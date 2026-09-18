@@ -10,8 +10,12 @@ ladder — is tested without an editor.
 
 from __future__ import annotations
 
+import argparse
+import json
+
 import pytest
 
+from boardwise.bridge.protocol import BridgeError, ErrorCodes
 from boardwise.core.candidate import (
     GeometryError,
     NetlistFormatError,
@@ -19,7 +23,15 @@ from boardwise.core.candidate import (
     candidate_from_netlist,
 )
 from boardwise.core.model import Component, DesignModel, Net, Pin
-from boardwise.engines.draw import DrawAborted, run_draw
+from boardwise.engines.draw import (
+    PERSISTENCE_NOT_PLACED,
+    PERSISTENCE_PLACED,
+    PERSISTENCE_SAVED_UNVERIFIED,
+    PERSISTENCE_SAVED_VERIFIED,
+    TIMEOUT_CODE,
+    DrawAborted,
+    run_draw,
+)
 from boardwise.engines.generate import generate_plan, strip_dangling_nets
 
 
@@ -799,3 +811,355 @@ def test_drifted_endpoints_snap_to_placed_pin_positions():
         (300.0, 300.0), (89.0, 300.0), (89.0, 745.0), (115.0, 745.0),
     ]
     assert (plan.net_names[0].x, plan.net_names[0].y) == (115.0, 755.0)
+
+
+# --------------------------------------------------------------------------
+# M0-P0d: persistence is three facts, and a timeout is not "nothing happened"
+# --------------------------------------------------------------------------
+
+
+class FaultClient(FakeClient):
+    """A ``FakeClient`` that can be told to fail a named action.
+
+    Three shapes, because they are three different facts:
+
+    * a **timeout** — the daemon stopped waiting. The editor was never told to
+      cancel, so the write may still have landed;
+    * a **refusal** — the editor answered, and said no;
+    * a **disconnect** — the socket died mid-run.
+
+    ``fail`` maps an action to ``(exception, times)``; ``times=None`` means
+    "always". An attempt that raises is still recorded in ``calls``, so a retry
+    shows up as a second entry rather than as nothing at all.
+    """
+
+    def __init__(self, geometry: dict, netlist: dict | None = None, *, fail=None):
+        super().__init__(geometry, netlist)
+        self.fail = dict(fail or {})
+
+    async def call(self, action: str, params=None) -> dict:
+        plan = self.fail.get(action)
+        if plan is not None:
+            exc, times = plan
+            self.calls.append((action, params or {}))
+            if times is None or times > 0:
+                if times is not None:
+                    self.fail[action] = (exc, times - 1)
+                raise exc
+        return await super().call(action, params)
+
+
+def _timeout(action: str) -> BridgeError:
+    return BridgeError(
+        ErrorCodes.TIMEOUT, f"{action} timed out after 30s"
+    )
+
+
+def test_the_timeout_code_the_flow_watches_for_is_the_one_the_daemon_sends():
+    """``draw`` reads the code by string, so a rename must not pass silently.
+
+    `engines/` does not import `bridge/` (the transport arrives as a duck-typed
+    client), which means the flow holds its own copy of the timeout code. This
+    is the test that keeps the copy honest — without it, changing
+    `ErrorCodes.TIMEOUT` would quietly turn every timeout back into a plain
+    failure and the re-read path would stop running.
+    """
+    assert TIMEOUT_CODE == ErrorCodes.TIMEOUT
+
+
+def test_a_timed_out_write_reads_the_page_back_and_is_never_retried():
+    """The ruling's core case (M0-P0d, 裁决 2).
+
+    ``sch.place_component`` times out. The daemon dropped the pending future
+    without cancelling the editor, so the part may be on the page — and a retry
+    would put a second one on the same spot. The flow must therefore look and
+    report, never re-issue.
+    """
+    client = FaultClient(_geo(), fail={"sch.place_component": (_timeout("sch.place_component"), None)})
+    result = _run(run_draw(
+        client, _golden_model(), confirm=lambda: True, offsets=GOLDEN_OFFSETS,
+    ))
+
+    actions = [a for a, _p in client.calls]
+    # one attempt per planned part — the count is the no-retry evidence
+    assert actions.count("sch.place_component") == 2, actions
+
+    readbacks = [
+        r for r in result.records
+        if r.action == "sch.geometry" and "read the page back" in r.summary
+    ]
+    assert len(readbacks) == 2, "every timed-out write gets its own readback"
+    assert all(r.ok for r in readbacks), "the read itself answered"
+
+    unknowns = [r for r in result.records if r.action == "persistence.sch.place_component"]
+    assert len(unknowns) == 2
+    for record in unknowns:
+        assert not record.ok
+        assert "UNKNOWN" in record.summary
+        assert "nothing was retried" in record.summary
+        assert "may have landed" in record.detail
+
+    assert [r.action for r in result.timeouts] == ["sch.place_component"] * 2
+
+
+def test_a_timed_out_write_is_still_recorded_as_a_timeout_not_a_refusal():
+    """A timeout and a refusal are different failures and must not merge.
+
+    Until M0-P0d both arrived as ``None`` from the same helper, which is why the
+    re-read could not be attached to the timeout alone.
+    """
+    client = FaultClient(_geo(), fail={"sch.doc.new": (_timeout("sch.doc.new"), None)})
+    result = _run(run_draw(
+        client, _golden_model(), confirm=lambda: True, offsets=GOLDEN_OFFSETS,
+    ))
+    staged = [r for r in result.records if r.action == "sch.doc.new"]
+    assert staged and staged[0].timed_out
+    assert not staged[0].ok
+
+
+def test_a_refused_write_is_not_a_timeout_and_gets_no_readback():
+    """An answer that says no is not an absence of an answer."""
+    client = FaultClient(
+        _geo(),
+        fail={"sch.doc.new": (
+            BridgeError(ErrorCodes.CONNECTOR_ERROR, "the editor refused"), None
+        )},
+    )
+    result = _run(run_draw(
+        client, _golden_model(), confirm=lambda: True, offsets=GOLDEN_OFFSETS,
+    ))
+    record = [r for r in result.records if r.action == "sch.doc.new"][0]
+    assert not record.ok
+    assert not record.timed_out
+    assert result.timeouts == []
+    assert not [
+        r for r in result.records
+        if r.action == "sch.geometry" and "read the page back" in r.summary
+    ], "no timeout means no readback obligation"
+
+
+def test_a_page_that_never_appeared_is_not_placed():
+    """Nothing written is its own state, not a weaker "saved"."""
+    client = FaultClient(
+        _geo(),
+        fail={"sch.doc.new": (
+            BridgeError(ErrorCodes.CONNECTOR_ERROR, "the editor refused"), None
+        )},
+    )
+    result = _run(run_draw(
+        client, _golden_model(), confirm=lambda: True, offsets=GOLDEN_OFFSETS,
+    ))
+    assert result.persistence == PERSISTENCE_NOT_PLACED
+    assert result.save_ok is False
+
+
+def test_a_refused_save_is_reported_rather_than_discarded():
+    """The connector *throws* when the editor refuses a save (audit D).
+
+    The flow used to ignore the save's answer entirely, so a refused save was
+    indistinguishable from a successful one and the report stayed silent about
+    the exact fact this task exists to state.
+    """
+    client = FaultClient(
+        _geo(),
+        fail={"sch.doc.save": (
+            BridgeError(
+                ErrorCodes.CONNECTOR_ERROR,
+                "sch_Document.save() returned false — the project may need a manual save",
+            ),
+            None,
+        )},
+    )
+    result = _run(run_draw(
+        client, _golden_model(), confirm=lambda: True, offsets=GOLDEN_OFFSETS,
+    ))
+    assert result.save_ok is False
+    refusals = [r for r in result.records if r.action == "persistence.save"]
+    assert refusals, "a refused save must leave a row, not vanish"
+    assert all(not r.ok for r in refusals)
+    assert "did NOT accept a save" in refusals[0].summary
+    assert result.persistence in (PERSISTENCE_PLACED, PERSISTENCE_NOT_PLACED), (
+        "without a save ack the run cannot claim saved_unverified"
+    )
+
+
+def test_a_clean_run_tops_out_at_saved_unverified():
+    """The ceiling is structural, not an oversight.
+
+    ``saved_verified`` needs a close-and-reopen, and the bridge cannot perform
+    one: ``doc.open`` is a read that moves focus without reloading from disk and
+    there is no close-project action (audit E). So a draw that went perfectly
+    still may not say "saved" without a qualifier.
+    """
+    client = FakeClient(_geo())
+    result = _run(run_draw(
+        client, _golden_model(), confirm=lambda: True, offsets=GOLDEN_OFFSETS,
+    ))
+    assert result.save_ok is True
+    assert result.persistence == PERSISTENCE_SAVED_UNVERIFIED
+    assert result.saved_verified is False
+    assert result.persistence != PERSISTENCE_SAVED_VERIFIED
+
+
+def test_an_unreachable_editor_does_not_produce_a_second_page():
+    """A disconnect mid-run: nothing is retried, one page was ever asked for."""
+    client = FaultClient(
+        _geo(), fail={"sch.place_wire": (OSError("connection closed"), None)}
+    )
+    result = _run(run_draw(
+        client, _golden_model(), confirm=lambda: True, offsets=GOLDEN_OFFSETS,
+    ))
+    actions = [a for a, _p in client.calls]
+    assert actions.count("sch.doc.new") == 1, "the page is never created twice"
+    assert actions.count("sch.place_component") == 2, "placements are not retried"
+    assert [r for r in result.records if r.action == "sch.place_wire"], (
+        "the dead socket is reported per action"
+    )
+    assert result.save_ok is not True or result.persistence != PERSISTENCE_SAVED_VERIFIED
+
+
+def test_a_partly_written_page_never_reaches_saved_unverified_over_a_timeout():
+    """Half a page plus a timed-out save is "unknown", and must say so."""
+    client = FaultClient(
+        _geo(),
+        fail={
+            "sch.place_wire": (_timeout("sch.place_wire"), None),
+            "sch.doc.save": (_timeout("sch.doc.save"), None),
+        },
+    )
+    result = _run(run_draw(
+        client, _golden_model(), confirm=lambda: True, offsets=GOLDEN_OFFSETS,
+    ))
+    assert result.save_ok is False
+    assert result.persistence not in (
+        PERSISTENCE_SAVED_UNVERIFIED, PERSISTENCE_SAVED_VERIFIED,
+    )
+    assert len(result.timeouts) >= 2
+    # the wires were attempted exactly once each
+    planned_wires = len(result.plan.wires)
+    actions = [a for a, _p in client.calls]
+    assert actions.count("sch.place_wire") == planned_wires
+
+
+# --------------------------------------------------------------------------
+# the CLI half: the exit code and the audit record must carry the same answer
+# --------------------------------------------------------------------------
+
+
+def _draw_args(**overrides) -> argparse.Namespace:
+    """The argparse surface ``_render_draw_result`` reads."""
+    base = {"spec": "spec.json", "render": None, "screenshot": None}
+    base.update(overrides)
+    return argparse.Namespace(**base)
+
+
+def _timed_out_run():
+    client = FaultClient(
+        _geo(), fail={"sch.place_wire": (_timeout("sch.place_wire"), None)}
+    )
+    return _run(run_draw(
+        client, _golden_model(), confirm=lambda: True, offsets=GOLDEN_OFFSETS,
+    ))
+
+
+def test_a_timed_out_write_cannot_finish_green(capsys):
+    """Exit 3, not 0: "the diff matched" is not "the page is right" (裁决 2).
+
+    The scenario is the ruling's own: the page happens to diff clean, but a
+    write timed out, so the page's state is unknown. A run whose outcome is
+    unknown must not be able to report success — that was the whole bug, and
+    the exit code is what a script reads.
+    """
+    from boardwise.cli import _render_draw_result
+    from boardwise.core.compare import compare_models
+
+    result = _timed_out_run()
+    # Make the diff genuinely clean, so the timeout is the only complaint.
+    result.comparison = compare_models(_golden_model(), _golden_model())
+    assert result.comparison.is_empty
+
+    code = _render_draw_result(result, _draw_args())
+    printed = capsys.readouterr().out
+    assert code == 3, "a timeout may not exit 0 through a clean diff"
+    assert "the page's state" in printed and "UNKNOWN" in printed
+    assert "persistence:" in printed
+
+
+def test_a_clean_run_without_timeouts_still_exits_zero(capsys):
+    """The control: exit 3 must mean "a timeout happened", not "a draw ran"."""
+    from boardwise.cli import _render_draw_result
+    from boardwise.core.compare import compare_models
+
+    client = FakeClient(_geo())
+    result = _run(run_draw(
+        client, _golden_model(), confirm=lambda: True, offsets=GOLDEN_OFFSETS,
+    ))
+    result.comparison = compare_models(_golden_model(), _golden_model())
+
+    code = _render_draw_result(result, _draw_args())
+    printed = capsys.readouterr().out
+    assert code == 0
+    assert "saved_unverified" in printed
+    assert "NOT verified on disk" in printed, (
+        "the report must not let a reader hear 'saved' without the qualifier"
+    )
+
+
+def test_the_persistence_state_reaches_the_audit_log(tmp_path, monkeypatch):
+    """The log has to answer "did this run persist anything?" on its own.
+
+    The daemon's per-action records say ``ok`` and nothing about persistence,
+    and never carry the save's payload (audit F). So the CLI writes its own
+    record — and the record's single ``persistence`` field is the only place a
+    reader looks, which is what keeps "saved" out of the log unless it is true.
+    """
+    from boardwise import cli as cli_module
+    from boardwise.bridge import daemon as daemon_module
+
+    monkeypatch.setattr(daemon_module, "BOARDWISE_HOME", tmp_path)
+    result = _timed_out_run()
+    cli_module._audit_draw_persistence(result, 3)
+
+    written = list((tmp_path / "audit").glob("*.jsonl"))
+    assert len(written) == 1, written
+    records = [
+        json.loads(line)
+        for line in written[0].read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert record["action"] == daemon_module.AUDIT_DRAW_PERSISTENCE
+    # The save *was* accepted here — the page content is what timed out — so the
+    # state is saved_unverified and the two facts are kept apart rather than
+    # merged into one verdict: unverified is not verified, and the timeout is
+    # reported on its own.
+    assert record["persistence"] == PERSISTENCE_SAVED_UNVERIFIED
+    assert record["saveVerified"] is False
+    assert record["exitCode"] == 3
+    assert record["saveAccepted"] is True
+    assert record["timeouts"] == ["sch.place_wire"] * len(result.plan.wires), (
+        "one entry per timed-out call, and not one more (no retries)"
+    )
+    # No bare "saved" key exists to be misread: the state name is the answer.
+    assert "saved" not in record
+
+
+def test_the_verified_state_is_the_only_one_that_may_say_saved(tmp_path, monkeypatch):
+    """``saved_verified`` is unreachable from a draw — so it must come from
+    somewhere that really reopened, and only then may the log say so."""
+    from boardwise import cli as cli_module
+    from boardwise.bridge import daemon as daemon_module
+
+    monkeypatch.setattr(daemon_module, "BOARDWISE_HOME", tmp_path)
+    client = FakeClient(_geo())
+    result = _run(run_draw(
+        client, _golden_model(), confirm=lambda: True, offsets=GOLDEN_OFFSETS,
+    ))
+    assert result.persistence == PERSISTENCE_SAVED_UNVERIFIED
+    cli_module._audit_draw_persistence(result, 0)
+
+    record = json.loads(
+        next((tmp_path / "audit").glob("*.jsonl")).read_text(encoding="utf-8")
+    )
+    assert record["saveVerified"] is False, "a draw never verified anything on disk"
+    assert record["persistence"] == PERSISTENCE_SAVED_UNVERIFIED

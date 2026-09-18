@@ -86,6 +86,8 @@ __all__ = [
     "AUDIT_PAIRING",
     "AUDIT_REVOKE",
     "AUDIT_REPAIRING",
+    "AUDIT_DRAW_PERSISTENCE",
+    "AUDIT_PERSISTENCE_VERIFIED",
     "UNKNOWN_CONNECTOR_VERSION",
     "client_with_version",
     "token_path",
@@ -119,6 +121,17 @@ AUDIT_REVOKE = "revoke"
 #: reactions: the first is "check this is yours", the second is "yes, you just
 #: reinstalled".
 AUDIT_REPAIRING = "re-pairing"
+
+#: How far a `draw` run's write actually got, recorded by the CLI process
+#: (M0-P0d). The daemon's own per-action records say `ok` and nothing about
+#: persistence — an action can be `ok: true` while the page was never saved,
+#: and `saved: true` never reached the log at all because the daemon does not
+#: record action payloads (audit F, 2026-09-18). These two names are what make
+#: the three states distinguishable in the log rather than only on stdout.
+#: `draw.persistence` is written by every draw run; `persistence.verified` only
+#: by a run that compared a page across a real close-and-reopen.
+AUDIT_DRAW_PERSISTENCE = "draw.persistence"
+AUDIT_PERSISTENCE_VERIFIED = "persistence.verified"
 
 #: Rendered in the audit log for a connector that does not announce its build.
 #: Spelled out rather than left empty on purpose: an absent field is easy to

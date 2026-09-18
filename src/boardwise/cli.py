@@ -264,6 +264,32 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    persist = sub.add_parser(
+        "persistence",
+        help=(
+            "Snapshot the live page and compare it across a real close-and-reopen "
+            "(read-only). Exit 0 identical / 1 different / 2 bad input / 3 undecidable."
+        ),
+        description=(
+            "The third persistence state — saved_verified — is the only one that "
+            "means the bytes reached the file, and no bridge action can establish "
+            "it: doc.open moves the focused tab without reloading it from disk and "
+            "there is no close-project action (M0-P0d audit). So the reopen is a "
+            "human act, and this command turns its result into a verdict. Snapshot "
+            "while the page is as drawn, close and reopen the project, then compare "
+            "against the snapshot. Read-only on both legs, so it cannot change what "
+            "it measures. See docs/persistence-baseline.md."
+        ),
+    )
+    persist.add_argument(
+        "--out", default=None,
+        help="Write the snapshot (netlist + geometry) to this JSON file.",
+    )
+    persist.add_argument(
+        "--baseline", default=None,
+        help="A snapshot to compare the live page against; equal means saved_verified.",
+    )
+
     lint = sub.add_parser(
         "lint",
         help=(
@@ -1051,7 +1077,9 @@ def _cmd_draw(args: argparse.Namespace) -> int:
         finally:
             await client.close()
 
-        return _render_draw_result(result, args, assembly_report=assembly_report)
+        code = _render_draw_result(result, args, assembly_report=assembly_report)
+        _audit_draw_persistence(result, code)
+        return code
 
     return asyncio.run(run())
 
@@ -1116,6 +1144,171 @@ def _golden_layout(path: str):
         print(f"boardwise: symbol bodies {path}: {exc}", file=sys.stderr)
         bodies = None
     return layout, bodies
+
+
+def _cmd_persistence(args: argparse.Namespace) -> int:
+    """Snapshot the live page, and compare it across a real close-and-reopen.
+
+    Read-only on both legs (``sch.netlist`` + ``sch.geometry``), so measuring
+    is not also changing. Exit 0 identical / 1 different / 2 bad input or an
+    unreachable editor / 3 could not decide.
+
+    Why this exists at all: `saved_verified` is the only persistence state that
+    means the bytes reached the file, and **no bridge action can establish it**
+    (M0-P0d audit E). The reopen is therefore a human act, and this command is
+    what turns that act's result into an exit code instead of an eyeball.
+    """
+    import asyncio
+    import json
+
+    if not args.out and not args.baseline:
+        print(
+            "boardwise persistence: give --out <file> to snapshot, --baseline <file> "
+            "to compare against one, or both",
+            file=sys.stderr,
+        )
+        return 2
+
+    BridgeClient, BridgeError, port, token = _open_cli(args)
+
+    async def run() -> int:
+        try:
+            client = await BridgeClient.open(
+                _bridge_uri(port), token, "cli", client="boardwise-cli"
+            )
+        except (OSError, BridgeError) as exc:
+            print(
+                f"boardwise persistence: daemon not reachable on 127.0.0.1:{port} ({exc})",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            current = {
+                "netlist": await client.call("sch.netlist", {"type": "EasyEDA"}),
+                "geometry": await client.call("sch.geometry", {}),
+            }
+        except BridgeError as exc:
+            print(f"boardwise persistence: {exc.code}: {exc.message}", file=sys.stderr)
+            return 2
+        finally:
+            await client.close()
+
+        if args.out:
+            Path(args.out).write_text(
+                json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            print(f"snapshot: {args.out}")
+            print(
+                "  next: close the project in the editor, reopen it, then re-run "
+                f"with --baseline {args.out}"
+            )
+        if not args.baseline:
+            return 0
+
+        try:
+            baseline = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"boardwise persistence: {args.baseline}: {exc}", file=sys.stderr)
+            return 2
+        return _compare_persistence(baseline, current)
+
+    return asyncio.run(run())
+
+
+def _compare_persistence(baseline: dict, current: dict) -> int:
+    """0 identical / 1 different / 3 could not decide.
+
+    Two independent halves, because they fail independently: the **netlist**
+    (connectivity, parsed by the same reader the diff uses) and a **primitive
+    census** from the geometry dump. A missing half is *undecidable*, never a
+    pass — "we could not look" and "it is identical" are the two answers this
+    must never blur, which is also the reason the census is compared rather
+    than the raw dumps: the dumps carry generated ids that change every render.
+    """
+    from boardwise.core.candidate import NetlistFormatError, candidate_from_netlist
+    from boardwise.core.compare import compare_models
+    from boardwise.engines.draw import geometry_fingerprint, fingerprint_total
+
+    models: dict[str, object] = {}
+    for side, snapshot in (("baseline", baseline), ("reopened", current)):
+        netlist = snapshot.get("netlist") or {}
+        text = netlist.get("text")
+        if not isinstance(text, str) or not text.strip():
+            print(
+                f"boardwise persistence: {side} has no netlist text — cannot decide. "
+                "The editor returns nothing for a never-saved project (measured "
+                "2026-09-13), which is the shape a failed save leaves behind.",
+                file=sys.stderr,
+            )
+            return 3
+        try:
+            models[side] = candidate_from_netlist(text, netlist.get("type", "EasyEDA"))
+        except NetlistFormatError as exc:
+            print(f"boardwise persistence: {side} netlist: {exc}", file=sys.stderr)
+            return 3
+
+    report = compare_models(models["baseline"], models["reopened"])
+    if not report.is_empty:
+        print("boardwise persistence: the reopened page is NOT what was drawn:")
+        print(report.render())
+        print("persistence: NOT saved_verified — the reopened content differs")
+        return 1
+
+    census = {
+        side: geometry_fingerprint(snapshot.get("geometry"))
+        for side, snapshot in (("baseline", baseline), ("reopened", current))
+    }
+    if not census["baseline"] or not census["reopened"]:
+        print(
+            "boardwise persistence: the primitive census came back empty on one "
+            "side — cannot decide",
+            file=sys.stderr,
+        )
+        return 3
+    if census["baseline"] != census["reopened"]:
+        print("boardwise persistence: the reopened page's primitives differ:")
+        for name in sorted(set(census["baseline"]) | set(census["reopened"])):
+            before = census["baseline"].get(name, 0)
+            after = census["reopened"].get(name, 0)
+            if before != after:
+                print(f"  {name}: {before} -> {after}")
+        print("persistence: NOT saved_verified")
+        return 1
+
+    reopened = models["reopened"]
+    print(
+        "boardwise persistence: the reopened page matches the snapshot "
+        f"({len(reopened.components)} components, {len(reopened.nets)} nets, "
+        f"{fingerprint_total(census['reopened'])} primitives)"
+    )
+    print("persistence: saved_verified — the content survived a close-and-reopen")
+    _audit_persistence_verified(reopened, census["reopened"])
+    return 0
+
+
+def _audit_persistence_verified(model: object, census: dict) -> None:
+    """The one record in the log that may say ``saved_verified`` outright.
+
+    Written by the CLI, like ``bridge revoke``'s record, because the daemon
+    cannot see across a reopen: it holds no connection while the editor is
+    closed. Never raises — a log that can fail a check is worse than no line.
+    """
+    try:
+        _, daemon_module, _ = _bridge_modules()
+        from boardwise.engines.draw import fingerprint_total
+
+        daemon_module.append_audit(
+            None,
+            action=daemon_module.AUDIT_PERSISTENCE_VERIFIED,
+            role="cli",
+            ok=True,
+            persistence="saved_verified",
+            components=len(model.components),
+            nets=len(model.nets),
+            primitives=fingerprint_total(census),
+        )
+    except (Exception, SystemExit):  # noqa: BLE001 — logging must not break a run
+        pass
 
 
 def _cmd_lint(args: argparse.Namespace) -> int:
@@ -1271,6 +1464,38 @@ def _ask_confirm() -> bool:
         return False
 
 
+def _audit_draw_persistence(result: object, exit_code: int) -> None:
+    """Put the persistence state in the audit log, not only on stdout.
+
+    The daemon's own per-action records carry ``ok`` and nothing about
+    persistence: an action can be ``ok: true`` while nothing was ever saved, and
+    the save's payload never reaches the log because the daemon does not record
+    action `data` (audit F, 2026-09-18). So "did this run persist anything?"
+    has to be written by the process that knows the answer — the same way
+    ``bridge revoke`` records its own outcome from the CLI.
+
+    One field, one vocabulary: ``persistence`` carries the state name and
+    nothing in this record says "saved" unless the state is ``saved_verified``.
+    Never raises (and swallows the websockets-missing ``SystemExit``): a log
+    that can fail a draw is worse than a missing line.
+    """
+    try:
+        _, daemon_module, _ = _bridge_modules()
+        daemon_module.append_audit(
+            None,
+            action=daemon_module.AUDIT_DRAW_PERSISTENCE,
+            role="cli",
+            ok=exit_code == 0,
+            persistence=result.persistence,
+            exitCode=exit_code,
+            saveAccepted=result.save_ok,
+            saveVerified=result.persistence == "saved_verified",
+            timeouts=[record.action for record in result.timeouts],
+        )
+    except (Exception, SystemExit):  # noqa: BLE001 — logging must not break a draw
+        pass
+
+
 def _render_draw_result(
     result: object, args: argparse.Namespace, assembly_report: list[str] | None = None
 ) -> int:
@@ -1358,6 +1583,29 @@ def _render_draw_result(
     print(f"\nexecuted {len(result.records)} bridge actions, "
           f"{len(failed)} failed")
 
+    # --- persistence: three facts, and this run only has some of them.
+    #
+    # Silence here was the bug: with nothing printed, a reader takes "no
+    # complaint" as "saved". The state is named, defined, and the audit log
+    # gets the same answer so it survives the terminal (M0-P0d).
+    from boardwise.engines.draw import PERSISTENCE_WORDS
+
+    persistence = result.persistence
+    print(f"\npersistence: {persistence} — {PERSISTENCE_WORDS[persistence]}")
+    timeouts = result.timeouts
+    if timeouts:
+        print(
+            f"  ! {len(timeouts)} call(s) the daemon stopped waiting for — the "
+            "page may hold a partial write; nothing was retried:"
+        )
+        for record in timeouts:
+            print(f"    {record.action}: {record.summary}")
+    if persistence != "saved_verified":
+        print(
+            "  only a close-and-reopen that compares equal makes this "
+            "saved_verified; see docs/persistence-baseline.md for the procedure"
+        )
+
     report = result.comparison
     exit_code = 1
     if report is None:
@@ -1369,6 +1617,17 @@ def _render_draw_result(
             exit_code = 0
         else:
             print(report.render())
+    if timeouts and exit_code == 0:
+        # The ruling's own case: a timeout must not be able to finish green.
+        # A write the daemon gave up on may have landed, so whatever the diff
+        # says, this run's outcome is "unknown / partly done" — a distinct code
+        # rather than 0, because "the diff matched" is not "the page is right".
+        # 3 is not 2: 2 means nothing was executed, 3 means we cannot say.
+        print(
+            "exit 3: the diff matched, but a write timed out — the page's state "
+            "is UNKNOWN, so this is not a pass"
+        )
+        exit_code = 3
     if result.render_b64 and args.render:
         Path(args.render).write_bytes(base64.b64decode(result.render_b64))
         print(f"\nrender (acceptance image): {args.render}")
@@ -2041,6 +2300,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_draw(args)
     if args.command == "lint":
         return _cmd_lint(args)
+    if args.command == "persistence":
+        return _cmd_persistence(args)
     if args.command == "parts":
         return PARTS_COMMANDS[args.parts_command](args)
     if args.command == "bom":
