@@ -1,0 +1,831 @@
+{
+  "kind": "boardwise-block-template",
+  "version": 1,
+  "name": "ch340_power_3v3",
+  "description": "3.3V rail: USB +5V in, RT9013 LDO, its input/output decoupling, and the VCC status LED with its series resistor.",
+  "provenance": {
+    "kind": "board-extract",
+    "source": "tests\\fixtures\\ch340_golden.epro2",
+    "designators": [
+      "U5",
+      "C5",
+      "C6",
+      "C7",
+      "C9",
+      "LED1",
+      "U3"
+    ],
+    "note": "The status LED shares this block's ground rail in the golden, so it is cut with it rather than split across a boundary that would cut copper."
+  },
+  "origin_file": [
+    130.0,
+    -475.0
+  ],
+  "bbox_file": [
+    130.0,
+    -475.0,
+    430.0,
+    -330.0
+  ],
+  "notes": [],
+  "interface": [
+    {
+      "role": "+5V",
+      "net": "+5V",
+      "net_class": "power",
+      "position": [
+        14.0,
+        51.0
+      ]
+    },
+    {
+      "role": "GND",
+      "net": "GND",
+      "net_class": "gnd",
+      "position": [
+        176.0,
+        27.0
+      ]
+    },
+    {
+      "role": "VCC",
+      "net": "VCC",
+      "net_class": "power",
+      "position": [
+        276.0,
+        75.0
+      ]
+    }
+  ],
+  "params": [
+    {
+      "name": "c6_value",
+      "role": "C6 value",
+      "default": "100nF",
+      "constraint": "capacitor_value",
+      "provenance": ""
+    },
+    {
+      "name": "c7_value",
+      "role": "C7 value",
+      "default": "10nF",
+      "constraint": "capacitor_value",
+      "provenance": ""
+    },
+    {
+      "name": "u3_value",
+      "role": "U3 value",
+      "default": "2.2kΩ",
+      "constraint": "resistor_value",
+      "provenance": "岳翔宇 2026-09-15: 黄金的 1kΩ 是他当年的人为错误（本人确认）；原库件 FRC0805J471 TS 是 470Ω，也不对。正确值 2.2kΩ 0805 → 0805W8F2201T5E / C17520；封装名 R0805 实测确认。"
+    }
+  ],
+  "symbols": {
+    "0ba286a5df5dbcd7": {
+      "offsets": {
+        "1": [
+          -20.0,
+          0.0
+        ],
+        "2": [
+          20.0,
+          0.0
+        ]
+      },
+      "body": [
+        -10.0,
+        -5.0,
+        10.0,
+        5.0
+      ],
+      "pin_names": {
+        "1": "1",
+        "2": "2"
+      }
+    },
+    "10de3aba8ed91373": {
+      "offsets": {
+        "1": [
+          0.0,
+          0.0
+        ]
+      },
+      "body": [
+        -10.0,
+        10.0,
+        10.0,
+        19.0
+      ],
+      "pin_names": {
+        "1": "Pin1"
+      }
+    },
+    "3109ab6b8bb776a7": {
+      "offsets": {
+        "1": [
+          0.0,
+          0.0
+        ]
+      },
+      "body": [
+        -10.0,
+        10.0,
+        10.0,
+        19.0
+      ],
+      "pin_names": {
+        "1": "Pin1"
+      }
+    },
+    "4718b8d5af755ff0": {
+      "offsets": {
+        "1": [
+          0.0,
+          0.0
+        ]
+      },
+      "body": [
+        -5.0,
+        -10.0,
+        5.0,
+        -5.0
+      ],
+      "pin_names": {
+        "1": "Pin1"
+      }
+    },
+    "8d544a550054d3da": {
+      "offsets": {
+        "1": [
+          -45.0,
+          -20.0
+        ],
+        "2": [
+          -45.0,
+          0.0
+        ],
+        "3": [
+          -45.0,
+          20.0
+        ],
+        "4": [
+          45.0,
+          10.0
+        ],
+        "5": [
+          45.0,
+          -10.0
+        ]
+      },
+      "body": [
+        -25.0,
+        -30.0,
+        25.0,
+        30.0
+      ],
+      "pin_names": {
+        "1": "VIN",
+        "2": "GND",
+        "3": "EN",
+        "4": "NC",
+        "5": "VOUT"
+      }
+    },
+    "b0b9fd7d73590615": {
+      "offsets": {
+        "1": [
+          -15.0,
+          0.0
+        ],
+        "2": [
+          15.0,
+          0.0
+        ]
+      },
+      "body": [
+        -5.0,
+        -8.0,
+        5.0,
+        8.0
+      ],
+      "pin_names": {
+        "1": "1",
+        "2": "2"
+      }
+    },
+    "cccb6f9da965da5e": {
+      "offsets": {
+        "1": [
+          0.0,
+          0.0
+        ]
+      },
+      "body": [
+        -5.0,
+        -10.0,
+        5.0,
+        -5.0
+      ],
+      "pin_names": {
+        "1": "Pin1"
+      }
+    },
+    "e4e02d3834df6479": {
+      "offsets": {
+        "1": [
+          -20.0,
+          0.0
+        ],
+        "2": [
+          20.0,
+          0.0
+        ]
+      },
+      "body": [
+        -10.0,
+        -8.0,
+        10.0,
+        8.0
+      ],
+      "pin_names": {
+        "1": "1",
+        "2": "2"
+      }
+    },
+    "f279a39f125d6a45": {
+      "offsets": {
+        "1": [
+          -20.0,
+          0.0
+        ],
+        "2": [
+          20.0,
+          0.0
+        ]
+      },
+      "body": [
+        -16.0,
+        -17.0,
+        10.0,
+        7.0
+      ],
+      "pin_names": {
+        "1": "K",
+        "2": "A"
+      }
+    },
+    "f2bec070fe11e475": {
+      "offsets": {
+        "1": [
+          -20.0,
+          0.0
+        ],
+        "2": [
+          20.0,
+          0.0
+        ]
+      },
+      "body": [
+        -10.0,
+        -8.0,
+        10.0,
+        8.0
+      ],
+      "pin_names": {
+        "1": "1",
+        "2": "2"
+      }
+    }
+  },
+  "components": [
+    {
+      "ref": "U5",
+      "symbol": "8d544a550054d3da",
+      "placement": {
+        "x": 119.0,
+        "y": 95.0,
+        "rotation": 0.0,
+        "mirror": false
+      },
+      "device": {
+        "lcsc": "C47773",
+        "keyword": "",
+        "device_uuid": "",
+        "library_uuid": "",
+        "expect_footprint": "",
+        "name": "RT9013-33GB",
+        "provenance": ""
+      },
+      "footprint": "SOT-23-5",
+      "params": {},
+      "pins": [
+        {
+          "number": "1",
+          "name": "VIN",
+          "net": "+5V"
+        },
+        {
+          "number": "2",
+          "name": "GND",
+          "net": "GND"
+        },
+        {
+          "number": "3",
+          "name": "EN",
+          "net": "+5V"
+        },
+        {
+          "number": "4",
+          "name": "NC",
+          "net": ""
+        },
+        {
+          "number": "5",
+          "name": "VOUT",
+          "net": "VCC"
+        }
+      ]
+    },
+    {
+      "ref": "C5",
+      "symbol": "e4e02d3834df6479",
+      "placement": {
+        "x": 38.0,
+        "y": 75.0,
+        "rotation": 90.0,
+        "mirror": false
+      },
+      "device": {
+        "lcsc": "C57895",
+        "keyword": "",
+        "device_uuid": "",
+        "library_uuid": "",
+        "expect_footprint": "",
+        "name": "CL10A225KA8NNNC",
+        "provenance": ""
+      },
+      "footprint": "0603",
+      "params": {},
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "net": "GND"
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "net": "+5V"
+        }
+      ]
+    },
+    {
+      "ref": "C6",
+      "symbol": "f2bec070fe11e475",
+      "placement": {
+        "x": 170.0,
+        "y": 55.0,
+        "rotation": 90.0,
+        "mirror": false
+      },
+      "device": {
+        "lcsc": "C14663",
+        "keyword": "",
+        "device_uuid": "",
+        "library_uuid": "",
+        "expect_footprint": "",
+        "name": "CC0603KRX7R9BB104",
+        "provenance": ""
+      },
+      "footprint": "0603",
+      "params": {
+        "value": "c6_value"
+      },
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "net": "VCC"
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "net": "GND"
+        }
+      ]
+    },
+    {
+      "ref": "C7",
+      "symbol": "b0b9fd7d73590615",
+      "placement": {
+        "x": 194.0,
+        "y": 58.0,
+        "rotation": 90.0,
+        "mirror": false
+      },
+      "device": {
+        "lcsc": "C100042",
+        "keyword": "",
+        "device_uuid": "",
+        "library_uuid": "",
+        "expect_footprint": "",
+        "name": "CC0603KRX7R9BB103",
+        "provenance": ""
+      },
+      "footprint": "0603",
+      "params": {
+        "value": "c7_value"
+      },
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "net": "VCC"
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "net": "GND"
+        }
+      ]
+    },
+    {
+      "ref": "C9",
+      "symbol": "e4e02d3834df6479",
+      "placement": {
+        "x": 276.0,
+        "y": 113.0,
+        "rotation": 90.0,
+        "mirror": false
+      },
+      "device": {
+        "lcsc": "C57895",
+        "keyword": "",
+        "device_uuid": "",
+        "library_uuid": "",
+        "expect_footprint": "",
+        "name": "CL10A225KA8NNNC",
+        "provenance": ""
+      },
+      "footprint": "0603",
+      "params": {},
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "net": "GND"
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "net": "VCC"
+        }
+      ]
+    },
+    {
+      "ref": "LED1",
+      "symbol": "f279a39f125d6a45",
+      "placement": {
+        "x": 220.0,
+        "y": 35.0,
+        "rotation": 0.0,
+        "mirror": false
+      },
+      "device": {
+        "lcsc": "C51933293",
+        "keyword": "",
+        "device_uuid": "",
+        "library_uuid": "",
+        "expect_footprint": "",
+        "name": "GL0603UG01",
+        "provenance": ""
+      },
+      "footprint": "0603",
+      "params": {},
+      "pins": [
+        {
+          "number": "1",
+          "name": "K",
+          "net": "GND"
+        },
+        {
+          "number": "2",
+          "name": "A",
+          "net": "NET4"
+        }
+      ]
+    },
+    {
+      "ref": "U3",
+      "symbol": "0ba286a5df5dbcd7",
+      "placement": {
+        "x": 256.0,
+        "y": 57.0,
+        "rotation": 90.0,
+        "mirror": false
+      },
+      "device": {
+        "lcsc": "C17520",
+        "keyword": "",
+        "device_uuid": "e6fc24c46c1b4a30bb4eb67fbe8dc16d",
+        "library_uuid": "0819f05c4eef4c71ace90d822a990e87",
+        "expect_footprint": "R0805",
+        "name": "FRC0805J471 TS",
+        "provenance": "岳翔宇 2026-09-15: 黄金的 1kΩ 是他当年的人为错误（本人确认）；原库件 FRC0805J471 TS 是 470Ω，也不对。正确值 2.2kΩ 0805 → 0805W8F2201T5E / C17520；封装名 R0805 实测确认。"
+      },
+      "footprint": "0805",
+      "params": {
+        "value": "u3_value"
+      },
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "net": "VCC"
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "net": "NET4"
+        }
+      ]
+    }
+  ],
+  "geometry": {
+    "wires": [
+      {
+        "net": "",
+        "points": [
+          [
+            164.0,
+            85.0
+          ],
+          [
+            170.0,
+            85.0
+          ],
+          [
+            194.0,
+            85.0
+          ],
+          [
+            256.0,
+            85.0
+          ],
+          [
+            276.0,
+            85.0
+          ],
+          [
+            276.0,
+            75.0
+          ]
+        ]
+      },
+      {
+        "net": "",
+        "points": [
+          [
+            170.0,
+            75.0
+          ],
+          [
+            170.0,
+            85.0
+          ]
+        ]
+      },
+      {
+        "net": "",
+        "points": [
+          [
+            194.0,
+            73.0
+          ],
+          [
+            194.0,
+            85.0
+          ]
+        ]
+      },
+      {
+        "net": "",
+        "points": [
+          [
+            256.0,
+            77.0
+          ],
+          [
+            256.0,
+            85.0
+          ]
+        ]
+      },
+      {
+        "net": "",
+        "points": [
+          [
+            276.0,
+            85.0
+          ],
+          [
+            276.0,
+            93.0
+          ]
+        ]
+      },
+      {
+        "net": "",
+        "points": [
+          [
+            276.0,
+            133.0
+          ],
+          [
+            276.0,
+            137.0
+          ]
+        ]
+      },
+      {
+        "net": "",
+        "points": [
+          [
+            170.0,
+            35.0
+          ],
+          [
+            176.0,
+            35.0
+          ],
+          [
+            194.0,
+            35.0
+          ],
+          [
+            200.0,
+            35.0
+          ]
+        ]
+      },
+      {
+        "net": "",
+        "points": [
+          [
+            176.0,
+            27.0
+          ],
+          [
+            176.0,
+            35.0
+          ]
+        ]
+      },
+      {
+        "net": "",
+        "points": [
+          [
+            194.0,
+            35.0
+          ],
+          [
+            194.0,
+            43.0
+          ]
+        ]
+      },
+      {
+        "net": "",
+        "points": [
+          [
+            14.0,
+            51.0
+          ],
+          [
+            14.0,
+            55.0
+          ],
+          [
+            38.0,
+            55.0
+          ],
+          [
+            64.0,
+            55.0
+          ],
+          [
+            64.0,
+            75.0
+          ],
+          [
+            64.0,
+            115.0
+          ],
+          [
+            74.0,
+            115.0
+          ]
+        ]
+      },
+      {
+        "net": "",
+        "points": [
+          [
+            64.0,
+            75.0
+          ],
+          [
+            74.0,
+            75.0
+          ]
+        ]
+      },
+      {
+        "net": "",
+        "points": [
+          [
+            26.0,
+            99.0
+          ],
+          [
+            26.0,
+            95.0
+          ],
+          [
+            38.0,
+            95.0
+          ],
+          [
+            74.0,
+            95.0
+          ]
+        ]
+      },
+      {
+        "net": "",
+        "points": [
+          [
+            240.0,
+            35.0
+          ],
+          [
+            256.0,
+            35.0
+          ],
+          [
+            256.0,
+            37.0
+          ]
+        ]
+      }
+    ],
+    "flags": [
+      {
+        "net": "GND",
+        "kind": "Ground",
+        "x": 276.0,
+        "y": 137.0,
+        "rotation": 0.0,
+        "mirror": false,
+        "symbol": "3109ab6b8bb776a7"
+      },
+      {
+        "net": "VCC",
+        "kind": "Power",
+        "x": 276.0,
+        "y": 75.0,
+        "rotation": 0.0,
+        "mirror": false,
+        "symbol": "4718b8d5af755ff0"
+      },
+      {
+        "net": "+5V",
+        "kind": "Power",
+        "x": 14.0,
+        "y": 51.0,
+        "rotation": 0.0,
+        "mirror": false,
+        "symbol": "cccb6f9da965da5e"
+      },
+      {
+        "net": "GND",
+        "kind": "Ground",
+        "x": 26.0,
+        "y": 99.0,
+        "rotation": 0.0,
+        "mirror": false,
+        "symbol": "10de3aba8ed91373"
+      },
+      {
+        "net": "GND",
+        "kind": "Ground",
+        "x": 176.0,
+        "y": 27.0,
+        "rotation": 180.0,
+        "mirror": false,
+        "symbol": "10de3aba8ed91373"
+      }
+    ],
+    "labels": []
+  }
+}

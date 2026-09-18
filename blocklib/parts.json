@@ -1,0 +1,3498 @@
+{
+  "kind": "boardwise-part-library",
+  "version": 1,
+  "sources": [
+    "blocklib/sources/smart_pillbox.eprj2",
+    "blocklib/sources/thesis_FOC_board.eprj2",
+    "tests/fixtures/ProPrj_ROBOT ctrl FOC_2026-09-16.epro2",
+    "tests/fixtures/ProPrj_智能药箱_2026-09-17.epro2",
+    "tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2",
+    "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2"
+  ],
+  "notes": [
+    "the source boards declare a web datasheet page; the directly readable `datasheetPdfUrl` comes from the product endpoint, which needs the network, so it is recorded in the corrections sidecar by `tools/backfill_datasheets.py`. 3 entr(ies) carry no PDF link — a part the service does not answer for stays empty rather than being guessed."
+  ],
+  "parts": [
+    {
+      "key": "buzzer.qmb_09b_03",
+      "value": "2.7kHz",
+      "mpn": "QMB-09B-03",
+      "lcsc": "C96256",
+      "manufacturer": "华能",
+      "deviceUuid": "9408c6c66b4c4bef927bb9b4cec2ff8b",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "BUZ-TH_BD9.0-P4.00-D0.6-FD",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "驱动方式:无源(外部驱动);构造类型:电磁式;频率:2.7kHz;声压(SPL):85dB;",
+        "Diameter(φD)": "9mm",
+        "Driver Circuitry": "无源(外部驱动)",
+        "Height": "5.7mm",
+        "Sound Pressure Level(SPL)": "85dB",
+        "Supplier Footprint": "插件,D=9mm",
+        "Technology": "电磁式",
+        "Voltage - Supply": "2V~5V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/QMB-09B-03/97460.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/c587e060eee64658b3d60588de560aba.pdf?productCode=C96256",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/smart_pillbox.eprj2; tests/fixtures/ProPrj_智能药箱_2026-09-17.epro2",
+        "designators": [
+          "BUZZER2@ProPrj_智能药箱_2026-09-17",
+          "BUZZER2@smart_pillbox"
+        ],
+        "note": "QMB-09B-03"
+      },
+      "notes": [
+        "the library spells this footprint 'BUZ-TH_BD9.0-P4.00-D0.6-FD'; the project's document said 'buz-th_bd9.0-p4.00-d0.6-fd'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "cap.100n_0402",
+      "value": "100nF",
+      "mpn": "CL05B104KB54PNC",
+      "lcsc": "C307331",
+      "manufacturer": "SAMSUNG(三星)",
+      "deviceUuid": "33dbcd8e8b3241828899bb3c808db9eb",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "C0402",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "容值:100nF;精度:±10%;额定电压:50V;温度系数:X7R;",
+        "Supplier Footprint": "0402",
+        "Temperature Coefficient": "X7R",
+        "Tolerance": "±10%",
+        "Voltage Rating": "50V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/CL05B104KB54PNC/291005.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/02336ea48ea44ca18c72517dd3cb7b47.pdf?productCode=C307331",
+      "basic": null,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2; tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "C14@ProPrj_毕设FOC驱动板_2026-09-17",
+          "C14@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "CL05B104KB54PNC"
+      },
+      "notes": [
+        "unrecognised JLCPCB Part Class 'Basic Part'; basic left unknown"
+      ]
+    },
+    {
+      "key": "cap.100n_0603.c113803",
+      "value": "100nF",
+      "mpn": "CC0603KRX7R0BB104",
+      "lcsc": "C113803",
+      "manufacturer": "YAGEO(国巨)",
+      "deviceUuid": "2e9c8b41e3c94bfeb74098877d8d0f02",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "C0603",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "容值:100nF;精度:±10%;额定电压:100V;温度系数:X7R;",
+        "Supplier Footprint": "0603",
+        "Temperature Coefficient": "X7R",
+        "Tolerance": "±10%",
+        "Voltage Rating": "100V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/CC0603KRX7R0BB104/115039.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/23ccee80ee542e7cf156a772bb589942.pdf?productCode=C113803",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "C48@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "CC0603KRX7R0BB104"
+      },
+      "notes": [
+        "key disambiguated with the C-number: more than one part shares the value/footprint slug"
+      ]
+    },
+    {
+      "key": "cap.100n_0603.c6119867",
+      "value": "100nF",
+      "mpn": "CGA0603X7R104K500JT",
+      "lcsc": "C6119867",
+      "manufacturer": "HRE(芯声)",
+      "deviceUuid": "04fdb63905b342c2af8d54ade46d72a2",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "C0603",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "容值:100nF;精度:±10%;额定电压:50V;温度系数:X7R;",
+        "Supplier Footprint": "0603",
+        "Temperature Coefficient": "X7R",
+        "Tolerance": "±10%",
+        "Voltage Rating": "50V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/CGA0603X7R104K500JT/7062573.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/6c1587595b5739d0f3edddbee7b7d187.pdf?productCode=C6119867",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_ROBOT ctrl FOC_2026-09-16.epro2; tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "C13@ProPrj_ROBOT ctrl FOC_2026-09-16",
+          "C14@ProPrj_ROBOT ctrl FOC_2026-09-16",
+          "C16@ProPrj_ROBOT ctrl FOC_2026-09-16",
+          "C17@ProPrj_ROBOT ctrl FOC_2026-09-16",
+          "C18@ProPrj_ROBOT ctrl FOC_2026-09-16",
+          "C22@ProPrj_高速电机控制器_2026-09-16",
+          "C26@ProPrj_高速电机控制器_2026-09-16",
+          "C45@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "CGA0603X7R104K500JT"
+      },
+      "notes": [
+        "key disambiguated with the C-number: more than one part shares the value/footprint slug"
+      ]
+    },
+    {
+      "key": "cap.100n_0805.c28233",
+      "value": "100nF",
+      "mpn": "CL21B104KCFNNNE",
+      "lcsc": "C28233",
+      "manufacturer": "SAMSUNG(三星)",
+      "deviceUuid": "7fe1204034d143ac9ddb217b3ea8de3e",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "C0805",
+      "footprint_name_verified": true,
+      "params": {
+        "Supplier Footprint": "0805",
+        "Temperature Coefficient": "X7R",
+        "Tolerance": "±10%",
+        "Voltage Rating": "100V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/CL21B104KCFNNNE/28983.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/02336ea48ea44ca18c72517dd3cb7b47.pdf?productCode=C28233",
+      "basic": true,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2",
+        "designators": [
+          "C80@thesis_FOC_board"
+        ],
+        "note": "CL21B104KCFNNNE"
+      },
+      "notes": [
+        "the library spells this footprint 'C0805'; the project's document said 'c0805'. The library's spelling is kept (006b's vocabulary rule).",
+        "key disambiguated with the C-number: more than one part shares the value/footprint slug"
+      ]
+    },
+    {
+      "key": "cap.100n_0805.c49678",
+      "value": "100nF",
+      "mpn": "CC0805KRX7R9BB104",
+      "lcsc": "C49678",
+      "manufacturer": "YAGEO(国巨)",
+      "deviceUuid": "e0a15c1cd8cb4f37aa658da9c5c7bfb4",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "C0805",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "容值:100nF;精度:±10%;额定电压:50V;材质(温度系数):X7R;",
+        "Supplier Footprint": "0805",
+        "Temperature Coefficient": "X7R",
+        "Tolerance": "±10%",
+        "Voltage Rated": "50V"
+      },
+      "datasheetUrl": "https://atta.szlcsc.com/upload/public/pdf/source/20180224/C181747_15194369449651363981.pdf",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/23ccee80ee542e7cf156a772bb589942.pdf?productCode=C49678",
+      "basic": true,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2; tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2",
+        "designators": [
+          "C13@thesis_FOC_board",
+          "C14@thesis_FOC_board",
+          "C17@thesis_FOC_board",
+          "C26@ProPrj_毕设FOC驱动板_2026-09-17",
+          "C27@ProPrj_毕设FOC驱动板_2026-09-17",
+          "C28@ProPrj_毕设FOC驱动板_2026-09-17",
+          "C29@ProPrj_毕设FOC驱动板_2026-09-17",
+          "C30@ProPrj_毕设FOC驱动板_2026-09-17",
+          "C31@ProPrj_毕设FOC驱动板_2026-09-17",
+          "C35@ProPrj_毕设FOC驱动板_2026-09-17",
+          "C36@ProPrj_毕设FOC驱动板_2026-09-17",
+          "C3@thesis_FOC_board",
+          "C41@ProPrj_毕设FOC驱动板_2026-09-17",
+          "C42@ProPrj_毕设FOC驱动板_2026-09-17",
+          "C43@ProPrj_毕设FOC驱动板_2026-09-17",
+          "C44@ProPrj_毕设FOC驱动板_2026-09-17",
+          "C4@thesis_FOC_board",
+          "C8@thesis_FOC_board",
+          "C98@thesis_FOC_board",
+          "C99@thesis_FOC_board"
+        ],
+        "note": "CC0805KRX7R9BB104"
+      },
+      "notes": [
+        "the library spells this footprint 'C0805'; the project's document said 'c0805'. The library's spelling is kept (006b's vocabulary rule).",
+        "key disambiguated with the C-number: more than one part shares the value/footprint slug"
+      ]
+    },
+    {
+      "key": "cap.100p_0603",
+      "value": "100pF",
+      "mpn": "CL10C101JB8NNNC",
+      "lcsc": "C14858",
+      "manufacturer": "SAMSUNG(三星)",
+      "deviceUuid": "c52f6dce9a2242039357ababc1e5f2aa",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "C0603",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "容值:100pF;精度:±5%;额定电压:50V;温度系数:C0G;",
+        "Supplier Footprint": "0603",
+        "Temperature Coefficient": "C0G",
+        "Tolerance": "±5%",
+        "Voltage Rating": "50V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/CL10C101JB8NNNC/15530.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/02336ea48ea44ca18c72517dd3cb7b47.pdf?productCode=C14858",
+      "basic": null,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "C3@ProPrj_高速电机控制器_2026-09-16",
+          "C4@ProPrj_高速电机控制器_2026-09-16",
+          "C8@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "CL10C101JB8NNNC"
+      },
+      "notes": [
+        "unrecognised JLCPCB Part Class 'Basic Part'; basic left unknown"
+      ]
+    },
+    {
+      "key": "cap.10n_0603",
+      "value": "10nF",
+      "mpn": "FCC0603B103K500CT",
+      "lcsc": "C5137477",
+      "manufacturer": "FOJAN(富捷)",
+      "deviceUuid": "66aa3774bf7b49ffb1c23728be5f8a55",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "C0603",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "容值:10nF;精度:±10%;额定电压:50V;温度系数:X7R;",
+        "Supplier Footprint": "0603",
+        "Temperature Coefficient": "X7R",
+        "Tolerance": "±10%",
+        "Voltage Rating": "50V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/FCC0603B103K500CT/5746979.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/96dc633700d86f8cae045018479f71b7.pdf?productCode=C5137477",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "C17@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "FCC0603B103K500CT"
+      },
+      "notes": []
+    },
+    {
+      "key": "cap.10u_0603",
+      "value": "10uF",
+      "mpn": "HGC0603R5106M250NTHJ",
+      "lcsc": "C7472961",
+      "manufacturer": "Chinocera(华瓷)",
+      "deviceUuid": "2dd2955ff2d9438591d60a0cc643b2ab",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "C0603",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "容值:10uF;精度:±20%;额定电压:25V;温度系数:X5R;",
+        "Supplier Footprint": "0603",
+        "Temperature Coefficient": "X5R",
+        "Tolerance": "±20%",
+        "Voltage Rating": "25V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/HGC0603R5106M250NTHJ/8532808.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/3025399970486160f9625970e5fd5973.pdf?productCode=C7472961",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_ROBOT ctrl FOC_2026-09-16.epro2",
+        "designators": [
+          "C10@ProPrj_ROBOT ctrl FOC_2026-09-16",
+          "C7@ProPrj_ROBOT ctrl FOC_2026-09-16"
+        ],
+        "note": "HGC0603R5106M250NTHJ"
+      },
+      "notes": []
+    },
+    {
+      "key": "cap.10u_0805",
+      "value": "10uF",
+      "mpn": "CGA0805X5R106K500MT",
+      "lcsc": "C6119889",
+      "manufacturer": "HRE(芯声)",
+      "deviceUuid": "b1bfeef5e7e547dab5bc8b59ba98e38a",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "C0805",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "容值:10uF;精度:±10%;额定电压:50V;温度系数:X5R;",
+        "Supplier Footprint": "0805",
+        "Temperature Coefficient": "X5R",
+        "Tolerance": "±10%",
+        "Voltage Rating": "50V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/CGA0805X5R106K500MT/7062595.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/739990a3f06d34efecb01197be80dfef.pdf?productCode=C6119889",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2",
+        "designators": [
+          "C4@ProPrj_毕设FOC驱动板_2026-09-17"
+        ],
+        "note": "CGA0805X5R106K500MT"
+      },
+      "notes": []
+    },
+    {
+      "key": "cap.10u_1210",
+      "value": "10uF",
+      "mpn": "GRM32EC72A106KE05L",
+      "lcsc": "C576517",
+      "manufacturer": "muRata(村田)",
+      "deviceUuid": "e416e7c5286a4ad38338f6658915fb29",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "C1210",
+      "footprint_name_verified": true,
+      "params": {
+        "Supplier Footprint": "1210",
+        "Temperature Coefficient": "X7S",
+        "Tolerance": "±10%",
+        "Voltage Rating": "100V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/GRM32EC72A106KE05L/604008.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/a5661d5fbdf2b41a50853cb83d84d655.pdf?productCode=C576517",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2",
+        "designators": [
+          "C81@thesis_FOC_board"
+        ],
+        "note": "GRM32EC72A106KE05L"
+      },
+      "notes": [
+        "the library spells this footprint 'C1210'; the project's document said 'c1210'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "cap.1n2_0603",
+      "value": "1.2nF",
+      "mpn": "GRM1885C1H122JA01D",
+      "lcsc": "C97876",
+      "manufacturer": "muRata(村田)",
+      "deviceUuid": "3a335255de004236ba16fa1b742006b3",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "C0603",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "容值:1.2nF;精度:±5%;额定电压:50V;温度系数:C0G;",
+        "Supplier Footprint": "0603",
+        "Temperature Coefficient": "C0G",
+        "Tolerance": "±5%",
+        "Voltage Rating": "50V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/GRM1885C1H122JA01D/99085.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/af436e044b3afa328a375bacac18e0cd.pdf?productCode=C97876",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2; tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2; tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "C19@ProPrj_毕设FOC驱动板_2026-09-17",
+          "C19@ProPrj_高速电机控制器_2026-09-16",
+          "C91@thesis_FOC_board"
+        ],
+        "note": "GRM1885C1H122JA01D"
+      },
+      "notes": [
+        "the library spells this footprint 'C0603'; the project's document said 'c0603'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "cap.1n_0603",
+      "value": "1nF",
+      "mpn": "CC0603KRX7R9BB102",
+      "lcsc": "C100040",
+      "manufacturer": "YAGEO(国巨)",
+      "deviceUuid": "6837e3527b884976bc73f7ceaafc9e12",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "C0603",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "容值:1nF;精度:±10%;额定电压:50V;材质(温度系数):X7R;",
+        "Supplier Footprint": "0603",
+        "Temperature Coefficient": "X7R",
+        "Tolerance": "±10%",
+        "Voltage Rated": "50V"
+      },
+      "datasheetUrl": "https://atta.szlcsc.com/upload/public/pdf/source/20180910/C282072_33301C7F631E79921B82A8DAC6BCC5B3.pdf",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/23ccee80ee542e7cf156a772bb589942.pdf?productCode=C100040",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "C60@ProPrj_高速电机控制器_2026-09-16",
+          "C61@ProPrj_高速电机控制器_2026-09-16",
+          "C62@ProPrj_高速电机控制器_2026-09-16",
+          "C63@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "CC0603KRX7R9BB102"
+      },
+      "notes": []
+    },
+    {
+      "key": "cap.1u_0603",
+      "value": "1uF",
+      "mpn": "CL10B105KA8NNNC",
+      "lcsc": "C29936",
+      "manufacturer": "SAMSUNG(三星)",
+      "deviceUuid": "f163a20c57a3458ab2a8fc303e5e2cb6",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "C0603",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "容值:1uF;精度:±10%;额定电压:25V;温度系数:X7R;",
+        "Supplier Footprint": "0603",
+        "Temperature Coefficient": "X7R",
+        "Tolerance": "±10%",
+        "Voltage Rating": "25V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/CL10B105KA8NNNC/30690.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/02336ea48ea44ca18c72517dd3cb7b47.pdf?productCode=C29936",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "C67@ProPrj_高速电机控制器_2026-09-16",
+          "C68@ProPrj_高速电机控制器_2026-09-16",
+          "C69@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "CL10B105KA8NNNC"
+      },
+      "notes": []
+    },
+    {
+      "key": "cap.1u_1206",
+      "value": "1uF",
+      "mpn": "CL31B105KCHNNNE",
+      "lcsc": "C13832",
+      "manufacturer": "SAMSUNG(三星)",
+      "deviceUuid": "08ca3f8d2be24137918f940f6dea3865",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "C1206",
+      "footprint_name_verified": true,
+      "params": {
+        "Supplier Footprint": "1206",
+        "Temperature Coefficient": "X7R",
+        "Tolerance": "±10%",
+        "Voltage Rating": "100V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/CL31B105KCHNNNE/14487.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/02336ea48ea44ca18c72517dd3cb7b47.pdf?productCode=C13832",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2",
+        "designators": [
+          "C83@thesis_FOC_board"
+        ],
+        "note": "CL31B105KCHNNNE"
+      },
+      "notes": [
+        "the library spells this footprint 'C1206'; the project's document said 'c1206'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "cap.20p_0402",
+      "value": "20pF",
+      "mpn": "FCC0402N200J500AT",
+      "lcsc": "C5137579",
+      "manufacturer": "FOJAN(富捷)",
+      "deviceUuid": "0eaff27d2b8f401e942d9adedc3d2e40",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "C0402",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "容值:20pF;精度:±5%;额定电压:50V;温度系数:C0G;",
+        "Supplier Footprint": "0402",
+        "Temperature Coefficient": "C0G",
+        "Tolerance": "±5%",
+        "Voltage Rating": "50V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/FCC0402N200J500AT/5747031.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/96dc633700d86f8cae045018479f71b7.pdf?productCode=C5137579",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "C21@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "FCC0402N200J500AT"
+      },
+      "notes": []
+    },
+    {
+      "key": "cap.2u2_0603.c342978",
+      "value": "2.2uF",
+      "mpn": "C1608X5R1V225KT000E",
+      "lcsc": "C342978",
+      "manufacturer": "TDK",
+      "deviceUuid": "00ae213559e54be0b9a9c524caba6a59",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "C0603",
+      "footprint_name_verified": true,
+      "params": {
+        "Body Length": "-",
+        "Body Thickness": "-",
+        "Body Width": "-",
+        "Description": "温度系数:X5R;额定电压:35V;容值:2.2uF;电容体长:-;精度:±10%;电容体宽:-;电容体厚度:-;",
+        "Supplier Footprint": "0603",
+        "Temperature Coefficient": "X5R",
+        "Tolerance": "±10%",
+        "Voltage Rated": "35V"
+      },
+      "datasheetUrl": "https://atta.szlcsc.com/upload/public/pdf/source/20190225/C342978_AEFAADBAAC963CB98F045B877B6B1B41.pdf",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/111e855c42cdc170c85dac8b2b70ced9.pdf?productCode=C342978",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2",
+        "designators": [
+          "C46@ProPrj_毕设FOC驱动板_2026-09-17"
+        ],
+        "note": "C1608X5R1V225KT000E"
+      },
+      "notes": [
+        "key disambiguated with the C-number: more than one part shares the value/footprint slug"
+      ]
+    },
+    {
+      "key": "cap.2u2_0603.c7432769",
+      "value": "2.2uF",
+      "mpn": "HGC0603R5225K500NTHJ",
+      "lcsc": "C7432769",
+      "manufacturer": "Chinocera(华瓷)",
+      "deviceUuid": "c4bd1fe79bda446488af74215485ca34",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "C0603",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "容值:2.2uF;精度:±10%;额定电压:50V;温度系数:X5R;",
+        "Supplier Footprint": "0603",
+        "Temperature Coefficient": "X5R",
+        "Tolerance": "±10%",
+        "Voltage Rating": "50V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/HGC0603R5225K500NTHJ/8438251.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/3025399970486160f9625970e5fd5973.pdf?productCode=C7432769",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "C40@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "HGC0603R5225K500NTHJ"
+      },
+      "notes": [
+        "key disambiguated with the C-number: more than one part shares the value/footprint slug"
+      ]
+    },
+    {
+      "key": "cap.47n_0603",
+      "value": "47nF",
+      "mpn": "CL10B473KB8NNNC",
+      "lcsc": "C1622",
+      "manufacturer": "SAMSUNG(三星)",
+      "deviceUuid": "ed3e2032cdfe4c688efeae34aa292a1d",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "C0603",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "容值:47nF;精度:±10%;额定电压:50V;温度系数:X7R;",
+        "Supplier Footprint": "0603",
+        "Temperature Coefficient": "X7R",
+        "Tolerance": "±10%",
+        "Voltage Rating": "50V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/CL10B473KB8NNNC/1974.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/02336ea48ea44ca18c72517dd3cb7b47.pdf?productCode=C1622",
+      "basic": null,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "C64@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "CL10B473KB8NNNC"
+      },
+      "notes": [
+        "unrecognised JLCPCB Part Class 'Basic Part'; basic left unknown"
+      ]
+    },
+    {
+      "key": "cap.47n_1206",
+      "value": "47nF",
+      "mpn": "GRM31M5C2A473JA01L",
+      "lcsc": "C6565546",
+      "manufacturer": "muRata(村田)",
+      "deviceUuid": "ca9f83e9a60a4186bf27444e7c43d10b",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "C1206",
+      "footprint_name_verified": true,
+      "params": {
+        "Supplier Footprint": "1206",
+        "Tolerance": "±5%",
+        "Voltage Rated": "100V"
+      },
+      "datasheetUrl": "https://atta.szlcsc.com/upload/public/pdf/source/20230811/41436D38D999B9AC3E405D77BCA95771.pdf",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/11e0bbff7122850fc77b9e9d497fb3b4.pdf?productCode=C6565546",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2",
+        "designators": [
+          "C82@thesis_FOC_board"
+        ],
+        "note": "GRM31M5C2A473JA01L"
+      },
+      "notes": [
+        "the library spells this footprint 'C1206'; the project's document said 'c1206'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "cap.4u7_1206",
+      "value": "4.7uF",
+      "mpn": "HHV1206R7475K101NSPJ",
+      "lcsc": "C22367839",
+      "manufacturer": "Chinocera(华瓷)",
+      "deviceUuid": "e5ef4375fab5420f8ef01e9eb6eea1e7",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "C1206",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "容值:4.7uF;精度:±10%;额定电压:100V;温度系数:X7R;",
+        "Supplier Footprint": "1206",
+        "Temperature Coefficient": "X7R",
+        "Tolerance": "±10%",
+        "Voltage Rating": "100V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/HHV1206R7475K101NSPJ/23841144.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/b7a133abe2101c7105ed2a4d7e583e11.pdf?productCode=C22367839",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "C1@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "HHV1206R7475K101NSPJ"
+      },
+      "notes": []
+    },
+    {
+      "key": "cap.pa50v330m10x15",
+      "value": "330uF",
+      "mpn": "PA50V330M10x15",
+      "lcsc": "C46550457",
+      "manufacturer": "JIERR(捷而瑞)",
+      "deviceUuid": "fc36e4be40ed4174b0d4f1babe6b986d",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "CAP-TH_BD10.0-P5.00-D0.6-FD-A",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "容值:330uF;精度:±20%;额定电压:50V;纹波电流:3.8A@100kHz;等效串联电阻(ESR):18mΩ@100kHz;类型:聚合物;",
+        "Diameter": "10mm",
+        "Equivalent Series Resistance(ESR)": "18mΩ@100kHz",
+        "Height - Seated (Max)": "15mm",
+        "Lifetime": "2000hrs@105℃",
+        "Operating Temperature": "-55℃~+105℃",
+        "Ripple Current": "3.8A@100kHz",
+        "Supplier Footprint": "插件,D10xL15mm",
+        "Tolerance": "±20%",
+        "Type": "聚合物",
+        "Voltage Rating": "50V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/PA50V330M10x15/48680151.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/9352f825fb63bcb6153eaa10a3e4530b.pdf?productCode=C46550457",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2; tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2; tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "C115@ProPrj_毕设FOC驱动板_2026-09-17",
+          "C115@ProPrj_高速电机控制器_2026-09-16",
+          "C115@thesis_FOC_board",
+          "C116@ProPrj_毕设FOC驱动板_2026-09-17",
+          "C116@thesis_FOC_board",
+          "C47@ProPrj_高速电机控制器_2026-09-16",
+          "C50@ProPrj_高速电机控制器_2026-09-16",
+          "C52@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "PA50V330M10x15"
+      },
+      "notes": [
+        "the library spells this footprint 'CAP-TH_BD10.0-P5.00-D0.6-FD-A'; the project's document said 'cap-th_bd10.0-p5.00-d0.6-fd-a'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "cap.spt1hm2r2d11orvzc",
+      "value": "2.2uF",
+      "mpn": "SPT1HM2R2D11ORVZC",
+      "lcsc": "C2896712",
+      "manufacturer": "Yunxing(云星)",
+      "deviceUuid": "3796b8f9123a47a8bbd8f08ab23e092f",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "CAP-TH_BD5.0-P2.00-D0.8-FD",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "容值:2.2uF;精度:±20%;额定电压:50V;",
+        "Rated Voltage": "50V",
+        "Supplier Footprint": "插件,D5xL11mm",
+        "Tolerance": "±20%"
+      },
+      "datasheetUrl": "https://atta.szlcsc.com/upload/public/pdf/source/20210917/C2896712_EB2C0CCF88F2A8B5F1B9831C4C0C2CF1.pdf",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/803f29e7b4f47fe7f7a68ea8e3f7dec0.pdf?productCode=C2896712",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2",
+        "designators": [
+          "C101@thesis_FOC_board",
+          "C11@thesis_FOC_board",
+          "C5@thesis_FOC_board",
+          "C64@thesis_FOC_board",
+          "C67@thesis_FOC_board",
+          "C69@thesis_FOC_board"
+        ],
+        "note": "SPT1HM2R2D11ORVZC"
+      },
+      "notes": [
+        "the library spells this footprint 'CAP-TH_BD5.0-P2.00-D0.8-FD'; the project's document said 'cap-th_bd5.0-p2.00-d0.8-fd'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "cap.spz1hm100e07o00raxxx",
+      "value": "10uF",
+      "mpn": "SPZ1HM100E07O00RAXXX",
+      "lcsc": "C160183",
+      "manufacturer": "AISHI(艾华集团)",
+      "deviceUuid": "3defbfc174804319bf86200893a2f9e9",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "CAP-TH_BD6.3-P2.50-D1.0-FD",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "容值:10uF;精度:±20%;额定电压:50V;纹波电流:1.85A@100kHz;等效串联电阻:90mΩ@100kHz;类型:-;",
+        "Equivalent Series Resistance(ESR)": "90mΩ@100kHz",
+        "L": "7mm",
+        "Lead Spacing": "2.5mm",
+        "Lifetime @ Temp": "2000hrs@105℃",
+        "Operating Temperature": "-55℃~+105℃",
+        "Rated Voltage": "50V",
+        "Ripple Current": "1.85A@100kHz",
+        "Supplier Footprint": "插件,D6.3xL7mm",
+        "Tolerance": "±20%",
+        "Type": "-",
+        "φD": "6.3mm"
+      },
+      "datasheetUrl": "https://atta.szlcsc.com/upload/public/pdf/source/20180329/C160183_870C0485B034FBDC0BE18A738F6C7319.pdf",
+      "datasheetPdfUrl": "",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2",
+        "designators": [
+          "C70@thesis_FOC_board"
+        ],
+        "note": "SPZ1HM100E07O00RAXXX"
+      },
+      "notes": [
+        "the library spells this footprint 'CAP-TH_BD6.3-P2.50-D1.0-FD'; the project's document said 'cap-th_bd6.3-p2.50-d1.0-fd'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "conn.1271wv_3p",
+      "value": "",
+      "mpn": "1271WV-3P",
+      "lcsc": "C7470079",
+      "manufacturer": "HanElectricity(瀚源)",
+      "deviceUuid": "c598ffa3dec04420a07cb928254733f7",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "HDR-TH_3P-P1.27-V-M",
+      "footprint_name_verified": true,
+      "params": {
+        "Circluar Pins/Square Pins": "方针",
+        "Contact Plating": "金",
+        "Description": "插针结构:1x3P;间距:1.27mm;圆针/方针:方针;安装方式:直插;排数:单排;总PIN位数:3P;配合针长度:4mm;塑高:1mm;端接针长度:2.2mm;触头镀层:金;工作温度:-40℃~+105℃;",
+        "Insulation Height": "1mm",
+        "Length of End Connection Pin": "2.2mm",
+        "Length of Mating Pin": "4mm",
+        "Mounting Type": "直插",
+        "Number of Pins": "3P",
+        "Number of Rows": "单排",
+        "Operating Temperature": "-40℃~+105℃",
+        "Pin Structure": "1x3P",
+        "Pitch": "1.27mm",
+        "Supplier Footprint": "插件,P=1.27mm"
+      },
+      "datasheetUrl": "https://atta.szlcsc.com/upload/public/pdf/source/20230725/C20F4E8AA455A91903D6D6B88966FE30.pdf",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/60e29eb4bb9d8199ef755c0257b65153.pdf?productCode=C7470079",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/smart_pillbox.eprj2; blocklib/sources/thesis_FOC_board.eprj2; tests/fixtures/ProPrj_智能药箱_2026-09-17.epro2",
+        "designators": [
+          "U12@ProPrj_智能药箱_2026-09-17",
+          "U12@smart_pillbox",
+          "U12@thesis_FOC_board"
+        ],
+        "note": "1271WV-3P"
+      },
+      "notes": [
+        "the library spells this footprint 'HDR-TH_3P-P1.27-V-M'; the project's document said 'hdr-th_3p-p1.27-v-m'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "conn.2_54_2_2p",
+      "value": "",
+      "mpn": "2.54-2*2P针",
+      "lcsc": "C66690",
+      "manufacturer": "BOOMELE(博穆精密)",
+      "deviceUuid": "620a23849568462ebc78fed879934515",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "HDR-TH_4P-P2.54-V-M-R2-C2-S2.54-1",
+      "footprint_name_verified": true,
+      "params": {
+        "Circluar Pins/Square Pins": "方针",
+        "Color": "黑色",
+        "Contact Material": "黄铜",
+        "Contact Plating": "金",
+        "Current Rating": "3A",
+        "Description": "插针结构:-;间距:2.54mm;行距:2.54mm;圆针/方针:方针;安装方式:直插;排数:双排;总PIN位数:4P;额定电流:3A;额定电压:-;配合针长度:6mm;塑高:2.5mm;端接针长度:3mm;触头材质:黄铜;触头镀层:金;工作温度:-55℃~+105℃;颜色:黑色;",
+        "Insulation Height": "2.5mm",
+        "Length of End Connection Pin": "3mm",
+        "Length of Mating Pin": "6mm",
+        "Mounting Type": "直插",
+        "Number of Pins": "4P",
+        "Number of Rows": "双排",
+        "Operating Temperature": "-55℃~+105℃",
+        "Pin Structure": "-",
+        "Pitch": "2.54mm",
+        "Row Spacing": "2.54mm",
+        "Supplier Footprint": "插件,P=2.54mm",
+        "Voltage Rating (Max)": "-"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/2.54-2*2P%25E9%2592%2588/67776.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/da58a1682b6e28e45de5939b2153e5b6.pdf?productCode=C66690",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "P1@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "2.54-2*2P针"
+      },
+      "notes": []
+    },
+    {
+      "key": "conn.dbt10_7_62_3p_gn_p",
+      "value": "",
+      "mpn": "DBT10-7.62-3P-GN-P",
+      "lcsc": "C479936",
+      "manufacturer": "DORABO(地博电气)",
+      "deviceUuid": "ae58f74a892c4a90960dfd8a9991472e",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "CONN-TH_3P-P7.62_L12.4-W22.9-EX1.9",
+      "footprint_name_verified": true,
+      "params": {
+        "Barrier Type": "两面",
+        "Color": "绿色",
+        "Current Rating": "24A",
+        "Mounting Type": "直插",
+        "Number of PINs Per Row": "3",
+        "Number of Pins": "3P",
+        "Number of Positions or Pins": "1x3P",
+        "Number of Rows": "1",
+        "Operating Temperature": "-40℃~+105℃",
+        "Pin Location": "边脚",
+        "Pitch": "7.62mm",
+        "Supplier Footprint": "插件,P=7.62mm",
+        "Voltage Rating (Max)": "450V",
+        "Wire Gauge - AWG": "14~22",
+        "Wire Gauge - mm2": "-"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/DBT10-7.62-3P-GN-P/487474.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/f35780fd09fcf4e336a9e413cf8cb1f5.pdf?productCode=C479936",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2",
+        "designators": [
+          "U22@thesis_FOC_board"
+        ],
+        "note": "DBT10-7.62-3P-GN-P"
+      },
+      "notes": [
+        "the library spells this footprint 'CONN-TH_3P-P7.62_L12.4-W22.9-EX1.9'; the project's document said 'conn-th_3p-p7.62_l12.4-w22.9-ex1.9'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "conn.hx_pz2_54_2x6p_tp",
+      "value": "",
+      "mpn": "HX PZ2.54-2x6P TP",
+      "lcsc": "C32713286",
+      "manufacturer": "hanxia(韩下)",
+      "deviceUuid": "8a49355520f24158a315533df4d4b32a",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "HDR-SMD_12P-P2.54-V-M-R2-C6-LS7.5",
+      "footprint_name_verified": true,
+      "params": {
+        "Circluar Pins/Square Pins": "方针",
+        "Color": "黑色",
+        "Contact Material": "黄铜",
+        "Contact Plating": "金",
+        "Current Rating": "3A",
+        "Description": "插针结构:2x6P;间距:2.54mm;行距:2.54mm;圆针/方针:方针;安装方式:立贴;排数:双排;总PIN位数:12P;额定电流:3A;额定电压:1kV;配合针长度:6mm;塑高:2.5mm;端接针长度:-;触头材质:黄铜;触头镀层:金;工作温度:-40℃~+105℃;颜色:黑色;",
+        "Insulation Height": "2.5mm",
+        "Length of End Connection Pin": "-",
+        "Length of Mating Pin": "6mm",
+        "Mounting Type": "立贴",
+        "Number of Pins": "12P",
+        "Number of Rows": "双排",
+        "Operating Temperature": "-40℃~+105℃",
+        "Pin Structure": "2x6P",
+        "Pitch": "2.54mm",
+        "Row Spacing": "2.54mm",
+        "Supplementary Features": "-",
+        "Supplier Footprint": "SMD,P=2.54mm",
+        "Voltage Rating (Max)": "1kV"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/HX%2520PZ2.54-2x6P%2520TP/34444566.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/35697d6a9ffa7ff5e797d2c9ca92148a.pdf?productCode=C32713286",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2",
+        "designators": [
+          "U4@ProPrj_毕设FOC驱动板_2026-09-17",
+          "U6@ProPrj_毕设FOC驱动板_2026-09-17"
+        ],
+        "note": "HX PZ2.54-2x6P TP"
+      },
+      "notes": []
+    },
+    {
+      "key": "conn.hx_pz2_54_2x6p_zz",
+      "value": "",
+      "mpn": "HX PZ2.54-2x6P ZZ",
+      "lcsc": "C32713279",
+      "manufacturer": "hanxia(韩下)",
+      "deviceUuid": "8032af6a4b74414cb1b8755f69fcea38",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "HDR-TH_12P-P2.54-V-M-R2-C6-S2.54_77313-101-12LF",
+      "footprint_name_verified": true,
+      "params": {
+        "Circluar Pins/Square Pins": "方针",
+        "Color": "黑色",
+        "Contact Material": "铜合金",
+        "Contact Plating": "金",
+        "Current Rating": "3A",
+        "Description": "插针结构:2x6P;间距:2.54mm;行距:2.54mm;圆针/方针:方针;安装方式:直插;排数:双排;总PIN位数:12P;额定电流:3A;额定电压:1kV;配合针长度:6mm;塑高:2.5mm;端接针长度:3mm;触头材质:铜合金;触头镀层:金;工作温度:-40℃~+105℃;颜色:黑色;",
+        "Insulation Height": "2.5mm",
+        "Length of End Connection Pin": "3mm",
+        "Length of Mating Pin": "6mm",
+        "Mounting Type": "直插",
+        "Number of Pins": "12P",
+        "Number of Rows": "双排",
+        "Operating Temperature": "-40℃~+105℃",
+        "Pin Structure": "2x6P",
+        "Pitch": "2.54mm",
+        "Row Spacing": "2.54mm",
+        "Supplementary Features": "-",
+        "Supplier Footprint": "插件,P=2.54mm",
+        "Voltage Rating (Max)": "1kV"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/HX%2520PZ2.54-2x6P%2520ZZ/34444559.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/020c4429d2f5d5816bf822d48a433935.pdf?productCode=C32713279",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "U2@ProPrj_高速电机控制器_2026-09-16",
+          "U4@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "HX PZ2.54-2x6P ZZ"
+      },
+      "notes": []
+    },
+    {
+      "key": "conn.microxnj",
+      "value": "",
+      "mpn": "MicroXNJ",
+      "lcsc": "C404969",
+      "manufacturer": "SHOU HAN(首韩)",
+      "deviceUuid": "8519cdaa8fb74c45b01b17ba48226572",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "MICRO-USB-SMD_MICROXNJ_1",
+      "footprint_name_verified": true,
+      "params": {
+        "Connect-Disconnect Life": "5千次",
+        "Connector Type": "Micro-B",
+        "Current Rating-Power": "1.8A",
+        "Description": "连接器类型:Micro-B;协议标准:USB 2.0;公母:母;安装方式:卧贴;触点数量:5P;端口数量:1;额定电流 - 电源:1.8A;工作温度:-20℃~+85℃;",
+        "Detection color": "黑色",
+        "Gender": "母",
+        "Mounting Type": "卧贴",
+        "Number of Contacts": "5P",
+        "Number of Ports": "1",
+        "Operating Temperature": "-20℃~+85℃",
+        "Protocol Standard": "USB 2.0",
+        "Supplier Footprint": "SMD",
+        "Voltage Rating": "30V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/MicroXNJ/392534.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/0f7c26967406a0a8af9ec0be0f7db719.pdf?productCode=C404969",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/smart_pillbox.eprj2; tests/fixtures/ProPrj_智能药箱_2026-09-17.epro2",
+        "designators": [
+          "USB1@ProPrj_智能药箱_2026-09-17",
+          "USB1@smart_pillbox"
+        ],
+        "note": "MicroXNJ"
+      },
+      "notes": [
+        "the library spells this footprint 'MICRO-USB-SMD_MICROXNJ_1'; the project's document said 'micro-usb-smd_microxnj'. The library's spelling is kept (006b's vocabulary rule).",
+        "the library spells this footprint 'MICRO-USB-SMD_MICROXNJ_1'; the project's document said 'MICRO-USB-SMD_MICROXNJ'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "conn.mr60pb_m",
+      "value": "",
+      "mpn": "MR60PB-M",
+      "lcsc": "C53087234",
+      "manufacturer": "AMASS(艾迈斯)",
+      "deviceUuid": "84f6a82db4284a0b8fa7cbe2e1a90e3a",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "CONN-TH_3P_MR60PB-M",
+      "footprint_name_verified": true,
+      "params": {
+        "Supplier Footprint": "-"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/MR60PB-M/56055074.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/beecfbc64e1e5366bafce3a730d4a75f.pdf?productCode=C53087234",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "CN2@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "MR60PB-M_C53087234"
+      },
+      "notes": []
+    },
+    {
+      "key": "conn.mx1_25_lt_3",
+      "value": "",
+      "mpn": "MX1.25-LT-3",
+      "lcsc": "C9900097986",
+      "manufacturer": "",
+      "deviceUuid": "d242aca920da44e1b77610bf3970daf6",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "CONN-SMD_3P-P1.25-MX1.25-LT-3",
+      "footprint_name_verified": true,
+      "params": {
+        "Supplier Footprint": "MX1.25-LT-3P"
+      },
+      "datasheetUrl": "",
+      "datasheetPdfUrl": "",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2; tests/fixtures/ProPrj_ROBOT ctrl FOC_2026-09-16.epro2; tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2; tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "U3@ProPrj_ROBOT ctrl FOC_2026-09-16",
+          "U8@ProPrj_毕设FOC驱动板_2026-09-17",
+          "U8@ProPrj_高速电机控制器_2026-09-16",
+          "U9@thesis_FOC_board"
+        ],
+        "note": "MX1.25-LT-3"
+      },
+      "notes": [
+        "the library spells this footprint 'CONN-SMD_3P-P1.25-MX1.25-LT-3'; the project's document said 'conn-smd_3p-p1.25-mx1.25-lt-3'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "conn.pm254v_11_03_h85",
+      "value": "",
+      "mpn": "PM254V-11-03-H85",
+      "lcsc": "C541850",
+      "manufacturer": "XFCN(兴飞)",
+      "deviceUuid": "2bee96c3aa6543c38682666a30e20e35",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "HDR-TH_3P-P2.54-V-F",
+      "footprint_name_verified": true,
+      "params": {
+        "Circular Hole / Square Hole": "方孔",
+        "Contact Material": "黄铜",
+        "Contact Plating": "-",
+        "Current Rating": "3A",
+        "Holes Direction": "顶部",
+        "Holes Structure": "1x3P",
+        "Insulation Height": "8.5mm",
+        "Mounting Type": "直插",
+        "Number of Positions": "3P",
+        "Number of Rows": "单排",
+        "Operating Temperature": "-40℃~+105℃",
+        "Pitch": "2.54mm",
+        "Row Spacing": "-",
+        "Supplier Footprint": "插件,P=2.54mm"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/PM254V-11-03-H85/562471.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/af0d96c840da8f18a05276b787d46de6.pdf?productCode=C541850",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2",
+        "designators": [
+          "H10@thesis_FOC_board",
+          "H11@thesis_FOC_board",
+          "H12@thesis_FOC_board"
+        ],
+        "note": "PM254V-11-03-H85"
+      },
+      "notes": [
+        "the library spells this footprint 'HDR-TH_3P-P2.54-V-F'; the project's document said 'hdr-th_3p-p2.54-v-f'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "conn.pm254v_11_07_h85",
+      "value": "",
+      "mpn": "PM254V-11-07-H85",
+      "lcsc": "C2832270",
+      "manufacturer": "XFCN(兴飞)",
+      "deviceUuid": "bcde43c8f8474f598d92de798b3b26c2",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "HDR-TH_7P-P2.54-V-F",
+      "footprint_name_verified": true,
+      "params": {
+        "Circular Hole / Square Hole": "方孔",
+        "Current Rating": "3A",
+        "Description": "插孔结构:1x7P;间距:2.54mm;行距:-;圆孔/方孔:方孔;安装方式:直插;排数:单排;总孔位数:7P;额定电流:3A;额定电压:250V;插孔方向:顶部;塑高:-;工作温度:-40℃~+105℃;",
+        "Holes Direction": "顶部",
+        "Holes Structure": "1x7P",
+        "Insulation Height": "-",
+        "Mounting Type": "直插",
+        "Number of Positions": "7P",
+        "Number of Rows": "单排",
+        "Operating Temperature": "-40℃~+105℃",
+        "Pitch": "2.54mm",
+        "Row Spacing": "-",
+        "Supplier Footprint": "插件,P=2.54mm",
+        "Voltage Rating (Max)": "250V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/PM254V-11-07-H85/2989788.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/5aa023c30ffb4f607882b69ea05af7aa.pdf?productCode=C2832270",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/smart_pillbox.eprj2; tests/fixtures/ProPrj_智能药箱_2026-09-17.epro2",
+        "designators": [
+          "H1@ProPrj_智能药箱_2026-09-17",
+          "H1@smart_pillbox"
+        ],
+        "note": "PM254V-11-07-H85"
+      },
+      "notes": [
+        "the library spells this footprint 'HDR-TH_7P-P2.54-V-F'; the project's document said 'hdr-th_7p-p2.54-v-f'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "conn.pz254v_11_04p",
+      "value": "",
+      "mpn": "PZ254V-11-04P",
+      "lcsc": "C2691448",
+      "manufacturer": "XFCN(兴飞)",
+      "deviceUuid": "9b540f58c6ad4e26b03d1a299cfb1108",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "HDR-TH_4P-P2.54-V-M",
+      "footprint_name_verified": true,
+      "params": {
+        "Circluar Pins/Square Pins": "方针",
+        "Color": "黑色",
+        "Contact Material": "-",
+        "Current Rating (Max)": "3A",
+        "Description": "插针结构:1x4P;间距:2.54mm;行距:-;圆针/方针:方针;安装类型:直插;排数:单排;总PIN位数:4P;额定电流:3A;额定电压:250V;配合针长度:6mm;塑高:2.5mm;端接针长度:3mm;触头材质:-;工作温度范围:-40℃~+105℃;颜色:黑色;",
+        "Insulation Height": "2.5mm",
+        "Length of End Connection Pin": "3mm",
+        "Length of Mating Pin": "6mm",
+        "Mounting Type": "直插",
+        "Number of Pins": "4P",
+        "Number of Rows": "单排",
+        "Operating Temperature Range": "-40℃~+105℃",
+        "Pin Structure": "1x4P",
+        "Pitch": "2.54mm",
+        "Row Spacing": "-",
+        "Supplier Footprint": "插件,P=2.54mm",
+        "Voltage Rating (Max)": "250V"
+      },
+      "datasheetUrl": "https://atta.szlcsc.com/upload/public/pdf/source/20200309/C492403_F9F19131791D08044AD4F84F8E751A34.pdf",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/3b85a1cdf6ed945f2e278f00c1e42442.pdf?productCode=C2691448",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/smart_pillbox.eprj2; blocklib/sources/thesis_FOC_board.eprj2; tests/fixtures/ProPrj_智能药箱_2026-09-17.epro2; tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2; tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "H2@ProPrj_智能药箱_2026-09-17",
+          "H2@smart_pillbox",
+          "H3@ProPrj_智能药箱_2026-09-17",
+          "H3@smart_pillbox",
+          "H9@thesis_FOC_board",
+          "SWD1@ProPrj_毕设FOC驱动板_2026-09-17",
+          "SWD1@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "PZ254V-11-04P"
+      },
+      "notes": [
+        "the library spells this footprint 'HDR-TH_4P-P2.54-V-M'; the project's document said 'hdr-th_4p-p2.54-v-m'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "conn.type_c_16pin_2md_073",
+      "value": "",
+      "mpn": "TYPE-C 16PIN 2MD(073)",
+      "lcsc": "C2765186",
+      "manufacturer": "SHOU HAN(首韩)",
+      "deviceUuid": "45fb1c7fbc5b42ebbb9f47d092c4f3dc",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "USB-C-SMD_TYPE-C-16PIN-2MD-073",
+      "footprint_name_verified": true,
+      "params": {
+        "Center Height": "-",
+        "Connect-Disconnect Life": "5千次",
+        "Connector Type": "Type-C",
+        "Current Rating-Power": "3A",
+        "Description": "连接器类型:Type-C;协议标准:USB 3.1;公母:母;安装方式:卧贴;触点数量:16P;端口数量:1;额定电流 - 电源:3A;工作温度:-25℃~+85℃;",
+        "Detection color": "黑色",
+        "Gender": "母",
+        "Length": "-",
+        "Mounting Type": "卧贴",
+        "Number of Contacts": "16P",
+        "Number of Ports": "1",
+        "Operating Temperature": "-25℃~+85℃",
+        "Protocol Standard": "USB 3.1",
+        "Supplementary Features": "-",
+        "Supplier Footprint": "SMD",
+        "Voltage Rating": "5V"
+      },
+      "datasheetUrl": "https://atta.szlcsc.com/upload/public/pdf/source/20250506/FFB74EDFDFA0AC372CE4A8E4F739CCEF.pdf",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/2d53d8d8199c9dd6666d9bc9ac7c3a1e.pdf?productCode=C2765186",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2; tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2; tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "USB1@ProPrj_毕设FOC驱动板_2026-09-17",
+          "USB1@ProPrj_高速电机控制器_2026-09-16",
+          "USB1@thesis_FOC_board"
+        ],
+        "note": "TYPE-C 16PIN 2MD(073)"
+      },
+      "notes": [
+        "the library spells this footprint 'USB-C-SMD_TYPE-C-16PIN-2MD-073'; the project's document said 'usb-c-smd_type-c-6pin-2md-073'. The library's spelling is kept (006b's vocabulary rule).",
+        "the library spells this footprint 'USB-C-SMD_TYPE-C-16PIN-2MD-073'; the project's document said 'USB-C-SMD_TYPE-C-6PIN-2MD-073'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "conn.wafer_mx1_25_4pzz",
+      "value": "",
+      "mpn": "WAFER-MX1.25-4PZZ",
+      "lcsc": "C3029397",
+      "manufacturer": "XUNPU(讯普)",
+      "deviceUuid": "237bb0e3087b490b8571cff1c130965d",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "CONN-TH_4P-P1.25_WAFER-MX1.25-4PZZ",
+      "footprint_name_verified": true,
+      "params": {
+        "Color": "米色",
+        "Contact Material": "黄铜",
+        "Contact Plating": "锡",
+        "Current Rating": "1A",
+        "Description": "插针结构:1x4P;间距:1.25mm;安装方式:直插;参考系列:PicoBlade(MX 1.25);总PIN数:4P;排数:1;每排PIN数:4;行距:-;额定电流:1A;触头材质:黄铜;触头镀层:锡;工作温度:-25℃~+85℃;",
+        "Flame Retardant Rating": "UL94V-0",
+        "Mounting Type": "直插",
+        "Number of PINs Per Row": "4",
+        "Number of Pins": "4P",
+        "Number of Rows": "1",
+        "Operating Temperature": "-25℃~+85℃",
+        "Pins Structure": "1x4P",
+        "Pitch": "1.25mm",
+        "Plastic Material": "LCP",
+        "Reference Series": "PicoBlade(MX 1.25)",
+        "Row Spacing": "-",
+        "Supplementary Features": "-",
+        "Supplier Footprint": "插件,P=1.25mm",
+        "Voltage Rating": "125V",
+        "X-Length of Bottom Edge on Board (Spacing Line)": "6.9mm",
+        "Y-Width of Bottom Edge on Board": "3.3mm",
+        "Z-Height of the Board": "4.6mm"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/WAFER-MX1.25-4PZZ/3561409.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/2b67f5d7aaa0e45cc024bc162ea1dd9f.pdf?productCode=C3029397",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2",
+        "designators": [
+          "U21@thesis_FOC_board"
+        ],
+        "note": "WAFER-MX1.25-4PZZ"
+      },
+      "notes": [
+        "the library spells this footprint 'CONN-TH_4P-P1.25_WAFER-MX1.25-4PZZ'; the project's document said 'conn-th_4p-p1.25_wafer-mx1.25-4pzz'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "conn.xt30pw_m30_g_y",
+      "value": "",
+      "mpn": "XT30PW-M30.G.Y",
+      "lcsc": "C431092",
+      "manufacturer": "AMASS(艾迈斯)",
+      "deviceUuid": "b32777ef8cbb47c2aab830bd60bc67df",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "CONN-TH_XT30PW-M",
+      "footprint_name_verified": true,
+      "params": {
+        "Connector type": "航模插头",
+        "Description": "Socket,DCsupply,XT30,male,PIN:2",
+        "Rated current": "15A",
+        "Rated voltage": "500VDC",
+        "Size/Specification": "2pin",
+        "Supplier Footprint": "-",
+        "Wire gauge": "16/18/20AWG",
+        "contact resistance": "1.2mΩ",
+        "interface form": "公头"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/XT30PW-M30.G.Y/426930.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/f40c503d729038bd14858056d73ccb74.pdf?productCode=C431092",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2",
+        "designators": [
+          "CN3@ProPrj_毕设FOC驱动板_2026-09-17"
+        ],
+        "note": "XT30PW-M30.G.Y"
+      },
+      "notes": []
+    },
+    {
+      "key": "conn.xt60pw_m",
+      "value": "",
+      "mpn": "XT60PW-M",
+      "lcsc": "C98732",
+      "manufacturer": "AMASS(艾迈斯)",
+      "deviceUuid": "4f157162dfd948088abecf15d05d4f0c",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "CONN-TH_XT60PW-M",
+      "footprint_name_verified": true,
+      "params": {
+        "Belt length": "-",
+        "Colour": "黄色",
+        "Connector type": "卧式插头",
+        "Description": "模型锂电连接器",
+        "FlameRetardantGrade": "-",
+        "Input": "-",
+        "InsulationMaterial": "-",
+        "Interface": "-",
+        "InterfaceType": "公头",
+        "MaximumCurrent": "-",
+        "MetalMaterial": "-",
+        "NumberOfUSBHoles": "-",
+        "Output": "-",
+        "Power": "-",
+        "RatedCurrent": "-",
+        "RatedVoltage": "-",
+        "RecommendedWireGauge": "-",
+        "Size": "-",
+        "Supplier Footprint": "-",
+        "Type": "卧式插头",
+        "Type1": "-",
+        "colour": "黄色",
+        "contact resistance": "-",
+        "interface form": "公头",
+        "specifications": "-"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/XT60PW-M/99942.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/e258adf1ce44622bb05a5787d35fc0fa.pdf?productCode=C98732",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2; tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "CN1@thesis_FOC_board",
+          "CN4@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "XT60PW-M"
+      },
+      "notes": [
+        "the library spells this footprint 'CONN-TH_XT60PW-M'; the project's document said 'conn-th_xt60pw-m'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "conn.zx_mx1_25_4pwt",
+      "value": "",
+      "mpn": "ZX-MX1.25-4PWT",
+      "lcsc": "C7430470",
+      "manufacturer": "Megastar(兆星)",
+      "deviceUuid": "1c11d04f0a79472ea4be195533fa53af",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "CONN-SMD_4P-P1.25-MX1.25-4P-WT",
+      "footprint_name_verified": true,
+      "params": {
+        "Color": "米色",
+        "Contact Material": "黄铜",
+        "Contact Plating": "锡",
+        "Current Rating": "1A",
+        "Description": "插针结构:1x4P;间距:1.25mm;安装方式:卧贴;参考系列:PicoBlade(MX 1.25);总PIN数:4P;排数:1;每排PIN数:4;行距:-;额定电流:1A;触头材质:黄铜;触头镀层:锡;工作温度:-25℃~+85℃;",
+        "Flame Retardant Rating": "-",
+        "Mounting Type": "卧贴",
+        "Number of PINs Per Row": "4",
+        "Number of Pins": "4P",
+        "Number of Rows": "1",
+        "Operating Temperature": "-25℃~+85℃",
+        "Pins Structure": "1x4P",
+        "Pitch": "1.25mm",
+        "Plastic Material": "LCP",
+        "Reference Series": "PicoBlade(MX 1.25)",
+        "Row Spacing": "-",
+        "Supplementary Features": "辅助焊脚",
+        "Supplier Footprint": "SMD,P=1.25mm,卧贴",
+        "Voltage Rating": "125V",
+        "X-Length of Bottom Edge on Board (Spacing Line)": "10mm",
+        "Y-Width of Bottom Edge on Board": "5.25mm",
+        "Z-Height of the Board": "3.6mm"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/ZX-MX1.25-4PWT/8430339.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/d48e07062db224e83de81d729cb66f70.pdf?productCode=C7430470",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2; tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "U3@ProPrj_毕设FOC驱动板_2026-09-17",
+          "U3@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "ZX-MX1.25-4PWT"
+      },
+      "notes": []
+    },
+    {
+      "key": "conn.zx_mx1_25_6plt",
+      "value": "",
+      "mpn": "ZX-MX1.25-6PLT",
+      "lcsc": "C7430477",
+      "manufacturer": "Megastar(兆星)",
+      "deviceUuid": "3bc6057bea8d4c9ebf31045d2f7513d7",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "CONN-SMD_6P-P1.25_ZX-MX1.25-6PLT",
+      "footprint_name_verified": true,
+      "params": {
+        "Color": "米色",
+        "Contact Material": "黄铜",
+        "Contact Plating": "锡",
+        "Current Rating": "1A",
+        "Description": "插针结构:1x6P;间距:1.25mm;安装方式:立贴;参考系列:PicoBlade(MX 1.25);总PIN数:6P;排数:1;每排PIN数:6;行距:-;额定电流:1A;触头材质:黄铜;触头镀层:锡;工作温度:-25℃~+85℃;",
+        "Flame Retardant Rating": "-",
+        "Mounting Type": "立贴",
+        "Number of PINs Per Row": "6",
+        "Number of Pins": "6P",
+        "Number of Rows": "1",
+        "Operating Temperature": "-25℃~+85℃",
+        "Pins Structure": "1x6P",
+        "Pitch": "1.25mm",
+        "Plastic Material": "LCP",
+        "Reference Series": "PicoBlade(MX 1.25)",
+        "Row Spacing": "-",
+        "Supplementary Features": "辅助焊脚",
+        "Supplier Footprint": "SMD,P=1.25mm",
+        "Voltage Rating": "125V",
+        "X-Length of Bottom Edge on Board (Spacing Line)": "12.5mm",
+        "Y-Width of Bottom Edge on Board": "4.3mm",
+        "Z-Height of the Board": "4.7mm"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/ZX-MX1.25-6PLT/8430346.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/3478dd3a407171d22798820c7c3b7f98.pdf?productCode=C7430477",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2; tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2; tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "CN1@ProPrj_毕设FOC驱动板_2026-09-17",
+          "CN1@ProPrj_高速电机控制器_2026-09-16",
+          "CN2@ProPrj_毕设FOC驱动板_2026-09-17",
+          "CN2@thesis_FOC_board"
+        ],
+        "note": "ZX-MX1.25-6PLT"
+      },
+      "notes": [
+        "the library spells this footprint 'CONN-SMD_6P-P1.25_ZX-MX1.25-6PLT'; the project's document said 'conn-smd_6p-p1.25_zx-mx1.25-6plt'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "diode.smcj28ca",
+      "value": "",
+      "mpn": "SMCJ28CA",
+      "lcsc": "C19077606",
+      "manufacturer": "R+O(宏嘉诚)",
+      "deviceUuid": "30562030bdf64bc7b5fbfb5e08d650ee",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "SMC_L6.9-W5.9-LS7.9-BI",
+      "footprint_name_verified": true,
+      "params": {
+        "Clamping Voltage": "45.4V",
+        "Operating Temperature": "-55℃~+150℃",
+        "Peak Pulse Current (Ipp)": "33.1A@10/1000us",
+        "Peak Pulse Power Dissipation (Ppp)": "1.5kW@10/1000us",
+        "Polarity": "双向",
+        "Reverse Leakage Current (Ir)": "1uA",
+        "Reverse Stand-Off Voltage (Vrwm)": "28V",
+        "Supplier Footprint": "SMC(DO-214AB)",
+        "Type": "TVS",
+        "Voltage - Breakdown": "34.4V",
+        "level of protection": "IEC 61000-4-2"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/SMCJ28CA/20275691.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/63434cf44d11833c6d7a145dda2ad39c.pdf?productCode=C19077606",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2",
+        "designators": [
+          "D1@thesis_FOC_board"
+        ],
+        "note": "SMCJ28CA_C19077606"
+      },
+      "notes": [
+        "the library spells this footprint 'SMC_L6.9-W5.9-LS7.9-BI'; the project's document said 'smc_l6.9-w5.9-ls7.9-bi'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "diode.smcj40ca",
+      "value": "",
+      "mpn": "SMCJ40CA",
+      "lcsc": "C80273",
+      "manufacturer": "Littelfuse(美国力特)",
+      "deviceUuid": "0f922dbd5a524bf89e3715cd69af4937",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "SMC_L6.9-W5.9-LS7.9-BI",
+      "footprint_name_verified": true,
+      "params": {
+        "Clamping Voltage": "64.5V",
+        "Description": "极性:双向;反向截止电压(Vrwm):40V;钳位电压:64.5V;峰值脉冲电流(Ipp):23.3A;峰值脉冲功率(Ppp):1.5kW;击穿电压:44.4V;",
+        "Operating Temperature": "-65℃~+150℃",
+        "Peak Pulse Current (Ipp)": "23.3A",
+        "Peak Pulse Power Dissipation (Ppp)": "1.5kW",
+        "Polarity": "双向",
+        "Reverse Stand-Off Voltage (Vrwm)": "40V",
+        "Supplier Footprint": "DO-214AB",
+        "Type": "TVS",
+        "Voltage - Breakdown": "44.4V",
+        "level of protection": "IEC 61000-4-2"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/SMCJ40CA/81419.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/4ffc39069ef6aef3785dfbfda82b9e7d.pdf?productCode=C80273",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2",
+        "designators": [
+          "D2@ProPrj_毕设FOC驱动板_2026-09-17"
+        ],
+        "note": "SMCJ40CA_C80273"
+      },
+      "notes": []
+    },
+    {
+      "key": "fet.agm12n10a",
+      "value": "",
+      "mpn": "AGM12N10A",
+      "lcsc": "C5464768",
+      "manufacturer": "AGMSEMI(芯控源)",
+      "deviceUuid": "9ecfa3b9411e4fdbbd23a64c863223b8",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "PDFN-8_L5.8-W4.9-P1.27-LS6.1-BL-A",
+      "footprint_name_verified": true,
+      "params": {
+        "Current - Continuous Drain(Id)": "55A",
+        "Description": "数量:1个N沟道;漏源电压(Vdss):100V;连续漏极电流(Id):55A;导通电阻(RDS(on)):9.3mΩ@10V;耗散功率(Pd):83W;阈值电压(Vgs(th)):1.8V@250uA;",
+        "Drain to Source Voltage": "100V",
+        "Gate Charge(Qg)": "22nC@10V",
+        "Gate Threshold Voltage (Vgs(th))": "1.8V@250uA",
+        "Input Capacitance(Ciss)": "1.08nF",
+        "Number": "1个N沟道",
+        "Operating Temperature": "-55℃~+150℃",
+        "Output Capacitance(Coss)": "460pF",
+        "Pd - Power Dissipation": "83W",
+        "RDS(on)": "9.3mΩ@10V",
+        "Reverse Transfer Capacitance (Crss@Vds)": "9pF",
+        "Supplier Footprint": "PDFN-8(5x6)"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/AGM12N10A/6380600.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/e29cd95b1eacd31c7b89977ce3a66ab4.pdf?productCode=C5464768",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "Q1@ProPrj_高速电机控制器_2026-09-16",
+          "Q2@ProPrj_高速电机控制器_2026-09-16",
+          "Q3@ProPrj_高速电机控制器_2026-09-16",
+          "Q4@ProPrj_高速电机控制器_2026-09-16",
+          "Q5@ProPrj_高速电机控制器_2026-09-16",
+          "Q6@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "AGM12N10A"
+      },
+      "notes": []
+    },
+    {
+      "key": "fet.mcac53n06y_tp",
+      "value": "",
+      "mpn": "MCAC53N06Y-TP",
+      "lcsc": "C5189463",
+      "manufacturer": "MCC(美微科)",
+      "deviceUuid": "507327f7a683429d916fa741a3baabca",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "PDFN-8_L5.8-W5.1-P1.27-LS6.1-BL",
+      "footprint_name_verified": true,
+      "params": {
+        "Current - Continuous Drain(Id)": "53A",
+        "Description": "数量:1个N沟道;漏源电压(Vdss):60V;连续漏极电流(Id):53A;导通电阻(RDS(on)):6.9mΩ@4.5V,10A;耗散功率(Pd):70W;阈值电压(Vgs(th)):1.1V;",
+        "Drain to Source Voltage": "60V",
+        "Gate Charge(Qg)": "31nC@30V",
+        "Gate Threshold Voltage (Vgs(th))": "1.1V",
+        "Input Capacitance(Ciss)": "1.988nF@30V",
+        "Number": "1个N沟道",
+        "Operating Temperature": "-55℃~+150℃",
+        "Pd - Power Dissipation": "70W",
+        "RDS(on)": "6.9mΩ@4.5V,10A",
+        "Reverse Transfer Capacitance (Crss@Vds)": "14pF@30V",
+        "Supplier Footprint": "DFN(5x6)"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/MCAC53N06Y-TP/5867832.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/fae5c976a73b99fa79d1bff259f0219b.pdf?productCode=C5189463",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2",
+        "designators": [
+          "Q1@ProPrj_毕设FOC驱动板_2026-09-17",
+          "Q2@ProPrj_毕设FOC驱动板_2026-09-17",
+          "Q3@ProPrj_毕设FOC驱动板_2026-09-17",
+          "Q4@ProPrj_毕设FOC驱动板_2026-09-17",
+          "Q7@ProPrj_毕设FOC驱动板_2026-09-17",
+          "Q8@ProPrj_毕设FOC驱动板_2026-09-17"
+        ],
+        "note": "MCAC53N06Y-TP"
+      },
+      "notes": []
+    },
+    {
+      "key": "ic.2n7002k",
+      "value": "",
+      "mpn": "2N7002K",
+      "lcsc": "C22379475",
+      "manufacturer": "R+O(宏嘉诚)",
+      "deviceUuid": "b73488897c9a4990a3291a75e9e7715d",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "SOT-23-3_L2.9-W1.3-P0.95-LS2.4-BR",
+      "footprint_name_verified": true,
+      "params": {
+        "Configuration": "-",
+        "Current - Continuous Drain(Id)": "340mA",
+        "Description": "数量:1个N沟道;漏源电压(Vdss):60V;连续漏极电流(Id):340mA;导通电阻(RDS(on)):900mΩ@10V；1.1Ω@4.5V;耗散功率(Pd):350mW;阈值电压(Vgs(th)):1.3V@1.0mA;",
+        "Drain to Source Voltage": "60V",
+        "Gate Charge(Qg)": "-",
+        "Gate Threshold Voltage (Vgs(th))": "1.3V@1.0mA",
+        "Input Capacitance(Ciss)": "40pF@10V",
+        "Number": "1个N沟道",
+        "Operating Temperature": "-55℃~+150℃",
+        "Pd - Power Dissipation": "350mW",
+        "RDS(on)": "900mΩ@10V；1.1Ω@4.5V",
+        "Reverse Transfer Capacitance (Crss@Vds)": "10pF@10V",
+        "Supplier Footprint": "SOT-23",
+        "Type": "N沟道"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/2N7002K/23902955.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/a2f43c1a60a861bf3c8ac550bcf5f81c.pdf?productCode=C22379475",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/smart_pillbox.eprj2; tests/fixtures/ProPrj_智能药箱_2026-09-17.epro2",
+        "designators": [
+          "U2@ProPrj_智能药箱_2026-09-17",
+          "U2@smart_pillbox"
+        ],
+        "note": "2N7002K_C22379475"
+      },
+      "notes": [
+        "the library spells this footprint 'SOT-23-3_L2.9-W1.3-P0.95-LS2.4-BR'; the project's document said 'sot-23-3_l2.9-w1.3-p0.95-ls2.4-br'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "ic.ams1117_3_3",
+      "value": "",
+      "mpn": "AMS1117-3.3",
+      "lcsc": "C6186",
+      "manufacturer": "AMS",
+      "deviceUuid": "9f9c6cb41c7449fd8acf96aceed2661a",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "SOT-223-3_L6.5-W3.4-P2.30-LS7.0-BR",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "输出类型:固定;工作电压:16V;输出电压:3.3V;输出电流:1A;电源纹波抑制比(PSRR):72dB@(120Hz);输出极性:正极;",
+        "Features": "过流保护；过热保护",
+        "Noise": "0.003%Vout",
+        "Number of Outputs": "1",
+        "Operating Temperature": "-40℃~+125℃",
+        "Output Configuration": "正极",
+        "Output Current": "1A",
+        "Output Type": "固定",
+        "Output Voltage": "3.3V",
+        "Power Supply Rejection Ratio (PSRR)": "72dB@(120Hz)",
+        "Supplier Footprint": "SOT-223",
+        "Voltage - Supply": "16V",
+        "Voltage Dropout": "1.1V@(800mA)",
+        "standby current": "5mA"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/AMS1117-3.3/6652.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/e6935943fc6b1bbf350a1a0f3e90dc4a.pdf?productCode=C6186",
+      "basic": true,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/smart_pillbox.eprj2; tests/fixtures/ProPrj_智能药箱_2026-09-17.epro2",
+        "designators": [
+          "U11@ProPrj_智能药箱_2026-09-17",
+          "U11@smart_pillbox"
+        ],
+        "note": "AMS1117-3.3_C6186"
+      },
+      "notes": [
+        "the library spells this footprint 'SOT-223-3_L6.5-W3.4-P2.30-LS7.0-BR'; the project's document said 'sot-223-3_l6.5-w3.4-p2.30-ls7.0-br'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "ic.ch340n",
+      "value": "",
+      "mpn": "CH340N",
+      "lcsc": "C2977777",
+      "manufacturer": "WCH(南京沁恒)",
+      "deviceUuid": "325695eb60964188af26323ab2a1a9ff",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "SOP-8_L4.9-W3.9-P1.27-LS6.0-BL",
+      "footprint_name_verified": true,
+      "params": {
+        "Applications Function": "USB转串口",
+        "Data Rate": "2Mbps",
+        "Description": "应用功能:USB转串口;接口协议:USB 2.0;通道数:1;数据速率:2Mbps;",
+        "Number of Channels": "1",
+        "Operating Temperature": "-20℃~+70℃",
+        "Protocol": "USB 2.0",
+        "Supplier Footprint": "SOP-8",
+        "Voltage - Supply": "3.3V；5V"
+      },
+      "datasheetUrl": "https://atta.szlcsc.com/upload/public/pdf/source/20240313/115CDE92081B1D6CB446704AD5D0F5F2.pdf",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/a3b2ca2c7638da2635df3f5b1d90bcc0.pdf?productCode=C2977777",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/smart_pillbox.eprj2; blocklib/sources/thesis_FOC_board.eprj2; tests/fixtures/ProPrj_ROBOT ctrl FOC_2026-09-16.epro2; tests/fixtures/ProPrj_智能药箱_2026-09-17.epro2; tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2; tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "U10@ProPrj_智能药箱_2026-09-17",
+          "U10@smart_pillbox",
+          "U5@ProPrj_毕设FOC驱动板_2026-09-17",
+          "U5@ProPrj_高速电机控制器_2026-09-16",
+          "U6@ProPrj_ROBOT ctrl FOC_2026-09-16",
+          "U8@thesis_FOC_board"
+        ],
+        "note": "CH340N"
+      },
+      "notes": [
+        "the library spells this footprint 'SOP-8_L4.9-W3.9-P1.27-LS6.0-BL'; the project's document said 'sop-8_l4.9-w3.9-p1.27-ls6.0-bl'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "ic.drv8313pwpr",
+      "value": "",
+      "mpn": "DRV8313PWPR",
+      "lcsc": "C92482",
+      "manufacturer": "TI(德州仪器)",
+      "deviceUuid": "091167023399467eaf044fa80257e928",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "HTSSOP-28_L9.8-W4.5-P0.65-LS6.6-BL-EP",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "DRV8313 具有集成 FET、65V 最大电压、3A 峰值电流的三相电机驱动器",
+        "Supplier Footprint": "HTSSOP-28-EP-4.5mm"
+      },
+      "datasheetUrl": "https://www.ti.com/cn/lit/gpn/drv8313",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/96f783672a1a4f37a514710c6bbe7fbf.pdf?productCode=C92482",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_ROBOT ctrl FOC_2026-09-16.epro2",
+        "designators": [
+          "DRV1@ProPrj_ROBOT ctrl FOC_2026-09-16"
+        ],
+        "note": "DRV8313PWPR"
+      },
+      "notes": []
+    },
+    {
+      "key": "ic.drv8350srtvr",
+      "value": "",
+      "mpn": "DRV8350SRTVR",
+      "lcsc": "C2861195",
+      "manufacturer": "TI(德州仪器)",
+      "deviceUuid": "be1781dd1f5a470a9fba3d1f80548721",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "WQFN-32_L5.0-W5.0-P0.50-TL-EP",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "DRV8350 102V（最大值）三相智能栅极驱动器",
+        "Supplier Footprint": "WQFN-32-EP(5x5)"
+      },
+      "datasheetUrl": "https://www.ti.com/cn/lit/gpn/drv8353",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/b374a33eadd5836b4345cb0af4a8964a.pdf?productCode=C2861195",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2; tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2; tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "U10@thesis_FOC_board",
+          "U18@ProPrj_高速电机控制器_2026-09-16",
+          "U2@ProPrj_毕设FOC驱动板_2026-09-17"
+        ],
+        "note": "DRV8350SRTVR"
+      },
+      "notes": [
+        "identity re-anchored by C-number through `lib.device.search` (matched on 'supplierId'); the stored library uuid 'FOC' is a library *name*, not a uuid, so `lib.device.get` rejected the pair. device uuid 68769f45364047248aaea8f89f900c62 -> be1781dd1f5a470a9fba3d1f80548721.",
+        "the library spells this footprint 'WQFN-32_L5.0-W5.0-P0.50-TL-EP'; the project's document said 'wqfn-32_l5.0-w5.0-p0.50-tl-ep'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "ic.esp_01s",
+      "value": "2.4GHz",
+      "mpn": "ESP-01S",
+      "lcsc": "C503582",
+      "manufacturer": "Ai-Thinker(安信可)",
+      "deviceUuid": "6193b73932f6487b91cf99ec0ee8469e",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "WIFIM-TH_8P-L24.7-W14.4-P2.54",
+      "footprint_name_verified": true,
+      "params": {
+        "Antenna Type": "板载PCB天线",
+        "Core Processor": "ESP8266芯片",
+        "Description": "核心处理器:ESP8266芯片;频率:2.4GHz;天线形式:板载PCB天线;发射功率:16dBm;接收灵敏度:-90dBm;",
+        "Operating Temperature": "-20℃~+70℃",
+        "Operating Voltage": "3V~3.6V",
+        "Output Power": "16dBm",
+        "Receive  Current": "56mA",
+        "Send  Current": "170mA",
+        "Sensitivity": "-90dBm",
+        "Supplier Footprint": "-",
+        "Support Interface": "GPIO；UART；PWM",
+        "Wireless Standard": "-"
+      },
+      "datasheetUrl": "https://atta.szlcsc.com/upload/public/pdf/source/20200407/C503582_1139AF8FB42E05635FA0089E1752A536.pdf",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/d2966a73d1e95869493cb148af7002bc.pdf?productCode=C503582",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/smart_pillbox.eprj2; tests/fixtures/ProPrj_智能药箱_2026-09-17.epro2",
+        "designators": [
+          "U13@ProPrj_智能药箱_2026-09-17",
+          "U13@smart_pillbox"
+        ],
+        "note": "ESP-01S"
+      },
+      "notes": [
+        "the library spells this footprint 'WIFIM-TH_8P-L24.7-W14.4-P2.54'; the project's document said 'wifim-th_8p-l24.7-w14.4-p2.54'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "ic.hb04n090s",
+      "value": "",
+      "mpn": "HB04N090S",
+      "lcsc": "C49423996",
+      "manufacturer": "R+O(宏嘉诚)",
+      "deviceUuid": "a7b4fe9132e444f68f50ba710eb9409a",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "TO-252-3L_L6.6-W6.1-P4.60-LS9.5-BR-CW",
+      "footprint_name_verified": true,
+      "params": {
+        "Current - Continuous Drain(Id)": "70A",
+        "Drain to Source Voltage": "40V",
+        "Gate Charge(Qg)": "45nC@10V",
+        "Gate Threshold Voltage (Vgs(th))": "1.5V",
+        "Input Capacitance(Ciss)": "2.53nF@20V",
+        "Number": "1个N沟道",
+        "Operating Temperature": "-55℃~+150℃",
+        "Pd - Power Dissipation": "60W",
+        "RDS(on)": "9mΩ@10V,12A",
+        "Reverse Transfer Capacitance (Crss@Vds)": "165pF@20V",
+        "Supplier Footprint": "TO-252"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/HB04N090S/51952243.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/5dc8d7368c40e37219636397170dbae2.pdf?productCode=C49423996",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2",
+        "designators": [
+          "Q1@thesis_FOC_board",
+          "Q2@thesis_FOC_board",
+          "Q3@thesis_FOC_board",
+          "Q4@thesis_FOC_board",
+          "Q5@thesis_FOC_board",
+          "Q6@thesis_FOC_board"
+        ],
+        "note": "HB04N090S"
+      },
+      "notes": [
+        "identity re-anchored by C-number through `lib.device.search` (matched on 'supplierId'); the stored library uuid 'FOC' is a library *name*, not a uuid, so `lib.device.get` rejected the pair. device uuid a43b2af3f55c466a88bb8f28e0d34287 -> a7b4fe9132e444f68f50ba710eb9409a.",
+        "the library spells this footprint 'TO-252-3L_L6.6-W6.1-P4.60-LS9.5-BR-CW'; the project's document said 'to-252-3l_l6.6-w6.1-p4.60-ls9.5-br-cw'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "ic.lm5164ddar",
+      "value": "",
+      "mpn": "LM5164DDAR",
+      "lcsc": "C477928",
+      "manufacturer": "TI(德州仪器)",
+      "deviceUuid": "aef6a3b388cc4d0fac09a8cb1dea8191",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "SO-8_L4.9-W3.9-P1.27-LS6.0-BL-EP",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "功能类型:降压型;工作电压:6V~100V;输出电压:-;输出电流:1A;输出类型:可调;",
+        "Frequency - Switching": "1MHz",
+        "Function": "降压型",
+        "Number of Outputs": "1",
+        "Operating Temperature": "-40℃~+150℃@(TJ)",
+        "Output Current": "1A",
+        "Output Type": "可调",
+        "Output Voltage": "-",
+        "Quiescent Current": "10.5uA",
+        "Supplier Footprint": "SO-8-EP",
+        "Switch tube (built-in/external)": "内置",
+        "Synchronous Rectifier": "是",
+        "Topology": "降压式",
+        "Voltage - Supply": "6V~100V"
+      },
+      "datasheetUrl": "https://www.ti.com/cn/lit/gpn/lm5164",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/0adc8e389ed3e6197be57b9940aa6370.pdf?productCode=C477928",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2; tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2; tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "U11@thesis_FOC_board",
+          "U7@ProPrj_毕设FOC驱动板_2026-09-17",
+          "U7@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "LM5164DDAR"
+      },
+      "notes": [
+        "the library spells this footprint 'SO-8_L4.9-W3.9-P1.27-LS6.0-BL-EP'; the project's document said 'so-8_l4.9-w3.9-p1.27-ls6.0-bl-ep'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "ic.mpu_6050",
+      "value": "",
+      "mpn": "MPU-6050",
+      "lcsc": "C24112",
+      "manufacturer": "TDK InvenSense(应美盛)",
+      "deviceUuid": "63c6641d2443452fafa198e6e069dd88",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "QFN-24_L4.0-W4.0-P0.50-BL-EP2.7",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "传感器类型:加速度计陀螺仪;",
+        "Operating Temperature": "-40℃~+85℃",
+        "Sensor Type": "加速度计陀螺仪",
+        "Supplier Footprint": "QFN-24-EP(4x4)"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/MPU-6050/24852.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/bba2ae92bee94263bbad2d14bc8967f1.pdf?productCode=C24112",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/smart_pillbox.eprj2; tests/fixtures/ProPrj_智能药箱_2026-09-17.epro2",
+        "designators": [
+          "U14@ProPrj_智能药箱_2026-09-17",
+          "U14@smart_pillbox"
+        ],
+        "note": "MPU-6050"
+      },
+      "notes": [
+        "the library spells this footprint 'QFN-24_L4.0-W4.0-P0.50-BL-EP2.7'; the project's document said 'qfn-24_l4.0-w4.0-p0.50-bl-ep2.7'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "ic.ref2033aiddcr",
+      "value": "",
+      "mpn": "REF2033AIDDCR",
+      "lcsc": "C440747",
+      "manufacturer": "TI(德州仪器)",
+      "deviceUuid": "2c1214f6fe5c47379bd0dcaf92eee964",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "SOT-23-5_L3.0-W1.7-P0.95-LS2.8-BL",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "输出类型:固定;输入电压:3.32V~5.5V;输出电流:20mA;精度:±0.05%;",
+        "Input Voltage": "3.32V~5.5V",
+        "Noise - 1/10Hz to 10Hz": "12ppmp-p",
+        "Noise - 10Hz to 10kHz": "-",
+        "Operating Temperature": "-40℃~+125℃@(Ta)",
+        "Output Current": "20mA",
+        "Output Type": "固定",
+        "Reference Type": "串联",
+        "Supplier Footprint": "SOT-23-5",
+        "Supply Current": "460uA",
+        "Temperature Coefficient": "8ppm/℃",
+        "Tolerance": "±0.05%"
+      },
+      "datasheetUrl": "http://www.ti.com/cn/lit/gpn/ref2033",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/79b8f6f82945f1d628a55adf4d0df3f3.pdf?productCode=C440747",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2; tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2; tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "U20@thesis_FOC_board",
+          "U9@ProPrj_毕设FOC驱动板_2026-09-17",
+          "U9@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "REF2033AIDDCR"
+      },
+      "notes": [
+        "the library spells this footprint 'SOT-23-5_L3.0-W1.7-P0.95-LS2.8-BL'; the project's document said 'sot-23-5_l3.0-w1.7-p0.95-ls2.8-bl'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "ic.rt9013_33gb",
+      "value": "",
+      "mpn": "RT9013-33GB",
+      "lcsc": "C47773",
+      "manufacturer": "RICHTEK(立锜)",
+      "deviceUuid": "df14319b7e4040b5ad0e393e0127c490",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "SOT-23-5_L3.0-W1.7-P0.95-LS2.8-BL",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "输出类型:固定;最大输入电压:5.5V;输出电压:3.3V;最大输出电流:500mA;电源纹波抑制比(PSRR):50dB@(10kHz);输出极性:正极;",
+        "Dropout Voltage": "400mV@(500mA)",
+        "Feature": "-",
+        "MAX Output Current": "500mA",
+        "Maximum Input Voltage": "5.5V",
+        "Noise": "-",
+        "Number of Outputs": "1",
+        "Operating Temperature": "-40℃~+85℃",
+        "Output Polarity": "正极",
+        "Output Type": "固定",
+        "Output Voltage": "3.3V",
+        "Power Supply Rejection Ratio (PSRR)": "50dB@(10kHz)",
+        "Supplier Footprint": "SOT-23-5",
+        "standby current": "50uA"
+      },
+      "datasheetUrl": "https://atta.szlcsc.com/upload/public/pdf/source/20150504/1457707282459.pdf",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/3e4c0e97f96a4457b99f132edf047652.pdf?productCode=C47773",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2; tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2; tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "U11@ProPrj_毕设FOC驱动板_2026-09-17",
+          "U11@ProPrj_高速电机控制器_2026-09-16",
+          "U5@thesis_FOC_board",
+          "U6@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "RT9013-33GB"
+      },
+      "notes": [
+        "the library spells this footprint 'SOT-23-5_L3.0-W1.7-P0.95-LS2.8-BL'; the project's document said 'sot-23-5_l3.0-w1.7-p0.95-ls2.8-bl'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "ic.sn65hvd230dr",
+      "value": "",
+      "mpn": "SN65HVD230DR",
+      "lcsc": "C12084",
+      "manufacturer": "TI(德州仪器)",
+      "deviceUuid": "14d8fbe6c235474fbc2f32fbb26640f9",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "SOIC-8_L4.9-W3.9-P1.27-LS6.0-BL",
+      "footprint_name_verified": true,
+      "params": {
+        "Current - Supply": "-",
+        "Data Rate": "1Mbps",
+        "Description": "类型:CAN收发器;数据速率:1Mbps;",
+        "Operating Temperature": "-40℃~+85℃",
+        "Supplier Footprint": "SOIC-8",
+        "Type": "CAN收发器",
+        "Voltage - Supply": "-"
+      },
+      "datasheetUrl": "https://www.ti.com/cn/lit/gpn/sn65hvd230",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/5f0a15e636e3498a8a69f46b0b740274.pdf?productCode=C12084",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2; tests/fixtures/ProPrj_ROBOT ctrl FOC_2026-09-16.epro2; tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2; tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "U12@ProPrj_毕设FOC驱动板_2026-09-17",
+          "U12@ProPrj_高速电机控制器_2026-09-16",
+          "U2@ProPrj_ROBOT ctrl FOC_2026-09-16",
+          "U2@thesis_FOC_board"
+        ],
+        "note": "SN65HVD230DR"
+      },
+      "notes": [
+        "the library spells this footprint 'SOIC-8_L4.9-W3.9-P1.27-LS6.0-BL'; the project's document said 'soic-8_l4.9-w3.9-p1.27-ls6.0-bl'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "ic.stm32g431rbt6",
+      "value": "",
+      "mpn": "STM32G431RBT6",
+      "lcsc": "C431633",
+      "manufacturer": "ST(意法半导体)",
+      "deviceUuid": "8955b7926e45494db2bb3d3bb3c0e631",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "LQFP-64_L10.0-W10.0-P0.50-LS12.0-BL",
+      "footprint_name_verified": true,
+      "params": {
+        "ADC (Bit)": "12bit",
+        "Applications": "-",
+        "CPU Core": "ARM-M系列",
+        "CPU Maximum Speed": "170MHz",
+        "DAC (Bit)": "12bit",
+        "Description": "CPU内核:ARM-M系列;CPU最大主频:170MHz;应用领域:-;",
+        "Number of I/O": "52",
+        "Program Storage Size": "128KB",
+        "Supplier Footprint": "LQFP-64(10x10)",
+        "Voltage - Supply": "1.71V~3.6V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/STM32G431RBT6/428111.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/5a76a08c3965acf2a7255ec04d1a3d83.pdf?productCode=C431633",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/smart_pillbox.eprj2; tests/fixtures/ProPrj_ROBOT ctrl FOC_2026-09-16.epro2; tests/fixtures/ProPrj_智能药箱_2026-09-17.epro2",
+        "designators": [
+          "U1@ProPrj_ROBOT ctrl FOC_2026-09-16",
+          "U1@ProPrj_智能药箱_2026-09-17",
+          "U1@smart_pillbox"
+        ],
+        "note": "STM32G431RBT6"
+      },
+      "notes": [
+        "the library spells this footprint 'LQFP-64_L10.0-W10.0-P0.50-LS12.0-BL'; the project's document said 'lqfp-64_l10.0-w10.0-p0.50-ls12.0-bl'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "ic.stm32h743vit6",
+      "value": "",
+      "mpn": "STM32H743VIT6",
+      "lcsc": "C114409",
+      "manufacturer": "ST(意法半导体)",
+      "deviceUuid": "d2b3032ca4f64c70a8f7bdafc8cad605",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "LQFP-100_L14.0-W14.0-P0.50-LS16.0-BL",
+      "footprint_name_verified": true,
+      "params": {
+        "ADC (Bit)": "16bit",
+        "Applications": "-",
+        "CPU Core": "ARM-M系列",
+        "CPU Maximum Speed": "480MHz",
+        "DAC (Bit)": "12bit",
+        "Description": "CPU内核:ARM-M系列;CPU最大主频:480MHz;应用领域:-;",
+        "Number of I/O": "82",
+        "Program Storage Size": "2MB",
+        "Supplier Footprint": "LQFP-100(14x14)",
+        "Voltage - Supply": "1.71V~3.6V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/STM32H743VIT6/115649.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/880ee2974c46763ce43da1468b8b0b74.pdf?productCode=C114409",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2; tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "U1@ProPrj_高速电机控制器_2026-09-16",
+          "U1@thesis_FOC_board"
+        ],
+        "note": "STM32H743VIT6_C114409"
+      },
+      "notes": [
+        "the library spells this footprint 'LQFP-100_L14.0-W14.0-P0.50-LS16.0-BL'; the project's document said 'lqfp-100_l14.0-w14.0-p0.50-ls16.0-bl'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "ic.tle5012be1000",
+      "value": "",
+      "mpn": "TLE5012BE1000",
+      "lcsc": "C123083",
+      "manufacturer": "Infineon(英飞凌)",
+      "deviceUuid": "93b07208fc6c4a5da83c593ce18e68b5",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "PG-DSO-8_L5.0-W4.0-P1.27-LS6.0-BL",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "采用巨磁电阻的角度传感器",
+        "Minimum Field": "30mT",
+        "Number of ABZ Pulses": "-",
+        "Number of Conjugate Points of UVW": "-",
+        "Operating Temperature": "-40℃~+150℃",
+        "Out Type": "IIF；SSC",
+        "Resolution": "15bit",
+        "Rotate Speed": "-",
+        "Supplier Footprint": "SO-8",
+        "Supply Current": "14mA",
+        "Supply Voltage": "3V~5.5V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/TLE5012BE1000/124353.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/676189a462e04d3c8f257457d8a49dd9.pdf?productCode=C123083",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_ROBOT ctrl FOC_2026-09-16.epro2; tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2",
+        "designators": [
+          "U1@ProPrj_毕设FOC驱动板_2026-09-17",
+          "U7@ProPrj_ROBOT ctrl FOC_2026-09-16"
+        ],
+        "note": "TLE5012BE1000"
+      },
+      "notes": []
+    },
+    {
+      "key": "ic.tlv9062idr",
+      "value": "",
+      "mpn": "TLV9062IDR",
+      "lcsc": "C398355",
+      "manufacturer": "TI(德州仪器)",
+      "deviceUuid": "33d6a7b049a746fc97b062f431ea4c52",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "SOIC-8_L5.0-W4.0-P1.27-LS6.0-BL",
+      "footprint_name_verified": true,
+      "params": {
+        "Common Mode Rejection Ratio(CMRR)": "103dB",
+        "Description": "放大器数:双路;轨到轨:-;增益带宽积(GBP):-;输入失调电压(Vos):1.6mV;压摆率(SR):6.5V/us;输入偏置电流(Ib):0.5pA;",
+        "Dual Supply": "-",
+        "Gain Bandwidth Product": "-",
+        "Ib - Input Bias Current": "0.5pA",
+        "Input Offset Current(Ios)": "-",
+        "Input Offset Voltage Drift(Vos TC)": "0.53uV/℃",
+        "Input offset current drift(Ios TC)": "-",
+        "Maximum Power Supply Range (Vdd-Vss)": "9V",
+        "Noise density(eN)": "10nV/√Hz@1kHz",
+        "Number of Channels": "双路",
+        "Operating Temperature": "-40℃~+125℃",
+        "Output Current": "-",
+        "Quiescent Current": "-",
+        "Rail to Rail": "-",
+        "Single supply": "1.8V~5.5V",
+        "Slew Rate": "6.5V/us",
+        "Supplier Footprint": "SOIC-8",
+        "Vos - Input Offset Voltage": "1.6mV"
+      },
+      "datasheetUrl": "https://www.ti.com/cn/lit/gpn/tlv9061",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/b3f500e21835dc38634fe987feaa838a.pdf?productCode=C398355",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2; tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2; tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "U13@thesis_FOC_board",
+          "U15@ProPrj_毕设FOC驱动板_2026-09-17",
+          "U15@ProPrj_高速电机控制器_2026-09-16",
+          "U16@ProPrj_毕设FOC驱动板_2026-09-17",
+          "U16@ProPrj_高速电机控制器_2026-09-16",
+          "U17@ProPrj_高速电机控制器_2026-09-16",
+          "U20@ProPrj_高速电机控制器_2026-09-16",
+          "U4@thesis_FOC_board"
+        ],
+        "note": "TLV9062IDR"
+      },
+      "notes": [
+        "the library spells this footprint 'SOIC-8_L5.0-W4.0-P1.27-LS6.0-BL'; the project's document said 'soic-8_l5.0-w4.0-p1.27-ls6.0-bl'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "ic.tpd4s010dqar",
+      "value": "",
+      "mpn": "TPD4S010DQAR",
+      "lcsc": "C907861",
+      "manufacturer": "TECH PUBLIC(台舟)",
+      "deviceUuid": "595feff85ce54a8cb65f941f78ff6f5e",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "DFN2510-10_L2.5-W1.0-P0.50-BL",
+      "footprint_name_verified": true,
+      "params": {
+        "Supplier Footprint": "DFN2510-10",
+        "Type": "ESD"
+      },
+      "datasheetUrl": "https://atta.szlcsc.com/upload/public/pdf/source/20220509/83DC68776E58751B01B3B3CE88B801B5.pdf",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/5a070e4ec1fc1b1471e346da96680462.pdf?productCode=C907861",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2",
+        "designators": [
+          "D2@thesis_FOC_board"
+        ],
+        "note": "TPD4S010DQAR_C907861"
+      },
+      "notes": [
+        "the library spells this footprint 'DFN2510-10_L2.5-W1.0-P0.50-BL'; the project's document said 'dfn2510-10_l2.5-w1.0-p0.50-bl'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "ic.tplp2981_30dbvr",
+      "value": "",
+      "mpn": "TPLP2981-30DBVR",
+      "lcsc": "C22435132",
+      "manufacturer": "TECH PUBLIC(台舟)",
+      "deviceUuid": "3e32f9a3feba4abdb0d83e16f355386a",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "SOT-23-5_L2.9-W1.6-P0.95-LS2.8-BR",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "输出类型:固定;最大输入电压:18V;输出电压:3V;输出电流:200mA;电源纹波抑制比(PSRR):70dB@(1kHz);输出极性:正极;",
+        "Maximum Input Voltage": "18V",
+        "Number of Outputs": "1",
+        "Operating Temperature": "-40℃~+150℃@(Tj)",
+        "Output Current": "200mA",
+        "Output Polarity": "正极",
+        "Output Type": "固定",
+        "Output Voltage": "3V",
+        "Power Supply Rejection Ratio (PSRR)": "70dB@(1kHz)",
+        "Supplier Footprint": "SOT-23-5"
+      },
+      "datasheetUrl": "https://atta.szlcsc.com/upload/public/pdf/source/20240521/B1E5C91DC1E8D52A5926C2FD8366B381.pdf",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/cde13e3f3c7de170f3198eb0f99ad4de.pdf?productCode=C22435132",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2; tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2",
+        "designators": [
+          "U13@ProPrj_毕设FOC驱动板_2026-09-17",
+          "U6@thesis_FOC_board"
+        ],
+        "note": "TPLP2981-30DBVR"
+      },
+      "notes": [
+        "the library spells this footprint 'SOT-23-5_L2.9-W1.6-P0.95-LS2.8-BR'; the project's document said 'sot-23-5_l2.9-w1.6-p0.95-ls2.8-br'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "ind.2u2_1008",
+      "value": "2.2uH",
+      "mpn": "DFE252012PD-2R2M=P2",
+      "lcsc": "C237482",
+      "manufacturer": "muRata(村田)",
+      "deviceUuid": "c6924e7977274d70b8fe864dc04a0d7f",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "L1008",
+      "footprint_name_verified": true,
+      "params": {
+        "DC Resistance (DCR)": "84mΩ",
+        "Description": "电感值:2.2uH;精度:±20%;额定电流:2.2A;饱和电流(Isat):2.8A;类型:-;",
+        "Rated Current": "2.2A",
+        "Ratings": "AEC-Q200",
+        "Saturation Current (Isat)": "2.8A",
+        "Supplier Footprint": "1008",
+        "Tolerance": "±20%",
+        "Type": "-"
+      },
+      "datasheetUrl": "https://atta.szlcsc.com/upload/public/pdf/source/20181115/C237482_93B2DC4334D335563925DD1602D33BC5.pdf",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/bb9bb75373b606ab990712baa009ad2d.pdf?productCode=C237482",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2; tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2; tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "L1@thesis_FOC_board",
+          "L2@ProPrj_毕设FOC驱动板_2026-09-17",
+          "L2@ProPrj_高速电机控制器_2026-09-16",
+          "L2@thesis_FOC_board",
+          "L3@ProPrj_毕设FOC驱动板_2026-09-17",
+          "L3@ProPrj_高速电机控制器_2026-09-16",
+          "L4@ProPrj_毕设FOC驱动板_2026-09-17",
+          "L4@ProPrj_高速电机控制器_2026-09-16",
+          "L8@thesis_FOC_board"
+        ],
+        "note": "DFE252012PD-2R2M=P2"
+      },
+      "notes": [
+        "the library spells this footprint 'L1008'; the project's document said 'l1008'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "ind.fhd4020s_330mt",
+      "value": "33uH",
+      "mpn": "FHD4020S-330MT",
+      "lcsc": "C602034",
+      "manufacturer": "cjiang(长江微电)",
+      "deviceUuid": "860f87017c484e0d859a24e5be1830bd",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "IND-SMD_L4.0-W4.0",
+      "footprint_name_verified": true,
+      "params": {
+        "Current - Saturation(Isat)": "1.4A",
+        "Current Rating": "860mA",
+        "DC Resistance(DCR)": "650mΩ",
+        "Description": "电感值:33uH;精度:±20%;额定电流:860mA;饱和电流(Isat):1.4A;类型:绕线电感;",
+        "Supplier Footprint": "SMD,4x4mm",
+        "Tolerance": "±20%",
+        "Type": "绕线电感"
+      },
+      "datasheetUrl": "https://atta.szlcsc.com/upload/public/pdf/source/20200609/C601990_BCEA243EC4DA0A9A288AA78A6DFB48A5.pdf",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/895b2de440259a112d2e51bc5015ac76.pdf?productCode=C602034",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "L1@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "FHD4020S-330MT"
+      },
+      "notes": []
+    },
+    {
+      "key": "ind.ftc252012s100mbca",
+      "value": "10uH",
+      "mpn": "FTC252012S100MBCA",
+      "lcsc": "C5832376",
+      "manufacturer": "cjiang(长江微电)",
+      "deviceUuid": "9350a9eec44b45e3b695f7a994a80ac0",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "IND-SMD_L2.5-W2.0",
+      "footprint_name_verified": true,
+      "params": {
+        "DC Resistance (DCR)": "330mΩ",
+        "Description": "电感值:10uH;精度:±20%;额定电流:1.2A;饱和电流(Isat):1.6A;类型:一体成型电感;",
+        "Rated Current": "1.2A",
+        "Saturation Current (Isat)": "1.6A",
+        "Supplier Footprint": "SMD,2x2.5mm",
+        "Tolerance": "±20%",
+        "Type": "一体成型电感"
+      },
+      "datasheetUrl": "https://atta.szlcsc.com/upload/public/pdf/source/20230602/8FFEDA9C0247A92A0D4B67554BFE4091.pdf",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/77df80da131e4870f452feed30b2f415.pdf?productCode=C5832376",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_ROBOT ctrl FOC_2026-09-16.epro2",
+        "designators": [
+          "10UH@ProPrj_ROBOT ctrl FOC_2026-09-16"
+        ],
+        "note": "FTC252012S100MBCA"
+      },
+      "notes": []
+    },
+    {
+      "key": "ind.fxl1040_330_m",
+      "value": "33uH",
+      "mpn": "FXL1040-330-M",
+      "lcsc": "C475918",
+      "manufacturer": "cjiang(长江微电)",
+      "deviceUuid": "78bf60f20e1647c7aebdbdd650baa739",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "IND-SMD_L11.5-W10.0_FXL1040",
+      "footprint_name_verified": true,
+      "params": {
+        "Current - Saturation(Isat)": "5A",
+        "Current Rating": "4.4A",
+        "DC Resistance(DCR)": "92mΩ",
+        "Description": "电感值:33uH;精度:±20%;额定电流:4.4A;饱和电流(Isat):5A;类型:一体成型电感;",
+        "Supplier Footprint": "SMD,11.5x10mm",
+        "Tolerance": "±20%",
+        "Type": "一体成型电感"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/FXL1040-330-M/482451.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/7ccab6d15d9e909aa3f3d55ed931dfcf.pdf?productCode=C475918",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2; tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2",
+        "designators": [
+          "L1@ProPrj_毕设FOC驱动板_2026-09-17",
+          "L4@thesis_FOC_board"
+        ],
+        "note": "FXL1040-330-M"
+      },
+      "notes": [
+        "the library spells this footprint 'IND-SMD_L11.5-W10.0_FXL1040'; the project's document said 'ind-smd_l11.5-w10.0_fxl1040'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "led.ncd0805r1",
+      "value": "",
+      "mpn": "NCD0805R1",
+      "lcsc": "C84256",
+      "manufacturer": "国星光电",
+      "deviceUuid": "65165b87e36a420bb0f83c56de791b8f",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "LED0805-RD",
+      "footprint_name_verified": true,
+      "params": {
+        "Color Temperature": "-",
+        "Description": "灯头类型:-;发光颜色:红色;正向电压(VF):1.6V~2.6V;功率:65mW;正向电流:20mA;主波长:615nm~630nm;二极管配置:独立二极管;透镜颜色:无色透明透镜;色温:-;发光强度:67mcd~195mcd;发光角度:130°;载带方式:-;工作温度:-30℃~+85℃;",
+        "Diode Configuration": "独立二极管",
+        "Dominant Wavelength": "615nm~630nm",
+        "Emitted Color": "红色",
+        "Forward Current": "20mA",
+        "Forward Voltage (VF)": "1.6V~2.6V",
+        "Illumination Color": "红色",
+        "Lamp Holder Type": "-",
+        "Lens Color": "无色透明透镜",
+        "Luminous Intensity": "67mcd~195mcd",
+        "Mounting Style": "-",
+        "Mounting Sytle": "-",
+        "Operating Temperature": "-30℃~+85℃",
+        "Peak Wavelength": "-",
+        "Power Dissipation": "65mW",
+        "Power(Watts)": "65mW",
+        "Supplier Footprint": "0805",
+        "Viewing Angle": "130°",
+        "Voltage - Forward(Vf)": "1.6V~2.6V",
+        "Wavelength - Dominant": "615nm~630nm"
+      },
+      "datasheetUrl": "https://atta.szlcsc.com/upload/public/pdf/source/20200820/C84256_F0A75A43B3EAD75808600A0514C76B99.pdf",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/e3e35db60c068efe42b02d21fe498cf3.pdf?productCode=C84256",
+      "basic": true,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2; tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2; tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "LED1@ProPrj_毕设FOC驱动板_2026-09-17",
+          "LED1@ProPrj_高速电机控制器_2026-09-16",
+          "LED1@thesis_FOC_board",
+          "LED2@ProPrj_毕设FOC驱动板_2026-09-17",
+          "LED4@thesis_FOC_board"
+        ],
+        "note": "NCD0805R1"
+      },
+      "notes": [
+        "the library spells this footprint 'LED0805-RD'; the project's document said 'led0805-r-rd'. The library's spelling is kept (006b's vocabulary rule).",
+        "unrecognised JLCPCB Part Class 'Basic Part'; basic left unknown"
+      ]
+    },
+    {
+      "key": "res.0_0603",
+      "value": "0Ω",
+      "mpn": "CRCW06030000Z0EAHP",
+      "lcsc": "C844719",
+      "manufacturer": "VISHAY(威世)",
+      "deviceUuid": "6ae577fef1bf45599c93699f82e69287",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "R0603",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "电阻类型:厚膜电阻;阻值:0Ω;精度:-;功率:333.333mW;最大工作电压:75V;温度系数:-;",
+        "Operating Temperature Range": "-55℃~+155℃",
+        "Overload Voltage (Max)": "75V",
+        "Power(Watts)": "333.333mW",
+        "Supplier Footprint": "0603",
+        "Temperature Coefficient": "-",
+        "Tolerance": "-",
+        "Type": "厚膜电阻"
+      },
+      "datasheetUrl": "https://atta.szlcsc.com/upload/public/pdf/source/20210813/1801A8E5B1B29C48A3A7F65BD9C9FB43.pdf",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/26cdfc55b8426b7658fe52a27bb4d16c.pdf?productCode=C844719",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_ROBOT ctrl FOC_2026-09-16.epro2",
+        "designators": [
+          "R8@ProPrj_ROBOT ctrl FOC_2026-09-16"
+        ],
+        "note": "CRCW06030000Z0EAHP"
+      },
+      "notes": []
+    },
+    {
+      "key": "res.0_1206",
+      "value": "0Ω",
+      "mpn": "RE1206F1R000",
+      "lcsc": "C46961765",
+      "manufacturer": "JIERR(捷而瑞)",
+      "deviceUuid": "fdb6cdcef0dd4547a52e553f618ec6e1",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "R1206",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "电阻类型:采样电阻；合金电阻;阻值:0Ω;精度:±1%;功率:1W;安装方式:贴片;",
+        "Mounting Type": "贴片",
+        "Power(Watts)": "1W",
+        "Supplier Footprint": "1206",
+        "Tolerance": "±1%",
+        "Type": "采样电阻；合金电阻"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/RE1206F1R000/49133304.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/ea7b98e05cbfe199942894d1b366f51f.pdf?productCode=C46961765",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "R50@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "RE1206F1R000"
+      },
+      "notes": []
+    },
+    {
+      "key": "res.100k_0603.c25803",
+      "value": "100kΩ",
+      "mpn": "0603WAF1003T5E",
+      "lcsc": "C25803",
+      "manufacturer": "UNI-ROYAL(厚声)",
+      "deviceUuid": "40ff282b3d594c33b798d1707d8406cb",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "R0603",
+      "footprint_name_verified": true,
+      "params": {
+        "Operating Temperature": "-55℃~+155℃",
+        "Power(Watts)": "100mW",
+        "Supplier Footprint": "0603",
+        "Temperature Coefficient": "±100ppm/℃",
+        "Tolerance": "±1%",
+        "Type": "厚膜电阻",
+        "Voltage-Supply(Max)": "75V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/0603WAF1003T5E/26546.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/0a975aaa49b7c97f38a963127be4a823.pdf?productCode=C25803",
+      "basic": true,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2",
+        "designators": [
+          "R85@thesis_FOC_board",
+          "R87@thesis_FOC_board",
+          "R89@thesis_FOC_board",
+          "R91@thesis_FOC_board"
+        ],
+        "note": "0603WAF1003T5E"
+      },
+      "notes": [
+        "the library spells this footprint 'R0603'; the project's document said 'r0603'. The library's spelling is kept (006b's vocabulary rule).",
+        "key disambiguated with the C-number: more than one part shares the value/footprint slug"
+      ]
+    },
+    {
+      "key": "res.100k_0603.c2906980",
+      "value": "100kΩ",
+      "mpn": "FRC0603F1003TS",
+      "lcsc": "C2906980",
+      "manufacturer": "FOJAN(富捷)",
+      "deviceUuid": "a8ced70c90564625b1939eaf737576ef",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "R0603",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "电阻类型:厚膜电阻;阻值:100kΩ;精度:±1%;功率:100mW;工作电压:75V;温度系数:±100ppm/℃;",
+        "Operating Temperature": "-55℃~+155℃",
+        "Power(Watts)": "100mW",
+        "Supplier Footprint": "0603",
+        "Temperature Coefficient": "±100ppm/℃",
+        "Tolerance": "±1%",
+        "Type": "厚膜电阻",
+        "Voltage-Supply(Max)": "75V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/FRC0603F1003TS/3180493.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/106fb934f95f063b695dad1b31b1eab8.pdf?productCode=C2906980",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_ROBOT ctrl FOC_2026-09-16.epro2",
+        "designators": [
+          "R6@ProPrj_ROBOT ctrl FOC_2026-09-16"
+        ],
+        "note": "FRC0603F1003TS"
+      },
+      "notes": [
+        "key disambiguated with the C-number: more than one part shares the value/footprint slug"
+      ]
+    },
+    {
+      "key": "res.100k_0805",
+      "value": "100kΩ",
+      "mpn": "0805W8F1003T5E",
+      "lcsc": "C149504",
+      "manufacturer": "UNI-ROYAL(厚声)",
+      "deviceUuid": "70d0676a7e554bf2bb2f7d2e56e17c75",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "R0805",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "电阻类型:厚膜电阻;阻值:100kΩ;精度:±1%;功率:125mW;工作电压:150V;温度系数:±100ppm/℃;",
+        "Operating Temperature": "-55℃~+155℃",
+        "Power(Watts)": "125mW",
+        "Supplier Footprint": "0805",
+        "Temperature Coefficient": "±100ppm/℃",
+        "Tolerance": "±1%",
+        "Type": "厚膜电阻",
+        "Voltage-Supply(Max)": "150V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/0805W8F1003T5E/160838.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/0a975aaa49b7c97f38a963127be4a823.pdf?productCode=C149504",
+      "basic": null,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2; tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "R20@ProPrj_毕设FOC驱动板_2026-09-17",
+          "R20@ProPrj_高速电机控制器_2026-09-16",
+          "R23@ProPrj_毕设FOC驱动板_2026-09-17"
+        ],
+        "note": "0805W8F1003T5E"
+      },
+      "notes": [
+        "unrecognised JLCPCB Part Class 'Basic Part'; basic left unknown"
+      ]
+    },
+    {
+      "key": "res.100m_1206",
+      "value": "100mΩ",
+      "mpn": "RE1206F1R100",
+      "lcsc": "C46961734",
+      "manufacturer": "JIERR(捷而瑞)",
+      "deviceUuid": "f19cb8134ad649fe8312ff8db54724a8",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "R1206",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "电阻类型:采样电阻；合金电阻;阻值:100mΩ;精度:±1%;功率:1W;温度系数:±50ppm/℃;安装方式:贴片;",
+        "Mounting Type": "贴片",
+        "Power(Watts)": "1W",
+        "Supplier Footprint": "1206",
+        "Temperature Coefficient": "±50ppm/℃",
+        "Tolerance": "±1%",
+        "Type": "采样电阻；合金电阻"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/RE1206F1R100/49133273.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/ea7b98e05cbfe199942894d1b366f51f.pdf?productCode=C46961734",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_ROBOT ctrl FOC_2026-09-16.epro2",
+        "designators": [
+          "R5@ProPrj_ROBOT ctrl FOC_2026-09-16"
+        ],
+        "note": "RE1206F1R100"
+      },
+      "notes": []
+    },
+    {
+      "key": "res.10k_0402",
+      "value": "10kΩ",
+      "mpn": "FRC0402F1002TS",
+      "lcsc": "C2906861",
+      "manufacturer": "FOJAN(富捷)",
+      "deviceUuid": "df4fedd13aa645e4909505b397e95f90",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "R0402",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "电阻类型:厚膜电阻;阻值:10kΩ;精度:±1%;功率:62.5mW;工作电压:50V;温度系数:±100ppm/℃;",
+        "Operating Temperature": "-55℃~+155℃",
+        "Power(Watts)": "62.5mW",
+        "Supplier Footprint": "0402",
+        "Temperature Coefficient": "±100ppm/℃",
+        "Tolerance": "±1%",
+        "Type": "厚膜电阻",
+        "Voltage-Supply(Max)": "50V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/FRC0402F1002TS/3180374.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/106fb934f95f063b695dad1b31b1eab8.pdf?productCode=C2906861",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "R17@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "FRC0402F1002TS"
+      },
+      "notes": []
+    },
+    {
+      "key": "res.10k_0603.c25804",
+      "value": "10kΩ",
+      "mpn": "0603WAF1002T5E",
+      "lcsc": "C25804",
+      "manufacturer": "UNI-ROYAL(厚声)",
+      "deviceUuid": "b948db94476e4027ac8953235755ec96",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "R0603",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "电阻类型:厚膜电阻;阻值:10kΩ;精度:±1%;功率:100mW;工作电压:75V;温度系数:±100ppm/℃;",
+        "Operating Temperature": "-55℃~+155℃",
+        "Power(Watts)": "100mW",
+        "Supplier Footprint": "0603",
+        "Temperature Coefficient": "±100ppm/℃",
+        "Tolerance": "±1%",
+        "Type": "厚膜电阻",
+        "Voltage-Supply(Max)": "75V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/0603WAF1002T5E/26547.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/0a975aaa49b7c97f38a963127be4a823.pdf?productCode=C25804",
+      "basic": null,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "R44@ProPrj_高速电机控制器_2026-09-16",
+          "R45@ProPrj_高速电机控制器_2026-09-16",
+          "R48@ProPrj_高速电机控制器_2026-09-16",
+          "R49@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "0603WAF1002T5E"
+      },
+      "notes": [
+        "unrecognised JLCPCB Part Class 'Basic Part'; basic left unknown",
+        "key disambiguated with the C-number: more than one part shares the value/footprint slug"
+      ]
+    },
+    {
+      "key": "res.10k_0603.c2906982",
+      "value": "10kΩ",
+      "mpn": "FRC0603F1002TS",
+      "lcsc": "C2906982",
+      "manufacturer": "FOJAN(富捷)",
+      "deviceUuid": "7d0a4241f13846d38eb1c0e45cc6ecf8",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "R0603",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "电阻类型:厚膜电阻;阻值:10kΩ;精度:±1%;功率:100mW;工作电压:75V;温度系数:±100ppm/℃;",
+        "Operating Temperature": "-55℃~+155℃",
+        "Power(Watts)": "100mW",
+        "Supplier Footprint": "0603",
+        "Temperature Coefficient": "±100ppm/℃",
+        "Tolerance": "±1%",
+        "Type": "厚膜电阻",
+        "Voltage-Supply(Max)": "75V"
+      },
+      "datasheetUrl": "",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/106fb934f95f063b695dad1b31b1eab8.pdf?productCode=C2906982",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_ROBOT ctrl FOC_2026-09-16.epro2",
+        "designators": [
+          "R3@ProPrj_ROBOT ctrl FOC_2026-09-16",
+          "R7@ProPrj_ROBOT ctrl FOC_2026-09-16"
+        ],
+        "note": "FRC0603F1002TS"
+      },
+      "notes": [
+        "key disambiguated with the C-number: more than one part shares the value/footprint slug"
+      ]
+    },
+    {
+      "key": "res.10k_0603.c2930027",
+      "value": "10kΩ",
+      "mpn": "FRC0603J103 TS",
+      "lcsc": "C2930027",
+      "manufacturer": "FOJAN(富捷)",
+      "deviceUuid": "1709464c13d4491cb76f0ceb913e81f7",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "R0603",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "电阻类型:厚膜电阻;阻值:10kΩ;精度:±5%;功率:100mW;工作电压:75V;温度系数:±100ppm/℃;",
+        "Operating Temperature": "-55℃~+155℃",
+        "Power(Watts)": "100mW",
+        "Supplier Footprint": "0603",
+        "Temperature Coefficient": "±100ppm/℃",
+        "Tolerance": "±5%",
+        "Type": "厚膜电阻",
+        "Voltage-Supply(Max)": "75V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/FRC0603J103%2520TS/3266960.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/106fb934f95f063b695dad1b31b1eab8.pdf?productCode=C2930027",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "R3@ProPrj_高速电机控制器_2026-09-16",
+          "R51@ProPrj_高速电机控制器_2026-09-16",
+          "R8@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "FRC0603J103 TS"
+      },
+      "notes": [
+        "key disambiguated with the C-number: more than one part shares the value/footprint slug"
+      ]
+    },
+    {
+      "key": "res.150k_0603",
+      "value": "150kΩ",
+      "mpn": "0603WAF1503T5E",
+      "lcsc": "C22807",
+      "manufacturer": "UNI-ROYAL(厚声)",
+      "deviceUuid": "db283e3760f94330ac8590f5100e16e2",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "R0603",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "电阻类型:厚膜电阻;阻值:150kΩ;精度:±1%;功率:100mW;工作电压:75V;温度系数:±100ppm/℃;",
+        "Operating Temperature": "-55℃~+155℃",
+        "Power(Watts)": "100mW",
+        "Supplier Footprint": "0603",
+        "Temperature Coefficient": "±100ppm/℃",
+        "Tolerance": "±1%",
+        "Type": "厚膜电阻",
+        "Voltage-Supply(Max)": "75V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/0603WAF1503T5E/23534.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/0a975aaa49b7c97f38a963127be4a823.pdf?productCode=C22807",
+      "basic": null,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2",
+        "designators": [
+          "R31@ProPrj_毕设FOC驱动板_2026-09-17"
+        ],
+        "note": "0603WAF1503T5E"
+      },
+      "notes": [
+        "unrecognised JLCPCB Part Class 'Basic Part'; basic left unknown"
+      ]
+    },
+    {
+      "key": "res.1k_0603",
+      "value": "1kΩ",
+      "mpn": "FRC0603F1001TS",
+      "lcsc": "C2907002",
+      "manufacturer": "FOJAN(富捷)",
+      "deviceUuid": "185ec9156267410e8a72be9fa0bd054d",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "R0603",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "电阻类型:厚膜电阻;阻值:1kΩ;精度:±1%;功率:100mW;工作电压:75V;温度系数:±100ppm/℃;",
+        "Operating Temperature": "-55℃~+155℃",
+        "Power(Watts)": "100mW",
+        "Supplier Footprint": "0603",
+        "Temperature Coefficient": "±100ppm/℃",
+        "Tolerance": "±1%",
+        "Type": "厚膜电阻",
+        "Voltage-Supply(Max)": "75V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/FRC0603F1001TS/3180515.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/106fb934f95f063b695dad1b31b1eab8.pdf?productCode=C2907002",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "U14@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "FRC0603F1001TS"
+      },
+      "notes": []
+    },
+    {
+      "key": "res.200k_0603",
+      "value": "200kΩ",
+      "mpn": "RC0603FR-07200KL",
+      "lcsc": "C105574",
+      "manufacturer": "YAGEO(国巨)",
+      "deviceUuid": "cd79944146524e2f9d021a8a52eb81e9",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "R0603",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "电阻类型:厚膜电阻;阻值:200kΩ;精度:±1%;功率:100mW;最大工作电压:75V;温度系数:±100ppm/℃;",
+        "Operating Temperature Range": "-55℃~+155℃",
+        "Overload Voltage (Max)": "75V",
+        "Power(Watts)": "100mW",
+        "Supplier Footprint": "0603",
+        "Temperature Coefficient": "±100ppm/℃",
+        "Tolerance": "±1%",
+        "Type": "厚膜电阻"
+      },
+      "datasheetUrl": "https://atta.szlcsc.com/upload/public/pdf/source/20180821/C275644_0D56F95EFF785E7D9A1FEF436B37DA78.pdf",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/b426be3ce22c6de3e0c3a2248e49159e.pdf?productCode=C105574",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "R41@ProPrj_高速电机控制器_2026-09-16",
+          "R42@ProPrj_高速电机控制器_2026-09-16",
+          "R46@ProPrj_高速电机控制器_2026-09-16",
+          "R47@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "RC0603FR-07200KL"
+      },
+      "notes": []
+    },
+    {
+      "key": "res.30k_0603",
+      "value": "30kΩ",
+      "mpn": "0603WAF3002T5E",
+      "lcsc": "C22984",
+      "manufacturer": "UNI-ROYAL(厚声)",
+      "deviceUuid": "5a0729e57b954fd9a63041fbaa7c3e8a",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "R0603",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "电阻类型:厚膜电阻;阻值:30kΩ;精度:±1%;功率:100mW;工作电压:75V;温度系数:±100ppm/℃;",
+        "Operating Temperature": "-55℃~+155℃",
+        "Power(Watts)": "100mW",
+        "Supplier Footprint": "0603",
+        "Temperature Coefficient": "±100ppm/℃",
+        "Tolerance": "±1%",
+        "Type": "厚膜电阻",
+        "Voltage-Supply(Max)": "75V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/0603WAF3002T5E/23711.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/0a975aaa49b7c97f38a963127be4a823.pdf?productCode=C22984",
+      "basic": true,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2; tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "R6@ProPrj_高速电机控制器_2026-09-16",
+          "R93@thesis_FOC_board",
+          "R94@thesis_FOC_board",
+          "R95@thesis_FOC_board",
+          "R96@thesis_FOC_board"
+        ],
+        "note": "0603WAF3002T5E"
+      },
+      "notes": [
+        "the library spells this footprint 'R0603'; the project's document said 'r0603'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "res.392k_0603",
+      "value": "392kΩ",
+      "mpn": "RCA03392KFLF",
+      "lcsc": "C22369707",
+      "manufacturer": "HKR(香港电阻)",
+      "deviceUuid": "d6cf08127dcb4b929f15238c0d99d3e6",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "R0603",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "阻值:392kΩ;精度:±1%;功率:100mW;",
+        "Power(Watts)": "100mW",
+        "Supplier Footprint": "0603",
+        "Tolerance": "±1%"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/RCA03392KFLF/23848738.html",
+      "datasheetPdfUrl": "",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2; tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2; tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "R19@ProPrj_毕设FOC驱动板_2026-09-17",
+          "R19@ProPrj_高速电机控制器_2026-09-16",
+          "R45@thesis_FOC_board"
+        ],
+        "note": "RCA03392KFLF"
+      },
+      "notes": [
+        "the library spells this footprint 'R0603'; the project's document said 'r0603'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "res.41k2_0805",
+      "value": "41.2kΩ",
+      "mpn": "FRC0805F4122TS",
+      "lcsc": "C2933440",
+      "manufacturer": "FOJAN(富捷)",
+      "deviceUuid": "fe4f19299ebd49999574efd20457c5de",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "R0805",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "电阻类型:厚膜电阻;阻值:41.2kΩ;精度:±1%;功率:125mW;工作电压:150V;温度系数:±100ppm/℃;",
+        "Operating Temperature": "-55℃~+155℃",
+        "Power(Watts)": "125mW",
+        "Supplier Footprint": "0805",
+        "Temperature Coefficient": "±100ppm/℃",
+        "Tolerance": "±1%",
+        "Type": "厚膜电阻",
+        "Voltage-Supply(Max)": "150V"
+      },
+      "datasheetUrl": "",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/106fb934f95f063b695dad1b31b1eab8.pdf?productCode=C2933440",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2; tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2; tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "R21@ProPrj_毕设FOC驱动板_2026-09-17",
+          "R21@ProPrj_高速电机控制器_2026-09-16",
+          "R44@thesis_FOC_board"
+        ],
+        "note": "FRC0805F4122TS"
+      },
+      "notes": [
+        "the library spells this footprint 'R0805'; the project's document said 'r0805'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "res.470_0805",
+      "value": "470Ω",
+      "mpn": "FRC0805J471 TS",
+      "lcsc": "C2907329",
+      "manufacturer": "FOJAN(富捷)",
+      "deviceUuid": "ba8e15ca327f415299259032a021810e",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "R0805",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "电阻类型:厚膜电阻;阻值:470Ω;精度:±5%;功率:125mW;最大工作电压:150V;温度系数:±100ppm/℃;",
+        "Operating Temperature Range": "-55℃~+155℃",
+        "Overload Voltage (Max)": "150V",
+        "Power(Watts)": "125mW",
+        "Supplier Footprint": "0805",
+        "Temperature Coefficient": "±100ppm/℃",
+        "Tolerance": "±5%",
+        "Type": "厚膜电阻"
+      },
+      "datasheetUrl": "https://atta.szlcsc.com/upload/public/pdf/source/20211221/925EC7D7225764EE0046F22065062C87.pdf",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/106fb934f95f063b695dad1b31b1eab8.pdf?productCode=C2907329",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2; tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2",
+        "designators": [
+          "U10@ProPrj_毕设FOC驱动板_2026-09-17",
+          "U14@ProPrj_毕设FOC驱动板_2026-09-17",
+          "U3@thesis_FOC_board",
+          "U7@thesis_FOC_board"
+        ],
+        "note": "FRC0805J471 TS"
+      },
+      "notes": [
+        "the library spells this footprint 'R0805'; the project's document said 'r0805'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "res.5k1_0402",
+      "value": "5.1kΩ",
+      "mpn": "FRC0402J512 TS",
+      "lcsc": "C2906948",
+      "manufacturer": "FOJAN(富捷)",
+      "deviceUuid": "75b068847069428793a10c7abf91de9b",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "R0402",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "电阻类型:厚膜电阻;阻值:5.1kΩ;精度:±5%;功率:62.5mW;工作电压:50V;温度系数:±100ppm/℃;",
+        "Operating Temperature": "-55℃~+155℃",
+        "Power(Watts)": "62.5mW",
+        "Supplier Footprint": "0402",
+        "Temperature Coefficient": "±100ppm/℃",
+        "Tolerance": "±5%",
+        "Type": "厚膜电阻",
+        "Voltage-Supply(Max)": "50V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/FRC0402J512%2520TS/3180461.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/106fb934f95f063b695dad1b31b1eab8.pdf?productCode=C2906948",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_ROBOT ctrl FOC_2026-09-16.epro2",
+        "designators": [
+          "R10@ProPrj_ROBOT ctrl FOC_2026-09-16",
+          "R14@ProPrj_ROBOT ctrl FOC_2026-09-16"
+        ],
+        "note": "FRC0402J512 TS"
+      },
+      "notes": []
+    },
+    {
+      "key": "res.5m_2512",
+      "value": "5mΩ",
+      "mpn": "JER2512F3R005",
+      "lcsc": "C46634460",
+      "manufacturer": "JIERR(捷而瑞)",
+      "deviceUuid": "68410e9dcc9d410d985e856b33c04a79",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "R2512",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "电阻类型:采样电阻；合金电阻;阻值:5mΩ;精度:±1%;功率:3W;温度系数:±50ppm/℃;",
+        "Power(Watts)": "3W",
+        "Supplier Footprint": "2512",
+        "Temperature Coefficient": "±50ppm/℃",
+        "Tolerance": "±1%",
+        "Type": "采样电阻；合金电阻"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/JER2512F3R005/48788262.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/02ae4b20613551dea68a63964573e262.pdf?productCode=C46634460",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2; tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2",
+        "designators": [
+          "R37@thesis_FOC_board",
+          "R40@thesis_FOC_board",
+          "R43@ProPrj_毕设FOC驱动板_2026-09-17",
+          "R43@thesis_FOC_board"
+        ],
+        "note": "JER2512F3R005"
+      },
+      "notes": [
+        "the library spells this footprint 'R2512'; the project's document said 'r2512'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "res.re2512f3r001",
+      "value": "1mΩ",
+      "mpn": "RE2512F3R001",
+      "lcsc": "C46961745",
+      "manufacturer": "JIERR(捷而瑞)",
+      "deviceUuid": "08b45505c95b411b9f78bb7f93531900",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "RES-SMD_L6.3-W3.2_R2512",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "电阻类型:采样电阻；合金电阻;阻值:1mΩ;精度:±1%;功率:3W;温度系数:±50ppm/℃;",
+        "Power(Watts)": "3W",
+        "Supplier Footprint": "2512",
+        "Temperature Coefficient": "±50ppm/℃",
+        "Tolerance": "±1%",
+        "Type": "采样电阻；合金电阻"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/RE2512F3R001/49133284.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/37a8bcdce51d433a2058130c8556d596.pdf?productCode=C46961745",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "R39@ProPrj_高速电机控制器_2026-09-16",
+          "R40@ProPrj_高速电机控制器_2026-09-16",
+          "R43@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "RE2512F3R001"
+      },
+      "notes": []
+    },
+    {
+      "key": "sw.ts6631a4p",
+      "value": "",
+      "mpn": "TS6631A4P",
+      "lcsc": "C431539",
+      "manufacturer": "SHOU HAN(首韩)",
+      "deviceUuid": "c8de227968204e6b9d5afbb556b1d2c9",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "SW-SMD_4P-L6.2-W6.2-P4.50-LS8.6",
+      "footprint_name_verified": true,
+      "params": {
+        "Actuator Style": "圆形按钮",
+        "Actuator/Cap Color": "红色",
+        "Circuit": "单刀单掷",
+        "Contact Current": "50mA",
+        "Description": "电路结构:单刀单掷;按钮形状:圆形按钮;作用力:2.5N;安装方式:立贴;开关长度:6.2mm;开关宽度:6.2mm;开关高度:3.1mm;带支架:不带支架;触点电流:50mA;额定电压:12V;带灯:无;工作寿命:10万次;",
+        "Length": "6.2mm",
+        "Life": "10万次",
+        "Mounting Type": "立贴",
+        "Operating Force": "2.5N",
+        "Operating Temperature": "-25℃~+70℃",
+        "Supplier Footprint": "SMD-4P,6.2x6.2mm",
+        "Switch Height": "3.1mm",
+        "Termination Style": "鸥翼型",
+        "Voltage Rating": "12V",
+        "Width": "6.2mm",
+        "With Lamp": "无",
+        "with Bracket": "不带支架"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/TS6631A4P/427896.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/27d9347864cbb992f3e0679cff0cd686.pdf?productCode=C431539",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "SW1@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "TS6631A4P"
+      },
+      "notes": []
+    },
+    {
+      "key": "sw.ts_1088_ar02016",
+      "value": "",
+      "mpn": "TS-1088-AR02016",
+      "lcsc": "C720477",
+      "manufacturer": "XUNPU(讯普)",
+      "deviceUuid": "cff07d923b95482c818b184e98b80db7",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "SW-SMD_L3.9-W3.0-P4.45",
+      "footprint_name_verified": true,
+      "params": {
+        "Actuator Style": "圆形按钮",
+        "Actuator/Cap Color": "黑色",
+        "Circuit": "单刀单掷",
+        "Contact Current": "50mA",
+        "Description": "电路结构:单刀单掷;按钮形状:圆形按钮;作用力:1.6N;安装方式:立贴;开关长度:4mm;开关宽度:3mm;开关高度:2mm;带支架:不带支架;触点电流:50mA;额定电压:12V;工作寿命:10万次;",
+        "Length": "4mm",
+        "Life": "10万次",
+        "Mounting Type": "立贴",
+        "Operating Force": "1.6N",
+        "Operating Temperature": "-30℃~+80℃",
+        "Supplier Footprint": "SMD,4x3mm",
+        "Switch Height": "2mm",
+        "Termination Style": "SMD接片",
+        "Voltage Rating": "12V",
+        "Width": "3mm",
+        "with Bracket": "不带支架"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/TS-1088-AR02016/763484.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/0475ac02febf455ca9ddcfb380b0df0d.pdf?productCode=C720477",
+      "basic": true,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/smart_pillbox.eprj2; blocklib/sources/thesis_FOC_board.eprj2; tests/fixtures/ProPrj_智能药箱_2026-09-17.epro2; tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2",
+        "designators": [
+          "RST1@ProPrj_毕设FOC驱动板_2026-09-17",
+          "SW1@ProPrj_智能药箱_2026-09-17",
+          "SW1@smart_pillbox",
+          "SW1@thesis_FOC_board",
+          "SW2@ProPrj_智能药箱_2026-09-17",
+          "SW2@smart_pillbox",
+          "SW3@ProPrj_智能药箱_2026-09-17",
+          "SW3@smart_pillbox",
+          "SW4@ProPrj_智能药箱_2026-09-17",
+          "SW4@smart_pillbox",
+          "SW5@ProPrj_智能药箱_2026-09-17",
+          "SW5@smart_pillbox"
+        ],
+        "note": "TS-1088-AR02016"
+      },
+      "notes": [
+        "the library spells this footprint 'SW-SMD_L3.9-W3.0-P4.45'; the project's document said 'sw-smd_l3.9-w3.0-p4.45'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "xtal.x322525msb4si",
+      "value": "25MHz",
+      "mpn": "X322525MSB4SI",
+      "lcsc": "C13740",
+      "manufacturer": "YXC(扬兴晶振)",
+      "deviceUuid": "3a99f8f91db94fa79887aa62d1fd5146",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "CRYSTAL-SMD_4P-L3.2-W2.5-BL-2",
+      "footprint_name_verified": true,
+      "params": {
+        "Crystal Type": "贴片晶振",
+        "Description": "晶振类型:贴片晶振;频率:25MHz;常温频差:±10ppm;外接负载电容:20pF;频率稳定度(全温):±20ppm;",
+        "External load capacitor": "20pF",
+        "Frequency Stability": "±20ppm",
+        "Frequency Stability(Full temperature range)": "±20ppm",
+        "Load Capacitance": "20pF",
+        "Normal temperature Frequency Tolerance": "±10ppm",
+        "Operating Temperature": "-40℃~+85℃",
+        "Supplier Footprint": "SMD3225-4P",
+        "Type": "贴片晶振"
+      },
+      "datasheetUrl": "https://atta.szlcsc.com/upload/public/pdf/source/20240329/19D5F850207469550BEB00D7DFEDBC7A.pdf",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/a84bd8d530dd46e4b0f6d0ee59d8a89c.pdf?productCode=C13740",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2; tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2; tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "X1@ProPrj_毕设FOC驱动板_2026-09-17",
+          "X1@ProPrj_高速电机控制器_2026-09-16",
+          "X1@thesis_FOC_board"
+        ],
+        "note": "X322525MSB4SI"
+      },
+      "notes": [
+        "the library spells this footprint 'CRYSTAL-SMD_4P-L3.2-W2.5-BL-2'; the project's document said 'osc-smd_4p-l3.2-w2.5-bl'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    },
+    {
+      "key": "xtal.x32258mob4si",
+      "value": "8MHz",
+      "mpn": "X32258MOB4SI",
+      "lcsc": "C2682775",
+      "manufacturer": "YXC(扬兴晶振)",
+      "deviceUuid": "00de843983c34cd4b1b42d4790d88933",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "CRYSTAL-SMD_4P-L3.2-W2.5-BL",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "晶振类型:贴片晶振;频率:8MHz;常温频差:±10ppm;负载电容:12pF;频率稳定度:±20ppm;",
+        "Equivalent Series Resistance(ESR)": "150Ω",
+        "Frequency Stability": "±20ppm",
+        "Load Capacitance": "12pF",
+        "Normal temperature Frequency Tolerance": "±10ppm",
+        "Operating Temperature": "-40℃~+85℃",
+        "Supplier Footprint": "SMD3225-4P",
+        "Type": "贴片晶振"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/X32258MOB4SI/2777872.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/55cc440413c171e448b6351b146536e5.pdf?productCode=C2682775",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "blocklib/sources/smart_pillbox.eprj2; tests/fixtures/ProPrj_ROBOT ctrl FOC_2026-09-16.epro2; tests/fixtures/ProPrj_智能药箱_2026-09-17.epro2",
+        "designators": [
+          "X1@ProPrj_智能药箱_2026-09-17",
+          "X1@smart_pillbox",
+          "X2@ProPrj_ROBOT ctrl FOC_2026-09-16"
+        ],
+        "note": "X32258MOB4SI"
+      },
+      "notes": [
+        "the library spells this footprint 'CRYSTAL-SMD_4P-L3.2-W2.5-BL'; the project's document said 'crystal-smd_4p-l3.2-w2.5-bl'. The library's spelling is kept (006b's vocabulary rule)."
+      ]
+    }
+  ]
+}

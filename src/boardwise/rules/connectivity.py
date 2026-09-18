@@ -1,0 +1,233 @@
+"""L1 connectivity rules.
+
+All rules in this module are heuristics over the normalized netlist model.
+They look at designator prefixes, value strings and net membership only —
+no schematic geometry, no datasheet knowledge. Each finding message states
+the heuristic's limits so readers can judge how much to trust it.
+"""
+
+from __future__ import annotations
+
+import re
+
+from ..core.model import Component, DesignModel, is_ground_net
+from .base import Finding, Rule
+
+LEVEL = "L1-connectivity"
+
+
+def parse_resistance_ohms(value: str) -> float | None:
+    """Tolerantly parse a resistor value string into ohms.
+
+    Accepted forms include ``"10mΩ"`` (0.01), ``"1mΩ"`` (0.001),
+    ``"0.01"`` (0.01), ``"0R01"`` / ``"4R7"`` (R as decimal separator),
+    ``"R010"`` (0.01), ``"10kΩ"`` / ``"10K"`` (1e4), ``"1MΩ"`` (1e6),
+    ``"10Ω"`` / ``"10 ohm"`` (10). Returns None when unparseable.
+    """
+    s = value.strip()
+    if not s:
+        return None
+    # Drop unit suffixes: Ω, ohm, ohms (any case).
+    s = re.sub(r"(?i)\s*(?:ohms?|Ω)\s*$", "", s).strip()
+    if not s:
+        return None
+    # "0R01" / "4R7": R acts as the decimal separator.
+    m = re.fullmatch(r"(\d+)[Rr](\d+)", s)
+    if m:
+        return float(f"{m.group(1)}.{m.group(2)}")
+    # "R010": leading R means 0.xxx.
+    m = re.fullmatch(r"[Rr](\d+)", s)
+    if m:
+        return float(f"0.{m.group(1)}")
+    # Plain number with an optional k/m/M multiplier suffix.
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)([kKmM]?)", s)
+    if not m:
+        return None
+    multiplier = {"": 1.0, "k": 1e3, "K": 1e3, "m": 1e-3, "M": 1e6}[m.group(2)]
+    return float(m.group(1)) * multiplier
+
+
+def _nets_with_prefix(model: DesignModel, prefix: str) -> set[str]:
+    """Names of nets that contain at least one member with that designator prefix."""
+    return {
+        net.name
+        for net in model.nets.values()
+        if any(designator.startswith(prefix) for designator, _ in net.pins)
+    }
+
+
+def _pin_net_evidence(comp: Component) -> list[str]:
+    return [
+        f"{comp.designator} pin{pin.number} @ {pin.net}"
+        for pin in comp.pins
+        if pin.net is not None
+    ]
+
+
+class DecouplingPerIC(Rule):
+    """Every IC (``U`` prefix) should share at least one pin net with a capacitor."""
+
+    id = "decoupling-per-ic"
+    title = "Each IC should share at least one net with a decoupling capacitor"
+    level = LEVEL
+    source = ""
+
+    ic_prefix = "U"
+    capacitor_prefix = "C"
+
+    def check(self, model: DesignModel) -> list[Finding]:
+        findings: list[Finding] = []
+        cap_nets = _nets_with_prefix(model, self.capacitor_prefix)
+        for comp in model.components.values():
+            if not comp.designator.startswith(self.ic_prefix):
+                continue
+            pin_nets = {
+                pin.net
+                for pin in comp.pins
+                if pin.net is not None and not is_ground_net(pin.net)
+            }
+            if pin_nets & cap_nets:
+                continue
+            findings.append(
+                Finding(
+                    rule_id=self.id,
+                    severity="WARN",
+                    level=self.level,
+                    message=(
+                        f"{comp.designator}: none of its pin nets contains a "
+                        "capacitor. Heuristic limits: matches designator "
+                        "prefixes only (U*/C*), cannot tell supply pins from "
+                        "signal pins, and any C-prefixed part (including "
+                        "connectors) counts as a capacitor."
+                    ),
+                    evidence=_pin_net_evidence(comp),
+                )
+            )
+        return findings
+
+
+class CrystalLoadCaps(Rule):
+    """Each crystal pin net should hold a capacitor whose other end is grounded."""
+
+    id = "xtal-load-caps"
+    title = "Crystal pins should each see a load capacitor to ground"
+    level = LEVEL
+    source = ""
+
+    crystal_prefixes = ("X", "Y")
+    capacitor_prefix = "C"
+    frequency_pattern = re.compile(r"(mhz|khz)", re.IGNORECASE)
+
+    def _is_crystal(self, comp: Component) -> bool:
+        if comp.designator[:1] in self.crystal_prefixes:
+            return True
+        return bool(self.frequency_pattern.search(comp.value or ""))
+
+    def _has_grounded_cap(self, model: DesignModel, net_name: str) -> bool:
+        net = model.nets.get(net_name)
+        if net is None:
+            return False
+        for designator, _ in net.pins:
+            if not designator.startswith(self.capacitor_prefix):
+                continue
+            candidate = model.components[designator]
+            for pin in candidate.pins:
+                if pin.net != net_name and is_ground_net(pin.net):
+                    return True
+        return False
+
+    def check(self, model: DesignModel) -> list[Finding]:
+        findings: list[Finding] = []
+        for comp in model.components.values():
+            if not self._is_crystal(comp):
+                continue
+            pin_nets = sorted(
+                {pin.net for pin in comp.pins if pin.net is not None}
+            )
+            missing = [
+                net for net in pin_nets if not self._has_grounded_cap(model, net)
+            ]
+            if missing:
+                findings.append(
+                    Finding(
+                        rule_id=self.id,
+                        severity="WARN",
+                        level=self.level,
+                        message=(
+                            f"{comp.designator}: no grounded capacitor found on "
+                            f"net(s) {', '.join(missing)}. Heuristic limits: "
+                            "crystals are detected by X/Y designator or a "
+                            "MHz/KHz value string; any C-prefixed part counts "
+                            "as a capacitor and its value is not checked."
+                        ),
+                        evidence=_pin_net_evidence(comp),
+                    )
+                )
+        return findings
+
+
+class ShuntSenseLink(Rule):
+    """Milliohm shunt resistors should connect to an IC's sense pins.
+
+    Smoke check only: passes if *some* U-prefixed component has pins on both
+    terminal nets of the shunt. Series resistors / filter networks between
+    shunt and IC are invisible at L1 and produce an INFO, not a WARN.
+    """
+
+    id = "shunt-sense-link"
+    title = "Shunt resistors should reach a current-sense input on an IC"
+    level = LEVEL
+    source = ""
+
+    resistor_prefix = "R"
+    ic_prefix = "U"
+    #: Upper bound for "milliohm-level" shunts, in milliohms.
+    max_shunt_milliohms = 50.0
+
+    def _is_shunt(self, comp: Component) -> bool:
+        if not comp.designator.startswith(self.resistor_prefix):
+            return False
+        ohms = parse_resistance_ohms(comp.value or "")
+        if ohms is None or ohms <= 0:  # 0Ω jumpers are not sense shunts
+            return False
+        return ohms * 1000.0 <= self.max_shunt_milliohms
+
+    def check(self, model: DesignModel) -> list[Finding]:
+        findings: list[Finding] = []
+        ics = [
+            comp
+            for comp in model.components.values()
+            if comp.designator.startswith(self.ic_prefix)
+        ]
+        for comp in model.components.values():
+            if not self._is_shunt(comp):
+                continue
+            terminals = sorted(
+                {pin.net for pin in comp.pins if pin.net is not None}
+            )
+            if len(terminals) != 2:
+                continue
+            linked = any(
+                all(
+                    any(pin.net == net for pin in ic.pins)
+                    for net in terminals
+                )
+                for ic in ics
+            )
+            if not linked:
+                findings.append(
+                    Finding(
+                        rule_id=self.id,
+                        severity="INFO",
+                        level=self.level,
+                        message=(
+                            f"{comp.designator} ({comp.value}): no IC pins found "
+                            f"on its terminal nets {terminals[0]} / {terminals[1]}. "
+                            "L1 capability boundary: the sense link may run "
+                            "through series resistors or a filter network, "
+                            "which a connectivity-only check cannot see."
+                        ),
+                        evidence=_pin_net_evidence(comp),
+                    )
+                )
+        return findings

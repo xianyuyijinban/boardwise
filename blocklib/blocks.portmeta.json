@@ -1,0 +1,94 @@
+{
+  "kind": "boardwise-block-port-metadata",
+  "version": 1,
+  "notes": [
+    "Task 008c item 4: what a port is electrically is a declaration, not something the board's geometry says, so it lives beside the blocks instead of inside them — `--recut` reproduces the four CH340 template files byte for byte with this file left alone (they are the known-good board, and tests/test_cut.py holds them to that).",
+    "A template read **without** this sidecar has none of it, which the level and power-tree gates answer with \"cannot tell\" rather than with agreement — they never pass on silence."
+  ],
+  "blocks": {
+    "ch340_usb_input": {
+      "provenance": "008c item 4: USB Type-C receptacle (shelf key conn.type_c_16pin_2md_073, LCSC C2765186)",
+      "ports": {
+        "GND": {
+          "direction": "sink"
+        },
+        "+5V": {
+          "direction": "source",
+          "voltage": "5V"
+        },
+        "D-": {
+          "level": "USB"
+        },
+        "D+": {
+          "level": "USB"
+        }
+      },
+      "notes": [
+        "`+5V` is `source` because the far end of the cable supplies it: this port carries VBUS. `D+`/`D-` are declared in the `USB` domain rather than as logic levels — they are a differential pair whose common-mode and thresholds come from the bus, not from VCC."
+      ]
+    },
+    "ch340_power_3v3": {
+      "provenance": "008c item 4: U5 = RT9013-33GB (shelf key ic.rt9013_33gb, LCSC C47773)",
+      "ports": {
+        "+5V": {
+          "direction": "sink",
+          "voltage": "5V"
+        },
+        "GND": {
+          "direction": "sink"
+        },
+        "VCC": {
+          "direction": "source",
+          "voltage": "3V3"
+        }
+      },
+      "notes": [
+        "`VCC` is `source` at `3V3` on the authority of U5, an RT9013-33GB — the `-33` in its name is the output voltage, and nothing else on this page drives that rail. `+5V` is a `sink` at `5V`: the same bus rail the USB block provides."
+      ]
+    },
+    "ch340_core": {
+      "provenance": "008c item 4: U1 = CH340G (LCSC C14267); its IO follows its own VCC pin",
+      "ports": {
+        "GND": {
+          "direction": "sink"
+        },
+        "VCC": {
+          "direction": "sink",
+          "voltage": "3V3"
+        },
+        "RX": {
+          "level": "3V3"
+        },
+        "TX": {
+          "level": "3V3"
+        },
+        "D+": {
+          "level": "USB"
+        },
+        "D-": {
+          "level": "USB"
+        }
+      },
+      "notes": [
+        "U1 is a CH340G whose IO level follows its VCC pin, so with VCC = 3V3 every logic port of this block speaks `3V3`. `VCC` is a `sink`, not a source: this block consumes the rail, it does not make it. `D+`/`D-` stay in the `USB` domain for the reason given in the USB block."
+      ]
+    },
+    "ch340_uart_header": {
+      "provenance": "008c item 4: a passive header — one connector and three wires",
+      "ports": {
+        "TX": {
+          "level": "3V3"
+        },
+        "RX": {
+          "level": "3V3"
+        },
+        "GND": {
+          "direction": "sink"
+        }
+      },
+      "notes": [
+        "The header is passive, so its `TX`/`RX` inherit the `3V3` the core block's CH340G drives rather than declaring a domain of their own, and `GND` is the sink every ground is."
+      ]
+    }
+  }
+}

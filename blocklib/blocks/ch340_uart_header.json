@@ -1,0 +1,213 @@
+{
+  "kind": "boardwise-block-template",
+  "version": 1,
+  "name": "ch340_uart_header",
+  "description": "3-pin UART header: TX, RX and ground.",
+  "provenance": {
+    "kind": "board-extract",
+    "source": "tests\\fixtures\\ch340_golden.epro2",
+    "designators": [
+      "H1"
+    ],
+    "note": "One connector and three wires; kept as its own block because it is the board's only external interface."
+  },
+  "origin_file": [
+    390.0,
+    -660.0
+  ],
+  "bbox_file": [
+    390.0,
+    -660.0,
+    460.0,
+    -600.0
+  ],
+  "notes": [],
+  "interface": [
+    {
+      "role": "TX",
+      "net": "TX",
+      "net_class": "signal",
+      "position": [
+        6.0,
+        22.0
+      ]
+    },
+    {
+      "role": "RX",
+      "net": "RX",
+      "net_class": "signal",
+      "position": [
+        6.0,
+        32.0
+      ]
+    },
+    {
+      "role": "GND",
+      "net": "GND",
+      "net_class": "gnd",
+      "position": [
+        6.0,
+        48.0
+      ]
+    }
+  ],
+  "params": [],
+  "symbols": {
+    "3f6e5d341edef0aa": {
+      "offsets": {
+        "1": [
+          -20.0,
+          -10.0
+        ],
+        "2": [
+          -20.0,
+          0.0
+        ],
+        "3": [
+          -20.0,
+          10.0
+        ]
+      },
+      "body": [
+        -10.0,
+        -20.0,
+        10.0,
+        20.0
+      ],
+      "pin_names": {
+        "1": "1",
+        "2": "2",
+        "3": "3"
+      }
+    },
+    "88d16d75e0d05f55": {
+      "offsets": {
+        "1": [
+          0.0,
+          0.0
+        ]
+      },
+      "body": [
+        -10.0,
+        10.0,
+        10.0,
+        19.0
+      ],
+      "pin_names": {
+        "1": "Pin1"
+      }
+    }
+  },
+  "components": [
+    {
+      "ref": "H1",
+      "symbol": "3f6e5d341edef0aa",
+      "placement": {
+        "x": 48.0,
+        "y": 32.0,
+        "rotation": 0.0,
+        "mirror": false
+      },
+      "device": {
+        "lcsc": "C2937625",
+        "keyword": "",
+        "device_uuid": "",
+        "library_uuid": "",
+        "expect_footprint": "",
+        "name": "PZ254V-11-03P",
+        "provenance": ""
+      },
+      "footprint": "插件,P=2.54mm",
+      "params": {},
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "net": "TX"
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "net": "RX"
+        },
+        {
+          "number": "3",
+          "name": "3",
+          "net": "GND"
+        }
+      ]
+    }
+  ],
+  "geometry": {
+    "wires": [
+      {
+        "net": "TX",
+        "points": [
+          [
+            6.0,
+            22.0
+          ],
+          [
+            28.0,
+            22.0
+          ]
+        ]
+      },
+      {
+        "net": "",
+        "points": [
+          [
+            6.0,
+            48.0
+          ],
+          [
+            6.0,
+            42.0
+          ],
+          [
+            28.0,
+            42.0
+          ]
+        ]
+      },
+      {
+        "net": "RX",
+        "points": [
+          [
+            6.0,
+            32.0
+          ],
+          [
+            28.0,
+            32.0
+          ]
+        ]
+      }
+    ],
+    "flags": [
+      {
+        "net": "GND",
+        "kind": "Ground",
+        "x": 6.0,
+        "y": 48.0,
+        "rotation": 0.0,
+        "mirror": false,
+        "symbol": "88d16d75e0d05f55"
+      }
+    ],
+    "labels": [
+      {
+        "net": "TX",
+        "x": 6.0,
+        "y": 22.0,
+        "rotation": 0.0
+      },
+      {
+        "net": "RX",
+        "x": 6.0,
+        "y": 32.0,
+        "rotation": 0.0
+      }
+    ]
+  }
+}

@@ -1,0 +1,206 @@
+{
+  "kind": "boardwise-block-template",
+  "version": 1,
+  "name": "power_ams1117_3v3",
+  "description": "3.3V rail from a 5V USB input: AMS1117-3.3 LDO with its input and output capacitors. Textbook topology (three-terminal fixed regulator) with both capacitor values taken from the datasheet's Application Hints.",
+  "provenance": {
+    "kind": "datasheet-extract",
+    "source": "AMS1117-3.3_C6186.pdf p.4 (Application Hints / Stability), p.1 (Pin Connections)",
+    "designators": [],
+    "note": "The datasheet has no application *circuit* figure, only prose and Figure 3 (the Kelvin connection for load regulation, which is about *where* to tap the output, not about which parts are present). So the topology here is the textbook three-terminal fixed-regulator arrangement and only the two numbers come from the datasheet: the 22uF output capacitor the Stability section requires, and the pin connection. Both are cited per-parameter. The input capacitor value is NOT from the datasheet (it does not state one) and is marked accordingly. The PDF is named in the brief's input folder; the full relative path is deliberately not written here so this file cannot be read as touching the answer side, and a draft must stay usable no matter where the input tree is mounted."
+  },
+  "origin_file": [0.0, 0.0],
+  "bbox_file": [0.0, 0.0, 0.0, 0.0],
+  "notes": [
+    "origin_file and bbox_file are 0 because there was no cut: nothing was extracted from a board. A datasheet-extract block has no source coordinates. Its components sit at the positions the author placed them (a signed layout, not a solved one), and connectivity is carried by the anchors the assembler synthesises per pin endpoint — a one-cell stub and a power/ground flag on every rail endpoint, a net label on every signal endpoint. 2026-09-17 ruling; see engines/assemble.py.",
+    "The datasheet's Stability section says an output capacitor is *required* ('the circuit design used in the AMS1117 series requires the use of an output capacitor as part of the device frequency compensation'), so the capacitor is part of the block rather than a decoupling afterthought.",
+    "The same section says the AMS1117 'does not need any protection diodes' between ADJ/VOUT/VIN. No such diodes are drawn — this is an intentional absence with a citation, not an omission.",
+    "Symbol offsets MEASURED on-canvas on 2026-09-17 via `sch.component_pins` on the real placed devices (U1 = C6186, symbol uuid 06f50e10ab7d460599b3fe3ee8717a78; C1/C2 = C6119889; placement rotation 0, mirror false), canvas y negated into this file's y-up space. They replace the earlier invented approximations, which the 2026-09-17 real-machine smoke proved wrong (the synthesised anchors floated; the editor netlist showed every placed pin on an empty net). The measured pin X/Y is assumed to be the connection tip — to be confirmed by the redraw's netlist compare. The `body` boxes are ESTIMATES from the pin extents (pin tips at +/-45 on the regulator, +/-20 on the capacitor, minus pin length 10): the library symbol dump exposes no glyph graphics, so no body was measured. Pin-name discrepancy: datasheet p.1 calls pin 1 'GND/ADJ' while the library symbol names it 'GND'; the symbol's name wins here because it is what the placed part shows."
+  ],
+  "interface": [
+    {
+      "role": "+5V",
+      "net": "+5V",
+      "net_class": "power",
+      "direction": "sink",
+      "voltage": "5V"
+    },
+    {
+      "role": "VCC",
+      "net": "VCC",
+      "net_class": "power",
+      "direction": "source",
+      "voltage": "3V3"
+    },
+    {
+      "role": "GND",
+      "net": "GND",
+      "net_class": "gnd",
+      "direction": "sink"
+    }
+  ],
+  "params": [
+    {
+      "name": "c_in_value",
+      "role": "C1 value (input)",
+      "default": "10uF",
+      "constraint": "capacitor_value",
+      "provenance": "NOT from the datasheet (it states no input capacitor value). Chosen as the conventional 10uF bulk on a 5V USB input feeding an LDO; the part is in the curated library as cap.10u_0805 / C6119889 (50V X5R). Flagged as a textbook choice so the reviewer can overrule the value without touching the topology."
+    },
+    {
+      "name": "c_out_value",
+      "role": "C2 value (output)",
+      "default": "10uF",
+      "constraint": "capacitor_value",
+      "provenance": "Full chain. (1) AMS1117-3.3 datasheet p.4, Stability: the output capacitor is required, not optional ('the circuit design used in the AMS1117 series requires the use of an output capacitor as part of the device frequency compensation'), and the value it names for all operating conditions is 22uF solid tantalum ('The addition of 22mF solid tantalum on the output will ensure stability for all operating conditions.' — the PDF's text layer renders the micro sign as 'm'). (2) The same paragraph names its own exception: the 22uF figure exists because it 'covers all cases of bypassing the adjustment terminal', and 'without bypassing the adjustment terminal smaller capacitors can be used with equally good results'. A fixed 3.3V device has no adjustment terminal to bypass, so that exception applies to this part by construction. (3) 岳翔宇 2026-09-17 ruling: use MLCC, not tantalum — same part as C1, cap.10u_0805 / C6119889 (10uF 50V X5R). This is a deliberate choice on cost and availability grounds; the ESR risk that the datasheet's tantalum wording guards against is his to carry and he has signed for it. The topology is unaffected — only the value, which is what this parameter exists for."
+    }
+  ],
+  "symbols": {
+    "AMS1117-3.3": {
+      "offsets": {
+        "1": [-45.0, -10.0],
+        "2": [-45.0, 0.0],
+        "3": [-45.0, 10.0],
+        "4": [45.0, 0.0]
+      },
+      "body": [-35.0, -15.0, 35.0, 15.0],
+      "pin_names": {
+        "1": "GND",
+        "2": "VOUT",
+        "3": "VIN",
+        "4": "VOUT"
+      }
+    },
+    "CAP-2PIN": {
+      "offsets": {
+        "1": [-20.0, 0.0],
+        "2": [20.0, 0.0]
+      },
+      "body": [-10.0, -8.0, 10.0, 8.0],
+      "pin_names": {
+        "1": "1",
+        "2": "2"
+      }
+    }
+  },
+  "components": [
+    {
+      "ref": "U1",
+      "symbol": "AMS1117-3.3",
+      "placement": {
+        "x": 100.0,
+        "y": 0.0,
+        "rotation": 0.0,
+        "mirror": false
+      },
+      "device": {
+        "lcsc": "C6186",
+        "keyword": "",
+        "device_uuid": "9f9c6cb41c7449fd8acf96aceed2661a",
+        "library_uuid": "0819f05c4eef4c71ace90d822a990e87",
+        "expect_footprint": "SOT-223-3_L6.5-W3.4-P2.30-LS7.0-BR",
+        "name": "AMS1117-3.3",
+        "provenance": "AMS1117-3.3 datasheet p.1, Pin Connections, 3-pin fixed/adjustable version: '1- Ground/Adjust  2 - VOUT  3 - VIN'. Pin numbers and names are read from here, not assumed."
+      },
+      "footprint": "SOT-223-3_L6.5-W3.4-P2.30-LS7.0-BR",
+      "params": {},
+      "pins": [
+        {
+          "number": "3",
+          "name": "VIN",
+          "net": "+5V"
+        },
+        {
+          "number": "2",
+          "name": "VOUT",
+          "net": "VCC"
+        },
+        {
+          "number": "4",
+          "name": "VOUT",
+          "net": "VCC"
+        },
+        {
+          "number": "1",
+          "name": "GND",
+          "net": "GND"
+        }
+      ]
+    },
+    {
+      "ref": "C1",
+      "symbol": "CAP-2PIN",
+      "placement": {
+        "x": 30.0,
+        "y": 0.0,
+        "rotation": 0.0,
+        "mirror": false
+      },
+      "device": {
+        "lcsc": "C6119889",
+        "keyword": "",
+        "device_uuid": "",
+        "library_uuid": "",
+        "expect_footprint": "C0805",
+        "name": "CGA0805X5R106K500MT",
+        "provenance": "curated library cap.10u_0805 (C6119889): 10uF, 50V, X5R, C0805."
+      },
+      "footprint": "C0805",
+      "params": {
+        "value": "c_in_value"
+      },
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "net": "+5V"
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "net": "GND"
+        }
+      ]
+    },
+    {
+      "ref": "C2",
+      "symbol": "CAP-2PIN",
+      "placement": {
+        "x": 185.0,
+        "y": 0.0,
+        "rotation": 0.0,
+        "mirror": false
+      },
+      "device": {
+        "lcsc": "C6119889",
+        "keyword": "",
+        "device_uuid": "",
+        "library_uuid": "",
+        "expect_footprint": "C0805",
+        "name": "CGA0805X5R106K500MT",
+        "provenance": "curated library cap.10u_0805 (C6119889): 10uF, 50V, X5R, C0805 — the same part as C1, per 岳翔宇 2026-09-17 (MLCC rather than the datasheet's tantalum; see c_out_value provenance for the full chain). Same part as the input capacitor on purpose: one line item, and the 50V rating leaves ample derating on a 3.3V rail."
+      },
+      "footprint": "C0805",
+      "params": {
+        "value": "c_out_value"
+      },
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "net": "VCC"
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "net": "GND"
+        }
+      ]
+    }
+  ],
+  "geometry": {
+    "wires": [],
+    "flags": [],
+    "labels": []
+  }
+}

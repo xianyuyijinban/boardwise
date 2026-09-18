@@ -1,0 +1,28 @@
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+# Reference material cloned for reading only (official EasyEDA Pro format
+# docs). Never part of the package.
+.ref/
+
+# Connector build artifacts: reproducible from source via `npm run package`,
+# so committing them would only create a chance for the two to disagree.
+connector/node_modules/
+connector/dist/
+connector/*.eext
+
+# Root-level probe/debug scratch from live troubleshooting sessions. Evidence
+# worth keeping lives in evidence/; these were one-shot dumps.
+.probe_*.json
+.tmp_*
+draw_*.txt
+g2.json
+rb.json
+.easyeda/
+.workbuddy-memory-tmp
+
+# An embedded git repository (has its own .git). Held out of the outer
+# history until the owner decides whether to merge contents or keep it
+# standalone — a gitlink entry would only pretend to be recoverable.
+inputs/smart_pillbox/firmware/

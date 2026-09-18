@@ -1,0 +1,752 @@
+{
+  "kind": "boardwise-block-template",
+  "version": 1,
+  "name": "ch340_usb_input",
+  "description": "USB-C receptacle: two CC pull-downs, VBUS decoupling, D+/D- taken out as signal ports.",
+  "provenance": {
+    "kind": "board-extract",
+    "source": "tests\\fixtures\\ch340_golden.epro2",
+    "designators": [
+      "USB1",
+      "R24",
+      "R27",
+      "C4"
+    ],
+    "note": "Cut from the golden page; the block is the USB front end only — regulation lives in ch340_power_3v3."
+  },
+  "origin_file": [
+    40.0,
+    -240.0
+  ],
+  "bbox_file": [
+    40.0,
+    -240.0,
+    230.0,
+    -40.0
+  ],
+  "notes": [],
+  "interface": [
+    {
+      "role": "GND",
+      "net": "GND",
+      "net_class": "gnd",
+      "position": [
+        112.0,
+        42.0
+      ]
+    },
+    {
+      "role": "+5V",
+      "net": "+5V",
+      "net_class": "power",
+      "position": [
+        128.0,
+        154.0
+      ]
+    },
+    {
+      "role": "D-",
+      "net": "D-",
+      "net_class": "signal",
+      "position": [
+        128.0,
+        104.0
+      ]
+    },
+    {
+      "role": "D+",
+      "net": "D+",
+      "net_class": "signal",
+      "position": [
+        128.0,
+        94.0
+      ]
+    }
+  ],
+  "params": [
+    {
+      "name": "r24_value",
+      "role": "R24 value",
+      "default": "5.1K",
+      "constraint": "resistor_value",
+      "provenance": ""
+    },
+    {
+      "name": "r27_value",
+      "role": "R27 value",
+      "default": "5.1K",
+      "constraint": "resistor_value",
+      "provenance": ""
+    }
+  ],
+  "symbols": {
+    "142308aa6a6cf4f3": {
+      "offsets": {
+        "1": [
+          -45.0,
+          -55.0
+        ],
+        "10": [
+          -45.0,
+          35.0
+        ],
+        "11": [
+          -45.0,
+          45.0
+        ],
+        "12": [
+          -45.0,
+          55.0
+        ],
+        "13": [
+          40.0,
+          55.0
+        ],
+        "14": [
+          40.0,
+          -55.0
+        ],
+        "2": [
+          -45.0,
+          -45.0
+        ],
+        "3": [
+          -45.0,
+          -35.0
+        ],
+        "4": [
+          -45.0,
+          -25.0
+        ],
+        "5": [
+          -45.0,
+          -15.0
+        ],
+        "6": [
+          -45.0,
+          -5.0
+        ],
+        "7": [
+          -45.0,
+          5.0
+        ],
+        "8": [
+          -45.0,
+          15.0
+        ],
+        "9": [
+          -45.0,
+          25.0
+        ]
+      },
+      "body": [
+        -35.0,
+        -65.0,
+        30.0,
+        65.0
+      ],
+      "pin_names": {
+        "1": "GND",
+        "10": "CC2",
+        "11": "VBUS",
+        "12": "GND",
+        "13": "SHELL",
+        "14": "SHELL",
+        "2": "VBUS",
+        "3": "SBU2",
+        "4": "CC1",
+        "5": "DN2",
+        "6": "DP1",
+        "7": "DN1",
+        "8": "DP2",
+        "9": "SBU1"
+      }
+    },
+    "3109ab6b8bb776a7": {
+      "offsets": {
+        "1": [
+          0.0,
+          0.0
+        ]
+      },
+      "body": [
+        -10.0,
+        10.0,
+        10.0,
+        19.0
+      ],
+      "pin_names": {
+        "1": "Pin1"
+      }
+    },
+    "3895d5680fb9947c": {
+      "offsets": {
+        "1": [
+          -20.0,
+          0.0
+        ],
+        "2": [
+          20.0,
+          0.0
+        ]
+      },
+      "body": [
+        -10.0,
+        -4.0,
+        10.0,
+        4.0
+      ],
+      "pin_names": {
+        "1": "1",
+        "2": "2"
+      }
+    },
+    "403ce475aebefda4": {
+      "offsets": {
+        "1": [
+          0.0,
+          0.0
+        ]
+      },
+      "body": [
+        -5.0,
+        -10.0,
+        5.0,
+        -5.0
+      ],
+      "pin_names": {
+        "1": "Pin1"
+      }
+    },
+    "88d16d75e0d05f55": {
+      "offsets": {
+        "1": [
+          0.0,
+          0.0
+        ]
+      },
+      "body": [
+        -10.0,
+        10.0,
+        10.0,
+        19.0
+      ],
+      "pin_names": {
+        "1": "Pin1"
+      }
+    },
+    "acc5092abd2f215d": {
+      "offsets": {
+        "1": [
+          -20.0,
+          0.0
+        ],
+        "2": [
+          20.0,
+          0.0
+        ]
+      },
+      "body": [
+        -10.0,
+        -8.0,
+        10.0,
+        8.0
+      ],
+      "pin_names": {
+        "1": "1",
+        "2": "2"
+      }
+    }
+  },
+  "components": [
+    {
+      "ref": "USB1",
+      "symbol": "142308aa6a6cf4f3",
+      "placement": {
+        "x": 49.0,
+        "y": 109.0,
+        "rotation": 180.0,
+        "mirror": false
+      },
+      "device": {
+        "lcsc": "C2765186",
+        "keyword": "",
+        "device_uuid": "",
+        "library_uuid": "",
+        "expect_footprint": "",
+        "name": "TYPE-C 16PIN 2MD(073)",
+        "provenance": ""
+      },
+      "footprint": "SMD",
+      "params": {},
+      "pins": [
+        {
+          "number": "1",
+          "name": "GND",
+          "net": "GND"
+        },
+        {
+          "number": "10",
+          "name": "CC2",
+          "net": "NET5"
+        },
+        {
+          "number": "11",
+          "name": "VBUS",
+          "net": "+5V"
+        },
+        {
+          "number": "12",
+          "name": "GND",
+          "net": "GND"
+        },
+        {
+          "number": "13",
+          "name": "SHELL",
+          "net": ""
+        },
+        {
+          "number": "14",
+          "name": "SHELL",
+          "net": ""
+        },
+        {
+          "number": "2",
+          "name": "VBUS",
+          "net": "+5V"
+        },
+        {
+          "number": "3",
+          "name": "SBU2",
+          "net": ""
+        },
+        {
+          "number": "4",
+          "name": "CC1",
+          "net": "NET6"
+        },
+        {
+          "number": "5",
+          "name": "DN2",
+          "net": "D-"
+        },
+        {
+          "number": "6",
+          "name": "DP1",
+          "net": "D+"
+        },
+        {
+          "number": "7",
+          "name": "DN1",
+          "net": "D-"
+        },
+        {
+          "number": "8",
+          "name": "DP2",
+          "net": "D+"
+        },
+        {
+          "number": "9",
+          "name": "SBU1",
+          "net": ""
+        }
+      ]
+    },
+    {
+      "ref": "R24",
+      "symbol": "3895d5680fb9947c",
+      "placement": {
+        "x": 140.0,
+        "y": 74.0,
+        "rotation": 0.0,
+        "mirror": false
+      },
+      "device": {
+        "lcsc": "C25905",
+        "keyword": "",
+        "device_uuid": "ef1f93374e0c4079b48a2d1a3cec8f6b",
+        "library_uuid": "0819f05c4eef4c71ace90d822a990e87",
+        "expect_footprint": "R0402",
+        "name": "Res_0402",
+        "provenance": "岳翔宇 2026-09-15: 原解析件 TCH35P5K10JE 的封装不是 0402（黄金是 0402）。改用 0402WGF5101TCE / C25905（UNI-ROYAL 厚膜 5.1kΩ ±1%）；封装名 R0402 由 lib.device.search + lib.footprint.get 实测确认，非关键字首命中。"
+      },
+      "footprint": "0402",
+      "params": {
+        "value": "r24_value"
+      },
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "net": "NET5"
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "net": "GND"
+        }
+      ]
+    },
+    {
+      "ref": "R27",
+      "symbol": "3895d5680fb9947c",
+      "placement": {
+        "x": 140.0,
+        "y": 134.0,
+        "rotation": 0.0,
+        "mirror": false
+      },
+      "device": {
+        "lcsc": "C25905",
+        "keyword": "",
+        "device_uuid": "ef1f93374e0c4079b48a2d1a3cec8f6b",
+        "library_uuid": "0819f05c4eef4c71ace90d822a990e87",
+        "expect_footprint": "R0402",
+        "name": "Res_0402",
+        "provenance": "岳翔宇 2026-09-15: 同 R24 —— 原 TCH35P5K10JE 封装错，换 0402WGF5101TCE / C25905（实测封装 R0402）。"
+      },
+      "footprint": "0402",
+      "params": {
+        "value": "r27_value"
+      },
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "net": "NET6"
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "net": "GND"
+        }
+      ]
+    },
+    {
+      "ref": "C4",
+      "symbol": "acc5092abd2f215d",
+      "placement": {
+        "x": 144.0,
+        "y": 40.0,
+        "rotation": 90.0,
+        "mirror": false
+      },
+      "device": {
+        "lcsc": "C6119852",
+        "keyword": "",
+        "device_uuid": "",
+        "library_uuid": "",
+        "expect_footprint": "",
+        "name": "CGA0603X5R105K500JT",
+        "provenance": ""
+      },
+      "footprint": "0603",
+      "params": {},
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "net": "+5V"
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "net": "GND"
+        }
+      ]
+    }
+  ],
+  "geometry": {
+    "wires": [
+      {
+        "net": "",
+        "points": [
+          [
+            94.0,
+            134.0
+          ],
+          [
+            120.0,
+            134.0
+          ]
+        ]
+      },
+      {
+        "net": "",
+        "points": [
+          [
+            160.0,
+            134.0
+          ],
+          [
+            176.0,
+            134.0
+          ]
+        ]
+      },
+      {
+        "net": "",
+        "points": [
+          [
+            94.0,
+            64.0
+          ],
+          [
+            144.0,
+            64.0
+          ],
+          [
+            158.0,
+            64.0
+          ]
+        ]
+      },
+      {
+        "net": "",
+        "points": [
+          [
+            144.0,
+            60.0
+          ],
+          [
+            144.0,
+            64.0
+          ]
+        ]
+      },
+      {
+        "net": "D-",
+        "points": [
+          [
+            94.0,
+            104.0
+          ],
+          [
+            128.0,
+            104.0
+          ]
+        ]
+      },
+      {
+        "net": "D+",
+        "points": [
+          [
+            94.0,
+            114.0
+          ],
+          [
+            128.0,
+            114.0
+          ]
+        ]
+      },
+      {
+        "net": "",
+        "points": [
+          [
+            160.0,
+            74.0
+          ],
+          [
+            176.0,
+            74.0
+          ]
+        ]
+      },
+      {
+        "net": "D-",
+        "points": [
+          [
+            94.0,
+            124.0
+          ],
+          [
+            128.0,
+            124.0
+          ]
+        ]
+      },
+      {
+        "net": "",
+        "points": [
+          [
+            94.0,
+            164.0
+          ],
+          [
+            112.0,
+            164.0
+          ],
+          [
+            112.0,
+            190.0
+          ]
+        ]
+      },
+      {
+        "net": "",
+        "points": [
+          [
+            94.0,
+            54.0
+          ],
+          [
+            112.0,
+            54.0
+          ],
+          [
+            112.0,
+            42.0
+          ]
+        ]
+      },
+      {
+        "net": "",
+        "points": [
+          [
+            144.0,
+            20.0
+          ],
+          [
+            144.0,
+            12.0
+          ],
+          [
+            152.0,
+            12.0
+          ]
+        ]
+      },
+      {
+        "net": "D+",
+        "points": [
+          [
+            94.0,
+            94.0
+          ],
+          [
+            128.0,
+            94.0
+          ]
+        ]
+      },
+      {
+        "net": "",
+        "points": [
+          [
+            94.0,
+            154.0
+          ],
+          [
+            128.0,
+            154.0
+          ]
+        ]
+      },
+      {
+        "net": "",
+        "points": [
+          [
+            94.0,
+            74.0
+          ],
+          [
+            120.0,
+            74.0
+          ]
+        ]
+      }
+    ],
+    "flags": [
+      {
+        "net": "GND",
+        "kind": "Ground",
+        "x": 176.0,
+        "y": 134.0,
+        "rotation": 90.0,
+        "mirror": false,
+        "symbol": "3109ab6b8bb776a7"
+      },
+      {
+        "net": "GND",
+        "kind": "Ground",
+        "x": 176.0,
+        "y": 74.0,
+        "rotation": 90.0,
+        "mirror": false,
+        "symbol": "3109ab6b8bb776a7"
+      },
+      {
+        "net": "GND",
+        "kind": "Ground",
+        "x": 112.0,
+        "y": 190.0,
+        "rotation": 0.0,
+        "mirror": false,
+        "symbol": "3109ab6b8bb776a7"
+      },
+      {
+        "net": "GND",
+        "kind": "Ground",
+        "x": 112.0,
+        "y": 42.0,
+        "rotation": 180.0,
+        "mirror": false,
+        "symbol": "3109ab6b8bb776a7"
+      },
+      {
+        "net": "+5V",
+        "kind": "Power",
+        "x": 128.0,
+        "y": 154.0,
+        "rotation": 270.0,
+        "mirror": false,
+        "symbol": "403ce475aebefda4"
+      },
+      {
+        "net": "+5V",
+        "kind": "Power",
+        "x": 158.0,
+        "y": 64.0,
+        "rotation": 270.0,
+        "mirror": false,
+        "symbol": "403ce475aebefda4"
+      },
+      {
+        "net": "GND",
+        "kind": "Ground",
+        "x": 152.0,
+        "y": 12.0,
+        "rotation": 90.0,
+        "mirror": false,
+        "symbol": "88d16d75e0d05f55"
+      }
+    ],
+    "labels": [
+      {
+        "net": "D-",
+        "x": 128.0,
+        "y": 124.0,
+        "rotation": 0.0
+      },
+      {
+        "net": "D-",
+        "x": 128.0,
+        "y": 104.0,
+        "rotation": 0.0
+      },
+      {
+        "net": "D+",
+        "x": 128.0,
+        "y": 94.0,
+        "rotation": 0.0
+      },
+      {
+        "net": "D+",
+        "x": 128.0,
+        "y": 114.0,
+        "rotation": 0.0
+      }
+    ]
+  }
+}
