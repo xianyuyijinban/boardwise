@@ -1,0 +1,880 @@
+{
+  "kind": "boardwise-block-template",
+  "version": 1,
+  "name": "ch340_core",
+  "description": "CH340G bridge: the IC, its VCC decoupling, and the 12 MHz crystal with both load capacitors.",
+  "provenance": {
+    "kind": "board-extract",
+    "source": "tests\\fixtures\\ch340_golden.epro2",
+    "designators": [
+      "U1",
+      "C1",
+      "X1",
+      "C25",
+      "C3"
+    ],
+    "note": "The electrical heart of the board; every pin that leaves it does so through a port."
+  },
+  "origin_file": [
+    60.0,
+    -690.0
+  ],
+  "bbox_file": [
+    60.0,
+    -690.0,
+    310.0,
+    -530.0
+  ],
+  "notes": [],
+  "interface": [
+    {
+      "role": "GND",
+      "net": "GND",
+      "net_class": "gnd",
+      "position": [
+        122.0,
+        120.0
+      ]
+    },
+    {
+      "role": "VCC",
+      "net": "VCC",
+      "net_class": "power",
+      "position": [
+        230.0,
+        16.0
+      ]
+    },
+    {
+      "role": "RX",
+      "net": "RX",
+      "net_class": "signal",
+      "position": [
+        114.0,
+        34.0
+      ]
+    },
+    {
+      "role": "TX",
+      "net": "TX",
+      "net_class": "signal",
+      "position": [
+        114.0,
+        44.0
+      ]
+    },
+    {
+      "role": "D+",
+      "net": "D+",
+      "net_class": "signal",
+      "position": [
+        114.0,
+        64.0
+      ]
+    },
+    {
+      "role": "D-",
+      "net": "D-",
+      "net_class": "signal",
+      "position": [
+        114.0,
+        74.0
+      ]
+    }
+  ],
+  "params": [
+    {
+      "name": "c1_value",
+      "role": "C1 value",
+      "default": "100nF",
+      "constraint": "capacitor_value",
+      "provenance": ""
+    },
+    {
+      "name": "c25_value",
+      "role": "C25 value",
+      "default": "30pF",
+      "constraint": "capacitor_value",
+      "provenance": ""
+    },
+    {
+      "name": "c3_value",
+      "role": "C3 value",
+      "default": "30pF",
+      "constraint": "capacitor_value",
+      "provenance": ""
+    }
+  ],
+  "symbols": {
+    "01346f7ca9e26bb1": {
+      "offsets": {
+        "1": [
+          -15.0,
+          0.0
+        ],
+        "2": [
+          15.0,
+          0.0
+        ]
+      },
+      "body": [
+        -5.0,
+        -8.0,
+        5.0,
+        8.0
+      ],
+      "pin_names": {
+        "1": "1",
+        "2": "2"
+      }
+    },
+    "0bbdf9b626f3f7d7": {
+      "offsets": {
+        "1": [
+          -40.0,
+          -35.0
+        ],
+        "10": [
+          40.0,
+          25.0
+        ],
+        "11": [
+          40.0,
+          15.0
+        ],
+        "12": [
+          40.0,
+          5.0
+        ],
+        "13": [
+          40.0,
+          -5.0
+        ],
+        "14": [
+          40.0,
+          -15.0
+        ],
+        "15": [
+          40.0,
+          -25.0
+        ],
+        "16": [
+          40.0,
+          -35.0
+        ],
+        "2": [
+          -40.0,
+          -25.0
+        ],
+        "3": [
+          -40.0,
+          -15.0
+        ],
+        "4": [
+          -40.0,
+          -5.0
+        ],
+        "5": [
+          -40.0,
+          5.0
+        ],
+        "6": [
+          -40.0,
+          15.0
+        ],
+        "7": [
+          -40.0,
+          25.0
+        ],
+        "8": [
+          -40.0,
+          35.0
+        ],
+        "9": [
+          40.0,
+          35.0
+        ]
+      },
+      "body": [
+        -30.0,
+        -45.0,
+        30.0,
+        45.0
+      ],
+      "pin_names": {
+        "1": "GND",
+        "10": "DSR#",
+        "11": "RI#",
+        "12": "DCD#",
+        "13": "DTR#",
+        "14": "RTS#",
+        "15": "R232",
+        "16": "VCC",
+        "2": "TXD",
+        "3": "RXD",
+        "4": "V3",
+        "5": "UD+",
+        "6": "UD-",
+        "7": "XI",
+        "8": "XO",
+        "9": "CTS#"
+      }
+    },
+    "88d16d75e0d05f55": {
+      "offsets": {
+        "1": [
+          0.0,
+          0.0
+        ]
+      },
+      "body": [
+        -10.0,
+        10.0,
+        10.0,
+        19.0
+      ],
+      "pin_names": {
+        "1": "Pin1"
+      }
+    },
+    "a4bda4074602a77a": {
+      "offsets": {
+        "1": [
+          -30.0,
+          10.0
+        ],
+        "2": [
+          30.0,
+          10.0
+        ],
+        "3": [
+          30.0,
+          -10.0
+        ],
+        "4": [
+          -30.0,
+          -10.0
+        ]
+      },
+      "body": [
+        -20.0,
+        -20.0,
+        20.0,
+        20.0
+      ],
+      "pin_names": {
+        "1": "OSC1",
+        "2": "GND",
+        "3": "OSC2",
+        "4": "GND"
+      }
+    },
+    "e56020ac6a60a623": {
+      "offsets": {
+        "1": [
+          0.0,
+          0.0
+        ]
+      },
+      "body": [
+        -5.0,
+        -10.0,
+        5.0,
+        -5.0
+      ],
+      "pin_names": {
+        "1": "Pin1"
+      }
+    },
+    "f2bec070fe11e475": {
+      "offsets": {
+        "1": [
+          -20.0,
+          0.0
+        ],
+        "2": [
+          20.0,
+          0.0
+        ]
+      },
+      "body": [
+        -10.0,
+        -8.0,
+        10.0,
+        8.0
+      ],
+      "pin_names": {
+        "1": "1",
+        "2": "2"
+      }
+    }
+  },
+  "components": [
+    {
+      "ref": "U1",
+      "symbol": "0bbdf9b626f3f7d7",
+      "placement": {
+        "x": 180.0,
+        "y": 59.0,
+        "rotation": 0.0,
+        "mirror": false
+      },
+      "device": {
+        "lcsc": "C14267",
+        "keyword": "",
+        "device_uuid": "",
+        "library_uuid": "",
+        "expect_footprint": "",
+        "name": "CH340G",
+        "provenance": ""
+      },
+      "footprint": "SOP-16",
+      "params": {},
+      "pins": [
+        {
+          "number": "1",
+          "name": "GND",
+          "net": "GND"
+        },
+        {
+          "number": "10",
+          "name": "DSR#",
+          "net": ""
+        },
+        {
+          "number": "11",
+          "name": "RI#",
+          "net": ""
+        },
+        {
+          "number": "12",
+          "name": "DCD#",
+          "net": ""
+        },
+        {
+          "number": "13",
+          "name": "DTR#",
+          "net": ""
+        },
+        {
+          "number": "14",
+          "name": "RTS#",
+          "net": ""
+        },
+        {
+          "number": "15",
+          "name": "R232",
+          "net": ""
+        },
+        {
+          "number": "16",
+          "name": "VCC",
+          "net": "VCC"
+        },
+        {
+          "number": "2",
+          "name": "TXD",
+          "net": "RX"
+        },
+        {
+          "number": "3",
+          "name": "RXD",
+          "net": "TX"
+        },
+        {
+          "number": "4",
+          "name": "V3",
+          "net": "NET1"
+        },
+        {
+          "number": "5",
+          "name": "UD+",
+          "net": "D+"
+        },
+        {
+          "number": "6",
+          "name": "UD-",
+          "net": "D-"
+        },
+        {
+          "number": "7",
+          "name": "XI",
+          "net": "NET3"
+        },
+        {
+          "number": "8",
+          "name": "XO",
+          "net": "NET2"
+        },
+        {
+          "number": "9",
+          "name": "CTS#",
+          "net": ""
+        }
+      ]
+    },
+    {
+      "ref": "C1",
+      "symbol": "f2bec070fe11e475",
+      "placement": {
+        "x": 86.0,
+        "y": 54.0,
+        "rotation": 180.0,
+        "mirror": false
+      },
+      "device": {
+        "lcsc": "C14663",
+        "keyword": "",
+        "device_uuid": "",
+        "library_uuid": "",
+        "expect_footprint": "",
+        "name": "CC0603KRX7R9BB104",
+        "provenance": ""
+      },
+      "footprint": "0603",
+      "params": {
+        "value": "c1_value"
+      },
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "net": "NET1"
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "net": "GND"
+        }
+      ]
+    },
+    {
+      "ref": "X1",
+      "symbol": "a4bda4074602a77a",
+      "placement": {
+        "x": 88.0,
+        "y": 94.0,
+        "rotation": 180.0,
+        "mirror": false
+      },
+      "device": {
+        "lcsc": "C9002",
+        "keyword": "",
+        "device_uuid": "",
+        "library_uuid": "",
+        "expect_footprint": "",
+        "name": "X322512MSB4SI",
+        "provenance": ""
+      },
+      "footprint": "SMD3225-4P",
+      "params": {},
+      "pins": [
+        {
+          "number": "1",
+          "name": "OSC1",
+          "net": "NET3"
+        },
+        {
+          "number": "2",
+          "name": "GND",
+          "net": "GND"
+        },
+        {
+          "number": "3",
+          "name": "OSC2",
+          "net": "NET2"
+        },
+        {
+          "number": "4",
+          "name": "GND",
+          "net": "GND"
+        }
+      ]
+    },
+    {
+      "ref": "C25",
+      "symbol": "01346f7ca9e26bb1",
+      "placement": {
+        "x": 34.0,
+        "y": 89.0,
+        "rotation": 270.0,
+        "mirror": false
+      },
+      "device": {
+        "lcsc": "C107004",
+        "keyword": "",
+        "device_uuid": "",
+        "library_uuid": "",
+        "expect_footprint": "",
+        "name": "CC0402JRNPO9BN300",
+        "provenance": ""
+      },
+      "footprint": "0402",
+      "params": {
+        "value": "c25_value"
+      },
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "net": "GND"
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "net": "NET2"
+        }
+      ]
+    },
+    {
+      "ref": "C3",
+      "symbol": "01346f7ca9e26bb1",
+      "placement": {
+        "x": 122.0,
+        "y": 99.0,
+        "rotation": 270.0,
+        "mirror": false
+      },
+      "device": {
+        "lcsc": "C107004",
+        "keyword": "",
+        "device_uuid": "",
+        "library_uuid": "",
+        "expect_footprint": "",
+        "name": "CC0402JRNPO9BN300",
+        "provenance": ""
+      },
+      "footprint": "0402",
+      "params": {
+        "value": "c3_value"
+      },
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "net": "NET3"
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "net": "GND"
+        }
+      ]
+    }
+  ],
+  "geometry": {
+    "wires": [
+      {
+        "net": "D+",
+        "points": [
+          [
+            114.0,
+            64.0
+          ],
+          [
+            140.0,
+            64.0
+          ]
+        ]
+      },
+      {
+        "net": "TX",
+        "points": [
+          [
+            114.0,
+            44.0
+          ],
+          [
+            140.0,
+            44.0
+          ]
+        ]
+      },
+      {
+        "net": "",
+        "points": [
+          [
+            34.0,
+            74.0
+          ],
+          [
+            34.0,
+            68.0
+          ],
+          [
+            56.0,
+            68.0
+          ],
+          [
+            56.0,
+            54.0
+          ],
+          [
+            36.0,
+            54.0
+          ]
+        ]
+      },
+      {
+        "net": "",
+        "points": [
+          [
+            56.0,
+            54.0
+          ],
+          [
+            66.0,
+            54.0
+          ]
+        ]
+      },
+      {
+        "net": "",
+        "points": [
+          [
+            56.0,
+            68.0
+          ],
+          [
+            56.0,
+            84.0
+          ],
+          [
+            58.0,
+            84.0
+          ]
+        ]
+      },
+      {
+        "net": "",
+        "points": [
+          [
+            106.0,
+            54.0
+          ],
+          [
+            140.0,
+            54.0
+          ]
+        ]
+      },
+      {
+        "net": "",
+        "points": [
+          [
+            118.0,
+            104.0
+          ],
+          [
+            118.0,
+            116.0
+          ],
+          [
+            122.0,
+            116.0
+          ],
+          [
+            122.0,
+            114.0
+          ]
+        ]
+      },
+      {
+        "net": "",
+        "points": [
+          [
+            122.0,
+            116.0
+          ],
+          [
+            122.0,
+            120.0
+          ]
+        ]
+      },
+      {
+        "net": "RX",
+        "points": [
+          [
+            114.0,
+            34.0
+          ],
+          [
+            140.0,
+            34.0
+          ]
+        ]
+      },
+      {
+        "net": "",
+        "points": [
+          [
+            118.0,
+            84.0
+          ],
+          [
+            122.0,
+            84.0
+          ],
+          [
+            140.0,
+            84.0
+          ]
+        ]
+      },
+      {
+        "net": "",
+        "points": [
+          [
+            126.0,
+            16.0
+          ],
+          [
+            126.0,
+            24.0
+          ],
+          [
+            140.0,
+            24.0
+          ]
+        ]
+      },
+      {
+        "net": "",
+        "points": [
+          [
+            58.0,
+            104.0
+          ],
+          [
+            34.0,
+            104.0
+          ],
+          [
+            34.0,
+            146.0
+          ],
+          [
+            134.0,
+            146.0
+          ],
+          [
+            134.0,
+            94.0
+          ],
+          [
+            140.0,
+            94.0
+          ]
+        ]
+      },
+      {
+        "net": "D-",
+        "points": [
+          [
+            114.0,
+            74.0
+          ],
+          [
+            140.0,
+            74.0
+          ]
+        ]
+      },
+      {
+        "net": "",
+        "points": [
+          [
+            220.0,
+            24.0
+          ],
+          [
+            230.0,
+            24.0
+          ],
+          [
+            234.0,
+            24.0
+          ]
+        ]
+      },
+      {
+        "net": "",
+        "points": [
+          [
+            230.0,
+            16.0
+          ],
+          [
+            230.0,
+            24.0
+          ]
+        ]
+      }
+    ],
+    "flags": [
+      {
+        "net": "GND",
+        "kind": "Ground",
+        "x": 126.0,
+        "y": 16.0,
+        "rotation": 180.0,
+        "mirror": false,
+        "symbol": "88d16d75e0d05f55"
+      },
+      {
+        "net": "GND",
+        "kind": "Ground",
+        "x": 36.0,
+        "y": 54.0,
+        "rotation": 270.0,
+        "mirror": false,
+        "symbol": "88d16d75e0d05f55"
+      },
+      {
+        "net": "GND",
+        "kind": "Ground",
+        "x": 122.0,
+        "y": 120.0,
+        "rotation": 0.0,
+        "mirror": false,
+        "symbol": "88d16d75e0d05f55"
+      },
+      {
+        "net": "VCC",
+        "kind": "Power",
+        "x": 230.0,
+        "y": 16.0,
+        "rotation": 0.0,
+        "mirror": false,
+        "symbol": "e56020ac6a60a623"
+      }
+    ],
+    "labels": [
+      {
+        "net": "RX",
+        "x": 114.0,
+        "y": 34.0,
+        "rotation": 0.0
+      },
+      {
+        "net": "TX",
+        "x": 114.0,
+        "y": 44.0,
+        "rotation": 0.0
+      },
+      {
+        "net": "D+",
+        "x": 114.0,
+        "y": 64.0,
+        "rotation": 0.0
+      },
+      {
+        "net": "D-",
+        "x": 114.0,
+        "y": 74.0,
+        "rotation": 0.0
+      }
+    ]
+  }
+}

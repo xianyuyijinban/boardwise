@@ -1,0 +1,48 @@
+{
+  "kind": "boardwise-board-spec",
+  "version": 1,
+  "name": "ams1117_smoke",
+  "description": "One datasheet-extract block on a page of its own: the first real-host test of synthesised anchors. The block carries no geometry, so the assembler names every pin endpoint itself — a one-cell stub and a flag on each rail endpoint, a net label on each signal endpoint. What a human has to judge here is whether that reads as a schematic: three parts, eight flags (U1's tab pin 4 is a second VOUT endpoint, so VCC anchors three times), and no wire that is not an anchor stub.",
+  "provenance": {
+    "kind": "datasheet-extract",
+    "source": "work item 3, first signed block (power_ams1117_3v3)",
+    "note": "Not a product page — a readability probe. It exists so the synthesised anchors can be looked at on a real canvas before six more blocks are written on the strength of the rule."
+  },
+  "sheet": {
+    "attrs": {
+      "Page Size": "A4",
+      "Border": "1",
+      "Title Block Position": "3",
+      "Size": "A4",
+      "Width": "1170",
+      "Height": "825",
+      "Region Start": "1",
+      "X Region Count": "6",
+      "Y Region Count": "4",
+      "Blade Width": "10",
+      "Title Block": "1"
+    },
+    "origin": [0.0, 0.0]
+  },
+  "references": [
+    {"id": "ds", "kind": "datasheet", "path": "AMS1117-3.3_C6186.pdf"}
+  ],
+  "blocks": [
+    {
+      "id": "pwr",
+      "template": "../blocks/power_ams1117_3v3.json",
+      "at": [400.0, -300.0],
+      "evidence": ["ds"],
+      "note": "Centred by hand so the synthesised anchors have room to be read. The block's own layout is the signed author's placement and is not re-solved."
+    }
+  ],
+  "connections": [],
+  "params": {
+    "pwr.c_in_value": "10uF",
+    "pwr.c_out_value": "10uF"
+  },
+  "param_evidence": {
+    "pwr.c_in_value": ["ds"],
+    "pwr.c_out_value": ["ds"]
+  }
+}

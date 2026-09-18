@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "boardwise"
+version = "0.1.0"
+description = "AI harness for EasyEDA Pro: rule-driven offline design review (stage 1), generation and simulation on the roadmap."
+readme = "README.md"
+requires-python = ">=3.10"
+# The only runtime dependency. `boardwise bridge` speaks WebSocket to the
+# connector extension; everything else is standard library by design, so the
+# offline review path stays installable anywhere.
+# The `websockets.asyncio.*` API used by the daemon landed in 13.0; developed
+# and tested against 17.1.
+dependencies = ["websockets>=13.0"]
+
+[project.scripts]
+boardwise = "boardwise.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+# Only the real suite. `tools/eprj2-recon/` is a lab notebook of one-off probe
+# scripts (they need pycryptodome and a sample .eprj2); its files must not be
+# collected just because they are named `*_test.py`.
+testpaths = ["tests"]
