@@ -183,7 +183,9 @@ def build_parser() -> argparse.ArgumentParser:
             "is assembled from block templates instead of replayed from the "
             "golden page (task 008a), and the spec first passes the product "
             "validation gates — a refused spec draws nothing (009-M0). "
-            "Exit 0 equal / 1 differences or failures / 2 bad input."
+            "Exit 0 equal / 1 differences or failures / 2 bad input / "
+            "3 a write's outcome is unknown (a timeout or a dropped connection), "
+            "which outranks 0 and 1 — the page's state cannot be stated."
         ),
     )
     draw.add_argument(
@@ -1490,6 +1492,12 @@ def _audit_draw_persistence(result: object, exit_code: int) -> None:
             exitCode=exit_code,
             saveAccepted=result.save_ok,
             saveVerified=result.persistence == "saved_verified",
+            # What is *known* to be on the page, and what cannot be stated. The
+            # acknowledged count is the field that contradicts "nothing was
+            # written" straight from the log, without needing the terminal
+            # scrollback (M0-P0d follow-up, 2026-09-18).
+            writesAcknowledged=len(result.acknowledged_writes),
+            writesUnknown=[record.action for record in result.unknown_writes],
             timeouts=[record.action for record in result.timeouts],
         )
     except (Exception, SystemExit):  # noqa: BLE001 — logging must not break a draw
@@ -1583,22 +1591,33 @@ def _render_draw_result(
     print(f"\nexecuted {len(result.records)} bridge actions, "
           f"{len(failed)} failed")
 
-    # --- persistence: three facts, and this run only has some of them.
+    # --- persistence: the facts about the write, and this run only has some.
     #
     # Silence here was the bug: with nothing printed, a reader takes "no
     # complaint" as "saved". The state is named, defined, and the audit log
     # gets the same answer so it survives the terminal (M0-P0d).
-    from boardwise.engines.draw import PERSISTENCE_WORDS
+    from boardwise.engines.draw import PERSISTENCE_UNKNOWN, PERSISTENCE_WORDS
 
     persistence = result.persistence
     print(f"\npersistence: {persistence} — {PERSISTENCE_WORDS[persistence]}")
-    timeouts = result.timeouts
-    if timeouts:
+    if persistence == PERSISTENCE_UNKNOWN:
+        # Say *which* writes are unaccounted for, and say what is known to be on
+        # the page. "unknown" alone still leaves a reader unable to decide
+        # whether redrawing is safe, and redrawing onto parts that are already
+        # there is the damage this state exists to prevent.
+        acknowledged = result.acknowledged_writes
         print(
-            f"  ! {len(timeouts)} call(s) the daemon stopped waiting for — the "
-            "page may hold a partial write; nothing was retried:"
+            f"  {len(acknowledged)} write(s) were acknowledged before the run "
+            "stopped — their content IS on the page:"
         )
-        for record in timeouts:
+        for record in acknowledged:
+            print(f"    {record.action}: {record.summary}")
+        print(
+            f"  ! {len(result.unknown_writes)} write(s) never answered — do NOT "
+            "assume they are absent, and do not redraw onto this page before "
+            "looking at it:"
+        )
+        for record in result.unknown_writes:
             print(f"    {record.action}: {record.summary}")
     if persistence != "saved_verified":
         print(
@@ -1617,15 +1636,17 @@ def _render_draw_result(
             exit_code = 0
         else:
             print(report.render())
-    if timeouts and exit_code == 0:
-        # The ruling's own case: a timeout must not be able to finish green.
-        # A write the daemon gave up on may have landed, so whatever the diff
-        # says, this run's outcome is "unknown / partly done" — a distinct code
-        # rather than 0, because "the diff matched" is not "the page is right".
-        # 3 is not 2: 2 means nothing was executed, 3 means we cannot say.
+    if result.timeouts or persistence == PERSISTENCE_UNKNOWN:
+        # A write the daemon gave up on, or one whose answer never arrived, may
+        # still have landed — so whatever the diff says, this run's outcome is
+        # "we cannot say". Exit 3 outranks both 0 and 1 for the same reason:
+        # "the diff differed" is a claim about a page whose contents we are no
+        # longer sure of. 3 is not 2 — 2 means nothing was executed, 3 means we
+        # do not know what was (M0-P0d follow-up, 2026-09-18).
         print(
-            "exit 3: the diff matched, but a write timed out — the page's state "
-            "is UNKNOWN, so this is not a pass"
+            "\nexit 3: a write's outcome is unknown (a call the daemon stopped "
+            "waiting for, or one whose connection died) — the page's state "
+            "cannot be stated, so this is not a pass"
         )
         exit_code = 3
     if result.render_b64 and args.render:

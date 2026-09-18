@@ -237,4 +237,110 @@ connector**。所以"daemon 报超时"与"写入没发生"是两件事 —— �
 未改动任何内容；该次调用如实返回 `CONNECTOR_ERROR: both netlist exports failed`）。
 代码/注释全英文；临时文件用仓内 `.tmp_*` 且已删。
 
+---
+
+# Follow-up（009d2）：断连路径的 persistence 谎报 —— 已交卷（2026-09-18）
+
+三条全绿：pytest **877 passed**（基线 866，**+11**）/ connector **183** / tsc 干净。
+
+## 现象（真机实证，Kimi 执行场景 B 抓出）
+
+`taskkill //F` 杀 daemon 后：audit log 实证 `sch.doc.new` ×1 + `sch.place_component` ×5
+**成功返回**（5 件落到 P4 页），而 draw 报告写
+`persistence: not_placed — nothing was written`。**这是谎报**，且是最危险的那类：
+信它去重画，同一页就有两套件。
+
+## 根因（文件:行号，改前）
+
+| # | 位置 | 问题 |
+|---|---|---|
+| 1 | `engines/draw.py:184-190`（原 `persistence` 属性） | 判据只有 `save_ok` / `comparison`，**没有任何"写入已被确认"的概念** ⇒ 把"流程没走完"（`comparison is None`）直接等同于"什么都没写"。**这是谎报的直接来源。** |
+| 2 | `engines/draw.py`（原 `_call` 失败分支） | 只把 `code == "TIMEOUT"` 记为 `timed_out`；daemon 被杀抛的是 `websockets.exceptions.ConnectionClosed`（**既非 `OSError` 也非 `BridgeError`，无 `code` 属性**）⇒ 落进普通失败。 |
+| 3 | `engines/draw.py`（原 `_call_write`） | 只对 `records[-1].timed_out` 反应 ⇒ 断连不触发读回、不标未知。 |
+| 4 | `engines/draw.py:1326-1330` | `candidate is None` 时 `return result`，`comparison` 从未设置 —— 这是 #1 把状态误判为 `not_placed` 的实际触发路径。 |
+
+## 修法
+
+**分层：谁持有传输谁负责归一化。**
+
+- `bridge/protocol.py`：新增 `ErrorCodes.DISCONNECTED`（**只能由 client 合成**——daemon 没了，
+  没人能回答；它存在的唯一理由是让"传输死了"与"动作被拒"可区分）。
+- `bridge/client.py::call`：把 `(websockets.ConnectionClosed, OSError)` 归一化为
+  `BridgeError(DISCONNECTED)`。这是**唯一**知道 `websockets` 的层；`engines/` 不 import
+  `bridge/`（刻意分层），只能按字符串读 `code`，所以契约必须在这里守住。
+- `bridge/client.py::close`：容忍"已经死掉的 socket"——它在 CLI 的 `finally` 里跑，
+  抛异常会把"失败但已被如实报告"的 draw 换成一个 traceback，丢掉"哪些写入无从交代"的报告。
+- `engines/draw.py`：
+  - `StepRecord` 增 `disconnected` / `wrote`，加 `unknown_outcome` 属性；
+  - `DISCONNECTED_CODE` / `READBACK_ACTION` 常量；
+  - 新增 `PERSISTENCE_UNKNOWN`（**不在三态阶梯上**——它不是更弱的断言，而是"断言做不了"）；
+  - `DrawResult.acknowledged_writes` / `unknown_writes`：`not_placed` 改为**只许在
+    「零个写入被确认 且 零个未知」时使用**（确有零写入的实证），不再是"没看完"的推论；
+  - `_read_back_after_unknown`（原 `_read_back_after_timeout` 改名，因为现在两种形状都走它）：
+    读回失败如实记 **"could not look"**，**绝不许读成"是空的"**；同一轮里若已确认传输死了，
+    后续写入不再重复试探，改为明写"没有再看（已经知道没得看）"——否则一行关键信息会被淹掉。
+  - `_call_write` 用 **index** 定位自己那条记录（原来是 `records[-1]`，读回会插行，不够稳）。
+- `cli.py`：`unknown` 时报告**分两段列出**"已确认落页的写入"与"从未答复的写入"，并明确警告
+  **不要在这个页面上重画**；退出码 **3 覆盖 0 和 1**（"diff 不同"也是对一个内容不再确定的
+  页面的断言）；`draw` 子命令 help 同步退出码；审计记录增 `writesAcknowledged` /
+  `writesUnknown`（**日志本身就能反驳"什么都没写"**，不必翻终端回滚）。
+
+## 测试清单（+11）
+
+`tests/test_candidate_draw.py`（+8）：
+`test_a_transport_death_never_claims_nothing_was_written`（场景 B 复现：`die_after=5`，
+断言 `unknown` 而非 `not_placed`、措辞不含 "nothing was written"、已确认写入含 2 个
+`sch.place_component` + `sch.doc.new`）、
+`test_the_dead_transport_is_never_read_as_an_empty_page`（"could not look"、且**不得**出现
+`0 component(s)`）、
+`test_the_page_is_looked_at_once_not_once_per_write`、
+`test_the_writes_are_never_reissued_after_a_transport_death`、
+`test_a_death_on_the_first_write_is_unknown_too`、
+`test_not_placed_still_belongs_to_a_refusal_before_any_write`（**边界守护**：拒绝是答复，
+零写入有实证 ⇒ `not_placed` 仍可达，否则该状态就废了）、
+`test_a_transport_death_cannot_finish_green_and_names_what_landed`（退出码 3，且是**从 1
+升级**上来的 —— 这个场景 `comparison is None`，原来会给 1）、
+`test_the_audit_log_alone_contradicts_nothing_was_written`。
+
+`FaultClient` 增 `die_after=k`：前 k 次调用正常，之后全部断连 —— 这是**某一时刻 daemon
+死掉**的形状（比逐动作设故障更贴近场景 B），也是"部分落页 + 其余未知"能离线复现的原因。
+
+`tests/test_bridge_cli.py`（+3）：`test_a_dead_transport_becomes_a_disconnected_code`
+（参数化 `ConnectionClosed` 与 `OSError` 两形状；用**真实**的 `ConnectionClosedError`
+构造，不用手搓替身 —— 否则"catch 的是不是真类型"根本没测到）、
+`test_closing_a_socket_that_is_already_gone_is_not_an_error`。
+
+## 变异验证（5 个，全部 CAUGHT + 还原 sha256 一致）
+
+| # | 变异 | 咬红 |
+|---|---|---|
+| M1 | **把断连路径重新映射回 `not_placed`**（即原 bug） | 3 条 |
+| M2 | 断连不再被标记（`disconnected=False`） | 2 条 |
+| M3 | 未知路径上完全不读回 | 1 条 |
+| M4 | `unknown` 不再覆盖 diff（摘掉退出码 3） | 1 条 |
+| M5 | 断连不再归一化成错误码 | 2 条 |
+
+## 被改既有测试（1 条，逐条说明）
+
+`tests/test_candidate_draw.py::test_a_timed_out_write_reads_the_page_back_and_is_never_retried`
+—— 它断言 `"may have landed" in record.detail`，而新措辞为 "may **still** have landed"
+并同时说明两种失败形状（"a timeout is not a cancellation and a dropped connection is not
+a failed write"）。**这是文案精化，不是语义改动**：该测试钉的实质（结果是未知、绝不重发）
+一字未变，我还为它补了两条断言（两种形状都要写明）。**其余 866 条一字未动。**
+
+## 纪律
+
+不动 git、不碰真机、全英文注释、临时文件用仓内 `.tmp_*` 且已删。
+
+## 报备：`tests/` 里两处同名顶层定义重复（**既有，非本任务引入**）
+
+`ast` 扫描 `tests/*.py` 发现两处**逐字节相同**的重复定义：
+`test_bridge_cli.py::test_status_ignores_an_ambient_http_proxy`（:334 / :369）与
+`test_candidate_draw.py::test_geometry_canvas_mode_matches_plan_positions`（:458 / :489）。
+Python 保留最后一个 ⇒ 前者是静默死代码，实际测试数比看起来少 1。
+**两处都在本任务改动之前**（我核对过行号位置），且 `tests/test_module_hygiene.py` 只扫
+`src/boardwise` ⇒ 这个形状在 `tests/` 里**目前无人守**。按"最小改动、既有测试语义不动"
+未动它们。**建议后续单独处理，并把 `test_module_hygiene` 的扫描面扩到 `tests/`。**
+
+
 

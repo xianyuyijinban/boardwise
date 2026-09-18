@@ -76,17 +76,46 @@ class StepRecord:
     #: telling the editor to cancel (`bridge/daemon.py:615-616`), so a write can
     #: still land after the caller has given up (M0-P0d, 2026-09-18).
     timed_out: bool = False
+    #: The daemon connection died while this action was in flight. Same
+    #: consequence as a timeout and for the same reason — an answer never
+    #: arrived, so nobody knows whether it landed — and measured on the real
+    #: host: killing the daemon mid-draw left five parts on the page while the
+    #: report said nothing had been written (M0-P0d follow-up, 2026-09-18).
+    disconnected: bool = False
+    #: This record is a **write attempt**. Set by `_call_write` rather than
+    #: derived from the action name, because `engines/` does not import the
+    #: action catalogue (`bridge/`) and so cannot ask what an action's risk is.
+    wrote: bool = False
+
+    @property
+    def unknown_outcome(self) -> bool:
+        """The call did not complete and its effect cannot be assumed either way."""
+        return self.timed_out or self.disconnected
 
 
-#: The error code the daemon raises when it stops waiting (`daemon.py:610-614`).
+#: The error codes that mean "we never learned what happened". Both are raised
+#: or normalised by the layer that owns the transport (`bridge/client.py` for
+#: the disconnect, `bridge/daemon.py` for the timeout), and both are read here
+#: by string because `engines/` does not import `bridge/`.
 TIMEOUT_CODE = "TIMEOUT"
+DISCONNECTED_CODE = "DISCONNECTED"
 
-#: How far the write actually got — three facts, not one. "The API answered ok"
+#: The action used for the "look at the page" readback after a write's outcome
+#: went unknown. Spelled once: the flow also uses it to notice that it has
+#: already tried to look and could not, so it does not look again for every
+#: later write on a transport that is known to be gone.
+READBACK_ACTION = "sch.geometry"
+
+#: How far the write actually got — four facts, not one. "The API answered ok"
 #: is the editor accepting a call; "the page reads back as asked" is the
 #: editor's own state; "it survived a reopen" is content reaching the file.
 #: Ascending, and a report may only claim the highest one it established.
-#: "saved" belongs to the last state alone.
+#: `unknown` sits outside that ladder on purpose: it is not a *weaker* claim,
+#: it is the statement that the claim cannot be made at all — some write was
+#: acknowledged or attempted and nobody can say what the page holds.
+#: "saved" belongs to `saved_verified` alone.
 PERSISTENCE_NOT_PLACED = "not_placed"
+PERSISTENCE_UNKNOWN = "unknown"
 PERSISTENCE_PLACED = "placed"
 PERSISTENCE_SAVED_UNVERIFIED = "saved_unverified"
 PERSISTENCE_SAVED_VERIFIED = "saved_verified"
@@ -95,7 +124,12 @@ PERSISTENCE_SAVED_VERIFIED = "saved_verified"
 #: one: the shortest wording that is still literally true.
 PERSISTENCE_WORDS: dict[str, str] = {
     PERSISTENCE_NOT_PLACED: (
-        "nothing was written — the flow stopped before it placed anything"
+        "nothing was written — not one write was acknowledged, so the page was "
+        "never touched"
+    ),
+    PERSISTENCE_UNKNOWN: (
+        "unknown — the run stopped before the page could be read back, so what "
+        "is on it cannot be stated"
     ),
     PERSISTENCE_PLACED: (
         "placed (in-editor readback ran; NOT saved — no successful save ack)"
@@ -171,8 +205,29 @@ class DrawResult:
         return [r for r in self.records if r.timed_out]
 
     @property
+    def acknowledged_writes(self) -> list[StepRecord]:
+        """Write attempts the editor **confirmed**. Their content is on the page.
+
+        This is the evidence that stops the report from saying "nothing was
+        written": a run that was interrupted after five placements still put
+        five parts on the page, and no later failure undoes that.
+        """
+        return [r for r in self.records if r.wrote and r.ok]
+
+    @property
+    def unknown_writes(self) -> list[StepRecord]:
+        """Writes whose fate nobody knows — no answer arrived either way.
+
+        A timeout and a dead transport land here together: the first because the
+        daemon stopped waiting without cancelling the editor, the second because
+        the answer never came back at all. In both cases the write may be on the
+        page, so "did it land?" is not a question this run can answer.
+        """
+        return [r for r in self.records if r.wrote and r.unknown_outcome]
+
+    @property
     def persistence(self) -> str:
-        """Which of the three facts about the write this run actually has.
+        """Which of the facts about the write this run actually has.
 
         The ceiling is deliberate. `saved_verified` needs a close-and-reopen,
         and the bridge cannot do one: `doc.open` is `risk=read` and moves the
@@ -180,6 +235,14 @@ class DrawResult:
         close-project action at all (audit E, 2026-09-18). So a draw run tops
         out at `saved_unverified` and says so, rather than borrowing the word
         "saved" for a state it never reached.
+
+        `not_placed` is the one state that asserts an absence, so it is the one
+        state that may not be reached by inference from "we did not finish
+        looking": it requires **zero** write attempts acknowledged *and* zero
+        unknown. Measured on the real host 2026-09-18: killing the daemon
+        mid-draw left five parts on the page, and a report that said "nothing
+        was written" would have sent a reader to redraw onto a page that already
+        had them — two sets of parts on one sheet. Hence `unknown`.
         """
         if self.saved_verified:
             return PERSISTENCE_SAVED_VERIFIED
@@ -187,6 +250,8 @@ class DrawResult:
             return PERSISTENCE_SAVED_UNVERIFIED
         if self.comparison is not None:
             return PERSISTENCE_PLACED
+        if self.acknowledged_writes or self.unknown_writes:
+            return PERSISTENCE_UNKNOWN
         return PERSISTENCE_NOT_PLACED
 
     @property
@@ -243,7 +308,14 @@ async def _call(
         message = getattr(exc, "message", None) or str(exc)
         code = str(getattr(exc, "code", "") or "")
         records.append(
-            StepRecord(action, summary, False, message, timed_out=code == TIMEOUT_CODE)
+            StepRecord(
+                action,
+                summary,
+                False,
+                message,
+                timed_out=code == TIMEOUT_CODE,
+                disconnected=code == DISCONNECTED_CODE,
+            )
         )
         return None
 
@@ -257,58 +329,93 @@ async def _call_write(
 ) -> dict[str, Any] | None:
     """``_call`` for an action that changes the project.
 
-    The difference is what a **timeout** means. On a read, a timeout costs the
-    answer and nothing else. On a write it costs the answer while the write may
-    still land — the daemon drops the pending future and never tells the editor
-    to cancel (`bridge/daemon.py:615-616`) — so the flow must read the page back
-    before concluding anything, and must **not** re-issue the write: a retry
-    after a write that did land is a duplicate part on the page.
+    The difference is what a **failed** call means. On a read, a failure costs
+    the answer and nothing else. On a write there are two shapes of failure
+    where the write may still have landed:
+
+    * a **timeout** — the daemon drops the pending future and never tells the
+      editor to cancel (`bridge/daemon.py:615-616`);
+    * a **disconnect** — the answer never arrived at all, because the connection
+      died while the call was in flight.
+
+    Both leave the page's state unknown, so both make the flow read the page
+    back before concluding anything, and neither may be answered by re-issuing
+    the write: a retry after a write that did land is a duplicate part on the
+    sheet. A refusal, by contrast, *is* an answer, and gets no readback.
 
     Callers say "this writes" rather than having the action catalogue consulted
     here, because `engines/` does not import `bridge/` (the transport is passed
     in as a duck-typed client) and this module must not start.
     """
+    before = len(records)
     data = await _call(client, action, params, records, summary)
-    if data is None and records and records[-1].timed_out:
-        await _read_back_after_timeout(client, action, records, summary)
+    record = records[before]
+    record.wrote = True
+    if data is None and record.unknown_outcome:
+        await _read_back_after_unknown(client, action, records, summary, record)
     return data
 
 
-async def _read_back_after_timeout(
+async def _read_back_after_unknown(
     client: Any,
     action: str,
     records: list[StepRecord],
     summary: str,
+    cause: StepRecord,
 ) -> None:
-    """Ask the page what is on it now, after ``action`` timed out.
+    """Ask the page what is on it now, after ``action``'s outcome went unknown.
 
     One read, and no repair. The count is the cheapest honest answer to "did
     anything land"; it is *reported*, never used to decide whether to retry,
     because deciding "nothing landed" from a readback we already do not trust
-    would be the same mistake one layer down. A readback that itself fails is
-    recorded as such — "we could not look" must not read as "it is empty".
+    would be the same mistake one layer down.
+
+    A readback that itself fails is reported as such — **"we could not look" is
+    not "it is empty"**, and that distinction is the whole point of this
+    function. When the transport is already known to be gone (an earlier
+    readback failed on a disconnect) the flow says so instead of pretending to
+    look again: a dead socket has nothing to report, and repeating the attempt
+    for every later write would bury the one row that matters.
     """
+    reason = "timed out" if cause.timed_out else "lost the connection"
+    already_gone = any(
+        r.action == READBACK_ACTION and r.disconnected and not r.ok
+        for r in records
+        if r is not cause
+    )
+    if already_gone:
+        records.append(
+            StepRecord(
+                f"persistence.{action}",
+                f"{action} {reason} — state is UNKNOWN and nothing was retried",
+                False,
+                f"the page was not read back: an earlier look already found the "
+                f"transport gone, so there is nothing to read ({summary})",
+            )
+        )
+        return
+
     count: int | None = None
     geometry = await _call(
-        client, "sch.geometry", {}, records,
-        f"read the page back after {action} timed out",
+        client, READBACK_ACTION, {}, records,
+        f"read the page back after {action} {reason}",
     )
     if isinstance(geometry, dict):
         components = geometry.get("components")
         if isinstance(components, list):
             count = len(components)
+    if count is None:
+        looked = "could not look — the readback did not answer"
+    else:
+        looked = f"the page reports {count} component(s) now"
     records.append(
         StepRecord(
             f"persistence.{action}",
-            f"{action} timed out — state is UNKNOWN and nothing was retried",
+            f"{action} {reason} — state is UNKNOWN and nothing was retried",
             False,
-            (
-                f"the page reports {count} component(s) now"
-                if count is not None
-                else "the readback could not say how many components are on the page"
-            )
-            + ". The daemon stopped waiting without cancelling the editor, so this "
-            "write may have landed; re-issuing it would create a duplicate "
+            f"{looked}. {action} may still have landed (a timeout is not a "
+            "cancellation and a dropped connection is not a failed write), so "
+            "re-issuing it could double whatever did "
             f"({summary})",
         )
     )

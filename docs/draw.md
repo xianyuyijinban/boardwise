@@ -366,18 +366,27 @@ Verification steps:
    disguised text, flip to `--naming wire` and re-run: zero rework, the wire
    already carries the net.
 
-## Persistence: three states, and `draw` can only reach two (M0-P0d)
+## Persistence: the facts about a write (M0-P0d, extended 2026-09-18)
 
 "The write API said ok", "the editor's page is right" and "the file kept it" are
-three different facts. The report names which one it established, and prints the
-state with its qualifier attached:
+different facts. The report names which one it established, and prints the state
+with its qualifier attached:
 
 | state | established by | meaning |
 |---|---|---|
-| `not_placed` | — | nothing was written; the flow stopped before it placed anything |
+| `not_placed` | zero write attempts acknowledged | the page was never touched |
+| `unknown` | the run stopped with writes acknowledged or unanswered | what is on the page **cannot be stated** |
 | `placed` | the netlist compare | written, and the editor's own readback agrees. **Not saved** |
 | `saved_unverified` | a `sch.doc.save` that answered ok | the editor accepted a save; nothing checked the disk |
 | `saved_verified` | a close-and-reopen that compares equal | the content reached the file |
+
+`unknown` is not a weaker rung on the ladder — it is the statement that the
+ladder cannot be climbed. It exists because of a measured defect: killing the
+daemon mid-draw left **five parts on the page** while the report said "nothing
+was written". A reader who believed that would redraw onto a page that already
+had them, ending with two sets of parts on one sheet. So the one state that
+asserts an *absence* requires positive evidence of the absence: zero write
+attempts acknowledged **and** zero unanswered.
 
 Two properties are structural, not oversights:
 
@@ -386,14 +395,21 @@ Two properties are structural, not oversights:
   without reloading it from disk, and there is no close-project action in the
   catalogue. The report therefore says "NOT verified on disk" out loud rather than
   borrowing the word "saved" for a state it never reached.
-* **A timeout is not "nothing happened".** The daemon drops the pending future
-  without telling the editor to cancel (`bridge/daemon.py`, `_forward`), so a
-  timed-out write may still land. Every write the flow issues goes through a
-  timeout-aware wrapper: on a timeout it reads the page back (`sch.geometry`),
-  reports that the state is **UNKNOWN**, and never re-issues the call — a retry
-  after a write that landed is a duplicate part. The exit code for that outcome is
-  **3** ("unknown / partly done"), distinct from 2 ("nothing was executed"), and it
-  overrides a clean diff, because "the diff matched" is not "the page is right".
+* **A failed write is not "nothing happened", in either of its two shapes.** A
+  **timeout** means the daemon stopped waiting without telling the editor to
+  cancel; a **disconnect** means the answer never arrived because the connection
+  died in flight. Both leave the outcome unknown, so every write the flow issues
+  goes through a timeout-aware wrapper: on either failure it reads the page back
+  (`sch.geometry`), reports what it saw — or that it **could not look**, which is
+  not the same as "it is empty" — and never re-issues the call, because a retry
+  after a write that landed is a duplicate part. Transport deaths are normalised
+  into `BridgeError(DISCONNECTED)` by `bridge/client.py`, the one layer that knows
+  about `websockets`.
+
+The exit code for an unknown outcome is **3** ("cannot say"), distinct from 2
+("nothing was executed"), and it **outranks both 0 and 1**: "the diff happened to
+match" and "the diff differed" are claims about a page whose contents we are no
+longer sure of.
 
 The third state is reachable only through a human step, and
 `boardwise persistence` turns that step's result into an exit code —
