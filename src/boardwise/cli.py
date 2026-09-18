@@ -181,7 +181,8 @@ def build_parser() -> argparse.ArgumentParser:
             "Redraw a golden board on a blank schematic page through the "
             "bridge and diff the result per pin (task 006). With --spec the plan "
             "is assembled from block templates instead of replayed from the "
-            "golden page (task 008a). "
+            "golden page (task 008a), and the spec first passes the product "
+            "validation gates — a refused spec draws nothing (009-M0). "
             "Exit 0 equal / 1 differences or failures / 2 bad input."
         ),
     )
@@ -243,6 +244,23 @@ def build_parser() -> argparse.ArgumentParser:
             "an electrical object — the report says so); "
             "label: the native net-label API (needs an EDA v4 host; dormant); "
             "none: no signal names at all. Rails always keep their flags."
+        ),
+    )
+    draw.add_argument(
+        "--port-meta", default="blocklib/blocks.portmeta.json",
+        help=(
+            "Spec mode only: the port-metadata sidecar the pre-draw validation "
+            "reads (default: %(default)s, same convention as `validate`). "
+            "Without it the levels and power-tree gates answer \"cannot tell\", "
+            "which refuses the draw."
+        ),
+    )
+    draw.add_argument(
+        "--library", default="",
+        help=(
+            "Spec mode only: curated part library a `part` reference in the "
+            "spec can cite (default: none; a part citation without a library "
+            "is undecidable, which refuses the draw)."
         ),
     )
 
@@ -391,21 +409,32 @@ def build_parser() -> argparse.ArgumentParser:
     validate = sub.add_parser(
         "validate",
         help=(
-            "Run a board spec through the four gates of task 008c item 4 "
-            "(closed book, pin budget, levels, power tree). Exit 0 clean / 1 "
-            "blocked / 2 bad input. An undecidable result blocks like a "
-            "violation does; a skipped gate says so instead of passing."
+            "Run a board spec through the validation gates of task 008c item 4 "
+            "(sources, pin budget, levels, power tree; --benchmark adds the "
+            "closed book). Exit 0 clean / 1 blocked / 2 bad input. An "
+            "undecidable result blocks like a violation does; a skipped gate "
+            "says so instead of passing."
         ),
     )
     validate.add_argument("--spec", required=True, help="Path to the board spec.")
     validate.add_argument(
+        "--benchmark", action="store_true",
+        help=(
+            "Also run the closed-book gate: the generation benchmark's "
+            "discipline (nothing may trace to the --target board, and every "
+            "field must cite a declared input). Product validation leaves it "
+            "out on purpose: a board being drawn owes sound electricity, not "
+            "a bibliography."
+        ),
+    )
+    validate.add_argument(
         "--target", action="append", default=[],
         metavar="NAME",
         help=(
-            "The board being generated — the one whose artifacts may not be "
-            "consulted. Give every alias it has (the export AND the local "
-            "project), or the closed-book gate stays undecidable; repeat the "
-            "option for more than one."
+            "Benchmark mode only: the board being generated — the one whose "
+            "artifacts may not be consulted. Give every alias it has (the "
+            "export AND the local project), or the closed-book gate stays "
+            "undecidable; repeat the option for more than one."
         ),
     )
     validate.add_argument(
@@ -836,11 +865,12 @@ def _cmd_draw(args: argparse.Namespace) -> int:
 
     Two design sources. ``--from <golden.epro2>`` replays the golden page's own
     layout (006b). ``--spec <board spec>`` **assembles** the design from block
-    templates (008a): the spec is then the judgement source, and ``--golden``
-    turns on the double-check that the specification reproduces the golden's
-    connectivity — run *before* a single bridge call, because a draw that
-    starts from an unverified specification just produces a page nobody can
-    trust.
+    templates (008a): the spec first passes the product validation gates
+    (009-M0 P0 — sources, pin budget, levels, power tree; a refused spec draws
+    nothing), and ``--golden`` then turns on the double-check that the
+    specification reproduces the golden's connectivity — both run *before* a
+    single bridge call, because a draw that starts from an unverified
+    specification just produces a page nobody can trust.
     """
     import asyncio
 
@@ -866,10 +896,54 @@ def _cmd_draw(args: argparse.Namespace) -> int:
     assembly_report: list[str] = []
     if args.spec:
         from boardwise.core.blocks import BlockError, load_board_spec
+        from boardwise.core.parts import PartError, load_parts
+        from boardwise.core.portmeta import PortMetaError, load_port_meta
         from boardwise.engines.assemble import assemble, assembly_lines
+        from boardwise.engines.validate_spec import validate_spec
 
+        # The product validation gates run before anything is assembled or
+        # sent (009-M0 P0): a spec that fails them is refused with zero
+        # writes — no assembly, no double check, and above all no bridge call.
+        # The closed book deliberately stays out of this: it grades generation
+        # benchmarks (`validate --benchmark`), not a board someone is drawing.
+        # Nothing is cached — the report is bound to the file's current bytes
+        # by the sha256 it prints, and every run re-reads them.
+        port_meta = None
+        if args.port_meta and Path(args.port_meta).is_file():
+            try:
+                port_meta = load_port_meta(args.port_meta)
+            except PortMetaError as exc:
+                print(f"boardwise draw: {exc}", file=sys.stderr)
+                return 2
         try:
-            design = assemble(load_board_spec(args.spec))
+            spec = load_board_spec(args.spec, port_meta=port_meta)
+        except BlockError as exc:
+            print(f"boardwise draw: {args.spec}: {exc}", file=sys.stderr)
+            return 2
+        library = None
+        if args.library:
+            try:
+                library = load_parts(args.library)
+            except PartError as exc:
+                print(f"boardwise draw: {args.library}: {exc}", file=sys.stderr)
+                return 2
+        validation = validate_spec(
+            spec,
+            library=library,
+            # Declared inputs resolve beside the spec, same as its block
+            # templates do; a new board has no other root to name.
+            root=Path(args.spec).resolve().parent,
+        )
+        for line in validation.render():
+            print(line)
+        if not validation.ok:
+            print(
+                "boardwise draw: the spec failed validation; nothing was executed",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            design = assemble(spec)
         except BlockError as exc:
             print(f"boardwise draw: {args.spec}: {exc}", file=sys.stderr)
             return 2
@@ -1510,11 +1584,13 @@ def _cmd_pintable_check(args: argparse.Namespace) -> int:
 
 
 def _cmd_validate(args: argparse.Namespace) -> int:
-    """Run the four gates (task 008c, item 4).
+    """Run the validation gates (task 008c, item 4; 009-M0 P0).
 
     Exit 0 when nothing blocks, 1 when a violation or an undecidable result
     does, 2 for bad input. Undecidable blocks because "we cannot tell" and "it
-    is fine" must never look the same in a report somebody has to act on.
+    is fine" must never look the same in a report somebody has to act on. The
+    closed book runs only under ``--benchmark``: it grades generation runs,
+    and a user validating a new board has no target to name.
     """
     import json as _json
 
@@ -1562,17 +1638,18 @@ def _cmd_validate(args: argparse.Namespace) -> int:
         root=args.root,
         mcu_block_id=args.block,
         mcu_component=args.mcu_component,
+        benchmark=args.benchmark,
     )
     if args.json:
         print(_json.dumps(report.as_json(), indent=2, ensure_ascii=False))
     else:
         for line in report.render():
             print(line)
-        if not args.target:
+        if args.benchmark and not args.target:
             print(
-                "note: no --target was given, so the closed-book gate could not "
-                "run (this is not a pass). Name the board being generated — "
-                "every alias of it.",
+                "note: --benchmark without --target leaves the closed-book gate "
+                "undecidable (this is not a pass). Name the board being "
+                "generated — every alias of it.",
                 file=sys.stderr,
             )
     return 0 if report.ok else 1

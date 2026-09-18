@@ -167,6 +167,13 @@ strategies that draw no name report ten phantom `ENDPOINT_NOT_TERMINAL` rows.
 | golden replay | `--from <golden.epro2>` | the golden page's own layout (006b) | "did we draw what the golden has?" |
 | **assembly** | `--spec <board spec>` | block templates + a spec (`docs/blocks.md`) | "did we draw what the **specification** says?" |
 
+With `--spec` the spec first passes the **product validation gates**
+(009-M0 P0, `docs/validate_spec.md`: sources, levels, power tree, and pin
+budget when a table is given) before anything is assembled — a refused spec
+draws nothing, the bridge is never opened, and the report's `spec sha256:`
+prefix binds the verdict to the exact bytes that were checked (nothing is
+cached; an edited spec is re-judged on the next run).
+
 With `--spec`, `--golden` turns on the **double check** that runs before a
 single bridge call: `compare` the assembled spec netlist against the golden
 (fixture plus its correction sidecar). A mismatch aborts the run, so a wrong

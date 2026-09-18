@@ -1,11 +1,19 @@
-"""The four gates a board spec must pass (task 008c, item 4).
+"""The gates a board spec must pass (task 008c, item 4; 009-M0 P0).
+
+The gates split into two families: the **product gates** (sources, pin budget,
+levels, power tree) always run, and the **closed book** is benchmark discipline
+that runs only under ``benchmark=True`` — a user drawing a new board owes sound
+electricity, not a bibliography, and has no target board to name.
 
 The negative cases are the point of this file — each gate is asked the one
 question it exists to answer, and then asked it in the shape that must be
 refused:
 
-* closed book — a template cut out of the target board is refused, and so is a
-  field that cites nothing (or cites something never declared);
+* sources — a declared input that is not there is refused, and a part citation
+  with no shelf to check against is undecidable rather than absent;
+* closed book (benchmark mode) — a template cut out of the target board is
+  refused, and so is a field that cites nothing (or cites something never
+  declared);
 * pin budget — a pin the MCU symbol does not have is refused, and so is asking
   for more pins than the symbol exposes;
 * levels — two domains on one net are refused unless a block on it declares
@@ -20,10 +28,11 @@ Two behaviours are pinned because they are the easy ways to get this wrong:
   checked nothing, and does not block — because a board with no MCU is a real
   thing, not a failure.
 
-The committed CH340 board is the known-good fixture for the last three gates:
-it is a real page whose metadata has been filled in, so if it fails, the gate is
-wrong. It fails the first gate *on purpose* — its blocks were cut out of the
-very page it would be graded against, which is exactly what closed book forbids.
+The committed CH340 board is the known-good fixture for the product gates: it
+is a real page whose metadata has been filled in, so if it fails, the gate is
+wrong. Under ``benchmark=True`` the closed book refuses it *on purpose* — its
+blocks were cut out of the very page it would be graded against, which is
+exactly what closed book forbids.
 """
 
 from __future__ import annotations
@@ -53,6 +62,7 @@ from boardwise.engines.validate_spec import (
     PASS,
     SKIPPED,
     UNDECIDABLE_GATE,
+    _gate_levels,
     validate_spec,
 )
 
@@ -82,7 +92,6 @@ def template_body(
     *,
     source: str = "hand",
     provenance_kind: str = "textbook",
-    level_shifter: bool = False,
     pins: tuple[str, ...] = ("1", "2", "3"),
     params: list[dict] | None = None,
 ) -> dict:
@@ -127,8 +136,6 @@ def template_body(
             "labels": [],
         },
     }
-    if level_shifter:
-        body["level_shifter"] = True
     return body
 
 
@@ -501,7 +508,7 @@ def test_a_missing_sidecar_file_is_an_error_not_silence():
 
 
 # --------------------------------------------------------------------------
-# gate 1 — the closed book
+# gate 1 — the closed book (benchmark discipline)
 # --------------------------------------------------------------------------
 
 
@@ -518,9 +525,20 @@ def fully_cited(tmp_path: Path, **overrides):
     )
 
 
-def test_a_spec_with_no_target_cannot_be_called_clean(tmp_path):
+def test_product_validation_needs_no_target(tmp_path):
+    """A new board has no golden to be graded against, and the product gates
+    must not ask for one (009-M0 P0, acceptance scenario 4)."""
     spec = fully_cited(tmp_path)
     report = validate_spec(spec)
+    gate = report.gate("closed-book")
+    assert gate.status == SKIPPED
+    assert "benchmark" in gate.skipped, "a skipped gate must say what would run it"
+    assert report.ok
+
+
+def test_a_benchmark_run_with_no_target_cannot_be_called_clean(tmp_path):
+    spec = fully_cited(tmp_path)
+    report = validate_spec(spec, benchmark=True)
     gate = report.gate("closed-book")
     assert gate.status == UNDECIDABLE_GATE
     assert not report.ok, "an untested claim is not a pass"
@@ -538,7 +556,7 @@ def test_a_template_cut_from_the_target_board_is_refused(tmp_path):
         raw,
         {"ta": template_body("ta", [port("A")], source="tests/fixtures/target_board.epro2")},
     )
-    report = validate_spec(spec, target="tests/fixtures/target_board.epro2")
+    report = validate_spec(spec, target="tests/fixtures/target_board.epro2", benchmark=True)
     assert report.gate("closed-book").status == FAIL
     assert "self-reference" in rules_of(report, "closed-book")
 
@@ -554,7 +572,7 @@ def test_an_export_date_is_not_a_loophole(tmp_path):
         ),
         {"ta": template_body("ta", [port("A")], source="tests/fixtures/ProPrj_box.epro2")},
     )
-    report = validate_spec(spec, target="tests/fixtures/ProPrj_box_2026-09-17.epro2")
+    report = validate_spec(spec, target="tests/fixtures/ProPrj_box_2026-09-17.epro2", benchmark=True)
     assert "self-reference" in rules_of(report, "closed-book")
 
 
@@ -569,9 +587,11 @@ def test_every_alias_of_the_target_can_be_named(tmp_path):
         ),
         {"ta": template_body("ta", [port("A")], source="blocklib/sources/pillbox.eprj2")},
     )
-    alone = validate_spec(spec, target="exports/ProPrj_box_2026-09-17.epro2")
+    alone = validate_spec(spec, target="exports/ProPrj_box_2026-09-17.epro2", benchmark=True)
     assert "self-reference" not in rules_of(alone, "closed-book")
-    both = validate_spec(spec, target=["exports/ProPrj_box_2026-09-17.epro2", "pillbox"])
+    both = validate_spec(
+        spec, target=["exports/ProPrj_box_2026-09-17.epro2", "pillbox"], benchmark=True
+    )
     assert "self-reference" in rules_of(both, "closed-book")
 
 
@@ -586,13 +606,13 @@ def test_a_near_miss_is_not_a_false_accusation(tmp_path):
         ),
         {"ta": template_body("ta", [port("A")], source="blocklib/blocks/ch340x_board.json")},
     )
-    report = validate_spec(spec, target="ch340.epro2")
+    report = validate_spec(spec, target="ch340.epro2", benchmark=True)
     assert "self-reference" not in rules_of(report, "closed-book")
 
 
 def test_naming_the_answer_in_the_spec_text_is_a_leak(tmp_path):
     spec = fully_cited(tmp_path, notes=["compared against target_board to check our work"])
-    report = validate_spec(spec, target="target_board.epro2")
+    report = validate_spec(spec, target="target_board.epro2", benchmark=True)
     assert "answer-leak" in rules_of(report, "closed-book")
 
 
@@ -604,14 +624,20 @@ def test_declaring_the_answer_as_an_input_is_refused(tmp_path):
             reference("answer", "datasheet", path="target_board.epro2"),
         ],
     )
-    report = validate_spec(spec, target="target_board.epro2")
+    report = validate_spec(spec, target="target_board.epro2", benchmark=True)
     assert "self-reference" in rules_of(report, "closed-book")
+
+
+# --------------------------------------------------------------------------
+# gate 2 — the sources (product discipline: declared inputs are real)
+# --------------------------------------------------------------------------
 
 
 def test_a_declared_input_that_is_not_there_is_refused(tmp_path):
     spec = fully_cited(tmp_path)
-    report = validate_spec(spec, target="some_board.epro2", root=tmp_path)
-    assert "declared-input-exists" in rules_of(report, "closed-book")
+    report = validate_spec(spec, root=tmp_path)
+    assert "declared-input-exists" in rules_of(report, "sources")
+    assert not report.ok
 
 
 def test_a_part_reference_the_shelf_does_not_have_is_refused(tmp_path):
@@ -626,8 +652,8 @@ def test_a_part_reference_the_shelf_does_not_have_is_refused(tmp_path):
             {"id": "a", "template": "ta", "at": [0.0, 0.0], "evidence": ["intent", "missing"]}
         ],
     )
-    report = validate_spec(spec, target="some_board.epro2", root=tmp_path, library=load_parts(LIBRARY))
-    assert "declared-input-exists" in rules_of(report, "closed-book")
+    report = validate_spec(spec, root=tmp_path, library=load_parts(LIBRARY))
+    assert "declared-input-exists" in rules_of(report, "sources")
 
 
 def test_without_the_shelf_a_part_citation_is_undecidable(tmp_path):
@@ -642,10 +668,15 @@ def test_without_the_shelf_a_part_citation_is_undecidable(tmp_path):
             {"id": "a", "template": "ta", "at": [0.0, 0.0], "evidence": ["intent", "answer-part"]}
         ],
     )
-    report = validate_spec(spec, target="some_board.epro2", root=tmp_path)
-    gate = report.gate("closed-book")
+    report = validate_spec(spec, root=tmp_path)
+    gate = report.gate("sources")
     assert gate.undecidables, "no library was supplied, so the citation cannot be checked"
     assert not report.ok
+
+
+# --------------------------------------------------------------------------
+# the evidence ledger (part of the closed book — benchmark mode only)
+# --------------------------------------------------------------------------
 
 
 def test_a_field_that_cites_nothing_is_refused(tmp_path):
@@ -670,7 +701,7 @@ def test_a_field_that_cites_nothing_is_refused(tmp_path):
             "tb": template_body("tb", [port("B")]),
         },
     )
-    report = validate_spec(spec, target="some_board.epro2")
+    report = validate_spec(spec, target="some_board.epro2", benchmark=True)
     gate = report.gate("closed-book")
     messages = " ".join(f.message for f in gate.violations)
     assert "connection 'N'" in messages
@@ -701,7 +732,7 @@ def test_a_missing_block_and_value_citation_are_each_reported(tmp_path):
             )
         },
     )
-    report = validate_spec(spec, target="some_board.epro2")
+    report = validate_spec(spec, target="some_board.epro2", benchmark=True)
     gate = report.gate("closed-book")
     messages = " ".join(f.message for f in gate.violations)
     assert "block 'a'" in messages
@@ -713,7 +744,7 @@ def test_a_citation_to_something_never_declared_is_refused(tmp_path):
         tmp_path,
         blocks=[{"id": "a", "template": "ta", "at": [0.0, 0.0], "evidence": ["nowhere"]}],
     )
-    report = validate_spec(spec, target="some_board.epro2")
+    report = validate_spec(spec, target="some_board.epro2", benchmark=True)
     gate = report.gate("closed-book")
     assert any("never declares" in f.message for f in gate.violations)
 
@@ -724,7 +755,7 @@ def test_a_spec_that_declares_nothing_is_refused(tmp_path):
         spec_json(blocks=[{"id": "a", "template": "ta", "at": [0.0, 0.0]}], connections=[]),
         {"ta": template_body("ta", [port("A")])},
     )
-    report = validate_spec(spec, target="some_board.epro2")
+    report = validate_spec(spec, target="some_board.epro2", benchmark=True)
     assert any("declares no inputs" in f.message for f in report.violations)
 
 
@@ -738,7 +769,7 @@ def test_an_uncited_input_is_noted_and_does_not_block(tmp_path):
             reference("spare", "intent", path="notes.md"),
         ],
     )
-    report = validate_spec(spec, target="some_board.epro2", root=tmp_path)
+    report = validate_spec(spec, target="some_board.epro2", root=tmp_path, benchmark=True)
     gate = report.gate("closed-book")
     assert not gate.violations and not gate.undecidables
     assert any(
@@ -751,12 +782,30 @@ def test_an_uncited_input_is_noted_and_does_not_block(tmp_path):
 def test_a_fully_cited_spec_passes_the_closed_book(tmp_path):
     (Path(tmp_path) / "intent.md").write_text("intent", encoding="utf-8")
     spec = fully_cited(tmp_path)
-    report = validate_spec(spec, target="some_board.epro2", root=tmp_path)
+    report = validate_spec(spec, target="some_board.epro2", root=tmp_path, benchmark=True)
     assert report.gate("closed-book").status == PASS
 
 
+def test_a_spec_without_a_ledger_is_still_a_product_spec(tmp_path):
+    """A user drawing a new board owes sound electricity, not a bibliography:
+    the ledger-less spec the benchmark refuses passes product validation
+    (009-M0 P0 — the committed CH340 spec is exactly this shape)."""
+    spec = build(
+        tmp_path,
+        spec_json(blocks=[{"id": "a", "template": "ta", "at": [0.0, 0.0]}], connections=[]),
+        {"ta": template_body("ta", [port("A")])},
+    )
+    report = validate_spec(spec)
+    assert report.ok
+    assert report.gate("closed-book").status == SKIPPED
+    # ...and the same spec still fails the closed book when it *is* graded
+    graded = validate_spec(spec, target="some_board.epro2", benchmark=True)
+    assert not graded.ok
+    assert "evidence-present" in rules_of(graded, "closed-book")
+
+
 # --------------------------------------------------------------------------
-# gate 2 — the pin budget
+# gate 3 — the pin budget
 # --------------------------------------------------------------------------
 
 
@@ -863,16 +912,14 @@ def test_a_pin_table_that_agrees_with_the_spec_passes(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# gate 3 — levels
+# gate 4 — levels
 # --------------------------------------------------------------------------
 
 
 def level_spec(tmp_path: Path, second, *, third=None, connections=None):
     templates = {
         "ta": template_body("ta", [port("A", level="3V3")]),
-        "tb": template_body(
-            "tb", [port("B", **second)], level_shifter=bool(second.get("level") is None)
-        ),
+        "tb": template_body("tb", [port("B", **second)]),
     }
     entries = [{"net": "N", "ports": [["a", "A"], ["b", "B"]], "evidence": ["intent"]}]
     if third is not None:
@@ -901,8 +948,15 @@ def test_two_domains_on_one_net_is_a_violation(tmp_path):
     assert "level-domain" in rules_of(report, "levels")
 
 
-def test_a_declared_level_shifter_on_the_net_is_allowed(tmp_path):
-    """The one legitimate reason for a net to carry two domains."""
+def test_no_declaration_makes_two_domains_on_one_net_legal(tmp_path):
+    """A block saying it is a level shifter does not licence its own net.
+
+    Replaces the old ``level_shifter: true`` exemption (M0-P0c). That exemption
+    let a block put two domains on one net just by declaring itself allowed to,
+    which is the one thing a real shifter never does: its low side and its high
+    side are two *different* nets. Here the block states the level it actually
+    speaks, and the net still fails because the other end disagrees.
+    """
     spec = build(
         tmp_path,
         spec_json(
@@ -917,13 +971,12 @@ def test_a_declared_level_shifter_on_the_net_is_allowed(tmp_path):
         ),
         {
             "ta": template_body("ta", [port("A", level="3V3")]),
-            "tb": template_body("tb", [port("B", level="5V")], level_shifter=True),
+            "tb": template_body("tb", [port("B", level="5V")]),
         },
     )
-    report = validate_spec(spec, target="some_board.epro2")
-    gate = report.gate("levels")
-    assert not gate.violations, [f.message for f in gate.violations]
-    assert any("level shifter" in f.message for f in gate.findings)
+    gate = validate_spec(spec, target="some_board.epro2").gate("levels")
+    assert gate.status == FAIL
+    assert [f.message for f in gate.violations if "two IO domains" in f.message]
 
 
 def test_a_silent_port_is_undecidable_not_agreeing(tmp_path):
@@ -958,31 +1011,43 @@ def test_a_net_with_no_levels_at_all_is_undecidable(tmp_path):
     assert "not a pass" in plain(gate.undecidables[0].message)
 
 
-def test_two_domains_without_a_shifter_between_them(tmp_path):
-    """A shifter not on the offending net does not licence anything."""
+def test_a_two_sided_shifter_joins_two_nets_each_in_one_domain(tmp_path):
+    """The legitimate conversion: two nets, one domain each (M0-P0c).
+
+    Replaces ``test_two_domains_without_a_shifter_between_them``, whose premise
+    — "a shifter not on the offending net licences nothing" — was part of the
+    exemption's vocabulary and no longer means anything. What a real shifter
+    looks like is this: its low side joins the 3V3 net, its high side joins the
+    5V net, and *neither net mixes domains*. That is why the exemption was
+    wrong — the legal case never triggered it.
+    """
     templates = {
-        "ta": template_body("ta", [port("A", level="3V3")]),
-        "tb": template_body("tb", [port("B", level="5V")]),
-        "tc": template_body("tc", [port("C", level="5V")], level_shifter=True),
+        "tlv": template_body("tlv", [port("A", level="3V3")]),
+        "ttx": template_body(
+            "ttx", [port("L", level="3V3"), port("H", level="5V")], pins=("1", "2")
+        ),
+        "thv": template_body("thv", [port("B", level="5V")]),
     }
     spec = build(
         tmp_path,
         spec_json(
             blocks=[
-                {"id": "a", "template": "ta", "at": [0.0, 0.0], "evidence": ["intent"]},
-                {"id": "b", "template": "tb", "at": [0.0, 0.0], "evidence": ["intent"]},
-                {"id": "c", "template": "tc", "at": [0.0, 0.0], "evidence": ["intent"]},
+                {"id": "lv", "template": "tlv", "at": [0.0, 0.0], "evidence": ["intent"]},
+                {"id": "tx", "template": "ttx", "at": [0.0, 0.0], "evidence": ["intent"]},
+                {"id": "hv", "template": "thv", "at": [0.0, 0.0], "evidence": ["intent"]},
             ],
             connections=[
-                {"net": "N", "ports": [["a", "A"], ["b", "B"]], "evidence": ["intent"]},
-                {"net": "M", "ports": [["b", "B"], ["c", "C"]], "evidence": ["intent"]},
+                {"net": "N3V3", "ports": [["lv", "A"], ["tx", "L"]], "evidence": ["intent"]},
+                {"net": "N5V", "ports": [["tx", "H"], ["hv", "B"]], "evidence": ["intent"]},
             ],
             references=[reference("intent", "intent", path="intent.md")],
         ),
         templates,
     )
     gate = validate_spec(spec, target="some_board.epro2").gate("levels")
-    assert [f.message for f in gate.violations if "net 'N'" in f.message]
+    assert gate.status == PASS, [f.message for f in gate.findings]
+    assert not gate.violations
+    assert not gate.undecidables, [f.message for f in gate.undecidables]
 
 
 def test_one_domain_on_every_port_passes(tmp_path):
@@ -991,8 +1056,61 @@ def test_one_domain_on_every_port_passes(tmp_path):
     assert gate.status == PASS
 
 
+def test_a_rail_on_the_same_page_does_not_switch_off_the_level_check(tmp_path):
+    """A non-signal port skips *its own* net, not the gate (M0-P0c).
+
+    The gate walks the spec's connections, and a rail is not its business — a
+    rail's business is the power tree. But the skip has to be per-net: with a
+    power net and a mixed-domain signal net on one page, only the signal net may
+    be judged, and it must still be judged.
+    """
+    spec = build(
+        tmp_path,
+        spec_json(
+            blocks=[
+                {"id": "a", "template": "ta", "at": [0.0, 0.0], "evidence": ["intent"]},
+                {"id": "b", "template": "tb", "at": [0.0, 0.0], "evidence": ["intent"]},
+            ],
+            connections=[
+                {"net": "N", "ports": [["a", "A"], ["b", "B"]], "evidence": ["intent"]},
+                {"net": "VCC", "ports": [["a", "P"], ["b", "P"]], "evidence": ["intent"]},
+            ],
+            references=[reference("intent", "intent", path="intent.md")],
+        ),
+        {
+            "ta": template_body(
+                "ta", [port("A", level="3V3"), port("P", "power", direction="source", voltage="3V3")]
+            ),
+            "tb": template_body(
+                "tb", [port("B", level="5V"), port("P", "power", direction="sink", voltage="3V3")]
+            ),
+        },
+    )
+    gate = _gate_levels(spec)
+    # The rail is skipped...
+    assert not [f for f in gate.findings if "VCC" in f.message]
+    # ...and the signal net on the same page is still judged.
+    assert [f for f in gate.violations if "net 'N'" in f.message]
+
+
+def test_a_connection_that_names_no_real_block_is_skipped(tmp_path):
+    """The gate's first guard: a net with no resolvable port is not a finding.
+
+    ``_ports_of`` returns nothing when a connection names a block that is not on
+    the page. Reached here by pulling the block out from under an already-loaded
+    spec, because the loader refuses such a connection in the first place — so
+    this pins the guard's own behaviour (nothing to judge, nothing reported)
+    rather than a state a valid spec can be written in.
+    """
+    spec = level_spec(tmp_path, {"level": "3V3"})
+    for connection in spec.connections:
+        connection.ports = [("ghost", "A")]
+    gate = _gate_levels(spec)
+    assert gate.findings == []
+
+
 # --------------------------------------------------------------------------
-# gate 4 — the power tree
+# gate 5 — the power tree
 # --------------------------------------------------------------------------
 
 
@@ -1113,19 +1231,24 @@ def test_one_source_feeding_a_matching_sink_passes(tmp_path):
 # --------------------------------------------------------------------------
 
 
-def test_the_ch340_board_passes_the_last_three_gates():
-    """It is a real page with its metadata filled in — if it fails, we are wrong."""
+def test_the_ch340_board_passes_product_validation():
+    """The committed spec is a *product* spec: no golden, no evidence ledger,
+    and it still comes back clean (009-M0 P0). It is a real page with its
+    metadata filled in — if it fails, the gate is wrong."""
     spec = load_board_spec(CH340_SPEC, port_meta=load_port_meta(PORT_META))
-    report = validate_spec(spec, target=str(CH340_GOLDEN), library=load_parts(LIBRARY))
+    report = validate_spec(spec)
+    assert report.gate("sources").status == PASS
     assert report.gate("levels").status == PASS
     assert report.gate("power-tree").status == PASS
     assert report.gate("pin-budget").status == SKIPPED
+    assert report.gate("closed-book").status == SKIPPED
+    assert report.ok
 
 
 def test_the_same_board_without_the_metadata_cannot_be_called_clean():
     """Reading the files alone gives no metadata, and 'cannot tell' blocks."""
     spec = load_board_spec(CH340_SPEC)
-    report = validate_spec(spec, target=str(CH340_GOLDEN))
+    report = validate_spec(spec)
     assert report.gate("levels").status == UNDECIDABLE_GATE
     assert report.gate("power-tree").status == UNDECIDABLE_GATE
     assert not report.ok
@@ -1134,7 +1257,7 @@ def test_the_same_board_without_the_metadata_cannot_be_called_clean():
 def test_the_ch340_board_is_refused_by_the_closed_book():
     """Every one of its blocks was cut out of the page it would be graded against."""
     spec = load_board_spec(CH340_SPEC)
-    report = validate_spec(spec, target=str(CH340_GOLDEN))
+    report = validate_spec(spec, target=str(CH340_GOLDEN), benchmark=True)
     gate = report.gate("closed-book")
     assert gate.status == FAIL
     assert sum(1 for f in gate.violations if f.rule == "self-reference") == 5, [
@@ -1144,20 +1267,32 @@ def test_the_ch340_board_is_refused_by_the_closed_book():
 
 def test_the_gates_are_reported_in_the_order_they_are_told_to_run():
     spec = load_board_spec(CH340_SPEC)
-    report = validate_spec(spec, target=str(CH340_GOLDEN))
+    report = validate_spec(spec)
     assert [gate.name for gate in report.gates] == list(GATE_ORDER)
 
 
 def test_the_report_can_be_read_by_a_machine(tmp_path):
     spec = fully_cited(tmp_path)
-    report = validate_spec(spec, target="some_board.epro2")
+    report = validate_spec(spec)
     body = report.as_json()
     assert body["ok"] is True
+    assert body["spec_hash"] == report.spec_hash
     assert {gate["name"] for gate in body["gates"]} == set(GATE_ORDER)
     assert body["rendered"], "the rendered form is part of the report"
 
 
+def test_the_report_is_bound_to_the_spec_revision_it_ran_on(tmp_path):
+    """"It passed" must name the bytes that passed — nothing is cached (009-M0)."""
+    import hashlib
+
+    spec = fully_cited(tmp_path)
+    report = validate_spec(spec)
+    digest = hashlib.sha256(Path(spec.path).read_bytes()).hexdigest()[:12]
+    assert report.spec_hash == digest
+    assert f"spec sha256:{digest}" in report.render()[0]
+
+
 def test_a_blocking_report_says_so_in_its_last_line(tmp_path):
     spec = fully_cited(tmp_path)
-    report = validate_spec(spec)  # no target ⇒ undecidable
+    report = validate_spec(spec, benchmark=True)  # no target ⇒ undecidable
     assert report.render()[-1].startswith("verdict: STOPPED")
