@@ -71,6 +71,43 @@ class StepRecord:
     summary: str
     ok: bool
     detail: str = ""
+    #: The daemon stopped waiting for this action. That is **not** the same as
+    #: "the action did not happen": the daemon drops the pending future without
+    #: telling the editor to cancel (`bridge/daemon.py:615-616`), so a write can
+    #: still land after the caller has given up (M0-P0d, 2026-09-18).
+    timed_out: bool = False
+
+
+#: The error code the daemon raises when it stops waiting (`daemon.py:610-614`).
+TIMEOUT_CODE = "TIMEOUT"
+
+#: How far the write actually got — three facts, not one. "The API answered ok"
+#: is the editor accepting a call; "the page reads back as asked" is the
+#: editor's own state; "it survived a reopen" is content reaching the file.
+#: Ascending, and a report may only claim the highest one it established.
+#: "saved" belongs to the last state alone.
+PERSISTENCE_NOT_PLACED = "not_placed"
+PERSISTENCE_PLACED = "placed"
+PERSISTENCE_SAVED_UNVERIFIED = "saved_unverified"
+PERSISTENCE_SAVED_VERIFIED = "saved_verified"
+
+#: One line per state, phrased so no reader can mistake a claim for a stronger
+#: one: the shortest wording that is still literally true.
+PERSISTENCE_WORDS: dict[str, str] = {
+    PERSISTENCE_NOT_PLACED: (
+        "nothing was written — the flow stopped before it placed anything"
+    ),
+    PERSISTENCE_PLACED: (
+        "placed (in-editor readback ran; NOT saved — no successful save ack)"
+    ),
+    PERSISTENCE_SAVED_UNVERIFIED: (
+        "saved_unverified (the save API answered ok; NOT verified on disk — "
+        "no reopen has compared it)"
+    ),
+    PERSISTENCE_SAVED_VERIFIED: (
+        "saved_verified (content survived a close-and-reopen and compared equal)"
+    ),
+}
 
 
 @dataclass
@@ -113,6 +150,44 @@ class DrawResult:
     #: ``export.screenshot`` output — kept only as a diagnostic, never as
     #: evidence (the viewport capture returns cached frames on this host).
     screenshot_b64: str | None = None
+    #: Did the last `sch.doc.save` come back ok? The connector *throws* when the
+    #: editor refuses a save (`connector/src/actions.ts:2211-2220`), so this is
+    #: "the editor accepted a save" — never "the bytes are on disk". Read the
+    #: answer instead of discarding it, which is what this flow did until
+    #: M0-P0d and why a failed save was invisible (audit A1).
+    save_ok: bool = False
+    #: Set by a caller that really closed the project, reopened it and compared.
+    #: **Nothing in this module can set it** — see :attr:`persistence`.
+    saved_verified: bool = False
+
+    @property
+    def timeouts(self) -> list[StepRecord]:
+        """Every action the daemon stopped waiting for.
+
+        Drives the "unknown / partial" outcome: a timeout on a write means the
+        page may be half-drawn, and no exit code for "the diff matched" is
+        allowed to hide that.
+        """
+        return [r for r in self.records if r.timed_out]
+
+    @property
+    def persistence(self) -> str:
+        """Which of the three facts about the write this run actually has.
+
+        The ceiling is deliberate. `saved_verified` needs a close-and-reopen,
+        and the bridge cannot do one: `doc.open` is `risk=read` and moves the
+        focused tab without reloading it from disk, and there is no
+        close-project action at all (audit E, 2026-09-18). So a draw run tops
+        out at `saved_unverified` and says so, rather than borrowing the word
+        "saved" for a state it never reached.
+        """
+        if self.saved_verified:
+            return PERSISTENCE_SAVED_VERIFIED
+        if self.save_ok:
+            return PERSISTENCE_SAVED_UNVERIFIED
+        if self.comparison is not None:
+            return PERSISTENCE_PLACED
+        return PERSISTENCE_NOT_PLACED
 
     @property
     def failures(self) -> list[StepRecord]:
@@ -166,8 +241,153 @@ async def _call(
         return data
     except Exception as exc:  # noqa: BLE001 — every failure is a report row
         message = getattr(exc, "message", None) or str(exc)
-        records.append(StepRecord(action, summary, False, message))
+        code = str(getattr(exc, "code", "") or "")
+        records.append(
+            StepRecord(action, summary, False, message, timed_out=code == TIMEOUT_CODE)
+        )
         return None
+
+
+async def _call_write(
+    client: Any,
+    action: str,
+    params: dict[str, Any],
+    records: list[StepRecord],
+    summary: str,
+) -> dict[str, Any] | None:
+    """``_call`` for an action that changes the project.
+
+    The difference is what a **timeout** means. On a read, a timeout costs the
+    answer and nothing else. On a write it costs the answer while the write may
+    still land — the daemon drops the pending future and never tells the editor
+    to cancel (`bridge/daemon.py:615-616`) — so the flow must read the page back
+    before concluding anything, and must **not** re-issue the write: a retry
+    after a write that did land is a duplicate part on the page.
+
+    Callers say "this writes" rather than having the action catalogue consulted
+    here, because `engines/` does not import `bridge/` (the transport is passed
+    in as a duck-typed client) and this module must not start.
+    """
+    data = await _call(client, action, params, records, summary)
+    if data is None and records and records[-1].timed_out:
+        await _read_back_after_timeout(client, action, records, summary)
+    return data
+
+
+async def _read_back_after_timeout(
+    client: Any,
+    action: str,
+    records: list[StepRecord],
+    summary: str,
+) -> None:
+    """Ask the page what is on it now, after ``action`` timed out.
+
+    One read, and no repair. The count is the cheapest honest answer to "did
+    anything land"; it is *reported*, never used to decide whether to retry,
+    because deciding "nothing landed" from a readback we already do not trust
+    would be the same mistake one layer down. A readback that itself fails is
+    recorded as such — "we could not look" must not read as "it is empty".
+    """
+    count: int | None = None
+    geometry = await _call(
+        client, "sch.geometry", {}, records,
+        f"read the page back after {action} timed out",
+    )
+    if isinstance(geometry, dict):
+        components = geometry.get("components")
+        if isinstance(components, list):
+            count = len(components)
+    records.append(
+        StepRecord(
+            f"persistence.{action}",
+            f"{action} timed out — state is UNKNOWN and nothing was retried",
+            False,
+            (
+                f"the page reports {count} component(s) now"
+                if count is not None
+                else "the readback could not say how many components are on the page"
+            )
+            + ". The daemon stopped waiting without cancelling the editor, so this "
+            "write may have landed; re-issuing it would create a duplicate "
+            f"({summary})",
+        )
+    )
+
+
+async def _save_project(
+    client: Any, result: "DrawResult", summary: str
+) -> bool:
+    """``sch.doc.save``, with the answer **checked** rather than discarded.
+
+    Returns whether the editor accepted the save and records it on the result.
+    A refusal arrives as an exception from the connector
+    (`connector/src/actions.ts:2211-2220`) — the current build never returns
+    ``saved: false`` — so a save that failed used to be swallowed by ``_call``
+    and then thrown away by the caller, leaving the report silent about the one
+    fact this whole task exists to state (audit A1/D).
+    """
+    data = await _call_write(
+        client, "sch.doc.save", {}, result.records, summary
+    )
+    result.save_ok = data is not None
+    if data is None:
+        result.records.append(
+            StepRecord(
+                "persistence.save",
+                f"{summary}: the editor did NOT accept a save",
+                False,
+                "the save answered nothing usable, so the page in the editor is "
+                "all that exists — this is not persisted, and the report must not "
+                "say it is",
+            )
+        )
+    return result.save_ok
+
+
+def geometry_fingerprint(geometry: dict[str, Any] | None) -> dict[str, int]:
+    """A stable, **id-free** summary of a ``sch.geometry`` dump.
+
+    Counts what the page holds — per list and per primitive type — so two dumps
+    of the same page compare equal and two different pages do not. Ids are left
+    out on purpose: the editor generates them per render, so comparing raw dumps
+    would report a difference on every reopen and the comparison would be
+    worthless. Empty means "this dump has none of the lists we know", which the
+    caller must read as *undecidable*, never as *identical*.
+
+    Separate from :func:`_census_types`, which reads the ``primitives`` list
+    some host builds expose. That key is **absent** from the dump measured on
+    this host (2026-09-18: the real export carries ``components`` / ``wires`` /
+    ``pins`` / ``netlabels``), so this is the shape-aware reader.
+    """
+    if not isinstance(geometry, dict):
+        return {}
+    out: dict[str, int] = {}
+    for key in ("components", "wires", "pins", "netlabels"):
+        items = geometry.get(key)
+        if not isinstance(items, list):
+            continue
+        out[key] = len(items)
+        for item in items:
+            state = item.get("state") if isinstance(item, dict) else None
+            tag = "<unlabelled>"
+            if isinstance(state, dict):
+                for field_name in ("ComponentType", "PrimitiveType", "NetLabelType"):
+                    value = state.get(field_name)
+                    if isinstance(value, str) and value:
+                        tag = value
+                        break
+            out[f"{key}/{tag}"] = out.get(f"{key}/{tag}", 0) + 1
+    return out
+
+
+def fingerprint_total(fingerprint: dict[str, int]) -> int:
+    """How many primitives a :func:`geometry_fingerprint` counted.
+
+    Only the per-list totals — the per-type entries are a breakdown of the same
+    primitives, so summing the whole dict would double-count every one of them
+    (measured while wiring this up: 35 components + 33 wires reported as 136).
+    """
+    return sum(count for key, count in fingerprint.items() if "/" not in key)
 
 
 def _census_types(geometry: dict[str, Any] | None) -> dict[str, int]:
@@ -321,7 +541,7 @@ _UUID_LIKE = re.compile(r"^[0-9a-f]{16}$|^[0-9a-f]{32}$")
 
 async def _settled_netlist(
     client: Any,
-    records: list[StepRecord],
+    result: "DrawResult",
     attempts: int = 4,
 ) -> tuple[dict[str, Any] | None, int, bool]:
     """Export until two consecutive reads agree; return the last one.
@@ -331,13 +551,17 @@ async def _settled_netlist(
     lagging the wire creation. ``settled`` says whether agreement was reached
     — a caller that gave up is reporting a read it does not trust, which is
     different from a read it does.
+
+    Takes the ``result`` rather than a bare record list so the save's answer can
+    be recorded on it: the last save of the run is the one that decides whether
+    the flow may claim ``saved_unverified`` at all (M0-P0d).
     """
     previous: str | None = None
     last: dict[str, Any] | None = None
     for attempt in range(1, attempts + 1):
-        await _call(client, "sch.doc.save", {}, records, f"save project (attempt {attempt})")
+        await _save_project(client, result, f"save project (attempt {attempt})")
         last = await _call(
-            client, "sch.netlist", {"type": "EasyEDA"}, records,
+            client, "sch.netlist", {"type": "EasyEDA"}, result.records,
             f"export editor netlist (attempt {attempt})",
         )
         text = (last or {}).get("text") or ""
@@ -656,7 +880,7 @@ async def _verify_placements(
     """
     from boardwise.core.verify import verify_placements
 
-    await _call(client, "sch.doc.save", {}, result.records, "save before readback")
+    await _save_project(client, result, "save before readback")
     netlist = await _call(
         client, "sch.netlist", {"type": "EasyEDA"}, result.records,
         "export netlist (placement verification readback)",
@@ -806,7 +1030,7 @@ async def run_draw(
     # must be asked for). The asking happened at this flow's own execution
     # gate — `print_gate` + `confirm()` ran before any of this — so the
     # confirmation travels with the call rather than being demanded twice.
-    page = await _call(
+    page = await _call_write(
         client, "sch.doc.new", {"confirm": True}, result.records,
         "create blank schematic page",
     )
@@ -831,7 +1055,7 @@ async def run_draw(
         }
         params.update(step.resolution())
         summary = f"place {step.designator} ({step.lcsc or step.keyword or '?'})"
-        placed = await _call(client, "sch.place_component", params, result.records, summary)
+        placed = await _call_write(client, "sch.place_component", params, result.records, summary)
         # The placed component's primitive id — the key the seventh path
         # (`sch.component_pins`) needs to hand back real pin coordinates.
         if placed and isinstance(placed.get("uuid"), str):
@@ -867,7 +1091,7 @@ async def run_draw(
         }
         if not wanted:
             continue
-        applied = await _call(
+        applied = await _call_write(
             client, "sch.set_component_attribute",
             {"primitiveId": primitive_id, "attributes": wanted, "pageUuid": page_uuid},
             result.records,
@@ -991,7 +1215,7 @@ async def run_draw(
             f"wire {step.net or '(unnamed)'} ({len(step.points)} pts) "
             + " ".join(f"({x:.0f},{y:.0f})" for x, y in step.points)
         )
-        await _call(
+        await _call_write(
             client, "sch.place_wire", params, result.records, summary,
         )
     for step in plan.net_names:
@@ -1033,7 +1257,7 @@ async def run_draw(
             }
             summary = f"name net {step.net} ({step.kind} flag)"
             action = "sch.place_power"
-        await _call(client, action, params, result.records, summary)
+        await _call_write(client, action, params, result.records, summary)
 
     # --- 4. the candidate model for the verdict.
     #
@@ -1049,7 +1273,7 @@ async def run_draw(
     # U1.16 as unconnected while the very same page, re-exported moments later,
     # had it in VCC. The second export is the verdict's source; when the two
     # disagree that is recorded, because a stale read is worth knowing about.
-    netlist, exports, settled = await _settled_netlist(client, result.records)
+    netlist, exports, settled = await _settled_netlist(client, result)
     if exports > 1:
         result.records.append(
             StepRecord(
