@@ -60,7 +60,10 @@ def test_props_kept_verbatim(model):
 
 
 def test_is_ground_net():
-    for name in ("GND", "AGND", "DGND", "PGND", "EGND", "VSS", "VEE", "gnd"):
+    for name in ("GND", "AGND", "DGND", "PGND", "EGND", "SGND", "VSS", "gnd"):
         assert is_ground_net(name), name
-    for name in ("VM", "+24V", "VCC", "", None):
+    # VEE is a negative supply in analog/ECL circuits, not ground: it moved out
+    # of the ground set in the 2026-09-18 ruling (M0-P0c). Reading it as ground
+    # made a negative rail hang a ground symbol off itself.
+    for name in ("VM", "+24V", "VCC", "VEE", "VEE-5V", "vee", "", None):
         assert not is_ground_net(name), name

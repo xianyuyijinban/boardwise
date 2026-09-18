@@ -1,4 +1,4 @@
-"""The spec-driven CLI surface (task 008a, items 3-4).
+"""The spec-driven CLI surface (task 008a, items 3-4; 009-M0 P0).
 
 Three commands grew a ``--spec`` path: ``compare`` (the spec netlist as the
 candidate — work item 4), ``lint`` (the assembled plan, offline, no editor) and
@@ -6,13 +6,17 @@ candidate — work item 4), ``lint`` (the assembled plan, offline, no editor) an
 and 5).
 
 What is under test here is the *decisions* the CLI makes, not the socket: the
-draw tests stop at the gate that runs before any bridge call, because the one
-thing worse than no acceptance run is an acceptance run that silently created a
-page in someone's project.
+draw tests stub the bridge to refuse the connection, so they observe the order
+— product validation gates, then assembly, then the double check, and only
+then the editor — without a daemon. The one thing worse than no acceptance run
+is an acceptance run that silently created a page in someone's project, so the
+stub also *counts* how often it was opened: a refused spec must open it zero
+times.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -32,6 +36,41 @@ SIDECAR = ROOT / "tests" / "fixtures" / "ch340_golden.overrides.json"
 #: the *corrected* golden (the sidecar is named, not assumed — see the note in
 #: `_cmd_compare`).
 COMPARE_SPEC = ["compare", "--spec", str(SPEC), "--golden", str(GOLDEN), "--overrides", str(SIDECAR)]
+
+
+@pytest.fixture
+def stub_bridge(monkeypatch):
+    """A bridge that never connects, and counts how often it was asked to.
+
+    The draw flow must reach for the editor only after every offline gate has
+    passed; the counter is what proves a refused spec never got that far.
+    """
+    from boardwise.bridge.protocol import BridgeError
+
+    class _StubClient:
+        opens = 0
+
+        @staticmethod
+        async def open(*_args, **_kwargs):
+            _StubClient.opens += 1
+            raise OSError("connection refused")
+
+    class _StubDaemon:
+        @staticmethod
+        def resolve_port() -> int:
+            return 1
+
+        @staticmethod
+        def ensure_token() -> str:
+            return "token"
+
+    class _StubModule:
+        BridgeClient = _StubClient
+
+    monkeypatch.setattr(
+        cli, "_bridge_modules", lambda: (_StubModule, _StubDaemon, BridgeError)
+    )
+    return _StubClient
 
 
 @pytest.fixture
@@ -176,42 +215,106 @@ def test_the_double_check_aborts_on_a_spec_that_does_not(capsys):
     assert "C1: value differs" in out
 
 
-def test_draw_spec_runs_both_gates_before_opening_the_bridge(monkeypatch, capsys):
-    """The two pre-flight gates are offline; the bridge is opened after them.
+def test_draw_spec_validates_assembles_and_double_checks_before_the_bridge(stub_bridge, capsys):
+    """The pre-flight gates are offline; the bridge is opened after all of them.
 
     The connector is stubbed to refuse the connection, so the test observes the
-    *order* without a daemon: assemble -> double check -> (then, and only then)
-    an attempt to reach the editor. On a real run the same order is what keeps a
-    wrong specification from mutating someone's project.
+    *order* without a daemon: product validation -> assembly -> double check ->
+    (then, and only then) an attempt to reach the editor. On a real run the
+    same order is what keeps a wrong specification from mutating someone's
+    project.
     """
-    from boardwise.bridge.protocol import BridgeError
-
-    class _StubClient:
-        @staticmethod
-        async def open(*_args, **_kwargs):
-            raise OSError("connection refused")
-
-    class _StubDaemon:
-        @staticmethod
-        def resolve_port() -> int:
-            return 1
-
-        @staticmethod
-        def ensure_token() -> str:
-            return "token"
-
-    class _StubModule:
-        BridgeClient = _StubClient
-
-    monkeypatch.setattr(
-        cli, "_bridge_modules", lambda: (_StubModule, _StubDaemon, BridgeError)
-    )
-
     code = cli.main(["draw", "--spec", str(SPEC), "--golden", str(GOLDEN)])
     captured = capsys.readouterr()
     assert code == 2
+    # the product validation gates ran first and passed the committed spec
+    assert "spec validation (spec sha256:" in captured.out
+    assert "closed-book" in captured.out and "skipped" in captured.out
+    assert "verdict: may proceed" in captured.out
+    # then the assembly and the double check
     assert "assembly from" in captured.out
     assert "block usb <- ch340_usb_input" in captured.out
     assert "the specification reproduces the golden" in captured.out
-    # and only after both gates did it try to reach the editor
+    # in that order, and only after all three did it try to reach the editor
+    assert captured.out.index("verdict: may proceed") < captured.out.index("assembly from")
     assert "daemon not reachable" in captured.err
+    assert stub_bridge.opens == 1
+
+
+# --------------------------------------------------------------------------
+# 009-M0 P0: the pre-draw product gates, and the benchmark flag
+# --------------------------------------------------------------------------
+
+
+def _with_bogus_level_clash(raw: dict) -> dict:
+    """Join a 3V3 UART pin to a USB pin: two IO domains, no shifter on the net."""
+    raw["connections"].append({"net": "BOGUS", "ports": [["uart", "TX"], ["usb", "D+"]]})
+    return raw
+
+
+def test_draw_refuses_a_spec_with_an_electrical_fault(stub_bridge, variant, capsys):
+    """A level clash is a pre-flight stop: no assembly, and no bridge call —
+    zero writes is the whole point of running the gates first."""
+    raw = _with_bogus_level_clash(json.loads(SPEC.read_text(encoding="utf-8")))
+    path = variant(connections=raw["connections"])
+    code = cli.main(["draw", "--spec", str(path)])
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "level-domain" in captured.out
+    assert "verdict: STOPPED" in captured.out
+    assert "assembly from" not in captured.out, "validation precedes assembly"
+    assert "failed validation; nothing was executed" in captured.err
+    assert stub_bridge.opens == 0
+
+
+def test_draw_rechecks_the_spec_on_every_run(stub_bridge, tmp_path, capsys):
+    """No caching: the same path is re-read, and a pass does not outlive an
+    edit — the printed sha256 is bound to the bytes that were checked."""
+    raw = json.loads(SPEC.read_text(encoding="utf-8"))
+    for block in raw["blocks"]:
+        block["template"] = str((SPEC_DIR / block["template"]).resolve())
+    path = tmp_path / "spec.json"
+    path.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    first = cli.main(["draw", "--spec", str(path)])
+    captured = capsys.readouterr()
+    assert first == 2, captured.out  # validation passed; the stub bridge refused
+    assert "verdict: may proceed" in captured.out
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+    assert f"spec sha256:{digest}" in captured.out
+    assert "daemon not reachable" in captured.err
+    assert stub_bridge.opens == 1
+
+    _with_bogus_level_clash(raw)
+    path.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    second = cli.main(["draw", "--spec", str(path)])
+    captured = capsys.readouterr()
+    assert second == 2
+    assert "verdict: STOPPED" in captured.out
+    assert "level-domain" in captured.out
+    new_digest = hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+    assert new_digest != digest
+    assert f"spec sha256:{new_digest}" in captured.out
+    assert stub_bridge.opens == 1, "a refused spec must never reach the bridge"
+
+
+def test_validate_leaves_the_closed_book_out_of_product_validation(capsys):
+    """The committed spec's blocks were cut out of its own golden; product
+    validation does not care — only the benchmark grades that."""
+    code = cli.main(["validate", "--spec", str(SPEC)])
+    captured = capsys.readouterr()
+    assert code == 0, captured.out
+    assert "closed-book" in captured.out and "skipped" in captured.out
+    assert "self-reference" not in captured.out
+
+
+def test_validate_benchmark_still_catches_the_leak(capsys):
+    """--benchmark is the generation evaluation: the same spec, the same
+    blocks, and now tracing them to the target board is a refusal."""
+    code = cli.main(
+        ["validate", "--spec", str(SPEC), "--benchmark", "--target", str(GOLDEN)]
+    )
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "self-reference" in captured.out

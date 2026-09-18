@@ -14,8 +14,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 import p4_replay  # noqa: E402  (tools/ replay of the v1 draw)
 
-from boardwise.core.compare import compare_models, reconcile_names  # noqa: E402
 from boardwise.core.candidate import candidate_from_geometry  # noqa: E402
+from boardwise.core.compare import compare_models, reconcile_names  # noqa: E402
+from boardwise.core.model import is_ground_net  # noqa: E402
 from boardwise.engines import layout  # noqa: E402
 from boardwise.engines.generate import (  # noqa: E402
     canvas_pin_offsets,
@@ -213,6 +214,40 @@ def test_strip_dangling_nets_treats_single_member_nets_as_open():
         if p.net is None
     }
     assert ("U1", "10") in open_pins, "U1.10's leftover wire stub is not a connection"
+
+
+# --------------------------------------------------------------------------
+# net role: the layout's ground decision is the model's, and VEE is not ground
+# --------------------------------------------------------------------------
+
+
+def test_the_layout_does_not_keep_its_own_ground_list():
+    """One ground list, and it lives in ``core.model`` (M0-P0c).
+
+    The layout used to carry a second regex beside ``is_ground_net``. The two
+    had already drifted — the regex lacked SGND/EGND and both listed VEE — so
+    this pins the property rather than the spelling: the layout's answer *is*
+    the model's answer, name for name. A name where they disagree is a second
+    implementation growing back.
+    """
+    for name in (
+        "GND", "gnd", "GNDA", "AGND", "DGND", "PGND", "EGND", "SGND", "VSS",
+        "VEE", "vee", "VEE-5V", "-5V", "VM", "+24V", "VCC", "VDD", "3V3", "RX",
+    ):
+        ground = layout._net_kind(name) == "Ground"
+        assert ground == is_ground_net(name), name
+
+
+def test_vee_is_not_given_a_ground_symbol():
+    """A negative supply is not a ground, so the plan must not flag it as one.
+
+    Before M0-P0c a net named VEE was classified ``Ground`` and therefore got a
+    ground flag hung off it — a symbol that says "this is 0 V" attached to a
+    rail that is not. It is now an ordinary unnamed-role net: wired, named as
+    text, flagged by nothing.
+    """
+    assert layout._net_kind("VEE") == "port"
+    assert layout._net_kind("VEE-5V") == "port"
 
 
 # --------------------------------------------------------------------------

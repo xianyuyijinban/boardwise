@@ -14,7 +14,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 #: Net-name prefixes treated as ground. Module-level so it can become
-#: configurable later without touching rule code.
+#: configurable later without touching rule code. ``VEE`` is deliberately
+#: absent: it is a *negative supply* in analog/ECL circuits, not a ground
+#: (2026-09-18 ruling, M0-P0c).
 GROUND_NET_PREFIXES: tuple[str, ...] = (
     "GND",
     "AGND",
@@ -23,7 +25,6 @@ GROUND_NET_PREFIXES: tuple[str, ...] = (
     "EGND",
     "SGND",
     "VSS",
-    "VEE",
 )
 
 
@@ -32,6 +33,14 @@ def is_ground_net(name: str | None) -> bool:
 
     Prefix match on the upper-cased name, so ``GNDA`` and ``VSSA`` also count.
     ``None`` and empty names are never ground.
+
+    **The name is only a candidate.** A net's role should come from declared
+    intent and from device facts (a part's pin function, a rail's source); this
+    inference exists so that rules have something to say about a name they were
+    handed, and it is deliberately narrow — a name it does not recognise is
+    "not known to be ground", not "not ground". ``VEE`` used to be listed here,
+    which made a negative supply read as ground; it is now left to the
+    declarations and device facts that should have been deciding it.
     """
     if not name:
         return False

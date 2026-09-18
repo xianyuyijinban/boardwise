@@ -158,6 +158,40 @@ def test_power_nets_get_one_flag_on_the_wire():
     assert plan.violations == []
 
 
+def test_a_negative_supply_is_not_flagged_as_a_ground():
+    """``VEE`` is a negative rail, so no ground symbol may hang off it (M0-P0c).
+
+    ``_is_power_net`` is what decides whether a net is drawn as a flag. ``VEE``
+    used to answer yes to the ground half of it, which put a symbol meaning
+    "this is 0 V" on a supply that is not — so the plan here must name the net
+    as an ordinary one and hang no flag on it.
+    """
+    assert not _is_power_net("VEE")
+    assert not _is_power_net("VEE-5V")
+    assert not _is_power_net("vee")
+
+    model = DesignModel()
+    model.components["U1"] = Component(
+        uid="u1", designator="U1",
+        pins=[Pin(number="1", name=""), Pin(number="2", name="")],
+    )
+    model.components["R1"] = Component(
+        uid="r1", designator="R1",
+        pins=[Pin(number="1", name=""), Pin(number="2", name="")],
+    )
+    model.nets["VEE"] = Net(name="VEE", pins=[("U1", "1"), ("R1", "1")])
+    model.nets["SIG"] = Net(name="SIG", pins=[("U1", "2"), ("R1", "2")])
+    offsets = {
+        "U1": {"1": (-20.0, -10.0), "2": (-20.0, 10.0)},
+        "R1": {"1": (-20.0, 0.0), "2": (20.0, 0.0)},
+    }
+    plan = generate_plan(model, offsets)
+    named = {(step.net, step.kind) for step in plan.net_names}
+    assert not any(kind == "Ground" for _, kind in named), named
+    assert ("VEE", "text") in named, f"VEE must still be named: {named}"
+    assert plan.violations == []
+
+
 def test_signal_nets_get_wires_and_a_decorative_name_by_default():
     plan = generate_plan(_synthetic_model(), _synthetic_offsets())
     rx_names = [n for n in plan.net_names if n.net == "RX"]
