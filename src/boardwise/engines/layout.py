@@ -49,7 +49,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
-from boardwise.core.model import DesignModel, Net
+from boardwise.core.model import DesignModel, Net, is_ground_net
 
 # --- sheet calibration constants (A4 landscape, editor canvas units) ------
 #
@@ -372,7 +372,10 @@ def _cells_to_points(cells: list[tuple[int, int]]) -> list[tuple[float, float]]:
 
 
 def _net_kind(name: str) -> str:
-    if re.match(r"^(GND|AGND|DGND|PGND|VSS|VEE)", name, re.IGNORECASE):
+    # Ground is decided in exactly one place (`core.model.is_ground_net`) — this
+    # used to keep its own regex beside it, which is how the two drifted apart
+    # on ``VEE`` and on the SGND/EGND spellings (2026-09-18 ruling, M0-P0c).
+    if is_ground_net(name):
         return "Ground"
     if re.match(r"^(\+\d+(?:\.\d+)?V|V(CC|DD|BAT|PP)\d*|V\d+)$", name, re.IGNORECASE):
         return "Power"

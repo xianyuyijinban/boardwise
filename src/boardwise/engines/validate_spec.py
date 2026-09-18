@@ -1,21 +1,37 @@
-"""The four gates a board spec must pass before it may be assembled (008c item 4).
+"""The gates a board spec must pass, in two families (008c item 4; 009-M0 P0).
 
-A board spec is a *claim*: these blocks, these numbers, these connections. This
-module is what makes the claim answerable without a model in the loop, and each
-gate answers a question the answer (the golden ``.epro2``) must not be consulted
-for:
+A board spec is a *claim*: these blocks, these numbers, these connections. The
+gates split by whose discipline they enforce, because "a user is drawing a new
+board" and "we are grading a generation run" are different questions:
 
-1. **closed book** — nothing generation-side may trace back to the target board
-   itself, and every field must name the declared input that justifies it
-   (:data:`core.blocks.SpecReference`);
+**Product gates** — what any spec must satisfy before anything may be drawn
+from it. They always run:
+
+1. **sources** — every declared input is real: the file is there to be read,
+   the shelf holds the cited part (:data:`core.blocks.SpecReference`);
 2. **pin budget** — the firmware's pin table and the schematic's MCU block must
    agree in both directions, and the block cannot use more pins than its symbol
    exposes;
-3. **levels** — a signal net joins ports that speak the same IO domain, unless a
-   block on it declares itself the shifter between them;
+3. **levels** — a signal net joins ports that speak the same IO domain. One net
+   carries one domain; there is no declaration that licenses mixing two, because
+   a level shifter's low side and high side are *two different nets* (2026-09-18
+   ruling, M0-P0c — the old ``level_shifter`` exemption only ever let real
+   errors through with a note);
 4. **power tree** — every power rail has exactly one source, and every sink on
    it asks for the voltage that source provides. Ground is exempt: ground is the
    sink.
+
+**Benchmark gate** — the discipline of a *generation evaluation*, run only when
+``benchmark=True`` (CLI: ``validate --benchmark``), reported as *skipped* with
+the reason otherwise:
+
+5. **closed book** — nothing generation-side may trace back to the target board
+   itself, and every field must name the declared input that justifies it. The
+   evidence ledger lives here because it is how a benchmark spec proves the
+   generator did not invent — or copy — the page. A user drawing a new board
+   owes sound electricity, not a bibliography, so the product run does not ask
+   for one; and the committed CH340 spec carries no ledger at all, which under
+   a product-side ledger rule could never be drawn.
 
 Two rules of the house are carried into the code:
 
@@ -29,11 +45,11 @@ Two rules of the house are carried into the code:
   boards with no MCU — but it can never be confused with having agreed.
 
 Port metadata is optional on purpose (see :class:`core.blocks.BlockPort`), so a
-template written before 008c item 4 loads unchanged and is *silent*; gates 3 and
-4 answer "cannot tell" for it rather than passing it. For blocks cut out of a
-board the metadata lives in the sidecar (:mod:`core.portmeta`) rather than in
-the file, because a declaration is not something the board's geometry says and
-the file has to stay reproducible:
+template written before 008c item 4 loads unchanged and is *silent*; the levels
+and power-tree gates answer "cannot tell" for it rather than passing it. For
+blocks cut out of a board the metadata lives in the sidecar
+(:mod:`core.portmeta`) rather than in the file, because a declaration is not
+something the board's geometry says and the file has to stay reproducible:
 
     validate_spec(load_board_spec(p, port_meta=load_port_meta(SIDECAR)), ...)
 
@@ -43,6 +59,7 @@ because pretending to agree is the one thing these gates must never do.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -67,8 +84,9 @@ SKIPPED = "skipped"
 
 #: The order gates run and print in. The closed-book gate is first because it is
 #: the one about honesty: if the page was copied from the answer, every other
-#: agreement it shows is worthless.
-GATE_ORDER = ("closed-book", "pin-budget", "levels", "power-tree")
+#: agreement it shows is worthless. It is benchmark discipline, so a product run
+#: prints it as *skipped* with the reason — never as a quiet pass.
+GATE_ORDER = ("closed-book", "sources", "pin-budget", "levels", "power-tree")
 
 _DATE_SUFFIX = re.compile(r"^(?P<head>.+?)_(?P<date>\d{4}-\d{2}-\d{2})$")
 
@@ -160,9 +178,16 @@ class Gate:
 
 @dataclass
 class ValidationReport:
-    """All four gates, in :data:`GATE_ORDER`."""
+    """Every gate's answer, in :data:`GATE_ORDER`, bound to one spec revision.
+
+    ``spec_hash`` is the sha256 of the spec file's bytes, cut to 12 hex chars:
+    "it passed" about a *previous* revision of the spec is the failure mode the
+    digest exists to forbid, and nothing is cached — every run re-reads the
+    file. It is empty for a spec that was never on disk.
+    """
 
     gates: list[Gate] = field(default_factory=list)
+    spec_hash: str = ""
 
     @property
     def violations(self) -> list[Finding]:
@@ -189,8 +214,9 @@ class ValidationReport:
         return next((g for g in self.gates if g.name == name), None)
 
     def render(self) -> list[str]:
+        digest = f" (spec sha256:{self.spec_hash})" if self.spec_hash else ""
         lines = [
-            f"spec validation: {len(self.violations)} violation(s), "
+            f"spec validation{digest}: {len(self.violations)} violation(s), "
             f"{len(self.undecidables)} undecidable, "
             f"{len(self.skipped)} gate(s) skipped"
         ]
@@ -206,6 +232,7 @@ class ValidationReport:
     def as_json(self) -> dict[str, Any]:
         return {
             "ok": self.ok,
+            "spec_hash": self.spec_hash,
             "violations": [f.as_json() for f in self.violations],
             "undecidables": [f.as_json() for f in self.undecidables],
             "gates": [g.as_json() for g in self.gates],
@@ -214,7 +241,7 @@ class ValidationReport:
 
 
 # --------------------------------------------------------------------------
-# gate 1 — the closed book
+# gate 1 — the closed book (benchmark discipline)
 # --------------------------------------------------------------------------
 
 
@@ -309,14 +336,25 @@ def _gate_closed_book(
     spec: BoardSpec,
     *,
     targets: list[str],
-    root: str | Path | None,
-    library: PartLibrary | None,
+    benchmark: bool,
 ) -> Gate:
     findings: list[Finding] = []
     title = (
         "no field may come from the target board, and every field must cite a "
         "declared input"
     )
+    if not benchmark:
+        return Gate(
+            name="closed-book",
+            title=title,
+            skipped=(
+                "benchmark discipline, not run: the closed book grades a "
+                "generation run — nothing may trace to the target board, and "
+                "every field must cite a declared input. A board being drawn "
+                "owes sound electricity, not a bibliography; re-run with "
+                "benchmark=True (CLI: --benchmark) to grade it"
+            ),
+        )
 
     names = _target_names(targets)
     if not names:
@@ -394,7 +432,7 @@ def _gate_closed_book(
                     )
                 )
 
-    # ---- every declared input must be real, and may not be the answer
+    # ---- the answer may not be smuggled in as a declared input either
     for ref in spec.references:
         matched = _traces_to(ref.path, names) if ref.path else ""
         if matched:
@@ -406,58 +444,6 @@ def _gate_closed_book(
                         f"declared input {ref.id!r} is the target board itself "
                         f"({matched!r}); declaring the answer as an authority is "
                         "how copying launders itself into the record"
-                    ),
-                    evidence=[f"{ref.id}: {ref.path}"],
-                )
-            )
-        if ref.kind == "part":
-            if library is None:
-                findings.append(
-                    Finding(
-                        kind=UNDECIDABLE,
-                        rule="declared-input-exists",
-                        message=(
-                            f"declared input {ref.id!r} cites shelf key {ref.ref!r} "
-                            "but no library was supplied, so the cited part could "
-                            "not be looked up — this is *not* a pass"
-                        ),
-                        evidence=[f"{ref.id}: {ref.ref}"],
-                    )
-                )
-            elif library.get(ref.ref) is None:
-                findings.append(
-                    Finding(
-                        kind=VIOLATION,
-                        rule="declared-input-exists",
-                        message=(
-                            f"declared input {ref.id!r} cites shelf key {ref.ref!r}, "
-                            "which is not on the shelf"
-                        ),
-                        evidence=[f"{ref.id}: {ref.ref}"],
-                    )
-                )
-            continue
-        if not ref.path:
-            continue
-        if root is None:
-            findings.append(
-                Finding(
-                    kind=NOTE,
-                    rule="declared-input-exists",
-                    message=(
-                        f"declared input {ref.id!r} points at {ref.path!r} and no "
-                        "root was supplied, so it was not checked"
-                    ),
-                )
-            )
-        elif _find_reference_path(ref.path, root) is None:
-            findings.append(
-                Finding(
-                    kind=VIOLATION,
-                    rule="declared-input-exists",
-                    message=(
-                        f"declared input {ref.id!r} points at {ref.path!r}, which is "
-                        "not there — a citation nobody can read is not evidence"
                     ),
                     evidence=[f"{ref.id}: {ref.path}"],
                 )
@@ -564,7 +550,83 @@ def _gate_closed_book(
 
 
 # --------------------------------------------------------------------------
-# gate 2 — the pin budget
+# gate 2 — the sources
+# --------------------------------------------------------------------------
+
+
+def _gate_sources(
+    spec: BoardSpec,
+    *,
+    root: str | Path | None,
+    library: PartLibrary | None,
+) -> Gate:
+    """Every declared input is real — the one ledger rule a product spec owes.
+
+    A spec declares what it stands on; this gate checks the declarations are
+    *applicable*: the file is there to be read, the shelf holds the cited part.
+    Whether every field then *cites* one of those inputs is the benchmark's
+    business (the closed book), not a product question.
+    """
+    title = "every declared input is real"
+    findings: list[Finding] = []
+    for ref in spec.references:
+        if ref.kind == "part":
+            if library is None:
+                findings.append(
+                    Finding(
+                        kind=UNDECIDABLE,
+                        rule="declared-input-exists",
+                        message=(
+                            f"declared input {ref.id!r} cites shelf key {ref.ref!r} "
+                            "but no library was supplied, so the cited part could "
+                            "not be looked up — this is *not* a pass"
+                        ),
+                        evidence=[f"{ref.id}: {ref.ref}"],
+                    )
+                )
+            elif library.get(ref.ref) is None:
+                findings.append(
+                    Finding(
+                        kind=VIOLATION,
+                        rule="declared-input-exists",
+                        message=(
+                            f"declared input {ref.id!r} cites shelf key {ref.ref!r}, "
+                            "which is not on the shelf"
+                        ),
+                        evidence=[f"{ref.id}: {ref.ref}"],
+                    )
+                )
+            continue
+        if not ref.path:
+            continue
+        if root is None:
+            findings.append(
+                Finding(
+                    kind=NOTE,
+                    rule="declared-input-exists",
+                    message=(
+                        f"declared input {ref.id!r} points at {ref.path!r} and no "
+                        "root was supplied, so it was not checked"
+                    ),
+                )
+            )
+        elif _find_reference_path(ref.path, root) is None:
+            findings.append(
+                Finding(
+                    kind=VIOLATION,
+                    rule="declared-input-exists",
+                    message=(
+                        f"declared input {ref.id!r} points at {ref.path!r}, which is "
+                        "not there — a citation nobody can read is not evidence"
+                    ),
+                    evidence=[f"{ref.id}: {ref.path}"],
+                )
+            )
+    return Gate(name="sources", title=title, findings=findings)
+
+
+# --------------------------------------------------------------------------
+# gate 3 — the pin budget
 # --------------------------------------------------------------------------
 
 
@@ -738,7 +800,7 @@ def _gate_pin_budget(
 
 
 # --------------------------------------------------------------------------
-# gate 3 — levels
+# gate 4 — levels
 # --------------------------------------------------------------------------
 
 
@@ -766,44 +828,30 @@ def _gate_levels(spec: BoardSpec) -> Gate:
         domains = {port.level for _, port in stated}
         ports = ", ".join(f"{who}.{port.role}" for who, port in stated) or "(none)"
         if len(domains) > 1:
-            shifters = [
-                instance.template.name
-                for instance, _, _ in entries
-                if instance.template.level_shifter
-            ]
-            if shifters:
-                findings.append(
-                    Finding(
-                        kind=NOTE,
-                        rule="level-domain",
-                        message=(
-                            f"net {connection.net!r} spans {', '.join(sorted(domains))} "
-                            f"and is bridged by {', '.join(shifters)}, which declares "
-                            "itself a level shifter — that is the one reason a net "
-                            "may carry two domains"
-                        ),
-                        evidence=[ports],
-                    )
+            findings.append(
+                Finding(
+                    kind=VIOLATION,
+                    rule="level-domain",
+                    message=(
+                        f"net {connection.net!r} joins ports in two IO domains "
+                        f"({', '.join(sorted(domains))}) — a net carries one domain, "
+                        "so this is a mix-up unless the two ends belong on two "
+                        "different nets"
+                    ),
+                    evidence=[ports],
                 )
-            else:
-                findings.append(
-                    Finding(
-                        kind=VIOLATION,
-                        rule="level-domain",
-                        message=(
-                            f"net {connection.net!r} joins ports in two IO domains "
-                            f"({', '.join(sorted(domains))}) with no level shifter "
-                            "declared on it"
-                        ),
-                        evidence=[ports],
-                    )
-                )
+            )
             continue
         silent = [
             f"{who}.{port.role}"
             for instance, who, port in entries
             if not port.level
         ]
+        # `entries` is non-empty (line above) and this branch means *no* port
+        # stated a level, so every entry is silent and `silent` cannot be empty
+        # here. The evidence is the silent list itself; an "or <fallback>" used
+        # to sit here naming an undefined variable, which only ever proved it
+        # was unreachable (M0-P0c).
         if not domains:
             findings.append(
                 Finding(
@@ -814,7 +862,7 @@ def _gate_levels(spec: BoardSpec) -> Gate:
                         f"the domains were not compared ({', '.join(silent)}) — this "
                         "is *not* a pass"
                     ),
-                    evidence=silent or named,
+                    evidence=silent,
                 )
             )
             continue
@@ -836,7 +884,7 @@ def _gate_levels(spec: BoardSpec) -> Gate:
 
 
 # --------------------------------------------------------------------------
-# gate 4 — the power tree
+# gate 5 — the power tree
 # --------------------------------------------------------------------------
 
 
@@ -945,8 +993,18 @@ def _gate_power_tree(spec: BoardSpec) -> Gate:
 
 
 # --------------------------------------------------------------------------
-# the four together
+# all five together
 # --------------------------------------------------------------------------
+
+
+def _spec_digest(spec: BoardSpec) -> str:
+    """sha256 of the spec file's bytes, cut to 12 hex chars; ``""`` off-disk."""
+    if not spec.path:
+        return ""
+    try:
+        return hashlib.sha256(Path(spec.path).read_bytes()).hexdigest()[:12]
+    except OSError:
+        return ""
 
 
 def validate_spec(
@@ -958,15 +1016,23 @@ def validate_spec(
     root: str | Path | None = None,
     mcu_block_id: str = "",
     mcu_component: str = "",
+    benchmark: bool = False,
 ) -> ValidationReport:
-    """Run all four gates over one board spec, in :data:`GATE_ORDER`.
+    """Run every gate over one board spec, in :data:`GATE_ORDER`.
+
+    The product gates (sources, pin budget, levels, power tree) always run.
+    The closed book is *benchmark discipline* and runs only with
+    ``benchmark=True``; otherwise it reports itself skipped with the reason,
+    because "the generation was not graded" must never read as "the generation
+    was clean".
 
     Every gate runs even when an earlier one has already failed: a page that is
     both copied from the answer and mis-wired wants both facts said at once,
     not one discovered after the other is fixed.
 
     ``target`` names the board being generated (once, or several aliases of
-    it); without it the closed-book gate is undecidable, which blocks.
+    it). Only the closed book consults it, and a benchmark run without one is
+    undecidable, which blocks.
     """
     targets: list[str] = []
     if isinstance(target, str):
@@ -975,14 +1041,15 @@ def validate_spec(
         targets = [str(item) for item in target]
 
     gates = [
-        _gate_closed_book(spec, targets=targets, root=root, library=library),
+        _gate_closed_book(spec, targets=targets, benchmark=benchmark),
+        _gate_sources(spec, root=root, library=library),
         _gate_pin_budget(spec, table, mcu_block_id=mcu_block_id, mcu_component=mcu_component),
         _gate_levels(spec),
         _gate_power_tree(spec),
     ]
     order = {name: index for index, name in enumerate(GATE_ORDER)}
     gates.sort(key=lambda gate: order.get(gate.name, len(order)))
-    return ValidationReport(gates=gates)
+    return ValidationReport(gates=gates, spec_hash=_spec_digest(spec))
 
 
 __all__ = [

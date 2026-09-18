@@ -445,12 +445,6 @@ class BlockTemplate:
     labels: list[TemplateLabel]
     path: str = ""
     notes: list[str] = field(default_factory=list)
-    #: True when the block is *declared* to join two IO domains — a level
-    #: shifter's own two sides speak different levels, which is the one
-    #: legitimate reason for a net to carry more than one (008c item 4). Off by
-    #: default: sharing a net between domains is a violation until a block says
-    #: it is the thing meant to do it.
-    level_shifter: bool = False
 
     def param(self, name: str) -> BlockParam | None:
         for item in self.params:
@@ -482,7 +476,6 @@ _TEMPLATE_KEYS = (
     "symbols",
     "components",
     "geometry",
-    "level_shifter",
 )
 
 
@@ -880,7 +873,6 @@ def template_from_json(raw: Any, *, where: str = "<block>") -> BlockTemplate:
         flags=flags,
         labels=labels,
         notes=[_as_str(n, f"{where}.notes[]") for n in _as_list(raw.get("notes"), f"{where}.notes")],
-        level_shifter=_as_bool(raw.get("level_shifter"), f"{where}.level_shifter"),
     )
 
 

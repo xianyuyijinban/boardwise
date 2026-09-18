@@ -113,6 +113,18 @@ def test_unknown_keys_are_rejected():
         template_from_json(body)
 
 
+def test_the_retired_level_shifter_flag_is_an_unknown_key():
+    """``level_shifter`` was deleted, and its key must not quietly come back.
+
+    The flag let a block declare itself licensed to bridge two IO domains on one
+    net, which only ever let real mix-ups through (M0-P0c, 2026-09-18). Leaving
+    the key accepted would let an author write it, believe it still does
+    something, and get no signal — so it is an unknown key on purpose.
+    """
+    with pytest.raises(BlockError, match="unknown key"):
+        template_from_json(minimal_template(level_shifter=True))
+
+
 def test_the_kind_and_version_are_checked():
     with pytest.raises(BlockError, match="kind"):
         template_from_json(minimal_template(kind="something-else"))
