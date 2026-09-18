@@ -1,0 +1,40 @@
+attributes                                         rows=0
+backups                                            rows=0
+block_symbol_attributes                            rows=0
+boards                                             rows=0
+branch_locks                                       rows=0
+branches                                           rows=2
+broadcast_messages                                 rows=0
+categories                                         rows=0
+component_histories                                rows=0
+components                                         rows=0
+components_tmp                                     rows=0
+coppers                                            rows=0
+db_paths                                           rows=0
+db_versions                                        rows=1
+devices                                            rows=0
+documents                                          rows=0
+editor_caches                                      rows=0
+history_data                                       rows=57
+notifications                                      rows=0
+project_histories                                  rows=0
+project_history_                                   rows=0
+project_history_31ae28a5bbd24351a77f4a60a281d692   rows=18
+project_images                                     rows=0
+project_logs                                       rows=0
+project_members                                    rows=1
+project_structures                                 rows=28
+projects                                           rows=1
+resources                                          rows=0
+schematics                                         rows=0
+sessions                                           rows=0
+sqlite_sequence                                    rows=3
+system_attributes                                  rows=0
+system_config                                      rows=0
+team_members                                       rows=0
+texts                                              rows=0
+users                                              rows=1
+
+project_history_31ae28a5bbd24351a77f4a60a281d692 -> id, uuid, parent, snapshot, key, is_lock, num, created_at, updated_at, lock_time, snapshot_num
+history_data -> id, uuid, history_uuid, dataStr, created_at, updated_at
+project_structures -> id, ticket, project_uuid, branch_uuid, structure

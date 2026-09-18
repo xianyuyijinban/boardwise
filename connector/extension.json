@@ -1,0 +1,62 @@
+{
+  "name": "boardwise-connector",
+  "uuid": "a08393abee5cbeb92f33e6cf2bf4b6a0",
+  "displayName": "boardwise Connector",
+  "description": "Bridges the local boardwise daemon to the official eda.* API over a loopback WebSocket, so the reviewer can read the open document, capture the canvas and mark findings in place.",
+  "version": "0.4.3",
+  "publisher": "boardwise",
+  "engines": {
+    "eda": "~3.2.0"
+  },
+  "license": "MIT",
+  "categories": "Other",
+  "keywords": [
+    "boardwise",
+    "design review",
+    "websocket"
+  ],
+  "activationEvents": {
+    "onStartupFinished": true
+  },
+  "entry": "./dist/index",
+  "dependentExtensions": {},
+  "headerMenus": {
+    "home": [
+      {
+        "id": "boardwise",
+        "title": "boardwise",
+        "menuItems": [
+          { "id": "Reconnect", "title": "Reconnect", "registerFn": "reconnect" },
+          { "id": "StopConnection", "title": "Stop", "registerFn": "stopConnection" },
+          { "id": "RePair", "title": "Re-pair on next connect", "registerFn": "rePair" },
+          { "id": "ToggleAutoConnect", "title": "Toggle auto-connect", "registerFn": "toggleAutoConnect" },
+          { "id": "About", "title": "About...", "registerFn": "about" }
+        ]
+      }
+    ],
+    "sch": [
+      {
+        "id": "boardwise",
+        "title": "boardwise",
+        "menuItems": [
+          { "id": "Reconnect", "title": "Reconnect", "registerFn": "reconnect" },
+          { "id": "StopConnection", "title": "Stop", "registerFn": "stopConnection" },
+          { "id": "RePair", "title": "Re-pair on next connect", "registerFn": "rePair" },
+          { "id": "About", "title": "About...", "registerFn": "about" }
+        ]
+      }
+    ],
+    "pcb": [
+      {
+        "id": "boardwise",
+        "title": "boardwise",
+        "menuItems": [
+          { "id": "Reconnect", "title": "Reconnect", "registerFn": "reconnect" },
+          { "id": "StopConnection", "title": "Stop", "registerFn": "stopConnection" },
+          { "id": "RePair", "title": "Re-pair on next connect", "registerFn": "rePair" },
+          { "id": "About", "title": "About...", "registerFn": "about" }
+        ]
+      }
+    ]
+  }
+}

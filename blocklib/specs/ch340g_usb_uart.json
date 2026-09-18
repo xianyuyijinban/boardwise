@@ -1,0 +1,120 @@
+{
+  "kind": "boardwise-board-spec",
+  "version": 1,
+  "name": "ch340g_usb_uart",
+  "description": "CH340G USB-UART bridge, assembled from four block templates cut out of the golden page. The blocks are placed on a grid of their own — they are NOT put back where the golden had them — which is what makes this a test of assembly rather than a re-encoding.",
+  "provenance": {
+    "kind": "board-extract",
+    "source": "tests/fixtures/ch340_golden.epro2",
+    "note": "Task 008a: the templates are board-extracts (source 3 of the three the architecture lists), so this validates the assembly mechanism, not template authoring quality. Template authoring is 008c/d."
+  },
+  "sheet": {
+    "attrs": {
+      "Page Size": "A4",
+      "Border": "1",
+      "Title Block Position": "3",
+      "Size": "A4",
+      "Width": "1170",
+      "Height": "825",
+      "Region Start": "1",
+      "X Region Count": "6",
+      "Y Region Count": "4",
+      "Blade Width": "10",
+      "Title Block": "1"
+    },
+    "origin": [0.0, 0.0]
+  },
+  "blocks": [
+    {
+      "id": "usb",
+      "template": "../blocks/ch340_usb_input.json",
+      "at": [20.0, -250.0],
+      "note": "Top-left, where the connector physically is. Signal flow leaves it downward."
+    },
+    {
+      "id": "power",
+      "template": "../blocks/ch340_power_3v3.json",
+      "at": [420.0, -200.0],
+      "note": "Top right, in the second column: 238 units of whitespace separate it from the USB block, so the two read as separate circuits — which the golden's tighter packing did not."
+    },
+    {
+      "id": "core",
+      "template": "../blocks/ch340_core.json",
+      "at": [20.0, -430.0],
+      "note": "Bottom left, below the USB front end it takes D+/D- from. The golden's own top-to-bottom order (input, rail, bridge) is preserved."
+    },
+    {
+      "id": "uart",
+      "template": "../blocks/ch340_uart_header.json",
+      "at": [420.0, -330.0],
+      "note": "Bottom right, downstream of the core it takes RX/TX from."
+    }
+  ],
+  "connections": [
+    {
+      "net": "GND",
+      "ports": [
+        ["usb", "GND"],
+        ["power", "GND"],
+        ["core", "GND"],
+        ["uart", "GND"]
+      ]
+    },
+    {
+      "net": "+5V",
+      "ports": [
+        ["usb", "+5V"],
+        ["power", "+5V"]
+      ]
+    },
+    {
+      "net": "VCC",
+      "ports": [
+        ["power", "VCC"],
+        ["core", "VCC"]
+      ]
+    },
+    {
+      "net": "D+",
+      "ports": [
+        ["usb", "D+"],
+        ["core", "D+"]
+      ]
+    },
+    {
+      "net": "D-",
+      "ports": [
+        ["usb", "D-"],
+        ["core", "D-"]
+      ]
+    },
+    {
+      "net": "RX",
+      "ports": [
+        ["core", "RX"],
+        ["uart", "RX"]
+      ]
+    },
+    {
+      "net": "TX",
+      "ports": [
+        ["core", "TX"],
+        ["uart", "TX"]
+      ]
+    }
+  ],
+  "params": {
+    "usb.r24_value": "5.1K",
+    "usb.r27_value": "5.1K",
+    "power.u3_value": "2.2kΩ",
+    "power.c6_value": "100nF",
+    "power.c7_value": "10nF",
+    "core.c1_value": "100nF",
+    "core.c25_value": "30pF",
+    "core.c3_value": "30pF"
+  },
+  "notes": [
+    "Every number on this board is a parameter; the spec states all of them so the design does not silently depend on a template default.",
+    "The status LED and its series resistor live inside the power block: in the golden they share that block's ground rail, and a boundary drawn between them would cut copper (the cut tool refuses that)."
+  ]
+}

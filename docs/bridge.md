@@ -1,0 +1,1156 @@
+# boardwise bridge — protocol & operations
+
+Status: v0, 2026-09-12, revised 2026-09-13. Scope: task 004 (read-mostly bridge), 004b
+(message-driven handshake + log-panel diagnostics), the on-machine fix that followed
+(`eda.sys_WebSocket` resolved from the extension's own scope, not `globalThis`), 004c
+(connector 0.2.0 — automatic TOFU pairing, no typed secret, Origin evidence gathering), and
+0.2.1/0.2.2 (the token's source is now detected, disclosed and fallen back on — **and a wrong
+first diagnosis of why it was missing, withdrawn; see §10.14**), 0.2.3 (one atomic storage key;
+a self-arm for an editor that never calls `activate()`), and 0.2.4 (**the 0.2.3 machine run
+disproved the half-write theory and exposed the real About… bug — one box, two store views;
+probes now observable; the menu click is the guaranteed arm** — §10.19, §10.20, §10.21), and
+0.2.5 (004d revision: **the connect starts at module evaluation — the one window measured to
+survive — timer probes deleted, the menu click demoted to a safety net**; §10.20).
+Implementation: `src/boardwise/bridge/` (Python daemon + client), `connector/` (TypeScript
+extension), `boardwise bridge` CLI.
+
+## 1. What the bridge is for
+
+Offline parsing (`boardwise review`) answers "is this design right?" from a file. The bridge
+answers the two questions a file cannot:
+
+- **What is open right now?** — which project / document / tab the user is looking at.
+- **Can we point at it?** — a native screenshot of the live canvas, and markers drawn on the
+  exact primitives a finding refers to.
+
+Read-mostly through v0 (004–004d): the only thing that touched the design was `canvas.highlight`
+— *indicator markers*, an overlay, not primitives. Task 006 (the draw flow) then added a
+deliberate, gated set of schematic write actions (`sch.doc.new`, `sch.place_*`) that only the
+explicit `boardwise draw` / `bridge call` entry points can drive; see [`docs/draw.md`](draw.md)
+for the risk decisions behind them.
+
+## 2. Topology
+
+Three processes, one listening socket:
+
+```
+  EasyEDA Pro  ─────────────────────────────────────────────┐
+  ┌──────────────────────────┐                              │ eda.* API (in-process)
+  │ boardwise connector      │  TypeScript, dist/index.js   │
+  │ (.eext, in the editor)   │  ← the only code with hands  │
+  └────────────┬─────────────┘                              │
+               │  outbound WebSocket (the editor dials out) │
+               │  ws://127.0.0.1:61190/eda                 │
+  ┌────────────▼─────────────┐
+  │ boardwise daemon         │  `boardwise bridge start`
+  │ (Python, websockets)     │  auth · routing · audit
+  └────────────┬─────────────┘
+               │  same protocol, role="cli", short-lived
+  ┌────────────▼─────────────┐
+  │ boardwise CLI            │  status · screenshot · highlight
+  └──────────────────────────┘
+```
+
+Why the editor dials *out*: an extension cannot open a listening socket, and `eda.sys_WebSocket`
+only offers outbound registration. So the daemon is the server and the editor is a client that
+reconnects forever. This is the same shape `easyeda-agent` uses.
+
+The connector is the only component that touches `eda.*`. The daemon never opens a file inside
+the editor; it only forwards frames and relays answers.
+
+## 3. Transport and framing
+
+- WebSocket over `127.0.0.1`. One JSON object per **text** message. No binary frames.
+- The daemon accepts **any request path** and ignores query strings — measured, not assumed:
+  connecting to `/`, `/eda` and `/a/b?foo=1` all reach the same handler (see §12). Both sides
+  dial `/eda` anyway, because that is the spelling observed working in `easyeda-agent`.
+- Frame size cap: **32 MiB** (`MAX_FRAME_BYTES`). The `websockets` default of 1 MiB is smaller
+  than a base64 screenshot, which is why it is raised.
+- The daemon sets `ping_interval=None`: liveness is an application-level concern (§7), not a
+  WebSocket-level one.
+
+### 3.1 Envelope
+
+Three kinds of frame share one envelope, told apart by which key is present:
+
+| kind | key | direction | example |
+|---|---|---|---|
+| request | `action` | either → either | asks for something |
+| response | `ok` | either → either | answers a request |
+| event | `event` | daemon → client | unsolicited notification |
+
+Precedence when classifying: **`ok` > `event` > `action`**, so a frame that somehow carries two
+of them behaves predictably. Both sides classify it the same way (`frame_kind` in
+`protocol.py`, `frameKind` in `connector/src/protocol.ts`) — if they disagreed, the banner
+would be read as a request and answered with `BAD_REQUEST`.
+
+Request — `params` is omitted when there is nothing to send:
+
+```json
+{"id": "pcb.readback-9f2a1c04", "action": "pcb.readback", "params": {"includePrimitives": true}}
+```
+
+Success:
+
+```json
+{"id": "pcb.readback-9f2a1c04", "ok": true, "data": {"kind": "pcb", "componentCount": 17, "...": "..."}}
+```
+
+Failure:
+
+```json
+{"id": "pcb.readback-9f2a1c04", "ok": false,
+ "error": {"code": "NO_CONNECTOR", "message": "pcb.readback needs the editor: no connector is connected. ..."}}
+```
+
+Event — no `id`, because nothing correlates with it:
+
+```json
+{"event": "banner", "data": {"server": "boardwise", "protocol": "1.0", "expect": "hello"}}
+```
+
+Rules both sides implement:
+
+1. `id` correlates. It is echoed unchanged; a late answer is matched by id, and an answer with
+   an unknown id is dropped, not treated as an error.
+2. `ok` decides success or failure; the key's presence is what makes a frame an answer.
+   Both sides send requests and answers over the same socket.
+3. An event is **never** answered. A client that replies to one is talking to itself.
+4. `detail` is optional and free-form; `code` and `message` are always present on a failure.
+5. Anything that is not a JSON object is rejected with `BAD_REQUEST` — including arrays, which
+   parse as JSON objects in some languages and are never valid frames.
+6. `requestFrame` omits empty `params` rather than sending `null`, so a request is exactly
+   `{id, action}` when it has no arguments. This is the one byte-level detail both sides must
+   agree on, and it has its own test on each side.
+
+### 3.2 The banner, and why the daemon speaks first
+
+**The daemon sends an event the instant a socket is accepted, before anything is asked of it.**
+
+```json
+{"event": "banner", "data": {"server": "boardwise", "protocol": "1.0", "expect": "hello"}}
+```
+
+The connector answers it with `hello`. Two *different* failures hid behind the one symptom ("the
+editor never opens a TCP connection"). They are worth keeping apart, because their fixes are
+unrelated — and because for a while the wrong one was believed to be the cause. **(a) is why the
+socket never existed; (b) is a deadlock that (a) prevented us from ever reaching.**
+
+**(a) The measured cause: `globalThis.eda` is `undefined` in the extension host.** The transport
+built its socket handle as `this.options.socket ?? globalThis.eda?.sys_WebSocket`. Nothing passed
+`options.socket`, so everything rested on that fallback — and the editor binds `eda` as a *context
+global*, not a property of `globalThis`. Measured on the machine 2026-09-13 (probes in
+`tools/probe1-surface.js`, `tools/probe2-register.js`): bare `eda` resolves, `globalThis.eda` is
+`undefined`, and `globalThis.eda === eda` is **false**. So `socket` was `undefined`, `connect()`
+took the `eda.sys_WebSocket is unavailable` branch, and `register` was *never called* — hence not
+one TCP connection, ever. The same probes proved `register` does open a real socket when it is
+reached from a scope where bare `eda` resolves. Fixed in 0.1.2 by passing the facade explicitly
+and deleting the fallback: `eda.sys_WebSocket` is now the only source.
+
+*(Generalisation, because this class of bug is cheap to reintroduce: a `??` fallback to a global
+that happens to be unreachable is invisible. It does not throw, it does not warn — it just makes
+the feature a no-op.)*
+
+**(b) The connect callback is also unreliable — a real trap, but not the deadlock.** `hello` used
+to be sent only from the editor's connect callback (the 4th argument of
+`eda.sys_WebSocket.register`). It is not dependable, so the handshake must not hang off it. The
+reference connector (`easyeda-agent`, which works in the same editor) passes an empty function
+for that callback and tells liveness from **inbound frames**. Extracted from
+`easyeda-agent-connector.eext` (`dist/index.js`), its registration is literally:
+
+```js
+eda.sys_WebSocket.register(
+  wsId,
+  `ws://127.0.0.1:${port}/eda`,
+  async (event) => {
+    const msg = JSON.parse(event.data);
+    if (msg.type === "handshake") { handshakeVerified = true; sendRegister(); ... }
+    ...
+  },
+  () => { }        // <- the connect callback: deliberately empty
+);
+```
+
+The handshake is driven entirely from the message handler; the callback is a no-op. Ours works
+the same way, expressed in our envelope. This is what the banner is for: it makes the socket
+speaking *first* a fact we can key on, rather than a callback we hope for.
+
+**What task 004b actually delivered.** It did **not** fix the zero-TCP failure — 004b shipped
+0.1.1 with (b) fixed and (a) still present, and the next hardware attempt still produced no
+connection. What it delivered is the *visibility* that made (a) findable: diagnostics moved to
+`eda.sys_Log` (§6), where the reason for each reconnect is readable inside the editor instead of
+going to a `console.log` nobody can open. The hourly gap between "004b done" and "root cause
+found" is the cost of a silent failure, and this section exists so that cost is not paid twice.
+
+Consequences worth stating plainly:
+
+- **Any inbound frame triggers `hello`**, not just the banner. Traffic is proof the socket is up
+  end to end; a callback is an opinion. The trigger is idempotent, so the callback firing *and*
+  the banner arriving still produce exactly one `hello` (a second one is a `PROTOCOL_VIOLATION`).
+- **The heartbeat starts after `hello` goes out**, never on the callback.
+- The callback is kept, demoted to advisory: a free early trigger when it works.
+
+The banner carries no secret and no `id`. It arrives before authentication, so it may only state
+what is already public about the daemon, and there is nothing for it to correlate with.
+
+### 3.3 Handshake
+
+Every connection — connector or CLI — must open with `hello` as its **first request**, i.e. the
+first frame carrying an `action`. The banner does not count; it is an event, not a request.
+The connector sends `hello` with the fixed id `"hello"`; the daemon answers with the same id.
+
+```json
+→ {"event": "banner", "data": {"server": "boardwise", "protocol": "1.0", "expect": "hello"}}
+← {"id": "hello", "action": "hello",
+   "params": {"token": "…64 hex…", "role": "connector",
+              "protocol": "1.0", "client": "boardwise-connector/3.2.121",
+              "connectorVersion": "0.4.1"}}
+→ {"id": "hello", "ok": true,
+   "data": {"role": "connector", "protocol": "1.0", "serverTime": 1789000000.0}}
+```
+
+`connectorVersion` is the connector's **own** build (`__BOARDWISE_VERSION__`,
+baked in by `build.mjs`), not the editor's — the `client` field already names
+the editor. Added in 004f so that every connection leaves "which build was
+running?" in the audit log: twice a sideload that did not take looked
+successful while the editor kept executing the previous bundle, and the only
+symptom was a stack pointing at a line that had already been fixed. It is
+**optional**: a connector that does not send it is accepted and recorded as
+`connector=<version unknown>`.
+
+The daemon checks, **in this order**, and closes the socket on the first failure. The order is
+load-bearing, not incidental — see §3.4 for why the version check precedes the secret:
+
+| Check | Failure code |
+|---|---|
+| A frame arrived within `HELLO_TIMEOUT` (**5 s**) | `UNAUTHENTICATED` ("no hello within 5s") |
+| `action == "hello"` | `PROTOCOL_VIOLATION` |
+| `params` is an object | `BAD_REQUEST` |
+| `role` is `connector` or `cli` | `BAD_REQUEST` |
+| `token` is a non-empty string | `UNAUTHENTICATED` |
+| `protocol` major version matches the daemon's | `VERSION_MISMATCH` |
+| the secret matches, per role (`secrets.compare_digest`) | `UNAUTHENTICATED` |
+
+Five seconds rather than ten, because the daemon speaks first: silence is now unambiguous — the
+client was addressed and did not answer, so the fault is on its side. The reference daemon
+allows 1.5 s; we are more generous only because a freshly started editor can be busy loading a
+board.
+
+Failures are answered with an error frame **before** the close, so the client can log a reason
+instead of seeing a bare disconnect.
+
+Two more rules:
+
+- `hello` sent later in the session is a `PROTOCOL_VIOLATION` — it is a handshake, not a verb.
+- A **second** connector that authenticates successfully replaces the first; the old socket is
+  closed with `PROTOCOL_VIOLATION` ("replaced by a new connector"). The editor may legitimately
+  restart, and refusing the new connection would leave the bridge dead until the daemon restarts.
+
+### 3.4 Pairing: trust on first use
+
+The CLI proves who it is with a secret it read off disk. A connector cannot: an editor extension
+has no way to learn the OS home directory, so in v0 the user had to copy 64 hex characters out of
+`~/.boardwise/token` and paste them into a dialog. As of 0.2.0 the connector **invents its own
+secret** (32 random bytes, hex) and the daemon learns it the first time. Since 0.2.1 it also says
+*which* source produced those bytes — Web Crypto, or the `Math.random` fallback it uses when Web
+Crypto is unusable (see §9, and `connector/src/random.ts`):
+
+```json
+← {"id": "hello", "action": "hello",
+   "params": {"token": "…64 hex, generated by the extension…", "role": "connector",
+              "protocol": "1.0", "client": "boardwise-connector/0.2.1"}}
+→ {"id": "hello", "ok": true,
+   "data": {"role": "connector", "protocol": "1.0", "serverTime": …,
+            "paired": true, "fingerprint": "53cd3b41"}}
+```
+
+| State of `~/.boardwise/connector-token` | What the daemon does |
+|---|---|
+| absent | **pairs**: writes the offered token, audits `pairing`, prints a loud line on the console |
+| present, token matches | accepts |
+| present, token differs, **a connector is attached** | `UNAUTHENTICATED` |
+| present, token differs, **nothing is attached** | **re-pairs**: overwrites the record, audits `re-pairing`, announces the replacement (004f) |
+
+The fourth row is the sideload self-heal. **Sideloading a connector build resets
+the editor's extension storage**, so the new build generates a fresh token and
+is then refused by a pairing it wrote itself on the previous run — an
+`UNAUTHENTICATED` loop that used to need a manual `bridge revoke` every time.
+With no connector attached the newcomer is displacing nobody, so it is accepted
+and the replacement is announced *as a replacement*, with the fingerprint it
+superseded. While a connector **is** attached the refusal stands: letting an
+unknown token take over from a live peer is exactly what pairing exists to
+prevent, and the error now says that instead of only quoting the revoke command.
+
+Residual case, stated rather than hidden: **two connector instances alive at
+once** (a sideload followed by *Reconnect* without a full editor restart leaves
+the old bundle's socket up) — then the old one is attached and the new one is
+still refused. The fix there is a real restart, or the `Re-pair on next connect`
+menu item; the daemon will not pull the pairing out from under a live socket.
+
+The console line is the whole safety mechanism, so it is fixed text:
+
+```
+boardwise bridge: paired new connector (fingerprint 53cd3b41); if this was not you, run: boardwise bridge revoke
+```
+
+`boardwise bridge revoke` deletes the file and audits `revoke`. The next connector re-pairs — a
+reset, not a blocklist. That is deliberate: the command cannot tell "the connector I distrust"
+from "the connector I just reinstalled", so it does the thing it can do honestly, which is make
+the trust decision happen again where the user can watch.
+
+Three properties that are easy to get wrong, and are not:
+
+- **The connector token is a different file, and a different secret, from the CLI token.** Pairing
+  a connector cannot weaken or leak the CLI credential, and a connector token never authenticates
+  a `role: "cli"` caller (asserted in the suite).
+- **An empty token never pairs.** Pairing is not a way in for a client with no random source of
+  its own: the check happens before either branch, so `""` and `null` are refused and nothing is
+  written. A hostile local process still has to invent a secret — it just does not have to be
+  *our* secret anymore.
+- **The version check precedes pairing.** Committing a pairing record for a connector we cannot
+  talk to would lock out the working one that connects next, and the resulting
+  `UNAUTHENTICATED` would name the wrong problem. A mismatched connector is refused and forgotten.
+- **The token's provenance is recorded, never assumed.** 0.2.0 generated the secret and swallowed
+  every failure, so when a real editor ended up with no token at all there was nothing to read
+  (§10.14). 0.2.1/0.2.2 report the source (`webcrypto` / `math` / `none`) in the log panel, in
+  `About…`, and beside the token in storage — so a weak token cannot hide behind a reload, and a
+  missing one cannot hide behind silence. §9 says what the weaker source does and does not cost.
+
+**Threat model.** The daemon is loopback-only, so what pairing resists is another *local process*
+or a *web page* getting there first — not a process that can already read the user's home
+directory, which has won regardless of anything this file says. Under that model, first-use trust
+with a loud announcement and a one-command undo is the right strength: it removes the typed secret
+without pretending to a guarantee the daemon cannot provide. The exposure window is the first
+connection only, and it is visible in the console and in the audit log.
+
+
+## 4. Action catalogue
+
+The catalogue is closed: an action not listed here is rejected with `UNKNOWN_ACTION` rather than
+forwarded into the editor as an open-ended string. `owner` decides who executes it. `risk` decides
+what may run unattended: `read` cannot change project content, `write` changes existing content,
+and **`create`** produces a new document — the daemon refuses a `create` action unless
+`params.confirm is True` (`CONFIRMATION_REQUIRED`), consuming the flag so it never reaches the
+connector. There is no action that deletes a document, by design.
+
+Two tests keep this table honest: `connector/tests/contract-drift.test.mjs` asserts that
+`ACTIONS`, the connector's handler registry and **this table** all list the same names
+(both difference directions reported), and `tests/test_action_catalogue.py` checks the catalogue
+against itself (unique names, the naming domain, valid `owner`/`risk`, every `create` action
+declaring `confirm`).
+
+| action | owner | risk | params | `data` on success | timeout |
+|---|---|---|---|---|---|
+| `hello` | daemon | read | daemon | `token`, `role`, `protocol`, `client` | `{role, protocol, serverTime}` | 30 s (`ACTION_TIMEOUT`) |
+| `ping` | daemon | read | daemon | — | `{pong: true, connector: bool, pairedFingerprint: str\|null}` | 30 s |
+| `document.current` | connector | read | connector | — | `{project, pcb, schematicPage, type, tabs}` | 30 s |
+| `sys.probe` | connector | read | connector | `checks`, `namespace`, `namespaces`, `functionsOnly` | `checks` mode: `{version, topLevel, checks: {NAME: {present, kind, checked, missing, status, notes?}}}`; enumerate mode: `{version, topLevel, namespaces: {NAME: {present, ownNames, functions, data, errors?}}}` — **read-only** introspection of the live API surface | 30 s |
+| `sys.self_update` | connector | write | connector | `bundleB64`, `version` | `{ok, oldVersion, newVersion, bytes, database, reloadInMs}` — rewrites the connector's own bundle in IndexedDB and reloads the page (§8); **the permission grant is preserved** | 30 s |
+| `sch.readback` | connector | read | connector | `includePrimitives` | `{kind: 'sch', components, primitives, componentCount}` | 30 s |
+| `pcb.readback` | connector | read | connector | `includePrimitives` | `{kind: 'pcb', components, primitives, componentCount}` | 30 s |
+| `export.screenshot` | connector | read | connector | `fit` | `{format, encoding: 'base64', bytes, data}` — **diagnostic only**: cached frames | 60 s |
+| `export.render` | connector | read | connector | `format`, `scope`, `ids`, `fileName` | `{format: 'image/png'\|'image/svg+xml'\|'application/pdf'\|'zip', encoding, bytes, data, scope, note}` — the document render (`scope`: page\|selection\|project) | 60 s |
+| `canvas.highlight` | connector | read | connector | `uuids`, `color`, `clear` | `{highlighted, cleared, unresolved}` | 30 s |
+| `sch.netlist` | connector | read | connector | `type` | `{type, source, size, text}` — the editor's own netlist | 60 s |
+| `sch.geometry` | connector | read | connector | `bboxIds` | `{components, wires, pins, netlabels, bboxes, meta}` — raw `getState_*` dumps + **measured** sheet bbox | 60 s |
+| `sch.doc.new` | connector | create | connector | `name` | `{schematicUuid, pageUuid}` | 60 s |
+| `sch.place_component` | connector | write | connector | `lcsc` \| `deviceUuid`+`libraryUuid` \| `keyword`, `x`, `y`, `rotation`, `mirror`, `designator`, `pageUuid`, `timeoutMs` | `{uuid, device: {uuid, libraryUuid, name}, resolvedBy, elapsedMs}`; on a 30 s miss: `code: 'TIMEOUT'` with `{device, x, y, landedAnyway, landedCount, near}` | 60 s |
+| `sch.place_wire` | connector | write | connector | `points` (`[[x,y],…]`), `net` | `{uuid, net, points}` | 60 s |
+| `sch.place_netlabel` | connector | write | connector | `x`, `y`, `net`, `pageUuid`, `timeoutMs` | `{uuid, outcome, elapsedMs, landedAnyway}` — 8 s bounded, reads back what landed | 60 s |
+| `sch.place_text` | connector | write | connector | `content`, `x`, `y`, `rotation`, `color`, `fontSize`, `pageUuid` | `{uuid, content, decorative: true}` — `sch_PrimitiveText`, **no connectivity** | 30 s |
+| `sch.place_power` | connector | write | connector | `kind`, `net`, `x`, `y`, `rotation`, `mirror` | `{uuid}` | 60 s |
+| `sch.place_netport` | connector | write | connector | `direction`, `net`, `x`, `y`, `rotation`, `mirror` | `{uuid}` | 60 s |
+| `sch.component_pins` | connector | read | `primitiveId` | `{primitiveId, returned, pins, note?, readErrors?}` — the placed component's pins **with geometry** (x/y/number/name/rotation/length) | 30 s |
+| `lib.symbol.get` | connector | read | `uuid`, `libraryUuid` | `{uuid, libraryUuid, found, item, readErrors?}` — library symbol metadata; **no geometry** | 30 s |
+| `lib.device.get` | connector | read | `uuid`, `libraryUuid` | `{uuid, libraryUuid, found, item, readErrors?}` — includes `association.symbol`/`.footprint` | 30 s |
+| `lib.device.search` | connector | read | `keyword`, `limit` | `{keyword, returned, shown, items}` — each item carries `footprintName`/`footprintUuid`/`supplierId` | 30 s |
+| `lib.footprint.get` | connector | read | `uuid`, `libraryUuid` | `{uuid, libraryUuid, found, name, item}` — footprint uuid → package name | 30 s |
+| `sch.set_component_attribute` | connector | write | `primitiveId`, `attributes`, `key`, `value`, `pageUuid` | `{primitiveId, attributes, mergedKeys, applied, wrote, otherPropertyBefore, otherPropertyAfter, mismatched?, clobberedOtherKeys?}` — **one** `modify` per call, then a read-back; `applied` means the read-back matched | 30 s |
+| `sch.doc.save` | connector | write | — | `{saved: true}` | 30 s |
+| `doc.list` | connector | read | — | `{documents: [{uuid, name, type, active}], active, schematicPages, pcbs, count, notes?}` — every page and PCB in the project | 30 s |
+| `doc.open` | connector | read | `uuid` | `{uuid, tabId, opened, activated, document}` — switches the editor's active document, confirmed by asking the editor | 30 s |
+| `pcb.doc.new` | connector | create | `boardName`, `confirm` | `{pcbUuid, focused}` — **gated**: without `confirm: true` the daemon answers `CONFIRMATION_REQUIRED` | 60 s |
+| `doc.rename` | connector | write | `uuid`, `name`, `type` | `{uuid, name, type, renamed, confirmed, notes?}` — dispatches to the per-kind `modify*Name` call and verifies against the editor's listing | 30 s |
+
+The 006 rows (everything from `sch.netlist` down) exist for the draw flow; their operator
+documentation, machine-probe checklist and known host traps live in [`docs/draw.md`](draw.md).
+Two of them carry measured warnings worth repeating here:
+
+- **`sch.netlist` has no fallback inside the connector on purpose.** The deprecated
+  `sch_Netlist.getNetlist()` has been measured *hanging* on EasyEDA 3.2.186, and a hung export
+  would hold this action's slot until timeout. The export either answers or fails structured;
+  the fallback to `sch.geometry` happens in the *draw flow*, where the timeout costs a report
+  row instead of a wedged socket.
+- **`export.render` is the acceptance image, `export.screenshot` is not.** The reference measured
+  `getCurrentRenderedAreaImage` returning byte-identical images across different board states, and we
+  reproduced that; the document render cannot come back as a cached frame. Since connector 0.4.2 the
+  render runs through `sch_ManufactureData.getExportDocumentFile` (ported from the reference's
+  `schematicExportImage`, live-verified on this host), so `format: png|svg|pdf` and
+  `scope: page|selection|project` are all real — `scope: 'selection'` requires `ids` and drives
+  `sch_SelectControl.doSelectPrimitives` first. **The `object` argument must be the literal strings
+  `'Current Page' | 'Current Page Selected Items' | 'Project'`** — the values the type package declares
+  make the host promise never settle (a stuck 1% toast), so the action races a 30 s deadline and its
+  timeout error says to reload the document to clear the toast. A multi-page project may return a zip —
+  the action says so (`format: 'zip'`) instead of handing the caller an archive named `.png`.
+- **`sch.place_netlabel` is timeout-bounded and self-reporting** (006b): it races an 8 s deadline
+  (`timeoutMs` overrides, clamped 200..30000 ms) and, on a miss, reads the attribute list back to
+  report whether the label landed anyway — the reference lesson is that a timed-out write may have
+  succeeded, and a blind retry stacks duplicates.
+- **`sch.place_netlabel` is a known hang, and on 3.2.186 it cannot work at all** (measured
+  2026-09-14): `createNetLabel` is documented *added in EDA v4*, so on the v3.2 line it never
+  settles and nothing lands (`landedAnyway: false`). It stays for hosts that have v4. The 006b
+  draw flow's `label` strategy is therefore dormant; the default `text` strategy names signal
+  nets with `sch.place_text` (visible but decorative) and rails with `sch.place_power`;
+  `sch.place_netport` remains only as the solver's last resort and is banned from the replay.
+  Evidence: `tasks/006b-netlabel-finding.md`.
+- **`sch.place_text` is the visible-name fallback, and it is decorative by construction.**
+  `sch_PrimitiveText.create` draws a text primitive with no connectivity — the editor's netlister
+  does not read it — so the action returns `decorative: true` and every report line that mentions
+  it says so. The wire still carries the net (the `wire` strategy's mechanism), which the editor
+  *does* honour; the text exists so a human can read the name.
+- **`sch.place_component` can time out and still land** (measured 2026-09-14): the first library
+  resolution on this host can exceed 30 s, after which the component *is* on the page. The action
+  therefore races a deadline and then **reads the page back** (`componentsNear`, ±30 units) to
+  report `landedAnyway` / `landedCount` / `near`, and its error text says "do NOT retry" when
+  something landed. A blind retry is how the probe page got stacked resistors. The daemon's own
+  deadline for this action is 60 s — deliberately longer, so the connector's readback answer
+  arrives instead of the daemon's timeout.
+- **`sys.probe` exists because a declared method and a live method are different things.**
+  `sch_ManufactureData.getPngFile` is marked *added in v3.2.183*, the host reports 3.2.186, and
+  the method answers `NOT_IMPLEMENTED` anyway. A `typeof` check can only say "one method is
+  missing"; the probe enumerates the namespace's real members — walking from the object **itself**
+  up the prototype chain (a class instance keeps its members on the prototype, `Object.keys`
+  returns `[]`; a plain-object namespace keeps them as own properties, so starting at
+  `getPrototypeOf` loses them). Each level is guarded on its own, because the host hands out
+  exotic objects whose `getPrototypeOf` throws; those failures are reported in `errors` rather
+  than swallowed.
+- **`sys.probe` has two modes because enumeration is a measurement that can fail on the object it
+  measures** (2026-09-14, on-machine). The first probe run died on *every* namespace with
+  `Cannot read properties of undefined (reading 'prototype')` — the host's exotic objects throw
+  from `getPrototypeOf`/`getOwnPropertyNames`, and `constructor` is unreachable. So the *stable*
+  mode is `checks`: `{"checks": {"<ns>": ["methodA", …]}}` reads each name with a plain
+  `typeof ns[name]`, and property access walks the prototype chain **as part of the language** —
+  no enumeration call exists to throw. The candidate names come from the offline type package via
+  `tools/api_names.py` (generated into `connector/src/api-names.ts`), which makes the check
+  *complete* for the declared surface, not a sample. `checks: true` uses that generated table.
+  The status vocabulary is deliberately the language's own — `function` / `object` / `undefined`
+  — plus `threw: …` and `namespace-absent`, so "undeclared" and "the read itself failed" never
+  collapse. A method the package marks `ADD since EDA v…` that reads back `undefined` gets a
+  `notes` entry carrying the contradiction. Enumeration survives as the *predictive* mode: it can
+  find a name nobody thought to check, which the type package cannot do.
+
+Notes that matter operationally:
+
+- **`hello`'s 30 s is the client's wait for an *answer*.** The daemon's wait for the *first
+  inbound frame* is a different number — `HELLO_TIMEOUT`, 5 s (§3.3). They are unrelated, and
+  confusing them makes the handshake look far more forgiving than it is.
+- **`ping` never reaches the editor.** It is answered by the daemon and reports whether a
+  connector is attached. This is what `boardwise bridge status` calls.
+- **Only `role: "cli"` may originate editor actions.** A connector asking for `pcb.readback`
+  gets `BAD_REQUEST` — the connector is the hands, not a caller, and this catches an accidental
+  loop where the extension ends up talking to itself.
+- **No connector attached** → `NO_CONNECTOR`, with a message naming the likely cause.
+- **`export.screenshot` gets double the timeout** of everything else: the editor renders the
+  canvas before replying, and a full-board render on a large design is slow. `fit: true` runs
+  `zoomToAllPrimitives` first, which changes what the user sees — so it is opt-in
+  (`--fit` on the CLI), never the default.
+- **`canvas.highlight` resolves uuids to coordinates, then draws.** The official marker API
+  (`dmt_EditorControl.generateIndicatorMarkers`) takes *shapes*, not ids, so each uuid is looked
+  up through the primitive namespaces first. Uuids that cannot be resolved are reported in
+  `unresolved` rather than silently skipped. Marker units are canvas units: mil on PCB, 0.01 inch
+  on schematic — a marker drawn on the wrong document is a plausible failure, so `unresolved`
+  being non-empty is the signal to check which tab is focused.
+- **`clear: true` removes markers and ignores `uuids`.** It exists so a review pass can be
+  reset without restarting the editor.
+
+## 5. Error codes
+
+| code | Meaning | Usually means |
+|---|---|---|
+| `UNAUTHENTICATED` | No `hello` in time, or the token is empty/wrong | A connector that is not the paired one — `boardwise bridge revoke` to forget the pairing (§3.4) |
+| `PROTOCOL_VIOLATION` | `hello` not first, `hello` twice, or a connector was replaced | Two editors running; or a hand-rolled client |
+| `VERSION_MISMATCH` | Protocol major differs | Daemon and connector from different checkouts |
+| `BAD_REQUEST` | Malformed JSON, missing/invalid field, or wrong role for the action | A client bug |
+| `UNKNOWN_ACTION` | Not in the catalogue | Typo, or an action that does not exist yet |
+| `NOT_IMPLEMENTED` | Known to the connector, but this editor version lacks the API | Editor older than the connector expects |
+| `NO_CONNECTOR` | The action needs the editor and none is attached | EasyEDA not running, extension disabled, or external interaction not granted |
+| `CONFIRMATION_REQUIRED` | A `create` action (one that produces a new document) arrived without `confirm: true` | Expected on the first call — re-send with `confirm: true`, or let the CLI ask (§4, 006c). Nothing was forwarded, so nothing was created |
+| `CONNECTOR_ERROR` | The connector raised, or refused (e.g. no image, canvas refused markers) | A document is not open/focused |
+| `TIMEOUT` | The connector did not answer within the action's timeout | Editor busy, modal dialog open, or a half-dead socket (§10) |
+| `INTERNAL` | Anything else; `message` carries the text | A bug — read the audit log |
+
+Codes are stable identifiers, not English prose: clients branch on `code`, humans read `message`.
+
+## 6. Connector-side states
+
+The transport reports six states. The split between `connecting` and `handshaking` is
+intentional — it separates the two failure families:
+
+| state | meaning | if it stays here |
+|---|---|---|
+| `idle` | not started, or auto-connect is off | — |
+| `connecting` | opening the socket | the daemon is not running / wrong port |
+| `handshaking` | socket open, waiting for `hello` to be accepted | **pairing problem** — the daemon is holding a different pairing (§3.4) |
+| `connected` | accepted; serving requests | — |
+| `reconnecting` | closed, waiting for the backoff timer | daemon went away |
+| `stopped` | stopped from the menu | — |
+
+The extension's **About…** menu item prints the state, the URL, where the token came from, the
+pairing fingerprint the daemon reported, and the last error. It is the fastest way to see *why*
+nothing connects. The token's *value* is never shown — not in About, not in the log panel, not on
+the daemon console, not in the audit log. Only its 8-hex fingerprint ever leaves the daemon, which
+is why the fingerprint is the one thing the two sides can compare.
+
+## 7. Liveness and reconnect
+
+`eda.sys_WebSocket.register(id, uri, onMessage, onConnected)` returns `void` and provides **no**
+`onClose` or `onError` callback. Death cannot be observed, only *inferred* — and the one callback
+it does offer fires **unreliably** (§3.2), so liveness is judged from traffic, never from it. Two
+consequences:
+
+1. **Heartbeat.** After a successful handshake the connector sends a `ping` request every 5 s
+   (application level; the daemon does not do WebSocket-level pings). Three consecutive misses
+   without an answer means the socket is dead, and a reconnect is scheduled. Because `ping` is
+   answered by the daemon, an answer proves the whole path — socket, daemon, routing — is alive.
+   Any incoming frame also clears the miss counter.
+2. **A fresh id per attempt.** The API ignores parameter changes for an id that is still live, so
+   each attempt registers a *new* id (`boardwise-1`, `boardwise-2`, …). Reusing one id would make
+   the second attempt silently do nothing.
+
+Backoff doubles from 1 s to a 30 s ceiling and resets on a successful connect. `stop()` clears
+every timer and closes the socket; a stopped transport sends nothing, ever (asserted in the
+suite, with a wait long enough to be meaningful).
+
+The daemon is the passive side: it does not track per-connector liveness, and clearing
+`daemon.connector` depends on the handler loop exiting. So a *half-open* socket can leave
+`status` reporting `connector: connected` while real actions time out — see §10.
+
+## 8. Configuration reference
+
+| What | Where | Default |
+|---|---|---|
+| Daemon host | `DEFAULT_HOST` | `127.0.0.1` (no public-interface code path exists) |
+| Daemon port | `BOARDWISE_PORT`, `--port` | `61190` |
+| Daemon state dir | `BOARDWISE_HOME` | `~/.boardwise` |
+| CLI token file | `token_path()` | `~/.boardwise/token` |
+| Paired connector token | `connector_token_path()` | `~/.boardwise/connector-token` (created on first pairing) |
+| Audit log | `audit_dir()` | `~/.boardwise/audit/YYYY-MM-DD.jsonl` |
+| Connector URL | extension user config `url` | `ws://127.0.0.1:61190/eda` |
+| Connector token | extension user config `token` | **generated** on first activation; nothing to type |
+| Connector auto-connect | extension user config `autoConnect` | on |
+
+### The `bridge` subcommands
+
+| Command | Exit | What it does |
+|---|---|---|
+| `bridge start` | 0 | Run the daemon. Prints the token path, the audit dir, the pairing path, and one loud line per first-time pairing. |
+| `bridge status` | 0 / 1 / 2 | Daemon up + connector attached / daemon up, no connector / daemon unreachable. Also prints the paired connector's fingerprint. |
+| `bridge revoke` | 0 | Delete the pairing record and audit `revoke`. Needs no daemon: it is a local file operation, because the moment you want to withdraw trust is the moment you are least sure what is running. |
+| `bridge screenshot <out>` | 0 / 1 / 2 | Native canvas capture; `--fit` zooms to the board first. |
+| `bridge highlight <uuid…>` | 0 / 1 / 2 | Draw markers; `--color`, `--zoom`, `--clear`. |
+| `bridge update-connector` | 0 / 1 / 2 | Hot-update the running connector from `connector/dist/index.js` (§8); asks first, `--yes` skips. |
+
+Connector token resolution order: `globalThis.BOARDWISE_TOKEN` (injection for tests) →
+extension user config → `?token=` on the configured URL → **generate one**. The last step is
+what makes the flow zero-configuration: the concrete path is `ensureConnectorToken()`, which
+writes the new token to extension storage before returning, so a reload reuses it instead of
+re-pairing the daemon. A token passed in the URL is read and then **stripped** from the socket
+URL, so it is not re-sent on every reconnect.
+
+### Self-updating the connector (`sys.self_update`, 0.4.3)
+
+Swapping connector versions used to mean uninstall → import → restart the editor: the editor
+evaluates an extension bundle exactly once at load, and dedups installs by uuid, so a version
+bump alone silently fails the import. `boardwise bridge update-connector` skips all three. It
+base64s the freshly built `connector/dist/index.js`, sends it as `sys.self_update`, and the
+running connector — which executes inside the editor page and therefore shares its storage —
+rewrites its own installation and reloads the page. The editor re-reads extensions from
+IndexedDB on load, so the new code runs. The mechanism is ported from the reference
+implementation's hot-reload script (live-verified there), minus its separate WS server and
+console injection: the existing daemon channel carries the bundle.
+
+The write targets two records (EasyEDA-internal layout):
+
+- `extensionsObjectStorage`, key `<uuid>|dist/index.js` — `source` is replaced with a
+  `File` built from the new bytes;
+- `extensionsIndex`, key `<uuid>` — **only** `config.version` and `fileSize` are bumped.
+  `isAllowExternalInteractions` (the permission grant) and `isEnable` are never touched:
+  an update that reset the grant would wake up unable to call any `eda.*` API.
+
+The response frame is sent **before** the reload is scheduled (a 500 ms timer), so the CLI
+always learns the outcome before the page and socket go away. The connector knows its own
+uuid because `build.mjs` bakes it in (`__BOARDWISE_UUID__`, same mechanism as the version).
+
+**Warning: the IndexedDB database/store names are EasyEDA-internal structure (`User_<teamUuid>_v6`
+today), not an official API — an editor upgrade may change them.** The action therefore
+validates at runtime instead of assuming: it enumerates `indexedDB.databases()` and refuses
+zero *or several* matches, checks both object stores exist, and checks both records exist
+before writing anything. Every failure is an explicit error naming what was found — the
+fallback is a manual uninstall + import of the `.eext`, and no failure path silently degrades.
+
+The bundle travels as one WebSocket frame: the daemon's inbound cap is `MAX_FRAME_BYTES`
+(32 MiB), and the ~107 kB bundle is ~143 kB as base64, so it fits with two orders of magnitude
+to spare; the CLI refuses early with a "raise the limit" message if that ever stops being true.
+
+### Audit log
+
+One JSON object per line, best-effort (a logging failure never breaks a call):
+
+```json
+{"ts": 1789000000.1, "action": "pcb.readback", "role": "cli", "ok": true, "ms": 41.2}
+{"ts": 1789000000.5, "action": "connect", "role": "-", "ok": true, "peer": "127.0.0.1:54048", "origin": null, "user_agent": "…"}
+{"ts": 1789000001.3, "action": "pairing", "role": "connector", "ok": true, "client": "boardwise-connector/0.2.1", "peer": "127.0.0.1:54048", "fingerprint": "53cd3b41"}
+{"ts": 1789000001.4, "action": "hello", "role": "connector", "ok": true, "client": "boardwise-connector/0.2.1"}
+{"ts": 1789000002.0, "action": "disconnect", "role": "connector", "ok": true, "actions": ["pcb.readback"]}
+{"ts": 1789000003.0, "action": "revoke", "role": "cli", "ok": true, "fingerprint": "53cd3b41"}
+```
+
+`connect`, `disconnect`, `hello`, `pairing` and `revoke` are **lifecycle** records: they carry
+their own fields and no `ms`. Everything else is a request and carries a duration. A token — or
+any slice of one longer than the 8-hex fingerprint — must never appear in this file, and there is
+a test that greps for exactly that.
+
+## 9. Security posture
+
+Stated plainly because it is the whole threat model:
+
+- **Loopback only.** The daemon binds `127.0.0.1`. There is no code path that listens on a
+  public interface and no option to make one.
+- **Two secrets, one per role.** `~/.boardwise/token` is the CLI's, 32 random bytes as 64 hex
+  characters, created on first `bridge start`, `chmod 0600` on POSIX. `~/.boardwise/connector-token`
+  is the connector's, written by the daemon the first time a connector pairs (§3.4). They are
+  separate files on purpose: pairing a connector can neither weaken nor leak the CLI credential,
+  and neither token authenticates the other role. On Windows the `chmod` is a no-op and the files
+  keep default ACLs — so on Windows the protection is the user profile's ACL, not that call.
+- **The connector is not sandboxed.** Anything `eda.*` exposes, an authenticated caller can
+  reach. The token is the only gate, which is why it is never logged, echoed in a status
+  message, or included in an error `detail` — only its 8-hex fingerprint is.
+- **The token is not a capability boundary against local processes.** Any process running as the
+  same user can read these files. The threat model is "another program, or a web page, trying to
+  get there first" — not "a program that already reads my home directory", which has won
+  regardless. Pairing is sized to that: first-use trust, announced on the console, one command to
+  undo.
+- **The connector's token may come from a weaker source than Web Crypto.** 0.2.1 falls back to
+  `Math.random` when Web Crypto is unusable, and *says so* — in the log panel, in `About…`, and in
+  the provenance carried inside the stored value itself (`webcrypto:<hex>` / `math:<hex>`, one key
+  since 0.2.3 — see §10.19). (The fallback was written after a real editor
+  failed to produce a token at all. The first explanation for that — "no `crypto` here" — turned
+  out to be wrong, §10.14; the fallback and its disclosure stand regardless, because a realm
+  without Web Crypto is a real possibility this code should not be defeated by.) That is a genuine
+  weakening (the bytes are not a CSPRNG's), but it does not move the boundary drawn directly
+  above: the token's job is to make a later connection distinguishable from the paired one, an
+  attacker who can read the file has won on either source, and one who cannot read it cannot
+  observe this process's PRNG outputs. The `Origin` rule below is the control that actually
+  addresses the web-page case. Anyone who wants stronger provenance can read `About…` and refuse a
+  `Math.random` pairing — which is why the source is displayed rather than assumed.
+- **What is *not* yet enforced: `Origin`.** The daemon records the `Origin` and `User-Agent` of
+  every handshake (task 004c is evidence-gathering) and `check_origin()` currently allows
+  everything. The rule — refuse `http(s)://` origins, allow a missing origin and the extension
+  host's own — lands in 004d, once the measurements say what the editor actually sends. Do not
+  describe this bridge as origin-checked until then.
+
+## 10. Known limitations (v0)
+
+Recorded rather than hidden, so a future session does not have to rediscover them:
+
+1. **Half-open connectors look alive.** `status` reads `daemon.connector is not None`; if the
+   editor dies without a clean TCP close, that stays true until a forwarded action times out.
+   Workaround: `boardwise bridge screenshot` — a real round trip — is the honest liveness check.
+2. **Only one connector is tracked.** A second editor instance displaces the first. Fine on one
+   workstation; wrong for any multi-user setup. **Multi-project routing is deliberately
+   deferred** (004f): the per-project pairing table, `connectors.json` and `--project` addressing
+   that task 004f first specified were **withdrawn**, because the premise they were built on was
+   measured to be false — see item 24. One connector per editor is the model; addressing "which
+   project" is a job for the actions (`doc.list` / `doc.open`), not for the transport.
+3. **`canvas.highlight` cannot mark pads, tracks or vias by uuid.** `locate()` tries component
+   namespaces first; other primitive kinds fall back to their namespace `get(uuid)` and start
+   coordinates, so a track is marked at its start point, not along its length.
+4. **Write actions exist, but only the ones the draw flow needs** (superseded in 0.3.x — this
+   entry used to read "none, by design"). `sch.place_*`, `sch.set_component_attribute` and
+   `sch.doc.save` mutate the page. There is still no delete: removing a page or a primitive is
+   deliberately outside the harness (`boardwise` cannot clean up after itself, so a run that
+   leaves a page must be cleaned up by hand), and no DRC run.
+5. ~~**`document.current` reports all three documents, not the focused tab.**~~ **Corrected
+   2026-09-16 (004f item 4).** There *is* a focused-document getter —
+   `dmt_SelectControl.getCurrentDocumentInfo` — and `document.current` now reads it, the same call
+   `doc.list` uses, so the two cannot disagree. Before this, `type` was derived from the
+   split-screen tab tree, whose objects carry **no `documentType` on this build**; the derivation
+   therefore answered `unknown` for a schematic page in front while `doc.list` named the same page
+   correctly. Consequences to rely on: `active` is the focused document and `typeSource` says
+   which read produced `type`; when `heuristic` is `true` the answer came from a fallback and
+   **must not be used as a criterion**. `tabs[]` is still returned, for display only.
+6. **`sch.readback` / `pcb.readback` summarise primitives rather than returning them raw.**
+   Editor objects are method-based (`getState_*()`), so the connector walks those getters, keeps
+   scalars and reports counts for collections. A field the connector does not know about is
+   still surfaced through the per-item `fields` bag, but nested structures are reduced to
+   `{count}` or `{object: true}`.
+7. **The editor's globals are not `globalThis`.** `eda` is bound as a context global in the
+   extension host: bare `eda` resolves, `globalThis.eda` is `undefined` (§3.2 a). Anything the
+   extension needs from the editor must be **passed in explicitly** by `index.ts`, never looked up
+   off `globalThis`. The transport no longer has any global fallback, on purpose.
+8. **The editor's connect callback cannot be trusted.** `eda.sys_WebSocket.register`'s 4th
+   argument does not reliably fire — see §3.2 b. The transport treats it as advisory and drives
+   `hello` from inbound frames. Consequence: **anything that needs to run "on connect" must be
+   triggered by a frame, not a callback.** A future feature that assumes a working connect
+   callback will silently never run.
+9. ~~**An out-of-flow netlist export comes back empty.**~~ **Withdrawn 2026-09-16 — it was a
+   probe bug, not a host behaviour.** The reading came from a shell-side probe that looked at the
+   payload **without parsing the `text` field**, so a perfectly good export was reported as
+   "0 components". `sch.netlist` returns the netlist as a JSON string under `data.text`; a
+   consumer that reads `data` and stops sees an empty netlist no matter how healthy the editor
+   is. The export is **not** anchored to a focused page, and there is no save-ordering problem —
+   both explanations were built on the bad reading and are withdrawn with it.
+   **Consequence for readers of this document:** the claims this entry used to carry about "which
+   page is focused" were never measured. Go through `data.text`.
+10. **A netlist export taken immediately after a write can be *stale*, and that IS real.**
+   Measured repeatedly on 2026-09-15/16: the editor recomputes connectivity asynchronously after
+   `sch.place_wire`, so an export issued right after the last create describes the page as it was
+   **before** that wire. Reproduced on the golden board: the run reported `U1.16` unconnected
+   while the same page, re-exported a moment later, had it in `VCC` — and a full membership
+   comparison against the golden matched net for net. **A read that is merely early is
+   indistinguishable from a broken board**, which is what made this expensive to find.
+   `engines/draw.py::_settled_netlist` therefore saves and exports **until two consecutive reads
+   agree** (up to four attempts), records how many attempts it took, and marks the verdict
+   untrusted if it gave up — so "I do not know" and "I know" stay distinguishable in the report.
+11. **`export.screenshot` gets 60 s because a render is slow — and that is a guess, not a
+   measurement.** No render on a large board has been timed yet. If screenshots start timing out
+   on real designs, this is the number to revisit first.
+12. ~~**The socket wiring has no automated guard.**~~ **Closed in 0.2.0.** `index.ts` now takes
+    its editor through an injectable facade (`src/facade.ts` — the only module allowed to touch
+    the host global), `tests/wiring.test.mjs` drives the whole production path (activate → resolve
+    config → generate a token → register a socket → answer the banner), and two source guards
+    forbid both known shapes of the old bug. See §12.
+13. **Pairing pairs whoever arrives first.** Between `bridge start` and the first connector, any
+    local process or web page that reaches the port can claim the pairing — that is what
+    first-use trust means. Mitigations, all of them visible: the announcement on the console, the
+    `pairing` audit record with the client string and peer, `bridge status` showing the
+    fingerprint, and `bridge revoke` to start over. What is *not* yet in place is the `Origin`
+    rule that would close the web-page half of this (§9). Since 004f the same applies to a
+    **re-pair** (§3.4): an unattached pairing may be re-taken, and that too is announced and
+    audited as `re-pairing`, with the fingerprint it replaced.
+14. **`revoke` cannot exclude one token.** It forgets the pairing, so *any* connector re-pairs
+    next — including the one you just revoked. Distinguishing "the connector I distrust" from
+    "the connector I reinstalled" is not possible from a token alone; the honest behaviour is to
+    make the decision visible again rather than to pretend to a blocklist.
+15. **The connector shows a fingerprint it did not compute.** `About…` reports the fingerprint
+    the *daemon* sent in the `hello` answer, because a verified one would need SHA-256 in the
+    extension and the editor's crypto surface is not guaranteed (see 14 — the first claim that it
+    was *absent* did not survive measurement). It is enough for the user to compare the editor's
+    line with `bridge status`, but it is not a proof of possession — do not present it as one.
+16. **Why the token was missing: answered — activation never fired, and the store was half-written.**
+    0.2.0 produced `token: NONE — this editor cannot generate one` with `state: idle`, and that was
+    attributed to `crypto` being unreachable from an extension realm. **0.2.1 disproved that** — its
+    own `About…` probes the realm and returned `crypto=ok`, i.e. `getRandomValues` is there and
+    callable. The lesson is about the *inference*, not the API: "no token" was read as "generation
+    failed", which it does not imply. The two causes are only distinguishable by asking whether
+    `activate()` ever ran, and nothing recorded that before 0.2.2. Asking it on the machine produced
+    `activation: NEVER RAN` — so it is the first cause, and 0.2.3 acts on it (§10.20). The same
+    reading of `About…` turned up a second, independent defect: `storage: readable
+    (token.source=webcrypto)` printed beside `token: NONE`, i.e. half a stored pair (§10.19). What
+    0.2.1+ hold, and what these measurements were made with, is the defensive reading, the reported
+    source, the `Math.random` fallback, the source guards, the probe, and the `activation:` /
+    `storage:` lines.
+17. **A `typeof` probe cannot tell a working function from one that throws.** The 0.2.1 diagnosis
+    leaned partly on `describeRandomHost` reporting `crypto=ok`, which it derived from
+    `typeof getRandomValues === 'function'`. A sandbox can expose a function that throws when
+    called. As of 0.2.2 the description comes from *calling* it, so `crypto=ok` means "it worked".
+18. **Nothing recorded whether the editor called `activate()`.** Menus work from a loaded module
+    even when activation never ran, so the extension can look healthy while doing nothing at all.
+    As of 0.2.2 `About…` reports `activation: NEVER RAN` / `<time> ok` / `<time> FAILED — <error>`,
+    and a rejected `activate()` is logged *and* toasted instead of vanishing — an unhandled
+    rejection in an extension host is otherwise completely invisible.
+19. **A `false` return from `setExtensionUserConfig` used to be ignored.** The API returns a
+    promise for a boolean and can resolve `false`; 0.2.x discarded it, so a refused write was
+    indistinguishable from a good one until the next reload — when the token was simply gone and
+    the connector silently re-paired. As of 0.2.2 it is reported through `tokenNote`.
+20. **The token is generated by the connector, not issued by the daemon.** Consequence: a
+    connector that cannot generate one cannot pair at all, even though the daemon could easily
+    mint a secret. Daemon-issued pairing would need a handshake step beyond the current banner →
+    `hello` shape, so it was left for a task that can change the protocol deliberately.
+21. ~~**Two adjacent storage writes are not a transaction, and one of them can vanish.**~~
+    **Downgraded in 0.2.4: the half-write was never proven, and the simpler explanation is that
+    the observer was broken.** The original evidence was `About…` reading `storage: readable
+    (token.source=webcrypto)` beside `token: NONE`. 0.2.3's own `About…` then reproduced the same
+    contradiction in the *new* single-key format — `storage: readable (token=webcrypto, 64
+    characters)` beside `token: NONE` — which cannot be a half-write, because there is only one
+    key. The real cause is §10.21: `about()` resolved the config through `facade?.storage` while
+    nothing had created the facade yet, so `token:` was computed with no store at all while
+    `storage:` — evaluated later in the same function — read it fine. Two store views in one box.
+    Lesson: **when two observations contradict, suspect the observer (two code paths) before the
+    observed (the store).** What survives of 0.2.3: one key, `token`, holding
+    `"<source>:<64 hex>"` — still the better shape (one write means nothing to half-write, and
+    `rePair` clears exactly it), a bare 0.2.0–0.2.2 hex value is still read (as `legacy format`),
+    and the upgrade forced no re-pair. But the editor storage's transactionality remains
+    unmeasured — do not cite it as a known editor defect.
+22. **The editor may never call `activate()`, and menus give no hint.** `activationEvents
+    .onStartupFinished` fires at *editor* start; reloading the extension on its own does not
+    re-trigger it. Menus keep working regardless — the editor evaluates the bundle to read the
+    `registerFn` exports — so the extension looks installed and does nothing at all. That is the
+    measured root cause of `token: NONE` (§10.14). 0.2.3 does not depend on the callback: at module
+    load it arms two deferred checks (1 s and 4 s), and if `activate()` has still not run while an
+    editor global is present, it connects anyway. Deliberately **loud** — it logs `activate() was
+    not called; connecting anyway (self-arm)` and `About…` reports `NEVER RAN — self-connected at
+    <time>`, so quiet coverage never hides a host behaving badly. The `NEVER RAN` still stands:
+    that line answers "did the editor call us", which is a fact about the editor, not about us.
+    `activate()` remains the primary path and wins the race — a shared one-shot guard means only
+    one of the two ever opens a socket.
+    **On the machine (0.2.3, 2026-09-13): the arm left no trace.** `About…` 13 s after load showed
+    a bare `NEVER RAN` — no `self-connected`, no `FAILED` — while the store held a token some
+    earlier module instance had written. So in that instance neither probe left a record, and
+    0.2.3's probes were silent on the miss path — the exact blind spot 0.2.2 exists to prevent,
+    rebuilt one version later. 0.2.4 closes it: every probe outcome is recorded
+    (`self-arm <trigger>: editor global not reachable`, in the log panel and in `About…`), and the
+    **menus are the guaranteed arm path** — `About…` arms after building its box, so one click is
+    enough to connect even if the host discards idle timers. The arm stands down honestly when
+    auto-connect is off (and releases its claim so a later arm can try again), and a manual
+    `reconnect` claims the attempt so the self-arm can never pile a second socket on top.
+    **Revised again in 0.2.5 (004d, measured under the new daemon): the arm is dead, long live the
+    bootstrap.** The restart experiment settled it: full editor restart, zero clicks, 15 s — zero
+    TCP; one About click — still zero TCP, confirming that menu-click contexts die before their
+    async work runs, while one 0.2.x instance's module-load-initiated chain had sustained a
+    48-minute reconnect loop (274 audited connects) on its own. Conclusion: **the only window the
+    host reliably keeps alive is the module's synchronous evaluation**, so since 0.2.5 the connect
+    starts exactly there (`bootstrapAtModuleLoad()` → `connectOnce()`, fire-and-forget), timer
+    probes are deleted (they could only produce misleading logs), and the menu click is demoted to
+    a redundant safety net (it re-evaluates the bundle, whose bootstrap has already claimed the
+    attempt). Cross-evaluation idempotency: the claim gate within a copy, and the deterministic
+    first socket id (`boardwise-1`) across copies — the editor sees a re-registration of the
+    connection it already has, not a second one. `activate()` is downgraded to a supported trigger
+    through the same gate; whether the host ever calls it is now a cleanliness question, not a
+    correctness one.
+23. **One box, two store views (0.2.3, fixed in 0.2.4).** `about()` resolved the config through
+    `facade?.storage` — optional chaining, no facade created — while `storageLine()` used
+    `host()`, which builds the facade on first use. Before anything else has run, the first read
+    saw no store and the second saw it, so one box could say `token: NONE` beside `storage:
+    readable (token=webcrypto, 64 characters)`. That contradiction is what §10.19's "half-write"
+    was read from, and it was the wrong reading both times. 0.2.4 creates the facade before
+    resolving anything, and a regression test installs a token and asserts the box reports it
+    before any activation. Corollary worth keeping: **a diagnostic that reads the same thing twice
+    through different paths is two diagnostics, and they can disagree.**
+24. **`eda.sys_Storage` is shared by the editor, not scoped per project — and that was measured,
+    not assumed.** Task 004f was originally specified as "one connector per project, so store a
+    per-project pairing table and address actions by `--project`". DeepSeek's on-machine
+    measurements overturned the premise: after a restart the connector connected with its
+    **existing** token (`sys_Storage` had not been reset), and `revoke` did not disturb a live
+    socket. The earlier "per-project isolation" reading came from a focused-page mix-up. So the
+    per-project table, `connectors.json` and `AMBIGUOUS_TARGET` were **withdrawn before being
+    built**, and the single-connector model stands (item 2).
+    What *does* reset the store is **sideloading a connector build** — and that, not project
+    switching, is the only real cause of the `UNAUTHENTICATED` waves seen on 2026-09-14. §3.4
+    turns that into a self-heal instead of a manual `bridge revoke`.
+25. **The connector's startup path had a blind spot; it is now bounded and loud (004f item 3).**
+    "Restart the editor and it does not connect, and nothing recovers it but another restart" has
+    reproduced three times since 0.2.5. Two defects in `index.ts` can produce exactly that, and
+    both were invisible: (a) `void bootstrapAtModuleLoad()` had **no `catch`**, so a rejection in
+    the first connect attempt left the one-shot claim taken forever — `activate()`, the self-arm
+    and `Reconnect` are all no-ops afterwards, with nothing in the log panel and nothing in
+    `About…`; (b) when `eda` was not bound at module evaluation the bootstrap stood down for the
+    life of that module instance. Since 0.4.1 the bootstrap catches, logs, **releases the claim**
+    and retries on a bounded schedule (≈29 s total), recording every attempt. The retry is
+    legitimate where 0.2.3's 1 s/4 s probes were not: those never ran because the bundle was not
+    loaded at all, whereas a chain started at module evaluation is the one context measured to
+    survive (004d: a 48-minute reconnect loop, 274 audited connects).
+    **Acceptance passed 2026-09-16: 5/5 consecutive cold editor starts connected with zero
+    clicks** (10–19 s each, one `hello ok` per start, and — the check that matters — **no
+    `pairing`/`re-pairing` event in any of the five rounds**, so nothing was re-paired to get
+    there). Reading "did it self-connect?" from `status: connected` alone is not enough: a single
+    manual click looks the same. What distinguishes them is the audit shape — one socket
+    dropping, exactly one `connect` arriving, and no pairing record.
+26. **An ambient HTTP proxy breaks a loopback connect, and it looks like a dead daemon.**
+    `websockets` 17 defaults `connect(..., proxy=True)`, which means "honour `HTTPS_PROXY` /
+    `HTTP_PROXY` / `ALL_PROXY`" — and the daemon is on `127.0.0.1`, where a proxy can only be
+    wrong. Measured 2026-09-16 with a proxy in the environment: `bridge status` dialled
+    `ws://127.0.0.1:61190/eda`, the proxy answered `InvalidProxyStatus: proxy rejected
+    connection: HTTP 502`, and the CLI reported "daemon not reachable" while the daemon was
+    fine. `BridgeClient.open` now passes `proxy=None`; `tests/test_bridge_cli.py` pins it, and
+    the rule generalises: a loopback destination never goes through a proxy.
+
+## 11. Relationship to `easyeda-agent` frames
+
+The envelope is deliberately close to the frames reconnoitred from `easyeda-agent` (MIT) in
+2026-08, so behaviour learned there transfers: `id` correlates, `ok` decides, `error.code` is
+machine-readable. Two deliberate differences:
+
+1. Results travel in `data`. `easyeda-agent` spreads them across `result` / `context` /
+   `artifacts`; one field is easier to validate and to type on both sides.
+2. The action catalogue is **declared**, not discovered at runtime. `ACTIONS` in `protocol.py`
+   is the single source for the daemon's routing table, the CLI's `--help`, and the docs — so an
+   action cannot exist in one place and be missing in another.
+
+## 12. How the claims here were verified
+
+| Claim | How |
+|---|---|
+| Envelope, routing, error codes, role guard, audit | `tests/test_bridge.py`, real WebSocket on `127.0.0.1:0` |
+| CLI exit codes (`0`/`1`/`2`), token creation, audit trail | `tests/test_bridge_cli.py` — a real `bridge start` subprocess on a free port, no EasyEDA needed |
+| Daemon ignores request path and query string | Probe: `/`, `/eda`, `/a/b?foo=1` all completed a `ping` handshake |
+| Both sides classify a frame the same way | `frame_kind` / `frameKind` asserted against the same three shapes on each side (`tests/test_bridge.py`, `connector/tests/protocol.test.mjs`) |
+| The daemon speaks first | `test_daemon_speaks_first_with_a_banner` — a raw socket receives `{"event":"banner",…}` before sending anything |
+| The banner is an event and carries no secret | `test_banner_frame_is_an_event_and_carries_no_secret` — no `id`, no token, `frame_kind == "event"` |
+| A banner *alone* triggers `hello` | `connector/tests/transport.test.mjs` — a banner is injected with **no** `socket.connect()` call, and `hello` must be sent |
+| A banner is answered with `hello`, never with an error | `connector/tests/transport.test.mjs` — the reply is the `hello` request, not `BAD_REQUEST` |
+| `hello` is sent exactly once per attempt | `connector/tests/transport.test.mjs` — both triggers (callback *and* banner) fire; one `hello` total |
+| The heartbeat starts after `hello`, not on the callback | `connector/tests/transport.test.mjs` |
+| Silence is hung up on and audited | `test_a_silent_connection_is_hung_up_and_audited` — `HELLO_TIMEOUT` monkeypatched to 0.5 s |
+| Every socket end is audited, even a pre-hello drop | `test_raw_connection_and_disconnection_are_audited` — a bare socket that never says `hello` still yields a `connect` (with `peer`) and a `disconnect` record |
+| `boardwise bridge --help` lists the real catalogue | `test_bridge_help_renders_the_action_catalogue` — renders `ACTIONS`, so help cannot drift from routing |
+| The focused document is read from one call, by both actions (004f) | `connector/tests/actions.test.mjs` — with a schematic page in front and a tab tree carrying no `documentType`, `document.current` must name that page's uuid and `doc.list` must agree; a fallback is asserted to be marked `heuristic: true` |
+| `hello` carries the connector's build, and an old one is not refused | `connector/tests/transport.test.mjs` (field present / absent in the frame) and `tests/test_bridge.py` — the audit record's `client` ends with `connector=0.4.1`, or with `(version unknown)` when the field is missing |
+| An unattached pairing may be re-taken, an attached one may not (004f) | `tests/test_bridge.py` — `test_a_new_token_re_pairs_when_nothing_is_attached` (audited as `re-pairing`, with the fingerprint it replaced) and `test_a_live_connector_is_not_displaced_by_a_new_token` |
+| A bootstrap that throws is loud, and does not hold the claim (004f) | `connector/tests/wiring.test.mjs` — an injected throwing `sys_Storage` must log `bootstrap FAILED: …` and a later `activate()` must still be able to connect; a stand-down retries once the host appears |
+| `requestFrame` byte shape | Asserted on both sides (`tests/test_bridge.py`, `connector/tests/transport.test.mjs`) |
+| `ActionError` survives a bundle boundary | `connector/tests/transport.test.mjs` — a foreign, structurally-valid error keeps its code instead of becoming `INTERNAL` |
+| Reconnect after missed heartbeats | `connector/tests/transport.test.mjs`, polling for the condition rather than sleeping |
+| `.eext` is a well-formed ZIP of the current build | `connector/tests/package.test.mjs` — parses the central directory and inflates every entry; CRC and size checked against the file on disk |
+| `eda.sys_WebSocket` signature (no `onClose`) | `@jlceda/pro-api-types@0.4.25` type definitions — `register(...)` returns `void` |
+| The connect callback is unreliable, and the reference works around it | Read from the extracted `easyeda-agent-connector.eext`: `register(id, \`ws://127.0.0.1:${port}/eda\`, onMessage, () => {})` — a deliberately **empty** 4th argument, with the handshake triggered by the inbound `{type:"handshake"}` frame inside `onMessage` |
+| `eda.sys_Log.add` is the editor's log panel, and the reference uses it for diagnostics | Same source: its `diag()` helper is `eda.sys_Log.add(\`[easyeda-agent] ${msg}\`)`, called on every register/retry decision |
+| The `.eext` layout | Unzipped the reference: root `extension.json` + `dist/index.js`, manifest using `entry: "./dist/index"`, `engines.eda: "~3.2.0"`, `activationEvents.onStartupFinished`, `headerMenus` — the same spellings ours uses |
+| `globalThis.eda` is `undefined` in the extension host while bare `eda` resolves | **On the machine, 2026-09-13**, via the editor's own script console: `tools/probe1-surface.js` returns `edaType: 'object'` but `globalType: 'undefined'`, `same: false`; `tools/probe2-register.js` then called `eda.sys_WebSocket.register` from that scope and a real TCP connection reached the daemon (audit: `connect` from `127.0.0.1:54048` at 02:20:53, closed 3.4 s later by the probe) |
+| A failed socket lookup was silent | Read from the 0.1.1 `.eext`: its `Transport` getter was `this.options.socket ?? globalThis.eda?.sys_WebSocket` while `buildTransport` passed no `socket` — so `socket` was always `undefined` and `connect()` returned into `scheduleReconnect('eda.sys_WebSocket is unavailable')` without ever calling `register`. 0.1.2 passes the socket explicitly; 0.2.0 removed the fallback entirely and made the wiring testable (§10.10, now closed) |
+| Rectangle markers take `left/right/top/bottom`, not the line/arc fields | `@jlceda/pro-api-types` `IDMT_IndicatorMarkerShape`, confirmed on the machine: 0.1.2 sent `startX/startY/endX/endY`, the editor returned `true` and rendered **nothing**; 0.1.3 with the correct fields drew the box. Guard: `connector/tests/actions.test.mjs` asserts the exact key set |
+| `canvas.highlight` end-to-end | **Human-confirmed 2026-09-13**: `boardwise bridge highlight <U1 primitiveId> --zoom` through our own daemon + 0.1.3 connector zoomed the canvas to U1 and drew the red rectangle; `--clear` removed it. Note: markers live on the interactive overlay, so exported screenshots are expected to be byte-identical with and without markers |
+| `hello` from the editor reaches the daemon | **On the machine, 2026-09-13** (0.1.2/0.1.3): audit log shows `hello role=connector ok=true client="boardwise-connector/3.2.149.88089769"` followed by `ping` heartbeats |
+| The first connector pairs, later ones must match | `test_first_connector_is_paired_and_remembered`, `test_a_paired_connector_pairs_only_once`, `test_hello_rejects_bad_token` — plus the CLI-level `test_a_connector_pairs_itself_and_then_only_that_token_is_accepted`, which pairs over a real socket against a real `bridge start` subprocess and then gets refused |
+| An empty or missing token never pairs | `test_an_empty_token_never_pairs` (parametrised `""`/`null`) — refused, nothing written, no `pairing` record |
+| A version-mismatched connector is never paired | `test_version_mismatch_never_pairs` — the version check runs before the record is written |
+| The two roles keep two secrets | `test_pairing_a_connector_does_not_touch_the_cli_token` — the connector's token is refused as `cli`, the CLI's token is refused as `connector`, and `cli` still works |
+| `revoke` forgets the pairing and the next connector re-pairs | `test_revoke_forgets_the_pairing_and_the_next_connector_re_pairs`, `test_revoke_without_a_pairing_is_a_no_op`, and `test_revoke_is_a_local_command_and_needs_no_daemon` (the CLI runs with nothing listening) |
+| A token never reaches the audit log, the console or About… | `test_the_token_itself_never_reaches_the_audit_log` greps every audit line for the token *and* for its first 8 characters; `connector/tests/wiring.test.mjs` asserts the About box and log panel hold the fingerprint and not the token; the CLI test asserts `status` prints the fingerprint only |
+| `connect` records `Origin` / `User-Agent`, absent → `null` | `test_connect_audit_records_origin_and_user_agent`, `test_a_missing_origin_is_recorded_as_null` |
+| `check_origin` currently allows everything | `test_check_origin_allows_everything_for_now` — written as an assertion so 004d cannot inherit "always allow" without deleting it on purpose |
+| The extension wires the editor's socket into the transport | `connector/tests/wiring.test.mjs` — with an injected facade: `activate()` registers the socket, a banner produces a `hello` carrying a generated 64-hex token, and the token is persisted |
+| The whole production path runs in CI | Same file, via `__setFacadeForTests` — this is the gap that let `globalThis.eda` ship twice (§10.10) |
+| Only one module touches the host `eda` global | `connector/tests/source-guard.test.mjs` — reads `src/*.ts`, ignores comments and string literals, and allows `eda.` only in `facade.ts`; a companion test fails if the facade stops referencing `eda` |
+| `Set token…` is gone and the menus all resolve | `connector/tests/wiring.test.mjs` — parses `extension.json`, asserts every `registerFn` is exported and that `setToken` is not among them |
+| Only one module touches the ambient `crypto` global | `connector/tests/source-guard.test.mjs` — the *same rule for the second host global*: `crypto.` is allowed only in `random.ts` and `globalThis.crypto` is forbidden everywhere, plus a companion test that fails if `random.ts` stops reading the global or stops reporting a source |
+| A host without Web Crypto still connects, and says what it used | `connector/tests/random.test.mjs` (unit: absent / no `getRandomValues` / throwing / nothing usable at all) and `connector/tests/wiring.test.mjs` (end-to-end with an injected crypto-less host: the token is still 64 hex, `math:<hex>` is persisted, the log warns, `About…` names `Math.random` and still never prints the token) |
+| `About…` explains *why* it has no token | `connector/tests/wiring.test.mjs` — a host with neither source reports `crypto=unavailable`, in the log panel and in the box |
+| A `typeof` probe is not evidence a function works | `connector/tests/random.test.mjs` — the description is produced by *calling* `getRandomValues` (asserted with a call counter) and a function that throws is reported as `crypto=getRandomValues threw TypeError`, not `crypto=ok` |
+| `About…` says whether `activate()` ever ran, and a failed one is never silent | `connector/tests/wiring.test.mjs` — `NEVER RAN` before activation, `<time> ok` after, and an injected throwing `sys_Storage` yields `activate FAILED: …` in the log panel, a toast, and `FAILED` plus the cause in the box |
+| A refused token write is reported, not swallowed | `connector/tests/config.test.mjs` — `setExtensionUserConfig` resolving `false` still yields a usable token *and* a `tokenNote` saying it was refused |
+| The token is stored under exactly one key, never a pair | `connector/tests/wiring.test.mjs` — the fake store records every key written and the assertion is `['token']`, so reintroducing a second key (the 0.2.1/0.2.2 partial-write bug, §10.19) fails the suite; `connector/tests/config.test.mjs` asserts the stored value is self-describing (`webcrypto:<hex>` / `math:<hex>`) |
+| A 0.2.2 bare-hex token still pairs after the upgrade | `connector/tests/config.test.mjs` — `ensureConnectorToken` reads a plain 64-hex value and reuses it rather than regenerating, so upgrading does not force `bridge revoke` |
+| `About…`'s `storage:` line summarises without disclosing | `connector/tests/config.test.mjs` — `describeStoredToken` over `unset` / `webcrypto:<hex>` / `math:<hex>` / legacy, asserting the summary never contains the value |
+| The extension connects even when the editor never calls `activate()` | `connector/tests/wiring.test.mjs` — with an injected facade and **no** `activate()` call, the module bootstrap registers the socket and answers the banner; since 0.2.5 this is the primary path, started at module evaluation (the one window the host measurably keeps alive, §10.20) |
+| Re-evaluating the bundle cannot open a second socket | `connector/tests/wiring.test.mjs` — the bootstrap run twice leaves exactly one registration (the claim gate); across copies the deterministic first socket id (`boardwise-1`) turns a re-registration into a no-op on the editor side |
+| The self-arm and `activate()` cannot both open a socket | `connector/tests/wiring.test.mjs` — `activate()` then the self-arm leaves exactly one registration (the shared one-shot guard); the self-arm is a no-op with no editor present, which is the Node path |
+| `About…`'s `token:` and `storage:` lines describe the same store | `connector/tests/wiring.test.mjs` — a token is installed and `about()` runs before anything else: the box reports `token: storage, 64 characters` and never `NONE` (the 0.2.3 regression, §10.21) |
+| A menu click arms the connection | `connector/tests/wiring.test.mjs` — `about()` alone leaves exactly one registration; the in-flight arm is awaited through the test seam, not slept on |
+| A missed self-arm probe is recorded, not swallowed | `connector/tests/wiring.test.mjs` — a probe told the editor is absent logs `self-arm …: editor global not reachable` and the box carries it (`self-arm: …`), so "probes ran and missed" is distinguishable from "nothing ran" |
+| The arm stands down instead of claiming a connection it did not make | `connector/tests/wiring.test.mjs` — with auto-connect off the arm records `arm stood down`, never says `self-connected`, releases its claim, and a second arm after re-enabling connects |
+| A manual connect claims the attempt | `connector/tests/wiring.test.mjs` — `reconnect()` followed by the self-arm leaves exactly one registration |
+| ~~`crypto` is not reachable from an extension realm~~ | **Withdrawn.** This was 0.2.1's diagnosis of `token: NONE`, and 0.2.1's own `About…` disproved it by reporting `crypto=ok`. Recorded here rather than deleted: the error is instructive (§10.14). `tools/probe3-crypto.js` still measures a given editor, and as of 0.2.2 it reports *usability*, not mere presence |
+
+Total: 143 Python tests (~8 s) + 95 connector tests (~1.2 s). Everything except the `eda.*`
+calls themselves is automated; §13 is what remains for a human with the editor open.
+
+Five claims are **not** automated (three hardware-only, two open):
+
+1. That the editor delivers the banner, so `hello` reaches the daemon — now **confirmed on the
+   machine** (§12, 2026-09-13), but not reproducible in CI.
+2. That `eda.sys_WebSocket` is reachable from the extension's scope — the *wiring* is tested now,
+   and both known spellings of the old bug are forbidden by source guard, but "the editor really
+   exposes it as we assume" can only be confirmed by connecting (and has been, §12).
+3. **Whether the connector's token was ever *attempted* on the machine — settled.** 0.2.0/0.2.1
+   showed `token: NONE` with `state: idle`; the first explanation ("no `crypto`") was disproved by
+   0.2.1's own probe; the 0.2.2 `activation:` line then answered the remaining question with
+   `NEVER RAN`. Kept in this list rather than deleted because the answer only arrived by asking
+   the editor directly — the two candidate causes were indistinguishable from outside (§10.14).
+4. **Whether the self-arm fires on the machine — settled by 0.2.5, accepted 2026-09-13 16:21.**
+   The interim findings (0.2.3's traceless probes; 0.2.4's menu-click chain producing zero TCP)
+   led to the module-bootstrap design, and the acceptance run closed it: full editor restart,
+   zero clicks — audit shows `connect` (with `origin: "https://client"` and the editor's
+   User-Agent, JLCEDAPro/3.2.186, Electron/41) → `pairing` (fingerprint `43b8e7a1`) → `hello
+   ok=true`, then a steady 5-second heartbeat; `bridge status` says connected; `bridge screenshot`
+   completed a real round trip. That audit line is also **004d's editor `Origin` sample** — the
+   remaining sample (a deliberate browser-console connection) is what the whitelist still waits
+   for. One nuance the run added: a menu click re-evaluates the bundle, and that fresh instance's
+   `About…` shows `state: idle` because it cannot see the long-lived instance's connection —
+   `bridge status` and the audit are the truth; and the re-evaluated bootstraps *did* reach TCP
+   twice (same token, same id, harmless), so "menu contexts always die" is a tendency, not a law.
+5. What `Origin` / `User-Agent` the editor's socket actually sends — **this is task 004c's
+   outstanding deliverable**, and the reason `check_origin` still returns `true`. The two samples
+   (one editor connection, one deliberate browser connection) belong in the run report; until
+   they exist, no rule is written.
+
+## 13. Manual verification checklist
+
+Requirements: EasyEDA Pro (engine `~3.2.0`), Node 22+, Python 3.10+ with `websockets`.
+
+**A. Build the connector**
+
+```bash
+cd connector
+npm install
+npm run build      # dist/index.js (IIFE, global edaEsbuildExportName) + dist/esm/*.mjs
+npm run package    # -> boardwise-connector-0.2.5.eext (~12 kB)
+npm test           # 95 tests, ~1.2 s
+npm run typecheck  # tsc --noEmit
+```
+
+`dist/index.js` is the artifact the editor loads; the `edaEsbuildExportName` global is what the
+official scaffolding expects. `dist/esm/` is built only so the tests can import the real modules
+without an editor, and is deliberately **not** in the `.eext`.
+
+**B. Sideload the extension**
+
+1. EasyEDA Pro → extension manager → install from a local `.eext`, or point it at the
+   `connector/` folder (manifest: `extension.json`, uuid `a08393abee5cbeb92f33e6cf2bf4b6a0`,
+   entry `./dist/index`).
+   The layout is not a guess: the working reference (`easyeda-agent-connector.eext`, which
+   installs in the same editor) is a ZIP whose root holds `extension.json`, with the bundle at
+   `dist/index.js`, and whose manifest uses the same field spellings we do — `entry: "./dist/index"`,
+   `engines.eda: "~3.2.0"`, `activationEvents.onStartupFinished`, `headerMenus`. Our archive
+   carries exactly the two entries that matter (`extension.json`, `dist/index.js`) and is verified
+   to be a well-formed ZIP matching the current build (`connector/tests/package.test.mjs`). If a
+   future editor build rejects it, install from the folder instead — the archive carries nothing
+   the folder does not.
+2. **Grant the extension "external interaction" permission.** Every `eda.*` call throws until
+   this is granted; without it the connector registers nothing and the daemon sees no connector
+   at all. This is the single most common setup failure.
+
+**C. Start the daemon**
+
+```bash
+boardwise bridge start
+# boardwise bridge: listening on 127.0.0.1:61190
+#   token file: C:\Users\<you>\.boardwise\token           <- the CLI's secret
+#   audit log:  C:\Users\<you>\.boardwise\audit
+#   pairing:    C:\Users\<you>\.boardwise\connector-token <- written on first connector connect
+#   waiting for the EasyEDA extension to connect (Ctrl-C to stop)
+```
+
+**D. Let the connector pair itself** (once)
+
+There is nothing to paste. On its first connection the connector presents a token it generated
+for itself, and the daemon — which has no paired connector yet — accepts it and remembers it
+(§3.4). The daemon prints a line naming the fingerprint:
+
+```
+boardwise bridge: paired new connector (fingerprint 3f9a1c7e); if this was not you, run: boardwise bridge revoke
+```
+
+`About…` should then read `state: connected` and show the same fingerprint. It also says **where
+the token came from** — `storage`, or `Math.random — NOT a CSPRNG` if Web Crypto was unusable
+(§9). The token value itself never appears in the log panel, the audit log or `status` — only the
+8-hex fingerprint does.
+
+**Read the box top to bottom**; each line localises a failure one step further along:
+
+```text
+boardwise connector
+activation: 14:02:11 ok            <- did the editor call us, and how did that go
+loaded: 14:02:09                   <- when this copy of the bundle was evaluated
+state: connected
+storage: readable (token=webcrypto, 64 characters)
+url: ws://127.0.0.1:61190/eda
+token: storage, 64 characters (never displayed)
+pairing: paired with the daemon (fingerprint 3f9a1c7e)
+auto-connect: on
+```
+
+**Read `activation:` first** — it is the line that resolves the oldest confusion:
+
+| `activation:` | Meaning |
+|---|---|
+| `NEVER RAN — self-connected at <time>` | The editor never called `activate()`, and the self-arm (§10.20) connected anyway. The extension works; the editor's activation event did not fire. Expected after reloading the extension without restarting the editor |
+| `NEVER RAN — …` | The editor never called `activate()` and nothing armed either. The `self-arm:` line at the bottom of the box says what the deferred probes found. Menus still work, which is what makes this look like a healthy extension. **Open `About…` once — that connects — and do a full editor restart for the clean state** |
+| `NEVER RAN — self-arm FAILED at <time>: <error>` | Both paths failed. The cause is in this line *and* in the log panel |
+| `<time> FAILED — <error>` | Activation ran and threw. The cause is in this line *and* in the log panel. This is the case that used to be completely invisible |
+| `<time> ok` / `<time> running` | Activation happened; whatever is wrong is further down (log panel, `storage:`, `token:`) |
+
+`loaded:` is when this module was evaluated. Two different times across two `About…` boxes mean the
+editor loaded the bundle twice — worth ruling out before anything else is blamed.
+
+Then `storage:` and `token:`. `storage: readable (token=unset)` means nothing is stored;
+`(token=webcrypto, 64 characters)` means a token is there, with the provenance it was created with
+— a *summary*, never the value. `token: NONE — this editor cannot generate one (crypto=…)` means
+nothing produced random bytes *and* nothing was stored; the parenthetical is the live diagnosis of
+the realm. `storage: read FAILED — …` means `eda.sys_Storage` rejected the read, which makes every
+token question moot — that is the failure the type declarations warn about for non-extension
+contexts. **The two lines must always agree** — 0.2.3 could show `token: NONE` beside a stored
+token, because the two lines read the store through different paths (§10.21); if you ever see
+that shape again on ≥ 0.2.4, it is a new bug and worth a report.
+
+**Opening `About…` arms the connection.** If activation never ran and the deferred probes found
+nothing, the menu click itself connects — menus are the one entry point measured to work without
+activation. The box you are looking at is the honest pre-arm snapshot; open it a second time to
+see the live state. The `self-arm:` line at the bottom records what the deferred probes tried
+(`+1s: editor global not reachable`, …), so "probes ran and missed" is distinguishable from
+"nothing ran" — the distinction 0.2.3 could not make (§10.20).
+
+If it reads `token: NONE … (crypto=unavailable)`, run `tools/probe3-crypto.js` in the editor's
+script console and report what it returns.
+To forget the pairing (e.g. before hand-off, or to lock an intruder out), run
+`boardwise bridge revoke`; the next connector to connect is trusted afresh. The editor-side
+equivalent is **boardwise → Re-pair on next connect**, which drops the connector's own stored
+token and offers a new one on the next connection — do both when you want a clean slate.
+
+**Check the editor log panel here.** The extension writes `[boardwise] …` lines to the editor's
+own log panel (`eda.sys_Log`) as well as to the devtools console. They name the URL it dials,
+where the token came from, and the reason for every reconnect — so a failure is diagnosable
+from inside the editor, without opening devtools.
+
+Read the lines in order; each one localises the failure further along the chain than the last:
+
+| Line | What it proves |
+|---|---|
+| `connect: url=… token=storage autoConnect=…` | the module evaluated and resolved its config — since 0.2.5 this is the bootstrap's line, not `activate()`'s (it names the token *source*, never the token value) |
+| `activate FAILED: <error>` | activation ran and threw — the reason the state never leaves `idle`. Nothing logged this before 0.2.2, which is why a failure here used to be invisible |
+| `generated a token with Math.random — crypto=unavailable` | the first run on this host: there was no usable Web Crypto, so the fallback produced the token (§9). A remark, not an error |
+| `register boardwise-1 -> ws://127.0.0.1:61190/eda` | the socket facade **was** reachable and `register` ran |
+| `sent hello (triggered by daemon banner)` | a frame came back from the daemon — the socket is up end to end |
+| `paired with the daemon, fingerprint 3f9a1c7e` | the daemon accepted the token and reports the fingerprint both sides now agree on |
+| state becomes `connected` | the transport is live and ready for actions |
+
+If the panel is empty, the extension never reached `activate()` — check the permission in B.2.
+If it stops after `activate`, the facade was not reachable: see the `is unavailable` row in F.
+
+Because the daemon speaks first, `sent hello (triggered by …)` should name `daemon banner`. If it
+instead says `onConnected`, the editor's connect callback fired this time — also fine, but the
+banner path is the one to trust.
+
+**E. Verify end to end**
+
+```bash
+boardwise bridge status
+# boardwise bridge: daemon up on 127.0.0.1:61190
+#   connector: connected            <- exit 0; "not connected" exits 1
+#   paired connector: 3f9a1c7e      <- the fingerprint the connector's About box should match
+
+boardwise bridge revoke           # forget the pairing; the next connector pairs afresh
+
+boardwise bridge screenshot shot.png --fit     # -> wrote shot.png
+boardwise bridge highlight <uuid> --color "#FF0000"   # marker appears on the canvas
+boardwise bridge highlight --clear                    # markers removed
+```
+
+Open the PNG and confirm it shows the board you have open — that is the proof the whole chain
+(dial-out socket, handshake, routing, `eda.*`) works.
+
+**F. When it does not work**
+
+| Symptom | Look at |
+|---|---|
+| `status` says daemon not reachable, exit 2 | Is `bridge start` still running? Wrong `--port` / `BOARDWISE_PORT`? |
+| `status` says connector not connected, exit 1 | Extension enabled? **External interaction granted?** → `About…` |
+| Editor log panel shows no `[boardwise]` lines at all | Nothing ran — the extension is not enabled, or the permission in B.2 is missing. Note that with the self-arm (§10.20) the panel is written to even when `activate()` never fires, so "no lines at all" now means the bundle was never evaluated |
+| `About…` says `NEVER RAN — self-connected at …` | Working as designed: the editor did not call `activate()`, and the self-arm covered it (§10.20). Nothing to fix, but it means the editor's activation event is not firing — a full restart is the clean state |
+| `About…` says `NEVER RAN — self-arm FAILED at …` | Both lanes failed and the error is on the line; the log panel carries the same message |
+| `About…` says `storage: readable (token=legacy format, …)` | A token written by 0.2.0–0.2.2, before provenance was recorded. Expected after the upgrade; it becomes `webcrypto`/`math` after the next re-pair (**Re-pair on next connect**) |
+| `About…` says `storage: readable (token=unset)` and the token question never resolves | Nothing is stored, and the log panel says why (`refused to store`, or `storing the token threw`). The 0.2.3 shape — `token: NONE` beside a *stored* token — was a bug in the box, not the store (§10.21); on ≥ 0.2.4 the two lines cannot disagree |
+| `About…` shows a `self-arm:` line with probe notes | The deferred probes ran and what each found is on the line (`+1s: editor global not reachable`, …). This is the answer 0.2.3 could not give: if the probes never left a note and nothing connected, the bundle was never evaluated; if they missed, the editor global was not bound when they fired — and opening `About…` connects anyway |
+| `About…` says `token: NONE — this editor cannot generate one (…)` and the state never leaves `idle` | **Read `activation:` first.** If it says `NEVER RAN`, the editor never called `activate()`: do a full editor restart (menus keep working without activation, which is what makes this look healthy). If it says `FAILED — …`, the cause is right there. Only if it says `ok` does the parenthetical matter: nothing produced random bytes, so nothing was dialled — run `tools/probe3-crypto.js` and report what it returns |
+| `About…` says `activation: <time> FAILED` | Activation threw and the log panel carries the same error. Before 0.2.2 this was silently swallowed |
+| `About…` says `storage: read FAILED — …` | `eda.sys_Storage` rejected a read. The type declarations warn these methods throw outside a real extension context; every token question is downstream of this |
+| `About…` says `Math.random — NOT a CSPRNG` | Working as designed: Web Crypto was unavailable and the fallback covered it (§9). Nothing to fix here — but the source is shown so you can decide |
+| `About…` shows `handshaking` | The daemon refused the hello — the presented token does not match the paired one. `boardwise bridge revoke`, then reconnect |
+| The connector loops `UNAUTHENTICATED` and nothing changed | A **stale daemon** is on the port: a long-running `bridge start` keeps the code it imported, so editing `src/` does not change what it enforces. A 0.2.0 daemon writes `origin` on every `connect` audit line — if today's `connect` lines have none, that daemon predates pairing and is still demanding the CLI token. Stop it, run `boardwise bridge start` again |
+| `About…` fingerprint differs from `boardwise bridge status` | Something else paired first (or a stale pairing): `revoke` and reconnect, and check the audit log's `pairing` line |
+| `About…` shows `connecting`, log names the URL | Daemon not listening on that port, or the URL was edited to a wrong path |
+| Log repeats `eda.sys_WebSocket is unavailable` and never shows `register …` | The extension host never handed us the socket facade — this is §3.2 (a). Check that the code resolves the API from the extension's own scope (bare `eda`), **not** `globalThis.eda` |
+| Log shows `register boardwise-N -> …` but no `sent hello` | `register` ran but nothing came back: the editor did not open the socket (permission, or the URL path) |
+| Action returns `NO_CONNECTOR` | EasyEDA closed, or the extension stopped (menu → Reconnect) |
+| Action returns `TIMEOUT` | Modal dialog / long render, or a half-open socket (§10) — try `screenshot` |
+| Everything connects but reads look empty | Is the right document focused? `document.current` shows what the editor reports |

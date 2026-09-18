@@ -1,0 +1,19 @@
+{
+  "name": "boardwise-connector",
+  "version": "0.4.3",
+  "private": true,
+  "description": "EasyEDA Pro extension that bridges the boardwise daemon to the official eda.* API.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "package": "node build.mjs && node package.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node build.mjs && node --test \"tests/**/*.test.mjs\""
+  },
+  "devDependencies": {
+    "@jlceda/pro-api-types": "^0.4.25",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
+  }
+}
