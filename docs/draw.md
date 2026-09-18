@@ -366,6 +366,39 @@ Verification steps:
    disguised text, flip to `--naming wire` and re-run: zero rework, the wire
    already carries the net.
 
+## Persistence: three states, and `draw` can only reach two (M0-P0d)
+
+"The write API said ok", "the editor's page is right" and "the file kept it" are
+three different facts. The report names which one it established, and prints the
+state with its qualifier attached:
+
+| state | established by | meaning |
+|---|---|---|
+| `not_placed` | — | nothing was written; the flow stopped before it placed anything |
+| `placed` | the netlist compare | written, and the editor's own readback agrees. **Not saved** |
+| `saved_unverified` | a `sch.doc.save` that answered ok | the editor accepted a save; nothing checked the disk |
+| `saved_verified` | a close-and-reopen that compares equal | the content reached the file |
+
+Two properties are structural, not oversights:
+
+* **`draw` tops out at `saved_unverified`.** `saved_verified` needs a reopen, and
+  the bridge cannot perform one: `doc.open` is a `read` that moves the focused tab
+  without reloading it from disk, and there is no close-project action in the
+  catalogue. The report therefore says "NOT verified on disk" out loud rather than
+  borrowing the word "saved" for a state it never reached.
+* **A timeout is not "nothing happened".** The daemon drops the pending future
+  without telling the editor to cancel (`bridge/daemon.py`, `_forward`), so a
+  timed-out write may still land. Every write the flow issues goes through a
+  timeout-aware wrapper: on a timeout it reads the page back (`sch.geometry`),
+  reports that the state is **UNKNOWN**, and never re-issues the call — a retry
+  after a write that landed is a duplicate part. The exit code for that outcome is
+  **3** ("unknown / partly done"), distinct from 2 ("nothing was executed"), and it
+  overrides a clean diff, because "the diff matched" is not "the page is right".
+
+The third state is reachable only through a human step, and
+`boardwise persistence` turns that step's result into an exit code —
+see `docs/persistence-baseline.md` for the four-scenario checklist.
+
 ## Known limits (006b scope)
 
 - The replay reproduces the golden's *drawing*, so it inherits the golden's own
