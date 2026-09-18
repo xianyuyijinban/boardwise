@@ -28,6 +28,8 @@ from boardwise.engines.draw import (
     PERSISTENCE_PLACED,
     PERSISTENCE_SAVED_UNVERIFIED,
     PERSISTENCE_SAVED_VERIFIED,
+    PERSISTENCE_UNKNOWN,
+    PERSISTENCE_WORDS,
     TIMEOUT_CODE,
     DrawAborted,
     run_draw,
@@ -831,13 +833,33 @@ class FaultClient(FakeClient):
     ``fail`` maps an action to ``(exception, times)``; ``times=None`` means
     "always". An attempt that raises is still recorded in ``calls``, so a retry
     shows up as a second entry rather than as nothing at all.
+
+    ``die_after`` models the daemon being killed: the first ``k`` calls answer
+    normally, and everything from the ``k+1``-th on fails with a disconnect.
+    That is the scenario-B shape — a *moment* the transport died, not a
+    per-action fault — and it is what makes "some writes landed and the rest are
+    unknown" reproducible offline.
     """
 
-    def __init__(self, geometry: dict, netlist: dict | None = None, *, fail=None):
+    def __init__(
+        self,
+        geometry: dict,
+        netlist: dict | None = None,
+        *,
+        fail=None,
+        die_after: int | None = None,
+    ):
         super().__init__(geometry, netlist)
         self.fail = dict(fail or {})
+        self.die_after = die_after
 
     async def call(self, action: str, params=None) -> dict:
+        if self.die_after is not None and len(self.calls) >= self.die_after:
+            self.calls.append((action, params or {}))
+            raise BridgeError(
+                ErrorCodes.DISCONNECTED,
+                f"the daemon connection closed while {action!r} was in flight",
+            )
         plan = self.fail.get(action)
         if plan is not None:
             exc, times = plan
@@ -897,7 +919,11 @@ def test_a_timed_out_write_reads_the_page_back_and_is_never_retried():
         assert not record.ok
         assert "UNKNOWN" in record.summary
         assert "nothing was retried" in record.summary
-        assert "may have landed" in record.detail
+        assert "may still have landed" in record.detail
+        # The reason covers both failure shapes, because the readback is what
+        # makes either one safe to report as unknown.
+        assert "not a cancellation" in record.detail
+        assert "not a failed write" in record.detail
 
     assert [r.action for r in result.timeouts] == ["sch.place_component"] * 2
 
@@ -1042,6 +1068,136 @@ def test_a_partly_written_page_never_reaches_saved_unverified_over_a_timeout():
 
 
 # --------------------------------------------------------------------------
+# M0-P0d follow-up: a transport death is not "nothing was written"
+# --------------------------------------------------------------------------
+
+
+def test_a_transport_death_never_claims_nothing_was_written():
+    """Scenario B, reproduced: the daemon dies after writes have landed.
+
+    Measured on the real host 2026-09-18 — `taskkill` on the daemon mid-draw left
+    five parts on the page, and the report said
+    `persistence: not_placed — nothing was written`. A reader who believed it
+    would redraw onto a page that already had them, ending with two sets of parts
+    on one sheet. `not_placed` asserts an *absence*, so it may only be reached
+    with evidence of the absence: zero writes acknowledged and none unanswered.
+    """
+    client = FaultClient(_geo(), die_after=5)
+    result = _run(run_draw(
+        client, _golden_model(), confirm=lambda: True, offsets=GOLDEN_OFFSETS,
+    ))
+
+    assert result.persistence == PERSISTENCE_UNKNOWN, result.persistence
+    assert result.persistence != PERSISTENCE_NOT_PLACED
+    assert "nothing was written" not in PERSISTENCE_WORDS[result.persistence]
+
+    # The parts really are on the page: the report has to say so.
+    acknowledged = [r.action for r in result.acknowledged_writes]
+    assert acknowledged.count("sch.place_component") == 2, acknowledged
+    assert "sch.doc.new" in acknowledged, acknowledged
+    assert result.unknown_writes, "the writes that never answered are listed too"
+
+
+def test_the_dead_transport_is_never_read_as_an_empty_page():
+    """A readback that cannot happen must say so, not report zero.
+
+    The connection is gone, so the look itself fails — and "we could not look"
+    is the one answer that must never be rendered as "there is nothing there".
+    """
+    client = FaultClient(_geo(), die_after=5)
+    result = _run(run_draw(
+        client, _golden_model(), confirm=lambda: True, offsets=GOLDEN_OFFSETS,
+    ))
+
+    looks = [
+        r for r in result.records
+        if r.action == "sch.geometry" and "read the page back" in r.summary
+    ]
+    assert looks, "the flow must at least try to look"
+    assert all(not r.ok for r in looks), "the socket is dead; the look cannot succeed"
+
+    unknown = [r for r in result.records if r.action.startswith("persistence.")]
+    assert unknown, unknown
+    detail = " ".join(r.detail for r in unknown)
+    assert "could not look" in detail or "there is nothing to read" in detail, detail
+    assert "0 component(s)" not in detail, (
+        "an unanswerable readback must never be phrased as a count"
+    )
+
+
+def test_the_page_is_looked_at_once_not_once_per_write():
+    """A dead socket has one story; repeating it per write buries the one row.
+
+    The first unknown write gets a real look. After that the flow records that it
+    did not look again, and says why — which is information, not silence.
+    """
+    client = FaultClient(_geo(), die_after=5)
+    result = _run(run_draw(
+        client, _golden_model(), confirm=lambda: True, offsets=GOLDEN_OFFSETS,
+    ))
+
+    looks = [
+        r for r in result.records
+        if r.action == "sch.geometry" and "read the page back" in r.summary
+    ]
+    assert len(looks) == 1, [r.summary for r in looks]
+    assert len(result.unknown_writes) >= 2, "more than one write went unanswered"
+    skipped = [
+        r for r in result.records
+        if r.action.startswith("persistence.") and "nothing to read" in r.detail
+    ]
+    assert skipped, "later writes must say the transport was already known to be gone"
+
+
+def test_the_writes_are_never_reissued_after_a_transport_death():
+    """The no-retry rule, on the disconnect path."""
+    client = FaultClient(_geo(), die_after=5)
+    result = _run(run_draw(
+        client, _golden_model(), confirm=lambda: True, offsets=GOLDEN_OFFSETS,
+    ))
+    actions = [a for a, _p in client.calls]
+    assert actions.count("sch.doc.new") == 1
+    assert actions.count("sch.place_component") == 2
+    assert actions.count("sch.place_wire") == len(result.plan.wires)
+
+
+def test_a_death_on_the_first_write_is_unknown_too():
+    """A disconnect on the page creation is not evidence that no page was made.
+
+    `sch.doc.new` timed out or lost its answer means the page may well exist, so
+    the run cannot claim the page was never touched either.
+    """
+    client = FaultClient(_geo(), die_after=0)
+    result = _run(run_draw(
+        client, _golden_model(), confirm=lambda: True, offsets=GOLDEN_OFFSETS,
+    ))
+    assert result.persistence == PERSISTENCE_UNKNOWN, result.persistence
+    assert result.acknowledged_writes == []
+    assert [r.action for r in result.unknown_writes] == ["sch.doc.new"]
+
+
+def test_not_placed_still_belongs_to_a_refusal_before_any_write():
+    """The guard on the other side: an *answer* of no is not an unknown.
+
+    A refusal leaves no doubt — nothing was written — so `not_placed` stays
+    correct, and must stay reachable, or the state would become unusable.
+    """
+    client = FaultClient(
+        _geo(),
+        fail={"sch.doc.new": (
+            BridgeError(ErrorCodes.CONNECTOR_ERROR, "the editor refused"), None
+        )},
+    )
+    result = _run(run_draw(
+        client, _golden_model(), confirm=lambda: True, offsets=GOLDEN_OFFSETS,
+    ))
+    assert result.persistence == PERSISTENCE_NOT_PLACED
+    assert result.acknowledged_writes == []
+    assert result.unknown_writes == []
+    assert "not one write was acknowledged" in PERSISTENCE_WORDS[PERSISTENCE_NOT_PLACED]
+
+
+# --------------------------------------------------------------------------
 # the CLI half: the exit code and the audit record must carry the same answer
 # --------------------------------------------------------------------------
 
@@ -1083,6 +1239,62 @@ def test_a_timed_out_write_cannot_finish_green(capsys):
     assert code == 3, "a timeout may not exit 0 through a clean diff"
     assert "the page's state" in printed and "UNKNOWN" in printed
     assert "persistence:" in printed
+
+
+def test_a_transport_death_cannot_finish_green_and_names_what_landed(capsys):
+    """Exit 3, and the report says which writes are on the page (M0-P0d follow-up).
+
+    The interrupted run's exit code used to come out 1 (no diff ran), which is
+    merely non-zero and says the wrong thing: the diff did not disagree, it never
+    ran. 3 is the semantically right code — the state is unknown — and it has to
+    outrank both 0 and 1, because "the diff differed" is also a claim about a
+    page whose contents are no longer certain.
+    """
+    from boardwise.cli import _render_draw_result
+
+    client = FaultClient(_geo(), die_after=5)
+    result = _run(run_draw(
+        client, _golden_model(), confirm=lambda: True, offsets=GOLDEN_OFFSETS,
+    ))
+    assert result.comparison is None, "no diff ran in this scenario"
+
+    code = _render_draw_result(result, _draw_args())
+    printed = capsys.readouterr().out
+    assert code == 3, "an interrupted run may not exit 1 as if the diff disagreed"
+    assert "persistence: unknown" in printed
+    assert "nothing was written" not in printed
+    assert "were acknowledged before the run stopped" in printed
+    assert "do NOT" in printed, "the reader must be warned before redrawing"
+    assert "sch.place_component" in printed
+
+
+def test_the_audit_log_alone_contradicts_nothing_was_written(tmp_path, monkeypatch):
+    """The log has to answer this without the terminal scrollback.
+
+    The daemon's own per-action records say `ok` and nothing about persistence,
+    and the save payload never reaches them (audit F). So the `draw.persistence`
+    line carries the count of acknowledged writes — the field a reader checks to
+    see whether the page was touched.
+    """
+    from boardwise import cli as cli_module
+    from boardwise.bridge import daemon as daemon_module
+
+    monkeypatch.setattr(daemon_module, "BOARDWISE_HOME", tmp_path)
+    client = FaultClient(_geo(), die_after=5)
+    result = _run(run_draw(
+        client, _golden_model(), confirm=lambda: True, offsets=GOLDEN_OFFSETS,
+    ))
+    cli_module._audit_draw_persistence(result, 3)
+
+    record = json.loads(
+        next((tmp_path / "audit").glob("*.jsonl")).read_text(encoding="utf-8")
+    )
+    assert record["persistence"] == PERSISTENCE_UNKNOWN
+    assert record["writesAcknowledged"] == len(result.acknowledged_writes)
+    assert record["writesAcknowledged"] >= 3, "the page really was touched"
+    assert record["writesUnknown"], "the unanswered writes are named"
+    assert record["saveVerified"] is False
+    assert "saved" not in record
 
 
 def test_a_clean_run_without_timeouts_still_exits_zero(capsys):

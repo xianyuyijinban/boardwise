@@ -560,6 +560,13 @@ class ErrorCodes:
     CONNECTOR_ERROR = "CONNECTOR_ERROR"
     #: The connector did not answer in time.
     TIMEOUT = "TIMEOUT"
+    #: The daemon connection died before an answer arrived. Raised by the
+    #: **client**, never by the daemon: once the socket is gone nobody is left to
+    #: answer. It exists as its own code because "the transport died" and "the
+    #: action failed" are not the same fact — a write whose answer never came may
+    #: still have landed in the editor, and a caller that cannot tell them apart
+    #: will report a half-drawn page as untouched (M0-P0d follow-up, 2026-09-18).
+    DISCONNECTED = "DISCONNECTED"
     #: Anything else; ``error.message`` carries the text.
     INTERNAL = "INTERNAL"
 

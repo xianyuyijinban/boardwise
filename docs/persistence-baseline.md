@@ -13,15 +13,22 @@
 
 | state | what it is | who can establish it |
 |---|---|---|
+| `not_placed` | **no** write was acknowledged — the page was never touched | `draw` |
+| `unknown` | the run stopped with writes acknowledged or unanswered, so what is on the page cannot be stated | `draw` |
 | `placed` | written, and the editor's own readback agrees | `draw` (the netlist compare) |
 | `saved_unverified` | the save API answered ok, nothing checked the disk | `draw` |
 | `saved_verified` | content survived a close-and-reopen and compared equal | **only scenario A** |
 
-Only the third is "persisted". `draw` can never reach it — `doc.open` moves the
-focused tab without reloading it from disk, and there is no close-project action
-in the protocol (`doc.list` / `doc.open` are the whole document surface) — so it
-prints its state name with the qualifier spelled out, and scenario A is how the
-third state gets established.
+Only `saved_verified` is "persisted". `draw` can never reach it — `doc.open` moves
+the focused tab without reloading it from disk, and there is no close-project
+action in the protocol (`doc.list` / `doc.open` are the whole document surface) —
+so it prints its state name with the qualifier spelled out, and scenario A is how
+the third state gets established.
+
+`not_placed` and `unknown` are the pair to keep straight, because they are what a
+reader acts on. `not_placed` asserts an **absence**, so it needs evidence of the
+absence; `unknown` is what an interrupted run gets, and it always comes with the
+list of writes that landed (scenario B).
 
 ## Before you start
 
@@ -126,24 +133,51 @@ Expected: a `persistence.verified` record with `"persistence": "saved_verified"`
 **What it proves:** a dead transport is reported as unknown, and **nothing is
 replayed** afterwards.
 
+> **Measured 2026-09-18 (first run of this checklist).** `taskkill //F` on the
+> daemon mid-draw left **5 parts on the P4 page** (audit log: `sch.doc.new` ×1 and
+> `sch.place_component` ×5 acknowledged), and the draw report said
+> `persistence: not_placed — nothing was written`. That was a **lie**, and the
+> most dangerous kind this milestone can tell: a reader who believed it would
+> redraw onto a page that already had the parts, ending with two sets of them on
+> one sheet. Root cause and fix are in `tasks/009d-persistence-baseline.md`
+> (follow-up section): a disconnect was not treated as "outcome unknown", and
+> `not_placed` was inferred from "the run did not finish looking". The exit code
+> in that first run was not captured (a shell artefact — the pipeline's `$?`
+> reported `tail`'s status, not the draw's), so **B3 below is still to be run.**
+>
+> **B3 measured 2026-09-18 (second run, after the 009d2 fix).** The daemon was
+> `taskkill //F`'d mid-draw again, with the exit code captured to a file — no
+> pipe in between. The draw reported `persistence: unknown — the run stopped
+> before the page could be read back`, listed **7 acknowledged writes** by name
+> (`sch.doc.new` ×1, `sch.place_component` ×6) as "their content IS on the
+> page", and **104 unanswered writes** with an explicit "do NOT assume they are
+> absent, and do not redraw onto this page" warning. **Exit code: 3.** The
+> first run's lie — `not_placed — nothing was written` with parts on the page —
+> is gone. Verdict: **pass**.
+
 ### B1. Start a draw, then kill the daemon while it runs
 
 ```bash
 # terminal 1
 PYTHONPATH=src ./.venv/Scripts/python -m boardwise.cli draw \
     --from tests/fixtures/ch340_golden.epro2 --yes
+# record the exit code properly — no pipe between the command and $?
+echo "draw exit: $?"
 # terminal 2, a few seconds in — the daemon runs in its own process:
 # Ctrl-C the `bridge start` process (or close its window).
 ```
 
 Expected in terminal 1: failed actions reported per action with the transport
-error, and the run ending non-zero. Judgement: the report **names the action that
-died** and does not claim success.
+error, and the run ending **non-zero**. Judgement: the report **names the action
+that died**, does not claim success, and does **not** say "nothing was written".
 
 ### B2. Look before touching anything
 
+Note the time before the run, so the log excerpt below can be scoped to it:
+
 ```bash
-PYTHONPATH=src ./.venv/Scripts/python -m boardwise.cli draw --help >/dev/null; \
+export RUN_STARTED_AT=$(PYTHONPATH=src ./.venv/Scripts/python -c "import time; print(time.time())")
+# ... now run B1 ...
 PYTHONPATH=src ./.venv/Scripts/python -m boardwise.cli bridge start   # terminal 3
 PYTHONPATH=src ./.venv/Scripts/python -m boardwise.cli bridge status
 ```
@@ -158,7 +192,7 @@ counts = collections.Counter()
 for path in sorted(home.glob('*.jsonl')):
     for line in path.read_text(encoding='utf-8').splitlines():
         rec = json.loads(line)
-        if rec.get('ts', 0) > float(os.environ.get('RUN_STARTED_AT', 0)):
+        if rec.get('ts', 0) > float(os.environ['RUN_STARTED_AT']):
             counts[rec.get('action')] += 1
 print(counts['sch.doc.new'], 'x sch.doc.new', counts['sch.place_component'], 'x place_component')
 "
@@ -166,6 +200,18 @@ print(counts['sch.doc.new'], 'x sch.doc.new', counts['sch.place_component'], 'x 
 
 Judgement: **one** `sch.doc.new` for the aborted run — a second one means
 something retried a create. Then, and only then, decide by hand whether to redraw.
+
+### B3. The report must not call the page untouched
+
+Two lines of the report carry the verdict; read them, not the impression:
+
+* `persistence:` must be **`unknown`**, never `not_placed`. `not_placed` asserts
+  that no write was acknowledged, and the audit line above just proved otherwise;
+* it must list the **acknowledged** writes ("their content IS on the page") and the
+  **unanswered** ones, and warn against redrawing onto the page;
+* the exit code must be **3** — unknown, not "the diff disagreed". Record it with
+  `echo "draw exit: $?"` and no pipe in between, which is how the first run of
+  this checklist lost the number.
 
 ---
 

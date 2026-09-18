@@ -583,3 +583,81 @@ def test_update_connector_refuses_a_payload_beyond_the_frame_cap(
     assert code == 2
     assert _RecordingClient.opened is None
     assert "MAX_FRAME_BYTES" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------
+# the client normalises a dead transport into DISCONNECTED (M0-P0d follow-up)
+# --------------------------------------------------------------------------
+
+
+def _abnormal_closure() -> BaseException:
+    """A real ``ConnectionClosedError`` — the shape a killed daemon produces.
+
+    Built through the library's own frames rather than a stub class, because the
+    point of the test below is that the *real* exception type is caught: a
+    hand-rolled stand-in would pass even if `client.call` only caught its parent
+    by accident.
+    """
+    import importlib
+
+    from websockets.exceptions import ConnectionClosedError
+
+    frames = importlib.import_module("websockets.frames")
+    return ConnectionClosedError(frames.Close(1006, "abnormal closure"), None)
+
+
+class _DeadSocket:
+    """A socket whose ``send`` fails the way a killed daemon makes it fail."""
+
+    def __init__(self, error: BaseException) -> None:
+        self.error = error
+        self.sent: list = []
+
+    async def send(self, payload):
+        self.sent.append(payload)
+        raise self.error
+
+    async def close(self):
+        return None
+
+
+@pytest.mark.parametrize(
+    "error_factory",
+    [_abnormal_closure, lambda: ConnectionResetError("connection reset by peer")],
+    ids=["connection-closed", "os-error"],
+)
+def test_a_dead_transport_becomes_a_disconnected_code(error_factory):
+    """The draw flow branches on a code, so the code has to exist.
+
+    `engines/` does not import `bridge/`, so it cannot know about
+    `websockets.ConnectionClosed`; it reads the error's `code` by string instead.
+    That makes this layer responsible for turning every transport death into that
+    one code — without it, a write whose connection died looks exactly like an
+    action the editor refused, and the page's state gets reported as untouched
+    (measured 2026-09-18: five parts on the page, "nothing was written").
+    """
+    import boardwise.bridge.client as client_module
+    from boardwise.bridge.protocol import BridgeError, ErrorCodes
+
+    socket_ = _DeadSocket(error_factory())
+    client = client_module.BridgeClient(socket_, "token", "cli")
+
+    with pytest.raises(BridgeError) as excinfo:
+        asyncio.run(client.call("sch.place_component", {"x": 1, "y": 2}))
+
+    assert excinfo.value.code == ErrorCodes.DISCONNECTED
+    assert "sch.place_component" in excinfo.value.message
+    assert excinfo.value.detail["action"] == "sch.place_component"
+    assert socket_.sent, "the request really was attempted before the socket died"
+
+
+def test_closing_a_socket_that_is_already_gone_is_not_an_error():
+    """`close()` runs from a `finally`, including on the daemon-died path.
+
+    Raising there would replace a failed-but-reported draw with a traceback and
+    lose the report that says which writes are unaccounted for.
+    """
+    import boardwise.bridge.client as client_module
+
+    client = client_module.BridgeClient(_DeadSocket(_abnormal_closure()), "token", "cli")
+    asyncio.run(client.close())  # must not raise

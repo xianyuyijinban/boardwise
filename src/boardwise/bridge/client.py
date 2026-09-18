@@ -63,10 +63,27 @@ class BridgeClient:
         }, id="hello")
 
     async def call(self, action: str, params: dict[str, Any] | None = None, *, id: str | None = None) -> Any:
-        """Send one request and return ``data``; raises :class:`BridgeError`."""
+        """Send one request and return ``data``; raises :class:`BridgeError`.
+
+        A transport death is normalised into ``BridgeError(DISCONNECTED)`` right
+        here, because this is the only layer that knows about ``websockets``. It
+        matters beyond tidiness: a write whose connection died mid-flight may
+        still have reached the editor, so a caller must be able to tell "the
+        daemon went away" apart from "the action failed" — the draw flow reads
+        exactly that code to decide whether the page's state is unknown rather
+        than assuming nothing happened (M0-P0d follow-up, 2026-09-18).
+        """
         frame_id = id or new_id()
-        await self._websocket.send(request_frame(action, params, id=frame_id))
-        frame = await self._recv_response()
+        try:
+            await self._websocket.send(request_frame(action, params, id=frame_id))
+            frame = await self._recv_response()
+        except (websockets.ConnectionClosed, OSError) as exc:
+            raise BridgeError(
+                ErrorCodes.DISCONNECTED,
+                f"the daemon connection closed while {action!r} was in flight "
+                f"({type(exc).__name__}); the action's outcome is unknown",
+                {"action": action, "frameId": frame_id, "cause": type(exc).__name__},
+            ) from exc
         if frame.get("ok"):
             return frame.get("data")
         error = frame.get("error") or {}
@@ -91,7 +108,17 @@ class BridgeClient:
                 return frame
 
     async def close(self) -> None:
-        await self._websocket.close()
+        """Close the socket; a socket that is already gone is not an error.
+
+        `close()` runs from a `finally` in the CLI, including on the path where
+        the daemon died mid-run — so raising here would replace a failed-but-
+        reported draw with a traceback, losing the report that says *which*
+        writes are unaccounted for.
+        """
+        try:
+            await self._websocket.close()
+        except (websockets.ConnectionClosed, OSError):
+            pass
 
 
 async def connect_client(uri: str, token: str, role: str, client: str = "") -> BridgeClient:
