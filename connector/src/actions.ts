@@ -2614,6 +2614,106 @@ export const exportRender: ActionHandler = async (params, eda) => {
 };
 
 /**
+ * `sch.place_wire`'s retry budget — and why it is these two numbers.
+ *
+ * The editor rejects `sch_PrimitiveWire.create` **synchronously** while a
+ * post-netlist lock window is open (measured 2026-09-18, host 3.2.186, pro-api
+ * 0.3.18, connector 0.4.4): inside the window `create` throws `create failed!`
+ * in 1-3 ms, while the *same* call with the *same* arguments succeeds before
+ * the probe and again about five seconds after it. The audit timeline of the
+ * run that found it (`~/.boardwise/audit/2026-09-18.jsonl`) reads
+ * `place_component x3 OK -> doc.save 46ms -> netlist 4933ms -> place_wire x10
+ * BAD (1-2ms each) -> place_power x3 OK`. The draw flow validates the page
+ * *before* it wires, so every wire of a 10-run block met the window head-on;
+ * the flags survived the same window by accident, each one spending 1.4-3.0 s
+ * resolving a library glyph.
+ *
+ * A retry is the right answer for *this* failure because it is a rejection,
+ * not a write that half-landed: the same arguments land a clean wire moments
+ * later. Contrast `sch.place_netlabel` below, where the call can hang **and**
+ * land, so a blind retry there would stack duplicate markers.
+ *
+ * The budget sits above the window the probe measured (closed before +5 s) and
+ * well under the daemon's 30 s `ACTION_TIMEOUT`, so the connector's own answer
+ * — not a daemon-side hang-up — is what reaches the caller.
+ *
+ * Only `sch.place_wire` is retried. Its siblings in the same family
+ * (`place_netlabel` / `place_text` / `place_netport` / `place_power`) have
+ * **not** been probed against the window, and a retry is only added to a write
+ * that was *measured* to fail inside it — so they keep their current behaviour
+ * until that audit is run. `place_power` is the one that survived the measured
+ * run, but it did so by taking 1.4-3.0 s per flag, which is luck rather than
+ * evidence.
+ */
+const WIRE_CREATE_RETRY_DELAY_MS = 500;
+const WIRE_CREATE_RETRY_BUDGET_MS = 10_000;
+
+/** The text a thrown value carries, whether it is an `Error` or a bare value. */
+function errorText(error: unknown): string {
+  if (error && typeof error === 'object' && 'message' in error) {
+    return String((error as { message: unknown }).message);
+  }
+  return String(error);
+}
+
+/**
+ * Is this the editor's synchronous `create failed!` rejection?
+ *
+ * Structural, on the message: the host throws a bare `Error` and its text is
+ * the only thing it carries, so there is no `code` to test. The match is on the
+ * *whole* message (trimmed, case-insensitive) — exactly the shape the probe
+ * pinned — so a different failure that merely mentions the phrase is not
+ * retried by accident; anything unrecognised reaches the caller unchanged.
+ */
+function isCreateRejection(error: unknown): boolean {
+  return errorText(error).trim().toLowerCase() === 'create failed!';
+}
+
+/**
+ * Call `attempt` until it survives {@link isCreateRejection}, or the budget runs out.
+ *
+ * Only that rejection is retried. A `BAD_REQUEST` about the parameters, or a
+ * `NOT_IMPLEMENTED` for an API this editor version does not expose, is thrown
+ * on the spot because no amount of waiting fixes it — which is also why the
+ * caller resolves `requireFn` *outside* the loop: the point is to retry the
+ * window, not the wiring.
+ *
+ * No attempt starts at or after the budget (`BUDGET - DELAY` is the last start
+ * time), so one wire action occupies the daemon's action slot for ~10 s at
+ * worst, and the total wall time stays under it plus a single host call. On
+ * exhaustion the error carries the attempt count and the elapsed time, because
+ * the bare `create failed!` it replaces says neither.
+ */
+async function withCreateRetry<T>(label: string, attempt: () => T | Promise<T>): Promise<T> {
+  const startedAt = Date.now();
+  let attempts = 0;
+  for (;;) {
+    attempts += 1;
+    try {
+      return await settle(attempt());
+    } catch (error) {
+      if (!isCreateRejection(error)) throw error;
+      const elapsedMs = Date.now() - startedAt;
+      if (elapsedMs + WIRE_CREATE_RETRY_DELAY_MS >= WIRE_CREATE_RETRY_BUDGET_MS) {
+        throw new ActionError(
+          'CONNECTOR_ERROR',
+          `${label}: the editor rejected create ${attempts} time(s) over ${elapsedMs} ms `
+            + `(retry every ${WIRE_CREATE_RETRY_DELAY_MS} ms, budget `
+            + `${WIRE_CREATE_RETRY_BUDGET_MS} ms); last rejection: ${errorText(error)}`,
+          {
+            attempts,
+            elapsedMs,
+            retryDelayMs: WIRE_CREATE_RETRY_DELAY_MS,
+            budgetMs: WIRE_CREATE_RETRY_BUDGET_MS,
+          },
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, WIRE_CREATE_RETRY_DELAY_MS));
+    }
+  }
+}
+
+/**
  * `sch.place_wire` — one wire polyline, optionally carrying a net name.
  *
  * `points` is `[[x, y], …]` (2+). **The editor's `create` rejects the pair
@@ -2623,6 +2723,11 @@ export const exportRender: ActionHandler = async (params, eda) => {
  * is the form that works. The wire's `net` parameter is passed through; the
  * draw flow additionally names nets with net ports, so a host that ignores
  * the wire net still ends up with correctly named nets.
+ *
+ * That same text is also what the post-netlist lock window produces, and by the
+ * time the call is made the parameters are already flat, so a rejection here is
+ * the window (see {@link WIRE_CREATE_RETRY_DELAY_MS}); the call is therefore
+ * retried on that shape alone.
  */
 export const schPlaceWire: ActionHandler = async (params, eda) => {
   await guardPage(eda, params.pageUuid);
@@ -2644,9 +2749,10 @@ export const schPlaceWire: ActionHandler = async (params, eda) => {
   const flat: number[] = [];
   for (const [x, y] of points) flat.push(x, y);
   const net = typeof params.net === 'string' && params.net ? params.net : undefined;
-  const created: any = await settle(
-    requireFn(eda, 'sch_PrimitiveWire.create')(flat, net),
-  );
+  // `requireFn` outside the retry: a missing API cannot start existing, and
+  // retrying it would only delay the structured NOT_IMPLEMENTED.
+  const create = requireFn(eda, 'sch_PrimitiveWire.create');
+  const created: any = await withCreateRetry('sch.place_wire', () => create(flat, net));
   const uuid = await getState(created, 'PrimitiveId');
   if (uuid == null) {
     throw new ActionError(
