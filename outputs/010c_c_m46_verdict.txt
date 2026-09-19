@@ -1,0 +1,7 @@
+pins whose stored y is 0  :  38   (uninformative: -0 == 0 both ways)
+pins whose stored y is != 0:  44   <-- the only half that can answer
+     parser == stored       : 0
+     parser == stored negated: 44
+
+VERDICT: every informative pin is negated -> the parser negates a
+         SYMBOL PIN's stored y. Appendix C's prediction holds.

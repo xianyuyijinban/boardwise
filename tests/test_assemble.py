@@ -144,9 +144,12 @@ def test_the_assembled_content_fits_the_declared_sheet(design):
     extent = design.bbox_file()
     assert extent is not None
     x0, y0, x1, y1 = extent
-    # file space: the sheet is y in [-height, 0]
+    # Canvas space (task 010c): the sheet is y in [0, height], because file space
+    # and the canvas are now the same y-up space. This assertion used to read
+    # `y in [-height, 0]`, which was the mirrored frame the convention change
+    # removed — and the spec's block positions moved with it.
     assert x0 >= 0 and x1 <= SHEET.x1
-    assert y0 >= -SHEET.y1 and y1 <= 0
+    assert y0 >= 0 and y1 <= SHEET.y1
     assert (x1 - x0) < SHEET.x1 - 2 * FRAME
     assert (y1 - y0) < SHEET.y1 - 2 * FRAME
 

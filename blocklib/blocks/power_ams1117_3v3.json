@@ -9,19 +9,38 @@
     "designators": [],
     "note": "The datasheet has no application *circuit* figure, only prose and Figure 3 (the Kelvin connection for load regulation, which is about *where* to tap the output, not about which parts are present). So the topology here is the textbook three-terminal fixed-regulator arrangement and only the two numbers come from the datasheet: the 22uF output capacitor the Stability section requires, and the pin connection. Both are cited per-parameter. The input capacitor value is NOT from the datasheet (it does not state one) and is marked accordingly. The PDF is named in the brief's input folder; the full relative path is deliberately not written here so this file cannot be read as touching the answer side, and a draft must stay usable no matter where the input tree is mounted."
   },
-  "origin_file": [0.0, 0.0],
-  "bbox_file": [0.0, 0.0, 0.0, 0.0],
+  "origin_file": [
+    0.0,
+    0.0
+  ],
+  "bbox_file": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
   "notes": [
-    "origin_file and bbox_file are 0 because there was no cut: nothing was extracted from a board. A datasheet-extract block has no source coordinates. Its components sit at the positions the author placed them (a signed layout, not a solved one), and connectivity is carried by the anchors the assembler synthesises per pin endpoint — a one-cell stub and a power/ground flag on every rail endpoint, a net label on every signal endpoint. 2026-09-17 ruling; see engines/assemble.py.",
+    "origin_file and bbox_file are 0 because there was no cut: nothing was extracted from a board. A datasheet-extract block has no source coordinates. This block nevertheless carries geometry (2026-09-18, task 010) — wires and flags drawn by hand on the layout below, not replayed from a measurement — so the assembler takes the 'block with geometry' path: every port's `position` below must be one of those flags, and a rail port whose flag is missing is an error rather than something to synthesise a point for. See docs/blocks.md, 'Anchors: two paths'.",
+    "The geometry is the textbook three-terminal-regulator idiom, drawn orthogonal with at most one bend per leg: +5V comes in on the left along y=130, VCC leaves on the right along y=130, and a GND bus runs along the bottom at y=65 with both capacitors dropping into it. Exactly one flag per net names each rail (+5V at the west end of its trunk, VCC at the east end of its, GND on the bus) — there is no per-pin flag. The three port positions are those three flag anchors, because on a block with geometry a port doubles as the anchor its name is drawn at.",
+    "No run crosses a symbol body. With the rotations applied, U1 occupies [85,85,155,115] file space, C1 [17,100,33,120] and C2 [207,100,223,120]. The horizontal runs sit at y=130 (above every body's y span) or y=65 (below them); the vertical legs run at x=25, 50, 60, 180, 215, of which only 25 and 215 fall inside a body's x span, and there they are confined to y in [65,90], below the capacitors' [100,120]. tests/test_ams1117_idiom.py asserts this corner by corner instead of resting on this sentence.",
+    "Each capacitor pin that lands on a rail is a wire-run *endpoint*, not a point in the middle of one run: the VCC trunk is written as two runs meeting at C2's pin-2 tip, and C1's +5V leg ends at its pin-2 tip. One measured hazard decides that split — handing geometry over as runs that all *end* at a junction is what the editor itself does, while a pin landing in the interior of a single run is the shape whose netlist came back not connected (measured 2026-09-15; engines/replay.py::split_at_junctions). The GND bus passes *through* its flag's anchor instead, which is a name rather than a connection.",
+    "Flag rotations are read off the golden page's own four flags (the task 008a board, cut into blocklib/blocks/ch340_core.json): a ground flag whose wire arrives from below carries rotation 0 with its glyph above the anchor; one whose wire arrives from above carries 180 with the glyph below; one at a wire's west end carries 270 with the glyph west; and the VCC flag whose wire arrives from above carries 0 with its glyph below. So the angle is chosen so the glyph points *away* from the wire's extent. Applied here: +5V's flag at the west end of an eastward trunk takes 90 (glyph west), VCC's at the east end of a westward trunk takes 270 (glyph east), and GND's takes 180 — the ruling's 'pointing down', with the bus running through it and the glyph below.",
+    "The flags carry no symbol uuid on purpose. A flag's uuid reaches nothing but the replay's annotation-box prediction (engines/replay.py; `sch.place_power` takes kind + net and the editor resolves the glyph — pinned by tools/_probe_flag_anchor.py), and this block was not cut from a board, so it has no measured glyph to cite; writing a library uuid here would be copying one off another board. The predicted box for these three is therefore a net-name text band at the anchor — the same prediction a geometry-less block's synthesised flags get. Where the glyph actually lands is the editor's business and a real-host question.",
+    "U1 pin 2 carries no net on purpose: on SOT-223, pin 2 and the tab (pin 4) are one piece of metal, and the tab is bonded to VCC — so pin 2 is already connected inside the package and is left off the page. It is written as an empty net rather than a net of its own, and an unconnected pin gets no anchor at all (the assembler skips exactly these pins when it would otherwise name every endpoint), so no flag or label is drawn for it.",
+    "C1 and C2 are mounted vertically at rotation 90, which puts pin 2 at the top. CAP-2PIN's pin 2 sits at symbol-local (+20, 0), and the file's rotation is counter-clockwise in the canvas's y-up frame (core.geometry.transform_point), so CCW-90 sends it to (0, +20) — straight up. The editor reaches the same geometry because engines/draw.py::_editor_rotation negates the angle at the API boundary: the editor API's own rotation is clockwise (measured on the live editor, task 010c's M4, 2026-09-19), the file's is counter-clockwise, and the two are opposite by construction. 270 would land the pin in the same place — CW-270 and CCW-90 are the same turn, which is exactly why the rotation value alone cannot tell the two conventions apart. 010c's appendix B briefly flipped this block to 270 on that ambiguity and then reverted it: the golden board settles the convention, and under the wrong one every two-pin passive swaps its pads (tests/test_calibration.py, comparing the real editor's own netlist export against a parse of .epro2). The pin/net table matches this mount: pin 2 (the +y pad) onto the rail, pin 1 onto the GND bus. An MLCC is unpolarised, so which pad goes to the rail is the drawing's choice; keeping the earlier pin-1-on-the-rail table instead would put every net name on the wrong pad, which is what the netlist assertions in tests/test_ams1117_idiom.py would catch.",
     "The datasheet's Stability section says an output capacitor is *required* ('the circuit design used in the AMS1117 series requires the use of an output capacitor as part of the device frequency compensation'), so the capacitor is part of the block rather than a decoupling afterthought.",
     "The same section says the AMS1117 'does not need any protection diodes' between ADJ/VOUT/VIN. No such diodes are drawn — this is an intentional absence with a citation, not an omission.",
-    "Symbol offsets MEASURED on-canvas on 2026-09-17 via `sch.component_pins` on the real placed devices (U1 = C6186, symbol uuid 06f50e10ab7d460599b3fe3ee8717a78; C1/C2 = C6119889; placement rotation 0, mirror false), canvas y negated into this file's y-up space. They replace the earlier invented approximations, which the 2026-09-17 real-machine smoke proved wrong (the synthesised anchors floated; the editor netlist showed every placed pin on an empty net). The measured pin X/Y is assumed to be the connection tip — to be confirmed by the redraw's netlist compare. The `body` boxes are ESTIMATES from the pin extents (pin tips at +/-45 on the regulator, +/-20 on the capacitor, minus pin length 10): the library symbol dump exposes no glyph graphics, so no body was measured. Pin-name discrepancy: datasheet p.1 calls pin 1 'GND/ADJ' while the library symbol names it 'GND'; the symbol's name wins here because it is what the placed part shows."
+    "Symbol pin offsets and body boxes are the 2026-09-18 library query (task 010): pin tips at +/-45 on the regulator (pins 1/2/3 on the left at y -10/0/+10, tab 4 on the right) and +/-20 on the capacitor, bodies [-35,-15,35,15] and [-10,-8,10,8]. The offsets came from the 2026-09-17 on-canvas measurement via `sch.component_pins` on the real placed devices (U1 = C6186, symbol uuid 06f50e10ab7d460599b3fe3ee8717a78; C1/C2 = C6119889; placement rotation 0, mirror false), recorded here in the canvas's y-up space, which is the file's own space since task 010c, and the 2026-09-18 query re-confirmed them and added the bodies — superseding the 2026-09-17 note, which had *estimated* the bodies from the pin extents because the library dump exposed no glyph graphics. The bodies are load-bearing now: the hand-drawn runs are checked against them. Pin-name discrepancy: datasheet p.1 calls pin 1 'GND/ADJ' while the library symbol names it 'GND'; the symbol's name wins here because it is what the placed part shows."
   ],
   "interface": [
     {
       "role": "+5V",
       "net": "+5V",
       "net_class": "power",
+      "position": [
+        25.0,
+        130.0
+      ],
       "direction": "sink",
       "voltage": "5V"
     },
@@ -29,6 +48,10 @@
       "role": "VCC",
       "net": "VCC",
       "net_class": "power",
+      "position": [
+        240.0,
+        130.0
+      ],
       "direction": "source",
       "voltage": "3V3"
     },
@@ -36,6 +59,10 @@
       "role": "GND",
       "net": "GND",
       "net_class": "gnd",
+      "position": [
+        110.0,
+        65.0
+      ],
       "direction": "sink"
     }
   ],
@@ -58,12 +85,29 @@
   "symbols": {
     "AMS1117-3.3": {
       "offsets": {
-        "1": [-45.0, -10.0],
-        "2": [-45.0, 0.0],
-        "3": [-45.0, 10.0],
-        "4": [45.0, 0.0]
+        "1": [
+          -45.0,
+          10.0
+        ],
+        "2": [
+          -45.0,
+          0.0
+        ],
+        "3": [
+          -45.0,
+          -10.0
+        ],
+        "4": [
+          45.0,
+          0.0
+        ]
       },
-      "body": [-35.0, -15.0, 35.0, 15.0],
+      "body": [
+        -35.0,
+        -15.0,
+        35.0,
+        15.0
+      ],
       "pin_names": {
         "1": "GND",
         "2": "VOUT",
@@ -73,10 +117,21 @@
     },
     "CAP-2PIN": {
       "offsets": {
-        "1": [-20.0, 0.0],
-        "2": [20.0, 0.0]
+        "1": [
+          -20.0,
+          0.0
+        ],
+        "2": [
+          20.0,
+          0.0
+        ]
       },
-      "body": [-10.0, -8.0, 10.0, 8.0],
+      "body": [
+        -10.0,
+        -8.0,
+        10.0,
+        8.0
+      ],
       "pin_names": {
         "1": "1",
         "2": "2"
@@ -88,8 +143,8 @@
       "ref": "U1",
       "symbol": "AMS1117-3.3",
       "placement": {
-        "x": 100.0,
-        "y": 0.0,
+        "x": 120.0,
+        "y": 100.0,
         "rotation": 0.0,
         "mirror": false
       },
@@ -113,7 +168,7 @@
         {
           "number": "2",
           "name": "VOUT",
-          "net": "VCC"
+          "net": ""
         },
         {
           "number": "4",
@@ -131,9 +186,9 @@
       "ref": "C1",
       "symbol": "CAP-2PIN",
       "placement": {
-        "x": 30.0,
-        "y": 0.0,
-        "rotation": 0.0,
+        "x": 25.0,
+        "y": 110.0,
+        "rotation": 90.0,
         "mirror": false
       },
       "device": {
@@ -153,12 +208,12 @@
         {
           "number": "1",
           "name": "1",
-          "net": "+5V"
+          "net": "GND"
         },
         {
           "number": "2",
           "name": "2",
-          "net": "GND"
+          "net": "+5V"
         }
       ]
     },
@@ -166,9 +221,9 @@
       "ref": "C2",
       "symbol": "CAP-2PIN",
       "placement": {
-        "x": 185.0,
-        "y": 0.0,
-        "rotation": 0.0,
+        "x": 215.0,
+        "y": 110.0,
+        "rotation": 90.0,
         "mirror": false
       },
       "device": {
@@ -188,19 +243,190 @@
         {
           "number": "1",
           "name": "1",
-          "net": "VCC"
+          "net": "GND"
         },
         {
           "number": "2",
           "name": "2",
-          "net": "GND"
+          "net": "VCC"
         }
       ]
     }
   ],
   "geometry": {
-    "wires": [],
-    "flags": [],
+    "wires": [
+      {
+        "net": "+5V",
+        "points": [
+          [
+            75.0,
+            90.0
+          ],
+          [
+            50.0,
+            90.0
+          ],
+          [
+            50.0,
+            130.0
+          ]
+        ]
+      },
+      {
+        "net": "+5V",
+        "points": [
+          [
+            50.0,
+            130.0
+          ],
+          [
+            25.0,
+            130.0
+          ]
+        ]
+      },
+      {
+        "net": "VCC",
+        "points": [
+          [
+            165.0,
+            100.0
+          ],
+          [
+            180.0,
+            100.0
+          ],
+          [
+            180.0,
+            130.0
+          ]
+        ]
+      },
+      {
+        "net": "VCC",
+        "points": [
+          [
+            180.0,
+            130.0
+          ],
+          [
+            215.0,
+            130.0
+          ]
+        ]
+      },
+      {
+        "net": "VCC",
+        "points": [
+          [
+            215.0,
+            130.0
+          ],
+          [
+            240.0,
+            130.0
+          ]
+        ]
+      },
+      {
+        "net": "GND",
+        "points": [
+          [
+            75.0,
+            110.0
+          ],
+          [
+            60.0,
+            110.0
+          ],
+          [
+            60.0,
+            65.0
+          ]
+        ]
+      },
+      {
+        "net": "GND",
+        "points": [
+          [
+            60.0,
+            65.0
+          ],
+          [
+            25.0,
+            65.0
+          ]
+        ]
+      },
+      {
+        "net": "GND",
+        "points": [
+          [
+            25.0,
+            65.0
+          ],
+          [
+            25.0,
+            90.0
+          ]
+        ]
+      },
+      {
+        "net": "GND",
+        "points": [
+          [
+            60.0,
+            65.0
+          ],
+          [
+            215.0,
+            65.0
+          ]
+        ]
+      },
+      {
+        "net": "GND",
+        "points": [
+          [
+            215.0,
+            65.0
+          ],
+          [
+            215.0,
+            90.0
+          ]
+        ]
+      }
+    ],
+    "flags": [
+      {
+        "net": "+5V",
+        "kind": "Power",
+        "x": 25.0,
+        "y": 130.0,
+        "rotation": 90.0,
+        "mirror": false,
+        "symbol": ""
+      },
+      {
+        "net": "VCC",
+        "kind": "Power",
+        "x": 240.0,
+        "y": 130.0,
+        "rotation": 270.0,
+        "mirror": false,
+        "symbol": ""
+      },
+      {
+        "net": "GND",
+        "kind": "Ground",
+        "x": 110.0,
+        "y": 65.0,
+        "rotation": 180.0,
+        "mirror": false,
+        "symbol": ""
+      }
+    ],
     "labels": []
   }
 }

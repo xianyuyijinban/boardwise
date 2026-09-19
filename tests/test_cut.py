@@ -30,13 +30,16 @@ BLOCKS = ROOT / "blocklib" / "blocks"
 #: The cut each committed template came from. Kept here as well as inside the
 #: templates so the test can state the *intent* independently of the artifact.
 CUTS = {
-    "ch340_usb_input": (["USB1", "R24", "R27", "C4"], (40.0, -240.0, 230.0, -40.0)),
+    # Canvas space (task 010c): each bbox is the stored one with its y range
+    # swapped, `[x0,y0,x1,y1] -> [x0,-y1,x1,-y0]`, because the harvest now reads
+    # through a parser that negates the stored y once at its own boundary.
+    "ch340_usb_input": (["USB1", "R24", "R27", "C4"], (40.0, 40.0, 230.0, 240.0)),
     "ch340_power_3v3": (
         ["U5", "C5", "C6", "C7", "C9", "LED1", "U3"],
-        (130.0, -475.0, 430.0, -330.0),
+        (130.0, 330.0, 430.0, 475.0),
     ),
-    "ch340_core": (["U1", "C1", "X1", "C25", "C3"], (60.0, -690.0, 310.0, -530.0)),
-    "ch340_uart_header": (["H1"], (390.0, -660.0, 460.0, -600.0)),
+    "ch340_core": (["U1", "C1", "X1", "C25", "C3"], (60.0, 530.0, 310.0, 690.0)),
+    "ch340_uart_header": (["H1"], (390.0, 600.0, 460.0, 660.0)),
 }
 
 #: The only provenance kind with a source board to re-derive from. Everything
@@ -176,7 +179,9 @@ def test_the_boundary_must_contain_the_parts_it_is_given():
             GOLDEN,
             name="bad",
             designators=["USB1", "C4"],
-            bbox=(40.0, -240.0, 230.0, -150.0),  # C4 sits below this
+            # Canvas space (task 010c). USB1 sits at y=131, below this box's
+            # y span [150, 240]; C4 (y=200) is inside it.
+            bbox=(40.0, 150.0, 230.0, 240.0),
         )
 
 
@@ -187,8 +192,10 @@ def test_the_boundary_may_not_cut_a_wire():
             GOLDEN,
             name="bad",
             designators=["USB1"],
-            # the VBUS run continues to x = 198, past this right-hand boundary
-            bbox=(40.0, -240.0, 170.0, -40.0),
+            # Canvas space (task 010c): the same region as before the convention
+            # change, with the y ends swapped. USB1 (89, 131) is inside; the VBUS
+            # run continues to x = 198, past this right-hand boundary.
+            bbox=(40.0, 40.0, 170.0, 240.0),
         )
 
 

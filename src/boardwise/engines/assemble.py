@@ -451,8 +451,15 @@ def _synthesise_anchors(
             else:
                 # A rail flag reads as attached when it hangs off the pin, so
                 # the stub runs outward: up from the topmost points, down from
-                # the bottom ones. `+y` is up in file space (the y-up
-                # convention the whole parser layer uses).
+                # the bottom ones. `+y` is up — true of this file's space since
+                # task 010c made file space and the canvas the same y-up space;
+                # before that the drawn page was mirrored and a power flag hung
+                # *downwards* while this comment claimed otherwise.
+                #
+                # The rotation stays 0 because these anchors carry no symbol, so
+                # there is no measured glyph for the annotation-box prediction to
+                # place (see `PlacedFlag.symbol_uuid` below); the box is a plain
+                # text band centred on the anchor, which is what 0 means here.
                 outward = RAIL_STUB if net_class == "power" else -RAIL_STUB
                 page.wires.append(
                     WireRun(

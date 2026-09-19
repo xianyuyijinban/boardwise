@@ -1,0 +1,47 @@
+{
+  "primitiveId": "dc2a6df8c60bba87",
+  "declared": "SCH_PrimitiveComponent.getAllPinsByPrimitiveId",
+  "returned": 4,
+  "pins": [
+    {
+      "X": 530,
+      "Y": 420,
+      "PinNumber": "1",
+      "PinName": "GND",
+      "Rotation": 180,
+      "PinLength": 10,
+      "PrimitiveId": "dc2a6df8c60bba87-e2",
+      "NoConnected": false
+    },
+    {
+      "X": 530,
+      "Y": 410,
+      "PinNumber": "2",
+      "PinName": "VOUT",
+      "Rotation": 180,
+      "PinLength": 10,
+      "PrimitiveId": "dc2a6df8c60bba87-e6",
+      "NoConnected": false
+    },
+    {
+      "X": 530,
+      "Y": 400,
+      "PinNumber": "3",
+      "PinName": "VIN",
+      "Rotation": 180,
+      "PinLength": 10,
+      "PrimitiveId": "dc2a6df8c60bba87-e10",
+      "NoConnected": false
+    },
+    {
+      "X": 620,
+      "Y": 410,
+      "PinNumber": "4",
+      "PinName": "VOUT",
+      "Rotation": 0,
+      "PinLength": 10,
+      "PrimitiveId": "dc2a6df8c60bba87-e14",
+      "NoConnected": false
+    }
+  ]
+}

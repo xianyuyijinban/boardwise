@@ -26,3 +26,8 @@ rb.json
 # history until the owner decides whether to merge contents or keep it
 # standalone — a gitlink entry would only pretend to be recoverable.
 inputs/smart_pillbox/firmware/
+
+# Live-session output scratch. Acceptance evidence cited by task books is
+# force-added (`git add -f`) and stays tracked; everything else here is
+# one-shot probe output that would only add noise to `git status`.
+outputs/

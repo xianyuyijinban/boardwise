@@ -62,9 +62,14 @@ SHEET_HEIGHT = 826.0
 #: Keep-out between anything (boxes, wire ends) and the sheet edge.
 FRAME = 10.0
 
-#: The title block sits in the bottom-right corner (canvas y grows downward).
-#: Conservative: if the real block is smaller this only costs layout space.
-TITLE_BLOCK = (SHEET_WIDTH - 330.0, SHEET_HEIGHT - 110.0, SHEET_WIDTH - 10.0, SHEET_HEIGHT - 10.0)
+#: The title block sits in the bottom-right corner. Canvas y grows **upward**
+#: (010c, measured 2026-09-18), so the bottom edge is ``y = 0`` and the block
+#: spans ``[10, 110]``. Before 010c the numbers were ``[H-110, H]``, which was
+#: the bottom while y grew downward and became the **top** once the axis was
+#: corrected — and the lint built on this rectangle went blind to content that
+#: actually sat on the title block (M3). Conservative: if the real block is
+#: smaller this only costs layout space.
+TITLE_BLOCK = (SHEET_WIDTH - 330.0, 10.0, SHEET_WIDTH - 10.0, 110.0)
 
 #: Minimum gap between component boxes, and box-to-frame / box-to-title.
 BOX_GAP = 30.0
@@ -226,11 +231,18 @@ def plan_placement(
     """Shelf-pack the components in ``order`` inside the usable sheet area.
 
     Boxes align their left/top edges to the packing cursor; columns advance
-    by ``width + COL_AISLE`` and rows by ``row_height + ROW_CHANNEL``. A row
-    that would reach past the right edge — or into the title block's x-range
-    while its band overlaps the title block's y-range — wraps to the next
-    row. A box that fits nowhere is still emitted, at its last candidate
-    spot, so the validator reports it by name instead of it vanishing.
+    by ``width + COL_AISLE`` and rows by ``row_height + ROW_CHANNEL``. Packing
+    starts **directly above the title block** and rows grow upward, away from
+    it. The block sits in the bottom-right corner (canvas y grows upward since
+    010c), so the frame's bottom margin is *inside* the block's band: starting
+    there made whole nets unroutable — measured, three ``NET_UNROUTABLE``
+    violations after the carve was corrected, and still one with the rows
+    marching the other way from the top. Raising the origin keeps the
+    direction the golden plan was calibrated against and only moves it. A row
+    that would reach past the right edge — or whose band overlaps the title
+    block while it also spans the block's x-range — wraps to the next row. A
+    box that fits nowhere is still emitted, at its last candidate spot, so the
+    validator reports it by name instead of it vanishing.
 
     Origins are snapped to :data:`GRID` so every pin tip lands on the
     routing lattice (offsets are multiples of 5, measured).
@@ -240,17 +252,24 @@ def plan_placement(
         return round(value / GRID) * GRID
 
     placements: list[Placement] = []
-    row_y = snap(FRAME + BOX_GAP)
+    row_y = snap(max(FRAME + BOX_GAP, TITLE_BLOCK[3] + BOX_GAP))
     row_height = 0.0
     cursor_x = snap(FRAME + BOX_GAP)
-    title_x0, title_y0, _tx1, _ty1 = TITLE_BLOCK
+    title_x0, title_y0, _tx1, title_y1 = TITLE_BLOCK
 
-    def wraps(width: float, band_bottom: float) -> bool:
+    def wraps(width: float, band_top: float) -> bool:
+        """Does a row this wide, reaching up to ``band_top``, stay clear?
+
+        A row can only meet the block by overlapping its band *and* spanning
+        its x-range. Both comparisons are kept so the guard still holds if the
+        sheet size or the block's proportions change; with the origin above the
+        block it never fires, which is the point.
+        """
         if cursor_x + width > SHEET_WIDTH - FRAME - BOX_GAP:
             return True
-        if band_bottom > title_y0 - BOX_GAP and cursor_x + width > title_x0 - BOX_GAP:
-            return True
-        return False
+        if cursor_x + width <= title_x0 - BOX_GAP:
+            return False
+        return row_y < title_y1 + BOX_GAP and band_top > title_y0 - BOX_GAP
 
     for designator in order:
         rel = _relative_box(offsets.get(designator, {}))
