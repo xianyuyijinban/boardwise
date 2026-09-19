@@ -219,28 +219,27 @@ def candidate_from_geometry(
     *,
     symbol_defs: dict[str, dict[str, tuple[float, float]]] | None = None,
     part_positions: dict[tuple[float, float], str] | None = None,
-    part_positions_canvas: bool = False,
 ) -> DesignModel:
-    """Rebuild connectivity from a ``sch.geometry`` dump.
+    """Rebuild connectivity from a ``sch.geometry`` dump, in **canvas** space.
 
     Pins come from the pin list when the editor exposes them; the measured
     reality on schematic pages is that ``sch_PrimitivePin.getAll()`` is
     EMPTY, so when ``symbol_defs`` and ``part_positions`` are supplied the
     pin tips are computed as *placed position + library symbol offset*:
-    parts are matched to designators by exact position (the editor keeps
-    the placed origin verbatim, in canvas units that are 1:1 with the file
-    except for a negated y axis, which this builder converts), and the
-    offsets come from the golden file's own symbol definitions via the
-    ``Symbol`` uuid each placed component reports. Wires contribute
-    polyline endpoints to the connectivity graph; netflag primitives force
-    net names at their points -- the editor carries their net in the
-    ``Net`` state field even when the file-side attribute was empty.
+    parts are matched to designators by exact position (the editor keeps the
+    placed origin verbatim), and the offsets come from the golden file's own
+    symbol definitions via the ``Symbol`` uuid each placed component reports.
+    Wires contribute polyline endpoints to the connectivity graph; netflag
+    primitives force net names at their points -- the editor carries their net
+    in the ``Net`` state field even when the file-side attribute was empty.
 
-    ``part_positions_canvas``: the draw flow passes the plan's placement
-    coordinates, which are CANVAS space (positive y); the calibration path
-    passes ``collect_part_placements`` keys, which are FILE space (y
-    already negated). Same builder, two conventions — the flag says which
-    key space to look up, everything internal stays file-space.
+    Everything here is the editor's own space, so there is nothing to convert:
+    the configurator's `editor -> file` negations are gone (task 010c, M1 —
+    the file stores y opposite to the canvas, the parser negates once at its
+    boundary, and this builder's model is therefore canvas space). The
+    ``part_positions_canvas`` flag went with them: it existed only because
+    ``collect_part_placements`` used to hand back file space while the draw
+    flow handed back canvas, and both are canvas now.
     """
     components_raw = geo.get("components") or []
     wires_raw = geo.get("wires") or []
@@ -250,7 +249,7 @@ def candidate_from_geometry(
     if not components_raw and not pins_raw:
         raise GeometryError("the geometry dump has neither components nor pins")
 
-    # --- parts (file coordinates: negate the editor's y)
+    # --- parts, at the editor's own coordinates
     placed: list[tuple[str, str, float, float, float, bool]] = []
     for entry in components_raw:
         state = entry.get("state") or {}
@@ -259,10 +258,7 @@ def candidate_from_geometry(
         y = as_float(field_of(state, "Y"))
         if x is None or y is None:
             continue
-        file_point = (
-            (round(x, 2), round(y, 2)) if part_positions_canvas
-            else (round(x, 2), round(-y, 2))
-        )
+        file_point = (round(x, 2), round(y, 2))
         designator = (part_positions or {}).get(file_point, "") if comp_type == "part" else ""
         if not designator:
             continue
@@ -279,7 +275,7 @@ def candidate_from_geometry(
                 designator,
                 str(field_of(state, "Symbol") or ""),
                 x,
-                -y,
+                y,
                 float(field_of(state, "Rotation") or 0.0),
                 state.get("Mirror") is True,
             )
@@ -297,7 +293,7 @@ def candidate_from_geometry(
             continue
         if number not in {p.number for p in model.components[owner].pins}:
             model.components[owner].pins.append(Pin(number=number, name=""))
-        pin_points[(owner, number)] = (x, -y)
+        pin_points[(owner, number)] = (x, y)
 
     if not pin_points and symbol_defs:
         # `_transform_point` comes from `core.geometry` (006c): this module used
@@ -336,7 +332,7 @@ def candidate_from_geometry(
             continue
         nodes = []
         for x, y in polyline:
-            pt = point_node(x, -y)  # editor y -> file coordinates
+            pt = point_node(x, y)  # the editor's own canvas coordinates
             node = ("w", pt)
             uf.find(node)
             point_index.setdefault(pt, []).append(node)
@@ -370,7 +366,7 @@ def candidate_from_geometry(
         y = as_float(field_of(state, "Y"))
         if not name or x is None or y is None:
             continue
-        for other in point_index.get(point_node(x, -y), []):
+        for other in point_index.get(point_node(x, y), []):
             forced.setdefault(other, name)
     for entry in geo.get("netlabels") or []:
         state = entry.get("state") or {}
@@ -379,7 +375,7 @@ def candidate_from_geometry(
         y = as_float(field_of(state, "Y"))
         if not name or x is None or y is None:
             continue
-        for other in point_index.get(point_node(x, -y), []):
+        for other in point_index.get(point_node(x, y), []):
             forced.setdefault(other, name)
 
     # --- name clusters, resolving per-node names through the final roots

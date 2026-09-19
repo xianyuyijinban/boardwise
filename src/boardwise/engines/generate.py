@@ -206,15 +206,22 @@ class ActionPlan:
 def canvas_pin_offsets(
     file_offsets: dict[str, dict[str, tuple[float, float]]],
 ) -> dict[str, dict[str, tuple[float, float]]]:
-    """File-space offsets -> editor canvas space (negate y, once, here).
+    """Pin offsets in, pin offsets out — canvas space, and **no conversion**.
 
-    The parser's offsets are file-space; the editor canvas negates y
-    (measured, and the calibration test pins it). Everything downstream —
-    layout, routing, the wire steps — is canvas space, so the conversion
-    happens exactly here and nowhere else.
+    It used to negate y here ("file-space offsets -> canvas"), which is the
+    second half of the double negation task 010c removed. The measurement behind
+    that removal (M1, 2026-09-18): the `.epro2` stores y opposite to the canvas
+    (`stored_y = -canvas_y`, 35/42 parts exact), so the parser negates once at
+    its own boundary and hands over canvas coordinates. A second negation here
+    did not cancel for hand-authored geometry — it mirrored it.
+
+    Kept, and kept named, as the *checkpoint* the coordinate guards point at
+    (`tests/test_coordinate_guards.py`): it is the one place a reader can look to
+    see that no conversion happens on this side any more, instead of having to
+    audit every engine call site for a stray sign.
     """
     return {
-        designator: {number: (dx, -dy) for number, (dx, dy) in offsets.items()}
+        designator: {number: (dx, dy) for number, (dx, dy) in offsets.items()}
         for designator, offsets in file_offsets.items()
     }
 

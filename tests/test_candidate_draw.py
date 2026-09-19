@@ -476,16 +476,18 @@ def test_geometry_canvas_mode_matches_plan_positions():
     offsets = {"sym-r": {"1": (-20.0, 0.0), "2": (20.0, 0.0)}}
     model = candidate_from_geometry(
         geo, symbol_defs=offsets, part_positions=canvas_positions,
-        part_positions_canvas=True,
     )
-    assert set(model.components) == {"U1"}, "canvas-mode position must match"
+    assert set(model.components) == {"U1"}, "the editor's own position must match"
     pins = {p.number: p.net for p in model.components["U1"].pins}
     assert pins == {"1": "RX", "2": "RX"}
-    # and the file-space convention still works unchanged (calibration path)
+    # There is no second convention any more (task 010c): a negated key finds
+    # nothing, which is the assertion that pins it — the builder used to hit a
+    # file-space fallback, and that fallback is what mirrored hand-authored
+    # geometry.
     file_model = candidate_from_geometry(
         geo, symbol_defs=offsets, part_positions={(100.0, -95.0): "U1"},
     )
-    assert set(file_model.components) == {"U1"}
+    assert set(file_model.components) == set()
 
 
 def test_geometry_canvas_mode_matches_plan_positions():
@@ -507,16 +509,18 @@ def test_geometry_canvas_mode_matches_plan_positions():
     offsets = {"sym-r": {"1": (-20.0, 0.0), "2": (20.0, 0.0)}}
     model = candidate_from_geometry(
         geo, symbol_defs=offsets, part_positions=canvas_positions,
-        part_positions_canvas=True,
     )
-    assert set(model.components) == {"U1"}, "canvas-mode position must match"
+    assert set(model.components) == {"U1"}, "the editor's own position must match"
     pins = {p.number: p.net for p in model.components["U1"].pins}
     assert pins == {"1": "RX", "2": "RX"}
-    # and the file-space convention still works unchanged (calibration path)
+    # There is no second convention any more (task 010c): a negated key finds
+    # nothing, which is the assertion that pins it — the builder used to hit a
+    # file-space fallback, and that fallback is what mirrored hand-authored
+    # geometry.
     file_model = candidate_from_geometry(
         geo, symbol_defs=offsets, part_positions={(100.0, -95.0): "U1"},
     )
-    assert set(file_model.components) == {"U1"}
+    assert set(file_model.components) == set()
 
 
 # --------------------------------------------------------------------------

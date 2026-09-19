@@ -126,6 +126,34 @@ class _Page:
     segments: dict[str, list[tuple[Point, Point]]] = field(default_factory=dict)
 
 
+def _page_y(stored: Any) -> float:
+    """A stored page y -> **canvas** y. This is the one negation (task 010c).
+
+    Measured 2026-09-18 (task 010c, M1): the `.epro2` stores y *opposite* to the
+    editor's canvas — `stored_y = -canvas_y`, exact on 35 of 42 parts when the
+    live `sch.geometry` of a project is compared against that same project's own
+    file, and never the same sign. The canvas itself is y **up** (a two-marker
+    test renders `y=700` at the page top, confirmed in the GUI).
+
+    Since 010c's convention is "file space is canvas space", every coordinate a
+    parser hands over is negated exactly here and nowhere else — callers work in
+    canvas space and must not negate again.
+    """
+    return -float(stored or 0)
+
+
+def _page_box(
+    box: tuple[float, float, float, float],
+) -> tuple[float, float, float, float]:
+    """A stored bbox -> canvas bbox: ``[x0, y0, x1, y1] -> [x0, -y1, x1, -y0]``.
+
+    The y range swaps ends, so a caller that reads ``box[1]`` as "the low edge"
+    keeps meaning it.
+    """
+    x0, y0, x1, y1 = box
+    return (x0, -y1, x1, -y0)
+
+
 def _iter_schematic_records(text: str, stats: ParseStats) -> list[Any]:
     """Records of the schematic-relevant documents, in stream order.
 
@@ -296,7 +324,7 @@ def _split_page(records: list[Any]) -> tuple[list[_Instance], list[dict[str, Any
             current = _Instance(
                 part_id=str(body.get("partId") or ""),
                 x=float(body.get("x") or 0),
-                y=float(body.get("y") or 0),
+                y=_page_y(body.get("y")),
                 rotation=float(body.get("rotation") or 0),
                 is_mirror=bool(body.get("isMirror") or False),
                 z_index=body.get("zIndex"),
@@ -322,9 +350,9 @@ def _split_page(records: list[Any]) -> tuple[list[_Instance], list[dict[str, Any
             group = body.get("lineGroup")
             if group:
                 start = (round(float(body.get("startX") or 0), COORD_PRECISION),
-                         round(float(body.get("startY") or 0), COORD_PRECISION))
+                         round(_page_y(body.get("startY")), COORD_PRECISION))
                 end = (round(float(body.get("endX") or 0), COORD_PRECISION),
-                       round(float(body.get("endY") or 0), COORD_PRECISION))
+                       round(_page_y(body.get("endY")), COORD_PRECISION))
                 segments.setdefault(str(group), []).append((start, end))
             continue
         # Any other element ends the current attribute run.
@@ -388,7 +416,7 @@ def _collect_symbols(records: list[Any]) -> dict[str, _SymbolDef]:
         if record.type == "PIN":
             flush()
             pin_open = (round(float(body.get("x") or 0), COORD_PRECISION),
-                        round(float(body.get("y") or 0), COORD_PRECISION))
+                        round(_page_y(body.get("y")), COORD_PRECISION))
             pin_ez = f"e{body.get('zIndex')}"
             continue
         if record.type == "ATTR" and pin_open is not None:
@@ -610,16 +638,17 @@ def collect_symbol_details(path: str | Path) -> dict[str, SymbolDetail]:
 
     details: dict[str, SymbolDetail] = {}
     for key, symbol in symbols.items():
+        box = extents.get(key)
         details[key] = SymbolDetail(
             uuid=key,
             title=symbol.title,
             offsets={number: point for number, (point, _ez) in symbol.pins.items()},
             pin_names=dict(symbol.pin_names),
             pin_types=dict(symbol.pin_types),
-            body=extents.get(key),
+            body=None if box is None else _page_box(box),
         )
     for key, box in extents.items():
-        details.setdefault(key, SymbolDetail(uuid=key, body=box))
+        details.setdefault(key, SymbolDetail(uuid=key, body=_page_box(box)))
     return details
 
 
@@ -816,7 +845,8 @@ def build_schematic_model(path: str | Path) -> DesignModel:
             x, y = body.get("x"), body.get("y")
             if x is None or y is None:
                 continue
-            flag_point = (round(float(x), COORD_PRECISION), round(float(y), COORD_PRECISION))
+            flag_point = (round(float(x), COORD_PRECISION),
+                          round(_page_y(y), COORD_PRECISION))
             for node in point_index.get(flag_point, []):
                 forced.setdefault(uf.find(node), str(body["value"]))
 
@@ -1153,7 +1183,7 @@ def collect_page_layout(path: str | Path) -> PageLayout:
             NetLabelAnchor(
                 net=value,
                 x=round(float(body["x"]), COORD_PRECISION),
-                y=round(float(body["y"]), COORD_PRECISION),
+                y=round(_page_y(body["y"]), COORD_PRECISION),
                 rotation=float(body.get("rotation") or 0.0),
             )
         )

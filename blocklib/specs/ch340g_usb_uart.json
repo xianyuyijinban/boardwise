@@ -28,25 +28,25 @@
     {
       "id": "usb",
       "template": "../blocks/ch340_usb_input.json",
-      "at": [20.0, -250.0],
+      "at": [20.0, 470.0],
       "note": "Top-left, where the connector physically is. Signal flow leaves it downward."
     },
     {
       "id": "power",
       "template": "../blocks/ch340_power_3v3.json",
-      "at": [420.0, -200.0],
+      "at": [420.0, 520.0],
       "note": "Top right, in the second column: 238 units of whitespace separate it from the USB block, so the two read as separate circuits — which the golden's tighter packing did not."
     },
     {
       "id": "core",
       "template": "../blocks/ch340_core.json",
-      "at": [20.0, -430.0],
+      "at": [20.0, 200.0],
       "note": "Bottom left, below the USB front end it takes D+/D- from. The golden's own top-to-bottom order (input, rail, bridge) is preserved."
     },
     {
       "id": "uart",
       "template": "../blocks/ch340_uart_header.json",
-      "at": [420.0, -330.0],
+      "at": [420.0, 300.0],
       "note": "Bottom right, downstream of the core it takes RX/TX from."
     }
   ],

@@ -9,10 +9,14 @@ inherits zoning, orientation and spacing for free. The generic solver in
 :mod:`boardwise.engines.layout` stays as the fallback for boards without
 reference geometry.
 
-Coordinate contract (the sign trap this project has hit twice):
+Coordinate contract (rewritten by task 010c, 2026-09-18 — the sign was measured
+properly this time):
 
-* the golden file's page space is **y up**, the editor canvas is **y down**;
-  the single conversion is ``canvas = (x, -y)`` and it happens exactly here;
+* the canvas is **y up** (two-marker test, GUI-confirmed) and the `.epro2` stores
+  y *opposite* to it (M1: `stored_y = -canvas_y`, 35/42 parts exact against the
+  same project's live geometry). The parser negates that once, at its own
+  boundary, so **everything in this module is already canvas space** and nothing
+  here negates a y again — a second sign was the vertical mirror 010c removed;
 * a *placement* keeps its rotation/mirror verbatim — the editor applies the
   same convention the file stores, so a replayed part sits exactly where it
   did, and its pins land on the replayed wires by construction;
@@ -97,10 +101,21 @@ class SheetFrame:
 
 
 def _ratio_title_block(bbox: Rect) -> Rect:
-    """Bottom-right sub-rect of ``bbox`` by the A-series landscape ratio."""
+    """Bottom-right sub-rect of ``bbox`` by the A-series landscape ratio.
+
+    "Bottom-right" is a geometric statement, and since 010c canvas y grows
+    **upward** (measured 2026-09-18): the bottom edge is ``y0``, so the block
+    occupies ``[y0, y0 + height]``. The pre-010c code carved ``[y1 - height,
+    y1]``, which *was* the bottom while y grew downward and became the **top**
+    the moment the convention was corrected — the same root cause as the
+    mirrored drawings. Measured on a rendered A4 page (M3): a marker placed at
+    the carve's centre landed in the **upper-right blank area**, while its
+    y-mirrored twin landed inside the real title block in the lower-right
+    corner.
+    """
     width = (bbox.x1 - bbox.x0) * TITLE_BLOCK_WIDTH_FRAC
     height = (bbox.y1 - bbox.y0) * TITLE_BLOCK_HEIGHT_FRAC
-    return Rect(bbox.x1 - width, bbox.y1 - height, bbox.x1, bbox.y1)
+    return Rect(bbox.x1 - width, bbox.y0, bbox.x1, bbox.y0 + height)
 
 
 def sheet_frame_from_bbox(
@@ -153,11 +168,10 @@ def sheet_frame_from_geometry(
         except ValueError:
             return None
         if width > 0 and height > 0:
-            # The declared size is anchored at the sheet's origin; with the
-            # file's y-up page space the sheet extends upward, so in canvas
-            # space it spans [origin.y, origin.y + height].
+            # Canvas space is y-up and the parser already delivered the origin in
+            # it, so the sheet simply extends upward from there.
             ox, oy = origin
-            bbox = Rect(ox, -oy, ox + width, -oy + height)
+            bbox = Rect(ox, oy, ox + width, oy + height)
             frame = sheet_frame_from_bbox(bbox, provenance="declared-size")
             frame.notes.append(
                 "frame from the declared page size (no measurable sheet bbox on this host)"
@@ -174,17 +188,22 @@ def sheet_frame_from_geometry(
 def _rotated_canvas_offsets(
     offsets: dict[str, tuple[float, float]], rotation: float, mirror: bool
 ) -> dict[str, tuple[float, float]]:
-    """File-space pin offsets -> canvas offsets for a *rotated* placement.
+    """Pin offsets -> offsets for a *rotated* placement, canvas space.
 
-    The parser's offsets are file space and unrotated; a placed instance
-    rotates them (clockwise, y-up) and mirrors across the vertical axis. The
-    result is converted to canvas space (y negated) so it can be added to a
-    canvas placement, which is what the box and the self-check work in.
+    The parser already hands over canvas coordinates (it negates the stored y
+    once at its boundary — task 010c), and a placed instance rotates them
+    counter-clockwise (the file's own convention; the editor's API reaches the
+    same geometry through `engines/draw.py::_editor_rotation`, which is why the
+    two must move together) and mirrors across the vertical axis. Nothing else is
+    applied: the result is already in the space the box and the self-check work
+    in, so there is no second sign to apply — applying one was the vertical
+    mirror this task removed.
     """
     out: dict[str, tuple[float, float]] = {}
     for number, (dx, dy) in offsets.items():
-        fx, fy = _transform_point(dx, dy, rotation=rotation, mirror=mirror, ox=0.0, oy=0.0)
-        out[number] = (fx, -fy)
+        out[number] = _transform_point(
+            dx, dy, rotation=rotation, mirror=mirror, ox=0.0, oy=0.0
+        )
     return out
 
 
@@ -213,7 +232,7 @@ def _body_box(
     for bx, by in ((body[0], body[1]), (body[0], body[3]), (body[2], body[1]), (body[2], body[3])):
         fx, fy = _transform_point(bx, by, rotation=rotation, mirror=mirror, ox=x, oy=y)
         xs.append(fx + dx)
-        ys.append(-fy + dy)
+        ys.append(fy + dy)
     return Rect(min(xs), min(ys), max(xs), max(ys))
 
 
@@ -246,7 +265,7 @@ def part_box(
             dx, dy, rotation=part.rotation, mirror=part.mirror, ox=part.x, oy=part.y
         )
         xs.append(fx)
-        ys.append(-fy)
+        ys.append(fy)
     return Rect(min(xs) - pad, min(ys) - pad, max(xs) + pad, max(ys) + pad)
 
 
@@ -277,9 +296,13 @@ def place_offset(content: Rect, frame: SheetFrame) -> tuple[tuple[float, float],
         return (dx, dy), notes
 
     # Push out of the title block, preferring the smaller displacement, then
-    # clamp back inside the frame.
+    # clamp back inside the frame. Both escapes are stated in the y-up space
+    # 010c settled: "left of the block" keeps the content's right edge west of
+    # `x0`, and "above the block" lifts its *bottom* edge clear of `y1` — the
+    # old formula subtracted from `y0` and so placed the content *below* a
+    # block that had itself moved to the top when the axis flipped.
     bx = frame.title_block.x0 - 20.0 - content.x1
-    by = frame.title_block.y0 - 20.0 - content.y1
+    by = frame.title_block.y1 + 20.0 - content.y0
     candidates = []
     if fits(_snap(bx), dy):
         candidates.append((_snap(bx), dy, "shifted left of the title block"))
@@ -415,10 +438,10 @@ def build_replay_plan(
         else:
             golden_boxes[part.designator] = box
 
-    wire_points = [(x, -y) for wire in page.wires for x, y in wire.points]
+    wire_points = [(x, y) for wire in page.wires for x, y in wire.points]
     anchors = (
-        [(label.x, -label.y) for label in page.labels]
-        + [(flag.x, -flag.y) for flag in page.flags]
+        [(label.x, label.y) for label in page.labels]
+        + [(flag.x, flag.y) for flag in page.flags]
     )
     content = _content_bbox(list(golden_boxes.values()), wire_points + anchors)
     if content is None:
@@ -430,7 +453,7 @@ def build_replay_plan(
     plan.notes.append(f"page offset ({dx:.0f}, {dy:.0f}) from the golden coordinates")
 
     def to_page(x: float, y: float) -> tuple[float, float]:
-        return (x + dx, -y + dy)
+        return (x + dx, y + dy)
 
     # --- placements: rotation and mirror verbatim (see the module docstring)
     for part in page.parts:
@@ -439,7 +462,7 @@ def build_replay_plan(
             PlacementStep(
                 designator=part.designator,
                 x=part.x + dx,
-                y=-part.y + dy,
+                y=part.y + dy,
                 rotation=part.rotation,
                 mirror=part.mirror,
                 lcsc=component.lcsc_part if component else "",
@@ -475,7 +498,7 @@ def build_replay_plan(
     for part in page.parts:
         component = model.components.get(part.designator)
         for number, (ox, oy) in per_part_offsets[part.designator].items():
-            page_point = (part.x + dx + ox, -part.y + dy + oy)
+            page_point = (part.x + dx + ox, part.y + dy + oy)
             pin_positions[(part.designator, number)] = page_point
         if component is None:
             continue
@@ -484,7 +507,7 @@ def build_replay_plan(
             if offset is None or not pin.net:
                 continue
             pin_net_page[
-                (round(part.x + dx + offset[0], 2), round(-part.y + dy + offset[1], 2))
+                (round(part.x + dx + offset[0], 2), round(part.y + dy + offset[1], 2))
             ] = pin.net
     plan.pin_positions = pin_positions
 
@@ -537,13 +560,13 @@ def build_replay_plan(
                 net=flag.net,
                 kind=flag.kind,
                 x=flag.x + dx,
-                y=-flag.y + dy,
+                y=flag.y + dy,
                 rotation=flag.rotation,
                 mirror=flag.mirror,
             )
         )
         annotation_boxes.append(
-            layout.annotation_box(flag.x + dx, -flag.y + dy, flag.net, glyph)
+            layout.annotation_box(flag.x + dx, flag.y + dy, flag.net, glyph)
         )
     for label in page.labels:
         if plan.naming_strategy == "text":
@@ -551,7 +574,7 @@ def build_replay_plan(
                 net=label.net,
                 kind="text",
                 x=label.x + dx,
-                y=-label.y + dy,
+                y=label.y + dy,
                 rotation=label.rotation,
                 decorative=True,
             )
@@ -560,7 +583,7 @@ def build_replay_plan(
                 net=label.net,
                 kind="label",
                 x=label.x + dx,
-                y=-label.y + dy,
+                y=label.y + dy,
                 rotation=label.rotation,
             )
         else:
@@ -569,7 +592,7 @@ def build_replay_plan(
             continue
         plan.net_names.append(step)
         annotation_boxes.append(
-            layout.annotation_box(label.x + dx, -label.y + dy, label.net)
+            layout.annotation_box(label.x + dx, label.y + dy, label.net)
         )
 
     # --- NC pins: golden pins with no net, listed so the report can tell
@@ -592,8 +615,8 @@ def build_replay_plan(
     # defect in the human's geometry.
     annotation_points = sorted(
         {(round(step.x, 2), round(step.y, 2)) for step in plan.net_names}
-        | {(round(label.x + dx, 2), round(-label.y + dy, 2)) for label in page.labels}
-        | {(round(flag.x + dx, 2), round(-flag.y + dy, 2)) for flag in page.flags}
+        | {(round(label.x + dx, 2), round(label.y + dy, 2)) for label in page.labels}
+        | {(round(flag.x + dx, 2), round(flag.y + dy, 2)) for flag in page.flags}
     )
     members_by_net = {
         name: {des for des, _pin in net.pins} for name, net in model.nets.items()

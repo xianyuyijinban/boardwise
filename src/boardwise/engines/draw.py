@@ -904,23 +904,30 @@ async def _snap_drifted_pins(
 
 
 def _editor_rotation(rotation: float) -> float:
-    """The angle to hand the editor, which is **not** the file's angle.
+    """The angle to hand the editor API: **the file's angle, negated**.
 
-    The golden file's instance rotation is clockwise in *y-up* space (pinned in
-    005), and `_rotated_canvas_offsets` faithfully reproduces it when computing
-    where each pin tip lands — which is where the replayed wire endpoints go.
+    The file's ``rotation`` and the editor API's ``rotation`` parameter are
+    opposite by construction, and this is the one place the two conventions meet.
 
-    The editor's `rotation` parameter, however, turns the symbol the *other*
-    way round: measured 2026-09-14, every part replayed at ``90`` or ``270``
-    came back with its pins exchanged, while ``0`` and ``180`` were correct.
-    That is the exact signature of a sign flip — negating an angle leaves 0 and
-    180 untouched and swaps 90 with 270. The visible consequence was the eight
-    two-pin passives (C25, C3, C4, C5, C6, C7, C9, U3) reporting pin 1 where
-    the golden has pin 2, and their wire endpoints missing the pin tips.
+    Measured 2026-09-14: every part replayed at ``90`` or ``270`` came back with
+    its pins exchanged while ``0`` and ``180`` were correct — the signature of a
+    sign flip (negating leaves 0 and 180 alone and swaps 90 with 270). The visible
+    consequence was the two-pin passives reporting pin 1 where the golden has
+    pin 2, and their wire endpoints missing the pin tips.
 
-    So the replay keeps the golden angle for its own geometry, and this one
-    function translates it at the API boundary — the only place the two
-    conventions meet.
+    010c's M4 measured the API directly (place at ``rotation=R``, read the pins
+    back with ``sch.component_pins``) and found it turns **clockwise** — the other
+    half of the same fact. Told ``-angle``, the editor turns
+    CW(-angle) = CCW(angle), and `core.geometry.transform_point` computes
+    CCW(angle) for the file's angle, so the landing calculation and the editor
+    agree. Both halves have to move together; 010c's appendix B moved one.
+
+    Appendix B briefly made this the identity, reading "the editor is clockwise"
+    as "the file's angle is the editor's angle". That *equates* the two
+    conventions instead of relating them, and the golden breaks immediately
+    (every two-pin passive swaps its pads). The four-part history is in
+    `core.geometry.transform_point`'s docstring — read it before changing either
+    side of this pair.
     """
     return (-float(rotation)) % 360.0
 
@@ -1423,7 +1430,6 @@ async def run_draw(
                     part_positions={
                         (step.x, step.y): step.designator for step in plan.placements
                     },
-                    part_positions_canvas=True,
                 )
                 result.candidate_source = "geometry readback"
             except GeometryError as exc:

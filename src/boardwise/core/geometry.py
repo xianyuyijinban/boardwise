@@ -68,23 +68,57 @@ COORD_PRECISION = 6
 def transform_point(
     x: float, y: float, *, rotation: float, mirror: bool, ox: float, oy: float
 ) -> tuple[float, float]:
-    """Symbol-local -> page coordinates.
+    """Symbol-local offset -> page coordinates, in **canvas** space.
 
-    Mirroring flips across the vertical axis (``x -> -x``), then the instance
-    origin is added. **Rotation is clockwise** in the editor's y-up space —
-    measured against the editor's own netlist (2026-09-13): with CCW every
-    rotated part (rot=90/270) had its pins swapped while rot=0 parts were
-    correct, which is exactly why the original CCW assumption survived the
-    U1-only spot check (rot=0 is insensitive to the direction). The editor's
-    netlist is the referee: C25 rot=270 pin 1 must land on the GND wire, and
-    only the CW mapping does.
+    Mirroring flips across the vertical axis (``x -> -x``), then **rotation is
+    counter-clockwise** in the y-up canvas frame. Both inputs are already canvas
+    space (task 010c: a parser negates the stored y once at its boundary, so
+    there is no second sign to apply here).
+
+    **The rotation sign has now been argued four times; it is CCW. The
+    distinction that keeps getting lost is between the *file's* angle and the
+    *editor API's* angle — they are opposite.** Read this before touching it:
+
+    * *2026-09-13 (pre-010c, an already-mirrored frame)* — calibrated "clockwise"
+      against the editor's own netlist. Correct for that frame: the pipeline
+      negated y afterwards, and a mirror flips a rotation's handedness.
+    * *2026-09-18 (010c ruling 3)* — recognised that the old frame's "CW" **is**
+      CCW on the real canvas, and made this function CCW. Correct.
+    * *2026-09-19 (010c M4)* — the editor API was measured directly and turns
+      **clockwise**: placing an AMS1117-3.3 at ``rotation=R`` and reading the pins
+      back with ``sch.component_pins`` gives CW(R) for R = 90 and 270, with the
+      pins' own rotation field corroborating (180/90/270 at R = 0/90/270).
+      Appendix B read that as "this function must be CW". **That inference is
+      wrong**, and it is wrong exactly where this note warns: ``R`` is the
+      *editor API's* angle, not the file's.
+    * *2026-09-19 (appendix B, reverted)* — the file's angle and the API's angle
+      are **opposite by construction**; `engines/draw.py::_editor_rotation` is
+      where that is undone (``R = -angle``). Told ``-angle``, the editor turns
+      CW(-angle) = CCW(angle) — which is what this function computes. The pair is
+      self-consistent either way; only the *pair* has to move together, and
+      moving it breaks the golden.
+
+    Why CCW is the file world's truth, independently of the API: this function is
+    what `parsers/schematic.py` uses to land pin tips on the page, and the parser
+    resolves pin-to-net by matching those tips against wire endpoints. Force it to
+    CW and the golden board's own connectivity falls apart — measured, 27 tests,
+    including `tests/test_calibration.py`, which compares a **netlist the real
+    editor exported on 2026-09-13** against an independent parse of `.epro2` and
+    is therefore grounded in the editor rather than in our own code. Under CW it
+    reports every two-pin passive swapping pin 1 and pin 2
+    (``+5V: golden='C4.2' candidate='C4.1'``); under CCW it is clean.
+
+    Note also that ``CCW(t) ∘ M == M ∘ CW(t)``. Every ``mirror=True`` case is
+    blind to this question, and the appendix B table's "mirror ✓ / CCW ✗" row
+    compared ``M ∘ CCW`` against ``CCW ∘ M`` — the one comparison that identity
+    forbids. Only ``mirror=False`` distinguishes the two, and only the golden
+    can adjudicate it.
 
     Lives in ``core`` (moved here from ``parsers.schematic`` in 006c) because
     both the parsers and the engines need it and ``core`` can depend on
     neither: the previous home forced ``core/candidate.py`` to import a
     **private** name from ``parsers``, inverting the layering. Pure math, no
-    parser state — the file/canvas *spaces* are the caller's business; this
-    only places an offset.
+    parser state.
     """
     if mirror:
         x = -x
@@ -94,8 +128,8 @@ def transform_point(
     # tuples elsewhere, and the dataclass would compare unequal to them. The
     # annotation says tuple so the next reader does not "tidy" it into Point.
     return (
-        round(x * cos_v + y * sin_v + ox, COORD_PRECISION),
-        round(-x * sin_v + y * cos_v + oy, COORD_PRECISION),
+        round(x * cos_v - y * sin_v + ox, COORD_PRECISION),
+        round(x * sin_v + y * cos_v + oy, COORD_PRECISION),
     )
 
 
