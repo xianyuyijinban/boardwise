@@ -7,9 +7,11 @@ smoke, not a substitute for it.
 
 The three claims worth checking here are the ruling's:
 
-* a geometry-less block assembles at all (it could not before 2026-09-17);
-* every pin endpoint gets a name — a one-cell stub plus a flag on rails, a label
-  on signals;
+* a block assembles at all, and by the path its own geometry decides: this one
+  carries wires and flags now (task 010), so nothing is synthesised and the
+  flag count is the template's rather than one per pin endpoint;
+* which of the two anchor paths was taken is read off the design and printed
+  rather than assumed, because that is the thing this probe exists to show;
 * the same input assembles byte-identically twice.
 """
 
@@ -52,8 +54,10 @@ def main() -> int:
     for comp in sorted(design.model.components.values(), key=lambda c: c.designator):
         print(f"  {comp.designator:5s} {comp.lcsc_part or '<unbound>':10s} {comp.footprint or '-'}")
 
-    print(f"\nsynthesised anchors: {len(design.page.flags)} flag(s), "
-          f"{len(design.page.labels)} label(s), {len(design.page.wires)} stub(s)")
+    synthesised = [line for line in design.report if "synthesised" in line]
+    print(f"\nanchors: {len(design.page.flags)} flag(s), "
+          f"{len(design.page.labels)} label(s), {len(design.page.wires)} wire run(s)"
+          f" — {'synthesised' if synthesised else 'from the template geometry'}")
     for flag in sorted(design.page.flags, key=lambda f: (f.net, f.y, f.x)):
         print(f"  flag  {flag.net:5s} {flag.kind:7s} at ({flag.x:.0f}, {flag.y:.0f})")
     for label in sorted(design.page.labels, key=lambda l: (l.net, l.y, l.x)):

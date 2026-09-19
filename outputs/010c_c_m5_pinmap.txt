@@ -1,0 +1,15 @@
+pin        design   editor   verdict
+---------  -------  -------  -------
+C1.1        GND      GND      OK
+C1.2        +5V      +5V      OK
+C2.1        GND      GND      OK
+C2.2        VCC      VCC      OK
+U1.1        GND      GND      OK
+U1.2        (none)   (none)   OK
+U1.3        +5V      +5V      OK
+U1.4        VCC      VCC      OK
+
+designators in the editor netlist: ['C1', 'C2', 'U1', 'U2']
+compared: 8  mismatches: 0 []
+
+VERDICT: every pin of U1/C1/C2 maps to the designed net.

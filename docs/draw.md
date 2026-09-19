@@ -74,17 +74,31 @@ page, inheriting zoning, orientation and spacing. The generic solver in
 `engines/layout.py` stays as the fallback for boards with no reference
 geometry, and `boardwise draw --solver` forces it.
 
-## Coordinate contract (the sign trap, hit twice)
+## Coordinate contract (rewritten by task 010c, 2026-09-18)
 
 | Space | Convention |
 |---|---|
-| golden file (`.epru` page) | **y up**, x right |
-| editor canvas | **y down**, x right |
+| editor canvas | **y up**, x right — measured by a two-marker test, GUI-confirmed |
+| `.epru` page as stored | **y down** — measured: `stored_y = -canvas_y` on 35 of 42 parts |
+| our file space = canvas | **y up**, x right |
 
-`canvas = (x, -y)`, applied in exactly one place (`engines/replay.py`).
-Pin offsets from the parser are file space and are rotated per instance with the
-parser's clockwise-y-up transform before their y is negated. The page offset is
-snapped to a 5-unit lattice so pin tips keep the grid the wire endpoints share.
+**One negation, at one boundary.** The parser negates the stored y as it hands its
+result over (`parsers/schematic.py::_page_y` / `_page_box`); everything past that
+point — replay, layout, the candidate builders, the plan — is canvas space and
+negates nothing. The earlier revision of this table had the canvas and the file
+labels the wrong way round, which is what made hand-authored geometry come out
+vertically mirrored while the golden replay stayed self-consistent (two
+negations cancelling). `engines/generate.py::canvas_pin_offsets` survives as the
+named checkpoint for that boundary and is now an identity.
+
+Pin offsets rotate **counter-clockwise** — the file's own convention, restored in
+`core/geometry.py::transform_point` — and then mirror across the vertical axis;
+the instance origin is added last. Note that the *editor API* turns clockwise, so
+`engines/draw.py::_editor_rotation` negates the angle when it hands it over: the
+file's angle and the API's angle are opposite, and the two ends of that pair must
+be changed together (010c's appendix B moved one and broke the golden). The page
+offset is snapped to a 5-unit lattice so pin tips keep the grid the wire endpoints
+share.
 
 A replay is therefore byte-exact apart from one integer page translation — and
 the self-check proves it: a replayed part's rotated pin tip must land on a

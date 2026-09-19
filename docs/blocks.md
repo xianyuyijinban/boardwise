@@ -38,20 +38,26 @@ and no new exception to R1–R5.
 
 ## The coordinate contract
 
-**Every coordinate inside a block template is a block-local file coordinate**:
-the golden page's file-space value minus `origin_file`. `origin_file` is kept so
-a block can be put back exactly where it was cut from, which is what makes the
-round-trip test possible.
+**Every coordinate inside a block template is a block-local canvas coordinate**:
+the page's canvas value minus `origin_file`. `origin_file` is kept so a block can
+be put back exactly where it was cut from, which is what makes the round-trip
+test possible. (Until task 010c this said "file coordinate" and meant the stored
+space, which is y **down**: the harvest read it through a parser that handed the
+stored value over verbatim, so hand-authored blocks — written y up, as author
+intent — came out vertically mirrored. The four `board-extract` blocks were
+re-cut after the fix, so their `origin_file` is now the **bottom-left** of the
+cut in canvas space.)
 
 * Placing a block is a plain addition: `page = local + instance.at`.
   (`at - origin_file` double-counts the cut offset. It is the bug the first
   assembler shipped: a correct netlist, geometry 240 units off the sheet.)
 * `at` defaults to `origin_file`, so a spec that only wants "put it all back"
   says nothing.
-* The file→canvas conversion still happens in exactly one place
-  (`engines/replay.py`), which is why nothing in `core/blocks.py`,
-  `engines/cut.py` or `engines/assemble.py` mentions the canvas. The 006c
-  coordinate guards (`tests/test_coordinate_guards.py`) hold.
+* The y sign flips in exactly one place, the **parser boundary**
+  (`parsers/schematic.py::_page_y` / `_page_box`) — not here and not in the
+  replay. Nothing in `core/blocks.py`, `engines/cut.py` or `engines/assemble.py`
+  negates a y, and the 006c coordinate guards
+  (`tests/test_coordinate_guards.py`) hold.
 
 ## Template fields
 
@@ -227,19 +233,23 @@ Three refusals guard the merge:
   quietly turn two nets into one.
 * a **power/ground port with no flag** at its position → error, **but only on a
   block that carries geometry** (2026-09-17 ruling; see the next section). A
-  template with wires or flags replays the anchors its cut saw, so a missing one
+  template with wires or flags replays the anchors it carries, so a missing one
   is a defect in the template. A geometry-less block has no measured anchor to
   be missing — its anchors are synthesised.
 
 ## Anchors: two paths, chosen by whether the block carries geometry
 
 A port's `position` is where its **name** is drawn, and where that anchor comes
-from depends on the block (2026-09-17 ruling, 岳翔宇):
+from depends on the block (2026-09-17 ruling, 岳翔宇). The rule is decided by
+whether the block **carries** geometry, not by what its provenance says it was
+made from: a `board-extract` cut its geometry, an authored block may draw it by
+hand (task 010), and either way the block is the authority on its own anchors.
 
-* **A block with geometry** (a `board-extract`) has anchors its cut actually
-  saw. Its flags and labels are translated onto the page, `position` is
-  **required** and must be one of them, and a rail port with nothing there is an
-  error — a measurement with a hole in it is a defect in the template.
+* **A block with geometry** has anchors that were actually drawn or measured.
+  Its flags and labels are translated onto the page, `position` is **required**
+  and must be one of them, and a rail port with nothing there is an error — a
+  block that writes its anchors down and then has a hole in them is a defect in
+  the template, not something the assembler may paper over with a point.
 * **A block with no geometry** (`datasheet-extract`, `textbook`) has no measured
   anchor at all, so `position` is **forbidden** and the assembler **synthesises**
   one per pin endpoint. Writing `[0, 0]` there is not "no position" — it is the
@@ -251,7 +261,7 @@ The synthesis is deterministic, so the same input assembles byte-identically:
 | rule | value |
 |---|---|
 | endpoints | `placement + symbol offsets`, rotated by `core.geometry.transform_point` (the one rotation convention in the project) |
-| rail stub | one routing cell, `engines.layout.GRID` = 5.0, **outward**: `+y` for power, `-y` for ground (`+y` is up in file space) |
+| rail stub | one routing cell, `engines.layout.GRID` = 5.0, **outward**: `+y` for power, `-y` for ground (`+y` is up — file space and canvas are the same y-up space since task 010c) |
 | rail flag | at the stub's far end, `kind` = `Power`/`Ground`, **`symbol_uuid` empty** |
 | signal name | a net label **at** the endpoint, no stub |
 | port anchor | the port doubles as its own endpoint's anchor: power takes the net's topmost endpoint, ground the bottommost, a signal the leftmost — ties broken by smallest x, resp. smallest y |
@@ -262,11 +272,57 @@ and the editor resolves it from `kind` + `net`, while an empty `symbol_uuid`
 degrades gracefully in the replay (it only feeds the annotation-box prediction).
 Both halves are pinned by `tools/_probe_flag_anchor.py`.
 
+**Does a wire need `net` to be named?** Measured 2026-09-19 (task 010c, M7) on a
+live page with two geometrically identical horizontal runs — one created with
+`net: "SIG_A"`, one without: the named run renders its name **once, at the run's
+midpoint**, and the unnamed run renders **no label at all**. Neither is labelled
+per segment. So the editor neither derives a name for an isolated run nor
+repeats one along a run: a signal name is visible only if the wire that carries
+it was created with one. That is what the draw flow already does (`--naming
+text` puts the name on the wire *and* a decorative text beside it), and
+"create the wire bare and let connectivity name it" is not a strategy this host
+supports — noted here because it was a live question, and answered by two runs
+and one render rather than by reasoning about the API.
+
 **Why the anchors exist at all.** A geometry-less block's components sit where
 its author placed them — a signed layout, not a solved one — and it has no
 wires, so without this pass its pins are electrically real but visually
 anonymous: a reader would see three parts and no idea which net is which.
 Connectivity travels as names, and names need anchors.
+
+### Hand-authored geometry (task 010)
+
+A block that carries geometry is not necessarily one that was cut. The LDO
+sample (`blocklib/blocks/power_ams1117_3v3.json`) is a `datasheet-extract`
+whose wires and flags were drawn by hand onto its own layout, and it takes the
+first path above: `position` on all three ports, each one a flag the block
+carries. The 2026-09-18 real-host smoke is why — that block's synthesised page
+was electrically right and unreadable (no wire at all, a flag on every pin,
+U1's left edge six texts deep).
+
+What changes is who is answerable for the drawing. Nothing checks it against a
+golden, because an authored block has none, so the block's `notes` and its own
+tests carry the claims:
+
+* one flag per net, at the point the port names — a per-pin flag is what the
+  synthesis path produces and what a reader cannot follow;
+* every run orthogonal, one bend at most, and no run through a symbol body;
+* every run end on a terminal: a pin tip, another run of the same net, or the
+  name anchored there;
+* a pin lands on a run's **end**, never inside one. The editor merges runs that
+  share an endpoint and repeats the junction point there, and a pin inside a
+  single run is the shape whose netlist came back unconnected (measured
+  2026-09-15, `engines/replay.py::split_at_junctions`), so a rail trunk that
+  passes a capacitor pin is written as two runs meeting at that pin;
+* a flag's anchor sits on one of its own net's runs.
+
+`tests/test_ams1117_idiom.py` asserts the drawing segment by segment and pins
+the two mutations that would otherwise slip through: one pin moved onto the
+wrong net, and one run re-drawn through a body. Note what the second one does
+not reuse — the page lint's `WIRE_THROUGH_BOX` rule excuses a segment carrying
+a pin tip of the same part at one end, so a run drawn from U1's own pin *into*
+U1's body lints with no `WIRE_THROUGH_BOX` row at all. The block-level test
+uses the bare geometric predicate, without that escape.
 
 ## What 008a does and does not claim
 
@@ -310,4 +366,5 @@ will read the acceptance numbers as more than they are.
 | `tests/test_assemble.py` | round trip, moved layout, negative cases |
 | `tests/test_spec_cli.py` | the `--spec` CLI surface |
 | `tests/test_designators.py` | the per-instance designator rule |
+| `tests/test_ams1117_idiom.py` | an authored block's hand-drawn geometry, and its netlist |
 | `tests/test_bom.py` | the BOM export and its three refusals |

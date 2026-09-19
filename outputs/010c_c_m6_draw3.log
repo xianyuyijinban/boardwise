@@ -1,0 +1,77 @@
+layout lint: 0 violations
+GATE: components: 17  nets named: 27  wires: 57  NC pins: 12  naming: text  notes: 3  violations: 0  [plan source: golden replay]
+      golden model: 17 components, 13 nets
+      sheet 0,0-1170,825 | drawable 10,10-1160,815 | title block 468,0-1170,198 (measured)
+      naming: text — 10 signal name(s) are drawn as TEXT (decorative, not native net labels)
+  place U1       at (240, 681)  rot 0          via C14267
+  place H1       at (438, 678)  rot 0          via C2937625
+  place R24      at (180, 216)  rot 0          via C25905
+  place R27      at (180, 156)  rot 0          via C25905
+  place USB1     at (89, 181)  rot 180        via C2765186
+  place C25      at (94, 651)  rot 270        via C107004
+  place C3       at (182, 641)  rot 270        via C107004
+  place C4       at (184, 250)  rot 90         via C6119852
+  place C6       at (300, 470)  rot 90         via C14663
+  place C7       at (324, 467)  rot 90         via C100042
+  place U5       at (249, 430)  rot 0          via C47773
+  place U3       at (386, 468)  rot 90         via C17520
+  place C1       at (146, 686)  rot 180        via C14663
+  place C5       at (168, 450)  rot 90         via C57895
+  place C9       at (406, 412)  rot 90         via C57895
+  place X1       at (148, 646)  rot 180        via C9002
+  place LED1     at (350, 490)  rot 0          via C51933293
+  note: shifted left of the title block
+  note: page offset (0, 50) from the golden coordinates
+  note: 35 wire run(s) carry no net name in the source (the editor derives them from the flags)
+  NC pins (left open): U1.10, U1.11, U1.12, U1.13, U1.14, U1.15, U1.9, U5.4, USB1.13, USB1.14, USB1.3, USB1.9
+  net names (27):
+    Ground  GND at (186,724)
+    Ground  GND at (96,686)
+    Ground  GND at (396,662)
+    Ground  GND at (216,156)
+    Ground  GND at (216,216)
+    Ground  GND at (152,100)
+    Ground  GND at (152,248)
+    Power   +5V at (168,136)
+    Power   +5V at (198,226)
+    Ground  GND at (182,620)
+    Ground  GND at (192,278)
+    Ground  GND at (406,388)
+    Power   VCC at (406,450)
+    Power   +5V at (144,474)
+    Ground  GND at (156,426)
+    Ground  GND at (306,498)
+    Power   VCC at (290,724)
+    text    RX at (174,706)
+    text    TX at (174,696)
+    text    D+ at (174,676)
+    text    D- at (174,666)
+    text    TX at (396,688)
+    text    RX at (396,678)
+    text    D- at (168,166)
+    text    D- at (168,186)
+    text    D+ at (168,196)
+    text    D+ at (168,176)
+  wires: 57 polylines
+  golden overrides (3):
+    R24  expect_footprint: 黄金 (空) → R0402, lcsc: 黄金 (空) → C25905, place_device_uuid: 黄金 (空) → ef1f93374e0c4079b48a2d1a3cec8f6b, place_library_uuid: 黄金 (空) → 0819f05c4eef4c71ace90d822a990e87  [岳翔宇 2026-09-15: 原解析件 TCH35P5K10JE 的封装不是 0402（黄金是 0402）。改用 0402WGF5101TCE / C25905（UNI-ROYAL 厚膜 5.1kΩ ±1%）；封装名 R0402 由 lib.device.search + lib.footprint.get 实测确认，非关键字首命中。]
+    R27  expect_footprint: 黄金 (空) → R0402, lcsc: 黄金 (空) → C25905, place_device_uuid: 黄金 (空) → ef1f93374e0c4079b48a2d1a3cec8f6b, place_library_uuid: 黄金 (空) → 0819f05c4eef4c71ace90d822a990e87  [岳翔宇 2026-09-15: 同 R24 —— 原 TCH35P5K10JE 封装错，换 0402WGF5101TCE / C25905（实测封装 R0402）。]
+    U3  expect_footprint: 黄金 (空) → R0805, lcsc: 黄金 C2907329 → C17520, place_device_uuid: 黄金 (空) → e6fc24c46c1b4a30bb4eb67fbe8dc16d, place_library_uuid: 黄金 (空) → 0819f05c4eef4c71ace90d822a990e87, value: 黄金 1kΩ → 2.2kΩ  [岳翔宇 2026-09-15: 黄金的 1kΩ 是他当年的人为错误（本人确认）；原库件 FRC0805J471 TS 是 470Ω，也不对。正确值 2.2kΩ 0805 → 0805W8F2201T5E / C17520；封装名 R0805 实测确认。]
+plan source: golden replay
+naming: text — 10 signal name(s) drawn as TEXT (decorative, NOT native net labels)
+sheet frame: sheet 0,0-1170,825 | drawable 10,10-1160,815 | title block 468,0-1170,198 (measured)
+candidate source: netlist export
+netlist probe: getNetlistFile (44891 chars)
+placement check: 17 parts, 1 drifted with the library version, 0 unmappable
+  ! pin numbering drifted with the library version — wire endpoints are replayed at the golden pin tips and the diff is compared by pin name for:
+    USB1
+
+executed 163 bridge actions, 0 failed
+
+persistence: saved_unverified — saved_unverified (the save API answered ok; NOT verified on disk — no reopen has compared it)
+  only a close-and-reopen that compares equal makes this saved_verified; see docs/persistence-baseline.md for the procedure
+
+diff vs golden (netlist export):
+no differences — designs match
+
+render (acceptance image): outputs/010c_c_m6_replay.png

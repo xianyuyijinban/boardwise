@@ -198,10 +198,18 @@ def test_frame_refuses_to_invent_a_page():
 
 
 def test_title_block_is_the_bottom_right_ratio_rect():
+    """Bottom-right is now a real corner: canvas y grows up (010c).
+
+    Pre-010c the carve was ``[y1 - h, y1]``, which *was* the bottom while y
+    grew downward and became the **top** once the axis was corrected. Measured
+    on a rendered A4 page: a marker at the old carve's centre landed in the
+    upper-right blank area, its y-mirrored twin inside the real title block.
+    """
     frame = sheet_frame_from_bbox(L.Rect(0.0, 0.0, 1170.0, 825.0))
     assert frame.title_block.x0 == pytest.approx(1170 * 0.4)
-    assert frame.title_block.y0 == pytest.approx(825 * 0.76)
-    assert (frame.title_block.x1, frame.title_block.y1) == (1170.0, 825.0)
+    assert frame.title_block.y0 == pytest.approx(0.0)
+    assert frame.title_block.y1 == pytest.approx(825 * 0.24)
+    assert frame.title_block.x1 == pytest.approx(1170.0)
 
 
 # --------------------------------------------------------------------------

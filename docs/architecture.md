@@ -89,7 +89,7 @@ adds is a *source* of geometry (a block library) and a *composition rule*
 (translate the block, name the nets); the plan-building path is untouched.
 `docs/blocks.md` is the format and pipeline reference.
 
-## Three coordinate spaces (v0.3, 2026-09-16)
+## Three coordinate spaces (v0.3, 2026-09-16; corrected 2026-09-18)
 
 Three spaces coexist and only two of them are ours to convert between. Getting
 this wrong produced two separate off-by-sign bugs in 006b, so the rules are
@@ -97,23 +97,45 @@ stated as constraints rather than as a convention.
 
 | Space | Units | y axis | Who sees it |
 |---|---|---|---|
-| **file** | mil (`.epru` stores what it stores) | up, and the sign convention is recorded per record type as measured | parsers |
-| **canvas** | page units, 1:1 with file | **down** (`canvas_y = -file_y`) | engines, the editor |
+| **file** (what `.epru` stores) | mil | **down** — measured 2026-09-18: `stored_y = -canvas_y` (35/42 parts exact, ROBOT ctrl FOC, live `sch.geometry` vs the project's own `.epro2`) | parsers |
+| **canvas** (the editor's API) | page units, 1:1 with file | **up** — measured 2026-09-18 by a two-marker test (`MARK_Y100`/`MARK_Y700` renders y=700 at the page top, confirmed in the GUI) | engines, the editor |
 | **mm** | millimetres | — | human-facing reports only |
+
+> **Measured 2026-09-18 (task 010c, M1).** Earlier revisions of this table said
+> canvas y was *down*. That was wrong — the canvas is y up, and the equation
+> `canvas_y = -file_y` has been the right *equation* all along with the two axis
+> labels swapped. The consequence is what task 010c is about: our own block-local
+> coordinates were authored **y up** (author intent: power rails higher), while the
+> pipeline treated them as file space (y down), so a hand-authored block came out
+> vertically mirrored while the golden replay stayed self-consistent (the two
+> negations cancelled). See `tasks/010c-coordinate-convention.md`.
+>
+> **Ruled 2026-09-18 (task 010c appendix A): one space, one negation.** Our
+> canonical file space becomes the canvas space, so the single negation lives at
+> the parser boundary and every caller stops negating. The harvested block library
+> was migrated (the four `board-extract` blocks were re-cut from the board they
+> name; `power_ams1117_3v3`'s measured symbol data was flipped and its two rail
+> legs re-aimed at the true pin tips). `engines/generate.py::canvas_pin_offsets`
+> survives as the *named* checkpoint for that boundary and is now an identity —
+> kept so the guards and a reader have one place to look rather than a negative
+> space to search.
 
 Rules:
 
-1. **Conversion happens in exactly two places**: at a parser's boundary (file →
-   canvas, as the parser hands its result over) and in
-   `engines/generate.py::canvas_pin_offsets` (the sanctioned entry point for pin
-   geometry). Anywhere else is a bug, not a shortcut.
+1. **Conversion happens in exactly one place**: at a parser's boundary, as the
+   parser hands its result over (`parsers/schematic.py::_page_y` / `_page_box`).
+   Everything downstream is canvas space. `engines/generate.py::canvas_pin_offsets`
+   is still *named* by the guards as the engines' entry point for pin geometry, but
+   it no longer converts — negating there as well was the second half of the double
+   negation 010c removed.
 2. **`engines` never speaks mil.** `mil_to_mm`, `25.4` and `39.37` are forbidden
    in `src/boardwise/engines/**`; the conversion lives in
    `core/geometry.py` (`MIL_TO_MM`, `mil_to_mm`) and is called at the boundary.
-3. **`parsers` never speaks canvas.** Identifiers containing `canvas` are
-   forbidden in `src/boardwise/parsers/**`. (The *words* are fine in comments,
-   docstrings and `.epru` record-type names — `"CANVAS"` is a record type, not a
-   coordinate claim.)
+3. **The parser boundary is where y flips, and only there.** Identifiers
+   containing `canvas` stay out of `src/boardwise/parsers/**` — the parser still
+   does not *name* the canvas; it yields coordinates in the one space both sides
+   now share. (The *words* remain fine in comments, docstrings and `.epru`
+   record-type names — `"CANVAS"` is a record type, not a coordinate claim.)
 4. **A name carries its space.** A variable or parameter holding canvas
    coordinates ends in `_canvas`, and one holding file coordinates ends in
    `_file`. Where the two meet, the suffix is what makes a reader able to check

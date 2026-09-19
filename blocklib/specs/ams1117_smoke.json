@@ -2,11 +2,11 @@
   "kind": "boardwise-board-spec",
   "version": 1,
   "name": "ams1117_smoke",
-  "description": "One datasheet-extract block on a page of its own: the first real-host test of synthesised anchors. The block carries no geometry, so the assembler names every pin endpoint itself — a one-cell stub and a flag on each rail endpoint, a net label on each signal endpoint. What a human has to judge here is whether that reads as a schematic: three parts, eight flags (U1's tab pin 4 is a second VOUT endpoint, so VCC anchors three times), and no wire that is not an anchor stub.",
+  "description": "One block on a page of its own: the readability probe for the LDO idiom (task 010). The block now carries hand-drawn geometry — three parts, ten wire runs, one flag per rail — so the assembler replays those wires and flags instead of synthesising an anchor per pin endpoint. It is the same page the 2026-09-18 real-host smoke rendered with synthesised anchors (eight per-pin flags, not one wire, U1's left edge six texts deep), kept as the before/after. What a human has to judge here is whether this reads as a schematic: is the topology legible, does any text sit on another, and does the page look drawn rather than stamped.",
   "provenance": {
     "kind": "datasheet-extract",
     "source": "work item 3, first signed block (power_ams1117_3v3)",
-    "note": "Not a product page — a readability probe. It exists so the synthesised anchors can be looked at on a real canvas before six more blocks are written on the strength of the rule."
+    "note": "Not a product page — a readability probe. It exists so a hand-drawn block can be looked at on a real canvas before more blocks are written on the strength of the rule."
   },
   "sheet": {
     "attrs": {
@@ -25,15 +25,15 @@
     "origin": [0.0, 0.0]
   },
   "references": [
-    {"id": "ds", "kind": "datasheet", "path": "AMS1117-3.3_C6186.pdf"}
+    {"id": "ds", "kind": "datasheet", "path": "../../inputs/smart_pillbox/datasheets/AMS1117-3.3_C6186.pdf"}
   ],
   "blocks": [
     {
       "id": "pwr",
       "template": "../blocks/power_ams1117_3v3.json",
-      "at": [400.0, -300.0],
+      "at": [400.0, 300.0],
       "evidence": ["ds"],
-      "note": "Centred by hand so the synthesised anchors have room to be read. The block's own layout is the signed author's placement and is not re-solved."
+      "note": "Centred by hand so the drawing has room to be read. The block's own layout is authored on the block's page and is not re-solved here."
     }
   ],
   "connections": [],
