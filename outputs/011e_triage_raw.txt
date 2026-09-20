@@ -1,0 +1,362 @@
+##### ProPrj_毕设FOC驱动板_2026-09-17  (tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2)
+      121 components, 85 nets
+
+=== decoupling-per-ic  [L1-connectivity]  findings: 5 WARN
+  [WARN] U1: none of its pin nets contains a capacitor. Heuristic limits: matches designator prefixes only (U*/C*), cannot tell supply pins from signal pins, and any C-prefixed part (including connectors) counts as a capacitor.
+  [WARN] U8: none of its pin nets contains a capacitor. Heuristic limits: matches designator prefixes only (U*/C*), cannot tell supply pins from signal pins, and any C-prefixed part (including connectors) counts as a capacitor.
+  [WARN] USB1: none of its pin nets contains a capacitor. Heuristic limits: matches designator prefixes only (U*/C*), cannot tell supply pins from signal pins, and any C-prefixed part (including connectors) counts as a capacitor.
+  [WARN] U7: none of its pin nets contains a capacitor. Heuristic limits: matches designator prefixes only (U*/C*), cannot tell supply pins from signal pins, and any C-prefixed part (including connectors) counts as a capacitor.
+  [WARN] U6: none of its pin nets contains a capacitor. Heuristic limits: matches designator prefixes only (U*/C*), cannot tell supply pins from signal pins, and any C-prefixed part (including connectors) counts as a capacitor.
+
+=== xtal-load-caps  [L1-connectivity]  findings: 1 WARN
+  [WARN] X1: no grounded capacitor found on net(s) OSC-IN, OSC-OUT. Heuristic limits: crystals are detected by X/Y designator or a MHz/KHz value string; any C-prefixed part counts as a capacitor and its value is not checked.
+
+=== shunt-sense-link  [L1-connectivity]  findings: 1 INFO
+  [INFO] R43 (10mΩ): no IC pins found on its terminal nets IA / PGND. L1 capability boundary: the sense link may run through series resistors or a filter network, which a connectivity-only check cannot see.
+
+=== conn-duplicate-designators  [L1-connectivity]  findings: 30 ERROR
+  [ERROR] U1 is used by more than one placed part; the model kept only the last placement
+  [ERROR] C13 is used by more than one placed part; the model kept only the last placement
+  [ERROR] U14 is used by more than one placed part; the model kept only the last placement
+  [ERROR] U15 is used by more than one placed part; the model kept only the last placement
+  [ERROR] R5 is used by more than one placed part; the model kept only the last placement
+  [ERROR] R1 is used by more than one placed part; the model kept only the last placement
+  [ERROR] R18 is used by more than one placed part; the model kept only the last placement
+  [ERROR] R2 is used by more than one placed part; the model kept only the last placement
+  [ERROR] R4 is used by more than one placed part; the model kept only the last placement
+  [ERROR] C9 is used by more than one placed part; the model kept only the last placement
+  [ERROR] C2 is used by more than one placed part; the model kept only the last placement
+  [ERROR] C12 is used by more than one placed part; the model kept only the last placement
+  [ERROR] C8 is used by more than one placed part; the model kept only the last placement
+  [ERROR] C11 is used by more than one placed part; the model kept only the last placement
+  [ERROR] C10 is used by more than one placed part; the model kept only the last placement
+  [ERROR] U2 is used by more than one placed part; the model kept only the last placement
+  [ERROR] C7 is used by more than one placed part; the model kept only the last placement
+  [ERROR] C6 is used by more than one placed part; the model kept only the last placement
+  [ERROR] R3 is used by more than one placed part; the model kept only the last placement
+  [ERROR] C3 is used by more than one placed part; the model kept only the last placement
+  [ERROR] C5 is used by more than one placed part; the model kept only the last placement
+  [ERROR] R8 is used by more than one placed part; the model kept only the last placement
+  [ERROR] R6 is used by more than one placed part; the model kept only the last placement
+  [ERROR] U16 is used by more than one placed part; the model kept only the last placement
+  [ERROR] C1 is used by more than one placed part; the model kept only the last placement
+  [ERROR] C4 is used by more than one placed part; the model kept only the last placement
+  [ERROR] SCREW1 is used by more than one placed part; the model kept only the last placement
+  [ERROR] SCREW2 is used by more than one placed part; the model kept only the last placement
+  [ERROR] SCREW3 is used by more than one placed part; the model kept only the last placement
+  [ERROR] SCREW4 is used by more than one placed part; the model kept only the last placement
+  <VIOLATION> C1: C1 is used by more than one placed part; the model kept only the last placement
+  <VIOLATION> C10: C10 is used by more than one placed part; the model kept only the last placement
+  <VIOLATION> C11: C11 is used by more than one placed part; the model kept only the last placement
+  <VIOLATION> C12: C12 is used by more than one placed part; the model kept only the last placement
+  <VIOLATION> C13: C13 is used by more than one placed part; the model kept only the last placement
+  <VIOLATION> C2: C2 is used by more than one placed part; the model kept only the last placement
+  <VIOLATION> C3: C3 is used by more than one placed part; the model kept only the last placement
+  <VIOLATION> C4: C4 is used by more than one placed part; the model kept only the last placement
+  <VIOLATION> C5: C5 is used by more than one placed part; the model kept only the last placement
+  <VIOLATION> C6: C6 is used by more than one placed part; the model kept only the last placement
+  <VIOLATION> C7: C7 is used by more than one placed part; the model kept only the last placement
+  <VIOLATION> C8: C8 is used by more than one placed part; the model kept only the last placement
+  <VIOLATION> C9: C9 is used by more than one placed part; the model kept only the last placement
+  <VIOLATION> R1: R1 is used by more than one placed part; the model kept only the last placement
+  <VIOLATION> R18: R18 is used by more than one placed part; the model kept only the last placement
+  <VIOLATION> R2: R2 is used by more than one placed part; the model kept only the last placement
+  <VIOLATION> R3: R3 is used by more than one placed part; the model kept only the last placement
+  <VIOLATION> R4: R4 is used by more than one placed part; the model kept only the last placement
+  <VIOLATION> R5: R5 is used by more than one placed part; the model kept only the last placement
+  <VIOLATION> R6: R6 is used by more than one placed part; the model kept only the last placement
+  <VIOLATION> R8: R8 is used by more than one placed part; the model kept only the last placement
+  <VIOLATION> SCREW1: SCREW1 is used by more than one placed part; the model kept only the last placement
+  <VIOLATION> SCREW2: SCREW2 is used by more than one placed part; the model kept only the last placement
+  <VIOLATION> SCREW3: SCREW3 is used by more than one placed part; the model kept only the last placement
+  <VIOLATION> SCREW4: SCREW4 is used by more than one placed part; the model kept only the last placement
+  <VIOLATION> U1: U1 is used by more than one placed part; the model kept only the last placement
+  <VIOLATION> U14: U14 is used by more than one placed part; the model kept only the last placement
+  <VIOLATION> U15: U15 is used by more than one placed part; the model kept only the last placement
+  <VIOLATION> U16: U16 is used by more than one placed part; the model kept only the last placement
+  <VIOLATION> U2: U2 is used by more than one placed part; the model kept only the last placement
+
+=== conn-nc-and-must-connect  [L2-facts]  findings: 
+  <UNKNOWN> 15 item(s); missing facts:
+     U14: facts for U14 (entry C2907329, mpn 'FRC0805J471 TS', lcsc 'C2907329'): record nc_pins / must_connect
+     U1: facts for U1 (entry C123083, mpn 'TLE5012BE1000', lcsc 'C123083'): record nc_pins / must_connect
+     U2: facts for U2 (entry C2861195, mpn 'DRV8350SRTVR', lcsc 'C2861195'): record nc_pins / must_connect
+     U8: facts for U8 (entry C9900097986, mpn 'MX1.25-LT-3', lcsc 'C9900097986'): record nc_pins / must_connect
+     U5: facts for U5 (entry C2977777, mpn 'CH340N', lcsc 'C2977777'): record nc_pins / must_connect
+     U12: facts for U12 (entry C12084, mpn 'SN65HVD230DR', lcsc 'C12084'): record nc_pins / must_connect
+     U10: facts for U10 (entry C2907329, mpn 'FRC0805J471 TS', lcsc 'C2907329'): record nc_pins / must_connect
+     U9: facts for U9 (entry C440747, mpn 'REF2033AIDDCR', lcsc 'C440747'): record nc_pins / must_connect
+     U7: facts for U7 (entry C477928, mpn 'LM5164DDAR', lcsc 'C477928'): record nc_pins / must_connect
+     U13: facts for U13 (entry C22435132, mpn 'TPLP2981-30DBVR', lcsc 'C22435132'): record nc_pins / must_connect
+     U15: facts for U15 (entry C398355, mpn 'TLV9062IDR', lcsc 'C398355'): record nc_pins / must_connect
+     U3: facts for U3 (entry C7430470, mpn 'ZX-MX1.25-4PWT', lcsc 'C7430470'): record nc_pins / must_connect
+     U4: facts for U4 (entry C32713286, mpn 'HX PZ2.54-2x6P TP', lcsc 'C32713286'): record nc_pins / must_connect
+     U6: facts for U6 (entry C32713286, mpn 'HX PZ2.54-2x6P TP', lcsc 'C32713286'): record nc_pins / must_connect
+     U16: facts for U16 (entry C398355, mpn 'TLV9062IDR', lcsc 'C398355'): record nc_pins / must_connect
+
+=== conn-library-pins  [L2-facts]  findings: 
+  <UNKNOWN> 1 item(s); missing facts:
+     library pin comparison: a library resolver (bridge): board pins vs the library symbol's pin numbers, per part with an identity
+
+=== pwr-supply-on-known-domain  [L2-facts]  findings: 
+  <UNKNOWN> 15 item(s); missing facts:
+     U14: facts for U14 (entry C2907329, mpn 'FRC0805J471 TS', lcsc 'C2907329'): record supply_pins
+     U1: facts for U1 (entry C123083, mpn 'TLE5012BE1000', lcsc 'C123083'): record supply_pins
+     U2: facts for U2 (entry C2861195, mpn 'DRV8350SRTVR', lcsc 'C2861195'): record supply_pins
+     U8: facts for U8 (entry C9900097986, mpn 'MX1.25-LT-3', lcsc 'C9900097986'): record supply_pins
+     U5: facts for U5 (entry C2977777, mpn 'CH340N', lcsc 'C2977777'): record supply_pins
+     U12: facts for U12 (entry C12084, mpn 'SN65HVD230DR', lcsc 'C12084'): record supply_pins
+     U10: facts for U10 (entry C2907329, mpn 'FRC0805J471 TS', lcsc 'C2907329'): record supply_pins
+     U9: facts for U9 (entry C440747, mpn 'REF2033AIDDCR', lcsc 'C440747'): record supply_pins
+     U7: facts for U7 (entry C477928, mpn 'LM5164DDAR', lcsc 'C477928'): record supply_pins
+     U13: facts for U13 (entry C22435132, mpn 'TPLP2981-30DBVR', lcsc 'C22435132'): record supply_pins
+     U15: facts for U15 (entry C398355, mpn 'TLV9062IDR', lcsc 'C398355'): record supply_pins
+     U3: facts for U3 (entry C7430470, mpn 'ZX-MX1.25-4PWT', lcsc 'C7430470'): record supply_pins
+     U4: facts for U4 (entry C32713286, mpn 'HX PZ2.54-2x6P TP', lcsc 'C32713286'): record supply_pins
+     U6: facts for U6 (entry C32713286, mpn 'HX PZ2.54-2x6P TP', lcsc 'C32713286'): record supply_pins
+     U16: facts for U16 (entry C398355, mpn 'TLV9062IDR', lcsc 'C398355'): record supply_pins
+
+=== pwr-domain-vs-range  [L2-facts]  findings: 
+  <UNKNOWN> 15 item(s); missing facts:
+     U14: facts for U14 (entry C2907329, mpn 'FRC0805J471 TS', lcsc 'C2907329'): record v_operating / v_abs_max
+     U1: facts for U1 (entry C123083, mpn 'TLE5012BE1000', lcsc 'C123083'): record v_operating / v_abs_max
+     U2: facts for U2 (entry C2861195, mpn 'DRV8350SRTVR', lcsc 'C2861195'): record v_operating / v_abs_max
+     U8: facts for U8 (entry C9900097986, mpn 'MX1.25-LT-3', lcsc 'C9900097986'): record v_operating / v_abs_max
+     U5: facts for U5 (entry C2977777, mpn 'CH340N', lcsc 'C2977777'): record v_operating / v_abs_max
+     U12: facts for U12 (entry C12084, mpn 'SN65HVD230DR', lcsc 'C12084'): record v_operating / v_abs_max
+     U10: facts for U10 (entry C2907329, mpn 'FRC0805J471 TS', lcsc 'C2907329'): record v_operating / v_abs_max
+     U9: facts for U9 (entry C440747, mpn 'REF2033AIDDCR', lcsc 'C440747'): record v_operating / v_abs_max
+     U7: facts for U7 (entry C477928, mpn 'LM5164DDAR', lcsc 'C477928'): record v_operating / v_abs_max
+     U13: facts for U13 (entry C22435132, mpn 'TPLP2981-30DBVR', lcsc 'C22435132'): record v_operating / v_abs_max
+     U15: facts for U15 (entry C398355, mpn 'TLV9062IDR', lcsc 'C398355'): record v_operating / v_abs_max
+     U3: facts for U3 (entry C7430470, mpn 'ZX-MX1.25-4PWT', lcsc 'C7430470'): record v_operating / v_abs_max
+     U4: facts for U4 (entry C32713286, mpn 'HX PZ2.54-2x6P TP', lcsc 'C32713286'): record v_operating / v_abs_max
+     U6: facts for U6 (entry C32713286, mpn 'HX PZ2.54-2x6P TP', lcsc 'C32713286'): record v_operating / v_abs_max
+     U16: facts for U16 (entry C398355, mpn 'TLV9062IDR', lcsc 'C398355'): record v_operating / v_abs_max
+
+=== path-ldo-dropout  [L2-facts]  findings: 
+  <UNKNOWN> 15 item(s); missing facts:
+     U14: category and ldo facts for U14 (entry C2907329, mpn 'FRC0805J471 TS', lcsc 'C2907329')
+     U1: category and ldo facts for U1 (entry C123083, mpn 'TLE5012BE1000', lcsc 'C123083')
+     U2: category and ldo facts for U2 (entry C2861195, mpn 'DRV8350SRTVR', lcsc 'C2861195')
+     U8: category and ldo facts for U8 (entry C9900097986, mpn 'MX1.25-LT-3', lcsc 'C9900097986')
+     U5: category and ldo facts for U5 (entry C2977777, mpn 'CH340N', lcsc 'C2977777')
+     U12: category and ldo facts for U12 (entry C12084, mpn 'SN65HVD230DR', lcsc 'C12084')
+     U10: category and ldo facts for U10 (entry C2907329, mpn 'FRC0805J471 TS', lcsc 'C2907329')
+     U9: category and ldo facts for U9 (entry C440747, mpn 'REF2033AIDDCR', lcsc 'C440747')
+     U7: category and ldo facts for U7 (entry C477928, mpn 'LM5164DDAR', lcsc 'C477928')
+     U13: category and ldo facts for U13 (entry C22435132, mpn 'TPLP2981-30DBVR', lcsc 'C22435132')
+     U15: category and ldo facts for U15 (entry C398355, mpn 'TLV9062IDR', lcsc 'C398355')
+     U3: category and ldo facts for U3 (entry C7430470, mpn 'ZX-MX1.25-4PWT', lcsc 'C7430470')
+     U4: category and ldo facts for U4 (entry C32713286, mpn 'HX PZ2.54-2x6P TP', lcsc 'C32713286')
+     U6: category and ldo facts for U6 (entry C32713286, mpn 'HX PZ2.54-2x6P TP', lcsc 'C32713286')
+     U16: category and ldo facts for U16 (entry C398355, mpn 'TLV9062IDR', lcsc 'C398355')
+
+=== decap-required-caps  [L2-facts]  findings: 1 WARN
+  [WARN] U11 pin5: the grounded capacitor on 'NET2' is only 100nF (< required 1uF)
+  <VIOLATION> U11 pin5: U11 pin5: the grounded capacitor on 'NET2' is only 100nF (< required 1uF)
+  <UNKNOWN> 15 item(s); missing facts:
+     U14: facts for U14 (entry C2907329, mpn 'FRC0805J471 TS', lcsc 'C2907329'): record required_caps
+     U1: facts for U1 (entry C123083, mpn 'TLE5012BE1000', lcsc 'C123083'): record required_caps
+     U2: facts for U2 (entry C2861195, mpn 'DRV8350SRTVR', lcsc 'C2861195'): record required_caps
+     U8: facts for U8 (entry C9900097986, mpn 'MX1.25-LT-3', lcsc 'C9900097986'): record required_caps
+     U5: facts for U5 (entry C2977777, mpn 'CH340N', lcsc 'C2977777'): record required_caps
+     U12: facts for U12 (entry C12084, mpn 'SN65HVD230DR', lcsc 'C12084'): record required_caps
+     U10: facts for U10 (entry C2907329, mpn 'FRC0805J471 TS', lcsc 'C2907329'): record required_caps
+     U9: facts for U9 (entry C440747, mpn 'REF2033AIDDCR', lcsc 'C440747'): record required_caps
+     U7: facts for U7 (entry C477928, mpn 'LM5164DDAR', lcsc 'C477928'): record required_caps
+     U13: facts for U13 (entry C22435132, mpn 'TPLP2981-30DBVR', lcsc 'C22435132'): record required_caps
+     U15: facts for U15 (entry C398355, mpn 'TLV9062IDR', lcsc 'C398355'): record required_caps
+     U3: facts for U3 (entry C7430470, mpn 'ZX-MX1.25-4PWT', lcsc 'C7430470'): record required_caps
+     U4: facts for U4 (entry C32713286, mpn 'HX PZ2.54-2x6P TP', lcsc 'C32713286'): record required_caps
+     U6: facts for U6 (entry C32713286, mpn 'HX PZ2.54-2x6P TP', lcsc 'C32713286'): record required_caps
+     U16: facts for U16 (entry C398355, mpn 'TLV9062IDR', lcsc 'C398355'): record required_caps
+
+=== param-divider-output  [L2-facts]  findings: 
+  <UNKNOWN> 1 item(s); missing facts:
+     U7 pin5: an input-range fact for U7 pin5
+
+=== param-rc-cutoff  [L2-facts]  findings: 11 INFO
+  [INFO] RC R43(0.01Ω) + C8(100pF) on 'IA': fc = 159,154,943,092 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC R43(0.01Ω) + C11(100pF) on 'IA': fc = 159,154,943,092 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC R18(1.5e+04Ω) + C16(100pF) on 'IC': fc = 106,103 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC U14(1000Ω) + C42(10nF) on 'MOTC': fc = 15,915 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC U14(1000Ω) + C41(100nF) on 'MOTC': fc = 1,592 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC U14(1000Ω) + C40(2.2uF) on 'MOTC': fc = 72 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC R5(1.5e+04Ω) + C8(100pF) on 'IA': fc = 106,103 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC R5(1.5e+04Ω) + C11(100pF) on 'IA': fc = 106,103 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC R13(1.5e+04Ω) + C8(100pF) on 'IA': fc = 106,103 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC R13(1.5e+04Ω) + C11(100pF) on 'IA': fc = 106,103 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC R14(1.5e+04Ω) + C16(100pF) on 'IC': fc = 106,103 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+
+=== param-value-mpn-match  [L2-facts]  findings: 10 WARN
+  [WARN] R43: board value 0.01 Ω contradicts its MPN ('JER2512F3R005' decodes to 0 Ω) -- BOM and schematic disagree
+  [WARN] U14: board value 1000 Ω contradicts its MPN ('FRC0805J471 TS' decodes to 470 Ω) -- BOM and schematic disagree
+  [WARN] C115: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+  [WARN] C116: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+  [WARN] U10: board value 1000 Ω contradicts its MPN ('FRC0805J471 TS' decodes to 470 Ω) -- BOM and schematic disagree
+  [WARN] C42: board value 1e-08 F contradicts its MPN ('CC0805KRX7R9BB104' decodes to 1e-07 F) -- BOM and schematic disagree
+  [WARN] C36: board value 2.2e-06 F contradicts its MPN ('CC0805KRX7R9BB104' decodes to 1e-07 F) -- BOM and schematic disagree
+  [WARN] C44: board value 2.2e-06 F contradicts its MPN ('CC0805KRX7R9BB104' decodes to 1e-07 F) -- BOM and schematic disagree
+  [WARN] C29: board value 2.2e-06 F contradicts its MPN ('CC0805KRX7R9BB104' decodes to 1e-07 F) -- BOM and schematic disagree
+  [WARN] C28: board value 2.2e-06 F contradicts its MPN ('CC0805KRX7R9BB104' decodes to 1e-07 F) -- BOM and schematic disagree
+  <VIOLATION> C115: C115: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+  <VIOLATION> C116: C116: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+  <VIOLATION> C28: C28: board value 2.2e-06 F contradicts its MPN ('CC0805KRX7R9BB104' decodes to 1e-07 F) -- BOM and schematic disagree
+  <VIOLATION> C29: C29: board value 2.2e-06 F contradicts its MPN ('CC0805KRX7R9BB104' decodes to 1e-07 F) -- BOM and schematic disagree
+  <VIOLATION> C36: C36: board value 2.2e-06 F contradicts its MPN ('CC0805KRX7R9BB104' decodes to 1e-07 F) -- BOM and schematic disagree
+  <VIOLATION> C42: C42: board value 1e-08 F contradicts its MPN ('CC0805KRX7R9BB104' decodes to 1e-07 F) -- BOM and schematic disagree
+  <VIOLATION> C44: C44: board value 2.2e-06 F contradicts its MPN ('CC0805KRX7R9BB104' decodes to 1e-07 F) -- BOM and schematic disagree
+  <VIOLATION> R43: R43: board value 0.01 Ω contradicts its MPN ('JER2512F3R005' decodes to 0 Ω) -- BOM and schematic disagree
+  <VIOLATION> U10: U10: board value 1000 Ω contradicts its MPN ('FRC0805J471 TS' decodes to 470 Ω) -- BOM and schematic disagree
+  <VIOLATION> U14: U14: board value 1000 Ω contradicts its MPN ('FRC0805J471 TS' decodes to 470 Ω) -- BOM and schematic disagree
+  <UNKNOWN> 32 item(s); missing facts:
+     R18: a decodable EIA value code in the MPN of R18
+     C5: a decodable EIA value code in the MPN of C5
+     C6: a decodable EIA value code in the MPN of C6
+     C7: a decodable EIA value code in the MPN of C7
+     C8: a decodable EIA value code in the MPN of C8
+     C11: a decodable EIA value code in the MPN of C11
+     R5: a decodable EIA value code in the MPN of R5
+     C15: a decodable EIA value code in the MPN of C15
+     R22: a decodable EIA value code in the MPN of R22
+     R24: a decodable EIA value code in the MPN of R24
+     R27: a decodable EIA value code in the MPN of R27
+     C23: a decodable EIA value code in the MPN of C23
+     C22: a decodable EIA value code in the MPN of C22
+     C17: a decodable EIA value code in the MPN of C17
+     C20: a decodable EIA value code in the MPN of C20
+     C21: a decodable EIA value code in the MPN of C21
+     C32: a decodable EIA value code in the MPN of C32
+     C33: a decodable EIA value code in the MPN of C33
+     R9: a decodable EIA value code in the MPN of R9
+     R10: a decodable EIA value code in the MPN of R10
+     R7: a decodable EIA value code in the MPN of R7
+     R13: a decodable EIA value code in the MPN of R13
+     R15: a decodable EIA value code in the MPN of R15
+     R16: a decodable EIA value code in the MPN of R16
+     R14: a decodable EIA value code in the MPN of R14
+     C16: a decodable EIA value code in the MPN of C16
+     C40: a decodable EIA value code in the MPN of C40
+     C38: a decodable EIA value code in the MPN of C38
+     R20: a decodable EIA value code in the MPN of R20
+     R23: a decodable EIA value code in the MPN of R23
+     C45: a decodable EIA value code in the MPN of C45
+     R32: a decodable EIA value code in the MPN of R32
+
+=== conn-usb-cc-pulldown  [L2-facts]  findings: 
+  <UNKNOWN> 2 item(s); missing facts:
+     USB1 pin4: a readable value on USB1
+     USB1 pin10: a readable value on USB1
+
+##### board24v  (tests/fixtures/board24v.enet)
+      50 components, 42 nets
+
+=== conn-duplicate-designators  [L1-connectivity]  findings: 
+
+=== conn-nc-and-must-connect  [L2-facts]  findings: 
+  <UNKNOWN> 3 item(s); missing facts:
+     U18: facts for U18 (entry C2861195, mpn 'DRV8350SRTVR', lcsc 'C2861195'): record nc_pins / must_connect
+     U19: facts for U19 (entry C32713286, mpn 'HX PZ2.54-2x6P TP', lcsc 'C32713286'): record nc_pins / must_connect
+     U21: facts for U21 (entry C32713286, mpn 'HX PZ2.54-2x6P TP', lcsc 'C32713286'): record nc_pins / must_connect
+
+=== conn-library-pins  [L2-facts]  findings: 
+  <UNKNOWN> 1 item(s); missing facts:
+     library pin comparison: a library resolver (bridge): board pins vs the library symbol's pin numbers, per part with an identity
+
+=== pwr-supply-on-known-domain  [L2-facts]  findings: 
+  <UNKNOWN> 3 item(s); missing facts:
+     U18: facts for U18 (entry C2861195, mpn 'DRV8350SRTVR', lcsc 'C2861195'): record supply_pins
+     U19: facts for U19 (entry C32713286, mpn 'HX PZ2.54-2x6P TP', lcsc 'C32713286'): record supply_pins
+     U21: facts for U21 (entry C32713286, mpn 'HX PZ2.54-2x6P TP', lcsc 'C32713286'): record supply_pins
+
+=== pwr-domain-vs-range  [L2-facts]  findings: 
+  <UNKNOWN> 3 item(s); missing facts:
+     U18: facts for U18 (entry C2861195, mpn 'DRV8350SRTVR', lcsc 'C2861195'): record v_operating / v_abs_max
+     U19: facts for U19 (entry C32713286, mpn 'HX PZ2.54-2x6P TP', lcsc 'C32713286'): record v_operating / v_abs_max
+     U21: facts for U21 (entry C32713286, mpn 'HX PZ2.54-2x6P TP', lcsc 'C32713286'): record v_operating / v_abs_max
+
+=== path-ldo-dropout  [L2-facts]  findings: 
+  <UNKNOWN> 3 item(s); missing facts:
+     U18: category and ldo facts for U18 (entry C2861195, mpn 'DRV8350SRTVR', lcsc 'C2861195')
+     U19: category and ldo facts for U19 (entry C32713286, mpn 'HX PZ2.54-2x6P TP', lcsc 'C32713286')
+     U21: category and ldo facts for U21 (entry C32713286, mpn 'HX PZ2.54-2x6P TP', lcsc 'C32713286')
+
+=== decap-required-caps  [L2-facts]  findings: 
+  <UNKNOWN> 3 item(s); missing facts:
+     U18: facts for U18 (entry C2861195, mpn 'DRV8350SRTVR', lcsc 'C2861195'): record required_caps
+     U19: facts for U19 (entry C32713286, mpn 'HX PZ2.54-2x6P TP', lcsc 'C32713286'): record required_caps
+     U21: facts for U21 (entry C32713286, mpn 'HX PZ2.54-2x6P TP', lcsc 'C32713286'): record required_caps
+
+=== param-divider-output  [L2-facts]  findings: 
+
+=== param-rc-cutoff  [L2-facts]  findings: 27 INFO
+  [INFO] RC R34(10Ω) + C116(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC R34(10Ω) + C47(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC R34(10Ω) + C51(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC R34(10Ω) + C52(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC R34(10Ω) + C115(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC R34(10Ω) + C50(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC R34(10Ω) + C49(2.2uF) on 'VM': fc = 7,234 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC R34(10Ω) + C48(100nF) on 'VM': fc = 159,155 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC R34(10Ω) + C59(10nF) on 'VM': fc = 1,591,549 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC R36(10Ω) + C116(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC R36(10Ω) + C47(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC R36(10Ω) + C51(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC R36(10Ω) + C52(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC R36(10Ω) + C115(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC R36(10Ω) + C50(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC R36(10Ω) + C49(2.2uF) on 'VM': fc = 7,234 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC R36(10Ω) + C48(100nF) on 'VM': fc = 159,155 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC R36(10Ω) + C59(10nF) on 'VM': fc = 1,591,549 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC R37(10Ω) + C116(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC R37(10Ω) + C47(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC R37(10Ω) + C51(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC R37(10Ω) + C52(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC R37(10Ω) + C115(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC R37(10Ω) + C50(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC R37(10Ω) + C49(2.2uF) on 'VM': fc = 7,234 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC R37(10Ω) + C48(100nF) on 'VM': fc = 159,155 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  [INFO] RC R37(10Ω) + C59(10nF) on 'VM': fc = 1,591,549 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+
+=== param-value-mpn-match  [L2-facts]  findings: 15 WARN
+  [WARN] C116: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+  [WARN] C47: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+  [WARN] C51: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+  [WARN] C52: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+  [WARN] C115: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+  [WARN] C50: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+  [WARN] C53: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+  [WARN] C54: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+  [WARN] C55: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+  [WARN] C56: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+  [WARN] C57: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+  [WARN] C58: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+  [WARN] R39: board value 0.001 Ω contradicts its MPN ('RE2512F3R001' decodes to 0 Ω) -- BOM and schematic disagree
+  [WARN] R40: board value 0.001 Ω contradicts its MPN ('RE2512F3R001' decodes to 0 Ω) -- BOM and schematic disagree
+  [WARN] R43: board value 0.001 Ω contradicts its MPN ('RE2512F3R001' decodes to 0 Ω) -- BOM and schematic disagree
+  <VIOLATION> C115: C115: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+  <VIOLATION> C116: C116: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+  <VIOLATION> C47: C47: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+  <VIOLATION> C50: C50: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+  <VIOLATION> C51: C51: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+  <VIOLATION> C52: C52: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+  <VIOLATION> C53: C53: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+  <VIOLATION> C54: C54: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+  <VIOLATION> C55: C55: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+  <VIOLATION> C56: C56: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+  <VIOLATION> C57: C57: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+  <VIOLATION> C58: C58: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+  <VIOLATION> R39: R39: board value 0.001 Ω contradicts its MPN ('RE2512F3R001' decodes to 0 Ω) -- BOM and schematic disagree
+  <VIOLATION> R40: R40: board value 0.001 Ω contradicts its MPN ('RE2512F3R001' decodes to 0 Ω) -- BOM and schematic disagree
+  <VIOLATION> R43: R43: board value 0.001 Ω contradicts its MPN ('RE2512F3R001' decodes to 0 Ω) -- BOM and schematic disagree
+  <UNKNOWN> 8 item(s); missing facts:
+     C48: a decodable EIA value code in the MPN of C48
+     R33: a decodable EIA value code in the MPN of R33
+     R34: a decodable EIA value code in the MPN of R34
+     R35: a decodable EIA value code in the MPN of R35
+     R36: a decodable EIA value code in the MPN of R36
+     R37: a decodable EIA value code in the MPN of R37
+     R38: a decodable EIA value code in the MPN of R38
+     C4: a decodable EIA value code in the MPN of C4
+

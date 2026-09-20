@@ -1,0 +1,166 @@
+boardwise review-eval: split=all, 7 board(s)
+
+board injected-duplicate-designator (reviewsets/injected/duplicate-designator.epro2) [reviewed]: 17 components, 12 nets, findings 1 ERROR / 0 WARN / 0 INFO
+  rule                   defects  det miss x-catch fp-exc fp-unexpl        precision           recall hp-find        hp-prec
+  decoupling-per-ic            0    0    0       0      0         0                —                —       0              —
+  xtal-load-caps               0    0    0       0      0         0                —                —       0              —
+  shunt-sense-link             0    0    0       0      0         0                —                —       0              —
+  conn-duplicate-designators       1    1    0       0      0         0       1/1 = 1.00       1/1 = 1.00       1     1/1 = 1.00
+  conn-nc-and-must-connect       0    0    0       0      0         0                —                —       0              —
+  conn-library-pins            0    0    0       0      0         0                —                —       0              —
+  pwr-supply-on-known-domain       0    0    0       0      0         0                —                —       0              —
+  pwr-domain-vs-range          0    0    0       0      0         0                —                —       0              —
+  path-ldo-dropout             0    0    0       0      0         0                —                —       0              —
+  decap-required-caps          0    0    0       0      0         0                —                —       0              —
+  param-led-current            0    0    0       0      0         0                —                —       0              —
+  param-divider-output         0    0    0       0      0         0                —                —       0              —
+  param-rc-cutoff              0    0    0       0      0         0                —                —       0              —
+  param-value-mpn-match        0    0    0       0      0         0                —                —       0              —
+  conn-usb-cc-pulldown         0    0    0       0      0         0                —                —       0              —
+  VIOLATION     decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=1  conn-nc-and-must-connect=0  conn-library-pins=0  pwr-supply-on-known-domain=0  pwr-domain-vs-range=0  path-ldo-dropout=0  decap-required-caps=0  param-led-current=0  param-divider-output=0  param-rc-cutoff=0  param-value-mpn-match=0  conn-usb-cc-pulldown=0
+  OK            decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=0  conn-nc-and-must-connect=1  conn-library-pins=0  pwr-supply-on-known-domain=2  pwr-domain-vs-range=2  path-ldo-dropout=1  decap-required-caps=4  param-led-current=1  param-divider-output=1  param-rc-cutoff=1  param-value-mpn-match=6  conn-usb-cc-pulldown=2
+  UNKNOWN       decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=0  conn-nc-and-must-connect=3  conn-library-pins=1  pwr-supply-on-known-domain=1  pwr-domain-vs-range=1  path-ldo-dropout=1  decap-required-caps=1  param-led-current=0  param-divider-output=0  param-rc-cutoff=0  param-value-mpn-match=2  conn-usb-cc-pulldown=0
+  NOT_APPLICABLE decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=0  conn-nc-and-must-connect=0  conn-library-pins=0  pwr-supply-on-known-domain=0  pwr-domain-vs-range=0  path-ldo-dropout=1  decap-required-caps=0  param-led-current=0  param-divider-output=0  param-rc-cutoff=0  param-value-mpn-match=0  conn-usb-cc-pulldown=0
+  queries excluded: 0
+
+board fixed-base (reviewsets/injected/fixed-base.epro2) [reviewed]: 17 components, 12 nets, findings 0 ERROR / 0 WARN / 0 INFO
+  rule                   defects  det miss x-catch fp-exc fp-unexpl        precision           recall hp-find        hp-prec
+  decoupling-per-ic            0    0    0       0      0         0                —                —       0              —
+  xtal-load-caps               0    0    0       0      0         0                —                —       0              —
+  shunt-sense-link             0    0    0       0      0         0                —                —       0              —
+  conn-duplicate-designators       0    0    0       0      0         0                —                —       0              —
+  conn-nc-and-must-connect       0    0    0       0      0         0                —                —       0              —
+  conn-library-pins            0    0    0       0      0         0                —                —       0              —
+  pwr-supply-on-known-domain       0    0    0       0      0         0                —                —       0              —
+  pwr-domain-vs-range          0    0    0       0      0         0                —                —       0              —
+  path-ldo-dropout             0    0    0       0      0         0                —                —       0              —
+  decap-required-caps          0    0    0       0      0         0                —                —       0              —
+  param-led-current            0    0    0       0      0         0                —                —       0              —
+  param-divider-output         0    0    0       0      0         0                —                —       0              —
+  param-rc-cutoff              0    0    0       0      0         0                —                —       0              —
+  param-value-mpn-match        0    0    0       0      0         0                —                —       0              —
+  conn-usb-cc-pulldown         0    0    0       0      0         0                —                —       0              —
+  VIOLATION     decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=0  conn-nc-and-must-connect=0  conn-library-pins=0  pwr-supply-on-known-domain=0  pwr-domain-vs-range=0  path-ldo-dropout=0  decap-required-caps=0  param-led-current=0  param-divider-output=0  param-rc-cutoff=0  param-value-mpn-match=0  conn-usb-cc-pulldown=0
+  OK            decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=1  conn-nc-and-must-connect=1  conn-library-pins=0  pwr-supply-on-known-domain=2  pwr-domain-vs-range=2  path-ldo-dropout=1  decap-required-caps=4  param-led-current=1  param-divider-output=1  param-rc-cutoff=1  param-value-mpn-match=6  conn-usb-cc-pulldown=2
+  UNKNOWN       decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=0  conn-nc-and-must-connect=3  conn-library-pins=1  pwr-supply-on-known-domain=1  pwr-domain-vs-range=1  path-ldo-dropout=1  decap-required-caps=1  param-led-current=0  param-divider-output=0  param-rc-cutoff=0  param-value-mpn-match=2  conn-usb-cc-pulldown=0
+  NOT_APPLICABLE decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=0  conn-nc-and-must-connect=0  conn-library-pins=0  pwr-supply-on-known-domain=0  pwr-domain-vs-range=0  path-ldo-dropout=1  decap-required-caps=0  param-led-current=0  param-divider-output=0  param-rc-cutoff=0  param-value-mpn-match=0  conn-usb-cc-pulldown=0
+  queries excluded: 0
+
+board injected-ldo-no-headroom (reviewsets/injected/ldo-no-headroom.epro2) [reviewed]: 17 components, 12 nets, findings 1 ERROR / 0 WARN / 0 INFO
+  rule                   defects  det miss x-catch fp-exc fp-unexpl        precision           recall hp-find        hp-prec
+  decoupling-per-ic            0    0    0       0      0         0                —                —       0              —
+  xtal-load-caps               0    0    0       0      0         0                —                —       0              —
+  shunt-sense-link             0    0    0       0      0         0                —                —       0              —
+  conn-duplicate-designators       0    0    0       0      0         0                —                —       0              —
+  conn-nc-and-must-connect       0    0    0       0      0         0                —                —       0              —
+  conn-library-pins            0    0    0       0      0         0                —                —       0              —
+  pwr-supply-on-known-domain       0    0    0       0      0         0                —                —       0              —
+  pwr-domain-vs-range          0    0    0       0      0         0                —                —       0              —
+  path-ldo-dropout             1    1    0       0      0         0       1/1 = 1.00       1/1 = 1.00       1     1/1 = 1.00
+  decap-required-caps          0    0    0       0      0         0                —                —       0              —
+  param-led-current            0    0    0       0      0         0                —                —       0              —
+  param-divider-output         0    0    0       0      0         0                —                —       0              —
+  param-rc-cutoff              0    0    0       0      0         0                —                —       0              —
+  param-value-mpn-match        0    0    0       0      0         0                —                —       0              —
+  conn-usb-cc-pulldown         0    0    0       0      0         0                —                —       0              —
+  VIOLATION     decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=0  conn-nc-and-must-connect=0  conn-library-pins=0  pwr-supply-on-known-domain=0  pwr-domain-vs-range=0  path-ldo-dropout=1  decap-required-caps=0  param-led-current=0  param-divider-output=0  param-rc-cutoff=0  param-value-mpn-match=0  conn-usb-cc-pulldown=0
+  OK            decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=1  conn-nc-and-must-connect=1  conn-library-pins=0  pwr-supply-on-known-domain=2  pwr-domain-vs-range=2  path-ldo-dropout=0  decap-required-caps=4  param-led-current=1  param-divider-output=1  param-rc-cutoff=1  param-value-mpn-match=6  conn-usb-cc-pulldown=2
+  UNKNOWN       decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=0  conn-nc-and-must-connect=3  conn-library-pins=1  pwr-supply-on-known-domain=1  pwr-domain-vs-range=1  path-ldo-dropout=1  decap-required-caps=1  param-led-current=0  param-divider-output=0  param-rc-cutoff=0  param-value-mpn-match=2  conn-usb-cc-pulldown=0
+  NOT_APPLICABLE decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=0  conn-nc-and-must-connect=0  conn-library-pins=0  pwr-supply-on-known-domain=0  pwr-domain-vs-range=0  path-ldo-dropout=1  decap-required-caps=0  param-led-current=0  param-divider-output=0  param-rc-cutoff=0  param-value-mpn-match=0  conn-usb-cc-pulldown=0
+  queries excluded: 0
+
+board injected-nc-pin-grounded (reviewsets/injected/nc-pin-grounded.epro2) [reviewed]: 17 components, 12 nets, findings 1 ERROR / 0 WARN / 0 INFO
+  rule                   defects  det miss x-catch fp-exc fp-unexpl        precision           recall hp-find        hp-prec
+  decoupling-per-ic            0    0    0       0      0         0                —                —       0              —
+  xtal-load-caps               0    0    0       0      0         0                —                —       0              —
+  shunt-sense-link             0    0    0       0      0         0                —                —       0              —
+  conn-duplicate-designators       0    0    0       0      0         0                —                —       0              —
+  conn-nc-and-must-connect       1    1    0       0      0         0       1/1 = 1.00       1/1 = 1.00       1     1/1 = 1.00
+  conn-library-pins            0    0    0       0      0         0                —                —       0              —
+  pwr-supply-on-known-domain       0    0    0       0      0         0                —                —       0              —
+  pwr-domain-vs-range          0    0    0       0      0         0                —                —       0              —
+  path-ldo-dropout             0    0    0       0      0         0                —                —       0              —
+  decap-required-caps          0    0    0       0      0         0                —                —       0              —
+  param-led-current            0    0    0       0      0         0                —                —       0              —
+  param-divider-output         0    0    0       0      0         0                —                —       0              —
+  param-rc-cutoff              0    0    0       0      0         0                —                —       0              —
+  param-value-mpn-match        0    0    0       0      0         0                —                —       0              —
+  conn-usb-cc-pulldown         0    0    0       0      0         0                —                —       0              —
+  VIOLATION     decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=0  conn-nc-and-must-connect=1  conn-library-pins=0  pwr-supply-on-known-domain=0  pwr-domain-vs-range=0  path-ldo-dropout=0  decap-required-caps=0  param-led-current=0  param-divider-output=0  param-rc-cutoff=0  param-value-mpn-match=0  conn-usb-cc-pulldown=0
+  OK            decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=1  conn-nc-and-must-connect=0  conn-library-pins=0  pwr-supply-on-known-domain=2  pwr-domain-vs-range=2  path-ldo-dropout=1  decap-required-caps=4  param-led-current=1  param-divider-output=1  param-rc-cutoff=1  param-value-mpn-match=6  conn-usb-cc-pulldown=2
+  UNKNOWN       decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=0  conn-nc-and-must-connect=3  conn-library-pins=1  pwr-supply-on-known-domain=1  pwr-domain-vs-range=1  path-ldo-dropout=1  decap-required-caps=1  param-led-current=0  param-divider-output=0  param-rc-cutoff=0  param-value-mpn-match=2  conn-usb-cc-pulldown=0
+  NOT_APPLICABLE decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=0  conn-nc-and-must-connect=0  conn-library-pins=0  pwr-supply-on-known-domain=0  pwr-domain-vs-range=0  path-ldo-dropout=1  decap-required-caps=0  param-led-current=0  param-divider-output=0  param-rc-cutoff=0  param-value-mpn-match=0  conn-usb-cc-pulldown=0
+  queries excluded: 0
+
+board injected-overvoltage-rail (reviewsets/injected/overvoltage-rail.epro2) [reviewed]: 17 components, 12 nets, findings 1 ERROR / 0 WARN / 0 INFO
+  rule                   defects  det miss x-catch fp-exc fp-unexpl        precision           recall hp-find        hp-prec
+  decoupling-per-ic            0    0    0       0      0         0                —                —       0              —
+  xtal-load-caps               0    0    0       0      0         0                —                —       0              —
+  shunt-sense-link             0    0    0       0      0         0                —                —       0              —
+  conn-duplicate-designators       0    0    0       0      0         0                —                —       0              —
+  conn-nc-and-must-connect       0    0    0       0      0         0                —                —       0              —
+  conn-library-pins            0    0    0       0      0         0                —                —       0              —
+  pwr-supply-on-known-domain       0    0    0       0      0         0                —                —       0              —
+  pwr-domain-vs-range          1    1    0       0      0         0       1/1 = 1.00       1/1 = 1.00       1     1/1 = 1.00
+  path-ldo-dropout             0    0    0       0      0         0                —                —       0              —
+  decap-required-caps          0    0    0       0      0         0                —                —       0              —
+  param-led-current            0    0    0       0      0         0                —                —       0              —
+  param-divider-output         0    0    0       0      0         0                —                —       0              —
+  param-rc-cutoff              0    0    0       0      0         0                —                —       0              —
+  param-value-mpn-match        0    0    0       0      0         0                —                —       0              —
+  conn-usb-cc-pulldown         0    0    0       0      0         0                —                —       0              —
+  VIOLATION     decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=0  conn-nc-and-must-connect=0  conn-library-pins=0  pwr-supply-on-known-domain=0  pwr-domain-vs-range=1  path-ldo-dropout=0  decap-required-caps=0  param-led-current=0  param-divider-output=0  param-rc-cutoff=0  param-value-mpn-match=0  conn-usb-cc-pulldown=0
+  OK            decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=1  conn-nc-and-must-connect=1  conn-library-pins=0  pwr-supply-on-known-domain=2  pwr-domain-vs-range=1  path-ldo-dropout=1  decap-required-caps=4  param-led-current=1  param-divider-output=1  param-rc-cutoff=1  param-value-mpn-match=6  conn-usb-cc-pulldown=2
+  UNKNOWN       decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=0  conn-nc-and-must-connect=3  conn-library-pins=1  pwr-supply-on-known-domain=1  pwr-domain-vs-range=1  path-ldo-dropout=1  decap-required-caps=1  param-led-current=0  param-divider-output=0  param-rc-cutoff=0  param-value-mpn-match=2  conn-usb-cc-pulldown=0
+  NOT_APPLICABLE decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=0  conn-nc-and-must-connect=0  conn-library-pins=0  pwr-supply-on-known-domain=0  pwr-domain-vs-range=0  path-ldo-dropout=1  decap-required-caps=0  param-led-current=0  param-divider-output=0  param-rc-cutoff=0  param-value-mpn-match=0  conn-usb-cc-pulldown=0
+  queries excluded: 0
+
+board injected-v3-decap-missing (reviewsets/injected/v3-decap-missing.epro2) [DRAFT (oracle review pending)]: 16 components, 12 nets, findings 0 ERROR / 0 WARN / 0 INFO
+  rule                   defects  det miss x-catch fp-exc fp-unexpl        precision           recall hp-find        hp-prec
+  decoupling-per-ic            0    0    0       0      0         0                —                —       0              —
+  xtal-load-caps               0    0    0       0      0         0                —                —       0              —
+  shunt-sense-link             0    0    0       0      0         0                —                —       0              —
+  conn-duplicate-designators       0    0    0       0      0         0                —                —       0              —
+  conn-nc-and-must-connect       0    0    0       0      0         0                —                —       0              —
+  conn-library-pins            0    0    0       0      0         0                —                —       0              —
+  pwr-supply-on-known-domain       0    0    0       0      0         0                —                —       0              —
+  pwr-domain-vs-range          0    0    0       0      0         0                —                —       0              —
+  path-ldo-dropout             0    0    0       0      0         0                —                —       0              —
+  decap-required-caps          0    0    0       0      0         0                —                —       0              —
+  param-led-current            0    0    0       0      0         0                —                —       0              —
+  param-divider-output         0    0    0       0      0         0                —                —       0              —
+  param-rc-cutoff              0    0    0       0      0         0                —                —       0              —
+  param-value-mpn-match        0    0    0       0      0         0                —                —       0              —
+  conn-usb-cc-pulldown         0    0    0       0      0         0                —                —       0              —
+  VIOLATION     decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=0  conn-nc-and-must-connect=0  conn-library-pins=0  pwr-supply-on-known-domain=0  pwr-domain-vs-range=0  path-ldo-dropout=0  decap-required-caps=0  param-led-current=0  param-divider-output=0  param-rc-cutoff=0  param-value-mpn-match=0  conn-usb-cc-pulldown=0
+  OK            decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=1  conn-nc-and-must-connect=1  conn-library-pins=0  pwr-supply-on-known-domain=2  pwr-domain-vs-range=2  path-ldo-dropout=1  decap-required-caps=4  param-led-current=1  param-divider-output=1  param-rc-cutoff=1  param-value-mpn-match=5  conn-usb-cc-pulldown=2
+  UNKNOWN       decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=0  conn-nc-and-must-connect=3  conn-library-pins=1  pwr-supply-on-known-domain=1  pwr-domain-vs-range=1  path-ldo-dropout=1  decap-required-caps=1  param-led-current=0  param-divider-output=0  param-rc-cutoff=0  param-value-mpn-match=2  conn-usb-cc-pulldown=0
+  NOT_APPLICABLE decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=0  conn-nc-and-must-connect=0  conn-library-pins=0  pwr-supply-on-known-domain=0  pwr-domain-vs-range=0  path-ldo-dropout=1  decap-required-caps=0  param-led-current=0  param-divider-output=0  param-rc-cutoff=0  param-value-mpn-match=0  conn-usb-cc-pulldown=0
+  queries excluded: 0
+
+board injected-value-mpn-mismatch (reviewsets/injected/value-mpn-mismatch.epro2) [reviewed]: 17 components, 12 nets, findings 0 ERROR / 1 WARN / 0 INFO
+  rule                   defects  det miss x-catch fp-exc fp-unexpl        precision           recall hp-find        hp-prec
+  decoupling-per-ic            0    0    0       0      0         0                —                —       0              —
+  xtal-load-caps               0    0    0       0      0         0                —                —       0              —
+  shunt-sense-link             0    0    0       0      0         0                —                —       0              —
+  conn-duplicate-designators       0    0    0       0      0         0                —                —       0              —
+  conn-nc-and-must-connect       0    0    0       0      0         0                —                —       0              —
+  conn-library-pins            0    0    0       0      0         0                —                —       0              —
+  pwr-supply-on-known-domain       0    0    0       0      0         0                —                —       0              —
+  pwr-domain-vs-range          0    0    0       0      0         0                —                —       0              —
+  path-ldo-dropout             0    0    0       0      0         0                —                —       0              —
+  decap-required-caps          0    0    0       0      0         0                —                —       0              —
+  param-led-current            0    0    0       0      0         0                —                —       0              —
+  param-divider-output         0    0    0       0      0         0                —                —       0              —
+  param-rc-cutoff              0    0    0       0      0         0                —                —       0              —
+  param-value-mpn-match        1    1    0       0      0         0       1/1 = 1.00       1/1 = 1.00       1     1/1 = 1.00
+  conn-usb-cc-pulldown         0    0    0       0      0         0                —                —       0              —
+  VIOLATION     decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=0  conn-nc-and-must-connect=0  conn-library-pins=0  pwr-supply-on-known-domain=0  pwr-domain-vs-range=0  path-ldo-dropout=0  decap-required-caps=0  param-led-current=0  param-divider-output=0  param-rc-cutoff=0  param-value-mpn-match=1  conn-usb-cc-pulldown=0
+  OK            decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=1  conn-nc-and-must-connect=1  conn-library-pins=0  pwr-supply-on-known-domain=2  pwr-domain-vs-range=2  path-ldo-dropout=1  decap-required-caps=4  param-led-current=1  param-divider-output=1  param-rc-cutoff=1  param-value-mpn-match=5  conn-usb-cc-pulldown=2
+  UNKNOWN       decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=0  conn-nc-and-must-connect=3  conn-library-pins=1  pwr-supply-on-known-domain=1  pwr-domain-vs-range=1  path-ldo-dropout=1  decap-required-caps=1  param-led-current=0  param-divider-output=0  param-rc-cutoff=0  param-value-mpn-match=2  conn-usb-cc-pulldown=0
+  NOT_APPLICABLE decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=0  conn-nc-and-must-connect=0  conn-library-pins=0  pwr-supply-on-known-domain=0  pwr-domain-vs-range=0  path-ldo-dropout=1  decap-required-caps=0  param-led-current=0  param-divider-output=0  param-rc-cutoff=0  param-value-mpn-match=0  conn-usb-cc-pulldown=0
+  queries excluded: 0
+
+  split totals (all) over 7 board(s), 6 carrying oracle records in this split:
+    defect detection (injected + native): 5/5 = 1.00  (cross-caught 0, missed 0)
+    high-priority precision (ERROR/WARN findings): 5/5 = 1.00  (0 contradicted an exception, 0 had no oracle record)

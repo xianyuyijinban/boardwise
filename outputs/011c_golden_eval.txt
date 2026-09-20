@@ -1,0 +1,22 @@
+boardwise review-eval: split=dev, 1 board(s)
+
+board ch340g-golden (tests/fixtures/ch340_golden.epro2) [DRAFT (oracle review pending)]: 17 components, 13 nets, findings 0 ERROR / 0 WARN / 0 INFO
+  rule                   defects  det miss x-catch fp-exc fp-unexpl        precision           recall
+  decoupling-per-ic            0    0    0       0      0         0                —                —
+  xtal-load-caps               0    0    0       0      0         0                —                —
+  shunt-sense-link             0    0    0       0      0         0                —                —
+  conn-duplicate-designators       0    0    0       0      0         0                —                —
+  conn-nc-and-must-connect       0    0    0       0      0         0                —                —
+  conn-library-pins            0    0    0       0      0         0                —                —
+  pwr-supply-on-known-domain       0    0    0       0      0         0                —                —
+  pwr-domain-vs-range          0    0    0       0      0         0                —                —
+  path-ldo-dropout             0    0    0       0      0         0                —                —
+  no registered rule: 3 record(s) hint rules that do not exist yet — listed verbatim, counted in no denominator:
+    LED1 [defect, WARN] hint 'param-value-mpn-match': Oracle ruling 2026-09-19 (was a query in the 011a draft). Three numbers on this board disagree about one resistor: board value=1k, the MP...
+    R24 [exception] hint 'conn-usb-cc-pulldown': Oracle ruling 2026-09-19 (was a query in the 011a draft): intended. R24 (pin 1 on USB1 pin 10, pin 2 on GND) and R27 (same on USB1 pin 4)...
+    R27 [exception] hint 'conn-usb-cc-pulldown': Oracle ruling 2026-09-19 (was a query in the 011a draft): intended. 5.1k Rd pull-down on USB1 CC2 (pin 4), the twin of R24 on CC1 (pin 10...
+  VIOLATION     decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=0  conn-nc-and-must-connect=0  conn-library-pins=0  pwr-supply-on-known-domain=0  pwr-domain-vs-range=0  path-ldo-dropout=0
+  OK            decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=1  conn-nc-and-must-connect=1  conn-library-pins=0  pwr-supply-on-known-domain=2  pwr-domain-vs-range=2  path-ldo-dropout=1
+  UNKNOWN       decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=0  conn-nc-and-must-connect=3  conn-library-pins=1  pwr-supply-on-known-domain=1  pwr-domain-vs-range=1  path-ldo-dropout=1
+  NOT_APPLICABLE decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=0  conn-nc-and-must-connect=0  conn-library-pins=0  pwr-supply-on-known-domain=0  pwr-domain-vs-range=0  path-ldo-dropout=1
+  queries excluded: 1

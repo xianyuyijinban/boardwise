@@ -1,0 +1,163 @@
+# boardwise review report
+
+- Source: tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2
+- Components: 121
+- Nets: 85
+- Findings: 30 ERROR, 14 WARN, 12 INFO
+
+## ERROR (30)
+
+- `conn-duplicate-designators` [L1-connectivity] U1 is used by more than one placed part; the model kept only the last placement
+  - duplicate designator U1
+- `conn-duplicate-designators` [L1-connectivity] C13 is used by more than one placed part; the model kept only the last placement
+  - duplicate designator C13
+- `conn-duplicate-designators` [L1-connectivity] U14 is used by more than one placed part; the model kept only the last placement
+  - duplicate designator U14
+- `conn-duplicate-designators` [L1-connectivity] U15 is used by more than one placed part; the model kept only the last placement
+  - duplicate designator U15
+- `conn-duplicate-designators` [L1-connectivity] R5 is used by more than one placed part; the model kept only the last placement
+  - duplicate designator R5
+- `conn-duplicate-designators` [L1-connectivity] R1 is used by more than one placed part; the model kept only the last placement
+  - duplicate designator R1
+- `conn-duplicate-designators` [L1-connectivity] R18 is used by more than one placed part; the model kept only the last placement
+  - duplicate designator R18
+- `conn-duplicate-designators` [L1-connectivity] R2 is used by more than one placed part; the model kept only the last placement
+  - duplicate designator R2
+- `conn-duplicate-designators` [L1-connectivity] R4 is used by more than one placed part; the model kept only the last placement
+  - duplicate designator R4
+- `conn-duplicate-designators` [L1-connectivity] C9 is used by more than one placed part; the model kept only the last placement
+  - duplicate designator C9
+- `conn-duplicate-designators` [L1-connectivity] C2 is used by more than one placed part; the model kept only the last placement
+  - duplicate designator C2
+- `conn-duplicate-designators` [L1-connectivity] C12 is used by more than one placed part; the model kept only the last placement
+  - duplicate designator C12
+- `conn-duplicate-designators` [L1-connectivity] C8 is used by more than one placed part; the model kept only the last placement
+  - duplicate designator C8
+- `conn-duplicate-designators` [L1-connectivity] C11 is used by more than one placed part; the model kept only the last placement
+  - duplicate designator C11
+- `conn-duplicate-designators` [L1-connectivity] C10 is used by more than one placed part; the model kept only the last placement
+  - duplicate designator C10
+- `conn-duplicate-designators` [L1-connectivity] U2 is used by more than one placed part; the model kept only the last placement
+  - duplicate designator U2
+- `conn-duplicate-designators` [L1-connectivity] C7 is used by more than one placed part; the model kept only the last placement
+  - duplicate designator C7
+- `conn-duplicate-designators` [L1-connectivity] C6 is used by more than one placed part; the model kept only the last placement
+  - duplicate designator C6
+- `conn-duplicate-designators` [L1-connectivity] R3 is used by more than one placed part; the model kept only the last placement
+  - duplicate designator R3
+- `conn-duplicate-designators` [L1-connectivity] C3 is used by more than one placed part; the model kept only the last placement
+  - duplicate designator C3
+- `conn-duplicate-designators` [L1-connectivity] C5 is used by more than one placed part; the model kept only the last placement
+  - duplicate designator C5
+- `conn-duplicate-designators` [L1-connectivity] R8 is used by more than one placed part; the model kept only the last placement
+  - duplicate designator R8
+- `conn-duplicate-designators` [L1-connectivity] R6 is used by more than one placed part; the model kept only the last placement
+  - duplicate designator R6
+- `conn-duplicate-designators` [L1-connectivity] U16 is used by more than one placed part; the model kept only the last placement
+  - duplicate designator U16
+- `conn-duplicate-designators` [L1-connectivity] C1 is used by more than one placed part; the model kept only the last placement
+  - duplicate designator C1
+- `conn-duplicate-designators` [L1-connectivity] C4 is used by more than one placed part; the model kept only the last placement
+  - duplicate designator C4
+- `conn-duplicate-designators` [L1-connectivity] SCREW1 is used by more than one placed part; the model kept only the last placement
+  - duplicate designator SCREW1
+- `conn-duplicate-designators` [L1-connectivity] SCREW2 is used by more than one placed part; the model kept only the last placement
+  - duplicate designator SCREW2
+- `conn-duplicate-designators` [L1-connectivity] SCREW3 is used by more than one placed part; the model kept only the last placement
+  - duplicate designator SCREW3
+- `conn-duplicate-designators` [L1-connectivity] SCREW4 is used by more than one placed part; the model kept only the last placement
+  - duplicate designator SCREW4
+
+## WARN (14)
+
+- `decap-required-caps` [L2-facts] U11 pin5: the grounded capacitor on 'NET6' is only 100nF (< required 1uF)
+  - U11 pin5 @ NET6
+  - C26 value 'C104'
+- `decoupling-per-ic` [L1-connectivity] U1: none of its pin nets contains a capacitor. Heuristic limits: matches designator prefixes only (U*/C*), cannot tell supply pins from signal pins, and any C-prefixed part (including connectors) counts as a capacitor.
+  - U1 pin2 @ AGND
+  - U1 pin3 @ AGND
+  - U1 pin4 @ AGND
+  - U1 pin6 @ AGND
+  - U1 pin7 @ AGND
+- `decoupling-per-ic` [L1-connectivity] U8: none of its pin nets contains a capacitor. Heuristic limits: matches designator prefixes only (U*/C*), cannot tell supply pins from signal pins, and any C-prefixed part (including connectors) counts as a capacitor.
+  - U8 pin1 @ GND
+  - U8 pin2 @ CAN_L
+  - U8 pin3 @ CAN_H
+- `decoupling-per-ic` [L1-connectivity] USB1: none of its pin nets contains a capacitor. Heuristic limits: matches designator prefixes only (U*/C*), cannot tell supply pins from signal pins, and any C-prefixed part (including connectors) counts as a capacitor.
+  - USB1 pin1 @ GND
+  - USB1 pin10 @ NET18
+  - USB1 pin12 @ GND
+  - USB1 pin4 @ NET19
+  - USB1 pin5 @ D-
+  - USB1 pin6 @ D+
+  - USB1 pin7 @ D-
+  - USB1 pin8 @ D+
+- `param-value-mpn-match` [L2-facts] R43: board value 0.01 Ω contradicts its MPN ('JER2512F3R005' decodes to 0 Ω) -- BOM and schematic disagree
+  - R43 value '10mΩ'
+  - R43 mpn 'JER2512F3R005'
+- `param-value-mpn-match` [L2-facts] U14: board value 1000 Ω contradicts its MPN ('FRC0805J471 TS' decodes to 470 Ω) -- BOM and schematic disagree
+  - U14 value '1kΩ'
+  - U14 mpn 'FRC0805J471 TS'
+- `param-value-mpn-match` [L2-facts] C115: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+  - C115 value '330uF'
+  - C115 mpn 'PA50V330M10x15'
+- `param-value-mpn-match` [L2-facts] C116: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+  - C116 value '330uF'
+  - C116 mpn 'PA50V330M10x15'
+- `param-value-mpn-match` [L2-facts] U10: board value 1000 Ω contradicts its MPN ('FRC0805J471 TS' decodes to 470 Ω) -- BOM and schematic disagree
+  - U10 value '1kΩ'
+  - U10 mpn 'FRC0805J471 TS'
+- `param-value-mpn-match` [L2-facts] C42: board value 1e-08 F contradicts its MPN ('CC0805KRX7R9BB104' decodes to 1e-07 F) -- BOM and schematic disagree
+  - C42 value '10nF'
+  - C42 mpn 'CC0805KRX7R9BB104'
+- `param-value-mpn-match` [L2-facts] C36: board value 2.2e-06 F contradicts its MPN ('CC0805KRX7R9BB104' decodes to 1e-07 F) -- BOM and schematic disagree
+  - C36 value '2.2uF'
+  - C36 mpn 'CC0805KRX7R9BB104'
+- `param-value-mpn-match` [L2-facts] C44: board value 2.2e-06 F contradicts its MPN ('CC0805KRX7R9BB104' decodes to 1e-07 F) -- BOM and schematic disagree
+  - C44 value '2.2uF'
+  - C44 mpn 'CC0805KRX7R9BB104'
+- `param-value-mpn-match` [L2-facts] C29: board value 2.2e-06 F contradicts its MPN ('CC0805KRX7R9BB104' decodes to 1e-07 F) -- BOM and schematic disagree
+  - C29 value '2.2uF'
+  - C29 mpn 'CC0805KRX7R9BB104'
+- `param-value-mpn-match` [L2-facts] C28: board value 2.2e-06 F contradicts its MPN ('CC0805KRX7R9BB104' decodes to 1e-07 F) -- BOM and schematic disagree
+  - C28 value '2.2uF'
+  - C28 mpn 'CC0805KRX7R9BB104'
+
+## INFO (12)
+
+- `param-rc-cutoff` [L2-facts] RC R43(0.01Ω) + C8(100pF) on 'IA': fc = 159,154,943,092 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  - R43 value '10mΩ'
+  - C8 value '100pF'
+- `param-rc-cutoff` [L2-facts] RC R43(0.01Ω) + C11(100pF) on 'IA': fc = 159,154,943,092 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  - R43 value '10mΩ'
+  - C11 value '100pF'
+- `param-rc-cutoff` [L2-facts] RC R18(1.5e+04Ω) + C16(100pF) on 'IC': fc = 106,103 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  - R18 value '15K'
+  - C16 value '100pF'
+- `param-rc-cutoff` [L2-facts] RC U14(1000Ω) + C42(10nF) on 'MOTC': fc = 15,915 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  - U14 value '1kΩ'
+  - C42 value '10nF'
+- `param-rc-cutoff` [L2-facts] RC U14(1000Ω) + C41(100nF) on 'MOTC': fc = 1,592 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  - U14 value '1kΩ'
+  - C41 value '100nF'
+- `param-rc-cutoff` [L2-facts] RC U14(1000Ω) + C40(2.2uF) on 'MOTC': fc = 72 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  - U14 value '1kΩ'
+  - C40 value '2.2uF'
+- `param-rc-cutoff` [L2-facts] RC R5(1.5e+04Ω) + C8(100pF) on 'IA': fc = 106,103 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  - R5 value '15K'
+  - C8 value '100pF'
+- `param-rc-cutoff` [L2-facts] RC R5(1.5e+04Ω) + C11(100pF) on 'IA': fc = 106,103 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  - R5 value '15K'
+  - C11 value '100pF'
+- `param-rc-cutoff` [L2-facts] RC R13(1.5e+04Ω) + C8(100pF) on 'IA': fc = 106,103 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  - R13 value '15K'
+  - C8 value '100pF'
+- `param-rc-cutoff` [L2-facts] RC R13(1.5e+04Ω) + C11(100pF) on 'IA': fc = 106,103 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  - R13 value '15K'
+  - C11 value '100pF'
+- `param-rc-cutoff` [L2-facts] RC R14(1.5e+04Ω) + C16(100pF) on 'IC': fc = 106,103 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+  - R14 value '15K'
+  - C16 value '100pF'
+- `shunt-sense-link` [L1-connectivity] R43 (10mΩ): no IC pins found on its terminal nets IA / PGND. L1 capability boundary: the sense link may run through series resistors or a filter network, which a connectivity-only check cannot see.
+  - R43 pin1 @ PGND
+  - R43 pin2 @ IA

@@ -8,13 +8,47 @@ from typing import Any
 
 from ..core.model import DesignModel
 from ..rules.base import SEVERITY_ORDER, Finding, Rule
-from ..rules.connectivity import CrystalLoadCaps, DecouplingPerIC, ShuntSenseLink
+from ..rules.connectivity import (
+    CrystalLoadCaps,
+    DecouplingPerIC,
+    DuplicateDesignators,
+    ShuntSenseLink,
+)
+from ..rules.decap import DecapRequiredCaps
+from ..rules.facts import (
+    DomainVsRange,
+    LdoDropout,
+    LibraryPinConsistency,
+    NcAndMustConnect,
+    SupplyOnKnownDomain,
+    UsbCcPulldown,
+)
+from ..rules.params import (
+    DividerOutput,
+    LedCurrent,
+    RcCutoff,
+    ValueMpnMatch,
+)
 
-#: Every rule applied by :func:`run_review`, in execution order.
+#: Every rule applied by :func:`run_review`, in execution order. The 011c
+#: facts rules sit after the L1 heuristics: they are slower (library loads)
+#: and their subjects overlap the L1 IC scan. The 011d batch follows them.
 BUILTIN_RULES: list[Rule] = [
     DecouplingPerIC(),
     CrystalLoadCaps(),
     ShuntSenseLink(),
+    DuplicateDesignators(),
+    NcAndMustConnect(),
+    LibraryPinConsistency(),
+    SupplyOnKnownDomain(),
+    DomainVsRange(),
+    LdoDropout(),
+    DecapRequiredCaps(),
+    LedCurrent(),
+    DividerOutput(),
+    RcCutoff(),
+    ValueMpnMatch(),
+    UsbCcPulldown(),
 ]
 
 

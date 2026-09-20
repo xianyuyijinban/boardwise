@@ -1,0 +1,24 @@
+boardwise review-eval: split=dev, 1 board(s)
+
+board ProPrj_高速电机控制器_2026-09-16 (tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2) [DRAFT (oracle review pending)]: 85 components, 113 nets, findings 16 ERROR / 12 WARN / 21 INFO
+  rule                   defects  det miss x-catch fp-exc fp-unexpl        precision           recall hp-find        hp-prec
+  decoupling-per-ic            0    0    0       0      0         2       0/2 = 0.00                —       2     0/2 = 0.00
+  xtal-load-caps               0    0    0       0      0         1       0/1 = 0.00                —       1     0/1 = 0.00
+  shunt-sense-link             0    0    0       0      0         0                —                —       0              —
+  conn-duplicate-designators       0    0    0       0      0        16      0/16 = 0.00                —      16    0/16 = 0.00
+  conn-nc-and-must-connect       0    0    0       0      0         0                —                —       0              —
+  conn-library-pins            0    0    0       0      0         0                —                —       0              —
+  pwr-supply-on-known-domain       0    0    0       0      0         0                —                —       0              —
+  pwr-domain-vs-range          0    0    0       0      0         0                —                —       0              —
+  path-ldo-dropout             0    0    0       0      0         0                —                —       0              —
+  decap-required-caps          0    0    0       0      0         4       0/4 = 0.00                —       4     0/4 = 0.00
+  param-led-current            0    0    0       0      0         0                —                —       0              —
+  param-divider-output         0    0    0       0      0         0                —                —       0              —
+  param-rc-cutoff              0    0    0       0      0        21      0/21 = 0.00                —       0              —
+  param-value-mpn-match        0    0    0       0      0         5       0/5 = 0.00                —       5     0/5 = 0.00
+  conn-usb-cc-pulldown         0    0    0       0      0         0                —                —       0              —
+  VIOLATION     decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=16  conn-nc-and-must-connect=0  conn-library-pins=0  pwr-supply-on-known-domain=0  pwr-domain-vs-range=0  path-ldo-dropout=0  decap-required-caps=4  param-led-current=0  param-divider-output=0  param-rc-cutoff=0  param-value-mpn-match=5  conn-usb-cc-pulldown=0
+  OK            decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=0  conn-nc-and-must-connect=2  conn-library-pins=0  pwr-supply-on-known-domain=2  pwr-domain-vs-range=2  path-ldo-dropout=2  decap-required-caps=0  param-led-current=0  param-divider-output=1  param-rc-cutoff=21  param-value-mpn-match=14  conn-usb-cc-pulldown=0
+  UNKNOWN       decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=0  conn-nc-and-must-connect=15  conn-library-pins=1  pwr-supply-on-known-domain=15  pwr-domain-vs-range=15  path-ldo-dropout=15  decap-required-caps=15  param-led-current=0  param-divider-output=0  param-rc-cutoff=0  param-value-mpn-match=18  conn-usb-cc-pulldown=2
+  NOT_APPLICABLE decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=0  conn-nc-and-must-connect=0  conn-library-pins=0  pwr-supply-on-known-domain=0  pwr-domain-vs-range=0  path-ldo-dropout=0  decap-required-caps=0  param-led-current=0  param-divider-output=0  param-rc-cutoff=0  param-value-mpn-match=0  conn-usb-cc-pulldown=0
+  queries excluded: 0

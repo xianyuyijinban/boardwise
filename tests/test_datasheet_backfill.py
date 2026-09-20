@@ -315,4 +315,6 @@ def test_the_artifacts_are_json_and_hold_only_what_was_asked_for(tmp_path):
     payload = json.loads(sidecar.read_text(encoding="utf-8"))
     assert payload["kind"] == "boardwise-part-corrections"
     assert "2026" not in sidecar.read_text(encoding="utf-8")
-    assert list(payload) == ["kind", "version", "note", "identity", "datasheets"]
+    # "curated" (task 011b) is a fixed section like the other two, present
+    # even when empty - the sidecar's shape does not depend on the run.
+    assert list(payload) == ["kind", "version", "note", "identity", "datasheets", "curated"]

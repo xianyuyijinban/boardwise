@@ -60,6 +60,48 @@ def build_parser() -> argparse.ArgumentParser:
     review.add_argument(
         "--md", dest="md_path", metavar="PATH", help="Write a Markdown report."
     )
+    review.add_argument(
+        "--view",
+        choices=("pcb", "schematic"),
+        default="pcb",
+        help=(
+            "Which model of a .epro2 backup to review: pcb (the default, the "
+            " PCB netlist view) or schematic (the parsed schematic, the view "
+            "the 011 review rules are written against — use it for "
+            "schematic-only exports, where the pcb view is empty)."
+        ),
+    )
+
+    review_eval = sub.add_parser(
+        "review-eval",
+        help="Measure review rules against oracle annotation sets (task 011a).",
+        description=(
+            "Run the built-in rules over each annotated board, pair findings "
+            "with the oracle's defect/exception records, and print per-rule "
+            "raw numerators and denominators. Holdout items are excluded "
+            "unless --split holdout (or all) is given explicitly, so rule "
+            "tuning cannot peek at them by accident."
+        ),
+    )
+    review_eval.add_argument(
+        "--annotations",
+        nargs="+",
+        required=True,
+        metavar="PATH",
+        help="Annotation-set JSON file(s) or glob patterns.",
+    )
+    review_eval.add_argument(
+        "--split",
+        choices=("dev", "holdout", "all"),
+        default="dev",
+        help="Which annotation split to measure (default: dev only).",
+    )
+    review_eval.add_argument(
+        "--json",
+        dest="json_path",
+        metavar="PATH",
+        help="Write the machine-readable report.",
+    )
 
     bridge = sub.add_parser(
         "bridge",
@@ -501,18 +543,27 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _load_model(path: Path) -> tuple[object, object | None]:
+def _load_model(path: Path, *, view: str = "pcb") -> tuple[object, object | None]:
     """Return ``(DesignModel, BoardGeometry | None)`` for a supported input.
 
-    ``BoardGeometry`` is only available for ``.epro2``; both views come from
-    one parse of the file. Raises :class:`EncryptedProjectError` for an
-    unreadable backup and ``ValueError`` for an unsupported extension.
+    ``view`` picks which model a ``.epro2`` backup yields: ``pcb`` (the
+    default, the netlist view ``review`` has always used) or ``schematic``
+    (the parsed schematic, which is what the 011-family rules are written
+    against — a schematic-only export yields an empty pcb view, measured
+    2026-09-19). ``BoardGeometry`` is only available for the pcb view of a
+    ``.epro2``; both views come from one parse of the file. Raises
+    :class:`EncryptedProjectError` for an unreadable backup and ``ValueError``
+    for an unsupported extension.
     """
     suffix = path.suffix.lower()
     if suffix == ".enet":
         return parse_enet(path), None
     if suffix == ".epro2":
         source = load_epro2_source(path)
+        if view == "schematic":
+            from .parsers.schematic import build_schematic_model
+
+            return build_schematic_model(path), None
         # One parse, two views: geometry and netlist stay consistent because
         # both read the same cached PCB context.
         return build_design_model(source), build_board_geometry(source)
@@ -615,7 +666,7 @@ def _cmd_compare(args: argparse.Namespace) -> int:
 def _cmd_review(args: argparse.Namespace) -> int:
     path = Path(args.file)
     try:
-        model, board = _load_model(path)
+        model, board = _load_model(path, view=args.view)
     except EncryptedProjectError as exc:
         print(f"boardwise: {exc}", file=sys.stderr)
         return 2
@@ -657,6 +708,129 @@ def _cmd_review(args: argparse.Namespace) -> int:
         print(f"Markdown report written to {args.md_path}")
 
     return 1 if counts["ERROR"] else 0
+
+
+def _cmd_review_eval(args: argparse.Namespace) -> int:
+    """Measure rules against oracle annotations (task 011a).
+
+    Exit codes: 0 measured (the harness is an instrument, not a gate — a bad
+    precision is a finding about the rules, not a CLI failure), 2 bad input
+    (unreadable annotation, missing board source). A record whose rule_hint
+    names an unregistered rule is **not** an error: it is listed verbatim in
+    the report's "no registered rule" column and enters no denominator
+    (task 011c sec.3.0) — the oracle's ground truth must not be hostage to
+    rule progress.
+    """
+    import json as _json
+
+    from .core.annotations import AnnotationError, load_annotations
+    from .engines.review_eval import (
+        SPLIT_CHOICES,
+        evaluate_annotations,
+        load_board_model,
+        render_text_report,
+    )
+
+    # Expand the annotation arguments (paths or globs), order-stable, deduped.
+    paths: list[Path] = []
+    for pattern in args.annotations:
+        candidate = Path(pattern)
+        if candidate.is_file():
+            paths.append(candidate)
+            continue
+        matches = sorted(Path().glob(pattern))
+        if not matches:
+            print(f"boardwise review-eval: no annotation file for {pattern!r}", file=sys.stderr)
+            return 2
+        paths.extend(match for match in matches if match.is_file())
+    seen: set[Path] = set()
+    ordered = [p for p in paths if not (p in seen or seen.add(p))]  # type: ignore[func-returns-value]
+
+    try:
+        sets = [load_annotations(path) for path in ordered]
+    except AnnotationError as exc:
+        print(f"boardwise review-eval: {exc}", file=sys.stderr)
+        return 2
+
+    from .engines.review import BUILTIN_RULES
+
+    if args.split not in SPLIT_CHOICES:
+        print(f"boardwise review-eval: --split must be one of {SPLIT_CHOICES}", file=sys.stderr)
+        return 2
+
+    models: dict[str, object] = {}
+    evaluations = []
+    for aset in sets:
+        try:
+            model = models.get(aset.source)
+            if model is None:
+                model = load_board_model(aset.source)
+                models[aset.source] = model
+        except (FileNotFoundError, ValueError) as exc:
+            print(f"boardwise review-eval: {exc}", file=sys.stderr)
+            return 2
+        evaluations.append(
+            evaluate_annotations(
+                aset, model, BUILTIN_RULES, split=args.split  # type: ignore[arg-type]
+            )
+        )
+
+    print(
+        render_text_report(
+            evaluations,
+            split=args.split,
+            rule_ids=[rule.id for rule in BUILTIN_RULES],
+        ).rstrip("\n")
+    )
+    if args.json_path:
+        payload = {
+            "split": args.split,
+            "boards": [
+                {
+                    "board": evaluation.board,
+                    "source": evaluation.source,
+                    "reviewed": evaluation.reviewed,
+                    "components": evaluation.component_count,
+                    "nets": evaluation.net_count,
+                    "findings": evaluation.severity_counts,
+                    "queries_excluded": evaluation.queries,
+                    "holdout_excluded": evaluation.excluded_holdout,
+                    "cross_matches": evaluation.cross_matches,
+                    "rules": [
+                        {
+                            "rule_id": metric.rule_id,
+                            "defects_hinted": metric.defects_hinted,
+                            "detected": metric.detected,
+                            "missed": metric.missed,
+                            "caught_by_other": metric.caught_by_other,
+                            "exceptions_hinted": metric.exceptions_hinted,
+                            "fp_on_exception": metric.fp_on_exception,
+                            "fp_unexplained": metric.fp_unexplained,
+                            "violations": metric.violations,
+                            "precision": metric.precision,
+                            "recall": metric.recall,
+                            # High-priority (ERROR/WARN) findings: the
+                            # determinate claims the graduation metric grades
+                            # (011e sec.4.1).
+                            "hp_findings": metric.hp_findings,
+                            "hp_true_positives": metric.hp_tp,
+                            "hp_false_positives_explained": metric.hp_fp_exception,
+                            "hp_false_positives_unexplained": metric.hp_fp_unexplained,
+                            "hp_precision": metric.hp_precision,
+                            "outcomes": metric.outcome_counts,
+                        }
+                        for metric in evaluation.metrics
+                    ],
+                }
+                for evaluation in evaluations
+            ],
+        }
+        Path(args.json_path).write_text(
+            _json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        print(f"JSON report written to {args.json_path}")
+    return 0
 
 
 # --------------------------------------------------------------------------
@@ -2315,6 +2489,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "review":
         return _cmd_review(args)
+    if args.command == "review-eval":
+        return _cmd_review_eval(args)
     if args.command == "compare":
         return _cmd_compare(args)
     if args.command == "draw":

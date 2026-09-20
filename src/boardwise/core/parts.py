@@ -35,7 +35,23 @@ from typing import Any
 #: Written into the library file so a stale one fails loudly rather than being
 #: read with today's rules.
 PART_LIBRARY_KIND = "boardwise-part-library"
-SCHEMA_VERSION = 1
+#: v2 (task 011b): entries may carry an electrical ``category`` and a ``facts``
+#: object. v1 files are rejected outright — the loader never guesses what a
+#: pre-facts entry meant to claim.
+SCHEMA_VERSION = 2
+
+#: The electrical category of an entry (task 011b §2.2). Deliberately **not**
+#: the shelf bucket that :func:`category_of`/``make_key`` compute from the
+#: footprint: that one files the part on the shelf, this one says what the
+#: part *is* — and the golden board's U3 (a resistor wearing a ``U`` prefix)
+#: is the measured proof that the two must not be conflated. A value outside
+#: this table is a loader error; extending the table is a decision, not a
+#: silent fallback.
+CATEGORY_VOCABULARY = frozenset({
+    "resistor", "capacitor", "inductor", "led", "diode", "connector",
+    "crystal", "ic.ldo", "ic.usb-uart", "ic.mcu", "ic.charger",
+    "buzzer", "switch", "module",
+})
 
 #: Honest tri-state for facts we may or may not have evidence for. Used for
 #: `basic` and for whether the bridge corroborated a footprint name: ``None``
@@ -529,6 +545,14 @@ class PartEntry:
     #: JLC basic-part flag. `True`/`False` only with evidence (`JLCPCB Part
     #: Class`), `None` otherwise — "no evidence" is not "extended".
     basic: bool | None = UNKNOWN
+    #: Electrical category from :data:`CATEGORY_VOCABULARY`, or "" when the
+    #: entry has not been classified. Absent ≠ unknown-to-a-rule: rules see
+    #: "" and report UNKNOWN rather than guessing from a designator prefix.
+    category: str = ""
+    #: Datasheet facts (task 011b §2.3), or None when nothing has been
+    #: recorded. Every recorded fact carries its own page-cited provenance;
+    #: the loader refuses a fact that cannot say where it came from.
+    facts: dict[str, Any] | None = None
     provenance: PartProvenance = field(default_factory=PartProvenance)
     notes: list[str] = field(default_factory=list)
 
@@ -583,7 +607,7 @@ class PartLibrary:
 _ENTRY_KEYS = (
     "key", "value", "mpn", "lcsc", "manufacturer", "deviceUuid", "libraryUuid",
     "footprint_name", "footprint_name_verified", "params", "datasheetUrl",
-    "datasheetPdfUrl", "basic", "provenance", "notes",
+    "datasheetPdfUrl", "basic", "category", "facts", "provenance", "notes",
 )
 _PROVENANCE_KEYS = ("kind", "source", "designators", "note")
 
@@ -605,11 +629,228 @@ def _as_opt_bool(value: Any, where: str) -> bool | None:
 
 
 def _check_keys(body: dict[str, Any], allowed: tuple[str, ...], where: str) -> None:
+    if not isinstance(body, dict):
+        raise PartError(f"{where}: expected an object, got {type(body).__name__}")
     unknown = sorted(set(body) - set(allowed))
     if unknown:
         raise PartError(
             f"{where}: unknown key(s) {', '.join(unknown)}; allowed: {', '.join(allowed)}"
         )
+
+
+# --------------------------------------------------------------------------
+# facts (task 011b §2.3) — datasheet claims, each with a page-cited source
+# --------------------------------------------------------------------------
+
+#: The whitelist of fact kinds. Anything else inside ``facts`` is a loader
+#: error: a fact this project has not decided how to represent must not sneak
+#: in under a typo-shaped key.
+FACTS_KEYS = (
+    "supply_pins", "required_caps", "nc_pins", "must_connect", "led", "ldo",
+    "pull_required",
+)
+
+#: An optional mode tag on a per-pin fact (task 011d sec.2): multi-mode parts
+#: (the CH340G's 5V/3.3V pair) tag each record with the mode it belongs to.
+#: Absent means "applies unconditionally". A mode-only fact is checked only
+#: when the board actually runs in that mode.
+def _fact_mode(raw: dict[str, Any], where: str) -> str | None:
+    if "mode" not in raw:
+        return None
+    mode = _as_str(raw.get("mode"), f"{where}.mode")
+    if not mode.strip():
+        raise PartError(f"{where}.mode: must be a non-empty string when present")
+    return mode
+
+#: A provenance string must cite WHERE in the source: a page, a section, a
+#: table, or a figure. "The datasheet says so" is not a citation. This is the
+#: hard gate task 011b was commissioned under — a fact that cannot name its
+#: page does not enter the library.
+_FACT_PAGE_RE = re.compile(
+    r"(?i)\bp(?:age)?\.?\s*\d+"          # p4 / p.4 / page 4
+    r"|\bsec(?:tion)?\.?\s*[\d.]+"       # sec.5.1 / section 7.2.3
+    r"|\bfig(?:ure)?\.?\s*\d+"           # fig.1 / Figure 2
+    r"|\btable\s*\d+"                    # Table 3
+    r"|\b第\s*\d+\s*页"                   # 第 4 页
+)
+
+
+def _fact_provenance(value: Any, where: str) -> str:
+    text = _as_str(value, where)
+    if not text:
+        raise PartError(f"{where}: a fact without provenance cannot be recorded")
+    if "http" not in text:
+        raise PartError(
+            f"{where}: provenance must cite its source URL, got {text!r}"
+        )
+    if not _FACT_PAGE_RE.search(text):
+        raise PartError(
+            f"{where}: provenance must cite a page, section, table or figure "
+            f"(e.g. 'p.4', 'sec.5.1', 'Table 3'), got {text!r}"
+        )
+    return text
+
+
+def _fact_pin(value: Any, where: str) -> str:
+    """A pin number as a **string** — named pins (BNC/ACK, 'V3') exist."""
+    if not isinstance(value, str) or not value.strip():
+        raise PartError(
+            f"{where}: a pin number must be a non-empty string, got {value!r}"
+        )
+    return value.strip()
+
+
+def _fact_range(value: Any, where: str) -> list[float | None]:
+    """``[min, max]`` in the key's own unit. Either bound may be null when the
+    source states only one side (measured: the RT9013 datasheet gives a 6V
+    upper abs-max and no lower one) — a claim the loader refuses to invent
+    must be expressible as its absence, not as a made-up 0."""
+    if not isinstance(value, list) or len(value) != 2:
+        raise PartError(f"{where}: a range must be [min, max], got {value!r}")
+    lo, hi = value
+    for bound in (lo, hi):
+        if bound is None:
+            continue
+        if isinstance(bound, bool) or not isinstance(bound, (int, float)):
+            raise PartError(
+                f"{where}: range bounds must be numbers or null, got {bound!r}"
+            )
+    if lo is not None and hi is not None and lo > hi:
+        raise PartError(f"{where}: range min {lo} > max {hi}")
+    return [lo, hi]
+
+
+def _fact_number(value: Any, where: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise PartError(f"{where}: expected a number, got {value!r}")
+    return float(value)
+
+
+def _facts_from_json(raw: Any, where: str) -> dict[str, Any]:
+    """Validate one entry's ``facts`` object. Unknown kinds are rejected."""
+    if not isinstance(raw, dict) or not raw:
+        raise PartError(f"{where}: expected a non-empty object")
+    _check_keys(raw, FACTS_KEYS, where)
+    facts: dict[str, Any] = {}
+
+    if "supply_pins" in raw:
+        entries = raw["supply_pins"]
+        if not isinstance(entries, list) or not entries:
+            raise PartError(f"{where}.supply_pins: expected a non-empty list")
+        checked = []
+        for i, entry in enumerate(entries):
+            spot = f"{where}.supply_pins[{i}]"
+            _check_keys(entry, ("pins", "name", "v_operating", "v_abs_max", "provenance", "mode"), spot)
+            pins_raw = entry.get("pins")
+            if not isinstance(pins_raw, list) or not pins_raw:
+                raise PartError(f"{spot}.pins: expected a non-empty list")
+            record: dict[str, Any] = {
+                "pins": [_fact_pin(pin, f"{spot}.pins[]") for pin in pins_raw],
+                "name": _require_nonempty(entry.get("name"), f"{spot}.name"),
+            }
+            mode = _fact_mode(entry, spot)
+            if mode is not None:
+                record["mode"] = mode
+            # Absent stays absent: a range the source never states must not
+            # round-trip into an explicit null and then fail its own reload.
+            if "v_operating" in entry:
+                record["v_operating"] = _fact_range(entry["v_operating"], f"{spot}.v_operating")
+            if "v_abs_max" in entry:
+                record["v_abs_max"] = _fact_range(entry["v_abs_max"], f"{spot}.v_abs_max")
+            record["provenance"] = _fact_provenance(entry.get("provenance"), f"{spot}.provenance")
+            checked.append(record)
+        facts["supply_pins"] = checked
+
+    if "required_caps" in raw:
+        entries = raw["required_caps"]
+        if not isinstance(entries, list) or not entries:
+            raise PartError(f"{where}.required_caps: expected a non-empty list")
+        checked = []
+        for i, entry in enumerate(entries):
+            spot = f"{where}.required_caps[{i}]"
+            _check_keys(entry, ("pin", "value", "provenance", "mode"), spot)
+            checked.append({
+                "pin": _fact_pin(entry.get("pin"), f"{spot}.pin"),
+                "value": _require_nonempty(entry.get("value"), f"{spot}.value"),
+                "provenance": _fact_provenance(entry.get("provenance"), f"{spot}.provenance"),
+                **({"mode": mode} if (mode := _fact_mode(entry, spot)) is not None else {}),
+            })
+        facts["required_caps"] = checked
+
+    if "nc_pins" in raw:
+        entry = raw["nc_pins"]
+        spot = f"{where}.nc_pins"
+        _check_keys(entry, ("pins", "provenance"), spot)
+        pins_raw = entry.get("pins")
+        if not isinstance(pins_raw, list) or not pins_raw:
+            raise PartError(f"{spot}.pins: expected a non-empty list")
+        facts["nc_pins"] = {
+            "pins": [_fact_pin(pin, f"{spot}.pins[]") for pin in pins_raw],
+            "provenance": _fact_provenance(entry.get("provenance"), f"{spot}.provenance"),
+        }
+
+    if "must_connect" in raw:
+        entries = raw["must_connect"]
+        if not isinstance(entries, list) or not entries:
+            raise PartError(f"{where}.must_connect: expected a non-empty list")
+        checked = []
+        for i, entry in enumerate(entries):
+            spot = f"{where}.must_connect[{i}]"
+            _check_keys(entry, ("pin", "to", "provenance", "mode"), spot)
+            checked.append({
+                "pin": _fact_pin(entry.get("pin"), f"{spot}.pin"),
+                "to": _require_nonempty(entry.get("to"), f"{spot}.to"),
+                "provenance": _fact_provenance(entry.get("provenance"), f"{spot}.provenance"),
+                **({"mode": mode} if (mode := _fact_mode(entry, spot)) is not None else {}),
+            })
+        facts["must_connect"] = checked
+
+    if "pull_required" in raw:
+        entries = raw["pull_required"]
+        if not isinstance(entries, list) or not entries:
+            raise PartError(f"{where}.pull_required: expected a non-empty list")
+        checked = []
+        for i, entry in enumerate(entries):
+            spot = f"{where}.pull_required[{i}]"
+            _check_keys(entry, ("pin", "to", "expected_value", "provenance"), spot)
+            checked.append({
+                "pin": _fact_pin(entry.get("pin"), f"{spot}.pin"),
+                "to": _require_nonempty(entry.get("to"), f"{spot}.to"),
+                "expected_value": _require_nonempty(
+                    entry.get("expected_value"), f"{spot}.expected_value"
+                ),
+                "provenance": _fact_provenance(entry.get("provenance"), f"{spot}.provenance"),
+            })
+        facts["pull_required"] = checked
+
+    if "led" in raw:
+        entry = raw["led"]
+        spot = f"{where}.led"
+        _check_keys(entry, ("vf_v", "if_max_ma", "provenance"), spot)
+        facts["led"] = {
+            "vf_v": _fact_range(entry.get("vf_v"), f"{spot}.vf_v"),
+            "if_max_ma": _fact_number(entry.get("if_max_ma"), f"{spot}.if_max_ma"),
+            "provenance": _fact_provenance(entry.get("provenance"), f"{spot}.provenance"),
+        }
+
+    if "ldo" in raw:
+        entry = raw["ldo"]
+        spot = f"{where}.ldo"
+        _check_keys(entry, ("dropout_max_mv", "condition", "provenance"), spot)
+        facts["ldo"] = {
+            "dropout_max_mv": _fact_number(entry.get("dropout_max_mv"), f"{spot}.dropout_max_mv"),
+            "condition": _require_nonempty(entry.get("condition"), f"{spot}.condition"),
+            "provenance": _fact_provenance(entry.get("provenance"), f"{spot}.provenance"),
+        }
+
+    return facts
+
+
+def _require_nonempty(value: Any, where: str) -> str:
+    text = _as_str(value, where)
+    if not text:
+        raise PartError(f"{where}: must be a non-empty string")
+    return text
 
 
 def entry_from_json(raw: Any, where: str = "<part>") -> PartEntry:
@@ -652,6 +893,16 @@ def entry_from_json(raw: Any, where: str = "<part>") -> PartEntry:
             "that would have set it cannot have run"
         )
 
+    category = _as_str(raw.get("category"), f"{where}.category")
+    if category and category not in CATEGORY_VOCABULARY:
+        raise PartError(
+            f"{where}.category: {category!r} is not in the vocabulary; the "
+            "table is extended by decision, not by typo"
+        )
+    facts = raw.get("facts")
+    if facts is not None:
+        facts = _facts_from_json(facts, f"{where}.facts")
+
     return PartEntry(
         key=_as_str(raw.get("key"), f"{where}.key"),
         value=_as_str(raw.get("value"), f"{where}.value"),
@@ -666,6 +917,8 @@ def entry_from_json(raw: Any, where: str = "<part>") -> PartEntry:
         datasheetUrl=_as_str(raw.get("datasheetUrl"), f"{where}.datasheetUrl"),
         datasheetPdfUrl=_as_str(raw.get("datasheetPdfUrl"), f"{where}.datasheetPdfUrl"),
         basic=_as_opt_bool(raw.get("basic"), f"{where}.basic"),
+        category=category,
+        facts=facts,
         provenance=PartProvenance(
             kind=_as_str(prov_raw.get("kind"), f"{where}.provenance.kind"),
             source=_as_str(prov_raw.get("source"), f"{where}.provenance.source"),
@@ -677,8 +930,14 @@ def entry_from_json(raw: Any, where: str = "<part>") -> PartEntry:
 
 
 def entry_to_json(entry: PartEntry) -> dict[str, Any]:
-    """Serialise one entry. Round-trips with :func:`entry_from_json`."""
-    return {
+    """Serialise one entry. Round-trips with :func:`entry_from_json`.
+
+    ``category`` and ``facts`` are written **only when present**: the 92
+    pre-facts entries must round-trip byte-identically (task 011b §五), and
+    an empty ``"category": ""`` on every one of them would be noise that
+    pretends a classification happened.
+    """
+    body: dict[str, Any] = {
         "key": entry.key,
         "value": entry.value,
         "mpn": entry.mpn,
@@ -700,6 +959,11 @@ def entry_to_json(entry: PartEntry) -> dict[str, Any]:
         },
         "notes": list(entry.notes),
     }
+    if entry.category:
+        body["category"] = entry.category
+    if entry.facts is not None:
+        body["facts"] = entry.facts
+    return body
 
 
 def library_from_json(raw: Any, where: str = "<library>") -> PartLibrary:
@@ -774,6 +1038,29 @@ def save_parts(library: PartLibrary, path: str | Path) -> Path:
         encoding="utf-8",
     )
     return file
+
+
+def find_facts(
+    library: PartLibrary, *, mpn: str | None = None, lcsc: str | None = None
+) -> PartEntry | None:
+    """Resolve a board part to its shelf entry — **exact match only**.
+
+    MPN first, then the C-number, then ``None``. No prefix, no fuzzy, no
+    case-folding: #202's regression was a part number's ``330`` being read as
+    a resistance, and the same failure one level up would be "close enough"
+    identity feeding rules that then cite the wrong datasheet. A part whose
+    identity cannot be resolved exactly is the rules' UNKNOWN case, not a
+    best guess (task 011b §2.4).
+    """
+    if mpn:
+        for part in library.parts:
+            if part.mpn and part.mpn == mpn:
+                return part
+    if lcsc:
+        for part in library.parts:
+            if part.lcsc and part.lcsc == lcsc:
+                return part
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -851,6 +1138,31 @@ class DatasheetOverride:
         return {"lcsc": self.lcsc, "pdfUrl": self.pdfUrl, "note": self.note}
 
 
+@dataclass(frozen=True)
+class CuratedOverride:
+    """Curated entry fields keyed by C-number (task 011b).
+
+    The facts a **datasheet** carries and no board can supply — supply-pin
+    ranges, required capacitors, dropout — plus, for a part that appears on no
+    harvest source at all, its whole identity. The harvest applies the fields
+    **over** what the boards produced, or appends the payload as a new entry
+    when the C-number is on no source, so the committed library stays a
+    deterministic function of sources + sidecar.
+
+    ``facts`` and ``category`` are validated right here, because a malformed
+    fact must be refused at the door, not discovered by a rule at run time.
+    Every other field is validated when the harvest merges them through
+    :func:`entry_from_json` — same validators, one gate.
+    """
+
+    lcsc: str
+    fields: dict[str, Any] = field(default_factory=dict)
+    note: str = ""
+
+    def as_json(self) -> dict[str, Any]:
+        return {"lcsc": self.lcsc, "fields": self.fields, "note": self.note}
+
+
 @dataclass
 class LibraryCorrections:
     """Every correction a harvest applies: identities and datasheet links.
@@ -863,16 +1175,20 @@ class LibraryCorrections:
 
     identity: dict[str, IdentityOverride] = field(default_factory=dict)
     datasheets: dict[str, DatasheetOverride] = field(default_factory=dict)
+    curated: dict[str, CuratedOverride] = field(default_factory=dict)
 
     @property
     def is_empty(self) -> bool:
-        return not self.identity and not self.datasheets
+        return not self.identity and not self.datasheets and not self.curated
 
     def identity_for(self, lcsc: str) -> IdentityOverride | None:
         return self.identity.get((lcsc or "").strip().upper())
 
     def datasheet_for(self, lcsc: str) -> DatasheetOverride | None:
         return self.datasheets.get((lcsc or "").strip().upper())
+
+    def curated_for(self, lcsc: str) -> CuratedOverride | None:
+        return self.curated.get((lcsc or "").strip().upper())
 
 
 def _as_lcsc(raw: Any, where: str) -> str:
@@ -921,11 +1237,41 @@ def _datasheet_from_json(raw: Any, where: str) -> DatasheetOverride:
     )
 
 
+def _curated_from_json(raw: Any, where: str) -> CuratedOverride:
+    if not isinstance(raw, dict):
+        raise PartError(f"{where}: expected an object")
+    _check_keys(raw, ("lcsc", "fields", "note"), where)
+    for required in ("lcsc", "fields"):
+        if not raw.get(required):
+            raise PartError(f"{where}: {required!r} is required and must not be empty")
+    fields = raw["fields"]
+    if not isinstance(fields, dict):
+        raise PartError(f"{where}.fields: expected an object")
+    allowed = [key for key in _ENTRY_KEYS if key != "lcsc"]
+    _check_keys(fields, tuple(allowed), f"{where}.fields")
+    # The two keys whose shape this module owns are validated now, so a bad
+    # fact cannot even sit in the sidecar; the rest go through the entry
+    # validator when the harvest applies them.
+    if "category" in fields:
+        category = _as_str(fields["category"], f"{where}.fields.category")
+        if category and category not in CATEGORY_VOCABULARY:
+            raise PartError(
+                f"{where}.fields.category: {category!r} is not in the vocabulary"
+            )
+    if "facts" in fields:
+        _facts_from_json(fields["facts"], f"{where}.fields.facts")
+    return CuratedOverride(
+        lcsc=_as_lcsc(raw.get("lcsc"), f"{where}.lcsc"),
+        fields=fields,
+        note=_as_str(raw.get("note"), f"{where}.note"),
+    )
+
+
 def corrections_from_json(raw: Any, where: str = "<corrections>") -> LibraryCorrections:
     """Validate a corrections file. An unknown key or a bad record is an error."""
     if not isinstance(raw, dict):
         raise PartError(f"{where}: expected a JSON object")
-    _check_keys(raw, ("kind", "version", "note", "identity", "datasheets"), where)
+    _check_keys(raw, ("kind", "version", "note", "identity", "datasheets", "curated"), where)
     kind = _as_str(raw.get("kind"), f"{where}.kind")
     if kind != CORRECTIONS_KIND:
         raise PartError(f"{where}.kind: expected {CORRECTIONS_KIND!r}, got {kind!r}")
@@ -933,6 +1279,7 @@ def corrections_from_json(raw: Any, where: str = "<corrections>") -> LibraryCorr
     for section, builder in (
         ("identity", _identity_from_json),
         ("datasheets", _datasheet_from_json),
+        ("curated", _curated_from_json),
     ):
         items = raw.get(section) or []
         if not isinstance(items, list):
@@ -951,10 +1298,15 @@ def corrections_from_json(raw: Any, where: str = "<corrections>") -> LibraryCorr
                     f"{where}.{section}: {record.lcsc} appears twice in its section"
                 )
             seen.add(record.lcsc)
-            if section == "identity":
-                out.identity[record.lcsc] = record
-            else:
-                out.datasheets[record.lcsc] = record
+            # Section -> store, explicitly: an if/else here silently routed a
+            # new third section into `datasheets` (caught by the count
+            # assertion during task 011b, not by the type system).
+            target = {
+                "identity": out.identity,
+                "datasheets": out.datasheets,
+                "curated": out.curated,
+            }[section]
+            target[record.lcsc] = record
     return out
 
 
@@ -988,11 +1340,18 @@ def save_corrections(corrections: LibraryCorrections, path: str | Path) -> Path:
             "library), resolved by C-number through `lib.device.search`, which "
             "accepts an item only on an exact, unique match. `datasheets` holds "
             "the PDF link read from the product page; a part the service does "
-            "not answer for is absent, never guessed."
+            "not answer for is absent, never guessed. `curated` (task 011b) "
+            "carries datasheet facts per C-number — and, for a part on no "
+            "harvest source, its whole identity — and the harvest applies the "
+            "fields over what the boards produced. Every curated fact names "
+            "its datasheet page; a fact that cannot is not recorded."
         ),
         "identity": [corrections.identity[key].as_json() for key in sorted(corrections.identity)],
         "datasheets": [
             corrections.datasheets[key].as_json() for key in sorted(corrections.datasheets)
+        ],
+        "curated": [
+            corrections.curated[key].as_json() for key in sorted(corrections.curated)
         ],
     }
     file.write_text(
@@ -1004,6 +1363,7 @@ def save_corrections(corrections: LibraryCorrections, path: str | Path) -> Path:
 __all__ = [
     "CATEGORY_TO_PREFIX",
     "CORRECTIONS_KIND",
+    "CuratedOverride",
     "DEFAULT_CATEGORY",
     "DESIGNATOR_CATEGORIES",
     "DatasheetOverride",
@@ -1019,11 +1379,14 @@ __all__ = [
     "PartProvenance",
     "ResistanceQuery",
     "SCHEMA_VERSION",
+    "CATEGORY_VOCABULARY",
+    "FACTS_KEYS",
     "category_of",
     "corrections_from_json",
     "entry_from_json",
     "entry_to_json",
     "expand_footprint_words",
+    "find_facts",
     "footprint_matches",
     "library_from_json",
     "library_to_json",

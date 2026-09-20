@@ -42,6 +42,8 @@ from ..core.parts import (
     PartLibrary,
     PartProvenance,
     category_of,
+    entry_from_json,
+    entry_to_json,
     make_key,
 )
 from ..parsers.board_source import (
@@ -668,6 +670,38 @@ def harvest_board(
     return (entries, report)
 
 
+def _apply_curated(
+    ordered: list[PartEntry],
+    by_lcsc: dict[str, PartEntry],
+    corrections: "LibraryCorrections",
+) -> None:
+    """Apply the sidecar's ``curated`` section (task 011b).
+
+    For a C-number the boards supplied, the payload's fields win — the boards
+    cannot know a datasheet's numbers. For a C-number on **no** source, the
+    payload must be a complete entry and joins the shelf. Either way the merge
+    runs through :func:`entry_from_json`, so a curated field that cannot form
+    a valid entry fails the harvest here rather than poisoning the shelf.
+    """
+    for lcsc, record in sorted(corrections.curated.items()):
+        existing = by_lcsc.get(lcsc)
+        if existing is not None:
+            body = {**entry_to_json(existing), **record.fields}
+        else:
+            body = {"lcsc": lcsc, **record.fields}
+        entry = entry_from_json(body, f"curated[{lcsc}]")
+        if record.note:
+            entry.notes.append(record.note)
+        datasheet = corrections.datasheet_for(lcsc)
+        if datasheet is not None:
+            entry.datasheetPdfUrl = datasheet.pdfUrl
+        if existing is None:
+            by_lcsc[lcsc] = entry
+            ordered.append(entry)
+        else:
+            ordered[ordered.index(existing)] = entry
+
+
 def harvest(
     sources: list[str | Path],
     *,
@@ -704,6 +738,9 @@ def harvest(
                 ordered.append(entry)
             else:
                 _merge(existing, entry, result.conflicts)
+
+    if corrections is not None and corrections.curated:
+        _apply_curated(ordered, by_lcsc, corrections)
 
     _resolve_keys(ordered)
     result.library.parts = sorted(ordered, key=lambda p: p.key)
