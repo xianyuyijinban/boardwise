@@ -1,0 +1,10 @@
+{
+  "schema": "boardwise-review-annotations/1",
+  "board": "injected-v3-decap-missing",
+  "source": "reviewsets/injected/v3-decap-missing.epro2",
+  "split_default": "dev",
+  "reviewed_by": "",
+  "reviewed_at": "",
+  "notes": "RETIRED 2026-09-20 (task 011e sec.1.2). Derived from reviewsets/injected/fixed-base.epro2 by reviewsets/injected/make_variants.py, which is the only writer of this file. The board is kept on disk so the byte-identity guard keeps covering it, but it carries NO records: it is in neither split and takes part in no detection criterion. Fault it was built with: C1 (the CH340G V3 0.1uF) removed from the board. Edit: delete C1's COMPONENT record and its attribute stream. Oracle note: RETIRED: on this topology the injection is invisible -- measured, not argued. In 3.3V mode the V3 capacitor requirement (facts tag mode: 5V) does not apply, and the requirement that does apply (VCC needs 0.1uF) is met by C9's 2.2uF with or without C1: the two boards produce identical rule output, det=0/1. The general property is that decap-required-caps compares against the LARGEST established capacitor on the net, so no single-capacitor removal on this board is visible at all (VCC carries four). Making it visible would mean editing three capacitors at once -- building a defect to fit the rule, which 011 sec.6 forbids. The missing-decoupling path stays covered by synthetic model tests. Kept as a board for the byte-identity guard, excluded from the per-variant detection criterion and from both splits.",
+  "items": []
+}

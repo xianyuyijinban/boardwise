@@ -98,3 +98,8 @@ class DesignModel:
     components: dict[str, Component] = field(default_factory=dict)
     nets: dict[str, Net] = field(default_factory=dict)
     raw: dict[str, Any] = field(default_factory=dict)
+    #: Designators that appeared **more than once** in the source. The dict
+    #: key above keeps only the last placement, so without this list a
+    #: two-page board that re-uses a designator silently loses a part (task
+    #: 011c sec.3.2, CONN-1). Empty for single-page boards without clashes.
+    duplicate_designators: list[str] = field(default_factory=list)

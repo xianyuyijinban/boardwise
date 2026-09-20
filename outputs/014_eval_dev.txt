@@ -1,0 +1,24 @@
+boardwise review-eval: split=dev, 1 board(s)
+
+board ProPrj_毕设FOC驱动板_2026-09-17 (tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2) [reviewed]: 121 components, 85 nets, findings 30 ERROR / 14 WARN / 12 INFO
+  rule                   defects  det miss x-catch fp-exc fp-unexpl        precision           recall hp-find        hp-prec
+  decoupling-per-ic            0    0    0       0      0         3       0/3 = 0.00                —       3     0/3 = 0.00
+  xtal-load-caps               0    0    0       0      0         0                —                —       0              —
+  shunt-sense-link             0    0    0       0      0         1       0/1 = 0.00                —       0              —
+  conn-duplicate-designators       0    0    0       0      0        30      0/30 = 0.00                —      30    0/30 = 0.00
+  conn-nc-and-must-connect       0    0    0       0      0         0                —                —       0              —
+  conn-library-pins            0    0    0       0      0         0                —                —       0              —
+  pwr-supply-on-known-domain       0    0    0       0      0         0                —                —       0              —
+  pwr-domain-vs-range          0    0    0       0      0         0                —                —       0              —
+  path-ldo-dropout             0    0    0       0      0         0                —                —       0              —
+  decap-required-caps          0    0    0       0      0         1       0/1 = 0.00                —       1     0/1 = 0.00
+  param-led-current            0    0    0       0      0         0                —                —       0              —
+  param-divider-output         0    0    0       0      0         0                —                —       0              —
+  param-rc-cutoff              0    0    0       0      0        11      0/11 = 0.00                —       0              —
+  param-value-mpn-match        0    0    0       0      0        10      0/10 = 0.00                —      10    0/10 = 0.00
+  conn-usb-cc-pulldown         0    0    0       0      0         0                —                —       0              —
+  VIOLATION     decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=30  conn-nc-and-must-connect=0  conn-library-pins=0  pwr-supply-on-known-domain=0  pwr-domain-vs-range=0  path-ldo-dropout=0  decap-required-caps=1  param-led-current=0  param-divider-output=0  param-rc-cutoff=0  param-value-mpn-match=10  conn-usb-cc-pulldown=0
+  OK            decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=0  conn-nc-and-must-connect=1  conn-library-pins=0  pwr-supply-on-known-domain=1  pwr-domain-vs-range=1  path-ldo-dropout=1  decap-required-caps=1  param-led-current=0  param-divider-output=0  param-rc-cutoff=11  param-value-mpn-match=1  conn-usb-cc-pulldown=2
+  UNKNOWN       decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=0  conn-nc-and-must-connect=15  conn-library-pins=1  pwr-supply-on-known-domain=15  pwr-domain-vs-range=15  path-ldo-dropout=15  decap-required-caps=15  param-led-current=0  param-divider-output=2  param-rc-cutoff=0  param-value-mpn-match=32  conn-usb-cc-pulldown=0
+  NOT_APPLICABLE decoupling-per-ic=legacy  xtal-load-caps=legacy  shunt-sense-link=legacy  conn-duplicate-designators=0  conn-nc-and-must-connect=0  conn-library-pins=0  pwr-supply-on-known-domain=0  pwr-domain-vs-range=0  path-ldo-dropout=0  decap-required-caps=0  param-led-current=0  param-divider-output=0  param-rc-cutoff=0  param-value-mpn-match=0  conn-usb-cc-pulldown=0
+  queries excluded: 0; holdout items excluded here: 43

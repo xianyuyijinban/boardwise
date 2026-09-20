@@ -36,12 +36,19 @@ def test_review_fixture_smoke(tmp_path):
     assert "ERROR" in result.stdout
 
     payload = json.loads(json_path.read_text(encoding="utf-8"))
-    assert payload["summary"] == {"ERROR": 0, "WARN": 0, "INFO": 0}
+    # 011d's facts rules measure the pcb view too and do raise WARN/INFO
+    # there, so the fixture is no longer all-zero; the contract this test
+    # pins is the exit-code one: no ERROR findings, exit 0.
+    assert payload["summary"]["ERROR"] == 0
+    assert set(payload["summary"]) == {"ERROR", "WARN", "INFO"}
     assert isinstance(payload["findings"], list)
 
     md = md_path.read_text(encoding="utf-8")
     assert md.startswith("# boardwise review report")
-    assert "No findings." in md
+    # 011d's rules find things on this board too (15 WARN / 27 INFO), so the
+    # report carries finding sections instead of "No findings.".
+    assert "No findings." not in md
+    assert "param-rc-cutoff" in md
 
 
 def test_review_exit_code_on_error(tmp_path):

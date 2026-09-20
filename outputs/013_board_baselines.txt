@@ -1,0 +1,44 @@
+== ch340_golden (tests/fixtures/ch340_golden.epro2)
+   components=17 nets=13 pins=66 pin-less=0 []
+== ProPrj_CH340G_2026-09-13 (tests/fixtures/ProPrj_CH340G_2026-09-13.epro2)
+   components=17 nets=13 pins=66 pin-less=0 []
+== bishe (tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2)
+   components=121 nets=85 pins=414 pin-less=0 []
+   --- the 25 early-placed parts, per-pin nets ---
+   C13  [2 pins] 1:AGND 2:AGND
+   C15  [2 pins] 1:GND 2:NET1
+   C17  [2 pins] 1:+24V 2:PGND
+   C18  [2 pins] 1:NET2 2:NET3
+   C20  [2 pins] 1:GND 2:OSC-IN
+   C21  [2 pins] 1:GND 2:OSC-OUT
+   C22  [2 pins] 1:NET5 2:NET4
+   C23  [2 pins] 1:GND 2:+5V
+   C24  [2 pins] 1:VCC/2 2:AGND
+   C25  [2 pins] 1:VCC/2 2:AGND
+   C32  [2 pins] 1:AGND 2:5VA
+   C33  [2 pins] 1:AGND 2:5VA
+   C34  [2 pins] 1:AGND 2:NET7
+   C37  [2 pins] 1:GND 2:VCC
+   C39  [2 pins] 1:NRST 2:GND
+   L2   [2 pins] 1:+5V 2:5VA
+   L3   [2 pins] 1:NET6 2:VCC
+   L4   [2 pins] 1:MOTC 2:VCCA
+   R22  [2 pins] 1:NET18 2:GND
+   R24  [2 pins] 1:NET19 2:GND
+   R25  [2 pins] 1:GND 2:PGND
+   R26  [2 pins] 1:NET7 2:5VA
+   R27  [2 pins] 1:NET20 2:GND
+   R28  [2 pins] 1:CAN_L 2:CAN_H
+   R29  [2 pins] 1:NRST 2:VCC
+   --- oscillator nets (open question: U1 PH0/OSC_IN) ---
+   OSC-IN: ['C20.2', 'X1.1']
+   OSC-OUT: ['C21.2', 'U1.13', 'X1.3']
+   IB-: ['R10.1', 'U1.12', 'U4.11']
+== pillbox (tests/fixtures/ProPrj_智能药箱_2026-09-17.epro2)
+   components=43 nets=40 pins=205 pin-less=0 []
+== llc (tests/fixtures/llc_board.epro2)
+   components=47 nets=40 pins=111 pin-less=0 []
+== robot_foc (tests/fixtures/ProPrj_ROBOT ctrl FOC_2026-09-16.epro2)
+   components=44 nets=57 pins=197 pin-less=0 []
+== highspeed (tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2)
+   components=85 nets=113 pins=445 pin-less=0 []

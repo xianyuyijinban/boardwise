@@ -1,0 +1,8 @@
+boardwise review-eval: split=dev, 1 board(s)
+
+board ch340g-golden (tests/fixtures/ch340_golden.epro2) [DRAFT (oracle review pending)]: 17 components, 13 nets, findings 0 ERROR / 1 WARN / 0 INFO
+  rule                   defects  det miss x-catch fp-exc fp-unexpl        precision           recall
+  decoupling-per-ic            0    0    0       0      0         0                —                —
+  xtal-load-caps               0    0    0       0      1         0       0/1 = 0.00                —
+  shunt-sense-link             0    0    0       0      0         0                —                —
+  queries excluded: 3
