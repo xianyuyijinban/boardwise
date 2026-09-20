@@ -1,0 +1,47 @@
+injected-defect proposals derived from ch340_golden.epro2:
+
+1. v3-decap-missing  [signed 2026-09-19 by Yue Xiangyu]
+   fault:    C1 (the CH340G V3 0.1uF) removed from the board
+   edit:     delete C1's COMPONENT record and its attribute stream
+   expects:  decap-required-caps (ref U1, ERROR)
+   note:     the V3 net loses its capacitor; the rule must say so. NOTE: on this board the V3 pin is ALREADY a violation (3.3V mode wants V3 tied to VCC, and it is not), so the derived board is a regression fixture, not a clean isolation of the missing cap -- see the generation report.
+
+2. duplicate-designator  [signed 2026-09-19 by Yue Xiangyu]
+   fault:    a second page carries a second R24
+   edit:     append a new SCH_PAGE holding a copy of R24's records
+   expects:  conn-duplicate-designators (ref R24, ERROR)
+   note:     the model keeps the last placement; the clash must be reported. The copy sits at the original's coordinates on purpose: a fault injection changes ONE thing, and moving it would also rewrite the netlist.
+
+3. nc-pin-grounded  [signed 2026-09-19 by Yue Xiangyu]
+   fault:    RT9013 pin4 (declared NC) wired to GND
+   edit:     clear U5.4's NO_CONNECT mark and add a wire from the pin tip to the grounded capacitor on the same row
+   expects:  conn-nc-and-must-connect (ref U5, ERROR)
+   note:     an NC pin on any net is the textbook violation
+
+4. overvoltage-rail  [signed 2026-09-19 by Yue Xiangyu]
+   fault:    the +5V rail renamed +9V (above the RT9013's 6V abs max)
+   edit:     rename the net in the page's flag attributes (Name and Global Net Name)
+   expects:  pwr-domain-vs-range (ref U5, ERROR)
+   note:     the domain inference reads the rail name; abs max is exceeded. Only the page's net declarations change -- the flag library device titles stay as they are, because renaming a net does not rename a part.
+
+5. ldo-no-headroom  [signed 2026-09-19 by Yue Xiangyu]
+   fault:    RT9013 input fed from the 3.3V rail (0V headroom < 400mV dropout)
+   edit:     reroute U5.1's wire from +5V to the VOUT rail
+   expects:  path-ldo-dropout (ref U5, WARN)
+   note:     headroom 0 mV against the dropout fact
+
+6. led-overcurrent  [NOT SIGNED]
+   fault:    LED series resistor swapped to 4.7 ohm
+   edit:     change U3's Value and MPN fields to 4R7
+   expects:  param-led-current (ref LED1, WARN)
+   note:     WITHDRAWN AND REPLACED, NOT SIGNED. The draft proposed 100 ohm, which with the LED's real Vf (2.7-3.2 V, GL0603UG01) gives 1-6 mA -- inside the house bounds, so nothing would fire. The replacement is 4.7 ohm (21-128 mA, entirely above the 15 mA ceiling), and it needs its own signature before it is built.
+
+7. value-mpn-mismatch  [signed 2026-09-19 by Yue Xiangyu]
+   fault:    U3's value field changed to 2.2k while its MPN still decodes 470 ohm
+   edit:     rewrite U3's Value attribute only
+   expects:  param-value-mpn-match (ref U3, WARN)
+   note:     the single-field contradiction. NOTE: this board already carries a 1k-ohm/470-ohm mismatch on U3 (it is the golden board's oracle defect), so the derived board widens an existing one rather than introducing a first-of-its-kind fault -- see the report.
+
+6 of 7 signed: v3-decap-missing, duplicate-designator, nc-pin-grounded, overvoltage-rail, ldo-no-headroom, value-mpn-mismatch
+
+`--generate` builds exactly the signed subset and refuses the rest (task 011d sec.4; 011 sec.6: injected faults must be real mistakes).

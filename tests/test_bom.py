@@ -259,19 +259,21 @@ def _cli(argv):
 
 
 def test_the_ch340_spec_exports_and_names_what_the_shelf_cannot_answer(capsys):
-    """Measured 2026-09-17: this board's parts are mostly *not* on the shelf.
+    """Measured 2026-09-17, updated 2026-09-19 (task 011b): the export says
+    which parts the shelf cannot answer for, per designator, and exits 1 —
+    the honest outcome, the opposite of quietly printing a shorter BOM.
 
-    The shelf was seeded from four other boards, so the CH340 golden's C-numbers
-    are largely absent. The export says so per designator and exits 1 — the
-    honest outcome, and the opposite of quietly printing a shorter BOM.
+    CH340G (C14267) used to be the example of an unresolvable part; task 011b
+    put it on the shelf, so the example is now R24 (C25905) — the assertion
+    still pins the same behaviour, against a part that is still absent.
     """
     code = _cli(["bom", "export", "--spec", str(SPEC), "--library", str(LIBRARY)])
     out = capsys.readouterr().out
     assert code == 1, out
     assert "open question" in out
-    assert "C14267 is not on the shelf" in out
-    # The two parts that *are* on the shelf come out with library footprint names.
-    assert "C2765186" in out and "C47773" in out
+    assert "C25905 is not on the shelf" in out
+    # The parts that *are* on the shelf come out with library footprint names.
+    assert "C14267" in out and "C2765186" in out and "C47773" in out
     assert "library's** name for the package" in out
 
 

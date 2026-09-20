@@ -1,0 +1,15 @@
+variant                rule                       ref   sev   hint det xcat fp   base-fires
+duplicate-designator   conn-duplicate-designators R24   ERROR 1    1   0    0    0/1  caught
+ldo-no-headroom        path-ldo-dropout           U5    ERROR 1    1   0    0    0/1  caught
+nc-pin-grounded        conn-nc-and-must-connect   U5    ERROR 1    1   0    0    0/1  caught
+overvoltage-rail       pwr-domain-vs-range        U5    ERROR 1    1   0    0    0/1  caught
+v3-decap-missing       decap-required-caps        U1    WARN  1    0   0    0    0/1  SILENT
+value-mpn-mismatch     param-value-mpn-match      U3    WARN  1    1   0    0    0/1  caught
+
+=== the base's own set (3 exceptions, no defects) ===
+  items: [('X1', 'exception'), ('R24', 'exception'), ('R27', 'exception')]
+  findings: {'ERROR': 0, 'WARN': 0, 'INFO': 0} | fp-exc total: 0 | fp-unexpl total: 0
+
+=== the golden set's two defects: base vs golden ===
+  fixed-base   U3: det=0 missed=1 viol=0 | U1: det=0 missed=1 viol=0
+  golden       U3: det=1 missed=0 viol=1 | U1: det=1 missed=0 viol=1

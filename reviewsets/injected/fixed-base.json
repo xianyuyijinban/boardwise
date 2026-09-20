@@ -1,0 +1,30 @@
+{
+  "schema": "boardwise-review-annotations/1",
+  "board": "fixed-base",
+  "source": "reviewsets/injected/fixed-base.epro2",
+  "split_default": "dev",
+  "reviewed_by": "Yue Xiangyu",
+  "reviewed_at": "2026-09-19",
+  "notes": "The corrected reference board (task 011d sec.4 follow-up; oracle rulings of 2026-09-19). Derived from tests/fixtures/ch340_golden.epro2 by reviewsets/injected/make_variants.py. Fix: the oracle's two rulings: U3's declared MPN corrected to the 1k sibling, and V3 tied to the VCC net. Edits: U3 instance 'Manufacturer Part': FRC0805J471 TS -> FRC0805J102 TS; V3's wire group: its NET label now reads VCC (was empty, so the net came out auto-named NET1). It carries NO defect records -- the oracle ruled the corrected board correct -- only the three exceptions copied from the signed golden set. Every injected variant is derived from this board, which is what makes an injected fault a first-of-its-kind signal. Oracle note: the substrate for every injected variant. Two corrections, both ruled 2026-09-19: 'U3 value 1k is right, MPN FRC0805J471 is wrong' and 'V3 must be tied to VCC'. The V3 fix is a net-name declaration on the existing wire, which is how a schematic ties two nets -- the capacitor C1 stays where it is and becomes a VCC decoupling cap, exactly what a 3.3V-mode CH340G wants. Only the instance's MPN claim is corrected; the local library device it points at still carries the old supplier fields, because re-picking the device would rewrite the library document and inventing a catalogue number for the 1k sibling would be fabrication (see the report).",
+  "items": [
+    {
+      "ref": "X1",
+      "rule_hint": "xtal-load-caps",
+      "kind": "exception",
+      "note": "Measured on the model: X1 is a 4-pad crystal (SMD3225-4P). Pins 1/3 sit on the resonator nets NET3/NET2 with load capacitors C3 and C25, each grounded on its other end - exactly what the rule asks for. Pins 2/4 are the crystal CASE, tied to GND. The rule then demands a grounded capacitor on the case net (GND) itself, which cannot exist by construction: firing here is a false positive. 011c fix (ruling): skip pins whose net is already ground; the exception record stays so the metrics stay self-consistent (fp-exc must drop to 0 with the record in place).",
+      "severity": ""
+    },
+    {
+      "ref": "R24",
+      "rule_hint": "conn-usb-cc-pulldown",
+      "kind": "exception",
+      "note": "Oracle ruling 2026-09-19 (was a query in the 011a draft): intended. R24 (pin 1 on USB1 pin 10, pin 2 on GND) and R27 (same on USB1 pin 4) are the 5.1k Rd pull-downs on the Type-C receptacle's CC1/CC2 - standard for a sink-port design. The rule named in the hint does not exist yet (second batch); until then the harness must list this exception in its unregistered-hint column. A future conn-usb-cc-pulldown rule must NOT flag these two."
+    },
+    {
+      "ref": "R27",
+      "rule_hint": "conn-usb-cc-pulldown",
+      "kind": "exception",
+      "note": "Oracle ruling 2026-09-19 (was a query in the 011a draft): intended. 5.1k Rd pull-down on USB1 CC2 (pin 4), the twin of R24 on CC1 (pin 10). Same unregistered-hint handling as R24."
+    }
+  ]
+}

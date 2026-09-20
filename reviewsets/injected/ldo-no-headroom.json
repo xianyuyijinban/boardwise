@@ -1,0 +1,19 @@
+{
+  "schema": "boardwise-review-annotations/1",
+  "board": "injected-ldo-no-headroom",
+  "source": "reviewsets/injected/ldo-no-headroom.epro2",
+  "split_default": "dev",
+  "reviewed_by": "Yue Xiangyu",
+  "reviewed_at": "2026-09-19",
+  "notes": "Signed injected-defect board (task 011d sec.4; proposal signed by Yue Xiangyu on 2026-09-19). Derived from reviewsets/injected/fixed-base.epro2 (the corrected reference board) by reviewsets/injected/make_variants.py, which is the only writer of this file. Fault: RT9013 input fed from the 3.3V rail (0V headroom < 400mV dropout). Edit: reroute U5.1's wire from +5V to the VOUT rail. The defect record below is the whole ground truth for the INJECTED fault: the named rule must catch it, and anything that rule adds beyond this record is a false positive. Findings from other rules are the base board's own (this board is the base plus one edit, and the base's records live in fixed-base.json) -- they land in the harness's unexplained column here, which is why the per-variant report quotes the expected rule's own columns rather than the board total. Split: dev (011e sec.2 -- assigned by sha1(id), see make_variants.py). Oracle note: headroom 0 mV against the dropout fact",
+  "items": [
+    {
+      "ref": "U5",
+      "rule_hint": "path-ldo-dropout",
+      "kind": "defect",
+      "severity": "ERROR",
+      "split": "dev",
+      "note": "Injected fault: RT9013 input fed from the 3.3V rail (0V headroom < 400mV dropout) (reroute U5.1's wire from +5V to the VOUT rail). Expected catch: path-ldo-dropout."
+    }
+  ]
+}

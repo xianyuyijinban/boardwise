@@ -1,0 +1,346 @@
+{
+  "schema": "boardwise-review-annotations/1",
+  "board": "ProPrj_毕设FOC驱动板_2026-09-17",
+  "source": "tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2",
+  "split_default": "holdout",
+  "reviewed_by": "Yue Xiangyu",
+  "reviewed_at": "2026-09-20",
+  "notes": "Oracle rulings of 2026-09-19, sections A and B (see the triage table in reviewsets/ProPrj_毕设FOC驱动板_2026-09-17-triage.md). A1: 30 conn-duplicate-designators collisions are defects, one record each (the oracle's words for the cause: 当时疏忽，没在意). A2: all 10 param-value-mpn-match contradictions are exceptions -- three because the decoder over-reaches on part numbers that are not EIA-coded, seven because the decode is right while the positions do not care about the difference. B: B1 (decap-required-caps on U11 pin5) is a defect -- NET2 carries 100 nF + 10 nF where the datasheet asks for >= 1 uF of output bulk. B2, B4 and B5 are observations, as ruled: an L1 heuristic the oracle retires in M2, a connectivity-only check meeting a filter network, and a facts/parse gap whose UNKNOWNs are not findings at all. Signed 2026-09-20: all of section B is ruled. The three 013-era rulings landed the same day -- U1.12 (PH0/OSC_IN on IB-) is a defect under the unregistered hint conn-osc-pin-net (M2 backlog, no M1 denominator), B3 is an exception whose finding the 013 parser fix already silenced, and B2 shrank 5 -> 3 because two of its five warnings were pin-less-part artefacts. split_default is holdout: this is the CONN-1 real board task 011e sec.2 asked for, and a real board stays out of rule tuning's sight even after signing. split_default is holdout: this is the CONN-1 real board task 011e sec.2 asked for, and a set still being ruled is precisely what holdout is for (rule tuning never sees it).",
+  "items": [
+    {
+      "ref": "C1",
+      "rule_hint": "conn-duplicate-designators",
+      "kind": "defect",
+      "severity": "ERROR",
+      "note": "Ruling A1 (oracle Yue Xiangyu, 2026-09-19; one decision covering all 30 refs in the batch): a real defect. This board is drawn across subsheets and a designator repeats there, but the netlist, the BOM and the layout are all PROJECT-scoped, so two different parts answer to one name. The parser merges every SCH_PAGE into one model keyed by designator and silently keeps only the last placement, which loses a part from the review; the rule reports the collision. ERROR rather than WARN because the ambiguity sits in the netlist every other artefact is keyed on. The oracle's words for how it happened: 当时疏忽，没在意 (an oversight at the time -- it did not get the attention it needed)."
+    },
+    {
+      "ref": "C2",
+      "rule_hint": "conn-duplicate-designators",
+      "kind": "defect",
+      "severity": "ERROR",
+      "note": "Ruling A1 (oracle Yue Xiangyu, 2026-09-19; one decision covering all 30 refs in the batch): a real defect. This board is drawn across subsheets and a designator repeats there, but the netlist, the BOM and the layout are all PROJECT-scoped, so two different parts answer to one name. The parser merges every SCH_PAGE into one model keyed by designator and silently keeps only the last placement, which loses a part from the review; the rule reports the collision. ERROR rather than WARN because the ambiguity sits in the netlist every other artefact is keyed on. The oracle's words for how it happened: 当时疏忽，没在意 (an oversight at the time -- it did not get the attention it needed)."
+    },
+    {
+      "ref": "C3",
+      "rule_hint": "conn-duplicate-designators",
+      "kind": "defect",
+      "severity": "ERROR",
+      "note": "Ruling A1 (oracle Yue Xiangyu, 2026-09-19; one decision covering all 30 refs in the batch): a real defect. This board is drawn across subsheets and a designator repeats there, but the netlist, the BOM and the layout are all PROJECT-scoped, so two different parts answer to one name. The parser merges every SCH_PAGE into one model keyed by designator and silently keeps only the last placement, which loses a part from the review; the rule reports the collision. ERROR rather than WARN because the ambiguity sits in the netlist every other artefact is keyed on. The oracle's words for how it happened: 当时疏忽，没在意 (an oversight at the time -- it did not get the attention it needed)."
+    },
+    {
+      "ref": "C4",
+      "rule_hint": "conn-duplicate-designators",
+      "kind": "defect",
+      "severity": "ERROR",
+      "note": "Ruling A1 (oracle Yue Xiangyu, 2026-09-19; one decision covering all 30 refs in the batch): a real defect. This board is drawn across subsheets and a designator repeats there, but the netlist, the BOM and the layout are all PROJECT-scoped, so two different parts answer to one name. The parser merges every SCH_PAGE into one model keyed by designator and silently keeps only the last placement, which loses a part from the review; the rule reports the collision. ERROR rather than WARN because the ambiguity sits in the netlist every other artefact is keyed on. The oracle's words for how it happened: 当时疏忽，没在意 (an oversight at the time -- it did not get the attention it needed)."
+    },
+    {
+      "ref": "C5",
+      "rule_hint": "conn-duplicate-designators",
+      "kind": "defect",
+      "severity": "ERROR",
+      "note": "Ruling A1 (oracle Yue Xiangyu, 2026-09-19; one decision covering all 30 refs in the batch): a real defect. This board is drawn across subsheets and a designator repeats there, but the netlist, the BOM and the layout are all PROJECT-scoped, so two different parts answer to one name. The parser merges every SCH_PAGE into one model keyed by designator and silently keeps only the last placement, which loses a part from the review; the rule reports the collision. ERROR rather than WARN because the ambiguity sits in the netlist every other artefact is keyed on. The oracle's words for how it happened: 当时疏忽，没在意 (an oversight at the time -- it did not get the attention it needed)."
+    },
+    {
+      "ref": "C6",
+      "rule_hint": "conn-duplicate-designators",
+      "kind": "defect",
+      "severity": "ERROR",
+      "note": "Ruling A1 (oracle Yue Xiangyu, 2026-09-19; one decision covering all 30 refs in the batch): a real defect. This board is drawn across subsheets and a designator repeats there, but the netlist, the BOM and the layout are all PROJECT-scoped, so two different parts answer to one name. The parser merges every SCH_PAGE into one model keyed by designator and silently keeps only the last placement, which loses a part from the review; the rule reports the collision. ERROR rather than WARN because the ambiguity sits in the netlist every other artefact is keyed on. The oracle's words for how it happened: 当时疏忽，没在意 (an oversight at the time -- it did not get the attention it needed)."
+    },
+    {
+      "ref": "C7",
+      "rule_hint": "conn-duplicate-designators",
+      "kind": "defect",
+      "severity": "ERROR",
+      "note": "Ruling A1 (oracle Yue Xiangyu, 2026-09-19; one decision covering all 30 refs in the batch): a real defect. This board is drawn across subsheets and a designator repeats there, but the netlist, the BOM and the layout are all PROJECT-scoped, so two different parts answer to one name. The parser merges every SCH_PAGE into one model keyed by designator and silently keeps only the last placement, which loses a part from the review; the rule reports the collision. ERROR rather than WARN because the ambiguity sits in the netlist every other artefact is keyed on. The oracle's words for how it happened: 当时疏忽，没在意 (an oversight at the time -- it did not get the attention it needed)."
+    },
+    {
+      "ref": "C8",
+      "rule_hint": "conn-duplicate-designators",
+      "kind": "defect",
+      "severity": "ERROR",
+      "note": "Ruling A1 (oracle Yue Xiangyu, 2026-09-19; one decision covering all 30 refs in the batch): a real defect. This board is drawn across subsheets and a designator repeats there, but the netlist, the BOM and the layout are all PROJECT-scoped, so two different parts answer to one name. The parser merges every SCH_PAGE into one model keyed by designator and silently keeps only the last placement, which loses a part from the review; the rule reports the collision. ERROR rather than WARN because the ambiguity sits in the netlist every other artefact is keyed on. The oracle's words for how it happened: 当时疏忽，没在意 (an oversight at the time -- it did not get the attention it needed)."
+    },
+    {
+      "ref": "C9",
+      "rule_hint": "conn-duplicate-designators",
+      "kind": "defect",
+      "severity": "ERROR",
+      "note": "Ruling A1 (oracle Yue Xiangyu, 2026-09-19; one decision covering all 30 refs in the batch): a real defect. This board is drawn across subsheets and a designator repeats there, but the netlist, the BOM and the layout are all PROJECT-scoped, so two different parts answer to one name. The parser merges every SCH_PAGE into one model keyed by designator and silently keeps only the last placement, which loses a part from the review; the rule reports the collision. ERROR rather than WARN because the ambiguity sits in the netlist every other artefact is keyed on. The oracle's words for how it happened: 当时疏忽，没在意 (an oversight at the time -- it did not get the attention it needed)."
+    },
+    {
+      "ref": "C10",
+      "rule_hint": "conn-duplicate-designators",
+      "kind": "defect",
+      "severity": "ERROR",
+      "note": "Ruling A1 (oracle Yue Xiangyu, 2026-09-19; one decision covering all 30 refs in the batch): a real defect. This board is drawn across subsheets and a designator repeats there, but the netlist, the BOM and the layout are all PROJECT-scoped, so two different parts answer to one name. The parser merges every SCH_PAGE into one model keyed by designator and silently keeps only the last placement, which loses a part from the review; the rule reports the collision. ERROR rather than WARN because the ambiguity sits in the netlist every other artefact is keyed on. The oracle's words for how it happened: 当时疏忽，没在意 (an oversight at the time -- it did not get the attention it needed)."
+    },
+    {
+      "ref": "C11",
+      "rule_hint": "conn-duplicate-designators",
+      "kind": "defect",
+      "severity": "ERROR",
+      "note": "Ruling A1 (oracle Yue Xiangyu, 2026-09-19; one decision covering all 30 refs in the batch): a real defect. This board is drawn across subsheets and a designator repeats there, but the netlist, the BOM and the layout are all PROJECT-scoped, so two different parts answer to one name. The parser merges every SCH_PAGE into one model keyed by designator and silently keeps only the last placement, which loses a part from the review; the rule reports the collision. ERROR rather than WARN because the ambiguity sits in the netlist every other artefact is keyed on. The oracle's words for how it happened: 当时疏忽，没在意 (an oversight at the time -- it did not get the attention it needed)."
+    },
+    {
+      "ref": "C12",
+      "rule_hint": "conn-duplicate-designators",
+      "kind": "defect",
+      "severity": "ERROR",
+      "note": "Ruling A1 (oracle Yue Xiangyu, 2026-09-19; one decision covering all 30 refs in the batch): a real defect. This board is drawn across subsheets and a designator repeats there, but the netlist, the BOM and the layout are all PROJECT-scoped, so two different parts answer to one name. The parser merges every SCH_PAGE into one model keyed by designator and silently keeps only the last placement, which loses a part from the review; the rule reports the collision. ERROR rather than WARN because the ambiguity sits in the netlist every other artefact is keyed on. The oracle's words for how it happened: 当时疏忽，没在意 (an oversight at the time -- it did not get the attention it needed)."
+    },
+    {
+      "ref": "C13",
+      "rule_hint": "conn-duplicate-designators",
+      "kind": "defect",
+      "severity": "ERROR",
+      "note": "Ruling A1 (oracle Yue Xiangyu, 2026-09-19; one decision covering all 30 refs in the batch): a real defect. This board is drawn across subsheets and a designator repeats there, but the netlist, the BOM and the layout are all PROJECT-scoped, so two different parts answer to one name. The parser merges every SCH_PAGE into one model keyed by designator and silently keeps only the last placement, which loses a part from the review; the rule reports the collision. ERROR rather than WARN because the ambiguity sits in the netlist every other artefact is keyed on. The oracle's words for how it happened: 当时疏忽，没在意 (an oversight at the time -- it did not get the attention it needed)."
+    },
+    {
+      "ref": "R1",
+      "rule_hint": "conn-duplicate-designators",
+      "kind": "defect",
+      "severity": "ERROR",
+      "note": "Ruling A1 (oracle Yue Xiangyu, 2026-09-19; one decision covering all 30 refs in the batch): a real defect. This board is drawn across subsheets and a designator repeats there, but the netlist, the BOM and the layout are all PROJECT-scoped, so two different parts answer to one name. The parser merges every SCH_PAGE into one model keyed by designator and silently keeps only the last placement, which loses a part from the review; the rule reports the collision. ERROR rather than WARN because the ambiguity sits in the netlist every other artefact is keyed on. The oracle's words for how it happened: 当时疏忽，没在意 (an oversight at the time -- it did not get the attention it needed)."
+    },
+    {
+      "ref": "R2",
+      "rule_hint": "conn-duplicate-designators",
+      "kind": "defect",
+      "severity": "ERROR",
+      "note": "Ruling A1 (oracle Yue Xiangyu, 2026-09-19; one decision covering all 30 refs in the batch): a real defect. This board is drawn across subsheets and a designator repeats there, but the netlist, the BOM and the layout are all PROJECT-scoped, so two different parts answer to one name. The parser merges every SCH_PAGE into one model keyed by designator and silently keeps only the last placement, which loses a part from the review; the rule reports the collision. ERROR rather than WARN because the ambiguity sits in the netlist every other artefact is keyed on. The oracle's words for how it happened: 当时疏忽，没在意 (an oversight at the time -- it did not get the attention it needed)."
+    },
+    {
+      "ref": "R3",
+      "rule_hint": "conn-duplicate-designators",
+      "kind": "defect",
+      "severity": "ERROR",
+      "note": "Ruling A1 (oracle Yue Xiangyu, 2026-09-19; one decision covering all 30 refs in the batch): a real defect. This board is drawn across subsheets and a designator repeats there, but the netlist, the BOM and the layout are all PROJECT-scoped, so two different parts answer to one name. The parser merges every SCH_PAGE into one model keyed by designator and silently keeps only the last placement, which loses a part from the review; the rule reports the collision. ERROR rather than WARN because the ambiguity sits in the netlist every other artefact is keyed on. The oracle's words for how it happened: 当时疏忽，没在意 (an oversight at the time -- it did not get the attention it needed)."
+    },
+    {
+      "ref": "R4",
+      "rule_hint": "conn-duplicate-designators",
+      "kind": "defect",
+      "severity": "ERROR",
+      "note": "Ruling A1 (oracle Yue Xiangyu, 2026-09-19; one decision covering all 30 refs in the batch): a real defect. This board is drawn across subsheets and a designator repeats there, but the netlist, the BOM and the layout are all PROJECT-scoped, so two different parts answer to one name. The parser merges every SCH_PAGE into one model keyed by designator and silently keeps only the last placement, which loses a part from the review; the rule reports the collision. ERROR rather than WARN because the ambiguity sits in the netlist every other artefact is keyed on. The oracle's words for how it happened: 当时疏忽，没在意 (an oversight at the time -- it did not get the attention it needed)."
+    },
+    {
+      "ref": "R5",
+      "rule_hint": "conn-duplicate-designators",
+      "kind": "defect",
+      "severity": "ERROR",
+      "note": "Ruling A1 (oracle Yue Xiangyu, 2026-09-19; one decision covering all 30 refs in the batch): a real defect. This board is drawn across subsheets and a designator repeats there, but the netlist, the BOM and the layout are all PROJECT-scoped, so two different parts answer to one name. The parser merges every SCH_PAGE into one model keyed by designator and silently keeps only the last placement, which loses a part from the review; the rule reports the collision. ERROR rather than WARN because the ambiguity sits in the netlist every other artefact is keyed on. The oracle's words for how it happened: 当时疏忽，没在意 (an oversight at the time -- it did not get the attention it needed)."
+    },
+    {
+      "ref": "R6",
+      "rule_hint": "conn-duplicate-designators",
+      "kind": "defect",
+      "severity": "ERROR",
+      "note": "Ruling A1 (oracle Yue Xiangyu, 2026-09-19; one decision covering all 30 refs in the batch): a real defect. This board is drawn across subsheets and a designator repeats there, but the netlist, the BOM and the layout are all PROJECT-scoped, so two different parts answer to one name. The parser merges every SCH_PAGE into one model keyed by designator and silently keeps only the last placement, which loses a part from the review; the rule reports the collision. ERROR rather than WARN because the ambiguity sits in the netlist every other artefact is keyed on. The oracle's words for how it happened: 当时疏忽，没在意 (an oversight at the time -- it did not get the attention it needed)."
+    },
+    {
+      "ref": "R8",
+      "rule_hint": "conn-duplicate-designators",
+      "kind": "defect",
+      "severity": "ERROR",
+      "note": "Ruling A1 (oracle Yue Xiangyu, 2026-09-19; one decision covering all 30 refs in the batch): a real defect. This board is drawn across subsheets and a designator repeats there, but the netlist, the BOM and the layout are all PROJECT-scoped, so two different parts answer to one name. The parser merges every SCH_PAGE into one model keyed by designator and silently keeps only the last placement, which loses a part from the review; the rule reports the collision. ERROR rather than WARN because the ambiguity sits in the netlist every other artefact is keyed on. The oracle's words for how it happened: 当时疏忽，没在意 (an oversight at the time -- it did not get the attention it needed)."
+    },
+    {
+      "ref": "R18",
+      "rule_hint": "conn-duplicate-designators",
+      "kind": "defect",
+      "severity": "ERROR",
+      "note": "Ruling A1 (oracle Yue Xiangyu, 2026-09-19; one decision covering all 30 refs in the batch): a real defect. This board is drawn across subsheets and a designator repeats there, but the netlist, the BOM and the layout are all PROJECT-scoped, so two different parts answer to one name. The parser merges every SCH_PAGE into one model keyed by designator and silently keeps only the last placement, which loses a part from the review; the rule reports the collision. ERROR rather than WARN because the ambiguity sits in the netlist every other artefact is keyed on. The oracle's words for how it happened: 当时疏忽，没在意 (an oversight at the time -- it did not get the attention it needed)."
+    },
+    {
+      "ref": "SCREW1",
+      "rule_hint": "conn-duplicate-designators",
+      "kind": "defect",
+      "severity": "ERROR",
+      "note": "Ruling A1 (oracle Yue Xiangyu, 2026-09-19; one decision covering all 30 refs in the batch): a real defect. This board is drawn across subsheets and a designator repeats there, but the netlist, the BOM and the layout are all PROJECT-scoped, so two different parts answer to one name. The parser merges every SCH_PAGE into one model keyed by designator and silently keeps only the last placement, which loses a part from the review; the rule reports the collision. ERROR rather than WARN because the ambiguity sits in the netlist every other artefact is keyed on. The oracle's words for how it happened: 当时疏忽，没在意 (an oversight at the time -- it did not get the attention it needed)."
+    },
+    {
+      "ref": "SCREW2",
+      "rule_hint": "conn-duplicate-designators",
+      "kind": "defect",
+      "severity": "ERROR",
+      "note": "Ruling A1 (oracle Yue Xiangyu, 2026-09-19; one decision covering all 30 refs in the batch): a real defect. This board is drawn across subsheets and a designator repeats there, but the netlist, the BOM and the layout are all PROJECT-scoped, so two different parts answer to one name. The parser merges every SCH_PAGE into one model keyed by designator and silently keeps only the last placement, which loses a part from the review; the rule reports the collision. ERROR rather than WARN because the ambiguity sits in the netlist every other artefact is keyed on. The oracle's words for how it happened: 当时疏忽，没在意 (an oversight at the time -- it did not get the attention it needed)."
+    },
+    {
+      "ref": "SCREW3",
+      "rule_hint": "conn-duplicate-designators",
+      "kind": "defect",
+      "severity": "ERROR",
+      "note": "Ruling A1 (oracle Yue Xiangyu, 2026-09-19; one decision covering all 30 refs in the batch): a real defect. This board is drawn across subsheets and a designator repeats there, but the netlist, the BOM and the layout are all PROJECT-scoped, so two different parts answer to one name. The parser merges every SCH_PAGE into one model keyed by designator and silently keeps only the last placement, which loses a part from the review; the rule reports the collision. ERROR rather than WARN because the ambiguity sits in the netlist every other artefact is keyed on. The oracle's words for how it happened: 当时疏忽，没在意 (an oversight at the time -- it did not get the attention it needed)."
+    },
+    {
+      "ref": "SCREW4",
+      "rule_hint": "conn-duplicate-designators",
+      "kind": "defect",
+      "severity": "ERROR",
+      "note": "Ruling A1 (oracle Yue Xiangyu, 2026-09-19; one decision covering all 30 refs in the batch): a real defect. This board is drawn across subsheets and a designator repeats there, but the netlist, the BOM and the layout are all PROJECT-scoped, so two different parts answer to one name. The parser merges every SCH_PAGE into one model keyed by designator and silently keeps only the last placement, which loses a part from the review; the rule reports the collision. ERROR rather than WARN because the ambiguity sits in the netlist every other artefact is keyed on. The oracle's words for how it happened: 当时疏忽，没在意 (an oversight at the time -- it did not get the attention it needed)."
+    },
+    {
+      "ref": "U1",
+      "rule_hint": "conn-duplicate-designators",
+      "kind": "defect",
+      "severity": "ERROR",
+      "note": "Ruling A1 (oracle Yue Xiangyu, 2026-09-19; one decision covering all 30 refs in the batch): a real defect. This board is drawn across subsheets and a designator repeats there, but the netlist, the BOM and the layout are all PROJECT-scoped, so two different parts answer to one name. The parser merges every SCH_PAGE into one model keyed by designator and silently keeps only the last placement, which loses a part from the review; the rule reports the collision. ERROR rather than WARN because the ambiguity sits in the netlist every other artefact is keyed on. The oracle's words for how it happened: 当时疏忽，没在意 (an oversight at the time -- it did not get the attention it needed)."
+    },
+    {
+      "ref": "U2",
+      "rule_hint": "conn-duplicate-designators",
+      "kind": "defect",
+      "severity": "ERROR",
+      "note": "Ruling A1 (oracle Yue Xiangyu, 2026-09-19; one decision covering all 30 refs in the batch): a real defect. This board is drawn across subsheets and a designator repeats there, but the netlist, the BOM and the layout are all PROJECT-scoped, so two different parts answer to one name. The parser merges every SCH_PAGE into one model keyed by designator and silently keeps only the last placement, which loses a part from the review; the rule reports the collision. ERROR rather than WARN because the ambiguity sits in the netlist every other artefact is keyed on. The oracle's words for how it happened: 当时疏忽，没在意 (an oversight at the time -- it did not get the attention it needed)."
+    },
+    {
+      "ref": "U14",
+      "rule_hint": "conn-duplicate-designators",
+      "kind": "defect",
+      "severity": "ERROR",
+      "note": "Ruling A1 (oracle Yue Xiangyu, 2026-09-19; one decision covering all 30 refs in the batch): a real defect. This board is drawn across subsheets and a designator repeats there, but the netlist, the BOM and the layout are all PROJECT-scoped, so two different parts answer to one name. The parser merges every SCH_PAGE into one model keyed by designator and silently keeps only the last placement, which loses a part from the review; the rule reports the collision. ERROR rather than WARN because the ambiguity sits in the netlist every other artefact is keyed on. The oracle's words for how it happened: 当时疏忽，没在意 (an oversight at the time -- it did not get the attention it needed)."
+    },
+    {
+      "ref": "U15",
+      "rule_hint": "conn-duplicate-designators",
+      "kind": "defect",
+      "severity": "ERROR",
+      "note": "Ruling A1 (oracle Yue Xiangyu, 2026-09-19; one decision covering all 30 refs in the batch): a real defect. This board is drawn across subsheets and a designator repeats there, but the netlist, the BOM and the layout are all PROJECT-scoped, so two different parts answer to one name. The parser merges every SCH_PAGE into one model keyed by designator and silently keeps only the last placement, which loses a part from the review; the rule reports the collision. ERROR rather than WARN because the ambiguity sits in the netlist every other artefact is keyed on. The oracle's words for how it happened: 当时疏忽，没在意 (an oversight at the time -- it did not get the attention it needed)."
+    },
+    {
+      "ref": "U16",
+      "rule_hint": "conn-duplicate-designators",
+      "kind": "defect",
+      "severity": "ERROR",
+      "note": "Ruling A1 (oracle Yue Xiangyu, 2026-09-19; one decision covering all 30 refs in the batch): a real defect. This board is drawn across subsheets and a designator repeats there, but the netlist, the BOM and the layout are all PROJECT-scoped, so two different parts answer to one name. The parser merges every SCH_PAGE into one model keyed by designator and silently keeps only the last placement, which loses a part from the review; the rule reports the collision. ERROR rather than WARN because the ambiguity sits in the netlist every other artefact is keyed on. The oracle's words for how it happened: 当时疏忽，没在意 (an oversight at the time -- it did not get the attention it needed)."
+    },
+    {
+      "ref": "U11",
+      "rule_hint": "decap-required-caps",
+      "kind": "defect",
+      "severity": "WARN",
+      "split": "holdout",
+      "note": "Ruling B1 (oracle Yue Xiangyu, 2026-09-19): defect. The rule reads the board correctly -- the largest established capacitor on 'NET2' is 100 nF -- and the fault is what it is not reading: the datasheet asks for >= 1 uF of output bulk on this pin and NET2 carries only 100 nF + 10 nF. The oracle confirmed the rule's own convention for bulk decoupling (the same figure the CH340G board's V3/VCC pins are held to), so the missing bulk is the defect, not the reading."
+    },
+    {
+      "ref": "C115",
+      "rule_hint": "param-value-mpn-match",
+      "kind": "exception",
+      "note": "Ruling A2a (oracle Yue Xiangyu, 2026-09-19): exception -- the DECODER is over-reaching, not the board. 'JER2512F3R005' is a 2512 current-sense shunt part number and 'PA50V330M10x15' is an aluminium-electrolytic part number (50 V, 330 uF, 10x15 mm); neither contains an EIA three-digit code, yet the decoder pulls '005' out of the first (read as 0 ohm) and '330' out of the second (read as 33 pF). The oracle's words: the electrolytic part number (330M) and the four-digit form (3R005) are being misread as EIA. The board values (10 m ohm, 330 uF) are right. M2 fixes the decoder (refuse a code that is part of a longer alphanumeric run or of an R-notation value; require an EIA-coded ceramic). Until that lands this record is what keeps the false positive COUNTED instead of argued away."
+    },
+    {
+      "ref": "C116",
+      "rule_hint": "param-value-mpn-match",
+      "kind": "exception",
+      "note": "Ruling A2a (oracle Yue Xiangyu, 2026-09-19): exception -- the DECODER is over-reaching, not the board. 'JER2512F3R005' is a 2512 current-sense shunt part number and 'PA50V330M10x15' is an aluminium-electrolytic part number (50 V, 330 uF, 10x15 mm); neither contains an EIA three-digit code, yet the decoder pulls '005' out of the first (read as 0 ohm) and '330' out of the second (read as 33 pF). The oracle's words: the electrolytic part number (330M) and the four-digit form (3R005) are being misread as EIA. The board values (10 m ohm, 330 uF) are right. M2 fixes the decoder (refuse a code that is part of a longer alphanumeric run or of an R-notation value; require an EIA-coded ceramic). Until that lands this record is what keeps the false positive COUNTED instead of argued away."
+    },
+    {
+      "ref": "R43",
+      "rule_hint": "param-value-mpn-match",
+      "kind": "exception",
+      "note": "Ruling A2a (oracle Yue Xiangyu, 2026-09-19): exception -- the DECODER is over-reaching, not the board. 'JER2512F3R005' is a 2512 current-sense shunt part number and 'PA50V330M10x15' is an aluminium-electrolytic part number (50 V, 330 uF, 10x15 mm); neither contains an EIA three-digit code, yet the decoder pulls '005' out of the first (read as 0 ohm) and '330' out of the second (read as 33 pF). The oracle's words: the electrolytic part number (330M) and the four-digit form (3R005) are being misread as EIA. The board values (10 m ohm, 330 uF) are right. M2 fixes the decoder (refuse a code that is part of a longer alphanumeric run or of an R-notation value; require an EIA-coded ceramic). Until that lands this record is what keeps the false positive COUNTED instead of argued away."
+    },
+    {
+      "ref": "C28",
+      "rule_hint": "param-value-mpn-match",
+      "kind": "exception",
+      "note": "Ruling A2b (oracle Yue Xiangyu, 2026-09-19): exception -- the decode is correct and the board is fine; the oracle's words: 这个本没错，不要定的太死 ('this one is not wrong -- do not pin it down so hard'). '471' -> 470 ohm and '104' -> 100 nF are right EIA decodes of an 0805 part, so the board value really does contradict the MPN's own code: 1k ohm against 470 ohm on U10/U14, and 2.2 uF or 10 nF against 100 nF on the five capacitors. The oracle rules those positions insensitive to the difference and declines to call it a defect. M2 input, stated by the oracle: this rule needs a CONTRADICTION MAGNITUDE concept (how far apart the two numbers are, and whether the position cares) instead of a binary verdict. Until then this record keeps the false positive counted."
+    },
+    {
+      "ref": "C29",
+      "rule_hint": "param-value-mpn-match",
+      "kind": "exception",
+      "note": "Ruling A2b (oracle Yue Xiangyu, 2026-09-19): exception -- the decode is correct and the board is fine; the oracle's words: 这个本没错，不要定的太死 ('this one is not wrong -- do not pin it down so hard'). '471' -> 470 ohm and '104' -> 100 nF are right EIA decodes of an 0805 part, so the board value really does contradict the MPN's own code: 1k ohm against 470 ohm on U10/U14, and 2.2 uF or 10 nF against 100 nF on the five capacitors. The oracle rules those positions insensitive to the difference and declines to call it a defect. M2 input, stated by the oracle: this rule needs a CONTRADICTION MAGNITUDE concept (how far apart the two numbers are, and whether the position cares) instead of a binary verdict. Until then this record keeps the false positive counted."
+    },
+    {
+      "ref": "C36",
+      "rule_hint": "param-value-mpn-match",
+      "kind": "exception",
+      "note": "Ruling A2b (oracle Yue Xiangyu, 2026-09-19): exception -- the decode is correct and the board is fine; the oracle's words: 这个本没错，不要定的太死 ('this one is not wrong -- do not pin it down so hard'). '471' -> 470 ohm and '104' -> 100 nF are right EIA decodes of an 0805 part, so the board value really does contradict the MPN's own code: 1k ohm against 470 ohm on U10/U14, and 2.2 uF or 10 nF against 100 nF on the five capacitors. The oracle rules those positions insensitive to the difference and declines to call it a defect. M2 input, stated by the oracle: this rule needs a CONTRADICTION MAGNITUDE concept (how far apart the two numbers are, and whether the position cares) instead of a binary verdict. Until then this record keeps the false positive counted."
+    },
+    {
+      "ref": "C42",
+      "rule_hint": "param-value-mpn-match",
+      "kind": "exception",
+      "note": "Ruling A2b (oracle Yue Xiangyu, 2026-09-19): exception -- the decode is correct and the board is fine; the oracle's words: 这个本没错，不要定的太死 ('this one is not wrong -- do not pin it down so hard'). '471' -> 470 ohm and '104' -> 100 nF are right EIA decodes of an 0805 part, so the board value really does contradict the MPN's own code: 1k ohm against 470 ohm on U10/U14, and 2.2 uF or 10 nF against 100 nF on the five capacitors. The oracle rules those positions insensitive to the difference and declines to call it a defect. M2 input, stated by the oracle: this rule needs a CONTRADICTION MAGNITUDE concept (how far apart the two numbers are, and whether the position cares) instead of a binary verdict. Until then this record keeps the false positive counted."
+    },
+    {
+      "ref": "C44",
+      "rule_hint": "param-value-mpn-match",
+      "kind": "exception",
+      "note": "Ruling A2b (oracle Yue Xiangyu, 2026-09-19): exception -- the decode is correct and the board is fine; the oracle's words: 这个本没错，不要定的太死 ('this one is not wrong -- do not pin it down so hard'). '471' -> 470 ohm and '104' -> 100 nF are right EIA decodes of an 0805 part, so the board value really does contradict the MPN's own code: 1k ohm against 470 ohm on U10/U14, and 2.2 uF or 10 nF against 100 nF on the five capacitors. The oracle rules those positions insensitive to the difference and declines to call it a defect. M2 input, stated by the oracle: this rule needs a CONTRADICTION MAGNITUDE concept (how far apart the two numbers are, and whether the position cares) instead of a binary verdict. Until then this record keeps the false positive counted."
+    },
+    {
+      "ref": "U10",
+      "rule_hint": "param-value-mpn-match",
+      "kind": "exception",
+      "note": "Ruling A2b (oracle Yue Xiangyu, 2026-09-19): exception -- the decode is correct and the board is fine; the oracle's words: 这个本没错，不要定的太死 ('this one is not wrong -- do not pin it down so hard'). '471' -> 470 ohm and '104' -> 100 nF are right EIA decodes of an 0805 part, so the board value really does contradict the MPN's own code: 1k ohm against 470 ohm on U10/U14, and 2.2 uF or 10 nF against 100 nF on the five capacitors. The oracle rules those positions insensitive to the difference and declines to call it a defect. M2 input, stated by the oracle: this rule needs a CONTRADICTION MAGNITUDE concept (how far apart the two numbers are, and whether the position cares) instead of a binary verdict. Until then this record keeps the false positive counted."
+    },
+    {
+      "ref": "U14",
+      "rule_hint": "param-value-mpn-match",
+      "kind": "exception",
+      "note": "Ruling A2b (oracle Yue Xiangyu, 2026-09-19): exception -- the decode is correct and the board is fine; the oracle's words: 这个本没错，不要定的太死 ('this one is not wrong -- do not pin it down so hard'). '471' -> 470 ohm and '104' -> 100 nF are right EIA decodes of an 0805 part, so the board value really does contradict the MPN's own code: 1k ohm against 470 ohm on U10/U14, and 2.2 uF or 10 nF against 100 nF on the five capacitors. The oracle rules those positions insensitive to the difference and declines to call it a defect. M2 input, stated by the oracle: this rule needs a CONTRADICTION MAGNITUDE concept (how far apart the two numbers are, and whether the position cares) instead of a binary verdict. Until then this record keeps the false positive counted."
+    },
+    {
+      "ref": "U1",
+      "rule_hint": "conn-osc-pin-net",
+      "kind": "defect",
+      "severity": "ERROR",
+      "split": "holdout",
+      "note": "oracle FINAL RULING 2026-09-20: defect. Measured in 013: the STM32's PH0/OSC_IN (pin 12) sits on net IB- (members R10.1, U4.11 -- the phase-B current-sense return), while the OSC-IN label on the crystal page carries only X1.1 + C20.2. Pin-level evidence is clean (the same instance's pin 13 lands on OSC-OUT correctly), so this is not a parser artifact: the 25 MHz crystal never drives the MCU, which has been running on HSI all along (the board worked because HSI is good enough for this loop). conn-osc-pin-net is an UNREGISTERED hint -- no M1 rule can detect this class; it is M2 backlog (cross-page label continuity / MCU osc-pin net assignment). It must land in the harness's no-registered-rule column and stay out of every M1 denominator."
+    },
+    {
+      "ref": "X1",
+      "rule_hint": "xtal-load-caps",
+      "kind": "exception",
+      "split": "holdout",
+      "note": "oracle FINAL RULING 2026-09-20: the board HAS load caps (C20/C21, 20 pF). The WARN was a false positive rooted in the parser dropping early-placed basic parts' pins; after the 013 Symbol-fallback fix C20/C21 join OSC-IN/OSC-OUT (cross-confirmed against PCB PAD_NET) and the rule is quiet (1 -> 0). Recorded as exception so the history is not lost. Note the harness mechanics: the rule now reports nothing for X1, so this record pairs with no finding -- it counts in the rule's exceptions_hinted (hinted, oracle looked) and in no other column; nothing is subtracted from any precision denominator."
+    }
+  ],
+  "observations": [
+    {
+      "ref": "",
+      "topic": "section B fully ruled and signed; the facts backlog C is not a ruling at all",
+      "note": "B1 is a defect record; B2, B4 and B5 are recorded as observations below, exactly as ruled. B3 closed on 2026-09-20: the oracle confirmed the load caps exist, and the 013 parser fix made the rule quiet on its own (1 -> 0), so the exception record pairs no finding -- history kept, denominator untouched. B2 shrank 5 -> 3 the same day for the same root cause (two of the five were pin-less-part artefacts, not heuristic errors). Section C is not a ruling but the list of facts the library cannot supply yet: the board's 15 ICs are the natural 011b batch, one datasheet each closing five rules at once. With all of B ruled the set is signed -- reviewed_by is filled, the DRAFT stamp is gone."
+    },
+    {
+      "ref": "",
+      "topic": "the A1 batch includes the four mounting screws (SCREW1..4)",
+      "note": "The triage offered a split ruling (screws are mounting hardware, not circuit parts). The oracle ruled defect for all 30 refs, so the screws are included: whatever the physical role of a part, a repeated designator still makes the project-scoped netlist ambiguous, and a reader cannot tell which SCREW1 is meant."
+    },
+    {
+      "ref": "",
+      "topic": "A2a/A2b: the ruling's letter and its count do not line up",
+      "note": "The ruling says 'A2a, 7 refs', but the mechanism it names (non-EIA part numbers being misread: the electrolytic 330M, the four-digit 3R005) covers exactly 3 refs on this board -- R43, C115, C116 -- while the 'correct decode, position does not care' group is the 7-ref one (U10, U14, C28, C29, C36, C42, C44). Both groups are ruled exception, so the landing is unambiguous either way and the records are grouped BY MECHANISM, read off the rule's own output; the count in the message is kept here as an open question rather than silently re-labelled."
+    },
+    {
+      "ref": "U10",
+      "topic": "the same MPN/value pair is a defect on the golden board",
+      "note": "U10 and U14 carry the same FRC0805J471 TS / 1k ohm pair as the CH340G board's U3, which the oracle ruled a DEFECT (the MPN is wrong; the value is right) while here the same contradiction is ruled an exception because the position is insensitive. The two are consistent only once the position's sensitivity is part of the rule -- which is exactly the contradiction-magnitude concept the oracle named as M2 input."
+    },
+    {
+      "ref": "U14",
+      "topic": "U14 carries records from both batches (A1 and A2b)",
+      "note": "U14 is one of the 30 duplicated designators AND one of the seven correct-decode contradictions, which is not a mistake in the triage: two parts really do answer to 'U14', the model keeps only the last placement, and THAT placement's 1k ohm value contradicts its MPN. A reader fixing the A1 defect has to re-check the A2b ruling on the surviving placement, because the part that lost the name is not the part the A2b record is about."
+    },
+    {
+      "ref": "",
+      "topic": "section B2 ruled: decoupling-per-ic is an L1 heuristic limitation, to be retired in M2 (U1, U8, USB1)",
+      "note": "The oracle ruled observation, not defect: the five WARN findings are real false positives with a known cause -- the L1 heuristic matches designator prefixes only, so it cannot tell a supply pin from a signal pin, and it counts USB1 (a connector) as an IC. Recorded once, as ruled, and the rule is on M2's retirement list. Consequence, stated rather than hidden: with no item records these five findings stay in the harness's unexplained column -- the same column as 'the oracle has not looked'. The precision number is identical either way (an exception record counts against it too), but a reader of the report should know that 'unexplained' on this board means 'ruled a rule limitation', not 'unreviewed'. Amended 2026-09-20: the set shrank 5 -> 3 after 013. U6/U7's warnings were not heuristic false positives at all -- their decoupling caps were among the 25 pin-less parts and simply came back. The remaining three are the true L1-heuristic limitations as originally ruled."
+    },
+    {
+      "ref": "R43",
+      "topic": "section B4 ruled: shunt-sense-link is correct here -- the sense link runs through a filter network",
+      "note": "R43's 10 mOhm shunt is two hops away from the IC pins it serves: the connection passes through the RC network the connectivity-only check cannot walk. The oracle ruled observation (no verdict about the board): the rule is doing exactly what it says, and the INFO is a capability-boundary note rather than a claim about the design. INFO findings are outside the high-priority precision denominator, so this one has no effect on the graduation number."
+    },
+    {
+      "ref": "USB1",
+      "topic": "section B5 ruled: backlog -- the CC pin nets carry no readable resistor value",
+      "note": "The oracle ruled backlog: the pull-downs are present and correct in the design (R24/R27, 5.1 k per ST AN5225 Table 6 on the CH340G board), but nothing readable resolves a value on USB1's own pins here, so conn-usb-cc-pulldown stays UNKNOWN. That is a facts/parse gap, not a finding -- UNKNOWN produces no finding at all, so it enters no precision denominator -- and it joins section C's backlog, the same class of work as the 15 ICs' missing supply_pins / required_caps."
+    }
+  ]
+}

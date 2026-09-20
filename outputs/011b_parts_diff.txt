@@ -1,0 +1,181 @@
+--- blocklib/parts.json.bak_tmp	2026-09-19 16:46:25.951309400 +0800
++++ blocklib/parts.json	2026-09-19 16:46:26.744269000 +0800
+@@ -1,6 +1,6 @@
+ {
+   "kind": "boardwise-part-library",
+-  "version": 1,
++  "version": 2,
+   "sources": [
+     "blocklib/sources/smart_pillbox.eprj2",
+     "blocklib/sources/thesis_FOC_board.eprj2",
+@@ -1806,7 +1806,117 @@
+       },
+       "notes": [
+         "the library spells this footprint 'SOT-223-3_L6.5-W3.4-P2.30-LS7.0-BR'; the project's document said 'sot-223-3_l6.5-w3.4-p2.30-ls7.0-br'. The library's spelling is kept (006b's vocabulary rule)."
+-      ]
++      ],
++      "category": "ic.ldo",
++      "facts": {
++        "supply_pins": [
++          {
++            "pins": [
++              "3"
++            ],
++            "name": "VIN",
++            "v_abs_max": [
++              null,
++              15.0
++            ],
++            "provenance": "AMS1117 datasheet (Advanced Monolithic Systems), p.2 Absolute Maximum Ratings (Input Voltage 15V, upper limit only; no operating input range is stated for the fixed 3.3V part beyond Vout+dropout), https://datasheet.lcsc.com/datasheet/pdf/e6935943fc6b1bbf350a1a0f3e90dc4a.pdf"
++          }
++        ],
++        "required_caps": [
++          {
++            "pin": "2",
++            "value": "22uF",
++            "provenance": "AMS1117 datasheet (Advanced Monolithic Systems), p.4 Stability (the series requires an output capacitor as part of frequency compensation; 22uF solid tantalum ensures stability for all operating conditions), https://datasheet.lcsc.com/datasheet/pdf/e6935943fc6b1bbf350a1a0f3e90dc4a.pdf"
++          }
++        ],
++        "ldo": {
++          "dropout_max_mv": 1300.0,
++          "condition": "Iout=0.8A, dVout/dVref=1 percent (min 1.1V, max 1.3V)",
++          "provenance": "AMS1117 datasheet (Advanced Monolithic Systems), p.3 Electrical Characteristics (Dropout Voltage), https://datasheet.lcsc.com/datasheet/pdf/e6935943fc6b1bbf350a1a0f3e90dc4a.pdf"
++        }
++      }
++    },
++    {
++      "key": "ic.ch340g",
++      "value": "",
++      "mpn": "CH340G",
++      "lcsc": "C14267",
++      "manufacturer": "WCH(南京沁恒)",
++      "deviceUuid": "f809d2f6af2d4c2eb58795bc97ecb0d8",
++      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
++      "footprint_name": "SOIC-16_L9.9-W3.9-P1.27-LS6.0-BL",
++      "footprint_name_verified": true,
++      "params": {
++        "JLCPCB Part Class": "Extended Part",
++        "Voltage - Supply": "5V；3.3V"
++      },
++      "datasheetUrl": "https://item.szlcsc.com/datasheet/CH340G/14927.html",
++      "datasheetPdfUrl": "https://atta.szlcsc.com/upload/public/pdf/source/20250604/33626338A5406B1E2A8163A86C0531AF.pdf",
++      "basic": false,
++      "provenance": {
++        "kind": "board-extract",
++        "source": "tests/fixtures/ch340_golden.epro2",
++        "designators": [
++          "U1@ch340_golden"
++        ],
++        "note": "identity from the golden board's own device attrs (mpn CH340G, lcsc C14267, footprint SOP-16); global uuids and the library footprint name from read-only lib.device.search / lib.device.get / lib.footprint.get (2026-09-19)"
++      },
++      "notes": [],
++      "category": "ic.usb-uart",
++      "facts": {
++        "supply_pins": [
++          {
++            "pins": [
++              "16"
++            ],
++            "name": "VCC",
++            "v_operating": [
++              4.0,
++              5.3
++            ],
++            "v_abs_max": [
++              -0.5,
++              6.0
++            ],
++            "provenance": "CH340 manual (1) rev 3D (wch.cn), p.5 sec.6.1 (VCC abs max -0.5..6.0V) and sec.6.2 (5V mode, V3 cap only: 4.0/5/5.3V), https://atta.szlcsc.com/upload/public/pdf/source/20250604/33626338A5406B1E2A8163A86C0531AF.pdf"
++          },
++          {
++            "pins": [
++              "16"
++            ],
++            "name": "VCC",
++            "v_operating": [
++              2.9,
++              3.6
++            ],
++            "provenance": "CH340 manual (1) rev 3D (wch.cn), p.5 sec.6.3 (3.3V mode, V3 tied to VCC: 2.9/3.3/3.6V for CH340G/T/R), https://atta.szlcsc.com/upload/public/pdf/source/20250604/33626338A5406B1E2A8163A86C0531AF.pdf"
++          }
++        ],
++        "required_caps": [
++          {
++            "pin": "4",
++            "value": "0.1uF",
++            "provenance": "CH340 manual (1) rev 3D (wch.cn), p.3 sec.5.1 and p.2 pin table (V3): in 5V mode V3 takes a 0.1uF decoupling cap to GND; in 3.3V mode V3 ties to VCC instead of the cap, https://atta.szlcsc.com/upload/public/pdf/source/20250604/33626338A5406B1E2A8163A86C0531AF.pdf"
++          },
++          {
++            "pin": "16",
++            "value": "0.1uF",
++            "provenance": "CH340 manual (1) rev 3D (wch.cn), p.2 pin table (VCC: power input, requires an external 0.1uF decoupling capacitor), https://atta.szlcsc.com/upload/public/pdf/source/20250604/33626338A5406B1E2A8163A86C0531AF.pdf"
++          }
++        ],
++        "must_connect": [
++          {
++            "pin": "7",
++            "to": "external 12MHz crystal network (XI)",
++            "provenance": "CH340 manual (1) rev 3D (wch.cn), p.2 pin table (XI: needs an external 12MHz crystal plus oscillation caps) and p.3 sec.5.1; clock tolerance 11.98-12.02MHz per p.6 sec.6.4, https://atta.szlcsc.com/upload/public/pdf/source/20250604/33626338A5406B1E2A8163A86C0531AF.pdf"
++          },
++          {
++            "pin": "8",
++            "to": "external 12MHz crystal network (XO)",
++            "provenance": "CH340 manual (1) rev 3D (wch.cn), p.2 pin table (XO: needs an external 12MHz crystal plus oscillation caps) and p.3 sec.5.1, https://atta.szlcsc.com/upload/public/pdf/source/20250604/33626338A5406B1E2A8163A86C0531AF.pdf"
++          }
++        ]
++      }
+     },
+     {
+       "key": "ic.ch340n",
+@@ -2149,7 +2259,50 @@
+       },
+       "notes": [
+         "the library spells this footprint 'SOT-23-5_L3.0-W1.7-P0.95-LS2.8-BL'; the project's document said 'sot-23-5_l3.0-w1.7-p0.95-ls2.8-bl'. The library's spelling is kept (006b's vocabulary rule)."
+-      ]
++      ],
++      "category": "ic.ldo",
++      "facts": {
++        "supply_pins": [
++          {
++            "pins": [
++              "1"
++            ],
++            "name": "VIN",
++            "v_operating": [
++              2.2,
++              5.5
++            ],
++            "v_abs_max": [
++              null,
++              6.0
++            ],
++            "provenance": "Richtek RT9013 DS9013-10, p.3 (Recommended Operating Conditions: supply input 2.2V-5.5V; Absolute Maximum Ratings: supply input 6V, upper limit only), https://datasheet.lcsc.com/datasheet/pdf/3e4c0e97f96a4457b99f132edf047652.pdf"
++          }
++        ],
++        "required_caps": [
++          {
++            "pin": "1",
++            "value": "1uF",
++            "provenance": "Richtek RT9013 DS9013-10, p.8 Applications Information (input capacitor > 1uF/X7R, within 0.5 inch of the pin), https://datasheet.lcsc.com/datasheet/pdf/3e4c0e97f96a4457b99f132edf047652.pdf"
++          },
++          {
++            "pin": "5",
++            "value": "1uF",
++            "provenance": "Richtek RT9013 DS9013-10, p.8 Applications Information (output capacitor at least 1uF ceramic, ESR > 5mOhm), https://datasheet.lcsc.com/datasheet/pdf/3e4c0e97f96a4457b99f132edf047652.pdf"
++          }
++        ],
++        "nc_pins": {
++          "pins": [
++            "4"
++          ],
++          "provenance": "Richtek RT9013 DS9013-10, p.2 Functional Pin Description (SOT-23-5 pin 4 = NC, No Internal Connection), https://datasheet.lcsc.com/datasheet/pdf/3e4c0e97f96a4457b99f132edf047652.pdf"
++        },
++        "ldo": {
++          "dropout_max_mv": 400.0,
++          "condition": "Iout=500mA, Vin 2.7-5.5V (max; typ 250mV). A second bucket: 320mV max at Iout=400mA, Vin 2.2-2.7V",
++          "provenance": "Richtek RT9013 DS9013-10, p.3 Electrical Characteristics (Dropout Voltage, Note 6), https://datasheet.lcsc.com/datasheet/pdf/3e4c0e97f96a4457b99f132edf047652.pdf"
++        }
++      }
+     },
+     {
+       "key": "ic.sn65hvd230dr",

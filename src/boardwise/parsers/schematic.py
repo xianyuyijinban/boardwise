@@ -250,6 +250,28 @@ def _collect_device_meta(records: list[Any]) -> dict[str, dict[str, str]]:
     return out
 
 
+def _symbol_uuid_of(inst: Any, device_meta: dict[str, dict[str, str]]) -> str:
+    """The instance's ``Symbol`` uuid, falling back to the DEVICE META (013).
+
+    EasyEDA does not write the ``Symbol`` ATTR on early-placed basic parts
+    (R/C/L/TP, old small-ticket instances): measured 2026-09-20 on the
+    graduation board — 132 instances carry it, 25 do not, and those 25 are
+    exactly the components that previously parsed out pin-less. Their DEVICE
+    META ``attributes.Symbol`` is always present and points at a SYMBOL
+    document with full PIN records, so the fallback resolves the library's
+    own symbol. Instance-first on purpose: a *stale* instance copy (the 006b
+    "library swap" lesson) is a placement-level fact that must not be
+    overwritten by the library — the fallback only fires when the instance
+    field is empty, which is "the editor never wrote it", not "the editor
+    wrote an old one".
+    """
+    uuid = (inst.attrs.get("Symbol") or "").strip()
+    if uuid:
+        return uuid
+    meta = device_meta.get((inst.attrs.get("Device") or "").strip(), {})
+    return str(meta.get("symbol") or "").strip()
+
+
 def resolve_component_identity(
     inst_attrs: dict[str, str], device_meta: dict[str, str]
 ) -> tuple[dict[str, str], list[str]]:
@@ -483,13 +505,16 @@ def build_pin_offsets(path: str | Path) -> dict[str, dict[str, Point]]:
     records = _iter_schematic_records(text, stats)
     instances, _loose, _segments = _split_page(records)
     symbols = _collect_symbols(records)
+    device_meta = _collect_device_meta(records)
 
     offsets: dict[str, dict[str, Point]] = {}
     for inst in instances:
         designator = (inst.attrs.get("Designator") or "").strip()
         if not designator or designator.endswith("?"):
             continue
-        symbol_def = symbols.get((inst.attrs.get("Symbol") or "").strip())
+        # 013: early-placed parts carry no Symbol ATTR — fall back to the
+        # DEVICE META so their pins resolve like everyone else's.
+        symbol_def = symbols.get(_symbol_uuid_of(inst, device_meta))
         if symbol_def is None:
             continue
         offsets[designator] = {
@@ -716,7 +741,11 @@ def build_schematic_model(path: str | Path) -> DesignModel:
         designator = (inst.attrs.get("Designator") or "").strip()
         if not designator or designator.endswith("?"):
             continue  # power symbols and the title-block frame are not parts
-        symbol_uuid = (inst.attrs.get("Symbol") or "").strip()
+        # 013: instance-first symbol uuid, DEVICE META as the fallback for
+        # early-placed parts whose instance ATTR never carried one. Pin-less
+        # components were the symptom: without the symbol document the pins
+        # never instantiate, and every connection they make is lost.
+        symbol_uuid = _symbol_uuid_of(inst, device_meta)
         meta = device_meta.get((inst.attrs.get("Device") or "").strip(), {})
         # Joined identity: the instance is the placement, the DEVICE META is
         # the library. See `resolve_component_identity` for why the empty
@@ -743,6 +772,13 @@ def build_schematic_model(path: str | Path) -> DesignModel:
         component.props["device_uuid"] = (inst.attrs.get("Device") or "").strip()
         if meta.get("symbol"):
             component.props["library_symbol_uuid"] = meta["symbol"]
+        if designator in components:
+            # The re-assignment below would silently overwrite the earlier
+            # placement: the other page still holds its part, but this model
+            # keeps only the last one. Recording the clash here is what turns
+            # "lost part" into "reported defect" (CONN-1, task 011c).
+            if designator not in model.duplicate_designators:
+                model.duplicate_designators.append(designator)
         components[designator] = component
         model.components[designator] = component
         symbol_def = symbols.get(symbol_uuid)
@@ -828,7 +864,10 @@ def build_schematic_model(path: str | Path) -> DesignModel:
         net_name = flag_net_name(inst)
         if not net_name:
             continue
-        symbol_def = symbols.get((inst.attrs.get("Symbol") or "").strip())
+        # 013: the same empty-Symbol-ATTR fallback as the parts pass — an
+        # early-placed flag with no instance Symbol must still anchor its
+        # net at the library symbol's pin position.
+        symbol_def = symbols.get(_symbol_uuid_of(inst, device_meta))
         if symbol_def is None:
             continue
         for _number, (point, _ez) in symbol_def.pins.items():

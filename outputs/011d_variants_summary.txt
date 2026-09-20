@@ -1,0 +1,13 @@
+variant                rule                     ref   sev   hint det xc  fp   base-fires
+duplicate-designator   conn-duplicate-designators R24   ERROR 1    1   0   0    0/1
+                         other findings: 1 ERROR / 2 WARN / 0 INFO
+ldo-no-headroom        path-ldo-dropout         U5    ERROR 1    1   0   0    0/1
+                         other findings: 1 ERROR / 2 WARN / 0 INFO
+nc-pin-grounded        conn-nc-and-must-connect U5    ERROR 1    1   0   0    0/1
+                         other findings: 1 ERROR / 2 WARN / 0 INFO
+overvoltage-rail       pwr-domain-vs-range      U5    ERROR 1    1   0   0    0/1
+                         other findings: 1 ERROR / 2 WARN / 0 INFO
+v3-decap-missing       decap-required-caps      U1    WARN  1    1   0   0    1/1
+                         other findings: 0 ERROR / 2 WARN / 0 INFO
+value-mpn-mismatch     param-value-mpn-match    U3    WARN  1    1   0   0    1/1
+                         other findings: 0 ERROR / 3 WARN / 0 INFO

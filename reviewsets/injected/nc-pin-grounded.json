@@ -1,0 +1,19 @@
+{
+  "schema": "boardwise-review-annotations/1",
+  "board": "injected-nc-pin-grounded",
+  "source": "reviewsets/injected/nc-pin-grounded.epro2",
+  "split_default": "holdout",
+  "reviewed_by": "Yue Xiangyu",
+  "reviewed_at": "2026-09-19",
+  "notes": "Signed injected-defect board (task 011d sec.4; proposal signed by Yue Xiangyu on 2026-09-19). Derived from reviewsets/injected/fixed-base.epro2 (the corrected reference board) by reviewsets/injected/make_variants.py, which is the only writer of this file. Fault: RT9013 pin4 (declared NC) wired to GND. Edit: clear U5.4's NO_CONNECT mark and add a wire from the pin tip to the grounded capacitor on the same row. The defect record below is the whole ground truth for the INJECTED fault: the named rule must catch it, and anything that rule adds beyond this record is a false positive. Findings from other rules are the base board's own (this board is the base plus one edit, and the base's records live in fixed-base.json) -- they land in the harness's unexplained column here, which is why the per-variant report quotes the expected rule's own columns rather than the board total. Split: holdout (011e sec.2 -- assigned by sha1(id), see make_variants.py). Oracle note: an NC pin on any net is the textbook violation",
+  "items": [
+    {
+      "ref": "U5",
+      "rule_hint": "conn-nc-and-must-connect",
+      "kind": "defect",
+      "severity": "ERROR",
+      "split": "holdout",
+      "note": "Injected fault: RT9013 pin4 (declared NC) wired to GND (clear U5.4's NO_CONNECT mark and add a wire from the pin tip to the grounded capacitor on the same row). Expected catch: conn-nc-and-must-connect."
+    }
+  ]
+}

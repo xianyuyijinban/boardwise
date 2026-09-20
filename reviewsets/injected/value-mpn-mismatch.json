@@ -1,0 +1,19 @@
+{
+  "schema": "boardwise-review-annotations/1",
+  "board": "injected-value-mpn-mismatch",
+  "source": "reviewsets/injected/value-mpn-mismatch.epro2",
+  "split_default": "dev",
+  "reviewed_by": "Yue Xiangyu",
+  "reviewed_at": "2026-09-19",
+  "notes": "Signed injected-defect board (task 011d sec.4; proposal signed by Yue Xiangyu on 2026-09-19). Derived from reviewsets/injected/fixed-base.epro2 (the corrected reference board) by reviewsets/injected/make_variants.py, which is the only writer of this file. Fault: U3's value field changed to 2.2k while its MPN decodes 1k. Edit: rewrite U3's Value attribute only. The defect record below is the whole ground truth for the INJECTED fault: the named rule must catch it, and anything that rule adds beyond this record is a false positive. Findings from other rules are the base board's own (this board is the base plus one edit, and the base's records live in fixed-base.json) -- they land in the harness's unexplained column here, which is why the per-variant report quotes the expected rule's own columns rather than the board total. Split: dev (011e sec.2 -- assigned by sha1(id), see make_variants.py). Oracle note: the single-field contradiction, now first-of-its-kind: the base has U3's value and MPN agreeing at 1k (the oracle's ruling), so this edit is the only disagreement on the board.",
+  "items": [
+    {
+      "ref": "U3",
+      "rule_hint": "param-value-mpn-match",
+      "kind": "defect",
+      "severity": "WARN",
+      "split": "dev",
+      "note": "Injected fault: U3's value field changed to 2.2k while its MPN decodes 1k (rewrite U3's Value attribute only). Expected catch: param-value-mpn-match."
+    }
+  ]
+}

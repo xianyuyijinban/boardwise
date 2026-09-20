@@ -1,0 +1,19 @@
+{
+  "schema": "boardwise-review-annotations/1",
+  "board": "injected-duplicate-designator",
+  "source": "reviewsets/injected/duplicate-designator.epro2",
+  "split_default": "holdout",
+  "reviewed_by": "Yue Xiangyu",
+  "reviewed_at": "2026-09-19",
+  "notes": "Signed injected-defect board (task 011d sec.4; proposal signed by Yue Xiangyu on 2026-09-19). Derived from reviewsets/injected/fixed-base.epro2 (the corrected reference board) by reviewsets/injected/make_variants.py, which is the only writer of this file. Fault: a second page carries a second R24. Edit: append a new SCH_PAGE holding a copy of R24's records. The defect record below is the whole ground truth for the INJECTED fault: the named rule must catch it, and anything that rule adds beyond this record is a false positive. Findings from other rules are the base board's own (this board is the base plus one edit, and the base's records live in fixed-base.json) -- they land in the harness's unexplained column here, which is why the per-variant report quotes the expected rule's own columns rather than the board total. Split: holdout (011e sec.2 -- assigned by sha1(id), see make_variants.py). Oracle note: the model keeps the last placement; the clash must be reported. The copy sits at the original's coordinates on purpose: a fault injection changes ONE thing, and moving it would also rewrite the netlist.",
+  "items": [
+    {
+      "ref": "R24",
+      "rule_hint": "conn-duplicate-designators",
+      "kind": "defect",
+      "severity": "ERROR",
+      "split": "holdout",
+      "note": "Injected fault: a second page carries a second R24 (append a new SCH_PAGE holding a copy of R24's records). Expected catch: conn-duplicate-designators."
+    }
+  ]
+}

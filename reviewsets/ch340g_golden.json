@@ -1,0 +1,61 @@
+{
+  "schema": "boardwise-review-annotations/1",
+  "board": "ch340g-golden",
+  "source": "tests/fixtures/ch340_golden.epro2",
+  "split_default": "dev",
+  "reviewed_by": "",
+  "reviewed_at": "",
+  "notes": "Draft for task 011a (2026-09-19, DeepSeek); items updated per the oracle's rulings of 2026-09-19 (task 011c sec.2) - LED1 became a defect, U3's query resolved into an observation, R24/R27 ruled intended (exceptions), and a new query on U1's V3 wiring was opened. The golden page is the reference design (replay-verified 2026-09-19, netlist diff zero), so its value to the metrics harness is EXCEPTION records (what rules must not flag) and QUERIES (what the oracle has not ruled on yet). Defect records for this board family come from injected-defect boards (task 011d). PENDING: Yue Xiangyu is the oracle - reviewed_by stays empty until he signs the final table. After 011d, every hint on this board is implemented; history: 011c left param-value-mpn-match and conn-usb-cc-pulldown unregistered, and the harness reported them in its no-registered-rule column instead of dropping them and must surface in the harness's unregistered-hint column, never vanish silently.",
+  "items": [
+    {
+      "ref": "X1",
+      "rule_hint": "xtal-load-caps",
+      "kind": "exception",
+      "note": "Measured on the model: X1 is a 4-pad crystal (SMD3225-4P). Pins 1/3 sit on the resonator nets NET3/NET2 with load capacitors C3 and C25, each grounded on its other end - exactly what the rule asks for. Pins 2/4 are the crystal CASE, tied to GND. The rule then demands a grounded capacitor on the case net (GND) itself, which cannot exist by construction: firing here is a false positive. 011c fix (ruling): skip pins whose net is already ground; the exception record stays so the metrics stay self-consistent (fp-exc must drop to 0 with the record in place).",
+      "severity": ""
+    },
+    {
+      "ref": "U3",
+      "rule_hint": "param-value-mpn-match",
+      "kind": "defect",
+      "severity": "WARN",
+      "note": "Oracle ruling 2026-09-19, re-anchored from LED1 to U3 per task 011d sec.1 (the mismatch lives on the resistor whose value and MPN disagree, not on the LED it feeds). Three numbers on this board disagree about U3: board value=1k, the MPN FRC0805J471 decodes to 470 ohm (47 x 10^1), and the oracle's design intent for LED series resistors is 2.2k. Electrically 1k/470 ohm will not burn the LED, so severity WARN: the fault is a BOM/schematic contradiction, not a hazard. The prefix mismatch (an 0805 resistor under a U designator) stays an observation. FINAL RULING 2026-09-19 (after the injected-variant round): the VALUE is right and the MPN is wrong -- U3 is a 1k part and FRC0805J471 is the mistake. Corrected in reviewsets/injected/fixed-base.epro2, where U3's declared MPN reads FRC0805J102 TS and this rule reports OK (1000 ohm against code 102)."
+    },
+    {
+      "ref": "R24",
+      "rule_hint": "conn-usb-cc-pulldown",
+      "kind": "exception",
+      "note": "Oracle ruling 2026-09-19 (was a query in the 011a draft): intended. R24 (pin 1 on USB1 pin 10, pin 2 on GND) and R27 (same on USB1 pin 4) are the 5.1k Rd pull-downs on the Type-C receptacle's CC1/CC2 - standard for a sink-port design. The rule named in the hint does not exist yet (second batch); until then the harness must list this exception in its unregistered-hint column. A future conn-usb-cc-pulldown rule must NOT flag these two."
+    },
+    {
+      "ref": "R27",
+      "rule_hint": "conn-usb-cc-pulldown",
+      "kind": "exception",
+      "note": "Oracle ruling 2026-09-19 (was a query in the 011a draft): intended. 5.1k Rd pull-down on USB1 CC2 (pin 4), the twin of R24 on CC1 (pin 10). Same unregistered-hint handling as R24."
+    },
+    {
+      "ref": "U1",
+      "rule_hint": "decap-required-caps",
+      "kind": "defect",
+      "severity": "WARN",
+      "note": "Oracle ruling 2026-09-19 (was a query; the board never powered up, so there is no measurement to contradict the manual). The VCC net is fed by the RT9013-33GB, i.e. 3.3V, which puts U1 in the CH340's 3.3V mode - and the CH340 manual p.3 sec.5.1 (with sec.6.3) requires V3 tied to VCC in that mode. The board instead gives V3 a 0.1uF capacitor (C1) to GND, the manual's 5V-mode wiring. Not destructive (WARN, not ERROR), but the manual's wiring is wrong and the chip may not run. The rule named in the hint is implemented in task 011d and is mode-sensitive: only the hit mode's required_caps and must_connect records apply. FINAL RULING 2026-09-19: the correct wiring is V3 tied to VCC. Corrected in reviewsets/injected/fixed-base.epro2, where the V3 wire's net declaration reads VCC -- V3 and VCC become one net, pin 4 sits on its required net, and C1 becomes a VCC decoupling capacitor."
+    }
+  ],
+  "observations": [
+    {
+      "ref": "U3",
+      "topic": "identity resolved: an 0805 resistor under a U-prefix designator",
+      "note": "Oracle ruling 2026-09-19 (was a query in the 011a draft): U3 is an 0805 resistor carrying a U-prefix designator - that mismatch (designator prefix vs device type) is material for a second-batch rule, recorded here as an observation, not pinned as a defect. The LED1 question it used to feed is answered on LED1's defect record: the series resistor IS U3 itself (value 1k), which is how the three-way disagreement (1k vs 470 ohm decoded vs 2.2k intent) arises."
+    },
+    {
+      "ref": "USB1",
+      "topic": "library pin-numbering drift (motivates CONN-3, not a defect here)",
+      "note": "M6 (2026-09-19) reported pin-numbering drift for USB1 between this golden board and the current library version; the replay compares USB1 by pin name for that reason. The board itself is ground truth - the drift lives in the library, so there is nothing to flag on this board."
+    },
+    {
+      "ref": "",
+      "topic": "scope note on 'normal' samples",
+      "note": "Deliberately NO per-component OK annotations: rules that stay silent on an unannotated ref are correct rejections by definition of the oracle record, and enumerating all 17 parts would make the file noise. Exception records carry the must-not-flag burden; injected-defect boards (011d) carry the must-flag burden."
+    }
+  ]
+}

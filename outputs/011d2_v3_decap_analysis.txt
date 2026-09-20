@@ -1,0 +1,21 @@
+===== fixed-base: 17 components, 12 nets
+  VCC members: [('C1', '1'), ('C6', '1'), ('C7', '1'), ('C9', '2'), ('U1', '16'), ('U1', '4'), ('U3', '1'), ('U5', '5')]
+  largest grounded cap on VCC -> C9 (2.2e-06 F)
+  [OK      ] U1 pin16: U1 pin16: C9 provides 2.2uF >= required 100nF to ground on 'VCC'
+  [OK      ] U1 pin4: U1 pin4 sits on its required net 'VCC' (mode '3.3V')
+  [led-current / UNKNOWN] LED1: current 0.10-0.60 mA straddles the house bounds [0.5, 15.0] mA -- the Vf range spans the threshold, so t
+
+===== v3-decap-missing: 16 components, 12 nets
+  VCC members: [('C6', '1'), ('C7', '1'), ('C9', '2'), ('U1', '16'), ('U1', '4'), ('U3', '1'), ('U5', '5')]
+  largest grounded cap on VCC -> C9 (2.2e-06 F)
+  [OK      ] U1 pin16: U1 pin16: C9 provides 2.2uF >= required 100nF to ground on 'VCC'
+  [OK      ] U1 pin4: U1 pin4 sits on its required net 'VCC' (mode '3.3V')
+  [led-current / UNKNOWN] LED1: current 0.10-0.60 mA straddles the house bounds [0.5, 15.0] mA -- the Vf range spans the threshold, so t
+
+===== golden (faulty): 17 components, 13 nets
+  VCC members: [('C6', '1'), ('C7', '1'), ('C9', '2'), ('U1', '16'), ('U3', '1'), ('U5', '5')]
+  largest grounded cap on VCC -> C9 (2.2e-06 F)
+  [OK      ] U1 pin16: U1 pin16: C9 provides 2.2uF >= required 100nF to ground on 'VCC'
+  [VIOLATION] U1 pin4: U1 pin4 must sit on net 'VCC' in mode '3.3V' but is on 'NET1' — the datasheet's wiring for the active mode is not what t
+  [led-current / UNKNOWN] LED1: current 0.10-0.60 mA straddles the house bounds [0.5, 15.0] mA -- the Vf range spans the threshold, so t
+

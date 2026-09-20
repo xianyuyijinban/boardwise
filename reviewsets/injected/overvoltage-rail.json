@@ -1,0 +1,19 @@
+{
+  "schema": "boardwise-review-annotations/1",
+  "board": "injected-overvoltage-rail",
+  "source": "reviewsets/injected/overvoltage-rail.epro2",
+  "split_default": "dev",
+  "reviewed_by": "Yue Xiangyu",
+  "reviewed_at": "2026-09-19",
+  "notes": "Signed injected-defect board (task 011d sec.4; proposal signed by Yue Xiangyu on 2026-09-19). Derived from reviewsets/injected/fixed-base.epro2 (the corrected reference board) by reviewsets/injected/make_variants.py, which is the only writer of this file. Fault: the +5V rail renamed +9V (above the RT9013's 6V abs max). Edit: rename the net in the page's flag attributes (Name and Global Net Name). The defect record below is the whole ground truth for the INJECTED fault: the named rule must catch it, and anything that rule adds beyond this record is a false positive. Findings from other rules are the base board's own (this board is the base plus one edit, and the base's records live in fixed-base.json) -- they land in the harness's unexplained column here, which is why the per-variant report quotes the expected rule's own columns rather than the board total. Split: dev (011e sec.2 -- assigned by sha1(id), see make_variants.py). Oracle note: the domain inference reads the rail name; abs max is exceeded. Only the page's net declarations change -- the flag library device titles stay as they are, because renaming a net does not rename a part.",
+  "items": [
+    {
+      "ref": "U5",
+      "rule_hint": "pwr-domain-vs-range",
+      "kind": "defect",
+      "severity": "ERROR",
+      "split": "dev",
+      "note": "Injected fault: the +5V rail renamed +9V (above the RT9013's 6V abs max) (rename the net in the page's flag attributes (Name and Global Net Name)). Expected catch: pwr-domain-vs-range."
+    }
+  ]
+}

@@ -277,7 +277,12 @@ def test_the_committed_library_is_valid_and_addressable():
     assert library.parts, "the harvested library is empty"
     for part in library.parts:
         assert part.key and part.lcsc and part.deviceUuid and part.libraryUuid
-        assert part.provenance.kind == "board-extract"
+        # 011d added the shelf's second kind: a part recorded from its
+        # catalog/datasheet identity (the golden board's LED), not from a
+        # board harvest. Every entry is one of the two documented kinds.
+        assert part.provenance.kind in ("board-extract", "catalog-select"), (
+            part.key, part.provenance.kind
+        )
         assert part.provenance.designators, part.key
     # keys and C-numbers are unique — the loader enforces it, this pins the data
     assert len({p.key for p in library.parts}) == len(library.parts)
@@ -370,7 +375,9 @@ def test_an_unknown_key_is_rejected_rather_than_ignored():
 def test_a_duplicate_key_or_c_number_is_rejected():
     body = {
         "kind": "boardwise-part-library",
-        "version": 1,
+        # version follows SCHEMA_VERSION (2 since task 011b); the semantics
+        # under test - duplicate keys and duplicate C-numbers - are unchanged.
+        "version": 2,
         "sources": [],
         "notes": [],
         "parts": [entry_to_json(entry()), entry_to_json(entry(mpn="other"))],

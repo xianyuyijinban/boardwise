@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 
 from ..core.model import Component, DesignModel, is_ground_net
-from .base import Finding, Rule
+from .base import Finding, Outcome, OutcomeRule, Rule
 
 LEVEL = "L1-connectivity"
 
@@ -106,6 +106,60 @@ class DecouplingPerIC(Rule):
         return findings
 
 
+class DuplicateDesignators(OutcomeRule):
+    """CONN-1 (task 011c): one designator must mean exactly one part.
+
+    The parser records every designator it had to overwrite while merging
+    pages (``model.duplicate_designators``) — a second page re-using ``U1``
+    means the model silently kept only the last placement and lost a part.
+    The rule only reads what the parser collected; the *finding* of the
+    duplication is the parser's, and it is an ERROR because two parts share
+    one name in the netlist that binds BOM, layout and review together.
+    """
+
+    id = "conn-duplicate-designators"
+    title = "Designators must be unique across the whole project"
+    level = LEVEL
+    source = "house rule; the parser records the clashes (011c sec.3.2)"
+
+    def outcomes(self, model: DesignModel) -> list[Outcome]:
+        if not model.duplicate_designators:
+            return [Outcome(
+                rule_id=self.id,
+                state="OK",
+                subject="designator uniqueness",
+                message=(
+                    f"all {len(model.components)} designators are unique "
+                    "across the parsed pages"
+                ),
+            )]
+        return [
+            Outcome(
+                rule_id=self.id,
+                state="VIOLATION",
+                subject=designator,
+                message=(
+                    f"{designator} is used by more than one placed part; the "
+                    "model kept only the last placement"
+                ),
+            )
+            for designator in model.duplicate_designators
+        ]
+
+    def check(self, model: DesignModel) -> list[Finding]:
+        return [
+            Finding(
+                rule_id=self.id,
+                severity="ERROR",
+                level=self.level,
+                message=outcome.message,
+                evidence=[f"duplicate designator {outcome.subject}"],
+            )
+            for outcome in self.outcomes(model)
+            if outcome.state == "VIOLATION"
+        ]
+
+
 class CrystalLoadCaps(Rule):
     """Each crystal pin net should hold a capacitor whose other end is grounded."""
 
@@ -142,8 +196,17 @@ class CrystalLoadCaps(Rule):
             if not self._is_crystal(comp):
                 continue
             pin_nets = sorted(
-                {pin.net for pin in comp.pins if pin.net is not None}
+                {
+                    pin.net
+                    for pin in comp.pins
+                    if pin.net is not None and not is_ground_net(pin.net)
+                }
             )
+            # Pins already sitting on ground are skipped outright: a 4-pad
+            # crystal's case pads (X1 pins 2/4) live on GND, and demanding a
+            # grounded capacitor on the ground net itself cannot succeed by
+            # construction — the false positive 011a measured and 011c
+            # sec.3.3 rules must be skipped, not annotated away.
             missing = [
                 net for net in pin_nets if not self._has_grounded_cap(model, net)
             ]
