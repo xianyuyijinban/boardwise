@@ -1,0 +1,73 @@
+012v2 S1 inventory — /test (test.eprj2), read-only, 2026-09-21
+identity: focused project name '/test' == test.eprj2 per Kimi's on-disk
+project_structures evidence (P4 uuid 362924e0e16ce90a matches exactly)
+
+projects: '/test' focused=True
+documents: 6 (4 pages, 1 pcb)
+
+--- P3 (f93a95b7245ba351, active) — kind=sch, components=3
+    (no designator)                            x=0 y=0  <-- sheet frame
+    ZZ9      ={Manufacturer Part}         sup=C6186      mpn=Advanced Monolithic Syst    [net-less]
+    U1       ={Manufacturer Part}         sup=C6186      mpn=Advanced Monolithic Syst    [net-less]
+
+--- P4 (362924e0e16ce90a, active) — kind=sch, components=18
+    (no designator)                            x=0 y=0  <-- sheet frame
+    LED1     ={Manufacturer Part}         sup=C51933293  mpn=Guiguang light(桂光光电)        [net-less]
+    X1       ={Value}                     sup=C9002      mpn=YXC(扬兴晶振)                   [net-less]
+    C9       ={Value}                     sup=C57895     mpn=SAMSUNG(三星)                 [net-less]
+    C5       ={Value}                     sup=C57895     mpn=SAMSUNG(三星)                 [net-less]
+    U3       ={Value}                     sup=C17520     mpn=UNI-ROYAL(厚声)               [net-less]
+    U5       ={Manufacturer Part}         sup=C47773     mpn=RICHTEK(立锜)                 [net-less]
+    C7       ={Value}                     sup=C100042    mpn=YAGEO(国巨)                   [net-less]
+    C1       ={Value}                     sup=C14663     mpn=YAGEO(国巨)                   [net-less]
+    C6       ={Value}                     sup=C14663     mpn=YAGEO(国巨)                   [net-less]
+    C4       ={Value}                     sup=C6119852   mpn=HRE(芯声)                     [net-less]
+    C3       ={Value}                     sup=C107004    mpn=YAGEO(国巨)                   [net-less]
+    C25      ={Value}                     sup=C107004    mpn=YAGEO(国巨)                   [net-less]
+    USB1     ={Manufacturer Part}         sup=C2765186   mpn=SHOU HAN(首韩)                [net-less]
+    R27      ={Value}                     sup=C25905     mpn=UNI-ROYAL(厚声)               [net-less]
+    R24      ={Value}                     sup=C25905     mpn=UNI-ROYAL(厚声)               [net-less]
+    H1       ={Manufacturer Part}         sup=C2937625   mpn=XFCN(兴飞)                    [net-less]
+    U1       ={Manufacturer Part}         sup=C14267     mpn=WCH(南京沁恒)                   [net-less]
+
+--- P1 (b4298962367251c8, active) — kind=sch, components=1
+    (no designator)                            x=0 y=0  <-- sheet frame
+
+--- P2 (b5269e3dea21f633, active) — kind=sch, components=1
+    (no designator)                            x=0 y=0  <-- sheet frame
+
+--- PCB1 (5dc38976c1fa45ce, active) — kind=pcb, components=0
+
+
+== S1 分类与建议（报岳裁） ==
+
+| 文档 | 内容 | 分类 | 建议 |
+|---|---|---|---|
+| P1 b4298962367251c8 | 仅 sheet 边框 | 空页 | 保留（无害画布） |
+| P2 b5269e3dea21f633 | 仅 sheet 边框 | 空页 | 保留 |
+| P3 f93a95b7245ba351 | sheet + ZZ9 + U1（均为 C6186 = AMS1117-3.3） | **演练残留** | 建议清（2 件） |
+| P4 362924e0e16ce90a | sheet + 17 件未布线（CH340G 电路拷贝：U1/U3/U5/USB1/X1/R24/R27/H1/LED1/C1/C3/C4/C5/C6/C7/C9/C25） | **演练残留（任务书原定清污目标）** | 建议清（17 件） |
+| PCB1 5dc38976c1fa45ce | 0 components | 空 | 保留 |
+
+== 与 Kimi 现状描述的差异（需岳知悉） ==
+
+Kimi 复核节写 "P4 回到演练前状态（1 个 sheet 符号，当日 11:07 保存）"；
+本次实测 **P4 = 17 件未布线 + 1 个 sheet**（逐件 readback 列在上文）。
+即撤销后演练内容整体回到页上，清污目标**重新存在**，不是"已消失"。
+S3 原指令（"P4 原清污目标已消失，改为只在 bw_scratch 上验证"）的前提不成立——
+建议改回"P4 按 R1 逐项核对后清污"，与 S4 的 bw_scratch 验证并行。
+
+== 身份判定逐项（R1，写操作前必须全项命中） ==
+
+- 焦点工程名：`/test`（= test.eprj2：Kimi 磁盘 project_structures 证据，P4 uuid
+  362924e0e16ce90a 与磁盘明文一字不差）✓
+- 页名：P4 ✓
+- 器件数：17 ✓
+- 未布线态：17/17 net-less ✓
+- 标记（P9/P10/P11 的 MARK_*）：该三页不存在（更早轮次已清），无冲突 ✓
+
+== connector bundle 验证（S1 要求） ==
+
+以错误 pageUuid 调 `sch.delete_primitives` →
+`PAGE_MISMATCH the focused page is 362924e0e16ce90a, not 0000000000000000` ——
+**守卫拒绝，非 unknown action** ⇒ 4 个新动作的 bundle 在编辑器内活着 ✓

@@ -68,12 +68,19 @@ Built-in rules (all L1-connectivity heuristics; each message states its limits):
 ```bash
 cd connector && npm install && node build.mjs   # build the editor extension
 boardwise bridge start                          # run the daemon (foreground, Ctrl-C to stop)
+boardwise doctor                                # 7 checks: daemon · extension · versions · project (exit 1 + a fix per line)
 boardwise bridge status                         # daemon up? connector attached? paired with whom?
 boardwise bridge screenshot shot.png --fit      # native canvas capture
 boardwise bridge highlight <uuid> --color "#FF0000"
 boardwise bridge highlight --clear
+boardwise review-mark report.json               # draw a `review --json` pass on the schematic (`clear` removes it)
+boardwise bridge export-fab --out fab/          # Gerber + P&P + BOM + manifest.json
 boardwise bridge revoke                         # forget the paired connector
 ```
+
+New to this? [`docs/getting-started.md`](docs/getting-started.md) walks the whole path — install
+the editor, import the `.eext`, start the daemon, get `doctor` green, then the first review and the
+first fab export — with the expected output at every step.
 
 ### Comparing against the golden board (`compare`)
 
@@ -305,12 +312,18 @@ boardwise review path/to/board.epro2 --json report.json --md report.md
 ```bash
 cd connector && npm install && node build.mjs   # 构建编辑器扩展
 boardwise bridge start                          # 起 daemon（前台，Ctrl-C 停）
+boardwise doctor                                # 七项体检：daemon · 扩展 · 版本 · 焦点工程（未通过则逐条给建议，退出 1）
 boardwise bridge status                         # daemon 在不在？扩展接没接上？跟谁配对的？
 boardwise bridge screenshot shot.png --fit      # 画布原生截图
 boardwise bridge highlight <uuid> --color "#FF0000"
 boardwise bridge highlight --clear
+boardwise review-mark report.json               # 把 `review --json` 的发现画到原理图上（`clear` 清掉）
+boardwise bridge export-fab --out fab/          # Gerber + 坐标 + BOM + manifest.json
 boardwise bridge revoke                         # 忘掉已配对的扩展
 ```
+
+第一次装？看 [`docs/getting-started.md`](docs/getting-started.md)：装编辑器 → 导入 `.eext` →
+起 daemon → doctor 全绿 → 第一次 review 与第一次导出打板文件，每一步都写了预期输出。
 
 ### 与黄金板比对（`compare`）
 

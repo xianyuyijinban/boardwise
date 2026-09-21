@@ -342,6 +342,18 @@ async function infoUuid(info: any): Promise<string | null> {
 }
 
 /**
+ * Uuids the host uses as a *placeholder* for "no document is focused".
+ *
+ * Measured on the machine 2026-09-21: with more than one editor window open and
+ * none of them focused, `getCurrentDocumentInfo` still answers — with
+ * `uuid: "0"`, a uuid no document in any project has. Reporting that as fact is
+ * worse than reporting nothing, because `active` is what every caller uses to
+ * decide *where* it is working, and a name that matches no document quietly
+ * defeats that check while looking like an answer.
+ */
+const PLACEHOLDER_DOC_UUIDS = new Set(['0']);
+
+/**
  * The **one** read of "which document is active", shared by `doc.list` and
  * `document.current`.
  *
@@ -357,16 +369,33 @@ async function infoUuid(info: any): Promise<string | null> {
  *
  * `source` says which call answered, so a fallback is never mistaken for the
  * direct answer.
+ *
+ * It is also where the host's placeholder uuid is turned into "no active
+ * document" (see {@link PLACEHOLDER_DOC_UUIDS}): the answer is dropped, and the
+ * raw reading goes into `problems` — which `doc.list` surfaces as `notes` —
+ * so the caller can tell "nothing is focused" from "the host said `0`".
  */
 async function activeDocument(
   eda: Eda,
   problems: string[],
 ): Promise<{ uuid: string; type: string; tabId?: string; source: string } | null> {
   const DIRECT = 'dmt_SelectControl.getCurrentDocumentInfo';
+  // A placeholder is a *reading*, not a failure, so it is named where every
+  // other "we asked and the answer was unusable" is named — the caller gets
+  // `null` (no active document) plus the evidence, never a uuid it might act
+  // on. Both readers share this, so the two can never disagree about it.
+  const noActive = (uuid: string, source: string): null => {
+    problems.push(
+      `${source}: reported uuid "${uuid}" for the active document — the host's `
+        + 'placeholder for "nothing is focused"; reported as no active document',
+    );
+    return null;
+  };
   try {
     const info: any = await settle(requireFn(eda, DIRECT)());
     const uuid = await infoUuid(info);
     if (uuid) {
+      if (PLACEHOLDER_DOC_UUIDS.has(uuid)) return noActive(uuid, DIRECT);
       const tabId = plainGet(info, 'tabId');
       return {
         uuid,
@@ -390,6 +419,7 @@ async function activeDocument(
       const info: any = await settle(requireFn(eda, path)());
       const uuid = await infoUuid(info);
       if (uuid) {
+        if (PLACEHOLDER_DOC_UUIDS.has(uuid)) return noActive(uuid, path);
         return { uuid, type, source: path };
       }
     } catch (error) {
@@ -1984,13 +2014,177 @@ export const docList: ActionHandler = async (_params, eda) => {
     if (row) rows.push(row);
   }
 
+  // 012 §五: the multi-project view rides along on the same report — the
+  // existing fields are untouched (187 tests guard them), `projects` is new.
+  const projects = await projectRows(eda, problems, rows);
+
   return {
     documents: rows,
+    projects,
     active,
     schematicPages: rows.filter((row) => row.type === 'page').length,
     pcbs: rows.filter((row) => row.type === 'pcb').length,
     count: rows.length,
     ...(problems.length ? { notes: problems } : {}),
+  };
+};
+
+/**
+ * The multi-project half of `doc.list` (012 §五): every project the editor
+ * has open, with the focused one marked.
+ *
+ * The type package's per-project read is `getProjectInfo(uuid)` — a *brief*
+ * item (uuid / friendlyName / team), explicitly documented as lacking the
+ * document tree; only `getCurrentProjectInfo()` carries the full tree, and
+ * there is exactly one current project. So the honest shape is: the focused
+ * project lists its schematics/pcbs, every other entry reports `documents:
+ * "brief"` with an empty pair, and the caller focuses another project with
+ * `doc.focus` / `doc.open` before enumerating its pages. `opened` is
+ * `"unknown"` for the non-focused entries on purpose: `getAllProjectsUuid()`
+ * answers for the whole workspace, not for "what is open in tabs", and the
+ * tab tree carries project names only inside tab titles — claiming an open
+ * set from that would be guessing.
+ */
+async function projectRows(eda: Eda, problems: string[], docRows: DocRow[]): Promise<Array<Record<string, unknown>>> {
+  const rows: Array<Record<string, unknown>> = [];
+  let current: any;
+  try {
+    const getCurrent = requireFn(eda, 'dmt_Project.getCurrentProjectInfo');
+    current = await settle(getCurrent());
+  } catch {
+    // A host without dmt_Project gets the legacy doc.list fields with an
+    // empty project view — an *absent capability*, not a broken read, so it
+    // stays out of `notes` (those name reads that actually failed).
+    return rows;
+  }
+  const currentUuid = plainGet(current, 'uuid');
+  const currentName = plainGet(current, 'name');
+  const currentFriendly = plainGet(current, 'friendlyName');
+
+  const push = (
+    uuid: unknown,
+    friendly: unknown,
+    name: unknown,
+    focused: boolean,
+    schematics: unknown[] = [],
+    pcbs: unknown[] = [],
+  ): void => {
+    if (typeof uuid !== 'string' || !uuid) return;
+    rows.push({
+      projectUuid: uuid,
+      name: typeof name === 'string' && name ? name : friendly,
+      friendlyName: typeof friendly === 'string' ? friendly : '',
+      focused,
+      opened: focused ? 'yes' : 'unknown',
+      schematics,
+      pcbs,
+      documents: focused ? 'full' : 'brief',
+    });
+  };
+
+  // The focused project first, from the full-info read. Its document list
+  // reuses the rows already enumerated above (getAllSchematicsInfo & co. —
+  // measured APIs), not the type package's `data[]` whose itemType values
+  // the host fills differently (measured 2026-09-21: my Schematic/PCB guess
+  // matched nothing, 0 schematics on a project with four).
+  const focusSchematics = docRows
+    .filter((row) => row.type === 'schematic' || row.type === 'page')
+    .map((row) => ({ uuid: row.uuid, name: row.name, type: row.type }));
+  const focusPcbs = docRows
+    .filter((row) => row.type === 'pcb')
+    .map((row) => ({ uuid: row.uuid, name: row.name, type: row.type }));
+  push(currentUuid, currentFriendly, currentName, true, focusSchematics, focusPcbs);
+
+  const getAllUuids = requireFn(eda, 'dmt_Project.getAllProjectsUuid');
+  let uuids: unknown;
+  try {
+    uuids = await settle(getAllUuids());
+  } catch (error) {
+    problems.push(
+      `projects: getAllProjectsUuid failed — ${String((error as Error)?.message ?? error)}`,
+    );
+    return rows;
+  }
+  if (!Array.isArray(uuids)) {
+    problems.push(`projects: getAllProjectsUuid returned ${typeof uuids}, not an array`);
+    return rows;
+  }
+  const getProjectInfo = requireFn(eda, 'dmt_Project.getProjectInfo');
+  for (const raw of uuids) {
+    const uuid = String(raw ?? '');
+    if (!uuid || uuid === currentUuid) continue;
+    try {
+      const info: any = await settle(getProjectInfo(uuid));
+      push(uuid, plainGet(info, 'friendlyName'), plainGet(info, 'name'), false);
+    } catch (error) {
+      problems.push(
+        `projects: getProjectInfo(${uuid}) failed — ${String((error as Error)?.message ?? error)}`,
+      );
+    }
+  }
+  return rows;
+}
+
+/**
+ * `doc.focus` — put an already-open document on top (012 §五).
+ *
+ * `activateDocument` takes a **tab id**, and the tab tree is the only place
+ * to resolve one from a page uuid: ids in the tree are `"<docUuid>@<hash>"`,
+ * so the caller may pass either the full tabId or the document uuid and the
+ * match is a prefix test against what the host actually reports. Focusing a
+ * document that has no tab is a caller bug — `doc.open` is the one that
+ * opens tabs — and is refused rather than silently opened.
+ */
+export const docFocus: ActionHandler = async (params, eda) => {
+  const tabId = typeof params.tabId === 'string' ? params.tabId.trim() : '';
+  const uuid = typeof params.pageUuid === 'string' ? params.pageUuid.trim() : '';
+  if (!tabId && !uuid) {
+    throw new ActionError('BAD_REQUEST', 'doc.focus needs params.tabId or params.pageUuid');
+  }
+  const tree: any = await settle(requireFn(eda, 'dmt_EditorControl.getSplitScreenTree')());
+  const tabs: Array<{ title: string; tabId: string; documentType: unknown }> = [];
+  const walk = (item: any): void => {
+    if (!item || typeof item !== 'object') return;
+    const own = plainGet(item, 'tabs');
+    if (Array.isArray(own)) {
+      for (const tab of own) {
+        tabs.push({
+          title: String(plainGet(tab, 'title') ?? ''),
+          tabId: String(plainGet(tab, 'tabId') ?? ''),
+          documentType: plainGet(tab, 'documentType'),
+        });
+      }
+    }
+    const children = plainGet(item, 'children');
+    if (Array.isArray(children)) for (const child of children) walk(child);
+  };
+  walk(tree);
+  if (!tabs.length) {
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      'doc.focus: getSplitScreenTree returned no tabs — is any document open?',
+    );
+  }
+
+  const wanted = tabId || uuid;
+  const match = tabs.find((t) => t.tabId === wanted) ??
+    tabs.find((t) => t.tabId.startsWith(`${wanted}@`)) ??
+    (tabId ? undefined : tabs.find((t) => t.title === wanted));
+  if (!match) {
+    throw new ActionError(
+      'NOT_FOUND',
+      `doc.focus: no open tab matches ${wanted} — open it first with doc.open`,
+      { wanted, openTabs: tabs.map((t) => t.tabId) },
+    );
+  }
+  const activated = await settle(
+    requireFn(eda, 'dmt_EditorControl.activateDocument')(match.tabId),
+  );
+  return {
+    activated: activated === true,
+    tabId: match.tabId,
+    title: match.title,
+    documentType: match.documentType ?? null,
   };
 };
 
@@ -3028,6 +3222,1746 @@ export const schPlaceNetport: ActionHandler = async (params, eda) => {
   const uuid = await getState(created, 'PrimitiveId');
   return { uuid: uuid == null ? null : String(uuid) };
 };
+
+/**
+ * Pose-editing classes, per the offline type package (2026-09-20 read).
+ *
+ * Each entry maps a class to the pose keys its `modify` property object
+ * actually accepts — `SCH_PrimitiveWire.modify` takes a `line`, not a pose,
+ * and `PCB_PrimitivePour.modify` has no position at all, so a request naming
+ * a primitive of those classes is a structural refusal, not a best effort.
+ * `mirror` exists only where the type package declares it (schematic
+ * components); passing it elsewhere would be silently dropped or rejected,
+ * so it is filtered out per class here. Attribute primitives are absent from
+ * both tables (see `SCH_DELETE_CLASSES`): a class the delete flow cannot
+ * address must not be movable either, or the two verbs disagree about what
+ * exists.
+ */
+const POSE_CLASSES: Record<string, string[]> = {
+  sch_PrimitiveComponent: ['x', 'y', 'rotation', 'mirror'],
+  sch_PrimitiveText: ['x', 'y', 'rotation'],
+  sch_PrimitivePin: ['x', 'y', 'rotation'],
+  pcb_PrimitiveComponent: ['x', 'y', 'rotation'],
+  pcb_PrimitiveVia: ['x', 'y'],
+  pcb_PrimitivePad: ['x', 'y', 'rotation'],
+};
+
+/**
+ * Classes the delete actions dispatch to. `sch_PrimitiveAttribute` is
+ * **excluded on purpose**: its type-package `delete()` takes no primitive id
+ * (`delete(): boolean` — it deletes whatever the editor has selected), so it
+ * cannot be addressed the way this contract requires; a probe of it is a
+ * measurement of a different operation. Everything else here declares
+ * `delete(primitiveIds: string | string[])`.
+ */
+const SCH_DELETE_CLASSES = [
+  'sch_PrimitiveComponent',
+  'sch_PrimitiveWire',
+  'sch_PrimitiveText',
+  'sch_PrimitivePin',
+];
+const PCB_DELETE_CLASSES = [
+  'pcb_PrimitiveComponent',
+  'pcb_PrimitiveLine',
+  'pcb_PrimitiveVia',
+  'pcb_PrimitivePad',
+  'pcb_PrimitivePour',
+];
+
+/**
+ * One `getAllPrimitiveId()` per class, joined into an id -> class index.
+ *
+ * The enumeration is the *authority* on what a page holds: an id absent from
+ * the index is `notFound` in the caller's report, and a class whose namespace
+ * or `getAllPrimitiveId` is missing fails the whole action structurally —
+ * a half-built index would dress "the API is gone" up as "the id was wrong".
+ */
+async function buildIdIndex(
+  eda: Eda,
+  classes: string[],
+  action: string,
+): Promise<Map<string, string>> {
+  const index = new Map<string, string>();
+  for (const ns of classes) {
+    const getAllIds = requireFn(eda, `${ns}.getAllPrimitiveId`);
+    let ids: unknown;
+    try {
+      ids = await settle(getAllIds());
+    } catch (error) {
+      throw new ActionError(
+        'CONNECTOR_ERROR',
+        `${action}: enumerating ${ns}.getAllPrimitiveId failed — ${String(
+          (error as Error)?.message ?? error,
+        )}`,
+        { namespace: ns },
+      );
+    }
+    if (!Array.isArray(ids)) {
+      throw new ActionError(
+        'CONNECTOR_ERROR',
+        `${action}: ${ns}.getAllPrimitiveId returned ${typeof ids}, not an array`,
+        { namespace: ns },
+      );
+    }
+    for (const id of ids) {
+      const key = String(id);
+      // First class to claim an id wins: a collision would mean the host
+      // handed the same id out twice, which is its bug to confess — and
+      // deleting either way hits the same primitive.
+      if (!index.has(key)) index.set(key, ns);
+    }
+  }
+  return index;
+}
+
+/** PCB-side page guard: same contract as `guardPage`, different document. */
+async function guardPcb(eda: Eda, expected: unknown): Promise<void> {
+  if (typeof expected !== 'string' || !expected) return;
+  const current: any = await settle(
+    requireFn(eda, 'dmt_Pcb.getCurrentPcbInfo')(),
+  );
+  const uuid = plainGet(current, 'uuid');
+  if (uuid !== expected) {
+    throw new ActionError(
+      'PAGE_MISMATCH',
+      `the focused PCB is ${uuid == null ? '(none)' : String(uuid)}, not ${expected} — refusing to edit`,
+      { expected, actual: uuid == null ? null : String(uuid) },
+    );
+  }
+}
+
+/**
+ * Read a primitive's pose off the object `get()` hands back, for the
+ * before/after report. Every field is independent: a host that hides one
+ * getter yields `null` for that field, not a failed modification.
+ */
+function readPose(obj: any): { x: unknown; y: unknown; rotation: unknown; mirror: unknown } {
+  const read = (name: string): unknown => {
+    const viaState = obj ? `getState_${name}` : '';
+    if (viaState && typeof obj[viaState] === 'function') {
+      try {
+        return obj[viaState]();
+      } catch {
+        return null;
+      }
+    }
+    const plain = plainGet(obj, name);
+    return plain === undefined ? null : plain;
+  };
+  return { x: read('X'), y: read('Y'), rotation: read('Rotation'), mirror: read('Mirror') };
+}
+
+/**
+ * `sch.delete_primitives` / `pcb.delete_primitives` — delete by id, honestly.
+ *
+ * `params.pageUuid` is the focused-document guard (a mismatch is a
+ * PAGE_MISMATCH refusal); `params.primitiveIds` is a list of primitive ids.
+ * The handler builds the page's id index across the dispatch classes, then
+ * deletes **one id per host call** — the type package's array form returns a
+ * single `boolean` for the whole batch, which cannot report a partial
+ * failure, and this contract prefers honest per-id results over batch speed.
+ *
+ * Returns `{deleted, notFound, failed}`: `deleted` are the ids the host
+ * confirmed, `notFound` are ids the page's index never held (including ids
+ * of classes the type package cannot address — e.g. schematic attributes,
+ * see `SCH_DELETE_CLASSES`), and `failed` carries per-id host refusals. A
+ * partial result is a *successful* action; only a broken enumeration or a
+ * missing page guard target throws.
+ */
+function makeDeletePrimitives(classes: string[], label: string): ActionHandler {
+  return async (params, eda) => {
+    const guard = classes[0].startsWith('sch_') ? guardPage : guardPcb;
+    await guard(eda, params.pageUuid);
+    const raw = params.primitiveIds;
+    if (raw !== undefined && !Array.isArray(raw)) {
+      throw new ActionError(
+        'BAD_REQUEST',
+        `${label} needs params.primitiveIds as an array of primitive ids`,
+      );
+    }
+    const ids = (raw ?? []).map((v) => String(v ?? '')).filter(Boolean);
+    if (!ids.length) return { deleted: [], notFound: [], failed: [] };
+    const index = await buildIdIndex(eda, classes, label);
+    const deleted: string[] = [];
+    const notFound: string[] = [];
+    const failed: Array<{ id: string; reason: string }> = [];
+    for (const id of ids) {
+      const ns = index.get(id);
+      if (!ns) {
+        notFound.push(id);
+        continue;
+      }
+      const del = requireFn(eda, `${ns}.delete`);
+      try {
+        const ok = await settle(del(id));
+        if (ok === true) deleted.push(id);
+        else failed.push({ id, reason: `delete returned ${String(ok)}` });
+      } catch (error) {
+        failed.push({
+          id,
+          reason: String((error as Error)?.message ?? error),
+        });
+      }
+    }
+    return { deleted, notFound, failed };
+  };
+}
+
+export const schDeletePrimitives = makeDeletePrimitives(
+  SCH_DELETE_CLASSES,
+  'sch.delete_primitives',
+);
+export const pcbDeletePrimitives = makeDeletePrimitives(
+  PCB_DELETE_CLASSES,
+  'pcb.delete_primitives',
+);
+
+const POSE_KEYS = ['x', 'y', 'rotation', 'mirror'] as const;
+
+/**
+ * Collect the pose fields the caller actually supplied, restricted to what
+ * the target class accepts. Returns `null` when nothing applicable was
+ * requested — "move it nowhere" is a caller bug, not an edit.
+ */
+function poseProperty(
+  ns: string,
+  params: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const allowed = POSE_CLASSES[ns];
+  const out: Record<string, unknown> = {};
+  for (const key of POSE_KEYS) {
+    if (params[key] === undefined) continue;
+    if (!allowed.includes(key)) {
+      throw new ActionError(
+        'BAD_REQUEST',
+        `${ns} has no ${key} in its modify property — its pose is ${allowed.join(', ')}`,
+        { namespace: ns, key },
+      );
+    }
+    if (key === 'mirror') out.mirror = params.mirror === true;
+    else if (key === 'rotation') {
+      const rotation = Number(params.rotation);
+      if (!Number.isFinite(rotation)) {
+        throw new ActionError('BAD_REQUEST', `rotation must be a number, got ${String(params.rotation)}`);
+      }
+      out.rotation = rotation;
+    } else {
+      const coord = Number(params[key]);
+      if (!Number.isFinite(coord)) {
+        throw new ActionError('BAD_REQUEST', `${key} must be a number, got ${String(params[key])}`);
+      }
+      out[key] = coord;
+    }
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+/**
+ * `sch.modify_primitive` / `pcb.modify_primitive` — move / rotate / mirror by
+ * id, nothing else.
+ *
+ * Only pose is exposed on purpose: value/designator edits have
+ * `sch.set_component_attribute`, and folding them here would duplicate that
+ * gate. The class comes from the page's id index (never guessed), the
+ * property keys are filtered through `POSE_CLASSES` — a wire, for instance,
+ * has no pose in the type package (`modify` takes a `line`) and naming one
+ * is a structural refusal. The action reads the pose before and after the
+ * host call and returns both, so the caller can verify what moved without a
+ * second read.
+ */
+function makeModifyPrimitive(label: string, schematic: boolean): ActionHandler {
+  return async (params, eda) => {
+    if (schematic) await guardPage(eda, params.pageUuid);
+    else await guardPcb(eda, params.pageUuid);
+    const id = typeof params.primitiveId === 'string' ? params.primitiveId : '';
+    if (!id) {
+      throw new ActionError('BAD_REQUEST', `${label} needs params.primitiveId`);
+    }
+    // The index walks the *deletable* classes too, on purpose: a wire exists
+    // on the page even though it has no pose, and the honest answer to "move
+    // this wire" is "that class cannot be moved", not "no such primitive".
+    const deletable = schematic ? SCH_DELETE_CLASSES : PCB_DELETE_CLASSES;
+    const classes = [...new Set([...deletable, ...Object.keys(POSE_CLASSES).filter((ns) =>
+      schematic ? ns.startsWith('sch_') : ns.startsWith('pcb_'),
+    )])];
+    const index = await buildIdIndex(eda, classes, label);
+    const ns = index.get(id);
+    if (!ns) {
+      throw new ActionError(
+        'NOT_FOUND',
+        `${label}: no primitive ${id} on the guarded page`,
+        { primitiveId: id },
+      );
+    }
+    if (!POSE_CLASSES[ns]) {
+      throw new ActionError(
+        'BAD_REQUEST',
+        `${label}: ${ns} has no pose semantics in the type package — modify is not a move`,
+        { namespace: ns, primitiveId: id },
+      );
+    }
+    const property = poseProperty(ns, params);
+    if (!property) {
+      throw new ActionError(
+        'BAD_REQUEST',
+        `${label} needs at least one of x / y / rotation / mirror`,
+      );
+    }
+    const mod = requireFn(eda, `${ns}.modify`);
+    const beforeObj: any = await settle(requireFn(eda, `${ns}.get`)(id));
+    if (!beforeObj) {
+      throw new ActionError(
+        'CONNECTOR_ERROR',
+        `${label}: ${ns}.get(${id}) returned nothing before the modify`,
+        { namespace: ns, primitiveId: id },
+      );
+    }
+    const before = readPose(beforeObj);
+    const afterObj: any = await settle(mod(id, property));
+    if (!afterObj) {
+      throw new ActionError(
+        'CONNECTOR_ERROR',
+        `${label}: the editor refused the modify (${ns} ${JSON.stringify(property)})`,
+        { namespace: ns, property },
+      );
+    }
+    const after = readPose(afterObj);
+    return { before, after };
+  };
+}
+
+export const schModifyPrimitive = makeModifyPrimitive('sch.modify_primitive', true);
+export const pcbModifyPrimitive = makeModifyPrimitive('pcb.modify_primitive', false);
+
+/**
+ * `doc.delete_page` — remove a schematic page by uuid (012 S4).
+ *
+ * The cleanup half of the scratch-page flow: `sch.doc.new` creates one, work
+ * happens on it, and the page itself has to go when the work is done. The
+ * uuid must be one the project actually lists — an unknown uuid is NOT_FOUND,
+ * never a silent no-op — and the host's own `deleteSchematicPage` decides the
+ * rest (it refuses the last page of a schematic, measured behaviour).
+ */
+export const docDeletePage: ActionHandler = async (params, eda) => {
+  const uuid = typeof params.pageUuid === 'string' ? params.pageUuid.trim() : '';
+  if (!uuid) {
+    throw new ActionError('BAD_REQUEST', 'doc.delete_page needs params.pageUuid');
+  }
+  const pages = await readDocItems(eda, 'dmt_Schematic.getAllSchematicPagesInfo', []);
+  const page = pages.find((item) => plainGet(item, 'uuid') === uuid);
+  if (!page) {
+    throw new ActionError(
+      'NOT_FOUND',
+      `doc.delete_page: ${uuid} is not a page of the current project`,
+      { pageUuid: uuid, knownPages: pages.map((item) => plainGet(item, 'uuid')) },
+    );
+  }
+  const name = plainGet(page, 'name');
+  const deleted = await settle(
+    requireFn(eda, 'dmt_Schematic.deleteSchematicPage')(uuid),
+  );
+  if (deleted !== true) {
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `the editor refused to delete page ${name ?? uuid}`,
+      { pageUuid: uuid },
+    );
+  }
+  return { deleted: true, pageUuid: uuid, name: typeof name === 'string' ? name : '' };
+};
+
+// --------------------------------------------------------------------------
+// 012 §六: `export.fab` — the fab bundle (Gerber + pick-and-place + BOM)
+// --------------------------------------------------------------------------
+
+/**
+ * One vendor's gerber arguments, named after the declaration.
+ *
+ * `getGerberFile(fileName, colorSilkscreen, unit, digitalFormat, other, layers,
+ * objects)` is positional, so this object is spread into the call at exactly
+ * one place instead of being unpacked by position in several. `unit` stays a
+ * plain string because `ESYS_Unit` is a string enum (`MILLIMETER = 'mm'`), so
+ * the wire value and the enum value are the same bytes.
+ */
+type FabGerberArgs = {
+  fileName: string;
+  colorSilkscreen: boolean;
+  unit: string;
+  digitalFormat: { integerNumber: number; decimalNumber: number };
+  other: {
+    metallicDrillingInformation: boolean;
+    nonMetallicDrillingInformation: boolean;
+    drillTable: boolean;
+    flyingProbeTestingFile: boolean;
+  };
+  layers?: Array<{ layerId: string; isMirror: boolean }>;
+  objects?: string[];
+};
+
+/** One row of the BOM's column spec (`IPCB_BomPropertiesTableColumns`). */
+type FabBomColumn = {
+  property: string;
+  title: string;
+  sort: null | 'asc' | 'desc';
+  group: null | 'Yes' | 'No';
+  orderWeight: number;
+};
+
+type FabVendorPreset = {
+  summary: string;
+  gerber: FabGerberArgs;
+  pickAndPlace: { fileName: string; fileType: 'csv' | 'xlsx'; unit: string };
+  bom: {
+    fileName: string;
+    fileType: 'csv' | 'xlsx';
+    filterOptions: Array<{ property: string; includeValue: boolean | string }>;
+    statistics: string[];
+    columns: FabBomColumn[];
+  };
+};
+
+/**
+ * The BOM's column set — every column a fab house or a buyer reads.
+ *
+ * **One list**, and `getBomFile`'s `property` argument is derived from it
+ * (`FAB_BOM_COLUMNS.map(c => c.property)`), so the two arguments the API takes
+ * cannot come to disagree about which columns exist. Heavier `orderWeight`
+ * sorts left, which is the documented meaning.
+ *
+ * The names are the component properties *this host* reports (measured in the
+ * netlist export, 2026-09-15: `Supplier Part` carries the LCSC code,
+ * `Manufacturer Part` the MPN, `JLCPCB Part Class` Basic/Extended), plus the
+ * two the type package's own example uses for the counting columns (`No.`,
+ * `Quantity`). Whether the host accepts every one of them is a **machine**
+ * question — see the manifest note this action attaches; the point of keeping
+ * them in one list is that the answer changes one place.
+ */
+const FAB_BOM_COLUMNS: FabBomColumn[] = [
+  { property: 'No.', title: '序号', sort: 'asc', group: null, orderWeight: 100 },
+  { property: 'Designator', title: '位号', sort: 'asc', group: 'No', orderWeight: 90 },
+  { property: 'Quantity', title: '数量', sort: 'desc', group: 'Yes', orderWeight: 80 },
+  { property: 'Value', title: '值', sort: 'asc', group: 'Yes', orderWeight: 70 },
+  { property: 'Name', title: '器件名称', sort: 'asc', group: 'Yes', orderWeight: 60 },
+  { property: 'Device', title: '器件', sort: null, group: 'Yes', orderWeight: 55 },
+  { property: 'Footprint', title: '封装', sort: null, group: 'Yes', orderWeight: 50 },
+  { property: 'Manufacturer Part', title: '制造商料号', sort: null, group: 'Yes', orderWeight: 40 },
+  { property: 'Manufacturer', title: '制造商', sort: null, group: 'Yes', orderWeight: 35 },
+  { property: 'Supplier Part', title: '立创编号', sort: null, group: 'Yes', orderWeight: 30 },
+  { property: 'Supplier', title: '供应商', sort: null, group: 'Yes', orderWeight: 25 },
+  { property: 'Supplier Footprint', title: '供应商封装', sort: null, group: 'Yes', orderWeight: 20 },
+  { property: 'JLCPCB Part Class', title: 'JLC 类别', sort: null, group: 'Yes', orderWeight: 15 },
+  { property: 'Datasheet', title: '数据手册', sort: null, group: 'Yes', orderWeight: 10 },
+  { property: 'Description', title: '描述', sort: null, group: 'Yes', orderWeight: 5 },
+];
+
+/**
+ * Vendor presets, keyed by the `vendor` parameter.
+ *
+ * `generic` is the only one with a preset (012v2 §六): metric 4:5 gerber with
+ * the drill table on, a CSV pick-and-place in millimetres, and a CSV BOM with
+ * every column. **`colorSilkscreen: false`** because the coloured silkscreen
+ * file is a JLC-specific extra ("嘉立创专用文件" in the declaration) that other
+ * fab houses do not want in the zip.
+ *
+ * `layers`/`objects` are deliberately **absent** from the gerber preset: their
+ * declared default is the editor's own one-click export set (the layers the
+ * board really uses, plus the drill layers), which is what a fab house expects.
+ * Pinning an explicit layer list here without a machine run would be a guess
+ * dressed as a decision; `params.gerber.layers` overrides it when a vendor
+ * wants an exact list.
+ */
+const FAB_VENDORS: Record<string, FabVendorPreset> = {
+  generic: {
+    summary: 'generic fab house: metric 4:5 gerber (drill table on), CSV P&P in mm, CSV BOM with every column',
+    gerber: {
+      fileName: 'fab_gerber',
+      colorSilkscreen: false,
+      unit: 'mm',
+      digitalFormat: { integerNumber: 4, decimalNumber: 5 },
+      other: {
+        metallicDrillingInformation: true,
+        nonMetallicDrillingInformation: true,
+        drillTable: true,
+        flyingProbeTestingFile: false,
+      },
+    },
+    pickAndPlace: { fileName: 'fab_pick_and_place', fileType: 'csv', unit: 'mm' },
+    bom: {
+      fileName: 'fab_bom',
+      fileType: 'csv',
+      // The two rules the type package's own example uses: only parts that are
+      // in the BOM, and only parts that are converted to the PCB.
+      filterOptions: [
+        { property: 'Add into BOM', includeValue: 'yes' },
+        { property: 'Convert to PCB', includeValue: 'yes' },
+      ],
+      statistics: ['No.', 'Quantity'],
+      columns: FAB_BOM_COLUMNS,
+    },
+  },
+};
+
+/**
+ * Vendors the catalogue reserves a slot for but has no preset for yet.
+ *
+ * Kept apart from the preset table so a caller asking for one gets "the slot
+ * exists, the preset does not" instead of "unknown vendor" — the two are
+ * different facts and the second one would be a lie (012v2 §六: 捷配留配置位).
+ */
+const FAB_PENDING_VENDORS: Record<string, string> = {
+  jiepei: 'the 捷配 preset is a reserved slot: it needs a sample BOM/template from 岳 before its columns can be written (012v2 open question)',
+};
+
+/** `ESYS_Unit`'s declared members, for validating a `unit` override. */
+const FAB_UNITS = ['mm', 'cm', 'dm', 'm', 'inch', 'in', 'mil'];
+
+/** Keys `params.gerber` may override — anything else is a typo, not a setting. */
+const FAB_GERBER_OVERRIDE_KEYS = [
+  'fileName', 'colorSilkscreen', 'unit', 'digitalFormat', 'other', 'layers', 'objects',
+];
+
+/**
+ * Per-file deadline for the three export calls.
+ *
+ * Same lesson as `export.render`: the host **drops an argument it dislikes
+ * without rejecting**, so the awaited promise never settles and the action slot
+ * is held forever. Each of the three calls therefore races its own deadline and
+ * reports a per-file `TIMEOUT`; the other two files still come back. 60 s is
+ * the editor's own "export manufacture data" order of magnitude for a small
+ * board, and the daemon's `FAB_TIMEOUT` (240 s) sits above 3 × this.
+ */
+const FAB_CALL_TIMEOUT_MS = 60_000;
+
+/** The payload for one fab file, as the wire carries it. */
+type FabFilePayload = {
+  role: string;
+  name: string;
+  mime: string;
+  bytes: number;
+  data: string;
+  sourceName: string;
+};
+
+/**
+ * Race one host call against a deadline, failing with a typed TIMEOUT.
+ *
+ * Used by every host call in this section, because they share the failure the
+ * `export.render` probe found: an argument the host dislikes is *dropped*, not
+ * rejected, so the promise never settles and the action slot is held until the
+ * daemon gives up — an answer nobody can act on, instead of a named failure.
+ * `hint` carries what the caller should do about it.
+ */
+function raceHostCall<T>(call: Promise<T>, label: string, ms: number, hint = ''): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () =>
+        reject(
+          new ActionError(
+            'TIMEOUT',
+            `${label} did not settle within ${ms} ms — the host swallowed the request `
+              + `instead of rejecting it${hint ? `; ${hint}` : ''}`,
+            { call: label, timeoutMs: ms },
+          ),
+        ),
+      ms,
+    );
+    call.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+/**
+ * A host `File` as base64 + metadata, or a thrown reason.
+ *
+ * A zero-byte file is a *failure*, not a small file: the editor answers with an
+ * empty File when there is nothing to export, and handing that to a fab house
+ * as a successful export is exactly the shape of error this project keeps
+ * paying for. The bytes are also sniffed for the zip magic so a gerber export
+ * that came back as an archive is named `.zip` instead of `.png`-style lies.
+ */
+async function readFabFile(
+  file: any, role: string, base: string, ext: string, fallbackMime: string,
+): Promise<FabFilePayload> {
+  const arrayBuffer = readMember(file, 'arrayBuffer').value;
+  if (typeof arrayBuffer !== 'function') {
+    throw new Error('the returned file has no arrayBuffer() — its bytes cannot be read');
+  }
+  const bytes = new Uint8Array(await arrayBuffer.call(file));
+  if (bytes.byteLength === 0) throw new Error('the editor returned an empty file');
+  const zip = bytes.length > 1 && bytes[0] === 0x50 && bytes[1] === 0x4b;
+  const given = readMember(file, 'name').value;
+  // Path separators are stripped: this name becomes a path on the writing side,
+  // and a host-provided name must never be able to climb out of `outDir`.
+  const sourceName = typeof given === 'string' ? given.replace(/[\\/]+/g, '_').trim() : '';
+  const type = readMember(file, 'type').value;
+  return {
+    role,
+    name: sourceName || `${base}${zip ? '.zip' : ext}`,
+    mime: typeof type === 'string' && type ? type : fallbackMime,
+    bytes: bytes.byteLength,
+    data: bytesToBase64(bytes),
+    sourceName,
+  };
+}
+
+/**
+ * `export.fab` — Gerber + pick-and-place + BOM in one call, plus the manifest.
+ *
+ * Why one action and not three: the three files are only useful together (a fab
+ * house rejects a submission with a mismatched or missing piece), and one call
+ * means one guard, one project/pcb stamp and one manifest for the set.
+ *
+ * **The connector does not write to `outDir`, and that is a measured limit, not
+ * a shortcut.** The declaration offers `sys_FileSystem.saveFile(fileData,
+ * fileName?)` — no directory argument; it goes through the browser download /
+ * Electron save dialog, so it cannot honour a path. The reliable path is the
+ * one `export.render` already uses: hand the bytes back as base64 and let the
+ * caller (the daemon-side CLI) write them. `outDir` is therefore carried in the
+ * parameters and recorded in the manifest, and the CLI is what creates it.
+ *
+ * Honest partial results: a file the host refuses, returns empty, or hangs on
+ * is reported in `failed` while the others still come back (`partial: true`).
+ * Only a *structural* absence throws — the namespace or one of the three
+ * declared methods missing — and so does "all three failed", because an empty
+ * bundle is not a bundle.
+ */
+export const exportFab: ActionHandler = async (params, eda) => {
+  const vendor = String(params?.vendor ?? 'generic').trim().toLowerCase();
+  const preset = FAB_VENDORS[vendor];
+  if (!preset) {
+    const pending = FAB_PENDING_VENDORS[vendor];
+    throw new ActionError(
+      'BAD_REQUEST',
+      pending
+        ? `export.fab has no preset for vendor ${JSON.stringify(vendor)} yet — ${pending}`
+        : `export.fab needs params.vendor to be one of ${Object.keys(FAB_VENDORS).join(' | ')} `
+          + `(known-but-unimplemented: ${Object.keys(FAB_PENDING_VENDORS).join(', ') || 'none'}; `
+          + `got ${JSON.stringify(params?.vendor)})`,
+      { vendor, known: Object.keys(FAB_VENDORS), pending: Object.keys(FAB_PENDING_VENDORS) },
+    );
+  }
+  const outDir = typeof params?.outDir === 'string' ? params.outDir.trim() : '';
+  if (!outDir) {
+    throw new ActionError(
+      'BAD_REQUEST',
+      'export.fab needs params.outDir — the directory the caller writes the bundle into. '
+        + 'The connector only *records* it: no declared API takes a destination directory '
+        + '(SYS_FileSystem.saveFile(fileData, fileName?) has none), so the daemon-side CLI does the write.',
+    );
+  }
+  const timeoutMs = Number.isFinite(Number(params?.timeoutMs))
+    ? Math.min(Math.max(Number(params?.timeoutMs), 200), 600_000)
+    : FAB_CALL_TIMEOUT_MS;
+
+  // --- params.gerber: an allowlist, so a typo fails instead of being ignored.
+  const overrides: Record<string, unknown> = {};
+  if (params?.gerber !== undefined) {
+    if (!params.gerber || typeof params.gerber !== 'object' || Array.isArray(params.gerber)) {
+      throw new ActionError('BAD_REQUEST', 'export.fab params.gerber must be an object of gerber overrides');
+    }
+    for (const [key, value] of Object.entries(params.gerber as Record<string, unknown>)) {
+      if (!FAB_GERBER_OVERRIDE_KEYS.includes(key)) {
+        throw new ActionError(
+          'BAD_REQUEST',
+          `export.fab params.gerber has an unknown key ${JSON.stringify(key)} — `
+            + `allowed: ${FAB_GERBER_OVERRIDE_KEYS.join(', ')}`,
+          { key, allowed: FAB_GERBER_OVERRIDE_KEYS },
+        );
+      }
+      overrides[key] = value;
+    }
+    if (overrides.unit !== undefined
+      && !(typeof overrides.unit === 'string' && FAB_UNITS.includes(overrides.unit))) {
+      throw new ActionError(
+        'BAD_REQUEST',
+        `export.fab params.gerber.unit must be one of ${FAB_UNITS.join(' | ')} `
+          + `(got ${JSON.stringify(overrides.unit)})`,
+      );
+    }
+    const format = overrides.digitalFormat;
+    if (format !== undefined && !(
+      format && typeof format === 'object' && !Array.isArray(format)
+      && Number.isFinite(Number((format as Record<string, unknown>).integerNumber))
+      && Number.isFinite(Number((format as Record<string, unknown>).decimalNumber))
+    )) {
+      throw new ActionError(
+        'BAD_REQUEST',
+        'export.fab params.gerber.digitalFormat must be {integerNumber, decimalNumber} '
+          + `(got ${JSON.stringify(format)})`,
+      );
+    }
+    if (overrides.colorSilkscreen !== undefined && typeof overrides.colorSilkscreen !== 'boolean') {
+      throw new ActionError('BAD_REQUEST', 'export.fab params.gerber.colorSilkscreen must be a boolean');
+    }
+    for (const key of ['other', 'layers', 'objects']) {
+      if (overrides[key] === undefined || overrides[key] === null) continue;
+      const shape = key === 'other' ? 'an object' : 'an array';
+      if (typeof overrides[key] !== 'object' || Array.isArray(overrides[key]) !== (key !== 'other')) {
+        throw new ActionError(
+          'BAD_REQUEST', `export.fab params.gerber.${key} must be ${shape}`,
+        );
+      }
+    }
+  }
+  const gerberArgs: FabGerberArgs = { ...preset.gerber, ...(overrides as Partial<FabGerberArgs>) };
+  const bomTemplate = typeof params?.bomTemplate === 'string' && params.bomTemplate.trim()
+    ? params.bomTemplate.trim()
+    : undefined;
+
+  // --- the host surface, checked before anything is called.
+  const mfg = namespaceOf(eda, 'pcb_ManufactureData');
+  const calls = ['getGerberFile', 'getPickAndPlaceFile', 'getBomFile'] as const;
+  for (const name of calls) {
+    if (typeof readMember(mfg, name).value !== 'function') {
+      throw new ActionError(
+        'NOT_IMPLEMENTED',
+        `pcb_ManufactureData.${name} is not available on this editor build`,
+        { path: `pcb_ManufactureData.${name}` },
+      );
+    }
+  }
+
+  // --- which board: the guard is the same one the writes use, because
+  // "which PCB is in front" decides which board is exported.
+  const pcbInfo: any = await settle(requireFn(eda, 'dmt_Pcb.getCurrentPcbInfo')());
+  const focusedUuid = (await infoUuid(pcbInfo)) ?? '';
+  const requested = typeof params?.pcbUuid === 'string' ? params.pcbUuid.trim() : '';
+  if (requested && focusedUuid !== requested) {
+    throw new ActionError(
+      'PAGE_MISMATCH',
+      `the focused PCB is ${focusedUuid || '(none)'}, not ${requested} — refusing to export. `
+        + 'The manufacture APIs export the board that is in front; open it first (doc.open).',
+      { expected: requested, actual: focusedUuid || null },
+    );
+  }
+  if (!focusedUuid) {
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      'no PCB is open in the focused project — export.fab exports the focused board '
+        + '(open it with doc.open, or pass pcbUuid once it is in front)',
+      { requested: requested || null },
+    );
+  }
+  const pcbName = pcbInfo ? String(plainGet(pcbInfo, 'name') ?? plainGet(pcbInfo, 'friendlyName') ?? '') : '';
+
+  // --- the manifest's project stamp. A missing project read is recorded, not
+  // fatal: the files themselves are what the caller came for.
+  let project: { uuid: string; name: string } = { uuid: '', name: '' };
+  const notes: string[] = [];
+  try {
+    const info: any = await settle(requireFn(eda, 'dmt_Project.getCurrentProjectInfo')());
+    project = {
+      uuid: (await infoUuid(info)) ?? '',
+      name: String(plainGet(info, 'friendlyName') ?? plainGet(info, 'name') ?? ''),
+    };
+  } catch (error) {
+    notes.push(`project info unreadable: ${String((error as Error)?.message ?? error)}`);
+  }
+
+  const files: FabFilePayload[] = [];
+  const failed: Array<{ role: string; reason: string }> = [];
+  const record = async (
+    role: string, base: string, ext: string, mime: string, call: () => Promise<any>,
+  ): Promise<void> => {
+    let file: any;
+    try {
+      file = await raceHostCall(
+        settle(call()),
+        `${role} export`,
+        timeoutMs,
+        'the editor may show a stuck export progress toast — reload the document to clear it',
+      );
+    } catch (error) {
+      failed.push({
+        role,
+        reason: isActionError(error)
+          ? `${error.code}: ${error.message}`
+          : String((error as Error)?.message ?? error),
+      });
+      return;
+    }
+    if (!file) {
+      failed.push({
+        role,
+        reason: 'the editor returned no file — is the exported board the one that is open, and does it have content?',
+      });
+      return;
+    }
+    try {
+      files.push(await readFabFile(file, role, base, ext, mime));
+    } catch (error) {
+      failed.push({ role, reason: String((error as Error)?.message ?? error) });
+    }
+  };
+
+  await record('gerber', preset.gerber.fileName, '.zip', 'application/zip', () =>
+    mfg.getGerberFile.call(
+      mfg,
+      gerberArgs.fileName,
+      gerberArgs.colorSilkscreen,
+      gerberArgs.unit,
+      gerberArgs.digitalFormat,
+      gerberArgs.other,
+      gerberArgs.layers,
+      gerberArgs.objects,
+    ));
+  await record('pick_and_place', preset.pickAndPlace.fileName, `.${preset.pickAndPlace.fileType}`,
+    'text/csv', () =>
+      mfg.getPickAndPlaceFile.call(
+        mfg,
+        preset.pickAndPlace.fileName,
+        preset.pickAndPlace.fileType,
+        preset.pickAndPlace.unit,
+      ));
+  await record('bom', preset.bom.fileName, `.${preset.bom.fileType}`, 'text/csv', () =>
+    mfg.getBomFile.call(
+      mfg,
+      preset.bom.fileName,
+      preset.bom.fileType,
+      bomTemplate,
+      preset.bom.filterOptions,
+      preset.bom.statistics,
+      FAB_BOM_COLUMNS.map((column) => column.property),
+      preset.bom.columns,
+    ));
+
+  if (files.length === 0) {
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `none of the three fab files came back (${failed.map((f) => `${f.role}: ${f.reason}`).join('; ')})`,
+      { failed, pcbUuid: focusedUuid, timeoutMs },
+    );
+  }
+
+  const builtAt = new Date().toISOString();
+  const manifest = {
+    schema: 'boardwise.fab/1',
+    generatedAt: builtAt,
+    vendor,
+    vendorSummary: preset.summary,
+    project,
+    pcb: { uuid: focusedUuid, name: pcbName },
+    outDir,
+    preset: {
+      gerber: gerberArgs,
+      pickAndPlace: preset.pickAndPlace,
+      bom: {
+        ...preset.bom,
+        template: bomTemplate ?? null,
+        property: FAB_BOM_COLUMNS.map((column) => column.property),
+      },
+      overrides: Object.keys(overrides).sort(),
+    },
+    files: files.map((file) => ({
+      role: file.role, name: file.name, mime: file.mime, bytes: file.bytes,
+    })),
+    failed,
+    notes: [
+      ...notes,
+      "the vendor preset is assembled offline from the type package; whether this host accepts every BOM column name is unverified until a real export is run (012v2 §六)",
+      'the connector cannot write to outDir: no declared API takes a directory (SYS_FileSystem.saveFile has no such argument), so the caller writes these base64 payloads',
+    ],
+  };
+
+  return {
+    vendor,
+    project,
+    pcb: { uuid: focusedUuid, name: pcbName },
+    outDir,
+    generatedAt: builtAt,
+    encoding: 'base64',
+    files,
+    manifest,
+    failed,
+    partial: failed.length > 0,
+    note: 'write files[].data (base64) into outDir under files[].name, and manifest.json from manifest{} — '
+      + 'the connector cannot write a path itself; `boardwise bridge export-fab` does both.',
+  };
+};
+
+// --------------------------------------------------------------------------
+// 012 §七: `lib.recommend` — read-only part recommendations
+// --------------------------------------------------------------------------
+
+/** How many candidates reach the answer unless the caller asks for more. */
+const RECOMMEND_TOP_N = 5;
+
+/** "每层 Top5" — one page of a layer holds this many, as the task words it. */
+const RECOMMEND_PAGE_SIZE = 5;
+
+/** "分页上限 3 页" — a layer stops here even when the host keeps returning full pages. */
+const RECOMMEND_MAX_PAGES = 3;
+
+/**
+ * Per-page deadline for one library search.
+ *
+ * A search reaches the editor's own library backend, so it is the one call in
+ * this action that can *hang* rather than fail — and a hung call would hold the
+ * action slot until the daemon gave up, answering the caller with a bare
+ * `TIMEOUT` and no idea which rung stalled. 20 s per page, with up to nine
+ * pages, fits inside the daemon's `RECOMMEND_TIMEOUT` (90 s) only because a
+ * hung page is reported and the descent continues instead of retrying.
+ */
+const RECOMMEND_CALL_TIMEOUT_MS = 20_000;
+
+/** What the recommendation is *for*: the parameters the old part carried. */
+type RecommendTarget = {
+  value: string;
+  partNumber: string;
+  partCode: string;
+  footprintName: string;
+  supplierFootprint: string;
+  name: string;
+};
+
+const EMPTY_TARGET: RecommendTarget = {
+  value: '', partNumber: '', partCode: '', footprintName: '', supplierFootprint: '', name: '',
+};
+
+/** Normalise a property key so `JLCPCB Part Class` and `jlcpcb_part_class` agree. */
+function normalizedKey(key: string): string {
+  return key.replace(/[\s_-]/g, '').toLowerCase();
+}
+
+/** `Object.keys` of a possibly-exotic host object; a throwing trap means none. */
+function ownKeys(obj: any): string[] {
+  try {
+    return Object.keys(obj ?? {});
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * One string field out of a plain property map, tolerating key spelling.
+ *
+ * The library items and the component `otherProperty` maps are plain objects
+ * whose key *spelling* is not guaranteed (`JLCPCB Part Class` was measured, and
+ * a variant that writes `JLCPCBP artClass` — or `Supplier_Part` — must still be
+ * found). Keys are compared with spaces/underscores/case removed, and every
+ * read is guarded because on this host a property read may be a trap.
+ */
+function stringField(obj: any, ...names: string[]): string {
+  if (!obj || typeof obj !== 'object') return '';
+  const wanted = names.map(normalizedKey);
+  for (const key of ownKeys(obj)) {
+    if (!wanted.includes(normalizedKey(key))) continue;
+    const read = readMember(obj, key);
+    if (read.error !== undefined) continue;
+    const value = read.value;
+    if (value === undefined || value === null) continue;
+    const text = String(value).trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+/**
+ * One field of a library item: plain property first, `getState_*` second.
+ *
+ * Measured 2026-09-15: the library item objects carry their data as **plain
+ * properties** (`item.uuid`, `item.footprintName`) while the editor's own
+ * primitives use `getState_*()` accessors — the same split that made
+ * `lib.device.get` answer `{}` for a device the editor had just placed. Both
+ * shapes are therefore read, and neither is assumed.
+ */
+async function libraryField(item: any, ...names: string[]): Promise<string> {
+  const direct = stringField(item, ...names);
+  if (direct) return direct;
+  for (const name of names) {
+    const value = await getState(item, name);
+    if (value === undefined || value === null) continue;
+    const text = String(value).trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+/**
+ * JLCPCB's part class as a sort key: **Basic first**.
+ *
+ * The class decides whether SMT assembly charges an extended-part fee, which is
+ * the whole reason 012v2 §七 asks for it in the output. `Preferred Extended` is
+ * checked before `Extended` because the longer string contains the shorter one.
+ */
+function partClassRank(partClass: string): number {
+  const text = partClass.toLowerCase();
+  if (!text) return 3;
+  if (text.includes('basic')) return 0;
+  if (text.includes('preferred')) return 1;
+  if (text.includes('extended')) return 2;
+  return 3;
+}
+
+/** Does a candidate's package match what the old part used? */
+function footprintMatches(
+  footprintName: string, supplierFootprint: string, target: RecommendTarget,
+): boolean {
+  const wanted = [target.footprintName, target.supplierFootprint]
+    .map((s) => s.toLowerCase()).filter(Boolean);
+  if (!wanted.length) return false;
+  return [footprintName, supplierFootprint]
+    .map((s) => s.toLowerCase()).filter(Boolean)
+    .some((have) => wanted.includes(have));
+}
+
+/** One search hit, reduced to the fields a chooser needs. */
+async function recommendCandidate(
+  item: any, layer: string, layerIndex: number, target: RecommendTarget,
+): Promise<Record<string, unknown>> {
+  const props = readMember(item, 'otherProperty').value;
+  const footprint = readMember(item, 'footprint').value;
+  const symbol = readMember(item, 'symbol').value;
+  const footprintName = await libraryField(item, 'footprintName')
+    || await libraryField(footprint, 'name');
+  const supplierFootprint = stringField(props, 'Supplier Footprint');
+  const partClass = stringField(props, 'JLCPCB Part Class', 'Part Class', 'LCSC Part Class');
+  return {
+    name: await libraryField(item, 'name'),
+    // The LCSC code has lived under `Supplier Part` in every map measured so
+    // far; `supplierId` is the search item's own spelling of the same fact.
+    lcsc: stringField(props, 'Supplier Part', 'LCSC Part', 'partCode')
+      || await libraryField(item, 'supplierId'),
+    mpn: stringField(props, 'Manufacturer Part', 'ManufacturerPart', 'partNumber'),
+    manufacturer: stringField(props, 'Manufacturer'),
+    footprintName,
+    supplierFootprint,
+    partClass: partClass || 'unknown',
+    partClassRank: partClassRank(partClass),
+    datasheet: stringField(props, 'Datasheet', 'Datasheet URL'),
+    description: await libraryField(item, 'description'),
+    deviceUuid: await libraryField(item, 'uuid'),
+    libraryUuid: await libraryField(item, 'libraryUuid'),
+    symbolUuid: await libraryField(symbol, 'uuid') || await libraryField(item, 'symbolUuid'),
+    footprintUuid: await libraryField(footprint, 'uuid') || await libraryField(item, 'footprintUuid'),
+    layer,
+    layerIndex,
+    footprintMatches: footprintMatches(footprintName, supplierFootprint, target),
+  };
+}
+
+/** Ranking: Basic first, then the package that fits, then the earlier layer. */
+function compareCandidates(a: Record<string, unknown>, b: Record<string, unknown>): number {
+  const byClass = Number(a.partClassRank) - Number(b.partClassRank);
+  if (byClass !== 0) return byClass;
+  const byFootprint = Number(b.footprintMatches) - Number(a.footprintMatches);
+  if (byFootprint !== 0) return byFootprint;
+  const byLayer = Number(a.layerIndex) - Number(b.layerIndex);
+  if (byLayer !== 0) return byLayer;
+  return String(a.name).localeCompare(String(b.name));
+}
+
+/** One layer of the ladder, and what it was handed. */
+type RecommendLayer = {
+  layer: string;
+  api: 'searchByProperties' | 'search';
+  args: Record<string, unknown>;
+  /** Absent when the layer cannot run; `why` says which reason applies. */
+  call: ((page: number) => Promise<any>) | null;
+  why: string;
+};
+
+/**
+ * Run one layer: page 1..`RECOMMEND_MAX_PAGES`, stopping on a short page.
+ *
+ * A short page means the host has nothing more for this query, so asking again
+ * is a wasted round trip; `topN` is the other stop — once the pool can fill the
+ * answer, more pages only add candidates nobody will see.
+ */
+async function runRecommendLayer(
+  layer: RecommendLayer, topN: number, timeoutMs: number,
+): Promise<{ items: any[]; pagesFetched: number; error: string }> {
+  const items: any[] = [];
+  let pagesFetched = 0;
+  for (let page = 1; page <= RECOMMEND_MAX_PAGES; page += 1) {
+    let found: any;
+    try {
+      found = await raceHostCall(
+        settle(layer.call!(page)),
+        `${layer.api} page ${page}`,
+        timeoutMs,
+        'the library search is not answering',
+      );
+    } catch (error) {
+      return {
+        items,
+        pagesFetched,
+        error: isActionError(error)
+          ? `${error.code}: ${error.message}`
+          : `${layer.api} page ${page} threw: ${String((error as Error)?.message ?? error)}`,
+      };
+    }
+    pagesFetched += 1;
+    const list = Array.isArray(found) ? found : [];
+    items.push(...list);
+    if (!Array.isArray(found)) {
+      return {
+        items,
+        pagesFetched,
+        error: `${layer.api} returned ${typeof found}, not an array`,
+      };
+    }
+    if (list.length < RECOMMEND_PAGE_SIZE) break;
+    if (items.length >= topN) break;
+  }
+  return { items, pagesFetched, error: '' };
+}
+
+/**
+ * The placed component a `ref` names, with the parameters it carries.
+ *
+ * Read-only, and **focus-guarded**: `sch_PrimitiveComponent.getAll()` is the
+ * focused page's list, so resolving "U1" against a page the caller did not mean
+ * would answer with a different board's part. There is no cross-page lookup to
+ * use instead, which is why the guard is the honest option rather than a
+ * convenience.
+ */
+async function componentByRef(
+  eda: Eda, ref: string,
+): Promise<{ component: Record<string, string> | null; designators: string[] }> {
+  const ns = namespaceOf(eda, 'sch_PrimitiveComponent');
+  const getAll = readMember(ns, 'getAll').value;
+  if (typeof getAll !== 'function') {
+    throw new ActionError(
+      'NOT_IMPLEMENTED',
+      'sch_PrimitiveComponent.getAll is not available — a designator cannot be resolved to a part',
+      { path: 'sch_PrimitiveComponent.getAll' },
+    );
+  }
+  const items: any[] = (await settle(getAll.call(ns))) ?? [];
+  const wanted = ref.trim().toLowerCase();
+  const designators: string[] = [];
+  let component: Record<string, string> | null = null;
+  for (const item of items) {
+    const propsState = await getState(item, 'OtherProperty');
+    const props = propsState && typeof propsState === 'object'
+      ? propsState
+      : readMember(item, 'otherProperty').value;
+    const fromState = await getState(item, 'Designator');
+    const designator = (fromState == null ? '' : String(fromState).trim())
+      || stringField(props, 'Designator')
+      || stringField(item, 'Designator', 'designator');
+    if (designator) designators.push(designator);
+    if (!designator || designator.toLowerCase() !== wanted || component) continue;
+    const primitiveId = await getState(item, 'PrimitiveId');
+    component = {
+      primitiveId: primitiveId == null ? '' : String(primitiveId),
+      designator,
+      name: stringField(props, 'Name'),
+      value: stringField(props, 'Value'),
+      partNumber: stringField(props, 'Manufacturer Part', 'ManufacturerPart'),
+      partCode: stringField(props, 'Supplier Part', 'LCSC Part'),
+      footprintName: stringField(props, 'FootprintName'),
+      supplierFootprint: stringField(props, 'Supplier Footprint'),
+    };
+  }
+  return { component, designators };
+}
+
+/**
+ * `lib.recommend` — read-only candidates for a part, and never a placement.
+ *
+ * Two entry points, exactly one of which must be given: `query` (a bare string
+ * — an MPN, a value, or an LCSC code) or `{pageUuid, ref}` (a placed part, whose
+ * own parameters are read off the page first).
+ *
+ * The ladder is the task's, and each rung reports its own hit count:
+ *
+ * 1. `exact` — `searchByProperties({partNumber, partCode})`: the two fields the
+ *    type package documents as the precise routes (MPN and LCSC code);
+ * 2. `properties` — `searchByProperties({value, footprintName})`: the same part
+ *    described the way a schematic holds it;
+ * 3. `keyword` — `search(text)`: the broadest, and the only rung that exists on
+ *    an editor older than the `searchByProperties` declaration (which is marked
+ *    **ADD since EDA v4**).
+ *
+ * The ladder **descends**: a rung that hits ends the search, and the rungs below
+ * it are reported as not called rather than silently missing. `allLayers: true`
+ * runs every rung and merges the pool, for a caller who wants the widest choice
+ * rather than the most precise one.
+ *
+ * `searchByProperties` missing is a *degradation*, not an error — the keyword
+ * rung still answers and the response says which rungs were unavailable. Only
+ * `lib_Device` itself missing, or every rung failing, is structural.
+ *
+ * **Read-only, stated as an output field**: nothing here places, edits or drops
+ * a part. Placement stays a decision the oracle makes, then executed through
+ * `sch.place_component` / `sch.set_component_attribute`.
+ */
+export const libRecommend: ActionHandler = async (params, eda) => {
+  const query = typeof params?.query === 'string' ? params.query.trim() : '';
+  const ref = typeof params?.ref === 'string' ? params.ref.trim() : '';
+  if (query && ref) {
+    throw new ActionError('BAD_REQUEST', 'lib.recommend takes either query or {pageUuid, ref} — not both');
+  }
+  if (!query && !ref) {
+    throw new ActionError('BAD_REQUEST', 'lib.recommend needs query, or {pageUuid, ref}');
+  }
+  const topN = Number.isFinite(Number(params?.topN))
+    ? Math.min(Math.max(Math.trunc(Number(params.topN)), 1), 20)
+    : RECOMMEND_TOP_N;
+  const allLayers = params?.allLayers === true;
+  const callTimeoutMs = Number.isFinite(Number(params?.timeoutMs))
+    ? Math.min(Math.max(Number(params.timeoutMs), 200), 120_000)
+    : RECOMMEND_CALL_TIMEOUT_MS;
+
+  const target: RecommendTarget = { ...EMPTY_TARGET };
+  let pageUuid = '';
+  let component: Record<string, string> | null = null;
+  if (ref) {
+    pageUuid = typeof params?.pageUuid === 'string' ? params.pageUuid.trim() : '';
+    if (!pageUuid) {
+      throw new ActionError(
+        'BAD_REQUEST',
+        'lib.recommend with ref needs pageUuid: the ref is resolved on the focused page, '
+          + 'and the page uuid is what proves it is the page the caller meant',
+      );
+    }
+    await guardPage(eda, pageUuid);
+    const found = await componentByRef(eda, ref);
+    if (!found.component) {
+      throw new ActionError(
+        'NOT_FOUND',
+        `no component with designator ${JSON.stringify(ref)} on the focused page `
+          + `(${found.designators.length} component(s): ${found.designators.slice(0, 20).join(', ') || 'none'})`,
+        { ref, designators: found.designators.slice(0, 50) },
+      );
+    }
+    component = found.component;
+    target.value = component.value;
+    target.partNumber = component.partNumber;
+    target.partCode = component.partCode;
+    target.footprintName = component.footprintName;
+    target.supplierFootprint = component.supplierFootprint;
+    target.name = component.name;
+  } else {
+    // A bare query is used verbatim on every rung: the same string is the MPN
+    // and the value for a real part number like "SS34", and a caller who knows
+    // which field their string is can use the ref path instead. An LCSC code
+    // (`C` + digits) is *not* a value, so it only takes the partCode rung.
+    const looksLikeLcsc = /^c\d{2,}$/i.test(query);
+    target.value = looksLikeLcsc ? '' : query;
+    target.partNumber = looksLikeLcsc ? '' : query;
+    target.partCode = looksLikeLcsc ? query.toUpperCase() : '';
+  }
+
+  const nsRead = readMember(eda, 'lib_Device');
+  const ns = nsRead.value;
+  if (nsRead.error !== undefined || !ns || typeof ns !== 'object') {
+    throw new ActionError(
+      'NOT_IMPLEMENTED',
+      `lib_Device is not available in this editor version (${nsRead.error ?? 'absent'})`,
+      { path: 'lib_Device' },
+    );
+  }
+  const searchByProperties = readMember(ns, 'searchByProperties').value;
+  const search = readMember(ns, 'search').value;
+  const hasProperties = typeof searchByProperties === 'function';
+  const hasSearch = typeof search === 'function';
+  if (!hasProperties && !hasSearch) {
+    throw new ActionError(
+      'NOT_IMPLEMENTED',
+      'neither lib_Device.searchByProperties nor lib_Device.search is available — nothing can be searched',
+      { path: 'lib_Device.search' },
+    );
+  }
+
+  const callProperties = (properties: Record<string, unknown>) =>
+    (page: number) =>
+      searchByProperties.call(ns, properties, undefined, undefined, undefined, RECOMMEND_PAGE_SIZE, page);
+  const callSearch = (keyword: string) =>
+    (page: number) =>
+      search.call(ns, keyword, undefined, undefined, undefined, RECOMMEND_PAGE_SIZE, page);
+
+  const exact: Record<string, unknown> = {};
+  if (target.partNumber) exact.partNumber = target.partNumber;
+  if (target.partCode) exact.partCode = target.partCode;
+  const described: Record<string, unknown> = {};
+  if (target.value) described.value = target.value;
+  if (target.footprintName) described.footprintName = target.footprintName;
+  const keyword = query || target.value || target.partNumber || target.name;
+
+  const layers: RecommendLayer[] = [
+    {
+      layer: 'exact',
+      api: 'searchByProperties',
+      args: exact,
+      call: hasProperties && Object.keys(exact).length ? callProperties(exact) : null,
+      why: !hasProperties
+        ? 'lib_Device.searchByProperties is not available on this editor build (the type package marks it "ADD since EDA v4")'
+        : 'no partNumber (MPN) or partCode (LCSC code) is known for this part',
+    },
+    {
+      layer: 'properties',
+      api: 'searchByProperties',
+      args: described,
+      call: hasProperties && Object.keys(described).length ? callProperties(described) : null,
+      why: !hasProperties
+        ? 'lib_Device.searchByProperties is not available on this editor build'
+        : 'neither a value nor a footprint name is known for this part',
+    },
+    {
+      layer: 'keyword',
+      api: 'search',
+      args: { keyword },
+      call: hasSearch && keyword ? callSearch(keyword) : null,
+      why: hasSearch
+        ? 'there is no text to search for'
+        : 'lib_Device.search is not available on this editor build',
+    },
+  ];
+
+  const report: Array<Record<string, unknown>> = [];
+  const collected: Array<Record<string, unknown>> = [];
+  const errors: string[] = [];
+  // Rungs that could not run at all, told apart from rungs an earlier hit made
+  // unnecessary: the first is something the caller has to know about the host,
+  // the second is the ladder working as designed.
+  const unavailable: string[] = [];
+  let succeeded = 0;
+  for (let index = 0; index < layers.length; index += 1) {
+    const layer = layers[index];
+    if (!layer.call) {
+      unavailable.push(`${layer.layer}: ${layer.why}`);
+      report.push({
+        layer: layer.layer, api: layer.api, called: false, args: layer.args,
+        hitCount: 0, reason: layer.why,
+      });
+      continue;
+    }
+    if (collected.length && !allLayers) {
+      report.push({
+        layer: layer.layer, api: layer.api, called: false, args: layer.args,
+        hitCount: 0,
+        reason: 'an earlier rung matched — pass allLayers: true to run every rung',
+      });
+      continue;
+    }
+    const outcome = await runRecommendLayer(layer, topN, callTimeoutMs);
+    if (outcome.error) errors.push(outcome.error);
+    else succeeded += 1;
+    report.push({
+      layer: layer.layer,
+      api: layer.api,
+      called: true,
+      args: layer.args,
+      hitCount: outcome.items.length,
+      pagesFetched: outcome.pagesFetched,
+      ...(outcome.error ? { error: outcome.error } : {}),
+    });
+    for (const item of outcome.items) {
+      collected.push(await recommendCandidate(item, layer.layer, index, target));
+    }
+  }
+
+  if (succeeded === 0) {
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `every search rung failed: ${errors.join('; ') || 'no rung could run'}`,
+      { errors, layers: report },
+    );
+  }
+
+  // One device can come back from more than one rung; the first rung to offer
+  // it keeps it, so `layer` stays the strongest evidence of why it is here.
+  const unique = new Map<string, Record<string, unknown>>();
+  for (const candidate of collected) {
+    const key = `${String(candidate.deviceUuid)}|${String(candidate.libraryUuid)}`;
+    if (unique.has(key)) continue;
+    unique.set(key, candidate);
+  }
+  const ranked = [...unique.values()].sort(compareCandidates);
+  const shown = ranked.slice(0, topN);
+  const notes: string[] = [];
+  if (!shown.length) {
+    notes.push(
+      'no library match — try the LCSC code directly (lib.device.get / getByLcscIds), '
+        + 'or a plainer query',
+    );
+  }
+  notes.push(
+    ...errors.map((error) => `a search rung failed: ${error}`),
+    ...unavailable,
+  );
+
+  return {
+    source: ref ? 'ref' : 'query',
+    query: query || null,
+    pageUuid: pageUuid || null,
+    ref: ref || null,
+    component,
+    target,
+    topN,
+    layers: report,
+    returned: ranked.length,
+    shown: shown.length,
+    candidates: shown,
+    // The type package's search item carries no stock or price field, so the
+    // recommendation cannot answer either — said with a fixed label rather
+    // than left for the caller to notice the absence.
+    'stock/price': '以商城实时为准',
+    readOnly: true,
+    placed: false,
+    note: 'read-only: nothing was placed or modified. Put a candidate on the page with '
+      + 'sch.place_component (deviceUuid + libraryUuid), or write the chosen LCSC code / MPN '
+      + 'onto the part already on the page with sch.set_component_attribute.',
+    ...(notes.length ? { notes } : {}),
+  };
+};
+
+// --------------------------------------------------------------------------
+// 012 §八: review.mark — draw a review pass back onto the page
+// --------------------------------------------------------------------------
+
+/** Half-width of a review marker, in canvas units — same size as `canvas.highlight`. */
+const REVIEW_MARK_SIZE = 60;
+
+/** Margin added to the focus box, so the part is not flush against the viewport edge. */
+const REVIEW_MARK_PAD = 20;
+
+/** One finding as the caller normalised it — what a mark needs, and nothing else. */
+type ReviewMark = {
+  /** 1-based position in `marks`, which is the order the caller sent (see `focus`). */
+  position: number;
+  ref: string;
+  ruleId: string;
+  severity: string;
+  /** The one-line summary, as the rule wrote it. */
+  text: string;
+};
+
+/** Trim anything that arrives as a string-ish field; never invent a value. */
+function markTextField(value: unknown): string {
+  if (typeof value === 'string') return value.trim();
+  if (value == null) return '';
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return '';
+}
+
+function reviewMarks(raw: unknown[]): ReviewMark[] {
+  return raw.map((entry, index) => {
+    const item = (entry && typeof entry === 'object' ? entry : {}) as Record<string, unknown>;
+    return {
+      position: index + 1,
+      ref: markTextField(item.ref),
+      ruleId: markTextField(item.ruleId),
+      severity: markTextField(item.severity).toUpperCase(),
+      text: markTextField(item.text),
+    };
+  });
+}
+
+type ComponentPosition = { primitiveId: string; designator: string; x: number; y: number };
+
+/**
+ * Where each component sits on the focused page, keyed by upper-cased designator.
+ *
+ * The position comes from `sch.geometry`'s own dump (`getState_X/Y`), not from a
+ * fresh `locate()` lookup per ref: the caller is marking a whole review pass, and
+ * the marker API takes *shapes*, so every position is needed anyway. A component
+ * without a designator or without numeric coordinates is counted in
+ * `withoutPosition` rather than dropped in silence.
+ *
+ * A page that cannot be read at all is **structural**: with no components there
+ * is no position for any ref, so the action fails by name instead of returning a
+ * jump list that is empty for a reason nobody can see.
+ */
+async function componentPositions(eda: Eda): Promise<{
+  positions: Map<string, ComponentPosition>;
+  components: number;
+  withoutPosition: number;
+}> {
+  const page = await geometryOf(eda, 'sch_PrimitiveComponent');
+  if (!page.available) {
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `the schematic page's components could not be read (${page.reason ?? 'unknown reason'}) — `
+        + 'no ref can be resolved to a position',
+      { reason: page.reason ?? null },
+    );
+  }
+  const positions = new Map<string, ComponentPosition>();
+  let withoutPosition = 0;
+  for (const entry of page.items as Array<{ primitiveId?: unknown; state?: unknown }>) {
+    const state = (entry.state && typeof entry.state === 'object' ? entry.state : {}) as Record<string, unknown>;
+    const other = state.OtherProperty && typeof state.OtherProperty === 'object'
+      ? (state.OtherProperty as Record<string, unknown>)
+      : {};
+    const designator = markTextField(state.Designator) || markTextField(other.Designator);
+    const x = Number(state.X);
+    const y = Number(state.Y);
+    if (!designator || !Number.isFinite(x) || !Number.isFinite(y)) {
+      withoutPosition += 1;
+      continue;
+    }
+    // A sheet symbol has no designator, so a duplicate key here would be two
+    // primitives sharing one — first one wins and the count above still adds up.
+    const key = designator.toUpperCase();
+    if (!positions.has(key)) {
+      positions.set(key, {
+        primitiveId: entry.primitiveId == null ? '' : String(entry.primitiveId),
+        designator,
+        x,
+        y,
+      });
+    } else {
+      withoutPosition += 1;
+    }
+  }
+  return { positions, components: (page.items as unknown[]).length, withoutPosition };
+}
+
+/**
+ * `review.mark` — take a `boardwise review` pass and put it on the canvas.
+ *
+ * The task's shape: findings in (each carrying a ref), markers out. The
+ * official API (`dmt_EditorControl.generateIndicatorMarkers`) takes *shapes*,
+ * not ids and not text, so a ref is resolved to a coordinate first and the
+ * marker is a rectangle around it. **The text the task asks for — rule id,
+ * severity, one line — cannot be drawn by this API.** It travels in the result
+ * instead: `marked[k]` is marker `k` (1-based, in the order drawn), so the
+ * caller's table *is* the legend, and the numbers on screen mean something.
+ *
+ * Three honest degradations, none of which lose the finding list:
+ *
+ * 1. `markers: false` — the caller asked for the jump list (ref + coordinates)
+ *    only; nothing is drawn.
+ * 2. `generateIndicatorMarkers` absent, or the canvas refuses it (returns
+ *    `false` for an unsupported canvas / unknown tab) — the answer becomes
+ *    `mode: 'list'` with the reason. A missing marker API must not cost the
+ *    caller the coordinates it can still use.
+ * 3. A ref that is not on the page, or has no position, is reported per mark in
+ *    `unresolved` — the rest are still drawn.
+ *
+ * Refusals, by contrast, are structural and thrown: a `pageUuid` that is not the
+ * focused page (`PAGE_MISMATCH`), a focused document that is not a schematic
+ * page, a page whose components cannot be read, `focus` outside `marks`, and no
+ * `marks` at all. `clear: true` calls `removeIndicatorMarkers` and needs the API
+ * to exist — there is no jump-list fallback for "remove the overlays".
+ *
+ * Read-only in the strict sense the catalogue uses: markers are an overlay, no
+ * primitive is created, moved or modified.
+ */
+export const reviewMark: ActionHandler = async (params, eda) => {
+  const control = namespaceOf(eda, 'dmt_EditorControl');
+
+  if (params?.clear === true) {
+    const remove = control.removeIndicatorMarkers;
+    if (typeof remove !== 'function') {
+      throw new ActionError(
+        'NOT_IMPLEMENTED',
+        'dmt_EditorControl.removeIndicatorMarkers() is not available — the markers cannot be cleared',
+        { path: 'dmt_EditorControl.removeIndicatorMarkers' },
+      );
+    }
+    const ok = await settle(remove.call(control));
+    return {
+      mode: 'markers' as const,
+      cleared: Boolean(ok),
+      count: 0,
+      marked: [],
+      unresolved: [],
+      readOnly: true,
+      note: ok
+        ? 'every indicator marker on the focused canvas was removed'
+        : 'the canvas refused the removal — an unsupported canvas or an unknown tab',
+    };
+  }
+
+  const raw = Array.isArray(params?.marks) ? (params.marks as unknown[]) : [];
+  if (raw.length === 0) {
+    throw new ActionError(
+      'BAD_REQUEST',
+      'review.mark needs params.marks (one entry per finding), or {clear: true} to remove the markers',
+    );
+  }
+  const marks = reviewMarks(raw);
+
+  const focus = params?.focus == null ? null : Number(params.focus);
+  if (focus !== null && (!Number.isInteger(focus) || focus < 1 || focus > marks.length)) {
+    throw new ActionError(
+      'BAD_REQUEST',
+      `params.focus is a 1-based position in marks (1..${marks.length}), got ${JSON.stringify(params?.focus)}`,
+      { focus: params?.focus ?? null, count: marks.length },
+    );
+  }
+
+  // The guard first: a uuid that does not match the focused page refuses before
+  // any position is read, so a wrong tab cannot produce markers.
+  await guardPage(eda, params?.pageUuid);
+
+  const problems: string[] = [];
+  const active = await activeDocument(eda, problems);
+  if (active && active.type !== 'page' && active.type !== 'schematic') {
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `the focused document is a ${active.type}, not a schematic page — markers would land on the `
+        + 'wrong canvas. Focus the schematic page the findings are about.',
+      { active },
+    );
+  }
+
+  const page = await componentPositions(eda);
+  const marked: Array<Record<string, unknown>> = [];
+  const unresolved: Array<Record<string, unknown>> = [];
+  for (const mark of marks) {
+    const label = {
+      position: mark.position,
+      ref: mark.ref,
+      ruleId: mark.ruleId,
+      severity: mark.severity,
+      text: mark.text,
+    };
+    if (!mark.ref) {
+      unresolved.push({ ...label, reason: 'the finding names no ref — there is nothing to point at' });
+      continue;
+    }
+    const hit = page.positions.get(mark.ref.toUpperCase());
+    if (!hit) {
+      unresolved.push({
+        ...label,
+        reason: `no component with this designator on the focused page (${page.positions.size} `
+          + `designator(s) in ${page.components} component(s))`,
+      });
+      continue;
+    }
+    marked.push({
+      ...label,
+      marker: marked.length + 1,
+      primitiveId: hit.primitiveId,
+      designator: hit.designator,
+      x: hit.x,
+      y: hit.y,
+    });
+  }
+
+  const boxes = marked.map((entry) => {
+    const x = entry.x as number;
+    const y = entry.y as number;
+    return {
+      type: 'rectangle',
+      left: x - REVIEW_MARK_SIZE,
+      right: x + REVIEW_MARK_SIZE,
+      top: y + REVIEW_MARK_SIZE,
+      bottom: y - REVIEW_MARK_SIZE,
+    };
+  });
+
+  // One call for the whole pass: the colour and the line width belong to the
+  // call, not to a marker, so severities cannot be coloured differently without
+  // splitting the pass into one call per severity — a decision the oracle has
+  // not made, so it is not taken here.
+  const wantMarkers = params?.markers !== false;
+  const generate = control.generateIndicatorMarkers;
+  let mode: 'markers' | 'list' = 'markers';
+  let attempted = 0;
+  let accepted = 0;
+  let markerReason = '';
+  if (!wantMarkers) {
+    mode = 'list';
+    markerReason = 'markers: false — the jump list was asked for, so nothing was drawn';
+  } else if (boxes.length === 0) {
+    markerReason = 'no ref resolved to a position on this page, so there was nothing to draw';
+  } else if (typeof generate !== 'function') {
+    mode = 'list';
+    markerReason = 'dmt_EditorControl.generateIndicatorMarkers() is not available on this editor — '
+      + 'degraded to the jump list (ref + coordinates); nothing was drawn';
+  } else {
+    attempted = boxes.length;
+    const color = parseColor(params?.color) ?? DEFAULT_MARKER_COLOR;
+    // `focus` wins the zoom: zooming to all markers and then to one of them
+    // would make which rectangle is in view depend on call ordering.
+    const zoom = params?.zoom === true && focus === null;
+    const ok = await settle(generate.call(control, boxes, color, 2, zoom));
+    if (ok) {
+      accepted = boxes.length;
+    } else {
+      mode = 'list';
+      markerReason = 'the canvas refused the markers (unsupported canvas or unknown tab) — '
+        + 'degraded to the jump list';
+    }
+  }
+
+  let focused: Record<string, unknown> | null = null;
+  if (focus !== null) {
+    const target = marks[focus - 1];
+    const base = {
+      position: target.position,
+      ref: target.ref,
+      ruleId: target.ruleId,
+      severity: target.severity,
+    };
+    const landed = marked.find((entry) => entry.position === target.position);
+    const zoomToRegion = control.zoomToRegion;
+    if (!landed) {
+      focused = { ...base, zoomed: false, reason: 'this finding has no position on this page, so there is nothing to zoom to' };
+    } else if (typeof zoomToRegion !== 'function') {
+      focused = { ...base, zoomed: false, reason: 'dmt_EditorControl.zoomToRegion() is not available on this editor' };
+    } else {
+      const x = landed.x as number;
+      const y = landed.y as number;
+      const pad = REVIEW_MARK_SIZE + REVIEW_MARK_PAD;
+      try {
+        const ok = await settle(zoomToRegion.call(control, x - pad, x + pad, y + pad, y - pad));
+        focused = {
+          ...base, x, y, zoomed: Boolean(ok),
+          ...(ok ? {} : { reason: 'the canvas refused the zoom (unsupported canvas or unknown tab)' }),
+        };
+      } catch (error) {
+        focused = { ...base, x, y, zoomed: false, reason: `zoomToRegion threw: ${String((error as Error)?.message ?? error)}` };
+      }
+    }
+  }
+
+  const notes: string[] = [];
+  if (page.withoutPosition) {
+    notes.push(`${page.withoutPosition} primitive(s) on the page carry no designator or no numeric position and cannot be pointed at`);
+  }
+  if (active === null) {
+    notes.push('the editor reported no active document — the markers land on whichever canvas was focused last'
+      + (problems.length ? ` (${problems[0]})` : ''));
+  }
+  if (!params?.pageUuid) {
+    notes.push('no pageUuid was given, so the page was not verified against a uuid; pass one to make a wrong tab a refusal');
+  }
+  if (unresolved.length) {
+    notes.push(`${unresolved.length} finding(s) could not be pointed at on this page and were not drawn`);
+  }
+  if (problems.length) {
+    notes.push(...problems.map((problem) => `a read failed: ${problem}`));
+  }
+
+  return {
+    mode,
+    cleared: false,
+    page: {
+      components: page.components,
+      designators: page.positions.size,
+      withoutPosition: page.withoutPosition,
+      active: active ? { uuid: active.uuid, type: active.type, source: active.source } : null,
+    },
+    count: marks.length,
+    marked,
+    unresolved,
+    markers: { attempted, accepted, ...(markerReason ? { reason: markerReason } : {}) },
+    ...(focused ? { focused } : {}),
+    readOnly: true,
+    note: 'markers are geometric: generateIndicatorMarkers takes shapes, not text. marked[k-1] is '
+      + 'marker k (1-based, in the order drawn) — `position` is the caller\'s own finding order, and '
+      + '`marker` is the drawn order. The API has no per-marker text, so the rule id, the severity '
+      + 'and the one-line summary travel in this table.',
+    ...(notes.length ? { notes } : {}),
+  };
+};
+
 export function buildHandlers(eda: Eda): Record<string, BoundHandler> {
   const bind =
     (handler: ActionHandler): BoundHandler =>
@@ -3063,5 +4997,14 @@ export function buildHandlers(eda: Eda): Record<string, BoundHandler> {
     'sch.place_text': bind(schPlaceText),
     'sch.place_power': bind(schPlacePower),
     'sch.place_netport': bind(schPlaceNetport),
+    'sch.delete_primitives': bind(schDeletePrimitives),
+    'pcb.delete_primitives': bind(pcbDeletePrimitives),
+    'sch.modify_primitive': bind(schModifyPrimitive),
+    'pcb.modify_primitive': bind(pcbModifyPrimitive),
+    'doc.focus': bind(docFocus),
+    'doc.delete_page': bind(docDeletePage),
+    'export.fab': bind(exportFab),
+    'lib.recommend': bind(libRecommend),
+    'review.mark': bind(reviewMark),
   };
 }

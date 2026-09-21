@@ -1,0 +1,11 @@
+$ bridge call --action doc.delete_page --params '{"pageUuid":"ed61d97da8f7dbf1"}'
+[13:14:20] rc=0  0.3s
+--- stdout ---
+{
+  "deleted": true,
+  "pageUuid": "ed61d97da8f7dbf1",
+  "name": "P5"
+}
+
+--- stderr ---
+

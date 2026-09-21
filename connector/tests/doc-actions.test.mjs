@@ -251,6 +251,71 @@ test('doc.list reports no active document without inventing one', async (t) => {
   assert.ok(frame.data.documents.every((row) => row.active === false));
 });
 
+test('doc.list treats the host\'s uuid "0" as no active document', async (t) => {
+  // Measured 2026-09-21: with two editor windows open and neither of them
+  // focused, `getCurrentDocumentInfo` still answers — with `uuid: "0"`, a uuid
+  // no document has. Taken at face value that is worse than no answer, because
+  // `active` is what a caller uses to decide where it is working. The reading
+  // itself is kept, in `notes`, so "nothing is focused" and "the host said 0"
+  // stay distinguishable.
+  const h = project({ active: '0' });
+  await ready(t, h);
+
+  const frame = await call(h, 'doc.list');
+  assert.equal(frame.data.active, null);
+  assert.ok(frame.data.documents.every((row) => row.active === false));
+  assert.equal(frame.data.count, 4, 'the placeholder must not hide the documents');
+  assert.ok(
+    (frame.data.notes ?? []).some((note) => note.includes('uuid "0"')),
+    `the raw reading must stay diagnosable: ${frame.data.notes}`,
+  );
+});
+
+test('a real active uuid is untouched by the placeholder rule', async (t) => {
+  const h = project({ active: 'sch-1' });
+  await ready(t, h);
+
+  const frame = await call(h, 'doc.list');
+  assert.equal(frame.data.active.uuid, 'sch-1');
+  assert.equal(frame.data.active.source, 'dmt_SelectControl.getCurrentDocumentInfo');
+  assert.equal(frame.data.documents.find((row) => row.uuid === 'sch-1').active, true);
+});
+
+test('the placeholder arriving through a fallback reader is normalised too', async (t) => {
+  // The direct getter is one of three reads for the same fact. The guard sits
+  // in the shared function precisely so a placeholder cannot slip through the
+  // per-kind getters instead — the "declared API vs the host's answer"
+  // difference this project keeps paying for.
+  const h = project({ active: '0' });
+  h.dmt_SelectControl = undefined;                      // the direct read is gone
+  h.__state.pages.push({ uuid: '0', name: 'placeholder' });
+  await ready(t, h);
+
+  const frame = await call(h, 'doc.list');
+  assert.equal(frame.data.active, null);
+  assert.ok(
+    (frame.data.notes ?? []).some((note) =>
+      note.includes('dmt_Schematic.getCurrentSchematicPageInfo') && note.includes('uuid "0"'),
+    ),
+    `the fallback reading must be named: ${frame.data.notes}`,
+  );
+});
+
+test('document.current calls the same placeholder "no active document"', async (t) => {
+  // Both actions read the focused document through one function, so a
+  // normalisation applied to only one of them would put them back in
+  // disagreement — the failure mode `activeDocument` exists to prevent.
+  const h = project({ active: '0' });
+  await ready(t, h);
+
+  const frame = await call(h, 'document.current');
+  assert.equal(frame.data.active, null);
+  assert.equal(frame.data.type, null);
+  assert.equal(frame.data.typeSource, 'none');
+  assert.equal(frame.data.heuristic, false);
+  assert.ok((frame.data.problems ?? []).some((problem) => problem.includes('uuid "0"')));
+});
+
 // --------------------------------------------------------------------------
 // doc.open
 // --------------------------------------------------------------------------

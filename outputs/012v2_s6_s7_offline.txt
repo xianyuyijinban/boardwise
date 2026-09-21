@@ -1,0 +1,181 @@
+012v2 第二批 · §六 export.fab + §七 lib.recommend —— 离线实现记录
+执行：DeepSeek（子代理），2026-09-21
+前提：编辑器扩展与 daemon 断连 ⇒ 本批**真机零操作**（未起 daemon、未调 bridge、未碰任何立创工程）；
+      交付物为「实现 + mock 测试 + 参数/契约记录」，真机项全部列在文末。
+
+================================================================================
+一、改动文件（sha256 / bytes，改动后实测）
+================================================================================
+7e12ef7600c6cba18129b80ae26348f1efa7f56e7f470f8f5f01a4c36521de0e   181261  connector/src/actions.ts
+8fcf0d68c67959d9e85513b3e22c2a7b58b335b1534ed311346dcc2ec1842dec    36770  connector/tests/actions012b.test.mjs   （新增）
+8c6be57887326683c6977b6bc8d45b7de9c38f2843d043be191967eed0bf1656    41256  src/boardwise/bridge/protocol.py
+ee55a4327a6dbf8afb91ed0b6fba6e427c6944f5ae3598edf5550f7eee3c5610   112236  src/boardwise/cli.py
+45122096e3927587ae7701c0edddacad48ff293591fdc2d2a683af170edbf0f5     9101  tests/test_fab_export.py               （新增）
+4bce068b7b5808c7084bd228ff193cb360d4f2235d38a93edc7c149f2a1593c0   102836  docs/bridge.md
+b24012c1d3b5f62418eddb47223fb607ace60f9bcd5c6b5be6a6cc04711182934    22843  README.md
+未触碰：任务书 tasks/012-basic-experience.md（交卷记录由主代理复验后落笔）、git、任何立创工程文件。
+
+================================================================================
+二、append 类写入的独立计数核对（grep -c，每条新增应恰好 1 命中）
+================================================================================
+connector/src/actions.ts   "'export.fab': bind(exportFab)"                  -> 1
+connector/src/actions.ts   "'lib.recommend': bind(libRecommend)"            -> 1
+bridge/protocol.py         name="export.fab"                                -> 1
+bridge/protocol.py         name="lib.recommend"                             -> 1
+bridge/protocol.py         ^FAB_TIMEOUT                                     -> 1   （定义；timeout_for 引用 1 处）
+bridge/protocol.py         ^RECOMMEND_TIMEOUT                               -> 1
+bridge/protocol.py         action == "export.fab"                           -> 1
+bridge/protocol.py         action == "lib.recommend"                        -> 1
+cli.py                     ^def _cmd_bridge_export_fab                   -> 1
+cli.py                     def _write_fab_bundle                         -> 1
+cli.py                     "export-fab": _cmd_bridge_export_fab             -> 1
+docs/bridge.md             ^| `export.fab`                                  -> 1
+docs/bridge.md             ^| `lib.recommend`                               -> 1
+docs/bridge.md             ^| `bridge export-fab --out DIR`                 -> 1
+README.md                  "bridge export-fab"                              -> 2   （中/英 quickstart 各 1，预期）
+connector/tests/actions012b.test.mjs  grep -c "^test("                      -> 32
+tests/test_fab_export.py              grep -c "^def test"                   -> 11  （其中 1 例 parametrize ×4 ⇒ pytest 计 14）
+
+================================================================================
+三、§六 export.fab 实现要点
+================================================================================
+签名： export.fab
+        params { pcbUuid?, outDir, vendor?='generic', gerber?{...}, bomTemplate?,
+                 timeoutMs? }   —— timeoutMs 每文件截止（200..600000，默认 60000）
+        返回   { vendor, project{uuid,name}, pcb{uuid,name}, outDir, generatedAt,
+                 encoding:'base64', files:[{role,name,mime,bytes,data,sourceName}],
+                 manifest{...}, failed:[{role,reason}], partial, note }
+
+1) 三件套一次出齐 + manifest：gerber(role=gerber) / 坐标(role=pick_and_place) / BOM(role=bom)，
+   manifest 内容 = schema(boardwise.fab/1) + generatedAt + vendor(+summary) + project + pcb +
+   outDir + preset（实际发出的全部参数，含 BOM 15 列）+ files（清单/字节数）+ failed + notes。
+   落盘侧（CLI）再补 outDir 解析路径与 written[]（stat 实测字节）。
+2) vendor 预设：只实现 generic ——
+   gerber:  colorSilkscreen=false（彩色丝印是"嘉立创专用文件"，通用板厂不要）、unit='mm'、
+            digitalFormat {4:5}、other{metallicDrilling:true, nonMetallic:true, drillTable:true,
+            flyingProbe:false}；layers/objects **故意不写**（声明默认即编辑器"一键导出"：
+            板内真实使用的层 + 钻孔层，写死一份清单在没上机前只能是猜）。
+   P&P:     fileType='csv', unit='mm'
+   BOM:     fileType='csv', template=params.bomTemplate ?? undefined,
+            filterOptions=[Add into BOM=yes, Convert to PCB=yes]（声明自带示例的两条规则）,
+            statistics=[No., Quantity]，columns=15 列全列，property 由 columns 派生
+            （一处定义、两处使用，不可能互相矛盾）。
+   捷配：留**配置位**不实现 —— FAB_PENDING_VENDORS.jiepei，报错文案区分"占位待样例"与"拼错"。
+3) 落盘路径（判定依据，不是省事）：类型包只声明 SYS_FileSystem.saveFile(fileData, fileName?)，
+   **无目录参数**（走浏览器下载/Electron 保存对话框），无法兑现 outDir。故沿用 export.render
+   的可靠路径：连接器回 base64，调用方（daemon 侧 CLI）落盘。outDir 仍为必填参数并写进 manifest，
+   使磁盘上那份 bundle 自己说得出"原本要放哪"。
+4) 守卫与诚实结果：
+   - pcbUuid 给了但与焦点 PCB 不符 → PAGE_MISMATCH（制造接口导出的是**前台那块板**；未导出任何文件）；
+     未给 pcbUuid → 用焦点板并在返回/manifest 里写明 uuid+name；没有 PCB 打开 → CONNECTOR_ERROR（不猜）。
+   - 命名空间或三个声明方法缺失 → NOT_IMPLEMENTED（结构性失败，报出是哪一个）；
+   - 单个文件被拒/返回 undefined/空文件/超时 → failed[] 逐文件记录，其余照回（partial:true）；
+     三个全丢 → CONNECTOR_ERROR（空 bundle 不是 bundle）；
+   - 每个导出调用各有 deadline（raceHostCall，默认 60s/文件）：宿主吞掉入参时 promise 永不 settle，
+     这是 export.render 实测过的形态，不能让动作槽被占死。
+5) 文件名：宿主的 File.name 优先（它才知道 gerber 是不是 zip），否则 `fab_gerber`+（zip 魔数→.zip）、
+   `fab_pick_and_place.csv`、`fab_bom.csv`；名字里的路径分隔符在连接器侧先剥掉，写盘侧再验一次。
+6) CLI 落盘器（src/boardwise/cli.py）：
+   `boardwise bridge export-fab --out DIR [--pcb UUID] [--vendor generic] [--gerber JSON]
+    [--bom-template NAME] [--timeout-ms N]`
+   - _write_fab_bundle(payload, out_dir)：纯文件操作（无需 daemon 即可测）——文件名必须**单段路径**
+     （`../x`、`sub/x`、`.`、`..` 一律拒绝，不做静默改名）；非 base64 / 空数据拒绝；
+     每个文件写后 stat 实测字节数，与连接器声明的 bytes 不一致 → manifest.byteCountMismatch + 退出 1；
+     manifest.json 最后写、并补 outDir/written[]。
+   - 退出码：0 全齐；1 动作失败 / 写入失败 / **残缺 bundle**（已到的文件保留在盘上，缺的在 stderr 点名）；
+     2 daemon 不可达或 --gerber 非 JSON。
+
+================================================================================
+四、§七 lib.recommend 实现要点
+================================================================================
+签名： lib.recommend
+        params { query? } | { pageUuid, ref }  二选一（同时给/都不给 = BAD_REQUEST），
+               topN?（1..20，默认 5）, allLayers?, timeoutMs?（每页搜索截止 200..120000，默认 20000）
+        返回   { source, query, ref, component, target, topN,
+                 layers:[{layer,api,called,args,hitCount,pagesFetched,reason?|error?}],
+                 returned, shown, candidates[...], 'stock/price', readOnly, placed, note, notes? }
+
+1) 逐层降级（本层命中即止，被跳过的层**显式标 called:false + 原因**，"没找到" 与 "没跑" 绝不混同）：
+   L1 exact      searchByProperties({partNumber, partCode})  —— 声明里的两条精确通路
+   L2 properties searchByProperties({value, footprintName})
+   L3 keyword    search(keyword)
+   每层 itemsOfPage=5（"每层 Top5"）、页码上限 3（"分页上限 3 页"，含"整页就继续翻、短页即止、
+   够 topN 即止"三条停止条件）；allLayers:true 则跑满三层并合并去重（同 device 以最早一层为准）。
+2) searchByProperties 缺失是**降级不是错误**：类型包标注 "ADD since EDA v4"，v3.2 宿主上很可能没有；
+   缺失时 L1/L2 标 unavailable + 原因，L3 照跑，notes 里顶层再说一次。
+   lib_Device 整个缺失、或所有层都抛异常 → NOT_IMPLEMENTED / CONNECTOR_ERROR（"搜不了" ≠ "没搜到"）。
+3) 位号路径：guardPage(pageUuid) → 焦点页组件枚举（sch_PrimitiveComponent.getAll）→ 位号匹配
+   （getState_Designator → OtherProperty.Designator 兜底），读出现有 value/MPN/LCSC/封装/供应商封装；
+   焦点页与 pageUuid 不符 → PAGE_MISMATCH（没有跨页查找 API，宁拒不错答）；位号不存在 → NOT_FOUND
+   （detail 带本页位号清单）。query 路径：C+数字 视为 LCSC 编号走 partCode，其余字符串同时当
+   partNumber 与 value（"SS34"这种真实 MPN 两个字段都认），每层 args 原样回显。
+4) 排序与输出：JLCPCB Part Class —— Basic(0) < Preferred(1) < Extended(2) < 未知(3)，
+   同级再看封装是否吻合、再看来自哪一层；TopN 默认 5。字段 name/lcsc/mpn/封装/
+   JLCPCB Part Class/datasheet/deviceUuid+libraryUuid(+symbolUuid/footprintUuid)。otherProperty 的键名
+   做"去空格/下划线/大小写"归一后匹配，库项先读普通属性再读 getState_*（两种形态都实测存在过）。
+5) 只读：输出固定 readOnly:true / placed:false + 落座指引（sch.place_component /
+   sch.set_component_attribute）；**无库存价格字段**（类型包没有），固定标注 `"stock/price": "以商城实时为准"`。
+
+================================================================================
+五、daemon 侧（protocol.py / docs/bridge.md / README.md）
+================================================================================
+- ACTIONS 新增 2 条，risk=**read**（export.fab 不改工程内容；真正写盘的是 CLI 的 outDir）：
+  name / owner / params 见 §二计数；两条都是两段式 `domain.verb`，未新开命名族（test_action_catalogue 绿）。
+- timeout_for：export.fab → FAB_TIMEOUT=240s（高于 3×60s 的逐文件 deadline）；
+  lib.recommend → RECOMMEND_TIMEOUT=90s（最多 9 次库搜索）。
+- docs/bridge.md：§4 动作表 2 行 + §8 子命令行 1 行（`bridge export-fab --out DIR`）+ 表后两段设计说明
+  （为何连接器不写 outDir、ref 路径为何有焦点守卫、searchByProperties 的 v4 降级）+ §12 证据表 3 行
+  （参数逐位钉住 / 落盘与残缺判定 / **"从未上机"这条如实登记**）。
+- README.md：中英 quickstart 各加 `bridge export-fab --out fab/` 一行。
+- contract-drift（catalogue ↔ registry ↔ §4 表）已随 connector 测试全绿；§8/§12 的表在守护测试解析范围之外。
+
+================================================================================
+六、三线实测（本批最终修订，2026-09-21）
+================================================================================
+connector `npm test`                236 passed / 0 failed   （基线 204 → +32，只增不减）
+connector `npx tsc --noEmit`        exit 0，无输出
+pytest（--basetemp=.tmp_pt_home）   1084 passed in 76.43s  （基线 1070 → +14，不许退步；本批未触碰既有 Python 测试）
+
+新增用例分布：
+  connector/tests/actions012b.test.mjs  32 例（§六 15 例：预设参数逐位、manifest、缺 pcbUuid 默认与无 PCB、
+                                             pcbUuid 守卫、vendor 非法/占位、outDir 必填、gerber 覆写与未知键、
+                                             bomTemplate 透传、单文件缺失、空文件、三件全丢、结构性缺失×2、逐文件超时；
+                                             §七 17 例：三层降级、首层命中止、Basic 排序与字段映射、空结果、
+                                             query/ref 二选一、LCSC 编号识别、焦点守卫、位号不存在、
+                                             searchByProperties 缺失降级、lib_Device 缺失、无搜索 API、
+                                             单层抛异常继续降级、全层抛异常、分页上限 3 页、allLayers 合并去重、
+                                             每页超时）
+  tests/test_fab_export.py              14 例（落盘+manifest 实测、自动建目录、文件名单段×4、
+                                             无文件/非 base64/空数据/非对象、字节数不符、无 daemon 退出 2、
+                                             --gerber 非 JSON 退出 2、动作目录与超时契约）
+
+守卫变异（.tmp_mutate_012b.py，跑完已删；pristine sha256
+7e12ef7600c6cba18129b80ae26348f1efa7f56e7f470f8f5f01a4c36521de0e 逐字节还原、还原后 32 例全绿）：
+  M1 关掉 export.fab 的 pcbUuid 守卫 → CAUGHT（1 红：fab refuses a pcbUuid that is not the focused board）
+  M2 删掉 lib.recommend 的 guardPage → CAUGHT（1 红：recommend refuses a ref on a page that is not the focused one）
+  M3 让 Basic 不再排前（rank 0→3）→ CAUGHT（2 红：Basic 排序 + allLayers 合并）
+  每次变异都先 `node build.mjs` 再跑用例（测试打的是 dist/esm，不重建的变异会"假通过"）。
+
+================================================================================
+七、真机待验清单（编辑器恢复后按序执行；本批一律未做）
+================================================================================
+A. 重启 daemon（新 ACTIONS/timeout 是加载期常量，不重启不认识这 2 个动作），并 `boardwise bridge update-connector`
+   （编辑器内的 bundle 需含新动作；`connector/dist/index.js` 已由本批构建）。
+B. §0 probe 增补：pcb_ManufactureData 的 getGerberFile/getPickAndPlaceFile/getBomFile typeof+最小只读调用；
+   lib_Device.search/searchByProperties/getByLcscIds typeof；sys_FileSystem.saveFile typeof
+   （若要把 PROBE_CHECKS 扩到 pcb_ManufactureData/lib_Device，需同时改 tests/test_api_names.py 的 NAMESPACES 并
+   重跑 tools/api_names.py 生成 api-names.ts —— 两处必须一起动）。
+C. §六 真机（验收工程由岳指定，test2/CH340G 除外）：对目标 PCB 跑 `boardwise bridge export-fab --out <dir>`，
+   逐项确认：
+   1) gerber 是否真为 zip（本批按 PK 魔数判名，未上机）；
+   2) generic 预设的 15 个 BOM 列名宿主是否全部接受（**最可能出问题的一项**，若报错或列缺失，改
+      FAB_BOM_COLUMNS 一处即可）；
+   3) 坐标文件单位/格式是否满足板厂；BOM filterOptions 的两条规则名是否仍有效；
+   4) 三件套 + manifest.json 能否直接发厂（岳确认）；
+   5) base64 体量：大板 gerber zip 的 base64 是否逼近 daemon MAX_FRAME_BYTES(32MiB)——超了 socket 会被关，
+      届时备选是编辑器侧 SYS_FileSystem.saveFile（无目录参数，需人工逐件保存）或在 daemon 侧先落盘再传。
+   6) 若宿主返回的 File 无 name，落盘名回退为 fab_gerber.zip 等固定名（已知行为，非缺陷）。
+D. §七 真机：对 "SS34" 与 "FRC0805J471" 各跑一次（`bridge call --action lib.recommend --params '{"query":"SS34"}'`
+   与定位号路径各一），如实落盘，重点确认：searchByProperties 在 3.2.186 上是否存在（不存在则只有关键词层，
+   属预期降级）、返回项的 otherProperty 键名是否与本次归一规则吻合、TopN 里 Basic 件是否排前。
+E. 真机验收通过后：任务书 §六/§七 逐字验收 + §十一 交卷标准里的真机证据（PNG/文件清单/岳签字）。

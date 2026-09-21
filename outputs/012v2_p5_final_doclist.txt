@@ -1,0 +1,63 @@
+{
+  "documents": [
+    {
+      "uuid": "121a882d229549dc84798edb2998fccb",
+      "name": "schematic1",
+      "type": "schematic",
+      "active": false,
+      "parentName": "Board1"
+    },
+    {
+      "uuid": "6522162edacd40e5a39a8bc4083c51c2",
+      "name": "P1",
+      "type": "page",
+      "active": false,
+      "parentUuid": "121a882d229549dc84798edb2998fccb",
+      "parentName": "schematic1"
+    },
+    {
+      "uuid": "8ea93963e4154b3ba2d2df9feb1d9f80",
+      "name": "PCB1",
+      "type": "pcb",
+      "active": false
+    }
+  ],
+  "projects": [
+    {
+      "projectUuid": "d2e2b864cf93f0b4b1d4d215446673788a7f6572c4afc20d25d4164d0e43f43c",
+      "name": "/智能药箱",
+      "friendlyName": "智能药箱",
+      "focused": true,
+      "opened": "yes",
+      "schematics": [
+        {
+          "uuid": "121a882d229549dc84798edb2998fccb",
+          "name": "schematic1",
+          "type": "schematic"
+        },
+        {
+          "uuid": "6522162edacd40e5a39a8bc4083c51c2",
+          "name": "P1",
+          "type": "page"
+        }
+      ],
+      "pcbs": [
+        {
+          "uuid": "8ea93963e4154b3ba2d2df9feb1d9f80",
+          "name": "PCB1",
+          "type": "pcb"
+        }
+      ],
+      "documents": "full"
+    }
+  ],
+  "active": {
+    "uuid": "0",
+    "type": "blank",
+    "tabId": "0",
+    "source": "dmt_SelectControl.getCurrentDocumentInfo"
+  },
+  "schematicPages": 1,
+  "pcbs": 1,
+  "count": 3
+}

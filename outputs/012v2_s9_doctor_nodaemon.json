@@ -1,0 +1,69 @@
+{
+  "ok": false,
+  "port": 54918,
+  "versions": {
+    "daemon": "0.1.0",
+    "daemonRunning": "",
+    "connectorRunning": "",
+    "connectorRepo": "0.4.5",
+    "editor": ""
+  },
+  "checks": [
+    {
+      "name": "daemon",
+      "label": "daemon 可达（ping，daemon 无 HTTP /health）",
+      "ok": false,
+      "skipped": false,
+      "detail": "连不上 127.0.0.1:54918：[WinError 1225] 远程计算机拒绝网络连接。",
+      "fix": "运行 `boardwise bridge start`（前台运行，保持窗口开着）；端口不是 61190 时用 --port 指明"
+    },
+    {
+      "name": "connector",
+      "label": "扩展已连接（WebSocket 已注册到 daemon）",
+      "ok": false,
+      "skipped": false,
+      "detail": "未验证：daemon 都没连上",
+      "fix": "先让扩展连上：打开立创 EDA Pro，确认 boardwise 扩展已启用并在面板里可见（首页/原理图/PCB 菜单里有 boardwise，`About…` 应显示 connected），再重跑 `boardwise doctor`（若刚重启过编辑器，daemon 侧用 `boardwise bridge status` 复核）"
+    },
+    {
+      "name": "methods",
+      "label": "sys.probe 关键方法在位",
+      "ok": false,
+      "skipped": false,
+      "detail": "未验证：sys.probe 没有答复（扩展未连接）",
+      "fix": "先让扩展连上：打开立创 EDA Pro，确认 boardwise 扩展已启用并在面板里可见（首页/原理图/PCB 菜单里有 boardwise，`About…` 应显示 connected），再重跑 `boardwise doctor`（若刚重启过编辑器，daemon 侧用 `boardwise bridge status` 复核）"
+    },
+    {
+      "name": "editor-version",
+      "label": "编辑器版本 ≥ 3.2.183",
+      "ok": false,
+      "skipped": false,
+      "detail": "未验证：没有读到编辑器版本（扩展未连接）",
+      "fix": "先让扩展连上：打开立创 EDA Pro，确认 boardwise 扩展已启用并在面板里可见（首页/原理图/PCB 菜单里有 boardwise，`About…` 应显示 connected），再重跑 `boardwise doctor`（若刚重启过编辑器，daemon 侧用 `boardwise bridge status` 复核）"
+    },
+    {
+      "name": "daemon-version",
+      "label": "daemon 版本与本机一致（新动作才不会『不认识』）",
+      "ok": false,
+      "skipped": false,
+      "detail": "未验证：daemon 没有答复",
+      "fix": "重启 daemon（`boardwise bridge start`）：动作表是加载期常量，跑着旧版本的 daemon 会把新动作答成 UNKNOWN_ACTION"
+    },
+    {
+      "name": "connector-version",
+      "label": "运行中的 connector 版本与仓库一致",
+      "ok": false,
+      "skipped": false,
+      "detail": "未验证：没有读到运行中的 connector 版本（扩展未连接）",
+      "fix": "先让扩展连上：打开立创 EDA Pro，确认 boardwise 扩展已启用并在面板里可见（首页/原理图/PCB 菜单里有 boardwise，`About…` 应显示 connected），再重跑 `boardwise doctor`（若刚重启过编辑器，daemon 侧用 `boardwise bridge status` 复核）"
+    },
+    {
+      "name": "project",
+      "label": "当前工程焦点可读",
+      "ok": false,
+      "skipped": false,
+      "detail": "未验证：doc.list 没有答复（扩展未连接）",
+      "fix": "先让扩展连上：打开立创 EDA Pro，确认 boardwise 扩展已启用并在面板里可见（首页/原理图/PCB 菜单里有 boardwise，`About…` 应显示 connected），再重跑 `boardwise doctor`（若刚重启过编辑器，daemon 侧用 `boardwise bridge status` 复核）"
+    }
+  ]
+}

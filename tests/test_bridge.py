@@ -813,6 +813,14 @@ def test_daemon_owned_ping_reports_connector_state(tmp_path):
             assert data["connector"] is False
             # Nothing has paired yet, and `bridge status` prints this line.
             assert data["pairedFingerprint"] is None
+            # `boardwise doctor` compares this with the install the CLI runs
+            # from: the action catalogue is a load-time constant, so a daemon
+            # left running across a checkout answers new actions with
+            # UNKNOWN_ACTION — and this field is what turns that into a
+            # diagnosis instead of a mystery (012v2 §九).
+            from boardwise import __version__
+
+            assert data["version"] == __version__
 
             conn_ws, _ = await _hello(port, "connector")
             await cli_ws.send(request_frame("ping", {}, id="p2"))

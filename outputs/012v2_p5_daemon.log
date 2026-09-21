@@ -1,0 +1,5 @@
+boardwise bridge: listening on 127.0.0.1:61190
+  token file: C:\Users\xiangyu\.boardwise\token
+  audit log:  C:\Users\xiangyu\.boardwise\audit
+  pairing:    C:\Users\xiangyu\.boardwise\connector-token
+  waiting for the EasyEDA extension to connect (Ctrl-C to stop)

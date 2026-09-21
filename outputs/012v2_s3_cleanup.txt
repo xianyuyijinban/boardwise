@@ -1,0 +1,34 @@
+012v2 S3 cleanup — /test, 2026-09-21
+
+== R1 live identity check ==
+focused project: ['/test'] (want ['/test'])
+P4 uuid from doc.list: '362924e0e16ce90a' (want 362924e0e16ce90a)
+P4 parts: 17, net-less: 17/17
+P4 designators: ['C1', 'C25', 'C3', 'C4', 'C5', 'C6', 'C7', 'C9', 'H1', 'LED1', 'R24', 'R27', 'U1', 'U3', 'U5', 'USB1', 'X1']
+designators == known 17: True
+R1 PASSED (all items matched)
+
+== pre-delete evidence ==
+P4 (362924e0e16ce90a): parts=17 ['C1', 'C25', 'C3', 'C4', 'C5', 'C6', 'C7', 'C9', 'H1', 'LED1', 'R24', 'R27', 'U1', 'U3', 'U5', 'USB1', 'X1']
+  P4 render -> outputs\012v2_P4_before.png (228618 bytes)
+P3 (f93a95b7245ba351): parts=2 ['U1', 'ZZ9']
+  P3 render -> outputs\012v2_P3_before.png (168119 bytes)
+
+== deleting P4: 17 primitive(s) ==
+  deleted=17 notFound=[] failed=[]
+  readback: parts=0 []
+
+== deleting P3: 2 primitive(s) ==
+  deleted=2 notFound=[] failed=[]
+  readback: parts=0 []
+
+== save probe ==
+sch_Document.save typeof: {"save": "function"}
+test.eprj2 mtime before save: 1789960069.9580812 (11:07:49)
+sch.doc.save -> {"saved": true}
+test.eprj2 mtime after save:  1789960069.9580812 (11:07:49)
+mtime jumped: False
+== save 复核（8s 后二次读取） ==
+test.eprj2 mtime: 11:07:49 -> **11:56:26**（size 5263360）
+⇒ sch_Document.save 存在且工作；sch.doc.save 返回 {"saved": true}；
+  本地文件为**异步落盘**（save 返回后约 10s mtime 才跳变）——不需岳 Ctrl+S。

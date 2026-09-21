@@ -1,0 +1,241 @@
+012v2 第三批（离线部分）· §八 review.mark + §九 boardwise doctor + 上手文档
+执行：DeepSeek（子代理），2026-09-21
+前提：编辑器扩展与 daemon **断连** ⇒ 本批**真机零操作**（未起任何 daemon、未调 bridge 连真机、
+      未碰任何立创工程文件）；交付物 = 实现 + mock 测试 + 守卫变异 + 文档，真机项全部列在文末。
+      doctor 的断连路径是**本地实测**的（对着一个没人监听的端口跑真 CLI，见 §四），不是 mock。
+
+================================================================================
+一、改动文件（sha256 / bytes，全部改动完成后实测）
+================================================================================
+0866471ca9534fbd8533acfaff8847f149270ebff3034c55f335f7a80e40d346   195173  connector/src/actions.ts                 （reviewMark 处理器）
+886e200f15a8a9fb7918a8a8f2867dd99cc9dec2ed42076edd05e3899660a76f    23781  connector/tests/actions012c.test.mjs     （新增，26 例）
+047fc71b9cb195d28b77fa63d7679939bbc0466d70273a55045c1cddfeec7cb2    43622  src/boardwise/bridge/protocol.py        （review.mark 动作）
+e7ba86c05edf228fd18d67310c5ef506dca23e021f84bccf9af08d54c6ecbdf4    37815  src/boardwise/bridge/daemon.py          （ping 报 daemon 版本）
+412685e7278f0219677e523d41ffddc174c7c43c0b960464d53886f42fd58d9e   146068  src/boardwise/cli.py                    （review-mark + doctor + 输入规范化）
+ec7ed229c9595d5039e1b3cf3cf7e6ff780631847cdaee54802a1016b87b5f1f     5634  src/boardwise/engines/review.py         （finding_refs + render_json 带 refs）
+ae471a5c9f05cfd844749a63b3eb750223e90964d3ef622b4ad6d1a315e44f73    16643  tests/test_doctor.py                     （新增，19 例）
+4693e71b95f926b90376cf7f00afc6a34f2105c482466f3bf3b3f929e819640c    17006  tests/test_review_mark_cli.py            （新增，23 函数 / 29 例）
+6e151c941cc3beacb7e9c167129305960489a99795e584f37caccd2c21ada027    41626  tests/test_bridge.py                     （ping 断言 +4 行，无新函数）
+6edb1c8c194e9e0481707bf57be53d1988855325445b96cc4694296a97e99837   110364  docs/bridge.md                          （动作表/子命令表/设计说明/§12 证据）
+e9099d1380616fb093e80c542bc6cfc9d2dea74e4482a9db29a2671bd8ee020c    10478  docs/getting-started.md                  （新增，上手文档）
+4e72efebac60eb6828fe88f0a65f70b25115b718a24c0081e08f98da0e5da397    23858  README.md                               （中英 quickstart 各 +2 行 + 指引）
+未触碰：git、tasks/012-basic-experience.md（交卷记录由主代理复验后落笔）、任何立创工程。
+临时文件 `.tmp_mutate_012c.py` 跑完已删；`.tmp_doctor_home/`（本地 doctor 实测造的）已删。
+
+================================================================================
+二、append 类写入的独立计数核对（grep -c，每条新增应恰好 1 命中）
+================================================================================
+connector/src/actions.ts   ^export const reviewMark                        -> 1
+connector/src/actions.ts   "'review.mark': bind(reviewMark)"               -> 1
+bridge/protocol.py         name="review.mark"                              -> 1
+bridge/daemon.py           '"version": BOARDWISE_VERSION'                  -> 1
+enseres/review.py          ^def finding_refs                               -> 1
+engines/review.py          '"refs": finding_refs'                          -> 1
+cli.py                     ^def _cmd_review_mark                        -> 1
+cli.py                     ^def _cmd_doctor                             -> 1
+cli.py                     ^def run_doctor                              -> 1
+cli.py                     args.command == "review-mark"                   -> 1
+cli.py                     args.command == "doctor"                        -> 1
+cli.py                     ^DOCTOR_PROBE_CHECKS = {                      -> 1
+docs/bridge.md             '^| `review.mark`'                              -> 1（§4 表行）
+docs/bridge.md             '^| `boardwise review-mark '                    -> 1（§8 表行）
+docs/bridge.md             '^| `boardwise doctor '                         -> 1（§8 表行）
+connector/tests/actions012c.test.mjs   grep -c '^test('                    -> 26
+tests/test_doctor.py                   grep -c '^def test'                -> 19
+tests/test_review_mark_cli.py          grep -c '^def test'                -> 23（其中 6 例 parametrize ⇒ 29 例）
+
+================================================================================
+三、§八 `review.mark` 实现要点（任务书 69–75 行）
+================================================================================
+连接器动作签名：
+  review.mark
+    params { pageUuid?, marks:[{ref,ruleId,severity,text}], clear?, focus?, color?, zoom?, markers? }
+    返回   { mode:'markers'|'list', cleared, page:{components,designators,withoutPosition,active},
+             count, marked:[{position,marker,ref,designator,ruleId,severity,text,primitiveId,x,y}],
+             unresolved:[{position,ref,ruleId,severity,text,reason}],
+             markers:{attempted,accepted,reason?}, focused?:{position,ref,x?,y?,zoomed,reason?},
+             readOnly:true, note, notes? }
+    risk = read（标记是叠加层，不建不改任何图元；与 canvas.highlight 同级）
+    daemon 超时 = 默认 30s（与 sch.geometry 同为一次页面 dump + 一次打标调用；未新增常量）
+
+1) 位置来源 = `sch.geometry` 的同一套 dump（geometryOf('sch_PrimitiveComponent') → state.Designator /
+   state.X / state.Y；Designator 缺失时兜底 state.OtherProperty.Designator）。**整页只读一次**，
+   而不是每个 ref 一次 locate()——打标本来就需要全部坐标。
+   页面读不出来（命名空间缺失/抛异常）是**结构性失败**（CONNECTOR_ERROR 并点名原因），
+   不降级成"空跳转清单"：一份空清单说不出为什么空。
+   没有位号或没有数值坐标的图元计入 page.withoutPosition 并在 notes 里说明，不静默丢弃。
+2) 打标内容（任务书要求 rule-id + severity + 一句话）：`generateIndicatorMarkers` 的声明形态是
+   `(markers: IDMT_IndicatorMarkerShape[], color?, lineWidth?, zoom?)` —— **只能画形状，不能写文字**
+   （形状仅 point/circle/line/arc/rectangle）。故：每个 ref 画一个以其坐标为中心的矩形，
+   文字三件套随结果返回，`marked[k-1]` 就是画布上第 k 个 marker。
+   CLI 打印的"序号 ↔ marker#k"表就是这张图的图例 —— 没有它，画布上那堆框没有意义。
+   矩形字段名沿用 canvas.highlight 的实测教训：left/right/top/bottom（不是 startX/endX）。
+   **不做按 severity 分色**：颜色属于"这次调用"而非单个 marker，分色 = 每种严重级别一次调用，
+   属未裁决的设计决策，本批不擅自决定（已在 docs/bridge.md 写明）。
+3) 降级纪律（任务书 §八 末条）—— 降级分支**三条都有测试**，且都不丢发现清单：
+   a) `markers:false`（调用方明确只要跳转清单）；
+   b) 宿主没有 `generateIndicatorMarkers`（typeof !== function）；
+   c) 宿主返回 false（不支持该画布 / tabId 未知）。
+   三者都 → `mode:'list'` + markers.reason，坐标照常返回。CLI 对应退出码 1（部分完成）。
+   单个 ref 不在本页 → 逐条 `unresolved`（reason 写清"本页 N 个位号 / M 个图元"），其余照画。
+4) 结构性拒绝（一律 throw，不静默）：
+   - `pageUuid` 与焦点页不符 → PAGE_MISMATCH（**守卫在读坐标之前**，错误页不会画出任何东西）；
+   - 焦点文档不是原理图页（dmt_SelectControl 读数：pcb/其他）→ CONNECTOR_ERROR，写明"会画到错的画布上"；
+   - 页面组件读不出来 → CONNECTOR_ERROR；
+   - `focus` 超出 marks 范围或非整数 → BAD_REQUEST（同样在画任何东西之前）；
+   - marks 为空且非 clear → BAD_REQUEST；
+   - `clear:true` 而宿主没有 `removeIndicatorMarkers` → NOT_IMPLEMENTED
+     （"移除叠加层"没有跳转清单式退路）。
+   `focus: N` 为 **marks 的 1-based 位置**（= 调用方自己的发现顺序，即 `boardwise review` 的报告顺序）；
+   zoomToRegion 收到的四个参数按声明顺序 `(left, right, top, bottom)`，盒子 = marker 框 + 20 单位余量；
+   focus 与 zoom 同时给时 **focus 赢**（否则"看到哪个框"取决于调用顺序）。
+   zoomToRegion 缺失 / 返回 false / 抛异常 → focused.zoomed=false + reason，**不影响已打好的标记**。
+5) CLI（`src/boardwise/cli.py`）：
+   `boardwise review-mark <findings> [--page UUID] [--focus N] [--color C] [--zoom] [--no-markers] [--json PATH] [--port N]`
+   - `<findings>` 三种形态：文件路径 / `-`（stdin）/ JSON 字面量（既不是文件也不是 `-`，
+     且以 `{`/`[` 开头才当字面量，路径优先）。接受 `review --json` 的 `{summary,findings}`、
+     裸数组、单条 finding 三种载荷；形状不对 → 退出 2 并说明期望什么。
+   - 字面量 `clear` = 清标（与任务书 `review.mark clear` 对应）；与既有 `bridge highlight --clear` 同一语义。
+   - 一条发现 → **每个 ref 一个 mark**（去耦类发现同时点名 IC 和电容，两个都要亮），
+     mark 顺序 = finding 顺序 = ref 出现顺序（`--focus N` 数的就是这个位置）。
+     没有 ref 的发现进 `skipped` 并在表里以 `[~]` 行点名（不静默少一条）。
+   - 退出码：0 全部到位 / 1 部分到位（含降级为 list、有 skipped、有 unresolved、clear 被拒）/ 2 输入或 daemon 不可用。
+   - 打印：`[k] 级别 规则 位号 marker#N @ (x, y) 一句话`；降级/notes/focused 逐行说明；末尾提示 clear 命令。
+6) 报告侧配套（`engines/review.py`）：`render_json` 每条 finding 增 `refs`（由 evidence→message
+   顺序派生、去重），规则本身**未改一行**（不是让 15 条规则各自声明 refs）。
+   抽取用**前缀白名单**（复用 `core/parts.DESIGNATOR_CATEGORIES` 的前缀 + RV/RP/RT/FB/NT/ZD/TVS/VR/BT/MK/MIC/TH/ZZ）：
+   只按形状匹配会把 `AMS1117` / `SS34` / `CH340G` / `FRC0805J471` / `PC14` / `D5V` 全当位号
+   （前两个实测会命中），这些正是会变成"解析不到"噪音的东西——白名单有专门的参数化测试。
+
+================================================================================
+四、§九 `boardwise doctor` 实现要点（任务书 77–79 行）
+================================================================================
+签名： `boardwise doctor [--json PATH] [--port N]`；退出 0 全绿 / 1 有未通过项（**不是 2**：
+      对同事而言"还没好"是一个状态、一个下一步；任务书的字面要求也是 exit 1）。
+
+七项检查（每项自带 fix 建议；`run_doctor` 是**纯函数**，全部输入装在一个 DoctorProbe 里）：
+  1 daemon 可达             —— 任务书写的是 daemon `/health`；**本 daemon 没有任何 HTTP 面**
+                              （WebSocket 服务器），`ping` 就是它的 health 答案。标签里如实写明。
+  2 扩展已连接             —— ping.connector + 配对指纹（未配对时说明"下一个连上来的即配对"）；
+  3 sys.probe 关键方法在位  —— 抽查 5 个：dmt_Schematic.getCurrentSchematicPageInfo（全部写守卫）、
+                              dmt_Pcb.getCurrentPcbInfo（pcb 守卫）、sch_PrimitiveComponent.getAll
+                              （读回/几何/ref 解析）、dmt_EditorControl.openDocument（doc.open / export.fab）、
+                              dmt_EditorControl.generateIndicatorMarkers（review.mark）。
+                              5 个名字全部来自生成的 `connector/src/api-names.ts`（有一条测试比对，
+                              防止写错名字变成永远修不好的红项）；
+  4 编辑器版本 ≥ 3.2.183    —— 低于floor 时点名"打标/缩放接口在该版本后才有"；
+  5 daemon 版本与本机一致   —— 新增：ping 返回 daemon 自己的版本（见下）；不一致 → "重启 daemon"
+                              （动作表是加载期常量，这一条正是为项目反复踩过的坑设的）；
+  6 connector 版本与仓库一致 —— sys.probe 的 `connector`（编辑器里真跑的构建）vs `connector/extension.json`；
+                              不一致 → `bridge update-connector`；本机没有仓库清单时 **SKIP 而非红**（wheel 安装合法）；
+  7 当前工程焦点可读        —— doc.list 的 projects[].focused + 活动文档；已知的 `active.uuid == "0"`
+                              垃圾读数在这里被**如实说明**（"属已知读数问题"）而不误判为故障。
+
+诚实降级：断连时逐行报"未验证：……"+ 同一条修复建议，不抛异常、不装作通过；"跳过的比对"单独标 SKIP 且不计入失败。
+本地实测（真 CLI + 没人监听的端口，未起 daemon）：`outputs/012v2_s9_doctor_nodaemon.json` + 7 行 FAIL + 退出 1。
+
+daemon 侧唯一改动：`ping` 结果增 `"version": BOARDWISE_VERSION`（`src/boardwise/bridge/daemon.py`）。
+  理由：`boardwise doctor` 要能分辨"答我的 daemon"与"我这个 CLI 是从哪份代码来的"，
+  而本项目已经两次为"daemon 跑着旧代码、新动作答 UNKNOWN_ACTION"付过代价；字段是增量，
+  不读它的调用方不受影响；老到不发这个字段的 daemon 被报成"未报告版本"（红 + 重启建议），不会伪装成一致。
+  `docs/bridge.md` §4 的 ping 行已同步。
+
+================================================================================
+五、上手文档 `docs/getting-started.md`（任务书 80 行）
+================================================================================
+面向非开发者同事，六步：装立创 EDA Pro（≥3.2.183）→ 装 .eext（含"必须重启编辑器"的理由与
+菜单/About… 验证点）→ `boardwise bridge start`（含首次配对公告、为什么窗口要一直开着、
+改版本后为何要重启 daemon）→ `boardwise doctor` 全绿（七项含义 + 每项红了怎么办的表）→
+第一次 review（离线报告 → `review-mark` 打标 → `--focus N` / `--no-markers` / 截图 → `clear`）→
+第一次 `export-fab`（四件套清单 + 残缺判据 + 只支持 generic）。
+每步都有"预期输出"（真实的输出格式样例）与 `截图位：docs/images/gs-0N-*.png` 占位，并明确写了
+"本轮交付时截图还没补（编辑器断连），按文件名补图即可，不用改文档"。
+末尾一张常见问题表（daemon not reachable / UNKNOWN_ACTION / NO_CONNECTOR / PAGE_MISMATCH / 打了标看不到）。
+README 中英 quickstart 各加 `boardwise doctor` 与 `boardwise review-mark report.json` 两行 + 指向本文的指引。
+
+================================================================================
+六、协议与文档同步
+================================================================================
+- `bridge/protocol.py` ACTIONS 新增 1 条 `review.mark`（risk=read，两段式命名，未新开命名族；
+  test_action_catalogue 17 例绿）。未新增 timeout 常量（见 §三.1 说明）。
+- `docs/bridge.md`：§4 动作表 +1 行、§4 ping 行更新、表后新增两段设计说明（marker 不能写字 /
+  ping 报版本）、§8 新增"两个不是 bridge 子命令的命令"表（doctor / review-mark 的退出码契约）、
+  §12 证据表 +6 行（含 **"从未上机"** 那一条如实登记）。
+- contract-drift 看守测试（catalogue ↔ registry ↔ §4 表）三项全绿，无需改动。
+
+================================================================================
+七、三线实测（2026-09-21，全部改动完成后最后一次全量）
+================================================================================
+connector `npm test`                262 passed / 0 failed   （基线 236 → +26，只增不减）
+connector `npx tsc --noEmit`        exit 0，无输出
+pytest（--basetemp=.tmp_pt_home）   1132 passed in 84.54s  （基线 1084 → +48，未触碰既有测试语义）
+三线均在**全部改动 + 守卫变异还原之后**的冻结状态上重跑（本文件 sha256 即该状态的实测值）。
+
+新增用例分布：
+  connector/tests/actions012c.test.mjs  26 例 —— 矩形字段与坐标（单次调用、颜色/线宽/zoom 逐位）、
+      位号大小写与页面拼写回显、ref 不在页（部分）、无 ref 的 mark、无坐标组件计数、
+      markers:false 降级、宿无 generateIndicatorMarkers 降级、画布拒绝降级、无可解析 ref、
+      pageUuid 守卫（放行 + 拒绝各一）、焦点非原理图页拒绝、页面读不出结构性失败、
+      marks 为空/缺失 3 种 BAD_REQUEST、clear（成功 / 画布拒绝 / 无 remove API 结构性）、
+      focus 盒子与顺序、focus 越界、focus 命中未解析项、zoomToRegion 缺失/拒绝抛异常、
+      zoom 直通与 focus 抑制、自定义颜色、无 pageUuid 的如实提示
+  tests/test_review_mark_cli.py  29 例 —— refs 派生（evidence 优先/去重/白名单 6 个反例参数化）、
+      render_json 带 refs、一 ref 一 mark 与顺序、旧报告无 refs 字段仍可用、无 ref 发现进 skipped、
+      路径/stdin/字面量/单条 finding 四种输入、四种坏输入报错、动作参数逐项（顺序/clear/markers/color/
+      pageUuid/focus）、0/1/1(降级)/1(skipped)/1(未打标) 退出码、clear 成功与拒绝、
+      daemon 侧拒绝、无 daemon 退出 2
+  tests/test_doctor.py  19 例 —— 全绿七项、断连七行 FAIL 各带 fix、无扩展时逐项"未验证"、
+      编辑器低于 floor（含 3.2.183 边界放行）、方法缺失点名、命名空间整体缺失、
+      daemon 版本不一致、老 daemon 无版本字段、connector 版本落后、无仓库清单时 SKIP、
+      无焦点工程、uuid=0 已知读数不掩盖焦点、抽查方法必须存在于 api-names.ts、floor 常量、
+      CLI 断连实测（真子进程 + 空闲端口，退出 1 且无 traceback）、CLI 三个载荷全绿 + --json、
+      无 connector 时只调 ping、probe/doc.list 报错不崩、doctor 只用 read 动作
+  tests/test_bridge.py  +4 行断言（ping 带 daemon 版本，无新函数）
+
+守卫变异（`.tmp_mutate_012c.py`，跑完已删；每次变异都先 `node build.mjs` 再跑用例，
+  每条都断言 pristine 字节逐字节还原）：
+  C1 删 review.mark 的 pageUuid 守卫        → CAUGHT（refuses a pageUuid that is not the focused page）
+  C2 放行非原理图焦点文档                    → CAUGHT（refuses a focused document that is not a schematic page）
+  C3 忽略 markers:false（照样打标）          → CAUGHT（markers: false yields the jump list and draws nothing）
+  C4 删 focus 范围校验                       → CAUGHT（focus out of range is refused before anything is drawn）
+  P1 删 render_json 的 refs                  → CAUGHT（test_render_json_states_the_refs_of_every_finding）
+  P2 删 ping 里的 daemon 版本                → CAUGHT（test_daemon_owned_ping_reports_connector_state）
+  P3 doctor 忽略运行中的 connector 版本      → CAUGHT（test_an_old_connector_bundle_is_diagnosed_as_update_connector）
+  P4 doctor 忽略编辑器版本 floor             → CAUGHT（test_an_editor_below_the_api_floor_is_called_out_with_the_version）
+  8/8 CAUGHT，字节还原全部 True；变异脚本已删除，源码无残留（grep 复核）。
+
+================================================================================
+八、真机待验清单（编辑器/扩展恢复后按序执行；本批一律未做）
+================================================================================
+A. 重启 daemon（新动作 review.mark 与 ping 的 version 都是加载期常量，不重启不认识/不返回），
+   并 `boardwise bridge update-connector`（编辑器内的 bundle 需含新动作；`connector/dist/index.js`
+   已由本批 `npm test` 的 build 步骤重建）。
+B. `boardwise doctor` 真机首跑：
+   1) 七项是否全绿；2) 五项抽查方法在 3.2.186 上是否 `function`（generateIndicatorMarkers 是 [beta]，
+      声明存在不等于行为可用）；3) `connector/extension.json` 与编辑器里跑的构建是否真的一致
+      （self_update 后若不一致 → 报 update-connector）；4) 焦点工程/活动文档读数是否与 `doc.list` 一致，
+      顺带确认 `active.uuid == "0"` 的已知读数问题是否仍存在（doctor 已如实标注，不误判）。
+C. §八真机（验收工程由岳指定，test2/CH340G 除外；**必须遵守 R1–R3**）：
+   1) 对毕设板工程跑一次 M1 审查 → `review --json r.json` → `doc.list` 取 pageUuid →
+      `review-mark r.json --page <uuid>`；确认画布出现红框、终端序号与框一一对应 → 截图落盘 outputs/；
+   2) 关键未知数：`generateIndicatorMarkers` 是否接受这批矩形（字段名已按实测教训写 left/right/top/
+      bottom）、标记是否可见、单位是否如声明（原理图 0.01 inch）；若形态不符 → 按任务书 §八 末条
+      如实降级为"跳转清单"，并把实测形态写进 docs/bridge.md；
+   3) `--focus N` 是否真的缩放（`zoomToRegion(left,right,top,bottom)` 的形参顺序是**声明顺序**，
+      未上机验证；若顺序不同，改一处调用即可）；
+   4) `review-mark clear` 后红框是否消失；
+   5) 故意用错 pageUuid 跑一次，确认 PAGE_MISMATCH 且画布无变化（R1 精神）。
+D. §八 边界真机项：焦点切到 PCB 再跑 review-mark（应 CONNECTOR_ERROR 并说明），
+   以及 `--no-markers` 在真机上的跳转清单输出。
+E. 上手文档：按 docs/getting-started.md 走一遍同事流程，补 `docs/images/gs-01..gs-06` 六张截图
+   （文档里的预期输出若与真机不符，以真机为准改文档——**文档不改真机**）。
+F. 真机验收通过后：任务书 §八/§九 逐字验收 + §十一 交卷标准里的真机证据（PNG/报告/岳签字）。
+
+================================================================================
+九、遗留（不在本批范围，如实登记）
+================================================================================
+- `docs/bridge.md` §12 末尾"Total: 143 Python tests (~8 s) + 95 connector tests (~1.2 s)"是**既有陈旧数字**
+  （早于本批，实际已 1132 / 262）。本批未改它（不属于第三批范围），在此登记，建议下一批连同 §12 通篇复核。
+- 按 severity 分色、画布上的文字标签（`sch.place_text` 会**写工程内容**）都未实现：两者都是设计决策，
+  留待岳裁决（分色需一次调用/一个级别；文字标签会改变工程内容，与"审查只读"冲突）。
+- MCP 封装、捷配 BOM 模板仍按任务书 §十二 挂起。
