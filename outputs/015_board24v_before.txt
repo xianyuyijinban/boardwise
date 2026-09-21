@@ -1,0 +1,44 @@
+boardwise review: tests/fixtures/board24v.enet (50 components, 42 nets)
+findings: 0 ERROR, 15 WARN, 27 INFO
+[WARN] param-value-mpn-match: C116: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+[WARN] param-value-mpn-match: C47: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+[WARN] param-value-mpn-match: C51: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+[WARN] param-value-mpn-match: C52: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+[WARN] param-value-mpn-match: C115: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+[WARN] param-value-mpn-match: C50: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+[WARN] param-value-mpn-match: C53: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+[WARN] param-value-mpn-match: C54: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+[WARN] param-value-mpn-match: C55: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+[WARN] param-value-mpn-match: C56: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+[WARN] param-value-mpn-match: C57: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+[WARN] param-value-mpn-match: C58: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+[WARN] param-value-mpn-match: R39: board value 0.001 Ω contradicts its MPN ('RE2512F3R001' decodes to 0 Ω) -- BOM and schematic disagree
+[WARN] param-value-mpn-match: R40: board value 0.001 Ω contradicts its MPN ('RE2512F3R001' decodes to 0 Ω) -- BOM and schematic disagree
+[WARN] param-value-mpn-match: R43: board value 0.001 Ω contradicts its MPN ('RE2512F3R001' decodes to 0 Ω) -- BOM and schematic disagree
+[INFO] param-rc-cutoff: RC R34(10Ω) + C116(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+[INFO] param-rc-cutoff: RC R34(10Ω) + C47(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+[INFO] param-rc-cutoff: RC R34(10Ω) + C51(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+[INFO] param-rc-cutoff: RC R34(10Ω) + C52(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+[INFO] param-rc-cutoff: RC R34(10Ω) + C115(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+[INFO] param-rc-cutoff: RC R34(10Ω) + C50(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+[INFO] param-rc-cutoff: RC R34(10Ω) + C49(2.2uF) on 'VM': fc = 7,234 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+[INFO] param-rc-cutoff: RC R34(10Ω) + C48(100nF) on 'VM': fc = 159,155 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+[INFO] param-rc-cutoff: RC R34(10Ω) + C59(10nF) on 'VM': fc = 1,591,549 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+[INFO] param-rc-cutoff: RC R36(10Ω) + C116(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+[INFO] param-rc-cutoff: RC R36(10Ω) + C47(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+[INFO] param-rc-cutoff: RC R36(10Ω) + C51(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+[INFO] param-rc-cutoff: RC R36(10Ω) + C52(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+[INFO] param-rc-cutoff: RC R36(10Ω) + C115(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+[INFO] param-rc-cutoff: RC R36(10Ω) + C50(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+[INFO] param-rc-cutoff: RC R36(10Ω) + C49(2.2uF) on 'VM': fc = 7,234 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+[INFO] param-rc-cutoff: RC R36(10Ω) + C48(100nF) on 'VM': fc = 159,155 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+[INFO] param-rc-cutoff: RC R36(10Ω) + C59(10nF) on 'VM': fc = 1,591,549 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+[INFO] param-rc-cutoff: RC R37(10Ω) + C116(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+[INFO] param-rc-cutoff: RC R37(10Ω) + C47(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+[INFO] param-rc-cutoff: RC R37(10Ω) + C51(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+[INFO] param-rc-cutoff: RC R37(10Ω) + C52(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+[INFO] param-rc-cutoff: RC R37(10Ω) + C115(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+[INFO] param-rc-cutoff: RC R37(10Ω) + C50(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+[INFO] param-rc-cutoff: RC R37(10Ω) + C49(2.2uF) on 'VM': fc = 7,234 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+[INFO] param-rc-cutoff: RC R37(10Ω) + C48(100nF) on 'VM': fc = 159,155 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
+[INFO] param-rc-cutoff: RC R37(10Ω) + C59(10nF) on 'VM': fc = 1,591,549 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)

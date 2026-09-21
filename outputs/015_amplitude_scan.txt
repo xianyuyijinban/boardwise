@@ -1,0 +1,45 @@
+### ProPrj_毕设FOC驱动板_2026-09-17.epro2
+  U14    kind=resistor  declared=1000 ohm  decoded=470 ohm  ratio=  2.13x  mpn='FRC0805J471 TS' value='1kΩ'
+  U10    kind=resistor  declared=1000 ohm  decoded=470 ohm  ratio=  2.13x  mpn='FRC0805J471 TS' value='1kΩ'
+  C42    kind=capacitor declared=1e-08 F  decoded=1e-07 F  ratio= 10.00x  mpn='CC0805KRX7R9BB104' value='10nF'
+  C36    kind=capacitor declared=2.2e-06 F  decoded=1e-07 F  ratio= 22.00x  mpn='CC0805KRX7R9BB104' value='2.2uF'
+  C44    kind=capacitor declared=2.2e-06 F  decoded=1e-07 F  ratio= 22.00x  mpn='CC0805KRX7R9BB104' value='2.2uF'
+  C29    kind=capacitor declared=2.2e-06 F  decoded=1e-07 F  ratio= 22.00x  mpn='CC0805KRX7R9BB104' value='2.2uF'
+  C28    kind=capacitor declared=2.2e-06 F  decoded=1e-07 F  ratio= 22.00x  mpn='CC0805KRX7R9BB104' value='2.2uF'
+
+### ProPrj_CH340G_2026-09-13.epro2
+  U3     kind=resistor  declared=1000 ohm  decoded=470 ohm  ratio=  2.13x  mpn='FRC0805J471 TS' value='1kΩ'
+
+### ProPrj_ROBOT ctrl FOC_2026-09-16.epro2
+  (no VIOLATION)
+
+### ProPrj_智能药箱_2026-09-17.epro2
+  (no VIOLATION)
+
+### ProPrj_高速电机控制器_2026-09-16.epro2
+  (no VIOLATION)
+
+### board24v.enet
+  (no VIOLATION)
+
+### llc_board.epro2
+  (no VIOLATION)
+
+### fixed-base.epro2
+  (no VIOLATION)
+
+### value-mpn-mismatch.epro2
+  U3     kind=resistor  declared=2200 ohm  decoded=1000 ohm  ratio=  2.20x  mpn='FRC0805J102 TS' value='2.2kΩ'
+
+### duplicate-designator.epro2
+  (no VIOLATION)
+
+### nc-pin-grounded.epro2
+  (no VIOLATION)
+
+### overvoltage-rail.epro2
+  (no VIOLATION)
+
+### ldo-no-headroom.epro2
+  (no VIOLATION)
+

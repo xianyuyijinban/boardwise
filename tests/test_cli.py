@@ -52,8 +52,9 @@ def test_review_fixture_smoke(tmp_path):
 
 
 def test_review_exit_code_on_error(tmp_path):
-    # Craft a minimal .enet that triggers the decoupling ERROR-free path is
-    # covered above; here we only assert the exit code stays within contract.
+    # A crafted minimal .enet: the ERROR-free path is covered above; here the
+    # contract is the exit code, plus (since 015) that the retired
+    # decoupling-per-ic stays silent on a board written exactly to trip it.
     enet = tmp_path / "tiny.enet"
     enet.write_text(
         json.dumps(
@@ -78,7 +79,10 @@ def test_review_exit_code_on_error(tmp_path):
     )
     result = run_cli("review", str(enet))
     assert result.returncode in (0, 1)
-    assert "decoupling-per-ic" in result.stdout  # WARN expected, exit 0
+    # 015 retired decoupling-per-ic, which is what this crafted board used to
+    # trip: the CLI must be silent about it and still exit 0 (the exit-code
+    # contract this test has always carried).
+    assert "decoupling-per-ic" not in result.stdout
     assert result.returncode == 0
 
 
@@ -93,15 +97,18 @@ def test_review_epro2_fixture_smoke(tmp_path):
     assert result.returncode == 0, result.stderr
     assert "(47 components, 25 nets)" in result.stdout
     assert "board: 117 pads, 49 tracks, 257 vias" in result.stdout
-    assert "0 ERROR, 7 WARN" in result.stdout
-    assert "decoupling-per-ic" in result.stdout
+    # 015 retired decoupling-per-ic and this board's 7 WARNs were all its, so
+    # the reviewer now has nothing to say about it (docs/epru-format.md keeps
+    # the pre-retirement measurement, and says so).
+    assert "0 ERROR, 0 WARN" in result.stdout
 
     payload = json.loads(json_path.read_text(encoding="utf-8"))
-    assert payload["summary"] == {"ERROR": 0, "WARN": 7, "INFO": 0}
+    assert payload["summary"] == {"ERROR": 0, "WARN": 0, "INFO": 0}
 
     md = md_path.read_text(encoding="utf-8")
     assert md.startswith("# boardwise review report")
     assert "Components: 47" in md
+    assert "No findings." in md
 
 
 def test_review_rejects_unknown_extension(tmp_path):
