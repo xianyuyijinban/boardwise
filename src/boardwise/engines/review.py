@@ -12,7 +12,6 @@ from ..core.parts import DESIGNATOR_CATEGORIES
 from ..rules.base import SEVERITY_ORDER, Finding, Rule
 from ..rules.connectivity import (
     CrystalLoadCaps,
-    DecouplingPerIC,
     DuplicateDesignators,
     ShuntSenseLink,
 )
@@ -35,8 +34,14 @@ from ..rules.params import (
 #: Every rule applied by :func:`run_review`, in execution order. The 011c
 #: facts rules sit after the L1 heuristics: they are slower (library loads)
 #: and their subjects overlap the L1 IC scan. The 011d batch follows them.
+#:
+#: ``decoupling-per-ic`` is **retired here** (task 015 sec.2; oracle ruling
+#: 011f B2 "L1 heuristic limitation, retire in M2"). The class and its tests
+#: stay in ``rules/connectivity.py`` -- retirement is not deletion, and the
+#: rule must stay runnable for review: re-add it to this list and
+#: ``test_011d_rules.py::test_decoupling_per_ic_is_retired_from_the_builtin_rules``
+#: goes red.
 BUILTIN_RULES: list[Rule] = [
-    DecouplingPerIC(),
     CrystalLoadCaps(),
     ShuntSenseLink(),
     DuplicateDesignators(),

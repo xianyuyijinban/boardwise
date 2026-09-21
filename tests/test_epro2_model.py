@@ -259,11 +259,19 @@ def test_value_fallback_is_usable_by_value_parsing_rules(model):
 
 
 def test_l1_rules_run_on_epro2_model(model):
-    findings = run_review(model)
-    assert findings  # the fixture really does trip decoupling-per-ic
-    assert all(f.rule_id for f in findings)
-    assert all(f.severity in {"ERROR", "WARN", "INFO"} for f in findings)
-    assert all(isinstance(f.evidence, list) for f in findings)
+    # Every registered rule answers on an .epro2-sourced model, and its
+    # findings are well formed. This fixture's 7 findings were all
+    # decoupling-per-ic's, which 015 retired, so the loop is now general
+    # rather than driven by whatever this one board happened to trip.
+    from boardwise.engines.review import BUILTIN_RULES
+
+    assert run_review(model) == []
+    for rule in BUILTIN_RULES:
+        findings = rule.check(model)
+        assert isinstance(findings, list)
+        assert all(f.rule_id for f in findings)
+        assert all(f.severity in {"ERROR", "WARN", "INFO"} for f in findings)
+        assert all(isinstance(f.evidence, list) for f in findings)
 
 
 # --------------------------------------------------------------------------

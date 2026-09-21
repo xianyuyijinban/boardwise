@@ -180,7 +180,9 @@ def test_an_unregistered_defect_never_cross_explains():
     slipped the unregistered record into an M1 denominator and overwrote the
     B2 ruling. Now the unregistered defect explains nothing: the finding falls
     through to fp_unexplained of the rule that fired, and the record is listed
-    verbatim in the unregistered column only.
+    verbatim in the unregistered column only. (015 retired the decoupling rule
+    itself, so that particular WARN is history -- the semantics it forced are
+    not, and this test pins them with a stand-in rule.)
     """
     aset = _aset([_defect("U1", "not-yet-built")])
     evaluation = evaluate_annotations(aset, _model(), [_FireOnU1()])
@@ -414,27 +416,32 @@ def test_the_real_ch340g_annotation_set_measures_the_known_false_positive():
 
 
 def test_the_bishe_boards_a_section_is_detected_and_explained():
-    """The A1/A2 landing, measured (011e sec.3 rulings of 2026-09-19), then
-    signed under the 2026-09-20 final rulings (task 014).
+    """The A1/A2 landing, measured (011e sec.3 rulings of 2026-09-19), signed
+    under the 2026-09-20 final rulings (task 014), then paid off by task 015.
 
     Two numbers, two different meanings. The 30 duplicates are **detected**
     (30/30): a real board, caught by a parser-level check that never had a
-    real board to prove itself on before. The 10 value/MPN contradictions moved
-    from the unexplained column to the exception column -- from "the oracle has
-    not looked" to "the oracle looked and ruled the rule wrong -- here is why".
+    real board to prove itself on before. The value/MPN contradictions were
+    the rule's own false positives -- 10 of them on the board, all ruled
+    exception, the A2a three (R43, C115, C116) because the *decoder* was
+    reading the part number wrong and the A2b seven because the oracle read
+    a 470-ohm-vs-1k-ohm disagreement as "not wrong enough to call".
 
-    The rule's own precision stays 0/10 on purpose: these ARE false positives,
-    and the decoder fix / contradiction-magnitude concept the oracle named as
-    M2 input are what will remove them. An exception record is how a known
-    false positive stays counted instead of being argued away.
+    015 landed the first half of the payment: the decoder refuses the
+    notations it was hard-reading, so the A2a three report UNKNOWN and their
+    findings are gone -- 10 exceptions, 7 paired findings -- while the A2b
+    seven stay VIOLATION exactly as ruled (the magnitude question is batch 2,
+    oracle-held). The rule's precision stays 0.0: what is left really is
+    false positives, and an exception record is how a known false positive
+    stays counted instead of being argued away.
 
     014 additions, each measured against the harness as it actually behaves:
-    the set is signed (no DRAFT stamp), the U1.12 defect lands in the
+    the set is signed (no DRAFT stamp); the U1.12 defect lands in the
     unregistered column and nowhere else (an unregistered hint never
-    cross-explains -- the decoupling WARN on U1 stays unexplained exactly as
-    the B2 observation ruled it), and the X1 exception pairs no finding at all
-    because the 013 fix silenced the rule before the record landed: it counts
-    as hinted-and-looked-at, in no other column.
+    cross-explains, so nothing it shares a ref with is collected by it); and
+    the X1 exception pairs no finding at all because the 013 fix silenced the
+    rule before the record landed: it counts as hinted-and-looked-at, in no
+    other column.
     """
     from boardwise.core.annotations import load_annotations
     from boardwise.engines.review import BUILTIN_RULES
@@ -446,9 +453,7 @@ def test_the_bishe_boards_a_section_is_detected_and_explained():
     # 014: the set is signed -- the report must not carry the DRAFT stamp.
     assert evaluation.reviewed
     # 014: exactly one unregistered record (the U1.12 defect), listed verbatim
-    # in the no-registered-rule column, counted in no denominator -- and, per
-    # the 014 cross-match fix, it does not explain the decoupling WARN that
-    # happens to share its ref (that one stays unexplained, as B2 ruled it).
+    # in the no-registered-rule column and counted in no denominator.
     assert len(evaluation.unregistered) == 1
     assert "U1" in evaluation.unregistered[0]
     assert "conn-osc-pin-net" in evaluation.unregistered[0]
@@ -458,31 +463,19 @@ def test_the_bishe_boards_a_section_is_detected_and_explained():
         30, 30, 0,
     )
     mpn = _metrics(evaluation, "param-value-mpn-match")
-    assert (mpn.exceptions_hinted, mpn.fp_on_exception) == (10, 10)
+    # 10 exception records, 7 of them still pairing a finding (015: the A2a
+    # three are UNKNOWN now, and an UNKNOWN emits no finding to pair).
+    assert (mpn.exceptions_hinted, mpn.fp_on_exception) == (10, 7)
     assert mpn.fp_unexplained == 0, "A2 is ruled; nothing on it is unlooked-at"
-    assert mpn.precision == 0.0, "and the rule is still the thing to fix"
-
-    # B1 is a landed defect and the rule catches it: the real board's bulk-cap
-    # shortfall is a true positive, same as the injected ones.
-    decap = _metrics(evaluation, "decap-required-caps")
-    assert (decap.defects_hinted, decap.detected, decap.missed) == (1, 1, 0)
-    assert decap.hp_tp == 1 and decap.hp_fp_unexplained == 0
-
-    # B2/B3 are ruled observation / still pending. The schema has no
-    # "observation" kind, so with no item records these findings stay in the
-    # unexplained column -- a wording gap, not a number gap: recording them as
-    # exceptions would move them to fp_on_exception and leave every precision
-    # figure untouched. The counts are pinned so that a future schema change
-    # (or an accidental record) shows up here rather than in a report.
-    #
-    # 013 moved both numbers, and both moves are *recoveries*, not drift:
-    # the Symbol-ATTR fallback brought the board's 25 early-placed R/C/L
-    # parts back into the netlist, and two of B2's five findings turned out
-    # to be artefacts of that same loss (caps the oracle was shown did not
-    # exist in the model); B3's xtal warning vanished because the load caps
-    # C20/C21 are now part of the graph it checks. 014 re-pinned B2 at 3 as
-    # the oracle's final count and asserts the cross-match stays out.
-    assert _metrics(evaluation, "decoupling-per-ic").fp_unexplained == 3
+    assert mpn.precision == 0.0, "and what is left really is a false positive"
+    # 015: retire the L1 heuristic (011f B2) and it leaves the measurement
+    # entirely -- no metrics row, and the three WARN findings it used to push
+    # into the unexplained column are gone, so the high-priority unexplained
+    # column on this board is empty. (The INFO measurements -- param-rc-cutoff,
+    # shunt-sense-link -- stay unexplained by design: they are reports, not
+    # claims, and never enter that column's count.)
+    assert "decoupling-per-ic" not in {m.rule_id for m in evaluation.metrics}
+    assert sum(m.hp_fp_unexplained for m in evaluation.metrics) == 0
     assert _metrics(evaluation, "xtal-load-caps").fp_unexplained == 0
     # 014: the X1 exception pairs no finding -- the rule is quiet after 013 --
     # so the harness's actual behaviour is "hinted and looked at", full stop:
@@ -493,6 +486,22 @@ def test_the_bishe_boards_a_section_is_detected_and_explained():
     # B4 is INFO: outside the high-priority denominator by construction.
     assert _metrics(evaluation, "shunt-sense-link").hp_findings == 0
 
+    # B1 is a landed defect and the rule catches it: the real board's bulk-cap
+    # shortfall is a true positive, same as the injected ones.
+    decap = _metrics(evaluation, "decap-required-caps")
+    assert (decap.defects_hinted, decap.detected, decap.missed) == (1, 1, 0)
+    assert decap.hp_tp == 1 and decap.hp_fp_unexplained == 0
+
+    # B2 asked the schema for a kind it does not have ("observation"), and the
+    # difference was a wording gap rather than a number gap: with no item
+    # records those findings sat in the unexplained column. 013 moved the
+    # count 5 -> 3 as a *recovery*, not drift -- the Symbol-ATTR fallback
+    # brought the board's 25 early-placed R/C/L parts back into the netlist,
+    # and two of B2's five findings turned out to be artefacts of that same
+    # loss. 014 pinned B2 at 3 as the oracle's final count. 015 retired the
+    # rule outright (asserted above), which is the strongest form of
+    # "recorded once": the history stays in the annotation set's B2
+    # observation, the measurement stops.
     board_hp = sum(
         (metric.hp_tp for metric in evaluation.metrics),
         start=0,

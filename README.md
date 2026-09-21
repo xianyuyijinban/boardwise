@@ -57,10 +57,9 @@ stack trace.
 Exit code is `1` when any ERROR-level finding exists, `0` otherwise; `2` means
 the input could not be read at all.
 
-Built-in rules (15 across the connectivity, power/path and parameter families;
+Built-in rules (14 across the connectivity, power/path and parameter families;
 each message states its limits):
 
-- `decoupling-per-ic` — every `U*` IC should share a pin net with a capacitor.
 - `xtal-load-caps` — crystal pins should each see a capacitor to ground.
 - `shunt-sense-link` — milliohm shunts should reach a sense input on an IC.
 - `duplicate-designators`, `nc-and-must-connect`, `library-pin-consistency` — connectivity.
@@ -306,9 +305,8 @@ boardwise review path/to/board.epro2 --json report.json --md report.md
 
 存在 ERROR 级发现时退出码为 `1`，否则为 `0`；输入根本读不出来时为 `2`。
 
-内置规则（连通、电源/路径、参数三族共 15 条，message 中如实标注了局限性）：
+内置规则（连通、电源/路径、参数三族共 14 条，message 中如实标注了局限性）：
 
-- `decoupling-per-ic`：每个 U 前缀 IC 的引脚网络中应至少有一个与电容共享。
 - `xtal-load-caps`：晶振每个引脚网络上应各有一个落到地的电容。
 - `shunt-sense-link`：毫欧级分流电阻应能到达某个 IC 的采样引脚。
 - `duplicate-designators`、`nc-and-must-connect`、`library-pin-consistency`：连通性。

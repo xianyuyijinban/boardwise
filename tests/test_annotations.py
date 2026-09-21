@@ -222,19 +222,33 @@ def test_load_annotations_reads_the_bishe_a_and_b_rulings():
     assert sorted(item.ref for item in duplicates) == sorted(
         model.duplicate_designators
     )
-    # The 10 mpn-exception refs are exactly the findings the rule reports, so
-    # the two sides cannot drift apart from the board they describe. (014: the
-    # X1 exception is asserted separately above -- it pairs no finding by
-    # design, the rule went quiet after 013.)
+    # The mpn exception refs and the rule's own output must not drift apart.
+    # After 015 (M2) three of the ten records -- R43's shunt and C115/C116's
+    # electrolytics, the A2a rulings ("the decoder read the part number
+    # wrong") -- no longer pair a finding, by the oracle's own decision; the
+    # other seven still are exactly the WARNs the rule reports. Both sides
+    # are pinned, so neither the board nor the decoder can move silently.
+    # (014: the X1 exception is asserted separately above -- it pairs no
+    # finding by design, the rule went quiet after 013.)
     mpn_exceptions = [i for i in exceptions if i.rule_hint == "param-value-mpn-match"]
+    assert len(mpn_exceptions) == 10
+    mpn_rule = ValueMpnMatch(library=load_parts("blocklib/parts.json"))
+    a2a = {"C115", "C116", "R43"}
     reported = {
         outcome.subject
-        for outcome in ValueMpnMatch(
-            library=load_parts("blocklib/parts.json")
-        ).outcomes(model)
+        for outcome in mpn_rule.outcomes(model)
         if outcome.state == "VIOLATION"
     }
-    assert sorted(item.ref for item in mpn_exceptions) == sorted(reported)
+    assert sorted(
+        item.ref for item in mpn_exceptions if item.ref not in a2a
+    ) == sorted(reported)
+    # The three A2a refs are still on the board and still read by the rule:
+    # UNKNOWN ("this notation is not EIA"), never a contradiction.
+    assert a2a <= {
+        outcome.subject
+        for outcome in mpn_rule.outcomes(model)
+        if outcome.state == "UNKNOWN"
+    }
     # ... and the same for B1: the defect is the finding the rule reports.
     decap = DecapRequiredCaps(library=load_parts("blocklib/parts.json"))
     violations = [o for o in decap.outcomes(model) if o.state == "VIOLATION"]

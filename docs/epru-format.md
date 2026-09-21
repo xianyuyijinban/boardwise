@@ -496,7 +496,9 @@ the two paths can report different findings for the *same* board:
 Measured on the fixture: `boardwise review tests/fixtures/llc_board.epro2`
 reports 47 components / 25 nets / 0 ERROR / 7 WARN, all `decoupling-per-ic`
 on `U1`–`U7` (this board's supply nets are named `DC+` / `DC-`, and no
-`C`-prefixed part sits on a `U` pin net).
+`C`-prefixed part sits on a `U` pin net). *(2026-09-21, task 015: that rule is
+retired — the same run now reports 0 ERROR / 0 WARN / 0 INFO, and the
+paragraph above stands as the measurement it was made from.)*
 
 Net names come straight from `PAD_NET.padNet`. There is **no** id → friendly
 name lookup: the 73 `NET` records in the PCB document only carry display

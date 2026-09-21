@@ -1,0 +1,49 @@
+=== board24v: param-value-mpn-match before -> after (task 015, M2) ===
+
+before: outputs\015_board24v_before.txt  -> findings: 0 ERROR, 15 WARN, 27 INFO
+after : outputs\015_board24v_after.txt  -> findings: 0 ERROR, 0 WARN, 27 INFO
+
+findings removed: 15; findings added: 0
+
+removed, grouped by the MPN the decoder refused:
+
+  HGC1206R5106K500NSPJ        6 x WARN  refs: C53, C54, C55, C56, C57, C58
+  PA50V330M10x15              6 x WARN  refs: C116, C47, C51, C52, C115, C50
+  RE2512F3R001                3 x WARN  refs: R39, R40, R43
+
+notation refused (one rule, three classes; task 015 sec.2):
+  PA50V330M10x15        electrolytic layout (case size 10x15, 50V before
+                        the value) -- 330M is 330 uF +/-20 %, not EIA
+  HGC1206R5106K500NSPJ  value + tolerance + voltage rating (106K500):
+                        the decoder read the 500 V rating as 5e-11 F
+  RE2512F3R001          R as the decimal point: a 1 m ohm shunt read as
+                        '00 x 10^1' = 0 ohm
+
+every removed line is one of the 15 WARN the oracle triaged as the
+decoder's fault (reviewsets/board24v-triage.md A1a/A1b/A1c); the board's
+27 INFO (param-rc-cutoff measurements) are untouched both ways.
+
+--- unified diff ---
+
+--- outputs\015_board24v_before.txt
++++ outputs\015_board24v_after.txt
+@@ -1,18 +1,3 @@
+ boardwise review: tests/fixtures/board24v.enet (50 components, 42 nets)
+-findings: 0 ERROR, 15 WARN, 27 INFO
+-[WARN] param-value-mpn-match: C116: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+-[WARN] param-value-mpn-match: C47: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+-[WARN] param-value-mpn-match: C51: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+-[WARN] param-value-mpn-match: C52: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+-[WARN] param-value-mpn-match: C115: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+-[WARN] param-value-mpn-match: C50: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+-[WARN] param-value-mpn-match: C53: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+-[WARN] param-value-mpn-match: C54: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+-[WARN] param-value-mpn-match: C55: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+-[WARN] param-value-mpn-match: C56: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+-[WARN] param-value-mpn-match: C57: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+-[WARN] param-value-mpn-match: C58: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+-[WARN] param-value-mpn-match: R39: board value 0.001 Ω contradicts its MPN ('RE2512F3R001' decodes to 0 Ω) -- BOM and schematic disagree
+-[WARN] param-value-mpn-match: R40: board value 0.001 Ω contradicts its MPN ('RE2512F3R001' decodes to 0 Ω) -- BOM and schematic disagree
+-[WARN] param-value-mpn-match: R43: board value 0.001 Ω contradicts its MPN ('RE2512F3R001' decodes to 0 Ω) -- BOM and schematic disagree
++findings: 0 ERROR, 0 WARN, 27 INFO
+ [INFO] param-rc-cutoff: RC R34(10Ω) + C116(330uF) on 'VM': fc = 48 Hz (-3 dB cutoff; reported, not graded -- no requirement channel exists)
