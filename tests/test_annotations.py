@@ -223,32 +223,34 @@ def test_load_annotations_reads_the_bishe_a_and_b_rulings():
         model.duplicate_designators
     )
     # The mpn exception refs and the rule's own output must not drift apart.
-    # After 015 (M2) three of the ten records -- R43's shunt and C115/C116's
+    # After 015 batch 1 three of the ten records -- R43's shunt and C115/C116's
     # electrolytics, the A2a rulings ("the decoder read the part number
-    # wrong") -- no longer pair a finding, by the oracle's own decision; the
-    # other seven still are exactly the WARNs the rule reports. Both sides
-    # are pinned, so neither the board nor the decoder can move silently.
+    # wrong") -- stopped pairing a finding because the decoder now refuses
+    # those notations. Batch 2 (2026-09-21, amplitude ruling) retired the
+    # other seven: the A2b refs are readable contradictions the oracle ruled
+    # *not wrong*, and the rule waives them by amplitude. So all ten records
+    # now pair nothing, and both sides are still pinned: the board's records
+    # are unchanged (a conflict left on file), and the rule's own verdicts are
+    # asserted next to them.
     # (014: the X1 exception is asserted separately above -- it pairs no
     # finding by design, the rule went quiet after 013.)
     mpn_exceptions = [i for i in exceptions if i.rule_hint == "param-value-mpn-match"]
     assert len(mpn_exceptions) == 10
     mpn_rule = ValueMpnMatch(library=load_parts("blocklib/parts.json"))
     a2a = {"C115", "C116", "R43"}
-    reported = {
-        outcome.subject
-        for outcome in mpn_rule.outcomes(model)
-        if outcome.state == "VIOLATION"
-    }
-    assert sorted(
-        item.ref for item in mpn_exceptions if item.ref not in a2a
-    ) == sorted(reported)
+    a2b = {"U10", "U14", "C28", "C29", "C36", "C42", "C44"}
+    assert {item.ref for item in mpn_exceptions} == a2a | a2b
+    outcomes = {o.subject: o for o in mpn_rule.outcomes(model)}
+    assert not [o for o in mpn_rule.outcomes(model) if o.state == "VIOLATION"]
     # The three A2a refs are still on the board and still read by the rule:
     # UNKNOWN ("this notation is not EIA"), never a contradiction.
-    assert a2a <= {
-        outcome.subject
-        for outcome in mpn_rule.outcomes(model)
-        if outcome.state == "UNKNOWN"
-    }
+    for ref in a2a:
+        assert outcomes[ref].state == "UNKNOWN", ref
+    # The seven A2b refs are OK *and say why*: amplitude plus ruling quoted.
+    for ref in sorted(a2b):
+        assert outcomes[ref].state == "OK", ref
+        assert "below the" in outcomes[ref].message, ref
+        assert "015 batch-2" in outcomes[ref].message, ref
     # ... and the same for B1: the defect is the finding the rule reports.
     decap = DecapRequiredCaps(library=load_parts("blocklib/parts.json"))
     violations = [o for o in decap.outcomes(model) if o.state == "VIOLATION"]

@@ -49,19 +49,35 @@ M1 晋级判定（014 交卷，holdout = 2 注入板 + 毕设板）：
 | 毕设板 exception | 10 | **7**（A2b 还在） | A2a 三条不再产出 finding |
 | dev hp-prec | 5/5 | 以复跑为准 | 若黄金/注入板上有 decoupling/mpn finding 会动，如实报 |
 
-### 批②（**oracle 裁决后**才动，本批不做）
+### 批②（oracle 已裁：**A，分类阈值 R 3x / C 25x**，2026-09-21）
 
-A2b 的"矛盾幅度"。**存在一个绕不开的设计冲突，必须 oracle 定**：
+A2b 的"矛盾幅度"。裁决链：oracle 先裁 **A**（幅度阈值 + 重签注入变体）；主代理把 A 放到实测数据上复算，发现**单一全球阈值不成立**（见下"决策数据"：五颗电容 10x–22x 在 3x 下照样报，晋级仍破）⇒ oracle 二裁 **R 3x / C 25x**（AskUserQuestion 四选项，亲选）。实现规格：
 
-被裁"本没错"的样本：470Ω vs 1000Ω（2.13x）、100nF vs 2200nF（22x）。
-而 oracle 亲手签的注入变体 `value-mpn-mismatch` 的缺陷正是 **value 2.2k vs MPN 1k（2.2x）**。
-纯幅度阈值解不开：2.13x 放行、2.2x 咬住，两个比值几乎相等——任何把 A2b 放行的阈值都会顺带把注入变体也放行，dev 检出 5/5 立刻破。
+**① `ValueMpnMatch` 幅度分级**（`src/boardwise/rules/params.py`）
 
-候选方案（批②任务书细化，此处只呈裁）：
+- 新增两个命名常量：电阻 `MPN_AMPLITUDE_TOLERANCE_R = 3.0`、电容 `MPN_AMPLITUDE_TOLERANCE_C = 25.0`，注释引 oracle 2026-09-21 二裁与决策数据（R 样本 2.13x 放行 / 4.7x 咬住；C 样本 22x 放行、无上限证据，25x 是主代理插值 oracle 确认）。
+- `ratio = max(declared, decoded) / min(declared, decoded)`；`min <= 0` 时比值无意义，维持现状判 VIOLATION。
+- `ratio < 阈值` → **OK**（不放行装没看见——消息如实写幅度与裁决出处，例：`board value 1kΩ vs MPN 470Ω differ 2.13x, below the 3x tolerance (oracle ruling 015 batch-2: "不要定的太死")`），走四态 OK 列、不进任何精确率分母（rc-cutoff 数值行先例）。
+- `ratio ≥ 阈值` → VIOLATION（现状文案 + 幅度值）。
+- 已知代价（oracle 知情）：黄金板 U3（2.13x < 3x）转 OK，dev 检出 5/5 → **4/5**，报告 missed 栏如实呈现；011c 该 defect 的 annotation **不改写**（冲突留史，oracle 若要改裁另说）。
 
-- **A. 阈值 3x + 重签注入变体**：矛盾幅度 ≥3x 才 VIOLATION；注入变体把 2.2k 改成 4.7k（4.7x）重新签署（改"注入什么"，需 oracle 签字，先例 011d led-overcurrent 门闩）。
-- **B. 不引入幅度**：A2b 七条维持 exception，hp-prec 停在 33/40 = 0.825，**晋级门槛放弃**（011 §十 判据需 oracle 改）。
-- **C. 位置/角色感知**：非关键参数位（上拉/退耦）的 value-MPN 不一致降级 INFO。样本不足（7 条），判据定义风险高。
+**② 注入变体重签**（oracle 裁 A 即签署，先例 011d 门闩）
+
+- `reviewsets/injected/make_variants.py`：`value-mpn-mismatch` 把 U3 value `'2.2kΩ'` → `'4.7kΩ'`（4.7x ≥ 3x 仍 VIOLATION）；`--generate value-mpn-mismatch` 重生成，`--check` 全板（含标注集）逐字节一致。
+- 变体标注集 JSON 的 defect note 追加 `FINAL RULING 2026-09-21`（A + R3/C25 裁决出处）； pinning 该变体 finding 文案的测试同步（2.2k→4.7k）。
+
+**③ 复跑对账**（写 `outputs/015b_eval_{dev,holdout}.txt`）
+
+| 指标 | 批①基线 | 批②预测 |
+|---|---|---|
+| holdout 检出 | 33/33 | **33/33 不变** |
+| holdout hp-prec | 33/40 = 0.82 | **33/33 = 1.00**（A2b 七条全转 OK ⇒ 011 §十 ≥95% **达成**） |
+| 毕设板 value-mpn VIOLATION | 7 | **0**（OK 列 +7） |
+| dev 检出 | 5/5 | **4/5**（黄金 U3 missed，oracle 知情代价） |
+| dev hp-prec | 5/5 | **5/5**（黄金 U3 转 OK 不进分母） |
+| 注入变体 det | 1/1 | **1/1**（4.7x ≥ 3x） |
+
+**④ 变异验证**（全 CAUGHT + 逐字节还原）：R 阈值 3.0→2.0（U10/U14 应变 VIOLATION ⇒ 红）；C 阈值 25.0→5.0（五颗电容应变 VIOLATION ⇒ 红）；生成器回退 2.2kΩ（变体 det 应掉 ⇒ 红）。
 
 #### 批② 决策数据（2026-09-21 全仓实测，`outputs/015_amplitude_scan.txt` + 扫描脚本 `.py`）
 
@@ -72,18 +88,15 @@ A2b 的"矛盾幅度"。**存在一个绕不开的设计冲突，必须 oracle �
 | 毕设板 | U10/U14（R） | **2.13x** | A2b **放行**（"本没错"） |
 | 毕设板 | C28/C29/C36/C42/C44（C） | 10x–22x | A2b **放行** |
 | CH340G 黄金板 | U3（R） | **2.13x** | 011c **判 defect**（LED 限流位） |
-| 注入变体 | U3（R） | 2.20x | 011d **签署 defect** |
+| 注入变体 | U3（R） | 2.20x（批②改 4.7x） | 011d **签署 defect**；批② A 重签 |
 
-**结论：方案 A 死了。** 判 defect 与判放行的边界在比值轴上**不是单调的**——2.13x 同时出现在两侧（U10/U14 放行 vs 黄金 U3 defect），3x 阈值会先把黄金板的 U3 defect 放行掉，dev 检出从 5/5 变 4/5，**不需要等到注入变体就已经破了**。oracle 的真实判据不是幅度而是**位置/角色**（A2b 的段名"位置不敏感"就是他自己写的）。选择实际上收敛为 **B vs C**：
-
-- **B**：七条维持 exception，hp-prec 0.825，晋级门槛放弃或改写。
-- **C**：按位置角色机械化"参数不敏感位"（如：电源网上的对地退耦电容、上拉/下拉电阻，且 declared ≥ decoded 时降级 INFO）。可机械化（网络拓扑可判），样本 7 条，判据先用这 7 条 + 黄金 U3（必须仍判 defect）做回归钉。
+**单一全球阈值不成立**（裁决链第一段）：A2b 五颗电容 10x–22x，3x 全球阈值只能放行 U10/U14，电容照样报 ⇒ holdout 33/38 = 0.87，晋级仍破；而能同时满足"22x 电容放行 + 4.7x 电阻咬住"的纯幅度形态只有**分类阈值**。2.13x 同时出现在裁决两侧（U10/U14 放行 vs 黄金 U3 defect）——黄金 U3 放行是 oracle 知情的既定代价。
 
 ## 三、不做
 
-- 批②的任何内容（幅度阈值、注入变体重签）。
+- ~~批②的任何内容~~（批② 已经 oracle 二裁放行：A，R 3x / C 25x——规格见 §二批②）。
 - 自动修复（M3）、真机写入、board24v 的标注集落地。
-- 规则类删除、既有 exception/defect 记录改写、harness 语义变更。
+- 规则类删除、既有 exception/defect 记录改写（黄金 U3 的 011c defect 维持原样，冲突留史）、harness 语义变更。
 
 ## 四、交卷标准
 
@@ -224,3 +237,137 @@ dev/holdout 逐板逐规则 diff：除"decoupling-per-ic 整行消失"外**逐�
 - **独立变异抽验（自做）**：`DecouplingPerIC` 加回 `BUILTIN_RULES` → `test_decoupling_per_ic_is_retired_from_the_builtin_rules` 红 → 还原 sha256 `ce0410b6…8f979b` 逐字节一致。**事故与教训**：还原时误用 `git checkout --`（变更未提交，checkout 拉回的是 HEAD 旧版），靠 diff 记录重建 + LF 行尾修复后哈希对齐——**未提交变更的变异还原必须 cp 备份，禁用 git checkout**（AGENTS.md 复验纪律拟增补此条）。
 - **边界核对**：标注集 sha256 `db1f5834…a18b7205`、`review_eval.py` sha256 `802b52dd…` 均未动；git status = 11 改 + 2 新（gs-02 图、本任务书），无越界文件。
 - **结论**：批①通过复验。待岳：①批② A/B/C 裁决（任务书 §二批②）；②本批 + gs-02 图/注的提交点头。
+
+## 八、批②交卷记录（执行者，2026-09-21；复验待 Kimi）
+
+批②按 §二批② 规格逐条落地。**git 未动**：批①已在 `501a2f4`（+ PROGRESS `1bee292`）提交，本批改动全部在工作树（8 改 + 1 任务书 + 3 份新证据）。变异现场与日志在 `.tmp_015b/`（gitignore 内，可原样复跑）。
+
+### ① `ValueMpnMatch` 幅度分级（`src/boardwise/rules/params.py`）
+
+| 位置 | 改动 |
+|---|---|
+| 54-80 | 两个命名常量的裁决注释（oracle 2026-09-21 二裁 A；三条决策数据：10x–22x 电容把单一全球阈值证伪 ⇒ 必须分类；2.13x 同时落在裁决两侧 ⇒ 黄金板 U3 转 OK 是**知情代价**；25x 是主代理插值、oracle 确认，非实测） |
+| 81-82 | `MPN_AMPLITUDE_TOLERANCE_R = 3.0`、`MPN_AMPLITUDE_TOLERANCE_C = 25.0` |
+| 115-124 | 类 docstring 补"可读 MPN 按幅度判、小幅度以 OK 且**如实写幅度**" |
+| 195-197 | 原"470 vs 1000 is a contradiction"注释改写（等值判断只留 `isclose` 一档） |
+| 212-263 | 分级主体：`tolerance` 按 `kind` 取常量；`low, high = sorted(...)`；`ratio = high/low if low > 0 else None`；`ratio < tolerance` → **OK**（消息 = `board value X vs MPN Y differ R Rx, below the Tx tolerance (oracle ruling 015 batch-2: "不要定的太死")`，带 value/mpn evidence）；否则 **VIOLATION**（原文案 + `(R Rx apart, at or above the Tx tolerance)`）；`low <= 0` → VIOLATION 且消息写"ratio undefined" |
+
+`min <= 0` 走 VIOLATION，与规格一致；`decoded` 为 0（如码 `000`）同样落这一支。等值（`isclose`）一档文案与行为**一字未改**。
+
+### ② 注入变体重签（`reviewsets/injected/`）
+
+- `make_variants.py`：`value-mpn-mismatch` 表项 `fault` 改 4.7k（4.70x）+ `oracle_note` 记重签与 4.7k 的**已知连带效应**（见下"与预测不符"）；新增 `final_ruling` 字段（229-236）；新增 `_final_ruling()` 助手（702-711）把该字段**追加**到生成标注集的 `notes` 与 **defect item note**（766/778）；`build_value_mpn_mismatch` 输出 4.7kΩ（646-663）；`--list` 增印 `ruling:` 行（1017-1018）。
+- 重签动作：`.venv/Scripts/python.exe reviewsets/injected/make_variants.py --generate value-mpn-mismatch` → `--check` 输出 **`--check: 7 board(s) and their annotation sets rebuild byte-identically`**（全板含标注集，逐字节）。
+- 新字节：`value-mpn-mismatch.epro2` sha256 `0a26446b…0e2925`（旧 `b254e081…`）、`value-mpn-mismatch.json` sha256 `1b883928…4ed35cd`。`fixed-base.*` 未变（`--check` 绿已证）。
+- defect note 尾部实测原文：`FINAL RULING 2026-09-21 (task 015 batch 2; oracle decision A, category tolerances R 3x / C 25x). The ruling's own words for the complaint are quoted in the rule (MPN_AMPLITUDE_TOLERANCE_R, src/boardwise/rules/params.py): the injected value moved 2.2k -> 4.7k ohm so that the disagreement reads 4.70x and stays a violation at or above the 3x tolerance.` `reviewed_at` 保持 `2026-09-19`（它是**签署日**字段，规格只要求 note 追加裁决；若岳要落 09-21 另裁，一行即可）。
+
+### ③ 复跑对账（`outputs/015b_eval_{dev,holdout}.txt` + `015b_bishe_a2b_waived.txt`）
+
+命令形态与批①逐字相同（先复现批①报告验证过命令，见下"口径"）：
+
+```
+.venv/Scripts/boardwise.exe review-eval --annotations reviewsets/ch340g_golden.json \
+  reviewsets/injected/fixed-base.json reviewsets/injected/overvoltage-rail.json \
+  reviewsets/injected/ldo-no-headroom.json reviewsets/injected/value-mpn-mismatch.json \
+  --split dev > outputs/015b_eval_dev.txt
+.venv/Scripts/boardwise.exe review-eval --annotations reviewsets/injected/duplicate-designator.json \
+  reviewsets/injected/nc-pin-grounded.json reviewsets/ProPrj_毕设FOC驱动板_2026-09-17.json \
+  --split holdout > outputs/015b_eval_holdout.txt
+```
+
+关键行原文：
+
+```
+outputs/015b_eval_dev.txt:17   param-value-mpn-match  1  0  1  0  0  0  —  0/1 = 0.00  0  —
+outputs/015b_eval_dev.txt:102  param-led-current     0  0  0  0  0  1  0/1 = 0.00  —  1  0/1 = 0.00   ← 变体上的第二条 finding（无记录认领）
+outputs/015b_eval_dev.txt:105  param-value-mpn-match  1  1  0  0  0  0  1/1 = 1.00  1/1 = 1.00  1  1/1 = 1.00
+outputs/015b_eval_dev.txt:114    defect detection (injected + native): 4/5 = 0.80  (cross-caught 0, missed 1)
+outputs/015b_eval_dev.txt:115    high-priority precision (ERROR/WARN findings): 4/5 = 0.80  (0 contradicted an exception, 1 had no oracle record)
+
+outputs/015b_eval_holdout.txt:47  board ProPrj_毕设FOC驱动板…: 121 components, 85 nets, findings 30 ERROR / 1 WARN / 12 INFO
+outputs/015b_eval_holdout.txt:61  param-value-mpn-match  0  0  0  0  0  0  —  —  0  —
+outputs/015b_eval_holdout.txt:66  OK  … param-value-mpn-match=8 …（批① 为 1，+7）
+outputs/015b_eval_holdout.txt:72    defect detection (injected + native): 33/33 = 1.00  (cross-caught 0, missed 0)
+outputs/015b_eval_holdout.txt:73    high-priority precision (ERROR/WARN findings): 33/33 = 1.00  (0 contradicted an exception, 0 had no oracle record)
+```
+
+毕设板 A2b 七条逐条（value / mpn / state / message / evidence）落 `outputs/015b_bishe_a2b_waived.txt`：U10/U14 = 2.13x、C42 = 10.00x、C28/C29/C36/C44 = 22.00x，七条全 OK，该板该规则 **findings = 0**；批① `outputs/015_eval_*.txt` 是批①截面（已随 501a2f4 提交），**未改**，用当前代码重跑会差 34 行（dev）/18 行（holdout），差异全部落在上表列出的那些行——即"批②动了哪几行"的自证。
+
+### ④ 预测表逐项实测
+
+| 指标 | 批①基线 | 批②预测 | 批②实测 | 判定 |
+|---|---|---|---|---|
+| holdout 检出 | 33/33 | 33/33 不变 | **33/33 = 1.00** | ✓ |
+| holdout hp-prec | 33/40 = 0.82 | 33/33 = 1.00（≥95% **达成**） | **33/33 = 1.00** | ✓ |
+| 毕设板 value-mpn VIOLATION | 7 | **0**（OK 列 +7） | **0**；OK 1 → **8** | ✓ |
+| dev 检出 | 5/5 | 4/5 | **4/5 = 0.80**（missed = 黄金板 U3，011 §十口径） | ✓ |
+| dev hp-prec | 5/5 | 5/5 | **4/5 = 0.80** | ✗ 见⑤ |
+| 注入变体 det | 1/1 | 1/1（4.7x ≥ 3x） | **1/1 = 1.00**（`param-value-mpn-match` 行） | ✓ |
+
+### ⑤ 与预测不符：dev hp-prec 5/5 → **实测 4/5 = 0.80**（不包装）
+
+**机制**：`value-mpn-mismatch` 板上的 U3 **就是 LED1 的限流电阻**。4.7kΩ 落在 `param-led-current` 的 [470, 2200] 窗口**外**（`params.py` 里那句"4.7k is the counter-example and violates"说的是同一件事），于是该板多出第二条 finding：`param-led-current WARN LED1`（`outputs/015b_eval_dev.txt:102`，fp-unexpl=1）。它的 ref 是 `LED1`，变体标注集只有一条 `U3` 记录 ⇒ 进 dev 高优精确率分母却无人认领 ⇒ 4/5。
+
+这条**不是**阈值算错，是**结构性冲突**：1k 的 MPN 要满足 ≥3x 需要 value ≥ 3000Ω，而窗口上限只有 2200Ω（= 2.20x）——**同一块板上不存在既 ≥3x 又在窗口内的 value 改写**。原 2.2k 之所以能"单缺陷"，正因为它压在窗口上限 2200Ω 上，而它恰好是 2.20x < 3x（这就是规格必须把它改成 4.7k 的原因）。两条已签裁决（011c/011d 的 LED 窗口、批②的 R 3x）在这块板上互斥，我用规格给的值执行并如实报数，**没有**自行改设计。已知可选处置（都需岳点头）：
+1. **接受**：dev 是调参 split，不是门槛（门槛 holdout hp-prec = 1.00 已达成）；代价就是这 0.80。
+2. **给标注集加第二条记录**（`ref: LED1, rule_hint: param-led-current, kind: defect, severity: WARN, split: dev`）：dev 检出 6/6、hp-prec 5/5 = 1.00，注记"4.7k 越窗是 011d 已签的反例"——但这是给"一条注入编辑"认领第二条缺陷，是签名级改动。
+3. **改注入落点/形态**（换一个非 LED 限流位的 ref，或改 MPN 侧）——后者需要岳提供一个**真实**料号（同系列 100Ω 兄弟号本仓无实测依据，凭空写属于伪造目录号，批①已明确拒绝过同类做法）。
+
+其余预测偏差：无。dev 5 板里除上述两条外逐行不变；holdout 三块板只动毕设板（-7 条 mpn WARN / -7 fp-exc）。
+
+### ⑥ 变异验证（3/3 CAUGHT + 逐字节还原）
+
+`pristine sha256`：`params.py = 229aaed1…3d79`、`make_variants.py = ddde8538…2bbe`、`value-mpn-mismatch.epro2 = 0a26446b…92925`、`.json = 1b883928…35cd`。**每次变异跑全量 pytest**（`--basetemp=.tmp_pt_home`），跑完 `cp` 还原（**禁用 git checkout**：工作树未提交，checkout 会拉 HEAD 冲掉改动）并 `sha256sum` + `cmp` 复核。备份/日志/汇总在 `.tmp_015b/`（`mutations.txt` + 三份 log）。
+
+| # | 变异 | 结果 | 咬住的测试 |
+|---|---|---|---|
+| 1 | R 阈值 3.0 → 2.0 | **CAUGHT**（exit 1，11 红 / 1134 绿） | 阈值常量钉子、2.13x 放行钉子、U10 见证、黄金板 U3 转 OK、毕设板 A2b 七条、标注集对账、dev/holdout 两处 mpn 精确率、CLI 0.00 断言 |
+| 2 | C 阈值 25.0 → 5.0 | **CAUGHT**（exit 1，6 红 / 1139 绿） | 阈值常量钉子、per-kind/边界钉子、R 恰 3.00x 钉子、毕设板 A2b 七条、标注集对账、毕设板 mpn 测量 |
+| 3 | 生成器回退 2.2kΩ（并 `--generate value-mpn-mismatch` 重生成） | **CAUGHT**（exit 1，4 红 / 1141 绿） | 变体携带故障、**逐 dev 板 det 断言**（det 1→0）、CAUGHT 表参数化用例、两条 finding 钉子 |
+
+三次还原均 `cmp` 逐字节一致 + 哈希回到上列 pristine 值；变异 3 额外复核 `--check` 仍打印 7 板逐字节一致。变异 1/2 只改常量一行，变异 3 的现场值（回退后板 = 批②前的 `b254e081…`）顺带证明"回退即让注入不可见"（该板在该规则下 findings = 0）。
+
+### ⑦ 三线
+
+| 线 | 命令 | 结果 |
+|---|---|---|
+| pytest | `.venv/Scripts/python.exe -m pytest --basetemp=.tmp_pt_home -q` | **1145 passed**（基线 1139 + 6 条新测，无删无改计数；日志 `.tmp_015b/final_full_suite.log`） |
+| connector | `cd connector && npm test` | **279 pass / 0 fail**（`connector/` 本批零改动，跑一遍只为确认没被带坏） |
+| TS | `cd connector && npx tsc --noEmit` | 干净（exit 0） |
+
+新增 7 条测试 / 改动 4 条既有测试：
+
+| 测试 | 钉什么 |
+|---|---|
+| `test_011d_rules.py::test_param4_a_contradiction_past_the_tolerance_is_the_violation` | 10x → VIOLATION 且消息带幅度（**替换**原 `…_value_mpn_contradiction_is_the_violation`：那个 1k-vs-470 用例现在是 OK 侧） |
+| `…::test_param4_a_contradiction_below_the_tolerance_is_ok_with_its_amplitude` | 2.13x → OK，消息含幅度 + `015 batch-2` + 中文裁决原话；带 evidence；`check()` 不产出 finding |
+| `…::test_param4_the_amplitude_tolerances_are_the_oracles_ruling` | 常量 3.0 / 25.0（**变异 1/2 的靶子**） |
+| `…::test_param4_the_tolerance_is_per_kind_and_the_boundary_is_inclusive` | C 10x/22x 放行、**25.00x 咬住**（`ratio >= 阈值` 的边界） |
+| `…::test_param4_a_resistor_at_the_r_tolerance_is_not_waived` | R 恰 3.00x 咬住、C 24.9x 放行（防两常量被对调） |
+| `…::test_param4_a_zero_side_leaves_the_ratio_undefined_and_stays_a_violation` | `min <= 0` → VIOLATION + "ratio undefined" |
+| `…::test_the_graduation_boards_a2b_seven_are_ok_and_the_rule_has_no_violation_left` | 真板 A2b 七条逐 ref 幅度 + 全板该规则零 VIOLATION |
+| （改）`…::test_param4_the_a2a_exceptions_become_unknown_not_contradictions` | U10 由 VIOLATION 改 OK，新增 U11(10kΩ) 作为"规则没被哑掉"的 VIOLATION 见证 |
+| （改）`…::test_the_golden_board_matches_the_task_book_expectations` | 黄金板 U3 由 VIOLATION 改 OK（含幅度与出处）；已知代价写在注释里 |
+| （改）`test_annotations.py::test_load_annotations_reads_the_bishe_a_and_b_rulings` | 10 条 mpn 例外：A2a 三条 UNKNOWN + A2b 七条 OK（逐 ref 断幅度/出处），全板零 VIOLATION；标注集 JSON **一字未动** |
+| （改）`test_injected_variants.py::test_value_mpn_mismatch_carries_two_findings_and_the_second_is_unclaimed` | **替换**原 `…_now_has_exactly_one_finding`：单缺陷属性已失（4.7k 连带 LED 越窗），两条 finding + "第二条无人认领"如实钉住，并把 2.2k→4.7k 的因果与结构性冲突写进 docstring |
+| （改）`test_injected_variants.py::test_the_two_native_defects_are_gone_from_the_base_and_still_there_on_the_golden` | 黄金板两条 defect 的 detected 期望分规则给（decap 1 / mpn 0） |
+| （改）`test_review_eval.py::test_the_real_ch340g_annotation_set_measures_the_known_false_positive` | 黄金板 mpn (1,1) → (1,0,missed 1)、`recall 0.0 / precision None` |
+| （改）`test_review_eval.py::test_the_bishe_boards_a_section_is_detected_and_explained` | 毕设板 mpn (10 exception, **0** fp)、零 VIOLATION、precision/recall 均 None |
+| （改）`test_review_eval.py::test_review_eval_measures_the_real_annotation_set` | 旧断言 `"0.00" not in stdout` 过粗（会连"recall 0/1"一起禁掉）；改为"xtal 行无 0.00 + 全报唯一一处 0.00 就是 mpn 的 0/1" |
+
+### ⑧ 改动文件清单 / 边界
+
+**Modified（8 + 本任务书）**：`src/boardwise/rules/params.py`、`reviewsets/injected/make_variants.py`、`reviewsets/injected/value-mpn-mismatch.epro2`、`reviewsets/injected/value-mpn-mismatch.json`、`tests/test_011d_rules.py`、`tests/test_annotations.py`、`tests/test_injected_variants.py`、`tests/test_review_eval.py`、`tasks/015-review-rules-m2.md`（本 §八）。
+**New（gitignore 内，需 `git add -f`）**：`outputs/015b_eval_dev.txt`、`outputs/015b_eval_holdout.txt`、`outputs/015b_bishe_a2b_waived.txt`。
+
+**没碰**：`src/boardwise/rules/values.py`（sha256 `dde2ed41…22b95`，批①成果，本批零改动）、`src/boardwise/engines/review_eval.py`（harness 语义）、`src/boardwise/engines/review.py`、`reviewsets/ch340g_golden.json`（黄金 U3 的 011c defect 记录**冲突留史**，未改）、`reviewsets/ProPrj_毕设FOC驱动板_2026-09-17.json`（10 条 exception 记录未改）、`reviewsets/injected/fixed-base.*`（`--check` 绿已证未变）、`README.md`（规则无增减）、`connector/`、git。
+
+## 九、Kimi 复验落笔（批②，2026-09-21，全部亲为）
+
+- **三线亲跑**：pytest **1145 passed**；connector **279 pass / 0 fail**；tsc 干净。
+- **eval 亲读**：`015b_eval_holdout.txt` 尾部 = 检出 **33/33 = 1.00**、hp-prec **33/33 = 1.00**（0 撞 exception、0 无记录）——**011 §十晋级判据（holdout ≥95% 精确率 + ≥90% 检出）正式达成**；`015b_eval_dev.txt` = 4/5 与 4/5（黄金 U3 missed 在 `:17`、LED1 次生 WARN 在 `:102`）。
+- **独立变异抽验（自做）**：`MPN_AMPLITUDE_TOLERANCE_R` 3.0→2.0 → **11 红 / 1134 绿**（CAUGHT）；cp 备份还原 sha256 `229aaed1…` 前后一致（未用 git checkout）。
+- **抽 diff 亲看**：`params.py:54-80` 裁决注释（三条实测事实 → 两个常量）、`make_variants.py` 重签与 `final_ruling` 落法，与 §二批②规格一致；任务书 §八 计数 1（无双执行）。
+- **边界核对**：`values.py dde2ed41…`、`review_eval.py 802b52dd…`、黄金/毕设标注集 sha256 均未动。
+- **一处实测偏离（执行者已如实上报，机制成立，待 oracle 三选一）**：dev hp-prec 实测 **4/5 = 0.80**（预测 5/5）——注入板 U3 兼是 LED1 限流电阻，4.7k 落在 `param-led-current` 的 [470,2200] 窗口外 ⇒ 同板多出一条 LED1 WARN，变体的单条 U3 记录解释不了。**结构性冲突**：MPN 锚 1k 时 ≥3x 需 value ≥ 3000Ω，窗口顶 2200Ω（=2.20x）——这块板上"≥3x"与"窗口内"互斥，2.2k 当年能单错型正因为它踩在窗口顶。选项：①接受（dev 是调参 split，晋级 holdout 已 1.00）；②给 LED1 补一条标注记录（dev 变 6/6 与 5/5，签字级改动）；③重锚注入 ref 或改从 MPN 侧注入（后者需 oracle 给真实料号，不臆造）。
+- **结论**：批②通过复验。待岳：①上述 dev hp-prec 三选一；②批②全部变更的提交点头。

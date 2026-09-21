@@ -1,0 +1,21 @@
+batch-2 A2b waiver evidence -- 毕设板 tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2
+rule param-value-mpn-match: R tolerance 3 / C tolerance 25 (oracle ruling 2026-09-21)
+
+C28   OK       C28: board value 2.2e-06 F vs MPN 1e-07 F differ 22.00x, below the 25x tolerance (oracle ruling 015 batch-2: "不要定的太死")
+        evidence: C28 value '2.2uF' | C28 mpn 'CC0805KRX7R9BB104'
+C29   OK       C29: board value 2.2e-06 F vs MPN 1e-07 F differ 22.00x, below the 25x tolerance (oracle ruling 015 batch-2: "不要定的太死")
+        evidence: C29 value '2.2uF' | C29 mpn 'CC0805KRX7R9BB104'
+C36   OK       C36: board value 2.2e-06 F vs MPN 1e-07 F differ 22.00x, below the 25x tolerance (oracle ruling 015 batch-2: "不要定的太死")
+        evidence: C36 value '2.2uF' | C36 mpn 'CC0805KRX7R9BB104'
+C42   OK       C42: board value 1e-08 F vs MPN 1e-07 F differ 10.00x, below the 25x tolerance (oracle ruling 015 batch-2: "不要定的太死")
+        evidence: C42 value '10nF' | C42 mpn 'CC0805KRX7R9BB104'
+C44   OK       C44: board value 2.2e-06 F vs MPN 1e-07 F differ 22.00x, below the 25x tolerance (oracle ruling 015 batch-2: "不要定的太死")
+        evidence: C44 value '2.2uF' | C44 mpn 'CC0805KRX7R9BB104'
+U10   OK       U10: board value 1000 Ω vs MPN 470 Ω differ 2.13x, below the 3x tolerance (oracle ruling 015 batch-2: "不要定的太死")
+        evidence: U10 value '1kΩ' | U10 mpn 'FRC0805J471 TS'
+U14   OK       U14: board value 1000 Ω vs MPN 470 Ω differ 2.13x, below the 3x tolerance (oracle ruling 015 batch-2: "不要定的太死")
+        evidence: U14 value '1kΩ' | U14 mpn 'FRC0805J471 TS'
+
+VIOLATION rows on this board: []
+OK rows on this board: ['C28', 'C29', 'C36', 'C41', 'C42', 'C44', 'U10', 'U14']
+findings this rule raises on this board: 0

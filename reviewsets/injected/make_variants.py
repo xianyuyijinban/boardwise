@@ -201,7 +201,10 @@ VARIANTS = [
     },
     {
         "id": "value-mpn-mismatch",
-        "fault": "U3's value field changed to 2.2k while its MPN decodes 1k",
+        "fault": (
+            "U3's value field changed to 4.7k while its MPN decodes 1k "
+            "(4.70x apart, past the R tolerance)"
+        ),
         "edit": "rewrite U3's Value attribute only",
         "expects": "param-value-mpn-match",
         "ref": "U3",
@@ -211,7 +214,26 @@ VARIANTS = [
         "oracle_note": (
             "the single-field contradiction, now first-of-its-kind: the base "
             "has U3's value and MPN agreeing at 1k (the oracle's ruling), so "
-            "this edit is the only disagreement on the board."
+            "this edit is the only disagreement on the board. **Re-signed "
+            "2026-09-21** (task 015 batch 2): the injected value was 2.2k, "
+            "and under batch 2's amplitude ruling 2.2k/1k = 2.20x sits below "
+            "the 3x R tolerance -- the rule would report OK and the injection "
+            "would not be caught at all. Measured side effect of the move to "
+            "4.7k, not hidden: 4.7k also leaves ``param-led-current``'s "
+            "[470, 2200] ohm window, so this board now carries a second "
+            "finding (a WARN on LED1, a ref its records do not claim). The "
+            "conflict is structural -- the window's ceiling is 2200 ohm = "
+            "2.20x of this board's own 1k MPN -- so no value-field edit can "
+            "be both >= 3x and inside the window."
+        ),
+        "final_ruling": (
+            "FINAL RULING 2026-09-21 (task 015 batch 2; oracle decision A, "
+            "category tolerances R 3x / C 25x). The ruling's own words for "
+            "the complaint are quoted in the rule "
+            "(``MPN_AMPLITUDE_TOLERANCE_R``, src/boardwise/rules/params.py): "
+            "the injected value moved 2.2k -> 4.7k ohm so that the "
+            "disagreement reads 4.70x and stays a violation at or above the "
+            "3x tolerance."
         ),
     },
 ]
@@ -622,7 +644,12 @@ def build_ldo_no_headroom(lines: list[str], variant_id: str) -> list[str]:
 
 
 def build_value_mpn_mismatch(lines: list[str], variant_id: str) -> list[str]:
-    """Rewrite U3's Value only -- the MPN keeps saying 470 ohm."""
+    """Rewrite U3's Value only -- the MPN keeps decoding 1k.
+
+    The value is 4.7k, not the 2.2k of the original injection: task 015 batch
+    2 rules a 2.20x disagreement *below* the R tolerance, so the original edit
+    would have left the fault uncaught (see the table's ``final_ruling``).
+    """
     cid = _component_id(lines, "U3")
     index = next(
         i for i, _h, b in _records(lines, "ATTR")
@@ -632,7 +659,7 @@ def build_value_mpn_mismatch(lines: list[str], variant_id: str) -> list[str]:
     if body.get("value") != "1k\u03a9":
         raise ValueError(f"U3's value is {body.get('value')!r}, expected '1k\\u03a9'")
     out = list(lines)
-    out[index] = _render(head, {**body, "value": "2.2k\u03a9"})
+    out[index] = _render(head, {**body, "value": "4.7k\u03a9"})
     return out
 
 
@@ -670,6 +697,18 @@ def _write_archive(members: dict[str, bytes], epru_name: str, text: str, out: Pa
             info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
             info.compress_type = zipfile.ZIP_DEFLATED
             archive.writestr(info, payload)
+
+
+def _final_ruling(variant: dict) -> str:
+    """The record a later ruling appends to an already-signed injection.
+
+    Empty for every variant the oracle has not re-signed; when a ruling moves
+    a fixture, the note has to say which ruling did it, or a reader comparing
+    the board with the table would take the table's old edit for the current
+    one (task 015 batch 2, ``value-mpn-mismatch``).
+    """
+    ruling = variant.get("final_ruling")
+    return f" {ruling}" if ruling else ""
 
 
 def _annotation(variant: dict, source_rel: str, base_id: str) -> dict:
@@ -724,6 +763,7 @@ def _annotation(variant: dict, source_rel: str, base_id: str) -> dict:
             f"rule's own columns rather than the board total. Split: {split} "
             f"(011e sec.2 -- assigned by sha1(id), see make_variants.py). "
             f"Oracle note: {variant['oracle_note']}"
+            + _final_ruling(variant)
         ),
         "items": [
             {
@@ -735,6 +775,7 @@ def _annotation(variant: dict, source_rel: str, base_id: str) -> dict:
                 "note": (
                     f"Injected fault: {variant['fault']} ({variant['edit']}). "
                     f"Expected catch: {variant['expects']}."
+                    + _final_ruling(variant)
                 ),
             }
         ],
@@ -973,6 +1014,8 @@ def list_variants() -> int:
         if not variant.get("retired"):
             print(f"   split:    {split_of(variant['id'])}")
         print(f"   note:     {variant['oracle_note']}")
+        if variant.get("final_ruling"):
+            print(f"   ruling:   {variant['final_ruling']}")
     live = eval_ids()
     print(f"\n{len(live)} of {len(VARIANTS)} variants in the eval set: {', '.join(live)}")
     print(f"   holdout: {', '.join(sorted(holdout_ids()))}")

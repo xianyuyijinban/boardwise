@@ -26,8 +26,13 @@ Three properties arrived with 011e and are pinned here:
 * ``value-mpn-mismatch`` used to carry a second effect -- the wider series
   resistance also dragged the computed LED current out of bounds. The oracle's
   2026-09-19 revision of ``param-led-current`` (judge the resistance against
-  [470, 2200] ohm in the 3V3 domain) removed it: that board is a single-fault
-  fixture now, and the test below pins the absence.
+  [470, 2200] ohm in the 3V3 domain) removed it *at 2.2k*, the value the
+  injection carried then, and the test below pinned the single-fault shape.
+  **Batch 2 (2026-09-21) took it back**: 2.2k against the 1k MPN is 2.20x,
+  below that ruling's 3x R tolerance, so the injected value moved to 4.7k and
+  the second effect returned -- 4.7k is outside the LED window. The board is
+  no longer a single-fault fixture, and the test below now pins *that*, with
+  the consequence in the dev measurement written down rather than hoped for.
 """
 
 from __future__ import annotations
@@ -111,7 +116,7 @@ def _fault_is_present(variant: str, model) -> bool:
     if variant == "ldo-no-headroom":
         return _pin(model, "U5", "1").net == "VCC"
     if variant == "value-mpn-mismatch":
-        return model.components["U3"].value == "2.2k\u03a9"
+        return model.components["U3"].value == "4.7k\u03a9"
     raise AssertionError(f"no fault check for {variant!r}")
 
 
@@ -304,18 +309,37 @@ def test_the_base_has_no_findings_at_all():
 
 
 def test_the_two_native_defects_are_gone_from_the_base_and_still_there_on_the_golden():
-    """The base is a correction, not a loosened harness."""
+    """The base is a correction, not a loosened harness.
+
+    One of the golden board's two defects is no longer *detected*: U3's
+    value/MPN pair is 2.13x, under batch 2's R tolerance, so
+    ``param-value-mpn-match`` reports OK and the signed record goes to the
+    missed column (the oracle knew: see the constant's comment in
+    ``rules/params.py``). The V3 decoupling defect is untouched, and the point
+    of this test -- the base, which carries the oracle's corrections, still
+    fires nothing -- is unchanged.
+    """
     golden_set = load_annotations(GOLDEN_SET)
-    for board, expected in ((BASE, 0), (GOLDEN, 1)):
+    expected_detected = {"decap-required-caps": 1, "param-value-mpn-match": 0}
+    for board in (BASE, GOLDEN):
         evaluation = evaluate_annotations(
             golden_set, load_board_model(board), BUILTIN_RULES
         )
-        for item in golden_set.items:
-            if item.kind != "defect":
-                continue
+        defects = [item for item in golden_set.items if item.kind == "defect"]
+        assert len(defects) == 2, "the golden set's two defects"
+        for item in defects:
+            want = 0 if board == BASE else expected_detected[item.rule_hint]
             metric = _metric(evaluation, item.rule_hint)
-            assert metric.detected == expected, (board.name, item.ref)
-            assert metric.violations == expected, (board.name, item.ref)
+            assert metric.detected == want, (board.name, item.ref)
+            assert metric.violations == want, (board.name, item.ref)
+    # The golden board's mpn defect is a *miss*, not silence about the part:
+    # the rule still speaks about U3, and says the amplitude out loud.
+    model = load_board_model(GOLDEN)
+    waived = [
+        o for o in ValueMpnMatch().outcomes(model)
+        if o.subject == "U3" and o.state == "OK"
+    ]
+    assert len(waived) == 1 and "2.13x" in waived[0].message
 
 
 # ---------------------------------------------------------------------------
@@ -440,30 +464,48 @@ def test_the_retired_variant_stays_unverifiable_and_the_measurement_is_still_ass
     assert _findings(variant) == []
 
 
-def test_value_mpn_mismatch_now_has_exactly_one_finding():
-    """One edit, one finding -- and it took an oracle ruling to get there.
+def test_value_mpn_mismatch_carries_two_findings_and_the_second_is_unclaimed():
+    """Batch 2's trade, pinned where it bites: 4.7k catches the MPN fault and
+    takes the LED window with it.
 
-    U3 is the LED's series resistor, so raising it to 2.2k used to have a
-    second effect: the computed LED current fell below the house floor
-    (0.05-0.27 mA against 0.5 mA). The 2026-09-19 revision judges the
-    **resistance** instead, and 2.2k is the oracle's own corrected value --
-    inside [470, 2200] ohm -- so the second finding is gone and this board is
-    a clean single-fault fixture, which is what the annotation set always
-    claimed it was.
+    History, so the loss is not mistaken for an oversight. At 2.2k this board
+    was a clean single-fault fixture: 2.2k sat exactly on the oracle's
+    [470, 2200] ohm window ceiling, so ``param-led-current`` was quiet. Batch
+    2 rules 2.2k/1k = 2.20x **below** the 3x R tolerance, which means the
+    injection stopped being caught at all -- the variant would have bought a
+    quieter rule at the price of a dead fixture. The injected value is now
+    4.7k (4.70x, a violation), and 4.7k is above the window ceiling.
+
+    The conflict is structural, not slack in the fixture: the window's ceiling
+    is 2200 ohm, i.e. 2.20x of this board's own 1k MPN, so **no** value-field
+    edit can be simultaneously >= 3x and inside the window. Reported to the
+    oracle; the numbers it costs in the dev measurement are in
+    ``outputs/015b_eval_dev.txt`` (one high-priority finding with no record to
+    explain it).
     """
     led = lambda board: {  # noqa: E731 - a one-line reader, used twice
         o.subject: o.state for o in LedCurrent().outcomes(load_board_model(board))
     }
-    assert led(BASE)["LED1"] == "OK"
-    assert led(INJECTED / "value-mpn-mismatch.epro2")["LED1"] == "OK"
+    assert led(BASE)["LED1"] == "OK", "the base stays clean"
+    assert led(INJECTED / "value-mpn-mismatch.epro2")["LED1"] == "VIOLATION"
 
+    # The base agrees with itself; the variant's MPN rule fires on the ref its
+    # record names, and the LED rule fires on a ref no record claims.
     value_mpn = {
         o.subject: o.state
         for o in ValueMpnMatch().outcomes(load_board_model(BASE))
     }
     assert value_mpn["U3"] == "OK", "the base has value and MPN agreeing"
     findings = _findings(INJECTED / "value-mpn-mismatch.epro2")
-    assert sorted(f.rule_id for f in findings) == ["param-value-mpn-match"]
+    assert sorted(f.rule_id for f in findings) == [
+        "param-led-current", "param-value-mpn-match",
+    ]
+    assert all(f.severity == "WARN" for f in findings)
+    aset = load_annotations(INJECTED / "value-mpn-mismatch.json")
+    assert [item.ref for item in aset.items] == ["U3"], (
+        "the LED finding is deliberately not claimed by a second record: the "
+        "annotation set is the oracle's, and re-writing it is his call"
+    )
 
 
 def test_the_base_annotation_set_carries_the_exceptions_but_no_defects():
