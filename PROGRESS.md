@@ -4,14 +4,14 @@ Living index. Details live in `tasks/*.md` (one book per task) and
 `docs/implementation-log.md` (the connector debugging arc). This file only
 collects the current truth and the pointers.
 
-## Current baseline (2026-09-21, commit e2bb78c)
+## Current baseline (2026-09-21, commit 1798d7e)
 
-- pytest: **1134 passed** (run with `--basetemp=.tmp_pt_home` on Windows —
+- pytest: **1136 passed** (run with `--basetemp=.tmp_pt_home` on Windows —
   the host's safe-delete hook otherwise eats the summary line and fakes
   exit 1)
-- connector: **266 pass / 0 fail** (`cd connector && npm test`)
+- connector: **279 pass / 0 fail** (`cd connector && npm test`)
 - `npx tsc --noEmit`: clean
-- connector version: **0.4.6** (`connector/extension.json`)
+- connector version: **0.4.10** (`connector/extension.json`)
 - Verified host: EasyEDA Pro **3.2.186** (the only host the bridge is
   calibrated against; every real-host fact in the task books names it)
 
@@ -22,6 +22,7 @@ collects the current truth and the pointers.
 | M0 baseline & unified entry | **DONE 2026-09-19** | tag `m0-baseline`; four real-host persistence scenarios PASS (`docs/persistence-baseline.md`); P0a write-path validation; P0d three-state persistence + 009d2 disconnect honesty (exit 3 exists); golden replay real-host netlist diff zero (010c M6) |
 | M1 useful schematic review | **DONE 2026-09-20** | `5958b1c`; annotations + metrics harness + 15 rules + injected boards + holdout 33/33 detection (`tasks/011-review-rules-m1.md`) |
 | 012 basic experience（内测版 0.4.6） | **DONE 2026-09-21**（真机验证走 013） | `e2bb78c`; delete/modify + multi-project + export-fab + lib.recommend + review-mark + doctor（`tasks/012-basic-experience.md`、`tasks/012-commit-checklist.md`） |
+| 013 real-host verification（0.4.10） | **DONE 2026-09-21** | `1798d7e`; doctor 7/7 真机、review.mark 毕设板 9/9、export.fab 三件套（BOM filter 极性修复）、lib.recommend supplierId 键、同事视角走查+截图（`tasks/013-realhost-verification.md`、`tasks/013-commit-checklist.md`） |
 
 ## Coordinate contract (the thing that cost the most sessions)
 
@@ -40,3 +41,4 @@ point. Full measurement history: `tasks/010c-coordinate-convention.md`
 - `ce044a6` coordinate convention + AMS1117 idiom block (010+010c)
 - `5958b1c` M1 review rules (011)
 - `e2bb78c` 012 basic experience, connector 0.4.6
+- `1798d7e` 013 real-host verification, connector 0.4.10
