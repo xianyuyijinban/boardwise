@@ -4,9 +4,9 @@ Living index. Details live in `tasks/*.md` (one book per task) and
 `docs/implementation-log.md` (the connector debugging arc). This file only
 collects the current truth and the pointers.
 
-## Current baseline (2026-09-21, commit 501a2f4)
+## Current baseline (2026-09-21, commit 5ff0a1d)
 
-- pytest: **1139 passed** (run with `--basetemp=.tmp_pt_home` on Windows —
+- pytest: **1145 passed** (run with `--basetemp=.tmp_pt_home` on Windows —
   the host's safe-delete hook otherwise eats the summary line and fakes
   exit 1)
 - connector: **279 pass / 0 fail** (`cd connector && npm test`)
@@ -23,7 +23,7 @@ collects the current truth and the pointers.
 | M1 useful schematic review | **DONE 2026-09-20** | `5958b1c`; annotations + metrics harness + 15 rules + injected boards + holdout 33/33 detection (`tasks/011-review-rules-m1.md`) |
 | 012 basic experience（内测版 0.4.6） | **DONE 2026-09-21**（真机验证走 013） | `e2bb78c`; delete/modify + multi-project + export-fab + lib.recommend + review-mark + doctor（`tasks/012-basic-experience.md`、`tasks/012-commit-checklist.md`） |
 | 013 real-host verification（0.4.10） | **DONE 2026-09-21** | `1798d7e`; doctor 7/7 真机、review.mark 毕设板 9/9、export.fab 三件套（BOM filter 极性修复）、lib.recommend supplierId 键、同事视角走查+截图（`tasks/013-realhost-verification.md`、`tasks/013-commit-checklist.md`） |
-| 015 review rules M2 批① | **DONE 2026-09-21** | `501a2f4`; MPN 解码器拒非 EIA 记法、decoupling-per-ic 退役、holdout hp-prec 33/40（`tasks/015-review-rules-m2.md`；批②矛盾幅度 oracle 已裁 A，进行中） |
+| 015 review rules M2 批①+批② | **DONE 2026-09-21** | `501a2f4`/`5ff0a1d`; MPN 解码器拒非 EIA 记法、decoupling-per-ic 退役、矛盾幅度 R 3x/C 25x（oracle 裁 A）+ 注入变体重签 4.7k；**holdout 33/33 双 1.00，011 §十晋级判据达成**（`tasks/015-review-rules-m2.md`；dev hp-prec 4/5 已知代价，oracle 终裁①接受） |
 
 ## Coordinate contract (the thing that cost the most sessions)
 
@@ -44,3 +44,4 @@ point. Full measurement history: `tasks/010c-coordinate-convention.md`
 - `e2bb78c` 012 basic experience, connector 0.4.6
 - `1798d7e` 013 real-host verification, connector 0.4.10
 - `501a2f4` 015 review rules M2 batch 1 (decoder guards + decoupling retired)
+- `5ff0a1d` 015 review rules M2 batch 2 (amplitude tolerances R 3x/C 25x + variant re-sign; M2 graduation: holdout 33/33 both 1.00)

@@ -371,3 +371,5 @@ outputs/015b_eval_holdout.txt:73    high-priority precision (ERROR/WARN findings
 - **边界核对**：`values.py dde2ed41…`、`review_eval.py 802b52dd…`、黄金/毕设标注集 sha256 均未动。
 - **一处实测偏离（执行者已如实上报，机制成立，待 oracle 三选一）**：dev hp-prec 实测 **4/5 = 0.80**（预测 5/5）——注入板 U3 兼是 LED1 限流电阻，4.7k 落在 `param-led-current` 的 [470,2200] 窗口外 ⇒ 同板多出一条 LED1 WARN，变体的单条 U3 记录解释不了。**结构性冲突**：MPN 锚 1k 时 ≥3x 需 value ≥ 3000Ω，窗口顶 2200Ω（=2.20x）——这块板上"≥3x"与"窗口内"互斥，2.2k 当年能单错型正因为它踩在窗口顶。选项：①接受（dev 是调参 split，晋级 holdout 已 1.00）；②给 LED1 补一条标注记录（dev 变 6/6 与 5/5，签字级改动）；③重锚注入 ref 或改从 MPN 侧注入（后者需 oracle 给真实料号，不臆造）。
 - **结论**：批②通过复验。待岳：①上述 dev hp-prec 三选一；②批②全部变更的提交点头。
+
+- **oracle 终裁（2026-09-21，岳）**：dev hp-prec 选 **①接受**——4/5 作为已知代价留史，不补标注、不重锚注入 ref；晋级判据以 holdout 双 1.00 为准。批②提交已点头：`5ff0a1d`。
