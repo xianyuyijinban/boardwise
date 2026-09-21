@@ -1,0 +1,78 @@
+013 批② 追加项 · BOM 表头 17 列 → 15 列（执行子代理，2026-09-21 16:34–16:55）
+================================================================================
+
+§1 根因（宿主源码，逐字见 013_p3_bom_filter_root.txt 的 [A]/[B] 段）
+------------------------------------------------------------------
+api.js 的 getBomFile 包装把列参数拼成 d.tableAttrKeys：
+
+    if(s) for(const p of s){ const m={title:p,value:p,order:0,key:0}; hne(p,m); push(m) }   // statistics，过 hne
+    if(a) for(const p of a){ const m={title:p,value:p,order:0,key:0};        push(m) }      // property，不过 hne
+    ... d.tableAttrKeys = d.tableAttrKeys.map((p,m)=>({...p, orderWeight: len-m}))
+    if(o){ const p = d.tableAttrKeys.map(m=>m.value);
+           for(const m of o) if(m.property==="No."&&(m.property="Number"), p.includes(m.property)) {...}
+                             else return }                                                    // 缺列 = 整次调用返回 undefined
+
+hne `'No.'` → value `'Number'`（BOM 引擎给序号列用的值）。两条结论：
+
+1. **同一列名给两处就会出两列**（宿主不去重）——preset 原先把 `No.`/`Quantity` 既放 statistics
+   又放 property（15 列全表），于是 tableAttrKeys 17 条、表头 17 列：第 13 列 `No.`/`Number`、
+   第 15 列第二个 `Quantity`，与第 1 列 `序号`、第 3 列 `数量` 重复。
+2. **不能反过来删 statistics**：只有 statistics 这条路径会把 `'No.'` 变成 `'Number'`，而列检查
+   `p.includes('Number')` 找不到就 `return` —— 整次调用不返回任何文件（不是"表头少两列"，是
+   **BOM 文件都没有**）。所以修法是"两列表互斥、并集 = 15 列"，不是"二选一删掉"。
+
+§2 改法（connector/src/actions.ts）
+-----------------------------------
+    const FAB_BOM_STATISTICS = ['No.', 'Quantity'];                       // 新增：只走 statistics
+    const FAB_BOM_PROPERTY   = FAB_BOM_COLUMNS.map(c => c.property)
+                                 .filter(p => !FAB_BOM_STATISTICS.includes(p));   // 新增：13 项，派生
+preset：`statistics: FAB_BOM_STATISTICS`（原字面量数组），`columns: FAB_BOM_COLUMNS` 不变；
+第 6 实参改为 `FAB_BOM_PROPERTY`；manifest.preset.bom.property 同步记实际所发（statistics 由
+`...preset.bom` 展开）。manifest note 首条改为"exactly the 15 BOM column names come back in the
+header, the two counting columns travelling as `statistics` and the other 13 as `property`
+(sending them in both produced a 17-column header …)"。
+mock（connector/tests/actions012b.test.mjs）：bom[5] 长度 13 + 与 statistics 互斥 + 并集 = columns
+的属性集合；manifest 用例同样断言 statistics=['No.','Quantity']、property 13、并集 15、columns 15。
+connector 测试数不变 **279**。
+
+§3 真机复核（输出 outputs/013_fab_bishe3/）
+------------------------------------------
+**表头逐字 15 列**（与 preset 的 titles 顺序一致）：
+  序号 位号 数量 值 器件名称 器件 封装 制造商料号 制造商 立创编号 供应商 供应商封装 JLC 类别 数据手册 描述
+- 数据行 **68**；`序号` 列恰为 1..68（统计列仍被编号 ⇒ 拆列没伤到数据）；`数量` 求和 = **122**；
+  位号列 122 个唯一值，与 fab_pick_and_place.csv（122 行）的位号**集合完全相等**。
+- fab_bom.csv 24388 B（17 列时为 25084 B）；gerber 真 zip 16 条目 testzip=None；
+  落盘名 fab_gerber.zip / fab_pick_and_place.csv / fab_bom.csv。
+- manifest：`preset.bom.statistics=['No.','Quantity']`、`property` 13 项、`columns` 15 项、
+  `filterOptions=[{Add into BOM, no}]`、`overrides=[]`、`failed=[]`、project 58c7593c…毕设FOC驱动板、
+  pcb ab812fb7…PCB1。目录内 `_r1.json` 记下这次导出时的 connector/project/active 读数。
+
+### 真机过程里撞到的事（重要，已写进 docs/bridge.md §12 附近）
+daemon 只保留**一个** connector 连接，而本机开着**多个编辑器窗口**（审计日志
+`013_p3b_audit_windows.txt`：同一分钟内 hello 帧分别为 connector=0.4.10 / 0.4.9 / 0.4.10，
+不同 socket），每个窗口有自己的扩展存储（各自的 build 版本）与各自的焦点工程，于是
+"哪个 build 在答"和"焦点在哪个工程"随"最后注册的窗口"一起翻——这就是任务书里记的"焦点漂移"。
+后果：**R1 全绿的导出也可能是旧 build 答的**。本次就是这样：第一次 R1 干净（毕设板 + PCB1）的
+导出回来仍是 **17 列**（旧 preset），窗口报的版本同样是 0.4.10 —— 两个 0.4.10 靠版本号根本区分不了，
+最后靠"表头 17/15"这个**行为**判定。处置：给"占着板子的那个窗口"重推同一版本的 bundle
+（`sys.self_update`，179530 B）→ 该窗口页面重载 → 下一次导出即为 **15 列**（16:49:31 → 16:49:47）。
+**结论：同一版本重推是生效的**，不需要 bump 版本（本次未 bump，仍 0.4.10）。
+证据链：outputs/013_p3_evidence/013_p3b_attempts.jsonl（逐次 connector/project/active/列数/自更新记录）、
+013_p3b_stale/（旧 build 的 17 列产物，留档不交付）、013_p3b_audit_windows.txt。
+
+§4 三线与变异
+--------------
+- pytest **1136 passed**；connector `npm test` **279 pass / 0 fail**；`npx tsc --noEmit` 干净。
+- 变异：把 `FAB_BOM_PROPERTY` 的 `.filter(...)` 去掉（= 统计两列又同时进 property）→ **2 红**
+  （"fab exports the three files with the vendor preset arguments"、"fab writes a manifest the
+  caller can drop next to the files"）；还原后 `connector/src/actions.ts` sha256 = 04a4fcb3451b1347…
+  与改前逐字节一致，重建 dist/index.js = d1bf0f72e3eb99d4… = 包内 bundle = 编辑器里加载的那份。
+
+§5 收尾状态
+------------
+- 版本仍 **0.4.10**（未 bump）；`boardwise-connector-0.4.10.eext` 重新打包（bundle 179530 B，
+  sha256 d1bf0f72…），已由 `bridge update-connector` 与脚本内 `sys.self_update` 推到编辑器，
+  真机导出的就是这份（dist ≡ 包 ≡ 机器）。
+- 文档：docs/bridge.md §12 两行（列拆分口径 + 新增"两列表互斥"证据行）、§4 export.fab 行与
+  "多窗口 = 多 connector 实例"新段、docs/api-surface-2026-09-20.md 更正⑤、protocol.py 的
+  export.fab summary。

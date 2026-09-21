@@ -1,0 +1,1 @@
+[{"name": "fab_gerber.zip", "role": "gerber", "bytes": 174051, "declaredBytes": 174051}, {"name": "fab_pick_and_place.csv", "role": "pick_and_place", "bytes": 49422, "declaredBytes": 49422}, {"name": "fab_bom.csv", "role": "bom", "bytes": 25084, "declaredBytes": 25084}]

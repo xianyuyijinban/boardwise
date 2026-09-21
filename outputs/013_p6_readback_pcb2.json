@@ -1,0 +1,445 @@
+{
+  "kind": "pcb",
+  "components": [
+    {
+      "primitiveId": "c4dc0f6ef1616584702a893414cd16c7",
+      "designator": "SCREW3",
+      "name": "",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 548.548,
+      "y": -511.0868,
+      "rotation": 134.9246,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "c4dc0f6ef1616584702a893414cd16c7",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 548.548,
+        "Y": -511.0868,
+        "Rotation": 134.9246,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "SCREW3",
+        "Pads": {
+          "count": 1
+        },
+        "Name": "",
+        "UniqueId": "$3",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "e5ac4a41288f2099e2b8bcb136bd33b2",
+      "designator": "SCREW2",
+      "name": "",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": -523.2836,
+      "y": -509.6759,
+      "rotation": 134.9246,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "e5ac4a41288f2099e2b8bcb136bd33b2",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": -523.2836,
+        "Y": -509.6759,
+        "Rotation": 134.9246,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "SCREW2",
+        "Pads": {
+          "count": 1
+        },
+        "Name": "",
+        "UniqueId": "$2",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "9c2996165bb39308f5aa8e07a415cc93",
+      "designator": "SCREW1",
+      "name": "",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": -521.8726,
+      "y": 562.1557,
+      "rotation": 134.9246,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "9c2996165bb39308f5aa8e07a415cc93",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": -521.8726,
+        "Y": 562.1557,
+        "Rotation": 134.9246,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "SCREW1",
+        "Pads": {
+          "count": 1
+        },
+        "Name": "",
+        "UniqueId": "$1",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "8acaf73adb0aefbe57c3e58046a7d32d",
+      "designator": "SCREW4",
+      "name": "",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 549.9589,
+      "y": 560.7447,
+      "rotation": 134.9246,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "8acaf73adb0aefbe57c3e58046a7d32d",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 549.9589,
+        "Y": 560.7447,
+        "Rotation": 134.9246,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "SCREW4",
+        "Pads": {
+          "count": 1
+        },
+        "Name": "",
+        "UniqueId": "$4",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "92c05a378f5bb9cc",
+      "designator": "C1",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 265,
+      "y": -120,
+      "rotation": -90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "92c05a378f5bb9cc",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 265,
+        "Y": -120,
+        "Rotation": -90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C1",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge282",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "b596084ba21d19bf",
+      "designator": "CN2",
+      "name": "={Manufacturer Part}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C7430477",
+      "manufacturer": "Megastar(兆星)",
+      "x": 742.5,
+      "y": 37.5,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "b596084ba21d19bf",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 742.5,
+        "Y": 37.5,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "CN2",
+        "Pads": {
+          "count": 8
+        },
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge280",
+        "Manufacturer": "Megastar(兆星)",
+        "ManufacturerId": "ZX-MX1.25-6PLT",
+        "Supplier": "LCSC",
+        "SupplierId": "C7430477",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "747409cd0b102fb5",
+      "designator": "R2",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 482.5,
+      "y": 97.5,
+      "rotation": 180,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "747409cd0b102fb5",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 482.5,
+        "Y": 97.5,
+        "Rotation": 180,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R2",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge284",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "c4f09f34d9af2f03",
+      "designator": "R4",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 480,
+      "y": 35,
+      "rotation": 180,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "c4f09f34d9af2f03",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 480,
+        "Y": 35,
+        "Rotation": 180,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R4",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge286",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "5e1433535a730ebb",
+      "designator": "U1",
+      "name": "={Manufacturer Part}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C123083",
+      "manufacturer": "Infineon(英飞凌)",
+      "x": 13.3,
+      "y": 25.5,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "5e1433535a730ebb",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 13.3,
+        "Y": 25.5,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "U1",
+        "Pads": {
+          "count": 8
+        },
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge281",
+        "Manufacturer": "Infineon(英飞凌)",
+        "ManufacturerId": "TLE5012BE1000",
+        "Supplier": "LCSC",
+        "SupplierId": "C123083",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "4c67f151b26e8406",
+      "designator": "R3",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 485,
+      "y": -30,
+      "rotation": 180,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "4c67f151b26e8406",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 485,
+        "Y": -30,
+        "Rotation": 180,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R3",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge285",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    }
+  ],
+  "primitives": [],
+  "componentCount": 10
+}

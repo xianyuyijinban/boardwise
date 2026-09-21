@@ -221,6 +221,42 @@ def _focused_project_documents(**overrides):
     return documents
 
 
+def test_the_page_count_is_doc_lists_count_not_the_length_of_the_document_list():
+    # Measured 2026-09-21: `projects[].schematics` is a *document list* and
+    # carries the container schematic node (`schematic1`) next to the four
+    # pages, so doctor printed "5 页原理图" for a four-page project. The number
+    # it prints is `doc.list`'s own — `schematicPages` / `pcbs` — which is what
+    # this test pins, container node and all.
+    documents = _focused_project_documents(
+        schematicPages=4,
+        pcbs=1,
+        projects=[{
+            "projectUuid": "proj-1", "name": "/test", "friendlyName": "test", "focused": True,
+            "schematics": [
+                {"uuid": "sch-1", "name": "schematic1", "type": "schematic"},
+                {"uuid": "page-1", "name": "P1", "type": "page"},
+                {"uuid": "page-2", "name": "P2", "type": "page"},
+                {"uuid": "page-3", "name": "P3", "type": "page"},
+                {"uuid": "page-4", "name": "P4", "type": "page"},
+            ],
+            "pcbs": [{"uuid": "pcb-1", "name": "PCB1", "type": "pcb"}],
+        }],
+    )
+    entry = check(run_doctor(healthy_probe(documents=documents)), "project")
+    assert entry.ok is True
+    assert "4 页原理图 / 1 个 PCB" in entry.detail
+    assert "5 页原理图" not in entry.detail
+
+
+def test_a_payload_without_the_counts_still_reports_the_list_length():
+    # An older connector build does not send `schematicPages` / `pcbs`; there
+    # the list lengths are the only numbers there are, and a count that may
+    # read one high beats a missing one.
+    entry = check(run_doctor(healthy_probe(documents=_focused_project_documents())), "project")
+    assert entry.ok is True
+    assert "1 页原理图 / 0 个 PCB" in entry.detail
+
+
 def test_the_normalised_placeholder_reading_does_not_hide_the_focused_project():
     # The machine reading is `active: {"uuid": "0"}` while a project is focused;
     # since connector 0.4.6 it arrives here normalised — `active: null` with the

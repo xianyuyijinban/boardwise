@@ -1,0 +1,298 @@
+{
+  "source": "outputs/013_bishe_findings.json",
+  "marks": [
+    {
+      "ref": "C1",
+      "ruleId": "param-value-mpn-match",
+      "severity": "WARN",
+      "text": "C1: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree",
+      "finding": 1
+    },
+    {
+      "ref": "C115",
+      "ruleId": "param-value-mpn-match",
+      "severity": "WARN",
+      "text": "C115: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree",
+      "finding": 2
+    },
+    {
+      "ref": "C116",
+      "ruleId": "param-value-mpn-match",
+      "severity": "WARN",
+      "text": "C116: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree",
+      "finding": 3
+    },
+    {
+      "ref": "R8",
+      "ruleId": "param-value-mpn-match",
+      "severity": "WARN",
+      "text": "R8: board value 0.005 Ω contradicts its MPN ('JER2512F3R005' decodes to 0 Ω) -- BOM and schematic disagree",
+      "finding": 4
+    },
+    {
+      "ref": "R18",
+      "ruleId": "param-value-mpn-match",
+      "severity": "WARN",
+      "text": "R18: board value 0.005 Ω contradicts its MPN ('JER2512F3R005' decodes to 0 Ω) -- BOM and schematic disagree",
+      "finding": 5
+    },
+    {
+      "ref": "R43",
+      "ruleId": "param-value-mpn-match",
+      "severity": "WARN",
+      "text": "R43: board value 0.005 Ω contradicts its MPN ('JER2512F3R005' decodes to 0 Ω) -- BOM and schematic disagree",
+      "finding": 6
+    },
+    {
+      "ref": "C4",
+      "ruleId": "param-value-mpn-match",
+      "severity": "WARN",
+      "text": "C4: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree",
+      "finding": 7
+    },
+    {
+      "ref": "C5",
+      "ruleId": "param-value-mpn-match",
+      "severity": "WARN",
+      "text": "C5: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree",
+      "finding": 8
+    },
+    {
+      "ref": "C6",
+      "ruleId": "param-value-mpn-match",
+      "severity": "WARN",
+      "text": "C6: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree",
+      "finding": 9
+    },
+    {
+      "ref": "C7",
+      "ruleId": "param-value-mpn-match",
+      "severity": "WARN",
+      "text": "C7: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree",
+      "finding": 10
+    },
+    {
+      "ref": "C8",
+      "ruleId": "param-value-mpn-match",
+      "severity": "WARN",
+      "text": "C8: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree",
+      "finding": 11
+    },
+    {
+      "ref": "C9",
+      "ruleId": "param-value-mpn-match",
+      "severity": "WARN",
+      "text": "C9: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree",
+      "finding": 12
+    },
+    {
+      "ref": "C10",
+      "ruleId": "param-value-mpn-match",
+      "severity": "WARN",
+      "text": "C10: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree",
+      "finding": 13
+    },
+    {
+      "ref": "C11",
+      "ruleId": "param-value-mpn-match",
+      "severity": "WARN",
+      "text": "C11: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree",
+      "finding": 14
+    },
+    {
+      "ref": "C12",
+      "ruleId": "param-value-mpn-match",
+      "severity": "WARN",
+      "text": "C12: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree",
+      "finding": 15
+    }
+  ],
+  "skipped": [],
+  "mode": "markers",
+  "complete": false,
+  "response": {
+    "mode": "markers",
+    "cleared": false,
+    "page": {
+      "components": 171,
+      "designators": 92,
+      "withoutPosition": 79,
+      "active": {
+        "uuid": "5f0f4e169f1745e789501f939bb10851",
+        "type": "page",
+        "source": "dmt_SelectControl.getCurrentDocumentInfo"
+      }
+    },
+    "count": 15,
+    "marked": [
+      {
+        "position": 1,
+        "ref": "C1",
+        "ruleId": "param-value-mpn-match",
+        "severity": "WARN",
+        "text": "C1: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree",
+        "marker": 1,
+        "primitiveId": "e60353",
+        "designator": "C1",
+        "x": 114,
+        "y": 655
+      },
+      {
+        "position": 2,
+        "ref": "C115",
+        "ruleId": "param-value-mpn-match",
+        "severity": "WARN",
+        "text": "C115: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree",
+        "marker": 2,
+        "primitiveId": "e61984",
+        "designator": "C115",
+        "x": 1420,
+        "y": 1084
+      },
+      {
+        "position": 3,
+        "ref": "C116",
+        "ruleId": "param-value-mpn-match",
+        "severity": "WARN",
+        "text": "C116: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree",
+        "marker": 3,
+        "primitiveId": "e61944",
+        "designator": "C116",
+        "x": 1398,
+        "y": 1084
+      },
+      {
+        "position": 7,
+        "ref": "C4",
+        "ruleId": "param-value-mpn-match",
+        "severity": "WARN",
+        "text": "C4: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree",
+        "marker": 4,
+        "primitiveId": "e64086",
+        "designator": "C4",
+        "x": 1067,
+        "y": 300
+      },
+      {
+        "position": 8,
+        "ref": "C5",
+        "ruleId": "param-value-mpn-match",
+        "severity": "WARN",
+        "text": "C5: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree",
+        "marker": 5,
+        "primitiveId": "e64172",
+        "designator": "C5",
+        "x": 852,
+        "y": 280
+      },
+      {
+        "position": 10,
+        "ref": "C7",
+        "ruleId": "param-value-mpn-match",
+        "severity": "WARN",
+        "text": "C7: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree",
+        "marker": 6,
+        "primitiveId": "8c453341af2a189a",
+        "designator": "C7",
+        "x": 92,
+        "y": 687
+      },
+      {
+        "position": 11,
+        "ref": "C8",
+        "ruleId": "param-value-mpn-match",
+        "severity": "WARN",
+        "text": "C8: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree",
+        "marker": 7,
+        "primitiveId": "e63575",
+        "designator": "C8",
+        "x": 1247,
+        "y": 245
+      },
+      {
+        "position": 12,
+        "ref": "C9",
+        "ruleId": "param-value-mpn-match",
+        "severity": "WARN",
+        "text": "C9: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree",
+        "marker": 8,
+        "primitiveId": "817717c39aa4e30d",
+        "designator": "C9",
+        "x": 106,
+        "y": 781
+      },
+      {
+        "position": 14,
+        "ref": "C11",
+        "ruleId": "param-value-mpn-match",
+        "severity": "WARN",
+        "text": "C11: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree",
+        "marker": 9,
+        "primitiveId": "e60928",
+        "designator": "C11",
+        "x": 436,
+        "y": 140
+      }
+    ],
+    "unresolved": [
+      {
+        "position": 4,
+        "ref": "R8",
+        "ruleId": "param-value-mpn-match",
+        "severity": "WARN",
+        "text": "R8: board value 0.005 Ω contradicts its MPN ('JER2512F3R005' decodes to 0 Ω) -- BOM and schematic disagree",
+        "reason": "no component with this designator on the focused page (92 designator(s) in 171 component(s))"
+      },
+      {
+        "position": 5,
+        "ref": "R18",
+        "ruleId": "param-value-mpn-match",
+        "severity": "WARN",
+        "text": "R18: board value 0.005 Ω contradicts its MPN ('JER2512F3R005' decodes to 0 Ω) -- BOM and schematic disagree",
+        "reason": "no component with this designator on the focused page (92 designator(s) in 171 component(s))"
+      },
+      {
+        "position": 6,
+        "ref": "R43",
+        "ruleId": "param-value-mpn-match",
+        "severity": "WARN",
+        "text": "R43: board value 0.005 Ω contradicts its MPN ('JER2512F3R005' decodes to 0 Ω) -- BOM and schematic disagree",
+        "reason": "no component with this designator on the focused page (92 designator(s) in 171 component(s))"
+      },
+      {
+        "position": 9,
+        "ref": "C6",
+        "ruleId": "param-value-mpn-match",
+        "severity": "WARN",
+        "text": "C6: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree",
+        "reason": "no component with this designator on the focused page (92 designator(s) in 171 component(s))"
+      },
+      {
+        "position": 13,
+        "ref": "C10",
+        "ruleId": "param-value-mpn-match",
+        "severity": "WARN",
+        "text": "C10: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree",
+        "reason": "no component with this designator on the focused page (92 designator(s) in 171 component(s))"
+      },
+      {
+        "position": 15,
+        "ref": "C12",
+        "ruleId": "param-value-mpn-match",
+        "severity": "WARN",
+        "text": "C12: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree",
+        "reason": "no component with this designator on the focused page (92 designator(s) in 171 component(s))"
+      }
+    ],
+    "markers": {
+      "attempted": 9,
+      "accepted": 9
+    },
+    "readOnly": true,
+    "note": "markers are geometric: generateIndicatorMarkers takes shapes, not text. marked[k-1] is marker k (1-based, in the order drawn) — `position` is the caller's own finding order, and `marker` is the drawn order. The API has no per-marker text, so the rule id, the severity and the one-line summary travel in this table.",
+    "notes": [
+      "79 primitive(s) on the page carry no designator or no numeric position and cannot be pointed at",
+      "6 finding(s) could not be pointed at on this page and were not drawn"
+    ]
+  }
+}

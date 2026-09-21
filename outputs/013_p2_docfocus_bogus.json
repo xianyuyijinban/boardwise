@@ -1,0 +1,13 @@
+{
+  "error": {
+    "code": "NOT_FOUND",
+    "message": "doc.focus: no open tab matches 0000000000000000 ¡ª open it first with doc.open",
+    "detail": {
+      "wanted": "0000000000000000",
+      "openTabs": [
+        "tab_page1",
+        "b4298962367251c8@ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489"
+      ]
+    }
+  }
+}

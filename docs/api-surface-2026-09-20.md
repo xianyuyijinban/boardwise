@@ -64,9 +64,12 @@ P1（内测后）：ECO importChanges、PCB 侧写、事件订阅实时审、仿
   - `getGerberFile(fileName, colorSilkscreen, unit, digitalFormat, layers, objects)`——单位/数字格式（4:5、英制 3:6）/钻孔表/层与对象全可控
   - `getPickAndPlaceFile(fileName, 'xlsx'|'csv', unit)`——SMT 坐标
   - `getBomFile(fileName, 'xlsx'|'csv', template, filterOptions, statistics, property, columns)`——**自定义模板与列**，非立创厂商格式的关键
+    - 【2026-09-21 真机更正③（013 批②）】**`filterOptions` 是"排除"规则，不是"保留"**：`includeValue` 是"该属性等于此值就把这一行删掉"。宿主 `api.js` 的 `mne`/`gne` 把它写进 `filterRules`（并先把取值非 `'yes'` 的归一到 `'no'`），`pro-sch` 的 BOM 生成 `verify` 一旦命中就丢行。于是类型包示例的 `{property:'Add into BOM', includeValue:'yes'}` 会删光所有"加入BOM"的器件——122 器件的板子只剩 152 B 表头（15 个列定义照样被逐字接受，所以"表头全接受"并不证明过滤对）。改发 `'no'`（宿主机自带默认规则的取值，`checked:true`）后 68 行、122 个位号齐全。见 `outputs/013_p3_evidence/013_p3_bom_filter_root.txt`、`outputs/013_fab_bishe2/`
+    - 【2026-09-21 真机更正④（013 批②）】**三件套的文件名不是同一套规则**：gerber/坐标是 `new File([data], t || c.fileName)`——原样回传我们传的 `fileName`（故 preset 名必须自带 `.zip`/`.csv`，否则落盘无扩展名）；BOM 是宿主自己拼 `fileName + '.' + fileType`（故 preset 的 BOM 名**不能**带 `.csv`，否则得到 `fab_bom.csv.csv`）
+    - 【2026-09-21 真机更正⑤（013 批②，已修）】**`statistics` 与 `property` 必须**不重不漏地合成列集**：宿主 `api.js` 用 `statistics + property` 建表且**不去重**，同一个列名给两处就会出两列 —— preset 原先把 `No.`/`Quantity` 两处都给，于是 15 列的 preset 出了 **17 列表头**（`序号`…`Number`、`数量`…`Quantity`）。而两个参数**不可互换**：只有 `statistics` 的条目会过 `hne`（把 `No.` 改写成宿主 BOM 引擎编号用的 `Number` 列），`property` 的条目永远不会被列检查匹配到，所以**不能反过来删掉 statistics**——`getBomFile` 的列检查是 `p.includes(m.property) … else return`，一旦某列两个列表都没有，整次调用返回 `undefined`（**一个 BOM 文件都不给**）。现修法：统计两列只走 `statistics`，其余 13 列由 `FAB_BOM_COLUMNS` 派生成 `property`，二者并集 = 15 列；真机表头逐字 15 列。见 `outputs/013_fab_bishe3/`
   - 补充：`getTestPointFile`（飞针）、`getPdfFile`、`getDxfFile`、`get3DFile`
 - 候选动作 `export.fab`：一次出"Gerber + 坐标 + BOM"三件套到指定目录；厂商差异通过 BOM template/columns 参数承载，后续攒厂商预设（捷配等）。
-- 待真机 probe：File 对象的落盘路径形态；BOM 模板语法。
+- 待真机 probe：**File 对象的落盘路径形态已实测（见更正④）**；BOM 模板语法仍待 probe（`getBomTemplates` 一侧）。
 
 两项加入 012v2 候选（编号 7/8）。
 
@@ -74,7 +77,9 @@ P1（内测后）：ECO importChanges、PCB 侧写、事件订阅实时审、仿
 
 - API 依据（`LIB_Device`，全部实测可用——011b 的 CH340G 身份就是这条桥查到的）：
   - `search(key, libraryUuid?, classification?, ...)`：关键字搜，默认**系统库**（即编辑器放器件时检索的立创库）
-  - **`searchByProperties({name, value, symbolName, footprintName, supplierFootprint, supplierId, partNumber, partCode}, ...)`**：八字段组合搜——`partNumber`=MPN、`partCode`=LCSC 编号，两条精确通路
+  - **`searchByProperties({name, value, symbolName, footprintName, supplierFootprint, supplierId, partNumber, partCode}, ...)`**：八字段组合搜——`partNumber`=MPN、`partCode`=LCSC 编号，声明里写作两条精确通路
+    - 【2026-09-21 真机更正①】这两条精确通路在 3.2.186 上**不生效**：方法存在且可调用，但 partNumber / partCode / value 四种属性集全部 0 命中、无 error。见 `outputs/013_f4_searchbyprops.txt`
+    - 【2026-09-21 真机更正②（F4 矩阵，定论）】"空转"的说法**只对部分键成立**，方法本身可用：`{supplierId:"C8678"}` 精确命中 1 条（伪造号 `C99999999999` 命中 0 ⇒ 真被当过滤条件），`partNumber`/`partCode`/`value` 被执行但无索引（返回 `[]`，而"被忽略的键"会返回整库默认页 10 条 ⇒ 0 不可能是忽略），`name`/`footprintName` 被忽略（返回默认页，与未知键同形）。实参形状无关（1 参 / 6 参、带不带 libraryUuid 结果不变），故与 `getPngFile`/`createNetLabel` **不是同一族**：是键选择错，不是方法空转。`lib.recommend` 的 exact 层因此改发 `{supplierId}`；见 `outputs/013_f4_probes_real.json`、`docs/bridge.md` §12
   - `getByLcscIds(lcscIds, ...)`：LCSC 编号直查，支持批量
   - 返回 `ILIB_DeviceSearchItem`：uuid/name/符号/封装/3D/图片/description/otherProperty（`otherProperty` 里带 LCSC Part Name、Manufacturer Part、**JLCPCB Part Class（Basic/Extended——SMT 换料费维度）**、Datasheet 链接，011b 在 META 里实测到这些键）
 - 候选动作 `lib.recommend`：输入位号/MPN/参数描述 → 多策略搜（MPN 精确 → 参数组合 → 关键字）→ TopN 候选（封装匹配 + Basic 件优先 + datasheet 链接）→ oracle 确认 → `set_component_attribute` 落座。

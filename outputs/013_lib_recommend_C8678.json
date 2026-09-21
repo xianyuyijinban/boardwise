@@ -1,0 +1,95 @@
+{
+  "source": "query",
+  "query": "C8678",
+  "pageUuid": null,
+  "ref": null,
+  "component": null,
+  "target": {
+    "value": "",
+    "partNumber": "",
+    "partCode": "C8678",
+    "footprintName": "",
+    "supplierFootprint": "",
+    "name": ""
+  },
+  "topN": 5,
+  "layers": [
+    {
+      "layer": "exact",
+      "api": "searchByProperties",
+      "called": true,
+      "args": {
+        "partCode": "C8678"
+      },
+      "hitCount": 0,
+      "pagesFetched": 1
+    },
+    {
+      "layer": "properties",
+      "api": "searchByProperties",
+      "called": false,
+      "args": {},
+      "hitCount": 0,
+      "reason": "neither a value nor a footprint name is known for this part"
+    },
+    {
+      "layer": "keyword",
+      "api": "search",
+      "called": true,
+      "args": {
+        "keyword": "C8678"
+      },
+      "hitCount": 2,
+      "pagesFetched": 1
+    }
+  ],
+  "returned": 2,
+  "shown": 2,
+  "candidates": [
+    {
+      "name": "SS34_C8678",
+      "lcsc": "C8678",
+      "mpn": "SS34",
+      "manufacturer": "MDD(辰达半导体)",
+      "footprintName": "SMA_L4.3-W2.6-LS5.2-RD",
+      "supplierFootprint": "SMA(DO-214AC)",
+      "partClass": "Basic Part",
+      "partClassRank": 0,
+      "datasheet": "https://item.szlcsc.com/datasheet/SS34/9178.html",
+      "description": "二极管配置:独立式;正向压降(Vf):550mV@3A;直流反向耐压(Vr):40V;整流电流:3A;",
+      "deviceUuid": "009407eaaa604eb9b6f73cc3868f316d",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "symbolUuid": "1730ed4965bc440d83c57d584a9d6a67",
+      "footprintUuid": "ae5b4041eac34ae3a0a27232f2a98886",
+      "layer": "keyword",
+      "layerIndex": 2,
+      "footprintMatches": false
+    },
+    {
+      "name": "FDMC8678S",
+      "lcsc": "C3279378",
+      "mpn": "FDMC8678S",
+      "manufacturer": "onsemi(安森美)",
+      "footprintName": "DFN-8_L3.3-W3.3-P0.65-BL-2",
+      "supplierFootprint": "Power-33",
+      "partClass": "Extended Part",
+      "partClassRank": 2,
+      "datasheet": "https://atta.szlcsc.com/upload/public/pdf/source/20230915/042C6740B0CF2EE9C9EB7E19E578121B.pdf",
+      "description": "类型:1个N沟道;漏源电压(Vdss):30V;连续漏极电流(Id):15A；18A;功率(Pd):41W；2.3W;导通电阻(RDS(on)@Vgs,Id):5.2mΩ@15A,10V;阈值电压(Vgs(th)@Id):3V@1mA;",
+      "deviceUuid": "e8cb4abbdb124ccf92d724c424cdff1f",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "symbolUuid": "4d2351d08217427b84347917577ebb6d",
+      "footprintUuid": "ad87fb85c79c4f638ad5458bf5507c1d",
+      "layer": "keyword",
+      "layerIndex": 2,
+      "footprintMatches": false
+    }
+  ],
+  "stock/price": "以商城实时为准",
+  "readOnly": true,
+  "placed": false,
+  "note": "read-only: nothing was placed or modified. Put a candidate on the page with sch.place_component (deviceUuid + libraryUuid), or write the chosen LCSC code / MPN onto the part already on the page with sch.set_component_attribute.",
+  "notes": [
+    "properties: neither a value nor a footprint name is known for this part"
+  ]
+}

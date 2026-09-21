@@ -1,0 +1,220 @@
+{
+  "schema": "boardwise.fab/1",
+  "generatedAt": "2026-09-21T08:49:49.050Z",
+  "vendor": "generic",
+  "vendorSummary": "generic fab house: metric 4:5 gerber (drill table on), CSV P&P in mm, CSV BOM with every column",
+  "project": {
+    "uuid": "58c7593c5ddda93f3c4d4b30638d0394defe3f43eaeab334913d667b1d4d01a6",
+    "name": "毕设FOC驱动板"
+  },
+  "pcb": {
+    "uuid": "ab812fb712e14a62920977ed67aaf8f1",
+    "name": "PCB1"
+  },
+  "outDir": "outputs\\013_p3b_stale",
+  "preset": {
+    "gerber": {
+      "fileName": "fab_gerber.zip",
+      "colorSilkscreen": false,
+      "unit": "mm",
+      "digitalFormat": {
+        "integerNumber": 4,
+        "decimalNumber": 5
+      },
+      "other": {
+        "metallicDrillingInformation": true,
+        "nonMetallicDrillingInformation": true,
+        "drillTable": true,
+        "flyingProbeTestingFile": false
+      }
+    },
+    "pickAndPlace": {
+      "fileName": "fab_pick_and_place.csv",
+      "fileType": "csv",
+      "unit": "mm"
+    },
+    "bom": {
+      "fileName": "fab_bom",
+      "fileType": "csv",
+      "filterOptions": [
+        {
+          "property": "Add into BOM",
+          "includeValue": "no"
+        }
+      ],
+      "statistics": [
+        "No.",
+        "Quantity"
+      ],
+      "columns": [
+        {
+          "property": "Number",
+          "title": "序号",
+          "sort": "asc",
+          "group": null,
+          "orderWeight": 100
+        },
+        {
+          "property": "Designator",
+          "title": "位号",
+          "sort": "asc",
+          "group": "No",
+          "orderWeight": 90
+        },
+        {
+          "property": "Quantity",
+          "title": "数量",
+          "sort": "desc",
+          "group": "Yes",
+          "orderWeight": 80
+        },
+        {
+          "property": "Value",
+          "title": "值",
+          "sort": "asc",
+          "group": "Yes",
+          "orderWeight": 70
+        },
+        {
+          "property": "Name",
+          "title": "器件名称",
+          "sort": "asc",
+          "group": "Yes",
+          "orderWeight": 60
+        },
+        {
+          "property": "Device",
+          "title": "器件",
+          "sort": null,
+          "group": "Yes",
+          "orderWeight": 55
+        },
+        {
+          "property": "Footprint",
+          "title": "封装",
+          "sort": null,
+          "group": "Yes",
+          "orderWeight": 50
+        },
+        {
+          "property": "Manufacturer Part",
+          "title": "制造商料号",
+          "sort": null,
+          "group": "Yes",
+          "orderWeight": 40
+        },
+        {
+          "property": "Manufacturer",
+          "title": "制造商",
+          "sort": null,
+          "group": "Yes",
+          "orderWeight": 35
+        },
+        {
+          "property": "Supplier Part",
+          "title": "立创编号",
+          "sort": null,
+          "group": "Yes",
+          "orderWeight": 30
+        },
+        {
+          "property": "Supplier",
+          "title": "供应商",
+          "sort": null,
+          "group": "Yes",
+          "orderWeight": 25
+        },
+        {
+          "property": "Supplier Footprint",
+          "title": "供应商封装",
+          "sort": null,
+          "group": "Yes",
+          "orderWeight": 20
+        },
+        {
+          "property": "JLCPCB Part Class",
+          "title": "JLC 类别",
+          "sort": null,
+          "group": "Yes",
+          "orderWeight": 15
+        },
+        {
+          "property": "Datasheet",
+          "title": "数据手册",
+          "sort": null,
+          "group": "Yes",
+          "orderWeight": 10
+        },
+        {
+          "property": "Description",
+          "title": "描述",
+          "sort": null,
+          "group": "Yes",
+          "orderWeight": 5
+        }
+      ],
+      "template": null,
+      "property": [
+        "Designator",
+        "Value",
+        "Name",
+        "Device",
+        "Footprint",
+        "Manufacturer Part",
+        "Manufacturer",
+        "Supplier Part",
+        "Supplier",
+        "Supplier Footprint",
+        "JLCPCB Part Class",
+        "Datasheet",
+        "Description"
+      ]
+    },
+    "overrides": []
+  },
+  "files": [
+    {
+      "role": "gerber",
+      "name": "fab_gerber.zip",
+      "mime": "application/zip",
+      "bytes": 174061
+    },
+    {
+      "role": "pick_and_place",
+      "name": "fab_pick_and_place.csv",
+      "mime": "text/csv",
+      "bytes": 49422
+    },
+    {
+      "role": "bom",
+      "name": "fab_bom.csv",
+      "mime": "text/csv",
+      "bytes": 24388
+    }
+  ],
+  "failed": [],
+  "notes": [
+    "measured 2026-09-21 on 3.2.186: exactly the 15 BOM column names come back in the header, the two counting columns travelling as `statistics` and the other 13 as `property` (sending them in both produced a 17-column header — see the preset), the BOM filter rule is an *exclusion* one — `includeValue` is the value that leaves a row out, not the one it keeps — and this host names the BOM file itself (`fileName + \".\" + fileType`) while gerber/P&P echo the name they are handed",
+    "the connector cannot write to outDir: no declared API takes a directory (SYS_FileSystem.saveFile has no such argument), so the caller writes these base64 payloads"
+  ],
+  "written": [
+    {
+      "name": "fab_gerber.zip",
+      "role": "gerber",
+      "bytes": 174061,
+      "declaredBytes": 174061
+    },
+    {
+      "name": "fab_pick_and_place.csv",
+      "role": "pick_and_place",
+      "bytes": 49422,
+      "declaredBytes": 49422
+    },
+    {
+      "name": "fab_bom.csv",
+      "role": "bom",
+      "bytes": 24388,
+      "declaredBytes": 24388
+    }
+  ]
+}

@@ -346,7 +346,7 @@ declaring `confirm`).
 | `hello` | daemon | read | daemon | `token`, `role`, `protocol`, `client` | `{role, protocol, serverTime}` | 30 s (`ACTION_TIMEOUT`) |
 | `ping` | daemon | read | daemon | — | `{pong: true, version, connector: bool, pairedFingerprint: str\|null}` — `version` is the daemon's own build, so "the daemon answering me" and "the daemon my CLI was built from" can be told apart | 30 s |
 | `document.current` | connector | read | connector | — | `{project, pcb, schematicPage, active, type, typeSource, heuristic, tabs}` — `active` is the focused document, or **null** when none is focused (the host's placeholder uuid `"0"` is reported as `null` plus a `problems` line, as in `doc.list`); `typeSource`/`heuristic` say which read produced `type` (§10 item 5) | 30 s |
-| `sys.probe` | connector | read | connector | `checks`, `namespace`, `namespaces`, `functionsOnly` | `checks` mode: `{version, topLevel, checks: {NAME: {present, kind, checked, missing, status, notes?}}}`; enumerate mode: `{version, topLevel, namespaces: {NAME: {present, ownNames, functions, data, errors?}}}` — **read-only** introspection of the live API surface | 30 s |
+| `sys.probe` | connector | read | connector | `checks`, `namespace`, `namespaces`, `functionsOnly` | `checks` mode: `{version, topLevel, checks: {NAME: {present, kind, checked, missing, status, arity, notes?}}}` — `status` is the member's `typeof` and `arity` its declared `fn.length` for the members that read back as functions; enumerate mode: `{version, topLevel, namespaces: {NAME: {present, ownNames, functions, data, errors?}}}` — **read-only** introspection of the live API surface | 30 s |
 | `sys.self_update` | connector | write | connector | `bundleB64`, `version` | `{ok, oldVersion, newVersion, bytes, database, reloadInMs}` — rewrites the connector's own bundle in IndexedDB and reloads the page (§8); **the permission grant is preserved** | 30 s |
 | `sch.readback` | connector | read | connector | `includePrimitives` | `{kind: 'sch', components, primitives, componentCount}` | 30 s |
 | `pcb.readback` | connector | read | connector | `includePrimitives` | `{kind: 'pcb', components, primitives, componentCount}` | 30 s |
@@ -376,9 +376,9 @@ declaring `confirm`).
 | `doc.list` | connector | read | — | `{documents: [{uuid, name, type, active}], projects: [{projectUuid, name, focused, opened, schematics, pcbs, documents}], active, schematicPages, pcbs, count, notes?}` — every page and PCB in the focused project plus a multi-project view (012 §五: non-focused projects report `documents: "brief"`, no document tree — focus them to enumerate); `active` is **null** when no document is focused, including when the host answers with its placeholder uuid `"0"` — the raw reading is kept in `notes` | 30 s |
 | `doc.focus` | connector | write | connector | `pageUuid` or `tabId` | `{activated, tabId, title, documentType}` — puts an already-open tab on top; refuses NOT_FOUND when nothing is open for that uuid | 30 s |
 | `doc.delete_page` | connector | write | connector | `pageUuid` | `{deleted, pageUuid, name}` — removes a schematic page; NOT_FOUND for a uuid the project does not list | 30 s |
-| `export.fab` | connector | read | connector | `pcbUuid`, `outDir`, `vendor`, `gerber`, `bomTemplate`, `timeoutMs` | `{vendor, project, pcb, outDir, generatedAt, encoding: 'base64', files: [{role, name, mime, bytes, data}], manifest, failed, partial, note}` — Gerber + pick-and-place + BOM in one call with a manifest; preset `generic` (metric 4:5, drill table on, CSV P&P in mm, CSV BOM with every column); a file the host refuses/empties/hangs on is reported per file in `failed` | 240 s (`FAB_TIMEOUT`) |
-| `lib.recommend` | connector | read | `query` \| `pageUuid`+`ref`, `topN`, `allLayers`, `timeoutMs` | `{source, query, ref, component, target, layers: [{layer, api, called, args, hitCount, pagesFetched, reason?, error?}], returned, shown, candidates, 'stock/price', readOnly, placed}` — the ladder `partNumber`/`partCode` → `searchByProperties(value+footprintName)` → `search(keyword)`, 5 hits per page and 3 pages per rung; Basic parts first; **no stock/price**; never places. `timeoutMs` is the **per-page** deadline for one library search (default 20 s): a page that never settles is reported as that rung's `error` and the descent continues, instead of consuming the whole action | 90 s (`RECOMMEND_TIMEOUT`) |
-| `review.mark` | connector | read | `pageUuid`, `marks` (`[{ref, ruleId, severity, text}]`), `clear`, `focus`, `color`, `zoom`, `markers` | `{mode: 'markers'\|'list', cleared, page: {components, designators, withoutPosition, active}, count, marked: [{position, marker, ref, designator, ruleId, severity, text, primitiveId, x, y}], unresolved: [{position, …, reason}], markers: {attempted, accepted, reason?}, focused?: {position, ref, zoomed, reason?}, readOnly, note, notes?}` — a review pass drawn on the focused schematic page: each finding's `ref` is resolved to its component's coordinates and marked with a rectangle. The marker API takes **shapes, not text**, so the rule id / severity / one-line summary come back in `marked` (`marked[k-1]` is marker k). `markers: false`, a missing `generateIndicatorMarkers` or a canvas that refuses it all degrade to `mode: 'list'` (the jump list, still carrying coordinates); a ref that is not on the page is reported per mark and the rest are still drawn; `focus: N` zooms to the Nth entry with `zoomToRegion`; `clear: true` removes the markers | 30 s |
+| `export.fab` | connector | read | connector | `pcbUuid`, `outDir`, `vendor`, `gerber`, `bom`, `bomTemplate`, `timeoutMs` | `{vendor, project, pcb, outDir, generatedAt, encoding: 'base64', files: [{role, name, mime, bytes, data}], manifest, failed, partial, note}` — Gerber + pick-and-place + BOM in one call with a manifest; preset `generic` (metric 4:5, drill table on, CSV P&P in mm, CSV BOM with every column — the 15 columns are sent as the two counting columns in `statistics` and the other 13 in `property`, disjoint lists whose union the host checks per column); a file the host refuses/empties/hangs on is reported per file in `failed`. `bom` is an override object limited to `filterOptions` — `[{property, includeValue}]` where a rule leaves a row **out** when the part matches `includeValue` (so the preset sends `'Add into BOM': 'no'`), and `null` means "send none, keep the host's own default rules". On disk the names are `fab_gerber.zip` / `fab_pick_and_place.csv` / `fab_bom.csv` | 240 s (`FAB_TIMEOUT`) |
+| `lib.recommend` | connector | read | `query` \| `pageUuid`+`ref`, `topN`, `allLayers`, `timeoutMs`, `probes` | `{source, query, ref, component, target, layers: [{layer, api, called, args, hitCount, pagesFetched, reason?, error?}], returned, shown, candidates, 'stock/price', readOnly, placed}` — the ladder `searchByProperties({supplierId: <LCSC code>})` → `searchByProperties({value, footprintName})` → `search(keyword)`, 5 hits per page and 3 pages per rung; Basic parts first; **no stock/price**; never places. `timeoutMs` is the **per-page** deadline for one library search (default 20 s): a page that never settles is reported as that rung's `error` and the descent continues, instead of consuming the whole action. `probes` (≤10) replaces the ladder with raw `searchByProperties` calls: each entry `{properties, libraryUuid?, classification?, symbolType?, itemsOfPage?, page?}` is sent with **exactly** the arguments given (an argument the caller left out is not sent, so `arguments.length` is theirs) and reported as `{args, called, hitCount, pageSize, firstKeys, error?}`; the answer is then `{..., probes: […], probesOnly: true, layers: [], candidates: [], returned: 0, shown: 0}`. The `exact` rung's key is `supplierId` because that is the only properties key 3.2.186 indexes (§12) — `partNumber` / `partCode` are applied there and match nothing, so sending them would be a call that cannot return a hit | 90 s (`RECOMMEND_TIMEOUT`) |
+| `review.mark` | connector | read | `pageUuid`, `marks` (`[{ref, ruleId, severity, text}]`), `clear`, `focus`, `color`, `zoom`, `markers` | `{mode: 'markers'\|'list', cleared, page: {components, designators, withoutPosition, active}, count, marked: [{position, marker, ref, designator, ruleId, severity, text, primitiveId, x, y}], unresolved: [{position, …, reason}], markers: {attempted, accepted, reason?}, focused?: {position, ref, zoomed, reason?}, readOnly, note, notes?}` — a review pass drawn on the focused schematic page: each finding's `ref` is resolved to its component's coordinates and marked with a rectangle. The marker API takes **shapes, not text**, so the rule id / severity / one-line summary come back in `marked` (`marked[k-1]` is marker k). `markers: false`, a missing `generateIndicatorMarkers` or a canvas that refuses it all degrade to `mode: 'list'` (the jump list, still carrying coordinates); a ref that is not on the page is reported per mark and the rest are still drawn; `focus: N` zooms to the Nth entry with `zoomToRegion`; `clear: true` removes the markers — it has **no page guard** (it clears whatever canvas is in front, which may belong to a different project; measured 2026-09-21), and with **no active document** it answers `cleared: true` with the note "no active canvas — nothing to remove" instead of reporting the host's refusal of a call that had nothing to act on | 30 s |
 | `doc.open` | connector | read | `uuid` | `{uuid, tabId, opened, activated, document}` — switches the editor's active document, confirmed by asking the editor | 30 s |
 | `pcb.doc.new` | connector | create | `boardName`, `confirm` | `{pcbUuid, focused}` — **gated**: without `confirm: true` the daemon answers `CONFIRMATION_REQUIRED` | 60 s |
 | `doc.rename` | connector | write | `uuid`, `name`, `type` | `{uuid, name, type, renamed, confirmed, notes?}` — dispatches to the per-kind `modify*Name` call and verifies against the editor's listing | 30 s |
@@ -389,10 +389,16 @@ browser download / Electron save dialog, so it cannot honour a path. The action 
 three files as base64 (the same reliable path `export.render` uses) plus a `manifest{}`, and
 `boardwise bridge export-fab --out DIR` is the caller that creates the directory and writes the four
 files. `outDir` is still a required parameter: it is recorded in `manifest.json`, so a bundle on disk
-says where it was meant to go. **A machine run is still owed** on the two points offline work cannot
-settle: whether the host accepts every BOM column name the `generic` preset sends, and whether the
-Gerber export really comes back as a zip (the action sniffs the zip magic instead of trusting the
-extension).
+says where it was meant to go. **Measured on 3.2.186 (2026-09-21)**: the Gerber export really is a zip
+(16 entries, `testzip()` clean, magic sniffed rather than the extension trusted), all 15 BOM column
+names come back verbatim in the header, and the **BOM's `filterOptions` are *exclusion* rules** — the
+type package's `includeValue` is the value that leaves a row **out**, so its own example
+(`'Add into BOM': 'yes'`) exports a header-only BOM for a 122-part board. The preset sends
+`'Add into BOM': 'no'` (the host's own default rule) and the parts are there; the `bom` override exists
+so this argument can be re-measured or replaced without a rebuild. The three names are not chosen the
+same way either: gerber and P&P come back under the name they were handed, the BOM's is the host's own
+`fileName + '.' + fileType` — which is why the preset carries the suffix for the first two and not for
+the third.
 
 **`review.mark` draws what the marker API can draw, and returns the rest.** The task asks for
 marks carrying "rule id + severity + one sentence"; `generateIndicatorMarkers(markers, color,
@@ -410,9 +416,15 @@ instead of one `locate` per ref. **The fallback is part of the contract, not an 
 the coordinates — the jump list the task asks for. Structural things stay thrown: a `pageUuid` that
 is not the focused page (`PAGE_MISMATCH`), a focused document that is not a schematic page, a page
 whose components cannot be read at all, `focus` outside `marks`, and a `clear` on a host without
-`removeIndicatorMarkers`. **Not yet run on a machine** — whether `generateIndicatorMarkers` accepts
-these rectangles on 3.2.186, and whether the markers are actually visible, is the acceptance
-question parked in the task book.
+`removeIndicatorMarkers`. **`clear` deliberately has no page guard**: it removes the overlays on
+whatever canvas is in front, which is what "clear the markers" means (measured 2026-09-21: it cleared a
+canvas belonging to a project other than the one the caller had in mind). With **no** active document
+the answer is `cleared: true` and the note "no active canvas — nothing to remove": the host answers
+`false` for that call, but there was no canvas to act on, and calling it a refusal sends the caller
+hunting an open document that does not exist. **The drawing path has run on a machine** — the host
+accepts the rectangles (`accepted` 9/9 on the 毕设板 page) — while the *visibility* of the markers on
+screen is only partly confirmed (one A/B sample showed box-shaped geometry, another showed none, with
+the view moving under a human hand throughout); see `outputs/013_p2_findings.txt` §八.
 
 **`ping` carries the daemon's own version.** `boardwise doctor` compares it with the version of the
 install the CLI is running from, because "a daemon that is one checkout behind" is a failure mode
@@ -427,8 +439,18 @@ component list (`sch_PrimitiveComponent.getAll()`), and there is no cross-page l
 so a `pageUuid` that is not the focused page is refused with `PAGE_MISMATCH` rather than answered from
 the wrong board. The rungs a hit made unnecessary are reported as `called: false` with the reason, so
 "this rung found nothing" and "this rung never ran" never look alike. `searchByProperties` is
-documented **ADD since EDA v4**: on a host without it the two exact rungs report themselves
-unavailable and the keyword rung still answers — a degradation that is visible, not silent.
+documented **ADD since EDA v4**: on a host without it the exact rung reports itself unavailable and
+the keyword rung still answers — a degradation that is visible, not silent. Measured 2026-09-21 (013),
+the declaration being *present* is not enough **by itself**, and it is also not the whole story: on
+3.2.186 the method is callable and it **does** match — but only on the keys that host indexes, which
+is why the exact rung sends `{supplierId}` rather than the declared `{partNumber, partCode}`. See
+§12's row for the measured matrix.
+To find out *why* on a live host without guessing, `probes` turns this action into a read-only
+channel: the caller supplies up to ten raw argument lists, each goes to `searchByProperties` exactly
+as written (an argument left out is not sent at all — the argument *count* is one of the things under
+measurement), and the answer carries
+`probes: [{args, called, hitCount, pageSize, firstKeys, error?}]` with `probesOnly: true`. Nothing
+else changes: with no `probes`, the answer is the same answer it always was, field for field.
 
 The 006 rows (everything from `sch.netlist` down) exist for the draw flow; their operator
 documentation, machine-probe checklist and known host traps live in [`docs/draw.md`](draw.md).
@@ -493,7 +515,11 @@ Two of them carry measured warnings worth repeating here:
   *complete* for the declared surface, not a sample. `checks: true` uses that generated table.
   The status vocabulary is deliberately the language's own — `function` / `object` / `undefined`
   — plus `threw: …` and `namespace-absent`, so "undeclared" and "the read itself failed" never
-  collapse. A method the package marks `ADD since EDA v…` that reads back `undefined` gets a
+  collapse. Every member that reads back as a function also carries its **declared arity**
+  (`fn.length`), which is how a "present, callable, matches nothing" method gets a shape to test
+  (`lib_Device.searchByProperties` on 3.2.186 is the case that asked for it): a hint, not a
+  verdict — a proxy or wrapper loses the real arity, so it is measured never judged on.
+  A method the package marks `ADD since EDA v…` that reads back `undefined` gets a
   `notes` entry carrying the contradiction. Enumeration survives as the *predictive* mode: it can
   find a name nobody thought to check, which the type package cannot do.
 
@@ -692,6 +718,28 @@ to come back (`boardwise bridge status`, or `boardwise doctor` green), then read
 and put the intended document back in front yourself: `doc.focus` for a tab that is already open,
 `doc.open` for one that is not. Re-read `doc.list` before any write; skipping that check means
 acting on a pre-reload reading in a changed editor.
+
+**More than one editor window means more than one connector, and the daemon has exactly one of
+them.** Measured 2026-09-21 (013 batch②, connector 0.4.9/0.4.10): the audit log recorded `hello`
+frames reporting `0.4.9` and `0.4.10` on **different sockets inside the same minute**, while
+`doc.list`'s focused project changed with the socket (`test` → `test2` → `毕设FOC驱动板`) and
+nothing was done to the editor between reads. Each window keeps its own extension store (hence its
+own build version) and its own focused project, and every window that (re)connects replaces the
+daemon's connector connection — so *both* "which build answers" and "which project is in front"
+belong to whichever window registered last, and they flip on the windows' own schedule. This is what
+the earlier "the focus moved with nobody touching the editor" note was seeing, and it has two
+consequences before any real-machine verification:
+
+- **An R1-clean reading does not prove the build under test answered.** A window left on an older
+  bundle answers `doc.list` perfectly. Check the *behaviour* you changed, not only the project name:
+  in this batch an R1-clean `export-fab` came back with the **old** 17-column BOM from a window that
+  still ran the previous 0.4.10, and the 15-column header is what identified the new one.
+- **`sys.self_update` (and `bridge update-connector`) updates the window that owns the socket**, not
+  the other windows. With two windows open a hot update can land beside the window you are about to
+  test; `sys.probe`'s `connector` version read in the same breath as the action is the cheapest way
+  to know which instance is answering, and repeating the update (after the socket moves) is expected
+  rather than a fault. When the two builds share a version string, the version cannot tell them
+  apart at all — a bump is the only marker that can.
 
 ### Audit log
 
@@ -1045,17 +1093,20 @@ machine-readable. Two deliberate differences:
 | The arm stands down instead of claiming a connection it did not make | `connector/tests/wiring.test.mjs` — with auto-connect off the arm records `arm stood down`, never says `self-connected`, releases its claim, and a second arm after re-enabling connects |
 | A manual connect claims the attempt | `connector/tests/wiring.test.mjs` — `reconnect()` followed by the self-arm leaves exactly one registration |
 | ~~`crypto` is not reachable from an extension realm~~ | **Withdrawn.** This was 0.2.1's diagnosis of `token: NONE`, and 0.2.1's own `About…` disproved it by reporting `crypto=ok`. Recorded here rather than deleted: the error is instructive (§10.14). `tools/probe3-crypto.js` still measures a given editor, and as of 0.2.2 it reports *usability*, not mere presence |
-| `export.fab` sends the preset's arguments, position for position | `connector/tests/actions012b.test.mjs` — the fake host records every call and the assertions are positional: `('fab_gerber', false, 'mm', {4,5}, {drillTable: true, …}, undefined, undefined)`, P&P `('fab_pick_and_place','csv','mm')`, and a BOM whose 15 `columns` and 15-element `property` list are one list by construction, so they cannot disagree |
+| `export.fab` sends the preset's arguments, position for position | `connector/tests/actions012b.test.mjs` — the fake host records every call and the assertions are positional: `('fab_gerber.zip', false, 'mm', {4,5}, {drillTable: true, …}, undefined, undefined)`, P&P `('fab_pick_and_place.csv','csv','mm')`, and a BOM whose 15 `columns` are told to the host as **two disjoint lists** — the counting columns as `statistics` (2) and the attributes as `property` (13) — with the test asserting their union is exactly those 15 and that neither repeats the other. The BOM's `filterOptions` is one **exclusion** rule (`'Add into BOM': 'no'`), and the name it carries has no suffix because the host appends it |
+| The BOM's columns go to the host as two disjoint lists, not as one list twice | **Measured on 3.2.186, 2026-09-21** (`outputs/013_p3_evidence/`, `outputs/013_fab_bishe3/`): the host builds its table from `statistics + property` and does not deduplicate, so a column named in both arrives twice — the preset's `No.`/`Quantity` in both places gave a **17-column header for a 15-column preset** (`序号`…`Number`, `数量`…`Quantity`). The two arguments are not interchangeable either: only `statistics` entries pass through `hne`, which rewrites `No.` into the `Number` column its BOM engine numbers, so dropping `statistics` makes the column check refuse the call and return **no file at all** (`api.js` `getBomFile`: `p.includes(m.property) … else return`). The counting columns therefore stay in `statistics` alone and `property` is derived as the columns minus those two; the header comes back with exactly 15 |
+| The BOM's filter rule is an exclusion rule, and the names arrive with the right suffixes | **Measured on 3.2.186, 2026-09-21** (`outputs/013_p3_evidence/`): the host's own `api.js` maps `filterOptions` onto `filterRules` (`mne`/`gne`) and its BOM builder drops a row when the rule matches (`pro-sch` `attrsGroup2` → `verify`), so `includeValue: 'yes'` dropped all 122 parts (`outputs/013_fab_bishe/fab_bom.csv` = 152 B of header only) while `'no'` keeps them; the preset now sends `'no'`. `api.js` also names the files: gerber/P&P are `new File([data], <the name we sent>)` while the BOM is `fileName + '.' + fileType`, which is why only the first two carry suffixes and `fab_bom.csv` does not become `fab_bom.csv.csv` |
 | The fab bundle lands as files, and a partial bundle is not a success | `tests/test_fab_export.py` — the writer decodes, writes and re-`stat`s every file, refuses a name that is not one path segment, reports a byte-count disagreement, and the CLI exits 1 for a partial bundle / 2 with no daemon |
-| **`export.fab` and `lib.recommend` have never run against EasyEDA** | Their contracts are pinned (32 mock tests + 14 pytest cases), but two machine questions stay open: whether this host accepts every BOM column name the `generic` preset sends, and whether `searchByProperties` exists at all — the declaration marks it **ADD since EDA v4**. The first real `bridge export-fab` and the first `lib.recommend` run settle both; see `outputs/012v2_s6_s7_offline.txt` |
+| **`export.fab` and `lib.recommend` have run against EasyEDA (013, 2026-09-21)** | Their contracts are pinned (39 mock tests + 14 pytest cases). **`lib_Device.searchByProperties` on 3.2.186 is settled (013 F4, on-machine matrix `outputs/013_f4_probes_real.json`)**: the method is callable and it filters — but only on the keys that host actually indexes. `{supplierId:"C8678"}` returns exactly that one device (a bogus C-number returns none), `{partNumber:"SS34"}` / `{partCode:"C8678"}` / `{value:"SS34"}` are applied as filters and match nothing (they answer `[]`, not the unfiltered page), `{name:…}` / `{footprintName:…}` are ignored outright (they answer the library's default page of ten, same as `{}` and as an unknown key). Call shape is *not* the cause: the argument count (1 vs 6, with and without `libraryUuid`) changes nothing, and `lib_Device.search` reports the same arity (4) as `searchByProperties` while hitting every time. So the earlier "declaration present, runtime empty" reading was wrong — unlike `getPngFile` (declared v3.2.183, absent at runtime) and `createNetLabel` (**ADD since EDA v4**, never settles), this method works; **the key choice was wrong**. `lib.recommend`'s `exact` rung therefore sends `{supplierId: <LCSC code>}` (falls back to not-called when the part has no LCSC code), the `properties` rung is kept as declared and reports in `notes` that it cannot match on this host, and the keyword rung carries the rest. **`export.fab` is settled too** (013 batch②): the gerber is a real zip, the 15 BOM columns come back verbatim, the empty BOM was the filter rule (see the row above), and the file names now match `getting-started` — see `outputs/013_fab_bishe2/` and `outputs/012v2_s6_s7_offline.txt` |
 | `review.mark` draws one rectangle per resolved ref, and returns the text the API cannot draw | `connector/tests/actions012c.test.mjs` — the fake host records the single marker call and the assertions are positional/exact: `left/right/top/bottom` around `getState_X/Y`, colour, line width 2, zoom flag; `marked[k-1]` is marker `k` and carries `ruleId`/`severity`/`text` |
 | A review pass survives a host that cannot draw it | Same file — `markers: false`, a missing `generateIndicatorMarkers` and a `false` answer all yield `mode: 'list'` with the coordinates and a reason, while `PAGE_MISMATCH`, a non-schematic focused document, an unreadable page, `focus` out of range and `clear` without `removeIndicatorMarkers` stay thrown errors |
+| `clear` with nothing open is already done, not refused | Same file — with the host answering its placeholder uuid for "nothing is focused", `clear: true` returns `cleared: true` and the note "no active canvas — nothing to remove" (with the raw reading appended) and never calls `removeIndicatorMarkers`; a canvas that is open and answers `false` still reports `cleared: false` |
 | A findings report can be turned into marks without a rule change | `tests/test_review_mark_cli.py` — `render_json` gains per-finding `refs` (derived from evidence, allow-listed so `AMS1117`/`SS34`/`CH340G` are not mistaken for designators), the CLI reads a path / `-` / a JSON literal, and one mark per ref is sent in finding order |
 | `boardwise doctor` diagnoses a disconnected installation instead of crashing on it | `tests/test_doctor.py` — `run_doctor` is pure, so no daemon, no connector, an old editor, a stale bundle and an unreadable project are all exercised as data; the CLI-level case (nothing listening) asserts exit 1 and one fix per failing line |
 | The daemon reports its own version, so a stale daemon is diagnosable | `tests/test_bridge.py::test_daemon_owned_ping_reports_connector_state` asserts `ping.version == boardwise.__version__`; doctor compares it with the running install and fails with "restart the daemon" on a mismatch |
-| **`review.mark` and `boardwise doctor` have never run against EasyEDA** | Their contracts are pinned (26 connector mock tests + 48 pytest cases), but the machine questions stay open: does `generateIndicatorMarkers` accept these rectangles on 3.2.186 and are the markers visible; do `zoomToRegion` and `removeIndicatorMarkers` behave as declared; does `sys.probe` answer the five spot-checked methods on a live host. See `outputs/012v2_s8_s9_offline.txt` |
+| **`review.mark` and `boardwise doctor` have run against EasyEDA (013 batch②, 2026-09-21)** | Their contracts are pinned (30 connector mock tests + 48 pytest cases). Machine facts so far: `generateIndicatorMarkers` **accepts** the rectangles (accepted 9/9 on the 毕设板 page) but whether they are *visible* is only partly confirmed — one A/B screenshot pair shows box-shaped geometry, another shows none, and the view moved under a human hand throughout (`outputs/013_p2_findings.txt` §八); `removeIndicatorMarkers` answered `true` once and `false` once in the same session, the `false` with no canvas focused (hence the口径 in the action table); `sys.probe` answers all five spot-checked methods, and `boardwise doctor` is 7/7 on the machine (`outputs/013_sys_probe_doctor.json`). See `outputs/012v2_s8_s9_offline.txt` |
 
-Total: 1132 Python tests (~87 s) + 266 connector tests (~2 s). Everything except the `eda.*`
+Total: 1136 Python tests (~85 s) + 279 connector tests (~2 s). Everything except the `eda.*`
 calls themselves is automated; §13 is what remains for a human with the editor open.
 
 Five claims are **not** automated (four only reproducible by hand, one still open):
@@ -1097,8 +1148,8 @@ Requirements: EasyEDA Pro (engine `~3.2.0`), Node 22+, Python 3.10+ with `websoc
 cd connector
 npm install
 npm run build      # dist/index.js (IIFE, global edaEsbuildExportName) + dist/esm/*.mjs
-npm run package    # -> connector/boardwise-connector-0.4.6.eext (~40 kB)
-npm test           # 266 tests, ~2 s
+npm run package    # -> connector/boardwise-connector-0.4.10.eext (~40 kB)
+npm test           # 279 tests, ~2 s
 npm run typecheck  # tsc --noEmit
 ```
 

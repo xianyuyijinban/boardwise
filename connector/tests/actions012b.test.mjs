@@ -178,7 +178,12 @@ function hostRecommend(options = {}) {
   };
   host.lib_Device = {
     async searchByProperties(properties, _libraryUuid, _classification, _symbolType, itemsOfPage, page) {
-      searches.push({ api: 'searchByProperties', properties, itemsOfPage, page });
+      // `argCount` is the caller's own `arguments.length`: the ladder always
+      // sends six, while a `probes` entry sends exactly what it was given, and
+      // that difference is what the F4 probes measure.
+      searches.push({
+        api: 'searchByProperties', properties, itemsOfPage, page, argCount: arguments.length,
+      });
       return options.searchByProperties
         ? options.searchByProperties(properties, page)
         : [];
@@ -242,13 +247,15 @@ test('fab exports the three files with the vendor preset arguments', async (t) =
   const frame = await call(host, 'export.fab', { outDir: 'E:/out/fab' });
   assert.equal(frame.ok, true, JSON.stringify(frame));
 
-  // The gerber arguments are the preset, position for position. `layers` and
-  // `objects` are deliberately undefined: the declared default is the editor's
-  // own one-click export set.
+  // The gerber arguments are the preset, position for position. The **name
+  // carries its suffix** because this host echoes it back verbatim as the
+  // file's name (a bare name reached disk with no extension, measured
+  // 2026-09-21). `layers` and `objects` are deliberately undefined: the
+  // declared default is the editor's own one-click export set.
   assert.deepEqual(host.__calls[0], {
     role: 'gerber',
     args: [
-      'fab_gerber',
+      'fab_gerber.zip',
       false,
       'mm',
       { integerNumber: 4, decimalNumber: 5 },
@@ -262,34 +269,49 @@ test('fab exports the three files with the vendor preset arguments', async (t) =
       undefined,
     ],
   });
-  assert.deepEqual(host.__calls[1].args, ['fab_pick_and_place', 'csv', 'mm']);
+  assert.deepEqual(host.__calls[1].args, ['fab_pick_and_place.csv', 'csv', 'mm']);
 
   const bom = host.__calls[2].args;
+  // No suffix on the BOM name: this is the one file the host names itself
+  // (`fileName + '.' + fileType`), so `.csv` here would land as `.csv.csv`.
   assert.equal(bom[0], 'fab_bom');
   assert.equal(bom[1], 'csv');
   assert.equal(bom[2], undefined, 'no bomTemplate was passed, so the host gets undefined');
-  assert.deepEqual(bom[3], [
-    { property: 'Add into BOM', includeValue: 'yes' },
-    { property: 'Convert to PCB', includeValue: 'yes' },
-  ]);
+  // `includeValue` is the value the rule leaves **out** — 'yes' would drop every
+  // part that is in the BOM (the header-only CSV of 2026-09-21). Only the rule
+  // the host itself checks by default is sent.
+  assert.deepEqual(bom[3], [{ property: 'Add into BOM', includeValue: 'no' }]);
   assert.deepEqual(bom[4], ['No.', 'Quantity']);
-  // "csv 全列": the columns the host is asked for and the `property` list it is
-  // given are one list, so they cannot disagree.
-  assert.equal(bom[5].length, 15);
-  assert.deepEqual(bom[5], bom[6].map((column) => column.property));
+  // "csv 全列", split the way the API declares it and the host enforces it: the
+  // two counting columns travel as `statistics`, every other column as
+  // `property`, and the union of the two is exactly the columns asked for (the
+  // host refuses the whole call when a column's property is in neither list —
+  // and refuses it with *no file*, not with a broken table). Neither list
+  // repeats an entry of the other: sending `No.`/`Quantity` in both is what put
+  // 17 columns in a 15-column header (measured 2026-09-21).
+  assert.equal(bom[5].length, 13);
+  assert.deepEqual(bom[5], bom[6].map((column) => column.property).filter((p) => !bom[4].includes(p)));
+  assert.deepEqual(
+    new Set([...bom[4], ...bom[5]]),
+    new Set(bom[6].map((column) => column.property)),
+    'statistics + property must be exactly the columns asked for',
+  );
+  assert.equal(new Set([...bom[4], ...bom[5]]).size, bom[4].length + bom[5].length, 'and disjoint');
   assert.ok(bom[5].includes('JLCPCB Part Class'));
   assert.ok(bom[5].includes('Supplier Part'));
 
   assert.deepEqual(frame.data.files.map((f) => f.role), ['gerber', 'pick_and_place', 'bom']);
   assert.equal(frame.data.encoding, 'base64');
   const gerber = frame.data.files[0];
-  // The host named it, so its name wins — the editor knows whether its gerber
-  // export is an archive better than a suffix guess does.
+  // This fake host echoes a name back, the way the real one does for gerber and
+  // P&P (`new File([data], t || c.fileName)`), so the name is the preset's.
   assert.equal(gerber.name, 'fab_gerber.zip');
   assert.equal(gerber.mime, 'application/zip');
   assert.equal(gerber.bytes, ZIPISH.length);
   assert.deepEqual(decode(gerber.data), ZIPISH);
-  // The two nameless files are named from the preset plus their real suffix.
+  // The two nameless files fall back to the preset name — and here that is also
+  // the `withSuffix` guard's test: the P&P preset already ends in `.csv`, so an
+  // unconditional append would put `fab_pick_and_place.csv.csv` on disk.
   assert.equal(frame.data.files[1].name, 'fab_pick_and_place.csv');
   assert.equal(frame.data.files[2].name, 'fab_bom.csv');
   assert.deepEqual(decode(frame.data.files[2].data), CSVISH);
@@ -315,11 +337,33 @@ test('fab writes a manifest the caller can drop next to the files', async (t) =>
      ['bom', 'fab_bom.csv', CSVISH.length]],
   );
   assert.deepEqual(manifest.failed, []);
+  // The manifest records the filters that were *sent*, so a bundle found on
+  // disk says what produced it.
+  assert.deepEqual(manifest.preset.bom.filterOptions, [{ property: 'Add into BOM', includeValue: 'no' }]);
+  assert.deepEqual(manifest.preset.overrides, []);
+  // …and the columns the same way: the counting ones as statistics, the rest as
+  // property, together exactly the columns in the preset — and *not* the same
+  // 15 in both lists, which is what the host would turn into a 17-column header.
+  assert.deepEqual(manifest.preset.bom.statistics, ['No.', 'Quantity']);
+  assert.equal(manifest.preset.bom.property.length, 13);
+  assert.deepEqual(
+    new Set([...manifest.preset.bom.statistics, ...manifest.preset.bom.property]),
+    new Set(manifest.preset.bom.columns.map((column) => column.property)),
+  );
+  assert.equal(
+    new Set([...manifest.preset.bom.statistics, ...manifest.preset.bom.property]).size,
+    15,
+    'the two lists are disjoint, so the sizes add up',
+  );
+  assert.equal(manifest.preset.bom.columns.length, 15);
   assert.ok(Number.isFinite(Date.parse(manifest.generatedAt)), 'generatedAt must be a timestamp');
   assert.equal(manifest.generatedAt, frame.data.generatedAt);
-  // The two honest caveats travel *with the bundle*, so a directory found on
-  // disk later says what was and was not verified.
-  assert.match(manifest.notes.join(' '), /unverified until a real export is run/);
+  // The caveats travel *with the bundle*, so a directory found on disk later
+  // says what was and was not verified: the columns and the filter rule were
+  // measured on 3.2.186 (2026-09-21), and the writing side is the caller.
+  assert.match(manifest.notes.join(' '), /measured 2026-09-21 on 3\.2\.186/);
+  assert.match(manifest.notes.join(' '), /exactly the 15 BOM column names/);
+  assert.match(manifest.notes.join(' '), /exclusion/);
   assert.match(manifest.notes.join(' '), /cannot write to outDir/);
   assert.equal(frame.data.partial, false);
 });
@@ -433,6 +477,64 @@ test('fab passes a bomTemplate through as the template name', async (t) => {
   assert.equal(frame.ok, true, JSON.stringify(frame));
   assert.equal(host.__calls[2].args[2], '捷配-常用');
   assert.equal(frame.data.manifest.preset.bom.template, '捷配-常用');
+});
+
+test('fab lets a caller replace the BOM filter rules (the probe channel)', async (t) => {
+  // The one argument whose meaning the declaration gets wrong: `includeValue` is
+  // the value the rule leaves *out*. A caller with a different rule — or one
+  // measuring this host — has to be able to say so without a rebuild, which is
+  // why this override exists at all.
+  const host = hostFab();
+  withEda(t, host);
+  await connector.activate();
+
+  const filters = [{ property: 'Add into BOM', includeValue: true }];
+  const frame = await call(host, 'export.fab', { outDir: 'x', bom: { filterOptions: filters } });
+  assert.equal(frame.ok, true, JSON.stringify(frame));
+  assert.deepEqual(host.__calls[2].args[3], filters);
+  assert.deepEqual(frame.data.manifest.preset.bom.filterOptions, filters);
+  assert.deepEqual(frame.data.manifest.preset.overrides, ['bom.filterOptions']);
+});
+
+test('fab treats `filterOptions: null` as "send none", not as "send an empty list"', async (t) => {
+  // `null` leaves the host on its own default rules; `[]` would hand it an empty
+  // list instead. Both happen to keep every part on this host, and the manifest
+  // has to say which one was asked for.
+  const host = hostFab();
+  withEda(t, host);
+  await connector.activate();
+
+  const frame = await call(host, 'export.fab', { outDir: 'x', bom: { filterOptions: null } });
+  assert.equal(frame.ok, true, JSON.stringify(frame));
+  assert.equal(host.__calls[2].args.length, 7, 'the argument positions do not move');
+  assert.equal(host.__calls[2].args[3], undefined, 'the host receives no filterOptions at all');
+  assert.equal(frame.data.manifest.preset.bom.filterOptions, null);
+
+  const empty = await call(host, 'export.fab', { outDir: 'x', bom: { filterOptions: [] } });
+  assert.equal(empty.ok, true, JSON.stringify(empty));
+  assert.deepEqual(host.__calls[5].args[3], []);
+});
+
+test('fab refuses a BOM override it cannot honour, instead of dropping it', async (t) => {
+  const host = hostFab();
+  withEda(t, host);
+  await connector.activate();
+
+  const bad = [
+    { bogus: 1 },
+    { filterOptions: 'yes' },
+    { filterOptions: [{}] },
+    { filterOptions: [{ property: '  ', includeValue: 'no' }] },
+    { filterOptions: [{ property: 'Add into BOM', includeValue: 1 }] },
+  ];
+  for (const entry of bad) {
+    const frame = await call(host, 'export.fab', { outDir: 'x', bom: entry });
+    assert.equal(frame.ok, false, `expected ${JSON.stringify(entry)} to be refused`);
+    assert.equal(frame.error.code, 'BAD_REQUEST');
+  }
+  // Nothing was called: an override the host would silently ignore is refused
+  // before the export starts, the same discipline as `params.gerber`.
+  assert.deepEqual(host.__calls, []);
 });
 
 test('fab reports one missing file and keeps the other two', async (t) => {
@@ -594,7 +696,10 @@ test('recommend descends the ladder and reports every rung', async (t) => {
     ['properties', 'searchByProperties', true, 0],
     ['keyword', 'search', true, 1],
   ]);
-  assert.deepEqual(frame.data.layers[0].args, { partNumber: 'SS34', partCode: 'C8678' });
+  // The exact rung addresses the part by its LCSC code under `supplierId` — the
+  // one properties key the 3.2.186 host indexes (2026-09-21 matrix). Sending
+  // `partNumber`/`partCode` there is a call that can only ever return [].
+  assert.deepEqual(frame.data.layers[0].args, { supplierId: 'C8678' });
   assert.deepEqual(frame.data.layers[1].args, {
     value: 'SS34', footprintName: 'SMA_L4.4-W2.6-LS5.0-RD',
   });
@@ -605,6 +710,10 @@ test('recommend descends the ladder and reports every rung', async (t) => {
     ['searchByProperties', 5, 1],
     ['search', 5, 1],
   ]);
+  // The properties rung ran and answered zero, which on this host is the only
+  // answer it *can* give — the response says so, so a caller does not read the
+  // zero as "this part is not in the library".
+  assert.match(frame.data.notes.join(' '), /cannot match on this host/);
   // The part's own parameters, read off the page, are the provenance of the
   // search — and they are what the caller compares a candidate against.
   assert.deepEqual(frame.data.component, {
@@ -624,7 +733,9 @@ test('recommend descends the ladder and reports every rung', async (t) => {
 test('recommend stops at the first rung that hits, and says so', async (t) => {
   const host = hostRecommend({
     components: ss34Components(),
-    searchByProperties: (properties) => (properties.partNumber ? [BASIC_SS34] : [EXTENDED_SS34]),
+    // The exact rung (`supplierId`) gets the Basic part, the described rung the
+    // extended one — so the test can tell which rung offered which device.
+    searchByProperties: (properties) => (properties.supplierId ? [BASIC_SS34] : [EXTENDED_SS34]),
     search: () => [EXTENDED_SS34],
   });
   withEda(t, host);
@@ -637,6 +748,7 @@ test('recommend stops at the first rung that hits, and says so', async (t) => {
     ['properties', false, 0],
     ['keyword', false, 0],
   ]);
+  assert.deepEqual(frame.data.layers[0].args, { supplierId: 'C8678' });
   // "not called" must never read as "found nothing".
   assert.match(frame.data.layers[1].reason, /earlier rung matched/);
   assert.equal(host.__searches.length, 1, 'a hit ends the descent');
@@ -715,7 +827,9 @@ test('recommend answers an honest empty result when nothing matches', async (t) 
 
 test('recommend takes a query or a ref, and exactly one of them', async (t) => {
   const host = hostRecommend({
-    searchByProperties: (properties, page) => (properties.partNumber === 'SS34' && page === 1
+    // The described rung carries a bare query forward as the `value`, which is
+    // where a query that is not an LCSC code is expected to be answered.
+    searchByProperties: (properties, page) => (properties.value === 'SS34' && page === 1
       ? [BASIC_SS34] : []),
   });
   withEda(t, host);
@@ -724,9 +838,16 @@ test('recommend takes a query or a ref, and exactly one of them', async (t) => {
   const byQuery = await call(host, 'lib.recommend', { query: 'SS34' });
   assert.equal(byQuery.ok, true, JSON.stringify(byQuery));
   assert.equal(byQuery.data.source, 'query');
-  // A bare query is used verbatim on every rung: an MPN is also the value.
-  assert.deepEqual(byQuery.data.layers[0].args, { partNumber: 'SS34' });
+  // A bare query is used verbatim on every rung that can carry it: an MPN is
+  // also the value. It is *not* an LCSC code, so the exact rung has nothing to
+  // send and says so instead of firing a call that cannot match (2026-09-21:
+  // `supplierId` is the only indexed properties key).
+  assert.deepEqual(byQuery.data.layers[0].args, {});
+  assert.equal(byQuery.data.layers[0].called, false);
+  assert.match(byQuery.data.layers[0].reason, /no partCode \(LCSC code\)/);
   assert.deepEqual(byQuery.data.target.value, 'SS34');
+  assert.deepEqual(byQuery.data.target.partCode, '');
+  assert.deepEqual(byQuery.data.layers[1].args, { value: 'SS34' });
   assert.equal(byQuery.data.candidates.length, 1);
 
   const neither = await call(host, 'lib.recommend', {});
@@ -754,7 +875,9 @@ test('recommend reads an LCSC code as a part code, not as a value', async (t) =>
 
   const frame = await call(host, 'lib.recommend', { query: 'c8678' });
   assert.equal(frame.ok, true, JSON.stringify(frame));
-  assert.deepEqual(frame.data.layers[0].args, { partCode: 'C8678' });
+  // The C-number is the part's LCSC code, so it is the exact rung that carries
+  // it — under `supplierId` (the key the host indexes) and as-is on the wire.
+  assert.deepEqual(frame.data.layers[0].args, { supplierId: 'C8678' });
   assert.deepEqual(frame.data.layers[1].args, {}, 'a C-number is not a value');
   assert.equal(frame.data.layers[1].called, false);
 });
@@ -912,7 +1035,7 @@ test('recommend pages a rung at most three times', async (t) => {
 test('recommend with allLayers merges the rungs and keeps one row per device', async (t) => {
   const host = hostRecommend({
     components: ss34Components(),
-    searchByProperties: (properties) => (properties.partNumber ? [BASIC_SS34] : [EXTENDED_SS34]),
+    searchByProperties: (properties) => (properties.supplierId ? [BASIC_SS34] : [EXTENDED_SS34]),
     search: () => [BASIC_SS34, EXTENDED_SS34],
   });
   withEda(t, host);
@@ -951,8 +1074,303 @@ test('recommend resolves a ref without needing the search APIs to be perfect', a
   assert.equal(frame.ok, true, JSON.stringify(frame));
   assert.deepEqual(frame.data.layers[0].args, {});
   assert.equal(frame.data.layers[0].called, false);
-  assert.match(frame.data.layers[0].reason, /no partNumber \(MPN\) or partCode/);
+  assert.match(frame.data.layers[0].reason, /no partCode \(LCSC code\)/);
   assert.deepEqual(frame.data.layers[1].args, { value: '100nF', footprintName: 'C0805' });
   assert.equal(frame.data.layers[1].hitCount, 1);
   assert.equal(frame.data.target.partCode, '');
+});
+
+// --------------------------------------------------------------------------
+// §七 lib.recommend · the read-only `probes` channel (F4, 2026-09-21)
+// --------------------------------------------------------------------------
+
+/**
+ * The ladder's answer for the ref fixture below.
+ *
+ * It exists because `probes` was added as an *increment*: a caller who does not
+ * send it gets the same answer as before, field for field and key order
+ * included. Any diff here — a new field, a moved key, a changed note — is a
+ * change to shipping behaviour, not a test to update; a deliberate change means
+ * re-capturing this string on purpose and saying so.
+ *
+ * **Re-recorded 2026-09-21 (F4 matrix, deliberate).** The `exact` rung's key
+ * changed from `{partNumber, partCode}` to `{supplierId}` and the properties
+ * rung now reports itself dead on 3.2.186, because the on-machine matrix
+ * (`outputs/013_f4_probes_real.json`) showed which keys that host indexes. The
+ * previous capture — `{partNumber:"SS34", partCode:"C8678"}` at the exact rung
+ * — is not reproducible behaviour any more, which is exactly what this
+ * re-record is for.
+ */
+const GOLDEN_REF_ANSWER = `{
+ "source": "ref",
+ "query": null,
+ "pageUuid": "page-1",
+ "ref": "D1",
+ "component": {
+  "primitiveId": "p-d1",
+  "designator": "D1",
+  "name": "",
+  "value": "SS34",
+  "partNumber": "SS34",
+  "partCode": "C8678",
+  "footprintName": "SMA_L4.4-W2.6-LS5.0-RD",
+  "supplierFootprint": "SMA"
+ },
+ "target": {
+  "value": "SS34",
+  "partNumber": "SS34",
+  "partCode": "C8678",
+  "footprintName": "SMA_L4.4-W2.6-LS5.0-RD",
+  "supplierFootprint": "SMA",
+  "name": ""
+ },
+ "topN": 5,
+ "layers": [
+  {
+   "layer": "exact",
+   "api": "searchByProperties",
+   "called": true,
+   "args": {
+    "supplierId": "C8678"
+   },
+   "hitCount": 0,
+   "pagesFetched": 1
+  },
+  {
+   "layer": "properties",
+   "api": "searchByProperties",
+   "called": true,
+   "args": {
+    "value": "SS34",
+    "footprintName": "SMA_L4.4-W2.6-LS5.0-RD"
+   },
+   "hitCount": 0,
+   "pagesFetched": 1
+  },
+  {
+   "layer": "keyword",
+   "api": "search",
+   "called": true,
+   "args": {
+    "keyword": "SS34"
+   },
+   "hitCount": 1,
+   "pagesFetched": 1
+  }
+ ],
+ "returned": 1,
+ "shown": 1,
+ "candidates": [
+  {
+   "name": "SS34-E3/61T",
+   "lcsc": "C12345",
+   "mpn": "SS34-E3/61T",
+   "manufacturer": "",
+   "footprintName": "SMA_L4.31-W2.79-LS5.28",
+   "supplierFootprint": "",
+   "partClass": "Extended Part",
+   "partClassRank": 2,
+   "datasheet": "",
+   "description": "",
+   "deviceUuid": "dev-ext",
+   "libraryUuid": "lib-1",
+   "symbolUuid": "",
+   "footprintUuid": "",
+   "layer": "keyword",
+   "layerIndex": 2,
+   "footprintMatches": false
+  }
+ ],
+ "stock/price": "以商城实时为准",
+ "readOnly": true,
+ "placed": false,
+ "note": "read-only: nothing was placed or modified. Put a candidate on the page with sch.place_component (deviceUuid + libraryUuid), or write the chosen LCSC code / MPN onto the part already on the page with sch.set_component_attribute.",
+ "notes": [
+  "properties: searchByProperties(value / footprintName) cannot match on this host — measured 2026-09-21 on 3.2.186: value is applied but has no index and footprintName is ignored outright, so those two keys never select anything (the LCSC code does: see the exact rung)"
+ ]
+}`;
+
+/** A host whose `searchByProperties` finds one part, for the hit shapes. */
+function probeHit() {
+  return searchItem({ uuid: 'dev-probe', name: 'SS34' });
+}
+
+test('recommend without probes answers byte for byte what it answered before', async (t) => {
+  const host = hostRecommend({
+    components: ss34Components(),
+    searchByProperties: () => [],
+    search: (keyword) => (keyword === 'SS34' ? [EXTENDED_SS34] : []),
+  });
+  withEda(t, host);
+  await connector.activate();
+
+  const frame = await call(host, 'lib.recommend', { pageUuid: SCH_PAGE, ref: 'D1' });
+  assert.equal(frame.ok, true, JSON.stringify(frame));
+  assert.equal(JSON.stringify(frame.data, null, 1), GOLDEN_REF_ANSWER);
+  // The probes vocabulary exists only on the probes path, so its absence is
+  // part of the default answer rather than something a caller has to ignore.
+  assert.equal('probes' in frame.data, false);
+  assert.equal('probesOnly' in frame.data, false);
+});
+
+test('recommend probes send exactly the arguments they were given, and report the reply', async (t) => {
+  const host = hostRecommend({
+    searchByProperties: (properties) => (properties.partNumber === 'SS34' ? [probeHit()] : []),
+  });
+  withEda(t, host);
+  await connector.activate();
+
+  const frame = await call(host, 'lib.recommend', {
+    probes: [
+      { properties: { partNumber: 'SS34' } },
+      { properties: { partNumber: 'SS34' }, libraryUuid: 'lib-1' },
+      { properties: { value: 'SS34' }, itemsOfPage: 10, page: 1 },
+      { properties: {} },
+    ],
+  });
+  assert.equal(frame.ok, true, JSON.stringify(frame));
+  // The argument *count* is part of the measurement — "the host branches on the
+  // call shape" is one of the answers F4 is looking for — so a probe goes out as
+  // one argument only when the caller gave one, and as six when they named the
+  // sixth. Nothing is padded to the declaration's six.
+  assert.deepEqual(host.__searches.map((s) => s.argCount), [1, 2, 6, 1]);
+  assert.deepEqual(frame.data.probes[0].args, [{ partNumber: 'SS34' }]);
+  assert.deepEqual(frame.data.probes[1].args, [{ partNumber: 'SS34' }, 'lib-1']);
+  // A gap before a named argument is filled with `undefined` (JSON: null) —
+  // dropping it would renumber the call and silently move `page` into position 2.
+  assert.deepEqual(frame.data.probes[2].args, [{ value: 'SS34' }, null, null, null, 10, 1]);
+  assert.deepEqual(frame.data.probes[3].args, [{}]);
+  // `called` / `hitCount` / `firstKeys` per entry; `pageSize` is what the caller
+  // *asked for* (`null` = they asked for nothing, so the host's own default was
+  // in force — 10 on the 3.2.186 host).
+  assert.deepEqual(
+    frame.data.probes.map((p) => [p.called, p.hitCount, p.pageSize]),
+    [[true, 1, null], [true, 1, null], [true, 0, 10], [true, 0, null]],
+  );
+  assert.deepEqual(frame.data.probes[0].firstKeys, [
+    'uuid', 'libraryUuid', 'name', 'footprintName', 'otherProperty',
+  ]);
+  assert.deepEqual(frame.data.probes[2].firstKeys, [], 'no hit, no keys to describe');
+  assert.equal(frame.data.probes[0].error, undefined);
+});
+
+test('recommend probes record a failure against its own entry and keep going', async (t) => {
+  const host = hostRecommend({
+    searchByProperties: (properties) => {
+      if (properties.partNumber === 'boom') throw new Error('library offline');
+      return [probeHit()];
+    },
+  });
+  withEda(t, host);
+  await connector.activate();
+
+  const frame = await call(host, 'lib.recommend', {
+    probes: [{ properties: { partNumber: 'boom' } }, { properties: { partNumber: 'SS34' } }],
+  });
+  assert.equal(frame.ok, true, JSON.stringify(frame));
+  // The call did go out and it failed — that is a row of the matrix, not a
+  // reason to lose the other rows or to fail the action.
+  assert.equal(frame.data.probes[0].called, true);
+  assert.match(frame.data.probes[0].error, /library offline/);
+  assert.equal(frame.data.probes[0].hitCount, 0);
+  assert.deepEqual(frame.data.probes[0].firstKeys, []);
+  assert.equal(frame.data.probes[1].hitCount, 1);
+  assert.equal(frame.data.probes[1].error, undefined);
+});
+
+test('recommend bounds the probes list and refuses a malformed entry', async (t) => {
+  const host = hostRecommend({ searchByProperties: () => [] });
+  withEda(t, host);
+  await connector.activate();
+
+  const ten = await call(host, 'lib.recommend', {
+    probes: Array.from({ length: 10 }, () => ({ properties: { value: 'SS34' } })),
+  });
+  assert.equal(ten.ok, true, JSON.stringify(ten));
+  assert.equal(ten.data.probes.length, 10, 'ten is inside the cap');
+
+  const tooMany = await call(host, 'lib.recommend', {
+    probes: Array.from({ length: 11 }, () => ({ properties: { value: 'SS34' } })),
+  });
+  assert.equal(tooMany.ok, false);
+  assert.equal(tooMany.error.code, 'BAD_REQUEST');
+  assert.match(tooMany.error.message, /at most 10 probes, got 11/);
+
+  const notAnArray = await call(host, 'lib.recommend', { query: 'SS34', probes: 'SS34' });
+  assert.equal(notAnArray.error.code, 'BAD_REQUEST');
+  assert.match(notAnArray.error.message, /probes must be an array/);
+
+  // A refused probes list never reaches the host: the ten calls above are all
+  // there is.
+  assert.equal(host.__searches.length, 10);
+  const noProperties = await call(host, 'lib.recommend', { probes: [{ libraryUuid: 'lib-1' }] });
+  assert.equal(noProperties.error.code, 'BAD_REQUEST');
+  assert.match(noProperties.error.message, /probes\[0\]\.properties must be an object/);
+  assert.equal(host.__searches.length, 10, 'a refused probes list never reaches the host');
+  assert.equal(host.__searches[0].argCount, 1);
+  assert.equal(host.__searches[0].itemsOfPage, undefined, 'and nothing is padded onto a probe');
+});
+
+test('recommend probes never walk the ladder and never write', async (t) => {
+  const host = hostRecommend({
+    components: ss34Components(),
+    searchByProperties: () => [BASIC_SS34],
+  });
+  withEda(t, host);
+  await connector.activate();
+
+  // Deliberately a ref on a page that is not the focused one: in probes mode
+  // there is no ladder to feed, so neither the focus guard nor the designator
+  // lookup runs — a probe reads no page at all.
+  const frame = await call(host, 'lib.recommend', {
+    pageUuid: 'another-page',
+    ref: 'D1',
+    probes: [{ properties: { partNumber: 'SS34' } }],
+  });
+  assert.equal(frame.ok, true, JSON.stringify(frame));
+  assert.equal(frame.data.probesOnly, true);
+  assert.equal(frame.data.source, 'probes');
+  // One call, and it is the probe: the keyword rung was never reached.
+  assert.deepEqual(host.__searches.map((s) => s.api), ['searchByProperties']);
+  assert.equal(host.__searches[0].argCount, 1);
+  // The ladder is empty *by construction*, not reported as three rungs that
+  // found nothing — `probesOnly` plus the note are what say so.
+  assert.deepEqual(frame.data.layers, []);
+  assert.deepEqual(frame.data.candidates, []);
+  assert.equal(frame.data.returned, 0);
+  assert.equal(frame.data.shown, 0);
+  assert.match(frame.data.notes.join(' '), /probes only/);
+  // No page was read, so the answer does not pretend to describe a part.
+  assert.deepEqual(frame.data.target, {
+    value: '', partNumber: '', partCode: '', footprintName: '', supplierFootprint: '', name: '',
+  });
+  assert.equal(frame.data.component, null);
+  assert.equal(frame.data.readOnly, true);
+  assert.equal(frame.data.placed, false);
+  assert.deepEqual(host.__writes, [], 'probes are read-only');
+});
+
+test('recommend probes report a missing searchByProperties per entry, not a failed action', async (t) => {
+  const legacy = hostRecommend({ without: ['lib_Device.searchByProperties'] });
+  withEda(t, legacy);
+  await connector.activate();
+
+  const frame = await call(legacy, 'lib.recommend', {
+    probes: [{ properties: { partNumber: 'SS34' } }, { properties: {} }],
+  });
+  assert.equal(frame.ok, true, JSON.stringify(frame));
+  assert.equal(frame.data.probesOnly, true);
+  assert.deepEqual(frame.data.probes.map((p) => p.called), [false, false]);
+  assert.match(frame.data.probes[0].error, /ADD since EDA v4/);
+  assert.deepEqual(legacy.__searches, [], 'no method, no call');
+
+  // `probes` is not a way around a missing namespace: `lib_Device` gone is
+  // structural for this action, exactly as it is for the ladder.
+  const gone = hostRecommend({ without: ['lib_Device'] });
+  withEda(t, gone);
+  await connector.activate();
+  const structural = await call(gone, 'lib.recommend', { probes: [{ properties: {} }] });
+  assert.equal(structural.ok, false);
+  assert.equal(structural.error.code, 'NOT_IMPLEMENTED');
+  assert.match(structural.error.message, /lib_Device/);
 });

@@ -1,0 +1,30 @@
+{
+  "project": {},
+  "pcb": null,
+  "schematicPage": null,
+  "active": null,
+  "type": null,
+  "typeSource": "none",
+  "heuristic": false,
+  "tabs": [
+    {
+      "tabId": "tab_page1",
+      "title": "Start Page",
+      "documentType": null,
+      "keys": [
+        "title",
+        "tabId",
+        "icon",
+        "tabStyle",
+        "isAbleDelete",
+        "group",
+        "draggable",
+        "data",
+        "isDisplayNone"
+      ]
+    }
+  ],
+  "problems": [
+    "dmt_SelectControl.getCurrentDocumentInfo: reported uuid \"0\" for the active document — the host's placeholder for \"nothing is focused\"; reported as no active document"
+  ]
+}

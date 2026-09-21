@@ -662,6 +662,46 @@ test('sys.probe checks mode reports an absent namespace as namespace-absent', as
   assert.equal(ns.status.getPngFile, 'namespace-absent');
 });
 
+test('sys.probe checks mode reports the declared arity of every function member', async (t) => {
+  // F4 (2026-09-21): `lib_Device.searchByProperties` reads back `function` on
+  // the 3.2.186 host and answers nothing, so "is the live member the
+  // six-argument method the type package declares, or a two-argument namesake?"
+  // is a question `typeof` cannot answer on its own — the same name exists on
+  // three classes with arities 6 / 2 / 2. `arity` is that answer, reported
+  // beside the typeof it belongs to and never judged on (a wrapper loses it).
+  const h = host({
+    sch_ManufactureData: {
+      getExportDocumentFile(fileName, fileType, typeParams, object) {},
+      getSvgFile() {},
+      version: '3.2.186',
+      getPngFile: undefined,
+    },
+  });
+  withEda(t, h);
+  await connector.activate();
+
+  const frame = await call(h, 'sys.probe', {
+    checks: {
+      sch_ManufactureData: [
+        'getExportDocumentFile', 'getSvgFile', 'version', 'getPngFile', 'nope',
+      ],
+    },
+  });
+  assert.equal(frame.ok, true, JSON.stringify(frame));
+  const ns = frame.data.checks.sch_ManufactureData;
+  assert.equal(ns.arity.getExportDocumentFile, 4);
+  assert.equal(ns.arity.getSvgFile, 0, 'a zero-argument method is reported, not omitted');
+  assert.equal(ns.status.getExportDocumentFile, 'function');
+  // Only the functions carry an entry: "no arity" is how a data field, an
+  // undefined member and a name the namespace never had stay distinguishable
+  // from a method that declares nothing.
+  assert.deepEqual(ns.arity, { getExportDocumentFile: 4, getSvgFile: 0 });
+  assert.equal(ns.status.version, 'string');
+  assert.equal(ns.arity.version, undefined);
+  assert.equal(ns.arity.getPngFile, undefined);
+  assert.equal(ns.arity.nope, undefined);
+});
+
 test('sys.probe checks mode notes a declared ADD-since method that is missing', async (t) => {
   // `getPngFile` is declared `ADD since EDA v3.2.183`; the host claims 3.2.186
   // and answers nothing. The report must carry the contradiction, not leave

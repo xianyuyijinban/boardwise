@@ -1,0 +1,35 @@
+013 批2 项1 BOM 零数据行根因 · 宿主自带源码逐字证据（只读抽取，2026-09-21）
+编辑器安装目录 D:/lceda-pro（立创EDA专业版 V3.2.186）；随包 pro-api 0.3.18 / pro-sch 3.2.181 / pro-ui 3.2.181
+类型包 @jlceda/pro-api-types 0.4.25 的 getBomFile 声明只写 filterOptions = 过滤规则，property 为规则名称、includeValue 为匹配的值——落实语义要看宿主实现：
+
+==============================================================================
+[A] 扩展侧包装 eda.pcb_ManufactureData.getBomFile — pro-api/0.3.18/api.js
+==============================================================================
+async getBomFile(t,i="xlsx",n,r,s,a,o){let{filterOptionArr:l,tableAttrKeysDefault:u}=await _.extensionApiMessageBus2.rpcCall("extensionApi.PCB_ManufactureData.getBomDefaultParams"),c=t||"Export_BOM",d={fileName:c+i,fileType:i};if(d.boardName="",d.ev="pcb",d.filterRules=[{attr:"Add into BOM",rule:"no",checked:!0,isForbidDel:!0,selected:!1},{attr:"Convert to PCB",rule:"no",checked:!1,isForbidDel:!0,selected:!1}],d.selectedId="",d.tableAttrKeys=[],r&&!mne(r,l,d))return;if(s)for(let p of s){let m={title:p,value:p,order:0,key:0};hne(p,m),d.tableAttrKeys.push(m)}if(a)for(let p of a){let m={title:p,value:p,order:0,key:0};d.tableAttrKeys.push(m)}if(d.tableAttrKeys.length<1){let p=u.length;d.tableAttrKeys=u.map((m,y)=>({...m,orderWeight:p-1-y}))}else d.tableAttrKeys=d.tableAttrKeys.map((p,m)=>({...p,orderWeight:d.tableAttrKeys.length-m}));if(o){let p=d.tableAttrKeys.map(m=>m.value);for(let m of o)if(m.property==="No."&&(m.property="Number"),p.includes(m.property)){if(!fne(m,d.tableAttrKeys))return}else return}d.tableAttrKeys.sort((p,m)=>m.orderWeight-p.orderWeight);let f=await _.extensionApiMessageBus2.rpcCall("extensionApi.PCB_ManufactureData.getBomFile",{...d,template:n});if(typeof f=="object"&&f!==null&&f.arrayBufferData)return new File([f.arrayBufferData],c+"."+i,{type:f.matchMimeType})}async getTestPointFile(t,i="xlsx"){let n=t||"TestPoint_Report",r={fileName:n,fileType:i},s=await _.extensionApiMessageBus2.rpcCall("
+
+==============================================================================
+[B] filterOptions->filterRules 映射（mne/gne）+ 列映射（hne/fne/dN）— 同文件
+==============================================================================
+function hne(e,t){e==="No."?t.value="Number":e==="Pin Count"?t.key=2:(e==="Layer"||e==="Mounting Style")&&(t.key=1)}function fne(e,t){for(let i of t)if(i.value===e.property){let n=e.title?e.title:i.title,r=e.sort?dN(e.sort):i.order,s=e.group?dN(e.group):i.key,a=e.orderWeight?e.orderWeight:i.orderWeight;return r===void 0||s===void 0||a===void 0?void 0:(i.title=n,i.order=r,i.key=s,i.orderWeight=a,!0)}}function mne(e,t,i){let n=!0;for(let r of e)if(r.property==="Add into BOM"||r.property==="Convert to PCB"){for(let s of i.filterRules)if(s.attr===r.property){let a=gne(r.includeValue);if(a===void 0){n=!1;return}s.rule=a,s.checked=!0,s.isForbidDel=!0,s.selected=!1}}else t.includes(r.property)?(typeof r.includeValue!="string"&&(n=!1),i.filterRules.push({attr:r.property,rule:r.includeValue,checked:!0,isForbidDel:!1,selected:!1})):n=!1;return n}function dN(e){return e=e.toLowerCase(),e==="asc"||e==="yes"?1:e==="desc"||e==="no"?2:void 0}function gne(e){return typeof e=="string"?(e=e.toLowerCase(
+
+==============================================================================
+[C] 宿主 gerber/pnp 的 File 名 — 同文件（原样回传我们传的 fileName）
+==============================================================================
+rpcCall("extensionApi.PCB_ManufactureData.getGerberFile",{...u});if(typeof c=="object"&&c!==null&&c.arrayBufferData)return new File([c.arrayBufferData],t||c.fileName,{type:c.matchMimeType})}async get3DFile(t,i="step",n=[
+
+async getPickAndPlaceFile(t,i="xlsx",n="mm"){let r=t||"Pick_Place",s={fileName:r,fileType:i,unit:n};s.isContainPanelized=!0,s.isContainPanelMarkCoord=!0,s.attrH
+...
+let a=await _.extensionApiMessageBus2.rpcCall("extensionApi.PCB_ManufactureData.getPickAndPlaceFile",{...s});if(typeof a=="object"&&a!==null&&a.blobData)return new File([a.blobData],r,{type:a.blobData.type})}async getFlyingProbeTestFile(t){let i=t,n=await _.extensionApiMessageBus2.rpcCall("extensionApi.PCB_ManufactureData.getFly
+
+==============================================================================
+[D] BOM 生成侧：过滤规则如何被应用（pro-sch/3.2.181/sch-main.js attrsGroup2 + verify）
+==============================================================================
+if((r=this.filterRules)!=null&&r.length)for(let P of this.filterRules){let{attr:M,rule:D,checked:k}=P;k&&((M==="Add into BOM"||M==="Convert to PCB")&&(!D||D!=="yes")&&(D="no"),D=D&&D.toString().replace(/(^\s*)|(\s*$)/g,""),w[M]?w[M]=w[M].concat(D):w[M]=[D])}this.rules=w,b.forEach((P,M)=>{P.value==="Quantity"&&(_=!0,x=P.title,T="Quantity"),P.value===fT&&(v=P.value,S=P.title),P.value===fT&&P.key==1&&(O=!0),(P.key==2||P.key==0)&&(y[P.value]=P.value)});let E={};for(let P=0,M=e.length;P<M;P++)if(Array.isArray(e[P])){let D=[],k=[],U=[];for(let L=0,F=e[P].length;L<F;L++){let A=e[P][L],N=[];(n=A.purepins)!=null&&n.length&&A.purepins.forEach(B=>{B.num.split(",").forEach(R=>{N.push(R)})}),(s=A.pins)!=
+
+verify(e){for(let[t,r]of Object.entries(this.rules)){e[t]=e[t]&&e[t].toString().replace(/(^\s*)|(\s*$)/g,"")||"";let n=new RegExp(r.join("|"),"i");if(r.length&&n.test(e[t])||r.indexOf("")!==-1&&e[t]=="")return!1}return!0}async exportBlankData(e=!1,t="Tab"){let r=this.fileType,n=this.filename,s=new Array,a=[],o=r==="csv"&&t=="Comma",l=o?",":"	";if(this.tableAttrKeys.map(({title:c})=>{c=c.replace(/"/g,'\\"'),a.push(o?`"${c}"`:c)}),s.push(a.join(l).replace(/BOM_/g,"")),s.push(`
+`),r==="csv"){let c=new Blob([v1(s.join(""))]);if(!e)pu?await YO(c,`${n}.csv`,"csv"):Nn.downloadFile(`${n}.csv`,c);else return c}return r==="xlsx"&&await this.e
+
+==============================================================================
+[E] 内部一键导出路径用同一套 filterRules（pro-ui/3.2.181/ui.js exportSingleFileType）
+==============================================================================
+case"BOM":{let o=he.getActiveTabData(),n=this.mergeExportParams(i,{fileType:"xlsx",fileName:"BOM",boardName:(o==null?void 0:o.title)||"",ev:"pcb",filterRules:[],tableAttrKeys:[],assemblyVariant:"",separator:"Tab"}),r=await this.getBomFile(n);if(!r||r.__isError)return null;let a=n.fileType;return{name:`${n.fileName}.${a}`,content:new Blob([r.arrayBufferData])}}case"Coordinate File":{let o=this.mergeExportParams(i,{fileType:"xlsx",fileName:"PickAndPlace",unit:"mm",attrHeads:[{title:"Designator",key:"Designator"},{title:"Device",key:"Device"},{title:"Footprint",key:"Footprint"},{title:"Mid X",key:"Mid X"},{title:"Mid Y",key:"Mid Y"},{title:"Ref X",key:"Ref X"},{title:"Ref Y",key:"Ref Y"},{title

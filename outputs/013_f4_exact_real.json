@@ -1,0 +1,153 @@
+{
+  "source": "query",
+  "query": "SS34",
+  "pageUuid": null,
+  "ref": null,
+  "component": null,
+  "target": {
+    "value": "SS34",
+    "partNumber": "SS34",
+    "partCode": "",
+    "footprintName": "",
+    "supplierFootprint": "",
+    "name": ""
+  },
+  "topN": 5,
+  "layers": [
+    {
+      "layer": "exact",
+      "api": "searchByProperties",
+      "called": false,
+      "args": {},
+      "hitCount": 0,
+      "reason": "no partCode (LCSC code) is known for this part — and supplierId, the key this host indexes, has nothing to carry (measured 2026-09-21)"
+    },
+    {
+      "layer": "properties",
+      "api": "searchByProperties",
+      "called": true,
+      "args": {
+        "value": "SS34"
+      },
+      "hitCount": 0,
+      "pagesFetched": 1
+    },
+    {
+      "layer": "keyword",
+      "api": "search",
+      "called": true,
+      "args": {
+        "keyword": "SS34"
+      },
+      "hitCount": 5,
+      "pagesFetched": 1
+    }
+  ],
+  "returned": 5,
+  "shown": 5,
+  "candidates": [
+    {
+      "name": "SS34_C8678",
+      "lcsc": "C8678",
+      "mpn": "SS34",
+      "manufacturer": "MDD(辰达半导体)",
+      "footprintName": "SMA_L4.3-W2.6-LS5.2-RD",
+      "supplierFootprint": "SMA(DO-214AC)",
+      "partClass": "Basic Part",
+      "partClassRank": 0,
+      "datasheet": "https://item.szlcsc.com/datasheet/SS34/9178.html",
+      "description": "二极管配置:独立式;正向压降(Vf):550mV@3A;直流反向耐压(Vr):40V;整流电流:3A;",
+      "deviceUuid": "009407eaaa604eb9b6f73cc3868f316d",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "symbolUuid": "1730ed4965bc440d83c57d584a9d6a67",
+      "footprintUuid": "ae5b4041eac34ae3a0a27232f2a98886",
+      "layer": "keyword",
+      "layerIndex": 2,
+      "footprintMatches": false
+    },
+    {
+      "name": "DW-03-08-S-S-340",
+      "lcsc": "C6602820",
+      "mpn": "DW-03-08-S-S-340",
+      "manufacturer": "SAMTEC",
+      "footprintName": "HDR-TH_DW-03-08-S-S-340",
+      "supplierFootprint": "插件,P=2.54mm",
+      "partClass": "Extended Part",
+      "partClassRank": 2,
+      "datasheet": "https://item.szlcsc.com/datasheet/DW-03-08-S-S-340/7557760.html",
+      "description": "间距:2.54mm;安装方式:直插;排数:单排;总PIN位数:3P;触头镀层:金;颜色:黑色;",
+      "deviceUuid": "3944bad7709c4a6f9b55450712cae162",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "symbolUuid": "261f06bdcea8413891a5546ed6338a32",
+      "footprintUuid": "d28109a8d6314d03a170564849a70353",
+      "layer": "keyword",
+      "layerIndex": 2,
+      "footprintMatches": false
+    },
+    {
+      "name": "DW-48-09-G-S-315",
+      "lcsc": "C7177898",
+      "mpn": "DW-48-09-G-S-315",
+      "manufacturer": "SAMTEC",
+      "footprintName": "HDR-TH_ZW-48-15-S-S-340-200-LL",
+      "supplierFootprint": "插件,P=2.54mm",
+      "partClass": "Extended Part",
+      "partClassRank": 2,
+      "datasheet": "https://item.szlcsc.com/datasheet/DW-48-09-G-S-315/8144883.html",
+      "description": "间距:2.54mm;安装方式:直插;排数:单排;总PIN位数:48P;触头镀层:金;颜色:黑色;",
+      "deviceUuid": "f4802e83be9147748eafefdff6b3e981",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "symbolUuid": "c095b4949c3d450993cce0e441f0da19",
+      "footprintUuid": "7cf10aae800c42da8bc3ce9560cf43d4",
+      "layer": "keyword",
+      "layerIndex": 2,
+      "footprintMatches": false
+    },
+    {
+      "name": "SS34",
+      "lcsc": "C9900023345",
+      "mpn": "SS34",
+      "manufacturer": "",
+      "footprintName": "SMA_L4.3-W2.6-LS5.0-RD",
+      "supplierFootprint": "SMA,DO-214AC",
+      "partClass": "Extended Part",
+      "partClassRank": 2,
+      "datasheet": "",
+      "description": "",
+      "deviceUuid": "8f5432cbd8844407abbc4f3dfc4821ff",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "symbolUuid": "0b55faebb09341c6a55cdfabae3a525b",
+      "footprintUuid": "f869598837964c68b58735f83bd7a46b",
+      "layer": "keyword",
+      "layerIndex": 2,
+      "footprintMatches": false
+    },
+    {
+      "name": "ZW-05-15-S-S-340-110",
+      "lcsc": "C6760472",
+      "mpn": "ZW-05-15-S-S-340-110",
+      "manufacturer": "SAMTEC",
+      "footprintName": "HDR-TH_ZW-05-15-S-S-340-110",
+      "supplierFootprint": "插件,P=2.54mm",
+      "partClass": "Extended Part",
+      "partClassRank": 2,
+      "datasheet": "https://item.szlcsc.com/datasheet/ZW-05-15-S-S-340-110/7718578.html",
+      "description": "间距:2.54mm;安装方式:直插;排数:单排;总PIN位数:5P;触头镀层:金;颜色:黑色;",
+      "deviceUuid": "58ee8e6519d54ba8911af2a212ca8f5b",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "symbolUuid": "05a62460e95045d48911a4d619e573e5",
+      "footprintUuid": "2e8ea76b49b84df49f1e903b3d17ef8f",
+      "layer": "keyword",
+      "layerIndex": 2,
+      "footprintMatches": false
+    }
+  ],
+  "stock/price": "以商城实时为准",
+  "readOnly": true,
+  "placed": false,
+  "note": "read-only: nothing was placed or modified. Put a candidate on the page with sch.place_component (deviceUuid + libraryUuid), or write the chosen LCSC code / MPN onto the part already on the page with sch.set_component_attribute.",
+  "notes": [
+    "exact: no partCode (LCSC code) is known for this part — and supplierId, the key this host indexes, has nothing to carry (measured 2026-09-21)",
+    "properties: searchByProperties(value / footprintName) cannot match on this host — measured 2026-09-21 on 3.2.186: value is applied but has no index and footprintName is ignored outright, so those two keys never select anything (the LCSC code does: see the exact rung)"
+  ]
+}

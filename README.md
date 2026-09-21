@@ -15,10 +15,10 @@ practice. Two pieces exist today:
    (component / pin / net references). One file in, full report out — no
    separate netlist export, no editor.
 2. **A live bridge (v0, read-mostly).** A local daemon plus an EasyEDA
-   extension, so the reviewer can also ask *what is open right now*, capture a
-   native screenshot of the canvas, and draw markers on the exact primitives a
-   finding refers to. It reads the editor; it never writes to the design.
-   See [`docs/bridge.md`](docs/bridge.md).
+   extension, so the reviewer can also ask *what is open right now*, draw
+   markers on the exact primitives a finding refers to, and export fab files —
+   and, behind per-page guards, place, move and delete primitives. Writes are
+   gated and audited. See [`docs/bridge.md`](docs/bridge.md).
 
 ### Install
 
@@ -57,11 +57,15 @@ stack trace.
 Exit code is `1` when any ERROR-level finding exists, `0` otherwise; `2` means
 the input could not be read at all.
 
-Built-in rules (all L1-connectivity heuristics; each message states its limits):
+Built-in rules (15 across the connectivity, power/path and parameter families;
+each message states its limits):
 
 - `decoupling-per-ic` — every `U*` IC should share a pin net with a capacitor.
 - `xtal-load-caps` — crystal pins should each see a capacitor to ground.
 - `shunt-sense-link` — milliohm shunts should reach a sense input on an IC.
+- `duplicate-designators`, `nc-and-must-connect`, `library-pin-consistency` — connectivity.
+- `supply-on-known-domain`, `domain-vs-range`, `ldo-dropout`, `usb-cc-pulldown` — power & paths.
+- `decap-required-caps`, `led-current`, `divider-output`, `rc-cutoff`, `value-mpn-match` — parameters.
 
 ### Live bridge
 
@@ -70,7 +74,7 @@ cd connector && npm install && node build.mjs   # build the editor extension
 boardwise bridge start                          # run the daemon (foreground, Ctrl-C to stop)
 boardwise doctor                                # 7 checks: daemon · extension · versions · project (exit 1 + a fix per line)
 boardwise bridge status                         # daemon up? connector attached? paired with whom?
-boardwise bridge screenshot shot.png --fit      # native canvas capture
+boardwise bridge screenshot shot.png --fit      # canvas capture (3.2.186: returns a cached frame — prefer the OS snip)
 boardwise bridge highlight <uuid> --color "#FF0000"
 boardwise bridge highlight --clear
 boardwise review-mark report.json               # draw a `review --json` pass on the schematic (`clear` removes it)
@@ -269,8 +273,9 @@ boardwise 是一个面向 EasyEDA 专业版（嘉立创EDA）的 AI 画板 harne
    输出带证据（器件 / 引脚 / 网络）的审查报告。一个文件进、一份报告出，不需
    要单独导网表。
 2. **实时桥（v0，只读为主）**——本地 daemon + EasyEDA 扩展，让审查器还能知道
-   「现在开着什么」、抓一张画布原生截图、并在发现项对应的图元上画标记。它只
-   读编辑器，不改设计。协议与验证清单见 [`docs/bridge.md`](docs/bridge.md)。
+   「现在开着什么」、在发现项对应的图元上画标记、导出制板文件；并且在逐页守
+   卫之后可以放置、移动、删除图元。写操作受控且可审计。协议与验证清单见
+   [`docs/bridge.md`](docs/bridge.md)。
 
 ### 安装
 
@@ -301,11 +306,14 @@ boardwise review path/to/board.epro2 --json report.json --md report.md
 
 存在 ERROR 级发现时退出码为 `1`，否则为 `0`；输入根本读不出来时为 `2`。
 
-内置规则（全部为 L1 连通性级启发式，message 中如实标注了局限性）：
+内置规则（连通、电源/路径、参数三族共 15 条，message 中如实标注了局限性）：
 
 - `decoupling-per-ic`：每个 U 前缀 IC 的引脚网络中应至少有一个与电容共享。
 - `xtal-load-caps`：晶振每个引脚网络上应各有一个落到地的电容。
 - `shunt-sense-link`：毫欧级分流电阻应能到达某个 IC 的采样引脚。
+- `duplicate-designators`、`nc-and-must-connect`、`library-pin-consistency`：连通性。
+- `supply-on-known-domain`、`domain-vs-range`、`ldo-dropout`、`usb-cc-pulldown`：电源与路径。
+- `decap-required-caps`、`led-current`、`divider-output`、`rc-cutoff`、`value-mpn-match`：参数。
 
 ### 实时桥
 
@@ -314,7 +322,7 @@ cd connector && npm install && node build.mjs   # 构建编辑器扩展
 boardwise bridge start                          # 起 daemon（前台，Ctrl-C 停）
 boardwise doctor                                # 七项体检：daemon · 扩展 · 版本 · 焦点工程（未通过则逐条给建议，退出 1）
 boardwise bridge status                         # daemon 在不在？扩展接没接上？跟谁配对的？
-boardwise bridge screenshot shot.png --fit      # 画布原生截图
+boardwise bridge screenshot shot.png --fit      # 画布截图（3.2.186 实测恒返回缓存空帧——优先用系统截图）
 boardwise bridge highlight <uuid> --color "#FF0000"
 boardwise bridge highlight --clear
 boardwise review-mark report.json               # 把 `review --json` 的发现画到原理图上（`clear` 清掉）
