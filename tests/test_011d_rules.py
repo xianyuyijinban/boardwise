@@ -324,7 +324,31 @@ def test_decap_the_v3_record_is_checked_when_5v_mode_is_active():
 # ------------------------------------------------------------ PARAM-4
 
 
-def test_param4_the_value_mpn_contradiction_is_the_violation():
+def test_param4_a_contradiction_past_the_tolerance_is_the_violation():
+    """4.7k against a 470-ohm MPN is 10x: past the R tolerance (2026-09-21),
+    so it stays the WARN it always was -- now with the amplitude quoted."""
+    lib = _library(_ldo_entry(), _uart_entry())
+    model = DesignModel()
+    model.components["U3"] = Component(
+        uid="u3", designator="U3", value="4.7kΩ",
+        mpn="FRC0805J471 TS", lcsc_part="C2907329",
+        pins=[Pin("1", "A", "VCC")],
+    )
+    findings = ValueMpnMatch(library=lib).check(model)
+    assert len(findings) == 1 and findings[0].severity == "WARN"
+    assert "470" in findings[0].message and "4700" in findings[0].message
+    assert "10.00x apart" in findings[0].message
+    assert "3x tolerance" in findings[0].message
+
+
+def test_param4_a_contradiction_below_the_tolerance_is_ok_with_its_amplitude():
+    """The same 1k-vs-470 pair the golden board carries: 2.13x < 3x is OK.
+
+    "OK" here is not silence -- the row quotes the amplitude and the ruling,
+    so a reader can see what was waived and re-judge it. This is the oracle's
+    known cost (2026-09-21): the golden board's U3 is this very pair, and it
+    was a signed 011c defect before the amplitude ruling.
+    """
     lib = _library(_ldo_entry(), _uart_entry())
     model = DesignModel()
     model.components["U3"] = Component(
@@ -332,15 +356,119 @@ def test_param4_the_value_mpn_contradiction_is_the_violation():
         mpn="FRC0805J471 TS", lcsc_part="C2907329",
         pins=[Pin("1", "A", "VCC")],
     )
-    findings = ValueMpnMatch(library=lib).check(model)
-    assert len(findings) == 1 and findings[0].severity == "WARN"
-    assert "470" in findings[0].message and "1000" in findings[0].message
+    states = _states(ValueMpnMatch(library=lib), model)
+    assert states["VIOLATION"] == []
+    assert ValueMpnMatch(library=lib).check(model) == []
+    waived = next(o for o in states["OK"] if o.subject == "U3")
+    assert "470" in waived.message and "1000" in waived.message
+    assert "2.13x" in waived.message
+    assert "below the 3x tolerance" in waived.message
+    assert "015 batch-2" in waived.message
+    # Evidence rides along, as it does for the violation.
+    assert "U3 value '1kΩ'" in waived.evidence
+
+
+def test_param4_the_amplitude_tolerances_are_the_oracles_ruling():
+    """The numbers, pinned. They are a ruling, not a physics constant: the
+    resistors' 3x is bracketed by the witnessed 2.13x (waived) and 4.70x
+    (kept), and the capacitors' 25x is the project lead's interpolation over
+    a witnessed 22x maximum (see the constant's comment)."""
+    from boardwise.rules.params import (
+        MPN_AMPLITUDE_TOLERANCE_C,
+        MPN_AMPLITUDE_TOLERANCE_R,
+    )
+
+    assert MPN_AMPLITUDE_TOLERANCE_R == 3.0
+    assert MPN_AMPLITUDE_TOLERANCE_C == 25.0
+    assert MPN_AMPLITUDE_TOLERANCE_R < MPN_AMPLITUDE_TOLERANCE_C
+
+
+def test_param4_the_tolerance_is_per_kind_and_the_boundary_is_inclusive():
+    """A capacitor at an amplitude no resistor could reach: 10x and 22x are
+    OK (the graduation board's five), and the ratio is at-or-above -> keep.
+
+    The two kinds are read off the shelf category first, then the value's
+    unit, which is what lets a 1k-ohm part under a U designator be judged at
+    all (``_kind_of``).
+    """
+    lib = _library(_ldo_entry(), _uart_entry())
+    model = DesignModel()
+    # Capacitors: 100nF declared against a 103 code (10 nF), which is the
+    # graduation board's C28/C29 shape -- 10x, far past any resistor's
+    # tolerance and still waived.
+    model.components["C28"] = Component(
+        uid="c28", designator="C28", value="100nF", mpn="CC0603KRX7R9BB103",
+        pins=[Pin("1", "A", "VCC")])
+    model.components["C29"] = Component(
+        uid="c29", designator="C29", value="0.1uF", mpn="CC0603KRX7R9BB103",
+        pins=[Pin("1", "A", "VCC")])
+    # A 2.2uF declared against a 100nF code is 22x -- the graduation board's
+    # C36/C44 shape.
+    model.components["C36"] = Component(
+        uid="c36", designator="C36", value="2.2uF", mpn="CL10B104KB8NNNC",
+        pins=[Pin("1", "A", "VCC")])
+    # 25x exactly: 2.5uF declared against a 100nF code.
+    model.components["C37"] = Component(
+        uid="c37", designator="C37", value="2.5uF", mpn="CL10B104KB8NNNC",
+        pins=[Pin("1", "A", "VCC")])
+    states = _states(ValueMpnMatch(library=lib), model)
+    ok = {o.subject: o.message for o in states["OK"]}
+    assert "10.00x" in ok["C28"] and "25x tolerance" in ok["C28"]
+    assert "10.00x" in ok["C29"]
+    assert "22.00x" in ok["C36"]
+    assert [o.subject for o in states["VIOLATION"]] == ["C37"]
+    assert "25.00x apart" in states["VIOLATION"][0].message
+
+
+def test_param4_a_resistor_at_the_r_tolerance_is_not_waived():
+    """3x exactly is the violation side ("ratio >= threshold"), and the same
+    ratio is a long way under the capacitor tolerance -- the boundary test
+    that keeps the two constants from being swapped."""
+    lib = _library(_ldo_entry(), _uart_entry())
+    model = DesignModel()
+    model.components["R9"] = Component(
+        uid="r9", designator="R9", value="3kΩ", mpn="FRC0805J102 TS",
+        pins=[Pin("1", "A", "VCC")])  # 3000 vs 1000 = 3.00x
+    model.components["C9"] = Component(
+        uid="c9", designator="C9", value="2.5uF", mpn="CL10B104KB8NNNC",
+        pins=[Pin("1", "A", "VCC")])
+    model.components["C10"] = Component(
+        uid="c10", designator="C10", value="2.49uF", mpn="CL10B104KB8NNNC",
+        pins=[Pin("1", "A", "VCC")])  # 24.9x -- just under, still waived
+    states = _states(ValueMpnMatch(library=lib), model)
+    violations = {o.subject: o.message for o in states["VIOLATION"]}
+    assert sorted(violations) == ["C9", "R9"]
+    assert "3.00x apart" in violations["R9"]
+    assert "25.00x apart" in violations["C9"]
+    assert any(o.subject == "C10" for o in states["OK"])
+
+
+def test_param4_a_zero_side_leaves_the_ratio_undefined_and_stays_a_violation():
+    """``min <= 0``: 0/0 and x/0 are not amplitudes. A 0-ohm value against a
+    470-ohm MPN still contradicts, and the message says why it was not
+    waived instead of inventing a ratio."""
+    lib = _library(_ldo_entry(), _uart_entry())
+    model = DesignModel()
+    model.components["R0"] = Component(
+        uid="r0", designator="R0", value="0Ω", mpn="FRC0805J471 TS",
+        pins=[Pin("1", "A", "VCC")])
+    states = _states(ValueMpnMatch(library=lib), model)
+    assert [o.subject for o in states["VIOLATION"]] == ["R0"]
+    message = states["VIOLATION"][0].message
+    assert "ratio undefined" in message
+    assert "0 vs 470" in message
+    assert not [o for o in states["OK"] if o.subject == "R0"]
 
 
 def test_param4_the_a2a_exceptions_become_unknown_not_contradictions():
     """The three exceptions the oracle ruled "the rule is wrong" (2026-09-20)
     as a rule-level assertion: R43's shunt (R notation) and C115/C116's
-    electrolytics must report UNKNOWN and raise nothing (task 015 sec.2)."""
+    electrolytics must report UNKNOWN and raise nothing (task 015 sec.2).
+
+    Two different decisions meet on this board and must not be confused: the
+    decoder *refuses* those three tokens (batch 1), while the amplitude
+    ruling *grades* what the decoder still reads (batch 2). The witness below
+    is the second half."""
     lib = _library(_ldo_entry(), _uart_entry())
     model = DesignModel()
     model.components["R43"] = Component(
@@ -352,14 +480,22 @@ def test_param4_the_a2a_exceptions_become_unknown_not_contradictions():
     model.components["C116"] = Component(
         uid="c116", designator="C116", value="330uF", mpn="PA50V330M10x15",
         pins=[Pin("1", "A", "VCC")])
-    # A part whose code is still read stays judged: the fix is not a mute.
+    # A part whose code is still read stays judged -- and since batch 2
+    # "judged" means graded by amplitude, so the witness has to be one that
+    # is actually past the tolerance: U10 as it stands on the real board
+    # (1k vs 471 = 2.13x) is OK now, while 10k against the same MPN is not.
     model.components["U10"] = Component(
         uid="u10", designator="U10", value="1kΩ", mpn="FRC0805J471 TS",
         pins=[Pin("1", "A", "VCC")])
+    model.components["U11"] = Component(
+        uid="u11", designator="U11", value="10kΩ", mpn="FRC0805J471 TS",
+        pins=[Pin("1", "A", "VCC")])
     states = _states(ValueMpnMatch(library=lib), model)
-    assert [o.subject for o in states["VIOLATION"]] == ["U10"]
+    assert [o.subject for o in states["VIOLATION"]] == ["U11"]
     unknown = {o.subject for o in states["UNKNOWN"]}
     assert {"R43", "C115", "C116"} <= unknown
+    assert "U10" not in unknown, "a decoded code is judged, never refused"
+    assert any(o.subject == "U10" for o in states["OK"])
 
 
 def test_param4_matching_values_are_ok_and_undecodable_are_unknown():
@@ -720,10 +856,18 @@ def test_the_golden_board_matches_the_task_book_expectations():
     v3 = [o for o in states["decap-required-caps"]["VIOLATION"]
           if o.subject == "U1 pin4"]
     assert len(v3) == 1
-    # U3's defect: value-vs-MPN.
-    u3 = [o for o in states["param-value-mpn-match"]["VIOLATION"]
-          if o.subject == "U3"]
+    # U3's defect: value-vs-MPN -- a signed 011c defect that the 2026-09-21
+    # amplitude ruling knowingly waives (1k against 470 is 2.13x, below the
+    # 3x R tolerance). The record stays as the oracle signed it; the rule
+    # reports OK **with the amplitude and the ruling quoted**, so the waiver
+    # is visible on the row rather than inferred from silence.
+    u3_violation = [o for o in states["param-value-mpn-match"]["VIOLATION"]
+                    if o.subject == "U3"]
+    assert u3_violation == []
+    u3 = [o for o in states["param-value-mpn-match"]["OK"] if o.subject == "U3"]
     assert len(u3) == 1
+    assert "2.13x" in u3[0].message and "015 batch-2" in u3[0].message
+    assert "1kΩ" in u3[0].evidence[0]
     # R24/R27 exceptions stay quiet: the pull-down rule says OK.
     assert {o.subject for o in states["conn-usb-cc-pulldown"]["OK"]} == {
         "USB1 pin4", "USB1 pin10",
@@ -735,6 +879,34 @@ def test_the_golden_board_matches_the_task_book_expectations():
     # for a part the oracle had just ruled correct.
     assert any(o.subject == "LED1" and o.state == "OK"
                for o in states["param-led-current"]["OK"])
+
+
+def test_the_graduation_boards_a2b_seven_are_ok_and_the_rule_has_no_violation_left():
+    """Batch 2, measured on the real board it was ruled for.
+
+    The oracle's A2b ruling ("this is not wrong, do not make it so absolute")
+    names seven refs: U10/U14 at 2.13x and C28/C29/C36/C42/C44 at 10x-22x.
+    All seven must come back OK **quoting their amplitude**, and the rule must
+    report no contradiction anywhere on the board -- which is what turns the
+    holdout measurement's precision term into zero.
+    """
+    from boardwise.core.parts import load_parts
+    from boardwise.engines.review_eval import load_board_model
+
+    model = load_board_model(
+        "tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2"
+    )
+    rule = ValueMpnMatch(library=load_parts("blocklib/parts.json"))
+    states = _states(rule, model)
+    assert states["VIOLATION"] == []
+    waived = {o.subject: o.message for o in states["OK"]}
+    for ref in ("U10", "U14"):
+        assert "2.13x" in waived[ref], ref
+    for ref in ("C28", "C29", "C36", "C44"):
+        assert "22.00x" in waived[ref], ref
+    assert "10.00x" in waived["C42"]
+    # The message carries the provenance of the waiver, not just the number.
+    assert "015 batch-2" in waived["C42"] and "25x tolerance" in waived["C42"]
 
 
 # ------------------------------------------------- rule-set retirement
