@@ -61,6 +61,7 @@ from typing import Any, Awaitable, Callable
 import websockets
 from websockets.asyncio.server import ServerConnection, serve
 
+from .. import __version__ as BOARDWISE_VERSION
 from .protocol import (
     HELLO_TIMEOUT,
     PROTOCOL_VERSION,
@@ -591,6 +592,13 @@ class BridgeDaemon:
         if action == "ping":
             return {
                 "pong": True,
+                # The daemon's own version, so a caller can tell "the daemon
+                # answering me" from "the daemon I or my CLI was built from".
+                # `boardwise doctor` is that caller: the action catalogue is a
+                # load-time constant, so a daemon left running across a
+                # checkout answers the new actions with UNKNOWN_ACTION, and
+                # this field is what turns that into a diagnosis.
+                "version": BOARDWISE_VERSION,
                 "connector": self.connector is not None,
                 # Fingerprint only — `bridge status` prints this, and the log
                 # panel and terminal are both places a secret must never reach.

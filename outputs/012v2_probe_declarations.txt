@@ -1,0 +1,169 @@
+== sch_PrimitiveWire ==
+  type: SCH_PrimitiveWire
+  methods (6):
+    create   [beta]
+    delete   [beta]
+    get   [beta]
+    getAll   [beta]
+    getAllPrimitiveId   [beta]
+    modify   [beta]
+== sch_PrimitiveText ==
+  type: SCH_PrimitiveText
+  methods (6):
+    create   [beta]
+    delete   [beta]
+    get   [beta]
+    getAll   [beta]
+    getAllPrimitiveId   [beta]
+    modify   [beta]
+== sch_PrimitiveAttribute ==
+  type: SCH_PrimitiveAttribute
+  methods (7):
+    create   [internal]
+    createNetLabel   [beta, ADD since v4]
+    delete   [internal]
+    get   [beta]
+    getAll   [beta]
+    getAllPrimitiveId   [beta]
+    modify   [beta]
+== sch_PrimitivePin ==
+  type: SCH_PrimitivePin
+  methods (6):
+    create   [beta]
+    delete   [beta]
+    get   [beta]
+    getAll   [beta]
+    getAllPrimitiveId   [beta]
+    modify   [beta]
+== pcb_PrimitiveLine ==
+  type: PCB_PrimitiveLine
+  methods (6):
+    create
+    delete   [beta]
+    get   [beta]
+    getAll   [beta]
+    getAllPrimitiveId   [beta]
+    modify   [beta]
+== pcb_PrimitiveVia ==
+  type: PCB_PrimitiveVia
+  methods (6):
+    create
+    delete   [beta]
+    get   [beta]
+    getAll   [beta]
+    getAllPrimitiveId   [beta]
+    modify   [beta]
+== pcb_PrimitivePad ==
+  type: PCB_PrimitivePad
+  methods (6):
+    create
+    delete   [beta]
+    get   [beta]
+    getAll   [beta]
+    getAllPrimitiveId   [beta]
+    modify   [beta]
+== pcb_PrimitivePour ==
+  type: PCB_PrimitivePour
+  methods (6):
+    create   [beta]
+    delete   [beta]
+    get   [beta]
+    getAll   [beta]
+    getAllPrimitiveId   [beta]
+    modify   [beta]
+== pcb_PrimitiveComponent ==
+  type: PCB_PrimitiveComponent
+  methods (10):
+    create   [beta]
+    delete   [beta]
+    get   [beta]
+    getAll   [beta]
+    getAllPinsByPrimitiveId   [beta]
+    getAllPrimitiveId   [beta]
+    getAllPropertyNames   [beta]
+    modify   [beta]
+    placeComponentWithMouse   [beta]
+    placeFootprintWithMouse   [beta]
+== dmt_Project ==
+  type: DMT_Project
+  methods (12):
+    copyProject   [internal]
+    createProject   [beta]
+    deleteProject   [internal]
+    getAllProjectsUuid
+    getCurrentProjectInfo
+    getProjectInfo
+    modifyProjectCollaborationMode   [internal]
+    modifyProjectDescription   [internal]
+    modifyProjectFriendlyName   [internal]
+    moveProject   [internal]
+    moveProjectToFolder
+    openProject
+== dmt_EditorControl ==
+  type: DMT_EditorControl
+  methods (20):
+    activateDocument
+    activateSplitScreen
+    closeDocument
+    createSplitScreen
+    generateIndicatorMarkers   [beta]
+    getCurrentRenderedAreaImage   [beta]
+    getSplitScreenIdByTabId
+    getSplitScreenTree
+    getTabsBySplitScreenId
+    mergeAllDocumentFromSplitScreen
+    moveDocumentToSplitScreen
+    openDocument
+    openLibraryDocument   [beta]
+    removeIndicatorMarkers   [beta]
+    tileAllDocumentToSplitScreen
+    zoom
+    zoomTo   [beta]
+    zoomToAllPrimitives   [beta]
+    zoomToRegion   [beta]
+    zoomToSelectedPrimitives   [beta]
+== pcb_ManufactureData ==
+  type: PCB_ManufactureData
+  methods (31):
+    deleteBomTemplate   [beta]
+    get3DFile   [beta]
+    get3DShellFile   [beta]
+    getAltiumDesignerFile   [beta]
+    getAutoLayoutJsonFile   [beta]
+    getAutoRouteJsonFile   [beta]
+    getAutoRouteJsonFileForJRouter   [beta]
+    getBomFile   [beta]
+    getBomTemplateFile   [beta]
+    getBomTemplates   [beta]
+    getDsnFile   [beta]
+    getDxfFile   [beta]
+    getFlyingProbeTestFile   [beta]
+    getGerberFile   [beta]
+    getIdxFile   [beta]
+    getInteractiveBomFile   [internal]
+    getIpc2581CFile   [beta]
+    getIpcD356AFile   [beta]
+    getManufactureData   [beta]
+    getNetlistFile   [beta]
+    getOpenDatabaseDoublePlusFile   [beta]
+    getPadsFile   [beta]
+    getPcbInfoFile   [beta]
+    getPdfFile   [beta]
+    getPickAndPlaceFile   [beta]
+    getTestPointFile   [beta]
+    place3DShellOrder   [beta]
+    placeComponentsOrder   [beta]
+    placePcbOrder   [beta]
+    placeSmtComponentsOrder   [beta]
+    uploadBomTemplateFile   [beta]
+== lib_Device ==
+  type: LIB_Device
+  methods (8):
+    copy   [beta]
+    create   [beta]
+    delete   [beta]
+    get   [beta]
+    getByLcscIds   [beta]
+    modify   [beta]
+    search   [beta]
+    searchByProperties   [beta, ADD since v4]

@@ -1,0 +1,27 @@
+=== 012v2 P5 run start 13:12:54 (budget 240s, period 5s, target /test @ ed61d97da8f7dbf1) ===
+13:12:54  poll#1  FOCUS-CHANGE -> '/高速电机控制器'  (target pages present: False, incoming docs 4, rc=0, 0.4s)
+13:12:59  poll#2  focused='/高速电机控制器'  (no)
+13:13:04  poll#3  focused='/高速电机控制器'  (no)
+13:13:09  poll#4  focused='/高速电机控制器'  (no)
+13:13:14  poll#5  focused='/高速电机控制器'  (no)
+13:13:19  poll#6  focused='/高速电机控制器'  (no)
+13:13:24  poll#7  focused='/高速电机控制器'  (no)
+13:13:29  poll#8  focused='/高速电机控制器'  (no)
+13:13:34  poll#9  focused='/高速电机控制器'  (no)
+13:13:39  poll#10  focused='/高速电机控制器'  (no)
+13:13:45  poll#11  focused='/高速电机控制器'  (no)
+13:13:49  poll#12  focused='/高速电机控制器'  (no)
+13:13:54  poll#13  focused='/高速电机控制器'  (no)
+13:13:59  poll#14  focused='/高速电机控制器'  (no)
+13:14:04  poll#15  focused='/高速电机控制器'  (no)
+13:14:09  poll#16  focused='/高速电机控制器'  (no)
+13:14:14  poll#17  focused='/高速电机控制器'  (no)
+13:14:19  poll#18  FOCUS-CHANGE -> '/test'  (target pages present: True, incoming docs 6, rc=0, 0.3s)
+13:14:19  *** HIT: focused == '/test' and page ed61d97da8f7dbf1 present -> deleting immediately ***
+13:14:20  DELETE attempt#1 rc=0 0.3s :: {   "deleted": true,   "pageUuid": "ed61d97da8f7dbf1",   "name": "P5" }
+13:14:20  DELETE OK (attempt#1)
+13:14:20  VERIFY doc.list rc=0 focused='/test' target-present=False (project pages=5)
+13:14:20  SAVE sch.doc.save rc=0 0.3s :: {   "saved": true }
+13:14:20  MTIME before-wait: 2026-09-21 13:14:20 size=5263360 mtime=+0800
+13:14:35  MTIME after+15s : 2026-09-21 13:14:20 size=5263360 mtime=+0800   -> UNCHANGED
+=== 012v2 P5 run end: deleted=True verified_absent=True save_rc=0 ===

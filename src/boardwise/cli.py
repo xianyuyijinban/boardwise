@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 from .engines.review import (
@@ -124,6 +126,36 @@ def build_parser() -> argparse.ArgumentParser:
     shot = bridge_sub.add_parser("screenshot", help="Export the current canvas as PNG.")
     shot.add_argument("out", help="Where to write the PNG.")
     shot.add_argument("--fit", action="store_true", help="Fit the board before capturing.")
+    fab = bridge_sub.add_parser(
+        "export-fab",
+        help=(
+            "Export the fab bundle (Gerber + pick-and-place + BOM + manifest.json) "
+            "into a directory. 012v2 §六."
+        ),
+        description=(
+            "Calls `export.fab` and writes what comes back into a directory: the "
+            "three fab files plus a manifest.json recording what they are, where "
+            "they were meant to go and what was verified. The connector cannot "
+            "write to a path itself — the declared SYS_FileSystem.saveFile takes no "
+            "directory — so the bytes arrive as base64 and this command is the "
+            "writer. Exit 0 only when the whole bundle landed."
+        ),
+    )
+    fab.add_argument("--out", required=True, help="Directory to write into (created if missing).")
+    fab.add_argument("--pcb", default=None, help="PCB uuid to export (default: the focused board).")
+    fab.add_argument("--vendor", default="generic", help="Vendor preset (default: generic).")
+    fab.add_argument(
+        "--gerber", default=None,
+        help=(
+            "JSON object of gerber overrides: fileName, colorSilkscreen, unit, "
+            "digitalFormat, other, layers, objects."
+        ),
+    )
+    fab.add_argument("--bom-template", default=None, help="Saved BOM template name.")
+    fab.add_argument(
+        "--timeout-ms", type=int, default=None,
+        help="Per-file deadline for the editor's export (200..600000, default 60000).",
+    )
     call = bridge_sub.add_parser(
         "call",
         help=(
@@ -173,6 +205,78 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip the confirmation prompt (the editor page WILL reload).",
     )
     bridge.add_argument(
+        "--port", type=int, default=None, help="Daemon port (default 61190)."
+    )
+
+    review_mark = sub.add_parser(
+        "review-mark",
+        help=(
+            "Draw a `boardwise review` pass on the live schematic canvas "
+            "(012v2 §八: markers + jump list)."
+        ),
+        description=(
+            "Reads the findings `boardwise review --json` wrote (a path, `-` for "
+            "stdin, or the JSON itself), resolves each finding's refs to positions "
+            "on the focused page and draws indicator markers there. The marker API "
+            "takes shapes, not text, so this command prints the finding table that "
+            "numbers the markers: position k is `marker#k` on the canvas. "
+            "`review-mark clear` removes the markers instead. Exit 0 all landed / "
+            "1 partial (a ref not on the page, a finding with no ref, or a host "
+            "that could not draw — each named) / 2 bad input or no daemon."
+        ),
+    )
+    review_mark.add_argument(
+        "findings",
+        help=(
+            "The `boardwise review --json` report: a path, `-` to read stdin, or "
+            "the JSON text. The literal `clear` removes the markers instead."
+        ),
+    )
+    review_mark.add_argument(
+        "--page", default=None, metavar="UUID",
+        help=(
+            "Schematic page uuid the findings are about (from `doc.list`). Given, "
+            "a different focused page is refused instead of marked."
+        ),
+    )
+    review_mark.add_argument(
+        "--focus", type=int, default=None, metavar="N",
+        help="Zoom the canvas to the Nth finding (1-based, the report's order).",
+    )
+    review_mark.add_argument("--color", default="#FF0000", help="Marker colour (default #FF0000).")
+    review_mark.add_argument(
+        "--zoom", action="store_true", help="Zoom to all markers (ignored together with --focus)."
+    )
+    review_mark.add_argument(
+        "--no-markers", action="store_true",
+        help="Draw nothing: print the jump list (ref + coordinates) only.",
+    )
+    review_mark.add_argument(
+        "--json", dest="json_path", metavar="PATH", help="Write the machine-readable result."
+    )
+    review_mark.add_argument(
+        "--port", type=int, default=None, help="Daemon port (default 61190)."
+    )
+
+    doctor = sub.add_parser(
+        "doctor",
+        help="Check that this installation can do anything (daemon · extension · versions · project).",
+        description=(
+            "Seven checks in one run: the daemon answers ping (there is no HTTP "
+            "/health — the daemon is a WebSocket server), the extension's "
+            "WebSocket is registered, five methods the harness depends on answer "
+            "`typeof === function` (sys.probe), the running daemon version matches "
+            "this install, the connector build in the editor matches the repo, the "
+            "editor is ≥ 3.2.183, and the focused project is readable. Green exits "
+            "0; anything else exits 1 with one fix per failing line. Built for the "
+            "unplugged case: no daemon, no extension and an old editor are all "
+            "reported, never crashed on."
+        ),
+    )
+    doctor.add_argument(
+        "--json", dest="json_path", metavar="PATH", help="Write the machine-readable report."
+    )
+    doctor.add_argument(
         "--port", type=int, default=None, help="Daemon port (default 61190)."
     )
 
@@ -1013,6 +1117,192 @@ def _cmd_bridge_screenshot(args: argparse.Namespace) -> int:
             return 1
         Path(args.out).write_bytes(base64.b64decode(payload))
         print(f"boardwise bridge: wrote {args.out}")
+        return 0
+
+    return asyncio.run(run())
+
+
+class FabWriteError(Exception):
+    """The fab bundle could not be written to disk."""
+
+
+def _write_fab_bundle(payload: object, out_dir: Path) -> dict:
+    """Write an ``export.fab`` payload into ``out_dir``; report what landed.
+
+    Deliberately a **pure file operation**, separated from the socket call so
+    the part that can destroy something is testable without a daemon. Three
+    rules, each learned the hard way elsewhere:
+
+    - **A file name is one path segment.** The name comes from the editor in one
+      case (a host-named gerber archive), so a name like ``../../x`` would write
+      outside the directory the user asked for; it is refused rather than
+      sanitised, because a silent rename is a worse surprise than a failure.
+    - **Every entry is decoded, then measured on disk.** ``written[].bytes`` is
+      the size ``stat`` reports, and a disagreement with the connector's own
+      ``bytes`` is reported instead of assumed away — a base64 bug would
+      otherwise look like a successful export.
+    - **The manifest is written last and enriched here**: ``outDir`` resolved and
+      ``written`` filled in with the measured sizes, so a directory found later
+      says where it went and what actually arrived.
+    """
+    import base64
+    import json
+
+    if not isinstance(payload, dict):
+        raise FabWriteError(f"the connector returned {type(payload).__name__}, not a payload")
+    files = payload.get("files")
+    if not isinstance(files, list) or not files:
+        raise FabWriteError(
+            "the connector returned no files to write "
+            f"(failed: {json.dumps(payload.get('failed'), ensure_ascii=False)})"
+        )
+    out_dir = Path(out_dir)
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise FabWriteError(f"cannot create {out_dir}: {exc}") from exc
+
+    written: list[dict] = []
+    mismatched: list[str] = []
+    for entry in files:
+        if not isinstance(entry, dict):
+            raise FabWriteError(f"a file entry is {type(entry).__name__}, not an object")
+        name = str(entry.get("name") or "")
+        if not name or name != Path(name).name or name in (".", ".."):
+            raise FabWriteError(
+                f"refusing to write {name!r}: a bundle file name must be a single "
+                "path segment"
+            )
+        data = entry.get("data")
+        if not isinstance(data, str) or not data:
+            raise FabWriteError(f"{name}: the connector sent no data")
+        try:
+            blob = base64.b64decode(data, validate=True)
+        except (ValueError, TypeError) as exc:
+            raise FabWriteError(f"{name}: data is not base64 ({exc})") from exc
+        target = out_dir / name
+        try:
+            target.write_bytes(blob)
+            size = target.stat().st_size
+        except OSError as exc:
+            raise FabWriteError(f"cannot write {target}: {exc}") from exc
+        declared = entry.get("bytes")
+        if isinstance(declared, int) and declared != size:
+            mismatched.append(name)
+        written.append({
+            "name": name,
+            "role": entry.get("role"),
+            "bytes": size,
+            "declaredBytes": declared if isinstance(declared, int) else None,
+        })
+
+    manifest = payload.get("manifest")
+    manifest = dict(manifest) if isinstance(manifest, dict) else {}
+    manifest["outDir"] = str(out_dir)
+    manifest["written"] = written
+    if mismatched:
+        manifest["byteCountMismatch"] = mismatched
+    manifest_path = out_dir / "manifest.json"
+    try:
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+    except OSError as exc:
+        raise FabWriteError(f"cannot write {manifest_path}: {exc}") from exc
+    return {
+        "outDir": str(out_dir),
+        "written": written,
+        "manifest": str(manifest_path),
+        "mismatched": mismatched,
+        "project": manifest.get("project"),
+        "pcb": manifest.get("pcb"),
+        "generatedAt": manifest.get("generatedAt"),
+    }
+
+
+def _cmd_bridge_export_fab(args: argparse.Namespace) -> int:
+    """`bridge export-fab` — call `export.fab` and put the bundle on disk.
+
+    Exit codes follow the rest of `boardwise bridge`: 2 when the daemon is not
+    reachable, 1 when the action failed **or** when the bundle came back
+    incomplete/broken, 0 only when every file and the manifest landed. A partial
+    bundle is a failure here even though the files that did arrive are kept:
+    a fab house cannot do anything with two of three files, and a caller reading
+    the exit code must not have to parse the output to find that out.
+    """
+    import asyncio
+    import json
+
+    BridgeClient, BridgeError, port, token = _open_cli(args)
+    params: dict = {"outDir": str(args.out), "vendor": args.vendor}
+    if args.pcb:
+        params["pcbUuid"] = args.pcb
+    if args.bom_template:
+        params["bomTemplate"] = args.bom_template
+    if args.timeout_ms is not None:
+        params["timeoutMs"] = args.timeout_ms
+    if args.gerber:
+        try:
+            gerber = json.loads(args.gerber)
+        except json.JSONDecodeError as exc:
+            print(f"boardwise bridge export-fab: --gerber is not JSON ({exc})", file=sys.stderr)
+            return 2
+        if not isinstance(gerber, dict):
+            print("boardwise bridge export-fab: --gerber must be a JSON object", file=sys.stderr)
+            return 2
+        params["gerber"] = gerber
+
+    async def run() -> int:
+        try:
+            client = await BridgeClient.open(
+                _bridge_uri(port), token, "cli", client="boardwise-cli"
+            )
+        except (OSError, BridgeError) as exc:
+            print(
+                f"boardwise bridge: daemon not reachable on 127.0.0.1:{port} ({exc})",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            data = await client.call("export.fab", params)
+        except BridgeError as exc:
+            print(
+                f"boardwise bridge export-fab: export.fab failed [{exc.code}] {exc.message}",
+                file=sys.stderr,
+            )
+            return 1
+        finally:
+            await client.close()
+
+        try:
+            result = _write_fab_bundle(data, Path(args.out))
+        except FabWriteError as exc:
+            print(f"boardwise bridge export-fab: {exc}", file=sys.stderr)
+            return 1
+
+        failed = data.get("failed") if isinstance(data, dict) else None
+        for item in failed or []:
+            if isinstance(item, dict):
+                print(
+                    f"boardwise bridge export-fab: MISSING {item.get('role')}: {item.get('reason')}",
+                    file=sys.stderr,
+                )
+        for entry in result["written"]:
+            print(f"boardwise bridge export-fab: wrote {entry['name']} "
+                  f"({entry['bytes']} B, {entry['role']})")
+        print(
+            f"boardwise bridge export-fab: {len(result['written'])} file(s) + manifest.json "
+            f"in {result['outDir']}"
+        )
+        if result["mismatched"]:
+            print(
+                "boardwise bridge export-fab: byte counts disagree with the connector for "
+                f"{', '.join(result['mismatched'])} — the files landed but the transfer is suspect",
+                file=sys.stderr,
+            )
+            return 1
+        if failed:
+            return 1
         return 0
 
     return asyncio.run(run())
@@ -2454,11 +2744,774 @@ def _cmd_bridge_call(args: argparse.Namespace) -> int:
     return asyncio.run(run())
 
 
+# --------------------------------------------------------------------------
+# review-mark (012v2 §八: a review pass drawn back onto the page)
+# --------------------------------------------------------------------------
+
+
+class FindingsError(Exception):
+    """The findings input could not be read or is not a review report."""
+
+
+def _load_findings(source: str) -> tuple[list[dict], str]:
+    """Read a findings list from a path, ``-`` (stdin) or the JSON itself.
+
+    Returns ``(findings, label)``. Three input forms because all three are
+    natural at a shell: the report file `boardwise review --json` wrote, a pipe
+    from it, and a literal pasted from a conversation. The literal is only tried
+    when the argument is *not* an existing path, so a file that happens to be
+    named like JSON still wins.
+    """
+    import json
+
+    label = source
+    text: str
+    if source == "-":
+        label = "<stdin>"
+        text = sys.stdin.read()
+    elif Path(source).is_file():
+        label = str(source)
+        try:
+            text = Path(source).read_text(encoding="utf-8")
+        except OSError as exc:
+            raise FindingsError(f"{source}: {exc}") from exc
+    elif source.lstrip()[:1] in ("{", "["):
+        text = source
+    else:
+        raise FindingsError(
+            f"{source}: not a file, not `-`, and not JSON. Pass the report "
+            "`boardwise review --json <path>` wrote, or `-` to read stdin."
+        )
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise FindingsError(f"{label} is not JSON ({exc})") from exc
+
+    if isinstance(payload, list):
+        findings = payload
+    elif isinstance(payload, dict) and isinstance(payload.get("findings"), list):
+        findings = payload["findings"]
+    elif isinstance(payload, dict) and ("rule_id" in payload or "ruleId" in payload):
+        findings = [payload]
+    else:
+        raise FindingsError(
+            f"{label} carries no findings: expected the `boardwise review --json` "
+            "payload ({'summary': …, 'findings': […]}) or a bare list of findings"
+        )
+    if not all(isinstance(entry, dict) for entry in findings):
+        raise FindingsError(f"{label}: every finding must be a JSON object")
+    return findings, label
+
+
+def marks_from_findings(findings: list[dict]) -> tuple[list[dict], list[dict]]:
+    """``(marks, skipped)`` for :func:`boardwise.engines.review.render_json` output.
+
+    A mark is what `review.mark` needs and nothing more: the ref, the rule id,
+    the severity and the one-line message. One mark per **ref**, because a
+    finding may name several parts (a decoupling violation names the IC *and*
+    the capacitor) and each of them is somewhere on the page — the same
+    rule-verdict may therefore light up twice, which is the honest picture.
+
+    The refs come from the report's own ``refs`` field when it has one (written
+    by `render_json` since 012v2 §八) and are otherwise read out of the evidence
+    with :func:`boardwise.engines.review.finding_refs` — so an older report file
+    still marks. A finding that names no ref at all is returned in `skipped`
+    rather than dropped: "this finding cannot be pointed at" is information, and
+    a silent gap in the count is not.
+    """
+    from .engines.review import finding_refs
+    from .rules.base import Finding
+
+    marks: list[dict] = []
+    skipped: list[dict] = []
+    for position, entry in enumerate(findings, 1):
+        rule_id = str(entry.get("rule_id") or entry.get("ruleId") or "").strip()
+        severity = str(entry.get("severity") or "").strip().upper()
+        message = str(entry.get("message") or "").strip()
+        evidence = entry.get("evidence")
+        evidence = [str(item) for item in evidence] if isinstance(evidence, list) else []
+        declared = entry.get("refs")
+        if declared is None and entry.get("ref") is not None:
+            declared = entry.get("ref")
+        if isinstance(declared, str):
+            declared = [declared]
+        refs: list[str] = []
+        if isinstance(declared, list):
+            refs = [str(ref).strip() for ref in declared if str(ref).strip()]
+        if not refs:
+            refs = finding_refs(
+                Finding(
+                    rule_id=rule_id,
+                    severity=severity or "INFO",
+                    message=message,
+                    level=str(entry.get("level") or ""),
+                    evidence=evidence,
+                )
+            )
+        if not refs:
+            skipped.append(
+                {
+                    "finding": position,
+                    "ruleId": rule_id,
+                    "severity": severity,
+                    "text": message,
+                    "reason": "该发现没有点名任何位号",
+                }
+            )
+            continue
+        for ref in refs:
+            marks.append(
+                {
+                    "ref": ref,
+                    "ruleId": rule_id,
+                    "severity": severity,
+                    "text": message,
+                    "finding": position,
+                }
+            )
+    return marks, skipped
+
+
+def _cmd_review_mark(args: argparse.Namespace) -> int:
+    """Draw a review pass on the live canvas, or clear it (§八).
+
+    Exit codes: 0 everything the report asked for is on the canvas (or the
+    markers were cleared); 1 partial — a ref that is not on the page, a finding
+    with no ref, or a host that could not draw, all named line by line; 2 the
+    input or the daemon was unusable. Partial is exit 1 rather than 0 on
+    purpose: "some of your review is on the canvas" is not the same claim as
+    "your review is on the canvas".
+    """
+    import asyncio
+    import json
+
+    BridgeClient, BridgeError, port, token = _open_cli(args)
+
+    marks: list[dict] = []
+    skipped: list[dict] = []
+    label = "clear"
+    if args.findings != "clear":
+        try:
+            findings, label = _load_findings(args.findings)
+            marks, skipped = marks_from_findings(findings)
+        except FindingsError as exc:
+            print(f"boardwise review-mark: {exc}", file=sys.stderr)
+            return 2
+        if not marks:
+            print(
+                f"boardwise review-mark: {label} 里没有可标记的位号"
+                f"（{len(skipped)} 条发现没有点名位号）—— 没有调用编辑器",
+                file=sys.stderr,
+            )
+            return 1
+
+    params: dict = {
+        "clear": args.findings == "clear",
+        "markers": not args.no_markers,
+        "color": args.color,
+        "zoom": bool(args.zoom),
+    }
+    if args.findings != "clear":
+        # `finding` stays CLI-side: the action's contract is position order, and
+        # an unknown key in the marks would only invite a second source of truth.
+        params["marks"] = [
+            {key: mark[key] for key in ("ref", "ruleId", "severity", "text")} for mark in marks
+        ]
+    if args.page:
+        params["pageUuid"] = args.page
+    if args.focus is not None:
+        params["focus"] = int(args.focus)
+
+    async def run() -> int:
+        try:
+            client = await BridgeClient.open(
+                _bridge_uri(port), token, "cli", client="boardwise-cli"
+            )
+        except (OSError, BridgeError) as exc:
+            print(
+                f"boardwise bridge: daemon not reachable on 127.0.0.1:{port} ({exc})",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            data = await client.call("review.mark", params)
+        except BridgeError as exc:
+            print(
+                f"boardwise review-mark: {params['clear'] and 'clear' or 'mark'} failed "
+                f"[{exc.code}] {exc.message}",
+                file=sys.stderr,
+            )
+            return 1
+        finally:
+            await client.close()
+        return _render_review_mark(label, marks, skipped, data, args)
+
+    return asyncio.run(run())
+
+
+def _render_review_mark(
+    label: str, marks: list[dict], skipped: list[dict], data: object,
+    args: argparse.Namespace,
+) -> int:
+    """Print the finding ↔ marker table the marker API cannot draw, and decide the exit."""
+    import json
+
+    payload = data if isinstance(data, dict) else {}
+
+    if payload.get("cleared") is not None and not marks:
+        ok = bool(payload.get("cleared"))
+        print(f"boardwise review-mark clear: {'已清除画布上的指示标记' if ok else '画布拒绝清除'}")
+        if not ok:
+            print(f"  {payload.get('note', '')}")
+        if args.json_path:
+            Path(args.json_path).write_text(
+                json.dumps({"mode": "clear", "response": payload}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        return 0 if ok else 1
+
+    marked = {entry.get("position"): entry for entry in payload.get("marked", [])}
+    unresolved = {entry.get("position"): entry for entry in payload.get("unresolved", [])}
+    mode = str(payload.get("mode") or "markers")
+    print(
+        f"boardwise review-mark: {label} —— {len(marks)} 个位号"
+        f"（{len(payload.get('marked', []))} 已打标，{len(payload.get('unresolved', []))} 未打标，"
+        f"{len(skipped)} 条发现没有位号）"
+    )
+    for position, mark in enumerate(marks, 1):
+        head = (
+            f"  [{position}] {mark['severity']:<5} {mark['ruleId']:<22} {mark['ref']:<8}"
+        )
+        hit = marked.get(position)
+        if hit:
+            print(
+                f"{head} marker#{hit.get('marker')} @ ({hit.get('x')}, {hit.get('y')})"
+                f"  {mark['text']}"
+            )
+        else:
+            reason = (unresolved.get(position) or {}).get("reason", "未打标")
+            print(f"{head} 未打标：{reason}  {mark['text']}")
+    for entry in skipped:
+        print(
+            f"  [~] {entry['severity']:<5} {entry['ruleId']:<22} "
+            f"发现 #{entry['finding']}：{entry['reason']}"
+        )
+    if mode == "list":
+        print(f"  降级为跳转清单（未在画布上打标）：{(payload.get('markers') or {}).get('reason', '')}")
+    else:
+        print(
+            f"  画布标记：{(payload.get('markers') or {}).get('accepted', 0)}/"
+            f"{(payload.get('markers') or {}).get('attempted', 0)}"
+            f"（marker#k = 上面第 k 个 marker 编号）"
+        )
+    focused = payload.get("focused")
+    if isinstance(focused, dict):
+        print(
+            f"  跳转到第 {focused.get('position')} 条 {focused.get('ref')}："
+            f"{'已缩放' if focused.get('zoomed') else '未缩放 — ' + str(focused.get('reason', ''))}"
+        )
+    for note in payload.get("notes", []):
+        print(f"  注：{note}")
+
+    ok = mode == "markers" and not unresolved and not skipped
+    print(
+        "boardwise review-mark: 全部到位；清除用 `boardwise review-mark clear`"
+        if ok
+        else "boardwise review-mark: 部分到位（见上）；清除用 `boardwise review-mark clear`"
+    )
+    if args.json_path:
+        Path(args.json_path).write_text(
+            json.dumps(
+                {
+                    "source": label,
+                    "marks": marks,
+                    "skipped": skipped,
+                    "mode": mode,
+                    "complete": ok,
+                    "response": payload,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    return 0 if ok else 1
+
+
+# --------------------------------------------------------------------------
+# doctor (012v2 §九: is this installation able to do anything at all?)
+# --------------------------------------------------------------------------
+
+
+#: The five methods `doctor` spot-checks — one per capability the harness needs,
+#: so a gap is named rather than discovered later by a failing action:
+#: the page-identity read every write guard uses, the PCB's identity read (the
+#: pcb guards), the component list every read and every ref resolution uses,
+#: focus (`doc.open` / `export.fab`), and the marker API (`review.mark`).
+#:
+#: Five, and deliberately not more: `sys.probe` can verify any declared member
+#: (`boardwise bridge call --action sys.probe`), and doctor is a health check,
+#: not the probe report. Every name here must exist in the generated table
+#: (`connector/src/api-names.ts`) — a test asserts that, so a typo cannot turn
+#: into a permanent red line nobody can fix.
+DOCTOR_PROBE_CHECKS: dict[str, tuple[str, ...]] = {
+    "dmt_Schematic": ("getCurrentSchematicPageInfo",),
+    "dmt_Pcb": ("getCurrentPcbInfo",),
+    "sch_PrimitiveComponent": ("getAll",),
+    "dmt_EditorControl": ("openDocument", "generateIndicatorMarkers"),
+}
+
+#: The editor release that added the API surface this harness leans on.
+#: Below it, `generateIndicatorMarkers`/`zoomToRegion` and friends are declared
+#: absent — so doctor says so instead of letting `review.mark` fail on the
+#: machine with a NOT_IMPLEMENTED nobody asked for.
+EDITOR_API_FLOOR = (3, 2, 183)
+
+#: The one sentence every connector-dependent check repeats when nothing is
+#: attached. Written once so the seven lines cannot drift into seven different
+#: guesses about the same missing socket.
+CONNECTOR_FIX = (
+    "先让扩展连上：打开立创 EDA Pro，确认 boardwise 扩展已启用并在面板里可见"
+    "（首页/原理图/PCB 菜单里有 boardwise，`About…` 应显示 connected），"
+    "再重跑 `boardwise doctor`（若刚重启过编辑器，daemon 侧用 `boardwise bridge status` 复核）"
+)
+
+
+@dataclass
+class DoctorCheck:
+    """One line of the doctor report, with its own fix."""
+
+    name: str
+    label: str
+    ok: bool
+    detail: str
+    fix: str = ""
+    #: True when the check could not be performed at all (its prerequisite is
+    #: missing, or the fact it compares against is not on this machine). A skip
+    #: is printed and never fails the run — claiming red for a comparison that
+    #: was never made would be its own kind of wrong.
+    skipped: bool = False
+
+
+@dataclass
+class DoctorProbe:
+    """Everything doctor learned, before it judges any of it.
+
+    A plain container so that :func:`run_doctor` is a *pure* function of what was
+    read: every branch (no daemon, no connector, an old editor, a stale bundle)
+    is testable without a socket, a daemon or an editor.
+    """
+
+    port: int
+    #: This install's own version (`boardwise.__version__`).
+    daemon_version: str = ""
+    #: The build the running connector announces (`sys.probe` → `connector`).
+    connector_version: str = ""
+    #: The editor's own version (`sys.probe` → `version`).
+    editor_version: str = ""
+    #: The in-repo connector version (`connector/extension.json`), '' when absent.
+    local_connector_version: str = ""
+    ping: dict | None = None
+    ping_error: str = ""
+    probe: dict | None = None
+    probe_error: str = ""
+    documents: dict | None = None
+    documents_error: str = ""
+
+
+def _version_tuple(text: str) -> tuple[int, ...]:
+    """``"v3.2.186 (build 7)"`` → ``(3, 2, 186)``; ``""`` → ``()``.
+
+    Tolerant on purpose: the editor's version string is the host's business, and
+    a check that goes red because of a suffix would be a false alarm.
+    """
+    match = re.match(r"\s*v?(\d+(?:\.\d+)*)", text or "")
+    if not match:
+        return ()
+    return tuple(int(part) for part in match.group(1).split("."))
+
+
+def run_doctor(p: DoctorProbe) -> list[DoctorCheck]:
+    """Judge one :class:`DoctorProbe`. Pure: no socket, no daemon, no editor."""
+    checks: list[DoctorCheck] = []
+
+    reachable = p.ping is not None
+    checks.append(
+        DoctorCheck(
+            name="daemon",
+            # The daemon has no HTTP surface at all — it is a WebSocket server
+            # and `ping` is its health answer, so that is what is checked.
+            label="daemon 可达（ping，daemon 无 HTTP /health）",
+            ok=reachable,
+            detail=(
+                f"127.0.0.1:{p.port} 的 daemon 已应答 ping"
+                if reachable
+                else f"连不上 127.0.0.1:{p.port}：{p.ping_error or '没有应答'}"
+            ),
+            fix="" if reachable else "运行 `boardwise bridge start`（前台运行，保持窗口开着）；端口不是 61190 时用 --port 指明",
+        )
+    )
+
+    attached = bool((p.ping or {}).get("connector"))
+    fingerprint = (p.ping or {}).get("pairedFingerprint")
+    checks.append(
+        DoctorCheck(
+            name="connector",
+            label="扩展已连接（WebSocket 已注册到 daemon）",
+            ok=attached,
+            detail=(
+                f"daemon 上注册着一个 connector，配对指纹 {fingerprint}"
+                if attached
+                else (
+                    "daemon 上没有 connector"
+                    if reachable
+                    else "未验证：daemon 都没连上"
+                )
+            ),
+            fix="" if attached else CONNECTOR_FIX,
+        )
+    )
+
+    missing = _probe_missing(p.probe)
+    if p.probe is None:
+        probe_ok = False
+        probe_detail = f"未验证：sys.probe 没有答复（{p.probe_error or '扩展未连接'}）"
+    else:
+        probe_ok = not missing
+        probe_detail = (
+            f"5/5 关键方法都是 function（{_probe_names()}）"
+            if probe_ok
+            else f"缺失或不是方法：{', '.join(missing)}"
+        )
+    checks.append(
+        DoctorCheck(
+            name="methods",
+            label="sys.probe 关键方法在位",
+            ok=probe_ok,
+            detail=probe_detail,
+            fix=(
+                ""
+                if probe_ok
+                else CONNECTOR_FIX
+                if p.probe is None
+                else "这台编辑器缺少 harness 依赖的接口——对照 `docs/getting-started.md` 的版本要求，"
+                "或先用 `boardwise bridge call --action sys.probe --params '{\"checks\":true}'` 看全表"
+            ),
+        )
+    )
+
+    editor = _version_tuple(p.editor_version)
+    if not p.editor_version:
+        editor_ok = False
+        editor_detail = f"未验证：没有读到编辑器版本（{p.probe_error or '扩展未连接'}）"
+    else:
+        editor_ok = bool(editor) and editor >= EDITOR_API_FLOOR
+        editor_detail = (
+            f"编辑器 {p.editor_version}"
+            + (
+                ""
+                if editor_ok
+                else f"（低于 {'.'.join(str(part) for part in EDITOR_API_FLOOR)}："
+                "generateIndicatorMarkers / zoomToRegion 等接口在该版本后才有）"
+            )
+        )
+    checks.append(
+        DoctorCheck(
+            name="editor-version",
+            label=f"编辑器版本 ≥ {'.'.join(str(part) for part in EDITOR_API_FLOOR)}",
+            ok=editor_ok,
+            detail=editor_detail,
+            fix=(
+                ""
+                if editor_ok
+                else CONNECTOR_FIX
+                if not p.editor_version
+                else "升级立创 EDA Pro 到 "
+                f"{'.'.join(str(part) for part in EDITOR_API_FLOOR)} 以上（当前 {p.editor_version}）"
+            ),
+        )
+    )
+
+    reported = str((p.ping or {}).get("version") or "")
+    if not reachable:
+        daemon_version_ok = False
+        daemon_version_detail = "未验证：daemon 没有答复"
+    elif not reported:
+        daemon_version_ok = False
+        daemon_version_detail = (
+            "运行的 daemon 没有报告自己的版本——它早于这一项检查：重启 daemon 再看"
+        )
+    else:
+        daemon_version_ok = reported == p.daemon_version
+        daemon_version_detail = (
+            f"运行的 daemon {reported}，本机 boardwise {p.daemon_version}"
+        )
+    checks.append(
+        DoctorCheck(
+            name="daemon-version",
+            label="daemon 版本与本机一致（新动作才不会『不认识』）",
+            ok=daemon_version_ok,
+            detail=daemon_version_detail,
+            fix=(
+                ""
+                if daemon_version_ok
+                else "重启 daemon（`boardwise bridge start`）：动作表是加载期常量，"
+                "跑着旧版本的 daemon 会把新动作答成 UNKNOWN_ACTION"
+            ),
+        )
+    )
+
+    if not p.local_connector_version:
+        checks.append(
+            DoctorCheck(
+                name="connector-version",
+                label="运行中的 connector 版本与仓库一致",
+                ok=True,
+                skipped=True,
+                detail="跳过比对：本机没有 connector/extension.json（不是仓库里的运行方式）",
+            )
+        )
+    elif not p.connector_version:
+        checks.append(
+            DoctorCheck(
+                name="connector-version",
+                label="运行中的 connector 版本与仓库一致",
+                ok=False,
+                detail=f"未验证：没有读到运行中的 connector 版本（{p.probe_error or '扩展未连接'}）",
+                fix=CONNECTOR_FIX,
+            )
+        )
+    else:
+        same = p.connector_version == p.local_connector_version
+        checks.append(
+            DoctorCheck(
+                name="connector-version",
+                label="运行中的 connector 版本与仓库一致",
+                ok=same,
+                detail=(
+                    f"编辑器里跑的是 connector {p.connector_version}，仓库里是 {p.local_connector_version}"
+                ),
+                fix=""
+                if same
+                else "运行 `boardwise bridge update-connector`（把仓库里的 bundle 热更新进编辑器；"
+                "编辑器里跑的可能是上一次的构建）",
+            )
+        )
+
+    focused_project = None
+    for entry in (p.documents or {}).get("projects") or []:
+        if isinstance(entry, dict) and entry.get("focused"):
+            focused_project = entry
+            break
+    if p.documents is None:
+        project_ok = False
+        project_detail = f"未验证：doc.list 没有答复（{p.documents_error or '扩展未连接'}）"
+    elif focused_project is None:
+        project_ok = False
+        project_detail = "编辑器里没有一个焦点工程——没有打开任何工程"
+    else:
+        project_ok = True
+        active = (p.documents or {}).get("active") or {}
+        uuid = str(active.get("uuid") or "")
+        if uuid and uuid != "0":
+            active_text = f"{active.get('type', '?')} {uuid[:8]}…"
+        else:
+            # "No active document" reaches doctor in three shapes and they mean
+            # the same thing: `active: null` alone (nothing is focused),
+            # `active: null` with the host's raw reading kept in `notes` (what
+            # connector 0.4.6 does with the placeholder `uuid: "0"`), and the
+            # placeholder itself in `active` (a connector older than 0.4.6 still
+            # loaded in the editor). The line stays green in all three — the
+            # focused project is readable either way, which is what this check
+            # is about.
+            notes = " ".join(str(note) for note in (p.documents or {}).get("notes") or [])
+            active_text = (
+                "无（宿主报占位读数 uuid=0：没有焦点文档，多窗口下常见）"
+                if uuid == "0" or 'uuid "0"' in notes
+                else "无（编辑器里没有焦点文档）"
+            )
+        project_detail = (
+            f"焦点工程：{focused_project.get('friendlyName') or focused_project.get('name') or '(无名)'}"
+            f"（{str(focused_project.get('projectUuid') or '')[:8]}…，"
+            f"{len(focused_project.get('schematics') or [])} 页原理图 / "
+            f"{len(focused_project.get('pcbs') or [])} 个 PCB）；活动文档：{active_text}"
+        )
+    checks.append(
+        DoctorCheck(
+            name="project",
+            label="当前工程焦点可读",
+            ok=project_ok,
+            detail=project_detail,
+            fix=(
+                ""
+                if project_ok
+                else CONNECTOR_FIX
+                if p.documents is None
+                else "在编辑器里打开（或切到）一个工程，再重跑 doctor："
+                "所有真机动作都作用在焦点工程上"
+            ),
+        )
+    )
+
+    return checks
+
+
+def _probe_names() -> str:
+    return ", ".join(
+        f"{namespace}.{member}"
+        for namespace, members in DOCTOR_PROBE_CHECKS.items()
+        for member in members
+    )
+
+
+def _probe_missing(payload: dict | None) -> list[str]:
+    """Which of the spot-checked methods are not `function`, as ``ns.member``."""
+    if not isinstance(payload, dict):
+        return [f"{ns}.{member}" for ns, members in DOCTOR_PROBE_CHECKS.items() for member in members]
+    checks = payload.get("checks")
+    checks = checks if isinstance(checks, dict) else {}
+    missing: list[str] = []
+    for namespace, members in DOCTOR_PROBE_CHECKS.items():
+        report = checks.get(namespace)
+        status = report.get("status") if isinstance(report, dict) else None
+        status = status if isinstance(status, dict) else {}
+        for member in members:
+            if status.get(member) != "function":
+                missing.append(f"{namespace}.{member}={status.get(member, '未报告')}")
+    return missing
+
+
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    """Report whether this installation can do anything, and how to fix it (§九).
+
+    Exit 0 only when every check is green (a deliberate *skip* is not a failure);
+    exit 1 otherwise, each line carrying its own fix. The whole point is the
+    disconnected case — daemon down, extension not loaded, an old editor — so
+    that case is the one built first: nothing here raises, and every check says
+    what it could not verify instead of crashing.
+    """
+    import asyncio
+    import json
+
+    BridgeClient, BridgeError, port, token = _open_cli(args)
+    probe = DoctorProbe(
+        port=port,
+        daemon_version=_local_version(),
+        local_connector_version=_repo_connector_version(),
+    )
+
+    async def run() -> int:
+        try:
+            client = await BridgeClient.open(
+                _bridge_uri(port), token, "cli", client="boardwise-doctor"
+            )
+        except (OSError, BridgeError) as exc:
+            probe.ping_error = str(exc)
+            return _finish_doctor(run_doctor(probe), probe, args)
+        try:
+            try:
+                probe.ping = await client.call("ping")
+            except BridgeError as exc:
+                probe.ping_error = f"[{exc.code}] {exc.message}"
+            if isinstance(probe.ping, dict) and probe.ping.get("connector"):
+                try:
+                    probe.probe = await client.call(
+                        "sys.probe",
+                        {"checks": {ns: list(members) for ns, members in DOCTOR_PROBE_CHECKS.items()}},
+                    )
+                except BridgeError as exc:
+                    probe.probe_error = f"[{exc.code}] {exc.message}"
+                try:
+                    probe.documents = await client.call("doc.list")
+                except BridgeError as exc:
+                    probe.documents_error = f"[{exc.code}] {exc.message}"
+        finally:
+            await client.close()
+        if isinstance(probe.probe, dict):
+            probe.connector_version = str(probe.probe.get("connector") or "")
+            probe.editor_version = str(probe.probe.get("version") or "")
+        return _finish_doctor(run_doctor(probe), probe, args)
+
+    return asyncio.run(run())
+
+
+def _local_version() -> str:
+    from . import __version__
+
+    return str(__version__)
+
+
+def _repo_connector_version() -> str:
+    """The version in the in-repo ``connector/extension.json``, or ``''``.
+
+    Read rather than imported: the comparison that matters is "what the editor
+    is running" against "what this checkout would install", and a missing
+    checkout is a legitimate installation (a wheel), not an error.
+    """
+    import json
+
+    try:
+        _bundle, manifest = _connector_artifacts()
+        return str(json.loads(manifest.read_text(encoding="utf-8")).get("version") or "")
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
+def _finish_doctor(checks: list[DoctorCheck], probe: DoctorProbe, args: argparse.Namespace) -> int:
+    import json
+
+    failed = [check for check in checks if not check.ok]
+    for check in checks:
+        mark = "SKIP" if check.skipped else ("PASS" if check.ok else "FAIL")
+        print(f"  {mark:<4} {check.label}")
+        print(f"         {check.detail}")
+        if check.fix:
+            print(f"         → {check.fix}")
+    print(
+        f"\nboardwise doctor: {len(checks) - len(failed)}/{len(checks)} 项通过"
+        + ("" if not failed else f"，{len(failed)} 项需要处理（上面的 → 就是建议）")
+    )
+    if failed:
+        print(f"  先修第一项：{failed[0].label}")
+    if args.json_path:
+        Path(args.json_path).write_text(
+            json.dumps(
+                {
+                    "ok": not failed,
+                    "port": probe.port,
+                    "versions": {
+                        "daemon": probe.daemon_version,
+                        "daemonRunning": str((probe.ping or {}).get("version") or ""),
+                        "connectorRunning": probe.connector_version,
+                        "connectorRepo": probe.local_connector_version,
+                        "editor": probe.editor_version,
+                    },
+                    "checks": [
+                        {
+                            "name": check.name,
+                            "label": check.label,
+                            "ok": check.ok,
+                            "skipped": check.skipped,
+                            "detail": check.detail,
+                            "fix": check.fix,
+                        }
+                        for check in checks
+                    ],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    return 0 if not failed else 1
+
+
 BRIDGE_COMMANDS = {
     "start": _cmd_bridge_start,
     "status": _cmd_bridge_status,
     "revoke": _cmd_bridge_revoke,
     "screenshot": _cmd_bridge_screenshot,
+    "export-fab": _cmd_bridge_export_fab,
     "call": _cmd_bridge_call,
     "highlight": _cmd_bridge_highlight,
     "update-connector": _cmd_bridge_update_connector,
@@ -2491,6 +3544,10 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_review(args)
     if args.command == "review-eval":
         return _cmd_review_eval(args)
+    if args.command == "review-mark":
+        return _cmd_review_mark(args)
+    if args.command == "doctor":
+        return _cmd_doctor(args)
     if args.command == "compare":
         return _cmd_compare(args)
     if args.command == "draw":

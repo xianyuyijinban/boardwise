@@ -1,0 +1,54 @@
+# 012v2 §P5 落盘侧验证（只读，2026-09-21 13:14~13:16）
+
+背景：本机实测里 `sch.doc.save` 返回 `{saved:true}` 后 mtime 通常在 ~10s 后才跳变，
+但本次删除后 mtime 在**删除同一秒**即跳变（13:14:20.673），15s 窗口内无二次跳变。
+为排除"mtime 变了但内容没落盘"，另做一次只读 SQLite 核对（`mode=ro`，不写库）。
+
+## 1. 文件 mtime
+```
+stat -c '%y %s' "/e/LC Project/test.eprj2"
+  运行前（13:11 观察） : 2026-09-21 12:07   size=5263360
+  删除后              : 2026-09-21 13:14:20.673490200 +0800  size=5263360
+  删除后 +15s         : 2026-09-21 13:14:20.673490200 +0800  （UNCHANGED）
+```
+→ 落盘发生在删除那一秒（不是 15s 后）；本次宿主是即时落盘，不是异步 10s。
+
+## 2. 编辑日志新增节点（`project_history_1bfc4a52dcd44f75ac5a5da35506f060`）
+```
+节点数 110；最新节点 id=110 uuid=ed72753d68a74f0d993bfda5a49be738
+  created_at = 2026-09-21 05:14:20 (UTC) = 13:14:20 本地
+上一节点 id=109  created_at = 2026-09-21 04:07:52 (UTC) = 12:07:52 本地   ← 与运行前 mtime 12:07 吻合
+```
+→ 12:07 的旧状态 = 节点 109；13:14:20 的新写入 = 节点 110（本次删除）。
+
+## 3. 解密最新日志块（`history_data` id=233，372 B；aes-128-gcm + gzip，key/iv 见 README）
+明文（逐字）：
+```
+{"type":"EDIT_HEAD"}||{"uuid":"08be6a96fc064a03b488fd9d5a25ccea","username":"","nickname":"","updateTime":1789967660663}|
+{"type":"DOCHEAD","ticket":55900}||{"docType":"SCH_PAGE","client":"14d1c789e9fb0e59","uuid":"ed61d97da8f7dbf1","updateTime":1789967660153,"version":"1789967660153","editVersion":"3.2.186"}|
+{"type":"DELETE_DOC","ticket":55900,"id":"DELETE_DOC"}||{"isDelete":true}
+```
+```
+updateTime 1789967660153 -> 2026-09-21 13:14:20.153 本地（= bridge 返回 deleted:true 的时刻）
+updateTime 1789967660663 -> 2026-09-21 13:14:20.663 本地
+文件 mtime               -> 2026-09-21 13:14:20.673 本地（比日志提交晚 10 ms）
+```
+→ **磁盘上存在宿主自己写的 `DELETE_DOC / isDelete:true` 墓碑，keyed 到 uuid
+`ed61d97da8f7dbf1`（docType=SCH_PAGE）**，即 P5 的删除已经落盘，不只是内存状态。
+
+## 4. 残留（说明，非矛盾）
+```
+project_structures          164 行，全部 ticket=55900，无一行含 ed61d97da8f7dbf1
+                            （该表是文档级清单，页面本来就从不入表 → 与删除无关）
+db 原始字节里 ed61d97da8f7dbf1 出现 2 次，均可定位到 project_images 行 id=44：
+    uuid = ed61d97da8f7dbf1
+    ticket = 55898（旧 ticket）
+    url    = /api/v4/projects/ea80...489/branches/1bfc...060/thumbs/ed61d97da8f7dbf1
+    image_data = 28260 字节（页面缩略图缓存）
+```
+→ 被删页面的**缩略图缓存行**留在 `project_images` 里；这是缓存，不是活页面。
+除此以外磁盘上再无该 uuid 的痕迹（无对应结构行、无活动历史记录）。
+
+## 5. 结论
+落盘侧 3 条独立证据方向一致：mtime 在删除秒跳变 → 新增历史节点 110 时间戳 13:14:20
+→ 该节点明文含 `DELETE_DOC isDelete:true` / uuid=ed61d97da8f7dbf1。**删页已持久化。**
