@@ -155,6 +155,50 @@ def test_the_mpn_code_finder_whitelists_shapes_and_guards_packages():
     assert mpn_value_code("CH340G") == "340"  # the finder is dumb; callers gate
 
 
+def test_the_mpn_code_finder_refuses_notations_that_are_not_eia():
+    """Task 015: three notations were being hard-read as EIA codes, and each
+    witnessed false contradiction came from one of them.
+
+    The refusal is of the **whole token**, not of one candidate: dropping a
+    candidate can promote another, and ``C1608X5R1V225KT000E`` is the proof --
+    with ``225`` dropped, ``000`` becomes the only code left and the part
+    reports as 0 F.
+
+    Each class has a witness the other two leave alone, which is what makes a
+    single-guard mutation visible (task 015 sec.4.2).
+    """
+    # R as the decimal point: a 1 mΩ shunt is not "00 x 10^1". Keep this list
+    # to the parts only the R guard refuses -- adding an HGC part number here
+    # would hide a broken voltage guard behind a working R guard.
+    assert mpn_value_code("RE2512F3R001") is None
+    assert mpn_value_code("JER2512F3R005") is None
+    assert mpn_value_code("RE1206F1R000") is None
+    assert mpn_value_code("RE1206F1R100") is None
+    # value + tolerance letter + voltage rating: the second group is a
+    # rating, so neither group is a value on its own.
+    assert mpn_value_code("HGC1206R5106K500NSPJ") is None  # 106K500 = 10µF/50V
+    assert mpn_value_code("HGC0603R5225K500NTHJ") is None
+    assert mpn_value_code("HHV1206R7475K101NSPJ") is None
+    assert mpn_value_code("CGA0603X7R104K500JT") is None
+    # The electrolytic layout: a case size, or a voltage before the value --
+    # PA50V330M10x15 is 50 V, 330 µF ±20 %, 10x15 mm, and "330M" is not EIA.
+    assert mpn_value_code("PA50V330M10x15") is None
+    assert mpn_value_code("PA50V330M") is None
+    # The strict shapes are untouched, the package guard included: a
+    # resistor's size-tolerance-value tail (0805 J 471) is not read as a
+    # voltage rating, the X7R/X5R dielectric is not an R decimal point, and a
+    # size is still not a value.
+    assert mpn_value_code("FRC0805J471 TS") == "471"
+    assert mpn_value_code("FRC0805F4122TS") is None
+    assert mpn_value_code("CL10B105KA8NNNC") == "105"
+    assert mpn_value_code("CC0603KRX7R9BB104") == "104"
+    assert mpn_value_code("GRM1885C1H122JA01D") == "122"
+    assert mpn_value_code("0805W8F1003T5E") is None
+    # Unchanged from before 015: this one is None by *ambiguity* (225 vs the
+    # packaging group 000), which is the pre-existing reason, not a refusal.
+    assert mpn_value_code("C1608X5R1V225KT000E") is None
+
+
 def test_a_capacitor_is_never_claimed_from_an_mpn_code_alone():
     """CH340G decodes to "34 pF"; only the shelf's category (or the value
     field, or the C-designator+code conjunction) may call something a cap."""
@@ -291,6 +335,31 @@ def test_param4_the_value_mpn_contradiction_is_the_violation():
     findings = ValueMpnMatch(library=lib).check(model)
     assert len(findings) == 1 and findings[0].severity == "WARN"
     assert "470" in findings[0].message and "1000" in findings[0].message
+
+
+def test_param4_the_a2a_exceptions_become_unknown_not_contradictions():
+    """The three exceptions the oracle ruled "the rule is wrong" (2026-09-20)
+    as a rule-level assertion: R43's shunt (R notation) and C115/C116's
+    electrolytics must report UNKNOWN and raise nothing (task 015 sec.2)."""
+    lib = _library(_ldo_entry(), _uart_entry())
+    model = DesignModel()
+    model.components["R43"] = Component(
+        uid="r43", designator="R43", value="0.01Ω", mpn="JER2512F3R005",
+        pins=[Pin("1", "A", "VCC")])
+    model.components["C115"] = Component(
+        uid="c115", designator="C115", value="330uF", mpn="PA50V330M10x15",
+        pins=[Pin("1", "A", "VCC")])
+    model.components["C116"] = Component(
+        uid="c116", designator="C116", value="330uF", mpn="PA50V330M10x15",
+        pins=[Pin("1", "A", "VCC")])
+    # A part whose code is still read stays judged: the fix is not a mute.
+    model.components["U10"] = Component(
+        uid="u10", designator="U10", value="1kΩ", mpn="FRC0805J471 TS",
+        pins=[Pin("1", "A", "VCC")])
+    states = _states(ValueMpnMatch(library=lib), model)
+    assert [o.subject for o in states["VIOLATION"]] == ["U10"]
+    unknown = {o.subject for o in states["UNKNOWN"]}
+    assert {"R43", "C115", "C116"} <= unknown
 
 
 def test_param4_matching_values_are_ok_and_undecodable_are_unknown():
@@ -666,3 +735,23 @@ def test_the_golden_board_matches_the_task_book_expectations():
     # for a part the oracle had just ruled correct.
     assert any(o.subject == "LED1" and o.state == "OK"
                for o in states["param-led-current"]["OK"])
+
+
+# ------------------------------------------------- rule-set retirement
+
+
+def test_decoupling_per_ic_is_retired_from_the_builtin_rules():
+    """Oracle ruling 011f B2 ("L1 heuristic limitation, retire in M2") landed
+    as task 015 sec.2: the rule leaves ``BUILTIN_RULES`` and the class stays.
+
+    Adding it back to the list is the mutation this test exists to catch.
+    """
+    from boardwise.engines.review import BUILTIN_RULES
+    from boardwise.rules.connectivity import DecouplingPerIC
+
+    ids = [rule.id for rule in BUILTIN_RULES]
+    assert "decoupling-per-ic" not in ids
+    assert len(ids) == 14
+    # Retirement is not deletion: the rule is still importable, still its own
+    # id, still runnable on its own (its own tests stay in test_rules.py).
+    assert DecouplingPerIC().id == "decoupling-per-ic"

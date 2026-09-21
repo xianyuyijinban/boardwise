@@ -1,0 +1,33 @@
+=== 015 sec.2 A2a evidence: the three refs the oracle ruled wrong ===
+
+board: tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2
+rule : param-value-mpn-match (state per designator, as the rule reports it)
+
+C115:
+  board value : '330uF'
+  mpn         : 'PA50V330M10x15'
+  decoded code: None  (None = refused/absent)
+  state       : UNKNOWN
+  message     : C115: its MPN 'PA50V330M10x15' contains no decodable EIA value code (or two conflicting ones, or is written in a notation that is not EIA)
+
+C116:
+  board value : '330uF'
+  mpn         : 'PA50V330M10x15'
+  decoded code: None  (None = refused/absent)
+  state       : UNKNOWN
+  message     : C116: its MPN 'PA50V330M10x15' contains no decodable EIA value code (or two conflicting ones, or is written in a notation that is not EIA)
+
+R43:
+  board value : '10mΩ'
+  mpn         : 'JER2512F3R005'
+  decoded code: None  (None = refused/absent)
+  state       : UNKNOWN
+  message     : R43: its MPN 'JER2512F3R005' contains no decodable EIA value code (or two conflicting ones, or is written in a notation that is not EIA)
+
+the board's param-value-mpn-match VIOLATION subjects (all A2b, ruled
+"the parts disagree and that is not a defect to call" -- batch 2, oracle):
+
+  C28, C29, C36, C42, C44, U10, U14
+
+VIOLATION count: 7  (014: 10; the three A2a refs are the
+difference and they are UNKNOWN above, i.e. reported, not raised)

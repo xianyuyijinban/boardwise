@@ -81,7 +81,11 @@ class ValueMpnMatch(FactsRule):
     The decoder is a whitelist (EIA three-digit codes, package codes guarded);
     an MPN that decodes to nothing is UNKNOWN ("contains no decodable value"),
     never a guessed match. R24/R27 have no MPN at all and stay UNKNOWN for
-    exactly that reason."""
+    exactly that reason. **UNKNOWN is the verdict for a refused notation too**
+    (``R`` as the decimal point, a voltage rating after the value, an
+    electrolytic part number -- task 015): those strings do carry a value, but
+    not one this decoder reads, and hard-reading them turned a 330 uF part
+    into a 3.3e-11 F contradiction."""
 
     id = "param-value-mpn-match"
     title = "The board's value field matches the MPN's decoded value"
@@ -114,7 +118,8 @@ class ValueMpnMatch(FactsRule):
                         message=(
                             f"{comp.designator}: its MPN "
                             f"{comp.mpn!r} contains no decodable EIA value "
-                            "code (or two conflicting ones)"
+                            "code (or two conflicting ones, or is written in "
+                            "a notation that is not EIA)"
                         ),
                         missing_fact=(
                             f"a decodable EIA value code in the MPN of "
