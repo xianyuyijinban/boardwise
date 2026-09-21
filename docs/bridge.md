@@ -331,7 +331,9 @@ forwarded into the editor as an open-ended string. `owner` decides who executes 
 what may run unattended: `read` cannot change project content, `write` changes existing content,
 and **`create`** produces a new document — the daemon refuses a `create` action unless
 `params.confirm is True` (`CONFIRMATION_REQUIRED`), consuming the flag so it never reaches the
-connector. There is no action that deletes a document, by design.
+connector. `doc.delete_page` (012) is the one action that **removes** a document; it is classed
+`write`, so the `create` gate above does not cover it — what guards it is the page-uuid check
+(a uuid the project does not list is `NOT_FOUND`), not a confirmation flag.
 
 Two tests keep this table honest: `connector/tests/contract-drift.test.mjs` asserts that
 `ACTIONS`, the connector's handler registry and **this table** all list the same names
@@ -342,8 +344,8 @@ declaring `confirm`).
 | action | owner | risk | params | `data` on success | timeout |
 |---|---|---|---|---|---|
 | `hello` | daemon | read | daemon | `token`, `role`, `protocol`, `client` | `{role, protocol, serverTime}` | 30 s (`ACTION_TIMEOUT`) |
-| `ping` | daemon | read | daemon | — | `{pong: true, connector: bool, pairedFingerprint: str\|null}` | 30 s |
-| `document.current` | connector | read | connector | — | `{project, pcb, schematicPage, type, tabs}` | 30 s |
+| `ping` | daemon | read | daemon | — | `{pong: true, version, connector: bool, pairedFingerprint: str\|null}` — `version` is the daemon's own build, so "the daemon answering me" and "the daemon my CLI was built from" can be told apart | 30 s |
+| `document.current` | connector | read | connector | — | `{project, pcb, schematicPage, active, type, typeSource, heuristic, tabs}` — `active` is the focused document, or **null** when none is focused (the host's placeholder uuid `"0"` is reported as `null` plus a `problems` line, as in `doc.list`); `typeSource`/`heuristic` say which read produced `type` (§10 item 5) | 30 s |
 | `sys.probe` | connector | read | connector | `checks`, `namespace`, `namespaces`, `functionsOnly` | `checks` mode: `{version, topLevel, checks: {NAME: {present, kind, checked, missing, status, notes?}}}`; enumerate mode: `{version, topLevel, namespaces: {NAME: {present, ownNames, functions, data, errors?}}}` — **read-only** introspection of the live API surface | 30 s |
 | `sys.self_update` | connector | write | connector | `bundleB64`, `version` | `{ok, oldVersion, newVersion, bytes, database, reloadInMs}` — rewrites the connector's own bundle in IndexedDB and reloads the page (§8); **the permission grant is preserved** | 30 s |
 | `sch.readback` | connector | read | connector | `includePrimitives` | `{kind: 'sch', components, primitives, componentCount}` | 30 s |
@@ -360,6 +362,10 @@ declaring `confirm`).
 | `sch.place_text` | connector | write | connector | `content`, `x`, `y`, `rotation`, `color`, `fontSize`, `pageUuid` | `{uuid, content, decorative: true}` — `sch_PrimitiveText`, **no connectivity** | 30 s |
 | `sch.place_power` | connector | write | connector | `kind`, `net`, `x`, `y`, `rotation`, `mirror` | `{uuid}` | 60 s |
 | `sch.place_netport` | connector | write | connector | `direction`, `net`, `x`, `y`, `rotation`, `mirror` | `{uuid}` | 60 s |
+| `sch.delete_primitives` | connector | write | connector | `pageUuid`, `primitiveIds` | `{deleted, notFound, failed}` — per-id honest result; the id index covers component/wire/text/pin (attribute primitives cannot be addressed by id) | 60 s |
+| `pcb.delete_primitives` | connector | write | connector | `pageUuid` (the PCB uuid), `primitiveIds` | `{deleted, notFound, failed}` — component/line/via/pad/pour, guarded against the focused PCB | 60 s |
+| `sch.modify_primitive` | connector | write | connector | `pageUuid`, `primitiveId`, `x`/`y`/`rotation`/`mirror` (≥1) | `{before, after}` — pose only; a wire has no pose in the type package and is refused | 60 s |
+| `pcb.modify_primitive` | connector | write | connector | `pageUuid`, `primitiveId`, `x`/`y`/`rotation` (≥1) | `{before, after}` — pose only, guarded against the focused PCB | 60 s |
 | `sch.component_pins` | connector | read | `primitiveId` | `{primitiveId, returned, pins, note?, readErrors?}` — the placed component's pins **with geometry** (x/y/number/name/rotation/length) | 30 s |
 | `lib.symbol.get` | connector | read | `uuid`, `libraryUuid` | `{uuid, libraryUuid, found, item, readErrors?}` — library symbol metadata; **no geometry** | 30 s |
 | `lib.device.get` | connector | read | `uuid`, `libraryUuid` | `{uuid, libraryUuid, found, item, readErrors?}` — includes `association.symbol`/`.footprint` | 30 s |
@@ -367,10 +373,62 @@ declaring `confirm`).
 | `lib.footprint.get` | connector | read | `uuid`, `libraryUuid` | `{uuid, libraryUuid, found, name, item}` — footprint uuid → package name | 30 s |
 | `sch.set_component_attribute` | connector | write | `primitiveId`, `attributes`, `key`, `value`, `pageUuid` | `{primitiveId, attributes, mergedKeys, applied, wrote, otherPropertyBefore, otherPropertyAfter, mismatched?, clobberedOtherKeys?}` — **one** `modify` per call, then a read-back; `applied` means the read-back matched | 30 s |
 | `sch.doc.save` | connector | write | — | `{saved: true}` | 30 s |
-| `doc.list` | connector | read | — | `{documents: [{uuid, name, type, active}], active, schematicPages, pcbs, count, notes?}` — every page and PCB in the project | 30 s |
+| `doc.list` | connector | read | — | `{documents: [{uuid, name, type, active}], projects: [{projectUuid, name, focused, opened, schematics, pcbs, documents}], active, schematicPages, pcbs, count, notes?}` — every page and PCB in the focused project plus a multi-project view (012 §五: non-focused projects report `documents: "brief"`, no document tree — focus them to enumerate); `active` is **null** when no document is focused, including when the host answers with its placeholder uuid `"0"` — the raw reading is kept in `notes` | 30 s |
+| `doc.focus` | connector | write | connector | `pageUuid` or `tabId` | `{activated, tabId, title, documentType}` — puts an already-open tab on top; refuses NOT_FOUND when nothing is open for that uuid | 30 s |
+| `doc.delete_page` | connector | write | connector | `pageUuid` | `{deleted, pageUuid, name}` — removes a schematic page; NOT_FOUND for a uuid the project does not list | 30 s |
+| `export.fab` | connector | read | connector | `pcbUuid`, `outDir`, `vendor`, `gerber`, `bomTemplate`, `timeoutMs` | `{vendor, project, pcb, outDir, generatedAt, encoding: 'base64', files: [{role, name, mime, bytes, data}], manifest, failed, partial, note}` — Gerber + pick-and-place + BOM in one call with a manifest; preset `generic` (metric 4:5, drill table on, CSV P&P in mm, CSV BOM with every column); a file the host refuses/empties/hangs on is reported per file in `failed` | 240 s (`FAB_TIMEOUT`) |
+| `lib.recommend` | connector | read | `query` \| `pageUuid`+`ref`, `topN`, `allLayers`, `timeoutMs` | `{source, query, ref, component, target, layers: [{layer, api, called, args, hitCount, pagesFetched, reason?, error?}], returned, shown, candidates, 'stock/price', readOnly, placed}` — the ladder `partNumber`/`partCode` → `searchByProperties(value+footprintName)` → `search(keyword)`, 5 hits per page and 3 pages per rung; Basic parts first; **no stock/price**; never places. `timeoutMs` is the **per-page** deadline for one library search (default 20 s): a page that never settles is reported as that rung's `error` and the descent continues, instead of consuming the whole action | 90 s (`RECOMMEND_TIMEOUT`) |
+| `review.mark` | connector | read | `pageUuid`, `marks` (`[{ref, ruleId, severity, text}]`), `clear`, `focus`, `color`, `zoom`, `markers` | `{mode: 'markers'\|'list', cleared, page: {components, designators, withoutPosition, active}, count, marked: [{position, marker, ref, designator, ruleId, severity, text, primitiveId, x, y}], unresolved: [{position, …, reason}], markers: {attempted, accepted, reason?}, focused?: {position, ref, zoomed, reason?}, readOnly, note, notes?}` — a review pass drawn on the focused schematic page: each finding's `ref` is resolved to its component's coordinates and marked with a rectangle. The marker API takes **shapes, not text**, so the rule id / severity / one-line summary come back in `marked` (`marked[k-1]` is marker k). `markers: false`, a missing `generateIndicatorMarkers` or a canvas that refuses it all degrade to `mode: 'list'` (the jump list, still carrying coordinates); a ref that is not on the page is reported per mark and the rest are still drawn; `focus: N` zooms to the Nth entry with `zoomToRegion`; `clear: true` removes the markers | 30 s |
 | `doc.open` | connector | read | `uuid` | `{uuid, tabId, opened, activated, document}` — switches the editor's active document, confirmed by asking the editor | 30 s |
 | `pcb.doc.new` | connector | create | `boardName`, `confirm` | `{pcbUuid, focused}` — **gated**: without `confirm: true` the daemon answers `CONFIRMATION_REQUIRED` | 60 s |
 | `doc.rename` | connector | write | `uuid`, `name`, `type` | `{uuid, name, type, renamed, confirmed, notes?}` — dispatches to the per-kind `modify*Name` call and verifies against the editor's listing | 30 s |
+
+**`export.fab` does not write to `outDir`, by measurement rather than by choice.** The type package
+declares `SYS_FileSystem.saveFile(fileData, fileName?)` — no destination argument; it goes through the
+browser download / Electron save dialog, so it cannot honour a path. The action therefore returns the
+three files as base64 (the same reliable path `export.render` uses) plus a `manifest{}`, and
+`boardwise bridge export-fab --out DIR` is the caller that creates the directory and writes the four
+files. `outDir` is still a required parameter: it is recorded in `manifest.json`, so a bundle on disk
+says where it was meant to go. **A machine run is still owed** on the two points offline work cannot
+settle: whether the host accepts every BOM column name the `generic` preset sends, and whether the
+Gerber export really comes back as a zip (the action sniffs the zip magic instead of trusting the
+extension).
+
+**`review.mark` draws what the marker API can draw, and returns the rest.** The task asks for
+marks carrying "rule id + severity + one sentence"; `generateIndicatorMarkers(markers, color,
+lineWidth, zoom)` takes an array of *shapes* only — point, circle, line, arc, rectangle — and has
+no place to put a string. So each mark becomes a rectangle around its component's coordinates and
+the three text fields come back in `marked`, where `marked[k-1]` is marker `k` **in the order
+drawn**. `boardwise review-mark` prints exactly that table, which is what makes the numbers on the
+canvas mean something; per-severity colours are *not* implemented, because the colour belongs to
+the call rather than to a marker, so they would cost one call per severity — a decision the oracle
+has not made. Ref resolution reads the page through the same dump `sch.geometry` uses
+(`getState_Designator` / `getState_X` / `getState_Y`), which keeps it one page read per pass
+instead of one `locate` per ref. **The fallback is part of the contract, not an error path**: with
+`markers: false`, with no `generateIndicatorMarkers` on the host, or with a canvas that answers
+`false` (unsupported canvas / unknown tab), the response becomes `mode: 'list'` with the reason and
+the coordinates — the jump list the task asks for. Structural things stay thrown: a `pageUuid` that
+is not the focused page (`PAGE_MISMATCH`), a focused document that is not a schematic page, a page
+whose components cannot be read at all, `focus` outside `marks`, and a `clear` on a host without
+`removeIndicatorMarkers`. **Not yet run on a machine** — whether `generateIndicatorMarkers` accepts
+these rectangles on 3.2.186, and whether the markers are actually visible, is the acceptance
+question parked in the task book.
+
+**`ping` carries the daemon's own version.** `boardwise doctor` compares it with the version of the
+install the CLI is running from, because "a daemon that is one checkout behind" is a failure mode
+this project has already paid for twice: the action catalogue is a load-time constant, so a daemon
+left running across a checkout answers every new action with `UNKNOWN_ACTION` while looking
+perfectly healthy. The field is additive — a client that does not read it is unaffected — and a
+daemon old enough not to send it is reported as *unknown* rather than silently equal (that is a
+`FAIL` line in doctor, with "restart the daemon" as the fix).
+
+**`lib.recommend`'s ref path is focus-guarded.** A designator is resolved in the *focused* page's
+component list (`sch_PrimitiveComponent.getAll()`), and there is no cross-page lookup to use instead —
+so a `pageUuid` that is not the focused page is refused with `PAGE_MISMATCH` rather than answered from
+the wrong board. The rungs a hit made unnecessary are reported as `called: false` with the reason, so
+"this rung found nothing" and "this rung never ran" never look alike. `searchByProperties` is
+documented **ADD since EDA v4**: on a host without it the two exact rungs report themselves
+unavailable and the keyword rung still answers — a degradation that is visible, not silent.
 
 The 006 rows (everything from `sch.netlist` down) exist for the draw flow; their operator
 documentation, machine-probe checklist and known host traps live in [`docs/draw.md`](draw.md).
@@ -476,7 +534,10 @@ Notes that matter operationally:
 | `NO_CONNECTOR` | The action needs the editor and none is attached | EasyEDA not running, extension disabled, or external interaction not granted |
 | `CONFIRMATION_REQUIRED` | A `create` action (one that produces a new document) arrived without `confirm: true` | Expected on the first call — re-send with `confirm: true`, or let the CLI ask (§4, 006c). Nothing was forwarded, so nothing was created |
 | `CONNECTOR_ERROR` | The connector raised, or refused (e.g. no image, canvas refused markers) | A document is not open/focused |
+| `PAGE_MISMATCH` | The page (or PCB/board) the action was given is not the one the editor has focused | A call aimed at a tab that is not in front — the guard exists so a write cannot land on the wrong page. Focus it first (`doc.focus`, or `doc.open` if it is not open) and re-check with `doc.list` |
+| `NOT_FOUND` | The uuid / primitive id / designator the action named does not exist: not in the project, not on the page, or with no open tab | A stale reference — the document was renamed or deleted, the primitive is gone, or the tab is closed. Re-read `doc.list` / `sch.geometry` and address what the editor actually reports |
 | `TIMEOUT` | The connector did not answer within the action's timeout | Editor busy, modal dialog open, or a half-dead socket (§10) |
+| `DISCONNECTED` | The socket died before an answer arrived — raised by the **client**, never by the daemon (once the socket is gone nobody is left to answer) | Daemon stopped or the editor closed mid-call. A write whose answer never came **may still have landed**: read the document back before retrying |
 | `INTERNAL` | Anything else; `message` carries the text | A bug — read the audit log |
 
 Codes are stable identifiers, not English prose: clients branch on `code`, humans read `message`.
@@ -547,6 +608,7 @@ The daemon is the passive side: it does not track per-connector liveness, and cl
 | `bridge status` | 0 / 1 / 2 | Daemon up + connector attached / daemon up, no connector / daemon unreachable. Also prints the paired connector's fingerprint. |
 | `bridge revoke` | 0 | Delete the pairing record and audit `revoke`. Needs no daemon: it is a local file operation, because the moment you want to withdraw trust is the moment you are least sure what is running. |
 | `bridge screenshot <out>` | 0 / 1 / 2 | Native canvas capture; `--fit` zooms to the board first. |
+| `bridge export-fab --out DIR` | 0 / 1 / 2 | The fab bundle: calls `export.fab` and writes Gerber + pick-and-place + BOM + `manifest.json` into DIR (created if missing). `--pcb`, `--vendor`, `--gerber` (JSON overrides), `--bom-template`, `--timeout-ms`. Exit 1 also for a **partial** bundle — the files that did arrive stay on disk, and the missing one is named on stderr. |
 | `bridge highlight <uuid…>` | 0 / 1 / 2 | Draw markers; `--color`, `--zoom`, `--clear`. |
 | `bridge update-connector` | 0 / 1 / 2 | Hot-update the running connector from `connector/dist/index.js` (§8); asks first, `--yes` skips. |
 
@@ -556,6 +618,17 @@ what makes the flow zero-configuration: the concrete path is `ensureConnectorTok
 writes the new token to extension storage before returning, so a reload reuses it instead of
 re-pairing the daemon. A token passed in the URL is read and then **stripped** from the socket
 URL, so it is not re-sent on every reconnect.
+
+### The two commands that are not `bridge` subcommands
+
+`boardwise doctor` and `boardwise review-mark` are top-level because neither is a *bridge*
+operation: doctor asks seven questions about the whole installation, review-mark turns an offline
+report into canvas markers.
+
+| Command | Exit | What it does |
+|---|---|---|
+| `boardwise doctor [--json PATH] [--port N]` | 0 / 1 | Seven checks in one run: the daemon answers `ping` (the daemon has **no HTTP surface at all** — no `/health`, it is a WebSocket server and `ping` is its health answer); the extension's socket is registered; five methods the harness depends on answer `typeof === function` (`sys.probe`); the running daemon's version matches this install; the connector build in the editor matches `connector/extension.json`; the editor is ≥ 3.2.183; the focused project is readable. Every line carries its own fix, and a check that *could not be made* says so instead of pretending. Exit 1 for anything not green — deliberately not 2, which `bridge status` uses for "daemon unreachable": to a colleague following `docs/getting-started.md`, "not ready yet" is one state with one next step |
+| `boardwise review-mark <findings> [--page UUID] [--focus N] [--color C] [--zoom] [--no-markers] [--json PATH]` | 0 / 1 / 2 | Draw a `boardwise review --json` pass on the focused schematic page. `<findings>` is a path, `-` (stdin) or the JSON itself; the literal `clear` removes the markers instead. Prints the finding ↔ marker table (position *k* is `marker#k` on the canvas), the unresolved refs and any degradation to the jump list. Exit 1 is **partial**: a ref not on the page, a finding with no ref, or a host that could not draw |
 
 ### Self-updating the connector (`sys.self_update`, 0.4.3)
 
@@ -589,8 +662,36 @@ before writing anything. Every failure is an explicit error naming what was foun
 fallback is a manual uninstall + import of the `.eext`, and no failure path silently degrades.
 
 The bundle travels as one WebSocket frame: the daemon's inbound cap is `MAX_FRAME_BYTES`
-(32 MiB), and the ~107 kB bundle is ~143 kB as base64, so it fits with two orders of magnitude
-to spare; the CLI refuses early with a "raise the limit" message if that ever stops being true.
+(32 MiB), and the ~164 kB bundle (0.4.6) is ~218 kB as base64, so it fits with two orders of
+magnitude to spare; the CLI refuses early with a "raise the limit" message if that ever stops
+being true.
+
+**The reload takes the editor's focus with it, and the connector deliberately does not try to put
+it back (decided 2026-09-21).** A reload is a page reload: the connector is re-evaluated from
+scratch and the editor restores its own windows, so the focused project after the reload is not
+necessarily the one that was focused before. Measured that day on a two-window editor (connector
+0.4.5): the focus had moved from `/test` to `/test2` with nobody touching the editor. Restoring
+the pre-reload document was considered and **not** implemented:
+
+- `activateDocument` — the only "put this document in front" API — takes a **tab id** and switches
+  the *tab layer only*; the schematic context does not follow it across projects (measured on this
+  host). A restore would therefore be a half-truth: `doc.list`'s `active` could name the original
+  page while the focused *project* — the thing every write action actually addresses — stayed
+  wherever the reload left it. A drift the caller can see beats a restore that only looks complete.
+- It would have to run *after* the editor has finished restoring its tabs, and there is no "editor
+  ready" signal: the register callback does not fire reliably (§3.2 b), and the one context
+  measured to survive a load is the module's own synchronous evaluation (§10 item 22). A restore
+  would be a timed guess at boot — the shape of silent failure this document keeps recording.
+- Tab ids are re-derived per load (`"<docUuid>@<hash>"`), and the document that was in front need
+  not be open in the restored session at all, so the intent would have to be persisted across the
+  reload and re-resolved against a tree that does not exist yet.
+
+What an operator should do instead, after `boardwise bridge update-connector`: wait for the socket
+to come back (`boardwise bridge status`, or `boardwise doctor` green), then read
+`boardwise bridge call --action doc.list` — it names the focused project and the active document —
+and put the intended document back in front yourself: `doc.focus` for a tab that is already open,
+`doc.open` for one that is not. Re-read `doc.list` before any write; skipping that check means
+acting on a pre-reload reading in a changed editor.
 
 ### Audit log
 
@@ -665,11 +766,14 @@ Recorded rather than hidden, so a future session does not have to rediscover the
 3. **`canvas.highlight` cannot mark pads, tracks or vias by uuid.** `locate()` tries component
    namespaces first; other primitive kinds fall back to their namespace `get(uuid)` and start
    coordinates, so a track is marked at its start point, not along its length.
-4. **Write actions exist, but only the ones the draw flow needs** (superseded in 0.3.x — this
-   entry used to read "none, by design"). `sch.place_*`, `sch.set_component_attribute` and
-   `sch.doc.save` mutate the page. There is still no delete: removing a page or a primitive is
-   deliberately outside the harness (`boardwise` cannot clean up after itself, so a run that
-   leaves a page must be cleaned up by hand), and no DRC run.
+4. **Write actions exist, and since 012 they are no longer only what the draw flow needs**
+   (superseded in 0.3.x — this entry used to read "none, by design"). `sch.place_*`,
+   `sch.set_component_attribute` and `sch.doc.save` mutate the page; 012 added
+   `sch.delete_primitives` / `pcb.delete_primitives`, `sch.modify_primitive` /
+   `pcb.modify_primitive`, `doc.focus` and `doc.delete_page`. Delete makes the harness able to
+   clean up after itself, but nothing drives it for you — these are reached through
+   `boardwise bridge call`, so a run that leaves a page is still the operator's to clear. Still
+   no DRC run.
 5. ~~**`document.current` reports all three documents, not the focused tab.**~~ **Corrected
    2026-09-16 (004f item 4).** There *is* a focused-document getter —
    `dmt_SelectControl.getCurrentDocumentInfo` — and `document.current` now reads it, the same call
@@ -941,11 +1045,20 @@ machine-readable. Two deliberate differences:
 | The arm stands down instead of claiming a connection it did not make | `connector/tests/wiring.test.mjs` — with auto-connect off the arm records `arm stood down`, never says `self-connected`, releases its claim, and a second arm after re-enabling connects |
 | A manual connect claims the attempt | `connector/tests/wiring.test.mjs` — `reconnect()` followed by the self-arm leaves exactly one registration |
 | ~~`crypto` is not reachable from an extension realm~~ | **Withdrawn.** This was 0.2.1's diagnosis of `token: NONE`, and 0.2.1's own `About…` disproved it by reporting `crypto=ok`. Recorded here rather than deleted: the error is instructive (§10.14). `tools/probe3-crypto.js` still measures a given editor, and as of 0.2.2 it reports *usability*, not mere presence |
+| `export.fab` sends the preset's arguments, position for position | `connector/tests/actions012b.test.mjs` — the fake host records every call and the assertions are positional: `('fab_gerber', false, 'mm', {4,5}, {drillTable: true, …}, undefined, undefined)`, P&P `('fab_pick_and_place','csv','mm')`, and a BOM whose 15 `columns` and 15-element `property` list are one list by construction, so they cannot disagree |
+| The fab bundle lands as files, and a partial bundle is not a success | `tests/test_fab_export.py` — the writer decodes, writes and re-`stat`s every file, refuses a name that is not one path segment, reports a byte-count disagreement, and the CLI exits 1 for a partial bundle / 2 with no daemon |
+| **`export.fab` and `lib.recommend` have never run against EasyEDA** | Their contracts are pinned (32 mock tests + 14 pytest cases), but two machine questions stay open: whether this host accepts every BOM column name the `generic` preset sends, and whether `searchByProperties` exists at all — the declaration marks it **ADD since EDA v4**. The first real `bridge export-fab` and the first `lib.recommend` run settle both; see `outputs/012v2_s6_s7_offline.txt` |
+| `review.mark` draws one rectangle per resolved ref, and returns the text the API cannot draw | `connector/tests/actions012c.test.mjs` — the fake host records the single marker call and the assertions are positional/exact: `left/right/top/bottom` around `getState_X/Y`, colour, line width 2, zoom flag; `marked[k-1]` is marker `k` and carries `ruleId`/`severity`/`text` |
+| A review pass survives a host that cannot draw it | Same file — `markers: false`, a missing `generateIndicatorMarkers` and a `false` answer all yield `mode: 'list'` with the coordinates and a reason, while `PAGE_MISMATCH`, a non-schematic focused document, an unreadable page, `focus` out of range and `clear` without `removeIndicatorMarkers` stay thrown errors |
+| A findings report can be turned into marks without a rule change | `tests/test_review_mark_cli.py` — `render_json` gains per-finding `refs` (derived from evidence, allow-listed so `AMS1117`/`SS34`/`CH340G` are not mistaken for designators), the CLI reads a path / `-` / a JSON literal, and one mark per ref is sent in finding order |
+| `boardwise doctor` diagnoses a disconnected installation instead of crashing on it | `tests/test_doctor.py` — `run_doctor` is pure, so no daemon, no connector, an old editor, a stale bundle and an unreadable project are all exercised as data; the CLI-level case (nothing listening) asserts exit 1 and one fix per failing line |
+| The daemon reports its own version, so a stale daemon is diagnosable | `tests/test_bridge.py::test_daemon_owned_ping_reports_connector_state` asserts `ping.version == boardwise.__version__`; doctor compares it with the running install and fails with "restart the daemon" on a mismatch |
+| **`review.mark` and `boardwise doctor` have never run against EasyEDA** | Their contracts are pinned (26 connector mock tests + 48 pytest cases), but the machine questions stay open: does `generateIndicatorMarkers` accept these rectangles on 3.2.186 and are the markers visible; do `zoomToRegion` and `removeIndicatorMarkers` behave as declared; does `sys.probe` answer the five spot-checked methods on a live host. See `outputs/012v2_s8_s9_offline.txt` |
 
-Total: 143 Python tests (~8 s) + 95 connector tests (~1.2 s). Everything except the `eda.*`
+Total: 1132 Python tests (~87 s) + 266 connector tests (~2 s). Everything except the `eda.*`
 calls themselves is automated; §13 is what remains for a human with the editor open.
 
-Five claims are **not** automated (three hardware-only, two open):
+Five claims are **not** automated (four only reproducible by hand, one still open):
 
 1. That the editor delivers the banner, so `hello` reaches the daemon — now **confirmed on the
    machine** (§12, 2026-09-13), but not reproducible in CI.
@@ -984,8 +1097,8 @@ Requirements: EasyEDA Pro (engine `~3.2.0`), Node 22+, Python 3.10+ with `websoc
 cd connector
 npm install
 npm run build      # dist/index.js (IIFE, global edaEsbuildExportName) + dist/esm/*.mjs
-npm run package    # -> boardwise-connector-0.2.5.eext (~12 kB)
-npm test           # 95 tests, ~1.2 s
+npm run package    # -> connector/boardwise-connector-0.4.6.eext (~40 kB)
+npm test           # 266 tests, ~2 s
 npm run typecheck  # tsc --noEmit
 ```
 
@@ -1153,4 +1266,4 @@ Open the PNG and confirm it shows the board you have open — that is the proof 
 | Log shows `register boardwise-N -> …` but no `sent hello` | `register` ran but nothing came back: the editor did not open the socket (permission, or the URL path) |
 | Action returns `NO_CONNECTOR` | EasyEDA closed, or the extension stopped (menu → Reconnect) |
 | Action returns `TIMEOUT` | Modal dialog / long render, or a half-open socket (§10) — try `screenshot` |
-| Everything connects but reads look empty | Is the right document focused? `document.current` shows what the editor reports |
+| Everything connects but reads look empty | Is the right document focused? `document.current` shows what the editor reports — `active: null` plus a note naming the host's uuid `"0"` means no document is focused (multi-window), so click the tab you meant and retry |

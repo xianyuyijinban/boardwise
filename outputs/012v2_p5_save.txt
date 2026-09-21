@@ -1,0 +1,8 @@
+[13:14:20] rc=0 0.3s
+--- stdout ---
+{
+  "saved": true
+}
+
+--- stderr ---
+

@@ -112,6 +112,25 @@ SCREENSHOT_TIMEOUT = 60.0
 #: readback ("did it land?") is what answers, not a daemon-side hang-up.
 PLACEMENT_TIMEOUT = 60.0
 
+#: Seconds the daemon waits for a primitive delete batch. Measured 2026-09-21
+#: (012): the editor re-solves the page per primitive at ~3.7 s each, so a
+#: 17-part cleanup needs ~63 s and blew through the 30 s default mid-batch.
+#: 150 s covers ~40 primitives — the largest single cleanup worth doing in
+#: one call; beyond that the caller should split on purpose, not by accident.
+DELETE_TIMEOUT = 150.0
+
+#: Seconds the daemon waits for a fab bundle. Three manufacture exports run in
+#: one call (Gerber / pick-and-place / BOM) and each can take tens of seconds on
+#: a real board, so the connector bounds **each file** at 60 s and this budget
+#: sits above 3 of those deadlines: a connector that hangs on one file still
+#: answers, per-file, inside the daemon's patience.
+FAB_TIMEOUT = 240.0
+
+#: Seconds the daemon waits for a part recommendation. Up to 3 rungs × 3 pages
+#: of library search, each of which is a round trip to the editor's own library
+#: backend — 30 s is the default for *one* read and this is up to nine.
+RECOMMEND_TIMEOUT = 90.0
+
 #: Name of the event the daemon sends the instant a socket opens.
 EVENT_BANNER = "banner"
 
@@ -471,6 +490,183 @@ ACTIONS: tuple[Action, ...] = (
         params_schema="direction: 'IN' | 'OUT' | 'BI'",
         risk="write",
     ),
+    # --- 012: delete / move / rotate by id (the AI's basic edit verbs) -------
+    Action(
+        name="sch.delete_primitives",
+        summary=(
+            "Delete schematic primitives by id. The page's id index is built "
+            "first (component / wire / text / pin — the classes the type "
+            "package lets address by id; attribute primitives cannot be), so "
+            "an id the page never held is reported, not guessed at. Honest "
+            "partial result: deleted / notFound / failed."
+        ),
+        params=("pageUuid", "primitiveIds"),
+        returns="{deleted: [id], notFound: [id], failed: [{id, reason}]}",
+        params_schema="pageUuid: the guarded page; primitiveIds: list of primitive ids",
+        risk="write",
+    ),
+    Action(
+        name="pcb.delete_primitives",
+        summary=(
+            "Delete PCB primitives by id — component / line / via / pad / "
+            "pour, guarded against the focused PCB. Honest partial result, "
+            "same shape as sch.delete_primitives."
+        ),
+        params=("pageUuid", "primitiveIds"),
+        returns="{deleted: [id], notFound: [id], failed: [{id, reason}]}",
+        params_schema="pageUuid: the guarded PCB uuid; primitiveIds: list of primitive ids",
+        risk="write",
+    ),
+    Action(
+        name="sch.modify_primitive",
+        summary=(
+            "Move / rotate / mirror one schematic primitive by id — pose only. "
+            "The class comes from the page's id index; the pose keys are "
+            "filtered through what that class's modify actually accepts "
+            "(a wire has no pose in the type package and is refused). "
+            "Returns the before/after pose for verification."
+        ),
+        params=("pageUuid", "primitiveId", "x", "y", "rotation", "mirror"),
+        returns="{before: {x, y, rotation, mirror}, after: {…}}",
+        params_schema="at least one of x / y / rotation / mirror",
+        risk="write",
+    ),
+    Action(
+        name="pcb.modify_primitive",
+        summary=(
+            "Move / rotate one PCB primitive by id — pose only, same contract "
+            "as sch.modify_primitive against the focused PCB."
+        ),
+        params=("pageUuid", "primitiveId", "x", "y", "rotation", "mirror"),
+        returns="{before: {x, y, rotation, mirror}, after: {…}}",
+        params_schema="at least one of x / y / rotation / mirror",
+        risk="write",
+    ),
+    # --- 012 §五: multi-project awareness ------------------------------------
+    Action(
+        name="doc.focus",
+        summary=(
+            "Put an already-open document on top: resolve a tab id from a "
+            "page uuid (or take a full tabId) in the split-screen tree and "
+            "activate it. Refuses (NOT_FOUND) when nothing is open for that "
+            "uuid — doc.open is the one that opens tabs."
+        ),
+        params=("pageUuid", "tabId"),
+        returns="{activated, tabId, title, documentType}",
+        params_schema="pageUuid or tabId, one required",
+        risk="write",
+    ),
+    Action(
+        name="doc.delete_page",
+        summary=(
+            "Delete a schematic page by uuid — the cleanup half of the "
+            "scratch-page flow. The uuid must be one the project lists "
+            "(NOT_FOUND otherwise); the host refuses to delete a schematic's "
+            "last page."
+        ),
+        params=("pageUuid",),
+        returns="{deleted, pageUuid, name}",
+        params_schema="pageUuid: the page to delete",
+        risk="write",
+    ),
+    # --- 012 §六/§七: the fab bundle and part recommendations ----------------
+    Action(
+        name="export.fab",
+        summary=(
+            "The focused PCB's fab bundle in one call (012 §六): Gerber (zip) + "
+            "pick-and-place + BOM, plus a manifest carrying the file list, the "
+            "parameters used, the project/pcb identity and the timestamp. The "
+            "connector CANNOT write to a path — no declared API takes a directory "
+            "(SYS_FileSystem.saveFile(fileData, fileName?) has none) — so the three "
+            "files come back as base64 and the caller writes them into `outDir`; "
+            "`boardwise bridge export-fab` is that caller. Vendor presets: `generic` "
+            "only, until a 捷配 sample BOM arrives. A file the host refuses, returns "
+            "empty or hangs on is reported per file in `failed` (`partial: true`) "
+            "while the others still come back."
+        ),
+        params=("pcbUuid", "outDir", "vendor", "gerber", "bomTemplate", "timeoutMs"),
+        returns=(
+            "{vendor, project, pcb, outDir, generatedAt, encoding: 'base64', "
+            "files: [{role, name, mime, bytes, data}], manifest, failed, partial, note}"
+        ),
+        params_schema=(
+            "pcbUuid: the board to export — default is the focused PCB, and a pcbUuid "
+            "that is not the focused one is PAGE_MISMATCH (the manufacture APIs export "
+            "the board in front); outDir: the directory the CALLER writes into "
+            "(required; recorded in the manifest); vendor: 'generic' (default); gerber: "
+            "override object limited to fileName/colorSilkscreen/unit/digitalFormat/"
+            "other/layers/objects; bomTemplate: a saved BOM template name; timeoutMs: "
+            "per-file deadline (200..600000, default 60000)"
+        ),
+        risk="read",
+    ),
+    Action(
+        name="lib.recommend",
+        summary=(
+            "READ-ONLY part recommendations for a placed part or a bare query "
+            "(012 §七). The search descends: exact identifiers (partNumber / "
+            "partCode) → searchByProperties(value + footprintName) → search(keyword); "
+            "each rung reports its own hit count (5 per page, 3 pages max) and the "
+            "rungs a hit made unnecessary are reported as not called. JLCPCB Basic "
+            "parts sort first. No stock and no price — the type package's search item "
+            "carries neither — so the answer labels them `stock/price: 以商城实时为准`. "
+            "Nothing is placed: placement stays the oracle's decision."
+        ),
+        params=("query", "pageUuid", "ref", "topN", "allLayers", "timeoutMs"),
+        returns=(
+            "{source, query, ref, component, target, layers: [{layer, api, called, args, "
+            "hitCount, pagesFetched, reason?, error?}], returned, shown, candidates: "
+            "[{name, lcsc, mpn, footprintName, partClass, datasheet, deviceUuid, "
+            "libraryUuid, symbolUuid, footprintUuid, layer}], 'stock/price', readOnly, placed}"
+        ),
+        params_schema=(
+            "query: free text (an MPN, a value, or a C-number) — or pageUuid+ref for a "
+            "part already on the page (the ref path is focus-guarded: the designator is "
+            "resolved in the focused page's component list); topN: how many candidates "
+            "(1..20, default 5); allLayers: run every rung instead of stopping at the "
+            "first that hits; timeoutMs: per-page deadline for one library search "
+            "(200..120000, default 20000) — a hung page is reported as that rung's "
+            "error and the descent continues"
+        ),
+        risk="read",
+    ),
+    # --- 012 §八: a review pass drawn back onto the canvas -------------------
+    Action(
+        name="review.mark",
+        summary=(
+            "Draw a `boardwise review` pass on the focused schematic page as "
+            "indicator markers, and jump to one finding (012 §八). The marker API "
+            "takes SHAPES, not text, so each mark's ref is resolved to its "
+            "component's coordinates first (the same component dump `sch.geometry` "
+            "returns) and the rule id / severity / one-line summary travel in the "
+            "result instead: `marked[k-1]` is marker k. View-only: markers are an "
+            "overlay, no primitive is created, moved or modified."
+        ),
+        params=("pageUuid", "marks", "clear", "focus", "color", "zoom", "markers"),
+        returns=(
+            "{mode: 'markers'|'list', cleared, page: {components, designators, "
+            "withoutPosition, active}, count, marked: [{position, marker, ref, "
+            "designator, ruleId, severity, text, primitiveId, x, y}], unresolved: "
+            "[{position, ref, ruleId, severity, text, reason}], markers: {attempted, "
+            "accepted, reason?}, focused?: {position, ref, zoomed, reason?}, readOnly, "
+            "note, notes?}"
+        ),
+        params_schema=(
+            "pageUuid: optional — the schematic page the findings are about; a "
+            "different focused page is PAGE_MISMATCH (without it, the page is not "
+            "verified and the result says so); marks: [{ref, ruleId, severity, text}] "
+            "in the caller's own finding order (position k is the k-th entry, which is "
+            "what `focus` counts) — a ref that is not on the page is reported in "
+            "`unresolved` while the rest are still marked; clear: true calls "
+            "removeIndicatorMarkers instead (and ignores marks); focus: 1-based "
+            "position to zoom to, via zoomToRegion; color: '#RRGGBB' or "
+            "{r,g,b,alpha}; zoom: zoom the canvas to all markers (ignored when focus "
+            "is given); markers: false returns the jump list (ref + coordinates) "
+            "without drawing — the explicit form of the degradation that also "
+            "happens when generateIndicatorMarkers is missing or refuses"
+        ),
+        risk="read",
+    ),
     # --- 006c: document management (probe / open / create / rename) ----------
     Action(
         name="doc.list",
@@ -724,6 +920,22 @@ def timeout_for(action: str) -> float:
     # budget must outlast that readback for its answer to reach the caller.
     if action == "sch.place_component":
         return PLACEMENT_TIMEOUT
+    # 012 measured 2026-09-21: a schematic delete costs ~3.7 s per primitive
+    # (the editor re-solves the page each time), so the 17-part cleanup ran
+    # past the 30 s default and the CLI hung up mid-batch. The action is
+    # per-id honest and resumable, but a caller that has to split its own
+    # batches to fit a timeout is a caller working around the daemon. 150 s
+    # covers ~40 primitives, the largest sane single cleanup.
+    if action in ("sch.delete_primitives", "pcb.delete_primitives"):
+        return DELETE_TIMEOUT
+    # Three manufacture exports in one call, each bounded at 60 s by the
+    # connector — the daemon has to outlast all three so a per-file miss
+    # ("gerber timed out, BOM still landed") reaches the caller as an answer.
+    if action == "export.fab":
+        return FAB_TIMEOUT
+    # Up to nine library searches (3 rungs × 3 pages) behind one action.
+    if action == "lib.recommend":
+        return RECOMMEND_TIMEOUT
     return ACTION_TIMEOUT
 
 

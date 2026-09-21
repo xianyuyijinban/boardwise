@@ -60,6 +60,7 @@ export type ErrorCode =
   | 'NO_CONNECTOR'
   | 'CONNECTOR_ERROR'
   | 'PAGE_MISMATCH'
+  | 'NOT_FOUND'
   | 'TIMEOUT'
   | 'INTERNAL';
 

@@ -1,0 +1,15 @@
+012v2 S4 — bw_scratch lifecycle, /test, 2026-09-21
+
+focused project: ['/test'] (want ['/test'])
+sch.doc.new -> {"schematicUuid": "d977b19a89c0abb7", "pageUuid": "ed61d97da8f7dbf1", "focused": true}
+
+sch.place_component -> {"uuid": "46f1137494fbc35c", "device": {"uuid": "96b39256cc3f4d80bd3b503deb4f3328", "libraryUuid": "0819f05c4eef4c71ace90d822a990e87", "name": ""}, "resolvedBy": "lcsc", "elapsedMs": 471}
+
+modify x/y -> {"before": {"x": 100, "y": 100, "rotation": 0, "mirror": false}, "after": {"x": 150, "y": 120, "rotation": 0, "mirror": false}}
+modify rotation -> {"before": {"x": 150, "y": 120, "rotation": 0, "mirror": false}, "after": {"x": 150, "y": 120, "rotation": 90, "mirror": false}}
+readback pose -> {"primitiveId": "46f1137494fbc35c", "x": 150, "y": 120, "rotation": 90, "mirror": false, "net": ""}
+
+delete part -> {"deleted": ["46f1137494fbc35c"], "notFound": [], "failed": []}
+readback after delete: parts=0
+
+SCRATCH PAGE UUID (to delete): ed61d97da8f7dbf1

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict
 from typing import Any
 
 from ..core.model import DesignModel
+from ..core.parts import DESIGNATOR_CATEGORIES
 from ..rules.base import SEVERITY_ORDER, Finding, Rule
 from ..rules.connectivity import (
     CrystalLoadCaps,
@@ -99,10 +101,61 @@ def render_markdown(findings: list[Finding], model_meta: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+#: A designator standing alone in prose: a short alpha prefix then digits, not
+#: glued to a longer word (`U1` yes, `PC14`/`3V3`/`FRC0805J471` no).
+_DESIGNATOR_TOKEN = re.compile(r"(?<![A-Za-z0-9_])([A-Za-z]{1,4})(\d{1,4})(?![A-Za-z0-9_])")
+
+#: The prefixes accepted as designators: the shelf table's own prefixes (the
+#: project's existing statement of what a designator prefix means) plus the few
+#: families it does not name. **An allow-list, not a heuristic on the shape** —
+#: `AMS1117`, `SS34` and `CH340G` all *look* like designators, and a shape-only
+#: rule would hand them to the canvas as refs that resolve to nothing.
+DESIGNATOR_PREFIXES: frozenset[str] = frozenset(DESIGNATOR_CATEGORIES) | frozenset(
+    {
+        "RV", "RP", "RT",   # potentiometer / preset
+        "FB",               # ferrite bead
+        "NT", "ZD", "TVS",  # thermistor / zener / TVS
+        "VR", "BT", "MK", "MIC", "TH", "ZZ",
+    }
+)
+
+
+def finding_refs(finding: Finding) -> list[str]:
+    """The designators a finding names, in first-seen order and deduplicated.
+
+    Read out of ``evidence`` first and ``message`` second — evidence entries
+    point at components by contract ("``C116 pin1 @ VM``"), while a message is
+    prose and may mention a part number. A finding may name several parts (a
+    decoupling violation names the IC *and* the capacitor), so this returns a
+    list; the caller decides how many marks that becomes.
+    """
+    refs: list[str] = []
+    seen: set[str] = set()
+    for text in [*finding.evidence, finding.message]:
+        for prefix, number in _DESIGNATOR_TOKEN.findall(text or ""):
+            if prefix.upper() not in DESIGNATOR_PREFIXES:
+                continue
+            ref = f"{prefix.upper()}{number}"
+            if ref in seen:
+                continue
+            seen.add(ref)
+            refs.append(ref)
+    return refs
+
+
 def render_json(findings: list[Finding]) -> str:
-    """Render a machine-readable report."""
+    """Render a machine-readable report.
+
+    Each finding also carries ``refs`` — the designators its evidence names —
+    which is what `boardwise review-mark` marks on the live canvas. Derived here
+    rather than added to :class:`Finding`, so the rules (and their tests) are
+    untouched: this is a reading of what a rule already wrote, not a new claim
+    the rule makes.
+    """
     payload = {
         "summary": severity_counts(findings),
-        "findings": [asdict(finding) for finding in findings],
+        "findings": [
+            {**asdict(finding), "refs": finding_refs(finding)} for finding in findings
+        ],
     }
     return json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
