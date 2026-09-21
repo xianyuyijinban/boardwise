@@ -4,6 +4,33 @@ Living index. Details live in `tasks/*.md` (one book per task) and
 `docs/implementation-log.md` (the connector debugging arc). This file only
 collects the current truth and the pointers.
 
+## [2026-09-21] M3 入口复核与上手文档收尾
+
+### Problem / Task
+- 复核 013 真机验收、015b 审查评测和现有桥写入能力，确定下一阶段的产品主线。
+
+### Resolution
+- 确认当前基线适合进入 M3“审查到局部修改”：连接器已有属性修改后读回、页守卫、保存、原理图回读和未知写入状态。
+- 将首个垂直切片定为单器件值修改，要求变更预览、前置条件、读回、复查和持久化核验；独立评测集扩充与 M3 并行。
+- 修正 `docs/getting-started.md` 对 `gs-03` 配对公告截图的描述，使文案与实际素材一致。
+
+### Prevention / Follow-up
+- 先建立 `ChangePlan`/变更合同和独立 benchmark，再扩展补器件、修单脚和局部重排；暂缓 PCB 自动布局布线与模型成本调度。
+
+### Verification
+- `git diff --check` 通过。
+- `docs/getting-started.md` 的 6 个图片引用均存在；未重跑完整 pytest/connector 套件（本次为架构复核与文档修正）。
+
+### Commit
+- Branch: `main`
+- Commit: `83f910e`（getting-started + 两张截图；本记录随 PROGRESS.md 单独提交）
+- Status: committed
+- Files:
+  - `docs/getting-started.md`
+  - `docs/images/gs-01-editor-about.png`
+  - `docs/images/gs-03-daemon-start.png`
+  - `PROGRESS.md`
+
 ## Current baseline (2026-09-21, commit 5ff0a1d)
 
 - pytest: **1145 passed** (run with `--basetemp=.tmp_pt_home` on Windows —
