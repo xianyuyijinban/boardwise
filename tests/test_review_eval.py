@@ -405,14 +405,22 @@ def test_the_real_ch340g_annotation_set_measures_the_known_false_positive():
     assert xtal.fp_on_exception == 0
     assert xtal.exceptions_hinted == 1  # the X1 record still counts as hinted
     # 011d: the V3 query became a defect (oracle: the board never powered
-    # up), every hint on the board is implemented, and both defects are
-    # detected -- the unregistered column is empty.
+    # up), every hint on the board is implemented, and the unregistered
+    # column is empty. (015 batch 2 changed one *detection* below, not the
+    # columns: the U3 record is still hinted and still read.)
     assert evaluation.queries == 0
     assert evaluation.unregistered == []
     decap = _metrics(evaluation, "decap-required-caps")
     assert (decap.defects_hinted, decap.detected) == (1, 1)
+    # 015 batch 2: the board's U3 defect (1k against a 470-ohm MPN, 2.13x) is
+    # now *below* the R tolerance, so the rule reports OK and the signed
+    # record lands as a miss. The oracle took this cost knowingly -- the
+    # measurement is here rather than in prose, and the record itself is left
+    # exactly as it was signed.
     mpn = _metrics(evaluation, "param-value-mpn-match")
-    assert (mpn.defects_hinted, mpn.detected) == (1, 1)
+    assert (mpn.defects_hinted, mpn.detected, mpn.missed) == (1, 0, 1)
+    assert (mpn.violations, mpn.false_positives) == (0, 0)
+    assert mpn.recall == 0.0 and mpn.precision is None
 
 
 def test_the_bishe_boards_a_section_is_detected_and_explained():
@@ -427,13 +435,16 @@ def test_the_bishe_boards_a_section_is_detected_and_explained():
     reading the part number wrong and the A2b seven because the oracle read
     a 470-ohm-vs-1k-ohm disagreement as "not wrong enough to call".
 
-    015 landed the first half of the payment: the decoder refuses the
+    015 landed the payment in two halves. Batch 1: the decoder refuses the
     notations it was hard-reading, so the A2a three report UNKNOWN and their
-    findings are gone -- 10 exceptions, 7 paired findings -- while the A2b
-    seven stay VIOLATION exactly as ruled (the magnitude question is batch 2,
-    oracle-held). The rule's precision stays 0.0: what is left really is
-    false positives, and an exception record is how a known false positive
-    stays counted instead of being argued away.
+    findings are gone -- 10 exceptions, 7 paired findings, the A2b seven still
+    VIOLATION. Batch 2 (2026-09-21, the amplitude ruling): those seven are
+    readable contradictions the oracle ruled "not wrong", and the rule now
+    waives them by amplitude, so **all ten exception records pair nothing**
+    and the rule reports no contradiction on this board at all. Precision is
+    therefore None (no claims left to score) rather than 0.0, and the rule's
+    measurements move out of the high-priority numerator and denominator
+    entirely -- which is the 011 sec.10 precision term the batch exists for.
 
     014 additions, each measured against the harness as it actually behaves:
     the set is signed (no DRAFT stamp); the U1.12 defect lands in the
@@ -463,11 +474,16 @@ def test_the_bishe_boards_a_section_is_detected_and_explained():
         30, 30, 0,
     )
     mpn = _metrics(evaluation, "param-value-mpn-match")
-    # 10 exception records, 7 of them still pairing a finding (015: the A2a
-    # three are UNKNOWN now, and an UNKNOWN emits no finding to pair).
-    assert (mpn.exceptions_hinted, mpn.fp_on_exception) == (10, 7)
+    # 10 exception records, all 10 of them pairing no finding: batch 1 made the
+    # A2a three UNKNOWN (no finding to pair) and batch 2 waived the A2b seven
+    # (an OK row raises no finding either).
+    assert (mpn.exceptions_hinted, mpn.fp_on_exception) == (10, 0)
     assert mpn.fp_unexplained == 0, "A2 is ruled; nothing on it is unlooked-at"
-    assert mpn.precision == 0.0, "and what is left really is a false positive"
+    assert mpn.violations == 0, "no contradiction left on the board"
+    assert mpn.precision is None and mpn.recall is None, (
+        "no claims and no defects hinted: the rule contributes nothing to "
+        "either side of the high-priority pair"
+    )
     # 015: retire the L1 heuristic (011f B2) and it leaves the measurement
     # entirely -- no metrics row, and the three WARN findings it used to push
     # into the unexplained column are gone, so the high-priority unexplained
@@ -536,9 +552,19 @@ def test_review_eval_measures_the_real_annotation_set():
     assert result.returncode == 0, result.stderr
     assert "DRAFT (oracle review pending)" in result.stdout
     assert "xtal-load-caps" in result.stdout
-    assert "0.00" not in result.stdout  # the grounded-case FP is fixed (011c)
-    # 011d: every hint implemented, both defects detected, the no-registered-
-    # rule column empty, and no queries left open.
+    lines = result.stdout.splitlines()
+    xtal_line = next(line for line in lines if "xtal-load-caps" in line)
+    assert "0.00" not in xtal_line, "the grounded-case FP is fixed (011c)"
+    # 015 batch 2: one 0.00 is left on this board, and it is not a false
+    # positive -- it is the mpn rule's *recall* for U3's signed 011c record,
+    # which the amplitude ruling turns into a knowing miss (2.13x < 3x, see
+    # rules/params.py). Asserted by name so it cannot quietly become a second
+    # score, or disappear.
+    mpn_line = next(line for line in lines if "param-value-mpn-match" in line)
+    assert "0/1 = 0.00" in mpn_line
+    assert result.stdout.count("0.00") == 1
+    # 011d: every hint implemented, the no-registered-rule column empty, and
+    # no queries left open.
     assert "queries excluded: 0" in result.stdout
     assert "no registered rule" not in result.stdout
     assert "1/1 = 1.00" in result.stdout  # decap-required-caps, precision

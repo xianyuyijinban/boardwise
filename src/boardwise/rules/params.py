@@ -51,6 +51,36 @@ LED_SERIES_BOUNDS_3V3 = (470.0, 2200.0)
 LED_WINDOW_DOMAIN_V = 3.3
 LED_DOMAIN_TOLERANCE_V = 0.05
 
+#: How far a board's value field may sit from its MPN's decoded value before
+#: the disagreement is called a contradiction, by part kind (task 015 batch 2;
+#: oracle ruling of 2026-09-21, decision A with category thresholds -- his
+#: words for the complaint: "不要定的太死"). The judged quantity is
+#: ``max(declared, decoded) / min(declared, decoded)``, so both directions
+#: read the same; a ratio strictly below the threshold is OK, at or above it
+#: is the violation it always was.
+#:
+#: Three measured facts produced exactly these two numbers:
+#:
+#: * **The families do not share a scale.** The parts the oracle ruled *not*
+#:   wrong are U10/U14 (1k ohm declared against a 470-ohm MPN, 2.13x) and
+#:   C28/C29/C36/C42/C44 (100 nF against 2.2 uF and 10 nF, 10x-22x). One
+#:   global 3x threshold only rescues the resistors: the capacitors still
+#:   report, and the graduation measurement stayed broken. Splitting by kind
+#:   is what the evidence supports.
+#: * **2.13x sits on both sides of a ruling.** U10/U14 pass here, while the
+#:   golden board's U3 -- also 1k against 470 -- is a defect the oracle signed
+#:   in 011c. A threshold in the middle of that pair cannot exist, so the
+#:   golden board's U3 turning OK is a **cost taken knowingly**: it moves from
+#:   detected to missed in the dev measurement, and its 011c record is left
+#:   alone rather than rewritten to fit.
+#: * **25x is interpolated, not measured.** No capacitor witness above 22x
+#:   exists anywhere in the repository, so the ceiling is the project lead's
+#:   interpolation over the evidence above, confirmed by the oracle. If a
+#:   real board ever produces a larger disagreement, this is the number to
+#:   re-ask about.
+MPN_AMPLITUDE_TOLERANCE_R = 3.0
+MPN_AMPLITUDE_TOLERANCE_C = 25.0
+
 
 def parse_resistance_ohms(value: str) -> float | None:
     """Re-exported helper: the L1 parser is the one ohm parser."""
@@ -85,7 +115,14 @@ class ValueMpnMatch(FactsRule):
     (``R`` as the decimal point, a voltage rating after the value, an
     electrolytic part number -- task 015): those strings do carry a value, but
     not one this decoder reads, and hard-reading them turned a 330 uF part
-    into a 3.3e-11 F contradiction."""
+    into a 3.3e-11 F contradiction.
+
+    A *readable* MPN that disagrees with the board's value is judged by
+    amplitude, not by equality (ruling of 2026-09-21, see
+    :data:`MPN_AMPLITUDE_TOLERANCE_R`): a small ratio is OK **with its
+    amplitude quoted in the message**, so the row says what was seen instead
+    of passing in silence, and it enters no precision denominator. Bigger
+    ratios keep the violation and now quote the amplitude too."""
 
     id = "param-value-mpn-match"
     title = "The board's value field matches the MPN's decoded value"
@@ -155,9 +192,9 @@ class ValueMpnMatch(FactsRule):
                     None,
                 ))
                 continue
-            # Nominal equality with a relative tolerance: both numbers are
-            # nominal declarations of the same part, so 470 vs 470.0 is a
-            # match and 470 vs 1000 is a contradiction.
+            # Nominal equality with a relative tolerance first: both numbers
+            # are nominal declarations of the same part, so 470 vs 470.0 is a
+            # match. Everything else is judged by amplitude (2026-09-21).
             if math.isclose(declared, decoded, rel_tol=1e-3):
                 rows.append((
                     Outcome(
@@ -173,6 +210,44 @@ class ValueMpnMatch(FactsRule):
                     None,
                 ))
             else:
+                tolerance = (
+                    MPN_AMPLITUDE_TOLERANCE_R if kind == "resistor"
+                    else MPN_AMPLITUDE_TOLERANCE_C
+                )
+                # ``min <= 0`` has no ratio: 0/0 is undefined and anything/0 is
+                # infinite, and neither is an amplitude a reader can judge. It
+                # stays a contradiction, as it always was.
+                low_side, high_side = sorted((declared, decoded))
+                ratio = high_side / low_side if low_side > 0 else None
+                if ratio is not None and ratio < tolerance:
+                    rows.append((
+                        Outcome(
+                            rule_id=self.id,
+                            state="OK",
+                            subject=comp.designator,
+                            message=(
+                                f"{comp.designator}: board value "
+                                f"{declared:.4g} {unit} vs MPN "
+                                f"{decoded:.4g} {unit} differ {ratio:.2f}x, "
+                                f"below the {tolerance:g}x tolerance (oracle "
+                                'ruling 015 batch-2: "\u4e0d\u8981\u5b9a\u7684'
+                                '\u592a\u6b7b")'
+                            ),
+                            evidence=[
+                                f"{comp.designator} value {comp.value!r}",
+                                f"{comp.designator} mpn {comp.mpn!r}",
+                            ],
+                        ),
+                        None,
+                    ))
+                    continue
+                amplitude = (
+                    f"{ratio:.2f}x apart, at or above the {tolerance:g}x "
+                    "tolerance"
+                    if ratio is not None else
+                    f"a zero side ({declared:.4g} vs {decoded:.4g} {unit}) "
+                    "leaves the ratio undefined, so no tolerance applies"
+                )
                 rows.append((
                     Outcome(
                         rule_id=self.id,
@@ -182,7 +257,7 @@ class ValueMpnMatch(FactsRule):
                             f"{comp.designator}: board value "
                             f"{declared:.4g} {unit} contradicts its MPN "
                             f"({comp.mpn!r} decodes to {decoded:.4g} {unit}) "
-                            "-- BOM and schematic disagree"
+                            f"-- BOM and schematic disagree ({amplitude})"
                         ),
                         evidence=[
                             f"{comp.designator} value {comp.value!r}",
