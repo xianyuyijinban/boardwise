@@ -1,0 +1,4 @@
+boardwise bridge export-fab: wrote fab_gerber.zip (4034 B, gerber)
+boardwise bridge export-fab: wrote fab_pick_and_place.csv (256 B, pick_and_place)
+boardwise bridge export-fab: wrote fab_bom.csv (126 B, bom)
+boardwise bridge export-fab: 3 file(s) + manifest.json in outputs\013_p3b_test2_check

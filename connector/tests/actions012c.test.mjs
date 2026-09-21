@@ -451,6 +451,27 @@ test('clear reports a canvas that refuses the removal', async (t) => {
   assert.match(frame.data.note, /refused the removal/);
 });
 
+test('clear with no active document is already done, not refused', async (t) => {
+  // Measured 2026-09-21: with nothing focused, the host answers `false` to
+  // removeIndicatorMarkers — and that answer used to come back as "the canvas
+  // refused the removal", which sends the caller looking for a canvas that is
+  // not open. There is no canvas, so there is nothing to remove, and the clear
+  // is idempotent.
+  const host = hostReviewMark();
+  host.dmt_SelectControl = { async getCurrentDocumentInfo() { return { uuid: '0' }; } };
+  withEda(t, host);
+  await connector.activate();
+
+  const frame = await call(host, 'review.mark', { clear: true });
+  assert.equal(frame.ok, true, JSON.stringify(frame));
+  assert.equal(frame.data.cleared, true);
+  assert.match(frame.data.note, /no active canvas — nothing to remove/);
+  // The host's own placeholder reading travels with the note, the way it does on
+  // the drawing path.
+  assert.match(frame.data.note, /placeholder/);
+  assert.equal(host.__removed(), 0, 'there is no canvas, so nothing is asked of the host');
+});
+
 test('clear without removeIndicatorMarkers is structural', async (t) => {
   const host = hostReviewMark({ without: ['dmt_EditorControl.removeIndicatorMarkers'] });
   withEda(t, host);

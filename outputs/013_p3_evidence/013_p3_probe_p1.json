@@ -1,0 +1,1 @@
+boardwise bridge call: export.fab failed [PAGE_MISMATCH] the focused PCB is (none), not ab812fb712e14a62920977ed67aaf8f1 — refusing to export. The manufacture APIs export the board that is in front; open it first (doc.open).

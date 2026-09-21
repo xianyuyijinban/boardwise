@@ -1,0 +1,10 @@
+{
+  "error": {
+    "code": "PAGE_MISMATCH",
+    "message": "the focused page is 5f0f4e169f1745e789501f939bb10851, not 0000000000000000 — refusing to place",
+    "detail": {
+      "expected": "0000000000000000",
+      "actual": "5f0f4e169f1745e789501f939bb10851"
+    }
+  }
+}

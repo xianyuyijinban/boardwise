@@ -1,0 +1,17 @@
+16:38:31 poll project='test2' active=None
+16:38:46 poll project='test2' active=None
+16:39:02 poll project='test2' active=None
+16:39:17 poll project='test2' active=None
+16:39:32 poll project='test2' active=None
+16:39:47 poll project='test2' active=None
+16:40:02 poll project='test2' active=None
+16:40:17 poll project='test2' active=None
+16:40:32 poll project='test2' active=None
+16:40:47 poll project='test2' active='5ce4c9f372e0f867'
+16:41:02 poll project='test2' active='5ce4c9f372e0f867'
+16:41:13 poll project='test2' active='5ce4c9f372e0f867'
+16:41:23 poll project='test' active='b4298962367251c8'
+16:41:33 poll project='test' active='b4298962367251c8'
+16:41:43 poll project='毕设FOC驱动板' active='ab812fb712e14a62920977ed67aaf8f1'
+16:41:44 export ok: [{"name": "fab_gerber.zip", "role": "gerber", "bytes": 174051, "declaredBytes": 174051}, {"name": "fab_pick_and_place.csv", "role": "pick_and_place", "bytes": 49422, "declaredBytes": 49422}, {"name": "fab_bom.csv", "role": "bom", "bytes": 25084, "declaredBytes": 25084}]
+16:41:44 failed=[] overrides=[]

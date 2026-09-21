@@ -1,0 +1,69 @@
+{
+  "ok": true,
+  "port": 61190,
+  "versions": {
+    "daemon": "0.1.0",
+    "daemonRunning": "0.1.0",
+    "connectorRunning": "0.4.6",
+    "connectorRepo": "0.4.6",
+    "editor": "3.2.186"
+  },
+  "checks": [
+    {
+      "name": "daemon",
+      "label": "daemon 可达（ping，daemon 无 HTTP /health）",
+      "ok": true,
+      "skipped": false,
+      "detail": "127.0.0.1:61190 的 daemon 已应答 ping",
+      "fix": ""
+    },
+    {
+      "name": "connector",
+      "label": "扩展已连接（WebSocket 已注册到 daemon）",
+      "ok": true,
+      "skipped": false,
+      "detail": "daemon 上注册着一个 connector，配对指纹 962bf45e",
+      "fix": ""
+    },
+    {
+      "name": "methods",
+      "label": "sys.probe 关键方法在位",
+      "ok": true,
+      "skipped": false,
+      "detail": "5/5 关键方法都是 function（dmt_Schematic.getCurrentSchematicPageInfo, dmt_Pcb.getCurrentPcbInfo, sch_PrimitiveComponent.getAll, dmt_EditorControl.openDocument, dmt_EditorControl.generateIndicatorMarkers）",
+      "fix": ""
+    },
+    {
+      "name": "editor-version",
+      "label": "编辑器版本 ≥ 3.2.183",
+      "ok": true,
+      "skipped": false,
+      "detail": "编辑器 3.2.186",
+      "fix": ""
+    },
+    {
+      "name": "daemon-version",
+      "label": "daemon 版本与本机一致（新动作才不会『不认识』）",
+      "ok": true,
+      "skipped": false,
+      "detail": "运行的 daemon 0.1.0，本机 boardwise 0.1.0",
+      "fix": ""
+    },
+    {
+      "name": "connector-version",
+      "label": "运行中的 connector 版本与仓库一致",
+      "ok": true,
+      "skipped": false,
+      "detail": "编辑器里跑的是 connector 0.4.6，仓库里是 0.4.6",
+      "fix": ""
+    },
+    {
+      "name": "project",
+      "label": "当前工程焦点可读",
+      "ok": true,
+      "skipped": false,
+      "detail": "焦点工程：test（ea80fff6…，5 页原理图 / 1 个 PCB）；活动文档：无（宿主报占位读数 uuid=0：没有焦点文档，多窗口下常见）",
+      "fix": ""
+    }
+  ]
+}

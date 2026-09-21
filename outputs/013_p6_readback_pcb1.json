@@ -1,0 +1,5574 @@
+{
+  "kind": "pcb",
+  "components": [
+    {
+      "primitiveId": "0543e5b7317ba164",
+      "designator": "C1",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 4510,
+      "y": -1145,
+      "rotation": 0,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "0543e5b7317ba164",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 4510,
+        "Y": -1145,
+        "Rotation": 0,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C1",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge193",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "8b7cbb2ecf211fb2",
+      "designator": "C5",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C2896712",
+      "manufacturer": "Yunxing(云星)",
+      "x": 4600,
+      "y": -2935,
+      "rotation": 180,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "8b7cbb2ecf211fb2",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 4600,
+        "Y": -2935,
+        "Rotation": 180,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C5",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge183",
+        "Manufacturer": "Yunxing(云星)",
+        "ManufacturerId": "SPT1HM2R2D11ORVZC",
+        "Supplier": "LCSC",
+        "SupplierId": "C2896712",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "f9119ea8d5424a05",
+      "designator": "C8",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C49678",
+      "manufacturer": "YAGEO(国巨)",
+      "x": 4555,
+      "y": -2255,
+      "rotation": 180,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "f9119ea8d5424a05",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 4555,
+        "Y": -2255,
+        "Rotation": 180,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C8",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge59",
+        "Manufacturer": "YAGEO(国巨)",
+        "ManufacturerId": "CC0805KRX7R9BB104",
+        "Supplier": "LCSC",
+        "SupplierId": "C49678",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "587e8c49adc7204d",
+      "designator": "C10",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 5650,
+      "y": -1450,
+      "rotation": 0,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "587e8c49adc7204d",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5650,
+        "Y": -1450,
+        "Rotation": 0,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C10",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge312",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "3b4b7ded0fb2bde9",
+      "designator": "C11",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C2896712",
+      "manufacturer": "Yunxing(云星)",
+      "x": 4905,
+      "y": -2105,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "3b4b7ded0fb2bde9",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 4905,
+        "Y": -2105,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C11",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge182",
+        "Manufacturer": "Yunxing(云星)",
+        "ManufacturerId": "SPT1HM2R2D11ORVZC",
+        "Supplier": "LCSC",
+        "SupplierId": "C2896712",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "6f72182eca8fd359",
+      "designator": "C12",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 5640,
+      "y": -1580,
+      "rotation": 0,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "6f72182eca8fd359",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5640,
+        "Y": -1580,
+        "Rotation": 0,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C12",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge313",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "e3bb3528cdb53d05",
+      "designator": "C15",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 5380,
+      "y": -1160,
+      "rotation": 0,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "e3bb3528cdb53d05",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5380,
+        "Y": -1160,
+        "Rotation": 0,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C15",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge314",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "36097d1dfff2f489",
+      "designator": "C17",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C49678",
+      "manufacturer": "YAGEO(国巨)",
+      "x": 5735,
+      "y": -1860,
+      "rotation": 0,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "36097d1dfff2f489",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5735,
+        "Y": -1860,
+        "Rotation": 0,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C17",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge80",
+        "Manufacturer": "YAGEO(国巨)",
+        "ManufacturerId": "CC0805KRX7R9BB104",
+        "Supplier": "LCSC",
+        "SupplierId": "C49678",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "976c6d9184202bc2",
+      "designator": "C18",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 5360,
+      "y": -1265,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "976c6d9184202bc2",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5360,
+        "Y": -1265,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C18",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge316",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "ba5a407ce846792c",
+      "designator": "C19",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 5330,
+      "y": -1665,
+      "rotation": -90.00000000000001,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "ba5a407ce846792c",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5330,
+        "Y": -1665,
+        "Rotation": -90.00000000000001,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C19",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge315",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "41b69876acf223fe",
+      "designator": "C20",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 5135,
+      "y": -1241.5099,
+      "rotation": 0,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "41b69876acf223fe",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5135,
+        "Y": -1241.5099,
+        "Rotation": 0,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C20",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge317",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "6073f258fe42b0db",
+      "designator": "C64",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C2896712",
+      "manufacturer": "Yunxing(云星)",
+      "x": 5225,
+      "y": -2315,
+      "rotation": -90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "6073f258fe42b0db",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5225,
+        "Y": -2315,
+        "Rotation": -90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C64",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge184",
+        "Manufacturer": "Yunxing(云星)",
+        "ManufacturerId": "SPT1HM2R2D11ORVZC",
+        "Supplier": "LCSC",
+        "SupplierId": "C2896712",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "429cb5b42643c898",
+      "designator": "C67",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C2896712",
+      "manufacturer": "Yunxing(云星)",
+      "x": 5765,
+      "y": -2005,
+      "rotation": 180,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "429cb5b42643c898",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5765,
+        "Y": -2005,
+        "Rotation": 180,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C67",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge187",
+        "Manufacturer": "Yunxing(云星)",
+        "ManufacturerId": "SPT1HM2R2D11ORVZC",
+        "Supplier": "LCSC",
+        "SupplierId": "C2896712",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "ed248d2755b05250",
+      "designator": "C69",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C2896712",
+      "manufacturer": "Yunxing(云星)",
+      "x": 4580,
+      "y": -2060,
+      "rotation": 0,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "ed248d2755b05250",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 4580,
+        "Y": -2060,
+        "Rotation": 0,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C69",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge189",
+        "Manufacturer": "Yunxing(云星)",
+        "ManufacturerId": "SPT1HM2R2D11ORVZC",
+        "Supplier": "LCSC",
+        "SupplierId": "C2896712",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "34df05758fd9ddb0",
+      "designator": "C70",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C160183",
+      "manufacturer": "AISHI(艾华集团)",
+      "x": 5620.270499999999,
+      "y": -2341.2803,
+      "rotation": -90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "34df05758fd9ddb0",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5620.270499999999,
+        "Y": -2341.2803,
+        "Rotation": -90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C70",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge190",
+        "Manufacturer": "AISHI(艾华集团)",
+        "ManufacturerId": "SPZ1HM100E07O00RAXXX",
+        "Supplier": "LCSC",
+        "SupplierId": "C160183",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "9b910194ab8a6ede",
+      "designator": "C90",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 5710,
+      "y": -2900,
+      "rotation": -90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "9b910194ab8a6ede",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5710,
+        "Y": -2900,
+        "Rotation": -90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C90",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge240",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "a0688e7aa8db1e54",
+      "designator": "C91",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C97876",
+      "manufacturer": "muRata(村田)",
+      "x": 5100,
+      "y": -2745,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "a0688e7aa8db1e54",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5100,
+        "Y": -2745,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C91",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge243",
+        "Manufacturer": "muRata(村田)",
+        "ManufacturerId": "GRM1885C1H122JA01D",
+        "Supplier": "LCSC",
+        "SupplierId": "C97876",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "6798a4d318f22b14",
+      "designator": "C92",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 5100,
+      "y": -2895,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "6798a4d318f22b14",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5100,
+        "Y": -2895,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C92",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge244",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "faf9694cb034653a",
+      "designator": "C93",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 5190,
+      "y": -2755,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "faf9694cb034653a",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5190,
+        "Y": -2755,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C93",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge247",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "521435200f8d729a",
+      "designator": "C98",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C49678",
+      "manufacturer": "YAGEO(国巨)",
+      "x": 5050,
+      "y": -2100,
+      "rotation": -90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "521435200f8d729a",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5050,
+        "Y": -2100,
+        "Rotation": -90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C98",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge96_1",
+        "Manufacturer": "YAGEO(国巨)",
+        "ManufacturerId": "CC0805KRX7R9BB104",
+        "Supplier": "LCSC",
+        "SupplierId": "C49678",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "176d4ebe8a1a8367",
+      "designator": "C99",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C49678",
+      "manufacturer": "YAGEO(国巨)",
+      "x": 5486.7655,
+      "y": -2118.596,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "176d4ebe8a1a8367",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5486.7655,
+        "Y": -2118.596,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C99",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge114_1",
+        "Manufacturer": "YAGEO(国巨)",
+        "ManufacturerId": "CC0805KRX7R9BB104",
+        "Supplier": "LCSC",
+        "SupplierId": "C49678",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "d0a9b6853b4f303f",
+      "designator": "C101",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C2896712",
+      "manufacturer": "Yunxing(云星)",
+      "x": 5201.7655,
+      "y": -2088.596,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "d0a9b6853b4f303f",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5201.7655,
+        "Y": -2088.596,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C101",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge195_1",
+        "Manufacturer": "Yunxing(云星)",
+        "ManufacturerId": "SPT1HM2R2D11ORVZC",
+        "Supplier": "LCSC",
+        "SupplierId": "C2896712",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "c562b81561704aa4",
+      "designator": "C115",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C46550457",
+      "manufacturer": "JIERR(捷而瑞)",
+      "x": 7155,
+      "y": -2280,
+      "rotation": 0,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "c562b81561704aa4",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 7155,
+        "Y": -2280,
+        "Rotation": 0,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C115",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge277",
+        "Manufacturer": "JIERR(捷而瑞)",
+        "ManufacturerId": "PA50V330M10x15",
+        "Supplier": "LCSC",
+        "SupplierId": "C46550457",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "864447f7767bb7d0",
+      "designator": "C116",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C46550457",
+      "manufacturer": "JIERR(捷而瑞)",
+      "x": 6740,
+      "y": -2700,
+      "rotation": -90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "864447f7767bb7d0",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 6740,
+        "Y": -2700,
+        "Rotation": -90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C116",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge278",
+        "Manufacturer": "JIERR(捷而瑞)",
+        "ManufacturerId": "PA50V330M10x15",
+        "Supplier": "LCSC",
+        "SupplierId": "C46550457",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "36b9c16c7d2b8efd",
+      "designator": "C119",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 5561.7655,
+      "y": -2113.596,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "36b9c16c7d2b8efd",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5561.7655,
+        "Y": -2113.596,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C119",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge298",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "a4db4d7458f6f898",
+      "designator": "C120",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 5641.7655,
+      "y": -2113.596,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "a4db4d7458f6f898",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5641.7655,
+        "Y": -2113.596,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C120",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge299",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "ce39b9fa4f718c2d",
+      "designator": "CN2",
+      "name": "={Manufacturer Part}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C7430477",
+      "manufacturer": "Megastar(兆星)",
+      "x": 4005,
+      "y": -2015,
+      "rotation": -90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "ce39b9fa4f718c2d",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 4005,
+        "Y": -2015,
+        "Rotation": -90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "CN2",
+        "Pads": {
+          "count": 8
+        },
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge280",
+        "Manufacturer": "Megastar(兆星)",
+        "ManufacturerId": "ZX-MX1.25-6PLT",
+        "Supplier": "LCSC",
+        "SupplierId": "C7430477",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "855edc2a4cf95e94",
+      "designator": "D1",
+      "name": "={Manufacturer Part}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C19077606",
+      "manufacturer": "R+O(宏嘉诚)",
+      "x": 6436.2803,
+      "y": -2326.0608,
+      "rotation": 180,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "855edc2a4cf95e94",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 6436.2803,
+        "Y": -2326.0608,
+        "Rotation": 180,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "D1",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge196",
+        "Manufacturer": "R+O(宏嘉诚)",
+        "ManufacturerId": "SMCJ28CA",
+        "Supplier": "LCSC",
+        "SupplierId": "C19077606",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "cd3df0449640874f",
+      "designator": "SWD",
+      "name": "={Manufacturer Part}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C2691448",
+      "manufacturer": "XFCN(兴飞)",
+      "x": 3965,
+      "y": -1510,
+      "rotation": 90.2417,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "cd3df0449640874f",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 3965,
+        "Y": -1510,
+        "Rotation": 90.2417,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "SWD",
+        "Pads": {
+          "count": 4
+        },
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge83",
+        "Manufacturer": "XFCN(兴飞)",
+        "ManufacturerId": "PZ254V-11-04P",
+        "Supplier": "LCSC",
+        "SupplierId": "C2691448",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "791b1fd867151750",
+      "designator": "5V",
+      "name": "={Manufacturer Part}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C541850",
+      "manufacturer": "XFCN(兴飞)",
+      "x": 5310,
+      "y": -2570,
+      "rotation": 0,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "791b1fd867151750",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5310,
+        "Y": -2570,
+        "Rotation": 0,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "5V",
+        "Pads": {
+          "count": 3
+        },
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge281",
+        "Manufacturer": "XFCN(兴飞)",
+        "ManufacturerId": "PM254V-11-03-H85",
+        "Supplier": "LCSC",
+        "SupplierId": "C541850",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "ab71b99c49c5bd5b",
+      "designator": "GND",
+      "name": "={Manufacturer Part}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C541850",
+      "manufacturer": "XFCN(兴飞)",
+      "x": 4920,
+      "y": -2580,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "ab71b99c49c5bd5b",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 4920,
+        "Y": -2580,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "GND",
+        "Pads": {
+          "count": 3
+        },
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge282",
+        "Manufacturer": "XFCN(兴飞)",
+        "ManufacturerId": "PM254V-11-03-H85",
+        "Supplier": "LCSC",
+        "SupplierId": "C541850",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "2c6c6bf95841bc47",
+      "designator": "3V3",
+      "name": "={Manufacturer Part}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C541850",
+      "manufacturer": "XFCN(兴飞)",
+      "x": 4740,
+      "y": -2320,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "2c6c6bf95841bc47",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 4740,
+        "Y": -2320,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "3V3",
+        "Pads": {
+          "count": 3
+        },
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge283",
+        "Manufacturer": "XFCN(兴飞)",
+        "ManufacturerId": "PM254V-11-03-H85",
+        "Supplier": "LCSC",
+        "SupplierId": "C541850",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "e37c6447785338ba",
+      "designator": "L1",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C237482",
+      "manufacturer": "muRata(村田)",
+      "x": 4550.2907,
+      "y": -2424.3965,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "e37c6447785338ba",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 4550.2907,
+        "Y": -2424.3965,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "L1",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge55_1",
+        "Manufacturer": "muRata(村田)",
+        "ManufacturerId": "DFE252012PD-2R2M=P2",
+        "Supplier": "LCSC",
+        "SupplierId": "C237482",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "03ad78f2ca624870",
+      "designator": "L2",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C237482",
+      "manufacturer": "muRata(村田)",
+      "x": 5810,
+      "y": -2235,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "03ad78f2ca624870",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5810,
+        "Y": -2235,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "L2",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge76",
+        "Manufacturer": "muRata(村田)",
+        "ManufacturerId": "DFE252012PD-2R2M=P2",
+        "Supplier": "LCSC",
+        "SupplierId": "C237482",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "052efdbbb68920cb",
+      "designator": "L4",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C475918",
+      "manufacturer": "cjiang(长江微电)",
+      "x": 5450,
+      "y": -2895,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "052efdbbb68920cb",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5450,
+        "Y": -2895,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "L4",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge241",
+        "Manufacturer": "cjiang(长江微电)",
+        "ManufacturerId": "FXL1040-330-M",
+        "Supplier": "LCSC",
+        "SupplierId": "C475918",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "128ce218bf08b3b3",
+      "designator": "L8",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C237482",
+      "manufacturer": "muRata(村田)",
+      "x": 5386.7655,
+      "y": -2108.596,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "128ce218bf08b3b3",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5386.7655,
+        "Y": -2108.596,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "L8",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge94_1",
+        "Manufacturer": "muRata(村田)",
+        "ManufacturerId": "DFE252012PD-2R2M=P2",
+        "Supplier": "LCSC",
+        "SupplierId": "C237482",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "8b04afa0782c25be",
+      "designator": "LED1",
+      "name": "={Manufacturer Part}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C84256",
+      "manufacturer": "国星光电",
+      "x": 4710,
+      "y": -2675,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "8b04afa0782c25be",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 4710,
+        "Y": -2675,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "LED1",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge91",
+        "Manufacturer": "国星光电",
+        "ManufacturerId": "NCD0805R1",
+        "Supplier": "LCSC",
+        "SupplierId": "C84256",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "7e718c16cfb18141",
+      "designator": "LED4",
+      "name": "={Manufacturer Part}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C84256",
+      "manufacturer": "国星光电",
+      "x": 5687.9705,
+      "y": -2526.2803,
+      "rotation": 0,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "7e718c16cfb18141",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5687.9705,
+        "Y": -2526.2803,
+        "Rotation": 0,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "LED4",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge91_1",
+        "Manufacturer": "国星光电",
+        "ManufacturerId": "LED",
+        "Supplier": "LCSC",
+        "SupplierId": "C84256",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "011673d2b0e25702",
+      "designator": "LED5",
+      "name": "",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": "",
+      "manufacturer": null,
+      "x": 6345,
+      "y": -800,
+      "rotation": 0,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "011673d2b0e25702",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 6345,
+        "Y": -800,
+        "Rotation": 0,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "LED5",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "",
+        "UniqueId": "gge206",
+        "SupplierId": "",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "a6c01281d8ae9fde",
+      "designator": "Q1",
+      "name": "={Manufacturer Part}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C5189463",
+      "manufacturer": "MCC(美微科)",
+      "x": 6755.903399999999,
+      "y": -1193.9211,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "a6c01281d8ae9fde",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 6755.903399999999,
+        "Y": -1193.9211,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "Q1",
+        "Pads": {
+          "count": 9
+        },
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge306",
+        "Manufacturer": "MCC(美微科)",
+        "ManufacturerId": "MCAC53N06Y-TP",
+        "Supplier": "LCSC",
+        "SupplierId": "C5189463",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "a8ba801a791c0ff5",
+      "designator": "Q2",
+      "name": "={Manufacturer Part}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C5189463",
+      "manufacturer": "MCC(美微科)",
+      "x": 6892.36,
+      "y": -1442.2677,
+      "rotation": -90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "a8ba801a791c0ff5",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 6892.36,
+        "Y": -1442.2677,
+        "Rotation": -90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "Q2",
+        "Pads": {
+          "count": 9
+        },
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge307",
+        "Manufacturer": "MCC(美微科)",
+        "ManufacturerId": "MCAC53N06Y-TP",
+        "Supplier": "LCSC",
+        "SupplierId": "C5189463",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "e6c2cd16216e50ef",
+      "designator": "Q3",
+      "name": "={Manufacturer Part}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C5189463",
+      "manufacturer": "MCC(美微科)",
+      "x": 6785.5505,
+      "y": -712.2172,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "e6c2cd16216e50ef",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 6785.5505,
+        "Y": -712.2172,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "Q3",
+        "Pads": {
+          "count": 9
+        },
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge308",
+        "Manufacturer": "MCC(美微科)",
+        "ManufacturerId": "MCAC53N06Y-TP",
+        "Supplier": "LCSC",
+        "SupplierId": "C5189463",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "c5cb506d3874dd52",
+      "designator": "Q4",
+      "name": "={Manufacturer Part}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C5189463",
+      "manufacturer": "MCC(美微科)",
+      "x": 6918.518,
+      "y": -961.5648999999999,
+      "rotation": -90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "c5cb506d3874dd52",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 6918.518,
+        "Y": -961.5648999999999,
+        "Rotation": -90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "Q4",
+        "Pads": {
+          "count": 9
+        },
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge309",
+        "Manufacturer": "MCC(美微科)",
+        "ManufacturerId": "MCAC53N06Y-TP",
+        "Supplier": "LCSC",
+        "SupplierId": "C5189463",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "f2abb6c8c5d9170f",
+      "designator": "Q7",
+      "name": "={Manufacturer Part}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C5189463",
+      "manufacturer": "MCC(美微科)",
+      "x": 6780.309500000001,
+      "y": -1948.3273,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "f2abb6c8c5d9170f",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 6780.309500000001,
+        "Y": -1948.3273,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "Q7",
+        "Pads": {
+          "count": 9
+        },
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge304",
+        "Manufacturer": "MCC(美微科)",
+        "ManufacturerId": "MCAC53N06Y-TP",
+        "Supplier": "LCSC",
+        "SupplierId": "C5189463",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "abad3910601b8714",
+      "designator": "Q8",
+      "name": "={Manufacturer Part}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C5189463",
+      "manufacturer": "MCC(美微科)",
+      "x": 6924.1785,
+      "y": -1728.3273,
+      "rotation": -90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "abad3910601b8714",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 6924.1785,
+        "Y": -1728.3273,
+        "Rotation": -90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "Q8",
+        "Pads": {
+          "count": 9
+        },
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge305",
+        "Manufacturer": "MCC(美微科)",
+        "ManufacturerId": "MCAC53N06Y-TP",
+        "Supplier": "LCSC",
+        "SupplierId": "C5189463",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "820f85cad83c4283",
+      "designator": "R3",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 5545,
+      "y": -1660,
+      "rotation": 180,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "820f85cad83c4283",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5545,
+        "Y": -1660,
+        "Rotation": 180,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R3",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge310",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "6c26664904fcbe49",
+      "designator": "R4",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 5545,
+      "y": -1725,
+      "rotation": 0,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "6c26664904fcbe49",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5545,
+        "Y": -1725,
+        "Rotation": 0,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R4",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge109",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "b2ea2cc1ef273520",
+      "designator": "R6",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 5450,
+      "y": -1735,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "b2ea2cc1ef273520",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5450,
+        "Y": -1735,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R6",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge311",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "cad91a40d8b09446",
+      "designator": "R7",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 5635,
+      "y": -1360,
+      "rotation": 0,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "cad91a40d8b09446",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5635,
+        "Y": -1360,
+        "Rotation": 0,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R7",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge109_1",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "80a2e5b51bce7242",
+      "designator": "R8",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "",
+      "manufacturer": "JIERR(捷而瑞)",
+      "x": 6580,
+      "y": -1425,
+      "rotation": 0,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "80a2e5b51bce7242",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 6580,
+        "Y": -1425,
+        "Rotation": 0,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R8",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge233_1",
+        "Manufacturer": "JIERR(捷而瑞)",
+        "ManufacturerId": "JER2512F3R005",
+        "Supplier": "LCSC",
+        "SupplierId": "",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "3466a7a622b2cc21",
+      "designator": "R9",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 5425,
+      "y": -1645,
+      "rotation": 180,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "3466a7a622b2cc21",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5425,
+        "Y": -1645,
+        "Rotation": 180,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R9",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge108",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "bf13ddf1121330a5",
+      "designator": "R10",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 5465,
+      "y": -1285,
+      "rotation": 180,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "bf13ddf1121330a5",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5465,
+        "Y": -1285,
+        "Rotation": 180,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R10",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge108_1",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "9bee820fbf2d4ba4",
+      "designator": "R12",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 5375,
+      "y": -1090,
+      "rotation": 0,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "9bee820fbf2d4ba4",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5375,
+        "Y": -1090,
+        "Rotation": 0,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R12",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge109_3",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "e9521953ba31881e",
+      "designator": "R15",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 5375.68,
+      "y": -1031.5099,
+      "rotation": 180,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "e9521953ba31881e",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5375.68,
+        "Y": -1031.5099,
+        "Rotation": 180,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R15",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge102_2",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "38fa82ca99a0b88f",
+      "designator": "R16",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 5585,
+      "y": -1285,
+      "rotation": 180,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "38fa82ca99a0b88f",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5585,
+        "Y": -1285,
+        "Rotation": 180,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R16",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge102",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "e256dff4f52f6ce2",
+      "designator": "R17",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 5495,
+      "y": -1180,
+      "rotation": -90.00000000000001,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "e256dff4f52f6ce2",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5495,
+        "Y": -1180,
+        "Rotation": -90.00000000000001,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R17",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge103",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "db856f10d2f01f17",
+      "designator": "R18",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "",
+      "manufacturer": "JIERR(捷而瑞)",
+      "x": 6610,
+      "y": -940,
+      "rotation": 0,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "db856f10d2f01f17",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 6610,
+        "Y": -940,
+        "Rotation": 0,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R18",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge233_2",
+        "Manufacturer": "JIERR(捷而瑞)",
+        "ManufacturerId": "JER2512F3R005",
+        "Supplier": "LCSC",
+        "SupplierId": "",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "e2a196fc703d6a77",
+      "designator": "R19",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 5230,
+      "y": -1216.5099,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "e2a196fc703d6a77",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5230,
+        "Y": -1216.5099,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R19",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge103_2",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "a2c348c1ca93921c",
+      "designator": "R20",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 5135,
+      "y": -1186.5099,
+      "rotation": 180,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "a2c348c1ca93921c",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5135,
+        "Y": -1186.5099,
+        "Rotation": 180,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R20",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge108_3",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "00111416f8a4db92",
+      "designator": "R24",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 4198.235,
+      "y": -2966.84,
+      "rotation": -90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "00111416f8a4db92",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 4198.235,
+        "Y": -2966.84,
+        "Rotation": -90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R24",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge55",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "c608e15407b2e7b2",
+      "designator": "R26",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 6503.9113,
+      "y": -513.6398,
+      "rotation": -90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "c608e15407b2e7b2",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 6503.9113,
+        "Y": -513.6398,
+        "Rotation": -90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R26",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge300",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "ddac0b87d92cacd5",
+      "designator": "R27",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 4193.235,
+      "y": -2780,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "ddac0b87d92cacd5",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 4193.235,
+        "Y": -2780,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R27",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge56",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "7d3d4927bcd08e11",
+      "designator": "R28",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 4015,
+      "y": -1175,
+      "rotation": -90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "7d3d4927bcd08e11",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 4015,
+        "Y": -1175,
+        "Rotation": -90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R28",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge116",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "767cacece5e7f69a",
+      "designator": "R29",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 4155,
+      "y": -910,
+      "rotation": 180,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "767cacece5e7f69a",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 4155,
+        "Y": -910,
+        "Rotation": 180,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R29",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge118",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "a7ee277e489f87b9",
+      "designator": "R30",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 4520,
+      "y": -560,
+      "rotation": -90.00000000000001,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "a7ee277e489f87b9",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 4520,
+        "Y": -560,
+        "Rotation": -90.00000000000001,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R30",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge121",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "e986c82a8009397a",
+      "designator": "R31",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 6100,
+      "y": -1665,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "e986c82a8009397a",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 6100,
+        "Y": -1665,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R31",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge204",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "bce1bec27dc1a547",
+      "designator": "R32",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 6337.8555,
+      "y": -1055.8786,
+      "rotation": 180,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "bce1bec27dc1a547",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 6337.8555,
+        "Y": -1055.8786,
+        "Rotation": 180,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R32",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge205",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "85408f6ad9e7a685",
+      "designator": "R33",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 6299.9985,
+      "y": -925.1155,
+      "rotation": -90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "85408f6ad9e7a685",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 6299.9985,
+        "Y": -925.1155,
+        "Rotation": -90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R33",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge207",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "5d32e37d68a2525e",
+      "designator": "R34",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 5165,
+      "y": -535,
+      "rotation": 180,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "5d32e37d68a2525e",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5165,
+        "Y": -535,
+        "Rotation": 180,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R34",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge208",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "3e25da5b7d408f88",
+      "designator": "R35",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 6595.7463,
+      "y": -544.3576,
+      "rotation": 0,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "3e25da5b7d408f88",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 6595.7463,
+        "Y": -544.3576,
+        "Rotation": 0,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R35",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge301",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "4446155db7b48ae8",
+      "designator": "R43",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "",
+      "manufacturer": "JIERR(捷而瑞)",
+      "x": 6620,
+      "y": -1700,
+      "rotation": 0,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "4446155db7b48ae8",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 6620,
+        "Y": -1700,
+        "Rotation": 0,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R43",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge233",
+        "Manufacturer": "JIERR(捷而瑞)",
+        "ManufacturerId": "JER2512F3R005",
+        "Supplier": "LCSC",
+        "SupplierId": "",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "d79a2c608a7bd81c",
+      "designator": "R44",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C2933440",
+      "manufacturer": "FOJAN(富捷)",
+      "x": 5995,
+      "y": -2695,
+      "rotation": 0,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "d79a2c608a7bd81c",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5995,
+        "Y": -2695,
+        "Rotation": 0,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R44",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge239",
+        "Manufacturer": "FOJAN(富捷)",
+        "ManufacturerId": "FRC0805F4122TS",
+        "Supplier": "LCSC",
+        "SupplierId": "C2933440",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "54730e5e26a81ecc",
+      "designator": "R45",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C22369707",
+      "manufacturer": "HKR(香港电阻)",
+      "x": 5170,
+      "y": -3090,
+      "rotation": 180,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "54730e5e26a81ecc",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5170,
+        "Y": -3090,
+        "Rotation": 180,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R45",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge242",
+        "Manufacturer": "HKR(香港电阻)",
+        "ManufacturerId": "RCA03392KFLF",
+        "Supplier": "LCSC",
+        "SupplierId": "C22369707",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "e2fb24c1ebaacc87",
+      "designator": "R49",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 5981.78,
+      "y": -2336.78,
+      "rotation": 0,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "e2fb24c1ebaacc87",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5981.78,
+        "Y": -2336.78,
+        "Rotation": 0,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R49",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge249",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "49769645e924323d",
+      "designator": "R84",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 5211.260199999999,
+      "y": -1766.9312,
+      "rotation": 0,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "49769645e924323d",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5211.260199999999,
+        "Y": -1766.9312,
+        "Rotation": 0,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R84",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge270",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "15b6b9ee3961ae68",
+      "designator": "RST",
+      "name": "={Manufacturer Part}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C720477",
+      "manufacturer": "XUNPU(讯普)",
+      "x": 4290.0575,
+      "y": -542.905,
+      "rotation": 180,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "15b6b9ee3961ae68",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 4290.0575,
+        "Y": -542.905,
+        "Rotation": 180,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "RST",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge120",
+        "Manufacturer": "XUNPU(讯普)",
+        "ManufacturerId": "TS-1088-AR02016",
+        "Supplier": "LCSC",
+        "SupplierId": "C720477",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "39b1f3ce0bbf3f69",
+      "designator": "U1",
+      "name": "={Manufacturer Part}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C114409",
+      "manufacturer": "ST(意法半导体)",
+      "x": 4695,
+      "y": -1525,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "39b1f3ce0bbf3f69",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 4695,
+        "Y": -1525,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "U1",
+        "Pads": {
+          "count": 100
+        },
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge192",
+        "Manufacturer": "ST(意法半导体)",
+        "ManufacturerId": "STM32H743VIT6",
+        "Supplier": "LCSC",
+        "SupplierId": "C114409",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "570c8deb89981097",
+      "designator": "U2",
+      "name": "={Manufacturer Part}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C12084",
+      "manufacturer": "TI(德州仪器)",
+      "x": 4158.5585,
+      "y": -1256.2655,
+      "rotation": 0,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "570c8deb89981097",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 4158.5585,
+        "Y": -1256.2655,
+        "Rotation": 0,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "U2",
+        "Pads": {
+          "count": 8
+        },
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge115",
+        "Manufacturer": "TI(德州仪器)",
+        "ManufacturerId": "SN65HVD230DR",
+        "Supplier": "LCSC",
+        "SupplierId": "C12084",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "256146d9765c6d69",
+      "designator": "U3",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "",
+      "manufacturer": "FOJAN(富捷)",
+      "x": 4665,
+      "y": -2550,
+      "rotation": 0,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "256146d9765c6d69",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 4665,
+        "Y": -2550,
+        "Rotation": 0,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "U3",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge98",
+        "Manufacturer": "FOJAN(富捷)",
+        "ManufacturerId": "FRC0805J471 TS",
+        "Supplier": "LCSC",
+        "SupplierId": "",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "a3431599b6e87d7f",
+      "designator": "U5",
+      "name": "={Manufacturer Part}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C47773",
+      "manufacturer": "RICHTEK(立锜)",
+      "x": 4595.2177,
+      "y": -2745.3615,
+      "rotation": 0,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "a3431599b6e87d7f",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 4595.2177,
+        "Y": -2745.3615,
+        "Rotation": 0,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "U5",
+        "Pads": {
+          "count": 5
+        },
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge2",
+        "Manufacturer": "RICHTEK(立锜)",
+        "ManufacturerId": "RT9013-33GB",
+        "Supplier": "LCSC",
+        "SupplierId": "C47773",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "204d309fe829eb8c",
+      "designator": "U6",
+      "name": "={Manufacturer Part}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C22435132",
+      "manufacturer": "TECH PUBLIC(台舟)",
+      "x": 5045,
+      "y": -2300,
+      "rotation": 180,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "204d309fe829eb8c",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5045,
+        "Y": -2300,
+        "Rotation": 180,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "U6",
+        "Pads": {
+          "count": 5
+        },
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge178",
+        "Manufacturer": "TECH PUBLIC(台舟)",
+        "ManufacturerId": "TPLP2981-30DBVR",
+        "Supplier": "LCSC",
+        "SupplierId": "C22435132",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "45fea6537716b30b",
+      "designator": "U7",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "",
+      "manufacturer": "FOJAN(富捷)",
+      "x": 5810.751,
+      "y": -2406.7418,
+      "rotation": -90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "45fea6537716b30b",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5810.751,
+        "Y": -2406.7418,
+        "Rotation": -90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "U7",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge98_1",
+        "Manufacturer": "FOJAN(富捷)",
+        "ManufacturerId": "FRC0805J471 TS",
+        "Supplier": "LCSC",
+        "SupplierId": "",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "320c00c2f8a987fe",
+      "designator": "U8",
+      "name": "={Manufacturer Part}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C2977777",
+      "manufacturer": "WCH(南京沁恒)",
+      "x": 4275,
+      "y": -2385,
+      "rotation": 0,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "320c00c2f8a987fe",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 4275,
+        "Y": -2385,
+        "Rotation": 0,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "U8",
+        "Pads": {
+          "count": 8
+        },
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge54",
+        "Manufacturer": "WCH(南京沁恒)",
+        "ManufacturerId": "CH340N",
+        "Supplier": "LCSC",
+        "SupplierId": "C2977777",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "c6adaa483159dcb6",
+      "designator": "U9",
+      "name": "={Manufacturer Part}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C9900097986",
+      "manufacturer": "",
+      "x": 4025,
+      "y": -770,
+      "rotation": -90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "c6adaa483159dcb6",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 4025,
+        "Y": -770,
+        "Rotation": -90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "U9",
+        "Pads": {
+          "count": 5
+        },
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge119",
+        "Manufacturer": "",
+        "ManufacturerId": "MX1.25-LT-3",
+        "Supplier": "LCSC",
+        "SupplierId": "C9900097986",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "cca12b438a75404b",
+      "designator": "U10",
+      "name": "={Manufacturer Part}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C2861195",
+      "manufacturer": "TI(德州仪器)",
+      "x": 6210.2865,
+      "y": -1245.8585,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "cca12b438a75404b",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 6210.2865,
+        "Y": -1245.8585,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "U10",
+        "Pads": {
+          "count": 33
+        },
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge195",
+        "Manufacturer": "TI(德州仪器)",
+        "ManufacturerId": "DRV8350SRTVR",
+        "Supplier": "LCSC",
+        "SupplierId": "C2861195",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "8d03950738461707",
+      "designator": "U11",
+      "name": "={Manufacturer Part}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C477928",
+      "manufacturer": "TI(德州仪器)",
+      "x": 5915,
+      "y": -2845,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "8d03950738461707",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5915,
+        "Y": -2845,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "U11",
+        "Pads": {
+          "count": 9
+        },
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge237",
+        "Manufacturer": "TI(德州仪器)",
+        "ManufacturerId": "LM5164DDAR",
+        "Supplier": "LCSC",
+        "SupplierId": "C477928",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "4c1de2e452c86438",
+      "designator": "U14",
+      "name": "={Manufacturer Part}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C398355",
+      "manufacturer": "TI(德州仪器)",
+      "x": 5480.407800000001,
+      "y": -1465.6314,
+      "rotation": 0,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "4c1de2e452c86438",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5480.407800000001,
+        "Y": -1465.6314,
+        "Rotation": 0,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "U14",
+        "Pads": {
+          "count": 8
+        },
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge82",
+        "Manufacturer": "TI(德州仪器)",
+        "ManufacturerId": "TLV9062IDR",
+        "Supplier": "LCSC",
+        "SupplierId": "C398355",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "ede1be6ab27404ef",
+      "designator": "U20",
+      "name": "={Manufacturer Part}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C440747",
+      "manufacturer": "TI(德州仪器)",
+      "x": 5221.6217,
+      "y": -1876.2945,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "ede1be6ab27404ef",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5221.6217,
+        "Y": -1876.2945,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "U20",
+        "Pads": {
+          "count": 5
+        },
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge31_1",
+        "Manufacturer": "TI(德州仪器)",
+        "ManufacturerId": "REF2033AIDDCR",
+        "Supplier": "LCSC",
+        "SupplierId": "C440747",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "e02c990401e98355",
+      "designator": "U21",
+      "name": "={Manufacturer Part}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C3029397",
+      "manufacturer": "XUNPU(讯普)",
+      "x": 3970,
+      "y": -2445,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "e02c990401e98355",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 3970,
+        "Y": -2445,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "U21",
+        "Pads": {
+          "count": 4
+        },
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge279",
+        "Manufacturer": "XUNPU(讯普)",
+        "ManufacturerId": "WAFER-MX1.25-4PZZ",
+        "Supplier": "LCSC",
+        "SupplierId": "C3029397",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "da65c291636628bb",
+      "designator": "USB1",
+      "name": "={Manufacturer Part}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C2765186",
+      "manufacturer": "SHOU HAN(首韩)",
+      "x": 4043.235,
+      "y": -2865,
+      "rotation": -90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "da65c291636628bb",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 4043.235,
+        "Y": -2865,
+        "Rotation": -90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "USB1",
+        "Pads": {
+          "count": 16
+        },
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge42",
+        "Manufacturer": "SHOU HAN(首韩)",
+        "ManufacturerId": "TYPE-C 16PIN 2MD(073)",
+        "Supplier": "LCSC",
+        "SupplierId": "C2765186",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "b48e37cf4ccc7257",
+      "designator": "X1",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C13740",
+      "manufacturer": "YXC(扬兴晶振)",
+      "x": 5175,
+      "y": -1530,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "b48e37cf4ccc7257",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5175,
+        "Y": -1530,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "X1",
+        "Pads": {
+          "count": 4
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge3",
+        "Manufacturer": "YXC(扬兴晶振)",
+        "ManufacturerId": "X322525MSB4SI",
+        "Supplier": "LCSC",
+        "SupplierId": "C13740",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "ca3c6b48fdd4b457",
+      "designator": "R5",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 4935,
+      "y": -1090,
+      "rotation": 180,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "ca3c6b48fdd4b457",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 4935,
+        "Y": -1090,
+        "Rotation": 180,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R5",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge319",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "7a91a89e53073204",
+      "designator": "R11",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 4540,
+      "y": -1065,
+      "rotation": 0,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "7a91a89e53073204",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 4540,
+        "Y": -1065,
+        "Rotation": 0,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R11",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge320",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "7b331b7c597b40d4",
+      "designator": "R14",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C149504",
+      "manufacturer": "UNI-ROYAL(厚声)",
+      "x": 5705,
+      "y": -2730,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "7b331b7c597b40d4",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5705,
+        "Y": -2730,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R14",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge322",
+        "Manufacturer": "UNI-ROYAL(厚声)",
+        "ManufacturerId": "0805W8F1003T5E",
+        "Supplier": "LCSC",
+        "SupplierId": "C149504",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "0cf08f2cc8e01fad",
+      "designator": "R21",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C2930156",
+      "manufacturer": "FOJAN(富捷)",
+      "x": 5835,
+      "y": -2690,
+      "rotation": 180,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "0cf08f2cc8e01fad",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5835,
+        "Y": -2690,
+        "Rotation": 180,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R21",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge321",
+        "Manufacturer": "FOJAN(富捷)",
+        "ManufacturerId": "FRC0805F3162TS",
+        "Supplier": "LCSC",
+        "SupplierId": "C2930156",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "06547fde389953f1",
+      "designator": "U4",
+      "name": "={Manufacturer Part}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C398355",
+      "manufacturer": "TI(德州仪器)",
+      "x": 5205,
+      "y": -985,
+      "rotation": 0,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "06547fde389953f1",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5205,
+        "Y": -985,
+        "Rotation": 0,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "U4",
+        "Pads": {
+          "count": 8
+        },
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge82_1",
+        "Manufacturer": "TI(德州仪器)",
+        "ManufacturerId": "TLV9062IDR",
+        "Supplier": "LCSC",
+        "SupplierId": "C398355",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "cd90f84761ba2400",
+      "designator": "C21",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C313102",
+      "manufacturer": "FH(风华)",
+      "x": 6060,
+      "y": -1370,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "cd90f84761ba2400",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 6060,
+        "Y": -1370,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C21",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge325",
+        "Manufacturer": "FH(风华)",
+        "ManufacturerId": "0603B473J500NT",
+        "Supplier": "LCSC",
+        "SupplierId": "C313102",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "12576b5722608ebc",
+      "designator": "R13",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 4850,
+      "y": -1940,
+      "rotation": 0,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "12576b5722608ebc",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 4850,
+        "Y": -1940,
+        "Rotation": 0,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R13",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge324",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "227d226a7d776983",
+      "designator": "C24",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C111768",
+      "manufacturer": "FH(风华)",
+      "x": 6195,
+      "y": -1520,
+      "rotation": -90.00000000000001,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "227d226a7d776983",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 6195,
+        "Y": -1520,
+        "Rotation": -90.00000000000001,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C24",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge328",
+        "Manufacturer": "FH(风华)",
+        "ManufacturerId": "0805B105K500AT",
+        "Supplier": "LCSC",
+        "SupplierId": "C111768",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "8c574275523a7cc0",
+      "designator": "C25",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C107004",
+      "manufacturer": "YAGEO(国巨)",
+      "x": 5080,
+      "y": -1455,
+      "rotation": -90.00000000000001,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "8c574275523a7cc0",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5080,
+        "Y": -1455,
+        "Rotation": -90.00000000000001,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C25",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge329",
+        "Manufacturer": "YAGEO(国巨)",
+        "ManufacturerId": "CC0402JRNPO9BN300",
+        "Supplier": "LCSC",
+        "SupplierId": "C107004",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "05c376c7fd3cf806",
+      "designator": "C26",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C107004",
+      "manufacturer": "YAGEO(国巨)",
+      "x": 5080,
+      "y": -1565,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "05c376c7fd3cf806",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5080,
+        "Y": -1565,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C26",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge330",
+        "Manufacturer": "YAGEO(国巨)",
+        "ManufacturerId": "CC0402JRNPO9BN300",
+        "Supplier": "LCSC",
+        "SupplierId": "C107004",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "28fa89c9cf088e1a",
+      "designator": "R48",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 6147.308000000001,
+      "y": -2217.308,
+      "rotation": -90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "28fa89c9cf088e1a",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 6147.308000000001,
+        "Y": -2217.308,
+        "Rotation": -90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "R48",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge248",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "ac0828fa7f236251",
+      "designator": "CN1",
+      "name": "={Manufacturer Part}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C431092",
+      "manufacturer": "AMASS(艾迈斯)",
+      "x": 7235,
+      "y": -2700,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "ac0828fa7f236251",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 7235,
+        "Y": -2700,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "CN1",
+        "Pads": {
+          "count": 4
+        },
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge331",
+        "Manufacturer": "AMASS(艾迈斯)",
+        "ManufacturerId": "XT30PW-M",
+        "Supplier": "LCSC",
+        "SupplierId": "C431092",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "f6c5ed7e00d2feb9",
+      "designator": "U12",
+      "name": "={Manufacturer Part}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C19268036",
+      "manufacturer": "AMASS(艾迈斯)",
+      "x": 7350,
+      "y": -1460,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "f6c5ed7e00d2feb9",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 7350,
+        "Y": -1460,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "U12",
+        "Pads": {
+          "count": 5
+        },
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge332",
+        "Manufacturer": "AMASS(艾迈斯)",
+        "ManufacturerId": "MR30PW-M30.G.Y",
+        "Supplier": "LCSC",
+        "SupplierId": "C19268036",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "c6c7dcfb9c0fe5a8",
+      "designator": "C3",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C14663",
+      "manufacturer": "YAGEO(国巨)",
+      "x": 4530,
+      "y": -2630,
+      "rotation": 180,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "c6c7dcfb9c0fe5a8",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 4530,
+        "Y": -2630,
+        "Rotation": 180,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C3",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge45",
+        "Manufacturer": "YAGEO(国巨)",
+        "ManufacturerId": "CC0603KRX7R9BB104",
+        "Supplier": "LCSC",
+        "SupplierId": "C14663",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "0d0fed93886aa379",
+      "designator": "C7",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C14663",
+      "manufacturer": "YAGEO(国巨)",
+      "x": 4540,
+      "y": -990,
+      "rotation": 0,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "0d0fed93886aa379",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 4540,
+        "Y": -990,
+        "Rotation": 0,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C7",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge302",
+        "Manufacturer": "YAGEO(国巨)",
+        "ManufacturerId": "CC0603KRX7R9BB104",
+        "Supplier": "LCSC",
+        "SupplierId": "C14663",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "24970043055bc6c4",
+      "designator": "C9",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C14663",
+      "manufacturer": "YAGEO(国巨)",
+      "x": 6434.692299999999,
+      "y": -511.5476,
+      "rotation": -90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "24970043055bc6c4",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 6434.692299999999,
+        "Y": -511.5476,
+        "Rotation": -90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C9",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge303",
+        "Manufacturer": "YAGEO(国巨)",
+        "ManufacturerId": "CC0603KRX7R9BB104",
+        "Supplier": "LCSC",
+        "SupplierId": "C14663",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "2896d403427b6f9f",
+      "designator": "C13",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C14663",
+      "manufacturer": "YAGEO(国巨)",
+      "x": 5370.4835,
+      "y": -2315.6703,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "2896d403427b6f9f",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5370.4835,
+        "Y": -2315.6703,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C13",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge45_4",
+        "Manufacturer": "YAGEO(国巨)",
+        "ManufacturerId": "CC0603KRX7R9BB104",
+        "Supplier": "LCSC",
+        "SupplierId": "C14663",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "3f096812d3dc6af2",
+      "designator": "C22",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C15849",
+      "manufacturer": "SAMSUNG(三星)",
+      "x": 5975,
+      "y": -1210,
+      "rotation": 180,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "3f096812d3dc6af2",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5975,
+        "Y": -1210,
+        "Rotation": 180,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C22",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge335",
+        "Manufacturer": "SAMSUNG(三星)",
+        "ManufacturerId": "CL10A105KB8NNNC",
+        "Supplier": "LCSC",
+        "SupplierId": "C15849",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "cc8c69073b978095",
+      "designator": "C23",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C6119867",
+      "manufacturer": "HRE(芯声)",
+      "x": 6090,
+      "y": -1545,
+      "rotation": 180,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "cc8c69073b978095",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 6090,
+        "Y": -1545,
+        "Rotation": 180,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C23",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge334",
+        "Manufacturer": "HRE(芯声)",
+        "ManufacturerId": "CGA0603X7R104K500JT",
+        "Supplier": "LCSC",
+        "SupplierId": "C6119867",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "a5aadd95be503a03",
+      "designator": "C27",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C22367827",
+      "manufacturer": "Chinocera(华瓷)",
+      "x": 6090,
+      "y": -1465,
+      "rotation": 180,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "a5aadd95be503a03",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 6090,
+        "Y": -1465,
+        "Rotation": 180,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C27",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge333",
+        "Manufacturer": "Chinocera(华瓷)",
+        "ManufacturerId": "HGC0603R5106M350NTHJ",
+        "Supplier": "LCSC",
+        "SupplierId": "C22367827",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "c09cd08386baafa4",
+      "designator": "C28",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C15849",
+      "manufacturer": "SAMSUNG(三星)",
+      "x": 6000,
+      "y": -1280,
+      "rotation": 180,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "c09cd08386baafa4",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 6000,
+        "Y": -1280,
+        "Rotation": 180,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C28",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge336",
+        "Manufacturer": "SAMSUNG(三星)",
+        "ManufacturerId": "CL10A105KB8NNNC",
+        "Supplier": "LCSC",
+        "SupplierId": "C15849",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "b83bf48fab364df7",
+      "designator": "C72",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C14663",
+      "manufacturer": "YAGEO(国巨)",
+      "x": 4158.5585,
+      "y": -1446.2655,
+      "rotation": 0,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "b83bf48fab364df7",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 4158.5585,
+        "Y": -1446.2655,
+        "Rotation": 0,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C72",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge117",
+        "Manufacturer": "YAGEO(国巨)",
+        "ManufacturerId": "CC0603KRX7R9BB104",
+        "Supplier": "LCSC",
+        "SupplierId": "C14663",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "d194bb121aefd1e7",
+      "designator": "C73",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C14663",
+      "manufacturer": "YAGEO(国巨)",
+      "x": 4455,
+      "y": -515,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "d194bb121aefd1e7",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 4455,
+        "Y": -515,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C73",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge122",
+        "Manufacturer": "YAGEO(国巨)",
+        "ManufacturerId": "CC0603KRX7R9BB104",
+        "Supplier": "LCSC",
+        "SupplierId": "C14663",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "1c5f7b658b9f7ac4",
+      "designator": "C108",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C14663",
+      "manufacturer": "YAGEO(国巨)",
+      "x": 5106.2602,
+      "y": -1811.9312,
+      "rotation": -90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "1c5f7b658b9f7ac4",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5106.2602,
+        "Y": -1811.9312,
+        "Rotation": -90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C108",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge269",
+        "Manufacturer": "YAGEO(国巨)",
+        "ManufacturerId": "CC0603KRX7R9BB104",
+        "Supplier": "LCSC",
+        "SupplierId": "C14663",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "49fc82f3c97464eb",
+      "designator": "C112",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C14663",
+      "manufacturer": "YAGEO(国巨)",
+      "x": 5426.260199999999,
+      "y": -1896.9312,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "49fc82f3c97464eb",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5426.260199999999,
+        "Y": -1896.9312,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C112",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge271",
+        "Manufacturer": "YAGEO(国巨)",
+        "ManufacturerId": "CC0603KRX7R9BB104",
+        "Supplier": "LCSC",
+        "SupplierId": "C14663",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "356042134fa04578",
+      "designator": "C113",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C14663",
+      "manufacturer": "YAGEO(国巨)",
+      "x": 5351.260199999999,
+      "y": -1896.9312,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "356042134fa04578",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5351.260199999999,
+        "Y": -1896.9312,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C113",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge272",
+        "Manufacturer": "YAGEO(国巨)",
+        "ManufacturerId": "CC0603KRX7R9BB104",
+        "Supplier": "LCSC",
+        "SupplierId": "C14663",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "86e384c6a7144ff8",
+      "designator": "C114",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C14663",
+      "manufacturer": "YAGEO(国巨)",
+      "x": 4420,
+      "y": -2250,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "86e384c6a7144ff8",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 4420,
+        "Y": -2250,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C114",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge276",
+        "Manufacturer": "YAGEO(国巨)",
+        "ManufacturerId": "CC0603KRX7R9BB104",
+        "Supplier": "LCSC",
+        "SupplierId": "C14663",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "6fe73d3b93ef3604",
+      "designator": "C4",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C100042",
+      "manufacturer": "YAGEO(国巨)",
+      "x": 4530,
+      "y": -2555,
+      "rotation": 180,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "6fe73d3b93ef3604",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 4530,
+        "Y": -2555,
+        "Rotation": 180,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C4",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge46",
+        "Manufacturer": "YAGEO(国巨)",
+        "ManufacturerId": "CC0603KRX7R9BB103",
+        "Supplier": "LCSC",
+        "SupplierId": "C100042",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "587f3351e3beda5c",
+      "designator": "C14",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C100042",
+      "manufacturer": "YAGEO(国巨)",
+      "x": 5450.4835,
+      "y": -2315.6703,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "587f3351e3beda5c",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 5450.4835,
+        "Y": -2315.6703,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C14",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge46_1",
+        "Manufacturer": "YAGEO(国巨)",
+        "ManufacturerId": "CC0603KRX7R9BB103",
+        "Supplier": "LCSC",
+        "SupplierId": "C100042",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "bc3b00213caf41e0",
+      "designator": "C16",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C377773",
+      "manufacturer": "SAMSUNG(三星)",
+      "x": 4265,
+      "y": -1790,
+      "rotation": 90,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "bc3b00213caf41e0",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 4265,
+        "Y": -1790,
+        "Rotation": 90,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C16",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge323",
+        "Manufacturer": "SAMSUNG(三星)",
+        "ManufacturerId": "CL21A225KBQNNNE",
+        "Supplier": "LCSC",
+        "SupplierId": "C377773",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    },
+    {
+      "primitiveId": "4acbc9843b536b8b",
+      "designator": "C89",
+      "name": "={Value}",
+      "footprint": {
+        "object": true
+      },
+      "supplier": "LCSC",
+      "supplierId": "C51205",
+      "manufacturer": "SAMSUNG(三星)",
+      "x": 6250,
+      "y": -2950,
+      "rotation": 180,
+      "layer": 1,
+      "fields": {
+        "PrimitiveType": "Component",
+        "PrimitiveId": "4acbc9843b536b8b",
+        "Component": {
+          "object": true
+        },
+        "Footprint": {
+          "object": true
+        },
+        "Layer": 1,
+        "X": 6250,
+        "Y": -2950,
+        "Rotation": 180,
+        "PrimitiveLock": false,
+        "AddIntoBom": true,
+        "Model3D": {
+          "object": true
+        },
+        "Designator": "C89",
+        "Pads": {
+          "count": 2
+        },
+        "Name": "={Value}",
+        "UniqueId": "gge238",
+        "Manufacturer": "SAMSUNG(三星)",
+        "ManufacturerId": "CL31B475KBHNNNE",
+        "Supplier": "LCSC",
+        "SupplierId": "C51205",
+        "OtherProperty": {
+          "object": true
+        }
+      }
+    }
+  ],
+  "primitives": [],
+  "componentCount": 122
+}

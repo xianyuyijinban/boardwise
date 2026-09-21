@@ -152,6 +152,21 @@ test('document.current marks a tab-tree-derived type as a heuristic', async () =
   );
 });
 
+test('a getState-shaped project box keeps its fields and gains doc.list\'s spelling', async () => {
+  // The *other* project shape: this fake answers through `getState_*` on the
+  // prototype, the way `document.current`'s pcb and schematic-page boxes do on
+  // the real build. Adding the identity `doc.list` reports must not cost a
+  // field a caller was already reading (measured 2026-09-21: on the real host
+  // it was the other way round — plain properties, an empty box).
+  const { eda } = fakeEda();
+  const data = await buildHandlers(eda)['document.current']({});
+
+  assert.equal(data.project.FriendlyName, 'CH340G');
+  assert.equal(data.project.Uuid, 'p1');
+  assert.equal(data.project.projectUuid, 'p1');
+  assert.equal(data.project.friendlyName, 'CH340G');
+});
+
 test('pcb.readback summarises components using the getState contract', async () => {
   const { eda } = fakeEda();
   const data = await buildHandlers(eda)['pcb.readback']({});

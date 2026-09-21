@@ -1,0 +1,20 @@
+boardwise review-mark: outputs/013_bishe_findings.json —— 15 个位号（9 已打标，6 未打标，0 条发现没有位号）
+  [1] WARN  param-value-mpn-match  C1       marker#1 @ (114, 655)  C1: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+  [2] WARN  param-value-mpn-match  C115     marker#2 @ (1420, 1084)  C115: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+  [3] WARN  param-value-mpn-match  C116     marker#3 @ (1398, 1084)  C116: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+  [4] WARN  param-value-mpn-match  R8       未打标：no component with this designator on the focused page (92 designator(s) in 171 component(s))  R8: board value 0.005 Ω contradicts its MPN ('JER2512F3R005' decodes to 0 Ω) -- BOM and schematic disagree
+  [5] WARN  param-value-mpn-match  R18      未打标：no component with this designator on the focused page (92 designator(s) in 171 component(s))  R18: board value 0.005 Ω contradicts its MPN ('JER2512F3R005' decodes to 0 Ω) -- BOM and schematic disagree
+  [6] WARN  param-value-mpn-match  R43      未打标：no component with this designator on the focused page (92 designator(s) in 171 component(s))  R43: board value 0.005 Ω contradicts its MPN ('JER2512F3R005' decodes to 0 Ω) -- BOM and schematic disagree
+  [7] WARN  param-value-mpn-match  C4       marker#4 @ (1067, 300)  C4: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+  [8] WARN  param-value-mpn-match  C5       marker#5 @ (852, 280)  C5: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+  [9] WARN  param-value-mpn-match  C6       未打标：no component with this designator on the focused page (92 designator(s) in 171 component(s))  C6: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+  [10] WARN  param-value-mpn-match  C7       marker#6 @ (92, 687)  C7: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+  [11] WARN  param-value-mpn-match  C8       marker#7 @ (1247, 245)  C8: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+  [12] WARN  param-value-mpn-match  C9       marker#8 @ (106, 781)  C9: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+  [13] WARN  param-value-mpn-match  C10      未打标：no component with this designator on the focused page (92 designator(s) in 171 component(s))  C10: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+  [14] WARN  param-value-mpn-match  C11      marker#9 @ (436, 140)  C11: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+  [15] WARN  param-value-mpn-match  C12      未打标：no component with this designator on the focused page (92 designator(s) in 171 component(s))  C12: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+  画布标记：9/9（marker#k = 上面第 k 个 marker 编号）
+  注：79 primitive(s) on the page carry no designator or no numeric position and cannot be pointed at
+  注：6 finding(s) could not be pointed at on this page and were not drawn
+boardwise review-mark: 部分到位（见上）；清除用 `boardwise review-mark clear`

@@ -1,0 +1,21 @@
+{
+  "components": [],
+  "wires": [],
+  "pins": [],
+  "netlabels": [],
+  "bboxes": {},
+  "meta": {
+    "available": {
+      "components": false,
+      "wires": true,
+      "pins": true,
+      "netlabels": false,
+      "bboxes": false
+    },
+    "sheets": [],
+    "reasons": {
+      "components": "call sch_PrimitiveComponent.getAll(): 获取所有器件失败",
+      "netlabels": "read sch_PrimitiveNetLabel: absent"
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "error": {
+    "code": "NOT_FOUND",
+    "message": "doc.focus: no open tab matches 0d961d9ab27445e0fa51639f1e1648a8ad51aa2549d4af264494a3b9859caaec ¡ª open it first with doc.open",
+    "detail": {
+      "wanted": "0d961d9ab27445e0fa51639f1e1648a8ad51aa2549d4af264494a3b9859caaec",
+      "openTabs": [
+        "tab_page1"
+      ]
+    }
+  }
+}

@@ -1,0 +1,90 @@
+{
+  "documents": [
+    {
+      "uuid": "4c8cf4a189c78533",
+      "name": "schematic1",
+      "type": "schematic",
+      "active": false,
+      "parentName": "Board1"
+    },
+    {
+      "uuid": "f805e257ac7383dc",
+      "name": "P3",
+      "type": "page",
+      "active": false,
+      "parentUuid": "4c8cf4a189c78533",
+      "parentName": "schematic1"
+    },
+    {
+      "uuid": "2b79b73f1e0e522f",
+      "name": "P2",
+      "type": "page",
+      "active": false,
+      "parentUuid": "4c8cf4a189c78533",
+      "parentName": "schematic1"
+    },
+    {
+      "uuid": "c7c82860f3597fcc",
+      "name": "P1",
+      "type": "page",
+      "active": false,
+      "parentUuid": "4c8cf4a189c78533",
+      "parentName": "schematic1"
+    },
+    {
+      "uuid": "5ce4c9f372e0f867",
+      "name": "PCB1",
+      "type": "pcb",
+      "active": true,
+      "parentName": "Board1"
+    }
+  ],
+  "projects": [
+    {
+      "projectUuid": "0d961d9ab27445e0fa51639f1e1648a8ad51aa2549d4af264494a3b9859caaec",
+      "name": "/test2",
+      "friendlyName": "test2",
+      "focused": true,
+      "opened": "yes",
+      "schematics": [
+        {
+          "uuid": "4c8cf4a189c78533",
+          "name": "schematic1",
+          "type": "schematic"
+        },
+        {
+          "uuid": "f805e257ac7383dc",
+          "name": "P3",
+          "type": "page"
+        },
+        {
+          "uuid": "2b79b73f1e0e522f",
+          "name": "P2",
+          "type": "page"
+        },
+        {
+          "uuid": "c7c82860f3597fcc",
+          "name": "P1",
+          "type": "page"
+        }
+      ],
+      "pcbs": [
+        {
+          "uuid": "5ce4c9f372e0f867",
+          "name": "PCB1",
+          "type": "pcb"
+        }
+      ],
+      "documents": "full"
+    }
+  ],
+  "active": {
+    "uuid": "5ce4c9f372e0f867",
+    "type": "pcb",
+    "tabId": "5ce4c9f372e0f867@0d961d9ab27445e0fa51639f1e1648a8ad51aa2549d4af264494a3b9859caaec",
+    "source": "dmt_SelectControl.getCurrentDocumentInfo"
+  },
+  "schematicPages": 3,
+  "pcbs": 1,
+  "count": 5
+}

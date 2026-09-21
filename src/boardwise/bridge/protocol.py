@@ -205,7 +205,8 @@ ACTIONS: tuple[Action, ...] = (
         returns=(
             "checks mode: {version, topLevel, checks: {NAME: {present, kind, "
             "checked, missing, status: {member: 'function'|'object'|"
-            "'undefined'|'threw: …'|'namespace-absent'}, notes?}}}; "
+            "'undefined'|'threw: …'|'namespace-absent'}, arity: {member: "
+            "fn.length for the members that are functions}, notes?}}}; "
             "enumerate mode: {version, topLevel, namespaces: {NAME: {present, "
             "functions, data, errors?}}}"
         ),
@@ -582,9 +583,19 @@ ACTIONS: tuple[Action, ...] = (
             "`boardwise bridge export-fab` is that caller. Vendor presets: `generic` "
             "only, until a 捷配 sample BOM arrives. A file the host refuses, returns "
             "empty or hangs on is reported per file in `failed` (`partial: true`) "
-            "while the others still come back."
+            "while the others still come back. Measured on 3.2.186 (2026-09-21): the "
+            "15 BOM column names come back verbatim — the two counting columns reach "
+            "the host as `statistics` and the other 13 as `property`, two disjoint "
+            "lists whose union it checks per column, because naming a column in both "
+            "is what doubled the header (17 columns for a 15-column preset) and "
+            "dropping `statistics` makes it return no BOM file at all; the BOM's "
+            "`filterOptions` are "
+            "*exclusion* rules — `includeValue` is the value that leaves a row out, "
+            "not the one it keeps — and the host names the BOM file itself "
+            "(`fileName + '.' + fileType`) while gerber/P&P echo the name they are "
+            "handed."
         ),
-        params=("pcbUuid", "outDir", "vendor", "gerber", "bomTemplate", "timeoutMs"),
+        params=("pcbUuid", "outDir", "vendor", "gerber", "bom", "bomTemplate", "timeoutMs"),
         returns=(
             "{vendor, project, pcb, outDir, generatedAt, encoding: 'base64', "
             "files: [{role, name, mime, bytes, data}], manifest, failed, partial, note}"
@@ -595,7 +606,11 @@ ACTIONS: tuple[Action, ...] = (
             "the board in front); outDir: the directory the CALLER writes into "
             "(required; recorded in the manifest); vendor: 'generic' (default); gerber: "
             "override object limited to fileName/colorSilkscreen/unit/digitalFormat/"
-            "other/layers/objects; bomTemplate: a saved BOM template name; timeoutMs: "
+            "other/layers/objects; bom: override object limited to filterOptions — "
+            "`[{property, includeValue}]` where the rule leaves a row **out** when the "
+            "part's property matches `includeValue` (so the preset sends 'Add into "
+            "BOM': 'no'), and `null` means 'send none — keep the host's own default "
+            "rules'; bomTemplate: a saved BOM template name; timeoutMs: "
             "per-file deadline (200..600000, default 60000)"
         ),
         risk="read",
@@ -604,29 +619,44 @@ ACTIONS: tuple[Action, ...] = (
         name="lib.recommend",
         summary=(
             "READ-ONLY part recommendations for a placed part or a bare query "
-            "(012 §七). The search descends: exact identifiers (partNumber / "
-            "partCode) → searchByProperties(value + footprintName) → search(keyword); "
+            "(012 §七). The search descends: the LCSC code as `supplierId` (the one "
+            "properties key 3.2.186 indexes, measured 2026-09-21) → "
+            "searchByProperties(value + footprintName) → search(keyword); "
             "each rung reports its own hit count (5 per page, 3 pages max) and the "
             "rungs a hit made unnecessary are reported as not called. JLCPCB Basic "
             "parts sort first. No stock and no price — the type package's search item "
             "carries neither — so the answer labels them `stock/price: 以商城实时为准`. "
-            "Nothing is placed: placement stays the oracle's decision."
+            "`probes` (≤10) replaces the descent with raw `searchByProperties` calls — a "
+            "read-only channel for measuring that method on a live host, see "
+            "`params_schema`. Nothing is placed: placement stays the oracle's decision."
         ),
-        params=("query", "pageUuid", "ref", "topN", "allLayers", "timeoutMs"),
+        params=("query", "pageUuid", "ref", "topN", "allLayers", "timeoutMs", "probes"),
         returns=(
             "{source, query, ref, component, target, layers: [{layer, api, called, args, "
             "hitCount, pagesFetched, reason?, error?}], returned, shown, candidates: "
             "[{name, lcsc, mpn, footprintName, partClass, datasheet, deviceUuid, "
-            "libraryUuid, symbolUuid, footprintUuid, layer}], 'stock/price', readOnly, placed}"
+            "libraryUuid, symbolUuid, footprintUuid, layer}], 'stock/price', readOnly, placed}; "
+            "with probes: {source: 'probes', probes: [{args, called, hitCount, pageSize, "
+            "firstKeys, error?}], probesOnly: true, layers: [], candidates: [], returned: 0, "
+            "shown: 0, …}"
         ),
         params_schema=(
             "query: free text (an MPN, a value, or a C-number) — or pageUuid+ref for a "
             "part already on the page (the ref path is focus-guarded: the designator is "
-            "resolved in the focused page's component list); topN: how many candidates "
+            "resolved in the focused page's component list); a bare MPN reaches the "
+            "keyword rung only: the exact rung is the LCSC code under `supplierId`, "
+            "because that is the one properties key 3.2.186 indexes (measured "
+            "2026-09-21); topN: how many candidates "
             "(1..20, default 5); allLayers: run every rung instead of stopping at the "
             "first that hits; timeoutMs: per-page deadline for one library search "
             "(200..120000, default 20000) — a hung page is reported as that rung's "
-            "error and the descent continues"
+            "error and the descent continues; probes: at most 10 raw "
+            "{properties, libraryUuid?, classification?, symbolType?, itemsOfPage?, page?} "
+            "entries — each is one `lib_Device.searchByProperties` call sent with exactly "
+            "the arguments given (an argument left out is not sent, so `arguments.length` "
+            "is the caller's), the ladder is not walked at all, and each entry is reported "
+            "as {args, called, hitCount, pageSize, firstKeys, error?} with "
+            "`probesOnly: true` in the answer"
         ),
         risk="read",
     ),
@@ -658,7 +688,12 @@ ACTIONS: tuple[Action, ...] = (
             "in the caller's own finding order (position k is the k-th entry, which is "
             "what `focus` counts) — a ref that is not on the page is reported in "
             "`unresolved` while the rest are still marked; clear: true calls "
-            "removeIndicatorMarkers instead (and ignores marks); focus: 1-based "
+            "removeIndicatorMarkers instead (and ignores marks) — it has **no page "
+            "guard** (it clears whatever canvas is in front, which may belong to "
+            "another project), and with no active document it answers cleared: true "
+            "with the note 'no active canvas — nothing to remove' instead of "
+            "reporting the host's refusal of a call that had nothing to act on; "
+            "focus: 1-based "
             "position to zoom to, via zoomToRegion; color: '#RRGGBB' or "
             "{r,g,b,alpha}; zoom: zoom the canvas to all markers (ignored when focus "
             "is given); markers: false returns the jump list (ref + coordinates) "

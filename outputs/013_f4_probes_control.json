@@ -1,0 +1,97 @@
+{
+  "source": "probes",
+  "query": null,
+  "pageUuid": null,
+  "ref": null,
+  "component": null,
+  "target": {
+    "value": "",
+    "partNumber": "",
+    "partCode": "",
+    "footprintName": "",
+    "supplierFootprint": "",
+    "name": ""
+  },
+  "topN": 5,
+  "layers": [],
+  "probes": [
+    {
+      "args": [
+        {
+          "totallyUnknownKey": "zzz"
+        }
+      ],
+      "called": true,
+      "hitCount": 10,
+      "pageSize": null,
+      "firstKeys": [
+        "uuid",
+        "libraryUuid",
+        "ordinal",
+        "name",
+        "symbolName",
+        "symbolUuid",
+        "symbol",
+        "footprintName",
+        "footprintUuid",
+        "footprint",
+        "model3DName",
+        "model3DUuid",
+        "model3D",
+        "imageUuid",
+        "description",
+        "otherProperty"
+      ]
+    },
+    {
+      "args": [
+        {
+          "name": "THIS_NAME_CANNOT_EXIST_9f3a"
+        }
+      ],
+      "called": true,
+      "hitCount": 10,
+      "pageSize": null,
+      "firstKeys": [
+        "uuid",
+        "libraryUuid",
+        "ordinal",
+        "name",
+        "symbolName",
+        "symbolUuid",
+        "symbol",
+        "footprintName",
+        "footprintUuid",
+        "footprint",
+        "model3DName",
+        "model3DUuid",
+        "model3D",
+        "imageUuid",
+        "description",
+        "otherProperty"
+      ]
+    },
+    {
+      "args": [
+        {
+          "supplierId": "C99999999999"
+        }
+      ],
+      "called": true,
+      "hitCount": 0,
+      "pageSize": null,
+      "firstKeys": []
+    }
+  ],
+  "probesOnly": true,
+  "returned": 0,
+  "shown": 0,
+  "candidates": [],
+  "stock/price": "以商城实时为准",
+  "readOnly": true,
+  "placed": false,
+  "note": "read-only: nothing was placed or modified. Put a candidate on the page with sch.place_component (deviceUuid + libraryUuid), or write the chosen LCSC code / MPN onto the part already on the page with sch.set_component_attribute.",
+  "notes": [
+    "probes only: the search ladder was not run — layers[] and candidates[] are empty by construction, and probes[] holds the raw searchByProperties calls"
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "test2": {
+    "source_file": "E:\\LC Project\\test2.eprj2",
+    "project_uuid": "0d961d9ab27445e0fa51639f1e1648a8ad51aa2549d4af264494a3b9859caaec",
+    "project_name": "test2",
+    "schematics": {
+      "4c8cf4a189c78533": "Schematic1"
+    },
+    "sheets": {
+      "f805e257ac7383dc": "P3",
+      "2b79b73f1e0e522f": "P2",
+      "c7c82860f3597fcc": "P1"
+    },
+    "pcbs": {
+      "5ce4c9f372e0f867": "PCB1"
+    },
+    "boards": {
+      "0d061aadc1f8b99f": "Board1"
+    }
+  },
+  "bishe-disk-copy": {
+    "source_file": "E:\\LC Project\\毕设FOC驱动板.eprj2",
+    "project_uuid": "d96d22377aea7743ba6c304e88cd0b6a9359e31ce7762154895d73e68718d528",
+    "project_name": "24V FOC驱动板",
+    "schematics": {
+      "d5a2de3b5c9143feab116900f81395f9": "Schematic1",
+      "197bdc724da1babd": "Schematic2"
+    },
+    "sheets": {
+      "5f0f4e169f1745e789501f939bb10851": "P1",
+      "b0342c521c674ddab8dcc8aaf269ca59": "P2",
+      "0876ea4e415ed158": "P1"
+    },
+    "pcbs": {
+      "ab812fb712e14a62920977ed67aaf8f1": "PCB1",
+      "308cffdb9f930ec1": "PCB2"
+    },
+    "boards": {
+      "5455a645b144c024": "Board2",
+      "d5c055266ef55000": "Board1"
+    }
+  }
+}

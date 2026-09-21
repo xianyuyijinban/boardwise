@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "BAD_REQUEST",
+    "message": "export.render needs params.scope in page | selection | project (got \"current\")",
+    "detail": null
+  }
+}

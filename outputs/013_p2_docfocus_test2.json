@@ -1,0 +1,12 @@
+{
+  "error": {
+    "code": "NOT_FOUND",
+    "message": "doc.focus: no open tab matches c7c82860f3597fcc ¡ª open it first with doc.open",
+    "detail": {
+      "wanted": "c7c82860f3597fcc",
+      "openTabs": [
+        "tab_page1"
+      ]
+    }
+  }
+}
