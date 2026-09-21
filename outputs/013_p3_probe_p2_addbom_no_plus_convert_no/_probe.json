@@ -1,0 +1,67 @@
+{
+  "candidate": "p2_addbom_no_plus_convert_no",
+  "bomOverride": {
+    "filterOptions": [
+      {
+        "property": "Add into BOM",
+        "includeValue": "no"
+      },
+      {
+        "property": "Convert to PCB",
+        "includeValue": "no"
+      }
+    ]
+  },
+  "effectiveFilters": [
+    {
+      "property": "Add into BOM",
+      "includeValue": "no"
+    },
+    {
+      "property": "Convert to PCB",
+      "includeValue": "no"
+    }
+  ],
+  "files": [
+    {
+      "role": "gerber",
+      "name": "fab_gerber.zip",
+      "bytes": 174052
+    },
+    {
+      "role": "pick_and_place",
+      "name": "fab_pick_and_place.csv",
+      "bytes": 49422
+    },
+    {
+      "role": "bom",
+      "name": "fab_bom.csv",
+      "bytes": 25084
+    }
+  ],
+  "overrides": [
+    "bom.filterOptions"
+  ],
+  "written": [
+    {
+      "name": "fab_gerber.zip",
+      "role": "gerber",
+      "bytes": 174052,
+      "declaredBytes": 174052
+    },
+    {
+      "name": "fab_pick_and_place.csv",
+      "role": "pick_and_place",
+      "bytes": 49422,
+      "declaredBytes": 49422
+    },
+    {
+      "name": "fab_bom.csv",
+      "role": "bom",
+      "bytes": 25084,
+      "declaredBytes": 25084
+    }
+  ],
+  "failed": [],
+  "partial": false
+}

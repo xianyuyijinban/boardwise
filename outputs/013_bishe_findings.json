@@ -1,0 +1,204 @@
+{
+  "summary": {
+    "ERROR": 0,
+    "WARN": 15,
+    "INFO": 0
+  },
+  "findings": [
+    {
+      "rule_id": "param-value-mpn-match",
+      "severity": "WARN",
+      "message": "C1: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree",
+      "level": "L2-facts",
+      "evidence": [
+        "C1 value '330uF'",
+        "C1 mpn 'PA50V330M10x15'"
+      ],
+      "refs": [
+        "C1"
+      ]
+    },
+    {
+      "rule_id": "param-value-mpn-match",
+      "severity": "WARN",
+      "message": "C115: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree",
+      "level": "L2-facts",
+      "evidence": [
+        "C115 value '330uF'",
+        "C115 mpn 'PA50V330M10x15'"
+      ],
+      "refs": [
+        "C115"
+      ]
+    },
+    {
+      "rule_id": "param-value-mpn-match",
+      "severity": "WARN",
+      "message": "C116: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree",
+      "level": "L2-facts",
+      "evidence": [
+        "C116 value '330uF'",
+        "C116 mpn 'PA50V330M10x15'"
+      ],
+      "refs": [
+        "C116"
+      ]
+    },
+    {
+      "rule_id": "param-value-mpn-match",
+      "severity": "WARN",
+      "message": "R8: board value 0.005 Ω contradicts its MPN ('JER2512F3R005' decodes to 0 Ω) -- BOM and schematic disagree",
+      "level": "L2-facts",
+      "evidence": [
+        "R8 value '5mΩ'",
+        "R8 mpn 'JER2512F3R005'"
+      ],
+      "refs": [
+        "R8"
+      ]
+    },
+    {
+      "rule_id": "param-value-mpn-match",
+      "severity": "WARN",
+      "message": "R18: board value 0.005 Ω contradicts its MPN ('JER2512F3R005' decodes to 0 Ω) -- BOM and schematic disagree",
+      "level": "L2-facts",
+      "evidence": [
+        "R18 value '5mΩ'",
+        "R18 mpn 'JER2512F3R005'"
+      ],
+      "refs": [
+        "R18"
+      ]
+    },
+    {
+      "rule_id": "param-value-mpn-match",
+      "severity": "WARN",
+      "message": "R43: board value 0.005 Ω contradicts its MPN ('JER2512F3R005' decodes to 0 Ω) -- BOM and schematic disagree",
+      "level": "L2-facts",
+      "evidence": [
+        "R43 value '5mΩ'",
+        "R43 mpn 'JER2512F3R005'"
+      ],
+      "refs": [
+        "R43"
+      ]
+    },
+    {
+      "rule_id": "param-value-mpn-match",
+      "severity": "WARN",
+      "message": "C4: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree",
+      "level": "L2-facts",
+      "evidence": [
+        "C4 value '330uF'",
+        "C4 mpn 'PA50V330M10x15'"
+      ],
+      "refs": [
+        "C4"
+      ]
+    },
+    {
+      "rule_id": "param-value-mpn-match",
+      "severity": "WARN",
+      "message": "C5: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree",
+      "level": "L2-facts",
+      "evidence": [
+        "C5 value '330uF'",
+        "C5 mpn 'PA50V330M10x15'"
+      ],
+      "refs": [
+        "C5"
+      ]
+    },
+    {
+      "rule_id": "param-value-mpn-match",
+      "severity": "WARN",
+      "message": "C6: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree",
+      "level": "L2-facts",
+      "evidence": [
+        "C6 value '330uF'",
+        "C6 mpn 'PA50V330M10x15'"
+      ],
+      "refs": [
+        "C6"
+      ]
+    },
+    {
+      "rule_id": "param-value-mpn-match",
+      "severity": "WARN",
+      "message": "C7: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree",
+      "level": "L2-facts",
+      "evidence": [
+        "C7 value '10uF'",
+        "C7 mpn 'HGC1206R5106K500NSPJ'"
+      ],
+      "refs": [
+        "C7"
+      ]
+    },
+    {
+      "rule_id": "param-value-mpn-match",
+      "severity": "WARN",
+      "message": "C8: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree",
+      "level": "L2-facts",
+      "evidence": [
+        "C8 value '10uF'",
+        "C8 mpn 'HGC1206R5106K500NSPJ'"
+      ],
+      "refs": [
+        "C8"
+      ]
+    },
+    {
+      "rule_id": "param-value-mpn-match",
+      "severity": "WARN",
+      "message": "C9: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree",
+      "level": "L2-facts",
+      "evidence": [
+        "C9 value '10uF'",
+        "C9 mpn 'HGC1206R5106K500NSPJ'"
+      ],
+      "refs": [
+        "C9"
+      ]
+    },
+    {
+      "rule_id": "param-value-mpn-match",
+      "severity": "WARN",
+      "message": "C10: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree",
+      "level": "L2-facts",
+      "evidence": [
+        "C10 value '10uF'",
+        "C10 mpn 'HGC1206R5106K500NSPJ'"
+      ],
+      "refs": [
+        "C10"
+      ]
+    },
+    {
+      "rule_id": "param-value-mpn-match",
+      "severity": "WARN",
+      "message": "C11: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree",
+      "level": "L2-facts",
+      "evidence": [
+        "C11 value '10uF'",
+        "C11 mpn 'HGC1206R5106K500NSPJ'"
+      ],
+      "refs": [
+        "C11"
+      ]
+    },
+    {
+      "rule_id": "param-value-mpn-match",
+      "severity": "WARN",
+      "message": "C12: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree",
+      "level": "L2-facts",
+      "evidence": [
+        "C12 value '10uF'",
+        "C12 mpn 'HGC1206R5106K500NSPJ'"
+      ],
+      "refs": [
+        "C12"
+      ]
+    }
+  ]
+}

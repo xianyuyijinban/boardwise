@@ -1,0 +1,220 @@
+=== 013 修复轮 · F4 调查报告：lib_Device.searchByProperties 参数语义 ===
+调查者：执行子代理（离线静态，未碰真机、未改任何行为）。日期：2026-09-21。
+输入事实来自 tasks/013-realhost-verification.md 交卷记录·批①（§项2，真机 connector 0.4.6 / editor 3.2.186）。
+
+【结论摘要】
+1. 声明与实参**逐位对得上**：connector 传的 6 个实参按位置完整覆盖声明的 6 个形参，且**与能出货的
+   keyword 层（lib_Device.search）共用同一段实参尾巴**。因此"第 6/7 位 pageSize/page 错位"在静态层面
+   **不成立**：两法的声明形参表逐字同序，若尾巴错位，`search` 也该坏——而它每次命中。
+2. 声明里的键名与 connector 传的键名**逐字一致**（partNumber / partCode / value / footprintName 全在
+   ILIB_DevicePropertiesForSearch 的 8 个声明键内）——"connector 传了声明外的键"也不成立。
+3. 剩下唯一未被排除的是"宿主在这版上不认这些键 / 该方法在 3.2.186 上是空壳"。这需要一次可换实参的
+   探针调用才能判，方案见【四】。（真机实测四种属性集全 0 命中、无 error、返回空数组 —— 见 §一 的事实行。）
+4. 附带发现（对 lib.recommend 有直接价值）：声明里还有 4 个未试过的键（name / symbolName /
+   supplierFootprint / supplierId），以及一条**独立于属性语义**的通路 `lib_Device.getByLcscIds`（按 C 编号
+   取器件）——它没有被 connector 使用，若探针证明可用，exact 层可以改挂它而不再依赖 searchByProperties。
+
+-----------------------------------------------------------------------------
+【一】声明逐字摘录
+-----------------------------------------------------------------------------
+来源：connector/node_modules/@jlceda/pro-api-types/index.d.ts
+包版本：@jlceda/pro-api-types 0.4.25（connector/package.json:15 依赖 "^0.4.25"，本地安装版本 0.4.25）
+宿主版本：editor 3.2.186（真机 sys.probe 报告）；connector 0.4.6。
+
+a) 方法声明（index.d.ts:1944-1958，含 jsdoc，逐字）
+
+		/**
+		 * 使用属性精确搜索器件
+		 *
+		 * @beta
+		 * @param properties - 属性
+		 * @param libraryUuid - 库 UUID，默认为系统库，可以使用 {@link LIB_LibrariesList} 内的接口获取
+		 * @param classification - 分类，默认为全部
+		 *
+		 * ADD since EDA v4
+		 * @param symbolType - 符号类型，默认为全部
+		 * @param itemsOfPage - 一页搜索结果的数量
+		 * @param page - 页数
+		 * @returns 搜索到的器件属性的列表
+		 */
+		public searchByProperties(properties: ILIB_DevicePropertiesForSearch, libraryUuid?: string, classification?: Array<string>, symbolType?: ELIB_SymbolType, itemsOfPage?: number, page?: number): Promise<Array<ILIB_DeviceSearchItem>>;
+
+	形参表（按位置）：1 properties（必填） · 2 libraryUuid? · 3 classification? · 4 symbolType? ·
+	5 itemsOfPage? · 6 page?。共 6 个，可选性如上。标注：@beta；"ADD since EDA v4" 这行落在
+	classification 与 symbolType 的 @param 之间（即该行是后加的，symbolType 疑为 v4 新增形参）。
+
+b) 唯一形参的类型声明（index.d.ts:1844-1866，逐字）
+
+	/**
+	 * 可用于精确搜索的器件参数
+	 *
+	 * @public
+	 */
+	interface ILIB_DevicePropertiesForSearch {
+		/** 器件名称 */
+		name?: string;
+		/** 值 */
+		value?: string;
+		/** 关联符号名称 */
+		symbolName?: string;
+		/** 关联封装名称 */
+		footprintName?: string;
+		/** 供应商封装名称 */
+		supplierFootprint?: string;
+		/** 供应商编号 */
+		supplierId?: string;
+		/** 料号 */
+		partNumber?: string;
+		/** 元件编码 */
+		partCode?: string;
+	}
+
+	8 个键，全部可选：name / value / symbolName / footprintName / supplierFootprint / supplierId /
+	partNumber / partCode。**没有** "Supplier Part"、"Manufacturer Part"、"LCSC Part" 这类宿主
+	otherProperty 里的中文/带空格键名（真机 otherProperty 的键名见 outputs/013_findings.txt:64-71）。
+
+c) 对照：同族 `search` 的声明（index.d.ts:1931-1943，逐字摘其签名行）
+
+		public search(key: string, libraryUuid?: string, classification?: ILIB_ClassificationIndex | Array<string>, symbolType?: ELIB_SymbolType, itemsOfPage?: number, page?: number): Promise<Array<ILIB_DeviceSearchItem>>;
+
+	两法形参表**同序同数量同可选性**，唯一差别：第 1 位（key: string vs properties: 对象）与第 3 位
+	（classification 允许 ILIB_ClassificationIndex vs 仅 Array<string>）。
+
+d) 同名方法在包内共 3 处（不同类，形参表不同）—— 排查时须确认宿主给的 lib_Device 挂的是哪一支：
+	index.d.ts:1958  LIB_Device.searchByProperties(6 参，如上)
+	index.d.ts:2139  LIB_Footprint.searchByProperties(properties: ILIB_FootprintPropertiesForSearch, libraryUuid?: string) —— 2 参
+	index.d.ts:2880  LIB_Symbol.searchByProperties(properties: ILIB_SymbolPropertiesForSearch, libraryUuid?: string)    —— 2 参
+	且 ILIB_FootprintPropertiesForSearch / ILIB_SymbolPropertiesForSearch 都**只有 name? 一个键**
+	（index.d.ts:2043-2046 / 2782-2785）。宿主侧的 `lib_Device: LIB_Device` 声明在 index.d.ts:19339。
+	→ 若宿主把某支 2 参实现挂到 lib_Device 上，传 {partNumber}/{value} 只会被当作"未知键"。
+
+-----------------------------------------------------------------------------
+【二】connector 现状调用处 · 实参逐一对照
+-----------------------------------------------------------------------------
+文件：connector/src/actions.ts（本题改前改后该段都未变；行号为修复轮 F3/F5 改后的当前行号）
+
+  4552	  const callProperties = (properties: Record<string, unknown>) =>
+  4553	    (page: number) =>
+  4554	      searchByProperties.call(ns, properties, undefined, undefined, undefined, RECOMMEND_PAGE_SIZE, page);
+  4555	  const callSearch = (keyword: string) =>
+  4556	    (page: number) =>
+  4557	      search.call(ns, keyword, undefined, undefined, undefined, RECOMMEND_PAGE_SIZE, page);
+  （RECOMMEND_PAGE_SIZE = 5，定义在 actions.ts:4173；ns = eda.lib_Device，actions.ts:4535）
+
+对照表（位置 → 形参 → 实参 → 取值 → 评判）
+  | # | 声明形参        | 实参（searchByProperties）                | 实参（search，能出货） | 评判                     |
+  |---|-----------------|-------------------------------------------|------------------------|--------------------------|
+  | 1 | properties      | `properties`（{partNumber} 或 {value,…}） | `keyword`（string）    | 类型各自匹配声明         |
+  | 2 | libraryUuid?    | `undefined`                               | `undefined`            | 同值：默认系统库         |
+  | 3 | classification? | `undefined`                               | `undefined`            | 同值：默认全部           |
+  | 4 | symbolType?     | `undefined`                               | `undefined`            | 同值：默认全部           |
+  | 5 | itemsOfPage?    | `RECOMMEND_PAGE_SIZE` = 5                 | 5                      | 真机 keyword 返回 5 条 ✓ |
+  | 6 | page?           | `page`（1..3）                            | `page`                 | 真机 pagesFetched=1 ✓     |
+
+实参个数：6（不多不少）。**第 7 位不存在**——批①"第 6/7 位错位"的猜想在代码里没有对应物。
+
+判别力论证（关键）：
+  * search 与 searchByProperties 的声明形参表同序同数量（§一 c），且 connector 对两法传的是**同一段
+    尾巴**（undefined, undefined, undefined, 5, page）。
+  * 真机上 search 每次命中（5 / 1 / 2 条）、pagesFetched=1，说明这段尾巴在该宿主上是被正常解释的
+    （itemsOfPage=5 得到"按 5 条截断"的结果，见 outputs/013_findings.txt:55-57、N2）。
+  * 若尾巴真错位，受影响的不会只有 searchByProperties。→ **"实参错位"在静态证据下被排除**（仅剩
+    "宿主对同名不同方法做不同参数解释"这种需要真机才能验的残余可能，见 §四 探针 5）。
+  * 另一条既有旁证：lib.device.search 动作（actions.ts:1133）只传 1 个实参
+    `search.call(ns, keyword)`，真机返回 10 条（宿主默认页），说明该宿主**允许**省略尾部实参、
+    且不依赖"传满 6 位"。所以"必须传满才能工作"也不是 searchByProperties 0 命中的解释。
+
+属性集与声明的对照（真机试过的 4 种，全部落在声明键内、拼写逐字一致）：
+  {partNumber:"SS34"}          ← 声明键 partNumber（料号）
+  {partCode:"C8678"}           ← 声明键 partCode（元件编码）
+  {value:"SS34"}               ← 声明键 value（值）
+  {partNumber:"SS34_C8678"}    ← 声明键 partNumber
+  → "connector 传的键不在声明里 / 拼写漂移"**不成立**。
+  未试过的声明键：name / symbolName / supplierFootprint / supplierId（真机 otherProperty 里这两个
+  的确有值：supplierId="C8678"、Supplier Footprint="SMA(DO-214AC)"）。
+
+-----------------------------------------------------------------------------
+【三】仓内既有 probe 记录（grep searchByProperties 全仓，排除 node_modules/dist）
+-----------------------------------------------------------------------------
+（a）docs/bridge.md:429-431 —— 说明"缺失即降级"的设计；:1050 —— "未决问题"表里写着
+     "`export.fab` 和 `lib.recommend` 从未对 EasyEDA 跑过 …… 以及 searchByProperties 到底存不存在
+     —— 声明标注 ADD since EDA v4。首次真机跑就会落定。"（批①已回答"存在"，但**该文档行尚未更新**，
+     属主代理/岳的文档口径决定，本轮不动。）
+（b）docs/api-surface-2026-09-20.md:17、:77 —— 八字段组合搜的离线转录（"partNumber=MPN、
+     partCode=LCSC 编号，两条精确通路"）。与本报告 §一 b 一致。
+（c）tools/ —— **没有任何 searchByProperties 相关探针脚本**（tools/ 下 grep 0 命中；现有探针是
+     probe1-surface.js / probe2-register.js / probe3-crypto.js 与 api_names.py，与库搜索无关）。
+（d）outputs/012v2_probe.md:25（typeof=function ×3）、012v2_probe_declarations.txt:169
+     （`searchByProperties   [beta, ADD since v4]`）、012v2_s6_s7_offline.txt:99-104、:145、:165、:179
+     —— 离线期只备了"缺失则降级"一条路，**没有**"在但不匹配"这条（交卷 N1）。
+（e）outputs/013_findings.txt:34-57 —— 批①真机读数（本次调查的输入事实）：
+     exact / properties 两法 called=true、hitCount=0、无 error；keyword 同串命中；
+     `lib.device.search` 不传 pageSize 时 returned=10（宿主默认页 10）。
+（f）仓内先例（"声明在、运行时不在/不干活"已有两例，见 actions.ts:1365-1372、:2670-2680、
+     :3080-3086 与 api-names.ts:30）：
+       - `sch_ManufactureData.getPngFile`：声明标 "added v3.2.183"，宿主 3.2.186，运行时**没有**。
+       - `createNetLabel`：声明标 "ADD since EDA v4"，3.2.186 上**永远不 settle**（睡着）。
+     即：本项目已有"类型包版本领先于运行时"的既定事实，本案（声明 v4 的方法在 v3.2 上存在但 0 命中）
+     与之同族，不是孤例。
+
+-----------------------------------------------------------------------------
+【四】下一步判别方案（只写方案，本轮不改代码、不碰真机）
+-----------------------------------------------------------------------------
+要判的两问：
+  Q1 宿主是否**认** properties 里的键？（忽略键 / 要求别的键 / 要求键值在索引里）
+  Q2 宿主是否对该方法**使用参数位置**（含"实参个数敏感"）？
+
+方案 A（主推，一次真机调用）：给 lib.recommend 加一个**只读、可选、封顶**的探针参数
+  `probes: [{properties, libraryUuid?, classification?, symbolType?, itemsOfPage?, page?}]`
+  - 语义：逐项**按调用者给的原样**调用 lib_Device.searchByProperties（未给的形参就**不传**，
+    让 arguments.length 与调用者一致），每项回 `{args, called, hitCount, pageSize, firstKeys[], error?}`。
+  - 边界：只读（不 place/不改）；probes 数组长度封顶（如 ≤ 8）；每项沿用现有 callTimeoutMs 超时；
+    缺省（不传 probes）时路径与现在**逐字节相同**，不影响出货行为；仍受 lib_Device 缺失的结构性报错。
+  - 为什么挂在 lib.recommend 上而不是新动作：它是唯一已经在用这个方法的动作，共用 ns/超时/报告框架，
+    不必新增动作表项与权限（真机边界最小）。
+  - 配套（可选、同一批）：sys.probe 的 checks 模式在每个成员旁多报一个 `arity: fn.length`
+    （**纯信息**，不改判定）。它能在一次调用里回答"运行时形参个数是否与声明一致"——若宿主报
+    searchByProperties.length ≠ 6，则 Q2 直接落定；注意 Function.length 在 webview 代理/包装后
+    可能失真，只能当线索不能当判据（与 sys.probe 既有"typeof 只证明存在"的口径一致）。
+
+方案 A 的执行矩阵（一条命令跑完，结果按下表判读）：
+  P1  searchByProperties({})                                  空属性
+  P2  searchByProperties({name:"SS34_C8678"})                 用 keyword 层**确实返回过**的 name 原值
+  P3  searchByProperties({supplierId:"C8678"})                用候选自己的 supplierId
+  P4  searchByProperties({partNumber:"SS34"}, "0819f05c4eef4c71ace90d822a990e87")
+                                                              带上候选的 libraryUuid（真机实测值）
+  P5  searchByProperties({partNumber:"SS34"})                 只传 1 个实参（对照 P4/既有 6 参调用）
+  P6  searchByProperties({value:"SS34"}, undefined, undefined, undefined, 10, 1)
+                                                              换页大小，看 hitCount 是否随页大小变
+  P7  getByLcscIds("C8678")                                   独立通路（声明 remark：私有化部署不可用）
+  （P2/P3 的串取自 outputs/013_lib_recommend_SS34.json 的候选：name="SS34_C8678"、
+    supplierId 即 lcsc="C8678"、libraryUuid="0819f05c4eef4c71ace90d822a990e87"。）
+
+判读表：
+  | 观测                                      | 结论                                                   | 后续动作（另立任务） |
+  |-------------------------------------------|--------------------------------------------------------|----------------------|
+  | P1 非空命中                               | 宿主不把空属性当过滤 → "忽略键"倾向：键不参与匹配       | 按 P2/P3 选可用键    |
+  | P2 或 P3 命中，P4 不命中                  | 宿主认 properties 对象，但 partNumber/partCode/value 在  | 把 exact/properties  |
+  |                                           | 该索引里搜不到（键名有效、字段无索引）                  | 层改发可用键         |
+  | P4 命中而 P5 不命中 / 反之                | 宿主对**实参个数/位置**敏感（Q2 成立）                  | 固定可用的调用形状   |
+  | P1–P6 全 0，且无 error                    | 该方法在 3.2.186 上是**声明在、运行时空转**（与 getPngFile | 把 exact/properties  |
+  |                                           | /createNetLabel 同族）                                  | 降级为声明不实并如实 |
+  |                                           |                                                         | 报（或直接撤掉两层） |
+  | P6 的 hitCount 随 itemsOfPage 变化         | 方法确实被执行到了（不是立刻 return []），只是无匹配     | 同上，偏向"键/索引" |
+  | P7 命中                                   | 有独立于属性语义的精确通路可替代 exact 层               | exact 层改挂 getByLcscIds |
+
+方案 B（零代码，但判别力弱）：只做一次 sys.probe `--params '{"checks":true}'` 并在本地读出
+  `typeof` 与（若加了 arity）形参个数。能回答"宿主侧形参个数是否为 6"，**不能**回答 Q1。
+  适合在方案 A 之前作为 5 分钟的先导。
+
+方案 C（不推荐）：在 lib.recommend 里"试错式轮询"多种实参形状（自动重试）。会把一次只读查询变成
+  一串不可预期的宿主调用，报告里也难以把"哪次调用命中"讲清楚；判别力不比方案 A 高，故不推荐。
+
+-----------------------------------------------------------------------------
+【五】本轮未做的事（边界声明）
+-----------------------------------------------------------------------------
+- 未改任何与 searchByProperties 有关的行为、参数、注释与文档（F4 只调查）。
+- 未碰真机：未调 bridge、未起 daemon、未做任何 probe 调用。
+- 未改 docs/bridge.md:1050 / docs/api-surface-2026-09-20.md 的措辞（"是否存在"已被批①落定，
+  但那是任务书/文档口径，留给主代理与岳裁定）。
+- outputs/013_lib_recommend_*.json、013_findings.txt 等批①证据未改动。

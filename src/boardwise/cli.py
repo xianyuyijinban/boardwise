@@ -3131,6 +3131,31 @@ def _version_tuple(text: str) -> tuple[int, ...]:
     return tuple(int(part) for part in match.group(1).split("."))
 
 
+def _project_counts(documents: dict, focused_project: dict) -> tuple[int, int]:
+    """``(页数, PCB 数)`` of the focused project, in ``doc.list``'s arithmetic.
+
+    ``projects[].schematics`` is a *document list*, not a page count: it carries
+    the container schematic node (``schematic1``) alongside the pages, so a
+    four-page project reads as five — the real host said "5 页原理图" on a
+    project whose ``schematicPages`` was 4 (measured 2026-09-21). ``doc.list``
+    has already counted both facts from ``documents[]``; use those numbers
+    rather than re-deriving a count from a list whose length means something
+    else.
+
+    The list lengths stay as the fallback whenever those two fields are not
+    numbers — an older connector build, or a payload that arrived malformed.
+    doctor never raises for a payload it does not understand.
+    """
+    schematics = focused_project.get("schematics") or []
+    pcbs = focused_project.get("pcbs") or []
+    pages = documents.get("schematicPages")
+    boards = documents.get("pcbs")
+    return (
+        pages if isinstance(pages, int) else len(schematics),
+        boards if isinstance(boards, int) else len(pcbs),
+    )
+
+
 def run_doctor(p: DoctorProbe) -> list[DoctorCheck]:
     """Judge one :class:`DoctorProbe`. Pure: no socket, no daemon, no editor."""
     checks: list[DoctorCheck] = []
@@ -3330,11 +3355,12 @@ def run_doctor(p: DoctorProbe) -> list[DoctorCheck]:
                 if uuid == "0" or 'uuid "0"' in notes
                 else "无（编辑器里没有焦点文档）"
             )
+        pages, boards = _project_counts(p.documents or {}, focused_project)
         project_detail = (
             f"焦点工程：{focused_project.get('friendlyName') or focused_project.get('name') or '(无名)'}"
             f"（{str(focused_project.get('projectUuid') or '')[:8]}…，"
-            f"{len(focused_project.get('schematics') or [])} 页原理图 / "
-            f"{len(focused_project.get('pcbs') or [])} 个 PCB）；活动文档：{active_text}"
+            f"{pages} 页原理图 / "
+            f"{boards} 个 PCB）；活动文档：{active_text}"
         )
     checks.append(
         DoctorCheck(

@@ -1,0 +1,114 @@
+{
+  "documents": [
+    {
+      "uuid": "d5a2de3b5c9143feab116900f81395f9",
+      "name": "schematic1",
+      "type": "schematic",
+      "active": false,
+      "parentName": "Board1"
+    },
+    {
+      "uuid": "197bdc724da1babd",
+      "name": "schematic2",
+      "type": "schematic",
+      "active": false,
+      "parentName": "Board2"
+    },
+    {
+      "uuid": "5f0f4e169f1745e789501f939bb10851",
+      "name": "P1",
+      "type": "page",
+      "active": true,
+      "parentUuid": "d5a2de3b5c9143feab116900f81395f9",
+      "parentName": "schematic1"
+    },
+    {
+      "uuid": "b0342c521c674ddab8dcc8aaf269ca59",
+      "name": "P2",
+      "type": "page",
+      "active": false,
+      "parentUuid": "d5a2de3b5c9143feab116900f81395f9",
+      "parentName": "schematic1"
+    },
+    {
+      "uuid": "0876ea4e415ed158",
+      "name": "P1",
+      "type": "page",
+      "active": false,
+      "parentUuid": "197bdc724da1babd",
+      "parentName": "schematic2"
+    },
+    {
+      "uuid": "ab812fb712e14a62920977ed67aaf8f1",
+      "name": "PCB1",
+      "type": "pcb",
+      "active": false,
+      "parentName": "Board1"
+    },
+    {
+      "uuid": "308cffdb9f930ec1",
+      "name": "PCB2",
+      "type": "pcb",
+      "active": false,
+      "parentName": "Board2"
+    }
+  ],
+  "projects": [
+    {
+      "projectUuid": "58c7593c5ddda93f3c4d4b30638d0394defe3f43eaeab334913d667b1d4d01a6",
+      "name": "/毕设FOC驱动板",
+      "friendlyName": "毕设FOC驱动板",
+      "focused": true,
+      "opened": "yes",
+      "schematics": [
+        {
+          "uuid": "d5a2de3b5c9143feab116900f81395f9",
+          "name": "schematic1",
+          "type": "schematic"
+        },
+        {
+          "uuid": "197bdc724da1babd",
+          "name": "schematic2",
+          "type": "schematic"
+        },
+        {
+          "uuid": "5f0f4e169f1745e789501f939bb10851",
+          "name": "P1",
+          "type": "page"
+        },
+        {
+          "uuid": "b0342c521c674ddab8dcc8aaf269ca59",
+          "name": "P2",
+          "type": "page"
+        },
+        {
+          "uuid": "0876ea4e415ed158",
+          "name": "P1",
+          "type": "page"
+        }
+      ],
+      "pcbs": [
+        {
+          "uuid": "ab812fb712e14a62920977ed67aaf8f1",
+          "name": "PCB1",
+          "type": "pcb"
+        },
+        {
+          "uuid": "308cffdb9f930ec1",
+          "name": "PCB2",
+          "type": "pcb"
+        }
+      ],
+      "documents": "full"
+    }
+  ],
+  "active": {
+    "uuid": "5f0f4e169f1745e789501f939bb10851",
+    "type": "page",
+    "tabId": "5f0f4e169f1745e789501f939bb10851@58c7593c5ddda93f3c4d4b30638d0394defe3f43eaeab334913d667b1d4d01a6",
+    "source": "dmt_SelectControl.getCurrentDocumentInfo"
+  },
+  "schematicPages": 3,
+  "pcbs": 2,
+  "count": 7
+}

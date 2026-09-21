@@ -1,0 +1,35 @@
+stage 0 (sweep any leftover markers)
+sweep clear try#1: cleared=True
+R1 OK focused='毕设FOC驱动板' doc.open matches=True
+stage 1 (baseline)
+E:\boardwise\outputs\013_proof_before_1.png hwnd=58593070 size=1297x729 nonWhite=15645 title=[test2 | ������EDA(רҵ��) - V3.2.186]
+E:\boardwise\outputs\013_proof_before_2.png hwnd=143528512 size=1297x729 nonWhite=8952 title=[����FOC������ | ������EDA(רҵ��) - V3.2.186]
+E:\boardwise\outputs\013_proof_before_3.png hwnd=1055226 size=1297x729 nonWhite=7629 title=[������EDA(רҵ��) - V3.2.186]
+restored foreground=58593070
+outputs/013_proof_before_2.png: size=1297x729 redPixels=526 bbox=1007,219 - 1296,567
+outputs/013_proof_before_2.png: size=1297x729 redPixels=37 bbox=1020,219 - 1286,554
+mark attempt #1 refused [CONNECTOR_ERROR]: openDocument(5f0f4e169f1745e789501f939bb10851) returned no tab id — the uuid may not exist
+mark attempt #2 refused [CONNECTOR_ERROR]: openDocument(5f0f4e169f1745e789501f939bb10851) returned no tab id — the uuid may not exist
+mark attempt #3 refused [CONNECTOR_ERROR]: openDocument(5f0f4e169f1745e789501f939bb10851) returned no tab id — the uuid may not exist
+mark attempt #4 refused [CONNECTOR_ERROR]: openDocument(5f0f4e169f1745e789501f939bb10851) returned no tab id — the uuid may not exist
+mark attempt #5 refused [CONNECTOR_ERROR]: openDocument(5f0f4e169f1745e789501f939bb10851) returned no tab id — the uuid may not exist
+mark attempt #6 refused [CONNECTOR_ERROR]: openDocument(5f0f4e169f1745e789501f939bb10851) returned no tab id — the uuid may not exist
+mark attempt #7 refused [CONNECTOR_ERROR]: openDocument(5f0f4e169f1745e789501f939bb10851) returned no tab id — the uuid may not exist
+mark attempt #8 refused [CONNECTOR_ERROR]: openDocument(5f0f4e169f1745e789501f939bb10851) returned no tab id — the uuid may not exist
+stage 2 (markers drawn: 9 marked, {"attempted": 9, "accepted": 9})
+E:\boardwise\outputs\013_proof_marked_1.png hwnd=58593070 size=1297x729 nonWhite=15645 title=[test2 | ������EDA(רҵ��) - V3.2.186]
+E:\boardwise\outputs\013_proof_marked_2.png hwnd=1055226 size=1297x729 nonWhite=15645 title=[������EDA(רҵ��) - V3.2.186]
+E:\boardwise\outputs\013_proof_marked_3.png hwnd=143528512 size=1297x729 nonWhite=8952 title=[����FOC������ | ������EDA(רҵ��) - V3.2.186]
+restored foreground=1055226
+outputs/013_proof_marked_2.png: size=1297x729 redPixels=0 bbox=-
+final clear try#1: cleared=False
+final clear try#2: cleared=False
+final clear try#3: cleared=False
+final clear try#4: cleared=False
+final clear try#5: cleared=True
+stage 3 (after clear)
+E:\boardwise\outputs\013_proof_after_1.png hwnd=1055226 size=1297x729 nonWhite=7981 title=[������EDA(רҵ��) - V3.2.186]
+E:\boardwise\outputs\013_proof_after_2.png hwnd=143528512 size=1297x729 nonWhite=8952 title=[����FOC������ | ������EDA(רҵ��) - V3.2.186]
+E:\boardwise\outputs\013_proof_after_3.png hwnd=58593070 size=1297x729 nonWhite=15645 title=[test2 | ������EDA(רҵ��) - V3.2.186]
+restored foreground=1055226
+outputs/013_proof_after_2.png: size=1297x729 redPixels=84 bbox=1012,219 - 1286,567

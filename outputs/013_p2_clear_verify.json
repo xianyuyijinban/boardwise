@@ -1,0 +1,10 @@
+[
+  {
+    "try": 1,
+    "focus": "test",
+    "active": "b4298962367251c8",
+    "docOpenMatches": "error CONNECTOR_ERROR",
+    "cleared": true,
+    "note": "every indicator marker on the focused canvas was removed"
+  }
+]

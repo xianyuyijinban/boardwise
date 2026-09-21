@@ -1,0 +1,10 @@
+$ .venv/Scripts/python.exe -m boardwise.cli bridge export-fab --out outputs/013_fab_bishe --pcb ab812fb712e14a62920977ed67aaf8f1
+exit=0
+--- stdout ---
+boardwise bridge export-fab: wrote fab_gerber (174063 B, gerber)
+boardwise bridge export-fab: wrote fab_pick_and_place (49422 B, pick_and_place)
+boardwise bridge export-fab: wrote fab_bom.csv (152 B, bom)
+boardwise bridge export-fab: 3 file(s) + manifest.json in outputs\013_fab_bishe
+
+--- stderr ---
+

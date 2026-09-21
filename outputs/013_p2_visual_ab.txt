@@ -1,0 +1,13 @@
+R1 OK focused='毕设FOC驱动板' doc.open matches=True
+--- stage A: baseline grab (no markers) ---
+E:\boardwise\outputs\013_ab_pre_1.png hwnd=58593070 size=1297x729 nonWhite=15645 title=[test2 | ������EDA(רҵ��) - V3.2.186]
+E:\boardwise\outputs\013_ab_pre_2.png hwnd=143528512 size=1297x729 nonWhite=9221 title=[����FOC������ | ������EDA(רҵ��) - V3.2.186]
+E:\boardwise\outputs\013_ab_pre_3.png hwnd=1055226 size=1297x729 nonWhite=7629 title=[������EDA(רҵ��) - V3.2.186]
+restored foreground=58593070
+outputs/013_ab_pre_143528512.png -> missing
+--- stage B: marked 9 {"attempted": 9, "accepted": 9} ---
+E:\boardwise\outputs\013_ab_on_1.png hwnd=58593070 size=1297x729 nonWhite=15645 title=[test2 | ������EDA(רҵ��) - V3.2.186]
+E:\boardwise\outputs\013_ab_on_2.png hwnd=1055226 size=1297x729 nonWhite=7629 title=[������EDA(רҵ��) - V3.2.186]
+E:\boardwise\outputs\013_ab_on_3.png hwnd=143528512 size=1297x729 nonWhite=8952 title=[����FOC������ | ������EDA(רҵ��) - V3.2.186]
+restored foreground=58593070
+outputs/013_ab_on_143528512.png -> missing

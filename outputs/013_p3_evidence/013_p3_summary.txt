@@ -1,0 +1,122 @@
+013 批② 项1/项2/项3 修复 · 真机与离线证据汇总（执行子代理，2026-09-21）
+====================================================================
+
+环境：daemon 61190（**未重启**，仍是 012 代码；`bom` 参数走透传，故新参数无需重启即生效）、
+编辑器 3.2.186（D:/lceda-pro）、connector 0.4.9 → **0.4.10**（热更 `ok: 0.4.9 -> 0.4.10`）。
+R1：每次 export 前 `doc.list` 焦点工程名逐字 == "毕设FOC驱动板"、active == pcb ab812fb7…（PCB1）。
+本批只用只读导出与 fab 调用；**未做任何 mark 调用**（`review.mark` 真机未跑，见 §5）。
+
+§1 项1 根因（BOM 零数据行）
+---------------------------
+宿主自带实现（随包源码，逐字抽于 outputs/013_p3_evidence/013_p3_bom_filter_root.txt）：
+
+  api.js（pro-api 0.3.18，扩展侧包装）
+    d.filterRules = [{attr:"Add into BOM", rule:"no", checked:true},
+                     {attr:"Convert to PCB", rule:"no", checked:false}]
+    r && !mne(r, filterOptionArr, d) → return   // filterOptions 映射失败即返回 undefined
+  mne: 对 "Add into BOM"/"Convert to PCB" 用 gne() 归一（'yes'|true→'yes'，'no'|false→'no'，
+       其余→undefined→整次调用失败），把结果写进 s.rule 并 checked = true
+  pro-sch sch-main.js attrsGroup2 → verify:
+       e[t] = … ; n = new RegExp(r.join("|"), "i");
+       if (r.length && n.test(e[t]) || …) return false   // **命中即丢行**
+
+  ⇒ filterOptions 是**排除**规则：includeValue 是"该值出现就把这一行删掉"，不是"保留该值"。
+    类型包示例 includeValue:'yes' 于是删掉了所有 Add into BOM=yes 的器件 —— 122 器件的板子
+    只剩表头（152 B，列定义照样被接受）。这正是本批起点。
+
+§2 项1 真机探针矩阵（outputs/013_p3_probe_*，逐发一个 outDir）
+--------------------------------------------------------------
+| 候选 | 实参（params.bom） | BOM 数据行 | BOM 字节 | 说明 |
+| p0_control_old_preset | [{Add into BOM:yes},{Convert to PCB:yes}] | **0** | 152 | 复现旧 preset（bug 对照）|
+| p1_preset_default | 无（= 新 preset：一条 [{Add into BOM:'no'}]） | **68** | 25084 | 采用形状 |
+| p2_addbom_no_plus_convert_no | [{Add into BOM:'no'},{Convert to PCB:'no'}] | 68 | 25084 | 与 p1 逐字节相同 |
+| p3_host_default_none | null（不传 filterOptions，宿主默认规则） | 68 | 25084 | 与 p1 逐字节相同 |
+四个 gerber 均为真 zip（16 条目、testzip=None）；四个 pnp 逐字节相同（122 行）。
+p1/p2/p3 的 fab_bom.csv sha256 全等（958e6941eaca6d95…）⇒ 显式一条 'no' 与宿主默认规则在本板
+上等价；**p2 的 "Convert to PCB" 不多删一行**（宿主默认本就不勾选它）。
+⇒ 采用 p1（显式、自解释、不受宿主默认值变动影响），保留 `params.bom.filterOptions` 探针通道
+  （null = 不传，即"保持宿主默认规则"）。
+
+行数口径说明（重要）：BOM 是**分组** BOM —— 122 个器件按同组属性合并成 68 行，Quantity 求和。
+真机核对（outputs/013_fab_bishe2/，CLI `boardwise bridge export-fab` 产出，exit 0）：
+  - fab_bom.csv：68 数据行；**Quantity 求和 = 122**；位号列共 **122 个唯一位号**；
+    与 fab_pick_and_place.csv 的 122 个位号**集合完全相等**（对称差为空）。
+  - fab_pick_and_place.csv：123 行 = 表头 + 122 行。
+  - fab_gerber.zip：真 zip，16 条目，testzip=None。
+  - manifest：project{58c7593c…, 毕设FOC驱动板}、pcb{ab812fb7…, PCB1}、failed=[]、
+    preset.bom.filterOptions=[{Add into BOM, no}]、overrides=[]。
+
+附发现的旧账（**非本次引入；已在本轮之后修掉，见 013_p3b_columns_fix.txt**）：BOM 表头是 **17** 列而非 15 —— preset 的
+`statistics: ['No.','Quantity']` 与 `columns` 里的 'No.'/'Quantity' 重复，宿主把统计项也当一列
+输出（旧 152 B 文件同样 17 列：…,'No.','JLC 类别','Quantity',…；新文件该列标题显示为 'Number'）。
+数据行两列都填了值，属冗余列、非错误。修法（实测定案）：**不能删 statistics**（只有它会把 `No.`
+改写成列检查所需的 `Number`，缺了这一列宿主整次调用不返回任何文件），而是让 `statistics`(2) 与
+`property`(13) **互斥、并集 = 15 列**；真机表头逐字 15 列、序号 1..68、数量求和 122
+（outputs/013_fab_bishe3/）。
+
+§3 项2 文件名（宿主源码 + 真机）
+-------------------------------
+  api.js: gerber  → new File([data], t || c.fileName)          // 原样回传我们传的 fileName
+          pnp     → new File([blobData], r)                     // 同上
+          bom     → new File([data], c + "." + i)               // c=fileName, i=fileType，宿主自己拼
+⇒ 修法：preset gerber fileName='fab_gerber.zip'、pnp='fab_pick_and_place.csv'，**BOM 保持 'fab_bom'**
+  （否则会得到 fab_bom.csv.csv）。真机落盘名（outputs/013_fab_bishe2/）：
+  fab_gerber.zip / fab_pick_and_place.csv / fab_bom.csv —— 与 docs/getting-started.md 第 6 步
+  写的三个名字**逐字一致**，该处无需再改。
+  另加 `withSuffix()` 兜底：宿主名字为空时按 preset 名补后缀且不重复补（防 .csv.csv）。
+
+§4 项3 review.mark clear 口径
+-----------------------------
+  代码：clear 路径先读 `activeDocument`（与 doc.list 同一读法）；active === null 时直接返回
+  cleared: true + note "no active canvas — nothing to remove (…占位读数…)"，**不再调用**宿主
+  removeIndicatorMarkers；有画布而宿主返 false 才 cleared: false（"the canvas refused…" 保留）。
+  `{clear:true}` 无页面守卫的行为**保留**（清除不针对页），docs/bridge.md §4 表行与散文已写明。
+  mock：actions012c 新增 "clear with no active document is already done, not refused"（走占位
+  uuid "0" 路径，断言 cleared:true / note / 宿主零调用）；原 "refuses the removal" 用例保留。
+  真机：本批**未调用 review.mark**（批②硬边界禁止 mark）。附：执行期间宿主焦点漂移到 test2
+  （projectUuid 0d961d9a…，active = 占位 "0" → null，notes 有原文），正是本修复针对的状态；
+  一次 `review.mark {"clear":true}` 即可真机确认（主代理可自行发，预期 cleared:true +
+  "no active canvas — nothing to remove"）。
+
+§5 收尾与三线
+-------------
+版本：connector/extension.json + package.json 0.4.9 → **0.4.10**；`npm run package` →
+connector/boardwise-connector-0.4.10.eext；独立 zipfile 校验：2 条目
+（extension.json 2150 B + dist/index.js）、manifest version=0.4.10（与磁盘两处一致）、
+包内 bundle 与磁盘 dist/index.js 逐字节相同（首版 sha256 e77581d657e8f8b6…，bundle 178845 B）、
+与 0.4.9 bundle（174274 B，3f9e16e2…）不同且含 'fab_gerber.zip' / 'fab_pick_and_place.csv' /
+includeValue:"no" / 'no active canvas' / withSuffix。
+（**本轮之后重打包**：列拆分修复后 bundle 179530 B、archive 43337 B、sha256 **d1bf0f72e3eb99d4…**，
+版本仍 0.4.10 —— dist、包内 bundle、编辑器里加载的那份三者逐字节相同；见 013_p3b_columns_fix.txt）
+热更：`bridge update-connector --yes` → ok: 0.4.9 -> 0.4.10；`sys.probe` 复核 connector="0.4.10"。
+doctor：**7/7 PASS**（connector 0.4.10 == 仓库；焦点工程：毕设FOC驱动板，3 页原理图 / 2 个 PCB，
+活动文档 pcb ab812fb7…）—— outputs/013_p3_evidence/013_p3_doctor_0410.txt
+三线（均在最终改动之后亲跑）：pytest **1136 passed**（82.56 s）、connector `npm test`
+**279 pass / 0 fail**（275 → 279，+4）、`npx tsc --noEmit` 干净。
+变异：① preset filterOptions 改回 'yes' → **2 红**（"fab exports the three files with the vendor
+preset arguments"、"fab writes a manifest the caller can drop next to the files"）；② clear 的
+active:null 分支改回 cleared:false → **1 红**（"clear with no active document is already done,
+not refused"）。两处还原后 `connector/src/actions.ts` sha256 与改前**逐字节一致**
+（4750bbb4289282ad…），重建 dist/index.js 也为 e77581d657e8f8b6…（= 打包内 bundle）。
+
+§6 证据清单（outputs/）
+----------------------
+013_p3_evidence/
+  013_p3_bom_filter_root.txt        宿主源码逐字摘录（api.js mne/gne/hne/fne、pro-sch verify、ui.js）
+  013_p3_probe_matrix.py            探针脚本（一次性；含 R1 前置检查，用生产 writer 落盘）
+  013_p3_probe_p0..p3_*/            四发探针产物（含各自 _probe.json 记录实参/生效值/覆盖项）
+  013_p3_summary.txt                本文件
+  013_p3_r1_doclist.json            起手 R1/焦点读数（active = page 5f0f4e16…）
+  013_p3_docopen_pcb1.json          doc.open(PCB1)（焦点类前置，已申报）
+  013_p3_r1_doclist_pcb.json        R1 复核：毕设FOC驱动板 + active=pcb ab812fb7…
+  013_p3_export_fab_bishe2.txt      最终 export-fab 终端输出
+  013_p3_doctor_0410.txt            doctor 7/7
+  013_p3_sys_probe_0410.json        sys.probe：connector 0.4.10
+  013_p3_update_connector.txt       热更输出
+  013_p3_r1_after_export.json /
+  _restored.json                    导出后焦点已漂移到 test2（active 占位 "0"→null）；两文件
+                                    **逐字节相同**——期间一次 doc.open(毕设板 P1) 复原尝试返回
+                                    CONNECTOR_ERROR（该 uuid 不在当前焦点工程内），零副作用（如实记录）
+  013_p3_sha256_before_mutation.txt 变异前四处 sha256
+013_fab_bishe2/                     最终交付包：fab_gerber.zip / fab_pick_and_place.csv /
+                                    fab_bom.csv / manifest.json

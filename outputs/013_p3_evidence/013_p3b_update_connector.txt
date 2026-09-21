@@ -1,0 +1,3 @@
+boardwise bridge update-connector: E:\boardwise\connector\dist\index.js (179530 bytes, 239376 as base64) -> version 0.4.10
+  ok: 0.4.10 -> 0.4.10 (179530 bytes written to User_08be6a96fc064a03b488fd9d5a25ccea_v6)
+  the editor page is reloading now; the new build should reconnect within seconds — verify with `boardwise bridge status` or the About… menu (version line)

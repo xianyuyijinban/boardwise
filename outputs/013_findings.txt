@@ -1,0 +1,161 @@
+013 批① 真机验证 —— 原始事实记录（执行子代理，2026-09-21）
+环境：daemon 127.0.0.1:61190（未重启、未 update-connector）；编辑器 3.2.186；connector 0.4.6；
+      焦点工程 /test（test.eprj2）。全部动作均为只读 call（+ 一次被拒绝的未知名调用），
+      无任何工程内容写操作（无 delete/modify/place/mark/fab）。焦点在每一步前后核对。
+
+=== 动作时间线 ===
+outputs/013_action_timeline.txt（16 行，无重复行；sort|uniq -d 为空）
+
+--- 项1 doctor 真机首跑 ---
+命令：boardwise doctor --json outputs/013_doctor.json
+退出码：0（7/7 通过）
+证据：outputs/013_doctor.json、outputs/013_doctor_stdout.txt、outputs/013_sys_probe_doctor.json
+逐项：
+  daemon            PASS  127.0.0.1:61190 已应答 ping
+  connector         PASS  已注册，指纹 962bf45e
+  methods           PASS  5/5 都是 function
+  editor-version    PASS  3.2.186 ≥ 3.2.183
+  daemon-version    PASS  运行中 0.1.0 == 本机 0.1.0
+  connector-version PASS  编辑器 0.4.6 == 仓库 0.4.6
+  project           PASS  焦点工程 test（ea80fff6…，5 页原理图 / 1 个 PCB）；活动文档：无（占位 uuid=0）
+5 个抽查方法 typeof（sys.probe 原始返回，editor 3.2.186 / connector 0.4.6）：
+  dmt_Schematic.getCurrentSchematicPageInfo = function
+  dmt_Pcb.getCurrentPcbInfo                = function
+  sch_PrimitiveComponent.getAll            = function
+  dmt_EditorControl.openDocument           = function
+  dmt_EditorControl.generateIndicatorMarkers = function
+  （仓库 docs 里没有 "[beta]" 这个标注；此为上游说法，未落本地文档）
+
+--- 项2 lib.recommend query 路径 ---
+证据：outputs/013_lib_recommend_SS34.json、013_lib_recommend_FRC0805J471.json、
+      附加判别：013_lib_recommend_C8678.json、013_lib_recommend_SS34_C8678.json、
+      013_lib_device_search_SS34.json
+query="SS34"（topN 默认 5）：
+  exact      searchByProperties {partNumber:"SS34"}  called=true  hitCount=0  pagesFetched=1
+  properties searchByProperties {value:"SS34"}       called=true  hitCount=0  pagesFetched=1
+  keyword    search             {keyword:"SS34"}     called=true  hitCount=5  pagesFetched=1
+  returned=5 shown=5
+query="FRC0805J471"：
+  exact      searchByProperties {partNumber:...}     called=true  hitCount=0
+  properties searchByProperties {value:...}          called=true  hitCount=0
+  keyword    search             {keyword:...}        called=true  hitCount=2
+  returned=2 shown=2
+附加判别（同一只读动作，用于分辨"不存在"与"匹配不到"）：
+  query="C8678"       exact {partCode:"C8678"} called=true hitCount=0；
+                      properties called=false（reason: neither a value nor a footprint name is known）；
+                      keyword {keyword:"C8678"} hitCount=2
+  query="SS34_C8678"  exact {partNumber:"SS34_C8678"} 0；properties {value:"SS34_C8678"} 0；keyword 1
+结论（事实）：lib_Device.searchByProperties 在 3.2.186 **存在且可调用**（typeof=function；
+  三种属性集都给 called=true、无 error 字段、返回数组长度 0）；但 try 过的四种属性集
+  （partNumber=SS34 / value=SS34 / partCode=C8678 / partNumber=SS34_C8678）全部 0 命中，
+  而同名 keyword 层每次都能命中（5 / 1 / 2）。即 searchByProperties 是"在但不匹配"，
+  本宿主上 exact 与 properties 两层实质空转，全靠 keyword 层出货。
+未确认项：无法区分"宿主忽略这些属性键"与"第 6/7 位实参（pageSize, page）位置不对"——
+  lib.recommend 只按固定位置传 (properties, undefined×3, 5, page)，没有通道换参数重试。
+hitCount=5 的语义：RECOMMEND_PAGE_SIZE=5（connector/src/actions.ts:4098），同 keyword 用
+  lib.device.search 不传 pageSize 时 returned=10（宿主默认页 10）——所以 keyword 的 hitCount
+  是**按请求页大小截断后的条数**，不是匹配总数（topN=5 也是停止条件之一）。
+候选字段形状（lib.recommend candidates[]，每项 17 键）：
+  name, lcsc, mpn, manufacturer, footprintName, supplierFootprint, partClass, partClassRank,
+  datasheet, description, deviceUuid, libraryUuid, symbolUuid, footprintUuid,
+  layer, layerIndex, footprintMatches
+  layer 取值＝该候选首次出现的层名（"keyword" / 更早的 "exact"/"properties"），
+  layerIndex 为层序（exact=0, properties=1, keyword=2）。
+otherProperty 原始键名（lib.device.search 的 deepDump，非转述）：
+  SS34_C8678(C8678)：LCSC Part Name, Supplier Part=C8678, Manufacturer=MDD(辰达半导体),
+    Manufacturer Part=SS34, Supplier Footprint=SMA(DO-214AC), JLCPCB Part Class=Basic Part,
+    Datasheet, Supplier, Add into BOM, Convert to PCB, Symbol, Designator, Footprint,
+    3D Model, 3D Model Title, 3D Model Transform, Diode Configuration,
+    Voltage - Forward(Vf@If), Voltage - DC Reverse(Vr), Current - Rectified,
+    Reverse Leakage Current (Ir), Operating Junction Temperature Range, Name
+  SS34(C9900023345)：同样 17 键但无电气类键；Manufacturer=""、Datasheet=""、description=""、
+    imageUuid=null、classification 两个 uuid 均为 null（字段级空缺是数据本身，不是读取失败）
+  lib.recommend 读取的 6 个键（Supplier Part / Manufacturer Part / Manufacturer /
+  Supplier Footprint / JLCPCB Part Class / Datasheet）**都以代码首选拼写原样存在**，
+  容错归一化(stringField)在本宿主上没有被迫用到。
+  库项是**扁平对象**：symbolName/symbolUuid/footprintName/footprintUuid 直接挂在 item 上，
+  只有一个嵌套对象 classification；**没有 item.symbol / item.footprint 子对象**
+  （deepDump depth=4、键数 24<64，无 __truncated 标记）→ 代码里
+  readMember(item,'footprint') 这条路在真机上是 undefined，实际由 footprintUuid/symbolUuid
+  回退填上。这条回退在真机上是**必需的**，不是冗余。
+
+--- 项3 doc.list / document.current 形状 ---
+证据：013_doclist_before.json（= r1a/r1b/r1c/r1d/r1e/r1f/r1g/r1h/r1i/after 全部字节相同，
+      sha256 a4786ae2b89444ef…）、013_document_current.json
+doc.list 顶层键：documents[], projects[], active, schematicPages, pcbs, count, notes
+  documents[]（6 行）：uuid/name/type/active/parentName（page 行另有 parentUuid）
+    type 取值：schematic ×1、page ×4、pcb ×1；每行 active 全为 false
+  projects[]（**仅 1 项**）：
+    projectUuid=ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489
+    name="/test"、friendlyName="test"、focused=true、opened="yes"、documents="full"
+    schematics[] 5 项（容器 schematic1 + 页 P1..P4）、pcbs[] 1 项（PCB1）
+    非焦点分支（opened="unknown" / documents="brief"）**本次未覆盖**：编辑器里只有一个工程
+  active: null；notes[0] = 'dmt_SelectControl.getCurrentDocumentInfo: reported uuid "0" …
+    reported as no active document' → uuid="0" 归一化真机生效，形状与离线一致
+  schematicPages=4（不含容器）、pcbs=1、count=6
+  无 projects: 开头的 notes → getAllProjectsUuid 未失败也未吐出第二個 uuid；
+  推断：该次 getAllProjectsUuid 只返回 /test 一个 uuid（工作区/dmt_Project 口径下也没有第二工程）
+document.current 与 doc.list 对比：
+  同口径：active=null 且 type=null、typeSource="none"、heuristic=false；
+    problems[0] 是同一句 uuid="0" 占位说明 → "无活动文档"这一读数两名读者一致 ✓
+  不同口径：**document.current.project = {}（空对象）**，而 doc.list 用同一次
+    dmt_Project.getCurrentProjectInfo 读出了 name/friendlyName/uuid 并列出 /test。
+    归因（离线可查证，不是猜）：documentCurrent 走 snapshot()，snapshot 只走
+    getState_* 原型成员（actions.ts:218）；projectRows 走 plainGet（actions.ts:89）。
+    该工程信息对象在本宿主上是**普通属性**（plainGet 读到了），所以 snapshot 只能给 {}。
+    残留不确定性：无法排除该对象是 Proxy、只有 plainGet 那条读法能取到值——本批无通道进一步判别。
+  pcb=null、schematicPage=null（两个 getCurrent*Info 返回空），与"无焦点文档"一致；
+  tabs[] 只有一项 {tabId:"tab_page1", title:"Start Page", documentType:null}，
+  并带 keys[]（说明 documentType 的键名探测在本宿主上仍未定）。
+
+--- 项4 dmt_Project.openProject 行为实测 ---
+证据：013_probe_dmt_project.json、013_openproject_attempt.json、013_doclist_after.json
+typeof 表（sys.probe 原始返回，connector 0.4.6 / editor 3.2.186，checked=6 missing=3）：
+  openProject=function、getAllProjectsUuid=function、getCurrentProjectInfo=function
+  openProjectByUuid=undefined、setCurrentProject=undefined、activateProject=undefined
+  （与 012v2 在 connector 0.4.5 上的读数逐字一致）
+调用尝试：boardwise bridge call --action dmt_Project.openProject --params '{"name":"/test2"}'
+  结果：非零退出，'boardwise bridge call: dmt_Project.openProject failed
+  [UNKNOWN_ACTION] unknown action \'dmt_Project.openProject\''
+  该报文格式来自 daemon（src/boardwise/bridge/daemon.py:551 `unknown action {action!r}`），
+  不是 connector（connector 的拒绝是 "connector has no handler for …"，index.ts:220）
+  → daemon 侧动作表在转发前就拒了，**没有任何帧到达编辑器**。
+根因（离线核对）：0.4.6 的动作表（connector/src/actions.ts:4965+ 与 protocol.py ACTIONS）里
+  **没有任何动作包装 dmt_Project.openProject**，桥也没有"任选 API"的直通口
+  （actions.ts 里 openProject 唯一出现在注释/文档）。因此本批**无法实测 openProject 行为**：
+  不是报错形态、不是版本不存在，而是**桥没有该动作的入口**。
+目标工程条件：doc.list projects[] 只有 1 项（/test），没有第二工程可切；
+  即便有入口，test2 也未在编辑器里打开（R3：不自行解释、不自行替代，交回主代理/岳裁定）。
+前后对比：调用尝试前后 doc.list 字节完全一致（sha a4786ae2b89444ef…），焦点未漂移。
+
+=== 真机新事实（与离线预期不符 / 离线没写清楚的）===
+N1 searchByProperties 在 3.2.186 **存在但四种属性集全部 0 命中**（离线只备了"缺失则降级"一条路，
+   没有"在但不匹配"这条；docs/bridge.md:1050 把"是否存在"列为待真机settle的问题——现在答了：
+   存在，但不干活）。keyword 层是唯一实际出货的层。
+N2 keyword 层 hitCount=5 是页大小截断值，不是匹配数（同 keyword 直查返回 10 条）。
+N3 document.current.project 在真机上是 {}，与 doc.list 的 /test 不同口径（同一宿主调用的两种读法）。
+N4 库项是扁平对象，无 item.symbol / item.footprint 子对象；代码里的 footprintUuid/symbolUuid
+   回退在真机上是**必需路径**（离线看着像冗余）。
+N5 库项 otherProperty 存在字段级空缺（Manufacturer/Datasheet/description/imageUuid 全空、
+   classification uuid 为 null）——"读到空"与"读失败"在输出里是两回事，本批未见读失败。
+N6 item 名与 MPN 可以不同（name="SS34_C8678"、mpn="SS34"、supplierId="C8678"）；
+   第 4 个候选 name="SS34"（C9900023345）与 MPN 同名但制造商为空。
+N7 doctor 的 project 行写 "5 页原理图"，其中的 5 = schematics[] 长度（含容器 schematic1），
+   实际页数是 schematicPages=4。数值来自 projectRows 的 schematics[]，标签措辞偏松，非 FAIL。
+N8 tabs[] 只有 Start Page 一个 tab，且 documentType=null、附带 keys[]——documentType 键名在本
+   宿主上仍未定（离线已知，真机复现）。
+N9 doctor 七项全绿、退出码 0，与离线预期一致（无差异）。connector 版本比对项真机 0.4.6==0.4.6。
+
+=== 需要批② / 修复轮跟进 ===
+F1 openProject 无入口：要么加一个焦点类动作包装（`project.open`，只 open 不写内容，需过确认门），
+   要么请岳在编辑器里手动打开 test2。二者都需要裁决，本批不动代码。
+F2 §五 非焦点分支（opened="unknown" / documents="brief"）与 focused 翻转**仍未覆盖**：
+   需先把 test2 打开成第二个工程（配合 F1）才能跑 projects[] 双工程 + doc.focus/doc.open 切换。
+   可考虑先走"岳手动开 test2"这条零代码路线。
+F3 document.current.project={} 的建议修法（供修复轮评估，本批未改）：project 改走 plainGet
+   （或 snapshot 后 plainGet 兜底），与 projectRows 同口径。
+F4 searchByProperties 的参数语义未定：需要一个能换实参顺序/键名的探针通道，否则"在但不匹配"
+   无法继续追（可能第 6/7 位实参错位）。
+F5 doctor project 行 "N 页原理图" 的措辞/计数口径（含容器）建议与 schematicPages 对齐——纯文案。
+F6 未做（本批边界外）：doc.focus 真机调用（无第二工程、无活动 tab，做了也没有判别力）、
+   review.mark / export.fab / 双工程段属批②。

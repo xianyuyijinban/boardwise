@@ -1,0 +1,19 @@
+boardwise review: tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2 (33 components, 14 nets)
+board: 125 pads, 29 tracks, 150 vias
+findings: 0 ERROR, 15 WARN, 0 INFO
+[WARN] param-value-mpn-match: C1: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+[WARN] param-value-mpn-match: C115: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+[WARN] param-value-mpn-match: C116: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+[WARN] param-value-mpn-match: R8: board value 0.005 Ω contradicts its MPN ('JER2512F3R005' decodes to 0 Ω) -- BOM and schematic disagree
+[WARN] param-value-mpn-match: R18: board value 0.005 Ω contradicts its MPN ('JER2512F3R005' decodes to 0 Ω) -- BOM and schematic disagree
+[WARN] param-value-mpn-match: R43: board value 0.005 Ω contradicts its MPN ('JER2512F3R005' decodes to 0 Ω) -- BOM and schematic disagree
+[WARN] param-value-mpn-match: C4: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+[WARN] param-value-mpn-match: C5: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+[WARN] param-value-mpn-match: C6: board value 0.00033 F contradicts its MPN ('PA50V330M10x15' decodes to 3.3e-11 F) -- BOM and schematic disagree
+[WARN] param-value-mpn-match: C7: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+[WARN] param-value-mpn-match: C8: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+[WARN] param-value-mpn-match: C9: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+[WARN] param-value-mpn-match: C10: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+[WARN] param-value-mpn-match: C11: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+[WARN] param-value-mpn-match: C12: board value 1e-05 F contradicts its MPN ('HGC1206R5106K500NSPJ' decodes to 5e-11 F) -- BOM and schematic disagree
+JSON report written to outputs/013_bishe_findings.json

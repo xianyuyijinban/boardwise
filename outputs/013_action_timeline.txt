@@ -1,0 +1,16 @@
+14:46:03	R1 focus check (before lib.recommend SS34)	doc.list	exit=0	bytes=2388
+14:46:07	lib.recommend query=SS34	lib.recommend	exit=0	bytes=5315
+14:46:07	R1 focus check (between)	doc.list	exit=0	bytes=2388
+14:46:08	lib.recommend query=FRC0805J471	lib.recommend	exit=0	bytes=2893
+14:46:09	R1 focus check (after)	doc.list	exit=0	bytes=2388
+r1d exit=0
+lib.device.search SS34 exit=0
+14:46:41	R1 focus check (before LCSC-code probe)	doc.list	exit=0	bytes=2388
+14:46:43	lib.recommend query=C8678 (LCSC code -> exact partCode rung)	lib.recommend	exit=0	bytes=3135
+14:46:44	R1 focus check (between)	doc.list	exit=0	bytes=2388
+14:46:48	lib.recommend query=SS34_C8678 (partNumber=exact device name)	lib.recommend	exit=0	bytes=2120
+14:46:48	R1 focus check (after)	doc.list	exit=0	bytes=2388
+14:47:06	R1 focus check (before dmt_Project probe)	doc.list	exit=0	bytes=2388
+14:47:07	sys.probe dmt_Project typeof table	sys.probe	exit=0	bytes=2791
+14:47:07	openProject invocation attempt (no wrapper expected)	dmt_Project.openProject	exit=1	bytes=113
+14:47:08	R1 focus check (after attempt)	doc.list	exit=0	bytes=2388

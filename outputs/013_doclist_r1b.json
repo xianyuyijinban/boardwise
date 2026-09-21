@@ -1,0 +1,101 @@
+{
+  "documents": [
+    {
+      "uuid": "d977b19a89c0abb7",
+      "name": "schematic1",
+      "type": "schematic",
+      "active": false,
+      "parentName": "Board1"
+    },
+    {
+      "uuid": "f93a95b7245ba351",
+      "name": "P3",
+      "type": "page",
+      "active": false,
+      "parentUuid": "d977b19a89c0abb7",
+      "parentName": "schematic1"
+    },
+    {
+      "uuid": "362924e0e16ce90a",
+      "name": "P4",
+      "type": "page",
+      "active": false,
+      "parentUuid": "d977b19a89c0abb7",
+      "parentName": "schematic1"
+    },
+    {
+      "uuid": "b4298962367251c8",
+      "name": "P1",
+      "type": "page",
+      "active": false,
+      "parentUuid": "d977b19a89c0abb7",
+      "parentName": "schematic1"
+    },
+    {
+      "uuid": "b5269e3dea21f633",
+      "name": "P2",
+      "type": "page",
+      "active": false,
+      "parentUuid": "d977b19a89c0abb7",
+      "parentName": "schematic1"
+    },
+    {
+      "uuid": "5dc38976c1fa45ce",
+      "name": "PCB1",
+      "type": "pcb",
+      "active": false,
+      "parentName": "Board1"
+    }
+  ],
+  "projects": [
+    {
+      "projectUuid": "ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489",
+      "name": "/test",
+      "friendlyName": "test",
+      "focused": true,
+      "opened": "yes",
+      "schematics": [
+        {
+          "uuid": "d977b19a89c0abb7",
+          "name": "schematic1",
+          "type": "schematic"
+        },
+        {
+          "uuid": "f93a95b7245ba351",
+          "name": "P3",
+          "type": "page"
+        },
+        {
+          "uuid": "362924e0e16ce90a",
+          "name": "P4",
+          "type": "page"
+        },
+        {
+          "uuid": "b4298962367251c8",
+          "name": "P1",
+          "type": "page"
+        },
+        {
+          "uuid": "b5269e3dea21f633",
+          "name": "P2",
+          "type": "page"
+        }
+      ],
+      "pcbs": [
+        {
+          "uuid": "5dc38976c1fa45ce",
+          "name": "PCB1",
+          "type": "pcb"
+        }
+      ],
+      "documents": "full"
+    }
+  ],
+  "active": null,
+  "schematicPages": 4,
+  "pcbs": 1,
+  "count": 6,
+  "notes": [
+    "dmt_SelectControl.getCurrentDocumentInfo: reported uuid \"0\" for the active document — the host's placeholder for \"nothing is focused\"; reported as no active document"
+  ]
+}

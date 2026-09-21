@@ -1,0 +1,159 @@
+013 批② 真机验收 · 原始事实记录（执行子代理，2026-09-21 15:47–16:5x）
+=========================================================================
+
+环境：daemon 61190（012 代码，未重启，未 update-connector）；编辑器 3.2.186
+（窗口标题 "… | 立创EDA(专业版) - V3.2.186"）；connector 0.4.9（doctor 自证）。
+焦点工程在本次执行期间**反复漂移**（见 §五），所有写操作都在 doc.list 焦点工程名逐字
+= 毕设FOC驱动板 的当口发出。
+
+§五 双工程段
+------------
+1. doc.list 现状（每次采样 projects[] 恒为 1 项，即焦点工程）：
+   | 时刻 | focused(friendlyName) | projects[] 条数 | active | 备注 |
+   | 15:47 | /test（test）        | 1 | page b4298962367251c8（/test P1） | 013_p2_doclist_1.json |
+   | 15:51:34 | test2            | 1 | null | 013_p2_doclist_watch.txt（后台轮询首样） |
+   | 15:51 | /毕设FOC驱动板      | 1 | null（占位 uuid=0 归一化 + notes） | 013_p2_doclist_3.json |
+   | 15:52 | /毕设FOC驱动板      | 1 | page 5f0f4e16…（毕设板 schematic1/P1） | 013_p2_doclist_r1_bishe.json |
+   | 16:07 | /毕设FOC驱动板      | 1 | page 5f0f4e16… | 013_p8_r1_doclist.json |
+   | 16:07 | /毕设FOC驱动板      | 1 | pcb ab812fb7…（PCB1） | 013_p6_r1_doclist.json |
+   | 16:0x | test2 / test 交替   | 1 | 见 013_p2_full_hunt_trace.txt 与 013_p2_hunt_trace.txt |
+   ⇒ 该宿主 dmt_Project.getAllProjectsUuid() 在每次采样里都只返回**当前工程**一项；
+    非焦点分支（opened:"unknown" / documents:"brief"）**从未出现**——如实定性：
+    **这台宿主上 projects[] 只报焦点工程**，多工程枚举路径不可用（也就无法实测
+    「非焦点工程条目」的形状）。
+2. 焦点漂移复现（012 已记录的现象，本轮三工程间漂移）：
+   /test（15:47）→ test2（15:51:34）→ 毕设FOC驱动板（15:51）→ test2/test（16:00–16:03）
+   → 毕设FOC驱动板（16:07）→ … 全程无人通过 API 改焦点（我只调 doc.open 打开页面标签、
+   doc.focus 查询式试切），故漂移来自宿主侧（岳在操作 + 多窗口）。
+3. doc.focus 试切 test2 → **NOT_FOUND**（013_p2_docfocus_test2.json、_tabid.json）：
+   detail.openTabs = ["tab_page1"]（title "Start Page"）。同一 uuid 用 test2 的
+   磁盘结构表（project_structures）实测 uuid：schematic 4c8cf4a189c78533 / P1 c7c82860f3597fcc /
+   P2 2b79b73f1e0e522f / P3 f805e257ac7383dc / PCB1 5ce4c9f372e0f867（副本 outputs/_013_test2_copy.eprj2）。
+   ⇒ **不能据 NOT_FOUND 判 test2 已关**：此刻宿主标签树里连任何工程页标签都没有（只有
+   开始页），doc.focus 的 NOT_FOUND 只说明"没有匹配的已开标签"。而 15:51:34 的采样里
+   focused=test2、documents 5 条⇒ test2 当时确实是宿主的当前工程。
+4. 新增可用读数（本轮发现）：`document.current` 的 `tabs[]` 是标签树的**只读**视图
+   （tabId/title/documentType/keys），比 doc.focus 报错里捞 openTabs 更直接；
+   本轮实测标签树只有 [{tabId:"tab_page1", title:"Start Page", documentType:null}]。
+5. doc.focus 的**成功路径未实测到**（三次试切全部 NOT_FOUND）；等效调用链的
+   activateDocument 成功观测见 §八 doc.open(activated:true)。
+
+§八 review.mark（毕设板 / schematic1 / P1 = 5f0f4e169f1745e789501f939bb10851）
+------------------------------------------------------------------------------
+夹具：tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2 →
+`boardwise review … --json outputs/013_bishe_findings.json`（exit 0；15 条 WARN，
+  全为 param-value-mpn-match，每条 1 个 ref）。
+R1 核对（013_p8_r1_doclist.json）：焦点工程名逐字"毕设FOC驱动板"；active=page 5f0f4e16…。
+选页：schematic1/P1 命中 9/15 refs（171 器件 / 92 位号）；schematic2/P1 只 1/15
+  （15 器件）⇒ 用 schematic1/P1。抽查 refs C1/C115/C116 在真机页上均存在
+  （sch.geometry，013_p2_geometry_bisheP1.json / 013_p2_geometry_bisheP1b.json）。
+mark（013_p8_mark.json）：mode=markers，marked=9，unresolved=6，markers={attempted:9,
+  accepted:9}；page={components:171, designators:92, withoutPosition:79}。
+  未打标 6 条（R8/R18/R43/C6/C10/C12）理由逐条写明 "no component with this designator
+  on the focused page"。CLI 表格见 013_mark_P1.txt。
+clear（013_p8_clear.json）：cleared=true。
+  另两次实测：013_vis_clear.json cleared=**false**（note "the canvas refused the removal
+  — an unsupported canvas or an unknown tab"）；013_p2_clear_verify.json 第 1 次即 true，
+  但**当时焦点工程是 /test、active=/test P1**——即 `review.mark {clear:true}` **无页面守卫**，
+  它清的是"当前画布"。
+错 pageUuid（013_p8_mismatch.json）：pageUuid=0000000000000000 →
+  **PAGE_MISMATCH** "the focused page is 5f0f4e16…, not 0000000000000000 — refusing to place"
+  （守卫在取坐标之前，画布无变化）；同一守卫另一次以 "the focused page is (none)" 拒绝。
+焦点为 PCB 时（013_p8_pcb_focus.json，doc.open(PCB1) 后不传 pageUuid）→
+  **CONNECTOR_ERROR** "the focused document is a pcb, not a schematic page …"。
+截图可见性（本轮最大的坑）：
+  - `bridge screenshot`（= export.screenshot）在本机**返回缓存空帧**：12210 B、1539x360、
+    全白；同一会话三次调用 + `--fit` 变体 **sha256 完全相同**
+    （fafc42d6…，见 013_mark_P1_bridge_cached_blank.png / 013_mark_cleared_bridge_cached_blank.png
+    / 013_markvis_bridge_cached_blank.png）⇒ 本轮复核了 bridge.md 里"viewport capture 不是证据"
+    的备注，并落实为实测。
+  - `PrintWindow`(PW_RENDERFULLCONTENT) 抓编辑器窗口同样是**缓存帧**：同一窗口在"标记前 /
+    标记后 / 清除后 / 20 分钟后"四次抓图 **sha256 逐字节相同**（013_win_2.png == 013_cap_*_3.png
+    == 013_mag_win_2.png …）。
+  - 唯一能给真内容的路径 = 抬升窗口 + CopyFromScreen（013_p2_screengrab.ps1；抓完恢复原前台窗口）。
+    以此取得的成对样本：
+      * 同一窗口同一次 mark（不带 --zoom，视图不变）前后：纯红像素 186 → **548**
+        （013_ab_pre_2.png → 013_ab_on_3.png），长直线红像素 123 → 520，**最长竖红线段
+        7 px → 42 px**（hollow 矩形边；013_p2_markerbox.ps1）——即画布上出现了框状几何。
+      * 但另一次改用 #FF00FF 标记（accepted 9/9）后，三个可见窗口里**洋红像素恒为 0**；
+        且该轮的"标记前/清除后"两图红/洋红计数逐项相同（013_proof_marked_*.png vs
+        013_proof_after_*.png）。
+    ⇒ 交卷口径：**宿主接受打标（accepted 9/9）确证；画布上"看得见矩形"只有一对样本支持
+      （红框几何 + 同窗口对照），**另有反例**，且视图在 岳 操作下不断变动，无法取得完全同
+      视图的干净 A/B。故"可见性"记为**未完全确证**，证据两存。
+
+§六 export.fab（毕设板 PCB1）
+------------------------------
+R1（013_p6_r1_doclist.json）：焦点工程名逐字"毕设FOC驱动板"，active=pcb ab812fb7…。
+选板依据（实读，非猜）：pcb.readback → PCB1 **122 器件**、PCB2 **10 器件**
+  （013_p6_readback_pcb1.json / _pcb2.json）⇒ 取 PCB1 为主板。
+命令：`boardwise bridge export-fab --out outputs/013_fab_bishe --pcb ab812fb712e14a62920977ed67aaf8f1`
+  → **exit 0**（013_p6_export.txt）。manifest.failed=[]。
+产物（outputs/013_fab_bishe/）：
+  | 文件 | 字节 | 类型 |
+  | fab_gerber | 174063 | **真 zip**（zipfile：16 条目，testzip=None：GTL/GBL/GTO/GBO/GTS/GBS/GTP/GKO/
+  |            |        | GDL/G1/G2/GDD + 3 个 DRL + "PCB下单必读.txt"；解压总长 729846 B） |
+  | fab_pick_and_place | 49422 | UTF-16LE 文本，CRLF，123 行 = 表头 + **122 行**（=PCB1 器件数），
+  |                    |       | 列 Designator/Device/Footprint/Mid X/Mid Y/…/Rotation/SMD/Comment/Value…，mm |
+  | fab_bom.csv | **152** | UTF-16LE，**只有表头 1 行、零数据行** |
+  | manifest.json | 5638 | schema boardwise.fab/1；project{uuid,name=毕设FOC驱动板}；pcb{uuid,name=PCB1}；
+  |               |      | outDir；vendor=generic；preset 全量；files[]；failed=[]；notes[]（2 条 caveat）；
+  |               |      | written[] 三条 declaredBytes 与实际字节**逐条相等** |
+BOM 15 列接受度（任务书点名的最大风险）：**表头全接受**——`序号 位号 数量 值 器件名称 器件 封装
+  制造商料号 制造商 立创编号 供应商 供应商封装 No. JLC 类别 Quantity 数据手册 描述`（= statistics
+  2 项 + columns 15 项），拼写逐字与 preset 一致；**但一个数据行都没有**（152 B）。
+  ⇒ 宿主吃下了列定义，却没吐数据；preset 的 filterOptions=[{Add into BOM=yes},{Convert to PCB=yes}]
+  与宿主语义的差异是首要嫌疑（pcb.readback 显示器件字段 AddIntoBom=true，故此过滤条件对 PCB
+  侧成立——嫌疑落在宿主 BOM 过滤键名/取值语义），需修复轮定夺。
+文件名与文档不符：实际 `fab_gerber`（无 .zip）/`fab_pick_and_place`（无 .csv）/`fab_bom.csv`。
+  原因（读码确认）：connector readFabFile 优先用宿主回传的 file.name（actions.ts:3900-3907），
+  而宿主对 gerber/pnp 回的是我们传的 fileName（preset 里就是 'fab_gerber'/'fab_pick_and_place'），
+  只有 BOM 由宿主补了 .csv。`docs/getting-started.md` 第 6 步承诺的
+  `fab_gerber.zip`/`fab_pick_and_place.csv` 与现实不符（文档或 preset 二者之一要改）。
+帧上限：三件套合计 223637 B（含 manifest 229275 B），base64 约 0.3 MB；
+  daemon MAX_FRAME_BYTES = 32 MiB（daemon.py:150）⇒ 远未逼近上限（约 1%）。
+
+doctor（顺带，013_p2_doctor.txt）：7/7 PASS，exit 0；焦点工程行
+  "焦点工程：毕设FOC驱动板（58c7593c…，3 页原理图 / 2 个 PCB）；活动文档：page 5f0f4e16…"
+  （F5 计数口径修复在真机上生效：3 页/2 PCB，容器不计）。
+
+getting-started 六张截图（docs/images/ 目录当前**不存在**）
+------------------------------------------------------------
+| 文件 | 能否由我产出 | 说明 |
+| gs-01-editor-about.png | 否 | 编辑器"帮助→关于"对话框，属 GUI；只能岳手截。旁证：窗口标题含 V3.2.186 |
+| gs-02-extension-menu.png | 否（半） | 菜单栏 boardwise 入口在窗口抓图里可见（013_win_print.png），
+|                            |     | 但 About 弹框要点开——岳手截 |
+| gs-03-daemon-start.png | 否 | 配对公告只在**首次配对**出现；复现需 revoke（破坏性）——建议岳手截，或以其机
+|                            |     | 上的 daemon 窗口为准；本轮只有 `bridge status` 输出（013_p2_*） |
+| gs-04-doctor-green.png | 终端文本可替 | 真实 7/7 输出见 013_p2_doctor.txt；建议岳照它截自己的终端 |
+| gs-05-review-mark.png | 画布部分有素材 | 打标画布抓图 013_mark_P1.png + 序号表 013_mark_P1.txt；
+|                            |                | 但 bridge screenshot 是缓存空帧（见上），且可见性未完全确证 |
+| gs-06-fab-files.png | 终端/目录可替 | 目录清单与终端输出见 013_p6_export.txt + manifest；建议岳照截 |
+
+本轮额外发现（需主代理裁决/落文档）
+------------------------------------
+F1. export.screenshot 在本机恒返回**同一张缓存空帧**（`--fit` 无效）——不是"偶发"，可直接写进
+    getting-started 的"打标成功但画布上看不到"排查行。
+F2. `review.mark {clear:true}` **无页面守卫**，会清除"当前画布"的标记；且本机出现 cleared=false
+    的拒绝（同一次会话里前一次 true）——建议文档/实现补"clear 与 mark 可能落在不同画布"的说明。
+F3. BOM 零数据行（上面 §六）——generic preset 的最大功能缺口。
+F4. gerber/pnp 落盘名缺扩展名（preset fileName 无后缀，宿主原样回传）。
+F5. 本机标签树极简（只有 Start Page，tabId="tab_page1"），且**没有任何工程页标签时**
+    doc.list 仍报"焦点工程"——focus 是应用级、与"有没有打开的文档"解耦；doc.focus 的
+    `<docUuid>@<projectHash>` 形态本机只在 /test P1 上见过一次（15:47）。
+F6. 我使用了 `doc.open`（catalogue 标 risk=read，"Changes the editor's active document, never
+    the project's content"）作为前置：本轮开始时机上**没有任何工程页标签**（只有开始页），
+    不打开目标页则 sch.geometry 为空、review.mark 无从落点。此点已在上文显式申报。
+
+
+附：工程身份交叉核对（磁盘结构层，明文）
+----------------------------------------
+E:\LC Project\毕设FOC驱动板.eprj2（SQLite project_structures，副本已删，提取件 013_p2_project_uuids.txt）：
+  文件内 project.name = "24V FOC驱动板"（与工程列表里同名的另一项对应），
+  schematics = Schematic1 d5a2de3b5c9143feab116900f81395f9 / Schematic2 197bdc724da1babd；
+  sheets = P1 5f0f4e169f1745e789501f939bb10851 / P2 b0342c521c674ddab8dcc8aaf269ca59 / P1 0876ea4e415ed158；
+  pcbs = PCB1 ab812fb712e14a62920977ed67aaf8f1 / PCB2 308cffdb9f930ec1；boards = Board1/Board2。
+  ⇒ 与真机 doc.list 的 uuid **逐字一致**（P1/P2/第二 P1/PCB1/PCB2/两个容器），
+    唯 projectUuid 不同（真机 58c7593c…，磁盘 d96d2237…）。
+  E:\LC Project\test2.eprj2：project 0d961d9a…，schematic 4c8cf4a189c78533，
+  sheets P1 c7c82860f3597fcc / P2 2b79b73f1e0e522f / P3 f805e257ac7383dc，PCB1 5ce4c9f372e0f867。

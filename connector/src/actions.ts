@@ -342,6 +342,52 @@ async function infoUuid(info: any): Promise<string | null> {
 }
 
 /**
+ * One identifying field of a project, in whichever of the two shapes the host
+ * handed the info object over: plain property first, `getState_*` second.
+ *
+ * Same lesson as {@link infoUuid}, for the project box: the type declarations
+ * describe `dmt_Project.getCurrentProjectInfo` as `IDMT_ProjectInfo` with plain
+ * readonly properties (`uuid`, `name`, `friendlyName`), and that is what the
+ * real host answers (measured 2026-09-21) — while a mock or an older build may
+ * answer through `getState_*` on the prototype. A reader that knew only one
+ * shape reported "no project" on a project it was handed.
+ */
+async function identityField(info: any, plain: string, state: string): Promise<string | undefined> {
+  const direct = plainGet(info, plain);
+  if (typeof direct === 'string' && direct) return direct;
+  const fallback = await getState(info, state);
+  return typeof fallback === 'string' && fallback ? fallback : undefined;
+}
+
+/**
+ * The identity of a project, spelled the way `doc.list`'s `projects[]` row
+ * spells it (`projectUuid` / `name` / `friendlyName`).
+ *
+ * Why one shared read rather than a field read per caller: `doc.list` and
+ * `document.current` ask the host for the *same* project and used to disagree
+ * about it. Measured 2026-09-21 on editor 3.2.186 — `projects[]` named the
+ * focused project (`/test`, `test`, `ea80fff6…`) while `document.current`
+ * answered `project: {}`, because that box was built with `snapshot()`, which
+ * walks `getState_*` prototype members only and this host's project info
+ * carries plain properties. The disagreement was invisible for as long as it
+ * lasted: `document.current`'s pcb and schematic-page boxes *are* read through
+ * `getState_*` on that build, so only the project box came back empty, and an
+ * empty box reads like "nothing is open". Both readers go through here now.
+ */
+async function projectIdentity(info: any): Promise<Record<string, string>> {
+  const [uuid, name, friendlyName] = await Promise.all([
+    identityField(info, 'uuid', 'Uuid'),
+    identityField(info, 'name', 'Name'),
+    identityField(info, 'friendlyName', 'FriendlyName'),
+  ]);
+  return {
+    ...(uuid ? { projectUuid: uuid } : {}),
+    ...(name ? { name } : {}),
+    ...(friendlyName ? { friendlyName } : {}),
+  };
+}
+
+/**
  * Uuids the host uses as a *placeholder* for "no document is focused".
  *
  * Measured on the machine 2026-09-21: with more than one editor window open and
@@ -434,6 +480,29 @@ async function activeDocument(
 // --------------------------------------------------------------------------
 
 /**
+ * The `project` box of `document.current`: the `snapshot()` view of the info
+ * object **plus** the identity `doc.list` reports for the same project.
+ *
+ * Both halves are kept. `snapshot` is the only reader that can carry whatever
+ * else a host build puts on the box, and the identity keys are what a caller
+ * compares against `doc.list`'s `projects[]` row — the two used to disagree
+ * exactly here, because `snapshot` cannot see plain properties (see
+ * {@link projectIdentity}).
+ */
+async function readProject(eda: Eda, problems: string[]): Promise<Record<string, unknown> | null> {
+  try {
+    const info = await requireFn(eda, 'dmt_Project.getCurrentProjectInfo')();
+    if (!info) return null;
+    return { ...(await snapshot(info, 40, problems)), ...(await projectIdentity(info)) };
+  } catch (error) {
+    problems.push(
+      `project (dmt_Project.getCurrentProjectInfo): ${String((error as Error)?.message ?? error)}`,
+    );
+    return null;
+  }
+}
+
+/**
  * `document.current` — what the editor has open.
  *
  * The API exposes *current project*, *current PCB* and *current schematic
@@ -456,7 +525,10 @@ export const documentCurrent: ActionHandler = async (_params, eda) => {
       return null;
     }
   };
-  const project = await readInfo('dmt_Project.getCurrentProjectInfo', 'project');
+  // The project box is the one that is *not* only a `snapshot`: this host
+  // answers it with plain properties, so a snapshot-only box came back empty
+  // on a project `doc.list` could name (measured 2026-09-21). See `readProject`.
+  const project = await readProject(eda, problems);
   const pcb = await readInfo('dmt_Pcb.getCurrentPcbInfo', 'pcb');
   const schematicPage = await readInfo('dmt_Schematic.getCurrentSchematicPageInfo', 'schematicPage');
 
@@ -1295,6 +1367,9 @@ export type BoundHandler = (params: Record<string, unknown>) => Promise<unknown>
  * declared surface. The report deliberately uses the same three words as
  * `typeof` — `function` / `object` / `undefined` — plus `threw`, because
  * "undeclared" and "the read itself failed" must never collapse into one.
+ * Every member that reads back as a function also gets an `arity` entry
+ * (`fn.length`), so "declared with six arguments" and "declared with two" are
+ * distinguishable without a second action — see the `arity` comment below.
  *
  * @param checks  `{namespace: [memberName, …]}` as received from the caller.
  * @param eda     The context-global host object.
@@ -1324,6 +1399,14 @@ function probeChecks(checks: Record<string, unknown>, eda: any): Record<string, 
 
     const status: Record<string, string> = {};
     const notes: Record<string, string> = {};
+    // `fn.length` — the member's *declared* arity, reported beside the typeof it
+    // belongs to. F4 (2026-09-21) needed exactly this: `searchByProperties`
+    // reads back `function` on a host that answers nothing, and a 2-argument
+    // implementation under a 6-argument declaration would explain it. A hint,
+    // not a verdict — a proxy or a wrapper loses the real arity, so it is
+    // reported and never judged on (same footing as "typeof only proves the
+    // member is there").
+    const arity: Record<string, number> = {};
     let missing = 0;
     for (const raw of requested) {
       const member = String(raw);
@@ -1338,6 +1421,15 @@ function probeChecks(checks: Record<string, unknown>, eda: any): Record<string, 
         // `getPrototypeOf`, nothing an exotic host object can break.
         const value = ns[member];
         status[member] = typeof value;
+        if (typeof value === 'function') {
+          try {
+            arity[member] = value.length;
+          } catch {
+            // A member whose arity read throws stays a `function` in `status`:
+            // the read the caller asked for succeeded, and the arity simply did
+            // not — which is readable as "a function with no arity entry".
+          }
+        }
         if (value === undefined) {
           missing += 1;
           // A declared `ADD since …` method answering `undefined` is the
@@ -1357,6 +1449,9 @@ function probeChecks(checks: Record<string, unknown>, eda: any): Record<string, 
       checked: requested.length,
       missing,
       status,
+      // Always present, and empty when no member read back as a function: an
+      // absent member has no arity, and "no entry" is that fact.
+      arity,
       ...(Object.keys(notes).length ? { notes } : {}),
     };
   }
@@ -1383,6 +1478,8 @@ function probeChecks(checks: Record<string, unknown>, eda: any): Record<string, 
  *   `getOwnPropertyNames`/`getPrototypeOf` call to throw on an exotic host
  *   object. The candidate names come from the offline type package
  *   (`tools/api_names.py`), so this is the *complete* set, not a sample.
+ *   The member's declared arity (`fn.length`) is reported alongside, which is
+ *   how "present but answering nothing" gets a shape to test.
  *   This is what a host that crashes the enumerator can still answer.
  * - **enumerate** (fallback): `namespace` / `namespaces` / `functionsOnly`.
  *   Kept because it can find a name nobody predicted — a capability the type
@@ -2057,9 +2154,10 @@ async function projectRows(eda: Eda, problems: string[], docRows: DocRow[]): Pro
     // stays out of `notes` (those name reads that actually failed).
     return rows;
   }
-  const currentUuid = plainGet(current, 'uuid');
-  const currentName = plainGet(current, 'name');
-  const currentFriendly = plainGet(current, 'friendlyName');
+  // The identity of the focused project comes from the read `document.current`
+  // uses for its `project` box, so the two cannot spell the same project
+  // differently (`projectIdentity`).
+  const currentIdentity = await projectIdentity(current);
 
   const push = (
     uuid: unknown,
@@ -2093,7 +2191,8 @@ async function projectRows(eda: Eda, problems: string[], docRows: DocRow[]): Pro
   const focusPcbs = docRows
     .filter((row) => row.type === 'pcb')
     .map((row) => ({ uuid: row.uuid, name: row.name, type: row.type }));
-  push(currentUuid, currentFriendly, currentName, true, focusSchematics, focusPcbs);
+  push(currentIdentity.projectUuid, currentIdentity.friendlyName, currentIdentity.name,
+    true, focusSchematics, focusPcbs);
 
   const getAllUuids = requireFn(eda, 'dmt_Project.getAllProjectsUuid');
   let uuids: unknown;
@@ -2112,10 +2211,11 @@ async function projectRows(eda: Eda, problems: string[], docRows: DocRow[]): Pro
   const getProjectInfo = requireFn(eda, 'dmt_Project.getProjectInfo');
   for (const raw of uuids) {
     const uuid = String(raw ?? '');
-    if (!uuid || uuid === currentUuid) continue;
+    if (!uuid || uuid === currentIdentity.projectUuid) continue;
     try {
       const info: any = await settle(getProjectInfo(uuid));
-      push(uuid, plainGet(info, 'friendlyName'), plainGet(info, 'name'), false);
+      const identity = await projectIdentity(info);
+      push(uuid, identity.friendlyName, identity.name, false);
     } catch (error) {
       problems.push(
         `projects: getProjectInfo(${uuid}) failed — ${String((error as Error)?.message ?? error)}`,
@@ -3623,10 +3723,12 @@ type FabVendorPreset = {
 /**
  * The BOM's column set — every column a fab house or a buyer reads.
  *
- * **One list**, and `getBomFile`'s `property` argument is derived from it
- * (`FAB_BOM_COLUMNS.map(c => c.property)`), so the two arguments the API takes
- * cannot come to disagree about which columns exist. Heavier `orderWeight`
- * sorts left, which is the documented meaning.
+ * **One list**, and both of `getBomFile`'s column arguments are derived from it:
+ * the two counting columns become `statistics` and every other column becomes
+ * `property`, so the host is told about exactly the columns that are asked for
+ * and about none of them twice. Heavier `orderWeight` sorts left, which is the
+ * documented meaning. See {@link FAB_BOM_STATISTICS} for why the split is not
+ * cosmetic.
  *
  * The names are the component properties *this host* reports (measured in the
  * netlist export, 2026-09-15: `Supplier Part` carries the LCSC code,
@@ -3655,6 +3757,38 @@ const FAB_BOM_COLUMNS: FabBomColumn[] = [
 ];
 
 /**
+ * The columns the BOM API takes as **statistics** rather than as attributes.
+ *
+ * The declaration has two arguments for one column set, and the host's
+ * implementation is why the two are not interchangeable: `statistics` entries go
+ * through `hne`, which rewrites `'No.'` into the `'Number'` column the BOM
+ * engine numbers, while a `property` entry keeps the literal `'No.'`. The host
+ * then builds the table from `statistics + property` and does **not**
+ * deduplicate (`api.js` `getBomFile`) — so sending the counting columns in both
+ * arguments produced a **17-column header for a 15-column preset** (measured
+ * 2026-09-21): `序号`/`Number` and `数量`/`Quantity` each arrived twice.
+ *
+ * Dropping `statistics` instead would be worse than untidy: the column pass
+ * refuses the whole call when a column's property is in neither list
+ * (`p.includes(m.property) … else return`), and `'No.'` only becomes `'Number'`
+ * — the value that pass looks for — on this path. No `statistics`, no BOM file
+ * at all.
+ */
+const FAB_BOM_STATISTICS = ['No.', 'Quantity'];
+
+/**
+ * The `property` argument: the columns that are attributes, in column order.
+ *
+ * Derived from {@link FAB_BOM_COLUMNS} rather than written out, and kept
+ * **disjoint** from {@link FAB_BOM_STATISTICS}: the union of the two is exactly
+ * the columns the preset asks for, which is the check the host runs for every
+ * column it is handed, and neither list repeats an entry of the other.
+ */
+const FAB_BOM_PROPERTY = FAB_BOM_COLUMNS
+  .map((column) => column.property)
+  .filter((property) => !FAB_BOM_STATISTICS.includes(property));
+
+/**
  * Vendor presets, keyed by the `vendor` parameter.
  *
  * `generic` is the only one with a preset (012v2 §六): metric 4:5 gerber with
@@ -3674,7 +3808,11 @@ const FAB_VENDORS: Record<string, FabVendorPreset> = {
   generic: {
     summary: 'generic fab house: metric 4:5 gerber (drill table on), CSV P&P in mm, CSV BOM with every column',
     gerber: {
-      fileName: 'fab_gerber',
+      // The name carries its own suffix because the host echoes this string
+      // back as the file's name (`api.js`: `new File([data], t || c.fileName)`)
+      // — a bare `fab_gerber` reached disk with no extension at all (measured
+      // 2026-09-21).
+      fileName: 'fab_gerber.zip',
       colorSilkscreen: false,
       unit: 'mm',
       digitalFormat: { integerNumber: 4, decimalNumber: 5 },
@@ -3685,17 +3823,41 @@ const FAB_VENDORS: Record<string, FabVendorPreset> = {
         flyingProbeTestingFile: false,
       },
     },
-    pickAndPlace: { fileName: 'fab_pick_and_place', fileType: 'csv', unit: 'mm' },
+    // Same echo as the gerber name — `new File([blobData], r)` — so the suffix
+    // has to be here too.
+    pickAndPlace: { fileName: 'fab_pick_and_place.csv', fileType: 'csv', unit: 'mm' },
     bom: {
+      // No suffix here, unlike the other two: this is the one name the host
+      // makes itself (`new File([data], fileName + '.' + fileType)`), so
+      // `fab_bom` lands as `fab_bom.csv`. Putting `.csv` here would produce
+      // `fab_bom.csv.csv` (measured 2026-09-21).
       fileName: 'fab_bom',
       fileType: 'csv',
-      // The two rules the type package's own example uses: only parts that are
-      // in the BOM, and only parts that are converted to the PCB.
-      filterOptions: [
-        { property: 'Add into BOM', includeValue: 'yes' },
-        { property: 'Convert to PCB', includeValue: 'yes' },
-      ],
-      statistics: ['No.', 'Quantity'],
+      // `includeValue` is the value the host filters **against** — the rule
+      // leaves a row *out* when the part's property matches it. That is the
+      // opposite of what the parameter's name suggests, and the type package's
+      // own example (`includeValue: 'yes'`) therefore drops every part that is
+      // in the BOM: with it, the 122-component board came back as a
+      // header-only CSV (measured on 2026-09-21). `'no'` is the editor's own
+      // default for this rule and keeps them.
+      //
+      // Evidence, all from the host's own code shipped in D:/lceda-pro: the
+      // wrapper maps our entries onto `filterRules`
+      // (`api.js` `mne`/`gne`, which also coerces any value but `'yes'` to
+      // `'no'`), and the BOM builder drops a row whenever the rule matches
+      // (`pro-sch` `attrsGroup2` → `verify`, `if (... n.test(e[t])) return
+      // false`). `api.js` starts from `[{attr:'Add into BOM', rule:'no',
+      // checked:true}, {attr:'Convert to PCB', rule:'no', checked:false}]`.
+      //
+      // One rule, not two: "Convert to PCB" is left unchecked by the host's own
+      // default, because on a PCB-side BOM every part is on the board by
+      // construction — the row it would drop is not the row a fab house reads.
+      filterOptions: [{ property: 'Add into BOM', includeValue: 'no' }],
+      // The counting columns go here and nowhere else, and every other column
+      // goes in the `property` argument derived from `FAB_BOM_COLUMNS` — sending
+      // one column in both is what doubled the header (see
+      // {@link FAB_BOM_STATISTICS}).
+      statistics: FAB_BOM_STATISTICS,
       columns: FAB_BOM_COLUMNS,
     },
   },
@@ -3719,6 +3881,20 @@ const FAB_UNITS = ['mm', 'cm', 'dm', 'm', 'inch', 'in', 'mil'];
 const FAB_GERBER_OVERRIDE_KEYS = [
   'fileName', 'colorSilkscreen', 'unit', 'digitalFormat', 'other', 'layers', 'objects',
 ];
+
+/**
+ * Keys `params.bom` may override, under the same allowlist discipline.
+ *
+ * One key wide, and for a measured reason: `filterOptions` is the argument whose
+ * meaning the declaration gets wrong (see the preset's comment), so a caller
+ * with a different BOM rule — or one measuring this host — needs a way to say
+ * so without a rebuild. `null` is the third value and means "send nothing at
+ * all", which is not the same as `[]`: the host then keeps its own default
+ * rules rather than being handed an empty list that happens to look the same.
+ * The list grows when a caller has a reason; it does not grow to be symmetric
+ * with `params.gerber`.
+ */
+const FAB_BOM_OVERRIDE_KEYS = ['filterOptions'];
 
 /**
  * Per-file deadline for the three export calls.
@@ -3779,6 +3955,19 @@ function raceHostCall<T>(call: Promise<T>, label: string, ms: number, hint = '')
 }
 
 /**
+ * `base` with `ext`, unless it already ends in it.
+ *
+ * The three files are not named the same way (measured 2026-09-21): gerber and
+ * pick-and-place echo back the name they were handed, while the BOM's is the
+ * host's own `fileName + '.' + fileType`. The preset names therefore carry their
+ * suffixes, and this guard is what keeps a host that ever appends on its own
+ * from producing `fab_bom.csv.csv`.
+ */
+function withSuffix(base: string, ext: string): string {
+  return base.toLowerCase().endsWith(ext.toLowerCase()) ? base : `${base}${ext}`;
+}
+
+/**
  * A host `File` as base64 + metadata, or a thrown reason.
  *
  * A zero-byte file is a *failure*, not a small file: the editor answers with an
@@ -3804,7 +3993,7 @@ async function readFabFile(
   const type = readMember(file, 'type').value;
   return {
     role,
-    name: sourceName || `${base}${zip ? '.zip' : ext}`,
+    name: sourceName || withSuffix(base, zip ? '.zip' : ext),
     mime: typeof type === 'string' && type ? type : fallbackMime,
     bytes: bytes.byteLength,
     data: bytesToBase64(bytes),
@@ -3832,6 +4021,13 @@ async function readFabFile(
  * Only a *structural* absence throws — the namespace or one of the three
  * declared methods missing — and so does "all three failed", because an empty
  * bundle is not a bundle.
+ *
+ * **What the host actually does with the preset, measured 2026-09-21 on
+ * 3.2.186** — this is why `params.bom` exists at all: the BOM's `filterOptions`
+ * are *exclusion* rules (`includeValue` is the value that leaves a row out, so
+ * the type package's own `'yes'` example exports an empty BOM — see the preset),
+ * and the three names are not chosen the same way (gerber and P&P echo the name
+ * they are handed, the BOM's is the host's own `fileName + '.' + fileType`).
  */
 export const exportFab: ActionHandler = async (params, eda) => {
   const vendor = String(params?.vendor ?? 'generic').trim().toLowerCase();
@@ -3907,6 +4103,46 @@ export const exportFab: ActionHandler = async (params, eda) => {
       if (typeof overrides[key] !== 'object' || Array.isArray(overrides[key]) !== (key !== 'other')) {
         throw new ActionError(
           'BAD_REQUEST', `export.fab params.gerber.${key} must be ${shape}`,
+        );
+      }
+    }
+  }
+  // --- params.bom: same allowlist. `filterOptions: null` means "send nothing",
+  // which leaves the host on its own default rules.
+  let bomFilters: FabVendorPreset['bom']['filterOptions'] | undefined = preset.bom.filterOptions;
+  const bomOverrides: Record<string, unknown> = {};
+  if (params?.bom !== undefined) {
+    if (!params.bom || typeof params.bom !== 'object' || Array.isArray(params.bom)) {
+      throw new ActionError('BAD_REQUEST', 'export.fab params.bom must be an object of BOM overrides');
+    }
+    for (const [key, value] of Object.entries(params.bom as Record<string, unknown>)) {
+      if (!FAB_BOM_OVERRIDE_KEYS.includes(key)) {
+        throw new ActionError(
+          'BAD_REQUEST',
+          `export.fab params.bom has an unknown key ${JSON.stringify(key)} — `
+            + `allowed: ${FAB_BOM_OVERRIDE_KEYS.join(', ')}`,
+          { key, allowed: FAB_BOM_OVERRIDE_KEYS },
+        );
+      }
+      bomOverrides[key] = value;
+    }
+    if ('filterOptions' in bomOverrides) {
+      const filters = bomOverrides.filterOptions;
+      if (filters === null) {
+        bomFilters = undefined;
+      } else if (Array.isArray(filters) && filters.every((entry) => (
+        entry && typeof entry === 'object' && !Array.isArray(entry)
+        && typeof (entry as Record<string, unknown>).property === 'string'
+        && ((entry as Record<string, unknown>).property as string).trim() !== ''
+        && ['string', 'boolean'].includes(typeof (entry as Record<string, unknown>).includeValue)
+      ))) {
+        bomFilters = filters as FabVendorPreset['bom']['filterOptions'];
+      } else {
+        throw new ActionError(
+          'BAD_REQUEST',
+          'export.fab params.bom.filterOptions must be null (send none — the host keeps its own '
+            + 'default rules), or an array of {property: string, includeValue: string | boolean} '
+            + `(got ${JSON.stringify(filters)})`,
         );
       }
     }
@@ -4027,9 +4263,9 @@ export const exportFab: ActionHandler = async (params, eda) => {
       preset.bom.fileName,
       preset.bom.fileType,
       bomTemplate,
-      preset.bom.filterOptions,
+      bomFilters,
       preset.bom.statistics,
-      FAB_BOM_COLUMNS.map((column) => column.property),
+      FAB_BOM_PROPERTY,
       preset.bom.columns,
     ));
 
@@ -4055,10 +4291,21 @@ export const exportFab: ActionHandler = async (params, eda) => {
       pickAndPlace: preset.pickAndPlace,
       bom: {
         ...preset.bom,
+        // The filters that were actually sent (`null` = none: the host kept its
+        // own default rules), not the preset's, so a bundle found on disk later
+        // says what produced it.
+        filterOptions: bomFilters ?? null,
         template: bomTemplate ?? null,
-        property: FAB_BOM_COLUMNS.map((column) => column.property),
+        // The `property` argument as sent — `statistics` (spread from the preset
+        // above) and this list are disjoint, and their union is `columns`.
+        property: FAB_BOM_PROPERTY,
       },
-      overrides: Object.keys(overrides).sort(),
+      overrides: [
+        ...Object.keys(overrides),
+        // A `bom` key is prefixed: both groups have a `filterOptions`-shaped
+        // future, and two bare names would be indistinguishable in a manifest.
+        ...Object.keys(bomOverrides).map((key) => `bom.${key}`),
+      ].sort(),
     },
     files: files.map((file) => ({
       role: file.role, name: file.name, mime: file.mime, bytes: file.bytes,
@@ -4066,7 +4313,12 @@ export const exportFab: ActionHandler = async (params, eda) => {
     failed,
     notes: [
       ...notes,
-      "the vendor preset is assembled offline from the type package; whether this host accepts every BOM column name is unverified until a real export is run (012v2 §六)",
+      'measured 2026-09-21 on 3.2.186: exactly the 15 BOM column names come back in the header, '
+      + 'the two counting columns travelling as `statistics` and the other 13 as `property` '
+      + '(sending them in both produced a 17-column header — see the preset), the BOM filter rule '
+      + 'is an *exclusion* one — `includeValue` is the value that leaves a row out, not the one it '
+      + 'keeps — and this host names the BOM file itself (`fileName + "." + fileType`) while '
+      + 'gerber/P&P echo the name they are handed',
       'the connector cannot write to outDir: no declared API takes a directory (SYS_FileSystem.saveFile has no such argument), so the caller writes these base64 payloads',
     ],
   };
@@ -4111,6 +4363,29 @@ const RECOMMEND_MAX_PAGES = 3;
  * hung page is reported and the descent continues instead of retrying.
  */
 const RECOMMEND_CALL_TIMEOUT_MS = 20_000;
+
+/**
+ * How many `probes` one call may carry.
+ *
+ * A probe is a raw host call the connector does not understand, so the list is
+ * capped: without a bound, `probes` would be an open channel into the editor's
+ * library, one call per entry, and the action's own deadline (and the daemon's
+ * 90 s) would decide how far it got rather than the caller.
+ */
+const RECOMMEND_MAX_PROBES = 10;
+
+/** `searchByProperties`' arguments after the first, in declaration order. */
+const PROBE_ARGUMENTS = ['libraryUuid', 'classification', 'symbolType', 'itemsOfPage', 'page'] as const;
+
+/**
+ * The read-only claim `lib.recommend` makes, in one place.
+ *
+ * The ladder's answer and the probes answer both carry it, and a claim written
+ * twice is a claim that drifts once.
+ */
+const RECOMMEND_READONLY_NOTE = 'read-only: nothing was placed or modified. Put a candidate on '
+  + 'the page with sch.place_component (deviceUuid + libraryUuid), or write the chosen LCSC code '
+  + '/ MPN onto the part already on the page with sch.set_component_attribute.';
 
 /** What the recommendation is *for*: the parameters the old part carried. */
 type RecommendTarget = {
@@ -4366,6 +4641,153 @@ async function componentByRef(
   return { component, designators };
 }
 
+/** One entry of `probes`, resolved into the exact call the caller asked for. */
+type RecommendProbe = {
+  /** The argument list for `Function.prototype.apply` — position for position. */
+  args: unknown[];
+  /** The page size the caller *asked for*; `null` when they did not ask. */
+  pageSize: number | null;
+};
+
+/**
+ * Read the optional `probes` parameter — or `null` when there are none.
+ *
+ * F4 (2026-09-21) needs to ask the *host* why `searchByProperties` answers
+ * nothing while `search` hits on the same string, and the two remaining
+ * explanations — "the host ignores these keys" and "the call shape matters" —
+ * are only distinguishable by varying one argument at a time. So the caller
+ * hands over the argument list itself and the connector sends it **verbatim**:
+ * an argument the caller did not give is not sent at all, which is what keeps
+ * `arguments.length` the caller's own (a `{properties, libraryUuid}` probe must
+ * reach the host as *two* arguments, not as six with four `undefined`s — the
+ * difference is the thing being measured).
+ *
+ * The shape is closed and small on purpose: every key that reaches a probe is a
+ * declared `searchByProperties` parameter, so a probe can never invent an
+ * argument the type package does not document. Absent (or explicitly `null`)
+ * means "no probes", in which case the action's own path is untouched.
+ */
+function recommendProbes(raw: unknown): RecommendProbe[] | null {
+  if (raw === undefined || raw === null) return null;
+  if (!Array.isArray(raw)) {
+    throw new ActionError(
+      'BAD_REQUEST',
+      'lib.recommend probes must be an array of {properties, libraryUuid?, classification?, '
+        + 'symbolType?, itemsOfPage?, page?}',
+    );
+  }
+  if (raw.length > RECOMMEND_MAX_PROBES) {
+    throw new ActionError(
+      'BAD_REQUEST',
+      `lib.recommend takes at most ${RECOMMEND_MAX_PROBES} probes, got ${raw.length}`,
+    );
+  }
+  return raw.map((entry, index) => {
+    const probe = entry && typeof entry === 'object' && !Array.isArray(entry)
+      ? (entry as Record<string, unknown>)
+      : null;
+    if (!probe) {
+      throw new ActionError('BAD_REQUEST', `lib.recommend probes[${index}] must be an object`);
+    }
+    const properties = probe.properties;
+    if (!properties || typeof properties !== 'object' || Array.isArray(properties)) {
+      throw new ActionError(
+        'BAD_REQUEST',
+        `lib.recommend probes[${index}].properties must be an object — it is the one argument `
+          + 'searchByProperties requires',
+      );
+    }
+    const args: unknown[] = [properties];
+    for (const name of PROBE_ARGUMENTS) {
+      if (!Object.prototype.hasOwnProperty.call(probe, name)) continue;
+      // A gap before a given argument is filled with `undefined`: the *position*
+      // is what the host reads, so dropping it would renumber the call.
+      while (args.length <= PROBE_ARGUMENTS.indexOf(name)) args.push(undefined);
+      args.push(probe[name]);
+    }
+    const asked = probe.itemsOfPage;
+    return {
+      args,
+      pageSize: typeof asked === 'number' && Number.isFinite(asked) ? asked : null,
+    };
+  });
+}
+
+/**
+ * Run one probe — exactly one `searchByProperties` call, reported as it went.
+ *
+ * One call, not the ladder's page walk: the point is the host's answer to a
+ * *specific* argument list, and a second page would muddy which call produced
+ * which count. `hitCount` is therefore the size of the page that came back, and
+ * `firstKeys` the first item's own key names, so a caller can see what a hit
+ * actually contains without a second round trip.
+ *
+ * Nothing here is fatal. A probe that throws, hangs or finds nothing becomes
+ * that entry's `error`/counts — the caller asked for a matrix, and one bad row
+ * must not cost them the rest. Only `lib_Device` missing is structural, and
+ * that check lives in the action.
+ */
+async function runRecommendProbe(
+  probe: RecommendProbe,
+  index: number,
+  ns: any,
+  searchByProperties: unknown,
+  timeoutMs: number,
+): Promise<Record<string, unknown>> {
+  const label = `searchByProperties probe ${index + 1}`;
+  if (typeof searchByProperties !== 'function') {
+    return {
+      args: probe.args,
+      called: false,
+      hitCount: 0,
+      pageSize: probe.pageSize,
+      firstKeys: [],
+      error: 'lib_Device.searchByProperties is not available on this editor build '
+        + '(the type package marks it "ADD since EDA v4")',
+    };
+  }
+  let found: any;
+  try {
+    // `apply` with the caller's own list — the same deadline a ladder page gets,
+    // for the same reason: this call reaches the library backend and can hang
+    // rather than fail.
+    found = await raceHostCall(
+      settle((searchByProperties as (...rest: unknown[]) => unknown).apply(ns, probe.args)),
+      label,
+      timeoutMs,
+      'the library search is not answering',
+    );
+  } catch (error) {
+    return {
+      args: probe.args,
+      called: true,
+      hitCount: 0,
+      pageSize: probe.pageSize,
+      firstKeys: [],
+      error: isActionError(error)
+        ? `${error.code}: ${error.message}`
+        : `${label} threw: ${String((error as Error)?.message ?? error)}`,
+    };
+  }
+  if (!Array.isArray(found)) {
+    return {
+      args: probe.args,
+      called: true,
+      hitCount: 0,
+      pageSize: probe.pageSize,
+      firstKeys: [],
+      error: `${label} returned ${typeof found}, not an array`,
+    };
+  }
+  return {
+    args: probe.args,
+    called: true,
+    hitCount: found.length,
+    pageSize: probe.pageSize,
+    firstKeys: found.length ? ownKeys(found[0]) : [],
+  };
+}
+
 /**
  * `lib.recommend` — read-only candidates for a part, and never a placement.
  *
@@ -4375,10 +4797,16 @@ async function componentByRef(
  *
  * The ladder is the task's, and each rung reports its own hit count:
  *
- * 1. `exact` — `searchByProperties({partNumber, partCode})`: the two fields the
- *    type package documents as the precise routes (MPN and LCSC code);
+ * 1. `exact` — `searchByProperties({supplierId})`: the LCSC code, addressed by
+ *    the one properties key this host actually indexes (measured 2026-09-21 on
+ *    3.2.186: `supplierId` = "C8678" → exactly that device, a bogus C-number →
+ *    none; `partNumber` / `partCode` / `value` are applied and match nothing;
+ *    `name` / `footprintName` are ignored — they answer with the library's
+ *    default page of ten. See `docs/bridge.md` §12);
  * 2. `properties` — `searchByProperties({value, footprintName})`: the same part
- *    described the way a schematic holds it;
+ *    described the way a schematic holds it — which on that same host is a rung
+ *    that **cannot hit**, and says so in `notes` rather than leaving a zero for
+ *    the caller to misread;
  * 3. `keyword` — `search(text)`: the broadest, and the only rung that exists on
  *    an editor older than the `searchByProperties` declaration (which is marked
  *    **ADD since EDA v4**).
@@ -4392,6 +4820,17 @@ async function componentByRef(
  * rung still answers and the response says which rungs were unavailable. Only
  * `lib_Device` itself missing, or every rung failing, is structural.
  *
+ * `probes` (optional, F4 2026-09-21) replaces the ladder with a raw channel onto
+ * `searchByProperties`: each entry is **one** call, sent with exactly the
+ * arguments the caller listed (see `recommendProbes`), and the answer carries
+ * `probes: [{args, called, hitCount, pageSize, firstKeys, error?}]` with
+ * `probesOnly: true`, an empty ladder and empty `candidates`. It was added to
+ * ask the *host* why the exact rung answered nothing on 3.2.186, and it
+ * answered: the call shape was never the problem, the **keys** were — which is
+ * why rung 1 sends `supplierId` today. With no `probes` in the params nothing
+ * about this action changes, which is the point: the ladder's answer is pinned
+ * byte for byte in `tests/actions012b.test.mjs`.
+ *
  * **Read-only, stated as an output field**: nothing here places, edits or drops
  * a part. Placement stays a decision the oracle makes, then executed through
  * `sch.place_component` / `sch.set_component_attribute`.
@@ -4399,11 +4838,18 @@ async function componentByRef(
 export const libRecommend: ActionHandler = async (params, eda) => {
   const query = typeof params?.query === 'string' ? params.query.trim() : '';
   const ref = typeof params?.ref === 'string' ? params.ref.trim() : '';
-  if (query && ref) {
-    throw new ActionError('BAD_REQUEST', 'lib.recommend takes either query or {pageUuid, ref} — not both');
-  }
-  if (!query && !ref) {
-    throw new ActionError('BAD_REQUEST', 'lib.recommend needs query, or {pageUuid, ref}');
+  // A probes-only call is not a search of its own, so the query/ref contract
+  // below does not apply to it: there is no ladder whose input has to be
+  // unambiguous. Everything else — the structural `lib_Device` check, the
+  // per-call deadline, the read-only answer fields — still does.
+  const probes = recommendProbes(params?.probes);
+  if (!probes) {
+    if (query && ref) {
+      throw new ActionError('BAD_REQUEST', 'lib.recommend takes either query or {pageUuid, ref} — not both');
+    }
+    if (!query && !ref) {
+      throw new ActionError('BAD_REQUEST', 'lib.recommend needs query, or {pageUuid, ref}');
+    }
   }
   const topN = Number.isFinite(Number(params?.topN))
     ? Math.min(Math.max(Math.trunc(Number(params.topN)), 1), 20)
@@ -4416,7 +4862,12 @@ export const libRecommend: ActionHandler = async (params, eda) => {
   const target: RecommendTarget = { ...EMPTY_TARGET };
   let pageUuid = '';
   let component: Record<string, string> | null = null;
-  if (ref) {
+  if (probes) {
+    // Nothing to resolve: a probe reads no page, so neither the focus-guarded
+    // designator lookup nor the query derivation runs, and `target` /
+    // `component` stay empty in the answer instead of looking like a part the
+    // caller asked about.
+  } else if (ref) {
     pageUuid = typeof params?.pageUuid === 'string' ? params.pageUuid.trim() : '';
     if (!pageUuid) {
       throw new ActionError(
@@ -4474,6 +4925,43 @@ export const libRecommend: ActionHandler = async (params, eda) => {
     );
   }
 
+  if (probes) {
+    // Probes only: the descent is not walked, so `layers` is empty and
+    // `candidates` is empty *by construction* rather than because nothing
+    // matched — which is what `probesOnly` is for. A probe that fails is that
+    // entry's `error`, never a reason to lose the other rows: the caller asked
+    // for a matrix and a matrix is the answer.
+    const answered: Array<Record<string, unknown>> = [];
+    // Sequentially, never in parallel: one editor, one library backend, and a
+    // matrix is read against the order the calls went out in.
+    for (let index = 0; index < probes.length; index += 1) {
+      answered.push(
+        await runRecommendProbe(probes[index], index, ns, searchByProperties, callTimeoutMs),
+      );
+    }
+    return {
+      source: 'probes',
+      query: query || null,
+      pageUuid: null,
+      ref: ref || null,
+      component,
+      target,
+      topN,
+      layers: [],
+      probes: answered,
+      probesOnly: true,
+      returned: 0,
+      shown: 0,
+      candidates: [],
+      'stock/price': '以商城实时为准',
+      readOnly: true,
+      placed: false,
+      note: RECOMMEND_READONLY_NOTE,
+      notes: ['probes only: the search ladder was not run — layers[] and candidates[] are empty '
+        + 'by construction, and probes[] holds the raw searchByProperties calls'],
+    };
+  }
+
   const callProperties = (properties: Record<string, unknown>) =>
     (page: number) =>
       searchByProperties.call(ns, properties, undefined, undefined, undefined, RECOMMEND_PAGE_SIZE, page);
@@ -4481,9 +4969,16 @@ export const libRecommend: ActionHandler = async (params, eda) => {
     (page: number) =>
       search.call(ns, keyword, undefined, undefined, undefined, RECOMMEND_PAGE_SIZE, page);
 
+  // The exact rung describes the part by its **LCSC code**, and the key it sends
+  // is `supplierId` rather than the declared `partCode`. Measured 2026-09-21 on
+  // 3.2.186 with the `probes` channel (`outputs/013_f4_probes_real.json`):
+  // `{supplierId:"C8678"}` returns exactly that one device and a bogus C-number
+  // returns none — the key is genuinely filtered on — while `{partCode:"C8678"}`
+  // and `{partNumber:"SS34"}` are applied and match nothing, and `name` /
+  // `footprintName` are ignored outright (they answer with the library's default
+  // page of 10). So the same fact, addressed by the key this host indexes.
   const exact: Record<string, unknown> = {};
-  if (target.partNumber) exact.partNumber = target.partNumber;
-  if (target.partCode) exact.partCode = target.partCode;
+  if (target.partCode) exact.supplierId = target.partCode;
   const described: Record<string, unknown> = {};
   if (target.value) described.value = target.value;
   if (target.footprintName) described.footprintName = target.footprintName;
@@ -4497,9 +4992,16 @@ export const libRecommend: ActionHandler = async (params, eda) => {
       call: hasProperties && Object.keys(exact).length ? callProperties(exact) : null,
       why: !hasProperties
         ? 'lib_Device.searchByProperties is not available on this editor build (the type package marks it "ADD since EDA v4")'
-        : 'no partNumber (MPN) or partCode (LCSC code) is known for this part',
+        : 'no partCode (LCSC code) is known for this part — and supplierId, the key this '
+          + 'host indexes, has nothing to carry (measured 2026-09-21)',
     },
     {
+      // Kept as the declared reading of "the same part as a schematic holds it",
+      // and reported honestly: on 3.2.186 this rung cannot hit — `value` is
+      // applied but has no index and `footprintName` is ignored (both measured
+      // 2026-09-21), which is why a run that reaches it says so in `notes`
+      // instead of leaving a zero to be read as "this part is not in the
+      // library".
       layer: 'properties',
       api: 'searchByProperties',
       args: described,
@@ -4526,6 +5028,10 @@ export const libRecommend: ActionHandler = async (params, eda) => {
   // unnecessary: the first is something the caller has to know about the host,
   // the second is the ladder working as designed.
   const unavailable: string[] = [];
+  // Rungs that ran, answered zero, and *cannot* answer otherwise on this host:
+  // told apart from "this part is not in the library" because a caller reading
+  // three zeros would draw exactly the wrong conclusion (2026-09-21).
+  const deadRungs: string[] = [];
   let succeeded = 0;
   for (let index = 0; index < layers.length; index += 1) {
     const layer = layers[index];
@@ -4560,6 +5066,14 @@ export const libRecommend: ActionHandler = async (params, eda) => {
     for (const item of outcome.items) {
       collected.push(await recommendCandidate(item, layer.layer, index, target));
     }
+    if (layer.layer === 'properties' && !outcome.error && !outcome.items.length) {
+      deadRungs.push(
+        'properties: searchByProperties(value / footprintName) cannot match on this host — '
+          + 'measured 2026-09-21 on 3.2.186: value is applied but has no index and '
+          + 'footprintName is ignored outright, so those two keys never select anything '
+          + '(the LCSC code does: see the exact rung)',
+      );
+    }
   }
 
   if (succeeded === 0) {
@@ -4590,6 +5104,7 @@ export const libRecommend: ActionHandler = async (params, eda) => {
   notes.push(
     ...errors.map((error) => `a search rung failed: ${error}`),
     ...unavailable,
+    ...deadRungs,
   );
 
   return {
@@ -4610,9 +5125,7 @@ export const libRecommend: ActionHandler = async (params, eda) => {
     'stock/price': '以商城实时为准',
     readOnly: true,
     placed: false,
-    note: 'read-only: nothing was placed or modified. Put a candidate on the page with '
-      + 'sch.place_component (deviceUuid + libraryUuid), or write the chosen LCSC code / MPN '
-      + 'onto the part already on the page with sch.set_component_attribute.',
+    note: RECOMMEND_READONLY_NOTE,
     ...(notes.length ? { notes } : {}),
   };
 };
@@ -4747,6 +5260,15 @@ async function componentPositions(eda: Eda): Promise<{
  * `marks` at all. `clear: true` calls `removeIndicatorMarkers` and needs the API
  * to exist — there is no jump-list fallback for "remove the overlays".
  *
+ * `clear: true` is also the one path with **no page guard**, and that is
+ * deliberate: it removes the overlays on whatever canvas is in front, which is
+ * what "clear the markers" means (measured 2026-09-21: it cleared a page in a
+ * different project than the one the caller had in mind). With **no** active
+ * document there is no canvas to clear, and the answer is `cleared: true` with
+ * the note "no active canvas — nothing to remove": the host refuses such a call
+ * (`removeIndicatorMarkers` answers `false`), but calling that a refusal would
+ * be wrong twice — nothing was there to remove, and the removal is idempotent.
+ *
  * Read-only in the strict sense the catalogue uses: markers are an overlay, no
  * primitive is created, moved or modified.
  */
@@ -4761,6 +5283,26 @@ export const reviewMark: ActionHandler = async (params, eda) => {
         'dmt_EditorControl.removeIndicatorMarkers() is not available — the markers cannot be cleared',
         { path: 'dmt_EditorControl.removeIndicatorMarkers' },
       );
+    }
+    // Which canvas, if any, is in front — the same read `doc.list` uses, so the
+    // two can never disagree about "nothing is focused". `cleared: true` here is
+    // idempotent semantics, not optimism: with no canvas, the markers the caller
+    // asked to be gone are gone, and reporting the host's `false` as "the canvas
+    // refused the removal" would send the caller hunting a canvas that is not
+    // open.
+    const clearProblems: string[] = [];
+    const clearActive = await activeDocument(eda, clearProblems);
+    if (clearActive === null) {
+      return {
+        mode: 'markers' as const,
+        cleared: true,
+        count: 0,
+        marked: [],
+        unresolved: [],
+        readOnly: true,
+        note: 'no active canvas — nothing to remove'
+          + (clearProblems.length ? ` (${clearProblems[0]})` : ''),
+      };
     }
     const ok = await settle(remove.call(control));
     return {

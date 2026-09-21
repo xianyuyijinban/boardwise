@@ -1,0 +1,960 @@
+{
+  "components": [
+    {
+      "primitiveId": "323915b1e38b40ab",
+      "state": {
+        "PrimitiveType": "Component",
+        "ComponentType": "sheet",
+        "PrimitiveId": "323915b1e38b40ab",
+        "Component": {
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "uuid": "6319cd16e94d2740",
+          "name": "Drawing-Symbol_A4"
+        },
+        "X": 0,
+        "Y": 0,
+        "SubPartName": "pid8a0e77bacb214e",
+        "Rotation": 0,
+        "Mirror": false,
+        "AddIntoBom": true,
+        "AddIntoPcb": true,
+        "Net": "",
+        "Symbol": {
+          "uuid": "9fb0dcee9ea87b6c",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "name": "Drawing-Symbol_A4"
+        },
+        "Name": "",
+        "OtherProperty": {
+          "Company": "嘉立创EDA",
+          "Drawed": "",
+          "Reviewed": "",
+          "Part Number": "",
+          "Version": "V1.0",
+          "Page Size": "A4",
+          "@Project Name": "毕设FOC驱动板",
+          "@Page Count": "1",
+          "@Update Date": "2026-04-12",
+          "@Create Date": "2026-03-14",
+          "@Schematic Name": "Schematic2",
+          "@Page No": "1",
+          "@Page Name": "P1",
+          "Description": "",
+          "@Create Time": "14:09:53",
+          "@Update Time": "19:57:47",
+          "Border": "1",
+          "Width": "1170",
+          "Height": "825",
+          "Region Start": "1",
+          "X Region Count": "6",
+          "Y Region Count": "4",
+          "Blade Width": "10",
+          "Color": "",
+          "Title Block Position": "3",
+          "Title Block": "1",
+          "@Board Name": "Board2"
+        }
+      }
+    },
+    {
+      "primitiveId": "7c21203a7b06c7f7",
+      "state": {
+        "PrimitiveType": "Component",
+        "ComponentType": "part",
+        "PrimitiveId": "7c21203a7b06c7f7",
+        "Component": {
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "uuid": "e184cbb40c2c6adf",
+          "name": "TLE5012BE1000"
+        },
+        "X": 836,
+        "Y": 741,
+        "SubPartName": "TLE5012BE1000XUMA1.1",
+        "Rotation": 0,
+        "Mirror": false,
+        "AddIntoBom": true,
+        "AddIntoPcb": true,
+        "Net": "",
+        "Symbol": {
+          "uuid": "45b1fa15c4f6385e",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "name": "TLE5012BE1000XUMA1"
+        },
+        "Footprint": {
+          "uuid": "701916777c5a1fff",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "name": "PG-DSO-8_L5.0-W4.0-P1.27-LS6.0-BL"
+        },
+        "Designator": "U1",
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge281",
+        "Manufacturer": "Infineon(英飞凌)",
+        "ManufacturerId": "TLE5012BE1000",
+        "Supplier": "LCSC",
+        "SupplierId": "C123083",
+        "OtherProperty": {
+          "LCSC Part Name": "基于GMR的角度传感器",
+          "Supplier Footprint": "SO-8",
+          "JLCPCB Part Class": "Extended Part",
+          "Datasheet": "https://item.szlcsc.com/datasheet/TLE5012BE1000/124353.html",
+          "Out Type": "IIF；SSC",
+          "Resolution": "15bit",
+          "Minimum Field": "30mT",
+          "Rotate Speed": "-",
+          "Number of ABZ Pulses": "-",
+          "Number of Conjugate Points of UVW": "-",
+          "Supply Voltage": "3V~5.5V",
+          "Supply Current": "14mA",
+          "Operating Temperature": "-40℃~+150℃",
+          "Description": "采用巨磁电阻的角度传感器"
+        }
+      }
+    },
+    {
+      "primitiveId": "888963914376c3c3",
+      "state": {
+        "PrimitiveType": "Component",
+        "ComponentType": "netflag",
+        "PrimitiveId": "888963914376c3c3",
+        "Component": {
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "uuid": "2bb71ff9f283494d83349030a64e3d15",
+          "name": "Power-VCC"
+        },
+        "X": 1092,
+        "Y": 726,
+        "SubPartName": "pid8a0e77bacb214e",
+        "Rotation": 270,
+        "Mirror": false,
+        "AddIntoBom": true,
+        "AddIntoPcb": true,
+        "Net": "VCC",
+        "Symbol": {
+          "uuid": "30ab5478962e4203b2b929c8cac0677e",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "name": "Power-VCC"
+        },
+        "Footprint": {
+          "uuid": "",
+          "libraryUuid": null
+        },
+        "Name": "VCC",
+        "OtherProperty": {
+          "Global Net Name": "VCC",
+          "Relevance": "[]",
+          "Description": ""
+        }
+      }
+    },
+    {
+      "primitiveId": "2fa9ee4964845be7",
+      "state": {
+        "PrimitiveType": "Component",
+        "ComponentType": "netflag",
+        "PrimitiveId": "2fa9ee4964845be7",
+        "Component": {
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "uuid": "1bc52e3616b54eaf8096c377141917dc",
+          "name": "Ground-GND"
+        },
+        "X": 1082,
+        "Y": 710,
+        "SubPartName": "pid8a0e77bacb214e",
+        "Rotation": 0,
+        "Mirror": false,
+        "AddIntoBom": true,
+        "AddIntoPcb": true,
+        "Net": "GND",
+        "Symbol": {
+          "uuid": "039ea9de4adb46a5aa4b1dc92288802d",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "name": "Ground-GND"
+        },
+        "Footprint": {
+          "uuid": "",
+          "libraryUuid": null
+        },
+        "Name": "GND",
+        "OtherProperty": {
+          "Global Net Name": "GND",
+          "Relevance": "[]",
+          "Description": ""
+        }
+      }
+    },
+    {
+      "primitiveId": "777a25fcf80cf1df",
+      "state": {
+        "PrimitiveType": "Component",
+        "ComponentType": "part",
+        "PrimitiveId": "777a25fcf80cf1df",
+        "Component": {
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "uuid": "233315d240a4445d9adf165f99c0c32d",
+          "name": "ZX-MX1.25-6PLT"
+        },
+        "X": 1040,
+        "Y": 741,
+        "SubPartName": "ZX-MX1.25-6PLT.1",
+        "Rotation": 180,
+        "Mirror": false,
+        "AddIntoBom": true,
+        "AddIntoPcb": true,
+        "Net": "",
+        "Symbol": {
+          "uuid": "38e7e62d5c544306a27ae7283a9fbbe4",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "name": "ZX-MX1.25-6PLT"
+        },
+        "Footprint": {
+          "uuid": "c31d374173584f7fbd207d57edf7cc49",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "name": "CONN-SMD_6P-P1.25_ZX-MX1.25-6PLT"
+        },
+        "Designator": "CN2",
+        "Name": "={Manufacturer Part}",
+        "UniqueId": "gge280",
+        "Manufacturer": "Megastar(兆星)",
+        "ManufacturerId": "ZX-MX1.25-6PLT",
+        "Supplier": "LCSC",
+        "SupplierId": "C7430477",
+        "OtherProperty": {
+          "LCSC Part Name": "1x6P 间距:1.25mm 立贴 系列:PicoBlade(MX 1.25)",
+          "Supplier Footprint": "SMD,P=1.25mm",
+          "JLCPCB Part Class": "扩展库",
+          "Datasheet": "https://item.szlcsc.com/datasheet/ZX-MX1.25-6PLT/8430346.html",
+          "Pins Structure": "1x6P",
+          "Pitch": "1.25mm",
+          "Mounting Type": "立贴",
+          "Reference Series": "PicoBlade(MX 1.25)",
+          "Number of Pins": "6P",
+          "Number of Rows": "1",
+          "Number of PINs Per Row": "6",
+          "Row Spacing": "-",
+          "Current Rating": "1A",
+          "Contact Material": "黄铜",
+          "Contact Plating": "锡",
+          "Operating Temperature": "-25℃~+85℃",
+          "Voltage Rating": "125V",
+          "Plastic Material": "LCP",
+          "Flame Retardant Rating": "-",
+          "Supplementary Features": "辅助焊脚",
+          "Color": "米色",
+          "Z-Height of the Board": "4.7mm",
+          "X-Length of Bottom Edge on Board (Spacing Line)": "12.5mm",
+          "Y-Width of Bottom Edge on Board": "4.3mm",
+          "Description": "插针结构:1x6P;间距:1.25mm;安装方式:立贴;参考系列:PicoBlade(MX 1.25);总PIN数:6P;排数:1;每排PIN数:6;行距:-;额定电流:1A;触头材质:黄铜;触头镀层:锡;工作温度:-25℃~+85℃;"
+        }
+      }
+    },
+    {
+      "primitiveId": "37331bbe79d39906",
+      "state": {
+        "PrimitiveType": "Component",
+        "ComponentType": "netflag",
+        "PrimitiveId": "37331bbe79d39906",
+        "Component": {
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "uuid": "b9d97ec01aa02b2c",
+          "name": "Power-VCC"
+        },
+        "X": 928,
+        "Y": 724,
+        "SubPartName": "pid8a0e77bacb214e",
+        "Rotation": 270,
+        "Mirror": false,
+        "AddIntoBom": true,
+        "AddIntoPcb": true,
+        "Net": "VCC",
+        "Symbol": {
+          "uuid": "a2a889190239aa1e",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "name": "Power-VCC"
+        },
+        "Name": "VCC",
+        "OtherProperty": {
+          "Global Net Name": "VCC",
+          "Relevance": "[]",
+          "Description": ""
+        }
+      }
+    },
+    {
+      "primitiveId": "5724462892c96554",
+      "state": {
+        "PrimitiveType": "Component",
+        "ComponentType": "netflag",
+        "PrimitiveId": "5724462892c96554",
+        "Component": {
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "uuid": "cebf42eac244bbf7",
+          "name": "Ground-GND"
+        },
+        "X": 924,
+        "Y": 772,
+        "SubPartName": "pid8a0e77bacb214e",
+        "Rotation": 90,
+        "Mirror": false,
+        "AddIntoBom": true,
+        "AddIntoPcb": true,
+        "Net": "GND",
+        "Symbol": {
+          "uuid": "192de19d1f637df7",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "name": "Ground-GND"
+        },
+        "Name": "GND",
+        "OtherProperty": {
+          "Global Net Name": "GND",
+          "Relevance": "[]",
+          "Description": ""
+        }
+      }
+    },
+    {
+      "primitiveId": "3305640fef501e63",
+      "state": {
+        "PrimitiveType": "Component",
+        "ComponentType": "part",
+        "PrimitiveId": "3305640fef501e63",
+        "Component": {
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "uuid": "a05afdfff21e1b73",
+          "name": "CAP_0603"
+        },
+        "X": 914,
+        "Y": 748,
+        "SubPartName": "CapAcitance.1",
+        "Rotation": 90,
+        "Mirror": false,
+        "AddIntoBom": true,
+        "AddIntoPcb": true,
+        "Net": "",
+        "Symbol": {
+          "uuid": "c7e4999c9265940a",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "name": "Capacitance"
+        },
+        "Footprint": {
+          "uuid": "45007c2a7e57428a961e6fa845979568",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "name": "C0603"
+        },
+        "Designator": "C1",
+        "Name": "={Value}",
+        "UniqueId": "gge282",
+        "OtherProperty": {
+          "Supplier Footprint": "0603",
+          "Value": "100nF",
+          "Description": "",
+          "Sim Model": "",
+          "Sim Model Title": "",
+          "Sim Model Path": "",
+          "NGSpice Model": "",
+          "NGSpice Model Title": "",
+          "NGspice Model Path": ""
+        }
+      }
+    },
+    {
+      "primitiveId": "5f7ef67a934f55fa",
+      "state": {
+        "PrimitiveType": "Component",
+        "ComponentType": "part",
+        "PrimitiveId": "5f7ef67a934f55fa",
+        "Component": {
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "uuid": "16c1570270b0fb88",
+          "name": "Res_0603"
+        },
+        "X": 750,
+        "Y": 726,
+        "SubPartName": "电阻.1",
+        "Rotation": 0,
+        "Mirror": false,
+        "AddIntoBom": true,
+        "AddIntoPcb": true,
+        "Net": "",
+        "Symbol": {
+          "uuid": "e12041e9b5f872e1",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "name": "电阻"
+        },
+        "Footprint": {
+          "uuid": "3d8b24436c9c462cabf3d683459942cd",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "name": "R0603"
+        },
+        "Designator": "R2",
+        "Name": "={Value}",
+        "UniqueId": "gge284",
+        "OtherProperty": {
+          "Supplier Footprint": "0603",
+          "Value": "100R",
+          "Description": "",
+          "Sim Model": "",
+          "Sim Model Title": "",
+          "Sim Model Path": "",
+          "NGSpice Model": "",
+          "NGSpice Model Title": "",
+          "NGspice Model Path": ""
+        }
+      }
+    },
+    {
+      "primitiveId": "395fed49d675c78e",
+      "state": {
+        "PrimitiveType": "Component",
+        "ComponentType": "part",
+        "PrimitiveId": "395fed49d675c78e",
+        "Component": {
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "uuid": "16c1570270b0fb88",
+          "name": "Res_0603"
+        },
+        "X": 750,
+        "Y": 736,
+        "SubPartName": "电阻.1",
+        "Rotation": 0,
+        "Mirror": false,
+        "AddIntoBom": true,
+        "AddIntoPcb": true,
+        "Net": "",
+        "Symbol": {
+          "uuid": "e12041e9b5f872e1",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "name": "电阻"
+        },
+        "Footprint": {
+          "uuid": "3d8b24436c9c462cabf3d683459942cd",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "name": "R0603"
+        },
+        "Designator": "R3",
+        "Name": "={Value}",
+        "UniqueId": "gge285",
+        "OtherProperty": {
+          "Supplier Footprint": "0603",
+          "Value": "100R",
+          "Description": "",
+          "Sim Model": "",
+          "Sim Model Title": "",
+          "Sim Model Path": "",
+          "NGSpice Model": "",
+          "NGSpice Model Title": "",
+          "NGspice Model Path": ""
+        }
+      }
+    },
+    {
+      "primitiveId": "ebac388b66cc2df6",
+      "state": {
+        "PrimitiveType": "Component",
+        "ComponentType": "part",
+        "PrimitiveId": "ebac388b66cc2df6",
+        "Component": {
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "uuid": "16c1570270b0fb88",
+          "name": "Res_0603"
+        },
+        "X": 750,
+        "Y": 746,
+        "SubPartName": "电阻.1",
+        "Rotation": 0,
+        "Mirror": false,
+        "AddIntoBom": true,
+        "AddIntoPcb": true,
+        "Net": "",
+        "Symbol": {
+          "uuid": "e12041e9b5f872e1",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "name": "电阻"
+        },
+        "Footprint": {
+          "uuid": "3d8b24436c9c462cabf3d683459942cd",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "name": "R0603"
+        },
+        "Designator": "R4",
+        "Name": "={Value}",
+        "UniqueId": "gge286",
+        "OtherProperty": {
+          "Supplier Footprint": "0603",
+          "Value": "100R",
+          "Description": "",
+          "Sim Model": "",
+          "Sim Model Title": "",
+          "Sim Model Path": "",
+          "NGSpice Model": "",
+          "NGSpice Model Title": "",
+          "NGspice Model Path": ""
+        }
+      }
+    },
+    {
+      "primitiveId": "e020092b3274f261",
+      "state": {
+        "PrimitiveType": "Component",
+        "ComponentType": "part",
+        "PrimitiveId": "e020092b3274f261",
+        "Component": {
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "uuid": "8a93c6acb6e93a7c",
+          "name": "M3螺丝"
+        },
+        "X": 726,
+        "Y": 664,
+        "SubPartName": "M3螺丝.1",
+        "Rotation": 0,
+        "Mirror": false,
+        "AddIntoBom": true,
+        "AddIntoPcb": true,
+        "Net": "",
+        "Symbol": {
+          "uuid": "96cbb0920460f519",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "name": "螺丝孔"
+        },
+        "Footprint": {
+          "uuid": "ca64d6abed165a11",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "name": "M3螺丝"
+        },
+        "Designator": "SCREW1",
+        "Name": "",
+        "UniqueId": "gge287",
+        "OtherProperty": {
+          "Supplier Footprint": "插件",
+          "Description": ""
+        }
+      }
+    },
+    {
+      "primitiveId": "3dfab880f4f5ac6d",
+      "state": {
+        "PrimitiveType": "Component",
+        "ComponentType": "part",
+        "PrimitiveId": "3dfab880f4f5ac6d",
+        "Component": {
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "uuid": "8a93c6acb6e93a7c",
+          "name": "M3螺丝"
+        },
+        "X": 790,
+        "Y": 666,
+        "SubPartName": "M3螺丝.1",
+        "Rotation": 0,
+        "Mirror": false,
+        "AddIntoBom": true,
+        "AddIntoPcb": true,
+        "Net": "",
+        "Symbol": {
+          "uuid": "96cbb0920460f519",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "name": "螺丝孔"
+        },
+        "Footprint": {
+          "uuid": "ca64d6abed165a11",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "name": "M3螺丝"
+        },
+        "Designator": "SCREW2",
+        "Name": "",
+        "UniqueId": "gge288",
+        "OtherProperty": {
+          "Supplier Footprint": "插件",
+          "Description": ""
+        }
+      }
+    },
+    {
+      "primitiveId": "2aedd43bcdc14fa3",
+      "state": {
+        "PrimitiveType": "Component",
+        "ComponentType": "part",
+        "PrimitiveId": "2aedd43bcdc14fa3",
+        "Component": {
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "uuid": "8a93c6acb6e93a7c",
+          "name": "M3螺丝"
+        },
+        "X": 872,
+        "Y": 664,
+        "SubPartName": "M3螺丝.1",
+        "Rotation": 0,
+        "Mirror": false,
+        "AddIntoBom": true,
+        "AddIntoPcb": true,
+        "Net": "",
+        "Symbol": {
+          "uuid": "96cbb0920460f519",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "name": "螺丝孔"
+        },
+        "Footprint": {
+          "uuid": "ca64d6abed165a11",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "name": "M3螺丝"
+        },
+        "Designator": "SCREW3",
+        "Name": "",
+        "UniqueId": "gge289",
+        "OtherProperty": {
+          "Supplier Footprint": "插件",
+          "Description": ""
+        }
+      }
+    },
+    {
+      "primitiveId": "4857848be66eb603",
+      "state": {
+        "PrimitiveType": "Component",
+        "ComponentType": "part",
+        "PrimitiveId": "4857848be66eb603",
+        "Component": {
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "uuid": "8a93c6acb6e93a7c",
+          "name": "M3螺丝"
+        },
+        "X": 944,
+        "Y": 664,
+        "SubPartName": "M3螺丝.1",
+        "Rotation": 0,
+        "Mirror": false,
+        "AddIntoBom": true,
+        "AddIntoPcb": true,
+        "Net": "",
+        "Symbol": {
+          "uuid": "96cbb0920460f519",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "name": "螺丝孔"
+        },
+        "Footprint": {
+          "uuid": "ca64d6abed165a11",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "name": "M3螺丝"
+        },
+        "Designator": "SCREW4",
+        "Name": "",
+        "UniqueId": "gge290",
+        "OtherProperty": {
+          "Supplier Footprint": "插件",
+          "Description": ""
+        }
+      }
+    }
+  ],
+  "wires": [
+    {
+      "primitiveId": "93178c5287758a14",
+      "state": {
+        "PrimitiveType": "Wire",
+        "PrimitiveId": "93178c5287758a14",
+        "Line": [
+          1060,
+          716,
+          1082,
+          716,
+          1082,
+          716,
+          1082,
+          710
+        ],
+        "Net": "",
+        "Color": null,
+        "LineWidth": null,
+        "LineType": null
+      }
+    },
+    {
+      "primitiveId": "3fb74c7ae6412616",
+      "state": {
+        "PrimitiveType": "Wire",
+        "PrimitiveId": "3fb74c7ae6412616",
+        "Line": [
+          1092,
+          726,
+          1060,
+          726
+        ],
+        "Net": "",
+        "Color": null,
+        "LineWidth": null,
+        "LineType": null
+      }
+    },
+    {
+      "primitiveId": "d14aee81b9dbfe30",
+      "state": {
+        "PrimitiveType": "Wire",
+        "PrimitiveId": "d14aee81b9dbfe30",
+        "Line": [
+          1092,
+          736,
+          1060,
+          736
+        ],
+        "Net": "SPI3_NSS",
+        "Color": null,
+        "LineWidth": null,
+        "LineType": null
+      }
+    },
+    {
+      "primitiveId": "5bd4e30b396d3cfb",
+      "state": {
+        "PrimitiveType": "Wire",
+        "PrimitiveId": "5bd4e30b396d3cfb",
+        "Line": [
+          1092,
+          746,
+          1060,
+          746
+        ],
+        "Net": "SPI3_SCK",
+        "Color": null,
+        "LineWidth": null,
+        "LineType": null
+      }
+    },
+    {
+      "primitiveId": "592f15005d488691",
+      "state": {
+        "PrimitiveType": "Wire",
+        "PrimitiveId": "592f15005d488691",
+        "Line": [
+          1092,
+          756,
+          1060,
+          756
+        ],
+        "Net": "SPI3_MISO",
+        "Color": null,
+        "LineWidth": null,
+        "LineType": null
+      }
+    },
+    {
+      "primitiveId": "8409d9166658b928",
+      "state": {
+        "PrimitiveType": "Wire",
+        "PrimitiveId": "8409d9166658b928",
+        "Line": [
+          1092,
+          766,
+          1060,
+          766
+        ],
+        "Net": "SPI3_MOSI",
+        "Color": null,
+        "LineWidth": null,
+        "LineType": null
+      }
+    },
+    {
+      "primitiveId": "269d44e7d4e0a52a",
+      "state": {
+        "PrimitiveType": "Wire",
+        "PrimitiveId": "269d44e7d4e0a52a",
+        "Line": [
+          924,
+          772,
+          914,
+          772,
+          914,
+          768,
+          914,
+          772,
+          898,
+          772,
+          914,
+          772,
+          898,
+          746,
+          898,
+          772,
+          898,
+          746,
+          886,
+          746
+        ],
+        "Net": "",
+        "Color": null,
+        "LineWidth": null,
+        "LineType": null
+      }
+    },
+    {
+      "primitiveId": "5123aca93806e910",
+      "state": {
+        "PrimitiveType": "Wire",
+        "PrimitiveId": "5123aca93806e910",
+        "Line": [
+          898,
+          724,
+          898,
+          736,
+          898,
+          736,
+          886,
+          736,
+          898,
+          724,
+          914,
+          724,
+          914,
+          728,
+          914,
+          724,
+          928,
+          724,
+          914,
+          724
+        ],
+        "Net": "",
+        "Color": null,
+        "LineWidth": null,
+        "LineType": null
+      }
+    },
+    {
+      "primitiveId": "d6a806913d05edcc",
+      "state": {
+        "PrimitiveType": "Wire",
+        "PrimitiveId": "d6a806913d05edcc",
+        "Line": [
+          770,
+          726,
+          786,
+          726
+        ],
+        "Net": "",
+        "Color": null,
+        "LineWidth": null,
+        "LineType": null
+      }
+    },
+    {
+      "primitiveId": "2cab450689903a9f",
+      "state": {
+        "PrimitiveType": "Wire",
+        "PrimitiveId": "2cab450689903a9f",
+        "Line": [
+          686,
+          712,
+          724,
+          712,
+          724,
+          712,
+          724,
+          726,
+          730,
+          726,
+          724,
+          726,
+          686,
+          726,
+          724,
+          726
+        ],
+        "Net": "SPI3_MOSI",
+        "Color": null,
+        "LineWidth": null,
+        "LineType": null
+      }
+    },
+    {
+      "primitiveId": "218a4499be396bf2",
+      "state": {
+        "PrimitiveType": "Wire",
+        "PrimitiveId": "218a4499be396bf2",
+        "Line": [
+          786,
+          746,
+          770,
+          746
+        ],
+        "Net": "",
+        "Color": null,
+        "LineWidth": null,
+        "LineType": null
+      }
+    },
+    {
+      "primitiveId": "97e9fb4f2072f5b5",
+      "state": {
+        "PrimitiveType": "Wire",
+        "PrimitiveId": "97e9fb4f2072f5b5",
+        "Line": [
+          786,
+          736,
+          770,
+          736
+        ],
+        "Net": "",
+        "Color": null,
+        "LineWidth": null,
+        "LineType": null
+      }
+    },
+    {
+      "primitiveId": "c5bece8c1825bfa8",
+      "state": {
+        "PrimitiveType": "Wire",
+        "PrimitiveId": "c5bece8c1825bfa8",
+        "Line": [
+          730,
+          746,
+          686,
+          746
+        ],
+        "Net": "SPI3_SCK",
+        "Color": null,
+        "LineWidth": null,
+        "LineType": null
+      }
+    },
+    {
+      "primitiveId": "ba53bd3d3f9d21f9",
+      "state": {
+        "PrimitiveType": "Wire",
+        "PrimitiveId": "ba53bd3d3f9d21f9",
+        "Line": [
+          730,
+          736,
+          686,
+          736
+        ],
+        "Net": "SPI3_NSS",
+        "Color": null,
+        "LineWidth": null,
+        "LineType": null
+      }
+    }
+  ],
+  "pins": [],
+  "netlabels": [],
+  "bboxes": {
+    "323915b1e38b40ab": {
+      "minX": 0,
+      "minY": 0,
+      "maxX": 1170,
+      "maxY": 825
+    }
+  },
+  "meta": {
+    "available": {
+      "components": true,
+      "wires": true,
+      "pins": true,
+      "netlabels": false,
+      "bboxes": true
+    },
+    "sheets": [
+      "323915b1e38b40ab"
+    ],
+    "reasons": {
+      "netlabels": "read sch_PrimitiveNetLabel: absent"
+    }
+  }
+}

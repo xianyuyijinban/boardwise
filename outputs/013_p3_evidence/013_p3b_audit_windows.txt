@@ -1,0 +1,23 @@
+013 批② BOM 列拆分修复 · 审计日志摘录（daemon 61190，2026-09-21 16:35–16:50）
+说明：connect/hello/disconnect 三类事件，显示同一个 daemon 上先后出现的 connector 实例与版本。
+
+16:36:16  disconnect  peer=127.0.0.1:62471 actions=10
+16:36:16  hello       boardwise-connector/3.2.186 connector=0.4.10
+16:37:16  disconnect  peer=127.0.0.1:55439 actions=6
+16:37:16  hello       boardwise-connector/3.2.186 connector=0.4.9
+16:38:02  disconnect  peer=127.0.0.1:57648 actions=6
+16:38:05  hello       boardwise-connector/3.2.186 connector=0.4.10
+16:41:16  disconnect  peer=127.0.0.1:61145 actions=15
+16:41:16  hello       boardwise-connector/3.2.186 connector=0.4.10
+16:41:16  disconnect  peer=127.0.0.1:53487 actions=0
+16:41:16  hello       boardwise-connector/3.2.186 connector=0.4.9
+16:41:39  disconnect  peer=127.0.0.1:55890 actions=4
+16:41:39  hello       boardwise-connector/3.2.186 connector=0.4.10
+16:44:16  disconnect  peer=127.0.0.1:63267 actions=9
+16:44:16  hello       boardwise-connector/3.2.186 connector=0.4.9
+16:46:16  disconnect  peer=127.0.0.1:59903 actions=8
+16:46:16  hello       boardwise-connector/3.2.186 connector=0.4.10
+16:49:16  hello       boardwise-connector/3.2.186 connector=0.4.10
+16:49:16  disconnect  peer=127.0.0.1:62544 actions=9
+16:49:33  disconnect  peer=127.0.0.1:65447 actions=3
+16:49:36  hello       boardwise-connector/3.2.186 connector=0.4.10

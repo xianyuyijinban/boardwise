@@ -439,6 +439,28 @@ test('doc.list carries the multi-project view alongside the legacy fields', asyn
   assert.equal(frame.data.count, frame.data.documents.length);
 });
 
+test('document.current names the current project the way doc.list does', async (t) => {
+  // Measured 2026-09-21 (editor 3.2.186): `dmt_Project.getCurrentProjectInfo`
+  // answers with plain readonly properties, and this box was built with
+  // `snapshot()` — which walks `getState_*` prototype members only — so
+  // `document.current` reported `project: {}` for the very project `doc.list`
+  // named (`/test`, `test`, `ea80fff6…`). The fake host answers in that shape
+  // (see `host012`), so both readers are held against one object here.
+  const host = host012();
+  withEda(t, host);
+  await connector.activate();
+
+  const current = await call(host, 'document.current', {});
+  const list = await call(host, 'doc.list', {});
+  const [focused] = list.data.projects.filter((project) => project.focused);
+
+  assert.equal(current.ok, true, JSON.stringify(current));
+  assert.notDeepEqual(current.data.project, {}, 'an empty project box hides an open project');
+  assert.equal(current.data.project.projectUuid, focused.projectUuid);
+  assert.equal(current.data.project.name, focused.name);
+  assert.equal(current.data.project.friendlyName, focused.friendlyName);
+});
+
 test('doc.focus activates a tab resolved by page-uuid prefix', async (t) => {
   const host = host012();
   withEda(t, host);

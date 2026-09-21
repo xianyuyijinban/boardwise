@@ -5,11 +5,15 @@
 
 全程大概 15 分钟，只有第 2 步和第 5 步需要你在编辑器里点几下，其余都是敲命令。
 
-> **关于截图**：每一步都有一个 `截图位`，标着它该拍成哪个文件。本轮交付时截图还没补
-> （编辑器与扩展当前处于断连状态，无法真机取图），按下文给出的文件名补进 `docs/images/`
-> 即可，不需要改这份文档。
+> **关于截图**：每一步都有一个 `截图位`，标着它该拍成哪个文件。`gs-04/05/06` 已补（终端渲染 + 真机打标抓图），
+> 其余三张待补：gs-01/02/03 需要编辑器界面（手截），
+> 按下文给出的文件名补进 `docs/images/` 即可，不需要改这份文档。
 
 **这台机器需要**：Windows 10/11、立创 EDA Pro **3.2.183 或更高**（推荐 3.2.186）、Python 3.10 以上。
+
+> **重要：一次只开一个编辑器窗口。** 每个窗口的扩展都会各自连上 daemon，而 daemon 只认
+> 最后注册的那个——开着多个窗口时，命令会打到哪个窗口是说不准的（2026-09-21 真机实测：
+> 同样的命令被旧窗口答了新窗口的事）。要用 boardwise 时，把多余的编辑器窗口关掉，只留一个。
 
 ---
 
@@ -117,7 +121,7 @@ boardwise doctor
   PASS daemon 版本与本机一致（新动作才不会『不认识』）
          运行的 daemon 0.1.0，本机 boardwise 0.1.0
   PASS 运行中的 connector 版本与仓库一致
-         编辑器里跑的是 connector 0.4.6，仓库里是 0.4.6
+         编辑器里跑的是 connector 0.4.10，仓库里是 0.4.10
   PASS 当前工程焦点可读
          焦点工程：毕设板（d2e2b864…，1 页原理图 / 1 个 PCB）；活动文档：page 121a882d…
 
@@ -141,6 +145,10 @@ boardwise doctor: 7/7 项通过
 想留一份机器可读的报告给同事排查，加 `--json doctor.json`。
 
 > 截图位：`docs/images/gs-04-doctor-green.png` —— 七行全绿的那次输出。
+> （已补：2026-09-21 本机实跑 `boardwise doctor` 的真实输出（7/7、connector 0.4.10）渲染成终端样式。
+> 图中焦点工程是当时开着的 test2，你跑出来会是自己开着的工程名。）
+
+![doctor 七行全绿](images/gs-04-doctor-green.png)
 
 ---
 
@@ -175,8 +183,10 @@ boardwise review-mark report.json
 ```bash
 boardwise review-mark report.json --focus 3     # 跳到第 3 条并缩放过去
 boardwise review-mark report.json --no-markers  # 只打印跳转清单（位号 + 坐标）
-boardwise bridge screenshot review.png --fit    # 把带标记的画布截下来存档
 ```
+
+截图存档用系统截图工具（Win+Shift+S）：`boardwise bridge screenshot` 在 3.2.186 上返回的是
+**缓存空帧**而不是当前画布（2026-09-21 真机实测），别拿它当证据。
 
 想指定工程页（防止画错页面，推荐）：
 
@@ -197,6 +207,11 @@ boardwise review-mark clear
 把编辑器切到正确的那一页再跑一次。
 
 > 截图位：`docs/images/gs-05-review-mark.png` —— 带红框的原理图 + 旁边那张序号表。
+> （已补：2026-09-21 毕设板真机打标抓图。整页缩略视图，红框是空心矩形、框在 finding 点名的器件周围；
+> 序号表在终端输出里。注意 `boardwise bridge screenshot` 在 3.2.186 上返回的是缓存空帧，
+> 截图要用系统截图工具或抬窗抓屏。）
+
+![原理图上的审查标记](images/gs-05-review-mark.png)
 
 ---
 
@@ -229,6 +244,10 @@ fab/
 - 退出码 `1` 表示**残缺**：已到的文件留在 `fab/` 里，缺的那个名字会打在屏幕上。别当成成功发厂。
 
 > 截图位：`docs/images/gs-06-fab-files.png` —— `fab/` 目录四个文件 + 终端输出。
+> （已补：2026-09-21 毕设板真机导出的真实记录渲染成终端样式（文件名与字节数来自该次的
+> `manifest.json`，目录名按本节叙事写作 `fab/`）。）
+
+![fab 四件套与终端输出](images/gs-06-fab-files.png)
 
 ---
 

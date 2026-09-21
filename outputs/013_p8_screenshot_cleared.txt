@@ -1,0 +1,7 @@
+$ .venv/Scripts/python.exe -m boardwise.cli bridge screenshot outputs/013_mark_cleared.png
+exit=0
+--- stdout ---
+boardwise bridge: wrote outputs/013_mark_cleared.png
+
+--- stderr ---
+

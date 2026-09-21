@@ -1,0 +1,7 @@
+$ .venv/Scripts/python.exe -m boardwise.cli bridge screenshot outputs/013_mark_P1.png
+exit=1
+--- stdout ---
+
+--- stderr ---
+boardwise bridge: screenshot failed [CONNECTOR_ERROR] connector disconnected
+

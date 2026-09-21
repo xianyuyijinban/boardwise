@@ -1,0 +1,12 @@
+{
+  "error": {
+    "code": "NOT_FOUND",
+    "message": "doc.focus: no open tab matches 5f0f4e169f1745e789501f939bb10851 — open it first with doc.open",
+    "detail": {
+      "wanted": "5f0f4e169f1745e789501f939bb10851",
+      "openTabs": [
+        "tab_page1"
+      ]
+    }
+  }
+}

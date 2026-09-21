@@ -1,0 +1,16 @@
+  PASS daemon 可达（ping，daemon 无 HTTP /health）
+         127.0.0.1:61190 的 daemon 已应答 ping
+  PASS 扩展已连接（WebSocket 已注册到 daemon）
+         daemon 上注册着一个 connector，配对指纹 962bf45e
+  PASS sys.probe 关键方法在位
+         5/5 关键方法都是 function（dmt_Schematic.getCurrentSchematicPageInfo, dmt_Pcb.getCurrentPcbInfo, sch_PrimitiveComponent.getAll, dmt_EditorControl.openDocument, dmt_EditorControl.generateIndicatorMarkers）
+  PASS 编辑器版本 ≥ 3.2.183
+         编辑器 3.2.186
+  PASS daemon 版本与本机一致（新动作才不会『不认识』）
+         运行的 daemon 0.1.0，本机 boardwise 0.1.0
+  PASS 运行中的 connector 版本与仓库一致
+         编辑器里跑的是 connector 0.4.9，仓库里是 0.4.9
+  PASS 当前工程焦点可读
+         焦点工程：毕设FOC驱动板（58c7593c…，3 页原理图 / 2 个 PCB）；活动文档：page 5f0f4e16…
+
+boardwise doctor: 7/7 项通过

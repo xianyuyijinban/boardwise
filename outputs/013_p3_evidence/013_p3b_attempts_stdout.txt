@@ -1,0 +1,7 @@
+{"attempt": 1, "at": "16:48:16", "connector": "0.4.10", "project": "test2", "active": "5ce4c9f372e0f867", "bundleBytes": 179530}
+{"attempt": 2, "at": "16:48:31", "connector": "0.4.10", "project": "test2", "active": "5ce4c9f372e0f867", "bundleBytes": 179530}
+{"attempt": 3, "at": "16:48:46", "connector": "0.4.10", "project": "test2", "active": "5ce4c9f372e0f867", "bundleBytes": 179530}
+{"attempt": 4, "at": "16:49:01", "connector": "0.4.10", "project": "test2", "active": "5ce4c9f372e0f867", "bundleBytes": 179530}
+{"attempt": 5, "at": "16:49:16", "connector": "0.4.10", "project": "test2", "active": "5ce4c9f372e0f867", "bundleBytes": 179530}
+{"attempt": 6, "at": "16:49:31", "connector": "0.4.10", "project": "毕设FOC驱动板", "active": "ab812fb712e14a62920977ed67aaf8f1", "bundleBytes": 179530, "columns": 17, "rows": 68, "header": "序号\t位号\t数量\t值\t器件名称\t器件\t封装\t制造商料号\t制造商\t立创编号\t供应商\t供应商封装\tNumber\tJLC 类别\tQuantity\t数据手册\t描述", "selfUpdate": {"old": "0.4.10", "new": "0.4.10", "bytes": 179530}}
+{"attempt": 7, "at": "16:49:47", "connector": "0.4.10", "project": "毕设FOC驱动板", "active": "ab812fb712e14a62920977ed67aaf8f1", "bundleBytes": 179530, "columns": 15, "rows": 68, "header": "序号\t位号\t数量\t值\t器件名称\t器件\t封装\t制造商料号\t制造商\t立创编号\t供应商\t供应商封装\tJLC 类别\t数据手册\t描述", "delivered": true}

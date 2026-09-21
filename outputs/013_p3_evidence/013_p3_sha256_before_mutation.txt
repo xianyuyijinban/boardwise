@@ -1,0 +1,4 @@
+4750bbb4289282ad1eb45302352b41bc900c0d69786603ad67eebc8278330d2f *connector/src/actions.ts
+e77581d657e8f8b6ba6a7d335926fbf1b17522b0724792d85cb15e81fd179fea *connector/dist/index.js
+4005233988c68de7eba22b41be748ae57c0451f3f97be25c01b112554db627a4 *connector/tests/actions012b.test.mjs
+6b5306901e1da5df6585cb0776160172a824ea97fcfe84a4c2e6af1fcb71b22b *connector/tests/actions012c.test.mjs
