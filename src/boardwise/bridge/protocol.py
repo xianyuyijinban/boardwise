@@ -233,6 +233,31 @@ ACTIONS: tuple[Action, ...] = (
         risk="write",
     ),
     Action(
+        name="sys.identity",
+        summary=(
+            "READ-ONLY: the editor's two identity layers, and whether they agree "
+            "(018 §B). Returns the project the editor reports as focused, the "
+            "project the *active document* belongs to (from "
+            "getCurrentDocumentInfo's parentProjectUuid, or the document's own "
+            "per-kind info read), a `consistent` flag comparing the two, and the "
+            "active page's uuid. Exists because the two layers disagreed on the "
+            "machine (2026-09-21): `doc.open`, which addresses the pages of the "
+            "project the editor has open, refused a uuid whose document was in "
+            "front — so a caller about to write needs to be able to ask this "
+            "first. `consistent` is **null** (with `consistentBasis`) when the "
+            "comparison cannot be made, never a hopeful true."
+        ),
+        params=(),
+        returns=(
+            "{focusedProject: {projectUuid, name, friendlyName} | null, "
+            "activeDocument: {uuid, type, tabId, projectUuid, project, source} | null, "
+            "consistent: bool | null, consistentBasis: 'project-uuid'|"
+            "'focused-project-listing'|'no-active-document'|'unavailable', "
+            "pageUuid: str | null, readOnly: true, notes?}"
+        ),
+        risk="read",
+    ),
+    Action(
         name="sch.readback",
         summary="Schematic components and a primitive subset, for a netlist view.",
         params=("includePrimitives",),
@@ -787,6 +812,14 @@ class ErrorCodes:
     CONFIRMATION_REQUIRED = "CONFIRMATION_REQUIRED"
     #: The action needs the editor but no connector is connected.
     NO_CONNECTOR = "NO_CONNECTOR"
+    #: A connector arrived while another editor instance already held the
+    #: bridge, so it was refused and its socket closed (018 §A). Promoted here
+    #: from its old home in :mod:`boardwise.bridge.daemon`: the code travels in
+    #: ``error.code``, so it belongs with the rest of the wire vocabulary — the
+    #: extension that wants to react to a refusal reads the frame, not the
+    #: daemon's source. The refusal's wording, which names the instance holding
+    #: the bridge, stays in ``daemon._refusal_message``.
+    CONNECTOR_ALREADY_ACTIVE = "CONNECTOR_ALREADY_ACTIVE"
     #: The connector raised / returned an error.
     CONNECTOR_ERROR = "CONNECTOR_ERROR"
     #: The connector did not answer in time.

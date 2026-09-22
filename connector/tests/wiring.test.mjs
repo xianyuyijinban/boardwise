@@ -604,3 +604,157 @@ test('the bootstrap retries instead of standing down when the editor is late', a
     'the startup nudge connects once the editor is reachable',
   );
 });
+
+// --------------------------------------------------------------------------
+// 018 §B3 — connector/daemon version negotiation
+// --------------------------------------------------------------------------
+
+test('hello carries this instance id, and the same one across reconnects', async (t) => {
+  // 018 §A/§B: the daemon refuses a second *live* connector instance, so the id
+  // has to mean "this editor instance" rather than "this socket". A reconnect
+  // is the same instance coming back; a new editor window (or a re-evaluated
+  // bundle) is a different one.
+  const { socket } = withHost(t);
+
+  await connector.activate();
+  await socket.deliver(BANNER);
+  const first = socket.frame('hello').params.instanceId;
+  assert.match(first, /^inst-\d+-[a-z0-9]+$/, `unexpected instance id: ${first}`);
+
+  await connector.reconnect();
+  await socket.deliver(BANNER);
+  const helloFrames = socket.sent.filter((entry) => entry.frame.action === 'hello');
+  assert.equal(helloFrames.length, 2, 'a reconnect sends a second hello');
+  assert.equal(
+    helloFrames[1].frame.params.instanceId,
+    first,
+    'a reconnect is the same instance, so the id must not change',
+  );
+});
+
+test('a daemon that asks for a newer connector is toasted, not silently obeyed', async (t) => {
+  // The failure this prevents is a version skew that looks like an action
+  // mysteriously misbehaving, with the user having no way to learn that their
+  // extension is the old half. The daemon still answers us — this is a warning
+  // sign, not a gate — so it has to reach the editor's visible surfaces.
+  const { socket, logs, toasts, dialogs } = withHost(t);
+
+  await connector.activate();
+  await socket.deliver(BANNER);
+  await socket.deliver({
+    id: 'hello',
+    ok: true,
+    data: { role: 'connector', protocol: '1.0', paired: true, minConnectorVersion: '99.0.0' },
+  });
+
+  assert.equal(connector.getStatus().minConnectorVersion, '99.0.0');
+  assert.equal(connector.getStatus().connectorOutdated, true);
+  assert.ok(
+    toasts.some((line) => line.includes('older than the daemon') && line.includes('99.0.0')),
+    `the user must be told: ${JSON.stringify(toasts)}`,
+  );
+  assert.ok(logs.some((line) => line.includes('older than the daemon')), logs.join('\n'));
+
+  connector.about();
+  const text = dialogs.at(-1).message;
+  assert.match(text, /upgrade needed/);
+  assert.match(text, /99\.0\.0/);
+});
+
+test('an absent minConnectorVersion is silence, exactly as specified', async (t) => {
+  // "The daemon did not state a minimum" and "you are up to date" are different
+  // facts. Rendering the first as the second (or as a warning) is how a
+  // diagnostics field starts lying.
+  const { socket, logs, toasts, dialogs } = withHost(t);
+
+  await connector.activate();
+  await socket.deliver(BANNER);
+  await socket.deliver({
+    id: 'hello',
+    ok: true,
+    data: { role: 'connector', protocol: '1.0', paired: true, fingerprint: 'abc12345' },
+  });
+
+  assert.equal(connector.getStatus().minConnectorVersion, undefined);
+  assert.equal(connector.getStatus().connectorOutdated, undefined);
+  assert.equal(
+    toasts.some((line) => /minimum|older than/.test(line)),
+    false,
+    `no version warning was asked for: ${JSON.stringify(toasts)}`,
+  );
+  assert.equal(
+    logs.some((line) => /minimum/.test(line)),
+    false,
+    `and nothing in the log: ${logs.join('\n')}`,
+  );
+
+  connector.about();
+  assert.equal(
+    /upgrade needed|connector version: ok/.test(dialogs.at(-1).message),
+    false,
+    'the About box must not invent a verdict about an unstated minimum',
+  );
+});
+
+test('a minimum this build satisfies is recorded, never toasted', async (t) => {
+  const { socket, logs, toasts, dialogs } = withHost(t);
+
+  await connector.activate();
+  await socket.deliver(BANNER);
+  await socket.deliver({
+    id: 'hello',
+    ok: true,
+    data: { role: 'connector', protocol: '1.0', minConnectorVersion: '0.0.1' },
+  });
+
+  assert.equal(connector.getStatus().connectorOutdated, false);
+  assert.equal(toasts.some((line) => /older than/.test(line)), false);
+  assert.ok(logs.some((line) => line.includes('satisfies the daemon')), logs.join('\n'));
+
+  connector.about();
+  assert.match(dialogs.at(-1).message, /connector version: ok/);
+});
+
+test('a minimum that cannot be compared is logged as unanswerable', async (t) => {
+  // The shape that must never pass for a verdict: a build whose own version is
+  // not a version (a bundle built without the define reports `unknown`).
+  const { socket, logs, toasts } = withHost(t);
+
+  await connector.activate();
+  await socket.deliver(BANNER);
+  await socket.deliver({
+    id: 'hello',
+    ok: true,
+    data: { role: 'connector', protocol: '1.0', minConnectorVersion: 'not a version' },
+  });
+
+  assert.equal(connector.getStatus().connectorOutdated, undefined);
+  assert.equal(toasts.some((line) => /older than/.test(line)), false);
+  assert.ok(
+    logs.some((line) => line.includes('cannot be compared')),
+    logs.join('\n'),
+  );
+});
+
+test('a reading from one daemon does not outlive the connection that produced it', async (t) => {
+  // A stale minimum would be reported as this connection's answer — the same
+  // class of mistake the About box was fixed for when it read the config
+  // through a facade that did not exist yet.
+  const { socket } = withHost(t);
+
+  await connector.activate();
+  await socket.deliver(BANNER);
+  await socket.deliver({
+    id: 'hello',
+    ok: true,
+    data: { role: 'connector', protocol: '1.0', minConnectorVersion: '99.0.0' },
+  });
+  assert.equal(connector.getStatus().connectorOutdated, true);
+
+  await connector.reconnect();
+  await socket.deliver(BANNER);
+  await socket.deliver({ id: 'hello', ok: true, data: { role: 'connector', protocol: '1.0' } });
+
+  assert.equal(connector.getStatus().minConnectorVersion, undefined);
+  assert.equal(connector.getStatus().connectorOutdated, undefined);
+});

@@ -1,0 +1,2 @@
+boardwise review: outputs/ProPrj_test_2026-09-22.epro2 (3 components, 6 nets)
+findings: 0 ERROR, 0 WARN, 0 INFO

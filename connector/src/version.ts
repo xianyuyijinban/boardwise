@@ -31,3 +31,43 @@ declare const __BOARDWISE_UUID__: string;
 
 export const EXTENSION_UUID: string =
   typeof __BOARDWISE_UUID__ === 'string' ? __BOARDWISE_UUID__ : '';
+
+/**
+ * A dotted version string as numbers, or `null` when it is not one.
+ *
+ * Deliberately strict: `'unknown'` is a real value in this codebase
+ * ({@link VERSION} answers it for a build with no define), and a comparison
+ * that treated it as `0.0.0` would report every such build as outdated. An
+ * unparsable side makes the comparison *unanswerable*, which is what the
+ * caller has to hear (018 §B3: a missing `minConnectorVersion` must be silent,
+ * not a warning).
+ */
+export function parseVersion(value: unknown): number[] | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim().replace(/^v/i, '');
+  if (!/^\d+(?:\.\d+)*$/.test(trimmed)) return null;
+  return trimmed.split('.').map((part) => Number(part));
+}
+
+/**
+ * `-1` when `left` is older, `1` when newer, `0` when equal — `null` when
+ * either side is not a version. Missing segments count as zero, so `0.4` and
+ * `0.4.0` compare equal.
+ */
+export function compareVersions(left: unknown, right: unknown): number | null {
+  const a = parseVersion(left);
+  const b = parseVersion(right);
+  if (!a || !b) return null;
+  for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
+    const x = a[i] ?? 0;
+    const y = b[i] ?? 0;
+    if (x !== y) return x < y ? -1 : 1;
+  }
+  return 0;
+}
+
+/** Is `version` older than `minimum`? `null` when that cannot be decided. */
+export function isVersionOlder(version: unknown, minimum: unknown): boolean | null {
+  const order = compareVersions(version, minimum);
+  return order === null ? null : order < 0;
+}

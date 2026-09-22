@@ -1,0 +1,30 @@
+018 install.bat 干净环境实测（2026-09-22，Kimi 亲测）
+========================================================
+
+方法
+----
+仓库最小集复制到一次性沙盒 E:\tmp_018_install_test\（pyproject.toml / README /
+AGENTS.md / src / scripts / docs + connector 的 extension.json、package*.json、
+build.mjs、package.mjs、src、dist），后台跑 `cmd //c scripts\install.bat`，
+模拟朋友拿到仓库后的第一体验。
+
+结果：PASS
+----------
+1. install.bat 全程跑完无人工干预：自建 .venv → pip install -e .（含 websockets
+   17.1）→ 自动跑 doctor 自检 → 打印中文"下一步"四步指引 → pause 结束。
+2. 功能实证（不依赖日志文本）：
+   - `E:\tmp_018_install_test\.venv\Scripts\python.exe -m boardwise.cli --help`
+     正常打印全部子命令（review / bridge / edit / doctor / …）。
+   - 同 venv `import websockets, boardwise` 成功：websockets 17.1，
+     boardwise 指向沙盒 src（editable 安装正确）。
+3. doctor 在沙盒输出 2/7：5 项 FAIL 全部是"扩展未连接"——沙盒里没有立创 EDA
+   编辑器，这是预期结果而非安装失败；每项都带中文 → 修复建议。通过的 2 项含
+   "daemon 版本与本机一致"。
+4. install.bat 为 GBK+CRLF 编码（既定裁决，见 018_packaging_survey.txt）；
+   日志经 UTF-8 读取出现的乱码仅是读取侧现象，cmd 窗口内显示正常。
+
+结论
+----
+朋友照 docs/install.md 六步走，install.bat 一段即可完成 CLI 侧安装；
+剩余动作（装扩展、起 daemon、编辑器内连接）在指引中逐步写明。
+沙盒已删除，本测试不留残留。

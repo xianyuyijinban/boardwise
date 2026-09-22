@@ -204,9 +204,12 @@ The connector sends `hello` with the fixed id `"hello"`; the daemon answers with
 ← {"id": "hello", "action": "hello",
    "params": {"token": "…64 hex…", "role": "connector",
               "protocol": "1.0", "client": "boardwise-connector/3.2.121",
-              "connectorVersion": "0.4.1"}}
+              "connectorVersion": "0.4.1",
+              "instanceId": "inst-112233445-9k2f0x1a"}}
 → {"id": "hello", "ok": true,
-   "data": {"role": "connector", "protocol": "1.0", "serverTime": 1789000000.0}}
+   "data": {"role": "connector", "protocol": "1.0", "serverTime": 1789000000.0,
+            "paired": true, "fingerprint": "53cd3b41",
+            "minConnectorVersion": "0.4.10"}}
 ```
 
 `connectorVersion` is the connector's **own** build (`__BOARDWISE_VERSION__`,
@@ -217,6 +220,41 @@ successful while the editor kept executing the previous bundle, and the only
 symptom was a stack pointing at a line that had already been fixed. It is
 **optional**: a connector that does not send it is accepted and recorded as
 `connector=<version unknown>`.
+
+`instanceId` names the **extension instance** (018 §A), not the build: it is
+generated once when the bundle is evaluated (`connector/src/index.ts`) and is
+stable across reconnects, so the daemon can tell "the same editor came back"
+from "a second editor window appeared". Two windows each running a connector
+used to take turns in the daemon's single active slot every few minutes, and a
+write could then land in the other window's project — so a second *live*
+instance is refused rather than accepted. Also **optional**: without it the
+daemon falls back to its connection-level uuid, which still distinguishes live
+connections but not reconnects of the same one.
+
+`minConnectorVersion` is the **ack's** half of that negotiation (018 §B3): the
+oldest connector build the daemon will vouch for. The connector compares it
+with its own `VERSION` on every accepted handshake and, when it is older, says
+so in the editor's log panel **and** as a toast — never silently, because the
+failure it prevents is a version skew that looks like a mysteriously broken
+action. Three cases are deliberately *not* warnings:
+
+- the field is **absent** — the daemon has not stated a minimum, so nothing is
+  claimed in either direction (and a reading from an earlier daemon is
+  discarded, so it cannot outlive the connection that produced it);
+- the two values cannot be compared (a build whose `VERSION` is `unknown`),
+  which is logged as an unanswerable comparison rather than reported as a
+  verdict;
+- the connector is **newer**, which is logged as satisfied.
+
+**Status of the field.** The daemon side landed with 018 §A: the ack carries
+`minConnectorVersion`, and its value is the daemon's own `MIN_CONNECTOR_VERSION`
+constant, equal to the shipped connector version today — so nothing is refused
+*now*, and the field exists for the day a protocol change makes an old bundle
+dangerous. It is **announced, not enforced**: the daemon still answers an older
+connector, which is why the connector's job here is to *say so* rather than to
+stop working. (The refusal path for a version would have to run before the
+token check, and a version comparison is not a reason to hang up on a connector
+that still works.)
 
 The daemon checks, **in this order**, and closes the socket on the first failure. The order is
 load-bearing, not incidental — see §3.4 for why the version check precedes the secret:
@@ -242,9 +280,25 @@ instead of seeing a bare disconnect.
 Two more rules:
 
 - `hello` sent later in the session is a `PROTOCOL_VIOLATION` — it is a handshake, not a verb.
-- A **second** connector that authenticates successfully replaces the first; the old socket is
-  closed with `PROTOCOL_VIOLATION` ("replaced by a new connector"). The editor may legitimately
-  restart, and refusing the new connection would leave the bridge dead until the daemon restarts.
+- A **second** connector that authenticates successfully is **refused** while the first one's
+  socket is still open. The newcomer gets an error frame — `CONNECTOR_ALREADY_ACTIVE`, "another
+  editor instance already holds the bridge (instance …, connector x.y.z, peer …); this connection
+  was refused so that writes cannot land in the wrong project", then the instruction to close the
+  extra window or run `boardwise bridge status` — and its socket is closed after it. The
+  refusal is audited as `connector_rejected` (both instance ids, both builds, the peer address)
+  and printed on the daemon's console in one line naming the holder, because the only person who
+  can act on it is the one looking at two EasyEDA windows. **The active instance is not
+  disturbed**: it is never told anything and keeps the bridge. A **dead** holder is not defended
+  — when the previous socket is no longer open the newcomer takes over, which is the ordinary
+  editor-reload path and has to stay smooth. That is also why liveness is read from the socket
+  rather than from the daemon's bookkeeping, and why the pairing check runs *before* this one: a
+  newcomer presenting a different token is refused as `UNAUTHENTICATED`, without the question
+  "who else is here?" being asked at all.
+
+Until 2026-09-22 this section said the opposite — that the second connection replaces the first
+and the old socket is closed with `PROTOCOL_VIOLATION` ("replaced by a new connector"). Two
+windows then took turns in the single slot every few minutes, and a write landed in whichever
+project the window that happened to be winning had in focus. See §10 item 2.
 
 ### 3.4 Pairing: trust on first use
 
@@ -344,8 +398,9 @@ declaring `confirm`).
 | action | owner | risk | params | `data` on success | timeout |
 |---|---|---|---|---|---|
 | `hello` | daemon | read | daemon | `token`, `role`, `protocol`, `client` | `{role, protocol, serverTime}` | 30 s (`ACTION_TIMEOUT`) |
-| `ping` | daemon | read | daemon | — | `{pong: true, version, connector: bool, pairedFingerprint: str\|null}` — `version` is the daemon's own build, so "the daemon answering me" and "the daemon my CLI was built from" can be told apart | 30 s |
-| `document.current` | connector | read | connector | — | `{project, pcb, schematicPage, active, type, typeSource, heuristic, tabs}` — `active` is the focused document, or **null** when none is focused (the host's placeholder uuid `"0"` is reported as `null` plus a `problems` line, as in `doc.list`); `typeSource`/`heuristic` say which read produced `type` (§10 item 5) | 30 s |
+| `ping` | daemon | read | daemon | — | `{pong: true, version, connector: bool, pairedFingerprint: str\|null, activeInstance: obj\|null, recentRejections: [obj]}` — `version` is the daemon's own build, so "the daemon answering me" and "the daemon my CLI was built from" can be told apart; `activeInstance` (018 §A) names the editor instance that holds the bridge (`instanceId`, `instanceIdSource`, `connectorVersion`, `client`, `peer`, `connectedAt`) and `recentRejections` is the last ≤5 connectors that were turned away (newest first, §3.3), each with both sides and a `reason`. `boardwise bridge status` renders both and adds nothing of its own | 30 s |
+| `document.current` | connector | read | connector | — | `{project, pcb, schematicPage, active, type, typeSource, heuristic, tabs}` — `active` is the focused document, or **null** when none is focused (the host's placeholder uuid `"0"` is reported as `null` plus a `problems` line, as in `doc.list`); `typeSource`/`heuristic` say which read produced `type` (§10 item 5); when the host offers them, `active` also carries `projectUuid` / `libraryUuid` — the document's own `parentProjectUuid` / `parentLibraryUuid`, i.e. the channel that says which project the focused *document* belongs to, which is not always the project `doc.list` calls focused (`sys.identity`) | 30 s |
+| `sys.identity` | connector | read | — | `{focusedProject, activeDocument, consistent, consistentBasis, pageUuid, readOnly, notes?}` — the editor's two identity layers side by side (018 §B): `focusedProject` is the project `doc.list` marks `focused` (`dmt_Project.getCurrentProjectInfo`), `activeDocument` is `getCurrentDocumentInfo`'s document plus the project it belongs to (`parentProjectUuid`, or the document's own per-kind info read when the host leaves that field empty). `consistent` compares the two project uuids and is **null** — never a hopeful `true` — when the comparison cannot be made, in which case `consistentBasis` says why (`no-active-document`, `unavailable`, or `focused-project-listing` when membership in the focused project's document list was the best available evidence). `pageUuid` is the active page's uuid. Read-only: nothing is opened, focused or written | 30 s |
 | `sys.probe` | connector | read | connector | `checks`, `namespace`, `namespaces`, `functionsOnly` | `checks` mode: `{version, topLevel, checks: {NAME: {present, kind, checked, missing, status, arity, notes?}}}` — `status` is the member's `typeof` and `arity` its declared `fn.length` for the members that read back as functions; enumerate mode: `{version, topLevel, namespaces: {NAME: {present, ownNames, functions, data, errors?}}}` — **read-only** introspection of the live API surface | 30 s |
 | `sys.self_update` | connector | write | connector | `bundleB64`, `version` | `{ok, oldVersion, newVersion, bytes, database, reloadInMs}` — rewrites the connector's own bundle in IndexedDB and reloads the page (§8); **the permission grant is preserved** | 30 s |
 | `sch.readback` | connector | read | connector | `includePrimitives` | `{kind: 'sch', components, primitives, componentCount}` | 30 s |
@@ -379,7 +434,7 @@ declaring `confirm`).
 | `export.fab` | connector | read | connector | `pcbUuid`, `outDir`, `vendor`, `gerber`, `bom`, `bomTemplate`, `timeoutMs` | `{vendor, project, pcb, outDir, generatedAt, encoding: 'base64', files: [{role, name, mime, bytes, data}], manifest, failed, partial, note}` — Gerber + pick-and-place + BOM in one call with a manifest; preset `generic` (metric 4:5, drill table on, CSV P&P in mm, CSV BOM with every column — the 15 columns are sent as the two counting columns in `statistics` and the other 13 in `property`, disjoint lists whose union the host checks per column); a file the host refuses/empties/hangs on is reported per file in `failed`. `bom` is an override object limited to `filterOptions` — `[{property, includeValue}]` where a rule leaves a row **out** when the part matches `includeValue` (so the preset sends `'Add into BOM': 'no'`), and `null` means "send none, keep the host's own default rules". On disk the names are `fab_gerber.zip` / `fab_pick_and_place.csv` / `fab_bom.csv` | 240 s (`FAB_TIMEOUT`) |
 | `lib.recommend` | connector | read | `query` \| `pageUuid`+`ref`, `topN`, `allLayers`, `timeoutMs`, `probes` | `{source, query, ref, component, target, layers: [{layer, api, called, args, hitCount, pagesFetched, reason?, error?}], returned, shown, candidates, 'stock/price', readOnly, placed}` — the ladder `searchByProperties({supplierId: <LCSC code>})` → `searchByProperties({value, footprintName})` → `search(keyword)`, 5 hits per page and 3 pages per rung; Basic parts first; **no stock/price**; never places. `timeoutMs` is the **per-page** deadline for one library search (default 20 s): a page that never settles is reported as that rung's `error` and the descent continues, instead of consuming the whole action. `probes` (≤10) replaces the ladder with raw `searchByProperties` calls: each entry `{properties, libraryUuid?, classification?, symbolType?, itemsOfPage?, page?}` is sent with **exactly** the arguments given (an argument the caller left out is not sent, so `arguments.length` is theirs) and reported as `{args, called, hitCount, pageSize, firstKeys, error?}`; the answer is then `{..., probes: […], probesOnly: true, layers: [], candidates: [], returned: 0, shown: 0}`. The `exact` rung's key is `supplierId` because that is the only properties key 3.2.186 indexes (§12) — `partNumber` / `partCode` are applied there and match nothing, so sending them would be a call that cannot return a hit | 90 s (`RECOMMEND_TIMEOUT`) |
 | `review.mark` | connector | read | `pageUuid`, `marks` (`[{ref, ruleId, severity, text}]`), `clear`, `focus`, `color`, `zoom`, `markers` | `{mode: 'markers'\|'list', cleared, page: {components, designators, withoutPosition, active}, count, marked: [{position, marker, ref, designator, ruleId, severity, text, primitiveId, x, y}], unresolved: [{position, …, reason}], markers: {attempted, accepted, reason?}, focused?: {position, ref, zoomed, reason?}, readOnly, note, notes?}` — a review pass drawn on the focused schematic page: each finding's `ref` is resolved to its component's coordinates and marked with a rectangle. The marker API takes **shapes, not text**, so the rule id / severity / one-line summary come back in `marked` (`marked[k-1]` is marker k). `markers: false`, a missing `generateIndicatorMarkers` or a canvas that refuses it all degrade to `mode: 'list'` (the jump list, still carrying coordinates); a ref that is not on the page is reported per mark and the rest are still drawn; `focus: N` zooms to the Nth entry with `zoomToRegion`; `clear: true` removes the markers — it has **no page guard** (it clears whatever canvas is in front, which may belong to a different project; measured 2026-09-21), and with **no active document** it answers `cleared: true` with the note "no active canvas — nothing to remove" instead of reporting the host's refusal of a call that had nothing to act on | 30 s |
-| `doc.open` | connector | read | `uuid` | `{uuid, tabId, opened, activated, document}` — switches the editor's active document, confirmed by asking the editor | 30 s |
+| `doc.open` | connector | read | `uuid` | `{uuid, tabId, opened, activated, document}` — switches the editor's active document, confirmed by asking the editor. On failure (`openDocument` answered no tab id) the error is a **diagnosis**, not a bare refusal (018 §B1): `CONNECTOR_ERROR` whose message names the focused project, the project the uuid belongs to (when a read can say so), whether the uuid is already open in a tab or listed among the open project's documents, and what to do (`switch the editor to project X first`, `use doc.focus`); `detail` carries the raw readings. A uuid no searchable project has says so, and says which projects could not be searched and why | 30 s |
 | `pcb.doc.new` | connector | create | `boardName`, `confirm` | `{pcbUuid, focused}` — **gated**: without `confirm: true` the daemon answers `CONFIRMATION_REQUIRED` | 60 s |
 | `doc.rename` | connector | write | `uuid`, `name`, `type` | `{uuid, name, type, renamed, confirmed, notes?}` — dispatches to the per-kind `modify*Name` call and verifies against the editor's listing | 30 s |
 
@@ -552,12 +607,13 @@ Notes that matter operationally:
 | code | Meaning | Usually means |
 |---|---|---|
 | `UNAUTHENTICATED` | No `hello` in time, or the token is empty/wrong | A connector that is not the paired one — `boardwise bridge revoke` to forget the pairing (§3.4) |
-| `PROTOCOL_VIOLATION` | `hello` not first, `hello` twice, or a connector was replaced | Two editors running; or a hand-rolled client |
+| `PROTOCOL_VIOLATION` | `hello` not first, or `hello` sent twice | A hand-rolled client — or an extension bundle that reconnects without reloading the page. Not "two editors" any more: a second **live** instance is refused with `CONNECTOR_ALREADY_ACTIVE` (§3.3) |
 | `VERSION_MISMATCH` | Protocol major differs | Daemon and connector from different checkouts |
 | `BAD_REQUEST` | Malformed JSON, missing/invalid field, or wrong role for the action | A client bug |
 | `UNKNOWN_ACTION` | Not in the catalogue | Typo, or an action that does not exist yet |
 | `NOT_IMPLEMENTED` | Known to the connector, but this editor version lacks the API | Editor older than the connector expects |
 | `NO_CONNECTOR` | The action needs the editor and none is attached | EasyEDA not running, extension disabled, or external interaction not granted |
+| `CONNECTOR_ALREADY_ACTIVE` | A connector's `hello` arrived while another editor instance's socket held the bridge (018 §A) | Two EasyEDA windows are open. Close the extra one — the daemon will not pull the bridge out from under a live socket, and the instance that holds it is named in the error, in the audit log (`connector_rejected`) and by `bridge status` (§3.3) |
 | `CONFIRMATION_REQUIRED` | A `create` action (one that produces a new document) arrived without `confirm: true` | Expected on the first call — re-send with `confirm: true`, or let the CLI ask (§4, 006c). Nothing was forwarded, so nothing was created |
 | `CONNECTOR_ERROR` | The connector raised, or refused (e.g. no image, canvas refused markers) | A document is not open/focused |
 | `PAGE_MISMATCH` | The page (or PCB/board) the action was given is not the one the editor has focused | A call aimed at a tab that is not in front — the guard exists so a write cannot land on the wrong page. Focus it first (`doc.focus`, or `doc.open` if it is not open) and re-check with `doc.list` |
@@ -631,7 +687,7 @@ The daemon is the passive side: it does not track per-connector liveness, and cl
 | Command | Exit | What it does |
 |---|---|---|
 | `bridge start` | 0 | Run the daemon. Prints the token path, the audit dir, the pairing path, and one loud line per first-time pairing. |
-| `bridge status` | 0 / 1 / 2 | Daemon up + connector attached / daemon up, no connector / daemon unreachable. Also prints the paired connector's fingerprint. |
+| `bridge status` | 0 / 1 / 2 | Daemon up + connector attached / daemon up, no connector / daemon unreachable. Also prints the paired connector's fingerprint, and — since 018 §A — the **active instance** (instance id, connector build, peer, connected-at) and the last refused connectors, both read straight out of `ping`'s `activeInstance` / `recentRejections` (§4). One editor instance holding the bridge is a *feature*: see §3.3 and §10 item 2. |
 | `bridge revoke` | 0 | Delete the pairing record and audit `revoke`. Needs no daemon: it is a local file operation, because the moment you want to withdraw trust is the moment you are least sure what is running. |
 | `bridge screenshot <out>` | 0 / 1 / 2 | Native canvas capture; `--fit` zooms to the board first. |
 | `bridge export-fab --out DIR` | 0 / 1 / 2 | The fab bundle: calls `export.fab` and writes Gerber + pick-and-place + BOM + `manifest.json` into DIR (created if missing). `--pcb`, `--vendor`, `--gerber` (JSON overrides), `--bom-template`, `--timeout-ms`. Exit 1 also for a **partial** bundle — the files that did arrive stay on disk, and the missing one is named on stderr. |
@@ -724,11 +780,17 @@ them.** Measured 2026-09-21 (013 batch②, connector 0.4.9/0.4.10): the audit lo
 frames reporting `0.4.9` and `0.4.10` on **different sockets inside the same minute**, while
 `doc.list`'s focused project changed with the socket (`test` → `test2` → `毕设FOC驱动板`) and
 nothing was done to the editor between reads. Each window keeps its own extension store (hence its
-own build version) and its own focused project, and every window that (re)connects replaces the
+own build version) and its own focused project, and every window that (re)connected replaced the
 daemon's connector connection — so *both* "which build answers" and "which project is in front"
-belong to whichever window registered last, and they flip on the windows' own schedule. This is what
+belonged to whichever window registered last, and they flipped on the windows' own schedule. This is what
 the earlier "the focus moved with nobody touching the editor" note was seeing, and it has two
 consequences before any real-machine verification:
+
+**The flipping stopped on 2026-09-22** (018 §A): a second *live* connector instance is now refused
+outright with `CONNECTOR_ALREADY_ACTIVE` (§3.3), so the socket no longer moves between windows —
+whichever window **arrived first and stayed connected** is the one answering. The measurements and
+both consequences below stand unchanged; what changed is that "which window is it this time?" is
+now answerable from `bridge status` rather than having to be inferred from every reading.
 
 - **An R1-clean reading does not prove the build under test answered.** A window left on an older
   bundle answers `doc.list` perfectly. Check the *behaviour* you changed, not only the project name:
@@ -750,14 +812,20 @@ One JSON object per line, best-effort (a logging failure never breaks a call):
 {"ts": 1789000000.5, "action": "connect", "role": "-", "ok": true, "peer": "127.0.0.1:54048", "origin": null, "user_agent": "…"}
 {"ts": 1789000001.3, "action": "pairing", "role": "connector", "ok": true, "client": "boardwise-connector/0.2.1", "peer": "127.0.0.1:54048", "fingerprint": "53cd3b41"}
 {"ts": 1789000001.4, "action": "hello", "role": "connector", "ok": true, "client": "boardwise-connector/0.2.1"}
+{"ts": 1789000001.9, "action": "connector_rejected", "role": "connector", "ok": false, "peer": "127.0.0.1:54102", "instanceId": "inst-…", "instanceIdSource": "hello", "connectorVersion": "0.4.10", "activeInstanceId": "inst-…", "activeConnectorVersion": "0.4.10", "activePeer": "127.0.0.1:54048", "reason": "another editor instance is already connected"}
 {"ts": 1789000002.0, "action": "disconnect", "role": "connector", "ok": true, "actions": ["pcb.readback"]}
 {"ts": 1789000003.0, "action": "revoke", "role": "cli", "ok": true, "fingerprint": "53cd3b41"}
 ```
 
-`connect`, `disconnect`, `hello`, `pairing` and `revoke` are **lifecycle** records: they carry
-their own fields and no `ms`. Everything else is a request and carries a duration. A token — or
-any slice of one longer than the 8-hex fingerprint — must never appear in this file, and there is
-a test that greps for exactly that.
+`connect`, `disconnect`, `hello`, `pairing`, `connector_rejected` and `revoke` are **lifecycle**
+records: they carry their own fields and no `ms`. Everything else is a request and carries a
+duration. `connector_rejected` (018 §A) is the record a second connector leaves behind when it is
+turned away (§3.3): it names **both** sides — the refused instance and the one holding the bridge
+(`activeInstanceId`, `activeConnectorVersion`, `activePeer`) — plus a `reason`, because "why did my
+write land in the other project?" is the question this record exists to answer. The same two facts
+are on the wire in `ping` and printed by `bridge status`, so reading the log is the fallback, not
+the first step. A token — or any slice of one longer than the 8-hex fingerprint — must never appear
+in this file, and there is a test that greps for exactly that.
 
 ## 9. Security posture
 
@@ -805,8 +873,12 @@ Recorded rather than hidden, so a future session does not have to rediscover the
 1. **Half-open connectors look alive.** `status` reads `daemon.connector is not None`; if the
    editor dies without a clean TCP close, that stays true until a forwarded action times out.
    Workaround: `boardwise bridge screenshot` — a real round trip — is the honest liveness check.
-2. **Only one connector is tracked.** A second editor instance displaces the first. Fine on one
-   workstation; wrong for any multi-user setup. **Multi-project routing is deliberately
+2. **Only one connector is tracked.** A second editor instance is **refused** while the first
+   one's socket is open (`CONNECTOR_ALREADY_ACTIVE`, audited `connector_rejected`, §3.3) — since
+   2026-09-22; before that the newcomer displaced the holder and two windows took turns in the
+   slot every few minutes. Still one workstation's model, and still wrong for any multi-user
+   setup: a second machine cannot share the bridge, and the fix for "my writes land in the other
+   window" is to close the extra window, not to route. **Multi-project routing is deliberately
    deferred** (004f): the per-project pairing table, `connectors.json` and `--project` addressing
    that task 004f first specified were **withdrawn**, because the premise they were built on was
    measured to be false — see item 24. One connector per editor is the model; addressing "which

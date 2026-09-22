@@ -1,0 +1,44 @@
+016 波② 场景 4 —— 保存失败/异常路径：**不可在本机模拟**，如实记录
+=====================================================================
+执行者：coder 子代理（真机）。2026-09-21。
+
+结论
+---------------------------------------------------------------------
+**不可模拟**。宿主（EasyEDA Pro 3.2.186 + connector 0.4.10）没有任何可编程手段让
+`sch.doc.save` 失败：
+  - 连接器侧 `sch.doc.save` 只是 `sch_Document.save()`，返回 false 就抛
+    ActionError（connector/src/actions.ts:2505-2513），没有参数能诱导 false；
+  - 编辑器里也没有"让保存被拒"的开关，且本任务禁止改 connector（§一 零 TS 改动）；
+  - 唯一能造成 save 层异常的现实途径是**断连**，但那条路径按设计归到
+    `unknown`（退出 3），由场景 5 覆盖，不是场景 4 的"被拒绝"。
+所以场景 4 不编造结果，只把代码路径指出来（任务书 §五真机 4 的要求）。
+
+save-ack 代码路径（供波②/后续复验核对）
+---------------------------------------------------------------------
+1. `src/boardwise/cli.py:4118-4143`（apply 步骤 6，本次切片的 save-ack）
+     saved = await call("sch.doc.save", {}, "persist the change", writes=True)
+     if saved is None:                       # 调用失败（拒绝或超时/断连）
+         report["save"] = {"ok": False, code, message}
+         if last["unknown"]:                 # 超时/断连 → 状态无法陈述
+             report["persistence"] = "unknown";  return done(3, "unknown", "save_unknown")
+         report["persistence"] = "placed"    # 宿主**拒绝**了保存
+         return done(2, "failed", "save_refused")
+     report["persistence"] = "saved_unverified"
+   即：**保存被拒 → 退出 2 + persistence=placed**（改动只在画布上）；
+       **保存超时/断连 → 退出 3 + persistence=unknown**；成功 → saved_unverified
+       （saved_verified 只能靠重开工程人工升级，§七.2）。
+
+2. 它照抄的模式：`src/boardwise/engines/draw.py:424-451`（`_save_project`）。
+   那里的 docstring 已记录本构建的实测事实："the current build never returns
+   `saved: false` — a refusal arrives as an exception"，所以 016 用
+   `saved is None`（调用抛错）作为"被拒"的判据，而不是读一个 `saved:false` 字段。
+
+3. 连接器侧：`connector/src/actions.ts:2505-2513`（`schDocSave`）——
+   `sch_Document.save()` 为假即抛 `CONNECTOR_ERROR`
+   ("sch_Document.save() returned false — the project may need a manual save")。
+
+离线等价覆盖（波①已交，供参考）
+---------------------------------------------------------------------
+stub daemon 下这两条分支都有断言：save 被拒 → `placed`、写超时 → 退出 3 + 回读 +
+不重试（`tests/test_016_edit_cli.py`，见任务书 §八.4 "额外覆盖"段）。
+真机侧本波只能留空，标"不可模拟"。

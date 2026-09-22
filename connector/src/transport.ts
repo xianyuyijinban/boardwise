@@ -77,14 +77,30 @@ export type TransportOptions = {
    * `(version unknown)` rather than refusing them.
    */
   connectorVersion?: string;
+  /**
+   * This extension instance's own id, announced in `hello` (018 §A/§B).
+   *
+   * The daemon keeps one *active connector instance* and refuses a second live
+   * one, because two editor windows each running a connector used to swap the
+   * active slot every few minutes and send writes into the wrong project. It
+   * needs a value that survives reconnects and changes only when the editor
+   * really restarts, which is what this is: `index.ts` generates it once per
+   * module evaluation.
+   *
+   * Optional, like `connectorVersion`: a build that does not send it still
+   * connects (the daemon falls back to its connection-level uuid).
+   */
+  instanceId?: string;
   /** Called for every request frame; must return the data payload or throw. */
   onRequest: (action: string, params: Record<string, unknown>) => Promise<unknown>;
   onStatus?: (state: TransportState, detail?: string) => void;
   onLog?: (message: string) => void;
   /**
    * The `data` of the daemon's answer to `hello` — `{role, protocol,
-   * serverTime, paired, fingerprint}`. The fingerprint is how the editor and
-   * the daemon can be seen to be talking about the same pairing.
+   * serverTime, paired, fingerprint, minConnectorVersion}`. The fingerprint is
+   * how the editor and the daemon can be seen to be talking about the same
+   * pairing; `minConnectorVersion` is the oldest connector build the daemon
+   * will vouch for, and is **absent** on daemons that predate the field.
    */
   onHelloResponse?: (data: Record<string, unknown>) => void;
   /**
@@ -240,6 +256,10 @@ export class Transport {
             ...(this.options.connectorVersion
               ? { connectorVersion: this.options.connectorVersion }
               : {}),
+            // Which extension *instance* this is, so the daemon can tell two
+            // editor windows apart instead of letting them take turns
+            // (018 §A). Omitted when the caller has none.
+            ...(this.options.instanceId ? { instanceId: this.options.instanceId } : {}),
           },
           'hello',
         ),
