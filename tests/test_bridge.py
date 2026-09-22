@@ -36,6 +36,7 @@ from boardwise.bridge.daemon import (
     BridgeDaemon,
     RejectionNotice,
     _bound_port,
+    _clock,
     check_origin,
     connector_fingerprint,
     connector_token_path,
@@ -1000,6 +1001,182 @@ def test_status_lines_mark_an_id_the_daemon_had_to_invent():
         "connectorVersion": None,
     }})
     assert any("no instanceId sent" in line for line in lines)
+
+
+def test_status_lines_map_every_window_to_its_project():
+    """The line that answers "which projects does 岳 have open?" (021 §2.3).
+
+    The bridge talks to exactly one editor window, so the *other* windows are
+    only visible through the refusals they left behind — each refusal naming the
+    project of the window it turned away. Deduplicated by project, because a
+    refused window retries every 20–40 s and the raw list is one project over
+    and over.
+    """
+    lines = status_lines({
+        "activeInstance": {
+            "instanceId": WINDOW_A, "instanceIdSource": "hello", "client": "boardwise-connector",
+            "connectorVersion": "0.4.11", "peer": "127.0.0.1:51234", "connectedAt": 1790000000.0,
+            "projectName": "/test", "projectUuid": "uuid-test",
+        },
+        "recentRejections": [
+            {"ts": 1790000100.0, "instanceId": WINDOW_B, "reason": "refused",
+             "projectName": "test2", "projectUuid": "uuid-test2"},
+            # The same window retrying — one project, not two.
+            {"ts": 1790000120.0, "instanceId": WINDOW_B, "reason": "refused",
+             "projectName": "test2", "projectUuid": "uuid-test2"},
+            # An old build, which has no project to report.
+            {"ts": 1790000130.0, "instanceId": "inst-old", "reason": "refused"},
+        ],
+    })
+
+    assert any(
+        "active instance" in line and "[project /test (uuid-test)]" in line for line in lines
+    ), lines
+    assert any(
+        "refused connector" in line and "[project test2 (uuid-test2)]" in line for line in lines
+    ), lines
+    seen = [line for line in lines if "projects seen:" in line]
+    assert seen == [
+        "  projects seen: /test (active), test2 (refused), 1 instance(s) naming no project"
+    ], seen
+
+
+def test_status_lines_are_byte_identical_when_no_window_named_a_project():
+    """Before 021 §2.3, word for word — and an old connector still gets that.
+
+    Every field is optional, so the common case until the extension is
+    sideloaded is a daemon that knows no projects at all. Its output must not
+    grow a placeholder, an empty suffix or a summary line: nothing is known, so
+    nothing is said.
+    """
+    stamp = 1790000000.0
+    refusal_at = 1790000100.0
+    data = {
+        "activeInstance": {
+            "instanceId": WINDOW_A, "instanceIdSource": "hello", "client": "boardwise-connector",
+            "connectorVersion": "0.4.10", "peer": "127.0.0.1:51234", "connectedAt": stamp,
+        },
+        "recentRejections": [{
+            "ts": refusal_at, "instanceId": WINDOW_B, "connectorVersion": None,
+            "reason": "another editor instance is already connected",
+        }],
+    }
+
+    assert status_lines(data) == [
+        f"  active instance: {WINDOW_A} (connector 0.4.10)",
+        f"    peer: 127.0.0.1:51234  connected: {_clock(stamp)}",
+        f"  refused connector: {WINDOW_B} (connector {UNKNOWN_CONNECTOR_VERSION})"
+        f" at {_clock(refusal_at)} — another editor instance is already connected",
+    ]
+    # And a daemon that knows nothing at all says nothing at all, as it did:
+    # "1 instance naming no project" beside no project is not a fact worth a
+    # line, and printing it would break the old output shape for nothing.
+    assert status_lines({"recentRejections": [{"instanceId": WINDOW_B}]}) == [
+        f"  refused connector: {WINDOW_B} (connector {UNKNOWN_CONNECTOR_VERSION}) at ? — refused"
+    ]
+
+
+def test_a_window_that_names_no_project_still_connects(tmp_path):
+    """Backwards compatibility, both directions (021 §2.3).
+
+    An old connector sends neither field, and must be welcomed exactly as
+    before: refused devices keep their refusal reason, the holder keeps its
+    slot. The daemon records the absence as ``None`` — it has no way to know
+    that window's project, and filling it in with the project of the window it
+    *is* talking to would be the very confusion this field exists to end.
+    """
+
+    async def scenario():
+        daemon = BridgeDaemon(token=TOKEN, home=tmp_path, on_rejection=lambda notice: None)
+        server, port = await _start(daemon)
+        async with server:
+            # An old build: no projectName, no projectUuid, no instanceId either.
+            first_ws, first = await _hello(port, "connector", token="t")
+            assert first["ok"] is True
+            holder = daemon.active_instance()
+            assert holder.project_name == ""
+            assert holder.as_status()["projectName"] is None
+            assert holder.as_status()["projectUuid"] is None
+
+            second_ws, refused = await _hello(port, "connector", token="t",
+                                              instanceId=WINDOW_B, projectName="test2")
+            assert refused["error"]["code"] == CONNECTOR_ALREADY_ACTIVE
+            await second_ws.close()
+
+            cli_ws, _ = await _hello(port, "cli")
+            await cli_ws.send(request_frame("ping", {}, id="p"))
+            data = decode_frame(await cli_ws.recv())["data"]
+            assert data["activeInstance"]["projectName"] is None
+            # A name without a uuid is kept as it came — half an identity is
+            # still more than none, and the daemon does not invent the other half.
+            assert data["recentRejections"][0]["projectName"] == "test2"
+            assert data["recentRejections"][0]["projectUuid"] is None
+
+            await first_ws.close()
+            await cli_ws.close()
+
+    run(scenario())
+
+    # The audit log carries both windows' projects after the fact.
+    refusals = [record for record in _audit_records(tmp_path)
+                if record["action"] == AUDIT_CONNECTOR_REJECTED]
+    assert refusals[0]["projectName"] == "test2"
+    assert refusals[0]["projectUuid"] is None
+    greetings = [record for record in _audit_records(tmp_path)
+                 if record["action"] == "hello" and record.get("ok") is True]
+    assert greetings[0]["projectName"] is None
+
+
+def test_each_window_reports_its_own_project(tmp_path):
+    """The point of the whole feature: the two projects, seen from the daemon.
+
+    `bridge status` is rendered by :func:`status_lines`, but what it renders has
+    to come off the wire: two windows, each naming a different project, and the
+    refused one must keep its project even though its socket is closed a moment
+    after it speaks — that closed socket is all the evidence there will ever be
+    that the second project is open.
+    """
+
+    async def scenario():
+        daemon = BridgeDaemon(token=TOKEN, home=tmp_path, on_rejection=lambda notice: None)
+        server, port = await _start(daemon)
+        async with server:
+            holder_ws, holder_reply = await _hello(
+                port, "connector", token="t", instanceId=WINDOW_A,
+                projectName="/test", projectUuid="uuid-test",
+            )
+            assert holder_reply["ok"] is True
+            assert daemon.active_instance().project_name == "/test"
+            assert daemon.active_instance().project_uuid == "uuid-test"
+
+            extra_ws, refused = await _hello(
+                port, "connector", token="t", instanceId=WINDOW_B,
+                projectName="test2", projectUuid="uuid-test2",
+            )
+            assert refused["error"]["code"] == CONNECTOR_ALREADY_ACTIVE
+            await extra_ws.close()
+
+            cli_ws, _ = await _hello(port, "cli")
+            await cli_ws.send(request_frame("ping", {}, id="p"))
+            data = decode_frame(await cli_ws.recv())["data"]
+
+            lines = status_lines(data)
+            assert any("[project /test (uuid-test)]" in line for line in lines), lines
+            assert any("[project test2 (uuid-test2)]" in line for line in lines), lines
+            assert any(
+                line == "  projects seen: /test (active), test2 (refused)" for line in lines
+            ), lines
+
+            await holder_ws.close()
+            await cli_ws.close()
+
+    run(scenario())
+
+    greetings = [record for record in _audit_records(tmp_path)
+                 if record["action"] == "hello" and record.get("ok") is True]
+    assert [(record["projectName"], record["projectUuid"]) for record in greetings] == [
+        ("/test", "uuid-test")
+    ]
 
 
 def test_the_daemon_prints_the_refusal_line_when_nobody_listens(tmp_path, capsys):

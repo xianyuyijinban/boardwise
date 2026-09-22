@@ -999,7 +999,8 @@ def own_daemon(tmp_path):
 
 
 async def _hello_over(
-    websocket, token: str, *, instance_id: str, version: str = "0.4.10"
+    websocket, token: str, *, instance_id: str, version: str = "0.4.10",
+    project_name: str | None = None, project_uuid: str | None = None,
 ) -> dict:
     """One connector handshake on an already-open socket.
 
@@ -1008,6 +1009,10 @@ async def _hello_over(
     and is covered in test_bridge.py. Deliberately not named ``_connector_hello``
     like the helper above: that one takes a port and opens its own socket, and a
     second function of the same name would shadow it for every test in the file.
+
+    ``project_name``/``project_uuid`` are the 021 §2.3 fields — the project the
+    *window* has open — and are omitted unless a test passes them, which is also
+    how an older connector arrives.
     """
     banner = json.loads(await websocket.recv())
     assert banner["event"] == "banner"
@@ -1021,6 +1026,8 @@ async def _hello_over(
             "client": f"boardwise-connector/{version}",
             "connectorVersion": version,
             "instanceId": instance_id,
+            **({"projectName": project_name} if project_name else {}),
+            **({"projectUuid": project_uuid} if project_uuid else {}),
         },
     }))
     return json.loads(await websocket.recv())
@@ -1056,6 +1063,42 @@ def test_status_names_the_holder_and_the_refused_window(own_daemon):
     assert "connector 0.4.10" in result.stdout
     assert "refused connector: window-B" in result.stdout
     assert token not in result.stdout, "the pairing secret must never be printed"
+
+
+def test_status_maps_every_window_to_its_project(own_daemon):
+    """021 §2.3, end to end: the projects of the windows the bridge cannot serve.
+
+    The question a user with three editor windows asks — "which projects does
+    boardwise know about?" — is answerable only because each window announces
+    its own project as it connects, *including* the ones refused a moment later.
+    The refused socket is closed immediately; the project it named is the only
+    trace that project leaves anywhere, and `status` is where it has to show up.
+    """
+    uri = f"ws://127.0.0.1:{own_daemon['port']}"
+    token = "the-shared-extension-token"  # both windows share one install
+
+    async def scenario():
+        async with websockets.connect(uri, max_size=None) as holder:
+            first = await _hello_over(
+                holder, token, instance_id="window-A",
+                project_name="/test", project_uuid="uuid-test",
+            )
+            assert first["ok"] is True, first
+            async with websockets.connect(uri, max_size=None) as extra:
+                refused = await _hello_over(
+                    extra, token, instance_id="window-B",
+                    project_name="test2", project_uuid="uuid-test2",
+                )
+                assert refused["error"]["code"] == "CONNECTOR_ALREADY_ACTIVE"
+                return _cli(["bridge", "status"], own_daemon["env"])
+
+    result = asyncio.run(scenario())
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "[project /test (uuid-test)]" in result.stdout, result.stdout
+    assert "[project test2 (uuid-test2)]" in result.stdout, result.stdout
+    assert "projects seen: /test (active), test2 (refused)" in result.stdout, result.stdout
+    assert token not in result.stdout
 
 
 def _not_our_daemon():

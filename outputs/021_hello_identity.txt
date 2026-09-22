@@ -1,0 +1,176 @@
+021 交卷证据：hello 携带窗口工程身份 + daemon 登记 + bridge status 映射
+======================================================================
+子代理：boardwise 执行子代理（2026-09-22）。文件显式 UTF-8。
+任务书：tasks/021-multiproject.md §2.3（最小落地件）。
+
+范围声明（红线遵守）
+--------------------
+* 未动 git（无 add/commit/checkout/restore/push）。
+* 未重启 daemon、未碰编辑器、未对任何真机工程发过任何动作。
+* 未写 tests/fixtures；新增测试只出现在 tests/test_bridge.py、tests/test_bridge_cli.py、
+  connector/tests/transport.test.mjs、connector/tests/wiring.test.mjs。
+* 一次性证据脚本写在 outputs/（gitignore 内）：021_hello_capture.mjs、021_daemon_identity_probe.py。
+
+
+一、改了哪些文件
+----------------
+1) connector/src/transport.ts
+   - 新增导出类型 `HelloProjectIdentity`（projectName / projectUuid，皆可选）。
+   - 新增选项 `projectIdentity?: () => Promise<HelloProjectIdentity | undefined>` 与
+     `projectIdentityTimeoutMs?`（默认 IDENTITY_DEADLINE_MS = 1500 ms）。
+   - `ensureHello` 拆成：无 reader 时走原同步路径（旧行为逐字节不变）；有 reader 时
+     `sendHelloWithProject` 先读身份再发 hello，读失败/超时/不 settle 一律省略字段。
+   - 新增模块内 `identityFields()`（只保留非空字符串，绝不发 null/"undefined"）与
+     `readProjectIdentity()`（deadline + 永不 reject；race 保证迟到的 reject 也算 handled）。
+2) connector/src/actions.ts
+   - 新增导出 `currentProjectIdentity(eda)`：复用既有 `projectIdentity`（identityField /
+     plainGet / getState，即 `dmt_Project.getCurrentProjectInfo` 那套共享读）。
+     `projectName` 取 friendlyName（编辑器自己显示的标签，如 `/test`），退化到 name；
+     `projectUuid` 原样。**永不抛、永不编造**：读不到/无 dmt_Project → 返回 {}。
+3) connector/src/index.ts
+   - 生产装配处注入 `projectIdentity: () => currentProjectIdentity(host().api)`。
+     依赖方向：actions → (protocol) ，transport → (protocol)，index 同时依赖两者，
+     **无循环依赖**（transport 不 import actions）。
+4) src/boardwise/bridge/daemon.py
+   - `ActiveConnector` 增 `project_name` / `project_uuid`（默认空串）+ as_status 增
+     `projectName` / `projectUuid`（恒存在，缺则为 None —— 与 connectorVersion 同风格）。
+   - `_handshake` 调新增私有 `_project_identity(params)` 解析（非字符串/空白视同未发送）。
+   - `_serve` 把 authenticated 上的两个字段复制到 connection（与 instance_id 同处；漏掉
+     这一步时 project_name 恒空 —— 已由测试当场抓住并修复）。
+   - `refuse_if_held` 的拒绝记录 + 审计增 `projectName`/`projectUuid`（**被拒窗口自己的**工程）。
+   - `_install_connector` 把身份写进 ActiveConnector，并在 `hello` 审计记录里加两个字段。
+   - `status_lines`：活跃行与拒绝行各追加 `  [project {name} ({uuid})]` 后缀（有才显示）；
+     末尾新增一行 `  projects seen: A (active), B (refused), …`（按工程去重；一个工程都没有
+     时不打印，保证旧输出逐字节不变）。新增私有 `_project_label` / `_project_name` /
+     `_project_suffix` / `_projects_seen`。
+5) src/boardwise/bridge/protocol.py
+   - `Connection` 增 `project_name` / `project_uuid`（daemon 侧簿记，不上线）。
+6) 测试：connector/tests/transport.test.mjs（+3）、connector/tests/wiring.test.mjs（+2 及
+   FakeSocket.deliver 增加一次 macrotask 排空）、tests/test_bridge.py（+4）、
+   tests/test_bridge_cli.py（+1，并给 `_hello_over` 增可选 project 参数）。
+
+注：connector/tests/wiring.test.mjs 的 `deliver()` 改动原因——hello 现在要等一次宿主导入读，
+不再在 `deliver()` 返回时就在线上；排空一个 macrotask 后 34 条既有断言全部原样通过（没有一条
+被弱化，读不到 hello 依然会 AssertionError）。
+
+
+二、hello 帧样例（逐字，来自 outputs/021_hello_capture.mjs 实跑生产装配）
+------------------------------------------------------------------------
+$ node outputs/021_hello_capture.mjs
+{
+  "id": "hello",
+  "action": "hello",
+  "params": {
+    "token": "aaaa…(64 hex, 证据中已替换为 a 重复)",
+    "role": "connector",
+    "protocol": "1.0",
+    "client": "boardwise-connector/3.2.186",
+    "connectorVersion": "0.4.11",
+    "instanceId": "inst-075535698-z5ie86cw",
+    "projectName": "/test",
+    "projectUuid": "ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489"
+  }
+}
+（host 的 dmt_Project.getCurrentProjectInfo 返回 {uuid: ea80fff6…, name:"test",
+ friendlyName:"/test"}，即 021 §A1 实测的那台机器上的 /test 工程。）
+
+
+三、daemon 登记 + bridge status 映射（逐字，来自 outputs/021_daemon_identity_probe.py）
+-------------------------------------------------------------------------------------
+真 socket + 真 daemon（OS 随机端口、临时 home），三个"窗口"：一个持有桥，两个被单活跃防护拒绝。
+
+ping 的关键片段（`bridge status` 读的就是它）：
+  "activeInstance": {
+    "instanceId": "inst-window-test", "instanceIdSource": "hello",
+    "connectorVersion": "0.4.11", "peer": "127.0.0.1:54871", "connectedAt": …,
+    "projectName": "/test",
+    "projectUuid": "ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489"
+  },
+  "recentRejections": [
+    { "instanceId": "inst-window-flyback", "activeInstanceId": "inst-window-test",
+      "projectName": "反激辅助电源", "projectUuid": "2222…2222",
+      "reason": "another editor instance is already connected" },
+    { "instanceId": "inst-window-test2", "activeInstanceId": "inst-window-test",
+      "projectName": "test2", "projectUuid": "1111…1111", … }
+  ]
+
+status_lines 渲染（逐字，`bridge status` 里 "connector: connected" 之后打印）：
+  active instance: inst-window-test (connector 0.4.11)  [project /test (ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489)]
+    peer: 127.0.0.1:54878  connected: 2026-09-22 15:56:04
+  refused connector: inst-window-flyback (connector 0.4.11) at 2026-09-22 15:56:04 — another editor instance is already connected  [project 反激辅助电源 (2222…2222)]
+  refused connector: inst-window-test2 (connector 0.4.11) at 2026-09-22 15:56:04 — another editor instance is already connected  [project test2 (1111…1111)]
+  projects seen: /test (active), 反激辅助电源 (refused), test2 (refused)
+
+最后一行就是交付的那句话：**AI 看得到岳开了哪些工程**（含桥碰不到的那两个窗口）。
+被拒实例的记录里带着它自己的工程名——被拒 socket 当场关闭，这条记录是那个工程留下的唯一痕迹。
+另：cli 端到端（真 daemon 子进程 + 真 CLI 进程）见 tests/test_bridge_cli.py::
+test_status_maps_every_window_to_its_project，断言 [project …] 与 projects seen 出现在 stdout。
+
+
+四、协议兼容性论证
+------------------
+前提：hello 是 connector→daemon 单向帧，daemon 只读自己认识的键（无参数白名单）。
+
+(a) 旧 connector → 新 daemon（不带字段）
+    - `_project_identity` 对缺键返回 ("","")；`Connection` 默认空串；`as_status()` 给 None。
+    - 拒绝记录/审计里两个字段为 None，绝不填成"它正在对话的那个窗口的工程"（那是 021 要
+      消灭的混淆本身）。
+    - `status_lines` 无后缀、无 projects seen 行 → **输出与改动前逐字节相同**。
+    - 测试：tests/test_bridge.py::test_a_window_that_names_no_project_still_connects、
+      ::test_status_lines_are_byte_identical_when_no_window_named_a_project
+      （后者用 `_clock()` 拼出期望字符串做 == 比对，三条旧行一字不差）。
+
+(b) 新 connector → 旧 daemon（多两个键）
+    - `git show HEAD:src/boardwise/bridge/daemon.py | grep -n "params.get"` 显示旧 daemon 的
+      hello 校验只读 role/token/protocol/client/connectorVersion/instanceId —— 全是"缺了也不
+      报错"的可选读法，多出来的键没有任何校验会碰到。
+    - `git show HEAD:src/boardwise/bridge/protocol.py` 的 `decode_frame` 只校验 JSON 对象、
+      action 非空字符串；params 内部键不校验。
+    - 结论：旧 daemon 完全忽略 projectName/projectUuid，握手与配对不受影响。
+
+(c) 同版本互连：connector 0.4.11 与 daemon 同时升级后，`bridge status` 出现工程映射；
+    若只升级一侧，(a)/(b) 两态如上，都不会握手失败。
+
+(d) 读不到的边界（不是错误）：宿主导入不可用、`getCurrentProjectInfo` 抛错、reader 不 settle
+    （1500 ms deadline）、返回半身份（只有 name 或只有 uuid）——四种都有测试覆盖，一律"省略
+    字段"而不是发空值或编造值。半身份在 status 里按现状显示（name 或 uuid 单显，不补另一半）。
+
+(e) 已知局限（如实报，未实现）：
+    1. 身份只在**每次握手**时读一次。窗口内换工程（如将来做 openProject）不改已登记的
+       projectName，直到该窗口重连。daemon 也无法主动刷新（eda 是窗口级，只有该窗口的
+       connector 能读）。→ 若要新鲜度，需要后续做"周期性 hello 身份更新"或新动作。
+    2. `bridge status` 只列 **recentRejections（上限 5 条，MAX_RECENT_REJECTIONS）** 里出现过的
+       窗口；每个被拒窗口 20–40 s 重试一次，所以现场通常都在，但极端情况下（>5 个窗口轮流
+       重试）可能漏掉一个。`projects seen` 已按工程去重，正常三窗口场景稳定。
+    3. 021 §2.3 的其余项（`bridge windows` / `bridge use --project` 选窗、doctor `multiwindow`
+       检查项、`doctor project` 追加"另有 N 个窗口未连接"）**未实现**，留作下一棒。
+    4. 拒绝时的控制台提示语（RejectionNotice）未加工程名（保持 018 原措辞与测试不变）。
+
+
+五、测试数字（本机实跑）
+------------------------
+* connector：`npm test` → tests 310 / pass 310 / fail 0（含新增 5 条）。
+  `npm run typecheck`（tsc --noEmit）→ 退出码 0，无输出。
+  子集：`node --test tests/transport.test.mjs` 19/19；`node --test tests/wiring.test.mjs` 36/36。
+* daemon：`.venv/Scripts/python.exe -m pytest tests/test_bridge.py -q --basetemp=.tmp_pt_021`
+  → 60 passed；`pytest tests/test_bridge_cli.py` → 29 passed；
+  `pytest tests/test_bridge.py tests/test_bridge_cli.py tests/test_doctor.py` → 112 passed。
+* 全量三线（pytest 全库 + connector + tsc）留给主代理复验。
+* 复验提示：主代理真机验证需要重启 daemon（新动作/新常量是加载期常量；本子代理按红线未重启）。
+  重启后 `boardwise bridge status` 应出现 `projects seen: …`，且被拒窗口行带 `[project …]`。
+  编辑器侧连接器需要**重新打包 sideload**（0.4.11 → 下一版）才会带 projectName/projectUuid。
+
+
+六、独立变异抽验（自改一行 → 必须红 → 还原）
+--------------------------------------------
+1) connector/src/transport.ts 的 hello 参数去掉 `...project` 展开 →
+   `node --test tests/transport.test.mjs tests/wiring.test.mjs` = 52 pass / 3 fail；
+   `cp` 备份还原后 sha256 与备份一致
+   （f3a915c74c24d4ba92ec8c7969395f147f831355f7df1b056b5c7dce2b39ee06），55/55 绿。
+   还原手段：`cp` 备份还原（未用 `git checkout --`）。
+2) src/boardwise/bridge/daemon.py 的 refused 行工程后缀恒为空 →
+   `pytest tests/test_bridge.py tests/test_bridge_cli.py` = 3 failed / 86 passed
+   （status_lines 映射、daemon 登记、CLI 端到端各一条）；还原后 sha256 一致
+   （1412352e529b2f56bc2b5ab1bc4bd0b8e5208e309d648f03af08ae0b19186334），89 passed。
+3) 开发中的一次自然变异：`_serve` 里漏掉 project_name/project_uuid 的复制 → 4 条新测试全红
+   （daemon 侧身份恒空），补上后全绿——该复制行是被测试钉住的，不是可有可无的装饰。

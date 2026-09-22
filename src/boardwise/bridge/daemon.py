@@ -355,6 +355,16 @@ def status_lines(data: dict[str, Any]) -> list[str]:
     These are the two lines that answer "why did my write land somewhere else",
     which used to require reading the audit log: *who* holds the bridge, and who
     was turned away for trying to take it.
+
+    **The project half (021 §2.3).** Since 2026-09-22 every connector announces
+    its own window's project in ``hello``, so each of those lines ends with a
+    ``[project …]`` suffix and one ``projects seen:`` line lists them together.
+    That list is the only way to see the *other* windows at all: the bridge
+    talks to exactly one editor window, and a window it turns away is still a
+    project the user has open. A window that named no project — an old build, or
+    a read that failed — gets no suffix and is counted, never guessed at. Lines
+    that existed before are unchanged in every byte up to the suffix, so old
+    output readers and old greps still match.
     """
     lines: list[str] = []
     active = data.get("activeInstance")
@@ -365,7 +375,10 @@ def status_lines(data: dict[str, Any]) -> list[str]:
             if active.get("instanceIdSource") == "hello"
             else "  [no instanceId sent — named by connection]"
         )
-        lines.append(f"  active instance: {active['instanceId']} (connector {version}){note}")
+        lines.append(
+            f"  active instance: {active['instanceId']} (connector {version}){note}"
+            f"{_project_suffix(active)}"
+        )
         if active.get("peer"):
             lines.append(
                 f"    peer: {active['peer']}"
@@ -379,8 +392,95 @@ def status_lines(data: dict[str, Any]) -> list[str]:
             f"  refused connector: {record.get('instanceId') or '?'}"
             f" (connector {version}) at {_clock(record.get('ts'))}"
             f" — {record.get('reason') or 'refused'}"
+            f"{_project_suffix(record)}"
         )
+    seen = _projects_seen(data)
+    if seen:
+        lines.append(seen)
     return lines
+
+
+def _project_label(record: dict[str, Any]) -> str:
+    """``name (uuid)`` from one status record, or ``""`` when neither is known.
+
+    Both halves are optional on the wire, so all four combinations are real and
+    each is rendered as itself: a connector may have a name and no uuid, or the
+    other way round. Nothing is padded and nothing is truncated — a uuid that
+    cannot be copied is not much use to someone deciding which window to close.
+    """
+    name = str(record.get("projectName") or "")
+    uuid = str(record.get("projectUuid") or "")
+    if name and uuid:
+        return f"{name} ({uuid})"
+    return name or uuid
+
+
+def _project_suffix(record: dict[str, Any]) -> str:
+    """The ``  [project …]`` tail on a status line, empty when nothing is known."""
+    label = _project_label(record)
+    return f"  [project {label}]" if label else ""
+
+
+def _project_name(record: dict[str, Any]) -> str:
+    """The project's *name* for the summary line, falling back to its uuid.
+
+    Deliberately not :func:`_project_label`: the summary groups windows by
+    project, and it stays readable only if the uuid — which is already printed
+    on the instance's own line — is left out of it.
+    """
+    name = str(record.get("projectName") or "")
+    return name or str(record.get("projectUuid") or "")
+
+
+def _projects_seen(data: dict[str, Any]) -> str:
+    """One line naming every project the daemon has been told about, or ``""``.
+
+    Answers 岳's question — "看得到我开了哪几个工程吗?" — from ``bridge status``
+    alone: the active window's project, plus one entry per distinct project
+    among the refused instances, which are the other editor windows (021
+    §实测记录 A1: three projects in three windows of one process).
+
+    Deduplicated by project rather than by refusal: a refused window retries
+    every 20–40 s, so the raw list is the same project over and over. A project
+    that is both active and refused is spelled that way rather than collapsed —
+    the same project in two windows is exactly the case where the bridge's
+    single slot matters. Instances that named no project are counted by
+    instance id, never listed under a made-up name.
+
+    Silent when *no* project is known: an old connector's output must not grow
+    a line saying that nothing is known (see the byte-for-byte test).
+    """
+    roles: dict[str, list[str]] = {}
+
+    def note(label: str, role: str) -> None:
+        entry = roles.setdefault(label, [])
+        if role not in entry:
+            entry.append(role)
+
+    active = data.get("activeInstance")
+    if isinstance(active, dict):
+        label = _project_name(active)
+        if label:
+            note(label, "active")
+
+    unnamed: list[str] = []
+    for record in data.get("recentRejections") or []:
+        if not isinstance(record, dict):
+            continue
+        label = _project_name(record)
+        if label:
+            note(label, "refused")
+            continue
+        instance = str(record.get("instanceId") or record.get("peer") or "")
+        if instance and instance not in unnamed:
+            unnamed.append(instance)
+
+    if not roles:
+        return ""
+    parts = [f"{label} ({', '.join(kinds)})" for label, kinds in roles.items()]
+    if unnamed:
+        parts.append(f"{len(unnamed)} instance(s) naming no project")
+    return "  projects seen: " + ", ".join(parts)
 
 
 # --------------------------------------------------------------------------
@@ -543,6 +643,12 @@ class ActiveConnector:
     #: can tell apart, and a fabricated id that looks real would be worse than
     #: no id at all.
     instance_id_source: str = "hello"
+    #: The project this window reported in ``hello`` (021 §2.3), or empty strings
+    #: when it reported none. The daemon cannot read it itself — `eda` is scoped
+    #: to one editor window — so this is a claim by the connector, recorded as
+    #: such; empty means "not named", never "no project".
+    project_name: str = ""
+    project_uuid: str = ""
 
     def describe(self) -> str:
         """One line naming this instance, for a console or a `status` command."""
@@ -558,6 +664,11 @@ class ActiveConnector:
             "connectorVersion": self.connector_version or None,
             "peer": self.peer,
             "connectedAt": self.connected_at,
+            # Added 2026-09-22 (021 §2.3), and always present so a caller can use
+            # `is None` rather than `in`. `None` is the field's own way of
+            # saying "this window named no project".
+            "projectName": self.project_name or None,
+            "projectUuid": self.project_uuid or None,
         }
 
 
@@ -664,6 +775,12 @@ class BridgeDaemon:
         # noisier.
         if role == ROLE_CONNECTOR:
             connection.instance_id, connection.instance_id_source = _instance_identity(params)
+            # Which project this *window* has open (021 §2.3). Optional, like
+            # `instanceId`, and optional for a stronger reason: the daemon has
+            # no way of reading it itself (`eda` is window-scoped), so an
+            # absent value is recorded as absent rather than filled with the
+            # focused project — which would be the project of a different window.
+            connection.project_name, connection.project_uuid = _project_identity(params)
         return connection
 
     def _authenticate_connector(self, provided: str, client: str, peer: str) -> None:
@@ -794,6 +911,13 @@ class BridgeDaemon:
             "activeInstanceId": active.instance_id,
             "activeConnectorVersion": active.connector_version or None,
             "activePeer": active.peer,
+            # The *refused* window's project (021 §2.3). This is the field that
+            # makes the refusal readable as a fact about the user's editor: a
+            # refused instance is not an error to be explained away, it is
+            # another project that is open right now and that the bridge cannot
+            # reach.
+            "projectName": str(getattr(connection, "project_name", "") or "") or None,
+            "projectUuid": str(getattr(connection, "project_uuid", "") or "") or None,
             "reason": "another editor instance is already connected",
         }
         self.audit(action=AUDIT_CONNECTOR_REJECTED, role=ROLE_CONNECTOR, ok=False, **record)
@@ -1067,6 +1191,11 @@ class BridgeDaemon:
         connection.authenticated = True
         connection.instance_id = getattr(authenticated, "instance_id", "")
         connection.instance_id_source = getattr(authenticated, "instance_id_source", "")
+        # Same reason as the instance id above: the handshake parsed these off
+        # the `hello` params, and this is the object the rest of the daemon
+        # (refusal records, `status`, the audit) reads them from (021 §2.3).
+        connection.project_name = getattr(authenticated, "project_name", "")
+        connection.project_uuid = getattr(authenticated, "project_uuid", "")
 
         # Single-active-connector guard + install (018 §A), both *before* the ack
         # is sent: a refused instance must never be told it is the connected one,
@@ -1133,12 +1262,17 @@ class BridgeDaemon:
             peer=peer,
             connected_at=time.time(),
             instance_id_source=str(getattr(connection, "instance_id_source", "") or "hello"),
+            project_name=str(getattr(connection, "project_name", "") or ""),
+            project_uuid=str(getattr(connection, "project_uuid", "") or ""),
         )
         # Every connection leaves the connector's build behind. "Which version
         # was actually running?" has been unanswerable twice after a sideload
         # that did not take, and this line is the answer. The instance id was
         # added for 018 §A for the same reason: after the fact, "which window
-        # was this?" has to be answerable from the log.
+        # was this?" has to be answerable from the log. The project joined them
+        # on 2026-09-22 (021 §2.3) — "which window was this?" is only half an
+        # answer when three windows are open, and the audit is where the
+        # project of a window that has since closed survives.
         self.audit(
             action="hello", role=connection.role, ok=True, peer=peer,
             client=client_with_version(connection.client, connection.connector_version),
@@ -1146,6 +1280,8 @@ class BridgeDaemon:
             instanceId=self.active.instance_id,
             instanceIdSource=self.active.instance_id_source,
             tookOverFrom=previous.instance_id if previous is not None else None,
+            projectName=self.active.project_name or None,
+            projectUuid=self.active.project_uuid or None,
         )
 
     async def _on_frame(self, websocket: ServerConnection, connection: Connection, raw: Any) -> None:
@@ -1249,6 +1385,24 @@ def _instance_identity(params: dict[str, Any]) -> tuple[str, str]:
     if isinstance(claimed, str) and claimed.strip():
         return claimed.strip(), "hello"
     return f"conn-{secrets.token_hex(8)}", "connection"
+
+
+def _project_identity(params: dict[str, Any]) -> tuple[str, str]:
+    """The project the connecting window reported in ``hello`` (021 §2.3).
+
+    Two optional strings, and their absence means absence. There is nothing to
+    fall back to: the daemon's own view of "the current project" is the project
+    of whichever window holds the bridge, so filling a blank in with it would
+    attribute one window's project to another — the exact confusion this field
+    exists to remove. Anything that is not a non-empty string is treated as not
+    sent, which is also how an old connector (neither field) and a newer one that
+    could not read its project arrive here.
+    """
+    def read(key: str) -> str:
+        value = params.get(key)
+        return value.strip() if isinstance(value, str) else ""
+
+    return read("projectName"), read("projectUuid")
 
 
 def _refusal_message(active: ActiveConnector) -> str:

@@ -22,7 +22,7 @@ import {
 } from './config';
 import { createFacade, hasHost, type EditorFacade } from './facade';
 import { describeRandom } from './random';
-import { buildHandlers } from './actions';
+import { buildHandlers, currentProjectIdentity } from './actions';
 import { ActionError } from './protocol';
 import { Transport, type TransportState } from './transport';
 import { VERSION, isVersionOlder } from './version';
@@ -251,6 +251,10 @@ function buildTransport(current: ResolvedConfig): Transport {
     connectorVersion: VERSION,
     // Told apart from the other editor windows (018 §A) — see INSTANCE_ID.
     instanceId: INSTANCE_ID,
+    // Which project *this window* has open, read at handshake time (021 §2.3).
+    // The daemon cannot ask: `eda` is window-scoped, so the only way it learns
+    // about the other editor windows is each one saying so as it connects.
+    projectIdentity: () => currentProjectIdentity(host().api as Record<string, any>),
     onRequest: async (action, params) => {
       const handlers = buildHandlers(host().api as Record<string, any>);
       const handler = handlers[action];
