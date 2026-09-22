@@ -39,9 +39,23 @@ boardwise review path/to/board.enet
 # Single-file review: an .epro2 project backup needs no netlist export
 boardwise review path/to/board.epro2
 
+# Don't know where the export landed? Review the newest .epro2 in a directory
+boardwise review --latest                # no argument: ~/Downloads, ~/Desktop, E:\LC Project
+boardwise review --latest D:\exports     # or name one directory (scanned one level deep)
+
 # Also write machine-readable and human-readable reports
 boardwise review path/to/board.epro2 --json report.json --md report.md
 ```
+
+`--latest` prints which file it picked (with its mtime) before it reviews, so the run
+is never ambiguous about what was read.
+
+An `.epro2` is reviewed in the **pcb** view by default; a schematic-only export needs
+`--view schematic` (its pcb view reads nothing).
+
+Installing this on a fresh Windows machine — Python, the editor `.eext`, the daemon —
+is its own walkthrough: [`docs/install.md`](docs/install.md) (Chinese, written for a
+hardware engineer who does not write code).
 
 The input type is picked from the extension:
 
@@ -295,9 +309,19 @@ boardwise review path/to/board.enet
 # 单文件审查：.epro2 工程备份，无需另导网表
 boardwise review path/to/board.epro2
 
+# 不知道导出文件存哪了：直接审目录里最新的那个 .epro2
+boardwise review --latest                     # 不带目录：扫 ~/Downloads、~/Desktop、E:\LC Project
+boardwise review --latest D:\exports          # 或指定一个目录（含一层子目录）
+
 # 同时输出 JSON / Markdown 报告
 boardwise review path/to/board.epro2 --json report.json --md report.md
 ```
+
+`--latest` 会先打印挑中了哪个文件（含最后修改时间），再开始审查——"最新"只有在说清是哪份
+导出时才有意义。
+
+`.epro2` 缺省按 **PCB 视图**审查；只画了原理图的导出要加 `--view schematic`（缺省视图在
+它上面读到的是 0 器件 0 网络）。
 
 按扩展名自动选择解析器：`.enet` 走网表，`.epro2` 走工程备份（额外打印焊盘 /
 走线 / 过孔数量）。备份若勾选了加密导出则无法读取，此时会提示重新导出时取消
@@ -312,6 +336,10 @@ boardwise review path/to/board.epro2 --json report.json --md report.md
 - `duplicate-designators`、`nc-and-must-connect`、`library-pin-consistency`：连通性。
 - `supply-on-known-domain`、`domain-vs-range`、`ldo-dropout`、`usb-cc-pulldown`：电源与路径。
 - `decap-required-caps`、`led-current`、`divider-output`、`rc-cutoff`、`value-mpn-match`：参数。
+
+如果你手上是一台干净的 Windows 机器，从零装到第一次审查看
+[`docs/install.md`](docs/install.md)：装 Python → `scripts/install.bat` → 编辑器里导入 `.eext` →
+配对 → `doctor` 全绿 → 第一次审查，每一步都有脚本和"应该看到什么"，面向硬件工程师、全程中文。
 
 ### 实时桥
 

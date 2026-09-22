@@ -1,0 +1,109 @@
+016 波② —— R1 事故报告：一次写操作落到了 test 工程之外的 test2
+=================================================================
+执行者：coder 子代理（真机）。2026-09-21 21:14–21:24。**未清理，未编造，停下报。**
+
+一句话
+---------------------------------------------------------------------
+daemon 同时挂着**两个编辑器实例**（connector 0.4.10 与 0.4.9），每 5 分钟互相顶掉
+一次；我的 `sch.doc.save`（21:20:58）与 `sch.doc.new`（21:21:10）正好落在 0.4.10 那个
+实例上，而它的当前工程是 **test2**（不是任务书指定的 test）。结果：**test2 工程被加进
+了一个空页 P4，并被落盘到 `E:\LC Project\test2.eprj2`**。test 工程与其它工程一个字节
+未动。我没有私自删除该页（越界工程的破坏性操作，按纪律先报）。
+
+时间线（全部来自 daemon 审计日志 `~/.boardwise/audit/2026-09-21.jsonl` + 实测输出）
+---------------------------------------------------------------------
+21:12:16  hello connector **0.4.9**            ← 实例 A 上线（其当前工程 = /test）
+21:14:06  ping cli                              （我：bridge status）
+21:15:39  doc.list cli      → projects[0].name = "/test", focused
+21:15:45  sch.readback / document.current       （我：场景 0 probe 读数）
+21:16:51  doc.list cli      → "/test"           （我：R1+R2 写前核对，**当时正确**）
+21:17:16  hello connector **0.4.10**           ← 实例 B 顶掉 A（其当前工程 = /test2）
+21:17:52  sch.geometry cli
+21:17:58  sch.netlist cli (failed)
+21:19:32  sys.probe cli  /  21:19:45 sys.probe cli
+21:20:58  **sch.doc.save cli → {"saved": true}**        ← 落到了实例 B = test2
+21:21:09  connect cli
+21:21:10  **sch.doc.new cli → {"schematicUuid":"4c8cf4a189c78533",
+                                "pageUuid":"d228ce3582bd748f","focused":true}**
+                                                        ← 落到了实例 B = test2
+21:21:10  `E:\LC Project\test2.eprj2` mtime 被改写（原 2026-09-19 13:07）
+21:21:14  doc.list cli      → projects[0].name = "/test2"，页表变成 P1,P2,P3,**P4**
+21:21:25  document.current / doc.list
+21:22:10  sch.readback cli  → test2 的新页 P4：只有一个页框图元（designator null），空页
+21:22:16  hello connector **0.4.9**            ← 实例 A 又顶回来（工程 = /test）
+21:23:56  sys.probe → connector **0.4.9**；doc.list → "/test"   （R1 复核，此刻又对）
+
+"这个 P4 是我造的"的独立证据（不是推测）
+---------------------------------------------------------------------
+1. test2 唯一的磁盘导出 `E:\LC Project\test2_backup\test2_2026-09-19-20-57.epro2`
+   （2026-09-19 20:57，86526 B）里的 SCH_PAGE 只有三个，uuid 与今天 live 的完全一致：
+       P3 f805e257ac7383dc   P2 2b79b73f1e0e522f   P1 c7c82860f3597fcc
+   **没有 P4**。⇒ test2 在本次之前只有 3 页。
+2. 现在 live 的 P1/P2/P3 uuid 与上面三个逐字相同（说明没有发生无关的重载），
+   新出现的第 4 页 uuid = `d228ce3582bd748f` = `sch.doc.new` 的返回 pageUuid。
+3. `sch.doc.new` 的实现（connector/src/actions.ts:1950-1995）复用
+   `dmt_Schematic.getCurrentSchematicInfo()` 取"当前 schematic"，再
+   `createSchematicPage(schematicUuid)`——`params.name` 只在需要
+   `createSchematic` 时才用得上。所以它**一定**把页加到"当前被聚焦的工程"里，
+   页名是编辑器自己编的号（故叫 P4，不叫任务书设想的 bw_scratch）。
+   这条既是事故机理，也**推翻任务书步骤 0 的一个前提**：本桥建不出"指定名字的
+   bw_scratch 页"，只能往当前聚焦工程里追加一页。
+4. 落盘证据：`grep -c d228ce3582bd748f "E:\LC Project\test2.eprj2"` → **7**
+   （4c8cf4a189c78533 → 12；c7c82860f3597fcc → 12；test 的 b4298962367251c8 → 0）。
+   test2.eprj2：大小不变 688128，mtime 2026-09-19 13:07 → 2026-09-21 21:21:10。
+
+没做的事（划清边界）
+---------------------------------------------------------------------
+- **没有**删除 P4，也没再发任何写动作（最后一次写在 21:21:10）。
+- **没有**动 test 工程：`test.eprj2` mtime 仍是 2026-09-21 13:14:20；
+  `test_backup/` 没有新增文件（最新仍是 17:34 那份）。
+- **没有**动 `outputs/011e|014|015b` 任何历史文件；**没有**动 git。
+- 只读地读了 test2 两样东西（无法避免/事后可知）：`doc.list` 的页清单（为定身份），
+  以及 21:22:10 的一次 `sch.readback`（返回只有那一页的空页框，designator=null，
+  没有带出 test2 的任何器件内容）。
+
+根因：环境缺陷——两个编辑器实例抢 daemon 的单一 connector 槽位
+---------------------------------------------------------------------
+审计日志里 `hello` 事件在 19:19 之后就是严格的 5 分钟交替、版本来回跳：
+
+    21:07:16 0.4.10 | 21:12:16 0.4.9 | 21:17:16 0.4.10 | 21:22:16 0.4.9 | ...
+
+实例 ↔ 工程映射（实测锚定）：
+    connector **0.4.9**  的当前工程 = **/test**    （21:23:56 sys.probe+doc.list；
+                                                    21:15:39 / 21:16:51 也是它）
+    connector **0.4.10** 的当前工程 = **/test2**   （21:21:14 / 21:21:25 / 21:22:10）
+
+对 R1 的直接后果（这是本波最要紧的结论）：
+  1. **单次 CLI 调用可能落到任一个实例上**。R1 的"写前 doc.list 核对"因此
+     **天然不够**——我 21:16:51 的核对是对的，21:21:10 的写却已经换了对手。
+     写前核对与写之间只要跨过 5 分钟边界，就会写进另一个编辑器。
+  2. daemon 侧没有"指定实例"的能力：`bridge status` 只给一个 pair 哈希
+     `962bf45e`，两个实例用的是同一个配对 token 文件
+     （`~/.boardwise/connector-token`），无法区分、无法钉住。
+  3. 危险面不限于 test/test2：另一实例聚焦的是**哪个工程我并不知道**。若某次
+     它聚焦在毕设FOC驱动板或 CH340G，同样的一次写就会打到生产工程上。这正是
+     任务书 R1 要防的事，而当前环境让 R1 无法可靠执行。
+
+可用的判据（本波实测）：`bridge call --action sys.probe --params '{"checks":true}'`
+返回顶层 `connector` 字段（"0.4.9"/"0.4.10"），配 `doc.list` 的 `projects[].name`
+就能回答"这一秒是谁在应答、它开着哪个工程"。
+
+建议的三步处理（**均未执行**，等岳/主代理裁决）
+---------------------------------------------------------------------
+1. 让岳**关掉重复的那个编辑器实例**，使 daemon 槽位上只剩一个 connector；
+   然后连续 ≥12 分钟反复 `sys.probe` + `doc.list`，`connector` 与工程名都不再变，
+   才算环境可用（12 分钟 > 两个 5 分钟边界）。
+2. 处置 P4：确认要删的话，需在 **0.4.10 窗口内**（即 test2 那个实例被挂上时）发
+       .venv/Scripts/python.exe -m boardwise.cli bridge call \
+         --action doc.delete_page --params '{"pageUuid":"d228ce3582bd748f"}'
+   （test2 此时有 4 页，不会撞"不许删最后一页"的宿主限制。）
+   也可以在编辑器里手动删除该页。**无论哪条，都要岳点头。**
+3. 环境干净后再恢复波②（见交卷段"下一步"）。
+
+附：审计日志原始片段
+---------------------------------------------------------------------
+21:12:16.848 hello connector True boardwise-connector/3.2.186 connector=0.4.9
+21:17:16.848 hello connector True boardwise-connector/3.2.186 connector=0.4.10
+21:20:58.010 sch.doc.save cli True
+21:21:10.078 sch.doc.new  cli True
+21:22:16.851 hello connector True boardwise-connector/3.2.186 connector=0.4.9

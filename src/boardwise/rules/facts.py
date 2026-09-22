@@ -97,12 +97,18 @@ class FactsRule(OutcomeRule):
             if IC_PATTERN.match(comp.designator)
         ]
 
-    def findings_from(
-        self, rows: list[tuple[Outcome, str | None]]
-    ) -> list[Finding]:
-        """VIOLATION rows become findings; the rest is silence with reasons."""
+    def findings_from(self, rows: list[tuple]) -> list[Finding]:
+        """VIOLATION rows become findings; the rest is silence with reasons.
+
+        A row is ``(outcome, severity)``, optionally followed by a third
+        element carrying the row's :class:`FindingTarget` (task 016). Only
+        ``param-value-mpn-match`` produces the three-element form; every other
+        caller passes pairs and is unaffected.
+        """
         findings: list[Finding] = []
-        for outcome, severity in rows:
+        for row in rows:
+            outcome, severity = row[0], row[1]
+            target = row[2] if len(row) > 2 else None
             if outcome.state != "VIOLATION":
                 continue
             findings.append(
@@ -112,6 +118,7 @@ class FactsRule(OutcomeRule):
                     level=self.level,
                     message=outcome.message,
                     evidence=list(outcome.evidence),
+                    target=target,
                 )
             )
         return findings

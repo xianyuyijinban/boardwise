@@ -1,0 +1,95 @@
+019 子代理（deepseek）交卷证据：测试 + 变异验证 + 真机样本（离线文件审查）
+============================================================================
+日期：2026-09-22  工作目录：E:\boardwise  Python：.venv/Scripts/python.exe
+纪律：只跑子集，未跑全量；未动 git；未动 tests/fixtures/；未动 outputs/011e*|014_*|015b_*|016_*
+
+1. 子集测试（最终版本落盘、两次变异均已还原之后跑的）
+--------------------------------------------------------------------------
+$ .venv/Scripts/python.exe -m pytest tests/test_019_empty_board_hint.py \
+      tests/test_018_cli_review.py tests/test_review_eval.py -q --basetemp=.tmp_pt_019
+...................................................................      [100%]
+67 passed in 2.39s
+（其中 tests/test_019_empty_board_hint.py 单独跑：11 passed）
+
+2. 变异验证（cp 备份 + sha256 还原，未用 git checkout；在**交付版本**上跑）
+--------------------------------------------------------------------------
+备份基线（最终版本）：
+$ cp src/boardwise/cli.py /c/Users/xiangyu/AppData/Local/Temp/bw019/cli.py.final
+$ sha256sum src/boardwise/cli.py .../cli.py.final
+0d7999fc76ed274334cb4c25040f2c79797f9394f3211ecde5d09c1ecea47219 *src/boardwise/cli.py
+0d7999fc76ed274334cb4c25040f2c79797f9394f3211ecde5d09c1ecea47219 *.../cli.py.final
+
+变异 A：触发条件恒 False（cli._pcb_view_read_nothing 首行插 `return False`）
+结果：CAUGHT —— 11 个测试里 5 个红
+  FAILED test_the_console_says_why_the_pcb_view_read_nothing
+  FAILED test_the_note_is_last_even_when_the_reports_are_written
+  FAILED test_latest_on_an_empty_backup_gets_the_note_too
+  FAILED test_the_md_summary_carries_the_chinese_hint
+  FAILED test_the_predicate_needs_all_three_conditions
+还原并复核：
+$ cp .../cli.py.final src/boardwise/cli.py
+$ sha256sum 两侧 -> 都是 0d7999fc...219
+$ cmp 两侧      -> RESTORED-IDENTICAL
+
+变异 B：删掉"铜也必须是空的"分支（pad/track/via 三条判断整段删除）
+结果：CAUGHT —— 1 个红
+  FAILED test_the_predicate_needs_all_three_conditions
+  （assert True is False：只有焊盘、没有网表的板子被误判成"视图空读"，
+   提示会把读者指向一个更糟的地方）
+还原并复核：cp 回来，sha256 与 cmp 均与基线一致 -> RESTORED-IDENTICAL
+
+（A/B 各跑过两轮：第一轮在 cli.py sha256 5b7bbb72...422 上，第二轮——上表这一轮——
+在交付版本 0d7999fc...219 上，结果一致。第二轮之前 cli.py 的改动只是删掉谓词里
+两处 `# type: ignore` 注释、测试文件把一处局部 import 提到模块顶部，都不是行为改动。）
+
+3. 真机样本 outputs/ProPrj_test_2026-09-22.epro2（真实空 PCB 导出，离线审查）
+--------------------------------------------------------------------------
+$ .venv/Scripts/python.exe -m boardwise.cli review outputs/ProPrj_test_2026-09-22.epro2
+boardwise review: outputs/ProPrj_test_2026-09-22.epro2 (0 components, 0 nets)
+board: 0 pads, 0 tracks, 0 vias
+findings: 0 ERROR, 0 WARN, 0 INFO
+note: pcb view read nothing from this file — for a schematic review, re-run with --view schematic
+exit=0                                    -> outputs/019_console_empty_pcb_view.txt
+
+$ ... review outputs/ProPrj_test_2026-09-22.epro2 --view schematic
+boardwise review: outputs/ProPrj_test_2026-09-22.epro2 (3 components, 6 nets)
+findings: 0 ERROR, 0 WARN, 0 INFO
+exit=0（无 note 行）                      -> outputs/019_console_schematic_view.txt
+（与任务书 §五 的期望一致：缺省有提示；schematic 无提示且有 3 件 6 网）
+
+$ ... review outputs/ProPrj_test_2026-09-22.epro2 --md outputs/019_empty_pcb_view_report.md \
+      --json outputs/019_empty_pcb_view.json
+末行仍是 note 行（JSON/Markdown 的 "written to" 排在它之前）
+--md 报告（outputs/019_empty_pcb_view_report.md）：
+  "## 中文摘要" 节里、"共 0 条发现：…" 与 "- 没有发现问题。" 之后是
+  提示：PCB 视图没有读到任何内容。如果你要审查的是原理图，请加 `--view schematic` 重新运行。
+  英文正文仍是 "No findings."，一行未动
+--json（outputs/019_empty_pcb_view.json）：
+  {"summary": {"ERROR": 0, "WARN": 0, "INFO": 0}, "findings": []}
+  文本逐字节 == render_json([])（引擎对空发现列表的渲染），键仍是 {summary, findings}，
+  文件里既没有"提示"也没有 "note:"。
+  （文件字节是 CRLF 而非 LF——Path.write_text 在 Windows 上的既有行为，与本次改动无关；
+   018 的字节比对是两次运行互比，故不受影响。）
+
+4. 不触发时输出不变（只加不改）
+--------------------------------------------------------------------------
+对 tests/fixtures/ 下每个 .epro2 与 board24v.enet 跑缺省 view，数 "note:" 行：
+  1  ProPrj_CH340G_2026-09-13.epro2   (0 components, 0 nets)   <- pcb 视图真空，应当提示
+  1  ch340_golden.epro2               (0 components, 0 nets)   <- 同上（测试用的真实空板夹具）
+  0  ProPrj_ROBOT ctrl FOC_2026-09-16.epro2  (49 components, 46 nets)
+  0  ProPrj_智能药箱_2026-09-17.epro2        (43 components, 40 nets)
+  0  ProPrj_毕设FOC驱动板_2026-09-17.epro2   (33 components, 14 nets)
+  0  ProPrj_高速电机控制器_2026-09-16.epro2  (49 components, 39 nets)
+  0  llc_board.epro2                         (47 components, 25 nets)
+  0  board24v.enet                           (50 components, 42 nets)
+有内容的输入一条 note 都不加；.enet 即使全空也不加（它没有视图可选）。
+
+5. 改动文件 sha256（2026-09-22 交卷时，即本文件所记录的那一版）
+--------------------------------------------------------------------------
+0d7999fc76ed274334cb4c25040f2c79797f9394f3211ecde5d09c1ecea47219 *src/boardwise/cli.py
+4ddaa7c411a88bbd417c2ebf247ba121eac1890f31386e09c2c7f55cddc1cd7b *src/boardwise/rules/i18n.py
+2f319500f616e10dd06f426a4c695a32cb17977e6112cb911731a559aae48f33 *tests/test_019_empty_board_hint.py (旧：import 提顶前的版本)
+80513b2b1ccad13a07e396b42a6cd79bdc8131766e8db2c2636f7a94cb49397a *tests/test_019_empty_board_hint.py (交付版本)
+68c1b433389f0951fa1815a14b318c2904e0525a80a0c4ca3f7073634e5a8f8f *README.md
+c6e17a296efbf7ce634d07f5f485d8b018af57674c4e6742a889ec329a4d6e73 *docs/getting-started.md
+65adddfdf3d4e2429d49a9ec2211c022dac75a845b84505a2067c34c1abdcc32 *docs/install.md

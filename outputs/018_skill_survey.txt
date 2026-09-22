@@ -1,0 +1,105 @@
+018 §E skill 盘点报告（盘点落盘，供统合决策）
+=========================================================
+执行者：coder 子代理 E（DeepSeek）。抓取时刻 2026-09-22 00:5x +0800。
+方法：find / ls / wc / stat / sha256sum / diff -rq / grep，**全部只读**。
+未跑任何 bridge 命令，未启动或停止 daemon，未碰编辑器；未动 git。
+
+
+一、结论先行（三条，都与会话里转述的前提不符，如实登记）
+---------------------------------------------------------
+
+1) 「C:\Users\xiangyu\.kimi-code\skills\ 下有若干 boardwise/EDA 相关 skill」——**不成立**。
+   该目录下只有两个 skill：`simulink-sps`（142 行，Simulink/Simscape 电力电子仿真踩坑）
+   与 `thesis-zwsi`（87 行，ZWSI 论文工作记忆）。二者与 EDA/立创/板级审查**无关**。
+   即：**kimi-code 用户级目录里 boardwise/EDA 相关 skill 数量 = 0**。
+
+2) 「用户 skill 既有 §17/§18 条目」——**磁盘上不存在这样的文件**。
+   全盘 grep（`两层焦点` / `逐件 ~3.7s` / `目录册` / `mpn 通道`）在
+   `.kimi-code`、`.claude`、`.codex`、`.hclaw/skills` 全部 0 命中。
+   仓库内只有两处**引用**（引用一个不存在的文件）：
+     - `outputs/012v2_probe.md:45` —— "## 三、实测陷阱（写进 skill §18）"
+     - `tasks/016-review-to-local-edit.md:324` —— "skill §18 已记的『工程焦点 vs sch 上下文页
+       可报不同答案』升级为：focused 工程都可能不一致"
+   ⇒ 那份 §17/§18 的 skill 从未落盘（或已不在本机）。**本批的统合 SKILL.md 是这些真机
+   事实的第一份落盘权威**，事实来源逐条改指仓库内报告（012v2_probe §三 / tasks/012 R1–R3 /
+   tasks/016 §十.5–§十.7 / outputs/016_probe_readback.txt）。
+
+3) 「E:\boardwise\ 内是否已有 `.kimi-code` / `AGENTS.md` 约定」——**两者都没有**。
+   `find . -name AGENTS.md`（排除 node_modules/.git）0 命中；
+   `find . -name .kimi-code` 0 命中；`.github/` 目录不存在（无 copilot-instructions）。
+   ⇒ 018 新建的 `.kimi-code/skills/boardwise/SKILL.md` 是仓库内**第一份**项目级 AI 约定。
+
+
+二、清单（路径 · 规模 · 主题 · 与 boardwise 的关系）
+---------------------------------------------------------
+
+A. kimi-code 用户级 skill（任务书点名的目录）
+   | 文件 | 行数 | 字节 | mtime | 主题 | 关系 |
+   |---|---|---|---|---|---|
+   | `C:\Users\xiangyu\.kimi-code\skills\simulink-sps\SKILL.md` | 142 | 19898 | 2026-07-31 | Simulink/SPS 仿真排障 | 无关（仿真，非 EDA） |
+   | `C:\Users\xiangyu\.kimi-code\skills\thesis-zwsi\SKILL.md` | 87 | 26307 | 2026-09-18 | ZWSI 论文工作记忆 | 无关（论文，非 EDA） |
+   ⇒ boardwise/EDA 相关：**0**。本目录不需要改动，也未改动。
+
+B. 用户级真正存在的 EDA/立创 skill（不在任务书点名的目录里）
+   | 路径 | 规模 | 主题 | 与 boardwise 的关系 |
+   |---|---|---|---|
+   | `C:\Users\xiangyu\.claude\skills\easyeda-agent\` | 58 文件；`SKILL.md` 127 行 / 10741 B / mtime 2026-09-10；`references/` 19 篇共 4028 行；`scripts/` 14 个 | 第三方 skill（author `zhoushoujianwork`，`.version` = 1.4.8，homepage `github.com/zhoushoujianwork/easyeda-agent`）。讲的是 **`easyeda` 这套 CLI/daemon/connector**（另一个项目）：强制版本门禁 `easyeda update --check --exit-code`、`easyeda sch …` 域式命令、设计流程/排版/制造规则知识库 | **同源不同物**：boardwise 与 easyeda-agent 是同一套桥架构（`docs/bridge.md:1020 §11 Relationship to easyeda-agent frames` 写过继承关系），但 **CLI 名、动作名、门禁口径、connector 全部不同**。它的 `references/*.md`（PCB 布线规范、选型、制造规则）boardwise 侧没有等价物 → 有可参考的知识，**没有可直接执行的命令** |
+   | `C:\Users\xiangyu\.codex\skills\easyeda-agent\` | 同上 58 文件 | 同上 | `diff -rq` 与 `.claude` 版**零差异**，`SKILL.md` sha256 前 12 位同为 `bc5ff9df5af4` ⇒ 同一份内容的副本，非独立 skill |
+   | `C:\Users\xiangyu\.claude\skills\stm32-motor-control-review.md` | 2263 行 / 65871 B / mtime 2026-06-20 | STM32 电机控制工程审查规则 + Ctrl-FOC-Lite 经验 | 无关（固件侧审查；仅"立创"字样偶现，非 EDA 操作手册） |
+   | `E:\boardwise\.ref\easyeda-pro-format-skill\` | `SKILL.md` 298 行 / 13407 B；另有 `documents/`（13 篇）、`primitives/`、`schemas/`、`validate.js`；自带 `.git`（commit `b2170ff`） | **官方**立创 EDA Pro **V3 文件格式**文档包（MIT） | 已在仓库内（`docs/epru-format.md:530` 记录：clone 自 `github.com/easyeda/easyeda-pro-format-skill`）。是**格式参考**，不是操作 skill；`tasks/002` 明确要求"不要把它的文件复制进本仓库" |
+   ⇒ grep 命中的其余文件（`huashu-nuwa`/`peng-zhihui-perspective` 的研究笔记）只在正文偶现"立创"一词，非 skill，不列。
+
+C. 仓库内既有的"事实源"（不是 skill，但统合产物的事实依据，改前就存在）
+   | 文件 | 行数 | 内容 |
+   |---|---|---|
+   | `docs/bridge.md` | 1320 | 桥协议 + **§4 动作全表（第 327 行起）** + 错误码 + 已知限制 |
+   | `docs/getting-started.md` | 275 | 同事视角 6 步上手（含"一次只开一个编辑器窗口"） |
+   | `docs/draw.md` | 451 | 画板动作的运维文档 + 宿主陷阱 |
+   | `docs/architecture.md` | 310 | 架构 |
+   | `README.md` | 434 | 安装/使用/`compare`/`draw`/`parts` |
+   | `PROGRESS.md` | 104 | 里程碑与基线（pytest 1145 / connector 279 / tsc 干净，commit 5ff0a1d 时点） |
+   | `tasks/*.md`（001–018） | — | 任务书，R1–R3 纪律在 `tasks/012-basic-experience.md:184-193` |
+   | `outputs/012v2_probe.md` | — | §三 实测陷阱（"写进 skill §18"的原始出处） |
+   | `outputs/016_probe_readback.txt` / `tasks/016-review-to-local-edit.md` §十.5–§十.7 | — | 两层焦点不一致、`.eprj2` 目录册、readback 无 mpn 通道 |
+
+
+三、重叠与冲突点（统合 SKILL.md 必须显式裁决的三条）
+---------------------------------------------------------
+
+1) **两套 CLI 名字**：`easyeda <domain> <command>`（easyeda-agent skill）vs
+   `boardwise bridge call --action <name> --params <json>`（boardwise）。
+   统合文件里必须写死：**boardwise 项目只认 `boardwise` CLI**，看到 `easyeda …` 一律不用。
+
+2) **两套 connector**：`easyeda-agent` 的 connector 与 boardwise 的 `.eext`
+   （`connector/extension.json`，当前 0.4.10）不通用；版本号也不对齐（1.4.8 vs 0.4.10）。
+
+3) **门禁口径不同**：easyeda-agent 要求每会话先跑 `easyeda update --check --exit-code`
+   与 GitHub latest 精确相等；boardwise **没有**该命令，等价的健康检查是
+   `boardwise doctor`（7 项，全绿 exit 0）。照抄 easyeda-agent 的门禁会直接报未知命令。
+
+4) 可继承的部分（不冲突）：easyeda-agent `references/` 里的**设计常识**
+   （PCB 布线规范、选型、制造规则）与 boardwise skill 不重叠，可按需引用其路径，
+   但**不作为 boardwise 的操作依据**。
+
+
+四、本次统合产出的决策（对应 §E.2）
+---------------------------------------------------------
+
+- 落点：`E:\boardwise\.kimi-code\skills\boardwise\SKILL.md`（仓库内，朋友 clone 即得）。
+  这是仓库内第一份（见 §一.3），无既有 AGENTS.md/.kimi-code 需要合并或覆盖。
+- 结构按任务书 §E.2 六段：何时加载 / 审查闭环 / 真机纪律 R1–R3 + 禁地 /
+  bridge 高频动作 15 / 真机事实坑表 / 红线。中文、祈使句、≤400 行。
+- **用户级旧 skill 文件不删**（岳自己决定），统合文件里注明"本文件为唯一权威，
+  用户级散件以本为准"，并点名 `easyeda-agent` 属于另一个项目以免被误当权威。
+- 未采纳"真机坑表从用户 skill §17/§18 迁入"的字面做法（该文件不存在），
+  改为从 §二.C 的仓库内报告迁入，逐条注明出处。
+
+
+五、机械核对（防双执行 / 防编造）
+---------------------------------------------------------
+
+- 本文件写入后立即 `grep -c "018_skill_survey"` 独立计数（见交卷记录的复验行）。
+- 所有行数/字节/mtime 由 `wc -l`/`stat -c%s`/`stat -c%y` 现场读出；sha256 由
+  `sha256sum` 读出（`.claude` 与 `.codex` 两份 easyeda-agent SKILL.md 前 12 位一致）。
+- 未执行任何写操作于：用户 home 下任何 skill、`.ref/`、`tests/fixtures/`、
+  `outputs/011e*|014_*|015b_*|016_*`。

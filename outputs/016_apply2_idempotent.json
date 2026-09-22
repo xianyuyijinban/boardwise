@@ -1,0 +1,76 @@
+{
+  "command": "apply",
+  "ok": true,
+  "outcome": "already_applied",
+  "reason": "already_applied",
+  "exitCode": 0,
+  "planPath": "outputs/016_plan_r1.json",
+  "plan": {
+    "planVersion": 1,
+    "source": {
+      "inputSha256": "12aabdac901f1478538efc811c35afa0a930bbcadaef0051d35647847d60f098",
+      "projectUuid": "",
+      "pageUuid": "",
+      "hostVersion": "3.2.186",
+      "connectorVersion": "0.4.10"
+    },
+    "target": {
+      "primitiveId": "",
+      "designator": "R1",
+      "expectedValue": "4.7k"
+    },
+    "change": {
+      "kind": "component-value",
+      "before": "4.7k",
+      "after": "1k"
+    },
+    "preconditions": [
+      "the page the editor has focused is the plan's page (this plan carries no pageUuid, so there is no page guard to enforce)",
+      "designator R1 still resolves on the page",
+      "Value is still 4.7k"
+    ],
+    "expectedPostcondition": [
+      "Value reads back as 1k",
+      "target review finding is resolved"
+    ]
+  },
+  "designator": "R1",
+  "before": "4.7k",
+  "after": "1k",
+  "page": {
+    "uuid": "",
+    "guard": "unavailable"
+  },
+  "projectUuid": "",
+  "resolved": {
+    "designator": "R1",
+    "primitiveId": "d815177955d60842",
+    "value": "1k",
+    "valueKey": "OtherProperty.Value"
+  },
+  "write": {
+    "action": "sch.set_component_attribute",
+    "calls": 0,
+    "key": "Value"
+  },
+  "verification": {},
+  "save": {},
+  "persistence": "",
+  "postReview": {},
+  "steps": [
+    {
+      "action": "sch.geometry",
+      "purpose": "read the page before writing",
+      "ok": true,
+      "wrote": false,
+      "code": "",
+      "message": "",
+      "unknown": false
+    }
+  ],
+  "notes": [
+    "pageUuid guard unavailable, focused page used — this plan carries no pageUuid, so `guardPage` returns early (measured, actions.ts) and nothing but the operator's attention says the focused page is the right one",
+    "R1.Value already reads '1k' (identical with the plan's '1k') — nothing was written (idempotent: no repeat of an applied change)"
+  ],
+  "final": "already applied; the page was not touched"
+}

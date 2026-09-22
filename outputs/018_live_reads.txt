@@ -1,0 +1,33 @@
+018 岳醒后真机读（2026-09-22 08:50，Kimi 亲跑，编辑器=test 工程 P4 页）
+=====================================================================
+
+0. 热更通道（代替手动卸载重装）
+-------------------------------
+- 08:49:43 connector 0.4.10 自动连上 daemon（61190）。
+- `bridge update-connector --yes`：推 connector/dist/index.js（194021B）→
+  "ok: 0.4.10 -> 0.4.11"，页面自动 reload。
+- 08:50:15 重连：`active instance: inst-005015404-gymhwk28 (connector 0.4.11)`。
+  顺带观察：0.4.11 上报真实 instanceId（旧版显示 [no instanceId sent]）。
+- 边界（已告知岳）：热更换运行时代码，扩展管理器面板版本号仍显示 0.4.10
+  （清单未变）；朋友机器仍走 .eext 完整安装。
+
+1. sys.identity（018 新动作，真机首读）
+--------------------------------------
+$ bridge call --action sys.identity
+  focusedProject: /test (ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489)
+  activeDocument: page 362924e0e16ce90a（= test 的 P4），projectUuid 同上
+  consistent: true（basis: project-uuid）  pageUuid: 362924e0e16ce90a  readOnly: true
+→ 两层焦点一致判定真机工作正常。
+
+2. doc.open 跨工程报错（018 新诊断，真机首读）
+---------------------------------------------
+$ bridge call --action doc.open --params '{"uuid":"c7c82860f3597fcc"}'
+  （c7c82860f3597fcc = test2 的 P1 页，见 016 事故报告行 40）
+→ CONNECTOR_ERROR（exit 1），**未切页未打开任何东西**：
+  "openDocument(c7c82860f3597fcc) returned no tab id — no document of the project
+   the editor has open is c7c82860f3597fcc (the focused project "/test" (ea80fff…)
+   lists 6 document(s) and none of them is this uuid) — the active document is
+   362924e0e16ce90a (project ea80fff…); take the uuid from doc.list"
+→ 诚实降级形态命中：test2 未在编辑器打开、文档树不可枚举，报错如实说"编辑器打开的
+  工程里没有这个 uuid"，并给出焦点工程名/文档数/活动文档/doc.list 指引。
+  "属于工程 X、先切换"归属形态需两个工程同时打开才触发（该分支有单测覆盖，此处未真机读）。

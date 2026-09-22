@@ -20,6 +20,7 @@ import os
 import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -76,18 +77,15 @@ def test_status_without_a_daemon_exits_2(tmp_path):
     assert "daemon not reachable" in result.stdout
 
 
-@pytest.fixture(scope="module")
-def daemon(tmp_path_factory):
-    """One real `bridge start` process, shared by the assertions below.
+def _start_daemon(home: Path, port: int, env: dict):
+    """Start one real ``bridge start`` process; hand back its console file.
 
     Its console goes to a *file* rather than a pipe. A pipe would have to be
     drained by a thread to be readable at all, and the pairing announcement —
     the one message the user is told to act on — is exactly the output worth
     asserting on. A file is readable at any point, non-blocking, on any OS.
+    Returns ``(process, handle, console)``; the caller owns stopping it.
     """
-    home = tmp_path_factory.mktemp("boardwise-home")
-    port = _free_port()
-    env = _env(home, port)
     console = home / "daemon-console.log"
     handle = open(console, "w", encoding="utf-8")
     process = subprocess.Popen(
@@ -98,21 +96,35 @@ def daemon(tmp_path_factory):
         encoding="utf-8",
         env=env,
     )
+    if not _wait_for_port(port):
+        process.kill()
+        handle.flush()
+        raise AssertionError(
+            f"daemon never listened on {port}: {console.read_text(encoding='utf-8')}"
+        )
+    return process, handle, console
+
+
+def _stop_daemon(process, handle) -> None:
+    process.terminate()
     try:
-        if not _wait_for_port(port):
-            process.kill()
-            handle.flush()
-            raise AssertionError(
-                f"daemon never listened on {port}: {console.read_text(encoding='utf-8')}"
-            )
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        process.kill()
+    handle.close()
+
+
+@pytest.fixture(scope="module")
+def daemon(tmp_path_factory):
+    """One real `bridge start` process, shared by the assertions below."""
+    home = tmp_path_factory.mktemp("boardwise-home")
+    port = _free_port()
+    env = _env(home, port)
+    process, handle, console = _start_daemon(home, port, env)
+    try:
         yield {"home": home, "port": port, "env": env, "console": console}
     finally:
-        process.terminate()
-        try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            process.kill()
-        handle.close()
+        _stop_daemon(process, handle)
 
 
 def _console(daemon) -> str:
@@ -661,3 +673,226 @@ def test_closing_a_socket_that_is_already_gone_is_not_an_error():
 
     client = client_module.BridgeClient(_DeadSocket(_abnormal_closure()), "token", "cli")
     asyncio.run(client.close())  # must not raise
+
+
+# --------------------------------------------------------------------------
+# `bridge status`: the instance that holds the bridge, and who was refused
+# (018 §A — the daemon side is in test_bridge.py; this is the CLI wiring)
+# --------------------------------------------------------------------------
+
+
+class _StatusClient:
+    """A `BridgeClient` whose `ping` answer is whatever the test sets."""
+
+    payload: dict = {}
+    opened = None
+
+    @classmethod
+    async def open(cls, uri, token, role, client=None):
+        cls.opened = (uri, token, role, client)
+        return cls()
+
+    async def call(self, action, params=None):
+        assert action == "ping", "status asks for nothing else"
+        return type(self).payload
+
+    async def close(self):
+        return None
+
+
+@pytest.fixture
+def status_env(monkeypatch, tmp_path):
+    """Isolated BOARDWISE_HOME (the command opens a CLI token) + a fake client."""
+    monkeypatch.setenv("BOARDWISE_HOME", str(tmp_path))
+    import boardwise.bridge.client as client_module
+
+    _StatusClient.opened = None
+    _StatusClient.payload = {"connector": True, "pairedFingerprint": "deadbeef"}
+    monkeypatch.setattr(client_module, "BridgeClient", _StatusClient)
+    return tmp_path
+
+
+def _status_args():
+    from boardwise.cli import build_parser
+
+    return build_parser().parse_args(["bridge", "status"])
+
+
+def test_status_prints_the_active_instance_and_the_refusals(status_env, capsys):
+    """The wiring, without a daemon: the daemon's lines have to reach stdout.
+
+    `status_lines` renders them (tested in test_bridge.py) and `bridge status`
+    has to print every one — this is the half that was missing, and a rendered
+    line nobody prints is not a diagnosis.
+    """
+    from boardwise.cli import _cmd_bridge_status
+
+    _StatusClient.payload = {
+        "connector": True,
+        "pairedFingerprint": "deadbeef",
+        "activeInstance": {
+            "instanceId": "window-A",
+            "instanceIdSource": "hello",
+            "connectorVersion": "0.4.10",
+            "peer": "127.0.0.1:51234",
+            "connectedAt": 1790000000.0,
+        },
+        "recentRejections": [{
+            "ts": 1790000100.0,
+            "instanceId": "window-B",
+            "connectorVersion": "0.4.10",
+            "reason": "another editor instance is already connected",
+        }],
+    }
+
+    assert _cmd_bridge_status(_status_args()) == 0
+
+    out = capsys.readouterr().out
+    assert "active instance: window-A" in out
+    assert "connector 0.4.10" in out
+    assert "peer: 127.0.0.1:51234" in out
+    assert "refused connector: window-B" in out
+    assert out.index("active instance:") < out.index("paired connector:")
+
+
+def test_status_prints_nothing_extra_when_there_is_nothing_to_report(status_env, capsys):
+    """A fresh daemon prints exactly what it printed before 018 §A."""
+    from boardwise.cli import _cmd_bridge_status
+
+    _StatusClient.payload = {"connector": False, "pairedFingerprint": None}
+
+    assert _cmd_bridge_status(_status_args()) == 1
+
+    out = capsys.readouterr().out
+    assert "connector: not connected" in out
+    assert "active instance" not in out
+    assert "refused connector" not in out
+
+
+@pytest.fixture
+def own_daemon(tmp_path):
+    """A daemon this test may disturb; the shared one is asserted on elsewhere.
+
+    A refusal is *state*: it stays in the daemon's memory and shows up in every
+    later `status`. The shared fixture's assertions are written against a daemon
+    that never saw one, and collection order is not something they should depend
+    on. One extra process is the cheaper fix.
+    """
+    port = _free_port()
+    env = _env(tmp_path, port)
+    process, handle, console = _start_daemon(tmp_path, port, env)
+    try:
+        yield {"home": tmp_path, "port": port, "env": env, "console": console}
+    finally:
+        _stop_daemon(process, handle)
+
+
+async def _hello_over(
+    websocket, token: str, *, instance_id: str, version: str = "0.4.10"
+) -> dict:
+    """One connector handshake on an already-open socket.
+
+    Sends the fields 018 §A added (``instanceId``, ``connectorVersion``) so the
+    daemon can tell two windows apart. An id-less connector is a different case
+    and is covered in test_bridge.py. Deliberately not named ``_connector_hello``
+    like the helper above: that one takes a port and opens its own socket, and a
+    second function of the same name would shadow it for every test in the file.
+    """
+    banner = json.loads(await websocket.recv())
+    assert banner["event"] == "banner"
+    await websocket.send(json.dumps({
+        "id": "hello",
+        "action": "hello",
+        "params": {
+            "token": token,
+            "role": "connector",
+            "protocol": "1.0",
+            "client": f"boardwise-connector/{version}",
+            "connectorVersion": version,
+            "instanceId": instance_id,
+        },
+    }))
+    return json.loads(await websocket.recv())
+
+
+def test_status_names_the_holder_and_the_refused_window(own_daemon):
+    """End to end: a real daemon, two windows, a real CLI process.
+
+    The question `status` has to answer — "why did my write land in the other
+    project?" — is asked *while* the two windows are fighting, so the first
+    socket stays open while the CLI runs. Both halves have to come from the
+    daemon: the instance holding the bridge, and the attempt it turned away.
+    """
+    uri = f"ws://127.0.0.1:{own_daemon['port']}"
+    token = "the-shared-extension-token"  # both windows share one install
+
+    async def scenario():
+        async with websockets.connect(uri, max_size=None) as holder:
+            first = await _hello_over(holder, token, instance_id="window-A")
+            assert first["ok"] is True, first
+            async with websockets.connect(uri, max_size=None) as extra:
+                refused = await _hello_over(extra, token, instance_id="window-B")
+                assert refused["ok"] is False
+                assert refused["error"]["code"] == "CONNECTOR_ALREADY_ACTIVE"
+                # The holder is still attached: this is the state the user sees.
+                return _cli(["bridge", "status"], own_daemon["env"])
+
+    result = asyncio.run(scenario())
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "connector: connected" in result.stdout
+    assert "active instance: window-A" in result.stdout
+    assert "connector 0.4.10" in result.stdout
+    assert "refused connector: window-B" in result.stdout
+    assert token not in result.stdout, "the pairing secret must never be printed"
+
+
+def _not_our_daemon():
+    """A loopback listener that answers the WebSocket handshake with garbage.
+
+    A plain TCP server: it accepts, reads whatever arrives, and replies with
+    bytes that are not an HTTP response — which is what any other process on
+    the port looks like to the client library.
+    """
+    listener = socket.socket()
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(4)
+    port = listener.getsockname()[1]
+
+    def serve():
+        while True:
+            try:
+                connection, _ = listener.accept()
+            except OSError:  # the listener was closed at the end of the test
+                return
+            try:
+                connection.recv(4096)
+                connection.sendall(b"nothing here speaks websocket\r\n\r\n")
+            except OSError:
+                pass
+            finally:
+                connection.close()
+
+    threading.Thread(target=serve, daemon=True).start()
+    return port, listener
+
+
+def test_status_against_a_port_that_is_not_our_daemon_exits_2(tmp_path):
+    """Another process on the port is a sentence, not a traceback.
+
+    Measured 2026-09-22: a stray listener on the bridge port accepts the TCP
+    connection and then fails the WebSocket handshake, and `websockets` raises
+    `InvalidMessage` — not an `OSError` — so the one command a confused user
+    runs printed a Python traceback instead of the line every other
+    unreachable-daemon case prints.
+    """
+    port, listener = _not_our_daemon()
+    try:
+        result = _cli(["bridge", "status"], _env(tmp_path, port))
+    finally:
+        listener.close()
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert f"daemon not reachable on 127.0.0.1:{port}" in result.stdout
+    assert "Traceback" not in result.stderr, result.stderr

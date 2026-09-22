@@ -12,6 +12,13 @@ client (see :mod:`boardwise.bridge.protocol`) and does three jobs:
    answer is relayed back.
 3. **Audit** — every request is appended to ``~/.boardwise/audit/<date>.jsonl``
    with role, action, duration and outcome.
+4. **Hold exactly one connector** — one editor instance owns the bridge; a
+   second one is refused with ``CONNECTOR_ALREADY_ACTIVE`` (audited as
+   ``connector_rejected``, announced on the console) while only an instance
+   whose socket is already gone is taken over, which is the reload path. Two
+   windows taking turns here is what made writes land in whichever project the
+   window that happened to be winning had focused (task 018 §A, measured
+   2026-09-21).
 
 Security posture, stated plainly because it is the whole threat model:
 
@@ -89,6 +96,10 @@ __all__ = [
     "AUDIT_REPAIRING",
     "AUDIT_DRAW_PERSISTENCE",
     "AUDIT_PERSISTENCE_VERIFIED",
+    "AUDIT_CONNECTOR_REJECTED",
+    "CONNECTOR_ALREADY_ACTIVE",
+    "MIN_CONNECTOR_VERSION",
+    "MAX_RECENT_REJECTIONS",
     "UNKNOWN_CONNECTOR_VERSION",
     "client_with_version",
     "token_path",
@@ -104,6 +115,9 @@ __all__ = [
     "client_headers",
     "append_audit",
     "PairingNotice",
+    "RejectionNotice",
+    "ActiveConnector",
+    "status_lines",
     "BridgeDaemon",
     "start_server",
     "serve_forever",
@@ -133,6 +147,34 @@ AUDIT_REPAIRING = "re-pairing"
 #: by a run that compared a page across a real close-and-reopen.
 AUDIT_DRAW_PERSISTENCE = "draw.persistence"
 AUDIT_PERSISTENCE_VERIFIED = "persistence.verified"
+
+#: The audit record that says a connector was **turned away** because another
+#: editor instance already holds the bridge (018 §A). Like the lifecycle names
+#: above it is not a wire action, so it is not in the action catalogue — it is
+#: the record an investigation greps for, which is why the task book fixes it.
+AUDIT_CONNECTOR_REJECTED = "connector_rejected"
+
+#: The wire code a refused connector is answered with, before its socket is
+#: closed (018 §A). The code itself is declared in
+#: :class:`boardwise.bridge.protocol.ErrorCodes` — it travels in ``error.code``
+#: and is therefore part of the protocol's vocabulary, not the daemon's. This
+#: name stays because it is how the refusal site, the audit reader and the
+#: tests already refer to it; the two are the same string by identity, and the
+#: contract test in ``tests/test_action_catalogue.py`` pins that.
+CONNECTOR_ALREADY_ACTIVE = ErrorCodes.CONNECTOR_ALREADY_ACTIVE
+
+#: Oldest connector build this daemon works with, announced in the ``hello``
+#: ack as ``minConnectorVersion`` so the extension can tell the user to update
+#: instead of failing later, mysteriously (018 §A/§B). Equal to the shipped
+#: connector version today, so nothing is refused *now*: the field exists so
+#: that the day a protocol change makes an old bundle dangerous, the mismatch
+#: arrives as a toast rather than as a stack trace.
+MIN_CONNECTOR_VERSION = "0.4.10"
+
+#: How many refusals the daemon keeps in memory for ``bridge status``. The audit
+#: log keeps all of them; this list is bounded because a refused connector backs
+#: off and retries, and the extra window may stay open for hours.
+MAX_RECENT_REJECTIONS = 5
 
 #: Rendered in the audit log for a connector that does not announce its build.
 #: Spelled out rather than left empty on purpose: an absent field is easy to
@@ -301,6 +343,46 @@ def append_audit(home: Path | None, **fields: Any) -> None:
         pass
 
 
+def status_lines(data: dict[str, Any]) -> list[str]:
+    """The active-instance and refusal lines ``boardwise bridge status`` prints.
+
+    Takes the ``ping`` answer the CLI has already fetched and returns the extra
+    lines for it — empty when there is nothing to say, so a fresh daemon with no
+    connector and no refusals prints exactly what it printed before. The
+    wording lives here rather than in the CLI so it cannot drift from the wire
+    keys it renders (018 §A); ``data`` is documented in :meth:`BridgeDaemon._local_action`.
+
+    These are the two lines that answer "why did my write land somewhere else",
+    which used to require reading the audit log: *who* holds the bridge, and who
+    was turned away for trying to take it.
+    """
+    lines: list[str] = []
+    active = data.get("activeInstance")
+    if isinstance(active, dict) and active.get("instanceId"):
+        version = active.get("connectorVersion") or UNKNOWN_CONNECTOR_VERSION
+        note = (
+            ""
+            if active.get("instanceIdSource") == "hello"
+            else "  [no instanceId sent — named by connection]"
+        )
+        lines.append(f"  active instance: {active['instanceId']} (connector {version}){note}")
+        if active.get("peer"):
+            lines.append(
+                f"    peer: {active['peer']}"
+                f"  connected: {_clock(active.get('connectedAt'))}"
+            )
+    for record in data.get("recentRejections") or []:
+        if not isinstance(record, dict):
+            continue
+        version = record.get("connectorVersion") or UNKNOWN_CONNECTOR_VERSION
+        lines.append(
+            f"  refused connector: {record.get('instanceId') or '?'}"
+            f" (connector {version}) at {_clock(record.get('ts'))}"
+            f" — {record.get('reason') or 'refused'}"
+        )
+    return lines
+
+
 # --------------------------------------------------------------------------
 # request headers (evidence gathering)
 # --------------------------------------------------------------------------
@@ -392,15 +474,110 @@ class PairingNotice:
         ]
 
 
+@dataclass(frozen=True)
+class RejectionNotice:
+    """What the daemon learned when it refused a second connector (018 §A).
+
+    The wording lives here rather than in the CLI for the same reason
+    :class:`PairingNotice`'s does: the line a user is told to act on and the
+    line the tests assert must not be able to drift apart. It is Chinese
+    because the person reading it is the editor's user, mid-task, with two
+    EasyEDA windows open — not a developer reading a log.
+    """
+
+    #: The instance that already holds the bridge (the one to close).
+    active_instance_id: str
+    active_connector_version: str
+    #: The instance that was turned away, for the audit trail and `status`.
+    instance_id: str = ""
+    connector_version: str = ""
+    peer: str = "-"
+
+    def console_lines(self) -> list[str]:
+        """The single line the daemon prints, in the task book's wording.
+
+        One line on purpose: it arrives under whatever else the daemon is
+        printing, and the only thing it has to achieve is that the user closes
+        the other window.
+        """
+        version = self.active_connector_version or UNKNOWN_CONNECTOR_VERSION
+        return [
+            "boardwise bridge: 另一个编辑器实例已连接"
+            f"（instance {self.active_instance_id}, connector {version}）。"
+            "若非预期，请关闭多余的 EasyEDA 窗口"
+        ]
+
+    def fallback_lines(self) -> list[str]:
+        """The same message in ASCII, for a console that cannot render Chinese.
+
+        Not decoration: a Windows console whose code page is not a CJK one raises
+        ``UnicodeEncodeError`` on the line above, and losing it would lose the
+        *only* warning the user gets that two windows are fighting over the
+        bridge. Same facts, same instruction, different characters.
+        """
+        version = self.active_connector_version or UNKNOWN_CONNECTOR_VERSION
+        return [
+            "boardwise bridge: another editor instance is already connected"
+            f" (instance {self.active_instance_id}, connector {version}). "
+            "If that is not what you expected, close the extra EasyEDA window."
+        ]
+
+
+@dataclass(frozen=True)
+class ActiveConnector:
+    """The one editor instance that holds the bridge (018 §A).
+
+    Kept apart from the socket it rides on so that three questions are
+    answerable without reading the log: which window is connected, which
+    connector build it runs, and when it arrived.
+    """
+
+    instance_id: str
+    client: str
+    connector_version: str
+    peer: str
+    connected_at: float
+    #: ``hello`` when the connector named itself, ``connection`` when the id was
+    #: invented for this socket because the build predates the field. Recorded
+    #: rather than hidden: the two mean different things about what the daemon
+    #: can tell apart, and a fabricated id that looks real would be worse than
+    #: no id at all.
+    instance_id_source: str = "hello"
+
+    def describe(self) -> str:
+        """One line naming this instance, for a console or a `status` command."""
+        version = self.connector_version or UNKNOWN_CONNECTOR_VERSION
+        return f"instance {self.instance_id} (connector {version}, peer {self.peer})"
+
+    def as_status(self) -> dict[str, Any]:
+        """The shape carried by ``ping`` and printed by :func:`status_lines`."""
+        return {
+            "instanceId": self.instance_id,
+            "instanceIdSource": self.instance_id_source,
+            "client": self.client,
+            "connectorVersion": self.connector_version or None,
+            "peer": self.peer,
+            "connectedAt": self.connected_at,
+        }
+
+
 @dataclass
 class BridgeDaemon:
     """Routes frames between CLI callers and the editor connector."""
 
     token: str
     home: Path = field(default_factory=lambda: BOARDWISE_HOME)
-    #: The connected editor extension, if any. Only one is tracked: a second
-    #: connector takes over (the editor may have been restarted).
+    #: The connected editor extension, if any. **At most one**, and it is never
+    #: displaced: while this socket is open a second connector is refused
+    #: (018 §A). Which *instance* it is — and that it is still worth trusting —
+    #: is :attr:`active` / :meth:`active_instance`, not this field alone.
     connector: ServerConnection | None = None
+    #: Which connector instance holds the bridge, when one does.
+    active: ActiveConnector | None = None
+    #: The last few refusals, newest first, so ``bridge status`` can show them
+    #: without anyone parsing a log file (018 §A). Bounded — see
+    #: :data:`MAX_RECENT_REJECTIONS`.
+    recent_rejections: list[dict[str, Any]] = field(default_factory=list)
     #: id -> Future resolved by the connector's response.
     pending: dict[str, asyncio.Future[dict[str, Any]]] = field(default_factory=dict)
     started_at: float = field(default_factory=time.time)
@@ -408,6 +585,12 @@ class BridgeDaemon:
     #: A callback rather than a print: this module is a library, and the tests
     #: collect notices instead of capturing stdout.
     on_pairing: Callable[[PairingNotice], None] | None = None
+    #: Called once per refused connector, for the same reason — and unlike
+    #: :attr:`on_pairing` it has a default action: with no callback installed the
+    #: daemon prints the line itself, because the requirement is that the
+    #: *console* says it (018 §A) and ``bridge start`` installs no
+    #: callback for this yet.
+    on_rejection: Callable[[RejectionNotice], None] | None = None
 
     # -- handshake ------------------------------------------------------
 
@@ -465,13 +648,23 @@ class BridgeDaemon:
         else:
             self._authenticate_connector(provided, client, peer)
 
-        return Connection(
+        connection = Connection(
             role=role,
             client=client,
             protocol=reported or PROTOCOL_VERSION,
             connector_version=version,
             authenticated=True,
         )
+        # Daemon-side bookkeeping, not wire-visible (see `Connection`'s own
+        # docstring): which extension *instance* this socket claims to be. Set
+        # here because this is the only place the `hello` params exist; read by
+        # `_serve`, which decides whether the instance may have the bridge, and
+        # by the `disconnect` record so the log names it. A CLI connection has
+        # no instance and gets none — inventing one would only make `status`
+        # noisier.
+        if role == ROLE_CONNECTOR:
+            connection.instance_id, connection.instance_id_source = _instance_identity(params)
+        return connection
 
     def _authenticate_connector(self, provided: str, client: str, peer: str) -> None:
         """Trust the first connector; require an exact match afterwards.
@@ -501,7 +694,12 @@ class BridgeDaemon:
             return
         if _tokens_equal(provided, paired):
             return
-        if self.connector is not None:
+        # "Attached" now means a socket that is *still open*
+        # (:meth:`active_instance`), not merely one the handler has not cleared
+        # yet: a reload closes the old socket and the next instance arrives
+        # while that `finally` is still pending, and that path has to work
+        # (018 §A).
+        if self.active_instance() is not None:
             raise BridgeError(
                 ErrorCodes.UNAUTHENTICATED,
                 "this connector is not the paired one and a connector is already "
@@ -541,6 +739,104 @@ class BridgeDaemon:
                 ))
             except Exception:  # a noisy console must not fail the handshake
                 pass
+
+    # -- single active instance (018 §A) ---------------------------------
+
+    def active_instance(self) -> ActiveConnector | None:
+        """The instance that holds the bridge, or ``None`` when nobody does.
+
+        Liveness is read from the socket, not from bookkeeping: a socket that is
+        no longer ``OPEN`` is *not* an active instance even if the handler has
+        not yet run its ``finally``. That window is exactly where a reload
+        happens — the old socket dies, the new instance arrives — and calling a
+        dying socket "connected" would refuse the connection that is supposed to
+        replace it.
+        """
+        if self.connector is None or not _socket_is_open(self.connector):
+            return None
+        return self.active
+
+    def refuse_if_held(self, connection: Connection, peer: str = "-") -> ActiveConnector | None:
+        """The instance that turns this newcomer away, or ``None`` if none does.
+
+        Called on every connector ``hello``, **before the ack goes out**: a
+        refused instance is never told it is the connected one and, the part
+        that matters, is never installed as the active connector — so it cannot
+        become the one a later write is forwarded to.
+
+        Tri-state, in the order the task book states it:
+
+        - no active instance → accept (returns ``None``);
+        - an active instance whose socket is gone → accept; it takes over, which
+          is the ordinary reload path and must stay smooth;
+        - an active instance whose socket is open → **refuse**: records
+          ``connector_rejected``, says so on the console, and returns the holder
+          so the caller can name it on the wire too.
+
+        A connector presenting a **different token** never reaches this point:
+        the pairing check refuses it first, with ``UNAUTHENTICATED``, because
+        since 004f an unattached pairing may be re-taken and only an attached one
+        is defended. Both are refusals; only this one is about *who else is
+        here*, and the two are recorded under their own names on purpose.
+        """
+        active = self.active_instance()
+        if active is None:
+            return None
+        instance_id = str(getattr(connection, "instance_id", "") or "")
+        version = connection.connector_version or ""
+        record: dict[str, Any] = {
+            "ts": time.time(),
+            "peer": peer,
+            "instanceId": instance_id,
+            "instanceIdSource": str(getattr(connection, "instance_id_source", "") or ""),
+            "connectorVersion": version or None,
+            "client": client_with_version(connection.client, connection.connector_version),
+            "activeInstanceId": active.instance_id,
+            "activeConnectorVersion": active.connector_version or None,
+            "activePeer": active.peer,
+            "reason": "another editor instance is already connected",
+        }
+        self.audit(action=AUDIT_CONNECTOR_REJECTED, role=ROLE_CONNECTOR, ok=False, **record)
+        # Newest first, and bounded: the refused window backs off and retries,
+        # so an unbounded list would grow for as long as it stays open.
+        self.recent_rejections.insert(0, record)
+        del self.recent_rejections[MAX_RECENT_REJECTIONS:]
+        self._announce_rejection(RejectionNotice(
+            active_instance_id=active.instance_id,
+            active_connector_version=active.connector_version,
+            instance_id=instance_id,
+            connector_version=version,
+            peer=peer,
+        ))
+        return active
+
+    def _announce_rejection(self, notice: RejectionNotice) -> None:
+        """Say it out loud. This line is the whole safety mechanism.
+
+        With no callback installed the daemon prints it itself — the requirement
+        is that the *console* carries the line (018 §A), and the process that
+        happens to own that console is an implementation detail. Nothing here
+        may fail the handshake: a refusal that manages to raise would leave a
+        socket open that we already decided to close.
+        """
+        if self.on_rejection is not None:
+            try:
+                self.on_rejection(notice)
+            except Exception:
+                pass
+            return
+        try:
+            print("\n".join(notice.console_lines()), flush=True)
+        except UnicodeEncodeError:
+            # A console that cannot render the Chinese line still has to hear
+            # this — see `RejectionNotice.fallback_lines`. Folded in here rather
+            # than left to the user's code page.
+            try:
+                print("\n".join(notice.fallback_lines()), flush=True)
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     # -- dispatch -------------------------------------------------------
 
@@ -590,6 +886,7 @@ class BridgeDaemon:
 
     def _local_action(self, action: str) -> dict[str, Any]:
         if action == "ping":
+            active = self.active_instance()
             return {
                 "pong": True,
                 # The daemon's own version, so a caller can tell "the daemon
@@ -599,20 +896,40 @@ class BridgeDaemon:
                 # checkout answers the new actions with UNKNOWN_ACTION, and
                 # this field is what turns that into a diagnosis.
                 "version": BOARDWISE_VERSION,
-                "connector": self.connector is not None,
+                "connector": self.has_connector(),
                 # Fingerprint only — `bridge status` prints this, and the log
                 # panel and terminal are both places a secret must never reach.
                 "pairedFingerprint": connector_fingerprint(
                     load_connector_token(self.home)
                 ),
+                # Which editor instance holds the bridge, and who was turned
+                # away — the two facts that answer "why did my write land in the
+                # other project?" without anyone reading a log file (018 §A).
+                # `status_lines` renders them; the keys are wire data.
+                "activeInstance": active.as_status() if active is not None else None,
+                "recentRejections": [dict(record) for record in self.recent_rejections],
             }
         # "hello" during the request phase is a protocol violation.
         raise BridgeError(
             ErrorCodes.PROTOCOL_VIOLATION, "hello may only be sent once, as the first frame"
         )
 
+    def has_connector(self) -> bool:
+        """Whether a connector socket is open right now.
+
+        The same liveness rule as :meth:`active_instance`, and deliberately the
+        one both `ping` and :meth:`_forward` use: a status line that says
+        "connected" while the forward path refuses, or the reverse, is worse
+        than either answer on its own.
+        """
+        return self.connector is not None and _socket_is_open(self.connector)
+
     async def _forward(self, action: str, params: dict[str, Any], role: str) -> Any:
-        if self.connector is None:
+        # `has_connector`, not `self.connector is not None`: a socket that died
+        # without the handler having noticed yet is not something to send a
+        # write to — it deserves the same NO_CONNECTOR the caller would get a
+        # second later, not an INTERNAL from a send on a closed socket.
+        if not self.has_connector():
             raise BridgeError(
                 ErrorCodes.NO_CONNECTOR,
                 f"{action} needs the editor: no connector is connected. "
@@ -694,14 +1011,20 @@ class BridgeDaemon:
             pass
         finally:
             if self.connector is websocket:
+                # Both together: the socket and the instance it stood for. The
+                # next connector to arrive finds no active instance and takes
+                # the bridge — the reload path (018 §A).
                 self.connector = None
+                self.active = None
             for future in list(self.pending.values()):
                 if not future.done():
                     future.set_exception(
                         BridgeError(ErrorCodes.CONNECTOR_ERROR, "connector disconnected")
                     )
             self.audit(action="disconnect", role=connection.role or "-", ok=True,
-                       peer=peer, actions=connection.seen_actions)
+                       peer=peer, actions=connection.seen_actions,
+                       **({"instanceId": connection.instance_id}
+                          if getattr(connection, "instance_id", "") else {}))
 
     async def _serve(self, websocket: ServerConnection, connection: Connection, peer: str) -> None:
         """Banner, handshake, then serve frames until the socket closes."""
@@ -742,6 +1065,27 @@ class BridgeDaemon:
         connection.protocol = authenticated.protocol
         connection.connector_version = authenticated.connector_version
         connection.authenticated = True
+        connection.instance_id = getattr(authenticated, "instance_id", "")
+        connection.instance_id_source = getattr(authenticated, "instance_id_source", "")
+
+        # Single-active-connector guard + install (018 §A), both *before* the ack
+        # is sent: a refused instance must never be told it is the connected one,
+        # and must never become the socket a later write is forwarded to. Two
+        # windows used to take turns here, minutes apart, and each write landed
+        # in whichever project the window that happened to be winning had in
+        # focus.
+        #
+        # The install sits immediately after the check, with no `await` between
+        # them, so the slot cannot be handed to two connectors that arrive in the
+        # same instant — the check-then-install pair has to be atomic, and the
+        # `await` that makes it non-atomic is the ack itself.
+        if connection.role == ROLE_CONNECTOR:
+            holder = self.refuse_if_held(connection, peer)
+            if holder is not None:
+                await self._close(websocket, CONNECTOR_ALREADY_ACTIVE,
+                                  _refusal_message(holder))
+                return
+            self._install_connector(websocket, connection, peer)
 
         await websocket.send(response_frame("hello", {
             "role": connection.role,
@@ -755,27 +1099,54 @@ class BridgeDaemon:
             "fingerprint": connector_fingerprint(
                 load_connector_token(self.home)
             ),
+            # The oldest connector build this daemon works with, so a build that
+            # is too old can say so in the editor instead of failing later at
+            # some unrelated action (018 §A/§B). Announced, not enforced: the
+            # refusal path for a *version* would have to run before the token is
+            # checked, and a version comparison is not a reason to hang up on a
+            # connector that still works.
+            "minConnectorVersion": MIN_CONNECTOR_VERSION,
         }))
-
-        if connection.role == ROLE_CONNECTOR:
-            previous = self.connector
-            self.connector = websocket
-            if previous is not None and previous is not websocket:
-                await self._close(previous, ErrorCodes.PROTOCOL_VIOLATION, "replaced by a new connector")
-            # Every connection leaves the connector's build behind. "Which
-            # version was actually running?" has been unanswerable twice after
-            # a sideload that did not take, and this line is the answer.
-            self.audit(
-                action="hello", role=connection.role, ok=True,
-                client=client_with_version(connection.client, connection.connector_version),
-                connectorVersion=connection.connector_version or None,
-            )
 
         try:
             async for raw in websocket:
                 await self._on_frame(websocket, connection, raw)
         except websockets.ConnectionClosed:
             pass
+
+    def _install_connector(self, websocket: ServerConnection, connection: Connection, peer: str) -> None:
+        """Give this instance the bridge, and put the handover on the record.
+
+        There is no displacement here any more. Until 2026-09-22 this method's
+        body closed whatever was there and took over — which is how two editor
+        windows ended up taking turns, five minutes apart, with every write
+        landing in the project the winning window had focused (018 §A). A socket
+        holding the bridge is now refused before we get here, so the only
+        previous holder this can replace is one whose socket is already gone.
+        """
+        previous = self.active
+        self.connector = websocket
+        self.active = ActiveConnector(
+            instance_id=str(getattr(connection, "instance_id", "") or ""),
+            client=connection.client,
+            connector_version=connection.connector_version,
+            peer=peer,
+            connected_at=time.time(),
+            instance_id_source=str(getattr(connection, "instance_id_source", "") or "hello"),
+        )
+        # Every connection leaves the connector's build behind. "Which version
+        # was actually running?" has been unanswerable twice after a sideload
+        # that did not take, and this line is the answer. The instance id was
+        # added for 018 §A for the same reason: after the fact, "which window
+        # was this?" has to be answerable from the log.
+        self.audit(
+            action="hello", role=connection.role, ok=True, peer=peer,
+            client=client_with_version(connection.client, connection.connector_version),
+            connectorVersion=connection.connector_version or None,
+            instanceId=self.active.instance_id,
+            instanceIdSource=self.active.instance_id_source,
+            tookOverFrom=previous.instance_id if previous is not None else None,
+        )
 
     async def _on_frame(self, websocket: ServerConnection, connection: Connection, raw: Any) -> None:
         started = time.perf_counter()
@@ -843,6 +1214,64 @@ def _peer_of(websocket: Any) -> str:
 
 def _major(version: str) -> str:
     return version.split(".")[0]
+
+
+def _socket_is_open(websocket: Any) -> bool:
+    """Whether a socket is still usable, per ``websockets``' own state.
+
+    Used instead of "is the attribute set" everywhere the daemon asks whether a
+    connector is *attached* (018 §A). The two are not the same: the socket dies
+    the moment the peer goes away, while ``self.connector`` is only cleared when
+    the handler reaches its ``finally`` — and the new instance arrives inside
+    that window, which is precisely the reload the guard has to let through.
+
+    Unknown state counts as open. A socket object with no ``state`` is either an
+    older ``websockets`` or a test double, and inventing "closed" for it would
+    turn a missing attribute into a refusal.
+    """
+    state = getattr(websocket, "state", None)
+    if state is None:
+        return True
+    return str(getattr(state, "name", state)).upper() == "OPEN"
+
+
+def _instance_identity(params: dict[str, Any]) -> tuple[str, str]:
+    """The connector instance id for one connection, and where it came from.
+
+    A connector built before 018 §A sends no ``instanceId``. It must still
+    connect — refusing an older editor would break every existing install — so
+    the daemon invents an id for **this connection**. The second element of the
+    pair says so, because the two are not equally strong evidence: a claimed id
+    can tell two windows apart for as long as they live, an invented one can
+    only name a socket.
+    """
+    claimed = params.get("instanceId")
+    if isinstance(claimed, str) and claimed.strip():
+        return claimed.strip(), "hello"
+    return f"conn-{secrets.token_hex(8)}", "connection"
+
+
+def _refusal_message(active: ActiveConnector) -> str:
+    """The wire message a refused connector is closed with.
+
+    Says what happened, who holds the bridge, and what to do about it. The
+    connector logs this and shows it; the person reading it is looking at two
+    EasyEDA windows and needs to know which one to close.
+    """
+    return (
+        f"another editor instance already holds the bridge "
+        f"({active.describe()}); this connection was refused so that writes "
+        f"cannot land in the wrong project — close the extra EasyEDA window, or "
+        f"run 'boardwise bridge status' to see which instance is connected"
+    )
+
+
+def _clock(value: Any) -> str:
+    """A timestamp as local wall-clock, or ``?`` when it is missing or absurd."""
+    try:
+        return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(value)))
+    except (TypeError, ValueError, OSError, OverflowError):
+        return "?"
 
 
 # --------------------------------------------------------------------------

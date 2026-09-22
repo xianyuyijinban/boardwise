@@ -1,0 +1,120 @@
+016 波② 场景 0 —— probe：sch.readback 能不能当复查的轻量模型
+=================================================================
+执行者：coder 子代理（真机）。抓取时刻 2026-09-21 21:23:56 +0800。
+
+原始命令与原始输出（未编辑）
+-----------------------------------------------------------------
+
+$ .venv/Scripts/python.exe -m boardwise.cli bridge status
+boardwise bridge: daemon up on 127.0.0.1:61190
+  connector: connected
+  paired connector: 962bf45e
+
+$ .venv/Scripts/python.exe -m boardwise.cli bridge call --action sys.probe --params '{"checks":true}'
+{
+  "version": "3.2.186",
+  "connector": "0.4.9",
+  ...
+
+$ .venv/Scripts/python.exe -m boardwise.cli bridge call --action doc.list
+      "name": "/test",
+      "focused": true,
+
+$ .venv/Scripts/python.exe -m boardwise.cli bridge call --action sch.readback
+{
+  "kind": "sch",
+  "components": [
+    {
+      "primitiveId": "b5ba3517c5abec68",
+      "designator": null,
+      "name": "",
+      "footprint": null,
+      "supplier": null,
+      "supplierId": null,
+      "manufacturer": null,
+      "x": 0, "y": 0, "rotation": 0, "net": "",
+      "fields": {
+        "PrimitiveType": "Component",
+        "ComponentType": "sheet",
+        "PrimitiveId": "b5ba3517c5abec68",
+        "Component": { "object": true },
+        "X": 0, "Y": 0,
+        "SubPartName": "pid8a0e77bacb214e",
+        "Rotation": 0, "Mirror": false,
+        "AddIntoBom": true, "AddIntoPcb": true,
+        "Net": "",
+        "Symbol": { "object": true },
+        "Name": "",
+        "OtherProperty": { "object": true }
+      }
+    }
+  ],
+  "primitives": [],
+  "componentCount": 1
+}
+
+$ ... --action sch.readback --params '{"includePrimitives": true}'   （primitives 段）
+  "primitives": [
+    { "__meta": { "unavailable": ["sch_PrimitiveNetLabel"], "returned": 0 } }
+  ],
+  "componentCount": 1
+
+样本的可信度限制（必须一起读）
+-----------------------------------------------------------------
+这次 probe 只采到 test 工程当前页（P1）上的**唯一一个 sheet 图元**——test 工程的
+P1..P4 四个页在磁盘导出里都只带自己的页框（每个 SCH_PAGE 文档 1 条 COMPONENT +
+若干 LINE，见 outputs/016_incident_test2_page.txt 的同类观测），所以**没有真实电阻**
+可以采样。也就是说：本文件没有"真实器件的 fields 里有没有 Value"的直接观测。
+
+但问题（"够不够跑 param-value-mpn-match 单规则"）不依赖那一条观测，
+有一条**结构性**的证据直接定死答案：
+
+结论：不够 —— 复查口径取"另存新 .epro2 → 审查 --file 新文件"
+-----------------------------------------------------------------
+1) readback 的每行组件是**写死的键集合**，没有 value、没有 mpn
+   （connector/src/actions.ts:619-627）：
+       components.push({
+         primitiveId: ...,
+         designator: fields.Designator ?? null,
+         name:       fields.Name ?? null,
+         footprint:  fields.Footprint ?? null,
+         supplier:   fields.Supplier ?? null,
+         supplierId: fields.SupplierId ?? null,
+         manufacturer: fields.Manufacturer ?? null,
+         x, y, rotation, (net | layer),
+         fields,
+       });
+   另有 `fields` 一条"40 个标量的快照袋"。所以：
+   - footprint 有（独立键，去重值在 fields.Footprint）→ 有；
+   - value  无独立键；mpn 无独立键 → 无。
+   上表实测的 sheet 行印证：designator/footprint 都在，Value 不出现。
+
+2) 即使真器件的 `fields` 袋里出现标量 `Value`，**mpn 也一定拿不到**，这才是判据：
+   `snapshot()`（actions.ts:218-241）只走 `getState_*()` 取标量；对象一律降级成
+   `{object: true}`。而 Value 与 Manufacturer Part 在宿主里位于
+   **OtherProperty**（对象）内——本文件的实测行里 OtherProperty 正是
+   `{"object": true}`。`param-value-mpn-match` 需要同时拿到 value 和 mpn
+   （rules/params.py `_rows`：comp.value 与 comp.mpn），缺 mpn ⇒ 规则只能出
+   UNKNOWN，复查永远不可能得到 resolved。故按 §九.5 走"不够"那条分支。
+
+3) 顺带确认（与 §九.5 的另一半一致）：`sch.geometry` 能拿到 Value，但那是
+   **活页**读，且走的是 `state.OtherProperty.Value`（core/changeplan.py:396-438
+   `resolve_on_page`）——它够 apply 的前置比对，不够离线规则重跑。
+
+定下的复查口径（波②）
+-----------------------------------------------------------------
+   apply → save → 请岳在编辑器"文件 → 导出 → 工程备份"另存一份**新的 .epro2**
+   → `boardwise review --view schematic --file <新文件>`
+      （或 `edit preview`，但 preview 会因 inputSha256 失配而按设计退出 4，
+        所以复查用 review；两者对目标位号的 VIOLATION 有无是同一判据）
+
+另：本环境**没有任何工程导出/备份动作**（已查实，见下）——这一步只能由人做。
+    `sys.probe` 枚举 dmt_Project（12 个成员）：
+      copyProject / createProject / deleteProject / getAllProjectsUuid /
+      getCurrentProjectInfo / getProjectInfo / modifyProjectCollaborationMode /
+      modifyProjectDescription / modifyProjectFriendlyName / moveProject /
+      moveProjectToFolder / openProject        —— 没有 export / backup / saveAs。
+    sys_FileSystem（17 个成员）只有 saveFile / saveFileToFileSystem 等落在编辑器
+    自有沙箱里的读写，取不到工程序列化内容；sys_FormatConversion 只做 Altium/DISA
+    库转换。`sch.doc.save` 实测（21:20:58 {"saved": true}）**不写 .eprj2、也不生成
+    test_backup 里的新 .epro2**（两者 mtime 都没动）。

@@ -1,0 +1,64 @@
+[watch] start 21:45:37, waiting for the 0.4.10 window...
+[fire] 21:45:38 instance=0.4.10 focused=test2 -> doc.list says:
+{
+  "documents": [
+    {
+      "uuid": "4c8cf4a189c78533",
+      "name": "schematic1",
+      "type": "schematic",
+      "active": false,
+      "parentName": "Board1"
+    },
+    {
+      "uuid": "d228ce3582bd748f",
+      "name": "P4",
+      "type": "page",
+      "active": false,
+      "parentUuid": "4c8cf4a189c78533",
+      "parentName": "schematic1"
+    },
+    {
+      "uuid": "f805e257ac7383dc",
+      "name": "P3",
+[fire] doc.delete_page d228ce3582bd748f
+{
+  "deleted": true,
+  "pageUuid": "d228ce3582bd748f",
+  "name": "P4"
+}
+[fire] sch.doc.save
+{
+  "saved": true
+}
+[verify] doc.list after delete:
+{
+  "documents": [
+    {
+      "uuid": "4c8cf4a189c78533",
+      "name": "schematic1",
+      "type": "schematic",
+      "active": false,
+      "parentName": "Board1"
+    },
+    {
+      "uuid": "f805e257ac7383dc",
+      "name": "P3",
+      "type": "page",
+      "active": false,
+      "parentUuid": "4c8cf4a189c78533",
+      "parentName": "schematic1"
+    },
+    {
+      "uuid": "2b79b73f1e0e522f",
+      "name": "P2",
+[verify] uuid occurrences on disk: 2 (expect 0 after save lands)
+-rw-r--r-- 1 xiangyu 197121 688128 Sep 21 21:45 /e/LC Project/test2.eprj2
+RESULT: FIRED
+
+== 2026-09-21 21:5x SQLite 落盘终验（Kimi 亲验） ==
+方法: sqlite3 只读打开 test2.eprj2，全表全行扫描 uuid 与页名
+- uuid d228ce3582bd748f 在表数据中命中: 0（删除前原始字节 grep = 7，删后原始字节 = 2）
+- 页名 "P4" 命中: 0
+- freelist pages: 12 / 168 —— 残留 2 处原始字节是 SQLite free page 物理垃圾（删除不覆写物理页），
+  文件大小 688128 不变由此解释，属正常，不做 VACUUM（避免重写用户工程文件）
+结论: P4 页面数据已从数据库内容中完全删除并保存落盘，删除成立。

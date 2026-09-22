@@ -400,6 +400,26 @@ async function projectIdentity(info: any): Promise<Record<string, string>> {
 const PLACEHOLDER_DOC_UUIDS = new Set(['0']);
 
 /**
+ * What the shared "which document is active" read answers.
+ *
+ * `projectUuid` / `libraryUuid` come from `IDMT_EditorDocumentItem`'s
+ * `parentProjectUuid` / `parentLibraryUuid` — the type package's own answer to
+ * "which project is this document in", and the only field that can tell two
+ * layers of editor focus apart when they disagree (the case `sys.identity`
+ * exists for; see `docs/bridge.md` §4). They are optional because only the
+ * direct `getCurrentDocumentInfo` read carries them, and only some host builds
+ * fill them in.
+ */
+type ActiveDocumentReading = {
+  uuid: string;
+  type: string;
+  tabId?: string;
+  projectUuid?: string;
+  libraryUuid?: string;
+  source: string;
+};
+
+/**
  * The **one** read of "which document is active", shared by `doc.list` and
  * `document.current`.
  *
@@ -424,7 +444,7 @@ const PLACEHOLDER_DOC_UUIDS = new Set(['0']);
 async function activeDocument(
   eda: Eda,
   problems: string[],
-): Promise<{ uuid: string; type: string; tabId?: string; source: string } | null> {
+): Promise<ActiveDocumentReading | null> {
   const DIRECT = 'dmt_SelectControl.getCurrentDocumentInfo';
   // A placeholder is a *reading*, not a failure, so it is named where every
   // other "we asked and the answer was unusable" is named — the caller gets
@@ -443,11 +463,22 @@ async function activeDocument(
     if (uuid) {
       if (PLACEHOLDER_DOC_UUIDS.has(uuid)) return noActive(uuid, DIRECT);
       const tabId = plainGet(info, 'tabId');
+      const parentProjectUuid = plainGet(info, 'parentProjectUuid');
+      const parentLibraryUuid = plainGet(info, 'parentLibraryUuid');
       return {
         uuid,
         // Same vocabulary as `doc.list`'s `documents[].type`.
         type: documentKind(plainGet(info, 'documentType')),
         ...(typeof tabId === 'string' && tabId ? { tabId } : {}),
+        // Carried through unchanged when the host offers them, omitted when it
+        // does not — "the host did not say" is a different fact from "no
+        // project", and only the caller knows which of the two it can act on.
+        ...(typeof parentProjectUuid === 'string' && parentProjectUuid
+          ? { projectUuid: parentProjectUuid }
+          : {}),
+        ...(typeof parentLibraryUuid === 'string' && parentLibraryUuid
+          ? { libraryUuid: parentLibraryUuid }
+          : {}),
         source: DIRECT,
       };
     }
@@ -471,6 +502,176 @@ async function activeDocument(
     } catch (error) {
       problems.push(`${path}: ${String((error as Error)?.message ?? error)}`);
     }
+  }
+  return null;
+}
+
+// --------------------------------------------------------------------------
+// project identity readers shared by the new diagnostics (018 §B)
+// --------------------------------------------------------------------------
+
+/** One project, in the spelling `doc.list`'s `projects[]` rows use. */
+type ProjectName = { projectUuid: string; name?: string; friendlyName?: string };
+
+/** A project plus the read that named it — never merged into one anonymous fact. */
+type ProjectOwner = ProjectName & { source: string };
+
+/** `name (uuid)`, or the bare uuid when the project could not be named. */
+function projectLabel(project: ProjectName | null): string {
+  if (!project?.projectUuid) return 'unknown';
+  const name = project.name || project.friendlyName;
+  return name ? `"${name}" (${project.projectUuid})` : project.projectUuid;
+}
+
+/** Build a {@link ProjectName} from an identity record, keeping only real fields. */
+function namedProject(projectUuid: string, identity: Record<string, string>): ProjectName {
+  const name = typeof identity.name === 'string' && identity.name ? identity.name : undefined;
+  const friendlyName = typeof identity.friendlyName === 'string' && identity.friendlyName
+    ? identity.friendlyName
+    : undefined;
+  return {
+    projectUuid,
+    ...(name ? { name } : {}),
+    ...(friendlyName ? { friendlyName } : {}),
+  };
+}
+
+/**
+ * The focused project — the one `doc.list` marks `focused: true`.
+ *
+ * Read through the same `projectIdentity` the `doc.list` and `document.current`
+ * project boxes use, so the three cannot disagree about the same project. It is
+ * a separate reader from `projectRows` on purpose: that one treats a missing
+ * `dmt_Project` as an absent capability and stays out of `notes`, while a
+ * *diagnostic* caller has to be told that it could not ask (018 §B: "both
+ * absent and different are reported honestly").
+ */
+async function focusedProject(eda: Eda, notes: string[]): Promise<ProjectName | null> {
+  let info: any;
+  try {
+    info = await settle(requireFn(eda, 'dmt_Project.getCurrentProjectInfo')());
+  } catch (error) {
+    notes.push(
+      `focused project (dmt_Project.getCurrentProjectInfo): ${String((error as Error)?.message ?? error)}`,
+    );
+    return null;
+  }
+  if (!info) return null;
+  const identity = await projectIdentity(info);
+  const uuid = identity.projectUuid;
+  if (typeof uuid !== 'string' || !uuid) return null;
+  return namedProject(uuid, identity);
+}
+
+/**
+ * Every project the editor has open, by uuid, with whatever name it will give.
+ *
+ * `getAllProjectsUuid` answers for the workspace, and `getProjectInfo(uuid)` is
+ * the type package's **brief** per-project read — uuid / friendlyName / team,
+ * explicitly documented as carrying no document tree. That is the honest limit
+ * of this index and the reason it can name a project but never list what is in
+ * one; a caller that needs the documents of a non-focused project has to focus
+ * it first (`doc.list`'s `projects[]` says the same with `documents: "brief"`).
+ */
+async function openProjectIndex(eda: Eda, notes: string[]): Promise<Map<string, ProjectName>> {
+  const index = new Map<string, ProjectName>();
+  let uuids: unknown;
+  try {
+    uuids = await settle(requireFn(eda, 'dmt_Project.getAllProjectsUuid')());
+  } catch (error) {
+    notes.push(`open projects: ${String((error as Error)?.message ?? error)}`);
+    return index;
+  }
+  if (!Array.isArray(uuids)) {
+    notes.push(`open projects: getAllProjectsUuid returned ${typeof uuids}, not an array`);
+    return index;
+  }
+  for (const raw of uuids) {
+    const uuid = String(raw ?? '');
+    if (!uuid) continue;
+    let entry: ProjectName = { projectUuid: uuid };
+    try {
+      const info: any = await settle(requireFn(eda, 'dmt_Project.getProjectInfo')(uuid));
+      if (info) entry = namedProject(uuid, await projectIdentity(info));
+    } catch (error) {
+      notes.push(
+        `open projects: getProjectInfo(${uuid}): ${String((error as Error)?.message ?? error)}`,
+      );
+    }
+    index.set(uuid, entry);
+  }
+  return index;
+}
+
+/** Fill in a project's names from the open-project index when it has none. */
+function withNames(project: ProjectName | null, index: Map<string, ProjectName>): ProjectName | null {
+  if (!project?.projectUuid) return null;
+  const known = index.get(project.projectUuid);
+  const name = project.name ?? known?.name;
+  const friendlyName = project.friendlyName ?? known?.friendlyName;
+  return {
+    projectUuid: project.projectUuid,
+    ...(name ? { name } : {}),
+    ...(friendlyName ? { friendlyName } : {}),
+  };
+}
+
+/**
+ * Which project a document uuid belongs to, asked of the document itself.
+ *
+ * This is the channel `document.current` was missing: when the editor's two
+ * layers of focus disagree, `doc.list` and `document.current` both describe the
+ * **focused project**, while the active document may belong to another one —
+ * and only the document's own info object says which. The type package carries
+ * the answer for every kind we can address: `IDMT_SchematicItem.parentProjectUuid`
+ * and `IDMT_PcbItem.parentProjectUuid` (`所属工程 UUID`). A schematic *page*
+ * uuid is resolved through its schematic, because a page item carries
+ * `parentSchematicUuid` and no project.
+ *
+ * The reads are per-kind and documented as operating "inside the currently open
+ * project", so on a real host a **foreign** uuid may legitimately answer
+ * nothing. That is a limit of the channel, and it is reported as `null` with
+ * the failure named in `notes` rather than guessed at.
+ */
+async function documentOwnerProject(
+  eda: Eda,
+  uuid: string,
+  notes: string[],
+): Promise<ProjectOwner | null> {
+  const check = (path: string, info: any): ProjectOwner | null => {
+    const projectUuid = plainGet(info, 'parentProjectUuid');
+    return typeof projectUuid === 'string' && projectUuid ? { projectUuid, source: path } : null;
+  };
+
+  const direct = ['dmt_Pcb.getPcbInfo', 'dmt_Schematic.getSchematicInfo'];
+  for (const path of direct) {
+    try {
+      const info = await settle(requireFn(eda, path)(uuid));
+      const found = info ? check(path, info) : null;
+      if (found) return found;
+    } catch (error) {
+      notes.push(`${path}(${uuid}): ${String((error as Error)?.message ?? error)}`);
+    }
+  }
+
+  // A schematic *page*: page → parent schematic → project.
+  const pagePath = 'dmt_Schematic.getSchematicPageInfo';
+  try {
+    const page: any = await settle(requireFn(eda, pagePath)(uuid));
+    const schematicUuid = plainGet(page, 'parentSchematicUuid');
+    if (typeof schematicUuid === 'string' && schematicUuid) {
+      const schematic: any = await settle(
+        requireFn(eda, 'dmt_Schematic.getSchematicInfo')(schematicUuid),
+      );
+      // The project uuid comes from the *schematic*, and the source says so:
+      // naming the page read here would credit the wrong call with the answer.
+      const found = schematic
+        ? check(`${pagePath} → dmt_Schematic.getSchematicInfo`, schematic)
+        : null;
+      if (found) return found;
+    }
+  } catch (error) {
+    notes.push(`${pagePath}(${uuid}): ${String((error as Error)?.message ?? error)}`);
   }
   return null;
 }
@@ -2065,25 +2266,22 @@ function docRow(
 }
 
 /**
- * `doc.list` — every document in the open project, and which one is active.
+ * Every document the editor's open project lists, in `doc.list`'s row shape.
  *
- * Motivation (岳翔宇, 006c): the harness has been acting on "whatever page is
- * focused", and a golden/test page mix-up has already bitten us twice. This
- * makes the project's document set something a caller can *see* — and it is
- * how a uuid for `doc.open` / `doc.rename` is obtained at all.
+ * One builder for two readers — `doc.list` itself and `doc.open`'s failure
+ * diagnosis (018 §B1), which has to ask "is this uuid in the project at all?"
+ * of exactly the set `doc.list` shows. Two copies of this would be two answers
+ * to that question.
  *
- * Each document kind has its own enumeration, so the table is assembled from
- * all of them rather than from the currently-open one, which is precisely the
- * assumption being removed.
+ * `activeUuid` only marks rows; a caller with no interest in the marker passes
+ * `null`, and a caller that needs to know whether the listing is *complete*
+ * watches `problems` (the enumerations record their own failures there).
  */
-export const docList: ActionHandler = async (_params, eda) => {
-  const problems: string[] = [];
-
-  // Which document is active — the same read `document.current` uses, so the
-  // two can never disagree about the same fact (see `activeDocument`).
-  const active = await activeDocument(eda, problems);
-  const activeUuid = active?.uuid ?? null;
-
+async function collectDocumentRows(
+  eda: Eda,
+  problems: string[],
+  activeUuid: string | null,
+): Promise<DocRow[]> {
   const rows: DocRow[] = [];
   const schematics = await readDocItems(eda, 'dmt_Schematic.getAllSchematicsInfo', problems);
   const schematicNames = new Map<string, string>();
@@ -2110,6 +2308,30 @@ export const docList: ActionHandler = async (_params, eda) => {
     const row = docRow(pcb, 'pcb', activeUuid);
     if (row) rows.push(row);
   }
+  return rows;
+}
+
+/**
+ * `doc.list` — every document in the open project, and which one is active.
+ *
+ * Motivation (岳翔宇, 006c): the harness has been acting on "whatever page is
+ * focused", and a golden/test page mix-up has already bitten us twice. This
+ * makes the project's document set something a caller can *see* — and it is
+ * how a uuid for `doc.open` / `doc.rename` is obtained at all.
+ *
+ * Each document kind has its own enumeration, so the table is assembled from
+ * all of them rather than from the currently-open one, which is precisely the
+ * assumption being removed.
+ */
+export const docList: ActionHandler = async (_params, eda) => {
+  const problems: string[] = [];
+
+  // Which document is active — the same read `document.current` uses, so the
+  // two can never disagree about the same fact (see `activeDocument`).
+  const active = await activeDocument(eda, problems);
+  const activeUuid = active?.uuid ?? null;
+
+  const rows = await collectDocumentRows(eda, problems, activeUuid);
 
   // 012 §五: the multi-project view rides along on the same report — the
   // existing fields are untouched (187 tests guard them), `projects` is new.
@@ -2289,6 +2511,202 @@ export const docFocus: ActionHandler = async (params, eda) => {
 };
 
 /**
+ * Carry a project's names through from the open-project index, keeping the read
+ * that named it.
+ */
+function namedOwner(owner: ProjectOwner | null, index: Map<string, ProjectName>): ProjectOwner | null {
+  if (!owner?.projectUuid) return null;
+  const named = withNames(owner, index) ?? { projectUuid: owner.projectUuid };
+  return { ...named, source: owner.source };
+}
+
+/**
+ * The project the **active document** belongs to (018 §B2 ②).
+ *
+ * Preferred channel: `getCurrentDocumentInfo().parentProjectUuid`, because it
+ * belongs to the very read that names the active document, so the two cannot
+ * disagree — and disagreeing is the failure this whole action is about. When
+ * the host does not fill that field in, the document's own per-kind read is
+ * asked instead ({@link documentOwnerProject}).
+ *
+ * `null` means neither answered. That is reported as "cannot be determined",
+ * never as "no project": a caller deciding whether it is safe to write needs to
+ * tell those apart.
+ */
+async function activeDocumentProject(
+  eda: Eda,
+  active: ActiveDocumentReading | null,
+  index: Map<string, ProjectName>,
+  notes: string[],
+): Promise<ProjectOwner | null> {
+  if (!active) return null;
+  if (active.projectUuid) {
+    const named = withNames({ projectUuid: active.projectUuid }, index);
+    if (named) {
+      return {
+        ...named,
+        source: 'dmt_SelectControl.getCurrentDocumentInfo (parentProjectUuid)',
+      };
+    }
+  }
+  const owner = namedOwner(await documentOwnerProject(eda, active.uuid, notes), index);
+  if (!owner) {
+    notes.push(
+      `active document ${active.uuid}: neither getCurrentDocumentInfo.parentProjectUuid `
+        + 'nor a per-kind info read named its project',
+    );
+  }
+  return owner;
+}
+
+/** Everything that could be established about a uuid the editor would not open. */
+type UuidLocation = {
+  focused: ProjectName | null;
+  active: ActiveDocumentReading | null;
+  /** Which project the active document belongs to, when a read can say. */
+  activeProject: ProjectName | null;
+  owner: ProjectOwner | null;
+  /** Is it among the documents `doc.list` lists? `null` when the listing broke. */
+  inFocusedListing: boolean | null;
+  listingCount: number;
+  listingComplete: boolean;
+  /** Open tabs whose tab id carries this uuid (`<docUuid>@<hash>`). */
+  openTabs: Array<{ tabId: string; title: string }>;
+  otherProjects: ProjectName[];
+  notes: string[];
+};
+
+/**
+ * Work out where a uuid `openDocument` refused to open actually lives (018 §B1).
+ *
+ * The two-layer focus problem (measured 2026-09-21): `doc.list` reported the
+ * focused project as one thing while the document in the editor's canvas
+ * belonged to another, and `doc.open` — which addresses the pages of the
+ * project the editor has open — refused a uuid that plainly existed. The bare
+ * "returned no tab id" told the caller nothing it could act on.
+ *
+ * Every read here is best-effort and guarded: this runs *inside* an error path,
+ * so it must never be the thing that replaces a diagnosis with a second
+ * failure. Anything it could not establish stays `null` and is named in
+ * `notes`.
+ */
+async function locateUuid(eda: Eda, uuid: string): Promise<UuidLocation> {
+  const notes: string[] = [];
+  const index = await openProjectIndex(eda, notes);
+  const focused = withNames(await focusedProject(eda, notes), index);
+  const active = await activeDocument(eda, notes);
+  const activeProject = await activeDocumentProject(eda, active, index, notes);
+  const owner = namedOwner(await documentOwnerProject(eda, uuid, notes), index);
+
+  // The same listing `doc.list` shows. A read that failed while building it is
+  // recorded by `collectDocumentRows` itself, which is what separates "this
+  // project has no such document" from "we could not list them".
+  const listingProblems: string[] = [];
+  const rows = await collectDocumentRows(eda, listingProblems, null);
+  notes.push(...listingProblems);
+  const hit = rows.find((row) => row.uuid === uuid) ?? null;
+
+  let openTabs: Array<{ tabId: string; title: string }> = [];
+  try {
+    const tree: any = await settle(requireFn(eda, 'dmt_EditorControl.getSplitScreenTree')());
+    openTabs = flattenTabs(tree)
+      .map((tab) => ({
+        tabId: String(plainGet(tab, 'tabId') ?? ''),
+        title: String(plainGet(tab, 'title') ?? ''),
+      }))
+      // A tab id is `"<documentUuid>@<hash>"` (measured 006c), so a prefix test
+      // is what matches a document uuid against the tabs it is open in.
+      .filter((tab) => tab.tabId === uuid || tab.tabId.startsWith(`${uuid}@`));
+  } catch (error) {
+    notes.push(
+      `tabs (dmt_EditorControl.getSplitScreenTree): ${String((error as Error)?.message ?? error)}`,
+    );
+  }
+
+  return {
+    focused,
+    active,
+    activeProject,
+    owner,
+    inFocusedListing: listingProblems.length ? null : hit !== null,
+    listingCount: rows.length,
+    listingComplete: listingProblems.length === 0,
+    openTabs,
+    otherProjects: [...index.values()]
+      .filter((project) => project.projectUuid !== focused?.projectUuid),
+    notes,
+  };
+}
+
+/**
+ * The sentence the caller needs, built from what {@link locateUuid} established.
+ *
+ * Every branch states what is *known* and what to do next; none of them
+ * pretends to have searched a project whose document tree the API cannot read
+ * (`getProjectInfo` is a brief read — see {@link openProjectIndex}), which is
+ * why the "nothing found" branch says which projects it was able to search and
+ * which it was not.
+ */
+function describeUuidLocation(uuid: string, location: UuidLocation): string {
+  const focusedLabel = projectLabel(location.focused);
+  const activeClause = describeActiveDocument(location);
+  const owner = location.owner;
+
+  if (owner?.projectUuid) {
+    const ownerLabel = projectLabel(owner);
+    if (location.focused?.projectUuid === owner.projectUuid) {
+      return `it belongs to the focused project ${ownerLabel} (${owner.source}), yet the editor `
+        + 'opened no tab — re-read doc.list, and use doc.focus if the document is already open';
+    }
+    return `this uuid belongs to project ${ownerLabel} (${owner.source}), which is not the project `
+      + `the editor has open (focused project: ${focusedLabel}; ${activeClause}); switch the editor `
+      + 'to that project first, then retry';
+  }
+
+  if (location.openTabs.length > 0) {
+    const titles = location.openTabs.map((tab) => `"${tab.title}"`).join(', ');
+    return `it is the uuid of an already-open tab (${titles}), so the document exists but the `
+      + 'editor did not open a tab for it — try doc.focus with this uuid';
+  }
+
+  if (location.inFocusedListing === true) {
+    return `it is one of the documents the open project ${focusedLabel} lists, but the editor opened `
+      + 'no tab — re-read doc.list before acting on this uuid';
+  }
+
+  if (location.listingComplete) {
+    const searched = `the focused project ${focusedLabel} lists ${location.listingCount} `
+      + 'document(s) and none of them is this uuid';
+    const others = location.otherProjects.length
+      ? `; the other open projects (${location.otherProjects.map(projectLabel).join(', ')}) cannot be `
+        + 'searched, because their document trees are not readable on this API (getProjectInfo is a '
+        + 'brief read) — focus one to enumerate it'
+      : '';
+    return `no document of the project the editor has open is ${uuid} (${searched})${others} `
+      + `— ${activeClause}; take the uuid from doc.list`;
+  }
+
+  return 'the open project\'s document list could not be read, so it is not possible to say whether '
+    + `${uuid} exists — re-read doc.list, and check the connector log for the failed enumeration`;
+}
+
+/**
+ * One clause naming the active document and the project it belongs to.
+ *
+ * Both halves come from the `document.current` channel — the active document
+ * from `getCurrentDocumentInfo`, its project from that read's
+ * `parentProjectUuid` (or the document's own per-kind read). Kept apart from
+ * the focused project on purpose: a message that named only the focused project
+ * would state the very thing that is in doubt.
+ */
+function describeActiveDocument(location: UuidLocation): string {
+  const active = location.active;
+  if (!active) return 'no document is focused in the editor';
+  const where = location.activeProject ? ` (project ${projectLabel(location.activeProject)})` : '';
+  return `the active document is ${active.uuid}${where}`;
+}
+
+/**
  * `doc.open` — focus a document by uuid, so later actions land where intended.
  *
  * `dmt_EditorControl.openDocument(uuid)` is the real entry (`@public`) and
@@ -2296,6 +2714,13 @@ export const docFocus: ActionHandler = async (params, eda) => {
  * id it opened. `activateDocument` takes that *tab id*, not a document uuid —
  * so it is the second half of the same move, not an alternative. Both are
  * @public on this build, which is why nothing here is emulated.
+ *
+ * The failure path is not a bare "no tab id" (018 §B1). `openDocument` is
+ * scoped to the project the editor has open, so the question "why is my uuid
+ * not here?" almost always has an answer that can be read off the editor: the
+ * uuid belongs to a *different* project, or it is already open in a tab, or the
+ * listing does not have it at all. The error carries that diagnosis, and the
+ * raw readings in `detail`, so a caller can act instead of guessing.
  */
 export const docOpen: ActionHandler = async (params, eda) => {
   const uuid = typeof params.uuid === 'string' ? params.uuid.trim() : '';
@@ -2306,10 +2731,33 @@ export const docOpen: ActionHandler = async (params, eda) => {
     requireFn(eda, 'dmt_EditorControl.openDocument')(uuid),
   ) as string | undefined;
   if (!tabId) {
+    // The diagnosis must never turn a clear error into an unclear one: if it
+    // throws for any reason, the original message stands.
+    let location: UuidLocation | null = null;
+    try {
+      location = await locateUuid(eda, uuid);
+    } catch {
+      // The diagnosis failed. That is not the caller's problem to solve, and
+      // the original failure — the one that is certainly true — is reported.
+      location = null;
+    }
+    const why = location ? describeUuidLocation(uuid, location) : 'the reason could not be read';
     throw new ActionError(
       'CONNECTOR_ERROR',
-      `openDocument(${uuid}) returned no tab id — the uuid may not exist in this project`,
-      { uuid },
+      `openDocument(${uuid}) returned no tab id — ${why}`,
+      location
+        ? {
+            uuid,
+            focusedProject: location.focused,
+            activeDocument: location.active,
+            uuidBelongsTo: location.owner,
+            inFocusedProjectListing: location.inFocusedListing,
+            listingCount: location.listingCount,
+            openTabs: location.openTabs,
+            otherProjects: location.otherProjects,
+            ...(location.notes.length ? { notes: location.notes } : {}),
+          }
+        : { uuid, diagnosisError: true },
     );
   }
 
@@ -2350,6 +2798,82 @@ export const docOpen: ActionHandler = async (params, eda) => {
     activated,
     document,
     ...(activateProblem ? { activateProblem } : {}),
+  };
+};
+
+/**
+ * `sys.identity` — the editor's two identity layers, and whether they agree
+ * (018 §B2).
+ *
+ * Why a separate read-only action rather than a note on `document.current`: the
+ * question being answered is not "what is open" but "**is what is open the
+ * thing I think I am writing to?**". Two layers exist, and they are not the
+ * same thing:
+ *
+ * - **`doc.list`'s `focused` project** — `dmt_Project.getCurrentProjectInfo`,
+ *   which the type package documents as the project of the schematic / PCB /
+ *   panel that holds the last *input* focus;
+ * - **the active document** — `dmt_SelectControl.getCurrentDocumentInfo`, plus
+ *   its `parentProjectUuid`, which says which project that document is in.
+ *
+ * Measured 2026-09-21 they disagreed: `doc.list` named one project as focused
+ * while the document in front belonged to another, and `doc.open` — scoped to
+ * the project the editor has open — then refused a uuid that existed. A caller
+ * about to write therefore has to be able to ask this before acting, and get a
+ * third value — `consistent` — that is `null` rather than `true` when the
+ * comparison cannot be made at all. "The check passed" and "the check could not
+ * run" must never look alike here.
+ *
+ * Read-only in the strict sense: nothing is opened, focused or written; the
+ * parameters are ignored.
+ */
+export const sysIdentity: ActionHandler = async (_params, eda) => {
+  const notes: string[] = [];
+  const index = await openProjectIndex(eda, notes);
+  const focused = withNames(await focusedProject(eda, notes), index);
+  const active = await activeDocument(eda, notes);
+  const activeProject = await activeDocumentProject(eda, active, index, notes);
+
+  // The comparison itself, and *how* it was made. Three bases, because they are
+  // worth different amounts of confidence: two project uuids that were both
+  // read (strong), the focused project's own document listing (weaker — it can
+  // only confirm membership), or nothing at all.
+  let consistent: boolean | null = null;
+  let consistentBasis = 'unavailable';
+  if (active === null) {
+    consistentBasis = 'no-active-document';
+  } else if (activeProject?.projectUuid && focused?.projectUuid) {
+    consistent = activeProject.projectUuid === focused.projectUuid;
+    consistentBasis = 'project-uuid';
+  } else if (focused?.projectUuid) {
+    // The document did not name its project. The one listing that can be read
+    // is the focused project's, and it is only worth an answer when all three
+    // of its enumerations succeeded — a partial listing would report "not in
+    // this project" for a document that simply was not listed.
+    const listingProblems: string[] = [];
+    const rows = await collectDocumentRows(eda, listingProblems, active.uuid);
+    notes.push(...listingProblems);
+    if (listingProblems.length === 0) {
+      consistent = rows.some((row) => row.uuid === active.uuid);
+      consistentBasis = 'focused-project-listing';
+    } else {
+      notes.push(
+        'the active document did not name its project and the focused project\'s listing was '
+          + 'incomplete, so the two layers cannot be compared',
+      );
+    }
+  }
+
+  return {
+    focusedProject: focused,
+    activeDocument: active
+      ? { ...active, project: activeProject }
+      : null,
+    consistent,
+    consistentBasis,
+    pageUuid: active?.uuid ?? null,
+    readOnly: true,
+    ...(notes.length ? { notes } : {}),
   };
 };
 
@@ -5514,6 +6038,7 @@ export function buildHandlers(eda: Eda): Record<string, BoundHandler> {
     'document.current': bind(documentCurrent),
     'sys.probe': bind(sysProbe),
     'sys.self_update': bind(sysSelfUpdate),
+    'sys.identity': bind(sysIdentity),
     'sch.readback': bind(schReadback),
     'lib.symbol.get': bind(libSymbolGet),
     'lib.device.get': bind(libDeviceGet),

@@ -14,19 +14,27 @@ import asyncio
 import base64
 import json
 import struct
+import sys
 import time
 import zlib
 from pathlib import Path
 
 import pytest
 import websockets
+from websockets.protocol import State
 
 from boardwise.bridge.daemon import (
+    AUDIT_CONNECTOR_REJECTED,
     AUDIT_PAIRING,
     AUDIT_REPAIRING,
+    CONNECTOR_ALREADY_ACTIVE,
+    MAX_RECENT_REJECTIONS,
+    MIN_CONNECTOR_VERSION,
     UNKNOWN_CONNECTOR_VERSION,
     AUDIT_REVOKE,
+    ActiveConnector,
     BridgeDaemon,
+    RejectionNotice,
     _bound_port,
     check_origin,
     connector_fingerprint,
@@ -34,6 +42,7 @@ from boardwise.bridge.daemon import (
     load_connector_token,
     revoke_connector_token,
     start_server,
+    status_lines,
 )
 from boardwise.bridge.protocol import (
     EVENT_BANNER,
@@ -655,6 +664,416 @@ def test_fingerprint_is_short_stable_and_not_derivable_by_eye(tmp_path):
     assert fingerprint != connector_fingerprint("b" * 64)
     assert connector_fingerprint(None) is None
     assert connector_fingerprint("") is None
+
+
+# --------------------------------------------------------------------------
+# one active connector at a time (018 §A)
+# --------------------------------------------------------------------------
+
+#: Two editor windows, as the daemon sees them: two sockets, two instance ids,
+#: one shared token (both windows run the same extension install, so the
+#: extension storage — and the pairing record — is the same one).
+WINDOW_A = "inst-101500123-aaaaaaaa"
+WINDOW_B = "inst-101533456-bbbbbbbb"
+
+
+class FakeSocket:
+    """A connector socket whose liveness is whatever the test says it is.
+
+    The daemon reads `state` to decide whether a connector is *attached*, so a
+    double that answers it is the only way to test the reload window at all: in
+    the wild the peer is gone while the handler has not yet run its `finally`,
+    and no amount of sleeping makes a real socket reproduce that ordering
+    reliably.
+    """
+
+    def __init__(self, state: State = State.CLOSED) -> None:
+        self.state = state
+        self.remote_address = ("127.0.0.1", 1)
+        self.sent: list = []
+
+    async def send(self, raw) -> None:
+        self.sent.append(raw)
+
+    async def close(self) -> None:
+        self.state = State.CLOSED
+
+
+def _held_by(instance_id: str = WINDOW_A, version: str = "0.4.4") -> ActiveConnector:
+    return ActiveConnector(
+        instance_id=instance_id,
+        client=f"boardwise-connector/{version}",
+        connector_version=version,
+        peer="127.0.0.1:1",
+        connected_at=time.time(),
+    )
+
+
+def test_a_second_connector_is_refused_while_the_first_is_attached(tmp_path):
+    """The accident this whole section exists to stop.
+
+    Both windows present the **same** paired token, because they share one
+    extension install — so the pairing check cannot tell them apart and used to
+    let the second one displace the first. The two then took turns every few
+    minutes, and each write landed in whichever project the window that happened
+    to be winning had focused (measured 2026-09-21).
+    """
+
+    notices: list[RejectionNotice] = []
+    shared_token = "one-token-for-one-extension-install"
+
+    async def scenario():
+        daemon = BridgeDaemon(token=TOKEN, home=tmp_path, on_rejection=notices.append)
+        server, port = await _start(daemon)
+        async with server:
+            first_ws, first = await _hello(
+                port, "connector", token=shared_token,
+                instanceId=WINDOW_A, connectorVersion="0.4.10",
+            )
+            assert first["ok"] is True
+            assert daemon.active_instance().instance_id == WINDOW_A
+
+            second_ws, second = await _hello(
+                port, "connector", token=shared_token,
+                instanceId=WINDOW_B, connectorVersion="0.4.10",
+            )
+            assert second["ok"] is False
+            assert second["error"]["code"] == CONNECTOR_ALREADY_ACTIVE
+            # The refusal is *said*, then the socket closes: a bare disconnect
+            # would be indistinguishable from a crash on the editor side.
+            with pytest.raises(websockets.ConnectionClosed):
+                await asyncio.wait_for(second_ws.recv(), timeout=5)
+
+            # …and the window that had the bridge still has it.
+            assert daemon.connector is not None
+            assert daemon.active_instance().instance_id == WINDOW_A
+            await first_ws.close()
+
+    run(scenario())
+
+    assert len(notices) == 1
+    assert notices[0].active_instance_id == WINDOW_A
+    assert notices[0].instance_id == WINDOW_B
+    line = "\n".join(notices[0].console_lines())
+    assert "另一个编辑器实例已连接" in line
+    assert "关闭多余的 EasyEDA 窗口" in line
+
+    refusals = [record for record in _audit_records(tmp_path)
+                if record["action"] == AUDIT_CONNECTOR_REJECTED]
+    assert len(refusals) == 1
+    assert refusals[0]["ok"] is False
+    # Both sides of the collision, so the log answers "which two windows" after
+    # the fact — the question that was unanswerable on 2026-09-21.
+    assert refusals[0]["instanceId"] == WINDOW_B
+    assert refusals[0]["activeInstanceId"] == WINDOW_A
+    assert refusals[0]["connectorVersion"] == "0.4.10"
+    assert refusals[0]["peer"], "the refused peer's address is what netstat is compared against"
+
+    greetings = [record for record in _audit_records(tmp_path)
+                 if record["action"] == "hello" and record.get("ok") is True]
+    assert [record["instanceId"] for record in greetings] == [WINDOW_A]
+
+
+def test_connector_already_active_is_declared_once_and_only_in_the_protocol():
+    """The refusal code belongs to the wire vocabulary, not to the daemon (018 §A).
+
+    It was declared in ``daemon.py`` while every other code travelled out of
+    ``ErrorCodes`` — two homes for one vocabulary, and the home that matters is
+    the protocol's, because the connector reading ``error.code`` never imports
+    the daemon. The daemon's name survives as an *alias*: the refusal site, the
+    audit reader and the tests above refer to it by that name, and a second
+    literal would be a second thing to keep in step. ``is`` rather than ``==``
+    on purpose — a copy that happens to spell the same today is exactly the
+    drift this test exists to catch.
+    """
+    from boardwise.bridge import daemon as daemon_module
+
+    assert ErrorCodes.CONNECTOR_ALREADY_ACTIVE == "CONNECTOR_ALREADY_ACTIVE"
+    assert daemon_module.CONNECTOR_ALREADY_ACTIVE is ErrorCodes.CONNECTOR_ALREADY_ACTIVE
+    assert "CONNECTOR_ALREADY_ACTIVE" in daemon_module.__all__
+
+
+def test_every_error_code_is_spelled_as_its_own_name():
+    """``ErrorCodes.X`` and the string on the wire are the same word.
+
+    A code is read by two programs and by hand while reading a log. A value that
+    drifts from its attribute name — or a raise site that invents a literal —
+    stays invisible until someone greps the audit log for the code the source
+    claims, so the spelling is pinned here rather than noticed later.
+    """
+    codes = {name: value for name, value in vars(ErrorCodes).items() if name.isupper()}
+    assert codes, "ErrorCodes has no codes — the test would pass vacuously"
+    assert {name: value for name, value in codes.items() if name != value} == {}
+
+
+def test_a_write_after_a_refusal_reaches_the_instance_that_holds_the_bridge(tmp_path):
+    """The failure mode, end to end: the answer must come from window A.
+
+    An audit record saying "refused" would not prove the routing; the request
+    has to actually arrive on the socket that holds the bridge, which is the
+    thing that was wrong when writes landed in the wrong project.
+    """
+    canned = {"components": [{"designator": "U1"}]}
+
+    async def scenario():
+        daemon = _daemon(tmp_path)
+        server, port = await _start(daemon)
+        async with server:
+            first_ws, _ = await _hello(port, "connector", token="t", instanceId=WINDOW_A)
+            fake = FakeConnector(first_ws, responses={"pcb.readback": canned})
+            task = asyncio.create_task(fake.serve())
+
+            second_ws, second = await _hello(port, "connector", token="t", instanceId=WINDOW_B)
+            assert second["error"]["code"] == CONNECTOR_ALREADY_ACTIVE
+            await second_ws.close()
+
+            cli_ws, _ = await _hello(port, "cli")
+            await cli_ws.send(request_frame("pcb.readback", {}, id="r"))
+            reply = decode_frame(await cli_ws.recv())
+            assert reply["ok"] is True
+            assert reply["data"] == canned
+            assert len(fake.received) == 1, "the refused window must receive nothing"
+
+            task.cancel()
+            await first_ws.close()
+            await cli_ws.close()
+
+    run(scenario())
+
+
+@pytest.mark.parametrize("state", [State.CLOSED, State.CLOSING])
+def test_a_dead_socket_is_taken_over_without_a_fuss(tmp_path, state):
+    """The reload path, which has to stay smooth.
+
+    The socket is dead while `self.connector` is still set — exactly the state a
+    reload leaves behind, because the handler's `finally` has not run yet.
+    Nobody is being displaced, so the newcomer takes the bridge; refusing here
+    would leave the extension dead until the daemon was restarted.
+    """
+
+    async def scenario():
+        daemon = _daemon(tmp_path)
+        daemon.connector = FakeSocket(state)
+        daemon.active = _held_by()
+        server, port = await _start(daemon)
+        async with server:
+            ws, reply = await _hello(port, "connector", token="t", instanceId=WINDOW_B)
+            assert reply["ok"] is True
+            # The dead holder is gone from the daemon's books, not just stopped.
+            assert daemon.active_instance().instance_id == WINDOW_B
+            assert not isinstance(daemon.connector, FakeSocket)
+            await ws.close()
+
+    run(scenario())
+
+    assert not [record for record in _audit_records(tmp_path)
+                if record["action"] == AUDIT_CONNECTOR_REJECTED]
+    greeting = next(record for record in _audit_records(tmp_path)
+                    if record["action"] == "hello" and record.get("ok") is True)
+    assert greeting["instanceId"] == WINDOW_B
+    assert greeting["tookOverFrom"] == WINDOW_A, "the log names what it replaced"
+
+
+def test_a_connector_without_an_instance_id_is_named_by_its_connection(tmp_path):
+    """Old builds keep working, and the daemon does not pretend otherwise.
+
+    A connector that predates `instanceId` must still connect — refusing every
+    existing install to add a diagnostic field would be a strange trade — so the
+    daemon invents an id for the *connection* and records that it did.
+    """
+
+    async def scenario():
+        daemon = _daemon(tmp_path)
+        server, port = await _start(daemon)
+        async with server:
+            first_ws, first = await _hello(port, "connector", token="t")
+            assert first["ok"] is True
+            first_instance = daemon.active_instance()
+            assert first_instance is not None
+            assert first_instance.instance_id.startswith("conn-")
+            assert first_instance.instance_id_source == "connection"
+            await first_ws.close()
+            await _until(lambda: daemon.connector is None)
+
+            # Per connection, not per daemon: the second socket gets its own.
+            second_ws, second = await _hello(port, "connector", token="t")
+            assert second["ok"] is True
+            assert daemon.active_instance().instance_id != first_instance.instance_id
+            await second_ws.close()
+
+    run(scenario())
+
+    greetings = [record for record in _audit_records(tmp_path)
+                 if record["action"] == "hello" and record.get("ok") is True]
+    assert len(greetings) == 2
+    assert all(record["instanceIdSource"] == "connection" for record in greetings)
+    assert greetings[0]["instanceId"] != greetings[1]["instanceId"]
+
+
+def test_hello_ack_announces_the_minimum_connector_version(tmp_path):
+    """The one field the extension needs to say "please update" (018 §A/§B)."""
+
+    async def scenario():
+        daemon = _daemon(tmp_path)
+        server, port = await _start(daemon)
+        async with server:
+            ws, reply = await _hello(port, "connector", instanceId=WINDOW_A)
+            assert reply["data"]["minConnectorVersion"] == MIN_CONNECTOR_VERSION
+            await ws.close()
+
+    run(scenario())
+
+    # Pinned as a literal: the constant is what the connector compares against,
+    # so a silent rename or a bump nobody told the connector about would show up
+    # here rather than as a toast that never appears.
+    assert MIN_CONNECTOR_VERSION == "0.4.10"
+
+
+def test_ping_reports_the_active_instance_and_the_refusals(tmp_path):
+    """What `bridge status` reads to answer "who is connected?"."""
+
+    async def scenario():
+        daemon = BridgeDaemon(token=TOKEN, home=tmp_path, on_rejection=lambda notice: None)
+        server, port = await _start(daemon)
+        async with server:
+            conn_ws, _ = await _hello(port, "connector", token="t", instanceId=WINDOW_A,
+                                      connectorVersion="0.4.10")
+            cli_ws, _ = await _hello(port, "cli")
+
+            await cli_ws.send(request_frame("ping", {}, id="p1"))
+            data = decode_frame(await cli_ws.recv())["data"]
+            assert data["connector"] is True
+            assert data["activeInstance"]["instanceId"] == WINDOW_A
+            assert data["activeInstance"]["connectorVersion"] == "0.4.10"
+            assert data["activeInstance"]["instanceIdSource"] == "hello"
+            assert data["recentRejections"] == []
+
+            for index in range(MAX_RECENT_REJECTIONS + 2):
+                extra_ws, refused = await _hello(
+                    port, "connector", token="t", instanceId=f"inst-extra-{index}",
+                )
+                assert refused["error"]["code"] == CONNECTOR_ALREADY_ACTIVE
+                await extra_ws.close()
+
+            await cli_ws.send(request_frame("ping", {}, id="p2"))
+            data = decode_frame(await cli_ws.recv())["data"]
+            assert len(data["recentRejections"]) == MAX_RECENT_REJECTIONS, (
+                "bounded: a refused window retries, so this list may not grow forever"
+            )
+            assert data["recentRejections"][0]["instanceId"] == (
+                f"inst-extra-{MAX_RECENT_REJECTIONS + 1}"
+            ), "newest first — the one just refused is the interesting one"
+
+            await conn_ws.close()
+            await cli_ws.close()
+
+    run(scenario())
+
+
+def test_status_lines_are_silent_when_there_is_nothing_to_say():
+    """A daemon with no connector and no refusals prints what it always did."""
+    assert status_lines({}) == []
+    assert status_lines({"connector": False, "recentRejections": []}) == []
+
+
+def test_status_lines_name_the_instance_and_the_refusals():
+    lines = status_lines({
+        "activeInstance": {
+            "instanceId": WINDOW_A, "instanceIdSource": "hello", "client": "boardwise-connector",
+            "connectorVersion": "0.4.10", "peer": "127.0.0.1:51234", "connectedAt": 1790000000.0,
+        },
+        "recentRejections": [{
+            "ts": 1790000100.0, "instanceId": WINDOW_B, "connectorVersion": None,
+            "reason": "another editor instance is already connected",
+        }],
+    })
+    assert any(WINDOW_A in line and "connector 0.4.10" in line for line in lines)
+    assert any(WINDOW_B in line and UNKNOWN_CONNECTOR_VERSION in line for line in lines)
+    assert any("peer: 127.0.0.1:51234" in line for line in lines)
+    assert all(line.startswith("  ") for line in lines)
+
+
+def test_status_lines_mark_an_id_the_daemon_had_to_invent():
+    """An invented id must not read like a claimed one."""
+    lines = status_lines({"activeInstance": {
+        "instanceId": "conn-0123456789abcdef", "instanceIdSource": "connection",
+        "connectorVersion": None,
+    }})
+    assert any("no instanceId sent" in line for line in lines)
+
+
+def test_the_daemon_prints_the_refusal_line_when_nobody_listens(tmp_path, capsys):
+    """`bridge start` installs no callback, so the daemon prints it itself.
+
+    The line is the whole safety mechanism (018 §A): it is the only thing that
+    tells the user two windows are fighting over the bridge, and the process
+    that happens to own the console is an implementation detail.
+    """
+
+    async def scenario():
+        daemon = _daemon(tmp_path)
+        server, port = await _start(daemon)
+        async with server:
+            first_ws, _ = await _hello(port, "connector", token="t",
+                                       instanceId=WINDOW_A, connectorVersion="0.4.10")
+            second_ws, refused = await _hello(port, "connector", token="t",
+                                              instanceId=WINDOW_B, connectorVersion="0.4.4")
+            assert refused["error"]["code"] == CONNECTOR_ALREADY_ACTIVE
+            await second_ws.close()
+            await first_ws.close()
+
+    run(scenario())
+
+    printed = capsys.readouterr().out
+    assert "另一个编辑器实例已连接" in printed
+    assert WINDOW_A in printed
+    assert "connector 0.4.10" in printed, "name the holder's build, not the refused one's"
+
+
+def test_the_refusal_is_still_said_on_a_console_that_cannot_render_chinese(
+    tmp_path, monkeypatch
+):
+    """A non-CJK code page must not swallow the one warning the user gets.
+
+    On a Windows console that is not UTF-8 or GBK, printing the Chinese line
+    raises `UnicodeEncodeError`. The daemon then says the same thing in ASCII
+    rather than saying nothing — losing this line would leave the user with two
+    windows fighting over the bridge and no explanation.
+    """
+
+    class AsciiOnlyConsole:
+        """A stdout whose encoding refuses anything above U+007F."""
+
+        def __init__(self) -> None:
+            self.text = ""
+
+        def write(self, text: str) -> None:
+            text.encode("ascii")  # raises UnicodeEncodeError, like the real one
+            self.text += text
+
+        def flush(self) -> None:
+            pass
+
+    console = AsciiOnlyConsole()
+    monkeypatch.setattr(sys, "stdout", console)
+
+    async def scenario():
+        daemon = _daemon(tmp_path)
+        server, port = await _start(daemon)
+        async with server:
+            first_ws, _ = await _hello(port, "connector", token="t",
+                                       instanceId=WINDOW_A, connectorVersion="0.4.10")
+            second_ws, refused = await _hello(port, "connector", token="t",
+                                              instanceId=WINDOW_B)
+            assert refused["error"]["code"] == CONNECTOR_ALREADY_ACTIVE
+            await second_ws.close()
+            await first_ws.close()
+
+    run(scenario())
+
+    assert "another editor instance is already connected" in console.text
+    assert WINDOW_A in console.text
+    assert console.text.isascii(), "the fallback must be encodable by definition"
 
 
 # --------------------------------------------------------------------------

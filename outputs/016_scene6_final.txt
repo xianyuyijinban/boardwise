@@ -1,0 +1,39 @@
+016 场景 6 终裁（2026-09-22 09:5x–10:1x，Kimi 亲跑）——PASS，saved_verified
+=====================================================================
+
+**推翻今晨 `016_scene6_result.txt` 的 FAIL 误判**（该文件保留作教训记录，勿再引用其结论）。
+
+最终事实链
+----------
+1. 岳关闭整个编辑器并重开 test 工程（无保存弹窗），今晨 08:58 readback P4 只剩 sheet
+   ——**这是编辑器重开后的陈旧视图**（半离线本地服务端同步滞后），非器件丢失。
+2. ~09:03 同步追平，昨晚的 R1（uuid d815177955d60842）**原样复活**（MPN/位号/uuid 全同），
+   岳随后手放的电阻拿到位号 R2 即佐证（他放置时 R1 已在）。
+3. 岳重导工程备份（覆盖 outputs/ProPrj_test_2026-09-22.epro2，与昨晚导出 #1 同名——
+   "替换"实为同名覆盖）。
+4. `review --view schematic`：**3 components / 6 nets，findings 0/0/0**——
+   wave② 的 param-value-mpn-match WARN（R1 4.7k vs MPN 1k）消失 = **resolved**。
+   证据：016_scene6_review2.json/.md。
+5. 防伪 resolved 核验（导出原始记录直读）：R1（d815177955d60842）ATTR 列表含
+   `Value = "1k"`、Manufacturer Part = "FRC0805J102 TS"、Supplier Part = "C2907295"
+   ——规则是**看到 1k 与 MPN 一致而通过**，不是没读到值而跳过。
+6. 现场清理：bridge 删 R1+R3（实验件）→ readback 剩 sheet+R2（岳手件，保留）→ save ✓。
+
+结论
+----
+- 016 全链闭环达成：plan → preview → apply → save → **整编辑器重启** → 导出 → 复查
+  resolved。persistence 终态 = **saved_verified**。016 六个场景全部落定
+  （1/2/3/5 波②已过，4 不可模拟，6 本次 PASS）。
+- **审查链"保存并验证持久化"在器件级成立**——今晨的"save 器件级失效"判断错误，撤回。
+
+两个真教训（进 skill 坑表）
+--------------------------
+A. **编辑器重开后同步滞后**：重开短时间内 readback 可能读到旧视图（器件"消失"），
+   同步追平后恢复。harness 在编辑器重启后**必须等同步/二次确认再信读数**，
+   否则会误判丢失、甚至重复放置。
+B. **review .epro2 缺省 view=board**：原理图内容的审查必须 `--view schematic`。
+   缺省 view 对 PCB 为空的工程报 "0 components" 且**不给出任何提示**——
+   今晨误判的帮凶（我把缺省 view 的 0 组件当成了导出缺内容）。
+   朋友 UX 改进候选：view=board 且 0 组件 0 焊盘时提示"试试 --view schematic"。
+C.（自身）临时脚本读 geometry 用了不存在的 `parts` 键（恒空）——geometry 响应键是
+   `components/wires/pins/netlabels/bboxes/meta`。"双通道确认"当时只有 readback 有效。

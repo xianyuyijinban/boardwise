@@ -164,10 +164,16 @@ boardwise doctor: 7/7 项通过
 ## 第 5 步 · 第一次设计审查（review + 画到编辑器上）
 
 **5.1 跑离线审查**（不需要编辑器，读的是工程备份或网表文件）：
-
 ```bash
-boardwise review path/to/board.epro2 --json report.json --md report.md
+# 第一次审查多半是"原理图刚画完"：.epro2 的 --view 缺省是 pcb，这里显式选原理图视图
+boardwise review path/to/board.epro2 --view schematic --json report.json --md report.md
+boardwise review --latest  # 不知道导出文件在哪：自动挑目录里最新的 .epro2，缺省扫 ~/Downloads、~/Desktop、E:\LC Project
 ```
+
+审板级内容（焊盘 / 走线 / 过孔）用 `--view pcb`（缺省）：只画了原理图的工程在 pcb 视图里
+读到的是 0 器件 0 网络，这时终端会补一行
+`note: pcb view read nothing from this file — for a schematic review, re-run with --view schematic`，
+`--md` 报告的中文摘要里也有对应的中文提示——见到它就把 `--view schematic` 加上。
 
 预期：终端里打印每条发现，一行一条；`report.json` / `report.md` 是同一份结果的两种格式。
 退出码 `1` 表示有 ERROR 级发现（这是"发现问题"，不是命令失败）、`0` 表示没有、`2` 表示文件读不了
