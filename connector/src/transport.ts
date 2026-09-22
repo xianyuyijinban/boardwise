@@ -233,10 +233,34 @@ export class Transport {
     this.options.onLog?.(message);
   }
 
-  /** Connect now. Never throws: a failure schedules a retry. */
+  /**
+   * Connect now. Never throws: a failure schedules a retry.
+   *
+   * Idempotent since 0.4.12 (024). `activate()` can now arrive *after* the
+   * module-load bootstrap has already opened the socket, and a second
+   * `start()` on a live attempt would register a second socket — the editor
+   * keys connections by the id we choose, and we choose a fresh id per attempt,
+   * so nothing would collapse the two. `connecting`, `handshaking` and
+   * `connected` all mean "an attempt is already on the wire"; only `idle`,
+   * `reconnecting` and `stopped` have nothing there.
+   */
   async start(): Promise<void> {
     this.stopped = false;
+    if (this.isLive()) return;
+    if (this.reconnectTimer) {
+      // An explicit start supersedes a scheduled retry, which would otherwise
+      // register a second socket a moment later.
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
     await this.connect();
+  }
+
+  /** Is there already an attempt on the wire? See {@link start}. */
+  private isLive(): boolean {
+    return (
+      this.state === 'connecting' || this.state === 'handshaking' || this.state === 'connected'
+    );
   }
 
   stop(): void {
@@ -633,5 +657,204 @@ async function readWithDeadline(
     return undefined;
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/**
+ * ─── Cross-evaluation runtime registry (024) ─────────────────────────────
+ *
+ * 立创 EDA 3.2.149 never dispatches `activate()` for a user extension: the host
+ * initialises its extension registry before the user info the gate depends on
+ * exists, then skips the pass (upstream issues #219/#221). The connector's
+ * answer is to start from the module load — which raises the next problem. The
+ * editor evaluates the bundle more than once in the same process (every menu
+ * click does), so without something shared, each evaluation would build its own
+ * controller: a second socket to the same daemon, a second reconnect loop, and
+ * its own idea of what is connected.
+ *
+ * So the first evaluation publishes its controller on the editor's own
+ * per-extension object (`eda`) under {@link SHARED_RUNTIME_KEY}, and a later
+ * evaluation of the same build reuses it. {@link sharedRuntimeImplementation}
+ * is the signature that makes "the same build" checkable: `cross-eval-v1` names
+ * the *shape* of the record, the connector version names the build. A record
+ * that is not an exact signature match is a different build (or an older
+ * connector that never published one) — its `stop` is called, best-effort, and
+ * this evaluation publishes in its place.
+ *
+ * This module owns the *mechanics* only — publish, look up, retire. What the
+ * controller does is the caller's business, which is also why the host object
+ * is a parameter: `facade.ts` is the only module allowed to touch `eda`, and a
+ * stand-in host is what makes the mechanism testable in Node at all.
+ */
+
+/** Where the published controller lives. Chosen for the editor's own object. */
+export const SHARED_RUNTIME_KEY = '__boardwiseTransportRuntime';
+
+/**
+ * The record's shape, appended to the connector version.
+ *
+ * Bump it when the members below change meaning: two builds that disagree about
+ * the shape must not hand each other their controllers, and the version alone
+ * would not catch a change to what the members *are*.
+ */
+export const SHARED_RUNTIME_EPOCH = 'cross-eval-v1';
+
+/** `<version>:cross-eval-v1` — the whole point of the check. */
+export function sharedRuntimeImplementation(version: string): string {
+  return `${version}:${SHARED_RUNTIME_EPOCH}`;
+}
+
+/**
+ * The members a published record must carry to be usable by another evaluation.
+ *
+ * Validated by reading, not by trusting the key: the object on the host belongs
+ * to the editor, and anything could be sitting under it.
+ */
+const SHARED_RUNTIME_MEMBERS = ['start', 'stop', 'bootstrapFromModuleLoad', 'getStatus'] as const;
+
+export interface SharedRuntimeLookup<T> {
+  /** The controller to use: ours, or the one already published. */
+  runtime: T;
+  /** True when this lookup created it (i.e. this evaluation ran the bootstrap). */
+  created: boolean;
+  /** True when {@link SHARED_RUNTIME_KEY} now holds that controller. */
+  published: boolean;
+  /** The signature of the record this evaluation replaced, when there was one. */
+  retired?: string;
+}
+
+function isReusableRuntime(value: unknown, implementation: string): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Record<string, unknown>;
+  if (candidate.implementation !== implementation) return false;
+  return SHARED_RUNTIME_MEMBERS.every((member) => typeof candidate[member] === 'function');
+}
+
+/**
+ * Publish a controller on the host, or report that the host would not take it.
+ *
+ * Both writes are attempted because the two ways this fails are real and
+ * different: a frozen or sealed object refuses `defineProperty`, a `Proxy` host
+ * may refuse assignment instead. A host that takes neither still runs the
+ * controller — this evaluation just has no way to hand it to the next one, and
+ * the caller says so in the log panel rather than pretending otherwise.
+ */
+function publishSharedRuntime(host: Record<string, unknown>, runtime: unknown): boolean {
+  try {
+    Object.defineProperty(host, SHARED_RUNTIME_KEY, {
+      configurable: true,
+      enumerable: false,
+      value: runtime,
+      writable: true,
+    });
+    return true;
+  } catch {
+    /* frozen, sealed, or a refusing proxy — try the plain write */
+  }
+  try {
+    host[SHARED_RUNTIME_KEY] = runtime;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The published controller, when the host carries one this build can use.
+ *
+ * The read-only half of {@link getOrCreateSharedRuntime}: what it answers is
+ * either the controller that owns this editor runtime or nothing, and the
+ * caller decides what to do with "nothing" (publish its own, or keep the one it
+ * already built before the host was reachable).
+ */
+export function readSharedRuntime<T extends { implementation: string }>(
+  host: Record<string, unknown> | undefined,
+  implementation: string,
+): T | undefined {
+  if (!host) return undefined;
+  const existing = host[SHARED_RUNTIME_KEY];
+  return isReusableRuntime(existing, implementation) ? (existing as T) : undefined;
+}
+
+/**
+ * Publish a controller built before the host was reachable, without overwriting.
+ *
+ * The narrow case this covers: the bundle was evaluated before the editor bound
+ * `eda`, so there was nothing to publish to. When the host appears later, the
+ * controller that already owns everything should become visible to later
+ * evaluations — but only if nothing is under the key yet. Anything that *is*
+ * there belongs to another evaluation, and two controllers overwriting each
+ * other is worse than one staying local.
+ */
+export function publishSharedRuntimeIfEmpty(
+  host: Record<string, unknown> | undefined,
+  runtime: unknown,
+): boolean {
+  if (!host) return false;
+  if (host[SHARED_RUNTIME_KEY] !== undefined) return false;
+  return publishSharedRuntime(host, runtime);
+}
+
+/**
+ * The controller that owns this editor runtime: the published one, or a new one.
+ *
+ * `create` runs only when there is nothing to reuse, so a re-evaluation never
+ * builds a second controller and never reaches for a second socket.
+ */
+export function getOrCreateSharedRuntime<T extends { implementation: string }>(
+  host: Record<string, unknown> | undefined,
+  implementation: string,
+  create: () => T,
+): SharedRuntimeLookup<T> {
+  if (!host) {
+    // No editor to publish to — the Node case, and the case of a host that
+    // binds its global a macrotask late. This evaluation owns its controller,
+    // unchanged from before this mechanism existed.
+    return { runtime: create(), created: true, published: false };
+  }
+
+  const existing = host[SHARED_RUNTIME_KEY];
+  if (isReusableRuntime(existing, implementation)) {
+    return { runtime: existing as T, created: false, published: false };
+  }
+
+  // Something else is there: a different build, or a record from a connector
+  // that predates this mechanism. Retire it before publishing, so its socket
+  // and its reconnect timer do not outlive the build that made them. Best
+  // effort by design — an old build's `stop` throwing must not stop us.
+  let retired: string | undefined;
+  if (existing && typeof existing === 'object') {
+    const stale = existing as { implementation?: unknown; stop?: unknown };
+    retired = typeof stale.implementation === 'string' ? stale.implementation : 'unknown build';
+    if (typeof stale.stop === 'function') {
+      try {
+        (stale.stop as () => void).call(existing);
+      } catch {
+        /* a stale controller that cannot stop is still stale */
+      }
+    }
+  }
+
+  const runtime = create();
+  const published = publishSharedRuntime(host, runtime);
+  return { runtime, created: true, published, ...(retired ? { retired } : {}) };
+}
+
+/**
+ * Forget the published controller, when it is still the one we published.
+ *
+ * Called on deactivation: the next extension load must be free to install its
+ * own controller rather than inherit a stopped one.
+ */
+export function releaseSharedRuntime(host: Record<string, unknown> | undefined, runtime: unknown): void {
+  if (!host || host[SHARED_RUNTIME_KEY] !== runtime) return;
+  try {
+    delete host[SHARED_RUNTIME_KEY];
+  } catch {
+    try {
+      host[SHARED_RUNTIME_KEY] = undefined;
+    } catch {
+      /* the stopped controller stays on the host, inert */
+    }
   }
 }
