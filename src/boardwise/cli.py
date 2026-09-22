@@ -6,24 +6,59 @@ import argparse
 import re
 import sys
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from .engines.review import (
+    BUILTIN_RULES,
+    finding_refs,
     render_json,
     render_markdown,
     run_review,
     severity_counts,
 )
 from .engines.generate import DEFAULT_NAMING_STRATEGY, NAMING_STRATEGIES
+from .core.changeplan import (
+    COMPONENT_VALUE_KIND,
+    ChangePlan,
+    ChangePlanError,
+    PlanSource,
+    component_value_plan,
+    resolve_on_page,
+    sha256_of,
+)
 from .parsers.enet import parse_enet
 from .parsers.epro2_model import build_design_model
 from .parsers.epru import EncryptedProjectError, build_board_geometry, load_epro2_source
+from .rules.i18n import EMPTY_PCB_VIEW_HINT, finding_line, summary_section
 
 #: Input extensions the reviewer understands, and what each one is.
 SUPPORTED_SUFFIXES: dict[str, str] = {
     ".enet": "schematic netlist export",
     ".epro2": "project backup (board + netlist, one file)",
 }
+
+#: Where `boardwise review --latest` looks when no directory is given
+#: (task 018 §C.1): the three places an export actually lands for this user —
+#: the browser's download folder, the desktop (where 立创's "导出" often saves),
+#: and the editor's default project root. A directory that does not exist is
+#: not an error: it is simply not scanned.
+LATEST_DEFAULT_DIRS: tuple[str, ...] = ("~/Downloads", "~/Desktop", "E:/LC Project")
+
+#: The suffix `--latest` recognises, matched case-insensitively (a copy of an
+#: export can arrive as `.EPRO2`).
+PROJECT_BACKUP_SUFFIX = ".epro2"
+
+#: Printed (task 019 §1) when the pcb view of a `.epro2` reads nothing at all.
+#: The most likely reason is that the export carries only a schematic, and the
+#: default view cannot say that by itself: the run then reports "0 components,
+#: 0 nets" as a fact and the reader concludes the export is empty. English,
+#: like the rest of the console output. Fires on
+#: :func:`_pcb_view_read_nothing` only — never on a board with content.
+EMPTY_PCB_VIEW_NOTE = (
+    "note: pcb view read nothing from this file — for a schematic review, "
+    "re-run with --view schematic"
+)
 
 
 def _bridge_help_epilog() -> str:
@@ -54,7 +89,26 @@ def build_parser() -> argparse.ArgumentParser:
         "review", help="Review an EasyEDA .enet netlist or .epro2 backup offline."
     )
     review.add_argument(
-        "file", help="Path to the .enet netlist or .epro2 project backup."
+        "file",
+        nargs="?",
+        help=(
+            "Path to the .enet netlist or .epro2 project backup. Omit it when "
+            "using --latest."
+        ),
+    )
+    review.add_argument(
+        "--latest",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="DIR",
+        help=(
+            "Review the most recently modified .epro2 in DIR (one level of "
+            "subdirectories included) instead of naming a file. Without DIR, "
+            "the defaults are scanned: ~/Downloads, ~/Desktop, E:\\LC Project "
+            "(only the ones that exist). Mutually exclusive with the file "
+            "argument."
+        ),
     )
     review.add_argument(
         "--json", dest="json_path", metavar="PATH", help="Write a JSON report."
@@ -255,6 +309,125 @@ def build_parser() -> argparse.ArgumentParser:
         "--json", dest="json_path", metavar="PATH", help="Write the machine-readable result."
     )
     review_mark.add_argument(
+        "--port", type=int, default=None, help="Daemon port (default 61190)."
+    )
+
+    edit = sub.add_parser(
+        "edit",
+        help=(
+            "Review-to-local-edit (task 016): turn one review finding into an "
+            "authorised, verified change of a single component's value."
+        ),
+        description=(
+            "The M3 loop's middle: `edit plan` turns one finding into a "
+            "ChangePlan (data, inspectable), `edit preview` re-checks it "
+            "offline against the snapshot, `edit apply` executes it on the live "
+            "canvas — one write, then a read-back, a save and a re-review. Only "
+            "`param-value-mpn-match` findings are repairable in this slice; a "
+            "plan for anything else is refused by name. Exit 0 applied (or "
+            "already applied) / 2 the promised effect is not on the board (a "
+            "refused write, a read-back that disagrees, a save the editor "
+            "refused, a re-review that still reports the finding) / 3 the "
+            "page's state cannot be stated (a timeout or a dropped connection; "
+            "nothing is retried) / 4 a precondition of the plan no longer "
+            "holds, or the snapshot is stale / 5 the plan or the input is "
+            "unusable."
+        ),
+    )
+    edit_sub = edit.add_subparsers(dest="edit_command", required=True)
+
+    edit_plan = edit_sub.add_parser(
+        "plan",
+        help="Offline: read a finding and write the ChangePlan that would fix it.",
+        description=(
+            "Parse the snapshot, run one rule, take the VIOLATION finding for "
+            "that designator and assemble the plan. Refuses (exit 5) when the "
+            "rule is unknown, is not repairable, has no violation there, or the "
+            "designator is ambiguous in the file — a plan that cannot be acted "
+            "on is worse than no plan."
+        ),
+    )
+    edit_plan.add_argument(
+        "--file", required=True, help="The .epro2 / .enet snapshot the plan is built against."
+    )
+    edit_plan.add_argument(
+        "--rule", required=True, help="Rule id whose finding the plan repairs (e.g. param-value-mpn-match)."
+    )
+    edit_plan.add_argument(
+        "--designator", required=True, help="The component to change, e.g. U3."
+    )
+    edit_plan.add_argument(
+        "--after", default=None,
+        help="The value to write (default: the finding's own suggested value).",
+    )
+    edit_plan.add_argument(
+        "-o", "--out", dest="out_path", default=None, metavar="PATH",
+        help="Write the ChangePlan JSON here (default: print it to stdout).",
+    )
+    edit_plan.add_argument(
+        "--json", dest="json_path", metavar="PATH", help="Write the machine-readable result."
+    )
+    edit_plan.add_argument(
+        "--view", choices=("schematic", "pcb"), default="schematic",
+        help=(
+            "Which model of a .epro2 to parse (default: schematic — the view the "
+            "011-family rules are written against; a schematic-only export's pcb "
+            "view is empty)."
+        ),
+    )
+
+    edit_preview = edit_sub.add_parser(
+        "preview",
+        help="Offline: check the plan against the snapshot and print the diff.",
+        description=(
+            "Re-read --file, compare its sha256 with the plan's, re-parse it and "
+            "confirm the target is still there with the value the plan expects. "
+            "Exit 4 for a stale snapshot or a target that moved; nothing is "
+            "written, ever. --file is required: the plan carries the input's "
+            "hash, not its path, so without the file there is nothing to check."
+        ),
+    )
+    edit_preview.add_argument("plan", help="The ChangePlan JSON `edit plan` wrote.")
+    edit_preview.add_argument(
+        "--file", default=None, help="The snapshot the plan was built against."
+    )
+    edit_preview.add_argument(
+        "--json", dest="json_path", metavar="PATH", help="Write the machine-readable result."
+    )
+    edit_preview.add_argument(
+        "--view", choices=("schematic", "pcb"), default="schematic",
+        help="Which model of a .epro2 to parse (default: schematic).",
+    )
+
+    edit_apply = edit_sub.add_parser(
+        "apply",
+        help="On the live canvas: re-check, write once, read back, save, re-review.",
+        description=(
+            "The four protections, in order: re-read the page and refuse a stale "
+            "snapshot; write exactly one key on exactly one primitive; verify "
+            "with the action's own read-back **and** an independent geometry "
+            "read; and treat a timeout or a dropped connection as unknown — read "
+            "the page back and never retry. Then `sch.doc.save` and a re-review "
+            "against --file. A repeated run recognises the value is already "
+            "there and writes nothing (exit 0, already_applied)."
+        ),
+    )
+    edit_apply.add_argument("plan", help="The ChangePlan JSON `edit plan` wrote.")
+    edit_apply.add_argument(
+        "--file", default=None,
+        help=(
+            "The snapshot to re-review after the save. Without it the re-review "
+            "is reported as unknown — it is never claimed."
+        ),
+    )
+    edit_apply.add_argument(
+        "--json", dest="json_path", metavar="PATH", help="Write the machine-readable result."
+    )
+    edit_apply.add_argument(
+        "--view", choices=("schematic", "pcb"), default="schematic",
+        help="Which model of a .epro2 to re-parse (default: schematic).",
+    )
+    edit_apply.add_argument(
         "--port", type=int, default=None, help="Daemon port (default 61190)."
     )
 
@@ -767,8 +940,240 @@ def _cmd_compare(args: argparse.Namespace) -> int:
     return 0 if report.is_empty else 1
 
 
+def _safe_iterdir(directory: Path) -> list[Path]:
+    """``directory``'s entries, sorted; an unreadable directory reads as empty.
+
+    `--latest` is a convenience: a permission error on one subdirectory must
+    not make the whole review fail, it just contributes no candidate.
+    """
+    try:
+        return sorted(directory.iterdir())
+    except OSError:
+        return []
+
+
+def _is_project_backup(path: Path) -> bool:
+    return path.is_file() and path.suffix.lower() == PROJECT_BACKUP_SUFFIX
+
+
+def _project_backups(directory: Path) -> list[Path]:
+    """The `.epro2` files in *directory* and **one level** below it.
+
+    One level, not a full walk: 立创 writes the export next to the project, and
+    a recursive search would wander trees nobody exported into and then pick
+    the wrong file with confidence.
+    """
+    found: list[Path] = []
+    for entry in _safe_iterdir(directory):
+        if entry.is_dir():
+            found.extend(
+                path for path in _safe_iterdir(entry) if _is_project_backup(path)
+            )
+        elif _is_project_backup(entry):
+            found.append(entry)
+    return found
+
+
+def _newest_project_backup(directories: list[Path]) -> Path | None:
+    """The most recently modified `.epro2` among *directories*, or ``None``.
+
+    Ties are broken by path so that two files written inside the same
+    nanosecond still give exactly one answer: the pick is a claim printed to
+    the user and must be repeatable.
+    """
+    candidates: list[tuple[int, str, Path]] = []
+    for directory in directories:
+        if not directory.is_dir():
+            continue
+        for path in _project_backups(directory):
+            try:
+                stamp = path.stat().st_mtime_ns
+            except OSError:
+                continue
+            candidates.append((stamp, str(path), path))
+    if not candidates:
+        return None
+    return max(candidates)[2]
+
+
+def _latest_scan_dirs(spec: str) -> list[Path]:
+    """The directories `--latest` scans: the one given, or the defaults that exist."""
+    if spec:
+        return [Path(spec).expanduser()]
+    return [
+        path
+        for path in (Path(raw).expanduser() for raw in LATEST_DEFAULT_DIRS)
+        if path.is_dir()
+    ]
+
+
+def _review_source(args: argparse.Namespace) -> str | None:
+    """The file to review, spelled as it will be reported: the positional
+    argument as given, or the path `--latest` picked.
+
+    Prints the pick (path + mtime) before the review starts, because "最新" is
+    only useful if it says which export it means — the user is the one who
+    knows whether the newest export is the right one. Returns ``None`` after
+    printing the reason when the input cannot be resolved (exit code 2, bad
+    usage).
+    """
+    if args.latest is None:
+        if not args.file:
+            print(
+                "boardwise review: give a file, or --latest [<目录>]",
+                file=sys.stderr,
+            )
+            return None
+        return args.file
+
+    if args.file:
+        print(
+            "boardwise review: give either a file or --latest, not both "
+            "(--latest picks the newest .epro2 itself)",
+            file=sys.stderr,
+        )
+        return None
+
+    directories = _latest_scan_dirs(args.latest)
+    if not directories:
+        print(
+            "boardwise review --latest: 默认目录都不存在（"
+            + "、".join(LATEST_DEFAULT_DIRS)
+            + "）; give one: boardwise review --latest <目录>",
+            file=sys.stderr,
+        )
+        return None
+    missing = [path for path in directories if not path.is_dir()]
+    if missing:
+        print(
+            "boardwise review --latest: "
+            + "、".join(str(path) for path in missing)
+            + " 不是一个目录",
+            file=sys.stderr,
+        )
+        return None
+
+    chosen = _newest_project_backup(directories)
+    if chosen is None:
+        print(
+            "boardwise review --latest: 这些目录里没有 .epro2（已含一层子目录）："
+            + "、".join(str(path) for path in directories),
+            file=sys.stderr,
+        )
+        return None
+    stamp = datetime.fromtimestamp(chosen.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+    print(f"boardwise review --latest: 选中 {chosen}（最后修改 {stamp}）")
+    return str(chosen)
+
+
+def _finding_refs_for_summary(finding, designators: set[str]) -> list[str]:
+    """A finding's designators, for the Chinese summary.
+
+    Read the same way `review-mark` reads them (:func:`finding_refs`), plus the
+    plan target when there is one — a repairable finding names the part it
+    would change even if its prose does not (task 016's `target`).
+
+    Then kept only if the board actually has that designator. The reader is an
+    allow-list of *prefixes* (`RT`, `C`, `U`, …) applied to prose, so a part
+    number sneaks through: on the injected value-mpn board the LED rule's
+    evidence says "per U5 RT9013-33GB output", and `RT9013` reads as a preset
+    designator. Naming a part the board does not contain would be worse than
+    naming none (the Chinese line is the one a reader trusts fastest).
+    """
+    refs = [ref for ref in finding_refs(finding) if ref in designators]
+    target = getattr(finding, "target", None)
+    designator = getattr(target, "component_ref", "") if target is not None else ""
+    if designator in designators and designator not in refs:
+        refs.insert(0, designator)
+    return refs
+
+
+def _chinese_summary(
+    findings: list,
+    counts: dict[str, int],
+    designators: set[str],
+    *,
+    empty_pcb_view: bool = False,
+) -> str:
+    """The Chinese summary section for a set of findings (task 018 §C.3).
+
+    One line per finding, in the report's own order (most severe first): rule
+    name in Chinese, the designators it names, the numbers it already printed.
+
+    ``empty_pcb_view`` (task 019 §2) adds the one sentence that explains an
+    all-empty report — a reader who meets "共 0 条发现" and stops there would
+    read a wrong view as a clean board. The wording lives in the i18n module
+    with the rest of the Chinese; the trigger does not (it is
+    :func:`_pcb_view_read_nothing`).
+    """
+    return summary_section(
+        [
+            finding_line(
+                severity=finding.severity,
+                rule_id=finding.rule_id,
+                message=finding.message,
+                refs=_finding_refs_for_summary(finding, designators),
+            )
+            for finding in findings
+        ],
+        counts,
+        hint=EMPTY_PCB_VIEW_HINT if empty_pcb_view else "",
+    )
+
+
+def _with_chinese_summary(markdown: str, section: str) -> str:
+    """Insert the Chinese summary (task 018 §C.3) into a rendered report.
+
+    Right after the header block and **before the first finding section**, so
+    the report still opens with `# boardwise review report` (byte for byte,
+    tests/test_cli.py pins that) while the first thing the reader meets is
+    Chinese. The English finding lines below it are untouched.
+    """
+    lines = markdown.split("\n")
+    for index, line in enumerate(lines):
+        if line.startswith("- Findings:"):
+            insert_at = min(index + 2, len(lines))
+            break
+    else:  # a header shape this code does not recognise: leave it alone
+        return markdown
+    return "\n".join([*lines[:insert_at], *section.split("\n"), *lines[insert_at:]])
+
+
+def _pcb_view_read_nothing(
+    path: Path, view: str, model: object, board: object | None
+) -> bool:
+    """Was this a `.epro2` reviewed in the pcb view that read *nothing*?
+
+    All three of task 019 §1's conditions in one place, because the hint is
+    only allowed to fire on exactly this shape:
+
+    * the input is a project backup (an `.enet` netlist has no view to pick, so
+      an empty one means an empty netlist, not a wrong view);
+    * ``view`` is ``pcb`` — the default, explicit or implicit, since the
+      default is what quietly produced the shrug;
+    * the model **and** the copper are empty: no components, no nets, no pads,
+      no tracks, no vias. A board with copper but no netlist is not an empty
+      read, and telling its reader to switch views would be a wrong hint —
+      worse than silence.
+
+    The wording is English or Chinese; the trigger is only ever this predicate.
+    """
+    if view != "pcb" or path.suffix.lower() != PROJECT_BACKUP_SUFFIX:
+        return False
+    if model.components or model.nets:
+        return False
+    # A board whose copper is there but whose netlist is empty is *not* an empty
+    # read: pointing its reader at another view would send them somewhere worse.
+    if board is not None and (board.pads or board.tracks or board.vias):
+        return False
+    return True
+
+
 def _cmd_review(args: argparse.Namespace) -> int:
-    path = Path(args.file)
+    source = _review_source(args)
+    if source is None:
+        return 2
+    path = Path(source)
     try:
         model, board = _load_model(path, view=args.view)
     except EncryptedProjectError as exc:
@@ -780,9 +1185,13 @@ def _cmd_review(args: argparse.Namespace) -> int:
 
     findings = run_review(model)
     counts = severity_counts(findings)
+    # Computed once, read twice: the console line and the Chinese summary line
+    # are two renderings of the same fact, and a change to the conditions must
+    # not be able to make them disagree (task 019 §1, §2).
+    empty_pcb_view = _pcb_view_read_nothing(path, args.view, model, board)
 
     print(
-        f"boardwise review: {args.file} "
+        f"boardwise review: {source} "
         f"({len(model.components)} components, {len(model.nets)} nets)"
     )
     if board is not None:
@@ -802,14 +1211,24 @@ def _cmd_review(args: argparse.Namespace) -> int:
         print(f"JSON report written to {args.json_path}")
     if args.md_path:
         meta = {
-            "source": str(args.file),
+            "source": source,
             "components": len(model.components),
             "nets": len(model.nets),
         }
+        summary = _chinese_summary(
+            findings, counts, set(model.components), empty_pcb_view=empty_pcb_view
+        )
         Path(args.md_path).write_text(
-            render_markdown(findings, meta), encoding="utf-8"
+            _with_chinese_summary(render_markdown(findings, meta), summary),
+            encoding="utf-8",
         )
         print(f"Markdown report written to {args.md_path}")
+
+    # Last line of the console output, after the report paths: the note is the
+    # one thing a reader of an empty run has to act on, so it must not be
+    # buried between the census and a "written to" line.
+    if empty_pcb_view:
+        print(EMPTY_PCB_VIEW_NOTE)
 
     return 1 if counts["ERROR"] else 0
 
@@ -1026,13 +1445,23 @@ def _cmd_bridge_status(args: argparse.Namespace) -> int:
     import asyncio
 
     BridgeClient, BridgeError, port, token = _open_cli(args)
+    # `WebSocketException`, not just `OSError`: a port that belongs to some
+    # *other* process accepts the TCP connection and then fails the WebSocket
+    # handshake — `websockets` raises `InvalidMessage` ("did not receive a valid
+    # HTTP response"), which is not an `OSError`, so it used to escape as a
+    # traceback. From the user's seat the two are one fact: nothing that talks
+    # like our daemon answered. Imported here rather than at module scope
+    # because offline review must keep working with `websockets` uninstalled.
+    from websockets.exceptions import WebSocketException
+
+    _, daemon_module, _ = _bridge_modules()
 
     async def run() -> int:
         try:
             client = await BridgeClient.open(
                 _bridge_uri(port), token, "cli", client="boardwise-cli"
             )
-        except (OSError, BridgeError) as exc:
+        except (OSError, WebSocketException, BridgeError) as exc:
             print(f"boardwise bridge: daemon not reachable on 127.0.0.1:{port} ({exc})")
             return 2
         try:
@@ -1046,6 +1475,12 @@ def _cmd_bridge_status(args: argparse.Namespace) -> int:
             if connected
             else "  connector: not connected (is EasyEDA running with the extension?)"
         )
+        # Who holds the bridge, and who was turned away for trying to take it
+        # (018 §A). Rendered by the daemon's ``status_lines`` rather than here,
+        # so the wording cannot drift from the keys it reads; empty when there
+        # is nothing to say, so a fresh daemon prints exactly what it did before.
+        for line in daemon_module.status_lines(data):
+            print(line)
         # Fingerprint only. The daemon never puts the token on the wire, so
         # there is nothing else this line *could* print — which is the point.
         fingerprint = data.get("pairedFingerprint")
@@ -3039,6 +3474,1145 @@ def _render_review_mark(
 
 
 # --------------------------------------------------------------------------
+# edit (016: review -> local edit — the M3 first slice, `component-value`)
+# --------------------------------------------------------------------------
+
+
+#: The rules whose findings this build can repair, mapped to the change kind a
+#: plan for them must name. A rule *absent* from this table is answered rather
+#: than ignored: a plan asked for such findings is refused by name, because
+#: silence would read as "there is nothing to fix here".
+REPAIRABLE_RULES: dict[str, str] = {"param-value-mpn-match": COMPONENT_VALUE_KIND}
+
+#: The reverse map, derived so the two directions cannot drift apart: `preview`
+#: and `apply` read a plan (which names no rule) and re-run the rule the plan's
+#: change kind belongs to.
+RULE_FOR_KIND: dict[str, str] = {
+    kind: rule_id for rule_id, kind in REPAIRABLE_RULES.items()
+}
+
+#: The one component attribute this slice may write — a range guard with a
+#: name, asserted in the apply path instead of promised in a comment (016 §四,
+#: protection 2: only the target, only locally).
+EDIT_WRITE_KEY = "Value"
+
+#: Bridge error codes that mean "the write may still have landed". The rule is
+#: draw.py's (`_call_write`, engines/draw.py:296-330): a timeout and a dropped
+#: connection both leave the page's state unknown, so both are read back and
+#: neither is retried. Pinned against `bridge.protocol.ErrorCodes` by the 016
+#: tests rather than imported here, so this module stays importable without the
+#: bridge's websockets dependency.
+UNKNOWN_OUTCOME_CODES = frozenset({"TIMEOUT", "DISCONNECTED"})
+
+#: Relative tolerance for "these two board values say the same thing". The rules
+#: already judge declarations at 1e-3 (`rules/params`: nominal equality), and a
+#: repair that disagreed with them would call a value changed that the rules
+#: call equal. It lives here rather than in `core/changeplan.py` because it
+#: needs the value parsers, and the layer rule is that `core` imports nothing
+#: from the package (`tests/test_layer_rules.py`).
+_VALUE_REL_TOL = 1e-3
+
+
+def _edit_step(
+    action: str, purpose: str, ok: bool, error: object | None = None,
+    *, wrote: bool = False,
+) -> dict:
+    """One bridge call as a report row (draw.py's ``StepRecord``, as a dict)."""
+    code = str(getattr(error, "code", "") or "") if error is not None else ""
+    message = ""
+    if error is not None:
+        message = str(getattr(error, "message", "") or "") or str(error)
+    return {
+        "action": action,
+        "purpose": purpose,
+        "ok": ok,
+        "wrote": wrote,
+        "code": code,
+        "message": message,
+        "unknown": (not ok) and code in UNKNOWN_OUTCOME_CODES,
+    }
+
+
+def same_board_value(left: str, right: str) -> tuple[bool, str]:
+    """Are these two board values the same value? ``(equal, how)``.
+
+    String equality first, because that is what the editor stores and what the
+    read-back compares; then the parsed quantity, because ``4.7k`` and
+    ``4.7kΩ`` are the same resistor and treating a formatting difference as
+    "somebody changed the board by hand" would refuse a plan that is still true.
+
+    ``how`` is ``"identical"``, ``"same resistance"``, ``"same capacitance"`` or
+    ``""`` for "not the same" — reported, so a reader can tell an exact match
+    from a numeric one.
+    """
+    left, right = (left or "").strip(), (right or "").strip()
+    if left == right:
+        return True, "identical"
+    from .rules.connectivity import parse_resistance_ohms
+    from .rules.values import parse_capacitance_farads
+
+    for parser, label in (
+        (parse_resistance_ohms, "same resistance"),
+        (parse_capacitance_farads, "same capacitance"),
+    ):
+        first, second = parser(left), parser(right)
+        if first is None or second is None:
+            continue
+        if first == 0.0 and second == 0.0:
+            return True, label
+        high, low = max(first, second), min(first, second)
+        if low > 0 and (high - low) <= _VALUE_REL_TOL * high:
+            return True, label
+    return False, ""
+
+
+def _boardwise_designator(model, designator: str) -> str | None:
+    """The model's own spelling of a designator, or None when it is not there.
+
+    Exact match first (that is the file's spelling), case-insensitive second
+    (a human typing ``u3`` means ``U3``). The model's spelling is returned so
+    every later comparison in one run uses a single string.
+    """
+    if designator in model.components:
+        return designator
+    wanted = designator.strip().upper()
+    for name in model.components:
+        if name.upper() == wanted:
+            return name
+    return None
+
+
+def _findings_naming(rule, model, designator: str) -> list:
+    """The rule's findings that name this designator.
+
+    Read through :func:`finding_refs` — the same reading ``review-mark`` marks
+    the canvas with — so "which findings will this edit silence" is answered by
+    the report's own definition of "names a designator", not by a second one.
+    """
+    wanted = designator.upper()
+    return [
+        finding
+        for finding in rule.check(model)
+        if wanted in {ref.upper() for ref in finding_refs(finding)}
+    ]
+
+
+def _snapshot_identity(path: Path) -> tuple[str, str, str, list[str]]:
+    """``(projectUuid, pageUuid, hostVersion, notes)``, read from the snapshot.
+
+    Three measured facts decide what is possible here, and each one is *said*
+    rather than papered over:
+
+    * a ``.epro2`` carries **no project uuid** — ``project2.json`` holds a
+      title, an editor version and a few flags and nothing else (read by
+      ``parsers/epru_stream.read_project_meta``), so ``projectUuid`` is empty
+      and the plan records that the only authority on that id is ``doc.list``
+      at apply time;
+    * the **page uuid** comes from the ``SCH_PAGE`` document head, and only when
+      the snapshot names exactly one such page: a multi-page backup has no
+      single page for the plan to name, and picking one would be exactly the
+      cross-page ambiguity §2.3 refuses to guess at;
+    * an ``.enet`` export carries neither, so both stay empty.
+    """
+    notes: list[str] = []
+    if path.suffix.lower() != ".epro2":
+        notes.append(
+            f"a {path.suffix or 'extension-less'} input carries no project or "
+            "page metadata here, so projectUuid and pageUuid are empty and the "
+            "page guard degrades to the focused page"
+        )
+        return "", "", "", notes
+
+    from .parsers.epru_stream import iter_epru_records, load_epru_text
+
+    try:
+        text, meta = load_epru_text(path)
+        pages = sorted({
+            str((record.body or {}).get("uuid") or "")
+            for record in iter_epru_records(text)
+            if record.type == "DOCHEAD"
+            and (record.body or {}).get("docType") == "SCH_PAGE"
+        } - {""})
+        host_version = str(meta.get("editorVersion") or "")
+    except Exception as exc:  # noqa: BLE001 — metadata is a nice-to-have, not the plan
+        notes.append(
+            f"the snapshot's own metadata could not be read ({exc}); "
+            "projectUuid and pageUuid are left empty"
+        )
+        return "", "", "", notes
+
+    notes.append(
+        "projectUuid is empty: a .epro2's metadata carries no project uuid "
+        "(measured), so `edit apply` reports what doc.list calls the focused "
+        "project and the plan does not pretend to know it"
+    )
+    if len(pages) == 1:
+        return "", pages[0], host_version, notes
+    if pages:
+        notes.append(
+            f"the snapshot holds {len(pages)} schematic pages, so no single "
+            "pageUuid could be named; pageUuid is empty and the page guard "
+            "degrades to the focused page"
+        )
+    else:
+        notes.append(
+            "the snapshot holds no SCH_PAGE document, so pageUuid is empty and "
+            "the page guard degrades to the focused page"
+        )
+    return "", "", host_version, notes
+
+
+def _cmd_edit_plan(args: argparse.Namespace) -> int:
+    """``edit plan``: one finding -> one ChangePlan, entirely offline.
+
+    Exit codes: 0 plan built; 2 the snapshot cannot be read; 5 the plan cannot
+    be built from what was asked — an unknown rule id, a rule this build cannot
+    repair, no violation for that designator, an ambiguous designator, or a
+    before/after pair the plan's own validation would refuse. The last group is
+    5 and not 2 on purpose: nothing is wrong with the input file, the *ask* is
+    what cannot be turned into a plan.
+    """
+    import json
+
+    path = Path(args.file)
+    if not path.is_file():
+        print(f"boardwise edit plan: {path}: not a file", file=sys.stderr)
+        return 2
+    try:
+        model, _board = _load_model(path, view=args.view)
+    except EncryptedProjectError as exc:
+        print(f"boardwise edit plan: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001 — the CLI must not traceback
+        print(f"boardwise edit plan: {path}: {exc}", file=sys.stderr)
+        return 2
+
+    rule = next((item for item in BUILTIN_RULES if item.id == args.rule), None)
+    if rule is None:
+        known = ", ".join(sorted(item.id for item in BUILTIN_RULES))
+        print(
+            f"boardwise edit plan: no rule with id {args.rule!r}\n"
+            f"  known rule ids: {known}",
+            file=sys.stderr,
+        )
+        return 5
+    if rule.id not in REPAIRABLE_RULES:
+        print(
+            f"boardwise edit plan: rule {rule.id!r} is not repairable in this "
+            "build（该规则不支持自动修改）— this slice executes "
+            f"{', '.join(sorted(set(REPAIRABLE_RULES.values())))} only, and it "
+            "needs a finding that carries a structured target",
+            file=sys.stderr,
+        )
+        return 5
+
+    designator = _boardwise_designator(model, args.designator)
+    if designator is None:
+        print(
+            f"boardwise edit plan: {path}: no component with designator "
+            f"{args.designator!r} in the {args.view} view",
+            file=sys.stderr,
+        )
+        return 5
+    if any(
+        name.upper() == designator.upper()
+        for name in model.duplicate_designators
+    ):
+        print(
+            f"boardwise edit plan: 位号 {designator} 在源文件里出现了多次"
+            "（duplicate designator）—— 跨页歧义，plan 拒绝生成，不猜是哪一块"
+            "（§2.3）",
+            file=sys.stderr,
+        )
+        return 5
+
+    findings = rule.check(model)
+    finding = next(
+        (
+            item
+            for item in findings
+            if item.target is not None
+            and item.target.component_ref.upper() == designator.upper()
+        ),
+        None,
+    )
+    if finding is None:
+        lines = [
+            f"boardwise edit plan: no VIOLATION for {designator} under "
+            f"{rule.id} — there is nothing to plan"
+        ]
+        for item in _findings_naming(rule, model, designator):
+            lines.append(f"  [{item.severity}] {item.message}")
+        if hasattr(rule, "outcomes"):
+            for outcome in rule.outcomes(model):
+                if outcome.subject == designator or outcome.subject.startswith(
+                    f"{designator} "
+                ):
+                    lines.append(
+                        f"  {outcome.state}: {outcome.subject} — {outcome.message}"
+                    )
+        print("\n".join(lines), file=sys.stderr)
+        return 5
+
+    before = finding.target.expected_before
+    after = (args.after if args.after is not None else finding.target.suggested_after)
+    after = (after or "").strip()
+    if not before:
+        print(
+            f"boardwise edit plan: the finding for {designator} carries no "
+            "current value, so the plan could not re-check itself before "
+            "writing — nothing to build",
+            file=sys.stderr,
+        )
+        return 5
+    if not after:
+        print(
+            f"boardwise edit plan: no value to write for {designator} — pass "
+            "--after, or use a rule whose finding carries a suggestion",
+            file=sys.stderr,
+        )
+        return 5
+    if after == before:
+        print(
+            f"boardwise edit plan: the value to write equals the current value "
+            f"({before!r}) — a plan that changes nothing is refused (the same "
+            "rule the plan's own validation applies)",
+            file=sys.stderr,
+        )
+        return 5
+
+    project_uuid, page_uuid, host_version, notes = _snapshot_identity(path)
+    source = PlanSource(
+        input_sha256=sha256_of(path),
+        project_uuid=project_uuid,
+        page_uuid=page_uuid,
+        host_version=host_version,
+        connector_version=_repo_connector_version(),
+    )
+    plan = component_value_plan(
+        source, designator=designator, before=before, after=after
+    )
+
+    print(
+        f"boardwise edit plan: {path} "
+        f"({len(model.components)} components, {len(model.nets)} nets; "
+        f"view {args.view})"
+    )
+    print(f"finding: [{finding.severity}] {finding.rule_id}: {finding.message}")
+    print(
+        f"plan: {designator}.{EDIT_WRITE_KEY} {before!r} -> {after!r} "
+        f"({plan.change.kind})"
+    )
+    print(
+        f"snapshot: sha256 {source.input_sha256}  "
+        f"pageUuid {source.page_uuid or '(none)'}  "
+        f"projectUuid {source.project_uuid or '(none)'}  "
+        f"host {source.host_version or '(unknown)'}  "
+        f"connector {source.connector_version or '(unknown)'}"
+    )
+    for note in notes:
+        print(f"note: {note}")
+
+    if args.out_path:
+        plan.dump(args.out_path)
+        print(f"plan written to {args.out_path}")
+    else:
+        print(json.dumps(plan.to_jsonable(), ensure_ascii=False, indent=2))
+
+    if args.json_path:
+        Path(args.json_path).write_text(
+            json.dumps(
+                {
+                    "command": "plan",
+                    "ok": True,
+                    "file": str(path),
+                    "view": args.view,
+                    "rule": rule.id,
+                    "designator": designator,
+                    "before": before,
+                    "after": after,
+                    "sha256": source.input_sha256,
+                    "planPath": args.out_path,
+                    "plan": plan.to_jsonable(),
+                    "components": len(model.components),
+                    "nets": len(model.nets),
+                    "notes": notes,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    return 0
+
+
+def _cmd_edit_preview(args: argparse.Namespace) -> int:
+    """``edit preview``: check the plan against the snapshot and show the diff.
+
+    Offline, read-only, and it cannot be talked out of the check: ``--file`` is
+    required because the plan carries the snapshot's *hash* and not its path, so
+    without the file protection 1 would have nothing to compare. Exit 0 fresh;
+    4 a stale snapshot (sha256 differs) or a target that is gone or no longer
+    holds the value the plan expects; 2 the snapshot cannot be read; 5 the plan
+    or the arguments are unusable.
+    """
+    import json
+
+    try:
+        plan = ChangePlan.load(args.plan)
+    except ChangePlanError as exc:
+        print(f"boardwise edit preview: {exc}", file=sys.stderr)
+        return 5
+    if not args.file:
+        print(
+            "boardwise edit preview: --file is required — the plan carries the "
+            "snapshot's sha256, not its path, so without the file there is "
+            "nothing to check the snapshot against",
+            file=sys.stderr,
+        )
+        return 5
+    path = Path(args.file)
+    if not path.is_file():
+        print(f"boardwise edit preview: {path}: not a file", file=sys.stderr)
+        return 2
+
+    digest = sha256_of(path)
+    if digest != plan.source.input_sha256:
+        print(
+            f"boardwise edit preview: 快照已失效 — {path} hashes {digest} but the "
+            f"plan was built against {plan.source.input_sha256}; nothing was "
+            "checked and nothing will be written — re-run `edit plan`",
+            file=sys.stderr,
+        )
+        return 4
+
+    try:
+        model, _board = _load_model(path, view=args.view)
+    except EncryptedProjectError as exc:
+        print(f"boardwise edit preview: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001 — the CLI must not traceback
+        print(f"boardwise edit preview: {path}: {exc}", file=sys.stderr)
+        return 2
+
+    designator = _boardwise_designator(model, plan.target.designator)
+    if designator is None:
+        print(
+            f"boardwise edit preview: {path} no longer holds designator "
+            f"{plan.target.designator} — 目标已不在快照里，前置条件失败",
+            file=sys.stderr,
+        )
+        return 4
+    component = model.components[designator]
+    equal, how = same_board_value(component.value, plan.change.before)
+    if not equal:
+        print(
+            f"boardwise edit preview: {designator}.{EDIT_WRITE_KEY} reads "
+            f"{component.value!r} in the snapshot, but the plan expects "
+            f"{plan.change.before!r} — 前置条件失败，快照里的值已经变了",
+            file=sys.stderr,
+        )
+        return 4
+
+    rule_id = RULE_FOR_KIND.get(plan.change.kind, "")
+    rule = next((item for item in BUILTIN_RULES if item.id == rule_id), None)
+    silenced = _findings_naming(rule, model, designator) if rule is not None else []
+
+    print(f"boardwise edit preview: {args.plan}")
+    print(
+        f"plan: {plan.change.kind} {designator}.{EDIT_WRITE_KEY} "
+        f"{plan.change.before!r} -> {plan.change.after!r}"
+    )
+    print(f"snapshot: {path} sha256 matches the plan's ({digest})")
+    print(f"target: {designator} is still there, value still {component.value!r} ({how})")
+    print(
+        f"semantic diff: {designator}.{EDIT_WRITE_KEY}: "
+        f"{component.value} → {plan.change.after}"
+    )
+    if rule is None:
+        print(f"resolves: (the plan's kind {plan.change.kind!r} maps to no rule in this build)")
+    else:
+        print(f"resolves ({len(silenced)} finding(s) from {rule.id}):")
+        for item in silenced:
+            print(f"  [{item.severity}] {item.message}")
+    print(
+        "geometric diff: no geometric diff by construction — the change rewrites "
+        "one key inside the component's otherProperty; no primitive is created, "
+        "moved or deleted, so no coordinate can move"
+    )
+
+    if args.json_path:
+        Path(args.json_path).write_text(
+            json.dumps(
+                {
+                    "command": "preview",
+                    "ok": True,
+                    "file": str(path),
+                    "view": args.view,
+                    "planPath": args.plan,
+                    "plan": plan.to_jsonable(),
+                    "sha256": digest,
+                    "snapshot": "fresh",
+                    "designator": designator,
+                    "observedValue": component.value,
+                    "valueComparison": how,
+                    "diff": {
+                        "designator": designator,
+                        "key": EDIT_WRITE_KEY,
+                        "from": component.value,
+                        "to": plan.change.after,
+                    },
+                    "resolves": [
+                        {
+                            "rule_id": item.rule_id,
+                            "severity": item.severity,
+                            "message": item.message,
+                        }
+                        for item in silenced
+                    ],
+                    "geometricDiff": (
+                        "none by construction: one key inside the component's "
+                        "otherProperty changes; no primitive is created, moved "
+                        "or deleted"
+                    ),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    return 0
+
+
+def _active_document_uuid(listing: dict) -> str:
+    """The focused document's uuid from a ``doc.list`` payload, ``""`` if none.
+
+    ``active`` is ``null`` when nothing is focused, and the host's placeholder
+    uuid ``"0"`` is normalised to null by the connector
+    (``docs/bridge.md``) — the second half is checked here as well, because a
+    placeholder taken for a page name would refuse a perfectly good plan.
+    """
+    active = listing.get("active")
+    uuid = str(active.get("uuid") or "") if isinstance(active, dict) else str(active or "")
+    return "" if uuid == "0" else uuid
+
+
+def _focused_project_uuid(listing: dict) -> str:
+    """The focused project's uuid from a ``doc.list`` payload, ``""`` if none."""
+    for project in listing.get("projects") or []:
+        if isinstance(project, dict) and project.get("focused"):
+            return str(project.get("projectUuid") or "")
+    return ""
+
+
+def _identity_project_text(project: object) -> str:
+    """One project of a ``sys.identity`` payload as ``name (uuid)``.
+
+    Both halves are printed because either one alone can mislead: two projects
+    can carry the same name, and a uuid names nothing to the operator.
+    """
+    if not isinstance(project, dict):
+        return "(no project reported)"
+    name = project.get("friendlyName") or project.get("name") or "(unnamed)"
+    return f"{name} ({project.get('projectUuid') or '(no uuid)'})"
+
+
+def _identity_document_text(document: object) -> str:
+    """``sys.identity``'s active document as ``uuid (kind)``, or its absence."""
+    if not isinstance(document, dict) or not document.get("uuid"):
+        return "(no active document)"
+    return f"{document['uuid']} ({document.get('type') or 'document'})"
+
+
+def _identity_document_project_text(document: object) -> str:
+    """The project the active document belongs to, named as far as it said.
+
+    ``activeDocument.project`` is the read the connector preferred; when the
+    host filled in only ``parentProjectUuid`` there is a uuid and no name, and
+    that is printed as exactly that rather than as "no project".
+    """
+    if not isinstance(document, dict):
+        return "(no active document)"
+    if isinstance(document.get("project"), dict):
+        return _identity_project_text(document["project"])
+    uuid = str(document.get("projectUuid") or "")
+    if uuid:
+        return f"(unnamed) ({uuid})"
+    return "(the document named no project)"
+
+
+def _edit_post_review(
+    path: str | None, started: float, rule_id: str, designator: str, view: str
+) -> dict:
+    """Step 7: re-read the snapshot from disk and re-run the rule (016 §3).
+
+    Three answers, and only the one the evidence supports: ``resolved`` (the
+    target's finding is gone), ``still_present`` (it is still there, with the
+    new findings attached) or ``unknown`` — which is what an unchanged file
+    gets, because "the save has not landed yet" and "the change was never saved"
+    are different facts and neither can be claimed from an unchanged mtime.
+    """
+    result: dict = {
+        "state": "unknown",
+        "reason": "",
+        "file": path or "",
+        "startedAt": started,
+        "findings": [],
+        "outcomes": [],
+    }
+    if not path:
+        result["reason"] = (
+            "no --file was given, so the disk copy was not re-read; the "
+            "re-review is not claimed"
+        )
+        return result
+    snapshot = Path(path)
+    try:
+        stat = snapshot.stat()
+    except OSError as exc:
+        result["reason"] = f"{snapshot} could not be stat()ed ({exc})"
+        return result
+    result["mtime"] = stat.st_mtime
+    # A file the editor's save never rewrote cannot be evidence about the
+    # change: reading it would compare the old content against the new value
+    # and call the edit un-resolved, which is a statement the file does not
+    # support. This is the honest "unknown".
+    if stat.st_mtime < started:
+        result["reason"] = (
+            f"{snapshot} was last written at {stat.st_mtime} which is before "
+            f"this run started at {started} — 保存未落盘或落盘延迟, so the "
+            "re-review is not claimed"
+        )
+        return result
+    try:
+        model, _board = _load_model(snapshot, view=view)
+    except Exception as exc:  # noqa: BLE001 — the CLI must not traceback
+        result["reason"] = f"{snapshot} could not be re-parsed ({exc})"
+        return result
+    rule = next((item for item in BUILTIN_RULES if item.id == rule_id), None)
+    if rule is None:
+        result["reason"] = f"the plan's kind maps to rule {rule_id!r}, which this build does not have"
+        return result
+    target = _boardwise_designator(model, designator)
+    if target is None:
+        result["state"] = "resolved"
+        result["reason"] = (
+            f"{designator} is not in the re-read snapshot at all — the component "
+            "the finding was about is gone"
+        )
+        return result
+    findings = _findings_naming(rule, model, target)
+    result["findings"] = [
+        {"rule_id": item.rule_id, "severity": item.severity, "message": item.message}
+        for item in findings
+    ]
+    if hasattr(rule, "outcomes"):
+        result["outcomes"] = [
+            {"state": outcome.state, "subject": outcome.subject, "message": outcome.message}
+            for outcome in rule.outcomes(model)
+            if outcome.subject == target or outcome.subject.startswith(f"{target} ")
+        ]
+    result["value"] = model.components[target].value
+    if findings:
+        result["state"] = "still_present"
+        result["reason"] = (
+            f"{rule_id} still reports {len(findings)} finding(s) about {target} "
+            f"after the save"
+        )
+    else:
+        result["state"] = "resolved"
+        result["reason"] = f"{rule_id} reports nothing about {target} after the save"
+    return result
+
+
+def _render_edit_apply(report: dict, args: argparse.Namespace) -> int:
+    """Print the human summary, write ``--json``, and return the exit code."""
+    import json
+
+    code = int(report.get("exitCode") or 0)
+    reason = report.get("reason") or ""
+    print(
+        f"boardwise edit apply: {report.get('designator')}.{EDIT_WRITE_KEY} "
+        f"{report.get('before')!r} -> {report.get('after')!r}  "
+        f"[{report.get('outcome')}{': ' + reason if reason else ''}]"
+    )
+    for step in report.get("steps") or []:
+        mark = "ok" if step["ok"] else ("UNKNOWN" if step["unknown"] else "FAILED")
+        line = f"  {mark:<7} {step['action']:<26} {step['purpose']}"
+        if not step["ok"]:
+            line += f" — [{step['code']}] {step['message']}"
+        print(line)
+    resolved = report.get("resolved") or {}
+    if resolved:
+        print(
+            f"  target  {resolved.get('designator')} -> primitiveId "
+            f"{resolved.get('primitiveId') or '(none)'}  "
+            f"{EDIT_WRITE_KEY} {resolved.get('value')!r} "
+            f"(read from {resolved.get('valueKey') or 'no Value key'})"
+        )
+    verification = report.get("verification") or {}
+    if verification:
+        print(
+            f"  readback sch.geometry says {verification.get('observed')!r} "
+            f"(wanted {verification.get('expected')!r}) — "
+            f"{'matched' if verification.get('matched') else 'DID NOT MATCH'}"
+            f"{' (' + verification['how'] + ')' if verification.get('how') else ''}"
+        )
+    if report.get("persistence"):
+        print(f"  persistence: {report['persistence']}")
+    post = report.get("postReview") or {}
+    if post:
+        print(f"  re-review: {post.get('state')} — {post.get('reason')}")
+        for item in post.get("findings") or []:
+            print(f"    [{item['severity']}] {item['rule_id']}: {item['message']}")
+    for note in report.get("notes") or []:
+        print(f"  note: {note}")
+    if report.get("final"):
+        print(f"boardwise edit apply: {report['final']}")
+
+    if args.json_path:
+        Path(args.json_path).write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    return code
+
+
+async def _edit_apply_flow(
+    client, bridge_error, plan, args: argparse.Namespace, started: float
+) -> int:
+    """The apply sequence of 016 §3, step by step, with every answer recorded.
+
+    The order is the protection: nothing is written before the plan's
+    preconditions have been re-read from the live page, and nothing is believed
+    after the write until the page has been read back independently.
+    """
+    records: list[dict] = []
+    notes: list[str] = []
+    designator = plan.target.designator
+    before, after = plan.change.before, plan.change.after
+    page = plan.source.page_uuid
+    report: dict = {
+        "command": "apply",
+        "ok": False,
+        "outcome": "",
+        "reason": "",
+        "exitCode": 0,
+        "planPath": str(args.plan),
+        "plan": plan.to_jsonable(),
+        "designator": designator,
+        "before": before,
+        "after": after,
+        "page": {"uuid": page, "guard": "enforced" if page else "unavailable"},
+        "identity": {},
+        "projectUuid": "",
+        "resolved": {},
+        "write": {"action": "sch.set_component_attribute", "calls": 0, "key": EDIT_WRITE_KEY},
+        "verification": {},
+        "save": {},
+        "persistence": "",
+        "postReview": {},
+        "steps": records,
+        "notes": notes,
+        "final": "",
+    }
+
+    def done(code: int, outcome: str, reason: str = "") -> int:
+        report["exitCode"] = code
+        report["outcome"] = outcome
+        report["ok"] = code == 0
+        if reason:
+            report["reason"] = reason
+        return _render_edit_apply(report, args)
+
+    async def call(action, params, purpose, *, writes=False):
+        try:
+            data = await client.call(action, params)
+        except bridge_error as exc:
+            records.append(_edit_step(action, purpose, False, exc, wrote=writes))
+            return None
+        records.append(_edit_step(action, purpose, True, wrote=writes))
+        return data
+
+    # ---- 1. preconditions, re-read from the live page (protection 1) -----
+    if page:
+        listing = await call(
+            "doc.list", {}, "confirm the focused page is the plan's page"
+        )
+        if isinstance(listing, dict):
+            report["projectUuid"] = _focused_project_uuid(listing)
+            focused = _active_document_uuid(listing)
+            if focused and focused != page:
+                notes.append(
+                    f"the editor has {focused} focused and the plan targets "
+                    f"{page}; nothing was read as the target and nothing was written"
+                )
+                return done(4, "refused", "page_mismatch")
+            if not focused:
+                notes.append(
+                    "doc.list reports no focused document, so the page could not "
+                    "be confirmed before the read; the write still carries "
+                    "pageUuid, which the host enforces (`guardPage`, actions.ts)"
+                )
+        else:
+            notes.append(
+                "doc.list did not answer, so the focused page was not confirmed "
+                "before the read; the write still carries pageUuid, which the "
+                "host enforces (`guardPage`, actions.ts)"
+            )
+    else:
+        notes.append(
+            "pageUuid guard unavailable, focused page used — this plan carries "
+            "no pageUuid, so `guardPage` returns early (measured, actions.ts) "
+            "and nothing but the operator's attention says the focused page is "
+            "the right one"
+        )
+
+    # ---- 1b. the editor's two layers of focus must agree (018 §B2) -------
+    # `doc.list`'s focus and the active document are two different reads, and
+    # they were measured disagreeing on the machine (2026-09-21): the write
+    # lands on whatever document is in front, while the operator reads the
+    # focused project. The plan's first precondition is "the page the editor has
+    # focused is the plan's page", and a disagreement is exactly that
+    # precondition being false — so it is checked before the plan is compared
+    # against the page at all.
+    identity = await call(
+        "sys.identity", {}, "confirm the editor's two layers of focus agree"
+    )
+    if not isinstance(identity, dict):
+        # No answer: an older connector, which does not know the action
+        # (UNKNOWN_ACTION), or a call that failed. That is a check which could
+        # not run, not a disagreement — the geometry guard below still stands,
+        # and refusing here would break every 0.4.10 connector.
+        last = records[-1]
+        report["identity"] = {"consistent": None, "consistentBasis": "unavailable"}
+        notes.append(
+            f"sys.identity could not be asked ([{last['code']}] {last['message']}) "
+            "— 身份核查不可用（老 connector 没有这个动作，或调用失败），"
+            "降级到 geometry 守卫，本次不因其拒绝写入"
+        )
+    else:
+        consistent = identity.get("consistent")
+        basis = str(identity.get("consistentBasis") or "") or "unavailable"
+        report["identity"] = {
+            "consistent": consistent if isinstance(consistent, bool) else None,
+            "consistentBasis": basis,
+            "focusedProject": identity.get("focusedProject"),
+            "activeDocument": identity.get("activeDocument"),
+        }
+        if consistent is False:
+            document = identity.get("activeDocument")
+            notes.append(
+                "焦点不一致，请先切换工程再执行：doc.list 报的焦点工程是 "
+                f"{_identity_project_text(identity.get('focusedProject'))}，"
+                f"编辑区活动文档 {_identity_document_text(document)} 属于 "
+                f"{_identity_document_project_text(document)}（判定依据 {basis}）"
+                " —— ChangePlan 的第一条 precondition 是 \"the page the editor "
+                "has focused is the plan's page\"，此时写入的落点与操作者预期"
+                "不同，所以没有发出任何写动作"
+            )
+            return done(4, "refused", "focus_inconsistent")
+        if consistent is not True:
+            notes.append(
+                "sys.identity could not decide whether the editor's two layers of "
+                f"focus agree (consistent={consistent!r}, 判定依据 {basis}) — "
+                "身份核查无法判定，降级到 geometry 守卫，本次不因其拒绝写入"
+            )
+
+    geometry = await call("sch.geometry", {}, "read the page before writing")
+    if geometry is None:
+        last = records[-1]
+        if last["unknown"]:
+            notes.append(
+                "the page could not be read (a timeout or a dropped connection); "
+                "nothing was written and nothing was retried"
+            )
+            return done(3, "unknown", "precondition_unreadable")
+        notes.append(
+            f"the page could not be read ([{last['code']}] {last['message']}); "
+            "nothing was written"
+        )
+        return done(4, "refused", "precondition_unreadable")
+
+    lookup = resolve_on_page(geometry, designator)
+    if lookup.component is None:
+        notes.append(
+            f"{designator} is not on the focused page — the plan's precondition "
+            "(`designator still resolves`) is broken, so nothing was written"
+        )
+        return done(4, "refused", "target_missing")
+    if lookup.ambiguous:
+        notes.append(
+            f"{lookup.matching} primitives on the page carry the designator "
+            f"{designator}; which of them the plan means cannot be decided, so "
+            "nothing was written"
+        )
+        return done(4, "refused", "target_ambiguous")
+    resolved = lookup.component
+    report["resolved"] = {
+        "designator": resolved.designator,
+        "primitiveId": resolved.primitive_id,
+        "value": resolved.value,
+        "valueKey": resolved.value_key,
+    }
+    if not resolved.primitive_id:
+        notes.append(
+            f"the page reports no primitiveId for {designator}, so the write has "
+            "no target; nothing was written"
+        )
+        return done(4, "refused", "target_without_id")
+    if not resolved.value_key:
+        # "the page states no Value" and "the page states a different Value" are
+        # different facts, and only the first one means there is nothing to
+        # compare the plan against.
+        notes.append(
+            f"the page states no {EDIT_WRITE_KEY} for {designator} (its primitive "
+            "carries no Value key), so the plan's precondition cannot be checked "
+            "against it; nothing was written"
+        )
+        return done(4, "refused", "target_without_value")
+
+    # Step 4 first, so a repeated run is recognised before any staleness talk:
+    # the value is already what the plan asks for -> nothing to write.
+    already, how_already = same_board_value(resolved.value, after)
+    if already:
+        notes.append(
+            f"{designator}.{EDIT_WRITE_KEY} already reads {resolved.value!r} "
+            f"({how_already} with the plan's {after!r}) — nothing was written "
+            "(idempotent: no repeat of an applied change)"
+        )
+        report["final"] = "already applied; the page was not touched"
+        return done(0, "already_applied", "already_applied")
+
+    holds, how_holds = same_board_value(resolved.value, before)
+    if not holds:
+        notes.append(
+            f"the page says {designator}.{EDIT_WRITE_KEY} is {resolved.value!r} "
+            f"but the plan expects {before!r} — 旧快照失效（值已被改动）, so "
+            "nothing was written"
+        )
+        return done(4, "refused", "stale_before")
+
+    # ---- 2. the one write (protection 2: one call, one key) --------------
+    params = {
+        "primitiveId": resolved.primitive_id,
+        "key": EDIT_WRITE_KEY,
+        "value": after,
+    }
+    if page:
+        params["pageUuid"] = page
+    write = await call(
+        "sch.set_component_attribute", params,
+        f"write {EDIT_WRITE_KEY}={after!r} on {designator}", writes=True,
+    )
+    report["write"]["calls"] = 1
+    report["write"]["params"] = {
+        "primitiveId": resolved.primitive_id,
+        "key": EDIT_WRITE_KEY,
+        "value": after,
+        "pageUuid": page or "(omitted: the plan carries none)",
+    }
+    if write is None:
+        last = records[-1]
+        # Step 5: unknown means read the page back, never retry.
+        readback = await call(
+            "sch.geometry", {},
+            "read the page back after the write's outcome went unknown",
+        )
+        observed, seen = "", "the page could not be read back"
+        if isinstance(readback, dict):
+            found = resolve_on_page(readback, designator)
+            observed = found.component.value if found.component is not None else ""
+            seen = (
+                f"the page reports {designator}.{EDIT_WRITE_KEY} as {observed!r}"
+                if found.component is not None
+                else f"{designator} is not on the page now"
+            )
+        report["verification"] = {
+            "action": "sch.geometry",
+            "afterUnknownWrite": True,
+            "observed": observed,
+            "expected": after,
+            "matched": same_board_value(observed, after)[0],
+        }
+        if last["unknown"]:
+            notes.append(
+                f"the write's outcome is UNKNOWN ([{last['code']}] "
+                f"{last['message']}); {seen}. Nothing was retried — a timeout is "
+                "not a cancellation and a dropped connection is not a failed "
+                "write, so re-issuing it could double whatever did land"
+            )
+            return done(3, "unknown", "write_unknown")
+        notes.append(
+            f"the write was refused ([{last['code']}] {last['message']}); {seen}"
+        )
+        return done(2, "failed", "write_refused")
+
+    data = write if isinstance(write, dict) else {}
+    other_after = data.get("otherPropertyAfter")
+    clobbered = data.get("clobberedOtherKeys") or []
+    report["write"].update({
+        "wrote": bool(data.get("wrote")),
+        "applied": bool(data.get("applied")),
+        "mergedKeys": data.get("mergedKeys") or [],
+        "otherPropertyAfter": other_after if isinstance(other_after, dict) else None,
+        "mismatched": data.get("mismatched") or [],
+        "clobberedOtherKeys": clobbered,
+        "readBackAfter": data.get("readBackAfter", ""),
+        "readBackBefore": data.get("readBackBefore", ""),
+        "writeError": data.get("writeError", ""),
+    })
+    if clobbered:
+        notes.append(
+            f"the action reports it clobbered other keys: {clobbered} — that is "
+            "exactly what protection 2 exists to catch, and the merge into the "
+            "existing otherProperty should have prevented it"
+        )
+    if not data.get("applied"):
+        notes.append(
+            "the action's own read-back does not confirm the write "
+            f"(wrote={bool(data.get('wrote'))}, "
+            f"mismatched={data.get('mismatched') or '[]'}, "
+            f"readBackAfter={data.get('readBackAfter') or '(none)'}) — the "
+            "independent read-back below is what decides"
+        )
+
+    # ---- 3. independent read-back (protection 3) ------------------------
+    verify = await call(
+        "sch.geometry", {}, "read the page back independently after the write"
+    )
+    if verify is None:
+        last = records[-1]
+        notes.append(
+            f"the independent read-back failed ([{last['code']}] "
+            f"{last['message']}) — the change may be on the page, but the page's "
+            "state cannot be stated"
+        )
+        return done(3, "unknown", "readback_unavailable")
+    found = resolve_on_page(verify, designator)
+    observed = found.component.value if found.component is not None else ""
+    matched, how = same_board_value(observed, after)
+    report["verification"] = {
+        "action": "sch.geometry",
+        "designator": found.component.designator if found.component else designator,
+        "primitiveId": found.component.primitive_id if found.component else "",
+        "observed": observed,
+        "expected": after,
+        "valueKey": found.component.value_key if found.component else "",
+        "matched": matched,
+        "how": how,
+    }
+    if not matched:
+        notes.append(
+            f"the independent read-back says {designator}.{EDIT_WRITE_KEY} is "
+            f"{observed!r}, not {after!r} — the change did not land as promised"
+        )
+        return done(2, "failed", "readback_mismatch")
+
+    # ---- 6. save (protection: check the answer, do not discard it) -------
+    saved = await call("sch.doc.save", {}, "persist the change", writes=True)
+    if saved is None:
+        last = records[-1]
+        report["save"] = {"ok": False, "code": last["code"], "message": last["message"]}
+        if last["unknown"]:
+            report["persistence"] = "unknown"
+            notes.append(
+                "the save's outcome is unknown — the change is verified on the "
+                "canvas, but whether it reached the file cannot be stated, and "
+                "nothing was retried"
+            )
+            return done(3, "unknown", "save_unknown")
+        report["persistence"] = "placed"
+        notes.append(
+            f"the editor refused the save ([{last['code']}] {last['message']}) — "
+            "the change is on the canvas only; it is NOT persisted"
+        )
+        return done(2, "failed", "save_refused")
+    report["save"] = {"ok": True, "answered": saved}
+    report["persistence"] = "saved_unverified"
+    notes.append(
+        "persistence is capped at saved_unverified: this bridge has no "
+        "close/reopen action (009d), so only a separate reopen can promote it "
+        "to saved_verified"
+    )
+
+    # ---- 7. re-review against the snapshot on disk ----------------------
+    report["postReview"] = _edit_post_review(
+        args.file, started, RULE_FOR_KIND.get(plan.change.kind, ""), designator,
+        args.view,
+    )
+    post_state = report["postReview"].get("state")
+    if post_state == "still_present":
+        report["final"] = (
+            f"applied and verified, but the re-review still reports the finding "
+            f"({designator})"
+        )
+        return done(2, "failed", "still_present")
+    if post_state == "unknown":
+        report["final"] = (
+            "applied and verified; the re-review could not be taken (see above)"
+        )
+        return done(0, "applied", "post_review_unknown")
+    report["final"] = f"applied, verified, saved and re-reviewed as {post_state}"
+    return done(0, "applied")
+
+
+def _cmd_edit_apply(args: argparse.Namespace) -> int:
+    """``edit apply``: execute one plan against a running editor (016 §3).
+
+    Exit codes: 0 the change is on the page and, when the re-review could be
+    taken, resolves the finding (or was already there); 2 the promised effect is
+    not there — the write was refused, the read-back disagreed, the editor
+    refused the save, or the re-review still reports the finding; 3 the page's
+    state cannot be stated (the daemon is unreachable, or a timeout / a dropped
+    connection with a read-back and no retry); 4 a precondition of the plan is
+    broken; 5 the plan or the input is unusable.
+    """
+    import asyncio
+    import time
+
+    try:
+        plan = ChangePlan.load(args.plan)
+    except ChangePlanError as exc:
+        print(f"boardwise edit apply: {exc}", file=sys.stderr)
+        return 5
+
+    # Stamped before the first bridge call: step 7 compares the snapshot's
+    # mtime against this, and a save that landed during the run must count.
+    started = time.time()
+    BridgeClient, BridgeError, port, token = _open_cli(args)
+
+    async def run() -> int:
+        try:
+            client = await BridgeClient.open(
+                _bridge_uri(port), token, "cli", client="boardwise-cli"
+            )
+        except (OSError, BridgeError) as exc:
+            # 3, not 2: with no connection there is nothing the daemon could
+            # have read back, so the page's state is *unstatable* — the same
+            # claim the flow below makes when a read-back times out. 2 is
+            # reserved for "the effect is not there", which is knowledge we do
+            # not have here (task 018 §C.1, found on the 016 scenario 5 run).
+            print(
+                f"boardwise bridge: daemon not reachable on 127.0.0.1:{port} ({exc})",
+                file=sys.stderr,
+            )
+            return 3
+        try:
+            return await _edit_apply_flow(client, BridgeError, plan, args, started)
+        finally:
+            await client.close()
+
+    return asyncio.run(run())
+
+
+EDIT_COMMANDS = {
+    "plan": _cmd_edit_plan,
+    "preview": _cmd_edit_preview,
+    "apply": _cmd_edit_apply,
+}
+
+
+# --------------------------------------------------------------------------
 # doctor (012v2 §九: is this installation able to do anything at all?)
 # --------------------------------------------------------------------------
 
@@ -3572,6 +5146,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_review_eval(args)
     if args.command == "review-mark":
         return _cmd_review_mark(args)
+    if args.command == "edit":
+        return EDIT_COMMANDS[args.edit_command](args)
     if args.command == "doctor":
         return _cmd_doctor(args)
     if args.command == "compare":

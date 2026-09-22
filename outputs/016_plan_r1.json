@@ -1,0 +1,29 @@
+{
+  "planVersion": 1,
+  "source": {
+    "inputSha256": "12aabdac901f1478538efc811c35afa0a930bbcadaef0051d35647847d60f098",
+    "projectUuid": "",
+    "pageUuid": "",
+    "hostVersion": "3.2.186",
+    "connectorVersion": "0.4.10"
+  },
+  "target": {
+    "primitiveId": "",
+    "designator": "R1",
+    "expectedValue": "4.7k"
+  },
+  "change": {
+    "kind": "component-value",
+    "before": "4.7k",
+    "after": "1k"
+  },
+  "preconditions": [
+    "the page the editor has focused is the plan's page (this plan carries no pageUuid, so there is no page guard to enforce)",
+    "designator R1 still resolves on the page",
+    "Value is still 4.7k"
+  ],
+  "expectedPostcondition": [
+    "Value reads back as 1k",
+    "target review finding is resolved"
+  ]
+}

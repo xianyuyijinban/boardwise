@@ -25,7 +25,7 @@ import { describeRandom } from './random';
 import { buildHandlers } from './actions';
 import { ActionError } from './protocol';
 import { Transport, type TransportState } from './transport';
-import { VERSION } from './version';
+import { VERSION, isVersionOlder } from './version';
 
 let transport: Transport | undefined;
 let facade: EditorFacade | undefined;
@@ -39,6 +39,32 @@ let facade: EditorFacade | undefined;
  */
 const MODULE_LOADED_AT = new Date().toISOString();
 
+/**
+ * This extension instance's id, generated once per module evaluation (018 §A).
+ *
+ * What it is for: two editor windows each running a connector used to take
+ * turns in the daemon's single "active connector" slot every few minutes, and a
+ * write could then land in the project of the *other* window. The daemon now
+ * refuses a second *live* instance, which means it has to be told when "the
+ * same instance" reconnects and when a genuinely different one appears — the
+ * two cases get opposite answers.
+ *
+ * So it is generated here, at module load, and **not** per connection: the
+ * transport's reconnect loop (and a menu's `reconnect`) is the same editor
+ * instance coming back, while a fresh editor process — or a reloaded extension
+ * bundle — is a new one. Random rather than derived from the editor, because
+ * the editor exposes nothing to derive it from; it is an identifier, not a
+ * secret, and never goes into a message the user reads.
+ */
+const INSTANCE_ID = newInstanceId();
+
+/** `inst-<HHMMSSmmm>-<8 random base36 chars>` — readable in an audit log. */
+function newInstanceId(): string {
+  const stamp = MODULE_LOADED_AT.slice(11, 23).replace(/[^0-9]/g, '');
+  const random = Math.random().toString(36).slice(2, 10);
+  return `inst-${stamp}-${random}`;
+}
+
 let status: {
   state: TransportState;
   detail?: string;
@@ -46,6 +72,16 @@ let status: {
   /** What the daemon said about this pairing, from the `hello` answer. */
   paired?: boolean;
   fingerprint?: string;
+  /**
+   * The oldest connector build the daemon accepts, from the `hello` answer.
+   *
+   * Only set when the daemon actually sent it: a daemon that predates the
+   * field says nothing, and "nothing" must not be rendered as "you are up to
+   * date" (018 §B3).
+   */
+  minConnectorVersion?: string;
+  /** Set only when {@link VERSION} is *older* than `minConnectorVersion`. */
+  connectorOutdated?: boolean;
 } = { state: 'idle' };
 
 /**
@@ -213,6 +249,8 @@ function buildTransport(current: ResolvedConfig): Transport {
     // was running?" after the fact — the question a sideload that silently did
     // not take leaves behind (004f item 5).
     connectorVersion: VERSION,
+    // Told apart from the other editor windows (018 §A) — see INSTANCE_ID.
+    instanceId: INSTANCE_ID,
     onRequest: async (action, params) => {
       const handlers = buildHandlers(host().api as Record<string, any>);
       const handler = handlers[action];
@@ -243,9 +281,56 @@ function buildTransport(current: ResolvedConfig): Transport {
           ? `paired with the daemon, fingerprint ${status.fingerprint}`
           : 'connected to the daemon, not paired yet',
       );
+      checkMinimumVersion(data.minConnectorVersion);
     },
     onLog: (message) => logLine(message),
   });
+}
+
+/**
+ * Compare this build against the daemon's `minConnectorVersion` (018 §B3).
+ *
+ * A toast rather than a refusal, because the daemon is still answering: the
+ * minimum is a warning sign, not a gate. What it replaces is silence — a
+ * version skew otherwise looks like an action that mysteriously misbehaves,
+ * and the user has no way to learn that their extension is the old half.
+ *
+ * Nothing at all happens when the field is missing: a daemon that does not
+ * state a minimum has not said this build is too old, and rendering its
+ * absence as "up to date" (or as a warning) would be inventing a fact — the
+ * rule the About box already follows for absent fields. The reading is
+ * *cleared* in that case too, so a value seen on one daemon cannot outlive the
+ * connection that produced it.
+ */
+function checkMinimumVersion(minimum: unknown): void {
+  const wanted = typeof minimum === 'string' ? minimum.trim() : '';
+  if (!wanted) {
+    status = { ...status, minConnectorVersion: undefined, connectorOutdated: undefined };
+    return;
+  }
+  status = { ...status, minConnectorVersion: wanted };
+  const older = isVersionOlder(VERSION, wanted);
+  if (older === null) {
+    // One side is not a version — `'unknown'` from a bundle built without the
+    // define, most likely. Recorded, never acted on: a comparison that cannot
+    // be made is not a verdict, and guessing here is how "which build is
+    // running" became a round trip twice already.
+    logLine(
+      `daemon asks for connector >= ${wanted}; this build reports ${VERSION}, `
+        + 'so the two cannot be compared',
+    );
+    return;
+  }
+  if (!older) {
+    status = { ...status, connectorOutdated: false };
+    logLine(`connector ${VERSION} satisfies the daemon's minimum ${wanted}`);
+    return;
+  }
+  status = { ...status, connectorOutdated: true };
+  logLine(`connector ${VERSION} is older than the daemon's minimum ${wanted} — update the extension`);
+  host().notify(
+    `boardwise: connector ${VERSION} is older than the daemon's minimum ${wanted} — update the extension`,
+  );
 }
 
 /** Resolve a config with a token in it, generating one on first use. */
@@ -426,6 +511,15 @@ export function about(): void {
     // The token itself is never shown, here or anywhere else.
     `token: ${tokenLine(current)}`,
     `pairing: ${pairing}`,
+    // Only when the daemon actually stated a minimum (018 §B3): an absent
+    // field means "no minimum", and a line about it would read as a verdict.
+    ...(status.minConnectorVersion
+      ? [
+          status.connectorOutdated
+            ? `upgrade needed: the daemon accepts connector >= ${status.minConnectorVersion}, this build is ${VERSION}`
+            : `connector version: ok (the daemon accepts >= ${status.minConnectorVersion})`,
+        ]
+      : []),
     `auto-connect: ${current.autoConnect ? 'on' : 'off'}`,
   ];
   if (status.lastError) lines.push(`last error: ${status.lastError}`);

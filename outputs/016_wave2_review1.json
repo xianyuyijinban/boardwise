@@ -1,0 +1,30 @@
+{
+  "summary": {
+    "ERROR": 0,
+    "WARN": 1,
+    "INFO": 0
+  },
+  "findings": [
+    {
+      "rule_id": "param-value-mpn-match",
+      "severity": "WARN",
+      "message": "R1: board value 4700 Ω contradicts its MPN ('FRC0805J102 TS' decodes to 1000 Ω) -- BOM and schematic disagree (4.70x apart, at or above the 3x tolerance)",
+      "level": "L2-facts",
+      "evidence": [
+        "R1 value '4.7k'",
+        "R1 mpn 'FRC0805J102 TS'"
+      ],
+      "target": {
+        "component_ref": "R1",
+        "primitive_id": "",
+        "pin_refs": [],
+        "net_refs": [],
+        "expected_before": "4.7k",
+        "suggested_after": "1k"
+      },
+      "refs": [
+        "R1"
+      ]
+    }
+  ]
+}

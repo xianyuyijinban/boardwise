@@ -343,3 +343,28 @@ test('hello announces the connector build, and omits it when there is none', asy
   assert.equal('connectorVersion' in bare.lastFrame().params, false);
   older.stop();
 });
+
+
+test('hello announces the instance id, and omits it when there is none', async () => {
+  // 018 §A: the daemon refuses a second *live* connector instance, so it has to
+  // be told which instance is coming back. The value is the extension's, not
+  // the connection's — `index.ts` generates it once per module evaluation — so
+  // the transport only carries what it is handed.
+  const socket = new FakeSocket();
+  const { transport } = makeTransport(socket, { instanceId: 'inst-112233445-ab12cd34' });
+  await transport.start();
+  socket.connect();
+
+  assert.equal(socket.lastFrame().params.instanceId, 'inst-112233445-ab12cd34');
+  transport.stop();
+
+  // A build that does not have one still connects: the daemon falls back to its
+  // connection-level uuid, which is weaker but not a guess.
+  const bare = new FakeSocket();
+  const { transport: anonymous } = makeTransport(bare);
+  await anonymous.start();
+  bare.connect();
+
+  assert.equal('instanceId' in bare.lastFrame().params, false);
+  anonymous.stop();
+});

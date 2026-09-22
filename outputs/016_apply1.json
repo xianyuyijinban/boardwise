@@ -1,0 +1,166 @@
+{
+  "command": "apply",
+  "ok": true,
+  "outcome": "applied",
+  "reason": "post_review_unknown",
+  "exitCode": 0,
+  "planPath": "outputs/016_plan_r1.json",
+  "plan": {
+    "planVersion": 1,
+    "source": {
+      "inputSha256": "12aabdac901f1478538efc811c35afa0a930bbcadaef0051d35647847d60f098",
+      "projectUuid": "",
+      "pageUuid": "",
+      "hostVersion": "3.2.186",
+      "connectorVersion": "0.4.10"
+    },
+    "target": {
+      "primitiveId": "",
+      "designator": "R1",
+      "expectedValue": "4.7k"
+    },
+    "change": {
+      "kind": "component-value",
+      "before": "4.7k",
+      "after": "1k"
+    },
+    "preconditions": [
+      "the page the editor has focused is the plan's page (this plan carries no pageUuid, so there is no page guard to enforce)",
+      "designator R1 still resolves on the page",
+      "Value is still 4.7k"
+    ],
+    "expectedPostcondition": [
+      "Value reads back as 1k",
+      "target review finding is resolved"
+    ]
+  },
+  "designator": "R1",
+  "before": "4.7k",
+  "after": "1k",
+  "page": {
+    "uuid": "",
+    "guard": "unavailable"
+  },
+  "projectUuid": "",
+  "resolved": {
+    "designator": "R1",
+    "primitiveId": "d815177955d60842",
+    "value": "4.7k",
+    "valueKey": "OtherProperty.Value"
+  },
+  "write": {
+    "action": "sch.set_component_attribute",
+    "calls": 1,
+    "key": "Value",
+    "params": {
+      "primitiveId": "d815177955d60842",
+      "key": "Value",
+      "value": "1k",
+      "pageUuid": "(omitted: the plan carries none)"
+    },
+    "wrote": true,
+    "applied": true,
+    "mergedKeys": [
+      "Datasheet",
+      "Description",
+      "JLCPCB Part Class",
+      "LCSC Part Name",
+      "Operating Temperature",
+      "Power(Watts)",
+      "Supplier Footprint",
+      "Temperature Coefficient",
+      "Tolerance",
+      "Type",
+      "Value",
+      "Voltage-Supply(Max)"
+    ],
+    "otherPropertyAfter": {
+      "LCSC Part Name": "",
+      "Supplier Footprint": "",
+      "JLCPCB Part Class": "",
+      "Datasheet": "",
+      "Type": "",
+      "Value": "1k",
+      "Tolerance": "",
+      "Power(Watts)": "",
+      "Voltage-Supply(Max)": "",
+      "Temperature Coefficient": "",
+      "Operating Temperature": "",
+      "Description": ""
+    },
+    "mismatched": [],
+    "clobberedOtherKeys": [],
+    "readBackAfter": "",
+    "readBackBefore": "",
+    "writeError": ""
+  },
+  "verification": {
+    "action": "sch.geometry",
+    "designator": "R1",
+    "primitiveId": "d815177955d60842",
+    "observed": "1k",
+    "expected": "1k",
+    "valueKey": "OtherProperty.Value",
+    "matched": true,
+    "how": "identical"
+  },
+  "save": {
+    "ok": true,
+    "answered": {
+      "saved": true
+    }
+  },
+  "persistence": "saved_unverified",
+  "postReview": {
+    "state": "unknown",
+    "reason": "outputs\\ProPrj_test_2026-09-22.epro2 was last written at 1790007335.0912094 which is before this run started at 1790007479.9265969 — 保存未落盘或落盘延迟, so the re-review is not claimed",
+    "file": "outputs/ProPrj_test_2026-09-22.epro2",
+    "startedAt": 1790007479.9265969,
+    "findings": [],
+    "outcomes": [],
+    "mtime": 1790007335.0912094
+  },
+  "steps": [
+    {
+      "action": "sch.geometry",
+      "purpose": "read the page before writing",
+      "ok": true,
+      "wrote": false,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.set_component_attribute",
+      "purpose": "write Value='1k' on R1",
+      "ok": true,
+      "wrote": true,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.geometry",
+      "purpose": "read the page back independently after the write",
+      "ok": true,
+      "wrote": false,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.doc.save",
+      "purpose": "persist the change",
+      "ok": true,
+      "wrote": true,
+      "code": "",
+      "message": "",
+      "unknown": false
+    }
+  ],
+  "notes": [
+    "pageUuid guard unavailable, focused page used — this plan carries no pageUuid, so `guardPage` returns early (measured, actions.ts) and nothing but the operator's attention says the focused page is the right one",
+    "persistence is capped at saved_unverified: this bridge has no close/reopen action (009d), so only a separate reopen can promote it to saved_verified"
+  ],
+  "final": "applied and verified; the re-review could not be taken (see above)"
+}

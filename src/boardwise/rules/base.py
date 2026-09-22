@@ -19,11 +19,40 @@ SEVERITY_ORDER: dict[str, int] = {"ERROR": 0, "WARN": 1, "INFO": 2}
 
 
 @dataclass
+class FindingTarget:
+    """What a finding is *about*, in fields a caller can act on (task 016).
+
+    ``evidence`` is for a reader and ``message`` is prose; this is the same
+    claim said in a shape a machine can use without re-parsing either. Every
+    field defaults to empty, so a rule fills in only what it actually knows —
+    an empty ``primitive_id`` means "not resolvable offline" (the live id only
+    exists on the editor's canvas; the schematic parser keeps the symbol uuid
+    instead, ``parsers/schematic.py``) and never "there is no primitive".
+
+    ``expected_before`` / ``suggested_after`` are *as written on the board*,
+    not normalised numbers, because they are what a repair has to compare
+    against and write back.
+    """
+
+    component_ref: str = ""
+    primitive_id: str = ""
+    pin_refs: list[str] = field(default_factory=list)
+    net_refs: list[str] = field(default_factory=list)
+    expected_before: str = ""
+    suggested_after: str = ""
+
+
+@dataclass
 class Finding:
     """One rule violation (or advisory note) with concrete evidence.
 
     ``evidence`` entries must point at specific components / nets / pins,
     e.g. ``"C116 pin1 @ VM"`` — never bare prose.
+
+    ``target`` is the optional structured form of the same claim: absent
+    (``None``) for every rule that has nothing to change, and it is what makes
+    a finding repairable — see task 016's ``core.changeplan``, which refuses to
+    act on a finding that carries no target.
     """
 
     rule_id: str
@@ -31,6 +60,7 @@ class Finding:
     message: str
     level: str
     evidence: list[str] = field(default_factory=list)
+    target: FindingTarget | None = None
 
 
 class Rule:

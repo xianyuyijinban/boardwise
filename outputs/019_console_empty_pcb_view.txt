@@ -1,0 +1,4 @@
+boardwise review: outputs/ProPrj_test_2026-09-22.epro2 (0 components, 0 nets)
+board: 0 pads, 0 tracks, 0 vias
+findings: 0 ERROR, 0 WARN, 0 INFO
+note: pcb view read nothing from this file — for a schematic review, re-run with --view schematic

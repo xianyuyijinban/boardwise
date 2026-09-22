@@ -21,7 +21,7 @@ import math
 
 from ..core.model import Component, DesignModel, is_ground_net
 from ..core.power_domains import domain_of, infer_net_domains
-from .base import Finding, Outcome
+from .base import Finding, FindingTarget, Outcome
 from .facts import FactsRule
 from .values import (
     decode_eia_3digit,
@@ -105,6 +105,39 @@ def _kind_of(comp: Component, entry) -> str | None:
     return None
 
 
+#: Engineering prefixes for :func:`_human_value`, largest scale first. The two
+#: spans differ because the value parsers do: a resistor value may be a bare
+#: number (``470``) while a capacitor value *must* name its unit, so a
+#: capacitor suggestion always ends in ``pF``/``nF``/``uF``/``mF``.
+_RESISTOR_PREFIXES = ((1e6, "M"), (1e3, "k"), (1.0, ""))
+_CAPACITOR_PREFIXES = ((1e-3, "mF"), (1e-6, "uF"), (1e-9, "nF"), (1e-12, "pF"))
+
+
+def _human_value(quantity: float, kind: str) -> str:
+    """A decoded SI quantity written the way a person writes the value.
+
+    ``1000.0`` ohms becomes ``"1k"`` and ``1e-7`` farads becomes ``"100nF"``,
+    so a suggestion can be typed back into the editor unchanged. The output is
+    required to survive a round trip through the value parsers inside the
+    rule's own tolerance — a *suggested* value nobody can parse would make the
+    repair loop fail to close, which is worse than no suggestion at all
+    (``tests/test_016_*`` pins the round trip across the whole EIA code space).
+
+    Six significant digits is deliberate: the quantities this formatter sees
+    are EIA codes (a two-digit mantissa times a power of ten), so six digits
+    render every one of them exactly and strip the float noise that dividing
+    by 1e-6 or 1e3 would otherwise print.
+    """
+    prefixes = _RESISTOR_PREFIXES if kind == "resistor" else _CAPACITOR_PREFIXES
+    for scale, suffix in prefixes:
+        if quantity >= scale:
+            return f"{quantity / scale:.6g}{suffix}"
+    # Unreachable for decoded EIA codes (the smallest resistor is 10 ohm and
+    # the smallest capacitor is 10 pF, both above their last prefix); kept so
+    # the function is total rather than raising inside a rule.
+    return f"{quantity:.6g}"
+
+
 class ValueMpnMatch(FactsRule):
     """PARAM-4: the board's value field agrees with the MPN's decoded value.
 
@@ -133,13 +166,13 @@ class ValueMpnMatch(FactsRule):
     )
 
     def outcomes(self, model: DesignModel) -> list[Outcome]:
-        return [outcome for outcome, _s in self._rows(model)]
+        return [row[0] for row in self._rows(model)]
 
     def check(self, model: DesignModel) -> list[Finding]:
         return self.findings_from(self._rows(model))
 
-    def _rows(self, model: DesignModel) -> list[tuple[Outcome, str | None]]:
-        rows: list[tuple[Outcome, str | None]] = []
+    def _rows(self, model: DesignModel) -> list[tuple]:
+        rows: list[tuple] = []
         for comp in model.components.values():
             entry = self.entry_for(comp)
             kind = _kind_of(comp, entry)
@@ -248,6 +281,13 @@ class ValueMpnMatch(FactsRule):
                     f"a zero side ({declared:.4g} vs {decoded:.4g} {unit}) "
                     "leaves the ratio undefined, so no tolerance applies"
                 )
+                # Task 016: the one row in the codebase that carries a
+                # structured target, which is what makes this the first
+                # repairable rule. The suggested value is the MPN's own
+                # decoded quantity written back in a human notation the value
+                # parsers read (`_human_value`), so a repair closes the loop:
+                # fix the board value to it and this very rule answers OK on
+                # the next pass.
                 rows.append((
                     Outcome(
                         rule_id=self.id,
@@ -265,6 +305,11 @@ class ValueMpnMatch(FactsRule):
                         ],
                     ),
                     "WARN",
+                    FindingTarget(
+                        component_ref=comp.designator,
+                        expected_before=comp.value,
+                        suggested_after=_human_value(decoded, kind),
+                    ),
                 ))
         return rows
 
