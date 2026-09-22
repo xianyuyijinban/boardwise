@@ -705,12 +705,37 @@ export function sharedRuntimeImplementation(version: string): string {
 }
 
 /**
- * The members a published record must carry to be usable by another evaluation.
+ * Every member a published record must carry to be usable by another evaluation.
  *
  * Validated by reading, not by trusting the key: the object on the host belongs
  * to the editor, and anything could be sitting under it.
+ *
+ * **The whole record — `keyof OwnedTransportRuntime` (`index.ts`) minus the
+ * `implementation` string, which is compared separately — rather than one name
+ * per defect.** The list used to grow the way the failures arrived, which is how
+ * `about` came to be the one member of five that a caller reached for without
+ * being checked: listed were the members a test had already gone red on. A
+ * record missing a member the caller then uses fails at the call site instead,
+ * and that failure is not always loud — an adopted record with no
+ * `noteEvaluation` throws inside `runtime()`, which `activate()` catches on
+ * purpose, so the extension looks inert rather than broken (measured: that is
+ * exactly what dropping a name from this list does, see the loop in
+ * `tests/bootstrap.test.mjs`). The price of the whole list is one comparison per
+ * member on a read that happens a handful of times per editor session; the price
+ * of a partial one is a silently half-working controller. The test walks it in
+ * both directions — a record missing any single member is retired, a record
+ * carrying all of them is adopted.
  */
-const SHARED_RUNTIME_MEMBERS = ['start', 'stop', 'bootstrapFromModuleLoad', 'getStatus'] as const;
+export const SHARED_RUNTIME_MEMBERS = [
+  'start',
+  'bootstrapFromModuleLoad',
+  'reconnect',
+  'stop',
+  'selfArm',
+  'about',
+  'getStatus',
+  'noteEvaluation',
+] as const;
 
 export interface SharedRuntimeLookup<T> {
   /** The controller to use: ours, or the one already published. */

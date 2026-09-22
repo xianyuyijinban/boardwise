@@ -1336,6 +1336,11 @@ Five claims are **not** automated (four only reproducible by hand, one still ope
    `About…` shows `state: idle` because it cannot see the long-lived instance's connection —
    `bridge status` and the audit are the truth; and the re-evaluated bootstraps *did* reach TCP
    twice (same token, same id, harmless), so "menu contexts always die" is a tendency, not a law.
+   (**Both symptoms closed in 0.4.13, without touching the fact underneath:** the box is now
+   answered through the shared controller, so a menu click reports the owning runtime instead of
+   its own empty copy, and it no longer arms a connection of its own — the observation that the
+   editor re-evaluates the bundle per menu click is exactly what the shared runtime exists for.
+   See §13 for the box's current shape.)
 5. What `Origin` / `User-Agent` the editor's socket actually sends — **this is task 004c's
    outstanding deliverable**, and the reason `check_origin` still returns `true`. The two samples
    (one editor connection, one deliberate browser connection) belong in the run report; until
@@ -1406,16 +1411,30 @@ the token came from** — `storage`, or `Math.random — NOT a CSPRNG` if Web Cr
 **Read the box top to bottom**; each line localises a failure one step further along:
 
 ```text
-boardwise connector
-activation: 14:02:11 ok            <- did the editor call us, and how did that go
-loaded: 14:02:09                   <- when this copy of the bundle was evaluated
+boardwise connector 0.4.13
+activation: 21:04:36 ok            <- did the editor call us, and how did that go
+lifecycle: moduleBootstrapObserved=yes activateObserved=yes evaluations=3
+bootstrap: the bundle was evaluated 3× in this editor runtime; activate() was dispatched at 21:04:36
+loaded: 21:04:29                   <- when the evaluation that owns this box was loaded
 state: connected
 storage: readable (token=webcrypto, 64 characters)
 url: ws://127.0.0.1:61190/eda
 token: storage, 64 characters (never displayed)
 pairing: paired with the daemon (fingerprint 3f9a1c7e)
+connector version: ok (the daemon accepts >= 0.4.10)
 auto-connect: on
 ```
+
+The two 024 lines answer the question the rest of the box cannot: `lifecycle:` reports
+the module-scope bootstrap and the activation callback as counters (plus how many times the
+editor has evaluated this bundle), and `bootstrap:` says the same thing in one sentence — the
+pair separates "the host never loaded us" from "it loaded us and never called `activate()`".
+Since 0.4.13 the box is answered through the controller that **owns** the connection, so these
+are the owning evaluation's numbers and `loaded:` stays put across menu clicks, even though the
+editor re-evaluates the bundle on every click (§12:4). Every time in the box is your local
+clock; before 0.4.13 all of them were UTC, which reads eight hours early in Beijing.
+**`connector version:` appears only when the daemon stated a minimum** (018 §B3) — with no
+minimum there is no verdict to print.
 
 **Read `activation:` first** — it is the line that resolves the oldest confusion:
 
@@ -1427,8 +1446,14 @@ auto-connect: on
 | `<time> FAILED — <error>` | Activation ran and threw. The cause is in this line *and* in the log panel. This is the case that used to be completely invisible |
 | `<time> ok` / `<time> running` | Activation happened; whatever is wrong is further down (log panel, `storage:`, `token:`) |
 
-`loaded:` is when this module was evaluated. Two different times across two `About…` boxes mean the
-editor loaded the bundle twice — worth ruling out before anything else is blamed.
+`loaded:` is when the evaluation that **owns this box** was loaded — the controller holding the
+connection, since 0.4.13 the box is answered through it even when a menu click re-evaluated the
+bundle, so this line stays put across clicks in one editor session. A *newer* value means the
+runtime was rebuilt (a new editor session, a re-import, or a record this build could not reuse),
+which is worth ruling out before anything else is blamed. Every time in the box — here and in
+`activation:`/`bootstrap:`/`self-arm:` — is the reader's **local** clock; before 0.4.13 it was UTC,
+which read eight hours early in Beijing (a correct `loaded: 11:50:21` beside a daemon log at
+19:50:21 was the round trip that fixed it).
 
 Then `storage:` and `token:`. `storage: readable (token=unset)` means nothing is stored;
 `(token=webcrypto, 64 characters)` means a token is there, with the provenance it was created with
