@@ -31,9 +31,9 @@ collects the current truth and the pointers.
   - `docs/images/gs-03-daemon-start.png`
   - `PROGRESS.md`
 
-## Current baseline (2026-09-22, commit `4448c59` on `d70f59b` + `ffbdf77`; published on GitHub)
+## Current baseline (2026-09-22, commit `383e524` on `4448c59`; published on GitHub)
 
-- pytest: **1298 passed** (run with `--basetemp=.tmp_pt_home` on Windows —
+- pytest: **1321 passed** (run with `--basetemp=.tmp_pt_home` on Windows —
   the host's safe-delete hook otherwise eats the summary line and fakes
   exit 1)
 - connector: **305 pass / 0 fail** (`cd connector && npm test`)
@@ -56,6 +56,7 @@ collects the current truth and the pointers.
 | 020 上游 issue 加固 | **DONE 2026-09-22** | `ffbdf77`; WI-1 解析静默丢脚可观测（ParseStats + review note：console EN / --md CN，--json 逐字节不变；llc 实测 14，毕设板 0）+ WI-2 update-connector 版本回读（verified→0 / mismatch→1 / timeout→3 UNKNOWN，`--no-verify` 保留旧行为）；真机 verified 0.4.11；变异 3/3 CAUGHT（`tasks/020-upstream-issue-fixes.md`；上游对照 #220-adjacent、#250/#252） |
 | 021 多工程=多窗口实测 + hello 身份登记 | **DONE 2026-09-22** | `d70f59b`; 三工程=三窗口一进程实测钉死（eda API 窗口级，跨窗口枚举结构性不通）；connector hello 带 projectName/projectUuid → daemon 登记活跃+被拒实例 → status `projects seen`；方案=文件审查不挑窗口 + 写操作人机协作换窗（`tasks/021-multiproject.md`；已知限制：reload 时序 null，daemon 主动查补登待做） |
 | 022 全新 clone 三 issue | **DONE 2026-09-22** | `4448c59`; Fixes #1（夹具守卫比内容不比字节——逐成员 sha256 + CRLF normalize，夹具零改动）+ Fixes #2（dev 依赖组 + install.bat 可选装）+ Fixes #3（doctor 首项离线安装版本预检，桥读项交叉复核）；doctor 七项→八项；变异 4/4 CAUGHT（`tasks/022-fresh-clone-issues.md`） |
+| 023 多窗口路由（向 easyeda 看齐） | **DONE 2026-09-22** | `383e524`; 拆 018 单活跃 → 窗口 hub（全接纳注册）+ response context 回流（切文档身份保鲜）+ `--project`/`--instance` 路由（三态诚实报错列在线窗口）+ per-window 写互斥；**三窗口真机八项全过**：三工程注册/test2 直达/禁地只读/建删页零误伤/hello-null 自愈/三窗逐个热更（`tasks/023-multiwindow-routing.md`；架构对齐上游 `internal/daemon/hub.go`+`dispatch.go`） |
 
 ## Coordinate contract (the thing that cost the most sessions)
 
@@ -82,3 +83,4 @@ point. Full measurement history: `tasks/010c-coordinate-convention.md`
 - `ffbdf77` 020 upstream-issue hardening (parse-drop observability + update-connector verified reload; pytest 1276)
 - `d70f59b` 021 multi-window reality + hello project-identity registration (pytest 1281)
 - `4448c59` 022 fresh-clone fixes: content-based fixture guard + dev deps + offline editor floor check (GitHub #1/#2/#3 closed; pytest 1298)
+- `383e524` 023 multi-window hub + project/instance routing + response context (three-window real host verified; pytest 1321)
