@@ -1,0 +1,183 @@
+# daemon listening on 127.0.0.1:50198; BOARDWISE_HOME=C:\Users\xiangyu\AppData\Local\Temp\tmpz66rwdve
+
+=== two windows connect, and BOTH are registered ===
+
+banner (to inst-101500123-aaaaaaaa): {"data": {"expect": "hello", "protocol": "1.0", "server": "boardwise"}, "event": "banner"}
+hello ack (to inst-101500123-aaaaaaaa): {"fingerprint": "566f8782", "minConnectorVersion": "0.4.10", "paired": true, "protocol": "1.0", "role": "connector", "serverTime": 1790067569.4861984, "windowKey": "inst-101500123-aaaaaaaa", "windowsOnline": 1}
+
+banner (to inst-101533456-bbbbbbbb): {"data": {"expect": "hello", "protocol": "1.0", "server": "boardwise"}, "event": "banner"}
+hello ack (to inst-101533456-bbbbbbbb): {"fingerprint": "566f8782", "minConnectorVersion": "0.4.10", "paired": true, "protocol": "1.0", "role": "connector", "serverTime": 1790067569.4913385, "windowKey": "inst-101533456-bbbbbbbb", "windowsOnline": 2}
+
+banner (to cli): {"data": {"expect": "hello", "protocol": "1.0", "server": "boardwise"}, "event": "banner"}
+hello ack (to cli): {"fingerprint": "566f8782", "minConnectorVersion": "0.4.10", "paired": true, "protocol": "1.0", "role": "cli", "serverTime": 1790067569.495394, "windowKey": null, "windowsOnline": 2}
+
+=== `boardwise bridge status` (rendered from ping) ===
+  windows: 2 connected
+  window: inst-101500123-aaaaaaaa (connector 0.4.10)  [project /test (uuid-test)]
+    peer: 127.0.0.1:50199  connected: 2026-09-22 16:59:29  last seen: 2026-09-22 16:59:29
+  window: inst-101533456-bbbbbbbb (connector 0.4.10)  [project test2 (uuid-test2)]
+    peer: 127.0.0.1:50201  connected: 2026-09-22 16:59:29  last seen: 2026-09-22 16:59:29
+  projects seen: /test (inst-101500123-aaaaaaaa), test2 (inst-101533456-bbbbbbbb)
+
+=== routing refusals, verbatim ===
+
+targetProject absent, 2 windows: {"error": {"code": "WINDOW_UNSPECIFIED", "detail": {"candidates": [{"client": "boardwise-connector/3.2.186", "connectedAt": 1790067569.4851484, "connectorVersion": "0.4.10", "instanceId": "inst-101500123-aaaaaaaa", "instanceIdSource": "hello", "lastSeen": 1790067569.4851484, "pageType": null, "pageUuid": null, "peer": "127.0.0.1:50199", "projectName": "/test", "projectUuid": "uuid-test", "routed": 0, "windowKey": "inst-101500123-aaaaaaaa"}, {"client": "boardwise-connector/3.2.186", "connectedAt": 1790067569.4907112, "connectorVersion": "0.4.10", "instanceId": "inst-101533456-bbbbbbbb", "instanceIdSource": "hello", "lastSeen": 1790067569.4907112, "pageType": null, "pageUuid": null, "peer": "127.0.0.1:50201", "projectName": "test2", "projectUuid": "uuid-test2", "routed": 0, "windowKey": "inst-101533456-bbbbbbbb"}]}, "message": "2 editor windows are connected and the request named no project; re-send with a project hint (boardwise bridge call --project NAME_OR_UUID) — online windows: /test (inst-101500123-aaaaaaaa), test2 (inst-101533456-bbbbbbbb)"}, "id": "nohint", "ok": false}
+
+targetProject='反激辅助电源' (matches nothing): {"error": {"code": "PROJECT_NOT_CONNECTED", "detail": {"candidates": [{"client": "boardwise-connector/3.2.186", "connectedAt": 1790067569.4851484, "connectorVersion": "0.4.10", "instanceId": "inst-101500123-aaaaaaaa", "instanceIdSource": "hello", "lastSeen": 1790067569.4851484, "pageType": null, "pageUuid": null, "peer": "127.0.0.1:50199", "projectName": "/test", "projectUuid": "uuid-test", "routed": 0, "windowKey": "inst-101500123-aaaaaaaa"}, {"client": "boardwise-connector/3.2.186", "connectedAt": 1790067569.4907112, "connectorVersion": "0.4.10", "instanceId": "inst-101533456-bbbbbbbb", "instanceIdSource": "hello", "lastSeen": 1790067569.4907112, "pageType": null, "pageUuid": null, "peer": "127.0.0.1:50201", "projectName": "test2", "projectUuid": "uuid-test2", "routed": 0, "windowKey": "inst-101533456-bbbbbbbb"}], "targetProject": "反激辅助电源"}, "message": "no connected window has project '反激辅助电源' open; online windows: /test (inst-101500123-aaaaaaaa), test2 (inst-101533456-bbbbbbbb)"}, "id": "miss", "ok": false}
+  detail.candidates windowKeys: ["inst-101500123-aaaaaaaa", "inst-101533456-bbbbbbbb"]
+
+=== routing: one match, by name and by uuid ===
+
+targetProject='test2': {"context": {"pageType": "pcb", "pageUuid": "page-pcb-b", "projectName": "test2", "projectUuid": "uuid-test2"}, "data": {"action": "doc.list", "window": "inst-101533456-bbbbbbbb"}, "id": "by-name", "ok": true}
+
+targetProject='uuid-test': {"context": {"pageType": "sch", "pageUuid": "page-sch-a", "projectName": "/test", "projectUuid": "uuid-test"}, "data": {"action": "doc.list", "window": "inst-101500123-aaaaaaaa"}, "id": "by-uuid", "ok": true}
+
+=== a third window claims the same project as window B -> ambiguous ===
+
+banner (to inst-101620000-cccccccc): {"data": {"expect": "hello", "protocol": "1.0", "server": "boardwise"}, "event": "banner"}
+hello ack (to inst-101620000-cccccccc): {"fingerprint": "566f8782", "minConnectorVersion": "0.4.10", "paired": true, "protocol": "1.0", "role": "connector", "serverTime": 1790067569.5063684, "windowKey": "inst-101620000-cccccccc", "windowsOnline": 3}
+
+targetProject='test2' (two windows have it): {"error": {"code": "PROJECT_AMBIGUOUS", "detail": {"candidates": [{"client": "boardwise-connector/3.2.186", "connectedAt": 1790067569.4907112, "connectorVersion": "0.4.10", "instanceId": "inst-101533456-bbbbbbbb", "instanceIdSource": "hello", "lastSeen": 1790067569.5005038, "pageType": "pcb", "pageUuid": "page-pcb-b", "peer": "127.0.0.1:50201", "projectName": "test2", "projectUuid": "uuid-test2", "routed": 1, "windowKey": "inst-101533456-bbbbbbbb"}, {"client": "boardwise-connector/3.2.186", "connectedAt": 1790067569.5056248, "connectorVersion": "0.4.10", "instanceId": "inst-101620000-cccccccc", "instanceIdSource": "hello", "lastSeen": 1790067569.5056248, "pageType": null, "pageUuid": null, "peer": "127.0.0.1:50203", "projectName": "test2", "projectUuid": "uuid-test2", "routed": 0, "windowKey": "inst-101620000-cccccccc"}], "targetProject": "test2"}, "message": "project 'test2' matches 2 connected windows (test2 (inst-101533456-bbbbbbbb), test2 (inst-101620000-cccccccc)); nothing was forwarded — close the duplicate window or name one of them"}, "id": "ambiguous", "ok": false}
+  detail.candidates windowKeys: ["inst-101533456-bbbbbbbb", "inst-101620000-cccccccc"]
+  (nothing was forwarded: neither window received this call)
+
+=== per-window call counts (ping, after the routed calls) ===
+  inst-101500123-aaaaaaaa: routed=1 project=/test page=sch/page-sch-a
+  inst-101533456-bbbbbbbb: routed=1 project=test2 page=pcb/page-pcb-b
+  inst-101620000-cccccccc: routed=0 project=test2 page=None/None
+
+=== closing window B, then asking for its project again ===
+targetProject='test2' (B closed, C still has it): {"context": {"pageType": "pcb", "pageUuid": "page-pcb-c", "projectName": "test2", "projectUuid": "uuid-test2"}, "data": {"action": "doc.list", "window": "inst-101620000-cccccccc"}, "id": "after-close", "ok": true}
+  online windows now: ['inst-101500123-aaaaaaaa', 'inst-101620000-cccccccc']
+
+=== audit log (oldest first; Boardwise home is temporary) ===
+  {"ts": 1790067569.4820065, "action": "connect", "role": "-", "ok": true, "peer": "127.0.0.1:50199", "origin": null, "user_agent": "Python/3.14 websockets/17.1"}
+  {"ts": 1790067569.4847145, "action": "pairing", "role": "connector", "ok": true, "client": "boardwise-connector/3.2.186", "peer": "127.0.0.1:50199", "fingerprint": "566f8782"}
+  {"ts": 1790067569.4854057, "action": "hello", "role": "connector", "ok": true, "peer": "127.0.0.1:50199", "client": "boardwise-connector/3.2.186 connector=0.4.10", "connectorVersion": "0.4.10", "instanceId": "inst-101500123-aaaaaaaa", "instanceIdSource": "hello", "windowKey": "inst-101500123-aaaaaaaa", "tookOverFrom": null, "duplicateInstanceId": null, "projectName": "/test", "projectUuid": "uuid-test", "windowsOnline": 1}
+  {"ts": 1790067569.4889426, "action": "connect", "role": "-", "ok": true, "peer": "127.0.0.1:50201", "origin": null, "user_agent": "Python/3.14 websockets/17.1"}
+  {"ts": 1790067569.4909406, "action": "hello", "role": "connector", "ok": true, "peer": "127.0.0.1:50201", "client": "boardwise-connector/3.2.186 connector=0.4.10", "connectorVersion": "0.4.10", "instanceId": "inst-101533456-bbbbbbbb", "instanceIdSource": "hello", "windowKey": "inst-101533456-bbbbbbbb", "tookOverFrom": null, "duplicateInstanceId": null, "projectName": "test2", "projectUuid": "uuid-test2", "windowsOnline": 2}
+  {"ts": 1790067569.4940407, "action": "connect", "role": "-", "ok": true, "peer": "127.0.0.1:50202", "origin": null, "user_agent": "Python/3.14 websockets/17.1"}
+  {"ts": 1790067569.4970217, "action": "ping", "role": "cli", "ok": true, "ms": 0.3}
+  {"ts": 1790067569.498006, "action": "doc.list", "role": "cli", "ok": false, "error": "WINDOW_UNSPECIFIED", "ms": 0.0}
+  {"ts": 1790067569.4992988, "action": "doc.list", "role": "cli", "ok": false, "error": "PROJECT_NOT_CONNECTED", "ms": 0.1}
+  {"ts": 1790067569.5007372, "action": "doc.list", "role": "cli", "ok": true, "ms": 0.3, "windowKey": "inst-101533456-bbbbbbbb", "projectName": "test2"}
+  {"ts": 1790067569.5019104, "action": "doc.list", "role": "cli", "ok": true, "ms": 0.3, "windowKey": "inst-101500123-aaaaaaaa", "projectName": "/test"}
+  {"ts": 1790067569.5037875, "action": "connect", "role": "-", "ok": true, "peer": "127.0.0.1:50203", "origin": null, "user_agent": "Python/3.14 websockets/17.1"}
+  {"ts": 1790067569.5058842, "action": "hello", "role": "connector", "ok": true, "peer": "127.0.0.1:50203", "client": "boardwise-connector/3.2.186 connector=0.4.10", "connectorVersion": "0.4.10", "instanceId": "inst-101620000-cccccccc", "instanceIdSource": "hello", "windowKey": "inst-101620000-cccccccc", "tookOverFrom": null, "duplicateInstanceId": null, "projectName": "test2", "projectUuid": "uuid-test2", "windowsOnline": 3}
+  {"ts": 1790067569.5076315, "action": "doc.list", "role": "cli", "ok": false, "error": "PROJECT_AMBIGUOUS", "ms": 0.0}
+  {"ts": 1790067569.5090253, "action": "ping", "role": "cli", "ok": true, "ms": 0.2}
+  {"ts": 1790067569.5109363, "action": "disconnect", "role": "connector", "ok": true, "peer": "127.0.0.1:50201", "actions": [], "instanceId": "inst-101533456-bbbbbbbb", "windowKey": "inst-101533456-bbbbbbbb", "projectName": "test2", "projectUuid": "uuid-test2", "pageUuid": "page-pcb-b", "pageType": "pcb", "routed": 1}
+  {"ts": 1790067569.824639, "action": "doc.list", "role": "cli", "ok": true, "ms": 0.7, "windowKey": "inst-101620000-cccccccc", "projectName": "test2"}
+  {"ts": 1790067569.8259966, "action": "ping", "role": "cli", "ok": true, "ms": 0.2}
+
+
+=== 023A-SUMMARY (Python 侧 · 棒 1) ===
+
+## 改动文件
+- src/boardwise/bridge/daemon.py   窗口 hub（原 018 单活跃拒绝拆掉）
+- src/boardwise/bridge/protocol.py 错误码 + context 簿记 + targetProject/context 帧字段
+- src/boardwise/bridge/client.py   BridgeClient.call(..., target_project=)
+- src/boardwise/cli.py             `bridge call --project`
+- tests/test_bridge.py             018 段的用例改写为新行为（登记/路由/context/互斥），未删来充数
+- tests/test_bridge_cli.py         status 三例改写 + `--project` 端到端/接线两例
+- docs/bridge.md                   §2 拓扑、§3.1 信封、§3.3、新增 §3.5 窗口 hub 与路由、
+                                   §4 ping 行、§5 错误码表、§8 子命令、§10 item1/2 与 10.24、
+                                   审计样例、§12 证据表、§13 E2 真机检查单
+- .kimi-code/skills/boardwise/SKILL.md  §2「多窗口用 --project」、§5 调用形态一行
+未碰 connector/（棒 2）、未动 git、未重启 daemon。
+
+## 命令与结果（本棒红线内的子集 + 全量回归）
+.venv/Scripts/python.exe -m pytest tests/test_bridge.py tests/test_bridge_cli.py -q --basetemp=.tmp_pt_023a
+    -> 103 passed in 13.87s      （其中 tests/test_bridge.py 单跑 72 passed）
+.venv/Scripts/python.exe -m pytest tests/ -q --basetemp=.tmp_pt_023a_full
+    -> 1312 passed in 109.28s    （全量回归，确认没有连带打坏别的测试）
+connector npm test / tsc 未跑：本棒不碰 connector/，那两条线属棒 2。
+
+## 路由三态的错误消息（逐字，见本文件前半部分的真实帧）
+1) WINDOW_UNSPECIFIED（无 hint，多窗口）
+   "2 editor windows are connected and the request named no project; re-send with a
+    project hint (boardwise bridge call --project NAME_OR_UUID) — online windows:
+    /test (inst-101500123-aaaaaaaa), test2 (inst-101533456-bbbbbbbb)"
+2) PROJECT_NOT_CONNECTED（hint 匹配 0 个）
+   "no connected window has project '反激辅助电源' open; online windows: /test (inst-…), test2 (inst-…)"
+3) PROJECT_AMBIGUOUS（hint 匹配 >1 个）
+   "project 'test2' matches 2 connected windows (test2 (inst-…bbbb), test2 (inst-…cccc));
+    nothing was forwarded — close the duplicate window or name one of them"
+三者都带 error.detail.candidates（每个窗口的 as_status()），不转发的语义有测试钉住。
+
+## 与任务书设计的偏离（都在测试里可见）
+1. hint 给定时若一个窗口都没连 → 仍是 NO_CONNECTOR（不是 PROJECT_NOT_CONNECTED）：此时"在线窗口
+   清单"是空的，NO_CONNECTOR 的 "Is EasyEDA running…?" 比"该工程没开"更准确，也保住了 CLI/doctor
+   既有的 NO_CONNECTOR 文案与退出码。
+2. 同 instanceId 双活（3.2.175）：两条连接都保留，第二条 key 加 `~2` 后缀（WINDOW_KEY_SEPARATOR），
+   于是出现 key ≠ instanceId 的行——status 与错误消息显示 key。这是"先 ambiguous 报错，人能看到"
+   的实现方式，不是静默去重；审计 hello 记录里有 duplicateInstanceId 字段。
+3. 只实现了 targetProject 与默认规则；未实现显式 windowId 直达（设计段没写，CLI 也没这需求）。
+4. 额外两件（任务书未点名，但直接服务"AI 指哪打哪/可验证"）：
+   a) 中继给 CLI 的 response/error 帧顶层带 context = 应答窗口的实时身份（旧连接器无 context 时，
+      daemon 用 hello 得到的上下文填），调用方能自证"这活是哪个窗口干的"；
+   b) 每条被转发的审计记录带 windowKey + projectName；disconnect 记录带该窗口最后已知的工程/页/routed。
+5. 拆掉的东西：refuse_if_held / RejectionNotice / _announce_rejection / on_rejection / recent_rejections /
+   ActiveConnector / active_instance()。保留两个"退役名"：ErrorCodes.CONNECTOR_ALREADY_ACTIVE（标注退役，
+   还在 §5 表里）与模块常量 AUDIT_CONNECTOR_REJECTED（不在 __all__）——理由：旧日志/在野连接器读得到，
+   删掉会让"查无此码/查无此记录"变成新的困惑；测试 test_the_refusal_machinery_is_gone_and_its_code_is_retired
+   钉住"机制不许回来"。
+6. ping 的 activeInstance / recentRejections 被 windows[] 取代，没做兼容层（同一仓库同版本，无跨版本读者）。
+
+## per-window 写互斥的实现口径
+写动作（risk != "read"）取该窗口的 asyncio.Lock；读动作不取锁；跨窗口并行。测试两条：
+test_writes_to_one_window_serialise_while_other_windows_run_in_parallel（用假连接器的实测时间窗相比
+较，同窗不重叠、异窗重叠）、test_a_read_does_not_take_the_write_lock（测试自己持锁：读照答、写被挡住、
+放锁后写立刻放行）。
+
+## 留给真机验证（R1 全程；daemon 要先重启，PID 27208 跑的是旧代码）
+1. 三窗口全连上：`bridge status` 出现 3 块 `window:`，`projects seen:` 三个工程，均带 windowKey。
+2. `boardwise bridge call --action doc.list --project test2` → exit 0，且返回的是 test2 那一窗口的数据。
+3. `boardwise bridge call --action sys.identity --project 反激辅助电源` → 只读通，focusedProject 逐字对上。
+4. 不带 `--project`（三窗口）→ exit 1、WINDOW_UNSPECIFIED、stderr 列三窗口——不瞎猜。
+5. `--project 不存在的名字` → PROJECT_NOT_CONNECTED，列在线窗口。
+6. 在某个窗口里切工程，再用**新**工程名 `--project` → 仍能命中（context 刷新链路，需棒 2 的 connector
+   真的在每个 response 里附 context；本棒只按任务书 §协议字段约定实现，未与真机 context 对过面）。
+7. 写 test2 成功、test/反激辅助电源 零影响（写前 doc.list 逐字确认焦点工程 = R1）。
+8. 需要裁定的观察点：真机上同一工程的重复窗口（若有）会不会常触发 PROJECT_AMBIGUOUS，以及 `~2` 后缀
+   在实际错误消息里的可读性是否够——这是设计上留给"人能看到"的诚实代价。
+
+
+
+=== 独立变异抽验（2 例，cp 备份 + sha256 还原；未用 git checkout）===
+M1 daemon.py：把 route() 的"无 hint 多窗口 → 拒绝"改成 `return live[0]`（静默挑第一个窗口）
+   期望红：hidden 猜测路径
+   实测：tests/test_bridge.py + tests/test_bridge_cli.py -> 3 failed, 100 passed
+         FAILED test_several_windows_and_no_hint_are_refused_not_guessed
+         FAILED test_a_window_that_names_no_project_still_connects_and_routes_around
+         FAILED test_call_project_hint_reaches_that_window_from_the_cli
+   还原：cp 备份回写 -> sha256 4aa79b7d39cc6bd4801e4d907c184768211bbfed8f1097a6bac3650036a1ff4b
+         （与备份逐字节一致）-> 72 passed
+M2 protocol.py：merge_context 里 `if not value: continue` 改成 `if value is None: continue`
+   （空串开始覆盖已知值）
+   期望红：context 合并不许用空值抹掉已知工程
+   实测：1 failed, 102 passed
+         FAILED test_a_context_that_could_not_be_read_never_erases_what_is_known
+   还原：cp 备份回写 -> sha256 0a5ba3f5786bf205c9dc2aa371dea0ef62654ffdc59fd48527100fbea1823d48
+         （与备份逐字节一致）-> 103 passed
+
+=== 最终状态 ===
+src/boardwise/bridge/daemon.py    sha256 4aa79b7d39cc6bd4801e4d907c184768211bbfed8f1097a6bac3650036a1ff4b
+src/boardwise/bridge/protocol.py  sha256 0a5ba3f5786bf205c9dc2aa371dea0ef62654ffdc59fd48527100fbea1823d48
+pytest tests/test_bridge.py tests/test_bridge_cli.py -q --basetemp=.tmp_pt_023a -> 103 passed
+pytest tests/ -q --basetemp=.tmp_pt_023a_full -> 1312 passed
+cd connector && npm test -> 325/325 ; npm run typecheck -> clean
+未动 git（改动全部留在工作树）；daemon 未重启。
+
+
+=== 新 CLI × 旧 daemon（PID 27208，运行中）的实测退化行为 ===
+$ PYTHONPATH=src .venv/Scripts/python.exe -m boardwise.cli bridge status
+boardwise bridge: daemon up on 127.0.0.1:61190
+  connector: connected
+  paired connector: 962bf45e
+exit=0
+说明：旧 daemon 的 ping 没有 `windows` 键，status_lines 因此一个字都不多印（旧输出逐字节不变），
+      exit code 也不变。**反过来说，`bridge status` 里没有 `windows: N connected` 就是"daemon 还没重启"的
+      直接标志**——重启前不要用 `--project`：旧 daemon 不认识 targetProject，会像 023 之前那样把调用
+      发给它当时持有的那个窗口（这正是 023 要消灭的静默错窗口）。daemon 必须由 Kimi 重启（PID 27208）。
+

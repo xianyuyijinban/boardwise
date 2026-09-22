@@ -256,6 +256,25 @@ def build_parser() -> argparse.ArgumentParser:
         "--params", default="{}", help="Action params as a JSON object literal."
     )
     call.add_argument(
+        "--project", default=None, metavar="NAME_OR_UUID",
+        help=(
+            "Route the call to the editor window that has this project open, "
+            "named by project name or uuid. Required as soon as more than one "
+            "window is connected: without it the daemon answers "
+            "WINDOW_UNSPECIFIED and lists the windows rather than guessing."
+        ),
+    )
+    call.add_argument(
+        "--instance", default=None, metavar="INSTANCE_ID",
+        help=(
+            "Route the call to one editor window by the instance id it "
+            "announced (the windowKey `bridge status` prints). The exact form of "
+            "`--project` for a window that cannot be named by a project — e.g. "
+            "right after the editor restarted and no window can read one yet. "
+            "Given together with --project, the instance decides."
+        ),
+    )
+    call.add_argument(
         "--yes", action="store_true",
         help=(
             "Pre-confirm a `create` action (creates a new document). Without it, "
@@ -298,6 +317,16 @@ def build_parser() -> argparse.ArgumentParser:
             "Return as soon as the daemon accepted the write, without waiting "
             "for the reloaded connector to report its version (the pre-020 "
             "behaviour: exit 0 even if the old build is still answering)."
+        ),
+    )
+    update.add_argument(
+        "--instance", default=None, metavar="INSTANCE_ID",
+        help=(
+            "Update one named editor window (the windowKey `bridge status` "
+            "prints) instead of whichever window the daemon would route to. The "
+            "only way to hot-update a window while several are connected and "
+            "none can be named by a project. The read-back then waits for a "
+            "window to come back announcing the stored version."
         ),
     )
     bridge.add_argument(
@@ -1559,10 +1588,11 @@ def _cmd_bridge_status(args: argparse.Namespace) -> int:
             if connected
             else "  connector: not connected (is EasyEDA running with the extension?)"
         )
-        # Who holds the bridge, and who was turned away for trying to take it
-        # (018 §A). Rendered by the daemon's ``status_lines`` rather than here,
-        # so the wording cannot drift from the keys it reads; empty when there
-        # is nothing to say, so a fresh daemon prints exactly what it did before.
+        # Every online editor window, with its project and page (023). Rendered by
+        # the daemon's ``status_lines`` rather than here, so the wording cannot
+        # drift from the keys it reads; empty when there is nothing to say, so a
+        # fresh daemon prints exactly what it did before. This is the list a
+        # caller reads to pick the `--project` hint for `bridge call`.
         for line in daemon_module.status_lines(data):
             print(line)
         # Fingerprint only. The daemon never puts the token on the wire, so
@@ -3103,10 +3133,22 @@ def _cmd_bridge_update_connector(args: argparse.Namespace) -> int:
 
     ``--no-verify`` restores the old behaviour (print "ok", return 0) for
     callers that would rather poll themselves.
+
+    ``--instance`` (023) aims the write at **one** window and changes the
+    read-back accordingly. Without it the write goes wherever the daemon routes
+    an unhinted call, which is the only window if there is one and
+    ``WINDOW_UNSPECIFIED`` if there are several — including the case that
+    motivated the flag: an editor that restarted, whose windows all greet the
+    daemon before they can read a project, so no window can be named by one. The
+    verification then waits for a window announcing the stored version
+    (:func:`_reloaded_window_version`), because the window that was updated
+    reconnects under a new instance id and can no longer be addressed by the old
+    one; the three outcomes (verified / FAILED / UNKNOWN) keep their exit codes.
     """
     import asyncio
 
     BridgeClient, BridgeError, port, token = _open_cli(args)
+    instance = (args.instance or "").strip()
 
     default_bundle, extension_json = _connector_artifacts()
     bundle_path = Path(args.bundle) if args.bundle else default_bundle
@@ -3138,6 +3180,10 @@ def _cmd_bridge_update_connector(args: argparse.Namespace) -> int:
         f"boardwise bridge update-connector: {bundle_path} "
         f"({byte_count} bytes, {len(params['bundleB64'])} as base64) "
         f"-> version {params['version']}"
+        # Which window this is aimed at, before anything is written: with several
+        # windows open, "which one did that land in?" is the first thing a reader
+        # of the log wants, and after the reload the window can no longer be asked.
+        + (f" -> window {instance}" if instance else "")
     )
     if not args.yes:
         if not sys.stdin.isatty():
@@ -3173,7 +3219,13 @@ def _cmd_bridge_update_connector(args: argparse.Namespace) -> int:
             )
             return 2
         try:
-            data = await client.call("sys.self_update", params)
+            # `--instance` routes the hot update itself; without it the call is
+            # unhinted, exactly as it was before the flag existed.
+            data = await client.call(
+                "sys.self_update",
+                params,
+                **({"target_instance": instance} if instance else {}),
+            )
         except BridgeError as exc:
             print(
                 f"boardwise bridge update-connector failed [{exc.code}] {exc.message}",
@@ -3204,6 +3256,8 @@ def _cmd_bridge_update_connector(args: argparse.Namespace) -> int:
             interval_s=UPDATE_VERIFY_INTERVAL_S,
             budget_s=UPDATE_VERIFY_BUDGET_S,
             margin_s=UPDATE_RELOAD_MARGIN_S,
+            instance=instance,
+            expected=expected,
         )
         if running is None:
             print(
@@ -3216,11 +3270,21 @@ def _cmd_bridge_update_connector(args: argparse.Namespace) -> int:
             )
             return 3
         if running != expected:
+            # Two different failures wear the same exit code, and the reader
+            # needs to know which one they have: an unhinted write may have
+            # landed in (or been answered by) another window, while `--instance`
+            # addressed one window and that window is still on the old build.
+            reason = (
+                f"window {instance} is still answering on {running}: the write "
+                "did not take effect in that window"
+                if instance
+                else "the editor may be running a different window's build; "
+                "`boardwise bridge status` names the holder"
+            )
             print(
                 f"boardwise bridge update-connector: FAILED — the write stored "
                 f"{expected} but the connector answering is {running}: the update "
-                f"did not take effect (the editor may be running a different "
-                f"window's build; `boardwise bridge status` names the holder)",
+                f"did not take effect ({reason})",
                 file=sys.stderr,
             )
             return 1
@@ -3261,6 +3325,88 @@ async def _running_connector_version(
     return str(probe.get("connector") or "") or None
 
 
+async def _online_windows(BridgeClient, BridgeError, port: int, token: str) -> list[dict] | None:
+    """The daemon's window table from ``ping``, or ``None`` if it cannot be read.
+
+    ``ping`` is answered by the daemon itself, so this read needs no routing —
+    which is the whole point: it works at the moment routing cannot, while the
+    window an update was sent to has reloaded and its replacement has not
+    arrived yet. ``None`` (daemon unreachable) and ``[]`` (no window connected)
+    are kept apart because they are different facts, and the caller's deadline
+    treats both as "nothing to read yet".
+    """
+    try:
+        client = await BridgeClient.open(
+            _bridge_uri(port), token, "cli", client="boardwise-cli"
+        )
+    except (OSError, BridgeError):
+        return None
+    try:
+        data = await client.call("ping")
+    except BridgeError:
+        return None
+    finally:
+        await client.close()
+    if not isinstance(data, dict):
+        return None
+    windows = data.get("windows")
+    if not isinstance(windows, list):
+        return []
+    return [window for window in windows if isinstance(window, dict)]
+
+
+def _text(value: object) -> str:
+    """One wire field as a stripped string; ``None``/absent becomes ``""``."""
+    return str(value).strip() if isinstance(value, str) else ""
+
+
+async def _reloaded_window_version(
+    BridgeClient, BridgeError, port: int, token: str, *, instance: str, expected: str
+) -> str | None:
+    """One read of "did the stored build come back?", for the ``--instance`` path.
+
+    The window ``--instance`` named is, by design, no longer the same connection
+    afterwards: the update reloads the editor page and the connector reconnects
+    under a **new instance id**, so routing the read back at the old name would
+    read nothing — and an unhinted read in a multi-window session is refused with
+    ``WINDOW_UNSPECIFIED``. So the read asks the daemon for its window table
+    (``ping``) and answers the question the update actually has: **is some online
+    window now announcing the version we just stored?**
+
+    Exactly two answers are readable this way, and they are the two the caller
+    can act on:
+
+    * some window reports ``expected`` → the reload happened and the new bundle
+      is running; that window's own string is returned;
+    * the window we addressed is still online under its own key and reports a
+      **different** version → the write did not take effect in the window it went
+      to; that version is returned, and the caller reports it as FAILED.
+
+    Anything else is ``None`` = "nothing to read yet", which the caller's
+    deadline turns into the honest exit 3 instead of a verdict on a reload that
+    may still be in flight. One asymmetry is deliberate and worth knowing:
+    because the reloaded connection cannot be recognised as *the same window*
+    (its id changed), branch one also accepts some *other* window that already
+    ran the stored build — so what ``--instance`` verifies is "a window is on it
+    now", not "that window is". Branch two is what still catches the case the
+    read-back exists for: the addressed window never reloaded and keeps
+    answering on the old build.
+    """
+    windows = await _online_windows(BridgeClient, BridgeError, port, token)
+    if windows is None:
+        return None
+    for window in windows:
+        version = _text(window.get("connectorVersion"))
+        if version and version == expected:
+            return version
+    for window in windows:
+        key = _text(window.get("windowKey")) or _text(window.get("instanceId"))
+        version = _text(window.get("connectorVersion"))
+        if version and instance in (key, _text(window.get("instanceId"))):
+            return version
+    return None
+
+
 async def _await_running_connector_version(
     BridgeClient,
     BridgeError,
@@ -3271,6 +3417,8 @@ async def _await_running_connector_version(
     interval_s: float,
     budget_s: float,
     margin_s: float,
+    instance: str = "",
+    expected: str = "",
 ) -> str | None:
     """Wait for the reloaded connector and return the version it reports.
 
@@ -3285,6 +3433,13 @@ async def _await_running_connector_version(
     ``None`` means the budget expired with nothing to read — "unknown", which is
     not the same claim as "failed".
 
+    ``instance`` switches the read from ``sys.probe`` to the daemon's window
+    table (:func:`_reloaded_window_version`), for an update aimed at one named
+    window: that window's connection does not survive its own reload, so the
+    thing to wait for is a window announcing ``expected``. ``expected`` is only
+    meaningful in that mode; the plain ``sys.probe`` read reports whatever is
+    answering and lets the caller compare.
+
     The three timings are **required** keyword arguments rather than defaults
     read from the module constants at import time: the caller
     (:func:`_cmd_bridge_update_connector`) looks them up when it runs, which is
@@ -3297,7 +3452,13 @@ async def _await_running_connector_version(
     deadline = time.monotonic() + budget_s
     await asyncio.sleep(max(reload_ms, 0) / 1000.0 + margin_s)
     while True:
-        version = await _running_connector_version(BridgeClient, BridgeError, port, token)
+        if instance:
+            version = await _reloaded_window_version(
+                BridgeClient, BridgeError, port, token,
+                instance=instance, expected=expected,
+            )
+        else:
+            version = await _running_connector_version(BridgeClient, BridgeError, port, token)
         if version is not None:
             return version
         if time.monotonic() + interval_s >= deadline:
@@ -3313,6 +3474,22 @@ def _cmd_bridge_call(args: argparse.Namespace) -> int:
     gets asked. `--yes` is the escape hatch for scripts, and it is deliberately
     a flag rather than a prompt — a non-interactive caller should have to say
     so out loud.
+
+    `--project` (023) is the window hint: with three or four editor windows open,
+    "which project?" is the caller's to answer, and the daemon refuses a call
+    that does not answer it rather than picking one. The hint travels **top
+    level** on the request frame as ``targetProject`` and never inside `params`,
+    so it cannot be mistaken for something the connector is being asked to do.
+
+    `--instance` is the same hint spelled with the window's own instance id (the
+    ``windowKey`` `bridge status` prints), for the case the project hint cannot
+    cover at all: measured 2026-09-22, an editor that restarts has its windows
+    greet the daemon before the editor API is ready, so every window's project
+    reads as unknown and *no* `--project` value matches anything. The instance id
+    is in the `hello` params, so it is always there. It rides the frame as the
+    sibling top-level field ``targetInstance``; when both flags are given the
+    daemon prefers the instance, and the caller is told which window answered by
+    the response's own `context`.
     """
     import asyncio
     import json
@@ -3332,6 +3509,16 @@ def _cmd_bridge_call(args: argparse.Namespace) -> int:
         return 2
     if args.yes:
         params["confirm"] = True
+    # Built once and reused by the confirmation retry: both sends have to name
+    # the same window, or "yes" would retry the call against a *different*
+    # window than the one the daemon refused to create a document in.
+    project = (args.project or "").strip()
+    instance = (args.instance or "").strip()
+    route_kwargs: dict[str, str] = {}
+    if project:
+        route_kwargs["target_project"] = project
+    if instance:
+        route_kwargs["target_instance"] = instance
 
     def _print_error(action: str, exc: "BridgeError") -> None:
         print(f"boardwise bridge call: {action} failed [{exc.code}] {exc.message}",
@@ -3372,7 +3559,7 @@ def _cmd_bridge_call(args: argparse.Namespace) -> int:
             return 2
         try:
             try:
-                data = await client.call(args.action, params)
+                data = await client.call(args.action, params, **route_kwargs)
             except BridgeError as exc:
                 if (
                     exc.code == ErrorCodes.CONFIRMATION_REQUIRED
@@ -3380,7 +3567,7 @@ def _cmd_bridge_call(args: argparse.Namespace) -> int:
                     and _ask(args.action, exc.message)
                 ):
                     params["confirm"] = True
-                    data = await client.call(args.action, params)
+                    data = await client.call(args.action, params, **route_kwargs)
                 else:
                     raise
         except BridgeError as exc:

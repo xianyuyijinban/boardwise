@@ -429,6 +429,7 @@ def _update_args(**over):
         yes=True,
         no_verify=False,
         port=None,
+        instance=None,
     )
     base.update(over)
     return argparse.Namespace(**base)
@@ -453,6 +454,9 @@ class _RecordingClient:
 
     opened = None
     calls: list = []
+    #: The routing kwargs of every call, in order — this is where a `--instance`
+    #: (or `--project`) hint is visible (`{"target_instance": "inst-A"}`, or `{}`).
+    routes: list = []
     #: Explicit version for the reconnected connector, or ``None`` to echo the write.
     running_version: str | None = None
     #: ``False``: nothing is attached (``sys.probe`` → ``NO_CONNECTOR``).
@@ -463,16 +467,25 @@ class _RecordingClient:
     stored_version: str = "0.4.3"
     #: The reload timer the reply carries (the connector really sends 500).
     reload_in_ms: int = 500
+    #: The daemon's `ping` window table. Only the `--instance` verification reads
+    #: it, because that path cannot use `sys.probe`: the window it updated
+    #: reconnects under a new instance id, so the read has to be "which windows
+    #: are online and what does each announce?" rather than "probe the window I
+    #: named" (see `_reloaded_window_version`).
+    windows: list = []
 
     @classmethod
     async def open(cls, uri, token, role, client=None):
         cls.opened = (uri, token, role, client)
         return cls()
 
-    async def call(self, action, params=None):
+    async def call(self, action, params=None, **route):
         type(self).calls.append((action, params))
+        type(self).routes.append(route)
         import base64
 
+        if action == "ping":
+            return {"connector": True, "windows": [dict(w) for w in type(self).windows]}
         if action == "sys.probe":
             from boardwise.bridge.protocol import BridgeError, ErrorCodes
 
@@ -505,10 +518,12 @@ def update_env(monkeypatch, tmp_path):
 
     _RecordingClient.opened = None
     _RecordingClient.calls = []
+    _RecordingClient.routes = []
     _RecordingClient.running_version = None
     _RecordingClient.reconnect = True
     _RecordingClient.stored_version = "0.4.3"
     _RecordingClient.reload_in_ms = 500
+    _RecordingClient.windows = []
     monkeypatch.setattr(client_module, "BridgeClient", _RecordingClient)
     return tmp_path
 
@@ -549,6 +564,11 @@ def test_update_connector_parses_its_arguments():
 
     args = build_parser().parse_args(["bridge", "update-connector", "--no-verify"])
     assert args.no_verify is True
+    # `--instance` (023 follow-up): absent by default, so an unhinted update
+    # keeps behaving exactly as it did before the flag existed.
+    assert args.instance is None
+    args = build_parser().parse_args(["bridge", "update-connector", "--instance", "inst-A"])
+    assert args.instance == "inst-A"
 
 
 def test_update_connector_defaults_point_at_the_repo_build():
@@ -700,6 +720,108 @@ def test_update_connector_verifies_a_rebuild_of_the_same_version(update_env, fas
 
     assert code == 0
     assert "verified: running connector is now 0.4.11" in capsys.readouterr().out
+
+
+def test_update_connector_instance_routes_the_write_and_reads_the_window_table(
+    update_env, fast_verify, capsys
+):
+    """`update-connector --instance INST` (023 follow-up): the whole point.
+
+    Two things change at once, and both have to be asserted because either one
+    alone would still "succeed": the write is routed at the named window (top
+    level `targetInstance`), and the read-back — which cannot probe that window
+    any more, its connection dies with the reload — answers from the daemon's
+    window table: some online window announces the stored version. Here the
+    reconnected window announces it under a *new* instance id, which is exactly
+    what the real reload does.
+    """
+    from boardwise.cli import _cmd_bridge_update_connector
+
+    bundle = update_env / "b.js"
+    bundle.write_bytes(b"x")
+    # `inst-A` is the window the write went to; after the reload it is *gone* and
+    # a different connection (`inst-C`, a new id) is announcing the new build.
+    # Nothing here would satisfy a "probe the window you named" rule, which is
+    # exactly why the read-back had to change.
+    _RecordingClient.windows = [
+        {"windowKey": "inst-B", "instanceId": "inst-B", "connectorVersion": "0.4.2"},
+        {"windowKey": "inst-C", "instanceId": "inst-C", "connectorVersion": "0.4.3"},
+    ]
+
+    code = _cmd_bridge_update_connector(
+        _update_args(bundle=str(bundle), version="0.4.3", yes=True, instance="inst-A")
+    )
+
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "verified: running connector is now 0.4.3" in out
+    # The named window is printed before the write, since after the reload
+    # nothing can be asked which window it was.
+    assert "-> window inst-A" in out
+    assert [action for action, _ in _RecordingClient.calls][0] == "sys.self_update"
+    # The write names the window; the read did not need to (and could not).
+    assert _RecordingClient.routes[0] == {"target_instance": "inst-A"}
+    assert "sys.probe" not in [action for action, _ in _RecordingClient.calls], (
+        "the reloaded window reconnects under a new instance id — probing the old "
+        "one would read nothing"
+    )
+    assert _RecordingClient.routes[1] == {}
+
+
+def test_update_connector_instance_reports_a_window_still_on_the_old_build(
+    update_env, fast_verify, capsys
+):
+    """`--instance`: the addressed window never reloaded — say so, exit 1.
+
+    The read-back the flag needs is coarser than the single-window one (it can
+    only see "a window announcing the stored version"), so the branch that keeps
+    it honest is this one: the window we wrote to is still online under its own
+    key and still announcing the build it had before.
+    """
+    from boardwise.cli import _cmd_bridge_update_connector
+
+    bundle = update_env / "b.js"
+    bundle.write_bytes(b"x")
+    _RecordingClient.windows = [
+        {"windowKey": "inst-A", "instanceId": "inst-A", "connectorVersion": "0.4.2"},
+        {"windowKey": "inst-B", "instanceId": "inst-B", "connectorVersion": "0.4.2"},
+    ]
+
+    code = _cmd_bridge_update_connector(
+        _update_args(bundle=str(bundle), version="0.4.3", yes=True, instance="inst-A")
+    )
+
+    assert code == 1
+    captured = capsys.readouterr()
+    assert "verified" not in captured.out
+    assert "FAILED" in captured.err and "did not take effect" in captured.err
+    assert "window inst-A is still answering on 0.4.2" in captured.err
+
+
+def test_update_connector_instance_says_unknown_when_nothing_comes_back(
+    update_env, fast_verify, capsys
+):
+    """No window online inside the budget: "unknown", never "failed" (exit 3).
+
+    The gap between the reload and the reconnection is the normal state of a
+    correct update, so it must not be read as a verdict — the same rule 020
+    fixed for the single-window path, kept for the instance one.
+    """
+    from boardwise.cli import _cmd_bridge_update_connector
+
+    bundle = update_env / "b.js"
+    bundle.write_bytes(b"x")
+    _RecordingClient.windows = []
+
+    code = _cmd_bridge_update_connector(
+        _update_args(bundle=str(bundle), version="0.4.3", yes=True, instance="inst-A")
+    )
+
+    assert code == 3
+    captured = capsys.readouterr()
+    assert "verified" not in captured.out
+    assert "UNKNOWN, not failed" in captured.err
+    assert _RecordingClient.calls.count(("ping", None)) > 1, "it waited and retried"
 
 
 def test_the_verify_phase_waits_out_the_reload_before_it_reads(monkeypatch):
@@ -929,7 +1051,7 @@ def _status_args():
     return build_parser().parse_args(["bridge", "status"])
 
 
-def test_status_prints_the_active_instance_and_the_refusals(status_env, capsys):
+def test_status_prints_the_window_table(status_env, capsys):
     """The wiring, without a daemon: the daemon's lines have to reach stdout.
 
     `status_lines` renders them (tested in test_bridge.py) and `bridge status`
@@ -941,33 +1063,39 @@ def test_status_prints_the_active_instance_and_the_refusals(status_env, capsys):
     _StatusClient.payload = {
         "connector": True,
         "pairedFingerprint": "deadbeef",
-        "activeInstance": {
-            "instanceId": "window-A",
-            "instanceIdSource": "hello",
-            "connectorVersion": "0.4.10",
-            "peer": "127.0.0.1:51234",
-            "connectedAt": 1790000000.0,
-        },
-        "recentRejections": [{
-            "ts": 1790000100.0,
-            "instanceId": "window-B",
-            "connectorVersion": "0.4.10",
-            "reason": "another editor instance is already connected",
-        }],
+        "windows": [
+            {
+                "windowKey": "window-A", "instanceId": "window-A",
+                "instanceIdSource": "hello", "connectorVersion": "0.4.10",
+                "peer": "127.0.0.1:51234", "connectedAt": 1790000000.0,
+                "lastSeen": 1790000010.0, "routed": 2,
+                "projectName": "/test", "projectUuid": "uuid-test",
+                "pageUuid": "page-a", "pageType": "sch",
+            },
+            {
+                "windowKey": "window-B", "instanceId": "window-B",
+                "instanceIdSource": "hello", "connectorVersion": "0.4.10",
+                "peer": "127.0.0.1:51235", "connectedAt": 1790000000.0,
+                "lastSeen": 1790000000.0, "routed": 0,
+                "projectName": "test2", "projectUuid": "uuid-test2",
+                "pageUuid": None, "pageType": None,
+            },
+        ],
     }
 
     assert _cmd_bridge_status(_status_args()) == 0
 
     out = capsys.readouterr().out
-    assert "active instance: window-A" in out
-    assert "connector 0.4.10" in out
+    assert "windows: 2 connected" in out
+    assert "window: window-A (connector 0.4.10)" in out
     assert "peer: 127.0.0.1:51234" in out
-    assert "refused connector: window-B" in out
-    assert out.index("active instance:") < out.index("paired connector:")
+    assert "window: window-B (connector 0.4.10)" in out
+    assert "projects seen: /test (window-A), test2 (window-B)" in out
+    assert out.index("windows: 2 connected") < out.index("paired connector:")
 
 
 def test_status_prints_nothing_extra_when_there_is_nothing_to_report(status_env, capsys):
-    """A fresh daemon prints exactly what it printed before 018 §A."""
+    """A fresh daemon prints exactly what it printed before 023."""
     from boardwise.cli import _cmd_bridge_status
 
     _StatusClient.payload = {"connector": False, "pairedFingerprint": None}
@@ -976,8 +1104,8 @@ def test_status_prints_nothing_extra_when_there_is_nothing_to_report(status_env,
 
     out = capsys.readouterr().out
     assert "connector: not connected" in out
-    assert "active instance" not in out
-    assert "refused connector" not in out
+    assert "windows:" not in out
+    assert "projects seen" not in out
 
 
 @pytest.fixture
@@ -1033,72 +1161,296 @@ async def _hello_over(
     return json.loads(await websocket.recv())
 
 
-def test_status_names_the_holder_and_the_refused_window(own_daemon):
+async def _fake_connector(
+    uri: str,
+    token: str,
+    *,
+    instance_id: str,
+    project_name: str | None = None,
+    project_uuid: str | None = None,
+    responses: dict | None = None,
+    context: dict | None = None,
+):
+    """A connector window that stays connected and answers actions.
+
+    Returns ``(websocket, task)``; the caller closes the socket and cancels the
+    task. It exists so the *real* CLI process can be run against a *real* daemon
+    with windows attached: the CLI is a subprocess, so the sockets answering it
+    have to be driven from this process's event loop.
+    """
+    ws = await websockets.connect(uri, max_size=None)
+    reply = await _hello_over(
+        ws, token, instance_id=instance_id,
+        project_name=project_name, project_uuid=project_uuid,
+    )
+    assert reply["ok"] is True, reply
+
+    async def serve():
+        async for raw in ws:
+            frame = json.loads(raw)
+            if "action" not in frame or "ok" in frame:
+                continue
+            answer = {"id": frame.get("id"), "ok": True,
+                      "data": (responses or {}).get(frame["action"], {})}
+            if context:
+                answer["context"] = context
+            await ws.send(json.dumps(answer))
+
+    return ws, asyncio.create_task(serve())
+
+
+def test_status_lists_every_connected_window(own_daemon):
     """End to end: a real daemon, two windows, a real CLI process.
 
-    The question `status` has to answer — "why did my write land in the other
-    project?" — is asked *while* the two windows are fighting, so the first
-    socket stays open while the CLI runs. Both halves have to come from the
-    daemon: the instance holding the bridge, and the attempt it turned away.
+    The question `status` has to answer — "which projects are open, and which one
+    is boardwise talking to?" — is asked *while* both windows are connected, so
+    both sockets stay open while the CLI runs. Before 023 only the privileged one
+    could appear here; the other was a refusal, and after it retried enough times
+    an unbounded list of them.
     """
     uri = f"ws://127.0.0.1:{own_daemon['port']}"
     token = "the-shared-extension-token"  # both windows share one install
 
     async def scenario():
-        async with websockets.connect(uri, max_size=None) as holder:
-            first = await _hello_over(holder, token, instance_id="window-A")
-            assert first["ok"] is True, first
-            async with websockets.connect(uri, max_size=None) as extra:
-                refused = await _hello_over(extra, token, instance_id="window-B")
-                assert refused["ok"] is False
-                assert refused["error"]["code"] == "CONNECTOR_ALREADY_ACTIVE"
-                # The holder is still attached: this is the state the user sees.
-                return _cli(["bridge", "status"], own_daemon["env"])
+        a_ws, _ = await _fake_connector(uri, token, instance_id="window-A",
+                                        project_name="/test", project_uuid="uuid-test")
+        b_ws, _ = await _fake_connector(uri, token, instance_id="window-B",
+                                        project_name="test2", project_uuid="uuid-test2")
+        try:
+            return await asyncio.to_thread(
+                _cli, ["bridge", "status"], own_daemon["env"])
+        finally:
+            await a_ws.close()
+            await b_ws.close()
 
     result = asyncio.run(scenario())
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "connector: connected" in result.stdout
-    assert "active instance: window-A" in result.stdout
-    assert "connector 0.4.10" in result.stdout
-    assert "refused connector: window-B" in result.stdout
+    assert "windows: 2 connected" in result.stdout
+    assert "window: window-A (connector 0.4.10)" in result.stdout
+    assert "window: window-B (connector 0.4.10)" in result.stdout
     assert token not in result.stdout, "the pairing secret must never be printed"
 
 
 def test_status_maps_every_window_to_its_project(own_daemon):
-    """021 §2.3, end to end: the projects of the windows the bridge cannot serve.
+    """021 §2.3 / 023, end to end: every project, with the key that reaches it.
 
-    The question a user with three editor windows asks — "which projects does
-    boardwise know about?" — is answerable only because each window announces
-    its own project as it connects, *including* the ones refused a moment later.
-    The refused socket is closed immediately; the project it named is the only
-    trace that project leaves anywhere, and `status` is where it has to show up.
+    The question a user with three or four editor windows asks — "which projects
+    does boardwise know about?" — is answerable because each window announces its
+    own project as it connects, and in 023 every one of them is a row rather than
+    a refusal. `projects seen` prints the hub keys, which is exactly what a caller
+    writes into `--project`.
     """
     uri = f"ws://127.0.0.1:{own_daemon['port']}"
     token = "the-shared-extension-token"  # both windows share one install
 
     async def scenario():
-        async with websockets.connect(uri, max_size=None) as holder:
-            first = await _hello_over(
-                holder, token, instance_id="window-A",
-                project_name="/test", project_uuid="uuid-test",
-            )
-            assert first["ok"] is True, first
-            async with websockets.connect(uri, max_size=None) as extra:
-                refused = await _hello_over(
-                    extra, token, instance_id="window-B",
-                    project_name="test2", project_uuid="uuid-test2",
-                )
-                assert refused["error"]["code"] == "CONNECTOR_ALREADY_ACTIVE"
-                return _cli(["bridge", "status"], own_daemon["env"])
+        a_ws, _ = await _fake_connector(uri, token, instance_id="window-A",
+                                        project_name="/test", project_uuid="uuid-test")
+        b_ws, _ = await _fake_connector(uri, token, instance_id="window-B",
+                                        project_name="test2", project_uuid="uuid-test2")
+        try:
+            return await asyncio.to_thread(
+                _cli, ["bridge", "status"], own_daemon["env"])
+        finally:
+            await a_ws.close()
+            await b_ws.close()
 
     result = asyncio.run(scenario())
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "[project /test (uuid-test)]" in result.stdout, result.stdout
     assert "[project test2 (uuid-test2)]" in result.stdout, result.stdout
-    assert "projects seen: /test (active), test2 (refused)" in result.stdout, result.stdout
+    assert "projects seen: /test (window-A), test2 (window-B)" in result.stdout, result.stdout
     assert token not in result.stdout
+
+
+def test_call_project_hint_reaches_that_window_from_the_cli(own_daemon):
+    """`bridge call --project test2`, end to end (023).
+
+    The flag crosses three layers — argparse, the request frame's top-level
+    `targetProject`, and the daemon's route — and any one of them silently
+    dropping it would still produce a *successful* call, just in the wrong
+    project. So both halves are asserted: the answer comes from window B, and the
+    same daemon with no hint at all refuses instead of guessing.
+    """
+    uri = f"ws://127.0.0.1:{own_daemon['port']}"
+    token = "the-shared-extension-token"
+
+    async def scenario():
+        a_ws, a_task = await _fake_connector(
+            uri, token, instance_id="window-A", project_name="/test",
+            project_uuid="uuid-test",
+            responses={"doc.list": {"window": "A"}},
+        )
+        b_ws, b_task = await _fake_connector(
+            uri, token, instance_id="window-B", project_name="test2",
+            project_uuid="uuid-test2",
+            responses={"doc.list": {"window": "B"}},
+            context={"projectName": "test2", "projectUuid": "uuid-test2",
+                     "pageUuid": "page-b", "pageType": "sch"},
+        )
+        try:
+            routed = await asyncio.to_thread(
+                _cli,
+                ["bridge", "call", "--action", "doc.list", "--project", "test2"],
+                own_daemon["env"],
+            )
+            # By uuid as well: the two spellings of one window have to work.
+            by_uuid = await asyncio.to_thread(
+                _cli,
+                ["bridge", "call", "--action", "doc.list", "--project", "uuid-test"],
+                own_daemon["env"],
+            )
+            unhinted = await asyncio.to_thread(
+                _cli, ["bridge", "call", "--action", "doc.list"], own_daemon["env"])
+            missing = await asyncio.to_thread(
+                _cli, ["bridge", "call", "--action", "doc.list", "--project", "test9"],
+                own_daemon["env"])
+        finally:
+            for task in (a_task, b_task):
+                task.cancel()
+            await a_ws.close()
+            await b_ws.close()
+        return routed, by_uuid, unhinted, missing
+
+    routed, by_uuid, unhinted, missing = asyncio.run(scenario())
+
+    assert routed.returncode == 0, routed.stdout + routed.stderr
+    assert '"window": "B"' in routed.stdout, routed.stdout
+    assert by_uuid.returncode == 0 and '"window": "A"' in by_uuid.stdout
+    # The two refusals are the honest half of the feature: the daemon will not
+    # choose a window, and says which ones it could have chosen.
+    assert unhinted.returncode == 1
+    assert "WINDOW_UNSPECIFIED" in unhinted.stdout + unhinted.stderr
+    assert "window-A" in unhinted.stderr and "window-B" in unhinted.stderr
+    assert missing.returncode == 1
+    assert "PROJECT_NOT_CONNECTED" in missing.stdout + missing.stderr
+    assert token not in routed.stdout + routed.stderr
+
+
+def test_call_instance_hint_reaches_that_window_from_the_cli(own_daemon):
+    """`bridge call --instance inst-B`, end to end — the gap this flag closes.
+
+    Both windows here announce **no project**, which is what the editor looks
+    like right after a restart (measured 2026-09-22: three windows present
+    themselves before the editor API is ready, so every context read is null).
+    `--project` then has nothing to match — the call is refused — while the
+    instance id the window sent in its `hello` still routes. Three layers have
+    to carry it (argparse → `targetInstance` → the daemon's `route`) and the
+    refusal for a name that is not online has to name the windows that are.
+    """
+    uri = f"ws://127.0.0.1:{own_daemon['port']}"
+    token = "the-shared-extension-token"
+
+    async def scenario():
+        a_ws, a_task = await _fake_connector(
+            uri, token, instance_id="window-A",
+            responses={"doc.list": {"window": "A"}},
+        )
+        b_ws, b_task = await _fake_connector(
+            uri, token, instance_id="window-B",
+            responses={"doc.list": {"window": "B"}},
+        )
+        try:
+            routed = await asyncio.to_thread(
+                _cli,
+                ["bridge", "call", "--action", "doc.list", "--instance", "window-B"],
+                own_daemon["env"],
+            )
+            by_project = await asyncio.to_thread(
+                _cli,
+                ["bridge", "call", "--action", "doc.list", "--project", "test2"],
+                own_daemon["env"],
+            )
+            missing = await asyncio.to_thread(
+                _cli,
+                ["bridge", "call", "--action", "doc.list", "--instance", "window-gone"],
+                own_daemon["env"],
+            )
+        finally:
+            for task in (a_task, b_task):
+                task.cancel()
+            await a_ws.close()
+            await b_ws.close()
+        return routed, by_project, missing
+
+    routed, by_project, missing = asyncio.run(scenario())
+
+    assert routed.returncode == 0, routed.stdout + routed.stderr
+    assert '"window": "B"' in routed.stdout, routed.stdout
+    # The dead end the flag removes: no window can be named by a project, so the
+    # project hint matches nothing.
+    assert by_project.returncode == 1
+    assert "PROJECT_NOT_CONNECTED" in by_project.stdout + by_project.stderr
+    assert missing.returncode == 1
+    assert "WINDOW_NOT_CONNECTED" in missing.stdout + missing.stderr
+    assert "window-A" in missing.stderr and "window-B" in missing.stderr
+    assert token not in routed.stdout + routed.stderr
+
+
+def test_bridge_call_project_flag_wiring(monkeypatch, tmp_path):
+    """argparse → the client's `target_project`, and nothing when absent.
+
+    The hint is passed as a keyword the client turns into the frame's top-level
+    field, and it is *omitted* rather than sent empty: a frame with
+    ``"targetProject": ""`` would be a hint that names the empty string, and the
+    pre-023 frame is what a caller without the flag should be sending.
+    """
+    import boardwise.bridge.client as client_module
+    from boardwise.cli import _cmd_bridge_call, build_parser
+
+    monkeypatch.setenv("BOARDWISE_HOME", str(tmp_path))
+
+    class Recorder:
+        calls: list = []
+
+        @classmethod
+        async def open(cls, *args, **kwargs):
+            return cls()
+
+        async def call(self, action, params, **kwargs):
+            type(self).calls.append({"action": action, "params": dict(params), **kwargs})
+            return {"ok": True}
+
+        async def close(self):
+            return None
+
+    Recorder.calls = []
+    monkeypatch.setattr(client_module, "BridgeClient", Recorder)
+
+    parser = build_parser()
+    assert parser.parse_args(["bridge", "call", "--action", "doc.list"]).project is None
+    assert parser.parse_args(
+        ["bridge", "call", "--action", "doc.list", "--project", "test2"]
+    ).project == "test2"
+
+    plain = parser.parse_args(["bridge", "call", "--action", "doc.list"])
+    assert _cmd_bridge_call(plain) == 0
+    hinted = parser.parse_args(
+        ["bridge", "call", "--action", "doc.list", "--project", " test2 "]
+    )
+    assert _cmd_bridge_call(hinted) == 0
+    by_instance = parser.parse_args(
+        ["bridge", "call", "--action", "doc.list", "--instance", " inst-A "]
+    )
+    assert _cmd_bridge_call(by_instance) == 0
+    both = parser.parse_args(
+        ["bridge", "call", "--action", "doc.list", "--project", "test2",
+         "--instance", "inst-A"]
+    )
+    assert _cmd_bridge_call(both) == 0
+
+    assert Recorder.calls == [
+        {"action": "doc.list", "params": {}},
+        {"action": "doc.list", "params": {}, "target_project": "test2"},
+        {"action": "doc.list", "params": {}, "target_instance": "inst-A"},
+        # Both ride one frame; which one decides is the daemon's business, and
+        # the CLI must not drop either on the way there.
+        {"action": "doc.list", "params": {}, "target_project": "test2",
+         "target_instance": "inst-A"},
+    ]
 
 
 def _not_our_daemon():

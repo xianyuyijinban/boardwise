@@ -1,0 +1,90 @@
+023 connector 侧交卷证据（棒 2，只碰 connector/）
+================================================
+
+日期：2026-09-22
+范围：`E:\boardwise\connector`（src/ 与 tests/ 均为 TypeScript 侧；未碰任何 Python 文件）
+任务书：`tasks/023-multiwindow-routing.md` §协议字段约定 第 1 条 + §connector（棒 2）
+
+改动文件（git status --porcelain，只读查询，未做任何 git 变更）
+----------------------------------------------------------------
+ M connector/src/protocol.ts      ResponseContext 类型 + Frame.context + withContext()
+ M connector/src/transport.ts     responseContext 选项 + 1500ms deadline + reply() 唯一收口点
+ M connector/src/actions.ts       currentResponseContext() + responsePageType()
+ M connector/src/index.ts         wiring: responseContext -> currentResponseContext(host().api)
+ ?? connector/tests/context.test.mjs   新增 15 条测试
+
+设计要点
+--------
+1. 帧顶层，不在 result：`context` 是 `data` 的兄弟键，`data` 一个字节未变
+   （单测断言 `answer.data` 深比较 + `'context' in answer.data === false`）。
+2. 唯一收口点：`Transport.reply(frame)` —— 成功帧、ActionError 帧、INTERNAL 帧、
+   以及"请求帧没有 action"的 BAD_REQUEST 帧全部经它发出，`reply` 里一次
+   `withContext(frame, await readResponseContext())`。不是四处撒胡椒粉。
+3. 读取时机：在 action handler **之后**读（`doc.open`/`doc.focus` 之后必须报告新文档）。
+   每次响应现读，绝不沿用上一次（单测 pin 住两次响应两个不同 context）。
+4. 防抛/超时壳：整段读取由 transport 侧 `readWithDeadline(read, ms)` 包住，
+   `Promise.race` + 1500ms（与 021 hello 身份同一个值、同一个模式，
+   `RESPONSE_CONTEXT_DEADLINE_MS`），抛异常/永不 settle 都只等于"没有 context"，
+   绝不拖住已经执行完的动作响应；测试把 deadline 缩到 20ms 验证释放。
+   读到的字段在帧侧再做一次词表清洗（`withContext` 内 `contextFields`）：空串、
+   非 sch/pcb 的第三种词、非字符串一律变成"没有这个键"。
+5. 词表：pageType ∈ {"sch","pcb",null}，与 `document.current` 的映射逐字一致
+   （schematic/page -> "sch"，pcb -> "pcb"）。`null` 是"读到了一份文档但它两种都不是"
+   （symbol 编辑器、home 页）；读不到文档 / 读到宿主占位 uuid "0" 时**省略**这两个键。
+6. 无 reader 的旧构建：帧与 023 之前完全一致，不含 `context: {}`。
+
+mock 实跑响应帧（逐字，`node` 直驱 dist/esm，mock eda = /test + 原理图页 page-a1）
+----------------------------------------------------------------------------------
+success frame:
+{"id":"req-1","ok":true,"data":{"documents":[],"count":0},"context":{"projectName":"/test","projectUuid":"ea80fff642fa86cd","pageUuid":"page-a1","pageType":"sch"}}
+
+error frame（同一窗口，ActionError PAGE_MISMATCH）:
+{"id":"req-1","ok":false,"error":{"code":"PAGE_MISMATCH","message":"the focused page is not the one asked for"},"context":{"projectName":"/test","projectUuid":"ea80fff642fa86cd","pageUuid":"page-a1","pageType":"sch"}}
+
+no reader configured（与 023 之前逐字一致）:
+{"id":"req-1","ok":true,"data":{"documents":[],"count":0}}
+
+测试数字
+--------
+`cd connector && npm test`（先 build 再 node --test）
+  ℹ tests 325   ℹ pass 325   ℹ fail 0
+  其中既有 310 条全绿，新增 15 条（tests/context.test.mjs）：
+    - 响应帧顶层四键；data 形状不变
+    - 每次响应现读（两次响应不同 context）
+    - 错误帧带 context（ActionError 路径）
+    - 无 action 的 BAD_REQUEST 帧带 context
+    - 读不到（{} / undefined / throw）一律省略键，不是空值
+    - 读取卡死 -> deadline 放行，响应照发且无 context
+    - 无 reader 时帧键集合 ['data','id','ok']
+    - 词表清洗：空串/第三种词丢弃，显式 null 保留，输入帧不被修改
+    - 真 reader：sch/pcb 两词、无文档时省略 page 键、宿主占位 uuid "0" 不算页面、
+      按类回退读也给出 "sch"、symbol 文档 -> null、全抛异常宿主 -> {}
+    - 生产路径端到端（index.ts wiring + facade mock）：doc.list 响应带四键，
+      切到 PCB 后下一次响应 pageType=pcb，且 data 仍是 doc.list 的 data
+
+`npm run typecheck`：干净（tsc --noEmit，0 输出）
+`npm run build`：成功；`dist/index.js`（sideload 产物，200227 字节）含
+  `currentResponseContext` 与 `pageType` —— 新代码确实进了会被编辑器加载的 bundle
+
+变异抽验（自做，`cp` 备份 + sha256 还原，未用 git checkout）
+-------------------------------------------------------------
+变异 1：`transport.ts` 的 `reply()` 改成直接 `this.raw(frame)`（不附 context）
+  -> `node --test tests/context.test.mjs`：pass 10 / fail 5（红）
+  还原后 `sha256sum -c`：src/transport.ts OK（0699b6c9…1ce41）
+变异 2：`actions.ts` 的 `responsePageType` 把 pcb 也映射成 "sch"（词表变异）
+  -> pass 13 / fail 2（红）
+  还原后 `sha256sum -c`：src/actions.ts OK（44ad09b1…8799）
+
+与任务书的理解/偏离
+-------------------
+1. `pageType: null` 的触发条件（任务书只给了类型 `"sch"|"pcb"|null`）：
+   取"有文档但既非原理图页也非 PCB"为 null；"没有任何文档 / 读不到"则**省略键**。
+   理由：任务书两处要求"读不到的键省略"，而 null 需要是一个真实读数才有意义；
+   daemon 侧 merge 语义下 null 与省略等价（不改已知值）。
+2. 错误帧也带 context（任务书说"每个 action 响应帧"）：失败的动作同样要说明是哪个
+   窗口失败的，而这正好是调用方最需要窗口身份的场合；实现上是同一个收口点。
+3. 未碰 `src/`、`tests/`（Python）、未碰 docs/bridge.md（棒 1 范围）。
+   提醒棒 1：`src/boardwise/bridge/protocol.py` 模块 docstring 里那句
+   "we put results in data instead of result/context/artifacts" 现在会被 023 读起来
+   自相矛盾（我们确实新增了顶层 context，只是它不在 data 里、且不是动作结果）——
+   该文件的措辞由棒 1 决定是否修订。

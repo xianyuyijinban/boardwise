@@ -34,22 +34,26 @@ for the risk decisions behind them.
 Three processes, one listening socket:
 
 ```
-  EasyEDA Pro  ─────────────────────────────────────────────┐
+  EasyEDA Pro (one per open window)  ───────────────────────┐
   ┌──────────────────────────┐                              │ eda.* API (in-process)
   │ boardwise connector      │  TypeScript, dist/index.js   │
   │ (.eext, in the editor)   │  ← the only code with hands  │
   └────────────┬─────────────┘                              │
-               │  outbound WebSocket (the editor dials out) │
+               │  outbound WebSocket (each window dials out) │
                │  ws://127.0.0.1:61190/eda                 │
   ┌────────────▼─────────────┐
   │ boardwise daemon         │  `boardwise bridge start`
-  │ (Python, websockets)     │  auth · routing · audit
+  │ (Python, websockets)     │  auth · window hub · routing · audit
   └────────────┬─────────────┘
                │  same protocol, role="cli", short-lived
   ┌────────────▼─────────────┐
-  │ boardwise CLI            │  status · screenshot · highlight
+  │ boardwise CLI            │  status · call --project/--instance · screenshot
   └──────────────────────────┘
 ```
+
+Every open EasyEDA window runs its own copy of the extension and dials the daemon itself, so a user
+with three windows has three connector sockets. The daemon registers **all** of them (023, §3.5) and
+routes each call to the window whose project the caller named.
 
 Why the editor dials *out*: an extension cannot open a listening socket, and `eda.sys_WebSocket`
 only offers outbound registration. So the daemon is the server and the editor is a client that
@@ -84,19 +88,25 @@ of them behaves predictably. Both sides classify it the same way (`frame_kind` i
 `protocol.py`, `frameKind` in `connector/src/protocol.ts`) — if they disagreed, the banner
 would be read as a request and answered with `BAD_REQUEST`.
 
-Request — `params` is omitted when there is nothing to send:
+Request — `params` is omitted when there is nothing to send, and `targetProject` / `targetInstance`
+(023, §3.5) are omitted unless the caller is naming a window:
 
 ```json
 {"id": "pcb.readback-9f2a1c04", "action": "pcb.readback", "params": {"includePrimitives": true}}
+{"id": "doc.list-1a2b3c", "action": "doc.list", "targetProject": "test2"}
+{"id": "doc.list-4d5e6f", "action": "doc.list", "targetInstance": "inst-101500123-aaaaaaaa"}
 ```
 
-Success:
+Success — `context` (023) is the answering window's live identity, a sibling of `data` rather than
+part of it, and it is omitted when the window named nothing:
 
 ```json
-{"id": "pcb.readback-9f2a1c04", "ok": true, "data": {"kind": "pcb", "componentCount": 17, "...": "..."}}
+{"id": "pcb.readback-9f2a1c04", "ok": true, "data": {"kind": "pcb", "componentCount": 17, "...": "..."},
+ "context": {"projectName": "test2", "projectUuid": "uuid-…", "pageUuid": "page-…", "pageType": "pcb"}}
 ```
 
-Failure:
+Failure — the same two optional fields may appear, so a refusal is attributable to the window it
+came from (`WINDOW_UNSPECIFIED` and friends have no window, so they carry no `context`):
 
 ```json
 {"id": "pcb.readback-9f2a1c04", "ok": false,
@@ -209,7 +219,8 @@ The connector sends `hello` with the fixed id `"hello"`; the daemon answers with
 → {"id": "hello", "ok": true,
    "data": {"role": "connector", "protocol": "1.0", "serverTime": 1789000000.0,
             "paired": true, "fingerprint": "53cd3b41",
-            "minConnectorVersion": "0.4.10"}}
+            "minConnectorVersion": "0.4.10",
+            "windowsOnline": 2, "windowKey": "inst-112233445-9k2f0x1a"}}
 ```
 
 `connectorVersion` is the connector's **own** build (`__BOARDWISE_VERSION__`,
@@ -224,12 +235,16 @@ symptom was a stack pointing at a line that had already been fixed. It is
 `instanceId` names the **extension instance** (018 §A), not the build: it is
 generated once when the bundle is evaluated (`connector/src/index.ts`) and is
 stable across reconnects, so the daemon can tell "the same editor came back"
-from "a second editor window appeared". Two windows each running a connector
-used to take turns in the daemon's single active slot every few minutes, and a
-write could then land in the other window's project — so a second *live*
-instance is refused rather than accepted. Also **optional**: without it the
-daemon falls back to its connection-level uuid, which still distinguishes live
-connections but not reconnects of the same one.
+from "a second editor window appeared". Since **023** it is also the daemon's
+**hub key**: every authenticated connector is registered rather than refused
+(§3.5), and this id is how a call is routed to one of them. Two windows sharing
+one id — the 3.2.175 double activation — are both kept, the second under a
+suffixed key (`inst-…~2`), because a dropped connection is a window the user has
+and the AI cannot see. The ack's `windowsOnline` says how many windows the
+daemon holds after this one joined, and `windowKey` says what this connection is
+called (`null` for a CLI connection). Also **optional**: without an
+`instanceId` the daemon falls back to its connection-level uuid, which still
+distinguishes live connections but not reconnects of the same one.
 
 `minConnectorVersion` is the **ack's** half of that negotiation (018 §B3): the
 oldest connector build the daemon will vouch for. The connector compares it
@@ -280,25 +295,17 @@ instead of seeing a bare disconnect.
 Two more rules:
 
 - `hello` sent later in the session is a `PROTOCOL_VIOLATION` — it is a handshake, not a verb.
-- A **second** connector that authenticates successfully is **refused** while the first one's
-  socket is still open. The newcomer gets an error frame — `CONNECTOR_ALREADY_ACTIVE`, "another
-  editor instance already holds the bridge (instance …, connector x.y.z, peer …); this connection
-  was refused so that writes cannot land in the wrong project", then the instruction to close the
-  extra window or run `boardwise bridge status` — and its socket is closed after it. The
-  refusal is audited as `connector_rejected` (both instance ids, both builds, the peer address)
-  and printed on the daemon's console in one line naming the holder, because the only person who
-  can act on it is the one looking at two EasyEDA windows. **The active instance is not
-  disturbed**: it is never told anything and keeps the bridge. A **dead** holder is not defended
-  — when the previous socket is no longer open the newcomer takes over, which is the ordinary
-  editor-reload path and has to stay smooth. That is also why liveness is read from the socket
-  rather than from the daemon's bookkeeping, and why the pairing check runs *before* this one: a
-  newcomer presenting a different token is refused as `UNAUTHENTICATED`, without the question
-  "who else is here?" being asked at all.
+- **Every** connector that authenticates is **registered** in the daemon's window hub (023, §3.5).
+  Until 2026-09-22 a second one was refused with `CONNECTOR_ALREADY_ACTIVE` — the fix for two windows
+  taking turns in a single slot, where each write landed in whichever project the winning window had
+  focused. Refusing was the wrong fix for the machine this runs on: a hardware engineer opens three
+  or four windows as a matter of course. Contention is now answered by **routing** instead of by
+  exclusion — the caller names the project it means, and a request that names none while several
+  windows are online is refused (`WINDOW_UNSPECIFIED`) rather than sent to a plausible one. See §3.5
+  for the routing rules and §5 for the codes.
 
-Until 2026-09-22 this section said the opposite — that the second connection replaces the first
-and the old socket is closed with `PROTOCOL_VIOLATION` ("replaced by a new connector"). Two
-windows then took turns in the single slot every few minutes, and a write landed in whichever
-project the window that happened to be winning had in focus. See §10 item 2.
+The refusal code and the `connector_rejected` audit record it produced are **retired**: nothing
+sends either any more, and both are kept only because connector builds in the field read the code.
 
 ### 3.4 Pairing: trust on first use
 
@@ -337,9 +344,11 @@ prevent, and the error now says that instead of only quoting the revoke command.
 
 Residual case, stated rather than hidden: **two connector instances alive at
 once** (a sideload followed by *Reconnect* without a full editor restart leaves
-the old bundle's socket up) — then the old one is attached and the new one is
-still refused. The fix there is a real restart, or the `Re-pair on next connect`
-menu item; the daemon will not pull the pairing out from under a live socket.
+the old bundle's socket up). Both are windows in the hub now (023, §3.5), so
+both appear in `bridge status` — and if the new build wants to re-pair, it needs
+either a real restart or the `Re-pair on next connect` menu item, because the
+daemon will not pull the pairing out from under a live socket. If the two claim
+one instance id, routing reports the ambiguity instead of picking one.
 
 The console line is the whole safety mechanism, so it is fixed text:
 
@@ -377,6 +386,84 @@ with a loud announcement and a one-command undo is the right strength: it remove
 without pretending to a guarantee the daemon cannot provide. The exposure window is the first
 connection only, and it is visible in the console and in the audit log.
 
+One rule changed with the hub (023): "a connector is attached" — the condition that blocks a
+stranger's re-pairing — now means *any* live connector, not a single privileged one. The strength of
+the rule is unchanged: an unknown token may only take over a pairing **nobody** is using, never one
+a live window is connected with.
+
+### 3.5 The window hub, and routing by project or instance (023)
+
+The daemon keeps **every** authenticated connector. Each connection is a hub entry keyed by the
+`instanceId` it claims, holding its socket and everything that window has said about itself; a
+second, third or fourth EasyEDA window registers exactly like the first. Nothing is hidden: `ping`
+returns one entry per window, `bridge status` prints one block each plus a `projects seen:` line, and
+every `hello` / `disconnect` / forwarded call lands in the audit log with its `windowKey`.
+
+**Context, kept fresh.** A window's identity is `{projectName, projectUuid, pageUuid, pageType}`.
+It is announced in `hello` (021 §2.3) and then **refreshed by every action response** in a top-level
+`context` object:
+
+```json
+← {"id": "doc.list-a1b2", "action": "doc.list", "params": {}}
+→ {"id": "doc.list-a1b2", "ok": true, "data": {…},
+   "context": {"projectName": "test2", "projectUuid": "uuid-…",
+               "pageUuid": "page-…", "pageType": "sch"}}
+```
+
+The connector reads that context when it runs the action and **omits the keys it cannot read**: a
+null, an empty string or an unknown key never overwrites a known value. That is what makes the
+routing table follow 岳 switching project or document mid-session instead of freezing at the
+handshake. `pageType` is the document domain (`sch` / `pcb`) and is the connector's vocabulary — the
+daemon records what it is told and never translates it.
+
+**Routing.** A caller names the window it wants, in one of two spellings:
+`bridge call --project NAME_OR_UUID` (top-level `targetProject`) or `bridge call --instance
+INSTANCE_ID` (top-level `targetInstance`). The daemon resolves the name to exactly one window, or
+refuses:
+
+| windows online | hint | result |
+|---|---|---|
+| ≥1 | `--instance`, matching a window's key or instance id | that window |
+| ≥1 | `--instance`, matching none | `WINDOW_NOT_CONNECTED`; the message ends with the `projectName (instanceId)` of every online window |
+| ≥1 | `--project`, matches exactly one window (by project **name** or **uuid**) | that window |
+| ≥1 | `--project`, matches none | `PROJECT_NOT_CONNECTED`; the message ends with the same online-window list |
+| ≥1 | `--project`, matches several | `PROJECT_AMBIGUOUS`; the message names the candidates — no "pick the newest" |
+| ≥1 | both hints | the **instance** decides: it names one connection, a project name may be claimed by several |
+| 1 | absent | that window — the pre-023 behaviour, byte for byte |
+| ≥2 | absent | `WINDOW_UNSPECIFIED`; the message names the candidates |
+| 0 | any | `NO_CONNECTOR` ("is EasyEDA running?") |
+
+**Why the second spelling exists.** An instance id is the *window's own* name for itself and it
+arrives in the `hello` params, so it is known from the first frame — while every project name is a
+read the connector has to perform, and the editor can be up before its API is. Measured 2026-09-22
+(023 follow-up): the editor restarts, three windows greet the daemon, and every context read comes
+back null — each window is a row `(no project) (inst-…)` and **no** `--project` value matches
+anything, including the window in front of the user. `--instance` is what still reaches a window
+then; `bridge status` prints the key to use, and the two refusal messages above say so too. Keys
+are matched, not guessed: when two live sockets claim one instance id the second is registered
+under `inst-…~2`, and each of the two spellings reaches its own connection.
+
+The answering window's live context comes back on the response frame — and on an error frame — as the
+same top-level `context`, so a caller can see *which* window answered without a second call. The hint
+itself never reaches `params`: it instructs the daemon about which window, it is not something the
+connector is asked to do.
+
+**Writes serialise per window.** Two writes into one editor queue (the editor is a single thread of
+truth — two placements racing in one window is how a half-drawn page happens); writes into two
+*different* windows run in parallel, which is the point of a hub; reads never take the lock at all.
+Each forwarded call's audit record carries the `windowKey` it went to and that window's
+`projectName`, because the window may be closed by the time anyone asks "which project did that write
+land in?".
+
+**What is retired.** 018's `CONNECTOR_ALREADY_ACTIVE` refusal, its `connector_rejected` audit record
+and its Chinese console warning. The code stays in §5 — connector builds read it — but nothing sends
+it. The console line was only ever necessary because the other windows were invisible everywhere
+else.
+
+**What is deferred.** Re-routing a retired window, deduplicating a double-activated window (it is
+reported as `PROJECT_AMBIGUOUS` instead), and connector-pushed context changes — a response already
+refreshes the context, which is enough until something wants live updates with no call in between.
+
 
 ## 4. Action catalogue
 
@@ -398,7 +485,7 @@ declaring `confirm`).
 | action | owner | risk | params | `data` on success | timeout |
 |---|---|---|---|---|---|
 | `hello` | daemon | read | daemon | `token`, `role`, `protocol`, `client` | `{role, protocol, serverTime}` | 30 s (`ACTION_TIMEOUT`) |
-| `ping` | daemon | read | daemon | — | `{pong: true, version, connector: bool, pairedFingerprint: str\|null, activeInstance: obj\|null, recentRejections: [obj]}` — `version` is the daemon's own build, so "the daemon answering me" and "the daemon my CLI was built from" can be told apart; `activeInstance` (018 §A) names the editor instance that holds the bridge (`instanceId`, `instanceIdSource`, `connectorVersion`, `client`, `peer`, `connectedAt`) and `recentRejections` is the last ≤5 connectors that were turned away (newest first, §3.3), each with both sides and a `reason`. `boardwise bridge status` renders both and adds nothing of its own | 30 s |
+| `ping` | daemon | read | daemon | — | `{pong: true, version, connector: bool, pairedFingerprint: str\|null, windows: [obj]}` — `version` is the daemon's own build, so "the daemon answering me" and "the daemon my CLI was built from" can be told apart; `windows` (023, §3.5) is **one entry per online editor window** (oldest first), each with `windowKey`, `instanceId`, `instanceIdSource`, `connectorVersion`, `client`, `peer`, `connectedAt`, `lastSeen`, `routed` (calls it has answered), `projectName`, `projectUuid`, `pageUuid`, `pageType` — every optional field is `null`, never absent. `boardwise bridge status` renders it and adds nothing of its own; the pre-023 `activeInstance` / `recentRejections` keys are gone (no window is refused any more) | 30 s |
 | `document.current` | connector | read | connector | — | `{project, pcb, schematicPage, active, type, typeSource, heuristic, tabs}` — `active` is the focused document, or **null** when none is focused (the host's placeholder uuid `"0"` is reported as `null` plus a `problems` line, as in `doc.list`); `typeSource`/`heuristic` say which read produced `type` (§10 item 5); when the host offers them, `active` also carries `projectUuid` / `libraryUuid` — the document's own `parentProjectUuid` / `parentLibraryUuid`, i.e. the channel that says which project the focused *document* belongs to, which is not always the project `doc.list` calls focused (`sys.identity`) | 30 s |
 | `sys.identity` | connector | read | — | `{focusedProject, activeDocument, consistent, consistentBasis, pageUuid, readOnly, notes?}` — the editor's two identity layers side by side (018 §B): `focusedProject` is the project `doc.list` marks `focused` (`dmt_Project.getCurrentProjectInfo`), `activeDocument` is `getCurrentDocumentInfo`'s document plus the project it belongs to (`parentProjectUuid`, or the document's own per-kind info read when the host leaves that field empty). `consistent` compares the two project uuids and is **null** — never a hopeful `true` — when the comparison cannot be made, in which case `consistentBasis` says why (`no-active-document`, `unavailable`, or `focused-project-listing` when membership in the focused project's document list was the best available evidence). `pageUuid` is the active page's uuid. Read-only: nothing is opened, focused or written | 30 s |
 | `sys.probe` | connector | read | connector | `checks`, `namespace`, `namespaces`, `functionsOnly` | `checks` mode: `{version, topLevel, checks: {NAME: {present, kind, checked, missing, status, arity, notes?}}}` — `status` is the member's `typeof` and `arity` its declared `fn.length` for the members that read back as functions; enumerate mode: `{version, topLevel, namespaces: {NAME: {present, ownNames, functions, data, errors?}}}` — **read-only** introspection of the live API surface | 30 s |
@@ -607,13 +694,17 @@ Notes that matter operationally:
 | code | Meaning | Usually means |
 |---|---|---|
 | `UNAUTHENTICATED` | No `hello` in time, or the token is empty/wrong | A connector that is not the paired one — `boardwise bridge revoke` to forget the pairing (§3.4) |
-| `PROTOCOL_VIOLATION` | `hello` not first, or `hello` sent twice | A hand-rolled client — or an extension bundle that reconnects without reloading the page. Not "two editors" any more: a second **live** instance is refused with `CONNECTOR_ALREADY_ACTIVE` (§3.3) |
+| `PROTOCOL_VIOLATION` | `hello` not first, or `hello` sent twice | A hand-rolled client — or an extension bundle that reconnects without reloading the page |
 | `VERSION_MISMATCH` | Protocol major differs | Daemon and connector from different checkouts |
-| `BAD_REQUEST` | Malformed JSON, missing/invalid field, or wrong role for the action | A client bug |
+| `BAD_REQUEST` | Malformed JSON, missing/invalid field, or wrong role for the action | A client bug — including a `targetProject` / `targetInstance` that is not a string (§3.5) |
 | `UNKNOWN_ACTION` | Not in the catalogue | Typo, or an action that does not exist yet |
 | `NOT_IMPLEMENTED` | Known to the connector, but this editor version lacks the API | Editor older than the connector expects |
 | `NO_CONNECTOR` | The action needs the editor and none is attached | EasyEDA not running, extension disabled, or external interaction not granted |
-| `CONNECTOR_ALREADY_ACTIVE` | A connector's `hello` arrived while another editor instance's socket held the bridge (018 §A) | Two EasyEDA windows are open. Close the extra one — the daemon will not pull the bridge out from under a live socket, and the instance that holds it is named in the error, in the audit log (`connector_rejected`) and by `bridge status` (§3.3) |
+| `CONNECTOR_ALREADY_ACTIVE` | **Retired (018 §A, removed by 023).** A second editor instance used to be refused while the first one's socket held the bridge | Nothing, today: the daemon sends this to nobody, because every authenticated window is registered (§3.5). It stays in the vocabulary because connector builds in the field read the code; the audit record `connector_rejected` is retired with it |
+| `PROJECT_NOT_CONNECTED` | A `targetProject` hint that no connected window has open (023) | The project is not open, or its window has not announced it yet — a window that cannot read its project at all is listed as `(no project)` and reachable only by `--instance`. The message lists every online window as `projectName (instanceId)`: name one of them, or read it off `bridge status` |
+| `PROJECT_AMBIGUOUS` | A `targetProject` hint that **more than one** connected window matches (023) | The same project open twice, or two sockets claiming one instance id (double activation). Nothing was forwarded; close the duplicate window or split the hint. Picking a window here is exactly the wrong-window write 018 measured |
+| `WINDOW_UNSPECIFIED` | Several windows are connected and the request named none (023) | Add `--project NAME_OR_UUID` or `--instance INSTANCE_ID` (`bridge call …`). Not an error in the "broken" sense — it is the daemon refusing to guess which window was meant, and the message lists the candidates |
+| `WINDOW_NOT_CONNECTED` | A `targetInstance` hint that no connected window answers to (023 follow-up) | The window is closed, or the id is from an earlier session (a reload gives the connector a new one). The message lists every online window as `projectName (instanceId)`; copy one out of it or out of `bridge status` |
 | `CONFIRMATION_REQUIRED` | A `create` action (one that produces a new document) arrived without `confirm: true` | Expected on the first call — re-send with `confirm: true`, or let the CLI ask (§4, 006c). Nothing was forwarded, so nothing was created |
 | `CONNECTOR_ERROR` | The connector raised, or refused (e.g. no image, canvas refused markers) | A document is not open/focused |
 | `PAGE_MISMATCH` | The page (or PCB/board) the action was given is not the one the editor has focused | A call aimed at a tab that is not in front — the guard exists so a write cannot land on the wrong page. Focus it first (`doc.focus`, or `doc.open` if it is not open) and re-check with `doc.list` |
@@ -664,9 +755,9 @@ Backoff doubles from 1 s to a 30 s ceiling and resets on a successful connect. `
 every timer and closes the socket; a stopped transport sends nothing, ever (asserted in the
 suite, with a wait long enough to be meaningful).
 
-The daemon is the passive side: it does not track per-connector liveness, and clearing
-`daemon.connector` depends on the handler loop exiting. So a *half-open* socket can leave
-`status` reporting `connector: connected` while real actions time out — see §10.
+The daemon is the passive side: it does not track per-connector liveness, and removing a window from
+the hub depends on the handler loop exiting. So a *half-open* socket can leave `status` reporting
+`connector: connected` while real actions time out — see §10.
 
 ## 8. Configuration reference
 
@@ -687,12 +778,13 @@ The daemon is the passive side: it does not track per-connector liveness, and cl
 | Command | Exit | What it does |
 |---|---|---|
 | `bridge start` | 0 | Run the daemon. Prints the token path, the audit dir, the pairing path, and one loud line per first-time pairing. |
-| `bridge status` | 0 / 1 / 2 | Daemon up + connector attached / daemon up, no connector / daemon unreachable. Also prints the paired connector's fingerprint, and — since 018 §A — the **active instance** (instance id, connector build, peer, connected-at) and the last refused connectors, both read straight out of `ping`'s `activeInstance` / `recentRejections` (§4). One editor instance holding the bridge is a *feature*: see §3.3 and §10 item 2. |
+| `bridge status` | 0 / 1 / 2 | Daemon up + connector attached / daemon up, no connector / daemon unreachable. Prints the paired connector's fingerprint and — since 023 — **one block per online editor window**: its `windowKey`, connector build, project, page, peer, arrival, last-heard-from and how many calls it has answered, plus a `projects seen:` line naming every project with the key that reaches it (§3.5). That list is what a caller reads before `bridge call --project …`. Several windows connected is the normal case, not a warning |
 | `bridge revoke` | 0 | Delete the pairing record and audit `revoke`. Needs no daemon: it is a local file operation, because the moment you want to withdraw trust is the moment you are least sure what is running. |
 | `bridge screenshot <out>` | 0 / 1 / 2 | Native canvas capture; `--fit` zooms to the board first. |
 | `bridge export-fab --out DIR` | 0 / 1 / 2 | The fab bundle: calls `export.fab` and writes Gerber + pick-and-place + BOM + `manifest.json` into DIR (created if missing). `--pcb`, `--vendor`, `--gerber` (JSON overrides), `--bom-template`, `--timeout-ms`. Exit 1 also for a **partial** bundle — the files that did arrive stay on disk, and the missing one is named on stderr. |
 | `bridge highlight <uuid…>` | 0 / 1 / 2 | Draw markers; `--color`, `--zoom`, `--clear`. |
-| `bridge update-connector` | 0 / 1 / 2 / 3 | Hot-update the running connector from `connector/dist/index.js` (§8); asks first, `--yes` skips. **Exit 0 only after the reloaded connector reported the new version** (020 §WI-2): 1 = it came back running a different build (the write did not take effect), 3 = it never came back inside the 30 s budget (state unknown, not failed), 2 = bad input or no daemon. `--no-verify` skips the read-back and returns as soon as the daemon accepted the write. |
+| `bridge call --action NAME [--params JSON] [--project NAME_OR_UUID] [--instance INSTANCE_ID] [--yes]` | 0 / 1 / 2 | Call one action and print its `data` as JSON. `--project` (023) routes the call to the editor window that has that project open, `--instance` (023 follow-up) to the window with that instance id (§3.5) — the latter is the only one that works while no window can read a project at all. Either is required as soon as more than one window is connected; without one a multi-window daemon answers `WINDOW_UNSPECIFIED` rather than guessing, and given both the instance decides. `--yes` pre-confirms a `create` action (006c); without it the daemon answers `CONFIRMATION_REQUIRED` and this command asks interactively. Exit 1 is a refused or failed action — the code and message are on stderr |
+| `bridge update-connector [--instance INSTANCE_ID]` | 0 / 1 / 2 / 3 | Hot-update the running connector from `connector/dist/index.js` (§8); asks first, `--yes` skips. **Exit 0 only after the reloaded connector reported the new version** (020 §WI-2): 1 = it came back running a different build (the write did not take effect), 3 = it never came back inside the 30 s budget (state unknown, not failed), 2 = bad input or no daemon. `--no-verify` skips the read-back and returns as soon as the daemon accepted the write. `--instance` aims the write at one named window instead of whichever window the daemon would route to, and the read-back then waits for a window announcing the stored version — the window it updated reconnects under a new instance id, so it cannot be probed by the old name |
 
 Connector token resolution order: `globalThis.BOARDWISE_TOKEN` (injection for tests) →
 extension user config → `?token=` on the configured URL → **generate one**. The last step is
@@ -792,57 +884,64 @@ and put the intended document back in front yourself: `doc.focus` for a tab that
 `doc.open` for one that is not. Re-read `doc.list` before any write; skipping that check means
 acting on a pre-reload reading in a changed editor.
 
-**More than one editor window means more than one connector, and the daemon has exactly one of
+**More than one editor window means more than one connector — and since 023 the daemon holds all of
 them.** Measured 2026-09-21 (013 batch②, connector 0.4.9/0.4.10): the audit log recorded `hello`
 frames reporting `0.4.9` and `0.4.10` on **different sockets inside the same minute**, while
 `doc.list`'s focused project changed with the socket (`test` → `test2` → `毕设FOC驱动板`) and
 nothing was done to the editor between reads. Each window keeps its own extension store (hence its
-own build version) and its own focused project, and every window that (re)connected replaced the
-daemon's connector connection — so *both* "which build answers" and "which project is in front"
-belonged to whichever window registered last, and they flipped on the windows' own schedule. This is what
-the earlier "the focus moved with nobody touching the editor" note was seeing, and it has two
-consequences before any real-machine verification:
+own build version) and its own focused project, and back then every window that (re)connected
+replaced the daemon's connector connection — so *both* "which build answers" and "which project is
+in front" belonged to whichever window registered last, and they flipped on the windows' own
+schedule. Two consequences stand, and both are now answerable rather than mysterious:
 
-**The flipping stopped on 2026-09-22** (018 §A): a second *live* connector instance is now refused
-outright with `CONNECTOR_ALREADY_ACTIVE` (§3.3), so the socket no longer moves between windows —
-whichever window **arrived first and stayed connected** is the one answering. The measurements and
-both consequences below stand unchanged; what changed is that "which window is it this time?" is
-now answerable from `bridge status` rather than having to be inferred from every reading.
+**Both fixes in sequence.** 2026-09-22 (018 §A) stopped the flipping by refusing a second *live*
+connector — whichever window arrived first and stayed connected answered, and `bridge status` named
+it. 2026-09-23 (023 §3.5) replaced that with the hub: every window is registered and the caller says
+which one it means (`--project`), so "which window is it this time?" is a parameter rather than a
+property of connection order.
 
 - **An R1-clean reading does not prove the build under test answered.** A window left on an older
   bundle answers `doc.list` perfectly. Check the *behaviour* you changed, not only the project name:
   in this batch an R1-clean `export-fab` came back with the **old** 17-column BOM from a window that
-  still ran the previous 0.4.10, and the 15-column header is what identified the new one.
-- **`sys.self_update` (and `bridge update-connector`) updates the window that owns the socket**, not
-  the other windows. With two windows open a hot update can land beside the window you are about to
-  test; `sys.probe`'s `connector` version read in the same breath as the action is the cheapest way
-  to know which instance is answering, and repeating the update (after the socket moves) is expected
-  rather than a fault. When the two builds share a version string, the version cannot tell them
-  apart at all — a bump is the only marker that can.
+  still ran the previous 0.4.10, and the 15-column header is what identified the new one. Since 023
+  each window's build is in `bridge status`, and every response frame's `context` names the window
+  that answered — read it instead of inferring from the focused project.
+- **`sys.self_update` (and `bridge update-connector`) updates whichever window the daemon routes to**
+  — with several windows open, the one you name (`--project` by project, `--instance` by instance id),
+  or the only one if there is just one. Hot updating one window and testing another is the way to get
+  a clean answer; `sys.probe`'s `connector` version read in the same breath as the action says which
+  build answered, and when two builds share a version string only a bump can tell them apart. Before
+  023 the update landed on whichever window owned the socket, which is the same hazard with the window
+  chosen for you. With `--instance`, note what the read-back can and cannot say: the updated window
+  reconnects under a **new** instance id, so the verification is "some online window now announces the
+  stored version" (exit 0), "the window you named is still answering on the old one" (exit 1), or
+  neither inside the budget (exit 3) — never a claim about which connection is which.
 
 ### Audit log
 
 One JSON object per line, best-effort (a logging failure never breaks a call):
 
 ```json
-{"ts": 1789000000.1, "action": "pcb.readback", "role": "cli", "ok": true, "ms": 41.2}
+{"ts": 1789000000.1, "action": "pcb.readback", "role": "cli", "ok": true, "ms": 41.2, "windowKey": "inst-…", "projectName": "test2"}
 {"ts": 1789000000.5, "action": "connect", "role": "-", "ok": true, "peer": "127.0.0.1:54048", "origin": null, "user_agent": "…"}
 {"ts": 1789000001.3, "action": "pairing", "role": "connector", "ok": true, "client": "boardwise-connector/0.2.1", "peer": "127.0.0.1:54048", "fingerprint": "53cd3b41"}
-{"ts": 1789000001.4, "action": "hello", "role": "connector", "ok": true, "client": "boardwise-connector/0.2.1"}
-{"ts": 1789000001.9, "action": "connector_rejected", "role": "connector", "ok": false, "peer": "127.0.0.1:54102", "instanceId": "inst-…", "instanceIdSource": "hello", "connectorVersion": "0.4.10", "activeInstanceId": "inst-…", "activeConnectorVersion": "0.4.10", "activePeer": "127.0.0.1:54048", "reason": "another editor instance is already connected"}
-{"ts": 1789000002.0, "action": "disconnect", "role": "connector", "ok": true, "actions": ["pcb.readback"]}
+{"ts": 1789000001.4, "action": "hello", "role": "connector", "ok": true, "connectorVersion": "0.4.10", "instanceId": "inst-…", "instanceIdSource": "hello", "windowKey": "inst-…", "tookOverFrom": null, "duplicateInstanceId": null, "projectName": "test2", "projectUuid": "uuid-…", "windowsOnline": 2}
+{"ts": 1789000002.0, "action": "disconnect", "role": "connector", "ok": true, "actions": ["pcb.readback"], "windowKey": "inst-…", "projectName": "test2", "projectUuid": "uuid-…", "pageUuid": "page-…", "pageType": "sch", "routed": 7}
 {"ts": 1789000003.0, "action": "revoke", "role": "cli", "ok": true, "fingerprint": "53cd3b41"}
 ```
 
-`connect`, `disconnect`, `hello`, `pairing`, `connector_rejected` and `revoke` are **lifecycle**
-records: they carry their own fields and no `ms`. Everything else is a request and carries a
-duration. `connector_rejected` (018 §A) is the record a second connector leaves behind when it is
-turned away (§3.3): it names **both** sides — the refused instance and the one holding the bridge
-(`activeInstanceId`, `activeConnectorVersion`, `activePeer`) — plus a `reason`, because "why did my
-write land in the other project?" is the question this record exists to answer. The same two facts
-are on the wire in `ping` and printed by `bridge status`, so reading the log is the fallback, not
-the first step. A token — or any slice of one longer than the 8-hex fingerprint — must never appear
-in this file, and there is a test that greps for exactly that.
+`connect`, `disconnect`, `hello`, `pairing` and `revoke` are **lifecycle** records: they carry their
+own fields and no `ms`. Everything else is a request and carries a duration, plus — since 023 —
+`windowKey` and the window's `projectName` when it was routed to one: "which project did that write
+land in?" has to be answerable from the call's own line, because the window may be closed by the time
+anyone asks. A `hello` record carries the hub key and how many windows were online when it arrived;
+a `disconnect` record carries the window's project and page **as last known**, which is where the
+identity of a window that has since closed survives. A token — or any slice of one longer than the
+8-hex fingerprint — must never appear in this file, and there is a test that greps for exactly that.
+
+`connector_rejected` (018 §A) is **retired** (023). It used to record a second connector being turned
+away, naming both sides; nothing is turned away any more, so nothing writes it. It is kept in this
+list because a reader grepping old logs for it deserves to find out why it stopped.
 
 ## 9. Security posture
 
@@ -887,19 +986,23 @@ Stated plainly because it is the whole threat model:
 
 Recorded rather than hidden, so a future session does not have to rediscover them:
 
-1. **Half-open connectors look alive.** `status` reads `daemon.connector is not None`; if the
-   editor dies without a clean TCP close, that stays true until a forwarded action times out.
-   Workaround: `boardwise bridge screenshot` — a real round trip — is the honest liveness check.
-2. **Only one connector is tracked.** A second editor instance is **refused** while the first
-   one's socket is open (`CONNECTOR_ALREADY_ACTIVE`, audited `connector_rejected`, §3.3) — since
-   2026-09-22; before that the newcomer displaced the holder and two windows took turns in the
-   slot every few minutes. Still one workstation's model, and still wrong for any multi-user
-   setup: a second machine cannot share the bridge, and the fix for "my writes land in the other
-   window" is to close the extra window, not to route. **Multi-project routing is deliberately
-   deferred** (004f): the per-project pairing table, `connectors.json` and `--project` addressing
-   that task 004f first specified were **withdrawn**, because the premise they were built on was
-   measured to be false — see item 24. One connector per editor is the model; addressing "which
-   project" is a job for the actions (`doc.list` / `doc.open`), not for the transport.
+1. **Half-open connectors look alive.** `status` reads the hub's socket states (`has_connector()`);
+   if the editor dies without a clean TCP close, a window stays "online" until a forwarded action
+   times out. Workaround: `boardwise bridge screenshot` — a real round trip — is the honest liveness
+   check.
+2. **Windows are registered, not deduplicated.** Every authenticated connector gets a hub row, so
+   three or four windows is the normal case and the caller decides which one answers — `--project`
+   by project, `--instance` by instance id (§3.5). What is
+   still missing on purpose: a *retired* window is not re-routed to (the caller is told
+   `PROJECT_NOT_CONNECTED` / `WINDOW_NOT_CONNECTED` and the window list), a window that connects
+   twice under one instance id is
+   reported as `PROJECT_AMBIGUOUS` rather than merged (the 3.2.175 double activation), and the
+   connector does not push a context change on its own — a response refreshes it. Still one
+   workstation's model, too: a second machine cannot share the bridge. **The daemon's own
+   multi-project addressing was deliberately deferred** (004f): the per-project pairing table and
+   `connectors.json` that task first specified were **withdrawn**, because the premise they were
+   built on was measured to be false — see item 24. `--project` (023) is a *routing* hint against
+   what each window reports, not a per-project pairing table.
 3. **`canvas.highlight` cannot mark pads, tracks or vias by uuid.** `locate()` tries component
    namespaces first; other primitive kinds fall back to their namespace `get(uuid)` and start
    coordinates, so a track is marked at its start point, not along its length.
@@ -1075,7 +1178,9 @@ Recorded rather than hidden, so a future session does not have to rediscover the
     **existing** token (`sys_Storage` had not been reset), and `revoke` did not disturb a live
     socket. The earlier "per-project isolation" reading came from a focused-page mix-up. So the
     per-project table, `connectors.json` and `AMBIGUOUS_TARGET` were **withdrawn before being
-    built**, and the single-connector model stands (item 2).
+    built**. The single-connector model stood until **023** replaced it with the window hub (§3.5)
+    — note what is *not* back: `--project` there is a routing hint matched against what each window
+    reports about itself, not a per-project pairing record and not a second token store.
     What *does* reset the store is **sideloading a connector build** — and that, not project
     switching, is the only real cause of the `UNAUTHENTICATED` waves seen on 2026-09-14. §3.4
     turns that into a self-heal instead of a manual `bridge revoke`.
@@ -1161,6 +1266,15 @@ machine-readable. Two deliberate differences:
 | `connect` records `Origin` / `User-Agent`, absent → `null` | `test_connect_audit_records_origin_and_user_agent`, `test_a_missing_origin_is_recorded_as_null` |
 | `check_origin` currently allows everything | `test_check_origin_allows_everything_for_now` — written as an assertion so 004d cannot inherit "always allow" without deleting it on purpose |
 | The extension wires the editor's socket into the transport | `connector/tests/wiring.test.mjs` — with an injected facade: `activate()` registers the socket, a banner produces a `hello` carrying a generated 64-hex token, and the token is persisted |
+| Every authenticated window is registered, none refused (023) | `test_every_window_that_authenticates_is_registered` (two windows, one shared token, both `ok`, both in `ping`), `test_two_live_sockets_claiming_one_instance_id_both_stay_visible` (the second under `inst-…~2`), and `test_the_refusal_machinery_is_gone_and_its_code_is_retired` (`refuse_if_held`, `RejectionNotice`, `active_instance`, `recent_rejections`, `on_rejection` all gone; no `connector_rejected` record is written) |
+| A project hint reaches exactly the window that has it, and only it | `test_a_project_hint_routes_to_the_window_that_has_it` — by name *and* by uuid; each fake window records what it received, and the other receives nothing. `test_call_project_hint_reaches_that_window_from_the_cli` drives the same thing through a real `bridge call --project` subprocess against a real daemon |
+| An instance hint reaches exactly the window that claimed it (023 follow-up) | `test_an_instance_hint_reaches_that_window_without_any_project` — two windows that can name **no** project (the restarted-editor state), where the project hint is refused and the instance hint still lands on one socket and not the other; `test_an_instance_hint_wins_over_a_project_hint`; `test_an_instance_hint_that_matches_no_window_lists_the_online_ones` (the message, verbatim); `test_an_instance_hint_names_one_of_two_connections_sharing_an_id` (the `~2` key is addressable); and `test_call_instance_hint_reaches_that_window_from_the_cli`, which drives the flag through a real CLI subprocess |
+| Routing refuses rather than guesses | `test_a_hint_that_matches_no_window_lists_the_online_ones` (`PROJECT_NOT_CONNECTED`, exact message including `projectName (instanceId)` per window), `test_a_hint_that_matches_two_windows_is_ambiguous` (`PROJECT_AMBIGUOUS`, nothing forwarded), `test_several_windows_and_no_hint_are_refused_not_guessed` (`WINDOW_UNSPECIFIED`), `test_a_single_window_needs_no_hint` (the pre-023 path, unchanged) |
+| A window's context is live, not frozen at the handshake | `test_a_response_context_moves_where_that_window_routes` — a window that answers while showing another project is found under the new name/uuid and **no longer** under the old one; `test_a_context_that_could_not_be_read_never_erases_what_is_known` (nulls, empty strings, unknown keys and non-objects change nothing) |
+| Disconnect removes the window, and only that one | `test_ping_drops_a_window_as_soon_as_its_socket_closes` — the remaining window is still routable, the closed one's project becomes `PROJECT_NOT_CONNECTED`, and its `disconnect` record carries the project and page it was last known to have. `test_a_dead_socket_is_displaced_without_a_fuss` covers the reload (`tookOverFrom`, no duplicate) |
+| Writes serialise per window; other windows run in parallel | `test_writes_to_one_window_serialise_while_other_windows_run_in_parallel` (wall-clock spans from a fake connector), `test_a_read_does_not_take_the_write_lock` |
+| A response is accepted only from the window that was asked | `test_a_response_from_another_window_does_not_answer_the_call` |
+| `bridge status` shows every window | `test_status_lines_render_the_window_table`, `test_status_lines_map_every_online_window_to_its_project`, `test_status_lines_say_nothing_about_projects_nobody_named`, and the CLI-level `test_status_lists_every_connected_window` / `test_status_maps_every_window_to_its_project` against a real daemon process |
 | The whole production path runs in CI | Same file, via `__setFacadeForTests` — this is the gap that let `globalThis.eda` ship twice (§10.10) |
 | Only one module touches the host `eda` global | `connector/tests/source-guard.test.mjs` — reads `src/*.ts`, ignores comments and string literals, and allows `eda.` only in `facade.ts`; a companion test fails if the facade stops referencing `eda` |
 | `Set token…` is gone and the menus all resolve | `connector/tests/wiring.test.mjs` — parses `extension.json`, asserts every `registerFn` is exported and that `setToken` is not among them |
@@ -1370,6 +1484,11 @@ banner path is the one to trust.
 boardwise bridge status
 # boardwise bridge: daemon up on 127.0.0.1:61190
 #   connector: connected            <- exit 0; "not connected" exits 1
+#   windows: 1 connected            <- 023: one block per online editor window
+#   window: inst-… (connector 0.4.10)  [project /test (uuid-…)]
+#     peer: 127.0.0.1:54048  connected: 2026-09-23 17:10:02  last seen: …  routed: 4
+#     page: sch page-…
+#   projects seen: /test (inst-…)
 #   paired connector: 3f9a1c7e      <- the fingerprint the connector's About box should match
 
 boardwise bridge revoke           # forget the pairing; the next connector pairs afresh
@@ -1381,6 +1500,46 @@ boardwise bridge highlight --clear                    # markers removed
 
 Open the PNG and confirm it shows the board you have open — that is the proof the whole chain
 (dial-out socket, handshake, routing, `eda.*`) works.
+
+**E2. Verify with three or four windows open (023)**
+
+Open EasyEDA on three different projects (each window connects independently — check
+`bridge status` lists three `window:` blocks with three different projects), then:
+
+```bash
+boardwise bridge call --action doc.list --project test2        # exit 0, and the answer is test2's
+boardwise bridge call --action doc.list --project <uuid>       # the same window, by uuid
+boardwise bridge call --action doc.list --instance <windowKey> # the same thing by instance id
+boardwise bridge call --action doc.list                        # exit 1, WINDOW_UNSPECIFIED,
+                                                               # listing all three windows
+boardwise bridge call --action doc.list --project no-such-one  # exit 1, PROJECT_NOT_CONNECTED,
+                                                               # listing all three windows
+boardwise bridge call --action doc.list --instance no-such-id  # exit 1, WINDOW_NOT_CONNECTED,
+                                                               # listing all three windows
+boardwise bridge call --action sys.identity --project 反激辅助电源  # read-only, must name that project
+```
+
+Then switch the focused project inside one window and repeat `--project` for the **new** project: it
+must route there without the window reconnecting (the context rides every response). For a write,
+use `test` / `test2` only, and confirm the other windows' projects are untouched afterwards.
+
+**E3. The restarted-editor case the instance hint exists for (023 follow-up)**
+
+Restart EasyEDA with several projects open, then *immediately* run `bridge status`: the windows are
+connected, but each may read as `[no project]` while the editor API is still coming up — the `hello`
+arrives long before any project read can. In that state:
+
+```bash
+boardwise bridge call --action doc.list --project test2        # exit 1, PROJECT_NOT_CONNECTED —
+                                                              # nothing to match against yet
+boardwise bridge call --action doc.list --instance <windowKey> # exit 0: the instance id was in the
+                                                              # hello, so it always routes
+boardwise bridge update-connector --instance <windowKey> --yes # hot-update THAT window and read its
+                                                              # version back from the hub
+```
+
+Then wait for the editor to finish loading and repeat `--project` for the same window: it routes
+now, because the first response refreshed the context.
 
 **F. When it does not work**
 

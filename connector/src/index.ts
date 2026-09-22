@@ -22,7 +22,7 @@ import {
 } from './config';
 import { createFacade, hasHost, type EditorFacade } from './facade';
 import { describeRandom } from './random';
-import { buildHandlers, currentProjectIdentity } from './actions';
+import { buildHandlers, currentProjectIdentity, currentResponseContext } from './actions';
 import { ActionError } from './protocol';
 import { Transport, type TransportState } from './transport';
 import { VERSION, isVersionOlder } from './version';
@@ -255,6 +255,11 @@ function buildTransport(current: ResolvedConfig): Transport {
     // The daemon cannot ask: `eda` is window-scoped, so the only way it learns
     // about the other editor windows is each one saying so as it connects.
     projectIdentity: () => currentProjectIdentity(host().api as Record<string, any>),
+    // Where this window is *now*, attached to every response frame (023). The
+    // handshake's identity is the connection's starting point; this is what
+    // keeps the daemon's routing current once the user switches document, so
+    // the two readings come from the same two shared readers.
+    responseContext: () => currentResponseContext(host().api as Record<string, any>),
     onRequest: async (action, params) => {
       const handlers = buildHandlers(host().api as Record<string, any>);
       const handler = handlers[action];

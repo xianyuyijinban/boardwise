@@ -1,24 +1,42 @@
 """WebSocket daemon: the bridge's server side.
 
 The daemon is the only listening socket in the system. It accepts two kinds of
-client (see :mod:`boardwise.bridge.protocol`) and does three jobs:
+client (see :mod:`boardwise.bridge.protocol`) and does four jobs:
 
 1. **Authenticate** — every connection must open with ``hello``; anything else
    is closed immediately. The two roles use *different* secrets:
    ``cli`` presents ``~/.boardwise/token`` (written by ``bridge start``, copied
    by the user), while ``connector`` uses trust-on-first-use pairing (below).
-2. **Route** — daemon-owned actions (``hello``, ``ping``) are answered here;
-   everything else is forwarded to the single connected ``connector`` and its
-   answer is relayed back.
-3. **Audit** — every request is appended to ``~/.boardwise/audit/<date>.jsonl``
-   with role, action, duration and outcome.
-4. **Hold exactly one connector** — one editor instance owns the bridge; a
-   second one is refused with ``CONNECTOR_ALREADY_ACTIVE`` (audited as
-   ``connector_rejected``, announced on the console) while only an instance
-   whose socket is already gone is taken over, which is the reload path. Two
-   windows taking turns here is what made writes land in whichever project the
-   window that happened to be winning had focused (task 018 §A, measured
-   2026-09-21).
+2. **Register** — every authenticated connector joins a **hub**: one entry per
+   editor window, keyed by the instance id it claims, carrying its socket and
+   what that window has told us about itself (project, page, build).
+3. **Route** — daemon-owned actions (``hello``, ``ping``) are answered here;
+   every other action is resolved to **one** window and forwarded there — by the
+   caller's ``targetInstance`` hint (the window's own instance id, which is the
+   only name that survives an editor which cannot yet read a project), else by
+   its ``targetProject`` hint, else directly when only one window is connected.
+   With several windows and no hint the daemon refuses with
+   ``WINDOW_UNSPECIFIED`` and lists them, because picking one would be exactly
+   the silent wrong-window write that 018 measured and 023 exists to end.
+4. **Audit** — every request is appended to ``~/.boardwise/audit/<date>.jsonl``
+   with role, action, duration, outcome and **which window answered it**.
+
+**The hub (023).** Until 2026-09-22 this daemon held exactly one connector and
+refused the second with ``CONNECTOR_ALREADY_ACTIVE``, because two windows taking
+turns in a single slot is how writes landed in whichever project the winning
+window had focused (018 §A). A hardware engineer opens three or four windows as
+a matter of course, so the single slot was the wrong fix: contention is now
+answered by *routing* instead of by exclusion. ``easyeda-agent``'s daemon is the
+model — a ``windowID`` per connection, a live ``context`` refreshed on every
+response, ``windowForProject`` to turn a project hint into a window, and a
+per-window lock so two writes to the same window serialise while different
+windows run in parallel.
+
+The refusal code survives in :class:`boardwise.bridge.protocol.ErrorCodes` as a
+retired name (it is read by connector builds in the field); nothing here raises
+it any more. The safety property 018 wanted is kept differently and more
+honestly: the second window is no longer *hidden*, it is a first-class row in
+``bridge status``, a line in the audit log, and a routing target.
 
 Security posture, stated plainly because it is the whole threat model:
 
@@ -63,7 +81,7 @@ import secrets
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Iterable
 
 import websockets
 from websockets.asyncio.server import ServerConnection, serve
@@ -80,8 +98,10 @@ from .protocol import (
     ErrorCodes,
     action_spec,
     banner_frame,
+    context_of,
     decode_frame,
     error_frame,
+    merge_context,
     request_frame,
     response_frame,
     timeout_for,
@@ -96,11 +116,9 @@ __all__ = [
     "AUDIT_REPAIRING",
     "AUDIT_DRAW_PERSISTENCE",
     "AUDIT_PERSISTENCE_VERIFIED",
-    "AUDIT_CONNECTOR_REJECTED",
-    "CONNECTOR_ALREADY_ACTIVE",
     "MIN_CONNECTOR_VERSION",
-    "MAX_RECENT_REJECTIONS",
     "UNKNOWN_CONNECTOR_VERSION",
+    "WINDOW_KEY_SEPARATOR",
     "client_with_version",
     "token_path",
     "connector_token_path",
@@ -115,8 +133,9 @@ __all__ = [
     "client_headers",
     "append_audit",
     "PairingNotice",
-    "RejectionNotice",
-    "ActiveConnector",
+    "WindowConnection",
+    "PendingCall",
+    "window_listing",
     "status_lines",
     "BridgeDaemon",
     "start_server",
@@ -148,20 +167,13 @@ AUDIT_REPAIRING = "re-pairing"
 AUDIT_DRAW_PERSISTENCE = "draw.persistence"
 AUDIT_PERSISTENCE_VERIFIED = "persistence.verified"
 
-#: The audit record that says a connector was **turned away** because another
-#: editor instance already holds the bridge (018 §A). Like the lifecycle names
-#: above it is not a wire action, so it is not in the action catalogue — it is
-#: the record an investigation greps for, which is why the task book fixes it.
+#: The audit record that said a connector was **turned away** because another
+#: editor instance already held the bridge (018 §A). **Retired in 023**: nothing
+#: is turned away any more, so this name has no writer. Kept — deliberately
+#: outside ``__all__``, since it is no longer part of the live API — because a
+#: reader grepping yesterday's logs for ``connector_rejected`` should be able to
+#: find out here why the record stopped, instead of concluding the daemon broke.
 AUDIT_CONNECTOR_REJECTED = "connector_rejected"
-
-#: The wire code a refused connector is answered with, before its socket is
-#: closed (018 §A). The code itself is declared in
-#: :class:`boardwise.bridge.protocol.ErrorCodes` — it travels in ``error.code``
-#: and is therefore part of the protocol's vocabulary, not the daemon's. This
-#: name stays because it is how the refusal site, the audit reader and the
-#: tests already refer to it; the two are the same string by identity, and the
-#: contract test in ``tests/test_action_catalogue.py`` pins that.
-CONNECTOR_ALREADY_ACTIVE = ErrorCodes.CONNECTOR_ALREADY_ACTIVE
 
 #: Oldest connector build this daemon works with, announced in the ``hello``
 #: ack as ``minConnectorVersion`` so the extension can tell the user to update
@@ -171,10 +183,12 @@ CONNECTOR_ALREADY_ACTIVE = ErrorCodes.CONNECTOR_ALREADY_ACTIVE
 #: arrives as a toast rather than as a stack trace.
 MIN_CONNECTOR_VERSION = "0.4.10"
 
-#: How many refusals the daemon keeps in memory for ``bridge status``. The audit
-#: log keeps all of them; this list is bounded because a refused connector backs
-#: off and retries, and the extra window may stay open for hours.
-MAX_RECENT_REJECTIONS = 5
+#: Separator between a window's instance id and the disambiguating counter the
+#: hub appends when two **live** sockets claim the same id (023). ``inst-x~2``.
+#: Chosen because it is not a character EasyEDA puts in an instance id, so a
+#: suffixed key can never collide with a claimed one, and it reads as "the same
+#: window, again" rather than as a different window.
+WINDOW_KEY_SEPARATOR = "~"
 
 #: Rendered in the audit log for a connector that does not announce its build.
 #: Spelled out rather than left empty on purpose: an absent field is easy to
@@ -344,67 +358,86 @@ def append_audit(home: Path | None, **fields: Any) -> None:
 
 
 def status_lines(data: dict[str, Any]) -> list[str]:
-    """The active-instance and refusal lines ``boardwise bridge status`` prints.
+    """The window table ``boardwise bridge status`` prints.
 
-    Takes the ``ping`` answer the CLI has already fetched and returns the extra
-    lines for it — empty when there is nothing to say, so a fresh daemon with no
-    connector and no refusals prints exactly what it printed before. The
-    wording lives here rather than in the CLI so it cannot drift from the wire
-    keys it renders (018 §A); ``data`` is documented in :meth:`BridgeDaemon._local_action`.
+    Takes the ``ping`` answer the CLI has already fetched and returns the lines
+    for it — empty when there is nothing to say, so a fresh daemon with no
+    connector prints exactly what it printed before. The wording lives here
+    rather than in the CLI so it cannot drift from the wire keys it renders
+    (018 §A); ``data`` is documented in :meth:`BridgeDaemon._local_action`.
 
-    These are the two lines that answer "why did my write land somewhere else",
-    which used to require reading the audit log: *who* holds the bridge, and who
-    was turned away for trying to take it.
+    **Multi-window (023).** One block per connected window: its hub key, its
+    connector build, its project and page, when it arrived, when it was last
+    heard from, and how many calls it has answered. This is the answer to "which
+    projects do I have open, and which one is boardwise talking to?" — a question
+    that used to have no answer at all, and then (018) only had one for the
+    single privileged window. Reading the audit log is now the fallback, not the
+    first step.
 
-    **The project half (021 §2.3).** Since 2026-09-22 every connector announces
-    its own window's project in ``hello``, so each of those lines ends with a
-    ``[project …]`` suffix and one ``projects seen:`` line lists them together.
-    That list is the only way to see the *other* windows at all: the bridge
-    talks to exactly one editor window, and a window it turns away is still a
-    project the user has open. A window that named no project — an old build, or
-    a read that failed — gets no suffix and is counted, never guessed at. Lines
-    that existed before are unchanged in every byte up to the suffix, so old
-    output readers and old greps still match.
+    The old ``active instance:`` line is gone: with a hub there is no "the"
+    instance. ``projects seen:`` stays and is upgraded from *roles* ("active",
+    "refused") to the online windows themselves, because every window in it is
+    now reachable and named.
+
+    A window that named no project — an old build, or a read that failed — gets
+    no suffix and is counted, never guessed at.
     """
     lines: list[str] = []
-    active = data.get("activeInstance")
-    if isinstance(active, dict) and active.get("instanceId"):
-        version = active.get("connectorVersion") or UNKNOWN_CONNECTOR_VERSION
+    windows = _status_windows(data)
+    if windows:
+        lines.append(f"  windows: {len(windows)} connected")
+    for window in windows:
+        version = window.get("connectorVersion") or UNKNOWN_CONNECTOR_VERSION
+        key = str(window.get("windowKey") or window.get("instanceId") or "?")
         note = (
             ""
-            if active.get("instanceIdSource") == "hello"
+            if window.get("instanceIdSource") == "hello"
             else "  [no instanceId sent — named by connection]"
         )
         lines.append(
-            f"  active instance: {active['instanceId']} (connector {version}){note}"
-            f"{_project_suffix(active)}"
+            f"  window: {key} (connector {version}){note}{_project_suffix(window)}"
         )
-        if active.get("peer"):
-            lines.append(
-                f"    peer: {active['peer']}"
-                f"  connected: {_clock(active.get('connectedAt'))}"
-            )
-    for record in data.get("recentRejections") or []:
-        if not isinstance(record, dict):
-            continue
-        version = record.get("connectorVersion") or UNKNOWN_CONNECTOR_VERSION
-        lines.append(
-            f"  refused connector: {record.get('instanceId') or '?'}"
-            f" (connector {version}) at {_clock(record.get('ts'))}"
-            f" — {record.get('reason') or 'refused'}"
-            f"{_project_suffix(record)}"
+        detail = (
+            f"    peer: {window.get('peer') or '-'}"
+            f"  connected: {_clock(window.get('connectedAt'))}"
+            f"  last seen: {_clock(window.get('lastSeen'))}"
         )
-    seen = _projects_seen(data)
+        routed = window.get("routed")
+        if isinstance(routed, int) and routed:
+            detail += f"  routed: {routed}"
+        lines.append(detail)
+        page = _page_line(window)
+        if page:
+            lines.append(page)
+    seen = _projects_seen(windows)
     if seen:
         lines.append(seen)
     return lines
+
+
+def _status_windows(data: dict[str, Any]) -> list[dict[str, Any]]:
+    """The ``windows`` list out of a ``ping`` answer, defensively.
+
+    Anything that is not a usable dict is dropped rather than rendered as a
+    broken line: this reads a frame from another process, and a status command
+    that raises on a malformed field is worse than one that shows the windows it
+    could read.
+    """
+    raw = data.get("windows")
+    if not isinstance(raw, list):
+        return []
+    return [
+        window
+        for window in raw
+        if isinstance(window, dict) and (window.get("windowKey") or window.get("instanceId"))
+    ]
 
 
 def _project_label(record: dict[str, Any]) -> str:
     """``name (uuid)`` from one status record, or ``""`` when neither is known.
 
     Both halves are optional on the wire, so all four combinations are real and
-    each is rendered as itself: a connector may have a name and no uuid, or the
+    each is rendered as itself: a window may have a name and no uuid, or the
     other way round. Nothing is padded and nothing is truncated — a uuid that
     cannot be copied is not much use to someone deciding which window to close.
     """
@@ -421,65 +454,63 @@ def _project_suffix(record: dict[str, Any]) -> str:
     return f"  [project {label}]" if label else ""
 
 
+def _page_line(record: dict[str, Any]) -> str:
+    """The ``    page: sch <uuid>`` line, or ``""`` when no page is known.
+
+    The page (023) is what a caller is really aiming at most of the time, and it
+    is the one field that moves while a window stays connected — so it is printed
+    on its own line rather than folded into the window's own, where a reader
+    would have to compare two whole lines to see that it changed.
+    """
+    page_type = str(record.get("pageType") or "")
+    page_uuid = str(record.get("pageUuid") or "")
+    if not (page_type or page_uuid):
+        return ""
+    return f"    page: {page_type or '?'} {page_uuid or '(no uuid)'}"
+
+
 def _project_name(record: dict[str, Any]) -> str:
     """The project's *name* for the summary line, falling back to its uuid.
 
     Deliberately not :func:`_project_label`: the summary groups windows by
     project, and it stays readable only if the uuid — which is already printed
-    on the instance's own line — is left out of it.
+    on the window's own line — is left out of it.
     """
     name = str(record.get("projectName") or "")
     return name or str(record.get("projectUuid") or "")
 
 
-def _projects_seen(data: dict[str, Any]) -> str:
-    """One line naming every project the daemon has been told about, or ``""``.
+def _projects_seen(windows: list[dict[str, Any]]) -> str:
+    """One line naming every project the online windows have open, or ``""``.
 
-    Answers 岳's question — "看得到我开了哪几个工程吗?" — from ``bridge status``
-    alone: the active window's project, plus one entry per distinct project
-    among the refused instances, which are the other editor windows (021
-    §实测记录 A1: three projects in three windows of one process).
+    The upgrade of 021 §2.3's line (023): it used to group *the active window
+    plus every refused one*, because a refused socket was the only evidence the
+    other projects existed. Every window is a hub row now, so the line groups the
+    windows that are actually connected and names each by its key — which is what
+    a caller needs to write back into ``--project``.
 
-    Deduplicated by project rather than by refusal: a refused window retries
-    every 20–40 s, so the raw list is the same project over and over. A project
-    that is both active and refused is spelled that way rather than collapsed —
-    the same project in two windows is exactly the case where the bridge's
-    single slot matters. Instances that named no project are counted by
-    instance id, never listed under a made-up name.
-
-    Silent when *no* project is known: an old connector's output must not grow
-    a line saying that nothing is known (see the byte-for-byte test).
+    Silent when *no* window named a project: an old connector's output must not
+    grow a line saying that nothing is known. Windows that named no project are
+    counted only once something else is named, for the same reason (the old
+    output-shape tests pin this).
     """
-    roles: dict[str, list[str]] = {}
-
-    def note(label: str, role: str) -> None:
-        entry = roles.setdefault(label, [])
-        if role not in entry:
-            entry.append(role)
-
-    active = data.get("activeInstance")
-    if isinstance(active, dict):
-        label = _project_name(active)
-        if label:
-            note(label, "active")
-
-    unnamed: list[str] = []
-    for record in data.get("recentRejections") or []:
-        if not isinstance(record, dict):
+    groups: dict[str, list[str]] = {}
+    unnamed = 0
+    for window in windows:
+        label = _project_name(window)
+        key = str(window.get("windowKey") or window.get("instanceId") or "?")
+        if not label:
+            unnamed += 1
             continue
-        label = _project_name(record)
-        if label:
-            note(label, "refused")
-            continue
-        instance = str(record.get("instanceId") or record.get("peer") or "")
-        if instance and instance not in unnamed:
-            unnamed.append(instance)
+        keys = groups.setdefault(label, [])
+        if key not in keys:
+            keys.append(key)
 
-    if not roles:
+    if not groups:
         return ""
-    parts = [f"{label} ({', '.join(kinds)})" for label, kinds in roles.items()]
+    parts = [f"{label} ({', '.join(keys)})" for label, keys in groups.items()]
     if unnamed:
-        parts.append(f"{len(unnamed)} instance(s) naming no project")
+        parts.append(f"{unnamed} window(s) naming no project")
     return "  projects seen: " + ", ".join(parts)
 
 
@@ -574,134 +605,160 @@ class PairingNotice:
         ]
 
 
-@dataclass(frozen=True)
-class RejectionNotice:
-    """What the daemon learned when it refused a second connector (018 §A).
+@dataclass
+class PendingCall:
+    """One forwarded action, waiting for a specific window's answer (023).
 
-    The wording lives here rather than in the CLI for the same reason
-    :class:`PairingNotice`'s does: the line a user is told to act on and the
-    line the tests assert must not be able to drift apart. It is Chinese
-    because the person reading it is the editor's user, mid-task, with two
-    EasyEDA windows open — not a developer reading a log.
+    The window is part of the record rather than a second table, because
+    everything the daemon does with a pending call is window-scoped: a socket
+    closing fails **its own** calls and nobody else's, and a response frame is
+    accepted only from the window the request went to. Correlating on the request
+    id alone — which is all a single-connector daemon needs — would let the
+    second window answer the first window's call, and with several windows open
+    that is a routing bug that arrives looking like a correct answer.
     """
 
-    #: The instance that already holds the bridge (the one to close).
-    active_instance_id: str
-    active_connector_version: str
-    #: The instance that was turned away, for the audit trail and `status`.
-    instance_id: str = ""
+    action: str
+    window: "WindowConnection"
+    future: asyncio.Future[dict[str, Any]]
+
+
+@dataclass
+class WindowConnection:
+    """One connected editor window: its socket plus what the daemon knows of it.
+
+    The hub's unit (023). Three questions have to be answerable about each one
+    without reading a log — which window it is, which connector build it runs,
+    and what it has open — so the answers are kept here rather than derived from
+    the socket at every use.
+
+    ``key`` is the daemon's handle for the connection and the identity used in
+    every routing decision, error message and audit line. It *is* the instance id
+    the window claimed, unless a second **live** socket claimed the same one — in
+    which case the newcomer's key is suffixed (``inst-x~2``). Two windows, one
+    id, two rows: dropping either would be the invisible failure this hub exists
+    to end, and the ambiguity is reported by routing rather than resolved by
+    guesswork (023 §今晚不做: no dedup yet).
+    """
+
+    websocket: Any
+    key: str
+    instance_id: str
+    client: str = ""
     connector_version: str = ""
     peer: str = "-"
-
-    def console_lines(self) -> list[str]:
-        """The single line the daemon prints, in the task book's wording.
-
-        One line on purpose: it arrives under whatever else the daemon is
-        printing, and the only thing it has to achieve is that the user closes
-        the other window.
-        """
-        version = self.active_connector_version or UNKNOWN_CONNECTOR_VERSION
-        return [
-            "boardwise bridge: 另一个编辑器实例已连接"
-            f"（instance {self.active_instance_id}, connector {version}）。"
-            "若非预期，请关闭多余的 EasyEDA 窗口"
-        ]
-
-    def fallback_lines(self) -> list[str]:
-        """The same message in ASCII, for a console that cannot render Chinese.
-
-        Not decoration: a Windows console whose code page is not a CJK one raises
-        ``UnicodeEncodeError`` on the line above, and losing it would lose the
-        *only* warning the user gets that two windows are fighting over the
-        bridge. Same facts, same instruction, different characters.
-        """
-        version = self.active_connector_version or UNKNOWN_CONNECTOR_VERSION
-        return [
-            "boardwise bridge: another editor instance is already connected"
-            f" (instance {self.active_instance_id}, connector {version}). "
-            "If that is not what you expected, close the extra EasyEDA window."
-        ]
-
-
-@dataclass(frozen=True)
-class ActiveConnector:
-    """The one editor instance that holds the bridge (018 §A).
-
-    Kept apart from the socket it rides on so that three questions are
-    answerable without reading the log: which window is connected, which
-    connector build it runs, and when it arrived.
-    """
-
-    instance_id: str
-    client: str
-    connector_version: str
-    peer: str
-    connected_at: float
-    #: ``hello`` when the connector named itself, ``connection`` when the id was
+    connected_at: float = field(default_factory=time.time)
+    #: ``hello`` when the window named itself, ``connection`` when the id was
     #: invented for this socket because the build predates the field. Recorded
     #: rather than hidden: the two mean different things about what the daemon
-    #: can tell apart, and a fabricated id that looks real would be worse than
-    #: no id at all.
+    #: can tell apart, and a fabricated id that looks real would be worse than no
+    #: id at all.
     instance_id_source: str = "hello"
-    #: The project this window reported in ``hello`` (021 §2.3), or empty strings
-    #: when it reported none. The daemon cannot read it itself — `eda` is scoped
-    #: to one editor window — so this is a claim by the connector, recorded as
-    #: such; empty means "not named", never "no project".
+    #: The project and page this window last reported — from its ``hello`` (021
+    #: §2.3) and then refreshed by every response frame's ``context`` (023), so
+    #: a user switching projects or documents is followed instead of being frozen
+    #: at the handshake. The daemon cannot read any of it itself: ``eda`` is
+    #: scoped to one editor window, so all of this is a claim by the connector,
+    #: recorded as such. Empty means "not named", never "no project".
     project_name: str = ""
     project_uuid: str = ""
+    page_uuid: str = ""
+    page_type: str = ""
+    #: When this window was last heard from (its ``hello``, or any response frame
+    #: it sent). A window connected-but-silent for an hour and one that answered
+    #: a second ago look identical in a socket list, and "is the window I am
+    #: about to write into still moving?" is the question this answers.
+    last_seen: float = field(default_factory=time.time)
+    #: How many forwarded calls this window has answered. Per window, because the
+    #: interesting fact in a multi-window session is *which* one the AI has been
+    #: talking to — something 018's single slot could not express at all.
+    routed: int = 0
+    #: Serialises this window's **write** actions (023 §per-window 写互斥). Writes
+    #: to one editor serialise because that editor is a single thread of truth:
+    #: two placements racing in one window is how a half-drawn page happens.
+    #: Writes to *different* windows run in parallel, which is the point of a hub.
+    write_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    def is_open(self) -> bool:
+        """Whether this window's socket is still usable — see :func:`_socket_is_open`."""
+        return _socket_is_open(self.websocket)
+
+    def touch(self) -> None:
+        self.last_seen = time.time()
 
     def describe(self) -> str:
-        """One line naming this instance, for a console or a `status` command."""
+        """One line naming this window, for a console or an error message."""
         version = self.connector_version or UNKNOWN_CONNECTOR_VERSION
-        return f"instance {self.instance_id} (connector {version}, peer {self.peer})"
+        return f"window {self.key} (connector {version}, peer {self.peer})"
 
     def as_status(self) -> dict[str, Any]:
         """The shape carried by ``ping`` and printed by :func:`status_lines`."""
         return {
+            # Both ids, always: the key is what a caller routes with, the instance
+            # id is what the window calls itself, and when they differ the
+            # difference is the news (two connections claiming one id).
+            "windowKey": self.key,
             "instanceId": self.instance_id,
             "instanceIdSource": self.instance_id_source,
             "client": self.client,
             "connectorVersion": self.connector_version or None,
             "peer": self.peer,
             "connectedAt": self.connected_at,
+            "lastSeen": self.last_seen,
+            "routed": self.routed,
             # Added 2026-09-22 (021 §2.3), and always present so a caller can use
             # `is None` rather than `in`. `None` is the field's own way of
-            # saying "this window named no project".
+            # saying "this window named no project". The page joined them in 023
+            # and is `None` until the connector answers something.
             "projectName": self.project_name or None,
             "projectUuid": self.project_uuid or None,
+            "pageUuid": self.page_uuid or None,
+            "pageType": self.page_type or None,
         }
+
+
+def window_listing(windows: Iterable[WindowConnection]) -> str:
+    """``projectName (instanceId)`` for each window, comma-separated (023).
+
+    The single rendering of "which windows are online", used by every routing
+    error. A caller told its project hint matched nothing needs the list more
+    than it needs the sentence around it, so the format is the one the task book
+    fixes — and the key, not the instance id, is what is printed, because the key
+    is what is unambiguous when two connections claim one id.
+
+    Empty list → ``"(none)"``, so a message built from it can never end in a
+    dangling colon.
+    """
+    rendered = [
+        f"{window.project_name or window.project_uuid or '(no project)'} ({window.key})"
+        for window in windows
+    ]
+    return ", ".join(rendered) if rendered else "(none)"
 
 
 @dataclass
 class BridgeDaemon:
-    """Routes frames between CLI callers and the editor connector."""
+    """Routes frames between CLI callers and the connected editor windows."""
 
     token: str
     home: Path = field(default_factory=lambda: BOARDWISE_HOME)
-    #: The connected editor extension, if any. **At most one**, and it is never
-    #: displaced: while this socket is open a second connector is refused
-    #: (018 §A). Which *instance* it is — and that it is still worth trusting —
-    #: is :attr:`active` / :meth:`active_instance`, not this field alone.
-    connector: ServerConnection | None = None
-    #: Which connector instance holds the bridge, when one does.
-    active: ActiveConnector | None = None
-    #: The last few refusals, newest first, so ``bridge status`` can show them
-    #: without anyone parsing a log file (018 §A). Bounded — see
-    #: :data:`MAX_RECENT_REJECTIONS`.
-    recent_rejections: list[dict[str, Any]] = field(default_factory=list)
-    #: id -> Future resolved by the connector's response.
-    pending: dict[str, asyncio.Future[dict[str, Any]]] = field(default_factory=dict)
+    #: Every connected editor window, keyed by its hub key (the ``hello``
+    #: ``instanceId``, suffixed when two live sockets claim one). **All of them**:
+    #: 023 replaced the single-active slot with a registry, so a second window is
+    #: registered instead of refused, and this dict is what a caller routes into.
+    #: Insertion order is connection order, which is also the order ``status``
+    #: prints — the window that has been there longest first.
+    windows: dict[str, WindowConnection] = field(default_factory=dict)
+    #: request id -> the call, its target window and its future. The window is
+    #: part of the value so a response can be checked against the window it was
+    #: sent to (023): with several windows open, "some socket answered with this
+    #: id" is not the same fact as "the window I asked answered".
+    pending: dict[str, PendingCall] = field(default_factory=dict)
     started_at: float = field(default_factory=time.time)
     #: Called once per first-time pairing, so the operator is told out loud.
     #: A callback rather than a print: this module is a library, and the tests
     #: collect notices instead of capturing stdout.
     on_pairing: Callable[[PairingNotice], None] | None = None
-    #: Called once per refused connector, for the same reason — and unlike
-    #: :attr:`on_pairing` it has a default action: with no callback installed the
-    #: daemon prints the line itself, because the requirement is that the
-    #: *console* says it (018 §A) and ``bridge start`` installs no
-    #: callback for this yet.
-    on_rejection: Callable[[RejectionNotice], None] | None = None
 
     # -- handshake ------------------------------------------------------
 
@@ -804,6 +861,13 @@ class BridgeDaemon:
         correctly-paired connector would let anything on loopback steal the
         pairing, which is precisely what pairing exists to prevent. That case
         is also self-explanatory to the user, so the error names it.
+
+        **"Attached" means any window (023).** With a hub there is no single
+        active instance to ask, so the test is :meth:`has_connector` — one live
+        connector socket, any number of them. The strength of the rule is
+        unchanged: an unknown token may only take over a pairing **nobody** is
+        using, never one a live window is connected with. What changed is only
+        that "live" is now a set rather than a slot.
         """
         paired = load_connector_token(self.home)
         if paired is None:
@@ -811,12 +875,11 @@ class BridgeDaemon:
             return
         if _tokens_equal(provided, paired):
             return
-        # "Attached" now means a socket that is *still open*
-        # (:meth:`active_instance`), not merely one the handler has not cleared
-        # yet: a reload closes the old socket and the next instance arrives
-        # while that `finally` is still pending, and that path has to work
-        # (018 §A).
-        if self.active_instance() is not None:
+        # Liveness read from the sockets themselves (:meth:`live_windows`), not
+        # from whether the handler has cleared its bookkeeping yet: a reload
+        # closes the old socket and the next instance arrives while that
+        # `finally` is still pending, and that path has to work (018 §A).
+        if self.has_connector():
             raise BridgeError(
                 ErrorCodes.UNAUTHENTICATED,
                 "this connector is not the paired one and a connector is already "
@@ -857,122 +920,412 @@ class BridgeDaemon:
             except Exception:  # a noisy console must not fail the handshake
                 pass
 
-    # -- single active instance (018 §A) ---------------------------------
+    # -- the hub (023) ---------------------------------------------------
 
-    def active_instance(self) -> ActiveConnector | None:
-        """The instance that holds the bridge, or ``None`` when nobody does.
+    def live_windows(self) -> list[WindowConnection]:
+        """Every registered window whose socket is still open, oldest first.
 
         Liveness is read from the socket, not from bookkeeping: a socket that is
-        no longer ``OPEN`` is *not* an active instance even if the handler has
-        not yet run its ``finally``. That window is exactly where a reload
-        happens — the old socket dies, the new instance arrives — and calling a
-        dying socket "connected" would refuse the connection that is supposed to
-        replace it.
+        no longer ``OPEN`` is *not* an online window even if its handler has not
+        yet run its ``finally``. That gap is exactly where a reload happens — the
+        old socket dies, the new one arrives — and calling a dying socket
+        "connected" would route the next request into a socket that is gone.
+
+        This is the single answer to "which windows are online", and every
+        routing message is built out of it.
         """
-        if self.connector is None or not _socket_is_open(self.connector):
-            return None
-        return self.active
+        return [window for window in self.windows.values() if window.is_open()]
 
-    def refuse_if_held(self, connection: Connection, peer: str = "-") -> ActiveConnector | None:
-        """The instance that turns this newcomer away, or ``None`` if none does.
+    def has_connector(self) -> bool:
+        """Whether any connector socket is open right now.
 
-        Called on every connector ``hello``, **before the ack goes out**: a
-        refused instance is never told it is the connected one and, the part
-        that matters, is never installed as the active connector — so it cannot
-        become the one a later write is forwarded to.
-
-        Tri-state, in the order the task book states it:
-
-        - no active instance → accept (returns ``None``);
-        - an active instance whose socket is gone → accept; it takes over, which
-          is the ordinary reload path and must stay smooth;
-        - an active instance whose socket is open → **refuse**: records
-          ``connector_rejected``, says so on the console, and returns the holder
-          so the caller can name it on the wire too.
-
-        A connector presenting a **different token** never reaches this point:
-        the pairing check refuses it first, with ``UNAUTHENTICATED``, because
-        since 004f an unattached pairing may be re-taken and only an attached one
-        is defended. Both are refusals; only this one is about *who else is
-        here*, and the two are recorded under their own names on purpose.
+        The same liveness rule as :meth:`live_windows`, and deliberately the one
+        ``ping``, the pairing check and the routing all use: a status that says
+        "connected" while routing refuses, or the reverse, is worse than either
+        answer on its own.
         """
-        active = self.active_instance()
-        if active is None:
+        return any(window.is_open() for window in self.windows.values())
+
+    def window_for_instance(self, instance_id: str) -> WindowConnection | None:
+        """The live window that answers to this name, or ``None``.
+
+        Two spellings both resolve, because a caller writing ``--instance`` has
+        one of them in hand and no way to tell which: the **hub key** a
+        connection registered under, and the **instance id** the window claimed
+        for itself. They differ only when two live sockets claimed one id — where
+        the second got a suffixed key (``inst-x~2``) — and that is exactly the
+        case this ordering settles: the **key** is matched first, so ``inst-x``
+        reaches the unsuffixed connection and ``inst-x~2`` the other one, both
+        without a guess. Falling back to the instance id afterwards keeps the
+        ordinary case (one connection per id, key == id) a plain lookup.
+
+        Matching the *live* windows only: a hub entry whose socket is gone is not
+        a window anybody can address, and returning it would route the next
+        request into a socket that no longer exists.
+        """
+        wanted = str(instance_id or "").strip()
+        if not wanted:
             return None
-        instance_id = str(getattr(connection, "instance_id", "") or "")
-        version = connection.connector_version or ""
-        record: dict[str, Any] = {
-            "ts": time.time(),
-            "peer": peer,
-            "instanceId": instance_id,
-            "instanceIdSource": str(getattr(connection, "instance_id_source", "") or ""),
-            "connectorVersion": version or None,
-            "client": client_with_version(connection.client, connection.connector_version),
-            "activeInstanceId": active.instance_id,
-            "activeConnectorVersion": active.connector_version or None,
-            "activePeer": active.peer,
-            # The *refused* window's project (021 §2.3). This is the field that
-            # makes the refusal readable as a fact about the user's editor: a
-            # refused instance is not an error to be explained away, it is
-            # another project that is open right now and that the bridge cannot
-            # reach.
-            "projectName": str(getattr(connection, "project_name", "") or "") or None,
-            "projectUuid": str(getattr(connection, "project_uuid", "") or "") or None,
-            "reason": "another editor instance is already connected",
-        }
-        self.audit(action=AUDIT_CONNECTOR_REJECTED, role=ROLE_CONNECTOR, ok=False, **record)
-        # Newest first, and bounded: the refused window backs off and retries,
-        # so an unbounded list would grow for as long as it stays open.
-        self.recent_rejections.insert(0, record)
-        del self.recent_rejections[MAX_RECENT_REJECTIONS:]
-        self._announce_rejection(RejectionNotice(
-            active_instance_id=active.instance_id,
-            active_connector_version=active.connector_version,
-            instance_id=instance_id,
-            connector_version=version,
+        live = self.live_windows()
+        for window in live:
+            if window.key == wanted:
+                return window
+        for window in live:
+            if window.instance_id == wanted:
+                return window
+        return None
+
+    def window_of(self, connection: Connection, websocket: Any = None) -> WindowConnection | None:
+        """The hub entry a connection registered as, if it registered one.
+
+        ``websocket`` is optional and, when given, must be the entry's own socket:
+        a reload can hand the same key to a *new* socket while the old one's
+        ``finally`` is still running, and "the key matches" is then true of two
+        different windows.
+        """
+        window = self.windows.get(connection.window_key) if connection.window_key else None
+        if window is None:
+            return None
+        if websocket is not None and window.websocket is not websocket:
+            return None
+        return window
+
+    def register(
+        self,
+        websocket: ServerConnection,
+        connection: Connection,
+        peer: str = "-",
+    ) -> WindowConnection:
+        """Welcome one authenticated connector into the hub (023).
+
+        This replaced 018's refusal. There is no slot to take any more, so two,
+        three or four windows all register and each stays reachable — which is
+        what 岳 asked for: three or four windows is an ordinary Tuesday, not a
+        contention to resolve.
+
+        The ``hello`` audit record is written here, before the ack goes out, as
+        it always was, and now carries the hub key plus how many windows are
+        online: "which windows were open at 17:10?" has to be answerable after
+        one of them has closed.
+        """
+        key, took_over, duplicate = self._claim_key(connection.instance_id)
+        now = time.time()
+        window = WindowConnection(
+            websocket=websocket,
+            key=key,
+            instance_id=connection.instance_id or key,
+            client=connection.client,
+            connector_version=connection.connector_version,
             peer=peer,
-        ))
-        return active
+            connected_at=now,
+            instance_id_source=connection.instance_id_source or "hello",
+            project_name=connection.project_name,
+            project_uuid=connection.project_uuid,
+            page_uuid=connection.page_uuid,
+            page_type=connection.page_type,
+            last_seen=now,
+        )
+        self.windows[key] = window
+        # The connection and the hub entry both need to know the key: the handler
+        # addresses the hub by it, and a CLI connection (which registers nothing)
+        # leaves it empty.
+        connection.window_key = key
+        self.audit(
+            action="hello", role=connection.role, ok=True, peer=peer,
+            client=client_with_version(connection.client, connection.connector_version),
+            connectorVersion=connection.connector_version or None,
+            instanceId=window.instance_id,
+            instanceIdSource=window.instance_id_source,
+            windowKey=key,
+            tookOverFrom=took_over,
+            duplicateInstanceId=duplicate,
+            projectName=window.project_name or None,
+            projectUuid=window.project_uuid or None,
+            # How many windows are online *after* this one joined, so "was this
+            # the first or the fourth?" needs no reconstruction from the log.
+            windowsOnline=len(self.live_windows()),
+        )
+        return window
 
-    def _announce_rejection(self, notice: RejectionNotice) -> None:
-        """Say it out loud. This line is the whole safety mechanism.
+    def _claim_key(self, instance_id: str) -> tuple[str, str | None, str | None]:
+        """Pick this connection's hub key: ``(key, took_over, duplicate)``.
 
-        With no callback installed the daemon prints it itself — the requirement
-        is that the *console* carries the line (018 §A), and the process that
-        happens to own that console is an implementation detail. Nothing here
-        may fail the handshake: a refusal that manages to raise would leave a
-        socket open that we already decided to close.
+        Three cases, and the third is why this exists as a method at all:
+
+        - **key free** — the ordinary case: nobody, or nobody still registered,
+          holds this instance id;
+        - **key held by a socket that is gone** — the reload path, which has to
+          stay smooth: the dead entry is displaced, the key is reused, and the
+          takeover is *reported* so the log names what it replaced;
+        - **key held by a live socket** — the same window connected twice (the
+          3.2.175 double activation). Both are kept and the newcomer gets a
+          suffixed key (``inst-x~2``). 023 §今晚不做 says no dedup tonight, and
+          the honest answer to two connections claiming one id is two rows plus a
+          routing ambiguity when they also claim one project — never a silently
+          dropped connection.
         """
-        if self.on_rejection is not None:
-            try:
-                self.on_rejection(notice)
-            except Exception:
-                pass
-            return
-        try:
-            print("\n".join(notice.console_lines()), flush=True)
-        except UnicodeEncodeError:
-            # A console that cannot render the Chinese line still has to hear
-            # this — see `RejectionNotice.fallback_lines`. Folded in here rather
-            # than left to the user's code page.
-            try:
-                print("\n".join(notice.fallback_lines()), flush=True)
-            except Exception:
-                pass
-        except Exception:
-            pass
+        claimed = (instance_id or "").strip() or f"conn-{secrets.token_hex(8)}"
+        existing = self.windows.get(claimed)
+        if existing is None:
+            return claimed, None, None
+        if existing.is_open():
+            index = 2
+            while f"{claimed}{WINDOW_KEY_SEPARATOR}{index}" in self.windows:
+                index += 1
+            return f"{claimed}{WINDOW_KEY_SEPARATOR}{index}", None, claimed
+        del self.windows[claimed]
+        return claimed, claimed, None
+
+    def unregister(self, window: WindowConnection) -> None:
+        """Remove one window from the hub. Idempotent, and identity-checked.
+
+        Identity rather than key: a reload can reuse a key while the dead
+        socket's handler is still on its way here, and removing by key would then
+        delete the *new* window — the reload path failing in the one place 018
+        already taught us to be careful about.
+        """
+        if self.windows.get(window.key) is window:
+            del self.windows[window.key]
+
+    def _drop_socket(self, connection: Connection, websocket: Any) -> WindowConnection | None:
+        """Forget the window on this socket, if it registered one. Returns it.
+
+        Called from the handler's single ``finally``, so every way a socket can
+        end leaves the hub without it: clean close, refused handshake, gone peer.
+        A CLI connection, or one that never finished its handshake, registered
+        nothing and this is a no-op for it.
+        """
+        window = self.window_of(connection, websocket)
+        if window is None:
+            # Identity sweep, for the case where the key was reassigned to a new
+            # socket before this ran: the old socket must still leave no trace.
+            window = next(
+                (w for w in self.windows.values() if w.websocket is websocket), None
+            )
+        if window is not None:
+            self.unregister(window)
+        return window
+
+    def apply_response_context(self, window: WindowConnection, frame: dict[str, Any]) -> tuple[str, ...]:
+        """Merge a response frame's ``context`` into the window's bookkeeping.
+
+        Thin wrapper over :func:`boardwise.bridge.protocol.merge_context`, in one
+        place because two things happen together here: the window is marked as
+        *just heard from* (any response proves it alive, with or without a
+        context), and whatever it reported about its project and page becomes the
+        truth the router works from. Frozen routing information is the bug this
+        refresh exists to prevent — 岳 switching documents mid-session must move
+        the routing, not be ignored until the next reconnect.
+        """
+        window.touch()
+        return merge_context(window, frame.get("context"))
+
+    # -- routing (023) ---------------------------------------------------
+
+    def route(
+        self,
+        target_project: Any = "",
+        action: str = "",
+        target_instance: Any = "",
+    ) -> WindowConnection:
+        """Decide which window answers this request, or refuse and say why.
+
+        The rule, in the order the caller's information runs out:
+
+        - **an instance hint, matching a window** → that window. Checked *first*
+          and by exact key / instance id (:meth:`window_for_instance`), because
+          an instance id names one connection while a project name can be
+          claimed by several — and because it is the only hint that still works
+          when no window can read a project at all (editor just restarted:
+          measured 2026-09-22, three windows, every ``context`` null);
+        - **an instance hint, no match** → ``WINDOW_NOT_CONNECTED``, listing the
+          windows that are online. Same shape as the project refusal below:
+          the caller names one of *those*;
+        - **a project hint, exactly one match** → that window. Matched by project
+          *name* or *uuid* against each window's live context, so a user who
+          switched project a minute ago is found under their new project;
+        - **a project hint, no match** → ``PROJECT_NOT_CONNECTED``, listing the
+          windows that are online. The caller names one; nothing is guessed;
+        - **a project hint, several matches** → ``PROJECT_AMBIGUOUS``, listing
+          the candidates. Deliberately not resolved by "pick the newest": a write
+          sent to the wrong window is the failure 018 measured, and a plausible
+          guess is exactly what makes it invisible;
+        - **no hint, one window** → that window. The single-window case is
+          unchanged, which is what keeps every existing caller working;
+        - **no hint, several windows** → ``WINDOW_UNSPECIFIED``, listing them.
+          "Which window did I mean?" is a question only the caller can answer,
+          and an error it can read is cheaper than a write that landed somewhere
+          plausible.
+
+        No window at all is ``NO_CONNECTOR`` — the same code and sentence as
+        before the hub, because when nothing is connected "is EasyEDA running?"
+        is a better thing to say than "that project is not open".
+        """
+        live = self.live_windows()
+        if not live:
+            prefix = f"{action} " if action else ""
+            raise BridgeError(
+                ErrorCodes.NO_CONNECTOR,
+                f"{prefix}needs the editor: no connector is connected. "
+                "Is EasyEDA running with the boardwise extension enabled?",
+            )
+        instance = self._target_instance(target_instance)
+        if instance:
+            window = self.window_for_instance(instance)
+            if window is not None:
+                return window
+            raise BridgeError(
+                ErrorCodes.WINDOW_NOT_CONNECTED,
+                f"no connected window is instance {instance!r}; online windows: "
+                f"{window_listing(live)}",
+                {"targetInstance": instance, "candidates": [w.as_status() for w in live]},
+            )
+        hint = self._target_project(target_project)
+        if hint:
+            matched = [
+                window
+                for window in live
+                if hint in (window.project_name, window.project_uuid)
+            ]
+            if len(matched) == 1:
+                return matched[0]
+            if not matched:
+                raise BridgeError(
+                    ErrorCodes.PROJECT_NOT_CONNECTED,
+                    f"no connected window has project {hint!r} open; online windows: "
+                    f"{window_listing(live)} — a window can also be named by its "
+                    "instance id (boardwise bridge call --instance INSTANCE_ID)",
+                    {"targetProject": hint, "candidates": [w.as_status() for w in live]},
+                )
+            raise BridgeError(
+                ErrorCodes.PROJECT_AMBIGUOUS,
+                f"project {hint!r} matches {len(matched)} connected windows "
+                f"({window_listing(matched)}); nothing was forwarded — close the "
+                "duplicate window or name one of them",
+                {"targetProject": hint, "candidates": [w.as_status() for w in matched]},
+            )
+        if len(live) == 1:
+            return live[0]
+        raise BridgeError(
+            ErrorCodes.WINDOW_UNSPECIFIED,
+            f"{len(live)} editor windows are connected and the request named no "
+            "project; re-send with a project hint (boardwise bridge call --project "
+            "NAME_OR_UUID) or an instance id (boardwise bridge call --instance "
+            f"INSTANCE_ID) — online windows: {window_listing(live)}",
+            {"candidates": [w.as_status() for w in live]},
+        )
+
+    @staticmethod
+    def _target_instance(value: Any) -> str:
+        """Validate the caller's ``targetInstance`` hint into a plain string.
+
+        The same rule as :meth:`_target_project`, and for the same reason: a
+        non-string is a ``BAD_REQUEST`` rather than "treated as absent", because
+        silently dropping a hint sends the call to a window the caller did not
+        choose. Stripped, so a shell's stray whitespace cannot turn a correct
+        instance id into a refusal.
+        """
+        if value is None:
+            return ""
+        if not isinstance(value, str):
+            raise BridgeError(
+                ErrorCodes.BAD_REQUEST,
+                "targetInstance must be an instance id string, got "
+                f"{type(value).__name__}",
+            )
+        return value.strip()
+
+    @staticmethod
+    def _target_project(value: Any) -> str:
+        """Validate the caller's ``targetProject`` hint into a plain string.
+
+        A non-string is a ``BAD_REQUEST`` rather than "treated as absent": a
+        caller that sent ``{"name": "test2"}`` meant to route somewhere, and
+        silently dropping the hint would send the call to a window it did not
+        choose — the failure this whole feature is about, arrived at through
+        politeness.
+        """
+        if value is None:
+            return ""
+        if not isinstance(value, str):
+            raise BridgeError(
+                ErrorCodes.BAD_REQUEST,
+                "targetProject must be a project name or uuid string, got "
+                f"{type(value).__name__}",
+            )
+        return value.strip()
 
     # -- dispatch -------------------------------------------------------
 
-    async def handle_request(self, action: str, params: dict[str, Any], role: str) -> Any:
-        """Answer one request. Shared by the socket handler and the tests."""
+    async def handle_request(
+        self,
+        action: str,
+        params: dict[str, Any],
+        role: str,
+        target_project: Any = "",
+        routed: dict[str, Any] | None = None,
+        target_instance: Any = "",
+    ) -> Any:
+        """Answer one request. Shared by the socket handler and the tests.
+
+        ``target_project`` / ``target_instance`` are the caller's window hints —
+        the frame's top-level ``targetProject`` / ``targetInstance`` (023) — and
+        ``routed`` is an out-parameter that receives ``{"windowKey": …}`` once a
+        window has been chosen: the handler writes the audit line and the relayed
+        frame, so it is the caller that needs to know *which* window this request
+        went to, and a return value cannot carry it (an error has one too).
+        """
         spec = action_spec(action)
         if spec is None:
             raise BridgeError(ErrorCodes.UNKNOWN_ACTION, f"unknown action {action!r}")
         if spec.owner == "daemon":
             return self._local_action(action)
         params = self._gate_confirmation(spec, params)
-        return await self._forward(action, params, role)
+        window = self.route(target_project, action, target_instance)
+        if routed is not None:
+            routed["windowKey"] = window.key
+        if spec.risk == "read":
+            return await self._forward(action, params, role, window)
+        # Writes serialise **per window** and only per window (023 §per-window
+        # 写互斥). One editor is a single thread of truth — two placements racing
+        # inside one window is how a half-drawn page happens — while two windows
+        # are two editors, and making them wait for each other would turn the
+        # hub back into a queue. Reads never take the lock: `doc.list` cannot
+        # corrupt anything.
+        async with window.write_lock:
+            return await self._forward(action, params, role, window)
+
+    def context_for_frame(self, routed: dict[str, Any] | None) -> dict[str, Any]:
+        """The answering window's context, for the frame relayed back to the caller.
+
+        Read *after* the call, deliberately: the connector refreshes its context
+        in every response, so this is the window's state at the moment it ran the
+        action — which is the fact a caller verifying "did that land in test2?"
+        actually needs. Empty when no window was routed to (a routing refusal) or
+        when the window named nothing.
+        """
+        key = str((routed or {}).get("windowKey") or "")
+        window = self.windows.get(key) if key else None
+        return context_of(window) if window is not None else {}
+
+    def _routed_audit_fields(self, routed: dict[str, Any] | None) -> dict[str, Any]:
+        """The audit fields naming the window a request was routed to.
+
+        Every forwarded call records `windowKey` and, when the window named one,
+        its project. "Which project did that write land in?" has to be answerable
+        from the request's own line: the window may well be closed by the time
+        anyone asks, and the alternative — reconstructing it from the `hello` and
+        `disconnect` records around it — is the kind of inference that gets
+        written down wrong.
+        """
+        key = str((routed or {}).get("windowKey") or "")
+        if not key:
+            return {}
+        window = self.windows.get(key)
+        fields: dict[str, Any] = {"windowKey": key}
+        if window is not None and window.project_name:
+            fields["projectName"] = window.project_name
+        return fields
 
     def _gate_confirmation(self, spec: Action, params: dict[str, Any]) -> dict[str, Any]:
         """Enforce the creation gate, and consume ``confirm`` either way.
@@ -1010,7 +1363,6 @@ class BridgeDaemon:
 
     def _local_action(self, action: str) -> dict[str, Any]:
         if action == "ping":
-            active = self.active_instance()
             return {
                 "pong": True,
                 # The daemon's own version, so a caller can tell "the daemon
@@ -1026,48 +1378,45 @@ class BridgeDaemon:
                 "pairedFingerprint": connector_fingerprint(
                     load_connector_token(self.home)
                 ),
-                # Which editor instance holds the bridge, and who was turned
-                # away — the two facts that answer "why did my write land in the
-                # other project?" without anyone reading a log file (018 §A).
-                # `status_lines` renders them; the keys are wire data.
-                "activeInstance": active.as_status() if active is not None else None,
-                "recentRejections": [dict(record) for record in self.recent_rejections],
+                # Every online window, oldest first (023) — what `bridge status`
+                # renders, and what a caller reads to decide which window to
+                # address. This was one `activeInstance` plus a `recentRejections`
+                # list before the hub existed; the rejections are gone because
+                # nobody is turned away any more, and the list of *reachable*
+                # windows is strictly better information than a list of the ones
+                # that were not.
+                "windows": [window.as_status() for window in self.live_windows()],
             }
         # "hello" during the request phase is a protocol violation.
         raise BridgeError(
             ErrorCodes.PROTOCOL_VIOLATION, "hello may only be sent once, as the first frame"
         )
 
-    def has_connector(self) -> bool:
-        """Whether a connector socket is open right now.
+    async def _forward(
+        self,
+        action: str,
+        params: dict[str, Any],
+        role: str,
+        window: WindowConnection,
+    ) -> Any:
+        """Send one action to **one window** and wait for that window's answer.
 
-        The same liveness rule as :meth:`active_instance`, and deliberately the
-        one both `ping` and :meth:`_forward` use: a status line that says
-        "connected" while the forward path refuses, or the reverse, is worse
-        than either answer on its own.
+        The window is handed in by :meth:`handle_request` rather than looked up
+        here, so the routing decision and the send cannot disagree — and so a
+        request can never be written into a socket whose per-window lock nobody
+        took.
         """
-        return self.connector is not None and _socket_is_open(self.connector)
-
-    async def _forward(self, action: str, params: dict[str, Any], role: str) -> Any:
-        # `has_connector`, not `self.connector is not None`: a socket that died
-        # without the handler having noticed yet is not something to send a
-        # write to — it deserves the same NO_CONNECTOR the caller would get a
-        # second later, not an INTERNAL from a send on a closed socket.
-        if not self.has_connector():
-            raise BridgeError(
-                ErrorCodes.NO_CONNECTOR,
-                f"{action} needs the editor: no connector is connected. "
-                "Is EasyEDA running with the boardwise extension enabled?",
-            )
         if role != ROLE_CLI:
             raise BridgeError(
                 ErrorCodes.BAD_REQUEST, f"role {role!r} may not call editor actions"
             )
         request_id = f"{action}-{secrets.token_hex(4)}"
         future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
-        self.pending[request_id] = future
+        self.pending[request_id] = PendingCall(action=action, window=window, future=future)
+        window.routed += 1
+        window.touch()
         try:
-            await self.connector.send(request_frame(action, params, id=request_id))
+            await window.websocket.send(request_frame(action, params, id=request_id))
             frame = await asyncio.wait_for(future, timeout=timeout_for(action))
         except asyncio.TimeoutError:
             raise BridgeError(
@@ -1085,12 +1434,26 @@ class BridgeDaemon:
             error.get("detail"),
         )
 
-    def resolve_connector_response(self, frame: dict[str, Any]) -> bool:
-        """Hand a connector frame to whoever is waiting for it."""
-        future = self.pending.get(str(frame.get("id")))
-        if future is None or future.done():
+    def resolve_connector_response(
+        self,
+        frame: dict[str, Any],
+        window: WindowConnection | None = None,
+    ) -> bool:
+        """Hand a connector frame to whoever is waiting for it.
+
+        ``window`` is the hub entry the frame arrived on. When it is given, the
+        answer is accepted **only** if it came from the window the request went
+        to (023): with several windows open, the request id is a correlation hint
+        rather than a proof, and a second window answering the first window's
+        call would arrive looking exactly like a correct answer. Returns whether
+        the frame resolved anything.
+        """
+        call = self.pending.get(str(frame.get("id")))
+        if call is None or call.future.done():
             return False
-        future.set_result(frame)
+        if window is not None and call.window is not window:
+            return False
+        call.future.set_result(frame)
         return True
 
     # -- audit ----------------------------------------------------------
@@ -1134,21 +1497,37 @@ class BridgeDaemon:
         except (websockets.ConnectionClosed, OSError):
             pass
         finally:
-            if self.connector is websocket:
-                # Both together: the socket and the instance it stood for. The
-                # next connector to arrive finds no active instance and takes
-                # the bridge — the reload path (018 §A).
-                self.connector = None
-                self.active = None
-            for future in list(self.pending.values()):
-                if not future.done():
-                    future.set_exception(
+            # The window leaves the hub here and nowhere else, so *every* way a
+            # socket can end — clean close, bad token, gone peer, editor reload —
+            # takes it out of the routing table. A connection that is still in
+            # the table after its socket died is a request that will be sent into
+            # nothing.
+            window = self._drop_socket(connection, websocket)
+            # Only this socket's calls fail. With one connector, "the connector
+            # disconnected" could fail them all; with a hub, failing another
+            # window's in-flight call because a *different* window closed would
+            # invent a failure that never happened.
+            for call in list(self.pending.values()):
+                if call.window.websocket is websocket and not call.future.done():
+                    call.future.set_exception(
                         BridgeError(ErrorCodes.CONNECTOR_ERROR, "connector disconnected")
                     )
             self.audit(action="disconnect", role=connection.role or "-", ok=True,
                        peer=peer, actions=connection.seen_actions,
                        **({"instanceId": connection.instance_id}
-                          if getattr(connection, "instance_id", "") else {}))
+                          if connection.instance_id else {}),
+                       **({"windowKey": window.key} if window is not None else {}),
+                       # The window's project and page *as last known*, recorded
+                       # at the moment it leaves: the audit is where the identity
+                       # of a window that has since closed survives — which is
+                       # what makes "that write went to the window on 反激辅助电源"
+                       # checkable after the fact.
+                       **({"projectName": window.project_name or None,
+                           "projectUuid": window.project_uuid or None,
+                           "pageUuid": window.page_uuid or None,
+                           "pageType": window.page_type or None,
+                           "routed": window.routed}
+                          if window is not None else {}))
 
     async def _serve(self, websocket: ServerConnection, connection: Connection, peer: str) -> None:
         """Banner, handshake, then serve frames until the socket closes."""
@@ -1189,32 +1568,26 @@ class BridgeDaemon:
         connection.protocol = authenticated.protocol
         connection.connector_version = authenticated.connector_version
         connection.authenticated = True
-        connection.instance_id = getattr(authenticated, "instance_id", "")
-        connection.instance_id_source = getattr(authenticated, "instance_id_source", "")
+        connection.instance_id = authenticated.instance_id
+        connection.instance_id_source = authenticated.instance_id_source
         # Same reason as the instance id above: the handshake parsed these off
         # the `hello` params, and this is the object the rest of the daemon
-        # (refusal records, `status`, the audit) reads them from (021 §2.3).
-        connection.project_name = getattr(authenticated, "project_name", "")
-        connection.project_uuid = getattr(authenticated, "project_uuid", "")
+        # (the hub, `status`, the audit) reads them from (021 §2.3). 023 added
+        # the page, which cannot be known at handshake time — no action has run
+        # yet — so it starts empty and is filled by the first response context.
+        connection.project_name = authenticated.project_name
+        connection.project_uuid = authenticated.project_uuid
 
-        # Single-active-connector guard + install (018 §A), both *before* the ack
-        # is sent: a refused instance must never be told it is the connected one,
-        # and must never become the socket a later write is forwarded to. Two
-        # windows used to take turns here, minutes apart, and each write landed
-        # in whichever project the window that happened to be winning had in
-        # focus.
-        #
-        # The install sits immediately after the check, with no `await` between
-        # them, so the slot cannot be handed to two connectors that arrive in the
-        # same instant — the check-then-install pair has to be atomic, and the
-        # `await` that makes it non-atomic is the ack itself.
+        # Every authenticated connector is registered (023), before the ack goes
+        # out, exactly where the single-active guard used to run. There is no
+        # check-then-install pair left to keep atomic: registering cannot
+        # conflict with registering, so a second window arriving in the same
+        # instant as the first just... registers. What 018 defended (a write
+        # landing in a project nobody chose) is now defended by *routing*: the
+        # caller names the window, and an unnamed request among several is
+        # refused rather than resolved.
         if connection.role == ROLE_CONNECTOR:
-            holder = self.refuse_if_held(connection, peer)
-            if holder is not None:
-                await self._close(websocket, CONNECTOR_ALREADY_ACTIVE,
-                                  _refusal_message(holder))
-                return
-            self._install_connector(websocket, connection, peer)
+            self.register(websocket, connection, peer)
 
         await websocket.send(response_frame("hello", {
             "role": connection.role,
@@ -1235,6 +1608,16 @@ class BridgeDaemon:
             # checked, and a version comparison is not a reason to hang up on a
             # connector that still works.
             "minConnectorVersion": MIN_CONNECTOR_VERSION,
+            # How many windows this daemon is holding after this one joined
+            # (023), so the extension can *tell the user* that other windows are
+            # connected instead of discovering it when a call comes back
+            # WINDOW_UNSPECIFIED. Reported, not acted on: deciding which window a
+            # caller meant is the daemon's business, not the connector's.
+            "windowsOnline": len(self.live_windows()),
+            # The hub key this connection registered under, so the editor can name
+            # itself the way the daemon (and `bridge status`) does — including the
+            # ``~2`` suffix when a second socket claimed the same instance id.
+            "windowKey": connection.window_key or None,
         }))
 
         try:
@@ -1242,47 +1625,6 @@ class BridgeDaemon:
                 await self._on_frame(websocket, connection, raw)
         except websockets.ConnectionClosed:
             pass
-
-    def _install_connector(self, websocket: ServerConnection, connection: Connection, peer: str) -> None:
-        """Give this instance the bridge, and put the handover on the record.
-
-        There is no displacement here any more. Until 2026-09-22 this method's
-        body closed whatever was there and took over — which is how two editor
-        windows ended up taking turns, five minutes apart, with every write
-        landing in the project the winning window had focused (018 §A). A socket
-        holding the bridge is now refused before we get here, so the only
-        previous holder this can replace is one whose socket is already gone.
-        """
-        previous = self.active
-        self.connector = websocket
-        self.active = ActiveConnector(
-            instance_id=str(getattr(connection, "instance_id", "") or ""),
-            client=connection.client,
-            connector_version=connection.connector_version,
-            peer=peer,
-            connected_at=time.time(),
-            instance_id_source=str(getattr(connection, "instance_id_source", "") or "hello"),
-            project_name=str(getattr(connection, "project_name", "") or ""),
-            project_uuid=str(getattr(connection, "project_uuid", "") or ""),
-        )
-        # Every connection leaves the connector's build behind. "Which version
-        # was actually running?" has been unanswerable twice after a sideload
-        # that did not take, and this line is the answer. The instance id was
-        # added for 018 §A for the same reason: after the fact, "which window
-        # was this?" has to be answerable from the log. The project joined them
-        # on 2026-09-22 (021 §2.3) — "which window was this?" is only half an
-        # answer when three windows are open, and the audit is where the
-        # project of a window that has since closed survives.
-        self.audit(
-            action="hello", role=connection.role, ok=True, peer=peer,
-            client=client_with_version(connection.client, connection.connector_version),
-            connectorVersion=connection.connector_version or None,
-            instanceId=self.active.instance_id,
-            instanceIdSource=self.active.instance_id_source,
-            tookOverFrom=previous.instance_id if previous is not None else None,
-            projectName=self.active.project_name or None,
-            projectUuid=self.active.project_uuid or None,
-        )
 
     async def _on_frame(self, websocket: ServerConnection, connection: Connection, raw: Any) -> None:
         started = time.perf_counter()
@@ -1292,9 +1634,15 @@ class BridgeDaemon:
             await websocket.send(error_frame(None, exc))
             return
 
-        # A connector frame carrying ok= is an answer to something we sent.
+        # A connector frame carrying ok= is an answer to something we sent. It
+        # also carries that window's live context (023), which is merged here —
+        # the one moment the daemon learns anything new about a window it did not
+        # ask about.
         if connection.role == ROLE_CONNECTOR and "ok" in frame:
-            self.resolve_connector_response(frame)
+            window = self.window_of(connection, websocket)
+            if window is not None:
+                self.apply_response_context(window, frame)
+            self.resolve_connector_response(frame, window)
             return
 
         action = str(frame.get("action") or "")
@@ -1303,22 +1651,36 @@ class BridgeDaemon:
         if not isinstance(params, dict):
             params = {}
         connection.seen_actions.append(action)
+        routed: dict[str, Any] = {}
         try:
-            data = await self.handle_request(action, params, connection.role)
+            data = await self.handle_request(
+                action,
+                params,
+                connection.role,
+                frame.get("targetProject", ""),
+                routed,
+                frame.get("targetInstance", ""),
+            )
         except BridgeError as exc:
             self.audit(action=action, role=connection.role, ok=False, error=exc.code,
-                       ms=round((time.perf_counter() - started) * 1000, 1))
-            await websocket.send(error_frame(frame_id, exc))
+                       ms=round((time.perf_counter() - started) * 1000, 1),
+                       **self._routed_audit_fields(routed))
+            await websocket.send(error_frame(
+                frame_id, exc, context=self.context_for_frame(routed)))
             return
         except Exception as exc:  # never let a handler kill the socket loop
             self.audit(action=action, role=connection.role, ok=False,
-                       error=ErrorCodes.INTERNAL, ms=round((time.perf_counter() - started) * 1000, 1))
+                       error=ErrorCodes.INTERNAL, ms=round((time.perf_counter() - started) * 1000, 1),
+                       **self._routed_audit_fields(routed))
             await websocket.send(error_frame(frame_id, BridgeError(
-                ErrorCodes.INTERNAL, f"{type(exc).__name__}: {exc}")))
+                ErrorCodes.INTERNAL, f"{type(exc).__name__}: {exc}"),
+                context=self.context_for_frame(routed)))
             return
         self.audit(action=action, role=connection.role, ok=True,
-                   ms=round((time.perf_counter() - started) * 1000, 1))
-        await websocket.send(response_frame(frame_id, data))
+                   ms=round((time.perf_counter() - started) * 1000, 1),
+                   **self._routed_audit_fields(routed))
+        await websocket.send(response_frame(
+            frame_id, data, context=self.context_for_frame(routed)))
 
     async def _close(self, websocket: ServerConnection, code: str, message: str) -> None:
         try:
@@ -1356,14 +1718,15 @@ def _socket_is_open(websocket: Any) -> bool:
     """Whether a socket is still usable, per ``websockets``' own state.
 
     Used instead of "is the attribute set" everywhere the daemon asks whether a
-    connector is *attached* (018 §A). The two are not the same: the socket dies
-    the moment the peer goes away, while ``self.connector`` is only cleared when
-    the handler reaches its ``finally`` — and the new instance arrives inside
-    that window, which is precisely the reload the guard has to let through.
+    connector is *attached* (018 §A, and every hub question in 023). The two are
+    not the same: the socket dies the moment the peer goes away, while its hub
+    entry is only removed when the handler reaches its ``finally`` — and the new
+    window arrives inside that gap, which is precisely the reload the routing has
+    to keep working through.
 
     Unknown state counts as open. A socket object with no ``state`` is either an
     older ``websockets`` or a test double, and inventing "closed" for it would
-    turn a missing attribute into a refusal.
+    turn a missing attribute into a vanished window.
     """
     state = getattr(websocket, "state", None)
     if state is None:
@@ -1378,8 +1741,10 @@ def _instance_identity(params: dict[str, Any]) -> tuple[str, str]:
     connect — refusing an older editor would break every existing install — so
     the daemon invents an id for **this connection**. The second element of the
     pair says so, because the two are not equally strong evidence: a claimed id
-    can tell two windows apart for as long as they live, an invented one can
-    only name a socket.
+    can tell two windows apart for as long as they live, an invented one can only
+    name a socket. In the hub (023) this id is also the connection's key, which is
+    why an invented one is spelled ``conn-…``: a key that looked like a claimed
+    instance id would hide which windows the daemon can actually tell apart.
     """
     claimed = params.get("instanceId")
     if isinstance(claimed, str) and claimed.strip():
@@ -1392,32 +1757,18 @@ def _project_identity(params: dict[str, Any]) -> tuple[str, str]:
 
     Two optional strings, and their absence means absence. There is nothing to
     fall back to: the daemon's own view of "the current project" is the project
-    of whichever window holds the bridge, so filling a blank in with it would
-    attribute one window's project to another — the exact confusion this field
-    exists to remove. Anything that is not a non-empty string is treated as not
-    sent, which is also how an old connector (neither field) and a newer one that
-    could not read its project arrive here.
+    of whichever window a request was routed to, so filling a blank in with it
+    would attribute one window's project to another — the exact confusion this
+    field exists to remove, and with several windows in the hub a *guess* about
+    the project is a routing decision made out of nothing. Anything that is not a
+    non-empty string is treated as not sent, which is also how an old connector
+    (neither field) and a newer one that could not read its project arrive here.
     """
     def read(key: str) -> str:
         value = params.get(key)
         return value.strip() if isinstance(value, str) else ""
 
     return read("projectName"), read("projectUuid")
-
-
-def _refusal_message(active: ActiveConnector) -> str:
-    """The wire message a refused connector is closed with.
-
-    Says what happened, who holds the bridge, and what to do about it. The
-    connector logs this and shows it; the person reading it is looking at two
-    EasyEDA windows and needs to know which one to close.
-    """
-    return (
-        f"another editor instance already holds the bridge "
-        f"({active.describe()}); this connection was refused so that writes "
-        f"cannot land in the wrong project — close the extra EasyEDA window, or "
-        f"run 'boardwise bridge status' to see which instance is connected"
-    )
 
 
 def _clock(value: Any) -> str:

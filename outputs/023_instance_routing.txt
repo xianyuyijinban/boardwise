@@ -1,0 +1,167 @@
+023 follow-up · --instance 直达窗口 · 证据（2026-09-22，执行子代理）
+
+仓库 E:\boardwise。红线段：未动 git、未重启 daemon（PID 11732 在跑）、未碰编辑器、未碰 connector/、
+未碰 tests/fixtures、写文件显式 UTF-8。
+
+================================================================================
+0. 改动文件
+================================================================================
+src/boardwise/bridge/protocol.py    request_frame(target_instance=) → 顶层 targetInstance；
+                                    ErrorCodes.WINDOW_NOT_CONNECTED；模块 docstring 补第三条协议字段
+src/boardwise/bridge/client.py      BridgeClient.call(target_instance=None) 透传
+src/boardwise/bridge/daemon.py      route(target_project, action, target_instance)：instance 优先、
+                                    未命中列在线窗口；window_for_instance() 改为 key 优先再 instanceId；
+                                    _target_instance() 校验（非字符串 → BAD_REQUEST）；
+                                    handle_request / _on_frame 把帧顶层 targetInstance 送进 route；
+                                    PROJECT_NOT_CONNECTED / WINDOW_UNSPECIFIED 消息补「可用 --instance」
+src/boardwise/cli.py                bridge call --instance；bridge update-connector --instance
+                                    （写路由 + verified 回读改走 windows 表）；_online_windows /
+                                    _reloaded_window_version 两个新辅助函数
+tests/test_bridge.py                新增 5 例（含 request_frame 三键断言），改 3 处旧文案断言
+tests/test_bridge_cli.py            新增 4 例，_RecordingClient 支持 ping/windows 与路由 kwargs 记录
+docs/bridge.md                      §2 / §3.1 / §3.5（路由表 + 为什么有第二个名字）/ §5 / §8 / §10 /
+                                    §12 / §13 补 --instance
+tasks/023-multiwindow-routing.md    交卷记录（本文件末尾摘要）
+
+================================================================================
+1. 真机形态的帧证据（真实 WebSocket、真实 daemon 进程内、两个窗口）
+   探针脚本：.tmp_ev/instance_routing_probe.py（一次性，未入库）
+   场景：编辑器重启后的状态 —— A 窗口读不到工程（projectName 为 null），B 窗口报到 test2
+================================================================================
+(probe output follows — 原始 stdout，UTF-8)
+# daemon on 127.0.0.1:60968 (in-process, temp home)
+hello A data: {"role": "connector", "protocol": "1.0", "serverTime": 1790069163.8704424, "paired": true, "fingerprint": "92e2a3ca", "minConnectorVersion": "0.4.10", "windowsOnline": 1, "windowKey": "inst-101500123-aaaaaaaa"}
+hello B data: {"role": "connector", "protocol": "1.0", "serverTime": 1790069163.8749871, "paired": true, "fingerprint": "92e2a3ca", "minConnectorVersion": "0.4.10", "windowsOnline": 2, "windowKey": "inst-101533456-bbbbbbbb"}
+
+# 1. targetInstance=inst-B  (the direct route)
+{"id": "q", "ok": true, "data": {"answeredBy": "B"}, "context": {"projectName": "test2"}}
+
+# 2. targetInstance=inst-nope  (WINDOW_NOT_CONNECTED)
+{"id": "q", "ok": false, "error": {"code": "WINDOW_NOT_CONNECTED", "message": "no connected window is instance 'inst-nope'; online windows: (no project) (inst-101500123-aaaaaaaa), test2 (inst-101533456-bbbbbbbb)", "detail": {"targetInstance": "inst-nope", "candidates[keys]": ["inst-101500123-aaaaaaaa", "inst-101533456-bbbbbbbb"]}}}
+
+# 3. targetProject=test2  (matches B)
+{"id": "q", "ok": true, "data": {"answeredBy": "B"}, "context": {"projectName": "test2"}}
+
+# 4. targetProject=test2 + targetInstance=inst-A  (instance wins)
+{"id": "q", "ok": true, "data": {"answeredBy": "A"}}
+
+# 5. targetProject=/test (nobody has it) — the restarted-editor dead end
+{"id": "q", "ok": false, "error": {"code": "PROJECT_NOT_CONNECTED", "message": "no connected window has project '/test' open; online windows: (no project) (inst-101500123-aaaaaaaa), test2 (inst-101533456-bbbbbbbb) — a window can also be named by its instance id (boardwise bridge call --instance INSTANCE_ID)", "detail": {"targetProject": "/test", "candidates[keys]": ["inst-101500123-aaaaaaaa", "inst-101533456-bbbbbbbb"]}}}
+
+# 6. no hint at all
+{"id": "q", "ok": false, "error": {"code": "WINDOW_UNSPECIFIED", "message": "2 editor windows are connected and the request named no project; re-send with a project hint (boardwise bridge call --project NAME_OR_UUID) or an instance id (boardwise bridge call --instance INSTANCE_ID) — online windows: (no project) (inst-101500123-aaaaaaaa), test2 (inst-101533456-bbbbbbbb)", "detail": {"candidates[keys]": ["inst-101500123-aaaaaaaa", "inst-101533456-bbbbbbbb"]}}}
+
+# 7. targetInstance=12345 (not a string)
+{"id": "q", "ok": false, "error": {"code": "BAD_REQUEST", "message": "targetInstance must be an instance id string, got int", "detail": {}}}
+
+# audit records (doc.list + refusals, windowKey on the routed one)
+{"action": "hello", "client": "boardwise-connector/0.4.11 connector=0.4.11", "connectorVersion": "0.4.11", "duplicateInstanceId": null, "instanceId": "inst-101500123-aaaaaaaa", "instanceIdSource": "hello", "ok": true, "peer": "127.0.0.1:60969", "projectName": null, "projectUuid": null, "role": "connector", "tookOverFrom": null, "ts": 1790069163.8697371, "windowKey": "inst-101500123-aaaaaaaa", "windowsOnline": 1}
+{"action": "hello", "client": "boardwise-connector/0.4.11 connector=0.4.11", "connectorVersion": "0.4.11", "duplicateInstanceId": null, "instanceId": "inst-101533456-bbbbbbbb", "instanceIdSource": "hello", "ok": true, "peer": "127.0.0.1:60970", "projectName": "test2", "projectUuid": null, "role": "connector", "tookOverFrom": null, "ts": 1790069163.87467, "windowKey": "inst-101533456-bbbbbbbb", "windowsOnline": 2}
+{"action": "doc.list", "ms": 0.5, "ok": true, "projectName": "test2", "role": "cli", "ts": 1790069163.8804607, "windowKey": "inst-101533456-bbbbbbbb"}
+{"action": "doc.list", "error": "WINDOW_NOT_CONNECTED", "ms": 0.0, "ok": false, "role": "cli", "ts": 1790069163.8814034}
+{"action": "doc.list", "ms": 0.2, "ok": true, "projectName": "test2", "role": "cli", "ts": 1790069163.8827348, "windowKey": "inst-101533456-bbbbbbbb"}
+{"action": "doc.list", "ms": 0.2, "ok": true, "role": "cli", "ts": 1790069163.8836458, "windowKey": "inst-101500123-aaaaaaaa"}
+{"action": "doc.list", "error": "PROJECT_NOT_CONNECTED", "ms": 0.0, "ok": false, "role": "cli", "ts": 1790069163.8843029}
+{"action": "doc.list", "error": "WINDOW_UNSPECIFIED", "ms": 0.0, "ok": false, "role": "cli", "ts": 1790069163.885084}
+{"action": "doc.list", "error": "BAD_REQUEST", "ms": 0.0, "ok": false, "role": "cli", "ts": 1790069163.8857896}
+
+(probe output end. 注意：探针用 --instance 直达的是 key（= instanceId），窗口 A 全程无工程，
+windowKey=inst-101500123-aaaaaaaa；第 4 条两个 hint 同时给，命中 A 而非 test2 的 B。)
+第 7 条说明 targetInstance 非字符串是 BAD_REQUEST（与 targetProject 同一口径）。
+
+================================================================================
+2. 三态错误消息逐字样例（与现有三态同格式：projectName (key) 列表）
+================================================================================
+WINDOW_NOT_CONNECTED（新，--instance 未命中）:
+  no connected window is instance 'inst-nope'; online windows: (no project) (inst-101500123-aaaaaaaa), test2 (inst-101533456-bbbbbbbb)
+  detail: {"targetInstance": "inst-nope", "candidates": [<每窗口 as_status()>]}
+
+PROJECT_NOT_CONNECTED（原有，末尾新增一句指路）:
+  no connected window has project '/test' open; online windows: (no project) (inst-101500123-aaaaaaaa), test2 (inst-101533456-bbbbbbbb) — a window can also be named by its instance id (boardwise bridge call --instance INSTANCE_ID)
+
+WINDOW_UNSPECIFIED（原有，hint 提示补 --instance）:
+  2 editor windows are connected and the request named no project; re-send with a project hint (boardwise bridge call --project NAME_OR_UUID) or an instance id (boardwise bridge call --instance INSTANCE_ID) — online windows: (no project) (inst-101500123-aaaaaaaa), test2 (inst-101533456-bbbbbbbb)
+
+PROJECT_AMBIGUOUS（未改，逐字）:
+  project 'test2' matches 2 connected windows (test2 (inst-…), test2 (inst-…)); nothing was forwarded — close the duplicate window or name one of them
+
+BAD_REQUEST（--instance 给非字符串）:
+  targetInstance must be an instance id string, got int
+
+同 instanceId 双活（~2 后缀）：key 精确匹配，不做歧义处理——inst-x 直达先注册者，
+inst-x~2 直达后者（用例 test_an_instance_hint_names_one_of_two_connections_sharing_an_id）。
+
+================================================================================
+3. 语义决定（供复验）
+================================================================================
+- 两个 hint 同时给：instance 优先（实例精确到一条连接，工程名可能被多个窗口共用）。
+  实现位置：daemon.route() 先解析 target_instance，命中即返回；未命中直接抛
+  WINDOW_NOT_CONNECTED，**不再回落到 targetProject**（回落会让"我指名了窗口"变成"我指名了工程"，
+  正是 018 测到的静默错窗写）。用例 test_an_instance_hint_wins_over_a_project_hint。
+- window_for_instance() 先比 key、再比 instanceId，所以 `inst-x` 与 `inst-x~2` 各直达一条连接，
+  既有的「同 id 取最长在线者」语义不变（未加后缀者即最老者）。
+- 无 hint 单窗口直达、无 hint 多窗口 WINDOW_UNSPECIFIED、无窗口 NO_CONNECTOR：一个字节未变。
+- 路由失败时错误帧不带 context（没选窗口就不宣称谁答的）；成功帧带应答窗口的实时 context。
+
+================================================================================
+4. --instance 下 update-connector 的 verified 语义（一句话）
+================================================================================
+等任一在线窗口（daemon `ping` 的 windows 表，daemon 自答、不需要路由）报到刚写入的版本即算
+verified（exit 0）；若被指名的那个窗口仍以自己的 key 在线且报旧版本 → FAILED（exit 1）；预算内
+两者都没读到 → UNKNOWN（exit 3）。探测不再用 sys.probe 打旧 instanceId —— reload 后该窗口以**新**
+instanceId 重连，旧名字已不存在；不带 --instance 时行为完全不变（仍是 sys.probe 单连接回读）。
+代价已写进 docs/bridge.md §8：该读法只能证明"某个窗口在跑新版本"，不能证明"就是那个窗口"——
+两者在 id 更换后不可区分，故不做更强的宣称。
+
+================================================================================
+5. 测试数字
+================================================================================
+.venv/Scripts/python.exe -m pytest tests/test_bridge.py tests/test_bridge_cli.py -q --basetemp=.tmp_pt_023b
+  → 112 passed（023 基线 103；本棒新增 9：test_bridge.py +5（4 路由 + 1 帧），test_bridge_cli.py +4）
+  test_bridge.py 单跑：77 passed（原 72）
+  test_bridge_cli.py 单跑：35 passed（原 30）
+
+全量回归：pytest tests/ -q --basetemp=.tmp_pt_023b_full2
+  → 1321 passed in 106.91s（023 基线 1312；+9 即本棒新增用例；最终代码状态上复跑）
+  另一次同命令（.tmp_pt_023b_full，改动收尾前）：1321 passed in 108.66s
+
+================================================================================
+6. 独立变异抽验（自改源码 → 必须变红 → cp 还原 → sha256/cmp 字节一致）
+================================================================================
+备份：cp src/boardwise/bridge/daemon.py .tmp_mut/daemon.py.bak
+      cp src/boardwise/cli.py        .tmp_mut/cli.py.bak
+      备份时哈希（与源文件一致）:
+        daemon.py  04609ed31b008b9f65ef1dec3f000179baa0e945857017675f18519ff4820a10
+        cli.py     ab83a08daec50c03ba41ced6ad68e16264b0a3149e73a2c228c79da3b5530353
+
+变异 1（daemon.py route()：`if instance:` → `if False and instance:`，即 instance 路由失效）
+  结果：6 failed, 106 passed —— test_an_instance_hint_reaches_that_window_without_any_project /
+  test_an_instance_hint_that_matches_no_window_lists_the_online_ones /
+  test_an_instance_hint_wins_over_a_project_hint /
+  test_an_instance_hint_names_one_of_two_connections_sharing_an_id /
+  test_a_window_that_names_no_project_still_connects_and_routes_around /
+  test_call_instance_hint_reaches_that_window_from_the_cli
+  还原：cp 回来 → sha256 04609ed31b008b9f65ef1dec3f000179baa0e945857017675f18519ff4820a10
+  （cmp 一致，RESTORED_BYTE_IDENTICAL）→ 复跑 112 passed
+
+变异 2（cli.py _reloaded_window_version()：去掉"任一窗口报 expected"分支）
+  结果：1 failed —— test_update_connector_instance_routes_the_write_and_reads_the_window_table
+  （该例因此改写为更严格形态：被写入的 inst-A 在 reload 后消失，回来的是**新** id inst-C，
+   只有"任一窗口报到新版本"这一条能判 verified，不会被子串匹配蒙对）
+  还原：cp 回来 → sha256 ab83a08daec50c03ba41ced6ad68e16264b0a3149e73a2c228c79da3b5530353
+  （cmp 一致，RESTORED_BYTE_IDENTICAL）→ 复跑 112 passed
+
+================================================================================
+7. 遗留 / 未做
+================================================================================
+1. **未做真机验证**：本棒不重启 daemon（PID 11732 仍跑旧代码），所以 --instance 的真机链路
+   （三窗口 + 编辑器重启后 context 全 null 的场景）留给主代理。**新动作与 ping 字段是加载期常量，
+   daemon 不重启不生效。** 真机步骤见 docs/bridge.md §13 E3。
+2. `bridge update-connector --instance` 的真机验证同样待做：需要热更一个指定窗口并观察
+   exit 0 / 1 / 3 三态（会 reload 编辑器页面，属写操作，按红线由主代理在 test/test2 上执行）。
+3. verified 在 --instance 下的固有弱点：reload 换了 instanceId，无法把"回来的连接"与"被更的那个
+   窗口"绑定；若另一个窗口本来就跑着同一版本，会误判 verified。已写进 docs §8 与函数 docstring，
+   未在代码层强行收紧（收紧需要 connector 侧在 hello 里带一个跨 reload 稳定的窗口标识，属下一棒）。
+4. 未给 review/draw/edit 等高层命令加 --instance（023 §今晚不做 的同一条：先 bridge call 层通）。
+5. connector 侧无改动：instanceId 已在 hello 里（023 棒 2 完成），本棒只消费它。
+6. 一次性探针脚本 .tmp_ev/ （未入库）与 .tmp_mut/（变异备份）可随时删。
