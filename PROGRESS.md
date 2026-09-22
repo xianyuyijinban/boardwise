@@ -38,7 +38,7 @@ collects the current truth and the pointers.
   exit 1)
 - connector: **305 pass / 0 fail** (`cd connector && npm test`)
 - `npx tsc --noEmit`: clean
-- connector version: **0.4.11** (`connector/extension.json`)
+- connector version: **0.4.12** (`connector/extension.json`)
 - Verified host: EasyEDA Pro **3.2.186** (the only host the bridge is
   calibrated against; every real-host fact in the task books names it)
 
@@ -84,3 +84,4 @@ point. Full measurement history: `tasks/010c-coordinate-convention.md`
 - `d70f59b` 021 multi-window reality + hello project-identity registration (pytest 1281)
 - `4448c59` 022 fresh-clone fixes: content-based fixture guard + dev deps + offline editor floor check (GitHub #1/#2/#3 closed; pytest 1298)
 - `383e524` 023 multi-window hub + project/instance routing + response context (three-window real host verified; pytest 1321)
+- `ac465ae` 024 connector bootstrap for EasyEDA 3.2.149 skipped-activate host defect (connector 0.4.12; 336/336)
