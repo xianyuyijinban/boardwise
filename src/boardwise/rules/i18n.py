@@ -66,6 +66,30 @@ EMPTY_PCB_VIEW_HINT = (
     "如果你要审查的是原理图，请加 `--view schematic` 重新运行。"
 )
 
+
+def parse_drop_hint(pins_dropped: int, components_without_symbol: int) -> str:
+    """解析丢了东西时的中文提示（任务 020 WI-1）；两项都为 0 时返回空串。
+
+    与 :data:`EMPTY_PCB_VIEW_HINT` 同样的分工：文案在这里，什么时候出现由 CLI
+    判断（`cli._parse_drop_note` 的英文版与它同源，两句话说的是同一组计数）。
+
+    **只报非 0 的项。** 0 在这里不是证据——pcb 视图的解析根本不经过原理图那条
+    通路，这两个计数不会被填（见 `cli._load_model`），把 "0 个引脚被丢弃" 写进
+    提示等于对一次没有发生的解析下结论。为 0 的项就不出现，比出现更诚实。
+
+    为什么要有这句话：丢脚与丢符号此前**零计数零告警**，报告照旧说"共 N 条发现"，
+    读的人只能理解成"都查过了"。有了这句，同样的报告才带上"查得不全"这个事实。
+    """
+    parts: list[str] = []
+    if pins_dropped:
+        parts.append(f"{pins_dropped} 个引脚因缺少引脚号被丢弃")
+    if components_without_symbol:
+        parts.append(f"{components_without_symbol} 个器件未能解析符号")
+    if not parts:
+        return ""
+    return "提示：解析中有" + "、".join(parts) + "——审查覆盖不完整，结果可能漏报。"
+
+
 #: 摘要里每条 finding 最多列几个关键数值：够看清"差多少"，又不至于把一行撑成
 #: 一段话（消息本体就在下一行，英文原文一字不少）。
 KEY_VALUE_LIMIT = 4

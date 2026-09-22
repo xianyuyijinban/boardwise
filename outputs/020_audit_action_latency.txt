@@ -1,0 +1,34 @@
+boardwise 动作耗时分布（来自 ~/.boardwise/audit 全部 39101 行历史，2026-09-22 算）
+上游 issue #208 的对照证据：超时预算此前靠点测，此表为分布。
+
+action                               n      p50      p95       p99       max  fail%
+sch.place_wire                    1321       16       34        72      1159   4.2%
+lib.footprint.get                  854      124     1025      1073      1343  16.0%
+lib.device.get                     729     1344     3020      3134      4115   0.3%
+sch.place_component                620     2431     5182      6850     30011   6.9%
+sch.place_power                    452     1368     3118      3931      6630   1.8%
+doc.list                           304        7       59        72       410   2.0%
+sch.place_text                     226        9       43        71        98  17.7%
+sch.set_component_attribute        215       32       56        68        83  11.6%
+sch.geometry                       172       53      217       424       537   5.2%
+sch.netlist                        162      485     3883      5356      6326  12.3%
+sys.probe                          116        1        4        26        42  22.4%
+doc.open                           113       42     1647      3713      4430  43.4%
+sch.doc.save                       109       26       74        78       135   9.2%
+sch.place_netport                   98     1326     2410      4229      4229   2.0%
+sch.doc.new                         56     1129     1786      2010      2010  14.3%
+document.current                    54       19       55        60        60   3.7%
+export.screenshot                   45     1028     1118      1306      1306   6.7%
+export.render                       39        3     3123      3368      3368  64.1%
+sch.component_pins                  37        2       19        20        20   2.7%
+review.mark                         37        1      752       870       870  13.5%
+sch.readback                        29       15       97       139       139   6.9%
+lib.device.search                   24      739     1508      3914      3914   0.0%
+sys.self_update                     19       26       52        52        52  21.1%
+sch.delete_primitives               14        8    30011     30011     30011  42.9%
+export.fab                          14      848     1340      1340      1340  14.3%
+doc.focus                           10        2       67        67        67  90.0%
+
+要点：place_component p99=6.9s（max 30011=超时截断，库首解析）；delete p95=30011 为旧 30s 超时
+截断（DELETE_TIMEOUT 已提 150s）；sys.self_update p50=26ms max=52ms —— 动作只写 bundle 即返回，
+reload 后无自动版本回读（问题 3 的数据面佐证）。
