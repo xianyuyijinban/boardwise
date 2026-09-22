@@ -388,6 +388,43 @@ async function projectIdentity(info: any): Promise<Record<string, string>> {
 }
 
 /**
+ * The focused project of *this window*, in the shape `hello` carries it
+ * (021 §2.3).
+ *
+ * The one channel that can answer "which projects does the user have open?".
+ * `eda` is window-scoped and there is no cross-window member on the host (021
+ * §A4, measured 2026-09-22: `dmt_Project` has 12 members and none of them lists
+ * the open projects), but every window runs its own connector — so each one
+ * saying which project it holds makes the set visible on the daemon side, where
+ * the refused instances are exactly the other windows (021 §实测记录 A1).
+ *
+ * **Never throws, and never guesses.** An empty object means "this window could
+ * not name its project" — an absent capability or a failed read, not a project
+ * called nothing. The daemon records that absence instead of a name, because
+ * this is the field a caller would use to decide where a write goes.
+ *
+ * `projectName` prefers `friendlyName` (`/test`) over `name` (`test`): it is
+ * the label the editor itself shows for the project, so the name printed by
+ * `bridge status` is one the user can match against their own window.
+ */
+export async function currentProjectIdentity(
+  eda: Eda,
+): Promise<{ projectName?: string; projectUuid?: string }> {
+  try {
+    const getCurrent = requireFn(eda, 'dmt_Project.getCurrentProjectInfo');
+    const info = await settle(getCurrent());
+    const identity = await projectIdentity(info);
+    const name = identity.friendlyName || identity.name;
+    return {
+      ...(identity.projectUuid ? { projectUuid: identity.projectUuid } : {}),
+      ...(name ? { projectName: name } : {}),
+    };
+  } catch {
+    return {};
+  }
+}
+
+/**
  * Uuids the host uses as a *placeholder* for "no document is focused".
  *
  * Measured on the machine 2026-09-21: with more than one editor window open and

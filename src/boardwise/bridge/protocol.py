@@ -1019,6 +1019,13 @@ class Connection:
     #: :func:`boardwise.bridge.daemon.client_with_version`, which renders that
     #: absence as "(version unknown)" instead of hiding it.
     connector_version: str = ""
+    #: The editor *window's* project, announced in `hello` (021 §2.3). Empty
+    #: for a CLI connection, for a connector build that predates the fields, and
+    #: for a window that could not read its project — the three cases are
+    #: deliberately not told apart here, because the honest reading of all three
+    #: is "this window named no project", and a guessed name is worse than none.
+    project_name: str = ""
+    project_uuid: str = ""
     authenticated: bool = False
     #: Frames received after handshake, for the audit log.
     seen_actions: list[str] = field(default_factory=list)

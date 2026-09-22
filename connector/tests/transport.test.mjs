@@ -368,3 +368,106 @@ test('hello announces the instance id, and omits it when there is none', async (
   assert.equal('instanceId' in bare.lastFrame().params, false);
   anonymous.stop();
 });
+
+
+test('hello announces this window\'s project, and omits it when it cannot be read', async () => {
+  // 021 §2.3: `eda` is window-scoped, so the daemon can only see as far as the
+  // window whose connector holds the bridge. Each window announcing its own
+  // project — the refused ones included — is what makes "which projects does
+  // the user have open?" answerable at all.
+  const socket = new FakeSocket();
+  const { transport } = makeTransport(socket, {
+    projectIdentity: async () => ({ projectName: '/test', projectUuid: 'ea80fff6' }),
+  });
+  await transport.start();
+  socket.connect();
+
+  assert.ok(await waitFor(() => socket.lastFrame()?.action === 'hello'));
+  const params = socket.lastFrame().params;
+  assert.equal(params.projectName, '/test');
+  assert.equal(params.projectUuid, 'ea80fff6');
+  transport.stop();
+
+  // A reader that answers nothing — a window with no project read, a host call
+  // that failed — leaves both fields out rather than sending a blank one the
+  // daemon would have to interpret.
+  const bare = new FakeSocket();
+  const { transport: quiet } = makeTransport(bare, { projectIdentity: async () => undefined });
+  await quiet.start();
+  bare.connect();
+  assert.ok(await waitFor(() => bare.lastFrame()?.action === 'hello'));
+  assert.equal('projectName' in bare.lastFrame().params, false);
+  assert.equal('projectUuid' in bare.lastFrame().params, false);
+  quiet.stop();
+});
+
+
+test('a project read that throws or stops answering never costs the handshake', async () => {
+  // Both are real on the editor host (host objects are Proxies whose `get` trap
+  // throws — measured 2026-09-14), and neither is a reason to lose the socket:
+  // the identity decorates the frame, it does not gate it.
+  const throwing = new FakeSocket();
+  const { transport: withError } = makeTransport(throwing, {
+    projectIdentity: async () => {
+      throw new Error('getCurrentProjectInfo blew up');
+    },
+  });
+  await withError.start();
+  throwing.connect();
+  assert.ok(await waitFor(() => throwing.lastFrame()?.action === 'hello'));
+  assert.equal('projectName' in throwing.lastFrame().params, false);
+  withError.stop();
+
+  // A reader that never settles is the case a deadline exists for: the frame
+  // must still go out, because a hello nobody sends leaves the daemon waiting
+  // on a socket that looks dead (its own HELLO_TIMEOUT is 5 s).
+  const stuck = new FakeSocket();
+  const { transport: hung } = makeTransport(stuck, {
+    projectIdentity: () => new Promise(() => {}),
+    projectIdentityTimeoutMs: 20,
+  });
+  await hung.start();
+  stuck.connect();
+  assert.ok(
+    await waitFor(() => stuck.lastFrame()?.action === 'hello'),
+    'the deadline must release the handshake, not hold it',
+  );
+  assert.equal('projectName' in stuck.lastFrame().params, false);
+  assert.equal(hung.getState(), 'handshaking');
+  hung.stop();
+});
+
+
+test('the project is re-read for each handshake, never carried over from the last one', async () => {
+  // A window can have a different project the next time it connects (the user
+  // switched, or the editor restored another one), so a remembered value would
+  // be a claim about a project that is no longer open.
+  const socket = new FakeSocket();
+  const names = ['/test', 'test2'];
+  let reads = 0;
+  const { transport } = makeTransport(socket, {
+    projectIdentity: async () => {
+      const projectName = names[Math.min(reads, names.length - 1)];
+      reads += 1;
+      return { projectName, projectUuid: `uuid-${reads}` };
+    },
+  });
+  await transport.start();
+  socket.connect();
+  assert.ok(await waitFor(() => socket.lastFrame()?.action === 'hello'));
+  assert.equal(socket.lastFrame().params.projectName, '/test');
+
+  // A refusal forces a reconnect; the retry greets from inbound traffic, as
+  // every attempt does (004b).
+  await socket.deliver({
+    id: 'hello', ok: false, error: { code: 'CONNECTOR_ALREADY_ACTIVE', message: 'refused' },
+  });
+  assert.ok(await waitFor(() => socket.registered.length === 2), 'expected a retry');
+  await socket.deliver({ event: 'banner', data: {} });
+
+  const hellos = () => socket.sent.filter((entry) => entry.frame.action === 'hello');
+  assert.ok(await waitFor(() => hellos().length === 2), 'the retry must greet too');
+  assert.equal(hellos()[1].frame.params.projectName, 'test2');
+  assert.equal(hellos()[1].frame.params.projectUuid, 'uuid-2');
+  transport.stop();
+});
