@@ -1,0 +1,257 @@
+022 #3 · 编辑器版本门槛（≥3.2.183）在前置动作做完前不可判定 — 证据
+=====================================================================
+
+仓库：E:\boardwise          日期：2026-09-22
+issue：xianyuyijinban/boardwise #3
+
+改动文件（仅此两个，均在授权范围内）：
+  - src/boardwise/cli.py        （离线预检实现 + run_doctor 新检查项 + 与桥读版本的交叉复核）
+  - tests/test_doctor.py        （12 个新用例 + 3 个既有用例随行数更新）
+  注：git status 里 docs/install.md、pyproject.toml、scripts/install.bat、
+      reviewsets/injected/make_variants.py、tests/test_injected_variants.py 的改动
+      属于 issue #1/#2 那一棒（agent-35），不是本子代理的产出。
+
+本机现状：daemon 127.0.0.1:61190 up，connector connected，编辑器 3.2.186 在线
+（`boardwise bridge status`：active instance inst-080006463-wflzqibr, connector 0.4.11）。
+
+
+§1 本机真实安装路径探测过程与结果
+---------------------------------------------------------------------
+
+[1] 探测命令与输出
+    $ powershell -NoProfile -Command "Get-Process lceda-pro | Select-Object -First 1 -ExpandProperty Path"
+    D:\lceda-pro\lceda-pro.exe
+
+    wmic 在本机不可用（Windows 11 已移除该组件）：
+    $ cmd /c "wmic process where \"name like '%lceda%'\" get ExecutablePath /format:list"
+    'wmic' 不是内部或外部命令，也不是可运行的程序或批处理文件。
+    → 因此探测实现里不依赖 wmic/注册表，只枚举「固定盘盘符根 + Windows 默认安装位置」并读清单。
+
+[2] 该安装树的清单（issue 作者指的 Electron 标准位置）
+    $ ls -l /d/lceda-pro/resources/app/package.json
+    -rw-r--r-- 1 xiangyu 197121 240 Aug 21 17:16 /d/lceda-pro/resources/app/package.json
+    $ cat /d/lceda-pro/resources/app/package.json
+    {
+        "name": "client.pro.lceda.cn",
+        "version": "3.2.186.b52e3e87",
+        "description": "",
+        "author": "JLCEDA",
+        "main": "./app.js",
+        "license": "JLC",
+        "productName": "JLCEDA_Pro",
+        "homepage": "https://pro.lceda.cn/"
+    }
+
+    即：本机形态 = <盘符>:\lceda-pro，清单字段就是 version（四段，第四段是构建后缀）。
+    已写进代码注释与候选列表首位（"*:\lceda-pro" 先于 globs 试）。
+
+[3] 探测耗时（真机，非估算）
+    >>> _editor_search_roots()  → ['C:\\','D:\\','E:\\','C:\\Users\\xiangyu\\AppData\\Local\\Programs',
+                                   'C:\\Users\\xiangyu\\AppData\\Local','C:\\Program Files',
+                                   'C:\\Program Files (x86)']   0.006s
+    >>> scan_editor_install(roots) → EditorInstall(path=D:\lceda-pro, version='3.2.186.b52e3e87')   0.001s
+    整条 `boardwise doctor`（含 daemon/connector/sys.probe/doc.list 真机往返）：0.36s
+
+
+§2 候选路径清单及依据
+---------------------------------------------------------------------
+
+顺序即代码顺序（_editor_search_roots + _editor_install_candidates）：
+
+  1. BOARDWISE_EDITOR_INSTALL 指定的根（os.pathsep 分隔）——设了就**取代**下列内置位置。
+     依据：安装目录因机器而异（issue 原话），显式指定是兜底；测试也必须能钉死搜索范围，
+     否则行数会随开发者本机装没装编辑器而变。
+  2. 每个**固定盘**的盘符根（C:\, D:\, E:\, …）——用 ctypes GetLogicalDrives +
+     GetDriveTypeW == DRIVE_FIXED 枚举。依据：本机就是 D:\lceda-pro，即"命名习惯 + 盘符根一层"。
+     跳过网络映射盘/可移动盘：glob 一个映射盘是挂死不是搜索。
+  3. 每个根下先试**具名目录**（EDITOR_INSTALL_DIR_NAMES）：
+     lceda-pro, lceda, LCEDA-Pro, easyeda-pro, EasyEDA Pro, 嘉立创EDA专业版, 嘉立创EDA
+     依据：厂商命名习惯；这一步是若干次 is_dir，本机 0.001s 命中。
+  4. 再对每个根做**一层 glob**（EDITOR_INSTALL_GLOBS）：*lceda* / *easyeda* / *嘉立创*
+     （Windows 上 glob 大小写不敏感）。依据：覆盖未列名的变体（如"LCEDA-Pro-2"）。
+     只扫一层、盘子数量有限：不做全盘递归（否则 doctor 会变成工具里最慢的命令）。
+  5. Windows 默认安装位置：%LOCALAPPDATA%\Programs、%LOCALAPPDATA%、
+     %ProgramFiles%、%ProgramW6432%、%ProgramFiles(x86)%
+     依据：默认安装路径；与文档 docs/install.md 的"下载桌面版"路径无关，只是兜底。
+
+  每个候选目录读 <候选>/resources/app/package.json 的 version。
+
+
+§3 判定语义表
+---------------------------------------------------------------------
+
+新检查项 name = "editor-install"，排在全部检查项**第一位**（run_doctor 的第一个 append），
+不经过桥、不经过 daemon、不经过扩展。
+
+  # | 离线预检（读安装树）                          | 判定
+  --+-----------------------------------------------+---------------------------------------
+  1 | 读到版本，且前三段 ≥ 3.2.183                  | PASS（detail 注明来源：离线读 resources/app/package.json，没有经过桥）
+  2 | 读到版本 < 3.2.183                            | FAIL，fix 直给"先升级编辑器到 ≥3.2.183，其余检查项都排在它后面"，
+    |                                               |   下载地址 https://pro.easyeda.com/（按 docs/install.md 现有说法）
+  3 | 读到版本 < 3.2.183，但桥报的**运行中**编辑器 ≥ 3.2.183 且与安装树不同
+    |                                               | SKIP：两处不是同一个安装，本项不作结论（跑着的那个才是分支依据）。
+    |                                               |   依据：磁盘上一棵没在用的旧树不该把体检点红——这正是本仓库一直在清理的假红
+  4 | 找不到安装树（没扫到任何 lceda/easyeda/嘉立创 目录）
+    |                                               | SKIP：如实列"扫过哪些位置"，明说不作结论（issue 作者点名保留的红/绿/跳过三态）
+  5 | 找到安装树但读不出可用版本（没有 package.json / JSON 坏 / version 字段空或非版本串）
+    |                                               | SKIP：如实说找到哪棵树、清单里写的是什么，不作结论
+
+现有桥读版本项 name = "editor-version"（label 未改："编辑器版本 ≥ 3.2.183"）——**以桥读为准**：
+  # | 情形                                          | 判定
+  --+-----------------------------------------------+---------------------------------------
+  A | 桥没读到版本（扩展未连）                      | FAIL「未验证：没有读到编辑器版本」+ CONNECTOR_FIX（原行为不变）
+  B | 桥读到 ≥ floor，且与安装树一致（或安装树未知） | PASS
+  C | 桥读到 < floor，而安装树 ≥ floor（装了新版却跑着旧版；多为升级后没重启）
+    |                                               | FAIL，detail 同时点出两处版本，fix = "关掉编辑器（含所有窗口）重启；
+    |                                               |   重启后仍是旧版本就查 (Get-Process lceda-pro).Path"
+  D | 桥读到 ≥ floor，安装树更旧（磁盘上另有一棵旧树，没在用） | PASS + detail 注明"安装树…里是 X，不是正在跑的这个"
+  E | 桥读到 < floor（两处都旧）                    | FAIL + "升级立创 EDA Pro 到 3.2.183 以上（当前 …）"
+
+版本比较口径：只比**前三段**（_editor_version_key = _version_tuple(text)[:3]）。
+依据：安装树写 "3.2.186.b52e3e87"，sys.probe 报 "3.2.186"——同一版本；不截断会把健康机器报成版本不一致。
+四段解析已单测：3.2.149.88089769 → (3,2,149)。
+
+JSON 输出新增两个字段：versions.editorInstall（离线读到的版本）、versions.editorInstallPath（那棵树的路径）。
+
+
+§4 真机 doctor 输出
+---------------------------------------------------------------------
+
+[4] 编辑器在线（daemon 61190，connector connected，全部真机往返）——新项排第一且 PASS：
+    $ .venv/Scripts/python.exe -m boardwise.cli doctor
+      PASS 编辑器安装版本 ≥ 3.2.183（离线读安装目录，不用扩展）
+             安装树 D:\lceda-pro 的包清单写着 3.2.186.b52e3e87（离线读 resources/app/package.json，没有经过桥）
+      PASS daemon 可达（ping，daemon 无 HTTP /health）
+             127.0.0.1:61190 的 daemon 已应答 ping
+      PASS 扩展已连接（WebSocket 已注册到 daemon）
+             daemon 上注册着一个 connector，配对指纹 962bf45e
+      PASS sys.probe 关键方法在位
+             5/5 关键方法都是 function（dmt_Schematic.getCurrentSchematicPageInfo, dmt_Pcb.getCurrentPcbInfo, sch_PrimitiveComponent.getAll, dmt_EditorControl.openDocument, dmt_EditorControl.generateIndicatorMarkers）
+      PASS 编辑器版本 ≥ 3.2.183
+             编辑器 3.2.186
+      PASS daemon 版本与本机一致（新动作才不会『不认识』）
+             运行的 daemon 0.1.0，本机 boardwise 0.1.0
+      PASS 运行中的 connector 版本与仓库一致
+             编辑器里跑的是 connector 0.4.11，仓库里是 0.4.11
+      PASS 当前工程焦点可读
+             焦点工程：反激辅助电源（24cd40ce…，1 页原理图 / 1 个 PCB）；活动文档：无（宿主报占位读数 uuid=0：没有焦点文档，多窗口下常见）
+
+    boardwise doctor: 8/8 项通过
+    exit=0
+
+[5] issue 的原始场景：install.bat 已跑完、扩展还没连上（端口 61999 没有 daemon），
+    安装树是真机那棵 —— 修复前这一行是"未验证：没有读到编辑器版本（扩展未连接）→ 先让扩展连上"，
+    现在版本问题**当场就有答案**，而且独立于下面 7 项：
+    $ BOARDWISE_PORT=61999 ... -m boardwise.cli doctor --port 61999
+      PASS 编辑器安装版本 ≥ 3.2.183（离线读安装目录，不用扩展）
+             安装树 D:\lceda-pro 的包清单写着 3.2.186.b52e3e87（离线读 resources/app/package.json，没有经过桥）
+      FAIL daemon 可达（ping，daemon 无 HTTP /health）
+             连不上 127.0.0.1:61999：[WinError 1225] 远程计算机拒绝网络连接。
+             → 运行 `boardwise bridge start`（前台运行，保持窗口开着）；端口不是 61190 时用 --port 指明
+      FAIL 扩展已连接（WebSocket 已注册到 daemon）
+             未验证：daemon 都没连上
+             → 先让扩展连上：打开立创 EDA Pro，确认 boardwise 扩展已启用并在面板里可见（首页/原理图/PCB 菜单里有 boardwise，`About…` 应显示 connected），再重跑 `boardwise doctor`（若刚重启过编辑器，daemon 侧用 `boardwise bridge status` 复核）
+      FAIL sys.probe 关键方法在位   …（下略，四行同 CONNECTOR_FIX）
+      FAIL 编辑器版本 ≥ 3.2.183
+             未验证：没有读到编辑器版本（扩展未连接）   ← 旧的一行仍是"未验证"，没被新项取代
+      FAIL daemon 版本与本机一致（新动作才不会『不认识』）
+      FAIL 运行中的 connector 版本与仓库一致
+      FAIL 当前工程焦点可读
+
+    boardwise doctor: 1/8 项通过，7 项需要处理（上面的 → 就是建议）
+      先修第一项：daemon 可达（ping，daemon 无 HTTP /health）
+    exit=1
+
+[6] 旧版本编辑器（把 issue 报的那个版本做成安装树：3.2.149.88089769）+ 未连 —— FAIL 排第一、直给先升级：
+    $ BOARDWISE_EDITOR_INSTALL=.tmp_pt_022b_ev/oldtree ... doctor --port 61999
+      FAIL 编辑器安装版本 ≥ 3.2.183（离线读安装目录，不用扩展）
+             安装树 E:\boardwise\.tmp_pt_022b_ev\oldtree\lceda-pro 的包清单写着 3.2.149.88089769（离线读 resources/app/package.json，没有经过桥）
+             → 先升级编辑器到 ≥3.2.183，其余检查项都排在它后面——现在这一步就能做，不用管 daemon 和扩展。到 https://pro.easyeda.com/ 下载最新桌面版（装到哪儿都行，doctor 会自己找到），装完重启编辑器再重跑 `boardwise doctor`
+      FAIL daemon 可达（…）
+
+    boardwise doctor: 0/8 项通过，8 项需要处理（上面的 → 就是建议）
+      先修第一项：编辑器安装版本 ≥ 3.2.183（离线读安装目录，不用扩展）
+    exit=1
+    （说明：这台真机装着 3.2.186，无法真造"跑着旧版"；oldtree 是用 BOARDWISE_EDITOR_INSTALL
+      钉住的伪造安装树，版本号照抄 issue。真机那棵树在 [4][5] 里是真读。）
+
+[7] 离线找不到安装树 → SKIP，如实说扫过哪里，不假装红绿：
+    $ BOARDWISE_EDITOR_INSTALL=.tmp_pt_022b_ev/emptydir ... doctor --port 61999
+      SKIP 编辑器安装版本 ≥ 3.2.183（离线读安装目录，不用扩展）
+             跳过：离线没找到编辑器安装（扫过 E:\boardwise\.tmp_pt_022b_ev\emptydir）—— 这一项不作结论，版本留给下面的『编辑器版本』，那项要扩展连上才读得到
+      FAIL daemon 可达（…）
+
+    boardwise doctor: 1/8 项通过，7 项需要处理（上面的 → 就是建议）
+      先修第一项：daemon 可达（ping，daemon 无 HTTP /health）
+
+[8] 交叉复核（安装树 3.2.190 比跑着的 3.2.186 新，daemon 在线）：不一致被报出来，但没有假红
+      SKIP 编辑器安装版本 ≥ 3.2.183（离线读安装目录，不用扩展）
+             跳过：安装树 E:\boardwise\.tmp_pt_022b_ev\newtree\lceda-pro 是 3.2.190.b0，正在运行的编辑器报 3.2.186——两处不是同一个安装，本项不作结论（下面的『编辑器版本』以跑着的那个为准）
+      PASS daemon 可达（…）… PASS 编辑器版本 ≥ 3.2.183
+    boardwise doctor: 8/8 项通过
+
+[9] 磁盘上躺着一棵没在用的旧树（oldtree 3.2.149），跑着的是 3.2.186：报出不一致，在线项注明来源
+      SKIP 编辑器安装版本 ≥ 3.2.183（离线读安装目录，不用扩展）
+             跳过：安装树 E:\boardwise\.tmp_pt_022b_ev\oldtree\lceda-pro 是 3.2.149.88089769，正在运行的编辑器报 3.2.186——两处不是同一个安装，本项不作结论（下面的『编辑器版本』以跑着的那个为准）
+      PASS 编辑器版本 ≥ 3.2.183
+             编辑器 3.2.186（安装树 E:\boardwise\.tmp_pt_022b_ev\oldtree\lceda-pro 里是 3.2.149.88089769，不是正在跑的这个）
+    boardwise doctor: 8/8 项通过
+
+    [8][9] 是同一棵树在两种方向下的表现：只有"跑着的比装着的旧、且装着的那棵达标"
+    （语义表 C 行）才点红，因为那时该做的是重启而不是下载。
+    [4]–[9] 的原始转录留在 .tmp_pt_022b_ev/（01_probe/04_online/05_offline_only/06_old_tree/07_skip/08_mismatch/09_stale_tree）。
+
+
+§5 测试数字
+---------------------------------------------------------------------
+
+  $ .venv/Scripts/python.exe -m pytest tests/test_doctor.py -q --basetemp=.tmp_pt_022b
+    37 passed in 4.90s          （修复前该文件 23 个用例，本次新增 14 个）
+
+  $ .venv/Scripts/python.exe -m pytest tests/test_doctor.py tests/test_cli.py tests/test_bridge_cli.py \
+        tests/test_module_hygiene.py tests/test_api_names.py tests/test_review_mark_cli.py \
+        -q --basetemp=.tmp_pt_022b
+    108 passed in 18.56s
+
+  新用例清单（tests/test_doctor.py）：
+    - test_the_offline_line_comes_first_and_names_the_tree_it_read          排第一 + PASS 文案
+    - test_an_old_install_tree_is_red_before_anything_is_connected          语义 2（issue 的机器）
+    - test_an_old_editor_still_connected_is_red_on_both_version_lines       语义 2 + E
+    - test_an_unreadable_or_absent_install_tree_is_a_skip_not_a_verdict     语义 4 + 5
+    - test_a_manifest_without_a_usable_version_is_also_a_skip               语义 5（解析失败）
+    - test_the_four_field_version_is_compared_on_its_first_three_fields     四段解析 + 边界 3.2.183/3.2.182
+    - test_the_tree_newer_than_the_running_editor_asks_for_a_restart         语义 C（重启而非下载）
+    - test_a_second_stale_install_on_disk_is_a_note_not_a_red_line           语义 3 + D（无假红）
+    - test_scan_editor_install_reads_the_manifest_under_a_root              真实文件系统
+    - test_scan_editor_install_matches_the_vendors_naming_habit             glob 分支（LCEDA-Pro-2）
+    - test_scan_editor_install_tells_a_missing_tree_from_an_unreadable_one  "没找到" vs "找到没版本"
+    - test_scan_editor_install_survives_a_broken_manifest                   坏 JSON 不抛
+    - test_the_pinned_search_replaces_the_built_in_locations                环境变量优先级 + 内置位置形状
+    - test_the_cli_says_upgrade_before_anything_is_connected                子进程真 CLI：0/8 且首行是升级
+    另外 5 个既有用例随"多了一行"更新断言（行数 7→8、SKIP 计数、JSON checks 名列表），
+    其断言意图未变：
+    - test_a_working_installation_is_all_green
+    - test_nothing_listening_is_reported_per_line_with_a_fix
+    - test_doctor_without_a_daemon_exits_1_with_fixes（另加 versions.editorInstall 断言）
+    - test_the_cli_gathers_the_three_payloads_and_goes_green（PASS 7→8，并把搜索钉到自建安装树）
+    - test_a_daemon_that_answers_without_a_connector_still_reports_every_line（SKIP 0→1）
+    新增 autouse 夹具 _no_real_editor：把 BOARDWISE_EDITOR_INSTALL 钉到一个空目录，
+    保证这些用例的行数与"开发者本机装没装编辑器"无关。
+
+  独立变异抽验（cp 备份 → 改一行 → 测试必须红 → 还原 → sha256/cmp 字节一致）：
+    变异 A：`max(offline, running) >= EDITOR_API_FLOOR` → `running >= EDITOR_API_FLOOR`
+            → 1 failed（test_the_tree_newer_than_the_running_editor_asks_for_a_restart）
+    变异 B：`_version_tuple(text)[:EDITOR_VERSION_DEPTH]` → `_version_tuple(text)`
+            → 1 failed（test_the_four_field_version_is_compared_on_its_first_three_fields）
+    还原后 sha256 = 7f517a62bd05266af71d0fab5342e57141b2662a2dd39d7f26866471f4b12cd8（与备份 cmp 一致），
+    37 passed 复跑绿。
+
+
+§6 未做 / 需跟进
+---------------------------------------------------------------------
+
+  - docs/getting-started.md 里写的是"七项 / PASS 七行 / 7/7 项通过"（第 119/137/140/156 行），
+    现在是八行。本子代理只被授权改 cli.py + test_doctor.py，未动该文档 —— 需要主代理派一棒补文档。
+  - docs/install.md 的"第 5 步 命令行跑 boardwise doctor / 七行全绿"同理（该文件本轮已被 agent-35 改过）。
+  - connector 两线（npm test / npx tsc --noEmit）未跑：本次改动不涉及 connector 与 TypeScript。
+  - 「跑着的比装着的旧」在真机上无法构造（本机只有 3.2.186），该分支只由单测覆盖。

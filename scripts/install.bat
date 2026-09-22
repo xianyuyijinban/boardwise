@@ -2,7 +2,7 @@
 chcp 936 >nul 2>&1
 rem ============================================================================
 rem  boardwise 一键安装（Windows）
-rem  动作：检查 Python 3.10+ - 建 .venv - 装 boardwise - 跑 doctor - 打印下一步
+rem  动作：检查 Python 3.10+ - 建 .venv - 装 boardwise - 问一句开发依赖 - 跑 doctor
 rem  只动本仓库目录，不碰你的工程文件，也不改系统 PATH。
 rem  可以随便重跑：已经存在的 .venv 会被复用。
 rem  本文件是 ANSI/GBK 编码，第 2 行切到 936；两行都要留着，否则中文会乱。
@@ -35,7 +35,7 @@ if not exist "pyproject.toml" (
 )
 
 rem ---------------------------------------------------------------- 1. Python
-echo [1/5] 检查 Python，需要 3.10 或更高 ...
+echo [1/6] 检查 Python，需要 3.10 或更高 ...
 set "PY="
 py -3 -c "import sys; raise SystemExit(0 if sys.version_info[:2] >= (3,10) else 9)" >nul 2>&1
 if not errorlevel 1 set "PY=py -3"
@@ -58,7 +58,7 @@ echo        用这个：%PY%
 if defined PY %PY% -c "import sys; print('        版本：Python ' + '.'.join(str(n) for n in sys.version_info[:3]))"
 
 rem ---------------------------------------------------------------- 2. venv
-echo [2/5] 准备虚拟环境 .venv ...
+echo [2/6] 准备虚拟环境 .venv ...
 if exist ".venv\Scripts\python.exe" (
   echo        已经存在，直接复用：%ROOT%\.venv
 ) else (
@@ -85,7 +85,7 @@ if not exist ".venv\Scripts\python.exe" (
 set "VPY=%ROOT%\.venv\Scripts\python.exe"
 
 rem ---------------------------------------------------------------- 3. pip
-echo [3/5] 升级 pip ...
+echo [3/6] 升级 pip ...
 "%VPY%" -m pip install --upgrade pip
 if errorlevel 1 (
   echo        [提示] 升级 pip 没成功，继续往下走。
@@ -93,7 +93,7 @@ if errorlevel 1 (
 )
 
 rem ---------------------------------------------------------------- 4. 安装
-echo [4/5] 安装 boardwise：pip install -e .
+echo [4/6] 安装 boardwise：pip install -e .
 "%VPY%" -m pip install -e .
 if errorlevel 1 (
   echo.
@@ -112,8 +112,23 @@ if not exist ".venv\Scripts\boardwise.exe" (
   echo               .venv\Scripts\python.exe -m boardwise.cli
 )
 
-rem ---------------------------------------------------------------- 5. doctor
-echo [5/5] 跑 boardwise doctor ...
+rem ---------------------------------------------------------------- 5. dev
+echo [5/6] 开发依赖（可选）：跑测试要用 pytest
+set "DEV="
+set /p "DEV=      装开发依赖吗？按回车装，输入 n 跳过："
+if /i "%DEV%"=="n" (
+  echo        跳过。以后要跑测试时再敲：
+  echo              "%VPY%" -m pip install -e ".[dev]"
+) else (
+  "%VPY%" -m pip install -e ".[dev]"
+  if errorlevel 1 (
+    echo        [提示] 开发依赖没装上（多半是网络），不影响使用。
+    echo               要跑测试时再敲：.venv\Scripts\python.exe -m pip install -e ".[dev]"
+  )
+)
+
+rem ---------------------------------------------------------------- 6. doctor
+echo [6/6] 跑 boardwise doctor ...
 echo.
 "%VPY%" -m boardwise.cli doctor
 set "DOC=%ERRORLEVEL%"
