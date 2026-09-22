@@ -31,7 +31,7 @@ collects the current truth and the pointers.
   - `docs/images/gs-03-daemon-start.png`
   - `PROGRESS.md`
 
-## Current baseline (2026-09-22, working tree — 016/018/019 待提交)
+## Current baseline (2026-09-22, commit `15b3da2` + `a69906c` LICENSE; published on GitHub)
 
 - pytest: **1259 passed** (run with `--basetemp=.tmp_pt_home` on Windows —
   the host's safe-delete hook otherwise eats the summary line and fakes
@@ -74,3 +74,5 @@ point. Full measurement history: `tasks/010c-coordinate-convention.md`
 - `1798d7e` 013 real-host verification, connector 0.4.10
 - `501a2f4` 015 review rules M2 batch 1 (decoder guards + decoupling retired)
 - `5ff0a1d` 015 review rules M2 batch 2 (amplitude tolerances R 3x/C 25x + variant re-sign; M2 graduation: holdout 33/33 both 1.00)
+- `15b3da2` 016+018+019 combined (review-to-local-edit closed loop & friend-beta readiness)
+- `a69906c` MIT LICENSE; repo published: https://github.com/xianyuyijinban/boardwise
