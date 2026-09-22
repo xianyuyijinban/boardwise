@@ -27,10 +27,11 @@ from .core.changeplan import (
     resolve_on_page,
     sha256_of,
 )
+from .core.geometry import ParseStats
 from .parsers.enet import parse_enet
 from .parsers.epro2_model import build_design_model
 from .parsers.epru import EncryptedProjectError, build_board_geometry, load_epro2_source
-from .rules.i18n import EMPTY_PCB_VIEW_HINT, finding_line, summary_section
+from .rules.i18n import EMPTY_PCB_VIEW_HINT, finding_line, parse_drop_hint, summary_section
 
 #: Input extensions the reviewer understands, and what each one is.
 SUPPORTED_SUFFIXES: dict[str, str] = {
@@ -59,6 +60,37 @@ EMPTY_PCB_VIEW_NOTE = (
     "note: pcb view read nothing from this file — for a schematic review, "
     "re-run with --view schematic"
 )
+
+#: The tail every parse-drop note shares (task 020 §WI-1). The numbers are
+#: written by :func:`_parse_drop_note`; the *consequence* is one sentence in
+#: one place, because "coverage is incomplete" is the whole reason the note
+#: exists — a reader who is told only the counts will take the report as
+#: complete anyway.
+PARSE_DROP_NOTE_TAIL = " — review coverage is incomplete"
+
+
+def _parse_drop_note(pins_dropped: int, components_without_symbol: int) -> str:
+    """The console note for a schematic parse that dropped things, or ``""``.
+
+    English, like the rest of the console output, and printed only when a
+    counter is non-zero — a zero is not evidence here (the pcb view never fills
+    these counters at all, see :func:`_load_model`), so a note reading "0 pins
+    dropped" would be a claim about a parse that did not happen. A zeroed item
+    therefore contributes nothing instead of "0".
+
+    The two facts are separate claims and stay separately worded: a dropped pin
+    is a connection the reviewer never saw, a component without a symbol is a
+    whole part whose pins are all missing. Both mean the same thing to the
+    reader — the report under-covers this board — so both carry the same tail.
+    """
+    parts: list[str] = []
+    if pins_dropped:
+        parts.append(f"{pins_dropped} pin(s) dropped during parse (missing pin number)")
+    if components_without_symbol:
+        parts.append(f"{components_without_symbol} component(s) without a resolvable symbol")
+    if not parts:
+        return ""
+    return "note: " + " and ".join(parts) + PARSE_DROP_NOTE_TAIL
 
 
 def _bridge_help_epilog() -> str:
@@ -257,6 +289,14 @@ def build_parser() -> argparse.ArgumentParser:
     update.add_argument(
         "--yes", action="store_true",
         help="Skip the confirmation prompt (the editor page WILL reload).",
+    )
+    update.add_argument(
+        "--no-verify", action="store_true",
+        help=(
+            "Return as soon as the daemon accepted the write, without waiting "
+            "for the reloaded connector to report its version (the pre-020 "
+            "behaviour: exit 0 even if the old build is still answering)."
+        ),
     )
     bridge.add_argument(
         "--port", type=int, default=None, help="Daemon port (default 61190)."
@@ -820,7 +860,9 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _load_model(path: Path, *, view: str = "pcb") -> tuple[object, object | None]:
+def _load_model(
+    path: Path, *, view: str = "pcb", parse_stats: ParseStats | None = None
+) -> tuple[object, object | None]:
     """Return ``(DesignModel, BoardGeometry | None)`` for a supported input.
 
     ``view`` picks which model a ``.epro2`` backup yields: ``pcb`` (the
@@ -831,6 +873,14 @@ def _load_model(path: Path, *, view: str = "pcb") -> tuple[object, object | None
     ``.epro2``; both views come from one parse of the file. Raises
     :class:`EncryptedProjectError` for an unreadable backup and ``ValueError``
     for an unsupported extension.
+
+    ``parse_stats`` (task 020 §WI-1) is an optional caller-owned
+    :class:`boardwise.core.geometry.ParseStats` the schematic parse fills in.
+    Only the schematic view writes it: the pcb view's model comes from the PCB
+    document (:mod:`boardwise.parsers.epro2_model`), which never consults the
+    SYMBOL documents the two drop counters are about — its counters would read
+    0 by construction rather than by evidence, so it is left untouched and its
+    reader must not treat a zero as a measurement.
     """
     suffix = path.suffix.lower()
     if suffix == ".enet":
@@ -840,7 +890,7 @@ def _load_model(path: Path, *, view: str = "pcb") -> tuple[object, object | None
         if view == "schematic":
             from .parsers.schematic import build_schematic_model
 
-            return build_schematic_model(path), None
+            return build_schematic_model(path, parse_stats=parse_stats), None
         # One parse, two views: geometry and netlist stay consistent because
         # both read the same cached PCB context.
         return build_design_model(source), build_board_geometry(source)
@@ -1094,6 +1144,7 @@ def _chinese_summary(
     designators: set[str],
     *,
     empty_pcb_view: bool = False,
+    parse_drop_hint: str = "",
 ) -> str:
     """The Chinese summary section for a set of findings (task 018 §C.3).
 
@@ -1105,7 +1156,18 @@ def _chinese_summary(
     read a wrong view as a clean board. The wording lives in the i18n module
     with the rest of the Chinese; the trigger does not (it is
     :func:`_pcb_view_read_nothing`).
+
+    ``parse_drop_hint`` (task 020 §WI-1) is the same idea one step further: the
+    report's findings are found in a model that *lost* pins, so "共 N 条发现"
+    is not the whole truth either. Empty string when nothing was dropped
+    (``rules.i18n.parse_drop_hint`` builds it from the counters). Both hints can
+    in principle be asked for at once, and they are two paragraphs then — each
+    stays its own paragraph, which is what makes them read.
     """
+    hints = [
+        EMPTY_PCB_VIEW_HINT if empty_pcb_view else "",
+        parse_drop_hint,
+    ]
     return summary_section(
         [
             finding_line(
@@ -1117,7 +1179,7 @@ def _chinese_summary(
             for finding in findings
         ],
         counts,
-        hint=EMPTY_PCB_VIEW_HINT if empty_pcb_view else "",
+        hint="\n\n".join(paragraph for paragraph in hints if paragraph),
     )
 
 
@@ -1174,8 +1236,12 @@ def _cmd_review(args: argparse.Namespace) -> int:
     if source is None:
         return 2
     path = Path(source)
+    # The parse reports what it dropped into this (task 020 §WI-1); the model
+    # itself is unchanged, so `--json` and every rule's input are byte-for-byte
+    # what they were. Only the schematic view fills it — see `_load_model`.
+    parse_stats = ParseStats()
     try:
-        model, board = _load_model(path, view=args.view)
+        model, board = _load_model(path, view=args.view, parse_stats=parse_stats)
     except EncryptedProjectError as exc:
         print(f"boardwise: {exc}", file=sys.stderr)
         return 2
@@ -1189,6 +1255,11 @@ def _cmd_review(args: argparse.Namespace) -> int:
     # are two renderings of the same fact, and a change to the conditions must
     # not be able to make them disagree (task 019 §1, §2).
     empty_pcb_view = _pcb_view_read_nothing(path, args.view, model, board)
+    # Same rule for the drop counters: one pair of numbers, rendered once in
+    # English for the console and once in Chinese for the summary.
+    drop_note = _parse_drop_note(
+        parse_stats.pins_dropped_no_number, parse_stats.components_without_symbol
+    )
 
     print(
         f"boardwise review: {source} "
@@ -1216,7 +1287,14 @@ def _cmd_review(args: argparse.Namespace) -> int:
             "nets": len(model.nets),
         }
         summary = _chinese_summary(
-            findings, counts, set(model.components), empty_pcb_view=empty_pcb_view
+            findings,
+            counts,
+            set(model.components),
+            empty_pcb_view=empty_pcb_view,
+            parse_drop_hint=parse_drop_hint(
+                parse_stats.pins_dropped_no_number,
+                parse_stats.components_without_symbol,
+            ),
         )
         Path(args.md_path).write_text(
             _with_chinese_summary(render_markdown(findings, meta), summary),
@@ -1224,11 +1302,15 @@ def _cmd_review(args: argparse.Namespace) -> int:
         )
         print(f"Markdown report written to {args.md_path}")
 
-    # Last line of the console output, after the report paths: the note is the
-    # one thing a reader of an empty run has to act on, so it must not be
-    # buried between the census and a "written to" line.
+    # Last lines of the console output, after the report paths: a note is the
+    # one thing a reader has to act on, so it must not be buried between the
+    # census and a "written to" line. The two cannot fire together — the empty
+    # view is a pcb-view reading and the counters are a schematic-parse one —
+    # so neither has to concede being last.
     if empty_pcb_view:
         print(EMPTY_PCB_VIEW_NOTE)
+    if drop_note:
+        print(drop_note)
 
     return 1 if counts["ERROR"] else 0
 
@@ -2936,6 +3018,22 @@ def _cmd_parts_select(args: argparse.Namespace) -> int:
     return result.exit_code
 
 
+#: The verification phase's clock (task 020 §WI-2), read when the phase runs —
+#: not baked into a default argument — so a test can shrink it to nothing.
+#:
+#: One probe a second for thirty seconds. In practice the reloaded page
+#: re-pairs in a second or two, while a *closed* editor never comes back: the
+#: budget is what keeps that case from hanging a script, and thirty seconds is
+#: the point where "not back yet" stops being plausible. Nothing here is on a
+#: write path — the write has already landed, this only reads.
+UPDATE_VERIFY_INTERVAL_S = 1.0
+UPDATE_VERIFY_BUDGET_S = 30.0
+#: Settle time on top of the reply's own ``reloadInMs`` before the first probe.
+#: Without it the old build — still attached until its reload timer fires —
+#: answers with the *old* version, and a correct update reads as a mismatch.
+UPDATE_RELOAD_MARGIN_S = 0.5
+
+
 def _connector_artifacts() -> tuple[Path, Path]:
     """``(bundle, extension.json)`` paths of the in-repo connector build.
 
@@ -2986,6 +3084,23 @@ def _cmd_bridge_update_connector(args: argparse.Namespace) -> int:
     restart. The confirmation exists because the reload discards unsaved
     editor state; `--yes` is the scripting escape hatch, same convention as
     `draw` and `bridge call`.
+
+    **The command does not stop at "the daemon accepted the write"** (task 020
+    §WI-2). That reply says the bytes were stored, not that they are running —
+    it was a "fake success window": the old build keeps answering every action
+    perfectly. So after the write the command waits, bounded, for the connector
+    to come back and **read its version from the reconnected connector itself**
+    (:func:`_await_running_connector_version`), then compares it with the
+    version it just stored:
+
+    * matches → ``verified: running connector is now X.Y.Z``, exit 0;
+    * reconnected but a *different* version → the write did not take effect,
+      exit 1 (this is the evidence the window used to hide);
+    * never came back inside the budget → the state cannot be stated, exit 3 —
+      distinct from 1 on purpose, and named on stderr.
+
+    ``--no-verify`` restores the old behaviour (print "ok", return 0) for
+    callers that would rather poll themselves.
     """
     import asyncio
 
@@ -3069,14 +3184,123 @@ def _cmd_bridge_update_connector(args: argparse.Namespace) -> int:
             f"  ok: {data.get('oldVersion')} -> {data.get('newVersion')} "
             f"({data.get('bytes')} bytes written to {data.get('database')})"
         )
-        print(
-            "  the editor page is reloading now; the new build should "
-            "reconnect within seconds — verify with `boardwise bridge status` "
-            "or the About… menu (version line)"
+        if args.no_verify:
+            print(
+                "  the editor page is reloading now; the new build should "
+                "reconnect within seconds — verify with `boardwise bridge status` "
+                "or the About… menu (version line)"
+            )
+            return 0
+
+        expected = str(params["version"])
+        running = await _await_running_connector_version(
+            BridgeClient,
+            BridgeError,
+            port,
+            token,
+            reload_ms=data.get("reloadInMs") or 0,
+            interval_s=UPDATE_VERIFY_INTERVAL_S,
+            budget_s=UPDATE_VERIFY_BUDGET_S,
+            margin_s=UPDATE_RELOAD_MARGIN_S,
         )
+        if running is None:
+            print(
+                f"boardwise bridge update-connector: the connector did not come "
+                f"back within {UPDATE_VERIFY_BUDGET_S:.0f}s — the state of the "
+                f"write is UNKNOWN, not failed: the editor may be closed, or the "
+                f"page may still be reloading. Re-check with `boardwise bridge "
+                f"status` (or run doctor) before trusting either answer",
+                file=sys.stderr,
+            )
+            return 3
+        if running != expected:
+            print(
+                f"boardwise bridge update-connector: FAILED — the write stored "
+                f"{expected} but the connector answering is {running}: the update "
+                f"did not take effect (the editor may be running a different "
+                f"window's build; `boardwise bridge status` names the holder)",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"  verified: running connector is now {running}")
         return 0
 
     return asyncio.run(run())
+
+
+async def _running_connector_version(
+    BridgeClient, BridgeError, port: int, token: str
+) -> str | None:
+    """One read of the **running** connector's version, or ``None`` for "not yet".
+
+    ``sys.probe`` is the connector answering for itself (its ``connector``
+    field is the version compiled into the bundle it is executing) — the same
+    read `doctor` uses to compare the editor's build with the checkout's.
+
+    Everything that is not a version is ``None``: no daemon, no connector
+    attached yet, a connector that is mid-reload and cannot answer. That is the
+    ordinary state during the reload, not a fault, so it is not reported here —
+    the caller owns the deadline and the wording.
+    """
+    try:
+        client = await BridgeClient.open(
+            _bridge_uri(port), token, "cli", client="boardwise-cli"
+        )
+    except (OSError, BridgeError):
+        return None
+    try:
+        probe = await client.call("sys.probe")
+    except BridgeError:
+        return None
+    finally:
+        await client.close()
+    if not isinstance(probe, dict):
+        return None
+    return str(probe.get("connector") or "") or None
+
+
+async def _await_running_connector_version(
+    BridgeClient,
+    BridgeError,
+    port: int,
+    token: str,
+    *,
+    reload_ms: float,
+    interval_s: float,
+    budget_s: float,
+    margin_s: float,
+) -> str | None:
+    """Wait for the reloaded connector and return the version it reports.
+
+    The reload is on a timer — the ``sys.self_update`` reply carries it as
+    ``reloadInMs`` (500 in practice) — and until it fires the **old** build is
+    still attached and answers ``sys.probe`` with the *old* version. So the
+    first probe waits out that window plus a margin; probing immediately and
+    believing the answer would report a perfectly good update as a mismatch,
+    which is the one direction of error this phase must not have.
+
+    After that it is one probe per ``interval_s`` until ``budget_s`` runs out.
+    ``None`` means the budget expired with nothing to read — "unknown", which is
+    not the same claim as "failed".
+
+    The three timings are **required** keyword arguments rather than defaults
+    read from the module constants at import time: the caller
+    (:func:`_cmd_bridge_update_connector`) looks them up when it runs, which is
+    what lets a test shrink the clock to nothing and still exercise this exact
+    function (defaults would freeze the 30 s production budget into the test).
+    """
+    import asyncio
+    import time
+
+    deadline = time.monotonic() + budget_s
+    await asyncio.sleep(max(reload_ms, 0) / 1000.0 + margin_s)
+    while True:
+        version = await _running_connector_version(BridgeClient, BridgeError, port, token)
+        if version is not None:
+            return version
+        if time.monotonic() + interval_s >= deadline:
+            return None
+        await asyncio.sleep(interval_s)
 
 
 def _cmd_bridge_call(args: argparse.Namespace) -> int:

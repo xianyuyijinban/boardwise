@@ -382,7 +382,9 @@ def _split_page(records: list[Any]) -> tuple[list[_Instance], list[dict[str, Any
     return instances, loose, segments
 
 
-def _collect_symbols(records: list[Any]) -> dict[str, _SymbolDef]:
+def _collect_symbols(
+    records: list[Any], parse_stats: ParseStats | None = None
+) -> dict[str, _SymbolDef]:
     """Group SYMBOL documents into ``uuid -> pin number -> (point, ez key)``.
 
     Pin numbers are paired **by stream order**, not by ``parentId``: a ``PIN``
@@ -400,6 +402,11 @@ def _collect_symbols(records: list[Any]) -> dict[str, _SymbolDef]:
     the run closes, which is also why the runs are flushed at document
     boundaries. Getting this wrong silently attributes one pin's name to its
     neighbour, which is worse than an empty name because it looks like data.
+
+    ``parse_stats`` (task 020 §WI-1) is where a run that closes **without** a
+    number is counted. Such a pin is not in the symbol's pin map, so the whole
+    pin — name, position and every connection it makes — is dropped; that used
+    to be invisible. Counting changes nothing about the returned symbols.
     """
     symbols: dict[str, _SymbolDef] = {}
     current: _SymbolDef | None = None
@@ -413,12 +420,18 @@ def _collect_symbols(records: list[Any]) -> dict[str, _SymbolDef]:
     def flush() -> None:
         """Commit the open pin run, if any, to the current symbol."""
         nonlocal pin_open, pin_ez, run_number, run_name, run_type
-        if current is not None and pin_open is not None and run_number:
-            current.pins[run_number] = (pin_open, pin_ez or "")
-            if run_name:
-                current.pin_names[run_number] = run_name
-            if run_type:
-                current.pin_types[run_number] = run_type
+        if current is not None and pin_open is not None:
+            if run_number:
+                current.pins[run_number] = (pin_open, pin_ez or "")
+                if run_name:
+                    current.pin_names[run_number] = run_name
+                if run_type:
+                    current.pin_types[run_number] = run_type
+            elif parse_stats is not None:
+                # The run closed with a position but no number: the pin is
+                # dropped (there is no key to file it under). Counted, never
+                # guessed at — a name-only pin has no identity to key on.
+                parse_stats.pins_dropped_no_number += 1
         pin_open, pin_ez, run_number, run_name, run_type = None, None, "", "", ""
 
     for record in records:
@@ -487,7 +500,30 @@ class _UnionFind:
         return groups
 
 
-def build_pin_offsets(path: str | Path) -> dict[str, dict[str, Point]]:
+def _stats_for(
+    parse_stats: ParseStats | None, path: str | Path, meta: dict[str, Any]
+) -> ParseStats:
+    """One :class:`ParseStats` for this parse: the caller's, or a private one.
+
+    A caller that wants to read what a parse dropped hands its own object in
+    (task 020 §WI-1); the provenance fields are filled here because the source
+    path and the editor version only exist *after* the file is decoded. A
+    caller that does not care passes nothing and gets a throwaway — the
+    counters then cost one integer increment per drop and are discarded, which
+    is what every parse did before this existed.
+    """
+    if parse_stats is None:
+        return ParseStats(source=str(path), editor_version=meta.get("editorVersion"))
+    if not parse_stats.source:
+        parse_stats.source = str(path)
+    if not parse_stats.editor_version:
+        parse_stats.editor_version = meta.get("editorVersion")
+    return parse_stats
+
+
+def build_pin_offsets(
+    path: str | Path, *, parse_stats: ParseStats | None = None
+) -> dict[str, dict[str, Point]]:
     """Designator -> pin number -> *symbol-local* pin offset.
 
     The draw flow places every component unrotated and unmirrored, so a
@@ -498,13 +534,14 @@ def build_pin_offsets(path: str | Path) -> dict[str, dict[str, Point]]:
     (pins belong to symbols, not to the page primitive list).
 
     Coordinates are in the same units as the page (editor canvas units,
-    1:1 with the file — measured).
+    1:1 with the file — measured). ``parse_stats`` counts the drops; see
+    :func:`_stats_for`.
     """
     text, meta = load_epru_text(Path(path))
-    stats = ParseStats(source=str(path), editor_version=meta.get("editorVersion"))
+    stats = _stats_for(parse_stats, path, meta)
     records = _iter_schematic_records(text, stats)
     instances, _loose, _segments = _split_page(records)
-    symbols = _collect_symbols(records)
+    symbols = _collect_symbols(records, stats)
     device_meta = _collect_device_meta(records)
 
     offsets: dict[str, dict[str, Point]] = {}
@@ -516,6 +553,7 @@ def build_pin_offsets(path: str | Path) -> dict[str, dict[str, Point]]:
         # DEVICE META so their pins resolve like everyone else's.
         symbol_def = symbols.get(_symbol_uuid_of(inst, device_meta))
         if symbol_def is None:
+            stats.components_without_symbol += 1  # task 020 §WI-1: counted, not hidden
             continue
         offsets[designator] = {
             number: point for number, (point, _ez) in symbol_def.pins.items()
@@ -608,7 +646,7 @@ def collect_symbol_details(path: str | Path) -> dict[str, SymbolDetail]:
     text, meta = load_epru_text(Path(path))
     stats = ParseStats(source=str(path), editor_version=meta.get("editorVersion"))
     records = _iter_schematic_records(text, stats)
-    symbols = _collect_symbols(records)
+    symbols = _collect_symbols(records, stats)
 
     extents: dict[str, tuple[float, float, float, float]] = {}
 
@@ -716,19 +754,26 @@ def collect_part_placements(path: str | Path) -> dict[tuple[float, float], str]:
     return out
 
 
-def build_schematic_model(path: str | Path) -> DesignModel:
+def build_schematic_model(
+    path: str | Path, *, parse_stats: ParseStats | None = None
+) -> DesignModel:
     """Parse a schematic-only ``.epro2`` into a :class:`DesignModel`.
 
     Raises the same errors :func:`boardwise.parsers.epru.load_epro2_source`
     raises for unreadable or encrypted inputs; the CLI turns those into exit
     code 2 instead of a traceback.
+
+    ``parse_stats`` (task 020 §WI-1) is an optional caller-owned
+    :class:`ParseStats` the parse fills in as it goes, so a caller can report
+    what was dropped. The returned model is the same either way — the counters
+    are the only difference.
     """
     text, meta = load_epru_text(Path(path))
-    stats = ParseStats(source=str(path), editor_version=meta.get("editorVersion"))
+    stats = _stats_for(parse_stats, path, meta)
     records = _iter_schematic_records(text, stats)
 
     instances, loose, segments = _split_page(records)
-    symbols = _collect_symbols(records)
+    symbols = _collect_symbols(records, stats)
     device_meta = _collect_device_meta(records)
 
     model = DesignModel()
@@ -790,6 +835,11 @@ def build_schematic_model(path: str | Path) -> DesignModel:
                     mirror=inst.is_mirror, ox=inst.x, oy=inst.y,
                 )
                 pins.append((number, page_point, ez, symbol_def.pin_names.get(number, "")))
+        else:
+            # No symbol document behind this placement: the component is in the
+            # model but carries no pins at all, so nothing it connects can be
+            # checked. Counted (task 020 §WI-1) — the model itself is unchanged.
+            stats.components_without_symbol += 1
         placed.append((inst, component, pins))
 
     # --- connectivity graph
@@ -869,6 +919,11 @@ def build_schematic_model(path: str | Path) -> DesignModel:
         # net at the library symbol's pin position.
         symbol_def = symbols.get(_symbol_uuid_of(inst, device_meta))
         if symbol_def is None:
+            # A flag with a net name but no symbol: it cannot anchor anything,
+            # and every wire it was meant to name keeps its auto-name. Counted
+            # with the parts pass (task 020 §WI-1) — one counter for "this
+            # placement has no symbol behind it", whether it is a part or a flag.
+            stats.components_without_symbol += 1
             continue
         for _number, (point, _ez) in symbol_def.pins.items():
             page_point = _transform_point(

@@ -1,0 +1,219 @@
+020 WI-1 交卷证据：解析器静默丢脚可观测化
+============================================================================
+日期：2026-09-22  工作目录：E:\boardwise  Python：.venv/Scripts/python.exe
+纪律：只跑子集（未跑全量，全量由 Kimi 复验跑）；未动 git；未动 tests/fixtures/（只读）；
+      未动 outputs/011e*|014_*|015b_*|016_*；新证据写 outputs/020_*。
+
+改了什么
+--------------------------------------------------------------------------
+1) src/boardwise/core/geometry.py（ParseStats）
+   + pins_dropped_no_number: int = 0      # PIN 记录收尾时没有 Pin Number
+   + components_without_symbol: int = 0   # symbol 文档没解析到（整器无脚）
+   两个键也进了 as_dict()（键序按字段声明序，插在 malformed_records 之后）。
+   该方法的唯一既有用法是 tests/test_epru_parser.py:362 读 "pcb_records"，加键不影响它。
+
+2) src/boardwise/parsers/schematic.py
+   + 新增私有 helper `_stats_for(parse_stats, path, meta)`：调用方给对象就用它（顺带补
+     source/editor_version），没给就用一次性的私有对象 —— 老行为，零开销。
+   + `_collect_symbols(records, parse_stats=None)`：flush() 里由
+     `if ... and run_number:` 改写成 `if current is not None and pin_open is not None:` +
+     `if run_number: ... elif parse_stats is not None: parse_stats.pins_dropped_no_number += 1`。
+     **返回值一个字节没变**（下面有 HEAD vs 改后逐模型比对）。
+   + `build_pin_offsets(path, *, parse_stats=None)`：:518 的 `symbol_def is None` 分支计数。
+   + `build_schematic_model(path, *, parse_stats=None)`：器件段（原 :784）与电源旗标段
+     （原 :871）两处 `symbol_def is None` 计数，随后照旧 continue / 空 pins。
+   + `collect_symbol_details` 把它自己那个 stats 传进 `_collect_symbols`（局部对象，
+     数字不外泄，只为"收集符号处一律计数"这一条不出现例外）。
+
+3) src/boardwise/rules/i18n.py
+   + `parse_drop_hint(pins_dropped, components_without_symbol) -> str`（中文文案；两项都 0 返回空串）。
+     文案定稿（两项都非 0 时）：
+     提示：解析中有N 个引脚因缺少引脚号被丢弃、M 个器件未能解析符号——审查覆盖不完整，结果可能漏报。
+
+4) src/boardwise/cli.py
+   + `PARSE_DROP_NOTE_TAIL = " — review coverage is incomplete"` 与
+     `_parse_drop_note(pins_dropped, components_without_symbol) -> str`（英文控制台 note；0 项不出现）。
+     文案定稿（两项都非 0 时）：
+     note: N pin(s) dropped during parse (missing pin number) and M component(s) without a
+     resolvable symbol — review coverage is incomplete
+   + `_load_model(path, *, view, parse_stats=None)`：schematic 视图把 stats 传下去；
+     pcb 视图不写（见下面"覆盖范围"）。
+   + `_chinese_summary(..., parse_drop_hint="")`：hint 变成"若干段"，空段不出现（019 的空读提示
+     逻辑原样保留；两段都非空时按 `\n\n` 分开，各自成段）。
+   + `_cmd_review`：建一个 `ParseStats()`、传给 `_load_model`、控制台末尾按需打印 note、
+     `--md` 的中文摘要按需带提示。
+
+`--json` 不变
+--------------------------------------------------------------------------
+`--json` 只走 `render_json(findings)`，本次改动没有碰它，也没有碰 finding/severity_counts。
+测试用两条钉住：文件字节 == `render_json(run_review(build_schematic_model(fixture)))`，
+以及"带 --md 与不带 --md 的两次 --json 字节相同"（见下）。
+
+覆盖范围（如实说明）
+--------------------------------------------------------------------------
+* schematic 视图（`--view schematic`）：两个计数都会填，note 会出。
+* pcb 视图（`.epro2` 缺省）：**不填**。该视图的模型来自 PCB 文档
+  （parsers/epro2_model.py），它根本不读 SYMBOL 文档 —— 那三条丢脚路径在这个通路上不存在，
+  计数"恒 0"是结构决定的、不是量出来的。所以 `_load_model` 不往那里塞统计，
+  `_parse_drop_note` 也不把 0 当作"没丢东西"的证据渲染（0 的项一律不出现）。
+  这一点由测试 test_the_pcb_view_never_fills_the_drop_counters 与
+  test_the_pcb_view_of_the_same_file_gets_no_note 钉住（同一份 llc 文件：schematic 报 14，
+  pcb 一个字都不说 —— 在 pcb 视图里那句"覆盖不完整"会是假话）。
+* `.enet` 输入：不经过本解析器，不涉及。
+
+实测计数（只读使用夹具）
+--------------------------------------------------------------------------
+$ .venv/Scripts/python.exe -m boardwise.cli review tests/fixtures/llc_board.epro2 --view schematic
+boardwise review: tests/fixtures/llc_board.epro2 (47 components, 40 nets)
+findings: 0 ERROR, 0 WARN, 0 INFO
+note: 14 pin(s) dropped during parse (missing pin number) — review coverage is incomplete
+
+  ⚠ 与任务书预期（"实测 7"）不一致，如实报：**实测 14**。原因是这份文件里那份晶体管阵列
+  SYMBOL 文档出现了两次（uuid 68f4d86f5f182974 与 510729142f8ef815），每份 7 个无名号但有
+  名脚的 PIN（Q1G/Q1S/Q2G/Q2S/Q3G/Q3S/Q4G），7×2=14。任务书写的"某符号 10 条 PIN 丢 7 条"
+  是**单份符号**的数，全文件的数翻倍。测试断言因此按任务书要求写 `>= 1`，但仍附一条
+  `== 14`（实测值）以便变化时立刻可见；若日后库件修好这两个符号，这两条断言要一起改。
+  components_without_symbol 在全部 7 份夹具上都是 0（三条 symbol_def is None 路径在真机上没被踩到，
+  合成用例才覆盖）。
+
+$ review "tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2" --view schematic
+boardwise review: ... (121 components, 85 nets)
+findings: 30 ERROR, 1 WARN, 12 INFO
+（**无 note**：pins_dropped_no_number=0、components_without_symbol=0 —— 与任务书预期一致）
+毕设板 counts: 121 器件 / 85 网络 / 414 脚 / 丢脚 0 / 丢符号 0。
+
+$ review tests/fixtures/ch340_golden.epro2 --view schematic
+boardwise review: ... (17 components, 13 nets)
+findings: 0 ERROR, 1 WARN, 0 INFO
+（**无 note**）
+
+7 份夹具的计数（identity_check.py 输出，见 .tmp_020work/identity_raw.txt）：
+  llc_board.epro2                        丢脚 14  丢符号 0   47 器件 / 40 网络 / 111 脚
+  ch340_golden.epro2                     丢脚  0  丢符号 0   17 器件 / 13 网络 /  66 脚
+  ProPrj_毕设FOC驱动板_2026-09-17.epro2   丢脚  0  丢符号 0  121 器件 / 85 网络 / 414 脚
+  ProPrj_CH340G_2026-09-13.epro2         丢脚  0  丢符号 0   17 器件 / 13 网络 /  66 脚
+  ProPrj_ROBOT ctrl FOC_2026-09-16.epro2 丢脚  0  丢符号 0   44 器件 / 57 网络 / 197 脚
+  ProPrj_智能药箱_2026-09-17.epro2        丢脚  0  丢符号 0   43 器件 / 40 网络 / 205 脚
+  ProPrj_高速电机控制器_2026-09-16.epro2  丢脚  0  丢符号 0   85 器件 /113 网络 / 445 脚
+
+解析结果逐字节不变（"只多计数"的直接证据）
+--------------------------------------------------------------------------
+方法：`git show HEAD:src/boardwise/parsers/schematic.py > .tmp_020work/origpkg/bwo/schematic_orig.py`
+（**只读** git 命令，未动工作树），把 HEAD 版与改后版并排 import，对 7 份夹具跑
+`build_schematic_model` 与 `build_pin_offsets` 并比较：
+  * dataclass `==`（DesignModel/Component/Net/Pin 都是 dataclass，逐字段比较）；
+  * 规范化 JSON digest（sha256：器件全字段 + 每脚 number/name/net + 网络端子 + duplicate_designators）。
+7 份夹具 × 2 个入口全部 `equal=True digest=True`，判定 **IDENTICAL**（原始输出：.tmp_020work/identity_raw.txt）。
+HEAD 版副本 sha256：8d57ba3e1b454a866fdf15d98600a64571c8a1b33f3a623419dc6e982eaaf833
+
+新增测试 tests/test_020_parse_drops.py（12 条，全绿）
+--------------------------------------------------------------------------
+1  test_the_llc_schematic_review_says_what_the_parse_dropped   real fixture：note 在最后一行、
+   计数 ==14 且 ≥1、不许提器件那半句
+2  test_the_parse_count_is_what_the_parser_counts             解析器自己数的数 == CLI 报的数
+3  test_the_md_summary_carries_the_chinese_hint               --md 中文提示出现且位置正确（结论行之后、
+   英文正文之前）
+4  test_a_pin_without_a_number_is_counted_not_silently_dropped 合成：缺 Pin Number 的 PIN → 计数 1 +
+   控制台 note（编号的那个脚仍在模型里）
+5  test_a_component_without_a_resolvable_symbol_is_counted     合成：symbol uuid 无文档 → 计数 1 +
+   note，且该器件照旧空脚
+6  test_the_console_note_joins_both_facts_and_omits_the_absent_one  文案拼装/0 项不出现（中英两侧）
+7  test_a_synthetic_backup_with_both_defects_says_both         合成：两项各 1 → 一句话说两件事
+8  test_a_healthy_export_gets_no_note_at_all                   ch340 金色板：控制台/中文摘要都无字样
+9  test_the_json_report_is_the_untouched_for_findings_render    --json 字节 == render_json(run_review(model))
+10 test_the_json_is_byte_identical_with_and_without_the_markdown
+11 test_the_pcb_view_never_fills_the_drop_counters             覆盖范围边界（结构性 0）
+12 test_the_pcb_view_of_the_same_file_gets_no_note              同一文件的 pcb 视图不说话
+
+合成用例的做法：手写 `.epru` 记录流装进真 ZIP（zipfile.writestr("board.epru", ...)），
+经 `.epro2` 归档 → `load_epru_text` → 解析器，全程走真实通路，不 mock 解析器。
+
+子集测试（最终版本落盘、三次变异均已还原之后跑的）
+--------------------------------------------------------------------------
+$ .venv/Scripts/python.exe -m pytest tests/test_020_parse_drops.py tests/test_bridge_cli.py \
+      tests/test_bridge.py tests/test_019_empty_board_hint.py tests/test_018_cli_review.py \
+      tests/test_review_eval.py -q --basetemp=.tmp_pt_020
+163 passed in 13.22s
+（tests/test_020_parse_drops.py 单独跑：12 passed）
+
+另外补跑了改动直接触及符号的既有文件（不是全量）：
+$ .venv/Scripts/python.exe -m pytest tests/test_013_symbol_fallback.py tests/test_epru_parser.py \
+      tests/test_epro2_model.py tests/test_016_edit_cli.py tests/test_board_source.py -q --basetemp=.tmp_pt_020
+148 passed in 6.61s
+
+变异验证（cp 备份 + sha256 还原；未用 git checkout）
+--------------------------------------------------------------------------
+交付基线（变异前记录，备份目录 .tmp_020work/ —— 不放 --basetemp 目录，原因见末尾事故记录）：
+  324f1cc2d43773f29828fac22fb8866796b71fc7fc00cf41e7de090e7b96f6d3 *src/boardwise/parsers/schematic.py
+  ed45f7577b64b7003d9becca33ec5a886a0a5739bb73b32001060f853a57705c *src/boardwise/cli.py
+
+变异 A（WI-1 计数）：src/boardwise/parsers/schematic.py `_collect_symbols.flush()`
+  `elif parse_stats is not None:` → `elif parse_stats is None:`（单 token，计数永不发生）
+  结果：CAUGHT —— tests/test_020_parse_drops.py **5 failed, 7 passed**
+    FAILED test_the_llc_schematic_review_says_what_the_parse_dropped
+    FAILED test_the_parse_count_is_what_the_parser_counts
+    FAILED test_the_md_summary_carries_the_chinese_hint
+    FAILED test_a_pin_without_a_number_is_counted_not_silently_dropped
+    FAILED test_a_synthetic_backup_with_both_defects_says_both
+  还原：cp .tmp_020work/schematic.py.bak src/boardwise/parsers/schematic.py
+        sha256 = 324f1cc2d43773f29828fac22fb8866796b71fc7fc00cf41e7de090e7b96f6d3（与基线逐字节一致）
+        复跑：12 passed
+
+变异 C（WI-1 渲染）：src/boardwise/cli.py `_cmd_review` 末段
+  `if drop_note:` → `if False:  # MUTATION C`（计数在，话不说）
+  结果：CAUGHT —— tests/test_020_parse_drops.py + tests/test_019_empty_board_hint.py
+        **4 failed, 19 passed**
+    FAILED test_the_llc_schematic_review_says_what_the_parse_dropped
+    FAILED test_a_pin_without_a_number_is_counted_not_silently_dropped
+    FAILED test_a_component_without_a_resolvable_symbol_is_counted
+    FAILED test_a_synthetic_backup_with_both_defects_says_both
+    （019 的 11 条一条没红：空读提示通路未被波及）
+  还原：cp .tmp_020work/cli.py.bak src/boardwise/cli.py
+        sha256 = ed45f7577b64b7003d9becca33ec5a886a0a5739bb73b32001060f853a57705c（与基线一致）
+        复跑：23 passed
+
+事故记录（如实报）
+--------------------------------------------------------------------------
+第一轮变异 A 的备份放在 `.tmp_pt_020/`（= --basetemp 目录）里，随后那次 pytest 运行**清空了
+该目录**（pytest 启动时会清 basetemp），备份随之消失；当时源码还停在变异态。
+恢复办法：按记录在案的变异前 sha256（第一个 Bash 调用已 tee 出来）用 Edit 把那一行改回，
+比对 hash 得 324f1cc2… == 基线值，逐字节复原（identity_check 与 12 条测试随后复跑通过）。
+后续备份全部改放 `.tmp_020work/`（同样被 .gitignore 覆盖，但不会被 pytest 清），
+变异 B/C 都是标准 cp → sha256 复原路径。**结论不受影响，但这是一次真实的过程失误，记在此处。**
+
+============================================================================
+附：交付版本最终 sha256（2026-09-22 收尾核对，与 .tmp_020work/final_hashes.txt 逐字节一致）
+============================================================================
+22f5773ba809aab8fd8f2301c1bf6baad4630bd89f4e202ad239238b7bbacb78 *src/boardwise/cli.py
+324f1cc2d43773f29828fac22fb8866796b71fc7fc00cf41e7de090e7b96f6d3 *src/boardwise/parsers/schematic.py
+1655e5ce8e091eac849f4e1c735c6bfed9bfbd4703940e92b336ca7bd7787056 *src/boardwise/core/geometry.py
+ac4061263db46b273e7defd582b51c0389fdd5f60673f85ea2f691bd5f6c7d2a *src/boardwise/rules/i18n.py
+21180053a06a83567d3f1546e7ede387f94e8880adf914165e5e8b19c650f1ef *tests/test_020_parse_drops.py
+e643c8d3c2ab8a58c6e1188a73b05328b7c3f13f43756f9f3b87dd43151086bf *tests/test_bridge_cli.py
+（docs/bridge.md 亦有改动；证据文件本身不参与代码路径，未列。）
+
+勘误/补充：变异 B、C 的第一次记录是在 cli.py = ed45f757… 那一版上做的；此后 cli.py 只做了一处
+**纯改名**（`_chinese_summary` 里 `"".join(hint for hint in hints ...)` 的迭代变量改名为 `paragraph`，
+不触及任何被断言的行为，改名原因：与 `hint=` 关键字同名易误读）。为了让"变异验证跑在交付字节上"
+这句话无懈可击，B、C 已在**最终版 cli.py（22f5773b…）**上重跑一遍，结果与记录一致：
+
+  变异 B'（`if running != expected:` → `if False:`，最终版）
+    .venv/Scripts/python.exe -m pytest tests/test_bridge_cli.py -q --basetemp=.tmp_pt_020 -k update_connector
+    → 1 failed, 10 passed, 17 deselected
+      FAILED test_update_connector_reports_a_connector_that_did_not_take_the_update（assert 0 == 1）
+    → cp .tmp_020work/cli.py.final src/boardwise/cli.py
+    → sha256 = 22f5773ba809aab8fd8f2301c1bf6baad4630bd89f4e202ad239238b7bbacb78（与最终版一致）
+
+  变异 C'（`if drop_note:` → `if False:`，最终版）
+    .venv/Scripts/python.exe -m pytest tests/test_020_parse_drops.py tests/test_019_empty_board_hint.py \
+        -q --basetemp=.tmp_pt_020
+    → 4 failed, 19 passed（同上面 C 的四条；019 的 11 条未受波及）
+    → cp .tmp_020work/cli.py.final src/boardwise/cli.py → sha256 同上，一致
+
+  变异 A 的靶点文件 schematic.py 自变异 A 之后**一字未动**（324f1cc2… == 变异前基线），故无需重跑。
+
+收尾复跑（六个文件全部回到最终哈希之后）：
+$ .venv/Scripts/python.exe -m pytest tests/test_020_parse_drops.py tests/test_bridge_cli.py \
+      tests/test_bridge.py tests/test_019_empty_board_hint.py tests/test_018_cli_review.py \
+      tests/test_review_eval.py -q --basetemp=.tmp_pt_020
+163 passed in 13.79s

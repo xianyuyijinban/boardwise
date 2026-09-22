@@ -427,6 +427,7 @@ def _update_args(**over):
         bundle=None,
         version=None,
         yes=True,
+        no_verify=False,
         port=None,
     )
     base.update(over)
@@ -434,10 +435,34 @@ def _update_args(**over):
 
 
 class _RecordingClient:
-    """Stands in for ``BridgeClient``: records the calls, answers a canned payload."""
+    """Stands in for ``BridgeClient``: records the calls, answers a canned payload.
+
+    Two actions are answered because task 020 §WI-2 made the command read one
+    after the other: ``sys.self_update`` returns the write's own reply, and
+    ``sys.probe`` stands for the **reconnected** connector naming the build it
+    is running. Two knobs describe what comes back from that second read:
+
+    * ``running_version`` — an explicit version, for the tests that need the
+      connector to disagree with the write; ``None`` (the default) echoes the
+      version the last ``sys.self_update`` stored, i.e. "the update worked";
+    * ``reconnect`` — ``False`` makes ``sys.probe`` answer ``NO_CONNECTOR``,
+      which is what the daemon says when nothing is attached: the reload has not
+      finished, or the editor is closed. The CLI has to read that as "not yet"
+      and let its deadline decide, never as "the new build is 0.0.0".
+    """
 
     opened = None
     calls: list = []
+    #: Explicit version for the reconnected connector, or ``None`` to echo the write.
+    running_version: str | None = None
+    #: ``False``: nothing is attached (``sys.probe`` → ``NO_CONNECTOR``).
+    reconnect: bool = True
+    #: The version the last ``sys.self_update`` stored — what a successful
+    #: update leaves behind, and what ``sys.probe`` echoes when
+    #: ``running_version`` is ``None``.
+    stored_version: str = "0.4.3"
+    #: The reload timer the reply carries (the connector really sends 500).
+    reload_in_ms: int = 500
 
     @classmethod
     async def open(cls, uri, token, role, client=None):
@@ -448,13 +473,24 @@ class _RecordingClient:
         type(self).calls.append((action, params))
         import base64
 
+        if action == "sys.probe":
+            from boardwise.bridge.protocol import BridgeError, ErrorCodes
+
+            if not type(self).reconnect:
+                raise BridgeError(ErrorCodes.NO_CONNECTOR, "no connector is connected")
+            reported = type(self).running_version
+            if reported is None:
+                reported = type(self).stored_version
+            return {"version": "3.2.186", "connector": reported}
+
+        type(self).stored_version = params["version"]
         return {
             "ok": True,
             "oldVersion": "0.4.2",
             "newVersion": params["version"],
             "bytes": len(base64.b64decode(params["bundleB64"])),
             "database": "User_team-7_v6",
-            "reloadInMs": 500,
+            "reloadInMs": type(self).reload_in_ms,
         }
 
     async def close(self):
@@ -469,8 +505,32 @@ def update_env(monkeypatch, tmp_path):
 
     _RecordingClient.opened = None
     _RecordingClient.calls = []
+    _RecordingClient.running_version = None
+    _RecordingClient.reconnect = True
+    _RecordingClient.stored_version = "0.4.3"
+    _RecordingClient.reload_in_ms = 500
     monkeypatch.setattr(client_module, "BridgeClient", _RecordingClient)
     return tmp_path
+
+
+@pytest.fixture
+def fast_verify(monkeypatch):
+    """Shrink the verification phase's clock (task 020 §WI-2) to nothing.
+
+    The command reads these three at call time on purpose, so a test can run
+    the real phase — real probes, real deadline arithmetic — in milliseconds
+    instead of waiting out the 30 s budget. The reload timer goes to 0 as well,
+    so nothing sleeps; the *rule* the timer encodes ("do not read the version
+    before the reload has fired") is pinned on its own further down, where it
+    can be measured properly.
+    """
+    import boardwise.cli as cli_module
+
+    monkeypatch.setattr(cli_module, "UPDATE_VERIFY_INTERVAL_S", 0.01)
+    monkeypatch.setattr(cli_module, "UPDATE_VERIFY_BUDGET_S", 0.2)
+    monkeypatch.setattr(cli_module, "UPDATE_RELOAD_MARGIN_S", 0.0)
+    monkeypatch.setattr(_RecordingClient, "reload_in_ms", 0)
+    return cli_module
 
 
 def test_update_connector_parses_its_arguments():
@@ -479,11 +539,16 @@ def test_update_connector_parses_its_arguments():
     args = build_parser().parse_args(["bridge", "update-connector"])
     assert args.bridge_command == "update-connector"
     assert args.bundle is None and args.version is None and args.yes is False
+    # Verification is on by default (task 020 §WI-2); `--no-verify` turns it off.
+    assert args.no_verify is False
 
     args = build_parser().parse_args(
         ["bridge", "update-connector", "--bundle", "b.js", "--version", "9.9.9", "--yes"]
     )
     assert (args.bundle, args.version, args.yes) == ("b.js", "9.9.9", True)
+
+    args = build_parser().parse_args(["bridge", "update-connector", "--no-verify"])
+    assert args.no_verify is True
 
 
 def test_update_connector_defaults_point_at_the_repo_build():
@@ -538,7 +603,153 @@ def test_update_connector_sends_sys_self_update_with_the_bundle(update_env, tmp_
     assert params["version"] == "0.4.3"
     out = capsys.readouterr().out
     assert "0.4.2 -> 0.4.3" in out
+    # The contract 020 upgraded: the command no longer stops at the write's own
+    # reply (that only says "stored", and the OLD build goes on answering every
+    # action perfectly). It reads the *running* connector's version back and
+    # says so — and the old wording that told the reader to go and check
+    # themselves is gone with it.
+    assert "verified: running connector is now 0.4.3" in out
+    assert "reloading" not in out
+    assert [action for action, _ in _RecordingClient.calls] == ["sys.self_update", "sys.probe"]
+    # Read after the write, and from the connector itself (`sys.probe`), not
+    # from the write's echo of its own input.
+    assert _RecordingClient.calls[1][1] is None
+    assert _RecordingClient.opened is not None, "the read needs its own connection"
+
+
+def test_update_connector_reports_a_connector_that_did_not_take_the_update(
+    update_env, fast_verify, capsys
+):
+    # The fake-success window, made loud: the write stored 0.4.3 and the
+    # connector answering is still 0.4.2. 020's whole point is that this exits 1
+    # with the two versions named, instead of printing "ok" and returning 0.
+    from boardwise.cli import _cmd_bridge_update_connector
+
+    bundle = update_env / "b.js"
+    bundle.write_bytes(b"x")
+    _RecordingClient.running_version = "0.4.2"
+
+    code = _cmd_bridge_update_connector(
+        _update_args(bundle=str(bundle), version="0.4.3", yes=True)
+    )
+
+    assert code == 1
+    captured = capsys.readouterr()
+    assert "verified" not in captured.out
+    assert "0.4.2 -> 0.4.3" in captured.out, "the write's own reply is still reported"
+    assert "FAILED" in captured.err and "0.4.3" in captured.err and "0.4.2" in captured.err
+    assert "did not take effect" in captured.err
+
+
+def test_update_connector_calls_a_timeout_unknown_not_failed(
+    update_env, fast_verify, capsys
+):
+    # Nothing came back inside the budget (editor closed, or still reloading):
+    # the honest answer is exit 3 = "cannot state", never 0 and never 1.
+    from boardwise.cli import _cmd_bridge_update_connector
+
+    bundle = update_env / "b.js"
+    bundle.write_bytes(b"x")
+    _RecordingClient.reconnect = False
+
+    code = _cmd_bridge_update_connector(
+        _update_args(bundle=str(bundle), version="0.4.3", yes=True)
+    )
+
+    assert code == 3
+    out = capsys.readouterr()
+    assert "verified" not in out.out
+    assert "UNKNOWN, not failed" in out.err
+    assert "boardwise bridge status" in out.err
+    # It waited and retried rather than giving up on the first read.
+    assert [action for action, _ in _RecordingClient.calls].count("sys.probe") > 1
+
+
+def test_update_connector_no_verify_restores_the_old_behaviour(
+    update_env, tmp_path, capsys
+):
+    # `--no-verify` is the escape hatch: same write, no read-back, no waiting —
+    # and it must not even open the second connection.
+    from boardwise.cli import _cmd_bridge_update_connector
+
+    bundle = tmp_path / "custom.js"
+    bundle.write_bytes(b"x")
+    _RecordingClient.reconnect = False  # would be exit 3 if the phase ran
+
+    code = _cmd_bridge_update_connector(
+        _update_args(bundle=str(bundle), version="0.4.3", yes=True, no_verify=True)
+    )
+
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "0.4.2 -> 0.4.3" in out
     assert "reloading" in out
+    assert "verified" not in out
+    assert [action for action, _ in _RecordingClient.calls] == ["sys.self_update"]
+
+
+def test_update_connector_verifies_a_rebuild_of_the_same_version(update_env, fast_verify, capsys):
+    from boardwise.cli import _cmd_bridge_update_connector
+
+    bundle = update_env / "b.js"
+    bundle.write_bytes(b"x")
+
+    code = _cmd_bridge_update_connector(
+        _update_args(bundle=str(bundle), version="0.4.11", yes=True)
+    )
+
+    assert code == 0
+    assert "verified: running connector is now 0.4.11" in capsys.readouterr().out
+
+
+def test_the_verify_phase_waits_out_the_reload_before_it_reads(monkeypatch):
+    """The trap this phase was born with: the OLD build answers first.
+
+    The reload sits on a ~500 ms timer, so a probe sent immediately after the
+    write is answered by the build that is about to be replaced — reading that
+    as "the update failed" would call a perfectly good update a failure. So the
+    first read happens only after ``reloadInMs`` plus the margin. Measured with
+    a real clock but a wide margin, because the property is an ordering, not a
+    duration.
+    """
+    import asyncio
+    import time
+
+    from boardwise.cli import _await_running_connector_version
+
+    reads: list[float] = []
+
+    class Client:
+        @classmethod
+        async def open(cls, uri, token, role, client=None):
+            return cls()
+
+        async def call(self, action, params=None):
+            reads.append(time.monotonic())
+            return {"connector": "0.4.3"}
+
+        async def close(self):
+            return None
+
+    from boardwise.bridge.protocol import BridgeError
+
+    started = time.monotonic()
+    version = asyncio.run(
+        _await_running_connector_version(
+            Client,
+            BridgeError,
+            61190,
+            "t",
+            reload_ms=120,
+            interval_s=0.01,
+            budget_s=1.0,
+            margin_s=0.08,
+        )
+    )
+
+    assert version == "0.4.3"
+    assert len(reads) == 1, "the first answer is authoritative"
+    assert reads[0] - started >= 0.19, "read before the reload window had elapsed"
 
 
 def test_update_connector_asks_first_and_honours_a_no(update_env, monkeypatch, capsys):
