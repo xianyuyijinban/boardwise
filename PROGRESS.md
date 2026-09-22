@@ -31,9 +31,9 @@ collects the current truth and the pointers.
   - `docs/images/gs-03-daemon-start.png`
   - `PROGRESS.md`
 
-## Current baseline (2026-09-22, commit `ffbdf77` on `15b3da2` + `a69906c` LICENSE; published on GitHub)
+## Current baseline (2026-09-22, commit `4448c59` on `d70f59b` + `ffbdf77`; published on GitHub)
 
-- pytest: **1276 passed** (run with `--basetemp=.tmp_pt_home` on Windows —
+- pytest: **1298 passed** (run with `--basetemp=.tmp_pt_home` on Windows —
   the host's safe-delete hook otherwise eats the summary line and fakes
   exit 1)
 - connector: **305 pass / 0 fail** (`cd connector && npm test`)
@@ -54,6 +54,8 @@ collects the current truth and the pointers.
 | 016 review-to-local-edit（M3 首切片） | **波①+波②主体 DONE 2026-09-22，场景 6 待岳重开验证** | ChangePlan + edit plan/preview/apply CLI + Finding.target 结构化；真机：apply exit 0（saved_unverified）、幂等 already_applied、stale_before exit 4、断连 exit 3；四保护全过（`tasks/016-review-to-local-edit.md` §十.7） |
 | 018 朋友内测基础体验 | **DONE 2026-09-22**（随 `15b3da2` 入库） | daemon 单活跃 connector 防护（真 daemon 五拍验证：接纳/CONNECTOR_ALREADY_ACTIVE 拒绝/接管）、sys.identity、doc.open 诊断式报错、review --latest + --md 中文摘要、install.bat 四件套 + docs/install.md、项目级 SKILL.md + AGENTS.md、connector 0.4.11 .eext（`tasks/018-beta-basic-experience.md`） |
 | 020 上游 issue 加固 | **DONE 2026-09-22** | `ffbdf77`; WI-1 解析静默丢脚可观测（ParseStats + review note：console EN / --md CN，--json 逐字节不变；llc 实测 14，毕设板 0）+ WI-2 update-connector 版本回读（verified→0 / mismatch→1 / timeout→3 UNKNOWN，`--no-verify` 保留旧行为）；真机 verified 0.4.11；变异 3/3 CAUGHT（`tasks/020-upstream-issue-fixes.md`；上游对照 #220-adjacent、#250/#252） |
+| 021 多工程=多窗口实测 + hello 身份登记 | **DONE 2026-09-22** | `d70f59b`; 三工程=三窗口一进程实测钉死（eda API 窗口级，跨窗口枚举结构性不通）；connector hello 带 projectName/projectUuid → daemon 登记活跃+被拒实例 → status `projects seen`；方案=文件审查不挑窗口 + 写操作人机协作换窗（`tasks/021-multiproject.md`；已知限制：reload 时序 null，daemon 主动查补登待做） |
+| 022 全新 clone 三 issue | **DONE 2026-09-22** | `4448c59`; Fixes #1（夹具守卫比内容不比字节——逐成员 sha256 + CRLF normalize，夹具零改动）+ Fixes #2（dev 依赖组 + install.bat 可选装）+ Fixes #3（doctor 首项离线安装版本预检，桥读项交叉复核）；doctor 七项→八项；变异 4/4 CAUGHT（`tasks/022-fresh-clone-issues.md`） |
 
 ## Coordinate contract (the thing that cost the most sessions)
 
@@ -78,3 +80,5 @@ point. Full measurement history: `tasks/010c-coordinate-convention.md`
 - `15b3da2` 016+018+019 combined (review-to-local-edit closed loop & friend-beta readiness)
 - `a69906c` MIT LICENSE; repo published: https://github.com/xianyuyijinban/boardwise
 - `ffbdf77` 020 upstream-issue hardening (parse-drop observability + update-connector verified reload; pytest 1276)
+- `d70f59b` 021 multi-window reality + hello project-identity registration (pytest 1281)
+- `4448c59` 022 fresh-clone fixes: content-based fixture guard + dev deps + offline editor floor check (GitHub #1/#2/#3 closed; pytest 1298)
