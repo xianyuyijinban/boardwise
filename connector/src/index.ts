@@ -20,11 +20,19 @@ import {
   STORAGE_KEYS,
   type ResolvedConfig,
 } from './config';
-import { createFacade, hasHost, type EditorFacade } from './facade';
+import { createFacade, hasHost, hostObject, type EditorFacade } from './facade';
 import { describeRandom } from './random';
 import { buildHandlers, currentProjectIdentity, currentResponseContext } from './actions';
 import { ActionError } from './protocol';
-import { Transport, type TransportState } from './transport';
+import {
+  Transport,
+  getOrCreateSharedRuntime,
+  publishSharedRuntimeIfEmpty,
+  readSharedRuntime,
+  releaseSharedRuntime,
+  sharedRuntimeImplementation,
+  type TransportState,
+} from './transport';
 import { VERSION, isVersionOlder } from './version';
 
 let transport: Transport | undefined;
@@ -65,6 +73,197 @@ function newInstanceId(): string {
   return `inst-${stamp}-${random}`;
 }
 
+// ─── The published controller (024) ───────────────────────────────────
+
+/**
+ * Which path asked for the connection.
+ *
+ * `bootstrap` is the module scope ({@link runBootstrap}); `activate` is the
+ * editor's lifecycle callback. Recorded rather than merely logged: on 立创 EDA
+ * 3.2.149 `activate` may never arrive, and the counters below are how that is
+ * told apart — on the machine, after a restart — from "the bundle was never
+ * evaluated at all".
+ */
+type TransportStartSource = 'activate' | 'bootstrap';
+
+/**
+ * What one evaluation of this bundle publishes for the next one to reuse.
+ *
+ * The members close over the *publishing* evaluation's module state, which is
+ * the whole point: the editor re-evaluates the bundle for every menu click, and
+ * a copy with its own state would open its own socket. Through this record a
+ * later evaluation reaches the controller that owns the connection and the real
+ * history, instead of a fresh copy of all three.
+ *
+ * The record lives on the editor's own per-extension object (`eda`), the one
+ * thing that outlives an evaluation — see the registry in `transport.ts` for
+ * the mechanics and the version signature that makes it safe.
+ */
+interface OwnedTransportRuntime {
+  readonly implementation: string;
+  start(source: TransportStartSource): Promise<void>;
+  bootstrapFromModuleLoad(): Promise<void>;
+  reconnect(): Promise<void>;
+  stop(quiet?: boolean): void;
+  selfArm(trigger: string, hostPresent?: boolean): Promise<void> | undefined;
+  about(): void;
+  getStatus(): ConnectorStatus;
+  noteEvaluation(): void;
+}
+
+/** This evaluation's view of the shared runtime, and who created it. */
+let shared: { runtime: OwnedTransportRuntime; created: boolean; published: boolean } | undefined;
+
+/**
+ * Did the module-load bootstrap run in this editor runtime? (024)
+ *
+ * Reported next to {@link activateObserved}. The pair exists because the
+ * failure mode is otherwise invisible: "the host evaluated the bundle but never
+ * dispatched `activate()`" is the case the bootstrap rescues, while "the host
+ * never evaluated the bundle" cannot be rescued from inside the editor at all —
+ * and on 3.2.149 the two look identical from the outside (no menu, no daemon
+ * connection, nothing in the log).
+ */
+let moduleBootstrapObserved = false;
+let moduleBootstrapObservedAt: string | undefined;
+
+/** Did the editor dispatch `activate()`? The counter that names the 3.2.149 defect. */
+let activateObserved = false;
+let activateObservedAt: string | undefined;
+
+/** How many times the editor has evaluated this bundle in this editor runtime. */
+let evaluations = 0;
+
+/**
+ * The bootstrap's once-per-editor-runtime latch.
+ *
+ * Per runtime, not per evaluation: `connectOnce` is one-shot anyway, but the
+ * latch is what stops a re-evaluation from re-running the bootstrap's own
+ * logging and scheduling.
+ */
+let bootstrappedFromModuleLoad = false;
+
+/** Where the controller is published: the stand-in host in the tests, else `eda`. */
+function sharedRuntimeHost(): Record<string, unknown> | undefined {
+  // The installed facade comes first on purpose: in the tests the host is a
+  // stand-in the ambient global knows nothing about, while in production the
+  // facade's `api` *is* `eda`.
+  const api = facade?.api ?? hostObject();
+  return api && typeof api === 'object' ? (api as Record<string, unknown>) : undefined;
+}
+
+/**
+ * The controller for this editor runtime: the published one, or a new one.
+ *
+ * Called from module scope (the bootstrap) and from every exported entry point,
+ * so a menu click's evaluation of the bundle reaches the controller that owns
+ * the socket instead of building a second one.
+ *
+ * A *published* record of this build wins over everything, including a
+ * controller of ours that was built before the editor's object was reachable
+ * (004f's late `eda`): the published one is the one the other evaluations will
+ * use, so it has to be the one we use too.
+ */
+function runtime(): OwnedTransportRuntime {
+  const host = sharedRuntimeHost();
+  const implementation = sharedRuntimeImplementation(VERSION);
+  const published = readSharedRuntime<OwnedTransportRuntime>(host, implementation);
+  if (published) {
+    if (shared?.runtime === published) {
+      // The registry was read late: what is published is what we published.
+      shared.published = true;
+    } else {
+      adoptPublishedRuntime(published);
+    }
+    return published;
+  }
+  if (shared) return shared.runtime;
+  const lookup = getOrCreateSharedRuntime<OwnedTransportRuntime>(host, implementation, createRuntime);
+  shared = { runtime: lookup.runtime, created: lookup.created, published: lookup.published };
+  if (lookup.created) {
+    // Creating a controller *is* this evaluation, so this is where it is
+    // counted. Every later evaluation of the same bundle reaches this record
+    // through `adoptPublishedRuntime` and counts itself there; that is what
+    // makes "the bundle was evaluated N times in this editor runtime" true
+    // rather than a guess.
+    evaluations += 1;
+  }
+  if (!lookup.published) {
+    // Honest, and not fatal: the controller works, the hand-off does not.
+    logLine(
+      'shared runtime: the editor object is not reachable yet — this evaluation owns its controller',
+    );
+  }
+  if (lookup.retired) {
+    logLine(`shared runtime: retired the controller published by ${lookup.retired}`);
+  }
+  return lookup.runtime;
+}
+
+/**
+ * Take over the controller another evaluation published, retiring ours.
+ *
+ * Ours never reached the host, but it may already own a socket (it was built
+ * while the editor's global was still unbound). Two controllers connected to one
+ * daemon is precisely what this mechanism exists to prevent, so the local one is
+ * stopped — best-effort, because a controller that cannot stop is still the
+ * wrong one to keep.
+ */
+function adoptPublishedRuntime(published: OwnedTransportRuntime): void {
+  const previous = shared?.runtime;
+  logLine(`shared runtime: reusing the controller published by ${published.implementation}`);
+  if (previous && previous !== published) {
+    try {
+      previous.stop(true);
+    } catch {
+      /* best-effort: it is on its way out either way */
+    }
+  }
+  shared = { runtime: published, created: false, published: true };
+  // The owner counts evaluations, so a reused record has to be told: this
+  // evaluation of the bundle is not the one that created the controller.
+  published.noteEvaluation();
+}
+
+/**
+ * Publish a controller that was built before the editor's object was reachable.
+ *
+ * The bundle can be evaluated while the host has not bound `eda` yet (measured
+ * in 004f). The controller then owns everything but is unpublished — exactly
+ * the state a second evaluation cannot see. Publishing it once the host appears
+ * is best-effort and never overwrites: something already under the key is
+ * another evaluation's controller, and this one then stays local. Both
+ * outcomes are logged, so the log panel never has to be guessed at.
+ */
+function republishSharedRuntime(): void {
+  if (!shared || shared.published) return;
+  const host = sharedRuntimeHost();
+  if (!host) return;
+  if (publishSharedRuntimeIfEmpty(host, shared.runtime)) {
+    shared.published = true;
+    logLine('shared runtime: published now that the editor object is reachable');
+  } else {
+    logLine('shared runtime: another controller owns the editor object; this one stays local');
+  }
+}
+
+/** The record this evaluation publishes. Every member closes over this file's state. */
+function createRuntime(): OwnedTransportRuntime {
+  return {
+    implementation: sharedRuntimeImplementation(VERSION),
+    start: runStart,
+    bootstrapFromModuleLoad: runBootstrap,
+    reconnect: runReconnect,
+    stop: runStop,
+    selfArm: runSelfArm,
+    about: runAbout,
+    getStatus: readStatus,
+    noteEvaluation: () => {
+      evaluations += 1;
+    },
+  };
+}
+
 let status: {
   state: TransportState;
   detail?: string;
@@ -83,6 +282,25 @@ let status: {
   /** Set only when {@link VERSION} is *older* than `minConnectorVersion`. */
   connectorOutdated?: boolean;
 } = { state: 'idle' };
+
+/**
+ * What {@link getStatus} answers: the connection state plus the 024 lifecycle
+ * counters.
+ *
+ * The counters ride along on the existing status read-out rather than in a new
+ * channel, because that read-out is what every diagnostic surface already uses
+ * (`About…` through this module, and the tests). On the machine they are the
+ * difference between the two failures described at {@link moduleBootstrapObserved}.
+ */
+export type ConnectorStatus = typeof status & {
+  moduleBootstrapObserved: boolean;
+  activateObserved: boolean;
+  evaluations: number;
+  /** When the bootstrap ran, ISO; absent when it never did. */
+  bootstrapAt?: string;
+  /** When `activate()` was dispatched, ISO; absent when it never was. */
+  activateAt?: string;
+};
 
 /**
  * Whether the editor ever called us, and how it went.
@@ -152,6 +370,8 @@ const BOOTSTRAP_RETRY_DELAYS_MS = [250, 750, 1500, 3000, 5000, 8000, 10000];
 
 let bootstrapRetries = 0;
 let bootstrapTimer: ReturnType<typeof setTimeout> | undefined;
+/** The next-macrotask half of the bootstrap pair; see {@link scheduleNextMacrotaskAttempt}. */
+let nextMacrotaskTimer: ReturnType<typeof setTimeout> | undefined;
 
 /** A rejected promise here is invisible in the editor, so always render it. */
 function describeError(error: unknown): string {
@@ -184,6 +404,13 @@ function host(): EditorFacade {
  * and not part of the editor's API.
  */
 export function __setFacadeForTests(next: EditorFacade | undefined): void {
+  if (next === undefined && shared) {
+    // Teardown: retire the controller this module published. Released *before*
+    // the facade is cleared, because the host object it was published on is the
+    // one the installed facade points at.
+    releaseSharedRuntime(sharedRuntimeHost(), shared.runtime);
+    shared = undefined;
+  }
   facade = next;
   transport?.stop();
   transport = undefined;
@@ -201,12 +428,22 @@ export function __setFacadeForTests(next: EditorFacade | undefined): void {
     // test drives.
     if (bootstrapTimer) clearTimeout(bootstrapTimer);
     bootstrapTimer = undefined;
+    if (nextMacrotaskTimer) clearTimeout(nextMacrotaskTimer);
+    nextMacrotaskTimer = undefined;
     bootstrapRetries = 0;
     // Clearing the stand-in returns the module to its pre-activation state, so
-    // one test's activation cannot bleed into the next one's `About…` box.
+    // one test's activation cannot bleed into the next one's `About…` box. The
+    // 024 lifecycle counters are part of that state: they describe *this*
+    // editor runtime, and the next test has a new one.
     status = { state: 'idle' };
     activation = undefined;
     selfArm = undefined;
+    moduleBootstrapObserved = false;
+    moduleBootstrapObservedAt = undefined;
+    activateObserved = false;
+    activateObservedAt = undefined;
+    evaluations = 0;
+    bootstrappedFromModuleLoad = false;
   }
 }
 
@@ -229,6 +466,13 @@ function logLine(message: string): void {
   } catch {
     /* console may be unavailable */
   }
+  // The facade is created here when the editor is reachable, rather than only
+  // from `connectOnce()`: the bootstrap's own lines (which evaluation ran, which
+  // controller it found) happen *before* the first connect, and they are exactly
+  // the lines that answer "did the host load the bundle at all?" — a question
+  // nobody can answer from `console.log` in the editor. No new bet on the host:
+  // `hasHost()` already asks the same question one line earlier in the caller.
+  if (!facade && hasHost()) facade = createFacade();
   facade?.log(line);
 }
 
@@ -366,19 +610,68 @@ async function connectableConfig(): Promise<ResolvedConfig> {
   return current;
 }
 
-/** Called by the editor when the extension activates. */
+/**
+ * Called by the editor when the extension activates.
+ *
+ * One of the two start paths since 024 — and on 立创 EDA 3.2.149 not the one
+ * that matters, because that host never dispatches this callback for a
+ * user-installed extension (the extension pass runs before the user info it is
+ * gated on, then is skipped; upstream #219/#221). It stays a supported trigger:
+ * whatever gets here first wins, and a late `activate()` finds the connection
+ * already made instead of opening a second one.
+ */
 export async function activate(_status?: unknown, _arg?: unknown): Promise<void> {
-  activation = { at: new Date().toISOString(), outcome: 'running' };
+  try {
+    await runtime().start('activate');
+  } catch {
+    // Recorded, logged and toasted inside `runStart`; the catch is here so an
+    // editor-host rejection never becomes an unhandled rejection, which is
+    // completely invisible in an extension host.
+  }
+}
+
+/**
+ * Start the connection, recording which path asked and how it went.
+ *
+ * The single body behind both paths, so the difference between them is one
+ * parameter instead of two code paths that drift: `activate()` claims the
+ * one-shot attempt through {@link connectOnce}, and so does the module
+ * bootstrap, so a host that dispatches `activate()` long after evaluating the
+ * bundle gets the idempotent no-op it needs.
+ *
+ * Rejects on failure as well as recording it, because the caller's reaction
+ * differs: `activate()` has nothing left to do, while the bootstrap schedules
+ * the retry that is the whole difference between a dead extension and one that
+ * connects when the editor settles.
+ */
+async function runStart(source: TransportStartSource): Promise<void> {
+  if (source === 'activate') {
+    // The counters are set before the attempt, not after: "the editor called
+    // us" and "the attempt worked" are different facts, and on the machine only
+    // the first one tells the 3.2.149 defect apart from a broken connect.
+    activateObserved = true;
+    activateObservedAt = new Date().toISOString();
+    activation = { at: activateObservedAt, outcome: 'running' };
+  }
   try {
     await connectOnce();
-    if (activation.outcome === 'running') activation.outcome = 'ok';
+    if (source === 'activate' && activation?.outcome === 'running') {
+      activation = { at: activation.at, outcome: 'ok' };
+    }
   } catch (error) {
-    // An unhandled rejection inside an extension host is silent: no toast, no
-    // log line, no state — just `state: idle` forever, which is exactly the
-    // symptom that cost 0.2.1 a round trip. Never let it be silent again.
-    activation = { at: activation.at, outcome: 'failed', error: describeError(error) };
-    logLine(`activate FAILED: ${describeError(error)}`);
-    host().notify('boardwise: activation failed — see the log panel');
+    if (source === 'activate') {
+      // An unhandled rejection inside an extension host is silent: no toast, no
+      // log line, no state — just `state: idle` forever, which is exactly the
+      // symptom that cost 0.2.1 a round trip. Never let it be silent again.
+      activation = {
+        at: activation?.at ?? new Date().toISOString(),
+        outcome: 'failed',
+        error: describeError(error),
+      };
+      logLine(`activate FAILED: ${describeError(error)}`);
+      host().notify('boardwise: activation failed — see the log panel');
+    }
+    throw error;
   }
 }
 
@@ -389,6 +682,12 @@ export async function activate(_status?: unknown, _arg?: unknown): Promise<void>
  * all want to open the socket; whoever claims first wins and the rest become
  * no-ops. Without the claim, a late `activate()` after the bootstrap connected
  * would build a second transport and orphan the first.
+ *
+ * Since 024 this is the *second* line of defence: the shared runtime means a
+ * re-evaluated bundle reaches the controller that already holds the connection
+ * instead of owning a claim of its own. This one still matters, because a host
+ * that dispatches `activate()` and then a menu click can arrive through two
+ * evaluations that both treat the attempt as theirs.
  */
 function claimConnectionAttempt(): boolean {
   if (connectionAttempted) return false;
@@ -400,6 +699,10 @@ async function connectOnce(): Promise<void> {
   // `activate()` and the self-arm both route through here, and only one of them
   // should reach the editor's socket. See `claimConnectionAttempt`.
   if (!claimConnectionAttempt()) return;
+  // Reaching this point means the editor is demonstrably here. If the controller
+  // was built before the host bound its global (004f), this is the moment it
+  // becomes visible to later evaluations — see `republishSharedRuntime`.
+  republishSharedRuntime();
   // Defensive: a manual reconnect may have left one behind. Two sockets to the
   // same daemon is never what anyone wants.
   transport?.stop();
@@ -422,15 +725,38 @@ async function connectOnce(): Promise<void> {
   await transport.start();
 }
 
-/** Called by the editor when the extension deactivates. */
+/**
+ * Called by the editor when the extension deactivates.
+ *
+ * Stops the controller *and* un-publishes it (024), so a subsequent extension
+ * load installs its own controller instead of inheriting a stopped one.
+ */
 export function deactivate(): void {
-  transport?.stop();
-  transport = undefined;
-  status = { state: 'stopped' };
+  if (!shared) {
+    // Nothing was ever published by this evaluation: stop what it owns
+    // locally. A deactivation must leave the module inert either way.
+    transport?.stop();
+    transport = undefined;
+    status = { state: 'stopped' };
+    return;
+  }
+  shared.runtime.stop(true);
+  releaseSharedRuntime(sharedRuntimeHost(), shared.runtime);
+  shared = undefined;
 }
 
 /** Menu: Reconnect */
 export async function reconnect(): Promise<void> {
+  await runtime().reconnect();
+}
+
+/** Menu: Stop */
+export function stopConnection(): void {
+  runtime().stop();
+}
+
+/** The body behind Reconnect: a fresh socket, claimed so nothing doubles it. */
+async function runReconnect(): Promise<void> {
   // A manual connect is an attempt too: the self-arm must not pile a second
   // socket on top of this one afterwards.
   claimConnectionAttempt();
@@ -442,11 +768,21 @@ export async function reconnect(): Promise<void> {
   host().notify(`boardwise: reconnecting to ${current.url}`);
 }
 
-/** Menu: Stop */
-export function stopConnection(): void {
+/**
+ * The body behind Stop, and behind deactivation.
+ *
+ * `quiet` is for deactivation: the editor is taking the extension away, so a
+ * toast telling the user their bridge stopped is noise they cannot act on.
+ */
+function runStop(quiet = false): void {
   transport?.stop();
-  status = { ...status, state: 'stopped', detail: 'stopped from the menu' };
-  host().notify('boardwise: stopped');
+  transport = undefined;
+  status = {
+    ...status,
+    state: 'stopped',
+    detail: quiet ? 'deactivated' : 'stopped from the menu',
+  };
+  if (!quiet) host().notify('boardwise: stopped');
 }
 
 /** Menu: Toggle auto-connect */
@@ -479,6 +815,17 @@ export async function rePair(): Promise<void> {
 
 /** Menu: About… — also the quickest way to see why nothing connects. */
 export function about(): void {
+  runAbout();
+}
+
+/**
+ * The body behind About…, run by the controller that owns the connection (024).
+ *
+ * Not the clicking evaluation's copy of it: the box is a report on *this editor
+ * runtime* — when it was loaded, which path started it, whether the editor ever
+ * dispatched `activate()` — and only the owning evaluation has that history.
+ */
+function runAbout(): void {
   // Create the facade BEFORE resolving the config. 0.2.3 resolved the config
   // through `facade?.storage` while nothing had created the facade yet, so
   // `token:` said NONE while `storage:` — evaluated later, through `host()` —
@@ -513,6 +860,13 @@ export function about(): void {
     `boardwise connector ${VERSION}`,
     // Second, because "no token" is ambiguous without it: never tried vs. failed.
     `activation: ${activationLine()}`,
+    // Third (024): the same question asked as two counters, because on 立创 EDA
+    // 3.2.149 "the editor never called us" and "the editor never even loaded us"
+    // are different failures with different answers, and only these tell them
+    // apart from inside the editor.
+    `lifecycle: moduleBootstrapObserved=${moduleBootstrapObserved ? 'yes' : 'no'}` +
+      ` activateObserved=${activateObserved ? 'yes' : 'no'} evaluations=${evaluations}`,
+    `bootstrap: ${bootstrapLine()}`,
     `loaded: ${MODULE_LOADED_AT.slice(11, 19)}`,
     `state: ${status.state}${status.detail ? ` (${status.detail})` : ''}`,
     `storage: ${storageLine()}`,
@@ -545,7 +899,48 @@ export function about(): void {
   // ran, so this is a no-op unless that bootstrap skipped for lack of an editor
   // global and one became reachable since. Fired AFTER the box is built, so
   // what the user reads is the honest pre-arm snapshot.
-  void selfArmNow('About menu');
+  void runSelfArm('About menu');
+}
+
+/**
+ * What the module-load bootstrap did, in one sentence (024).
+ *
+ * This is the line that decides the next step on the real machine. "The bundle
+ * was evaluated and `activate()` was not dispatched" means the bootstrap is
+ * doing its job and the only thing missing is the editor's callback. "The
+ * bundle was never evaluated before this click" means the host did not load it
+ * at all — nothing inside the extension can fix that, and the answer is
+ * re-importing at every start or a newer editor.
+ */
+function bootstrapLine(): string {
+  if (!moduleBootstrapObserved) {
+    return 'the module-scope bootstrap never ran in this editor runtime';
+  }
+  const observedAt = (moduleBootstrapObservedAt ?? '').slice(11, 19) || 'unknown';
+  if (evaluations <= 1) {
+    // The editor re-evaluates the bundle for every menu click (measured on the
+    // real editor, see this file's history), so `evaluations=1` reported from a
+    // menu item means the startup evaluation never happened and this click is
+    // the editor loading us for the first time.
+    if (activateObserved) {
+      return `the bundle was evaluated once, at ${observedAt}, and activate() was dispatched`;
+    }
+    return (
+      `this is the first evaluation of the bundle in this editor runtime (at ${observedAt}); ` +
+      'the host had not loaded the extension before this point'
+    );
+  }
+  if (!activateObserved) {
+    return (
+      `the bundle was evaluated ${evaluations}× in this editor runtime and activate() was never ` +
+      `dispatched — the connection starts from the module load (first seen at ${observedAt})`
+    );
+  }
+  const activatedAt = (activateObservedAt ?? '').slice(11, 19) || 'unknown';
+  return (
+    `the bundle was evaluated ${evaluations}× in this editor runtime; activate() was dispatched ` +
+    `at ${activatedAt}`
+  );
 }
 
 /**
@@ -624,7 +1019,7 @@ function tokenLine(current: ResolvedConfig): string {
  * and quiet coverage would hide the underlying problem: the log panel names it,
  * and `About…` reports `self-connected` beside the `NEVER RAN`.
  */
-function selfArmNow(trigger: string, hostPresent?: boolean): Promise<void> | undefined {
+function runSelfArm(trigger: string, hostPresent?: boolean): Promise<void> | undefined {
   if (activation) return undefined; // the editor did call us; nothing to arm
   if (selfArm) return undefined; // already armed, successfully or not
   // "Is there an editor?" defaults to a live check — the facade counts (a test
@@ -670,55 +1065,96 @@ function selfArmNow(trigger: string, hostPresent?: boolean): Promise<void> | und
 }
 
 /**
- * The primary connect path: run once, synchronously, at module evaluation.
+ * The module-load bootstrap: start the connection without `activate()` (024).
  *
- * 004d measured the host's lifecycle rules the hard way (2026-09-13, new daemon,
- * no stale-code confound):
+ * ★ This is the primary path, not a fallback, and the reason is a host defect
+ * rather than a preference. On 立创 EDA 3.2.149 the host initialises its
+ * extension registry *before* the user info that gates it, so the pass that
+ * would dispatch a user extension's `activate()` never runs for that launch —
+ * the extension works when imported and never again after a restart. Upstream
+ * reports the same finding (#219/#221/#222) and answers it the same way: start
+ * from the module scope, which the host does execute, and let `activate()`
+ * remain an idempotent second trigger.
  *
- * - a connection chain initiated during the module's synchronous evaluation
- *   **survives** — one 0.2.x instance's chain sustained a 48-minute reconnect
- *   loop on its own (274 audited connects);
- * - chains initiated *later* do not: the `+1s`/`+4s` self-arm timers never left
- *   a trace, and a menu click's `void selfArmNow()` chain produced zero TCP —
- *   each menu click re-evaluates the bundle (`loaded:` changes every time) and
- *   that context dies before its async work runs.
+ * The older measurement from 004d points the same way: a connection chain
+ * started during the module's synchronous evaluation **survives** (one ran a
+ * 48-minute reconnect loop on its own, 274 audited connects), while chains
+ * started later — timers, menu clicks — do not.
  *
- * So the connect starts here, in the only window measured to work, instead of
- * waiting for `activate()` (which the host may never call) or a timer (which
- * the host may discard). `activate()` remains a supported trigger via the same
- * gate; whatever gets there first wins.
- *
- * Re-evaluations are the reason for the claim gate: every menu click evaluates
- * this module again, and each copy would happily open its own socket. Within
- * one copy the gate is enough; across copies the deterministic first socket id
- * (`boardwise-1`) means the editor sees a re-registration of the connection it
- * already has, not a second one. Node (the test suite) has no editor, so the
- * guard keeps import side-effect-free there.
+ * Once per *editor runtime*: a re-evaluation finds the bootstrap already done
+ * and stands down, which is what keeps the log panel plot readable and the
+ * second-evaluation no-op. The latch is armed only when an attempt actually
+ * started — a bootstrap that stood down for lack of an editor must stay
+ * re-runnable, because that is the whole "the host bound `eda` a moment later"
+ * case the ladder below exists for.
  */
-function bootstrapAtModuleLoad(): Promise<void> | undefined {
+async function runBootstrap(): Promise<void> {
+  if (bootstrappedFromModuleLoad) return;
+  moduleBootstrapObserved = true;
+  moduleBootstrapObservedAt = new Date().toISOString();
+  logLine(
+    `module evaluated (evaluation ${evaluations} of this bundle in this editor runtime); ` +
+      'starting the connector without waiting for activate()',
+  );
+  // The pair upstream uses: try now, and once more on the next macrotask,
+  // because a sandbox may only bind its globals when the current task ends.
+  // Both land on `runStart('bootstrap')`, whose claim gate makes the second a
+  // no-op whenever the first one got anywhere.
+  const immediate = bootstrapAttempt('at module load');
+  if (immediate) bootstrappedFromModuleLoad = true;
+  scheduleNextMacrotaskAttempt();
+  await immediate;
+}
+
+/**
+ * One bootstrap connect attempt, with the failure record and the retry (004f).
+ *
+ * The `catch` is the fix for that blind spot, not a nicety: `connectOnce()` has
+ * already taken the one-shot claim by the time it can reject, so without this an
+ * early throw left `activate()`, the self-arm and Reconnect all no-ops for the
+ * rest of the editor's life, with nothing in the log panel and nothing in
+ * `About…`: a dead extension that looks untouched.
+ */
+function bootstrapAttempt(trigger: string): Promise<void> | undefined {
   if (!facade && !hasHost()) {
     // No editor bound at evaluation time. Say so in the log panel — the one
     // sink that outlives this module instance — rather than vanishing, and
     // knock again: an extension bundle can be evaluated before the host has
     // bound its global, and until 004f that meant standing down for good.
-    const note = 'at module load: editor global not bound; connect not attempted';
+    const note = `${trigger}: editor global not bound; connect not attempted`;
     armNotes.push(note);
     logLine(`bootstrap ${note}`);
-    scheduleBootstrapRetry('editor global not bound');
+    scheduleBootstrapRetry(note);
     return undefined;
   }
-  // The `catch` is the fix for the blind spot, not a nicety. `connectOnce()`
-  // had already taken the one-shot claim by the time it can reject, so without
-  // this an early throw left `activate()`, the self-arm and Reconnect all
-  // no-ops for the rest of the editor's life, with nothing in the log panel and
-  // nothing in `About…`: a dead extension that looks untouched.
-  return connectOnce().catch((error) => {
+  return runStart('bootstrap').catch((error) => {
     connectionAttempted = false; // a failed attempt must not block the next one
     const reason = describeError(error);
     armNotes.push(`bootstrap attempt failed: ${reason}`);
     logLine(`bootstrap FAILED: ${reason}`);
     scheduleBootstrapRetry(reason);
   });
+}
+
+/**
+ * The second half of the bootstrap pair: one more look, on the next macrotask.
+ *
+ * Not a retry policy — `scheduleBootstrapRetry` owns that, with its own ladder —
+ * but the "the sandbox was not ready for the first attempt" case, which is only
+ * a macrotask away. Cheap when the first attempt worked: the claim gate ends it
+ * in one line.
+ */
+function scheduleNextMacrotaskAttempt(): void {
+  nextMacrotaskTimer = setTimeout(() => {
+    nextMacrotaskTimer = undefined;
+    if (connectionAttempted || activation || selfArm) return; // an attempt owns it
+    if (!facade && !hasHost()) {
+      logLine('bootstrap next-macrotask attempt: the editor global is still not bound');
+      return;
+    }
+    logLine('bootstrap next-macrotask attempt: the editor is reachable after the module load');
+    void bootstrapAttempt('next macrotask');
+  }, 0);
 }
 
 /**
@@ -744,28 +1180,45 @@ function scheduleBootstrapRetry(reason: string): void {
       scheduleBootstrapRetry('editor global still not bound');
       return;
     }
-    void connectOnce().catch((error) => {
-      connectionAttempted = false;
-      scheduleBootstrapRetry(describeError(error));
-    });
+    void bootstrapAttempt('bootstrap retry');
   }, delay);
 }
 
 // The connect starts here, at evaluation — not in `activate()`, which the host
-// may never call, and not in a timer, which the host may discard.
-void bootstrapAtModuleLoad();
+// may never call, and not in a timer, which the host may discard. Everything
+// below this line happens on every evaluation, and `runtime()` is what makes
+// the second evaluation share the first one's controller instead of building a
+// second one — including its count of how many evaluations there have been.
+void runtime().bootstrapFromModuleLoad();
 
 /** Test seam: run the module-load bootstrap now (Node has no editor at import). */
 export function __bootstrapForTests(): Promise<void> {
-  return bootstrapAtModuleLoad() ?? armPromise ?? Promise.resolve();
+  return runtime().bootstrapFromModuleLoad();
 }
 
 /** Test seam: run the menu safety-net arm now, instead of from a menu click. */
 export function __selfArmForTests(options?: { hostPresent?: boolean }): Promise<void> {
-  return selfArmNow('test', options?.hostPresent) ?? armPromise ?? Promise.resolve();
+  return runtime().selfArm('test', options?.hostPresent) ?? armPromise ?? Promise.resolve();
 }
 
-/** Exposed for the manual checklist / smoke test: current connection state. */
-export function getStatus(): typeof status {
-  return status;
+/**
+ * The status read-out: connection state plus the 024 lifecycle counters.
+ *
+ * Read through the runtime so a menu-click evaluation reports the state of the
+ * controller that owns the connection — which is the only state that means
+ * anything — rather than its own, freshly initialised copy.
+ */
+export function getStatus(): ConnectorStatus {
+  return runtime().getStatus();
+}
+
+function readStatus(): ConnectorStatus {
+  return {
+    ...status,
+    moduleBootstrapObserved,
+    activateObserved,
+    evaluations,
+    ...(moduleBootstrapObservedAt ? { bootstrapAt: moduleBootstrapObservedAt } : {}),
+    ...(activateObservedAt ? { activateAt: activateObservedAt } : {}),
+  };
 }

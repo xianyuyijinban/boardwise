@@ -78,6 +78,24 @@ export function hasHost(): boolean {
   return Boolean(hostGlobal());
 }
 
+/**
+ * The host object itself, as somewhere to hang cross-evaluation state (024).
+ *
+ * Read *without* creating a facade on purpose: the caller is the shared-runtime
+ * registry, which runs during module evaluation — before anything has decided
+ * that the editor is ready — and a facade created here would also answer
+ * `hasHost()` differently for everyone else.
+ *
+ * What it is for: the editor hands every evaluation of our bundle the same
+ * per-extension `eda` object, which is the only place that survives a
+ * re-evaluation (`globalThis` is not reachable from the extension host, see the
+ * module docstring). `undefined` when there is no editor to publish to.
+ */
+export function hostObject(): Record<string, unknown> | undefined {
+  const api = hostGlobal();
+  return api && typeof api === 'object' ? (api as Record<string, unknown>) : undefined;
+}
+
 export function createFacade(host?: unknown): EditorFacade {
   const api = (host ?? hostGlobal()) as any;
 

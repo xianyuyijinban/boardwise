@@ -1,0 +1,175 @@
+024 交卷证据 — 立创 EDA 3.2.149 适配（connector：模块加载自举 bootstrap）
+=========================================================================
+执行子代理（boardwise task 024 / 棒 1，纯 connector 范围）  2026-09-22
+
+1. 版本与三线
+-------------
+connector 版本 0.4.12（extension.json:6 / package.json:3 / package-lock.json:3,9 同步）
+
+cd /e/boardwise/connector
+  npm run build      → OK  （dist/index.js 210468 B；含 "cross-eval-v1" ×1、
+                            "void runtime().bootstrapFromModuleLoad()" 顶层调用 ×1）
+  npm run typecheck  → OK  （tsc --noEmit，无输出）
+  npm test           → tests 336 / pass 336 / fail 0   （325 既有 + 11 新增，全绿）
+
+Python 侧未动（pytest 不属本任务范围；docs 由主代理统一处理）。
+
+2. 改动文件
+-----------
+connector/src/transport.ts       +225  §024 跨求值运行时注册表 + Transport.start() 幂等
+connector/src/index.ts           +577  控制器发布时间化、bootstrap 主路径、诊断计数
+connector/src/facade.ts          +18   hostObject()（唯一允许触碰 eda 的模块）
+connector/extension.json          版本 0.4.11 → 0.4.12
+connector/package.json            版本同上
+connector/package-lock.json       版本同上（2 处）
+connector/tests/bootstrap.test.mjs  新增 401 行 / 11 条测试
+
+sha256（交卷时）：
+  30ae461e46f202bc139280dd678dea9537a8f9d74e4cb6357933f51aa09a8de7  src/index.ts
+  a4073e2944f4a1cfedc39258604be9a774f36d601b403b4e07554a92edc83b88  src/transport.ts
+  cd49da6c2ea6e67b9efb0a5ccb25bbe4c04cad3497899f4b13f50d06e7b37f2c  src/facade.ts
+  6abf902b179637d5193440da0404eed50aafffe00187e40163006d2b57bd4f56  tests/bootstrap.test.mjs
+
+未打 .eext（按任务书由主代理打）。未动 git（git status 仅上述 6 改 + 1 新增）。
+
+3. 机制（我们自己的实现，照上游范式不照抄）
+------------------------------------------
+发布位置：编辑器 per-extension 对象（`eda`）上的非枚举属性 `__boardwiseTransportRuntime`，
+签名 `<connectorVersion>:cross-eval-v1`（transport.ts SHARED_RUNTIME_KEY /
+SHARED_RUNTIME_EPOCH / sharedRuntimeImplementation）。
+
+记录成员（契约，注册表按成员逐个 typeof 校验，不信任键上的任何东西）：
+  implementation / start / stop / bootstrapFromModuleLoad / getStatus
+  + reconnect / selfArm / about / noteEvaluation（index.ts 内部契约）
+
+注册表语义（transport.ts）：
+  readSharedRuntime()        只读命中判断
+  getOrCreateSharedRuntime() 命中即复用；命中不了则把旧记录 stop(无参) 后发布本 build 的
+                             （best-effort，旧控制器 stop 抛错照常接管）
+  publishSharedRuntimeIfEmpty() 只补空位、绝不覆盖（004f「编辑器迟到」用）
+  releaseSharedRuntime()     deactivate 时摘下自己发布的那条
+
+index.ts 的 runtime() 取值优先级：
+  已发布且签名匹配 > 本求值自己的局部控制器 > 新建并尝试发布
+  若本求值在 host 尚不可达时建过控制器、之后又发现别的求值已发布同一 build 的记录：
+  采纳对方（adoptPublishedRuntime），并把本地那个 stop(true)（它可能已占着一个 socket）。
+
+4. bootstrap 时序（activate 早 / 晚 / 不到 三种）
+----------------------------------------------
+(A) activate 迟到（3.2.149 的实际形态）
+  bundle 求值 → runtime() 建/采纳控制器 → 发布到 eda
+    → runBootstrap(): moduleBootstrapObserved=true, bootstrapAt=now
+      → bootstrapAttempt('at module load') 立即
+        → runStart('bootstrap') → connectOnce() 取一次性 claim → register(socket)
+      → scheduleNextMacrotaskAttempt()  setTimeout(0) 第二试（claim 已取 → 一行返回）
+    → …之后编辑器终于派发 activate()
+      → activateObserved=true, activateAt=now
+      → runStart('activate') → connectOnce() → claim 已取 → 无操作（不双连、不二次 hello）
+  实测：tests/bootstrap.test.mjs「activate() after the bootstrap is a no-op」
+        —— register 1 次、hello 1 帧、两计数皆 yes
+
+(B) activate 先到（旧编辑器/旧行为）
+  activate() → runStart('activate') → connectOnce() 取 claim → register
+    → bundle 再被求值（菜单点击）或 bootstrap 再跑一次
+      → runStart('bootstrap') → claim 已取 → 无操作
+  实测：「activate() first, then the bootstrap: still one socket」
+
+(C) activate 永不到，且 host 在求值当下不可达（004f 迟到形态）
+  求值 → runtime() 建局部控制器（未发布，日志明说）
+    → bootstrapAttempt: !facade && !hasHost() → 记录 armNotes + 日志，梯子 250ms/750ms/…
+    → setTimeout(0) 第二试：host 仍未绑定 → 只记日志；若已绑定 → 立即连上
+  实测：「the bootstrap tries once more on the next macrotask」——0ms 第二试连上，
+        随后 250ms 梯子重试触发时 claim 已取 → 仍只有 1 次 register
+
+(D) 再求值（菜单点击 / 重导入）
+  第二份 bundle 求值 → runtime() 读到已发布记录 → 采纳（原控制器 noteEvaluation++）
+    → adopt 时把本地未发布的那个 stop(true)
+  实测：「a second evaluation of the bundle reuses the first controller」
+        —— 引擎用 `import('.../index.mjs?evaluation=…')` 造出真正独立的第二次求值，
+          register 仍为 1，evaluations=2，记录对象同一引用；日志有
+          "reusing the controller published by 0.4.12:cross-eval-v1"
+
+5. 诊断计数（真机区分「评估了但 activate 未派发」vs「bundle 根本没被评估」）
+--------------------------------------------------------------------------
+getStatus() 现在返回 ConnectorStatus = 原状态字段 + moduleBootstrapObserved /
+activateObserved / evaluations / bootstrapAt / activateAt（沿用既有状态读取路径，
+不做新通道）。About… 增两行：
+
+  lifecycle: moduleBootstrapObserved=yes activateObserved=no evaluations=2
+  bootstrap: the bundle was evaluated 2x in this editor runtime and activate() was
+             never dispatched — the connection starts from the module load (first seen at 09:12:01)
+
+判读规则（写进 bootstrapLine() 的注释）：
+  evaluations=1 且从菜单打开 About… ⇒ 编辑器此前从未求值本 bundle（启动时没加载，
+    只能每次启动重新导入 / 升级编辑器；bundle 内任何代码都救不了）
+  evaluations>1 且 activateObserved=no ⇒ 编辑器加载了 bundle 但没派发 activate()
+    （3.2.149 缺陷本形，bootstrap 已自救）
+  activateObserved=yes ⇒ 宿主正常派发，bootstrap 只是提前了连接
+
+另：logLine() 现在在 host 可达时顺手建 facade（原来 bootstrap 的早期日志只进 console，
+编辑器日志面板看不到）——真机上「bundle 是否被求值」的第一手证据就是日志面板里
+"[boardwise] module evaluated (evaluation N …)" 那行，之前它会丢。
+
+6. 与上游范式的差异点及理由
+---------------------------
+(1) 注册表在 transport.ts、控制器在 index.ts，而非全塞进 transport.ts
+    我们的结构是 class Transport + index.ts 持有实例与 facade；把「发布/复用/退役」
+    的机械动作留在 transport.ts（无 host 访问、纯函数、可单测），「start/stop 是什么
+    意思」留在 index.ts。host 对象一律参数传入——facade.ts 是唯一允许读 eda 的模块，
+    tests/source-guard.test.mjs 强制此约束，上游没有这层约束。
+(2) 记录多一个 getStatus + noteEvaluation，少一个「派发是否已验证」
+    上游用 handshakeVerified/isConnecting 判重；我们用一次性 claim（connectionAttempted，
+    004f 起就在）+ Transport.start() 的 isLive 守卫（connecting/handshaking/connected
+    不重入）。另外我们保留既有的退避重连（1s×2 上限 30s，minBackoffMs 可注入），
+    上游是 always-on Worker watchdog + 端口扫描，机制不同，本轮不改。
+(3) start(source) 的 activate 计数放在控制器里，而不是上游的模块级布尔
+    因为 About… 由控制器（拥有连接的那份求值）渲染，计数必须和被渲染的状态同一个闭包。
+(4) 第二试接在既有 bootstrap 梯子上，而不是新造一条路径
+    上游只有「立即 + setTimeout(0)」；我们原有 250ms/750ms/…/10s 阶梯（004f 修复），
+    于是把 setTimeout(0) 实现为「梯子之外的单次试探」：只在还没人取到 claim 时动手，
+    成功/失败都写日志，且不吞梯子的档位（既有断言 "bootstrap retry 1 in 250 ms" 不动）。
+(5) 发布失败（host 冻结/拒绝写）不致命，只在日志里说明
+    上游 try defineProperty → 失败再赋值 → 再失败就算了，不说；我们加一条
+    "the editor object is not reachable yet — this evaluation owns its controller"，
+    因为「控制器活着但交接没发生」正是真机上最容易被误判的状态。
+(6) 采纳优先于覆盖
+    上游遇到非本签名记录直接 stop 后覆盖；我们区分两种情况：别的 build（retire +
+    覆盖）vs 同 build 别的求值已发布（采纳 + 把本地未发布的 stop）。后者是我们
+    「求值先于 host 绑定」这条路径必然会遇到的形态（004f 实测存在）。
+
+7. 单测（connector/tests/bootstrap.test.mjs，11 条，全绿）
+--------------------------------------------------------
+ 1 Transport.start() does not re-register a live attempt
+ 2 a bundle evaluated with the editor bound connects without activate()   ← 冷启动真形
+ 3 activate() after the bootstrap is a no-op: one socket, one handshake
+ 4 activate() first, then the bootstrap: still one socket
+ 5 the two counters reach the status read-out, and the About box
+ 6 the bootstrap tries once more on the next macrotask
+ 7 a second evaluation of the bundle reuses the first controller          ← 重复求值复用
+ 8 a controller published by another build is stopped before this one takes over
+ 9 a stale controller that throws while stopping still gets replaced
+10 a host that refuses the hand-off still connects, and says so
+11 deactivate() releases the record, so the next load owns its own controller
+
+测试造真求值的手段：`await import('../dist/esm/index.mjs?<label>=<now>')`
+（Node 按 URL 缓存模块，不同 query = 另一次求值；两份共享的 transport.ts chunk 是无状态
+的，所有需要跨求值共享的东西都在 eda 上那条记录里）。冷启动形用
+`globalThis.eda = <stand-in host>` 在 import 之前绑定（facade.ts 读的就是裸 eda），
+测完恢复。
+
+变异自检（本轮自做 1 处，主代理可复验）：
+  src/transport.ts 的 isReusableRuntime() 加 `return false`（复用失效）
+  → tests/bootstrap.test.mjs 变红：'a second evaluation …' actual 2 / expected 1（2 次 register）
+  → cp 备份还原后 sha256 与还原前逐字节一致 a4073e29…；build+11 条复跑全绿
+  （备份/还原用 cp，未用 git checkout --）
+
+8. 遗留（未做 / 需真机）
+-----------------------
+* Worker watchdog（背景页定时器节流免疫）按任务书留给 025；本轮不动退避重连策略。
+* 3.2.149 的 API 能力分层等真机连通后 sys.probe 实测再定降级清单。
+* 「求值早于 host 绑定」时，本求值的局部控制器若先连上、之后才采纳别的求值已发布的
+  记录，会先 stop 自己再接管——这条路径只在「同一 editor runtime 里两次求值都发生在
+  eda 绑定之前」才走到，测试无法在 Node 里完全复现该竞态，真机日志会说明是哪一个分支
+  （"reusing the controller published by …" / "staying local"）。
+* dist/index.js（IIFE）未在真机编辑器里跑过：本轮的证据全部是 Node 侧行为 + 构建产物
+  静态核验，真机验证在岳的工作电脑（导入 0.4.12 → 完全重启 → 看日志/About/daemon）。
