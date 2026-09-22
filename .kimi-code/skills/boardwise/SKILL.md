@@ -43,9 +43,16 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
 - 配对是 TOFU：第一次连上就信，之后只认那个 token（`~/.boardwise/connector-token`）。
   换环境/清过配对用 `boardwise bridge revoke`。
 - 审计日志 `~/.boardwise/audit/`：每个动作都有记录。工程出了怪事，先看当天的日志。
-- **一次只开一个编辑器窗口。** 多窗口各自连 daemon，命令落到哪个窗口说不准
-  （2026-09-21 真机实测：同样的命令被旧窗口答了新窗口的事）。018 起 daemon 会拒绝
-  第二个实例并打印提示；但仍不要开多个。
+- **多窗口：用 `--project` 或 `--instance` 指哪打哪（023 起）。** 一个工程一个窗口、各连各的，
+  daemon 全部登记；`bridge call --project <工程名或uuid>` 只落到那个窗口，`bridge status` 列出所有
+  在线窗口（`windowKey` / 工程 / 页 / 路由次数）。不带 hint 且开了多个窗口时会明确报
+  `WINDOW_UNSPECIFIED` 并列候选，指错工程报 `PROJECT_NOT_CONNECTED`，同名多窗口报
+  `PROJECT_AMBIGUOUS`——**daemon 不猜**。写动作仍只碰 `test` / `test2`；
+  018 的拒绝逻辑与 `CONNECTOR_ALREADY_ACTIVE` 拒绝码已退役（码留在词表里）。
+  **编辑器刚重启时**每个窗口的 `context` 可能全是 null（API 还没起来），此时 `--project` 谁也匹配
+  不上——用 `bridge call --instance <windowKey>` 按实例 id 直达（两个 hint 同时给时 instance 优先，
+  未命中报 `WINDOW_NOT_CONNECTED` 并列在线窗口）；`bridge update-connector --instance <windowKey>`
+  可热更指定窗口，其回读等"任一窗口报到新版本"。
 
 ## 3. 审查闭环（朋友主用这条）
 
@@ -116,6 +123,8 @@ boardwise edit apply   plan.json --file <导出.epro2> --json apply.json
 
 调用形态：`boardwise bridge call --action <名字> --params '<JSON>'`；
 `create` 类动作（新建文档）需 `--yes`，否则 daemon 回 `CONFIRMATION_REQUIRED`。
+开了多个编辑器窗口时加 `--project <工程名或uuid>` 或 `--instance <windowKey>`（023）：
+见 §2 多窗口那条。
 
 | 动作 | 用途 / 关键参数 | 要点 |
 |---|---|---|

@@ -43,10 +43,38 @@ The shape is deliberately close to the ``easyeda-agent`` frames reconnoitred
 in 2026-08 (see ``docs/bridge.md``), so behaviour learned on that connector
 transfers: ``id`` correlates, ``ok`` decides, ``error.code`` is machine
 readable. Three differences: we put results in ``data`` instead of
-``result``/``context``/``artifacts``, every action is explicitly declared in
+``result``/``artifacts``, every action is explicitly declared in
 :data:`ACTIONS` rather than discovered at runtime, and the liveness signal
 travels *daemon to connector* as an event (:func:`banner_frame`) instead of
 being inferred from a connect callback the editor does not reliably call.
+
+Since 023 the daemon is a **hub of editor windows** (one registration per
+connector socket, keyed by the instance id it claims) rather than a
+single-active slot, which puts two optional top-level fields on this wire:
+
+- ``targetProject`` on a **request** — the project (name or uuid) the CLI wants
+  to be answered by. The daemon resolves it to one registered window or refuses
+  with ``PROJECT_NOT_CONNECTED`` / ``PROJECT_AMBIGUOUS``; with no hint and more
+  than one window it refuses with ``WINDOW_UNSPECIFIED`` rather than guessing.
+- ``targetInstance`` on a **request** — the same instruction spelled with the
+  *instance id* the window itself claimed, which needs no project to be readable
+  at all. Measured 2026-09-22: three windows restart and greet the daemon before
+  the editor API is ready, so every ``context`` comes back null and **no** project
+  hint can match anything — ``--project`` has nothing to match against, while the
+  instance id is in the ``hello`` params and always there. When both hints are
+  present the instance wins: it names one connection, a project name may be
+  claimed by several.
+- ``context`` on a **response** — ``{projectName, projectUuid, pageUuid,
+  pageType}``, the window's live identity at the moment it ran the action. The
+  connector reads it fresh per response and omits what it cannot read; the
+  daemon merges the non-empty keys into its own bookkeeping (:func:`merge_context`),
+  so routing follows the user switching projects instead of a picture frozen at
+  the handshake. The daemon passes the merged context on to the CLI in the relayed
+  frame, so "which window answered this?" is answerable by the caller.
+
+Both fields are optional, and a frame without them is byte-for-byte the
+pre-023 frame: an old connector never sends ``context``, and an old caller never
+sends ``targetProject`` (nor, since the instance hint, ``targetInstance``).
 """
 
 from __future__ import annotations
@@ -65,8 +93,10 @@ __all__ = [
     "ACTIONS",
     "ACTION_NAMES",
     "HELLO_TIMEOUT",
+    "CONTEXT_KEYS",
     "BridgeError",
     "ErrorCodes",
+    "Connection",
     "new_id",
     "banner_frame",
     "request_frame",
@@ -74,6 +104,8 @@ __all__ = [
     "error_frame",
     "decode_frame",
     "frame_kind",
+    "merge_context",
+    "context_of",
     "describe_actions",
 ]
 
@@ -133,6 +165,28 @@ RECOMMEND_TIMEOUT = 90.0
 
 #: Name of the event the daemon sends the instant a socket opens.
 EVENT_BANNER = "banner"
+
+#: The keys a response frame's ``context`` may carry (023 §协议字段约定), in the
+#: order they are merged. Wire spelling is camelCase like every other optional
+#: field (``instanceId``, ``projectName``); :data:`_CONTEXT_ATTRS` maps each one
+#: onto the bookkeeping attribute that holds it.
+#:
+#: ``pageType`` is the *document* domain — ``sch`` or ``pcb`` — and the
+#: vocabulary is the connector's to spell because only the editor knows; the
+#: daemon records what it is told rather than translating, and a value nobody
+#: recognises is still recorded as itself. A wrong page type is a claim about
+#: the editor, and quietly rewriting a claim is how a routing decision ends up
+#: justified by something the daemon made up.
+CONTEXT_KEYS: tuple[str, ...] = ("projectName", "projectUuid", "pageUuid", "pageType")
+
+#: wire key -> the attribute it is merged into. One table, so the merge and the
+#: read-back (:func:`context_of`) can never disagree about where a value lives.
+_CONTEXT_ATTRS: dict[str, str] = {
+    "projectName": "project_name",
+    "projectUuid": "project_uuid",
+    "pageUuid": "page_uuid",
+    "pageType": "page_type",
+}
 
 
 @dataclass(frozen=True)
@@ -812,13 +866,39 @@ class ErrorCodes:
     CONFIRMATION_REQUIRED = "CONFIRMATION_REQUIRED"
     #: The action needs the editor but no connector is connected.
     NO_CONNECTOR = "NO_CONNECTOR"
+    #: A ``targetProject`` hint that no connected window has open (023). Raised
+    #: by the daemon, before anything is forwarded: the message lists the windows
+    #: that *are* online, because the caller's next move is to name one of them.
+    PROJECT_NOT_CONNECTED = "PROJECT_NOT_CONNECTED"
+    #: A ``targetProject`` hint that more than one connected window matches —
+    #: the same project open twice, or a name and a uuid that are not unique.
+    #: Honest rather than clever: the daemon does not pick one, because a write
+    #: sent to the wrong window is the failure mode this whole routing exists to
+    #: prevent. The message lists the candidates (023).
+    PROJECT_AMBIGUOUS = "PROJECT_AMBIGUOUS"
+    #: A ``targetInstance`` hint that no connected window answers to — neither as
+    #: the hub key it registered under nor as the instance id it claimed. Raised
+    #: by the daemon, before anything is forwarded, and the message lists the
+    #: windows that *are* online, exactly like ``PROJECT_NOT_CONNECTED``: the
+    #: caller named a window and the useful thing to say next is which windows
+    #: exist. Its own code rather than a reuse of ``PROJECT_NOT_CONNECTED``
+    #: because the hint was a different kind of name, and a caller that mistyped
+    #: an instance id should be told *that*, not that a project is not open.
+    WINDOW_NOT_CONNECTED = "WINDOW_NOT_CONNECTED"
+    #: Several windows are connected and the request named none (023). Not an
+    #: error in the "something is broken" sense — it is the daemon saying it will
+    #: not guess which window the caller meant.
+    WINDOW_UNSPECIFIED = "WINDOW_UNSPECIFIED"
     #: A connector arrived while another editor instance already held the
-    #: bridge, so it was refused and its socket closed (018 §A). Promoted here
-    #: from its old home in :mod:`boardwise.bridge.daemon`: the code travels in
-    #: ``error.code``, so it belongs with the rest of the wire vocabulary — the
-    #: extension that wants to react to a refusal reads the frame, not the
-    #: daemon's source. The refusal's wording, which names the instance holding
-    #: the bridge, stays in ``daemon._refusal_message``.
+    #: bridge, so it was refused and its socket closed (018 §A).
+    #:
+    #: **Retired by 023, and kept on purpose.** The single-active guard is gone:
+    #: every authenticated connector is now registered in the hub, so this daemon
+    #: never sends this code. It stays in the vocabulary because the code is read
+    #: by connector builds in the field, and a name that vanished from the shared
+    #: vocabulary would leave their handling of it referencing nothing. Nothing
+    #: in this package raises it; a connector that still switches on it simply
+    #: has a branch that no longer fires.
     CONNECTOR_ALREADY_ACTIVE = "CONNECTOR_ALREADY_ACTIVE"
     #: The connector raised / returned an error.
     CONNECTOR_ERROR = "CONNECTOR_ERROR"
@@ -876,23 +956,74 @@ def _random_suffix() -> str:
     return secrets.token_hex(3)
 
 
-def request_frame(action: str, params: dict[str, Any] | None = None, *, id: str | None = None) -> str:
-    """Serialise a request frame."""
+def request_frame(
+    action: str,
+    params: dict[str, Any] | None = None,
+    *,
+    id: str | None = None,
+    target_project: str = "",
+    target_instance: str = "",
+) -> str:
+    """Serialise a request frame.
+
+    ``target_project`` (023) names the project the caller wants to be answered
+    by and rides **top level**, not in ``params``: it is an instruction to the
+    daemon about *which window*, not something the connector is being asked to
+    do, and keeping it out of ``params`` means it can never be forwarded into an
+    action that has no idea what a project hint is. Empty means "no hint" and
+    the key is omitted entirely, so a frame without a hint is the pre-023 frame.
+
+    ``target_instance`` is the same instruction by instance id — the window's own
+    name for itself, which survives a daemon that knows no projects at all (the
+    editor restarted and every context read came back null). Both keys may ride
+    one frame and the daemon prefers the instance; this function does not choose,
+    because sending everything the caller said is the only version of this that
+    cannot lose a hint.
+    """
     frame: dict[str, Any] = {"id": id or new_id(), "action": action}
     if params:
         frame["params"] = params
+    hint = str(target_project or "").strip()
+    if hint:
+        frame["targetProject"] = hint
+    instance = str(target_instance or "").strip()
+    if instance:
+        frame["targetInstance"] = instance
     return json.dumps(frame, ensure_ascii=False)
 
 
-def response_frame(id: str, data: Any = None) -> str:
-    """Serialise a successful response frame."""
-    return json.dumps({"id": id, "ok": True, "data": data}, ensure_ascii=False)
+def response_frame(id: str, data: Any = None, *, context: dict[str, Any] | None = None) -> str:
+    """Serialise a successful response frame.
+
+    ``context`` (023) is the answering window's live identity, a **sibling of**
+    ``data`` rather than part of it: an action's result shape is the connector's
+    contract and must not grow a field that means "which window this was". Only
+    non-empty keys are written, so a window that could read nothing sends a
+    response that looks exactly like a pre-023 one.
+    """
+    frame: dict[str, Any] = {"id": id, "ok": True, "data": data}
+    if context:
+        frame["context"] = context
+    return json.dumps(frame, ensure_ascii=False)
 
 
-def error_frame(id: str | None, error: BridgeError | dict[str, Any]) -> str:
-    """Serialise a failed response frame."""
+def error_frame(
+    id: str | None,
+    error: BridgeError | dict[str, Any],
+    *,
+    context: dict[str, Any] | None = None,
+) -> str:
+    """Serialise a failed response frame.
+
+    ``context`` (023) is the same window context :func:`response_frame` carries,
+    on the failure path: a write that came back refused is exactly when the
+    caller most needs to know *which* window refused it, and it is the same
+    top-level sibling of the payload as on a success.
+    """
     payload = error.as_dict() if isinstance(error, BridgeError) else error
     frame: dict[str, Any] = {"id": id, "ok": False, "error": payload}
+    if context:
+        frame["context"] = context
     return json.dumps(frame, ensure_ascii=False)
 
 
@@ -1019,13 +1150,92 @@ class Connection:
     #: :func:`boardwise.bridge.daemon.client_with_version`, which renders that
     #: absence as "(version unknown)" instead of hiding it.
     connector_version: str = ""
-    #: The editor *window's* project, announced in `hello` (021 §2.3). Empty
-    #: for a CLI connection, for a connector build that predates the fields, and
-    #: for a window that could not read its project — the three cases are
-    #: deliberately not told apart here, because the honest reading of all three
-    #: is "this window named no project", and a guessed name is worse than none.
+    #: The *instance* this socket claims to be (018 §A), read from the `hello`
+    #: params — declared here rather than set on the object by the daemon, which
+    #: is how it used to travel and made "which fields exist?" a question about
+    #: the caller. ``instance_id_source`` says where the id came from: ``hello``
+    #: when the connector named itself, ``connection`` when the daemon invented
+    #: one for a build that predates the field.
+    instance_id: str = ""
+    instance_id_source: str = ""
+    #: The hub key this socket registered under (023). Equal to
+    #: ``instance_id`` except when two live sockets claim the same id, where the
+    #: second gets a suffixed key. Set by the daemon at registration; empty on a
+    #: CLI connection.
+    window_key: str = ""
+    #: The editor *window's* project, announced in `hello` (021 §2.3) and then
+    #: **kept fresh** from every response frame's ``context`` (023). Empty for a
+    #: CLI connection, for a connector build that predates the fields, and for a
+    #: window that could not read its project — the three cases are deliberately
+    #: not told apart here, because the honest reading of all three is "this
+    #: window named no project", and a guessed name is worse than none.
     project_name: str = ""
     project_uuid: str = ""
+    #: The document in front of that window, and its domain (`sch` / `pcb`), from
+    #: the same response ``context`` (023). Reachable only from a response: the
+    #: handshake happens before any action has run, so a fresh connection knows
+    #: no page until the connector answers something.
+    page_uuid: str = ""
+    page_type: str = ""
     authenticated: bool = False
     #: Frames received after handshake, for the audit log.
     seen_actions: list[str] = field(default_factory=list)
+
+
+def merge_context(target: Any, context: Any) -> tuple[str, ...]:
+    """Fold a response frame's ``context`` into a connection's bookkeeping.
+
+    Returns the attribute names that **changed**, in :data:`CONTEXT_KEYS` order —
+    empty when nothing did, which is also what an old connector (no ``context``
+    at all) and a context full of unreadable keys produce.
+
+    Three rules, all of them about not inventing facts:
+
+    - **Only non-empty strings are merged.** A key the connector could not read
+      is omitted from its frame, and the merge treats ``None``, ``""`` and a
+      non-string the same as absent: they leave the known value alone. A window
+      that has just lost its active document must not have its project erased by
+      a null — the project is still open.
+    - **Unknown keys are ignored**, not stored: the frame is written by a
+      connector we did not build, and letting it write arbitrary attributes onto
+      daemon-side bookkeeping is a privilege nothing needs.
+    - **Values are kept as sent** (whitespace-stripped), never translated or
+      validated against a vocabulary. A ``pageType`` this daemon has never heard
+      of is still the editor's own answer.
+
+    Duck-typed rather than typed to :class:`Connection`: the daemon's live
+    registry entry carries the same four attributes, and the routing decision has
+    to read the *registry's* copy. One merge implementation for both, so the two
+    cannot drift.
+    """
+    if not isinstance(context, dict):
+        return ()
+    changed: list[str] = []
+    for key in CONTEXT_KEYS:
+        value = context.get(key)
+        if not isinstance(value, str):
+            continue
+        value = value.strip()
+        if not value:
+            continue
+        attribute = _CONTEXT_ATTRS[key]
+        if getattr(target, attribute, "") != value:
+            setattr(target, attribute, value)
+            changed.append(attribute)
+    return tuple(changed)
+
+
+def context_of(target: Any) -> dict[str, str]:
+    """One connection's current context, wire-shaped; empty keys are omitted.
+
+    The inverse of :func:`merge_context`, and the reason both live here: what the
+    daemon hands back to the caller on a relayed response has to be spelled the
+    same way the connector spells it, or a reader would have to know which side
+    of the wire it is looking at.
+    """
+    payload: dict[str, str] = {}
+    for key in CONTEXT_KEYS:
+        value = str(getattr(target, _CONTEXT_ATTRS[key], "") or "")
+        if value:
+            payload[key] = value
+    return payload

@@ -62,7 +62,15 @@ class BridgeClient:
             "client": self._client,
         }, id="hello")
 
-    async def call(self, action: str, params: dict[str, Any] | None = None, *, id: str | None = None) -> Any:
+    async def call(
+        self,
+        action: str,
+        params: dict[str, Any] | None = None,
+        *,
+        id: str | None = None,
+        target_project: str | None = None,
+        target_instance: str | None = None,
+    ) -> Any:
         """Send one request and return ``data``; raises :class:`BridgeError`.
 
         A transport death is normalised into ``BridgeError(DISCONNECTED)`` right
@@ -72,10 +80,30 @@ class BridgeClient:
         daemon went away" apart from "the action failed" — the draw flow reads
         exactly that code to decide whether the page's state is unknown rather
         than assuming nothing happened (M0-P0d follow-up, 2026-09-18).
+
+        ``target_project`` (023) is the window hint the daemon routes by: the
+        project name or uuid whose editor window should answer. ``None`` (the
+        default, and what every caller that does not pass it sends) omits the
+        field entirely, so a request without a hint is the pre-023 frame — which
+        is also what keeps a one-window daemon working with no ceremony at all.
+
+        ``target_instance`` is the same hint by instance id, and it is the one
+        that still works when a window has no project to be named by: the editor
+        tells the daemon its instance id at the handshake, long before any action
+        proves it can read a project. Passing both sends both; the daemon prefers
+        the instance.
         """
         frame_id = id or new_id()
         try:
-            await self._websocket.send(request_frame(action, params, id=frame_id))
+            await self._websocket.send(
+                request_frame(
+                    action,
+                    params,
+                    id=frame_id,
+                    target_project=target_project or "",
+                    target_instance=target_instance or "",
+                )
+            )
             frame = await self._recv_response()
         except (websockets.ConnectionClosed, OSError) as exc:
             raise BridgeError(

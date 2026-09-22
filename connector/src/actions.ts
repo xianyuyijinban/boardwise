@@ -16,7 +16,7 @@
  */
 
 import { PROBE_CHECKS, ADDED_SINCE } from './api-names';
-import { ActionError, isActionError } from './protocol';
+import { ActionError, isActionError, type ResponseContext } from './protocol';
 import { sysSelfUpdate } from './self-update';
 import { VERSION } from './version';
 
@@ -422,6 +422,65 @@ export async function currentProjectIdentity(
   } catch {
     return {};
   }
+}
+
+/**
+ * The `pageType` vocabulary of a response frame's context (023 §协议字段约定 1).
+ *
+ * Two words, and they are `document.current`'s own: `sch` for a schematic or
+ * one of its pages, `pcb` for a PCB. `null` is the third answer, and it is a
+ * *reading* — a document is in front and it is neither (a symbol editor, the
+ * home tab). A window that could read no document at all omits the key
+ * instead, because "no document" and "a document of another kind" are
+ * different facts and the daemon routes on the difference.
+ */
+function responsePageType(kind: string): 'sch' | 'pcb' | null {
+  if (kind === 'pcb') return 'pcb';
+  if (kind === 'page' || kind === 'schematic') return 'sch';
+  return null;
+}
+
+/**
+ * This window's live context, read for each response frame (023 §协议字段约定 1).
+ *
+ * Why it is per response rather than per connection: with three editor windows
+ * open, the daemon has to answer "which project is this action about?" before
+ * every call, and a context frozen at `hello` answers it about the document the
+ * user had open when the connector connected. The response the daemon is
+ * already waiting for is the freshest thing on the wire, so the answer rides on
+ * it.
+ *
+ * Both reads are the *shared* ones — `currentProjectIdentity`, which is what
+ * `hello` announces, and `activeDocument`, which is what `doc.list` and
+ * `document.current` use — so this can never disagree with the actions a caller
+ * would use to check it. The empty `problems` array is deliberate: those
+ * findings belong to the actions that report them, and a context frame carries
+ * four short fields, not a diagnosis.
+ *
+ * **Never throws, never invents, never waits.** Whatever could not be read is
+ * left out of the object — an absent `pageUuid` means "this window did not
+ * say", and the transport puts the whole read on a deadline so a host call that
+ * never settles costs a decoration rather than the answer.
+ */
+export async function currentResponseContext(eda: Eda): Promise<ResponseContext> {
+  const context: ResponseContext = {};
+  try {
+    Object.assign(context, await currentProjectIdentity(eda));
+  } catch {
+    // `currentProjectIdentity` answers `{}` instead of throwing; this is the
+    // shell for a host that gets past its own guards.
+  }
+  try {
+    const active = await activeDocument(eda, []);
+    if (active) {
+      context.pageUuid = active.uuid;
+      context.pageType = responsePageType(active.type);
+    }
+  } catch {
+    // A document read that failed leaves both keys out — never the previous
+    // window's reading, which would name a page this window does not have.
+  }
+  return context;
 }
 
 /**
