@@ -62,6 +62,37 @@ export type TransportState =
   | 'reconnecting'
   | 'stopped';
 
+/**
+ * The editor window's own project, announced in `hello` (021 §2.3).
+ *
+ * Why it belongs in the handshake: `eda` is scoped to one editor *window*, so
+ * the daemon can only ever see the project of the window whose connector holds
+ * the bridge. Every window's connector announcing its own project — including
+ * the ones the single-active guard turns away, which are exactly the other
+ * windows — is what makes "which projects does the user have open?" answerable
+ * at all (021 §实测记录 A1: three projects, three windows, one process).
+ *
+ * Both fields are optional, and are simply left out when the window cannot name
+ * its project: the daemon records that absence rather than a guess, because
+ * this is the field a caller would use to decide *where* it is working.
+ */
+export type HelloProjectIdentity = {
+  /** The label the editor shows for the project, e.g. `/test`. */
+  projectName?: string;
+  projectUuid?: string;
+};
+
+/**
+ * How long `hello` waits for that read, in ms.
+ *
+ * The daemon closes a socket that has not said `hello` within its own
+ * `HELLO_TIMEOUT` (5 s), and `hello` is also what starts the heartbeat — so a
+ * host call that never settles must not be able to hold the handshake open.
+ * Past the deadline the frame goes out without the identity: a missing field is
+ * honest, a hello nobody ever sends is a dead connection.
+ */
+const IDENTITY_DEADLINE_MS = 1500;
+
 export type TransportOptions = {
   url: string;
   token: string;
@@ -91,6 +122,22 @@ export type TransportOptions = {
    * connects (the daemon falls back to its connection-level uuid).
    */
   instanceId?: string;
+  /**
+   * Reads the project this editor window has open, for `hello` (021 §2.3).
+   *
+   * Injected rather than imported: the reader lives in `actions.ts`, which this
+   * file must not depend on (the dependency runs the other way, and reaching up
+   * would be a cycle). Omitted entirely when absent — and also when it answers
+   * nothing, throws, or never settles, because none of those is a reason to
+   * lose the handshake.
+   */
+  projectIdentity?: () => Promise<HelloProjectIdentity | undefined>;
+  /**
+   * Deadline for {@link TransportOptions.projectIdentity}, in ms; default
+   * {@link IDENTITY_DEADLINE_MS}. A tunable because the tests shrink it to keep
+   * runs fast, like the others here.
+   */
+  projectIdentityTimeoutMs?: number;
   /** Called for every request frame; must return the data payload or throw. */
   onRequest: (action: string, params: Record<string, unknown>) => Promise<unknown>;
   onStatus?: (state: TransportState, detail?: string) => void;
@@ -242,6 +289,40 @@ export class Transport {
     this.missed = 0;
     this.backoffMs = this.options.minBackoffMs ?? 1000;
     this.setState('handshaking');
+    const readProject = this.options.projectIdentity;
+    if (!readProject) {
+      // No reader configured: unchanged behaviour — the frame goes out here and
+      // now, with no project fields at all.
+      this.sendHello(trigger, {});
+      return;
+    }
+    void this.sendHelloWithProject(trigger, readProject);
+  }
+
+  /**
+   * Read this window's project, then send `hello` (021 §2.3).
+   *
+   * Deliberately on a deadline (see {@link IDENTITY_DEADLINE_MS}): the identity
+   * is a decoration on the frame, never a precondition for it, and the daemon
+   * closes a socket that stays silent past its own `HELLO_TIMEOUT`.
+   */
+  private async sendHelloWithProject(
+    trigger: string,
+    readProject: () => Promise<HelloProjectIdentity | undefined>,
+  ): Promise<void> {
+    const attempt = this.socketId;
+    const project = await readProjectIdentity(
+      readProject,
+      this.options.projectIdentityTimeoutMs ?? IDENTITY_DEADLINE_MS,
+    );
+    // A reconnect may have begun while the read was pending. That attempt owns
+    // the wire and greets on its own (`greeted` is per attempt), so this one
+    // must not send anything to a socket that is no longer ours.
+    if (this.stopped || !attempt || this.socketId !== attempt) return;
+    this.sendHello(trigger, project);
+  }
+
+  private sendHello(trigger: string, project: HelloProjectIdentity): void {
     try {
       this.raw(
         requestFrame(
@@ -260,6 +341,10 @@ export class Transport {
             // editor windows apart instead of letting them take turns
             // (018 §A). Omitted when the caller has none.
             ...(this.options.instanceId ? { instanceId: this.options.instanceId } : {}),
+            // Which project this window has open (021 §2.3), so the daemon can
+            // list every window it has heard from — the refused ones included —
+            // as a project. Omitted when this window cannot name one.
+            ...project,
           },
           'hello',
         ),
@@ -407,5 +492,51 @@ export class Transport {
     this.log(`reconnecting in ${this.backoffMs} ms: ${reason}`);
     this.reconnectTimer = setTimeout(() => void this.connect(), this.backoffMs);
     this.backoffMs = Math.min(this.backoffMs * 2, this.options.maxBackoffMs ?? 30000);
+  }
+}
+
+/**
+ * Keep only the fields the `hello` frame is entitled to carry.
+ *
+ * The reader is a callback a build supplies, so this is where "a field we could
+ * not read" is turned into "no field" — never into `null`, `undefined` or the
+ * string `"undefined"`, all of which would read on the daemon side like a
+ * project that happens to be named that.
+ */
+function identityFields(identity: HelloProjectIdentity | undefined): HelloProjectIdentity {
+  const name = identity?.projectName;
+  const uuid = identity?.projectUuid;
+  return {
+    ...(typeof name === 'string' && name ? { projectName: name } : {}),
+    ...(typeof uuid === 'string' && uuid ? { projectUuid: uuid } : {}),
+  };
+}
+
+/**
+ * The injected project read, with a deadline, and with "nothing" as its one
+ * failure mode.
+ *
+ * Never rejects and never hangs. A reader that throws and a reader that never
+ * settles both answer `{}` — both are real on the editor host (measured
+ * 2026-09-14: host objects are Proxies whose `get` trap throws), and a caller
+ * whose read failed still has a socket to open and a daemon waiting for it.
+ */
+async function readProjectIdentity(
+  read: () => Promise<HelloProjectIdentity | undefined>,
+  ms: number,
+): Promise<HelloProjectIdentity> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const deadline = new Promise<undefined>((resolve) => {
+      timer = setTimeout(() => resolve(undefined), ms);
+    });
+    // `Promise.race` subscribes to both promises, so a reader that rejects
+    // *after* the deadline won is still a handled rejection.
+    const value = await Promise.race([Promise.resolve(read()), deadline]);
+    return identityFields(value);
+  } catch {
+    return {};
+  } finally {
+    clearTimeout(timer);
   }
 }

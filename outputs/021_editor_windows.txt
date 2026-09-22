@@ -1,0 +1,7 @@
+5240	lceda-pro	visible=True	min=False	hwnd=17041766	反激辅助电源 | 嘉立创EDA(专业版) - V3.2.186
+5240	lceda-pro	visible=True	min=False	hwnd=6688148	嘉立创EDA(专业版) - V3.2.186
+5240	lceda-pro	visible=True	min=False	hwnd=3545490	test2 | 嘉立创EDA(专业版) - V3.2.186
+5240	lceda-pro	visible=False	min=False	hwnd=141953144	MSCTFIME UI
+5240	lceda-pro	visible=False	min=False	hwnd=727194	Default IME
+60344	lceda-pro	visible=False	min=False	hwnd=110497198	Default IME
+55916	lceda-pro	visible=False	min=False	hwnd=661864	Default IME

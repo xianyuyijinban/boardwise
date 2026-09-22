@@ -44,6 +44,13 @@ class FakeSocket {
 
   async deliver(frame) {
     await this.onMessage?.({ data: JSON.stringify(frame) });
+    // The `hello` a banner triggers is no longer on the wire the moment
+    // `deliver` returns: since 021 §2.3 it carries this window's project, read
+    // from the host first, so it goes out a few microtasks later. One macrotask
+    // turn drains that whole chain, so a test can still read `frame('hello')`
+    // straight after delivering — and if the handshake never happens, that read
+    // is `undefined` and the test fails, which is the point.
+    await new Promise((resolve) => setImmediate(resolve));
   }
 
   frame(action) {
@@ -757,4 +764,52 @@ test('a reading from one daemon does not outlive the connection that produced it
 
   assert.equal(connector.getStatus().minConnectorVersion, undefined);
   assert.equal(connector.getStatus().connectorOutdated, undefined);
+});
+
+// --------------------------------------------------------------------------
+// 021 §2.3 — every window names its project in `hello`
+// --------------------------------------------------------------------------
+
+test('hello carries this window\'s project, taken from the host through the real wiring', async (t) => {
+  // The production path, end to end: `index.ts` hands the transport a reader
+  // built on `actions.currentProjectIdentity`. What the daemon gets is a claim
+  // by *this window* — the only channel there is, because `eda` is
+  // window-scoped and the host has no "list the open projects" member (021
+  // §A4) — so the value has to reach the frame unchanged.
+  const { socket, host } = withHost(t);
+  host.dmt_Project = {
+    getCurrentProjectInfo: async () => ({
+      uuid: 'ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489',
+      name: 'test',
+      friendlyName: '/test',
+    }),
+  };
+
+  await connector.activate();
+  await socket.deliver(BANNER);
+
+  const hello = socket.frame('hello');
+  assert.ok(hello, 'the handshake must still happen');
+  assert.equal(hello.params.projectName, '/test', 'the name the editor itself shows');
+  assert.equal(
+    hello.params.projectUuid,
+    'ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489',
+  );
+});
+
+test('a window that cannot name its project still connects', async (t) => {
+  // A host build without `dmt_Project`, or a read that fails, must not cost the
+  // connection: the fields are omitted, and omitted is a fact the daemon
+  // records as "this window named no project" rather than one it fills in from
+  // whichever project it happens to be talking to.
+  const { socket } = withHost(t); // this fake host has no dmt_Project at all
+
+  await connector.activate();
+  await socket.deliver(BANNER);
+
+  const hello = socket.frame('hello');
+  assert.ok(hello, 'a missing project is not a missing handshake');
+  assert.equal('projectName' in hello.params, false);
+  assert.equal('projectUuid' in hello.params, false);
+  assert.match(hello.params.token, /^[0-9a-f]{64}$/, 'everything else is unchanged');
 });
