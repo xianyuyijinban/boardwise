@@ -30,11 +30,14 @@ from boardwise.bridge.protocol import BridgeError, ErrorCodes
 from boardwise.cli import (
     DOCTOR_PROBE_CHECKS,
     EDITOR_API_FLOOR,
+    EDITOR_INSTALL_ENV,
     DoctorProbe,
     _cmd_doctor,
+    _editor_version_key,
     _repo_connector_version,
     build_parser,
     run_doctor,
+    scan_editor_install,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -49,7 +52,14 @@ ALL_PRESENT = {
 
 
 def healthy_probe(**overrides) -> DoctorProbe:
-    """A probe of a working installation, with fields overridable one at a time."""
+    """A probe of a working installation, with fields overridable one at a time.
+
+    The two offline fields (`offline_editor_*`) stay empty here: this fixture is
+    about the bridge path, and each case of the offline pre-check has its own
+    test below. A fixture that claimed an install tree would also be a second
+    input to the version line, so the floor cases would no longer be testing what
+    they say they test.
+    """
     values = {
         "port": 61190,
         "daemon_version": "0.1.0",
@@ -78,16 +88,42 @@ def check(checks, name):
     return found
 
 
+@pytest.fixture(autouse=True)
+def _no_real_editor(monkeypatch, tmp_path_factory):
+    """The offline pre-check must never read *this* machine's editor.
+
+    `_cmd_doctor` scans the real disk, and two tests below run the real CLI — so
+    without this pin their line counts would depend on whether the developer
+    happens to have 立创 EDA Pro installed and at which version. Pinning the
+    search to an empty directory makes every case the test's own; the tests that
+    want a tree to be found pin the variable again, to a tree they built.
+    """
+    monkeypatch.setenv(EDITOR_INSTALL_ENV, str(tmp_path_factory.mktemp("no-editor")))
+
+
+def install_tree(root: Path, version: str, name: str = "lceda-pro") -> Path:
+    """A directory shaped like an editor install tree, manifest included."""
+    tree = root / name
+    (tree / "resources" / "app").mkdir(parents=True, exist_ok=True)
+    (tree / "resources" / "app" / "package.json").write_text(
+        json.dumps({"name": "client.pro.lceda.cn", "version": version}), encoding="utf-8"
+    )
+    return tree
+
+
 def test_a_working_installation_is_all_green():
     checks = run_doctor(healthy_probe())
     assert [(entry.name, entry.ok) for entry in checks] == [
         (entry.name, True) for entry in checks
     ], [(entry.name, entry.ok, entry.detail) for entry in checks]
     assert all(entry.fix == "" for entry in checks), "a green line must not carry a fix"
+    # The eight lines, the offline pre-check first (issue #3). This probe says
+    # nothing about an install tree, so that line is a skip rather than a claim.
     assert [entry.name for entry in checks] == [
-        "daemon", "connector", "methods", "editor-version",
+        "editor-install", "daemon", "connector", "methods", "editor-version",
         "daemon-version", "connector-version", "project",
     ]
+    assert check(checks, "editor-install").skipped is True
 
 
 def test_nothing_listening_is_reported_per_line_with_a_fix():
@@ -95,8 +131,11 @@ def test_nothing_listening_is_reported_per_line_with_a_fix():
         port=61190, daemon_version="0.1.0", local_connector_version="0.4.5",
         ping_error="connection refused",
     ))
-    assert [entry.ok for entry in checks] == [False] * 7
-    assert all(entry.fix for entry in checks), "every failing line must say what to do"
+    # Seven red lines; the offline pre-check has no install to read here (no
+    # page for it was gathered), so it skips instead of going red.
+    assert [entry.ok for entry in checks] == [True] + [False] * 7
+    assert check(checks, "editor-install").skipped is True
+    assert all(entry.fix for entry in checks if not entry.ok), "every failing line must say what to do"
     assert "connection refused" in check(checks, "daemon").detail
     assert "61190" in check(checks, "daemon").detail
     # A check that could not be made says so instead of pretending it failed.
@@ -321,17 +360,233 @@ def test_the_version_floor_is_the_one_the_task_book_names():
 
 
 # --------------------------------------------------------------------------
+# the offline pre-check (issue #3)
+# --------------------------------------------------------------------------
+#
+# The complaint: the version gate was the *last* thing decidable, because it sat
+# behind daemon → extension → .eext → restart → pairing, while upgrading the
+# editor is the first thing to do. It is read from the install tree instead,
+# offline, and judged first — so a machine with an old editor says so before the
+# user has set anything else up.
+
+
+def test_the_offline_line_comes_first_and_names_the_tree_it_read():
+    checks = run_doctor(healthy_probe(
+        offline_editor_path=r"D:\lceda-pro",
+        offline_editor_version="3.2.186.b52e3e87",
+    ))
+    assert [entry.name for entry in checks][0] == "editor-install"
+    assert len(checks) == 8
+    entry = checks[0]
+    assert entry.ok is True and entry.skipped is False
+    assert r"D:\lceda-pro" in entry.detail
+    assert "3.2.186.b52e3e87" in entry.detail
+    assert "resources/app/package.json" in entry.detail
+
+
+def test_an_old_install_tree_is_red_before_anything_is_connected():
+    """The issue's own machine: nothing set up yet, an editor below the floor."""
+    checks = run_doctor(DoctorProbe(
+        port=61190,
+        offline_editor_path=r"D:\lceda-pro",
+        offline_editor_version="3.2.149.88089769",
+    ))
+    entry = checks[0]
+    assert entry.name == "editor-install"
+    assert entry.ok is False and entry.skipped is False
+    assert "3.2.149.88089769" in entry.detail and r"D:\lceda-pro" in entry.detail
+    # 直给：先升级，其余都排在它后面；地址按 docs/install.md 的说法。
+    assert "先升级编辑器到 ≥3.2.183" in entry.fix
+    assert "其余检查项都排在它后面" in entry.fix
+    assert "https://pro.easyeda.com/" in entry.fix
+    # …and only then the six prerequisites of the bridge path.
+    assert [c.name for c in checks][1] == "daemon"
+
+
+def test_an_old_editor_still_connected_is_red_on_both_version_lines():
+    """Same old editor, breadcrumb complete: the offline line still comes first.
+
+    Both lines are red here and they agree, which is the state a user lands in
+    after the extension finally connects on a machine that never upgraded — with
+    the actionable one (upgrade) printed first.
+    """
+    checks = run_doctor(healthy_probe(
+        editor_version="3.2.149.88089769",
+        probe={"version": "3.2.149.88089769", "connector": "0.4.5", "checks": ALL_PRESENT},
+        offline_editor_path=r"D:\lceda-pro",
+        offline_editor_version="3.2.149.88089769",
+    ))
+    assert [entry.ok for entry in (check(checks, "editor-install"), check(checks, "editor-version"))] == [False, False]
+    assert "先升级编辑器" in check(checks, "editor-install").fix
+    assert "升级立创 EDA Pro" in check(checks, "editor-version").fix
+
+
+def test_an_unreadable_or_absent_install_tree_is_a_skip_not_a_verdict():
+    """The distinction the issue author asked to keep: unknown is not red."""
+    unreadable = run_doctor(DoctorProbe(
+        port=61190, offline_editor_path=r"D:\lceda-pro", offline_editor_version="",
+        offline_editor_roots=("D:\\", "C:\\"),
+    ))
+    entry = unreadable[0]
+    assert entry.skipped is True and entry.ok is True
+    assert r"D:\lceda-pro" in entry.detail and "跳过" in entry.detail
+
+    absent = run_doctor(DoctorProbe(
+        port=61190, offline_editor_roots=("D:\\", r"C:\Program Files"),
+    ))
+    entry = absent[0]
+    assert entry.name == "editor-install"
+    assert entry.skipped is True and entry.ok is True
+    assert "离线没找到编辑器安装" in entry.detail
+    assert "D:\\" in entry.detail and r"C:\Program Files" in entry.detail
+
+
+def test_a_manifest_without_a_usable_version_is_also_a_skip():
+    checks = run_doctor(DoctorProbe(
+        port=61190, offline_editor_path=r"D:\lceda-pro", offline_editor_version="not a version",
+    ))
+    entry = checks[0]
+    assert entry.skipped is True and entry.ok is True
+    assert "跳过" in entry.detail and "not a version" in entry.detail
+
+
+def test_the_four_field_version_is_compared_on_its_first_three_fields():
+    # The install tree carries a build suffix, `sys.probe` does not: without this
+    # the two readings of the same release would look like different releases.
+    assert _editor_version_key("3.2.149.88089769") == (3, 2, 149)
+    assert _editor_version_key("3.2.186.b52e3e87") == (3, 2, 186)
+    assert _editor_version_key("v3.2.183") == (3, 2, 183)
+    assert _editor_version_key("") == ()
+
+    checks = run_doctor(healthy_probe(
+        offline_editor_path=r"D:\lceda-pro",
+        offline_editor_version="3.2.186.b52e3e87",
+    ))
+    assert all(entry.ok for entry in checks)
+    assert "不是正在跑的这个" not in check(checks, "editor-version").detail
+
+    # The floor itself passes with a suffix, and one field below it does not.
+    at_floor = run_doctor(DoctorProbe(port=61190, offline_editor_version="3.2.183.71234567"))
+    assert at_floor[0].ok is True
+    below = run_doctor(DoctorProbe(port=61190, offline_editor_version="3.2.182.71234567"))
+    assert below[0].ok is False
+
+
+def test_the_tree_newer_than_the_running_editor_asks_for_a_restart():
+    """Upgraded but not restarted: the fix is a restart, not a download."""
+    checks = run_doctor(healthy_probe(
+        editor_version="3.2.149",
+        probe={"version": "3.2.149", "connector": "0.4.5", "checks": ALL_PRESENT},
+        offline_editor_path=r"D:\lceda-pro",
+        offline_editor_version="3.2.186.b52e3e87",
+    ))
+    install = check(checks, "editor-install")
+    assert install.skipped is True and install.ok is True
+    assert "两处不是同一个安装" in install.detail
+    assert "3.2.149" in install.detail and "3.2.186.b52e3e87" in install.detail
+
+    running = check(checks, "editor-version")
+    assert running.ok is False
+    assert "3.2.149" in running.detail and "3.2.186.b52e3e87" in running.detail
+    assert "重启" in running.fix
+    assert "Get-Process lceda-pro" in running.fix
+
+
+def test_a_second_stale_install_on_disk_is_a_note_not_a_red_line():
+    """The other direction: the editor in use is fine, the found tree is old.
+
+    Reported (the two readings disagree) but not red — a check that fails on a
+    machine where everything works is the false alarm this project keeps
+    cleaning up.
+    """
+    checks = run_doctor(healthy_probe(
+        offline_editor_path=r"C:\Program Files\lceda-pro",
+        offline_editor_version="3.2.149.88089769",
+    ))
+    install = check(checks, "editor-install")
+    assert install.skipped is True and install.ok is True
+    assert "两处不是同一个安装" in install.detail
+    assert r"C:\Program Files\lceda-pro" in install.detail
+
+    running = check(checks, "editor-version")
+    assert running.ok is True
+    assert "不是正在跑的这个" in running.detail
+    assert [entry for entry in checks if not entry.ok] == []
+
+
+def test_scan_editor_install_reads_the_manifest_under_a_root(tmp_path):
+    tree = install_tree(tmp_path, "3.2.186.b52e3e87")
+    scan = scan_editor_install(roots=[tmp_path])
+    assert scan.install is not None
+    assert scan.install.path == tree
+    assert scan.install.version == "3.2.186.b52e3e87"
+    assert scan.roots == (tmp_path,)
+
+
+def test_scan_editor_install_matches_the_vendors_naming_habit(tmp_path):
+    # Not one of the exact names: found by the one-level glob instead, and case
+    # does not matter (Windows glob normalises it).
+    tree = install_tree(tmp_path, "3.2.190.b0", name="LCEDA-Pro-2")
+    scan = scan_editor_install(roots=[tmp_path])
+    assert scan.install is not None and scan.install.path == tree
+    assert scan.install.version == "3.2.190.b0"
+
+
+def test_scan_editor_install_tells_a_missing_tree_from_an_unreadable_one(tmp_path):
+    empty = tmp_path / "no-editor-here"
+    empty.mkdir()
+    assert scan_editor_install(roots=[empty]).install is None
+
+    # A directory of the right name with nothing inside: "found, but no version"
+    # — a different answer from "found nothing", and doctor says which.
+    (tmp_path / "lceda-pro").mkdir()
+    scan = scan_editor_install(roots=[tmp_path])
+    assert scan.install is not None
+    assert scan.install.path == tmp_path / "lceda-pro"
+    assert scan.install.version == ""
+
+
+def test_scan_editor_install_survives_a_broken_manifest(tmp_path):
+    tree = install_tree(tmp_path, "3.2.186")
+    (tree / "resources" / "app" / "package.json").write_bytes(b"{not json at all")
+    scan = scan_editor_install(roots=[tmp_path])
+    assert scan.install is not None and scan.install.version == ""
+
+
+def test_the_pinned_search_replaces_the_built_in_locations(monkeypatch, tmp_path):
+    """`BOARDWISE_EDITOR_INSTALL` wins, so a test (or an odd machine) decides."""
+    from boardwise.cli import _editor_search_roots
+
+    tree = install_tree(tmp_path, "3.2.186")
+    monkeypatch.setenv(EDITOR_INSTALL_ENV, str(tmp_path))
+    assert _editor_search_roots() == [tmp_path]
+    assert scan_editor_install().install.path == tree
+
+    # Unset, the built-in locations come back (drive roots first, then the two
+    # Windows install directories) — asserted as a shape, not as this machine's
+    # disk.
+    monkeypatch.delenv(EDITOR_INSTALL_ENV)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    monkeypatch.setenv("ProgramFiles", str(tmp_path / "pf"))
+    roots = _editor_search_roots()
+    assert len(roots) == len(set(roots)) and roots, roots
+    assert Path(tmp_path / "local" / "Programs") in roots
+    assert Path(tmp_path / "pf") in roots
+
+
+# --------------------------------------------------------------------------
 # the CLI itself
 # --------------------------------------------------------------------------
 
 
-def _env(home: Path, port: int) -> dict:
+def _env(home: Path, port: int, **extra: str) -> dict:
     import os
 
     env = os.environ.copy()
     env["PYTHONPATH"] = str(SRC)
     env["BOARDWISE_HOME"] = str(home)
     env["BOARDWISE_PORT"] = str(port)
+    env.update(extra)
     return env
 
 
@@ -343,28 +598,61 @@ def _free_port() -> int:
 
 def test_doctor_without_a_daemon_exits_1_with_fixes(tmp_path):
     port = _free_port()
+    empty = tmp_path / "no-editor"
+    empty.mkdir()
     result = subprocess.run(
         [sys.executable, "-m", "boardwise.cli", "doctor", "--port", str(port),
          "--json", str(tmp_path / "doctor.json")],
         capture_output=True, text=True, encoding="utf-8",
-        env=_env(tmp_path, port), timeout=60,
+        env=_env(tmp_path, port, BOARDWISE_EDITOR_INSTALL=str(empty)), timeout=60,
     )
     assert result.returncode == 1, result.stdout + result.stderr
     assert "Traceback" not in result.stderr
+    # Seven red lines and one skip: the offline pre-check looked where it was
+    # told to, found nothing, and says so instead of inventing a version.
     assert result.stdout.count("FAIL") == 7
+    assert result.stdout.count("SKIP") == 1
     assert "boardwise bridge start" in result.stdout
-    assert "0/7" in result.stdout
+    assert "1/8" in result.stdout
     payload = json.loads((tmp_path / "doctor.json").read_text(encoding="utf-8"))
     assert payload["ok"] is False
     assert payload["port"] == port
     assert [entry["name"] for entry in payload["checks"]] == [
-        "daemon", "connector", "methods", "editor-version",
+        "editor-install", "daemon", "connector", "methods", "editor-version",
         "daemon-version", "connector-version", "project",
     ]
+    assert payload["checks"][0]["skipped"] is True
     assert payload["versions"]["daemon"] == __version__
+    assert payload["versions"]["editorInstall"] == ""
     assert payload["versions"]["connectorRepo"] == json.loads(
         (ROOT / "connector" / "extension.json").read_text(encoding="utf-8")
     )["version"]
+
+
+def test_the_cli_says_upgrade_before_anything_is_connected(tmp_path):
+    """End to end, the issue's machine: old editor, no daemon, no extension.
+
+    The one thing this machine can already know is the answer, so it is the one
+    thing the report starts with — and it does not need the other six lines to
+    have a verdict first.
+    """
+    port = _free_port()
+    install_tree(tmp_path, "3.2.149.88089769")
+    result = subprocess.run(
+        [sys.executable, "-m", "boardwise.cli", "doctor", "--port", str(port)],
+        capture_output=True, text=True, encoding="utf-8",
+        env=_env(tmp_path, port, BOARDWISE_EDITOR_INSTALL=str(tmp_path)), timeout=60,
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "Traceback" not in result.stderr
+    lines = [line for line in result.stdout.splitlines() if line.strip()]
+    assert lines[0].lstrip().startswith("FAIL")
+    assert "编辑器安装版本 ≥ 3.2.183" in lines[0]
+    assert "3.2.149.88089769" in result.stdout
+    assert "先升级编辑器到 ≥3.2.183" in result.stdout
+    assert "0/8" in result.stdout
+    assert "8 项需要处理" in result.stdout
+    assert result.stdout.count("FAIL") == 8
 
 
 class _FakeDaemon:
@@ -423,7 +711,7 @@ def _doctor_args(tmp_path=None, json_path=None):
     return args
 
 
-def test_the_cli_gathers_the_three_payloads_and_goes_green(fake_daemon, capsys, tmp_path):
+def test_the_cli_gathers_the_three_payloads_and_goes_green(fake_daemon, capsys, tmp_path, monkeypatch):
     # The connector version is read from the repo, not written as a literal:
     # `_cmd_doctor` compares what the editor runs against `connector/extension.json`
     # (that is the check), so a hardcoded fixture version turns this green case
@@ -437,13 +725,25 @@ def test_the_cli_gathers_the_three_payloads_and_goes_green(fake_daemon, capsys, 
             "active": {"uuid": "page-1", "type": "page"},
         },
     ))
+    # This case *has* an editor on disk, at the version the stub reports: eight
+    # green lines, the offline one first. The fixture that pins the search to an
+    # empty directory is re-pinned here, to a tree of this test's own making, so
+    # the count does not depend on the developer's machine.
+    tree = install_tree(tmp_path, "3.2.186.b52e3e87")
+    monkeypatch.setenv(EDITOR_INSTALL_ENV, str(tmp_path))
     code = _cmd_doctor(_doctor_args(json_path=tmp_path / "d.json"))
     out = capsys.readouterr().out
     assert code == 0
     assert daemon.calls == ["ping", "sys.probe", "doc.list"]
-    assert out.count("PASS") == 7
+    assert out.count("PASS") == 8
+    assert out.count("FAIL") == 0
+    assert out.splitlines()[0].lstrip().startswith("PASS")
+    assert str(tree) in out
     assert "毕设板" in out
-    assert json.loads((tmp_path / "d.json").read_text(encoding="utf-8"))["ok"] is True
+    payload = json.loads((tmp_path / "d.json").read_text(encoding="utf-8"))
+    assert payload["ok"] is True
+    assert payload["versions"]["editorInstall"] == "3.2.186.b52e3e87"
+    assert payload["versions"]["editorInstallPath"] == str(tree)
 
 
 def test_a_daemon_that_answers_without_a_connector_still_reports_every_line(fake_daemon, capsys):
@@ -459,10 +759,13 @@ def test_a_daemon_that_answers_without_a_connector_still_reports_every_line(fake
     # Required reading: from the repo, `connector/extension.json` exists, so the
     # connector-version comparison is one of the five failing lines rather than a
     # skip. The two green lines are the daemon (it answered) and the daemon
-    # version (this CLI and the stub agree).
+    # version (this CLI and the stub agree); the one skip is the offline
+    # pre-check, which found no install tree because this test pinned the search
+    # to an empty directory.
     assert out.count("FAIL") == 5
     assert out.count("PASS") == 2
-    assert out.count("SKIP") == 0
+    assert out.count("SKIP") == 1
+    assert "离线没找到编辑器安装" in out
     assert "未验证" in out
 
 

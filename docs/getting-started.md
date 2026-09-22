@@ -114,11 +114,13 @@ boardwise bridge: listening on 127.0.0.1:61190
 boardwise doctor
 ```
 
-它一口气查七件事，每一条都自己带修复建议。**全绿才算装好**（退出码 0）；有红项退出码是 1。
+它一口气查八件事，每一条都自己带修复建议。**全绿才算装好**（退出码 0）；有红项退出码是 1。
 
-全绿的输出长这样（`PASS` 七行）：
+全绿的输出长这样（`PASS` 八行）：
 
 ```text
+  PASS 编辑器安装版本 ≥ 3.2.183（离线读安装目录，不用扩展）
+         安装树 D:\lceda-pro 的包清单写着 3.2.186.b52e3e87（离线读 resources/app/package.json，没有经过桥）
   PASS daemon 可达（ping，daemon 无 HTTP /health）
          127.0.0.1:61190 的 daemon 已应答 ping
   PASS 扩展已连接（WebSocket 已注册到 daemon）
@@ -134,17 +136,18 @@ boardwise doctor
   PASS 当前工程焦点可读
          焦点工程：毕设板（d2e2b864…，1 页原理图 / 1 个 PCB）；活动文档：page 121a882d…
 
-boardwise doctor: 7/7 项通过
+boardwise doctor: 8/8 项通过
 ```
 
-七项分别在问什么：
+八项分别在问什么：
 
 | 行 | 在问什么 | 红了怎么办 |
 |---|---|---|
+| 编辑器安装版本（离线） | 装在本机的编辑器达不达标——不用扩展、不用 daemon，装完立创就能查 | 先升级编辑器到 ≥3.2.183，其余检查都排在它后面 |
 | daemon 可达 | 本机能连上 daemon（`ping`） | 回第 3 步启动它；端口不是 61190 时加 `--port` |
 | 扩展已连接 | 编辑器里的扩展真的把 socket 注册上来了 | 打开编辑器、确认扩展启用；再不行重做第 2 步 |
 | sys.probe 关键方法在位 | 编辑器真的暴露了 harness 要用的 5 个方法 | 编辑器太旧或版本不对，升级编辑器 |
-| 编辑器版本 ≥ 3.2.183 | 打标/缩放这些接口存不存在 | 升级立创 EDA Pro |
+| 编辑器版本 ≥ 3.2.183 | 正在跑的这个编辑器达不达标（经桥复核，与离线项互为印证） | 升级立创 EDA Pro；刚升级过就重启编辑器 |
 | daemon 版本与本机一致 | 跑着的 daemon 是不是你这份代码 | 重启 daemon（`Ctrl-C` 后重跑第 3 步） |
 | connector 版本与仓库一致 | 编辑器里跑的是不是最新那份 .eext | `boardwise bridge update-connector`（热更新，不用重装） |
 | 当前工程焦点可读 | 编辑器里有没有打开一个工程 | 打开工程，再跑一次 doctor |
@@ -153,11 +156,12 @@ boardwise doctor: 7/7 项通过
 
 想留一份机器可读的报告给同事排查，加 `--json doctor.json`。
 
-> 截图位：`docs/images/gs-04-doctor-green.png` —— 七行全绿的那次输出。
-> （已补：2026-09-21 本机实跑 `boardwise doctor` 的真实输出（7/7、connector 0.4.10）渲染成终端样式。
+> 截图位：`docs/images/gs-04-doctor-green.png` —— 全绿的那次输出。
+> （已补：2026-09-21 本机实跑 `boardwise doctor` 的真实输出（当时 7/7、connector 0.4.10）渲染成终端样式。
+> 022 起 doctor 多了第一行离线安装版本预检（8 行），截图待更新。
 > 图中焦点工程是当时开着的 test2，你跑出来会是自己开着的工程名。）
 
-![doctor 七行全绿](images/gs-04-doctor-green.png)
+![doctor 全绿](images/gs-04-doctor-green.png)
 
 ---
 

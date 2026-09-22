@@ -1,0 +1,177 @@
+022 · GitHub issue #1 / #2 交卷证据
+===================================
+执行：coder 子代理（2026-09-22）· 仓库 E:\boardwise（branch main，未做任何 git 变更）
+本机：Windows + Git Bash，.venv Python 3.14.4，zlib 1.3.1.zlib-ng
+
+--------------------------------------------------------------------------------
+一、改动文件（5 个，git status 只列这 5 个 + 别人的在制品）
+--------------------------------------------------------------------------------
+pyproject.toml                          c9d075e9f85e76a6dae165ab37cdd76df364bae637335d5ba9b290230e8cd4aa
+scripts/install.bat                     a1c03956e5341482ceddf35757992ca2cb7b95b54ba74ba80bd22a7246956ffc
+docs/install.md                         c94fd9ef7851a500531f22f01c34fa88f7dd746f649d8c138b955fb35073d42e
+reviewsets/injected/make_variants.py    4803e0aeff915e6c9d60157108d95c1cb765aaa17bf2f7918f81975d8d7dc042
+tests/test_injected_variants.py         3512107261fd4d404338afca3f6cd9b2601f6cef73a699bf4eb2d3696d343a76
+
+夹具一个字节都没动：
+  $ git status --short reviewsets/injected/ tests/fixtures/
+   M reviewsets/injected/make_variants.py        <- 只有生成器脚本本身
+（所有 *.epro2 / *.json 夹具、tests/fixtures/ 全下保持不变；未使用 ZIP_STORED 重存方案。）
+
+⚠ 工作树里另有**别的代理**正在改 src/boardwise/cli.py 与 tests/test_doctor.py（issue #3 编辑器
+  版本预检，与本任务无关）。本任务全程未碰这两个文件，也未碰 tasks/017-eval-set-expansion.md。
+
+--------------------------------------------------------------------------------
+二、测试数字
+--------------------------------------------------------------------------------
+子集（本任务主战场）：
+  修前  .venv/Scripts/python.exe -m pytest tests/test_injected_variants.py -q --basetemp=.tmp_pt_022a
+        -> 33 passed in 5.21s
+  修后  同一条命令 -> 36 passed in 5.73s（33 + 新增 3 条，其中 1 条为改名）
+
+全量（只跑两遍：改动定型后各一次，非循环）：
+  .venv/Scripts/python.exe -m pytest tests/ -q --basetemp=.tmp_pt_022a
+  -> 1298 passed in 111.34s
+  -> 1298 passed in 100.62s   （最后那次 docstring 改动后复跑，0 failed；含 issue #3 并行在制品用例）
+  （首次全量曾被并行在制品的 tests/test_doctor.py 半成品瞬间打断：SyntaxError/collection error，
+    与本任务无关，文件落定后即恢复。）
+
+注：本机能跑绿的"修前"是环境巧合——本机 zlib 与提交夹具同一实现（committed compress_size
+= 74382，本机 compresslevel=6 重建也是 74382），所以复现不出 clone 的 3 failed。issue 描述的
+失败用"换压缩流"等价复现，见第三节。
+
+关键 CLI：
+  $ .venv/Scripts/python.exe reviewsets/injected/make_variants.py --check
+  --check: 7 board(s) and their annotation sets rebuild with identical content
+  exit=0
+
+--------------------------------------------------------------------------------
+三、issue #1 根因复现：同一内容、不同压缩流，旧规则判漂移 / 新规则判一致
+--------------------------------------------------------------------------------
+做法：用 make_variants.generate() 把全部夹具（7 板 × epro2+json）重建到 .tmp_022_proof/L{1,6,9}
+      （只改 zip 的 compresslevel，内容一字不动），然后分别用两套规则比对：
+      旧规则 = 归档字节相等；新规则 = 逐成员内容 sha256（文本成员 CRLF→LF）。
+
+tracked: 7 boards x 2 artifacts
+committed CH340G.epru compress_size: 74382   （IMAGE/ 2, project2.json 108）
+
+compresslevel=1  rebuilt CH340G.epru size=119188
+  OLD byte rule    -> drift (7): fixed-base.epro2, v3-decap-missing.epro2,
+                     duplicate-designator.epro2, nc-pin-grounded.epro2,
+                     overvoltage-rail.epro2, ldo-no-headroom.epro2, value-mpn-mismatch.epro2
+  NEW content rule -> drift (0): []
+compresslevel=6  rebuilt CH340G.epru size=74382
+  OLD byte rule    -> drift (0): []
+  NEW content rule -> drift (0): []
+compresslevel=9  rebuilt CH340G.epru size=74513
+  OLD byte rule    -> drift (7): 同上 7 个 .epro2
+  NEW content rule -> drift (0): []
+
+—— 与 issue 里那 7 个漂移项（fixed-base / v3-decap-missing / duplicate-designator /
+   nc-pin-grounded / overvoltage-rail / ldo-no-headroom / value-mpn-mismatch）逐项一致，
+   .json 一项都不漂。旧规则下"压缩实现不同 = 夹具漂移"得到复现；新规则对此 0 漂移。
+
+同源脆弱性的另一半（autocrlf）实测：
+  committed fixed-base.json on disk has CRLF: True | size 3195
+  OLD byte rule    -> drift: True      （同一份内容、只把行尾改成 LF）
+  NEW content rule -> drift: False
+
+内容真的改了就必须报（逐成员、带成员名）：
+  same     content drift -> []
+  edited   content drift -> ['fixed-base.epro2 :: CH340G.epru']
+  dropped  content drift -> ['fixed-base.epro2 :: project2.json (member missing)']
+
+--------------------------------------------------------------------------------
+四、新的守卫语义（一句话）
+--------------------------------------------------------------------------------
+--check 把重建结果与提交夹具按**归档成员逐一比内容 sha256**（成员名集合必须相等；文本成员
+先 CRLF→LF），不再比归档字节——环境压缩差异在新语义下根本不存在，内容漂移则精确报到
+"<板>.<后缀> :: <成员名>"（成员缺失/多余同样报出）。
+
+实现位置 reviewsets/injected/make_variants.py：
+  TEXT_SUFFIXES / _normalise()        文本成员行尾归一（.epru/.json/.txt/.csv/.md/.xml）
+  _content_digests()                  成员名 -> 内容 sha256；非 zip（.json 标注集）取 {"":...}
+  _drift_labels()                     比两个 digest 映射，报成员增/删/改
+  _artifact_label()                   "fixed-base.epro2 :: CH340G.epru" 这种可读拼法
+  check()                             组装：快照提交侧 digest -> 重建到 .tmp_variant_check -> 比
+报错文案已改（不再说 "byte-identical"）：
+  "regeneration drifted from the committed fixtures (member content differs; the
+   deflate stream is not compared, issue #1): <列表>"
+说明写进了模块 docstring 的第二条性质 + 新比对区段注释，均链回 issue #1。
+
+测试侧：
+  改名 test_regeneration_is_byte_identical -> test_regeneration_reproduces_the_committed_content
+  改断言 test_check_reports_drift_without_rewriting_the_fixture：要求报文含
+        "member content"、板名、"CH340G.epru"（只报文件名的旧断言已不成立）
+  新增 3 条：
+    test_the_guard_compares_content_not_the_compression_stream
+        真跑 check()，但把写出改成 compresslevel=1；断言重建归档字节**确实**与提交不同
+        （否则测试空转），同时 check()==0。
+    test_drift_is_reported_member_by_member
+        改一个成员内容 -> 只有该成员被判漂移；删一个成员 -> "<成员> (member missing)"。
+    test_line_endings_are_not_content
+        LF/CRLF 的 .json 与 zip 成员判一致（且两文件字节确实不同），同成员多一行仍判漂移。
+
+--------------------------------------------------------------------------------
+五、issue #2：dev 依赖
+--------------------------------------------------------------------------------
+1) pyproject.toml 新增（含一段解释为什么"配置不是依赖"的注释）：
+     [project.optional-dependencies]
+     dev = ["pytest"]
+2) scripts/install.bat 新增第 5 步（原第 5 步 doctor 顺延为 6/6，各步号 /5 -> /6）：
+     提示式安装——"装开发依赖吗？按回车装，输入 n 跳过"，回车即
+     `"%VPY%" -m pip install -e ".[dev]"`；失败只是提示，不中断安装。
+     install.bat 仍是 **GBK/ANSI + CRLF**（改完实测 6238 字节、CRLF 164 行、无 BOM，
+     无裸 LF；用 GBK 解码/回写，未经 UTF-8 编辑器）。第 2 行 chcp 936 保留未动。
+3) docs/install.md：第 2 步由"五件事"改"六件事"并加第 5 项；"不对怎么办"加一条跳过/补装；
+   维护者段落加一条 dev 依赖说明 + issue #2 由来。
+
+实测（真 cmd，非 Git Bash 直传）：
+  $ cmd /c .tmp_022_quote_probe.bat
+  argv seen by the child: ['-e', '.[dev]']            <- cmd 正确剥掉引号
+
+  $ cmd /c .tmp_022_pipdev.bat     (内部执行 install.bat 第 5 步的同一条命令)
+  Requirement already satisfied: websockets>=13.0 ... (17.1)
+  Requirement already satisfied: pytest ... (9.1.1)
+  Building editable for boardwise (pyproject.toml): done
+  Successfully installed boardwise-0.1.0
+  === EXIT=0 ===
+  pytest 9.1.1
+  boardwise requires: ['websockets>=13.0', 'pytest; extra == "dev"']
+  === EXIT=0 ===
+
+第 5 步整段（从 install.bat 里按字节抽出来、原样拼成 bat）在真 cmd 下两个分支都通：
+  answer: Enter (install) | exit=0   -> 打印 [5/6] 提示 -> 真跑 pip install -e ".[dev]"（editable 重装）
+  answer: n (skip)        | exit=0   -> 打印"跳过。以后要跑测试时再敲：… -m pip install -e ".[dev]"
+  （括号块 / set /p / 嵌套 if errorlevel 没有语法问题；真 cmd 运行实测，非推测）
+
+注：插桩测试用的 .tmp_022_quote_probe.bat / .tmp_022_pipdev.bat / .tmp_022_patch_bat.py /
+.tmp_022_devstep_probe.py 等临时件跑完即删，不入库。
+
+--------------------------------------------------------------------------------
+六、独立变异抽验（cp 备份 + sha256 还原，未用 git checkout）
+--------------------------------------------------------------------------------
+基线：make_variants.py sha256 4803e0aeff915e6c9d60157108d95c1cb765aaa17bf2f7918f81975d8d7dc042
+备份：.tmp_022_backup/make_variants.py.bak（同哈希）
+
+变异 A：_normalise() 关掉行尾归一（改成恒返回原字节）
+  -> 1 failed, 35 passed；FAILED test_line_endings_are_not_content
+变异 B：_content_digests() 退回"哈希整个归档字节"
+  -> 4 failed, 32 passed；FAILED test_check_reports_drift_without_rewriting_the_fixture,
+     test_the_guard_compares_content_not_the_compression_stream,
+     test_drift_is_reported_member_by_member, test_line_endings_are_not_content
+
+还原：cp 备份 -> sha256 与基线逐字节相同（cmp 无差异，RESTORED-IDENTICAL），复跑子集 36 passed。
+
+--------------------------------------------------------------------------------
+七、与 issue 建议的偏离 / 遗留
+--------------------------------------------------------------------------------
+1. 偏离：无（两条都按建议实现；建议 2 的 ZIP_STORED 重存方案未采用，也没重写任何夹具）。
+2. install.bat 的 dev 安装做成**提示式**（回车=装，n=跳过）而非无脑自动——理由：这份脚本的
+   主要读者是"装来用"的硬件工程师，默认安装流程保持原样；同时开发机一路回车就齐活。
+3. 遗留（未改，需主代理/用户裁决）：make_variants.py 的 VARIANTS[0]["oracle_note"] 与
+   _annotation() 里给退役板的 note 中仍有 "byte-identity guard" 字样。这两处是**会被写进
+   已提交夹具 reviewsets/injected/v3-decap-missing.json 的序列化文本**，改字必然让该 json
+   与新生成结果内容不一致（守卫会红），需要重生成那份夹具——按纪律本轮不动夹具，故保留。
+   改判只需一处：把 note 里 "byte-identity guard" 改成 "content guard" 并
+   `make_variants.py --generate v3-decap-missing --rebuild-retired`。
+4. 未跑 connector 线（npm test / tsc）：本任务未触碰 connector/ 一个字节，留给主代理复验时的三线。

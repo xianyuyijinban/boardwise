@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Iterable, Iterator
 
 from .engines.review import (
     BUILTIN_RULES,
@@ -4874,6 +4876,174 @@ CONNECTOR_FIX = (
     "再重跑 `boardwise doctor`（若刚重启过编辑器，daemon 侧用 `boardwise bridge status` 复核）"
 )
 
+#: Only the first three fields of an editor version mean anything to the floor.
+#: The fourth is a build suffix — `3.2.186.b52e3e87` on the machine this was
+#: measured on, `3.2.149.88089769` in the issue — so comparing it would make two
+#: readings of the same release disagree.
+EDITOR_VERSION_DEPTH = 3
+
+#: The manifest every Electron app carries at the top of its install tree. The
+#: editor is no exception, and reading it needs no bridge, no daemon and no
+#: running editor — which is the whole point of the offline pre-check (issue #3).
+EDITOR_MANIFEST = Path("resources") / "app" / "package.json"
+
+#: Directory names the desktop editor installs into, by the vendor's naming
+#: habit (立创 EDA Pro / LCEDA Pro / EasyEDA Pro). Tried before the globs below,
+#: so the ordinary machine costs a handful of `is_dir` calls.
+EDITOR_INSTALL_DIR_NAMES = (
+    "lceda-pro",
+    "lceda",
+    "LCEDA-Pro",
+    "easyeda-pro",
+    "EasyEDA Pro",
+    "嘉立创EDA专业版",
+    "嘉立创EDA",
+)
+
+#: One-level globs for the rest of that habit. One level only, and matched
+#: case-insensitively on Windows: a recursive walk to find an editor would make
+#: `doctor` — the command people run *because* something is broken — the slowest
+#: thing in the tool.
+EDITOR_INSTALL_GLOBS = ("*lceda*", "*easyeda*", "*嘉立创*")
+
+#: Pins the offline search, `os.pathsep`-separated roots. Set, it *replaces* the
+#: built-in locations: for an install somewhere unusual, and for tests, which
+#: must not read whichever editor the developer happens to have installed.
+EDITOR_INSTALL_ENV = "BOARDWISE_EDITOR_INSTALL"
+
+#: `GetDriveTypeW`'s "fixed disk". Mapped shares and removable media are skipped
+#: on purpose: globbing one of those is a hang, not a search.
+_DRIVE_FIXED = 3
+
+
+@dataclass
+class EditorInstall:
+    """An editor install tree found on disk, read without any bridge."""
+
+    path: Path
+    #: The version its manifest declares, `''` when the tree was there but the
+    #: manifest could not be read (or said nothing usable).
+    version: str = ""
+
+
+@dataclass
+class EditorInstallScan:
+    """What the offline scan found, and the roots it looked under."""
+
+    install: EditorInstall | None = None
+    roots: tuple[Path, ...] = ()
+
+
+def _fixed_drive_roots() -> list[Path]:
+    """``D:\\``-style roots of this machine's fixed disks (Windows only)."""
+    if os.name != "nt":
+        return []
+    try:
+        import ctypes
+        import string
+
+        mask = ctypes.windll.kernel32.GetLogicalDrives()
+        roots = []
+        for index, letter in enumerate(string.ascii_uppercase):
+            root = Path(f"{letter}:\\")
+            if mask >> index & 1 and ctypes.windll.kernel32.GetDriveTypeW(str(root)) == _DRIVE_FIXED:
+                roots.append(root)
+        return roots
+    except (ImportError, AttributeError, OSError):
+        # ctypes ships with Python on Windows; should this ever fail, one try at
+        # C: beats losing the scan entirely.
+        fallback = Path("C:\\")
+        return [fallback] if fallback.is_dir() else []
+
+
+def _editor_search_roots() -> list[Path]:
+    """Roots to look one level under, most likely first.
+
+    The pinned list first (:data:`EDITOR_INSTALL_ENV`), then every fixed drive
+    root — the machine this was measured on keeps the editor at ``D:\\lceda-pro``,
+    which is only the naming habit one level under a drive — then the Windows
+    install locations, where the installer puts it when the user takes the
+    default.
+    """
+    pinned = [
+        Path(part.strip())
+        for part in os.environ.get(EDITOR_INSTALL_ENV, "").split(os.pathsep)
+        if part.strip()
+    ]
+    if pinned:
+        return pinned
+    roots = _fixed_drive_roots()
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        roots += [Path(local) / "Programs", Path(local)]
+    for key in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"):
+        value = os.environ.get(key)
+        if value:
+            roots.append(Path(value))
+    unique: list[Path] = []
+    for root in roots:
+        if root not in unique:
+            unique.append(root)
+    return unique
+
+
+def _editor_install_candidates(roots: Iterable[Path]) -> Iterator[Path]:
+    """Directories worth reading a manifest from: named ones, then globbed ones."""
+    seen: set[Path] = set()
+
+    def fresh(candidate: Path) -> bool:
+        if candidate in seen or not candidate.is_dir():
+            return False
+        seen.add(candidate)
+        return True
+
+    for root in roots:
+        for name in EDITOR_INSTALL_DIR_NAMES:
+            candidate = root / name
+            if fresh(candidate):
+                yield candidate
+    for root in roots:
+        for pattern in EDITOR_INSTALL_GLOBS:
+            try:
+                matches = sorted(root.glob(pattern))
+            except OSError:
+                continue
+            for match in matches:
+                if fresh(match):
+                    yield match
+
+
+def scan_editor_install(roots: Iterable[Path] | None = None) -> EditorInstallScan:
+    """Find an editor install tree and read its version — offline.
+
+    No daemon, no connected extension, no `sys.probe`: just the manifest the
+    editor ships. That is what makes the answer available *before* the whole
+    bridge path (daemon → extension → restart → pairing) that the version gate
+    otherwise waits on, while upgrading the editor is the thing to do first
+    (issue #3).
+
+    ``install`` is ``None`` when no install tree was found at all, and carries an
+    empty ``version`` when one was found but its manifest could not be read —
+    doctor tells those two apart instead of guessing a verdict.
+    """
+    import json
+
+    looked = tuple(roots) if roots is not None else tuple(_editor_search_roots())
+    first_tree: Path | None = None
+    for candidate in _editor_install_candidates(looked):
+        if first_tree is None:
+            first_tree = candidate
+        try:
+            payload = json.loads((candidate / EDITOR_MANIFEST).read_text(encoding="utf-8"))
+        except (OSError, ValueError, UnicodeDecodeError):
+            continue
+        version = payload.get("version") if isinstance(payload, dict) else None
+        if str(version or "").strip():
+            return EditorInstallScan(EditorInstall(candidate, str(version).strip()), looked)
+    return EditorInstallScan(
+        EditorInstall(first_tree, "") if first_tree is not None else None, looked
+    )
+
 
 @dataclass
 class DoctorCheck:
@@ -4907,6 +5077,16 @@ class DoctorProbe:
     connector_version: str = ""
     #: The editor's own version (`sys.probe` → `version`).
     editor_version: str = ""
+    #: The version the *installed* editor tree declares
+    #: (`<安装目录>/resources/app/package.json`), read offline. Empty when no
+    #: tree was found; see `offline_editor_path` to tell "not found" from
+    #: "found but unreadable".
+    offline_editor_version: str = ""
+    #: The install tree that version came from.
+    offline_editor_path: str = ""
+    #: The roots the offline scan looked under — for its skip message, so the
+    #: reader learns *where* doctor looked instead of just that it found nothing.
+    offline_editor_roots: tuple[str, ...] = ()
     #: The in-repo connector version (`connector/extension.json`), '' when absent.
     local_connector_version: str = ""
     ping: dict | None = None
@@ -4927,6 +5107,18 @@ def _version_tuple(text: str) -> tuple[int, ...]:
     if not match:
         return ()
     return tuple(int(part) for part in match.group(1).split("."))
+
+
+def _editor_version_key(text: str) -> tuple[int, ...]:
+    """The comparable part of an editor version: its first three fields.
+
+    ``"3.2.186.b52e3e87"`` → ``(3, 2, 186)``, the same key as the ``"3.2.186"``
+    `sys.probe` reports for the running editor. Without this, the install tree
+    (build suffix included) would read as a *different* release from the editor
+    it belongs to, and the offline/online comparison would cry wolf on every
+    healthy machine.
+    """
+    return _version_tuple(text)[:EDITOR_VERSION_DEPTH]
 
 
 def _project_counts(documents: dict, focused_project: dict) -> tuple[int, int]:
@@ -4954,9 +5146,114 @@ def _project_counts(documents: dict, focused_project: dict) -> tuple[int, int]:
     )
 
 
+def _editor_floor_label(*, offline: bool) -> str:
+    """The label of one of the two version lines.
+
+    They ask about two different editors — the tree on disk and the editor that
+    is running — and those disagree on a machine that upgraded without
+    restarting, so the two lines must not read as the same question asked twice.
+    """
+    floor_text = ".".join(str(part) for part in EDITOR_API_FLOOR)
+    if offline:
+        return f"编辑器安装版本 ≥ {floor_text}（离线读安装目录，不用扩展）"
+    return f"编辑器版本 ≥ {floor_text}"
+
+
 def run_doctor(p: DoctorProbe) -> list[DoctorCheck]:
     """Judge one :class:`DoctorProbe`. Pure: no socket, no daemon, no editor."""
     checks: list[DoctorCheck] = []
+    floor_text = ".".join(str(part) for part in EDITOR_API_FLOOR)
+
+    # Issue #3: the floor is the first thing to fix and was the last thing
+    # decidable — it sat behind daemon → extension → .eext → restart → pairing.
+    # The install tree answers it offline, so it is judged first and says what to
+    # do before any of the six lines below can even be read.
+    offline = _editor_version_key(p.offline_editor_version)
+    running = _editor_version_key(p.editor_version)
+    if not p.offline_editor_path and not p.offline_editor_version:
+        checks.append(
+            DoctorCheck(
+                name="editor-install",
+                label=_editor_floor_label(offline=True),
+                ok=True,
+                skipped=True,
+                detail=(
+                    "跳过：离线没找到编辑器安装（扫过 "
+                    + ("、".join(p.offline_editor_roots) or "（没有可扫的位置）")
+                    + "）—— 这一项不作结论，版本留给下面的『编辑器版本』，那项要扩展连上才读得到"
+                ),
+            )
+        )
+    elif not offline:
+        checks.append(
+            DoctorCheck(
+                name="editor-install",
+                label=_editor_floor_label(offline=True),
+                ok=True,
+                skipped=True,
+                detail=(
+                    f"跳过：找到了安装树 {p.offline_editor_path}，但读不出 "
+                    f"{EDITOR_MANIFEST.as_posix()} 里的可用版本"
+                    + (
+                        "（清单里没有 version 字段）"
+                        if not p.offline_editor_version
+                        else f"（清单里写的是 {p.offline_editor_version}）"
+                    )
+                    + "—— 这一项不作结论"
+                ),
+            )
+        )
+    elif running and offline != running and max(offline, running) >= EDITOR_API_FLOOR:
+        # Two install trees disagree, and the disagreement changes the verdict:
+        # the one that passes the floor is not the one that fails it. The tree
+        # found on disk may not be the editor anyone is using, so calling it red
+        # would be the false alarm this project keeps sweeping up — report the
+        # discrepancy and let the line below judge the editor that is running
+        # (which is the one boardwise talks to).
+        checks.append(
+            DoctorCheck(
+                name="editor-install",
+                label=_editor_floor_label(offline=True),
+                ok=True,
+                skipped=True,
+                detail=(
+                    f"跳过：安装树 {p.offline_editor_path} 是 {p.offline_editor_version}，"
+                    f"正在运行的编辑器报 {p.editor_version}——两处不是同一个安装，"
+                    "本项不作结论（下面的『编辑器版本』以跑着的那个为准）"
+                ),
+            )
+        )
+    elif offline >= EDITOR_API_FLOOR:
+        checks.append(
+            DoctorCheck(
+                name="editor-install",
+                label=_editor_floor_label(offline=True),
+                ok=True,
+                detail=(
+                    f"安装树 {p.offline_editor_path} 的包清单写着 {p.offline_editor_version}"
+                    f"（离线读 {EDITOR_MANIFEST.as_posix()}，没有经过桥）"
+                ),
+            )
+        )
+    else:
+        checks.append(
+            DoctorCheck(
+                name="editor-install",
+                label=_editor_floor_label(offline=True),
+                ok=False,
+                detail=(
+                    f"安装树 {p.offline_editor_path} 的包清单写着 {p.offline_editor_version}"
+                    f"（离线读 {EDITOR_MANIFEST.as_posix()}，没有经过桥）"
+                    + ("；正在运行的编辑器也是这个版本" if running == offline else "")
+                ),
+                fix=(
+                    f"先升级编辑器到 ≥{floor_text}，其余检查项都排在它后面——"
+                    "现在这一步就能做，不用管 daemon 和扩展。"
+                    "到 https://pro.easyeda.com/ 下载最新桌面版（装到哪儿都行，doctor 会自己找到），"
+                    "装完重启编辑器再重跑 `boardwise doctor`"
+                ),
+            )
+        )
 
     reachable = p.ping is not None
     checks.append(
@@ -5023,25 +5320,48 @@ def run_doctor(p: DoctorProbe) -> list[DoctorCheck]:
         )
     )
 
-    editor = _version_tuple(p.editor_version)
+    editor = _editor_version_key(p.editor_version)
+    # What the install tree has to say about the editor that is *running*. The
+    # running one stays the authority (it is the editor boardwise talks to), so
+    # the tree is used only where it sharpens the answer:
+    # - the tree clears the floor and the running editor does not → the upgrade
+    #   happened and the process is still the old build (or the old install is
+    #   the one being launched): red, and the fix is a restart, not a download;
+    # - anything else they disagree on → a note. A second, stale install on disk
+    #   is worth naming, but it is not a fault in the editor in use.
+    outdated_running = bool(offline and editor and editor < EDITOR_API_FLOOR <= offline)
+    other_tree = bool(offline and editor and editor != offline and not outdated_running)
     if not p.editor_version:
         editor_ok = False
         editor_detail = f"未验证：没有读到编辑器版本（{p.probe_error or '扩展未连接'}）"
     else:
-        editor_ok = bool(editor) and editor >= EDITOR_API_FLOOR
-        editor_detail = (
-            f"编辑器 {p.editor_version}"
-            + (
-                ""
-                if editor_ok
-                else f"（低于 {'.'.join(str(part) for part in EDITOR_API_FLOOR)}："
-                "generateIndicatorMarkers / zoomToRegion 等接口在该版本后才有）"
+        editor_ok = bool(editor) and editor >= EDITOR_API_FLOOR and not outdated_running
+        if outdated_running:
+            editor_detail = (
+                f"编辑器 {p.editor_version}（低于 {floor_text}，而跑着的这个不是装着的那个）："
+                f"安装树 {p.offline_editor_path} 里已经是 {p.offline_editor_version}——"
+                "升级之后编辑器没重启，或者启动的仍是旧的安装目录"
             )
-        )
+        else:
+            editor_detail = (
+                f"编辑器 {p.editor_version}"
+                + (
+                    ""
+                    if editor_ok
+                    else f"（低于 {floor_text}："
+                    "generateIndicatorMarkers / zoomToRegion 等接口在该版本后才有）"
+                )
+                + (
+                    f"（安装树 {p.offline_editor_path} 里是 {p.offline_editor_version}，"
+                    "不是正在跑的这个）"
+                    if other_tree
+                    else ""
+                )
+            )
     checks.append(
         DoctorCheck(
             name="editor-version",
-            label=f"编辑器版本 ≥ {'.'.join(str(part) for part in EDITOR_API_FLOOR)}",
+            label=_editor_floor_label(offline=False),
             ok=editor_ok,
             detail=editor_detail,
             fix=(
@@ -5049,8 +5369,15 @@ def run_doctor(p: DoctorProbe) -> list[DoctorCheck]:
                 if editor_ok
                 else CONNECTOR_FIX
                 if not p.editor_version
+                else (
+                    "把编辑器完全关掉（含所有窗口）再启动一次，然后重跑 `boardwise doctor`："
+                    "跑着的比装着的旧，说明升级前的旧进程还活着；"
+                    "重启后如果仍是旧版本，看启动的是哪个安装目录"
+                    "（`(Get-Process lceda-pro).Path`）"
+                )
+                if outdated_running
                 else "升级立创 EDA Pro 到 "
-                f"{'.'.join(str(part) for part in EDITOR_API_FLOOR)} 以上（当前 {p.editor_version}）"
+                f"{floor_text} 以上（当前 {p.editor_version}）"
             ),
         )
     )
@@ -5212,7 +5539,10 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     exit 1 otherwise, each line carrying its own fix. The whole point is the
     disconnected case — daemon down, extension not loaded, an old editor — so
     that case is the one built first: nothing here raises, and every check says
-    what it could not verify instead of crashing.
+    what it could not verify instead of crashing. The one line that needs no
+    socket is judged from the editor's install tree and printed first (issue #3):
+    upgrading the editor is the first fix, so it must not wait on the six that
+    follow it.
     """
     import asyncio
     import json
@@ -5223,6 +5553,14 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         daemon_version=_local_version(),
         local_connector_version=_repo_connector_version(),
     )
+    # Read the install tree *before* touching the socket: this is the one thing
+    # doctor can answer on a machine where nothing else is set up yet, and it is
+    # the answer that has to come first (issue #3).
+    scan = scan_editor_install()
+    probe.offline_editor_roots = tuple(str(root) for root in scan.roots)
+    if scan.install is not None:
+        probe.offline_editor_path = str(scan.install.path)
+        probe.offline_editor_version = scan.install.version
 
     async def run() -> int:
         try:
@@ -5309,6 +5647,8 @@ def _finish_doctor(checks: list[DoctorCheck], probe: DoctorProbe, args: argparse
                         "connectorRunning": probe.connector_version,
                         "connectorRepo": probe.local_connector_version,
                         "editor": probe.editor_version,
+                        "editorInstall": probe.offline_editor_version,
+                        "editorInstallPath": probe.offline_editor_path,
                     },
                     "checks": [
                         {

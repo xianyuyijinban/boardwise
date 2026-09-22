@@ -16,7 +16,7 @@ on the base.
 Three properties arrived with 011e and are pinned here:
 
 * ``v3-decap-missing`` is **retired** (sec.1.2). Its file stays on disk so the
-  byte-identity guard keeps covering it, but it is in no split, carries no
+  content guard keeps covering it, but it is in no split, carries no
   records, and the gate refuses to author it. The measurement behind the
   retirement -- removing C1 is invisible to ``decap-required-caps`` on this
   topology -- is still asserted, because a retirement nobody can re-check is
@@ -40,6 +40,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -188,7 +189,8 @@ def test_the_split_is_derived_from_sha1_and_matches_the_frozen_ledger():
 def test_the_retired_board_is_watched_but_not_graded(capsys):
     """sec.1.2, and the distinction is the whole point of the arrangement."""
     module = _generator()
-    # Watched: the guard still rebuilds and compares it.
+    # Watched: the guard still rebuilds it and compares the content, member for
+    # member (issue #1 -- not the archive bytes, which belong to the zlib).
     assert RETIRED in module._tracked_ids()
     assert module.check() == 0
     # Not graded: in no split, and its annotation set claims nothing.
@@ -246,8 +248,13 @@ def test_the_gate_refuses_a_name_that_is_not_in_the_table(capsys):
     assert "unknown board" in capsys.readouterr().err
 
 
-def test_regeneration_is_byte_identical():
-    """The archive carries a fixed timestamp and ids are derived, not random."""
+def test_regeneration_reproduces_the_committed_content():
+    """Ids are derived and the archive timestamp is fixed, so a rebuild is stable.
+
+    Stability is what makes the guard readable; *content* is what it compares
+    (issue #1: member content, never the deflate stream -- see
+    ``test_the_guard_compares_content_not_the_compression_stream``).
+    """
     assert _generator().check() == 0
 
 
@@ -259,7 +266,8 @@ def test_check_reports_drift_without_rewriting_the_fixture(capsys):
     every later check agreed with it -- a mutation that should have been caught
     was reported as surviving. The guard now builds into a scratch directory;
     this test drives a drifted fixture through it and requires both that the
-    drift is reported and that the file on disk is left exactly as it was.
+    drift is reported -- by member name, as content -- and that the file on
+    disk is left exactly as it was.
     """
     module = _generator()
     target = INJECTED / "v3-decap-missing.epro2"
@@ -269,11 +277,129 @@ def test_check_reports_drift_without_rewriting_the_fixture(capsys):
     try:
         target.write_bytes(drifted)
         assert module.check() == 1
-        assert "not byte-identical" in capsys.readouterr().err
+        err = capsys.readouterr().err
+        assert "member content" in err and "v3-decap-missing.epro2" in err, err
+        # The report names the member that moved, not just the file: an
+        # unnamed "drift" would leave the reader to diff two zips by hand.
+        assert "CH340G.epru" in err, err
         assert target.read_bytes() == drifted, "the guard rewrote what it checked"
     finally:
         target.write_bytes(original)
     assert module.check() == 0, "the fixture is back and the guard agrees"
+
+
+def test_the_guard_compares_content_not_the_compression_stream(monkeypatch):
+    """Issue #1. A ``.epro2`` is a zip; the deflate stream is the writer's zlib.
+
+    Same content, different zlib: two machines build the identical board and
+    the archive bytes differ, because the compressor -- not the fixture --
+    decides how the members are wrapped. The guard's first version compared
+    those bytes, so a fresh clone (Python 3.12, zlib 1.3.1) failed three tests
+    with every fixture content-correct.
+
+    The rebuild below is driven with a different compression level, which is
+    the same failure mode with the same fix in view: the archives must really
+    differ in bytes, and the guard must stay green.
+    """
+    module = _generator()
+    committed = {
+        path.name: path.read_bytes()
+        for path in INJECTED.glob("*.epro2")
+    }
+    byte_differences: list[str] = []
+
+    def compress_differently(members, epru_name, text, out: Path):
+        members = dict(members)
+        members[epru_name] = text.encode("utf-8")
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as archive:
+            for name, payload in members.items():
+                info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+                info.compress_type = zipfile.ZIP_DEFLATED
+                archive.writestr(info, payload, compresslevel=1)
+        # Recorded here, not after ``check``: the guard deletes its scratch
+        # directory on the way out, which is part of what makes it read-only.
+        if committed.get(out.name) != out.read_bytes():
+            byte_differences.append(out.name)
+
+    monkeypatch.setattr(module, "_write_archive", compress_differently)
+    assert module.check() == 0, "compression is not content"
+    assert byte_differences, (
+        "the rebuild reproduced the committed bytes exactly, so this test "
+        "proved nothing about compression -- pick a level that really differs"
+    )
+
+
+def test_drift_is_reported_member_by_member(tmp_path):
+    """One changed member, one removed member: both named, nothing else claimed.
+
+    The guard's unit of comparison is the member, so this drives the
+    comparison directly rather than through ``check`` (which rebuilds the whole
+    family): the committed board, a copy with one member's content altered, and
+    a copy with a member gone.
+    """
+    module = _generator()
+    source = INJECTED / "fixed-base.epro2"
+    with zipfile.ZipFile(source) as archive:
+        members = {info.filename: archive.read(info) for info in archive.infolist()}
+    text_member = next(n for n in members if n.lower().endswith(".epru"))
+    body = members[text_member].decode("utf-8")
+    others = [n for n in members if n != text_member]
+    assert others, "the board is expected to carry more than the .epru member"
+
+    altered = tmp_path / "altered.epro2"
+    module._write_archive(dict(members), text_member, body + " \n", altered)
+    without = tmp_path / "without.epro2"
+    module._write_archive(
+        {n: payload for n, payload in members.items() if n != others[0]},
+        text_member,
+        body,
+        without,
+    )
+
+    want = module._content_digests(source)
+    assert module._drift_labels(want, module._content_digests(altered)) == [text_member]
+    assert module._drift_labels(want, module._content_digests(without)) == [
+        f"{others[0]} (member missing)"
+    ]
+    # The member set is part of the comparison, and the label spells both halves
+    # the way the guard's report does.
+    assert module._artifact_label("fixed-base", "epro2", text_member) == (
+        f"fixed-base.epro2 :: {text_member}"
+    )
+    # A plain file has no members; its label is just the file.
+    assert module._artifact_label("fixed-base", "json", "") == "fixed-base.json"
+
+
+def test_line_endings_are_not_content(tmp_path):
+    """Issue #1's second half: the ``.json`` blobs are LF, a checkout may not be.
+
+    The committed annotation sets are LF. The generator writes LF too, but
+    Python's text mode turns that into CRLF on Windows, and a clone with
+    ``core.autocrlf=false`` holds LF -- so the same generator output reached the
+    guard as two different byte strings. Line endings are not content here.
+    """
+    module = _generator()
+    lf = tmp_path / "set.json"
+    lf.write_bytes(b'{\n  "items": []\n}\n')
+    crlf = tmp_path / "set-crlf.json"
+    crlf.write_bytes(b'{\r\n  "items": []\r\n}\r\n')
+    assert module._content_digests(lf) == module._content_digests(crlf)
+
+    # Inside an archive, member for member -- and the two files really do differ
+    # in bytes, so the equality above is the normalisation's doing.
+    plain = tmp_path / "plain.epro2"
+    re_spelled = tmp_path / "re-spelled.epro2"
+    module._write_archive({}, "CH340G.epru", "a\nb\n", plain)
+    module._write_archive({}, "CH340G.epru", "a\r\nb\r\n", re_spelled)
+    assert plain.read_bytes() != re_spelled.read_bytes()
+    assert module._content_digests(plain) == module._content_digests(re_spelled)
+
+    # Content still counts: the same member carrying one more line is drift.
+    changed = tmp_path / "changed.epro2"
+    module._write_archive({}, "CH340G.epru", "a\nb\nc\n", changed)
+    assert module._drift_labels(
+        module._content_digests(plain), module._content_digests(changed)
+    ) == ["CH340G.epru"]
 
 
 def test_the_led_overcurrent_proposal_is_gone():
@@ -351,8 +477,8 @@ def test_the_two_native_defects_are_gone_from_the_base_and_still_there_on_the_go
 def test_the_variant_carries_its_injected_fault_and_the_base_does_not(variant):
     """Every board on disk, retired ones included: the edit must still be there.
 
-    Retirement withdraws the *claim*, not the board -- and the byte-identity
-    guard only means something if the board it covers still carries the edit
+    Retirement withdraws the *claim*, not the board -- and the content guard
+    only means something if the board it covers still carries the edit
     it was built with.
     """
     assert _fault_is_present(variant, load_board_model(INJECTED / f"{variant}.epro2"))
