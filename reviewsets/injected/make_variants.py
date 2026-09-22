@@ -45,9 +45,20 @@ Two properties this script must keep, because fixtures rot silently:
   every rewritten line is checked against a byte-for-byte re-serialisation of
   its parsed self -- a format drift fails loudly instead of corrupting a
   fixture that then "passes";
-* **regeneration is byte-identical.** Record ids are derived from the board id
-  (sha1) and archive entries carry a fixed DOS timestamp, so ``--check`` can
-  compare a fresh build against what is committed.
+* **regeneration reproduces the committed content.** Record ids are derived
+  from the board id (sha1) and archive entries carry a fixed DOS timestamp, so
+  ``--check`` rebuilds every board into a scratch directory and holds it
+  against what is committed -- member by member, on *content*.
+
+  Content, not archive bytes (issue #1). A ``.epro2`` is a zip, and the deflate
+  stream inside it is written by whatever zlib the building machine carries:
+  two machines build the same board, member contents identical, archive bytes
+  different. The guard's first version compared those bytes and called the
+  difference fixture drift, so a fresh clone failed three of these tests with
+  nothing wrong with the fixtures. Text members are compared with CRLF
+  normalised to LF for the same reason: the committed ``.json`` blobs are LF,
+  and only ``core.autocrlf`` decides whether a working copy hands the guard LF
+  or CRLF.
 """
 
 from __future__ import annotations
@@ -122,7 +133,8 @@ VARIANTS = [
         "severity": "WARN",
         "signed": "",
         # Retired 2026-09-20 (task 011e sec.1.2, oracle's discretion). The file
-        # stays on disk and stays byte-reproducible; it is simply no longer
+        # stays on disk and stays reproducible (content-wise, which is what the
+        # guard compares); it is simply no longer
         # part of the eval set.
         "retired": "2026-09-20",
         "builder": "v3_decap_missing",
@@ -386,7 +398,7 @@ def _page_end(lines: list[str]) -> int:
 
 
 def _rid(variant_id: str, purpose: str, index: int = 0) -> str:
-    """A deterministic 24-hex record id, so regeneration is byte-identical."""
+    """A deterministic 24-hex record id, so regeneration reproduces the records."""
     seed = f"boardwise-injected:{variant_id}:{purpose}:{index}"
     return hashlib.sha1(seed.encode("utf-8")).hexdigest()[:24]
 
@@ -689,7 +701,12 @@ def _read_lines(path: Path) -> tuple[list[str], bytes, dict]:
 
 
 def _write_archive(members: dict[str, bytes], epru_name: str, text: str, out: Path) -> None:
-    """Write the archive with a fixed DOS timestamp (repeatable bytes)."""
+    """Write the archive with a fixed DOS timestamp.
+
+    The timestamp and the derived record ids make a rebuild *stable* on one
+    machine, which is what makes a diff readable; the guard itself compares
+    content, never these bytes (issue #1 -- see ``check``).
+    """
     members = dict(members)
     members[epru_name] = text.encode("utf-8")
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as archive:
@@ -874,7 +891,7 @@ def generate(
             if spec.get("retired"):
                 print(
                     f"refusing to generate {i!r}: retired {spec['retired']} -- "
-                    f"kept on disk for the byte-identity guard only, not part "
+                    f"kept on disk for the content guard only, not part "
                     f"of the eval set. {spec.get('oracle_note', '')}",
                     file=sys.stderr,
                 )
@@ -946,13 +963,86 @@ def _tracked_ids() -> list[str]:
     return [BASES[0]["id"]] + _variant_ids()
 
 
+# ---------------------------------------------------------------------------
+# The guard's comparison (issue #1): content, never archive bytes.
+#
+# A ``.epro2`` is a zip. Its members are the fixtures; the deflate stream that
+# wraps them belongs to the zlib build of whichever machine wrote the file, so
+# the same content re-compresses to different bytes elsewhere. Comparing the
+# archives byte for byte therefore made a fresh clone fail three tests with
+# nothing wrong with the fixtures, and no compression level reproduces another
+# zlib's output (measured on the issue: 74382 committed vs 76166 rebuilt at
+# level 6, member contents identical). So the guard opens both sides, requires
+# the member *names* to match, and compares each member's content digest.
+#
+# Text members are further compared with CRLF normalised to LF: the committed
+# ``.json`` blobs are LF, the generator writes LF, and only ``core.autocrlf``
+# decides what a working copy holds -- so on a clone with ``autocrlf=false``
+# the same generator output looked like drift too.
+# ---------------------------------------------------------------------------
+
+#: Member suffixes whose content is text, and may therefore differ in line
+#: endings between a working copy and a build. Nothing else is touched: a
+#: binary member is hashed exactly as it lies.
+TEXT_SUFFIXES = frozenset({".epru", ".json", ".txt", ".csv", ".md", ".xml"})
+
+
+def _normalise(name: str, payload: bytes) -> bytes:
+    """CRLF -> LF for a text member; a binary member is returned unchanged."""
+    if Path(name).suffix.lower() in TEXT_SUFFIXES:
+        return payload.replace(b"\r\n", b"\n")
+    return payload
+
+
+def _content_digests(path: Path) -> dict[str, str]:
+    """``member name -> sha256(content)`` for an artifact the guard watches.
+
+    A board is a zip, so the keys are its member names and the member set is
+    part of the comparison. Everything else (the ``.json`` annotation set) is a
+    plain file, and gets the single key ``""`` -- ``_artifact_label`` knows how
+    to spell either one.
+    """
+    if not zipfile.is_zipfile(path):
+        return {"": hashlib.sha256(_normalise(path.name, path.read_bytes())).hexdigest()}
+    with zipfile.ZipFile(path) as archive:
+        return {
+            info.filename: hashlib.sha256(
+                _normalise(info.filename, archive.read(info))
+            ).hexdigest()
+            for info in archive.infolist()
+        }
+
+
+def _drift_labels(want: dict[str, str], got: dict[str, str]) -> list[str]:
+    """Which members of one artifact moved, spelled for a report line."""
+    labels = []
+    for member in sorted(set(want) | set(got)):
+        if member not in got:
+            labels.append(f"{member} (member missing)")
+        elif member not in want:
+            labels.append(f"{member} (member not expected)")
+        elif want[member] != got[member]:
+            labels.append(member)
+    return labels
+
+
+def _artifact_label(board_id: str, suffix: str, member: str) -> str:
+    """``fixed-base.epro2 :: CH340G.epru`` -- a plain file has no member part."""
+    return f"{board_id}.{suffix}" + (f" :: {member}" if member else "")
+
+
 def check() -> int:
-    """A fresh build must be byte-identical to what is committed.
+    """A fresh build must reproduce the committed fixtures, content for content.
 
     Both artifacts are compared, board *and* annotation set: the set is
     generated too, so a change there is a change to the fixtures whatever it
     does to the board (measured: guarding only ``.epro2`` let a mutated set
     ship unnoticed).
+
+    What is compared is the *content* of each member, not the archive bytes --
+    see the section comment above and ``_content_digests`` (issue #1: a fresh
+    clone's zlib writes a different deflate stream for identical content, and
+    the first version of this guard reported that as fixture drift).
 
     The build goes to ``.tmp_variant_check`` -- an in-repo scratch path, per
     the project's rule against system temp -- and the committed files are
@@ -961,14 +1051,18 @@ def check() -> int:
     later check agreed with the mutant.
     """
     ids = _tracked_ids()
-    before = {
-        (i, suffix): (HERE / f"{i}.{suffix}").read_bytes()
-        for i in ids for suffix in ("epro2", "json")
+    artifacts = {
+        (board, suffix): HERE / f"{board}.{suffix}"
+        for board in ids for suffix in ("epro2", "json")
     }
-    missing = [f"{i}.{s}" for (i, s) in before if not (HERE / f"{i}.{s}").is_file()]
+    missing = [
+        f"{board}.{suffix}" for (board, suffix), path in artifacts.items()
+        if not path.is_file()
+    ]
     if missing:
         print(f"missing generated artifacts: {', '.join(missing)}", file=sys.stderr)
         return 2
+    before = {key: _content_digests(path) for key, path in artifacts.items()}
     scratch = ROOT / ".tmp_variant_check"
     shutil.rmtree(scratch, ignore_errors=True)
     try:
@@ -978,17 +1072,24 @@ def check() -> int:
         if code != 0:
             return code
         drifted = [
-            f"{i}.{suffix}" for (i, suffix), payload in before.items()
-            if payload != (scratch / f"{i}.{suffix}").read_bytes()
+            _artifact_label(board, suffix, member)
+            for (board, suffix), digest in before.items()
+            for member in _drift_labels(
+                digest, _content_digests(scratch / f"{board}.{suffix}")
+            )
         ]
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
     if drifted:
-        print(f"regeneration is not byte-identical: {', '.join(drifted)}",
-              file=sys.stderr)
+        print(
+            "regeneration drifted from the committed fixtures (member content "
+            f"differs; the deflate stream is not compared, issue #1): "
+            f"{', '.join(drifted)}",
+            file=sys.stderr,
+        )
         return 1
     print(f"--check: {len(ids)} board(s) and their annotation sets "
-          "rebuild byte-identically")
+          "rebuild with identical content")
     return 0
 
 
@@ -1035,10 +1136,11 @@ def main() -> int:
     parser.add_argument("--generate", nargs="*", default=None, metavar="VARIANT",
                         help="build signed variants (default: all live signed ones)")
     parser.add_argument("--check", action="store_true",
-                        help="rebuild and compare against the committed boards")
+                        help="rebuild and compare content against the committed "
+                             "boards (issue #1: member content, not archive bytes)")
     parser.add_argument("--rebuild-retired", action="store_true",
                         help="maintenance: also rebuild retired fixtures (the "
-                             "byte-identity guard's door; they stay in no split)")
+                             "content guard's door; they stay in no split)")
     args = parser.parse_args()
     if args.check:
         return check()

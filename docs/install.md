@@ -38,7 +38,7 @@
 | 2 | 双击 `scripts\install.bat` | 最后打印"下一步"，`.venv` 建好、boardwise 装上 |
 | 3 | 编辑器里导入 `boardwise-connector-*.eext`，**然后完全重启编辑器** | 顶栏出现 `boardwise` 菜单 |
 | 4 | 双击 `scripts\start-daemon.bat`，窗口保持开着 | 窗口里出现带指纹的"配对"公告 |
-| 5 | 命令行跑 `boardwise doctor` | 七行全绿 |
+| 5 | 命令行跑 `boardwise doctor` | 八行全绿（第一行是离线安装版本预检，编辑器太旧会先在这里红） |
 
 > **命令怎么写**：本文里的 `boardwise xxx` 都指 boardwise 命令。装完之后它不在你的 PATH 上，
 > 所以在仓库目录里用**完整写法**最省事：
@@ -75,15 +75,18 @@ python --version
 
 ## 第 2 步 · 双击 `scripts\install.bat`
 
-这个脚本放在仓库的 `scripts\` 文件夹里，双击它就行。它会依次做五件事，每一步都有中文提示：
+这个脚本放在仓库的 `scripts\` 文件夹里，双击它就行。它会依次做六件事，每一步都有中文提示：
 
 1. 找 Python（3.10 以上），找不到就给你官网链接并退出；
 2. 在仓库目录里建虚拟环境 `.venv`（已经有了就复用，不会覆盖）；
 3. 把 pip 升到新版（失败不致命，会提示你继续）；
 4. 装 boardwise 本身（`pip install -e .`，联网从 PyPI 下载 `websockets`）；
-5. 跑一遍 `boardwise doctor`，然后打印"下一步"。
+5. 问你一句**要不要装开发依赖**（`pip install -e ".[dev]"`，就是 pytest）——
+   **不管它、直接按回车就行**；只有真去跑仓库自带的测试才用得到它，
+   想跳过就输入 `n`；
+6. 跑一遍 `boardwise doctor`，然后打印"下一步"。
 
-预期：窗口最后停在"下一步，按顺序："那段话。在这之前会看到一句
+预期：窗口最后停在"下一步，按顺序："那段话。在第 5 步它会停下来等你按一下回车。在这之前会看到一句
 `doctor 退出码 1：现在有红项。`——**首次装完 doctor 是红的很正常**，
 因为 daemon 还没起、编辑器还没装扩展；脚本会把每条红项的修复建议列出来，照着做即可。
 
@@ -95,6 +98,8 @@ python --version
   .venv\Scripts\python.exe -m pip install -e . -i https://pypi.tuna.tsinghua.edu.cn/simple
   ```
 - **权限问题**：把仓库放在你有写权限的目录（比如 `E:\boardwise`），不要放 `C:\Program Files`。
+- **第 5 步问你开发依赖、你不想装**：输入 `n` 回车跳过即可，不影响使用；以后要跑仓库自带的
+  测试时再敲一次 `.venv\Scripts\python.exe -m pip install -e ".[dev]"`。
 - **想重装**：直接重跑本脚本；要彻底重来就先删掉 `.venv` 再跑。
 
 两条要知道的规矩：
@@ -192,7 +197,7 @@ boardwise bridge: listening on 127.0.0.1:61190
 想要一份机器可读的报告：加 `--json doctor.json`。断开状态下 doctor 不会崩，
 它会逐行说"未验证：……"并退出 1。
 
-> 截图位：`docs/images/install-05-doctor-green.png` —— 七行全绿的输出
+> 截图位：`docs/images/install-05-doctor-green.png` —— 全绿的输出（022 起为八行，首行离线安装版本预检；截图待更新）
 > （可复用 `gs-04-doctor-green.png` 的画法：真实输出渲染成终端样式）。
 
 ---
@@ -246,6 +251,10 @@ rem 看完清掉标记
 
 ## 给维护者（这段不是朋友看的）
 
+- **开发依赖在 `[project.optional-dependencies]` 里**（`pyproject.toml`：`dev = ["pytest"]`）。
+  pytest 以前只出现在 `[tool.pytest.ini_options]`——那是**配置，不是依赖**，所以全新 clone
+  按本装完仍然 `No module named pytest`（issue #2）。开发机一装就能跑三线：
+  `.venv\Scripts\python.exe -m pip install -e ".[dev]"`；`install.bat` 第 5 步会问一次。
 - `scripts\*.bat` 是 **GBK/ANSI + CRLF**，第 2 行 `chcp 936`。原因见第 2 步末尾：
   cmd 按控制台代码页解析批处理文件，UTF-8 + `chcp 65001` 会被解析错位（实测会出现
   "把某一行的尾巴当命令执行"）。改脚本时不要把它存成 UTF-8，也不要删 `chcp` 那一行。

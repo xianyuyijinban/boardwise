@@ -15,6 +15,15 @@ requires-python = ">=3.10"
 # and tested against 17.1.
 dependencies = ["websockets>=13.0"]
 
+# Test-only extras (issue #2). The suite is this project's second line of
+# defence (AGENTS.md: pytest / connector `npm test` / `tsc`), but pytest was
+# only ever configured here -- in `[tool.pytest.ini_options]`, which is
+# configuration, not a dependency -- so a fresh clone could finish
+# `scripts/install.bat` and still have no pytest to run it with. A development
+# machine installs itself with `pip install -e ".[dev]"`.
+[project.optional-dependencies]
+dev = ["pytest"]
+
 [project.scripts]
 boardwise = "boardwise.cli:main"
 
