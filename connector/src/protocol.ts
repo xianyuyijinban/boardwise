@@ -35,6 +35,44 @@ export type Frame = {
   ok?: boolean;
   data?: unknown;
   error?: { code: string; message: string; detail?: unknown };
+  /**
+   * The live context of the window that answered (023 §协议字段约定 1).
+   *
+   * Top level, **not** inside `data`: an action's result shape is a contract
+   * with every caller, and this is bookkeeping about *which window* answered.
+   * Optional everywhere — a frame without it is a frame from a connector that
+   * could not read its own context, which is a fact, not an error.
+   */
+  context?: ResponseContext;
+};
+
+/**
+ * Where a window is, as of the moment it answered.
+ *
+ * The daemon routes by this: with three editor windows open, "which project
+ * has this action" is the question every call has to answer first, and a
+ * context frozen at `hello` answers it about a document the user has since
+ * closed. So the connector re-reads it for each response — see
+ * `currentResponseContext` in `actions.ts`.
+ *
+ * Every field is optional and **omitted rather than guessed** when the window
+ * cannot read it: an absent `projectUuid` means "this window did not say", a
+ * wrong one means a write in the wrong project. `pageType: null` is the one
+ * exception and it is a reading, not an absence: a document is in front and it
+ * is neither a schematic page nor a PCB.
+ */
+export type ResponseContext = {
+  /** The label the editor shows, e.g. `/test` — the same value `hello` sends. */
+  projectName?: string;
+  projectUuid?: string;
+  /** The document in front, as `doc.list` / `document.current` name it. */
+  pageUuid?: string;
+  /**
+   * Its kind, in `document.current`'s vocabulary: `sch` for a schematic
+   * (schematic or page) and `pcb` for a PCB. The daemon's routing narrows two
+   * windows of the same project by this, so the two sides spell it the same way.
+   */
+  pageType?: 'sch' | 'pcb' | null;
 };
 
 export type FrameKind = 'response' | 'event' | 'request';
@@ -113,6 +151,44 @@ export function errorFrame(id: string | undefined, error: ActionError): Frame {
   };
   if (error.detail !== undefined) payload.detail = error.detail;
   return { id, ok: false, error: payload };
+}
+
+/**
+ * Add the window's live context to a response frame (023 §协议字段约定 1).
+ *
+ * The wire's vocabulary is enforced **here**, at the frame, whatever the
+ * reader handed over: the reader is a callback a build supplies, so a field
+ * that is empty, of the wrong type, or a `pageType` outside the two words the
+ * daemon routes by is turned into no field rather than into something the
+ * daemon would have to disbelieve. `pageType: null` is kept — it is a reading
+ * ("a document is in front and it is neither"), and the daemon's merge treats
+ * it as no news rather than as a value.
+ *
+ * A no-op when there is nothing to add, and that is load-bearing: a build with
+ * no context reader configured, or a window that could name nothing, must put
+ * the *same bytes* on the wire as before this field existed. `context: {}`
+ * would be a different claim on the daemon side, where the key's presence is
+ * what says this connector speaks 023.
+ */
+export function withContext(frame: Frame, context: ResponseContext | undefined): Frame {
+  const fields = contextFields(context);
+  return fields ? { ...frame, context: fields } : frame;
+}
+
+/** The fields of {@link ResponseContext} that are readings, or `undefined`. */
+function contextFields(context: ResponseContext | undefined): ResponseContext | undefined {
+  if (!context || typeof context !== 'object') return undefined;
+  const name = context.projectName;
+  const uuid = context.projectUuid;
+  const pageUuid = context.pageUuid;
+  const pageType = context.pageType;
+  const fields: ResponseContext = {
+    ...(typeof name === 'string' && name ? { projectName: name } : {}),
+    ...(typeof uuid === 'string' && uuid ? { projectUuid: uuid } : {}),
+    ...(typeof pageUuid === 'string' && pageUuid ? { pageUuid } : {}),
+    ...(pageType === 'sch' || pageType === 'pcb' || pageType === null ? { pageType } : {}),
+  };
+  return Object.keys(fields).length > 0 ? fields : undefined;
 }
 
 export function parseFrame(raw: string): Frame {

@@ -29,7 +29,9 @@ import {
   requestFrame,
   responseFrame,
   errorFrame,
+  withContext,
   type Frame,
+  type ResponseContext,
 } from './protocol';
 
 /** The slice of `eda.sys_WebSocket` we use. */
@@ -93,6 +95,18 @@ export type HelloProjectIdentity = {
  */
 const IDENTITY_DEADLINE_MS = 1500;
 
+/**
+ * How long a response waits for that context read, in ms.
+ *
+ * Same value and same reasoning as {@link IDENTITY_DEADLINE_MS}, for a harder
+ * case: this deadline sits on *every* answer, so a host call that never settles
+ * must cost a decoration, never the action. The read is two host calls and
+ * normally answers in single-digit milliseconds; the deadline exists only for
+ * the pathological case (a hung editor), and a response that arrives 1.5 s late
+ * with no context is still the truth about what the action did.
+ */
+const RESPONSE_CONTEXT_DEADLINE_MS = 1500;
+
 export type TransportOptions = {
   url: string;
   token: string;
@@ -138,6 +152,21 @@ export type TransportOptions = {
    * runs fast, like the others here.
    */
   projectIdentityTimeoutMs?: number;
+  /**
+   * Reads this window's live context, for every response frame (023 §协议字段约定 1).
+   *
+   * Injected for the same reason as {@link TransportOptions.projectIdentity}:
+   * the reader lives in `actions.ts`, which this file must not depend on. It is
+   * read **after** the action has run, so the answer describes the window as
+   * the action left it — a `doc.open` is precisely the case where the context
+   * before and after differ, and it is the after that a routing daemon needs.
+   *
+   * Optional, and answering `undefined` is a supported outcome: a transport
+   * built without a reader puts exactly the frames it always did on the wire.
+   */
+  responseContext?: () => Promise<ResponseContext | undefined>;
+  /** Deadline for {@link TransportOptions.responseContext}; see the constant. */
+  responseContextTimeoutMs?: number;
   /** Called for every request frame; must return the data payload or throw. */
   onRequest: (action: string, params: Record<string, unknown>) => Promise<unknown>;
   onStatus?: (state: TransportState, detail?: string) => void;
@@ -422,15 +451,19 @@ export class Transport {
 
     const action = frame.action;
     if (typeof action !== 'string' || action === '') {
-      this.raw(errorFrame(frame.id, new ActionError('BAD_REQUEST', 'request frame has no action')));
+      await this.reply(
+        errorFrame(frame.id, new ActionError('BAD_REQUEST', 'request frame has no action')),
+      );
       return;
     }
     try {
       const data = await this.options.onRequest(action, frame.params ?? {});
-      this.raw(responseFrame(frame.id, data));
+      // The context is read *here*, after the action: it has to describe the
+      // window the action left behind, not the one it was sent to.
+      await this.reply(responseFrame(frame.id, data));
     } catch (error) {
       if (isActionError(error)) {
-        this.raw(errorFrame(frame.id, error));
+        await this.reply(errorFrame(frame.id, error));
       } else {
         // An unexpected throw carries only a sentence ("TypeError: Cannot read
         // properties of undefined (reading 'prototype')"), which cost a whole
@@ -438,7 +471,7 @@ export class Transport {
         // about and nothing about where. The name and the top of the stack go
         // into `detail`, which the daemon and the CLI already print.
         const err = error as { name?: unknown; message?: unknown; stack?: unknown };
-        this.raw(errorFrame(frame.id, new ActionError('INTERNAL', String(error), {
+        await this.reply(errorFrame(frame.id, new ActionError('INTERNAL', String(error), {
           errorName: typeof err?.name === 'string' ? err.name : typeof error,
           errorMessage: typeof err?.message === 'string' ? err.message : null,
           stack: typeof err?.stack === 'string'
@@ -447,6 +480,39 @@ export class Transport {
         })));
       }
     }
+  }
+
+  /**
+   * Put one answer on the wire, carrying this window's live context (023).
+   *
+   * **The single point every response frame leaves the connector through** —
+   * the success path, both failure paths and the malformed-request refusal all
+   * end here — so "every answer says where it came from" is one line to read
+   * instead of four to keep in step. A failed action still tells the daemon
+   * which window refused it, which is exactly when a caller is most likely to
+   * be guessing about the window.
+   *
+   * The context decorates the frame; it never gates one (see
+   * {@link readResponseContext}).
+   */
+  private async reply(frame: Frame): Promise<void> {
+    this.raw(withContext(frame, await this.readResponseContext()));
+  }
+
+  /**
+   * This window's live context, or `undefined` when there is nothing to say.
+   *
+   * `undefined` rather than `{}`, and the difference is not cosmetic: a frame
+   * that says nothing and a frame claiming an empty context are different
+   * statements, and only the first is true of a build with no reader.
+   */
+  private async readResponseContext(): Promise<ResponseContext | undefined> {
+    const read = this.options.responseContext;
+    if (!read) return undefined;
+    return readWithDeadline(
+      read,
+      this.options.responseContextTimeoutMs ?? RESPONSE_CONTEXT_DEADLINE_MS,
+    );
   }
 
   /**
@@ -536,6 +602,35 @@ async function readProjectIdentity(
     return identityFields(value);
   } catch {
     return {};
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * The injected context read, on a deadline, with "nothing" as its one failure
+ * mode.
+ *
+ * The same shape as {@link readProjectIdentity} on purpose: a reader that
+ * throws and one that never settles both answer `undefined`, because both are
+ * real on the editor host and neither is a reason to lose the answer to an
+ * action that has already been carried out. Keeping only the fields that are
+ * readings is `withContext`'s job, at the frame.
+ */
+async function readWithDeadline(
+  read: () => Promise<ResponseContext | undefined>,
+  ms: number,
+): Promise<ResponseContext | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const deadline = new Promise<undefined>((resolve) => {
+      timer = setTimeout(() => resolve(undefined), ms);
+    });
+    // `Promise.race` subscribes to both promises, so a reader that rejects
+    // *after* the deadline won is still a handled rejection.
+    return await Promise.race([Promise.resolve(read()), deadline]);
+  } catch {
+    return undefined;
   } finally {
     clearTimeout(timer);
   }
