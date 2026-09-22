@@ -41,11 +41,40 @@ let facade: EditorFacade | undefined;
 /**
  * When this module was evaluated.
  *
- * Shown in `About…` for one reason: if the editor evaluates the bundle twice, the
- * menu closures and the activation callback can end up in different instances,
- * and this timestamp is what makes that visible instead of baffling.
+ * Shown in `About…` as `loaded:` — the evaluation that *answers* the box, which
+ * since 0.4.13 is the one holding the connection (`about()` goes through
+ * `runtime()`). So two boxes in one editor session agree, and a newer value means
+ * the runtime was rebuilt rather than that the editor re-evaluated the bundle:
+ * that re-evaluation happens on every menu click and is the reason the shared
+ * runtime exists at all, while `evaluations` in the same box is what counts it.
+ *
+ * ISO/UTC deliberately, and not for display: {@link newInstanceId} slices the
+ * digits of {@link INSTANCE_ID} out of it and the daemon's audit log reads them,
+ * so that format is a contract. What the user reads goes through
+ * {@link localClock}.
  */
 const MODULE_LOADED_AT = new Date().toISOString();
+
+/**
+ * `HH:MM:SS` on the reader's own clock — the form every time in `About…` takes.
+ *
+ * Local, rather than the UTC digits this box used to slice out of an ISO string:
+ * the box is read next to the editor's clock, the daemon's audit log and
+ * `boardwise bridge status`, and all three are local. On 2026-09-21 a UTC
+ * reading eight hours behind the wall clock is exactly what made a *correct*
+ * `loaded: 11:50:21` (19:50:21 in Beijing; the same instant the daemon logged
+ * the instance) look like it had come from an earlier editor session.
+ *
+ * An unparsable stamp answers `'unknown'`, the rule the rest of this box follows
+ * for a field that is not there — and the reason the callers below may pass
+ * `''` for an unset one.
+ */
+function localClock(iso: string): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return 'unknown';
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${pad(at.getHours())}:${pad(at.getMinutes())}:${pad(at.getSeconds())}`;
+}
 
 /**
  * This extension instance's id, generated once per module evaluation (018 §A).
@@ -815,7 +844,13 @@ export async function rePair(): Promise<void> {
 
 /** Menu: About… — also the quickest way to see why nothing connects. */
 export function about(): void {
-  runAbout();
+  // Through the controller, like every other entry point — and that is not a
+  // style point. Called directly (as 0.4.12 did) this body runs in the
+  // *clicking* evaluation, whose counters have never been written: the box then
+  // reports `no/no/0`, `state: idle`, `pairing: not connected yet` and
+  // "the module-scope bootstrap never ran in this editor runtime" for a runtime
+  // that is connected and answering pings.
+  runtime().about();
 }
 
 /**
@@ -824,6 +859,13 @@ export function about(): void {
  * Not the clicking evaluation's copy of it: the box is a report on *this editor
  * runtime* — when it was loaded, which path started it, whether the editor ever
  * dispatched `activate()` — and only the owning evaluation has that history.
+ *
+ * Reached through `runtime().about()` — from {@link about} above, and from the
+ * published record's own copy of this function when a later evaluation of the
+ * bundle renders the box. Before 0.4.13 the export called this directly instead,
+ * so the box was built from whatever evaluation the editor dispatched the click
+ * into (see `tests/bootstrap.test.mjs`, "reports the owner, not its own empty
+ * copy").
  */
 function runAbout(): void {
   // Create the facade BEFORE resolving the config. 0.2.3 resolved the config
@@ -867,7 +909,7 @@ function runAbout(): void {
     `lifecycle: moduleBootstrapObserved=${moduleBootstrapObserved ? 'yes' : 'no'}` +
       ` activateObserved=${activateObserved ? 'yes' : 'no'} evaluations=${evaluations}`,
     `bootstrap: ${bootstrapLine()}`,
-    `loaded: ${MODULE_LOADED_AT.slice(11, 19)}`,
+    `loaded: ${localClock(MODULE_LOADED_AT)}`,
     `state: ${status.state}${status.detail ? ` (${status.detail})` : ''}`,
     `storage: ${storageLine()}`,
     `url: ${current.url}`,
@@ -916,7 +958,7 @@ function bootstrapLine(): string {
   if (!moduleBootstrapObserved) {
     return 'the module-scope bootstrap never ran in this editor runtime';
   }
-  const observedAt = (moduleBootstrapObservedAt ?? '').slice(11, 19) || 'unknown';
+  const observedAt = localClock(moduleBootstrapObservedAt ?? '');
   if (evaluations <= 1) {
     // The editor re-evaluates the bundle for every menu click (measured on the
     // real editor, see this file's history), so `evaluations=1` reported from a
@@ -936,7 +978,7 @@ function bootstrapLine(): string {
       `dispatched — the connection starts from the module load (first seen at ${observedAt})`
     );
   }
-  const activatedAt = (activateObservedAt ?? '').slice(11, 19) || 'unknown';
+  const activatedAt = localClock(activateObservedAt ?? '');
   return (
     `the bundle was evaluated ${evaluations}× in this editor runtime; activate() was dispatched ` +
     `at ${activatedAt}`
@@ -957,7 +999,7 @@ function activationLine(): string {
     // user should know their editor's activation event did not fire, and that
     // the extension is nonetheless working.
     if (selfArm) {
-      const armed = selfArm.at.slice(11, 19);
+      const armed = localClock(selfArm.at);
       if (selfArm.outcome === 'failed') {
         return `NEVER RAN — self-arm FAILED at ${armed}: ${selfArm.error}`;
       }
@@ -973,7 +1015,7 @@ function activationLine(): string {
     }
     return 'NEVER RAN — the editor has not called activate() since load; try a full editor restart';
   }
-  const time = activation.at.slice(11, 19);
+  const time = localClock(activation.at);
   if (activation.outcome === 'failed') return `${time} FAILED — ${activation.error}`;
   return `${time} ${activation.outcome}`;
 }
