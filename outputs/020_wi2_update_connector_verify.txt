@@ -1,0 +1,150 @@
+020 WI-2 交卷证据：update-connector 自动版本回读（关上假成功窗口）
+============================================================================
+日期：2026-09-22  工作目录：E:\boardwise  Python：.venv/Scripts/python.exe
+纪律：只跑子集（未跑全量）；未动 git；未动 tests/fixtures/；未动 outputs/011e*|014_*|015b_*|016_*；
+      **未对编辑器做任何写操作**（真机验证由 Kimi 复验时做）。本 WI 是纯离线实现+单测。
+
+问题（020 审计 §3）
+--------------------------------------------------------------------------
+`sys.self_update` 的 `newVersion` 是**回显入参**（self-update.ts 只写 DB 就返回），CLI 打印
+`ok: old->new` 即 return 0；reload 排了 500ms 定时器后**无任何回读**。旧 build 照旧应答每一个动作，
+所以"更新失败"和"更新成功"在输出上完全一样 —— 假成功窗口。单测把这个契约钉死
+（test_bridge_cli.py 原 :523-541，断言含 "0.4.2 -> 0.4.3" 与 "reloading"），任务书允许升级它。
+
+改了什么（src/boardwise/cli.py）
+--------------------------------------------------------------------------
++ 三个计时常量（**在调用时读取**，不是绑进默认参数 —— 这是让测试能把时钟缩到 0 的接缝）：
+    UPDATE_VERIFY_INTERVAL_S = 1.0    轮询间隔
+    UPDATE_VERIFY_BUDGET_S  = 30.0    总预算
+    UPDATE_RELOAD_MARGIN_S  = 0.5     在回复自带的 reloadInMs 之上多等的余量
++ `_running_connector_version(BridgeClient, BridgeError, port, token)`：一次读。
+  新开一条 CLI 连接 → `sys.probe` → 取 `connector` 字段（与 doctor 读运行中版本同一个读法，
+  cli.py:4883-4898 那套）。没 daemon / 没连上 / 还在 reload 都是 `None`（"还没回来"），不报错。
++ `_await_running_connector_version(..., *, reload_ms, interval_s, budget_s, margin_s)`：
+  先睡过 `reload_ms + margin_s`，再每 `interval_s` 读一次，直到 `budget_s` 用完；
+  读到版本就返回，超预算返回 None。
+  三个计时参数是**必填关键字参数**（不给默认值）：调用方在运行时查模块常量，
+  这样测试缩时钟时不会踩到"import 期已绑定的 30 秒默认值"（这个坑真实踩过一次：超时用例跑了 29.8s）。
++ `_cmd_bridge_update_connector`：
+  写完 → 若 `--no-verify`：照旧打印 "reloading…" 并 return 0；
+  否则读回运行时版本并三分支：
+    匹配        → `  verified: running connector is now X.Y.Z`  → exit 0
+    不匹配      → stderr `FAILED — the write stored X but the connector answering is Y: the update
+                  did not take effect (… bridge status names the holder)` → exit 1
+    超时未回读  → stderr `the connector did not come back within 30s — the state of the write is
+                  UNKNOWN, not failed: …` → exit 3
++ `--no-verify` 参数（帮助文本写清：恢复 020 之前的行为，exit 0 即使旧 build 还在应答）。
++ docstring 写清三分支与"为什么不立刻读"。
+
+**先等过 reload 窗口再读**是这个阶段最容易写错的一处：reload 有 500ms 定时器，
+立刻探到的是**将被替换的旧 build**，把那个读结果当"不匹配"就会把一次好更新报成失败
+（exit 1）。所以第一次读发生在 `reloadInMs + 0.5s` 之后，且有一条专门的顺序测试钉住这一点。
+
+期望版本取自 `params["version"]`（= `connector/extension.json` 的 version，除非传了 --version），
+与 doctor 的比对面完全同一个定义。注意：`extension.json` 与 `package.json→build.mjs 注入的
+`__BOARDWISE_VERSION__`` 是两个文件（020 审计 §3 附注），两者若漂移，这里会像 doctor 一样报不匹配 ——
+行为一致，不额外发明第二套判据。
+
+文档
+--------------------------------------------------------------------------
+docs/bridge.md：
+  * 子命令行表该行改成 `0 / 1 / 2 / 3` 并写清三种结局与 `--no-verify`；
+  * §8「Self-updating the connector」加一段说明"写进去 ≠ 跑起来"与回读机制、比对定义、--no-verify；
+  * "操作员该做什么"那段原先要求手跑 status/doctor 等 socket 回来，改为"本命令自己就等并验证了"，
+    剩下的手工步骤只有恢复焦点/读 doc.list。
+
+测试（tests/test_bridge_cli.py）
+--------------------------------------------------------------------------
+改：
+  * `_update_args` 基座加 `no_verify=False`（新参数）。
+  * `_RecordingClient` 新增两个旋钮：`running_version`（显式版本；缺省回声最后一次 self_update 存入的
+    版本 = "更新成功"）、`reconnect=False`（sys.probe 回 NO_CONNECTOR = "还没回来"）；
+    `call("sys.probe")` 一条分支把它作为**重连后**的 connector 版本报出。
+    （原 mock 只会应答 sys.self_update，升级契约后必须也回答 sys.probe。）
+  * 新 fixture `fast_verify`：把三个计时常量缩到 0.01/0.2/0.0 并把 mock 的 reloadInMs 归 0
+    （常量是调用时读的，所以 monkeypatch 有效）。
+  * 原 `test_update_connector_sends_sys_self_update_with_the_bundle`（任务书点名可改）：现在断言
+    `verified: running connector is now 0.4.3`、**不再有** "reloading"、调用序列 ==
+    ["sys.self_update", "sys.probe"]、且 probe 走的是新开的一条连接（`opened` 被覆盖）；
+    用**真实默认计时**跑（验证默认路径确实存在）。
+  * `test_update_connector_parses_its_arguments` 加 `no_verify` 默认 False / `--no-verify` True。
+
+新增 5 条：
+  * test_update_connector_reports_a_connector_that_did_not_take_the_update
+      running_version="0.4.2" vs 写入 0.4.3 → exit 1，stderr 含 FAILED + 两个版本号 + "did not take
+      effect"，stdout 无 verified（但仍有 ok 行）
+  * test_update_connector_calls_a_timeout_unknown_not_failed
+      reconnect=False → exit 3，stderr 含 "UNKNOWN, not failed"，且 probe 被重试多次（>1）
+  * test_update_connector_no_verify_restores_the_old_behaviour
+      --no-verify → exit 0，有 "reloading"、无 verified，调用序列只有 ["sys.self_update"]
+      （连第二条连接都不开）
+  * test_update_connector_verifies_a_rebuild_of_the_same_version
+      重推同版本 0.4.11 → verified
+  * test_the_verify_phase_waits_out_the_reload_before_it_reads
+      真时钟顺序测试：reload_ms=120/margin=0.08 → 首次读取必须发生在 ≥0.19s 之后，且只读一次
+
+子集测试（最终版本落盘、两次变异均已还原之后跑的）
+--------------------------------------------------------------------------
+$ .venv/Scripts/python.exe -m pytest tests/test_020_parse_drops.py tests/test_bridge_cli.py \
+      tests/test_bridge.py tests/test_019_empty_board_hint.py tests/test_018_cli_review.py \
+      tests/test_review_eval.py -q --basetemp=.tmp_pt_020
+163 passed in 13.22s
+（tests/test_bridge_cli.py 单独跑 28 passed / 8.94s，与 020 前同量级：耗时的两条是用了真实默认计时的
+ 1.01s×2，其余走 fast_verify）
+
+$ .venv/Scripts/python.exe -m boardwise.cli bridge update-connector --help
+  --no-verify      Return as soon as the daemon accepted the write, without
+                   waiting for the reloaded connector to report its version
+                   (the pre-020 behaviour: exit 0 even if the old build is
+                   still answering).
+
+变异验证（cp 备份 + sha256 还原；未用 git checkout）
+--------------------------------------------------------------------------
+交付基线：ed45f7577b64b7003d9becca33ec5a886a0a5739bb73b32001060f853a57705c *src/boardwise/cli.py
+
+变异 B（WI-2 比对）：`if running != expected:` → `if False:  # MUTATION B`（恒视为匹配）
+  结果：CAUGHT —— tests/test_bridge_cli.py -k update_connector **1 failed, 10 passed, 17 deselected**
+    FAILED test_update_connector_reports_a_connector_that_did_not_take_the_update
+      assert code == 1 → assert 0 == 1
+      变异版输出（正是要关掉的那个假成功）：
+        boardwise bridge update-connector: …/b.js (1 bytes, 4 as base64) -> version 0.4.3
+          ok: 0.4.2 -> 0.4.3 (1 bytes written to User_team-7_v6)
+          verified: running connector is now 0.4.2      ← 明明是旧版本却说 verified
+  还原：cp .tmp_020work/cli.py.bak src/boardwise/cli.py
+        sha256 = ed45f7577b64b7003d9becca33ec5a886a0a5739bb73b32001060f853a57705c（与基线一致）
+        复跑：11 passed, 17 deselected
+
+未做的验证（留给 Kimi 复验）
+--------------------------------------------------------------------------
+* 真机：`update-connector --yes` 推 0.4.11 bundle → 应自动打印 verified（编辑器开着时）；编辑器关着
+  时应 exit 3 且报 UNKNOWN。本子代理按纪律未对编辑器执行任何写操作，也未起/写 daemon。
+* 多窗口情形（daemon 只有一个 connector 位）未在真机上验：那种情况下回读到的版本属于"持有 socket 的
+  那个窗口"，不匹配即为真结论（doctor 同判据），文档 §3.3/§10 已记录该边界。
+
+过程事故（如实报）
+--------------------------------------------------------------------------
+见 outputs/020_wi1_parse_drops.txt 末尾"事故记录"：第一轮变异 A 的备份曾被 pytest 的 --basetemp 清空，
+当时源码停在变异态；按记录在案的变异前 sha256 用 Edit 复原并核对 hash 逐字节一致，结论不受影响。
+本 WI 的变异 B 备份一开始就放在 `.tmp_020work/`（不被 pytest 清），全程标准 cp → sha256 路径。
+
+============================================================================
+附：交付版本最终 sha256 与变异 B/C 在最终版 cli.py 上的重跑（2026-09-22 收尾）
+============================================================================
+22f5773ba809aab8fd8f2301c1bf6baad4630bd89f4e202ad239238b7bbacb78 *src/boardwise/cli.py
+324f1cc2d43773f29828fac22fb8866796b71fc7fc00cf41e7de090e7b96f6d3 *src/boardwise/parsers/schematic.py
+1655e5ce8e091eac849f4e1c735c6bfed9bfbd4703940e92b336ca7bd7787056 *src/boardwise/core/geometry.py
+ac4061263db46b273e7defd582b51c0389fdd5f60673f85ea2f691bd5f6c7d2a *src/boardwise/rules/i18n.py
+21180053a06a83567d3f1546e7ede387f94e8880adf914165e5e8b19c650f1ef *tests/test_020_parse_drops.py
+e643c8d3c2ab8a58c6e1188a73b05328b7c3f13f43756f9f3b87dd43151086bf *tests/test_bridge_cli.py
+
+上面"变异 B"记录的基线 ed45f757… 是重跑前的 cli.py；此后 cli.py 只做了一处**纯改名**
+（`_chinese_summary` 里生成器变量改名，不触及行为）。为让"变异跑在交付字节上"无懈可击，
+变异 B 已在最终版 cli.py（22f5773b…）上重跑：
+
+  `if running != expected:` → `if False:`（最终版）
+  $ .venv/Scripts/python.exe -m pytest tests/test_bridge_cli.py -q --basetemp=.tmp_pt_020 -k update_connector
+  → 1 failed, 10 passed, 17 deselected
+    FAILED test_update_connector_reports_a_connector_that_did_not_take_the_update（assert 0 == 1）
+    变异版输出：ok: 0.4.2 -> 0.4.3 / verified: running connector is now 0.4.2（旧版本却说 verified）
+  → cp .tmp_020work/cli.py.final src/boardwise/cli.py
+  → sha256 = 22f5773b…（与交付版一致，逐字节复原）

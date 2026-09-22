@@ -439,6 +439,13 @@ class ParseStats:
     (a signal that the format drifted); ``unconsumed_types`` counts known
     types inside the PCB document that carry no board geometry (RULE,
     PREFERENCE, ...). Neither is ever fatal — they are only counted.
+
+    The two *drop* counters (task 020 §WI-1) count what a parse silently left
+    behind, which used to leave no trace at all: a pin record whose ``Pin
+    Number`` never arrived, and a placed component whose symbol document did
+    not resolve (so it contributes no pins). ``schematic.py``'s
+    ``_collect_symbols`` and the symbol lookups in ``build_schematic_model`` /
+    ``build_pin_offsets`` are the only writers.
     """
 
     source: str = ""
@@ -451,6 +458,14 @@ class ParseStats:
     pads_without_net: int = 0
     empty_body_records: int = 0
     malformed_records: int = 0
+    #: PIN records that closed without a ``Pin Number`` attribute. The pin is
+    #: not in the symbol's pin map, so every connection it makes is invisible
+    #: to the schematic model (measured: 14 on `llc_board.epro2`'s two symbol
+    #: documents, 7 named pins each).
+    pins_dropped_no_number: int = 0
+    #: Components (and net-naming power flags) whose symbol document did not
+    #: resolve, so they were modelled with no pins at all.
+    components_without_symbol: int = 0
     edit_version: str | None = None
     editor_version: str | None = None
 
@@ -467,6 +482,8 @@ class ParseStats:
             "pads_without_net": self.pads_without_net,
             "empty_body_records": self.empty_body_records,
             "malformed_records": self.malformed_records,
+            "pins_dropped_no_number": self.pins_dropped_no_number,
+            "components_without_symbol": self.components_without_symbol,
             "edit_version": self.edit_version,
             "editor_version": self.editor_version,
         }

@@ -692,7 +692,7 @@ The daemon is the passive side: it does not track per-connector liveness, and cl
 | `bridge screenshot <out>` | 0 / 1 / 2 | Native canvas capture; `--fit` zooms to the board first. |
 | `bridge export-fab --out DIR` | 0 / 1 / 2 | The fab bundle: calls `export.fab` and writes Gerber + pick-and-place + BOM + `manifest.json` into DIR (created if missing). `--pcb`, `--vendor`, `--gerber` (JSON overrides), `--bom-template`, `--timeout-ms`. Exit 1 also for a **partial** bundle — the files that did arrive stay on disk, and the missing one is named on stderr. |
 | `bridge highlight <uuid…>` | 0 / 1 / 2 | Draw markers; `--color`, `--zoom`, `--clear`. |
-| `bridge update-connector` | 0 / 1 / 2 | Hot-update the running connector from `connector/dist/index.js` (§8); asks first, `--yes` skips. |
+| `bridge update-connector` | 0 / 1 / 2 / 3 | Hot-update the running connector from `connector/dist/index.js` (§8); asks first, `--yes` skips. **Exit 0 only after the reloaded connector reported the new version** (020 §WI-2): 1 = it came back running a different build (the write did not take effect), 3 = it never came back inside the 30 s budget (state unknown, not failed), 2 = bad input or no daemon. `--no-verify` skips the read-back and returns as soon as the daemon accepted the write. |
 
 Connector token resolution order: `globalThis.BOARDWISE_TOKEN` (injection for tests) →
 extension user config → `?token=` on the configured URL → **generate one**. The last step is
@@ -736,6 +736,20 @@ The response frame is sent **before** the reload is scheduled (a 500 ms timer), 
 always learns the outcome before the page and socket go away. The connector knows its own
 uuid because `build.mjs` bakes it in (`__BOARDWISE_UUID__`, same mechanism as the version).
 
+**"The daemon accepted the write" is not "the new build is running" — so the CLI reads the
+version back (020 §WI-2).** `newVersion` in the reply is an *echo of the CLI's own input*; the old
+build goes on answering every action perfectly, which made a failed update indistinguishable from
+a successful one. `boardwise bridge update-connector` therefore waits out the reply's own
+`reloadInMs` (the old build answers until that timer fires, and believing it would report a good
+update as a mismatch), then polls `sys.probe` — the connector naming the version compiled into the
+bundle it is executing — once a second for at most 30 s: matching version → `verified: running
+connector is now X.Y.Z`, exit 0; a *different* version → exit 1 naming both; nothing back inside
+the budget (editor closed, page still reloading) → exit 3, because "unknown" is not "failed". The
+comparison is against the version the CLI just stored, i.e. the same `connector/extension.json`
+value `boardwise doctor` compares against — a version-string drift between `extension.json` and
+`package.json` (the two files the build reads) would surface here exactly as it does in doctor. `--no-verify` restores the old
+"print ok and return 0" behaviour for callers that would rather poll themselves.
+
 **Warning: the IndexedDB database/store names are EasyEDA-internal structure (`User_<teamUuid>_v6`
 today), not an official API — an editor upgrade may change them.** The action therefore
 validates at runtime instead of assuming: it enumerates `indexedDB.databases()` and refuses
@@ -768,8 +782,11 @@ the pre-reload document was considered and **not** implemented:
   not be open in the restored session at all, so the intent would have to be persisted across the
   reload and re-resolved against a tree that does not exist yet.
 
-What an operator should do instead, after `boardwise bridge update-connector`: wait for the socket
-to come back (`boardwise bridge status`, or `boardwise doctor` green), then read
+What an operator should do instead, after `boardwise bridge update-connector`: the command itself
+now waits for the socket to come back and verifies the running version (020 §WI-2, exit 0 means
+`verified: running connector is now X.Y.Z` — before that, this step was the manual `boardwise
+bridge status` / `boardwise doctor` green the reader had to remember). What it does **not** do is
+restore the focus, so the remaining manual step is to read
 `boardwise bridge call --action doc.list` — it names the focused project and the active document —
 and put the intended document back in front yourself: `doc.focus` for a tab that is already open,
 `doc.open` for one that is not. Re-read `doc.list` before any write; skipping that check means
