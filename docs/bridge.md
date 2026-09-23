@@ -789,7 +789,7 @@ the hub depends on the handler loop exiting. So a *half-open* socket can leave `
 | `bridge export-fab --out DIR` | 0 / 1 / 2 | The fab bundle: calls `export.fab` and writes Gerber + pick-and-place + BOM + `manifest.json` into DIR (created if missing). `--pcb`, `--vendor`, `--gerber` (JSON overrides), `--bom-template`, `--timeout-ms`. Exit 1 also for a **partial** bundle — the files that did arrive stay on disk, and the missing one is named on stderr. |
 | `bridge highlight <uuid…>` | 0 / 1 / 2 | Draw markers; `--color`, `--zoom`, `--clear`. |
 | `bridge call --action NAME [--params JSON] [--project NAME_OR_UUID] [--instance INSTANCE_ID] [--yes]` | 0 / 1 / 2 | Call one action and print its `data` as JSON. `--project` (023) routes the call to the editor window that has that project open, `--instance` (023 follow-up) to the window with that instance id (§3.5) — the latter is the only one that works while no window can read a project at all. Either is required as soon as more than one window is connected; without one a multi-window daemon answers `WINDOW_UNSPECIFIED` rather than guessing, and given both the instance decides. `--yes` pre-confirms a `create` action (006c); without it the daemon answers `CONFIRMATION_REQUIRED` and this command asks interactively. Exit 1 is a refused or failed action — the code and message are on stderr |
-| `bridge update-connector [--instance INSTANCE_ID]` | 0 / 1 / 2 / 3 | Hot-update the running connector from `connector/dist/index.js` (§8); asks first, `--yes` skips. **Exit 0 only after the reloaded connector reported the new version** (020 §WI-2): 1 = it came back running a different build (the write did not take effect), 3 = it never came back inside the 30 s budget (state unknown, not failed), 2 = bad input or no daemon. `--no-verify` skips the read-back and returns as soon as the daemon accepted the write. `--instance` aims the write at one named window instead of whichever window the daemon would route to, and the read-back then waits for a window announcing the stored version — the window it updated reconnects under a new instance id, so it cannot be probed by the old name |
+| `bridge update-connector [--instance INSTANCE_ID]` | 0 / 1 / 2 / 3 | Hot-update the running connector from `connector/dist/index.js` (§8); asks first, `--yes` skips. **Exit 0 only after the daemon's window table reports the stored version on some window** (020 §WI-2, sharpened in 025): 1 = a connection that came back *after* the write announces a different build (the reload landed on the wrong build), 3 = nothing conclusive inside the 30 s budget (state unknown, not failed — the old socket lingering is "not yet", not a failure), 2 = bad input or no daemon. `--no-verify` skips the read-back and returns as soon as the daemon accepted the write. `--instance` aims the write at one named window; the read-back is the same either way, since the updated window reconnects under a new instance id and cannot be probed by the old name |
 
 Connector token resolution order: `globalThis.BOARDWISE_TOKEN` (injection for tests) →
 extension user config → `?token=` on the configured URL → **generate one**. The last step is
@@ -836,18 +836,31 @@ always learns the outcome before the page and socket go away. The connector know
 uuid because `build.mjs` bakes it in (`__BOARDWISE_UUID__`, same mechanism as the version).
 
 **"The daemon accepted the write" is not "the new build is running" — so the CLI reads the
-version back (020 §WI-2).** `newVersion` in the reply is an *echo of the CLI's own input*; the old
-build goes on answering every action perfectly, which made a failed update indistinguishable from
-a successful one. `boardwise bridge update-connector` therefore waits out the reply's own
-`reloadInMs` (the old build answers until that timer fires, and believing it would report a good
-update as a mismatch), then polls `sys.probe` — the connector naming the version compiled into the
-bundle it is executing — once a second for at most 30 s: matching version → `verified: running
-connector is now X.Y.Z`, exit 0; a *different* version → exit 1 naming both; nothing back inside
-the budget (editor closed, page still reloading) → exit 3, because "unknown" is not "failed". The
-comparison is against the version the CLI just stored, i.e. the same `connector/extension.json`
-value `boardwise doctor` compares against — a version-string drift between `extension.json` and
-`package.json` (the two files the build reads) would surface here exactly as it does in doctor. `--no-verify` restores the old
-"print ok and return 0" behaviour for callers that would rather poll themselves.
+version back (020 §WI-2, sharpened in 025 batch 2's follow-up).** `newVersion` in the reply is an
+*echo of the CLI's own input*; the old build goes on answering every action perfectly, which made a
+failed update indistinguishable from a successful one. `boardwise bridge update-connector`
+therefore waits out the reply's own `reloadInMs` (until that timer fires the old socket is still
+in the daemon's table), then reads the daemon's **window table** — one read a second for at most
+30 s — and decides on it *per window*:
+
+- a window announcing the stored version → `verified: running connector is now X.Y.Z`, exit 0;
+- a connection that was **not online before the write** announcing a *different* build → exit 1
+  naming both: the page reloaded, and it came back on something other than what was just stored;
+- nothing conclusive inside the budget → exit 3, because "unknown" is not "failed".
+
+That middle rule is the one to remember, and it exists because of a measured false alarm: a reload
+**replaces** the connection (the connector mints a new instance id per page load) while the old
+socket lingers until the editor tears the page down — **five seconds**, measured on 2026-09-23.
+Reading that lingering socket as "the write did not take effect" reported a successful update as
+FAILED, which is precisely the "not back yet ≠ failed" distinction 020 set out to keep; the
+"already here" snapshot is what makes the difference decidable. The comparison is against the
+version the CLI just stored, i.e. the same `connector/extension.json` value `boardwise doctor`
+compares against — a version-string drift between `extension.json` and `package.json` (the two
+files the build reads) would surface here exactly as it does in doctor. `--no-verify` restores the old
+"print ok and return 0" behaviour for callers that would rather poll themselves. `--instance INST`
+aims the write at one named window; the read-back is the same either way, since the updated window
+can no longer be addressed by its old name and a routed probe in a multi-window session could be
+answered by any window.
 
 **Warning: the IndexedDB database/store names are EasyEDA-internal structure (`User_<teamUuid>_v6`
 today), not an official API — an editor upgrade may change them.** The action therefore
