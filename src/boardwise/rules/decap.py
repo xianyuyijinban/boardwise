@@ -28,10 +28,12 @@ golden expectation is phrased ">=1uF" (RT9013 pins).
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
+from dataclasses import dataclass
 
 from ..core.model import Component, DesignModel, is_ground_net
 from ..core.power_domains import domain_of, infer_net_domains
-from .base import Finding, Outcome
+from .base import Finding, FindingTarget, Outcome
 from .facts import (
     _CATEGORY_UNKNOWN,
     _NON_IC,
@@ -43,77 +45,68 @@ from .values import decode_eia_3digit, mpn_value_code, parse_capacitance_farads
 
 
 def _capacitance_farads(comp: Component, library) -> float | None:
-    """The capacitor's value: board value first, else its MPN's EIA code.
+    """A parsed component's capacitor value — the shared reading, by fields.
 
-    The MPN route needs the part to already look like a capacitor (see
-    :func:`_looks_like_capacitor`): an MPN's digits are not self-evidently a
-    value code (``CH340G`` would decode to "34 pF" otherwise -- measured on
-    the golden board's U1)."""
-    from_board = parse_capacitance_farads(comp.value or "")
-    if from_board is not None:
-        return from_board
-    if not _looks_like_capacitor(comp, library):
-        return None
-    code = mpn_value_code(comp.mpn or "")
-    if code is not None:
-        return decode_eia_3digit(code, 1e-12)
-    return None
-
-
-def _grounded_cap_on(
-    model: DesignModel, net_name: str, library
-) -> tuple[Component, float | None] | None:
-    """The best grounded capacitor on ``net_name``: the one with the largest
-    *established* value. A cap with an unreadable value never wins -- "there
-    is a cap but I cannot read it" is UNKNOWN territory, handled by the
-    caller when no readable cap exists at all.
-
-    A capacitor is identified by its board value parsing as a capacitance or
-    its shelf category being ``capacitor`` -- never by the C designator
-    prefix alone (the U3 lesson: prefixes lie), and never by an MPN code
-    alone (the CH340G lesson: digits in an MPN are not a value claim)."""
-    net = model.nets.get(net_name)
-    if net is None:
-        return None
-    best: tuple[Component, float | None] | None = None
-    unreadable: Component | None = None
-    for designator, _pin in net.pins:
-        other = model.components.get(designator)
-        if other is None:
-            continue
-        if not _looks_like_capacitor(other, library):
-            continue
-        if not any(
-            pin.net is not None and is_ground_net(pin.net)
-            for pin in other.pins
-        ):
-            continue
-        farads = _capacitance_farads(other, library)
-        if farads is None:
-            unreadable = unreadable or other
-            continue
-        if best is None or farads > best[1]:
-            best = (other, farads)
-    if best is not None:
-        return best
-    if unreadable is not None:
-        return unreadable, None
-    return None
+    A wrapper over :func:`candidate_farads` so there is exactly one
+    board-value-then-MPN-code implementation (see :class:`CapCandidate`).
+    """
+    return candidate_farads(
+        CapCandidate(
+            designator=comp.designator,
+            value=comp.value or "",
+            mpn=comp.mpn or "",
+            lcsc=comp.lcsc_part or "",
+        ),
+        library,
+    )
 
 
 _CAP_DESIGNATOR = re.compile(r"^C\d")
 
 
-def _looks_like_capacitor(comp: Component, library) -> bool:
-    if parse_capacitance_farads(comp.value or "") is not None:
+@dataclass(frozen=True)
+class CapCandidate:
+    """One capacitor candidate for a decoupling requirement, as an inventory item.
+
+    Deliberately *not* a :class:`~boardwise.core.model.Component`: the offline
+    rule reads the parsed board, and apply's idempotence probe reads the live
+    page (`sch.geometry` + `sch.netlist`), and the two inventories have almost
+    nothing in common except the four fields a decision needs. Keeping the
+    decision below on this shape is what lets both sides call **one**
+    implementation instead of writing two similar ones — the whole point of
+    §二.5 ("repeat apply must never create a second part, and the probe is the
+    rule's own judgement").
+    """
+
+    designator: str
+    value: str = ""
+    mpn: str = ""
+    lcsc: str = ""
+    #: Whether the candidate's other end is on a ground net. Only grounded
+    #: candidates can satisfy a decoupling requirement; an ungrounded one is not
+    #: evidence of anything (the rule says so, and so does apply).
+    grounded: bool = False
+
+
+def looks_like_capacitor(
+    designator: str, value: str, mpn: str, lcsc: str, library=None
+) -> bool:
+    """Is this inventory item a capacitor? — one predicate, two callers.
+
+    Takes the four fields rather than a ``Component`` so the live page (which
+    has no ``Component``) can ask the same question. The rule's own wrapper
+    (:func:`_looks_like_capacitor`) passes a parsed component's fields through
+    here, so the offline rule and apply cannot answer differently.
+    """
+    if parse_capacitance_farads(value or "") is not None:
         return True
     from ..core.parts import find_facts
 
     entry = None
-    if comp.mpn:
-        entry = find_facts(library, mpn=comp.mpn)
-    if entry is None and comp.lcsc_part:
-        entry = find_facts(library, lcsc=comp.lcsc_part)
+    if mpn:
+        entry = find_facts(library, mpn=mpn)
+    if entry is None and lcsc:
+        entry = find_facts(library, lcsc=lcsc)
     if entry is not None and entry.category == "capacitor":
         return True
     # The conjunction: a C-prefixed designator (positional evidence) *and* a
@@ -121,11 +114,156 @@ def _looks_like_capacitor(comp: Component, library) -> bool:
     # unshelfed capacitor (the golden board's C4/C5/C9, whose values live
     # only in their MPNs) be counted, without letting the regulator
     # (CH340G-shaped MPNs decode as "34 pF") masquerade as one.
-    if _CAP_DESIGNATOR.match(comp.designator) and mpn_value_code(
-        comp.mpn or ""
-    ):
+    if _CAP_DESIGNATOR.match(designator or "") and mpn_value_code(mpn or ""):
         return True
     return False
+
+
+def candidate_farads(candidate: CapCandidate, library=None) -> float | None:
+    """The value of one candidate: board value first, else its MPN's EIA code.
+
+    The MPN route needs the part to already look like a capacitor (see
+    :func:`looks_like_capacitor`): an MPN's digits are not self-evidently a
+    value code (``CH340G`` would decode to "34 pF" otherwise -- measured on the
+    golden board's U1)."""
+    from_board = parse_capacitance_farads(candidate.value or "")
+    if from_board is not None:
+        return from_board
+    if not looks_like_capacitor(
+        candidate.designator, candidate.value, candidate.mpn, candidate.lcsc, library
+    ):
+        return None
+    code = mpn_value_code(candidate.mpn or "")
+    if code is not None:
+        return decode_eia_3digit(code, 1e-12)
+    return None
+
+
+@dataclass(frozen=True)
+class CapDecision:
+    """What one decoupling requirement amounts to, given an inventory.
+
+    ``state`` is one of ``unparseable`` / ``missing`` / ``unreadable`` /
+    ``satisfied`` / ``too_small``; everything else is the evidence for it, so a
+    caller can phrase its own message (the rule does, and apply's probe does)
+    without recomputing anything.
+    """
+
+    state: str
+    required_farads: float | None = None
+    required_text: str = ""
+    cap_designator: str = ""
+    cap_farads: float | None = None
+
+    @property
+    def satisfied(self) -> bool:
+        return self.state == "satisfied"
+
+
+def decide_required_cap(
+    declared_text: str,
+    candidates: Sequence[CapCandidate],
+    library=None,
+) -> CapDecision:
+    """**The one decision**: is this requirement met by this inventory?
+
+    Both `decap-required-caps` and `edit apply`'s idempotence probe call this —
+    the rule to report a violation, the probe to decide whether a previous run
+    (or the operator's own hand) already satisfied it. §二.5 forbids a second,
+    similar-looking implementation, and this function is where that is enforced:
+    if the two ever disagree, they disagree here, visibly, in one place.
+
+    The semantics are the rule's, unchanged:
+
+    * ``missing``    — no candidate at all on the net.
+    * ``unreadable`` — candidates exist but none has an establishable value
+      (a cap whose value cannot be read is *not* evidence of compliance).
+    * ``satisfied``  — the best readable candidate is ``>=`` the requirement
+      ("not below the declared value" is the engineering meaning).
+    * ``too_small``  — it exists and its value is below the requirement.
+    * ``unparseable``— the requirement itself is not a capacitance.
+    """
+    required = parse_capacitance_farads(str(declared_text or ""))
+    if required is None:
+        return CapDecision("unparseable", required_text=str(declared_text or ""))
+    best: tuple[CapCandidate, float] | None = None
+    unreadable: CapCandidate | None = None
+    for candidate in candidates:
+        farads = candidate_farads(candidate, library)
+        if farads is None:
+            unreadable = unreadable or candidate
+            continue
+        if best is None or farads > best[1]:
+            best = (candidate, farads)
+    if best is None:
+        if unreadable is not None:
+            return CapDecision(
+                "unreadable",
+                required_farads=required,
+                required_text=str(declared_text or ""),
+                cap_designator=unreadable.designator,
+            )
+        return CapDecision(
+            "missing", required_farads=required, required_text=str(declared_text or "")
+        )
+    candidate, farads = best
+    return CapDecision(
+        "satisfied" if farads + 1e-12 >= required else "too_small",
+        required_farads=required,
+        required_text=str(declared_text or ""),
+        cap_designator=candidate.designator,
+        cap_farads=farads,
+    )
+
+
+def cap_candidates_on(model: DesignModel, net_name: str, library=None) -> list[CapCandidate]:
+    """Every grounded capacitor candidate on ``net_name``, from the parsed board.
+
+    Candidates are grounded by construction here: a capacitor whose other end is
+    not on a ground net cannot decouple anything, and the rule has always
+    required exactly that ("grounded" is part of the requirement, not a
+    preference). The *value* question is left to
+    :func:`decide_required_cap` so that the same comparison serves both callers.
+    """
+    net = model.nets.get(net_name)
+    if net is None:
+        return []
+    found: list[CapCandidate] = []
+    for designator, _pin in net.pins:
+        other = model.components.get(designator)
+        if other is None:
+            continue
+        if not _looks_like_capacitor(other, library):
+            continue
+        if not any(
+            pin.net is not None and is_ground_net(pin.net) for pin in other.pins
+        ):
+            continue
+        found.append(
+            CapCandidate(
+                designator=other.designator,
+                value=other.value or "",
+                mpn=other.mpn or "",
+                lcsc=other.lcsc_part or "",
+                grounded=True,
+            )
+        )
+    return found
+
+
+
+def _looks_like_capacitor(comp: Component, library) -> bool:
+    """Is this parsed component a capacitor? — the shared predicate, by fields.
+
+    Kept as a `Component`-shaped wrapper because the rule's tests import it
+    (``tests/test_011d_rules.py``), and because every caller inside the rule
+    already has a component in hand. The judgement itself is
+    :func:`looks_like_capacitor`, which the live-page side of apply calls with
+    the same four fields.
+    """
+    return looks_like_capacitor(
+        comp.designator, comp.value or "", comp.mpn or "", comp.lcsc_part or "", library
+    )
 
 
 class DecapRequiredCaps(FactsRule):
@@ -140,7 +278,11 @@ class DecapRequiredCaps(FactsRule):
     )
 
     def outcomes(self, model: DesignModel) -> list[Outcome]:
-        return [outcome for outcome, _s in self._rows(model)]
+        # Row shape is (outcome, severity), optionally with a third element (the
+        # FindingTarget, task 016/029). Read as `row[0]` rather than unpacking two
+        # names: the moment a row gained a target, tuple-unpacking here would
+        # have turned a repair capability into a crash in the states view.
+        return [row[0] for row in self._rows(model)]
 
     def check(self, model: DesignModel) -> list[Finding]:
         return self.findings_from(self._rows(model))
@@ -338,10 +480,33 @@ class DecapRequiredCaps(FactsRule):
         rows: list[tuple[Outcome, str | None]],
     ) -> None:
         pin = str(record.get("pin", ""))
-        declared = parse_capacitance_farads(str(record.get("value", "")))
+        required_text = str(record.get("value", ""))
         net = next((p.net for p in comp.pins if p.number == pin), None)
         evidence = [f"{comp.designator} pin{pin} @ {net}"] if net else []
-        if declared is None:
+
+        def target() -> FindingTarget:
+            """The structured form of *this* row's claim (task 029 §二.1).
+
+            ``component_ref`` is the IC that needs the capacitor (the anchor a
+            repair hangs off), ``pin_refs``/``net_refs`` say which supply pin and
+            which net, and ``suggested_after`` carries the recipe exactly as the
+            facts shelf states it (``"0.1uF"``) — never a re-formatted number,
+            because it is what the plan has to compare and place against.
+
+            Built for the VIOLATION rows only: an OK row has nothing to repair,
+            and an UNKNOWN row's honest answer is the missing fact it already
+            names, not a plan.
+            """
+            return FindingTarget(
+                component_ref=comp.designator,
+                pin_refs=[pin],
+                net_refs=[net] if net else [],
+                suggested_after=required_text,
+            )
+
+        candidates = cap_candidates_on(model, net, self.library) if net else []
+        decision = decide_required_cap(required_text, candidates, self.library)
+        if decision.state == "unparseable":
             rows.append((
                 Outcome(
                     rule_id=self.id,
@@ -360,8 +525,9 @@ class DecapRequiredCaps(FactsRule):
                 None,
             ))
             return
-        found = _grounded_cap_on(model, net, self.library) if net else None
-        if found is None:
+        declared = decision.required_farads
+        assert declared is not None  # parseable by construction, above
+        if decision.state == "missing":
             rows.append((
                 Outcome(
                     rule_id=self.id,
@@ -375,10 +541,18 @@ class DecapRequiredCaps(FactsRule):
                     evidence=evidence,
                 ),
                 "WARN",
+                target(),
             ))
             return
-        cap, farads = found
-        if farads is None:
+        cap = next(
+            (
+                model.components.get(candidate.designator)
+                for candidate in candidates
+                if candidate.designator == decision.cap_designator
+            ),
+            None,
+        )
+        if decision.state == "unreadable":
             rows.append((
                 Outcome(
                     rule_id=self.id,
@@ -386,30 +560,33 @@ class DecapRequiredCaps(FactsRule):
                     subject=f"{comp.designator} pin{pin}",
                     message=(
                         f"{comp.designator} pin{pin}: a grounded capacitor "
-                        f"({cap.designator}) is present on {net!r}, but its "
+                        f"({decision.cap_designator}) is present on {net!r}, but its "
                         "value cannot be established (board value and MPN "
                         "code both unreadable)"
                     ),
-                    evidence=evidence + [f"{cap.designator} value {cap.value!r}"],
+                    evidence=evidence
+                    + [f"{decision.cap_designator} value {(cap.value if cap else '')!r}"],
                     missing_fact=(
-                        f"a readable value for capacitor {cap.designator}"
+                        f"a readable value for capacitor {decision.cap_designator}"
                     ),
                 ),
                 None,
             ))
             return
-        if farads + 1e-12 >= declared:
+        assert decision.cap_farads is not None
+        if decision.state == "satisfied":
             rows.append((
                 Outcome(
                     rule_id=self.id,
                     state="OK",
                     subject=f"{comp.designator} pin{pin}",
                     message=(
-                        f"{comp.designator} pin{pin}: {cap.designator} "
-                        f"provides {_fmt_farads(farads)} >= required "
+                        f"{comp.designator} pin{pin}: {decision.cap_designator} "
+                        f"provides {_fmt_farads(decision.cap_farads)} >= required "
                         f"{_fmt_farads(declared)} to ground on {net!r}"
                     ),
-                    evidence=evidence + [f"{cap.designator} value {cap.value!r}"],
+                    evidence=evidence
+                    + [f"{decision.cap_designator} value {(cap.value if cap else '')!r}"],
                 ),
                 None,
             ))
@@ -421,12 +598,14 @@ class DecapRequiredCaps(FactsRule):
                     subject=f"{comp.designator} pin{pin}",
                     message=(
                         f"{comp.designator} pin{pin}: the grounded capacitor "
-                        f"on {net!r} is only {_fmt_farads(farads)} "
+                        f"on {net!r} is only {_fmt_farads(decision.cap_farads)} "
                         f"(< required {_fmt_farads(declared)})"
                     ),
-                    evidence=evidence + [f"{cap.designator} value {cap.value!r}"],
+                    evidence=evidence
+                    + [f"{decision.cap_designator} value {(cap.value if cap else '')!r}"],
                 ),
                 "WARN",
+                target(),
             ))
 
 
