@@ -1167,6 +1167,23 @@ Recorded rather than hidden, so a future session does not have to rediscover the
     connection it already has, not a second one. `activate()` is downgraded to a supported trigger
     through the same gate; whether the host ever calls it is now a cleanliness question, not a
     correctness one.
+    **Field result, 2026-09-23 (issue #4): on 3.2.149 the skipped activation is an upstream
+    report, not a fact.** The 024 book read upstream #219/#221 (`hw()` sets
+    `isExtensionsInitialized` before calling `Ig()`, which returns early until the user info
+    exists) as a confirmed defect of 3.2.149 and built the module-scope bootstrap as the way
+    around it. Measured instead on EasyEDA Pro **3.2.149.88089769** with connector **0.4.15
+    registered in the extension library** (not sideloaded): a cold start **does** dispatch
+    `activate()` — `activation: 10:25:01 ok`, `lifecycle: moduleBootstrapObserved=yes
+    activateObserved=yes evaluations=3`, `state: connected`, paired — and closing and reopening
+    the window behaves the same. So the item above keeps the meaning it always had: what it names
+    is the **reload-without-restart** case, and that is the case the bootstrap exists for; on
+    this host the bootstrap is **idempotent defence**, not a workaround for a defect reproduced
+    here. One combination is still unmeasured and must not be cited as fact either way: a
+    **sideloaded** build on 3.2.149 — the state the 024 observation was made in. A second symptom
+    from the same run is not activation at all: with two windows open the daemon registered one,
+    and the second appeared only after its page was reloaded — window freeze / lazy evaluation,
+    the same cause as the 7-hour background-window freeze measured on 3.2.186
+    (`tasks/025-review-flow-v2.md`), which is why multi-window work keeps 3.2.186 as its baseline.
 23. **One box, two store views (0.2.3, fixed in 0.2.4).** `about()` resolved the config through
     `facade?.storage` — optional chaining, no facade created — while `storageLine()` used
     `host()`, which builds the facade on first use. Before anything else has run, the first read
