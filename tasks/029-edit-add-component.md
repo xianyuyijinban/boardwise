@@ -99,3 +99,36 @@ bw_scratch/test 页给一颗测试 IC 补去耦电容：成功、人工先补→
 ## 六、交卷记录
 
 （子代理交文本，主代理 append 并复验。）
+
+### 029-a · 交卷（2026-09-23，子代理 agent-43）
+
+- **① decap 补 target + 判定共享**：两条 VIOLATION 行带 FindingTarget（锚点 IC / 供电脚 / 网 / facts 配方串）；
+  架上是 UNKNOWN 就不给 target。**§二.5 的"同一份代码"落成两个模块级函数**（`cap_candidates_on` +
+  `decide_required_cap`），规则与 apply 的幂等探测都调它们；`outcomes()` 的三元组行崩点已修。
+- **② changeplan 支持 add-component**：新增 `PlanPart/PlanConnection` 与 target 的 anchor/assignedDesignator/x/y/
+  connection/connectionDetail；校验 lcsc/value/≥2 连接/connection∈{wire,label}/x,y 为数字；**`to_jsonable` 按 kind 分支**，
+  `component-value` 的 JSON 一字未变（016 round-trip 测试仍绿）。`_LATER_KINDS` 摘出 add-component。
+- **③ `edit plan --report`**：从 report.json 的 decap finding + 活页面建 plan；阶梯 `LANDING_GRID=5`（= layout.GRID，
+  测试断言）固定顺序 9 位，**耗尽抛 LadderExhausted（绝不落原点）**；位号取最小空闲；连接先 wire（落点 100 单位内线段）
+  再 label（该页该网已有 label 用法），都不成立即拒绝。`--project/--instance` 全命令贯通。
+- **④ apply 编排器 + 11 离线用例**（任务书 10 个 + 1 个额外）：幂等探测走**活工程 export→离线 parse** 后调规则的两个函数；
+  范围差异必须恰好 +1；连接以**工程自身网表**回执判定；结果态沿用 016/draw 与 `persistence` 三档。
+- 变异 2/2 CAUGHT（M1 幂等漏判 / M2 阶梯兜底放原点），各只打中 1 条目标用例；还原
+  `engines/addcomponent.py 6a20100f…`（cp + cmp 一致）。
+- 三线：pytest **1418 passed**（1407+11）；connector/tsc 未跑（本批未动 connector）。
+- **偏离（主代理裁决见下）**：`addcomponent.py` 因层规则落在 `engines/`；`REPAIRABLE_RULES` 增 `decap-required-caps`，
+  016 相应断言/两个 fake 的 `**hint` 已同步更新（接口增长，非放水）。
+- **未做**：`edit preview` 仍不认 add-component；report.json 的 target 是 `asdict` 顺带同步（未加显式 schema 测试/文档段）；
+  GND 端 pin 硬编码 "2"；wire 分支按"最近线段"而非按网判别。真机一律未碰。
+
+### 主代理复验与裁决（2026-09-23）
+
+- 亲手抽核：三个 sha256 与交卷一致（addcomponent `6a20100f…`、changeplan `115fd632…`、decap `0b6e5b2a…`）；
+  `git status` 清单一致；`pytest test_029a_addcomponent.py + test_layer_rules.py` **20 passed**；全量复跑见本节后补。
+- **裁决 1（接受偏离）**：`engines/addcomponent.py` 落点是层规则强制（core 不许 import rules），不算偏离是合规。
+- **裁决 2（接受）**：`REPAIRABLE_RULES` 增项——表即契约的意图保住（016 断言按新事实更新）。
+- **裁决 3（029-b 前必须盯）**：wire 分支"最近线段不按网判别"是本批最弱一环——放行理由：连接是否成立
+  最终由**工程自身网表**回读判定，错网会 honest fail 而不是假成功；029-b 真机用例必须包含
+  "落点附近有异网线段的页面"，验证 wire 不错连、错连时报告而非装成功。GND pin "2" 硬编码对 2 脚电容成立，
+  网表回读兜底，接受为本片边界。
+- 遗留入账：`edit preview` 认 add-component、report.json 显式 schema 测试，列入 029-b 或后续小批。

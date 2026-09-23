@@ -197,7 +197,14 @@ def test_a_rule_without_a_target_is_refused_by_name(tmp_path, capsys):
     assert code == 5, err
     assert "param-led-current" in err
     assert "该规则不支持自动修改" in err
-    assert REPAIRABLE_RULES == {"param-value-mpn-match": "component-value"}
+    # 029-a grew the table: `decap-required-caps` is repairable now (it adds a
+    # part, so its plan needs a report and a live page rather than this offline
+    # path). The assertion keeps its point — the table is the contract, and a
+    # rule that is not in it is refused by name above.
+    assert REPAIRABLE_RULES == {
+        "param-value-mpn-match": "component-value",
+        "decap-required-caps": "add-component",
+    }
 
 
 def test_a_designator_with_no_violation_says_so_with_the_outcomes(tmp_path, capsys):
@@ -489,6 +496,7 @@ class _StubEditor:
         self.identity_error = identity_error
         self.calls = []
         self.params = []
+        self.targets: list[dict] = []
 
     def _identity(self):
         if self.identity is not None:
@@ -531,10 +539,14 @@ class _StubEditor:
             "meta": {"available": {"components": True}},
         }
 
-    async def call(self, action, params=None):
+    async def call(self, action, params=None, *, target_project=None, target_instance=None):
         params = params or {}
         self.calls.append(action)
         self.params.append(params)
+        # 029-a: `edit`'s flows pass the 023 window hint on every call, so the
+        # stub mirrors `BridgeClient.call`'s signature — recording it, because a
+        # hint that silently vanishes is exactly the failure 2c spent a batch on.
+        self.targets.append({"action": action, "project": target_project, "instance": target_instance})
         if action == "doc.list":
             return {
                 "active": {"uuid": self.page, "type": "page"},
@@ -770,8 +782,8 @@ def test_apply_fails_when_the_independent_readback_disagrees(
     # is what catches it.
     original = daemon.call
 
-    async def _lying(action, params=None):
-        data = await original(action, params)
+    async def _lying(action, params=None, **hint):
+        data = await original(action, params, **hint)
         if action == "sch.set_component_attribute":
             daemon.other["Value"] = daemon.value = "4.7kΩ"
         return data
@@ -1050,8 +1062,10 @@ def test_apply_refuses_an_ambiguous_designator_on_the_page(
     single = daemon._geometry()
     original = daemon.call
 
-    async def _two(action, params=None):
-        data = await original(action, params)
+    async def _two(action, params=None, **hint):
+        # `**hint`: the flows pass the 023 window hint (029-a) and this wrapper
+        # has to forward it, or the stub change would look like a flow bug.
+        data = await original(action, params, **hint)
         if action == "sch.geometry":
             data = {"components": single["components"] * 2, "meta": data["meta"]}
         return data

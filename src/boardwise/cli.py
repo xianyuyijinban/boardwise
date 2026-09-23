@@ -39,10 +39,15 @@ from .engines.checkup import (
 )
 from .engines.generate import DEFAULT_NAMING_STRATEGY, NAMING_STRATEGIES
 from .core.changeplan import (
+    ADD_COMPONENT_KIND,
     COMPONENT_VALUE_KIND,
+    CONNECTION_KINDS,
     ChangePlan,
     ChangePlanError,
+    PlanConnection,
+    PlanPart,
     PlanSource,
+    add_component_plan,
     component_value_plan,
     resolve_on_page,
     sha256_of,
@@ -583,6 +588,36 @@ def build_parser() -> argparse.ArgumentParser:
             "view is empty)."
         ),
     )
+    # ---- 029-a: the same command, the other way in -----------------------
+    edit_plan.add_argument(
+        "--report", default=None, metavar="PATH",
+        help=(
+            "Build the plan from a checkup report.json instead of re-running the "
+            "rule: the finding there carries the anchor, the supply pin, the net "
+            "and the recipe (`decap-required-caps` findings only). Needs --lcsc "
+            "and a live editor (the landing spot and the designator pool come "
+            "from `sch.geometry`) — `edit plan --help`, §029-a."
+        ),
+    )
+    edit_plan.add_argument(
+        "--lcsc", default=None, metavar="Cxxxxx",
+        help=(
+            "The orderable part number of the part to add (§二.2: an LCSC number "
+            "from the facts shelf, or this). Without one the plan is refused: an "
+            "unverified recipe is not something to place silently."
+        ),
+    )
+    edit_plan.add_argument(
+        "--project", default=None, metavar="NAME_OR_UUID",
+        help="Which editor window to read the geometry from (023 routing hint).",
+    )
+    edit_plan.add_argument(
+        "--instance", default=None, metavar="INSTANCE_ID",
+        help="The same choice by window key, for a window that cannot name a project.",
+    )
+    edit_plan.add_argument(
+        "--port", type=int, default=None, help="Daemon port (default 61190).",
+    )
 
     edit_preview = edit_sub.add_parser(
         "preview",
@@ -605,6 +640,17 @@ def build_parser() -> argparse.ArgumentParser:
     edit_preview.add_argument(
         "--view", choices=("schematic", "pcb"), default="schematic",
         help="Which model of a .epro2 to parse (default: schematic).",
+    )
+    edit_preview.add_argument(
+        "--project", default=None, metavar="NAME_OR_UUID",
+        help="Which editor window to read from (023 routing hint; add-component plans only).",
+    )
+    edit_preview.add_argument(
+        "--instance", default=None, metavar="INSTANCE_ID",
+        help="The same choice by window key.",
+    )
+    edit_preview.add_argument(
+        "--port", type=int, default=None, help="Daemon port (default 61190).",
     )
 
     edit_apply = edit_sub.add_parser(
@@ -637,6 +683,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     edit_apply.add_argument(
         "--port", type=int, default=None, help="Daemon port (default 61190)."
+    )
+    edit_apply.add_argument(
+        "--project", default=None, metavar="NAME_OR_UUID",
+        help=(
+            "Which editor window to write to (023 routing hint). Needed whenever "
+            "several windows are online: the daemon refuses to guess."
+        ),
+    )
+    edit_apply.add_argument(
+        "--instance", default=None, metavar="INSTANCE_ID",
+        help="The same choice by window key, for a window that cannot name a project.",
     )
 
     # Spelled from the constant, never typed out again: the floor moves in one
@@ -5003,11 +5060,39 @@ def _render_review_mark(
 # --------------------------------------------------------------------------
 
 
+def _edit_target_kwargs(args: argparse.Namespace) -> dict[str, str | None]:
+    """The 023 routing hint for `BridgeClient.call`, from the parsed flags.
+
+    Every `edit` command grew `--project`/`--instance` in 029-a for the reason 2c
+    established: with several editor windows online the daemon refuses to guess
+    (`WINDOW_UNSPECIFIED`), and the machine this runs on usually has three. The
+    hint is a *frame* field, never a connector parameter, so it is passed as
+    keywords and every call stays addressable.
+    """
+    return {
+        "target_project": getattr(args, "project", None) or None,
+        "target_instance": getattr(args, "instance", None) or None,
+    }
+
+
 #: The rules whose findings this build can repair, mapped to the change kind a
 #: plan for them must name. A rule *absent* from this table is answered rather
 #: than ignored: a plan asked for such findings is refused by name, because
 #: silence would read as "there is nothing to fix here".
-REPAIRABLE_RULES: dict[str, str] = {"param-value-mpn-match": COMPONENT_VALUE_KIND}
+REPAIRABLE_RULES: dict[str, str] = {
+    "param-value-mpn-match": COMPONENT_VALUE_KIND,
+    # 029-a: the same rule machinery, a different shape of repair. `decap`
+    # findings carry a target naming the IC, the supply pin, the net and the
+    # recipe value (029 §二.1), which is what an add-component plan is built
+    # from; the rule is offline (`edit plan --report`) and the live probe reuses
+    # its own decision function (§二.5).
+    "decap-required-caps": ADD_COMPONENT_KIND,
+}
+
+#: The designator prefix an added decoupling part gets. A constant rather than
+#: an argument: this slice adds capacitors, and the day it adds something else
+#: is the day the prefix becomes a plan field.
+ADD_COMPONENT_PREFIX = "C"
 
 #: The reverse map, derived so the two directions cannot drift apart: `preview`
 #: and `apply` read a plan (which names no rule) and re-run the rule the plan's
@@ -5188,15 +5273,31 @@ def _snapshot_identity(path: Path) -> tuple[str, str, str, list[str]]:
 
 
 def _cmd_edit_plan(args: argparse.Namespace) -> int:
-    """``edit plan``: one finding -> one ChangePlan, entirely offline.
+    """``edit plan``: one finding -> one ChangePlan.
+
+    Two ways in, and they are different because the plans are:
+
+    * ``--file`` (016): re-run the rule over the snapshot. Offline, and it works
+      for `param-value-mpn-match`, whose repair needs nothing but the file.
+    * ``--report`` (029-a): read the finding out of a checkup report.json and
+      build an `add-component` plan from it. The landing spot, the designator
+      pool and the connection all come from the *live page*, so this one needs an
+      editor — a plan that named a spot without looking at the board would be a
+      guess wearing a coordinate.
 
     Exit codes: 0 plan built; 2 the snapshot cannot be read; 5 the plan cannot
     be built from what was asked — an unknown rule id, a rule this build cannot
-    repair, no violation for that designator, an ambiguous designator, or a
-    before/after pair the plan's own validation would refuse. The last group is
-    5 and not 2 on purpose: nothing is wrong with the input file, the *ask* is
-    what cannot be turned into a plan.
+    repair, no violation for that designator, an ambiguous designator, no
+    verified recipe, an exhausted landing ladder, a net with no connection
+    option, or a before/after pair the plan's own validation would refuse.
     """
+    if getattr(args, "report", None):
+        return _cmd_edit_plan_add_component(args)
+    return _cmd_edit_plan_value(args)
+
+
+def _cmd_edit_plan_value(args: argparse.Namespace) -> int:
+    """The 016 path: one attribute, one component, no editor."""
     import json
 
     path = Path(args.file)
@@ -5369,6 +5470,266 @@ def _cmd_edit_plan(args: argparse.Namespace) -> int:
             encoding="utf-8",
         )
     return 0
+
+
+def _cmd_edit_plan_add_component(args: argparse.Namespace) -> int:
+    """``edit plan --report``: a decap finding + the live page -> an add-component plan (029-a).
+
+    The finding comes from a checkup report.json (it carries the structured
+    target, §二.1); everything else comes from the page, because every remaining
+    decision is about *this* board: where the part can land (the ladder, §二.4),
+    which number is free (§二.3), and how it can be joined to its net (§二.4).
+
+    Every refusal says what is missing or what is in the way, and none of them
+    produces a plan anyway: no verified recipe, an anchor that is not on the
+    page, an exhausted ladder, a net with neither a nearby wire nor a label.
+    """
+    import asyncio
+    import json
+
+    from .engines import addcomponent
+    from .core.changeplan import CONNECTION_LABEL, CONNECTION_WIRE  # noqa: F401 - documented pair
+
+    report_hint = ""
+    report_path = Path(args.report)
+    try:
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        print(f"boardwise edit plan: {report_path}: cannot be read ({exc})", file=sys.stderr)
+        return 2
+    except ValueError as exc:
+        print(f"boardwise edit plan: {report_path}: is not JSON ({exc})", file=sys.stderr)
+        return 2
+
+    rule_id = args.rule or "decap-required-caps"
+    if rule_id not in REPAIRABLE_RULES:
+        print(
+            f"boardwise edit plan: rule {rule_id!r} is not repairable in this build "
+            f"— this build repairs {', '.join(sorted(REPAIRABLE_RULES))}",
+            file=sys.stderr,
+        )
+        return 5
+    kind = REPAIRABLE_RULES[rule_id]
+    if kind != ADD_COMPONENT_KIND:
+        print(
+            f"boardwise edit plan: rule {rule_id!r} repairs by {kind}, which does not "
+            "need a report — use --file (016's path)",
+            file=sys.stderr,
+        )
+        return 5
+
+    designator = (args.designator or "").strip().upper()
+    finding = next(
+        (
+            item
+            for item in payload.get("findings") or []
+            if str(item.get("rule_id")) == rule_id
+            and str((item.get("target") or {}).get("component_ref") or "").upper()
+            == designator
+        ),
+        None,
+    )
+    if finding is None:
+        rule_findings = [
+            item for item in payload.get("findings") or []
+            if str(item.get("rule_id")) == rule_id
+        ]
+        print(
+            f"boardwise edit plan: {report_path} carries no {rule_id} finding for "
+            f"{designator or '(no --designator given)'} — nothing to plan",
+            file=sys.stderr,
+        )
+        for item in rule_findings:
+            target = item.get("target") or {}
+            name = target.get("component_ref")
+            print(
+                f"  [{item.get('severity')}] {name or '(no target)'}: "
+                f"{str(item.get('message') or '')[:120]}",
+                file=sys.stderr,
+            )
+        if rule_findings and all(not (item.get("target") or {}) for item in rule_findings):
+            print(
+                "  这些 finding 没有 structured target —— 规则只有在 facts 架有具体配方"
+                "（required_caps）时才给 target；先录入事实再建 plan（§二.1）",
+                file=sys.stderr,
+            )
+        return 5
+
+    target = finding.get("target") or {}
+    recipe = (args.after if args.after is not None else target.get("suggested_after")) or ""
+    recipe = str(recipe).strip()
+    nets = [str(item) for item in target.get("net_refs") or [] if str(item).strip()]
+    pins = [str(item) for item in target.get("pin_refs") or [] if str(item).strip()]
+    if not recipe or not nets:
+        print(
+            f"boardwise edit plan: the finding for {designator} carries no recipe "
+            f"(suggested_after={target.get('suggested_after')!r}, net_refs={nets}) — "
+            "facts 架上没有具体条目时规则不给 target，plan 也不猜料号（§二.1）",
+            file=sys.stderr,
+        )
+        return 5
+    lcsc = (args.lcsc or str(target.get("lcsc") or "")).strip()
+    if not lcsc:
+        print(
+            f"boardwise edit plan: no verified recipe for {designator} pin"
+            f"{pins[0] if pins else '?'}: the facts shelf states the value "
+            f"{recipe!r} but no orderable part — pass --lcsc Cxxxxx (029 §二.2). "
+            "Placing an unverified part is how the wrong capacitor ends up on a "
+            "decoupling pin",
+            file=sys.stderr,
+        )
+        return 5
+    net = nets[0]
+
+    if not args.file:
+        print(
+            "boardwise edit plan: --file is required with --report — it is the "
+            "snapshot the plan's sha256 is taken from and the file apply "
+            "re-reviews afterwards",
+            file=sys.stderr,
+        )
+        return 5
+    snapshot = Path(args.file)
+    if not snapshot.is_file():
+        print(f"boardwise edit plan: {snapshot}: not a file", file=sys.stderr)
+        return 2
+
+    BridgeClient, BridgeError, port, token = _open_cli(args)
+
+    async def run() -> int:
+        try:
+            client = await BridgeClient.open(
+                _bridge_uri(port), token, "cli", client="boardwise-cli"
+            )
+        except (OSError, BridgeError) as exc:
+            print(
+                f"boardwise edit plan: the live page is required for an "
+                f"add-component plan, and the daemon is not reachable "
+                f"(127.0.0.1:{port}: {exc})",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            geometry = await client.call("sch.geometry", {}, **_edit_target_kwargs(args))
+        except BridgeError as exc:
+            print(
+                f"boardwise edit plan: sch.geometry failed [{exc.code}] {exc.message}",
+                file=sys.stderr,
+            )
+            return 2
+        finally:
+            await client.close()
+
+        origins = addcomponent.component_origins(geometry)
+        anchor_at = origins.get(designator)
+        if anchor_at is None:
+            print(
+                f"boardwise edit plan: anchor {designator} is not on the focused "
+                f"page ({len(origins)} components there: "
+                f"{', '.join(sorted(origins)[:12])}{'…' if len(origins) > 12 else ''}) "
+                "— the plan would name a spot next to nothing",
+                file=sys.stderr,
+            )
+            return 5
+        try:
+            spot = addcomponent.landing_spot(anchor_at, addcomponent.occupied_points(geometry))
+        except addcomponent.LadderExhausted as exc:
+            print(
+                f"boardwise edit plan: no free landing spot next to {designator} — {exc}. "
+                "阶梯耗尽就拒绝，绝不放原点（§二.4）：先把那一块挪开或手工放这颗电容",
+                file=sys.stderr,
+            )
+            return 5
+        try:
+            connection = addcomponent.choose_connection(net, (spot.x, spot.y), geometry)
+        except addcomponent.NoConnectionOption as exc:
+            print(f"boardwise edit plan: {exc}", file=sys.stderr)
+            return 5
+        assigned = addcomponent.allocate_designator(origins.keys(), ADD_COMPONENT_PREFIX)
+
+        project_uuid, page_uuid, host_version, notes = _snapshot_identity(snapshot)
+        source = PlanSource(
+            input_sha256=sha256_of(snapshot),
+            project_uuid=project_uuid,
+            page_uuid=page_uuid or str(payload.get("source", {}).get("pageUuid") or ""),
+            host_version=host_version,
+            connector_version=_repo_connector_version(),
+        )
+        connections = [
+            PlanConnection(pin=pins[0] if pins else "1", net=net),
+            PlanConnection(pin="2", net="GND"),
+        ]
+        plan = add_component_plan(
+            source,
+            anchor=designator,
+            designator=assigned,
+            part=PlanPart(lcsc=lcsc, value=recipe, footprint=str(target.get("footprint") or "")),
+            connections=connections,
+            x=spot.x,
+            y=spot.y,
+            connection=connection.kind,
+            connection_detail=connection.detail,
+            recipe_source=(
+                f"facts:{lcsc}" if target.get("lcsc") else f"operator:{lcsc}"
+            ),
+        )
+
+        print(
+            f"boardwise edit plan: {report_path} → add {assigned} ({recipe}, {lcsc}) "
+            f"next to {designator} pin{pins[0] if pins else '?'} on net {net!r}"
+        )
+        print(f"finding: [{finding.get('severity')}] {rule_id}: {finding.get('message')}")
+        print(
+            f"spot: ({spot.x:g}, {spot.y:g}) — ladder rung {spot.index} "
+            f"offset {spot.offset}{' (the ideal spot was taken)' if spot.stepped else ' (ideal spot)'}"
+        )
+        print(f"connection: {connection.kind} — {connection.detail}")
+        print(
+            f"snapshot: sha256 {source.input_sha256}  pageUuid {source.page_uuid or '(none)'}  "
+            f"host {source.host_version or '(unknown)'}"
+        )
+        for note in notes:
+            print(f"note: {note}")
+        report_hint = str(args.json_path or "")
+
+        if args.out_path:
+            plan.dump(args.out_path)
+            print(f"plan written to {args.out_path}")
+        else:
+            print(json.dumps(plan.to_jsonable(), ensure_ascii=False, indent=2))
+        if args.json_path:
+            Path(args.json_path).write_text(
+                json.dumps(
+                    {
+                        "command": "plan",
+                        "ok": True,
+                        "kind": ADD_COMPONENT_KIND,
+                        "report": str(report_path),
+                        "file": str(snapshot),
+                        "rule": rule_id,
+                        "anchor": designator,
+                        "designator": assigned,
+                        "lcsc": lcsc,
+                        "value": recipe,
+                        "net": net,
+                        "pin": pins[0] if pins else "",
+                        "spot": {"x": spot.x, "y": spot.y, "index": spot.index, "offset": list(spot.offset)},
+                        "connection": connection.kind,
+                        "connectionDetail": connection.detail,
+                        "recipeSource": plan.change.recipe_source,
+                        "sha256": source.input_sha256,
+                        "planPath": args.out_path,
+                        "plan": plan.to_jsonable(),
+                        "notes": notes,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        return 0
+
+    return asyncio.run(run())
 
 
 def _cmd_edit_preview(args: argparse.Namespace) -> int:
@@ -5751,7 +6112,7 @@ async def _edit_apply_flow(
 
     async def call(action, params, purpose, *, writes=False):
         try:
-            data = await client.call(action, params)
+            data = await client.call(action, params, **_edit_target_kwargs(args))
         except bridge_error as exc:
             records.append(_edit_step(action, purpose, False, exc, wrote=writes))
             return None
@@ -6081,6 +6442,445 @@ async def _edit_apply_flow(
     return done(0, "applied")
 
 
+async def _edit_apply_add_flow(
+    client, bridge_error, plan, args: argparse.Namespace, started: float
+) -> int:
+    """Execute one `add-component` plan against a running editor (029 §二.6).
+
+    The 016 protections, unchanged in spirit and only reshaped where the work
+    differs: preconditions re-read from the live page before anything is written;
+    exactly the plan's part, placed at the plan's spot, connected the way the plan
+    decided; a read-back that does not trust the writes' own answers; and
+    UNKNOWN → read the page, never retry.
+
+    Two things this flow has that the value flow does not:
+
+    * **The idempotence probe** (§二.5), run before the first write and answered
+      by the rule's own two functions on a model parsed from the *live* project
+      export. If the recipe is already satisfied on the anchor's net the run ends
+      as `already-applied` with zero writes — the acceptance's "重复 apply 零新增".
+    * **The range obligation** (§一): after the writes, the page must have gained
+      exactly one component. Two parts, or a part and a missing one, is an
+      accident report rather than a success, and it is reported as `failed` even
+      though something *did* land.
+    """
+    from .engines import addcomponent
+    from .core.changeplan import CONNECTION_LABEL
+
+    records: list[dict] = []
+    notes: list[str] = []
+    designator = plan.target.designator
+    anchor = plan.target.anchor or ""
+    part = plan.change.part or PlanPart()
+    nets = {item.pin: item.net for item in plan.change.connections}
+    decoupled_net = nets.get(plan.change.connections[0].pin, "") if plan.change.connections else ""
+    page = plan.source.page_uuid
+    report: dict = {
+        "command": "apply",
+        "ok": False,
+        "kind": ADD_COMPONENT_KIND,
+        "outcome": "",
+        "reason": "",
+        "exitCode": 0,
+        "planPath": str(args.plan),
+        "plan": plan.to_jsonable(),
+        "designator": designator,
+        "anchor": anchor,
+        "part": {"lcsc": part.lcsc, "value": part.value, "footprint": part.footprint},
+        "recipeSource": plan.change.recipe_source,
+        "connections": {item.pin: item.net for item in plan.change.connections},
+        "page": {"uuid": page, "guard": "enforced" if page else "unavailable"},
+        "spot": {"x": plan.target.x, "y": plan.target.y, "connection": plan.target.connection},
+        "idempotence": {},
+        "write": {"action": "sch.place_component", "calls": 0},
+        "verification": {},
+        "range": {},
+        "save": {},
+        "persistence": "",
+        "postReview": {},
+        "steps": records,
+        "notes": notes,
+        "final": "",
+    }
+
+    def done(code: int, outcome: str, reason: str = "") -> int:
+        report["exitCode"] = code
+        report["outcome"] = outcome
+        report["ok"] = code == 0
+        if reason:
+            report["reason"] = reason
+        return _render_edit_apply_add(report, args)
+
+    async def call(action, params, purpose, *, writes=False):
+        try:
+            data = await client.call(action, params, **_edit_target_kwargs(args))
+        except bridge_error as exc:
+            records.append(_edit_step(action, purpose, False, exc, wrote=writes))
+            return None
+        records.append(_edit_step(action, purpose, True, wrote=writes))
+        return data
+
+    # ---- 1. the page guard, re-read before anything is written ------------
+    if page:
+        listing = await call("doc.list", {}, "confirm the focused page is the plan's page")
+        if isinstance(listing, dict):
+            focused = _active_document_uuid(listing)
+            if focused and focused != page:
+                notes.append(
+                    f"the editor has {focused} focused and the plan targets {page}; "
+                    "nothing was written"
+                )
+                return done(4, "refused", "page_mismatch")
+    else:
+        notes.append(
+            "pageUuid guard unavailable — this plan carries no pageUuid, so "
+            "`guardPage` returns early (measured, actions.ts)"
+        )
+
+    # ---- 1b. the two layers of focus must agree (018 §B2) -----------------
+    identity = await call("sys.identity", {}, "confirm the editor's two layers of focus agree")
+    if isinstance(identity, dict) and identity.get("consistent") is False:
+        notes.append(
+            "焦点不一致，请先切换工程再执行：ChangePlan 的第一条 precondition 是 "
+            "\"the page the editor has focused is the plan's page\" —— 没有发出任何写动作"
+        )
+        return done(4, "refused", "focus_inconsistent")
+
+    # ---- 1c. the live page: anchor, designator, landing spot --------------
+    geometry = await call("sch.geometry", {}, "read the page before writing")
+    if geometry is None:
+        last = records[-1]
+        notes.append(
+            "the page could not be read, so the plan's preconditions were not "
+            "checked; nothing was written"
+        )
+        return done(3 if last["unknown"] else 4, "unknown" if last["unknown"] else "refused",
+                    "precondition_unreadable")
+    origins = addcomponent.component_origins(geometry)
+    if anchor not in origins:
+        notes.append(
+            f"anchor {anchor} is not on the focused page — the plan's precondition "
+            "(`anchor still resolves`) is broken; nothing was written"
+        )
+        return done(4, "refused", "anchor_missing")
+    if designator in origins:
+        notes.append(
+            f"{designator} already exists on the page — the assigned designator was "
+            "taken between plan and apply (人可能刚手放了一个); nothing was written"
+        )
+        return done(4, "refused", "designator_taken")
+    occupied = addcomponent.occupied_points(geometry)
+    spot = (float(plan.target.x or 0.0), float(plan.target.y or 0.0))
+    if not addcomponent.is_free(spot[0], spot[1], occupied):
+        notes.append(
+            f"the planned landing spot ({spot[0]:g}, {spot[1]:g}) is occupied now — "
+            "the plan's precondition is broken; nothing was written (阶梯在上一次建 plan "
+            "时已经走过，apply 不替它改主意)"
+        )
+        return done(4, "refused", "spot_taken")
+    report["resolved"] = {"anchor": anchor, "anchorAt": list(origins[anchor]), "components": len(origins)}
+
+    # ---- 2. the idempotence probe (§二.5) ---------------------------------
+    before_model = await _live_project_model(call, notes)
+    if before_model is None:
+        notes.append(
+            "the live project could not be read (sys.get_project_file → parse), so "
+            "'is this already done?' cannot be answered; nothing was written — a "
+            "create that cannot check idempotence is a duplicate waiting to happen"
+        )
+        return done(4, "refused", "idempotence_unreadable")
+    before_designators = set(before_model.components)
+    decision = addcomponent.probe_already_applied(before_model, decoupled_net, part.value)
+    report["idempotence"] = {
+        "net": decoupled_net,
+        "recipe": part.value,
+        "state": decision.state,
+        "cap": decision.cap_designator,
+        "capFarads": decision.cap_farads,
+        "requiredFarads": decision.required_farads,
+        "how": "rules.decap.decide_required_cap (the rule's own judgement)",
+    }
+    if decision.satisfied:
+        notes.append(
+            f"net {decoupled_net!r} already carries {decision.cap_designator} "
+            f"({decision.cap_farads} >= required {decision.required_farads}) — a "
+            "repeat run or a hand-placed part; nothing was written (idempotent)"
+        )
+        report["final"] = "already satisfied; the page was not touched"
+        return done(0, "already_applied", "already_applied")
+
+    # ---- 3. the writes: place, then connect -------------------------------
+    place_params: dict = {
+        "lcsc": part.lcsc,
+        "x": spot[0],
+        "y": spot[1],
+        "designator": designator,
+    }
+    if page:
+        place_params["pageUuid"] = page
+    placed = await call(
+        "sch.place_component", place_params,
+        f"place {designator} ({part.value}, {part.lcsc}) at ({spot[0]:g}, {spot[1]:g})",
+        writes=True,
+    )
+    report["write"]["calls"] = 1
+    report["write"]["params"] = {**place_params, "pageUuid": page or "(omitted: none in the plan)"}
+    if placed is None:
+        last = records[-1]
+        readback = await call("sch.geometry", {}, "read the page back after the placement's outcome went unknown")
+        landed = False
+        if isinstance(readback, dict):
+            landed = designator in addcomponent.component_origins(readback)
+        report["verification"] = {"afterUnknownWrite": True, "designatorPresent": landed}
+        if last["unknown"] and not landed:
+            notes.append(
+                f"the placement's outcome is UNKNOWN ([{last['code']}] {last['message']}) "
+                "and the read-back does not show the part; nothing was retried — a "
+                "timeout is not a cancellation, and the first placement of a session "
+                "can land while reporting a miss (measured, sch.place_component)"
+            )
+            return done(3, "unknown", "place_unknown")
+        if not landed:
+            notes.append(f"the placement was refused ([{last['code']}] {last['message']})")
+            return done(2, "failed", "place_refused")
+        notes.append(
+            "the placement reported a failure but the part is on the page — "
+            "continuing with the connection, because the page is the authority"
+        )
+    else:
+        report["write"]["placed"] = placed if isinstance(placed, dict) else {}
+
+    if plan.target.connection == CONNECTION_LABEL:
+        label = await call(
+            "sch.place_netlabel",
+            {"net": decoupled_net, "x": spot[0], "y": spot[1], **({"pageUuid": page} if page else {})},
+            f"label the new part with the net name {decoupled_net!r}",
+            writes=True,
+        )
+        report["write"]["calls"] += 1
+        report["write"]["label"] = {"ok": label is not None, "net": decoupled_net}
+    else:
+        near = addcomponent.nearest_wire_point(spot, geometry)
+        if near is None:
+            notes.append(
+                "the plan chose a wire but the page no longer shows a wire point to "
+                "reach — the connection was NOT drawn; the part is placed and the "
+                "connection is missing"
+            )
+            return done(2, "failed", "connection_unavailable")
+        wire = await call(
+            "sch.place_wire",
+            {"points": [[spot[0], spot[1]], [near[0], near[1]]], "net": decoupled_net,
+             **({"pageUuid": page} if page else {})},
+            f"draw the short wire to ({near[0]:g}, {near[1]:g}) carrying net {decoupled_net!r}",
+            writes=True,
+        )
+        report["write"]["calls"] += 1
+        report["write"]["wire"] = {"ok": wire is not None, "to": [near[0], near[1]], "net": decoupled_net}
+
+    # ---- 4. independent read-back: the part, the range, the connectivity ---
+    verify = await call("sch.geometry", {}, "read the page back independently after the writes")
+    if verify is None:
+        notes.append(
+            "the independent read-back failed — the page's state cannot be stated, "
+            "although the writes were issued"
+        )
+        return done(3, "unknown", "readback_unavailable")
+    if designator not in addcomponent.component_origins(verify):
+        notes.append(f"the read-back does not show {designator} on the page — the placement did not land")
+        return done(2, "failed", "readback_missing")
+    after_model = await _live_project_model(call, notes)
+    if after_model is None:
+        notes.append(
+            "the page shows the new part, but the project export could not be read "
+            "again, so the range (+1 part) and the connectivity cannot be stated"
+        )
+        return done(3, "unknown", "range_unreadable")
+    diff = addcomponent.range_diff(before_designators, set(after_model.components), designator)
+    report["range"] = {
+        "added": list(diff.added),
+        "removed": list(diff.removed),
+        "unchanged": diff.unchanged,
+        "expected": designator,
+        "ok": diff.ok,
+        "before": len(before_designators),
+        "after": len(after_model.components),
+    }
+    if not diff.ok:
+        notes.append(
+            f"范围差异不是恰好 +1：{diff.describe()} —— 事故报告（029 §一：多一个器件、"
+            "少一个器件都算事故，哪怕板子看起来更好）；没有保存，请人工确认页面"
+        )
+        return done(2, "failed", "range_diff")
+    # Connectivity is judged by the project's *own* netlist (the model parsed
+    # from the live export), not by the wire this flow drew: "the wire landed"
+    # and "the pin is on the net" are different claims, and the second one is
+    # the one a decoupling requirement actually means.
+    memberships = {}
+    for pin, net in nets.items():
+        node = after_model.nets.get(net)
+        memberships[pin] = bool(
+            node is not None and any(designator == name for name, _pin in node.pins)
+        )
+    report["verification"] = {
+        "action": "sch.geometry + sys.get_project_file",
+        "designator": designator,
+        "present": True,
+        "value": (after_model.components[designator].value if designator in after_model.components else ""),
+        "expectedValue": part.value,
+        "nets": memberships,
+    }
+    if not all(memberships.values()):
+        missing = [pin for pin, ok in memberships.items() if not ok]
+        notes.append(
+            f"the new part is on the page but the project's own netlist does not place "
+            f"it on {', '.join(nets[pin] for pin in missing)} — 连接没有成立（放置成功、"
+            "连通失败）；没有保存"
+        )
+        return done(2, "failed", "connection_not_established")
+
+    # ---- 5. save ---------------------------------------------------------
+    saved = await call("sch.doc.save", {}, "persist the change", writes=True)
+    if saved is None:
+        last = records[-1]
+        report["save"] = {"ok": False, "code": last["code"], "message": last["message"]}
+        if last["unknown"]:
+            report["persistence"] = "unknown"
+            notes.append(
+                "the save's outcome is unknown — the new part is verified on the canvas, "
+                "but whether it reached the file cannot be stated, and nothing was retried"
+            )
+            return done(3, "unknown", "save_unknown")
+        report["persistence"] = "placed"
+        notes.append(
+            f"the editor refused the save ([{last['code']}] {last['message']}) — the new "
+            "part is on the canvas only; it is NOT persisted"
+        )
+        return done(2, "failed", "save_refused")
+    report["save"] = {"ok": True, "answered": saved}
+    report["persistence"] = "saved_unverified"
+    notes.append(
+        "persistence is capped at saved_unverified: this bridge has no close/reopen "
+        "action (009d), so only a separate reopen can promote it to saved_verified"
+    )
+
+    # ---- 6. re-review against the snapshot on disk ------------------------
+    report["postReview"] = _edit_post_review(
+        args.file, started, "decap-required-caps", anchor, args.view
+    )
+    post_state = report["postReview"].get("state")
+    if post_state == "still_present":
+        report["final"] = (
+            f"placed, verified, saved — but the re-review still reports the decap finding "
+            f"for {anchor} (recipes involve values and grounding; check what the shelf asks for)"
+        )
+        return done(2, "failed", "still_present")
+    if post_state == "unknown":
+        report["final"] = "placed, verified and saved; the re-review could not be taken (see above)"
+        return done(0, "applied", "post_review_unknown")
+    report["final"] = f"placed, verified, saved and re-reviewed as {post_state}"
+    return done(0, "applied")
+
+
+async def _live_project_model(call, notes: list[str]):
+    """The live project as an offline model — the idempotence probe's input (§二.5).
+
+    Tier A1 (`sys.get_project_file` → a temp `.epro2` → the offline parser), the
+    same reading `boardwise checkup` prefers, so the probe judges the board with
+    the rules' own parser rather than a second one written for the wire. Returns
+    ``None`` (with a note) when the export or the parse fails: for a *create*, an
+    unreadable board means "I cannot check whether this is already done", and the
+    caller refuses rather than risk a duplicate.
+    """
+    import tempfile
+
+    payload = await call(
+        "sys.get_project_file", {"fileType": "epro2"},
+        "export the live project for the idempotence probe and the range check",
+    )
+    if not isinstance(payload, dict):
+        return None
+    try:
+        blob = _archive_bytes(payload, "sys.get_project_file")
+    except ValueError as exc:
+        notes.append(f"the live project export could not be decoded ({exc})")
+        return None
+    with tempfile.TemporaryDirectory(prefix="boardwise-edit-") as tmp:
+        archive = Path(tmp) / "project.epro2"
+        archive.write_bytes(blob)
+        try:
+            model, _board = _parse_archive(archive)
+        except Exception as exc:  # noqa: BLE001 — the CLI must not traceback
+            notes.append(f"the live project export could not be parsed ({exc})")
+            return None
+    return model
+
+
+def _render_edit_apply_add(report: dict, args: argparse.Namespace) -> int:
+    """Print the human summary of an add-component apply, write ``--json``, exit."""
+    import json
+
+    code = int(report.get("exitCode") or 0)
+    reason = report.get("reason") or ""
+    print(
+        f"boardwise edit apply: add {report.get('designator')} "
+        f"({report['part'].get('value')!r}, {report['part'].get('lcsc')}) next to "
+        f"{report.get('anchor')}  [{report.get('outcome')}{': ' + reason if reason else ''}]"
+    )
+    for step in report.get("steps") or []:
+        mark = "ok" if step["ok"] else ("UNKNOWN" if step["unknown"] else "FAILED")
+        line = f"  {mark:<7} {step['action']:<26} {step['purpose']}"
+        if not step["ok"]:
+            line += f" — [{step['code']}] {step['message']}"
+        print(line)
+    spot = report.get("spot") or {}
+    print(
+        f"  spot    ({spot.get('x'):g}, {spot.get('y'):g})  connection "
+        f"{spot.get('connection')}  recipe {report.get('recipeSource') or '(unrecorded)'}"
+    )
+    idempotence = report.get("idempotence") or {}
+    if idempotence:
+        print(
+            f"  probe   net {idempotence.get('net')!r} recipe {idempotence.get('recipe')!r} → "
+            f"{idempotence.get('state')}"
+            + (f" ({idempotence.get('cap')})" if idempotence.get("cap") else "")
+        )
+    diff = report.get("range") or {}
+    if diff:
+        print(
+            f"  range   before {diff.get('before')} → after {diff.get('after')}  "
+            f"added {diff.get('added')} removed {diff.get('removed')}  "
+            f"{'as promised (+1)' if diff.get('ok') else 'NOT +1 — accident'}"
+        )
+    verification = report.get("verification") or {}
+    # The pins the plan promised, so the line reads "1→VCC ok" rather than
+    # "1 ok": the membership map only carries booleans.
+    promised: dict = report.get("connections") or {}
+    member_nets = verification.get("nets") or {}
+    if member_nets:
+        print(
+            "  nets    "
+            + ", ".join(
+                f"{pin}→{promised.get(pin, '?')} {'ok' if established else 'MISSING'}"
+                for pin, established in member_nets.items()
+            )
+        )
+    if report.get("persistence"):
+        print(f"  persistence: {report['persistence']}")
+    post = report.get("postReview") or {}
+    if post:
+        print(f"  re-review: {post.get('state')} — {post.get('reason')}")
+    for note in report.get("notes") or []:
+        print(f"  note: {note}")
+    if report.get("final"):
+        print(f"boardwise edit apply: {report['final']}")
+    if args.json_path:
+        Path(args.json_path).write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    return code
+
+
 def _cmd_edit_apply(args: argparse.Namespace) -> int:
     """``edit apply``: execute one plan against a running editor (016 §3).
 
@@ -6123,6 +6923,8 @@ def _cmd_edit_apply(args: argparse.Namespace) -> int:
             )
             return 3
         try:
+            if plan.change.kind == ADD_COMPONENT_KIND:
+                return await _edit_apply_add_flow(client, BridgeError, plan, args, started)
             return await _edit_apply_flow(client, BridgeError, plan, args, started)
         finally:
             await client.close()
