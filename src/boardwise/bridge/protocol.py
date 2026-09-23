@@ -471,34 +471,13 @@ ACTIONS: tuple[Action, ...] = (
         risk="read",
     ),
     # --- 026 probe batch: TEMPORARY instrumentation --------------------------
-    Action(
-        name="sys.worker_probe",
-        summary=(
-            "PROBE-ONLY, TEMPORARY (026b, retires with its answer): the one question "
-            "the probe batch could not answer from a desk — can a native WebSocket "
-            "reach the daemon (ws://127.0.0.1:61190/eda) from the extension page, "
-            "and from a blob: Worker? Both scopes are tried separately and the same "
-            "probe code runs in each, because the page's answer is not evidence "
-            "about the Worker's: if a Worker can open the socket itself, form B' "
-            "(transport inside the Worker) becomes possible. Read-only, and it "
-            "terminates its Worker and revokes its blob URL whether it answered or "
-            "not; a refusal (no Worker, a CSP that blocks blob: or connect-src) is "
-            "reported as that refusal, never as an empty success."
-        ),
-        params=("mode", "url", "timeoutMs"),
-        returns=(
-            "{mode: 'nativeWs', url, timeoutMs, support: {typeofWebSocket, "
-            "typeofWorker, typeofBlob, typeofUrl}, page: {construct: {ok, error?}, "
-            "opened, messages, sample, events, elapsedMs, verdict}, worker: same "
-            "shape (plus supported/error when no Worker could be built), verdict}"
-        ),
-        params_schema=(
-            "mode: only nativeWs (the retired worker|pageTimer|workerTimer|"
-            "hostTimer|status modes are refused with BAD_REQUEST); url: default "
-            "ws://127.0.0.1:61190/eda; timeoutMs: 500..20000, default 4000"
-        ),
-        risk="read",
-    ),
+    # (empty: `sys.worker_probe` was removed in 0.4.18 / 026c. Its four
+    # measurement modes were retired with their answers in 026b; its one
+    # remaining question — can a native WebSocket reach the daemon from the page
+    # and from a Worker? — was measured on the machine in batch 2b, and the
+    # answer is recorded in `outputs/026b_2b_p6_nativews.txt` and in the P6
+    # section of `outputs/026_probe.md`. The section header stays as the marker
+    # that the whole probe family is gone, not as a place to add another one.)
     Action(
         name="sch.readback",
         summary="Schematic components and a primitive subset, for a netlist view.",
