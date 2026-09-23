@@ -562,12 +562,18 @@ test('a wake on a healthy connection does nothing but stamp activity', async (t)
   assert.ok(logs.some((line) => /connected and answering/.test(line)), logs.join('\n'));
 });
 
-test('a wake with an outstanding heartbeat sends one at once', async (t) => {
-  // A heartbeat that has gone out and not been answered: the socket may be
-  // half-open, and the throttled timer that would have noticed is the thing the
-  // alarm exists to bypass. The miss limit is set high so the heartbeat timer
-  // itself cannot reconnect during the test — the branch under test is the
-  // middle one (0 < missed < limit).
+test('a wake reconnects on the first unanswered heartbeat, without waiting for the miss limit', async (t) => {
+  // 0.4.18 (026c) — the spec change the batch-2b measurements asked for. A
+  // heartbeat has gone out and not been answered, and the page has been silent
+  // long enough for the alarm to fire: the socket is judged dead *now*. The
+  // reasoning, and why waiting was pointless: a live socket answers a ping
+  // within milliseconds and that answer arrives as an inbound frame, which
+  // resets the miss counter — so "wake + one unanswered heartbeat" already
+  // cannot be a live socket. The old behaviour (ping again, wait for the third
+  // miss) cost two more throttled cycles, measured at 135–152 s on the machine.
+  //
+  // The miss limit is 50 here on purpose, so the *heartbeat timer* cannot be
+  // what reconnects: only the wake can.
   const socket = new FakeSocket();
   const { transport, logs } = makeTransportWithCleanup(t, socket, {
     heartbeatMs: 20,
@@ -578,16 +584,77 @@ test('a wake with an outstanding heartbeat sends one at once', async (t) => {
   await socket.deliver({ id: 'hello', ok: true, data: {} });
 
   assert.ok(await waitFor(() => socket.pings().length >= 1), 'an unanswered heartbeat had to go first');
+  const registered = socket.registered.length;
   const pings = socket.pings().length;
+
   transport.wake('test');
 
-  assert.ok(logs.some((line) => /watchdog wake \(test\): \d+ unanswered heartbeat\(s\) — pinging now/.test(line)),
-    `the decision must be readable in the log: ${logs.join('\n')}`);
   assert.ok(
-    await waitFor(() => socket.pings().length > pings),
-    'and a heartbeat must actually go out',
+    await waitFor(() => socket.registered.length > registered),
+    'one unanswered heartbeat must be enough to rebuild the socket',
   );
-  assert.notEqual(transport.getState(), 'reconnecting', 'this branch pings; it does not rebuild');
+  assert.equal(socket.pings().length, pings, 'and it must not spend a ping on the dead socket first');
+  assert.ok(
+    logs.some((line) => /watchdog wake \(test\): \d+ unanswered heartbeat\(s\)/.test(line)),
+    `the decision must be readable in the log: ${logs.join('\n')}`,
+  );
+});
+
+test('the wake path reconnects synchronously, with no timer a throttled page could defer', async (t) => {
+  // 026c. The wake path used to drop the socket and then reconnect from a
+  // `setTimeout(…, 0)`. On a throttled page that timer is coalesced with
+  // everything else to about one tick a minute, so "reconnect now" could be
+  // deferred by the rest of the throttled period — which is exactly the extra
+  // ~50 s two of the three machine runs showed (101 s and 115 s instead of the
+  // 58–63 s the other run managed). `connect()` registers synchronously, so a
+  // direct call is immediate, and this asserts that by reading the socket
+  // *without awaiting anything*.
+  const socket = new FakeSocket();
+  const { transport } = makeTransportWithCleanup(t, socket, {
+    heartbeatMs: 20,
+    heartbeatMissLimit: 50,
+  });
+  await transport.start();
+  await socket.deliver(BANNER);
+  await socket.deliver({ id: 'hello', ok: true, data: {} });
+  assert.ok(await waitFor(() => socket.pings().length >= 1), 'an unanswered heartbeat had to go first');
+
+  const registered = socket.registered.length;
+  transport.wake('synchronous');
+
+  assert.equal(
+    socket.registered.length,
+    registered + 1,
+    'the re-registration must have happened before wake() returned — a deferred one is a throttled one',
+  );
+  assert.ok(
+    socket.closed.length >= 1,
+    'and the dead socket is closed first, not left to the daemon to time out',
+  );
+});
+
+test('a wake at exactly one miss reconnects too (the boundary the spec names)', async (t) => {
+  // `missed > 0` is the rule, so the boundary case is one — pinned separately
+  // because "at least the miss limit" and "any miss" differ by exactly here.
+  const socket = new FakeSocket();
+  const { transport } = makeTransportWithCleanup(t, socket, {
+    heartbeatMs: 30,
+    heartbeatMissLimit: 99,
+  });
+  await transport.start();
+  await socket.deliver(BANNER);
+  await socket.deliver({ id: 'hello', ok: true, data: {} });
+
+  assert.ok(await waitFor(() => socket.pings().length === 1), 'exactly one unanswered heartbeat');
+  // Freeze the cadence: the timer is far from its next tick, so anything that
+  // happens now is the wake's doing.
+  const registered = socket.registered.length;
+  transport.wake('one miss');
+
+  assert.ok(
+    await waitFor(() => socket.registered.length > registered, 500),
+    'one miss is dead enough',
+  );
 });
 
 test('a wake past the miss limit rebuilds the socket instead of waiting for the timer', async (t) => {

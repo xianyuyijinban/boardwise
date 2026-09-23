@@ -149,3 +149,40 @@
   根本攒不到 45 s 静默；"wake + 有未答心跳"已是强死亡证据。预期恢复 ~45–60 s，达 ≤90 s 目标。
 - **裁决 2（批准删）**：`sys.worker_probe`（nativeWs）使命完成（P6 两半真机实测），批 2c 删净。
 - 遗留：`test2` 窗口留开（岳自行处置）；第 5 项 149 第二窗口验证归岳。
+
+### 026c · 交卷（2026-09-23，子代理 agent-43）
+
+- **裁决 1 实现**：`Transport.wake()` 的 `connected` 分支改为「`missed > 0` 即判死 → `reconnectNow()`」，
+  原「先补 ping 等 missLimit」分支删除；`missed = 0`、connecting/handshaking、idle/reconnecting 三支语义不变。
+- **额外修复（主代理已追认，见下）**：`reconnectNow()` 原走 `scheduleReconnect(reason, 0)` = `setTimeout(…,0)`，
+  而节流页面会把 0 延时定时器一起压到下一拍 ⇒ 「立即重连」里藏着最多一整拍（≈60 s）。现改为
+  `dropAttempt(reason)`（清定时器/关 socket/置 reconnecting/写日志与 lastError）+ **直接 `connect()`**（同步注册）。
+  诊断依据：三次复测中两次 101.3 s / 96.7 s，与验收目标直接冲突。mock 新增同步性钉子用例。
+- **删净 `sys.worker_probe`**：actions.ts（动作+两个 helper+worker 源码，−250 行）、protocol.py 目录、bridge.md §4 行、
+  P6/退役模式用例；新增「registry 里已无该动作」用例。真机实证：`UNKNOWN_ACTION unknown action 'sys.worker_probe'` ✔，
+  对照 `sys.connector_status` 仍可用 ✔。P6 证据文件与 `026_probe.md` 的 P6 节未动。
+- **SKILL 第 21 条**（工具坑①②）已加；**PROGRESS 未动**。版本 0.4.18，dist `2e047a6a…`（252952 B），已热更到 test 窗口。
+- **真机复测（5 次，压后台 + 杀 daemon + audit 量 hello）**：
+  A 62.8/57.9、B 114.9/60.6（该次 daemon 自身慢启动 54.3 s）、C 101.3/96.7、D 93.4/88.8、E 74.6/70.0（秒；kill/监听两口径），
+  判死分支五次全是 `1 unanswered heartbeat(s)`，wake 报告静默 48.5–51.1 s。
+  ⇒ **连接器自身份额 48.5–51.1 s 达标（预期 45–60 s，2b 为 135–152 s）**；**kill→hello 总时长受页面节流相位支配，
+  2/5 命中 ≤90 s**（监听口径 4/5）。不凑数，五次全记。D 次同刻对照：未节流的 ROBOT 窗 24 s 回来，
+  被压最底的 test 窗 93 s——同一 daemon 同一杀法，差别只在页面是否被节流。
+- 变异 CAUGHT（指定靶，404 中 3 红）；还原 `transport.ts 88e6940b…`（cp 备份 + cmp 一致）。
+- 三线：pytest 1388 · connector 404/0 · tsc clean。前台回归：checkup 与 025c 基线逐行一致，零残留。
+- 遗留：test2 与 ROBOT 窗口仍跑 0.4.17（等各自页面 reload 自然升级）；test2 窗口未关。
+
+### 主代理复验与第二裁（2026-09-23）
+
+- 抽查：dist `2e047a6a…` / `transport.ts 88e6940b…` 与交卷一致；7 份证据 + summary 齐；
+  `git status` 文件清单与交卷一致；UNKNOWN_ACTION 实证 ×2 在案；`reconnectNow()` 终码亲读
+  （reset backoff → dropAttempt → 同步 connect，注释带实测依据）。
+- **追认额外修复**：`reconnectNow` 去定时器与裁决 1 同一意图（"立即"重连被一个可被节流的
+  `setTimeout(0)` 架空，属实现缺陷），不予回退，记入规格。
+- **裁决 3（批 2d 规格）**：相位项（kill→hello 中 0–60 s 的随机等待）来自"等下一个被节流的心跳定时器
+  把 ping 发出去"。消法不是调短常数，而是**让 wake 本身当探针**——`wake()` 的 `connected` 且
+  `missed === 0` 分支从"只盖戳返回"改为**立即同步 `sendPing()`**：活 socket 的 pong 毫秒内回来刷新活性
+  （上线证据代替自我盖戳）；死 socket 则 `missed` 变 1，下一拍 wake 即判死。同时静默阈值 45→**30 s**
+  （检查仍 15 s）：稳态由闹钟每 ~30 s 驱动一次探针，死亡判定最坏 2×30+15 ≈ 75 s，kill→hello 稳定
+  ≤90 s 有余量。误杀代价可忽略（loopback 30 s 无 pong = daemon 真挂了；重连廉价）。
+- 2c 五项其余结论接受；「kill→hello 2/5 命中」不定罪——根因已定位且 2d 有针对性规格。
