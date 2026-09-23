@@ -660,17 +660,21 @@ def build_parser() -> argparse.ArgumentParser:
             "snapshot; write exactly one key on exactly one primitive; verify "
             "with the action's own read-back **and** an independent geometry "
             "read; and treat a timeout or a dropped connection as unknown — read "
-            "the page back and never retry. Then `sch.doc.save` and a re-review "
-            "against --file. A repeated run recognises the value is already "
-            "there and writes nothing (exit 0, already_applied)."
+            "the page back and never retry. Then `sch.doc.save` and a re-review: "
+            "for `add-component` the live project is re-exported and the rule re-run "
+            "(029-d §②), for `component-value` the snapshot `--file` is re-read. A "
+            "repeated run recognises the work is already done and writes nothing "
+            "(exit 0, already_applied)."
         ),
     )
     edit_apply.add_argument("plan", help="The ChangePlan JSON `edit plan` wrote.")
     edit_apply.add_argument(
         "--file", default=None,
         help=(
-            "The snapshot to re-review after the save. Without it the re-review "
-            "is reported as unknown — it is never claimed."
+            "The snapshot to re-review after the save (`component-value`: the file "
+            "the editor rewrites; an `add-component` apply re-exports the live "
+            "project instead and falls back to this when that cannot answer). "
+            "Without it the re-review is reported as unknown — never claimed."
         ),
     )
     edit_apply.add_argument(
@@ -5762,9 +5766,11 @@ def _cmd_edit_preview(args: argparse.Namespace) -> int:
     Offline, read-only, and it cannot be talked out of the check: ``--file`` is
     required because the plan carries the snapshot's *hash* and not its path, so
     without the file protection 1 would have nothing to compare. Exit 0 fresh;
-    4 a stale snapshot (sha256 differs) or a target that is gone or no longer
-    holds the value the plan expects; 2 the snapshot cannot be read; 5 the plan
-    or the arguments are unusable.
+    4 a stale snapshot (sha256 differs) or a precondition the file breaks — for
+    `component-value` the target is gone or no longer holds the value the plan
+    expects, for `add-component` (029-d §④) the anchor is gone or the designator
+    the plan intends to use is already spent; 2 the snapshot cannot be read; 5
+    the plan or the arguments are unusable.
     """
     import json
 
@@ -5804,6 +5810,9 @@ def _cmd_edit_preview(args: argparse.Namespace) -> int:
     except Exception as exc:  # noqa: BLE001 — the CLI must not traceback
         print(f"boardwise edit preview: {path}: {exc}", file=sys.stderr)
         return 2
+
+    if plan.change.kind == ADD_COMPONENT_KIND:
+        return _preview_add_component(plan, path, model, digest, args)
 
     designator = _boardwise_designator(model, plan.target.designator)
     if designator is None:
@@ -5884,6 +5893,115 @@ def _cmd_edit_preview(args: argparse.Namespace) -> int:
                         "none by construction: one key inside the component's "
                         "otherProperty changes; no primitive is created, moved "
                         "or deleted"
+                    ),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    return 0
+
+
+def _preview_add_component(plan, path: Path, model, digest: str, args) -> int:
+    """``edit preview`` for a *create* (029-d §④): the target does not exist yet.
+
+    So the checks are the other three, and they are the create's own
+    preconditions read backwards: the **anchor** the part is added for must still
+    be in the snapshot, the designator the plan intends to use must still be
+    **free** in it (a taken one is a refusal, not a "the target moved"), and the
+    file must be the one the plan was built against. Offline, so the landing spot
+    is not re-measured: it comes from the live page, which no snapshot can speak
+    for — the report says where it was measured and claims nothing more.
+    """
+    import json
+
+    anchor = plan.target.anchor or ""
+    designator = plan.target.designator
+    resolved = _boardwise_designator(model, anchor) if anchor else None
+    if resolved is None:
+        print(
+            f"boardwise edit preview: {path} does not hold the anchor {anchor or '(none)'} "
+            f"— 锚点不在快照里，前置条件失败（这颗电容是为它加的）",
+            file=sys.stderr,
+        )
+        return 4
+    if _boardwise_designator(model, designator) is not None:
+        print(
+            f"boardwise edit preview: {path} already spends designator {designator} "
+            f"— 位号已被占用（\u4eba\u53ef\u80fd\u521a\u624b\u653e\u4e86\u4e00\u4e2a\uff09"
+            "\uff0c前置条件失败",
+            file=sys.stderr,
+        )
+        return 4
+
+    rule_id = RULE_FOR_KIND.get(plan.change.kind, "")
+    rule = next((item for item in BUILTIN_RULES if item.id == rule_id), None)
+    silenced = _findings_naming(rule, model, resolved) if rule is not None else []
+    part = plan.change.part or PlanPart()
+
+    print(f"boardwise edit preview: {args.plan}")
+    print(
+        f"plan: {plan.change.kind} create {designator} ({part.value}, {part.lcsc}) "
+        f"next to {resolved}"
+    )
+    print(f"snapshot: {path} sha256 matches the plan's ({digest})")
+    print(
+        f"anchor: {resolved} is in the snapshot, and designator {designator} is still "
+        "free there (the create's own precondition, read the other way round)"
+    )
+    for item in plan.change.connections:
+        print(f"connection: pin {item.pin}→{item.net} via {item.kind} — {item.detail}")
+    print(
+        f"spot: ({plan.target.x:g}, {plan.target.y:g}) — measured on the live page at "
+        "plan time; a snapshot cannot confirm it (the whole-project export names no "
+        "single page), so apply re-checks it there"
+    )
+    if rule is None:
+        print(f"resolves: (the plan's kind {plan.change.kind!r} maps to no rule in this build)")
+    else:
+        print(f"resolves ({len(silenced)} finding(s) from {rule.id}):")
+        for item in silenced:
+            print(f"  [{item.severity}] {item.message}")
+    print(
+        "geometric diff: one component is created, its declared connections are drawn "
+        "and one flag is placed when a rail is declared — all of it on the live page, "
+        "none of it predictable from the file alone"
+    )
+
+    if args.json_path:
+        Path(args.json_path).write_text(
+            json.dumps(
+                {
+                    "command": "preview",
+                    "ok": True,
+                    "kind": plan.change.kind,
+                    "file": str(path),
+                    "view": args.view,
+                    "planPath": args.plan,
+                    "plan": plan.to_jsonable(),
+                    "sha256": digest,
+                    "snapshot": "fresh",
+                    "anchor": resolved,
+                    "designator": designator,
+                    "designatorFree": True,
+                    "part": {"lcsc": part.lcsc, "value": part.value,
+                             "footprint": part.footprint},
+                    "spot": {"x": plan.target.x, "y": plan.target.y},
+                    "connections": [
+                        {"pin": item.pin, "net": item.net, "kind": item.kind,
+                         "detail": item.detail,
+                         "to": list(item.to) if item.to else None}
+                        for item in plan.change.connections
+                    ],
+                    "resolves": [
+                        {"rule_id": item.rule_id, "severity": item.severity,
+                         "message": item.message}
+                        for item in silenced
+                    ],
+                    "geometricDiff": (
+                        "one created component, its declared connections, and one "
+                        "net flag per declared rail — measured by apply, not here"
                     ),
                 },
                 ensure_ascii=False,
@@ -6489,7 +6607,7 @@ async def _edit_apply_add_flow(
       though something *did* land.
     """
     from .engines import addcomponent
-    from .core.changeplan import CONNECTION_LABEL, CONNECTION_WIRE
+    from .core.changeplan import CONNECTION_LABEL, CONNECTION_POWER_FLAG, CONNECTION_WIRE
 
     records: list[dict] = []
     notes: list[str] = []
@@ -6591,24 +6709,19 @@ async def _edit_apply_add_flow(
             "(`anchor still resolves`) is broken; nothing was written"
         )
         return done(4, "refused", "anchor_missing")
-    if designator in origins:
-        notes.append(
-            f"{designator} already exists on the page — the assigned designator was "
-            "taken between plan and apply (人可能刚手放了一个); nothing was written"
-        )
-        return done(4, "refused", "designator_taken")
     occupied = addcomponent.occupied_points(geometry)
     spot = (float(plan.target.x or 0.0), float(plan.target.y or 0.0))
-    if not addcomponent.is_free(spot[0], spot[1], occupied):
-        notes.append(
-            f"the planned landing spot ({spot[0]:g}, {spot[1]:g}) is occupied now — "
-            "the plan's precondition is broken; nothing was written (阶梯在上一次建 plan "
-            "时已经走过，apply 不替它改主意)"
-        )
-        return done(4, "refused", "spot_taken")
     report["resolved"] = {"anchor": anchor, "anchorAt": list(origins[anchor]), "components": len(origins)}
 
     # ---- 2. the idempotence probe (§二.5) ---------------------------------
+    #
+    # It runs **before** the designator and landing-spot checks (029-d §③), and
+    # that order is the point: on a repeat run the designator *is* taken (by the
+    # part this very flow placed) and the landing spot *is* occupied (by the same
+    # part), so checking them first answers "designator_taken" — technically safe
+    # and completely misleading, because the work is done. The probe is a read of
+    # the live board, so putting it first costs nothing and buys the honest
+    # answer: `already_applied`.
     before_model = await _live_project_model(call, notes)
     if before_model is None:
         notes.append(
@@ -6645,6 +6758,22 @@ async def _edit_apply_add_flow(
         )
         report["final"] = "already satisfied; the page was not touched"
         return done(0, "already_applied", "already_applied")
+
+    # ---- 2b. the landing spot and the designator, now that the work is not --
+    # ---- already done: the plan's other two preconditions ------------------
+    if designator in origins:
+        notes.append(
+            f"{designator} already exists on the page — the assigned designator was "
+            "taken between plan and apply (人可能刚手放了一个); nothing was written"
+        )
+        return done(4, "refused", "designator_taken")
+    if not addcomponent.is_free(spot[0], spot[1], occupied):
+        notes.append(
+            f"the planned landing spot ({spot[0]:g}, {spot[1]:g}) is occupied now — "
+            "the plan's precondition is broken; nothing was written (阶梯在上一次建 plan "
+            "时已经走过，apply 不替它改主意)"
+        )
+        return done(4, "refused", "spot_taken")
 
     # ---- 3. the writes: place, then connect -------------------------------
     place_params: dict = {
@@ -6696,12 +6825,18 @@ async def _edit_apply_add_flow(
     # showed the capacitor on its own auto net. `sch.component_pins` answers the
     # placed pins by id (read-only), so the wire can start where the editor joins
     # wires — and when it cannot be read, the fallback is named in the notes
-    # instead of being taken silently.
+    # instead of being taken silently. A `power-flag` needs the same coordinate
+    # and has **no** weaker fallback: a flag on the part's origin would sit on the
+    # body and ground nothing, so that connection is refused instead (029-d §①).
     placed_id = str((report["write"].get("placed") or {}).get("uuid") or "")
     if not placed_id and isinstance(readback, dict):
         placed_id = addcomponent.primitive_id_of(readback, designator)
     pin_coords: dict[str, tuple[float, float]] = {}
-    if any(item.kind == CONNECTION_WIRE for item in plan.change.connections):
+    needs_pin = any(
+        item.kind in (CONNECTION_WIRE, CONNECTION_POWER_FLAG)
+        for item in plan.change.connections
+    )
+    if needs_pin:
         if not placed_id:
             notes.append(
                 "the new part's canvas id could not be established, so `sch.component_pins` "
@@ -6744,6 +6879,42 @@ async def _edit_apply_add_flow(
             executed.append({"pin": item.pin, "net": item.net, "kind": item.kind,
                              "ok": answered is not None})
             continue
+        if item.kind == CONNECTION_POWER_FLAG:
+            # A ground/power symbol is placed **on the pin**. The kind is
+            # re-derived from the net name here rather than trusted from the plan:
+            # the plan says "this is a rail", the judgement of *which* rail
+            # belongs to `layout._net_kind` (one place, as always), and a plan
+            # whose net stopped being a rail is refused by name instead of
+            # receiving a flag the editor would have to invent a name for.
+            flag = addcomponent.power_flag_kind(item.net)
+            pin_at = pin_coords.get(item.pin)
+            if not flag or pin_at is None:
+                missing = (
+                    f"net {item.net!r} is not a rail name (no flag kind applies)" if not flag
+                    else f"pin {item.pin} of {designator} is not among the pins the editor "
+                         f"reports ({sorted(pin_coords) or 'none'})"
+                )
+                notes.append(
+                    f"the plan chose a power flag for pin {item.pin}→{item.net}, but {missing} "
+                    "— the flag was NOT placed (a flag anywhere but the pin grounds nothing, "
+                    "and a dangling wire named after the net is not a connection)"
+                )
+                report["write"]["connections"] = executed
+                return done(2, "failed", "flag_unavailable")
+            answered = await call(
+                "sch.place_power",
+                {"kind": flag, "net": item.net, "x": pin_at[0], "y": pin_at[1],
+                 "rotation": 0, "mirror": False,
+                 **({"pageUuid": page} if page else {})},
+                f"place a {flag} flag named {item.net!r} on pin {item.pin} of "
+                f"{designator} at ({pin_at[0]:g}, {pin_at[1]:g})",
+                writes=True,
+            )
+            report["write"]["calls"] += 1
+            executed.append({"pin": item.pin, "net": item.net, "kind": item.kind,
+                             "flag": flag, "at": [pin_at[0], pin_at[1]],
+                             "ok": answered is not None})
+            continue
         target = item.to or addcomponent.nearest_wire_point(spot, geometry, item.net)
         if target is None or len(target) < 2:
             notes.append(
@@ -6753,7 +6924,11 @@ async def _edit_apply_add_flow(
             )
             report["write"]["connections"] = executed
             return done(2, "failed", "connection_unavailable")
-        anchor = pin_coords.get(item.pin) or (spot[0], spot[1])
+        # `pin_at`, not `anchor`: the flow's `anchor` is the plan's anchor
+        # *component* (the IC the finding named), and shadowing it here once cost
+        # the re-review its designator (029-d: a tuple reached
+        # `_boardwise_designator`). Same coordinate, different question.
+        pin_at = pin_coords.get(item.pin) or (spot[0], spot[1])
         if item.pin not in pin_coords:
             notes.append(
                 f"pin {item.pin} of {designator} is not among the pins the editor reports "
@@ -6761,19 +6936,19 @@ async def _edit_apply_add_flow(
                 f"({spot[0]:g}, {spot[1]:g}) rather than on the pin"
             )
         # Orthogonal by construction: a diagonal segment hangs the host (029-c).
-        route = addcomponent.wire_route(anchor, target)
+        route = addcomponent.wire_route(pin_at, target)
         answered = await call(
             "sch.place_wire",
             {"points": [list(point) for point in route], "net": item.net,
              **({"pageUuid": page} if page else {})},
-            f"draw the wire from pin {item.pin} of {designator} at ({anchor[0]:g}, {anchor[1]:g}) "
+            f"draw the wire from pin {item.pin} of {designator} at ({pin_at[0]:g}, {pin_at[1]:g}) "
             f"to ({target[0]:g}, {target[1]:g}), carrying net {item.net!r} "
             f"({len(route)} orthogonal point(s))",
             writes=True,
         )
         report["write"]["calls"] += 1
         executed.append({"pin": item.pin, "net": item.net, "kind": item.kind,
-                         "from": [anchor[0], anchor[1]], "to": [target[0], target[1]],
+                         "from": [pin_at[0], pin_at[1]], "to": [target[0], target[1]],
                          "route": [list(point) for point in route],
                          "ok": answered is not None})
     report["write"]["connections"] = executed
@@ -6797,14 +6972,27 @@ async def _edit_apply_add_flow(
         )
         return done(3, "unknown", "range_unreadable")
     diff = addcomponent.range_diff(before_designators, set(after_model.components), designator)
+    # The flags are counted **separately** (029-d §①): a net flag is a component
+    # with an empty designator, so it is invisible to the designator-set diff
+    # above — and "the range is exactly +1 part +k connections" is the acceptance,
+    # which means a flag that was promised and did not appear (or one nobody asked
+    # for) has to be able to fail the run.
+    flags_expect = sum(
+        1 for item in plan.change.connections if item.kind == CONNECTION_POWER_FLAG
+    )
+    flags_before = addcomponent.netflag_count(geometry)
+    flags_after = addcomponent.netflag_count(verify)
+    flags_ok = (flags_after - flags_before) == flags_expect
     report["range"] = {
         "added": list(diff.added),
         "removed": list(diff.removed),
         "unchanged": diff.unchanged,
         "expected": designator,
-        "ok": diff.ok,
+        "ok": diff.ok and flags_ok,
         "before": len(before_designators),
         "after": len(after_model.components),
+        "flags": {"before": flags_before, "after": flags_after,
+                  "expected": flags_expect, "ok": flags_ok},
     }
     if not diff.ok:
         notes.append(
@@ -6812,6 +7000,13 @@ async def _edit_apply_add_flow(
             "少一个器件都算事故，哪怕板子看起来更好）；没有保存，请人工确认页面"
         )
         return done(2, "failed", "range_diff")
+    if not flags_ok:
+        notes.append(
+            f"电源/地旗标数量不对：计划声明 {flags_expect} 个，页面从 {flags_before} 变成 "
+            f"{flags_after} —— 少一个就是接地没落地（网表也会不成立），多一个是别人放的"
+            "东西被算进来；没有保存，请人工确认页面"
+        )
+        return done(2, "failed", "range_flag_diff")
     # Connectivity is judged by the project's *own* netlist (the model parsed
     # from the live export), not by the wire this flow drew: "the wire landed"
     # and "the pin is on the net" are different claims, and the second one is
@@ -6864,10 +7059,27 @@ async def _edit_apply_add_flow(
         "action (009d), so only a separate reopen can promote it to saved_verified"
     )
 
-    # ---- 6. re-review against the snapshot on disk ------------------------
-    report["postReview"] = _edit_post_review(
-        args.file, started, "decap-required-caps", anchor, args.view
-    )
+    # ---- 6. re-review: re-export the live project and re-run the rule ------
+    #
+    # 029-d §②. The 016 path re-reads the file on disk, which works there because
+    # the snapshot *is* the editor's file; for a create in this test project the
+    # editor never rewrites that export, so the honest answer was always
+    # "unknown" (029-c measured it) and the real re-review had to be run by hand
+    # with `checkup --project`. Re-exporting the live project and re-running the
+    # rule is that same reading, promoted into the flow. `--file` keeps its exact
+    # 016 meaning for `component-value` — this branch is the `add-component` flow's
+    # alone, and it falls back to the file-based reading when the export fails.
+    report["postReview"] = await _edit_post_review_live(call, anchor, notes)
+    if report["postReview"].get("state") == "unknown":
+        fallback = _edit_post_review(
+            args.file, started, "decap-required-caps", anchor, args.view
+        )
+        fallback["source"] = "file"
+        fallback["reason"] = (
+            f"the live re-export could not answer ({report['postReview'].get('reason')}); "
+            f"{fallback.get('reason') or ''}"
+        ).strip()
+        report["postReview"] = fallback
     post_state = report["postReview"].get("state")
     if post_state == "still_present":
         report["final"] = (
@@ -6880,6 +7092,108 @@ async def _edit_apply_add_flow(
         return done(0, "applied", "post_review_unknown")
     report["final"] = f"placed, verified, saved and re-reviewed as {post_state}"
     return done(0, "applied")
+
+
+async def _edit_post_review_live(call, anchor: str, notes: list[str]) -> dict:
+    """Re-export the live project, re-run the plan's rule, and say what it found.
+
+    The answer is one of the same three states the file-based reading uses
+    (``resolved`` / ``still_present`` / ``unknown``), so the caller cannot tell
+    them apart by shape — only by ``source``. Two things are deliberately done
+    here rather than left to the caller:
+
+    * the export is taken **twice** and the two models compared, because the
+      editor recomputes connectivity after a create and a single export can
+      describe the page as it was one write ago (measured 2026-09-15, draw flow);
+      a disagreement is reported as ``republished`` and the *second* read is used;
+    * a missing component is ``resolved``, not ``unknown``: the finding was about
+      the anchor's decoupling, and an anchor that is gone has no finding left.
+    """
+    rule_id = RULE_FOR_KIND.get(ADD_COMPONENT_KIND, "decap-required-caps")
+    result: dict = {
+        "state": "unknown",
+        "reason": "",
+        "source": "live",
+        "rule": rule_id,
+        "anchor": anchor,
+        "findings": [],
+        "outcomes": [],
+    }
+    model = await _live_project_model(call, notes)
+    if model is None:
+        result["reason"] = "the live project could not be exported and parsed after the save"
+        return result
+    second = await _live_project_model(call, notes)
+    if second is not None:
+        first_fingerprint = _model_fingerprint(model)
+        if _model_fingerprint(second) != first_fingerprint:
+            result["republished"] = True
+            model = second
+    rule = next((item for item in BUILTIN_RULES if item.id == rule_id), None)
+    if rule is None:
+        result["reason"] = f"the plan's kind maps to rule {rule_id!r}, which this build does not have"
+        return result
+    target = _boardwise_designator(model, anchor)
+    if target is None:
+        result["state"] = "resolved"
+        result["reason"] = (
+            f"{anchor} is not in the re-exported project at all — the component the "
+            "finding was about is gone"
+        )
+        return result
+    findings = _findings_naming(rule, model, target)
+    result["findings"] = [
+        {"rule_id": item.rule_id, "severity": item.severity, "message": item.message}
+        for item in findings
+    ]
+    if hasattr(rule, "outcomes"):
+        result["outcomes"] = [
+            {"state": outcome.state, "subject": outcome.subject, "message": outcome.message}
+            for outcome in rule.outcomes(model)
+            if outcome.subject == target or outcome.subject.startswith(f"{target} ")
+        ]
+    result["value"] = model.components[target].value
+    # "No finding" is only *resolved* when the rule could actually decide. A
+    # facts-driven rule answers UNKNOWN when the shelf has nothing to judge the
+    # part by, and reading that as "the finding is gone" would be the exact
+    # mistake the four-state protocol exists to prevent — a rule that cannot
+    # decide must not be reported as a rule that decided "fine".
+    undecided = [item for item in result["outcomes"] if item["state"] == "UNKNOWN"]
+    if findings:
+        result["state"] = "still_present"
+        result["reason"] = (
+            f"{rule_id} still reports {len(findings)} finding(s) about {target} on the "
+            "re-exported project after the save"
+        )
+    elif undecided:
+        result["state"] = "unknown"
+        result["reason"] = (
+            f"{rule_id} cannot decide about {target} on the re-exported project: "
+            f"{undecided[0]['message']} — 'no finding' and 'no facts to decide' are "
+            "different answers and only the first one is `resolved`"
+        )
+    else:
+        result["state"] = "resolved"
+        result["reason"] = (
+            f"{rule_id} reports nothing about {target} on the re-exported project after "
+            "the save"
+        )
+    return result
+
+
+def _model_fingerprint(model) -> tuple:
+    """A cheap, order-stable signature of the netlist, for freshness comparison.
+
+    Nets *and* pins, because the staleness this compares against is a pin quietly
+    still sitting on its old net: a fingerprint that only counted components would
+    call the pre-recompute export identical to the settled one.
+    """
+    return tuple(
+        sorted(
+            (name, tuple(sorted((str(designator), str(pin)) for designator, pin in net.pins)))
+            for name, net in (model.nets or {}).items()
+        )
+    )
 
 
 async def _live_project_model(call, notes: list[str]):

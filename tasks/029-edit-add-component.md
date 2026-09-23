@@ -196,3 +196,39 @@ bw_scratch/test 页给一颗测试 IC 补去耦电容：成功、人工先补→
 3. **重复 apply 报 already_applied**：幂等探测**提到位号/落点前置检查之前**（探测只读，安全不降）——
    `designator_taken` 技术安全但误导（活儿其实干完了），already_applied 才是诚实答案。
 4. 遗留收编：`edit preview` 认 add-component、report.json target 显式 schema 测试。
+
+### 029-d · 交卷（2026-09-24，子代理 agent-43；两次超时后由主代理从磁盘交卷验收）
+
+- **① GND 端 = power-flag，probe 通过、已实现、真机跑通**：`sch.place_power kind=Ground net=GND` 落在新件
+  自己的引脚坐标上（读 `sch.component_pins`，读不到即 `flag_unavailable` 拒绝，绝不退回原点）；导出网表
+  `GND [('C1','2')]` 实证。旗标在 geometry 里是 `netflag`（无位号、不进网表器件表）⇒ 范围差异**单独计**
+  `range.flags{before,after,expected,ok}`，承诺的旗标没出现 → `range_flag_diff` 失败且不保存。
+  "是不是轨道网"交给唯一判定 `layout._net_kind`（ground 再交给 `core.model.is_ground_net`，VEE 仍不是地）。
+  `choose_connection` 四态：wire → rail 的 flag → 页面已有同名 label → 拒绝。**没有悬空名线**。
+- **② apply 内置重审**：save 后重新导出 → 离线 parse → 重跑规则，**导出两次要求网表指纹一致**（编辑器在
+  create 后重算连通性，单次导出可能落后一次写）；报告 `postReview{state, source:"live", findings, …}`；
+  `unknown` 才回落 016 的 `--file`（`source:"file"` 写明原因），016 语义一字未动。**新增诚实性**：facts 规则
+  答 UNKNOWN（架上无判定依据）不算 `resolved`——"没有 finding"和"没有事实可判"是两回事。
+- **③ 幂等探测前置**：重复 apply 报 `already_applied`（exit 0、零写入），真机 case c 重跑实测 ✔。
+- **④ 遗留收编**：`edit preview` 认 add-component（anchor 在位 / 位号在快照里还空 / sha 匹配）；
+  report.json target 显式 schema 测试（键集+类型+取值，用 `render_json` 真实产出）。另修真机阴影 bug：
+  apply 连接循环里局部变量 `anchor` 遮蔽 plan 的 anchor 组件名（029-c 的 --file 重审因 mtime 早退没暴露，
+  live 重审当场炸出 `_boardwise_designator` 收到 tuple），改名 `pin_at`。
+- **真机**：case a 重跑仍真成功且**重审内置 resolved**（exit 0）；case c 重跑 already_applied 零写入；
+  **新形态"页面无 GND 几何 → power-flag 接地"全链真成功**（plan `2→GND via power-flag` → flags {0→1 ok} →
+  save → 网表 `GND [('C1','2')]` → re-review resolved）。画布证据 `029d_newshape_canvas_p5.png`（checkup
+  canvas 阶段抓图；`export.screenshot` 本机只回 1×1 PNG，视口抓图这条路不可用，如实记）。
+- **零残留**：bw_scratch (a9ebb627…) 已删；doc.list 6 文档、geometry 1 器件 0 线 0 label 0 netflag、
+  identity consistent、前台复位 P1。daemon 在线（3 窗）。ROBOT/test2 只读。
+- 三线：pytest **1435 passed**（最终字节，1425+10；主代理复跑 101s 一致）；connector/tsc 未跑（未动 connector）。
+- 变异 **2/2 CAUGHT**（M1 删 power-flag 分支 → 5 红；M2 顺序倒回 → 1 红），cp+cmp 还原，sha 亲核一致
+  （addcomponent `e7a037c6…`、cli `0e1d964a…`、changeplan `e75265c3…`、测试 `902d76a2…`）。
+- **遗留入账**：`export.screenshot` 本机 1×1（抓图走 checkup canvas）；旗标 rotation 固定 0（视觉朝向未逐值验证）；
+  power-flag 触发面目前仅 decap GND 场景（以后要扩需 `PlanConnection` 加显式 flag-kind 字段）。
+
+### 主代理复验（2026-09-24）
+
+- 子代理两次超时但磁盘交卷完整（summary/sha256/mutation/cleanup/证据齐全），由主代理直接验收：
+  4 个 sha256 与交卷表逐字一致、工作区恰好 4 文件、变异记录双 CAUGHT 含还原 sha、全量 pytest **1435 passed** 亲跑。
+- **029（M3 第 2 片 add-component）全线收官**：离线 21 用例（029-a 11 + 029-d 增 10）+ 真机 a/b/c/d/f +
+  无 GND 几何新形态全过；四保护、五态、范围差异、幂等、重审内置全部兑现。
