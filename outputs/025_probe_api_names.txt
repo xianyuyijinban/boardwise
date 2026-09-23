@@ -1,0 +1,31 @@
+025 批 1 附证 · sys.probe checks 名单扩到 11 个命名空间后的真机读数
+================================================================================
+日期：2026-09-23 01:2x  宿主 3.2.186  connector 0.4.14
+命令（原始响应 .tmp_025_probe_checks.json）：
+    boardwise bridge call --action sys.probe --params '{"checks":true}'
+
+    connector 0.4.14  editor 3.2.186  topLevel 命名空间 101 个
+    sch_ManufactureData      present=True checked=13 missing=2  ['getPngFile','getSvgFile']
+    dmt_EditorControl        present=True checked=20 missing=0
+    dmt_Schematic            present=True checked=17 missing=0
+    dmt_Pcb                  present=True checked= 7 missing=0
+    sch_Document             present=True checked= 9 missing=0
+    sch_PrimitiveComponent   present=True checked=23 missing=0
+    sch_PrimitivePin         present=True checked= 6 missing=0
+    pcb_Drc                  present=True checked=45 missing=0
+    sch_Drc                  present=True checked= 1 missing=0
+    sys_FileManager          present=True checked=15 missing=1  ['getSchematicFile']
+    sys_Tool                 present=True checked= 3 missing=0
+
+说明：
+* 名单由 `tools/api_names.py` 从离线类型包生成（`connector/src/api-names.ts`），本次新增
+  pcb_Drc / sch_Drc / sys_FileManager / sys_Tool 四个（共 11 个），三处同步：生成器命令行、
+  `tests/test_api_names.py` 的 NAMESPACES、生成文件自身的头注释；另有第四处是
+  `connector/tests/actions006b.test.mjs` 里对 PROBE_CHECKS 键集的 pin（不同步会红）。
+* `DOCTOR_PROBE_CHECKS` **未动**（零 diff，按要求 5 项刻意克制）。
+* 三条缺失都是「声明有、宿主答 undefined」，逐条点名：
+  - `sch_ManufactureData.getPngFile` / `getSvgFile`：声明 ADD since EDA v3.2.183，
+    宿主自报 3.2.186——老的已知矛盾（SKILL 坑，acceptance image 走 export.render 的原因）。
+  - `sys_FileManager.getSchematicFile`：**新发现**，声明也是 `ADD since EDA v3.2.183`,
+    宿主 3.2.186 上同样答 undefined（getDocumentFile 在、getSchematicFile 不在）。
+    ⇒ 批 2 若想「只导原理图」不要走这个名字；`getDocumentFile` 实测可用（见 P1）。

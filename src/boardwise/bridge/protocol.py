@@ -255,14 +255,16 @@ ACTIONS: tuple[Action, ...] = (
             "exotic host objects that abort enumeration), and enumeration "
             "finds members nobody predicted."
         ),
-        params=("checks", "namespace", "namespaces", "functionsOnly"),
+        params=("checks", "namespace", "namespaces", "functionsOnly", "call"),
         returns=(
             "checks mode: {version, topLevel, checks: {NAME: {present, kind, "
             "checked, missing, status: {member: 'function'|'object'|"
             "'undefined'|'threw: …'|'namespace-absent'}, arity: {member: "
             "fn.length for the members that are functions}, notes?}}}; "
             "enumerate mode: {version, topLevel, namespaces: {NAME: {present, "
-            "functions, data, errors?}}}"
+            "functions, data, errors?}}}; call mode (025): {version, topLevel, "
+            "call: {action, params, result}} — result is the named action's own "
+            "answer}"
         ),
         risk="read",
     ),
@@ -308,6 +310,113 @@ ACTIONS: tuple[Action, ...] = (
             "consistent: bool | null, consistentBasis: 'project-uuid'|"
             "'focused-project-listing'|'no-active-document'|'unavailable', "
             "pageUuid: str | null, readOnly: true, notes?}"
+        ),
+        risk="read",
+    ),
+    # --- 025: online review data (document file / source, the two DRC checks) --
+    Action(
+        name="sys.get_document_file",
+        summary=(
+            "READ-ONLY: the open document as an .epro/.epro2 archive, base64. The "
+            "online half of the offline review pipeline — the bytes are the same "
+            "kind of archive `boardwise review` reads, so they go through "
+            "load_epru_text -> build_schematic_model with no rule changes. The "
+            "declaration gates the call on 工程设计图 > 文件导出 and says a missing "
+            "grant throws every time; the connector cannot read grants, so a "
+            "refusal carries the host's own message plus the documented gates in "
+            "`detail.permissions`. `isZip` is reported rather than assumed."
+        ),
+        params=("fileType", "fileName", "password", "timeoutMs"),
+        returns=(
+            "{fileType, source, encoding: 'base64', name, mime, bytes, data, "
+            "isZip, note?}"
+        ),
+        params_schema=(
+            "fileType: epro2|epro (default epro2); fileName: optional; password: "
+            "optional (an encrypted export reads as an unreadable archive "
+            "downstream); timeoutMs: optional, default 30000"
+        ),
+        risk="read",
+    ),
+    Action(
+        name="sys.get_document_source",
+        summary=(
+            "READ-ONLY: the focused document's own source text, unjudged. The "
+            "declaration is one line (`Promise<string | undefined>`, @beta) and "
+            "says nothing about the format, so whether it equals the .epru record "
+            "stream inside an .epro2 is a question for a probe, not for this "
+            "action. Truncates to `maxChars` and echoes both ends of the text "
+            "(the head, plus `tail` when truncated), because a stream is "
+            "recognised by its first and last records."
+        ),
+        params=("maxChars",),
+        returns=(
+            "{source, chars, maxChars, truncated, data, headLines, tail?, note?}"
+        ),
+        params_schema=(
+            "maxChars: 256..4000000 (default 65536); `data` is the head, `tail` "
+            "the last 1024 characters, present only when truncated"
+        ),
+        risk="read",
+    ),
+    Action(
+        name="sch.drc_check",
+        summary=(
+            "READ-ONLY: the schematic DRC, via sch_Drc.check(strict, "
+            "userInterface, includeVerboseError). (025 §0, measured) the host's "
+            "verbose answer holds **aggregate counts only** — the per-item detail "
+            "goes to the bottom panel, which has no read interface for an "
+            "extension. The array is therefore returned **verbatim** under "
+            "`counts`, with `total`/`byType` summed from the entries' own fields "
+            "and any entry without a numeric `count` counted in `unparsed` "
+            "instead of folding in as zero. A boolean answer is reported as mode "
+            "`boolean`, never as an empty result. Throws on a page that is not a "
+            "schematic page, and the throw is reported with the focused document "
+            "named."
+        ),
+        params=("strict", "userInterface", "includeVerboseError"),
+        returns=(
+            "{source, checked, mode: 'counts'|'boolean'|'unexpected', counts, "
+            "entries?, total?, byType?, unparsed?, passed, elapsedMs, args, page, "
+            "uiRequested, notes?, raw?, unrenderable?, note?}"
+        ),
+        params_schema=(
+            "strict: default true; userInterface: default false (true pops the "
+            "editor's bottom DRC panel); includeVerboseError: default true"
+        ),
+        risk="read",
+    ),
+    Action(
+        name="pcb.drc_check",
+        summary=(
+            "READ-ONLY: the PCB DRC, per item, via pcb_Drc.check(strict, "
+            "userInterface, includeVerboseError) — the one DRC that hands back "
+            "item-level detail (025 §0, and measured 2026-09-23: the tree is "
+            "group.list[].list[] with leaves carrying ruleName / errorType / "
+            "explanation.str / obj1 / obj2 / globalIndex / parentId, and every "
+            "node states its own `count`). Groups are returned **verbatim** so a "
+            "Finding-mapping layer can read the shape the editor really produces; "
+            "`counts` only describes what came back, and whole groups are dropped "
+            "(never cut in half) to stay inside `maxChars`. A non-PCB page is "
+            "kept distinct from a clean board: the declaration promises "
+            "`undefined`, the host actually **throws** (a message-bus error — the "
+            "check publishes to the PCB canvas topic and nothing subscribes on a "
+            "schematic page), and both are reported as `checked: false` with the "
+            "focused document named — never as an empty result. Note that an "
+            "*empty* PCB is not a clean board with zero findings either: the test "
+            "project's empty PCB answered one 'Netlist Error / Import Changes'."
+        ),
+        params=("strict", "userInterface", "includeVerboseError", "maxChars"),
+        returns=(
+            "{source, checked, available, mode: 'groups'|'boolean'|'unexpected', "
+            "groups, counts: {groups, returnedGroups, errors, errorsSource, items, "
+            "byLabel, jsonChars}, truncated, elapsedMs, args, page, uiRequested, "
+            "reason?, notes?, raw?}"
+        ),
+        params_schema=(
+            "strict: default true; userInterface: default false; "
+            "includeVerboseError: default true; maxChars: 1000..4000000 (default "
+            "200000)"
         ),
         risk="read",
     ),

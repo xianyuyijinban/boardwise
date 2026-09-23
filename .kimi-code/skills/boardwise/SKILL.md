@@ -131,7 +131,7 @@ boardwise edit apply   plan.json --file <导出.epro2> --json apply.json
 | `ping` | daemon 活着吗 | daemon 自己答，`version` 是 daemon 版本；`bridge status` 就是它 |
 | `doc.list` | 焦点工程 + 所有页/板 + 多工程视图 | 非焦点工程只给 `brief`（无文档树）；无焦点文档时 `active: null` |
 | `document.current` | 活动文档/标签属于哪个工程 | 与 `doc.list` **不一致**是已知坑（坑 1） |
-| `sys.probe` | 宿主 API 面在位检查 | `params:{"checks":true}` 按生成的名单逐个 `typeof`；权威依据是**真机 probe**，不是类型包声明 |
+| `sys.probe` | 宿主 API 面在位检查 | `params:{"checks":true}` 按生成的名单逐个 `typeof`；`{"checks":{...}}` 显式名单逐名覆盖；`{"call":"<动作>","params":{...}}` 调白名单内四个只读动作（025 批 1，绕坑 8 的加载期目录，probe 专用）；权威依据是**真机 probe**，不是类型包声明 |
 | `doc.open` | 打开/切到某个 uuid 的文档 | `{uuid}`；只在**活动工程**内寻址，跨工程找不到（坑 1） |
 | `sch.readback` | 页内器件清单 | 键集合写死：**没有 value、没有 mpn**（坑 3） |
 | `sch.geometry` | 原始几何 + 实测页面 bbox | `{bboxIds}`；整页只读一次的坐标来源（打标/定位用） |
@@ -173,6 +173,7 @@ boardwise edit apply   plan.json --file <导出.epro2> --json apply.json
 | 13 | **编辑器整关重开后读数可能是同步滞后的陈旧视图**：器件已持久化却短暂"消失"（R1 实测：08:58 读无、09:03 复活，值与 uuid 原样），追平后恢复 | 重启编辑器后**别立即信 readback**——判"丢件"前隔几十秒复读或导出复核；否则会把持久化误判成失效、甚至重复放置。出处 `outputs/016_scene6_final.txt` |
 | 14 | **`review` 读 `.epro2` 缺省 view=board**：审原理图内容必须 `--view schematic`；缺省 view 对空 PCB 工程报 `0 components` 且无任何提示 | 审原理图永远带 `--view schematic`；拿到 "0 组件 0 网" 先想 view，再想导出。出处 `outputs/016_scene6_final.txt` 教训 B |
 | 15 | `sch.geometry` 响应键是 `components/wires/pins/netlabels/bboxes/meta`——**没有 `parts`** | 写诊断脚本先打印 `list(d.keys())` 再取值；拿不存在的键 `.get()` 恒空，会编造出"空页"假象。出处 `outputs/016_scene6_final.txt` 教训 C |
+| 16 | **热更/自更新后页面 reload，焦点抛到家页**（`type:home`，uuid 形似 `tab_page1`） | 热更后立刻读/写页面前先 `doc.open` 定点，否则动作落在家页报错。出处 025 批 1 |
 
 宿主版本：**3.2.183 是下限**（打标/缩放接口从这版才有），**3.2.186 是唯一校准对象**。
 宿主声明 ≠ 宿主实现（`sch_ManufactureData.getPngFile` 声明 v3.2.183 却回 `NOT_IMPLEMENTED`）——

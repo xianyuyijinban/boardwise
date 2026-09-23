@@ -1782,9 +1782,17 @@ function probeChecks(checks: Record<string, unknown>, eda: any): Record<string, 
  *   Kept because it can find a name nobody predicted — a capability the type
  *   package cannot provide. A throwing level costs one report line, never the
  *   whole answer.
+ * - **`call`** (025): `{"call": {"action": "…", "params": {…}}}` runs one
+ *   registered *read-only* action and returns its own answer under `call`. This
+ *   is not an enumeration: it exists because the daemon's catalogue is a
+ *   load-time constant, so an action registered after the daemon started cannot
+ *   be reached by `bridge call --action <name>` until that daemon restarts. The
+ *   allowlist is closed and read-only (see {@link PROBE_CALL_ACTIONS}) so this
+ *   channel cannot bypass the daemon's `create` gate.
  *
  * Purely read-only: it calls nothing. Every branch records its own outcome, so
- * an empty answer is distinguishable from a failed one.
+ * an empty answer is distinguishable from a failed one. (The `call` mode is the
+ * one exception, and it only reaches actions that are themselves read-only.)
  *
  * Params:
  * - `checks` (object, optional): `{namespace: [methodName, …]}` — the exact
@@ -1794,6 +1802,8 @@ function probeChecks(checks: Record<string, unknown>, eda: any): Record<string, 
  *   several at once.
  * - `functionsOnly` (boolean, optional, default `false`): keep only function
  *   members. Off by default so a renamed data field is not hidden.
+ * - `call` (object, optional): `{action, params?}` — dispatch one allowlisted
+ *   read-only action. Checked before `checks`, so the key cannot be shadowed.
  */
 export const sysProbe: ActionHandler = async (params, eda) => {
   const version = (() => {
@@ -1818,6 +1828,45 @@ export const sysProbe: ActionHandler = async (params, eda) => {
       return [];
     }
   })();
+
+  // `call` mode (025): dispatch one registered **read-only** action by name.
+  // Exists because the daemon's catalogue is a load-time constant, so a freshly
+  // registered action is unreachable until the daemon is restarted — see
+  // `PROBE_CALL_ACTIONS` for the rule and the reasoning. The handler is invoked
+  // exactly as `buildHandlers` would invoke it, so the answer is the registered
+  // action's own answer, not a re-implementation of it.
+  if (params?.call !== undefined) {
+    const request = params.call;
+    if (!request || typeof request !== 'object' || Array.isArray(request)) {
+      throw new ActionError(
+        'BAD_REQUEST',
+        'sys.probe params.call must be an object {action, params?}',
+      );
+    }
+    const name = String((request as Record<string, unknown>).action ?? '');
+    const handler = PROBE_CALL_ACTIONS[name];
+    if (!handler) {
+      throw new ActionError(
+        'BAD_REQUEST',
+        `sys.probe call mode only dispatches ${Object.keys(PROBE_CALL_ACTIONS).join(' | ')} `
+          + `(asked for ${JSON.stringify(name)}) — the list is closed to read-only actions so `
+          + "this channel can never bypass the daemon's create gate",
+        { action: name, allowed: Object.keys(PROBE_CALL_ACTIONS) },
+      );
+    }
+    const inner = (request as Record<string, unknown>).params;
+    if (inner !== undefined && (!inner || typeof inner !== 'object' || Array.isArray(inner))) {
+      throw new ActionError('BAD_REQUEST', 'sys.probe params.call.params must be an object');
+    }
+    const forwarded = (inner ?? {}) as Record<string, unknown>;
+    const result = await handler(forwarded, eda);
+    return {
+      version,
+      connector: VERSION,
+      topLevel,
+      call: { action: name, params: forwarded, result },
+    };
+  }
 
   if (params?.checks) {
     // `checks: true` (or an empty object) means "use the offline table" —
@@ -6124,6 +6173,740 @@ export const reviewMark: ActionHandler = async (params, eda) => {
   };
 };
 
+// --------------------------------------------------------------------------
+// 025: the document file / document source reads, and the two DRC checks
+// --------------------------------------------------------------------------
+
+/**
+ * The permission gates the type package documents on `sys_FileManager`.
+ *
+ * Reported in every refusal's `detail` instead of being asserted as the cause.
+ * The connector observes a `throw`; it cannot see the extension's grants, so
+ * "you lack a permission" is a claim it has no way to check. What it *can* hand
+ * back is the host's own words plus the gates the declaration names — which is
+ * the difference between an actionable refusal and a blank one.
+ */
+const FILE_READ_GATES: readonly string[] = [
+  '工程设计图 > 文件导出 — getDocumentFile / getSchematicFile',
+  '工程管理 > 下载工程 — getProjectFile',
+];
+
+/**
+ * One budget for both `sys_FileManager` reads, and the daemon's is what binds.
+ *
+ * The daemon gives a newly registered action the default `ACTION_TIMEOUT` of
+ * 30 s (`protocol.timeout_for` does not name these yet). A connector deadline
+ * *longer* than the daemon's can never be observed — the caller gets the
+ * daemon's TIMEOUT and this action's honest verdict never arrives — so the two
+ * are deliberately equal rather than merely compatible.
+ */
+const DOCUMENT_READ_TIMEOUT_MS = 30_000;
+
+/**
+ * A host error as `name: message`, with the name said only once.
+ *
+ * The host's own `Error.message` sometimes already begins with its name
+ * (`"Error: 指定的主题消息在对应的画布内没有相关订阅"` — measured 2026-09-23), so a
+ * caller that always prefixes reports `threw Error: Error: …`. The prefix is
+ * therefore added only when the message does not already carry it, and the parts
+ * travel separately in `detail` either way.
+ */
+function hostErrorText(error: unknown): { name: string; message: string; text: string } {
+  const host = error as { name?: unknown; message?: unknown } | null;
+  const name = typeof host?.name === 'string' && host.name ? host.name : typeof error;
+  const message = String(host?.message ?? error);
+  return {
+    name,
+    message,
+    text: message.startsWith(`${name}:`) ? message : `${name}: ${message}`,
+  };
+}
+
+/**
+ * The refusal of one `sys_FileManager` read, as an error that names what happened.
+ *
+ * `getDocumentFile` and `getDocumentSource` are both documented to `throw` when
+ * the extension lacks a grant ("没有权限调用将始终 throw Error"), and this side
+ * has no way to read the extension's grants. So the host's message is carried
+ * through verbatim, the gates above are listed as the possibilities the package
+ * names, and `detail.thrown` separates a refusal from a *missing method* — a
+ * distinction that stayed invisible for as long as nothing wrote it down.
+ */
+function fileReadFailure(path: string, error: unknown): ActionError {
+  if (isActionError(error)) return error;
+  const host = hostErrorText(error);
+  return new ActionError(
+    'CONNECTOR_ERROR',
+    `${path} threw ${host.text}. The connector cannot read this `
+      + "extension's grants, so whether a permission is missing is not knowable from "
+      + `here; the type package documents these gates: ${FILE_READ_GATES.join('; ')}`,
+    {
+      path,
+      thrown: true,
+      errorName: host.name,
+      errorMessage: host.message,
+      permissions: FILE_READ_GATES,
+    },
+  );
+}
+
+/** A host `File` as base64 plus the metadata a caller needs to write it out. */
+async function hostFilePayload(
+  file: any,
+  path: string,
+): Promise<{ name: string; mime: string; bytes: number; data: string; isZip: boolean }> {
+  const member = readMember(file, 'arrayBuffer');
+  if (typeof member.value !== 'function') {
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `${path} returned an object with no arrayBuffer() — its bytes cannot be read`,
+      { path, observed: member.error ?? typeof file },
+    );
+  }
+  const buffer = new Uint8Array(await settle(member.value.call(file)));
+  if (buffer.byteLength === 0) {
+    // The rule `export.fab` learned, applied before it can bite: an empty file is
+    // a *failure*, not a small one. Zero bytes fed to the offline pipeline would
+    // read as "a project with nothing in it" and the report would be wrong in the
+    // reassuring direction.
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `${path} returned a zero-byte file — an empty export is not a small one`,
+      { path, bytes: 0 },
+    );
+  }
+  const given = readMember(file, 'name').value;
+  const type = readMember(file, 'type').value;
+  return {
+    // A host-provided name becomes a path on the writing side, so separators are
+    // stripped before it can climb out of the caller's output directory.
+    name: typeof given === 'string' && given ? given.replace(/[\\/]+/g, '_').trim() : '',
+    mime: typeof type === 'string' && type ? type : 'application/octet-stream',
+    bytes: buffer.byteLength,
+    data: bytesToBase64(buffer),
+    isZip: buffer.length > 1 && buffer[0] === 0x50 && buffer[1] === 0x4b,
+  };
+}
+
+/**
+ * `sys.get_document_file` — the open document as an `.epro`/`.epro2` archive.
+ *
+ * This is the online half of the offline pipeline: the bytes it returns are the
+ * same kind of archive `boardwise review` already reads, so a live project can go
+ * through `load_epru_text → build_schematic_model` with **no rule changes** —
+ * provided the host actually hands the file over. The declaration marks the call
+ * as gated on 工程设计图 > 文件导出 and says a missing grant throws every time, so
+ * "it worked" is a fact about this editor's grants, not about the API's shape;
+ * the probe record in `outputs/025_probe_p1_document_file.txt` is where that was
+ * measured, and `detail.permissions` travels with every refusal so a caller knows
+ * what to ask the user to enable.
+ *
+ * `isZip` is reported rather than assumed: an `.epro2` is a ZIP archive, so a
+ * payload whose first two bytes are not `PK` will not parse downstream, and
+ * saying so here is cheaper than a parser failure one layer away.
+ */
+export const sysGetDocumentFile: ActionHandler = async (params, eda) => {
+  const PATH = 'sys_FileManager.getDocumentFile';
+  const requested = params?.fileType === undefined ? 'epro2' : String(params.fileType);
+  if (requested !== 'epro2' && requested !== 'epro') {
+    throw new ActionError(
+      'BAD_REQUEST',
+      `sys.get_document_file needs params.fileType to be epro2 or epro `
+        + `(got ${JSON.stringify(params?.fileType)})`,
+    );
+  }
+  const fileName = typeof params?.fileName === 'string' ? params.fileName.trim() : '';
+  const password = typeof params?.password === 'string' ? params.password : '';
+  const timeoutMs = Number.isFinite(Number(params?.timeoutMs))
+    ? Math.min(Math.max(Number(params?.timeoutMs), 200), 600_000)
+    : DOCUMENT_READ_TIMEOUT_MS;
+  const call = requireFn(eda, PATH);
+
+  let file: any;
+  try {
+    file = await raceHostCall(
+      settle(call(fileName || undefined, password || undefined, requested)),
+      PATH,
+      timeoutMs,
+      'the host drops an argument it dislikes rather than rejecting it, and this '
+        + 'call is gated on a grant the connector cannot see',
+    );
+  } catch (error) {
+    throw fileReadFailure(PATH, error);
+  }
+  if (!file) {
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `${PATH} returned ${file === null ? 'null' : 'undefined'} — the declaration says `
+        + 'that means no document is open or the read failed; nothing was exported',
+      { path: PATH, fileType: requested, empty: true },
+    );
+  }
+
+  const payload = await hostFilePayload(file, PATH);
+  return {
+    fileType: requested,
+    source: PATH,
+    encoding: 'base64',
+    ...payload,
+    ...(payload.isZip
+      ? {}
+      : {
+          note: 'the first bytes are not the ZIP magic "PK" — an .epro2 is a ZIP '
+            + 'archive, so these bytes will not parse through the offline pipeline',
+        }),
+  };
+};
+
+/** Default and ceiling for `sys.get_document_source`'s `maxChars`. */
+const SOURCE_DEFAULT_MAX_CHARS = 65_536;
+const SOURCE_MAX_MAX_CHARS = 4_000_000;
+/** How much of a truncated source is echoed from the end, to recognise its shape. */
+const SOURCE_TAIL_CHARS = 1_024;
+
+/**
+ * `sys.get_document_source` — the focused document's source text.
+ *
+ * The declaration is one line (`Promise<string | undefined>`, `@beta`) and says
+ * nothing about the format, so this action's job is to hand the string back
+ * **unjudged** and let a probe decide what it is. Whether it equals the `.epru`
+ * record stream inside an `.epro2` is exactly the question `outputs/025_probe_p2_document_source.txt`
+ * answers; the action itself only reports length and, when it truncates, both
+ * ends of the text.
+ *
+ * Both ends, not just the head: a record stream's head is a `DOCHEAD` line and
+ * its tail is the last record of the last document, and a reader who sees one
+ * without the other cannot tell a truncated dump from a different format.
+ */
+export const sysGetDocumentSource: ActionHandler = async (params, eda) => {
+  const PATH = 'sys_FileManager.getDocumentSource';
+  let maxChars = SOURCE_DEFAULT_MAX_CHARS;
+  if (params?.maxChars !== undefined) {
+    const wanted = Number(params.maxChars);
+    if (!Number.isFinite(wanted) || wanted < 256 || wanted > SOURCE_MAX_MAX_CHARS) {
+      throw new ActionError(
+        'BAD_REQUEST',
+        `sys.get_document_source params.maxChars must be a number between 256 and `
+          + `${SOURCE_MAX_MAX_CHARS} (got ${JSON.stringify(params.maxChars)})`,
+      );
+    }
+    maxChars = Math.floor(wanted);
+  }
+  const call = requireFn(eda, PATH);
+
+  let source: unknown;
+  try {
+    source = await raceHostCall(
+      settle(call()),
+      PATH,
+      DOCUMENT_READ_TIMEOUT_MS,
+      'this read takes no arguments, so a hang means the host never answered',
+    );
+  } catch (error) {
+    throw fileReadFailure(PATH, error);
+  }
+  if (typeof source !== 'string') {
+    // `undefined` is documented ("当前未打开文档或数据获取失败") and null is not,
+    // but both mean the same thing to a caller: there is no text. Reported as a
+    // failure with the observed kind rather than as an empty string, because an
+    // empty string is a *value* an equivalence check would happily compare.
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `${PATH} returned ${source === undefined ? 'undefined' : source === null ? 'null' : typeof source} `
+        + '— the declaration says undefined means no document is open or the read failed',
+      { path: PATH, kind: source === undefined ? 'undefined' : typeof source },
+    );
+  }
+  const chars = source.length;
+  const truncated = chars > maxChars;
+  const data = truncated ? source.slice(0, maxChars) : source;
+  return {
+    source: PATH,
+    chars,
+    maxChars,
+    truncated,
+    data,
+    headLines: (data.match(/\n/g) ?? []).length,
+    ...(truncated
+      ? {
+          tail: source.slice(-SOURCE_TAIL_CHARS),
+          note: `truncated to the first ${maxChars} characters; \`tail\` echoes the last `
+            + `${SOURCE_TAIL_CHARS}, so both ends of the stream are inspectable`,
+        }
+      : {}),
+    ...(chars === 0 ? { note: 'the host returned an empty string' } : {}),
+  };
+};
+
+/** The three arguments both DRC checks take, with this project's defaults. */
+function drcArgs(params: Record<string, unknown>): {
+  strict: boolean;
+  userInterface: boolean;
+  includeVerboseError: boolean;
+} {
+  return {
+    // The declaration says the schematic check is "统一为严格检查模式" anyway, and
+    // the PCB one likewise; the default matches what the editor itself does.
+    strict: params?.strict !== false,
+    // Never a default: the editor pops its bottom DRC panel when this is true,
+    // and an unattended check that rearranges the user's screen is a side effect
+    // nobody asked for. A caller that wants to *watch* it passes true.
+    userInterface: params?.userInterface === true,
+    includeVerboseError: params?.includeVerboseError !== false,
+  };
+}
+
+/** Which document a check ran against, plus why that read could not be made. */
+async function drcTarget(eda: Eda, problems: string[]): Promise<Record<string, unknown>> {
+  const active = await activeDocument(eda, problems);
+  return active ? { uuid: active.uuid, type: active.type } : { uuid: null, type: 'unknown' };
+}
+
+/** `uuid (type)` for an error message, or the fact that nothing is focused. */
+function describeDocument(page: Record<string, unknown>): string {
+  const uuid = page?.uuid;
+  return typeof uuid === 'string' && uuid
+    ? `${uuid} (${String(page.type ?? 'unknown')})`
+    : 'no document (the host reported none as focused)';
+}
+
+/**
+ * `sch.drc_check` — the schematic DRC counts, read without touching the editor UI.
+ *
+ * What the type package promises and what the host does are different here, and
+ * both are reported: the declaration overloads `includeVerboseError: true` to
+ * resolve an array and `false` to resolve a boolean, but the machine measurement
+ * behind 025 §0 found the array holds **aggregate counts only**
+ * (`[{type: 'fatalError'|'error'|'warn', count}]`) while the per-item detail goes
+ * to the bottom panel, which has no read interface for an extension. So the array
+ * is returned **verbatim** under `counts` — no reshaping that would make an
+ * aggregate look like a list of findings — and `total` / `byType` are summed from
+ * the entries' own fields, with any entry that carries no numeric `count` counted
+ * separately in `unparsed` rather than folded in as zero.
+ *
+ * A boolean answer despite `includeVerboseError: true` is reported as mode
+ * `boolean`, not as an empty result: this build said only "passed".
+ */
+export const schDrcCheck: ActionHandler = async (params, eda) => {
+  const PATH = 'sch_Drc.check';
+  const args = drcArgs(params);
+  const problems: string[] = [];
+  const page = await drcTarget(eda, problems);
+  const call = requireFn(eda, PATH);
+
+  const started = Date.now();
+  let result: unknown;
+  try {
+    result = await raceHostCall(
+      settle(call(args.strict, args.userInterface, args.includeVerboseError)),
+      PATH,
+      DOCUMENT_READ_TIMEOUT_MS,
+      'the host drops an argument it dislikes rather than rejecting it',
+    );
+  } catch (error) {
+    if (isActionError(error)) throw error;
+    const host = hostErrorText(error);
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `${PATH} threw ${host.text}. This call is only meaningful on a `
+        + `schematic page — the focused document here is ${describeDocument(page)} — and `
+        + 'the type package marks the whole namespace @beta',
+      {
+        path: PATH,
+        args,
+        focused: page,
+        thrown: true,
+        errorName: host.name,
+        errorMessage: host.message,
+        elapsedMs: Date.now() - started,
+      },
+    );
+  }
+  const elapsedMs = Date.now() - started;
+  const base = {
+    source: PATH,
+    checked: true,
+    elapsedMs,
+    args,
+    page,
+    uiRequested: args.userInterface,
+    ...(problems.length ? { notes: problems } : {}),
+  };
+
+  if (Array.isArray(result)) {
+    const byType: Record<string, number> = {};
+    let total = 0;
+    let unparsed = 0;
+    for (const entry of result) {
+      const type = plainGet(entry, 'type');
+      const count = Number(plainGet(entry, 'count'));
+      const label = typeof type === 'string' && type ? type : '(entry without a type field)';
+      if (Number.isFinite(count)) {
+        byType[label] = (byType[label] ?? 0) + count;
+        total += count;
+      } else {
+        unparsed += 1;
+        byType[label] = byType[label] ?? 0;
+      }
+    }
+    return {
+      ...base,
+      mode: 'counts',
+      counts: result,
+      entries: result.length,
+      total,
+      byType,
+      passed: total === 0,
+      ...(unparsed ? { unparsed } : {}),
+    };
+  }
+  if (typeof result === 'boolean') {
+    return {
+      ...base,
+      mode: 'boolean',
+      counts: null,
+      passed: result,
+      note: 'the host answered a boolean even though includeVerboseError was true: this '
+        + 'build does not hand back per-kind counts, so "passed" is everything it said',
+    };
+  }
+  const rendered = safeJson(result);
+  return {
+    ...base,
+    mode: 'unexpected',
+    counts: null,
+    passed: null,
+    ...(rendered.error ? { unrenderable: rendered.error } : { raw: result }),
+    note: 'the answer is neither the declared count array nor a boolean; reported whole '
+      + 'rather than reshaped',
+  };
+};
+
+/** Default and ceiling for `pcb.drc_check`'s inline tree. */
+const DRC_TREE_DEFAULT_MAX_CHARS = 200_000;
+const DRC_TREE_MAX_MAX_CHARS = 4_000_000;
+
+/** `JSON.stringify` that cannot throw on a cyclic or hostile host object. */
+function safeJson(value: unknown): { text: string; error?: string } {
+  try {
+    return { text: JSON.stringify(value) ?? '' };
+  } catch (error) {
+    return { text: '', error: String((error as Error)?.message ?? error) };
+  }
+}
+
+/**
+ * The keys a DRC node uses to hold its children.
+ *
+ * A closed list rather than "any array-valued field", and the difference is not
+ * theoretical: measured on the machine 2026-09-23, a real leaf carries
+ * `objs: ['err0']` and its containers carry `title: [name, '(1)']`, so a walk
+ * that followed *every* array would treat each error as a branch and report
+ * **0 items beside a group whose own `count` says 1** — a summary that lies in
+ * the reassuring direction, which is the one direction that must not happen
+ * (`outputs/025_probe_p4_pcb_drc.txt`).
+ */
+const DRC_CHILD_KEYS = ['list', 'children', 'errors', 'items', 'groups'] as const;
+
+/** The array-valued children of a DRC node, from {@link DRC_CHILD_KEYS} only. */
+function drcChildArrays(node: Record<string, unknown>): unknown[] {
+  const out: unknown[] = [];
+  for (const key of DRC_CHILD_KEYS) {
+    const value = node[key];
+    if (Array.isArray(value)) out.push(value);
+  }
+  return out;
+}
+
+/**
+ * A DRC node's own `count`, when it states one.
+ *
+ * The editor puts the number of errors *under* a node on the node itself, which
+ * makes it better evidence than anything a walk can derive — it is the host's
+ * own answer to "how many?". Read defensively: a node without it returns
+ * `null`, never 0, so "did not say" cannot pass for "none".
+ */
+function drcNodeCount(node: unknown): number | null {
+  if (!node || typeof node !== 'object' || Array.isArray(node)) return null;
+  const count = Number(plainGet(node, 'count'));
+  return Number.isFinite(count) ? count : null;
+}
+
+/** The label a DRC leaf carries, from whichever of its own fields exists. */
+function drcLeafLabel(item: unknown): string {
+  for (const key of ['ruleName', 'errorType', 'type', 'name', 'kind']) {
+    const value = plainGet(item, key);
+    if (typeof value === 'string' && value) return value;
+  }
+  return '(leaf without a name field)';
+}
+
+/**
+ * Count a DRC answer's leaf items, grouped by the label each leaf carries.
+ *
+ * A count and not an interpretation: which field a leaf uses for its rule name
+ * differs per group, so the walk looks for the spellings the type package and
+ * the host use, and reports every node that has none of them under one honest
+ * label instead of dropping it. `seen` guards against a host object that points
+ * back at itself — the walk must never be the thing that hangs.
+ */
+function countDrcLeaves(
+  node: unknown,
+  byLabel: Record<string, number>,
+  seen: Set<unknown>,
+): number {
+  if (Array.isArray(node)) {
+    let total = 0;
+    for (const child of node) total += countDrcLeaves(child, byLabel, seen);
+    return total;
+  }
+  if (!node || typeof node !== 'object') return 0;
+  if (seen.has(node)) return 0;
+  seen.add(node);
+  const children = drcChildArrays(node as Record<string, unknown>);
+  if (children.length === 0) {
+    const label = drcLeafLabel(node);
+    byLabel[label] = (byLabel[label] ?? 0) + 1;
+    return 1;
+  }
+  let total = 0;
+  for (const child of children) total += countDrcLeaves(child, byLabel, seen);
+  return total;
+}
+
+/**
+ * Keep whole groups while the rendered text stays inside the budget.
+ *
+ * Whole groups rather than a byte cut: half a group's JSON is not a DRC finding,
+ * and a caller that receives one cannot tell it from a finding about a truncated
+ * object. The first group is always kept — if it alone exceeds the budget the
+ * note says so, which is more useful than an empty tree.
+ */
+function budgetDrcGroups(
+  groups: unknown[],
+  maxChars: number,
+): { kept: unknown[]; dropped: number; jsonChars: number; oversizedFirst: boolean } {
+  const kept: unknown[] = [];
+  let used = 2; // the brackets of the array
+  let dropped = 0;
+  let oversizedFirst = false;
+  for (const group of groups) {
+    const size = safeJson(group).text.length + 1;
+    if (kept.length === 0) {
+      oversizedFirst = size > maxChars;
+      kept.push(group);
+      used += size;
+      continue;
+    }
+    if (used + size > maxChars) {
+      dropped = groups.length - kept.length;
+      break;
+    }
+    kept.push(group);
+    used += size;
+  }
+  return { kept, dropped, jsonChars: used, oversizedFirst };
+}
+
+/**
+ * `pcb.drc_check` — the PCB DRC result, per item, as the host structured it.
+ *
+ * This is the one DRC that does carry item-level detail (025 §0): the answer is
+ * an array of groups, each with a sub-group level and leaves carrying
+ * `ruleName` / `errorType` / `explanation` / `obj1` / `obj2` / `globalIndex` /
+ * `parentId`. **Measured on the machine 2026-09-23** (see
+ * `outputs/025_probe_p4_pcb_drc.txt`) the tree is `group.list[].list[]`, each
+ * node states its own `count`, and a leaf is told from a container by which of
+ * the keys the tree really uses (`list`/`children`/…) is an array — a leaf's own
+ * `objs: ['err0']` is *not* a child list, and treating it as one is how a tally
+ * ends up reporting 0 items beside a group whose `count` says 1.
+ *
+ * The groups therefore come back **verbatim** — a mapping layer can read the
+ * shape the editor really produces instead of the one this file guessed — and
+ * the counts beside them only describe what was returned.
+ *
+ * Two answers are kept distinguishable from "a clean board":
+ *
+ * - `undefined`: the declared answer for "the editor is not on a PCB". Measured
+ *   2026-09-23, the host instead **throws** `指定的主题消息在对应的画布内没有相关订阅`
+ *   (the check publishes to the PCB canvas topic and there is no subscriber on a
+ *   schematic page), so the throw is caught and reported with the focused
+ *   document named. Both shapes are handled because a declaration is not a
+ *   behaviour.
+ * - a tree with no leaves: the *empty test PCB* answered one group, "Netlist
+ *   Error / Import Changes" — the schematic has parts and the PCB does not. So
+ *   "0 items" here is a real verdict about a board, not an absence of checking.
+ */
+export const pcbDrcCheck: ActionHandler = async (params, eda) => {
+  const PATH = 'pcb_Drc.check';
+  const args = drcArgs(params);
+  let maxChars = DRC_TREE_DEFAULT_MAX_CHARS;
+  if (params?.maxChars !== undefined) {
+    const wanted = Number(params.maxChars);
+    if (!Number.isFinite(wanted) || wanted < 1_000 || wanted > DRC_TREE_MAX_MAX_CHARS) {
+      throw new ActionError(
+        'BAD_REQUEST',
+        `pcb.drc_check params.maxChars must be a number between 1000 and `
+          + `${DRC_TREE_MAX_MAX_CHARS} (got ${JSON.stringify(params.maxChars)})`,
+      );
+    }
+    maxChars = Math.floor(wanted);
+  }
+  const problems: string[] = [];
+  const page = await drcTarget(eda, problems);
+  const call = requireFn(eda, PATH);
+
+  const started = Date.now();
+  let result: unknown;
+  try {
+    result = await raceHostCall(
+      settle(call(args.strict, args.userInterface, args.includeVerboseError)),
+      PATH,
+      DOCUMENT_READ_TIMEOUT_MS,
+      'the host drops an argument it dislikes rather than rejecting it',
+    );
+  } catch (error) {
+    if (isActionError(error)) throw error;
+    const host = hostErrorText(error);
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `${PATH} threw ${host.text}. The declaration says the call reports `
+        + `nothing at all when no PCB is focused; the focused document here is `
+        + `${describeDocument(page)}`,
+      {
+        path: PATH,
+        args,
+        focused: page,
+        thrown: true,
+        errorName: host.name,
+        errorMessage: host.message,
+        elapsedMs: Date.now() - started,
+      },
+    );
+  }
+  const elapsedMs = Date.now() - started;
+  const base = {
+    source: PATH,
+    elapsedMs,
+    args,
+    page,
+    uiRequested: args.userInterface,
+    ...(problems.length ? { notes: problems } : {}),
+  };
+
+  if (result === undefined || result === null) {
+    return {
+      ...base,
+      checked: false,
+      available: false,
+      groups: null,
+      counts: null,
+      reason:
+        `the host returned ${result === null ? 'null' : 'undefined'}, its declared answer for `
+        + `"there is no PCB document to check" — the focused document here is `
+        + `${describeDocument(page)}. No check ran: this is not a board with zero errors`,
+    };
+  }
+  if (typeof result === 'boolean') {
+    return {
+      ...base,
+      checked: true,
+      available: true,
+      mode: 'boolean',
+      groups: null,
+      counts: null,
+      passed: result,
+      note: 'the host answered a boolean even though includeVerboseError was true: this '
+        + 'build does not hand back per-item errors, so "passed" is everything it said',
+    };
+  }
+  if (!Array.isArray(result)) {
+    const rendered = safeJson(result);
+    return {
+      ...base,
+      checked: true,
+      available: true,
+      mode: 'unexpected',
+      groups: null,
+      counts: null,
+      ...(rendered.error ? { unrenderable: rendered.error } : { raw: result }),
+      note: 'the answer is not the declared group array; reported whole rather than reshaped',
+    };
+  }
+
+  const byLabel: Record<string, number> = {};
+  const items = countDrcLeaves(result, byLabel, new Set<unknown>());
+  // The host states the number of errors under each group on the group itself,
+  // which beats anything a walk can derive. Preferred when *every* top-level
+  // group states one; otherwise the walked count is used and `errorsSource`
+  // says so, because a total silently assembled from two sources is not a fact.
+  let stated = 0;
+  let fromHost = 0;
+  for (const group of result) {
+    const count = drcNodeCount(group);
+    if (count !== null) {
+      stated += 1;
+      fromHost += count;
+    }
+  }
+  const hostCountsAll = result.length > 0 && stated === result.length;
+  const budget = budgetDrcGroups(result, maxChars);
+  const notes: string[] = [...(problems.length ? problems : [])];
+  if (budget.dropped) {
+    notes.push(
+      `${budget.dropped} group(s) were dropped to keep the answer inside maxChars `
+        + `(${maxChars}); the counts describe the whole answer, the returned groups do not`,
+    );
+  }
+  if (budget.oversizedFirst) {
+    notes.push(
+      'the first group alone exceeds maxChars, so it is returned whole and this answer is '
+        + 'larger than the budget asks for',
+    );
+  }
+  return {
+    ...base,
+    checked: true,
+    available: true,
+    mode: 'groups',
+    groups: budget.kept,
+    counts: {
+      groups: result.length,
+      returnedGroups: budget.kept.length,
+      errors: hostCountsAll ? fromHost : items,
+      errorsSource: hostCountsAll ? 'group-count' : 'walked-leaves',
+      items,
+      byLabel,
+      jsonChars: budget.jsonChars,
+    },
+    truncated: budget.dropped > 0,
+    ...(notes.length ? { notes } : {}),
+  };
+};
+
+/**
+ * The actions `sys.probe`'s `call` mode may dispatch to, and why the list is short.
+ *
+ * The daemon's action catalogue is a **load-time constant**: an action registered
+ * here *after* the daemon started is unreachable through `bridge call --action
+ * <name>` — the daemon answers `UNKNOWN_ACTION` before the frame is forwarded
+ * (SKILL.md §6 pitfall 8, third recurrence). Restarting the daemon is the normal
+ * fix, and it is the operator's call to make. This channel exists so a read-only
+ * probe can still measure a freshly registered action against a daemon that has
+ * not been restarted yet, which is what 025 batch 1 needed.
+ *
+ * It is a closed list of **read-only** actions on purpose. The `create` gate
+ * (`CONFIRMATION_REQUIRED`) lives in the daemon, so anything routed through here
+ * would bypass it — and a bypass that can bring a document into existence is
+ * exactly the hole the gate was built to close. Reads have no gate to bypass.
+ */
+const PROBE_CALL_ACTIONS: Record<string, ActionHandler> = {
+  'sys.get_document_file': sysGetDocumentFile,
+  'sys.get_document_source': sysGetDocumentSource,
+  'sch.drc_check': schDrcCheck,
+  'pcb.drc_check': pcbDrcCheck,
+};
+
 export function buildHandlers(eda: Eda): Record<string, BoundHandler> {
   const bind =
     (handler: ActionHandler): BoundHandler =>
@@ -6135,6 +6918,13 @@ export function buildHandlers(eda: Eda): Record<string, BoundHandler> {
     'sys.probe': bind(sysProbe),
     'sys.self_update': bind(sysSelfUpdate),
     'sys.identity': bind(sysIdentity),
+    // 025: the online half of the review pipeline — a whole document as an
+    // archive the offline parsers already read, the document's own source text,
+    // and the two DRC checks. All four are reads.
+    'sys.get_document_file': bind(sysGetDocumentFile),
+    'sys.get_document_source': bind(sysGetDocumentSource),
+    'sch.drc_check': bind(schDrcCheck),
+    'pcb.drc_check': bind(pcbDrcCheck),
     'sch.readback': bind(schReadback),
     'lib.symbol.get': bind(libSymbolGet),
     'lib.device.get': bind(libDeviceGet),

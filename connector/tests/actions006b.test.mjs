@@ -734,15 +734,24 @@ test('sys.probe checks mode takes the offline table when asked for defaults', as
     'dmt_EditorControl',
     'dmt_Pcb',
     'dmt_Schematic',
+    // 025 batch 1: the two DRC namespaces and the two "where does a project
+    // leave the editor" ones (`sys_FileManager` under its permission gate,
+    // `sys_Tool` as the host's own comparison lane). Same three-place sync as
+    // before — the generator, `tests/test_api_names.py`'s NAMESPACES, and this
+    // list, which is the connector-side reader of the generated table.
+    'pcb_Drc',
     'sch_Document',
+    'sch_Drc',
     'sch_ManufactureData',
     // 006b-F3 recon: the seventh path to a placed pin's geometry, plus the
     // real net-flag API (`createNetFlag`) the decorative-text fallback stands
     // in for.
     'sch_PrimitiveComponent',
     'sch_PrimitivePin',
+    'sys_FileManager',
+    'sys_Tool',
   ]);
-  // The five namespaces must not be empty shells.
+  // The namespaces must not be empty shells.
   for (const name of namespaces) {
     assert.ok(frame.data.checks[name].checked > 0, `${name} checked nothing`);
   }
