@@ -6195,6 +6195,50 @@ CONNECTOR_FIX = (
     "再重跑 `boardwise doctor`（若刚重启过编辑器，daemon 侧用 `boardwise bridge status` 复核）"
 )
 
+#: The daemon's code for "several windows are online and you did not say which one
+#: you meant" (`ErrorCodes.WINDOW_UNSPECIFIED`, daemon.py:1210). Spelled as a
+#: literal rather than imported: `cli.py` reaches the bridge package lazily on
+#: purpose (`_bridge_modules`), so that everything except `bridge`/`doctor`/`checkup`
+#: imports and runs without `websockets` installed.
+WINDOW_UNSPECIFIED_CODE = "WINDOW_UNSPECIFIED"
+
+#: The fix for that code, and it points the *opposite* way from CONNECTOR_FIX.
+#:
+#: Issue #6 (岳's 3.2.149 machine, two windows online): doctor read 4/8 and all
+#: four fixes said "先让扩展连上" — but the extension was attached and working.
+#: What had happened is the daemon refusing to guess which window a call was
+#: about (§3.5), which is a *designed* refusal, not a fault: sending the reader to
+#: go re-enable an extension that is already connected is worse than saying
+#: nothing, because they will spend the time and end up where they started.
+MULTI_WINDOW_FIX = (
+    "多个编辑器窗口在线，daemon 不猜是哪一个（设计如此，不是故障）："
+    "用 `boardwise doctor --project <工程名或 uuid>` 或 `--instance <窗口 id>` 指定一个窗口再重跑；"
+    "`boardwise bridge status` 会列出每个在线窗口的工程名与 id"
+)
+
+
+def _window_unspecified(error: str) -> bool:
+    """Was this failure the daemon refusing to guess a window?
+
+    The text is the one `_cmd_doctor` builds from a `BridgeError` — ``[CODE] …`` —
+    so the code is read from the *leading bracket* rather than searched for
+    anywhere in the string: a message that merely mentions the code (the refused
+    action's own text does: the daemon lists the windows it could have picked)
+    must not by itself turn a check into the multi-window story.
+    """
+    return (error or "").startswith(f"[{WINDOW_UNSPECIFIED_CODE}]")
+
+
+def _connector_fix(error: str) -> str:
+    """The fix line for a connector-dependent check that could not be made.
+
+    Two stories, and they are not interchangeable: no connector at all (fix the
+    extension) versus a connector that answered the daemon but not this call
+    (name the window). Everything that is not the second one keeps the sentence
+    it always had — an unrecognised error is not evidence for a new story.
+    """
+    return MULTI_WINDOW_FIX if _window_unspecified(error) else CONNECTOR_FIX
+
 #: Only the first three fields of an editor version mean anything to the floor.
 #: The fourth is a build suffix — `3.2.186.b52e3e87` on the machine this was
 #: measured on, `3.2.149.88089769` in the issue — so comparing it would make two
@@ -6631,7 +6675,7 @@ def run_doctor(p: DoctorProbe) -> list[DoctorCheck]:
             fix=(
                 ""
                 if probe_ok
-                else CONNECTOR_FIX
+                else _connector_fix(p.probe_error)
                 if p.probe is None
                 else "这台编辑器缺少 harness 依赖的接口——对照 `docs/getting-started.md` 的版本要求，"
                 "或先用 `boardwise bridge call --action sys.probe --params '{\"checks\":true}'` 看全表"
@@ -6687,7 +6731,7 @@ def run_doctor(p: DoctorProbe) -> list[DoctorCheck]:
             fix=(
                 ""
                 if editor_ok
-                else CONNECTOR_FIX
+                else _connector_fix(p.probe_error)
                 if not p.editor_version
                 else (
                     "把编辑器完全关掉（含所有窗口）再启动一次，然后重跑 `boardwise doctor`："
@@ -6748,7 +6792,7 @@ def run_doctor(p: DoctorProbe) -> list[DoctorCheck]:
                 label="运行中的 connector 版本与仓库一致",
                 ok=False,
                 detail=f"未验证：没有读到运行中的 connector 版本（{p.probe_error or '扩展未连接'}）",
-                fix=CONNECTOR_FIX,
+                fix=_connector_fix(p.probe_error),
             )
         )
     else:
@@ -6816,7 +6860,7 @@ def run_doctor(p: DoctorProbe) -> list[DoctorCheck]:
             fix=(
                 ""
                 if project_ok
-                else CONNECTOR_FIX
+                else _connector_fix(p.documents_error)
                 if p.documents is None
                 else "在编辑器里打开（或切到）一个工程，再重跑 doctor："
                 "所有真机动作都作用在焦点工程上"

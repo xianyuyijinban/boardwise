@@ -159,6 +159,71 @@ def test_no_connector_names_the_extension_as_the_thing_to_fix():
     assert "no connector is connected" in check(checks, "methods").detail
 
 
+#: The daemon's refusal as doctor records it: `_cmd_doctor` formats every
+#: `BridgeError` as `[CODE] message`, and this is the code plus the message the
+#: daemon actually sends (issue #6, 岳's machine: three windows, no hint).
+WINDOW_UNSPECIFIED = (
+    "[WINDOW_UNSPECIFIED] 2 editor windows are connected and the request named no "
+    "project; re-send with a project hint (boardwise bridge call --project NAME_OR_UUID) "
+    "or an instance id (boardwise bridge call --instance INSTANCE_ID)"
+)
+
+
+def test_a_refused_window_guess_points_at_addressing_instead_of_the_extension():
+    # Issue #6. The extension *is* attached here (`ping` says so, so the
+    # daemon-side connector line is green) — what failed is the daemon declining
+    # to guess which of several windows the call was about. All four fixes telling
+    # the reader to go and check that the extension is enabled send them somewhere
+    # they have nothing to do, which is what this test forbids.
+    checks = run_doctor(healthy_probe(
+        probe=None, probe_error=WINDOW_UNSPECIFIED,
+        documents=None, documents_error=WINDOW_UNSPECIFIED,
+        connector_version="", editor_version="",
+    ))
+    assert check(checks, "connector").ok is True, "the extension is attached; that line is fine"
+    for name in ("methods", "editor-version", "connector-version", "project"):
+        entry = check(checks, name)
+        assert entry.ok is False, name
+        assert "--project" in entry.fix and "--instance" in entry.fix, (name, entry.fix)
+        assert "bridge status" in entry.fix, name
+        assert "立创 EDA Pro" not in entry.fix, f"{name}: the extension is not the problem"
+        # The daemon's own words survive in the detail — the reader can see that
+        # the code was WINDOW_UNSPECIFIED without taking the fix line's word.
+        assert "WINDOW_UNSPECIFIED" in entry.detail, name
+
+
+def test_only_the_refusal_code_changes_the_story():
+    # A near-miss code must not: `PROJECT_NOT_CONNECTED` also arrives from a
+    # routing hint, but its meaning is "no window has that project open", which
+    # the extension sentence answers as well as anything does.
+    checks = run_doctor(healthy_probe(
+        probe=None, probe_error="[PROJECT_NOT_CONNECTED] no connected window has project 'x' open",
+        documents=None, documents_error="[PROJECT_NOT_CONNECTED] no connected window has project 'x' open",
+        connector_version="", editor_version="",
+    ))
+    for name in ("methods", "editor-version", "connector-version", "project"):
+        entry = check(checks, name)
+        assert entry.ok is False, name
+        assert "立创 EDA Pro" in entry.fix, (name, entry.fix)
+
+
+def test_a_code_mentioned_inside_a_message_is_not_the_code():
+    # The refused *action*'s own text lists the windows and repeats the code
+    # (the daemon's message does), so a substring search would read an unrelated
+    # failure as the multi-window story. Only the leading bracket counts.
+    checks = run_doctor(healthy_probe(
+        probe=None,
+        probe_error="[CONNECTOR_ERROR] the page refused: WINDOW_UNSPECIFIED was the old answer",
+        documents=None,
+        documents_error="[CONNECTOR_ERROR] the page refused: WINDOW_UNSPECIFIED was the old answer",
+        connector_version="", editor_version="",
+    ))
+    for name in ("methods", "editor-version", "connector-version", "project"):
+        entry = check(checks, name)
+        assert entry.ok is False, name
+        assert "立创 EDA Pro" in entry.fix, (name, entry.fix)
+
+
 def test_an_editor_below_the_api_floor_is_called_out_with_the_version():
     checks = run_doctor(healthy_probe(
         editor_version="3.2.148",

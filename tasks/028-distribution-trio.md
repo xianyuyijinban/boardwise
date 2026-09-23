@@ -118,3 +118,21 @@
   （幂等实证，非首次安装）。
 - `git status` 清单与交卷一致；`packaging/build|out` 已忽略。
 - 待 3c：Release notes 岳过目后由主代理发布。
+
+### issue #6 修复文案（2026-09-23，子代理 agent-43）
+
+- 四处 fix 分支按错误码分岔：新增 `WINDOW_UNSPECIFIED_CODE` / `MULTI_WINDOW_FIX` / `_window_unspecified()`
+  / `_connector_fix()`；`[WINDOW_UNSPECIFIED]` 开头的失败改为指引 `doctor --project/--instance`
+  （并提 `bridge status` 看窗口表），**其余错误码一律保留原 CONNECTOR_FIX**。判码只看前导方括号，
+  不做子串搜索（daemon 的消息正文里也会出现该码）。daemon 侧 `connector` 检查不动。
+- 单测 +3（WINDOW_UNSPECIFIED 四条 fix 变指引 / PROJECT_NOT_CONNECTED 仍原文案 / 正文出现该码不算），
+  既有 NO_CONNECTOR 用例未改仍绿。
+- 变异 CAUGHT（分岔恒假 → 42 中 1 红，只打中新行为）；还原 `cli.py ba5995c9…`（cp + cmp 一致）。
+- 三线：pytest **1407 passed**（1404+3）；connector / tsc 未跑（本批未动 connector）。
+- 真机顺验（本机三窗、doctor 不带参数）：复现 4/8，四条 fix 全部改为寻址指引
+  （原文 `outputs/026f_doctor_multiwin_fix.txt`）。
+
+### 主代理复验（2026-09-23）
+
+- `cli.py ba5995c9…` 与交卷一致；`git status` 仅两文件；`pytest tests/test_doctor.py` **42 passed** 亲手复跑。
+- 与 af2ac90 的 `--project/--instance` 合流后，issue #6 两半均修。
