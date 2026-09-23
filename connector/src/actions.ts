@@ -16,7 +16,6 @@
  */
 
 import { PROBE_CHECKS, ADDED_SINCE } from './api-names';
-import { DEFAULT_URL } from './config';
 import { ActionError, isActionError, type ResponseContext } from './protocol';
 import { sysSelfUpdate } from './self-update';
 import { VERSION } from './version';
@@ -6972,7 +6971,7 @@ export const pcbDrcCheck: ActionHandler = async (params, eda) => {
 };
 
 // --------------------------------------------------------------------------
-// 026b: `sys.connector_status` (product) and the P6 native-WebSocket probe
+// 026b: `sys.connector_status` — the promoted diagnostics action
 // --------------------------------------------------------------------------
 
 /**
@@ -7042,256 +7041,6 @@ function connectorStatusReport(eda: Eda): Record<string, unknown> {
 }
 
 /**
- * One native-WebSocket attempt, in whichever scope asks for it (026b P6).
- *
- * Written as an ordinary function on purpose: the Worker copy is
- * `String(nativeWebSocketProbe)` interpolated into the inline worker source, so
- * the page and the Worker run **the same code** instead of two similar
- * implementations that can drift — which is what makes their two answers
- * comparable at all. It therefore closes over nothing: the socket constructor
- * comes in as `makeSocket`, and the only globals it touches are `Date` and
- * `setTimeout`, both of which exist in a Worker.
- *
- * Nothing is inferred. A constructor that throws is reported with the host's
- * own message (a CSP refusal reads like a CSP refusal); a socket that opened and
- * said nothing is `opened, silent`, which is *not* the same reading as "could
- * not connect"; and the daemon's own first frame — the banner, §3.2 — is kept
- * verbatim, truncated, as the proof that a real daemon answered.
- *
- * What it does **not** prove: that the application handshake (`hello`) would be
- * accepted over such a socket. That needs the paired token, and pairing is not
- * this probe's question — see the P6 section of `outputs/026_probe.md`.
- */
-async function nativeWebSocketProbe(
-  makeSocket: (url: string) => any,
-  url: string,
-  timeoutMs: number,
-): Promise<Record<string, unknown>> {
-  const started = Date.now();
-  const events: Array<Record<string, unknown>> = [];
-  let socket: any = null;
-  try {
-    socket = makeSocket(url);
-  } catch (error) {
-    return {
-      construct: { ok: false, error: String((error as Error)?.message ?? error) },
-      opened: false,
-      messages: 0,
-      sample: [],
-      events,
-      elapsedMs: Date.now() - started,
-      verdict: 'the WebSocket constructor threw',
-    };
-  }
-
-  let opened = false;
-  let messages = 0;
-  const sample: string[] = [];
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, timeoutMs);
-    const finish = () => {
-      clearTimeout(timer);
-      resolve();
-    };
-    try {
-      socket.onopen = () => {
-        opened = true;
-        events.push({ at: Date.now(), type: 'open' });
-      };
-      socket.onmessage = (event: any) => {
-        messages += 1;
-        events.push({ at: Date.now(), type: 'message' });
-        if (sample.length < 3) {
-          const data = event?.data;
-          sample.push(typeof data === 'string' ? data.slice(0, 400) : String(data));
-        }
-        // The daemon speaks first (the banner), so one frame is all this probe
-        // is waiting for.
-        if (messages >= 1) finish();
-      };
-      socket.onerror = () => {
-        events.push({ at: Date.now(), type: 'error' });
-      };
-      socket.onclose = (event: any) => {
-        events.push({
-          at: Date.now(),
-          type: 'close',
-          code: event?.code ?? null,
-          reason: String(event?.reason ?? ''),
-        });
-        finish();
-      };
-    } catch (error) {
-      events.push({ type: 'handlerSetupFailed', error: String((error as Error)?.message ?? error) });
-      finish();
-    }
-  });
-
-  try {
-    socket.close(1000, 'boardwise probe done');
-  } catch {
-    /* already gone */
-  }
-
-  return {
-    construct: { ok: true },
-    opened,
-    messages,
-    sample,
-    events,
-    elapsedMs: Date.now() - started,
-    verdict: opened
-      ? (messages > 0 ? 'opened, and the daemon spoke first' : 'opened, silent')
-      : 'never opened',
-  };
-}
-
-/**
- * The Worker half of the P6 probe: the *same* {@link nativeWebSocketProbe}, run
- * inside a `blob:` Worker.
- *
- * This is the question that decides whether form B′ exists at all: if a Worker
- * can open the daemon socket itself, the transport could move wholesale into
- * the Worker and the page would only execute `eda` calls. The page's own
- * answer is not evidence about this one — a Worker obeys its own CSP
- * (`connect-src` is inherited in most engines, but "most" is what probes are
- * for).
- *
- * The probe is terminated and its URL revoked whether it answered or not: a
- * probe that leaks a thread is a bug of its own, and 026 P1 measured that the
- * round trip works, so there is nothing to keep alive.
- *
- * Built by a function rather than a constant so the tests can read the exact
- * text the Worker will run — including whether it still parses, which is the
- * real risk of interpolating a function into a string.
- */
-export function nativeWsProbeWorkerSource(): string {
-  return `
-var makeSocket = function (url) { return new WebSocket(url); };
-var probe = ${String(nativeWebSocketProbe)};
-self.onmessage = function (event) {
-  var data = (event && event.data) ? event.data : {};
-  if (data.type !== 'probe') return;
-  Promise.resolve(probe(makeSocket, String(data.url), Number(data.timeoutMs) || 4000)).then(
-    function (report) { try { self.postMessage({ type: 'nativeWs', report: report }); } catch (error) { /* page gone */ } },
-    function (error) { try { self.postMessage({ type: 'nativeWs', error: String(error) }); } catch (error2) { /* page gone */ } }
-  );
-};
-`;
-}
-
-async function workerNativeWsProbe(url: string, timeoutMs: number): Promise<Record<string, unknown>> {
-  const setup: Record<string, unknown> = {};
-  let worker: any = null;
-  let blobUrl = '';
-  try {
-    const blob = new (globalThis as any).Blob([nativeWsProbeWorkerSource()], { type: 'text/javascript' });
-    blobUrl = String((globalThis as any).URL.createObjectURL(blob));
-    setup.blobUrl = { ok: true, scheme: blobUrl.slice(0, 5) };
-    worker = new (globalThis as any).Worker(blobUrl);
-    setup.construct = { ok: true };
-  } catch (error) {
-    // The honest failure again (P1's rule, unchanged): no Worker means this
-    // half of the question was not answered, and saying so is the answer.
-    return {
-      supported: false,
-      ...setup,
-      error: String((error as Error)?.message ?? error),
-      verdict: 'no Worker — the Worker half of P6 is unanswered by this host',
-    };
-  }
-
-  try {
-    const report = await new Promise<Record<string, unknown>>((resolve) => {
-      const timer = setTimeout(
-        () => resolve({ error: `no answer from the Worker within ${timeoutMs} ms`, timedOut: true }),
-        timeoutMs + 500,
-      );
-      const finish = (value: Record<string, unknown>) => {
-        clearTimeout(timer);
-        resolve(value);
-      };
-      worker.onmessage = (event: any) => {
-        const data = event?.data ?? null;
-        if (!data) return;
-        if (data.type === 'nativeWs' && data.report) finish({ ...data.report });
-        else if (data.type === 'nativeWs') finish({ error: String(data.error ?? 'unknown failure') });
-      };
-      worker.onerror = (event: any) => {
-        finish({ error: `the Worker reported an error: ${String(event?.message ?? '')}`, workerError: true });
-      };
-      worker.postMessage({ type: 'probe', url, timeoutMs });
-    });
-    return { supported: true, ...setup, ...report };
-  } finally {
-    try {
-      worker.terminate();
-    } catch {
-      /* nothing to do */
-    }
-    try {
-      (globalThis as any).URL.revokeObjectURL(blobUrl);
-    } catch {
-      /* nothing to do */
-    }
-  }
-}
-
-/**
- * `sys.worker_probe` — what is left of the 026 instrumentation: the P6 question.
- *
- * The four measurement modes of the probe batch (`worker`, `pageTimer`,
- * `workerTimer`, `hostTimer`) were retired with their answers (026b §2.4, and
- * `outputs/026_probe.md`): each was a one-off reading, and two of them left a
- * timer or an interval behind in the page or in the host. `status` was promoted
- * to `sys.connector_status` above, where it belongs as a product.
- *
- * What remains is the one question the probe batch could not answer from a
- * desk: **can a native `WebSocket` reach the daemon from the extension page,
- * and from a Worker?** It runs on the machine (batch 2b), is read-only, and
- * leaves nothing behind — and it goes when its answer does.
- */
-export const sysWorkerProbe: ActionHandler = async (params) => {
-  const mode = String(params?.mode ?? 'nativeWs');
-  if (mode !== 'nativeWs') {
-    throw new ActionError(
-      'BAD_REQUEST',
-      `sys.worker_probe now has exactly one mode, nativeWs (got ${JSON.stringify(params?.mode)}); `
-        + 'the worker | pageTimer | workerTimer | hostTimer | status modes were retired in 026b',
-    );
-  }
-  const url = String(params?.url ?? DEFAULT_URL);
-  const timeoutMs = Number.isFinite(Number(params?.timeoutMs))
-    ? Math.min(Math.max(Number(params?.timeoutMs), 500), 20_000)
-    : 4_000;
-  const report: Record<string, unknown> = {
-    mode,
-    url,
-    timeoutMs,
-    support: {
-      typeofWebSocket: typeof (globalThis as any).WebSocket,
-      typeofWorker: typeof (globalThis as any).Worker,
-      typeofBlob: typeof (globalThis as any).Blob,
-      typeofUrl: typeof (globalThis as any).URL,
-    },
-  };
-  // The page first, then the Worker: two independent answers, side by side, so
-  // "the page can reach the daemon" cannot be read as "the Worker can too".
-  report.page = await nativeWebSocketProbe(
-    (target: string) => new (globalThis as any).WebSocket(target),
-    url,
-    timeoutMs,
-  );
-  report.worker = await workerNativeWsProbe(url, timeoutMs);
-  report.verdict = (report.page as any)?.messages > 0 && (report.worker as any)?.messages > 0
-    ? 'both scopes reached the daemon — form B′ is at least possible'
-    : ((report.page as any)?.messages > 0
-        ? 'the page reached the daemon; a Worker did not — form B′ is not possible on this host'
-        : 'the page did not reach the daemon either — native WebSocket is not a route here');
-  return report;
-};
-
-/**
  * The actions `sys.probe`'s `call` mode may dispatch to, and why the list is short.
  *
  * The daemon's action catalogue is a **load-time constant**: an action registered
@@ -7307,11 +7056,10 @@ export const sysWorkerProbe: ActionHandler = async (params) => {
  * would bypass it — and a bypass that can bring a document into existence is
  * exactly the hole the gate was built to close. Reads have no gate to bypass.
  *
- * Neither new action is on this list. `sys.connector_status` is a real
- * catalogue entry (026b §2.4) and is reached the documented way; `sys.worker_probe`
- * is what is left of the temporary instrumentation — exactly one mode, the P6
- * native-WebSocket question — and a probe that needed the bypass would be
- * measuring a path nobody will keep.
+ * The 026-era instrumentation is gone and `sys.connector_status` is a real
+ * catalogue entry of its own (026b §2.4), reached the documented way — nothing
+ * registered in the last two batches rides on this bypass, because a probe that
+ * needed one would be measuring a path nobody will keep.
  */
 const PROBE_CALL_ACTIONS: Record<string, ActionHandler> = {
   'sys.get_document_file': sysGetDocumentFile,
@@ -7379,11 +7127,11 @@ export function buildHandlers(eda: Eda): Record<string, BoundHandler> {
     'review.mark': bind(reviewMark),
     // 026b §2.4: the About box's own counters, promoted from the probe where
     // they answered issue #4 (an extension the host never activated looks
-    // identical from outside to one that never loaded).
+    // identical from outside to one that never loaded). The probe it came from
+    // is gone as of 0.4.18 (026c): its one remaining question — can a native
+    // WebSocket reach the daemon from the page and from a Worker? — was
+    // measured on the machine, and the answer lives in `outputs/026_probe.md`
+    // and `outputs/026b_2b_p6_nativews.txt`.
     'sys.connector_status': bind(sysConnectorStatus),
-    // 026b, TEMPORARY and down to one mode: can a native WebSocket reach the
-    // daemon from the page, and from a Worker? (P6, run in batch 2b.) The
-    // answer retires this action.
-    'sys.worker_probe': bind(sysWorkerProbe),
   };
 }

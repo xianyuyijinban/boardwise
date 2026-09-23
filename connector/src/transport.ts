@@ -289,10 +289,19 @@ export class Transport {
    *
    * - `connected` with no outstanding heartbeat — nothing to do. The activity
    *   stamp above already stopped the alarm repeating.
-   * - `connected` with unanswered heartbeats — the socket may be half-open, so
-   *   a ping goes out now instead of waiting for a throttled timer. Past the
-   *   miss limit the socket is already judged dead, and waiting for the timer
-   *   that would have judged it is exactly the delay this alarm exists to skip.
+   * - `connected` with **any** unanswered heartbeat — the socket is judged dead,
+   *   now. Changed in 0.4.18 (026c), and the change is the whole point of it:
+   *   the machine measurements of batch 2b showed a background window recovering
+   *   in 135–152 s instead of the 90 s that batch was for, because a half-open
+   *   socket was only *declared* dead after {@link heartbeatMissLimit} unanswered
+   *   heartbeats — three throttled ticks, about three minutes. The old reaction
+   *   here (send one more ping, then wait for the timer) could not shorten that:
+   *   a ping into a dead socket proves nothing. The silence is what proves it. A
+   *   live socket answers a ping within milliseconds, and that answer arrives as
+   *   an inbound frame, which resets the miss counter and re-arms the alarm — so
+   *   a page that has been quiet past the alarm's 45 s *and* has an unanswered
+   *   heartbeat outstanding cannot be sitting on a live socket. Waiting for the
+   *   third miss buys nothing and costs two more throttled cycles.
    * - `connecting`/`handshaking` with 45 s of silence behind it — the handshake
    *   is not coming (the daemon answers a banner immediately and allows 5 s for
    *   `hello`), so the attempt is replaced now rather than after the daemon's
@@ -309,14 +318,10 @@ export class Transport {
         this.log(`watchdog wake (${source}): connected and answering — nothing to do`);
         return;
       }
-      if (this.missed >= (this.options.heartbeatMissLimit ?? 3)) {
-        this.reconnectNow(
-          `watchdog wake (${source}): ${this.missed} heartbeats unanswered`,
-        );
-        return;
-      }
-      this.log(`watchdog wake (${source}): ${this.missed} unanswered heartbeat(s) — pinging now`);
-      this.sendPing(`watchdog wake (${source}): ping`);
+      // One unanswered heartbeat is enough; see the case list above.
+      this.reconnectNow(
+        `watchdog wake (${source}): ${this.missed} unanswered heartbeat(s)`,
+      );
       return;
     }
 
@@ -335,11 +340,13 @@ export class Transport {
   }
 
   /**
-   * One heartbeat, from wherever it was due. Shared with the wake path.
+   * One heartbeat, sent by the timer that owns the cadence.
    *
    * `why` is what the log and any resulting reconnect reason are phrased
    * around, so "the timer got no answer" and "an alarm woke a silent page" stay
    * distinguishable in the log panel — the difference matters on the machine.
+   * (The wake path used to come through here too until 0.4.18; it reconnects on
+   * the first unanswered heartbeat now, so a ping from it would be pointless.)
    */
   private sendPing(why: string): void {
     this.missed += 1;
@@ -351,16 +358,30 @@ export class Transport {
   }
 
   /**
-   * Drop whatever is on the wire and reconnect at once, with the ladder reset.
+   * Drop whatever is on the wire and reconnect **synchronously**, ladder reset.
    *
-   * A wake is evidence about the *page*, not about the daemon, so the backoff
-   * ladder the previous failure climbed says nothing about now: starting it
-   * again would make a frozen window's recovery wait through 1 s … 30 s of
-   * delays for a daemon that has been up the whole time.
+   * Two things this must not do, and both were measured:
+   *
+   * - It must not keep the ladder. A wake is evidence about the *page*, not
+   *   about the daemon, so the backoff the previous failure climbed says nothing
+   *   about now: a frozen window's recovery would otherwise wait through the
+   *   1 s … 30 s it had accumulated against a daemon that never left.
+   * - It must not go through a timer **at all**, not even `setTimeout(…, 0)`.
+   *   A throttled page's timers are coalesced to about one tick a minute, and
+   *   that applies to zero-delay ones too — so the "immediate" reconnect could
+   *   be deferred by the rest of the throttled period. Measured on 3.2.186
+   *   (026c): with `setTimeout(0)` the same experiment came back in 101 s and
+   *   115 s on two runs out of three, and the deferral is what the extra ~50 s
+   *   was. `connect()` registers synchronously, so calling it directly is
+   *   immediate in the only sense that matters to a throttled page.
    */
   private reconnectNow(reason: string): void {
     this.backoffMs = this.options.minBackoffMs ?? 1000;
-    this.scheduleReconnect(reason, 0);
+    if (!this.dropAttempt(reason)) return;
+    // Logged like the ladder's path, with the one difference that matters to a
+    // reader of the log panel: this one did not wait for anything.
+    this.log(`reconnecting now, no timer: ${reason}`);
+    void this.connect();
   }
 
   /**
@@ -702,15 +723,15 @@ export class Transport {
   }
 
   /**
-   * Drop the current attempt and try again after `delayMs` (default: the
-   * current backoff step, which then doubles).
+   * Drop the current attempt without scheduling anything.
    *
-   * The explicit delay exists for the watchdog's wake path (026b): "try again
-   * now" and "try again after the ladder's next step" are different statements,
-   * and the wake case is the first one.
+   * The teardown half of {@link scheduleReconnect}, split out in 026c: the wake
+   * path has to be able to leave the wire clean *and* reconnect on the spot, and
+   * it must not do the second half through a timer (see {@link reconnectNow}).
+   * Returns false when there is nothing to do because the transport is stopped.
    */
-  private scheduleReconnect(reason: string, delayMs?: number): void {
-    if (this.stopped) return;
+  private dropAttempt(reason: string): boolean {
+    if (this.stopped) return false;
     this.clearTimers();
     if (this.socketId) {
       try {
@@ -721,6 +742,19 @@ export class Transport {
     }
     this.socketId = undefined;
     this.setState('reconnecting', reason);
+    return true;
+  }
+
+  /**
+   * Drop the current attempt and try again after `delayMs` (default: the
+   * current backoff step, which then doubles).
+   *
+   * This is the ladder's path — a failure the transport noticed on its own. The
+   * watchdog's wake goes through {@link reconnectNow} instead, because a page
+   * that is throttled cannot be trusted to run a timer on time.
+   */
+  private scheduleReconnect(reason: string, delayMs?: number): void {
+    if (!this.dropAttempt(reason)) return;
     const delay = delayMs ?? this.backoffMs;
     this.log(`reconnecting in ${delay} ms: ${reason}`);
     this.reconnectTimer = setTimeout(() => void this.connect(), delay);

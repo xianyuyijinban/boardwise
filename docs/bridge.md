@@ -496,7 +496,6 @@ declaring `confirm`).
 | `sch.drc_check` | connector | read | connector | `strict`, `userInterface`, `includeVerboseError` | `{source, checked, mode: 'counts'\|'boolean'\|'unexpected', counts, entries?, total?, byType?, unparsed?, passed, elapsedMs, args, page, uiRequested, notes?, raw?}` — `sch_Drc.check(strict, false, true)`. (025 §0, measured) the host's verbose answer holds **aggregate counts only**; the per-item detail goes to the bottom panel and `SYS_PanelControl` has no read interface, so the array is returned **verbatim** under `counts` with `total`/`byType` summed from the entries' own fields and any entry lacking a numeric `count` counted in `unparsed` rather than folded in as zero. A boolean answer is mode `boolean`, never an empty result. Throws on a non-schematic page; the refusal names the focused document | 30 s |
 | `pcb.drc_check` | connector | read | connector | `strict`, `userInterface`, `includeVerboseError`, `maxChars` | `{source, checked, available, mode: 'groups'\|'boolean'\|'unexpected', groups, counts: {groups, returnedGroups, errors, errorsSource, items, byLabel, jsonChars}, truncated, elapsedMs, args, page, uiRequested, reason?, notes?, raw?}` — `pcb_Drc.check(strict, false, true)`, the DRC that *does* carry item detail. **Measured 2026-09-23** (`outputs/025_probe_p4_pcb_drc.txt`): the tree is `group.list[].list[]`, every node states its own `count`, and a leaf carries `ruleName`/`errorType`/`explanation.str`/`obj1`/`obj2`/`globalIndex`/`parentId`. Groups come back **verbatim** for the Finding-mapping layer; whole groups are dropped (never cut in half) to stay inside `maxChars`. A non-PCB page is never reported as a clean board — the declaration promises `undefined`, the host actually **throws** `指定的主题消息在对应的画布内没有相关订阅`, and both become `checked: false` + a `reason` naming the focused document. An *empty* PCB is not a zero-finding board either: the test project's empty PCB answered one "Netlist Error / Import Changes" (schematic has parts, PCB does not) | 30 s |
 | `sys.connector_status` | connector | read | connector | — | `{present, readStatus, status, moduleBootstrapObserved, activateObserved, evaluations}` — the About box's own read-out, for a caller who cannot open the box. `status` is the same `ConnectorStatus` the box renders (so the two can never disagree): the transport `state`, the daemon's `paired`/`fingerprint`/`minConnectorVersion`, the 024 lifecycle counters — **`moduleBootstrapObserved`** (was our bundle evaluated in this editor runtime at all?), **`activateObserved`** (did the host dispatch `activate()`?), **`evaluations`** (how many times the bundle was evaluated) — and, since 026b, **`watchdog`**: `{state: 'running'\|'unavailable'\|'not started'\|'stopped', reason?, wakes, activityPosts, checkIntervalMs, activityTimeoutMs}`. That last field is the one that answers "why did this window sit there for hours": `running` means a Worker alarm is watching the page, `unavailable(<reason>)` means the host refused one and the window recovers **only** when the user brings it to the front (§7). `present: false` means no evaluation has published its runtime record — an extension that is not loaded, which is a different failure from one that is loaded and inert. Read-only: it never starts, stops or reconnects anything | 30 s |
-| `sys.worker_probe` | connector | read | connector | `mode`, `url`, `timeoutMs` | **PROBE-ONLY, TEMPORARY (026b) — one mode left, and it retires with its answer.** `mode: 'nativeWs'` (the only accepted value; the retired `worker`\|`pageTimer`\|`workerTimer`\|`hostTimer`\|`status` modes are refused with `BAD_REQUEST` naming what replaced them) is the P6 question: **can a native `WebSocket` reach the daemon** at `url` (default `ws://127.0.0.1:61190/eda`) **from the extension page, and from a `blob:` Worker?** Both scopes are probed separately, and the *same* code runs in each (`String(function)` interpolated into the worker source), because the page's answer is not evidence about the Worker's — the Worker obeys its own CSP, and if it can open the socket itself then form B′ (transport inside the Worker) becomes possible. Each half reports `{construct: {ok, error?}, opened, messages, sample, events, elapsedMs, verdict}`, where `sample` is the daemon's own first frame (the banner, §3.2) truncated, and `verdict` distinguishes `opened, and the daemon spoke first` from `opened, silent` from `never opened` — "opened but said nothing" is not the same reading as "could not connect". It does **not** test the application handshake (that needs the paired token). A refusal (no `Worker`, a CSP that blocks `blob:` or `connect-src`) is reported as that refusal, never as an empty success. Always terminates its Worker and revokes its blob URL | 30 s |
 | `sch.readback` | connector | read | connector | `includePrimitives` | `{kind: 'sch', components, primitives, componentCount}` | 30 s |
 | `pcb.readback` | connector | read | connector | `includePrimitives` | `{kind: 'pcb', components, primitives, componentCount}` | 30 s |
 | `export.screenshot` | connector | read | connector | `fit` | `{format, encoding: 'base64', bytes, data}` — **diagnostic only**: cached frames | 60 s |
@@ -789,17 +788,17 @@ So the connector ships one alarm in a Worker, and the page keeps it informed:
 - the Worker checks every **15 s**, and once the page has been silent for longer than **45 s** it
   posts `{type:'wake'}` — **one per check**, not one per silence, because a frozen page swallows
   messages and must find one waiting the moment it runs again;
-- the page's reaction is `Transport.wake()`: `connected` with nothing outstanding → nothing to do
-  (the activity stamp already stops the alarm repeating); `connected` with unanswered heartbeats →
-  ping now, and past the miss limit reconnect now instead of waiting for the throttled heartbeat
-  timer; `connecting`/`handshaking` → replace the attempt now; `idle`/`reconnecting` → connect now
-  with the backoff ladder reset, because the silence was the page's and says nothing about the
-  daemon.
+- the page's reaction is `Transport.wake()`: `connected` with **nothing** outstanding → nothing to do
+  (the activity stamp already stops the alarm repeating); `connected` with **any** unanswered
+  heartbeat → the socket is judged dead and rebuilt now (since 0.4.18 — see §7.1's measurement
+  note for why one miss is enough); `connecting`/`handshaking` → replace the attempt now;
+  `idle`/`reconnecting` → connect now with the backoff ladder reset, because the silence was the
+  page's and says nothing about the daemon.
 
 | window state | page timers | without the watchdog | with the watchdog |
 |---|---|---|---|
 | foreground | normal | normal | unchanged (the alarm only ever adds a Worker) |
-| background (throttled) | ~1 tick a minute | heartbeat drops to the same rate; a reconnect after a daemon restart waits for a throttled timer | recovers within one throttled cycle: the wake is queued and the reaction does not wait for a timer |
+| background (throttled) | ~1 tick a minute | heartbeat drops to the same rate; a reconnect after a daemon restart waits for a throttled timer | the page's next tick notices, and the reconnect itself waits for nothing: measured, that is the wake's ~50 s of silence plus about a second (§7.1's table) |
 | frozen (the 7-hour state) | stop entirely | **never reconnects** until the window is brought to the front | the wake is already queued when the page unfreezes, and the reconnect happens then, without the backoff |
 | page discarded | dead | nothing recovers | nothing recovers — the Worker's thread goes with the page |
 
@@ -810,20 +809,44 @@ so this table claims "the wake is waiting when the page runs again", not "a Work
 page". This document must never say the watchdog makes a window immune: it bounds the damage the
 page's own throttling can do.
 
-**The first machine measurement of this mechanism (026b batch 2b, 3.2.186, 2026-09-23), reported
-against its target.** With the window out of the foreground and its page ticking at ~1/minute (read
-off the daemon's audit as a 60 s `ping` spacing), killing and restarting the daemon brought the
-connector back **151 s** later — the brief was ≤90 s, so **the target is not met in this scenario**.
-The watchdog was running (`sys.connector_status` → `state: running, wakes: 6, activityPosts: 186`)
-and it is what performed that reconnection: the transport's own record is
-`watchdog wake (worker alarm after 59207 ms of page silence): 3 heartbeats unanswered`, which is the
-alarm's reconnect branch, not the heartbeat timer's. What gated it is the miss limit in front of it:
-a half-open socket is only *declared* dead after three unanswered heartbeats, and three throttled
-ticks are three minutes of silence — the alarm's earlier wakes took the "…unanswered heartbeat(s) —
-pinging now" branch, and a ping into a dead socket cannot prove anything. So the promise this section
-can make is: **once the transport agrees the socket is dead, the alarm reconnects in seconds instead
-of waiting for a throttled timer.** Making a *single* unanswered heartbeat plus a wake mean "dead" is
-the obvious next change, and it is deliberately not made here (§10.22).
+**The machine measurements, against the target (026b batch 2b and 026c, 3.2.186, 2026-09-23).** With
+the window out of the foreground and its page ticking at ~1/minute (read off the daemon's audit as a
+60 s `ping` spacing), killing and restarting the daemon brought the connector back **151 s** and
+**135 s** on the first two runs — the brief was ≤90 s. The watchdog was running
+(`sys.connector_status` → `state: running, wakes: 6, activityPosts: 186`) and it is what performed
+those reconnections: the transport's own record is `watchdog wake (worker alarm after
+59207 ms of page silence): 3 heartbeats unanswered`, the alarm's reconnect branch, not the heartbeat
+timer's. What gated it was the miss limit in front of it: a half-open socket was only *declared* dead
+after three unanswered heartbeats, and three throttled ticks are three minutes of silence — the
+alarm's earlier wakes took the "…unanswered heartbeat(s) — pinging now" branch, and a ping into a
+dead socket cannot prove anything.
+
+**Both of those were fixed in 0.4.18 (026c), and this is what changed and what it bought.** One
+unanswered heartbeat plus a wake now means dead (§10.22), and the wake's reconnect no longer goes
+through `setTimeout(…, 0)` — a throttled page defers zero-delay timers along with everything else,
+so "immediate" had a timer in it that could cost a whole tick. Five more machine runs (same method)
+after those changes:
+
+| run | connector | daemon took to listen | kill → hello | listening → hello | what the wake reported |
+|---|---|---|---|---|---|
+| A | 0.4.18, before the timer fix | 4.9 s | **62.8 s** | **57.9 s** | 51 104 ms of silence, 1 unanswered heartbeat |
+| B | same | 54.3 s (slow start, unrelated) | 114.9 s | **60.6 s** | 51 103 ms, 1 unanswered heartbeat |
+| C | same | 4.7 s | 101.3 s | 96.7 s | 51 108 ms, 1 unanswered heartbeat |
+| D | 0.4.18, timer fixed | 4.6 s | 93.4 s | **88.8 s** | 48 488 ms, 1 unanswered heartbeat |
+| E | same | 4.6 s | **74.6 s** | **70.0 s** | 48 476 ms, 1 unanswered heartbeat |
+
+Read it in two parts, because one number would be a lie. **The connector's own share is the wake's
+silence plus about a second — 48.5–51.1 s measured, against the 45–60 s the design predicts** — and
+that is what the fix bought: the same measurement was 135–152 s before. The *total* from the kill
+additionally contains the page's own throttled tick: a backgrounded page runs its timers about once
+a minute, so where in that cycle the daemon died decides how long the page has left to notice, and
+the total therefore lands anywhere in [connector's share, ~one tick + connector's share]. Five runs
+spread exactly there (62.8 s … 114.9 s), which is why this section claims a *share*, not a total. Two
+same-instant controls say the same thing: in run D the user's own window (never backgrounded by the
+test, and not throttled) came back in **24 s**, while the throttled test window took 93 s.
+
+If a *total* ≤90 s is ever required, the only levers left are the two constants in this design (the
+15 s check and the 45 s silence threshold) — both deliberate, both spec-level, neither changed here.
 
 **One alarm per editor runtime.** The editor re-evaluates the bundle on every menu click, so the
 Worker is owned by the shared runtime the transport already lives in (024): a later evaluation
@@ -1293,10 +1316,16 @@ Recorded rather than hidden, so a future session does not have to rediscover the
     under a 60 s throttle that is three minutes of silence — the alarm's earlier wakes hit the
     "…unanswered heartbeat(s) — pinging now" branch, and a ping into a dead socket proves nothing.
     So: the watchdog bounds the loss to one throttled cycle *once the transport already agrees the
-    socket is dead*, and no better. Whether a wake with an outstanding heartbeat should reconnect
-    outright (the daemon's answer to that ping would have arrived and cleared the counter, so
-    "wake + an unanswered heartbeat" is already strong evidence) is an open question for the next
-    batch, not a claim this document makes.
+    socket is dead*, and no better. **Closed in 0.4.18 (026c):** a wake with *any* unanswered
+    heartbeat now means dead outright, and the wake's reconnect no longer passes through
+    `setTimeout(…)` — which a throttled page defers along with every other timer, so "immediate" used
+    to contain up to a whole tick of delay. Five machine runs after the change gave 62.8 / 114.9 /
+    101.3 / 93.4 / 74.6 s from the kill and 57.9 / 60.6 / 96.7 / 88.8 / 70.0 s from the moment the
+    daemon could be reached, against 135–152 s before §7.1's numbers: the connector's own share of a
+    recovery is now the wake's silence plus about a second (**48.5–51.1 s measured**), and the rest
+    of the spread is the page's own ~1/minute tick — where in that cycle the daemon died is not
+    something a connector can control, so the *total* is phase-dependent while the *share* is not.
+    §7.1 carries the table.
     **Three more measurements from the same batch, because one number would have been a guess.**
     The same experiment was run three times (window out of the foreground, daemon killed and
     restarted): **151.5 s**, **135.5 s**, and a three-window run in which **all three** windows came
