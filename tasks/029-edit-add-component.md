@@ -161,3 +161,38 @@ bw_scratch/test 页给一颗测试 IC 补去耦电容：成功、人工先补→
   先例时 GND 是通用例外，其他网仍拒绝）；② apply 把 facts 架传给幂等探测（029-b 遗留）；③ case a 跑到
   **真成功**（两端连通 + 网表 ok + 保存 + mtime + 重审 OK）；④ 补跑 b/c/d/f；⑤ 顺带收 029-a 遗留
   （`edit preview` 认 add-component、report.json 显式 schema 测试）。
+
+### 029-c · 交卷（2026-09-24，子代理 agent-43）
+
+- **case a 真成功**：落点 (300,295)；plan 两条连接都判 `wire`；apply 逐条执行 →
+  网表回读 `1→NET4 ok, 2→GND ok`、范围 +1、`sch.doc.save` 调过、活工程重审 **findings 0 条**。
+  证据 `outputs/029c_case_a.txt`（含保存后网表 `NET4=[U9.2,U9.4,C1.1]` / `GND=[C1.2]`）。
+- **真机挖出三条硬事实（都进代码注释 + 替身用例）**：
+  ① `sch.place_wire` 带**对角线段永不返回**（daemon 30s 超时 2/2；同页正交 0.4s）⇒ 新增 `wire_route()` 强制正交；
+  ② **落点=器件原点，不是引脚**（`sch.component_pins` 实测 pin1=(x−20,y)、pin2=(x+20,y)）⇒ wire 从新件自己的脚画起，
+     读不到时退回落点并在 notes 点名；"从落点画线就通了"是旧误读；
+  ③ **`sch.place_netlabel` 在本机不可用**（`createNetLabel did not settle`；geometry meta 说
+     `read sch_PrimitiveNetLabel: absent`）⇒ GND label 兜底本机无法执行，case a 让 GND 端也走 wire
+     （页面先有一段 GND 线段，未新增机制）。
+- **b/c/d/f 都跑到**：b 手放 C5(22uF,已接地) → 同一 plan apply = `already_applied`、`write.calls=0`
+  （C5 的 22uF 只能来自 facts 架 ⇒ **架透传真机证到**）；c 同一 plan 再 apply = `designator_taken` exit 4 零写入；
+  d 正交小走线占满 9 个阶梯位 → plan exit 5、文案列全 9 位、未写 plan、原点无件；
+  f apply 中途杀 daemon → 写都 ok 但收尾 DISCONNECTED → `unknown: range_unreadable` exit 3、未重试、save 未发；
+  重启后独立读回证明写其实落了，但那一轮不声称。
+- **零残留**：bw_scratch (b362ce1f…) 已删；`doc.list` 6 文档、geometry 1 器件 0 线、identity consistent；
+  **前台已复位**（`doc.focus` → P1.Schematic1）。daemon 已复位在线（3 窗）。
+- 三线：pytest **1425 passed**（最终字节，主代理复跑一致）；connector/tsc 未跑（未动 connector）。
+  改动 4 文件 sha256 亲核一致（cli `73553328…`、changeplan `eea2f26c…`、addcomponent `5df65400…`、测试 `e274114b…`）。
+  变异 **2/2 CAUGHT**（M1 删 GND label 兜底 → 2 红；M2 wire 起点退回落点 → 1 红），cp 备份 + cmp 字节还原。
+- **未做**：`edit preview` 认 add-component；report.json target 显式 schema 测试。
+
+### 主代理裁决（2026-09-24，029-d 按此执行）
+
+1. **GND 端机制**：先 probe `sch.place_power`（真器件、参与网表）。可用 → 全局网端点在半径内无几何时用
+   **power-flag** 连接（kind 写进 plan、范围差异计入）；不可用 → 拒绝并说出缺什么，**禁止悬悬空名线**。
+2. **apply 重审**：add-component 的 apply 在 save 后加"**重新导出→离线 parse→重跑规则**"的重审路径
+   （029-c case a 手工做的 `checkup --project` 就是这条，收编进 apply 内置）；`--file` 路径对
+   component-value 的 016 语义一字不动。
+3. **重复 apply 报 already_applied**：幂等探测**提到位号/落点前置检查之前**（探测只读，安全不降）——
+   `designator_taken` 技术安全但误导（活儿其实干完了），already_applied 才是诚实答案。
+4. 遗留收编：`edit preview` 认 add-component、report.json target 显式 schema 测试。
