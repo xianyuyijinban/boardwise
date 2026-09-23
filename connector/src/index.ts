@@ -34,9 +34,29 @@ import {
   type TransportState,
 } from './transport';
 import { VERSION, isVersionOlder } from './version';
+import { Watchdog, type WatchdogStatus } from './watchdog';
 
 let transport: Transport | undefined;
 let facade: EditorFacade | undefined;
+
+/**
+ * The background alarm, one per editor runtime (026b, form A).
+ *
+ * Owned here because this file owns the connection, and for the same reason the
+ * transport is shared through a published record: the editor re-evaluates the
+ * bundle on every menu click, so "one Worker per evaluation" would leak a
+ * thread per click. A later evaluation reaches the runtime that published this
+ * object and never calls this module's own {@link ensureWatchdog} at all — the
+ * singleton is a consequence of the shared runtime, not a second guard beside
+ * it (`tests/watchdog.test.mjs`, "a fresh evaluation of the bundle adopts the
+ * runtime and builds no second alarm", drives exactly that: a fresh evaluation
+ * plus a reconnect, and one Worker constructed in total).
+ *
+ * `undefined` until the first connection attempt: with auto-connect off there
+ * is nothing for an alarm to watch, and a Worker started then would only be
+ * something else to explain in `About…`.
+ */
+let watchdog: Watchdog | undefined;
 
 /**
  * When this module was evaluated.
@@ -329,6 +349,16 @@ export type ConnectorStatus = typeof status & {
   bootstrapAt?: string;
   /** When `activate()` was dispatched, ISO; absent when it never was. */
   activateAt?: string;
+  /**
+   * What the background alarm is doing (026b), or absent when none was ever
+   * built (auto-connect off, or no connection attempt yet).
+   *
+   * Reported as a reading, never as a promise: `state: 'unavailable'` means
+   * this editor refused a Worker, and the connector then has **no** background
+   * alarm — which is exactly what `sys.connector_status` exists to say out
+   * loud, since the observable difference on the machine is hours of silence.
+   */
+  watchdog?: WatchdogStatus;
 };
 
 /**
@@ -443,6 +473,11 @@ export function __setFacadeForTests(next: EditorFacade | undefined): void {
   facade = next;
   transport?.stop();
   transport = undefined;
+  // The alarm belongs to the run that built it (026b). A Worker left ticking
+  // between tests would be a leaked thread *and* a wake arriving in the next
+  // test's transport — the same reason the transport is stopped right above.
+  watchdog?.stop();
+  watchdog = undefined;
   // Tests drive activation explicitly, so any background connect is a race
   // waiting to happen: it could fire between a test's `about()` and its
   // `activate()` and change what the box says. Reset the gate for good.
@@ -509,6 +544,37 @@ function config(): ResolvedConfig {
   return resolveConfig(facade?.storage);
 }
 
+/**
+ * The alarm for this runtime: the existing one, or a new one (026b §2.1).
+ *
+ * The `if (watchdog) return watchdog` line is the whole singleton: a manual
+ * reconnect, a second connect path, or a re-run of the bootstrap all land here
+ * and reuse the Worker that is already ticking. Deleting that line is the leak
+ * `tests/watchdog.test.mjs` bites on — "a manual reconnect replaces the socket,
+ * never the alarm" and "a fresh evaluation of the bundle adopts the runtime and
+ * builds no second alarm" — because every connect would then start another
+ * thread that nothing ever terminates.
+ *
+ * A watchdog that could not be built is kept, not retried: the host's refusal
+ * (no `Worker`, a CSP that blocks `blob:`) is a fact about this editor, and
+ * `About…` reports it rather than pretending the connector is watched. The
+ * connector itself is unaffected — this is a safety net, not a requirement.
+ */
+function ensureWatchdog(): Watchdog {
+  if (watchdog) return watchdog;
+  const created = new Watchdog({
+    // The transport is looked up at wake time, never captured: a manual
+    // reconnect replaces it, and a wake must reach whatever owns the wire now.
+    onWake: (info) => {
+      transport?.wake(`worker alarm after ${info.silenceMs} ms of page silence`);
+    },
+    onLog: (message) => logLine(message),
+  });
+  watchdog = created;
+  created.start();
+  return created;
+}
+
 /** Build a transport from the current config, wired to the editor. */
 function buildTransport(current: ResolvedConfig): Transport {
   return new Transport({
@@ -565,6 +631,11 @@ function buildTransport(current: ResolvedConfig): Transport {
       );
       checkMinimumVersion(data.minConnectorVersion);
     },
+    // The alarm is told about every sign of life by the transport itself
+    // (`noteActivity` at the heartbeat, on inbound traffic, on a connect
+    // attempt and on the handshake). One method wide, and read at call time so
+    // a watchdog replaced by a later evaluation is reached, not a stale one.
+    watchdog: { noteActivity: () => watchdog?.noteActivity() },
     onLog: (message) => logLine(message),
   });
 }
@@ -750,6 +821,10 @@ async function connectOnce(): Promise<void> {
     logLine('auto-connect is off; use the Reconnect menu item');
     return;
   }
+  // The alarm comes up with the connection, never before it: with auto-connect
+  // off there is no socket for it to watch, and `About…` would then have to
+  // explain a running Worker that watches nothing (026b §2.2).
+  ensureWatchdog();
   transport = buildTransport(await connectableConfig());
   await transport.start();
 }
@@ -791,6 +866,9 @@ async function runReconnect(): Promise<void> {
   claimConnectionAttempt();
   transport?.stop();
   const current = await connectableConfig();
+  // The same alarm, not a second one: a manual reconnect replaces the socket,
+  // never the Worker (026b §2.1).
+  ensureWatchdog();
   transport = buildTransport(current);
   logLine(`manual reconnect to ${current.url} (token ${current.tokenSource})`);
   await transport.start();
@@ -802,10 +880,17 @@ async function runReconnect(): Promise<void> {
  *
  * `quiet` is for deactivation: the editor is taking the extension away, so a
  * toast telling the user their bridge stopped is noise they cannot act on.
+ *
+ * The alarm goes with the connection (026b §2.1): a Worker left ticking after
+ * `stop()` would keep waking a transport that is not there, and "a stopped
+ * transport sends nothing, ever" (docs/bridge.md §7) has to stay true of the
+ * thread too — so it is terminated, and the next connect builds a fresh one.
  */
 function runStop(quiet = false): void {
   transport?.stop();
   transport = undefined;
+  watchdog?.stop();
+  watchdog = undefined;
   status = {
     ...status,
     state: 'stopped',
@@ -925,6 +1010,11 @@ function runAbout(): void {
             : `connector version: ok (the daemon accepts >= ${status.minConnectorVersion})`,
         ]
       : []),
+    // What keeps this window recoverable while it is in the background (026b).
+    // Next to `state:` on purpose: this is the line that explains *why* a
+    // background window's state can lag, and the only place a user can see
+    // that this editor refused a Worker.
+    `watchdog: ${watchdogLine()}`,
     `auto-connect: ${current.autoConnect ? 'on' : 'off'}`,
   ];
   if (status.lastError) lines.push(`last error: ${status.lastError}`);
@@ -1046,6 +1136,37 @@ function tokenLine(current: ResolvedConfig): string {
     return `Math.random — NOT a CSPRNG — ${current.token.length} characters (never displayed)`;
   }
   return `${current.tokenSource}, ${current.token.length} characters (never displayed)`;
+}
+
+/**
+ * Whether a background alarm is watching this window (026b), in the words a
+ * user reads.
+ *
+ * Deliberately narrow, and deliberately *not* a claim about what the alarm
+ * achieves: P3 measured that a Worker's clock survives page throttling, but no
+ * controlled reproduction of the frozen state exists (026b §一), so the box
+ * says who is running — `running` or the host's own refusal — and nothing else.
+ * "immunity" is a word this line must never contain.
+ */
+function watchdogLine(): string {
+  if (!watchdog) {
+    if (status.state === 'idle' && status.detail === 'auto-connect is off') {
+      return 'not started (auto-connect is off)';
+    }
+    // A stopped connection had an alarm and it was terminated with the socket
+    // (`runStop`) — saying "no connection attempt yet" there would be false.
+    if (status.state === 'stopped') return 'stopped (the alarm goes with the connection)';
+    return 'not started (no connection attempt yet)';
+  }
+  const report = watchdog.status();
+  if (report.state === 'unavailable') {
+    return `unavailable(${report.reason ?? 'the host gave no reason'})`;
+  }
+  if (report.state === 'running') {
+    return `running (checks every ${report.checkIntervalMs} ms, wakes after `
+      + `${report.activityTimeoutMs} ms of page silence, wakes so far: ${report.wakes})`;
+  }
+  return report.state;
 }
 
 /**
@@ -1262,5 +1383,10 @@ function readStatus(): ConnectorStatus {
     evaluations,
     ...(moduleBootstrapObservedAt ? { bootstrapAt: moduleBootstrapObservedAt } : {}),
     ...(activateObservedAt ? { activateAt: activateObservedAt } : {}),
+    // Read at call time, and only when there is an alarm: "no watchdog key" and
+    // "a watchdog that is not running" are different statements, and the
+    // diagnostics that read this (`sys.connector_status`, `About…`) must be
+    // able to tell them apart (026b §2.3).
+    ...(watchdog ? { watchdog: watchdog.status() } : {}),
   };
 }

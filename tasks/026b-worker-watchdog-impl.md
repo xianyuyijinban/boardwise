@@ -91,3 +91,30 @@
 - Worker 脚本必须内联（blob），不引外部文件（eext 单文件分发改不起）。
 - 禁止向 Worker 转发任何 `eda` 调用（P2 已证不可行，别留"将来也许"的转发脚手架）。
 - About 的 watchdog 行只报事实（running/unavailable+原因），不许报"免疫"。
+
+## 六、交卷记录
+
+### 026b 批 2a · 交卷（2026-09-23，子代理 agent-43）
+
+- 范围：P6 探针 + 形态 A 实现 + mock 单测 + 清理；**未碰真机**、未动 git；批 2b 未做。
+- 交付：`connector/` 0.4.17。新模块 `src/watchdog.ts`（Worker 闹钟 + 页面半边 + 降级 + stop 连带 terminate）；
+  `transport.ts` 四处活性上报 + `wake()` 四分支 + `reconnectNow()`；`index.ts` `ensureWatchdog()` 单例
+  （挂 024 共享运行时）+ About `watchdog:` 行 + `ConnectorStatus.watchdog`；`actions.ts` 删 4 个测量模式（−703 行）、
+  `status` 转正 `sys.connector_status`、`sys.worker_probe` 只剩 `nativeWs`（P6）；`protocol.py` + `docs/bridge.md`
+  §4/§6/§7 同步（§7 重写为 7.1：机制 + 三态表 + 诚实边界 + 单例）。
+- 三线（交付态）：pytest **1388 passed**（基线同数）· connector **418 pass / 0 fail** · `tsc --noEmit` 干净；
+  dist `sha256 8fe4f591…`，**256827 B**。
+- 变异 **2/2 CAUGHT**：①`Transport.wake()` 收了 wake 不动作 → 5 红；②删 `ensureWatchdog` 单例守卫 → 2 红；
+  还原 sha256 `transport.ts ae9ae2bf…`、`index.ts 85157990…`（cp 备份 + cmp 一致，未用 git checkout）。
+- P6：**daemon 侧实测通**（Node 原生 WebSocket 51 ms 连上、54 ms 收 banner，无子协议要求，
+  `outputs/026b_p6_offline.txt`）；**页面/Worker 侧待批 2b**（CSP 是页面内事实，用
+  `sys.worker_probe {"mode":"nativeWs"}` 测）。探针两半跑同一段代码，`verdict` 三档不许合并。
+- 2b 前置：`sys.connector_status` 是新目录项，**先重启 daemon** 才能 `bridge call` 到它。
+- 未做（属 2b）：SKILL 坑表 / PROGRESS / §10.22 同步；doctor 集成（§2.4 明确本批不动）。
+
+### 主代理复验（2026-09-23）
+
+- 亲手复跑三线：pytest **1388 passed**（114.5s）· connector **418 pass / 0 fail** · tsc 干净——与交卷一致。
+- sha256 抽核一致：dist `8fe4f591…`（256827 B）、`transport.ts ae9ae2bf…`、`index.ts 85157990…`。
+- **裁决**：`nativeWs` 保留为 `sys.worker_probe` 唯一模式（PROBE-ONLY），批准——批 2b 的 P6 页面侧判定
+  依赖它，2b 跑完即删；任务书 §2.4 的"删净"以本裁决为准顺延到 2b。

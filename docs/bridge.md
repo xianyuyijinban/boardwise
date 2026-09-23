@@ -495,7 +495,8 @@ declaring `confirm`).
 | `sys.get_document_source` | connector | read | connector | `maxChars` | `{source, chars, maxChars, truncated, data, headLines, tail?, note?}` — the focused document's own source text, **unjudged**: the declaration is one line (`Promise<string \| undefined>`, `@beta`) and says nothing about the format, so whether it equals the `.epru` record stream is a probe question (`outputs/025_probe_p2_document_source.txt`). Truncates to `maxChars` and echoes both ends — a stream is recognised by its first and last records, and a head without a tail cannot be told from a different format | 30 s |
 | `sch.drc_check` | connector | read | connector | `strict`, `userInterface`, `includeVerboseError` | `{source, checked, mode: 'counts'\|'boolean'\|'unexpected', counts, entries?, total?, byType?, unparsed?, passed, elapsedMs, args, page, uiRequested, notes?, raw?}` — `sch_Drc.check(strict, false, true)`. (025 §0, measured) the host's verbose answer holds **aggregate counts only**; the per-item detail goes to the bottom panel and `SYS_PanelControl` has no read interface, so the array is returned **verbatim** under `counts` with `total`/`byType` summed from the entries' own fields and any entry lacking a numeric `count` counted in `unparsed` rather than folded in as zero. A boolean answer is mode `boolean`, never an empty result. Throws on a non-schematic page; the refusal names the focused document | 30 s |
 | `pcb.drc_check` | connector | read | connector | `strict`, `userInterface`, `includeVerboseError`, `maxChars` | `{source, checked, available, mode: 'groups'\|'boolean'\|'unexpected', groups, counts: {groups, returnedGroups, errors, errorsSource, items, byLabel, jsonChars}, truncated, elapsedMs, args, page, uiRequested, reason?, notes?, raw?}` — `pcb_Drc.check(strict, false, true)`, the DRC that *does* carry item detail. **Measured 2026-09-23** (`outputs/025_probe_p4_pcb_drc.txt`): the tree is `group.list[].list[]`, every node states its own `count`, and a leaf carries `ruleName`/`errorType`/`explanation.str`/`obj1`/`obj2`/`globalIndex`/`parentId`. Groups come back **verbatim** for the Finding-mapping layer; whole groups are dropped (never cut in half) to stay inside `maxChars`. A non-PCB page is never reported as a clean board — the declaration promises `undefined`, the host actually **throws** `指定的主题消息在对应的画布内没有相关订阅`, and both become `checked: false` + a `reason` naming the focused document. An *empty* PCB is not a zero-finding board either: the test project's empty PCB answered one "Netlist Error / Import Changes" (schematic has parts, PCB does not) | 30 s |
-| `sys.worker_probe` | connector | read | connector | `mode`, `op`, `intervalMs`, `maxTicks`, `timeoutMs`, `id`, `oneShot` | **PROBE-ONLY, TEMPORARY (026)** — `mode: 'worker'` (default): builds a `blob:` Worker and reports `{support, blobUrl, construct, messaging: {delivered, ready, ack, roundTripMs, ticks, tickIntervalsMs, verdict, raw}, terminated}`; the Worker's own `probes` carry `typeof eda` / `typeof globalThis.eda`, which is what decides form A (Worker alarm) vs form B (transport inside the Worker). `mode: 'pageTimer'` with `op: start\|read\|stop`: a page-side interval timestamp log (`count`, `intervalsMs`, `min/median/max/mean`, `gaps{over2s,over10s,over60s}`) — the background-throttling measurement; `mode: 'workerTimer'` keeps the same log inside the Worker instead (the control for that measurement); `mode: 'hostTimer'` with `op: start\|read\|stop` (params `id`, `oneShot`) drives the host's own `eda.sys_Timer.setIntervalTimer(id, ms, callFn, ...args)` and reports `{timerId, oneShot, running, intervalMs, elapsedMs, callbackArgs, setterReturned, facts, error}` — the measurement that decides whether a host timer can stand in for the Worker alarm (026 P5: it cannot, its callbacks are throttled with the page). `mode: 'status'`: the About box's own counters from the shared runtime record (`moduleBootstrapObserved`, `activateObserved`, `evaluations`) — the cold-start-after-sideload measurement. Read-only, and **a failure is reported as that failure** (no Worker / CSP refusal / no answer) — never as an empty success | 30 s |
+| `sys.connector_status` | connector | read | connector | — | `{present, readStatus, status, moduleBootstrapObserved, activateObserved, evaluations}` — the About box's own read-out, for a caller who cannot open the box. `status` is the same `ConnectorStatus` the box renders (so the two can never disagree): the transport `state`, the daemon's `paired`/`fingerprint`/`minConnectorVersion`, the 024 lifecycle counters — **`moduleBootstrapObserved`** (was our bundle evaluated in this editor runtime at all?), **`activateObserved`** (did the host dispatch `activate()`?), **`evaluations`** (how many times the bundle was evaluated) — and, since 026b, **`watchdog`**: `{state: 'running'\|'unavailable'\|'not started'\|'stopped', reason?, wakes, activityPosts, checkIntervalMs, activityTimeoutMs}`. That last field is the one that answers "why did this window sit there for hours": `running` means a Worker alarm is watching the page, `unavailable(<reason>)` means the host refused one and the window recovers **only** when the user brings it to the front (§7). `present: false` means no evaluation has published its runtime record — an extension that is not loaded, which is a different failure from one that is loaded and inert. Read-only: it never starts, stops or reconnects anything | 30 s |
+| `sys.worker_probe` | connector | read | connector | `mode`, `url`, `timeoutMs` | **PROBE-ONLY, TEMPORARY (026b) — one mode left, and it retires with its answer.** `mode: 'nativeWs'` (the only accepted value; the retired `worker`\|`pageTimer`\|`workerTimer`\|`hostTimer`\|`status` modes are refused with `BAD_REQUEST` naming what replaced them) is the P6 question: **can a native `WebSocket` reach the daemon** at `url` (default `ws://127.0.0.1:61190/eda`) **from the extension page, and from a `blob:` Worker?** Both scopes are probed separately, and the *same* code runs in each (`String(function)` interpolated into the worker source), because the page's answer is not evidence about the Worker's — the Worker obeys its own CSP, and if it can open the socket itself then form B′ (transport inside the Worker) becomes possible. Each half reports `{construct: {ok, error?}, opened, messages, sample, events, elapsedMs, verdict}`, where `sample` is the daemon's own first frame (the banner, §3.2) truncated, and `verdict` distinguishes `opened, and the daemon spoke first` from `opened, silent` from `never opened` — "opened but said nothing" is not the same reading as "could not connect". It does **not** test the application handshake (that needs the paired token). A refusal (no `Worker`, a CSP that blocks `blob:` or `connect-src`) is reported as that refusal, never as an empty success. Always terminates its Worker and revokes its blob URL | 30 s |
 | `sch.readback` | connector | read | connector | `includePrimitives` | `{kind: 'sch', components, primitives, componentCount}` | 30 s |
 | `pcb.readback` | connector | read | connector | `includePrimitives` | `{kind: 'pcb', components, primitives, componentCount}` | 30 s |
 | `export.screenshot` | connector | read | connector | `fit` | `{format, encoding: 'base64', bytes, data}` — **diagnostic only**: cached frames | 60 s |
@@ -736,10 +737,17 @@ intentional — it separates the two failure families:
 | `stopped` | stopped from the menu | — |
 
 The extension's **About…** menu item prints the state, the URL, where the token came from, the
-pairing fingerprint the daemon reported, and the last error. It is the fastest way to see *why*
-nothing connects. The token's *value* is never shown — not in About, not in the log panel, not on
-the daemon console, not in the audit log. Only its 8-hex fingerprint ever leaves the daemon, which
-is why the fingerprint is the one thing the two sides can compare.
+pairing fingerprint the daemon reported, whether the background watchdog is running, and the last
+error. It is the fastest way to see *why* nothing connects. The token's *value* is never shown —
+not in About, not in the log panel, not on the daemon console, not in the audit log. Only its 8-hex
+fingerprint ever leaves the daemon, which is why the fingerprint is the one thing the two sides can
+compare.
+
+The `watchdog:` line is one of four readings, and it is a fact about this editor rather than a
+promise about behaviour (§7): `running (checks every 15000 ms, wakes after 45000 ms of page silence,
+wakes so far: N)`, `unavailable(<the host's own refusal>)`, `not started (auto-connect is off)` or
+`not started (no connection attempt yet)`. `unavailable` is the one to act on: that window will not
+notice a dead socket while it is in the background, and only bringing it to the front recovers it.
 
 ## 7. Liveness and reconnect
 
@@ -758,8 +766,56 @@ consequences:
    the second attempt silently do nothing.
 
 Backoff doubles from 1 s to a 30 s ceiling and resets on a successful connect. `stop()` clears
-every timer and closes the socket; a stopped transport sends nothing, ever (asserted in the
-suite, with a wait long enough to be meaningful).
+every timer and closes the socket and the watchdog Worker; a stopped transport sends nothing, ever
+(asserted in the suite, with a wait long enough to be meaningful — and since 026b with the Worker's
+own message count asserted alongside).
+
+### 7.1 The background watchdog (026b)
+
+Both of the mechanisms above are **page timers**, and a background editor window's page timers are
+the problem. Measured on 3.2.186 (026 probe batch, `outputs/026_probe.md`): with the window pushed
+out of the foreground, a 1 s page clock ticked **10 times in 242 s** (Chromium's intensive
+throttling, ~1 tick a minute); the worst recorded case is the 7-hour incident (batch 2 of 025), where
+a window in the frozen state never reconnected at all until the user brought it to the front. The
+same probe batch measured the other half, and it is the premise of the fix: **a `blob:` Worker's own
+timers are not throttled with the page** — in the same 153 s in which the page managed 20 ticks, the
+Worker produced 153, maximum gap 1015 ms. A host-level timer (`eda.sys_Timer`) was measured too, and
+is **not** an alternative: its callbacks are throttled exactly like the page's (P5).
+
+So the connector ships one alarm in a Worker, and the page keeps it informed:
+
+- the transport reports **activity** on every sign of life — heartbeat sent, any inbound frame, a
+  connect attempt, a successful handshake;
+- the Worker checks every **15 s**, and once the page has been silent for longer than **45 s** it
+  posts `{type:'wake'}` — **one per check**, not one per silence, because a frozen page swallows
+  messages and must find one waiting the moment it runs again;
+- the page's reaction is `Transport.wake()`: `connected` with nothing outstanding → nothing to do
+  (the activity stamp already stops the alarm repeating); `connected` with unanswered heartbeats →
+  ping now, and past the miss limit reconnect now instead of waiting for the throttled heartbeat
+  timer; `connecting`/`handshaking` → replace the attempt now; `idle`/`reconnecting` → connect now
+  with the backoff ladder reset, because the silence was the page's and says nothing about the
+  daemon.
+
+| window state | page timers | without the watchdog | with the watchdog |
+|---|---|---|---|
+| foreground | normal | normal | unchanged (the alarm only ever adds a Worker) |
+| background (throttled) | ~1 tick a minute | heartbeat drops to the same rate; a reconnect after a daemon restart waits for a throttled timer | recovers within one throttled cycle: the wake is queued and the reaction does not wait for a timer |
+| frozen (the 7-hour state) | stop entirely | **never reconnects** until the window is brought to the front | the wake is already queued when the page unfreezes, and the reconnect happens then, without the backoff |
+| page discarded | dead | nothing recovers | nothing recovers — the Worker's thread goes with the page |
+
+**Honest boundary.** The throttled row is measured on the machine. The frozen row rests on the same
+Worker-timer measurement plus the queued-message property, and **no controlled reproduction of the
+frozen state exists** (the probe batch's item #2: the minimize APIs do not take effect on 3.2.186) —
+so this table claims "the wake is waiting when the page runs again", not "a Worker survives a frozen
+page". This document must never say the watchdog makes a window immune: it bounds the damage the
+page's own throttling can do.
+
+**One alarm per editor runtime.** The editor re-evaluates the bundle on every menu click, so the
+Worker is owned by the shared runtime the transport already lives in (024): a later evaluation
+adopts the published controller and never builds a second Worker, `stop()` terminates it with the
+socket, and the singleton is asserted in `connector/tests/watchdog.test.mjs`. If the host refuses a
+Worker (a CSP that blocks `blob:`, no constructor at all) the connector runs exactly as before —
+with no alarm — and says so in the log panel and in `About…`; the failure is never silent.
 
 The daemon is the passive side: it does not track per-connector liveness, and removing a window from
 the hub depends on the handler loop exiting. So a *half-open* socket can leave `status` reporting

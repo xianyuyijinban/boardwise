@@ -184,6 +184,18 @@ export type TransportOptions = {
    * `socket` getter below; optional only so tests can inject a fake.
    */
   socket?: EditorWebSocket;
+  /**
+   * The background alarm, told about every sign of life (026b).
+   *
+   * One direction only — the transport reports, it never drives the alarm.
+   * `index.ts` owns the `Watchdog` and hands it in; the wake travels back
+   * through {@link Transport.wake}, which is called by the owner, so this file
+   * stays free of any knowledge of Workers.
+   *
+   * Every call is wrapped: the alarm is a safety net, and a safety net that can
+   * break the liveness loop it guards is worse than none.
+   */
+  watchdog?: WatchdogLink;
   /** Tunables; the tests shrink these to keep runs fast. */
   minBackoffMs?: number;
   maxBackoffMs?: number;
@@ -191,6 +203,16 @@ export type TransportOptions = {
   /** Heartbeats with no answer before the socket is considered dead. */
   heartbeatMissLimit?: number;
 };
+
+/**
+ * The slice of the watchdog the transport talks to (026b).
+ *
+ * Structural on purpose: `transport.ts` must not import `watchdog.ts`'s class,
+ * so a test can hand it a counter and the dependency stays one method wide.
+ */
+export interface WatchdogLink {
+  noteActivity(): void;
+}
 
 export class Transport {
   private socketId: string | undefined;
@@ -231,6 +253,114 @@ export class Transport {
 
   private log(message: string) {
     this.options.onLog?.(message);
+  }
+
+  /**
+   * Tell the background alarm that the page is alive (026b).
+   *
+   * Called from every sign of life the transport produces — a connect attempt,
+   * any inbound frame, a heartbeat that went out, a completed handshake. It
+   * carries no detail on purpose: what the alarm counts is silence, and the
+   * *kind* of traffic is already in the log panel under its own name.
+   *
+   * Never allowed to throw into the caller: the alarm is an observer, and a
+   * broken observer must not stop the heartbeat.
+   */
+  private noteActivity(): void {
+    try {
+      this.options.watchdog?.noteActivity();
+    } catch {
+      /* the alarm is not worth losing a connection over */
+    }
+  }
+
+  /**
+   * The alarm woke us: the page has been silent long enough that the throttled
+   * timers are not to be trusted (026b §2.2).
+   *
+   * This is the whole point of the Worker. In the background a page's timers
+   * fall to about one tick a minute — and in the frozen state measured over the
+   * 7-hour incident they stop — so a heartbeat or backoff timer may not run for
+   * hours. The wake message is *queued* by the Worker and delivered the moment
+   * the page runs again, which is what turns "recovery when the user brings the
+   * window to the front" into "recovery when the page unfreezes".
+   *
+   * Four cases, and the difference between them is what the transport knows:
+   *
+   * - `connected` with no outstanding heartbeat — nothing to do. The activity
+   *   stamp above already stopped the alarm repeating.
+   * - `connected` with unanswered heartbeats — the socket may be half-open, so
+   *   a ping goes out now instead of waiting for a throttled timer. Past the
+   *   miss limit the socket is already judged dead, and waiting for the timer
+   *   that would have judged it is exactly the delay this alarm exists to skip.
+   * - `connecting`/`handshaking` with 45 s of silence behind it — the handshake
+   *   is not coming (the daemon answers a banner immediately and allows 5 s for
+   *   `hello`), so the attempt is replaced now rather than after the daemon's
+   *   own close, which a half-open socket never delivers.
+   * - `idle`/`reconnecting` — nothing on the wire; connect now, with the backoff
+   *   ladder reset, because the silence was the page's and not the daemon's.
+   */
+  wake(source: string): void {
+    if (this.stopped) return;
+    this.noteActivity();
+
+    if (this.state === 'connected') {
+      if (this.missed === 0) {
+        this.log(`watchdog wake (${source}): connected and answering — nothing to do`);
+        return;
+      }
+      if (this.missed >= (this.options.heartbeatMissLimit ?? 3)) {
+        this.reconnectNow(
+          `watchdog wake (${source}): ${this.missed} heartbeats unanswered`,
+        );
+        return;
+      }
+      this.log(`watchdog wake (${source}): ${this.missed} unanswered heartbeat(s) — pinging now`);
+      this.sendPing(`watchdog wake (${source}): ping`);
+      return;
+    }
+
+    if (this.state === 'connecting' || this.state === 'handshaking') {
+      this.reconnectNow(`watchdog wake (${source}): the handshake has been silent for too long`);
+      return;
+    }
+
+    this.log(`watchdog wake (${source}): nothing on the wire — connecting now, backoff reset`);
+    this.backoffMs = this.options.minBackoffMs ?? 1000;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
+    void this.connect();
+  }
+
+  /**
+   * One heartbeat, from wherever it was due. Shared with the wake path.
+   *
+   * `why` is what the log and any resulting reconnect reason are phrased
+   * around, so "the timer got no answer" and "an alarm woke a silent page" stay
+   * distinguishable in the log panel — the difference matters on the machine.
+   */
+  private sendPing(why: string): void {
+    this.missed += 1;
+    try {
+      this.raw(requestFrame('ping'));
+    } catch {
+      this.scheduleReconnect(`${why} send failed`);
+    }
+  }
+
+  /**
+   * Drop whatever is on the wire and reconnect at once, with the ladder reset.
+   *
+   * A wake is evidence about the *page*, not about the daemon, so the backoff
+   * ladder the previous failure climbed says nothing about now: starting it
+   * again would make a frozen window's recovery wait through 1 s … 30 s of
+   * delays for a daemon that has been up the whole time.
+   */
+  private reconnectNow(reason: string): void {
+    this.backoffMs = this.options.minBackoffMs ?? 1000;
+    this.scheduleReconnect(reason, 0);
   }
 
   /**
@@ -286,6 +416,8 @@ export class Transport {
 
   private async connect(): Promise<void> {
     const socket = this.socket;
+    // An attempt is a sign of life: the page is running, whatever the outcome.
+    this.noteActivity();
     if (!socket) {
       this.scheduleReconnect('eda.sys_WebSocket is unavailable');
       return;
@@ -425,12 +557,10 @@ export class Transport {
         this.scheduleReconnect('heartbeat timed out');
         return;
       }
-      this.missed += 1;
-      try {
-        this.raw(requestFrame('ping'));
-      } catch {
-        this.scheduleReconnect('heartbeat send failed');
-      }
+      this.sendPing('heartbeat');
+      // A ping that went out is the page doing its job, whether or not an
+      // answer comes back — the alarm measures the *page*, not the daemon.
+      this.noteActivity();
     }, interval);
   }
 
@@ -445,6 +575,7 @@ export class Transport {
     }
 
     this.missed = 0; // any traffic proves the socket is alive
+    this.noteActivity();
 
     // The handshake hangs off inbound traffic, not off the editor's connect
     // callback (see ensureHello). This line is the fix for task 004b.
@@ -463,6 +594,9 @@ export class Transport {
       if (frame.id === 'hello' || frame.action === 'hello') {
         if (frame.ok) {
           this.setState('connected');
+          // The handshake is the strongest sign of life there is: the whole
+          // path — socket, daemon, pairing — just answered (026b).
+          this.noteActivity();
           this.options.onHelloResponse?.(
             (frame.data ?? {}) as Record<string, unknown>,
           );
@@ -567,7 +701,15 @@ export class Transport {
     this.socket.send(this.socketId, JSON.stringify(frame));
   }
 
-  private scheduleReconnect(reason: string): void {
+  /**
+   * Drop the current attempt and try again after `delayMs` (default: the
+   * current backoff step, which then doubles).
+   *
+   * The explicit delay exists for the watchdog's wake path (026b): "try again
+   * now" and "try again after the ladder's next step" are different statements,
+   * and the wake case is the first one.
+   */
+  private scheduleReconnect(reason: string, delayMs?: number): void {
     if (this.stopped) return;
     this.clearTimers();
     if (this.socketId) {
@@ -579,8 +721,9 @@ export class Transport {
     }
     this.socketId = undefined;
     this.setState('reconnecting', reason);
-    this.log(`reconnecting in ${this.backoffMs} ms: ${reason}`);
-    this.reconnectTimer = setTimeout(() => void this.connect(), this.backoffMs);
+    const delay = delayMs ?? this.backoffMs;
+    this.log(`reconnecting in ${delay} ms: ${reason}`);
+    this.reconnectTimer = setTimeout(() => void this.connect(), delay);
     this.backoffMs = Math.min(this.backoffMs * 2, this.options.maxBackoffMs ?? 30000);
   }
 }
