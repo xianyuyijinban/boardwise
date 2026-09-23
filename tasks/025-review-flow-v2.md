@@ -131,3 +131,24 @@ unknown_parts 逐个 WebSearch 规格书核周边配置；canvas_images 逐张�
 - 证据：`outputs/025_probe_p{1,2,3,4}_*.txt` + `025_probe_api_names.txt`（未入库）；
   test 工程零残留（geometry/doc.list 前后逐字段一致）。
 - 新坑入 SKILL 坑 16：热更后页面 reload 焦点抛家页，读页面前先 `doc.open` 定点。
+
+### 批 2（数据路）· 2026-09-23 上午 · agent-43 执行
+
+- daemon 重启 ×2（第二次因为 getProjectFile 的目录条目后写——**改目录 → 重启 daemon →
+  热更 connector**，顺序反了新动作卡在目录里查不到）+ `bridge call --action` 真实路由复验
+  四个批 1 动作全通（`outputs/025b_routed.txt`；pcb.drc_check 在原理图页 exit 1 是预期边界）。
+- 新动作 `sys.get_project_file`（connector **0.4.15**，与 get_document_file 共用 readArchive；
+  拒绝时给出**这次调用**的门）：真机**权限放行**，1,765,386 B 整工程归档 → **A1 满血路成立**；
+  A1'（逐页导出合并）亦实测，位号集合与整工程模型逐项一致（`outputs/025b_project_file.txt`）。
+- `boardwise checkup`（骨架 + 三级降级 A1→A1'→A3，A2 依批 1 P2 结论不启用）+ `review --live`；
+  report.json 的 source/model 真实、drc/modules/findings/ai_slots 空且标 pending；
+  exit 0/2/3 语义见 docstring（1 待批 3 填 findings 后可达）。
+- test 工程端到端实录 `outputs/025b_checkup_skeleton.txt`（含两份 report.json），零残留。
+- 三线：pytest **1336**（+15）/ connector **365**（+6）/ tsc 干净；离线 eval dev+holdout 与
+  `d6dca3b` 基线**逐字节相同**（dev `bcaf42a8…`、holdout `33c4118a…`）。
+- 变异 3/3 CAUGHT（关 A1' 分支 / tier 撒谎 / 删注册表项）；还原 sha256
+  `cli.py 2cb149d703890b8f…`、`actions.ts 1805ec1344fbdeaf…`。
+- 坑：daemon 重启后 connector 可能**长时间不回来**（后台冻结，本次 7 小时，前台化才自愈）——
+  别只等 90 s，看 audit；`doc.open` 后焦点会变，批处理在 finally 里复位。
+- 发现待办：`update-connector` 在 reload 未完成时误报 FAILED（回读应等预算耗尽再判 mismatch）——
+  独立小修，未做。

@@ -1,0 +1,58 @@
+{
+  "schema": "boardwise.checkup/1",
+  "generatedAt": "2026-09-23T08:50:37+0800",
+  "source": {
+    "tier": "project-file",
+    "tierLabel": "整工程归档（sys.get_project_file → 临时 .epro2 → 离线管线）：满血",
+    "project": {
+      "name": "/test",
+      "friendlyName": "test",
+      "projectUuid": "ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489"
+    },
+    "pageUuid": "b4298962367251c8",
+    "pageType": "page",
+    "hostVersion": "3.2.186",
+    "connectorVersion": "0.4.15",
+    "file": null,
+    "attempts": [
+      {
+        "tier": "project-file",
+        "ok": true,
+        "ms": 792.8,
+        "bytes": 1765386,
+        "sha256": "c8c60361113efd344dbbd6b15b4aa34f34f923f1340560ac7f4dd831b09892e0",
+        "components": 1,
+        "nets": 2
+      }
+    ],
+    "notes": []
+  },
+  "model": {
+    "view": "schematic",
+    "components": 1,
+    "nets": 2,
+    "designators": [
+      "R2"
+    ],
+    "duplicateDesignators": []
+  },
+  "pending": {
+    "drc": "batch 3（DRC → Finding 映射）",
+    "findings": "batch 3/4（规则引擎全扫 → 模块分组）",
+    "modules": "batch 4（模块聚类）",
+    "ai_slots": "batch 4（unknown_parts / canvas_images / summary 槽位）",
+    "reportMd": "batch 4（report.md 人读版）",
+    "canvasImages": "batch 4（export.render 打包）"
+  },
+  "drc": {
+    "schematic": null,
+    "pcb": null
+  },
+  "modules": [],
+  "findings": [],
+  "ai_slots": {
+    "unknown_parts": [],
+    "canvas_images": [],
+    "summary_template": ""
+  }
+}

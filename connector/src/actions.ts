@@ -6183,13 +6183,57 @@ export const reviewMark: ActionHandler = async (params, eda) => {
  * Reported in every refusal's `detail` instead of being asserted as the cause.
  * The connector observes a `throw`; it cannot see the extension's grants, so
  * "you lack a permission" is a claim it has no way to check. What it *can* hand
- * back is the host's own words plus the gates the declaration names — which is
- * the difference between an actionable refusal and a blank one.
+ * back is the host's own words plus the gate the declaration names for *that*
+ * call — which is the difference between an actionable refusal and a blank one.
  */
-const FILE_READ_GATES: readonly string[] = [
-  '工程设计图 > 文件导出 — getDocumentFile / getSchematicFile',
-  '工程管理 > 下载工程 — getProjectFile',
-];
+const DOCUMENT_EXPORT_GATE = '工程设计图 > 文件导出 — getDocumentFile / getSchematicFile';
+const PROJECT_DOWNLOAD_GATE =
+  '工程管理 > 下载工程 — getProjectFile / getProjectFileByProjectUuid';
+const FILE_READ_GATES: readonly string[] = [DOCUMENT_EXPORT_GATE, PROJECT_DOWNLOAD_GATE];
+
+/** One `sys_FileManager` read: where it is, what it is gated on, what empty means. */
+type FileManagerRead = {
+  /** The `eda.*` path, spelled so an error names the exact method. */
+  path: string;
+  /**
+   * The gate *this* call is documented under, or `null` when the declaration
+   * names none. `null` is a real value and is reported as such: quoting a gate
+   * the type package does not attach to this call would be an invented fact
+   * (`getDocumentSource` is documented `@beta` with no permission note at all).
+   */
+  gate: string | null;
+  /** What the declaration says an `undefined` return means. */
+  emptyMeans: string;
+  /**
+   * What the read covers, as a fact for the caller rather than a label for the
+   * action. Measured 2026-09-23: `getDocumentFile` hands back the **focused
+   * document** (plus the library documents it references), NOT the project, so a
+   * caller that assumed project scope would silently review one page
+   * (`outputs/025_probe_p1_document_file.txt`).
+   */
+  scope: 'document' | 'project';
+};
+
+const DOCUMENT_FILE_READ: FileManagerRead = {
+  path: 'sys_FileManager.getDocumentFile',
+  gate: DOCUMENT_EXPORT_GATE,
+  emptyMeans: 'no document is open or the read failed',
+  scope: 'document',
+};
+
+const PROJECT_FILE_READ: FileManagerRead = {
+  path: 'sys_FileManager.getProjectFile',
+  gate: PROJECT_DOWNLOAD_GATE,
+  emptyMeans: 'no project is open or the read failed',
+  scope: 'project',
+};
+
+const DOCUMENT_SOURCE_READ: FileManagerRead = {
+  path: 'sys_FileManager.getDocumentSource',
+  gate: null,
+  emptyMeans: 'no document is open or the read failed',
+  scope: 'document',
+};
 
 /**
  * One budget for both `sys_FileManager` reads, and the daemon's is what binds.
@@ -6225,26 +6269,30 @@ function hostErrorText(error: unknown): { name: string; message: string; text: s
 /**
  * The refusal of one `sys_FileManager` read, as an error that names what happened.
  *
- * `getDocumentFile` and `getDocumentSource` are both documented to `throw` when
- * the extension lacks a grant ("没有权限调用将始终 throw Error"), and this side
- * has no way to read the extension's grants. So the host's message is carried
- * through verbatim, the gates above are listed as the possibilities the package
- * names, and `detail.thrown` separates a refusal from a *missing method* — a
- * distinction that stayed invisible for as long as nothing wrote it down.
+ * Both archive reads are documented to `throw` when the extension lacks a grant
+ * ("没有权限调用将始终 throw Error"), and this side has no way to read the
+ * extension's grants. So the host's message is carried through verbatim, the
+ * gate the declaration names *for this call* is quoted first, and
+ * `detail.thrown` separates a refusal from a *missing method* — a distinction
+ * that stayed invisible for as long as nothing wrote it down.
  */
-function fileReadFailure(path: string, error: unknown): ActionError {
+function fileReadFailure(spec: FileManagerRead, error: unknown): ActionError {
   if (isActionError(error)) return error;
   const host = hostErrorText(error);
+  const gate = spec.gate
+    ? `the type package documents this call's gate as "${spec.gate}"`
+    : 'the type package documents no permission gate for this call';
   return new ActionError(
     'CONNECTOR_ERROR',
-    `${path} threw ${host.text}. The connector cannot read this `
+    `${spec.path} threw ${host.text}. The connector cannot read this `
       + "extension's grants, so whether a permission is missing is not knowable from "
-      + `here; the type package documents these gates: ${FILE_READ_GATES.join('; ')}`,
+      + `here; ${gate} (the gates it does document: ${FILE_READ_GATES.join('; ')})`,
     {
-      path,
+      path: spec.path,
       thrown: true,
       errorName: host.name,
       errorMessage: host.message,
+      gate: spec.gate,
       permissions: FILE_READ_GATES,
     },
   );
@@ -6289,29 +6337,28 @@ async function hostFilePayload(
 }
 
 /**
- * `sys.get_document_file` — the open document as an `.epro`/`.epro2` archive.
+ * The archive read both `sys.get_document_file` and `sys.get_project_file` run.
  *
- * This is the online half of the offline pipeline: the bytes it returns are the
- * same kind of archive `boardwise review` already reads, so a live project can go
- * through `load_epru_text → build_schematic_model` with **no rule changes** —
- * provided the host actually hands the file over. The declaration marks the call
- * as gated on 工程设计图 > 文件导出 and says a missing grant throws every time, so
- * "it worked" is a fact about this editor's grants, not about the API's shape;
- * the probe record in `outputs/025_probe_p1_document_file.txt` is where that was
- * measured, and `detail.permissions` travels with every refusal so a caller knows
- * what to ask the user to enable.
- *
- * `isZip` is reported rather than assumed: an `.epro2` is a ZIP archive, so a
- * payload whose first two bytes are not `PK` will not parse downstream, and
- * saying so here is cheaper than a parser failure one layer away.
+ * One implementation because the only differences are the `eda.*` path, the gate
+ * the declaration names, and what the archive covers — and a second copy of this
+ * error handling is exactly how the two would drift into answering differently
+ * about the same host behaviour. The declaration's three arguments are passed
+ * positionally and in order (`fileName, password, fileType`), with an omitted
+ * optional forwarded as `undefined` rather than `''`: the host drops an argument
+ * it dislikes without rejecting, so the *shape* of the call is part of the
+ * measurement.
  */
-export const sysGetDocumentFile: ActionHandler = async (params, eda) => {
-  const PATH = 'sys_FileManager.getDocumentFile';
+async function readArchive(
+  action: string,
+  spec: FileManagerRead,
+  params: Record<string, unknown>,
+  eda: Eda,
+): Promise<unknown> {
   const requested = params?.fileType === undefined ? 'epro2' : String(params.fileType);
   if (requested !== 'epro2' && requested !== 'epro') {
     throw new ActionError(
       'BAD_REQUEST',
-      `sys.get_document_file needs params.fileType to be epro2 or epro `
+      `${action} needs params.fileType to be epro2 or epro `
         + `(got ${JSON.stringify(params?.fileType)})`,
     );
   }
@@ -6320,33 +6367,34 @@ export const sysGetDocumentFile: ActionHandler = async (params, eda) => {
   const timeoutMs = Number.isFinite(Number(params?.timeoutMs))
     ? Math.min(Math.max(Number(params?.timeoutMs), 200), 600_000)
     : DOCUMENT_READ_TIMEOUT_MS;
-  const call = requireFn(eda, PATH);
+  const call = requireFn(eda, spec.path);
 
   let file: any;
   try {
     file = await raceHostCall(
       settle(call(fileName || undefined, password || undefined, requested)),
-      PATH,
+      spec.path,
       timeoutMs,
       'the host drops an argument it dislikes rather than rejecting it, and this '
         + 'call is gated on a grant the connector cannot see',
     );
   } catch (error) {
-    throw fileReadFailure(PATH, error);
+    throw fileReadFailure(spec, error);
   }
   if (!file) {
     throw new ActionError(
       'CONNECTOR_ERROR',
-      `${PATH} returned ${file === null ? 'null' : 'undefined'} — the declaration says `
-        + 'that means no document is open or the read failed; nothing was exported',
-      { path: PATH, fileType: requested, empty: true },
+      `${spec.path} returned ${file === null ? 'null' : 'undefined'} — the declaration says `
+        + `that means ${spec.emptyMeans}; nothing was exported`,
+      { path: spec.path, fileType: requested, empty: true },
     );
   }
 
-  const payload = await hostFilePayload(file, PATH);
+  const payload = await hostFilePayload(file, spec.path);
   return {
     fileType: requested,
-    source: PATH,
+    source: spec.path,
+    scope: spec.scope,
     encoding: 'base64',
     ...payload,
     ...(payload.isZip
@@ -6356,7 +6404,45 @@ export const sysGetDocumentFile: ActionHandler = async (params, eda) => {
             + 'archive, so these bytes will not parse through the offline pipeline',
         }),
   };
-};
+}
+
+/**
+ * `sys.get_document_file` — the **focused document** as an `.epro`/`.epro2` archive.
+ *
+ * The online half of the offline pipeline: the bytes are the same kind of archive
+ * `boardwise review` already reads, so a live page goes through
+ * `load_epru_text → build_schematic_model` with **no rule changes** — provided
+ * the host hands the file over. The declaration gates the call on
+ * 工程设计图 > 文件导出 and says a missing grant throws every time, so "it worked"
+ * is a fact about this editor's grants rather than about the API's shape; the
+ * probe record is `outputs/025_probe_p1_document_file.txt`, and
+ * `detail.permissions` travels with every refusal so a caller knows what to ask
+ * the user to enable.
+ *
+ * `scope: 'document'` is reported because it was measured, not assumed: the
+ * archive holds the focused page plus the library documents it references, so a
+ * caller after the whole project needs `sys.get_project_file` instead
+ * (batch 2's A-tier ladder is built on exactly this distinction).
+ */
+export const sysGetDocumentFile: ActionHandler = (params, eda) =>
+  readArchive('sys.get_document_file', DOCUMENT_FILE_READ, params, eda);
+
+/**
+ * `sys.get_project_file` — the **whole open project** as an `.epro`/`.epro2` archive.
+ *
+ * This is the one call that yields a complete design in a single payload, which
+ * is why batch 2's data path tries it first (tier `project-file`): one archive
+ * means one parse, and the offline pipeline then sees the same file a human
+ * would have exported by hand — every page, every library document, the PCB.
+ *
+ * The declaration gates it on **工程管理 > 下载工程**, a *different* gate from
+ * `getDocumentFile`'s, so "the document export works" does not imply this one
+ * does. That is worth stating plainly: the permission question has to be asked
+ * per call, which is what `outputs/025b_project_file.txt` records and what the
+ * A-tier ladder exists to survive when the answer is no.
+ */
+export const sysGetProjectFile: ActionHandler = (params, eda) =>
+  readArchive('sys.get_project_file', PROJECT_FILE_READ, params, eda);
 
 /** Default and ceiling for `sys.get_document_source`'s `maxChars`. */
 const SOURCE_DEFAULT_MAX_CHARS = 65_536;
@@ -6403,7 +6489,7 @@ export const sysGetDocumentSource: ActionHandler = async (params, eda) => {
       'this read takes no arguments, so a hang means the host never answered',
     );
   } catch (error) {
-    throw fileReadFailure(PATH, error);
+    throw fileReadFailure(DOCUMENT_SOURCE_READ, error);
   }
   if (typeof source !== 'string') {
     // `undefined` is documented ("当前未打开文档或数据获取失败") and null is not,
@@ -6902,6 +6988,7 @@ export const pcbDrcCheck: ActionHandler = async (params, eda) => {
  */
 const PROBE_CALL_ACTIONS: Record<string, ActionHandler> = {
   'sys.get_document_file': sysGetDocumentFile,
+  'sys.get_project_file': sysGetProjectFile,
   'sys.get_document_source': sysGetDocumentSource,
   'sch.drc_check': schDrcCheck,
   'pcb.drc_check': pcbDrcCheck,
@@ -6923,6 +7010,10 @@ export function buildHandlers(eda: Eda): Record<string, BoundHandler> {
     // and the two DRC checks. All four are reads.
     'sys.get_document_file': bind(sysGetDocumentFile),
     'sys.get_document_source': bind(sysGetDocumentSource),
+    // 025 batch 2: the whole-project archive. Same gate family as the document
+    // read, but a *different* gate (工程管理 > 下载工程) and a different scope —
+    // this is the tier-A1 payload checkup tries first.
+    'sys.get_project_file': bind(sysGetProjectFile),
     'sch.drc_check': bind(schDrcCheck),
     'pcb.drc_check': bind(pcbDrcCheck),
     'sch.readback': bind(schReadback),

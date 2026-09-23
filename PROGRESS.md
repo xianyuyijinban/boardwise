@@ -36,9 +36,9 @@ collects the current truth and the pointers.
 - pytest: **1321 passed** (run with `--basetemp=.tmp_pt_home` on Windows —
   the host's safe-delete hook otherwise eats the summary line and fakes
   exit 1)
-- connector: **359 pass / 0 fail** (`cd connector && npm test`)
+- connector: **365 pass / 0 fail** (`cd connector && npm test`)
 - `npx tsc --noEmit`: clean
-- connector version: **0.4.14** (`connector/extension.json`)
+- connector version: **0.4.15** (`connector/extension.json`)
 - Verified host: EasyEDA Pro **3.2.186** (the only host the bridge is
   calibrated against; every real-host fact in the task books names it)
 
@@ -87,3 +87,4 @@ point. Full measurement history: `tasks/010c-coordinate-convention.md`
 - `ac465ae` 024 connector bootstrap for EasyEDA 3.2.149 skipped-activate host defect (connector 0.4.12; 336/336)
 - 024b About box reads the shared runtime, not the clicking evaluation's empty copy (connector **0.4.13**; menu-click re-evaluations no longer report `never ran / idle` while connected — the fake diagnosis that would have misled the 3.2.149 field test; all box timestamps now local clock, was UTC; `SHARED_RUNTIME_MEMBERS` covers the full `OwnedTransportRuntime` interface; real-host verified on 3.2.186: `activateObserved=yes evaluations=3 state: connected`; connector 340/340)
 - 025 batch 1 probe: online DRC/export actions (`sys.get_document_file` / `sys.get_document_source` / `sch.drc_check` / `pcb.drc_check`, connector **0.4.14**) + `sys.probe` `call` whitelist channel; P1 document-level epro2 full-fidelity path **works** (offline pipeline reused unchanged), P2 getDocumentSource **rejected** as A2 (drops footprint + connectivity), P3/P4 work (P4 PCB-page only, host throws instead of typed `undefined`); connector 359/359, pytest 1321 unchanged (`tasks/025-review-flow-v2.md` §7, `outputs/025_probe_*`)
+- 025 batch 2 data path: `sys.get_project_file` permission **GRANTED** on real host (whole-project .epro2 1.7 MB — tier A1 full-fidelity established) + per-page merge fallback A1' verified identical designator sets; `boardwise checkup` skeleton with three-tier ladder (A1 → A1' → A3-netlist; A2 not enabled per batch 1) + `review --live`; report.json schema `boardwise.checkup/1` with pending batch-3/4 sections; pytest **1336** (+15), connector **365** (+6), offline evals byte-identical to `d6dca3b`; mutations 3/3 caught; known follow-up: `update-connector` false-FAILED when the reload has not landed yet

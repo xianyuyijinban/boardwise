@@ -1,0 +1,114 @@
+025 批 2 第 1 步 · sys.get_project_file 真机 probe（权限 / zip / 离线管线 / 交叉核对）
+================================================================================
+时间：2026-09-23 08:48:53   工作目录：E:\boardwise
+宿主：立创 EDA Pro 3.2.186（pro-api 0.3.18）   connector：0.4.15（本次新增 sys.get_project_file）
+通道：**真实路由** `bridge call --action sys.get_project_file`（daemon 已于 08:40 重启，目录含新动作）
+
+· bridge status
+    boardwise bridge: daemon up on 127.0.0.1:61190
+      connector: connected
+      windows: 1 connected
+      window: inst-003941041-56h9uam1 (connector 0.4.15)  [project test (ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489)]
+        peer: 127.0.0.1:50185  connected: 2026-09-23 08:40:29  last seen: 2026-09-23 08:48:35  routed: 35
+        page: sch b4298962367251c8
+      projects seen: test (inst-003941041-56h9uam1)
+      paired connector: b8b4a348
+· R1 身份：焦点工程 /test（friendlyName test），activeDocument b4298962367251c8 / page，consistent=True
+
+$ bridge call --action sys.get_project_file --params '{"fileType":"epro2"}'   [1134 ms, exit 0]
+    响应（base64 已落盘）：{"bytes": 1765386, "encoding": "base64", "fileType": "epro2", "isZip": true, "mime": "zip", "name": "test.epro2", "savedTo": ".tmp_025b_project.epro2", "scope": "project", "sha256": "72328b6e87abb5e5ace032457dc823ae1313c4d3e5bfee55244f6d7680f72c5e", "source": "sys_FileManager.getProjectFile"}
+
+1. 权限：**放行**（没有 throw）
+   类型包说「本接口需要启用 工程管理 > 下载工程 权限，没有权限调用将始终 throw Error」；
+   这台安装上 getProjectFile 正常返回 File，说明该权限已启用——与 getDocumentFile
+   （工程设计图 > 文件导出）是**两道不同的门**，两道都开着。
+
+2. bytes → 合法 zip？
+   zipfile.is_zipfile = True
+   entry: IMAGE/  (0 B)
+   entry: IMAGE/1899cf1ffd6aeb16.webp  (50482 B)
+   entry: IMAGE/e828ceabf6f890e9.webp  (48844 B)
+   entry: IMAGE/b649ebd87d54e397.webp  (48808 B)
+   entry: IMAGE/2c44ce0a520cafc2.webp  (64272 B)
+   entry: IMAGE/630cf344dec094e1.webp  (64294 B)
+   entry: IMAGE/b4298962367251c8.webp  (22802 B)
+   entry: IMAGE/b3f2f3a10774e831.webp  (60090 B)
+   entry: IMAGE/b2bf61b8eedcbd33.webp  (39196 B)
+   entry: IMAGE/d541ce48640709ca.webp  (47172 B)
+   entry: IMAGE/c46299b312a1e9fa.webp  (47230 B)
+   entry: IMAGE/9fb56cee5607f1be.webp  (47128 B)
+   entry: IMAGE/6d94422ac2ab5de9.webp  (52142 B)
+   entry: IMAGE/e46b1cd528a78e2f.webp  (47484 B)
+   entry: IMAGE/436e6956e4865ed7.webp  (47588 B)
+   entry: IMAGE/2bcedea7947da5b6.webp  (47484 B)
+   entry: IMAGE/f47805e4aff18ec0.webp  (47766 B)
+   entry: IMAGE/483991ba9ba56b77.webp  (47766 B)
+   entry: IMAGE/0cf2aaa622b1c88e.webp  (47766 B)
+   entry: IMAGE/81402a5d307f1e6d.webp  (48170 B)
+   entry: IMAGE/a96770437b4cd3c6.webp  (48170 B)
+   entry: IMAGE/012be56611df438e.webp  (48028 B)
+   entry: IMAGE/1fe9bcea525263b3.webp  (49066 B)
+   entry: IMAGE/5625c753ef33a48d.webp  (48054 B)
+   entry: IMAGE/59309a885dbb459c.webp  (48110 B)
+   entry: IMAGE/81fe4b29b7869e38.webp  (49964 B)
+   entry: IMAGE/cba34d860c62633d.webp  (49066 B)
+   entry: IMAGE/23ac085e25aaa4f0.webp  (49054 B)
+   entry: IMAGE/51e1b44e66b44964.webp  (23220 B)
+   entry: IMAGE/0ffe9626780ac362.webp  (49588 B)
+   entry: IMAGE/55c1a45a35759d77.webp  (25466 B)
+   entry: IMAGE/eb2c4881394cb2c4.webp  (27900 B)
+   entry: IMAGE/e8e6ae1ce4a1e5a7.webp  (40438 B)
+   entry: IMAGE/9c2ca92bb9f6be5e.webp  (34262 B)
+   entry: IMAGE/d388580712fec7cf.webp  (42382 B)
+   entry: IMAGE/a026fa5f360ebe1b.webp  (28016 B)
+   entry: IMAGE/ef1b35743e43190b.webp  (27870 B)
+   entry: IMAGE/d974183092a46a7d.webp  (34894 B)
+   entry: IMAGE/f34e03d4ce15f7e6.webp  (34160 B)
+   entry: IMAGE/fdfdd4614dd72384.webp  (26986 B)
+   entry: IMAGE/b471ac4923e95714.webp  (38740 B)
+   entry: IMAGE/b5269e3dea21f633.webp  (22888 B)
+   entry: IMAGE/f93a95b7245ba351.webp  (22878 B)
+   entry: IMAGE/362924e0e16ce90a.webp  (21766 B)
+   entry: IMAGE/ed61d97da8f7dbf1.webp  (21194 B)
+   entry: project2.json  (130 B)
+   entry: test.epru  (620025 B)
+
+3. 离线管线（零改动复用）
+   load_epru_text → 617108 字符 / 2139 条记录
+   meta: {"title": "test", "cbb_project": 0, "editorVersion": "3.2.186", "introduction": "", "description": "", "tags": "[]"}
+   DOCHEAD 125 个，按类型：{"FOOTPRINT": 17, "SYMBOL": 29, "DEVICE": 29, "BOARD": 1, "SCH": 1, "SCH_PAGE": 44, "PCB": 1, "CONFIG": 1, "PANEL": 1, "BLOB": 1}
+   记录类型前 12：[["ATTR", 503], ["LAYER", 465], ["ELE_PLACEHOLDER", 241], ["POLY", 183], ["FILL", 137], ["DOCHEAD", 125], ["META", 124], ["PIN", 88], ["PAD", 72], ["CANVAS", 46], ["DELETE_DOC", 40], ["PART", 29]]
+   SCH_PAGE uuid（44）：['012be56611df438e', '0cf2aaa622b1c88e', '0ffe9626780ac362', '1899cf1ffd6aeb16', '1fe9bcea525263b3', '23ac085e25aaa4f0', '2bcedea7947da5b6', '2c44ce0a520cafc2', '362924e0e16ce90a', '436e6956e4865ed7', '483991ba9ba56b77', '51e1b44e66b44964', '55c1a45a35759d77', '5625c753ef33a48d', '59309a885dbb459c', '630cf344dec094e1', '6d94422ac2ab5de9', '81402a5d307f1e6d', '81fe4b29b7869e38', '9c2ca92bb9f6be5e', '9fb56cee5607f1be', 'a026fa5f360ebe1b', 'a96770437b4cd3c6', 'b2bf61b8eedcbd33', 'b3f2f3a10774e831', 'b4298962367251c8', 'b471ac4923e95714', 'b5269e3dea21f633', 'b649ebd87d54e397', 'c46299b312a1e9fa', 'cba34d860c62633d', 'd388580712fec7cf', 'd541ce48640709ca', 'd974183092a46a7d', 'e46b1cd528a78e2f', 'e828ceabf6f890e9', 'e8e6ae1ce4a1e5a7', 'eb2c4881394cb2c4', 'ed61d97da8f7dbf1', 'ef1b35743e43190b', 'f34e03d4ce15f7e6', 'f47805e4aff18ec0', 'f93a95b7245ba351', 'fdfdd4614dd72384']
+
+   _load_model(view='schematic') → components 1 / nets 2
+   _load_model(view='pcb') → components 0 / nets 0，pads 0 / tracks 0 / vias 0
+
+4. 在线交叉核对
+   doc.list 页 uuid（4）：['362924e0e16ce90a', 'b4298962367251c8', 'b5269e3dea21f633', 'f93a95b7245ba351']
+   归档 SCH_PAGE 覆盖在线页：全中
+   归档里的 PCB 文档：['5dc38976c1fa45ce']；在线 doc.list 的 pcb：['5dc38976c1fa45ce']
+   整工程 schematic 模型位号集合：['R2']
+   焦点页（P1）在线 geometry 位号：（无位号图元），components 1
+   焦点页在线 readback 位号：['None']
+
+5. 与逐页导出的关系（批 1 的 A1 只有单页）
+   getDocumentFile 返回的是**焦点文档**（批 1 P1 实测 29,672 B / 5 个 DOCHEAD）；
+   本归档是**整工程**（1765386 B / 125 个 DOCHEAD），一次拿到全部页与库文档。
+
+6. 降级路（A1'）也实测一遍：逐页 doc.open + getDocumentFile → 合并 → 与上面的整工程模型对照
+   动机：A1 在这台机器上放行，所以 checkup 走的是 project-file；但权限被关的机器上走的是
+   per-page，那条路必须实测过。这一段用与 checkup 同一套动作和同一个合并函数跑一遍。
+   页 362924e0e16ce90a: 31739 B  位号 ['R2']
+   页 b4298962367251c8: 29671 B  位号 []
+   页 b5269e3dea21f633: 30043 B  位号 []
+   页 f93a95b7245ba351: 29709 B  位号 []
+   合并后：components 1 / nets 2，位号 ['R2']；重复位号 []
+   整工程（A1）模型：components 1 / nets 2，位号 ['R2']
+   两条路的位号集合一致：True
+   合并函数写下的 note：['merged 4 per-page models by designator/net name — cross-page connectivity is agreement by net name, not a traced connection']
+   焦点已复位到 b4298962367251c8
+
+结论：**能用**（整工程满血路成立：工程下载权限放行、合法 zip、load_epru_text 与
+_load_model(schematic/pcb) 零改动解析出整工程模型；checkup 的 A1 就是这条路。）
+       降级路 A1' 同样实测通过：逐页导出合并后的位号集合与整工程模型一致（True），
+       所以「工程下载权限被关」的机器上 checkup 不会退化成 exit 3。

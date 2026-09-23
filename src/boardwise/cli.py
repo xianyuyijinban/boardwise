@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -153,13 +155,71 @@ def build_parser() -> argparse.ArgumentParser:
     review.add_argument(
         "--view",
         choices=("pcb", "schematic"),
-        default="pcb",
+        # Resolved in `_cmd_review`: `pcb` for a file (the historical default),
+        # `schematic` for --live (a live model is a page model). A plain default
+        # here would make `review --live` refuse its own sensible view.
+        default=None,
         help=(
-            "Which model of a .epro2 backup to review: pcb (the default, the "
-            " PCB netlist view) or schematic (the parsed schematic, the view "
-            "the 011 review rules are written against — use it for "
-            "schematic-only exports, where the pcb view is empty)."
+            "Which model of a .epro2 backup to review: pcb (the default for a "
+            "file, the PCB netlist view) or schematic (the parsed schematic, the "
+            "view the 011 review rules are written against — use it for "
+            "schematic-only exports, where the pcb view is empty). With --live "
+            "the default is schematic, because the live data path yields pages."
         ),
+    )
+    review.add_argument(
+        "--live",
+        action="store_true",
+        help=(
+            "Review the project open in the editor instead of a file (025 batch "
+            "2): the same offline rules over a model loaded through checkup's "
+            "tier ladder (project archive → per-page archives → netlist). "
+            "Mutually exclusive with a file argument and with --latest. Exit 3 "
+            "when the online state cannot be stated."
+        ),
+    )
+
+    checkup = sub.add_parser(
+        "checkup",
+        help="One-command review: read the live project, report what tier it used.",
+    )
+    checkup.add_argument(
+        "--file",
+        metavar="PATH",
+        default="",
+        help=(
+            "Offline fallback: an exported .epro2 to report on, with no editor "
+            "and no daemon involved. Mutually exclusive with --project/--instance."
+        ),
+    )
+    checkup.add_argument(
+        "--project",
+        default="",
+        help=(
+            "Which editor window to read, by project name or uuid (023). Needed "
+            "only when several windows are connected and none can be named by "
+            "the daemon's default."
+        ),
+    )
+    checkup.add_argument(
+        "--instance",
+        default="",
+        help=(
+            "The same choice spelled as the window key `bridge status` prints — "
+            "the way to reach one window when no project can be read yet."
+        ),
+    )
+    checkup.add_argument(
+        "--out",
+        default="checkup",
+        metavar="DIR",
+        help=(
+            "Directory for report.json (created if missing). Default: "
+            "%(default)s."
+        ),
+    )
+    checkup.add_argument(
+        "--port", type=int, default=None, help="Daemon port (default 61190)."
     )
 
     review_eval = sub.add_parser(
@@ -1263,29 +1323,75 @@ def _pcb_view_read_nothing(
 
 
 def _cmd_review(args: argparse.Namespace) -> int:
-    source = _review_source(args)
-    if source is None:
-        return 2
-    path = Path(source)
-    # The parse reports what it dropped into this (task 020 §WI-1); the model
-    # itself is unchanged, so `--json` and every rule's input are byte-for-byte
-    # what they were. Only the schematic view fills it — see `_load_model`.
+    live = bool(getattr(args, "live", False))
+    live_notes: list[str] = []
+    live_attempts: list[dict] = []
     parse_stats = ParseStats()
-    try:
-        model, board = _load_model(path, view=args.view, parse_stats=parse_stats)
-    except EncryptedProjectError as exc:
-        print(f"boardwise: {exc}", file=sys.stderr)
-        return 2
-    except ValueError as exc:
-        print(f"boardwise: {path}: {exc}", file=sys.stderr)
-        return 2
+
+    if live:
+        if args.file or args.latest is not None:
+            print(
+                "boardwise review --live: --live reads the editor, so a file "
+                "argument / --latest would be a second, contradictory source "
+                "(give one)",
+                file=sys.stderr,
+            )
+            return 2
+        # A live model is a *page* model: the live tiers read page archives (or a
+        # netlist), and there is no live PCB-document model to review. Asking for
+        # the pcb view explicitly is therefore refused rather than silently
+        # answered with the schematic one.
+        if args.view == "pcb":
+            print(
+                "boardwise review --live: the live data path yields the schematic "
+                "view (pages + their library documents); --view pcb needs a PCB "
+                "document export, which no action returns — review a file instead",
+                file=sys.stderr,
+            )
+            return 2
+        loaded = _load_model_online(
+            args, notes=live_notes, attempts=live_attempts, parse_stats=parse_stats
+        )
+        if loaded is None:
+            print(
+                "boardwise review --live: 在线状态不可陈述 — no tier produced a model",
+                file=sys.stderr,
+            )
+            for note in live_notes:
+                print(f"  note: {note}", file=sys.stderr)
+            return 3
+        model, board, tier, source_meta = loaded
+        view = "schematic"
+        source = f"live:{CHECKUP_TIERS[tier].split('（')[0]}"
+        project = (source_meta.get("project") or {})
+        label = project.get("friendlyName") or project.get("name")
+        if label:
+            source = f"live:/{label} (tier {tier})"
+        path = None
+    else:
+        source = _review_source(args)
+        if source is None:
+            return 2
+        path = Path(source)
+        view = args.view or "pcb"
+        # The parse reports what it dropped into this (task 020 §WI-1); the model
+        # itself is unchanged, so `--json` and every rule's input are byte-for-byte
+        # what they were. Only the schematic view fills it — see `_load_model`.
+        try:
+            model, board = _load_model(path, view=view, parse_stats=parse_stats)
+        except EncryptedProjectError as exc:
+            print(f"boardwise: {exc}", file=sys.stderr)
+            return 2
+        except ValueError as exc:
+            print(f"boardwise: {path}: {exc}", file=sys.stderr)
+            return 2
 
     findings = run_review(model)
     counts = severity_counts(findings)
     # Computed once, read twice: the console line and the Chinese summary line
     # are two renderings of the same fact, and a change to the conditions must
     # not be able to make them disagree (task 019 §1, §2).
-    empty_pcb_view = _pcb_view_read_nothing(path, args.view, model, board)
+    empty_pcb_view = path is not None and _pcb_view_read_nothing(path, view, model, board)
     # Same rule for the drop counters: one pair of numbers, rendered once in
     # English for the console and once in Chinese for the summary.
     drop_note = _parse_drop_note(
@@ -1344,6 +1450,492 @@ def _cmd_review(args: argparse.Namespace) -> int:
         print(drop_note)
 
     return 1 if counts["ERROR"] else 0
+
+
+# --------------------------------------------------------------------------
+# checkup (025 batch 2): the data path, with an honest tier ladder
+# --------------------------------------------------------------------------
+
+#: Report schema id. Bumped when a field's *meaning* changes, not when one is added.
+CHECKUP_SCHEMA = "boardwise.checkup/1"
+
+#: What each tier actually read, spelled for the report's own header.
+#:
+#: The tier is the one field a reader must be able to trust, because it is what
+#: separates "reviewed the whole project" from "reviewed one page" from
+#: "reviewed connectivity only". A report that cannot say which of these it used
+#: cannot be trusted to say what it reviewed (025 §2 阶段 A).
+CHECKUP_TIERS: dict[str, str] = {
+    "project-file": "整工程归档（sys.get_project_file → 临时 .epro2 → 离线管线）：满血",
+    "per-page": "逐页归档合并（doc.open + sys.get_document_file × N）：跨页连通性不保证",
+    "netlist": "在线网表 + 几何（sch.netlist / sch.geometry → candidate）：仅连通性",
+    "file": "离线文件（--file）：不连编辑器",
+}
+
+#: The view the data path yields, and therefore the one `checkup` reports. The
+#: 011-family rules are written against the schematic model, and the live tiers
+#: produce exactly that (pages + the library documents they reference), so this
+#: is not a default the caller should have to restate.
+CHECKUP_VIEW = "schematic"
+
+
+def _checkup_report(
+    *,
+    tier: str,
+    source: dict,
+    model: object,
+    attempts: list[dict],
+    notes: list[str],
+) -> dict:
+    """Assemble the batch-2 skeleton: real source/model facts, empty later stages.
+
+    Fields are present and empty **on purpose**. Batch 3 fills `drc` and
+    `findings` (the DRC→Finding mapping), batch 4 fills `modules`, `ai_slots`,
+    `report.md` and the canvas images; a skeleton that carried half-guessed
+    content would be worse than one that says what is missing, because the
+    reader of a report has no way to tell an empty section from a checked one.
+    """
+    return {
+        "schema": CHECKUP_SCHEMA,
+        "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "source": {
+            "tier": tier,
+            "tierLabel": CHECKUP_TIERS.get(tier, "(unknown tier)"),
+            **source,
+            "attempts": attempts,
+            "notes": notes,
+        },
+        "model": {
+            "view": CHECKUP_VIEW,
+            "components": len(model.components),
+            "nets": len(model.nets),
+            "designators": sorted(model.components),
+            "duplicateDesignators": sorted(model.duplicate_designators),
+        },
+        "pending": {
+            "drc": "batch 3（DRC → Finding 映射）",
+            "findings": "batch 3/4（规则引擎全扫 → 模块分组）",
+            "modules": "batch 4（模块聚类）",
+            "ai_slots": "batch 4（unknown_parts / canvas_images / summary 槽位）",
+            "reportMd": "batch 4（report.md 人读版）",
+            "canvasImages": "batch 4（export.render 打包）",
+        },
+        "drc": {"schematic": None, "pcb": None},
+        "modules": [],
+        "findings": [],
+        "ai_slots": {"unknown_parts": [], "canvas_images": [], "summary_template": ""},
+    }
+
+
+def _write_checkup_report(out_dir: Path, report: dict) -> Path:
+    """Write ``report.json`` into ``out_dir`` (created if missing), and say where."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / "report.json"
+    path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def _merge_schematic_models(models: list, *, notes: list[str]) -> object:
+    """Union per-page models into one.
+
+    Why a merge at all: the per-page tier is what runs when the project-download
+    gate is closed, and one page's model is not a project's. Components are keyed
+    by designator (the model's own key), nets by name — so a net that appears on
+    two pages keeps every pin it was seen with, and a designator that appears
+    twice is recorded in ``duplicate_designators`` rather than silently winning.
+
+    **What this cannot do is stated, not hidden**: two pages connected only by a
+    net label are two pins with the same net name in the merged model, which is
+    agreement by *name*, not a connectivity proof. That is why the caller labels
+    the tier ``per-page`` instead of ``project-file``.
+    """
+    from .core.model import DesignModel, Net
+
+    merged = DesignModel()
+    for model in models:
+        for designator, component in model.components.items():
+            if designator in merged.components:
+                if designator not in merged.duplicate_designators:
+                    merged.duplicate_designators.append(designator)
+                continue
+            merged.components[designator] = component
+        for name, net in model.nets.items():
+            existing = merged.nets.get(name)
+            if existing is None:
+                merged.nets[name] = Net(name=name, pins=list(net.pins))
+                continue
+            for pin in net.pins:
+                if pin not in existing.pins:
+                    existing.pins.append(pin)
+        for key, value in model.raw.items():
+            merged.raw.setdefault(key, value)
+    merged.duplicate_designators.sort()
+    if len(models) > 1:
+        notes.append(
+            f"merged {len(models)} per-page models by designator/net name — cross-page "
+            "connectivity is agreement by net name, not a traced connection"
+        )
+    return merged
+
+
+def _archive_bytes(payload: object, label: str) -> bytes:
+    """The base64 payload of an archive action as bytes, or a named failure."""
+    import base64
+
+    if not isinstance(payload, dict):
+        raise ValueError(f"{label}: response is not an object")
+    data = payload.get("data")
+    if not isinstance(data, str) or not data:
+        raise ValueError(f"{label}: response carries no base64 data")
+    if payload.get("isZip") is False:
+        raise ValueError(f"{label}: the host returned bytes that are not a ZIP archive")
+    return base64.b64decode(data)
+
+
+def _parse_archive(path: Path, *, parse_stats: ParseStats | None = None) -> tuple[object, object | None]:
+    """Parse one downloaded archive through the *existing* offline pipeline."""
+    return _load_model(path, view=CHECKUP_VIEW, parse_stats=parse_stats)
+
+
+def _load_model_online(
+    args: argparse.Namespace,
+    *,
+    notes: list[str],
+    attempts: list[dict],
+    parse_stats: ParseStats | None = None,
+) -> tuple[object, object | None, str, dict] | None:
+    """The online branch of model loading: A1 → A1' → A3, first success wins.
+
+    Returns ``(model, board, tier, source_meta)``, or ``None`` when
+    the online state **cannot be stated** (daemon unreachable, no connector, or
+    every tier refused) — which the caller turns into exit code 3, never into an
+    empty model.
+
+    The ladder, and why in this order:
+
+    * **A1** `sys.get_project_file` — one archive, every page and library
+      document: the only tier that is exactly what a human export would be.
+    * **A1'** per page: `doc.open` + `sys.get_document_file` for each page, then
+      merge. Same bytes per page as A1's, one page at a time; it exists because
+      A1 is gated on 工程管理 > 下载工程 while the per-page read is gated on
+      工程设计图 > 文件导出 — two different grants, so one can be closed while
+      the other is open (025 batch 1 measured both open on this machine).
+    * **A3** `sch.netlist` + `sch.geometry` → `core/candidate.py`: connectivity
+      only, no values and no MPNs, but it needs no export permission at all.
+
+    **A2 (`sys.getDocumentSource`) is deliberately absent.** Batch 1 measured it
+    (`outputs/025_probe_p2_document_source.txt`): same record grammar as an
+    `.epru`, but scoped to the *focused document* and missing the SYMBOL/DEVICE
+    documents a page references — the model built from it lost the footprint and
+    every net (P4: `0603`/2 nets → `''`/0 nets). A tier that silently reviews a
+    wrong model is worse than one that admits it has no model.
+    """
+    import asyncio
+
+    BridgeClient, BridgeError, port, token = _open_cli(args)
+    route_kwargs: dict[str, str] = {}
+    if getattr(args, "project", ""):
+        route_kwargs["target_project"] = args.project.strip()
+    if getattr(args, "instance", ""):
+        route_kwargs["target_instance"] = args.instance.strip()
+
+    async def run() -> tuple[object, object | None, str, dict, str] | None:
+        try:
+            client = await BridgeClient.open(
+                _bridge_uri(port), token, "cli", client="boardwise-cli"
+            )
+        except (OSError, BridgeError) as exc:
+            notes.append(f"daemon not reachable on 127.0.0.1:{port} ({exc})")
+            return None
+        try:
+            return await _checkup_ladder(client, args, route_kwargs, notes, attempts, parse_stats)
+        finally:
+            await client.close()
+
+    return asyncio.run(run())
+
+
+async def _checkup_ladder(
+    client,
+    args: argparse.Namespace,
+    route_kwargs: dict,
+    notes: list[str],
+    attempts: list[dict],
+    parse_stats: ParseStats | None,
+) -> tuple[object, object | None, str, dict, str] | None:
+    """One pass down the tier ladder against an open client. See `_load_model_online`."""
+    import hashlib
+    import tempfile
+    from pathlib import Path as _Path
+
+    BridgeError = _bridge_modules()[2]
+
+    async def call(action: str, params: dict):
+        return await client.call(action, params, **route_kwargs)
+
+    # --- the live editor's identity, read once for the report's `source` block.
+    host_version = ""
+    connector_version = ""
+    try:
+        probe = await call("sys.probe", {"namespaces": []})
+        host_version = str(probe.get("version") or "")
+        connector_version = str(probe.get("connector") or "")
+    except BridgeError as exc:
+        attempts.append({"tier": "identity", "ok": False, "code": exc.code, "message": exc.message})
+    except Exception as exc:  # noqa: BLE001 — a missing connector is an answer, not a crash
+        notes.append(f"sys.probe failed: {exc}")
+
+    project: dict = {}
+    active: dict = {}
+    pages: list[str] = []
+    try:
+        listing = await call("doc.list", {})
+        for row in listing.get("projects", []) or []:
+            if row.get("focused"):
+                project = {"name": row.get("name"), "friendlyName": row.get("friendlyName"),
+                           "projectUuid": row.get("projectUuid")}
+        active = listing.get("active") or {}
+        pages = [d.get("uuid") for d in listing.get("documents", []) or []
+                 if d.get("type") == "page" and d.get("uuid")]
+    except BridgeError as exc:
+        attempts.append({"tier": "identity", "ok": False, "code": exc.code, "message": exc.message})
+        if exc.code in ("NO_CONNECTOR", "WINDOW_NOT_CONNECTED", "WINDOW_UNSPECIFIED",
+                        "PROJECT_NOT_CONNECTED", "PROJECT_AMBIGUOUS"):
+            notes.append(f"doc.list: {exc.code}: {exc.message}")
+            return None
+    except Exception as exc:  # noqa: BLE001
+        notes.append(f"doc.list failed: {exc}")
+
+    source_meta: dict = {
+        "project": project or None,
+        "pageUuid": active.get("uuid"),
+        "pageType": active.get("type"),
+        "hostVersion": host_version,
+        "connectorVersion": connector_version,
+        "file": None,
+    }
+
+    with tempfile.TemporaryDirectory(prefix="boardwise-checkup-") as tmp:
+        tmpdir = _Path(tmp)
+
+        # --- A1: the whole project in one archive.
+        started = time.perf_counter()
+        try:
+            payload = await call("sys.get_project_file", {"fileType": "epro2"})
+            blob = _archive_bytes(payload, "sys.get_project_file")
+            archive = tmpdir / "project.epro2"
+            archive.write_bytes(blob)
+            model, board = _parse_archive(archive, parse_stats=parse_stats)
+            attempts.append({
+                "tier": "project-file", "ok": True,
+                "ms": round((time.perf_counter() - started) * 1000, 1),
+                "bytes": len(blob), "sha256": hashlib.sha256(blob).hexdigest(),
+                "components": len(model.components), "nets": len(model.nets),
+            })
+            return model, board, "project-file", source_meta
+        except BridgeError as exc:
+            attempts.append({"tier": "project-file", "ok": False, "code": exc.code,
+                             "message": exc.message,
+                             "ms": round((time.perf_counter() - started) * 1000, 1)})
+            notes.append(
+                f"project-file tier refused: {exc.code}: {exc.message} — the declaration "
+                "gates getProjectFile on 工程管理 > 下载工程; falling to per-page exports "
+                "(a different gate: 工程设计图 > 文件导出)"
+            )
+        except (ValueError, EncryptedProjectError) as exc:
+            attempts.append({"tier": "project-file", "ok": False, "error": str(exc)})
+            notes.append(f"project-file tier unusable: {exc}")
+
+        # --- A1': one archive per page, merged.
+        if pages:
+            started = time.perf_counter()
+            models = []
+            page_attempts = []
+            reopened: list[str] = []
+            try:
+                for uuid in pages:
+                    try:
+                        await call("doc.open", {"uuid": uuid})
+                        payload = await call("sys.get_document_file", {"fileType": "epro2"})
+                        blob = _archive_bytes(payload, f"sys.get_document_file({uuid})")
+                        archive = tmpdir / f"page-{uuid}.epro2"
+                        archive.write_bytes(blob)
+                        page_model, _ = _parse_archive(archive, parse_stats=parse_stats)
+                        models.append(page_model)
+                        reopened.append(uuid)
+                        page_attempts.append({
+                            "pageUuid": uuid, "ok": True, "bytes": len(blob),
+                            "components": len(page_model.components),
+                        })
+                    except (BridgeError, ValueError, EncryptedProjectError) as exc:
+                        page_attempts.append({"pageUuid": uuid, "ok": False, "error": str(exc)})
+            finally:
+                # The ladder moved the editor's focus; put it back where it was, so a
+                # read-only command does not leave the user's editor on a different page.
+                if reopened and active.get("uuid"):
+                    try:
+                        await call("doc.open", {"uuid": active["uuid"]})
+                    except Exception as exc:  # noqa: BLE001
+                        notes.append(f"could not restore focus to {active['uuid']}: {exc}")
+            if models:
+                merged = _merge_schematic_models(models, notes=notes)
+                attempts.append({
+                    "tier": "per-page", "ok": True,
+                    "ms": round((time.perf_counter() - started) * 1000, 1),
+                    "pages": page_attempts,
+                    "components": len(merged.components), "nets": len(merged.nets),
+                })
+                notes.append(
+                    f"per-page tier: {len(models)}/{len(pages)} page archives parsed; focus restored"
+                )
+                return merged, None, "per-page", source_meta
+            attempts.append({"tier": "per-page", "ok": False, "pages": page_attempts})
+            notes.append("per-page tier produced no usable page archive")
+        else:
+            attempts.append({"tier": "per-page", "ok": False, "error": "no page uuid was listed"})
+            notes.append("per-page tier skipped: doc.list listed no schematic page")
+
+        # --- A3: connectivity only, no export permission needed.
+        started = time.perf_counter()
+        try:
+            from .core.candidate import (
+                GeometryError,
+                NetlistFormatError,
+                candidate_from_geometry,
+                candidate_from_netlist,
+            )
+
+            model = None
+            geometry_problem = ""
+            try:
+                netlist = await call("sch.netlist", {"type": "EasyEDA"})
+                text = netlist.get("text") if isinstance(netlist, dict) else None
+                if isinstance(text, str) and text.strip():
+                    model = candidate_from_netlist(text, netlist.get("type", "EasyEDA"))
+            except NetlistFormatError as exc:
+                geometry_problem = f"netlist unusable ({exc})"
+            except BridgeError as exc:
+                geometry_problem = f"netlist refused ({exc.code}: {exc.message})"
+            if model is None:
+                try:
+                    geometry = await call("sch.geometry", {})
+                    model = candidate_from_geometry(geometry)
+                except GeometryError as exc:
+                    geometry_problem = (geometry_problem + "; " if geometry_problem else "") + str(exc)
+                except BridgeError as exc:
+                    geometry_problem = (
+                        f"{geometry_problem}; geometry refused ({exc.code})"
+                        if geometry_problem else f"geometry refused ({exc.code})"
+                    )
+            if model is None:
+                attempts.append({"tier": "netlist", "ok": False, "error": geometry_problem})
+                notes.append(f"netlist tier gave no model: {geometry_problem}")
+                return None
+            attempts.append({
+                "tier": "netlist", "ok": True,
+                "ms": round((time.perf_counter() - started) * 1000, 1),
+                "components": len(model.components), "nets": len(model.nets),
+                **({"note": geometry_problem} if geometry_problem else {}),
+            })
+            notes.append(
+                "netlist tier: connectivity only — no values, no MPNs, no poses "
+                "(core/candidate.py); the report header says so"
+            )
+            return model, None, "netlist", source_meta
+        except Exception as exc:  # noqa: BLE001 — the last tier failing is still an answer
+            attempts.append({"tier": "netlist", "ok": False, "error": str(exc)})
+            notes.append(f"netlist tier failed: {exc}")
+            return None
+
+
+def _cmd_checkup(args: argparse.Namespace) -> int:
+    """``boardwise checkup`` — one command, an honest tier ladder, a report skeleton.
+
+    Exit codes follow ``review``'s vocabulary and are the whole point of the
+    ladder being explicit:
+
+    * **0** a model was obtained and no finding is an ERROR (batch 2 always says
+      this: `findings` is empty until batch 3 fills it, so exit 1 is not
+      reachable yet — stated rather than faked);
+    * **2** the input cannot be used (mutually exclusive arguments, an unreadable
+      `--file`, an unsupported extension);
+    * **3** the online state cannot be stated (no daemon, no connector, or every
+      tier refused). Never an empty model dressed up as a clean board.
+    """
+    if args.file and (args.project or args.instance):
+        print(
+            "boardwise checkup: --file is the offline fallback and takes no "
+            "--project/--instance (give one or the other)",
+            file=sys.stderr,
+        )
+        return 2
+
+    out_dir = Path(args.out)
+    notes: list[str] = []
+    attempts: list[dict] = []
+    parse_stats = ParseStats()
+
+    if args.file:
+        path = Path(args.file)
+        try:
+            model, _board = _load_model(path, view=CHECKUP_VIEW, parse_stats=parse_stats)
+        except EncryptedProjectError as exc:
+            print(f"boardwise checkup: {exc}", file=sys.stderr)
+            return 2
+        except ValueError as exc:
+            print(f"boardwise checkup: {path}: {exc}", file=sys.stderr)
+            return 2
+        tier = "file"
+        source = {
+            "project": None, "pageUuid": None, "pageType": None,
+            "hostVersion": "", "connectorVersion": "", "file": str(path),
+        }
+        attempts.append({"tier": "file", "ok": True, "path": str(path),
+                         "components": len(model.components), "nets": len(model.nets)})
+        print(f"boardwise checkup: {path} ({CHECKUP_TIERS['file']})")
+    else:
+        loaded = _load_model_online(args, notes=notes, attempts=attempts, parse_stats=parse_stats)
+        if loaded is None:
+            print(
+                "boardwise checkup: 在线状态不可陈述 — no tier produced a model "
+                "(see the attempts below); nothing was reported as reviewed",
+                file=sys.stderr,
+            )
+            for attempt in attempts:
+                print(f"  {attempt.get('tier')}: {attempt}", file=sys.stderr)
+            for note in notes:
+                print(f"  note: {note}", file=sys.stderr)
+            return 3
+        model, _board, tier, source = loaded
+        project_name = (source.get("project") or {}).get("friendlyName") or (
+            (source.get("project") or {}).get("name") or "(project unknown)"
+        )
+        print(f"boardwise checkup: {project_name} (tier {tier} — {CHECKUP_TIERS[tier]})")
+
+    report = _checkup_report(tier=tier, source=source, model=model, attempts=attempts, notes=notes)
+    report_path = _write_checkup_report(out_dir, report)
+
+    print(
+        f"  model: {report['model']['components']} components, {report['model']['nets']} nets "
+        f"(view {CHECKUP_VIEW})"
+    )
+    if report["model"]["designators"]:
+        print(f"  designators: {', '.join(report['model']['designators'])}")
+    print(f"  attempts: " + "; ".join(
+        f"{a.get('tier')} {'ok' if a.get('ok') else 'failed'}"
+        + (f" ({a.get('code')})" if a.get("code") else "")
+        + (f" {a.get('ms')} ms" if a.get("ms") is not None else "")
+        for a in attempts
+    ))
+    for note in notes:
+        print(f"  note: {note}")
+    print(f"  report: {report_path}")
+    print(
+        "  pending: drc/findings → batch 3, modules/ai_slots/report.md/canvas → batch 4 "
+        "(fields present and empty on purpose; see report.json's `pending`)"
+    )
+    print("  exit: 0 (a model was obtained; no ERROR findings — findings are empty until batch 3)")
+    return 0
 
 
 def _cmd_review_eval(args: argparse.Namespace) -> int:
@@ -5893,6 +6485,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "review":
         return _cmd_review(args)
+    if args.command == "checkup":
+        return _cmd_checkup(args)
     if args.command == "review-eval":
         return _cmd_review_eval(args)
     if args.command == "review-mark":
