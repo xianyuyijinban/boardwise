@@ -118,3 +118,34 @@
 - sha256 抽核一致：dist `8fe4f591…`（256827 B）、`transport.ts ae9ae2bf…`、`index.ts 85157990…`。
 - **裁决**：`nativeWs` 保留为 `sys.worker_probe` 唯一模式（PROBE-ONLY），批准——批 2b 的 P6 页面侧判定
   依赖它，2b 跑完即删；任务书 §2.4 的"删净"以本裁决为准顺延到 2b。
+
+### 026b 批 2b · 交卷（2026-09-23，子代理 agent-43；第 1–4、6 项，第 5 项归岳）
+
+- 前置：热更 0.4.17（exit 0，`verified`）→ 重启 daemon（`sys.connector_status` 真机跑通，证明新目录生效）。
+- ① 节流态恢复：**目标未达成**。三次实测重连 151.5 s / 135.5 s / 139.7–145.5 s（三窗口那次三窗全回），
+  全部 > 90 s。重连者是 watchdog（`lastError: watchdog wake (worker alarm after 5920x ms of page
+  silence): 3 heartbeats unanswered`；`state: running, wakes 6→14`）。门是 `heartbeatMissLimit=3`
+  × ~60 s 节流心跳 ⇒ 批 2c 把"wake + 有未答心跳"直接判死（主代理已裁，见下）。
+- ② 解冻即连：成立——重连发生在后台（17:57:1x），比回前台（17:59:45）早 2 分 28 秒，回前台后 90 s
+  无新重连。**偏差**：hold 实测 4 分 47 秒（脚本卡死，未达任务书 10 分钟要求）。
+- ③ 三窗口：test + test2 + 岳的 ROBOT 窗，三窗全回（139.7 / 145.4 / 145.5 s）；压后台只压非禁地窗口，
+  所有调用显式 `--project`。附带发现：新开的第二窗口**上线但不报工程名**（3 s 上线、`projectName=None`，
+  重连后才报 test2）——3.2.186 上的"第二个窗口"是"匿名上线"而非"不上线"。
+- ④ 前台回归：checkup 与 025c 基线**逐行一致**，geometry/doc.list 零残留。
+- P6 真机：**两半都通**（页面 5 ms、Worker 19 ms 各收到 daemon banner）⇒ 形态 B′ 在连通性层无障碍；
+  未测应用层 hello/配对。已补进 `outputs/026_probe.md`（补记，不改原结论）。
+- 文档：`docs/bridge.md` §7.1 加"第一次真机测量"、§10 第 1 条与第 22 条各补实测；
+  `SKILL.md` 坑表加第 19 条（宿主 `sys_Timer` 同吃节流）、第 20 条（抢前台方法）。
+- 三线：pytest 1388 · connector 418/0 · tsc clean；dist sha256 `8fe4f591…` 未变（2b 未改代码）。
+- 证据：`outputs/026b_2b_{prereq,throttled_recovery,thaw_reconnect,three_windows,checkup_regression,
+  p6_nativews,connector_status}.txt`。
+
+### 主代理复验与裁决（2026-09-23）
+
+- 抽查：7 份证据文件齐；`git status` 仅 SKILL.md + bridge.md 两改动（PROGRESS 未被碰 ✔）；
+  坑 19/20 原文在表；`watchdog wake` 原文在节流证据中 ×2。
+- **裁决 1（批 2c 规格变更，批准）**：wake 触发时若已有任何未答心跳（`missed > 0`）即判死并
+  `reconnectNow()`，不等 `missLimit=3`。依据：socket 活着时 daemon 的 pong 会立即回页刷新活性，
+  根本攒不到 45 s 静默；"wake + 有未答心跳"已是强死亡证据。预期恢复 ~45–60 s，达 ≤90 s 目标。
+- **裁决 2（批准删）**：`sys.worker_probe`（nativeWs）使命完成（P6 两半真机实测），批 2c 删净。
+- 遗留：`test2` 窗口留开（岳自行处置）；第 5 项 149 第二窗口验证归岳。

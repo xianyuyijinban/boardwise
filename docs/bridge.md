@@ -810,6 +810,21 @@ so this table claims "the wake is waiting when the page runs again", not "a Work
 page". This document must never say the watchdog makes a window immune: it bounds the damage the
 page's own throttling can do.
 
+**The first machine measurement of this mechanism (026b batch 2b, 3.2.186, 2026-09-23), reported
+against its target.** With the window out of the foreground and its page ticking at ~1/minute (read
+off the daemon's audit as a 60 s `ping` spacing), killing and restarting the daemon brought the
+connector back **151 s** later — the brief was ≤90 s, so **the target is not met in this scenario**.
+The watchdog was running (`sys.connector_status` → `state: running, wakes: 6, activityPosts: 186`)
+and it is what performed that reconnection: the transport's own record is
+`watchdog wake (worker alarm after 59207 ms of page silence): 3 heartbeats unanswered`, which is the
+alarm's reconnect branch, not the heartbeat timer's. What gated it is the miss limit in front of it:
+a half-open socket is only *declared* dead after three unanswered heartbeats, and three throttled
+ticks are three minutes of silence — the alarm's earlier wakes took the "…unanswered heartbeat(s) —
+pinging now" branch, and a ping into a dead socket cannot prove anything. So the promise this section
+can make is: **once the transport agrees the socket is dead, the alarm reconnects in seconds instead
+of waiting for a throttled timer.** Making a *single* unanswered heartbeat plus a wake mean "dead" is
+the obvious next change, and it is deliberately not made here (§10.22).
+
 **One alarm per editor runtime.** The editor re-evaluates the bundle on every menu click, so the
 Worker is owned by the shared runtime the transport already lives in (024): a later evaluation
 adopts the published controller and never builds a second Worker, `stop()` terminates it with the
@@ -1067,6 +1082,13 @@ Recorded rather than hidden, so a future session does not have to rediscover the
    if the editor dies without a clean TCP close, a window stays "online" until a forwarded action
    times out. Workaround: `boardwise bridge screenshot` — a real round trip — is the honest liveness
    check.
+   **The background form of it is bounded since 0.4.17 (026b, §7.1), and only bounded.** A throttled
+   window can hold a socket the daemon has already lost while its own page still believes it is
+   connected; the Worker watchdog is what eventually drives it back — measured on 3.2.186, a daemon
+   restart with the window out of the foreground gave a **151 s** reconnection (`hello` 17:41:17 for
+   a daemon listening from 17:38:46), driven by the alarm, not by the page's heartbeats. The
+   workaround above stays the honest check for a *foreground* window, and a window that is neither
+   connected nor being woken is still indistinguishable from a dead one by `status` alone.
 2. **Windows are registered, not deduplicated.** Every authenticated connector gets a hub row, so
    three or four windows is the normal case and the caller decides which one answers — `--project`
    by project, `--instance` by instance id (§3.5). What is
@@ -1256,6 +1278,38 @@ Recorded rather than hidden, so a future session does not have to rediscover the
     and the second appeared only after its page was reloaded — window freeze / lazy evaluation,
     the same cause as the 7-hour background-window freeze measured on 3.2.186
     (`tasks/025-review-flow-v2.md`), which is why multi-window work keeps 3.2.186 as its baseline.
+    **026b (0.4.17, measured on 3.2.186, 2026-09-23): the background case now has a bound, and the
+    number is honest.** The connector ships a Worker watchdog (§7.1), and this is what it actually
+    did on the machine. A background window's page timers run at **~1 tick a minute** — read off the
+    daemon's own audit as a 60 s `ping` spacing (17:42:18 → 17:43:18 → 17:44:18), the throttled
+    regime §7.1 describes. Killing the daemon and restarting it while that window stayed out of the
+    foreground, the connector returned **151 s later** (hello 17:41:17 for a daemon listening from
+    17:38:46); the **≤90 s target was not met**. The watchdog was running and it is what performed
+    that reconnection — the transport's own record says so in as many words:
+    `lastError: watchdog wake (worker alarm after 59207 ms of page silence): 3 heartbeats
+    unanswered` (the wake's reconnect branch, not the heartbeat timer's), with `watchdog: {state:
+    running, wakes: 6, activityPosts: 186}` in `sys.connector_status`. What gated it is the miss
+    limit: a half-open socket is only *declared* dead after three heartbeats go unanswered, and
+    under a 60 s throttle that is three minutes of silence — the alarm's earlier wakes hit the
+    "…unanswered heartbeat(s) — pinging now" branch, and a ping into a dead socket proves nothing.
+    So: the watchdog bounds the loss to one throttled cycle *once the transport already agrees the
+    socket is dead*, and no better. Whether a wake with an outstanding heartbeat should reconnect
+    outright (the daemon's answer to that ping would have arrived and cleared the counter, so
+    "wake + an unanswered heartbeat" is already strong evidence) is an open question for the next
+    batch, not a claim this document makes.
+    **Three more measurements from the same batch, because one number would have been a guess.**
+    The same experiment was run three times (window out of the foreground, daemon killed and
+    restarted): **151.5 s**, **135.5 s**, and a three-window run in which **all three** windows came
+    back — the two backgrounded ones at **145.4 s / 145.5 s** and the third (untouched by the test,
+    the user's own window) at 139.7 s. So the band is
+    **135–152 s**, and every sample missed the 90 s target the same way (the miss limit, not the
+    alarm, is the gate). The three-window run also measured a *second* long-standing symptom in its
+    3.2.186 form: a freshly opened second window's connector **connected 3 s after launch but could
+    not name its project** (`projectName` omitted, reachable only by `--instance`) until its page
+    was evaluated again — after the daemon restart that same window came back as `project='test2'`.
+    So on this host the second-window symptom is "online but anonymous", not "offline", which is a
+    narrower failure than the 3.2.149 report and is why multi-window work should still name its
+    target explicitly rather than trust a project hint.
 23. **One box, two store views (0.2.3, fixed in 0.2.4).** `about()` resolved the config through
     `facade?.storage` — optional chaining, no facade created — while `storageLine()` used
     `host()`, which builds the facade on first use. Before anything else has run, the first read
