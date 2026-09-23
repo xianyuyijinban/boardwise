@@ -467,12 +467,26 @@ class _RecordingClient:
     stored_version: str = "0.4.3"
     #: The reload timer the reply carries (the connector really sends 500).
     reload_in_ms: int = 500
-    #: The daemon's `ping` window table. Only the `--instance` verification reads
-    #: it, because that path cannot use `sys.probe`: the window it updated
-    #: reconnects under a new instance id, so the read has to be "which windows
-    #: are online and what does each announce?" rather than "probe the window I
-    #: named" (see `_reloaded_window_version`).
+    #: The daemon's `ping` window table. Both verification paths read it (the
+    #: read-back is per *window*: the window that was updated reconnects under a
+    #: new instance id, so the question is "which windows are online, and what
+    #: does each announce?" rather than "probe the window I named").
+    #:
+    #: `windows` is what the daemon reports **before** the write (the read-back's
+    #: "who was already here" snapshot); `windows_after` — when set — is the table
+    #: from the write onwards, which is how a test expresses "the reloaded page
+    #: came back" (a new instance id) or "the old socket is still sitting there".
     windows: list = []
+    windows_after: list | None = None
+    #: ``True``: the daemon answers ``ping`` with an error (table unreadable).
+    ping_fails: bool = False
+    #: ``True``: the table is unreadable **only before the write** — i.e. the
+    #: read-back's snapshot could not be taken while the polls still can. That is
+    #: the shape that decides whether "no snapshot" is handled as "no mismatch
+    #: verdict" or as "every window looks new" (the false FAILED again).
+    ping_fails_before: bool = False
+    #: Set by the fake itself when ``sys.self_update`` has been answered.
+    wrote: bool = False
 
     @classmethod
     async def open(cls, uri, token, role, client=None):
@@ -485,7 +499,14 @@ class _RecordingClient:
         import base64
 
         if action == "ping":
-            return {"connector": True, "windows": [dict(w) for w in type(self).windows]}
+            from boardwise.bridge.protocol import BridgeError, ErrorCodes
+
+            if type(self).ping_fails or (type(self).ping_fails_before and not type(self).wrote):
+                raise BridgeError(ErrorCodes.INTERNAL, "window table unavailable")
+            table = type(self).windows
+            if type(self).wrote and type(self).windows_after is not None:
+                table = type(self).windows_after
+            return {"connector": True, "windows": [dict(w) for w in table]}
         if action == "sys.probe":
             from boardwise.bridge.protocol import BridgeError, ErrorCodes
 
@@ -496,6 +517,7 @@ class _RecordingClient:
                 reported = type(self).stored_version
             return {"version": "3.2.186", "connector": reported}
 
+        type(self).wrote = True
         type(self).stored_version = params["version"]
         return {
             "ok": True,
@@ -524,6 +546,10 @@ def update_env(monkeypatch, tmp_path):
     _RecordingClient.stored_version = "0.4.3"
     _RecordingClient.reload_in_ms = 500
     _RecordingClient.windows = []
+    _RecordingClient.windows_after = None
+    _RecordingClient.ping_fails = False
+    _RecordingClient.ping_fails_before = False
+    _RecordingClient.wrote = False
     monkeypatch.setattr(client_module, "BridgeClient", _RecordingClient)
     return tmp_path
 
@@ -612,12 +638,20 @@ def test_update_connector_sends_sys_self_update_with_the_bundle(update_env, tmp_
 
     bundle = tmp_path / "custom.js"
     bundle.write_bytes(b"the new bundle\n")
+    # The reconnected window announcing the stored version — the read-back's
+    # "verified" evidence, read from the daemon's own window table.
+    _RecordingClient.windows = []
+    _RecordingClient.windows_after = [
+        {"windowKey": "inst-C", "instanceId": "inst-C", "connectorVersion": "0.4.3"}
+    ]
     code = _cmd_bridge_update_connector(
         _update_args(bundle=str(bundle), version="0.4.3", yes=True)
     )
     assert code == 0
     assert _RecordingClient.calls, "sys.self_update was never called"
-    action, params = _RecordingClient.calls[0]
+    # Call 0 is the pre-write `ping` (the snapshot the read-back needs); the write
+    # is the one after it.
+    action, params = _RecordingClient.calls[1]
     assert action == "sys.self_update"
     assert base64.b64decode(params["bundleB64"]) == b"the new bundle\n"
     assert params["version"] == "0.4.3"
@@ -630,10 +664,10 @@ def test_update_connector_sends_sys_self_update_with_the_bundle(update_env, tmp_
     # themselves is gone with it.
     assert "verified: running connector is now 0.4.3" in out
     assert "reloading" not in out
-    assert [action for action, _ in _RecordingClient.calls] == ["sys.self_update", "sys.probe"]
-    # Read after the write, and from the connector itself (`sys.probe`), not
-    # from the write's echo of its own input.
-    assert _RecordingClient.calls[1][1] is None
+    # The read-back is the daemon's window table, read once before the write (the
+    # "who was already here" snapshot the mismatch verdict needs) and once after.
+    assert [action for action, _ in _RecordingClient.calls] == ["ping", "sys.self_update", "ping"]
+    assert _RecordingClient.calls[2][1] is None
     assert _RecordingClient.opened is not None, "the read needs its own connection"
 
 
@@ -647,7 +681,15 @@ def test_update_connector_reports_a_connector_that_did_not_take_the_update(
 
     bundle = update_env / "b.js"
     bundle.write_bytes(b"x")
-    _RecordingClient.running_version = "0.4.2"
+    # The connection that was there for the write is gone, and a new one (a new
+    # instance id) has come back announcing the old build: the page really did
+    # reload, onto something other than what was stored.
+    _RecordingClient.windows = [
+        {"windowKey": "inst-A", "instanceId": "inst-A", "connectorVersion": "0.4.2"}
+    ]
+    _RecordingClient.windows_after = [
+        {"windowKey": "inst-C", "instanceId": "inst-C", "connectorVersion": "0.4.2"}
+    ]
 
     code = _cmd_bridge_update_connector(
         _update_args(bundle=str(bundle), version="0.4.3", yes=True)
@@ -658,7 +700,7 @@ def test_update_connector_reports_a_connector_that_did_not_take_the_update(
     assert "verified" not in captured.out
     assert "0.4.2 -> 0.4.3" in captured.out, "the write's own reply is still reported"
     assert "FAILED" in captured.err and "0.4.3" in captured.err and "0.4.2" in captured.err
-    assert "did not take effect" in captured.err
+    assert "(re)connected after the write" in captured.err
 
 
 def test_update_connector_calls_a_timeout_unknown_not_failed(
@@ -670,7 +712,7 @@ def test_update_connector_calls_a_timeout_unknown_not_failed(
 
     bundle = update_env / "b.js"
     bundle.write_bytes(b"x")
-    _RecordingClient.reconnect = False
+    _RecordingClient.windows = []
 
     code = _cmd_bridge_update_connector(
         _update_args(bundle=str(bundle), version="0.4.3", yes=True)
@@ -681,8 +723,9 @@ def test_update_connector_calls_a_timeout_unknown_not_failed(
     assert "verified" not in out.out
     assert "UNKNOWN, not failed" in out.err
     assert "boardwise bridge status" in out.err
-    # It waited and retried rather than giving up on the first read.
-    assert [action for action, _ in _RecordingClient.calls].count("sys.probe") > 1
+    # It waited and retried rather than giving up on the first read; the first
+    # `ping` is the pre-write snapshot, the rest are the polls.
+    assert [action for action, _ in _RecordingClient.calls].count("ping") > 1
 
 
 def test_update_connector_no_verify_restores_the_old_behaviour(
@@ -694,7 +737,7 @@ def test_update_connector_no_verify_restores_the_old_behaviour(
 
     bundle = tmp_path / "custom.js"
     bundle.write_bytes(b"x")
-    _RecordingClient.reconnect = False  # would be exit 3 if the phase ran
+    _RecordingClient.windows = []  # would be exit 3 if the verification phase ran
 
     code = _cmd_bridge_update_connector(
         _update_args(bundle=str(bundle), version="0.4.3", yes=True, no_verify=True)
@@ -705,7 +748,9 @@ def test_update_connector_no_verify_restores_the_old_behaviour(
     assert "0.4.2 -> 0.4.3" in out
     assert "reloading" in out
     assert "verified" not in out
-    assert [action for action, _ in _RecordingClient.calls] == ["sys.self_update"]
+    # No polls (and no waiting): the only read is the pre-write snapshot, which is
+    # taken before the write no matter what the verification phase will do.
+    assert [action for action, _ in _RecordingClient.calls] == ["ping", "sys.self_update"]
 
 
 def test_update_connector_verifies_a_rebuild_of_the_same_version(update_env, fast_verify, capsys):
@@ -713,6 +758,11 @@ def test_update_connector_verifies_a_rebuild_of_the_same_version(update_env, fas
 
     bundle = update_env / "b.js"
     bundle.write_bytes(b"x")
+    # A rebuild of the version already running: the window announces `expected`
+    # before the write as well as after, so the first read is already conclusive.
+    _RecordingClient.windows = [
+        {"windowKey": "inst-A", "instanceId": "inst-A", "connectorVersion": "0.4.11"}
+    ]
 
     code = _cmd_bridge_update_connector(
         _update_args(bundle=str(bundle), version="0.4.11", yes=True)
@@ -758,25 +808,30 @@ def test_update_connector_instance_routes_the_write_and_reads_the_window_table(
     # The named window is printed before the write, since after the reload
     # nothing can be asked which window it was.
     assert "-> window inst-A" in out
-    assert [action for action, _ in _RecordingClient.calls][0] == "sys.self_update"
-    # The write names the window; the read did not need to (and could not).
-    assert _RecordingClient.routes[0] == {"target_instance": "inst-A"}
+    assert [action for action, _ in _RecordingClient.calls] == [
+        "ping", "sys.self_update", "ping",
+    ], "the pre-write snapshot, the routed write, then the poll"
+    # Only the write is routed; the reads are the daemon's own table, which needs
+    # no window hint (and could not use one: the reloaded window answers to a new
+    # instance id).
+    assert _RecordingClient.routes[1] == {"target_instance": "inst-A"}
+    assert _RecordingClient.routes[0] == {} and _RecordingClient.routes[2] == {}
     assert "sys.probe" not in [action for action, _ in _RecordingClient.calls], (
         "the reloaded window reconnects under a new instance id — probing the old "
         "one would read nothing"
     )
-    assert _RecordingClient.routes[1] == {}
 
 
-def test_update_connector_instance_reports_a_window_still_on_the_old_build(
-    update_env, fast_verify, capsys
-):
-    """`--instance`: the addressed window never reloaded — say so, exit 1.
+def test_two_lingering_sockets_do_not_add_up_to_a_failure(update_env, fast_verify, capsys):
+    """The same false FAILED, on the **unhinted** path, with two windows open.
 
-    The read-back the flag needs is coarser than the single-window one (it can
-    only see "a window announcing the stored version"), so the branch that keeps
-    it honest is this one: the window we wrote to is still online under its own
-    key and still announcing the build it had before.
+    Before the fix this was the exit-1 case: the write went to `inst-A`, both
+    sockets were still online on the old build, and "the window we wrote to is
+    still answering on 0.4.2" was treated as evidence. It is not — both sockets
+    are the ones that were there *before* the write, and neither has reloaded
+    yet. Rewritten here rather than deleted: the unhinted path deserves the
+    regression too, and the `--instance` one is
+    `test_a_reload_still_in_flight_is_unknown_never_failed`.
     """
     from boardwise.cli import _cmd_bridge_update_connector
 
@@ -788,14 +843,13 @@ def test_update_connector_instance_reports_a_window_still_on_the_old_build(
     ]
 
     code = _cmd_bridge_update_connector(
-        _update_args(bundle=str(bundle), version="0.4.3", yes=True, instance="inst-A")
+        _update_args(bundle=str(bundle), version="0.4.3", yes=True)
     )
 
-    assert code == 1
+    assert code == 3, "two sockets that have not reloaded yet are not a mismatch"
     captured = capsys.readouterr()
-    assert "verified" not in captured.out
-    assert "FAILED" in captured.err and "did not take effect" in captured.err
-    assert "window inst-A is still answering on 0.4.2" in captured.err
+    assert "FAILED" not in captured.err
+    assert "UNKNOWN, not failed" in captured.err
 
 
 def test_update_connector_instance_says_unknown_when_nothing_comes_back(
@@ -824,6 +878,129 @@ def test_update_connector_instance_says_unknown_when_nothing_comes_back(
     assert _RecordingClient.calls.count(("ping", None)) > 1, "it waited and retried"
 
 
+def test_a_reload_still_in_flight_is_unknown_never_failed(update_env, fast_verify, capsys):
+    """The false FAILED this task exists to kill (025 batch 2's carried-over todo).
+
+    Timeline measured on the machine (`outputs/025b_routed.txt`, 2026-09-23):
+    the write lands at 08:39:36 and the reloaded connector hello's at 08:39:41 —
+    five seconds later. In between, the daemon's table still holds the **old
+    socket**, answering with the old version, and the read-back used to take that
+    as "the write did not take effect": exit 1 FAILED, on an update that had in
+    fact succeeded (the very same `inst-A`/0.4.14 window the command complained
+    about was gone by the time the next `bridge status` ran).
+
+    "Still here" is not "came back different". A reload **destroys** the socket —
+    the connector's instance id is generated per page load (`connector/src/index.ts`,
+    `newInstanceId()`) — so a window online under the identity it had before the
+    write has simply not reloaded *yet*. Inside the budget that is "nothing to
+    read yet", which the deadline turns into exit 3, never 1.
+    """
+    from boardwise.cli import _cmd_bridge_update_connector
+
+    stale = [{"windowKey": "inst-A", "instanceId": "inst-A", "connectorVersion": "0.4.2"}]
+    _RecordingClient.windows = stale
+    _RecordingClient.windows_after = stale  # the reload has not happened yet
+    bundle = update_env / "b.js"
+    bundle.write_bytes(b"x")
+
+    code = _cmd_bridge_update_connector(
+        _update_args(bundle=str(bundle), version="0.4.3", yes=True, instance="inst-A")
+    )
+
+    assert code == 3, "a reload still in flight is UNKNOWN, not FAILED"
+    captured = capsys.readouterr()
+    assert "FAILED" not in captured.err
+    assert "UNKNOWN, not failed" in captured.err
+    # It kept looking rather than believing the first (stale) table it read.
+    assert _RecordingClient.calls.count(("ping", None)) > 1
+
+
+def test_a_reconnected_connector_on_another_build_is_the_mismatch_case(
+    update_env, fast_verify, capsys
+):
+    """The one shape that *is* exit 1: a connection that came back on a build
+    other than the one just stored.
+
+    The old socket is gone (it died with the reload) and a new instance id is
+    announcing something else — so the page really did reload, and what it came
+    back with is not what was written. That is the evidence 020's read-back
+    exists to surface, and it is now the *only* way to reach exit 1.
+    """
+    from boardwise.cli import _cmd_bridge_update_connector
+
+    _RecordingClient.windows = [
+        {"windowKey": "inst-A", "instanceId": "inst-A", "connectorVersion": "0.4.2"}
+    ]
+    _RecordingClient.windows_after = [
+        {"windowKey": "inst-C", "instanceId": "inst-C", "connectorVersion": "0.4.2"}
+    ]
+    bundle = update_env / "b.js"
+    bundle.write_bytes(b"x")
+
+    code = _cmd_bridge_update_connector(
+        _update_args(bundle=str(bundle), version="0.4.3", yes=True, instance="inst-A")
+    )
+
+    assert code == 1
+    captured = capsys.readouterr()
+    assert "verified" not in captured.out
+    assert "FAILED" in captured.err
+    assert "0.4.3" in captured.err and "0.4.2" in captured.err
+    assert "(re)connected after the write" in captured.err
+
+
+def test_an_unreadable_window_table_is_unknown_not_failed(update_env, fast_verify, capsys):
+    """The table cannot be read at all: no verdict is available, so say so.
+
+    "A window came back on another build" is a claim about a connection that was
+    not there before the write, so it needs the "who was there before" table. With
+    no table at any point, the command must fall back to the honest "unknown"
+    (exit 3) instead of inventing a verdict.
+    """
+    from boardwise.cli import _cmd_bridge_update_connector
+
+    _RecordingClient.ping_fails = True
+    _RecordingClient.windows_after = [
+        {"windowKey": "inst-A", "instanceId": "inst-A", "connectorVersion": "0.4.2"}
+    ]
+    bundle = update_env / "b.js"
+    bundle.write_bytes(b"x")
+
+    code = _cmd_bridge_update_connector(
+        _update_args(bundle=str(bundle), version="0.4.3", yes=True, instance="inst-A")
+    )
+
+    assert code == 3
+    assert "FAILED" not in capsys.readouterr().err
+
+
+def test_a_missing_snapshot_cannot_produce_a_mismatch(update_env, fast_verify, capsys):
+    """The snapshot failing is not a licence to call every window new.
+
+    This is the subtler half of the same false FAILED: the pre-write `ping` fails
+    while a later poll succeeds, so the read-back has a table in hand and *no*
+    baseline to compare it against. Reading that as "a window I have never seen is
+    announcing another build" would report FAILED on a reload that is simply still
+    in flight — the pre-existing socket looks brand new. With no baseline the
+    honest answer is "unknown".
+    """
+    from boardwise.cli import _cmd_bridge_update_connector
+
+    _RecordingClient.ping_fails_before = True
+    _RecordingClient.windows_after = [
+        {"windowKey": "inst-A", "instanceId": "inst-A", "connectorVersion": "0.4.2"}
+    ]
+    bundle = update_env / "b.js"
+    bundle.write_bytes(b"x")
+
+    code = _cmd_bridge_update_connector(
+        _update_args(bundle=str(bundle), version="0.4.3", yes=True, instance="inst-A")
+    )
+
+    assert code == 3, "no baseline, no mismatch claim"
+    assert "FAILED" not in capsys.readouterr().err
+
+
 def test_the_verify_phase_waits_out_the_reload_before_it_reads(monkeypatch):
     """The trap this phase was born with: the OLD build answers first.
 
@@ -846,9 +1023,15 @@ def test_the_verify_phase_waits_out_the_reload_before_it_reads(monkeypatch):
         async def open(cls, uri, token, role, client=None):
             return cls()
 
-        async def call(self, action, params=None):
+        async def call(self, action, params=None, **route):
             reads.append(time.monotonic())
-            return {"connector": "0.4.3"}
+            # The daemon's window table, announcing the stored version: the read
+            # is per window now (the reloaded one answers to a new instance id,
+            # and a routed probe in a multi-window session could be answered by
+            # any of them).
+            return {"connector": True, "windows": [
+                {"windowKey": "inst-C", "instanceId": "inst-C", "connectorVersion": "0.4.3"}
+            ]}
 
         async def close(self):
             return None
@@ -866,6 +1049,8 @@ def test_the_verify_phase_waits_out_the_reload_before_it_reads(monkeypatch):
             interval_s=0.01,
             budget_s=1.0,
             margin_s=0.08,
+            expected="0.4.3",
+            before=frozenset(),
         )
     )
 
@@ -904,9 +1089,17 @@ def test_update_connector_asks_first_and_honours_a_no(update_env, monkeypatch, c
     assert "aborted" in capsys.readouterr().out
 
     monkeypatch.setattr("builtins.input", lambda prompt="": "y")
+    # The read-back that follows needs a window announcing what was stored — and
+    # the *pre-write* `ping` (the snapshot the read-back compares against) is the
+    # first call now, so the write is no longer call 0.
+    _RecordingClient.windows_after = [
+        {"windowKey": "inst-C", "instanceId": "inst-C", "connectorVersion": "1.0.0"}
+    ]
     code = _cmd_bridge_update_connector(_update_args(bundle=str(bundle), version="1.0.0", yes=False))
     assert code == 0
-    assert _RecordingClient.calls[0][0] == "sys.self_update"
+    assert [action for action, _ in _RecordingClient.calls] == [
+        "ping", "sys.self_update", "ping",
+    ]
     err = capsys.readouterr().err
     assert "RELOAD" in err and "unsaved changes" in err
 
