@@ -211,3 +211,15 @@
   常数 `WATCHDOG_ACTIVITY_TIMEOUT_MS = 30_000` 亲见（下划线分隔符）；6 份证据齐；`git status` 清单相符。
 - **026 全线收官**（probe 定案 → 形态 A → 判死规格 → 相位消除）：多窗口后台冻结从"永不恢复"到有界
   ~27–46 s。剩 149 第二窗口验证（岳）与 test2/ROBOT 窗自然升级。
+
+### 批 2b 第 5 项 · 149 现场答案（2026-09-23 晚，岳工作电脑 3.2.149.88089769 + connector 0.4.17）
+
+岳的 harness 双窗口实测（daemon 被杀 13s 后重启的非受控样本，边界声明在 issue #4 评论）：
+
+- **149 第二窗口 = 上线但匿名**（projectName=None，`--instance` 寻址）——与 3.2.186 同形态，不是"不上线"。
+- **watchdog 在 149 正常工作**：节流后台窗 84s 自愈（`lastError: watchdog wake (worker alarm after
+  45096 ms of page silence): 3 heartbeats unanswered`，与 186 同形状），活跃窗 34s；两窗 `lastWakeAt`
+  各自等于自己的重连时刻（差 49.5s 与回连差吻合）。
+- 多窗口路由全通：无提示拒绝并列候选 / `--project` 打名 / `--instance` 打匿名。
+- 注：该机跑 0.4.17（3-heartbeat 旧规则）；0.4.19（026d）同法 27–46s，149 同向。
+- issue #4 三件事全闭环，已建议关闭；issue #6（doctor 文案）另立，修复批在途。
