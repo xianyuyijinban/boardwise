@@ -200,6 +200,8 @@ boardwise checkup --file <导出.epro2> --out <目录>       # 断连兜底：�
 | 16 | **热更/自更新后页面 reload，焦点抛到家页**（`type:home`，uuid 形似 `tab_page1`） | 热更后立刻读/写页面前先 `doc.open` 定点，否则动作落在家页报错。出处 025 批 1 |
 | 17 | **主机 ERC 计数是 host-wide，不按页**：多页逐页调 `sch.drc_check` 各报同一读数（4 页都 `{warn:1}`），求和会编出 4 倍错误数；PCB DRC 树**没有 severity 字段**，叶子的 `parentId` 第二段才是编辑器自己的页签名 | ERC 计数全工程只报一次（标 `host-wide`）；PCB 叶子 severity 用 parentId 分流，读不出按 ERROR 并标 `assumed`。出处 `outputs/025c_checkup_live.txt`、025 批 3 |
 | 18 | **3.2.149 开两个窗口时第二个编辑器窗口的 connector 不上线**（页面重载后第二个才上线）：窗口冻结/懒求值，与本机背景窗口冻结 7 小时同源，**不是** activate 派发问题（3.2.149.88089769 冷启动 activate 正常派发） | 多窗口作业先在 3.2.18x 上做；149 的多窗口等 Worker watchdog。出处 issue #4（2026-09-23）、`tasks/024-easyeda-3.2.149-bootstrap.md` §现场验证修订、`tasks/025-review-flow-v2.md:151` |
+| 19 | **宿主 `sys_Timer` 也吃页面节流**：`eda.sys_Timer.setIntervalTimer` 的回调由宿主投到**页面任务队列**，后台窗口里与页面时钟吃同一张节流时刻表（三钟同段实测：宿主 150 s 只 18 次，48 s/60 s/35 s 三个大间隔与页面逐一重合；同段 Worker 158/158）。`...args` 透传是真的（`callbackArgs` 拿到 `['probe-arg', 42]`） | 想要"后台免疫"只能用 `blob:` Worker 自己的定时器（0.4.17 的 watchdog 就是它）；**别**把宿主定时器当后台闹钟。出处 `outputs/026_probe_p5_host_timer.txt`、`tasks/026-worker-watchdog.md` §三.5 |
+| 20 | **让窗口真"后台"只能抢走前台**：`ShowWindow(SW_MINIMIZE)` / `WM_SYSCOMMAND:SC_MINIMIZE` / `SetWindowPos(HWND_BOTTOM)` 在本机**都不改变前台**（`IsIconic` 恒 false，只压 z 序）；窗口仍持前台时 Chromium **不节流**，后台读数全是废的。抢前台只有 `powershell -NoProfile -Command "…SetForegroundWindow…"` **内联**生效，同一段代码写成 `.ps1` 走 `-File` **不生效** | 用 `.tmp_026_fg.py`（`away`/`front`/枚举窗口）：抢完必须**复读** `GetForegroundWindow` 确认不是编辑器，后台成立的旁证是连接器心跳出现 **60 s 间隔**（audit 里 `ping role=connector` 的间距）。出处 026 P5、026b 批 2b |
 
 宿主版本：**3.2.149 是实测下限**（2026-09-23 在 3.2.149.88089769 上实测：打标/缩放等 8 个关键成员
 typeof 全在位、activate 冷启动正常派发、render 实跑 308KB PNG——旧立论"3.2.183 以下这些接口不存在"
