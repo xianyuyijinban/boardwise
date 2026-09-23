@@ -36,9 +36,9 @@ collects the current truth and the pointers.
 - pytest: **1388 passed** (run with `--basetemp=.tmp_pt_home` on Windows —
   the host's safe-delete hook otherwise eats the summary line and fakes
   exit 1)
-- connector: **380 pass / 0 fail** (`cd connector && npm test`)
+- connector: **418 pass / 0 fail** (`cd connector && npm test`)
 - `npx tsc --noEmit`: clean
-- connector version: **0.4.16** (`connector/extension.json`)
+- connector version: **0.4.17** (`connector/extension.json`)
 - Verified host: EasyEDA Pro **3.2.186** (the only host the bridge is
   calibrated against; every real-host fact in the task books names it)
 
@@ -94,3 +94,4 @@ point. Full measurement history: `tasks/010c-coordinate-convention.md`
 - 025e update-connector false-FAILED fix: verdict changed from "version" to "**identity + version**" — only a connection that was NOT online before the write (reload mints a new instance id) reporting a non-stored build counts as mismatch; a lingering old socket is "not back yet" (wait), budget exhausted → exit 3 UNKNOWN, stored build sighted → exit 0; pre-write window-table snapshot, missing snapshot disables mismatch; `_running_connector_version()` deleted (probe read is answerable by any window, carries no identity); three-state semantics unchanged; pytest **1388** (+4, incl. the regression pin that was red before: `assert 1 == 3`), connector 365 unchanged; mutations 3/3 caught; live hot-update drill folded into 026 task 0 (`tasks/025-review-flow-v2.md` §7, `outputs/025e_update_connector_false_failed.txt`)
 - 026 probe batch (Worker watchdog 定案): 形态 A（Worker 闹钟）**定案**——P2 否了形态 B（Worker 里无 `eda`）、P5 否了宿主 `sys_Timer`（回调与页面时钟同吃一张节流时刻表，大间隔逐一重合）、P3 证实 A 前提（页面时钟压到整分钟级时 Worker 153/153 一次不落）、P1 证实扩展页可起 `blob:` Worker（往返 8 ms）；任务 0 真机热更 exit 0 verified（025e 修复闭环）；P4 sideload 冷启动 12.5 s 自愈（卸载重导入腿需岳手动）；临时动作 `sys.worker_probe`（connector **0.4.16**，PROBE-ONLY，15 mock 用例）；去留已定：实现批删 4 个测量模式、`status` 改名 `sys.connector_status` 并入 doctor；connector **380** (+15)，pytest 1388 不变；变异 4/4 CAUGHT（`tasks/026-worker-watchdog.md` §六，`outputs/026_probe.md`）
 - 027 EDITOR_API_FLOOR (3,2,183)→(3,2,149): 旧立论（<183 无 generateIndicatorMarkers/zoomToRegion）被 3.2.149.88089769 现场证伪（8/8 成员 probe 全 function 带 arity、activate 冷启动正常、render 实跑 308KB PNG）；常量+注释重写（实测点仅 149/186 两台、行为级验收另立批次、typeof 证否不证用三条边界）、doctor 文案随常量动态化、getting-started 7 处+install.md 2 处+SKILL 坑表同步；pytest 1388 不变（无语义新增）、connector 380 回归、变异 3/3 CAUGHT（FLOOR 边界/outdated_running/floor_text 拼接）；假安装树实跑：149 过/148 卡（`tasks/027-editor-api-floor.md` §五）
+- 026b batch 2a (Worker 闹钟形态 A 实现): 新模块 `connector/src/watchdog.ts`（内联 blob Worker：15s 查活性 / 页面沉默 45s 起每拍发 wake，解冻即连不等节流心跳；降级报原因不吹"免疫"）；`transport.ts` 四处活性上报 + `wake()` 四分支 + `reconnectNow()` 退避复位；`index.ts` `ensureWatchdog()` 单例挂 024 共享运行时 + About `watchdog:` 行；`actions.ts` 删 4 个测量模式（−703 行）、`status` 转正 `sys.connector_status`、`sys.worker_probe` 仅留 `nativeWs`（P6 页面侧判定靠它，2b 跑完即删，主代理裁决）；daemon 零改动；connector **418**（删 15 + 新增 24+29），pytest 1388 不变，dist 0.4.17 `8fe4f591…` 256827B；变异 2/2 CAUGHT（wake 不动作 5 红 / 重求值双 Worker 2 红）；P6 daemon 侧实测通（Node 原生 WS 51ms 连上收 banner）；主代理复验三线+sha256 一致（`tasks/026b-worker-watchdog-impl.md` §六，`outputs/026b_impl_2a.txt`）

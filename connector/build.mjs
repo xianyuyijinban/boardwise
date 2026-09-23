@@ -66,6 +66,7 @@ await build({
     'src/self-update.ts',
     'src/transport.ts',
     'src/version.ts',
+    'src/watchdog.ts',
   ],
   outdir: 'dist/esm',
   format: 'esm',
