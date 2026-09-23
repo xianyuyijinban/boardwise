@@ -16,17 +16,18 @@ Three rules the rest of the slice leans on:
   "the two agreed last week" is not a property either of them can hold.
 * **Determinism, never convenience.** The designator is the lowest free number
   for its prefix, the landing spot is a fixed ladder from the anchor, and the
-  connection is decided by two named rules rather than by whichever call would
+  connection is decided by three named rules rather than by whichever call would
   succeed. Two runs of the same plan therefore produce the same numbers, and a
   reviewer can predict both before reading the code.
 * **Refusals say what is missing.** An exhausted ladder names the positions it
-  tried and what occupies them; a net that cannot be connected names both
-  options that were checked. No fallback to the origin, and no unannounced
-  label: a label is a named outcome of `choose_connection` (the page's own habit
-  for that net, or the ground exception of 029-c), never something apply slips in
-  when a wire would not reach. The M2 rules ("don't connect by label and call it
-  done", "don't quietly choose") are enforced by the shape of that decision, not
-  by a comment.
+  tried and what occupies them; a net that cannot be connected names all three
+  options that were checked. No fallback to the origin, no unannounced label and
+  no dangling named wire: every mechanism is a named outcome of
+  `choose_connection` (a wire to that net's own segment, a flag on the pin for a
+  rail, a label only where the page already names the net), never something apply
+  slips in when a wire would not reach. The M2 rules ("don't connect by label and
+  call it done", "don't quietly choose") are enforced by the shape of that
+  decision, not by a comment.
 
 Nothing here talks to the bridge: the geometry it reads is a `sch.geometry`
 dump, which the CLI fetches.
@@ -108,11 +109,11 @@ class LadderExhausted(Exception):
 
 
 class NoConnectionOption(Exception):
-    """No nearby wire of that net, no label of it on the page, not a ground net.
+    """No nearby wire of that net, not a rail (so no flag), no label of it.
 
-    All three checks are named in the message (029-c added the ground exception),
-    because the operator's next move — which wire to draw — depends on knowing
-    which of them failed.
+    All three checks are named in the message (029-d made the rail check the
+    second one), because the operator's next move — which wire to draw, or which
+    rail to name — depends on knowing which of them failed.
     """
 
     def __init__(self, net: str, detail: str):
@@ -225,6 +226,43 @@ def pin_points(payload: Any) -> dict[str, tuple[float, float]]:
         if number and x is not None and y is not None:
             points.setdefault(number, (x, y))
     return points
+
+
+def power_flag_kind(net: str) -> str:
+    """The net-flag kind a rail net gets (`'Ground'`/`'Power'`), or ``''``.
+
+    A *rail* — ground or a supply — is the one thing that may be created where
+    the page has nothing, because a flag is a real library component and the
+    editor's own netlist carries it (measured 2026-09-24: placing
+    ``kind=Ground, net=GND`` on a capacitor's pin moved that pin onto net GND in
+    the exported netlist, twice in a row, with no wire anywhere).
+
+    The judgement of "is this name a rail" is **not re-made here**: it is
+    ``layout._net_kind``, the same function the draw flow names nets with (which
+    itself defers ground to `core.model.is_ground_net`). A second regex beside
+    this one is how ``VEE`` and the SGND/EGND spellings drifted apart before.
+    """
+    from .layout import _net_kind
+
+    kind = _net_kind(net or "")
+    return kind if kind in ("Ground", "Power") else ""
+
+
+def netflag_count(geometry: Any) -> int:
+    """How many net flags (ground/power symbols) the page reports.
+
+    Counted from `sch.geometry`, where a flag is a component with
+    ``ComponentType: "netflag"`` and an **empty Designator** — which is exactly
+    why the designator-set range diff never sees it, and why 029-d's acceptance
+    ("+1 part +1 flag") needs this second count.
+    """
+    if not isinstance(geometry, dict):
+        return 0
+    return sum(
+        1
+        for entry in geometry.get("components") or []
+        if _text(_state_of(entry).get("ComponentType")) == "netflag"
+    )
 
 
 def wire_route(
@@ -384,21 +422,24 @@ def nearest_wire_point(
 
 
 def choose_connection(net: str, spot: tuple[float, float], geometry: Any):
-    """How **one** declared connection is made (029-c §①), or a refusal.
+    """How **one** declared connection is made (029-c §①, 029-d §①), or a refusal.
 
-    Three outcomes, in the task book's order:
+    Four outcomes, in the order the task books fix:
 
     1. **wire** — a vertex of *that net's own* wiring is within
        :data:`CONNECT_RADIUS`. Short loop, no name to invent.
-    2. **label** — allowed when either the page already labels that net (copying
-       its convention) **or** the net is a ground net. Ground is the deliberate
-       exception: `GND` is how *every* schematic says ground, so requiring a
-       label precedent for it would refuse the most standard drawing there is.
-       Which of the two reasons applied is written into the detail.
-    3. neither → :class:`NoConnectionOption`, naming both checks.
+    2. **power-flag** — the net is a rail (ground or a supply, decided by
+       :func:`power_flag_kind`) and the page has no geometry of it to reach: the
+       flag is placed **on the part's own pin**, which is the one way to create a
+       rail connection where the page has none that the editor's netlist actually
+       carries. A dangling wire named after the rail is *not* an option (029-d
+       forbids it by name): copper that reaches nothing is not a connection.
+    3. **label** — the page already names that net with a label, so the connection
+       copies a convention instead of inventing one. (Not for rails: a rail gets
+       the flag, and the host's net-label API is measured unusable anyway — 029-c.)
+    4. neither → :class:`NoConnectionOption`, naming all three checks.
     """
-    from ..core.changeplan import CONNECTION_LABEL, CONNECTION_WIRE
-    from ..core.model import is_ground_net
+    from ..core.changeplan import CONNECTION_LABEL, CONNECTION_POWER_FLAG, CONNECTION_WIRE
 
     near = nearest_wire_point(spot, geometry, net)
     if near is not None and near[2] <= CONNECT_RADIUS:
@@ -410,15 +451,17 @@ def choose_connection(net: str, spot: tuple[float, float], geometry: Any):
             ),
             to=(near[0], near[1]),
         )
-    labels = net_label_names(geometry)
-    if is_ground_net(net):
+    flag = power_flag_kind(net)
+    if flag:
         return ConnectionChoice(
-            kind=CONNECTION_LABEL,
+            kind=CONNECTION_POWER_FLAG,
             detail=(
-                f"a net label {net!r}: the net is a ground net, and naming ground is "
-                "how a schematic states it even when this page shows no label precedent"
+                f"a {flag} flag named {net!r} placed on the part's own pin: the page has "
+                f"no {net!r} geometry within {CONNECT_RADIUS:g} units to reach, and a flag "
+                "is a library component the editor's netlist carries (029-d, measured)"
             ),
         )
+    labels = net_label_names(geometry)
     if net in labels:
         return ConnectionChoice(
             kind=CONNECTION_LABEL,
@@ -436,9 +479,9 @@ def choose_connection(net: str, spot: tuple[float, float], geometry: Any):
             if near is not None
             else "(the page has no wire points at all)"
         )
-        + f", and this page uses no label named {net!r} (it is not a ground net "
-        "either, which would have allowed one) — 两种连接手段都不成立，拒绝建 plan"
-        "（不用全脚标签假装连通）",
+        + f", this page uses no label named {net!r}, and the net is not a rail "
+        f"(a ground or supply name, which would have allowed a flag) — 三种连接手段"
+        "都不成立，拒绝建 plan（不用悬空名线、也不用全脚标签假装连通）",
     )
 
 
