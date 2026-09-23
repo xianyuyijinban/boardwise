@@ -38,6 +38,7 @@ __all__ = [
     "COMPONENT_VALUE_KIND",
     "CONNECTION_KINDS",
     "CONNECTION_LABEL",
+    "CONNECTION_POWER_FLAG",
     "CONNECTION_WIRE",
     "PLAN_VERSION",
     "SUPPORTED_KINDS",
@@ -76,15 +77,25 @@ _LATER_KINDS = {
     "move-block": "moving a functional block",
 }
 
-#: How an added part is connected to the net it decouples. Two, and both are a
-#: claim about what is on the page: `wire` draws a short segment to an existing
-#: segment of that net, `label` puts the net's own name on a stub. There is no
-#: third option on purpose — an all-pin label would *look* connected while
-#: saying nothing about where the current goes (岳 M2 red line), and "whichever
-#: works" is exactly the silent choice the plan exists to make explicit.
+#: How an added part is connected to the net it decouples. Three, and each one
+#: is a claim about what will be on the page:
+#:
+#: * `wire` draws a short segment from the part's own pin to an existing segment
+#:   of that net;
+#: * `label` puts the page's own name for that net on a stub (only where the page
+#:   already names it that way — a name is a convention, not a connection);
+#: * `power-flag` places a real ground/power symbol on the pin (029-d). It is the
+#:   only mechanism that can *create* a rail connection where the page has none,
+#:   and it is a library component, so the editor's own netlist carries it.
+#:
+#: There is no "whichever works" option: an all-pin label would *look* connected
+#: while saying nothing about where the current goes (岳 M2 red line), and a
+#: dangling wire named after the net is the same lie in copper (029-d forbids it
+#: by name).
 CONNECTION_WIRE = "wire"
 CONNECTION_LABEL = "label"
-CONNECTION_KINDS: tuple[str, ...] = (CONNECTION_WIRE, CONNECTION_LABEL)
+CONNECTION_POWER_FLAG = "power-flag"
+CONNECTION_KINDS: tuple[str, ...] = (CONNECTION_WIRE, CONNECTION_LABEL, CONNECTION_POWER_FLAG)
 
 _SHA256_RE = re.compile(r"\A[0-9a-f]{64}\Z")
 
@@ -154,15 +165,15 @@ class PlanTarget:
     #: `sch.place_component` and `sch.geometry` speak).
     x: float | None = None
     y: float | None = None
-    #: `add-component` only: ``wire`` or ``label`` — see CONNECTION_KINDS. A
-    #: summary of the first declared connection (the plan's oldest shape, kept so
-    #: a reader of the target block alone still learns the mode); since 029-c the
+    #: `add-component` only: one of CONNECTION_KINDS. A summary of the first
+    #: declared connection (the plan's oldest shape, kept so a reader of the
+    #: target block alone still learns the mode); since 029-c the
     #: **per-connection** ``change.connections[*].kind`` is what apply executes,
-    #: and the two differ whenever a plan mixes a wire with a label.
+    #: and the two differ whenever a plan mixes a wire with a flag.
     connection: str = ""
-    #: Why that connection, in one line (the segment it reaches, or the label it
-    #: copies). Written into the plan because "it connected somehow" is not a
-    #: reviewable claim.
+    #: Why that connection, in one line (the segment it reaches, the label it
+    #: copies, or the flag it places). Written into the plan because "it
+    #: connected somehow" is not a reviewable claim.
     connection_detail: str = ""
 
 
@@ -189,9 +200,12 @@ class PlanConnection:
 
     pin: str = ""
     net: str = ""
-    kind: str = ""      # wire | label; required by the add-component validation
+    kind: str = ""      # wire | label | power-flag; required by the validation
     detail: str = ""
-    #: Where a `wire` connection ends (a vertex of that net's own wiring).
+    #: Where a `wire` connection ends (a vertex of that net's own wiring). A
+    #: `power-flag` reaches a coordinate too — the *pin's own* — but that one is
+    #: not known until the part is placed, so apply reads it there rather than
+    #: pretending the plan could have known it.
     to: tuple[float, float] | None = None
 
 
