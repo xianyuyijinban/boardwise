@@ -86,7 +86,7 @@ test('sys.connector_status lifts the three lifecycle counters out of the status 
       activateObserved: false,
       evaluations: 3,
       fingerprint: '53cd3b41',
-      watchdog: { state: 'running', wakes: 2, activityPosts: 11, checkIntervalMs: 15000, activityTimeoutMs: 45000 },
+      watchdog: { state: 'running', wakes: 2, activityPosts: 11, checkIntervalMs: 15000, activityTimeoutMs: 30000 },
     }),
   };
   const report = await status(fakeEda({ __boardwiseTransportRuntime: published }));
@@ -101,7 +101,7 @@ test('sys.connector_status lifts the three lifecycle counters out of the status 
     wakes: 2,
     activityPosts: 11,
     checkIntervalMs: 15000,
-    activityTimeoutMs: 45000,
+    activityTimeoutMs: 30000,
   });
 });
 

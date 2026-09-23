@@ -743,7 +743,7 @@ fingerprint ever leaves the daemon, which is why the fingerprint is the one thin
 compare.
 
 The `watchdog:` line is one of four readings, and it is a fact about this editor rather than a
-promise about behaviour (§7): `running (checks every 15000 ms, wakes after 45000 ms of page silence,
+promise about behaviour (§7): `running (checks every 15000 ms, wakes after 30000 ms of page silence,
 wakes so far: N)`, `unavailable(<the host's own refusal>)`, `not started (auto-connect is off)` or
 `not started (no connection attempt yet)`. `unavailable` is the one to act on: that window will not
 notice a dead socket while it is in the background, and only bringing it to the front recovers it.
@@ -785,20 +785,20 @@ So the connector ships one alarm in a Worker, and the page keeps it informed:
 
 - the transport reports **activity** on every sign of life — heartbeat sent, any inbound frame, a
   connect attempt, a successful handshake;
-- the Worker checks every **15 s**, and once the page has been silent for longer than **45 s** it
+- the Worker checks every **15 s**, and once the page has been silent for longer than **30 s** it
   posts `{type:'wake'}` — **one per check**, not one per silence, because a frozen page swallows
   messages and must find one waiting the moment it runs again;
-- the page's reaction is `Transport.wake()`: `connected` with **nothing** outstanding → nothing to do
-  (the activity stamp already stops the alarm repeating); `connected` with **any** unanswered
-  heartbeat → the socket is judged dead and rebuilt now (since 0.4.18 — see §7.1's measurement
-  note for why one miss is enough); `connecting`/`handshaking` → replace the attempt now;
-  `idle`/`reconnecting` → connect now with the backoff ladder reset, because the silence was the
-  page's and says nothing about the daemon.
+- the page's reaction is `Transport.wake()`: `connected` with **nothing** outstanding → **probe the
+  socket with a ping** (since 0.4.19 — the daemon's answer is the liveness evidence, and it arrives
+  as an inbound frame, so nothing here waits for a page timer); `connected` with **any** unanswered
+  heartbeat → the socket is judged dead and rebuilt now (since 0.4.18); `connecting`/`handshaking` →
+  replace the attempt now; `idle`/`reconnecting` → connect now with the backoff ladder reset,
+  because the silence was the page's and says nothing about the daemon.
 
 | window state | page timers | without the watchdog | with the watchdog |
 |---|---|---|---|
 | foreground | normal | normal | unchanged (the alarm only ever adds a Worker) |
-| background (throttled) | ~1 tick a minute | heartbeat drops to the same rate; a reconnect after a daemon restart waits for a throttled timer | the page's next tick notices, and the reconnect itself waits for nothing: measured, that is the wake's ~50 s of silence plus about a second (§7.1's table) |
+| background (throttled) | ~1 tick a minute | heartbeat drops to the same rate; a reconnect after a daemon restart waits for a throttled timer | the alarm probes the socket every 30–45 s and rebuilds it on the first unanswered answer: measured kill→hello **27–46 s** (§7.1's table) |
 | frozen (the 7-hour state) | stop entirely | **never reconnects** until the window is brought to the front | the wake is already queued when the page unfreezes, and the reconnect happens then, without the backoff |
 | page discarded | dead | nothing recovers | nothing recovers — the Worker's thread goes with the page |
 
@@ -845,8 +845,26 @@ spread exactly there (62.8 s … 114.9 s), which is why this section claims a *s
 same-instant controls say the same thing: in run D the user's own window (never backgrounded by the
 test, and not throttled) came back in **24 s**, while the throttled test window took 93 s.
 
-If a *total* ≤90 s is ever required, the only levers left are the two constants in this design (the
-15 s check and the 45 s silence threshold) — both deliberate, both spec-level, neither changed here.
+**0.4.19 (026d) removed that residual term, and the same experiment now has no spread to explain
+away.** The wake stopped being a page word for the page's own liveness and became a probe — and the
+silence threshold went from 45 s to 30 s so the probe runs every 30–45 s in the steady state instead
+of every 45–60 s. Where the old design waited for the page's throttled heartbeat timer to send the
+ping that would discover the dead socket, this one never waits for a timer at all. Three runs, same
+method, immediately after:
+
+| run | connector | daemon took to listen | **kill → hello** | listening → hello | what the wake reported |
+|---|---|---|---|---|---|
+| F | 0.4.19 | 4.7 s | **39.6 s** | 34.9 s | 34 788 ms of silence, 1 unanswered heartbeat |
+| G | 0.4.19 | 4.6 s | **27.1 s** | 22.5 s | 49 788 ms, 1 unanswered heartbeat |
+| H | 0.4.19 | 4.7 s | **45.8 s** | 41.1 s | 34 773 ms, 1 unanswered heartbeat |
+
+**3/3 under the 90 s brief, and the worst sample is roughly half of it** — where the same three-run
+budget under 0.4.18 produced 93.4 s, 27.1 s and 45.8 s-shaped evidence only after the phase happened
+to fall favourably. What remains is the design's own floor, not a scheduling accident: at worst the
+page's last sign of life is 30–45 s before the first wake (the Worker compares strictly on a 15 s
+grid), the probe's ping is unanswered, and the *next* check judges the socket dead — so the total is
+bounded by that threshold plus one check, and the daemon's own startup. The two constants are now
+the 15 s check and the 30 s silence threshold.
 
 **One alarm per editor runtime.** The editor re-evaluates the bundle on every menu click, so the
 Worker is owned by the shared runtime the transport already lives in (024): a later evaluation
@@ -1325,7 +1343,11 @@ Recorded rather than hidden, so a future session does not have to rediscover the
     recovery is now the wake's silence plus about a second (**48.5–51.1 s measured**), and the rest
     of the spread is the page's own ~1/minute tick — where in that cycle the daemon died is not
     something a connector can control, so the *total* is phase-dependent while the *share* is not.
-    §7.1 carries the table.
+    **Closed in 0.4.19 (026d):** that residual phase term came from the ping leaving on the page's
+    throttled heartbeat timer, so the wake itself became the probe (ping now; the pong is the
+    liveness evidence) and the silence threshold went 45 s → 30 s. Three runs with no other change:
+    **kill → hello 39.6 / 27.1 / 45.8 s**, i.e. 3/3 inside the 90 s brief and roughly half of it in
+    the worst case, with no spread that needs explaining. §7.1 carries the table.
     **Three more measurements from the same batch, because one number would have been a guess.**
     The same experiment was run three times (window out of the foreground, daemon killed and
     restarted): **151.5 s**, **135.5 s**, and a three-window run in which **all three** windows came
