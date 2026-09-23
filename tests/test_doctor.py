@@ -161,17 +161,17 @@ def test_no_connector_names_the_extension_as_the_thing_to_fix():
 
 def test_an_editor_below_the_api_floor_is_called_out_with_the_version():
     checks = run_doctor(healthy_probe(
-        editor_version="3.2.180",
-        probe={"version": "3.2.180", "connector": "0.4.5", "checks": ALL_PRESENT},
+        editor_version="3.2.148",
+        probe={"version": "3.2.148", "connector": "0.4.5", "checks": ALL_PRESENT},
     ))
     entry = check(checks, "editor-version")
     assert entry.ok is False
-    assert "3.2.180" in entry.detail
-    assert "3.2.183" in entry.fix
-    # 3.2.183 itself is the floor, not the line above it.
+    assert "3.2.148" in entry.detail
+    assert "3.2.149" in entry.fix
+    # 3.2.149 itself is the floor, not the line above it.
     floor = run_doctor(healthy_probe(
-        editor_version="3.2.183",
-        probe={"version": "3.2.183", "connector": "0.4.5", "checks": ALL_PRESENT},
+        editor_version="3.2.149",
+        probe={"version": "3.2.149", "connector": "0.4.5", "checks": ALL_PRESENT},
     ))
     assert check(floor, "editor-version").ok is True
 
@@ -184,7 +184,10 @@ def test_a_missing_method_is_named_not_counted():
             "dmt_EditorControl": {
                 "present": True, "kind": "object", "checked": 2, "missing": 1,
                 "status": {"openDocument": "function", "generateIndicatorMarkers": "undefined"},
-                "notes": {"generateIndicatorMarkers": "declared ADD since EDA v3.2.183 on this host"},
+                # The host's own remark rides along with `status` (the real ones
+                # read `declared ADD since EDA v… on this host`): a hint, never
+                # the verdict — the member is named from `status` either way.
+                "notes": {"generateIndicatorMarkers": "declared in the type package, undefined here"},
             },
         },
     }))
@@ -356,7 +359,7 @@ def test_the_probe_checks_and_the_generated_api_table_agree():
 
 
 def test_the_version_floor_is_the_one_the_task_book_names():
-    assert EDITOR_API_FLOOR == (3, 2, 183)
+    assert EDITOR_API_FLOOR == (3, 2, 149)
 
 
 # --------------------------------------------------------------------------
@@ -389,14 +392,14 @@ def test_an_old_install_tree_is_red_before_anything_is_connected():
     checks = run_doctor(DoctorProbe(
         port=61190,
         offline_editor_path=r"D:\lceda-pro",
-        offline_editor_version="3.2.149.88089769",
+        offline_editor_version="3.2.148.88089769",
     ))
     entry = checks[0]
     assert entry.name == "editor-install"
     assert entry.ok is False and entry.skipped is False
-    assert "3.2.149.88089769" in entry.detail and r"D:\lceda-pro" in entry.detail
+    assert "3.2.148.88089769" in entry.detail and r"D:\lceda-pro" in entry.detail
     # 直给：先升级，其余都排在它后面；地址按 docs/install.md 的说法。
-    assert "先升级编辑器到 ≥3.2.183" in entry.fix
+    assert "先升级编辑器到 ≥3.2.149" in entry.fix
     assert "其余检查项都排在它后面" in entry.fix
     assert "https://pro.easyeda.com/" in entry.fix
     # …and only then the six prerequisites of the bridge path.
@@ -411,10 +414,10 @@ def test_an_old_editor_still_connected_is_red_on_both_version_lines():
     the actionable one (upgrade) printed first.
     """
     checks = run_doctor(healthy_probe(
-        editor_version="3.2.149.88089769",
-        probe={"version": "3.2.149.88089769", "connector": "0.4.5", "checks": ALL_PRESENT},
+        editor_version="3.2.148.88089769",
+        probe={"version": "3.2.148.88089769", "connector": "0.4.5", "checks": ALL_PRESENT},
         offline_editor_path=r"D:\lceda-pro",
-        offline_editor_version="3.2.149.88089769",
+        offline_editor_version="3.2.148.88089769",
     ))
     assert [entry.ok for entry in (check(checks, "editor-install"), check(checks, "editor-version"))] == [False, False]
     assert "先升级编辑器" in check(checks, "editor-install").fix
@@ -455,7 +458,7 @@ def test_the_four_field_version_is_compared_on_its_first_three_fields():
     # the two readings of the same release would look like different releases.
     assert _editor_version_key("3.2.149.88089769") == (3, 2, 149)
     assert _editor_version_key("3.2.186.b52e3e87") == (3, 2, 186)
-    assert _editor_version_key("v3.2.183") == (3, 2, 183)
+    assert _editor_version_key("v3.2.149") == (3, 2, 149)
     assert _editor_version_key("") == ()
 
     checks = run_doctor(healthy_probe(
@@ -466,28 +469,28 @@ def test_the_four_field_version_is_compared_on_its_first_three_fields():
     assert "不是正在跑的这个" not in check(checks, "editor-version").detail
 
     # The floor itself passes with a suffix, and one field below it does not.
-    at_floor = run_doctor(DoctorProbe(port=61190, offline_editor_version="3.2.183.71234567"))
+    at_floor = run_doctor(DoctorProbe(port=61190, offline_editor_version="3.2.149.71234567"))
     assert at_floor[0].ok is True
-    below = run_doctor(DoctorProbe(port=61190, offline_editor_version="3.2.182.71234567"))
+    below = run_doctor(DoctorProbe(port=61190, offline_editor_version="3.2.148.71234567"))
     assert below[0].ok is False
 
 
 def test_the_tree_newer_than_the_running_editor_asks_for_a_restart():
     """Upgraded but not restarted: the fix is a restart, not a download."""
     checks = run_doctor(healthy_probe(
-        editor_version="3.2.149",
-        probe={"version": "3.2.149", "connector": "0.4.5", "checks": ALL_PRESENT},
+        editor_version="3.2.148",
+        probe={"version": "3.2.148", "connector": "0.4.5", "checks": ALL_PRESENT},
         offline_editor_path=r"D:\lceda-pro",
         offline_editor_version="3.2.186.b52e3e87",
     ))
     install = check(checks, "editor-install")
     assert install.skipped is True and install.ok is True
     assert "两处不是同一个安装" in install.detail
-    assert "3.2.149" in install.detail and "3.2.186.b52e3e87" in install.detail
+    assert "3.2.148" in install.detail and "3.2.186.b52e3e87" in install.detail
 
     running = check(checks, "editor-version")
     assert running.ok is False
-    assert "3.2.149" in running.detail and "3.2.186.b52e3e87" in running.detail
+    assert "3.2.148" in running.detail and "3.2.186.b52e3e87" in running.detail
     assert "重启" in running.fix
     assert "Get-Process lceda-pro" in running.fix
 
@@ -637,7 +640,7 @@ def test_the_cli_says_upgrade_before_anything_is_connected(tmp_path):
     have a verdict first.
     """
     port = _free_port()
-    install_tree(tmp_path, "3.2.149.88089769")
+    install_tree(tmp_path, "3.2.148.88089769")
     result = subprocess.run(
         [sys.executable, "-m", "boardwise.cli", "doctor", "--port", str(port)],
         capture_output=True, text=True, encoding="utf-8",
@@ -647,9 +650,9 @@ def test_the_cli_says_upgrade_before_anything_is_connected(tmp_path):
     assert "Traceback" not in result.stderr
     lines = [line for line in result.stdout.splitlines() if line.strip()]
     assert lines[0].lstrip().startswith("FAIL")
-    assert "编辑器安装版本 ≥ 3.2.183" in lines[0]
-    assert "3.2.149.88089769" in result.stdout
-    assert "先升级编辑器到 ≥3.2.183" in result.stdout
+    assert "编辑器安装版本 ≥ 3.2.149" in lines[0]
+    assert "3.2.148.88089769" in result.stdout
+    assert "先升级编辑器到 ≥3.2.149" in result.stdout
     assert "0/8" in result.stdout
     assert "8 项需要处理" in result.stdout
     assert result.stdout.count("FAIL") == 8

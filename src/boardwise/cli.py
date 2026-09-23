@@ -578,6 +578,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--port", type=int, default=None, help="Daemon port (default 61190)."
     )
 
+    # Spelled from the constant, never typed out again: the floor moves in one
+    # place, or `--help` starts quoting a version doctor no longer asks for.
+    floor_text = ".".join(str(part) for part in EDITOR_API_FLOOR)
     doctor = sub.add_parser(
         "doctor",
         help="Check that this installation can do anything (daemon · extension · versions · project).",
@@ -587,7 +590,7 @@ def build_parser() -> argparse.ArgumentParser:
             "WebSocket is registered, five methods the harness depends on answer "
             "`typeof === function` (sys.probe), the running daemon version matches "
             "this install, the connector build in the editor matches the repo, the "
-            "editor is ≥ 3.2.183, and the focused project is readable. Green exits "
+            f"editor is ≥ {floor_text}, and the focused project is readable. Green exits "
             "0; anything else exits 1 with one fix per failing line. Built for the "
             "unplugged case: no daemon, no extension and an old editor are all "
             "reported, never crashed on."
@@ -6052,11 +6055,31 @@ DOCTOR_PROBE_CHECKS: dict[str, tuple[str, ...]] = {
     "dmt_EditorControl": ("openDocument", "generateIndicatorMarkers"),
 }
 
-#: The editor release that added the API surface this harness leans on.
-#: Below it, `generateIndicatorMarkers`/`zoomToRegion` and friends are declared
-#: absent — so doctor says so instead of letting `review.mark` fail on the
-#: machine with a NOT_IMPLEMENTED nobody asked for.
-EDITOR_API_FLOOR = (3, 2, 183)
+#: The oldest editor release this harness has evidence for. Not a promise that
+#: everything from here up works — see the three boundaries below.
+#:
+#: It was 3.2.183, on the reading that `generateIndicatorMarkers`/`zoomToRegion`
+#: and friends did not exist below that. **Disproved on 3.2.149.88089769**
+#: (2026-09-23, measured on the machine): the eight members probed there all
+#: answer `typeof === function` *with* their arity, `activate()` is dispatched
+#: normally on a cold start (the "3.2.149 never dispatches it" reading of 024 did
+#: not reproduce), and `sch_ManufactureData.getExportDocumentFile` really runs —
+#: a 308 KB PNG came back. Hence 3.2.149.
+#:
+#: What it does *not* claim:
+#:
+#: 1. **Not "3.2.149 and up are all fine."** The measured points are exactly two
+#:    hosts — 3.2.149.88089769 and 3.2.186 — and below 3.2.149 there is no
+#:    evidence at all, which is why doctor keeps refusing those.
+#: 2. **Behaviour is a separate question, measured separately**: `review.mark`
+#:    really drawing, the checkup chain end to end, DRC on a real project. A host
+#:    found crippled there gets a *behavioural* check in doctor rather than a
+#:    version number — measure it, do not infer it from the release.
+#: 3. **`typeof` proves a member exists, never that it works.** That is this
+#:    repo's own lesson, not a caveat: `getPngFile` is declared from 3.2.183 and
+#:    answers nothing at runtime on *both* measured hosts. Absence is evidence;
+#:    presence is only a hint.
+EDITOR_API_FLOOR = (3, 2, 149)
 
 #: The one sentence every connector-dependent check repeats when nothing is
 #: attached. Written once so the seven lines cannot drift into seven different
@@ -6540,7 +6563,8 @@ def run_doctor(p: DoctorProbe) -> list[DoctorCheck]:
                     ""
                     if editor_ok
                     else f"（低于 {floor_text}："
-                    "generateIndicatorMarkers / zoomToRegion 等接口在该版本后才有）"
+                    "这套 harness 依赖的画布接口只在这条线以上实测过——"
+                    "低于它的版本没有证据，不是判定为坏的）"
                 )
                 + (
                     f"（安装树 {p.offline_editor_path} 里是 {p.offline_editor_version}，"
