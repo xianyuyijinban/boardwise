@@ -136,3 +136,13 @@
 
 - `cli.py ba5995c9…` 与交卷一致；`git status` 仅两文件；`pytest tests/test_doctor.py` **42 passed** 亲手复跑。
 - 与 af2ac90 的 `--project/--instance` 合流后，issue #6 两半均修。
+
+### 批 3c · Release 发布（2026-09-23，主代理；notes 岳已过目"没意见"）
+
+- **GitHub Release v0.4.19**（prerelease）：https://github.com/xianyuyijinban/boardwise/releases/tag/v0.4.19
+- 附件两个，**GitHub 服务端 digest 与本机 sha256 逐字节一致**（上传完整性实证）：
+  - `boardwise.exe` 11 698 601 B，`sha256:5cff0611…` ✔
+  - `boardwise-connector-0.4.19.eext` 62 303 B，`sha256:95923f2c…` ✔
+- notes = 岳过目版（下载双 sha + 7 步安装 + SmartScreen 提醒 + 多窗口自愈/双版本/checkup 三卖点
+  + exe 承诺兑现 + token 本地/loopback only 一句）。
+- **028 内测分发三件套全线收官。**
