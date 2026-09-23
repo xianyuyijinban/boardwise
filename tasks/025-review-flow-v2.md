@@ -169,3 +169,36 @@ unknown_parts 逐个 WebSearch 规格书核周边配置；canvas_images 逐张�
 - 三线：pytest **1363**（+27）/ connector 365 回归 / tsc 干净；离线 eval 与 dbd4570 逐字节相同；
   变异 4/4 CAUGHT（含一个「新字段没人读所以没人钉住」的发现，补断言后才中）。
 - 坑：ERC 计数 host-wide（入 SKILL 坑 17）；bash heredoc 写 CRLF 混行——长文本追加走 Edit 工具。
+
+### 批 4（报告 + 槽位 + skill）· 2026-09-23 中午 · agent-43 执行，Kimi 复验
+
+- 新模块 `engines/checkup.py`（806 行）：**模块聚类**（≥2 页带器件 → 按页，工程师自己的切分；
+  否则按**非地网**连通性聚类——GND 连一切，含它永远只有一块；同名页 uuid 前 8 位消歧；
+  命名要 ≥1/3 功能器件命中家族特征，否则保守留白 `未命名模块 N`）+ **页归属浅扫**
+  （整工程合并模型没有页切分，按 SCH_PAGE 文档重扫一遍；**必须按位置 join**——实测
+  Designator 属性的 `parentId` 是实例 container id 而不是 COMPONENT 的 partId，
+  按 id join 静默 0 页，比红更危险）+ **AI 槽位**（unknown_parts 逐条带 reasons/question、
+  canvas_images 逐原理图页 PNG、summary_template 中文四段模板）+ `report.md` 渲染
+  （与 report.json 同源同序）。`cli.py` +239（阶段 D 渲染、markdown 写出、控制台模块/槽位行、
+  `pending` 清空但保留键——消费者靠它区分"没欠账"与"键丢了"）。
+- 文档：README 英/中 checkup 段 + `/2` 各段含义表、getting-started 第 5 步插 5.0「一条命令」、
+  **SKILL.md §3 重写**为「checkup 优先 + AI 填槽」一页 SOP（§4–§8 未动）、bridge.md §8
+  命令表补 checkup 行（Kimi 收尾同步，"two commands" 标题随之改）。
+- 三线：pytest **1384**（1363+21：test_025d 16 例 + checkup_cli 5 例）/ connector **365** 回归 /
+  tsc 干净——Kimi 复验一致。离线 eval dev/holdout 与 `7ccf0a2` **逐字节相同**（sha256
+  `bcaf42a8…`/`33c4118a…`，Kimi 亲手 diff=IDENTICAL）；`engines/review.py`、`rules/` 零 diff。
+- 真机实录 `outputs/025d_checkup_full.txt`（437 行）：在线 `checkup` exit **1**（主机 PCB DRC
+  `Import Changes` 1 条——test 工程 PCB 与原理图网表不一致，真实命中）、tier=project-file 满血、
+  4 张 2362×1672 PNG 落 `--out`、三处 doc.open 焦点全复位、geometry/doc.list 逐字段零残留；
+  `--file` 兜底 exit 0，drc 两段 `offline-not-available`（没查≠零错误）、canvas 空 + note。
+  **PNG 经 Kimi 亲眼验证**：P1 空页边框、P4 页 R2 10K 在位（与模型 1 器件一致），真渲染非空帧。
+- 变异 **3/3 CAUGHT**（`_dominant()` 恒真→无依据也命名 / unknown_parts 去掉「MPN 值码解不出」理由 /
+  在线路径不出图且槽位不报原因），cp 备份 + sha256 还原逐字一致（`checkup.py 688ce48f…`、
+  `cli.py 9c80cf50…`，备份 `.tmp_mut025d/`，Kimi 复验还原一致）。
+- 坑：① 两个启发式假阳性被测试逮到——LCSC 码 `C57895` 的 `7895` 被无锚点 `78\d{2}` 当成
+  7800 系稳压器（修法：匹配文本剔除供应商码 + 全模式加锚点）；`LM358` 运放命中 `LM\d{2,4}`
+  被命名电源（修法：false-friends 黑名单）。② 单页板按连通性基本分不出模块——报告明说
+  "划分信息量有限"而不是硬造结构。③ 一次在线 checkup ~15 s（4 张 render 占大头，单张 2–3 s），
+  提速留给后续批次（并发出图）。④ `ai_slots` 多一个规格外键 `canvas_images_note`：
+  列表为空时区分"没图"与"图丢了"。
+- 待岳裁：`outputs/025d_*`（含 4 张 PNG ~630 KB）是否 `git add -f` 入库（outputs/ 默认 gitignore）。

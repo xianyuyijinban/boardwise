@@ -319,12 +319,13 @@ def test_a_closed_project_gate_falls_to_per_page_exports_and_says_so(
     assert "cross-page connectivity" not in notes
     # The ladder moved the focus and put it back.
     # ladder: open the page, restore. DRC stage: open the page, open the PCB,
-    # restore. The focus is put back twice, and the last thing either stage does
-    # is put it back where it found it.
-    assert _FakeBridgeClient.history.count("doc.open") == 5
+    # restore. Canvas stage: open the page, restore. Three stages, three restores —
+    # and the last thing each one does is put the focus back where it found it.
+    assert _FakeBridgeClient.history.count("doc.open") == 7
     opens = [params.get("uuid") for action, params in _FakeBridgeClient.history_pairs
              if action == "doc.open"]
-    assert opens == [PAGE_UUID, PAGE_UUID, PAGE_UUID, "5dc38976c1fa45ce", PAGE_UUID]
+    assert opens == [PAGE_UUID, PAGE_UUID, PAGE_UUID, "5dc38976c1fa45ce", PAGE_UUID,
+                     PAGE_UUID, PAGE_UUID]
     assert "tier per-page" in capsys.readouterr().out
 
 
@@ -404,32 +405,39 @@ def test_the_file_fallback_never_touches_the_bridge(fake_bridge, tmp_path):
     assert report["model"]["nets"] == 13
 
 
-def test_batch_four_sections_exist_and_are_empty(tmp_path):
-    """What batch 4 still owes is present, empty and marked — and nothing else is.
+def test_nothing_is_pending_once_batch_four_has_run(tmp_path):
+    """`pending` is empty and every section is real.
 
-    Rewritten in batch 3 to go through the **real** `_checkup_report` instead of a
-    hand-built copy of its shape. The copy had already gone stale (it still listed
-    `drc`/`findings` as pending after batch 3 filled them), which is exactly the
-    drift a second spelling of the report invites.
+    Rewritten twice, and the history is the point: it started as a hand-built copy
+    of the report shape (which went stale the moment batch 3 filled `drc`), was
+    rewritten in batch 3 to go through the **real** `_checkup_report`, and now
+    asserts the batch-4 contract — nothing owed.
     """
     from boardwise.cli import _checkup_report
+    from boardwise.engines.checkup import modules_section, summary_template, unknown_parts
     from boardwise.engines.drc import offline_section, summarise
     from boardwise.parsers.schematic import build_schematic_model
 
     model = build_schematic_model(GOLDEN)
     drc = {"schematic": offline_section("no editor"), "pcb": offline_section("no editor")}
+    modules, facts = modules_section(model=model, findings=[], attribution=None)
+    assert facts["moduleBasis"] == "connectivity"
+    slots = {"unknown_parts": unknown_parts(model), "canvas_images": [],
+             "canvas_images_note": "offline", "summary_template": summary_template()}
     report = _checkup_report(
         tier="file", source={"file": str(GOLDEN)}, model=model, attempts=[], notes=[],
         drc=drc, findings=[], summary=summarise(drc=drc, findings=[]),
+        modules=modules, slots=slots,
     )
     written = json.loads(_write_checkup_report(
         tmp_path / "nested" / "deep", report).read_text(encoding="utf-8"))
 
-    assert set(written["pending"]) == {"modules", "ai_slots", "reportMd", "canvasImages"}, (
-        "drc and findings are batch 3's and are no longer pending"
+    assert written["pending"] == {}, "the key stays, empty: nothing is owed any more"
+    assert written["modules"] and written["modules"][0]["components"], (
+        "a 17-part board must group into something"
     )
-    assert written["modules"] == []
-    assert written["ai_slots"] == {"unknown_parts": [], "canvas_images": [], "summary_template": ""}
+    assert written["ai_slots"]["unknown_parts"], "the golden board has parts with no MPN"
+    assert written["ai_slots"]["summary_template"].startswith("【结论先行】")
     assert written["drc"]["schematic"]["source"] == "offline-not-available"
     assert written["drc"]["schematic"]["checked"] is False
     assert written["summary"]["exitCode"] == 0
@@ -725,3 +733,109 @@ def test_every_page_is_opened_and_the_focus_is_put_back(fake_bridge, tmp_path):
     assert report["drc"]["schematic"]["countsBasis"] == "host-wide", (
         "the two pages answered the same thing, so the host's counts are reported once"
     )
+
+
+# --------------------------------------------------------------------------
+# batch 4: report.md, the canvas images, and the slots that point at them
+# --------------------------------------------------------------------------
+
+#: A 1x1 PNG — the smallest thing that is *really* a PNG, so the test's fake
+#: `export.render` returns bytes a reader (and a hash) can be checked against.
+TINY_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg=="
+)
+
+
+def _render_answer(data: bytes = TINY_PNG, file_format: str = "image/png") -> dict:
+    return {"format": file_format, "encoding": "base64", "bytes": len(data),
+            "data": base64.b64encode(data).decode("ascii"), "scope": "page", "note": ""}
+
+
+def test_checkup_writes_report_markdown_beside_the_json(fake_bridge, tmp_path):
+    _FakeBridgeClient.answers = {**_live_answers(), **_measured_drc_answers(),
+                                 "export.render": _render_answer()}
+    args = _checkup_args(out=str(tmp_path / "out"))
+
+    assert _cmd_checkup(args) == 1
+
+    markdown = (tmp_path / "out" / "report.md").read_text(encoding="utf-8")
+    report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
+    assert markdown.startswith("# boardwise checkup 报告")
+    assert "**结论：1 项 ERROR**（退出码 1）" in markdown
+    assert "## 主机 DRC" in markdown and "## 模块" in markdown
+    assert "## AI 槽位" in markdown and "【结论先行】" in markdown
+    assert report["ai_slots"]["summary_template"].rstrip() in markdown
+    assert (tmp_path / "out" / "report.md").stat().st_size > 500
+
+
+def test_canvas_images_are_rendered_per_page_and_named_relative(fake_bridge, tmp_path):
+    _FakeBridgeClient.answers = {**_live_answers(), "export.render": _render_answer()}
+    args = _checkup_args(out=str(tmp_path / "out"))
+
+    assert _cmd_checkup(args) == 0
+
+    report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
+    images = report["ai_slots"]["canvas_images"]
+    assert len(images) == 1, "one schematic page in this fake project; the PCB is not rendered"
+    image = images[0]
+    assert image["page"] == "P1" and image["pageUuid"] == PAGE_UUID
+    assert image["file"] == "canvas-P1.png", "relative, because the report travels"
+    assert "error" not in image
+    written = (tmp_path / "out" / "canvas-P1.png").read_bytes()
+    assert written == TINY_PNG, "the file is exactly what the host rendered"
+    assert image["bytes"] == len(TINY_PNG)
+    assert len(image["sha256"]) == 64
+
+    # The canvas stage opens each page and then puts the focus back.
+    opens = [params.get("uuid") for action, params in _FakeBridgeClient.history_pairs
+             if action == "doc.open"]
+    assert opens[-1] == PAGE_UUID
+    assert "export.render" in _FakeBridgeClient.history
+
+
+def test_a_page_that_cannot_be_rendered_is_an_entry_not_a_failure(fake_bridge, tmp_path):
+    _FakeBridgeClient.answers = {
+        **_live_answers(), **_measured_drc_answers(),
+        "export.render": BridgeError(ErrorCodes.TIMEOUT, "render did not settle"),
+    }
+    args = _checkup_args(out=str(tmp_path / "out"))
+
+    assert _cmd_checkup(args) == 1, "a failed picture must not change what the board found"
+
+    report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
+    image = report["ai_slots"]["canvas_images"][0]
+    assert "TIMEOUT" in image["error"] and "file" not in image
+    assert not list((tmp_path / "out").glob("*.png")), "nothing was written for a failed render"
+
+
+def test_a_render_that_is_not_a_png_is_not_written_as_one(fake_bridge, tmp_path):
+    """A multi-document render comes back as a zip; naming that `.png` would be a
+    lie the report's reader cannot see."""
+    _FakeBridgeClient.answers = {
+        **_live_answers(),
+        "export.render": _render_answer(b"PK\x03\x04not-a-png", file_format="zip"),
+    }
+    args = _checkup_args(out=str(tmp_path / "out"))
+
+    assert _cmd_checkup(args) == 0
+
+    report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
+    image = report["ai_slots"]["canvas_images"][0]
+    assert "不是 PNG" in image["error"]
+    assert "file" not in image
+    assert not list((tmp_path / "out").glob("*.png"))
+
+
+def test_the_offline_path_writes_markdown_and_no_canvas(fake_bridge, tmp_path):
+    args = _checkup_args(file=str(GOLDEN), out=str(tmp_path / "out"))
+
+    assert _cmd_checkup(args) == 0
+
+    report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
+    assert report["ai_slots"]["canvas_images"] == []
+    assert "离线" in report["ai_slots"]["canvas_images_note"]
+    assert _FakeBridgeClient.opened == 0, "no editor was asked for pictures either"
+    markdown = (tmp_path / "out" / "report.md").read_text(encoding="utf-8")
+    assert "**未检查** —— 离线路径" in markdown
+    assert "无图。离线路径" in markdown
+    assert "## 模块" in markdown and "## AI 槽位" in markdown

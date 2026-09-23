@@ -27,6 +27,16 @@ from .engines.drc import (
     schematic_section,
     summarise as drc_summarise,
 )
+from .engines.checkup import (
+    PAGE_ATTRIBUTION_ARCHIVE,
+    PAGE_ATTRIBUTION_PER_PAGE,
+    PAGE_ATTRIBUTION_UNRESOLVED,
+    modules_section,
+    page_attribution_from_archive,
+    render_report_markdown,
+    summary_template,
+    unknown_parts,
+)
 from .engines.generate import DEFAULT_NAMING_STRATEGY, NAMING_STRATEGIES
 from .core.changeplan import (
     COMPONENT_VALUE_KIND,
@@ -1366,7 +1376,7 @@ def _cmd_review(args: argparse.Namespace) -> int:
             for note in live_notes:
                 print(f"  note: {note}", file=sys.stderr)
             return 3
-        model, board, tier, source_meta = loaded
+        model, board, tier, source_meta, _attribution = loaded
         view = "schematic"
         source = f"live:{CHECKUP_TIERS[tier].split('（')[0]}"
         project = (source_meta.get("project") or {})
@@ -1501,16 +1511,16 @@ def _checkup_report(
     drc: dict,
     findings: list[dict],
     summary: dict,
+    modules: list[dict],
+    slots: dict,
 ) -> dict:
-    """Assemble the report: what was read (batch 2), what was found (batch 3).
+    """Assemble the report: what was read (batch 2), what was found (batch 3),
+    what it means and what the model still has to do (batch 4).
 
-    `drc`, `findings` and `summary` are batch 3's content, assembled by
-    `engines/drc.py` from the host's own answers plus the offline rules. What is
-    still empty and marked in `pending` is batch 4's: `modules`, `ai_slots`,
-    `report.md` and the canvas images. Fields are present and empty **on
-    purpose** — a skeleton that carried half-guessed content would be worse than
-    one that says what is missing, because a reader cannot tell an empty section
-    from a checked one.
+    Every section is real by now. `pending` is kept as an **empty** object rather
+    than removed: a consumer that learned to read it finds "nothing owed" instead
+    of a missing key, and the next batch that owes something has a place to say
+    so.
     """
     return {
         "schema": CHECKUP_SCHEMA,
@@ -1530,16 +1540,11 @@ def _checkup_report(
             "duplicateDesignators": sorted(model.duplicate_designators),
         },
         "summary": summary,
-        "pending": {
-            "modules": "batch 4（模块聚类）",
-            "ai_slots": "batch 4（unknown_parts / canvas_images / summary 槽位）",
-            "reportMd": "batch 4（report.md 人读版）",
-            "canvasImages": "batch 4（export.render 打包）",
-        },
+        "pending": {},
         "drc": drc,
-        "modules": [],
+        "modules": modules,
         "findings": findings,
-        "ai_slots": {"unknown_parts": [], "canvas_images": [], "summary_template": ""},
+        "ai_slots": slots,
     }
 
 
@@ -1548,6 +1553,20 @@ def _write_checkup_report(out_dir: Path, report: dict) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "report.json"
     path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def _write_checkup_markdown(out_dir: Path, report: dict) -> Path:
+    """Write ``report.md`` beside ``report.json`` — the same content, for a human.
+
+    Rendered from the *report dict*, never from the live objects: a second
+    rendering path that read the model again could disagree with the JSON, and the
+    JSON is the contract. The rendering itself lives in
+    `engines/checkup.render_report_markdown`.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / "report.md"
+    path.write_text(render_report_markdown(report), encoding="utf-8")
     return path
 
 
@@ -1619,10 +1638,10 @@ def _load_model_online(
     notes: list[str],
     attempts: list[dict],
     parse_stats: ParseStats | None = None,
-) -> tuple[object, object | None, str, dict] | None:
+) -> tuple[object, object | None, str, dict, dict | None] | None:
     """The online branch of model loading: A1 → A1' → A3, first success wins.
 
-    Returns ``(model, board, tier, source_meta)``, or ``None`` when
+    Returns ``(model, board, tier, source_meta, attribution)``, or ``None`` when
     the online state **cannot be stated** (daemon unreachable, no connector, or
     every tier refused) — which the caller turns into exit code 3, never into an
     empty model.
@@ -1704,6 +1723,7 @@ async def _checkup_ladder(
     project: dict = {}
     active: dict = {}
     pages: list[str] = []
+    page_titles: dict[str, str] = {}
     try:
         listing = await call("doc.list", {})
         for row in listing.get("projects", []) or []:
@@ -1713,6 +1733,9 @@ async def _checkup_ladder(
         active = listing.get("active") or {}
         pages = [d.get("uuid") for d in listing.get("documents", []) or []
                  if d.get("type") == "page" and d.get("uuid")]
+        page_titles = {d["uuid"]: str(d.get("name") or "")
+                       for d in listing.get("documents", []) or []
+                       if d.get("type") == "page" and d.get("uuid")}
     except BridgeError as exc:
         attempts.append({"tier": "identity", "ok": False, "code": exc.code, "message": exc.message})
         if exc.code in ("NO_CONNECTOR", "WINDOW_NOT_CONNECTED", "WINDOW_UNSPECIFIED",
@@ -1748,7 +1771,11 @@ async def _checkup_ladder(
                 "bytes": len(blob), "sha256": hashlib.sha256(blob).hexdigest(),
                 "components": len(model.components), "nets": len(model.nets),
             })
-            return model, board, "project-file", source_meta
+            attribution = {
+                "source": PAGE_ATTRIBUTION_ARCHIVE,
+                "pages": page_attribution_from_archive(archive),
+            }
+            return model, board, "project-file", source_meta, attribution
         except BridgeError as exc:
             attempts.append({"tier": "project-file", "ok": False, "code": exc.code,
                              "message": exc.message,
@@ -1766,6 +1793,7 @@ async def _checkup_ladder(
         if pages:
             started = time.perf_counter()
             models = []
+            page_models: dict[str, object] = {}
             page_attempts = []
             reopened: list[str] = []
             try:
@@ -1778,6 +1806,7 @@ async def _checkup_ladder(
                         archive.write_bytes(blob)
                         page_model, _ = _parse_archive(archive, parse_stats=parse_stats)
                         models.append(page_model)
+                        page_models[uuid] = page_model
                         reopened.append(uuid)
                         page_attempts.append({
                             "pageUuid": uuid, "ok": True, "bytes": len(blob),
@@ -1804,7 +1833,18 @@ async def _checkup_ladder(
                 notes.append(
                     f"per-page tier: {len(models)}/{len(pages)} page archives parsed; focus restored"
                 )
-                return merged, None, "per-page", source_meta
+                attribution = {
+                    "source": PAGE_ATTRIBUTION_PER_PAGE,
+                    "pages": {
+                        uuid: {
+                            "uuid": uuid,
+                            "title": page_titles.get(uuid, ""),
+                            "components": sorted(page_models[uuid].components),
+                        }
+                        for uuid in reopened
+                    },
+                }
+                return merged, None, "per-page", source_meta, attribution
             attempts.append({"tier": "per-page", "ok": False, "pages": page_attempts})
             notes.append("per-page tier produced no usable page archive")
         else:
@@ -1857,7 +1897,7 @@ async def _checkup_ladder(
                 "netlist tier: connectivity only — no values, no MPNs, no poses "
                 "(core/candidate.py); the report header says so"
             )
-            return model, None, "netlist", source_meta
+            return model, None, "netlist", source_meta, None
         except Exception as exc:  # noqa: BLE001 — the last tier failing is still an answer
             attempts.append({"tier": "netlist", "ok": False, "error": str(exc)})
             notes.append(f"netlist tier failed: {exc}")
@@ -1923,6 +1963,12 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
                 "离线路径（--file）不连编辑器，因此没有主机 PCB DRC；要它就给一个在线工程"
             ),
         }
+        attribution = {
+            "source": PAGE_ATTRIBUTION_ARCHIVE,
+            "pages": page_attribution_from_archive(path),
+        }
+        canvas: list[dict] = []
+        canvas_note = "离线路径（--file）不连编辑器，因此不出画布图；要图就给一个在线工程"
         print(f"boardwise checkup: {path} ({CHECKUP_TIERS['file']})")
     else:
         loaded = _load_model_online(args, notes=notes, attempts=attempts, parse_stats=parse_stats)
@@ -1937,7 +1983,7 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
             for note in notes:
                 print(f"  note: {note}", file=sys.stderr)
             return 3
-        model, _board, tier, source = loaded
+        model, _board, tier, source, attribution = loaded
         project_name = (source.get("project") or {}).get("friendlyName") or (
             (source.get("project") or {}).get("name") or "(project unknown)"
         )
@@ -1960,13 +2006,35 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
             f"{readings.get('pcbDocuments', 0)} 块 PCB（userInterface=false，焦点已复位）"
         )
 
+        # --- 阶段 D（只做原理图页）：each page rendered to a PNG in --out.
+        canvas = _render_canvas_images(args, out_dir, notes=notes)
+        canvas_note = "" if canvas else "没有页面可出图，或每一页的 render 都失败了（见 notes）" 
+
     findings = [_finding_payload(finding) for finding in run_review(model)]
     summary = drc_summarise(drc=drc, findings=findings)
+
+    # --- 阶段 C 的分组 + AI 槽位（025 §2 阶段 C/E）。
+    modules, module_facts = modules_section(
+        model=model,
+        findings=findings,
+        attribution=(attribution or {}).get("pages"),
+        attribution_source=(attribution or {}).get("source", PAGE_ATTRIBUTION_UNRESOLVED),
+    )
+    source.update({key: value for key, value in module_facts.items() if key != "notes"})
+    notes.extend(module_facts.get("notes") or [])
+    slots = {
+        "unknown_parts": unknown_parts(model),
+        "canvas_images": canvas,
+        "canvas_images_note": canvas_note,
+        "summary_template": summary_template(),
+    }
+
     report = _checkup_report(
         tier=tier, source=source, model=model, attempts=attempts, notes=notes,
-        drc=drc, findings=findings, summary=summary,
+        drc=drc, findings=findings, summary=summary, modules=modules, slots=slots,
     )
     report_path = _write_checkup_report(out_dir, report)
+    report_md_path = _write_checkup_markdown(out_dir, report)
 
     print(
         f"  model: {report['model']['components']} components, {report['model']['nets']} nets "
@@ -1996,11 +2064,18 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         print("  errors: none")
     for note in notes:
         print(f"  note: {note}")
+    print(f"  modules: {len(modules)}（basis {source.get('moduleBasis')}，"
+          f"pageAttribution {source.get('pageAttribution')}）")
+    for module in modules:
+        print(f"    {module['name']}: {len(module['components'])} 器件"
+              + (f"，findings {module['findings']}" if module.get("findings") else "")
+              + (f" — {module['note']}" if module.get("note") else ""))
+    print(f"  ai_slots: unknown_parts {len(slots['unknown_parts'])}，"
+          f"canvas_images {len(canvas)}" + (f"（{canvas_note}）" if canvas_note else "")
+          + "，summary_template 已留槽")
     print(f"  report: {report_path}")
-    print(
-        "  pending: modules/ai_slots/report.md/canvas → batch 4 "
-        "(fields present and empty on purpose; see report.json's `pending`)"
-    )
+    print(f"  report.md: {report_md_path}")
+    print("  pending: none（批 4 已把 modules / ai_slots / report.md / 画布图补齐）")
     if summary["warnings"]:
         # 末尾「提醒」段：warn 不决定退出码，但决定读者下一步看哪儿。
         print(f"  reminder: {summary['warnCount']} warning(s)")
@@ -2056,6 +2131,112 @@ def _summary_line(entry: dict) -> str:
     net = f" net {entry['net']}" if entry.get("net") else ""
     detail = f" — {entry['detail']}" if entry.get("detail") else ""
     return f"[{entry.get('severity')}] {number}x {label}{net} ({entry.get('ref')}){detail}"
+
+
+def _render_canvas_images(args: argparse.Namespace, out_dir: Path, *, notes: list[str]) -> list[dict]:
+    """阶段 D: one PNG per **schematic page**, written into ``--out``.
+
+    The canvas review is 岳's division of labour (025 §0): the model reads the
+    picture and judges placement, legibility and net-name clarity — so the report's
+    job is to *put the pictures where it can see them*, with no interpretation
+    attached.
+
+    Three disciplines, each one earned:
+
+    * **schematic pages only.** PCB pages are explicitly out of scope for now
+      ("PCB 先不动"), so the render walks the page list and nothing else.
+    * **the focus is restored in a `finally`**, like the DRC stage — a read-only
+      command must not leave the editor on another tab.
+    * **a failure is an entry, not an exception.** A page whose render fails, or
+      comes back as something other than a PNG (a multi-document zip is the known
+      shape), is recorded with its reason and the rest still render; a report with
+      no images and no explanation would read like a board with nothing to show.
+
+    Relative file names go into the slot, because the slot's reader is looking at
+    `report.json` inside `--out` and a machine-specific absolute path would be
+    useless in a report that gets copied elsewhere.
+    """
+    import asyncio
+    import hashlib
+
+    BridgeClient, BridgeError, port, token = _open_cli(args)
+    route_kwargs: dict[str, str] = {}
+    if getattr(args, "project", ""):
+        route_kwargs["target_project"] = args.project.strip()
+    if getattr(args, "instance", ""):
+        route_kwargs["target_instance"] = args.instance.strip()
+
+    async def run() -> list[dict]:
+        try:
+            client = await BridgeClient.open(
+                _bridge_uri(port), token, "cli", client="boardwise-cli"
+            )
+        except (OSError, BridgeError) as exc:
+            notes.append(f"canvas stage: daemon not reachable ({exc})")
+            return []
+        focus: str | None = None
+        rendered = False
+        try:
+            try:
+                listing = await client.call("doc.list", {}, **route_kwargs)
+            except BridgeError as exc:
+                notes.append(f"canvas stage: doc.list {exc.code}: {exc.message}")
+                return []
+            focus = (listing.get("active") or {}).get("uuid")
+            pages = [(d.get("uuid"), str(d.get("name") or "")) for d in listing.get("documents") or []
+                     if d.get("type") == "page" and d.get("uuid")]
+            out_dir.mkdir(parents=True, exist_ok=True)
+            images: list[dict] = []
+            for uuid, name in pages:
+                entry: dict = {"page": name or uuid, "pageUuid": uuid}
+                try:
+                    await client.call("doc.open", {"uuid": uuid}, **route_kwargs)
+                    rendered = True
+                    payload = await client.call(
+                        "export.render",
+                        {"format": "png", "scope": "page", "fileName": f"canvas-{_file_stem(name or uuid)}.png"},
+                        **route_kwargs,
+                    )
+                except BridgeError as exc:
+                    entry["error"] = f"{exc.code}: {exc.message}"
+                    images.append(entry)
+                    continue
+                if not isinstance(payload, dict) or not payload.get("data"):
+                    entry["error"] = "render 没有回 base64 数据"
+                elif payload.get("format") != "image/png":
+                    # A zip here means the editor rendered several documents; writing
+                    # it as `.png` would be a lie the report's reader cannot see.
+                    entry["error"] = f"render 回的是 {payload.get('format')}，不是 PNG（不落盘）"
+                else:
+                    import base64
+
+                    blob = base64.b64decode(payload["data"])
+                    relative = f"canvas-{_file_stem(name or uuid)}.png"
+                    (out_dir / relative).write_bytes(blob)
+                    entry.update({
+                        "file": relative,
+                        "bytes": len(blob),
+                        "sha256": hashlib.sha256(blob).hexdigest(),
+                    })
+                images.append(entry)
+            return images
+        finally:
+            try:
+                if rendered and focus:
+                    await client.call("doc.open", {"uuid": focus}, **route_kwargs)
+                    notes.append(f"canvas stage: 焦点已复位到 {focus}")
+            except Exception as exc:  # noqa: BLE001 — a failed restore is a note
+                notes.append(f"canvas stage: 焦点复位失败（{exc}）— 编辑器可能停在别处")
+            finally:
+                await client.close()
+
+    return asyncio.run(run())
+
+
+def _file_stem(name: str) -> str:
+    """A file-name stem safe on every platform, from a page name."""
+    stem = re.sub(r"[^A-Za-z0-9._\u4e00-\u9fff-]+", "_", str(name or "")).strip("_")
+    return stem[:48] or "page"
 
 
 def _read_online_drc(args: argparse.Namespace, *, notes: list[str]) -> dict:

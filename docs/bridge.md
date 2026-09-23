@@ -798,16 +798,18 @@ writes the new token to extension storage before returning, so a reload reuses i
 re-pairing the daemon. A token passed in the URL is read and then **stripped** from the socket
 URL, so it is not re-sent on every reconnect.
 
-### The two commands that are not `bridge` subcommands
+### The commands that are not `bridge` subcommands
 
-`boardwise doctor` and `boardwise review-mark` are top-level because neither is a *bridge*
-operation: doctor asks seven questions about the whole installation, review-mark turns an offline
-report into canvas markers.
+`boardwise doctor`, `boardwise review-mark` and `boardwise checkup` are top-level because none of
+them is a *bridge* operation: doctor asks seven questions about the whole installation,
+review-mark turns an offline report into canvas markers, and checkup is the one-command review
+that consumes the bridge end to end.
 
 | Command | Exit | What it does |
 |---|---|---|
 | `boardwise doctor [--json PATH] [--port N]` | 0 / 1 | Seven checks in one run: the daemon answers `ping` (the daemon has **no HTTP surface at all** — no `/health`, it is a WebSocket server and `ping` is its health answer); the extension's socket is registered; five methods the harness depends on answer `typeof === function` (`sys.probe`); the running daemon's version matches this install; the connector build in the editor matches `connector/extension.json`; the editor is ≥ 3.2.183; the focused project is readable. Every line carries its own fix, and a check that *could not be made* says so instead of pretending. Exit 1 for anything not green — deliberately not 2, which `bridge status` uses for "daemon unreachable": to a colleague following `docs/getting-started.md`, "not ready yet" is one state with one next step |
 | `boardwise review-mark <findings> [--page UUID] [--focus N] [--color C] [--zoom] [--no-markers] [--json PATH]` | 0 / 1 / 2 | Draw a `boardwise review --json` pass on the focused schematic page. `<findings>` is a path, `-` (stdin) or the JSON itself; the literal `clear` removes the markers instead. Prints the finding ↔ marker table (position *k* is `marker#k` on the canvas), the unresolved refs and any degradation to the jump list. Exit 1 is **partial**: a ref not on the page, a finding with no ref, or a host that could not draw |
+| `boardwise checkup [--project NAME_OR_UUID] [--out DIR] [--file PATH]` | 0 / 1 / 2 / 3 | The whole review in one command (025): pulls the focused project down the three-tier ladder (`project-file` → `per-page` → `netlist`; `--file` is the offline fallback), runs the host's own checks (`sch.drc_check` + `pcb.drc_check`, `userInterface:false`, focus restored afterwards), runs the offline rule engine, groups components into modules, renders one `canvas-<page>.png` per schematic page (PCB pages are not rendered yet), and writes `report.json` (`schema: boardwise.checkup/2`) + `report.md` into `--out`. Exit 1 means an ERROR was **found** (an ERC error/fatalError count, a PCB DRC leaf, or a rule's ERROR finding); exit 3 means the online state cannot be stated — never "the board is clean". A check that did not run is `{checked:false, reason}`, not zero counts. `report.json.ai_slots` lists what is left for a model: `unknown_parts`, `canvas_images`, `summary_template` |
 
 ### Self-updating the connector (`sys.self_update`, 0.4.3)
 
