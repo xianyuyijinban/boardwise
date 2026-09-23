@@ -49,12 +49,20 @@ export const WATCHDOG_CHECK_INTERVAL_MS = 15_000;
 /**
  * How long the page may be silent before the alarm fires, in ms.
  *
- * Three heartbeat intervals (5 s each) times three: the page normally reports
- * activity every 5 s, and the observed throttled period is about 60 s, so 45 s
- * is short enough to recover inside one throttled cycle and long enough that a
- * merely slow page never trips it.
+ * Two check intervals (0.4.19, 026d — it was 45 s, i.e. three, before the wake
+ * became a probe). With the wake itself pinging the socket (§7.1), the steady
+ * state under throttling is an alarm-driven probe every 30–45 s and a pong that
+ * refreshes the clock, so this constant sets how quickly a *dead* socket is
+ * noticed: at worst two checks past the threshold — the first wakes and pings
+ * into nothing, the next sees an unanswered heartbeat and rebuilds the socket.
+ *
+ * The bound is deliberately not "30 s exactly": the Worker compares strictly
+ * (`silence > timeout`) on a 15 s grid, so in practice the first wake lands
+ * 30–45 s after the last sign of life. Lower it further and a page busy inside
+ * a legitimate long host call starts looking dead; raise it and the kill→hello
+ * budget grows back.
  */
-export const WATCHDOG_ACTIVITY_TIMEOUT_MS = 45_000;
+export const WATCHDOG_ACTIVITY_TIMEOUT_MS = 30_000;
 
 /**
  * `idle`        — built, not started.

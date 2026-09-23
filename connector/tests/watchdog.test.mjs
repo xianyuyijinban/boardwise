@@ -129,14 +129,15 @@ test('a stop message takes the worker\'s clock down with it', async () => {
 });
 
 test('the shipped thresholds are the policy the docs state', () => {
-  // 45 s is three heartbeat intervals (5 s) times three, and the observed
-  // throttled period is ~60 s, so the alarm sits inside one throttled cycle.
+  // 30 s is two check intervals (026d): the alarm fires on the first check past
+  // the threshold, so a dead socket is judged on the wake after next — at worst
+  // a threshold-plus-two-checks wait instead of a throttled timer's.
   assert.equal(WATCHDOG_CHECK_INTERVAL_MS, 15_000);
-  assert.equal(WATCHDOG_ACTIVITY_TIMEOUT_MS, 45_000);
+  assert.equal(WATCHDOG_ACTIVITY_TIMEOUT_MS, 30_000);
   assert.match(buildWatchdogSource({
     checkIntervalMs: WATCHDOG_CHECK_INTERVAL_MS,
     activityTimeoutMs: WATCHDOG_ACTIVITY_TIMEOUT_MS,
-  }), /ACTIVITY_TIMEOUT_MS = 45000/);
+  }), /ACTIVITY_TIMEOUT_MS = 30000/);
 });
 
 // --------------------------------------------------------------------------
@@ -543,7 +544,12 @@ test('a wake skips a pending backoff instead of waiting it out', async (t) => {
   );
 });
 
-test('a wake on a healthy connection does nothing but stamp activity', async (t) => {
+test('a healthy wake probes the socket, and the pong is what refreshes the alarm', async (t) => {
+  // 0.4.19 (026d): the wake no longer stamps its own activity — that was a page
+  // word for the page's own liveness, and the whole reason the kill→hello time
+  // had a random 0–60 s in it was that the *evidence* came from a throttled
+  // timer. The probe replaces it: ping now, and the daemon's answer arrives as
+  // an inbound frame, which resets the miss counter *and* stamps activity.
   const socket = new FakeSocket();
   const { transport, logs, activities } = makeTransportWithCleanup(t, socket);
   await transport.start();
@@ -557,9 +563,43 @@ test('a wake on a healthy connection does nothing but stamp activity', async (t)
 
   assert.equal(transport.getState(), 'connected', 'nothing was torn down');
   assert.equal(socket.registered.length, registered, 'and nothing was re-registered');
-  assert.equal(socket.pings().length, pings, 'no extra ping: the heartbeat is not overdue');
-  assert.equal(activities.length, seen + 1, 'but the alarm is told the page is alive');
-  assert.ok(logs.some((line) => /connected and answering/.test(line)), logs.join('\n'));
+  assert.equal(socket.pings().length, pings + 1, 'the wake probes with one ping');
+  assert.equal(activities.length, seen, 'and does not stamp the page alive by itself');
+  assert.ok(logs.some((line) => /probing it/.test(line)), logs.join('\n'));
+
+  // The answer is what refreshes the alarm — and it does so through the same
+  // `onMessage` path every other inbound frame takes.
+  await socket.deliver({ id: 'probe', ok: true, data: { pong: true } });
+  assert.equal(activities.length, seen + 1, 'the pong raises the activity stamp');
+});
+
+test('a dead socket takes two wakes: the probe, then the verdict', async (t) => {
+  // The sequence the kill→hello budget rests on: wake #1 finds nothing
+  // outstanding, probes, and gets no answer (the miss counter goes to 1); wake
+  // #2 — one check later, since nothing stamped activity in between — sees the
+  // unanswered heartbeat and rebuilds. A page timer is involved nowhere.
+  const socket = new FakeSocket();
+  const { transport } = makeTransportWithCleanup(t, socket, {
+    heartbeatMs: 10_000, // the timer must not be what pings or reconnects here
+    heartbeatMissLimit: 50,
+  });
+  await transport.start();
+  await socket.deliver(BANNER);
+  await socket.deliver({ id: 'hello', ok: true, data: {} });
+
+  const registered = socket.registered.length;
+  const pings = socket.pings().length;
+
+  transport.wake('probe one');
+  assert.equal(socket.pings().length, pings + 1, 'wake #1 probes');
+  assert.equal(socket.registered.length, registered, 'and does not reconnect on its own');
+
+  transport.wake('probe two');
+  assert.equal(
+    socket.registered.length,
+    registered + 1,
+    'wake #2 sees one unanswered heartbeat and rebuilds the socket',
+  );
 });
 
 test('a wake reconnects on the first unanswered heartbeat, without waiting for the miss limit', async (t) => {
@@ -855,7 +895,7 @@ test('About… reports the alarm without claiming it makes the window immune', a
   connector.about();
 
   const box = parts.dialogs.at(-1).message;
-  assert.match(box, /watchdog: running \(checks every 15000 ms, wakes after 45000 ms of page silence, wakes so far: 1\)/);
+  assert.match(box, /watchdog: running \(checks every 15000 ms, wakes after 30000 ms of page silence, wakes so far: 1\)/);
   for (const word of ['immune', 'immunity', 'always', 'never fails']) {
     assert.equal(box.includes(word), false, `the box must not promise "${word}"`);
   }

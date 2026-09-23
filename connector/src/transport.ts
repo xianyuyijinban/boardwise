@@ -281,49 +281,58 @@ export class Transport {
    * This is the whole point of the Worker. In the background a page's timers
    * fall to about one tick a minute — and in the frozen state measured over the
    * 7-hour incident they stop — so a heartbeat or backoff timer may not run for
-   * hours. The wake message is *queued* by the Worker and delivered the moment
-   * the page runs again, which is what turns "recovery when the user brings the
+   * hours. A wake is a message, not a timer: it is delivered as soon as the page
+   * can run at all, which is what turns "recovery when the user brings the
    * window to the front" into "recovery when the page unfreezes".
    *
    * Four cases, and the difference between them is what the transport knows:
    *
-   * - `connected` with no outstanding heartbeat — nothing to do. The activity
-   *   stamp above already stopped the alarm repeating.
+   * - `connected` with no outstanding heartbeat — **the wake is the probe**
+   *   (0.4.19, 026d). It used to stamp its own activity and return, which left
+   *   the actual liveness question to a page timer that a throttled page may not
+   *   run for a minute — and that timer is exactly the random 0–60 s the
+   *   kill→hello measurements of batch 2c could not get rid of. A ping goes out
+   *   synchronously instead: a live socket answers in milliseconds, and that
+   *   answer arrives as an inbound frame, which both resets the miss counter and
+   *   stamps the alarm's activity — liveness *evidence* in place of the page's
+   *   own word for it. A dead socket answers nothing, so the next wake sees an
+   *   unanswered heartbeat and takes the branch below.
    * - `connected` with **any** unanswered heartbeat — the socket is judged dead,
-   *   now. Changed in 0.4.18 (026c), and the change is the whole point of it:
-   *   the machine measurements of batch 2b showed a background window recovering
-   *   in 135–152 s instead of the 90 s that batch was for, because a half-open
-   *   socket was only *declared* dead after {@link heartbeatMissLimit} unanswered
-   *   heartbeats — three throttled ticks, about three minutes. The old reaction
-   *   here (send one more ping, then wait for the timer) could not shorten that:
-   *   a ping into a dead socket proves nothing. The silence is what proves it. A
-   *   live socket answers a ping within milliseconds, and that answer arrives as
-   *   an inbound frame, which resets the miss counter and re-arms the alarm — so
-   *   a page that has been quiet past the alarm's 45 s *and* has an unanswered
-   *   heartbeat outstanding cannot be sitting on a live socket. Waiting for the
-   *   third miss buys nothing and costs two more throttled cycles.
-   * - `connecting`/`handshaking` with 45 s of silence behind it — the handshake
-   *   is not coming (the daemon answers a banner immediately and allows 5 s for
-   *   `hello`), so the attempt is replaced now rather than after the daemon's
-   *   own close, which a half-open socket never delivers.
+   *   now. Changed in 0.4.18 (026c): the machine measurements of batch 2b showed
+   *   a background window recovering in 135–152 s instead of the 90 s that batch
+   *   was for, because a half-open socket was only *declared* dead after
+   *   {@link heartbeatMissLimit} unanswered heartbeats — three throttled ticks.
+   *   The old reaction (send one more ping, then wait for the timer) could not
+   *   shorten that: a ping into a dead socket proves nothing, and the silence is
+   *   what proves it.
+   * - `connecting`/`handshaking` with the alarm's silence behind it — the
+   *   handshake is not coming (the daemon answers a banner immediately and allows
+   *   5 s for `hello`), so the attempt is replaced now rather than after the
+   *   daemon's own close, which a half-open socket never delivers.
    * - `idle`/`reconnecting` — nothing on the wire; connect now, with the backoff
    *   ladder reset, because the silence was the page's and not the daemon's.
+   *
+   * Only the last two branches stamp activity, and on purpose: there the page
+   * running the wake *is* the evidence, and stamping keeps a reconnect in
+   * progress from being woken over and over. In the `connected` branches the
+   * evidence has to come from the socket itself.
    */
   wake(source: string): void {
     if (this.stopped) return;
-    this.noteActivity();
 
     if (this.state === 'connected') {
       if (this.missed === 0) {
-        this.log(`watchdog wake (${source}): connected and answering — nothing to do`);
+        this.log(`watchdog wake (${source}): the socket looks quiet — probing it`);
+        this.sendPing(`watchdog wake (${source}): probe`);
         return;
       }
-      // One unanswered heartbeat is enough; see the case list above.
       this.reconnectNow(
         `watchdog wake (${source}): ${this.missed} unanswered heartbeat(s)`,
       );
       return;
     }
+
+    this.noteActivity();
 
     if (this.state === 'connecting' || this.state === 'handshaking') {
       this.reconnectNow(`watchdog wake (${source}): the handshake has been silent for too long`);
