@@ -131,10 +131,71 @@ def _bridge_help_epilog() -> str:
         return "actions: (bridge package unavailable — see docs/bridge.md)"
 
 
+class _VersionAction(argparse.Action):
+    """``--version``, computed when it is asked for rather than at parse time.
+
+    ``action="version"`` wants the text up front, which would make *every*
+    command pay for two file reads (the bundle's size and its manifest) whether
+    it prints them or not. This action resolves the text only when the flag is
+    actually used. It exits 0 like the built-in one.
+    """
+
+    def __init__(self, option_strings, dest, **kwargs):  # type: ignore[no-untyped-def]
+        super().__init__(option_strings, dest, nargs=0, **kwargs)
+
+    def __call__(self, parser, namespace, values, option_string=None):  # type: ignore[no-untyped-def]
+        print(_version_text())
+        parser.exit()
+
+
+def _version_text() -> str:
+    """Two lines: this CLI, then the connector bundle it carries (028 §二.3).
+
+    Both versions are *read*, never guessed. The CLI's comes from the package,
+    the bundle's from the ``extension.json`` beside the bundle — the same
+    manifest ``update-connector`` takes the pushed version from, so "what
+    ``--version`` says" and "what a hot update would install" cannot disagree.
+
+    A missing or unreadable manifest prints ``unknown`` **with the path it looked
+    at**. A friend's bug report containing a path is worth more than a blank
+    line, and inventing a version would be worse than both — the failure mode
+    this whole package exists to avoid.
+    """
+    import json
+
+    from . import __version__, resources
+
+    first = f"boardwise {__version__} (CLI, running from {resources.describe_state()})"
+    try:
+        bundle = resources.connector_bundle()
+        manifest = resources.connector_extension_json()
+    except RuntimeError as exc:
+        return f"{first}\nconnector bundle unknown ({exc})"
+    try:
+        version = str(json.loads(manifest.read_text(encoding="utf-8")).get("version") or "unknown")
+    except (OSError, ValueError) as exc:
+        return f"{first}\nconnector bundle unknown (cannot read {manifest}: {exc})"
+    try:
+        size = f", {bundle.stat().st_size} bytes"
+    except OSError:
+        size = " (the bundle file is missing)"
+    return f"{first}\nconnector bundle {version} ({bundle}{size})"
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="boardwise",
         description="AI harness for EasyEDA Pro: offline design review (stage 1).",
+    )
+    # Two versions on purpose (028 batch 3a): the CLI and the connector bundle
+    # this build would push into the editor are versioned separately (0.1.0 vs
+    # 0.4.19 today, a known and deliberate split), and a bug report needs both —
+    # "which boardwise" and "which extension it installed" are different
+    # questions, and the second one is the answer a friend cannot look up.
+    parser.add_argument(
+        "--version",
+        action=_VersionAction,
+        help="Print the CLI version and the embedded connector bundle version.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
     review = sub.add_parser(
@@ -601,6 +662,36 @@ def build_parser() -> argparse.ArgumentParser:
     )
     doctor.add_argument(
         "--port", type=int, default=None, help="Daemon port (default 61190)."
+    )
+    # Same two hints `bridge call` takes, and for the same reason (023 §3.5):
+    # with several editor windows connected the daemon refuses to guess which one
+    # a call is about, so four of doctor's checks can only answer "not verified"
+    # unless it can name a window. Measured 2026-09-23 with three windows open:
+    # doctor read 4/8 purely because it had no way to say which window to ask.
+    doctor.add_argument(
+        "--project", default=None, metavar="NAME_OR_UUID",
+        help="Which editor window the online checks should ask (023 routing hint).",
+    )
+    doctor.add_argument(
+        "--instance", default=None, metavar="INSTANCE_ID",
+        help="The same choice by window key, for a window that cannot name a project.",
+    )
+
+    install_skill = sub.add_parser(
+        "install-skill",
+        help="Copy the bundled SKILL.md into the user-level Kimi Code skill directory.",
+        description=(
+            "Writes the SKILL.md this build carries to "
+            "~/.kimi-code/skills/boardwise/SKILL.md (override the directory with "
+            "BOARDWISE_SKILL_HOME). Idempotent: an identical file says 'already "
+            "current' and is left alone. A *different* file is backed up to "
+            "SKILL.md.bak-<date> first — never silently overwritten. --uninstall "
+            "removes the installed copy, and the directory when it empties."
+        ),
+    )
+    install_skill.add_argument(
+        "--uninstall", action="store_true",
+        help="Remove the installed copy instead of installing one.",
     )
 
     compare = sub.add_parser(
@@ -4055,15 +4146,29 @@ UPDATE_RELOAD_MARGIN_S = 0.5
 
 
 def _connector_artifacts() -> tuple[Path, Path]:
-    """``(bundle, extension.json)`` paths of the in-repo connector build.
+    """``(bundle, extension.json)`` paths of the connector build this install ships.
 
-    Resolved from this file's location (``src/boardwise/cli.py`` → repo root),
-    so the defaults work from any working directory as long as the checkout is
-    intact. This CLI is developed and run from the repo; an installed wheel
-    without the ``connector/`` tree simply fails the existence check below.
+    Resolved through :mod:`boardwise.resources`, so the answer is the in-repo
+    build when boardwise runs from a checkout and the *embedded* copy when it
+    runs from the frozen exe (028 batch 3a). Before that the two paths were
+    computed here from ``Path(__file__).parents[2]``, which is right from a
+    checkout and points into the PyInstaller extraction directory from an exe —
+    the one resolution the single exe cannot get wrong, since it carries no repo.
     """
-    root = Path(__file__).resolve().parents[2]
-    return root / "connector" / "dist" / "index.js", root / "connector" / "extension.json"
+    from . import resources
+
+    try:
+        return resources.connector_bundle(), resources.connector_extension_json()
+    except RuntimeError:
+        # A frozen process that cannot name its own extraction directory. Return
+        # the paths anyway: every caller reports them (that is how the friend
+        # learns what is missing), and inventing a different answer here would
+        # only hide the bootstrap problem.
+        root = Path(__file__).resolve().parents[2]
+        return (
+            root / "connector" / "dist" / "index.js",
+            root / "connector" / "extension.json",
+        )
 
 
 def _update_connector_payload(
@@ -6791,15 +6896,23 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             except BridgeError as exc:
                 probe.ping_error = f"[{exc.code}] {exc.message}"
             if isinstance(probe.ping, dict) and probe.ping.get("connector"):
+                # The window hint, when one was given: every check below is a
+                # connector-owned call, and with several windows online the
+                # daemon answers WINDOW_UNSPECIFIED rather than guessing (§3.5).
+                target = {
+                    "target_project": args.project or None,
+                    "target_instance": args.instance or None,
+                }
                 try:
                     probe.probe = await client.call(
                         "sys.probe",
                         {"checks": {ns: list(members) for ns, members in DOCTOR_PROBE_CHECKS.items()}},
+                        **target,
                     )
                 except BridgeError as exc:
                     probe.probe_error = f"[{exc.code}] {exc.message}"
                 try:
-                    probe.documents = await client.call("doc.list")
+                    probe.documents = await client.call("doc.list", **target)
                 except BridgeError as exc:
                     probe.documents_error = f"[{exc.code}] {exc.message}"
         finally:
@@ -6816,6 +6929,61 @@ def _local_version() -> str:
     from . import __version__
 
     return str(__version__)
+
+
+def _cmd_install_skill(args: argparse.Namespace) -> int:
+    """Install (or remove) the user-level copy of SKILL.md (028 §三.2).
+
+    Exit codes: 0 for every outcome the user asked for — installed, updated,
+    already current, removed, and "there was nothing to remove" — because a
+    second run of an idempotent command is a success, not a failure. 1 is
+    reserved for a filesystem step that actually failed, whose message names the
+    path and the OS reason.
+
+    The source is the *bundled* SKILL.md (``resources.skill_md()``), not a path
+    the caller passes: the whole point is that the exe carries the checklist it
+    installs, so "install the skill" cannot mean "install whatever is on disk
+    next to me".
+    """
+    from . import resources, skill_install
+
+    if args.uninstall:
+        try:
+            outcome = skill_install.uninstall()
+        except skill_install.SkillInstallError as exc:
+            print(f"boardwise install-skill: {exc}", file=sys.stderr)
+            return 1
+        if outcome.outcome == "absent":
+            print(f"boardwise install-skill: nothing to remove at {outcome.path}")
+            return 0
+        tail = " (and the now-empty directory)" if outcome.removed_directory else ""
+        print(f"boardwise install-skill: removed {outcome.path}{tail}")
+        return 0
+
+    try:
+        source = resources.skill_md()
+    except RuntimeError as exc:
+        print(f"boardwise install-skill: {exc}", file=sys.stderr)
+        return 1
+    try:
+        outcome = skill_install.install(source)
+    except skill_install.SkillInstallError as exc:
+        print(f"boardwise install-skill: {exc}", file=sys.stderr)
+        return 1
+
+    if outcome.outcome == "current":
+        print(f"boardwise install-skill: already current — {outcome.path} matches {source}")
+        return 0
+    print(
+        f"boardwise install-skill: {outcome.outcome} {outcome.path} "
+        f"({source.stat().st_size} bytes from {source})"
+    )
+    if outcome.backup is not None:
+        print(
+            f"  the file that was there is kept at {outcome.backup} "
+            f"({outcome.previous_bytes} bytes)"
+        )
+    return 0
 
 
 def _repo_connector_version() -> str:
@@ -6931,6 +7099,8 @@ def main(argv: list[str] | None = None) -> int:
         return EDIT_COMMANDS[args.edit_command](args)
     if args.command == "doctor":
         return _cmd_doctor(args)
+    if args.command == "install-skill":
+        return _cmd_install_skill(args)
     if args.command == "compare":
         return _cmd_compare(args)
     if args.command == "draw":

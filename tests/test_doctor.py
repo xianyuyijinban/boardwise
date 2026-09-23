@@ -667,9 +667,16 @@ class _FakeDaemon:
         self.documents = documents
         self.errors = errors or {}
         self.calls = []
+        self.targets = []
 
-    async def call(self, action, params=None):
+    async def call(self, action, params=None, *, target_project=None, target_instance=None):
+        # The routing hints are part of `BridgeClient.call`'s signature since
+        # doctor grew `--project`/`--instance` (028 batch 3a): with several
+        # windows connected the daemon refuses to guess, so those checks need a
+        # way to name one. Recorded rather than ignored, so a test can assert the
+        # hint actually travels.
         self.calls.append(action)
+        self.targets.append({"action": action, "project": target_project, "instance": target_instance})
         if action in self.errors:
             raise BridgeError(self.errors[action], f"{action} failed in the stub")
         if action == "ping":
@@ -707,11 +714,61 @@ def fake_daemon(monkeypatch):
     return install
 
 
-def _doctor_args(tmp_path=None, json_path=None):
+def _doctor_args(tmp_path=None, json_path=None, extra=()):
     args = build_parser().parse_args(
-        ["doctor"] + (["--json", str(json_path)] if json_path else [])
+        ["doctor"] + (["--json", str(json_path)] if json_path else []) + list(extra)
     )
     return args
+
+
+def test_the_window_hint_reaches_the_calls_that_need_one(fake_daemon, capsys, tmp_path, monkeypatch):
+    # 028 batch 3a. With several editor windows connected the daemon refuses to
+    # guess which window a call is about (`WINDOW_UNSPECIFIED`, §3.5), so four of
+    # doctor's eight checks can only answer "not verified" — measured on this
+    # machine with three windows open: 4/8, purely for lack of a way to name one.
+    # The hint must therefore reach the connector-owned calls, and not the
+    # daemon-owned `ping` (whose answer is about the daemon, not a window).
+    daemon = fake_daemon(_FakeDaemon(
+        ping={"pong": True, "version": __version__, "connector": True, "pairedFingerprint": "ab12cd34"},
+        probe={"version": "3.2.186", "connector": _repo_connector_version(), "checks": ALL_PRESENT},
+        documents={
+            "projects": [{"projectUuid": "proj-1", "friendlyName": "test", "focused": True,
+                          "schematics": [], "pcbs": []}],
+            "active": {"uuid": "page-1", "type": "page"},
+        },
+    ))
+    tree = install_tree(tmp_path, "3.2.186.b52e3e87")
+    monkeypatch.setenv(EDITOR_INSTALL_ENV, str(tmp_path))
+
+    code = _cmd_doctor(_doctor_args(extra=["--instance", "inst-abc123"]))
+    capsys.readouterr()
+
+    assert code == 0
+    hints = {entry["action"]: entry["instance"] for entry in daemon.targets}
+    assert hints["sys.probe"] == "inst-abc123"
+    assert hints["doc.list"] == "inst-abc123"
+    assert hints["ping"] is None, "ping is answered by the daemon, which needs no window"
+
+
+def test_a_window_hint_is_optional_and_changes_nothing_when_absent(fake_daemon, capsys, tmp_path, monkeypatch):
+    # The single-window case (and the case where a project hint is enough) must
+    # keep working exactly as before: no hint given, no hint sent.
+    daemon = fake_daemon(_FakeDaemon(
+        ping={"pong": True, "version": __version__, "connector": True, "pairedFingerprint": "ab12cd34"},
+        probe={"version": "3.2.186", "connector": _repo_connector_version(), "checks": ALL_PRESENT},
+        documents={
+            "projects": [{"projectUuid": "proj-1", "friendlyName": "test", "focused": True,
+                          "schematics": [], "pcbs": []}],
+            "active": {"uuid": "page-1", "type": "page"},
+        },
+    ))
+    install_tree(tmp_path, "3.2.186.b52e3e87")
+    monkeypatch.setenv(EDITOR_INSTALL_ENV, str(tmp_path))
+
+    assert _cmd_doctor(_doctor_args()) == 0
+    capsys.readouterr()
+    assert {entry["instance"] for entry in daemon.targets} == {None}
+    assert {entry["project"] for entry in daemon.targets} == {None}
 
 
 def test_the_cli_gathers_the_three_payloads_and_goes_green(fake_daemon, capsys, tmp_path, monkeypatch):
