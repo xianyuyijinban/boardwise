@@ -21,6 +21,12 @@ from .engines.review import (
     run_review,
     severity_counts,
 )
+from .engines.drc import (
+    offline_section,
+    pcb_section,
+    schematic_section,
+    summarise as drc_summarise,
+)
 from .engines.generate import DEFAULT_NAMING_STRATEGY, NAMING_STRATEGIES
 from .core.changeplan import (
     COMPONENT_VALUE_KIND,
@@ -1457,7 +1463,13 @@ def _cmd_review(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------
 
 #: Report schema id. Bumped when a field's *meaning* changes, not when one is added.
-CHECKUP_SCHEMA = "boardwise.checkup/1"
+#:
+#: `/2` since batch 3: `drc` and `findings` went from placeholders (`null` / `[]`,
+#: listed in `pending`) to the sections themselves, and `summary` appeared. A
+#: consumer written against `/1` — the two batch-2 reports in `outputs/` are that
+#: shape — would read `drc.schematic: null` as "not checked yet"; the id is how it
+#: can tell before it reads a batch-3 report wrong.
+CHECKUP_SCHEMA = "boardwise.checkup/2"
 
 #: What each tier actually read, spelled for the report's own header.
 #:
@@ -1486,14 +1498,19 @@ def _checkup_report(
     model: object,
     attempts: list[dict],
     notes: list[str],
+    drc: dict,
+    findings: list[dict],
+    summary: dict,
 ) -> dict:
-    """Assemble the batch-2 skeleton: real source/model facts, empty later stages.
+    """Assemble the report: what was read (batch 2), what was found (batch 3).
 
-    Fields are present and empty **on purpose**. Batch 3 fills `drc` and
-    `findings` (the DRC→Finding mapping), batch 4 fills `modules`, `ai_slots`,
-    `report.md` and the canvas images; a skeleton that carried half-guessed
-    content would be worse than one that says what is missing, because the
-    reader of a report has no way to tell an empty section from a checked one.
+    `drc`, `findings` and `summary` are batch 3's content, assembled by
+    `engines/drc.py` from the host's own answers plus the offline rules. What is
+    still empty and marked in `pending` is batch 4's: `modules`, `ai_slots`,
+    `report.md` and the canvas images. Fields are present and empty **on
+    purpose** — a skeleton that carried half-guessed content would be worse than
+    one that says what is missing, because a reader cannot tell an empty section
+    from a checked one.
     """
     return {
         "schema": CHECKUP_SCHEMA,
@@ -1512,17 +1529,16 @@ def _checkup_report(
             "designators": sorted(model.components),
             "duplicateDesignators": sorted(model.duplicate_designators),
         },
+        "summary": summary,
         "pending": {
-            "drc": "batch 3（DRC → Finding 映射）",
-            "findings": "batch 3/4（规则引擎全扫 → 模块分组）",
             "modules": "batch 4（模块聚类）",
             "ai_slots": "batch 4（unknown_parts / canvas_images / summary 槽位）",
             "reportMd": "batch 4（report.md 人读版）",
             "canvasImages": "batch 4（export.render 打包）",
         },
-        "drc": {"schematic": None, "pcb": None},
+        "drc": drc,
         "modules": [],
-        "findings": [],
+        "findings": findings,
         "ai_slots": {"unknown_parts": [], "canvas_images": [], "summary_template": ""},
     }
 
@@ -1849,18 +1865,23 @@ async def _checkup_ladder(
 
 
 def _cmd_checkup(args: argparse.Namespace) -> int:
-    """``boardwise checkup`` — one command, an honest tier ladder, a report skeleton.
+    """``boardwise checkup`` — one command, an honest tier ladder, an exit code.
 
-    Exit codes follow ``review``'s vocabulary and are the whole point of the
-    ladder being explicit:
+    Exit codes follow ``review``'s vocabulary:
 
-    * **0** a model was obtained and no finding is an ERROR (batch 2 always says
-      this: `findings` is empty until batch 3 fills it, so exit 1 is not
-      reachable yet — stated rather than faked);
+    * **0** a model was obtained and nothing is an ERROR;
+    * **1** something is: an ERROR-severity finding from the offline rules, a
+      `fatalError`/`error` count from the host's ERC, or a leaf from its PCB DRC
+      (batch 3 made this reachable — the counts and the tree now reach the
+      report instead of being marked pending);
     * **2** the input cannot be used (mutually exclusive arguments, an unreadable
       `--file`, an unsupported extension);
     * **3** the online state cannot be stated (no daemon, no connector, or every
       tier refused). Never an empty model dressed up as a clean board.
+
+    A DRC that could **not** run is not an error and not a pass: it leaves the
+    section at `{checked: false, reason}` and adds no counts, so exit 0 can never
+    be read as "the editor's checks passed" when they never ran.
     """
     if args.file and (args.project or args.instance):
         print(
@@ -1892,6 +1913,16 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         }
         attempts.append({"tier": "file", "ok": True, "path": str(path),
                          "components": len(model.components), "nets": len(model.nets)})
+        # No editor, so no host DRC. Both sections say *that*, rather than
+        # carrying zeroes a reader could mistake for a clean board.
+        drc = {
+            "schematic": offline_section(
+                "离线路径（--file）不连编辑器，因此没有主机 ERC；这一段的空是「没查」，不是「零错误」"
+            ),
+            "pcb": offline_section(
+                "离线路径（--file）不连编辑器，因此没有主机 PCB DRC；要它就给一个在线工程"
+            ),
+        }
         print(f"boardwise checkup: {path} ({CHECKUP_TIERS['file']})")
     else:
         loaded = _load_model_online(args, notes=notes, attempts=attempts, parse_stats=parse_stats)
@@ -1912,7 +1943,29 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         )
         print(f"boardwise checkup: {project_name} (tier {tier} — {CHECKUP_TIERS[tier]})")
 
-    report = _checkup_report(tier=tier, source=source, model=model, attempts=attempts, notes=notes)
+        # --- 阶段 B: the editor's own DRC, read-only, focus restored.
+        #
+        # Its outcome is *not* appended to `source.attempts`: that array is the
+        # tier ladder's record ("which model source answered"), and the DRC reads
+        # are a different question — they live in the `drc` sections, which carry
+        # their own `checked`/`reason`/`elapsedMs`.
+        readings = _read_online_drc(args, notes=notes)
+        drc = {
+            "schematic": schematic_section(readings.get("schematic", [])),
+            "pcb": pcb_section(readings.get("pcb"), documents_listed=readings.get("pcbDocuments", 0)),
+        }
+        notes.append(
+            "DRC stage: read "
+            f"{len(readings.get('schematic', []))} 页 ERC + "
+            f"{readings.get('pcbDocuments', 0)} 块 PCB（userInterface=false，焦点已复位）"
+        )
+
+    findings = [_finding_payload(finding) for finding in run_review(model)]
+    summary = drc_summarise(drc=drc, findings=findings)
+    report = _checkup_report(
+        tier=tier, source=source, model=model, attempts=attempts, notes=notes,
+        drc=drc, findings=findings, summary=summary,
+    )
     report_path = _write_checkup_report(out_dir, report)
 
     print(
@@ -1921,21 +1974,177 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
     )
     if report["model"]["designators"]:
         print(f"  designators: {', '.join(report['model']['designators'])}")
+    print(f"  drc: {_drc_line('schematic', drc['schematic'])} | {_drc_line('pcb', drc['pcb'])}")
+    print(
+        f"  findings: {sum(1 for f in findings if f.get('severity') == 'ERROR')} ERROR, "
+        f"{sum(1 for f in findings if f.get('severity') == 'WARN')} WARN, "
+        f"{sum(1 for f in findings if f.get('severity') == 'INFO')} INFO (boardwise 规则引擎)"
+    )
     print(f"  attempts: " + "; ".join(
         f"{a.get('tier')} {'ok' if a.get('ok') else 'failed'}"
         + (f" ({a.get('code')})" if a.get("code") else "")
         + (f" {a.get('ms')} ms" if a.get("ms") is not None else "")
         for a in attempts
     ))
+    # 报告头部 ERROR 区：先说要紧的，再看清单。
+    if summary["errors"]:
+        print(f"  errors: {summary['errorCount']}"
+              + ("（计数不完整：有主机答复不能枚举）" if summary["countsIncomplete"] else ""))
+        for entry in summary["errors"]:
+            print("    " + _summary_line(entry))
+    else:
+        print("  errors: none")
     for note in notes:
         print(f"  note: {note}")
     print(f"  report: {report_path}")
     print(
-        "  pending: drc/findings → batch 3, modules/ai_slots/report.md/canvas → batch 4 "
+        "  pending: modules/ai_slots/report.md/canvas → batch 4 "
         "(fields present and empty on purpose; see report.json's `pending`)"
     )
-    print("  exit: 0 (a model was obtained; no ERROR findings — findings are empty until batch 3)")
-    return 0
+    if summary["warnings"]:
+        # 末尾「提醒」段：warn 不决定退出码，但决定读者下一步看哪儿。
+        print(f"  reminder: {summary['warnCount']} warning(s)")
+        for entry in summary["warnings"]:
+            print("    " + _summary_line(entry))
+    exit_code = int(summary["exitCode"])
+    print(
+        f"  exit: {exit_code} "
+        + ("(ERROR present — see the errors above)" if exit_code else
+           "(a model was obtained and nothing is an ERROR)")
+    )
+    return exit_code
+
+
+def _finding_payload(finding: object) -> dict:
+    """One finding as the report carries it — **the same shape `review --json` uses**.
+
+    Reusing `render_json`'s two derivations (`asdict` plus `finding_refs`) rather
+    than re-spelling them here: `boardwise review`'s JSON output is a contract
+    other tasks read (`review-mark` consumes it), and a second spelling would let
+    the two drift into disagreeing about what a finding looks like. The engine
+    itself is untouched — this is the report assembling what the rule wrote.
+    """
+    from dataclasses import asdict
+
+    return {**asdict(finding), "refs": finding_refs(finding)}
+
+
+def _drc_line(name: str, section: dict) -> str:
+    """One console line per DRC section: what was read, or why nothing was."""
+    if not section.get("checked"):
+        return f"{name}: not checked — {section.get('reason')}"
+    if name == "schematic":
+        if section.get("countsKnown") is False:
+            return f"schematic: passed={section.get('passed')} (主机未给计数)"
+        parts = ", ".join(
+            f"{kind} {section[kind]}" for kind in ("fatalError", "error", "warn") if kind in section
+        )
+        return (f"schematic: {parts or 'no counts'} "
+                f"[{section.get('pagesChecked')}/{section.get('pageCount')} 页, {section.get('countsBasis')}]")
+    if section.get("mode") == "boolean":
+        return f"pcb: passed={section.get('passed')} (主机未给逐条)"
+    totals = section.get("totals", {})
+    return (f"pcb: {totals.get('leafs', 0)} leaf(s) in {len(section.get('groups', []))} group(s)"
+            + ("（截断）" if section.get("truncated") else ""))
+
+
+def _summary_line(entry: dict) -> str:
+    """One line per summary entry — count plus the reference to check it at."""
+    count = entry.get("count")
+    number = "count unknown" if count is None else str(count)
+    label = entry.get("ruleName") or entry.get("ruleId") or entry.get("kind") or entry.get("severity")
+    net = f" net {entry['net']}" if entry.get("net") else ""
+    detail = f" — {entry['detail']}" if entry.get("detail") else ""
+    return f"[{entry.get('severity')}] {number}x {label}{net} ({entry.get('ref')}){detail}"
+
+
+def _read_online_drc(args: argparse.Namespace, *, notes: list[str]) -> dict:
+    """阶段 B: ask the editor's own two DRCs, with the focus put back.
+
+    Read-only by construction: `doc.open` moves the focused tab and `drc.check`
+    only reads (with `userInterface` left at its `false` default, so the editor's
+    bottom panel is not popped open on a machine nobody is watching). Every page
+    is opened before its own `sch_Drc.check`, and the **focus is restored in a
+    `finally`** — a review that left the user's editor on a different page would
+    be a side effect nobody asked for.
+
+    Why per page at all, when the counts do not vary by page: batch 3 measured
+    that they do not (all four pages of the test project answer `warn 1`), and
+    the section reports the per-page readings *and* the invariance. Calling per
+    page is the only way to *know* that, and it costs ~27 ms each.
+
+    Returns `{"schematic": [reading…], "pcb": reading|None, "pcbDocuments": n}`.
+    A failure here never fails the command: it lands in the section as
+    `checked: false` with its reason.
+    """
+    import asyncio
+
+    BridgeClient, BridgeError, port, token = _open_cli(args)
+    route_kwargs: dict[str, str] = {}
+    if getattr(args, "project", ""):
+        route_kwargs["target_project"] = args.project.strip()
+    if getattr(args, "instance", ""):
+        route_kwargs["target_instance"] = args.instance.strip()
+
+    async def run() -> dict:
+        try:
+            client = await BridgeClient.open(
+                _bridge_uri(port), token, "cli", client="boardwise-cli"
+            )
+        except (OSError, BridgeError) as exc:
+            notes.append(f"DRC stage: daemon not reachable ({exc})")
+            return {"schematic": [], "pcb": None, "pcbDocuments": 0, "unreachable": str(exc)}
+        try:
+            try:
+                listing = await client.call("doc.list", {}, **route_kwargs)
+            except BridgeError as exc:
+                notes.append(f"DRC stage: doc.list {exc.code}: {exc.message}")
+                return {"schematic": [], "pcb": None, "pcbDocuments": 0,
+                        "error": {"code": exc.code, "message": exc.message}}
+            documents = listing.get("documents") or []
+            pages = [d.get("uuid") for d in documents if d.get("type") == "page" and d.get("uuid")]
+            pcbs = [d.get("uuid") for d in documents if d.get("type") == "pcb" and d.get("uuid")]
+            focus = (listing.get("active") or {}).get("uuid")
+
+            async def open_document(uuid: str) -> dict | None:
+                try:
+                    await client.call("doc.open", {"uuid": uuid}, **route_kwargs)
+                    return None
+                except BridgeError as exc:
+                    return {"code": exc.code, "message": exc.message}
+
+            async def read_once(action: str, uuid: str) -> dict:
+                failure = await open_document(uuid)
+                if failure:
+                    return {"documentUuid": uuid, "error": failure}
+                try:
+                    payload = await client.call(action, {}, **route_kwargs)
+                except BridgeError as exc:
+                    return {"documentUuid": uuid, "error": {"code": exc.code, "message": exc.message}}
+                return {"documentUuid": uuid, "payload": payload}
+
+            schematic: list[dict] = []
+            for uuid in pages:
+                reading = await read_once("sch.drc_check", uuid)
+                schematic.append({"pageUuid": uuid, **reading})
+            pcb_reading = await read_once("pcb.drc_check", pcbs[0]) if pcbs else None
+            if len(pcbs) > 1:
+                notes.append(
+                    f"doc.list 列了 {len(pcbs)} 块 PCB，本段只读第一块 {pcbs[0]}"
+                    "（多板工程要把 pcb.drc_check 逐块读，留待后续）"
+                )
+            return {"schematic": schematic, "pcb": pcb_reading, "pcbDocuments": len(pcbs)}
+        finally:
+            try:
+                if (focus := locals().get("focus")) and pages:
+                    await client.call("doc.open", {"uuid": focus}, **route_kwargs)
+                    notes.append(f"DRC stage: 焦点已复位到 {focus}")
+            except Exception as exc:  # noqa: BLE001 — a restore that fails is a note
+                notes.append(f"DRC stage: 焦点复位失败（{exc}）— 编辑器可能停在别处")
+            finally:
+                await client.close()
+
+    return asyncio.run(run())
 
 
 def _cmd_review_eval(args: argparse.Namespace) -> int:
