@@ -1,0 +1,52 @@
+{
+  "schema": "boardwise.checkup/1",
+  "generatedAt": "2026-09-23T08:50:37+0800",
+  "source": {
+    "tier": "file",
+    "tierLabel": "离线文件（--file）：不连编辑器",
+    "project": null,
+    "pageUuid": null,
+    "pageType": null,
+    "hostVersion": "",
+    "connectorVersion": "",
+    "file": ".tmp_025b_project.epro2",
+    "attempts": [
+      {
+        "tier": "file",
+        "ok": true,
+        "path": ".tmp_025b_project.epro2",
+        "components": 1,
+        "nets": 2
+      }
+    ],
+    "notes": []
+  },
+  "model": {
+    "view": "schematic",
+    "components": 1,
+    "nets": 2,
+    "designators": [
+      "R2"
+    ],
+    "duplicateDesignators": []
+  },
+  "pending": {
+    "drc": "batch 3（DRC → Finding 映射）",
+    "findings": "batch 3/4（规则引擎全扫 → 模块分组）",
+    "modules": "batch 4（模块聚类）",
+    "ai_slots": "batch 4（unknown_parts / canvas_images / summary 槽位）",
+    "reportMd": "batch 4（report.md 人读版）",
+    "canvasImages": "batch 4（export.render 打包）"
+  },
+  "drc": {
+    "schematic": null,
+    "pcb": null
+  },
+  "modules": [],
+  "findings": [],
+  "ai_slots": {
+    "unknown_parts": [],
+    "canvas_images": [],
+    "summary_template": ""
+  }
+}

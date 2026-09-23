@@ -1,0 +1,160 @@
+025 批 2 第 2 步 · boardwise checkup 骨架在 test 工程端到端实录
+================================================================================
+时间：2026-09-23 08:50:35   工作目录：E:\boardwise
+宿主：立创 EDA Pro 3.2.186   connector：0.4.15   daemon：本次重启后的进程（目录含批 1+批 2 动作）
+
+$ boardwise bridge status   [exit 0, 270 ms]
+    boardwise bridge: daemon up on 127.0.0.1:61190
+      connector: connected
+      windows: 1 connected
+      window: inst-003941041-56h9uam1 (connector 0.4.15)  [project test (ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489)]
+        peer: 127.0.0.1:50185  connected: 2026-09-23 08:40:29  last seen: 2026-09-23 08:49:03  routed: 49
+        page: sch b4298962367251c8
+      projects seen: test (inst-003941041-56h9uam1)
+      paired connector: b8b4a348
+
+$ bridge call --action sys.identity --params '{}'   [exit 0, 276 ms]
+    {
+      "focusedProject": {
+        "projectUuid": "ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489",
+        "name": "/test",
+        "friendlyName": "test"
+      },
+      "activeDocument": {
+        "uuid": "b4298962367251c8",
+        "type": "page",
+        "tabId": "b4298962367251c8@ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489",
+        "projectUuid": "ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489",
+        "source": "dmt_SelectControl.getCurrentDocumentInfo",
+        "project": {
+          "projectUuid": "ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489",
+          "source": "dmt_SelectControl.getCurrentDocumentInfo (parentProjectUuid)"
+        }
+      },
+      "consistent": true,
+      "consistentBasis": "project-uuid",
+      "pageUuid": "b4298962367251c8",
+      "readOnly": true
+    }
+
+· R1：焦点工程 /test（friendlyName test）
+
+================================================================================
+① 在线路径：boardwise checkup（tier 阶梯；期望 project-file 满血）
+================================================================================
+$ boardwise checkup --out outputs\025b_checkup_out   [exit 0, 1078 ms]
+    boardwise checkup: test (tier project-file — 整工程归档（sys.get_project_file → 临时 .epro2 → 离线管线）：满血)
+      model: 1 components, 2 nets (view schematic)
+      designators: R2
+      attempts: project-file ok 792.8 ms
+      report: outputs\025b_checkup_out\report.json
+      pending: drc/findings → batch 3, modules/ai_slots/report.md/canvas → batch 4 (fields present and empty on purpose; see report.json's `pending`)
+      exit: 0 (a model was obtained; no ERROR findings — findings are empty until batch 3)
+
+
+· outputs\025b_checkup_out\report.json 全文（骨架：真实字段 + 空的后段）
+    {
+      "schema": "boardwise.checkup/1",
+      "generatedAt": "2026-09-23T08:50:37+0800",
+      "source": {
+        "tier": "project-file",
+        "tierLabel": "整工程归档（sys.get_project_file → 临时 .epro2 → 离线管线）：满血",
+        "project": {
+          "name": "/test",
+          "friendlyName": "test",
+          "projectUuid": "ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489"
+        },
+        "pageUuid": "b4298962367251c8",
+        "pageType": "page",
+        "hostVersion": "3.2.186",
+        "connectorVersion": "0.4.15",
+        "file": null,
+        "attempts": [
+          {
+            "tier": "project-file",
+            "ok": true,
+            "ms": 792.8,
+            "bytes": 1765386,
+            "sha256": "c8c60361113efd344dbbd6b15b4aa34f34f923f1340560ac7f4dd831b09892e0",
+            "components": 1,
+            "nets": 2
+          }
+        ],
+        "notes": []
+      },
+      "model": {
+        "view": "schematic",
+        "components": 1,
+        "nets": 2,
+        "designators": [
+          "R2"
+        ],
+        "duplicateDesignators": []
+      },
+      "pending": {
+        "drc": "batch 3（DRC → Finding 映射）",
+        "findings": "batch 3/4（规则引擎全扫 → 模块分组）",
+        "modules": "batch 4（模块聚类）",
+        "ai_slots": "batch 4（unknown_parts / canvas_images / summary 槽位）",
+        "reportMd": "batch 4（report.md 人读版）",
+        "canvasImages": "batch 4（export.render 打包）"
+      },
+      "drc": {
+        "schematic": null,
+        "pcb": null
+      },
+      "modules": [],
+      "findings": [],
+      "ai_slots": {
+        "unknown_parts": [],
+        "canvas_images": [],
+        "summary_template": ""
+      }
+    }
+
+· 骨架自检
+    source.tier            = project-file
+    source.tierLabel       = 整工程归档（sys.get_project_file → 临时 .epro2 → 离线管线）：满血
+    source.project         = {"name": "/test", "friendlyName": "test", "projectUuid": "ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489"}
+    source.pageUuid        = b4298962367251c8
+    source.hostVersion     = 3.2.186
+    source.connectorVersion= 0.4.15
+    model                  = {"view": "schematic", "components": 1, "nets": 2, "designators": ["R2"], "duplicateDesignators": []}
+    drc / modules / findings / ai_slots 均为空且带 pending 标记：{"drc": "batch 3（DRC → Finding 映射）", "findings": "batch 3/4（规则引擎全扫 → 模块分组）", "modules": "batch 4（模块聚类）", "ai_slots": "batch 4（unknown_parts / canvas_images / summary 槽位）", "reportMd": "batch 4（report.md 人读版）", "canvasImages": "batch 4（export.render 打包）"}
+
+================================================================================
+② 离线兜底：boardwise checkup --file <整工程 .epro2>（不连编辑器）
+================================================================================
+$ boardwise checkup --file .tmp_025b_project.epro2 --out outputs\025b_checkup_out_file   [exit 0, 159 ms]
+    boardwise checkup: .tmp_025b_project.epro2 (离线文件（--file）：不连编辑器)
+      model: 1 components, 2 nets (view schematic)
+      designators: R2
+      attempts: file ok
+      report: outputs\025b_checkup_out_file\report.json
+      pending: drc/findings → batch 3, modules/ai_slots/report.md/canvas → batch 4 (fields present and empty on purpose; see report.json's `pending`)
+      exit: 0 (a model was obtained; no ERROR findings — findings are empty until batch 3)
+
+· 与在线报告同构（同 schema、同段、tier=file）
+    source.tier / model = {"tier": "file", "view": "schematic", "components": 1, "nets": 2, "designators": ["R2"], "duplicateDesignators": []}
+    与在线报告键集一致：True
+
+================================================================================
+③ 等价路径：boardwise review --live（同一阶梯，跑现有规则引擎）
+================================================================================
+$ boardwise review --live   [exit 0, 971 ms]
+    boardwise review: live:/test (tier project-file) (1 components, 2 nets)
+    findings: 0 ERROR, 0 WARN, 0 INFO
+
+================================================================================
+④ 跑完复核：test 工程零残留
+================================================================================
+    geometry components 1 -> 1，wires 0 -> 0，pins 0 -> 0
+    primitiveId 集合一致：True
+    doc.list documents 一致：True；projects 一致：True
+    焦点页：b4298962367251c8 -> b4298962367251c8
+
+小结
+    ① 在线 checkup 走通 tier=project-file（整工程归档，满血），报告骨架字段齐、后段空且标 pending；
+    ② --file 兜底与在线报告同构（同 schema/同段/键集一致），tier=file，全程不连 daemon；
+    ③ review --live 用同一阶梯拿模型后跑现有规则引擎（test 工程 0 findings）；
+    ④ 只读：几何与文档树逐字段未变，焦点未动。
