@@ -1,0 +1,59 @@
+025 批 3 · PCB 逐条补测：在毕设FOC驱动板上的只读尝试（R1 双查 → R3 如实报告）
+====================================================================================
+时间：2026-09-23 09:24:41   工作目录：E:\boardwise   宿主 3.2.186 / connector 0.4.15
+
+$ boardwise bridge status   [exit 0, 270 ms]
+    boardwise bridge: daemon up on 127.0.0.1:61190
+      connector: connected
+      windows: 1 connected
+      window: inst-003941041-56h9uam1 (connector 0.4.15)  [project test (ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489)]
+        peer: 127.0.0.1:50185  connected: 2026-09-23 08:40:29  last seen: 2026-09-23 09:24:01  routed: 123
+        page: sch b4298962367251c8
+      projects seen: test (inst-003941041-56h9uam1)
+      paired connector: b8b4a348
+
+· 在线窗口数：1；daemon 登记的工程：['projects seen: test (inst-003941041-56h9uam1)']
+
+· R1 双查（两处独立读数，必须一致才敢动手）
+    sys.identity.focusedProject = {"projectUuid": "ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489", "name": "/test", "friendlyName": "test"}
+    sys.identity.activeDocument.uuid = b4298962367251c8 type=page consistent=True
+    doc.list.projects = [{"name": "/test", "friendlyName": "test", "opened": "yes", "focused": true}]
+    doc.list.documents = [["schematic1", "schematic"], ["P4", "page"], ["P3", "page"], ["P1", "page"], ["P2", "page"], ["PCB1", "pcb"]]
+
+· 结论：毕设FOC驱动板 **没有打开**
+    doc.list 只列出一个工程（['/test']），其中 False 与毕设相关；编辑器只有一个窗口（1 个），该窗口的工程就是 /test。
+    宿主确有 `openProject` 一类 API，但**桥没有对应动作**（ACTIONS 里与工程相关的只有
+    `sys.get_project_file`（读当前打开的工程）和 `doc.open`（只在活动工程内寻址，SKILL 坑 1））——018/013 已裁定不为它新造动作。
+    ⇒ 没有到达那块板的只读路径：不打开工程就调不到它的 `pcb_Drc.check`。
+
+· 按 R3（找不到 ≠ 已清 / 不许自行替代）我**停下来**，没有做的事：
+    ① 没有打开毕设工程（那是禁地；`project.open` 类动作不存在，只能由人操作编辑器）；
+    ② 没有用 `doc.open` 去试一个跨工程 uuid（它只在活动工程内寻址，试了只会得到
+       CONNECTOR_ERROR，证明不了什么，却会动到焦点）；
+    ③ 没有拿 test 的读数冒充毕设的逐条样本。
+
+====================================================================================
+本次**能**给的 PCB DRC 证据（test 工程 PCB1，含器件的 PCB 仍缺）
+====================================================================================
+· test 的 PCB1 = 5dc38976c1fa45ce 是空板（pcb.readback: components [] / primitives []），
+  但 DRC 仍回 1 条真实错误：'Netlist Error / Import Changes'（原理图有 R2、PCB 没有）。
+  逐字结构见 outputs/025_probe_p4_pcb_drc.txt（批 1 实测）与 outputs/025c_checkup_live.txt
+  （批 3 映射后的 groups/totals/leaf）。
+  叶子字段实测集合 = {errorType, errorObjType, ruleName, ruleTypeName, obj1, obj2, objs,
+                      explanation{str,param}, globalIndex, parentId, visible}
+  ——**没有** net/pos/layer：那是器件/坐标类错误才有的字段，空板上造不出来。
+
+· 映射层对 net/pos/layer 是**容忍式**读取（有就带上、没有就不出现），单测用
+  《类型包声明 + 任务书 §0 记录》的叶子形态覆盖了 template/verbatim/fallback 三条渲染路径
+  （tests/test_025c_drc_mapping.py）。**但这三条路径没有真机样本**，标注为未验证：
+    - 带 {占位符} 的 explanation.str + param ⇒ rendered='template'（只有声明，无实测样本）
+    - 无 explanation 的叶子 ⇒ rendered='fallback'，句式为 'ruleName / net X / @(x, y) / layer N'
+      （位置/layer 字段名按任务书 §0 记的 'pos'/'layer' 读，未验）
+
+· 建议（请岳裁）：在编辑器里打开毕设FOC驱动板（它不在任何窗口里），我就能补上一次
+  只读 `pcb.drc_check`（R1 双查身份 → userInterface=false → doc.open 回 test P1 → 复核焦点），
+  拿到带 net/pos/layer 的真实叶子后，把 template/fallback 两条渲染路径从「按声明实现」
+  升级为「真机验证」。在它打开之前，这一条只能是「未验证」。
+
+结论：**未能完成**（条件：毕设FOC驱动板未在编辑器打开，且桥没有 project.open 动作；
+      按 R3 未强行触碰，已给出 test 工程可得的全部 PCB DRC 证据与待验清单）。

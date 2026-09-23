@@ -1,0 +1,154 @@
+025 批 3 真机实录 · checkup 全链（数据路 + 阶段 B 主机 DRC + 规则引擎 findings + exit 1）
+====================================================================================
+时间：2026-09-23 09:53:00   工作目录：E:\boardwise
+宿主：立创 EDA Pro 3.2.186   connector：0.4.15   daemon：带 025 全部动作的目录
+
+$ boardwise bridge status   [exit 0, 349 ms]
+    boardwise bridge: daemon up on 127.0.0.1:61190
+      connector: connected
+      windows: 1 connected
+      window: inst-003941041-56h9uam1 (connector 0.4.15)  [project test (ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489)]
+        peer: 127.0.0.1:50185  connected: 2026-09-23 08:40:29  last seen: 2026-09-23 09:52:22  routed: 147
+        page: sch b4298962367251c8
+      projects seen: test (inst-003941041-56h9uam1)
+      paired connector: b8b4a348
+
+$ bridge call --action sys.identity --params '{}'   [exit 0, 356 ms]
+    {
+      "focusedProject": {
+        "projectUuid": "ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489",
+        "name": "/test",
+        "friendlyName": "test"
+      },
+      "activeDocument": {
+        "uuid": "b4298962367251c8",
+        "type": "page",
+        "tabId": "b4298962367251c8@ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489",
+        "projectUuid": "ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489",
+        "source": "dmt_SelectControl.getCurrentDocumentInfo",
+        "project": {
+          "projectUuid": "ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489",
+          "source": "dmt_SelectControl.getCurrentDocumentInfo (parentProjectUuid)"
+        }
+      },
+      "consistent": true,
+      "consistentBasis": "project-uuid",
+      "pageUuid": "b4298962367251c8",
+      "readOnly": true
+    }
+
+· R1 身份：focusedProject=/test / friendlyName=test，activeDocument=b4298962367251c8 (type page)，consistent=True
+
+====================================================================================
+① 在线 checkup（阶段 A 数据路 + 阶段 B 主机 DRC + 规则引擎 findings）
+====================================================================================
+$ boardwise checkup --out outputs\025c_checkup_out   [exit 1, 3548 ms]
+    boardwise checkup: test (tier project-file — 整工程归档（sys.get_project_file → 临时 .epro2 → 离线管线）：满血)
+      model: 1 components, 2 nets (view schematic)
+      designators: R2
+      drc: schematic: warn 1 [4/4 页, host-wide] | pcb: 1 leaf(s) in 1 group(s)
+      findings: 0 ERROR, 0 WARN, 0 INFO (boardwise 规则引擎)
+      attempts: project-file ok 1097.0 ms
+      errors: 1
+        [ERROR] 1x Import Changes (drc.pcb.groups[0].children[0].leafs[0])
+      note: DRC stage: 焦点已复位到 b4298962367251c8
+      note: DRC stage: read 4 页 ERC + 1 块 PCB（userInterface=false，焦点已复位）
+      report: outputs\025c_checkup_out\report.json
+      pending: modules/ai_slots/report.md/canvas → batch 4 (fields present and empty on purpose; see report.json's `pending`)
+      reminder: 1 warning(s)
+        [WARN] 1x warn (drc.schematic) — 主机 ERC 聚合计数；逐条不在返回值里（见 findings 段的说明）
+      exit: 1 (ERROR present — see the errors above)
+
+    ↑ exit 1：批 3 才第一次可达——主机 PCB DRC 的 1 条 'Import Changes' 叶子是 ERROR。
+
+====================================================================================
+② report.json：summary / drc / findings 摘录
+====================================================================================
+· summary（分流：计数 + 引用，决定退出码的地方）
+    {
+      "errorCount": 1,
+      "warnCount": 1,
+      "infoCount": 0,
+      "errors": [
+        {
+          "section": "drc.pcb",
+          "source": "host-drc",
+          "severity": "ERROR",
+          "severitySource": "parentId",
+          "ruleName": "Import Changes",
+          "net": "",
+          "count": 1,
+          "ref": "drc.pcb.groups[0].children[0].leafs[0]"
+        }
+      ],
+      "warnings": [
+        {
+          "section": "drc.schematic",
+          "source": "host-erc",
+          "severity": "WARN",
+          "kind": "warn",
+          "count": 1,
+          "ref": "drc.schematic",
+          "detail": "主机 ERC 聚合计数；逐条不在返回值里（见 findings 段的说明）"
+        }
+      ],
+      "countsIncomplete": false,
+      "exitCode": 1
+    }
+
+· drc.schematic（计数原样；pages 是逐页读数）
+    {"checked": true, "source": "host-erc", "pageCount": 4, "pagesChecked": 4, "note": "逐条见 findings 段（规则引擎）", "notes": ["主机只回聚合计数（025 §0 实测），逐条细节不在返回值里（在编辑器底部面板，扩展无读接口）", "findings 段是 boardwise 自有规则引擎的结果，与主机 ERC 不是同一套规则，两边计数不可互推", "4 页读数完全相同，故按主机口径报一次，不按页累加（实测：test 工程 4 页均回 warn 1）"], "warn": 1, "totals": {"warn": 1}, "total": 1, "countsBasis": "host-wide", "pageCountsAgree": true, "passed": false}
+    page {"pageUuid": "362924e0e16ce90a", "checked": true, "mode": "counts", "counts": {"warn": 1}, "total": 1, "passed": false, "elapsedMs": 26}
+    page {"pageUuid": "f93a95b7245ba351", "checked": true, "mode": "counts", "counts": {"warn": 1}, "total": 1, "passed": false, "elapsedMs": 27}
+    page {"pageUuid": "b4298962367251c8", "checked": true, "mode": "counts", "counts": {"warn": 1}, "total": 1, "passed": false, "elapsedMs": 17}
+    page {"pageUuid": "b5269e3dea21f633", "checked": true, "mode": "counts", "counts": {"warn": 1}, "total": 1, "passed": false, "elapsedMs": 16}
+
+· drc.pcb（组树映射 + totals；叶子渲染成一句话）
+    {"checked": true, "source": "host-drc", "documentUuid": "5dc38976c1fa45ce", "documentsListed": 1, "mode": "groups", "elapsedMs": 372, "severityBasis": "parentId-second-segment", "totals": {"groups": 1, "groupsReturned": 1, "leafs": 1, "hostErrors": 1, "hostErrorsSource": "group-count", "byRule": {"Import Changes": 1}, "bySeverity": {"ERROR": 1}}, "truncated": false}
+    note: 叶子 severity 取自宿主自己的 parentId 第二段（实测 DRCTab|_|Errors|_|… ⇒ Errors 页）；读不出那一段时按 ERROR 记并标 severitySource='assumed'（偏严不偏松）
+    group[0] 'Netlist Error' count=1 title=['Netlist Error', '(1)']
+      child 'Netlist Error' count=1
+        leaf: {"ruleName": "Import Changes", "ruleTypeName": "Import Changes", "errorType": "Netlist Error", "errorObjType": "Netlist Error", "net": "", "severity": "ERROR", "severitySource": "parentId", "explanation": "PCB and schematic netlist does not match. You can click on the rule name \"Import Changes\" to view the difference.", "rendered": "verbatim", "globalIndex": "err4", "parentId": "DRCTab|_|Errors|_|Netlist Error|_|Netlist Error", "obj1": {"typeName": "Schematic Netlist", "suffix": ""}, "obj2": {"typeName": "PCB Netlist", "suffix": ""}, "objs": ["err4"]}
+
+· findings（boardwise 规则引擎，形态与 review --json 一致）：0 条
+
+· source（tier + 身份 + 逐级 attempts）
+    {"tier": "project-file", "tierLabel": "整工程归档（sys.get_project_file → 临时 .epro2 → 离线管线）：满血", "project": {"name": "/test", "friendlyName": "test", "projectUuid": "ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489"}, "pageUuid": "b4298962367251c8", "hostVersion": "3.2.186", "connectorVersion": "0.4.15"}
+    attempt: {"tier": "project-file", "ok": true, "ms": 1097.0, "bytes": 1769852, "sha256": "235b85e97c9cd3a3a5241d28046cb340a79defceadb6781e49c593411ceedc9d", "components": 1, "nets": 2}
+    note: DRC stage: 焦点已复位到 b4298962367251c8
+    note: DRC stage: read 4 页 ERC + 1 块 PCB（userInterface=false，焦点已复位）
+
+====================================================================================
+③ 离线兜底：--file（不连编辑器 ⇒ drc 段标 offline-not-available，绝不写 0 错误）
+====================================================================================
+$ boardwise checkup --file .tmp_025b_project.epro2 --out outputs\025c_checkup_out_file   [exit 0, 221 ms]
+    boardwise checkup: .tmp_025b_project.epro2 (离线文件（--file）：不连编辑器)
+      model: 1 components, 2 nets (view schematic)
+      designators: R2
+      drc: schematic: not checked — 离线路径（--file）不连编辑器，因此没有主机 ERC；这一段的空是「没查」，不是「零错误」 | pcb: not checked — 离线路径（--file）不连编辑器，因此没有主机 PCB DRC；要它就给一个在线工程
+      findings: 0 ERROR, 0 WARN, 0 INFO (boardwise 规则引擎)
+      attempts: file ok
+      errors: none
+      report: outputs\025c_checkup_out_file\report.json
+      pending: modules/ai_slots/report.md/canvas → batch 4 (fields present and empty on purpose; see report.json's `pending`)
+      exit: 0 (a model was obtained and nothing is an ERROR)
+
+    drc.schematic = {"checked": false, "source": "offline-not-available", "reason": "离线路径（--file）不连编辑器，因此没有主机 ERC；这一段的空是「没查」，不是「零错误」", "note": "离线路径不连编辑器，故没有主机 DRC；要它就给一个在线的 test/test2 工程"}
+    drc.pcb       = {"checked": false, "source": "offline-not-available", "reason": "离线路径（--file）不连编辑器，因此没有主机 PCB DRC；要它就给一个在线工程", "note": "离线路径不连编辑器，故没有主机 DRC；要它就给一个在线的 test/test2 工程"}
+    summary       = {"errorCount": 0, "warnCount": 0, "infoCount": 0, "errors": [], "warnings": [], "countsIncomplete": false, "exitCode": 0}
+    与在线报告的键集一致：True
+
+====================================================================================
+④ 跑完复核：test 工程零残留
+====================================================================================
+    geometry components 1 -> 1；primitiveId 集合一致：True
+    doc.list documents 一致：True；projects 一致：True
+    焦点页：b4298962367251c8 -> b4298962367251c8
+
+小结
+    · 阶段 A 仍走 tier=project-file（满血）；阶段 B 按页读 ERC（4/4 页）+ 读 PCB DRC，焦点 finally 复位；
+    · drc.schematic 是主机的聚合计数（warn 1，4 页读数相同 ⇒ countsBasis=host-wide，不累加），
+      note 明写「逐条见 findings 段」且注明两个引擎不是同一套规则；
+    · drc.pcb 把组树映射成 groups/totals，叶子渲染成一句话（rendered=verbatim 表原样）；
+    · findings 来自 run_review，形态与 review --json 逐字段一致；
+    · summary 分流：errors 1（pcb 叶子）、warnings 1（sch warn）+ 1（findings WARN），exit 1。

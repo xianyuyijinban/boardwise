@@ -152,3 +152,20 @@ unknown_parts 逐个 WebSearch 规格书核周边配置；canvas_images 逐张�
   别只等 90 s，看 audit；`doc.open` 后焦点会变，批处理在 finally 里复位。
 - 发现待办：`update-connector` 在 reload 未完成时误报 FAILED（回读应等预算耗尽再判 mismatch）——
   独立小修，未做。
+
+### 批 3（DRC 归一）· 2026-09-23 上午 · agent-43 执行
+
+- 新模块 `engines/drc.py`（713 行）：sch 计数原样进 `drc.schematic`（**不编造逐条**）；
+  pcb 组树逐条映射进 `drc.pcb`（渲染三态 template/verbatim/fallback 标证据量）；
+  **「没查」（throw/checked:false/离线）与「干净板」严格分开**。
+- **实测修正任务书假设**：主机 ERC 计数**不按页**（4 页同值）——顶栏不累加，标
+  `countsBasis:'host-wide'`；PCB 树无 severity 字段，叶子按 `parentId` 第二段
+  （编辑器自己的 Errors 页签）分流，读不出按 ERROR 并标 `assumed`。
+- checkup 填 `drc`/`findings`/`summary` 三段：findings 与 `review --json` 逐字段相同
+  （有等式测试钉住）；**exit 1 首次可达**；控制台头部 ERROR 区 + 末尾 WARN 提醒段；
+  离线路径不调 DRC（标 `offline-not-available`）。schema `boardwise.checkup/1` → `/2`。
+- 真机：test 工程全链 exit 1（`outputs/025c_checkup_live.txt`）；**PCB 逐条补测未完成**——
+  毕设FOC驱动板未在编辑器打开，桥无 project.open，R3 停下待岳（`outputs/025c_pcb_drc_bishe.txt`）。
+- 三线：pytest **1363**（+27）/ connector 365 回归 / tsc 干净；离线 eval 与 dbd4570 逐字节相同；
+  变异 4/4 CAUGHT（含一个「新字段没人读所以没人钉住」的发现，补断言后才中）。
+- 坑：ERC 计数 host-wide（入 SKILL 坑 17）；bash heredoc 写 CRLF 混行——长文本追加走 Edit 工具。

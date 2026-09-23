@@ -94,3 +94,48 @@ cp 还原后 sha256 逐字节一致（`a4073e29…`）。
 待岳真机：导入 0.4.12 → 完全重启 → 看日志面板是否有
 `[boardwise] module evaluated (evaluation N …)`、About… 的 lifecycle 两行、daemon 侧 hello。
 若 `moduleBootstrapObserved=no`/无日志行 = 宿主连 bundle 都不加载（bootstrap 救不了）。
+
+### 现场验证修订（2026-09-23，issue #4）
+
+> 本节只增不改：上文 §根因、§我们的现状、§验证路径 的历史原文一律保留（它们是当时的判断，
+> 不是要抹掉的错），修订口径以本节为准。
+
+**实测现场**（岳的工作电脑，2026-09-23 上午）：EasyEDA Pro **3.2.149.88089769** +
+connector **0.4.15**，扩展经 `update-connector` **正式写入扩展库**（不是 sideload 导入态）。
+
+- **冷启动正常派发 `activate()`**：`About…` 读 `activation: 10:25:01 ok`、
+  `lifecycle: moduleBootstrapObserved=yes activateObserved=yes evaluations=3`、
+  `state: connected`、`pairing: paired`。**关窗再开同样派发。**
+- 即：`moduleBootstrapObserved=yes` 与 `activateObserved=yes` 同时成立——bundle 被评估，
+  activate 也来了，不是「评估了但没派发」，更不是「bundle 根本没被评估」。
+
+**结论修正（口径）**
+
+1. §根因 里「3.2.149 上用户扩展的 `activate()` **永远不被派发**」与 §我们的现状 里
+   「3.2.149 上 activate 永不派发 = 永不启动」**声明确认过宽**：上游 #219/#221 报告的现象
+   在 3.2.149.88089769 上**未复现**（上面这轮现场数据是反例）。缺陷归属改成
+   「**上游报告 + 本机 3.2.149.88089769 未复现（issue #4）**」，不再作为本版宿主的确定事实引用。
+2. **bootstrap 定位修正**：从「绕过已确认缺陷」改为「**幂等防御**」，机制**保留**——
+   它本身正确且无害（模块加载即自举、重复求值复用同一运行时、旧 build 先 stop、
+   activate 晚到/早到均幂等、诊断计数可见），代价近乎零；它真正覆盖的场景是
+   「**不重启编辑器、只 reload 扩展**」这类 activate 不重发的情形（`docs/bridge.md` §10.22），
+   而不是本机的冷启动。
+3. 因此本文档的任务范围不变，**不需要**回滚 0.4.12–0.4.15 的任何改动。
+
+**未验证假设（待测，岳提出）**
+
+- 假设：024 当时观察到的现象发生在扩展处于 **sideload 导入态**；正式注册进扩展库后宿主就
+  正常派发 activate。
+- **待测组合：sideload 态冷启动**——导入 0.4.15 的 `.eext` 但不入库 → 完全重启编辑器 →
+  看 `About…` 的 `activateObserved`。
+  - 读到 `no` → 上游缺陷可钉在这一版宿主上，bootstrap 是绕行手段；
+  - 读到 `yes` → 「3.2.149 跳过 activate」应整个撤回（届时 §根因 的结论按本节口径再降一级）。
+
+**遗留症状的重新归因（多窗口）**
+
+开两个窗口时 daemon 只识别到一个，**页面重载之后**第二个窗口才上线。这不是 activate 派发
+问题，而是**窗口冻结 / 懒求值**：与本机 3.2.186 上观察到的背景窗口冻结 7 小时同源
+（`tasks/025-review-flow-v2.md:151`，前台化才自愈）。所以：149 上做多窗口作业前先避开，
+多窗口的验证基线仍是 3.2.186，149 的多窗口等 Worker watchdog。
+
+> 本轮为文档修订：未改代码、未动 git、未重跑测试（无代码变化）。

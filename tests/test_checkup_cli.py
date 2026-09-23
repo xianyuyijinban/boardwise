@@ -99,12 +99,20 @@ def _netlist_payload() -> dict:
 
 
 class _FakeBridgeClient:
-    """A ``BridgeClient`` stand-in (the pattern `tests/test_persistence.py` uses)."""
+    """A ``BridgeClient`` stand-in (the pattern `tests/test_persistence.py` uses).
+
+    `history` accumulates across connections, because a `checkup` run opens two
+    of them — the model ladder's and the DRC stage's — and an assertion about
+    "what did the ladder ask for" must not be confused by the second connection's
+    calls. `calls` stays per-connection.
+    """
 
     opened = 0
     answers: dict = {}
     fail_open: BaseException | None = None
     calls: list = []
+    history: list = []
+    history_pairs: list = []
     route_kwargs: list = []
 
     @classmethod
@@ -118,6 +126,8 @@ class _FakeBridgeClient:
 
     async def call(self, action, params=None, **kwargs):
         type(self).calls.append(action)
+        type(self).history.append(action)
+        type(self).history_pairs.append((action, params or {}))
         type(self).route_kwargs.append(kwargs)
         answer = type(self).answers.get(action)
         if isinstance(answer, BaseException):
@@ -139,6 +149,8 @@ def fake_bridge(monkeypatch, tmp_path):
     _FakeBridgeClient.answers = {}
     _FakeBridgeClient.fail_open = None
     _FakeBridgeClient.opened = 0
+    _FakeBridgeClient.history = []
+    _FakeBridgeClient.history_pairs = []
     monkeypatch.setattr(client_module, "BridgeClient", _FakeBridgeClient)
     return tmp_path
 
@@ -150,8 +162,8 @@ def _checkup_args(**overrides) -> argparse.Namespace:
 
 
 def _live_answers(*, project_refusal: bool = False, page_blob: bytes | None = None,
-                  netlist: bool = True) -> dict:
-    """The fake daemon's answers for one run of the ladder."""
+                  netlist: bool = True, drc: bool = True) -> dict:
+    """The fake daemon's answers for one run of the ladder (and of the DRC stage)."""
     answers: dict = {
         "sys.probe": {"version": "3.2.186", "connector": "0.4.15", "topLevel": []},
         "doc.list": {
@@ -177,7 +189,77 @@ def _live_answers(*, project_refusal: bool = False, page_blob: bytes | None = No
         answers["sys.get_document_file"] = _archive_payload(page_blob, scope="document")
     if netlist:
         answers["sch.netlist"] = _netlist_payload()
+    if drc:
+        # Clean-but-real shapes by default: the ladder tests are about the *data
+        # path*, and a noisy DRC would decide their exit code for them. The
+        # measured (dirty) answers live in `_measured_drc_answers` and are used by
+        # the DRC tests, which are the ones that should care.
+        answers["sch.drc_check"] = {
+            "source": "sch_Drc.check", "checked": True, "mode": "counts",
+            "counts": [{"type": "warn", "count": 0}], "entries": 1, "total": 0,
+            "byType": {"warn": 0}, "passed": True, "elapsedMs": 12,
+            "args": {"strict": True, "userInterface": False, "includeVerboseError": True},
+            "page": {"uuid": PAGE_UUID, "type": "page"}, "uiRequested": False,
+        }
+        answers["pcb.drc_check"] = {
+            "source": "pcb_Drc.check", "checked": True, "available": True, "mode": "groups",
+            "groups": [],
+            "counts": {"groups": 0, "returnedGroups": 0, "errors": 0, "errorsSource": "group-count",
+                       "items": 0, "byLabel": {}, "jsonChars": 2},
+            "truncated": False, "elapsedMs": 271,
+            "args": {"strict": True, "userInterface": False, "includeVerboseError": True},
+            "page": {"uuid": "5dc38976c1fa45ce", "type": "pcb"}, "uiRequested": False,
+        }
     return answers
+
+
+def _measured_drc_answers() -> dict:
+    """The DRC answers the machine actually gave for the test project (batch 1).
+
+    Not invented: `[{type:'warn',count:1}]` identical on all four pages, and one
+    `Netlist Error / Import Changes` leaf whose group carries its own `count`
+    (`outputs/025_probe_p4_pcb_drc.txt`). This is the content the report's DRC
+    sections and its exit code are tested against.
+    """
+    return {
+        "sch.drc_check": {
+            "source": "sch_Drc.check", "checked": True, "mode": "counts",
+            "counts": [{"type": "warn", "count": 1}], "entries": 1, "total": 1,
+            "byType": {"warn": 1}, "passed": False, "elapsedMs": 13,
+            "args": {"strict": True, "userInterface": False, "includeVerboseError": True},
+            "page": {"uuid": PAGE_UUID, "type": "page"}, "uiRequested": False,
+        },
+        "pcb.drc_check": {
+            "source": "pcb_Drc.check", "checked": True, "available": True, "mode": "groups",
+            "groups": [{
+                "name": "Netlist Error",
+                "list": [{
+                    "name": "Netlist Error",
+                    "list": [{
+                        "visible": True, "errorType": "Netlist Error",
+                        "errorObjType": "Netlist Error", "ruleName": "Import Changes",
+                        "ruleTypeName": "Import Changes",
+                        "obj1": {"typeName": "Schematic Netlist", "suffix": ""},
+                        "obj2": {"typeName": "PCB Netlist", "suffix": ""},
+                        "objs": ["err0"],
+                        "explanation": {
+                            "str": "PCB and schematic netlist does not match.", "param": {},
+                        },
+                        "globalIndex": "err0",
+                        "parentId": "DRCTab|_|Errors|_|Netlist Error|_|Netlist Error",
+                    }],
+                    "count": 1, "title": ["Netlist Error", "(1)"], "visible": True,
+                }],
+                "visible": True, "count": 1, "title": ["Netlist Error", "(1)"],
+            }],
+            "counts": {"groups": 1, "returnedGroups": 1, "errors": 1,
+                       "errorsSource": "group-count", "items": 1,
+                       "byLabel": {"Import Changes": 1}, "jsonChars": 667},
+            "truncated": False, "elapsedMs": 271,
+            "args": {"strict": True, "userInterface": False, "includeVerboseError": True},
+            "page": {"uuid": "5dc38976c1fa45ce", "type": "pcb"}, "uiRequested": False,
+        },
+    }
 
 
 # --------------------------------------------------------------------------
@@ -194,7 +276,9 @@ def test_checkup_reads_the_whole_project_when_the_project_archive_works(
     assert _cmd_checkup(args) == 0
 
     report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
-    assert report["schema"] == "boardwise.checkup/1"
+    from boardwise.cli import CHECKUP_SCHEMA
+
+    assert report["schema"] == CHECKUP_SCHEMA
     assert report["source"]["tier"] == "project-file"
     assert report["source"]["project"]["friendlyName"] == "test"
     assert report["source"]["pageUuid"] == PAGE_UUID
@@ -205,7 +289,10 @@ def test_checkup_reads_the_whole_project_when_the_project_archive_works(
     assert report["model"]["components"] == 17
     assert report["model"]["view"] == "schematic"
     # The ladder stops at the first tier that works: no per-page export ran.
-    assert _FakeBridgeClient.calls == ["sys.probe", "doc.list", "sys.get_project_file"]
+    # The ladder stops at the first tier that works; the DRC stage is a second
+    # connection and does not appear in the ladder's own sequence.
+    assert _FakeBridgeClient.history[:3] == ["sys.probe", "doc.list", "sys.get_project_file"]
+    assert "sch.drc_check" in _FakeBridgeClient.history
     assert "tier project-file" in capsys.readouterr().out
 
 
@@ -231,8 +318,13 @@ def test_a_closed_project_gate_falls_to_per_page_exports_and_says_so(
     # One page is not a merge, and the report must not claim otherwise.
     assert "cross-page connectivity" not in notes
     # The ladder moved the focus and put it back.
-    assert _FakeBridgeClient.calls.count("doc.open") == 2
-    assert _FakeBridgeClient.calls[-1] == "doc.open"
+    # ladder: open the page, restore. DRC stage: open the page, open the PCB,
+    # restore. The focus is put back twice, and the last thing either stage does
+    # is put it back where it found it.
+    assert _FakeBridgeClient.history.count("doc.open") == 5
+    opens = [params.get("uuid") for action, params in _FakeBridgeClient.history_pairs
+             if action == "doc.open"]
+    assert opens == [PAGE_UUID, PAGE_UUID, PAGE_UUID, "5dc38976c1fa45ce", PAGE_UUID]
     assert "tier per-page" in capsys.readouterr().out
 
 
@@ -312,29 +404,36 @@ def test_the_file_fallback_never_touches_the_bridge(fake_bridge, tmp_path):
     assert report["model"]["nets"] == 13
 
 
-def test_batch_three_and_four_sections_exist_and_are_empty(tmp_path):
-    """The skeleton is a contract: fields present, empty, and marked as owed."""
+def test_batch_four_sections_exist_and_are_empty(tmp_path):
+    """What batch 4 still owes is present, empty and marked — and nothing else is.
+
+    Rewritten in batch 3 to go through the **real** `_checkup_report` instead of a
+    hand-built copy of its shape. The copy had already gone stale (it still listed
+    `drc`/`findings` as pending after batch 3 filled them), which is exactly the
+    drift a second spelling of the report invites.
+    """
+    from boardwise.cli import _checkup_report
+    from boardwise.engines.drc import offline_section, summarise
     from boardwise.parsers.schematic import build_schematic_model
 
     model = build_schematic_model(GOLDEN)
-    report = {
-        "schema": "boardwise.checkup/1",
-        "source": {"tier": "file", "attempts": [], "notes": []},
-        "model": {"view": "schematic", "components": len(model.components), "nets": len(model.nets),
-                  "designators": sorted(model.components), "duplicateDesignators": []},
-        "pending": {"drc": "batch 3", "findings": "batch 3/4", "modules": "batch 4",
-                    "ai_slots": "batch 4", "reportMd": "batch 4", "canvasImages": "batch 4"},
-        "drc": {"schematic": None, "pcb": None},
-        "modules": [],
-        "findings": [],
-        "ai_slots": {"unknown_parts": [], "canvas_images": [], "summary_template": ""},
-    }
-    path = _write_checkup_report(tmp_path / "nested" / "deep", report)
-    written = json.loads(path.read_text(encoding="utf-8"))
-    assert written["drc"] == {"schematic": None, "pcb": None}
-    assert written["modules"] == [] and written["findings"] == []
+    drc = {"schematic": offline_section("no editor"), "pcb": offline_section("no editor")}
+    report = _checkup_report(
+        tier="file", source={"file": str(GOLDEN)}, model=model, attempts=[], notes=[],
+        drc=drc, findings=[], summary=summarise(drc=drc, findings=[]),
+    )
+    written = json.loads(_write_checkup_report(
+        tmp_path / "nested" / "deep", report).read_text(encoding="utf-8"))
+
+    assert set(written["pending"]) == {"modules", "ai_slots", "reportMd", "canvasImages"}, (
+        "drc and findings are batch 3's and are no longer pending"
+    )
+    assert written["modules"] == []
     assert written["ai_slots"] == {"unknown_parts": [], "canvas_images": [], "summary_template": ""}
-    assert set(written["pending"]) == {"drc", "findings", "modules", "ai_slots", "reportMd", "canvasImages"}
+    assert written["drc"]["schematic"]["source"] == "offline-not-available"
+    assert written["drc"]["schematic"]["checked"] is False
+    assert written["summary"]["exitCode"] == 0
+    assert written["findings"] == []
 
 
 def test_file_and_a_window_hint_are_mutually_exclusive(capsys, tmp_path):
@@ -420,7 +519,7 @@ def test_review_live_runs_the_rules_over_the_live_model(fake_bridge, capsys, tmp
     printed = capsys.readouterr().out
     assert "live:/test (tier project-file)" in printed
     assert "17 components, 13 nets" in printed
-    assert _FakeBridgeClient.calls[-1] == "sys.get_project_file"
+    assert "sys.get_project_file" in _FakeBridgeClient.history
 
 
 def test_review_live_refuses_a_second_source_and_the_pcb_view(fake_bridge, capsys):
@@ -446,3 +545,183 @@ def test_review_live_with_no_tier_is_exit_three(fake_bridge, capsys):
     )
     assert _cmd_review(args) == 3
     assert "在线状态不可陈述" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------
+# batch 3: the editor's DRC, the rules' findings, and the exit code they decide
+# --------------------------------------------------------------------------
+
+
+def test_checkup_maps_the_editors_drc_into_both_sections(fake_bridge, capsys, tmp_path):
+    """The measured answers: ERC counts (warn 1) and one PCB leaf. Exit 1."""
+    _FakeBridgeClient.answers = {**_live_answers(), **_measured_drc_answers()}
+    args = _checkup_args(out=str(tmp_path / "out"))
+
+    assert _cmd_checkup(args) == 1
+
+    report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
+    drc = report["drc"]
+    assert drc["schematic"]["checked"] is True
+    assert drc["schematic"]["warn"] == 1 and drc["schematic"]["countsBasis"] == "host-wide"
+    assert drc["schematic"]["pagesChecked"] == 1
+    assert drc["schematic"]["note"] == "逐条见 findings 段（规则引擎）"
+    assert "fatalError" not in drc["schematic"], "a kind the host never stated stays absent"
+
+    pcb = drc["pcb"]
+    assert pcb["checked"] is True and pcb["documentUuid"] == "5dc38976c1fa45ce"
+    assert pcb["totals"]["leafs"] == 1 and pcb["totals"]["hostErrors"] == 1
+    leaf = pcb["groups"][0]["children"][0]["leafs"][0]
+    assert leaf["ruleName"] == "Import Changes" and leaf["rendered"] == "verbatim"
+
+    summary = report["summary"]
+    assert summary["exitCode"] == 1
+    assert summary["countsIncomplete"] is False
+    assert [entry["ref"] for entry in summary["errors"]] == [
+        "drc.pcb.groups[0].children[0].leafs[0]"
+    ]
+    assert [entry.get("kind") for entry in summary["warnings"]] == ["warn", None]
+    assert summary["warnings"][0]["section"] == "drc.schematic"
+    assert summary["warnings"][1]["section"] == "findings" and summary["warnings"][1]["ref"] == "findings[0]"
+    printed = capsys.readouterr().out
+    assert "drc: schematic: warn 1 [1/1 页, host-wide] | pcb: 1 leaf(s) in 1 group(s)" in printed
+    assert "errors: 1" in printed and "reminder: 2 warning(s)" in printed
+    assert "exit: 1" in printed
+
+
+def test_findings_are_filled_and_have_the_same_shape_review_json_uses(
+    fake_bridge, tmp_path, monkeypatch
+):
+    """`checkup`'s findings must be `review --json`'s findings, field for field.
+
+    Two renderings of the same `Finding` are a drift risk, so the assertion is an
+    equality against `render_json` rather than a list of expected keys: if the
+    review command's output shape ever changes, this goes red with it.
+    """
+    from boardwise.engines.review import render_json
+    from boardwise.cli import _finding_payload
+
+    _FakeBridgeClient.answers = _live_answers()
+    args = _checkup_args(out=str(tmp_path / "out"))
+    captured: dict = {}
+    import boardwise.cli as cli_module
+
+    real_run_review = cli_module.run_review
+
+    def spy(model):
+        findings = real_run_review(model)
+        captured["findings"] = findings
+        return findings
+
+    monkeypatch.setattr(cli_module, "run_review", spy)
+    assert _cmd_checkup(args) == 0
+
+    findings = captured["findings"]
+    assert findings, "the golden fixture is expected to produce at least one finding"
+    report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
+    assert report["findings"] == [_finding_payload(finding) for finding in findings]
+    assert report["findings"] == json.loads(render_json(findings))["findings"]
+    # And the shapes really are identical to review's, not merely equal to a copy.
+    assert set(report["findings"][0]) >= {"rule_id", "severity", "message", "level", "evidence",
+                                         "target", "refs"}
+
+
+def test_an_error_finding_alone_is_exit_one(fake_bridge, tmp_path, monkeypatch):
+    """No shipped fixture yields an ERROR-severity finding (the rules are tuned
+    to WARN — measured on ch340_golden / llc_board / the injected boards), so the
+    finding is injected here to exercise *the integration*: findings → summary →
+    exit code."""
+    import boardwise.cli as cli_module
+    from boardwise.rules.base import Finding
+
+    _FakeBridgeClient.answers = _live_answers()
+    monkeypatch.setattr(
+        cli_module, "run_review",
+        lambda model: [Finding(rule_id="param-value-mpn-match", severity="ERROR",
+                               level="L2", message="U3 value vs MPN", evidence=["U3 pin1 @ VCC"])],
+    )
+    args = _checkup_args(out=str(tmp_path / "out"))
+
+    assert _cmd_checkup(args) == 1
+
+    report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
+    assert report["summary"]["errorCount"] == 1
+    assert report["summary"]["errors"][-1]["ruleId"] == "param-value-mpn-match"
+    assert report["summary"]["errors"][-1]["ref"] == "findings[0]"
+    assert report["findings"][0]["severity"] == "ERROR"
+
+
+def test_the_offline_fallback_asks_no_editor_and_says_there_was_no_drc(
+    fake_bridge, tmp_path
+):
+    args = _checkup_args(file=str(GOLDEN), out=str(tmp_path / "out"))
+    assert _cmd_checkup(args) == 0
+    assert _FakeBridgeClient.opened == 0
+    assert "sch.drc_check" not in _FakeBridgeClient.history
+
+    report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
+    for name in ("schematic", "pcb"):
+        section = report["drc"][name]
+        assert section["checked"] is False
+        assert section["source"] == "offline-not-available"
+        assert section["reason"]
+        assert "warn" not in section and "totals" not in section
+
+
+def test_a_drc_that_could_not_run_is_not_a_clean_board(fake_bridge, capsys, tmp_path):
+    """Both DRCs refusing must leave the sections un-checked *and* exit 0 —
+    which is only honest because the sections carry the reason."""
+    answers = _live_answers(drc=False)
+    answers["sch.drc_check"] = BridgeError(ErrorCodes.NO_CONNECTOR, "gone")
+    answers["pcb.drc_check"] = BridgeError(
+        ErrorCodes.CONNECTOR_ERROR, "指定的主题消息在对应的画布内没有相关订阅"
+    )
+    _FakeBridgeClient.answers = answers
+    args = _checkup_args(out=str(tmp_path / "out"))
+
+    assert _cmd_checkup(args) == 0
+
+    report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
+    assert report["drc"]["schematic"]["checked"] is False
+    assert "NO_CONNECTOR" in report["drc"]["schematic"]["reason"]
+    assert report["drc"]["pcb"]["checked"] is False
+    assert "指定的主题消息" in report["drc"]["pcb"]["reason"]
+    assert report["summary"]["errors"] == [] and report["summary"]["exitCode"] == 0
+    printed = capsys.readouterr().out
+    assert "schematic: not checked" in printed and "pcb: not checked" in printed
+
+
+def test_every_page_is_opened_and_the_focus_is_put_back(fake_bridge, tmp_path):
+    """The page walk is what makes the ERC readings per page; the restore is what
+    keeps a read-only command from moving the user's editor."""
+    answers = _live_answers()
+    answers["doc.list"] = {
+        "documents": [
+            {"uuid": "page-a", "name": "A", "type": "page"},
+            {"uuid": "page-b", "name": "B", "type": "page"},
+            {"uuid": "5dc38976c1fa45ce", "name": "PCB1", "type": "pcb"},
+        ],
+        "active": {"uuid": "page-a", "type": "page"},
+        "projects": [{"name": "/test", "friendlyName": "test", "projectUuid": "u", "focused": True}],
+    }
+    _FakeBridgeClient.answers = answers
+    args = _checkup_args(out=str(tmp_path / "out"))
+
+    assert _cmd_checkup(args) == 0
+
+    from boardwise.cli import _read_online_drc
+
+    _FakeBridgeClient.history_pairs = []
+    _FakeBridgeClient.history = []
+    _read_online_drc(args, notes=[])
+    opens = [params.get("uuid") for action, params in _FakeBridgeClient.history_pairs
+             if action == "doc.open"]
+    assert opens == ["page-a", "page-b", "5dc38976c1fa45ce", "page-a"], (
+        "every page, then the PCB, then back to whatever was focused"
+    )
+    assert _FakeBridgeClient.history.count("sch.drc_check") == 2
+
+    report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
+    assert report["drc"]["schematic"]["pagesChecked"] == 2
+    assert report["drc"]["schematic"]["countsBasis"] == "host-wide", (
+        "the two pages answered the same thing, so the host's counts are reported once"
+    )
