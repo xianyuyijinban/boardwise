@@ -36,9 +36,9 @@ collects the current truth and the pointers.
 - pytest: **1388 passed** (run with `--basetemp=.tmp_pt_home` on Windows —
   the host's safe-delete hook otherwise eats the summary line and fakes
   exit 1)
-- connector: **418 pass / 0 fail** (`cd connector && npm test`)
+- connector: **405 pass / 0 fail** (`cd connector && npm test`)
 - `npx tsc --noEmit`: clean
-- connector version: **0.4.17** (`connector/extension.json`)
+- connector version: **0.4.19** (`connector/extension.json`)
 - Verified host: EasyEDA Pro **3.2.186** (the only host the bridge is
   calibrated against; every real-host fact in the task books names it)
 
@@ -96,3 +96,4 @@ point. Full measurement history: `tasks/010c-coordinate-convention.md`
 - 027 EDITOR_API_FLOOR (3,2,183)→(3,2,149): 旧立论（<183 无 generateIndicatorMarkers/zoomToRegion）被 3.2.149.88089769 现场证伪（8/8 成员 probe 全 function 带 arity、activate 冷启动正常、render 实跑 308KB PNG）；常量+注释重写（实测点仅 149/186 两台、行为级验收另立批次、typeof 证否不证用三条边界）、doctor 文案随常量动态化、getting-started 7 处+install.md 2 处+SKILL 坑表同步；pytest 1388 不变（无语义新增）、connector 380 回归、变异 3/3 CAUGHT（FLOOR 边界/outdated_running/floor_text 拼接）；假安装树实跑：149 过/148 卡（`tasks/027-editor-api-floor.md` §五）
 - 026b batch 2a (Worker 闹钟形态 A 实现): 新模块 `connector/src/watchdog.ts`（内联 blob Worker：15s 查活性 / 页面沉默 45s 起每拍发 wake，解冻即连不等节流心跳；降级报原因不吹"免疫"）；`transport.ts` 四处活性上报 + `wake()` 四分支 + `reconnectNow()` 退避复位；`index.ts` `ensureWatchdog()` 单例挂 024 共享运行时 + About `watchdog:` 行；`actions.ts` 删 4 个测量模式（−703 行）、`status` 转正 `sys.connector_status`、`sys.worker_probe` 仅留 `nativeWs`（P6 页面侧判定靠它，2b 跑完即删，主代理裁决）；daemon 零改动；connector **418**（删 15 + 新增 24+29），pytest 1388 不变，dist 0.4.17 `8fe4f591…` 256827B；变异 2/2 CAUGHT（wake 不动作 5 红 / 重求值双 Worker 2 红）；P6 daemon 侧实测通（Node 原生 WS 51ms 连上收 banner）；主代理复验三线+sha256 一致（`tasks/026b-worker-watchdog-impl.md` §六，`outputs/026b_impl_2a.txt`）
 - 027 行为级验收（岳工作电脑 3.2.149.88089769 + connector 0.4.17，2026-09-24）：五步全绿——doctor **8/8**（floor PASS）、checkup 全链 exit 1、`review-mark` **marker 实落 R7 @(205,485)**——`generateIndicatorMarkers`/`zoomToRegion` 在 149 从"typeof 证否不证用"升级为行为实证，FLOOR (3,2,149) 立论闭环；未了项：149 第二窗口上线验证（026b 2b-5）未测，issue #4 多窗口症状保持开放（`tasks/027-editor-api-floor.md` 末节）
+- 026b/026c/026d (Worker 闹钟实现+两轮规格修正，多窗口后台冻结收官): 形态 A 落地（`watchdog.ts` 内联 blob Worker + `transport.ts` wake 四分支 + `ensureWatchdog()` 挂 024 运行时单例 + About 行）；026c 判死规格「wake + 任一未答心跳即死」+ `reconnectNow()` 去 `setTimeout(0)`（节流页把 0 延时也压到下一拍）；026d「wake 即探针」（健康 wake 同步 sendPing、上线证据代替自我盖戳）+ 静默 45→30 s——**真机同法对照：2b 135–152 s（未达标）→ 2c 62.8–114.9（相位项）→ 2d 39.6/27.1/45.8（3/3 ≤90 s，相位项消除）**；`sys.worker_probe` 删净（真机 UNKNOWN_ACTION 实证）；`status` 转正 `sys.connector_status`；P6 两半真机实测通（形态 B′ 连通性无障碍）；附带事实：3.2.186 第二窗口是「上线但匿名」（projectName=None 至重连）；变异 2a 2/2 + 2c 1/1 + 2d 1/1 全 CAUGHT；connector **405** / 0.4.19，pytest 1388 不变，dist `378a59bb…` 253495B；遗留：test2/ROBOT 窗等页面 reload 自然升级、149 第二窗口验证归岳、「长调用误判死亡」按裁决接受（`tasks/026b-worker-watchdog-impl.md` §六，`outputs/026{,b,c,d}_*`）

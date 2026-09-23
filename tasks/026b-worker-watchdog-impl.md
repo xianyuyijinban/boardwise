@@ -186,3 +186,28 @@
   （检查仍 15 s）：稳态由闹钟每 ~30 s 驱动一次探针，死亡判定最坏 2×30+15 ≈ 75 s，kill→hello 稳定
   ≤90 s 有余量。误杀代价可忽略（loopback 30 s 无 pong = daemon 真挂了；重连廉价）。
 - 2c 五项其余结论接受；「kill→hello 2/5 命中」不定罪——根因已定位且 2d 有针对性规格。
+
+### 026d · 交卷（2026-09-23，子代理 agent-43）
+
+- **裁决 3 实现**：`Transport.wake()` 的 `connected` 且 `missed === 0` 分支改为**同步 `sendPing()`**（wake 即探针；
+  活 socket 的 pong 作入帧刷新活性，代替自我盖戳）；`connected` 两支不再自我盖戳，另两支保留（避免重连期被反复 wake）。
+  静默阈值 `WATCHDOG_ACTIVITY_TIMEOUT_MS` 45 000 → **30 000**（检查仍 15 000）；About/`sys.connector_status` 文案同步。
+- **推导核对**：成立，实测优于上界——wake#2 只等 **1 个 15 s 检查**（探针不再盖戳、静默保持、每次检查都发 wake）；
+  且 daemon 死后页面自身心跳常已把 `missed` 置 1 ⇒ 有时**一次 wake 就判死**。严格 `>` + 15 s 网格使首拍 wake 落在静默 30–45 s。
+- **真机复测 3/3 ≤90 s**：kill→hello **39.6 / 27.1 / 45.8 s**（监听口径 34.9 / 22.5 / 41.1 s），判死分支全为
+  `1 unanswered heartbeat(s)`，`activityTimeoutMs` 读回 30000；三次 daemon 启动均 4.6–4.7 s。历史对照（同方法）：
+  2b 151.5/135.5/139.7–145.5 → 2c 62.8/114.9/101.3/93.4/74.6 → **2d 39.6/27.1/45.8** ⇒ 相位项已消。
+- **变异 CAUGHT**（指定靶：删健康分支 sendPing）：405 中 2 红；还原 `transport.ts 25de7863…`（cp 备份 + cmp 一致）。
+- mock：404 → **405**（新增"探针+pong 刷新"与"两次 wake 序列"两条，阈值用例改 30000）。
+- 文档：§7.1（机制三态 + 30 s + 2d 实测表 + 状态表）、§6 About 示例 30000、§10 第 22 条补"相位项已消"。
+  版本 0.4.19，dist `378a59bb…`（253495 B），已热更到 test 窗口（verified）。
+- 前台回归：checkup 与 025c 基线逐行一致；零残留 `components=1 / docs=6 active=P1`。
+- 三线：pytest 1388 · connector 405/0 · tsc clean。
+- 遗留：test2 / ROBOT 窗仍 0.4.17（等页面 reload 自然升级）；test2 窗未关；"长调用被误判死亡"按裁决接受、记录在案。
+
+### 主代理复验（2026-09-23）
+
+- sha256 三处与交卷一致（dist `378a59bb…`、`transport.ts 25de7863…`、`watchdog.ts 95772252…`）；
+  常数 `WATCHDOG_ACTIVITY_TIMEOUT_MS = 30_000` 亲见（下划线分隔符）；6 份证据齐；`git status` 清单相符。
+- **026 全线收官**（probe 定案 → 形态 A → 判死规格 → 相位消除）：多窗口后台冻结从"永不恢复"到有界
+  ~27–46 s。剩 149 第二窗口验证（岳）与 test2/ROBOT 窗自然升级。
