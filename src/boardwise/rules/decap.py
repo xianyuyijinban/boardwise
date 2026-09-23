@@ -103,6 +103,14 @@ def looks_like_capacitor(
     from ..core.parts import find_facts
 
     entry = None
+    if library is None:
+        # No shelf in hand (029-b measured this path from apply's probe): the
+        # shelf questions simply have no answer, and the value/designator
+        # evidence below still does. `find_facts(None, …)` used to raise
+        # `AttributeError: 'NoneType' object has no attribute 'parts'` — a crash
+        # in the middle of an apply, discovered on the machine because every
+        # fixture net happened to be shelf-free.
+        return bool(_CAP_DESIGNATOR.match(designator or "") and mpn_value_code(mpn or ""))
     if mpn:
         entry = find_facts(library, mpn=mpn)
     if entry is None and lcsc:

@@ -51,12 +51,27 @@ class _BridgeError(Exception):
 
 
 def _geometry(*, components, wires=(), netlabels=()):
+    """A `sch.geometry` dump in the shape 3.2.186 actually sends (measured 029-b).
+
+    `wires` are polylines of `(x, y)` pairs; each one is given a net by the
+    heuristic below so a test can put a *different* net's wire right next to a
+    landing spot — the page 029 §六 verdict 3 asked for.
+    """
+    def net_of(points):
+        return "OTHER" if points and points[0][1] == 999 else "VCC"
+
     return {
         "components": [
             {"primitiveId": f"p-{name}", "state": {"Designator": name, "X": x, "Y": y}}
             for name, x, y in components
         ],
-        "wires": [{"state": {"Points": [[x, y] for x, y in points]}} for points in wires],
+        # The measured host shape (029-b): a wire's state carries `Line` and its
+        # own `Net`. `net_of` says which wire belongs to which net, which is what
+        # makes the "wrong net is not chosen" case testable offline.
+        "wires": [
+            {"state": {"Line": [c for pair in points for c in pair], "Net": net_of(points)}}
+            for points in wires
+        ],
         "netlabels": [{"state": {"Net": name}} for name in netlabels],
         "meta": {"available": {"components": True}},
     }
@@ -174,7 +189,7 @@ def _apply_args(plan_path, *extra):
 def test_plan_is_built_from_a_report_finding_and_a_live_page(monkeypatch, tmp_path, capsys):
     geometry = _geometry(
         components=[("U1", 0.0, 0.0), ("C3", 40.0, 40.0)],
-        wires=[[(0.0, 0.0), (10.0, 0.0)]],
+        wires=[[(0.0, 0.0), (10.0, 0.0)], [(0.0, 999.0), (5.0, 999.0)]],
     )
     bridge = _FakeBridge(geometry=geometry)
     _stub_bridge(monkeypatch, bridge)
@@ -209,6 +224,10 @@ def test_plan_is_built_from_a_report_finding_and_a_live_page(monkeypatch, tmp_pa
     assert plan.target.assigned_designator == "C1"
     assert plan.target.anchor == "U1"
     assert plan.target.connection == "wire", "a wire point 10 units away is the first option"
+    assert "'VCC' segment" in plan.target.connection_detail, (
+        "the wire branch must name the net it is joining — the 'OTHER' wire is 5 units "
+        "from the ideal spot and must not be the one chosen (029 §六 verdict 3)"
+    )
     assert (plan.target.x, plan.target.y) == (0.0, -5.0), "the ladder's first free rung"
     assert "page-1" not in out or True  # the plan's page comes from the snapshot, not the report
 
