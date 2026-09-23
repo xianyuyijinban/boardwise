@@ -201,8 +201,10 @@ boardwise checkup --file <导出.epro2> --out <目录>       # 断连兜底：�
 | 17 | **主机 ERC 计数是 host-wide，不按页**：多页逐页调 `sch.drc_check` 各报同一读数（4 页都 `{warn:1}`），求和会编出 4 倍错误数；PCB DRC 树**没有 severity 字段**，叶子的 `parentId` 第二段才是编辑器自己的页签名 | ERC 计数全工程只报一次（标 `host-wide`）；PCB 叶子 severity 用 parentId 分流，读不出按 ERROR 并标 `assumed`。出处 `outputs/025c_checkup_live.txt`、025 批 3 |
 | 18 | **3.2.149 开两个窗口时第二个编辑器窗口的 connector 不上线**（页面重载后第二个才上线）：窗口冻结/懒求值，与本机背景窗口冻结 7 小时同源，**不是** activate 派发问题（3.2.149.88089769 冷启动 activate 正常派发） | 多窗口作业先在 3.2.18x 上做；149 的多窗口等 Worker watchdog。出处 issue #4（2026-09-23）、`tasks/024-easyeda-3.2.149-bootstrap.md` §现场验证修订、`tasks/025-review-flow-v2.md:151` |
 
-宿主版本：**3.2.183 是下限**（打标/缩放接口从这版才有），**3.2.186 是唯一校准对象**。
-宿主声明 ≠ 宿主实现（`sch_ManufactureData.getPngFile` 声明 v3.2.183 却回 `NOT_IMPLEMENTED`）——
+宿主版本：**3.2.149 是实测下限**（2026-09-23 在 3.2.149.88089769 上实测：打标/缩放等 8 个关键成员
+typeof 全在位、activate 冷启动正常派发、render 实跑 308KB PNG——旧立论"3.2.183 以下这些接口不存在"
+已被证伪，见 `tasks/027-editor-api-floor.md`）；**3.2.186 是唯一校准对象**。低于 149 没有证据，doctor 照卡。
+宿主声明 ≠ 宿主实现（`sch_ManufactureData.getPngFile` 声明 v3.2.183 却回 `NOT_IMPLEMENTED`，两台实测机皆然）——
 每一节的第一步都是真机 probe，probe 不通就如实降级，**不许照类型包硬写**。
 
 ## 7. 红线（开发/测试，改代码也照办）

@@ -443,6 +443,40 @@ ACTIONS: tuple[Action, ...] = (
         ),
         risk="read",
     ),
+    # --- 026 probe batch: TEMPORARY instrumentation --------------------------
+    Action(
+        name="sys.worker_probe",
+        summary=(
+            "PROBE-ONLY, TEMPORARY (026, to be retired or promoted): three "
+            "measurements the Worker-watchdog design is waiting on. mode=worker "
+            "builds a blob: Worker and reports what the worker says about its own "
+            "scope (`typeof eda` decides form B), a page→worker→page round trip and "
+            "its timer ticks; mode=pageTimer with op=start|read|stop keeps a "
+            "page-side interval timestamp log (how hard is a background window "
+            "throttled — minutes, or frozen?); mode=status reads the About box's own "
+            "lifecycle counters (moduleBootstrapObserved / activateObserved / "
+            "evaluations) off the shared runtime record, which is how a cold start "
+            "after a sideload is judged. Read-only, but it does start a Worker and "
+            "(pageTimer) leaves an interval running until stopped — a failure is "
+            "reported as that failure, never as an empty success."
+        ),
+        params=("mode", "op", "intervalMs", "maxTicks", "timeoutMs"),
+        returns=(
+            "{mode: 'worker', support, blobUrl: {ok, error?}, construct: {ok, kind, "
+            "error?}, messaging: {delivered, ready, ack, roundTripMs, ticks, "
+            "tickIntervalsMs, verdict, raw}, terminated} | "
+            "{op, running, intervalMs, count, intervalsMs, minMs/medianMs/maxMs/"
+            "meanMs, gaps: {over2s, over10s, over60s}, ...} | "
+            "{present, readStatus, status, moduleBootstrapObserved, "
+            "activateObserved, evaluations}"
+        ),
+        params_schema=(
+            "mode: worker|pageTimer|status (default worker); op: start|read|stop "
+            "(pageTimer); intervalMs: page timer period, default 1000; maxTicks: "
+            "cap, default 900; timeoutMs: worker answer deadline, default 2000"
+        ),
+        risk="read",
+    ),
     Action(
         name="sch.readback",
         summary="Schematic components and a primitive subset, for a netlist view.",

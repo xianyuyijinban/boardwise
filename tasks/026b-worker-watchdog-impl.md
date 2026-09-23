@@ -1,0 +1,93 @@
+# 026 — Worker watchdog：实现批任务书（v1，形态 A）
+
+> 2026-09-23 定稿。前置：probe 批结论（`outputs/026_probe.md`、本任务书系列 §六）——
+> **形态 A（Worker 闹钟）定案**：Worker 可起（P1）、Worker 里无 `eda`（P2，形态 B 出局）、
+> 页面后台时钟压到整分钟级而 Worker 153/153 一次不落（P3）、宿主 `sys_Timer` 同吃节流（P5）。
+> 本批把 probe 结论变成产品行为：**后台窗口的 connector 不再"永不回来"**。
+
+## 一、要治的病（行为定义，不是猜测）
+
+| 状态 | 页面定时器 | 现状（无 watchdog） | 目标（有 watchdog） |
+|---|---|---|---|
+| 前台 | 正常 | 正常 | 不变 |
+| 后台（节流态，P3 实测） | 压到 ~1 次/分钟 | 心跳慢到分钟级（daemon 容忍，半开）；daemon 重启后重连退避也吃节流 | **至多落后一个节流周期（≤ ~70 s）就重连** |
+| 冻结态（7 小时事故态） | 全停 | **永不重连**（025 批 2 实测 7 小时，前台化才自愈） | 解冻瞬间立即重连（wake 已排队，不等退避） |
+| 页面被丢弃 | 全死 | 无解（Worker 同死） | 无解——如实声明，不假装覆盖 |
+
+诚实边界：P3 证明 Worker 在**节流态**免疫；**冻结态 Worker 是否也活**没有受控复现
+（probe 未做 #2）——实现批的真机验收只承诺节流态指标 + 解冻即连，不许吹"冻结态必活"。
+
+## 二、批 2a：P6 探针 + 形态 A 实现 + 单测 + 清理
+
+### P6 前置探针（小，但必须先做——它决定有没有 B' 这条路）
+
+`sys.worker_probe` 加 `nativeWs` 模式：**页面与 Worker 各自** `new WebSocket('ws://127.0.0.1:61190/eda')`：
+- 页面侧：原生 WS 能不能连 daemon（CSP connect-src 是未知数）；
+- **Worker 侧**：能连 ⇒ 存在"形态 B'"（transport 整体入 Worker、页面只做 eda 执行器）——
+  **本批不实现 B'**，只在 probe 报告补一行"可行/不可行 + 理由"，供后续评估；
+  不能连 ⇒ 形态 A 是唯一解，probe 报告 likewise。
+- 探完如实记，不许编（同 P1–P5 纪律）。
+
+### 形态 A 实现（connector 内部，daemon 零改动）
+
+1. **所有权**：Watchdog Worker 挂在**共享 transport 运行时**上（024b 的
+   `SHARED_RUNTIME_MEMBERS` 同款纪律）——菜单点击会重求值 bundle，**每次求值各起一个
+   Worker 就是泄漏**。必须有"已存在即接管/不重复创建"的单例语义，且 `stop()` 连 Worker
+   一起 terminate（现有"stopped transport sends nothing"断言扩展到 Worker）。
+2. **活性协议**（全部走 `postMessage`，无共享状态）：
+   - 页面侧 transport 每次活动（heartbeat 发送、收到任何帧、重连尝试、connect 成功）
+     向 Worker 报一个 `{type:'activity'}`（fire-and-forget，不await）；
+   - Worker 每 **15 s** 检查一次 `now - lastActivity > 45 s`（心跳 5 s × 3 miss 的 3 倍，
+     余量覆盖节流周期），超了就每拍发 `{type:'wake'}`，直到活性恢复；
+   - 页面收到 `wake`：transport 未连接 → **立即 `connect()` 并复位退避**；
+     已连接但心跳逾期 → 立即补一次心跳；一切正常 → 只回活性戳。
+3. **降级**：`new Worker` 失败（CSP 变了、宿主禁了）→ 回退现状（无 watchdog），
+   About 加一行 `watchdog: running|unavailable(<原因>)`，不许静默。
+4. **清理（probe 批去留已裁）**：`sys.worker_probe` 删 `worker`/`pageTimer`/`workerTimer`/
+   `hostTimer` 四个测量模式 + P6 用的 `nativeWs` 模式；`status` 改名 **`sys.connector_status`**
+   独立成动作（不再叫 probe），doctor 第八项后加为第九项？——**不**，先不动 doctor 检查数：
+   本批只把 `sys.connector_status` 注册为正式只读动作并入 bridge.md 目录，doctor 集成留给
+   下一批（避免一次改太多面）。
+5. **文档**：bridge.md §7 重写（watchdog 机制、三态行为表、诚实边界）+ §4 目录
+   （`sys.connector_status` 正式、`sys.worker_probe` 删除）+ About 新行。
+   connector 0.4.17。
+
+### 单测（connector mock，全离线）
+
+- Worker 可注入（`globalThis.Worker` 替换，同 `BOARDWISE_TOKEN` 注入套路）；
+- 沉默 ≥45 s → 页面收到 wake → 未连接时 `connect()` 被调且退避复位；
+- 重求值场景（模拟 024b 的 fresh evaluation）→ **不重复创建 Worker**（单例断言）；
+- `stop()` → Worker terminated、之后零消息（对齐现有 stopped-transport 断言风格）；
+- `new Worker` 抛错 → 降级路径 + About 行报 unavailable；
+- 变异 ≥2：① watchdog 收到 wake 不动作（假闹钟）；② 每次求值都新建 Worker（泄漏）——
+  都必须有测试咬住。
+
+## 三、批 2b：真机验收 + 文档收官
+
+1. **节流态恢复**：test 窗口压后台（probe 批的抢前台方法，`.tmp_026_fg.py` 模式）→
+   重启 daemon → 测 time-to-reconnect。**基线**（无 watchdog）：≥ 数分钟或永不；
+   **目标**：≤ 90 s（一个节流周期 + 余量），audit 时间线作证。
+2. **解冻即连**：后台 10 分钟后回前台 → 已在 wake 驱动下先行重连（audit 里 reconnect
+   早于前台化时刻）。
+3. **三窗口**：两窗压后台一窗前台，重启 daemon，三窗全部回来。
+4. **前台回归**：正常操作（checkup 全链）零变化；geometry/doc.list 零残留。
+5. **149 验证**（岳工作电脑，列为交付物之一）：第二个窗口能不能上线——
+  若上线，issue #4 的多窗口症状关闭；若仍不上线，如实记"149 第二窗口是另一层病"
+  （bootstrap 级，watchdog 管不到），不硬吹。
+6. bridge.md §7/§10.22 同步、SKILL 坑表加 P5/抢前台两条、PROGRESS 更新。
+
+## 四、验收（两批合并判）
+
+- 三线全绿（pytest `--basetemp=.tmp_pt_home` / connector / tsc）；
+- P6 结论入 `outputs/026_probe.md`（补节，不改原结论）；
+- 批 2b 真机证据落 `outputs/026b_*.txt`（节流恢复时间线、三窗口、零残留复核）；
+- 变异 ≥2（批 2a 指定两靶）；
+- 真机只碰 test/test2；不动 git；文件显式 UTF-8。
+
+## 五、守卫
+
+- **daemon 一行不改**：watchdog 是 connector 内部机制，协议帧零变化——若发现需要
+  daemon 配合，停下来报主代理（架构约束）。
+- Worker 脚本必须内联（blob），不引外部文件（eext 单文件分发改不起）。
+- 禁止向 Worker 转发任何 `eda` 调用（P2 已证不可行，别留"将来也许"的转发脚手架）。
+- About 的 watchdog 行只报事实（running/unavailable+原因），不许报"免疫"。
