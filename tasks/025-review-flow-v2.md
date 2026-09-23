@@ -202,3 +202,24 @@ unknown_parts 逐个 WebSearch 规格书核周边配置；canvas_images 逐张�
   提速留给后续批次（并发出图）。④ `ai_slots` 多一个规格外键 `canvas_images_note`：
   列表为空时区分"没图"与"图丢了"。
 - 待岳裁：`outputs/025d_*`（含 4 张 PNG ~630 KB）是否 `git add -f` 入库（outputs/ 默认 gitignore）。
+
+### 批 2 待办关闭 · 2026-09-23 下午 · agent-43 执行，Kimi 复验（假 FAILED）
+
+- **缺陷**：`_reloaded_window_version()`（修前 cli.py:4345-4389）第二分支把"写入目标窗口仍在线
+  报别的版本"当 mismatch → 首次回读（reloadInMs 500ms + margin 0.5s 后）即判 FAILED/exit 1；
+  真机实测 reload 要 **5 s**（08:39:36 写入 → 08:39:41 新 connector 报到），热更成功却报失败，
+  与 020 WI-2 的"没回来 = UNKNOWN ≠ failed"冲突。
+- **修复**：判据改为"**身份 + 版本**"——只有写入前不在线的连接（新 instance id）报出非存储版本
+  才算 mismatch；旧 socket 仍在线 = "还没回来"，继续等，预算耗尽 exit 3；某窗口报存储版本 exit 0。
+  写前取一次窗口表快照（`_snapshot_identities`），快照缺失时不许判 mismatch；两条路径统一读
+  daemon 窗口表；删除 `_running_connector_version()`（sys.probe 读法多窗口下会被任意窗口作答、
+  且无窗口身份）。三态语义与退出码一字未改。
+- **测试**：`tests/test_bridge_cli.py` 39 例；新增 5 例，含回归靶
+  `test_a_reload_still_in_flight_is_unknown_never_failed`（修前 **assert 1 == 3** 红，修复后绿）
+  与"无 `--instance` 路径"同形态用例（原 `...instance_reports_a_window_still_on_the_old_build` 改写）。
+- **变异 3/3 CAUGHT**：忽略快照 → 2 红；verified 不可达 → 4 红；快照缺失按"全新建"处理 → 1 红
+  （第三次先没红，补 `ping_fails_before` 假件 + 用例后才红）。还原 sha256
+  `cli.py 492b97c0c3107c7a…`（交付态 `d90fa3d8c671bf27…`，差两处注释；Kimi 复验交付态一致）。
+- **三线**：pytest **1388**（+4）/ connector **365** 回归 / tsc 干净（均 Kimi 亲手复跑）；
+  `docs/bridge.md` §8 与命令表行同步。
+- **未做**：真机热更演练（并入 026 批任务 0）；证据 `outputs/025e_update_connector_false_failed.txt`。
