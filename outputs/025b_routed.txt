@@ -1,0 +1,67 @@
+025 批 2 第 0 步 · daemon 重启后的真实路由复验（bridge call --action <真名>）
+================================================================================
+时间：2026-09-23 08:48:10   工作目录：E:\boardwise
+
+· 重启前 bridge status（旧 daemon：PID 47620，2026-09-22 19:39:54 起，目录早于批 1 的四个名字）
+    boardwise bridge: daemon up on 127.0.0.1:61190
+      connector: connected
+      windows: 1 connected
+      window: inst-172422620-aa4iaw6o (connector 0.4.14)  [project test (ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489)]
+        peer: 127.0.0.1:56307  connected: 2026-09-23 01:24:22  last seen: 2026-09-23 01:30:00  routed: 33
+        page: sch b4298962367251c8
+      projects seen: test (inst-172422620-aa4iaw6o)
+      paired connector: b8b4a348
+
+· 重启后 bridge status
+    boardwise bridge: daemon up on 127.0.0.1:61190
+      connector: connected
+      windows: 1 connected
+      window: inst-003941041-56h9uam1 (connector 0.4.15)  [project test (ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489)]
+        peer: 127.0.0.1:50185  connected: 2026-09-23 08:40:29  last seen: 2026-09-23 08:47:02  routed: 26
+        page: sch b4298962367251c8
+      projects seen: test (inst-003941041-56h9uam1)
+      paired connector: b8b4a348
+
+· 时间线（重要运维事实：daemon 重启 ≠ connector 立刻回来）
+    01:31:40  抓重启前状态（上表），旧 daemon PID 47620
+    01:33      taskkill 47620；cmd start scripts\start-daemon.bat → 新 daemon 起来（监听 61190）
+    01:33–08:38 connector **7 小时没回来**：audit 里 01:30 之后唯一的连接是 CLI 的 ping 三元组，
+              编辑器窗口当时不在前台（Chromium 后台冻结会把 transport 的 setTimeout 挂住；
+              024 记过同类现象「背景窗口 ~4 分钟才重连」，这次是冻结而非慢）
+    08:38:18  hello role=connector（窗口回到前台后自愈），instance 仍是 inst-172422620-aa4iaw6o
+    08:39:36  热更到 connector 0.4.15（批 2 新增 sys.get_project_file；见 025b_project_file.txt）
+    08:40:12  第二次重启 daemon —— 因为 sys.get_project_file 的目录条目是 08:3x 才写进
+              protocol.py 的，daemon 的 ACTIONS 是加载期常量，不重启就路由不到它
+    本次执行  第三次真实路由复验（下表，connector 0.4.15）
+    ⇒ 教训 ①：重启 daemon 后若编辑器窗口不在前台别只等 90 s，先看 audit 的 connect 记录；
+      教训 ②：凡是「改 protocol.py + 热更 connector」，顺序必须是 改目录 → 重启 daemon → 热更，
+      否则新动作会卡在 daemon 目录里查不到。
+
+$ bridge call --action doc.list --params '{}'   [333 ms, exit 0]
+        {"active": {"uuid": "b4298962367251c8", "type": "page", "tabId": "b4298962367251c8@ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489", "projectUuid": "ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489", "source": "dmt_SelectControl.getCurrentDocumentInfo"}, "projects": [{"name": "/test", "friendlyName": "test", "focused": true, "pcbs": [{"uuid": "5dc38976c1fa45ce", "name": "PCB1", "type": "pcb"}], "schematics": 5}], "documents": 6}
+
+$ bridge call --action sys.identity --params '{}'   [271 ms, exit 0]
+        {"activeDocument": {"project": {"projectUuid": "ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489", "source": "dmt_SelectControl.getCurrentDocumentInfo (parentProjectUuid)"}, "projectUuid": "ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489", "source": "dmt_SelectControl.getCurrentDocumentInfo", "tabId": "b4298962367251c8@ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489", "type": "page", "uuid": "b4298962367251c8"}, "consistent": true, "consistentBasis": "project-uuid", "focusedProject": {"friendlyName": "test", "name": "/test", "projectUuid": "ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489"}, "pageUuid": "b4298962367251c8", "readOnly": true}
+
+· 四个批 1 动作，真名路由（不再经 sys.probe call 通道）
+
+$ bridge call --action sys.get_document_file --params '{"fileType": "epro2"}'   [325 ms, exit 0]
+        {"bytes": 29671, "encoding": "base64", "fileType": "epro2", "isZip": true, "mime": "zip", "name": "ProDoc_P1_2026-09-23.epro2", "savedTo": ".tmp_025b_sys_get_document_file.epro2", "scope": "document", "sha256": "c019212b161abd78583e02824b8bf394d7c8188b27e4c20441b328e3a0108fd3", "source": "sys_FileManager.getDocumentFile"}
+
+$ bridge call --action sys.get_document_source --params '{"maxChars": 2048}'   [265 ms, exit 0]
+        {"chars": 11300, "head": "{\"type\":\"DOCHEAD\"}||{\"docType\":\"SCH_PAGE\",\"client\":\"14a0b52f66972d29\",\"uuid\":\"b4298962367251c8\",\"updateTime\":1790124491890,\"version\":\"1790124491890\",\"editVersio", "headLines": 6, "maxChars": 2048, "note": "truncated to the first 2048 characters; `tail` echoes the last 1024, so both ends of the stream are inspectable", "source": "sys_FileManager.getDocumentSource", "tail": "ontFamily\":null,\"fontSize\":null,\"fontWeight\":null,\"italic\":null,\"underline\":null,\"align\":null,\"value\":\"1\",\"keyVisible\":null,\"valueVisible\":null,\"key\":\"Title Block\",\"fillColor\":null,\"parentId\":\"b5ba3517c5abec68\",\"zIndex\":31}|\n{\"type\":\"ATTR\",\"ticket\":32,\"id\":\"45ba6597259df855\"}||{\"x\":null,\"y\":null,\"rotation\":null,\"color\":null,\"fontFamily\":null,\"fontSize\":null,\"fontWeight\":null,\"italic\":null,\"underline\":null,\"align\":null,\"value\":\"\",\"keyVisible\":null,\"valueVisible\":null,\"key\":\"Name\",\"fillColor\":null,\"parentId\":\"b5ba3517c5abec68\",\"zIndex\":32}|\n{\"type\":\"ATTR\",\"ticket\":33,\"id\":\"ca3b050a9c1e1cb5\"}||{\"x\":null,\"y\":null,\"rotation\":null,\"color\":null,\"fontFamily\":null,\"fontSize\":null,\"fontWeight\":null,\"italic\":null,\"underline\":null,\"align\":null,\"value\":\"\",\"keyVisible\":null,\"valueVisible\":null,\"key\":\"Description\",\"fillColor\":null,\"parentId\":\"b5ba3517c5abec68\",\"zIndex\":33}|\n{\"type\":\"COMPONENT\",\"ticket\":34,\"id\":\"b5ba3517c5abec68\"}||{\"partId\":\"pid8a0e77bacb214e\",\"x\":0,\"y\":0,\"rotation\":0,\"isMirror\":false,\"attrs\":{},\"zIndex\":0}", "truncated": true}
+
+$ bridge call --action sch.drc_check --params '{}'   [282 ms, exit 0]
+        {"args": {"includeVerboseError": true, "strict": true, "userInterface": false}, "byType": {"warn": 1}, "checked": true, "counts": [{"count": 1, "type": "warn"}], "elapsedMs": 11, "entries": 1, "mode": "counts", "page": {"type": "page", "uuid": "b4298962367251c8"}, "passed": false, "source": "sch_Drc.check", "total": 1, "uiRequested": false}
+
+$ bridge call --action pcb.drc_check --params '{}'   [272 ms, exit 1]
+        boardwise bridge call: pcb.drc_check failed [CONNECTOR_ERROR] pcb_Drc.check threw Error: 指定的主题消息在对应的画布内没有相关订阅. The declaration says the call reports nothing at all when no PCB is focused; the focused 
+        ↑ exit 1 是**预期的边界行为**，不是路由失败：当前焦点在原理图页 P1，
+          宿主对 pcb_Drc.check 抛「指定的主题消息在对应的画布内没有相关订阅」，
+          connector 如实转成 CONNECTOR_ERROR（批 1 P4 已钉死这一形态）。
+
+小结：四条命令全部到达 connector 的 handler（daemon 目录命中 → 门控 → hub 路由 →
+回程带 context），批 1 遗留的「新动作只能走 call 通道」问题随 daemon 重启消失。
+       sys.get_document_file 落盘 .tmp_025b_sys_get_document_file.epro2：29,672 字节，
+       与批 1 抓取同尺寸但 sha256 不同——换会话后 DOCHEAD 的 client id 与内嵌预览图会变，
+       正是批 1 §5 那条「字节相等不能当幂等判据、模型级才是」的现场复现。

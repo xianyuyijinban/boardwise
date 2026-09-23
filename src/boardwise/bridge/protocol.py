@@ -328,13 +328,36 @@ ACTIONS: tuple[Action, ...] = (
         ),
         params=("fileType", "fileName", "password", "timeoutMs"),
         returns=(
-            "{fileType, source, encoding: 'base64', name, mime, bytes, data, "
-            "isZip, note?}"
+            "{fileType, source, scope: 'document', encoding: 'base64', name, mime, "
+            "bytes, data, isZip, note?}"
         ),
         params_schema=(
             "fileType: epro2|epro (default epro2); fileName: optional; password: "
             "optional (an encrypted export reads as an unreadable archive "
             "downstream); timeoutMs: optional, default 30000"
+        ),
+        risk="read",
+    ),
+    Action(
+        name="sys.get_project_file",
+        summary=(
+            "READ-ONLY: the open **project** as one .epro/.epro2 archive, base64 — "
+            "every page, every library document and the PCB in a single payload, "
+            "which is why 025 batch 2's data path tries it first (tier "
+            "`project-file`). Gated on 工程管理 > 下载工程, a **different** gate "
+            "from getDocumentFile's 工程设计图 > 文件导出, so \"the document export "
+            "works\" does not imply this one does; a refusal carries the host's "
+            "message plus the gate the declaration names for this call. `scope` "
+            "says which archive the caller actually got."
+        ),
+        params=("fileType", "fileName", "password", "timeoutMs"),
+        returns=(
+            "{fileType, source, scope: 'project', encoding: 'base64', name, mime, "
+            "bytes, data, isZip, note?}"
+        ),
+        params_schema=(
+            "fileType: epro2|epro (default epro2); fileName: optional; password: "
+            "optional; timeoutMs: optional, default 30000"
         ),
         risk="read",
     ),
