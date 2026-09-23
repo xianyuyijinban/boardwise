@@ -182,14 +182,8 @@ def occupied_points(geometry: Any) -> list[tuple[float, float]]:
     like it connected something it does not touch.
     """
     points = list(component_origins(geometry).values())
-    if isinstance(geometry, dict):
-        for entry in geometry.get("wires") or []:
-            state = _state_of(entry)
-            for pair in state.get("Points") or state.get("points") or []:
-                if isinstance(pair, (list, tuple)) and len(pair) >= 2:
-                    x, y = _number(pair[0]), _number(pair[1])
-                    if x is not None and y is not None:
-                        points.append((x, y))
+    for x, y, _net in wire_vertices(geometry):
+        points.append((x, y))
     return points
 
 
@@ -264,52 +258,84 @@ def net_label_names(geometry: Any) -> set[str]:
     return names
 
 
-def nearest_wire_point(
-    spot: tuple[float, float], geometry: Any
-) -> tuple[float, float, float] | None:
-    """The closest wire vertex to ``spot`` as ``(x, y, distance)``, or ``None``.
+def wire_vertices(geometry: Any) -> list[tuple[float, float, str]]:
+    """``(x, y, net)`` for every wire vertex, in the shape the host actually sends.
 
-    Wires in a `sch.geometry` dump carry points, not net names (measured: the
-    schema has ``Points`` per wire and no net field), so this is *nearness*
-    evidence rather than a promise about which net the wire belongs to — which
-    is why the choice it feeds still has to be confirmed by the label branch
-    and by the read-back netlist before anyone calls it connected.
+    Measured on 3.2.186 (029-b, 2026-09-23): a wire's state is
+    ``{PrimitiveType: "Wire", Line: [x1, y1, x2, y2, …], Net: "NET4", …}`` — a
+    **flat** coordinate list, and the net **is** carried by the wire. The earlier
+    reading (``state.Points``, "wires carry no net") was wrong, and it made both
+    the occupancy test and the wire option blind: a page with a wire in hand
+    looked wire-less. Reading the real shape here is what lets the connection
+    choice demand the *right* net instead of settling for the nearest one.
     """
+    found: list[tuple[float, float, str]] = []
     if not isinstance(geometry, dict):
-        return None
-    best: tuple[float, float, float] | None = None
+        return found
     for entry in geometry.get("wires") or []:
         state = _state_of(entry)
-        for pair in state.get("Points") or state.get("points") or []:
-            if not isinstance(pair, (list, tuple)) or len(pair) < 2:
-                continue
-            x, y = _number(pair[0]), _number(pair[1])
-            if x is None or y is None:
-                continue
-            distance = ((x - spot[0]) ** 2 + (y - spot[1]) ** 2) ** 0.5
-            if best is None or distance < best[2]:
-                best = (x, y, distance)
+        net = _text(state.get("Net"))
+        line = state.get("Line") or state.get("Points") or state.get("points") or []
+        if isinstance(line, (list, tuple)) and line and not isinstance(line[0], (list, tuple)):
+            coords = list(line)
+            for index in range(0, len(coords) - 1, 2):
+                x, y = _number(coords[index]), _number(coords[index + 1])
+                if x is not None and y is not None:
+                    found.append((x, y, net))
+        else:
+            for pair in line:
+                if isinstance(pair, (list, tuple)) and len(pair) >= 2:
+                    x, y = _number(pair[0]), _number(pair[1])
+                    if x is not None and y is not None:
+                        found.append((x, y, net))
+    return found
+
+
+def nearest_wire_point(
+    spot: tuple[float, float], geometry: Any, net: str = ""
+) -> tuple[float, float, float] | None:
+    """The closest vertex **of ``net``'s own wiring** to ``spot``, or ``None``.
+
+    ``net`` is required by every real caller: a wire of another net is not a
+    connection option, it is the mistake this function used to be able to make
+    (029 §六 verdict 3). Passing an empty ``net`` keeps the old, unjudged
+    behaviour for diagnostics, and no flow uses it.
+    """
+    best: tuple[float, float, float] | None = None
+    for x, y, vertex_net in wire_vertices(geometry):
+        if net and vertex_net != net:
+            continue
+        distance = ((x - spot[0]) ** 2 + (y - spot[1]) ** 2) ** 0.5
+        if best is None or distance < best[2]:
+            best = (x, y, distance)
     return best
 
 
 def choose_connection(net: str, spot: tuple[float, float], geometry: Any) -> ConnectionChoice:
     """Wire or label — decided by two rules, refused when neither holds (§二.4).
 
-    The order is the task book's: a nearby wire first (it is the connection that
-    keeps the decoupling loop short, which is the whole reason the capacitor is
-    being added), then the page's own label habit for that net (a label only
-    joins a net the board already names that way, so it copies a convention
-    instead of inventing one). Neither → :class:`NoConnectionOption`, whose
-    message names both checks.
+    The order is the task book's: a nearby wire of **that net** first (it is the
+    connection that keeps the decoupling loop short, which is the whole reason
+    the capacitor is being added), then the page's own label habit for that net
+    (a label only joins a net the board already names that way, so it copies a
+    convention instead of inventing one). Neither → :class:`NoConnectionOption`,
+    whose message names both checks.
+
+    The net filter is not decoration: the machine sends each wire's own ``Net``
+    (measured 029-b), so "nearest wire" used to be able to pick the wrong one —
+    the weakness 029 §六 verdict 3 sent this batch to look for. With the filter a
+    mis-connection is impossible by construction, and what remains to verify on
+    the machine is only whether the *stub* reaches the pin (which the netlist
+    readback answers).
     """
     from ..core.changeplan import CONNECTION_LABEL, CONNECTION_WIRE
 
-    near = nearest_wire_point(spot, geometry)
+    near = nearest_wire_point(spot, geometry, net)
     if near is not None and near[2] <= CONNECT_RADIUS:
         return ConnectionChoice(
             kind=CONNECTION_WIRE,
             detail=(
-                f"a short wire to the existing segment at ({near[0]:g}, {near[1]:g}), "
+                f"a short wire to the existing {net!r} segment at ({near[0]:g}, {near[1]:g}), "
                 f"{near[2]:.0f} units away (limit {CONNECT_RADIUS:g})"
             ),
         )
