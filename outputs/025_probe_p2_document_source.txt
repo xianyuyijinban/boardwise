@@ -1,0 +1,70 @@
+025 批 1 probe · P2：sys_FileManager.getDocumentSource() 格式采样与等价性判定
+================================================================================
+日期：2026-09-23 01:2x  宿主 3.2.186  connector 0.4.14
+工程（R1）：doc.list + sys.identity 双查，焦点工程 `/test`（friendlyName `test`），
+  焦点页 P1 = b4298962367251c8。只读；为取「有真器件的页」样本另 doc.open 过 P4
+  （362924e0e16ce90a），随后开回 P1。
+通道：`sys.probe {call:{action:"sys.get_document_source", params:{...}}}`（理由见 P1 §0）。
+
+调用：
+    .venv/Scripts/python.exe .tmp_025_drive.py sys.get_document_source '{"maxChars":2048}'  out.json   # 采样
+    .venv/Scripts/python.exe .tmp_025_drive.py sys.get_document_source '{"maxChars":200000}' out.json  # 全长
+
+1. 调用形态（正面回答「放行吗 / 返回什么」）
+--------------------------------------------------------------------------------
+    {"source":"sys_FileManager.getDocumentSource","chars":11300,"maxChars":2048,
+     "truncated":true,"data":"<前 2048 字符>","headLines":6,
+     "tail":"<末 1024 字符>","note":"truncated to the first 2048 characters; ..."}
+无权限 throw（与 getDocumentFile 一样放行）。字符串、非 undefined。
+P1 全长 11,300 字符 / 35 条记录；P4 全长 14,452 字符 / 45 条记录。
+
+2. 前 2KB 采样（逐字，2048 字符处截断在一条 ATTR 记录中间）
+--------------------------------------------------------------------------------
+{"type":"DOCHEAD"}||{"docType":"SCH_PAGE","client":"69839e40a00dc716","uuid":"b4298962367251c8","updateTime":1790097879858,"version":"1790097879858","editVersion":"3.2.186"}|
+{"type":"CANVAS","ticket":1,"id":"CANVAS"}||{"originX":0,"originY":0}|
+{"type":"ATTR","ticket":2,"id":"4fcbf50c6000b4b8"}||{"x":2547,"y":159,"rotation":0,"color":null,"fontFamily":null,"fontSize":20,"fontWeight":null,"italic":...(截断)
+（完整 2048 字符样本见 .tmp_025_p2_head.txt / .tmp_025_f_p2.json 的 data 字段；
+  全长文本已落 .tmp_025_f_p2_full.txt 与 .tmp_025_f_p2_P4.txt。）
+
+3. 结构特征
+--------------------------------------------------------------------------------
+* 逐行一条记录，行格式 **`{"type":…,...}||{…body…}` + 行尾 `|`**，与 `.epru` 里
+  `load_epru_text` 读到的记录流**同一套语法**（首行是 DOCHEAD）。
+  逐行验证：35/35 行的 header 与 body 都能 `json.loads` 解析通过；34 行带行尾 `|`，
+  最后一行不带（与 .epru 一致）。
+* 记录类型直方图：
+    P1（11,300 字符）：DOCHEAD 1（SCH_PAGE b4298962367251c8）、CANVAS 1、ATTR 32、COMPONENT 1
+    P4（14,452 字符）：DOCHEAD 1（SCH_PAGE 362924e0e16ce90a）、CANVAS 1、ATTR 41、COMPONENT 2
+* **只含焦点文档那一个 DOCHEAD**：没有 SYMBOL / DEVICE / SCH / META 文档，即页面引用的
+  库文档不在其中（这决定了下面的等价性判定）。
+* 头字段与导出流有差异：源里 DOCHEAD 头是 `{"type":"DOCHEAD"}`（无 ticket），
+  ATTR 头带 `ticket`+`id`；导出件里 DOCHEAD 头带 `ticket`，且 ATTR/COMPONENT 的 body
+  多出 `strikeout`、`zIndex` 取值不同（源:0 / 导出:null），源多一条 CANVAS 而导出件多
+  META 与 LINE。
+
+4. 与 .epru 记录流的等价性：**语法同、记录集不同、模型不等价**
+--------------------------------------------------------------------------------
+(a) 记录集（同一页 P1：源 vs 同一页在 getDocumentFile 导出件 `.epru` 里的段落）
+    源           35 条：DOCHEAD 1、CANVAS 1、ATTR 32、COMPONENT 1
+    导出件同页    37 条：META 1、ATTR 32、COMPONENT 1、LINE 3
+    逐条按 (type, body) 精确比对：**0 条完全相同**（ATTR 逐条在 zIndex / strikeout 上不同）。
+(b) 模型级（决定性判据）：把源文本原样封成 `x.epru` → zip 成 .epro2 → 走同一条离线管线
+    P1：源→模型 0 器件 / 0 网；导出→模型 0 器件 / 0 网（P1 太小，分不出）
+    **P4：源→模型 [('R2', footprint='', value='')]，nets 0
+          导出→模型 [('R2', footprint='0603', value='')]，nets 2**
+    差在两处，且都是「A2 直接顶替 A1 会静默丢信息」的形态：
+      · footprint 丢失（'0603' → ''）——因为页面引用的 SYMBOL/DEVICE 文档不在源里；
+      · 连通性归零（2 网 → 0 网）——同理，引脚/连线所属的库文档缺失。
+(c) 结论：源 = **焦点页自身的实时记录流**（编辑器内存态序列化），
+    导出件 = **保存态序列化 + 规范化（补 META/LINE）+ 被引用库文档 + 预览图**。
+    两者同语法，但 A2 **不能**在模型级别等价替代 A1。
+
+5. 附带确认
+--------------------------------------------------------------------------------
+* 源长度随焦点页变化（11,300 ↔ 14,452），且总在 reload/切页后与当前焦点一致 →
+  它就是「当前文档」的源码，任务书 §0 里「格式是否等价 .epru 未证」这一条现在有答案：
+  **同语法、非同一记录集**。
+
+结论：**不能用**（作为 A2 顶替 A1）——同语法但只覆盖焦点文档、缺被引用库文档，模型级
+会丢 footprint 与全部连通性（P4 实测 0603/2 网 → ''/0 网）；可用作单页记录流的原始查看
+（诊断/对比用），不可用作审查模型的来源。

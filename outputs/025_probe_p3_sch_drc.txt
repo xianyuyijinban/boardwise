@@ -1,0 +1,68 @@
+025 批 1 probe · P3：sch_Drc.check(strict, false, true) 在 test 工程原理图页实测
+================================================================================
+日期：2026-09-23 01:2x  宿主 3.2.186  connector 0.4.14
+工程（R1）：doc.list + sys.identity 双查，焦点工程 `/test`（friendlyName `test`），
+  焦点页 P1 = b4298962367251c8（page，与任务书基线一致）。只读动作。
+通道：`sys.probe {call:{action:"sch.drc_check", params:{...}}}`（理由见 P1 §0）。
+
+调用：
+    .venv/Scripts/python.exe .tmp_025_drive.py sch.drc_check '{}' out.json                     # 第 1 次
+    .venv/Scripts/python.exe .tmp_025_drive.py sch.drc_check '{}' out.json                     # 第 2 次
+    .venv/Scripts/python.exe .tmp_025_drive.py sch.drc_check '{"userInterface":true}' out.json # UI=true
+
+1. 计数 / 返回形态（三次完全一致）
+--------------------------------------------------------------------------------
+    args      {"strict": true, "userInterface": false, "includeVerboseError": true}
+    page      {"uuid": "b4298962367251c8", "type": "page"}
+    mode      "counts"
+    counts    [{"type": "warn", "count": 1}]      ← 宿主数组**原样**
+    entries   1
+    total     1
+    byType    {"warn": 1}
+    passed    false
+返回形态与 connector 契约逐键相同（checked/elapsedMs/source/uiRequested 等见 out.json）。
+计数语义提醒（025 §0 的结论本次复核成立）：这个数组是**聚合计数**，`total=1` 是「该页有
+1 条 warn」，**不是**一条可定位的 finding——逐条细节不在返回值里（在底部面板，
+`SYS_PanelControl` 无读接口）。所以报告若要逐条，只能靠自有规则引擎（批 3 的本意）。
+
+2. 耗时（连接器内 elapsedMs / 端到端 wall，同一页冷热各一次）
+--------------------------------------------------------------------------------
+    第 1 次   elapsedMs 13 ms   wall 21.4 ms
+    第 2 次   elapsedMs  4 ms   wall 12.1 ms
+    UI=true   elapsedMs  5 ms   wall 11.1 ms
+    （另有一轮更早的同页实测：11 ms / 50 ms —— 量级一致，都是数十毫秒级。）
+
+3. 幂等：**是**
+--------------------------------------------------------------------------------
+三次调用的 counts / total / byType / passed 逐字段相同（[warn×1]），未出现计数漂移；
+第 2 次与第 1 次相隔一次 P4/PCB 的切换与两个热更，仍然相同——注意此处的「同」是
+**计数语义**上的同，不是字节同（这条经验来自 P1 §5：字节相等不能当幂等判据）。
+
+4. UI 副作用：**未证实可从 connector 观测**（如实报，不编）
+--------------------------------------------------------------------------------
+* 默认 `userInterface:false`（actions.ts 的默认，也是任务书 §6 的要求）：不请求面板。
+* 显式 `userInterface:true` 的一次：请求确实透传（args 里 userInterface=true），宿主照常
+  返回同一组计数；**但「底部面板是否呼出」既没有读接口也没有可靠截图通道**：
+  `sys_PanelControl` 只有 open/close/toggle-lock/isLocked（**没有 isOpen**），
+  `dmt_Panel` 是工程面板文档不是 UI 面板，`export.screenshot` 在本宿主走的是
+  「缓存空帧」老路（SKILL 坑 6），文档 render 不含面板。
+  ⇒ 本次记录口径：**已请求、宿主已答，是否可见未观测到**；若岳屏幕上多出一块 DRC 面板，
+  那正是这一次 UI=true 调用留下的，点掉即可。批 2 的 checkup 默认 false，不受影响。
+
+5. 边界（不在原理图页）
+--------------------------------------------------------------------------------
+在 test 的 PCB1（5dc38976c1fa45ce，type pcb）上调用同一条：
+    boardwise bridge call 失败 [CONNECTOR_ERROR]
+    sch_Drc.check threw Error: SCH_DrcUtil: doctype(3) not support check sch drc.
+    This call is only meaningful on a schematic page — the focused document here is
+    5dc38976c1fa45ce (pcb) — and the type package marks the whole namespace @beta
+    detail: {path:"sch_Drc.check", args:{true,false,true}, focused:{uuid,type:"pcb"},
+             thrown:true, errorName:"Error", errorMessage:"Error: SCH_DrcUtil: doctype(3)
+             not support check sch drc", elapsedMs:0}
+即：**非原理图页 = 宿主 throw**（不是返回 false / 空数组），connector 如实捕获为
+CONNECTOR_ERROR，并把「焦点文档是谁」写进 message 与 detail——调用方一眼知道错在哪。
+宿主文案本身带 `Error:` 前缀，connector 不再重复拼 name（勿出现 "Error: Error:"）。
+
+结论：**能用**（计数、耗时、返回形态、幂等全部测到；`userInterface:false` 可静默跑；
+非原理图页会 throw 且被如实报告为 CONNECTOR_ERROR；唯一未证实项是 UI=true 时面板是否可见，
+属 connector 不可观测范围）。

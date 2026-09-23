@@ -1,0 +1,97 @@
+025 批 1 probe · P4：pcb_Drc.check(strict, false, true) 在 test 工程的 PCB 上实测
+================================================================================
+日期：2026-09-23 01:2x  宿主 3.2.186  connector 0.4.14
+工程（R1）：doc.list + sys.identity 双查，焦点工程 `/test`（friendlyName `test`）。
+  test 工程只有一块 PCB：PCB1 = 5dc38976c1fa45ce（doc.list 的 pcbs[0]）。
+  test2 **未连着**（bridge status 只有 test 一个窗口），所以「test/test2 找含器件的 PCB 页」
+  这一条只能落在 test 上——见 §4 的场景缺口。
+通道：`sys.probe {call:{action:"pcb.drc_check", params:{...}}}`（理由见 P1 §0）。
+
+调用与顺序：
+    # 边界一：先在原理图页 P1 上调一次（不应答「干净板」）
+    .venv/Scripts/python.exe .tmp_025_drive.py pcb.drc_check '{}' out.json
+    # 真跑：doc.open PCB1 → 调两次（幂等 / 冷热）
+    boardwise bridge call --action doc.open --params '{"uuid":"5dc38976c1fa45ce"}'
+    boardwise bridge call --action pcb.readback --params '{}'            # 确认板上无件
+    .venv/Scripts/python.exe .tmp_025_drive.py pcb.drc_check '{}' out.json   ×2
+
+1. 边界一：不在 PCB 文档时**宿主 throw，不是 undefined**
+--------------------------------------------------------------------------------
+（任务书 §0 记的是「不在 PCB 文档时返回 undefined」——**类型包与真机不一致**，这条要更正。）
+    [CONNECTOR_ERROR] pcb_Drc.check threw Error: 指定的主题消息在对应的画布内没有相关订阅.
+      The declaration says the call reports nothing at all when no PCB is focused;
+      the focused document here is b4298962367251c8 (page)
+    detail: {path:"pcb_Drc.check", args:{strict:true,userInterface:false,includeVerboseError:true},
+             focused:{uuid:"b4298962367251c8",type:"page"}, thrown:true, errorName:"Error",
+             errorMessage:"Error: 指定的主题消息在对应的画布内没有相关订阅", elapsedMs:0}
+宿主文案是消息总线口径（DRC 请求发布到 PCB 画布主题，原理图页上没有订阅者 → throw）。
+connector 两种形态都处理（throw → CONNECTOR_ERROR 带焦点文档；真回 undefined 才走
+`checked:false + reason` 那条）。**绝不把「没有 PCB 可查」报成「板子零错误」。**
+顺带修掉一处文案 bug：宿主 message 自带 `Error:` 前缀，早先拼成 "Error: Error: 指定…"，
+现已只在 message 不带前缀时才补 name（前后两次抓取都在 .tmp_025_p4_onsch.json /
+.tmp_025_f_p4_boundary.json 里留证）。
+
+2. 真跑：PCB1（空板）
+--------------------------------------------------------------------------------
+    page    {"uuid":"5dc38976c1fa45ce","type":"pcb"}
+    args    {"strict":true,"userInterface":false,"includeVerboseError":true}
+    mode    "groups"      checked true    available true    truncated false
+    counts  {"groups":1,"returnedGroups":1,"errors":1,"errorsSource":"group-count",
+             "items":1,"byLabel":{"Import Changes":1},"jsonChars":667}
+    groups  ← 逐条树**原样**回传，全文见 .tmp_025_f_p4_groups.json；关键结构：
+      [{"name":"Netlist Error","title":["Netlist Error","(1)"],"visible":true,"count":1,
+        "list":[{"name":"Netlist Error","title":["Netlist Error","(1)"],"visible":true,"count":1,
+                 "list":[{"visible":true,
+                          "errorType":"Netlist Error","errorObjType":"Netlist Error",
+                          "ruleName":"Import Changes","ruleTypeName":"Import Changes",
+                          "obj1":{"typeName":"Schematic Netlist","suffix":""},
+                          "obj2":{"typeName":"PCB Netlist","suffix":""},
+                          "objs":["err0"],
+                          "explanation":{"str":"PCB and schematic netlist does not match. You can click on the rule name \"Import Changes\" to view the difference.","param":{}},
+                          "globalIndex":"err0",
+                          "parentId":"DRCTab|_|Errors|_|Netlist Error|_|Netlist Error"}]}]}]
+树形 = **group.list[].list[]**（组 → 子组 → 叶子），每个节点自带 `count`；
+叶子字段集合 = {errorType, errorObjType, ruleName, ruleTypeName, obj1, obj2, objs,
+explanation{str,param}, globalIndex, parentId, visible}。
+※ 任务书 §0 记的叶子含 net/pos/layer —— 本次这一条错误的叶子**没有** net/pos/layer（它与
+  器件/坐标无关，是网表比对错误）。逐条形态以本次实测字段为准，批 3 映射层要按存在的字段取，
+  不要按假定取（同 SKILL 坑 15 的教训）。
+
+3. 幂等 / 耗时
+--------------------------------------------------------------------------------
+    第 1 次（第一次热更后的构建、该 PCB 会话首跑）：elapsedMs 2,740 ms（含首次 DRC 初始化）
+    第 2 次（同会话、同一构建）：elapsedMs 233 ms   wall 253.6 ms
+    末次实测（counts 修复后、交付版本）：elapsedMs 271 ms  wall 306.9 ms
+    三次的 groups 逐字段相同（跨两次热更也比对过：trees identical == True），counts 逐键相同。
+    ⇒ 幂等成立；耗时按百毫秒量级预期，首跑可能到秒级——daemon 侧 30 s（ACTION_TIMEOUT）
+      对 test 规模绰绰有余，大板是否够要等有真实大板时再量。
+
+4. 场景缺口（R3：不自行替代，如实报）
+--------------------------------------------------------------------------------
+任务书 P4 的兜底是「都没有就在 test 工程用 pcb.doc.new 建一页放两个器件一条线再跑」。
+实测两件事：
+  (a) test 工程**有** PCB 页（PCB1），不用新建——但它是**空板**：
+      `pcb.readback` → {"kind":"pcb","components":[],"primitives":[],"componentCount":0}。
+      （旁证：在原理图页调 pcb.readback 会 INTERNAL —— 宿主 `pcb_PrimitiveComponent.getAll`
+      内部 `Cannot read properties of null (reading 'map')`，socket 栈落在 pro-api api.js；
+      在 PCB 页调用则正常返回空数组。）
+  (b) **当前动作集没有 PCB 放置能力**：ACTIONS 里只有 sch.place_*，PCB 侧只有
+      readback / modify_primitive / delete_primitives / doc.new；宿主有
+      `pcb_Document.importChanges`（原理图→PCB 导入变更）但**未注册**，也不在本批范围内，
+      所以我**没有**为了凑场景去调它 —— 「两个器件一条线」的 PCB 场景这次没造出来。
+  效果评估：即便空板，DRC 也给出了 **1 条真实错误**（Netlist Error / Import Changes：
+  原理图有器件、PCB 没有 → 网表不匹配），于是批 3 需要的**逐条叶子形态已经拿到**；
+  未拿到的只是「器件/坐标类错误（clearance/unrouted 等带 net/pos/layer 的叶子）」。
+
+5. 现场清理：零残留
+--------------------------------------------------------------------------------
+本次 P4 全程只读（没建页、没放件、没删件），只 doc.open 切过焦点，最后已开回 P1：
+    doc.list   documents / projects 逐字段与开工前相同（4 个原理图页 + PCB1，pcbs=1）
+    sch.geometry（P1）components 1→1（同一 primitiveId）、wires 0、pins 0、netlabels 0、bboxes 1
+    sys.identity 焦点 /test，activeDocument b4298962367251c8（page），consistent true
+即：**没有需要清理的改动**，「几何前后计数一致」成立。
+
+结论：**能用**（条件：只在 PCB 文档上调用——不在 PCB 页时宿主是 **throw** 而类型包写的是
+undefined，已如实捕获为 CONNECTOR_ERROR 并点名焦点文档；test 工程只有空板 PCB1，故只验到
+一条网表比对错误，器件/坐标类逐条字段（net/pos/layer）本次未能造出，需后续有器件的 PCB
+再补一次）。

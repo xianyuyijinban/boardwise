@@ -1,0 +1,93 @@
+025 批 1 probe · P1：sys.get_document_file('epro2') 权限 / zip / 离线管线 / 在线交叉核对
+================================================================================
+日期：2026-09-23 01:2x  宿主：立创 EDA Pro 3.2.186（pro-api 0.3.18）  connector：0.4.14
+工程（R1 身份）：doc.list + sys.identity 双查，焦点工程 `/test`（friendlyName `test`，
+  projectUuid ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489），
+  consistent=true；焦点页 P1 = b4298962367251c8（type page）。与任务书 `test` 逐字一致。
+  全程只读：doc.open（view-only）开了 P4 / PCB1 再开回 P1，无写动作、无建删件。
+
+0. 为什么走 sys.probe 的 call 通道（口径先说清）
+--------------------------------------------------------------------------------
+四个新动作已按 025 注册进 connector（actions.ts + protocol.py ACTIONS + docs/bridge.md），
+但 **daemon 的 ACTIONS 是加载期常量**，在跑的 daemon 早于这四个名字，`bridge call
+--action sys.get_document_file` 会被 daemon 先判 UNKNOWN_ACTION（实测）：
+    boardwise bridge call: sys.get_document_file failed [UNKNOWN_ACTION] unknown action
+岳的 daemon 不许重启，所以 probe 走 connector 内 `sys.probe` 的 `call` 通道——
+它按名字派发到**注册表里同一个 handler 函数**（`PROBE_CALL_ACTIONS`），只绕过 daemon 的
+目录校验，不绕过任何逻辑：参数校验、错误码、base64 转换、返回结构都是交付的那份代码。
+批 2 起仍需重启 daemon 才能用 `--action <新名>` 正常路由（见交卷「坑」节）。
+
+调用（工作目录 E:\boardwise）：
+    .venv/Scripts/python.exe .tmp_025_drive.py sys.get_document_file '{"fileType":"epro2"}' out.json
+该脚本 = BridgeClient("cli") → `sys.probe {call:{action,params}}`，完整响应落 out.json。
+
+1. 权限：**放行**（不是 throw）
+--------------------------------------------------------------------------------
+    {"fileType":"epro2","source":"sys_FileManager.getDocumentFile","encoding":"base64",
+     "name":"ProDoc_P1_2026-09-23.epro2","mime":"zip","bytes":29672,"isZip":true}
+没有 throw、没有 note（isZip=true 故无「非 ZIP magic」提示）。类型包说的
+「工程设计图 > 文件导出」权限门在这台安装上是**放行**的；actions.ts 里那条
+「throw → CONNECTOR_ERROR + detail.permissions」的诚实错误路径本次未被触发（真实触发
+留待权限被关的机器，或用 pcb/sch 边界那两条已验证的 throw 路径作对照——见 P3/P4）。
+
+2. bytes → 落盘 → 合法 zip？
+--------------------------------------------------------------------------------
+    decoded bytes 29672  zipfile.is_zipfile = True
+    entries: IMAGE/ (0) | IMAGE/b4298962367251c8.webp (22802) | project2.json (150)
+             | ProDoc_P1_2026-09-23.epru (69464)
+是合法 zip；`.epru` 是页面记录流，`project2.json` 是工程元数据，IMAGE/*.webp 是画布预览图。
+文件名是宿主自己起的 `ProDoc_<页名>_<日期>.epro2`（**文档级**导出，不是工程级备份）。
+
+3. 离线管线：load_epru_text + build_schematic_model
+--------------------------------------------------------------------------------
+    meta: {"title":"ProDoc_P1_2026-09-23","cbb_project":false,"editorVersion":"3.2.186",...}
+    records 69 (全部)：ATTR 42, ELE_PLACEHOLDER 7, DOCHEAD 5, META 4, LINE 3, RULE 2,
+                      CANVAS 1, PART 1, OBJ 1, TABLE 1, COMPONENT 1, BLOB 1
+    docs: DEVICE 8af1cde95399dfe9 | SYMBOL 24bca7036f446d3c | SCH d977b19a89c0abb7
+          | SCH_PAGE b4298962367251c8 | BLOB
+    build_schematic_model → components 0, nets 0
+解析**成功**（无异常、无 EncryptedProjectError）。0 个器件不是漏解析：P1 上唯一那个
+COMPONENT 的 partId 是 pid8a0e77bacb214e（图框/标题栏），无 Designator、有 "?" 结尾的
+占位规则把它排除——与在线读数一致（下一节）。
+
+4. 在线交叉核对（位号集合比对）
+--------------------------------------------------------------------------------
+(a) 焦点页 P1：在线 vs 导出模型
+    sch.geometry  → components 1（Designator=None，即图框）、wires 0、pins 0、netlabels 0
+    sch.readback  → components 1（designator=None）
+    导出模型      → 器件 0（图框不计）      判定：一致（在线「有 1 个无位号图元」⇔ 模型「0 个器件」）
+(b) 另一个有真器件的页 P4 = 362924e0e16ce90a（doc.open → 导出 → 解析 → 再开回 P1）
+    在线 sch.geometry → components 2：Designator=R2（name "={Value}"）+ 1 个图框
+    在线 sch.readback → R2（footprint 是个对象、无 value/mpn——已知坑 3）
+    导出模型          → [('R2', footprint='0603', value='')]，nets 2
+    位号集合比对：在线 {R2} == 模型 {R2}  ✔
+    额外收获：模型有 footprint='0603'，在线 readback 拿不到（值/MPN/footprint 只能走导出通道，
+    这正是 A1 满血路的价值）。
+(c) 工程级一致性：导出的 DOCHEAD 里 SCH_PAGE uuid = b4298962367251c8，与 doc.list 的焦点页 uuid
+    逐字相同；导出含 SYMBOL/DEVICE/SCH 引用文档，模型才能解出 footprint 与 2 条网。
+
+5. 参照物：两次抓取自洽（字节级 vs 模型级）
+--------------------------------------------------------------------------------
+* 同一会话、同一页、连抓两次：**字节完全一致**
+      cap1 sha256 1f1604bb58f2074c7424522ee315ede68eab7e3b4872fabf4e3217bda4260359 (29672 B)
+      cap2 sha256 1f1604bb58f2074c7424522ee315ede68eab7e3b4872fabf4e3217bda4260359 (29672 B)
+* 跨「页面 reload」（两次热更之间）抓同一页：**字节不同，模型相同**
+      P4 33,034 → 31,742 字节（sha eac5980a… → e9d9e7a2…）；141 条记录里只有 9 条不同，逐条查清是：
+      ① 8 条 DOCHEAD 的 `client` 字段（每次会话/加载一个新随机 id：46d004298cc7576f →
+         59783bd746257a4e），其中 1 条同时带 `version`/`updateTime` 差异；
+      ② 1 条 ATTR 的 `value`/`zIndex`/`strikeout`（标题栏属性的默认值回填）；
+      ③ 外加 zip 内嵌预览图 IMAGE/*.webp 重新渲染（23246 → 21766 字节）。
+      记录类型直方图与模型逐项相同（141 条记录、R2/0603）。
+    结论（给批 2/4 用）：**字节相等不能当缓存/幂等判据**，模型级比对才是。
+    test 工程没有人工导出的参照件，按任务书不去造；本节即为模型级参照物。
+
+6. 其它旁证（同一次 probe 顺手取到，机器事实）
+--------------------------------------------------------------------------------
+* `pcb.readback` 在**原理图页**调用会 INTERNAL：宿主 `pcb_PrimitiveComponent.getAll` 内部
+  `Cannot read properties of null (reading 'map')`（socket stack 落在 pro-api api.js）。
+  在 PCB 页调用则正常返回 `{components:[],primitives:[]}`（见 P4）。
+* 热更（sys.self_update）后页面 reload，焦点文档变成家页（`type: home`，uuid 形如 `tab_page1`），
+  不是热更前那张页——凡热更后接着读页面的动作，先 doc.open 定点。
+
+结论：**能用**（A1 满血路成立：权限放行、bytes 合法 zip、离线管线零改动原样跑通、
+位号集合与在线读数一致；注意它是**文档级**导出——要整工程得用 getProjectFile，未注册）。

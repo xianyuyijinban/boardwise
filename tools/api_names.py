@@ -286,6 +286,34 @@ NAMESPACE_NOTES: dict[str, str] = {
         "`save` is the step that makes the netlist export reliable: an unsaved page\n"
         "  // has no netlist to hand back."
     ),
+    "pcb_Drc": (
+        "025 — the PCB design-rule check. `check` is @beta and measured (025 §0) to\n"
+        "  // return **per-item** groups, unlike the schematic one: leaves carry\n"
+        "  // ruleName / net / pos / explanation / obj1 / obj2 / layer, which is what a\n"
+        "  // Finding-mapping layer reads. `startRealTimeDrc` / `stopRealTimeDrc` /\n"
+        "  // `getRealTimeDrcStatus` are hard-coded `return false` stubs on the host —\n"
+        "  // listed here so that stays measurable rather than assumed."
+    ),
+    "sch_Drc": (
+        "025 — the schematic design-rule check. One method, @beta, and measured\n"
+        "  // (025 §0) to answer **aggregate counts only** even with\n"
+        "  // includeVerboseError:true; the per-item detail goes to a bottom panel with\n"
+        "  // no read interface, which is why the offline rule engine still supplies\n"
+        "  // the per-item findings (batch 3)."
+    ),
+    "sys_FileManager": (
+        "025 — where a project leaves the editor: `getDocumentFile` / `getProjectFile`\n"
+        "  // return an .epro/.epro2 as a `File`. Both are documented to **throw** when\n"
+        "  // the extension lacks a grant (工程设计图 > 文件导出 / 工程管理 > 下载工程), which\n"
+        "  // is the permission question batch 1 had to measure rather than read off the\n"
+        "  // declaration. `getDocumentSource` is the unverified second path."
+    ),
+    "sys_Tool": (
+        "025 — the host's own comparison tools (`netlistComparison`,\n"
+        "  // `schematicComparison`, `pcbComparison`). Probed alongside the DRC\n"
+        "  // namespaces because a \"what changed?\" review lane would need them, and\n"
+        "  // because the declared surface and the live one have disagreed before."
+    ),
 }
 
 
