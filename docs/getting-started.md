@@ -9,10 +9,47 @@
 > 其余为终端渲染与真机打标抓图）。gs-01 只保留版本号区域，授权信息已裁掉。
 
 **这台机器需要**：Windows 10/11、立创 EDA Pro **3.2.149 或更高**（推荐 3.2.186）、Python 3.10 以上。
+**给没有 Python 的朋友**：走下面的「第 0 步」，只下载两个文件（一个 exe + 一个 eext），本机不用装 Python，
+也不用这份仓库。
 
-> **重要：一次只开一个编辑器窗口。** 每个窗口的扩展都会各自连上 daemon，而 daemon 只认
-> 最后注册的那个——开着多个窗口时，命令会打到哪个窗口是说不准的（2026-09-21 真机实测：
-> 同样的命令被旧窗口答了新窗口的事）。要用 boardwise 时，把多余的编辑器窗口关掉，只留一个。
+> **多个编辑器窗口怎么办。** 每个窗口的扩展都会各自连上 daemon（023 起 daemon 是一个**窗口路由表**，
+> 不再是"只认最后一个"），但**当有多个窗口在线、而命令没说是哪一个时，daemon 会拒绝猜**，回
+> `WINDOW_UNSPECIFIED` 并把在线窗口都列出来。两种处理：把多余的窗口关掉，或者在命令上显式点名——
+> `boardwise bridge call --instance <窗口 id>`（`boardwise bridge status` 会打印每个窗口的 id 与工程名）。
+> 同一个 daemon 上多窗口并存是正常用法，不是故障。
+
+---
+
+## 第 0 步（朋友专用）· 不用 Python 的装法
+
+> 这一节是给**没有 Python、也没有这份仓库**的人准备的：只下载两个文件就能用上。
+> 仓库里的同事请跳过，从下面「第 1 步」开始。
+
+1. 从 Release 页面下载两个文件：`boardwise.exe` 和 `boardwise-connector-0.4.19.eext`。
+   预期：`boardwise.exe` 约 11 MB。双击它可能先被 Windows 拦一次（这个 exe 没有代码签名）——
+   点「更多信息 → 仍要运行」即可；`windows 已保护你的电脑` 不是中毒提示。
+2. 把 `boardwise.exe` 放到一个好找的目录（例如 `D:\boardwise\`）。不用安装、不用加 PATH，
+   下面命令里写全路径就行。
+   预期：`D:\boardwise\boardwise.exe --version` 打印两行 ——
+   `boardwise 0.1.0 (CLI, running from a frozen exe)` 和 `connector bundle 0.4.19 (…\resources\connector\dist\index.js, 253495 bytes)`
+   （第二行是你这份 exe 里**自带**的扩展版本号，报障时连这两行一起发）。
+3. 装扩展：打开立创 EDA Pro，在扩展/插件面板里导入 `boardwise-connector-0.4.19.eext`。
+   预期：菜单栏出现 boardwise（`关于…` / `Reconnect` / `Stop`）。
+4. 起桥：开一个命令行窗口，运行 `D:\boardwise\boardwise.exe bridge start`。
+   预期：打印 `boardwise bridge: listening on 127.0.0.1:61190` 与
+   `waiting for the EasyEDA extension to connect (Ctrl-C to stop)`；**这个窗口别关**（它就是桥，Ctrl-C 停）。
+5. 回编辑器，点一次 boardwise 菜单里的 `Reconnect`（编辑器启动时扩展可能先于 daemon 醒来）。
+   预期：在**另一个**命令行窗口里跑 `D:\boardwise\boardwise.exe bridge status`，看到
+   `connector: connected` 与你打开的工程名。
+6. 装上 agent 用的清单：`D:\boardwise\boardwise.exe install-skill`。
+   预期：`boardwise install-skill: installed C:\Users\<你>\.kimi-code\skills\boardwise\SKILL.md (25366 bytes …)`；
+   再跑一次会变成 `already current`（它不会重复写，也不会覆盖你改过的文件——会先备份成 `SKILL.md.bak-<日期>`）。
+7. 自检：`D:\boardwise\boardwise.exe doctor`。
+   预期：最后一行 `boardwise doctor: 8/8 项通过`。若同时开着多个编辑器窗口，加
+   `--instance <窗口 id>` 指定问哪一个（`bridge status` 会打印每个窗口的 id）。
+
+> 配对与隐私（一句话）：配对 token 是**在你自己机器上**生成的（`%USERPROFILE%\.boardwise\`），
+> 不要跟别人共用一份；daemon 只监听 `127.0.0.1`，exe 不会把任何东西上传到网上。
 
 ---
 

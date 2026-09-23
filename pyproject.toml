@@ -21,8 +21,13 @@ dependencies = ["websockets>=13.0"]
 # configuration, not a dependency -- so a fresh clone could finish
 # `scripts/install.bat` and still have no pytest to run it with. A development
 # machine installs itself with `pip install -e ".[dev]"`.
+#
+# `pyinstaller` rides along since 028 batch 3a: it builds the single-file
+# `boardwise.exe` (`packaging/build_exe.py`), it is needed by nobody at runtime,
+# and leaving it out would make the release artifact reproducible only on the one
+# machine where it happens to be installed by hand.
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = ["pytest", "pyinstaller>=6.0"]
 
 [project.scripts]
 boardwise = "boardwise.cli:main"
