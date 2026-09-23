@@ -104,3 +104,20 @@ BOARDWISE_EDITOR_INSTALL=…/148  → FAIL 编辑器安装版本 ≥ 3.2.149
 `boardwise doctor --help` 也随常量输出 `the editor is ≥ 3.2.149`。临时目录已删。
 
 遗留（**未动**，交主代理裁）：`docs/install.md:24`（"3.2.183 或更高"）与 `:192`（"编辑器版本 ≥ 3.2.183"），以及 `.kimi-code/skills/boardwise/SKILL.md:204-205`（"3.2.183 是下限"。同时 `:205` 有 `sch_ManufactureData.getPngFile` 的声明≠实现记录）。三处都不在 §三 改动面内，故只报不改；`SKILL.md` 是本仓 AI 约定的唯一权威，留着旧下限会继续误导后续子代理，建议下一批一并更新。
+
+### 149 行为级验收（2026-09-24，岳工作电脑 3.2.149.88089769，connector 0.4.17）
+
+岳五步全跑，结果逐条：
+
+| 步骤 | 结果 |
+|---|---|
+| `git pull` | ✔ 4307369（直连超时，走 7890 代理成功） |
+| 重启 daemon | ✔ 61190 应答 |
+| `bridge update-connector --yes` | ✔ 0.4.15 → 0.4.17，写入 `User_309b46a8…_v6`，verified |
+| `boardwise doctor` | ✔ **8/8 全绿**——floor 检查在 149 上 PASS（本任务预期①成立） |
+| `boardwise checkup --out checkup149` | ✔ 全链跑通，exit 1（有发现，预期语义） |
+| `boardwise review-mark checkup149/report.json` | ✔ **1 个 marker 落在 R7 @(205,485)** |
+
+结论：`generateIndicatorMarkers`/`zoomToRegion` 在 3.2.149 上不只 `typeof === function`（027 probe），
+**行为级可用**——FLOOR (3,2,149) 的立论从"证否不证用"升级为行为实证。
+未了项：149 第二窗口上线验证（026b 批 2b 第 5 项）岳尚未测，issue #4 多窗口症状保持开放。
