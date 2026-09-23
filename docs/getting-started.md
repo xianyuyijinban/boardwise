@@ -167,9 +167,34 @@ boardwise doctor: 8/8 项通过
 
 ---
 
-## 第 5 步 · 第一次设计审查（review + 画到编辑器上）
+## 第 5 步 · 第一次设计审查（checkup 一条命令 + 画到编辑器上）
 
-**5.1 跑离线审查**（不需要编辑器，读的是工程备份或网表文件）：
+**5.0 首选：`boardwise checkup` 一条命令**（编辑器连着、daemon 在跑时就这么用）：
+
+```bash
+boardwise checkup --out checkup
+```
+
+它自己做完这些事：把焦点工程整份抓下来（抓不到就逐页抓、再不行只读网表——报告里会写它用了哪一级），
+跑编辑器的 ERC 与 PCB DRC，跑 boardwise 的规则，把器件按页或按连通性分成模块，
+给每张原理图页出一张 PNG，最后写出 `checkup/report.json`（机器读）、`checkup/report.md`（人读）
+和 `checkup/canvas-*.png`（画布图）。
+
+预期：终端先打一行结论（ERROR 几条），再打模块、槽位和两份报告的路径。
+退出码 `1` 表示**发现了** ERROR（不是命令失败）、`0` 表示没有、`2` 表示参数/文件不可用、
+`3` 表示**在线状态说不清**（daemon 没起、扩展没连上）——`3` 绝不等于"板子干净"。
+
+报告里 `ai_slots` 是留给 AI（或留给你自己）的三件事：`unknown_parts`（要查规格书的器件）、
+`canvas_images`（要看的画布图）、`summary_template`（总结模板）。把 `report.md` 从头读一遍，
+它把这三件事按顺序摆在最后。
+
+没连编辑器时用兜底的 `--file`（同一套报告，DRC 段会写明"没查"而不是"零错误"）：
+
+```bash
+boardwise checkup --file path/to/board.epro2 --out checkup
+```
+
+**5.1 单点命令：离线审查**（不需要编辑器，读的是工程备份或网表文件）：
 ```bash
 # 第一次审查多半是"原理图刚画完"：.epro2 的 --view 缺省是 pcb，这里显式选原理图视图
 boardwise review path/to/board.epro2 --view schematic --json report.json --md report.md

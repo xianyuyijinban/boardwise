@@ -57,6 +57,41 @@ Installing this on a fresh Windows machine — Python, the editor `.eext`, the d
 is its own walkthrough: [`docs/install.md`](docs/install.md) (Chinese, written for a
 hardware engineer who does not write code).
 
+### One-command review (`checkup`)
+
+With the editor open and the daemon running, one command does the whole review —
+data, the editor's own checks, the offline rules, the module grouping, a canvas
+PNG per schematic page, and the two reports:
+
+```bash
+boardwise checkup                                   # focused project -> ./checkup/
+boardwise checkup --project <name|uuid> --out DIR   # pick the window
+boardwise checkup --file board.epro2 --out DIR      # no editor: offline fallback
+```
+
+What lands in `--out`: `report.json` (the contract), `report.md` (the same content
+for a human) and `canvas-<page>.png` (one per schematic page; PCB pages are not
+rendered yet).
+
+Exit codes: `0` no ERROR / `1` an ERROR was found (an ERC `error`/`fatalError`
+count, a PCB DRC leaf, or a rule's ERROR finding) / `2` unusable input /
+`3` **the online state cannot be stated** (no daemon, no connector, every data tier
+refused) — `3` is never "the board is clean". A check that could not run is
+`{checked: false, reason}` and carries no counts.
+
+`report.json` is `schema: "boardwise.checkup/2"`:
+
+| Section | What it holds |
+|---|---|
+| `source` | which tier answered (`project-file` → `per-page` → `netlist` → `file`), the project/page identity, host and connector versions, what was tried and what was noted |
+| `model` | the parsed design: component and net counts, designators, duplicate designators |
+| `summary` | the split the exit code comes from: `errors[]` / `warnings[]`, each with a `ref` back into the report |
+| `drc` | `schematic` (the editor's ERC **counts only**, with the per-page readings and the basis for their total) and `pcb` (its per-item tree, mapped: groups, leaf sentences, totals) |
+| `modules` | pages (multi-page projects) or connectivity clusters, each with its components, its findings by index and the evidence for its name |
+| `findings` | the offline rule engine's findings, the same shape `review --json` uses |
+| `ai_slots` | what is left to a model: `unknown_parts` (with why each is listed), `canvas_images`, `summary_template` |
+| `pending` | empty — present so a reader can tell "nothing owed" from "key missing" |
+
 The input type is picked from the extension:
 
 | Input | What it is | What you get |
@@ -322,6 +357,38 @@ boardwise review path/to/board.epro2 --json report.json --md report.md
 
 `.epro2` 缺省按 **PCB 视图**审查；只画了原理图的导出要加 `--view schematic`（缺省视图在
 它上面读到的是 0 器件 0 网络）。
+
+### 一键审查（`checkup`）
+
+编辑器开着、daemon 在跑时，一条命令做完整轮审查——取数据、跑编辑器自己的 ERC/DRC、
+跑离线规则、分模块、每张原理图页出一张画布图，最后写两份报告：
+
+```bash
+boardwise checkup                                   # 焦点工程 → ./checkup/
+boardwise checkup --project <名|uuid> --out DIR      # 多窗口时指哪打哪
+boardwise checkup --file board.epro2 --out DIR       # 没编辑器：离线兜底
+```
+
+`--out` 目录里：`report.json`（契约）、`report.md`（同一份内容，人读）、
+`canvas-<页名>.png`（每张原理图页一张；PCB 页暂不出图）。
+
+退出码：`0` 无 ERROR / `1` 发现 ERROR（主机 ERC 的 error/fatalError 计数、主机 PCB DRC 的逐条、
+自有规则的 ERROR finding 任一命中）/ `2` 输入不可用 / `3` **在线状态不可陈述**（daemon 不通、
+扩展没连上、三级数据路全被拒）——`3` 绝不等于"板子干净"。没跑成的检查记成
+`{checked: false, reason}` 且**不带任何计数**。
+
+`report.json` 的 schema 是 `"boardwise.checkup/2"`：
+
+| 段 | 内容 |
+|---|---|
+| `source` | 这一轮用的是哪一级（`project-file` → `per-page` → `netlist` → `file`）、工程/页身份、宿主与 connector 版本、逐级 `attempts` 与 `notes` |
+| `model` | 解析出的设计：器件数/网络数、位号、跨页重号 |
+| `summary` | 退出码由它决定：`errors[]` / `warnings[]`，每条带 `ref` 指回报告里对应位置 |
+| `drc` | `schematic`（主机 ERC **只有聚合计数**，附逐页读数与合计口径）与 `pcb`（主机逐条树映射后的 groups/叶子句子/totals） |
+| `modules` | 多页工程按页、单页按连通性；每块含器件、findings 索引、命名依据 |
+| `findings` | 离线规则引擎的结果，形态与 `review --json` 一致 |
+| `ai_slots` | 留给模型的三件事：`unknown_parts`（含上榜原因）、`canvas_images`、`summary_template` |
+| `pending` | 空——留着这个键，好让读者能区分"没有欠账"和"键不见了" |
 
 按扩展名自动选择解析器：`.enet` 走网表，`.epro2` 走工程备份（额外打印焊盘 /
 走线 / 过孔数量）。备份若勾选了加密导出则无法读取，此时会提示重新导出时取消

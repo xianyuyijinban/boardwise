@@ -56,48 +56,71 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
 
 ## 3. 审查闭环（朋友主用这条）
 
-### 3.1 导出（人手，在编辑器里）
-编辑器 → 文件 → 导出 → **工程备份**，另存 `.epro2`。
-**导出时取消"加密"**——加密的 `.epro2` 读不了（`review` 退出码 2）。
+> **工作流编译在工具里，skill 只说什么时候调它。** 一条命令把数据取回、把主机 DRC 和自有规则跑完、
+> 把要模型判断的东西（不熟器件、画布图、总结）摆成槽位；skill 不再描述流程步骤，
+> 只描述"看到什么就跑哪条、槽位怎么填"。
 
-### 3.2 离线审查
-```bash
-boardwise review <导出.epro2> --view schematic --json report.json --md report.md
-```
-- `.epro2` 看原理图**必须**加 `--view schematic`：011 家族规则是对着 schematic 模型写的，
-  只有原理图的导出在默认 `pcb` 视图下是空的。
-- 终端逐行打印发现；`report.json`/`report.md` 是同一份结果的两种格式。
-- **不知道导出文件在哪**：`boardwise review --latest [<目录>]` 自动挑目录（含一层子目录）里最新修改的 `.epro2`，选中哪个先打印出来（含 mtime）；不给目录就扫 `~/Downloads`、`~/Desktop`、`E:\LC Project`（存在才扫）。与位置参数 `file` 互斥：同时给只打印一行错误、退出 2，不审任何东西。
-- 退出码：`0` 无 ERROR / `1` 有 ERROR（这是**发现问题**，不是命令失败）/ `2` 文件读不了。
+### 3.1 审板子＝`boardwise checkup`（首选，一条命令）
 
-### 3.3 把发现画回画布（需要 daemon + 编辑器焦点在那张原理图页上）
 ```bash
-boardwise bridge call --action doc.list        # 先拿 pageUuid，并确认焦点工程
-boardwise review-mark report.json --page <pageUuid>
+boardwise checkup                                  # 焦点工程，报告写 checkup/
+boardwise checkup --project <工程名|uuid> --out <目录>   # 多窗口时指哪打哪
+boardwise checkup --file <导出.epro2> --out <目录>       # 断连兜底：纯离线，跳过在线阶段
 ```
-- 终端打一张序号表：`[序号] 级别 规则 位号 marker#N @ (x,y) 一句话`。
-  **marker API 只能画形状、不能写字**，所以这张表就是图例：`marker#N` = 画布上第 N 个红框。
-- 想跳到最后一条 / 只看不画：`--focus 3` / `--no-markers`。
-- 清标记：`boardwise review-mark clear`。**注意 `clear` 没有 page 守卫**：它清的是最前面那块
-  画布，可能不属于你以为的工程（2026-09-21 实测）。
-- 退出码：`0` 全到位 / `1` 部分（哪个位号不在当前页会逐条写明）/ `2` 输入坏或 daemon 不可用。
-- 要留证据图用 `--action export.render`；**不要**用 `boardwise bridge screenshot`
-  （3.2.186 上返回缓存空帧，2026-09-21 实测）。
 
-### 3.4 从 finding 到局部修改（M3 切片，可修范围很窄）
-```bash
-boardwise edit plan    --file <导出.epro2> --rule param-value-mpn-match --designator U3 -o plan.json
-boardwise edit preview plan.json --file <导出.epro2>      # 离线复查，永不写
-boardwise edit apply   plan.json --file <导出.epro2> --json apply.json
-```
-- **当前只有 `param-value-mpn-match`（单器件值）可修**；别的规则会被按名字拒绝。
-- `apply` 走四道保护：写前重读页面 → 只写一个键 → 独立 geometry 回读 → save + 复查；
-  重复执行会认 `already_applied` 且零写入。
-- `apply` 退出码：`0` 已应用（或已应用过）/ `2` 承诺的效果不在板上（写被拒、回读不符、
-  保存被拒、复查仍有该 finding）/ `3` 页状态不可陈述（超时或断连；**不重试**）/
-  `4` plan 的前置条件不再成立或快照过期 / `5` plan 或输入不可用。
-- 落盘诚实度：无"关闭重开"动作时只能报 `saved_unverified`；要 `saved_verified`
-  必须走 关闭重开工程 → 回读/导出 #2 → 再 `review`（见 §6 坑 3、坑 4）。
+产出（`--out` 目录内）：`report.json`（契约）· `report.md`（人读，同一份内容）·
+`canvas-<页名>.png`（每张原理图页一张，PCB 页不出图）。
+
+- **退出码**：`0` 无 ERROR / `1` 有 ERROR（主机 ERC fatalError/error、主机 PCB DRC 逐条、
+  自有规则 ERROR 任一命中）/ `2` 输入不可用 / `3` 在线状态不可陈述（daemon 不通、没 connector、
+  三级数据路全被拒）——`3` 绝不是"板子干净"。
+- **报告自己说数据从哪来**（`source.tier`，缺一级就如实降级）：
+  `project-file` 整工程归档（满血）→ `per-page` 逐页导出合并（跨页连通性按网名，
+  不是追出来的连线）→ `netlist` 仅连通性（无值/无 MPN/无位姿）→ `file` 离线文件。
+  `drc.*.checked=false` + `reason` 一律是"**没查**"，不是"零错误"。
+- 只读：`doc.open` 只切焦点、`userInterface` 恒 false（不弹底部面板），每个阶段 `finally`
+  把焦点复位。旧版 connector 缺某个动作时报告会记 `note` 并降级，不会瞎报。
+
+**AI 要做的三件事（`report.json` 的 `ai_slots` 就是清单，逐条做完再答用户）**：
+
+1. `unknown_parts[]` —— 每条 `{designator, name, mpn, reasons, question}`：
+   去 WebSearch 规格书，核对**周边配置**是否符合典型应用（去耦/上下拉/限流/耐压），
+   顺手确认可用型号。`reasons` 说明它为什么上榜（无 MPN / MPN 的值码解不出 / 无供应商），
+   同一件事按同一个 `question` 回答即可。
+2. `canvas_images[]` —— 每张图 `{page, file}`：**读图**看摆放、位号可读性、网络标识、
+   模块区分度。图在 `--out` 里，路径是相对的：打开 `report.md` 点链接即可。
+3. `summary_template` —— 按模板**原样留槽**填四段（结论先行 / 错误与归因 / 警告提醒 /
+   建议动作），把上面的结论写进去，别重述 `report.json` 的全部内容。
+
+**不要重算工具已经算过的东西**：DRC 计数与 PCB 逐条在 `drc` 段、模块划分在 `modules` 段、
+规则 findings 在 `findings` 段（`summary` 里的 `ref` 指回它们）。模型只补三件事：
+**查不熟的器件、看画布、写总结**。总结写完把 `report.md`（含图）交用户。
+
+### 3.2 断连兜底与单点命令
+
+没编辑器、只要一份规则体检，或要把发现画回画布/改一处值时，走下面这些单点命令。
+**它们不替代 3.1**：3.1 能用就用 3.1。
+
+- **手动导出 + 离线审查**（断连兜底）：编辑器 → 文件 → 导出 → **工程备份**，另存 `.epro2`
+  （**导出时取消"加密"**，加密的读不了 → 退出码 2）。然后
+  `boardwise review <导出.epro2> --view schematic --json report.json --md report.md`
+  —— 看原理图**必须** `--view schematic`（011 家族规则对着 schematic 模型写；默认 `pcb` 视图在
+  schematic-only 导出上是空的）。不知道文件在哪：`review --latest [<目录>]` 自动挑最新的 `.epro2`
+  并先打印它选了哪个。退出码 `0`/`1` 同 3.1，`2` = 文件读不了。
+- **把发现画回画布**（要 daemon + 焦点在那张原理图页）：
+  `boardwise bridge call --action doc.list` 拿 `pageUuid` → `boardwise review-mark report.json --page <uuid>`。
+  终端那张序号表就是图例（marker 只能画形状、不能写字，`marker#N` = 第 N 个红框）；
+  `--focus 3` 跳最后一条、`--no-markers` 只看不画。清标记 `review-mark clear`
+  **没有 page 守卫**（清的是最前面那块画布，2026-09-21 实测）。留证据图用 `export.render`，
+  **不要**用 `bridge screenshot`（3.2.186 返回缓存空帧）。退出码 `0`/`1` 部分成功/`2` 输入坏。
+- **从 finding 到局部修改**（可修范围很窄）：
+  `boardwise edit plan --file <导出.epro2> --rule param-value-mpn-match --designator U3 -o plan.json`
+  → `edit preview plan.json --file ...`（离线复查，永不写）→ `edit apply plan.json --file ... --json apply.json`。
+  **只有 `param-value-mpn-match`（单器件值）可修**，别的规则按名字拒绝。`apply` 四道保护：
+  写前重读页面 → 只写一个键 → 独立 geometry 回读 → save + 复查；重复执行认 `already_applied` 零写入。
+  退出码：`0` 已应用 / `2` 效果不在板上 / `3` 页状态不可陈述（**不重试**）/ `4` 前置条件不再成立 /
+  `5` plan 不可用。落盘诚实度：无"关闭重开"动作时只报 `saved_unverified`；要 `saved_verified`
+  得走 关闭重开工程 → 回读/导出 #2 → 再 `review`（§6 坑 3、坑 4）。
 
 ## 4. 真机纪律（写操作前逐条对，命中即停）
 
