@@ -154,7 +154,11 @@ class PlanTarget:
     #: `sch.place_component` and `sch.geometry` speak).
     x: float | None = None
     y: float | None = None
-    #: `add-component` only: ``wire`` or ``label`` — see CONNECTION_KINDS.
+    #: `add-component` only: ``wire`` or ``label`` — see CONNECTION_KINDS. A
+    #: summary of the first declared connection (the plan's oldest shape, kept so
+    #: a reader of the target block alone still learns the mode); since 029-c the
+    #: **per-connection** ``change.connections[*].kind`` is what apply executes,
+    #: and the two differ whenever a plan mixes a wire with a label.
     connection: str = ""
     #: Why that connection, in one line (the segment it reaches, or the label it
     #: copies). Written into the plan because "it connected somehow" is not a
@@ -173,10 +177,22 @@ class PlanPart:
 
 @dataclass
 class PlanConnection:
-    """One pin of the new part and the net it must end up on."""
+    """One pin of the new part, the net it must reach, **and how** (029-c §①).
+
+    ``kind`` is not optional for an `add-component` plan: 029-b measured what a
+    plan without it does — the ground end was left to "whatever the landing spot
+    happened to touch", the netlist readback said `2→GND MISSING`, and the run
+    failed after placing a part. Every declared connection now carries its own
+    decision, its own evidence line and (for a wire) the point it reaches, so
+    apply executes exactly what the human authorised — one connection at a time.
+    """
 
     pin: str = ""
     net: str = ""
+    kind: str = ""      # wire | label; required by the add-component validation
+    detail: str = ""
+    #: Where a `wire` connection ends (a vertex of that net's own wiring).
+    to: tuple[float, float] | None = None
 
 
 @dataclass
@@ -257,7 +273,13 @@ class ChangePlan:
                     "footprint": (self.change.part or PlanPart()).footprint,
                 },
                 "connections": [
-                    {"pin": item.pin, "net": item.net}
+                    {
+                        "pin": item.pin,
+                        "net": item.net,
+                        "kind": item.kind,
+                        "detail": item.detail,
+                        **({"to": list(item.to)} if item.to else {}),
+                    }
                     for item in self.change.connections
                 ],
                 "recipeSource": self.change.recipe_source,
@@ -480,7 +502,29 @@ def _add_change_from(change: dict[str, Any]) -> PlanChange:
             raise ChangePlanError(
                 f"change.connections[{index}] needs both pin and net, got {item!r}"
             )
-        connections.append(PlanConnection(pin=pin, net=net))
+        kind = item.get("kind")
+        if kind not in CONNECTION_KINDS:
+            raise ChangePlanError(
+                f"change.connections[{index}].kind must be one of "
+                f"{', '.join(CONNECTION_KINDS)}, got {kind!r} — every declared "
+                "connection says how it is made; leaving it to apply is the bug "
+                "029-b measured (placement succeeded, GND never connected)"
+            )
+        target = item.get("to")
+        point: tuple[float, float] | None = None
+        if kind == CONNECTION_WIRE:
+            if not (isinstance(target, (list, tuple)) and len(target) >= 2
+                    and all(isinstance(value, (int, float)) and not isinstance(value, bool)
+                            for value in target[:2])):
+                raise ChangePlanError(
+                    f"change.connections[{index}].to must be [x, y] for a wire "
+                    f"connection (the vertex of that net it reaches), got {target!r}"
+                )
+            point = (float(target[0]), float(target[1]))
+        connections.append(
+            PlanConnection(pin=pin, net=net, kind=str(kind),
+                           detail=str(item.get("detail") or ""), to=point)
+        )
     return PlanChange(
         kind=ADD_COMPONENT_KIND,
         part=PlanPart(
@@ -502,9 +546,9 @@ def add_component_plan(
     connections: list[PlanConnection],
     x: float,
     y: float,
-    connection: str,
-    connection_detail: str,
     recipe_source: str,
+    connection: str = "",
+    connection_detail: str = "",
 ) -> ChangePlan:
     """The second plan shape: a part that does not exist yet (029 §二.2).
 
@@ -518,7 +562,7 @@ def add_component_plan(
     criterion (§一: a difference that is not +1 part +k connections is an
     accident, even when the board looks better).
     """
-    if connection not in CONNECTION_KINDS:
+    if connection and connection not in CONNECTION_KINDS:
         raise ValueError(
             f"connection must be one of {', '.join(CONNECTION_KINDS)}, got {connection!r}"
         )
@@ -538,8 +582,9 @@ def add_component_plan(
             assigned_designator=designator,
             x=float(x),
             y=float(y),
-            connection=connection,
-            connection_detail=connection_detail,
+            connection=connection or (connections[0].kind if connections else ""),
+            connection_detail=connection_detail
+            or (connections[0].detail if connections else ""),
         ),
         change=PlanChange(
             kind=ADD_COMPONENT_KIND,
@@ -557,8 +602,11 @@ def add_component_plan(
         expected_postcondition=[
             f"{designator} exists on the page with value {part.value!r}",
             "its pins sit on "
-            + " and ".join(f"{item.pin}→{item.net}" for item in connections)
-            + f" ({connection}: {connection_detail})",
+            + "; ".join(
+                f"{item.pin}→{item.net} via {item.kind}"
+                + (f" to ({item.to[0]:g}, {item.to[1]:g})" if item.to else "")
+                for item in connections
+            ),
             "the page gained exactly one component and its connections — nothing else moved",
             "target review finding is resolved",
         ],
