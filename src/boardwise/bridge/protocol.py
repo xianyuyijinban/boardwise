@@ -443,37 +443,59 @@ ACTIONS: tuple[Action, ...] = (
         ),
         risk="read",
     ),
+    # --- 026b: the promoted diagnostics action ------------------------------
+    Action(
+        name="sys.connector_status",
+        summary=(
+            "The About box's own read-out, for a caller outside the editor: the "
+            "connection state plus the lifecycle counters that tell an inert "
+            "extension from a missing one — moduleBootstrapObserved (was the bundle "
+            "evaluated at all?), activateObserved (was activate() dispatched?), "
+            "evaluations (how many times), and the background watchdog's state "
+            "(running | unavailable(reason) | not started), which is the difference "
+            "between a window that recovers by itself in the background and one that "
+            "waits for the user to bring it to the front. Read-only: it never starts, "
+            "stops or reconnects anything. If no evaluation has published its runtime "
+            "record, present=false says so rather than guessing."
+        ),
+        params=(),
+        returns=(
+            "{present: bool, readStatus: bool, status: {state, detail?, lastError?, "
+            "paired?, fingerprint?, minConnectorVersion?, connectorOutdated?, "
+            "moduleBootstrapObserved, activateObserved, evaluations, bootstrapAt?, "
+            "activateAt?, watchdog?: {state, reason?, wakes, lastWakeAt?, "
+            "activityPosts, checkIntervalMs, activityTimeoutMs, lastWake}}, "
+            "moduleBootstrapObserved, activateObserved, evaluations} | "
+            "{present: false, error?|observed|note}"
+        ),
+        risk="read",
+    ),
     # --- 026 probe batch: TEMPORARY instrumentation --------------------------
     Action(
         name="sys.worker_probe",
         summary=(
-            "PROBE-ONLY, TEMPORARY (026, to be retired or promoted): three "
-            "measurements the Worker-watchdog design is waiting on. mode=worker "
-            "builds a blob: Worker and reports what the worker says about its own "
-            "scope (`typeof eda` decides form B), a page→worker→page round trip and "
-            "its timer ticks; mode=pageTimer with op=start|read|stop keeps a "
-            "page-side interval timestamp log (how hard is a background window "
-            "throttled — minutes, or frozen?); mode=status reads the About box's own "
-            "lifecycle counters (moduleBootstrapObserved / activateObserved / "
-            "evaluations) off the shared runtime record, which is how a cold start "
-            "after a sideload is judged. Read-only, but it does start a Worker and "
-            "(pageTimer) leaves an interval running until stopped — a failure is "
-            "reported as that failure, never as an empty success."
+            "PROBE-ONLY, TEMPORARY (026b, retires with its answer): the one question "
+            "the probe batch could not answer from a desk — can a native WebSocket "
+            "reach the daemon (ws://127.0.0.1:61190/eda) from the extension page, "
+            "and from a blob: Worker? Both scopes are tried separately and the same "
+            "probe code runs in each, because the page's answer is not evidence "
+            "about the Worker's: if a Worker can open the socket itself, form B' "
+            "(transport inside the Worker) becomes possible. Read-only, and it "
+            "terminates its Worker and revokes its blob URL whether it answered or "
+            "not; a refusal (no Worker, a CSP that blocks blob: or connect-src) is "
+            "reported as that refusal, never as an empty success."
         ),
-        params=("mode", "op", "intervalMs", "maxTicks", "timeoutMs"),
+        params=("mode", "url", "timeoutMs"),
         returns=(
-            "{mode: 'worker', support, blobUrl: {ok, error?}, construct: {ok, kind, "
-            "error?}, messaging: {delivered, ready, ack, roundTripMs, ticks, "
-            "tickIntervalsMs, verdict, raw}, terminated} | "
-            "{op, running, intervalMs, count, intervalsMs, minMs/medianMs/maxMs/"
-            "meanMs, gaps: {over2s, over10s, over60s}, ...} | "
-            "{present, readStatus, status, moduleBootstrapObserved, "
-            "activateObserved, evaluations}"
+            "{mode: 'nativeWs', url, timeoutMs, support: {typeofWebSocket, "
+            "typeofWorker, typeofBlob, typeofUrl}, page: {construct: {ok, error?}, "
+            "opened, messages, sample, events, elapsedMs, verdict}, worker: same "
+            "shape (plus supported/error when no Worker could be built), verdict}"
         ),
         params_schema=(
-            "mode: worker|pageTimer|status (default worker); op: start|read|stop "
-            "(pageTimer); intervalMs: page timer period, default 1000; maxTicks: "
-            "cap, default 900; timeoutMs: worker answer deadline, default 2000"
+            "mode: only nativeWs (the retired worker|pageTimer|workerTimer|"
+            "hostTimer|status modes are refused with BAD_REQUEST); url: default "
+            "ws://127.0.0.1:61190/eda; timeoutMs: 500..20000, default 4000"
         ),
         risk="read",
     ),

@@ -16,6 +16,7 @@
  */
 
 import { PROBE_CHECKS, ADDED_SINCE } from './api-names';
+import { DEFAULT_URL } from './config';
 import { ActionError, isActionError, type ResponseContext } from './protocol';
 import { sysSelfUpdate } from './self-update';
 import { VERSION } from './version';
@@ -6971,356 +6972,37 @@ export const pcbDrcCheck: ActionHandler = async (params, eda) => {
 };
 
 // --------------------------------------------------------------------------
-// 026 probe batch: `sys.worker_probe` — TEMPORARY instrumentation
+// 026b: `sys.connector_status` (product) and the P6 native-WebSocket probe
 // --------------------------------------------------------------------------
 
 /**
- * The Worker source, as a string, for the 026 probe (P1/P2).
+ * The lifecycle counters `About…` shows, for a caller outside the editor.
  *
- * It must be self-contained: a `blob:` Worker has no module resolution and no
- * importScripts privileges we can rely on. Everything it reports is a `typeof`,
- * which is the one read that cannot throw — including for a bare identifier the
- * scope does not have (`typeof eda`), which is exactly the question P2 asks.
+ * This is the `status` mode of the retired `sys.worker_probe`, promoted to a
+ * real read-only action (026b §2.4) because it answers the one question no
+ * other surface can: **is the extension inert?** On 立创 EDA 3.2.149 the host
+ * may evaluate the bundle and never dispatch `activate()` (upstream
+ * #219/#221), and the failure looks from outside exactly like a connector that
+ * is not running at all — no socket, no log, nothing. `moduleBootstrapObserved`
+ * / `activateObserved` / `evaluations` are the three readings that separate
+ * "the host never evaluated our bundle" from "the host evaluated it and never
+ * called us"; `doctor` cannot tell them apart from the daemon side.
+ *
+ * `getStatus()` on the published record is read, rather than a new channel
+ * opened: it is the same `ConnectorStatus` the About box renders, so a
+ * diagnostic call and the box cannot disagree — the rule that kept biting when
+ * two readers of one fact were allowed to exist (024 §About).
+ *
+ * The record lives on the editor object under `__boardwiseTransportRuntime`
+ * (`index.ts`, `sharedRuntimeHost`), and every member read is guarded: on this
+ * host a member read is a trap invocation that can throw, and a diagnostic
+ * action that dies on its own subject is worse than useless.
+ *
+ * Read-only. It never starts, stops or reconnects anything.
  */
-const WORKER_PROBE_SOURCE = `
-const post = (payload) => { try { self.postMessage(payload); } catch (error) { /* nothing to do */ } };
-post({ type: 'ready', at: Date.now(), probes: {
-  self: typeof self,
-  window: typeof window,
-  document: typeof document,
-  eda: typeof eda,
-  // Deliberately a lookup on a *variable* (P2 asks whether a Worker's global
-  // object carries a host eda; it is expected not to) rather than the ambient
-  // globalThis.xxx shape, which this repo forbids in connector source and which
-  // tests/source-guard.test.mjs rightly refuses to let through.
-  globalThisEda: (() => { const host = typeof globalThis === 'undefined' ? null : globalThis; if (!host) return 'no-globalThis'; try { return typeof host['eda']; } catch (e) { return 'threw:' + String(e); } })(),
-  globalThisKeys: (() => { try { return Object.getOwnPropertyNames(globalThis).slice(0, 60); } catch (e) { return String(e); } })(),
-  setInterval: typeof setInterval,
-  setTimeout: typeof setTimeout,
-  postMessage: typeof self.postMessage,
-  importScripts: typeof importScripts,
-  fetch: typeof fetch,
-  indexedDB: typeof indexedDB,
-  location: (typeof location !== 'undefined' ? String(location.href) : null),
-  origin: (typeof location !== 'undefined' ? String(location.origin) : null),
-} });
-let ticks = 0;
-const timer = setInterval(() => {
-  ticks += 1;
-  post({ type: 'tick', ticks, at: Date.now() });
-}, 200);
-self.onmessage = (event) => {
-  post({ type: 'ack', echo: event.data, at: Date.now() });
-  if (event.data && event.data.type === 'stop') clearInterval(timer);
-};
-`;
+export const sysConnectorStatus: ActionHandler = async (_params, eda) => connectorStatusReport(eda);
 
-/**
- * `sys.worker_probe` — TEMPORARY instrumentation for the 026 probe batch.
- *
- * Not a feature. It answers four questions the watchdog design (form A: a Worker
- * alarm; form B: the transport inside the Worker) depends on, and **the honest
- * failure of each is a result**: a host with no `Worker`, a CSP that refuses
- * `blob:` workers, or a Worker that never answers must be reported as exactly
- * that, never as a guess. The batch's only non-negotiable assertion is this one
- * (026 §四): a probe that invents data is worse than a probe that fails.
- *
- * Modes, because one temporary name is easier to retire than three:
- *
- * - `mode: 'worker'` (default) — build a `blob:` Worker, read what it reports
- *   about its own scope (`typeof eda` is P2's question), round-trip a message
- *   from the page and back, collect its timer ticks, then terminate it.
- * - `mode: 'pageTimer'` with `op: start|read|stop` — a page-side `setInterval`
- *   timestamp log (P3: how badly is a background window throttled, or frozen).
- *   `start` leaves an interval running on purpose; the caller stops it.
- * - `mode: 'workerTimer'` with `op: start|read|stop` — the same measurement inside
- *   a Worker that is kept **alive** across calls, so a background stretch can
- *   compare the two clocks tick for tick. Form A of the watchdog rests on
- *   "Worker timers keep running while the page is throttled", and that premise
- *   is measured here rather than assumed.
- * - `mode: 'hostTimer'` with `op: start|read|stop` — the **host's own** timer
- *   (`eda.sys_Timer.setIntervalTimer(id, timeoutMs, callFn, ...args)`), kept
- *   alive across calls. This is the third candidate for the watchdog alarm (P5):
- *   a host timer would be far lighter than a Worker if it keeps firing in a
- *   background window, so its cadence is measured next to the page's and the
- *   Worker's.
- * - `mode: 'status'` — the lifecycle counters `About…` reads
- *   (`moduleBootstrapObserved` / `activateObserved` / `evaluations`), from the
- *   shared runtime record on `eda` (P4: did a cold start bootstrap the module?).
- *
- * The `worker` mode always terminates its Worker and revokes its blob URL, whether
- * it answered or not; `workerTimer` keeps one until `op: 'stop'`.
- */
-export const sysWorkerProbe: ActionHandler = async (params, eda) => {
-  const mode = String(params?.mode ?? 'worker');
-  const timeoutMs = Number.isFinite(Number(params?.timeoutMs))
-    ? Math.min(Math.max(Number(params?.timeoutMs), 200), 20_000)
-    : 2_000;
-
-  if (mode === 'pageTimer') return pageTimerProbe(params);
-  if (mode === 'workerTimer') return workerTimerProbe(params);
-  if (mode === 'hostTimer') return hostTimerProbe(params, eda, mode);
-  if (mode === 'status') return runtimeStatusProbe(eda);
-  if (mode !== 'worker') {
-    throw new ActionError(
-      'BAD_REQUEST',
-      `sys.worker_probe needs params.mode to be worker | pageTimer | workerTimer | hostTimer | status `
-        + `(got ${JSON.stringify(params?.mode)})`,
-    );
-  }
-
-  // --- P1: can this extension page build a Worker at all?
-  const support: Record<string, unknown> = {
-    typeofWorker: typeof (globalThis as any).Worker,
-    typeofSharedWorker: typeof (globalThis as any).SharedWorker,
-    typeofBlob: typeof (globalThis as any).Blob,
-    typeofUrl: typeof (globalThis as any).URL,
-    crossOriginIsolated: typeof (globalThis as any).crossOriginIsolated === 'boolean'
-      ? (globalThis as any).crossOriginIsolated
-      : null,
-    location: (() => {
-      try {
-        return String((globalThis as any).location?.href ?? '');
-      } catch {
-        return '';
-      }
-    })(),
-  };
-  const report: Record<string, unknown> = { mode, support };
-
-  let url = '';
-  let worker: any = null;
-  let blobError = '';
-  try {
-    const blob = new (globalThis as any).Blob([WORKER_PROBE_SOURCE], { type: 'text/javascript' });
-    url = String((globalThis as any).URL.createObjectURL(blob));
-    report.blobUrl = { ok: true, scheme: url.slice(0, 5) };
-  } catch (error) {
-    blobError = String((error as Error)?.message ?? error);
-    report.blobUrl = { ok: false, error: blobError };
-  }
-
-  const messages: any[] = [];
-  let constructed = false;
-  let constructError = '';
-  if (!blobError) {
-    try {
-      worker = new (globalThis as any).Worker(url);
-      constructed = true;
-      report.construct = { ok: true, options: 'classic' };
-    } catch (error) {
-      constructError = String((error as Error)?.message ?? error);
-      report.construct = { ok: false, kind: 'classic', error: constructError };
-      // A CSP that refuses `blob:` workers usually refuses both kinds, but a
-      // module-type refusal is worth separating from a wholesale one.
-      try {
-        worker = new (globalThis as any).Worker(url, { type: 'module' });
-        constructed = true;
-        report.construct = { ok: true, options: 'module', note: 'classic refused, module accepted' };
-      } catch (error2) {
-        report.construct = {
-          ok: false,
-          kind: 'module',
-          error: constructError,
-          moduleError: String((error2 as Error)?.message ?? error2),
-        };
-      }
-    }
-  }
-
-  if (constructed && worker) {
-    const started = Date.now();
-    const pingAt = Date.now();
-    let acked: any = null;
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, timeoutMs);
-      const finish = () => {
-        clearTimeout(timer);
-        resolve();
-      };
-      try {
-        worker.onmessage = (event: any) => {
-          const data = event?.data ?? null;
-          messages.push(data);
-          if (data && data.type === 'ack') acked = data;
-          if (data && data.type === 'ready') {
-            // The round-trip is the second half of P1: page → worker → page.
-            try {
-              worker.postMessage({ type: 'ping', at: pingAt });
-            } catch (error) {
-              messages.push({ type: 'pageSendFailed', error: String((error as Error)?.message ?? error) });
-            }
-          }
-        };
-        worker.onerror = (event: any) => {
-          messages.push({
-            type: 'workerError',
-            message: String(event?.message ?? ''),
-            filename: String(event?.filename ?? ''),
-            lineno: event?.lineno ?? null,
-          });
-        };
-        // Safety net: if the worker answered everything it ever will, stop early.
-        const poll = setInterval(() => {
-          const ticks = messages.filter((m) => m?.type === 'tick').length;
-          if (acked && ticks >= 2) {
-            clearInterval(poll);
-            finish();
-          }
-        }, 50);
-        setTimeout(() => clearInterval(poll), timeoutMs + 50);
-      } catch (error) {
-        messages.push({ type: 'pageSetupFailed', error: String((error as Error)?.message ?? error) });
-        finish();
-      }
-    });
-    const ready = messages.find((m) => m?.type === 'ready') ?? null;
-    const ticks = messages.filter((m) => m?.type === 'tick');
-    report.messaging = {
-      delivered: messages.length > 0,
-      ready: ready ? ready.probes : null,
-      readyAt: ready?.at ?? null,
-      // P2's answer, in the worker's own words: `typeof eda` inside the Worker.
-      ack: acked ? { echo: acked.echo, at: acked.at } : null,
-      roundTripMs: acked ? Number(acked.at) - pingAt : null,
-      ticks: ticks.length,
-      tickIntervalsMs: ticks.slice(1).map((t, i) => Number(t.at) - Number(ticks[i].at)),
-      elapsedMs: Date.now() - started,
-      raw: messages.slice(0, 12),
-      verdict: ready
-        ? (acked ? 'worker-ready-and-round-tripped' : 'worker-ready-no-round-trip')
-        : (messages.length ? 'messages-unrecognised' : `no message within ${timeoutMs} ms`),
-    };
-  } else {
-    report.messaging = {
-      delivered: false,
-      // Present and null rather than absent: "nothing was read" is a reading, and
-      // a missing key would look like a report that simply forgot to say.
-      ready: null,
-      ack: null,
-      ticks: 0,
-      verdict: blobError
-        ? `no worker: blob URL failed (${blobError})`
-        : `no worker: constructor refused (${constructError})`,
-    };
-  }
-
-  // Always clean up: a probe that leaks a worker thread would be a bug of its own.
-  let terminated = false;
-  if (worker) {
-    try {
-      worker.terminate();
-      terminated = true;
-    } catch {
-      terminated = false;
-    }
-  }
-  if (url) {
-    try {
-      (globalThis as any).URL.revokeObjectURL(url);
-    } catch {
-      /* nothing to do */
-    }
-  }
-  report.terminated = terminated;
-  return report;
-};
-
-/**
- * The page-side interval log (026 P3), kept in module scope of the probe.
- *
- * Module scope, not per call: the whole point is to keep ticking while nobody is
- * calling, then be read afterwards. `start` deliberately leaves the interval
- * running.
- */
-const pageTimerState: { timer: any; ticks: number[]; intervalMs: number; startedAt: number } = {
-  timer: null,
-  ticks: [],
-  intervalMs: 0,
-  startedAt: 0,
-};
-
-function pageTimerSummary(): Record<string, unknown> {
-  const ticks = pageTimerState.ticks;
-  const intervals = ticks.slice(1).map((at, index) => at - ticks[index]);
-  const sorted = [...intervals].sort((a, b) => a - b);
-  const sum = intervals.reduce((total, value) => total + value, 0);
-  const gaps = (threshold: number) => intervals.filter((value) => value >= threshold).length;
-  return {
-    running: pageTimerState.timer !== null,
-    intervalMs: pageTimerState.intervalMs,
-    startedAt: pageTimerState.startedAt || null,
-    startedAtIso: pageTimerState.startedAt ? new Date(pageTimerState.startedAt).toISOString() : null,
-    nowAt: Date.now(),
-    elapsedMs: pageTimerState.startedAt ? Date.now() - pageTimerState.startedAt : 0,
-    count: ticks.length,
-    // The distribution, not just a mean: throttling shows up as a few huge gaps
-    // among otherwise punctual ticks, and a mean would hide exactly that.
-    intervalsMs: intervals,
-    minMs: sorted.length ? sorted[0] : null,
-    medianMs: sorted.length ? sorted[Math.floor(sorted.length / 2)] : null,
-    maxMs: sorted.length ? sorted[sorted.length - 1] : null,
-    meanMs: intervals.length ? Math.round(sum / intervals.length) : null,
-    gaps: {
-      over2s: gaps(2_000),
-      over10s: gaps(10_000),
-      over60s: gaps(60_000),
-    },
-    lastTickAt: ticks.length ? ticks[ticks.length - 1] : null,
-  };
-}
-
-function pageTimerProbe(params: Record<string, unknown>): Record<string, unknown> {
-  const op = String(params?.op ?? 'read');
-  if (op === 'start') {
-    if (pageTimerState.timer !== null) {
-      clearInterval(pageTimerState.timer);
-      pageTimerState.timer = null;
-    }
-    const intervalMs = Number.isFinite(Number(params?.intervalMs))
-      ? Math.min(Math.max(Number(params?.intervalMs), 50), 60_000)
-      : 1_000;
-    const maxTicks = Number.isFinite(Number(params?.maxTicks))
-      ? Math.min(Math.max(Number(params?.maxTicks), 10), 10_000)
-      : 900;
-    pageTimerState.ticks = [];
-    pageTimerState.intervalMs = intervalMs;
-    pageTimerState.startedAt = Date.now();
-    pageTimerState.timer = setInterval(() => {
-      pageTimerState.ticks.push(Date.now());
-      if (pageTimerState.ticks.length >= maxTicks) {
-        clearInterval(pageTimerState.timer);
-        pageTimerState.timer = null;
-      }
-    }, intervalMs);
-    return { op, ...pageTimerSummary() };
-  }
-  if (op === 'stop') {
-    if (pageTimerState.timer !== null) {
-      clearInterval(pageTimerState.timer);
-      pageTimerState.timer = null;
-    }
-    return { op, ...pageTimerSummary() };
-  }
-  if (op !== 'read') {
-    throw new ActionError(
-      'BAD_REQUEST',
-      `sys.worker_probe mode=pageTimer needs params.op to be start | read | stop (got ${JSON.stringify(params?.op)})`,
-    );
-  }
-  return { op, ...pageTimerSummary() };
-}
-
-/**
- * The lifecycle counters `About…` shows (026 P4), read off the shared runtime.
- *
- * `getStatus()` on the published record is the same `ConnectorStatus` the About
- * box renders — read here rather than through a new channel, so a cold-start
- * probe and the box cannot disagree. The record lives on `eda` under
- * `__boardwiseTransportRuntime` (`index.ts`, `sharedRuntimeHost`), and the read
- * is guarded: on this host a member read is a trap invocation that can throw.
- */
-function runtimeStatusProbe(eda: Eda): Record<string, unknown> {
+function connectorStatusReport(eda: Eda): Record<string, unknown> {
   const member = readMember(eda, '__boardwiseTransportRuntime');
   if (member.error !== undefined) {
     return { present: false, error: `read __boardwiseTransportRuntime: ${member.error}` };
@@ -7330,7 +7012,7 @@ function runtimeStatusProbe(eda: Eda): Record<string, unknown> {
     return {
       present: false,
       observed: typeof box,
-      note: 'the shared runtime record is not on `eda` — no evaluation published one',
+      note: 'the shared runtime record is not on the editor object — no evaluation published one',
     };
   }
   const getStatus = readMember(box, 'getStatus');
@@ -7360,319 +7042,255 @@ function runtimeStatusProbe(eda: Eda): Record<string, unknown> {
 }
 
 /**
- * The Worker source for the **long-lived** timer probe (`mode: 'workerTimer'`).
+ * One native-WebSocket attempt, in whichever scope asks for it (026b P6).
  *
- * Different from {@link WORKER_PROBE_SOURCE} in the one way that matters: this
- * worker is started and left running, and it timestamps its own ticks, so the
- * question "does a Worker's clock keep running while the *page* is throttled?"
- * can be answered by comparing its intervals with the page's
- * (`mode: 'pageTimer'`) over the same background stretch. Form A of the watchdog
- * rests entirely on that answer, so it is measured rather than assumed.
+ * Written as an ordinary function on purpose: the Worker copy is
+ * `String(nativeWebSocketProbe)` interpolated into the inline worker source, so
+ * the page and the Worker run **the same code** instead of two similar
+ * implementations that can drift — which is what makes their two answers
+ * comparable at all. It therefore closes over nothing: the socket constructor
+ * comes in as `makeSocket`, and the only globals it touches are `Date` and
+ * `setTimeout`, both of which exist in a Worker.
+ *
+ * Nothing is inferred. A constructor that throws is reported with the host's
+ * own message (a CSP refusal reads like a CSP refusal); a socket that opened and
+ * said nothing is `opened, silent`, which is *not* the same reading as "could
+ * not connect"; and the daemon's own first frame — the banner, §3.2 — is kept
+ * verbatim, truncated, as the proof that a real daemon answered.
+ *
+ * What it does **not** prove: that the application handshake (`hello`) would be
+ * accepted over such a socket. That needs the paired token, and pairing is not
+ * this probe's question — see the P6 section of `outputs/026_probe.md`.
  */
-const WORKER_TIMER_SOURCE = `
-const ticks = [];
-let timer = null;
-const post = (payload) => { try { self.postMessage(payload); } catch (error) { /* nothing to do */ } };
-function start(ms) {
-  if (timer) clearInterval(timer);
-  timer = setInterval(() => { const at = Date.now(); ticks.push(at); post({ type: 'tick', n: ticks.length, at }); }, ms);
+async function nativeWebSocketProbe(
+  makeSocket: (url: string) => any,
+  url: string,
+  timeoutMs: number,
+): Promise<Record<string, unknown>> {
+  const started = Date.now();
+  const events: Array<Record<string, unknown>> = [];
+  let socket: any = null;
+  try {
+    socket = makeSocket(url);
+  } catch (error) {
+    return {
+      construct: { ok: false, error: String((error as Error)?.message ?? error) },
+      opened: false,
+      messages: 0,
+      sample: [],
+      events,
+      elapsedMs: Date.now() - started,
+      verdict: 'the WebSocket constructor threw',
+    };
+  }
+
+  let opened = false;
+  let messages = 0;
+  const sample: string[] = [];
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, timeoutMs);
+    const finish = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    try {
+      socket.onopen = () => {
+        opened = true;
+        events.push({ at: Date.now(), type: 'open' });
+      };
+      socket.onmessage = (event: any) => {
+        messages += 1;
+        events.push({ at: Date.now(), type: 'message' });
+        if (sample.length < 3) {
+          const data = event?.data;
+          sample.push(typeof data === 'string' ? data.slice(0, 400) : String(data));
+        }
+        // The daemon speaks first (the banner), so one frame is all this probe
+        // is waiting for.
+        if (messages >= 1) finish();
+      };
+      socket.onerror = () => {
+        events.push({ at: Date.now(), type: 'error' });
+      };
+      socket.onclose = (event: any) => {
+        events.push({
+          at: Date.now(),
+          type: 'close',
+          code: event?.code ?? null,
+          reason: String(event?.reason ?? ''),
+        });
+        finish();
+      };
+    } catch (error) {
+      events.push({ type: 'handlerSetupFailed', error: String((error as Error)?.message ?? error) });
+      finish();
+    }
+  });
+
+  try {
+    socket.close(1000, 'boardwise probe done');
+  } catch {
+    /* already gone */
+  }
+
+  return {
+    construct: { ok: true },
+    opened,
+    messages,
+    sample,
+    events,
+    elapsedMs: Date.now() - started,
+    verdict: opened
+      ? (messages > 0 ? 'opened, and the daemon spoke first' : 'opened, silent')
+      : 'never opened',
+  };
 }
-self.onmessage = (event) => {
-  const data = event && event.data ? event.data : {};
-  if (data.type === 'start') { start(Number(data.intervalMs) || 1000); post({ type: 'started', intervalMs: Number(data.intervalMs) || 1000, at: Date.now() }); }
-  else if (data.type === 'stop') { if (timer) clearInterval(timer); timer = null; post({ type: 'stopped', count: ticks.length, at: Date.now() }); }
-  else if (data.type === 'read') { post({ type: 'ticks', at: Date.now(), ticks: ticks.slice() }); }
-};
-`;
 
 /**
- * The live Worker of `mode: 'workerTimer'`, in module scope of the probe.
+ * The Worker half of the P6 probe: the *same* {@link nativeWebSocketProbe}, run
+ * inside a `blob:` Worker.
  *
- * One worker, kept alive across calls on purpose: the measurement spans a
- * background stretch during which nobody calls, and a worker that was terminated
- * between calls could not be throttled *or* survive.
+ * This is the question that decides whether form B′ exists at all: if a Worker
+ * can open the daemon socket itself, the transport could move wholesale into
+ * the Worker and the page would only execute `eda` calls. The page's own
+ * answer is not evidence about this one — a Worker obeys its own CSP
+ * (`connect-src` is inherited in most engines, but "most" is what probes are
+ * for).
+ *
+ * The probe is terminated and its URL revoked whether it answered or not: a
+ * probe that leaks a thread is a bug of its own, and 026 P1 measured that the
+ * round trip works, so there is nothing to keep alive.
+ *
+ * Built by a function rather than a constant so the tests can read the exact
+ * text the Worker will run — including whether it still parses, which is the
+ * real risk of interpolating a function into a string.
  */
-const workerTimerState: {
-  worker: any;
-  url: string;
-  ticks: number[];
-  ownTicks: number[];
-  startedAt: number;
-  intervalMs: number;
-  error: string;
-  notes: string[];
-} = { worker: null, url: '', ticks: [], ownTicks: [], startedAt: 0, intervalMs: 0, error: '', notes: [] };
+export function nativeWsProbeWorkerSource(): string {
+  return `
+var makeSocket = function (url) { return new WebSocket(url); };
+var probe = ${String(nativeWebSocketProbe)};
+self.onmessage = function (event) {
+  var data = (event && event.data) ? event.data : {};
+  if (data.type !== 'probe') return;
+  Promise.resolve(probe(makeSocket, String(data.url), Number(data.timeoutMs) || 4000)).then(
+    function (report) { try { self.postMessage({ type: 'nativeWs', report: report }); } catch (error) { /* page gone */ } },
+    function (error) { try { self.postMessage({ type: 'nativeWs', error: String(error) }); } catch (error2) { /* page gone */ } }
+  );
+};
+`;
+}
 
-function stopWorkerTimer(): boolean {
-  let stopped = false;
-  if (workerTimerState.worker) {
-    try {
-      workerTimerState.worker.postMessage({ type: 'stop' });
-      workerTimerState.worker.terminate();
-      stopped = true;
-    } catch {
-      stopped = false;
-    }
+async function workerNativeWsProbe(url: string, timeoutMs: number): Promise<Record<string, unknown>> {
+  const setup: Record<string, unknown> = {};
+  let worker: any = null;
+  let blobUrl = '';
+  try {
+    const blob = new (globalThis as any).Blob([nativeWsProbeWorkerSource()], { type: 'text/javascript' });
+    blobUrl = String((globalThis as any).URL.createObjectURL(blob));
+    setup.blobUrl = { ok: true, scheme: blobUrl.slice(0, 5) };
+    worker = new (globalThis as any).Worker(blobUrl);
+    setup.construct = { ok: true };
+  } catch (error) {
+    // The honest failure again (P1's rule, unchanged): no Worker means this
+    // half of the question was not answered, and saying so is the answer.
+    return {
+      supported: false,
+      ...setup,
+      error: String((error as Error)?.message ?? error),
+      verdict: 'no Worker — the Worker half of P6 is unanswered by this host',
+    };
   }
-  if (workerTimerState.url) {
+
+  try {
+    const report = await new Promise<Record<string, unknown>>((resolve) => {
+      const timer = setTimeout(
+        () => resolve({ error: `no answer from the Worker within ${timeoutMs} ms`, timedOut: true }),
+        timeoutMs + 500,
+      );
+      const finish = (value: Record<string, unknown>) => {
+        clearTimeout(timer);
+        resolve(value);
+      };
+      worker.onmessage = (event: any) => {
+        const data = event?.data ?? null;
+        if (!data) return;
+        if (data.type === 'nativeWs' && data.report) finish({ ...data.report });
+        else if (data.type === 'nativeWs') finish({ error: String(data.error ?? 'unknown failure') });
+      };
+      worker.onerror = (event: any) => {
+        finish({ error: `the Worker reported an error: ${String(event?.message ?? '')}`, workerError: true });
+      };
+      worker.postMessage({ type: 'probe', url, timeoutMs });
+    });
+    return { supported: true, ...setup, ...report };
+  } finally {
     try {
-      (globalThis as any).URL.revokeObjectURL(workerTimerState.url);
+      worker.terminate();
+    } catch {
+      /* nothing to do */
+    }
+    try {
+      (globalThis as any).URL.revokeObjectURL(blobUrl);
     } catch {
       /* nothing to do */
     }
   }
-  workerTimerState.worker = null;
-  workerTimerState.url = '';
-  return stopped;
-}
-
-function intervalSummary(ticks: number[]): Record<string, unknown> {
-  const intervals = ticks.slice(1).map((at, index) => at - ticks[index]);
-  const sorted = [...intervals].sort((a, b) => a - b);
-  const sum = intervals.reduce((total, value) => total + value, 0);
-  const gaps = (threshold: number) => intervals.filter((value) => value >= threshold).length;
-  return {
-    count: ticks.length,
-    intervalsMs: intervals,
-    minMs: sorted.length ? sorted[0] : null,
-    medianMs: sorted.length ? sorted[Math.floor(sorted.length / 2)] : null,
-    maxMs: sorted.length ? sorted[sorted.length - 1] : null,
-    meanMs: intervals.length ? Math.round(sum / intervals.length) : null,
-    gaps: { over2s: gaps(2_000), over10s: gaps(10_000), over60s: gaps(60_000) },
-    firstAt: ticks.length ? ticks[0] : null,
-    lastAt: ticks.length ? ticks[ticks.length - 1] : null,
-  };
-}
-
-function workerTimerProbe(params: Record<string, unknown>): Record<string, unknown> {
-  const op = String(params?.op ?? 'read');
-  if (op === 'start') {
-    const intervalMs = Number.isFinite(Number(params?.intervalMs))
-      ? Math.min(Math.max(Number(params.intervalMs), 50), 60_000)
-      : 1_000;
-    stopWorkerTimer();
-    workerTimerState.ticks = [];
-    workerTimerState.ownTicks = [];
-    workerTimerState.notes = [];
-    workerTimerState.startedAt = Date.now();
-    workerTimerState.intervalMs = intervalMs;
-    workerTimerState.error = '';
-    try {
-      const blob = new (globalThis as any).Blob([WORKER_TIMER_SOURCE], { type: 'text/javascript' });
-      const url = String((globalThis as any).URL.createObjectURL(blob));
-      const worker = new (globalThis as any).Worker(url);
-      workerTimerState.worker = worker;
-      workerTimerState.url = url;
-      worker.onmessage = (event: any) => {
-        const data = event?.data ?? null;
-        if (!data) return;
-        if (data.type === 'tick' && typeof data.at === 'number') workerTimerState.ticks.push(data.at);
-        else if (data.type === 'ticks' && Array.isArray(data.ticks)) workerTimerState.ownTicks = data.ticks;
-        else if (data.type === 'started' || data.type === 'stopped') workerTimerState.notes.push(data.type);
-      };
-      worker.onerror = (event: any) =>
-        workerTimerState.notes.push(`workerError:${String(event?.message ?? '')}`);
-      worker.postMessage({ type: 'start', intervalMs });
-    } catch (error) {
-      // The honest failure again: a worker that could not be built is not a
-      // running measurement, whatever the caller hoped for.
-      workerTimerState.error = String((error as Error)?.message ?? error);
-      workerTimerState.worker = null;
-    }
-    // The interval summary is present even when nothing ticked: a reader must be
-    // able to tell "zero ticks" from "the key is missing".
-    return { op, ...workerTimerStatus(), ...intervalSummary(workerTimerState.ticks) };
-  }
-  if (op === 'stop') {
-    const running = workerTimerState.worker !== null;
-    const stopped = stopWorkerTimer();
-    return { op, running, stopped, ...workerTimerStatus(), ...intervalSummary(workerTimerState.ticks) };
-  }
-  if (op !== 'read') {
-    throw new ActionError(
-      'BAD_REQUEST',
-      `sys.worker_probe mode=workerTimer needs params.op to be start | read | stop (got ${JSON.stringify(params?.op)})`,
-    );
-  }
-  if (workerTimerState.worker) {
-    try {
-      workerTimerState.worker.postMessage({ type: 'read' });
-    } catch {
-      /* the page-side list still stands */
-    }
-  }
-  return { op, ...workerTimerStatus(), ...intervalSummary(workerTimerState.ticks) };
 }
 
 /**
- * The host's own timer (026 P5), the third candidate for the watchdog alarm.
+ * `sys.worker_probe` — what is left of the 026 instrumentation: the P6 question.
  *
- * `eda.sys_Timer.setIntervalTimer(id, timeoutMs, callFn, ...args)` is a *host*
- * API: the callback is invoked by the editor, not by the page's event loop, so
- * the question P3 answers for page timers — "does it keep running in a
- * background window?" — has to be asked of this one too, and the answer decides
- * whether the watchdog needs a Worker at all (a host timer would be an order of
- * magnitude lighter: no Worker, no blob URL, no message protocol).
+ * The four measurement modes of the probe batch (`worker`, `pageTimer`,
+ * `workerTimer`, `hostTimer`) were retired with their answers (026b §2.4, and
+ * `outputs/026_probe.md`): each was a one-off reading, and two of them left a
+ * timer or an interval behind in the page or in the host. `status` was promoted
+ * to `sys.connector_status` above, where it belongs as a product.
  *
- * The callback records its own timestamps *and* the arguments it was handed, so
- * the declared `...args` pass-through is measured rather than assumed.
+ * What remains is the one question the probe batch could not answer from a
+ * desk: **can a native `WebSocket` reach the daemon from the extension page,
+ * and from a Worker?** It runs on the machine (batch 2b), is read-only, and
+ * leaves nothing behind — and it goes when its answer does.
  */
-const hostTimerState: {
-  id: string;
-  ticks: number[];
-  startedAt: number;
-  intervalMs: number;
-  oneShot: boolean;
-  callbackArgs: unknown;
-  returned: unknown;
-  error: string;
-  facts: Record<string, unknown>;
-} = {
-  id: '',
-  ticks: [],
-  startedAt: 0,
-  intervalMs: 0,
-  oneShot: false,
-  callbackArgs: undefined,
-  returned: undefined,
-  error: '',
-  facts: {},
-};
-
-function hostTimerApi(eda: Eda): { timer: any; facts: Record<string, unknown> } {
-  const ns = readMember(eda, 'sys_Timer');
-  const facts: Record<string, unknown> = {
-    namespace: typeof ns.value,
-    setIntervalTimer: 'namespace-absent',
-    setTimeoutTimer: 'namespace-absent',
-    clearIntervalTimer: 'namespace-absent',
-    clearTimeoutTimer: 'namespace-absent',
-  };
-  const timer = ns.value;
-  if (!timer || typeof timer !== 'object') return { timer: null, facts };
-  for (const name of ['setIntervalTimer', 'setTimeoutTimer', 'clearIntervalTimer', 'clearTimeoutTimer']) {
-    const member = readMember(timer, name);
-    facts[name] = typeof member.value === 'function' ? `function/${member.value.length}` : typeof member.value;
-  }
-  return { timer, facts };
-}
-
-function hostTimerProbe(params: Record<string, unknown>, eda: Eda, mode: string): Record<string, unknown> {
-  const op = String(params?.op ?? 'read');
-  const { timer, facts } = hostTimerApi(eda);
-  if (op === 'start') {
-    const intervalMs = Number.isFinite(Number(params?.intervalMs))
-      ? Math.min(Math.max(Number(params?.intervalMs), 50), 60_000)
-      : 1_000;
-    const id = String(params?.id ?? 'boardwise-probe');
-    const oneShot = params?.oneShot === true;
-    const setter = oneShot ? 'setTimeoutTimer' : 'setIntervalTimer';
-    hostTimerState.id = id;
-    hostTimerState.ticks = [];
-    hostTimerState.startedAt = Date.now();
-    hostTimerState.intervalMs = intervalMs;
-    hostTimerState.oneShot = oneShot;
-    hostTimerState.callbackArgs = undefined;
-    hostTimerState.returned = undefined;
-    hostTimerState.error = '';
-    hostTimerState.facts = { ...facts, requested: setter };
-    if (!timer) {
-      hostTimerState.error = 'sys_Timer is not an object on this host';
-      return { op, mode, ...hostTimerStatus(), ...intervalSummary(hostTimerState.ticks) };
-    }
-    const setMember = readMember(timer, setter);
-    if (typeof setMember.value !== 'function') {
-      hostTimerState.error = `${setter} is ${typeof setMember.value}, not a function`;
-      return { op, mode, ...hostTimerStatus(), ...intervalSummary(hostTimerState.ticks) };
-    }
-    // The callback must survive being called from *outside* this action's own
-    // stack — that is the whole question — so it is a plain closure over module
-    // state, and it records what the host hands it.
-    const callback = (...args: unknown[]) => {
-      hostTimerState.ticks.push(Date.now());
-      if (hostTimerState.callbackArgs === undefined) hostTimerState.callbackArgs = args;
-    };
-    try {
-      const returned = setMember.value.call(timer, id, intervalMs, callback, 'probe-arg', 42);
-      hostTimerState.returned = returned;
-      if (returned === false) {
-        hostTimerState.error = `${setter} answered false — the host refused to set the timer`;
-      }
-    } catch (error) {
-      hostTimerState.error = `${setter} threw: ${String((error as Error)?.message ?? error)}`;
-    }
-    // The summary rides along on every exit from `start`, so "zero ticks" is a
-    // reading rather than a missing key.
-    return { op, mode, ...hostTimerStatus(), ...intervalSummary(hostTimerState.ticks) };
-  }
-  if (op === 'stop') {
-    const id = hostTimerState.id || String(params?.id ?? 'boardwise-probe');
-    let cleared: unknown = null;
-    let clearError = '';
-    const clearName = hostTimerState.oneShot ? 'clearTimeoutTimer' : 'clearIntervalTimer';
-    if (timer) {
-      const clearMember = readMember(timer, clearName);
-      if (typeof clearMember.value === 'function') {
-        try {
-          cleared = clearMember.value.call(timer, id);
-        } catch (error) {
-          clearError = `${clearName} threw: ${String((error as Error)?.message ?? error)}`;
-        }
-      } else {
-        clearError = `${clearName} is ${typeof clearMember.value}`;
-      }
-    } else {
-      clearError = 'sys_Timer is not an object on this host';
-    }
-    return {
-      op, mode, cleared, ...(clearError ? { clearError } : {}),
-      ...hostTimerStatus(), ...intervalSummary(hostTimerState.ticks),
-    };
-  }
-  if (op !== 'read') {
+export const sysWorkerProbe: ActionHandler = async (params) => {
+  const mode = String(params?.mode ?? 'nativeWs');
+  if (mode !== 'nativeWs') {
     throw new ActionError(
       'BAD_REQUEST',
-      `sys.worker_probe mode=hostTimer needs params.op to be start | read | stop (got ${JSON.stringify(params?.op)})`,
+      `sys.worker_probe now has exactly one mode, nativeWs (got ${JSON.stringify(params?.mode)}); `
+        + 'the worker | pageTimer | workerTimer | hostTimer | status modes were retired in 026b',
     );
   }
-  return { op, mode, ...hostTimerStatus(), ...intervalSummary(hostTimerState.ticks) };
-}
-
-function hostTimerStatus(): Record<string, unknown> {
-  return {
-    timerId: hostTimerState.id || null,
-    oneShot: hostTimerState.oneShot,
-    running: hostTimerState.startedAt > 0 && hostTimerState.error === '',
-    intervalMs: hostTimerState.intervalMs,
-    startedAt: hostTimerState.startedAt || null,
-    startedAtIso: hostTimerState.startedAt ? new Date(hostTimerState.startedAt).toISOString() : null,
-    nowAt: Date.now(),
-    elapsedMs: hostTimerState.startedAt ? Date.now() - hostTimerState.startedAt : 0,
-    // What the host handed the callback (`...args` pass-through, measured) and
-    // what the setter answered.
-    callbackArgs: hostTimerState.callbackArgs === undefined ? null : hostTimerState.callbackArgs,
-    setterReturned: hostTimerState.returned === undefined ? null : hostTimerState.returned,
-    facts: hostTimerState.facts,
-    ...(hostTimerState.error ? { error: hostTimerState.error } : {}),
+  const url = String(params?.url ?? DEFAULT_URL);
+  const timeoutMs = Number.isFinite(Number(params?.timeoutMs))
+    ? Math.min(Math.max(Number(params?.timeoutMs), 500), 20_000)
+    : 4_000;
+  const report: Record<string, unknown> = {
+    mode,
+    url,
+    timeoutMs,
+    support: {
+      typeofWebSocket: typeof (globalThis as any).WebSocket,
+      typeofWorker: typeof (globalThis as any).Worker,
+      typeofBlob: typeof (globalThis as any).Blob,
+      typeofUrl: typeof (globalThis as any).URL,
+    },
   };
-}
+  // The page first, then the Worker: two independent answers, side by side, so
+  // "the page can reach the daemon" cannot be read as "the Worker can too".
+  report.page = await nativeWebSocketProbe(
+    (target: string) => new (globalThis as any).WebSocket(target),
+    url,
+    timeoutMs,
+  );
+  report.worker = await workerNativeWsProbe(url, timeoutMs);
+  report.verdict = (report.page as any)?.messages > 0 && (report.worker as any)?.messages > 0
+    ? 'both scopes reached the daemon — form B′ is at least possible'
+    : ((report.page as any)?.messages > 0
+        ? 'the page reached the daemon; a Worker did not — form B′ is not possible on this host'
+        : 'the page did not reach the daemon either — native WebSocket is not a route here');
+  return report;
+};
 
-function workerTimerStatus(): Record<string, unknown> {
-  return {
-    running: workerTimerState.worker !== null,
-    intervalMs: workerTimerState.intervalMs,
-    startedAt: workerTimerState.startedAt || null,
-    startedAtIso: workerTimerState.startedAt ? new Date(workerTimerState.startedAt).toISOString() : null,
-    nowAt: Date.now(),
-    elapsedMs: workerTimerState.startedAt ? Date.now() - workerTimerState.startedAt : 0,
-    // The worker's own tick list (from its `read` answer), when it arrived: the
-    // page can be throttled and defer these messages, and the worker's clock is
-    // the thing under test.
-    workerOwnTickCount: workerTimerState.ownTicks.length,
-    ...(workerTimerState.error ? { error: workerTimerState.error } : {}),
-    ...(workerTimerState.notes.length ? { notes: workerTimerState.notes } : {}),
-  };
-}
 /**
  * The actions `sys.probe`'s `call` mode may dispatch to, and why the list is short.
  *
@@ -7689,9 +7307,10 @@ function workerTimerStatus(): Record<string, unknown> {
  * would bypass it — and a bypass that can bring a document into existence is
  * exactly the hole the gate was built to close. Reads have no gate to bypass.
  *
- * `sys.worker_probe` is **not** on this list even though it is read-only: it is
- * temporary instrumentation (026), and the catalogue entry plus a daemon restart
- * is the documented way to reach it — a probe that needed the bypass would be
+ * Neither new action is on this list. `sys.connector_status` is a real
+ * catalogue entry (026b §2.4) and is reached the documented way; `sys.worker_probe`
+ * is what is left of the temporary instrumentation — exactly one mode, the P6
+ * native-WebSocket question — and a probe that needed the bypass would be
  * measuring a path nobody will keep.
  */
 const PROBE_CALL_ACTIONS: Record<string, ActionHandler> = {
@@ -7758,8 +7377,13 @@ export function buildHandlers(eda: Eda): Record<string, BoundHandler> {
     'export.fab': bind(exportFab),
     'lib.recommend': bind(libRecommend),
     'review.mark': bind(reviewMark),
-    // 026 probe batch, TEMPORARY: Worker capability, the page-side interval log
-    // and the About-box lifecycle counters. Retired or promoted by 026 §五/§六.
+    // 026b §2.4: the About box's own counters, promoted from the probe where
+    // they answered issue #4 (an extension the host never activated looks
+    // identical from outside to one that never loaded).
+    'sys.connector_status': bind(sysConnectorStatus),
+    // 026b, TEMPORARY and down to one mode: can a native WebSocket reach the
+    // daemon from the page, and from a Worker? (P6, run in batch 2b.) The
+    // answer retires this action.
     'sys.worker_probe': bind(sysWorkerProbe),
   };
 }
