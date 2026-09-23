@@ -12,6 +12,13 @@ connector/node_modules/
 connector/dist/
 connector/*.eext
 
+# PyInstaller's output for the single-file friend build (028 batch 3a). The
+# artifact is a release attachment, not a source file: `packaging/build_exe.py`
+# rebuilds it byte-for-byte from the sources plus the connector bundle.
+packaging/build/
+packaging/out/
+packaging/*.spec.bak
+
 # Root-level probe/debug scratch from live troubleshooting sessions. Evidence
 # worth keeping lives in evidence/; these were one-shot dumps.
 .probe_*.json
