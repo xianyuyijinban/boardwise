@@ -21,9 +21,12 @@ Three rules the rest of the slice leans on:
   reviewer can predict both before reading the code.
 * **Refusals say what is missing.** An exhausted ladder names the positions it
   tried and what occupies them; a net that cannot be connected names both
-  options that were checked. No fallback to the origin, no silent label — the
-  M2 rules ("don't connect by label and call it done", "don't quietly choose")
-  are enforced by the absence of a code path, not by a comment.
+  options that were checked. No fallback to the origin, and no unannounced
+  label: a label is a named outcome of `choose_connection` (the page's own habit
+  for that net, or the ground exception of 029-c), never something apply slips in
+  when a wire would not reach. The M2 rules ("don't connect by label and call it
+  done", "don't quietly choose") are enforced by the shape of that decision, not
+  by a comment.
 
 Nothing here talks to the bridge: the geometry it reads is a `sch.geometry`
 dump, which the CLI fetches.
@@ -105,7 +108,12 @@ class LadderExhausted(Exception):
 
 
 class NoConnectionOption(Exception):
-    """Neither a nearby wire nor an existing label of that net — refused, not guessed."""
+    """No nearby wire of that net, no label of it on the page, not a ground net.
+
+    All three checks are named in the message (029-c added the ground exception),
+    because the operator's next move — which wire to draw — depends on knowing
+    which of them failed.
+    """
 
     def __init__(self, net: str, detail: str):
         self.net = net
@@ -133,6 +141,8 @@ class ConnectionChoice:
 
     kind: str  # changeplan.CONNECTION_WIRE / CONNECTION_LABEL
     detail: str
+    #: Where the wire ends, for a `wire` choice (a vertex of that net).
+    to: tuple[float, float] | None = None
 
 
 def _state_of(entry: Any) -> dict[str, Any]:
@@ -172,6 +182,68 @@ def component_origins(geometry: Any) -> dict[str, tuple[float, float]]:
             continue
         origins.setdefault(name, (x, y))
     return origins
+
+
+def primitive_id_of(geometry: Any, designator: str) -> str:
+    """The canvas id of one component, from a `sch.geometry` dump (029-c).
+
+    Needed for the branch where the placement's outcome went unknown but the
+    read-back shows the part anyway: the write's own answer carried no id, and
+    the part's pins can only be read by id (`sch.component_pins`).
+    """
+    if not isinstance(geometry, dict):
+        return ""
+    for entry in geometry.get("components") or []:
+        if not isinstance(entry, dict):
+            continue
+        state = _state_of(entry)
+        name = _text(state.get("Designator"))
+        if name == designator:
+            return str(entry.get("primitiveId") or state.get("PrimitiveId") or "")
+    return ""
+
+
+def pin_points(payload: Any) -> dict[str, tuple[float, float]]:
+    """``pinNumber -> (x, y)`` from a `sch.component_pins` answer (029-c).
+
+    This is the coordinate a wire has to *start* at. Measured on 3.2.186: a
+    placed capacitor's pins sit **20 units either side of its origin**, so a wire
+    drawn from the landing spot (which is the origin) touches neither — 029-b
+    read `1→NET4 ok` off one export and 029-c re-measured the same page as the
+    part sitting on its own auto net, which is what a wire that reaches nothing
+    looks like. The pin's reported `X`/`Y` is the connection end (the outer end
+    of the pin's own length), which is the point the editor joins wires to.
+    """
+    points: dict[str, tuple[float, float]] = {}
+    if not isinstance(payload, dict):
+        return points
+    for item in payload.get("pins") or []:
+        if not isinstance(item, dict):
+            continue
+        number = _text(item.get("PinNumber")) or _text(item.get("PinName"))
+        x, y = _number(item.get("X")), _number(item.get("Y"))
+        if number and x is not None and y is not None:
+            points.setdefault(number, (x, y))
+    return points
+
+
+def wire_route(
+    anchor: tuple[float, float], target: tuple[float, float]
+) -> list[tuple[float, float]]:
+    """The polyline from a pin to its target, **orthogonal** by construction (029-c).
+
+    Measured on 3.2.186: `sch.place_wire` with a diagonal segment never returns —
+    the call hangs until the daemon's 30 s timeout, twice out of twice, while the
+    same call with an axis-aligned segment answers in ~0.4 s. The corner goes at
+    ``(anchor.x, target.y)``: the first run leaves the pin along the axis it points
+    at, which keeps it clear of the neighbouring pin (a run along the pin row would
+    cross the part's own body). Same discipline `engines/layout.py` routes on.
+    """
+    ax, ay = float(anchor[0]), float(anchor[1])
+    tx, ty = float(target[0]), float(target[1])
+    if ax == tx or ay == ty:
+        return [(ax, ay), (tx, ty)]
+    return [(ax, ay), (ax, ty), (tx, ty)]
 
 
 def occupied_points(geometry: Any) -> list[tuple[float, float]]:
@@ -311,24 +383,22 @@ def nearest_wire_point(
     return best
 
 
-def choose_connection(net: str, spot: tuple[float, float], geometry: Any) -> ConnectionChoice:
-    """Wire or label — decided by two rules, refused when neither holds (§二.4).
+def choose_connection(net: str, spot: tuple[float, float], geometry: Any):
+    """How **one** declared connection is made (029-c §①), or a refusal.
 
-    The order is the task book's: a nearby wire of **that net** first (it is the
-    connection that keeps the decoupling loop short, which is the whole reason
-    the capacitor is being added), then the page's own label habit for that net
-    (a label only joins a net the board already names that way, so it copies a
-    convention instead of inventing one). Neither → :class:`NoConnectionOption`,
-    whose message names both checks.
+    Three outcomes, in the task book's order:
 
-    The net filter is not decoration: the machine sends each wire's own ``Net``
-    (measured 029-b), so "nearest wire" used to be able to pick the wrong one —
-    the weakness 029 §六 verdict 3 sent this batch to look for. With the filter a
-    mis-connection is impossible by construction, and what remains to verify on
-    the machine is only whether the *stub* reaches the pin (which the netlist
-    readback answers).
+    1. **wire** — a vertex of *that net's own* wiring is within
+       :data:`CONNECT_RADIUS`. Short loop, no name to invent.
+    2. **label** — allowed when either the page already labels that net (copying
+       its convention) **or** the net is a ground net. Ground is the deliberate
+       exception: `GND` is how *every* schematic says ground, so requiring a
+       label precedent for it would refuse the most standard drawing there is.
+       Which of the two reasons applied is written into the detail.
+    3. neither → :class:`NoConnectionOption`, naming both checks.
     """
     from ..core.changeplan import CONNECTION_LABEL, CONNECTION_WIRE
+    from ..core.model import is_ground_net
 
     near = nearest_wire_point(spot, geometry, net)
     if near is not None and near[2] <= CONNECT_RADIUS:
@@ -338,8 +408,17 @@ def choose_connection(net: str, spot: tuple[float, float], geometry: Any) -> Con
                 f"a short wire to the existing {net!r} segment at ({near[0]:g}, {near[1]:g}), "
                 f"{near[2]:.0f} units away (limit {CONNECT_RADIUS:g})"
             ),
+            to=(near[0], near[1]),
         )
     labels = net_label_names(geometry)
+    if is_ground_net(net):
+        return ConnectionChoice(
+            kind=CONNECTION_LABEL,
+            detail=(
+                f"a net label {net!r}: the net is a ground net, and naming ground is "
+                "how a schematic states it even when this page shows no label precedent"
+            ),
+        )
     if net in labels:
         return ConnectionChoice(
             kind=CONNECTION_LABEL,
@@ -357,9 +436,34 @@ def choose_connection(net: str, spot: tuple[float, float], geometry: Any) -> Con
             if near is not None
             else "(the page has no wire points at all)"
         )
-        + f", and this page uses no label named {net!r} — 两种连接手段都不成立，"
-        "拒绝建 plan（不用全脚标签假装连通）",
+        + f", and this page uses no label named {net!r} (it is not a ground net "
+        "either, which would have allowed one) — 两种连接手段都不成立，拒绝建 plan"
+        "（不用全脚标签假装连通）",
     )
+
+
+def choose_connections(
+    pairs: Sequence[tuple[str, str]], spot: tuple[float, float], geometry: Any
+) -> list[Any]:
+    """One :class:`~boardwise.core.changeplan.PlanConnection` per declared pin.
+
+    Every declared connection decides for itself, and a refusal on any of them
+    refuses the whole plan: a part placed with three of its four pins connected
+    is exactly the half-done state 029-b's case a produced, and it is worse than
+    no plan because it looks finished.
+    """
+    from ..core.changeplan import PlanConnection
+
+    chosen = []
+    for pin, net in pairs:
+        choice = choose_connection(net, spot, geometry)
+        chosen.append(
+            PlanConnection(
+                pin=pin, net=net, kind=choice.kind, detail=choice.detail,
+                to=getattr(choice, "to", None),
+            )
+        )
+    return chosen
 
 
 def probe_already_applied(

@@ -44,7 +44,6 @@ from .core.changeplan import (
     CONNECTION_KINDS,
     ChangePlan,
     ChangePlanError,
-    PlanConnection,
     PlanPart,
     PlanSource,
     add_component_plan,
@@ -5488,7 +5487,6 @@ def _cmd_edit_plan_add_component(args: argparse.Namespace) -> int:
     import json
 
     from .engines import addcomponent
-    from .core.changeplan import CONNECTION_LABEL, CONNECTION_WIRE  # noqa: F401 - documented pair
 
     report_hint = ""
     report_path = Path(args.report)
@@ -5640,32 +5638,44 @@ def _cmd_edit_plan_add_component(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 5
+        # The *new part's* pins, not the anchor's (029-b: using the anchor's pin
+        # number made both connections claim pin 2 and the decoupled net became
+        # GND), and **each one decides how it is made** (029-c §①): 029-b's case a
+        # executed only the first connection and left GND to "whatever the landing
+        # spot touched", which the netlist readback then refused.
         try:
-            connection = addcomponent.choose_connection(net, (spot.x, spot.y), geometry)
+            connections = addcomponent.choose_connections(
+                [("1", net), ("2", "GND")], (spot.x, spot.y), geometry
+            )
         except addcomponent.NoConnectionOption as exc:
             print(f"boardwise edit plan: {exc}", file=sys.stderr)
             return 5
+        for item in connections:
+            print(f"connection: {item.pin}→{item.net} via {item.kind} — {item.detail}")
         assigned = addcomponent.allocate_designator(origins.keys(), ADD_COMPONENT_PREFIX)
 
         project_uuid, page_uuid, host_version, notes = _snapshot_identity(snapshot)
+        # The snapshot of a whole project holds many pages, so it can name none of
+        # them (the note above says so); the checkup report *can*, because it
+        # attributed its findings to pages (029-c: the live page is where the part
+        # lands, so its uuid is what the page guard must enforce). Saying which
+        # source won keeps the note from contradicting the plan it sits next to.
+        if not page_uuid:
+            reported_page = str(payload.get("source", {}).get("pageUuid") or "")
+            if reported_page:
+                page_uuid = reported_page
+                notes.append(
+                    f"pageUuid {page_uuid!r} comes from the checkup report's source block, "
+                    "not from the snapshot (a whole-project export names no single page), "
+                    "so the page guard still has a page to enforce"
+                )
         source = PlanSource(
             input_sha256=sha256_of(snapshot),
             project_uuid=project_uuid,
-            page_uuid=page_uuid or str(payload.get("source", {}).get("pageUuid") or ""),
+            page_uuid=page_uuid,
             host_version=host_version,
             connector_version=_repo_connector_version(),
         )
-        # The *new part's* pins, not the anchor's: a capacitor's two ends are "1"
-        # and "2" whatever pin of the IC the finding named. Using the anchor's pin
-        # number here (as 029-a did) makes both connections claim the same pin, the
-        # dict collapses to the last one, and the part is wired to GND instead of
-        # the net it was added for — measured on the machine in 029-b: the
-        # placement succeeded and the netlist readback said "2→GND" for a plan
-        # whose whole purpose was to decouple NET4.
-        connections = [
-            PlanConnection(pin="1", net=net),
-            PlanConnection(pin="2", net="GND"),
-        ]
         plan = add_component_plan(
             source,
             anchor=designator,
@@ -5674,8 +5684,8 @@ def _cmd_edit_plan_add_component(args: argparse.Namespace) -> int:
             connections=connections,
             x=spot.x,
             y=spot.y,
-            connection=connection.kind,
-            connection_detail=connection.detail,
+            connection=connections[0].kind,
+            connection_detail=connections[0].detail,
             recipe_source=(
                 f"facts:{lcsc}" if target.get("lcsc") else f"operator:{lcsc}"
             ),
@@ -5690,7 +5700,11 @@ def _cmd_edit_plan_add_component(args: argparse.Namespace) -> int:
             f"spot: ({spot.x:g}, {spot.y:g}) — ladder rung {spot.index} "
             f"offset {spot.offset}{' (the ideal spot was taken)' if spot.stepped else ' (ideal spot)'}"
         )
-        print(f"connection: {connection.kind} — {connection.detail}")
+        print(
+            "connections: "
+            + "; ".join(f"pin {item.pin}→{item.net} via {item.kind}" for item in connections)
+            + f" ({len(connections)} declared, all executed by apply)"
+        )
         print(
             f"snapshot: sha256 {source.input_sha256}  pageUuid {source.page_uuid or '(none)'}  "
             f"host {source.host_version or '(unknown)'}"
@@ -5721,8 +5735,11 @@ def _cmd_edit_plan_add_component(args: argparse.Namespace) -> int:
                         "net": net,
                         "pin": pins[0] if pins else "",
                         "spot": {"x": spot.x, "y": spot.y, "index": spot.index, "offset": list(spot.offset)},
-                        "connection": connection.kind,
-                        "connectionDetail": connection.detail,
+                        "connections": [
+                            {"pin": item.pin, "net": item.net, "kind": item.kind,
+                             "detail": item.detail, "to": list(item.to) if item.to else None}
+                            for item in connections
+                        ],
                         "recipeSource": plan.change.recipe_source,
                         "sha256": source.input_sha256,
                         "planPath": args.out_path,
@@ -6472,7 +6489,7 @@ async def _edit_apply_add_flow(
       though something *did* land.
     """
     from .engines import addcomponent
-    from .core.changeplan import CONNECTION_LABEL
+    from .core.changeplan import CONNECTION_LABEL, CONNECTION_WIRE
 
     records: list[dict] = []
     notes: list[str] = []
@@ -6495,7 +6512,11 @@ async def _edit_apply_add_flow(
         "anchor": anchor,
         "part": {"lcsc": part.lcsc, "value": part.value, "footprint": part.footprint},
         "recipeSource": plan.change.recipe_source,
-        "connections": {item.pin: item.net for item in plan.change.connections},
+        "connections": [
+            {"pin": item.pin, "net": item.net, "kind": item.kind, "detail": item.detail,
+             "to": list(item.to) if item.to else None}
+            for item in plan.change.connections
+        ],
         "page": {"uuid": page, "guard": "enforced" if page else "unavailable"},
         "spot": {"x": plan.target.x, "y": plan.target.y, "connection": plan.target.connection},
         "idempotence": {},
@@ -6597,7 +6618,16 @@ async def _edit_apply_add_flow(
         )
         return done(4, "refused", "idempotence_unreadable")
     before_designators = set(before_model.components)
-    decision = addcomponent.probe_already_applied(before_model, decoupled_net, part.value)
+    # The shelf, so "is this thing a capacitor?" is judged with the same evidence
+    # the offline rule has (029-c §②: without it the predicate fell back to the
+    # value/designator route, and 029-b measured that it can crash outright when a
+    # part on the net carries an MPN).
+    library, library_note = _facts_library()
+    if library_note:
+        notes.append(library_note)
+    decision = addcomponent.probe_already_applied(
+        before_model, decoupled_net, part.value, library
+    )
     report["idempotence"] = {
         "net": decoupled_net,
         "recipe": part.value,
@@ -6632,6 +6662,7 @@ async def _edit_apply_add_flow(
     )
     report["write"]["calls"] = 1
     report["write"]["params"] = {**place_params, "pageUuid": page or "(omitted: none in the plan)"}
+    readback = None
     if placed is None:
         last = records[-1]
         readback = await call("sch.geometry", {}, "read the page back after the placement's outcome went unknown")
@@ -6657,33 +6688,95 @@ async def _edit_apply_add_flow(
     else:
         report["write"]["placed"] = placed if isinstance(placed, dict) else {}
 
-    if plan.target.connection == CONNECTION_LABEL:
-        label = await call(
-            "sch.place_netlabel",
-            {"net": decoupled_net, "x": spot[0], "y": spot[1], **({"pageUuid": page} if page else {})},
-            f"label the new part with the net name {decoupled_net!r}",
-            writes=True,
-        )
-        report["write"]["calls"] += 1
-        report["write"]["label"] = {"ok": label is not None, "net": decoupled_net}
-    else:
-        near = addcomponent.nearest_wire_point(spot, geometry)
-        if near is None:
+    # Where a wire has to *start*: the new part's own pin, not its origin. The
+    # landing spot is the part's origin (029-b), and on 3.2.186 a placed
+    # capacitor's pins sit 20 units either side of it — so a wire drawn from the
+    # spot touches nothing. 029-c measured the consequence on the machine: the
+    # part landed, the page carried the wire, and the project's own netlist still
+    # showed the capacitor on its own auto net. `sch.component_pins` answers the
+    # placed pins by id (read-only), so the wire can start where the editor joins
+    # wires — and when it cannot be read, the fallback is named in the notes
+    # instead of being taken silently.
+    placed_id = str((report["write"].get("placed") or {}).get("uuid") or "")
+    if not placed_id and isinstance(readback, dict):
+        placed_id = addcomponent.primitive_id_of(readback, designator)
+    pin_coords: dict[str, tuple[float, float]] = {}
+    if any(item.kind == CONNECTION_WIRE for item in plan.change.connections):
+        if not placed_id:
             notes.append(
-                "the plan chose a wire but the page no longer shows a wire point to "
-                "reach — the connection was NOT drawn; the part is placed and the "
-                "connection is missing"
+                "the new part's canvas id could not be established, so `sch.component_pins` "
+                "could not be asked where its pins are: a wire is drawn from the landing spot "
+                "(the part's origin) instead, which may miss the pin — the netlist readback "
+                "is what decides"
             )
+        else:
+            pin_payload = await call(
+                "sch.component_pins", {"primitiveId": placed_id},
+                "read the new part's own pin coordinates, so a wire starts on the pin",
+            )
+            pin_coords = addcomponent.pin_points(pin_payload)
+            report["write"]["pins"] = {
+                "primitiveId": placed_id,
+                "read": sorted(pin_coords),
+                "points": {number: list(point) for number, point in sorted(pin_coords.items())},
+            }
+            if not pin_coords:
+                notes.append(
+                    f"the editor reported no pin geometry for {designator} (sch.component_pins "
+                    f"→ {pin_payload!r}), so a wire is drawn from the landing spot instead of "
+                    "from the pin — the netlist readback is what decides"
+                )
+
+    # Every declared connection is executed, in plan order (029-c §①). A plan that
+    # only drew the first one is what 029-b's case a measured: the part landed,
+    # the netlist said 2→GND MISSING, and nothing was saved.
+    executed: list[dict] = []
+    for item in plan.change.connections:
+        if item.kind == CONNECTION_LABEL:
+            answered = await call(
+                "sch.place_netlabel",
+                {"net": item.net, "x": spot[0], "y": spot[1],
+                 **({"pageUuid": page} if page else {})},
+                f"label pin {item.pin} with the net name {item.net!r}",
+                writes=True,
+            )
+            report["write"]["calls"] += 1
+            executed.append({"pin": item.pin, "net": item.net, "kind": item.kind,
+                             "ok": answered is not None})
+            continue
+        target = item.to or addcomponent.nearest_wire_point(spot, geometry, item.net)
+        if target is None or len(target) < 2:
+            notes.append(
+                f"the plan chose a wire for pin {item.pin}→{item.net} but the page no "
+                "longer shows a vertex of that net to reach — the connection was NOT "
+                "drawn"
+            )
+            report["write"]["connections"] = executed
             return done(2, "failed", "connection_unavailable")
-        wire = await call(
+        anchor = pin_coords.get(item.pin) or (spot[0], spot[1])
+        if item.pin not in pin_coords:
+            notes.append(
+                f"pin {item.pin} of {designator} is not among the pins the editor reports "
+                f"({sorted(pin_coords) or 'none'}), so this wire starts at the landing spot "
+                f"({spot[0]:g}, {spot[1]:g}) rather than on the pin"
+            )
+        # Orthogonal by construction: a diagonal segment hangs the host (029-c).
+        route = addcomponent.wire_route(anchor, target)
+        answered = await call(
             "sch.place_wire",
-            {"points": [[spot[0], spot[1]], [near[0], near[1]]], "net": decoupled_net,
+            {"points": [list(point) for point in route], "net": item.net,
              **({"pageUuid": page} if page else {})},
-            f"draw the short wire to ({near[0]:g}, {near[1]:g}) carrying net {decoupled_net!r}",
+            f"draw the wire from pin {item.pin} of {designator} at ({anchor[0]:g}, {anchor[1]:g}) "
+            f"to ({target[0]:g}, {target[1]:g}), carrying net {item.net!r} "
+            f"({len(route)} orthogonal point(s))",
             writes=True,
         )
         report["write"]["calls"] += 1
-        report["write"]["wire"] = {"ok": wire is not None, "to": [near[0], near[1]], "net": decoupled_net}
+        executed.append({"pin": item.pin, "net": item.net, "kind": item.kind,
+                         "from": [anchor[0], anchor[1]], "to": [target[0], target[1]],
+                         "route": [list(point) for point in route],
+                         "ok": answered is not None})
+    report["write"]["connections"] = executed
 
     # ---- 4. independent read-back: the part, the range, the connectivity ---
     verify = await call("sch.geometry", {}, "read the page back independently after the writes")
@@ -6823,6 +6916,46 @@ async def _live_project_model(call, notes: list[str]):
     return model
 
 
+def _facts_library():
+    """The curated shelf for the judgements that need it, plus a note when it is absent.
+
+    029-c §②: the idempotence probe asks "is the thing on this net really a
+    capacitor?" through `rules.decap`'s own predicate, and that predicate reads
+    the shelf when it is given one. Handing it nothing is not neutral — 029-b
+    measured that the shelf-less route can miss a part whose evidence lives only
+    in the library. So the shelf is loaded and handed over, and every way of not
+    having one is reported as a note instead of passing for evidence:
+
+    * the file is unreadable or not JSON → ``(None, note)``;
+    * the file is missing or lists no parts → the (empty) shelf **and** a note,
+      because `core.parts.load_parts` deliberately reads "missing" as "empty
+      shelf", which would otherwise let a weaker judgement pass in silence.
+
+    Never raises: the apply runs either way, on weaker evidence, and says so.
+    """
+    from .engines.bom import BomError, load_library
+    from .rules.facts import DEFAULT_LIBRARY_PATH
+
+    path = Path(DEFAULT_LIBRARY_PATH)
+    try:
+        library = load_library(path)
+    except (BomError, OSError) as exc:
+        return None, (
+            f"the curated shelf at {path} could not be read ({exc}), so the "
+            "idempotence probe judged 'is this already a grounded capacitor?' "
+            "without library facts — weaker evidence, and the reason is recorded "
+            "here rather than left implicit"
+        )
+    if not library.parts:
+        where = f"{path} is not a file" if not path.is_file() else f"{path} lists no parts"
+        return library, (
+            f"the curated shelf carries no facts ({where}), so the idempotence probe "
+            "judged 'is this already a grounded capacitor?' from the page alone — "
+            "weaker evidence, named rather than left implicit"
+        )
+    return library, ""
+
+
 def _render_edit_apply_add(report: dict, args: argparse.Namespace) -> int:
     """Print the human summary of an add-component apply, write ``--json``, exit."""
     import json
@@ -6860,9 +6993,26 @@ def _render_edit_apply_add(report: dict, args: argparse.Namespace) -> int:
             f"{'as promised (+1)' if diff.get('ok') else 'NOT +1 — accident'}"
         )
     verification = report.get("verification") or {}
+    declared = report.get("connections") or []
+    if declared:
+        print(
+            "  declared "
+            + "; ".join(
+                f"{item['pin']}→{item['net']} via {item['kind']}" for item in declared
+            )
+        )
+    for item in (report.get("write") or {}).get("connections") or []:
+        route = ""
+        if item.get("from") and item.get("to"):
+            route = (f"({item['from'][0]:g}, {item['from'][1]:g}) → "
+                     f"({item['to'][0]:g}, {item['to'][1]:g})")
+        print(
+            f"  wrote   pin {item['pin']}→{item['net']} {item['kind']} "
+            f"{'ok' if item.get('ok') else 'FAILED'} {route}"
+        )
     # The pins the plan promised, so the line reads "1→VCC ok" rather than
     # "1 ok": the membership map only carries booleans.
-    promised: dict = report.get("connections") or {}
+    promised: dict = {item["pin"]: item["net"] for item in declared}
     member_nets = verification.get("nets") or {}
     if member_nets:
         print(
