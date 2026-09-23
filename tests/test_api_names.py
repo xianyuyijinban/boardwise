@@ -39,6 +39,15 @@ NAMESPACES = [
     # had missed.
     "sch_PrimitiveComponent",
     "sch_PrimitivePin",
+    # 025 batch 1: the DRC namespaces and where a project leaves the editor.
+    # `pcb_Drc.check` is the one DRC that returns per-item errors; `sch_Drc.check`
+    # returns aggregate counts only (measured 2026-09-22, 025 §0); the two
+    # `sys_FileManager` reads are the zero-export paths under a permission gate;
+    # `sys_Tool` is the host's own comparison lane, probed alongside them.
+    "pcb_Drc",
+    "sch_Drc",
+    "sys_FileManager",
+    "sys_Tool",
 ]
 
 

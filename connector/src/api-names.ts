@@ -3,7 +3,7 @@
  *
  * **Generated — do not edit by hand.** Regenerate with:
  *
- *     python tools/api_names.py --emit-ts connector/src/api-names.ts sch_ManufactureData dmt_EditorControl dmt_Schematic dmt_Pcb sch_Document sch_PrimitiveComponent sch_PrimitivePin
+ *     python tools/api_names.py --emit-ts connector/src/api-names.ts sch_ManufactureData dmt_EditorControl dmt_Schematic dmt_Pcb sch_Document sch_PrimitiveComponent sch_PrimitivePin pcb_Drc sch_Drc sys_FileManager sys_Tool
  *
  * Why a generated table instead of enumerating the live object: on
  * 2026-09-14 the on-machine probe died on *every* namespace with
@@ -149,6 +149,98 @@ export const PROBE_CHECKS: Record<string, string[]> = {
     'getAllPrimitiveId',
     'modify',
   ],
+  // 025 — the PCB design-rule check. `check` is @beta and measured (025 §0) to
+  // return **per-item** groups, unlike the schematic one: leaves carry
+  // ruleName / net / pos / explanation / obj1 / obj2 / layer, which is what a
+  // Finding-mapping layer reads. `startRealTimeDrc` / `stopRealTimeDrc` /
+  // `getRealTimeDrcStatus` are hard-coded `return false` stubs on the host —
+  // listed here so that stays measurable rather than assumed.
+  pcb_Drc: [
+    'addNetToEqualLengthNetGroup',
+    'addNetToNetClass',
+    'addPadPairToPadPairGroup',
+    'check',
+    'createDifferentialPair',
+    'createEqualLengthNetGroup',
+    'createNetClass',
+    'createPadPairGroup',
+    'deleteDifferentialPair',
+    'deleteEqualLengthNetGroup',
+    'deleteNetClass',
+    'deletePadPairGroup',
+    'deleteRuleConfiguration',
+    'getAllDifferentialPairs',
+    'getAllEqualLengthNetGroups',
+    'getAllNetClasses',
+    'getAllPadPairGroups',
+    'getAllRuleConfigurations',
+    'getCurrentRuleConfiguration',
+    'getCurrentRuleConfigurationName',
+    'getDefaultRuleConfigurationName',
+    'getNetByNetRules',
+    'getNetRules',
+    'getPadPairGroupMinWireLength',
+    'getRealTimeDrcStatus',
+    'getRegionRules',
+    'getRuleConfiguration',
+    'modifyDifferentialPairName',
+    'modifyDifferentialPairNegativeNet',
+    'modifyDifferentialPairPositiveNet',
+    'modifyEqualLengthNetGroupName',
+    'modifyNetClassName',
+    'modifyPadPairGroupName',
+    'overwriteCurrentRuleConfiguration',
+    'overwriteNetByNetRules',
+    'overwriteNetRules',
+    'overwriteRegionRules',
+    'removeNetFromEqualLengthNetGroup',
+    'removeNetFromNetClass',
+    'removePadPairFromPadPairGroup',
+    'renameRuleConfiguration',
+    'saveRuleConfiguration',
+    'setAsDefaultRuleConfiguration',
+    'startRealTimeDrc',
+    'stopRealTimeDrc',
+  ],
+  // 025 — the schematic design-rule check. One method, @beta, and measured
+  // (025 §0) to answer **aggregate counts only** even with
+  // includeVerboseError:true; the per-item detail goes to a bottom panel with
+  // no read interface, which is why the offline rule engine still supplies
+  // the per-item findings (batch 3).
+  sch_Drc: [
+    'check',
+  ],
+  // 025 — where a project leaves the editor: `getDocumentFile` / `getProjectFile`
+  // return an .epro/.epro2 as a `File`. Both are documented to **throw** when
+  // the extension lacks a grant (工程设计图 > 文件导出 / 工程管理 > 下载工程), which
+  // is the permission question batch 1 had to measure rather than read off the
+  // declaration. `getDocumentSource` is the unverified second path.
+  sys_FileManager: [
+    'extractLibInfo',
+    'extractProjectInfo',
+    'getCbbFileByCbbUuid',
+    'getDeviceFileByDeviceUuid',
+    'getDocumentFile',
+    'getDocumentFootprintSources',
+    'getDocumentSource',
+    'getFootprintFileByFootprintUuid',
+    'getPanelLibraryFileByPanelLibraryUuid',
+    'getProjectFile',
+    'getProjectFileByProjectUuid',
+    'getSchematicFile',
+    'getSymbolFileBySymbolUuid',
+    'importProjectByProjectFile',
+    'setDocumentSource',
+  ],
+  // 025 — the host's own comparison tools (`netlistComparison`,
+  // `schematicComparison`, `pcbComparison`). Probed alongside the DRC
+  // namespaces because a "what changed?" review lane would need them, and
+  // because the declared surface and the live one have disagreed before.
+  sys_Tool: [
+    'netlistComparison',
+    'pcbComparison',
+    'schematicComparison',
+  ],
 };
 
 /**
@@ -159,5 +251,8 @@ export const ADDED_SINCE: Record<string, Record<string, string>> = {
   sch_ManufactureData: {
     getPngFile: 'v3.2.183',
     getSvgFile: 'v3.2.183',
+  },
+  sys_FileManager: {
+    getSchematicFile: 'v3.2.183',
   },
 };
