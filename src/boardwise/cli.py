@@ -5655,8 +5655,15 @@ def _cmd_edit_plan_add_component(args: argparse.Namespace) -> int:
             host_version=host_version,
             connector_version=_repo_connector_version(),
         )
+        # The *new part's* pins, not the anchor's: a capacitor's two ends are "1"
+        # and "2" whatever pin of the IC the finding named. Using the anchor's pin
+        # number here (as 029-a did) makes both connections claim the same pin, the
+        # dict collapses to the last one, and the part is wired to GND instead of
+        # the net it was added for — measured on the machine in 029-b: the
+        # placement succeeded and the netlist readback said "2→GND" for a plan
+        # whose whole purpose was to decouple NET4.
         connections = [
-            PlanConnection(pin=pins[0] if pins else "1", net=net),
+            PlanConnection(pin="1", net=net),
             PlanConnection(pin="2", net="GND"),
         ]
         plan = add_component_plan(

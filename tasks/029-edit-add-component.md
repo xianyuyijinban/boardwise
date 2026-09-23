@@ -132,3 +132,32 @@ bw_scratch/test 页给一颗测试 IC 补去耦电容：成功、人工先补→
   "落点附近有异网线段的页面"，验证 wire 不错连、错连时报告而非装成功。GND pin "2" 硬编码对 2 脚电容成立，
   网表回读兜底，接受为本片边界。
 - 遗留入账：`edit preview` 认 add-component、report.json 显式 schema 测试，列入 029-b 或后续小批。
+
+### 029-b · 交卷（2026-09-23，子代理 agent-43）
+
+- **布景**：test 建 bw_scratch（9733d4eb…，编辑器显示 P5）→ 放 `C6186` AMS1117-3.3 为 U9；
+  编辑器**自动命名** U9 pin2 所在网为 `NET4`（无需手动连线）；再放一段 NET4 走线给落点候选项。
+  checkup → report.json 直接给出带 **structured target** 的 decap finding（U9 pin2 / NET4 / 22uF）✔。
+- **case a（成功路径）= 诚实失败**：plan 建出（落点 (300,295) 阶梯第 1 级、连接 `wire → NET4 线段 5 单位`）；
+  apply 落件 ✔、范围恰好 **+1** ✔、网表回读 `1→NET4 ok / 2→GND MISSING` → `connection_not_established`、
+  **未保存**（exit 2）。⇒ 放行弱点"最近线段不按网判别"在真机上**没有表现为错连**，而表现为**只连一端**。
+- **真机暴露并已修的三个问题（主代理已复验，见下）**：① wire 的 state 真形状是 `Line: [x1,y1,x2,y2,…]` + **`Net`**
+  （原假设"不带网名"错了）⇒ 现在 `nearest_wire_point` **只认目标网线段，错连结构上不可能**，mock 加"异网更近也不选"断言；
+  ② plan 把**锚点 IC 的脚号**当成新电容的脚号 ⇒ 解耦网被写成 GND（第一次 apply 的 `probe net 'GND'` 实证），已修；
+  ③ `looks_like_capacitor(library=None)` 崩（`find_facts(None)`），已加无架分支；**遗留**：apply 未把 facts 架传给探测。
+- **未跑**：b 人工先补 / c 重复 apply / d 阶梯占满 / f 断连恢复；e 异网线段页只有 mock 判据 + 结构锁死，真机未单做。
+  按指示跳过编辑器重开验证（需岳在场）、`edit preview` 认 add-component、report.json 显式 schema 测试。
+- **零残留**：两张 bw_scratch 页（含 U9/C1/C2）已 `doc.delete_page` 删除；`doc.list` 6 文档、active P1、
+  geometry 1 器件 0 线、`sys.identity consistent` ✔。**未复位**：`front` 报 ok=false，前台未还给编辑器（如实记）。
+- 三线：pytest **1418 passed**（修复后）；connector/tsc 未跑（未动 connector）。改动 4 个文件（addcomponent/cli/decap/测试）。
+
+### 主代理复验与 029-c 派遣（2026-09-23）
+
+- 抽核：工作区 4 文件与交卷一致；`nearest_wire_point(net=...)` 按网判别亲读在码（docstring 点名裁决 3）；
+  证据 8 份齐（stage/case_a/cleanup + 2 plan + 3 apply + snapshot）。
+- **case a 的诚实失败定调**：这是网表回读按设计工作（没连全就不保存），不是系统缺陷；
+  但**成功路径还没通**——plan 只执行了 1→NET4 一条连接，GND 端寄托在"落点相连的 stub"上（到不了电容脚）。
+- **029-c 派遣内容**：① 每条声明连接都必须显式执行——wire 不可达时 GND 等全局网走 **net label**（页面无 label
+  先例时 GND 是通用例外，其他网仍拒绝）；② apply 把 facts 架传给幂等探测（029-b 遗留）；③ case a 跑到
+  **真成功**（两端连通 + 网表 ok + 保存 + mtime + 重审 OK）；④ 补跑 b/c/d/f；⑤ 顺带收 029-a 遗留
+  （`edit preview` 认 add-component、report.json 显式 schema 测试）。
