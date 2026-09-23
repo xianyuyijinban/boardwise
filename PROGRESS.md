@@ -33,7 +33,7 @@ collects the current truth and the pointers.
 
 ## Current baseline (2026-09-22, commit `383e524` on `4448c59`; published on GitHub)
 
-- pytest: **1404 passed** (run with `--basetemp=.tmp_pt_home` on Windows —
+- pytest: **1418 passed** (run with `--basetemp=.tmp_pt_home` on Windows —
   the host's safe-delete hook otherwise eats the summary line and fakes
   exit 1)
 - connector: **405 pass / 0 fail** (`cd connector && npm test`)
