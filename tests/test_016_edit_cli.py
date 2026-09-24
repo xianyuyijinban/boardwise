@@ -197,13 +197,15 @@ def test_a_rule_without_a_target_is_refused_by_name(tmp_path, capsys):
     assert code == 5, err
     assert "param-led-current" in err
     assert "该规则不支持自动修改" in err
-    # 029-a grew the table: `decap-required-caps` is repairable now (it adds a
-    # part, so its plan needs a report and a live page rather than this offline
-    # path). The assertion keeps its point — the table is the contract, and a
-    # rule that is not in it is refused by name above.
+    # 029-a and 035 grew the table: `decap-required-caps` adds a part and
+    # `conn-nc-and-must-connect` repairs a pin, so both take the report + live
+    # page path rather than this offline one. The assertion keeps its point — the
+    # table is the contract, and a rule that is not in it is refused by name
+    # above.
     assert REPAIRABLE_RULES == {
         "param-value-mpn-match": "component-value",
         "decap-required-caps": "add-component",
+        "conn-nc-and-must-connect": "patch-pin",
     }
 
 

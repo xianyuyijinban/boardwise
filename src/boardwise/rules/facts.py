@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import math
 import re
+from dataclasses import dataclass, field
 
 from ..core.model import Component, DesignModel, Net
 from ..core.parts import PartEntry, PartLibrary, find_facts
@@ -30,7 +31,7 @@ from ..core.power_domains import (
     infer_net_domains,
     ldo_output_pin,
 )
-from .base import Finding, Outcome, OutcomeRule
+from .base import Finding, FindingTarget, Outcome, OutcomeRule
 from .connectivity import parse_resistance_ohms
 
 LEVEL = "L2-facts"
@@ -131,10 +132,264 @@ def _pin_net(comp: Component, number: str) -> str | None:
     return None
 
 
+def _nc_target(designator: str, pin: str, net: str) -> FindingTarget:
+    """The structured claim of an NC violation, as a **disconnect** (035 §1).
+
+    ``expected_before`` is the net the pin sits on today and ``suggested_after``
+    is the **empty string** — "no net" is the repair, and writing that down as an
+    empty string (rather than, say, the word "NC") keeps the field meaning the
+    same thing it does everywhere else: the net the pin should end up on.
+    """
+    return FindingTarget(
+        component_ref=designator,
+        pin_refs=[pin],
+        net_refs=[net],
+        expected_before=net,
+        suggested_after="",
+    )
+
+
+def _must_connect_target(
+    designator: str, pin: str, net: str | None, target: str
+) -> FindingTarget:
+    """The structured claim of a must_connect violation, as a **connect** or a
+    **reconnect** (035 §1).
+
+    ``suggested_after`` is the target net the shelf names; ``expected_before`` is
+    where the pin is now — the empty string when it reaches no net at all, which
+    is the connect form, and the wrong net's name when it reaches one, which is
+    the reconnect form. ``net_refs`` lists both ends (current first, target last,
+    and only the target when the pin is dangling) because a plan has to be able
+    to name where it is going *and* what it is leaving.
+    """
+    current = net or ""
+    return FindingTarget(
+        component_ref=designator,
+        pin_refs=[pin],
+        net_refs=([current, target] if current else [target]),
+        expected_before=current,
+        suggested_after=target,
+    )
+
+
 def _identity(comp: Component) -> str:
     bits = [f"mpn {comp.mpn!r}" if comp.mpn else None,
             f"lcsc {comp.lcsc_part!r}" if comp.lcsc_part else None]
     return ", ".join(b for b in bits if b) or "no mpn, no lcsc number"
+
+
+#: The four answers a pin-level obligation can get, and they are the rule's own
+#: vocabulary (`Outcome.state`) — not a second one invented for repairs.
+PIN_OK = "OK"
+PIN_VIOLATION = "VIOLATION"
+PIN_UNKNOWN = "UNKNOWN"
+
+
+@dataclass(frozen=True)
+class PinRuling:
+    """What the shelf's obligation for **one pin** comes to, and why (035).
+
+    The per-pin form of this rule's judgement, extracted so the repair slice can
+    ask "is this pin already as it should be?" through the *same* function that
+    produced the finding (029's rule: the probe is the rule's own judgement, not a
+    second, similar-looking test). ``target`` is filled only for a VIOLATION — an
+    OK row has nothing to repair and an UNKNOWN row's honest answer is the fact it
+    names.
+    """
+
+    state: str
+    message: str
+    evidence: list[str] = field(default_factory=list)
+    target: FindingTarget | None = None
+    missing_fact: str = ""
+
+
+#: What the editor calls a net nobody named. Two spellings, measured 2026-09-24:
+#:
+#: * ``NET1``, ``NET2``, … — how an island with nothing to name it gets stored, and
+#:   how the *export* spells the net of a pin that reaches nothing;
+#: * ``$57N2`` — the editor's **internal id**, which is what its own netlist
+#:   (`sch.netlist`) reports for a wire **nobody named**. Measured on the same
+#:   board: the very same unnamed wire read `NET3` through the export and `$57N2`
+#:   through `sch.netlist`, which is what made a plan built on the export answer
+#:   `stale_before` for a board that had not moved.
+#:
+#: Both carry **no intent** — that is the whole test — so the judgements that ask
+#: "did a person name this?" must not be fooled by which spelling they are handed.
+_AUTO_NET_RE = re.compile(r"^(NET\d+|\$\S+)$", re.IGNORECASE)
+
+
+def is_auto_net(name: str | None) -> bool:
+    """Is this an editor-generated net name? (the ones that mean nothing)"""
+    return bool(name) and bool(_AUTO_NET_RE.match(str(name).strip()))
+
+
+def nc_violation(model: DesignModel, comp: Component, pin: str) -> tuple[bool, str]:
+    """Is a declared-NC pin connected, and to what (035 round 2, ruling A)?
+
+    Two ways to be connected, and they are the two ways a *named* intent can show
+    up on a board:
+
+    * the pin **shares its net with ≥2 pins** — something else is wired here;
+    * the pin sits **alone on a net somebody named** (``GND``, ``NCNET``, …).
+      Naming is intent: a hand-drawn net called ``GND`` that ends on an NC pin is
+      a mistake to fix, not an island to ignore.
+
+    A single-member **auto** net (``NET7``) is *not* a connection: it is the shape
+    the editor leaves behind for a pin that reaches nothing — measured 035 on
+    3.2.186, where deleting the wire off an NC pin left it alone on ``NET6``. Both
+    the rule and the repair read this function, so "the repair worked" and "the
+    rule is satisfied" cannot disagree (029's rule, round-2 ruling A).
+    """
+    net = _pin_net(comp, pin)
+    company = pin_company(model, comp, pin)
+    if company:
+        mates = ", ".join(f"{name}.{number}" for name, number in sorted(company))
+        return True, f"sits on net {net!r} with {mates}"
+    if net and not is_auto_net(net):
+        return True, f"sits alone on the named net {net!r}"
+    return False, f"touches no net" + (f" (alone on {net!r})" if net else "")
+
+
+def pin_dangles(model: DesignModel, comp: Component, pin: str) -> tuple[bool, str]:
+    """Does this pin reach **nothing**? The same reading as `nc_violation`, inverted.
+
+    Added 035 round 3, because the two directions need one vocabulary. The export
+    gives a pin that reaches nothing a single-member auto net (measured
+    2026-09-24: a dangling U3 pin5 reads ``NET5 [('U3','5')]``), so a
+    `must_connect` judgement that only asked "does the pin's net equal the target?"
+    called a *dangling* pin "on the wrong net 'NET5'" and built a reconnect — a
+    removal, of which there was nothing to remove: the plan refused with "nothing
+    recognisable attaches the pin" and the connect form could not run at all.
+
+    Ruling A's measurement is why one reading serves both directions: a
+    single-member auto net *is* the shape of a pin that reaches nothing, and being
+    alone on a net somebody **named** is still being somewhere. Both the NC
+    judgement and the must_connect one call this, so they cannot disagree.
+    """
+    connected, how = nc_violation(model, comp, pin)
+    return (not connected), how
+
+
+def pin_company(model: DesignModel, comp: Component, pin: str) -> list[tuple[str, str]]:
+    """Every *other* pin that shares this pin's net (035, measured on the machine).
+
+    Why "shares" rather than "has a net name": a real export can carry a pin that
+    *looks* connected and is not. Measured 2026-09-24 on 3.2.186: deleting the
+    wire off a declared-NC pin left the pin sitting alone on a single-member
+    auto-net (`NET6 [('U3','4')]`) — the editor kept the net object after its wire
+    was gone. A rule that asked "is the pin's net set?" would call that connected
+    and refuse to believe a repair it had just watched succeed (035's
+    real-machine leg hit exactly this: apply's own readback said disconnected
+    while the re-review said "still sits on net 'NET6'").
+
+    Counting company is the reading that holds in both directions: a pin alone on
+    its net is connected to nothing, whether that net is auto-named or the old
+    name — and a pin that shares a net with others is connected, whatever the net
+    is called.
+    """
+    node = (model.nets or {}).get(_pin_net(comp, pin) or "")
+    if node is None:
+        return []
+    return [
+        (str(name), str(number))
+        for name, number in node.pins
+        if not (str(name) == comp.designator and str(number) == str(pin))
+    ]
+
+
+def pin_obligation(entry: PartEntry, pin: str) -> tuple[str, str] | None:
+    """``(kind, detail)`` for a pin the shelf has an obligation about, else None.
+
+    ``kind`` is ``"nc"`` (declared not-connected) or ``"must_connect"`` (must
+    reach ``detail``). Mode-tagged must_connect records are **not** obligations
+    here: they are conditional, this rule has no voltage evidence, and the
+    mode-aware decap rule owns them (011d §3.1) — the rule keeps the
+    unconditional records, and so does this.
+    """
+    facts = entry.facts or {}
+    for candidate in (facts.get("nc_pins") or {}).get("pins", []):
+        if str(candidate) == str(pin):
+            return "nc", ""
+    for record in facts.get("must_connect", []):
+        if record.get("mode") is not None:
+            continue
+        if str(record.get("pin", "")) == str(pin):
+            return "must_connect", str(record.get("to", ""))
+    return None
+
+
+def pin_ruling(comp: Component, entry: PartEntry, model: DesignModel, pin: str) -> PinRuling:
+    """This rule's judgement for one pin — the rule and the repair both call it."""
+    obligation = pin_obligation(entry, pin)
+    if obligation is None:
+        return PinRuling(
+            state=PIN_UNKNOWN,
+            message=(
+                f"{comp.designator} pin{pin}: the shelf records no nc_pins / "
+                "must_connect obligation for this pin"
+            ),
+            missing_fact=(
+                f"facts for {comp.designator} pin{pin} ({_identity(comp)}): record an "
+                "nc_pins or must_connect obligation, or say there is none"
+            ),
+        )
+    kind, target = obligation
+    net = _pin_net(comp, pin)
+    if kind == "nc":
+        connected, how = nc_violation(model, comp, pin)
+        if not connected:
+            return PinRuling(
+                state=PIN_OK,
+                message=f"{comp.designator} pin{pin} is NC and {how}",
+            )
+        return PinRuling(
+            state=PIN_VIOLATION,
+            message=f"{comp.designator} pin{pin} is declared NC but {how}",
+            evidence=[f"{comp.designator} pin{pin} @ {net or '(no net)'}"],
+            target=_nc_target(comp.designator, str(pin), net or ""),
+        )
+    if target not in model.nets:
+        return PinRuling(
+            state=PIN_UNKNOWN,
+            message=(
+                f"{comp.designator} pin{pin}'s must_connect target is free text, "
+                "not a net name"
+            ),
+            missing_fact=(
+                f"must_connect target {target!r} on {comp.designator} pin{pin} is free "
+                "text — connectivity alone cannot verify it"
+            ),
+        )
+    if net == target:
+        return PinRuling(
+            state=PIN_OK,
+            message=(
+                f"{comp.designator} pin{pin} reaches its must_connect target net "
+                f"{target!r}"
+            ),
+        )
+    dangles, how = pin_dangles(model, comp, pin)
+    if dangles:
+        # Nothing to remove, so this is the **connect** form: `expected_before` is
+        # the empty string, which is the plan's own word for "reaches nothing".
+        return PinRuling(
+            state=PIN_VIOLATION,
+            message=(
+                f"{comp.designator} pin{pin} must connect to net {target!r} and {how}"
+            ),
+            evidence=[f"{comp.designator} pin{pin} @ {net or '(no net)'}"],
+            target=_must_connect_target(comp.designator, pin, None, target),
+        )
+    return PinRuling(
+        state=PIN_VIOLATION,
+        message=(
+            f"{comp.designator} pin{pin} must connect to net {target!r} but sits on "
+            f"{net!r}"
+        ),
+        evidence=[f"{comp.designator} pin{pin} @ {net}"],
+        target=_must_connect_target(comp.designator, pin, net, target),
+    )
 
 
 class NcAndMustConnect(FactsRule):
@@ -149,13 +404,16 @@ class NcAndMustConnect(FactsRule):
     source = "house rule over the facts library's nc_pins / must_connect records"
 
     def outcomes(self, model: DesignModel) -> list[Outcome]:
-        rows = self._rows(model)
-        return [outcome for outcome, _severity in rows]
+        # `row[0]`, not tuple-unpacking: since 035 the VIOLATION rows carry a
+        # third element (their FindingTarget), and unpacking two names would turn
+        # a repair capability into a crash in the states view — the same lesson
+        # `DecapRequiredCaps.outcomes` records.
+        return [row[0] for row in self._rows(model)]
 
     def check(self, model: DesignModel) -> list[Finding]:
         return self.findings_from(self._rows(model))
 
-    def _rows(self, model: DesignModel) -> list[tuple[Outcome, str | None]]:
+    def _rows(self, model: DesignModel) -> list[tuple]:
         rows: list[tuple[Outcome, str | None]] = []
         for comp in self.ics(model):
             entry = self.entry_for(comp)
@@ -211,98 +469,45 @@ class NcAndMustConnect(FactsRule):
                     "ERROR",
                 ))
                 continue
-            nc = (entry.facts or {}).get("nc_pins") or {}
-            for pin in nc.get("pins", []):
-                net = _pin_net(comp, str(pin))
-                if net is not None:
-                    rows.append((
-                        Outcome(
-                            rule_id=self.id,
-                            state="VIOLATION",
-                            subject=f"{comp.designator} pin{pin}",
-                            message=(
-                                f"{comp.designator} pin{pin} is declared NC but "
-                                f"sits on net {net!r}"
-                            ),
-                            evidence=[f"{comp.designator} pin{pin} @ {net}"],
-                        ),
-                        "ERROR",
-                    ))
-                else:
-                    rows.append((
-                        Outcome(
-                            rule_id=self.id,
-                            state="OK",
-                            subject=f"{comp.designator} pin{pin}",
-                            message=(
-                                f"{comp.designator} pin{pin} is NC and touches "
-                                "no net"
-                            ),
-                        ),
-                        None,
-                    ))
-            for record in (entry.facts or {}).get("must_connect", []):
-                if record.get("mode") is not None:
-                    # A mode-tagged obligation is conditional ("only in 3.3V
-                    # mode"), and this rule has no voltage evidence to know
-                    # which mode is active -- judging it here would fire on
-                    # the wrong mode. The mode-aware decap rule owns it
-                    # (task 011d sec.3.1); this rule keeps the unconditional
-                    # records.
-                    continue
-                pin = str(record.get("pin", ""))
-                target = str(record.get("to", ""))
-                net = _pin_net(comp, pin)
-                if target in model.nets:
-                    if net == target:
-                        rows.append((
-                            Outcome(
-                                rule_id=self.id,
-                                state="OK",
-                                subject=f"{comp.designator} pin{pin}",
-                                message=(
-                                    f"{comp.designator} pin{pin} reaches its "
-                                    f"must_connect target net {target!r}"
-                                ),
-                            ),
-                            None,
-                        ))
-                    else:
-                        rows.append((
-                            Outcome(
-                                rule_id=self.id,
-                                state="VIOLATION",
-                                subject=f"{comp.designator} pin{pin}",
-                                message=(
-                                    f"{comp.designator} pin{pin} must connect "
-                                    f"to net {target!r} but sits on "
-                                    f"{net!r}"
-                                ),
-                                evidence=[
-                                    f"{comp.designator} pin{pin} @ {net}"
-                                ],
-                            ),
-                            "ERROR",
-                        ))
-                else:
-                    rows.append((
-                        Outcome(
-                            rule_id=self.id,
-                            state="UNKNOWN",
-                            subject=f"{comp.designator} pin{pin}",
-                            message=(
-                                f"{comp.designator} pin{pin}'s must_connect "
-                                f"target is free text, not a net name"
-                            ),
-                            missing_fact=(
-                                f"must_connect target {target!r} on "
-                                f"{comp.designator} pin{pin} is free text — "
-                                "connectivity alone cannot verify it"
-                            ),
-                        ),
-                        None,
-                    ))
+            # Every obligation the shelf records for this part, judged **by the
+            # one function** that also answers "is this pin already right?" for
+            # the repair slice (035). The rows below are only plumbing around it:
+            # a second per-pin judgement living here is exactly what the task
+            # book forbids.
+            for pin, _obligation in self._obligation_pins(entry):
+                ruling = pin_ruling(comp, entry, model, pin)
+                rows.append((
+                    Outcome(
+                        rule_id=self.id,
+                        state=ruling.state,
+                        subject=f"{comp.designator} pin{pin}",
+                        message=ruling.message,
+                        evidence=list(ruling.evidence),
+                        missing_fact=ruling.missing_fact,
+                    ),
+                    "ERROR" if ruling.state == "VIOLATION" else None,
+                    *([ruling.target] if ruling.target is not None else []),
+                ))
         return rows
+
+    @staticmethod
+    def _obligation_pins(entry: PartEntry) -> list[tuple[str, str]]:
+        """``(pin, kind)`` for every pin the shelf has an obligation about.
+
+        Unconditional `must_connect` records only — a mode-tagged obligation is
+        conditional and this rule has no voltage evidence (011d §3.1) — and the
+        order is "NC pins first, then must-connect pins", the order the rows have
+        always come in.
+        """
+        facts = entry.facts or {}
+        out: list[tuple[str, str]] = []
+        for pin in (facts.get("nc_pins") or {}).get("pins", []):
+            out.append((str(pin), "nc"))
+        for record in facts.get("must_connect", []):
+            if record.get("mode") is not None:
+                continue
+            out.append((str(record.get("pin", "")), "must_connect"))
+        return out
 
 
 class LibraryPinConsistency(OutcomeRule):
