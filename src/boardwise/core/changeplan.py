@@ -46,6 +46,9 @@ __all__ = [
     "ChangePlanError",
     "PageComponent",
     "PageLookup",
+    "ATTACHMENT_KINDS",
+    "PATCH_PIN_KIND",
+    "PlanAttachment",
     "PlanChange",
     "PlanConnection",
     "PlanPart",
@@ -53,6 +56,7 @@ __all__ = [
     "PlanTarget",
     "add_component_plan",
     "component_value_plan",
+    "patch_pin_plan",
     "resolve_on_page",
     "sha256_of",
 ]
@@ -67,15 +71,30 @@ PLAN_VERSION = 1
 #: why apply grew a second flow (see `core/addcomponent.py`).
 COMPONENT_VALUE_KIND = "component-value"
 ADD_COMPONENT_KIND = "add-component"
-SUPPORTED_KINDS: tuple[str, ...] = (COMPONENT_VALUE_KIND, ADD_COMPONENT_KIND)
+#: 035: one pin's connection repaired — disconnect what should not be there,
+#: connect what should be, or both (the shelf's NC / must_connect obligations).
+PATCH_PIN_KIND = "patch-pin"
+SUPPORTED_KINDS: tuple[str, ...] = (
+    COMPONENT_VALUE_KIND,
+    ADD_COMPONENT_KIND,
+    PATCH_PIN_KIND,
+)
 
 #: Where the *other* kinds belong, quoted in the refusal so the reader is not
 #: left guessing whether the plan is broken or merely early.
 _LATER_KINDS = {
-    "patch-pin": "repairing a single pin",
     "insert-subcircuit": "inserting an RC / divider sub-circuit",
     "move-block": "moving a functional block",
 }
+
+#: What a `patch-pin` disconnect may take off a pin (035 §2). Two, and both have
+#: to be *proven on the canvas*: a wire whose endpoint lands exactly on the pin,
+#: or a net label sitting exactly on it. Anything else — a wire passing through
+#: the pin mid-segment, a net flag, a second attachment — is a refusal, because a
+#: repair that deletes the wrong thing is worse than no repair.
+ATTACHMENT_WIRE = "wire"
+ATTACHMENT_NETLABEL = "netlabel"
+ATTACHMENT_KINDS: tuple[str, ...] = (ATTACHMENT_WIRE, ATTACHMENT_NETLABEL)
 
 #: How an added part is connected to the net it decouples. Three, and each one
 #: is a claim about what will be on the page:
@@ -154,6 +173,10 @@ class PlanTarget:
     designator: str = ""
     primitive_id: str = ""
     expected_value: str = ""
+    #: `patch-pin` only: **which pin** of `designator` the plan repairs. A pin
+    #: is named by its component plus this number, which is the pair the findings
+    #: and the netlist both speak (035 §二).
+    pin: str = ""
     #: `add-component` only: the anchor this part is added for (the IC whose
     #: supply pin the finding named).
     anchor: str = ""
@@ -210,6 +233,22 @@ class PlanConnection:
 
 
 @dataclass
+class PlanAttachment:
+    """The thing a `patch-pin` disconnect takes off a pin (035 §2).
+
+    ``primitive_id`` is the canvas id that will be deleted, and ``at`` is the
+    coordinate that *proves* the attachment lands on the pin — recorded in the
+    plan because "there was something attached" is not reviewable, and because
+    apply re-checks it before deleting anything.
+    """
+
+    kind: str = ""          # wire | netlabel — see ATTACHMENT_KINDS
+    primitive_id: str = ""
+    detail: str = ""
+    at: tuple[float, float] | None = None
+
+
+@dataclass
 class PlanChange:
     """The change itself, in whichever shape its kind uses.
 
@@ -225,6 +264,17 @@ class PlanChange:
     after: str = ""
     part: PlanPart | None = None
     connections: list[PlanConnection] = field(default_factory=list)
+    #: `patch-pin` only: the net the pin is on today ("" = it reaches none) and
+    #: the net it must end up on ("" = the repair is to **disconnect** it). The
+    #: two together are the plan's whole claim, and `before != after` is
+    #: enforced — a plan that changes nothing is not a change.
+    before_net: str = ""
+    after_net: str = ""
+    #: `patch-pin` only: what the disconnect leg removes. Required whenever
+    #: `before_net` is non-empty: leaving a net means taking off the thing that
+    #: attaches the pin to it, and adding a *new* connection while the old one is
+    #: still there would short the two nets together.
+    attachment: PlanAttachment | None = None
     #: Where the part came from: ``facts:<lcsc>`` when the shelf supplied it,
     #: ``operator:<lcsc>`` when ``--lcsc`` did. Recorded rather than implied,
     #: because the acceptance question "was this a verified recipe?" is
@@ -270,6 +320,39 @@ class ChangePlan:
             "before": self.change.before,
             "after": self.change.after,
         }
+        if self.change.kind == PATCH_PIN_KIND:
+            target.update({"pin": self.target.pin})
+            change = {
+                "kind": self.change.kind,
+                "beforeNet": self.change.before_net,
+                "afterNet": self.change.after_net,
+                "connections": [
+                    {
+                        "pin": item.pin,
+                        "net": item.net,
+                        "kind": item.kind,
+                        "detail": item.detail,
+                        **({"to": list(item.to)} if item.to else {}),
+                    }
+                    for item in self.change.connections
+                ],
+                **(
+                    {
+                        "attachment": {
+                            "kind": self.change.attachment.kind,
+                            "primitiveId": self.change.attachment.primitive_id,
+                            "detail": self.change.attachment.detail,
+                            **(
+                                {"at": list(self.change.attachment.at)}
+                                if self.change.attachment.at
+                                else {}
+                            ),
+                        }
+                    }
+                    if self.change.attachment
+                    else {}
+                ),
+            }
         if self.change.kind == ADD_COMPONENT_KIND:
             target.update({
                 "anchor": self.target.anchor,
@@ -357,6 +440,14 @@ class ChangePlan:
         if not isinstance(designator, str) or not designator.strip():
             raise ChangePlanError(
                 f"target.designator must name the component, got {designator!r}"
+            )
+        if kind == PATCH_PIN_KIND:
+            return cls(
+                source=_source_from(source, digest),
+                target=_patch_pin_target_from(target, designator.strip()),
+                change=_patch_pin_change_from(change),
+                preconditions=_string_list(payload, "preconditions"),
+                expected_postcondition=_string_list(payload, "expectedPostcondition"),
             )
         if kind == ADD_COMPONENT_KIND:
             return cls(
@@ -624,6 +715,271 @@ def add_component_plan(
             "the page gained exactly one component and its connections — nothing else moved",
             "target review finding is resolved",
         ],
+    )
+
+
+def _patch_pin_target_from(target: dict[str, Any], designator: str) -> PlanTarget:
+    """Read a `patch-pin` target: the component **and the pin** it repairs."""
+    pin = str(target.get("pin") or "").strip()
+    if not pin:
+        raise ChangePlanError(
+            "target.pin is empty — patch-pin repairs one named pin, and a plan "
+            "that does not say which one cannot be reviewed or re-checked "
+            "(035 §二)"
+        )
+    return PlanTarget(
+        designator=designator,
+        primitive_id=str(target.get("primitiveId") or ""),
+        expected_value=str(target.get("expectedValue") or ""),
+        pin=pin,
+    )
+
+
+def _patch_pin_change_from(change: dict[str, Any]) -> PlanChange:
+    """Read a `patch-pin` change, and refuse the shapes that cannot be executed.
+
+    The invariants are the plan's meaning, so they are checked here rather than
+    discovered at the wire:
+
+    * ``beforeNet != afterNet`` — a plan that changes nothing is not a change;
+    * a non-empty ``beforeNet`` **requires** an attachment: leaving a net means
+      taking off what attaches the pin to it (and connecting the new net while
+      the old attachment is still there would short the two together);
+    * a non-empty ``afterNet`` requires exactly one connection, in
+      `CONNECTION_KINDS`, with a destination for a `wire`;
+    * an empty ``afterNet`` (a pure disconnect) requires **no** connection —
+      "disconnect, and also draw something" is not a shape this slice executes.
+    """
+    before = change.get("beforeNet", "")
+    after = change.get("afterNet", "")
+    if not isinstance(before, str) or not isinstance(after, str):
+        raise ChangePlanError(
+            f"change.beforeNet/change.afterNet must be strings, got {before!r} / {after!r}"
+        )
+    if before == after:
+        raise ChangePlanError(
+            f"change.beforeNet and change.afterNet are both {before!r} — a plan "
+            "that changes nothing is not a change"
+        )
+    raw = change.get("connections", [])
+    if not isinstance(raw, list):
+        raise ChangePlanError(
+            f"change.connections must be a list, got {raw!r}"
+        )
+    connections: list[PlanConnection] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise ChangePlanError(
+                f"change.connections[{index}] must be an object, got {item!r}"
+            )
+        kind = item.get("kind")
+        if kind not in CONNECTION_KINDS:
+            raise ChangePlanError(
+                f"change.connections[{index}].kind must be one of "
+                f"{', '.join(CONNECTION_KINDS)}, got {kind!r} — the connect leg "
+                "says how it is made, and \"whichever works\" is the silent "
+                "choice this field exists to forbid (029 §二.4)"
+            )
+        target = item.get("to")
+        point: tuple[float, float] | None = None
+        if kind == CONNECTION_WIRE:
+            if not (isinstance(target, (list, tuple)) and len(target) >= 2
+                    and all(isinstance(value, (int, float)) and not isinstance(value, bool)
+                            for value in target[:2])):
+                raise ChangePlanError(
+                    f"change.connections[{index}].to must be [x, y] for a wire "
+                    f"connection (the vertex of that net it reaches), got {target!r}"
+                )
+            point = (float(target[0]), float(target[1]))
+        net = str(item.get("net") or "").strip()
+        if not net:
+            raise ChangePlanError(
+                f"change.connections[{index}].net is empty — the connect leg must "
+                "name the net the pin is being joined to"
+            )
+        connections.append(
+            PlanConnection(pin=str(item.get("pin") or ""), net=net,
+                           kind=str(kind), detail=str(item.get("detail") or ""),
+                           to=point)
+        )
+    attachment_raw = change.get("attachment")
+    attachment: PlanAttachment | None = None
+    if attachment_raw is not None:
+        if not isinstance(attachment_raw, dict):
+            raise ChangePlanError(
+                f"change.attachment must be an object, got {attachment_raw!r}"
+            )
+        attachment_kind = attachment_raw.get("kind")
+        if attachment_kind not in ATTACHMENT_KINDS:
+            raise ChangePlanError(
+                f"change.attachment.kind must be one of "
+                f"{', '.join(ATTACHMENT_KINDS)}, got {attachment_kind!r} — only the "
+                "two attachments that can be proven on the canvas are recognised "
+                "(035 §2)"
+            )
+        attachment_id = str(attachment_raw.get("primitiveId") or "").strip()
+        if not attachment_id:
+            raise ChangePlanError(
+                "change.attachment.primitiveId is empty — a disconnect without the "
+                "id of the thing to delete cannot be executed, only guessed at"
+            )
+        at = attachment_raw.get("at")
+        point = None
+        if isinstance(at, (list, tuple)) and len(at) >= 2:
+            point = (float(at[0]), float(at[1]))
+        attachment = PlanAttachment(
+            kind=str(attachment_kind),
+            primitive_id=attachment_id,
+            detail=str(attachment_raw.get("detail") or ""),
+            at=point,
+        )
+    if before and attachment is None:
+        raise ChangePlanError(
+            f"change.beforeNet is {before!r} but the plan carries no attachment — "
+            "leaving a net means taking off the thing that attaches the pin to it "
+            "(035 §2; connecting the new net alongside the old one would short them)"
+        )
+    if not after and connections:
+        raise ChangePlanError(
+            "change.afterNet is empty (a disconnect) but the plan also carries "
+            f"{len(connections)} connection(s) — this slice executes one shape at a "
+            "time; say what should happen with one of them"
+        )
+    if after:
+        if len(connections) != 1:
+            raise ChangePlanError(
+                f"change.afterNet is {after!r}, so the plan must carry exactly one "
+                f"connection making that true, got {len(connections)}"
+            )
+        if connections[0].net != after:
+            raise ChangePlanError(
+                f"the connection names net {connections[0].net!r} but "
+                f"change.afterNet is {after!r} — they have to agree, or the plan "
+                "would do one thing and claim another"
+            )
+    return PlanChange(
+        kind=PATCH_PIN_KIND,
+        before=before,
+        after=after,
+        before_net=before,
+        after_net=after,
+        connections=connections,
+        attachment=attachment,
+    )
+
+
+def patch_pin_plan(
+    source: PlanSource,
+    *,
+    designator: str,
+    pin: str,
+    before_net: str,
+    after_net: str,
+    connection: str = "",
+    connection_detail: str = "",
+    to: tuple[float, float] | None = None,
+    attachment: PlanAttachment | None = None,
+    attachment_detail: str = "",
+) -> ChangePlan:
+    """The third plan shape: **one pin's connection** repaired (035).
+
+    Three forms come out of the same builder, because they are one claim with two
+    ends: the net the pin is on now and the net it must be on.
+
+    * ``before="" , after=T`` — **connect**: the pin reaches nothing and must
+      reach ``T``;
+    * ``before=N, after=""`` — **disconnect**: the pin sits on ``N`` and must
+      reach nothing;
+    * ``before=N, after=T`` — **reconnect**: both, in that order (off ``N``, onto
+      ``T``).
+
+    ``attachment`` is what a disconnect takes off the pin, and the two invariants
+    `from_jsonable` enforces (an attachment whenever ``before`` is non-empty, no
+    connection when ``after`` is empty) are enforced here too, so a plan built in
+    process cannot be one the reader would refuse.
+    """
+    if not designator.strip():
+        raise ValueError("designator is empty")
+    if not str(pin).strip():
+        raise ValueError("pin is empty — patch-pin repairs one named pin")
+    if before_net == after_net:
+        raise ValueError(
+            f"before_net and after_net are both {before_net!r} — nothing to change"
+        )
+    if before_net and attachment is None:
+        raise ValueError(
+            f"before_net is {before_net!r} but no attachment was given — leaving a "
+            "net means taking off what attaches the pin to it"
+        )
+    if connection and connection not in CONNECTION_KINDS:
+        raise ValueError(
+            f"connection must be one of {', '.join(CONNECTION_KINDS)}, got {connection!r}"
+        )
+    if after_net and not connection:
+        raise ValueError(
+            f"after_net is {after_net!r} but no connection mechanism was chosen"
+        )
+    if not after_net and connection:
+        raise ValueError(
+            "after_net is empty (a disconnect) but a connection mechanism was given"
+        )
+    connections = (
+        [PlanConnection(pin=str(pin), net=after_net, kind=connection,
+                        detail=connection_detail, to=to)]
+        if after_net
+        else []
+    )
+    if source.page_uuid:
+        page_line = f"pageUuid {source.page_uuid} is still the focused page"
+    else:
+        page_line = (
+            "the page the editor has focused is the plan's page (this plan "
+            "carries no pageUuid, so there is no page guard to enforce)"
+        )
+    preconditions = [page_line, f"{designator} pin{pin} still resolves on the page"]
+    postconditions: list[str] = []
+    if before_net:
+        preconditions.append(
+            f"{designator} pin{pin} is still on net {before_net!r}"
+        )
+        preconditions.append(
+            f"the attachment to remove ({attachment.kind if attachment else '?'} "
+            f"{attachment.primitive_id if attachment else '?'}) is still on the pin"
+            + (f" at ({attachment.at[0]:g}, {attachment.at[1]:g})" if attachment and attachment.at else "")
+        )
+        postconditions.append(
+            f"{designator} pin{pin} no longer touches net {before_net!r}"
+        )
+    else:
+        preconditions.append(
+            f"{designator} pin{pin} still reaches no net"
+        )
+    if after_net:
+        preconditions.append(
+            f"the recipe this plan was built against still asks for {after_net!r}"
+        )
+        postconditions.append(
+            f"{designator} pin{pin} sits on {after_net!r} via {connection}"
+            + (f" to ({to[0]:g}, {to[1]:g})" if to else "")
+        )
+    postconditions.append(
+        "the netlist changed exactly as promised and nowhere else"
+    )
+    postconditions.append("the target review finding is resolved")
+    return ChangePlan(
+        source=source,
+        target=PlanTarget(designator=designator, expected_value=after_net, pin=str(pin)),
+        change=PlanChange(
+            kind=PATCH_PIN_KIND,
+            before=before_net,
+            after=after_net,
+            before_net=before_net,
+            after_net=after_net,
+            connections=connections,
+            attachment=attachment,
+        ),
+        preconditions=preconditions,
+        expected_postcondition=postconditions,
     )
 
 

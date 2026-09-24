@@ -79,4 +79,49 @@ M3 顺序第 3 刀（016 改值 ✅ → 029 补件 ✅ → **patch-pin** → ins
 
 ## 交卷记录
 
-（子代理交文本，主代理 append 并复验。）
+（子代理四轮交卷全文：`outputs/035_summary.txt`；真机原件：`outputs/035_live.txt`、`outputs/035c_live.txt`、`outputs/035d_live.txt`。）
+
+### 子代理交卷浓缩（agent-43，2026-09-24）
+
+**round-1**：离线三形态全部落地（plan/preview/apply 编排 + 幂等 + 歧义附着拒绝），pytest 1478，
+变异 2/2 CAUGHT。真机 disconnect 走到诚实失败：删线成功（画布回读 `attachmentGone:true`）但导出网表
+仍报 `NET4=[U3.2,U3.4]` → exit 2 未保存。两条实测落进代码：NC 判据「坐在网上」=「与别人共网」
+（刚断开的脚留在单成员自动网 `NET6`）；附着物判定读「脚在上报点表里」（宿主把相接两段线合并成一个
+primitive，接点重复上报）。
+
+**round-2**：NC 判据统一一个函数——`pin_ruling()`（规则行与 repair 共用）+ `nc_violation()` +
+`is_auto_net()`：≥2 成员网=违例 / 单成员自动网=OK / 单成员用户命名网=违例 / 无网=OK，pytest 1484。
+诊断 B 定论：**根因是导出滞后，不是符号 2/4 脚内部绑定**——活网表删除后立刻正确（2 与 4 分开），
+导出在 0s / save+3s / +30s / 切页后四次读数完全一致；滞后不自愈 ⇒ 唯一新鲜读数是活网表。
+
+**round-3**（裁决 c + 两条收紧落地）：pin 级验收 = **活网表 + 画布双证**，缺一 exit 3
+`verification_disagrees`；connect/reconnect 目标网必须**用户命名网**（自动网 plan 时拒，exit 5）；
+范围核对分家（delete → 画布身份级 `wiresVanished == [attachment.primitive_id]`；create → 维持导出核对）。
+真机三形态一次跑齐（只碰 test 窗）：**A disconnect**（真架 `nc_pins:["4"]`）、**B connect**、
+**C reconnect**（B/C 用 test-only facts 架，must_connect 事实逐字标注为测试编造，临时 cwd
+`%TEMP%\bw035c\`，真库 `blocklib/parts.json` 未写）——各 applied + saved + 重审 resolved +
+幂等重放 already_applied + stale exit 4 零写入。重审读数：删过东西的 run 用活网表覆盖导出
+（`patchpin.overlay_live_nets`）；纯 create 仍读导出。规则侧镜像修复 `pin_dangles()`（够不着任何网 →
+connect 形态而非 reconnect）。pytest 1497 / connector 419 / tsc 干净；变异 7/7 CAUGHT。
+
+**round-4**（三条裁决落地）：范围分家定案——**「导出新鲜当且仅当本 run 无删除」**写进 `cli.py` §6c，
+新增可读字段 `verification.outsideScopeBasis`；被幻影差异拦过的 reconnect 夹具（错网=两成员自动网
+pin5↔pin1）重跑 applied + saved。`edit plan --pin` 共享选择器 `_select_report_finding()`（patch-pin 与
+029 decap `--report` 共用）：多条命中拒绝并点名候选脚号 / 无匹配拒绝 / 配 `--file` 拒绝；真机三态实证
+（U3 同页 pin4 NC + pin5 must_connect：无参 exit 5 列候选、`--pin 5` 建 reconnect plan、`--pin 9` exit 5）。
+第四个实测发现：导出与活网表对同一匿名网给两个名字（`NET3` vs `$57N2`）⇒ `is_auto_net` 词表扩为
+`^(NET\d+|\$\S+)$`，stale 检查两个自动名视为同一岛（用户命名网仍逐字比，测试钉住）。pytest **1507** /
+connector **419** / tsc 干净；变异 4/4 CAUGHT（四轮累计 2+2+7+4 全 CAUGHT）。现场零残留：scratch 页全删、
+6 文档、焦点回 P1、identity consistent；ROBOT/test2 全程未寻址。
+
+裁决留痕：netlabel 附着 → **拒绝并点名**（本机 `sch_PrimitiveNetLabel` 连读都不存在；不给 connector
+加无法验收的删除类别）。
+
+### 主代理复验（2026-09-24）
+
+- sha256 抽核 6 件全对：cli.py `94c54f42…`、changeplan.py `d6edaf05…`、facts.py `7c4e4d6f…`、
+  patchpin.py `dcc5bce0…`、test_035_patchpin.py `aa151b70…`、test_016_edit_cli.py `9026c911…`。
+- 三线复跑：pytest **1507 passed** / connector **419 passed** / `tsc --noEmit` 干净。
+- `git status` 无测试架污染（test-only `parts.json` 只在 `%TEMP%\bw035c\`）；connector/daemon 零改动，
+  仍 0.4.23。
+- SKILL.md 坑表补第 24 条（导出不重算定论 + 三条宿主习性），动作说明区补 patch-pin 用法与 `--pin`。

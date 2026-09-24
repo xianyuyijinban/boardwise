@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import re
@@ -42,12 +43,15 @@ from .core.changeplan import (
     ADD_COMPONENT_KIND,
     COMPONENT_VALUE_KIND,
     CONNECTION_KINDS,
+    PATCH_PIN_KIND,
     ChangePlan,
     ChangePlanError,
+    PlanAttachment,
     PlanPart,
     PlanSource,
     add_component_plan,
     component_value_plan,
+    patch_pin_plan,
     resolve_on_page,
     sha256_of,
 )
@@ -608,6 +612,17 @@ def build_parser() -> argparse.ArgumentParser:
             "and the recipe (`decap-required-caps` findings only). Needs --lcsc "
             "and a live editor (the landing spot and the designator pool come "
             "from `sch.geometry`) — `edit plan --help`, §029-a."
+        ),
+    )
+    edit_plan.add_argument(
+        "--pin", default=None, metavar="NUMBER",
+        help=(
+            "Which pin's finding to repair (035 四轮). A report can carry several "
+            "findings for one designator under one rule — the NC pin and the "
+            "must_connect pin of the same part, one decap row per supply pin — and "
+            "the selector will not pick one for you: with more than one match it "
+            "refuses and names the pins. Required then, optional otherwise; when "
+            "given it must match exactly one finding."
         ),
     )
     edit_plan.add_argument(
@@ -5559,6 +5574,11 @@ REPAIRABLE_RULES: dict[str, str] = {
     # from; the rule is offline (`edit plan --report`) and the live probe reuses
     # its own decision function (§二.5).
     "decap-required-caps": ADD_COMPONENT_KIND,
+    # 035: one pin's connection. `conn-nc-and-must-connect` is the one rule whose
+    # findings are about a *pin* — a declared-NC pin sitting on a net, or a
+    # must_connect pin that reaches the wrong one (or none) — and its target
+    # carries exactly what a patch-pin plan is built from (035 §1).
+    "conn-nc-and-must-connect": PATCH_PIN_KIND,
 }
 
 #: The designator prefix an added decoupling part gets. A constant rather than
@@ -5764,7 +5784,25 @@ def _cmd_edit_plan(args: argparse.Namespace) -> int:
     option, or a before/after pair the plan's own validation would refuse.
     """
     if getattr(args, "report", None):
+        # Which `--report` builder runs is decided by the *rule's* repairable
+        # kind (035): the two live-page builders need different things from the
+        # page — 029 a landing spot, a designator pool and a connection, 035 the
+        # pin's own coordinates and whatever is attached to them. An unknown rule
+        # is still refused inside the builder it would have gone to.
+        rule_id = (getattr(args, "rule", "") or "decap-required-caps").strip()
+        if REPAIRABLE_RULES.get(rule_id) == PATCH_PIN_KIND:
+            return _cmd_edit_plan_patch_pin(args)
         return _cmd_edit_plan_add_component(args)
+    if str(getattr(args, "pin", "") or "").strip():
+        # `--pin` selects among a report's findings; the `--file` path re-runs the
+        # rule and never sees a report, so accepting it there would be a switch
+        # that silently does nothing (035 四轮).
+        print(
+            "boardwise edit plan: --pin selects one of a **report's** findings, and "
+            "this path re-runs the rule on --file instead — pass --report to use it",
+            file=sys.stderr,
+        )
+        return 5
     return _cmd_edit_plan_value(args)
 
 
@@ -5944,6 +5982,356 @@ def _cmd_edit_plan_value(args: argparse.Namespace) -> int:
     return 0
 
 
+def _select_report_finding(
+    payload: dict, *, rule_id: str, designator: str, pin: str = ""
+) -> tuple[dict | None, str]:
+    """The one finding a repair is for, out of a checkup report (035 四轮).
+
+    A report routinely carries **several** findings for one designator under one
+    rule id — measured 2026-09-24 on the machine: the scratch part produced both
+    `U3 pin4` (declared NC on a net) and `U3 pin5` (a must_connect obligation) from
+    `conn-nc-and-must-connect`, and `decap-required-caps` has one row per supply
+    pin. Picking "the first match" silently planned the wrong repair: the real
+    run's first attempt went looking for an attachment on pin4 while the finding
+    to repair was pin5, and refused with "nothing recognisable attaches".
+
+    So the selector is total rather than first-match:
+
+    * one match → that finding;
+    * several → ``None`` plus a message naming the pins, until ``--pin`` says which
+      ("a plan that repairs the wrong pin is worse than no plan");
+    * ``--pin`` given → it must match exactly one finding, and nothing else;
+    * none → ``None`` and an **empty** message: each builder keeps its own
+      not-found wording (they have different things to say about it).
+
+    Returns ``(finding, why)``.
+    """
+    matches = [
+        item
+        for item in payload.get("findings") or []
+        if str(item.get("rule_id")) == rule_id
+        and str((item.get("target") or {}).get("component_ref") or "").upper() == designator
+    ]
+    if pin:
+        matches = [
+            item
+            for item in matches
+            if pin
+            in [
+                str(ref).strip()
+                for ref in ((item.get("target") or {}).get("pin_refs") or [])
+            ]
+        ]
+        if not matches:
+            return None, (
+                f"{designator or '(no --designator given)'} pin{pin}: no {rule_id} finding "
+                "matches that pin — --pin has to name a pin the report's findings carry"
+            )
+    if len(matches) > 1:
+        pins = sorted({
+            str(ref)
+            for item in matches
+            for ref in ((item.get("target") or {}).get("pin_refs") or [])
+        })
+        return None, (
+            f"{len(matches)} {rule_id} findings for {designator} (pins: "
+            + (", ".join(pins) or "none recorded")
+            + ") — say which one with --pin <number>; 一条 designator 上多条 pin 级 "
+            "finding 时不许挑第一条（035 四轮）"
+        )
+    if not matches:
+        return None, ""
+    return matches[0], ""
+
+
+def _cmd_edit_plan_patch_pin(args: argparse.Namespace) -> int:
+    """``edit plan --report``: a pin-level finding -> a `patch-pin` plan (035).
+
+    The three forms come straight out of the rule's target: ``expected_before`` is
+    the net the pin is on now and ``suggested_after`` the net it must be on, and
+    an empty string on either side has a meaning — "reaches nothing". A plan that
+    read a missing field as "no change" would be the silent choice this slice
+    exists to forbid, so the two empty/not-empty combinations are the form.
+
+    Everything the plan claims beyond that is measured on the live page: the
+    pin's own coordinates (`sch.component_pins`), what attaches it when something
+    has to come off (`patchpin.attachment_on_pin`, proven on the canvas), and how
+    the new connection is made (`addcomponent.choose_connection` — the 029
+    judgement: a wire to that net's own segment, a power flag when the net is a
+    rail and nothing reaches it, a label only where the page already names it).
+    """
+    import asyncio
+    import json
+
+    from .engines import addcomponent, patchpin
+
+    report_path = Path(args.report)
+    try:
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        print(f"boardwise edit plan: {report_path}: cannot be read ({exc})", file=sys.stderr)
+        return 2
+    except ValueError as exc:
+        print(f"boardwise edit plan: {report_path}: is not JSON ({exc})", file=sys.stderr)
+        return 2
+    rule_id = (args.rule or "").strip()
+    if REPAIRABLE_RULES.get(rule_id) != PATCH_PIN_KIND:
+        print(
+            f"boardwise edit plan: rule {rule_id!r} does not repair by {PATCH_PIN_KIND} "
+            f"— this builder serves {', '.join(sorted(r for r, kind in REPAIRABLE_RULES.items() if kind == PATCH_PIN_KIND))}",
+            file=sys.stderr,
+        )
+        return 5
+    designator = (args.designator or "").strip().upper()
+    finding, why = _select_report_finding(
+        payload, rule_id=rule_id, designator=designator, pin=str(args.pin or "").strip()
+    )
+    if finding is None:
+        if why:
+            print(f"boardwise edit plan: {why}", file=sys.stderr)
+            return 5
+        rule_findings = [
+            item for item in payload.get("findings") or []
+            if str(item.get("rule_id")) == rule_id
+        ]
+        print(
+            f"boardwise edit plan: no {rule_id} finding for {designator!r} in "
+            f"{report_path} ({len(rule_findings)} finding(s) for that rule: "
+            + (", ".join(sorted({
+                str((item.get("target") or {}).get("component_ref") or "(no target)")
+                for item in rule_findings
+            })) or "none")
+            + ")",
+            file=sys.stderr,
+        )
+        return 5
+    target = finding.get("target") or {}
+    pins = [str(item) for item in target.get("pin_refs") or [] if str(item).strip()]
+    if not pins:
+        print(
+            "  这条 finding 没有 structured target —— 规则只在 pin 级义务（nc_pins / "
+            "无条件 must_connect）成立、且 must_connect 目标真的是网名时才给 target；"
+            "UNKNOWN（架里没事实、mode-tagged、自由文本目标）不给，plan 也不猜（035 §1）",
+            file=sys.stderr,
+        )
+        return 5
+    pin = pins[0]
+    before_net = str(target.get("expected_before") or "").strip()
+    after_net = str(target.get("suggested_after") or "").strip()
+    if before_net == after_net:
+        print(
+            f"boardwise edit plan: the finding for {designator} pin{pin} says "
+            f"{before_net!r} on both sides — nothing to change",
+            file=sys.stderr,
+        )
+        return 5
+    form = "connect" if not before_net else ("disconnect" if not after_net else "reconnect")
+
+    if not args.file:
+        print(
+            "boardwise edit plan: --file is required with --report — it is the "
+            "snapshot the plan's sha256 is taken from and the file apply "
+            "re-reviews afterwards",
+            file=sys.stderr,
+        )
+        return 5
+    snapshot = Path(args.file)
+    if not snapshot.is_file():
+        print(f"boardwise edit plan: {snapshot}: not a file", file=sys.stderr)
+        return 2
+
+    BridgeClient, BridgeError, port, token = _open_cli(args)
+
+    async def run() -> int:
+        try:
+            client = await BridgeClient.open(
+                _bridge_uri(port), token, "cli", client="boardwise-cli"
+            )
+        except (OSError, BridgeError) as exc:
+            print(
+                f"boardwise edit plan: the live page is required for a "
+                f"{PATCH_PIN_KIND} plan ({exc})",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            route = _edit_target_kwargs(args)
+            try:
+                listing = await client.call("doc.list", {}, **route)
+            except BridgeError as exc:
+                print(f"boardwise edit plan: doc.list failed [{exc.code}] {exc.message}",
+                      file=sys.stderr)
+                return 2
+            page = _active_document_uuid(listing) if isinstance(listing, dict) else ""
+            try:
+                geometry = await client.call("sch.geometry", {}, **route)
+            except BridgeError as exc:
+                print(f"boardwise edit plan: sch.geometry failed [{exc.code}] {exc.message}",
+                      file=sys.stderr)
+                return 2
+            if not isinstance(geometry, dict):
+                print("boardwise edit plan: the page could not be read", file=sys.stderr)
+                return 2
+            primitive = addcomponent.primitive_id_of(geometry, designator)
+            if not primitive:
+                print(
+                    f"boardwise edit plan: {designator} is not on the focused page "
+                    f"({len(addcomponent.component_origins(geometry))} components there) "
+                    "— the plan would name a pin next to nothing",
+                    file=sys.stderr,
+                )
+                return 5
+            try:
+                pin_payload = await client.call(
+                    "sch.component_pins", {"primitiveId": primitive}, **route
+                )
+            except BridgeError as exc:
+                print(f"boardwise edit plan: sch.component_pins failed [{exc.code}] {exc.message}",
+                      file=sys.stderr)
+                return 2
+            pin_coords = addcomponent.pin_points(pin_payload)
+            if pin not in pin_coords:
+                print(
+                    f"boardwise edit plan: {designator} reports no pin {pin} "
+                    f"(pins: {sorted(pin_coords) or 'none'}) — 没有脚坐标就不知道该"
+                    "动哪一根线，拒绝（035 §3）",
+                    file=sys.stderr,
+                )
+                return 5
+            pin_at = pin_coords[pin]
+        finally:
+            await client.close()
+
+        attachment = None
+        if before_net:
+            try:
+                found = patchpin.attachment_on_pin(geometry, pin_at)
+            except patchpin.AttachmentRefused as exc:
+                print(f"boardwise edit plan: {exc}", file=sys.stderr)
+                return 5
+            attachment = PlanAttachment(
+                kind=found.kind, primitive_id=found.primitive_id,
+                detail=found.detail, at=found.at,
+            )
+        connection = ""
+        connection_detail = ""
+        to = None
+        if after_net:
+            from .rules import facts as facts_rules
+
+            if facts_rules.is_auto_net(after_net):
+                print(
+                    f"boardwise edit plan: the must_connect target for {designator} pin{pin} "
+                    f"is {after_net!r}, an editor-generated net name — 收紧一（035 三轮）："
+                    "connect/reconnect 的目标必须是**用户命名网**；自动名说明没人给这个网起名，"
+                    "接匿名网本来就是怪修复，而且验收用的活网表按名字给、认不出它。拒绝建 plan",
+                    file=sys.stderr,
+                )
+                return 5
+            try:
+                choice = addcomponent.choose_connection(after_net, pin_at, geometry)
+            except addcomponent.NoConnectionOption as exc:
+                print(f"boardwise edit plan: {exc}", file=sys.stderr)
+                return 5
+            connection = choice.kind
+            connection_detail = choice.detail
+            to = choice.to
+
+        project_uuid, page_uuid, host_version, notes = _snapshot_identity(snapshot)
+        if not page_uuid:
+            reported_page = str(payload.get("source", {}).get("pageUuid") or "")
+            if reported_page:
+                page_uuid = reported_page
+                notes.append(
+                    f"pageUuid {page_uuid!r} comes from the checkup report's source block, "
+                    "not from the snapshot (a whole-project export names no single page), "
+                    "so the page guard still has a page to enforce"
+                )
+        source = PlanSource(
+            input_sha256=sha256_of(snapshot),
+            project_uuid=project_uuid,
+            page_uuid=page_uuid or page,
+            host_version=host_version,
+            connector_version=_repo_connector_version(),
+        )
+        plan = patch_pin_plan(
+            source,
+            designator=designator,
+            pin=pin,
+            before_net=before_net,
+            after_net=after_net,
+            connection=connection,
+            connection_detail=connection_detail,
+            to=to,
+            attachment=attachment,
+        )
+
+        print(
+            f"boardwise edit plan: {report_path} → {form} {designator} pin{pin} "
+            f"{before_net or '(no net)'} → {after_net or '(no net)'}"
+        )
+        print(f"finding: [{finding.get('severity')}] {rule_id}: {finding.get('message')}")
+        print(f"pin: {designator} pin{pin} at ({pin_at[0]:g}, {pin_at[1]:g})")
+        if attachment is not None:
+            print(f"disconnect: {attachment.kind} {attachment.primitive_id} — {attachment.detail}")
+        if after_net:
+            print(f"connect: pin{pin}→{after_net} via {connection} — {connection_detail}")
+        print(
+            f"snapshot: sha256 {source.input_sha256}  pageUuid {source.page_uuid or '(none)'}  "
+            f"host {source.host_version or '(unknown)'}"
+        )
+        for note in notes:
+            print(f"note: {note}")
+
+        if args.out_path:
+            plan.dump(args.out_path)
+            print(f"plan written to {args.out_path}")
+        else:
+            print(json.dumps(plan.to_jsonable(), ensure_ascii=False, indent=2))
+        if args.json_path:
+            Path(args.json_path).write_text(
+                json.dumps(
+                    {
+                        "command": "plan",
+                        "ok": True,
+                        "kind": PATCH_PIN_KIND,
+                        "form": form,
+                        "report": str(report_path),
+                        "file": str(snapshot),
+                        "rule": rule_id,
+                        "designator": designator,
+                        "pin": pin,
+                        "pinAt": list(pin_at),
+                        "beforeNet": before_net,
+                        "afterNet": after_net,
+                        "connection": connection,
+                        "connectionDetail": connection_detail,
+                        "to": list(to) if to else None,
+                        "attachment": (
+                            {
+                                "kind": attachment.kind,
+                                "primitiveId": attachment.primitive_id,
+                                "detail": attachment.detail,
+                                "at": list(attachment.at) if attachment.at else None,
+                            }
+                            if attachment
+                            else None
+                        ),
+                        "sha256": source.input_sha256,
+                        "planPath": args.out_path,
+                        "plan": plan.to_jsonable(),
+                        "notes": notes,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        return 0
+
+    return asyncio.run(run())
+
+
 def _cmd_edit_plan_add_component(args: argparse.Namespace) -> int:
     """``edit plan --report``: a decap finding + the live page -> an add-component plan (029-a).
 
@@ -5990,17 +6378,13 @@ def _cmd_edit_plan_add_component(args: argparse.Namespace) -> int:
         return 5
 
     designator = (args.designator or "").strip().upper()
-    finding = next(
-        (
-            item
-            for item in payload.get("findings") or []
-            if str(item.get("rule_id")) == rule_id
-            and str((item.get("target") or {}).get("component_ref") or "").upper()
-            == designator
-        ),
-        None,
+    finding, why = _select_report_finding(
+        payload, rule_id=rule_id, designator=designator, pin=str(args.pin or "").strip()
     )
     if finding is None:
+        if why:
+            print(f"boardwise edit plan: {why}", file=sys.stderr)
+            return 5
         rule_findings = [
             item for item in payload.get("findings") or []
             if str(item.get("rule_id")) == rule_id
@@ -6282,6 +6666,8 @@ def _cmd_edit_preview(args: argparse.Namespace) -> int:
 
     if plan.change.kind == ADD_COMPONENT_KIND:
         return _preview_add_component(plan, path, model, digest, args)
+    if plan.change.kind == PATCH_PIN_KIND:
+        return _preview_patch_pin(plan, path, model, digest, args)
 
     designator = _boardwise_designator(model, plan.target.designator)
     if designator is None:
@@ -6362,6 +6748,146 @@ def _cmd_edit_preview(args: argparse.Namespace) -> int:
                         "none by construction: one key inside the component's "
                         "otherProperty changes; no primitive is created, moved "
                         "or deleted"
+                    ),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    return 0
+
+
+def _preview_patch_pin(plan, path: Path, model, digest: str, args) -> int:
+    """``edit preview`` for a pin repair (035): the pin, its net now, and the form.
+
+    Offline, so two of the plan's claims can be checked and one cannot:
+
+    * the **pin is there** — `designator` still has that pin in the snapshot;
+    * the pin **is where the plan thinks it is** — its net in the snapshot is
+      ``change.beforeNet`` (a mismatch is exit 4: the board moved under the plan);
+    * the **attachment** cannot be checked here: a snapshot holds no canvas ids,
+      so "the thing I am about to delete is still the thing that is there" is
+      apply's job, with `sch.geometry` in hand. Said out loud rather than
+      silently skipped.
+    """
+    import json
+
+    from .engines import patchpin
+
+    designator = plan.target.designator
+    pin = plan.target.pin
+    resolved = _boardwise_designator(model, designator)
+    if resolved is None:
+        print(
+            f"boardwise edit preview: {path} no longer holds {designator} — "
+            "目标已不在快照里，前置条件失败",
+            file=sys.stderr,
+        )
+        return 4
+    component = model.components[resolved]
+    numbers = [item.number for item in component.pins]
+    if pin not in numbers:
+        print(
+            f"boardwise edit preview: {resolved} has no pin {pin} in {path} "
+            f"(pins: {', '.join(numbers) or 'none'}) — 前置条件失败",
+            file=sys.stderr,
+        )
+        return 4
+    now = patchpin.pin_net(model, resolved, pin)
+    if now != plan.change.before_net:
+        print(
+            f"boardwise edit preview: {resolved} pin{pin} reads net {now!r} in the "
+            f"snapshot, but the plan expects {plan.change.before_net!r} — "
+            "前置条件失败，快照里的连接已经变了",
+            file=sys.stderr,
+        )
+        return 4
+
+    form = (
+        "connect" if not plan.change.before_net
+        else ("disconnect" if not plan.change.after_net else "reconnect")
+    )
+    rule_id = RULE_FOR_KIND.get(plan.change.kind, "")
+    rule = next((item for item in BUILTIN_RULES if item.id == rule_id), None)
+    subject = f"{resolved} pin{pin}"
+    silenced = [
+        item for item in (rule.check(model) if rule is not None else [])
+        if subject in item.message or any(subject in entry for entry in item.evidence)
+    ]
+
+    print(f"boardwise edit preview: {args.plan}")
+    print(
+        f"plan: {form} {subject} {plan.change.before_net or '(no net)'} → "
+        f"{plan.change.after_net or '(no net)'}"
+    )
+    print(f"snapshot: {path} sha256 matches the plan's ({digest})")
+    print(f"target: {subject} is still there, still on net {now!r}")
+    if plan.change.attachment is not None:
+        print(
+            f"disconnect: {plan.change.attachment.kind} "
+            f"{plan.change.attachment.primitive_id} — {plan.change.attachment.detail}"
+        )
+        print(
+            "attachment: cannot be confirmed from a snapshot (it holds no canvas "
+            "ids) — apply re-reads the page and re-checks that same coordinate"
+        )
+    for item in plan.change.connections:
+        print(f"connect: pin{item.pin}→{item.net} via {item.kind} — {item.detail}")
+    if rule is None:
+        print(f"resolves: (the plan's kind {plan.change.kind!r} maps to no rule in this build)")
+    else:
+        print(f"resolves ({len(silenced)} finding(s) from {rule.id}):")
+        for item in silenced:
+            print(f"  [{item.severity}] {item.message}")
+    print(
+        "geometric diff: one attachment deleted and/or one connection drawn on the "
+        "live page — measured by apply, not predicted here"
+    )
+
+    if args.json_path:
+        Path(args.json_path).write_text(
+            json.dumps(
+                {
+                    "command": "preview",
+                    "ok": True,
+                    "kind": plan.change.kind,
+                    "form": form,
+                    "file": str(path),
+                    "view": args.view,
+                    "planPath": args.plan,
+                    "plan": plan.to_jsonable(),
+                    "sha256": digest,
+                    "snapshot": "fresh",
+                    "designator": resolved,
+                    "pin": pin,
+                    "observedNet": now,
+                    "beforeNet": plan.change.before_net,
+                    "afterNet": plan.change.after_net,
+                    "attachment": (
+                        {
+                            "kind": plan.change.attachment.kind,
+                            "primitiveId": plan.change.attachment.primitive_id,
+                            "detail": plan.change.attachment.detail,
+                            "at": list(plan.change.attachment.at)
+                            if plan.change.attachment.at else None,
+                        }
+                        if plan.change.attachment else None
+                    ),
+                    "connections": [
+                        {"pin": item.pin, "net": item.net, "kind": item.kind,
+                         "detail": item.detail,
+                         "to": list(item.to) if item.to else None}
+                        for item in plan.change.connections
+                    ],
+                    "resolves": [
+                        {"rule_id": item.rule_id, "severity": item.severity,
+                         "message": item.message}
+                        for item in silenced
+                    ],
+                    "geometricDiff": (
+                        "one attachment deleted and/or one connection drawn — "
+                        "measured by apply"
                     ),
                 },
                 ensure_ascii=False,
@@ -7739,6 +8265,786 @@ def _facts_library():
     return library, ""
 
 
+def _render_edit_apply_patch_pin(report: dict, args: argparse.Namespace) -> int:
+    """Print the human summary of a patch-pin apply, write ``--json``, exit."""
+    import json
+
+    code = int(report.get("exitCode") or 0)
+    reason = report.get("reason") or ""
+    print(
+        f"boardwise edit apply: {report.get('form')} {report.get('designator')} "
+        f"pin{report.get('pin')} {report.get('beforeNet') or '(no net)'} → "
+        f"{report.get('afterNet') or '(no net)'}  "
+        f"[{report.get('outcome')}{': ' + reason if reason else ''}]"
+    )
+    for step in report.get("steps") or []:
+        mark = "ok" if step["ok"] else ("UNKNOWN" if step["unknown"] else "FAILED")
+        line = f"  {mark:<7} {step['action']:<26} {step['purpose']}"
+        if not step["ok"]:
+            line += f" — [{step['code']}] {step['message']}"
+        print(line)
+    spot = report.get("pinAt") or [0, 0]
+    print(
+        f"  pin     {report.get('designator')} pin{report.get('pin')} at "
+        f"({spot[0]:g}, {spot[1]:g})  observed {report.get('observedNet')!r}"
+    )
+    idempotence = report.get("idempotence") or {}
+    if idempotence:
+        print(f"  probe   {idempotence.get('pin')} → {idempotence.get('state')}")
+    attachment = report.get("attachment")
+    if attachment:
+        print(
+            f"  off     delete {attachment['kind']} {attachment['primitiveId']} — "
+            f"{attachment['detail']}"
+        )
+    connection = report.get("connection")
+    if connection:
+        print(
+            f"  on      pin{connection['pin']}→{connection['net']} via "
+            f"{connection['kind']} — {connection['detail']}"
+        )
+    diff = report.get("range") or {}
+    if diff:
+        print(f"  range   {json.dumps(diff, ensure_ascii=False)}")
+    verification = report.get("verification") or {}
+    if verification:
+        outside = verification.get("outsideScope") or []
+        print(
+            f"  live    {verification.get('pin')} net {verification.get('liveNet')!r} "
+            f"(wanted {verification.get('expected')!r}) — "
+            f"{'ok' if verification.get('liveOk') else 'DID NOT MATCH'}"
+        )
+        print(
+            f"  canvas  {verification.get('canvas')}  — "
+            f"{'ok' if verification.get('canvasOk') else 'DID NOT MATCH'}"
+        )
+        if verification.get("exportNetlist"):
+            print(
+                f"  export  {verification.get('exportNetlist')} "
+                f"(net {verification.get('exportNet')!r})"
+                + ("; 范围外零差异" if not outside else "; 范围外差异: " + "；".join(outside))
+            )
+        if verification.get("outsideScopeBasis"):
+            print(f"  范围核对 {verification['outsideScopeBasis']}")
+    if report.get("persistence"):
+        print(f"  persistence: {report['persistence']}")
+    post = report.get("postReview") or {}
+    if post:
+        print(
+            f"  re-review: {post.get('state')} — {post.get('reason')}"
+            + (f"  [connectivity: {post['connectivity']}]" if post.get("connectivity") else "")
+        )
+    for note in report.get("notes") or []:
+        print(f"  note: {note}")
+    if report.get("final"):
+        print(f"boardwise edit apply: {report['final']}")
+    if args.json_path:
+        Path(args.json_path).write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    return code
+
+
+async def _edit_apply_patch_pin_flow(client, bridge_error, plan, args, started) -> int:
+    """``edit apply`` for a pin repair (035).
+
+    The four protections are 016's and 029's, unchanged in intent:
+
+    * **the page guard** — the plan's page is still the focused one, and the two
+      layers of focus agree;
+    * **re-read before writing** — the pin is re-measured on the page *and* in the
+      project's own netlist: it must still be on ``before_net`` (a mismatch is
+      exit 4 — the board moved under the plan), and for a disconnect the very
+      attachment the plan names must still be on the pin;
+    * **the range** — judged by *identity*, not by counts: the attachment id is
+      gone, the promised connection is on the pin, and
+      :func:`patchpin.outside_scope_differences` shows that no other pin changed
+      company in the netlist. (A wire count would be the wrong instrument: the
+      editor merges touching wires into one primitive — measured 029-c, where two
+      new connections left the wire count unchanged.)
+    * **the read-back decides** — the project's own netlist says whether the pin
+      reached ``after_net`` or left ``before_net``, and a timeout or a dropped
+      connection is ``unknown`` (exit 3), read back and never retried.
+
+    The idempotence probe runs **before** the range checks and before any write,
+    and it is the rule's own per-pin judgement (`rules.facts.pin_ruling`): "this
+    pin is already as the shelf asks" is the same answer the finding came from.
+    """
+    from .core.changeplan import CONNECTION_LABEL, CONNECTION_POWER_FLAG
+    from .engines import addcomponent, patchpin
+    from .rules import facts as facts_rules
+
+    records: list[dict] = []
+    notes: list[str] = []
+    designator = plan.target.designator
+    pin = plan.target.pin
+    before_net = plan.change.before_net
+    after_net = plan.change.after_net
+    attachment = plan.change.attachment
+    page = plan.source.page_uuid
+    rule_id = RULE_FOR_KIND.get(PATCH_PIN_KIND, "conn-nc-and-must-connect")
+    form = "connect" if not before_net else ("disconnect" if not after_net else "reconnect")
+    report: dict = {
+        "command": "apply",
+        "ok": False,
+        "kind": PATCH_PIN_KIND,
+        "form": form,
+        "outcome": "",
+        "reason": "",
+        "exitCode": 0,
+        "planPath": str(args.plan),
+        "plan": plan.to_jsonable(),
+        "designator": designator,
+        "pin": pin,
+        "beforeNet": before_net,
+        "afterNet": after_net,
+        "connection": (
+            {
+                "pin": plan.change.connections[0].pin,
+                "net": plan.change.connections[0].net,
+                "kind": plan.change.connections[0].kind,
+                "detail": plan.change.connections[0].detail,
+                "to": list(plan.change.connections[0].to)
+                if plan.change.connections[0].to else None,
+            }
+            if plan.change.connections else None
+        ),
+        "attachment": (
+            {
+                "kind": attachment.kind,
+                "primitiveId": attachment.primitive_id,
+                "detail": attachment.detail,
+                "at": list(attachment.at) if attachment.at else None,
+            }
+            if attachment else None
+        ),
+        "page": {"uuid": page, "guard": "enforced" if page else "unavailable"},
+        "pinAt": None,
+        "idempotence": {},
+        "write": {"calls": 0, "deleted": [], "drawn": []},
+        "verification": {},
+        "range": {},
+        "save": {},
+        "persistence": "",
+        "postReview": {},
+        "steps": records,
+        "notes": notes,
+        "final": "",
+    }
+
+    def done(code: int, outcome: str, reason: str = "") -> int:
+        report["exitCode"] = code
+        report["outcome"] = outcome
+        report["ok"] = code == 0
+        if reason:
+            report["reason"] = reason
+        return _render_edit_apply_patch_pin(report, args)
+
+    async def call(action, params, purpose, *, writes=False):
+        try:
+            data = await client.call(action, params, **_edit_target_kwargs(args))
+        except bridge_error as exc:
+            records.append(_edit_step(action, purpose, False, exc, wrote=writes))
+            return None
+        records.append(_edit_step(action, purpose, True, wrote=writes))
+        return data
+
+    # ---- 1. the page guard + the two layers of focus ----------------------
+    if page:
+        listing = await call("doc.list", {}, "confirm the focused page is the plan's page")
+        if isinstance(listing, dict):
+            focused = _active_document_uuid(listing)
+            if focused and focused != page:
+                notes.append(
+                    f"the editor has {focused} focused and the plan targets {page}; "
+                    "nothing was written"
+                )
+                return done(4, "refused", "page_mismatch")
+    identity = await call("sys.identity", {}, "confirm the editor's two layers of focus agree")
+    if isinstance(identity, dict) and identity.get("consistent") is False:
+        notes.append(
+            "焦点不一致，请先切换工程再执行：ChangePlan 的第一条 precondition 是 "
+            "\"the page the editor has focused is the plan's page\" —— 没有发出任何写动作"
+        )
+        return done(4, "refused", "focus_inconsistent")
+
+    # ---- 2. the live page: the pin's coordinates, and its attachment -------
+    geometry = await call("sch.geometry", {}, "read the page before writing")
+    if geometry is None:
+        last = records[-1]
+        notes.append(
+            "the page could not be read, so the plan's preconditions were not checked; "
+            "nothing was written"
+        )
+        return done(3 if last["unknown"] else 4, "unknown" if last["unknown"] else "refused",
+                    "precondition_unreadable")
+    primitive = addcomponent.primitive_id_of(geometry, designator)
+    if not primitive:
+        notes.append(
+            f"{designator} is not on the focused page — the plan's precondition "
+            "(`{designator} pin{pin} still resolves`) is broken; nothing was written"
+        )
+        return done(4, "refused", "designator_missing")
+    pin_payload = await call(
+        "sch.component_pins", {"primitiveId": primitive},
+        "read the pin's own coordinates on the canvas",
+    )
+    pin_coords = addcomponent.pin_points(pin_payload)
+    if pin not in pin_coords:
+        notes.append(
+            f"the editor reports no pin {pin} for {designator} (pins: "
+            f"{sorted(pin_coords) or 'none'}) — 没有脚坐标就不知道该动哪一根线；没有写"
+        )
+        return done(4, "refused", "pin_missing")
+    pin_at = pin_coords[pin]
+    report["pinAt"] = list(pin_at)
+
+    # ---- 3. the live netlist, and the idempotence probe --------------------
+    #
+    # The probe runs **before** the stale and attachment checks (030 §③'s lesson,
+    # applied to a pin): on a repeat run the pin is already as the shelf asks, so
+    # `before_net` no longer holds and the attachment is gone — checking those
+    # first would answer "stale_before" or "attachment_missing" for work that is
+    # *finished*. Both checks read the same model, so putting the probe first
+    # costs nothing and buys the honest answer.
+    before_model = await _live_project_model(call, notes)
+    if before_model is None:
+        notes.append(
+            "the live project could not be read (sys.get_project_file → parse), so the "
+            "pin's current connection cannot be stated; nothing was written"
+        )
+        return done(4, "refused", "netlist_unreadable")
+    # ---- ...and on the delete path that reading is the live netlist ------------
+    #
+    # Measured 2026-09-24, on a repeat run of a repair that had just succeeded: a
+    # deletion does not make the export recompute, so the export still joined the
+    # two pins the editor had separated. The probe therefore called the finished
+    # repair a violation, and the run then refused it as `stale_before` — the one
+    # answer a repeat run must never give (029's idempotence rule). So where the
+    # plan **removes** something, the pin's membership comes from `sch.netlist`
+    # (the reading that is fresh) over the export's identity — props and the shelf
+    # lookup stay the export's. A connect-only run keeps the export: nothing has
+    # been created yet in this run, and a create is measured to make the editor
+    # recompute (029), so there the export is already the fresh reading.
+    #
+    # It is a **copy** that gets overlaid. The export-vs-export comparison the
+    # create path's range check is built on (`outside_scope_differences`) must stay
+    # one instrument on both sides: measured 2026-09-24 on a reconnect, comparing a
+    # live-overlaid *before* against an exported *after* reported six phantom
+    # out-of-scope differences (R2.1, R2.2, U3.1, U3.3, U3.4 — pins the live
+    # netlist simply reports as unnamed) and stopped a repair whose two legs were
+    # both green.
+    observed_model = before_model
+    if attachment is not None:
+        live_answer = await call(
+            "sch.netlist", {"type": "EasyEDA"},
+            "read the editor's own netlist for the pin's current connection "
+            "(an export does not recompute for a deletion)",
+        )
+        live_nets = patchpin.live_pin_nets(live_answer)
+        if live_nets:
+            observed_model = patchpin.overlay_live_nets(
+                copy.deepcopy(before_model), live_nets
+            )
+            report["observedVia"] = "sch.netlist (live) over the export"
+        else:
+            report["observedVia"] = "project export"
+            notes.append(
+                "the editor's own netlist came back empty, so the pin's current "
+                "connection was read from the export alone — which does not recompute "
+                "for a deletion; a repeat run may answer stale_before instead of "
+                "already_applied (measured 2026-09-24)"
+            )
+    else:
+        report["observedVia"] = "project export"
+    rule = next((item for item in BUILTIN_RULES if item.id == rule_id), None)
+    component = observed_model.components.get(designator)
+    entry = rule.entry_for(component) if (rule is not None and component is not None) else None
+    if rule is None or component is None or entry is None:
+        notes.append(
+            f"the rule {rule_id!r} cannot judge {designator} on this board "
+            "(no rule, no component, or no shelf entry), so 'is this already done?' "
+            "has no answer; nothing was written — a write that cannot check itself is "
+            "a duplicate waiting to happen"
+        )
+        return done(4, "refused", "pin_judgement_unavailable")
+    ruling = facts_rules.pin_ruling(component, entry, observed_model, pin)
+    report["idempotence"] = {
+        "pin": f"{designator} pin{pin}",
+        "state": ruling.state,
+        "how": "rules.facts.pin_ruling (the rule's own per-pin judgement)",
+    }
+    if ruling.state == facts_rules.PIN_OK:
+        notes.append(
+            f"{designator} pin{pin} is already as the shelf asks ({ruling.message}) — a "
+            "repeat run or a hand repair; nothing was written (idempotent)"
+        )
+        report["final"] = "already satisfied; the page was not touched"
+        return done(0, "already_applied", "already_applied")
+    if ruling.state != facts_rules.PIN_VIOLATION:
+        notes.append(
+            f"the shelf's obligation for {designator} pin{pin} cannot be judged "
+            f"({ruling.state}: {ruling.message}) — 不给 plan 的形态也不该在这里写；没有写"
+        )
+        return done(4, "refused", "pin_judgement_undecided")
+
+    # ---- 4. the plan's own preconditions: the pin, and the attachment ------
+    now_net = patchpin.pin_net(observed_model, designator, pin)
+    report["observedNet"] = now_net
+    # The connect form's precondition is "the pin reaches **nothing**", and a pin
+    # that reaches nothing may still carry an editor-numbered net: measured
+    # 2026-09-24, right after the stub wire was deleted the live netlist read U3
+    # pin5 as `'NET3'` — alone on an auto net, which is exactly the shape
+    # `pin_ruling` calls dangling. Comparing raw names refused the very state the
+    # plan asked for (`stale_before`, exit 4, the connect form un-runnable), so the
+    # empty `before_net` is checked with the same reading the rule uses.
+    if before_net:
+        # An **auto** name is not an identity: measured 2026-09-24 on the reconnect
+        # fixture below, the same unnamed wire read `NET3` through the export (where
+        # `before_net` came from) and `$57N2` through the editor's own netlist — the
+        # board had not moved, and the run answered `stale_before` (exit 4) for a
+        # plan whose two nets are the same island. Ruling A's vocabulary is what
+        # settles it: a name nobody chose means nothing, so two of them compare
+        # equal. What still guards the write is the *attachment* check below (the
+        # exact primitive the plan named must still be on the pin) and the
+        # verification afterwards.
+        stale = (now_net or "") != before_net and not (
+            facts_rules.is_auto_net(before_net) and facts_rules.is_auto_net(now_net)
+        )
+    else:
+        dangles, _how = facts_rules.pin_dangles(observed_model, component, pin)
+        stale = not dangles
+    if stale:
+        notes.append(
+            f"{designator} pin{pin} is on {now_net!r} in the live netlist, but the plan "
+            f"expects {before_net!r}"
+            + (
+                ""
+                if before_net
+                else "（connect 形态：该脚必须不接触任何网；光有编辑器的自动网号"
+                     "不算接上了——实测 2026-09-24）"
+            )
+            + " — 快照已失效，前置条件失败；没有写"
+        )
+        return done(4, "refused", "stale_before")
+    if attachment is not None and not patchpin.primitive_present(
+        geometry, attachment.primitive_id
+    ):
+        notes.append(
+            f"the attachment this plan would delete ({attachment.kind} "
+            f"{attachment.primitive_id}) is not on the page any more — the plan's "
+            "precondition is broken; nothing was written (拒绝删除别的东西)"
+        )
+        return done(4, "refused", "attachment_missing")
+
+    # ---- 5. the writes: off the old net (if any), then onto the new one ---
+    if attachment is not None:
+        reply = await call(
+            "sch.delete_primitives",
+            {"primitiveIds": [attachment.primitive_id],
+             **({"pageUuid": page} if page else {})},
+            f"delete the {attachment.kind} {attachment.primitive_id} attached to "
+            f"{designator} pin{pin}",
+            writes=True,
+        )
+        report["write"]["calls"] += 1
+        if not isinstance(reply, dict):
+            last = records[-1]
+            follow_up = await call("sch.geometry", {}, "read the page back after the delete")
+            gone = isinstance(follow_up, dict) and not patchpin.primitive_present(
+                follow_up, attachment.primitive_id
+            )
+            if last["unknown"] and not gone:
+                notes.append(
+                    f"the delete's outcome is UNKNOWN ([{last['code']}] {last['message']}) "
+                    "and the read-back still shows the attachment; nothing was retried"
+                )
+                return done(3, "unknown", "delete_unknown")
+            if not gone:
+                notes.append(
+                    f"the editor refused the delete ([{last['code']}] {last['message']})"
+                )
+                return done(2, "failed", "delete_refused")
+            notes.append(
+                "the delete reported a failure but the attachment is gone — continuing, "
+                "because the page is the authority"
+            )
+        else:
+            deleted = [str(item) for item in reply.get("deleted") or []]
+            missing = [str(item) for item in reply.get("notFound") or []]
+            failed = reply.get("failed") or []
+            report["write"]["deleted"] = deleted
+            if attachment.primitive_id not in deleted or missing or failed:
+                notes.append(
+                    f"the delete did not take {attachment.primitive_id}: deleted={deleted}, "
+                    f"notFound={missing}, failed={failed} — 没有继续画新连接（先把事实说清）"
+                )
+                return done(2, "failed", "delete_refused")
+
+    for item in plan.change.connections:
+        if item.kind == CONNECTION_POWER_FLAG:
+            flag = addcomponent.power_flag_kind(item.net)
+            if not flag:
+                notes.append(
+                    f"the plan chose a power flag for net {item.net!r}, which the net "
+                    "kind judgement no longer calls a rail — nothing was placed"
+                )
+                return done(2, "failed", "flag_unavailable")
+            answered = await call(
+                "sch.place_power",
+                {"kind": flag, "net": item.net, "x": pin_at[0], "y": pin_at[1],
+                 "rotation": 0, "mirror": False,
+                 **({"pageUuid": page} if page else {})},
+                f"place a {flag} flag named {item.net!r} on {designator} pin{pin}",
+                writes=True,
+            )
+            report["write"]["calls"] += 1
+            report["write"]["drawn"].append(
+                {"net": item.net, "kind": item.kind, "at": list(pin_at),
+                 "ok": answered is not None}
+            )
+            continue
+        if item.kind == CONNECTION_LABEL:
+            answered = await call(
+                "sch.place_netlabel",
+                {"net": item.net, "x": pin_at[0], "y": pin_at[1],
+                 **({"pageUuid": page} if page else {})},
+                f"label {designator} pin{pin} with the net name {item.net!r}",
+                writes=True,
+            )
+            report["write"]["calls"] += 1
+            report["write"]["drawn"].append(
+                {"net": item.net, "kind": item.kind, "at": list(pin_at),
+                 "ok": answered is not None}
+            )
+            continue
+        target = item.to or addcomponent.nearest_wire_point(pin_at, geometry, item.net)
+        if target is None or len(target) < 2:
+            notes.append(
+                f"the plan chose a wire to {item.net!r} but the page no longer shows a "
+                "vertex of that net to reach — the connection was NOT drawn"
+            )
+            return done(2, "failed", "connection_unavailable")
+        route = addcomponent.wire_route(pin_at, target)
+        answered = await call(
+            "sch.place_wire",
+            {"points": [list(point) for point in route], "net": item.net,
+             **({"pageUuid": page} if page else {})},
+            f"draw the wire from {designator} pin{pin} at ({pin_at[0]:g}, {pin_at[1]:g}) "
+            f"to ({target[0]:g}, {target[1]:g}), carrying net {item.net!r}",
+            writes=True,
+        )
+        report["write"]["calls"] += 1
+        report["write"]["drawn"].append(
+            {"net": item.net, "kind": item.kind, "from": list(pin_at),
+             "to": list(target), "route": [list(point) for point in route],
+             "ok": answered is not None}
+        )
+
+    # ---- 6. the read-back: the page, then the project's own netlist -------
+    verify = await call("sch.geometry", {}, "read the page back independently after the writes")
+    if verify is None:
+        notes.append(
+            "the independent read-back failed — the page's state cannot be stated, "
+            "although the writes were issued"
+        )
+        return done(3, "unknown", "readback_unavailable")
+    range_report: dict = {}
+    if attachment is not None:
+        range_report["attachmentGone"] = not patchpin.primitive_present(
+            verify, attachment.primitive_id
+        )
+    # The canvas leg asks "what touches this pin *now*?", so it is read on both
+    # paths: with `after_net` empty the net filter is off, and then any wire end or
+    # any flag on the pin counts — the disconnect form's "nothing is left on it".
+    range_report["wireEndpointsOnPin"] = patchpin.wire_endpoints_on_pin(
+        verify, pin_at, after_net
+    )
+    range_report["flagOnPin"] = patchpin.flag_on_pin(verify, pin_at, after_net)
+    range_report["netLabelOnPin"] = patchpin.net_label_on_pin(verify, pin_at)
+    range_report["wiresThroughPin"] = patchpin.wires_through_pin(verify, pin_at)
+    # ---- the delete path's range check is a **canvas identity** difference ---
+    #
+    # Measured 035 round 3: the project export does not recompute for a deletion
+    # (it reported the deleted wire's two pins as still joined at 0 s, after a
+    # save, 30 s later and after a page switch), so "the export shows no
+    # out-of-scope change" would pass vacuously on this path. What *is* fresh is
+    # the canvas: exactly the promised primitive may be gone, and nothing else.
+    if attachment is not None:
+        before_ids = {item.primitive_id for item in patchpin.wire_segments(geometry)}
+        after_ids = {item.primitive_id for item in patchpin.wire_segments(verify)}
+        range_report["wiresVanished"] = sorted(before_ids - after_ids)
+        range_report["wiresAppeared"] = sorted(after_ids - before_ids)
+    report["range"] = range_report
+    if attachment is not None and not range_report["attachmentGone"]:
+        notes.append(
+            f"范围差异不对：要删的附着物 {attachment.primitive_id} 还在页面上 —— "
+            "事故报告；没有保存"
+        )
+        return done(2, "failed", "attachment_still_there")
+    if attachment is not None and range_report.get("wiresVanished") != [attachment.primitive_id]:
+        notes.append(
+            "画布身份级范围差异不对：消失的走线是 "
+            f"{range_report.get('wiresVanished')!r}，而计划只授权删 "
+            f"{attachment.primitive_id!r} —— 事故报告（035 三轮：delete 路径以画布身份级差异为准，"
+            "导出对删除不重算）；没有保存"
+        )
+        return done(2, "failed", "range_canvas_diff")
+    if after_net and not (range_report["wireEndpointsOnPin"] or range_report["flagOnPin"]):
+        notes.append(
+            f"范围差异不对：说好的连接（{after_net!r}）在页面上看不到 —— 既没有线端落在脚上，"
+            "脚上也没有旗标；事故报告；没有保存"
+        )
+        return done(2, "failed", "connection_not_drawn")
+
+    # ---- 6b. the two legs (035 round 3 ruling): live netlist + canvas -----
+    #
+    # The **editor's own netlist** is the fresh reading of pin membership
+    # (measured: it separates pins the moment a wire is deleted, while the project
+    # export kept reporting them together for 30+ s). It reports *names*, so a pin
+    # on an unnamed net reads "" — which is exactly what the **canvas** leg is for:
+    # the attachment is gone / the new wire lands on the pin. `create` triggers a
+    # recompute, so a connect/reconnect also gets the export as a third reading;
+    # `delete` does not, so there the export is only an accident-report attachment.
+    live = await call("sch.netlist", {"type": "EasyEDA"}, "read the editor's own netlist")
+    live_nets = patchpin.live_pin_nets(live)
+    live_net = live_nets.get((designator, pin))
+    report["verification"] = {
+        "action": "sch.netlist (live) + sch.geometry (canvas)",
+        "pin": f"{designator} pin{pin}",
+        "liveNet": live_net,
+        "liveNetRead": live is not None,
+        "expected": after_net or "(no net)",
+        "canvas": dict(range_report),
+    }
+    if live is None:
+        notes.append(
+            "the editor's own netlist could not be read, so the pin's membership cannot be "
+            "stated — 双证缺一，判 unknown（不判成功）；没有保存"
+        )
+        return done(3, "unknown", "live_netlist_unreadable")
+    live_ok = (live_net == after_net) if after_net else (live_net == "")
+    canvas_ok = (
+        bool(range_report.get("wireEndpointsOnPin") or range_report.get("flagOnPin"))
+        if after_net
+        else bool(range_report.get("attachmentGone"))
+        and not range_report.get("wireEndpointsOnPin")
+        and not range_report.get("flagOnPin")
+        and not range_report.get("netLabelOnPin")
+    )
+    report["verification"]["liveOk"] = live_ok
+    report["verification"]["canvasOk"] = canvas_ok
+    if not (live_ok and canvas_ok):
+        report["verification"]["ok"] = False
+        notes.append(
+            f"双证不一致，判 unknown（不判成功）：活网表说 {live_net!r}"
+            + (f"（应为 {after_net!r}）" if after_net else "（应为空/无名）")
+            + f"，画布腿 {'ok' if canvas_ok else '不成立'}；没有保存，人工看一眼页面"
+        )
+        return done(3, "unknown", "verification_disagrees")
+
+    # ---- 6c. the out-of-scope check: export **or** canvas, by the run's shape --
+    #
+    # 035 round 4, the judge for the whole split, written down once:
+    #
+    #     导出新鲜当且仅当本 run 无删除
+    #
+    # ``delete_path`` is exactly that condition, so the two instruments are chosen
+    # by it and never mixed:
+    #
+    # * **a run that removed something** is judged on the **canvas identity** (above:
+    #   exactly the promised primitive gone, nothing else vanished) plus the **live
+    #   netlist** (6b: the pin ended where the plan said). The project export is read
+    #   only to be attached as an accident report — not to pass judgement. It is not
+    #   merely stale on this path: measured 2026-09-24 it *invented* a connection,
+    #   reporting `GND = [U3.1, U3.2, U3.5]` on a reconnect whose canvas held one
+    #   merged GND wire and whose live netlist read `U3 {1:'', 2:'GND', 5:'GND'}` —
+    #   and that phantom blocked a repair whose two legs were both green.
+    # * **a pure create** (029's add-component shape, and 035's own connect form)
+    #   keeps the export check: a create is measured to make the editor recompute,
+    #   so there the export *is* the fresh reading, and both of its sides come from
+    #   the export so the comparison stays one instrument.
+    delete_path = attachment is not None
+    after_model = await _live_project_model(call, notes)
+    outside: list[str] = []
+    if after_model is not None and after_net and not delete_path:
+        outside = patchpin.outside_scope_differences(
+            before_model, after_model, designator=designator, pin=pin
+        )
+    report["verification"]["exportNetlist"] = (
+        "unreadable"
+        if after_model is None
+        else (
+            "attached (accident report only)"
+            if delete_path
+            else "judged (the out-of-scope check's own reading, both sides)"
+        )
+    )
+    report["verification"]["exportNet"] = (
+        patchpin.pin_net(after_model, designator, pin) if after_model is not None else None
+    )
+    report["verification"]["outsideScope"] = outside
+    report["verification"]["outsideScopeBasis"] = (
+        "canvas identity (sch.geometry) + live netlist (sch.netlist) — 本 run 删了东西，"
+        "导出不重算，故只作事故报告附件"
+        if delete_path
+        else "project export (both sides) — 纯 create，导出会重算"
+    )
+    report["verification"]["ok"] = True
+    if outside:
+        notes.append(
+            "范围外网表有差异（事故报告）：" + "；".join(outside) + " —— 没有保存，请人工确认页面"
+        )
+        return done(2, "failed", "outside_scope")
+
+    # ---- 7. save ---------------------------------------------------------
+    saved = await call("sch.doc.save", {}, "persist the change", writes=True)
+    if saved is None:
+        last = records[-1]
+        report["save"] = {"ok": False, "code": last["code"], "message": last["message"]}
+        if last["unknown"]:
+            report["persistence"] = "unknown"
+            notes.append(
+                "the save's outcome is unknown — the repair is verified on the canvas, but "
+                "whether it reached the file cannot be stated, and nothing was retried"
+            )
+            return done(3, "unknown", "save_unknown")
+        report["persistence"] = "placed"
+        notes.append(
+            f"the editor refused the save ([{last['code']}] {last['message']}) — the repair "
+            "is on the canvas only; it is NOT persisted"
+        )
+        return done(2, "failed", "save_refused")
+    report["save"] = {"ok": True, "answered": saved}
+    report["persistence"] = "saved_unverified"
+    notes.append(
+        "persistence is capped at saved_unverified: this bridge has no close/reopen action "
+        "(009d), so only a separate reopen can promote it to saved_verified"
+    )
+
+    # ---- 8. the re-review: the rule's own judgement, on fresh connectivity --
+    #
+    # "Fresh" means the instrument that is actually fresh for this run: a run that
+    # **removed** something cannot be re-reviewed on the export, which does not
+    # recompute for a deletion (measured — see `patchpin.overlay_live_nets`), so
+    # there the editor's own netlist is overlaid on the exported identity.
+    report["postReview"] = await _edit_post_review_pin(
+        call, notes, rule_id=rule_id, designator=designator, pin=pin,
+        live_connectivity=attachment is not None,
+    )
+    post_state = report["postReview"].get("state")
+    if post_state == "still_present":
+        report["final"] = (
+            f"written, verified and saved — but the re-review still reports {designator} "
+            f"pin{pin} as a violation"
+        )
+        return done(2, "failed", "still_present")
+    if post_state == "unknown":
+        report["final"] = "written, verified and saved; the re-review could not be taken"
+        return done(0, "applied", "post_review_unknown")
+    report["final"] = f"repaired, verified, saved and re-reviewed as {post_state}"
+    return done(0, "applied")
+
+
+async def _edit_post_review_pin(
+    call, notes: list[str], *, rule_id: str, designator: str, pin: str,
+    live_connectivity: bool = False,
+) -> dict:
+    """Re-export the live project and re-ask the rule about **this pin** (035 §3).
+
+    The 029 review answers "does the rule still report anything about this
+    anchor?"; a pin repair asks a narrower question, and the rule already has the
+    vocabulary for it: `pin_ruling` returns OK / VIOLATION / UNKNOWN per pin, so
+    the review reads that same function instead of re-deriving it.
+    The export is taken twice (the editor recomputes connectivity after a write —
+    measured, draw flow), and the *second* read is used when they disagree.
+
+    ``live_connectivity`` is for the runs that **removed** something: measured
+    2026-09-24, a deletion does not make the export recompute, so a re-review on
+    the export alone reported a correct delete as `still_present` (exit 2, the pin
+    joined in the export long after the editor had separated it — and the wire
+    count and the pin's own live net both said it was gone). There the pin
+    membership comes from `sch.netlist` instead, overlaid on the exported model by
+    :func:`patchpin.overlay_live_nets`; a connect-only run keeps the export, whose
+    recompute after a *create* is the measured behaviour 029 relies on. Which
+    instrument answered is reported as ``connectivity`` rather than left implicit.
+    """
+    from .engines import patchpin
+    from .rules import facts as facts_rules
+
+    result: dict = {
+        "state": "unknown",
+        "reason": "",
+        "source": "live",
+        "rule": rule_id,
+        "subject": f"{designator} pin{pin}",
+        "pin": pin,
+        "findings": [],
+        "outcomes": [],
+    }
+    model = await _live_project_model(call, notes)
+    if model is None:
+        result["reason"] = "the live project could not be exported and parsed after the save"
+        return result
+    second = await _live_project_model(call, notes)
+    if second is not None and _model_fingerprint(second) != _model_fingerprint(model):
+        result["republished"] = True
+        model = second
+    if live_connectivity:
+        answer = await call(
+            "sch.netlist", {"type": "EasyEDA"},
+            "read the editor's own netlist for the re-review (an export does not "
+            "recompute for a deletion)",
+        )
+        live_nets = patchpin.live_pin_nets(answer)
+        if live_nets:
+            model = patchpin.overlay_live_nets(model, live_nets)
+            result["connectivity"] = "sch.netlist (live) over the export"
+        else:
+            result["connectivity"] = "project export (the live netlist came back empty)"
+            notes.append(
+                "the re-review wanted the editor's own netlist (this run deleted "
+                "something, and the export does not recompute for a deletion) but it "
+                "came back empty — the exported model was used instead"
+            )
+    else:
+        result["connectivity"] = "project export"
+    rule = next((item for item in BUILTIN_RULES if item.id == rule_id), None)
+    if rule is None:
+        result["reason"] = f"the plan maps to rule {rule_id!r}, which this build does not have"
+        return result
+    component = model.components.get(designator)
+    if component is None:
+        result["state"] = "resolved"
+        result["reason"] = f"{designator} is not in the re-exported project at all"
+        return result
+    entry = rule.entry_for(component)
+    if entry is None:
+        result["reason"] = (
+            f"the shelf has no entry for {designator} in the re-exported project, so the "
+            "pin's obligation cannot be judged"
+        )
+        return result
+    ruling = facts_rules.pin_ruling(component, entry, model, pin)
+    result["outcomes"] = [
+        {"state": ruling.state, "subject": f"{designator} pin{pin}", "message": ruling.message}
+    ]
+    result["value"] = patchpin.pin_net(model, designator, pin)
+    if ruling.state == "VIOLATION":
+        result["state"] = "still_present"
+        result["reason"] = f"{rule_id} still reports {designator} pin{pin}: {ruling.message}"
+    elif ruling.state == "OK":
+        result["state"] = "resolved"
+        result["reason"] = f"{rule_id} reports {designator} pin{pin} as satisfied"
+    else:
+        result["reason"] = (
+            f"{rule_id} cannot decide about {designator} pin{pin} on the re-exported project "
+            f"({ruling.state}: {ruling.message}) — 'no finding' and 'no facts to decide' are "
+            "different answers and only the first one is `resolved`"
+        )
+    return result
+
+
 def _render_edit_apply_add(report: dict, args: argparse.Namespace) -> int:
     """Print the human summary of an add-component apply, write ``--json``, exit."""
     import json
@@ -7865,6 +9171,8 @@ def _cmd_edit_apply(args: argparse.Namespace) -> int:
         try:
             if plan.change.kind == ADD_COMPONENT_KIND:
                 return await _edit_apply_add_flow(client, BridgeError, plan, args, started)
+            if plan.change.kind == PATCH_PIN_KIND:
+                return await _edit_apply_patch_pin_flow(client, BridgeError, plan, args, started)
             return await _edit_apply_flow(client, BridgeError, plan, args, started)
         finally:
             await client.close()
