@@ -826,6 +826,119 @@ def test_a_render_that_is_not_a_png_is_not_written_as_one(fake_bridge, tmp_path)
     assert not list((tmp_path / "out").glob("*.png"))
 
 
+#: A 1x1 SVG, and the bytes a fallback leg is checked against.
+TINY_SVG = b'<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'
+
+
+def _png_then_svg_answer(*, svg_ok: bool = True):
+    """`export.render` scripted per format: PNG times out, SVG answers (031 §4).
+
+    The callable seam is what makes the fallback leg assertable at all — the fake
+    answers by *params*, so "the first call was PNG with a 10 s leash and the
+    second was SVG with the default" is a reading, not a hope.
+    """
+    def answer(action, params):
+        if params.get("format") == "png":
+            raise BridgeError(ErrorCodes.TIMEOUT, "png rasterisation did not settle")
+        if not svg_ok:
+            raise BridgeError(ErrorCodes.TIMEOUT, "svg also did not settle")
+        return _render_answer(TINY_SVG, file_format="image/svg+xml")
+    return answer
+
+
+def test_a_png_timeout_falls_back_to_svg_and_keeps_the_png_error(fake_bridge, tmp_path):
+    """031 §2: the fallback leg, and the trace it has to leave behind.
+
+    A PNG timeout on 3.2.149 is "the host's rasterisation is stuck", not "the
+    board is unrenderable" — so the same page is retried once as SVG (which
+    answered in the same second when this was measured), and the entry says both
+    what landed and what the PNG leg did: swapping formats silently would turn a
+    measured host defect into a report that looks clean.
+    """
+    _FakeBridgeClient.answers = {**_live_answers(), "export.render": _png_then_svg_answer()}
+    args = _checkup_args(out=str(tmp_path / "out"))
+
+    assert _cmd_checkup(args) == 0
+
+    report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
+    image = report["ai_slots"]["canvas_images"][0]
+    assert image["format"] == "svg"
+    assert image["pngError"].startswith("TIMEOUT:")
+    assert "file" in image and image["file"] == "canvas-P1.svg"
+    assert (tmp_path / "out" / "canvas-P1.svg").read_bytes() == TINY_SVG
+    assert image["bytes"] == len(TINY_SVG) and len(image["sha256"]) == 64
+    assert not list((tmp_path / "out").glob("*.png")), "the PNG leg wrote nothing — it timed out"
+
+    renders = [params for action, params in _FakeBridgeClient.history_pairs
+               if action == "export.render"]
+    assert [params["format"] for params in renders] == ["png", "svg"]
+    assert renders[0]["timeoutMs"] == 10_000, (
+        "the PNG leg gets the short leash: a stuck rasterisation freezes the editor's "
+        "progress toast for as long as the caller waits"
+    )
+    assert "timeoutMs" not in renders[1], "the SVG leg keeps the connector's default (30 s)"
+
+    markdown = (tmp_path / "out" / "report.md").read_text(encoding="utf-8")
+    assert "canvas-P1.svg" in markdown, "the report's link follows the file that landed"
+
+
+def test_a_png_timeout_whose_svg_fallback_also_fails_keeps_both_errors(fake_bridge, tmp_path):
+    _FakeBridgeClient.answers = {
+        **_live_answers(), "export.render": _png_then_svg_answer(svg_ok=False),
+    }
+    args = _checkup_args(out=str(tmp_path / "out"))
+
+    assert _cmd_checkup(args) == 0, "两张图都没出，但板子的结论没变 —— 退出码只看规则与 DRC"
+
+    image = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))[
+        "ai_slots"
+    ]["canvas_images"][0]
+    assert "png rasterisation did not settle" in image["error"]
+    assert "svg also did not settle" in image["error"]
+    assert "file" not in image
+    assert not list((tmp_path / "out").glob("canvas-P1.*")), "neither leg wrote a file"
+
+
+def test_a_png_bad_request_does_not_fall_back(fake_bridge, tmp_path):
+    """Only a TIMEOUT earns the other format (031 §2).
+
+    `BAD_REQUEST` / `NOT_IMPLEMENTED` is the host *telling* us something. Falling
+    back there would hide a real problem behind a picture that happens to work in
+    the other format — and the next reader would never learn the PNG path broke.
+    """
+    _FakeBridgeClient.answers = {
+        **_live_answers(),
+        "export.render": BridgeError(ErrorCodes.BAD_REQUEST, "params.ids must be a string[]"),
+    }
+    args = _checkup_args(out=str(tmp_path / "out"))
+
+    assert _cmd_checkup(args) == 0, "出图失败不改板子结论；这张假板本来就没有 ERROR"
+
+    image = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))[
+        "ai_slots"
+    ]["canvas_images"][0]
+    assert image["error"].startswith("BAD_REQUEST:")
+    assert "format" not in image and "pngError" not in image
+    assert [params["format"] for action, params in _FakeBridgeClient.history_pairs
+            if action == "export.render"] == ["png"], "no second call was made"
+
+
+def test_a_healthy_png_render_adds_no_new_fields(fake_bridge, tmp_path):
+    """Backward compatibility: a working PNG page is exactly the entry it was."""
+    _FakeBridgeClient.answers = {**_live_answers(), "export.render": _render_answer()}
+    args = _checkup_args(out=str(tmp_path / "out"))
+
+    assert _cmd_checkup(args) == 0
+
+    image = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))[
+        "ai_slots"
+    ]["canvas_images"][0]
+    assert set(image) == {"page", "pageUuid", "file", "bytes", "sha256"}
+    assert image["file"] == "canvas-P1.png"
+    assert [params["format"] for action, params in _FakeBridgeClient.history_pairs
+            if action == "export.render"] == ["png"]
+
+
 def test_the_offline_path_writes_markdown_and_no_canvas(fake_bridge, tmp_path):
     args = _checkup_args(file=str(GOLDEN), out=str(tmp_path / "out"))
 
