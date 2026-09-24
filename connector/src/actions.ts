@@ -3480,16 +3480,6 @@ const EXPORT_RENDER_TIMEOUT_MIN_MS = 1_000;
 const EXPORT_RENDER_TIMEOUT_MAX_MS = 60_000;
 
 /**
- * The deadline one `export.render` call runs under: `params.timeoutMs` clamped
- * into `[1 s, 60 s]`, or {@link EXPORT_RENDER_TIMEOUT_MS} when the caller did
- * not ask. Clamped rather than trusted, for the reason the net-label probe
- * clamps its own: a caller must not be able to switch the bound off (a promise
- * that never settles would hold the action slot forever).
- *
- * Exported because it is the *decision* a test cares about — pinning "absent →
- * 30 s" by waiting 30 s would be a slow test of a fast rule.
- */
-/**
  * How long after the export settles before the progress toast is torn down (032).
  *
  * Late on purpose: the platform runs its own teardown right after the promise
@@ -3533,6 +3523,98 @@ function scheduleExportTeardown(eda: Eda): void {
       }
     }
   }, EXPORT_TEARDOWN_DELAY_MS);
+}
+
+/**
+ * The deadline one `export.render` call runs under: `params.timeoutMs` clamped
+ * into `[1 s, 60 s]`, or {@link EXPORT_RENDER_TIMEOUT_MS} when the caller did
+ * not ask. Clamped rather than trusted, for the reason the net-label probe
+ * clamps its own: a caller must not be able to switch the bound off (a promise
+ * that never settles would hold the action slot forever).
+ *
+ * Exported because it is the *decision* a test cares about — pinning "absent →
+ * 30 s" by waiting 30 s would be a slow test of a fast rule.
+ */
+/**
+ * Activate the page an export is about (033, issue #5 毛病 A).
+ *
+ * Measured by 岳 on 3.2.149 + 0.4.21, a controlled comparison in one window on
+ * one page four minutes apart: the same `export.render` call that had hung for
+ * 30 s **succeeded in ~2 s** once the page had been `doc.open`ed
+ * (`activated: true`), and a page that had never been opened hung on
+ * `format=png` **and** on `format=svg`. So the variable is *activation*, not the
+ * file type — the "PNG hangs while SVG answers" reading of the first
+ * measurements rested on a single sample (that page had been opened by a checkup
+ * minutes earlier).
+ *
+ * Every historical observation fits that: `boardwise checkup` never failed,
+ * because its canvas stage opens each page before rendering it, and every bare
+ * `bridge call export.render` hung, because nothing had focused the page. H1
+ * ("it must be the active document") and H2 ("it must have been activated at
+ * least once") are not separated — activating right before the export satisfies
+ * both, which is why this does not try to.
+ *
+ * "The active document" is resolved through the same reader `doc.list` uses
+ * (including the host's placeholder-uuid handling), so the phrase cannot mean two
+ * different things in one connector.
+ */
+async function activateExportPage(eda: Eda, params: Record<string, unknown>): Promise<string> {
+  const asked = typeof params?.pageUuid === 'string' ? params.pageUuid.trim() : '';
+  let uuid = asked;
+  if (!uuid) {
+    const problems: string[] = [];
+    const active = await activeDocument(eda, problems);
+    uuid = active?.uuid ?? '';
+    if (!uuid) {
+      throw new ActionError(
+        'CONNECTOR_ERROR',
+        'export.render scope=page could not resolve a page to export: no params.pageUuid was '
+          + 'given and the editor reports no active document'
+          + (problems.length ? ` (${problems.join('; ')})` : '')
+          + ' — pass params.pageUuid (doc.list names them) or open a page first',
+        { pageUuid: null, problems },
+      );
+    }
+  }
+
+  const tabId = (await settle(requireFn(eda, 'dmt_EditorControl.openDocument')(uuid))) as
+    | string
+    | undefined;
+  if (!tabId) {
+    // The same diagnosis `doc.open` carries (018 §B1), for the same reason: "why
+    // is my uuid not here?" is answerable from the editor, and the answer is what
+    // the caller needs. Nothing is exported — a page that does not become active
+    // hangs this host (033), so trying anyway would burn the whole timeout to
+    // learn what this already knows.
+    let location: UuidLocation | null = null;
+    try {
+      location = await locateUuid(eda, uuid);
+    } catch {
+      // The diagnosis must never turn a clear error into an unclear one.
+      location = null;
+    }
+    const why = location ? describeUuidLocation(uuid, location) : 'the reason could not be read';
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `export.render could not activate page ${uuid}: openDocument returned no tab id — ${why}. `
+        + 'The export was NOT attempted: on 3.2.149 a page that is not activated hangs the export '
+        + 'until the caller gives up (issue #5).',
+      location
+        ? {
+            uuid,
+            focusedProject: location.focused,
+            activeDocument: location.active,
+            uuidBelongsTo: location.owner,
+            inFocusedProjectListing: location.inFocusedListing,
+            listingCount: location.listingCount,
+            openTabs: location.openTabs,
+            otherProjects: location.otherProjects,
+            ...(location.notes.length ? { notes: location.notes } : {}),
+          }
+        : { uuid, diagnosisError: true },
+    );
+  }
+  return uuid;
 }
 
 export function exportRenderTimeoutMs(params: Record<string, unknown> | undefined): number {
@@ -3588,6 +3670,12 @@ export const exportRender: ActionHandler = async (params, eda) => {
     }
     await settle(requireFn(eda, 'sch_SelectControl.doSelectPrimitives')(ids));
   }
+  // 033: **activate the page before exporting it.** A page that has never been
+  // the active document makes this host hang the export (png and svg alike),
+  // measured on 3.2.149; `pageUuid` says which page when the active document is
+  // not the one meant. `selection` and `project` are untouched: a selection
+  // carries its own ids and a project export is a whole-project archive.
+  const activatedPageUuid = scope === 'page' ? await activateExportPage(eda, params) : '';
 
   const fileName = typeof params?.fileName === 'string' && params.fileName
     ? params.fileName
@@ -3602,22 +3690,24 @@ export const exportRender: ActionHandler = async (params, eda) => {
         () =>
           reject(
             new ActionError(
-              // Two hypotheses, said as two — the old text asserted the first one
-              // ("the host drops an argument it dislikes"), which was the truth of
-              // the 2026-09-18 .d.ts trap and is the *wrong* thing to hand a reader
-              // whose PNG render hung on an otherwise healthy host (issue #5).
+              // The hypothesis order is the 033 correction: activation, not the
+              // file type and not a dropped argument. The old text led with the
+              // .d.ts trap (a real trap, but the wrong lead) and then claimed
+              // "format=png timed out while format=svg answered" — a single
+              // sample, refuted by a controlled comparison on 3.2.149.
               'TIMEOUT',
               `getExportDocumentFile did not settle within ${timeoutMs / 1000} s `
-                + `(format=${format}, scope=${scope}). Two hypotheses, and this call cannot tell `
-                + 'them apart: (1) the host does not accept an argument — it drops one it dislikes '
-                + 'instead of rejecting, the .d.ts trap this action was ported around; (2) the '
-                + "host's PNG rasterisation path is stuck, measured on 3.2.149 (issue #5), where "
-                + 'format=png timed out three times while format=svg answered in the same second. '
-                + 'Practical next step: retry with format=svg (the checkup canvas stage falls back '
-                + 'to it on a PNG timeout). The export opens a progress toast the host does not '
-                + `retire by itself — this action tears it down about ${EXPORT_TEARDOWN_DELAY_MS} ms `
-                + 'after it answers, on every outcome; if the bar is STILL up after that, the '
-                + 'editor is wedged for another reason and reloading the document is the way out.',
+                + `(format=${format}, scope=${scope}). Leading hypothesis: **the page has never `
+                + 'been activated** — measured on 3.2.149 (issue #5), where this same call hung '
+                + 'until the target page was opened and then answered in ~2 s, on png and svg '
+                + 'alike. Since 0.4.22 this action activates the page itself, so the remaining '
+                + 'cases are: the active document was not the page you meant (pass '
+                + 'params.pageUuid), or the editor is wedged for another reason — reload the '
+                + 'document. Historical footnote, unrelated to this symptom: an argument the '
+                + 'host dislikes is dropped without rejecting (the 2026-09-18 .d.ts trap). '
+                + 'The export opens a progress toast the host does not retire by itself — this '
+                + `action tears it down about ${EXPORT_TEARDOWN_DELAY_MS} ms after it answers, on `
+                + 'every outcome.',
               { path: 'sch_ManufactureData.getExportDocumentFile', format, scope, timeoutMs },
             ),
           ),
@@ -3658,6 +3748,10 @@ export const exportRender: ActionHandler = async (params, eda) => {
     bytes: bytes.byteLength,
     data: bytesToBase64(bytes),
     scope,
+    // Which page was made active for this export (033): the caller named it, or
+    // it was the active document. Reported so a reader can tell what was
+    // exported without guessing from the file name.
+    ...(activatedPageUuid ? { activatedPageUuid } : {}),
     note: isZip
       ? 'the editor returned an archive (multi-document export), not a single image'
       : '',

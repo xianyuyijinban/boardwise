@@ -72,4 +72,31 @@ H1（导出时必须是活动文档）vs H2（载入后至少激活过一次即�
 
 ## 交卷记录
 
-（子代理交文本，主代理 append 并复验。）
+### 033 · 交卷（2026-09-24，子代理 agent-43；摘要 `outputs/033_summary.txt`）
+
+- **connector 0.4.22**：`exportRender` 新增可选 `pageUuid`；`scope=page` 时解析目标 uuid
+  （`pageUuid` ?? 当前活动文档，复用 doc.list 的 `activeDocument` 读书器）→
+  `dmt_EditorControl.openDocument(uuid)` 激活**成功后才导出**；结果带 `activatedPageUuid`。
+  激活失败三态全拒绝导出：解析不到 → 诚实报错；`openDocument` 抛错 → 原错误透传；
+  不回 tab id → 沿用 doc.open 的 locate/describe 诊断。selection/project 未动，daemon 零改动。
+- **TIMEOUT 文案修订**：头号假设 = "目标页自载入后从未激活（传 pageUuid 或先 doc.open）"；
+  **撤回**"PNG 卡死 SVG 可用"（单样本被岳的反例推翻）；.d.ts 参数坑降为历史注脚。
+- **测试**：connector +5 改 1 → **415 passed**；pytest **1447** 不变（python 只动注释）；
+  tsc 干净。变异 **2/2 CAUGHT**（M1 删激活 → 5 红；M2 激活降级 best-effort → 3 红）。
+- **真机（186，只碰 test 窗）**：热更 0.4.22 verified（新连接 `inst-082604830-5940wbyf`）；
+  带 `pageUuid` 导 P2 → `activatedPageUuid` 正确 + 导出后 doc.list 的 active 真变成 P2
+  （激活不是答案里的字段，是真换页）；无参路径 sha256 与有参**逐字节相同**；checkup 端到端
+  回归 4 页 PNG 全落盘、entry 键集不变（checkup 未改，天然免疫结论成立）。ROBOT/test2 未寻址。
+- **文档纠错**：SKILL 坑 23 重写（激活才是正案；toast 漏与激活挂死两件事分开说）；
+  bridge.md §4 行 + §10.28 同口径重写。
+- **判断两条（主代理已批）**：① cli.py 三处注释/docstring 改写（031 写下的被推翻结论连注释
+  都不许留，代码零改动）；② `activatedPageUuid` 只在 scope=page 出现（没激活步骤的 scope 不带）。
+
+### 主代理复验（2026-09-24）
+
+- sha256 抽核 8 件（7 跟踪文件 + dist `07f69e24…` 257761B）与交卷值逐字一致 ✔；
+- 三线复跑：pytest **1447**（108s）/ connector **415 pass 0 fail** / tsc 干净 ✔；
+- 变异记录定向红、还原 sha 回基线 ✔；
+- **验收分工**：毛病 B（toast 漏）岳已两样本验证闭环；毛病 A（未激活页面导出挂死）的根治验收
+  归岳——149 上升 0.4.22 后，窗口刚载入、**不 doc.open**，裸调 `export.render` 应直接成功。
+  验收通过前 issue #5 保持开放。

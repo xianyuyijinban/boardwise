@@ -31,14 +31,14 @@ collects the current truth and the pointers.
   - `docs/images/gs-03-daemon-start.png`
   - `PROGRESS.md`
 
-## Current baseline (2026-09-24, 032 export.render toast 自清除; published on GitHub)
+## Current baseline (2026-09-24, 033 export.render 导出前自激活; published on GitHub)
 
 - pytest: **1447 passed** (run with `--basetemp=.tmp_pt_home` on Windows —
   the host's safe-delete hook otherwise eats the summary line and fakes
   exit 1)
-- connector: **410 pass / 0 fail** (`cd connector && npm test`)
+- connector: **415 pass / 0 fail** (`cd connector && npm test`)
 - `npx tsc --noEmit`: clean
-- connector version: **0.4.21** (`connector/extension.json`)
+- connector version: **0.4.22** (`connector/extension.json`)
 - Verified host: EasyEDA Pro **3.2.186** (the only host the bridge is
   calibrated against; every real-host fact in the task books names it)
 
@@ -106,3 +106,5 @@ point. Full measurement history: `tasks/010c-coordinate-convention.md`
 - 031 export.render PNG 超时 → SVG 回退（issue #5 收编，connector **0.4.20**）: 149 实测 PNG 光栅化卡死而 SVG 同刻可用、宿主 UI 冻结时心跳/连接全部正常（**心跳连续不能排除宿主故障** → SKILL 坑 23）；connector TIMEOUT 文案双假设 + svg 指引 + `timeoutMs`（clamp 1..60s，缺省 30s 不变）；checkup 画布阶段 PNG 10s 短绳、**仅 TIMEOUT** 同页回退 SVG（entry 留 `format`+`pngError`，schema 只加字段）；真机 186：0.4.20 热更 verified、PNG 回归 156678B、`timeoutMs=1` 强制超时新文案 + SVG 1970ms 真返回、checkup 4 页零新字段；pytest **1447**（+4）connector **407**（+4），变异 2/2 CAUGHT；主代理裁决两条遗留（daemon 30s 盖 60s 上限=已知限制、protocol schema 漂移=接受）；149 marker A/B 未做（`tasks/031-export-render-png-fallback.md` §交卷记录，`outputs/031_*`）
 
 - 032 export.render toast 自清除（issue #5 症状正案，connector **0.4.21**）: 岳 149 新证据推翻 #5 原诊断——PNG **成功**（664KB 落盘）UI 照样卡 99%，卡死 = ManufactureData 导出管线**漏进度条 toast**（与成败无关），031 回退只治超时失败不治卡死；移植上游 finally 修法（400ms 后 `destroyProgressBar`+`destroyLoading`，幂等 best-effort，成功/超时两路都拆）+ TIMEOUT 文案末句改"自拆，仍挂才 reload"；真机 186：热更 verified、probe 两函数在册、PNG 回归 sha 与 031 逐字节相同；connector **410**（+3）pytest 1447 不变，变异 2/2 CAUGHT；**视觉验收归岳（149 上 toast 应 ~1s 自灭），验收前 #5 保持开放**（`tasks/032-export-render-toast-teardown.md` §交卷记录，`outputs/032_*`）
+
+- 033 export.render 导出前自激活（issue #5 毛病 A 正案，connector **0.4.22**）: 岳受控对照（149+0.4.21，同窗同页隔 4 分钟）钉死真因——**页面自载入后未激活 ⇒ 导出挂死（png/svg 无差别）**，doc.open 激活后 ~2s 成功；一条机制解释全部历史观测（checkup 逐页 doc.open 所以从未失败、裸调全挂、孤例 svg 成功是文档还热）；**撤回**"PNG 卡死 SVG 可用"单样本旧结论，SKILL 坑 23 与 bridge.md §10.28 纠错重写；`exportRender` 新增 `pageUuid`，scope=page 先解析目标（参数 ?? 活动文档）→ `openDocument` 激活**成功后才导出**，激活失败三态全拒绝；真机 186：热更 verified、带 pageUuid 导出后 doc.list active 真换页、无参与有参 sha 逐字节相同、checkup 4 页零回归；connector **415**（+5）pytest 1447 不变，变异 2/2 CAUGHT；毛病 B（toast 漏）岳两样本验证闭环；毛病 A 根治验收归岳（149 裸调 render 应直接成功）（`tasks/033-export-render-auto-activate.md` §交卷记录，`outputs/033_*`）
