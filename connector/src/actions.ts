@@ -3475,6 +3475,26 @@ const EXPORT_RENDER_FORMATS: Record<string, { fileType: string; ext: string; mim
  */
 const EXPORT_RENDER_TIMEOUT_MS = 30_000;
 
+/** Bounds for `params.timeoutMs`, in the same shape `sch.place_netlabel` uses. */
+const EXPORT_RENDER_TIMEOUT_MIN_MS = 1_000;
+const EXPORT_RENDER_TIMEOUT_MAX_MS = 60_000;
+
+/**
+ * The deadline one `export.render` call runs under: `params.timeoutMs` clamped
+ * into `[1 s, 60 s]`, or {@link EXPORT_RENDER_TIMEOUT_MS} when the caller did
+ * not ask. Clamped rather than trusted, for the reason the net-label probe
+ * clamps its own: a caller must not be able to switch the bound off (a promise
+ * that never settles would hold the action slot forever).
+ *
+ * Exported because it is the *decision* a test cares about — pinning "absent →
+ * 30 s" by waiting 30 s would be a slow test of a fast rule.
+ */
+export function exportRenderTimeoutMs(params: Record<string, unknown> | undefined): number {
+  const asked = Number(params?.timeoutMs);
+  if (!Number.isFinite(asked)) return EXPORT_RENDER_TIMEOUT_MS;
+  return Math.min(Math.max(asked, EXPORT_RENDER_TIMEOUT_MIN_MS), EXPORT_RENDER_TIMEOUT_MAX_MS);
+}
+
 export const exportRender: ActionHandler = async (params, eda) => {
   const mfg = namespaceOf(eda, 'sch_ManufactureData');
   const getExportDocumentFile = mfg.getExportDocumentFile;
@@ -3527,21 +3547,31 @@ export const exportRender: ActionHandler = async (params, eda) => {
     ? params.fileName
     : `render.${spec.ext}`;
   const typeParams = { theme: 'Default', lineWidth: 'Default' };
+  const timeoutMs = exportRenderTimeoutMs(params);
 
   const file: any = await new Promise((resolve, reject) => {
     const timer = setTimeout(
       () =>
         reject(
           new ActionError(
+            // Two hypotheses, said as two — the old text asserted the first one
+            // ("the host drops an argument it dislikes"), which was the truth of
+            // the 2026-09-18 .d.ts trap and is the *wrong* thing to hand a reader
+            // whose PNG render hung on an otherwise healthy host (issue #5).
             'TIMEOUT',
-            `getExportDocumentFile did not settle within ${EXPORT_RENDER_TIMEOUT_MS / 1000} s — `
-              + 'the host swallowed the request (it drops an argument it dislikes without '
-              + 'rejecting). The editor may show a stuck 1% progress toast; reload the '
-              + 'document to clear it.',
-            { path: 'sch_ManufactureData.getExportDocumentFile', format, scope },
+            `getExportDocumentFile did not settle within ${timeoutMs / 1000} s `
+              + `(format=${format}, scope=${scope}). Two hypotheses, and this call cannot tell `
+              + 'them apart: (1) the host does not accept an argument — it drops one it dislikes '
+              + 'instead of rejecting, the .d.ts trap this action was ported around; (2) the '
+              + "host's PNG rasterisation path is stuck, measured on 3.2.149 (issue #5), where "
+              + 'format=png timed out three times while format=svg answered in the same second. '
+              + 'Practical next step: retry with format=svg (the checkup canvas stage falls back '
+              + 'to it on a PNG timeout); the editor may show a stuck 1% progress toast — reload '
+              + 'the document to clear it.',
+            { path: 'sch_ManufactureData.getExportDocumentFile', format, scope, timeoutMs },
           ),
         ),
-      EXPORT_RENDER_TIMEOUT_MS,
+      timeoutMs,
     );
     settle(getExportDocumentFile.call(mfg, fileName, spec.fileType, typeParams, objectLiteral)).then(
       (value) => {
