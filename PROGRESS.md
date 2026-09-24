@@ -31,9 +31,9 @@ collects the current truth and the pointers.
   - `docs/images/gs-03-daemon-start.png`
   - `PROGRESS.md`
 
-## Current baseline (2026-09-24, 034 激活三步补齐; published on GitHub)
+## Current baseline (2026-09-24, 035 patch-pin 收官; published on GitHub)
 
-- pytest: **1447 passed** (run with `--basetemp=.tmp_pt_home` on Windows —
+- pytest: **1507 passed** (run with `--basetemp=.tmp_pt_home` on Windows —
   the host's safe-delete hook otherwise eats the summary line and fakes
   exit 1)
 - connector: **419 pass / 0 fail** (`cd connector && npm test`)
@@ -110,3 +110,5 @@ point. Full measurement history: `tasks/010c-coordinate-convention.md`
 - 033 export.render 导出前自激活（issue #5 毛病 A 正案，connector **0.4.22**）: 岳受控对照（149+0.4.21，同窗同页隔 4 分钟）钉死真因——**页面自载入后未激活 ⇒ 导出挂死（png/svg 无差别）**，doc.open 激活后 ~2s 成功；一条机制解释全部历史观测（checkup 逐页 doc.open 所以从未失败、裸调全挂、孤例 svg 成功是文档还热）；**撤回**"PNG 卡死 SVG 可用"单样本旧结论，SKILL 坑 23 与 bridge.md §10.28 纠错重写；`exportRender` 新增 `pageUuid`，scope=page 先解析目标（参数 ?? 活动文档）→ `openDocument` 激活**成功后才导出**，激活失败三态全拒绝；真机 186：热更 verified、带 pageUuid 导出后 doc.list active 真换页、无参与有参 sha 逐字节相同、checkup 4 页零回归；connector **415**（+5）pytest 1447 不变，变异 2/2 CAUGHT；毛病 B（toast 漏）岳两样本验证闭环；毛病 A 根治验收归岳（149 裸调 render 应直接成功）（`tasks/033-export-render-auto-activate.md` §交卷记录，`outputs/033_*`）
 
 - 034 activateExportPage 补齐三步（issue #5 毛病 A 复修，connector **0.4.23**）: 033 验收未过——岳钉到行：只调 `openDocument`（开标签页）漏了 `activateDocument(tabId)`（切前台）+ `getCurrentDocumentInfo()` 回读；修法 = **复用 `docOpen` 处理器**（同一实现，结构上不可能漂移），严格不降级（`activated && matchesRequest` 双真才导出，否则拒绝）；H1/H2 定案 = 每次导出前都要 activate；真机 186：热更 verified、带 pageUuid 导出后 active 真切成 P3、无参与有参 sha 逐字节相同；connector **419**（+4）pytest 1447 不变，变异 2/2 CAUGHT（判据放宽 4 红 / 退回单步 7 红）；激活路径与岳 17:33 亲手验证成功那次逐调用一致，**149 效果验收归岳**——岳 2026-09-24 验收通过（刚载入裸调直接成功），issue #5 关闭（`tasks/034-activate-export-page-full.md` §交卷记录，`outputs/034_*`）
+
+- 035 patch-pin（M3 第 3 片，修单个引脚连接；connector/daemon 零改动仍 **0.4.23**）: 三形态 disconnect/connect/reconnect 离线+真机全收官——真机各 applied + saved + 重审 resolved + 幂等 already_applied + stale exit 4 零写入（disconnect 用真架 `nc_pins:["4"]`；connect/reconnect 用 test-only facts 架，must_connect 事实逐字标注测试编造，临时 cwd `%TEMP%\bw035c\`，真库未写）；pin 级验收 = **活网表 + 画布双证**（缺一 exit 3 `verification_disagrees`），导出降级事故报告；范围核对分家定案「**导出新鲜当且仅当本 run 无删除**」（含删除→画布身份级 `wiresVanished == [attachment.primitive_id]`，纯 create→导出核对）；`edit plan --pin` 共享选择器（035 与 029 decap `--report` 共用：多条命中拒绝点名 / 无匹配拒绝 / 配 `--file` 拒绝，真机三态实证）；NC 判据统一 `pin_ruling`/`nc_violation`（规则与 repair 同一函数），`is_auto_net` 词表扩为 `^(NET\d+|\$\S+)$`——导出与活网表对同一匿名网给两个名字（`NET3` vs `$57N2`），stale 检查两自动名视为同一岛、用户命名网仍逐字比；四条宿主习性入 SKILL 坑 24（导出对删除永不重算 / 悬空脚单成员自动网双名 / 相接线合并 primitive 接点重复上报 / `doc.new` name 被忽略）；netlabel 附着拒绝并点名（本机 `sch_PrimitiveNetLabel` 连读都不存在，不给 connector 加无法验收的类别）；pytest **1507**（+60 over 1447），connector **419** / tsc 不变，变异四轮 2+2+7+4 全 CAUGHT；主代理复验 sha256 6 件一致、三线复跑全绿、现场零残留（`tasks/035-patch-pin.md` §交卷记录，`outputs/035{,c,d}_*`）

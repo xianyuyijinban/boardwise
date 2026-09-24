@@ -116,11 +116,23 @@ boardwise checkup --file <导出.epro2> --out <目录>       # 断连兜底：�
 - **从 finding 到局部修改**（可修范围很窄）：
   `boardwise edit plan --file <导出.epro2> --rule param-value-mpn-match --designator U3 -o plan.json`
   → `edit preview plan.json --file ...`（离线复查，永不写）→ `edit apply plan.json --file ... --json apply.json`。
-  **只有 `param-value-mpn-match`（单器件值）可修**，别的规则按名字拒绝。`apply` 四道保护：
+  `--file` 路径**只有 `param-value-mpn-match`（单器件值）可修**，别的规则按名字拒绝
+  （029 补器件、035 修脚都走 `--report` 路径，见下条）。`apply` 四道保护：
   写前重读页面 → 只写一个键 → 独立 geometry 回读 → save + 复查；重复执行认 `already_applied` 零写入。
   退出码：`0` 已应用 / `2` 效果不在板上 / `3` 页状态不可陈述（**不重试**）/ `4` 前置条件不再成立 /
   `5` plan 不可用。落盘诚实度：无"关闭重开"动作时只报 `saved_unverified`；要 `saved_verified`
   得走 关闭重开工程 → 回读/导出 #2 → 再 `review`（§6 坑 3、坑 4）。
+- **修单个引脚连接**（035 `patch-pin`，要 daemon + 一份 checkup `report.json`）：
+  `boardwise edit plan --report report.json --rule conn-nc-and-must-connect --designator U3 --pin 4 -o plan.json`
+  → `edit preview` / `edit apply` 同上。三形态：**disconnect**（NC 脚，删掉脚上附着的那段线）、
+  **connect**（悬空脚画线到既有同名网段 / power-flag / 页面已有 label）、**reconnect**（删错接 + 画新接）。
+  **同一 designator 同规则有多条 pin 级 finding 时 `--pin` 必给**——不给则拒绝并列候选脚号，
+  `--pin` 无匹配也拒绝；`--pin` 只作用于 `--report` 路径（029 的 decap `--report` 共用同一选择器，
+  不限制在 035），配 `--file` 直接拒。connect/reconnect 的目标网必须是**用户命名网**
+  （自动网 `NET\d+` / `$\S+` 判不得身份，plan 时拒，exit 5）；附着在脚上的 **netlabel 删不了**
+  （本机 `sch_PrimitiveNetLabel` 连读都不存在），拒绝并点名，不替用户想办法。pin 级验收 =
+  **活网表（`sch.netlist`）+ 画布（`sch.geometry`）双证**，缺一 exit 3 `verification_disagrees`；
+  导出网表只作事故报告附件——**导出新鲜当且仅当本 run 无删除**（§6 坑 24）。
 
 ## 4. 真机纪律（写操作前逐条对，命中即停）
 
@@ -206,6 +218,7 @@ boardwise checkup --file <导出.epro2> --out <目录>       # 断连兜底：�
 | 22 | **多窗口 update-connector 的三档行为与共享存储盲区**（030，岳 2026-09-24 实测四坑）：① 多窗又不寻址 → 旧版本直接把无 hint 的调用发出去，daemon 回 `WINDOW_UNSPECIFIED`（像"更新失败"）；现在 CLI **先读窗口表再拒绝**（exit 2）并列出窗口表 + 两种做法。② 一个编辑器里**多个窗口共用同一份扩展存储**（IndexedDB `User_<teamUuid>_v6`）：第二个窗口的 `sys.self_update` 报 `0.4.19 -> 0.4.19`（记录已被第一窗改过），不是出错也不是没写——**写就是 reload 的唯一触发器**（`location.reload()` 挂在同一个动作里），所以 `--all` 每窗都要写一次，去重只能体现在"同一存储记录只改动一次"的报告上。③ reload 后 **instance id 必变**（`newInstanceId()` 每次模块求值一次），旧 id 作废。④ reload 后有一段**匿名期**（岳见约 4 分钟；本机 2026-09-24 复测：10:55:09 重连 → 10:55:27 `--project test` 报 `PROJECT_NOT_CONNECTED` → 用 `--instance` 调一次 → 10:55:38 `--project` 就恢复了）：匿名期**用 `--instance <新 id>` 直达**，窗口一应答工程名就回来，不是等满 4 分钟，也不是显示 bug | 多窗更新用 `--all`（逐窗写、逐窗 reload、逐窗验收，每窗一行 verified/unknown）——**注意 `--all` 会 reload 每一个在线窗口，禁地窗（ROBOT、毕设FOC 等真实工程）在场时不许裸跑，先 `bridge status` 核窗口清单**；更新完 `bridge status` **逐窗核版本**；只更一窗用 `--instance <新读到的 id>`。verified 的判据是"**目标窗**旧身份从表里消失 + 写之后新出现的连接报出该版本"——别拿另一窗的应答当本窗的 verified（共享存储场景下那是假 yes）。出处 `outputs/030_*.txt`、`docs/bridge.md` §10.27 |
 
 | 23 | **`export.render` 挂死 = 目标页自载入后从未被激活**（issue #5 正案，033）；**进度条 toast 漏是另一件事**（032）——两件事分开记，别混：3.2.149 + 0.4.21 上岳做了受控对照（同窗同页相隔 4 分钟，唯一变量是「导出前有没有 `doc.open` 过目标页」）：**没激活过 → png 与 svg 都挂死**（15:48:19 png 30s 超时；15:50:00 svg 同样超时）；`doc.open`（回 `activated: true`）之后 → **15:54:02 png ~2 秒成功**（662229B、magic 过）。**由此撤回两条旧结论**：①「PNG 卡死而 SVG 同刻可用」不成立——那是**单样本**（2026-09-23 18:05:53 那次成功是孤例，几分钟前 checkup 刚 `doc.open` 过那页，文档还「热」）；②「宿主不接受某个参数」与本症状无关（那是 2026-09-18 .d.ts 坑的真相，降为历史注脚）。一条机制解释全部历史观测：**checkup 从未失败**（它的画布阶段本就逐页 `doc.open` 再渲染——调用方碰巧做对了，所以 checkup **不改**），**每次裸调 `bridge call export.render` 都挂**（没先动焦点）。H1「必须是活动文档」/H2「载入后激活过一次即可」未分离，**修法相同**。**0.4.22 起 `export.render` 自己激活**：`scope=page` 时先解析目标 uuid（`params.pageUuid` ?? 当前活动文档）→ `dmt_EditorControl.openDocument(uuid)` → 成功才导出，结果带 `activatedPageUuid`；活动文档解析不到、或 `openDocument` 失败/不回 tab id → **诚实报错、不导出**（诊断沿用 `doc.open` 那套）；`scope=selection`/`project` 不动。031 的 **PNG→SVG 回退保留**（它是 checkup 超时不失败的保护），但它的旧前提已撤回：svg 在页面未激活时同样挂 | 裸调出图挂住时先查这条：**导出前目标页激活了吗**——传 `params.pageUuid`，或先 `doc.open`；checkup 对本病天然免疫（逐页 open + 渲染），**不用改**。**另一件事**：进度条 toast 漏（ManufactureData 管线开了不退，**成功也卡 99%**）——0.4.21 起 connector 在 `finally` 里 400ms 后 best-effort 拆（`destroyProgressBar`/`destroyLoading`，岳两样本验证通过）。心跳连续**仍不能**排除宿主故障（socket/心跳/路由计数只描述*通道*）。**149 上的根治验收归岳**：窗口刚载入、不 doc.open，裸调 `export.render` 应直接成功。出处 issue #5、`outputs/031_*.txt`、`outputs/032_*.txt`、`outputs/033_*.txt`、`docs/bridge.md` §10.28 `openDocument(uuid)` ≠ `activateDocument(tabId)`（**开标签页 vs 切前台激活，入参一个是 uuid、一个是 tab id**）——导出前必须**两者都做 + `getCurrentDocumentInfo()` 回读确认 `matchesRequest`** 才导出；0.4.22 只做了第一步，岳 149 验收当场未过（裸调仍 TIMEOUT ×2），0.4.23 补齐三步。H1/H2 **定案**：**每次导出前都要 activate**（不是"载入后激活过一次即可"）。 |
+| 24 | **导出文件对删除永不重算**（035 四轮真机定论）：`save`、等 30 s、切页都不触发，四次导出逐字节一致仍报旧网表；create 会触发重算（029 实测）。⇒ 判据一句话：**导出新鲜当且仅当本 run 无删除**——含删除 run 的 pin 级新鲜读数只能走编辑器**活网表**（`sch.netlist` 的 `components[k].pinInfoMap[pin].net`，按名字给，未命名网一律空，单独证不了"两脚没共用未命名网"，**必须配画布双证**）。连带三条宿主习性：① 宿主给**悬空脚发单成员自动网**，导出名 `NET\d+`、活网表内部名 `$\S+`——**同一座岛两个名字，自动网名不是身份**（stale 检查对两个自动名视为同一岛；用户命名网仍逐名比）；② 相接的两段线被宿主**合并成一个 primitive**，接点在点表里重复上报（实测 `[345,300,345,290,255,300,345,300]`）——附着物判定必须读"脚在上报点表里"，按首尾点判会把 T 型误判成附着；③ `sch.doc.new` 的 name 参数被忽略 | pin 级验收 = 活网表 + 画布双证，缺一 exit 3，导出降级为事故报告附件；范围核对分家（含删除 → 画布身份级差异 `wiresVanished == [attachment.primitive_id]`；纯 create → 维持导出核对）。出处 `outputs/035c_live.txt`、`outputs/035d_live.txt`、`tasks/035-patch-pin.md` |
 宿主版本：**3.2.149 是实测下限**（2026-09-23 在 3.2.149.88089769 上实测：打标/缩放等 8 个关键成员
 typeof 全在位、activate 冷启动正常派发、render 实跑 308KB PNG——旧立论"3.2.183 以下这些接口不存在"
 已被证伪，见 `tasks/027-editor-api-floor.md`）；**3.2.186 是唯一校准对象**。低于 149 没有证据，doctor 照卡。
