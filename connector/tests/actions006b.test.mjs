@@ -1034,3 +1034,100 @@ test('export.render timeout names both hypotheses and points at format=svg', asy
   });
 });
 
+// --------------------------------------------------------------------------
+// export.render teardown (032): the export's progress toast retired on both paths
+// --------------------------------------------------------------------------
+
+
+/** Collect the teardown timers (400 ms) while letting every other timer run.
+ *
+ * The teardown is *scheduled*, not awaited — so the test has to hold the
+ * callback in its hand to fire it. Swallowing only the 400 ms timers keeps the
+ * harness's own polling (`waitFor`) working: a blanket `setTimeout` stub would
+ * freeze the very loop that waits for the response frame.
+ */
+function captureTeardownTimers(t) {
+  const realSetTimeout = globalThis.setTimeout;
+  const pending = [];
+  globalThis.setTimeout = (fn, ms, ...rest) => {
+    if (ms === 400) {
+      pending.push(fn);
+      return 0;
+    }
+    return realSetTimeout(fn, ms, ...rest);
+  };
+  t.after(() => {
+    globalThis.setTimeout = realSetTimeout;
+  });
+  return pending;
+}
+
+function progressHost(overrides = {}) {
+  return host({
+    sys_LoadingAndProgressBar: (base) => {
+      const state = base.__state;
+      state.progress = [];
+      return {
+        destroyProgressBar() {
+          state.progress.push('destroyProgressBar');
+          if (state.destroyThrows) throw new Error('destroy refused');
+        },
+        destroyLoading() {
+          state.progress.push('destroyLoading');
+          if (state.destroyThrows) throw new Error('destroy refused');
+        },
+        ...(overrides.progress ?? {}),
+      };
+    },
+  });
+}
+
+test('export.render schedules the progress-toast teardown on success', async (t) => {
+  // 岳's 149 measurement: the file lands (664 KB) and the editor stays at 99%
+  // until somebody closes the bar by hand. The teardown is what retires it, and
+  // it has to be on the *success* path — that is the whole finding.
+  const h = progressHost();
+  const pending = captureTeardownTimers(t);
+  withEda(t, h);
+  await connector.activate();
+
+  const frame = await call(h, 'export.render', {});
+  assert.equal(frame.ok, true, 'the export itself is untouched');
+  assert.deepEqual(h.__state.progress, [], 'nothing is torn down before the delay');
+  assert.equal(pending.length, 1, 'exactly one teardown was scheduled');
+
+  pending[0]();
+  assert.deepEqual(h.__state.progress, ['destroyProgressBar', 'destroyLoading']);
+});
+
+test('export.render schedules the teardown on the timeout path too, and survives a refusing host', async (t) => {
+  const h = progressHost();
+  h.sch_ManufactureData.getExportDocumentFile = () => new Promise(() => {});
+  h.__state.destroyThrows = true;
+  const pending = captureTeardownTimers(t);
+  withEda(t, h);
+  await connector.activate();
+
+  const frame = await call(h, 'export.render', { timeoutMs: 1_000 });
+  assert.equal(frame.ok, false);
+  assert.equal(frame.error.code, 'TIMEOUT', 'a failing teardown does not change the error shape');
+  assert.equal(pending.length, 1, 'the timeout path leaves the 1% toast behind without this');
+
+  pending[0]();  // must not throw, and must not reach the response frame
+  assert.deepEqual(h.__state.progress, ['destroyProgressBar', 'destroyLoading']);
+});
+
+test('export.render skips the teardown when the host has no progress namespace', async (t) => {
+  // An older host without `sys_LoadingAndProgressBar` still exports; the
+  // teardown is best-effort cosmetics and must never be a reason to fail.
+  const h = host({ sys_LoadingAndProgressBar: null });
+  const pending = captureTeardownTimers(t);
+  withEda(t, h);
+  await connector.activate();
+
+  const frame = await call(h, 'export.render', {});
+  assert.equal(frame.ok, true);
+  assert.equal(pending.length, 1, 'the timer is still scheduled — it just finds nothing to call');
+  pending[0]();  // a no-op, and no exception
+});
+

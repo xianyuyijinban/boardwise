@@ -3,7 +3,7 @@
   "uuid": "a08393abee5cbeb92f33e6cf2bf4b6a0",
   "displayName": "boardwise Connector",
   "description": "Bridges the local boardwise daemon to the official eda.* API over a loopback WebSocket, so the reviewer can read the open document, capture the canvas and mark findings in place.",
-  "version": "0.4.20",
+  "version": "0.4.21",
   "publisher": "boardwise",
   "engines": {
     "eda": "~3.2.0"

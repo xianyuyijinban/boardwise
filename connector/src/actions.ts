@@ -3489,6 +3489,52 @@ const EXPORT_RENDER_TIMEOUT_MAX_MS = 60_000;
  * Exported because it is the *decision* a test cares about — pinning "absent →
  * 30 s" by waiting 30 s would be a slow test of a fast rule.
  */
+/**
+ * How long after the export settles before the progress toast is torn down (032).
+ *
+ * Late on purpose: the platform runs its own teardown right after the promise
+ * resolves, and a bar destroyed underneath that is how a toast reappears. 400 ms
+ * is the delay upstream `easyeda-agent` uses for the same symptom.
+ */
+const EXPORT_TEARDOWN_DELAY_MS = 400;
+
+/** The two teardown calls, in the order upstream makes them. */
+const EXPORT_TEARDOWN_METHODS = ['destroyProgressBar', 'destroyLoading'] as const;
+
+/**
+ * Retire the export's progress toast, best-effort and late (032, issue #5).
+ *
+ * Measured by 岳 on 3.2.149 (2026-09-24): the export **succeeds** — 664172 bytes
+ * on disk, no fallback triggered — and the editor still sits at "99%" until a
+ * human closes the bar. So this is neither a timeout symptom nor a failure
+ * symptom: the ManufactureData export pipeline delivers its file without
+ * retiring the progress bar it opened, on both outcomes. That is why the
+ * teardown lives in the caller's `finally`, not in an error path.
+ *
+ * `sys_LoadingAndProgressBar.destroyProgressBar()` / `destroyLoading()` are
+ * `@public`, idempotent and safe with no bar on screen (upstream's live note:
+ * `showProgressBar(99)` → `destroyProgressBar()` clears it). Every step here is
+ * optional anyway — an older host without the namespace, or a destroy that
+ * throws, must leave the export's own outcome exactly as it was, because this is
+ * cosmetics with a real cost when missing, never a reason to fail a good export.
+ */
+function scheduleExportTeardown(eda: Eda): void {
+  setTimeout(() => {
+    const bar = readMember(eda, 'sys_LoadingAndProgressBar').value;
+    if (!bar || typeof bar !== 'object') return;
+    for (const name of EXPORT_TEARDOWN_METHODS) {
+      const fn = readMember(bar, name).value;
+      if (typeof fn !== 'function') continue;
+      try {
+        fn.call(bar);
+      } catch {
+        // Best-effort: a host that refuses the teardown keeps its own toast, and
+        // shouting about it here would turn a cosmetic miss into a failed action.
+      }
+    }
+  }, EXPORT_TEARDOWN_DELAY_MS);
+}
+
 export function exportRenderTimeoutMs(params: Record<string, unknown> | undefined): number {
   const asked = Number(params?.timeoutMs);
   if (!Number.isFinite(asked)) return EXPORT_RENDER_TIMEOUT_MS;
@@ -3549,41 +3595,53 @@ export const exportRender: ActionHandler = async (params, eda) => {
   const typeParams = { theme: 'Default', lineWidth: 'Default' };
   const timeoutMs = exportRenderTimeoutMs(params);
 
-  const file: any = await new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () =>
-        reject(
-          new ActionError(
-            // Two hypotheses, said as two — the old text asserted the first one
-            // ("the host drops an argument it dislikes"), which was the truth of
-            // the 2026-09-18 .d.ts trap and is the *wrong* thing to hand a reader
-            // whose PNG render hung on an otherwise healthy host (issue #5).
-            'TIMEOUT',
-            `getExportDocumentFile did not settle within ${timeoutMs / 1000} s `
-              + `(format=${format}, scope=${scope}). Two hypotheses, and this call cannot tell `
-              + 'them apart: (1) the host does not accept an argument — it drops one it dislikes '
-              + 'instead of rejecting, the .d.ts trap this action was ported around; (2) the '
-              + "host's PNG rasterisation path is stuck, measured on 3.2.149 (issue #5), where "
-              + 'format=png timed out three times while format=svg answered in the same second. '
-              + 'Practical next step: retry with format=svg (the checkup canvas stage falls back '
-              + 'to it on a PNG timeout); the editor may show a stuck 1% progress toast — reload '
-              + 'the document to clear it.',
-            { path: 'sch_ManufactureData.getExportDocumentFile', format, scope, timeoutMs },
+  let file: any;
+  try {
+    file = await new Promise((resolve, reject) => {
+      const timer = setTimeout(
+        () =>
+          reject(
+            new ActionError(
+              // Two hypotheses, said as two — the old text asserted the first one
+              // ("the host drops an argument it dislikes"), which was the truth of
+              // the 2026-09-18 .d.ts trap and is the *wrong* thing to hand a reader
+              // whose PNG render hung on an otherwise healthy host (issue #5).
+              'TIMEOUT',
+              `getExportDocumentFile did not settle within ${timeoutMs / 1000} s `
+                + `(format=${format}, scope=${scope}). Two hypotheses, and this call cannot tell `
+                + 'them apart: (1) the host does not accept an argument — it drops one it dislikes '
+                + 'instead of rejecting, the .d.ts trap this action was ported around; (2) the '
+                + "host's PNG rasterisation path is stuck, measured on 3.2.149 (issue #5), where "
+                + 'format=png timed out three times while format=svg answered in the same second. '
+                + 'Practical next step: retry with format=svg (the checkup canvas stage falls back '
+                + 'to it on a PNG timeout). The export opens a progress toast the host does not '
+                + `retire by itself — this action tears it down about ${EXPORT_TEARDOWN_DELAY_MS} ms `
+                + 'after it answers, on every outcome; if the bar is STILL up after that, the '
+                + 'editor is wedged for another reason and reloading the document is the way out.',
+              { path: 'sch_ManufactureData.getExportDocumentFile', format, scope, timeoutMs },
+            ),
           ),
-        ),
-      timeoutMs,
-    );
-    settle(getExportDocumentFile.call(mfg, fileName, spec.fileType, typeParams, objectLiteral)).then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error) => {
-        clearTimeout(timer);
-        reject(error);
-      },
-    );
-  });
+        timeoutMs,
+      );
+      settle(getExportDocumentFile.call(mfg, fileName, spec.fileType, typeParams, objectLiteral)).then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      );
+      });
+  } finally {
+    // **Both** outcomes go through here (032): on 3.2.149 a *successful* export
+    // leaves the same stuck 99% toast as a timed-out one, because the toast
+    // belongs to the export pipeline and nobody retires it. A rejected promise
+    // reaches the finally too, which is the path that used to leave the 1% toast
+    // hanging forever.
+    scheduleExportTeardown(eda);
+  }
   if (!file) {
     throw new ActionError(
       'CONNECTOR_ERROR',

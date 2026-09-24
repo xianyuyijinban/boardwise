@@ -63,4 +63,31 @@ stuck at 99% until the user closes it by hand (live-reported twice)"——他们
 
 ## 交卷记录
 
-（子代理交文本，主代理 append 并复验。）
+### 032 · 交卷（2026-09-24，子代理 agent-43；摘要 `outputs/032_summary.txt`）
+
+- **connector 0.4.21**：`exportRender` 导出调用区包 try/**finally**——`scheduleExportTeardown(eda)`
+  在应答后 400ms best-effort 调 `sys_LoadingAndProgressBar.destroyProgressBar()` + `destroyLoading()`
+  （`readMember` 读命名空间而非 `namespaceOf`——后者缺命名空间会抛 NOT_IMPLEMENTED，与 best-effort
+  相悖；逐个 typeof 守卫、各自 try/catch）。**成功与超时两条路径都拆**（成功路径才是正案——岳 149
+  实测成功也卡）。TIMEOUT 文案末句改：connector 应答后 ~400ms 自拆，仍挂着才 reload。
+- **测试**：connector +3 条（成功 / 超时+refusing host / 缺命名空间）→ **410 passed**；pytest 未动
+  python，**1447** 不变；tsc 干净。变异 **2/2 CAUGHT**（M1 删 finally teardown → 3 红；M2 拆
+  try/catch → 1 红）。dist 构建确定性可复现（两次同 sha `15cfc732…`，255504B）。
+- **真机（186，只碰 test 窗）**：热更 0.4.21 verified（新连接 `inst-065453418-6y202jn4`）；
+  `sys.probe` 核 `destroyProgressBar`/`destroyLoading` typeof=function arity=0；PNG 回归 156678B
+  **sha256 与 031 那次逐字节相同**（teardown 不影响渲染内容）；超时腿复核出新文案末句。
+  ROBOT 0.4.17 / test2 0.4.19 全程未寻址。
+- **文档**：SKILL 坑 23 改写（卡死 = 导出管线漏 toast，与成败无关；0.4.21 起自清除；031 回退是
+  另一件事——超时的兜底）；bridge.md export.render 行 + §10.28 同口径。
+
+### 主代理复验（2026-09-24）
+
+- sha256 抽核 7 件（6 跟踪文件 + dist `15cfc732…`）与交卷值逐字一致 ✔；
+- 三线复跑：pytest **1447**（111s，python 未动）/ connector **410 pass 0 fail** / tsc 干净 ✔；
+- 变异记录定向红、还原 sha 回基线 ✔；
+- **子代理遗留①（149 视觉验收）**：转给岳——本机 186 不留 toast，自清除效果只能在 149 上看
+  （跑 checkup 或任意 export.render，卡 99% 的进度条应 ~1s 内自灭）。验收通过前 issue #5 保持开放。
+- **子代理遗留②（"上游现行源码已看不到那段 finally"）**：**不成立**——引文来源是主代理当日 10:51
+  从上游 main 分支实拉的 `extension/src/actions.ts:4240-4254`（finally + 400ms setTimeout +
+  两个 destroy 调用，注释原文照录于本任务书 §背景），亲见。子代理大概查了过时克隆或别的路径，
+  不影响本批实现（按引文移植，且有 live 实证背书）。

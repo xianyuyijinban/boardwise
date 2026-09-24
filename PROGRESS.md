@@ -31,14 +31,14 @@ collects the current truth and the pointers.
   - `docs/images/gs-03-daemon-start.png`
   - `PROGRESS.md`
 
-## Current baseline (2026-09-24, 031 export.render PNG→SVG 回退; published on GitHub)
+## Current baseline (2026-09-24, 032 export.render toast 自清除; published on GitHub)
 
 - pytest: **1447 passed** (run with `--basetemp=.tmp_pt_home` on Windows —
   the host's safe-delete hook otherwise eats the summary line and fakes
   exit 1)
-- connector: **407 pass / 0 fail** (`cd connector && npm test`)
+- connector: **410 pass / 0 fail** (`cd connector && npm test`)
 - `npx tsc --noEmit`: clean
-- connector version: **0.4.20** (`connector/extension.json`)
+- connector version: **0.4.21** (`connector/extension.json`)
 - Verified host: EasyEDA Pro **3.2.186** (the only host the bridge is
   calibrated against; every real-host fact in the task books names it)
 
@@ -104,3 +104,5 @@ point. Full measurement history: `tasks/010c-coordinate-convention.md`
 - 030 update-connector 多窗三档（岳四坑收编）: 无寻址+多窗**写前拒绝**（exit 2 列窗口表+两条出路）；`--instance` 不变；`--all` 新增（逐窗写/reload/验收，exit 0/1/3 三态沿用 025e）；**verified 收紧**=只认目标窗旧身份消失+写后新连接报出版本（共享存储下异窗应答是假 yes，真机证到：test 的连接全程在线时 test2 的 verified 等到它自己 10:55:51 的新连接）；坑 4 精修（匿名期 `--instance` 调一次即恢复 `--project`，不必等 4 分钟）；`--all` 真机未跑（会 reload 禁地 ROBOT，主代理裁决 (c) 维持现状+SKILL 坑 22 加注禁地守卫）；pytest **1443**（+8），connector/tsc 未动，变异 2/2 CAUGHT；现场 test2 升 0.4.19、ROBOT 一字未写（`tasks/030-update-connector-multiwindow.md` §五，`outputs/030_*`）
 
 - 031 export.render PNG 超时 → SVG 回退（issue #5 收编，connector **0.4.20**）: 149 实测 PNG 光栅化卡死而 SVG 同刻可用、宿主 UI 冻结时心跳/连接全部正常（**心跳连续不能排除宿主故障** → SKILL 坑 23）；connector TIMEOUT 文案双假设 + svg 指引 + `timeoutMs`（clamp 1..60s，缺省 30s 不变）；checkup 画布阶段 PNG 10s 短绳、**仅 TIMEOUT** 同页回退 SVG（entry 留 `format`+`pngError`，schema 只加字段）；真机 186：0.4.20 热更 verified、PNG 回归 156678B、`timeoutMs=1` 强制超时新文案 + SVG 1970ms 真返回、checkup 4 页零新字段；pytest **1447**（+4）connector **407**（+4），变异 2/2 CAUGHT；主代理裁决两条遗留（daemon 30s 盖 60s 上限=已知限制、protocol schema 漂移=接受）；149 marker A/B 未做（`tasks/031-export-render-png-fallback.md` §交卷记录，`outputs/031_*`）
+
+- 032 export.render toast 自清除（issue #5 症状正案，connector **0.4.21**）: 岳 149 新证据推翻 #5 原诊断——PNG **成功**（664KB 落盘）UI 照样卡 99%，卡死 = ManufactureData 导出管线**漏进度条 toast**（与成败无关），031 回退只治超时失败不治卡死；移植上游 finally 修法（400ms 后 `destroyProgressBar`+`destroyLoading`，幂等 best-effort，成功/超时两路都拆）+ TIMEOUT 文案末句改"自拆，仍挂才 reload"；真机 186：热更 verified、probe 两函数在册、PNG 回归 sha 与 031 逐字节相同；connector **410**（+3）pytest 1447 不变，变异 2/2 CAUGHT；**视觉验收归岳（149 上 toast 应 ~1s 自灭），验收前 #5 保持开放**（`tasks/032-export-render-toast-teardown.md` §交卷记录，`outputs/032_*`）
