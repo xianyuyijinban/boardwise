@@ -1483,6 +1483,7 @@ Recorded rather than hidden, so a future session does not have to rediscover the
       is the call's own timeout, which is why the action has one (and why 031's short leash exists).
     **Superseded guess:** the review-mark indicator markers were one early hypothesis for the
     trigger. The measured cause is page activation, and no batch since has needed the marker story.
+    **Three steps, not one (034).** `openDocument(uuid)` opens a **tab**; `activateDocument(tabId)` is what brings the document to the front, and its argument is the **tab id**, not the uuid; `getCurrentDocumentInfo()` is the readback that confirms it (`matchesRequest`). 0.4.22 performed only the first — its 149 acceptance failed (a bare `export.render` still timed out twice with 0.4.22 running, and succeeded in 2 s right after a `doc.open`). Since **0.4.23** the export calls the `doc.open` handler itself (one implementation, so the two cannot drift) and refuses to export unless activation returned true **and** the readback matches; the answer carries `activatedPageUuid` + `activated: true`. H1/H2 is settled: **activate before every export**, not once per page load.
 
 ## 11. Relationship to `easyeda-agent` frames
 
