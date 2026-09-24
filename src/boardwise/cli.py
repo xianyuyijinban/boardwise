@@ -2317,11 +2317,14 @@ def _render_canvas_images(args: argparse.Namespace, out_dir: Path, *, notes: lis
       comes back as something other than a PNG (a multi-document zip is the known
       shape), is recorded with its reason and the rest still render; a report with
       no images and no explanation would read like a board with nothing to show.
-    * **PNG first, SVG as the fallback** (031, issue #5): on 3.2.149 the host's
-      PNG rasterisation can hang while `format=svg` answers in the same second, so
-      a **TIMEOUT** on the PNG leg is retried once as SVG on the same page. The
-      PNG error stays in the entry (`pngError`) — swapping formats silently would
-      turn a measured host defect into a report that looks clean.
+    * **PNG first, SVG as the fallback** (031, issue #5): a **TIMEOUT** on the PNG
+      leg is retried once as SVG on the same page, and the PNG error stays in the
+      entry (`pngError`) — swapping formats silently would turn a host defect into
+      a report that looks clean. The premise 031 wrote this on ("PNG hangs while
+      SVG answers in the same second") was **withdrawn in 033**: the measured
+      cause of a hung export is an *inactive page*, and svg hangs the same way
+      there. This stage opens every page before rendering it, so it was never
+      exposed to that; the fallback stays as a timeout guard, nothing more.
 
     Relative file names go into the slot, because the slot's reader is looking at
     `report.json` inside `--out` and a machine-specific absolute path would be
@@ -2389,16 +2392,17 @@ def _render_canvas_images(args: argparse.Namespace, out_dir: Path, *, notes: lis
 
 #: How long one page's PNG render may take before the canvas stage stops waiting
 #: (031). A correct render answers in ~100–200 ms, so 10 s is generous — and the
-#: reason for a *short* leash is the host: a rasterisation that hangs (issue #5,
-#: 3.2.149) freezes the editor's progress toast for as long as you wait, so the
-#: only humane thing a caller can do is fail fast and take the SVG leg.
+#: reason for a *short* leash is the host: a render that hangs (issue #5 — 3.2.149
+#: hangs an export whose page was never activated; this stage activates each page
+#: first, so what is left here is a guard) freezes the editor's progress toast for
+#: as long as you wait, so the only humane thing a caller can do is fail fast.
 CANVAS_PNG_TIMEOUT_MS = 10_000
 
 #: The one `export.render` failure that earns a different format (031 §2): a
-#: timeout is "the host did not answer", which is exactly the shape PNG
-#: rasterisation takes on 3.2.149. A `BAD_REQUEST` or `NOT_IMPLEMENTED` is the
-#: host *telling* us something — falling back there would hide a real problem
-#: behind a picture that happens to work in the other format.
+#: timeout is "the host did not answer" — the shape every hung export takes
+#: (issue #5), whatever the page state was. A `BAD_REQUEST` or `NOT_IMPLEMENTED`
+#: is the host *telling* us something — falling back there would hide a real
+#: problem behind a picture that happens to work in the other format.
 CANVAS_FALLBACK_CODES = ("TIMEOUT",)
 
 
