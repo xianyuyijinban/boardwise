@@ -43,7 +43,7 @@ function primitive(idOrFields, extra = {}) {
 
 /** Minimal host: only the namespaces these three actions touch. */
 function host(overrides = {}) {
-  const state = { labelCalls: [] };
+  const state = { labelCalls: [], editorCalls: [] };
   const hostObject = {
     sys_WebSocket: {
       register(id, uri, onMessage) {
@@ -88,6 +88,7 @@ function host(overrides = {}) {
       async getExportDocumentFile(fileName, fileType, typeParams, object) {
         state.exportCalls = state.exportCalls ?? [];
         state.exportCalls.push({ fileName, fileType, typeParams, object });
+        state.editorCalls.push(['getExportDocumentFile', fileName]);
         // a 1x1 PNG
         const png = Buffer.from(
           '89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c6300010000050001',
@@ -134,6 +135,27 @@ function host(overrides = {}) {
     dmt_Schematic: {
       async getCurrentSchematicPageInfo() {
         return { uuid: 'page-1' };
+      },
+    },
+
+    // 033: `export.render scope=page` activates its target before exporting, so
+    // every render test needs these two. `openDocument` records the order it was
+    // called in (`state.editorCalls`) because "activation happens *before* the
+    // export" is the property under test; `getCurrentDocumentInfo` is the same
+    // read `doc.list` uses for "the active document".
+    dmt_SelectControl: {
+      async getCurrentDocumentInfo() {
+        if (state.activeDocument === null) return undefined;
+        return { uuid: state.activeDocument ?? 'page-1', documentType: 'Schematic Page',
+                 tabId: 'tab-1', parentProjectUuid: 'proj-1' };
+      },
+    },
+    dmt_EditorControl: {
+      async openDocument(uuid) {
+        state.editorCalls.push(['openDocument', uuid]);
+        if (state.openDocumentThrows) throw new Error('openDocument exploded');
+        if (state.openDocumentRefuses) return undefined;
+        return `tab-${uuid}`;
       },
     },
 
@@ -1003,11 +1025,11 @@ test('export.render timeouts: params.timeoutMs clamped, default unchanged', () =
   assert.equal(exportRenderTimeoutMs({ timeoutMs: 999_999 }), 60_000, 'above the ceiling');
 });
 
-test('export.render timeout names both hypotheses and points at format=svg', async (t) => {
-  // issue #5: on 3.2.149 a PNG render hung while SVG answered in the same
-  // second. The old message asserted the *other* hypothesis (an argument the
-  // host dislikes), which sends the reader down the wrong path — so the text
-  // has to carry both, plus the one practical thing to try.
+test('export.render timeout leads with activation and has dropped the svg story', async (t) => {
+  // 033 corrected the message twice over: the leading hypothesis is the *page
+  // never having been activated* (the controlled comparison on 3.2.149), and the
+  // "PNG times out while SVG answers in the same second" claim is gone — that was
+  // one sample, and svg hung too when the page had not been opened.
   const h = host({
     sch_ManufactureData: (base) => ({
       ...base.sch_ManufactureData,
@@ -1022,16 +1044,112 @@ test('export.render timeout names both hypotheses and points at format=svg', asy
   assert.equal(frame.ok, false);
   assert.equal(frame.error.code, 'TIMEOUT');
   assert.match(frame.error.message, /within 1 s/, 'the clamped deadline is what the text says');
-  assert.match(frame.error.message, /format=svg/, 'the practical next step is named');
-  assert.match(frame.error.message, /does not accept an argument/, 'hypothesis 1');
-  assert.match(frame.error.message, /rasterisation path is stuck/, 'hypothesis 2');
-  assert.match(frame.error.message, /3\.2\.149/, 'hypothesis 2 cites the measurement');
+  assert.match(frame.error.message, /never been activated/, 'the leading hypothesis is back');
+  assert.match(frame.error.message, /params\.pageUuid/, 'and it says how to be unambiguous');
+  assert.doesNotMatch(frame.error.message, /format=svg/,
+    'the svg-differentiation advice is retracted — svg hangs the same way');
+  assert.doesNotMatch(frame.error.message, /rasterisation/);
+  assert.match(frame.error.message, /Historical footnote/, '.d.ts trap demoted, not deleted');
+  assert.match(frame.error.message, /tears it down/, 'the 032 teardown sentence survives');
   assert.deepEqual(frame.error.detail, {
     path: 'sch_ManufactureData.getExportDocumentFile',
     format: 'png',
     scope: 'page',
     timeoutMs: 1_000,
   });
+});
+
+// --------------------------------------------------------------------------
+// export.render activation (033): the export is about an *active* page
+// --------------------------------------------------------------------------
+
+
+test('export.render activates the page it was told to export, before exporting', async (t) => {
+  const h = host();
+  withEda(t, h);
+  await connector.activate();
+
+  const frame = await call(h, 'export.render', { pageUuid: 'page-7', format: 'png' });
+
+  assert.equal(frame.ok, true, JSON.stringify(frame.error ?? {}));
+  assert.deepEqual(h.__state.editorCalls, [
+    ['openDocument', 'page-7'],
+    ['getExportDocumentFile', 'render.png'],
+  ], 'the activation comes first — that ordering is the fix');
+  assert.equal(frame.data.activatedPageUuid, 'page-7');
+});
+
+test('export.render with no pageUuid activates the active document (old callers self-heal)', async (t) => {
+  // Every pre-0.4.22 caller passes no pageUuid (including `boardwise draw`'s
+  // acceptance image). They keep working *and* stop being able to hang on an
+  // inactive page: whatever the editor reports as active is activated first.
+  const h = host();
+  h.__state.activeDocument = 'page-9';
+  withEda(t, h);
+  await connector.activate();
+
+  const frame = await call(h, 'export.render', {});
+
+  assert.equal(frame.ok, true);
+  assert.deepEqual(h.__state.editorCalls, [
+    ['openDocument', 'page-9'],
+    ['getExportDocumentFile', 'render.png'],
+  ]);
+  assert.equal(frame.data.activatedPageUuid, 'page-9');
+});
+
+test('export.render reports an unresolvable active document instead of guessing', async (t) => {
+  const h = host();
+  // Both readers must come up empty for "no active document": the direct
+  // `getCurrentDocumentInfo` (below) and the per-kind fallback the connector
+  // also consults (`dmt_Schematic.getCurrentSchematicPageInfo`), which the share
+  // fake host answers with 'page-1'.
+  h.__state.activeDocument = null;
+  h.dmt_Schematic.getCurrentSchematicPageInfo = async () => undefined;
+  withEda(t, h);
+  await connector.activate();
+
+  const frame = await call(h, 'export.render', {});
+
+  assert.equal(frame.ok, false);
+  assert.equal(frame.error.code, 'CONNECTOR_ERROR');
+  assert.match(frame.error.message, /no active document/);
+  assert.match(frame.error.message, /params\.pageUuid/, 'the way out is named');
+  assert.deepEqual(
+    h.__state.editorCalls,
+    [],
+    'nothing was opened and nothing was exported — a guess here would render the wrong page',
+  );
+});
+
+test('export.render propagates an openDocument failure and does not export', async (t) => {
+  const h = host();
+  h.__state.openDocumentThrows = true;
+  withEda(t, h);
+  await connector.activate();
+
+  const frame = await call(h, 'export.render', { pageUuid: 'page-7' });
+
+  assert.equal(frame.ok, false);
+  assert.match(frame.error.message, /exploded/, 'the host error is carried through');
+  assert.deepEqual(h.__state.editorCalls, [['openDocument', 'page-7']],
+    'the export is NOT attempted on a page that did not become active');
+});
+
+test('export.render explains an openDocument that returns no tab id, and still does not export', async (t) => {
+  const h = host();
+  h.__state.openDocumentRefuses = true;
+  withEda(t, h);
+  await connector.activate();
+
+  const frame = await call(h, 'export.render', { pageUuid: 'page-missing' });
+
+  assert.equal(frame.ok, false);
+  assert.equal(frame.error.code, 'CONNECTOR_ERROR');
+  assert.match(frame.error.message, /openDocument returned no tab id/);
+  assert.match(frame.error.message, /The export was NOT attempted/);
+  assert.ok(frame.error.detail, 'the diagnosis rides in detail, like doc.open');
+  assert.deepEqual(h.__state.editorCalls, [['openDocument', 'page-missing']]);
 });
 
 // --------------------------------------------------------------------------
