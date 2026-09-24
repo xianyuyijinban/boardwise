@@ -192,6 +192,28 @@ boardwise doctor: 8/8 项通过
 | connector 版本与仓库一致 | 编辑器里跑的是不是最新那份 .eext | `boardwise bridge update-connector`（热更新，不用重装） |
 | 当前工程焦点可读 | 编辑器里有没有打开一个工程 | 打开工程，再跑一次 doctor |
 
+**更新 connector 时开着多个编辑器窗口**（硬件工程师常态，也是三个坑的来源）：不带寻址的
+`boardwise bridge update-connector` 会被**拒绝**并列出窗口表——daemon 不猜是哪一个窗口，这是设计
+而不是故障。三档做法：
+
+| 你在做什么 | 命令 |
+|---|---|
+| 只开了一个窗口 | `boardwise bridge update-connector --yes` |
+| 只想更新某一个窗口 | `boardwise bridge update-connector --instance <窗口 id> --yes`（id 见 `boardwise bridge status`） |
+| 全部窗口一起更新（推荐） | `boardwise bridge update-connector --all --yes` |
+
+`--all` 会逐窗写 bundle、逐窗 reload、逐窗验收，每窗一行结果（`verified` / `unknown`）。**更新完
+再用 `boardwise bridge status` 逐窗核一遍版本**（每行的 `connector X.Y.Z` 就是那个窗口正在跑的
+版本）——这是最省事的人工复核法。三件容易误判的事：
+
+- 窗口 reload 后会换**新的 instance id**，旧 id 立即作废，要更新就重读 `bridge status`；
+- 窗口 reload 后有一段**匿名期**（实测约 4 分钟量级；表里的工程名显示 `(anonymous)`）：这段里
+  `--project <工程名>` 路由会报 `PROJECT_NOT_CONNECTED`——**改用 `--instance <新 id>` 直达**，
+  它一应答（一次调用就够）工程名就回来了（本机实测：10:55:09 重连匿名 → 10:55:27 `--project` 失败
+  → 用 `--instance` 调了一次 → 10:55:38 `--project test` 恢复正常）。这不是显示 bug，也不是窗口丢了；
+- 一个编辑器里的多个窗口**共用同一份扩展存储**（IndexedDB `User_<team>_v6`）：第二个窗口写入时会
+  看到 `0.4.19 -> 0.4.19`，那是"这份存储已经被第一个窗口更新过了"，不是它没更新，也不是出错。
+
 断开状态下 doctor 不会崩：它会逐行说"未验证：……"并给出同一条修复建议，然后退出 1。
 
 想留一份机器可读的报告给同事排查，加 `--json doctor.json`。
