@@ -499,7 +499,7 @@ declaring `confirm`).
 | `sch.readback` | connector | read | connector | `includePrimitives` | `{kind: 'sch', components, primitives, componentCount}` | 30 s |
 | `pcb.readback` | connector | read | connector | `includePrimitives` | `{kind: 'pcb', components, primitives, componentCount}` | 30 s |
 | `export.screenshot` | connector | read | connector | `fit` | `{format, encoding: 'base64', bytes, data}` — **diagnostic only**: cached frames | 60 s |
-| `export.render` | connector | read | connector | `format`, `scope`, `ids`, `fileName` | `{format: 'image/png'\|'image/svg+xml'\|'application/pdf'\|'zip', encoding, bytes, data, scope, note}` — the document render (`scope`: page\|selection\|project) | 60 s |
+| `export.render` | connector | read | connector | `format`, `scope`, `ids`, `fileName`, `timeoutMs` | `{format: 'image/png'\|'image/svg+xml'\|'application/pdf'\|'zip', encoding, bytes, data, scope, note}` — the document render (`scope`: page\|selection\|project). `timeoutMs` (0.4.20) clamps into 1..60 s and defaults to the 30 s constant; a call that runs out answers `TIMEOUT` with **two** hypotheses named (an argument the host drops, or a stuck PNG rasterisation — see §10.28) and points at `format=svg` | 60 s |
 | `canvas.highlight` | connector | read | connector | `uuids`, `color`, `clear` | `{highlighted, cleared, unresolved}` | 30 s |
 | `sch.netlist` | connector | read | connector | `type` | `{type, source, size, text}` — the editor's own netlist | 60 s |
 | `sch.geometry` | connector | read | connector | `bboxIds` | `{components, wires, pins, netlabels, bboxes, meta}` — raw `getState_*` dumps + **measured** sheet bbox | 60 s |
@@ -1440,6 +1440,29 @@ Recorded rather than hidden, so a future session does not have to rediscover the
       during the anonymous phase is the **instance id**, and project routing returns with the
       window's first answer; treat 岳's "~4 minutes" as the worst case he saw, not as a timer to
       wait out. This is **not** a display bug and not a sign the window was lost (§10.27).
+
+28. **A frozen host is not a broken connection — and PNG rasterisation is where it freezes
+    (issue #5, 031).** Measured on 岳's work machine, editor **3.2.149.88089769**, connector 0.4.17:
+    `export.render format=png scope=page` timed out **three times out of three** at the 30 s bound,
+    while `format=svg` answered **in the same second** (166012 bytes). Same call path, same page,
+    only `fileType` different — and the connection layer showed nothing at all: heartbeats normal,
+    `bridge status` `connected`, `routed` 22. The editor's own progress toast stayed stuck, which is
+    what "the host is busy, not the socket" looks like from the outside. Two consequences to keep:
+    - **A healthy connection cannot rule out a host fault.** Everything the bridge can read about
+      itself (sockets, heartbeats, routing counters) describes the *channel*; a promise the host
+      never settles produces the same "connected" picture as an idle editor. The only honest signal
+      is the call's own timeout, which is why the action has one.
+    - **The timeout text names both hypotheses** since 0.4.20 (an argument the host drops, *or* a
+      stuck PNG path) and points at `format=svg`. Until then it asserted the argument story — the
+      truth of the 2026-09-18 `.d.ts` trap and the *wrong* lead for a PNG hang.
+    The checkup canvas stage (031 §2) therefore renders PNG with a **10 s** leash and falls back to
+    SVG **once** on a timeout, recording `format: "svg"` plus the original error as `pngError` — a
+    silently swapped format would read as "the host is fine". Only `TIMEOUT` triggers it: a
+    `BAD_REQUEST` or `NOT_IMPLEMENTED` is the host telling us something, and papering over it with
+    another format is how a real defect stays hidden.
+    **Not yet explained:** whether the trigger is the review-mark indicator markers on the canvas
+    (the shape the reports were produced with). That needs 岳's 149 machine and another frozen UI,
+    so it is a plan, not a finding — do not cite a cause this batch did not measure.
 
 ## 11. Relationship to `easyeda-agent` frames
 

@@ -15,6 +15,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { createFacade } from '../dist/esm/facade.mjs';
+import { exportRenderTimeoutMs } from '../dist/esm/actions.mjs';
 import * as connector from '../dist/esm/index.mjs';
 
 /**
@@ -989,3 +990,47 @@ test('sch.place_text is NOT_IMPLEMENTED when the host has no text namespace', as
   assert.equal(frame.ok, false);
   assert.equal(frame.error.code, 'NOT_IMPLEMENTED');
 });
+
+test('export.render timeouts: params.timeoutMs clamped, default unchanged', () => {
+  // The decision, without waiting for it: absent/non-numeric fall back to the
+  // 30 s constant, and the clamp keeps a caller from switching the bound off.
+  assert.equal(exportRenderTimeoutMs(undefined), 30_000, 'the default is the constant');
+  assert.equal(exportRenderTimeoutMs({}), 30_000);
+  assert.equal(exportRenderTimeoutMs({ timeoutMs: 'soon' }), 30_000, 'not a number');
+  assert.equal(exportRenderTimeoutMs({ timeoutMs: 15_000 }), 15_000, 'in range, honoured');
+  assert.equal(exportRenderTimeoutMs({ timeoutMs: 1 }), 1_000, 'below the floor');
+  assert.equal(exportRenderTimeoutMs({ timeoutMs: 0 }), 1_000);
+  assert.equal(exportRenderTimeoutMs({ timeoutMs: 999_999 }), 60_000, 'above the ceiling');
+});
+
+test('export.render timeout names both hypotheses and points at format=svg', async (t) => {
+  // issue #5: on 3.2.149 a PNG render hung while SVG answered in the same
+  // second. The old message asserted the *other* hypothesis (an argument the
+  // host dislikes), which sends the reader down the wrong path — so the text
+  // has to carry both, plus the one practical thing to try.
+  const h = host({
+    sch_ManufactureData: (base) => ({
+      ...base.sch_ManufactureData,
+      getExportDocumentFile: () => new Promise(() => {}), // never settles
+    }),
+  });
+  withEda(t, h);
+  await connector.activate();
+
+  const frame = await call(h, 'export.render', { format: 'png', timeoutMs: 1_000 });
+
+  assert.equal(frame.ok, false);
+  assert.equal(frame.error.code, 'TIMEOUT');
+  assert.match(frame.error.message, /within 1 s/, 'the clamped deadline is what the text says');
+  assert.match(frame.error.message, /format=svg/, 'the practical next step is named');
+  assert.match(frame.error.message, /does not accept an argument/, 'hypothesis 1');
+  assert.match(frame.error.message, /rasterisation path is stuck/, 'hypothesis 2');
+  assert.match(frame.error.message, /3\.2\.149/, 'hypothesis 2 cites the measurement');
+  assert.deepEqual(frame.error.detail, {
+    path: 'sch_ManufactureData.getExportDocumentFile',
+    format: 'png',
+    scope: 'page',
+    timeoutMs: 1_000,
+  });
+});
+

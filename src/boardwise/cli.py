@@ -2307,7 +2307,7 @@ def _render_canvas_images(args: argparse.Namespace, out_dir: Path, *, notes: lis
     job is to *put the pictures where it can see them*, with no interpretation
     attached.
 
-    Three disciplines, each one earned:
+    Four disciplines, each one earned:
 
     * **schematic pages only.** PCB pages are explicitly out of scope for now
       ("PCB 先不动"), so the render walks the page list and nothing else.
@@ -2317,6 +2317,11 @@ def _render_canvas_images(args: argparse.Namespace, out_dir: Path, *, notes: lis
       comes back as something other than a PNG (a multi-document zip is the known
       shape), is recorded with its reason and the rest still render; a report with
       no images and no explanation would read like a board with nothing to show.
+    * **PNG first, SVG as the fallback** (031, issue #5): on 3.2.149 the host's
+      PNG rasterisation can hang while `format=svg` answers in the same second, so
+      a **TIMEOUT** on the PNG leg is retried once as SVG on the same page. The
+      PNG error stays in the entry (`pngError`) — swapping formats silently would
+      turn a measured host defect into a report that looks clean.
 
     Relative file names go into the slot, because the slot's reader is looking at
     `report.json` inside `--out` and a machine-specific absolute path would be
@@ -2354,37 +2359,20 @@ def _render_canvas_images(args: argparse.Namespace, out_dir: Path, *, notes: lis
             out_dir.mkdir(parents=True, exist_ok=True)
             images: list[dict] = []
             for uuid, name in pages:
-                entry: dict = {"page": name or uuid, "pageUuid": uuid}
                 try:
                     await client.call("doc.open", {"uuid": uuid}, **route_kwargs)
                     rendered = True
-                    payload = await client.call(
-                        "export.render",
-                        {"format": "png", "scope": "page", "fileName": f"canvas-{_file_stem(name or uuid)}.png"},
-                        **route_kwargs,
-                    )
                 except BridgeError as exc:
-                    entry["error"] = f"{exc.code}: {exc.message}"
-                    images.append(entry)
-                    continue
-                if not isinstance(payload, dict) or not payload.get("data"):
-                    entry["error"] = "render 没有回 base64 数据"
-                elif payload.get("format") != "image/png":
-                    # A zip here means the editor rendered several documents; writing
-                    # it as `.png` would be a lie the report's reader cannot see.
-                    entry["error"] = f"render 回的是 {payload.get('format')}，不是 PNG（不落盘）"
-                else:
-                    import base64
-
-                    blob = base64.b64decode(payload["data"])
-                    relative = f"canvas-{_file_stem(name or uuid)}.png"
-                    (out_dir / relative).write_bytes(blob)
-                    entry.update({
-                        "file": relative,
-                        "bytes": len(blob),
-                        "sha256": hashlib.sha256(blob).hexdigest(),
+                    images.append({
+                        "page": name or uuid, "pageUuid": uuid,
+                        "error": f"{exc.code}: {exc.message}",
                     })
-                images.append(entry)
+                    continue
+                images.append(
+                    await _render_one_canvas_image(
+                        client, uuid, name, out_dir, route_kwargs, BridgeError
+                    )
+                )
             return images
         finally:
             try:
@@ -2397,6 +2385,88 @@ def _render_canvas_images(args: argparse.Namespace, out_dir: Path, *, notes: lis
                 await client.close()
 
     return asyncio.run(run())
+
+
+#: How long one page's PNG render may take before the canvas stage stops waiting
+#: (031). A correct render answers in ~100–200 ms, so 10 s is generous — and the
+#: reason for a *short* leash is the host: a rasterisation that hangs (issue #5,
+#: 3.2.149) freezes the editor's progress toast for as long as you wait, so the
+#: only humane thing a caller can do is fail fast and take the SVG leg.
+CANVAS_PNG_TIMEOUT_MS = 10_000
+
+#: The one `export.render` failure that earns a different format (031 §2): a
+#: timeout is "the host did not answer", which is exactly the shape PNG
+#: rasterisation takes on 3.2.149. A `BAD_REQUEST` or `NOT_IMPLEMENTED` is the
+#: host *telling* us something — falling back there would hide a real problem
+#: behind a picture that happens to work in the other format.
+CANVAS_FALLBACK_CODES = ("TIMEOUT",)
+
+
+async def _render_one_canvas_image(client, page_uuid: str, name: str, out_dir: Path,
+                                   route_kwargs: dict, bridge_error) -> dict:
+    """One page → one image file, PNG first and SVG as the measured fallback.
+
+    031 (issue #5): on 3.2.149 `format=png` timed out three times while
+    `format=svg` answered in the same second, with the host's UI frozen and the
+    connection perfectly healthy — so a PNG **timeout** is retried once as SVG on
+    the same page. Everything else about the page is unchanged: the entry keeps
+    the same keys, and the fallback only *adds* `format`/`pngError`, because the
+    original error is evidence a report must carry (a silently swapped format
+    would read as "the host is fine").
+    """
+    import base64
+    import hashlib
+
+    entry: dict = {"page": name or page_uuid, "pageUuid": page_uuid}
+    stem = _file_stem(name or page_uuid)
+    png_error = ""
+    payload = None
+    try:
+        payload = await client.call(
+            "export.render",
+            {"format": "png", "scope": "page", "fileName": f"canvas-{stem}.png",
+             "timeoutMs": CANVAS_PNG_TIMEOUT_MS},
+            **route_kwargs,
+        )
+    except bridge_error as exc:
+        if exc.code not in CANVAS_FALLBACK_CODES:
+            entry["error"] = f"{exc.code}: {exc.message}"
+            return entry
+        png_error = f"{exc.code}: {exc.message}"
+    if payload is None:
+        try:
+            payload = await client.call(
+                "export.render",
+                {"format": "svg", "scope": "page", "fileName": f"canvas-{stem}.svg"},
+                **route_kwargs,
+            )
+        except bridge_error as exc:
+            entry["error"] = (
+                f"{png_error}；同页回退 format=svg 也失败：{exc.code}: {exc.message}"
+                "（两种格式都没落盘）"
+            )
+            return entry
+        entry["pngError"] = png_error
+        entry["format"] = "svg"
+    is_svg = entry.get("format") == "svg"
+    extension, label, mime = ("svg", "SVG", "image/svg+xml") if is_svg else ("png", "PNG", "image/png")
+    if not isinstance(payload, dict) or not payload.get("data"):
+        entry["error"] = "render 没有回 base64 数据"
+        return entry
+    if payload.get("format") != mime:
+        # A zip here means the editor rendered several documents; writing it as an
+        # image would be a lie the report's reader cannot see.
+        entry["error"] = f"render 回的是 {payload.get('format')}，不是 {label}（不落盘）"
+        return entry
+    blob = base64.b64decode(payload["data"])
+    relative = f"canvas-{stem}.{extension}"
+    (out_dir / relative).write_bytes(blob)
+    entry.update({
+        "file": relative,
+        "bytes": len(blob),
+        "sha256": hashlib.sha256(blob).hexdigest(),
+    })
+    return entry
 
 
 def _file_stem(name: str) -> str:

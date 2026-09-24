@@ -31,14 +31,14 @@ collects the current truth and the pointers.
   - `docs/images/gs-03-daemon-start.png`
   - `PROGRESS.md`
 
-## Current baseline (2026-09-24, 030 update-connector 多窗三档; published on GitHub)
+## Current baseline (2026-09-24, 031 export.render PNG→SVG 回退; published on GitHub)
 
-- pytest: **1443 passed** (run with `--basetemp=.tmp_pt_home` on Windows —
+- pytest: **1447 passed** (run with `--basetemp=.tmp_pt_home` on Windows —
   the host's safe-delete hook otherwise eats the summary line and fakes
   exit 1)
-- connector: **405 pass / 0 fail** (`cd connector && npm test`)
+- connector: **407 pass / 0 fail** (`cd connector && npm test`)
 - `npx tsc --noEmit`: clean
-- connector version: **0.4.19** (`connector/extension.json`)
+- connector version: **0.4.20** (`connector/extension.json`)
 - Verified host: EasyEDA Pro **3.2.186** (the only host the bridge is
   calibrated against; every real-host fact in the task books names it)
 
@@ -102,3 +102,5 @@ point. Full measurement history: `tasks/010c-coordinate-convention.md`
 - 029 batch a (M3 第 2 片 add-component 离线核心): `decap-required-caps` 补 FindingTarget（锚点 IC/供电脚/网/facts 配方串，UNKNOWN 不给 target）；**幂等探测与规则判定同一函数**（`cap_candidates_on` + `decide_required_cap`，层规则强制落 `engines/addcomponent.py`）；changeplan 增 `add-component`（`to_jsonable` 按 kind 分支，016 component-value JSON 一字未变）；`edit plan --report`（阶梯 `LANDING_GRID=5`=layout.GRID 固定 9 位耗尽抛 LadderExhausted 绝不落原点、位号最小空闲、连接 wire-or-label 二选一拒绝静默）；apply 编排 11 离线用例（幂等走活工程 export→parse、范围差异恰好 +1、连接以工程网表回执判定）；pytest **1418**（+11），变异 2/2（幂等漏判/兜底放原点）；主代理裁决 3 条含"029-b 必须含异网线段页面盯 wire 不错连"；遗留 `edit preview` 认 add-component + report.json 显式 schema 测试（`tasks/029-edit-add-component.md` §六）
 - 029 batches b/c/d (M3 第 2 片 add-component 全线收官): 真机暴露三 bug 修复（wire state 带 `Net` 原名假设错→`nearest_wire_point` 按网过滤错连结构不可能；plan 错用锚点 IC 脚号；无架 `looks_like_capacitor` 崩）+ 三宿主硬事实入码（**对角线挂死 place_wire**⇒`wire_route()` 强制正交；**落点=原点≠引脚**⇒wire 从新件自己的脚画起；**place_netlabel 本机不可用**）；GND 端机制=**power-flag**（`sch.place_power` probe 过、旗标放新件引脚、范围差异单计 flags、轨道网判定归 `layout._net_kind` 唯一处）；apply 内置重审（save 后双导出指纹一致→重跑规则→resolved/still-present，facts UNKNOWN 不算 resolved）+ 幂等探测前置（重复 apply=already_applied 零写入）；真机 case a 两次真成功（重审 findings 0）+ b/c/d/f + 无 GND 几何新形态全链；pytest **1435**（+27 over 1407），变异 2+2+2 全 CAUGHT；`export.screenshot` 本机只回 1×1 PNG 入账（`tasks/029-edit-add-component.md` §六，`outputs/029{b,c,d}_*`）
 - 030 update-connector 多窗三档（岳四坑收编）: 无寻址+多窗**写前拒绝**（exit 2 列窗口表+两条出路）；`--instance` 不变；`--all` 新增（逐窗写/reload/验收，exit 0/1/3 三态沿用 025e）；**verified 收紧**=只认目标窗旧身份消失+写后新连接报出版本（共享存储下异窗应答是假 yes，真机证到：test 的连接全程在线时 test2 的 verified 等到它自己 10:55:51 的新连接）；坑 4 精修（匿名期 `--instance` 调一次即恢复 `--project`，不必等 4 分钟）；`--all` 真机未跑（会 reload 禁地 ROBOT，主代理裁决 (c) 维持现状+SKILL 坑 22 加注禁地守卫）；pytest **1443**（+8），connector/tsc 未动，变异 2/2 CAUGHT；现场 test2 升 0.4.19、ROBOT 一字未写（`tasks/030-update-connector-multiwindow.md` §五，`outputs/030_*`）
+
+- 031 export.render PNG 超时 → SVG 回退（issue #5 收编，connector **0.4.20**）: 149 实测 PNG 光栅化卡死而 SVG 同刻可用、宿主 UI 冻结时心跳/连接全部正常（**心跳连续不能排除宿主故障** → SKILL 坑 23）；connector TIMEOUT 文案双假设 + svg 指引 + `timeoutMs`（clamp 1..60s，缺省 30s 不变）；checkup 画布阶段 PNG 10s 短绳、**仅 TIMEOUT** 同页回退 SVG（entry 留 `format`+`pngError`，schema 只加字段）；真机 186：0.4.20 热更 verified、PNG 回归 156678B、`timeoutMs=1` 强制超时新文案 + SVG 1970ms 真返回、checkup 4 页零新字段；pytest **1447**（+4）connector **407**（+4），变异 2/2 CAUGHT；主代理裁决两条遗留（daemon 30s 盖 60s 上限=已知限制、protocol schema 漂移=接受）；149 marker A/B 未做（`tasks/031-export-render-png-fallback.md` §交卷记录，`outputs/031_*`）
