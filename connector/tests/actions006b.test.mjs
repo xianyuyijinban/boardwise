@@ -145,17 +145,32 @@ function host(overrides = {}) {
     // read `doc.list` uses for "the active document".
     dmt_SelectControl: {
       async getCurrentDocumentInfo() {
+        state.editorCalls.push(['getCurrentDocumentInfo']);
         if (state.activeDocument === null) return undefined;
-        return { uuid: state.activeDocument ?? 'page-1', documentType: 'Schematic Page',
-                 tabId: 'tab-1', parentProjectUuid: 'proj-1' };
+        const uuid = state.activeDocument ?? 'page-1';
+        return { uuid, documentType: 'Schematic Page', tabId: `tab-${uuid}`,
+                 parentProjectUuid: 'proj-1' };
       },
     },
     dmt_EditorControl: {
+      // 034: `openDocument` opens a *tab*; `activateDocument` takes that tab id
+      // and brings the document to the front. The fake models them as two steps
+      // because the export must perform both — 033 did only the first and 岳's
+      // 149 run failed on it.
       async openDocument(uuid) {
         state.editorCalls.push(['openDocument', uuid]);
         if (state.openDocumentThrows) throw new Error('openDocument exploded');
         if (state.openDocumentRefuses) return undefined;
-        return `tab-${uuid}`;
+        state.pendingTab = `tab-${uuid}`;
+        return state.pendingTab;
+      },
+      async activateDocument(tabId) {
+        state.editorCalls.push(['activateDocument', tabId]);
+        if (state.activateThrows) throw new Error('activateDocument exploded');
+        if (state.activateReturnsFalse) return false;
+        if (state.activateIsLying) return true; // claims success, does not switch
+        state.activeDocument = state.pendingTab.replace(/^tab-/, '');
+        return true;
       },
     },
 
@@ -1064,7 +1079,12 @@ test('export.render timeout leads with activation and has dropped the svg story'
 // --------------------------------------------------------------------------
 
 
-test('export.render activates the page it was told to export, before exporting', async (t) => {
+test('export.render performs all three of doc.open\'s steps before exporting', async (t) => {
+  // 034: openDocument (opens the tab) → activateDocument(tabId) (brings it to the
+  // front) → getCurrentDocumentInfo (confirms it) → the export. 033 stopped after
+  // the first step, and a freshly loaded 149 window still hung on a bare
+  // export.render with 0.4.22 installed — the tab was open, the document was not
+  // in front, and that is what the host waits for.
   const h = host();
   withEda(t, h);
   await connector.activate();
@@ -1072,11 +1092,17 @@ test('export.render activates the page it was told to export, before exporting',
   const frame = await call(h, 'export.render', { pageUuid: 'page-7', format: 'png' });
 
   assert.equal(frame.ok, true, JSON.stringify(frame.error ?? {}));
-  assert.deepEqual(h.__state.editorCalls, [
+  const calls = h.__state.editorCalls;
+  assert.deepEqual(calls.slice(0, 4), [
     ['openDocument', 'page-7'],
+    ['activateDocument', 'tab-page-7'],
+    ['getCurrentDocumentInfo'],
     ['getExportDocumentFile', 'render.png'],
-  ], 'the activation comes first — that ordering is the fix');
+  ], 'all three steps, in doc.open\'s order, before the export');
+  assert.deepEqual(calls.slice(4).map(([name]) => name), ['getCurrentDocumentInfo'],
+    'nothing else touches the editor — the trailing read is the response frame building its context');
   assert.equal(frame.data.activatedPageUuid, 'page-7');
+  assert.equal(frame.data.activated, true, 'the receipt says so, like doc.open');
 });
 
 test('export.render with no pageUuid activates the active document (old callers self-heal)', async (t) => {
@@ -1091,8 +1117,12 @@ test('export.render with no pageUuid activates the active document (old callers 
   const frame = await call(h, 'export.render', {});
 
   assert.equal(frame.ok, true);
-  assert.deepEqual(h.__state.editorCalls, [
+  const calls = h.__state.editorCalls;
+  assert.deepEqual(calls.slice(0, 5), [
+    ['getCurrentDocumentInfo'],      // resolving "the active document"
     ['openDocument', 'page-9'],
+    ['activateDocument', 'tab-page-9'],
+    ['getCurrentDocumentInfo'],      // the confirmation read
     ['getExportDocumentFile', 'render.png'],
   ]);
   assert.equal(frame.data.activatedPageUuid, 'page-9');
@@ -1116,9 +1146,9 @@ test('export.render reports an unresolvable active document instead of guessing'
   assert.match(frame.error.message, /no active document/);
   assert.match(frame.error.message, /params\.pageUuid/, 'the way out is named');
   assert.deepEqual(
-    h.__state.editorCalls,
+    h.__state.editorCalls.filter(([name]) => name !== 'getCurrentDocumentInfo'),
     [],
-    'nothing was opened and nothing was exported — a guess here would render the wrong page',
+    'nothing was opened, activated or exported — a guess here would render the wrong page',
   );
 });
 
@@ -1132,7 +1162,7 @@ test('export.render propagates an openDocument failure and does not export', asy
 
   assert.equal(frame.ok, false);
   assert.match(frame.error.message, /exploded/, 'the host error is carried through');
-  assert.deepEqual(h.__state.editorCalls, [['openDocument', 'page-7']],
+  assert.deepEqual(h.__state.editorCalls.map(([name]) => name), ['openDocument', 'getCurrentDocumentInfo'],
     'the export is NOT attempted on a page that did not become active');
 });
 
@@ -1146,10 +1176,78 @@ test('export.render explains an openDocument that returns no tab id, and still d
 
   assert.equal(frame.ok, false);
   assert.equal(frame.error.code, 'CONNECTOR_ERROR');
-  assert.match(frame.error.message, /openDocument returned no tab id/);
-  assert.match(frame.error.message, /The export was NOT attempted/);
+  assert.match(frame.error.message, /returned no tab id/,
+    'doc.open\'s own diagnosis, propagated unchanged');
   assert.ok(frame.error.detail, 'the diagnosis rides in detail, like doc.open');
-  assert.deepEqual(h.__state.editorCalls, [['openDocument', 'page-missing']]);
+  assert.ok(!h.__state.editorCalls.some(([name]) => name === 'getExportDocumentFile'),
+    'no export attempt after a refused activation');
+});
+
+test('export.render refuses when activateDocument says false', async (t) => {
+  // The half 033 was missing. `openDocument` alone leaves a page that is open but
+  // not in front, which is exactly the state 岳's 149 hung on.
+  const h = host();
+  h.__state.activateReturnsFalse = true;
+  withEda(t, h);
+  await connector.activate();
+
+  const frame = await call(h, 'export.render', { pageUuid: 'page-7' });
+
+  assert.equal(frame.ok, false);
+  assert.equal(frame.error.code, 'CONNECTOR_ERROR');
+  assert.match(frame.error.message, /activateDocument said false/);
+  assert.match(frame.error.message, /The export was NOT attempted/);
+  assert.ok(!h.__state.editorCalls.some(([name]) => name === 'getExportDocumentFile'),
+    'no export from a page that is not in front');
+});
+
+test('export.render refuses when activateDocument throws', async (t) => {
+  const h = host();
+  h.__state.activateThrows = true;
+  withEda(t, h);
+  await connector.activate();
+
+  const frame = await call(h, 'export.render', { pageUuid: 'page-7' });
+
+  assert.equal(frame.ok, false);
+  assert.match(frame.error.message, /activateDocument exploded/);
+  assert.ok(!h.__state.editorCalls.some(([name]) => name === 'getExportDocumentFile'));
+});
+
+test('export.render refuses when the readback does not match the page it asked for', async (t) => {
+  // `activateDocument` can return true and the editor can still be showing
+  // another document; the confirmation read is what catches that, because the
+  // call's own answer is not evidence about what is in front.
+  const h = host();
+  h.__state.activeDocument = 'page-other';
+  h.__state.activateIsLying = true;
+  withEda(t, h);
+  await connector.activate();
+
+  const frame = await call(h, 'export.render', { pageUuid: 'page-7' });
+
+  assert.equal(frame.ok, false);
+  assert.match(frame.error.message, /matchesRequest=false/);
+  assert.match(frame.error.message, /The export was NOT attempted/);
+  assert.ok(!h.__state.editorCalls.some(([name]) => name === 'getExportDocumentFile'),
+    'a page that is not confirmed in front is not exported from');
+});
+
+test('export.render refuses honestly when the host has no activateDocument', async (t) => {
+  // Not a degrade to "try anyway": on 3.2.149 trying anyway is what hangs. An
+  // older host without the member gets an error naming it, and no export.
+  const h = host();
+  delete h.dmt_EditorControl.activateDocument;
+  withEda(t, h);
+  await connector.activate();
+
+  const frame = await call(h, 'export.render', { pageUuid: 'page-7' });
+
+  assert.equal(frame.ok, false);
+  assert.match(frame.error.message, /activateDocument/);
+  assert.match(frame.error.message, /not available in this editor version/,
+    'the missing member is named, not guessed around');
+  assert.ok(!h.__state.editorCalls.some(([name]) => name === 'getExportDocumentFile'));
 });
 
 // --------------------------------------------------------------------------

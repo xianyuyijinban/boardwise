@@ -3577,41 +3577,53 @@ async function activateExportPage(eda: Eda, params: Record<string, unknown>): Pr
     }
   }
 
-  const tabId = (await settle(requireFn(eda, 'dmt_EditorControl.openDocument')(uuid))) as
-    | string
-    | undefined;
-  if (!tabId) {
-    // The same diagnosis `doc.open` carries (018 §B1), for the same reason: "why
-    // is my uuid not here?" is answerable from the editor, and the answer is what
-    // the caller needs. Nothing is exported — a page that does not become active
-    // hangs this host (033), so trying anyway would burn the whole timeout to
-    // learn what this already knows.
-    let location: UuidLocation | null = null;
-    try {
-      location = await locateUuid(eda, uuid);
-    } catch {
-      // The diagnosis must never turn a clear error into an unclear one.
-      location = null;
-    }
-    const why = location ? describeUuidLocation(uuid, location) : 'the reason could not be read';
+  // **The whole of `doc.open`**, not just its first step (034). 033 called
+  // `openDocument` and stopped there, and 岳's 149 acceptance failed on exactly
+  // that: on a freshly loaded window a bare `export.render` still timed out twice
+  // with 0.4.22 installed, while the same call right after `doc.open` succeeded in
+  // 2 s. `openDocument` **opens a tab**; whether that takes input focus is the
+  // host's business — `activateDocument(tabId)` is what brings the document to the
+  // front, and its argument is the **tab id**, not the uuid.
+  //
+  // This calls the `doc.open` handler itself rather than repeating its three steps
+  // (open → activate → read back), so the two can never drift into "the export
+  // activates a page slightly differently from `doc.open`". The handler's own
+  // no-tab-id diagnosis propagates unchanged.
+  const opened = (await docOpen({ uuid }, eda)) as {
+    tabId?: string;
+    activated?: boolean;
+    activateProblem?: string;
+    document?: { matchesRequest?: boolean } | { error?: string };
+  };
+
+  // Strict, and deliberately not best-effort: on 3.2.149 a page that is not the
+  // active document hangs the export until the caller gives up, so a half-
+  // activated page is not something to export from — "try anyway" costs the whole
+  // timeout and returns nothing. `doc.open` itself reports `activated: false` and
+  // carries on (focus is its caller's business); here it is a refusal.
+  const activated = opened?.activated === true;
+  const matches = (opened?.document as { matchesRequest?: boolean } | undefined)?.matchesRequest === true;
+  if (!activated || !matches) {
+    const readback = opened?.document as
+      | { matchesRequest?: boolean; error?: string }
+      | undefined;
     throw new ActionError(
       'CONNECTOR_ERROR',
-      `export.render could not activate page ${uuid}: openDocument returned no tab id — ${why}. `
-        + 'The export was NOT attempted: on 3.2.149 a page that is not activated hangs the export '
-        + 'until the caller gives up (issue #5).',
-      location
-        ? {
-            uuid,
-            focusedProject: location.focused,
-            activeDocument: location.active,
-            uuidBelongsTo: location.owner,
-            inFocusedProjectListing: location.inFocusedListing,
-            listingCount: location.listingCount,
-            openTabs: location.openTabs,
-            otherProjects: location.otherProjects,
-            ...(location.notes.length ? { notes: location.notes } : {}),
-          }
-        : { uuid, diagnosisError: true },
+      `export.render could not make page ${uuid} the active document: `
+        + `activateDocument said ${activated ? 'true' : 'false'}, the editor reports `
+        + (readback?.error
+          ? `an unreadable active document (${readback.error})`
+          : `matchesRequest=${String(readback?.matchesRequest)}`)
+        + (opened?.activateProblem ? ` — ${opened.activateProblem}` : '')
+        + '. The export was NOT attempted: on 3.2.149 an export of a page that is not the active '
+        + 'document hangs until the caller gives up (issue #5).',
+      {
+        uuid,
+        tabId: opened?.tabId ?? null,
+        activated,
+        activeDocument: readback ?? null,
+        ...(opened?.activateProblem ? { activateProblem: opened.activateProblem } : {}),
+      },
     );
   }
   return uuid;
@@ -3751,7 +3763,12 @@ export const exportRender: ActionHandler = async (params, eda) => {
     // Which page was made active for this export (033): the caller named it, or
     // it was the active document. Reported so a reader can tell what was
     // exported without guessing from the file name.
-    ...(activatedPageUuid ? { activatedPageUuid } : {}),
+    ...(activatedPageUuid
+      // `activated: true` is the same receipt shape `doc.open` returns, and here
+      // it is not a report but a consequence: a page that could not be activated
+      // was refused before the export, never exported from (034).
+      ? { activatedPageUuid, activated: true }
+      : {}),
     note: isZip
       ? 'the editor returned an archive (multi-document export), not a single image'
       : '',
