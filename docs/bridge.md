@@ -902,7 +902,7 @@ the hub depends on the handler loop exiting. So a *half-open* socket can leave `
 | `bridge export-fab --out DIR` | 0 / 1 / 2 | The fab bundle: calls `export.fab` and writes Gerber + pick-and-place + BOM + `manifest.json` into DIR (created if missing). `--pcb`, `--vendor`, `--gerber` (JSON overrides), `--bom-template`, `--timeout-ms`. Exit 1 also for a **partial** bundle — the files that did arrive stay on disk, and the missing one is named on stderr. |
 | `bridge highlight <uuid…>` | 0 / 1 / 2 | Draw markers; `--color`, `--zoom`, `--clear`. |
 | `bridge call --action NAME [--params JSON] [--project NAME_OR_UUID] [--instance INSTANCE_ID] [--yes]` | 0 / 1 / 2 | Call one action and print its `data` as JSON. `--project` (023) routes the call to the editor window that has that project open, `--instance` (023 follow-up) to the window with that instance id (§3.5) — the latter is the only one that works while no window can read a project at all. Either is required as soon as more than one window is connected; without one a multi-window daemon answers `WINDOW_UNSPECIFIED` rather than guessing, and given both the instance decides. `--yes` pre-confirms a `create` action (006c); without it the daemon answers `CONFIRMATION_REQUIRED` and this command asks interactively. Exit 1 is a refused or failed action — the code and message are on stderr |
-| `bridge update-connector [--instance INSTANCE_ID]` | 0 / 1 / 2 / 3 | Hot-update the running connector from `connector/dist/index.js` (§8); asks first, `--yes` skips. **Exit 0 only after the daemon's window table reports the stored version on some window** (020 §WI-2, sharpened in 025): 1 = a connection that came back *after* the write announces a different build (the reload landed on the wrong build), 3 = nothing conclusive inside the 30 s budget (state unknown, not failed — the old socket lingering is "not yet", not a failure), 2 = bad input or no daemon. `--no-verify` skips the read-back and returns as soon as the daemon accepted the write. `--instance` aims the write at one named window; the read-back is the same either way, since the updated window reconnects under a new instance id and cannot be probed by the old name |
+| `bridge update-connector [--instance INSTANCE_ID \| --all]` | 0 / 1 / 2 / 3 | Hot-update the running connector from `connector/dist/index.js` (§8); asks first, `--yes` skips. **Exit 0 only after the window that the write went to has reloaded and a connection that was not online before announces the stored version** (020 §WI-2, sharpened by 025 and again by 030 §二.2): 1 = a connection that came back *after* the write announces a different build (the reload landed on the wrong build), or a window's write was refused; 3 = nothing conclusive inside the 30 s budget (state unknown, not failed — the old socket lingering is "not yet", not a failure); 2 = bad input, no daemon, or an unaddressed call with several windows online. `--no-verify` skips the read-back and returns as soon as the daemon accepted the write. **Three modes** (030 §二.1): no addressing with one window online updates it, as before; no addressing with several windows online is **refused before anything is written**, with the window table and the two ways to name a window; `--instance` aims at one named window; `--all` updates every online window, writing per storage record and verifying each window on its own line (exit 0 only when all verified). The verification is per *window* because the reloaded window reconnects under a new instance id and cannot be probed by the old name — and because two windows of one editor **share** the IndexedDB record, so another window's answer is not evidence about this one (§10.27) |
 
 Connector token resolution order: `globalThis.BOARDWISE_TOKEN` (injection for tests) →
 extension user config → `?token=` on the configured URL → **generate one**. The last step is
@@ -1045,10 +1045,14 @@ property of connection order.
   a clean answer; `sys.probe`'s `connector` version read in the same breath as the action says which
   build answered, and when two builds share a version string only a bump can tell them apart. Before
   023 the update landed on whichever window owned the socket, which is the same hazard with the window
-  chosen for you. With `--instance`, note what the read-back can and cannot say: the updated window
-  reconnects under a **new** instance id, so the verification is "some online window now announces the
-  stored version" (exit 0), "the window you named is still answering on the old one" (exit 1), or
-  neither inside the budget (exit 3) — never a claim about which connection is which.
+  chosen for you. Since 030 the command will not even guess: with several windows online and no
+  `--instance`/`--all` it refuses before writing (`--all` updates every window, each verified on its
+  own line). Note what the read-back can and cannot say: the updated window reconnects under a **new**
+  instance id, so the verification is "the window the write went to is gone from the table and a
+  connection that was not online before announces the stored version" (exit 0), "a connection that
+  came back announces another build" (exit 1), or neither inside the budget (exit 3) — never a claim
+  about which connection is which, and never another window's answer standing in for this one's
+  (§10.27).
 
 ### Audit log
 
@@ -1409,6 +1413,33 @@ Recorded rather than hidden, so a future session does not have to rediscover the
     connection: HTTP 502`, and the CLI reported "daemon not reachable" while the daemon was
     fine. `BridgeClient.open` now passes `proxy=None`; `tests/test_bridge_cli.py` pins it, and
     the rule generalises: a loopback destination never goes through a proxy.
+27. **One editor profile, one extension record — and three consequences the multi-window
+    operator has to know (030).** Measured on the machine 2026-09-24 (岳, updating with two windows
+    open) and pinned by tests:
+    - **Several windows share one IndexedDB record.** The connector bundle and its
+      `config.version` live in `User_<teamUuid>_v6` (`connector/src/self-update.ts`), one record per
+      editor profile, **not per window**. So `sys.self_update` in the second window reports
+      `0.4.19 -> 0.4.19`: the record was already updated by the first. That is not an error and not
+      a no-op either — the write is what schedules that page's `location.reload()`, so `--all`
+      cannot skip it (§8) and says instead "N windows share this record, it changed once".
+    - **A reload replaces the window's identity.** `INSTANCE_ID` is minted per module evaluation
+      (`connector/src/index.ts`, `newInstanceId()`), so both the claimed instance id and the
+      daemon's hub key change; the old id is dead the moment the page goes away. Anything written
+      before the update ("update window `inst-…`") has to be re-read afterwards, and the
+      verification can only bind "the window I wrote to" to "the new connection" through the
+      table: its old identity **gone**, a connection that was not online before announcing the
+      stored version. Reading "some window announces the stored version" was the pre-030 rule, and
+      it let a *different* window of the same profile satisfy this one's `verified`.
+    - **After a reload the window is anonymous until it answers something.** It greets the daemon
+      before the editor API is ready, so the table has no `projectName` for it and `bridge status`
+      prints it without a project. Measured 2026-09-24 on this machine, and the shape is worth
+      knowing exactly: the reloaded window hello'd at **10:55:09**, `bridge call --project test`
+      failed `PROJECT_NOT_CONNECTED` at **10:55:27** (the daemon had nothing to match the name
+      against), **one** routed call by `--instance` at 10:55:38 refreshed its context — and
+      `--project test` worked again from that moment on, with no further wait. So the escape hatch
+      during the anonymous phase is the **instance id**, and project routing returns with the
+      window's first answer; treat 岳's "~4 minutes" as the worst case he saw, not as a timer to
+      wait out. This is **not** a display bug and not a sign the window was lost (§10.27).
 
 ## 11. Relationship to `easyeda-agent` frames
 

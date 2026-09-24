@@ -430,6 +430,7 @@ def _update_args(**over):
         no_verify=False,
         port=None,
         instance=None,
+        all=False,
     )
     base.update(over)
     return argparse.Namespace(**base)
@@ -487,6 +488,15 @@ class _RecordingClient:
     ping_fails_before: bool = False
     #: Set by the fake itself when ``sys.self_update`` has been answered.
     wrote: bool = False
+    #: 030: which IndexedDB record each window writes into, and what version each
+    #: record currently holds. Two windows of one editor profile **share** a
+    #: record (measured, 岳's ``User_309b46a8…_v6``), so a fake that gave every
+    #: window its own could not express the shared-storage blind spot at all.
+    window_databases: dict = {}
+    database_versions: dict = {}
+    database_default: str = "User_team-7_v6"
+    #: ``{windowKey: (code, message)}`` — the windows whose write the daemon refuses.
+    write_fails: dict = {}
 
     @classmethod
     async def open(cls, uri, token, role, client=None):
@@ -517,14 +527,23 @@ class _RecordingClient:
                 reported = type(self).stored_version
             return {"version": "3.2.186", "connector": reported}
 
+        window = route.get("target_instance") or ""
+        if window in type(self).write_fails:
+            from boardwise.bridge.protocol import BridgeError, ErrorCodes
+
+            code, message = type(self).write_fails[window]
+            raise BridgeError(code, message)
+        database = type(self).window_databases.get(window, type(self).database_default)
+        old_version = type(self).database_versions.get(database, "0.4.2")
+        type(self).database_versions[database] = params["version"]
         type(self).wrote = True
         type(self).stored_version = params["version"]
         return {
             "ok": True,
-            "oldVersion": "0.4.2",
+            "oldVersion": old_version,
             "newVersion": params["version"],
             "bytes": len(base64.b64decode(params["bundleB64"])),
-            "database": "User_team-7_v6",
+            "database": database,
             "reloadInMs": type(self).reload_in_ms,
         }
 
@@ -550,6 +569,10 @@ def update_env(monkeypatch, tmp_path):
     _RecordingClient.ping_fails = False
     _RecordingClient.ping_fails_before = False
     _RecordingClient.wrote = False
+    _RecordingClient.window_databases = {}
+    _RecordingClient.database_versions = {}
+    _RecordingClient.database_default = "User_team-7_v6"
+    _RecordingClient.write_fails = {}
     monkeypatch.setattr(client_module, "BridgeClient", _RecordingClient)
     return tmp_path
 
@@ -595,6 +618,10 @@ def test_update_connector_parses_its_arguments():
     assert args.instance is None
     args = build_parser().parse_args(["bridge", "update-connector", "--instance", "inst-A"])
     assert args.instance == "inst-A"
+    # `--all` (030): off by default, so the other two modes keep their meaning.
+    assert args.all is False
+    args = build_parser().parse_args(["bridge", "update-connector", "--all"])
+    assert args.all is True
 
 
 def test_update_connector_defaults_point_at_the_repo_build():
@@ -753,23 +780,78 @@ def test_update_connector_no_verify_restores_the_old_behaviour(
     assert [action for action, _ in _RecordingClient.calls] == ["ping", "sys.self_update"]
 
 
-def test_update_connector_verifies_a_rebuild_of_the_same_version(update_env, fast_verify, capsys):
+def test_a_rebuild_of_the_same_version_needs_its_own_reload_to_be_verified(
+    update_env, fast_verify, capsys
+):
+    """030 §二.2: the same-version rebuild was the blind spot's purest form.
+
+    The window announces the version being stored **before** the write as well
+    as after, so 025e's rule ("any window announces `expected`") answered
+    `verified` from the socket that had not reloaded at all. The tightened rule
+    wants the reload: the window's own new identity announcing the stored build.
+    """
     from boardwise.cli import _cmd_bridge_update_connector
 
     bundle = update_env / "b.js"
     bundle.write_bytes(b"x")
-    # A rebuild of the version already running: the window announces `expected`
-    # before the write as well as after, so the first read is already conclusive.
-    _RecordingClient.windows = [
-        {"windowKey": "inst-A", "instanceId": "inst-A", "connectorVersion": "0.4.11"}
-    ]
+    same = [{"windowKey": "inst-A", "instanceId": "inst-A", "connectorVersion": "0.4.11"}]
+    _RecordingClient.windows = same
+    _RecordingClient.windows_after = same  # nothing reloaded yet
 
     code = _cmd_bridge_update_connector(
         _update_args(bundle=str(bundle), version="0.4.11", yes=True)
     )
+    assert code == 3, "the pre-write socket is not evidence that this window reloaded"
+    assert "verified" not in capsys.readouterr().out
 
-    assert code == 0
-    assert "verified: running connector is now 0.4.11" in capsys.readouterr().out
+    # …and the same run is verified as soon as its own reload shows up: the old
+    # identity gone, a new one announcing what was stored. (`wrote` is reset so
+    # this second run's *pre-write* read still sees the old table.)
+    _RecordingClient.wrote = False
+    _RecordingClient.windows = same
+    _RecordingClient.windows_after = [
+        {"windowKey": "inst-D", "instanceId": "inst-D", "connectorVersion": "0.4.11"}
+    ]
+    code = _cmd_bridge_update_connector(
+        _update_args(bundle=str(bundle), version="0.4.11", yes=True)
+    )
+    out = capsys.readouterr().out
+    assert code == 0, out
+    assert "verified: running connector is now 0.4.11" in out
+    assert "inst-D" in out, "the verdict names the connection that proved it"
+
+
+def test_another_windows_answer_does_not_verify_this_window(update_env, fast_verify, capsys):
+    """The shared-storage blind spot, exactly as 岳 hit it (坑 2).
+
+    Two windows of one editor share an IndexedDB record, so window A can already
+    be running the stored build while the write is aimed at window B. A's
+    connection announces `expected` **before** the write and keeps announcing it
+    after — and 025e's rule read that as B's `verified` without B having reloaded
+    at all. Under the tightened rule the verdict is about **the window that was
+    addressed**: while its own socket is still online, the answer is "unknown".
+    """
+    from boardwise.cli import _cmd_bridge_update_connector
+
+    bundle = update_env / "b.js"
+    bundle.write_bytes(b"x")
+    table = [
+        {"windowKey": "inst-A", "instanceId": "inst-A", "connectorVersion": "0.4.3"},
+        {"windowKey": "inst-B", "instanceId": "inst-B", "connectorVersion": "0.4.2"},
+    ]
+    _RecordingClient.windows = table
+    _RecordingClient.windows_after = table  # B has not reloaded; A never will
+
+    code = _cmd_bridge_update_connector(
+        _update_args(bundle=str(bundle), version="0.4.3", yes=True, instance="inst-B")
+    )
+    assert code == 3, (
+        "A 窗的应答不能算 B 窗的 verified —— 两个窗口共享一份存储，"
+        "A 报的版本与 B 有没有 reload 毫无关系"
+    )
+    captured = capsys.readouterr()
+    assert "verified" not in captured.out
+    assert "inst-B" in captured.err
 
 
 def test_update_connector_instance_routes_the_write_and_reads_the_window_table(
@@ -789,11 +871,17 @@ def test_update_connector_instance_routes_the_write_and_reads_the_window_table(
 
     bundle = update_env / "b.js"
     bundle.write_bytes(b"x")
-    # `inst-A` is the window the write went to; after the reload it is *gone* and
-    # a different connection (`inst-C`, a new id) is announcing the new build.
-    # Nothing here would satisfy a "probe the window you named" rule, which is
-    # exactly why the read-back had to change.
+    # Two windows online, the write aimed at `inst-A` (one of them, as an operator
+    # reading `bridge status` would do it). After the reload `inst-A` is *gone* —
+    # its connection died with the page — and a different connection
+    # (`inst-C`, a new instance id) announces the new build, while the window
+    # nobody touched is still there. Nothing here would satisfy a "probe the
+    # window you named" rule, which is exactly why the read-back is the table.
     _RecordingClient.windows = [
+        {"windowKey": "inst-A", "instanceId": "inst-A", "connectorVersion": "0.4.2"},
+        {"windowKey": "inst-B", "instanceId": "inst-B", "connectorVersion": "0.4.2"},
+    ]
+    _RecordingClient.windows_after = [
         {"windowKey": "inst-B", "instanceId": "inst-B", "connectorVersion": "0.4.2"},
         {"windowKey": "inst-C", "instanceId": "inst-C", "connectorVersion": "0.4.3"},
     ]
@@ -805,6 +893,7 @@ def test_update_connector_instance_routes_the_write_and_reads_the_window_table(
     assert code == 0
     out = capsys.readouterr().out
     assert "verified: running connector is now 0.4.3" in out
+    assert "inst-C" in out, "the verdict names the connection that proved the reload"
     # The named window is printed before the write, since after the reload
     # nothing can be asked which window it was.
     assert "-> window inst-A" in out
@@ -822,34 +911,71 @@ def test_update_connector_instance_routes_the_write_and_reads_the_window_table(
     )
 
 
-def test_two_lingering_sockets_do_not_add_up_to_a_failure(update_env, fast_verify, capsys):
-    """The same false FAILED, on the **unhinted** path, with two windows open.
+def test_several_windows_and_no_addressing_is_refused_with_the_table(
+    update_env, fast_verify, capsys
+):
+    """030 §二.1, mode 1 — 岳's 坑 1 answered *before* the write.
 
-    Before the fix this was the exit-1 case: the write went to `inst-A`, both
-    sockets were still online on the old build, and "the window we wrote to is
-    still answering on 0.4.2" was treated as evidence. It is not — both sockets
-    are the ones that were there *before* the write, and neither has reloaded
-    yet. Rewritten here rather than deleted: the unhinted path deserves the
-    regression too, and the `--instance` one is
-    `test_a_reload_still_in_flight_is_unknown_never_failed`.
+    The unhinted call used to go out and come back `WINDOW_UNSPECIFIED` after the
+    daemon had already been asked, which reads as the update failing. Now the
+    window table is read first and the command refuses with the two ways to name
+    a window — and the ids have to be in that message, because after a reload the
+    window answers to a new one (坑 3).
     """
     from boardwise.cli import _cmd_bridge_update_connector
 
     bundle = update_env / "b.js"
     bundle.write_bytes(b"x")
     _RecordingClient.windows = [
-        {"windowKey": "inst-A", "instanceId": "inst-A", "connectorVersion": "0.4.2"},
-        {"windowKey": "inst-B", "instanceId": "inst-B", "connectorVersion": "0.4.2"},
+        {"windowKey": "inst-A", "instanceId": "inst-A", "connectorVersion": "0.4.2",
+         "projectName": "test"},
+        {"windowKey": "inst-B", "instanceId": "inst-B", "connectorVersion": "0.4.2",
+         "projectName": "test2"},
+        {"windowKey": "inst-C", "instanceId": "inst-C", "connectorVersion": "0.4.19",
+         "projectName": None},
     ]
 
     code = _cmd_bridge_update_connector(
         _update_args(bundle=str(bundle), version="0.4.3", yes=True)
     )
 
-    assert code == 3, "two sockets that have not reloaded yet are not a mismatch"
-    captured = capsys.readouterr()
-    assert "FAILED" not in captured.err
-    assert "UNKNOWN, not failed" in captured.err
+    assert code == 2, "refused before anything is written"
+    err = capsys.readouterr().err
+    assert "3 个编辑器窗口在线" in err and "设计如此，不是故障" in err
+    for key in ("inst-A", "inst-B", "inst-C"):
+        assert key in err, "the table is what the operator picks an id from"
+    assert "--instance" in err and "--all" in err, "both ways out are named"
+    assert "什么都没写" in err
+    assert (None, None) not in _RecordingClient.calls
+    assert "sys.self_update" not in [action for action, _ in _RecordingClient.calls], (
+        "a refused run must not write: the decision is made from the table alone"
+    )
+    assert "(anonymous)" in err, (
+        "a window that has just reloaded cannot name its project (坑 4) — that is "
+        "printed as anonymous, not as no project"
+    )
+
+
+def test_one_window_needs_no_addressing(update_env, fast_verify, capsys):
+    """Mode 1's other half: with a single window online nothing changes."""
+    from boardwise.cli import _cmd_bridge_update_connector
+
+    bundle = update_env / "b.js"
+    bundle.write_bytes(b"x")
+    _RecordingClient.windows = [
+        {"windowKey": "inst-A", "instanceId": "inst-A", "connectorVersion": "0.4.2"}
+    ]
+    _RecordingClient.windows_after = [
+        {"windowKey": "inst-D", "instanceId": "inst-D", "connectorVersion": "0.4.3"}
+    ]
+
+    code = _cmd_bridge_update_connector(
+        _update_args(bundle=str(bundle), version="0.4.3", yes=True)
+    )
+
+    assert code == 0
+    assert "sys.self_update" in [action for action, _ in _RecordingClient.calls]
+    assert _RecordingClient.routes[1] == {}, "the unhinted write stays unhinted"
 
 
 def test_update_connector_instance_says_unknown_when_nothing_comes_back(
@@ -1695,3 +1821,213 @@ def test_status_against_a_port_that_is_not_our_daemon_exits_2(tmp_path):
     assert result.returncode == 2, result.stdout + result.stderr
     assert f"daemon not reachable on 127.0.0.1:{port}" in result.stdout
     assert "Traceback" not in result.stderr, result.stderr
+
+
+# --------------------------------------------------------------------------
+# 030: update-connector in a multi-window session (modes, --all, storage)
+# --------------------------------------------------------------------------
+
+
+def _all_windows():
+    """Three windows: two of them share one IndexedDB record, the third its own."""
+    return [
+        {"windowKey": "inst-A", "instanceId": "inst-A", "connectorVersion": "0.4.2",
+         "projectName": "test"},
+        {"windowKey": "inst-B", "instanceId": "inst-B", "connectorVersion": "0.4.2",
+         "projectName": "test2"},
+        {"windowKey": "inst-C", "instanceId": "inst-C", "connectorVersion": "0.4.2",
+         "projectName": "ROBOT"},
+    ]
+
+
+def _reloaded(*keys, version="0.4.3"):
+    """The table after reloads: brand-new instance ids for the given windows."""
+    return [
+        {"windowKey": key, "instanceId": key, "connectorVersion": version, "projectName": None}
+        for key in keys
+    ]
+
+
+def test_storage_groups_count_a_shared_record_as_one_change():
+    """The dedupe the report can honestly state (030 §二.1).
+
+    Two windows in one editor profile write into one record, so the *record*
+    changes once; the second write stores the same bytes and says so with
+    ``oldVersion == newVersion`` — 岳's ``0.4.19 -> 0.4.19``. Counting it as a
+    second change would tell the operator two updates happened.
+    """
+    from boardwise.cli import _storage_groups
+
+    groups = _storage_groups([
+        {"window": "inst-A", "database": "User_x_v6",
+         "oldVersion": "0.4.2", "newVersion": "0.4.3"},
+        {"window": "inst-B", "database": "User_x_v6",
+         "oldVersion": "0.4.3", "newVersion": "0.4.3"},
+        {"window": "inst-C", "database": "User_y_v6",
+         "oldVersion": "0.4.2", "newVersion": "0.4.3"},
+    ])
+    assert [
+        (group["database"], group["windows"], group["changed"], group["rewrites"])
+        for group in groups
+    ] == [
+        ("User_x_v6", ["inst-A", "inst-B"], ["inst-A"], ["inst-B"]),
+        ("User_y_v6", ["inst-C"], ["inst-C"], []),
+    ]
+
+
+def test_update_connector_all_writes_every_window_and_reports_the_shared_record(
+    update_env, fast_verify, capsys
+):
+    """`--all`: one write per window, one verdict per window, storage grouped.
+
+    Every window must be written to, because `sys.self_update` is also the only
+    thing that reloads a page — so the run's dedupe is the **record**: the group
+    line says two windows share one record and it changed once, and the second
+    window's own line shows the equal rewrite that triggered its reload.
+    """
+    from boardwise.cli import _cmd_bridge_update_connector
+
+    bundle = update_env / "b.js"
+    bundle.write_bytes(b"x")
+    _RecordingClient.windows = _all_windows()
+    _RecordingClient.window_databases = {
+        "inst-A": "User_x_v6", "inst-B": "User_x_v6", "inst-C": "User_y_v6",
+    }
+    _RecordingClient.database_versions = {"User_x_v6": "0.4.2", "User_y_v6": "0.4.2"}
+    # Every window reloaded: three new connections, all announcing the new build.
+    _RecordingClient.windows_after = _reloaded("inst-D", "inst-E", "inst-F")
+
+    code = _cmd_bridge_update_connector(
+        _update_args(bundle=str(bundle), version="0.4.3", yes=True, all=True)
+    )
+
+    out = capsys.readouterr().out
+    assert code == 0, out
+    assert "all: 3 个在线窗口" in out
+    assert "User_x_v6: 2 窗共享这份存储，记录改动 1 次（inst-A）" in out
+    assert "等值重写 1 次（inst-B" in out
+    assert "0.4.2 -> 0.4.3" in out and "0.4.3 -> 0.4.3" in out, (
+        "the second window's own line shows the equal rewrite"
+    )
+    for key in ("inst-A", "inst-B", "inst-C"):
+        assert f"{key}: verified (0.4.3)" in out, "every window gets its own verdict"
+    writes = [route for action, route in zip(
+        [a for a, _ in _RecordingClient.calls], _RecordingClient.routes)
+        if action == "sys.self_update"]
+    assert writes == [
+        {"target_instance": "inst-A"},
+        {"target_instance": "inst-B"},
+        {"target_instance": "inst-C"},
+    ], "each window is written to explicitly — nothing is left to the daemon's routing"
+    assert _RecordingClient.database_versions == {"User_x_v6": "0.4.3", "User_y_v6": "0.4.3"}
+
+
+def test_update_connector_all_reports_one_window_as_unknown_not_as_verified(
+    update_env, fast_verify, capsys
+):
+    """A window whose own socket is still online is `unknown`, not verified.
+
+    This is the `--all` shape of the blind spot: another window's connection is
+    announcing the right build the whole time, and this window has not reloaded.
+    Exit 3 (some unknown, nothing mismatched), and the line names the window.
+    """
+    from boardwise.cli import _cmd_bridge_update_connector
+
+    bundle = update_env / "b.js"
+    bundle.write_bytes(b"x")
+    _RecordingClient.windows = _all_windows()
+    _RecordingClient.window_databases = {"inst-A": "User_x_v6", "inst-B": "User_y_v6",
+                                         "inst-C": "User_z_v6"}
+    lingering = {"windowKey": "inst-B", "instanceId": "inst-B",
+                 "connectorVersion": "0.4.2", "projectName": "test2"}
+    _RecordingClient.windows_after = _reloaded("inst-D", "inst-E") + [lingering]
+
+    code = _cmd_bridge_update_connector(
+        _update_args(bundle=str(bundle), version="0.4.3", yes=True, all=True)
+    )
+
+    captured = capsys.readouterr()
+    assert code == 3, captured.out + captured.err
+    assert "inst-A: verified (0.4.3)" in captured.out
+    assert "inst-C: verified (0.4.3)" in captured.out
+    assert "inst-B: unknown" in captured.err and "inst-B 仍以写之前的身份在线" in captured.err
+    assert "不是失败" in captured.err
+
+
+def test_update_connector_all_exits_1_when_a_window_comes_back_on_another_build(
+    update_env, fast_verify, capsys
+):
+    from boardwise.cli import _cmd_bridge_update_connector
+
+    bundle = update_env / "b.js"
+    bundle.write_bytes(b"x")
+    _RecordingClient.windows = [
+        {"windowKey": "inst-A", "instanceId": "inst-A", "connectorVersion": "0.4.2"},
+    ]
+    _RecordingClient.windows_after = _reloaded("inst-D", version="0.4.1")
+
+    code = _cmd_bridge_update_connector(
+        _update_args(bundle=str(bundle), version="0.4.3", yes=True, all=True)
+    )
+
+    captured = capsys.readouterr()
+    assert code == 1, captured.out + captured.err
+    assert "mismatch" in captured.err and "0.4.1" in captured.err
+
+
+def test_update_connector_all_counts_a_refused_write_as_a_failure(
+    update_env, fast_verify, capsys
+):
+    from boardwise.cli import _cmd_bridge_update_connector
+
+    bundle = update_env / "b.js"
+    bundle.write_bytes(b"x")
+    _RecordingClient.windows = _all_windows()
+    _RecordingClient.write_fails = {"inst-B": ("CONNECTOR_ERROR", "no such window")}
+    _RecordingClient.windows_after = _reloaded("inst-D", "inst-E")
+
+    code = _cmd_bridge_update_connector(
+        _update_args(bundle=str(bundle), version="0.4.3", yes=True, all=True)
+    )
+
+    captured = capsys.readouterr()
+    assert code == 1, captured.out + captured.err
+    assert "1 个窗口的写入被拒" in captured.err
+    assert "inst-B: 写入失败 [CONNECTOR_ERROR] no such window" in captured.out
+    assert "inst-B: verified" not in captured.out, "a window that was never written has no verdict"
+
+
+def test_update_connector_all_refuses_without_windows_or_with_an_instance(
+    update_env, fast_verify, capsys
+):
+    from boardwise.cli import _cmd_bridge_update_connector
+
+    bundle = update_env / "b.js"
+    bundle.write_bytes(b"x")
+
+    # Nothing online: there is no window to update, and saying "ok" would be a lie.
+    _RecordingClient.windows = []
+    code = _cmd_bridge_update_connector(
+        _update_args(bundle=str(bundle), version="0.4.3", yes=True, all=True)
+    )
+    assert code == 2
+    assert "没有在线窗口" in capsys.readouterr().err
+
+    # `--all` and `--instance` are two contradictory answers to one question.
+    _RecordingClient.calls = []
+    _RecordingClient.windows = _all_windows()
+    code = _cmd_bridge_update_connector(
+        _update_args(bundle=str(bundle), version="0.4.3", yes=True, all=True,
+                     instance="inst-A")
+    )
+    assert code == 2
+    assert "二选一" in capsys.readouterr().err
+    assert _RecordingClient.calls == [], "the contradiction is refused before any read"
+
+    # An unreadable table: `--all` cannot know what to update, so it writes nothing.
+    _RecordingClient.ping_fails = True
+    code = _cmd_bridge_update_connector(
+        _update_args(bundle=str(bundle), version="0.4.3", yes=True, all=True)
+    )
+    assert code == 2
+    assert "窗口表读不到" in capsys.readouterr().err

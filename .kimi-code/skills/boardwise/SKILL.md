@@ -52,7 +52,7 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
   **编辑器刚重启时**每个窗口的 `context` 可能全是 null（API 还没起来），此时 `--project` 谁也匹配
   不上——用 `bridge call --instance <windowKey>` 按实例 id 直达（两个 hint 同时给时 instance 优先，
   未命中报 `WINDOW_NOT_CONNECTED` 并列在线窗口）；`bridge update-connector --instance <windowKey>`
-  可热更指定窗口，其回读等"任一窗口报到新版本"。
+  可热更指定窗口（`--all` 更新全部在线窗口；多窗又不寻址则**拒绝并列窗口表**，见坑 22）。
 
 ## 3. 审查闭环（朋友主用这条）
 
@@ -203,6 +203,7 @@ boardwise checkup --file <导出.epro2> --out <目录>       # 断连兜底：�
 | 19 | **宿主 `sys_Timer` 也吃页面节流**：`eda.sys_Timer.setIntervalTimer` 的回调由宿主投到**页面任务队列**，后台窗口里与页面时钟吃同一张节流时刻表（三钟同段实测：宿主 150 s 只 18 次，48 s/60 s/35 s 三个大间隔与页面逐一重合；同段 Worker 158/158）。`...args` 透传是真的（`callbackArgs` 拿到 `['probe-arg', 42]`） | 想要"后台免疫"只能用 `blob:` Worker 自己的定时器（0.4.17 的 watchdog 就是它）；**别**把宿主定时器当后台闹钟。出处 `outputs/026_probe_p5_host_timer.txt`、`tasks/026-worker-watchdog.md` §三.5 |
 | 20 | **让窗口真"后台"只能抢走前台**：`ShowWindow(SW_MINIMIZE)` / `WM_SYSCOMMAND:SC_MINIMIZE` / `SetWindowPos(HWND_BOTTOM)` 在本机**都不改变前台**（`IsIconic` 恒 false，只压 z 序）；窗口仍持前台时 Chromium **不节流**，后台读数全是废的。抢前台只有 `powershell -NoProfile -Command "…SetForegroundWindow…"` **内联**生效，同一段代码写成 `.ps1` 走 `-File` **不生效** | 用 `.tmp_026_fg.py`（`away`/`front`/枚举窗口）：抢完必须**复读** `GetForegroundWindow` 确认不是编辑器，后台成立的旁证是连接器心跳出现 **60 s 间隔**（audit 里 `ping role=connector` 的间距）。出处 026 P5、026b 批 2b |
 | 21 | **诊断脚本自己会把现场搞死**（两个都实测踩过）：① `subprocess.run([... , "Start-Process", ...], capture_output=True)` 起后台进程**会一直等继承过去的管道 EOF** —— daemon 起来了，调用永不返回，脚本卡死而 `finally` 都跑不到；② 节流态下 `bridge status` 单次可以等 **~35 s**（它要 ping 到被节流的页面），拿它轮询会把脚本自己拖死 | ① 起后台进程一律 `Popen(..., creationflags=DETACHED_PROCESS\|CREATE_NEW_PROCESS_GROUP, stdout=DEVNULL)`，**不要** capture；② 量"重连时刻"这类事件**直接读 audit** 的 `{ts, action:"hello", role:"connector", projectName, instanceId}`，别问 CLI。出处 `outputs/026b_2b_throttled_recovery.txt` §五、026b 批 2b |
+| 22 | **多窗口 update-connector 的三档行为与共享存储盲区**（030，岳 2026-09-24 实测四坑）：① 多窗又不寻址 → 旧版本直接把无 hint 的调用发出去，daemon 回 `WINDOW_UNSPECIFIED`（像"更新失败"）；现在 CLI **先读窗口表再拒绝**（exit 2）并列出窗口表 + 两种做法。② 一个编辑器里**多个窗口共用同一份扩展存储**（IndexedDB `User_<teamUuid>_v6`）：第二个窗口的 `sys.self_update` 报 `0.4.19 -> 0.4.19`（记录已被第一窗改过），不是出错也不是没写——**写就是 reload 的唯一触发器**（`location.reload()` 挂在同一个动作里），所以 `--all` 每窗都要写一次，去重只能体现在"同一存储记录只改动一次"的报告上。③ reload 后 **instance id 必变**（`newInstanceId()` 每次模块求值一次），旧 id 作废。④ reload 后有一段**匿名期**（岳见约 4 分钟；本机 2026-09-24 复测：10:55:09 重连 → 10:55:27 `--project test` 报 `PROJECT_NOT_CONNECTED` → 用 `--instance` 调一次 → 10:55:38 `--project` 就恢复了）：匿名期**用 `--instance <新 id>` 直达**，窗口一应答工程名就回来，不是等满 4 分钟，也不是显示 bug | 多窗更新用 `--all`（逐窗写、逐窗 reload、逐窗验收，每窗一行 verified/unknown）——**注意 `--all` 会 reload 每一个在线窗口，禁地窗（ROBOT、毕设FOC 等真实工程）在场时不许裸跑，先 `bridge status` 核窗口清单**；更新完 `bridge status` **逐窗核版本**；只更一窗用 `--instance <新读到的 id>`。verified 的判据是"**目标窗**旧身份从表里消失 + 写之后新出现的连接报出该版本"——别拿另一窗的应答当本窗的 verified（共享存储场景下那是假 yes）。出处 `outputs/030_*.txt`、`docs/bridge.md` §10.27 |
 
 宿主版本：**3.2.149 是实测下限**（2026-09-23 在 3.2.149.88089769 上实测：打标/缩放等 8 个关键成员
 typeof 全在位、activate 冷启动正常派发、render 实跑 308KB PNG——旧立论"3.2.183 以下这些接口不存在"

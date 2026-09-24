@@ -60,4 +60,43 @@ exit code 沿用 025e 的三态约定（0 全 verified / 3 有 unknown——查 
 
 ## 五、交卷记录
 
-（子代理交文本，主代理 append 并复验。）
+### 030 · 交卷（2026-09-24，子代理 agent-43）
+
+- **三档行为**：无寻址 + 多窗 → **写之前**拒绝（exit 2，列窗口表 + `--instance`/`--all` 两条出路，
+  真机三窗在线实测）；`--instance` 行为不变（真机两次单窗更新成功）；`--all` 新增（逐窗写、逐窗 reload、
+  逐窗验收，每窗一行三态；exit 0 全 verified / 1 mismatch 或某窗写入被拒 / 3 有 unknown）；
+  `--all` 与 `--instance` 同给 → exit 2。025e 的三态 exit code 约定未动。
+- **verified 收紧（§二.2）**：只认**目标窗**旧身份从表里消失 + 写后**新出现**的连接报出该版本；
+  另一窗（哪怕一直报着 expected）不再算。规则抽成纯函数 `_table_verdicts`/`_one_verdict`。
+  **真机证到**：更新 test2（跑 0.4.17）时 test 的连接（10:55:09 起报 0.4.19）全程在线 ——
+  旧规则会立刻拿它满足 test2 的 verified，新规则等到 10:55:51 test2 自己的新连接才给结论。
+  另：窗口表写前读不到 ⇒ 不给 verified（无基线无"新连接"）。
+- **岳四坑复现/精修**：坑 2 完整复现（test 与 test2 **同一存储记录** `User_08be6a96…_v6`，
+  test2 回执 `0.4.19 -> 0.4.19` 而页面跑 0.4.17）；坑 3 复现（两次更新都换新 instance id）；
+  坑 4 **与原文有出入并已按实测改文档**：匿名期 `--project` 会 `PROJECT_NOT_CONNECTED`，
+  用 `--instance` 调一次后立刻恢复（10:55:09 重连 → 10:55:27 失败 → 10:55:38 恢复），
+  不是必须等满 4 分钟。
+- **为什么 `--all` 不能真"只写一次"**：`sys.self_update` 里写入与 `location.reload()` 是同一动作，
+  连接器无 reload-only；实测证明写一窗**不连带** reload 别窗（更新 test 后 test2/ROBOT 纹丝不动）⇒
+  跳过写 = 那窗不更新。去重落在报告层：按 `database` 分组写明"N 窗共享、记录改动 1 次、其余等值重写"。
+- **真机 `--all` 未跑（守卫）**：`--all` = 全部在线窗口，本机含禁地 ROBOT，跑一次就会 reload 它 ⇒
+  按派单停下来报。出路：(a) 给 `--all` 加范围选择（可重复 `--instance`/`--project` 作 include-list）
+  ——未擅自加；(b) 你先安排 ROBOT 不在场再批无范围 `--all`；(c) 维持现状。其余验收项都落到真机。
+- 三线：pytest **1443 passed**（最终字节；基线 1435，净增 8 条）；connector/tsc 未跑（未动 connector）。
+  变异 **2/2 CAUGHT**（M1 删 verified 目标窗绑定 → 2 红；M2 共享存储等值重写算成改动 → 2 红），
+  cp 备份 + cmp 字节还原。证据 `outputs/030_*.txt`。
+- 改动：`src/boardwise/cli.py`（`2e917535…`）、`tests/test_bridge_cli.py`（`1a3db49d…`）、
+  文档三处（SKILL.md 坑 22 / docs/bridge.md §8+§10.27 / docs/getting-started.md §4）。
+- 现场：test→`inst-025509703-we4o7y4l` 0.4.19；**test2 升到 0.4.19**（`inst-025551260-nr90szcw`）；
+  ROBOT 0.4.17 一字未写。
+
+### 主代理复验（2026-09-24）
+
+- sha256 抽核：cli.py / test_bridge_cli.py 与交卷值逐字一致 ✔；
+- pytest 全量复跑 **1443 passed**（106.8s，`--basetemp=.tmp_pt_home`）✔；connector 未动（git status 佐证），三线口径成立；
+- 变异记录 `outputs/030_mutation.txt` 四条失败均为定向用例，还原后 sha 回基线、47 条复跑全绿 ✔；
+- **补一处文档守卫**：SKILL.md 坑 22 做法格加注——`--all` 会 reload 每一个在线窗口，
+  禁地窗在场时不许裸跑（原行文只说"用 `--all`"，有误导 agent 带上 ROBOT 的风险）。
+- **裁决 §四出路**：取 (c) 维持现状。理由：岳工作电脑双窗场景（两窗都要更新）已由无范围 `--all` 覆盖；
+  本机禁地窗在场是开发机特有形态，用文档守卫解决，不为它加 include-list 复杂度。
+  若将来真出现"多窗里只更新子集"的需求，再开 (a)。

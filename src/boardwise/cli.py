@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import Iterable, Iterator, Sequence
 
 from .engines.review import (
     BUILTIN_RULES,
@@ -466,8 +466,20 @@ def build_parser() -> argparse.ArgumentParser:
             "Update one named editor window (the windowKey `bridge status` "
             "prints) instead of whichever window the daemon would route to. The "
             "only way to hot-update a window while several are connected and "
-            "none can be named by a project. The read-back then waits for a "
+            "none can be named by a project. The read-back then waits for the "
             "window to come back announcing the stored version."
+        ),
+    )
+    update.add_argument(
+        "--all", action="store_true",
+        help=(
+            "Update **every** online editor window (030): the bundle is written "
+            "per storage record and each window is reloaded and verified on its "
+            "own line. Windows of one editor profile share an IndexedDB record, "
+            "so the record changes once however many windows write into it, and "
+            "every window still reloads (the reload cannot be separated from the "
+            "write). Every window's unsaved state is lost — including windows "
+            "you did not name."
         ),
     )
     bridge.add_argument(
@@ -4274,12 +4286,12 @@ def _cmd_bridge_update_connector(args: argparse.Namespace) -> int:
     §WI-2). That reply says the bytes were stored, not that they are running —
     it was a "fake success window": the old build keeps answering every action
     perfectly. So after the write the command waits, bounded, and reads the
-    daemon's **window table** (:func:`_await_running_connector_version` →
-    :func:`_reload_verdict`), which says per window which build each connection
+    daemon's **window table** (:func:`_await_verdicts` →
+    :func:`_table_verdicts`), which says per window which build each connection
     announces. Three outcomes, and the codes are 020's:
 
-    * a window announces the stored version → ``verified: running connector is
-      now X.Y.Z``, exit 0;
+    * **the window the write went to** has reloaded and a connection that was not
+      online before announces the stored version → ``verified``, exit 0;
     * a connection that came back **after** the write announces a *different*
       build → the page reloaded onto the wrong build, exit 1;
     * nothing conclusive inside the budget → the state cannot be stated, exit 3,
@@ -4291,21 +4303,45 @@ def _cmd_bridge_update_connector(args: argparse.Namespace) -> int:
     down — **five seconds**, measured — and reading that lingering socket as "the
     write did not take effect" reported a successful update as FAILED. "Still
     here" is "not yet"; only "came back different" is evidence
-    (:func:`_reload_verdict`).
+    (:func:`_table_verdicts`).
+
+    **Three ways to address the window(s)** (030 §二.1), because a hardware
+    engineer keeps three or four windows open and the daemon refuses to guess:
+
+    * **no addressing, one window online** — that window, as it always did;
+    * *no addressing, several windows online* — refused before anything is
+      written (exit 2), with the window table and the two ways to name one
+      (:func:`_multi_window_update_refusal`). This is the shape 岳 hit (坑 1:
+      ``WINDOW_UNSPECIFIED`` after the daemon had already been asked);
+    * ``--instance ID`` (023) — one window, unchanged;
+    * ``--all`` — every online window: the bundle is written per storage record
+      and **each** window is reloaded and verified on its own line, exit 0 only
+      when every window verified.
 
     ``--no-verify`` restores the old behaviour (print "ok", return 0) for
     callers that would rather poll themselves.
 
-    ``--instance`` (023) aims the write at **one** window. The read-back is the
-    same either way, deliberately: the updated window reconnects under a new
-    instance id, so it cannot be addressed by the old name, and a routed
-    ``sys.probe`` in a multi-window session could be answered by *any* window —
-    the table is the only read that keeps the facts per window.
+    The read-back is the window table either way, deliberately: the updated
+    window reconnects under a new instance id, so it cannot be addressed by the
+    old name, and a routed ``sys.probe`` in a multi-window session could be
+    answered by *any* window — the table is the only read that keeps the facts
+    per window.
     """
     import asyncio
 
     BridgeClient, BridgeError, port, token = _open_cli(args)
     instance = (args.instance or "").strip()
+    update_all = bool(getattr(args, "all", False))
+    if instance and update_all:
+        # Two answers to one question: `--instance` names a window, `--all` names
+        # every window. Picking one of them silently would be exactly the guess
+        # this command refuses to make, so the caller is sent back to decide.
+        print(
+            "boardwise bridge update-connector: --all 与 --instance 一起给时无法判断"
+            "该更新哪些窗口（一个是「全部」，一个是「这一个」）—— 二选一后重跑；什么都没写",
+            file=sys.stderr,
+        )
+        return 2
 
     default_bundle, extension_json = _connector_artifacts()
     bundle_path = Path(args.bundle) if args.bundle else default_bundle
@@ -4341,6 +4377,7 @@ def _cmd_bridge_update_connector(args: argparse.Namespace) -> int:
         # windows open, "which one did that land in?" is the first thing a reader
         # of the log wants, and after the reload the window can no longer be asked.
         + (f" -> window {instance}" if instance else "")
+        + (" -> all online windows" if update_all else "")
     )
     if not args.yes:
         if not sys.stdin.isatty():
@@ -4375,16 +4412,35 @@ def _cmd_bridge_update_connector(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 2
-        # **Who is online before the write** — the read-back's "already here" set.
-        # It has to be taken first: after the write, "has this socket reloaded?"
-        # can only be answered against what the table looked like before, because
-        # a reload *replaces* the connection (a new instance id) while the old
-        # socket lingers for as long as the editor takes to tear the page down
-        # (see `_reload_verdict`). `None` = the table could not be read, and then
-        # no mismatch can be claimed at all.
-        online_before = _snapshot_identities(
-            await _online_windows(BridgeClient, BridgeError, port, token)
-        )
+        # **Who is online before the write** — the read-back's "already here" set,
+        # and (030 §二.1) the table the refusal and `--all` are built from. It has
+        # to be taken first: after the write, "has this socket reloaded?" can only
+        # be answered against what the table looked like before, because a reload
+        # *replaces* the connection (a new instance id) while the old socket
+        # lingers for as long as the editor takes to tear the page down (see
+        # `_table_verdicts`). `None` = the table could not be read, and then
+        # nothing can be called new — so nothing can be verified either.
+        windows_before = await _online_windows(BridgeClient, BridgeError, port, token)
+        online_before = _snapshot_identities(windows_before)
+        if update_all:
+            return await _update_all_windows(
+                client,
+                BridgeClient,
+                BridgeError,
+                port,
+                token,
+                params=params,
+                byte_count=byte_count,
+                windows=windows_before,
+                before=online_before,
+                args=args,
+            )
+        if not instance and windows_before is not None and len(windows_before) > 1:
+            # Before the write, on purpose: 岳's 坑 1 was the daemon refusing
+            # *after* an unhinted call had already been sent, which reads as a
+            # failure of the update rather than as the question it actually is.
+            print(_multi_window_update_refusal(windows_before), file=sys.stderr)
+            return 2
         try:
             # `--instance` routes the hot update itself; without it the call is
             # unhinted, exactly as it was before the flag existed.
@@ -4414,7 +4470,14 @@ def _cmd_bridge_update_connector(args: argparse.Namespace) -> int:
             return 0
 
         expected = str(params["version"])
-        running = await _await_running_connector_version(
+        # Which window this verification is *about* (030 §二.2). `--instance` says
+        # it outright; without the flag the only window online before the write
+        # is the one the daemon could have routed to — and with several online
+        # this path is unreachable, because it was refused above.
+        target = instance
+        if not target and online_before is not None and len(online_before) == 1:
+            target = next(iter(online_before))
+        states = await _await_verdicts(
             BridgeClient,
             BridgeError,
             port,
@@ -4425,18 +4488,20 @@ def _cmd_bridge_update_connector(args: argparse.Namespace) -> int:
             margin_s=UPDATE_RELOAD_MARGIN_S,
             expected=expected,
             before=online_before,
+            targets=[target],
         )
-        if running is None:
+        state, running, detail = states.get(target, (RELOAD_PENDING, "", ""))
+        if state == RELOAD_PENDING:
             print(
                 f"boardwise bridge update-connector: the connector did not come "
                 f"back within {UPDATE_VERIFY_BUDGET_S:.0f}s — the state of the "
                 f"write is UNKNOWN, not failed: the editor may be closed, or the "
-                f"page may still be reloading. Re-check with `boardwise bridge "
-                f"status` (or run doctor) before trusting either answer",
+                f"page may still be reloading. {detail}。Re-check with `boardwise "
+                f"bridge status` (or run doctor) before trusting either answer",
                 file=sys.stderr,
             )
             return 3
-        if running != expected:
+        if state == RELOAD_MISMATCH:
             # The only way to reach this branch: a connection that was **not**
             # online before the write announced a different build. The old socket
             # being still there is no longer evidence of anything but "not yet"
@@ -4448,16 +4513,192 @@ def _cmd_bridge_update_connector(args: argparse.Namespace) -> int:
                 f"announces {running}: the page came back on a build other than "
                 f"the one just stored"
                 + (f" (the write was aimed at window {instance})" if instance else "")
-                + ". The old socket being replaced is what makes this evidence "
-                "rather than a reload still in flight; `boardwise bridge status` "
-                "names every online window's version",
+                + f". {detail}；`boardwise bridge status` names every online "
+                "window's version",
                 file=sys.stderr,
             )
             return 1
         print(f"  verified: running connector is now {running}")
+        print(f"  {detail}")
         return 0
 
     return asyncio.run(run())
+
+
+def _storage_groups(writes: Sequence[dict]) -> list[dict]:
+    """Group write replies by the IndexedDB record they landed in (030 §二.1).
+
+    ``sys.self_update`` answers with the record it wrote — ``database``, the
+    ``User_<team>_v6`` name 岳 measured two windows sharing. Windows of one editor
+    profile share it, so the *record* changes once however many windows write into
+    it; every later write stores the same bytes and says so with
+    ``oldVersion == newVersion`` — which is exactly 坑 2's ``0.4.19 -> 0.4.19``.
+
+    Each group is ``{database, windows, changed, rewrites}``: the keys that made
+    the record change, and the keys whose write found it already at the target
+    version. That distinction is the dedupe as far as it can honestly go — see
+    :func:`_update_all_windows` for why the *write itself* cannot be skipped.
+    """
+    groups: dict[str, dict] = {}
+    for write in writes:
+        database = _text(write.get("database")) or "(unreported storage)"
+        group = groups.setdefault(
+            database, {"database": database, "windows": [], "changed": [], "rewrites": []}
+        )
+        key = _text(write.get("window"))
+        group["windows"].append(key)
+        old = _text(write.get("oldVersion"))
+        new = _text(write.get("newVersion"))
+        if old and new and old == new:
+            group["rewrites"].append(key)
+        else:
+            group["changed"].append(key)
+    return list(groups.values())
+
+
+async def _update_all_windows(
+    client,
+    BridgeClient,
+    BridgeError,
+    port: int,
+    token: str,
+    *,
+    params: dict,
+    byte_count: int,
+    windows: list[dict] | None,
+    before: frozenset[str] | None,
+    args,
+) -> int:
+    """``--all``: every online window, one write and one verdict each (030 §二.1).
+
+    **Why the write is not deduplicated away.** The bundle lives in one shared
+    record, so re-writing it into that record changes nothing — but the *reload*
+    is not a separate action: `sys.self_update` is the only thing that reloads an
+    editor page (`connector/src/self-update.ts`: it writes, then schedules
+    ``location.reload()``). Skipping the call for the windows that share a record
+    would leave them running the old build, which is the opposite of what `--all`
+    means. So every window gets the call, and the dedupe is what the report states
+    (:func:`_storage_groups`): *"N windows share record X; the record changed 1
+    time"* — the later writes are equal rewrites, and their reply says so.
+
+    Order: writes first (so every page is reloading while the first verdicts are
+    polled), then one poll per interval for all targets at once.
+    """
+    expected = str(params["version"])
+    if windows is None:
+        print(
+            "boardwise bridge update-connector: --all 需要 daemon 的窗口表来判断"
+            "该更新哪些窗口，但窗口表读不到（daemon 没应答）—— 什么都没写",
+            file=sys.stderr,
+        )
+        return 2
+    if not windows:
+        print(
+            "boardwise bridge update-connector: --all 但当前没有在线窗口 —— "
+            "没有可以更新的窗口，什么都没写",
+            file=sys.stderr,
+        )
+        return 2
+
+    print(f"  all: {len(windows)} 个在线窗口：")
+    for line in _window_table_lines(windows):
+        print(f"  {line}")
+
+    keys = [_window_key(window) for window in windows]
+    writes: list[dict] = []
+    for key in keys:
+        try:
+            data = await client.call("sys.self_update", params, target_instance=key)
+        except BridgeError as exc:
+            writes.append({"window": key, "error": f"[{exc.code}] {exc.message}"})
+            continue
+        writes.append({"window": key, **(data if isinstance(data, dict) else {})})
+    print("  bundle 写入（按存储记录去重）：")
+    failed = [write for write in writes if write.get("error")]
+    for group in _storage_groups(writes):
+        shared = len(group["windows"])
+        print(
+            f"    {group['database']}: {shared} 窗共享这份存储，记录改动 "
+            f"{len(group['changed'])} 次"
+            + (
+                f"（{', '.join(group['changed'])}）；等值重写 {len(group['rewrites'])} 次"
+                f"（{', '.join(group['rewrites'])} —— 同记录已是该版本，"
+                "reload 只能由本动作触发，所以字节再写一遍、内容不变）"
+                if group["rewrites"]
+                else ""
+            )
+        )
+    for write in writes:
+        if write.get("error"):
+            print(f"    {write['window']}: 写入失败 {write['error']}")
+            continue
+        print(
+            f"    {write['window']}: {write.get('oldVersion')} -> {write.get('newVersion')} "
+            f"({write.get('bytes')} bytes)"
+        )
+    if args.no_verify:
+        print(
+            "  the editor pages are reloading now; the new build should reconnect "
+            "within seconds — verify with `boardwise bridge status` or the About… "
+            "menu (version line)"
+        )
+        return 1 if failed else 0
+
+    reload_ms = max(
+        [float(write.get("reloadInMs") or 0) for write in writes if not write.get("error")]
+        or [0.0]
+    )
+    targets = [key for key in keys if key not in {w["window"] for w in failed}]
+    states = await _await_verdicts(
+        BridgeClient,
+        BridgeError,
+        port,
+        token,
+        reload_ms=reload_ms,
+        interval_s=UPDATE_VERIFY_INTERVAL_S,
+        budget_s=UPDATE_VERIFY_BUDGET_S,
+        margin_s=UPDATE_RELOAD_MARGIN_S,
+        expected=expected,
+        before=before,
+        targets=targets,
+    )
+    print("  逐窗验收：")
+    verified = mismatch = unknown = 0
+    for key in targets:
+        state, version, detail = states.get(key, (RELOAD_PENDING, "", ""))
+        if state == RELOAD_VERIFIED:
+            verified += 1
+            print(f"    {key}: verified ({version}) — {detail}")
+        elif state == RELOAD_MISMATCH:
+            mismatch += 1
+            print(f"    {key}: mismatch — {detail}", file=sys.stderr)
+        else:
+            unknown += 1
+            print(f"    {key}: unknown — {detail}", file=sys.stderr)
+    if failed:
+        print(
+            f"boardwise bridge update-connector: {len(failed)} 个窗口的写入被拒 —— "
+            "整体算失败（其余窗口的结果见上）",
+            file=sys.stderr,
+        )
+        return 1
+    if mismatch:
+        print(
+            f"boardwise bridge update-connector: FAILED — {mismatch} 个窗口 reload 回来"
+            f"报的不是刚存进去的 {expected}；{verified} 个 verified，{unknown} 个 unknown",
+            file=sys.stderr,
+        )
+        return 1
+    if unknown:
+        print(
+            f"boardwise bridge update-connector: {unknown} 个窗口在 "
+            f"{UPDATE_VERIFY_BUDGET_S:.0f}s 内没有给出结论 —— 它们的写入结果 UNKNOWN，"
+            f"不是失败（{verified} 个 verified）。用 `boardwise bridge status` 逐窗复核",
+            file=sys.stderr,
+        )
+        return 3
+    print(f"  verified: {verified} 个窗口都报 {expected}")
+    return 0
 
 
 async def _online_windows(BridgeClient, BridgeError, port: int, token: str) -> list[dict] | None:
@@ -4497,12 +4738,16 @@ def _text(value: object) -> str:
 
 #: What the reload read-back can conclude, and what the caller does with each.
 #:
-#: ``verified`` — a window is announcing the stored version; exit 0.
+#: ``verified`` — **the window the write went to** has reloaded and is announcing
+#: the stored version; exit 0.
 #: ``mismatch`` — a connection that came back *after* the write is announcing a
 #: different build; exit 1. Only reachable with that "after" evidence, which is
 #: what this pair of names is about.
+#: ``pending`` — nothing conclusive *about this window* yet; the caller's deadline
+#: turns it into "unknown" (exit 3), which is not the same claim as "failed".
 RELOAD_VERIFIED = "verified"
 RELOAD_MISMATCH = "mismatch"
+RELOAD_PENDING = "pending"
 
 
 def _window_names(window: dict) -> set[str]:
@@ -4531,57 +4776,224 @@ def _snapshot_identities(windows: list[dict] | None) -> frozenset[str] | None:
     return frozenset(names)
 
 
-async def _reload_verdict(
+def _window_key(window: dict) -> str:
+    """The name to print for a window: its hub key, else its instance id."""
+    return _text(window.get("windowKey")) or _text(window.get("instanceId")) or "?"
+
+
+def _window_label(window: dict) -> str:
+    """``key (connector X, project Y)`` — one window, as a reader needs it.
+
+    The project is printed as whatever the window said, including "(anonymous)":
+    a window that has just reloaded cannot name its project for a while (019/030
+    §一.4), and showing a blank there would read as "no project" rather than "not
+    yet".
+    """
+    version = _text(window.get("connectorVersion")) or "unknown"
+    project = _text(window.get("projectName")) or "(anonymous)"
+    return f"{_window_key(window)} (connector {version}, {project})"
+
+
+def _window_table_lines(windows: list[dict]) -> list[str]:
+    """The window table as printed lines, in the order the daemon sent it."""
+    return [f"  {_window_label(window)}" for window in windows]
+
+
+def _multi_window_update_refusal(windows: list[dict]) -> str:
+    """The refusal for "several windows are online and you named none" (030 §二.1).
+
+    The same story `MULTI_WINDOW_FIX` tells `doctor` (issue #6): refusing to guess
+    is *designed*, not broken, and the reader's next move is to name a window.
+    Here there are **two** ways to do that — one window, or all of them — so the
+    message carries both, plus the table to choose from: after the reload the
+    window answers to a new instance id, so the ids have to be in the message
+    *before* anything is written.
+    """
+    lines = [
+        f"boardwise bridge update-connector: {len(windows)} 个编辑器窗口在线，"
+        "daemon 不猜是哪一个（设计如此，不是故障）：",
+    ]
+    lines.extend(_window_table_lines(windows))
+    lines.append(
+        "两种做法：`boardwise bridge update-connector --instance <窗口 id>` 只更新一个窗口"
+        "（id 见上表，更新后该窗口会换新 id，旧 id 作废）；"
+        "或 `boardwise bridge update-connector --all` 更新全部在线窗口"
+        "（每一窗都会 reload，未保存的编辑会丢）。什么都没写。"
+    )
+    return "\n".join(lines)
+
+
+def _table_verdicts(
+    windows: list[dict] | None,
+    *,
+    expected: str,
+    before: frozenset[str] | None,
+    targets: Sequence[str] = (),
+) -> dict[str, tuple[str, str, str]]:
+    """One read of the window table → one verdict per target window.
+
+    Pure, so the rule can be pinned without a socket — and it is the rule 030
+    §二.2 tightens. ``targets`` are the hub keys of the windows whose updates are
+    being verified (``""`` = "the caller named none", which is only allowed when
+    the pre-write table was empty or held one window).
+
+    Three answers per target, and the middle one is the fix:
+
+    * ``verified`` — a connection that was **not online before the write**
+      announces ``expected``, *and* the target's own pre-write identity is gone
+      from the table. A reload destroys its socket and the connector mints a new
+      instance id per page load (`connector/src/index.ts`, ``newInstanceId()``),
+      so "the window I wrote to vanished and a new connection says X" is the
+      strongest claim the daemon's table supports. The old rule read "any window
+      announces X" — and two windows in one editor **share one IndexedDB record**
+      (measured: `User_<team>_v6`), so the *other* window's connection could
+      satisfy this window's verified without this window having reloaded at all
+      (岳's 坑 2).
+    * ``mismatch`` — a connection that was not online before announces something
+      else: the page did reload, onto a build other than the one stored (020's
+      exit 1).
+    * ``pending`` — nothing conclusive *about this window* yet: its own socket is
+      still online (the reload has not happened), no new connection has reported,
+      or the pre-write table could not be read (**no baseline, no verified**: a
+      window cannot be called new without knowing who was there before).
+
+    Measured on the machine (2026-09-23, `outputs/025b_routed.txt`): the write
+    lands and the reloaded connector says hello **five seconds** later, with the
+    old socket answering the whole time. Before that rule existed, the first read
+    inside the window was taken as a verdict and a successful update read as
+    FAILED — the false alarm 025 batch 2 carried over.
+    """
+    if windows is None:
+        return {
+            target: (RELOAD_PENDING, "", "the daemon's window table could not be read")
+            for target in (targets or ("",))
+        }
+    names_now: set[str] = set()
+    fresh: list[dict] = []
+    for window in windows:
+        names = _window_names(window)
+        names_now |= names
+        # With no baseline there is no "new" — and calling every window new is the
+        # false FAILED this rule exists to prevent, so `fresh` stays empty and
+        # every target answers `pending`.
+        if before is not None and not (names & before):
+            fresh.append(window)
+    results: dict[str, tuple[str, str, str]] = {}
+    for target in targets or ("",):
+        results[target] = _one_verdict(target, windows, names_now, fresh, before, expected)
+    return results
+
+
+def _one_verdict(
+    target: str,
+    windows: list[dict],
+    names_now: set[str],
+    fresh: list[dict],
+    before: frozenset[str] | None,
+    expected: str,
+) -> tuple[str, str, str]:
+    """`(state, version, detail)` for one window — the rule, in one place."""
+    if before is None:
+        return (
+            RELOAD_PENDING,
+            "",
+            "写之前的窗口表没读到，无法判断哪些连接是新的 —— 没有基线就不给 verified",
+        )
+    if not expected:
+        return RELOAD_PENDING, "", "没有要等待的版本（expected 为空）"
+    if target:
+        if target in names_now:
+            return (
+                RELOAD_PENDING,
+                "",
+                f"窗口 {target} 仍以写之前的身份在线 —— 它还没 reload（旧 id 作废之前不给结论）",
+            )
+        if target not in before:
+            return (
+                RELOAD_PENDING,
+                "",
+                f"窗口 {target} 不在写之前的窗口表里，表里没有任何连接可以归给它",
+            )
+    for window in fresh:
+        version = _text(window.get("connectorVersion"))
+        if version and version == expected:
+            return (
+                RELOAD_VERIFIED,
+                version,
+                f"写之后新出现的连接 {_window_key(window)} 报 {version}，且目标窗的旧连接已消失",
+            )
+    for window in fresh:
+        version = _text(window.get("connectorVersion"))
+        if version and version != expected:
+            return (
+                RELOAD_MISMATCH,
+                version,
+                f"写之后新出现的连接 {_window_key(window)} 报 {version}（不是刚存进去的 {expected}）",
+            )
+    return RELOAD_PENDING, "", "写之后还没有新连接报出结论"
+
+
+async def _await_verdicts(
     BridgeClient,
     BridgeError,
     port: int,
     token: str,
     *,
-    expected: str,
-    before: frozenset[str] | None,
-) -> tuple[str, str] | None:
-    """One read of the daemon's window table, as `(verdict, version)` or ``None``.
+    reload_ms: float,
+    interval_s: float,
+    budget_s: float,
+    margin_s: float,
+    expected: str = "",
+    before: frozenset[str] | None = None,
+    targets: Sequence[str] = (),
+) -> dict[str, tuple[str, str, str]]:
+    """Poll the window table until every target settles, or the budget runs out.
 
-    The question is "did the stored build come back?", and the table answers it
-    **per window**, which is what makes the distinction this function exists for
-    possible:
+    The reload is on a timer — the ``sys.self_update`` reply carries it as
+    ``reloadInMs`` (500 in practice) — and until it fires the **old** build is
+    still attached and answers with the *old* version. So the first read waits
+    out that window plus a margin; but the margin is a heuristic (the editor took
+    5 s to come back when this was measured), which is why the loop never treats
+    "an old version came back" as a verdict: a still-attached socket is "not
+    yet", and only a *reconnected* window can produce a verdict
+    (:func:`_table_verdicts`).
 
-    * some window announces ``expected`` → `(verified, version)`. The reloaded
-      window reconnects under a **new instance id** (the connector mints one per
-      page load), so it cannot be recognised as the window the write went to —
-      and an unhinted routed read could be answered by *any* window in a
-      multi-window session. Reading the table avoids both problems.
-    * a window that was **not** online before the write announces something else
-      → `(mismatch, version)`: the page did reload, and what came back is not
-      what was stored. That is the evidence 020 §WI-2 wanted to surface.
-    * only windows from the pre-write snapshot → ``None`` = "not back yet". A
-      reload **destroys** the socket, so a window still online under its old name
-      has not reloaded; it is not evidence that the write failed.
+    One read per round for **all** targets, so `--all` costs one table read per
+    interval, not one per window. ``pending`` at the deadline stays pending: the
+    caller renders it as "unknown", which is not the same claim as "failed".
 
-    Measured on the machine (2026-09-23, `outputs/025b_routed.txt`): the write
-    lands and the reloaded connector says hello **five seconds** later, with the
-    old socket answering the whole time. Before this rule existed, the first read
-    inside that window was taken as a verdict and a successful update was
-    reported as FAILED — the false alarm 025 batch 2 carried over.
+    ``before`` is the set of windows that were online *before* the write
+    (:func:`_snapshot_identities`); ``None`` means that snapshot could not be
+    taken, and then no window can be verified (see :func:`_one_verdict`).
+
+    The three timings are **required** keyword arguments rather than defaults
+    read from the module constants at import time: the caller
+    (:func:`_cmd_bridge_update_connector`) looks them up when it runs, which is
+    what lets a test shrink the clock to nothing and still exercise this exact
+    function (defaults would freeze the 30 s production budget into the test).
     """
-    windows = await _online_windows(BridgeClient, BridgeError, port, token)
-    if windows is None:
-        return None
-    for window in windows:
-        version = _text(window.get("connectorVersion"))
-        if version and version == expected:
-            return RELOAD_VERIFIED, version
-    if before is None:
-        # No snapshot: every window looks new, and claiming a mismatch here is
-        # exactly the false FAILED this rule removes. Stay silent and let the
-        # deadline answer "unknown".
-        return None
-    for window in windows:
-        version = _text(window.get("connectorVersion"))
-        if not version or (_window_names(window) & before):
-            continue
-        return RELOAD_MISMATCH, version
-    return None
+    import asyncio
+    import time
+
+    pending = list(targets or ("",))
+    deadline = time.monotonic() + budget_s
+    await asyncio.sleep(max(reload_ms, 0) / 1000.0 + margin_s)
+    states: dict[str, tuple[str, str, str]] = {}
+    while True:
+        windows = await _online_windows(BridgeClient, BridgeError, port, token)
+        round_ = _table_verdicts(
+            windows, expected=expected, before=before, targets=pending
+        )
+        for target in pending:
+            state, version, detail = round_[target]
+            states[target] = (state, version, detail)
+            if state != RELOAD_PENDING:
+                pending.remove(target)
+        if not pending:
+            return states
+        if time.monotonic() + interval_s >= deadline:
+            return states
+        await asyncio.sleep(interval_s)
 
 
 async def _await_running_connector_version(
@@ -4597,45 +5009,28 @@ async def _await_running_connector_version(
     expected: str = "",
     before: frozenset[str] | None = None,
 ) -> str | None:
-    """Wait for the reloaded connector and return the version it reports.
+    """The version a verified reload reports, or ``None`` (025e's single-window read).
 
-    The reload is on a timer — the ``sys.self_update`` reply carries it as
-    ``reloadInMs`` (500 in practice) — and until it fires the **old** build is
-    still attached and answers with the *old* version. So the first read waits out
-    that window plus a margin; but the margin is a heuristic (the editor took 5 s
-    to come back when this was measured), which is why the loop no longer treats
-    "an old version came back" as a verdict at all: a still-attached socket is
-    "not yet", and only a *reconnected* window can produce a mismatch
-    (:func:`_reload_verdict`).
-
-    After that it is one read per ``interval_s`` until ``budget_s`` runs out.
-    ``None`` means the budget expired with nothing conclusive — "unknown", which
-    is not the same claim as "failed".
-
-    ``before`` is the set of windows that were online *before* the write
-    (:func:`_snapshot_identities`); ``None`` means that snapshot could not be
-    taken, and then this function can only ever answer verified-or-unknown.
-
-    The three timings are **required** keyword arguments rather than defaults
-    read from the module constants at import time: the caller
-    (:func:`_cmd_bridge_update_connector`) looks them up when it runs, which is
-    what lets a test shrink the clock to nothing and still exercise this exact
-    function (defaults would freeze the 30 s production budget into the test).
+    A thin reading of :func:`_await_verdicts` kept for the one-window path and
+    its tests: it answers with the *version* rather than the verdict, and only
+    ``verified`` produces one — a mismatch and a timeout are both ``None`` here,
+    which is why the command itself reads the verdicts instead.
     """
-    import asyncio
-    import time
-
-    deadline = time.monotonic() + budget_s
-    await asyncio.sleep(max(reload_ms, 0) / 1000.0 + margin_s)
-    while True:
-        verdict = await _reload_verdict(
-            BridgeClient, BridgeError, port, token, expected=expected, before=before
-        )
-        if verdict is not None:
-            return verdict[1]
-        if time.monotonic() + interval_s >= deadline:
-            return None
-        await asyncio.sleep(interval_s)
+    states = await _await_verdicts(
+        BridgeClient,
+        BridgeError,
+        port,
+        token,
+        reload_ms=reload_ms,
+        interval_s=interval_s,
+        budget_s=budget_s,
+        margin_s=margin_s,
+        expected=expected,
+        before=before,
+        targets=[""],
+    )
+    state, version, _detail = states.get("", (RELOAD_PENDING, "", ""))
+    return version if state == RELOAD_VERIFIED else None
 
 
 def _cmd_bridge_call(args: argparse.Namespace) -> int:
