@@ -1,8 +1,8 @@
 """DECAP-1: required decoupling capacitors, mode-sensitive (task 011d sec.3.1).
 
 For an IC with ``required_caps`` facts, each record demands a capacitor on
-the pin's net whose other end is grounded and whose value is not below the
-declared one. Two rules of honesty govern the check:
+the pin's net whose **other end is on a different ground net** and whose value
+is not below the declared one. Three rules of honesty govern the check:
 
 - **Mode sensitivity.** A record tagged ``mode`` applies only when the board
   actually runs that part in that mode; the mode is *measured* from the
@@ -15,6 +15,15 @@ declared one. Two rules of honesty govern the check:
 - **Per component, per pin.** A shared power rail having *a* capacitor does
   not make every part on it compliant (DECAP-2 is a scope statement, not a
   separate rule): the check runs per record and compares values.
+- **The bridge, and the two shapes that are not one** (039 批①b, both measured
+  on the thesis board). A capacitor with both terminals on the same net is not a
+  candidate -- it bridges nothing -- and gets its own WARN naming it; and a
+  capacitor that exists but whose value nobody declared makes the requirement
+  UNKNOWN ("a capacitor is present, its value cannot be established"), not
+  "no grounded capacitor found". And when the protected pin's own net **is** a
+  ground net the rule decides nothing at all (UNKNOWN, naming that fact): a
+  supply pin on a ground net is a connectivity question, and this rule used to
+  answer it OK because a ground net is full of "grounded" capacitors.
 
 A capacitor's value is taken from the board's ``value`` field when it
 parses, else from its MPN's EIA code when that decodes unambiguously, else
@@ -58,12 +67,21 @@ def _capacitance_farads(comp: Component, library) -> float | None:
             value=comp.value or "",
             mpn=comp.mpn or "",
             lcsc=comp.lcsc_part or "",
+            footprint=comp.footprint or "",
         ),
         library,
     )
 
 
 _CAP_DESIGNATOR = re.compile(r"^C\d")
+
+#: A footprint that is **only** a chip package size: `0603`, `C0603`, `C_0805`.
+#: This is the shape a capacitor carries when nobody ever filled its value in
+#: (measured: the thesis board's C34, footprint `0603`, `Name` attribute null),
+#: and it is the weakest evidence :func:`looks_like_capacitor` accepts — the
+#: designator must still be C-prefixed, and the whole footprint must be the size,
+#: so a hand-drawn or oddly named part cannot slip in on this route.
+_CHIP_SIZE_FOOTPRINT = re.compile(r"^(?:[A-Za-z]+[-_]?)?\d{4}$")
 
 
 @dataclass(frozen=True)
@@ -84,6 +102,7 @@ class CapCandidate:
     value: str = ""
     mpn: str = ""
     lcsc: str = ""
+    footprint: str = ""
     #: Whether the candidate's other end is on a ground net. Only grounded
     #: candidates can satisfy a decoupling requirement; an ungrounded one is not
     #: evidence of anything (the rule says so, and so does apply).
@@ -91,14 +110,36 @@ class CapCandidate:
 
 
 def looks_like_capacitor(
-    designator: str, value: str, mpn: str, lcsc: str, library=None
+    designator: str,
+    value: str,
+    mpn: str,
+    lcsc: str,
+    library=None,
+    *,
+    footprint: str = "",
 ) -> bool:
     """Is this inventory item a capacitor? — one predicate, two callers.
 
-    Takes the four fields rather than a ``Component`` so the live page (which
-    has no ``Component``) can ask the same question. The rule's own wrapper
+    Takes the fields rather than a ``Component`` so the live page (which has no
+    ``Component``) can ask the same question. The rule's own wrapper
     (:func:`_looks_like_capacitor`) passes a parsed component's fields through
     here, so the offline rule and apply cannot answer differently.
+
+    Three routes, strongest first, and the third one is 039 批①b's:
+
+    1. the ``value`` parses as a capacitance;
+    2. the shelf says ``category: capacitor``;
+    3. positional + shape evidence: a **C-prefixed designator** *and* either a
+       decodable MPN value code or a chip-size-only footprint.
+
+    Route 3 is what separates "a capacitor is there but its value is not" from
+    "there is no capacitor": a part matched only this way becomes a candidate
+    whose value is unreadable, so the decision is ``unreadable`` (UNKNOWN, with
+    the capacitor named) rather than ``missing`` ("no grounded capacitor
+    found") — two different statements about the board, and only one of them
+    true. It is deliberately the narrow conjunction: route 2 alone would trust a
+    category the shelf may not have, and either signal alone would let a
+    regulator with a capacitor-shaped MPN masquerade as one.
     """
     if parse_capacitance_farads(value or "") is not None:
         return True
@@ -112,7 +153,13 @@ def looks_like_capacitor(
         # `AttributeError: 'NoneType' object has no attribute 'parts'` — a crash
         # in the middle of an apply, discovered on the machine because every
         # fixture net happened to be shelf-free.
-        return bool(_CAP_DESIGNATOR.match(designator or "") and mpn_value_code(mpn or ""))
+        return bool(
+            _CAP_DESIGNATOR.match(designator or "")
+            and (
+                mpn_value_code(mpn or "")
+                or _CHIP_SIZE_FOOTPRINT.match((footprint or "").strip())
+            )
+        )
     if mpn:
         entry = find_facts(library, mpn=mpn)
     if entry is None and lcsc:
@@ -125,6 +172,12 @@ def looks_like_capacitor(
     # only in their MPNs) be counted, without letting the regulator
     # (CH340G-shaped MPNs decode as "34 pF") masquerade as one.
     if _CAP_DESIGNATOR.match(designator or "") and mpn_value_code(mpn or ""):
+        return True
+    # ... and the same conjunction with the footprint's shape instead of the
+    # MPN's code, for the part that says nothing about itself at all.
+    if _CAP_DESIGNATOR.match(designator or "") and _CHIP_SIZE_FOOTPRINT.match(
+        (footprint or "").strip()
+    ):
         return True
     return False
 
@@ -140,7 +193,12 @@ def candidate_farads(candidate: CapCandidate, library=None) -> float | None:
     if from_board is not None:
         return from_board
     if not looks_like_capacitor(
-        candidate.designator, candidate.value, candidate.mpn, candidate.lcsc, library
+        candidate.designator,
+        candidate.value,
+        candidate.mpn,
+        candidate.lcsc,
+        library,
+        footprint=candidate.footprint,
     ):
         return None
     code = mpn_value_code(candidate.mpn or "")
@@ -226,13 +284,30 @@ def decide_required_cap(
     )
 
 
-def cap_candidates_on(model: DesignModel, net_name: str, library=None) -> list[CapCandidate]:
-    """Every grounded capacitor candidate on ``net_name``, from the parsed board.
+def _bridges_to_ground(comp: Component, net_name: str) -> bool:
+    """One terminal on ``net_name``, the **other** on a different ground net.
 
-    Candidates are grounded by construction here: a capacitor whose other end is
-    not on a ground net cannot decouple anything, and the rule has always
-    required exactly that ("grounded" is part of the requirement, not a
-    preference). The *value* question is left to
+    This is what "grounded" has to mean for a decoupling requirement to be met:
+    a capacitor with both terminals on one net connects nothing, so it cannot
+    decouple that net from anything. Measured (039 批①b): the thesis board's
+    C115 carries ``330uF`` and both terminals on ``AGND``, and the pre-039b
+    predicate counted it as satisfying a requirement on ``AGND``.
+    """
+    others = {
+        pin.net for pin in comp.pins if pin.net is not None and pin.net != net_name
+    }
+    return any(is_ground_net(name) for name in others)
+
+
+def cap_candidates_on(model: DesignModel, net_name: str, library=None) -> list[CapCandidate]:
+    """Every decoupling candidate on ``net_name``, from the parsed board.
+
+    A candidate must (a) be a capacitor by :func:`looks_like_capacitor` and
+    (b) **bridge** the net to ground — one terminal here, the other on a
+    *different* ground net. Both halves are requirements, not preferences: a
+    part that is not a capacitor is not evidence, and a capacitor whose two
+    terminals sit on the same net is not a bridge (039 批①b measured the second
+    case on a real board). The *value* question is left to
     :func:`decide_required_cap` so that the same comparison serves both callers.
     """
     net = model.nets.get(net_name)
@@ -245,9 +320,7 @@ def cap_candidates_on(model: DesignModel, net_name: str, library=None) -> list[C
             continue
         if not _looks_like_capacitor(other, library):
             continue
-        if not any(
-            pin.net is not None and is_ground_net(pin.net) for pin in other.pins
-        ):
+        if not _bridges_to_ground(other, net_name):
             continue
         found.append(
             CapCandidate(
@@ -255,11 +328,45 @@ def cap_candidates_on(model: DesignModel, net_name: str, library=None) -> list[C
                 value=other.value or "",
                 mpn=other.mpn or "",
                 lcsc=other.lcsc_part or "",
+                footprint=other.footprint or "",
                 grounded=True,
             )
         )
     return found
 
+
+def same_net_capacitors_on(
+    model: DesignModel, net_name: str, library=None
+) -> list[Component]:
+    """Capacitors on ``net_name`` whose **every** terminal is on ``net_name``.
+
+    The complement of :func:`_bridges_to_ground`, and the reason it exists as its
+    own function: a capacitor drawn closed on itself is not a decoupling
+    candidate (it is excluded above) *and* is worth one row of its own — "both
+    terminals on one net" is either a schematic/soldering error or a netlist
+    that cannot be read, and either way a reviewer should see it.
+
+    Only capacitors that already look like capacitors reach this list; an
+    unreadable part is C34's case (a candidate, not a phantom).
+    """
+    net = model.nets.get(net_name)
+    if net is None:
+        return []
+    found: list[Component] = []
+    seen: set[str] = set()
+    for designator, _pin in net.pins:
+        other = model.components.get(designator)
+        if other is None or other.designator in seen:
+            continue
+        seen.add(other.designator)
+        if len(other.pins) < 2:
+            continue
+        if not _looks_like_capacitor(other, library):
+            continue
+        connected = {pin.net for pin in other.pins if pin.net is not None}
+        if connected == {net_name}:
+            found.append(other)
+    return found
 
 
 def _looks_like_capacitor(comp: Component, library) -> bool:
@@ -269,10 +376,15 @@ def _looks_like_capacitor(comp: Component, library) -> bool:
     (``tests/test_011d_rules.py``), and because every caller inside the rule
     already has a component in hand. The judgement itself is
     :func:`looks_like_capacitor`, which the live-page side of apply calls with
-    the same four fields.
+    the same fields.
     """
     return looks_like_capacitor(
-        comp.designator, comp.value or "", comp.mpn or "", comp.lcsc_part or "", library
+        comp.designator,
+        comp.value or "",
+        comp.mpn or "",
+        comp.lcsc_part or "",
+        library,
+        footprint=comp.footprint or "",
     )
 
 
@@ -332,6 +444,10 @@ class DecapRequiredCaps(FactsRule):
     def _rows(self, model: DesignModel) -> list[tuple[Outcome, str | None]]:
         guesses = infer_net_domains(model, self.library)
         rows: list[tuple[Outcome, str | None]] = []
+        #: "(net, capacitor)" pairs already reported as bridging nothing, so a
+        #: rail examined by three parts gets one row about its phantom capacitor
+        #: rather than three (039 批①b).
+        seen_phantoms: set[tuple[str, str]] = set()
         for comp in self.ics(model):
             entry = self.entry_for(comp)
             if entry is None:
@@ -437,7 +553,7 @@ class DecapRequiredCaps(FactsRule):
                     # silence, because the record said when it applies and
                     # the board measured otherwise.
                     continue
-                self._check_cap_record(comp, record, model, rows)
+                self._check_cap_record(comp, record, model, rows, seen_phantoms)
             for record in must:
                 mode = record.get("mode")
                 if mode is not None and mode not in hit_modes:
@@ -489,11 +605,69 @@ class DecapRequiredCaps(FactsRule):
         record: dict,
         model: DesignModel,
         rows: list[tuple[Outcome, str | None]],
+        seen_phantoms: set[tuple[str, str]],
     ) -> None:
         pin = str(record.get("pin", ""))
         required_text = str(record.get("value", ""))
         net = next((p.net for p in comp.pins if p.number == pin), None)
         evidence = [f"{comp.designator} pin{pin} @ {net}"] if net else []
+
+        if net and is_ground_net(net):
+            # 039 批①b's boundary: when the protected pin sits on a **ground**
+            # net, this rule does not decide anything — not "satisfied" and not
+            # "missing". It used to say OK here, because a ground net always has
+            # grounded capacitors on it (measured: the thesis board's U5 pin5 is
+            # on AGND and its requirement was "met" by C115, a capacitor whose
+            # own two terminals are both AGND). A supply pin landing on a ground
+            # net is a **connectivity** question — a short, or a netlist that
+            # cannot be read — and a capacitor rule must not answer it. The row
+            # names the board fact and stops.
+            rows.append((
+                Outcome(
+                    rule_id=self.id,
+                    state="UNKNOWN",
+                    subject=f"{comp.designator} pin{pin}",
+                    message=(
+                        f"{comp.designator} pin{pin} sits on the ground net "
+                        f"{net!r}, so its decoupling requirement cannot be "
+                        "judged from here — a supply pin on a ground net is a "
+                        "connectivity question, not a capacitor one"
+                    ),
+                    evidence=evidence,
+                    missing_fact=(
+                        f"a net for {comp.designator} pin{pin} that is not a "
+                        f"ground net (it is on {net!r} today)"
+                    ),
+                ),
+                None,
+            ))
+            return
+
+        for phantom in same_net_capacitors_on(model, net, self.library):
+            key = (net, phantom.designator)
+            if key in seen_phantoms:
+                continue
+            seen_phantoms.add(key)
+            rows.append((
+                Outcome(
+                    rule_id=self.id,
+                    state="VIOLATION",
+                    subject=phantom.designator,
+                    message=(
+                        f"{phantom.designator}: both terminals are on net "
+                        f"{net!r}, so it bridges nothing and cannot decouple "
+                        f"it (required {required_text} for "
+                        f"{comp.designator} pin{pin})"
+                    ),
+                    evidence=[
+                        f"{phantom.designator} @ {net} (both terminals)",
+                        f"{phantom.designator} value {phantom.value or ''!r}",
+                    ],
+                ),
+                "WARN",
+            ))
+
+        candidates = cap_candidates_on(model, net, self.library) if net else []
 
         def target() -> FindingTarget:
             """The structured form of *this* row's claim (task 029 §二.1).
@@ -570,10 +744,10 @@ class DecapRequiredCaps(FactsRule):
                     state="UNKNOWN",
                     subject=f"{comp.designator} pin{pin}",
                     message=(
-                        f"{comp.designator} pin{pin}: a grounded capacitor "
-                        f"({decision.cap_designator}) is present on {net!r}, but its "
-                        "value cannot be established (board value and MPN "
-                        "code both unreadable)"
+                        f"{comp.designator} pin{pin}: a capacitor is present on "
+                        f"{net!r} ({decision.cap_designator}), but its value "
+                        "cannot be established, so the required "
+                        f"{record.get('value')} cannot be checked"
                     ),
                     evidence=evidence
                     + [f"{decision.cap_designator} value {(cap.value if cap else '')!r}"],

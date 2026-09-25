@@ -87,7 +87,7 @@ Two consequences worth knowing:
   only comes from the bridge. `Verified ⟹ resolvable` still holds: the exemption
   is exactly the shut gate, and anything else must carry the pair.
 
-### Wave 1 (039), and two rule behaviours it measured
+### Wave 1 (039), and the two rule behaviours it measured
 
 Five ICs the boards actually place were curated: **CH340N** (`ic.usb-uart`),
 **SN65HVD230DR** (`ic.transceiver`), **TLV9062IDR** (`ic.opamp`),
@@ -102,21 +102,22 @@ Notably **not** recorded: CH340N pin 4 (unlisted in the manual's SOP-8 column, a
 GND **if unused**" — a rule cannot see whether it is used), and SN65HVD230's RS
 mode select (a choice, not an obligation).
 
-REF2033AIDDCR ships **gated** (`facts_verified: false`): its facts are complete
-and cited, but the VIN bypass requirement makes `decap-required-caps` report "no
-grounded capacitor found" on 毕设FOC驱动板, where C34 sits between VIN and AGND
-with an undeclared value. Two behaviours of that rule, both pre-existing and both
-measured while curating, are why:
+REF2033AIDDCR came through curation **gated** for one round: its facts were
+complete and cited, but the VIN bypass requirement made `decap-required-caps`
+report "no grounded capacitor found" on 毕设FOC驱动板, where C34 sits between VIN
+and AGND with an undeclared value. Both behaviours behind that report were
+pre-existing rule defects, and both are now fixed in `rules/decap.py`
+(039 批①b), which is why the entry is verified and driving:
 
-* a capacitor with **no readable value** is not a candidate at all
-  (`looks_like_capacitor` wants a value or a decodable MPN), so the honest
-  "the capacitor is there, its value is not established" (UNKNOWN) is reported as
-  "missing" instead;
-* a capacitor whose **both terminals are on the same net** counts as a grounded
-  candidate, so C115 (AGND↔AGND, 330uF) can "satisfy" a requirement on AGND.
-
-Both are rule questions, not shelf questions; fixing them belongs to a batch that
-owns `decap.py`, and the flip of REF2033 is what closes the loop when it lands.
+* a capacitor with **no readable value** is now a candidate whose value cannot be
+  established (`unreadable` → UNKNOWN, naming the capacitor), instead of not
+  being a candidate at all and reading as "there is no capacitor here";
+* a capacitor whose **both terminals are on the same net** no longer counts as a
+  grounded candidate — a candidate must *bridge* the net to a different ground
+  net — and such a capacitor gets its own WARN saying it bridges nothing;
+* and when the protected pin's **own net is a ground net** (the thesis board's
+  U5 pin5 on AGND) the rule decides nothing: UNKNOWN, naming the fact. It used to
+  answer OK there, because a ground net is full of "grounded" capacitors.
 
 ## Where the identity comes from
 

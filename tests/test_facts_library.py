@@ -192,17 +192,16 @@ def test_the_committed_library_is_v2_with_its_curated_fact_entries():
     with_category = sorted(p.key for p in library.parts if p.category)
     # 011d sec.1/2 added a fourth: the Type-C receptacle (oracle-approved
     # category + the CC pull_required facts) -- and a fifth, the LED.
-    # 039 wave 1 added four more that drive rules (CH340N, SN65HVD230DR,
-    # TLV9062IDR, MPU-6050) and one that is **gated** (REF2033AIDDCR): its facts
-    # are recorded and cited but `facts_verified` is false, so `entry.facts` reads
-    # None and it is deliberately absent from `with_facts` while keeping its
-    # category. That asymmetry is the gate working, not a mistake.
+    # 039 wave 1 added five more (CH340N, SN65HVD230DR, TLV9062IDR, MPU-6050,
+    # REF2033AIDDCR). REF2033 came through one round **gated** (`facts_verified:
+    # false`, because the decap rule misread its board); 039 批①b fixed the rule
+    # and flipped it, so the category list and the facts list agree again.
     assert with_facts == [
         "conn.type_c_16pin_2md_073", "ic.ams1117_3_3", "ic.ch340g",
-        "ic.ch340n", "ic.mpu_6050", "ic.rt9013_33gb", "ic.sn65hvd230dr",
-        "ic.tlv9062idr", "led.emerald_green_0603",
+        "ic.ch340n", "ic.mpu_6050", "ic.ref2033aiddcr", "ic.rt9013_33gb",
+        "ic.sn65hvd230dr", "ic.tlv9062idr", "led.emerald_green_0603",
     ]
-    assert with_category == sorted([*with_facts, "ic.ref2033aiddcr"])
+    assert with_category == with_facts
     # The two harvested entries gained keys; the 90 others are untouched.
     rt = find_facts(library, mpn="RT9013-33GB")
     assert rt.facts["ldo"]["dropout_max_mv"] == 400
@@ -232,12 +231,15 @@ def test_the_committed_library_is_v2_with_its_curated_fact_entries():
     assert {p["pin"] for p in n.facts["required_caps"]} == {"5", "8"}
     assert n.facts["supply_pins"][1]["v_operating"] == [3.1, 3.6]
     assert all("crystal" not in m["to"] for m in n.facts["must_connect"])
-    # ... and the gated entry keeps its claim, reachable through the field the
-    # gate holds it in, while the rule-facing one stays empty.
+    # ... and the entry that was gated for one round now drives, with the same
+    # facts it was held with (the flip is the absence of the flag, which is what
+    # `entry_to_json` writes).
     ref = find_facts(library, mpn="REF2033AIDDCR")
     assert ref.category == "ic.reference"
-    assert ref.facts is None and ref.facts_verified is False
-    assert {k for k in ref.candidate_facts} == {"supply_pins", "required_caps"}
+    assert ref.facts_verified is True and ref.candidate_facts is None
+    assert {k for k in ref.facts} == {"supply_pins", "required_caps"}
+    assert ref.facts["required_caps"][0]["pin"] == "4"
+    assert "p.23 sec.11" in ref.facts["required_caps"][0]["provenance"]
 
 
 def test_facts_mode_tags_survive_the_loader_and_gating():
