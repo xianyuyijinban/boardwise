@@ -144,6 +144,16 @@ boardwise checkup --file <导出.epro2> --out <目录>       # 断连兜底：�
   活网表；T2 纯 create → 导出核对）；apply 后全规则 findings **只许减不许增**（新增 exit 2 打印新增行）。
   落点是**两件一起**的九宫阶梯（模板自带相对偏移 + bbox 干涉检查），位号池取「页面 ∪ 工程导出」
   （§6 坑 25）。
+- **局部移动一个功能块**（037 `move-block`，要 daemon；无驱动规则——AI 点名移什么，工具保证连接不变）：
+  `boardwise edit plan --move --designators R7,C9 --dx 100 --dy 0 -o plan.json` → `edit preview` / `edit apply` 同上。
+  dx/dy 必须是**网格整数倍**（5 的倍数），否则 plan 拒绝。**宿主移器件不拖线**（§6 坑 26）：
+  线一律删除 + 正交重画（组内线在两个移动脚之间 `wire_route` 重画，边界线重画到离移动脚最远的原上报点）。
+  五种拒绝并点名：边界 label/netflag/总线、组内非器件图元、目标位压既有图元或压组外走线、
+  位号找不到/一对多、off-grid。**验收主判据 = 网表恒等**——移动不许改任何连接
+  （活网表逐脚岛屿比对，自动网同岛规则），任何一脚变了 exit 2；幂等与 stale 判据 = plan 自己的
+  postconditions（036 先例）；`modify_primitive` 报错先回读位姿、**证明没落地**才许重试一次
+  （举证重试，写进报告——盲目重试仍禁）。注意：本机造不出"边界带 label"的现场
+  （`place_netlabel` 不可用），该拒绝只有离线用例，别在真机上硬试。
 
 ## 4. 真机纪律（写操作前逐条对，命中即停）
 
@@ -231,6 +241,7 @@ boardwise checkup --file <导出.epro2> --out <目录>       # 断连兜底：�
 | 23 | **`export.render` 挂死 = 目标页自载入后从未被激活**（issue #5 正案，033）；**进度条 toast 漏是另一件事**（032）——两件事分开记，别混：3.2.149 + 0.4.21 上岳做了受控对照（同窗同页相隔 4 分钟，唯一变量是「导出前有没有 `doc.open` 过目标页」）：**没激活过 → png 与 svg 都挂死**（15:48:19 png 30s 超时；15:50:00 svg 同样超时）；`doc.open`（回 `activated: true`）之后 → **15:54:02 png ~2 秒成功**（662229B、magic 过）。**由此撤回两条旧结论**：①「PNG 卡死而 SVG 同刻可用」不成立——那是**单样本**（2026-09-23 18:05:53 那次成功是孤例，几分钟前 checkup 刚 `doc.open` 过那页，文档还「热」）；②「宿主不接受某个参数」与本症状无关（那是 2026-09-18 .d.ts 坑的真相，降为历史注脚）。一条机制解释全部历史观测：**checkup 从未失败**（它的画布阶段本就逐页 `doc.open` 再渲染——调用方碰巧做对了，所以 checkup **不改**），**每次裸调 `bridge call export.render` 都挂**（没先动焦点）。H1「必须是活动文档」/H2「载入后激活过一次即可」未分离，**修法相同**。**0.4.22 起 `export.render` 自己激活**：`scope=page` 时先解析目标 uuid（`params.pageUuid` ?? 当前活动文档）→ `dmt_EditorControl.openDocument(uuid)` → 成功才导出，结果带 `activatedPageUuid`；活动文档解析不到、或 `openDocument` 失败/不回 tab id → **诚实报错、不导出**（诊断沿用 `doc.open` 那套）；`scope=selection`/`project` 不动。031 的 **PNG→SVG 回退保留**（它是 checkup 超时不失败的保护），但它的旧前提已撤回：svg 在页面未激活时同样挂 | 裸调出图挂住时先查这条：**导出前目标页激活了吗**——传 `params.pageUuid`，或先 `doc.open`；checkup 对本病天然免疫（逐页 open + 渲染），**不用改**。**另一件事**：进度条 toast 漏（ManufactureData 管线开了不退，**成功也卡 99%**）——0.4.21 起 connector 在 `finally` 里 400ms 后 best-effort 拆（`destroyProgressBar`/`destroyLoading`，岳两样本验证通过）。心跳连续**仍不能**排除宿主故障（socket/心跳/路由计数只描述*通道*）。**149 上的根治验收归岳**：窗口刚载入、不 doc.open，裸调 `export.render` 应直接成功。出处 issue #5、`outputs/031_*.txt`、`outputs/032_*.txt`、`outputs/033_*.txt`、`docs/bridge.md` §10.28 `openDocument(uuid)` ≠ `activateDocument(tabId)`（**开标签页 vs 切前台激活，入参一个是 uuid、一个是 tab id**）——导出前必须**两者都做 + `getCurrentDocumentInfo()` 回读确认 `matchesRequest`** 才导出；0.4.22 只做了第一步，岳 149 验收当场未过（裸调仍 TIMEOUT ×2），0.4.23 补齐三步。H1/H2 **定案**：**每次导出前都要 activate**（不是"载入后激活过一次即可"）。 |
 | 24 | **导出文件对删除永不重算**（035 四轮真机定论）：`save`、等 30 s、切页都不触发，四次导出逐字节一致仍报旧网表；create 会触发重算（029 实测）。⇒ 判据一句话：**导出新鲜当且仅当本 run 无删除**——含删除 run 的 pin 级新鲜读数只能走编辑器**活网表**（`sch.netlist` 的 `components[k].pinInfoMap[pin].net`，按名字给，未命名网一律空，单独证不了"两脚没共用未命名网"，**必须配画布双证**）。连带三条宿主习性：① 宿主给**悬空脚发单成员自动网**，导出名 `NET\d+`、活网表内部名 `$\S+`——**同一座岛两个名字，自动网名不是身份**（stale 检查对两个自动名视为同一岛；用户命名网仍逐名比）；② 相接的两段线被宿主**合并成一个 primitive**，接点在点表里重复上报（实测 `[345,300,345,290,255,300,345,300]`）——附着物判定必须读"脚在上报点表里"，按首尾点判会把 T 型误判成附着；③ `sch.doc.new` 的 name 参数被忽略 | pin 级验收 = 活网表 + 画布双证，缺一 exit 3，导出降级为事故报告附件；范围核对分家（含删除 → 画布身份级差异 `wiresVanished == [attachment.primitive_id]`；纯 create → 维持导出核对）。出处 `outputs/035c_live.txt`、`outputs/035d_live.txt`、`tasks/035-patch-pin.md` |
 | 25 | **036 三条宿主习性（真机实证）**：① 宿主上报一条线的点会**重复结点**（实测 `[345,320,345,310,555,320,345,320]`），"最后一个点"可能只是拐角——**找线的远端要取离锚点最远的点**，单点线视为无远端、拒绝；② 宿主对撞上**工程全局**的位号会**静默改名**（要 R2、页面空、但 P4 已有 R2 → 落成 R3，改名发生在跑动中，plan 的 postcondition 随之不成立报 exit 3）⇒ 位号池必须取「**页面 ∪ 工程导出**」，只看页面必撞车；③ findings 签名别把"同一件事换措辞"和"自动网重编号"算新增（插入 100nF 后 decap 规则改措辞；悬空脚自动网 NET3→NET4）⇒ 签名 = `rule|severity|component|pins|命名网`（自动网名不计入） | 位号池、远端取点、findings 签名三处都已按此入码（036）；029 位号池同款盲点的修复见 036b。出处 `outputs/036_summary.txt`、`outputs/036_live.txt`、`tasks/036-insert-subcircuit.md` |
+| 26 | **037 两条宿主习性（真机实证）**：① 宿主移动器件**不拖线**——`sch.modify_primitive` 把器件移走，线的上报端点留在原地（连接实际断开）⇒ 移动块必须删线 + 正交重画；② 宿主上报一条线是**点集不是路径**——`[445,320, 445,310, 655,320, 445,320]` 的相邻对里有从没画过的对角线 ⇒ 照抄点集"平移重画"会画出对角线挂死宿主（029-c 的课），按"相邻线段"判 T 会误报（5 单位外的脚落进幻影对角线容差，单器件移动曾被整片误拒）⇒ 附着/通脚判据只能说「**脚在不在上报点集里**」，漏判由网表恒等兜底（exit 2 按脚点名）。附带：`modify_primitive` 间歇抛宿主 `TypeError: Cannot destructure property 'cmdKey'…`（**改动前**抛，器件没动）⇒ 报错先回读位姿，证明没落地才许一次**举证重试**并写进报告 | 移动类流程一律 delete + `wire_route` 正交重画；T/附着判定禁用线段几何，用点集成员判定。出处 `outputs/037_probe.txt`、`outputs/037_live.txt`、`tasks/037-move-block.md` |
 宿主版本：**3.2.149 是实测下限**（2026-09-23 在 3.2.149.88089769 上实测：打标/缩放等 8 个关键成员
 typeof 全在位、activate 冷启动正常派发、render 实跑 308KB PNG——旧立论"3.2.183 以下这些接口不存在"
 已被证伪，见 `tasks/027-editor-api-floor.md`）；**3.2.186 是唯一校准对象**。低于 149 没有证据，doctor 照卡。
