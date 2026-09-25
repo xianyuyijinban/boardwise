@@ -192,11 +192,17 @@ def test_the_committed_library_is_v2_with_its_curated_fact_entries():
     with_category = sorted(p.key for p in library.parts if p.category)
     # 011d sec.1/2 added a fourth: the Type-C receptacle (oracle-approved
     # category + the CC pull_required facts) -- and a fifth, the LED.
+    # 039 wave 1 added four more that drive rules (CH340N, SN65HVD230DR,
+    # TLV9062IDR, MPU-6050) and one that is **gated** (REF2033AIDDCR): its facts
+    # are recorded and cited but `facts_verified` is false, so `entry.facts` reads
+    # None and it is deliberately absent from `with_facts` while keeping its
+    # category. That asymmetry is the gate working, not a mistake.
     assert with_facts == [
         "conn.type_c_16pin_2md_073", "ic.ams1117_3_3", "ic.ch340g",
-        "ic.rt9013_33gb", "led.emerald_green_0603",
+        "ic.ch340n", "ic.mpu_6050", "ic.rt9013_33gb", "ic.sn65hvd230dr",
+        "ic.tlv9062idr", "led.emerald_green_0603",
     ]
-    assert with_category == with_facts
+    assert with_category == sorted([*with_facts, "ic.ref2033aiddcr"])
     # The two harvested entries gained keys; the 90 others are untouched.
     rt = find_facts(library, mpn="RT9013-33GB")
     assert rt.facts["ldo"]["dropout_max_mv"] == 400
@@ -218,6 +224,20 @@ def test_the_committed_library_is_v2_with_its_curated_fact_entries():
             for p in usb.facts["pull_required"]] == [
         ("4", "GND", "5.1k"), ("10", "GND", "5.1k"),
     ]
+    # 039 wave 1 in detail: the SOP-8 CH340N is not the SOP-16 CH340G -- its VCC
+    # is pin 5, its 3.3V-mode floor is 3.1V (the C/N/K/E/X/B group), and it needs
+    # no crystal (an internal clock generator), which is why no must_connect
+    # names one.
+    n = find_facts(library, mpn="CH340N")
+    assert {p["pin"] for p in n.facts["required_caps"]} == {"5", "8"}
+    assert n.facts["supply_pins"][1]["v_operating"] == [3.1, 3.6]
+    assert all("crystal" not in m["to"] for m in n.facts["must_connect"])
+    # ... and the gated entry keeps its claim, reachable through the field the
+    # gate holds it in, while the rule-facing one stays empty.
+    ref = find_facts(library, mpn="REF2033AIDDCR")
+    assert ref.category == "ic.reference"
+    assert ref.facts is None and ref.facts_verified is False
+    assert {k for k in ref.candidate_facts} == {"supply_pins", "required_caps"}
 
 
 def test_facts_mode_tags_survive_the_loader_and_gating():

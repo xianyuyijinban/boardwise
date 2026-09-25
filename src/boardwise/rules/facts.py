@@ -53,12 +53,67 @@ _CATEGORY_UNKNOWN = "unknown"
 
 
 def _category_state(entry: PartEntry) -> str:
+    # The 039 gate, at the one choke point every facts rule passes through: an
+    # entry whose facts are unverified is **unclassified as far as the rules are
+    # concerned**, whatever `category` says. There is no partial trust — an
+    # author who typed a category and facts but has not been reviewed is the
+    # exact case the gate exists for — and putting the check here rather than in
+    # each rule is what keeps a rule from forgetting it. A `true` entry (every
+    # entry written before the field existed) is untouched.
+    if not entry.facts_verified:
+        return _CATEGORY_UNKNOWN
     category = entry.category or ""
     if category.startswith("ic"):
         return _IC
     if category:
         return _NON_IC
     return _CATEGORY_UNKNOWN
+
+
+#: What a closed gate adds to a rule's message (task 039 §WI-4). "No facts" and
+#: "facts nobody has verified" are the same thing to a consumer — both leave
+#: `entry.facts` None — but they are different work orders: the first is a
+#: curation task, the second a **review**. Only the entry can tell them apart,
+#: so the rule asks it rather than guessing from an empty dict.
+_GATE_NOTE = (
+    " — candidate entry: facts_verified is false, so nothing in it drives a "
+    "rule yet (the flip is the review)"
+)
+
+
+def _facts_absent_reason(entry: PartEntry) -> str:
+    """Why the shelf cannot judge this part, in the entry's own terms.
+
+    Three answers, never two: "nothing recorded", "a claim nobody vouched for",
+    and "no facts and not even a verified entry" are three different next acts,
+    and collapsing them would make the report's honest silence a lie.
+    """
+    if entry.facts_verified:
+        return "its shelf entry has no facts"
+    if entry.candidate_facts:
+        return "its shelf entry claims facts nobody has verified" + _GATE_NOTE
+    return "its shelf entry has no facts and is itself unverified" + _GATE_NOTE
+
+
+def _category_absent_reason(entry: PartEntry) -> str:
+    """The same three answers about the classification rather than the facts."""
+    if entry.facts_verified:
+        return "its shelf entry has no category"
+    return "its shelf entry is unverified, so it is unclassified too" + _GATE_NOTE
+
+
+def _gate_review_note(entry: PartEntry) -> str:
+    """What a candidate's intake item *is*: a review, not a recording.
+
+    Empty for every verified entry, so the intake line a curated part produces
+    is byte-identical to what it was before the gate existed.
+    """
+    if entry.facts_verified:
+        return ""
+    return (
+        " — or read the recorded facts, and if they are right, set "
+        "facts_verified to true (that flip IS the review)"
+    )
 
 
 class FactsRule(OutcomeRule):
@@ -458,12 +513,13 @@ class NcAndMustConnect(FactsRule):
                         state="UNKNOWN",
                         subject=comp.designator,
                         message=(
-                            f"{comp.designator}: its shelf entry has no facts, "
+                            f"{comp.designator}: {_facts_absent_reason(entry)}, "
                             "so its NC and must-connect constraints are unknown"
                         ),
                         missing_fact=(
                             f"facts for {comp.designator} (entry {entry.lcsc}, "
                             f"{_identity(comp)}): record nc_pins / must_connect"
+                            + _gate_review_note(entry)
                         ),
                     ),
                     "ERROR",
@@ -706,12 +762,13 @@ class SupplyOnKnownDomain(FactsRule):
                         state="UNKNOWN",
                         subject=comp.designator,
                         message=(
-                            f"{comp.designator}: its shelf entry has no facts, "
+                            f"{comp.designator}: {_facts_absent_reason(entry)}, "
                             "so its supply pins are unknown"
                         ),
                         missing_fact=(
                             f"facts for {comp.designator} (entry {entry.lcsc}, "
                             f"{_identity(comp)}): record supply_pins"
+                            + _gate_review_note(entry)
                         ),
                     ),
                     None,
@@ -828,7 +885,7 @@ class DomainVsRange(FactsRule):
                         state="UNKNOWN",
                         subject=comp.designator,
                         message=(
-                            f"{comp.designator}: its shelf entry has no facts, "
+                            f"{comp.designator}: {_facts_absent_reason(entry)}, "
                             "so its operating ranges are unknown"
                         ),
                         missing_fact=(
@@ -995,12 +1052,13 @@ class LdoDropout(FactsRule):
                         state="UNKNOWN",
                         subject=comp.designator,
                         message=(
-                            f"{comp.designator}: its shelf entry has no "
-                            "category, so whether it is an LDO is unknown"
+                            f"{comp.designator}: {_category_absent_reason(entry)}, "
+                            "so whether it is an LDO is unknown"
                         ),
                         missing_fact=(
                             f"category and ldo facts for {comp.designator} "
                             f"(entry {entry.lcsc}, {_identity(comp)})"
+                            + _gate_review_note(entry)
                         ),
                     ),
                     None,

@@ -112,6 +112,11 @@ boardwise checkup --file <导出.epro2> --out <目录>       # 断连兜底：�
   必须显式 `--view schematic`）。`--view pcb` 对 eprj3 **诚实报错**"B 档未开"，不给空模型；
   `--latest` 认 eprj3 目录（按索引 mtime 参选）；工程 uuid 从索引 `owner_uuid` 取
   （补了"只有 .epro2 才带工程 uuid"的老缺口）。**一律只读**：写路径走 bridge API，不落盘。
+- **器件事实库（039 parts 工具链，纯离线）**：`boardwise parts missing --file <工程>` 列出每颗
+  IC 缺哪些事实（UNKNOWN 的来源清单，含 datasheetUrl）；`parts show <mpn>` 看库里已有什么
+  （每条事实带出处页码）；`parts add <mpn> --lcsc <C码>` 追加候选条目。**`facts_verified: false`
+  的候选事实不驱动任何规则**（规则视同无 facts 报 UNKNOWN）——核验的物理形态 = 岳审 git diff
+  后翻 true。细则见 `docs/parts.md`。
 - **把发现画回画布**（要 daemon + 焦点在那张原理图页）：
   `boardwise bridge call --action doc.list` 拿 `pageUuid` → `boardwise review-mark report.json --page <uuid>`。
   终端那张序号表就是图例（marker 只能画形状、不能写字，`marker#N` = 第 N 个红框）；
