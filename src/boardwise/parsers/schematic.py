@@ -115,6 +115,10 @@ class _Instance:
     #: container id in the original document. ``NO_CONNECT`` references pins
     #: through it (``"<container>-e<pin element id>"``).
     container_id: str = ""
+    #: The ``SCH_PAGE`` document uuid this placement came from. Two pages are
+    #: two coordinate systems (and, in a multi-board project, two boards), so
+    #: every connectivity question is asked per page (040 §WI-1).
+    page: str = ""
 
 
 @dataclass
@@ -124,6 +128,43 @@ class _Page:
     instances: list[_Instance] = field(default_factory=list)
     loose_attrs: list[dict[str, Any]] = field(default_factory=list)
     segments: dict[str, list[tuple[Point, Point]]] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class _LooseAttr:
+    """A page-level ATTR together with the ``SCH_PAGE`` it was read from.
+
+    *Loose* = it does not belong to the component before it: a ``NET`` label
+    (its ``parentId`` is a wire group), a ``NO_CONNECT`` (a symbol pin), or a
+    standalone ``Global Net Name`` flag. The page travels with it because both
+    the flag's anchor and every coordinate lookup are page-local (040 §WI-1).
+    """
+
+    page: str
+    body: dict[str, Any]
+
+
+@dataclass
+class _PageSplit:
+    """One walk of the schematic records, ready for a page-scoped build.
+
+    ``segments`` keeps **every** line group, graphics included: that is the raw
+    drawing, and the replay path (:func:`collect_page_layout`) reads it as
+    geometry. ``wire_groups`` names the subset a ``WIRE`` head owns — the only
+    groups allowed to join a net (040 §WI-2; measured on the 毕设 board, where a
+    header symbol's bracket graphic otherwise shorted three pins into one).
+
+    ``pages`` maps a line group to its ``SCH_PAGE`` uuid, which is what lets
+    the connectivity pass key its coordinate index by page. Group ids are
+    uuids and every fixture measured carries each group on exactly one page, so
+    the two structures cannot disagree.
+    """
+
+    instances: list[_Instance] = field(default_factory=list)
+    loose: list[_LooseAttr] = field(default_factory=list)
+    segments: dict[str, list[tuple[Point, Point]]] = field(default_factory=dict)
+    wire_groups: set[str] = field(default_factory=set)
+    pages: dict[str, str] = field(default_factory=dict)
 
 
 def _page_y(stored: Any) -> float:
@@ -304,7 +345,63 @@ def resolve_component_identity(
     return fields, provenance
 
 
-def _split_page(records: list[Any]) -> tuple[list[_Instance], list[dict[str, Any]], dict[str, list[tuple[Point, Point]]]]:
+def _wire_head_groups(records: list[Any]) -> set[str]:
+    """The line groups that are **wires**: the groups a ``WIRE`` record names.
+
+    Measured 2026-09-26 (040 §WI-2) on all nine page-streams of the fixture set:
+    a ``WIRE`` head carries the group id of its own ``LINE`` members in its ``id``
+    (``WIRE id=3a042cc210e78826`` ⇢ ``LINE … lineGroup=3a042cc210e78826``), and
+    **every** ``NET`` label's ``parentId`` is one of those groups — 0 exceptions,
+    on the golden board (33 wire groups / 27 labels / 40 groups) and on the
+    毕设 board (page ``40daf``: 60 / 58 / 163; page ``5f0f``: 226 / 204 / 445).
+    The groups no head names are the graphics that come free with a placed
+    symbol.
+
+    The older form of this test — "the group of the next ``LINE`` record after a
+    head" — reads the same file but **misses wires**: the golden board's
+    ``C9.1 = GND`` wire (group ``53e74bed8853c849``) has two body-less ``LINE``
+    placeholders between its head and its only real ``LINE``, so a scan that
+    stops at the first ``LINE`` sees no group and drops that wire's connection
+    (measured: 040 §WI-0, the regression that the 006b note did not catch). Both
+    readings are kept, unioned: they agree on every measured stream, and the
+    union stays correct if a future export writes a different id pair, which is
+    exactly the failure mode 038 hit with PIN keys.
+
+    Documents are **not** filtered here, deliberately: on all eight real
+    fixtures every ``WIRE`` record sits inside its ``SCH_PAGE``, but the
+    synthetic eprj3 page (``tests/fixtures/eprj3_synth``) stores the page's own
+    elements after a ``SYMBOL`` section within the same glued stream, and a
+    doc-type filter drops that page's only wire (measured: the 038 model test
+    goes red). Nothing in this judgement needs the document — a head names its
+    group wherever it sits.
+    """
+    groups: set[str] = set()
+    pending = False
+    for record in records:
+        if record.type == "DOCHEAD":
+            pending = False
+            continue
+        if record.type == "WIRE":
+            if record.id:
+                groups.add(str(record.id))  # a head names its own group
+            pending = True
+            continue
+        if record.type != "LINE":
+            # Every other kind of element is transparent to the head→line
+            # pairing.
+            continue
+        if not record.body:
+            # A body-less LINE carries no group and does not end the head's run.
+            continue
+        if pending:
+            pending = False
+            group = str(record.body.get("lineGroup") or "")
+            if group:
+                groups.add(group)
+    return groups
+
+
+def _split_page(records: list[Any]) -> _PageSplit:
     """Group page records into component instances, loose ATTRs, wire segments.
 
     A ``COMPONENT`` record owns the ATTR records that immediately follow it —
@@ -312,10 +409,17 @@ def _split_page(records: list[Any]) -> tuple[list[_Instance], list[dict[str, Any
     labels point at a ``lineGroup``, ``NO_CONNECT`` at a symbol pin, a
     standalone ``Global Net Name`` at a flag uuid). Those are collected as
     *loose* attributes so they can be resolved page-wide.
+
+    Every instance and every loose attribute carries the ``SCH_PAGE`` it came
+    from: a page is a coordinate system, and a multi-board project's pages are
+    different boards, so nothing here may be pooled across them (040 §WI-1).
     """
-    instances: list[_Instance] = []
-    loose: list[dict[str, Any]] = []
-    segments: dict[str, list[tuple[Point, Point]]] = {}
+    split = _PageSplit()
+    split.wire_groups = _wire_head_groups(records)
+    instances = split.instances
+    loose = split.loose
+    segments = split.segments
+    page = ""
 
     current: _Instance | None = None
 
@@ -339,6 +443,13 @@ def _split_page(records: list[Any]) -> tuple[list[_Instance], list[dict[str, Any
 
     for record in records:
         body = record.body
+        if record.type == "DOCHEAD":
+            # A new document: only SCH_PAGE carries connectivity, and its uuid
+            # is the page every record after it belongs to. (The grouper also
+            # ends the attribute run, as it always did.)
+            page = str(body.get("uuid") or "") if body.get("docType") == "SCH_PAGE" else ""
+            current = None
+            continue
         if body is None:
             current = None
             continue
@@ -350,6 +461,7 @@ def _split_page(records: list[Any]) -> tuple[list[_Instance], list[dict[str, Any
                 rotation=float(body.get("rotation") or 0),
                 is_mirror=bool(body.get("isMirror") or False),
                 z_index=body.get("zIndex"),
+                page=page,
             )
             instances.append(current)
             continue
@@ -361,7 +473,7 @@ def _split_page(records: list[Any]) -> tuple[list[_Instance], list[dict[str, Any
                 if not current.container_id and body.get("parentId"):
                     current.container_id = str(body.get("parentId"))
             else:
-                loose.append(body)
+                loose.append(_LooseAttr(page=page, body=body))
             continue
         if record.type == "ELE_PLACEHOLDER":
             # A placeholder is part of the element it precedes — it must NOT
@@ -376,10 +488,11 @@ def _split_page(records: list[Any]) -> tuple[list[_Instance], list[dict[str, Any
                 end = (round(float(body.get("endX") or 0), COORD_PRECISION),
                        round(_page_y(body.get("endY")), COORD_PRECISION))
                 segments.setdefault(str(group), []).append((start, end))
+                split.pages.setdefault(str(group), page)
             continue
         # Any other element ends the current attribute run.
         current = None
-    return instances, loose, segments
+    return split
 
 
 def _collect_symbols(
@@ -564,7 +677,7 @@ def build_pin_offsets(
     text, meta = load_epru_text(Path(path))
     stats = _stats_for(parse_stats, path, meta)
     records = _iter_schematic_records(text, stats)
-    instances, _loose, _segments = _split_page(records)
+    instances = _split_page(records).instances
     symbols = _collect_symbols(records, stats, pin_key=_pin_key_for(meta))
     device_meta = _collect_device_meta(records)
 
@@ -620,7 +733,7 @@ def collect_part_devices(path: str | Path) -> dict[str, str]:
     text, meta = load_epru_text(Path(path))
     stats = ParseStats(source=str(path), editor_version=meta.get("editorVersion"))
     records = _iter_schematic_records(text, stats)
-    instances, _loose, _segments = _split_page(records)
+    instances = _split_page(records).instances
 
     out: dict[str, str] = {}
     for inst in instances:
@@ -766,7 +879,7 @@ def collect_part_placements(path: str | Path) -> dict[tuple[float, float], str]:
     text, meta = load_epru_text(Path(path))
     stats = ParseStats(source=str(path), editor_version=meta.get("editorVersion"))
     records = _iter_schematic_records(text, stats)
-    instances, _loose, _segments = _split_page(records)
+    instances = _split_page(records).instances
     out: dict[tuple[float, float], str] = {}
     for inst in instances:
         designator = (inst.attrs.get("Designator") or "").strip()
@@ -796,12 +909,18 @@ def build_schematic_model(
     stats = _stats_for(parse_stats, path, meta)
     records = _iter_schematic_records(text, stats)
 
-    instances, loose, segments = _split_page(records)
+    split = _split_page(records)
+    instances, segments = split.instances, split.segments
+    loose = [item.body for item in split.loose]
     symbols = _collect_symbols(records, stats, pin_key=_pin_key_for(meta))
     device_meta = _collect_device_meta(records)
 
     model = DesignModel()
     components: dict[str, Component] = {}
+    # designator -> {page uuid: placements seen}, so a designator that repeats
+    # can be told apart: twice on one page is a clash in one netlist, once each
+    # on two pages is a multi-board project numbering its own parts (040 §WI-3).
+    placements_seen: dict[str, dict[str, int]] = {}
     # (instance, component, [(pin number, page point, ez key, pin name)])
     placed: list[tuple[_Instance, Component, list[tuple[str, Point, str, str]]]] = []
 
@@ -841,13 +960,15 @@ def build_schematic_model(
         component.props["device_uuid"] = (inst.attrs.get("Device") or "").strip()
         if meta.get("symbol"):
             component.props["library_symbol_uuid"] = meta["symbol"]
-        if designator in components:
-            # The re-assignment below would silently overwrite the earlier
-            # placement: the other page still holds its part, but this model
-            # keeps only the last one. Recording the clash here is what turns
-            # "lost part" into "reported defect" (CONN-1, task 011c).
-            if designator not in model.duplicate_designators:
-                model.duplicate_designators.append(designator)
+        # Which pages this designator was placed on. The assignment below keeps
+        # only the last placement per designator (the "one designator, one
+        # component" contract; 040b re-scopes it per board), and the two kinds
+        # of repeat are not the same thing (040 §WI-3, measured on the 毕设
+        # board: 30 refs repeat across three pages that are three boards) —
+        # same page = two parts answer to one name in one netlist (a real
+        # clash), different pages = another board numbering its own R1.
+        pages_of = placements_seen.setdefault(designator, {})
+        pages_of[inst.page] = pages_of.get(inst.page, 0) + 1
         components[designator] = component
         model.components[designator] = component
         symbol_def = symbols.get(symbol_uuid)
@@ -866,19 +987,30 @@ def build_schematic_model(
             stats.components_without_symbol += 1
         placed.append((inst, component, pins))
 
-    # --- connectivity graph
+    # --- connectivity graph, page-scoped (040 §WI-1)
+    #
+    # Every key carries the page: a page is its own coordinate system, and in a
+    # multi-board project its own board. Pooling them welded three boards'
+    # netlists into one graph — the 毕设 board's "C115 has both pins on AGND"
+    # and "U5 pin 5 is on AGND" were both that weld (039d), not the drawing.
     uf = _UnionFind()
-    point_index: dict[Point, list[Any]] = {}
+    point_index: dict[tuple[str, Point], list[Any]] = {}
 
-    for group, segs in segments.items():
+    # Only groups a WIRE head owns are wires (040 §WI-2). The rest of the
+    # drawing — a placed symbol's own graphics — is not copper, and one such
+    # segment (the 毕设 board's 46-unit vertical between its +24V and PGND
+    # rails) was shorting a whole capacitor bank.
+    for group in sorted(split.wire_groups):
+        segs = segments.get(group) or []
+        page = split.pages.get(group, "")
         for index, (start, end) in enumerate(segs):
-            start_node = ("w", group, index, "s")
-            end_node = ("w", group, index, "e")
+            start_node = ("w", page, group, index, "s")
+            end_node = ("w", page, group, index, "e")
             uf.find(start_node)
             uf.find(end_node)
             uf.union(start_node, end_node)  # segments of one wire are one net
-            point_index.setdefault(start, []).append(start_node)
-            point_index.setdefault(end, []).append(end_node)
+            point_index.setdefault((page, start), []).append(start_node)
+            point_index.setdefault((page, end), []).append(end_node)
     for nodes in point_index.values():
         for other in nodes[1:]:
             uf.union(nodes[0], other)  # wires touching at a point
@@ -894,15 +1026,18 @@ def build_schematic_model(
                 container, ez = parent.rsplit("-e", 1)
                 nc_set.add((container, f"e{ez}"))
 
-    pin_nodes: dict[tuple[str, str], Any] = {}
+    pin_nodes: dict[tuple[str, str, str], Any] = {}
     for inst, component, pins in placed:
         for number, point, ez, _pin_name in pins:
-            node = ("p", component.designator, number)
-            pin_nodes[(component.designator, number)] = node
+            # (page, designator, number): the designator alone is not an
+            # identity once two pages can hold it (040 §WI-1).
+            key = (inst.page, component.designator, number)
+            node = ("p",) + key
+            pin_nodes[key] = node
             uf.find(node)
             if (inst.container_id, ez) in nc_set:
                 continue  # NC pins stay off the connectivity graph
-            touching = point_index.get(point)
+            touching = point_index.get((inst.page, point))
             if touching:
                 uf.union(node, touching[0])
 
@@ -954,18 +1089,20 @@ def build_schematic_model(
                 point[0], point[1], rotation=inst.rotation,
                 mirror=inst.is_mirror, ox=inst.x, oy=inst.y,
             )
-            for node in point_index.get(page_point, []):
+            for node in point_index.get((inst.page, page_point), []):
                 forced.setdefault(uf.find(node), net_name)
-    for body in loose:
+    for item in split.loose:
         # Standalone power flags carry the net name and the point where it
-        # attaches; both must be present to be usable.
+        # attaches; both must be present to be usable. The page comes with the
+        # attribute — the same coordinate on another page is another node.
+        body = item.body
         if body.get("key") == "Global Net Name" and body.get("value"):
             x, y = body.get("x"), body.get("y")
             if x is None or y is None:
                 continue
             flag_point = (round(float(x), COORD_PRECISION),
                           round(_page_y(y), COORD_PRECISION))
-            for node in point_index.get(flag_point, []):
+            for node in point_index.get((item.page, flag_point), []):
                 forced.setdefault(uf.find(node), str(body["value"]))
 
     # --- name every cluster deterministically
@@ -973,9 +1110,10 @@ def build_schematic_model(
     clusters = uf.clusters()
     explicit: dict[Any, str] = {}
     for root, nodes in clusters.items():
-        # explicit NET label on any wire group of the cluster
+        # explicit NET label on any wire group of the cluster (the wire node is
+        # ("w", page, group, index, end), so the group id is node[2])
         group_labels = sorted(
-            {net_labels_of(segments, loose, g) for g in (n[1] for n in nodes if n[0] == "w")}
+            {net_labels_of(segments, loose, g) for g in (n[2] for n in nodes if n[0] == "w")}
             - {""},
         )
         if group_labels:
@@ -995,7 +1133,9 @@ def build_schematic_model(
     nets: dict[str, Net] = {}
     for inst, component, pins in placed:
         for number, point, ez, pin_name in pins:
-            node = pin_nodes[(component.designator, number)]
+            # the pin's own page: the designator alone is ambiguous once two
+            # pages can hold it (040 §WI-1).
+            node = pin_nodes[(inst.page, component.designator, number)]
             name = labels.get(uf.find(node), "")
             is_nc = (inst.container_id, ez) in nc_set
             component.pins.append(
@@ -1008,6 +1148,21 @@ def build_schematic_model(
             if member not in net.pins:
                 net.pins.append(member)
     model.nets = nets
+
+    # --- how a repeated designator reads (040 §WI-3)
+    for designator in sorted(placements_seen):
+        pages_of = placements_seen[designator]
+        if sum(pages_of.values()) < 2:
+            continue
+        if any(count > 1 for count in pages_of.values()):
+            # twice on one page: two parts, one name, one netlist — the clash
+            # CONN-1 is about. (Defect dominates when both kinds are true.)
+            model.duplicate_designators.append(designator)
+        elif len(pages_of) > 1:
+            # one placement per page, several pages: a multi-board project
+            # numbering each board's own parts. Recorded with the pages, for
+            # the rule to report as information (040 §WI-3).
+            model.cross_page_designators[designator] = sorted(pages_of)
     return model
 
 
@@ -1211,7 +1366,11 @@ def collect_page_layout(path: str | Path) -> PageLayout:
     text, meta = load_epru_text(Path(path))
     stats = ParseStats(source=str(path), editor_version=meta.get("editorVersion"))
     records = _iter_schematic_records(text, stats)
-    instances, loose, segments = _split_page(records)
+    split = _split_page(records)
+    instances, segments = split.instances, split.segments
+    # The layout is read as drawn geometry, so it takes the loose attributes as
+    # plain bodies; only the connectivity pass needs their page (040 §WI-1).
+    loose = [item.body for item in split.loose]
     device_titles = _collect_device_titles(records)
 
     layout = PageLayout()
@@ -1256,27 +1415,15 @@ def collect_page_layout(path: str | Path) -> PageLayout:
         )
 
     # --- wire groups: owned by a WIRE head (see the section comment)
-    page_records = [
-        record
-        for record in records
-        if record.type != "DOCHEAD" or record.body.get("docType") == "SCH_PAGE"
-    ]
     net_by_group = {
         str(body.get("parentId")): str(body.get("value") or "").strip()
         for body in loose
         if body.get("key") == "NET" and body.get("parentId")
     }
-    wire_groups: set[str] = set()
-    for index, record in enumerate(page_records):
-        if record.type != "WIRE":
-            continue
-        for follower in page_records[index + 1:]:
-            body = follower.body or {}
-            if follower.type == "LINE":
-                group = str(body.get("lineGroup") or "")
-                if group:
-                    wire_groups.add(group)
-                break
+    # The same judgement the connectivity pass makes (040 §WI-2): a group is a
+    # wire when a WIRE head owns it. Reused rather than re-derived, so a wire
+    # can never be a wire for one reader and a graphic for the other.
+    wire_groups: set[str] = set(split.wire_groups)
     wire_groups.update(net_by_group)
 
     for group in sorted(wire_groups):

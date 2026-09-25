@@ -136,10 +136,13 @@ def _designator_category(component: Component) -> str:
 def page_attribution_from_archive(path) -> dict[str, dict]:
     """`{page_uuid: {title, components}}` from an archive's `SCH_PAGE` documents.
 
-    Why this pass exists: `build_schematic_model` merges every page into one
-    model — correctly, since a netlist-level review wants the whole design — and
-    the per-page split is gone by the time a report sees it. Re-deriving it from
-    the same record stream is cheap, read-only, and keeps the parser untouched.
+    Why this pass exists: the model is keyed by designator, so the per-page
+    split is gone by the time a report sees it. Since 040 the parser keeps the
+    pages *apart* in connectivity (three pages of a multi-board project are
+    three boards, not one welded netlist), but the model still carries no page
+    field — 040b's work — so a report that wants to say "which page is this
+    module on" re-derives it here. Re-deriving it from the same record stream is
+    cheap, read-only, and keeps the parser untouched.
 
     It is deliberately shallow: a `COMPONENT` record's `partId`, then the
     `Designator` attribute that **follows** it — the same positional join the
@@ -379,7 +382,10 @@ def modules_section(
         for page in chosen:
             title = page.get("title") or page["uuid"]
             title_counts[title] = title_counts.get(title, 0) + 1
-        ambiguous = model.duplicate_designators
+        # Both kinds of repeat leave one placement out of the model, so both
+        # make a page's ref list ambiguous — `repeated_designators()` is exactly
+        # "this name does not resolve to one placement" (040 §WI-3).
+        ambiguous = model.repeated_designators()
         for page in chosen:
             components = [ref for ref in page["components"] if ref in model.components]
             missing = [ref for ref in page["components"] if ref not in model.components]
@@ -396,8 +402,9 @@ def modules_section(
             collisions = sorted(set(components) & set(ambiguous))
             if collisions:
                 notes.append(
-                    f"该页含 {len(collisions)} 个跨页重号位号（{'、'.join(collisions[:6])}）："
-                    "模型按位号索引，跨页重号记在 model.duplicateDesignators"
+                    f"该页含 {len(collisions)} 个重号位号（{'、'.join(collisions[:6])}）："
+                    "模型按位号索引，跨页重号记在 model.crossPageDesignators"
+                    "（多板工程合法），同页重号记在 model.duplicateDesignators（缺陷）"
                 )
             modules.append({
                 "name": name,
