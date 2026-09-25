@@ -82,6 +82,27 @@ verified 闸（未核验不驱动决策）**。facts 词表现状：`supply_pins
 照旧：pytest 必带 `--basetemp=.tmp_pt_home`；变异 cp 备份 + sha256/cmp 还原；
 真机全程不碰（本批纯离线）；`tests/fixtures/` 既有夹具只读；eprj3/epro2 工程文件只读。
 
+## 批①b：decap 规则硬化 + REF2033 翻闸（批①真机数据挖出的两个既有盲点）
+
+批① curation 用真实板数据照出 `decap-required-caps` 两个既有盲点（证据 `outputs/039_eval_delta.txt`
+与 039_summary.txt §三），本批修规则并翻闸：
+
+1. **"电容在、值没填"被报成"没有电容"**：毕设板 U9（REF2033）NET7 上确有电容 C34，但其 `Name`
+   属性为 `null` ⇒ `looks_like_capacitor` 不认 ⇒ `decide_required_cap` 返回 `missing` 而非
+   `unreadable`。修法：候选判据把"封装/类别像电容但值不可读"与"没有电容"分开——前者报
+   `unreadable`（WARN 措辞改为"有电容但值读不出，无法核对 0.1uF 要求"），后者才报 missing。
+   修完把 `ic.ref2033aiddcr` 的 `facts_verified` 翻 **true**。
+2. **两端同网的电容被当合格退耦**：毕设板 C115（330uF）两端都在 AGND，被判成 U5 pin5 的
+   合格退耦（OK）。修法：合格退耦必须**桥接两个不同的网**（供电网 ↔ 地网）；两端同网者
+   不算，并给一条单独的 WARN（"电容两端同网，不接任何东西"——这本身是焊接/原理图错误信号）。
+   注意边界：若被护脚的网本身就是地网（U5 pin5 落 AGND 的异常形态），不许借这条规则断案，
+   如实 UNKNOWN 并指明"脚落在地网"这一事实。
+
+验收：两个盲点各一组正负用例；eval 前后对比，**VIOLATION 不许减**（已知 0 条变化基线），
+新增 WARN 逐条解释；REF2033 翻 true 后的 delta 同样逐条解释；变异 ≥2（两个修法各退回一次
+看红）；三线全绿；不碰真机、不碰 git / PROGRESS / SKILL.md；交卷 `outputs/039b1_summary.txt`
+（注意别踩 039b 审查流程批的文件名，那是下一批）。
+
 ## 交卷记录
 
 （子代理交文本，主代理 append 并复验。）
