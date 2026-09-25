@@ -133,6 +133,17 @@ boardwise checkup --file <导出.epro2> --out <目录>       # 断连兜底：�
   （本机 `sch_PrimitiveNetLabel` 连读都不存在），拒绝并点名，不替用户想办法。pin 级验收 =
   **活网表（`sch.netlist`）+ 画布（`sch.geometry`）双证**，缺一 exit 3 `verification_disagrees`；
   导出网表只作事故报告附件——**导出新鲜当且仅当本 run 无删除**（§6 坑 24）。
+- **插入 RC / 分压子电路**（036 `insert-subcircuit`，要 daemon；**无驱动规则**——AI 自己判断该插什么，
+  工具保证插得对）：
+  `boardwise edit plan --insert rc-lowpass --pin U3.5 --r 1k --r-lcsc C7250 --c 100n --c-lcsc C14663 -o plan.json`
+  → `edit preview` / `edit apply` 同上。T1 `rc-lowpass` 串联插入（断开锚点脚 → 串 R → 负载侧并 C 到 GND，
+  含删除）；T2 `divider` 抽头分压（`--net <网名>` + `--r1/--r1-lcsc/--r2/--r2-lcsc`，纯 create）。
+  值与 lcsc **全显式无默认**（029 红线：未验证配方不静默落件）；`--insert` 与 `--file`/`--report` 同给直接拒。
+  **判据与 029/035 不同**：本片无规则，幂等探测与回读的判据 = **plan 自己的 postconditions**
+  （一个函数两用：写前探测、写后回读），双证缺一 exit 3；范围分家照旧（T1 含删除 → 画布身份级 +
+  活网表；T2 纯 create → 导出核对）；apply 后全规则 findings **只许减不许增**（新增 exit 2 打印新增行）。
+  落点是**两件一起**的九宫阶梯（模板自带相对偏移 + bbox 干涉检查），位号池取「页面 ∪ 工程导出」
+  （§6 坑 25）。
 
 ## 4. 真机纪律（写操作前逐条对，命中即停）
 
@@ -219,6 +230,7 @@ boardwise checkup --file <导出.epro2> --out <目录>       # 断连兜底：�
 
 | 23 | **`export.render` 挂死 = 目标页自载入后从未被激活**（issue #5 正案，033）；**进度条 toast 漏是另一件事**（032）——两件事分开记，别混：3.2.149 + 0.4.21 上岳做了受控对照（同窗同页相隔 4 分钟，唯一变量是「导出前有没有 `doc.open` 过目标页」）：**没激活过 → png 与 svg 都挂死**（15:48:19 png 30s 超时；15:50:00 svg 同样超时）；`doc.open`（回 `activated: true`）之后 → **15:54:02 png ~2 秒成功**（662229B、magic 过）。**由此撤回两条旧结论**：①「PNG 卡死而 SVG 同刻可用」不成立——那是**单样本**（2026-09-23 18:05:53 那次成功是孤例，几分钟前 checkup 刚 `doc.open` 过那页，文档还「热」）；②「宿主不接受某个参数」与本症状无关（那是 2026-09-18 .d.ts 坑的真相，降为历史注脚）。一条机制解释全部历史观测：**checkup 从未失败**（它的画布阶段本就逐页 `doc.open` 再渲染——调用方碰巧做对了，所以 checkup **不改**），**每次裸调 `bridge call export.render` 都挂**（没先动焦点）。H1「必须是活动文档」/H2「载入后激活过一次即可」未分离，**修法相同**。**0.4.22 起 `export.render` 自己激活**：`scope=page` 时先解析目标 uuid（`params.pageUuid` ?? 当前活动文档）→ `dmt_EditorControl.openDocument(uuid)` → 成功才导出，结果带 `activatedPageUuid`；活动文档解析不到、或 `openDocument` 失败/不回 tab id → **诚实报错、不导出**（诊断沿用 `doc.open` 那套）；`scope=selection`/`project` 不动。031 的 **PNG→SVG 回退保留**（它是 checkup 超时不失败的保护），但它的旧前提已撤回：svg 在页面未激活时同样挂 | 裸调出图挂住时先查这条：**导出前目标页激活了吗**——传 `params.pageUuid`，或先 `doc.open`；checkup 对本病天然免疫（逐页 open + 渲染），**不用改**。**另一件事**：进度条 toast 漏（ManufactureData 管线开了不退，**成功也卡 99%**）——0.4.21 起 connector 在 `finally` 里 400ms 后 best-effort 拆（`destroyProgressBar`/`destroyLoading`，岳两样本验证通过）。心跳连续**仍不能**排除宿主故障（socket/心跳/路由计数只描述*通道*）。**149 上的根治验收归岳**：窗口刚载入、不 doc.open，裸调 `export.render` 应直接成功。出处 issue #5、`outputs/031_*.txt`、`outputs/032_*.txt`、`outputs/033_*.txt`、`docs/bridge.md` §10.28 `openDocument(uuid)` ≠ `activateDocument(tabId)`（**开标签页 vs 切前台激活，入参一个是 uuid、一个是 tab id**）——导出前必须**两者都做 + `getCurrentDocumentInfo()` 回读确认 `matchesRequest`** 才导出；0.4.22 只做了第一步，岳 149 验收当场未过（裸调仍 TIMEOUT ×2），0.4.23 补齐三步。H1/H2 **定案**：**每次导出前都要 activate**（不是"载入后激活过一次即可"）。 |
 | 24 | **导出文件对删除永不重算**（035 四轮真机定论）：`save`、等 30 s、切页都不触发，四次导出逐字节一致仍报旧网表；create 会触发重算（029 实测）。⇒ 判据一句话：**导出新鲜当且仅当本 run 无删除**——含删除 run 的 pin 级新鲜读数只能走编辑器**活网表**（`sch.netlist` 的 `components[k].pinInfoMap[pin].net`，按名字给，未命名网一律空，单独证不了"两脚没共用未命名网"，**必须配画布双证**）。连带三条宿主习性：① 宿主给**悬空脚发单成员自动网**，导出名 `NET\d+`、活网表内部名 `$\S+`——**同一座岛两个名字，自动网名不是身份**（stale 检查对两个自动名视为同一岛；用户命名网仍逐名比）；② 相接的两段线被宿主**合并成一个 primitive**，接点在点表里重复上报（实测 `[345,300,345,290,255,300,345,300]`）——附着物判定必须读"脚在上报点表里"，按首尾点判会把 T 型误判成附着；③ `sch.doc.new` 的 name 参数被忽略 | pin 级验收 = 活网表 + 画布双证，缺一 exit 3，导出降级为事故报告附件；范围核对分家（含删除 → 画布身份级差异 `wiresVanished == [attachment.primitive_id]`；纯 create → 维持导出核对）。出处 `outputs/035c_live.txt`、`outputs/035d_live.txt`、`tasks/035-patch-pin.md` |
+| 25 | **036 三条宿主习性（真机实证）**：① 宿主上报一条线的点会**重复结点**（实测 `[345,320,345,310,555,320,345,320]`），"最后一个点"可能只是拐角——**找线的远端要取离锚点最远的点**，单点线视为无远端、拒绝；② 宿主对撞上**工程全局**的位号会**静默改名**（要 R2、页面空、但 P4 已有 R2 → 落成 R3，改名发生在跑动中，plan 的 postcondition 随之不成立报 exit 3）⇒ 位号池必须取「**页面 ∪ 工程导出**」，只看页面必撞车；③ findings 签名别把"同一件事换措辞"和"自动网重编号"算新增（插入 100nF 后 decap 规则改措辞；悬空脚自动网 NET3→NET4）⇒ 签名 = `rule|severity|component|pins|命名网`（自动网名不计入） | 位号池、远端取点、findings 签名三处都已按此入码（036）；029 位号池同款盲点的修复见 036b。出处 `outputs/036_summary.txt`、`outputs/036_live.txt`、`tasks/036-insert-subcircuit.md` |
 宿主版本：**3.2.149 是实测下限**（2026-09-23 在 3.2.149.88089769 上实测：打标/缩放等 8 个关键成员
 typeof 全在位、activate 冷启动正常派发、render 实跑 308KB PNG——旧立论"3.2.183 以下这些接口不存在"
 已被证伪，见 `tasks/027-editor-api-floor.md`）；**3.2.186 是唯一校准对象**。低于 149 没有证据，doctor 照卡。

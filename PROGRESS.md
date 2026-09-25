@@ -31,9 +31,9 @@ collects the current truth and the pointers.
   - `docs/images/gs-03-daemon-start.png`
   - `PROGRESS.md`
 
-## Current baseline (2026-09-24, 035 patch-pin 收官; published on GitHub)
+## Current baseline (2026-09-25, 036 insert-subcircuit 收官; published on GitHub)
 
-- pytest: **1507 passed** (run with `--basetemp=.tmp_pt_home` on Windows —
+- pytest: **1570 passed** (run with `--basetemp=.tmp_pt_home` on Windows —
   the host's safe-delete hook otherwise eats the summary line and fakes
   exit 1)
 - connector: **419 pass / 0 fail** (`cd connector && npm test`)
@@ -112,3 +112,5 @@ point. Full measurement history: `tasks/010c-coordinate-convention.md`
 - 034 activateExportPage 补齐三步（issue #5 毛病 A 复修，connector **0.4.23**）: 033 验收未过——岳钉到行：只调 `openDocument`（开标签页）漏了 `activateDocument(tabId)`（切前台）+ `getCurrentDocumentInfo()` 回读；修法 = **复用 `docOpen` 处理器**（同一实现，结构上不可能漂移），严格不降级（`activated && matchesRequest` 双真才导出，否则拒绝）；H1/H2 定案 = 每次导出前都要 activate；真机 186：热更 verified、带 pageUuid 导出后 active 真切成 P3、无参与有参 sha 逐字节相同；connector **419**（+4）pytest 1447 不变，变异 2/2 CAUGHT（判据放宽 4 红 / 退回单步 7 红）；激活路径与岳 17:33 亲手验证成功那次逐调用一致，**149 效果验收归岳**——岳 2026-09-24 验收通过（刚载入裸调直接成功），issue #5 关闭（`tasks/034-activate-export-page-full.md` §交卷记录，`outputs/034_*`）
 
 - 035 patch-pin（M3 第 3 片，修单个引脚连接；connector/daemon 零改动仍 **0.4.23**）: 三形态 disconnect/connect/reconnect 离线+真机全收官——真机各 applied + saved + 重审 resolved + 幂等 already_applied + stale exit 4 零写入（disconnect 用真架 `nc_pins:["4"]`；connect/reconnect 用 test-only facts 架，must_connect 事实逐字标注测试编造，临时 cwd `%TEMP%\bw035c\`，真库未写）；pin 级验收 = **活网表 + 画布双证**（缺一 exit 3 `verification_disagrees`），导出降级事故报告；范围核对分家定案「**导出新鲜当且仅当本 run 无删除**」（含删除→画布身份级 `wiresVanished == [attachment.primitive_id]`，纯 create→导出核对）；`edit plan --pin` 共享选择器（035 与 029 decap `--report` 共用：多条命中拒绝点名 / 无匹配拒绝 / 配 `--file` 拒绝，真机三态实证）；NC 判据统一 `pin_ruling`/`nc_violation`（规则与 repair 同一函数），`is_auto_net` 词表扩为 `^(NET\d+|\$\S+)$`——导出与活网表对同一匿名网给两个名字（`NET3` vs `$57N2`），stale 检查两自动名视为同一岛、用户命名网仍逐字比；四条宿主习性入 SKILL 坑 24（导出对删除永不重算 / 悬空脚单成员自动网双名 / 相接线合并 primitive 接点重复上报 / `doc.new` name 被忽略）；netlabel 附着拒绝并点名（本机 `sch_PrimitiveNetLabel` 连读都不存在，不给 connector 加无法验收的类别）；pytest **1507**（+60 over 1447），connector **419** / tsc 不变，变异四轮 2+2+7+4 全 CAUGHT；主代理复验 sha256 6 件一致、三线复跑全绿、现场零残留（`tasks/035-patch-pin.md` §交卷记录，`outputs/035{,c,d}_*`）
+
+- 036 insert-subcircuit（M3 第 4 片，插入 RC/分压子电路；connector/daemon 零改动仍 **0.4.23**）: **首个无驱动规则的切片**——入口 `edit plan --insert <rc-lowpass|divider>`（AI 决定插什么、工具保证插得对；值/lcsc 全显式无默认）；T1 rc-lowpass 含删除（035 附着物机制复用）、T2 divider 纯 create，两模板真机各 applied + saved + 幂等 already_applied + stale exit 4 零写入（只碰 test 窗）；判据差入码：幂等与回读 = **plan 自己的 postconditions**（一个函数两用），双证缺一 exit 3；范围分家照旧；新增规矩 **apply 后全规则 findings 只许减不许增**（签名 = rule|severity|component|pins|命名网，自动网名不计入）；落点 = **两件一起**的九宫阶梯（模板自带相对偏移 + bbox 干涉）；三条宿主新习性入 SKILL 坑 25（线点重复→远端取最远点 / 撞工程全局位号被静默改名→位号池取「页面 ∪ 工程导出」/ findings 换措辞与自动网重编号不算新增）；pytest **1570**（+63 over 1507），connector 419 / tsc 不变，变异 3/3 CAUGHT；遗留 036b：029 位号池同款盲点修复（主代理已批，随下一批）（`tasks/036-insert-subcircuit.md` §交卷记录，`outputs/036_*`）
