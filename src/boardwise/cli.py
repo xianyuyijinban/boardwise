@@ -45,17 +45,20 @@ from .core.changeplan import (
     COMPONENT_VALUE_KIND,
     CONNECTION_KINDS,
     INSERT_SUBCIRCUIT_KIND,
+    MOVE_BLOCK_KIND,
     PATCH_PIN_KIND,
     TEMPLATE_DIVIDER,
     TEMPLATE_RC_LOWPASS,
     ChangePlan,
     ChangePlanError,
     PlanAttachment,
+    PlanMove,
     PlanPart,
     PlanSource,
     add_component_plan,
     component_value_plan,
     insert_subcircuit_plan,
+    move_block_plan,
     patch_pin_plan,
     resolve_on_page,
     sha256_of,
@@ -655,8 +658,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     # ---- 036: the third way in — an explicit request, with no rule at all ----
     edit_plan.add_argument(
-        "--insert", default=None, metavar="TEMPLATE",
-        help=(
+        "--insert", default=None, metavar="TEMPLATE",        help=(
             "Insert a whole sub-circuit instead of repairing a finding (036): "
             "`rc-lowpass` (series R with a shunt C to ground — it removes the wire "
             "that joins the anchor pin to its net, so it needs --pin) or `divider` "
@@ -673,6 +675,31 @@ def build_parser() -> argparse.ArgumentParser:
             "is the anchor). Refused when it has no geometry on the page — a "
             "divider hanging off nothing is not a divider."
         ),
+    )
+    # ---- 037: the fourth way in — the caller names a group and a delta ------
+    edit_plan.add_argument(
+        "--move", action="store_true",
+        help=(
+            "Move a block of parts locally (037): `--designators R7,C9 --dx 100 --dy 0`. "
+            "The delta must be a whole number of 5-unit grid steps, the group must be "
+            "parts (not a sheet frame), and every wire attached to the group is taken off "
+            "and drawn again — the host moves a part without dragging its wires "
+            "(measured, `outputs/037_probe.txt`). Refuses anything it cannot move without "
+            "guessing: a label or flag on a boundary wire, a T through a group pin, a "
+            "target area that is occupied, an unknown or duplicated designator."
+        ),
+    )
+    edit_plan.add_argument(
+        "--designators", default=None, metavar="R7,C9",
+        help="For `--move`: the parts to move together, comma-separated (≥1).",
+    )
+    edit_plan.add_argument(
+        "--dx", default=None, metavar="UNITS",
+        help="For `--move`: the horizontal delta, in canvas units (a multiple of 5).",
+    )
+    edit_plan.add_argument(
+        "--dy", default=None, metavar="UNITS",
+        help="For `--move`: the vertical delta, in canvas units (a multiple of 5).",
     )
     for flag, text in (
         ("--r", "For `--insert rc-lowpass`: the series resistor's value (e.g. 1k)."),
@@ -5840,6 +5867,8 @@ def _cmd_edit_plan(args: argparse.Namespace) -> int:
     verified recipe, an exhausted landing ladder, a net with no connection
     option, or a before/after pair the plan's own validation would refuse.
     """
+    if getattr(args, "move", False):
+        return _cmd_edit_plan_move(args)
     if getattr(args, "insert", None):
         return _cmd_edit_plan_insert(args)
     if getattr(args, "report", None):
@@ -6151,6 +6180,254 @@ def _finding_signature(finding) -> str:
 def _baseline_findings(model) -> list[str]:
     """Every finding the project's rules report right now, sorted and deduped."""
     return sorted({_finding_signature(item) for item in run_review(model)})
+
+
+def _cmd_edit_plan_move(args: argparse.Namespace) -> int:
+    """``edit plan --move``: a group of parts and a delta -> a ChangePlan (037).
+
+    The caller says *what* to move and *how far*; this builder looks at the live
+    page for everything a safe move needs — the parts' poses (the stale judgement),
+    their pins, which wires touch them and how each one has to be redrawn, whether
+    the target area is free — and reads the live export once for the two things
+    that belong together: the plan's `inputSha256` and the baseline findings apply
+    refuses to grow.
+
+    Everything it cannot do without guessing is refused by name (037 §一):
+    an unknown or duplicated designator, a delta off the grid, a part off the grid,
+    a boundary wire attached to a label or a flag, a T through a group pin, a
+    target that lands on something.
+
+    Exit codes: 0 plan built; 2 the page or the export cannot be read; 5 the move
+    cannot be planned from what was asked.
+    """
+    import asyncio
+
+    from .engines import addcomponent, moveblock
+    from .engines import patchpin as _patchpin
+
+    def fail(message: str) -> int:
+        print(f"boardwise edit plan: {message}", file=sys.stderr)
+        return 5
+
+    names = [item.strip().upper() for item in str(args.designators or "").split(",")
+             if item.strip()]
+    if not names:
+        return fail(
+            "--move needs --designators R7,C9 (the parts to move together, ≥1) — "
+            "一位号一组，显式给"
+        )
+    if len(set(names)) != len(names):
+        return fail(f"--designators lists a designator twice: {', '.join(names)}")
+    if args.dx is None or args.dy is None:
+        return fail("--move needs both --dx and --dy (the delta in canvas units)")
+    try:
+        dx, dy = float(args.dx), float(args.dy)
+    except (TypeError, ValueError):
+        return fail(f"--dx/--dy must be numbers, got {args.dx!r} / {args.dy!r}")
+    if args.file:
+        return fail(
+            "--move builds from the live page and records the live export's own sha256, "
+            "so it does not read --file — drop the flag rather than having it ignored"
+        )
+    if args.report or args.insert:
+        return fail("--move is its own way in: it takes neither --report nor --insert")
+    if not moveblock.on_grid(dx) or not moveblock.on_grid(dy):
+        return fail(
+            f"the delta ({dx:g}, {dy:g}) is not a multiple of the {moveblock.GRID:g}-unit "
+            "grid — 网格歪了线就再也接不上（037 §一）；改成 5 的整数倍再来"
+        )
+
+    BridgeClient, BridgeError, port, token = _open_cli(args)
+    notes: list[str] = []
+
+    async def run() -> int:
+        try:
+            client = await BridgeClient.open(
+                _bridge_uri(port), token, "cli", client="boardwise-cli"
+            )
+        except (OSError, BridgeError) as exc:
+            print(
+                f"boardwise edit plan: the live page is required for a move-block plan "
+                f"({exc})",
+                file=sys.stderr,
+            )
+            return 2
+
+        async def call(action, params, purpose):
+            return await client.call(action, params, **_edit_target_kwargs(args))
+
+        try:
+            listing = await call("doc.list", {}, "confirm the focused page")
+            page = _active_document_uuid(listing) if isinstance(listing, dict) else ""
+            geometry = await call("sch.geometry", {}, "read the page before planning")
+            if not isinstance(geometry, dict):
+                print(
+                    "boardwise edit plan: the page could not be read, so the group's poses "
+                    "and its wiring are unknown — nothing to plan from",
+                    file=sys.stderr,
+                )
+                return 2
+            netlist = await call(
+                "sch.netlist", {"type": "EasyEDA"},
+                "read the editor's own netlist for the identity claim",
+            )
+            live = _patchpin.live_pin_nets(netlist)
+            # Per-part pin geometry: one call each, and they are what decide which
+            # wires touch the group (an endpoint exactly on a pin — 035's rule).
+            pins: dict[str, dict[str, tuple[float, float]]] = {}
+            for name in names:
+                primitive = addcomponent.primitive_id_of(geometry, name)
+                if not primitive:
+                    pins[name] = {}
+                    continue
+                payload = await call(
+                    "sch.component_pins", {"primitiveId": primitive},
+                    f"read {name}'s own pin coordinates",
+                )
+                pins[name] = addcomponent.pin_points(payload)
+            export = await _live_project_export(call, notes)
+        finally:
+            await client.close()
+        if export is None:
+            print(
+                "boardwise edit plan: the live project export could not be read, so the "
+                "plan's baseline findings (and the sha256 it carries) are unknown — "
+                "nothing to plan from",
+                file=sys.stderr,
+            )
+            return 2
+        digest = hashlib.sha256(export).hexdigest()
+        model = _model_from_export(export, notes)
+        if model is None:
+            print(
+                "boardwise edit plan: the live project export could not be parsed, so the "
+                "baseline findings are unknown — nothing to plan from",
+                file=sys.stderr,
+            )
+            return 2
+
+        try:
+            group = moveblock.resolve_group(geometry, names, pins)
+            moveblock.check_grid(group, dx, dy)
+            wires = moveblock.plan_wires(geometry, group, pins, dx, dy)
+            moveblock.check_target_free(geometry, group, dx, dy)
+        except moveblock.MoveRefused as exc:
+            print(f"boardwise edit plan: {exc}", file=sys.stderr)
+            return 5
+        if not wires:
+            notes.append(
+                "no wire touches this group, so the move needs no redraw — the parts are "
+                "simply modified (and the netlist identity still has to hold)"
+            )
+        elif all("both ends on the group" in item.why for item in wires):
+            notes.append(
+                "every wire on this group is internal, so each one is redrawn with the same "
+                "shape shifted by the delta"
+            )
+
+        islands = moveblock.plan_islands(live, group, pins)
+        moves = [
+            PlanMove(
+                designator=item.designator, primitive_id=item.primitive_id,
+                from_at=item.at, from_rotation=item.rotation,
+                to_at=(item.x + dx, item.y + dy),
+            )
+            for item in group
+        ]
+        source = PlanSource(
+            input_sha256=digest,
+            project_uuid=str(
+                (listing.get("projects") or [{}])[0].get("projectUuid")
+                if isinstance(listing, dict) and listing.get("projects")
+                else ""
+            ),
+            page_uuid=page,
+            host_version="",
+            connector_version=_repo_connector_version(),
+        )
+        plan = move_block_plan(
+            source,
+            moves=moves,
+            wire_ops=[moveblock.wire_op_from(item) for item in wires],
+            islands=islands,
+            designators=names,
+            dx=dx,
+            dy=dy,
+            baseline_findings=_baseline_findings(model),
+        )
+
+        print(
+            f"boardwise edit plan: --move {', '.join(names)} by ({dx:g}, {dy:g}) "
+            f"— {len(moves)} part(s), {len(wires)} wire(s) redrawn"
+        )
+        for item in moves:
+            print(
+                f"  move    {item.designator} ({item.primitive_id}) "
+                f"({item.from_at[0]:g}, {item.from_at[1]:g}) rot {item.from_rotation:g}° → "
+                f"({item.to_at[0]:g}, {item.to_at[1]:g})"
+            )
+        for item in wires:
+            print(
+                f"  wire    {item.primitive_id} net {item.net or '(unnamed)'} — {item.why}"
+            )
+        print(
+            f"identity: {len(islands)} pin(s) recorded with the mates they have now — "
+            "the move must change none of them"
+        )
+        print(
+            f"snapshot: sha256 {digest} (the live project export this plan was built "
+            f"against)  pageUuid {page or '(none)'}"
+        )
+        print(f"baseline: {len(plan.change.baseline_findings)} finding(s) — apply refuses to save if the set grows")
+        for note in notes:
+            print(f"note: {note}")
+        if args.out_path:
+            plan.dump(args.out_path)
+            print(f"plan written to {args.out_path}")
+        else:
+            print(json.dumps(plan.to_jsonable(), ensure_ascii=False, indent=2))
+        if args.json_path:
+            Path(args.json_path).write_text(
+                json.dumps(
+                    {
+                        "command": "plan",
+                        "ok": True,
+                        "kind": MOVE_BLOCK_KIND,
+                        "designators": names,
+                        "delta": {"dx": dx, "dy": dy},
+                        "moves": [
+                            {
+                                "designator": item.designator,
+                                "primitiveId": item.primitive_id,
+                                "from": {"x": item.from_at[0], "y": item.from_at[1],
+                                         "rotation": item.from_rotation},
+                                "to": {"x": item.to_at[0], "y": item.to_at[1]},
+                            }
+                            for item in moves
+                        ],
+                        "wireOps": [
+                            {"primitiveId": item.primitive_id, "net": item.net,
+                             "why": item.why,
+                             "pointsBefore": [list(p) for p in item.points_before],
+                             "pointsAfter": [list(p) for p in item.points_after]}
+                            for item in wires
+                        ],
+                        "islands": [{"pin": item.pin, "mates": item.mates}
+                                    for item in islands],
+                        "baselineFindings": plan.change.baseline_findings,
+                        "sha256": digest,
+                        "planPath": args.out_path,
+                        "plan": plan.to_jsonable(),
+                        "notes": notes,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        return 0
+
+    return asyncio.run(run())
 
 
 def _cmd_edit_plan_insert(args: argparse.Namespace) -> int:
@@ -7258,6 +7535,126 @@ def _cmd_edit_plan_add_component(args: argparse.Namespace) -> int:
     return asyncio.run(run())
 
 
+def _preview_move(plan, path, model, digest, args: argparse.Namespace) -> int:
+    """``edit preview`` for a `move-block` plan (037).
+
+    Read-only and never writes. What a signer needs is exactly what it prints: the
+    parts with the pose each has and the point each goes to, every wire that is
+    taken off and what it becomes, and the identity claim — because the whole risk
+    of a local move is a connection quietly changing.
+
+    The preconditions are about the **live canvas** (poses, the wires' presence,
+    free space), so without the export the plan was built against, preview lists
+    them and says only `edit apply` can re-check them. With ``--file`` given (the
+    export itself) the model-level ones are checked for real: the parts must still
+    be in it.
+    """
+    import json
+
+    moves = list(plan.change.moves)
+    ops = list(plan.change.wire_ops)
+    print(f"boardwise edit preview: {args.plan}")
+    print(
+        f"plan: move-block {', '.join(item.designator for item in moves)} by "
+        f"({float(plan.target.x or 0.0):g}, {float(plan.target.y or 0.0):g})"
+    )
+    if path is not None and model is not None:
+        print(f"snapshot: {path} sha256 matches the plan's ({digest})")
+    else:
+        print(
+            "snapshot: none given — this plan carries the live export's sha256, not a "
+            "file of yours; the page-level preconditions are re-checked by `edit apply`"
+        )
+    for item in moves:
+        print(
+            f"  move    {item.designator} ({item.primitive_id}) "
+            f"({item.from_at[0]:g}, {item.from_at[1]:g}) rot {item.from_rotation:g}° → "
+            f"({item.to_at[0]:g}, {item.to_at[1]:g})"
+        )
+    if not ops:
+        print("  wire    (none — no wire touches this group)")
+    for item in ops:
+        print(
+            f"  wire    {item.primitive_id} net {item.net or '(unnamed)'}: "
+            f"{[tuple(p) for p in item.points_before]} → {[tuple(p) for p in item.points_after]}"
+        )
+    print(
+        f"identity: {len(plan.change.islands)} pin(s) must keep exactly the mates they had "
+        "— the move may not change any connection"
+    )
+    print("postconditions (what apply will read back):")
+    for line in plan.expected_postcondition:
+        print(f"  * {line}")
+
+    verdicts: list[tuple[str, str]] = []
+    if model is not None:
+        missing = [item.designator for item in moves if item.designator not in model.components]
+        verdicts.append((
+            "the parts are still in the export the plan was built against",
+            f"missing: {', '.join(missing)}" if missing else "ok",
+        ))
+        verdicts.append((
+            "the target area is still free",
+            "live page only — check with `edit apply`",
+        ))
+    else:
+        verdicts = [
+            (line, "live page only — check with `edit apply`")
+            for line in plan.preconditions
+        ]
+    print("preconditions:")
+    for line, verdict in verdicts:
+        print(f"  [{verdict}] {line}")
+    broken = [line for line, verdict in verdicts if verdict not in ("ok",)
+              and "live page only" not in verdict]
+    if broken:
+        print(
+            "boardwise edit preview: 有一条前置条件在快照里已经不成立（见上）—— 重新 "
+            "`edit plan`，或确认现场后再 apply",
+            file=sys.stderr,
+        )
+        return 4
+    if args.json_path:
+        Path(args.json_path).write_text(
+            json.dumps(
+                {
+                    "command": "preview",
+                    "ok": True,
+                    "kind": MOVE_BLOCK_KIND,
+                    "file": str(path) if path is not None else None,
+                    "planPath": args.plan,
+                    "plan": plan.to_jsonable(),
+                    "designators": [item.designator for item in moves],
+                    "moves": [
+                        {
+                            "designator": item.designator,
+                            "primitiveId": item.primitive_id,
+                            "from": {"x": item.from_at[0], "y": item.from_at[1],
+                                     "rotation": item.from_rotation},
+                            "to": {"x": item.to_at[0], "y": item.to_at[1]},
+                        }
+                        for item in moves
+                    ],
+                    "wireOps": [
+                        {"primitiveId": item.primitive_id, "net": item.net,
+                         "pointsBefore": [list(p) for p in item.points_before],
+                         "pointsAfter": [list(p) for p in item.points_after]}
+                        for item in ops
+                    ],
+                    "islands": [{"pin": item.pin, "mates": item.mates}
+                                for item in plan.change.islands],
+                    "preconditions": [
+                        {"claim": line, "verdict": verdict} for line, verdict in verdicts
+                    ],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    return 0
+
+
 def _preview_insert(plan, path, model, digest, args: argparse.Namespace) -> int:
     """``edit preview`` for an `insert-subcircuit` plan (036).
 
@@ -7471,6 +7868,30 @@ def _cmd_edit_preview(args: argparse.Namespace) -> int:
         print(f"boardwise edit preview: {exc}", file=sys.stderr)
         return 5
     insert = plan.change.kind == INSERT_SUBCIRCUIT_KIND
+    if plan.change.kind == MOVE_BLOCK_KIND and not args.file:
+        return _preview_move(plan, None, None, "", args)
+    if plan.change.kind == MOVE_BLOCK_KIND:
+        path = Path(args.file)
+        if not path.is_file():
+            print(f"boardwise edit preview: {path}: not a file", file=sys.stderr)
+            return 2
+        digest = sha256_of(path)
+        if digest != plan.source.input_sha256:
+            print(
+                f"boardwise edit preview: 快照已失效 — {path} hashes {digest} but the plan "
+                f"was built against {plan.source.input_sha256}; nothing was checked",
+                file=sys.stderr,
+            )
+            return 4
+        try:
+            model, _board = _load_model(path, view=args.view)
+        except EncryptedProjectError as exc:
+            print(f"boardwise edit preview: {exc}", file=sys.stderr)
+            return 2
+        except Exception as exc:  # noqa: BLE001 — the CLI must not traceback
+            print(f"boardwise edit preview: {path}: {exc}", file=sys.stderr)
+            return 2
+        return _preview_move(plan, path, model, digest, args)
     if insert and not args.file:
         return _preview_insert(plan, None, None, "", args)
     if not args.file:
@@ -10594,6 +11015,538 @@ async def _edit_apply_insert_flow(
     return done(0, "applied")
 
 
+def _render_edit_apply_move(report: dict, args: argparse.Namespace) -> int:
+    """Print the human summary of a move-block apply, write ``--json``, exit."""
+    import json
+
+    code = int(report.get("exitCode") or 0)
+    reason = report.get("reason") or ""
+    print(
+        f"boardwise edit apply: move {', '.join(report.get('designators') or [])} by "
+        f"({report.get('delta', {}).get('dx', 0):g}, {report.get('delta', {}).get('dy', 0):g})"
+        f"  [{report.get('outcome')}{': ' + reason if reason else ''}]"
+    )
+    for step in report.get("steps") or []:
+        mark = "ok" if step["ok"] else ("UNKNOWN" if step["unknown"] else "FAILED")
+        line = f"  {mark:<7} {step['action']:<26} {step['purpose']}"
+        if not step["ok"]:
+            line += f" — [{step['code']}] {step['message']}"
+        print(line)
+    probe = report.get("idempotence") or {}
+    if probe:
+        print(
+            f"  probe   {probe.get('state')} — "
+            f"{probe.get('reason') or ('postconditions ' + ('hold' if probe.get('satisfied') else 'do not hold'))}"
+        )
+    for item in report.get("moves") or []:
+        print(
+            f"  move    {item['designator']} ({item['primitiveId']}) "
+            f"({item['from']['x']:g}, {item['from']['y']:g}) → "
+            f"({item['to']['x']:g}, {item['to']['y']:g})  "
+            f"[{'done' if item.get('ok') else 'not moved'}]"
+        )
+    for item in report.get("wireOps") or []:
+        print(f"  wire    {item['primitiveId']} net {item.get('net') or '(unnamed)'} redrawn"
+              f"  [{'done' if item.get('ok') else 'not redrawn'}]")
+    verification = report.get("verification") or {}
+    if verification:
+        live = verification.get("live") or []
+        canvas = verification.get("canvas") or []
+        print(f"  live    the editor's own netlist — "
+              f"{'ok' if not live else str(len(live)) + ' problem(s): ' + '; '.join(live)}")
+        print(f"  canvas  poses and wire endpoints — "
+              f"{'ok' if not canvas else str(len(canvas)) + ' problem(s): ' + '; '.join(canvas)}")
+    identity = report.get("identity") or {}
+    if identity:
+        print(
+            "  identity "
+            + ("ok — no pin changed company" if not identity.get("differences")
+               else f"CHANGED — {identity['differences']}")
+        )
+    diff = report.get("range") or {}
+    if diff:
+        print(f"  range   {json.dumps(diff, ensure_ascii=False)}")
+    if report.get("findings"):
+        print(f"  findings {json.dumps(report['findings'], ensure_ascii=False)}")
+    if report.get("persistence"):
+        print(f"  persistence: {report['persistence']}")
+    for note in report.get("notes") or []:
+        print(f"  note: {note}")
+    if report.get("final"):
+        print(f"boardwise edit apply: {report['final']}")
+    if args.json_path:
+        Path(args.json_path).write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    return code
+
+
+async def _edit_apply_move_flow(
+    client, bridge_error, plan, args: argparse.Namespace, started: float
+) -> int:
+    """Execute one `move-block` plan against a running editor (037 §2).
+
+    The five protections, reshaped for a move:
+
+    * **the probe first**: the plan's own postconditions (every part at its target
+      pose, the netlist identity) decide "already done" — zero writes. There is no
+      rule to ask, so the plan's claims are what is read.
+    * **stale**: every part must still be at the pose the plan measured and every
+      wire the plan takes off must still be there; a group somebody nudged by hand
+      is refused (exit 4), and a *partially* moved group is refused by the same
+      check rather than finished — half a move is a state nobody authorised.
+    * **the writes** in the measured order (the host does not drag wires, so the
+      wires have to follow): move each part, take off every wire the plan named,
+      draw each one again as planned.
+    * **the read-back**: the poses and the redrawn wires' endpoints on the canvas,
+      and — the acceptance's main judgement — a **whole-netlist identity diff**
+      between the read taken before the writes and the one after. Any pin whose
+      company changed is exit 2, named pin by pin. A leg that cannot be read is
+      exit 3, never success.
+    * **no new findings** (036's rule): the rules' set may shrink, never grow.
+    """
+    from .engines import addcomponent, moveblock, patchpin
+
+    records: list[dict] = []
+    notes: list[str] = []
+    moves = list(plan.change.moves)
+    ops = list(plan.change.wire_ops)
+    names = [item.designator for item in moves]
+    page = plan.source.page_uuid
+    dx = float(plan.target.x or 0.0)
+    dy = float(plan.target.y or 0.0)
+    report: dict = {
+        "command": "apply",
+        "ok": False,
+        "kind": MOVE_BLOCK_KIND,
+        "outcome": "",
+        "reason": "",
+        "exitCode": 0,
+        "planPath": str(args.plan),
+        "plan": plan.to_jsonable(),
+        "designators": names,
+        "delta": {"dx": dx, "dy": dy},
+        "moves": [
+            {
+                "designator": item.designator, "primitiveId": item.primitive_id,
+                "from": {"x": item.from_at[0], "y": item.from_at[1],
+                         "rotation": item.from_rotation},
+                "to": {"x": item.to_at[0], "y": item.to_at[1]},
+                "ok": False,
+            }
+            for item in moves
+        ],
+        "wireOps": [
+            {"primitiveId": item.primitive_id, "net": item.net,
+             "pointsBefore": [list(p) for p in item.points_before],
+             "pointsAfter": [list(p) for p in item.points_after], "ok": False}
+            for item in ops
+        ],
+        "page": {"uuid": page, "guard": "enforced" if page else "unavailable"},
+        "idempotence": {},
+        "write": {"calls": 0},
+        "verification": {},
+        "identity": {},
+        "range": {},
+        "findings": {},
+        "save": {},
+        "persistence": "",
+        "steps": records,
+        "notes": notes,
+        "final": "",
+    }
+
+    def done(code: int, outcome: str, reason: str = "") -> int:
+        report["exitCode"] = code
+        report["outcome"] = outcome
+        report["ok"] = code == 0
+        if reason:
+            report["reason"] = reason
+        return _render_edit_apply_move(report, args)
+
+    async def call(action, params, purpose, *, writes=False):
+        try:
+            data = await client.call(action, params, **_edit_target_kwargs(args))
+        except bridge_error as exc:
+            records.append(_edit_step(action, purpose, False, exc, wrote=writes))
+            return None
+        records.append(_edit_step(action, purpose, True, wrote=writes))
+        return data
+
+    # ---- 1. the page guard, and the two layers of focus (018 §B2) ---------
+    if page:
+        listing = await call("doc.list", {}, "confirm the focused page is the plan's page")
+        if isinstance(listing, dict):
+            focused = _active_document_uuid(listing)
+            if focused and focused != page:
+                notes.append(
+                    f"the editor has {focused} focused and the plan targets {page}; "
+                    "nothing was written"
+                )
+                return done(4, "refused", "page_mismatch")
+    else:
+        notes.append(
+            "pageUuid guard unavailable — this plan carries no pageUuid, so `guardPage` "
+            "returns early (measured, actions.ts)"
+        )
+    identity = await call("sys.identity", {}, "confirm the editor's two layers of focus agree")
+    if isinstance(identity, dict) and identity.get("consistent") is False:
+        notes.append("焦点不一致，请先切换工程再执行 — 没有发出任何写动作")
+        return done(4, "refused", "focus_inconsistent")
+
+    # ---- 2. the probe: the plan's own postconditions, read on the board ----
+    geometry = await call("sch.geometry", {}, "read the page before writing")
+    if geometry is None:
+        last = records[-1]
+        notes.append(
+            "the page could not be read, so the plan's preconditions were not checked; "
+            "nothing was written"
+        )
+        return done(3 if last["unknown"] else 4, "unknown" if last["unknown"] else "refused",
+                    "precondition_unreadable")
+    netlist_before = patchpin.live_pin_nets(
+        await call("sch.netlist", {"type": "EasyEDA"},
+                   "read the editor's own netlist before writing (the identity baseline)")
+    )
+    before_export = await _live_project_export(call, notes)
+    before_model = _model_from_export(before_export, notes) if before_export else None
+    state = moveblock.postcondition_problems(plan, geometry=geometry, live=netlist_before)
+    report["idempotence"] = {
+        "state": "satisfied" if moveblock.all_satisfied(state) else "not_satisfied",
+        "satisfied": moveblock.all_satisfied(state),
+        "problems": state,
+        "how": (
+            "engines/moveblock.postcondition_problems — the plan's own postconditions "
+            "(target poses + the recorded netlist identity; there is no rule for this kind)"
+        ),
+    }
+    if moveblock.all_satisfied(state):
+        notes.append(
+            "every part is already at its planned point and the netlist still shows the "
+            "recorded islands — a repeat run or a hand move; nothing was written (idempotent)"
+        )
+        report["final"] = "already satisfied; the page was not touched"
+        return done(0, "already_applied", "already_applied")
+
+    # ---- 3. stale: the poses the plan measured, and the wires it named -----
+    page_poses = moveblock.poses(geometry)
+    for item in moves:
+        part = page_poses.get(item.designator)
+        if part is None:
+            notes.append(
+                f"{item.designator} is not on the focused page — the plan's precondition "
+                "(`the part is still where I measured it`) is broken; nothing was written"
+            )
+            return done(4, "refused", "part_missing")
+        if (part.x, part.y) != item.from_at or abs(part.rotation - item.from_rotation) > 1e-6:
+            notes.append(
+                f"{item.designator} is at ({part.x:g}, {part.y:g}) rot {part.rotation:g}°, "
+                f"but the plan measured ({item.from_at[0]:g}, {item.from_at[1]:g}) rot "
+                f"{item.from_rotation:g}° — 快照已失效（也可能是上次只搬了一半：半成品不接着搬，"
+                "人工确认后重新 plan）；没有写"
+            )
+            return done(4, "refused", "stale_pose")
+    for item in ops:
+        if not patchpin.primitive_present(geometry, item.primitive_id):
+            notes.append(
+                f"the wire this plan redraws ({item.primitive_id}) is not on the page any "
+                "more — the plan's precondition is broken; nothing was written"
+            )
+            return done(4, "refused", "wire_missing")
+    target_problems: list[str] = []
+    try:
+        moveblock.check_target_free(geometry, [
+            moveblock.Part(
+                designator=item.designator, primitive_id=item.primitive_id,
+                x=item.from_at[0], y=item.from_at[1], rotation=item.from_rotation,
+                at=item.from_at,
+            )
+            for item in moves
+        ], dx, dy)
+    except moveblock.MoveRefused as exc:
+        target_problems.append(str(exc))
+    if target_problems:
+        notes.append(
+            "the target area is no longer free — the plan's precondition is broken; "
+            "nothing was written (" + "; ".join(target_problems) + ")"
+        )
+        return done(4, "refused", "target_occupied")
+
+    # ---- 4. the writes: parts first, then off with the wires, then on ------
+    for index, item in enumerate(moves):
+        params = {
+            "primitiveId": item.primitive_id,
+            "x": item.to_at[0], "y": item.to_at[1],
+            **({"pageUuid": page} if page else {}),
+        }
+        answered = await call(
+            "sch.modify_primitive", params,
+            f"move {item.designator} to ({item.to_at[0]:g}, {item.to_at[1]:g})",
+            writes=True,
+        )
+        report["write"]["calls"] += 1
+        if answered is None:
+            last = records[-1]
+            readback = await call("sch.geometry", {},
+                                  f"read the page back after {item.designator}'s move went wrong")
+            at_target = False
+            if isinstance(readback, dict):
+                pose = moveblock.poses(readback).get(item.designator)
+                at_target = bool(pose and (pose.x, pose.y) == item.to_at)
+            report["moves"][index]["ok"] = at_target
+            if at_target:
+                notes.append(
+                    f"{item.designator}'s move reported a failure but the read-back shows it "
+                    "at its target — continuing, because the page is the authority"
+                )
+                continue
+            # The host's `modify` intermittently throws before it changes anything
+            # (measured: "Cannot destructure property 'cmdKey'" — outputs/037_probe.txt).
+            # That failure is *verified* not to have landed (the pose is unchanged), so
+            # one retry is allowed — and only then, because a blind retry after a
+            # timeout is exactly what the house rule forbids.
+            if last["unknown"]:
+                notes.append(
+                    f"{item.designator}'s move outcome is UNKNOWN ([{last['code']}] "
+                    f"{last['message']}) and the read-back does not show it at its target; "
+                    "nothing was retried"
+                )
+                return done(3, "unknown", "move_unknown")
+            if not isinstance(readback, dict):
+                notes.append(
+                    f"{item.designator}'s move failed and the page could not be read back, "
+                    "so whether it landed cannot be stated"
+                )
+                return done(3, "unknown", "readback_unavailable")
+            notes.append(
+                f"{item.designator}'s move was refused ([{last['code']}] {last['message']}); "
+                "the read-back proves nothing moved, so it is tried once more "
+                "(the host's modify is measured to fail this way before changing anything)"
+            )
+            answered = await call(
+                "sch.modify_primitive", params,
+                f"move {item.designator} to ({item.to_at[0]:g}, {item.to_at[1]:g}) (one retry, "
+                "the first attempt provably did not land)",
+                writes=True,
+            )
+            report["write"]["calls"] += 1
+            if answered is None:
+                notes.append(
+                    f"{item.designator} could not be moved after one verified retry — "
+                    "stopping here (the group is now half-moved; re-plan after looking at "
+                    "the page)"
+                )
+                return done(2, "failed", "move_refused")
+        report["moves"][index]["ok"] = True
+        if isinstance(answered, dict) and answered.get("after"):
+            report["moves"][index]["answered"] = answered
+
+    for index, item in enumerate(ops):
+        reply = await call(
+            "sch.delete_primitives",
+            {"primitiveIds": [item.primitive_id],
+             **({"pageUuid": page} if page else {})},
+            f"take off the wire {item.primitive_id} (the host does not drag it with the part)",
+            writes=True,
+        )
+        report["write"]["calls"] += 1
+        if not isinstance(reply, dict):
+            last = records[-1]
+            if last["unknown"]:
+                notes.append(
+                    f"the delete of {item.primitive_id} is UNKNOWN — reading the page back "
+                    "rather than retrying it"
+                )
+            else:
+                notes.append(
+                    f"the delete of {item.primitive_id} reported a failure; continuing, "
+                    "because the page is the authority"
+                )
+        else:
+            deleted = [str(entry) for entry in reply.get("deleted") or []]
+            if item.primitive_id not in deleted:
+                notes.append(
+                    f"the delete did not take {item.primitive_id} (deleted={deleted}, "
+                    f"notFound={reply.get('notFound')}, failed={reply.get('failed')}) — "
+                    "stopping (a wire that is still there plus a redrawn copy would short)"
+                )
+                return done(2, "failed", "delete_refused")
+
+    for index, item in enumerate(ops):
+        points = [list(point) for point in item.points_after]
+        route = addcomponent.wire_route(
+            (points[0][0], points[0][1]), (points[-1][0], points[-1][1])
+        )
+        # The planned points are already orthogonal (029's wire_route built them, and
+        # an internal wire keeps its own shape); the route is re-derived only to be
+        # sure a diagonal can never reach the host (it hangs the editor, 029-c).
+        params: dict = {"points": points}
+        if item.net:
+            params["net"] = item.net
+        if page:
+            params["pageUuid"] = page
+        answered = await call(
+            "sch.place_wire", params,
+            f"draw {item.primitive_id}'s replacement: {len(points)} orthogonal point(s)"
+            + (f", carrying net {item.net!r}" if item.net else " (unnamed, as it was)"),
+            writes=True,
+        )
+        report["write"]["calls"] += 1
+        if answered is None:
+            notes.append(
+                f"the redrawn wire for {item.primitive_id} was refused — the connection is "
+                "gone until it is drawn; stopping (nothing was saved)"
+            )
+            return done(2, "failed", "wire_refused")
+        report["wireOps"][index]["ok"] = True
+        del route
+
+    # ---- 5. the read-back: poses and endpoints, then the identity ----------
+    verify = await call("sch.geometry", {}, "read the page back independently after the writes")
+    if verify is None:
+        notes.append(
+            "the independent read-back failed — the page's state cannot be stated, "
+            "although the writes were issued"
+        )
+        return done(3, "unknown", "readback_unavailable")
+    netlist_after = patchpin.live_pin_nets(
+        await call("sch.netlist", {"type": "EasyEDA"},
+                   "read the editor's own netlist again (the identity judgement)")
+    )
+    differences = moveblock.netlist_differences(netlist_before, netlist_after)
+    report["identity"] = {
+        "action": "sch.netlist before vs after the writes",
+        "pins": len(netlist_before),
+        "differences": differences,
+    }
+    state_after = moveblock.postcondition_problems(plan, geometry=verify, live=netlist_after)
+    report["verification"] = {
+        "action": "sch.geometry (canvas) + sch.netlist (live, identity diff)",
+        "canvas": state_after["canvas"],
+        "live": [
+            f"{'.'.join(pin)}: had {before} now {after}"
+            for pin, before, after in _island_leg(netlist_before, netlist_after, plan)
+        ] + state_after["live"],
+        "ok": moveblock.all_satisfied(state_after) and not differences,
+    }
+    if differences:
+        notes.append(
+            "网表恒等失败（移动不许改任何连接）：" + "；".join(differences)
+            + " —— 事故报告；没有保存，请人工确认页面"
+        )
+        return done(2, "failed", "netlist_changed")
+    if not moveblock.all_satisfied(state_after):
+        notes.append(
+            "回读没通过计划自己的 postconditions（双证缺一判 unknown，不判成功）："
+            + ("；".join("画布腿：" + item for item in state_after["canvas"])
+               if state_after["canvas"] else "")
+            + ("；".join("活网表腿：" + item for item in state_after["live"])
+               if state_after["live"] else "")
+            + " —— 没有保存"
+        )
+        return done(3, "unknown", "verification_disagrees")
+
+    # ---- 6. the range: this path deleted wires, so the canvas is the judge --
+    before_ids = {item.primitive_id for item in patchpin.wire_segments(geometry)}
+    after_ids = {item.primitive_id for item in patchpin.wire_segments(verify)}
+    vanished = sorted(before_ids - after_ids)
+    appeared = sorted(after_ids - before_ids)
+    authorized = sorted(item.primitive_id for item in ops)
+    report["range"] = {
+        "wiresVanished": vanished,
+        "wiresAppeared": appeared,
+        "authorized": authorized,
+        "partsMoved": [item["designator"] for item in report["moves"] if item["ok"]],
+    }
+    report["rangeBasis"] = (
+        "canvas identity (sch.geometry) + live netlist (sch.netlist) — 本 run 删了线，"
+        "导出不重算，故只作事故报告附件（SKILL 坑 24）"
+    )
+    if vanished != authorized:
+        notes.append(
+            f"画布身份级范围差异不对：消失的走线是 {vanished!r}，而计划只授权删 "
+            f"{authorized!r} —— 事故报告；没有保存"
+        )
+        return done(2, "failed", "range_canvas_diff")
+
+    # ---- 6b. no new findings (there is no rule of our own to re-review) -----
+    after_export = await _live_project_export(call, notes)
+    after_model = _model_from_export(after_export, notes) if after_export else None
+    baseline = set(plan.change.baseline_findings)
+    if after_model is None:
+        report["findings"] = {"state": "unknown", "baseline": sorted(baseline)}
+        notes.append(
+            "the after-export could not be parsed, so 'did this move break something?' "
+            "could not be answered — reported as unknown, not as clean"
+        )
+    else:
+        now = set(_baseline_findings(after_model))
+        grown = sorted(now - baseline)
+        report["findings"] = {
+            "baseline": sorted(baseline), "after": sorted(now),
+            "new": grown, "resolved": sorted(baseline - now),
+        }
+        if grown:
+            notes.append(
+                "新增 finding（apply 后重跑全规则，集合只许减不许增）：" + "；".join(grown)
+                + " —— 事故报告；没有保存"
+            )
+            return done(2, "failed", "new_findings")
+    del before_model
+
+    # ---- 7. save ----------------------------------------------------------
+    saved = await call("sch.doc.save", {}, "persist the change", writes=True)
+    if saved is None:
+        last = records[-1]
+        report["save"] = {"ok": False, "code": last["code"], "message": last["message"]}
+        if last["unknown"]:
+            report["persistence"] = "unknown"
+            notes.append(
+                "the save's outcome is unknown — the move is verified on the page, but "
+                "whether it reached the file cannot be stated, and nothing was retried"
+            )
+            return done(3, "unknown", "save_unknown")
+        report["persistence"] = "placed"
+        notes.append(
+            f"the editor refused the save ([{last['code']}] {last['message']}) — the move "
+            "is on the canvas only; it is NOT persisted"
+        )
+        return done(2, "failed", "save_refused")
+    report["save"] = {"ok": True, "answered": saved}
+    report["persistence"] = "saved_unverified"
+    notes.append(
+        "persistence is capped at saved_unverified: this bridge has no close/reopen action "
+        "(009d), so only a separate reopen can promote it to saved_verified"
+    )
+    report["final"] = (
+        f"{len(moves)} part(s) moved by ({dx:g}, {dy:g}), the netlist is identical "
+        f"({len(netlist_before)} pins compared), {len(ops)} wire(s) redrawn, saved"
+    )
+    return done(0, "applied")
+
+
+def _island_leg(before, after, plan):
+    """Rows for the *plan's* pins whose company **changed** — the readable leg.
+
+    The whole-netlist diff is the judgement; these rows are what a reader wants when
+    it fails, and a row for a pin that kept its mates would be noise dressed as a
+    problem (the first real run reported ten of those and looked like ten failures
+    while the identity check underneath said ok). So only changes are returned.
+    """
+    from .engines import moveblock
+
+    was = moveblock.islands(before)
+    now = moveblock.islands(after)
+    rows = []
+    for island in plan.change.islands:
+        key = moveblock.pin_key(island.pin)
+        was_mates = sorted(".".join(mate) for mate in was.get(key, frozenset()))
+        now_mates = sorted(".".join(mate) for mate in now.get(key, frozenset()))
+        if was_mates != now_mates:
+            rows.append((key, was_mates, now_mates))
+    return rows
+
+
 def _render_edit_apply_add(report: dict, args: argparse.Namespace) -> int:
     """Print the human summary of an add-component apply, write ``--json``, exit."""
     import json
@@ -10724,6 +11677,8 @@ def _cmd_edit_apply(args: argparse.Namespace) -> int:
                 return await _edit_apply_patch_pin_flow(client, BridgeError, plan, args, started)
             if plan.change.kind == INSERT_SUBCIRCUIT_KIND:
                 return await _edit_apply_insert_flow(client, BridgeError, plan, args, started)
+            if plan.change.kind == MOVE_BLOCK_KIND:
+                return await _edit_apply_move_flow(client, BridgeError, plan, args, started)
             return await _edit_apply_flow(client, BridgeError, plan, args, started)
         finally:
             await client.close()

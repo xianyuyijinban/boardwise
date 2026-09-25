@@ -31,9 +31,9 @@ collects the current truth and the pointers.
   - `docs/images/gs-03-daemon-start.png`
   - `PROGRESS.md`
 
-## Current baseline (2026-09-25, 036 insert-subcircuit 收官; published on GitHub)
+## Current baseline (2026-09-25, 037 move-block 收官, M3 五片全满; published on GitHub)
 
-- pytest: **1570 passed** (run with `--basetemp=.tmp_pt_home` on Windows —
+- pytest: **1611 passed** (run with `--basetemp=.tmp_pt_home` on Windows —
   the host's safe-delete hook otherwise eats the summary line and fakes
   exit 1)
 - connector: **419 pass / 0 fail** (`cd connector && npm test`)
@@ -116,3 +116,5 @@ point. Full measurement history: `tasks/010c-coordinate-convention.md`
 - 036 insert-subcircuit（M3 第 4 片，插入 RC/分压子电路；connector/daemon 零改动仍 **0.4.23**）: **首个无驱动规则的切片**——入口 `edit plan --insert <rc-lowpass|divider>`（AI 决定插什么、工具保证插得对；值/lcsc 全显式无默认）；T1 rc-lowpass 含删除（035 附着物机制复用）、T2 divider 纯 create，两模板真机各 applied + saved + 幂等 already_applied + stale exit 4 零写入（只碰 test 窗）；判据差入码：幂等与回读 = **plan 自己的 postconditions**（一个函数两用），双证缺一 exit 3；范围分家照旧；新增规矩 **apply 后全规则 findings 只许减不许增**（签名 = rule|severity|component|pins|命名网，自动网名不计入）；落点 = **两件一起**的九宫阶梯（模板自带相对偏移 + bbox 干涉）；三条宿主新习性入 SKILL 坑 25（线点重复→远端取最远点 / 撞工程全局位号被静默改名→位号池取「页面 ∪ 工程导出」/ findings 换措辞与自动网重编号不算新增）；pytest **1570**（+63 over 1507），connector 419 / tsc 不变，变异 3/3 CAUGHT；遗留 036b：029 位号池同款盲点修复（主代理已批，随下一批）（`tasks/036-insert-subcircuit.md` §交卷记录，`outputs/036_*`）
 
 - 036b 029 位号池同款盲点修复: 共用函数 `addcomponent.designator_pool`（页面 ∪ 工程导出，036/029 不漂移）；029 用既有 `--file` 快照取全局位号**零新增桥调用**；apply 侧补工程级 `designator_taken` exit 4 零写入（主代理裁决 apply 严于 plan）；测试 +3 + 框架改 1 条已申报；pytest **1573**，connector 419 / tsc 不变，变异 1/1（3 红）；真机未跑（离线可证，"静默改名"事实系 036 真机实测）（`tasks/036-insert-subcircuit.md` §036b，`outputs/036b_*`）
+
+- 037 move-block（M3 第 5 片收官，局部移动功能块；connector/daemon 零改动仍 **0.4.23**）: 探针定论**宿主不拖线**（modify_primitive 移件、线端点留原地）→ 重路径（组内线/边界线删除 + wire_route 正交重画，connector 三件现成零改动）；入口 `edit plan --move --designators … --dx/--dy`（网格整数倍否则拒）；五种拒绝（边界 label/netflag/总线、非器件图元、压点、位号找不到/一对多、off-grid）；**验收主判据 = 网表恒等**（活网表逐脚岛屿比对，一脚变了 exit 2）；幂等/stale 判据 = plan 自己的 postconditions（036 先例）；真机：多器件块 (U1,U2) by (100,0) applied+saved（网表 12 脚零差异、幂等零写入、stale exit 4）、单器件 (50,50) applied+saved；主代理裁决三处全批（线段判 T→点集成员判定 / 组内线不做同形状平移 / cmdKey 报错举证重试一次）；边界带 label 形状本机造不出（place_netlabel 不可用）仅离线用例——环境限制已注明；两条宿主新习性入 SKILL 坑 26（不拖线 / 上报的线是点集不是路径，照抄会画幻影对角线挂死宿主）；pytest **1611**（+38 over 1573），connector 419 / tsc 不变，变异 3/3 CAUGHT；**M3 五片（016/029/035/036/037）至此全满**（`tasks/037-move-block.md` §交卷记录，`outputs/037_*`）
