@@ -147,3 +147,15 @@ R2.2 到 GND（同 T1 第 3 步）。
 - 三线复跑：pytest **1570 passed** / connector **419 passed** / `tsc --noEmit` 干净。
 - `git status` 仅 4 件预期改动（017 草稿未跟踪、不混入）；connector/daemon 零改动，仍 0.4.23。
 - SKILL.md 动作说明区补 `--insert` 一条（两模板 + 无规则判据差），坑表补第 25 条（三条宿主习性）。
+
+### 036b 追加（029 位号池同款盲点修复，2026-09-25）
+
+- 子代理交卷留的裁决点落地：新共用函数 `engines/addcomponent.py::designator_pool(geometry, model=None)`
+  = 页面 ∪ 工程导出，036/029 两处调用（不复制漂移）；029 用手上既有 `--file` 快照取工程全局位号，
+  **零新增桥调用**；apply 侧补工程级检查（exit 4 `designator_taken` 零写入，note 点名——主代理批准
+  apply 比 plan 严：plan 可被手改/过时，写前重读必须查工程级）。
+- 测试 +3（029 撞号跳号 / apply 撞号 exit 4 / 快照不可解析回退点名）；框架改 1 条已申报
+  （原前提"builder 会给出撞号 plan"不复存在，改手工改 plan 构造，防线保留）。
+- 主代理复验：sha256 3/3 对（cli.py `c95de583…`、addcomponent.py `1cd235cc…`、test_029a `2b73b4ea…`），
+  pytest **1573** / connector 419 / tsc 干净；变异 1/1（池退回只看页面 → 3 红）；connector 零改动。
+  真机未跑——离线可证，所依据的"静默改名"事实本身是 036 真机实测（`outputs/036b_summary.txt`）。
