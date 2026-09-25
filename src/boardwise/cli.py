@@ -1250,6 +1250,18 @@ def _load_model(
     reader must not treat a zero as a measurement.
     """
     suffix = path.suffix.lower()
+    from .parsers.eprj3 import Eprj3Error, PCB_TIER_ERROR, looks_like_eprj3
+
+    if looks_like_eprj3(path):
+        # 038 tier A: a folder project is readable **schematic** only, and the
+        # pcb view is refused by name rather than answered with an empty model
+        # (a model with 0 components and 0 nets reads as "a clean board" —
+        # SKILL pit 14).
+        if view == "pcb":
+            raise ValueError(PCB_TIER_ERROR)
+        from .parsers.schematic import build_schematic_model
+
+        return build_schematic_model(path, parse_stats=parse_stats), None
     if suffix == ".enet":
         return parse_enet(path), None
     if suffix == ".epro2":
@@ -1373,6 +1385,16 @@ def _is_project_backup(path: Path) -> bool:
     return path.is_file() and path.suffix.lower() == PROJECT_BACKUP_SUFFIX
 
 
+def _is_eprj3_project(path: Path) -> bool:
+    """A folder project: a directory holding a `<name>.eprj3` index (038 §2).
+
+    `--latest` picks between project *inputs*, and a V4 folder is one — the
+    mtime it competes on is the index file's, which is what the editor rewrites
+    when the project changes.
+    """
+    return path.is_dir() and any(path.glob("*.eprj3"))
+
+
 def _project_backups(directory: Path) -> list[Path]:
     """The `.epro2` files in *directory* and **one level** below it.
 
@@ -1382,9 +1404,14 @@ def _project_backups(directory: Path) -> list[Path]:
     """
     found: list[Path] = []
     for entry in _safe_iterdir(directory):
+        if _is_eprj3_project(entry):
+            found.append(entry)
         if entry.is_dir():
             found.extend(
                 path for path in _safe_iterdir(entry) if _is_project_backup(path)
+            )
+            found.extend(
+                path for path in _safe_iterdir(entry) if _is_eprj3_project(path)
             )
         elif _is_project_backup(entry):
             found.append(entry)
@@ -5796,6 +5823,28 @@ def _snapshot_identity(path: Path) -> tuple[str, str, str, list[str]]:
     * an ``.enet`` export carries neither, so both stay empty.
     """
     notes: list[str] = []
+    from .parsers.eprj3 import Eprj3Error, looks_like_eprj3, read_index
+
+    if looks_like_eprj3(path):
+        # 038 §2: an eprj3 folder **does** carry the project identity — its
+        # `<name>.eprj3` index holds `name` and `owner_uuid` — so the old gap
+        # ("only a .epro2 carries a project uuid") is closed for folder
+        # projects instead of being repeated as a note. The page stays empty:
+        # a folder holds many pages, so naming one would be the cross-page
+        # guess §2.3 refuses (the checkup report can attribute a finding to a
+        # page, and that is where a pageUuid may legitimately come from).
+        try:
+            index = read_index(path)
+        except Eprj3Error as exc:
+            notes.append(str(exc))
+            return "", "", "", notes
+        project_uuid = str(index.get("owner_uuid") or "")
+        notes.append(
+            f"projectUuid {project_uuid or '(none in the index)'} comes from the "
+            f"{path.name}.eprj3 index (a folder project carries its own identity, "
+            "038 §2), and pageUuid stays empty because one folder holds many pages"
+        )
+        return project_uuid, "", "", notes
     if path.suffix.lower() != ".epro2":
         notes.append(
             f"a {path.suffix or 'extension-less'} input carries no project or "

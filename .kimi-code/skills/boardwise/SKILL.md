@@ -107,6 +107,11 @@ boardwise checkup --file <导出.epro2> --out <目录>       # 断连兜底：�
   —— 看原理图**必须** `--view schematic`（011 家族规则对着 schematic 模型写；默认 `pcb` 视图在
   schematic-only 导出上是空的）。不知道文件在哪：`review --latest [<目录>]` 自动挑最新的 `.epro2`
   并先打印它选了哪个。退出码 `0`/`1` 同 3.1，`2` = 文件读不了。
+- **eprj3 文件夹工程（V4，038 A 档只读）**：`boardwise review <工程目录> --view schematic --json ...`
+  —— 目录内含 `<同名>.eprj3` 索引即识别（`sch/**/*.esch2` 逐页粘成一条记录流，原理图模型满血；
+  必须显式 `--view schematic`）。`--view pcb` 对 eprj3 **诚实报错**"B 档未开"，不给空模型；
+  `--latest` 认 eprj3 目录（按索引 mtime 参选）；工程 uuid 从索引 `owner_uuid` 取
+  （补了"只有 .epro2 才带工程 uuid"的老缺口）。**一律只读**：写路径走 bridge API，不落盘。
 - **把发现画回画布**（要 daemon + 焦点在那张原理图页）：
   `boardwise bridge call --action doc.list` 拿 `pageUuid` → `boardwise review-mark report.json --page <uuid>`。
   终端那张序号表就是图例（marker 只能画形状、不能写字，`marker#N` = 第 N 个红框）；

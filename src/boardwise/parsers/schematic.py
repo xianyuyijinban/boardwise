@@ -383,7 +383,8 @@ def _split_page(records: list[Any]) -> tuple[list[_Instance], list[dict[str, Any
 
 
 def _collect_symbols(
-    records: list[Any], parse_stats: ParseStats | None = None
+    records: list[Any], parse_stats: ParseStats | None = None, *,
+    pin_key: str = "zIndex",
 ) -> dict[str, _SymbolDef]:
     """Group SYMBOL documents into ``uuid -> pin number -> (point, ez key)``.
 
@@ -452,7 +453,17 @@ def _collect_symbols(
             flush()
             pin_open = (round(float(body.get("x") or 0), COORD_PRECISION),
                         round(_page_y(body.get("y")), COORD_PRECISION))
-            pin_ez = f"e{body.get('zIndex')}"
+            # The key that ties a PIN to the attributes and NO_CONNECT parents
+            # that reference it. V3 (`.epro2`) keys them by the *synthesised*
+            # `e<zIndex>` (measured: 12 of the golden fixture's PIN rows have an
+            # `id` that is NOT `e<zIndex>`, and its NO_CONNECT parents carry
+            # `-e<zIndex>`); eprj3 keys them by the PIN row's own `id` (038 §1,
+            # spec + example: `PIN id:"e1"` with `ATTR parentId:"e1"`).
+            # Branching on the format is what the V3 regression demanded.
+            if pin_key == "pin_id" and record.id:
+                pin_ez = str(record.id)
+            else:
+                pin_ez = f"e{body.get('zIndex')}"
             continue
         if record.type == "ATTR" and pin_open is not None:
             key = body.get("key")
@@ -521,6 +532,19 @@ def _stats_for(
     return parse_stats
 
 
+def _pin_key_for(meta: dict[str, Any]) -> str:
+    """Which key ties a PIN to its attributes in *this* file's format.
+
+    The container knows (``eprj3`` sets ``meta['format']``), and that is the whole
+    reason this is a function rather than a constant: V3's `.epro2` files key pin
+    attributes by the synthesised ``e<zIndex>`` (the golden fixture has 12 PIN rows
+    whose own ``id`` differs from it, and every NO_CONNECT parent carries
+    ``-e<zIndex>``), while eprj3 keys them by the PIN row's own ``id``. Switching
+    the whole build to the eprj3 key broke V3 in the measurement this branch
+    exists for, so the format decides and the V3 tests are the arbiter.
+    """
+    return "pin_id" if str(meta.get("format") or "") == "eprj3" else "zIndex"
+
 def build_pin_offsets(
     path: str | Path, *, parse_stats: ParseStats | None = None
 ) -> dict[str, dict[str, Point]]:
@@ -541,7 +565,7 @@ def build_pin_offsets(
     stats = _stats_for(parse_stats, path, meta)
     records = _iter_schematic_records(text, stats)
     instances, _loose, _segments = _split_page(records)
-    symbols = _collect_symbols(records, stats)
+    symbols = _collect_symbols(records, stats, pin_key=_pin_key_for(meta))
     device_meta = _collect_device_meta(records)
 
     offsets: dict[str, dict[str, Point]] = {}
@@ -646,7 +670,7 @@ def collect_symbol_details(path: str | Path) -> dict[str, SymbolDetail]:
     text, meta = load_epru_text(Path(path))
     stats = ParseStats(source=str(path), editor_version=meta.get("editorVersion"))
     records = _iter_schematic_records(text, stats)
-    symbols = _collect_symbols(records, stats)
+    symbols = _collect_symbols(records, stats, pin_key=_pin_key_for(meta))
 
     extents: dict[str, tuple[float, float, float, float]] = {}
 
@@ -773,7 +797,7 @@ def build_schematic_model(
     records = _iter_schematic_records(text, stats)
 
     instances, loose, segments = _split_page(records)
-    symbols = _collect_symbols(records, stats)
+    symbols = _collect_symbols(records, stats, pin_key=_pin_key_for(meta))
     device_meta = _collect_device_meta(records)
 
     model = DesignModel()
