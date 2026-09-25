@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import os
 import re
@@ -43,7 +44,10 @@ from .core.changeplan import (
     ADD_COMPONENT_KIND,
     COMPONENT_VALUE_KIND,
     CONNECTION_KINDS,
+    INSERT_SUBCIRCUIT_KIND,
     PATCH_PIN_KIND,
+    TEMPLATE_DIVIDER,
+    TEMPLATE_RC_LOWPASS,
     ChangePlan,
     ChangePlanError,
     PlanAttachment,
@@ -51,6 +55,7 @@ from .core.changeplan import (
     PlanSource,
     add_component_plan,
     component_value_plan,
+    insert_subcircuit_plan,
     patch_pin_plan,
     resolve_on_page,
     sha256_of,
@@ -576,13 +581,28 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     edit_plan.add_argument(
-        "--file", required=True, help="The .epro2 / .enet snapshot the plan is built against."
+        "--file", default=None,
+        help=(
+            "The .epro2 / .enet snapshot the plan is built against. Required by the "
+            "`--file` and `--report` ways in (it is the snapshot's sha256 the plan "
+            "carries); `--insert` builds from the live page and records the live "
+            "export's own sha256 instead, so it refuses this flag rather than "
+            "quietly ignoring it."
+        ),
     )
     edit_plan.add_argument(
-        "--rule", required=True, help="Rule id whose finding the plan repairs (e.g. param-value-mpn-match)."
+        "--rule", default=None,
+        help=(
+            "Rule id whose finding the plan repairs (e.g. param-value-mpn-match). "
+            "Required except with `--insert`, which has no rule to name (036)."
+        ),
     )
     edit_plan.add_argument(
-        "--designator", required=True, help="The component to change, e.g. U3."
+        "--designator", default=None,
+        help=(
+            "The component to change, e.g. U3. Required except with `--insert "
+            "divider`, which anchors on a net (036)."
+        ),
     )
     edit_plan.add_argument(
         "--after", default=None,
@@ -633,6 +653,38 @@ def build_parser() -> argparse.ArgumentParser:
             "unverified recipe is not something to place silently."
         ),
     )
+    # ---- 036: the third way in — an explicit request, with no rule at all ----
+    edit_plan.add_argument(
+        "--insert", default=None, metavar="TEMPLATE",
+        help=(
+            "Insert a whole sub-circuit instead of repairing a finding (036): "
+            "`rc-lowpass` (series R with a shunt C to ground — it removes the wire "
+            "that joins the anchor pin to its net, so it needs --pin) or `divider` "
+            "(two resistors from a net to ground with the tap in the middle — it "
+            "creates only, so it needs --net). Both need their values and LCSC "
+            "numbers explicitly: there is no rule and no recipe lookup here, and an "
+            "unverified part is never placed silently."
+        ),
+    )
+    edit_plan.add_argument(
+        "--net", default=None, metavar="NAME",
+        help=(
+            "For `--insert divider`: the net the divider taps (its own wire vertex "
+            "is the anchor). Refused when it has no geometry on the page — a "
+            "divider hanging off nothing is not a divider."
+        ),
+    )
+    for flag, text in (
+        ("--r", "For `--insert rc-lowpass`: the series resistor's value (e.g. 1k)."),
+        ("--r-lcsc", "For `--insert rc-lowpass`: the series resistor's LCSC number."),
+        ("--c", "For `--insert rc-lowpass`: the shunt capacitor's value (e.g. 1n)."),
+        ("--c-lcsc", "For `--insert rc-lowpass`: the shunt capacitor's LCSC number."),
+        ("--r1", "For `--insert divider`: the upper resistor's value."),
+        ("--r1-lcsc", "For `--insert divider`: the upper resistor's LCSC number."),
+        ("--r2", "For `--insert divider`: the lower resistor's value."),
+        ("--r2-lcsc", "For `--insert divider`: the lower resistor's LCSC number."),
+    ):
+        edit_plan.add_argument(flag, default=None, metavar="VALUE", help=text)
     edit_plan.add_argument(
         "--project", default=None, metavar="NAME_OR_UUID",
         help="Which editor window to read the geometry from (023 routing hint).",
@@ -5767,7 +5819,7 @@ def _snapshot_identity(path: Path) -> tuple[str, str, str, list[str]]:
 def _cmd_edit_plan(args: argparse.Namespace) -> int:
     """``edit plan``: one finding -> one ChangePlan.
 
-    Two ways in, and they are different because the plans are:
+    Three ways in, and they are different because the plans are:
 
     * ``--file`` (016): re-run the rule over the snapshot. Offline, and it works
       for `param-value-mpn-match`, whose repair needs nothing but the file.
@@ -5776,6 +5828,11 @@ def _cmd_edit_plan(args: argparse.Namespace) -> int:
       pool and the connection all come from the *live page*, so this one needs an
       editor — a plan that named a spot without looking at the board would be a
       guess wearing a coordinate.
+    * ``--insert`` (036): no finding and no rule — the caller *asks* for a
+      sub-circuit by template. Everything still comes from the live page (the
+      anchor, the attachment to remove, the free space, the designator pool) and
+      the live export (the baseline findings), because "insert an RC here" without
+      looking at the board is the same guess.
 
     Exit codes: 0 plan built; 2 the snapshot cannot be read; 5 the plan cannot
     be built from what was asked — an unknown rule id, a rule this build cannot
@@ -5783,6 +5840,8 @@ def _cmd_edit_plan(args: argparse.Namespace) -> int:
     verified recipe, an exhausted landing ladder, a net with no connection
     option, or a before/after pair the plan's own validation would refuse.
     """
+    if getattr(args, "insert", None):
+        return _cmd_edit_plan_insert(args)
     if getattr(args, "report", None):
         # Which `--report` builder runs is decided by the *rule's* repairable
         # kind (035): the two live-page builders need different things from the
@@ -6042,6 +6101,577 @@ def _select_report_finding(
     if not matches:
         return None, ""
     return matches[0], ""
+
+
+def _finding_signature(finding) -> str:
+    """One rule finding as a stable signature (036's baseline).
+
+    apply compares the *set* of these before and after an insert: a finding that
+    was there when the plan was built may still be there or be gone, but a new one
+    means the insert broke something the rules can see.
+
+    The signature is the finding's **subject**, not its sentence. Measured
+    2026-09-25 on the machine: inserting a 100nF cap onto a supply pin that had
+    none made `decap-required-caps` reword itself from "no grounded capacitor found
+    on net 'VOUT_U3'" to "the grounded capacitor on 'VOUT_U3' is only 100nF (<
+    required 1uF)" — same rule, same component, same pin, same net, and the board
+    strictly better. Keying on the message text called that *two new findings* and
+    stopped a correct insert before the save; keying on the structured target (the
+    fields a repair would act on) says what the check actually means: **a new
+    problem on a new subject**.
+
+    Severity stays in: a rule that started reporting the same subject as an ERROR
+    is a change. **Auto net names are dropped**: measured 2026-09-25, the editor
+    renumbered a dangling pin's auto net (`NET3` → `NET4`) when the insert added
+    wiring elsewhere on the page, and the same complaint about the same pin then
+    looked like a new finding. An auto name is not an identity (035 round 4) — a
+    *named* net stays in the signature, because that one carries intent.
+
+    A finding without a structured target falls back to its message (there is no
+    subject to compare, and inventing one would hide it).
+    """
+    from .rules import facts as facts_rules
+
+    target = getattr(finding, "target", None)
+    if target is None:
+        return f"{finding.rule_id}|{finding.severity}|{finding.message}"
+    return "|".join([
+        str(finding.rule_id),
+        str(finding.severity),
+        str(getattr(target, "component_ref", "") or ""),
+        ",".join(str(item) for item in (getattr(target, "pin_refs", None) or [])),
+        ",".join(
+            str(item)
+            for item in (getattr(target, "net_refs", None) or [])
+            if not facts_rules.is_auto_net(str(item))
+        ),
+    ])
+
+
+def _baseline_findings(model) -> list[str]:
+    """Every finding the project's rules report right now, sorted and deduped."""
+    return sorted({_finding_signature(item) for item in run_review(model)})
+
+
+def _cmd_edit_plan_insert(args: argparse.Namespace) -> int:
+    """``edit plan --insert``: a template, an anchor and a recipe -> a ChangePlan (036).
+
+    The first entry with **no finding behind it**: the caller decided what the
+    board needs, and this builder's job is to turn that decision into something
+    previewable, executable and checkable. So it looks at the live page for
+    everything a decision needs and would be wrong without:
+
+    * the anchor (the pin's own coordinates, or the net's own vertex) and — for
+      `rc-lowpass` — the wire that joins that pin to its net, proven on the canvas
+      by 035's attachment judgement (a label, a T, two candidates or nothing is a
+      refusal that names what it found);
+    * free space for **both** parts, tried together along 029's ladder;
+    * the page's own designator pool (the lowest free R/C numbers);
+    * how the ground leg can be made (029's `choose_connection`: a wire to that
+      rail's own geometry, or a flag on the pin — never a label, SKILL pit 9).
+
+    It also reads the live export once, for two things that belong together: the
+    plan's `inputSha256` (a plan has to name the input it was built against) and
+    the **baseline findings** apply will refuse to grow.
+
+    Exit codes: 0 plan built; 2 the live page or export cannot be read; 5 the
+    request cannot be turned into a plan — an unknown template, a missing or
+    mismatched flag, an anchor that is not there, an ambiguous attachment, an
+    exhausted landing ladder, or a ground leg with no connection option.
+    """
+    import asyncio
+
+    from .core.parts import find_facts
+    from .engines import addcomponent, patchpin, subcircuit
+
+    template_name = str(args.insert or "").strip()
+    try:
+        tpl = subcircuit.template(template_name)
+    except KeyError as exc:
+        print(f"boardwise edit plan: {exc}", file=sys.stderr)
+        return 5
+    if args.report:
+        print(
+            "boardwise edit plan: --insert takes no --report — it is the way in for a "
+            "change no finding describes (036); use --report to repair one",
+            file=sys.stderr,
+        )
+        return 5
+    if args.file:
+        print(
+            "boardwise edit plan: --insert builds from the live page and records the live "
+            "export's own sha256, so it does not read --file — drop the flag rather than "
+            "having it silently ignored",
+            file=sys.stderr,
+        )
+        return 5
+
+    # ---- the recipe: explicit values and LCSC numbers, no defaults ---------
+    if tpl.name == TEMPLATE_RC_LOWPASS:
+        wanted = [
+            ("--r", args.r, "series resistor"),
+            ("--r-lcsc", args.r_lcsc, "series resistor"),
+            ("--c", args.c, "shunt capacitor"),
+            ("--c-lcsc", args.c_lcsc, "shunt capacitor"),
+        ]
+    else:
+        wanted = [
+            ("--r1", args.r1, "upper resistor"),
+            ("--r1-lcsc", args.r1_lcsc, "upper resistor"),
+            ("--r2", args.r2, "lower resistor"),
+            ("--r2-lcsc", args.r2_lcsc, "lower resistor"),
+        ]
+    missing = [flag for flag, value, _role in wanted if not str(value or "").strip()]
+    if missing:
+        print(
+            f"boardwise edit plan: --insert {tpl.name} needs "
+            + ", ".join(f"{flag} ({role})" for flag, _value, role in wanted)
+            + f" — missing {', '.join(missing)}; there is no recipe lookup on this path "
+            "and no default: an unverified part is never placed silently (029 §二.2)",
+            file=sys.stderr,
+        )
+        return 5
+    if tpl.name == TEMPLATE_DIVIDER:
+        stray = [flag for flag, value in (("--r", args.r), ("--c", args.c)) if str(value or "").strip()]
+        if stray:
+            print(
+                f"boardwise edit plan: --insert divider takes --r1/--r2, not "
+                f"{', '.join(stray)} — a divider has two resistors and no capacitor",
+                file=sys.stderr,
+            )
+            return 5
+    elif [flag for flag, value in (("--r1", args.r1), ("--r2", args.r2)) if str(value or "").strip()]:
+        print(
+            "boardwise edit plan: --insert rc-lowpass takes --r/--c, not --r1/--r2",
+            file=sys.stderr,
+        )
+        return 5
+
+    anchor_pin_arg = str(args.pin or "").strip()
+    anchor_net_arg = str(args.net or "").strip()
+    if tpl.name == TEMPLATE_RC_LOWPASS:
+        if not anchor_pin_arg or anchor_net_arg:
+            print(
+                "boardwise edit plan: --insert rc-lowpass anchors on a pin — pass "
+                "--pin <DESIGNATOR>.<PIN> (and not --net: it is the pin's wire that comes "
+                "off first)",
+                file=sys.stderr,
+            )
+            return 5
+        anchor_designator, _, anchor_pin = anchor_pin_arg.partition(".")
+        anchor_designator = anchor_designator.strip().upper()
+        anchor_pin = anchor_pin.strip()
+        if not anchor_designator or not anchor_pin:
+            print(
+                f"boardwise edit plan: --pin {anchor_pin_arg!r} does not name a pin; "
+                "expected <DESIGNATOR>.<PIN>, e.g. U3.5",
+                file=sys.stderr,
+            )
+            return 5
+    else:
+        if not anchor_net_arg or anchor_pin_arg:
+            print(
+                "boardwise edit plan: --insert divider anchors on a net — pass --net "
+                "<NAME> (and not --pin: there is no component to name)",
+                file=sys.stderr,
+            )
+            return 5
+
+    BridgeClient, BridgeError, port, token = _open_cli(args)
+    notes: list[str] = []
+    library, library_note = _facts_library()
+    if library_note:
+        notes.append(library_note)
+
+    async def run() -> int:
+        try:
+            client = await BridgeClient.open(
+                _bridge_uri(port), token, "cli", client="boardwise-cli"
+            )
+        except (OSError, BridgeError) as exc:
+            print(
+                f"boardwise edit plan: the live page is required for an "
+                f"insert-subcircuit plan ({exc})",
+                file=sys.stderr,
+            )
+            return 2
+
+        async def call(action, params, purpose):
+            return await client.call(action, params, **_edit_target_kwargs(args))
+
+        try:
+            route = _edit_target_kwargs(args)
+            listing = await call("doc.list", {}, "confirm the focused page")
+            page = _active_document_uuid(listing) if isinstance(listing, dict) else ""
+            geometry = await call("sch.geometry", {}, "read the page before planning")
+            if not isinstance(geometry, dict):
+                print(
+                    "boardwise edit plan: the page could not be read, so the anchor and "
+                    "the free space are unknown — nothing to plan from",
+                    file=sys.stderr,
+                )
+                return 2
+            netlist = await call(
+                "sch.netlist", {"type": "EasyEDA"},
+                "read the editor's own netlist for the anchor pin's current net",
+            )
+            live_nets = patchpin.live_pin_nets(netlist)
+            export = await _live_project_export(call, notes)
+        finally:
+            await client.close()
+        if export is None:
+            print(
+                "boardwise edit plan: the live project export could not be read, so the "
+                "plan's baseline findings (and the sha256 it carries) are unknown — "
+                "nothing to plan from",
+                file=sys.stderr,
+            )
+            return 2
+        digest = hashlib.sha256(export).hexdigest()
+        model = _model_from_export(export, notes)
+        if model is None:
+            print(
+                "boardwise edit plan: the live project export could not be parsed, so the "
+                "baseline findings are unknown — nothing to plan from",
+                file=sys.stderr,
+            )
+            return 2
+        baseline = _baseline_findings(model)
+
+        names = list(addcomponent.component_origins(geometry))
+        # The pool is the page **and the project** (036): `sch.place_component`
+        # honours the designator it is given only when nothing else in the project
+        # already has it — measured 2026-09-25, asking for `R2` on a page that had
+        # none produced `R3`, because the project's other page carried an R2. The
+        # rename lands mid-run, so the plan's own postconditions ("R2 is on the
+        # page") stop holding and the run reports `verification_disagrees` for a
+        # circuit that is electrically right. The export is already in hand here,
+        # so the number is allocated project-wide and nothing has to be renamed.
+        for designator in (model.components or {}):
+            if designator not in names:
+                names.append(designator)
+        attachment = None
+        before_net = ""
+        anchor_at: tuple[float, float] | None = None
+        if tpl.name == TEMPLATE_RC_LOWPASS:
+            primitive = addcomponent.primitive_id_of(geometry, anchor_designator)
+            if not primitive:
+                print(
+                    f"boardwise edit plan: {anchor_designator} is not on the focused page "
+                    f"({len(addcomponent.component_origins(geometry))} components there) — "
+                    "the plan would name a pin next to nothing",
+                    file=sys.stderr,
+                )
+                return 5
+            try:
+                pin_payload = await _plan_call(args, "sch.component_pins",
+                                               {"primitiveId": primitive})
+            except BridgeError as exc:
+                print(
+                    f"boardwise edit plan: sch.component_pins failed [{exc.code}] "
+                    f"{exc.message}",
+                    file=sys.stderr,
+                )
+                return 2
+            pin_coords = addcomponent.pin_points(pin_payload)
+            if anchor_pin not in pin_coords:
+                print(
+                    f"boardwise edit plan: {anchor_designator} reports no pin {anchor_pin} "
+                    f"(pins: {sorted(pin_coords) or 'none'}) — 没有脚坐标就不知道该插在哪，"
+                    "拒绝（035 §3）",
+                    file=sys.stderr,
+                )
+                return 5
+            anchor_at = pin_coords[anchor_pin]
+            try:
+                found = patchpin.attachment_on_pin(geometry, anchor_at)
+            except patchpin.AttachmentRefused as exc:
+                print(f"boardwise edit plan: {exc}", file=sys.stderr)
+                return 5
+            attachment = PlanAttachment(
+                kind=found.kind, primitive_id=found.primitive_id,
+                detail=found.detail, at=found.at,
+            )
+            before_net = str(live_nets.get((anchor_designator, anchor_pin)) or "")
+            far = _attachment_far_end(geometry, found)
+            if far is None:
+                print(
+                    f"boardwise edit plan: the attachment on {anchor_designator} "
+                    f"pin{anchor_pin} has no readable far end, so the series resistor's "
+                    "far side has nowhere to go — 拒绝（不猜 N 在哪）",
+                    file=sys.stderr,
+                )
+                return 5
+        else:
+            vertex = _net_vertex(geometry, anchor_net_arg)
+            if vertex is None:
+                print(
+                    f"boardwise edit plan: net {anchor_net_arg!r} has no wire geometry on "
+                    "this page, so the divider would hang off nothing — 拒绝建 plan",
+                    file=sys.stderr,
+                )
+                return 5
+            anchor_at = vertex
+
+        parts_spec = []
+        for part in tpl.parts:
+            if tpl.name == TEMPLATE_RC_LOWPASS:
+                value = str(args.r if part.prefix == "R" else args.c).strip()
+                lcsc = str(args.r_lcsc if part.prefix == "R" else args.c_lcsc).strip()
+            else:
+                value = str(args.r1 if part.role == "divider-top" else args.r2).strip()
+                lcsc = str(
+                    args.r1_lcsc if part.role == "divider-top" else args.r2_lcsc
+                ).strip()
+            parts_spec.append((part, value, lcsc))
+
+        try:
+            group = subcircuit.plan_group(anchor_at, tpl, geometry, names)
+        except addcomponent.LadderExhausted as exc:
+            print(f"boardwise edit plan: {exc}", file=sys.stderr)
+            print(
+                "  两件一起试过每一级阶梯；绝不落原点（029 §二.4）。"
+                "页面上挪开既有图元后重试，或用 --pin/--net 换锚点",
+                file=sys.stderr,
+            )
+            return 5
+
+        placed = {item.role: item for item in group.parts}
+        plan_parts: list[PlanPart] = []
+        by_role: dict[str, PlanPart] = {}
+        recipe_sources: list[str] = []
+        for part, value, lcsc in parts_spec:
+            assigned = placed[part.role]
+            entry = find_facts(library, lcsc=lcsc) if library is not None else None
+            footprint = str(getattr(entry, "footprint_name", "") or "")
+            recipe_sources.append(f"facts:{lcsc}" if entry is not None else f"operator:{lcsc}")
+            if entry is None:
+                notes.append(
+                    f"the facts shelf has no entry for {lcsc} ({value}), so the plan "
+                    "records the part without a footprint — the recipe came from the "
+                    "operator, not from a verified shelf row (029 §二.2)"
+                )
+            item = PlanPart(
+                lcsc=lcsc, value=value, footprint=footprint,
+                designator=assigned.designator, role=part.role,
+                x=assigned.x, y=assigned.y, rotation=assigned.rotation,
+            )
+            plan_parts.append(item)
+            by_role[part.role] = item
+
+        try:
+            if tpl.name == TEMPLATE_RC_LOWPASS:
+                connections = subcircuit.rc_lowpass_connections(
+                    series_r=group.parts[0], shunt_c=group.parts[1],
+                    anchor_pin=anchor_at, rejoin_at=_attachment_far_end(geometry, found),
+                    before_net=before_net, geometry=geometry,
+                )
+            else:
+                connections = subcircuit.divider_connections(
+                    top_r=group.parts[0], bottom_r=group.parts[1],
+                    anchor_net=anchor_net_arg, anchor_at=anchor_at, geometry=geometry,
+                )
+        except addcomponent.NoConnectionOption as exc:
+            print(f"boardwise edit plan: {exc}", file=sys.stderr)
+            return 5
+        # The connections were built from the ladder's own parts, so the records and
+        # the plan's `parts` must agree on the numbers — if they ever don't, the
+        # plan would place one part and connect another.
+        for item in connections:
+            if item.designator not in {part.designator for part in plan_parts}:
+                raise AssertionError(
+                    f"internal: connection names {item.designator}, which the plan does "
+                    "not place"
+                )
+
+        source = PlanSource(
+            input_sha256=digest,
+            project_uuid=str(
+                (listing.get("projects") or [{}])[0].get("projectUuid")
+                if isinstance(listing, dict) and listing.get("projects")
+                else ""
+            ),
+            page_uuid=page,
+            host_version="",
+            connector_version=_repo_connector_version(),
+        )
+        plan = insert_subcircuit_plan(
+            source,
+            template=tpl.name,
+            parts=plan_parts,
+            connections=connections,
+            anchor=anchor_designator if tpl.name == TEMPLATE_RC_LOWPASS else "",
+            anchor_net=anchor_net_arg if tpl.name == TEMPLATE_DIVIDER else "",
+            anchor_pin=anchor_pin if tpl.name == TEMPLATE_RC_LOWPASS else "",
+            anchor_at=anchor_at,
+            attachment=attachment,
+            before_net=before_net,
+            baseline_findings=baseline,
+        )
+
+        print(
+            f"boardwise edit plan: --insert {tpl.name} — {tpl.summary}"
+        )
+        if anchor_at is not None:
+            print(
+                f"anchor: "
+                + (
+                    f"{anchor_designator} pin{anchor_pin} at ({anchor_at[0]:g}, {anchor_at[1]:g})"
+                    if tpl.name == TEMPLATE_RC_LOWPASS
+                    else f"net {anchor_net_arg!r} vertex at ({anchor_at[0]:g}, {anchor_at[1]:g})"
+                )
+            )
+        if tpl.name == TEMPLATE_RC_LOWPASS:
+            print(f"off: {attachment.kind} {attachment.primitive_id} — {attachment.detail}")
+        for item in plan_parts:
+            print(
+                f"on: {item.designator} ({item.role}) {item.value} {item.lcsc} at "
+                f"({float(item.x or 0.0):g}, {float(item.y or 0.0):g})"
+            )
+        print(
+            "connections: "
+            + "; ".join(
+                f"{item.designator}.{item.pin}→{item.net} via {item.kind}"
+                + (f" to ({item.to[0]:g}, {item.to[1]:g})" if item.to else "")
+                + (f" to {item.to_pin}" if item.to_pin else "")
+                for item in connections
+            )
+        )
+        print(
+            f"snapshot: sha256 {digest} (the live project export this plan was built "
+            f"against)  pageUuid {page or '(none)'}"
+        )
+        print(f"baseline: {len(baseline)} finding(s) — apply refuses to save if the set grows")
+        for note in notes:
+            print(f"note: {note}")
+
+        if args.out_path:
+            plan.dump(args.out_path)
+            print(f"plan written to {args.out_path}")
+        else:
+            print(json.dumps(plan.to_jsonable(), ensure_ascii=False, indent=2))
+        if args.json_path:
+            Path(args.json_path).write_text(
+                json.dumps(
+                    {
+                        "command": "plan",
+                        "ok": True,
+                        "kind": INSERT_SUBCIRCUIT_KIND,
+                        "template": tpl.name,
+                        "anchor": {
+                            "designator": anchor_designator if tpl.name == TEMPLATE_RC_LOWPASS else "",
+                            "pin": anchor_pin if tpl.name == TEMPLATE_RC_LOWPASS else "",
+                            "net": anchor_net_arg if tpl.name == TEMPLATE_DIVIDER else "",
+                            "at": list(anchor_at) if anchor_at else None,
+                        },
+                        "attachment": (
+                            {
+                                "kind": attachment.kind,
+                                "primitiveId": attachment.primitive_id,
+                                "detail": attachment.detail,
+                                "at": list(attachment.at) if attachment.at else None,
+                            }
+                            if attachment
+                            else None
+                        ),
+                        "parts": [
+                            {
+                                "designator": item.designator, "role": item.role,
+                                "lcsc": item.lcsc, "value": item.value,
+                                "footprint": item.footprint,
+                                "x": item.x, "y": item.y,
+                            }
+                            for item in plan_parts
+                        ],
+                        "connections": [
+                            {
+                                "designator": item.designator, "pin": item.pin,
+                                "net": item.net, "kind": item.kind, "detail": item.detail,
+                                "to": list(item.to) if item.to else None,
+                                "toPin": item.to_pin or None,
+                            }
+                            for item in connections
+                        ],
+                        "recipeSource": recipe_sources,
+                        "rung": {"index": group.spot.index, "offset": list(group.spot.offset)},
+                        "baselineFindings": baseline,
+                        "sha256": digest,
+                        "planPath": args.out_path,
+                        "plan": plan.to_jsonable(),
+                        "notes": notes,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        return 0
+
+    return asyncio.run(run())
+
+
+async def _plan_call(args: argparse.Namespace, action: str, params: dict):
+    """One read-only call from a plan builder that has already closed its client.
+
+    The `--insert` builder reads the page, then the netlist/export, and only then
+    needs the anchor pin's coordinates — opening a second short-lived connection
+    for that single read is cheaper to reason about than holding one open across
+    five calls, and the two reads it *does* need together (page, export) are taken
+    in the same block.
+    """
+    BridgeClient, _BridgeError, port, token = _open_cli(args)
+    client = await BridgeClient.open(_bridge_uri(port), token, "cli", client="boardwise-cli")
+    try:
+        return await client.call(action, params, **_edit_target_kwargs(args))
+    finally:
+        await client.close()
+
+
+def _attachment_far_end(geometry: Any, attachment) -> tuple[float, float] | None:
+    """The endpoint of the attachment's wire that is **not** on the pin (036).
+
+    After the wire comes off, the old net is still reachable at its far end — the
+    endpoint apply can draw the series resistor's second leg back to. The
+    attachment's own `at` is the pin-side endpoint, so the far end is the point
+    **farthest from the pin** — not "the last reported point": measured
+    2026-09-25, the host reports a wire's points with the junction repeated
+    (``[345, 320, 345, 310, 555, 320, 345, 320]`` for a two-segment wire), so
+    "the last one" is the corner, and reconnecting there would reach nothing
+    after the wire is deleted. A wire with only the pin's own point has no far
+    end, and the caller refuses rather than guessing.
+    """
+    from .engines import patchpin
+
+    best: tuple[float, float] | None = None
+    best_distance = 0.0
+    for segment in patchpin.wire_segments(geometry):
+        if segment.primitive_id != attachment.primitive_id:
+            continue
+        for point in segment.points:
+            distance = (
+                (point[0] - attachment.at[0]) ** 2 + (point[1] - attachment.at[1]) ** 2
+            ) ** 0.5
+            if distance > best_distance + patchpin.SAME_POINT:
+                best, best_distance = point, distance
+    return best
+
+
+def _net_vertex(geometry: Any, net: str) -> tuple[float, float] | None:
+    """A deterministic vertex of ``net``'s own wiring (036's divider anchor).
+
+    The lowest ``(x, y)`` of the net's vertices, so the same command on the same
+    page plans the same divider: "the first vertex in reading order" is a rule a
+    reviewer can predict, and any vertex of a net is electrically the same net.
+    """
+    from .engines import addcomponent
+
+    vertices = [
+        (x, y) for x, y, vertex_net in addcomponent.wire_vertices(geometry)
+        if vertex_net == net
+    ]
+    if not vertices:
+        return None
+    return min(vertices)
 
 
 def _cmd_edit_plan_patch_pin(args: argparse.Namespace) -> int:
@@ -6613,6 +7243,193 @@ def _cmd_edit_plan_add_component(args: argparse.Namespace) -> int:
     return asyncio.run(run())
 
 
+def _preview_insert(plan, path, model, digest, args: argparse.Namespace) -> int:
+    """``edit preview`` for an `insert-subcircuit` plan (036).
+
+    Read-only and never writes. What it prints is exactly what a human signing the
+    plan needs: the parts with their numbers, values and landing spots, the
+    attachment that comes off (if any), every wire with both of its ends, and the
+    preconditions with their verdicts.
+
+    Those verdicts come in two kinds, and saying *which* is the honest part —
+    this plan's preconditions are about the **live canvas** (a pin's current net,
+    free space, unused numbers), so without the export it was built against,
+    preview cannot check them and must not pretend to. With ``--file`` given (the
+    export itself, if the operator kept it) the model-level ones are checked for
+    real: the designators must still be unused, and the anchor pin must still be
+    on the net the plan says.
+    """
+    import json
+
+    parts = list(plan.change.parts)
+    anchor = plan.target
+    label = (
+        f"{anchor.designator} pin{anchor.pin}" if anchor.designator and anchor.pin
+        else f"net {anchor.anchor_net!r}"
+    )
+    print(f"boardwise edit preview: {args.plan}")
+    print(
+        f"plan: insert-subcircuit {plan.change.template} — {label} at "
+        f"({float(anchor.x or 0.0):g}, {float(anchor.y or 0.0):g})"
+    )
+    if path is not None and model is not None:
+        print(f"snapshot: {path} sha256 matches the plan's ({digest})")
+    else:
+        print(
+            "snapshot: none given — this plan carries the live export's sha256, not a "
+            "file of yours; the page-level preconditions are re-checked by `edit apply` "
+            "on the live canvas (pass --file with that export to re-check the model here)"
+        )
+    for item in parts:
+        print(
+            f"  place   {item.designator} ({item.role}) {item.value} {item.lcsc}"
+            + (f" [{item.footprint}]" if item.footprint else "")
+            + f" at ({float(item.x or 0.0):g}, {float(item.y or 0.0):g})"
+            + (f" rotation {item.rotation}°" if item.rotation else "")
+        )
+    attachment = plan.change.attachment
+    if attachment is not None:
+        print(
+            f"  remove  {attachment.kind} {attachment.primitive_id} at "
+            f"({attachment.at[0]:g}, {attachment.at[1]:g}) — {attachment.detail}"
+        )
+    for item in plan.change.connections:
+        print(
+            f"  wire    {item.designator}.{item.pin} → {item.net} via {item.kind}"
+            + (f" to ({item.to[0]:g}, {item.to[1]:g})" if item.to else "")
+            + (f" to {item.to_pin}" if item.to_pin else "")
+            + "  — " + item.detail
+        )
+    print(
+        "routes: orthogonal, computed by apply from each placed pin's own coordinates "
+        "(a +20-unit guess at plan time would be exactly the kind of assumption 029-c "
+        "measured the host disproving)"
+    )
+    print(
+        f"baseline: {len(plan.change.baseline_findings)} finding(s) — apply refuses to "
+        "save if the set grows"
+    )
+    print("postconditions (what apply will read back):")
+    for line in plan.expected_postcondition:
+        print(f"  * {line}")
+
+    verdicts: list[tuple[str, str]] = []
+    if model is not None:
+        taken = [
+            item.designator for item in parts if item.designator in model.components
+        ]
+        verdicts.append((
+            ", ".join(item.designator for item in parts) + " still unused",
+            f"taken: {', '.join(taken)}" if taken else "ok",
+        ))
+        if anchor.designator and anchor.pin:
+            component = model.components.get(anchor.designator)
+            pin_net = None
+            if component is not None:
+                for pin in component.pins:
+                    if pin.number == anchor.pin:
+                        pin_net = pin.net
+            verdicts.append((
+                f"{anchor.designator} pin{anchor.pin} is still on "
+                f"{plan.change.before_net!r}",
+                "ok" if pin_net == plan.change.before_net
+                else f"reads {pin_net!r} in the snapshot",
+            ))
+        else:
+            verdicts.append((
+                f"net {anchor.anchor_net!r} still exists",
+                "ok" if anchor.anchor_net in (model.nets or {}) else "not in the snapshot",
+            ))
+        verdicts.append((
+            "the landing spots are still unoccupied",
+            "live page only — check with `edit apply`",
+        ))
+        verdicts.append((
+            "the recipes are still the ones the plan was built from",
+            "the plan carries them; nothing in a file can change that",
+        ))
+    else:
+        verdicts = [
+            (line, "live page only — check with `edit apply`")
+            for line in plan.preconditions
+        ]
+    print("preconditions:")
+    for line, verdict in verdicts:
+        print(f"  [{verdict}] {line}")
+    broken = [
+        line for line, verdict in verdicts
+        if verdict not in ("ok",)
+        and "live page only" not in verdict
+        and "nothing in a file" not in verdict
+    ]
+    if broken:
+        print(
+            "boardwise edit preview: 有一条前置条件在快照里已经不成立（见上）—— 重新 "
+            "`edit plan`，或确认现场后再 apply",
+            file=sys.stderr,
+        )
+        return 4
+    if args.json_path:
+        Path(args.json_path).write_text(
+            json.dumps(
+                {
+                    "command": "preview",
+                    "ok": True,
+                    "kind": INSERT_SUBCIRCUIT_KIND,
+                    "file": str(path) if path is not None else None,
+                    "planPath": args.plan,
+                    "plan": plan.to_jsonable(),
+                    "template": plan.change.template,
+                    "anchor": {
+                        "designator": anchor.designator, "pin": anchor.pin,
+                        "net": anchor.anchor_net,
+                        "at": [anchor.x, anchor.y],
+                    },
+                    "parts": [
+                        {
+                            "designator": item.designator, "role": item.role,
+                            "lcsc": item.lcsc, "value": item.value,
+                            "footprint": item.footprint, "x": item.x, "y": item.y,
+                            "rotation": item.rotation,
+                        }
+                        for item in parts
+                    ],
+                    "attachment": (
+                        {
+                            "kind": attachment.kind,
+                            "primitiveId": attachment.primitive_id,
+                            "at": list(attachment.at) if attachment.at else None,
+                        }
+                        if attachment is not None else None
+                    ),
+                    "connections": [
+                        {
+                            "designator": item.designator, "pin": item.pin,
+                            "net": item.net, "kind": item.kind,
+                            "to": list(item.to) if item.to else None,
+                            "toPin": item.to_pin or None,
+                        }
+                        for item in plan.change.connections
+                    ],
+                    "postconditions": list(plan.expected_postcondition),
+                    "preconditions": [
+                        {"claim": line, "verdict": verdict} for line, verdict in verdicts
+                    ],
+                    "geometricDiff": (
+                        f"the page gains {len(parts)} component(s) and "
+                        f"{sum(1 for c in plan.change.connections if c.kind == 'wire')} "
+                        "wire(s)"
+                        + (", and loses the named attachment" if attachment else "")
+                    ),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    return 0
+
+
 def _cmd_edit_preview(args: argparse.Namespace) -> int:
     """``edit preview``: check the plan against the snapshot and show the diff.
 
@@ -6624,6 +7441,12 @@ def _cmd_edit_preview(args: argparse.Namespace) -> int:
     expects, for `add-component` (029-d §④) the anchor is gone or the designator
     the plan intends to use is already spent; 2 the snapshot cannot be read; 5
     the plan or the arguments are unusable.
+
+    `insert-subcircuit` is the one kind whose plan does **not** come from a file:
+    its sha256 is the live project export's, which the operator never had (036).
+    So `--file` is optional there — give it and it is checked like any other,
+    leave it out and the preview lists the change (parts, attachment, wires) and
+    says which preconditions only `edit apply` can re-check, on the live page.
     """
     import json
 
@@ -6632,6 +7455,9 @@ def _cmd_edit_preview(args: argparse.Namespace) -> int:
     except ChangePlanError as exc:
         print(f"boardwise edit preview: {exc}", file=sys.stderr)
         return 5
+    insert = plan.change.kind == INSERT_SUBCIRCUIT_KIND
+    if insert and not args.file:
+        return _preview_insert(plan, None, None, "", args)
     if not args.file:
         print(
             "boardwise edit preview: --file is required — the plan carries the "
@@ -6668,6 +7494,8 @@ def _cmd_edit_preview(args: argparse.Namespace) -> int:
         return _preview_add_component(plan, path, model, digest, args)
     if plan.change.kind == PATCH_PIN_KIND:
         return _preview_patch_pin(plan, path, model, digest, args)
+    if insert:
+        return _preview_insert(plan, path, model, digest, args)
 
     designator = _boardwise_designator(model, plan.target.designator)
     if designator is None:
@@ -8191,6 +9019,43 @@ def _model_fingerprint(model) -> tuple:
     )
 
 
+async def _live_project_export(call, notes: list[str]) -> bytes | None:
+    """The live project's own export bytes, or ``None`` (with a note).
+
+    Split out of :func:`_live_project_model` for 036: the `--insert` plan builder
+    needs the bytes' **sha256** (a plan has to carry the input it was built
+    against) *and* the model they parse into (the baseline findings apply
+    compares against afterwards), and reading the export twice for that would be
+    two different reads of a board that can move between them.
+    """
+    payload = await call(
+        "sys.get_project_file", {"fileType": "epro2"},
+        "export the live project for the idempotence probe and the range check",
+    )
+    if not isinstance(payload, dict):
+        return None
+    try:
+        return _archive_bytes(payload, "sys.get_project_file")
+    except ValueError as exc:
+        notes.append(f"the live project export could not be decoded ({exc})")
+        return None
+
+
+def _model_from_export(blob: bytes, notes: list[str]):
+    """Parse exported project bytes into the offline model (029's Tier A1)."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="boardwise-edit-") as tmp:
+        archive = Path(tmp) / "project.epro2"
+        archive.write_bytes(blob)
+        try:
+            model, _board = _parse_archive(archive)
+        except Exception as exc:  # noqa: BLE001 — the CLI must not traceback
+            notes.append(f"the live project export could not be parsed ({exc})")
+            return None
+    return model
+
+
 async def _live_project_model(call, notes: list[str]):
     """The live project as an offline model — the idempotence probe's input (§二.5).
 
@@ -8201,28 +9066,10 @@ async def _live_project_model(call, notes: list[str]):
     unreadable board means "I cannot check whether this is already done", and the
     caller refuses rather than risk a duplicate.
     """
-    import tempfile
-
-    payload = await call(
-        "sys.get_project_file", {"fileType": "epro2"},
-        "export the live project for the idempotence probe and the range check",
-    )
-    if not isinstance(payload, dict):
+    blob = await _live_project_export(call, notes)
+    if blob is None:
         return None
-    try:
-        blob = _archive_bytes(payload, "sys.get_project_file")
-    except ValueError as exc:
-        notes.append(f"the live project export could not be decoded ({exc})")
-        return None
-    with tempfile.TemporaryDirectory(prefix="boardwise-edit-") as tmp:
-        archive = Path(tmp) / "project.epro2"
-        archive.write_bytes(blob)
-        try:
-            model, _board = _parse_archive(archive)
-        except Exception as exc:  # noqa: BLE001 — the CLI must not traceback
-            notes.append(f"the live project export could not be parsed ({exc})")
-            return None
-    return model
+    return _model_from_export(blob, notes)
 
 
 def _facts_library():
@@ -9045,6 +9892,679 @@ async def _edit_post_review_pin(
     return result
 
 
+def _render_edit_apply_insert(report: dict, args: argparse.Namespace) -> int:
+    """Print the human summary of an insert-subcircuit apply, write ``--json``, exit."""
+    import json
+
+    code = int(report.get("exitCode") or 0)
+    reason = report.get("reason") or ""
+    print(
+        f"boardwise edit apply: insert {report.get('template')} "
+        f"{report.get('anchorLabel')}  [{report.get('outcome')}"
+        f"{': ' + reason if reason else ''}]"
+    )
+    for step in report.get("steps") or []:
+        mark = "ok" if step["ok"] else ("UNKNOWN" if step["unknown"] else "FAILED")
+        line = f"  {mark:<7} {step['action']:<26} {step['purpose']}"
+        if not step["ok"]:
+            line += f" — [{step['code']}] {step['message']}"
+        print(line)
+    probe = report.get("idempotence") or {}
+    if probe:
+        print(
+            f"  probe   {probe.get('state')} — {probe.get('reason') or 'postconditions ' + ('hold' if probe.get('satisfied') else 'do not hold')}"
+        )
+    attachment = report.get("attachment")
+    if attachment:
+        print(
+            f"  off     delete {attachment['kind']} {attachment['primitiveId']} — "
+            f"{attachment['detail']}"
+        )
+    for item in report.get("parts") or []:
+        print(
+            f"  on      {item['designator']} ({item['role']}) {item['value']} {item['lcsc']} "
+            f"at ({item['x']:g}, {item['y']:g})"
+        )
+    for item in report.get("declared") or []:
+        print(
+            f"  wire    {item['designator']}.{item['pin']} → {item['net']} via {item['kind']}"
+            + (f" to ({item['to'][0]:g}, {item['to'][1]:g})" if item.get("to") else "")
+            + (f" to {item['toPin']}" if item.get("toPin") else "")
+        )
+    verification = report.get("verification") or {}
+    if verification:
+        live = verification.get("live") or []
+        canvas = verification.get("canvas") or []
+        print(
+            f"  live    the editor's own netlist — "
+            f"{'ok' if not live else str(len(live)) + ' problem(s): ' + '; '.join(live)}"
+        )
+        print(
+            f"  canvas  placement and wire endpoints — "
+            f"{'ok' if not canvas else str(len(canvas)) + ' problem(s): ' + '; '.join(canvas)}"
+        )
+    diff = report.get("range") or {}
+    if diff:
+        print(f"  range   {json.dumps(diff, ensure_ascii=False)}")
+    if report.get("findings"):
+        print(f"  findings {json.dumps(report['findings'], ensure_ascii=False)}")
+    if report.get("persistence"):
+        print(f"  persistence: {report['persistence']}")
+    for note in report.get("notes") or []:
+        print(f"  note: {note}")
+    if report.get("final"):
+        print(f"boardwise edit apply: {report['final']}")
+    if args.json_path:
+        Path(args.json_path).write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    return code
+
+
+async def _edit_apply_insert_flow(
+    client, bridge_error, plan, args: argparse.Namespace, started: float
+) -> int:
+    """Execute one `insert-subcircuit` plan against a running editor (036 §3).
+
+    The same four protections as the other kinds, reshaped where this kind
+    differs:
+
+    * **The idempotence probe is the plan's own postconditions.** 029 and 035 ask
+      the *rule* "is this still broken?"; there is no rule here — nothing found
+      this change — so the probe is
+      `engines/subcircuit.postcondition_problems` over the live page and the
+      editor's own netlist, and it is the **same function** the verification calls
+      afterwards. "Already done" and "done" therefore cannot disagree.
+    * **A part already on the page that does *not* satisfy them is a refusal**, not
+      a retry: a previous run that placed R1 and failed to wire it leaves exactly
+      that shape, and placing a second R1 would be two half-circuits.
+    * **The range is judged by the run's shape** (035 round 4, 036 §1): a template
+      that removes a wire is checked on the canvas identity (the promised
+      primitive gone, nothing else vanished) and the live netlist; a pure create is
+      checked against the export. `导出新鲜当且仅当本 run 无删除`.
+    * **No new findings.** There is no rule to re-review, so the question "did this
+      break something?" is answered by every rule there *is*: the after-export's
+      finding set must not grow past the plan's baseline, or the run fails before
+      the save and prints the new lines.
+    """
+    from .core.changeplan import CONNECTION_POWER_FLAG, CONNECTION_WIRE
+    from .engines import addcomponent, patchpin, subcircuit
+
+    records: list[dict] = []
+    notes: list[str] = []
+    template = plan.change.template
+    delete_path = plan.change.attachment is not None
+    page = plan.source.page_uuid
+    anchor = plan.target
+    anchor_label = (
+        f"{anchor.designator} pin{anchor.pin}" if anchor.designator and anchor.pin
+        else f"net {anchor.anchor_net!r}"
+    )
+    parts = list(plan.change.parts)
+    report: dict = {
+        "command": "apply",
+        "ok": False,
+        "kind": INSERT_SUBCIRCUIT_KIND,
+        "template": template,
+        "outcome": "",
+        "reason": "",
+        "exitCode": 0,
+        "planPath": str(args.plan),
+        "plan": plan.to_jsonable(),
+        "anchor": {
+            "designator": anchor.designator,
+            "pin": anchor.pin,
+            "net": anchor.anchor_net,
+            "at": [anchor.x, anchor.y] if anchor.x is not None else None,
+        },
+        "anchorLabel": anchor_label,
+        "parts": [
+            {
+                "designator": item.designator, "role": item.role, "lcsc": item.lcsc,
+                "value": item.value, "footprint": item.footprint,
+                "x": float(item.x or 0.0), "y": float(item.y or 0.0),
+            }
+            for item in parts
+        ],
+        "declared": [
+            {
+                "designator": item.designator, "pin": item.pin, "net": item.net,
+                "kind": item.kind, "detail": item.detail,
+                "to": list(item.to) if item.to else None,
+                "toPin": item.to_pin or None,
+            }
+            for item in plan.change.connections
+        ],
+        "attachment": (
+            {
+                "kind": plan.change.attachment.kind,
+                "primitiveId": plan.change.attachment.primitive_id,
+                "detail": plan.change.attachment.detail,
+                "at": list(plan.change.attachment.at)
+                if plan.change.attachment.at else None,
+            }
+            if plan.change.attachment
+            else None
+        ),
+        "page": {"uuid": page, "guard": "enforced" if page else "unavailable"},
+        "idempotence": {},
+        "write": {"calls": 0, "placed": [], "connections": []},
+        "verification": {},
+        "range": {},
+        "findings": {},
+        "save": {},
+        "persistence": "",
+        "steps": records,
+        "notes": notes,
+        "final": "",
+    }
+
+    def done(code: int, outcome: str, reason: str = "") -> int:
+        report["exitCode"] = code
+        report["outcome"] = outcome
+        report["ok"] = code == 0
+        if reason:
+            report["reason"] = reason
+        return _render_edit_apply_insert(report, args)
+
+    async def call(action, params, purpose, *, writes=False):
+        try:
+            data = await client.call(action, params, **_edit_target_kwargs(args))
+        except bridge_error as exc:
+            records.append(_edit_step(action, purpose, False, exc, wrote=writes))
+            return None
+        records.append(_edit_step(action, purpose, True, wrote=writes))
+        return data
+
+    async def read_pins(page_geometry) -> dict[tuple[str, str], tuple[float, float]]:
+        """``(designator, pin) -> (x, y)`` for every plan part that is on the page."""
+        found: dict[tuple[str, str], tuple[float, float]] = {}
+        if not isinstance(page_geometry, dict):
+            return found
+        for item in parts:
+            primitive = addcomponent.primitive_id_of(page_geometry, item.designator)
+            if not primitive:
+                continue
+            payload = await call(
+                "sch.component_pins", {"primitiveId": primitive},
+                f"read {item.designator}'s own pin coordinates",
+            )
+            for number, point in addcomponent.pin_points(payload).items():
+                found[(item.designator, number)] = point
+        return found
+
+    # ---- 1. the page guard, re-read before anything is written ------------
+    if page:
+        listing = await call("doc.list", {}, "confirm the focused page is the plan's page")
+        if isinstance(listing, dict):
+            focused = _active_document_uuid(listing)
+            if focused and focused != page:
+                notes.append(
+                    f"the editor has {focused} focused and the plan targets {page}; "
+                    "nothing was written"
+                )
+                return done(4, "refused", "page_mismatch")
+    else:
+        notes.append(
+            "pageUuid guard unavailable — this plan carries no pageUuid, so "
+            "`guardPage` returns early (measured, actions.ts)"
+        )
+    identity = await call("sys.identity", {}, "confirm the editor's two layers of focus agree")
+    if isinstance(identity, dict) and identity.get("consistent") is False:
+        notes.append(
+            "焦点不一致，请先切换工程再执行 — 没有发出任何写动作"
+        )
+        return done(4, "refused", "focus_inconsistent")
+
+    # ---- 2. the probe: the plan's own postconditions, read on the board ----
+    geometry = await call("sch.geometry", {}, "read the page before writing")
+    if geometry is None:
+        last = records[-1]
+        notes.append(
+            "the page could not be read, so the plan's preconditions were not checked; "
+            "nothing was written"
+        )
+        return done(3 if last["unknown"] else 4, "unknown" if last["unknown"] else "refused",
+                    "precondition_unreadable")
+    netlist = await call(
+        "sch.netlist", {"type": "EasyEDA"},
+        "read the editor's own netlist (the probe's membership leg)",
+    )
+    live = patchpin.live_pin_nets(netlist)
+    before_export = await _live_project_export(call, notes)
+    before_model = _model_from_export(before_export, notes) if before_export else None
+    pins = await read_pins(geometry)
+    state = subcircuit.postcondition_problems(plan, live=live, geometry=geometry, pins=pins)
+    on_page = [item.designator for item in parts if item.designator in addcomponent.component_origins(geometry)]
+    report["idempotence"] = {
+        "state": "satisfied" if subcircuit.all_satisfied(state) else "not_satisfied",
+        "satisfied": subcircuit.all_satisfied(state),
+        "partsOnPage": on_page,
+        "problems": state,
+        "how": (
+            "engines/subcircuit.postcondition_problems — the plan's own postconditions "
+            "(there is no rule for this kind, so the plan states what done means)"
+        ),
+    }
+    if subcircuit.all_satisfied(state):
+        notes.append(
+            "both parts are on the page and the plan's postconditions hold — a repeat run "
+            "or a hand-built circuit; nothing was written (idempotent)"
+        )
+        report["final"] = "already satisfied; the page was not touched"
+        return done(0, "already_applied", "already_applied")
+    half = [name for name in on_page if name]
+    if half:
+        notes.append(
+            f"{', '.join(half)} is already on the page but the plan's postconditions do not "
+            "hold: "
+            + "；".join(state["live"] + state["canvas"])
+            + " —— 这是上次跑到一半留下的形状（器件在、线没接上）；再放一遍会变成两套半电路，"
+            "故拒绝（没有写）"
+        )
+        return done(4, "refused", "part_present_unfinished")
+
+    # ---- 3. the plan's own preconditions, on the live page ----------------
+    if delete_path:
+        attachment = plan.change.attachment
+        if not patchpin.primitive_present(geometry, attachment.primitive_id):
+            notes.append(
+                f"the attachment this plan removes ({attachment.kind} "
+                f"{attachment.primitive_id}) is not on the page any more — the plan's "
+                "precondition is broken; nothing was written (拒绝删别的东西)"
+            )
+            return done(4, "refused", "attachment_missing")
+        now_net = str(live.get((anchor.designator, anchor.pin)) or "")
+        # An **auto** name is not an identity (035 round 4): the export calls an
+        # unnamed net `NET3`, the editor's own netlist calls the same island
+        # `$57N2`, and comparing two meaningless names refused a board that had not
+        # moved. Two auto names compare equal; a named net is compared by name.
+        from .rules import facts as facts_rules
+
+        same = (now_net or "") == plan.change.before_net or (
+            facts_rules.is_auto_net(now_net) and facts_rules.is_auto_net(plan.change.before_net)
+        )
+        report["observedNet"] = now_net
+        if not same:
+            notes.append(
+                f"{anchor.designator} pin{anchor.pin} is on {now_net!r} in the editor's own "
+                f"netlist, but the plan expects {plan.change.before_net!r} — 快照已失效，"
+                "前置条件失败；没有写"
+            )
+            return done(4, "refused", "stale_before")
+    else:
+        record = plan.change.connections[0].to
+        vertices = {
+            (x, y) for x, y, net in addcomponent.wire_vertices(geometry)
+            if net == anchor.anchor_net
+        }
+        if record not in vertices:
+            notes.append(
+                f"the anchor net {anchor.anchor_net!r} no longer has a vertex at "
+                f"({record[0]:g}, {record[1]:g}) — the plan's precondition is broken; "
+                "nothing was written"
+            )
+            return done(4, "refused", "anchor_moved")
+    taken = [
+        item.designator for item in parts
+        if item.designator in addcomponent.component_origins(geometry)
+    ]
+    if taken:
+        notes.append(
+            f"{', '.join(taken)} is already used on the page — 位号在 plan 与 apply 之间被"
+            "占用了；没有写"
+        )
+        return done(4, "refused", "designator_taken")
+    occupied = addcomponent.occupied_points(geometry)
+    busy = [
+        item.designator for item in parts
+        if not addcomponent.is_free(float(item.x or 0.0), float(item.y or 0.0), occupied)
+    ]
+    if busy:
+        notes.append(
+            f"the planned landing spot of {', '.join(busy)} is occupied now — 阶梯在 plan 时"
+            "已经走过，apply 不替它改主意；没有写"
+        )
+        return done(4, "refused", "spot_taken")
+
+    # ---- 4. the writes: off the old net (if any), then the parts and wires -
+    if delete_path:
+        attachment = plan.change.attachment
+        reply = await call(
+            "sch.delete_primitives",
+            {"primitiveIds": [attachment.primitive_id],
+             **({"pageUuid": page} if page else {})},
+            f"delete the {attachment.kind} {attachment.primitive_id} attached to "
+            f"{anchor_label}",
+            writes=True,
+        )
+        report["write"]["calls"] += 1
+        if not isinstance(reply, dict):
+            last = records[-1]
+            if last["unknown"]:
+                notes.append(
+                    "the delete's outcome is UNKNOWN — read the page below rather than "
+                    "retrying it"
+                )
+            else:
+                # The page is the authority (035): continue and let the read-back
+                # say whether the wire is gone.
+                notes.append(
+                    "the delete reported a failure; continuing, because the page is the "
+                    "authority"
+                )
+        else:
+            deleted = [str(item) for item in reply.get("deleted") or []]
+            missing = [str(item) for item in reply.get("notFound") or []]
+            failed = reply.get("failed") or []
+            report["write"]["deleted"] = deleted
+            if attachment.primitive_id not in deleted or missing or failed:
+                notes.append(
+                    f"the delete did not take {attachment.primitive_id}: deleted={deleted}, "
+                    f"notFound={missing}, failed={failed} — 没有继续往下画线（先按事实说清）"
+                )
+                return done(2, "failed", "delete_refused")
+
+    pin_coords: dict[tuple[str, str], tuple[float, float]] = {}
+    for item in parts:
+        place_params: dict = {
+            "lcsc": item.lcsc,
+            "x": float(item.x or 0.0),
+            "y": float(item.y or 0.0),
+            "designator": item.designator,
+            "rotation": int(item.rotation or 0),
+        }
+        if page:
+            place_params["pageUuid"] = page
+        placed = await call(
+            "sch.place_component", place_params,
+            f"place {item.designator} ({item.value}, {item.lcsc}) at "
+            f"({float(item.x or 0.0):g}, {float(item.y or 0.0):g})",
+            writes=True,
+        )
+        report["write"]["calls"] += 1
+        entry = {"designator": item.designator, "value": item.value, "lcsc": item.lcsc,
+                 "x": item.x, "y": item.y, "answered": isinstance(placed, dict)}
+        report["write"]["placed"].append(entry)
+        if placed is None:
+            last = records[-1]
+            readback = await call(
+                "sch.geometry", {},
+                f"read the page back after {item.designator}'s placement went unknown",
+            )
+            landed = isinstance(readback, dict) and item.designator in addcomponent.component_origins(readback)
+            if last["unknown"] and not landed:
+                notes.append(
+                    f"{item.designator}'s placement outcome is UNKNOWN ([{last['code']}] "
+                    f"{last['message']}) and the read-back does not show it; nothing was "
+                    "retried — a timeout is not a cancellation"
+                )
+                return done(3, "unknown", "place_unknown")
+            if not landed:
+                notes.append(
+                    f"{item.designator}'s placement was refused ([{last['code']}] "
+                    f"{last['message']})"
+                )
+                return done(2, "failed", "place_refused")
+            notes.append(
+                f"{item.designator}'s placement reported a failure but the part is on the "
+                "page — continuing, because the page is the authority"
+            )
+
+    # The pins are read **after** placement: the plan cannot know where the editor
+    # will put them (029-c), so the wires start on the pins the editor reports.
+    placed_geometry = await call(
+        "sch.geometry", {},
+        "read the page again to find the placed parts and their pins",
+    )
+    pins = await read_pins(placed_geometry if isinstance(placed_geometry, dict) else {})
+    report["write"]["pins"] = {
+        f"{designator}.{pin}": list(point)
+        for (designator, pin), point in sorted(pins.items())
+    }
+    executed: list[dict] = []
+    for item in plan.change.connections:
+        if item.kind == CONNECTION_POWER_FLAG:
+            flag = addcomponent.power_flag_kind(item.net)
+            start = pins.get((item.designator, item.pin))
+            if not flag or start is None:
+                missing = (
+                    f"net {item.net!r} is not a rail name (no flag kind applies)"
+                    if not flag
+                    else f"pin {item.pin} of {item.designator} is not among the pins the "
+                         f"editor reports ({sorted(n for d, n in pins if d == item.designator) or 'none'})"
+                )
+                notes.append(
+                    f"the plan chose a power flag for {item.designator}.{item.pin}→{item.net}, "
+                    f"but {missing} — the flag was NOT placed"
+                )
+                report["write"]["connections"] = executed
+                return done(2, "failed", "flag_unavailable")
+            answered = await call(
+                "sch.place_power",
+                {"kind": flag, "net": item.net, "x": start[0], "y": start[1],
+                 "rotation": 0, "mirror": False,
+                 **({"pageUuid": page} if page else {})},
+                f"place a {flag} flag named {item.net!r} on {item.designator}.{item.pin}",
+                writes=True,
+            )
+            report["write"]["calls"] += 1
+            executed.append({
+                "designator": item.designator, "pin": item.pin, "net": item.net,
+                "kind": item.kind, "at": [start[0], start[1]], "ok": answered is not None,
+            })
+            continue
+        start = pins.get((item.designator, item.pin))
+        target = subcircuit.wire_target(item, pins)
+        if start is None or target is None:
+            notes.append(
+                f"{item.designator}.{item.pin}'s wire cannot be drawn: "
+                + ("its own pin coordinates were not reported" if start is None
+                   else f"its far end ({item.to_pin or item.net}) could not be located")
+                + " — 没有猜坐标，停在这里"
+            )
+            report["write"]["connections"] = executed
+            return done(2, "failed", "wire_unavailable")
+        route = addcomponent.wire_route(start, target)
+        # The net name is passed only where the plan named a page net: the new
+        # node's own wires are left unnamed on purpose, so the editor names that
+        # island itself (036 §3 — the read-back compares islands, not names).
+        params: dict = {"points": [list(point) for point in route]}
+        if item.net not in (subcircuit.NODE_X, ""):
+            params["net"] = item.net
+        if page:
+            params["pageUuid"] = page
+        answered = await call(
+            "sch.place_wire", params,
+            f"draw the wire from {item.designator}.{item.pin} at "
+            f"({start[0]:g}, {start[1]:g}) to ({target[0]:g}, {target[1]:g})"
+            + (f", carrying net {item.net!r}" if "net" in params else " (the new node, unnamed)")
+            + f" ({len(route)} orthogonal point(s))",
+            writes=True,
+        )
+        report["write"]["calls"] += 1
+        executed.append({
+            "designator": item.designator, "pin": item.pin, "net": item.net,
+            "kind": item.kind, "from": [start[0], start[1]], "to": [target[0], target[1]],
+            "route": [list(point) for point in route], "ok": answered is not None,
+        })
+    report["write"]["connections"] = executed
+
+    # ---- 5. the read-back: the plan's postconditions, both legs ------------
+    verify = await call("sch.geometry", {}, "read the page back independently after the writes")
+    if verify is None:
+        notes.append(
+            "the independent read-back failed — the page's state cannot be stated, "
+            "although the writes were issued"
+        )
+        return done(3, "unknown", "readback_unavailable")
+    live_after = patchpin.live_pin_nets(
+        await call("sch.netlist", {"type": "EasyEDA"}, "read the editor's own netlist again")
+    )
+    pins_after = await read_pins(verify)
+    state_after = subcircuit.postcondition_problems(
+        plan, live=live_after, geometry=verify, pins=pins_after
+    )
+    report["verification"] = {
+        "action": "sch.netlist (live) + sch.geometry (canvas)",
+        "live": state_after["live"],
+        "canvas": state_after["canvas"],
+        "membership": {
+            f"{designator}.{pin}": live_after.get((designator, pin), "")
+            for (designator, pin) in subcircuit.plan_pins(plan)
+        },
+        "ok": subcircuit.all_satisfied(state_after),
+    }
+    if not subcircuit.all_satisfied(state_after):
+        notes.append(
+            "回读没通过计划自己的 postconditions（双证缺一判 unknown，不判成功）："
+            + ("；".join("活网表腿：" + item for item in state_after["live"])
+               if state_after["live"] else "")
+            + ("；".join("画布腿：" + item for item in state_after["canvas"])
+               if state_after["canvas"] else "")
+            + " —— 没有保存，人工看一眼页面"
+        )
+        return done(3, "unknown", "verification_disagrees")
+
+    # ---- 6. the range, and the rules' verdict on what was added ------------
+    after_export = await _live_project_export(call, notes)
+    after_model = _model_from_export(after_export, notes) if after_export else None
+    wanted = {item.designator for item in parts}
+    diff: dict = {"expected": sorted(wanted)}
+    if before_model is not None and after_model is not None:
+        before_names = set(before_model.components)
+        after_names = set(after_model.components)
+        added = sorted(after_names - before_names)
+        removed = sorted(before_names - after_names)
+        diff.update({"added": added, "removed": removed,
+                     "unchanged": len(before_names & after_names)})
+        # Two parts is the template's whole promise: one is a half-circuit and
+        # three is somebody else's part being counted in (029 §一's reading).
+        if added != sorted(wanted) or removed:
+            notes.append(
+                f"范围差异不是恰好 +{len(wanted)}（{', '.join(sorted(wanted))}）："
+                f"added={added}, removed={removed} —— 事故报告；没有保存，请人工确认页面"
+            )
+            report["range"] = diff
+            return done(2, "failed", "range_diff")
+    else:
+        notes.append(
+            "the project export could not be read after the writes, so the +2-part range "
+            "could not be checked — the read-back above still decided the run"
+        )
+    if delete_path:
+        before_ids = {item.primitive_id for item in patchpin.wire_segments(geometry)}
+        after_ids = {item.primitive_id for item in patchpin.wire_segments(verify)}
+        vanished = sorted(before_ids - after_ids)
+        appeared = sorted(after_ids - before_ids)
+        diff.update({"wiresVanished": vanished, "wiresAppeared": appeared})
+        report["rangeBasis"] = (
+            "canvas identity (sch.geometry) + live netlist (sch.netlist) — 本 run 删了东西，"
+            "导出不重算，故只作事故报告附件"
+        )
+        if vanished != [plan.change.attachment.primitive_id]:
+            notes.append(
+                f"画布身份级范围差异不对：消失的走线是 {vanished!r}，而计划只授权删 "
+                f"{plan.change.attachment.primitive_id!r} —— 事故报告；没有保存"
+            )
+            report["range"] = diff
+            return done(2, "failed", "range_canvas_diff")
+    else:
+        report["rangeBasis"] = "project export (both sides) — 纯 create，导出会重算"
+        outside: list[str] = []
+        if before_model is not None and after_model is not None:
+            outside = subcircuit.existing_company_problems(before_model, after_model)
+        diff["outsideScope"] = outside
+        if outside:
+            notes.append(
+                "范围外网表有差异（事故报告）：" + "；".join(outside)
+                + " —— 没有保存，请人工确认页面"
+            )
+            report["range"] = diff
+            return done(2, "failed", "outside_scope")
+    if delete_path and before_model is not None and after_model is not None:
+        # The export is not the verdict on this path, but its reading is still
+        # worth attaching: if *it* saw an existing pin change company, a human
+        # should look — the canvas answered "nothing else vanished", and the two
+        # read different things (035 round 4: 导出只作事故报告附件).
+        diff["exportAccidentReport"] = subcircuit.existing_company_problems(
+            before_model, after_model
+        )
+    report["range"] = diff
+    flags_before = addcomponent.netflag_count(geometry)
+    flags_after = addcomponent.netflag_count(verify)
+    flags_expect = sum(
+        1 for item in plan.change.connections
+        if item.kind == CONNECTION_POWER_FLAG
+    )
+    diff["flags"] = {"before": flags_before, "after": flags_after, "expected": flags_expect}
+    if (flags_after - flags_before) != flags_expect:
+        notes.append(
+            f"电源/地旗标数量不对：计划声明 {flags_expect} 个，页面从 {flags_before} 变成 "
+            f"{flags_after} —— 少一个就是接地没落地，多一个是别人的东西；没有保存"
+        )
+        return done(2, "failed", "range_flag_diff")
+
+    # ---- 6b. no new findings (there is no rule of our own to re-review) -----
+    baseline = set(plan.change.baseline_findings)
+    now = set(_baseline_findings(after_model)) if after_model is not None else None
+    if now is None:
+        report["findings"] = {"state": "unknown", "baseline": sorted(baseline)}
+        notes.append(
+            "the after-export could not be parsed, so 'did this insert break something?' "
+            "could not be answered — reported as unknown, not as clean"
+        )
+    else:
+        grown = sorted(now - baseline)
+        report["findings"] = {
+            "baseline": sorted(baseline),
+            "after": sorted(now),
+            "new": grown,
+            "resolved": sorted(baseline - now),
+        }
+        if grown:
+            notes.append(
+                "新增 finding（apply 后重跑全规则，集合只许减不许增）："
+                + "；".join(grown)
+                + " —— 事故报告；没有保存"
+            )
+            return done(2, "failed", "new_findings")
+
+    # ---- 7. save ----------------------------------------------------------
+    saved = await call("sch.doc.save", {}, "persist the change", writes=True)
+    if saved is None:
+        last = records[-1]
+        report["save"] = {"ok": False, "code": last["code"], "message": last["message"]}
+        if last["unknown"]:
+            report["persistence"] = "unknown"
+            notes.append(
+                "the save's outcome is unknown — the circuit is verified on the page, but "
+                "whether it reached the file cannot be stated, and nothing was retried"
+            )
+            return done(3, "unknown", "save_unknown")
+        report["persistence"] = "placed"
+        notes.append(
+            f"the editor refused the save ([{last['code']}] {last['message']}) — the "
+            "circuit is on the canvas only; it is NOT persisted"
+        )
+        return done(2, "failed", "save_refused")
+    report["save"] = {"ok": True, "answered": saved}
+    report["persistence"] = "saved_unverified"
+    notes.append(
+        "persistence is capped at saved_unverified: this bridge has no close/reopen action "
+        "(009d), so only a separate reopen can promote it to saved_verified"
+    )
+    report["final"] = (
+        f"{template} inserted, verified against the plan's own postconditions, saved"
+        + (
+            f" — {len(report['findings'].get('resolved') or [])} earlier finding(s) are gone"
+            if (report.get("findings") or {}).get("resolved")
+            else ""
+        )
+    )
+    return done(0, "applied")
+
+
 def _render_edit_apply_add(report: dict, args: argparse.Namespace) -> int:
     """Print the human summary of an add-component apply, write ``--json``, exit."""
     import json
@@ -9173,6 +10693,8 @@ def _cmd_edit_apply(args: argparse.Namespace) -> int:
                 return await _edit_apply_add_flow(client, BridgeError, plan, args, started)
             if plan.change.kind == PATCH_PIN_KIND:
                 return await _edit_apply_patch_pin_flow(client, BridgeError, plan, args, started)
+            if plan.change.kind == INSERT_SUBCIRCUIT_KIND:
+                return await _edit_apply_insert_flow(client, BridgeError, plan, args, started)
             return await _edit_apply_flow(client, BridgeError, plan, args, started)
         finally:
             await client.close()

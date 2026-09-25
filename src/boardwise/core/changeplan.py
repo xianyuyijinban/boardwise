@@ -40,8 +40,12 @@ __all__ = [
     "CONNECTION_LABEL",
     "CONNECTION_POWER_FLAG",
     "CONNECTION_WIRE",
+    "INSERT_SUBCIRCUIT_KIND",
+    "INSERT_TEMPLATES",
     "PLAN_VERSION",
     "SUPPORTED_KINDS",
+    "TEMPLATE_DIVIDER",
+    "TEMPLATE_RC_LOWPASS",
     "ChangePlan",
     "ChangePlanError",
     "PageComponent",
@@ -56,6 +60,7 @@ __all__ = [
     "PlanTarget",
     "add_component_plan",
     "component_value_plan",
+    "insert_subcircuit_plan",
     "patch_pin_plan",
     "resolve_on_page",
     "sha256_of",
@@ -74,16 +79,29 @@ ADD_COMPONENT_KIND = "add-component"
 #: 035: one pin's connection repaired — disconnect what should not be there,
 #: connect what should be, or both (the shelf's NC / must_connect obligations).
 PATCH_PIN_KIND = "patch-pin"
+#: 036: a whole sub-circuit inserted — two parts, their wiring, and (for
+#: `rc-lowpass`) the wire that has to come off first. The first kind with **no
+#: driving rule**: the plan states its own postconditions and they are what the
+#: idempotence probe and the read-back read (there is no rule to re-run).
+INSERT_SUBCIRCUIT_KIND = "insert-subcircuit"
 SUPPORTED_KINDS: tuple[str, ...] = (
     COMPONENT_VALUE_KIND,
     ADD_COMPONENT_KIND,
     PATCH_PIN_KIND,
+    INSERT_SUBCIRCUIT_KIND,
 )
+
+#: 036: the sub-circuit templates this build can insert. The vocabulary lives
+#: beside the other kinds' vocabularies rather than in `engines/subcircuit.py`
+#: because the *plan's validation* has to refuse a template this build cannot
+#: execute, and `core` may not import `engines` (tests/test_layer_rules.py).
+TEMPLATE_RC_LOWPASS = "rc-lowpass"
+TEMPLATE_DIVIDER = "divider"
+INSERT_TEMPLATES: tuple[str, ...] = (TEMPLATE_RC_LOWPASS, TEMPLATE_DIVIDER)
 
 #: Where the *other* kinds belong, quoted in the refusal so the reader is not
 #: left guessing whether the plan is broken or merely early.
 _LATER_KINDS = {
-    "insert-subcircuit": "inserting an RC / divider sub-circuit",
     "move-block": "moving a functional block",
 }
 
@@ -198,15 +216,36 @@ class PlanTarget:
     #: copies, or the flag it places). Written into the plan because "it
     #: connected somehow" is not a reviewable claim.
     connection_detail: str = ""
+    #: `insert-subcircuit` only: the **net** a `divider` hangs off, when the
+    #: anchor is not a component pin at all (036's second template starts from a
+    #: net's own wire, not from a part). Exactly one of (designator, pin) /
+    #: anchor_net is set, and the validation enforces it.
+    anchor_net: str = ""
 
 
 @dataclass
 class PlanPart:
-    """The part to place, as the shelf or the operator stated it (029 §二.2)."""
+    """The part to place, as the shelf or the operator stated it (029 §二.2).
+
+    `insert-subcircuit` places **two** of these at once, so the fields the
+    single-part kinds could keep in the target block — which part, and where it
+    lands — live here for that kind: ``designator`` (allocated from the page's
+    own pool), ``role`` (which slot of the template this is) and the landing
+    coordinates. The 029 shape is untouched: those keys are written only for the
+    insert kind, and a 029 plan still serialises exactly what it always did.
+    """
 
     lcsc: str = ""
     value: str = ""
     footprint: str = ""
+    designator: str = ""
+    role: str = ""
+    x: float | None = None
+    y: float | None = None
+    #: `insert-subcircuit` only: the rotation the template asks for, in degrees.
+    #: `divider`'s second resistor is turned 180° so the two pins that form the
+    #: tap face each other; apply places the part with exactly this rotation.
+    rotation: int = 0
 
 
 @dataclass
@@ -230,6 +269,15 @@ class PlanConnection:
     #: not known until the part is placed, so apply reads it there rather than
     #: pretending the plan could have known it.
     to: tuple[float, float] | None = None
+    #: `insert-subcircuit` only: which of the plan's parts this pin belongs to.
+    #: 029 had exactly one part, so `pin` alone was unambiguous; a two-part
+    #: insert is not, and "1" meaning R1.1 or C1.1 depending on position is the
+    #: kind of ambiguity that plans exist to remove.
+    designator: str = ""
+    #: `insert-subcircuit` only: the wire ends on **another plan part's pin**,
+    #: named ``<designator>.<pin>``. Both ends of such a wire belong to parts this
+    #: plan places, so neither coordinate exists until apply reads them back.
+    to_pin: str = ""
 
 
 @dataclass
@@ -264,6 +312,21 @@ class PlanChange:
     after: str = ""
     part: PlanPart | None = None
     connections: list[PlanConnection] = field(default_factory=list)
+    #: `insert-subcircuit` only: which template this is (036's vocabulary lives
+    #: beside the other kind constants), and the parts it places — plural, which
+    #: is why this kind carries its own ``parts`` rather than 029's single
+    #: ``part``. A plan is readable as *what will be on the board afterwards*:
+    #: template, parts with values and numbers and landing spots, connections,
+    #: and whatever has to come off first.
+    template: str = ""
+    parts: list[PlanPart] = field(default_factory=list)
+    #: `insert-subcircuit` only: the findings the project reported when the plan
+    #: was built, as rule/subject/message signatures. apply re-runs every rule on
+    #: a fresh export afterwards and refuses to save when the set **grew** — an
+    #: insert may resolve findings or leave them, never create one (there is no
+    #: rule for this kind, so "did it break something?" has to be answered by the
+    #: rules that do exist).
+    baseline_findings: list[str] = field(default_factory=list)
     #: `patch-pin` only: the net the pin is on today ("" = it reaches none) and
     #: the net it must end up on ("" = the repair is to **disconnect** it). The
     #: two together are the plan's whole claim, and `before != after` is
@@ -381,6 +444,61 @@ class ChangePlan:
                 ],
                 "recipeSource": self.change.recipe_source,
             }
+        if self.change.kind == INSERT_SUBCIRCUIT_KIND:
+            target.update({
+                "anchor": self.target.anchor,
+                "anchorNet": self.target.anchor_net,
+                "pin": self.target.pin,
+                "x": self.target.x,
+                "y": self.target.y,
+            })
+            change = {
+                "kind": self.change.kind,
+                "template": self.change.template,
+                "parts": [
+                    {
+                        "designator": item.designator,
+                        "role": item.role,
+                        "lcsc": item.lcsc,
+                        "value": item.value,
+                        "footprint": item.footprint,
+                        "x": item.x,
+                        "y": item.y,
+                        "rotation": item.rotation,
+                    }
+                    for item in self.change.parts
+                ],
+                "connections": [
+                    {
+                        "designator": item.designator,
+                        "pin": item.pin,
+                        "net": item.net,
+                        "kind": item.kind,
+                        "detail": item.detail,
+                        **({"to": list(item.to)} if item.to else {}),
+                        **({"toPin": item.to_pin} if item.to_pin else {}),
+                    }
+                    for item in self.change.connections
+                ],
+                "beforeNet": self.change.before_net,
+                **(
+                    {
+                        "attachment": {
+                            "kind": self.change.attachment.kind,
+                            "primitiveId": self.change.attachment.primitive_id,
+                            "detail": self.change.attachment.detail,
+                            **(
+                                {"at": list(self.change.attachment.at)}
+                                if self.change.attachment.at
+                                else {}
+                            ),
+                        }
+                    }
+                    if self.change.attachment
+                    else {}
+                ),
+                "baselineFindings": list(self.change.baseline_findings),
+            }
         return {
             "planVersion": self.plan_version,
             "source": {
@@ -435,6 +553,17 @@ class ChangePlan:
             raise ChangePlanError(
                 "source.inputSha256 must be 64 hex characters (the sha256 of "
                 f"the snapshot the plan was built from), got {digest!r}"
+            )
+        if kind == INSERT_SUBCIRCUIT_KIND:
+            # No `target.designator` requirement here: a `divider` anchors on a
+            # **net**, not on a component, so the insert reader checks the pair
+            # (designator+pin) / anchorNet itself.
+            return cls(
+                source=_source_from(source, digest),
+                target=_insert_target_from(target),
+                change=_insert_change_from(change),
+                preconditions=_string_list(payload, "preconditions"),
+                expected_postcondition=_string_list(payload, "expectedPostcondition"),
             )
         designator = target.get("designator")
         if not isinstance(designator, str) or not designator.strip():
@@ -642,6 +771,281 @@ def _add_change_from(change: dict[str, Any]) -> PlanChange:
     )
 
 
+#: The connection kinds an `insert-subcircuit` may declare. The `label` option is
+#: absent on purpose: the host's net-label API is measured unusable (SKILL pit 9,
+#: ``sch_PrimitiveNetLabel: absent``), so a plan that leaned on it could not be
+#: executed — and a kind the page cannot carry is not a decision, it is a hope.
+INSERT_CONNECTION_KINDS: tuple[str, ...] = (CONNECTION_WIRE, CONNECTION_POWER_FLAG)
+
+
+def _insert_independent_point(value: Any) -> tuple[float, float] | None:
+    if (
+        isinstance(value, (list, tuple))
+        and len(value) >= 2
+        and all(isinstance(item, (int, float)) and not isinstance(item, bool) for item in value[:2])
+    ):
+        return (float(value[0]), float(value[1]))
+    return None
+
+
+def _insert_target_from(target: dict[str, Any]) -> PlanTarget:
+    """Read an `insert-subcircuit` target: the **anchor**, which may be a pin or a net.
+
+    `rc-lowpass` hangs off one pin of one component (the wire that joins that pin
+    to its net is what comes off first), so its anchor is ``designator`` +
+    ``pin``. `divider` hangs off a **net** — the stub the divider taps — because
+    there is no component to name: the anchor is ``anchorNet`` plus the vertex the
+    plan recorded. Exactly one of the two shapes, and the point is required either
+    way: apply re-reads it before writing anything.
+    """
+    anchor = str(target.get("anchor") or "").strip()
+    anchor_net = str(target.get("anchorNet") or "").strip()
+    pin = str(target.get("pin") or "").strip()
+    designator = str(target.get("designator") or "").strip()
+    if bool(anchor_net) == bool(designator and pin):
+        raise ChangePlanError(
+            "an insert-subcircuit target anchors on exactly one thing: either a "
+            "component pin (target.designator + target.pin, what rc-lowpass hangs "
+            "off) or a net (target.anchorNet, what divider taps) — got "
+            f"designator={designator!r} pin={pin!r} anchorNet={anchor_net!r}"
+        )
+    point = _insert_independent_point([target.get("x"), target.get("y")])
+    if point is None:
+        raise ChangePlanError(
+            "target.x/target.y must be the anchor point in canvas units (the pin's "
+            f"coordinates, or the net vertex the plan taps), got "
+            f"{target.get('x')!r} / {target.get('y')!r}"
+        )
+    return PlanTarget(
+        designator=designator,
+        primitive_id=str(target.get("primitiveId") or ""),
+        expected_value=str(target.get("expectedValue") or ""),
+        pin=pin,
+        anchor=anchor or designator,
+        anchor_net=anchor_net,
+        x=point[0],
+        y=point[1],
+    )
+
+
+def _insert_change_from(change: dict[str, Any]) -> PlanChange:
+    """Read an `insert-subcircuit` change, refusing anything apply cannot execute.
+
+    Five invariants, each with a refusal of its own because each one is a way for
+    the plan to *look* executable and not be:
+
+    * the template is one this build has;
+    * every part states its designator, its recipe (lcsc **and** value) and where
+      it lands, and no two parts share a number;
+    * every connection names one of those parts, a pin, a net, and a kind from
+      :data:`INSERT_CONNECTION_KINDS` — a wire also says where it ends, either at
+      a recorded point or at another planned part's pin;
+    * `rc-lowpass` has exactly one attachment and a non-empty ``beforeNet`` (it
+      removes a wire); `divider` has neither (it removes nothing);
+    * the baseline findings are listed, because apply's "no new findings" check
+      has nothing to compare against otherwise.
+    """
+    template = str(change.get("template") or "").strip()
+    if template not in INSERT_TEMPLATES:
+        raise ChangePlanError(
+            f"change.template is {template!r}; this build inserts "
+            f"{', '.join(INSERT_TEMPLATES)} only"
+        )
+    raw_parts = change.get("parts")
+    if not isinstance(raw_parts, list) or not raw_parts:
+        raise ChangePlanError(
+            f"change.parts must list the parts to place, got {raw_parts!r}"
+        )
+    parts: list[PlanPart] = []
+    seen: set[str] = set()
+    for index, item in enumerate(raw_parts):
+        if not isinstance(item, dict):
+            raise ChangePlanError(
+                f"change.parts[{index}] must be an object, got {item!r}"
+            )
+        designator = str(item.get("designator") or "").strip()
+        if not designator:
+            raise ChangePlanError(
+                f"change.parts[{index}].designator is empty — a template's parts are "
+                "planned by number so two runs land the same ones (026/029's rule)"
+            )
+        if designator in seen:
+            raise ChangePlanError(
+                f"change.parts lists {designator!r} twice — two parts cannot share a "
+                "designator, and one of them would silently not be placed"
+            )
+        seen.add(designator)
+        lcsc = str(item.get("lcsc") or "").strip()
+        if not lcsc:
+            raise ChangePlanError(
+                f"change.parts[{index}].lcsc is empty — a part with no orderable number "
+                "is not a recipe (029 §二.2)"
+            )
+        value = str(item.get("value") or "").strip()
+        if not value:
+            raise ChangePlanError(
+                f"change.parts[{index}].value is empty — the value is what the read-back "
+                "and the human reviewing the plan compare"
+            )
+        point = _insert_independent_point([item.get("x"), item.get("y")])
+        if point is None:
+            raise ChangePlanError(
+                f"change.parts[{index}].x/.y must be the landing point in canvas units, "
+                f"got {item.get('x')!r} / {item.get('y')!r} — apply places the part there "
+                "and the read-back checks it is still there"
+            )
+        parts.append(PlanPart(
+            lcsc=lcsc, value=value, footprint=str(item.get("footprint") or ""),
+            designator=designator, role=str(item.get("role") or ""),
+            x=point[0], y=point[1], rotation=int(item.get("rotation") or 0),
+        ))
+    raw = change.get("connections")
+    if not isinstance(raw, list) or not raw:
+        raise ChangePlanError(
+            f"change.connections must list the wires the template draws, got {raw!r}"
+        )
+    connections: list[PlanConnection] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise ChangePlanError(
+                f"change.connections[{index}] must be an object, got {item!r}"
+            )
+        designator = str(item.get("designator") or "").strip()
+        if designator not in seen:
+            raise ChangePlanError(
+                f"change.connections[{index}].designator is {designator!r}, which is not "
+                f"one of the parts this plan places ({', '.join(sorted(seen))}) — a "
+                "connection to a part nobody planned is a connection to nothing"
+            )
+        pin = str(item.get("pin") or "").strip()
+        net = str(item.get("net") or "").strip()
+        if not pin or not net:
+            raise ChangePlanError(
+                f"change.connections[{index}] needs both pin and net, got {item!r}"
+            )
+        kind = item.get("kind")
+        if kind not in INSERT_CONNECTION_KINDS:
+            raise ChangePlanError(
+                f"change.connections[{index}].kind must be one of "
+                f"{', '.join(INSERT_CONNECTION_KINDS)}, got {kind!r} — 本机 "
+                "`sch.place_netlabel` 不可用（SKILL 坑 9），label 不作为连接手段"
+            )
+        point = _insert_independent_point(item.get("to"))
+        to_pin = str(item.get("toPin") or "").strip()
+        if kind == CONNECTION_WIRE:
+            if point is None and not to_pin:
+                raise ChangePlanError(
+                    f"change.connections[{index}] is a wire with neither `to` (a point) "
+                    "nor `toPin` (another planned part's pin) — where the wire ends is "
+                    "the one thing apply cannot decide for itself"
+                )
+            if point is not None and to_pin:
+                raise ChangePlanError(
+                    f"change.connections[{index}] says both `to` and `toPin`; a wire has "
+                    "one far end"
+                )
+            if to_pin:
+                target_part, _, target_pin = to_pin.partition(".")
+                if target_part not in seen or not target_pin:
+                    raise ChangePlanError(
+                        f"change.connections[{index}].toPin is {to_pin!r}, which does not "
+                        f"name a pin of a planned part ({', '.join(sorted(seen))})"
+                    )
+        elif point is not None or to_pin:
+            raise ChangePlanError(
+                f"change.connections[{index}] is a {kind} connection with a far-end "
+                "point; a rail flag is placed on the part's own pin (029-d)"
+            )
+        connections.append(PlanConnection(
+            designator=designator, pin=pin, net=net, kind=str(kind),
+            detail=str(item.get("detail") or ""), to=point, to_pin=to_pin,
+        ))
+    covered = {item.designator for item in connections}
+    unconnected = sorted(seen - covered)
+    if unconnected:
+        raise ChangePlanError(
+            f"change.parts lists {', '.join(unconnected)} but no connection mentions "
+            "them — a part placed and left unconnected is the half-done state this "
+            "kind exists to prevent"
+        )
+    before_net = str(change.get("beforeNet") or "").strip()
+    attachment = _insert_attachment_from(change)
+    if template == TEMPLATE_RC_LOWPASS:
+        if attachment is None:
+            raise ChangePlanError(
+                "an rc-lowpass plan must name the attachment it removes "
+                "(change.attachment) — the anchor pin is wired to its net by definition, "
+                "and inserting the series resistor means taking that wire off first"
+            )
+        if not before_net:
+            raise ChangePlanError(
+                "an rc-lowpass plan must state change.beforeNet — the net the anchor pin "
+                "is on today, which the series resistor's far side goes back to"
+            )
+    else:
+        if attachment is not None:
+            raise ChangePlanError(
+                "a divider plan removes nothing, so it must not carry "
+                "change.attachment — a plan that says it will delete something the "
+                "template never removes is not what it claims to be"
+            )
+        if before_net:
+            raise ChangePlanError(
+                "a divider plan must leave change.beforeNet empty — nothing is being "
+                f"disconnected, got {before_net!r}"
+            )
+    baseline = change.get("baselineFindings")
+    if not isinstance(baseline, list) or any(not isinstance(item, str) for item in baseline):
+        raise ChangePlanError(
+            "change.baselineFindings must be a list of the finding signatures the "
+            "project reported when this plan was built — apply re-runs every rule "
+            "afterwards and refuses to save when the set grew, which it cannot do "
+            f"without a baseline, got {baseline!r}"
+        )
+    return PlanChange(
+        kind=INSERT_SUBCIRCUIT_KIND,
+        template=template,
+        parts=parts,
+        connections=connections,
+        before_net=before_net,
+        attachment=attachment,
+        baseline_findings=[str(item) for item in baseline],
+    )
+
+
+def _insert_attachment_from(change: dict[str, Any]) -> PlanAttachment | None:
+    """The attachment an `insert-subcircuit` removes, if it declares one."""
+    raw = change.get("attachment")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ChangePlanError(
+            f"change.attachment must be an object, got {type(raw).__name__}"
+        )
+    kind = raw.get("kind")
+    if kind not in ATTACHMENT_KINDS:
+        raise ChangePlanError(
+            f"change.attachment.kind must be one of {', '.join(ATTACHMENT_KINDS)}, "
+            f"got {kind!r}"
+        )
+    primitive_id = str(raw.get("primitiveId") or "").strip()
+    if not primitive_id:
+        raise ChangePlanError(
+            "change.attachment.primitiveId is empty — the removal is by canvas id, so a "
+            "plan without one cannot say what it will delete (035 §2)"
+        )
+    point = _insert_independent_point(raw.get("at"))
+    if point is None:
+        raise ChangePlanError(
+            f"change.attachment.at must be the coordinate that proves the attachment "
+            f"lands on the pin, got {raw.get('at')!r}"
+        )
+    return PlanAttachment(
+        kind=str(kind), primitive_id=primitive_id,
+        detail=str(raw.get("detail") or ""), at=point,
+    )
+
+
 def add_component_plan(
     source: PlanSource,
     *,
@@ -714,6 +1118,134 @@ def add_component_plan(
             ),
             "the page gained exactly one component and its connections — nothing else moved",
             "target review finding is resolved",
+        ],
+    )
+
+
+def insert_subcircuit_plan(
+    source: PlanSource,
+    *,
+    template: str,
+    parts: list[PlanPart],
+    connections: list[PlanConnection],
+    anchor: str = "",
+    anchor_net: str = "",
+    anchor_pin: str = "",
+    anchor_at: tuple[float, float] | None = None,
+    attachment: PlanAttachment | None = None,
+    before_net: str = "",
+    baseline_findings: list[str] | None = None,
+) -> ChangePlan:
+    """The fourth plan shape: a sub-circuit, with its own postconditions (036).
+
+    There is no finding and no rule here, so the plan has to say *for itself*
+    what "done" means — and the two lists below are that statement, generated from
+    the same values apply will re-read so they cannot drift:
+
+    * ``preconditions`` — the anchor, the thing to remove (if any), the two
+      designators and the two landing spots. Apply re-checks every one of them
+      against the live page before the first write.
+    * ``expected_postcondition`` — the two parts on the page at their spots, the
+      new node as **one island** in the editor's own netlist, the old net on the
+      resistor's far side, the ground leg on its rail, nothing else moved, and no
+      rule reporting anything it did not report before. Apply re-reads all of it
+      afterwards, and the *same* function answers "already done" before the writes
+      (`engines/subcircuit.postcondition_problems`).
+    """
+    if template not in INSERT_TEMPLATES:
+        raise ValueError(
+            f"template must be one of {', '.join(INSERT_TEMPLATES)}, got {template!r}"
+        )
+    if not parts:
+        raise ValueError("an insert-subcircuit plan needs at least one part")
+    if source.page_uuid:
+        page_line = f"pageUuid {source.page_uuid} is still the focused page"
+    else:
+        page_line = (
+            "the page the editor has focused is the plan's page (this plan "
+            "carries no pageUuid, so there is no page guard to enforce)"
+        )
+    anchor_at = anchor_at or (0.0, 0.0)
+    preconditions = [page_line]
+    if template == TEMPLATE_RC_LOWPASS:
+        preconditions.append(
+            f"anchor {anchor} pin{anchor_pin} still resolves on the page"
+        )
+        preconditions.append(
+            f"the anchor pin is still on net {before_net!r}"
+        )
+        if attachment is not None:
+            preconditions.append(
+                f"the attachment to remove ({attachment.kind} {attachment.primitive_id}) "
+                f"is still on the pin at ({anchor_at[0]:g}, {anchor_at[1]:g})"
+            )
+    else:
+        preconditions.append(
+            f"the anchor net {anchor_net!r} still has a vertex at "
+            f"({anchor_at[0]:g}, {anchor_at[1]:g})"
+        )
+    preconditions.append(
+        "designators "
+        + ", ".join(item.designator for item in parts)
+        + " are still unused on the page"
+    )
+    preconditions.append(
+        "the landing spots "
+        + ", ".join(f"({float(item.x or 0.0):g}, {float(item.y or 0.0):g})" for item in parts)
+        + " are still unoccupied"
+    )
+    preconditions.append(
+        "the recipes "
+        + ", ".join(f"{item.designator}={item.value!r} ({item.lcsc})" for item in parts)
+        + " are still the ones this plan was built from"
+    )
+    node_pins = [
+        f"{item.designator}.{item.pin}" for item in connections if item.net == "X"
+    ]
+    ground_pins = [
+        f"{item.designator}.{item.pin}" for item in connections if item.net == "GND"
+    ]
+    far_side = [
+        f"{item.designator}.{item.pin}→{item.net}" for item in connections
+        if item.net not in ("X", "GND")
+    ]
+    return ChangePlan(
+        source=source,
+        target=PlanTarget(
+            designator=anchor,
+            anchor=anchor or anchor_net,
+            anchor_net=anchor_net,
+            pin=anchor_pin,
+            x=anchor_at[0],
+            y=anchor_at[1],
+        ),
+        change=PlanChange(
+            kind=INSERT_SUBCIRCUIT_KIND,
+            template=template,
+            parts=list(parts),
+            connections=list(connections),
+            attachment=attachment,
+            before_net=before_net,
+            baseline_findings=list(baseline_findings or []),
+        ),
+        preconditions=preconditions,
+        expected_postcondition=[
+            ", ".join(
+                f"{item.designator} ({item.value!r}, {item.lcsc}) at "
+                f"({float(item.x or 0.0):g}, {float(item.y or 0.0):g})"
+                for item in parts
+            )
+            + " are on the page",
+            f"the new node 'X' is one island in the editor's own netlist: "
+            + (", ".join(node_pins) or "(none declared)"),
+            *(
+                [f"the anchor pin left its old net and " + ", ".join(far_side) + " is on it"]
+                if far_side
+                else []
+            ),
+            f"the ground leg ({', '.join(ground_pins) or '(none declared)'}) is on 'GND'",
+            "the page gained exactly the planned parts and their wires — nothing else moved",
+            "no rule reports a finding it did not report before",
         ],
     )
 

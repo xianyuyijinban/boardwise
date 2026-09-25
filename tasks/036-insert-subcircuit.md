@@ -116,4 +116,34 @@ R2.2 到 GND（同 T1 第 3 步）。
 
 ## 交卷记录
 
-（子代理交文本，主代理 append 并复验。）
+（子代理交卷全文：`outputs/036_summary.txt`；真机原件：`outputs/036_live.txt`。）
+
+### 子代理交卷浓缩（agent-43，2026-09-25）
+
+- **交付**：`engines/subcircuit.py`（新——两模板、两件一起的九宫落点阶梯、计划自己的 postconditions
+  判据、create 路径范围判据）；`core/changeplan.py`（insert-subcircuit 转正，payload 多件化：
+  `PlanPart.designator/role/x/y/rotation`、`PlanConnection.designator/toPin`、`change.template/parts/
+  baselineFindings`；**016/029/035 JSON 一字不变**，回归钉钉住）；`cli.py`（第三个入口
+  `edit plan --insert`，preview insert 分支，第四条 apply 流程）；`tests/test_036_subcircuit.py`（63 条）。
+- **真机（只碰 test 窗 `inst-015813234-aw2317s0`）**：
+  - **T1 rc-lowpass：applied + saved ✔**——夹具 U3/U9（C47773）+ U3.5→U9.1 线（VOUT_U3）；apply
+    删线 + 放 R1(1k,C7250) + C1(100nF,C14663) + 3 线 + GND 旗标 + save；幂等重放 already_applied 零写入；
+    现场复核 X={U3.5,R1.1,C1.1} 同岛（`$61N2`）、R1.2 回 VOUT_U3 且 U9.1 仍在、C1.2 在 GND。
+  - **T2 divider：applied + saved ✔**——夹具 U1/U2 + DIV_FEED；stale 演示（先删锚点网线）exit 4
+    `anchor_moved` 零写入 ✔；apply 放 R1(27k,C22967)+R3(1k,C7250)+2 线+旗标+save；幂等 already_applied ✔。
+  - 模板器件 test 工程库自带 0603 R/C，未动禁地；零残留（4 scratch 页全删、6 文档、焦点 P1、
+    identity consistent；test2/ROBOT 未寻址）。
+- **真机暴露已修三处**（均实证）：① 宿主上报线点重复结点，远端取"离锚点最远的点"（原取最后点=拐角，
+  删线后什么都不剩）；② 宿主对撞工程全局的位号静默改名（要 R2 得 R3）⇒ 位号池取「页面 ∪ 工程导出」；
+  ③ findings 签名把换措辞/自动网重编号当新增 ⇒ 签名改为 rule|severity|component|pins|命名网。
+- **三线/变异**：pytest **1570**（+63）；connector 419 / tsc 干净（零改动）；变异 3/3 CAUGHT
+  （幂等漏判 / 范围误拦 / 幻影放行三方向）。
+- **遗留裁决**：029 位号池同样只看页面（同盲点）——主代理已批修，立案 036b 随下一批落。
+
+### 主代理复验（2026-09-25）
+
+- sha256 抽核 4 件全对：cli.py `2c30bbb3…`、changeplan.py `0b127246…`、subcircuit.py `b4210b6e…`、
+  test_036_subcircuit.py `3f9c9520…`。
+- 三线复跑：pytest **1570 passed** / connector **419 passed** / `tsc --noEmit` 干净。
+- `git status` 仅 4 件预期改动（017 草稿未跟踪、不混入）；connector/daemon 零改动，仍 0.4.23。
+- SKILL.md 动作说明区补 `--insert` 一条（两模板 + 无规则判据差），坑表补第 25 条（三条宿主习性）。
