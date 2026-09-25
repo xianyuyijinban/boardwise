@@ -267,6 +267,9 @@ typeof 全在位、activate 冷启动正常派发、render 实跑 308KB PNG—�
 - 新增动作：`protocol.py` 目录 + connector handler + `docs/bridge.md` §4 三处必须同步
   （`tests/test_action_catalogue.py` 与 `connector/tests/contract-drift.test.mjs` 会拦）。
 - 不碰历史证据：`outputs/011e*`、`014_*`、`015b_*`、`016_*`；不碰 `tests/fixtures/` 既有夹具。
+- **connector 版本号每 bump 一次就发一个 GitHub Release**（岳 2026-09-25 定的规矩：版本史公开，
+  更新节奏可视化）：`npm run package` 出 eext → `packaging/build_exe.py` 出 exe（内嵌 bundle 哈希
+  进 notes）→ `gh release create v<版本> --prerelease` 双附件 → 验服务端 digest 与本机 sha256 一致。
 
 ## 8. 故障速查
 
