@@ -712,9 +712,15 @@ def _fact_provenance(value: Any, where: str) -> str:
     text = _as_str(value, where)
     if not text:
         raise PartError(f"{where}: a fact without provenance cannot be recorded")
-    if "http" not in text:
+    if "http" not in text and "file:" not in text:
+        # A **source** is what is required, and 039 批② made the second spelling
+        # necessary: an engineer can hand over a PDF with no URL on it, and the
+        # local file IS the citation (`file:E:/…/CH340N.pdf, p.5`). The page/section
+        # requirement below is untouched, so "the datasheet says so" is still
+        # refused — only the *addressability* of the source widened.
         raise PartError(
-            f"{where}: provenance must cite its source URL, got {text!r}"
+            f"{where}: provenance must cite its source (a URL, or a local "
+            f"'file:' path for a datasheet handed over by hand), got {text!r}"
         )
     if not _FACT_PAGE_RE.search(text):
         raise PartError(

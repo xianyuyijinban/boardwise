@@ -22,6 +22,7 @@ grouping could not be made, say that instead of inventing one.**
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any, Iterable
 
 from ..core.model import Component, DesignModel, is_ground_net
@@ -481,7 +482,6 @@ def modules_section(
 #: The question every `unknown_parts` entry asks. One template, so the model's
 #: worklist is uniform — the *reason* differs per entry and travels beside it.
 UNKNOWN_PART_QUESTION = "核对该器件周边配置是否符合规格书典型应用（去耦/上下拉/限流/耐压），并确认可用型号"
-
 #: Why a part is on the list. Reported per entry so the model can prioritise:
 #: "no MPN at all" and "an MPN this decoder refuses" are different problems.
 UNKNOWN_REASON_NO_MPN = "无 MPN"
@@ -543,6 +543,396 @@ def unknown_parts(model: DesignModel) -> list[dict]:
     return out
 
 
+# --------------------------------------------------------------------------
+# 未审器件 — the promoted section (039 批② §WI-1)
+# --------------------------------------------------------------------------
+
+#: The three acquisition channels 岳 named, in the order the SOP tries them.
+CHANNEL_ENGINEER = "engineer"
+CHANNEL_LCSC = "lcsc"
+CHANNEL_OFFICIAL = "official"
+
+#: Why the official-site channel is empty in the report. The CLI does not search
+#: the web; the AI does, and the report gives it the queries to start from.
+OFFICIAL_CHANNEL_DETAIL = (
+    "CLI 不搜官网：这一通道由 AI 用 WebSearch 走，报告只给建议查询词与厂商名"
+)
+
+UNREVIEWED_DATASHEET_DIR = ".tmp_datasheets"
+
+
+def _local_datasheet(directory: Path | None, *needles: str) -> Path | None:
+    """A local PDF whose file name carries one of ``needles`` (case-insensitive)."""
+    if directory is None:
+        return None
+    folder = Path(directory)
+    if not folder.is_dir():
+        return None
+    wanted = [needle.strip().lower() for needle in needles if needle and needle.strip()]
+    for path in sorted(folder.glob("*.pdf")):
+        name = path.name.lower()
+        if any(needle in name for needle in wanted):
+            return path
+    return None
+
+
+def suggested_queries(mpn: str, manufacturer: str = "", value: str = "") -> list[str]:
+    """The query words to hand the AI when it has to go to the vendor's site."""
+    text = (mpn or "").strip()
+    if not text:
+        # No MPN to search on: the honest query is about the marking on the part.
+        text = (value or "").strip() or "(没有 MPN)"
+        return [f"{text} datasheet pdf", f"{text} 数据手册 规格书"]
+    queries = [f"{text} datasheet pdf", f"{text} 数据手册"]
+    if manufacturer:
+        queries.append(f"{manufacturer} {text} datasheet")
+        site = manufacturer.split("(")[0].strip()
+        if site and site.isascii():
+            queries.append(f"{text} site:{site.lower()}.com")
+    return queries
+
+
+def unreviewed_parts(
+    model: DesignModel,
+    *,
+    library: object | None = None,
+    datasheet_dir: str | Path | None = UNREVIEWED_DATASHEET_DIR,
+) -> list[dict]:
+    """The 「未审器件」 section: parts whose review cannot be finished yet.
+
+    `unknown_parts` (025) listed the parts a model must look up, by identity
+    signals. This is that list **promoted**, because 岳's first instruction is a
+    gate rather than a worklist: a part the shelf cannot judge stops the review,
+    and the report has to say which channel could still supply its datasheet.
+
+    A part is here when any of these holds:
+
+    * it is an **IC by designation** and the shelf gives no facts that a rule may
+      act on — no entry at all, an entry with no facts, or a **candidate** whose
+      `facts_verified` is false (039 批①'s gate: an unverified claim does not
+      drive rules, so it does not close this item either);
+    * it has no MPN, or an MPN whose value code this project refuses, or no
+      supplier part number — the three 025 identity signals, kept because they
+      are also reasons a datasheet hunt cannot even start.
+
+    Each entry carries the three channels' real state, and the CLI only claims
+    what it can measure: `engineer` (a local PDF in the datasheet folder —
+    `parts fetch --file` puts one there), `lcsc` (the shelf entry's own
+    `datasheetPdfUrl`/`datasheetUrl`, which is what `parts fetch` downloads),
+    `official` (never the CLI's — it hands over the queries instead).
+    """
+    from ..core.parts import FACTS_KEYS, find_facts
+    from ..rules.facts import IC_PATTERN
+
+    known = {entry["designator"]: entry for entry in unknown_parts(model)}
+    folder = Path(datasheet_dir) if datasheet_dir else None
+    out: list[dict] = []
+    for designator in sorted(model.components):
+        component = model.components[designator]
+        is_ic = bool(IC_PATTERN.match(designator))
+        entry = None
+        if library is not None:
+            if (component.mpn or "").strip():
+                entry = find_facts(library, mpn=component.mpn)
+            if entry is None and (component.lcsc_part or "").strip():
+                entry = find_facts(library, lcsc=component.lcsc_part)
+        facts = {}
+        if entry is not None:
+            facts = entry.facts if entry.facts is not None else (entry.candidate_facts or {})
+        gated = bool(entry is not None and not entry.facts_verified)
+        no_driving_facts = entry is None or entry.facts is None
+        reasons = list(known.get(designator, {}).get("reasons") or [])
+        if not (is_ic and no_driving_facts) and not reasons:
+            continue
+        if is_ic and no_driving_facts and not reasons:
+            reasons = (
+                ["货架没有可驱动规则的 facts"
+                 + ("（候选条目未核验）" if gated else "（条目没有 facts）")]
+                if entry is not None
+                else ["货架没有这颗料"]
+            )
+        mpn = (component.mpn or "").strip()
+        manufacturer = (entry.manufacturer if entry is not None else "") or str(
+            component.props.get("manufacturer") or ""
+        )
+        local = _local_datasheet(folder, mpn, component.lcsc_part or "")
+        entry_url = (entry.datasheetPdfUrl if entry is not None else "") or ""
+        page_url = (entry.datasheetUrl if entry is not None else "") or ""
+        channels = {
+            CHANNEL_ENGINEER: {
+                "ok": local is not None,
+                "detail": (
+                    f"工作区有本地手册 {local.name}" if local is not None
+                    else f"{UNREVIEWED_DATASHEET_DIR}/ 下没有这颗料的 PDF"
+                    "（工程师给手册用 `parts fetch --file`）"
+                ),
+                "path": str(local) if local is not None else "",
+            },
+            CHANNEL_LCSC: {
+                "ok": bool(entry_url or page_url),
+                "detail": (
+                    "库条目自带 PDF 链接，`parts fetch` 可直接下载" if entry_url
+                    else "库条目只有商品页链接（PDF 链接要回商品页取）" if page_url
+                    else "库条目没有任何 datasheet 链接"
+                ),
+                "datasheetPdfUrl": entry_url,
+                "datasheetUrl": page_url,
+                "shelfKey": entry.key if entry is not None else "",
+            },
+            CHANNEL_OFFICIAL: {
+                "ok": None,
+                "by": "ai",
+                "detail": OFFICIAL_CHANNEL_DETAIL,
+                "suggestedQueries": suggested_queries(mpn, manufacturer, component.value),
+            },
+        }
+        out.append({
+            "designator": designator,
+            "name": str(component.props.get("device_name") or component.value or ""),
+            "value": component.value,
+            "footprint": component.footprint,
+            "mpn": mpn,
+            "supplier": component.lcsc_part,
+            "reasons": reasons,
+            "question": UNKNOWN_PART_QUESTION,
+            "isIc": is_ic,
+            "onShelf": entry is not None,
+            "shelfKey": entry.key if entry is not None else "",
+            "factsVerified": (entry.facts_verified if entry is not None else None),
+            "factsPresent": sorted(facts),
+            "missingFacts": (
+                [key for key in FACTS_KEYS if key not in facts] if is_ic else []
+            ),
+            "channels": channels,
+        })
+    return out
+
+
+# --------------------------------------------------------------------------
+# warning triage (039 批② §WI-2)
+# --------------------------------------------------------------------------
+
+#: The verdict vocabulary the AI fills, one of these three and nothing else.
+TRIAGE_VERDICTS = ("有益", "有害", "无害")
+
+#: Why the host's ERC warnings arrive without text — measured twice now (025 §0
+#: on 2026-09-23, and again by the 039 批② probe on 2026-09-25): the answer is
+#: `[{type: 'warn', count: n}]` for *every* page of a project, and the per-item
+#: detail lives in the editor's bottom panel, which has no read interface.
+ERC_TEXT_UNAVAILABLE = (
+    "主机 ERC 只回按 kind 的合计（逐页一致 ⇒ 该计数是 host-wide，不是页内计数）；"
+    "逐条文本在编辑器底部面板，连接器没有读取接口（039 批② 真机 probe，"
+    "证据 outputs/039c_erc_probe.txt）"
+)
+
+
+def _is_warning_kind(kind: str) -> bool:
+    text = (kind or "").lower()
+    return "warn" in text
+
+
+def _leaf_severity(leaf: dict) -> str:
+    return str(leaf.get("severity") or "").lower()
+
+
+def _walk_leafs_with_ref(group: dict, ref: str) -> list[tuple[str, dict]]:
+    out: list[tuple[str, dict]] = [
+        (f"{ref}.leafs[{index}]", leaf) for index, leaf in enumerate(group.get("leafs") or [])
+    ]
+    for index, child in enumerate(group.get("children") or []):
+        out.extend(_walk_leafs_with_ref(child, f"{ref}.children[{index}]"))
+    return out
+
+
+def warning_triage_slots(
+    *,
+    model: DesignModel,
+    drc: dict,
+    findings: list[dict],
+    modules: list[dict],
+) -> list[dict]:
+    """The `warning_triage` slots: one row per warning the report knows about.
+
+    Three sources, because the report learns about warnings three ways, and each
+    one can say something different:
+
+    * **host ERC** (`drc.schematic`) — counts per kind, host-wide, no text. One
+      row per warning kind, `text` empty and `textUnavailable` saying why;
+    * **PCB DRC leaves** (`drc.pcb.groups`) — real per-item text and often a net,
+      so the module attribution is *measured* where the data allows it;
+    * **boardwise findings** with severity `WARN` — full text plus refs, so the
+      module attribution is exact.
+
+    What the rule engine was told is left `""`: `verdict` (one of
+    :data:`TRIAGE_VERDICTS`) and `reason` are the AI's to fill, per 岳's step ②.
+    """
+    module_of: dict[str, str] = {}
+    for module in modules:
+        for designator in module.get("components") or []:
+            module_of.setdefault(designator, module.get("name", ""))
+    net_modules: dict[str, str] = {}
+    for name, net in (model.nets or {}).items():
+        for designator, _pin in net.pins:
+            module = module_of.get(designator)
+            if module:
+                net_modules.setdefault(name, module)
+
+    out: list[dict] = []
+    schematic = drc.get("schematic") or {}
+    if schematic.get("checked") and not schematic.get("countsKnown") is False:
+        # The per-kind counts live under `totals` in the section `drc.py` builds
+        # (`counts` is the *per-page* array); falling back keeps this working if a
+        # future section carries the flat map under the other name.
+        per_kind = schematic.get("totals") or schematic.get("counts") or {}
+        for kind, count in sorted(per_kind.items()):
+            if not _is_warning_kind(kind):
+                continue
+            out.append({
+                "source": "host-erc",
+                "severity": kind,
+                "count": count,
+                "text": "",
+                "textUnavailable": ERC_TEXT_UNAVAILABLE,
+                "attribution": {"scope": "host-wide", "page": None, "module": None},
+                "verdict": "",
+                "reason": "",
+                "evidence": [
+                    f"drc.schematic.totals[{kind!r}] = {count}",
+                    f"pagesChecked={schematic.get('pagesChecked')}, "
+                    f"countsBasis={schematic.get('countsBasis')}",
+                ],
+            })
+    pcb = drc.get("pcb") or {}
+    for group in pcb.get("groups") or []:
+        for ref, leaf in _walk_leafs_with_ref(group, f"drc.pcb.groups[{group.get('index')}]"):
+            severity = _leaf_severity(leaf)
+            if severity and not _is_warning_kind(severity):
+                continue  # an error stays an error: the errors section owns it
+            net = str(leaf.get("net") or "")
+            label = leaf.get("ruleName") or leaf.get("errorType") or "(no rule name)"
+            explanation = str(leaf.get("explanation") or "")
+            out.append({
+                "source": "pcb-drc",
+                "severity": severity or "unknown",
+                "severitySource": leaf.get("severitySource") or "",
+                "count": 1,
+                "text": f"{label}：{explanation}" if explanation else str(label),
+                "textUnavailable": "",
+                "attribution": {
+                    "scope": "leaf",
+                    "page": None,
+                    "net": net,
+                    "module": net_modules.get(net) if net else None,
+                },
+                "verdict": "",
+                "reason": "",
+                "evidence": [ref, f"globalIndex={leaf.get('globalIndex')}"],
+            })
+    for index, finding in enumerate(findings):
+        if str(finding.get("severity") or "").upper() != "WARN":
+            continue
+        refs = [str(ref) for ref in (finding.get("refs") or [])]
+        module = next((module_of[ref] for ref in refs if ref in module_of), None)
+        out.append({
+            "source": "boardwise-rule",
+            "severity": "WARN",
+            "count": 1,
+            "text": str(finding.get("message") or ""),
+            "textUnavailable": "",
+            "attribution": {
+                "scope": "finding",
+                "page": None,
+                "net": "",
+                "module": module,
+            },
+            "verdict": "",
+            "reason": "",
+            "evidence": [f"findings[{index}] rule {finding.get('rule_id')}", *refs],
+        })
+    return out
+
+
+def order_modules_by_warnings(
+    modules: list[dict], findings: list[dict]
+) -> list[dict]:
+    """「警告所在模块优先」— warning-bearing modules first, rest in place.
+
+    The order is stable and the count is written onto each module
+    (`warningFindings`), so the reordering is checkable rather than a vibe. Only
+    *attributable* warnings can move a module: the host's ERC counts are
+    host-wide with no items (measured — see :data:`ERC_TEXT_UNAVAILABLE`), so a
+    report where those are the only warnings keeps the grouping's own order and
+    says so.
+    """
+    ordered: list[dict] = []
+    for module in modules:
+        warning_indices = [
+            index
+            for index in module.get("findings") or []
+            if index < len(findings)
+            and str(findings[index].get("severity") or "").upper() == "WARN"
+        ]
+        ordered.append({**module, "warningFindings": warning_indices})
+    with_warnings = [module for module in ordered if module["warningFindings"]]
+    without = [module for module in ordered if not module["warningFindings"]]
+    return [*with_warnings, *without]
+
+
+# --------------------------------------------------------------------------
+# layout aesthetics (039 批② §WI-3) — off unless the switch says otherwise
+# --------------------------------------------------------------------------
+
+#: The five axes, the same ruler the roadmap's M2 drawing-readability rubric
+#: uses: review data today is the yardstick for generated drawings tomorrow.
+LAYOUT_AXES: tuple[tuple[str, str, str], ...] = (
+    ("topology", "拓扑可辨", "一眼能不能看出这块电路在做什么、各个功能块在哪里"),
+    ("flow", "流向明确", "电源/信号是否有一个清楚的方向，有没有说不清的回头线"),
+    ("text", "文字可读", "位号、数值、注释够不够大、清不清楚，有没有重叠或被线压住"),
+    ("grouping", "分组合理", "同一功能的器件是否聚在一起，模块之间有没有留白与边界"),
+    ("netlabels", "网络标识规范", "关键网络有没有可读的标签、命名是否一致，地与电源是否用符号而不是长线"),
+)
+
+LAYOUT_SCALE = "1–5 分（1 = 不可读，5 = 清晰）；只评「看得懂」，不评电气正确性"
+
+LAYOUT_VISION_RULE = (
+    "本节必须由具备视觉判断力的模型填写。模型不具备时，把 skipped 写成理由、五轴 score 保持 "
+    "null —— 禁止编分数：弱模型假装看出好坏比不评更害人。"
+)
+
+
+def layout_review_section(*, source: str, pages: list[dict]) -> dict:
+    """The `layout_review` section, present **only when the switch is on**.
+
+    The CLI leaves every axis empty on purpose (`score: null`, `evidence: ""`):
+    the numbers are the model's judgement, and what the tool contributes is the
+    ruler, the pages to look at, and the discipline about not inventing scores.
+    """
+    return {
+        "enabled": True,
+        "source": source,
+        "scale": LAYOUT_SCALE,
+        "axes": [
+            {"key": key, "name": name, "question": question, "score": None, "evidence": ""}
+            for key, name, question in LAYOUT_AXES
+        ],
+        "pages": [
+            {
+                "page": page.get("page") or page.get("pageUuid") or "",
+                "file": page.get("file") or "",
+                "bytes": page.get("bytes"),
+                **({"error": page.get("error")} if page.get("error") else {}),
+            }
+            for page in pages
+        ],
+        "visionRequired": LAYOUT_VISION_RULE,
+        "skipped": None,
+        "note": (
+            "五轴与路线图 M2 的绘制可读性标尺同一把尺：今天的审查数据就是将来生成绘制的评测标尺。"
+            "评分是给用户看的体检结论，不是投板门禁。"
+        ),
+    }
+
+
 #: The Chinese skeleton the model fills and hands to the user. A constant, not a
 #: prompt: the *structure* of a good answer ("what is the verdict, why, what next")
 #: belongs in the tool (025 §0), and what the model contributes is the judgement,
@@ -602,8 +992,13 @@ def render_report_markdown(report: dict) -> str:
     errors = summary.get("errorCount", 0)
     warnings = summary.get("warnCount", 0)
     exit_code = summary.get("exitCode", 0)
-    verdict = "无 ERROR" if not errors else f"{errors} 项 ERROR"
-    if summary.get("countsIncomplete"):
+    # The conclusion is the *report's own*, computed where the sections were
+    # built (039 批②): when parts are unreviewed it says exactly that, and
+    # nothing on that line claims a pass.
+    verdict = summary.get("conclusion") or (
+        "无 ERROR" if not errors else f"{errors} 项 ERROR"
+    )
+    if summary.get("countsIncomplete") and "计数不完整" not in verdict:
         verdict += "（计数不完整：有主机答复不能枚举）"
 
     project = source.get("project") or {}
@@ -632,6 +1027,43 @@ def render_report_markdown(report: dict) -> str:
     else:
         for entry in summary["errors"]:
             lines.append(_summary_bullet(entry))
+    lines.append("")
+
+    # --- the datasheet gate: what could not be reviewed at all (039 批② §WI-1).
+    unreviewed = report.get("unreviewed_parts") or []
+    lines.append(f"## 未审器件（{len(unreviewed)}）")
+    lines.append("")
+    if not unreviewed:
+        lines.append("无：每个器件都有货架事实或身份信息，规则能判。")
+    else:
+        lines.append(
+            "本节非空时**不得宣称审查通过**：只能说 DRC/连接性已审，"
+            f"{len(unreviewed)} 颗器件缺手册未审。三通道（工程师给 / 立创找 / 官网搜）逐条列在下面。"
+        )
+        lines.append("")
+        lines.append("| 位号 | MPN | 供应商 | 缺哪些 fact | 工程师给 | 立创找 | 官网搜 |")
+        lines.append("|---|---|---|---|---|---|---|")
+        for part in unreviewed:
+            channels = part.get("channels") or {}
+            lines.append(
+                f"| {_cell(part.get('designator'))} | {_cell(part.get('mpn'))} "
+                f"| {_cell(part.get('supplier'))} "
+                f"| {_cell('、'.join(part.get('missingFacts') or []) or '—')} "
+                f"| {_channel_cell(channels.get('engineer'))} "
+                f"| {_channel_cell(channels.get('lcsc'))} "
+                f"| {_channel_cell(channels.get('official'))} |"
+            )
+        lines.append("")
+        for part in unreviewed:
+            channels = part.get("channels") or {}
+            official = (channels.get("official") or {}).get("suggestedQueries") or []
+            if official:
+                lines.append(
+                    f"- `{part.get('designator')}` 官网通道建议查询词："
+                    + "；".join(f"`{query}`" for query in official)
+                )
+        lines.append("")
+        lines.append(f"每个器件问同一件事：{UNKNOWN_PART_QUESTION}")
     lines.append("")
 
     lines.append("## 主机 DRC")
@@ -725,6 +1157,63 @@ def render_report_markdown(report: dict) -> str:
             lines.append(_summary_bullet(entry))
     lines.append("")
 
+    # --- 岳's step ②: the triage slots (039 批② §WI-2).
+    triage = report.get("warning_triage") or []
+    lines.append(f"## 警告分诊（{len(triage)}）")
+    lines.append("")
+    if not triage:
+        lines.append("没有需要分诊的警告（主机 ERC 无 warn 计数、PCB DRC 无 warn 级叶子、规则无 WARN）。")
+    else:
+        lines.append(
+            "逐条填 `verdict`（" + " / ".join(TRIAGE_VERDICTS) + "）与 `reason`（岳的审查三步之②）。"
+            "主机 ERC 的条目**没有逐条文本**——它的答复只有按 kind 的合计（见 drc.schematic），"
+            "逐条详情在编辑器底部面板且没有读取接口。"
+        )
+        lines.append("")
+        lines.append("| # | 来源 | 级别 | 计数 | 归属模块 | 文本 | verdict | 理由 |")
+        lines.append("|---|---|---|---|---|---|---|---|")
+        for index, entry in enumerate(triage):
+            attribution = entry.get("attribution") or {}
+            module = attribution.get("module") or (
+                "（host-wide，无逐条归属）" if attribution.get("scope") == "host-wide" else "—"
+            )
+            text = entry.get("text") or f"（无逐条文本：{entry.get('textUnavailable', '')}）"
+            lines.append(
+                f"| {index} | {_cell(entry.get('source'))} | {_cell(entry.get('severity'))} "
+                f"| {_cell(entry.get('count'))} | {_cell(module)} | {_cell(text)} "
+                f"| {_cell(entry.get('verdict') or '（待填）')} | {_cell(entry.get('reason') or '（待填）')} |"
+            )
+    lines.append("")
+
+    layout = report.get("layout_review")
+    if layout:
+        lines.append("## 布局审美（五轴，1–5 分）")
+        lines.append("")
+        lines.append(f"- 开关：on（来源 `{layout.get('source')}`）—— {layout.get('scale')}")
+        lines.append(f"- 纪律：{layout.get('visionRequired')}")
+        if layout.get("skipped"):
+            lines.append(f"- **本模型跳过**：{layout['skipped']}")
+        lines.append("")
+        lines.append("| 轴 | 问题 | 分数 | 证据 |")
+        lines.append("|---|---|---|---|")
+        for axis in layout.get("axes") or []:
+            lines.append(
+                f"| {_cell(axis.get('name'))} | {_cell(axis.get('question'))} "
+                f"| {_cell(axis.get('score') if axis.get('score') is not None else '（待填）')} "
+                f"| {_cell(axis.get('evidence') or '（待填）')} |"
+            )
+        pages = layout.get("pages") or []
+        lines.append("")
+        lines.append(f"- 逐页画布图（{len(pages)}）：" + (
+            "、".join(
+                f"[{page.get('page') or '?'}]({page['file']})" if page.get("file")
+                else f"{page.get('page') or '?'}（{page.get('error') or '无图'}）"
+                for page in pages
+            ) or "无"
+        ))
+        lines.append(f"- {layout.get('note', '')}")
+        lines.append("")
+
     lines.append("## AI 槽位（要模型做的三件事）")
     lines.append("")
     unknown = slots.get("unknown_parts") or []
@@ -786,6 +1275,21 @@ def render_report_markdown(report: dict) -> str:
             lines.append(f"- 待办（{label}）：{report['pending'][key]}")
     lines.append("")
     return "\n".join(lines)
+
+
+def _channel_cell(channel: dict | None) -> str:
+    """One acquisition channel as a table cell: yes/no/unknown, plus the short why."""
+    if not channel:
+        return "—"
+    state = channel.get("ok")
+    if state is True:
+        mark = "有"
+    elif state is False:
+        mark = "没有"
+    else:
+        mark = "未（AI 走）"
+    detail = str(channel.get("detail") or "")
+    return f"{mark} —— {detail}" if detail else mark
 
 
 def _summary_bullet(entry: dict) -> str:

@@ -81,20 +81,39 @@ boardwise checkup --file <导出.epro2> --out <目录>       # 断连兜底：�
 - 只读：`doc.open` 只切焦点、`userInterface` 恒 false（不弹底部面板），每个阶段 `finally`
   把焦点复位。旧版 connector 缺某个动作时报告会记 `note` 并降级，不会瞎报。
 
-**AI 要做的三件事（`report.json` 的 `ai_slots` 就是清单，逐条做完再答用户）**：
+**审查三步与 AI 槽位（报告 schema /3：`ai_slots` 加三个一等节就是清单，逐条做完再答用户）**：
 
-1. `unknown_parts[]` —— 每条 `{designator, name, mpn, reasons, question}`：
-   去 WebSearch 规格书，核对**周边配置**是否符合典型应用（去耦/上下拉/限流/耐压），
-   顺手确认可用型号。`reasons` 说明它为什么上榜（无 MPN / MPN 的值码解不出 / 无供应商），
-   同一件事按同一个 `question` 回答即可。
-2. `canvas_images[]` —— 每张图 `{page, file}`：**读图**看摆放、位号可读性、网络标识、
-   模块区分度。图在 `--out` 里，路径是相对的：打开 `report.md` 点链接即可。
-3. `summary_template` —— 按模板**原样留槽**填四段（结论先行 / 错误与归因 / 警告提醒 /
-   建议动作），把上面的结论写进去，别重述 `report.json` 的全部内容。
+① **ERC 先行**：主机 ERC/DRC 读数在 `drc` 段——error 已在报告头部错误段，先解决；
+warn 逐条进 `warning_triage[]`，**把每条的 `verdict` 填成 有益/有害/无害、`reason` 写理由**。
+主机 ERC **没有逐条文本**（只有 host-wide 合计，039 真机 probe 实证，§6 坑 27），
+对着计数与画布图判，要看文本得去编辑器底部面板；PCB DRC 叶子和自有规则 WARN 是带文本的。
+含警告的模块已排在 `modules` 前头（`source.modulesOrderedBy = "warnings-first"`，
+每个模块带 `warningFindings`），分模块**先审含警告的**。
+
+② **分模块 + 手册闸**：`unreviewed_parts[]` 每颗带三通道状态（`channels.engineer/lcsc/official`）。
+遇到不熟的器件**不许跳过、不许涂绿**——按通道取手册：工程师给的 PDF 放 `.tmp_datasheets/`
+（`boardwise parts fetch <mpn> --file <PDF>` 落进去）；立创通道 `parts fetch <mpn>`
+自动从库条目链接下载并提取候选事实；官网通道永远是你的活
+（`channels.official.suggestedQueries` 给了查询词，WebSearch 找规格书，核**周边配置**：
+去耦/上下拉/限流/耐压，顺手确认可用型号）。拿到手册当场核完继续审，**三通道全灭**
+才让它留在未审器件里。**该节非空时不得宣称"审查通过"**——结论只能用
+`summary.conclusion` 那句（"DRC/连接性已审，N 颗器件缺手册未审"），
+`summary.mayClaimPassed` 就是这道闸。
+
+③ **整图布局（审美开关，默认关）**：开关开着报告才有 `layout_review` 节（五轴：
+拓扑可辨/流向明确/文字可读/分组合理/网络标识规范），对着 `canvas_images[]` 逐轴打 1–5 分
+并写 evidence；**模型没有视觉判断力就写 `skipped`、分数留 null——禁止编分数**
+（`layout_review.visionRequired` 说死了）。**首次为用户服务时问一次**"要不要开布局审美评分"，
+把选择写进 `boardwise config set review.aesthetics on|off`，不问第二次；
+单次想开用 `checkup --aesthetics`（单次覆盖赢配置）。画布图在 `--out` 里，
+打开 `report.md` 点链接即可。
+
+最后 `summary_template` —— 按模板**原样留槽**填四段（结论先行 / 错误与归因 / 警告提醒 /
+建议动作），把上面的结论写进去，别重述 `report.json` 的全部内容。
 
 **不要重算工具已经算过的东西**：DRC 计数与 PCB 逐条在 `drc` 段、模块划分在 `modules` 段、
-规则 findings 在 `findings` 段（`summary` 里的 `ref` 指回它们）。模型只补三件事：
-**查不熟的器件、看画布、写总结**。总结写完把 `report.md`（含图）交用户。
+规则 findings 在 `findings` 段（`summary` 里的 `ref` 指回它们）。模型只补四件事：
+**填警告分诊、查不熟的器件、看画布、写总结**。总结写完把 `report.md`（含图）交用户。
 
 ### 3.2 断连兜底与单点命令
 
@@ -114,8 +133,11 @@ boardwise checkup --file <导出.epro2> --out <目录>       # 断连兜底：�
   （补了"只有 .epro2 才带工程 uuid"的老缺口）。**一律只读**：写路径走 bridge API，不落盘。
 - **器件事实库（039 parts 工具链，纯离线）**：`boardwise parts missing --file <工程>` 列出每颗
   IC 缺哪些事实（UNKNOWN 的来源清单，含 datasheetUrl）；`parts show <mpn>` 看库里已有什么
-  （每条事实带出处页码）；`parts add <mpn> --lcsc <C码>` 追加候选条目。**`facts_verified: false`
-  的候选事实不驱动任何规则**（规则视同无 facts 报 UNKNOWN）——核验的物理形态 = 岳审 git diff
+  （每条事实带出处页码）；`parts add <mpn> --lcsc <C码>` 追加候选条目；`parts fetch <mpn>`
+  取手册（`--file <PDF>` 工程师通道 / 库条目立创链接自动下载 / 都没有就打印官网查询词让你去
+  WebSearch），候选事实提取是**窄**的（"引脚表+规格行"同文档才 join，Infineon 那类排版一条
+  提不出、如实不改库，全文留给你读）。**`facts_verified: false` 的候选事实不驱动任何规则**
+  （规则视同无 facts 报 UNKNOWN）——核验的物理形态 = 岳审 git diff
   后翻 true。细则见 `docs/parts.md`。
 - **把发现画回画布**（要 daemon + 焦点在那张原理图页）：
   `boardwise bridge call --action doc.list` 拿 `pageUuid` → `boardwise review-mark report.json --page <uuid>`。
@@ -252,6 +274,7 @@ boardwise checkup --file <导出.epro2> --out <目录>       # 断连兜底：�
 | 24 | **导出文件对删除永不重算**（035 四轮真机定论）：`save`、等 30 s、切页都不触发，四次导出逐字节一致仍报旧网表；create 会触发重算（029 实测）。⇒ 判据一句话：**导出新鲜当且仅当本 run 无删除**——含删除 run 的 pin 级新鲜读数只能走编辑器**活网表**（`sch.netlist` 的 `components[k].pinInfoMap[pin].net`，按名字给，未命名网一律空，单独证不了"两脚没共用未命名网"，**必须配画布双证**）。连带三条宿主习性：① 宿主给**悬空脚发单成员自动网**，导出名 `NET\d+`、活网表内部名 `$\S+`——**同一座岛两个名字，自动网名不是身份**（stale 检查对两个自动名视为同一岛；用户命名网仍逐名比）；② 相接的两段线被宿主**合并成一个 primitive**，接点在点表里重复上报（实测 `[345,300,345,290,255,300,345,300]`）——附着物判定必须读"脚在上报点表里"，按首尾点判会把 T 型误判成附着；③ `sch.doc.new` 的 name 参数被忽略 | pin 级验收 = 活网表 + 画布双证，缺一 exit 3，导出降级为事故报告附件；范围核对分家（含删除 → 画布身份级差异 `wiresVanished == [attachment.primitive_id]`；纯 create → 维持导出核对）。出处 `outputs/035c_live.txt`、`outputs/035d_live.txt`、`tasks/035-patch-pin.md` |
 | 25 | **036 三条宿主习性（真机实证）**：① 宿主上报一条线的点会**重复结点**（实测 `[345,320,345,310,555,320,345,320]`），"最后一个点"可能只是拐角——**找线的远端要取离锚点最远的点**，单点线视为无远端、拒绝；② 宿主对撞上**工程全局**的位号会**静默改名**（要 R2、页面空、但 P4 已有 R2 → 落成 R3，改名发生在跑动中，plan 的 postcondition 随之不成立报 exit 3）⇒ 位号池必须取「**页面 ∪ 工程导出**」，只看页面必撞车；③ findings 签名别把"同一件事换措辞"和"自动网重编号"算新增（插入 100nF 后 decap 规则改措辞；悬空脚自动网 NET3→NET4）⇒ 签名 = `rule|severity|component|pins|命名网`（自动网名不计入） | 位号池、远端取点、findings 签名三处都已按此入码（036）；029 位号池同款盲点的修复见 036b。出处 `outputs/036_summary.txt`、`outputs/036_live.txt`、`tasks/036-insert-subcircuit.md` |
 | 26 | **037 两条宿主习性（真机实证）**：① 宿主移动器件**不拖线**——`sch.modify_primitive` 把器件移走，线的上报端点留在原地（连接实际断开）⇒ 移动块必须删线 + 正交重画；② 宿主上报一条线是**点集不是路径**——`[445,320, 445,310, 655,320, 445,320]` 的相邻对里有从没画过的对角线 ⇒ 照抄点集"平移重画"会画出对角线挂死宿主（029-c 的课），按"相邻线段"判 T 会误报（5 单位外的脚落进幻影对角线容差，单器件移动曾被整片误拒）⇒ 附着/通脚判据只能说「**脚在不在上报点集里**」，漏判由网表恒等兜底（exit 2 按脚点名）。附带：`modify_primitive` 间歇抛宿主 `TypeError: Cannot destructure property 'cmdKey'…`（**改动前**抛，器件没动）⇒ 报错先回读位姿，证明没落地才许一次**举证重试**并写进报告 | 移动类流程一律 delete + `wire_route` 正交重画；T/附着判定禁用线段几何，用点集成员判定。出处 `outputs/037_probe.txt`、`outputs/037_live.txt`、`tasks/037-move-block.md` |
+| 27 | **主机 ERC 没有逐项条目**（039 真机 probe 实证）：`sch.drc_check` 答复只有按 kind 合计（`counts/byType/total`），显式 verbose（`strict=true, includeVerboseError=true`）也只给合计、`raw=null`；42 个 action 的目录里**没有任何**能枚举 ERC 条目的动作。PCB DRC 相反——叶子带 `ruleName/explanation/obj1/obj2`，但引用是 netlist 级对象不是位号，归模块只能靠叶子的 `net` | ERC 警告分诊只摆**计数 + kind**、标 `host-wide`、文本空缺写 `textUnavailable`——不许把合计伪造成页内/逐条归属；逐条文本只能人去编辑器底部面板看。出处 `outputs/039c_erc_probe.txt` |
 宿主版本：**3.2.149 是实测下限**（2026-09-23 在 3.2.149.88089769 上实测：打标/缩放等 8 个关键成员
 typeof 全在位、activate 冷启动正常派发、render 实跑 308KB PNG——旧立论"3.2.183 以下这些接口不存在"
 已被证伪，见 `tasks/027-editor-api-floor.md`）；**3.2.186 是唯一校准对象**。低于 149 没有证据，doctor 照卡。

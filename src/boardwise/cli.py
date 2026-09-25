@@ -33,11 +33,16 @@ from .engines.checkup import (
     PAGE_ATTRIBUTION_ARCHIVE,
     PAGE_ATTRIBUTION_PER_PAGE,
     PAGE_ATTRIBUTION_UNRESOLVED,
+    UNREVIEWED_DATASHEET_DIR,
+    layout_review_section,
     modules_section,
+    order_modules_by_warnings,
     page_attribution_from_archive,
     render_report_markdown,
     summary_template,
     unknown_parts,
+    unreviewed_parts,
+    warning_triage_slots,
 )
 from .engines.generate import DEFAULT_NAMING_STRATEGY, NAMING_STRATEGIES
 from .core.changeplan import (
@@ -313,6 +318,33 @@ def build_parser() -> argparse.ArgumentParser:
     )
     checkup.add_argument(
         "--port", type=int, default=None, help="Daemon port (default 61190)."
+    )
+    checkup.add_argument(
+        "--library",
+        default=None,
+        help=(
+            "The curated shelf the facts-driven sections read (default: "
+            "blocklib/parts.json). `未审器件` uses it to say which facts a part "
+            "is missing, and whether the LCSC channel has a datasheet link."
+        ),
+    )
+    aesthetics = checkup.add_mutually_exclusive_group()
+    aesthetics.add_argument(
+        "--aesthetics",
+        dest="aesthetics",
+        action="store_true",
+        default=None,
+        help=(
+            "Turn the layout aesthetics section on for this run only (five axes, "
+            "1-5 + evidence each). Overrides `config`'s review.aesthetics; the "
+            "section is absent when the switch is off."
+        ),
+    )
+    aesthetics.add_argument(
+        "--no-aesthetics",
+        dest="aesthetics",
+        action="store_false",
+        help="Turn it off for this run only, whatever the configuration says.",
     )
 
     review_eval = sub.add_parser(
@@ -1113,6 +1145,45 @@ def build_parser() -> argparse.ArgumentParser:
     parts_add.add_argument(
         "--json", dest="json_path", metavar="PATH", help="Write the machine-readable result."
     )
+    parts_fetch = parts_sub.add_parser(
+        "fetch",
+        help="Get a datasheet and turn it into a candidate entry (facts_verified: false).",
+        description=(
+            "Two channels, in the order 岳 named them. `--file <local PDF>` is the "
+            "engineer handing one over; without it, the shelf entry's own LCSC "
+            "links (datasheetPdfUrl first, then the product page) are downloaded "
+            "into .tmp_datasheets/ (gitignored). Either way the PDF's text is "
+            "dumped beside it page by page, a narrow extractor proposes "
+            "supply_pins / required_caps / nc_pins records that quote their own "
+            "line and page, and the entry is written with facts_verified: false — "
+            "a candidate drives no rule until a human vouches for it. The third "
+            "channel (the vendor's own site) is the AI's, via WebSearch; this "
+            "command prints the queries to start from when it cannot get a PDF. "
+            "Exit 0 fetched / 2 nothing to fetch or the input is unusable."
+        ),
+    )
+    parts_fetch.add_argument("query", help="MPN, shelf key or C-number of the part.")
+    parts_fetch.add_argument(
+        "--file", dest="pdf_file", default=None,
+        help="A local PDF the engineer provided (skips the download entirely).",
+    )
+    parts_fetch.add_argument(
+        "--library", default=None, help="The shelf to write into (default blocklib/parts.json)."
+    )
+    parts_fetch.add_argument(
+        "--out", default=".tmp_datasheets",
+        help="Where the PDF and its text dump go (default: %(default)s, gitignored).",
+    )
+    parts_fetch.add_argument(
+        "--force", action="store_true",
+        help=(
+            "Replace facts an entry already carries (and re-close the gate). "
+            "Without it, an entry whose facts drive rules is never overwritten."
+        ),
+    )
+    parts_fetch.add_argument(
+        "--json", dest="json_path", metavar="PATH", help="Write the machine-readable result."
+    )
     pick = parts_sub.add_parser(
         "select",
         help=(
@@ -1282,6 +1353,46 @@ def build_parser() -> argparse.ArgumentParser:
     )
     validate.add_argument(
         "--json", action="store_true", help="Print the machine-readable report.",
+    )
+
+    settings = sub.add_parser(
+        "config",
+        help=(
+            "User-level settings in ~/.boardwise/config.json (039 批②). "
+            "`config get <key>` / `config set <key> <value>` / `config show`. "
+            "Exit 0 ok / 2 bad key, bad value or unreadable file."
+        ),
+    )
+    settings_sub = settings.add_subparsers(dest="config_command", required=True)
+    settings_get = settings_sub.add_parser(
+        "get",
+        help="Print one setting's resolved value (the file's, else the default).",
+        description=(
+            "The resolved value, one line on stdout so a shell can read it, and "
+            "with --json the value plus where it came from ('file' or 'default')."
+        ),
+    )
+    settings_get.add_argument("key", help="The dotted key, e.g. review.aesthetics.")
+    settings_get.add_argument(
+        "--json", action="store_true", help="Print {key, value, source, path}."
+    )
+    settings_set = settings_sub.add_parser(
+        "set",
+        help="Write one setting (a switch takes on/off).",
+        description=(
+            "Read-modify-write of the whole settings file, written atomically "
+            "beside it. An unknown key is refused: the table of settings is "
+            "extended by decision, not by typo."
+        ),
+    )
+    settings_set.add_argument("key", help="The dotted key, e.g. review.aesthetics.")
+    settings_set.add_argument("value", help="on / off (also true/false/1/0/yes/no).")
+    settings_show = settings_sub.add_parser(
+        "show",
+        help="Every known setting with its value, source and meaning.",
+    )
+    settings_show.add_argument(
+        "--json", action="store_true", help="Print the whole resolved table."
     )
     return parser
 
@@ -1825,7 +1936,15 @@ def _cmd_review(args: argparse.Namespace) -> int:
 #: consumer written against `/1` — the two batch-2 reports in `outputs/` are that
 #: shape — would read `drc.schematic: null` as "not checked yet"; the id is how it
 #: can tell before it reads a batch-3 report wrong.
-CHECKUP_SCHEMA = "boardwise.checkup/2"
+#:
+#: `/3` since 039 批②: review stopped being "what the rules found" and became the
+#: three-step flow. `unreviewed_parts` is a gate rather than a worklist (a part
+#: with no datasheet stops the review, and `summary.mayClaimPassed` says so),
+#: `warning_triage` is the slot 岳's step ② fills, and `layout_review` is present
+#: **only when the aesthetics switch is on** — a `/2` reader that iterates the
+#: top-level sections still finds everything it knew, plus one alias
+#: (`ai_slots.unknown_parts` is the same list as `unreviewed_parts`).
+CHECKUP_SCHEMA = "boardwise.checkup/3"
 
 #: What each tier actually read, spelled for the report's own header.
 #:
@@ -1859,16 +1978,25 @@ def _checkup_report(
     summary: dict,
     modules: list[dict],
     slots: dict,
+    unreviewed_parts: list[dict] | None = None,
+    warning_triage: list[dict] | None = None,
+    layout_review: dict | None = None,
 ) -> dict:
     """Assemble the report: what was read (batch 2), what was found (batch 3),
     what it means and what the model still has to do (batch 4).
+
+    039 批② promoted three things out of `ai_slots` into sections of their own —
+    `unreviewed_parts` (the datasheet gate), `warning_triage` (岳's step ②), and
+    `layout_review` (the aesthetics switch, **absent** when off) — and bumped the
+    schema to `/3`. The v2 slot name `ai_slots.unknown_parts` is kept as an alias
+    of the first one, so a reader written against `/2` keeps working.
 
     Every section is real by now. `pending` is kept as an **empty** object rather
     than removed: a consumer that learned to read it finds "nothing owed" instead
     of a missing key, and the next batch that owes something has a place to say
     so.
     """
-    return {
+    body: dict = {
         "schema": CHECKUP_SCHEMA,
         "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "source": {
@@ -1890,8 +2018,15 @@ def _checkup_report(
         "drc": drc,
         "modules": modules,
         "findings": findings,
+        "unreviewed_parts": list(unreviewed_parts or []),
+        "warning_triage": list(warning_triage or []),
         "ai_slots": slots,
     }
+    # Absent, not empty: "the switch is off" and "the switch is on and nobody has
+    # scored anything yet" are two different states of the report (039 批② §WI-3).
+    if layout_review is not None:
+        body["layout_review"] = layout_review
+    return body
 
 
 def _write_checkup_report(out_dir: Path, report: dict) -> Path:
@@ -2250,6 +2385,42 @@ async def _checkup_ladder(
             return None
 
 
+def _checkup_shelf(args: argparse.Namespace):
+    """``(library | None, note)`` — the curated shelf for the facts-driven sections.
+
+    A missing or unreadable shelf is **reported**, never silently treated as
+    empty: `未审器件` would then say "the shelf has nothing" about every part,
+    which is a different claim from "the shelf could not be read".
+    """
+    from boardwise.core.parts import PartError, load_parts
+    from boardwise.rules.facts import DEFAULT_LIBRARY_PATH
+
+    path = getattr(args, "library", None) or DEFAULT_LIBRARY_PATH
+    try:
+        return load_parts(path), ""
+    except PartError as exc:
+        return None, f"货架 {path} 读不了（{exc}）：未审器件节按「没有货架」计算，不是「货架为空」"
+
+
+def _checkup_aesthetics(args: argparse.Namespace) -> tuple[bool, str]:
+    """``(enabled, source)`` for the layout-aesthetics switch.
+
+    A configuration that cannot be read must not silently turn the section off
+    (or on): the run falls back to the default *and* the report says the file was
+    unreadable, because a switch whose state nobody can state is not a switch.
+    ``--aesthetics``/``--no-aesthetics`` still win over both.
+    """
+    from boardwise.core.config import ConfigError, aesthetics_enabled
+
+    override = getattr(args, "aesthetics", None)
+    try:
+        return aesthetics_enabled(override)
+    except ConfigError as exc:
+        if override is not None:
+            return bool(override), f"cli（配置文件读不了：{exc}）"
+        return False, f"config（读不了，按默认关：{exc}）"
+
+
 def _cmd_checkup(args: argparse.Namespace) -> int:
     """``boardwise checkup`` — one command, an honest tier ladder, an exit code.
 
@@ -2359,6 +2530,11 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
     findings = [_finding_payload(finding) for finding in run_review(model)]
     summary = drc_summarise(drc=drc, findings=findings)
 
+    # --- the curated shelf: the facts-driven sections read it (039 批②).
+    shelf, shelf_note = _checkup_shelf(args)
+    if shelf_note:
+        notes.append(shelf_note)
+
     # --- 阶段 C 的分组 + AI 槽位（025 §2 阶段 C/E）。
     modules, module_facts = modules_section(
         model=model,
@@ -2368,16 +2544,69 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
     )
     source.update({key: value for key, value in module_facts.items() if key != "notes"})
     notes.extend(module_facts.get("notes") or [])
+
+    # 「警告所在模块优先」: attributable warnings move their module to the front.
+    modules = order_modules_by_warnings(modules, findings)
+    warning_modules = [m["name"] for m in modules if m.get("warningFindings")]
+    source["modulesOrderedBy"] = "warnings-first"
+    if warning_modules:
+        notes.append(f"模块按「含警告优先」排序，含警告的模块：{'、'.join(warning_modules)}")
+
+    # 未审器件：the datasheet gate's own section (039 批② §WI-1).
+    unreviewed = unreviewed_parts(
+        model, library=shelf, datasheet_dir=Path(UNREVIEWED_DATASHEET_DIR)
+    )
+    summary["unreviewedParts"] = len(unreviewed)
+    summary["mayClaimPassed"] = not unreviewed
+    # The conclusion carries both halves. With errors present the count stays first
+    # (that is the reader's next action); with none, the datasheet gate is the whole
+    # of what may be said — and nothing on the line claims a pass while parts have
+    # no datasheet.
+    verdict = "无 ERROR" if not summary.get("errorCount") else f"{summary['errorCount']} 项 ERROR"
+    if unreviewed:
+        summary["conclusion"] = (
+            f"{verdict}；另有 {len(unreviewed)} 颗器件缺手册未审"
+            if summary.get("errorCount")
+            else f"DRC/连接性已审，{len(unreviewed)} 颗器件缺手册未审"
+        )
+    else:
+        summary["conclusion"] = verdict
+
+    triage = warning_triage_slots(model=model, drc=drc, findings=findings, modules=modules)
+    aesthetics_on, aesthetics_source = _checkup_aesthetics(args)
     slots = {
-        "unknown_parts": unknown_parts(model),
+        # The v2 name kept as an alias of the promoted section: same list, one
+        # source of truth, so a reader written against 025 keeps working.
+        "unknown_parts": unreviewed,
         "canvas_images": canvas,
         "canvas_images_note": canvas_note,
         "summary_template": summary_template(),
+        "warning_triage_note": (
+            "逐条把 warning_triage[].verdict 填成 有益/有害/无害，并在 .reason 写理由"
+            "（岳的审查三步之②）；主机 ERC 的条目没有逐条文本，只能对着计数与画布图判"
+        ),
+        "aesthetics": {
+            "enabled": aesthetics_on,
+            "source": aesthetics_source,
+            "section": "layout_review" if aesthetics_on else "",
+            "note": (
+                "" if aesthetics_on
+                else "审美评分未开（默认关）。要看就 `checkup --aesthetics`，或 "
+                     "`boardwise config set review.aesthetics on`"
+            ),
+        },
     }
 
     report = _checkup_report(
         tier=tier, source=source, model=model, attempts=attempts, notes=notes,
         drc=drc, findings=findings, summary=summary, modules=modules, slots=slots,
+        unreviewed_parts=unreviewed,
+        warning_triage=triage,
+        layout_review=(
+            layout_review_section(source=aesthetics_source, pages=canvas)
+            if aesthetics_on
+            else None
+        ),
     )
     report_path = _write_checkup_report(out_dir, report)
     report_md_path = _write_checkup_markdown(out_dir, report)
@@ -4665,6 +4894,32 @@ def _entry_dump(entry: object) -> dict:
     }
 
 
+def _shelf_lookup(library: object, query: str) -> object | None:
+    """One shelf entry by exact key → exact MPN → case-insensitive either.
+
+    Shared by `parts show` and `parts fetch` so "which entry does this query
+    name" has one answer: a shelf key is typed by hand and an MPN read off a
+    screen, and the last step is what makes either usable.
+    """
+    folded = (query or "").casefold()
+    entry = library.get(query)
+    if entry is None:
+        entry = next(
+            (part for part in library.parts if part.mpn and part.mpn == query), None
+        )
+    if entry is None:
+        entry = next(
+            (
+                part
+                for part in library.parts
+                if part.key.casefold() == folded
+                or (part.mpn and part.mpn.casefold() == folded)
+            ),
+            None,
+        )
+    return entry
+
+
 def _cmd_parts_show(args: argparse.Namespace) -> int:
     """WI-2: one entry in full — identity, facts, provenance, gate state.
 
@@ -4687,19 +4942,7 @@ def _cmd_parts_show(args: argparse.Namespace) -> int:
 
     query = args.query
     folded = query.casefold()
-    entry = library.get(query)
-    if entry is None:
-        entry = next((part for part in library.parts if part.mpn and part.mpn == query), None)
-    if entry is None:
-        entry = next(
-            (
-                part
-                for part in library.parts
-                if part.key.casefold() == folded
-                or (part.mpn and part.mpn.casefold() == folded)
-            ),
-            None,
-        )
+    entry = _shelf_lookup(library, query)
     if entry is None:
         near = [
             part
@@ -4929,7 +5172,387 @@ def _cmd_parts_add(args: argparse.Namespace) -> int:
     return 0
 
 
-#: The verification phase's clock (task 020 §WI-2), read when the phase runs —
+# ---------------------------------------------------------------------------
+# parts fetch (039 批② WI-1): the datasheet channel
+# ---------------------------------------------------------------------------
+
+#: Where the downloaded PDFs and their text dumps live. Under `.tmp_*`, which the
+#: repo ignores: a datasheet library is a cache, not an artifact.
+DATASHEET_DIR = ".tmp_datasheets"
+
+#: A browser-shaped UA: TI and LCSC both answer a bare urllib request with an
+#: error page (measured in 039 批①, where the "PDF" that came back was a 3 KB
+#: HTML 404), and the check below is what catches it.
+_DOWNLOAD_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+)
+
+
+def _pdf_python() -> tuple[str, str]:
+    """``(interpreter, how-found)`` for the pypdf helper.
+
+    pypdf is deliberately **not** a project dependency (039 批①'s constraint), so
+    the extractor runs in whichever interpreter has it: an explicit
+    ``BOARDWISE_PDF_PYTHON``, else the isolated venv convention `.tmp_pdfenv/`,
+    else this interpreter (and then the helper says so itself if pypdf is absent).
+    """
+    explicit = (os.environ.get("BOARDWISE_PDF_PYTHON") or "").strip()
+    if explicit:
+        return explicit, "BOARDWISE_PDF_PYTHON"
+    for candidate in (Path(".tmp_pdfenv/Scripts/python.exe"), Path(".tmp_pdfenv/bin/python")):
+        if candidate.is_file():
+            return str(candidate), f"隔离 venv {candidate}"
+    return sys.executable, "当前解释器（需自带 pypdf）"
+
+
+def _pdf_text(pdf: Path) -> tuple[str, str]:
+    """Run the pypdf helper in the interpreter that has pypdf; ``(text, how)``.
+
+    The helper is a module of this package (`boardwise.pdf_text`) and imports
+    nothing but pypdf, so pointing ``PYTHONPATH`` at ``src/`` is enough to run it
+    in a venv that has never heard of boardwise.
+    """
+    import subprocess
+
+    python, how = _pdf_python()
+    src_root = str(Path(__file__).resolve().parents[1])
+    env = dict(os.environ)
+    env["PYTHONPATH"] = src_root + (
+        os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else ""
+    )
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    try:
+        proc = subprocess.run(
+            [python, "-m", "boardwise.pdf_text", str(pdf)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            env=env, timeout=300,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ValueError(f"跑不动 pypdf 提取器（{python}）：{exc}") from exc
+    if proc.returncode != 0:
+        detail = (proc.stderr or "").strip() or f"exit {proc.returncode}"
+        raise ValueError(detail)
+    return proc.stdout, how
+
+
+def _download_pdf(url: str, dest: Path) -> int:
+    """Download ``url`` into ``dest``; returns the byte count, or raises.
+
+    The reply is checked for the PDF magic (`%PDF`) rather than trusted: both
+    vendors answer an unauthenticated or 404 request with an HTML error page, and
+    a text dump of that page would look like "the datasheet says nothing".
+    """
+    import urllib.error
+    import urllib.request
+
+    request = urllib.request.Request(url, headers={"User-Agent": _DOWNLOAD_UA})
+    try:
+        with urllib.request.urlopen(request, timeout=90) as response:  # noqa: S310
+            payload = response.read()
+    except (urllib.error.URLError, OSError) as exc:
+        raise ValueError(f"下载失败：{exc}") from exc
+    if not payload.startswith(b"%PDF"):
+        head = payload[:80].decode("utf-8", "replace").replace("\n", " ")
+        raise ValueError(
+            f"下载回来的不是 PDF（{len(payload)} B，开头 {head!r}）："
+            "多是被拒绝或 404 的 HTML 错误页"
+        )
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(payload)
+    return len(payload)
+
+
+def _parts_fetch_report(args: argparse.Namespace, entry: object | None) -> list[str]:
+    """The next steps to print when there is no PDF to fetch."""
+    from boardwise.engines.checkup import suggested_queries
+
+    manufacturer = (entry.manufacturer if entry is not None else "") or ""
+    queries = suggested_queries(
+        (entry.mpn if entry is not None else args.query) or args.query,
+        manufacturer,
+        (entry.value if entry is not None else "") or "",
+    )
+    lines = [
+        f"  no PDF for {args.query!r} — 三条通道都没走通：",
+        f"    ① 工程师给：boardwise parts fetch {args.query} --file <local.pdf>",
+        "    ② 立创找：库里这颗料的 datasheetPdfUrl / datasheetUrl 都为空，"
+        "把 C 码补上再试（`parts add <mpn> --lcsc <C码>`）"
+        if entry is not None
+        else "    ② 立创找：库里没有这颗料（先 `parts add <mpn> --lcsc <C码>`）",
+        "    ③ 官网搜（AI 用 WebSearch，CLI 不搜）：",
+    ]
+    lines.extend(f"       - {query}" for query in queries)
+    return lines
+
+
+def _cmd_parts_fetch(args: argparse.Namespace) -> int:
+    """WI-1: get a datasheet, extract candidate facts, write a gated candidate.
+
+    Exit 0 when something was fetched (the entry may still be unchanged if there
+    was nothing to propose), 2 when the input or the channels cannot produce a
+    PDF. **Nothing here verifies anything**: the facts land with
+    `facts_verified: false`, and an entry whose facts currently drive rules is
+    never overwritten without `--force` — an unverified guess does not replace
+    something a human vouched for.
+    """
+    import json
+    import shutil
+
+    from boardwise.core.parts import (
+        PartError,
+        entry_from_json,
+        entry_to_json,
+        load_parts,
+        save_parts,
+    )
+    from boardwise.engines.datasheet import candidate_facts, pages_from_marked_text
+
+    library_path = _parts_library_path(args)
+    try:
+        library = load_parts(library_path)
+    except PartError as exc:
+        print(f"boardwise parts fetch: {exc}", file=sys.stderr)
+        return 2
+    entry = _shelf_lookup(library, args.query)
+    if entry is None and not args.pdf_file:
+        print(
+            f"boardwise parts fetch: {args.query!r} 不在库里，也就没有立创链接可下载",
+            file=sys.stderr,
+        )
+        for line in _parts_fetch_report(args, None):
+            print(line, file=sys.stderr)
+        return 2
+    if entry is not None and entry.facts is not None and not args.force:
+        print(
+            f"boardwise parts fetch: {entry.key} 已经有核验过的 facts，"
+            "不用未核验的候选覆盖它（要覆盖加 --force）",
+            file=sys.stderr,
+        )
+        return 2
+
+    out_dir = Path(args.out)
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", (entry.mpn if entry else args.query) or "datasheet")
+    url = ""
+    channel = ""
+    if args.pdf_file:
+        pdf = Path(args.pdf_file)
+        if not pdf.is_file():
+            print(f"boardwise parts fetch: {pdf} 不存在", file=sys.stderr)
+            return 2
+        channel = "engineer"
+        url = (entry.datasheetPdfUrl if entry is not None else "") or ""
+    else:
+        url = entry.datasheetPdfUrl or entry.datasheetUrl
+        if not url:
+            print(
+                f"boardwise parts fetch: {entry.key} 的库条目没有任何 datasheet 链接",
+                file=sys.stderr,
+            )
+            for line in _parts_fetch_report(args, entry):
+                print(line, file=sys.stderr)
+            return 2
+        pdf = out_dir / f"{stem}.pdf"
+        channel = "lcsc-pdf" if entry.datasheetPdfUrl else "lcsc-page"
+        try:
+            size = _download_pdf(url, pdf)
+        except ValueError as exc:
+            print(f"boardwise parts fetch: {exc}", file=sys.stderr)
+            for line in _parts_fetch_report(args, entry):
+                print(line, file=sys.stderr)
+            return 2
+        print(f"  downloaded: {pdf} ({size} B) from {url}")
+
+    try:
+        marked, extractor = _pdf_text(pdf)
+    except ValueError as exc:
+        print(f"boardwise parts fetch: 文本提取失败：{exc}", file=sys.stderr)
+        for line in _parts_fetch_report(args, entry):
+            print(line, file=sys.stderr)
+        return 2
+    pages = pages_from_marked_text(marked)
+    text_path = out_dir / f"{stem}.txt"
+    text_path.parent.mkdir(parents=True, exist_ok=True)
+    text_path.write_text(marked, encoding="utf-8")
+
+    label = (
+        f"{(entry.manufacturer if entry is not None else '') or ''} "
+        f"{(entry.mpn if entry is not None else args.query)}".strip()
+        or args.query
+    )
+    facts, notes = candidate_facts(pages, label=label, url=url or f"file:{pdf}")
+    print(f"  text: {text_path}（{len(pages)} 页；提取器 {extractor}）")
+    print(f"  candidate facts: {', '.join(sorted(facts)) or '(none)'}")
+
+    result: dict = {
+        "command": "parts-fetch",
+        "ok": True,
+        "query": args.query,
+        "channel": channel,
+        "datasheetUrl": url,
+        "pdf": str(pdf),
+        "text": str(text_path),
+        "pages": len(pages),
+        "extractor": extractor,
+        "facts": facts,
+        "notes": notes,
+        "written": False,
+    }
+
+    if entry is None:
+        # No C-number ⇒ no valid entry can be created (the schema requires one).
+        # The candidate facts are still handed over, in a file beside the text.
+        sidecar = out_dir / f"{stem}.candidate.json"
+        sidecar.write_text(
+            json.dumps({"label": label, "url": url, "facts": facts}, ensure_ascii=False, indent=2)
+            + "\n",
+            encoding="utf-8",
+        )
+        print(f"  candidate facts 写到 {sidecar}：库里没有这颗料，"
+              "先 `parts add <mpn> --lcsc <C码>` 建条目再入库")
+        result["candidateFile"] = str(sidecar)
+    elif not facts:
+        # Nothing proposed ⇒ nothing to write. An entry with `facts: {}` is not a
+        # thing the schema has (a fact object is non-empty or absent), and closing
+        # the gate on an entry that carries no claim would only make the gate
+        # meaningless. The text dump is the deliverable here.
+        print("  自动提取没有提出任何候选事实：全文已落盘，请读全文再填（工具不猜）；"
+              "这次没有改库")
+        result["notes"] = [
+            *notes,
+            "没有提出候选事实 ⇒ 没有写库（facts_verified 的语义是「有一条没人核验的声称」，"
+            "没有声称就不该关闸）",
+        ]
+    else:
+        before = entry_to_json(entry)
+        body = dict(before)
+        body["facts"] = facts
+        body["facts_verified"] = False
+        body["notes"] = list(entry.notes) + [
+            f"candidate facts fetched 039 批② from {url or pdf} "
+            f"({channel}）：自动提取，未经核验（facts_verified: false）——"
+            "逐条对着 text dump 的页码核过再翻 true"
+        ]
+        try:
+            candidate = entry_from_json(body, f"fetch[{entry.key}]")
+        except PartError as exc:
+            print(f"boardwise parts fetch: 提取出的候选事实过不了校验：{exc}", file=sys.stderr)
+            return 2
+        if before != entry_to_json(candidate):
+            # The same document-level write `parts add` uses: only this entry's
+            # bytes move, and the result is re-parsed before the write is called
+            # done.
+            raw = json.loads(Path(library_path).read_text(encoding="utf-8"))
+            for index, item in enumerate(raw.get("parts") or []):
+                if item.get("key") == entry.key:
+                    raw["parts"][index] = entry_to_json(candidate)
+                    break
+            backup = Path(library_path).with_suffix(Path(library_path).suffix + ".tmp")
+            shutil.copy2(library_path, backup)
+            Path(library_path).write_text(
+                json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+            )
+            try:
+                reloaded = load_parts(library_path)
+            except PartError as exc:
+                shutil.copy2(backup, library_path)
+                print(
+                    f"boardwise parts fetch: 写进去的条目验证器不认，已回滚：{exc}",
+                    file=sys.stderr,
+                )
+                return 2
+            result["written"] = True
+            result["entriesOnShelf"] = len(reloaded.parts)
+            result["backup"] = str(backup)
+            print(f"  wrote {entry.key}: facts_verified=false（{len(reloaded.parts)} 条）")
+            print(f"  backup: {backup}")
+        else:
+            print("  candidate facts 与现状一致，没有写盘")
+    print("  gate: facts_verified=false —— 这些事实不驱动规则，核验后在 diff 里翻 true")
+    print(f"  下一步：boardwise parts show {entry.key if entry else args.query}；"
+          f"全文在 {text_path}")
+    if args.json_path:
+        Path(args.json_path).write_text(
+            json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        print(f"json: {args.json_path}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# config (039 批② WI-3): the user-level settings file
+# ---------------------------------------------------------------------------
+
+
+def _cmd_config_get(args: argparse.Namespace) -> int:
+    """Print one setting's resolved value — one line, so a shell can read it."""
+    import json
+
+    from boardwise.core.config import ConfigError, config_path, get_setting, source_of
+
+    try:
+        value = get_setting(args.key)
+        source = source_of(args.key)
+    except ConfigError as exc:
+        print(f"boardwise config get: {exc}", file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps(
+            {
+                "key": args.key,
+                "value": value,
+                "source": source,
+                "path": str(config_path()),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ))
+    else:
+        print("on" if value is True else "off" if value is False else value)
+    return 0
+
+
+def _cmd_config_set(args: argparse.Namespace) -> int:
+    """Write one setting; an unknown key or value is refused (exit 2)."""
+    from boardwise.core.config import ConfigError, parse_value, set_setting
+
+    try:
+        value = parse_value(args.key, args.value)
+        path = set_setting(args.key, value)
+    except ConfigError as exc:
+        print(f"boardwise config set: {exc}", file=sys.stderr)
+        return 2
+    print(f"{args.key} = {'on' if value is True else 'off' if value is False else value}")
+    print(f"  written: {path}")
+    return 0
+
+
+def _cmd_config_show(args: argparse.Namespace) -> int:
+    """Every known setting: value, where it came from, and what it does."""
+    import json
+
+    from boardwise.core.config import ConfigError, config_path, resolved_settings
+
+    try:
+        table = resolved_settings()
+    except ConfigError as exc:
+        print(f"boardwise config show: {exc}", file=sys.stderr)
+        return 2
+    path = config_path()
+    if args.json:
+        print(json.dumps(
+            {"path": str(path), "exists": path.is_file(), "settings": table},
+            ensure_ascii=False,
+            indent=2,
+        ))
+        return 0
+    print(f"boardwise config: {path}" + ("" if path.is_file() else "（文件不存在 —— 全是默认值）"))
+    for key, row in table.items():
+        value = row["value"]
+        shown = "on" if value is True else "off" if value is False else value
+        print(f"  {key} = {shown}  [{row['source']}；默认 {row['default']}] — {row['label']}")
+        print(f"      {row['help']}")
+    return 0
 #: not baked into a default argument — so a test can shrink it to nothing.
 #:
 #: One read of the daemon's window table per second, for thirty seconds. In
@@ -13254,6 +13877,7 @@ PARTS_COMMANDS = {
     "missing": _cmd_parts_missing,
     "show": _cmd_parts_show,
     "add": _cmd_parts_add,
+    "fetch": _cmd_parts_fetch,
 }
 
 BOM_COMMANDS = {
@@ -13262,6 +13886,12 @@ BOM_COMMANDS = {
 
 PINTABLE_COMMANDS = {
     "check": _cmd_pintable_check,
+}
+
+CONFIG_COMMANDS = {
+    "get": _cmd_config_get,
+    "set": _cmd_config_set,
+    "show": _cmd_config_show,
 }
 
 
@@ -13299,6 +13929,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_persistence(args)
     if args.command == "parts":
         return PARTS_COMMANDS[args.parts_command](args)
+    if args.command == "config":
+        return CONFIG_COMMANDS[args.config_command](args)
     if args.command == "bom":
         return BOM_COMMANDS[args.bom_command](args)
     if args.command == "pintable":

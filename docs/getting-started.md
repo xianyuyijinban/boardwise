@@ -244,9 +244,24 @@ boardwise checkup --out checkup
 退出码 `1` 表示**发现了** ERROR（不是命令失败）、`0` 表示没有、`2` 表示参数/文件不可用、
 `3` 表示**在线状态说不清**（daemon 没起、扩展没连上）——`3` 绝不等于"板子干净"。
 
-报告里 `ai_slots` 是留给 AI（或留给你自己）的三件事：`unknown_parts`（要查规格书的器件）、
-`canvas_images`（要看的画布图）、`summary_template`（总结模板）。把 `report.md` 从头读一遍，
-它把这三件事按顺序摆在最后。
+报告里留给 AI（或留给你自己）的几件事：`unreviewed_parts`（**未审器件**：规则还判不了的器件，
+每颗列出缺哪些 fact 与三条获取通道——工程师给 / 立创找 / 官网搜；这一节非空时报告不会说"审查通过"，
+只会说"DRC/连接性已审，N 颗器件缺手册未审"）、`warning_triage`（每条警告一格，`verdict` 填
+有益/有害/无害 + 理由）、`canvas_images`（要看的画布图）、`summary_template`（总结模板）。
+`ai_slots.unknown_parts` 是 `unreviewed_parts` 的旧名字，内容同一份。
+
+想要**布局审美评分**（拓扑可辨 / 流向明确 / 文字可读 / 分组合理 / 网络标识规范，五轴各 1–5 分）
+就打开开关——默认关，因为它要求驱动模型有视觉能力：
+
+```bash
+boardwise config set review.aesthetics on    # 持久开关（写在 ~/.boardwise/config.json）
+boardwise config get review.aesthetics       # 回读
+boardwise checkup --aesthetics               # 只这一次打开（优先于配置）
+boardwise checkup --no-aesthetics            # 只这一次关掉
+```
+
+开关关着时报告里**没有** `layout_review` 这一节（不是空节）。开着但模型没有视觉判断力时，
+按规范把 `skipped` 写上理由、五轴分数留空 —— 不许编分数。
 
 没连编辑器时用兜底的 `--file`（同一套报告，DRC 段会写明"没查"而不是"零错误"）：
 
