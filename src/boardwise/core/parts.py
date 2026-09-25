@@ -47,9 +47,17 @@ SCHEMA_VERSION = 2
 #: is the measured proof that the two must not be conflated. A value outside
 #: this table is a loader error; extending the table is a decision, not a
 #: silent fallback.
+#:
+#: Extended in 039 (wave 1) by four classes the curation pass needed and the
+#: table did not have: `ic.transceiver` (SN65HVD230), `ic.opamp` (TLV9062),
+#: `ic.reference` (REF2033), `ic.sensor` (MPU-6050). The rules' subject test is
+#: "category starts with ic", so a part that is an IC could not be judged at all
+#: while its class had no word here — leaving it as "no category" would have made
+#: a curated entry read as unclassified, which is the one thing it is not.
 CATEGORY_VOCABULARY = frozenset({
     "resistor", "capacitor", "inductor", "led", "diode", "connector",
     "crystal", "ic.ldo", "ic.usb-uart", "ic.mcu", "ic.charger",
+    "ic.transceiver", "ic.opamp", "ic.reference", "ic.sensor",
     "buzzer", "switch", "module",
 })
 
@@ -553,8 +561,32 @@ class PartEntry:
     #: recorded. Every recorded fact carries its own page-cited provenance;
     #: the loader refuses a fact that cannot say where it came from.
     facts: dict[str, Any] | None = None
+    #: 039: the **gate**. An entry authored by `parts add` is a candidate — it
+    #: carries facts a machine drafted and nobody has reviewed — and a rule that
+    #: acted on it would be a machine grading its own homework. `False` means the
+    #: authored facts are held in :attr:`candidate_facts` and `facts` reads None,
+    #: so every consumer sees "no facts" without knowing this field exists; the
+    #: human flips it in the diff, which is what "verified" physically is here.
+    #: The default is `True`: the 94 entries written before this field existed
+    #: keep behaving exactly as they did (`entry_to_json` omits a `True`).
+    facts_verified: bool = True
+    #: The authored facts while the gate is closed — kept apart so `parts show`
+    #: can print what the candidate claims, and so a review can see the whole
+    #: claim before vouching for it.
+    candidate_facts: dict[str, Any] | None = None
     provenance: PartProvenance = field(default_factory=PartProvenance)
     notes: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        # The gate, enforced on the object rather than only in the loader: no
+        # construction route — the file loader, a test, a future writer — may
+        # produce an entry that carries facts a rule can read while
+        # `facts_verified` is false. `entry_from_json` therefore does no move of
+        # its own; this is the one place, and it is idempotent.
+        if self.facts_verified is False and self.facts is not None:
+            if self.candidate_facts is None:
+                self.candidate_facts = self.facts
+            self.facts = None
 
     def resistance(self) -> Decimal | None:
         """The declared resistance, from a **named field** only.
@@ -607,7 +639,8 @@ class PartLibrary:
 _ENTRY_KEYS = (
     "key", "value", "mpn", "lcsc", "manufacturer", "deviceUuid", "libraryUuid",
     "footprint_name", "footprint_name_verified", "params", "datasheetUrl",
-    "datasheetPdfUrl", "basic", "category", "facts", "provenance", "notes",
+    "datasheetPdfUrl", "basic", "category", "facts", "facts_verified",
+    "provenance", "notes",
 )
 _PROVENANCE_KEYS = ("kind", "source", "designators", "note")
 
@@ -858,9 +891,26 @@ def entry_from_json(raw: Any, where: str = "<part>") -> PartEntry:
     if not isinstance(raw, dict):
         raise PartError(f"{where}: expected an object")
     _check_keys(raw, _ENTRY_KEYS, where)
-    for required in ("key", "lcsc", "deviceUuid", "libraryUuid"):
-        if not raw.get(required):
-            raise PartError(f"{where}: {required!r} is required and must not be empty")
+    # 039's gate is read first: it decides whether the uuid pair is required
+    # (immediately below) and whether the authored facts may drive a rule (last).
+    facts_verified = raw.get("facts_verified")
+    if facts_verified is not None and not isinstance(facts_verified, bool):
+        raise PartError(
+            f"{where}.facts_verified must be true or false, got {facts_verified!r}"
+        )
+    # `deviceUuid`/`libraryUuid` are the pair `sch.place_component` needs, so an
+    # entry a rule acts on must carry them. A **candidate** (`facts_verified:
+    # false`) is the other kind of thing: `parts add` is offline by design and
+    # the pair only comes from the bridge (`lib.device.get`), so demanding it
+    # here would make "scaffold the part now, resolve it when the machine is up"
+    # impossible. Empty uuids are therefore the shut gate's normal shape, and
+    # the flag is the only thing that has to be believed.
+    required = ["key", "lcsc"]
+    if facts_verified is not False:
+        required += ["deviceUuid", "libraryUuid"]
+    for name in required:
+        if not raw.get(name):
+            raise PartError(f"{where}: {name!r} is required and must not be empty")
     params = raw.get("params") or {}
     if not isinstance(params, dict):
         raise PartError(f"{where}.params: expected an object")
@@ -902,6 +952,9 @@ def entry_from_json(raw: Any, where: str = "<part>") -> PartEntry:
     facts = raw.get("facts")
     if facts is not None:
         facts = _facts_from_json(facts, f"{where}.facts")
+    # No move happens here: `PartEntry.__post_init__` owns the invariant
+    # "facts_verified is false ⟹ facts reads None", so the loader, a test and any
+    # future writer all get it from the one place.
 
     return PartEntry(
         key=_as_str(raw.get("key"), f"{where}.key"),
@@ -919,6 +972,7 @@ def entry_from_json(raw: Any, where: str = "<part>") -> PartEntry:
         basic=_as_opt_bool(raw.get("basic"), f"{where}.basic"),
         category=category,
         facts=facts,
+        facts_verified=True if facts_verified is None else facts_verified,
         provenance=PartProvenance(
             kind=_as_str(prov_raw.get("kind"), f"{where}.provenance.kind"),
             source=_as_str(prov_raw.get("source"), f"{where}.provenance.source"),
@@ -936,6 +990,13 @@ def entry_to_json(entry: PartEntry) -> dict[str, Any]:
     pre-facts entries must round-trip byte-identically (task 011b §五), and
     an empty ``"category": ""`` on every one of them would be noise that
     pretends a classification happened.
+
+    ``facts_verified`` (039) is written **only when false** — same reason: a
+    ``true`` on the 94 entries written before the field existed would be a
+    claim nobody typed, and would rewrite every line of the shelf. A closed
+    gate writes the entry's ``candidate_facts`` under ``facts`` so the claim
+    is reviewable in the diff; ``candidate_facts`` itself is derived, never
+    serialised.
     """
     body: dict[str, Any] = {
         "key": entry.key,
@@ -961,8 +1022,14 @@ def entry_to_json(entry: PartEntry) -> dict[str, Any]:
     }
     if entry.category:
         body["category"] = entry.category
-    if entry.facts is not None:
-        body["facts"] = entry.facts
+    # The authored facts go to the file either way: a candidate's claim has to be
+    # reviewable in the diff, which is where the verification happens. A `True`
+    # flag is **not** written, so the 94 pre-039 entries stay byte-identical.
+    written_facts = entry.facts if entry.facts is not None else entry.candidate_facts
+    if written_facts is not None:
+        body["facts"] = written_facts
+    if entry.facts_verified is False:
+        body["facts_verified"] = False
     return body
 
 

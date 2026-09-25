@@ -86,13 +86,19 @@ def ldo_output_pin(entry: PartEntry) -> str | None:
     """The LDO's output pin, from its own facts: the required capacitor that
     is not on a supply pin. Both measured entries (RT9013: caps on 1/5 with
     VIN on 1; AMS1117: cap on 2 with VIN on 3) resolve unambiguously; an entry
-    that does not gets None and contributes no domain."""
+    that does not gets None and contributes no domain.
+
+    ``entry.facts or {}`` and not ``entry.facts``: since 039 a candidate entry
+    (`facts_verified: false`) reads as no facts, and this reader is called for
+    every shelf entry whose category is `ic.ldo` — including one that only claims
+    to be an LDO. Reading the claim here would be the gate leaking.
+    """
     supply = {
         pin
-        for record in entry.facts.get("supply_pins", [])
+        for record in (entry.facts or {}).get("supply_pins", [])
         for pin in record.get("pins", [])
     }
-    for cap in entry.facts.get("required_caps", []):
+    for cap in (entry.facts or {}).get("required_caps", []):
         if cap.get("pin") not in supply:
             return cap.get("pin")
     return None
