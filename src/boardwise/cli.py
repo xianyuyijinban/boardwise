@@ -2011,7 +2011,15 @@ def _checkup_report(
             "components": len(model.components),
             "nets": len(model.nets),
             "designators": sorted(model.components),
+            # 040 §WI-3: two kinds of repeat, kept apart. `duplicateDesignators`
+            # is the defect (one name, two parts, one page); the cross-page map
+            # is a multi-board project numbering each board's own R1, listed
+            # with the pages so a reader can see which board is which.
             "duplicateDesignators": sorted(model.duplicate_designators),
+            "crossPageDesignators": {
+                designator: sorted(pages)
+                for designator, pages in sorted(model.cross_page_designators.items())
+            },
         },
         "summary": summary,
         "pending": {},
@@ -7148,7 +7156,7 @@ def _cmd_edit_plan_value(args: argparse.Namespace) -> int:
         return 5
     if any(
         name.upper() == designator.upper()
-        for name in model.duplicate_designators
+        for name in model.repeated_designators()
     ):
         print(
             f"boardwise edit plan: 位号 {designator} 在源文件里出现了多次"

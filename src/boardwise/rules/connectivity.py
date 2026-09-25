@@ -106,58 +106,131 @@ class DecouplingPerIC(Rule):
         return findings
 
 
+#: Does a designator repeated **across pages** count as a defect?
+#:
+#: True = the two signed rulings stand: oracle A1 (2026-09-19) ruled the 毕设
+#: board's 30 cross-page repeats ERROR defects ("the netlist, the BOM and the
+#: layout are all PROJECT-scoped, so two different parts answer to one name"),
+#: and the injected ``duplicate-designator`` variant (011d, signed the same day)
+#: *is* a cross-page repeat by construction ("a second page carries a second
+#: R24") whose record demands severity ERROR.
+#:
+#: False = 040 §WI-3's reading, that a multi-board project numbers each board's
+#: own parts so a repeat across pages is legitimate. 040 implemented the
+#: *distinction* (the model now says which kind a repeat is) but left this True:
+#: flipping it would overturn an oracle ruling the task book did not cite, drop
+#: the eval's high-priority precision 0.97 -> 0.88 and the injected variant's
+#: only defect with it. The measured cost of False is in
+#: ``outputs/040_summary.txt``; the flip is this one word and is the oracle's
+#: call, not the parser's.
+CROSS_PAGE_REPEAT_IS_A_DEFECT = True
+
+
 class DuplicateDesignators(OutcomeRule):
     """CONN-1 (task 011c): one designator must mean exactly one part.
 
-    The parser records every designator it had to overwrite while merging
-    pages (``model.duplicate_designators``) — a second page re-using ``U1``
-    means the model silently kept only the last placement and lost a part.
-    The rule only reads what the parser collected; the *finding* of the
-    duplication is the parser's, and it is an ERROR because two parts share
-    one name in the netlist that binds BOM, layout and review together.
+    Two kinds of repeat, and 040 §WI-3 made the parser tell them apart (on the
+    毕设 board: 30 refs repeat across 3 pages that are three boards; two of them,
+    U15/U16, repeat *within* one page):
+
+    * **twice on one page** — two parts answer to one name inside one netlist,
+      which is what binds BOM, layout and review together. The parser records
+      these in ``model.duplicate_designators``.
+    * **once each on two pages** — either a multi-board project numbering each
+      board's own ``R1``, or one design drawn across subsheets. The parser
+      records these in ``model.cross_page_designators``, with the pages.
+
+    Both are reported, and the message says which kind it is and on which pages
+    — the reading is no longer "somewhere, twice". Whether the second kind is a
+    defect is a ruling, not a parser question: see
+    :data:`CROSS_PAGE_REPEAT_IS_A_DEFECT` (True today, on oracle A1 plus the
+    signed injected variant).
     """
 
     id = "conn-duplicate-designators"
     title = "Designators must be unique across the whole project"
     level = LEVEL
-    source = "house rule; the parser records the clashes (011c sec.3.2)"
+    source = "house rule; the parser records the clashes (011c sec.3.2, 040 §WI-3)"
 
     def outcomes(self, model: DesignModel) -> list[Outcome]:
-        if not model.duplicate_designators:
-            return [Outcome(
-                rule_id=self.id,
-                state="OK",
-                subject="designator uniqueness",
-                message=(
-                    f"all {len(model.components)} designators are unique "
-                    "across the parsed pages"
-                ),
-            )]
-        return [
-            Outcome(
-                rule_id=self.id,
-                state="VIOLATION",
-                subject=designator,
-                message=(
-                    f"{designator} is used by more than one placed part; the "
-                    "model kept only the last placement"
-                ),
-            )
-            for designator in model.duplicate_designators
-        ]
+        return [outcome for outcome, _severity in self._rows(model)]
 
     def check(self, model: DesignModel) -> list[Finding]:
-        return [
-            Finding(
-                rule_id=self.id,
-                severity="ERROR",
-                level=self.level,
-                message=outcome.message,
-                evidence=[f"duplicate designator {outcome.subject}"],
+        findings: list[Finding] = []
+        for outcome, severity in self._rows(model):
+            # The severity hint is the row's kind marker (same idiom as
+            # RcCutoff): None means "this row is not a report" -- the clean
+            # board's single OK row.
+            if severity is None:
+                continue
+            findings.append(
+                Finding(
+                    rule_id=self.id,
+                    severity=severity,
+                    level=self.level,
+                    message=outcome.message,
+                    evidence=list(outcome.evidence),
+                )
             )
-            for outcome in self.outcomes(model)
-            if outcome.state == "VIOLATION"
-        ]
+        return findings
+
+    def _rows(self, model: DesignModel) -> list[tuple[Outcome, str | None]]:
+        rows: list[tuple[Outcome, str | None]] = []
+        for designator in model.duplicate_designators:
+            rows.append((
+                Outcome(
+                    rule_id=self.id,
+                    state="VIOLATION",
+                    subject=designator,
+                    message=(
+                        f"{designator} is used by more than one placed part on "
+                        "one page; the model kept only the last placement"
+                    ),
+                    evidence=[f"duplicate designator {designator}"],
+                ),
+                "ERROR",
+            ))
+        for designator, pages in sorted(model.cross_page_designators.items()):
+            where = "、".join(page[:8] for page in pages)
+            defect = CROSS_PAGE_REPEAT_IS_A_DEFECT
+            rows.append((
+                Outcome(
+                    rule_id=self.id,
+                    state="VIOLATION" if defect else "OK",
+                    subject=designator,
+                    message=(
+                        f"{designator} is placed once on each of {len(pages)} "
+                        f"pages ({where}) -- "
+                        + (
+                            "every board of a multi-board project numbers its own "
+                            "parts, so this is reported, not graded"
+                            if not defect else
+                            "the model kept only the last placement, and a "
+                            "project-scoped netlist/BOM cannot hold one name for "
+                            "two parts"
+                        )
+                    ),
+                    evidence=[
+                        f"designator {designator} on {len(pages)} pages: "
+                        + ", ".join(pages)
+                    ],
+                ),
+                "ERROR" if defect else "INFO",
+            ))
+        if not rows:
+            rows.append((
+                Outcome(
+                    rule_id=self.id,
+                    state="OK",
+                    subject="designator uniqueness",
+                    message=(
+                        f"all {len(model.components)} designators are unique "
+                        "across the parsed pages"
+                    ),
+                ),
+                None,
+            ))
+        return rows
 
 
 class CrystalLoadCaps(Rule):

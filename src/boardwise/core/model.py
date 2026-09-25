@@ -98,8 +98,26 @@ class DesignModel:
     components: dict[str, Component] = field(default_factory=dict)
     nets: dict[str, Net] = field(default_factory=dict)
     raw: dict[str, Any] = field(default_factory=dict)
-    #: Designators that appeared **more than once** in the source. The dict
-    #: key above keeps only the last placement, so without this list a
-    #: two-page board that re-uses a designator silently loses a part (task
-    #: 011c sec.3.2, CONN-1). Empty for single-page boards without clashes.
+    #: Designators placed **twice on one page**: two parts answer to one name
+    #: in one netlist, which is what CONN-1 is about. The dict key above keeps
+    #: only the last placement, so without this list the clash would be silent
+    #: (task 011c sec.3.2). Empty for single-page boards without clashes.
     duplicate_designators: list[str] = field(default_factory=list)
+    #: Designator -> the pages it is placed on, for designators that appear on
+    #: **more than one page** (one placement each). A multi-board project
+    #: numbers each board's parts independently, so this is information, not a
+    #: defect — 040 §WI-3 split it out of ``duplicate_designators``, which used
+    #: to hold both kinds under one name. ``repeated_designators()`` is what a
+    #: consumer that merely needs "is this name ambiguous here?" should call.
+    cross_page_designators: dict[str, list[str]] = field(default_factory=dict)
+
+    def repeated_designators(self) -> list[str]:
+        """Every designator this model cannot resolve to exactly one placement.
+
+        Both kinds are ambiguous for a *consumer* even though only one of them
+        is a defect: a repair plan or a per-page report cannot tell which
+        placement is meant. Rules that judge the drawing use
+        :attr:`duplicate_designators` instead — the distinction is 040 §WI-3's
+        whole point.
+        """
+        return sorted(set(self.duplicate_designators) | set(self.cross_page_designators))

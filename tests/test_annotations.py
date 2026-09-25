@@ -219,9 +219,17 @@ def test_load_annotations_reads_the_bishe_a_and_b_rulings():
     assert "U7" not in b2.topic and "U6" not in b2.topic
 
     model = load_board_model(aset.source)
-    assert sorted(item.ref for item in duplicates) == sorted(
-        model.duplicate_designators
+    # 040 §WI-3: the oracle's 30 refs are the designators this model cannot
+    # resolve to one placement. 28 of them repeat once per page (the pages are
+    # three boards); U15 and U16 repeat *within* one page. Both kinds are listed
+    # by `repeated_designators()`, which is the union of the two fields the
+    # parser now fills separately -- asserting on `duplicate_designators` alone
+    # would silently drop 28 records.
+    assert sorted(item.ref for item in duplicates) == model.repeated_designators()
+    assert model.duplicate_designators == ["U15", "U16"], (
+        "the same-page repeats: page 5f0f carries U15 and U16 twice each"
     )
+    assert len(model.cross_page_designators) == 28
     # The mpn exception refs and the rule's own output must not drift apart.
     # After 015 batch 1 three of the ten records -- R43's shunt and C115/C116's
     # electrolytics, the A2a rulings ("the decoder read the part number
