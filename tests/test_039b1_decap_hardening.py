@@ -347,22 +347,31 @@ def test_the_ground_net_boundary_emits_no_phantom_row_for_that_net():
 
 
 def test_the_thesis_board_now_says_what_is_actually_there(capsys):
-    """The board both blind spots were measured on, read for real: the CH340N's
-    VCC pin is on a ground net (UNKNOWN, named), and the REF2033's VIN has a
-    capacitor whose value was never filled in (UNKNOWN, named) instead of "no
-    grounded capacitor found"."""
+    """The board both blind spots were measured on, read for real.
+
+    Two of its rows moved when 040 fixed the parser, and the moves are the
+    point of the test: the CH340N's VCC pin used to read as sitting on the
+    ground net 'AGND' (that reading *was* the page-welding bug, 039d), so the
+    rule could only name the boundary; it now reads VCC and finds the 2.2uF cap
+    that is really there. The REF2033's VIN still has a capacitor whose value
+    was never filled in (UNKNOWN, named) instead of "no grounded capacitor
+    found" — that blind spot is untouched, and so is the board's one real
+    violation.
+    """
     from boardwise.core.parts import load_parts
 
     model, _ = cli._load_model(FOC_BOARD, view="schematic")
     states = _states(DecapRequiredCaps(library=load_parts(SHELF)), model)
     unknown = {o.subject: o for o in states["UNKNOWN"]}
-    assert "U5 pin5" in unknown
-    assert "ground net 'AGND'" in unknown["U5 pin5"].message
+    ok = {o.subject: o for o in states["OK"]}
+    assert "U5 pin5" in ok, "040: the CH340N's VCC pin is on VCC now, not AGND"
+    assert "VCC" in ok["U5 pin5"].message and "C36" in ok["U5 pin5"].message
+    assert "U5 pin5" not in unknown
     assert "U9 pin4" in unknown
     assert "C34" in unknown["U9 pin4"].message
     assert "cannot be checked" in unknown["U9 pin4"].message
     assert not any(
-        "NET7" in o.message and "no grounded capacitor" in o.message
+        "no grounded capacitor" in o.message and "C34" in o.message
         for o in states["VIOLATION"]
     )
     # The board's one real violation is untouched by either fix.

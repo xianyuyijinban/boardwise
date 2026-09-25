@@ -109,7 +109,14 @@ def _fault_is_present(variant: str, model) -> bool:
     if variant == "v3-decap-missing":
         return "C1" not in model.components
     if variant == "duplicate-designator":
-        return model.duplicate_designators == ["R24"]
+        # The injection appends a *second page* holding a copy of R24 (011d, the
+        # oracle's signed fault "a second page carries a second R24"), so the
+        # repeat is a cross-page one and the parser files it under its own field
+        # since 040 §WI-3. Either field means the clash is visible; asserting on
+        # `duplicate_designators` alone would now read as "no fault" on a board
+        # whose fault is real -- and whose rule still reports ERROR
+        # (`test_the_expected_rule_catches_the_injected_fault`).
+        return model.repeated_designators() == ["R24"]
     if variant == "nc-pin-grounded":
         return _pin(model, "U5", "4").net == "GND"
     if variant == "overvoltage-rail":

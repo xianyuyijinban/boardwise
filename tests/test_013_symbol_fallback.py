@@ -143,10 +143,17 @@ def test_the_other_boards_with_the_same_gap_come_out_clean(path, label):
 #: fix; the fallback must leave them byte-for-byte where they were. (A full
 #: serialized before/after diff was also run during the 013 handover as a
 #: mutation check -- deleting the fallback changed nothing on these boards.)
+#:
+#: `duplicate-designator` is the one entry 040 moved: its injection (011d) is a
+#: second SCH_PAGE holding a copy of R24 at the *same* coordinates, so until 040
+#: the copy's pins landed on the base page's wires and added no net of their own.
+#: Pages are separate coordinate systems now, the copy's two pins are their own
+#: (unconnected) nets, and the count is 14. Nothing about the 013 fallback is
+#: involved -- the board's component and pin counts are unchanged.
 FROZEN = [
     (FIXTURES / "ch340_golden.epro2", 17, 13, 66),
     (FIXTURES / "ProPrj_CH340G_2026-09-13.epro2", 17, 13, 66),
-    (Path("reviewsets/injected/duplicate-designator.epro2"), 17, 12, 66),
+    (Path("reviewsets/injected/duplicate-designator.epro2"), 17, 14, 66),
     (Path("reviewsets/injected/fixed-base.epro2"), 17, 12, 66),
     (Path("reviewsets/injected/ldo-no-headroom.epro2"), 17, 12, 66),
     (Path("reviewsets/injected/nc-pin-grounded.epro2"), 17, 12, 66),
