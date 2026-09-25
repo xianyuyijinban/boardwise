@@ -42,6 +42,8 @@ __all__ = [
     "CONNECTION_WIRE",
     "INSERT_SUBCIRCUIT_KIND",
     "INSERT_TEMPLATES",
+    "MOVE_BLOCK_KIND",
+    "MOVE_GRID",
     "PLAN_VERSION",
     "SUPPORTED_KINDS",
     "TEMPLATE_DIVIDER",
@@ -55,12 +57,16 @@ __all__ = [
     "PlanAttachment",
     "PlanChange",
     "PlanConnection",
+    "PlanIsland",
+    "PlanMove",
     "PlanPart",
     "PlanSource",
     "PlanTarget",
+    "PlanWireOp",
     "add_component_plan",
     "component_value_plan",
     "insert_subcircuit_plan",
+    "move_block_plan",
     "patch_pin_plan",
     "resolve_on_page",
     "sha256_of",
@@ -84,12 +90,24 @@ PATCH_PIN_KIND = "patch-pin"
 #: driving rule**: the plan states its own postconditions and they are what the
 #: idempotence probe and the read-back read (there is no rule to re-run).
 INSERT_SUBCIRCUIT_KIND = "insert-subcircuit"
+#: 037: a block moved locally — the last M3 slice, and the second kind with no
+#: driving rule. The caller names the group and the delta; the plan records every
+#: part's pose before it moves, the wires it will redraw, and its own
+#: postconditions (the poses *and* the netlist identity).
+MOVE_BLOCK_KIND = "move-block"
 SUPPORTED_KINDS: tuple[str, ...] = (
     COMPONENT_VALUE_KIND,
     ADD_COMPONENT_KIND,
     PATCH_PIN_KIND,
     INSERT_SUBCIRCUIT_KIND,
+    MOVE_BLOCK_KIND,
 )
+
+#: The routing/landing grid a local move has to stay on (029's
+#: `engines/layout.GRID`, echoed here because `core` may not import `engines`).
+#: A delta off this grid leaves the moved pins off-grid, and the wire redrawn to
+#: them can never join the old routing cleanly.
+MOVE_GRID = 5.0
 
 #: 036: the sub-circuit templates this build can insert. The vocabulary lives
 #: beside the other kinds' vocabularies rather than in `engines/subcircuit.py`
@@ -100,10 +118,10 @@ TEMPLATE_DIVIDER = "divider"
 INSERT_TEMPLATES: tuple[str, ...] = (TEMPLATE_RC_LOWPASS, TEMPLATE_DIVIDER)
 
 #: Where the *other* kinds belong, quoted in the refusal so the reader is not
-#: left guessing whether the plan is broken or merely early.
-_LATER_KINDS = {
-    "move-block": "moving a functional block",
-}
+#: left guessing whether the plan is broken or merely early. Empty since 037:
+#: every M3 kind is executable now, and the refusal text says so without a hint
+#: (an empty table must not print "one of the M3 follow-ups").
+_LATER_KINDS = {}
 
 #: What a `patch-pin` disconnect may take off a pin (035 §2). Two, and both have
 #: to be *proven on the canvas*: a wire whose endpoint lands exactly on the pin,
@@ -281,6 +299,59 @@ class PlanConnection:
 
 
 @dataclass
+class PlanMove:
+    """One part of a `move-block`, as a pose before and a point after (037 §1).
+
+    ``from_`` is the pose the plan was built on — x, y **and rotation** — because
+    that is the stale judgement at apply time: a part somebody nudged by hand is
+    no longer the part this plan measured, and moving it by the planned delta
+    would land it somewhere nobody authorised. ``to`` is where it goes; the
+    rotation does not change (a local move translates, it does not re-orient).
+    """
+
+    designator: str = ""
+    primitive_id: str = ""
+    from_at: tuple[float, float] | None = None
+    from_rotation: float = 0.0
+    to_at: tuple[float, float] | None = None
+
+
+@dataclass
+class PlanWireOp:
+    """One wire a `move-block` takes off and draws again (037 §1, heavy path).
+
+    Why redraw at all is measured, not assumed: on 3.2.186 ``sch.modify_primitive``
+    moves the part and leaves the wire where it was (probe, `outputs/037_probe.txt`),
+    so the connection would break. ``points_before`` is what the wire is today and
+    ``points_after`` what it becomes — same shape shifted by the delta for a wire
+    inside the group, an orthogonal route from the moved pin to the **original far
+    point** for a wire that leaves the group. ``net`` is carried so the redrawn
+    wire joins the same net it did (and an unnamed wire stays unnamed).
+    """
+
+    primitive_id: str = ""
+    kind: str = "redraw"
+    net: str = ""
+    points_before: list[tuple[float, float]] = field(default_factory=list)
+    points_after: list[tuple[float, float]] = field(default_factory=list)
+
+
+@dataclass
+class PlanIsland:
+    """One moved pin and the pins it shared a net with (037's netlist identity).
+
+    Stored as **pins**, never as net names: an auto-named net is renumbered by the
+    editor whenever the wiring changes (measured 035/036), and equality of two
+    meaningless names is not evidence. "Which pins are together" is the fact the
+    move has to preserve, so that is what the plan records and what the probe
+    re-reads.
+    """
+
+    pin: str = ""
+    mates: list[str] = field(default_factory=list)
+
+
+@dataclass
 class PlanAttachment:
     """The thing a `patch-pin` disconnect takes off a pin (035 §2).
 
@@ -327,6 +398,17 @@ class PlanChange:
     #: rule for this kind, so "did it break something?" has to be answered by the
     #: rules that do exist).
     baseline_findings: list[str] = field(default_factory=list)
+    #: `move-block` only: every part's pose before and after, in plan order, and
+    #: the wires the run takes off and draws again. Together they are the whole
+    #: change: "which parts move where, which wires follow".
+    moves: list[PlanMove] = field(default_factory=list)
+    wire_ops: list[PlanWireOp] = field(default_factory=list)
+    #: `move-block` only: for every pin of every moved part, the pins it shared a
+    #: net with when the plan was built. This is the netlist-identity claim — a
+    #: move must not change any connection (037 §一, the acceptance's main
+    #: judgement) — and it is checkable before the writes too, which is how the
+    #: probe answers `already_applied`.
+    islands: list[PlanIsland] = field(default_factory=list)
     #: `patch-pin` only: the net the pin is on today ("" = it reaches none) and
     #: the net it must end up on ("" = the repair is to **disconnect** it). The
     #: two together are the plan's whole claim, and `before != after` is
@@ -499,6 +581,46 @@ class ChangePlan:
                 ),
                 "baselineFindings": list(self.change.baseline_findings),
             }
+        if self.change.kind == MOVE_BLOCK_KIND:
+            target.update({
+                "designators": [item.designator for item in self.change.moves],
+                "dx": self.target.x,
+                "dy": self.target.y,
+            })
+            change = {
+                "kind": self.change.kind,
+                "moves": [
+                    {
+                        "designator": item.designator,
+                        "primitiveId": item.primitive_id,
+                        "from": {
+                            "x": (item.from_at or (0.0, 0.0))[0],
+                            "y": (item.from_at or (0.0, 0.0))[1],
+                            "rotation": item.from_rotation,
+                        },
+                        "to": {
+                            "x": (item.to_at or (0.0, 0.0))[0],
+                            "y": (item.to_at or (0.0, 0.0))[1],
+                        },
+                    }
+                    for item in self.change.moves
+                ],
+                "wireOps": [
+                    {
+                        "primitiveId": item.primitive_id,
+                        "kind": item.kind,
+                        "net": item.net,
+                        "pointsBefore": [list(point) for point in item.points_before],
+                        "pointsAfter": [list(point) for point in item.points_after],
+                    }
+                    for item in self.change.wire_ops
+                ],
+                "islands": [
+                    {"pin": item.pin, "mates": list(item.mates)}
+                    for item in self.change.islands
+                ],
+                "baselineFindings": list(self.change.baseline_findings),
+            }
         return {
             "planVersion": self.plan_version,
             "source": {
@@ -562,6 +684,17 @@ class ChangePlan:
                 source=_source_from(source, digest),
                 target=_insert_target_from(target),
                 change=_insert_change_from(change),
+                preconditions=_string_list(payload, "preconditions"),
+                expected_postcondition=_string_list(payload, "expectedPostcondition"),
+            )
+        if kind == MOVE_BLOCK_KIND:
+            # Also no `target.designator`: a move is about a *group*, and the
+            # group lives in `change.moves` (the target block names it for a
+            # reader, and carries the delta the caller asked for).
+            return cls(
+                source=_source_from(source, digest),
+                target=_move_target_from(target),
+                change=_move_change_from(change),
                 preconditions=_string_list(payload, "preconditions"),
                 expected_postcondition=_string_list(payload, "expectedPostcondition"),
             )
@@ -786,6 +919,209 @@ def _insert_independent_point(value: Any) -> tuple[float, float] | None:
     ):
         return (float(value[0]), float(value[1]))
     return None
+
+
+def _move_target_from(target: dict[str, Any]) -> PlanTarget:
+    """Read a `move-block` target: the group as named, and the delta requested.
+
+    The delta is part of the target because it is what the caller *asked for*
+    (`--dx/--dy`), while `change.moves` is what the page said the parts are and
+    where each one will be. Both are checked against the grid, and the two must
+    agree — a plan whose delta does not match its moves is a plan whose two halves
+    describe different changes.
+    """
+    raw = target.get("designators")
+    names = [str(item).strip() for item in (raw or []) if str(item).strip()]
+    if not names:
+        raise ChangePlanError(
+            "target.designators must name the group this move covers (the designators "
+            f"the caller passed), got {raw!r}"
+        )
+    numbers = {}
+    for key in ("dx", "dy"):
+        value = target.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ChangePlanError(
+                f"target.{key} must be a number in canvas units, got {value!r}"
+            )
+        numbers[key] = float(value)
+    designator = str(target.get("designator") or "").strip()
+    return PlanTarget(
+        designator=designator or ", ".join(names),
+        primitive_id=str(target.get("primitiveId") or ""),
+        expected_value=str(target.get("expectedValue") or ""),
+        x=numbers["dx"],
+        y=numbers["dy"],
+    )
+
+
+def _grid_aligned(value: float, grid: float = MOVE_GRID) -> bool:
+    """Is this coordinate a whole number of grid steps? (037 §一: off-grid refuses.)"""
+    return abs(round(value / grid) * grid - value) <= 1e-6
+
+
+def _move_point(value: Any, where: str) -> tuple[float, float]:
+    if not isinstance(value, dict):
+        raise ChangePlanError(
+            f"change.moves[*].{where} must be an object with x and y, got {value!r}"
+        )
+    out = []
+    for key in ("x", "y"):
+        number = value.get(key)
+        if isinstance(number, bool) or not isinstance(number, (int, float)):
+            raise ChangePlanError(
+                f"change.moves[*].{where}.{key} must be a number in canvas units, "
+                f"got {number!r}"
+            )
+        if not _grid_aligned(float(number)):
+            raise ChangePlanError(
+                f"change.moves[*].{where}.{key} is {number!r}, which is not a multiple of "
+                f"the {MOVE_GRID:g}-unit grid — a move off the grid leaves the pins off the "
+                "grid and the wires can never join the old routing (037 §一)"
+            )
+        out.append(float(number))
+    return (out[0], out[1])
+
+
+def _move_change_from(change: dict[str, Any]) -> PlanChange:
+    """Read a `move-block` change: the parts, the wires, and the identity claim.
+
+    Five invariants, each one a way for the plan to look executable and not be:
+
+    * at least one move, each naming a part, its canvas id, a **grid-aligned**
+      pose before and a grid-aligned point after, with the rotation it had;
+    * every wire op names a wire and says what it was and what it becomes;
+    * the designators are pairwise distinct (one designator, one part);
+    * the recorded islands name the moved pins and their mates;
+    * the baseline findings are listed, because "no new findings" cannot be
+      judged without them (036's rule, unchanged).
+    """
+    raw = change.get("moves")
+    if not isinstance(raw, list) or not raw:
+        raise ChangePlanError(
+            f"change.moves must list the parts this plan moves, got {raw!r}"
+        )
+    moves: list[PlanMove] = []
+    seen: set[str] = set()
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise ChangePlanError(f"change.moves[{index}] must be an object, got {item!r}")
+        designator = str(item.get("designator") or "").strip()
+        if not designator:
+            raise ChangePlanError(
+                f"change.moves[{index}].designator is empty — a move is named by the part "
+                "it moves"
+            )
+        if designator in seen:
+            raise ChangePlanError(
+                f"change.moves lists {designator!r} twice — one designator is one part "
+                "(and two entries would fight over where it lands)"
+            )
+        seen.add(designator)
+        primitive_id = str(item.get("primitiveId") or "").strip()
+        if not primitive_id:
+            raise ChangePlanError(
+                f"change.moves[{index}].primitiveId is empty — the write is by canvas id, "
+                "so a move without one cannot say what it will touch"
+            )
+        before = item.get("from")
+        after = item.get("to")
+        rotation = (before or {}).get("rotation") if isinstance(before, dict) else None
+        if isinstance(rotation, bool) or not isinstance(rotation, (int, float)):
+            raise ChangePlanError(
+                f"change.moves[{index}].from.rotation must be a number, got {rotation!r} — "
+                "it is the pose the plan was built on, and apply re-reads it"
+            )
+        moves.append(PlanMove(
+            designator=designator, primitive_id=primitive_id,
+            from_at=_move_point(before, "from"), from_rotation=float(rotation),
+            to_at=_move_point(after, "to"),
+        ))
+    raw_ops = change.get("wireOps")
+    if raw_ops is not None and not isinstance(raw_ops, list):
+        raise ChangePlanError(
+            f"change.wireOps must be a list, got {raw_ops!r}"
+        )
+    ops: list[PlanWireOp] = []
+    for index, item in enumerate(raw_ops or []):
+        if not isinstance(item, dict):
+            raise ChangePlanError(f"change.wireOps[{index}] must be an object, got {item!r}")
+        primitive_id = str(item.get("primitiveId") or "").strip()
+        if not primitive_id:
+            raise ChangePlanError(
+                f"change.wireOps[{index}].primitiveId is empty — the wire this plan takes "
+                "off is named by its canvas id (035 §2's rule, same reason)"
+            )
+        kind = str(item.get("kind") or "").strip()
+        if kind != "redraw":
+            raise ChangePlanError(
+                f"change.wireOps[{index}].kind is {kind!r}; this build redraws wires "
+                "(the host does not drag them — measured, `outputs/037_probe.txt`)"
+            )
+        before = _move_points_list(item.get("pointsBefore"), f"change.wireOps[{index}].pointsBefore")
+        after = _move_points_list(item.get("pointsAfter"), f"change.wireOps[{index}].pointsAfter")
+        if len(before) < 2 or len(after) < 2:
+            raise ChangePlanError(
+                f"change.wireOps[{index}] needs at least two points on each side, got "
+                f"{len(before)} and {len(after)}"
+            )
+        ops.append(PlanWireOp(
+            primitive_id=primitive_id, kind=kind, net=str(item.get("net") or ""),
+            points_before=before, points_after=after,
+        ))
+    raw_islands = change.get("islands")
+    if not isinstance(raw_islands, list) or not raw_islands:
+        raise ChangePlanError(
+            "change.islands must record, for every pin of every moved part, the pins it "
+            f"shared a net with — that is the netlist-identity claim, got {raw_islands!r}"
+        )
+    islands: list[PlanIsland] = []
+    for index, item in enumerate(raw_islands):
+        if not isinstance(item, dict):
+            raise ChangePlanError(
+                f"change.islands[{index}] must be an object, got {item!r}"
+            )
+        pin = str(item.get("pin") or "").strip()
+        if "." not in pin:
+            raise ChangePlanError(
+                f"change.islands[{index}].pin is {pin!r}; it must be <designator>.<pin>"
+            )
+        mates = item.get("mates")
+        if not isinstance(mates, list):
+            raise ChangePlanError(
+                f"change.islands[{index}].mates must be a list, got {mates!r}"
+            )
+        islands.append(PlanIsland(pin=pin, mates=[str(mate) for mate in mates]))
+    baseline = change.get("baselineFindings")
+    if not isinstance(baseline, list) or any(not isinstance(item, str) for item in baseline):
+        raise ChangePlanError(
+            "change.baselineFindings must be a list of the finding signatures the project "
+            f"reported when this plan was built, got {baseline!r}"
+        )
+    return PlanChange(
+        kind=MOVE_BLOCK_KIND,
+        moves=moves,
+        wire_ops=ops,
+        islands=islands,
+        baseline_findings=[str(item) for item in baseline],
+    )
+
+
+def _move_points_list(value: Any, where: str) -> list[tuple[float, float]]:
+    if not isinstance(value, list):
+        raise ChangePlanError(f"{where} must be a list of [x, y] pairs, got {value!r}")
+    out: list[tuple[float, float]] = []
+    for index, pair in enumerate(value):
+        if (
+            not isinstance(pair, (list, tuple)) or len(pair) < 2
+            or any(isinstance(item, bool) or not isinstance(item, (int, float))
+                   for item in pair[:2])
+        ):
+            raise ChangePlanError(
+                f"{where}[{index}] must be [x, y] in canvas units, got {pair!r}"
+            )
+        out.append((float(pair[0]), float(pair[1])))
+    return out
 
 
 def _insert_target_from(target: dict[str, Any]) -> PlanTarget:
@@ -1118,6 +1454,84 @@ def add_component_plan(
             ),
             "the page gained exactly one component and its connections — nothing else moved",
             "target review finding is resolved",
+        ],
+    )
+
+
+def move_block_plan(
+    source: PlanSource,
+    *,
+    moves: list[PlanMove],
+    wire_ops: list[PlanWireOp],
+    islands: list[PlanIsland],
+    designators: list[str],
+    dx: float,
+    dy: float,
+    baseline_findings: list[str] | None = None,
+) -> ChangePlan:
+    """The fifth plan shape: a group of parts moves by a delta (037).
+
+    No rule drives this one either, so the plan states what it will do and what
+    "done" means:
+
+    * every moved part's **target pose** (and the pose it was measured at — the
+      stale judgement);
+    * every wire it takes off and draws again, with both shapes;
+    * the **netlist identity**: for each pin of each moved part, the pins it
+      shared a net with. A move must not change a single connection — that is the
+      acceptance's main judgement (037 §一) — and pin sets are the reading that
+      survives the editor renaming an auto net (035/036's lesson).
+
+    The preconditions apply re-checks are the poses, the wires' presence and the
+    two designator/geometry facts; the postconditions are the target poses, the
+    islands, the redrawn wires' endpoints and "no new findings".
+    """
+    if not moves:
+        raise ValueError("a move-block plan needs at least one move")
+    if source.page_uuid:
+        page_line = f"pageUuid {source.page_uuid} is still the focused page"
+    else:
+        page_line = (
+            "the page the editor has focused is the plan's page (this plan carries "
+            "no pageUuid, so there is no page guard to enforce)"
+        )
+    names = ", ".join(item.designator for item in moves)
+    return ChangePlan(
+        source=source,
+        target=PlanTarget(
+            designator=names,
+            x=float(dx),
+            y=float(dy),
+        ),
+        change=PlanChange(
+            kind=MOVE_BLOCK_KIND,
+            moves=list(moves),
+            wire_ops=list(wire_ops),
+            islands=list(islands),
+            baseline_findings=list(baseline_findings or []),
+        ),
+        preconditions=[
+            page_line,
+            f"every part of the group ({names}) is still where the plan measured it",
+            "the wires the plan takes off are still on the page",
+            f"the landing area {dx:g} right / {dy:g} down of the group is still free",
+            "the recipes and designators are still the ones this plan was built from",
+        ],
+        expected_postcondition=[
+            "every part of the group is at its planned point: "
+            + "; ".join(
+                f"{item.designator} → ({item.to_at[0]:g}, {item.to_at[1]:g})"
+                for item in moves
+            ),
+            f"the netlist is identical: {len(islands)} pin(s) keep exactly the mates they "
+            "had (no connection changes)",
+            (
+                f"the {len(wire_ops)} wire(s) the plan redraws end where the plan says, and "
+                "nothing else vanished"
+                if wire_ops
+                else "no wire changes: the host moved the parts without dragging them"
+            ),
+            "no rule reports a finding it did not report before",
         ],
     )
 

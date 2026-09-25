@@ -354,9 +354,19 @@ def test_a_plan_this_build_cannot_execute_is_refused(mutate, expected):
 
 
 def test_a_bad_kind_says_which_m3_follow_up_owns_it():
+    """037 filled the last slot: there is no "later kind" table any more, so the
+    refusal names the executable kinds and nothing else (`move-block` is one of
+    them now, and its own reader refuses a payload shaped like a value change)."""
+    with pytest.raises(ChangePlanError) as excinfo:
+        ChangePlan.from_jsonable(_plan_payload(kind="teleport"))
+    message = str(excinfo.value)
+    assert "teleport" in message
+    assert "this build executes" in message
+    assert "M3 follow-ups" not in message
+
     with pytest.raises(ChangePlanError) as excinfo:
         ChangePlan.from_jsonable(_plan_payload(kind="move-block"))
-    assert "moving a functional block" in str(excinfo.value)
+    assert "target.designators must name the group" in str(excinfo.value)
 
 
 def test_a_valid_plan_round_trips_through_json(tmp_path):
