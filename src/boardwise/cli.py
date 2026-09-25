@@ -6338,18 +6338,14 @@ def _cmd_edit_plan_insert(args: argparse.Namespace) -> int:
             return 2
         baseline = _baseline_findings(model)
 
-        names = list(addcomponent.component_origins(geometry))
-        # The pool is the page **and the project** (036): `sch.place_component`
-        # honours the designator it is given only when nothing else in the project
-        # already has it — measured 2026-09-25, asking for `R2` on a page that had
-        # none produced `R3`, because the project's other page carried an R2. The
-        # rename lands mid-run, so the plan's own postconditions ("R2 is on the
-        # page") stop holding and the run reports `verification_disagrees` for a
-        # circuit that is electrically right. The export is already in hand here,
-        # so the number is allocated project-wide and nothing has to be renamed.
-        for designator in (model.components or {}):
-            if designator not in names:
-                names.append(designator)
+        names = addcomponent.designator_pool(geometry, model)
+        # 036b: one shared helper for both builders — the pool is the page **and
+        # the project**, because `sch.place_component` honours a designator only
+        # when nothing else in the project already has it. Measured 2026-09-25:
+        # asking for `R2` on a page that had none produced `R3` (another page
+        # carried an R2), and the rename landed mid-run, so the plan's own
+        # postconditions stopped holding for a circuit that was electrically
+        # right. The export is already in hand here (it carries the baseline).
         attachment = None
         before_net = ""
         anchor_at: tuple[float, float] | None = None
@@ -7139,9 +7135,28 @@ def _cmd_edit_plan_add_component(args: argparse.Namespace) -> int:
             return 5
         for item in connections:
             print(f"connection: {item.pin}→{item.net} via {item.kind} — {item.detail}")
-        assigned = addcomponent.allocate_designator(origins.keys(), ADD_COMPONENT_PREFIX)
+        # The pool is the page **and the project** (036b): the host renames a
+        # designator that collides anywhere in the project, and it renames it
+        # mid-run — the plan's postconditions then fail for a board that is right.
+        # The snapshot *is* the project export this plan is built against, so the
+        # project's own designators are already in hand; a snapshot that cannot be
+        # parsed falls back to the page alone, and the note says so.
+        pool_notes: list[str] = []
+        project_model = None
+        try:
+            project_model, _board = _load_model(snapshot, view=args.view)
+        except Exception as exc:  # noqa: BLE001 — the pool is not worth a refusal
+            pool_notes.append(
+                f"the snapshot could not be parsed ({exc}), so the designator pool is "
+                "this page alone — a number another page already uses would be renamed "
+                "by the host mid-run (measured 2026-09-25)"
+            )
+        assigned = addcomponent.allocate_designator(
+            addcomponent.designator_pool(geometry, project_model), ADD_COMPONENT_PREFIX
+        )
 
         project_uuid, page_uuid, host_version, notes = _snapshot_identity(snapshot)
+        notes.extend(pool_notes)
         # The snapshot of a whole project holds many pages, so it can name none of
         # them (the note above says so); the checkup report *can*, because it
         # attributed its findings to pages (029-c: the live page is where the part
@@ -8588,6 +8603,20 @@ async def _edit_apply_add_flow(
         notes.append(
             f"{designator} already exists on the page — the assigned designator was "
             "taken between plan and apply (人可能刚手放了一个); nothing was written"
+        )
+        return done(4, "refused", "designator_taken")
+    if designator in (before_model.components or {}):
+        # 036b: the page is not the whole board. Measured 2026-09-25, the host
+        # renames a designator that collides with **another page** of the project,
+        # mid-run — so the part would land under a different number than the plan
+        # says and the read-back would report a failure for a write that happened.
+        # Refused here, by name, before anything is placed.
+        notes.append(
+            f"{designator} is already used by another page of this project "
+            "(the live export has it) — the host would silently renumber the part "
+            "mid-run and the plan's own read-back would then disagree; nothing was "
+            "written. Re-run `edit plan` so the number is allocated project-wide "
+            "(036b)"
         )
         return done(4, "refused", "designator_taken")
     if not addcomponent.is_free(spot[0], spot[1], occupied):

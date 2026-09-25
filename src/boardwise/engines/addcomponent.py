@@ -326,6 +326,29 @@ def landing_spot(
     raise LadderExhausted(tried, occupied)
 
 
+def designator_pool(geometry: Any, model: Any = None) -> list[str]:
+    """Every designator a plan must avoid: the page's **and the project's** (036b).
+
+    ``allocate_designator`` picks the lowest free number from the names it is
+    given, so what counts as "used" is whatever this pool holds. The page alone is
+    not enough, and that is measured rather than assumed: on 2026-09-25 the host
+    honoured a requested ``R2`` only when nothing **in the project** already had it
+    — asking for R2 on a page with no R2 produced ``R3``, because another page
+    carried an R2 — and it made the rename **mid-run**, so the plan's own
+    postconditions ("R2 is on the page at …") stopped holding and the run reported
+    `verification_disagrees` for a circuit that was electrically right.
+
+    ``model`` is the project export the caller already reads (029's snapshot,
+    036's live export); ``None`` degrades to the page alone, which the caller is
+    expected to *say* rather than leave implicit.
+    """
+    names = list(component_origins(geometry))
+    for designator in (getattr(model, "components", None) or {}):
+        if str(designator) not in names:
+            names.append(str(designator))
+    return names
+
+
 def allocate_designator(names: Iterable[str], prefix: str) -> str:
     """The lowest free ``<prefix><n>`` (n >= 1) among ``names`` (§二.3).
 
