@@ -791,6 +791,62 @@ def test_apply_refuses_a_designator_that_was_taken(monkeypatch, tmp_path, capsys
     assert bridge.writes == []
 
 
+def test_the_pool_says_so_when_the_snapshot_cannot_be_parsed(monkeypatch, tmp_path, capsys):
+    """The pool falls back to the page alone — and the note says which, because a
+    silent fallback is how a project-wide collision comes back."""
+    geometry = _geometry(
+        components=[("U1", 0.0, 0.0), ("C3", 40.0, 40.0)],
+        wires=[[(0.0, 0.0), (10.0, 0.0)]],
+    )
+    _stub_bridge(monkeypatch, _FakeBridge(geometry=geometry))
+    report = tmp_path / "report.json"
+    report.write_text(json.dumps({"findings": [{
+        "rule_id": "decap-required-caps", "severity": "WARN",
+        "message": "U1 pin1: no grounded capacitor found on net 'VCC' (required 0.1uF)",
+        "target": {"component_ref": "U1", "pin_refs": ["1"], "net_refs": ["VCC"],
+                   "suggested_after": "0.1uF"},
+    }]}), encoding="utf-8")
+    snapshot = tmp_path / "snap.epro2"
+    snapshot.write_bytes(b"x")          # not an archive at all
+    out_path = tmp_path / "plan.json"
+    code = cli.main([
+        "edit", "plan", "--file", str(snapshot), "--rule", "decap-required-caps",
+        "--designator", "U1", "--report", str(report), "--lcsc", "C1525",
+        "-o", str(out_path),
+    ])
+    out = capsys.readouterr().out
+    assert code == 0, out
+    assert "the designator pool is this page alone" in out
+    assert ChangePlan.load(out_path).target.designator == "C1", (
+        "the page's own numbers still decide what is free"
+    )
+
+
+def test_apply_refuses_a_designator_another_page_spends(monkeypatch, tmp_path, capsys):
+    """036b: the page is not the whole board.
+
+    Measured 2026-09-25: the host renames a designator that collides with another
+    **page** of the project, mid-run — the part lands under a different number than
+    the plan says, and the plan's own read-back then reports a failure for a write
+    that did happen. The live export is already in hand here (the probe reads it),
+    so the collision is refused by name, before anything is placed.
+    """
+    plan = _plan(tmp_path)
+    bridge = _FakeBridge(geometry=_geometry(
+        components=[("U1", 0.0, 0.0)], wires=[[(0, 0), (5, 0)]]))
+    _stub_bridge(monkeypatch, bridge)
+    _stub_model(monkeypatch, [_model(
+        components={"U1": "IC", "C7": "0.1uF"},   # C7 lives on another page
+        nets={"VCC": [("U1", "1")]},
+    )])
+    code = cli.main(["edit", "apply", str(plan)])
+    out = capsys.readouterr().out
+    assert code == 4, out
+    assert "designator_taken" in out
+    assert "another page" in out
+    assert bridge.writes == [], "nothing was written"
+
+
 def test_a_repeat_apply_answers_already_applied_even_though_the_designator_is_taken(
     monkeypatch, tmp_path, capsys
 ):
@@ -1074,14 +1130,44 @@ def test_preview_refuses_an_anchor_that_is_not_in_the_snapshot(monkeypatch, tmp_
 
 
 def test_preview_refuses_a_designator_the_snapshot_already_spends(monkeypatch, tmp_path, capsys):
+    """The preview's own designator check, on a plan that *does* spend a spent number.
+
+    Since 036b the builder cannot hand out such a plan — the pool is the page
+    **and** the project (the snapshot's own C-names included), so it picks the
+    lowest free number project-wide. The check still has to hold, because a plan
+    file can be edited by hand and a designator can be spent between planning and
+    applying — which is exactly what this constructs.
+    """
     bridge = _FakeBridge(geometry=_geometry(
         components=[("U3", 0.0, 0.0)], wires=[[(0.0, 0.0), (5.0, 0.0)]]))
     _stub_bridge(monkeypatch, bridge)
-    plan = _plan_against_the_snapshot(tmp_path, anchor="U3")  # no C-names live → C1
-    code = cli.main(["edit", "preview", str(plan), "--file", str(SNAPSHOT)])
+    plan_path = _plan_against_the_snapshot(tmp_path, anchor="U3")
+    plan = ChangePlan.load(plan_path)
+    assert plan.target.designator == "C2", "the lowest free C number project-wide"
+    plan.target.designator = "C1"          # spent by the snapshot itself
+    plan.target.assigned_designator = "C1"
+    plan.dump(plan_path)
+    code = cli.main(["edit", "preview", str(plan_path), "--file", str(SNAPSHOT)])
     err = capsys.readouterr().err
     assert code == 4, err
     assert "C1" in err and "already" in err
+
+
+def test_the_designator_pool_skips_a_number_another_page_spends(monkeypatch, tmp_path, capsys):
+    """036b, measured 2026-09-25: the host renames a designator that collides
+    **anywhere in the project**, and it renames it mid-run — so the plan must not
+    ask for one. The live page here shows no C-names at all; the snapshot does
+    (`SNAPSHOT_C_NAMES`), and the pool has to include them."""
+    bridge = _FakeBridge(geometry=_geometry(
+        components=[("U3", 0.0, 0.0)], wires=[[(0.0, 0.0), (5.0, 0.0)]]))
+    _stub_bridge(monkeypatch, bridge)
+    plan_path = _plan_against_the_snapshot(tmp_path, anchor="U3")
+    plan = ChangePlan.load(plan_path)
+    used = {int(name[1:]) for name in SNAPSHOT_C_NAMES}
+    assert int(plan.target.designator[1:]) not in used, (
+        f"{plan.target.designator} is spent by another page of the snapshot"
+    )
+    assert plan.target.designator == f"C{min(n for n in range(1, 30) if n not in used)}"
 
 
 # --------------------------------------------------------------------------
