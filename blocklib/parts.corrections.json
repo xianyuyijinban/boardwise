@@ -343,6 +343,11 @@
       "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
     },
     {
+      "lcsc": "C51933293",
+      "pdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/6aa51d5de7e985239d9ee8560a86a092.pdf",
+      "note": "the part's own datasheet PDF (Vf / If on p.3)"
+    },
+    {
       "lcsc": "C53087234",
       "pdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/beecfbc64e1e5366bafce3a730d4a75f.pdf?productCode=C53087234",
       "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
@@ -466,14 +471,42 @@
       "lcsc": "C98732",
       "pdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/e258adf1ce44622bb05a5787d35fc0fa.pdf?productCode=C98732",
       "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
-    },
-    {
-      "lcsc": "C51933293",
-      "pdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/6aa51d5de7e985239d9ee8560a86a092.pdf",
-      "note": "the part's own datasheet PDF (Vf / If on p.3)"
     }
   ],
   "curated": [
+    {
+      "lcsc": "C12084",
+      "fields": {
+        "category": "ic.transceiver",
+        "facts": {
+          "supply_pins": [
+            {
+              "pins": [
+                "3"
+              ],
+              "name": "VCC",
+              "v_operating": [
+                3.0,
+                3.6
+              ],
+              "v_abs_max": [
+                -0.3,
+                6.0
+              ],
+              "provenance": "SN65HVD230/231/232 datasheet (TI SLOS346O, revised April 2018), p.6 sec.8.3 (Recommended Operating Conditions: supply voltage VCC min 3V, max 3.6V) and sec.8.1 (Absolute Maximum Ratings: supply voltage VCC -0.3..6V), https://www.ti.com/lit/ds/symlink/sn65hvd230.pdf"
+            }
+          ],
+          "required_caps": [
+            {
+              "pin": "3",
+              "value": "100nF",
+              "provenance": "SN65HVD230/231/232 datasheet (TI SLOS346O, revised April 2018), p.32 sec.12 Power Supply Recommendations (the VCC supply pin of each CAN transceiver should be decoupled with a 100-nF ceramic capacitor located as close to the VCC and GND pins as possible; p.33 sec.13.1 repeats it for the bypass capacitors), https://www.ti.com/lit/ds/symlink/sn65hvd230.pdf"
+            }
+          ]
+        }
+      },
+      "note": "facts curated 2026-09-25 (039 wave 1). RS (pin 8) is a mode select (strong pull-down = high speed, strong pull-up = low power, 10k-100k = slope control, p.6 sec.7) — a design choice, not an obligation, so it is not recorded as must_connect or pull_required."
+    },
     {
       "lcsc": "C14267",
       "fields": {
@@ -568,6 +601,232 @@
       "note": ""
     },
     {
+      "lcsc": "C24112",
+      "fields": {
+        "category": "ic.sensor",
+        "facts": {
+          "supply_pins": [
+            {
+              "pins": [
+                "13"
+              ],
+              "name": "VDD",
+              "v_operating": [
+                2.375,
+                3.46
+              ],
+              "v_abs_max": [
+                -0.5,
+                6.0
+              ],
+              "provenance": "MPU-6000/MPU-6050 Product Specification (InvenSense PS-MPU-6000A-00 revision 3.4, 2013-08-19), p.8 (MPU-6050 column: VDD 2.375V-3.46V) and p.20 sec.6.9 (Absolute Maximum Ratings: supply voltage, VDD -0.5V to +6V), https://datasheet.lcsc.com/datasheet/pdf/bba2ae92bee94263bbad2d14bc8967f1.pdf?productCode=C24112"
+            },
+            {
+              "pins": [
+                "8"
+              ],
+              "name": "VLOGIC",
+              "v_operating": [
+                1.71,
+                3.46
+              ],
+              "v_abs_max": [
+                -0.5,
+                null
+              ],
+              "provenance": "MPU-6000/MPU-6050 Product Specification (InvenSense PS-MPU-6000A-00 revision 3.4, 2013-08-19), p.8 (MPU-6050 only: VLOGIC 1.71V to VDD; VDD's own maximum is 3.46V, so the recorded upper edge is 3.46V) and p.20 sec.6.9 (VLOGIC input voltage -0.5V to VDD + 0.5V — the upper edge is net-dependent, so only the lower one is recorded), https://datasheet.lcsc.com/datasheet/pdf/bba2ae92bee94263bbad2d14bc8967f1.pdf?productCode=C24112"
+            }
+          ],
+          "required_caps": [
+            {
+              "pin": "10",
+              "value": "0.1uF",
+              "provenance": "MPU-6000/MPU-6050 Product Specification (InvenSense PS-MPU-6000A-00 revision 3.4, 2013-08-19), p.22 sec.7.3 Bill of Materials for External Components (C1, regulator filter capacitor on pin 10 REGOUT: ceramic X7R 0.1uF), https://datasheet.lcsc.com/datasheet/pdf/bba2ae92bee94263bbad2d14bc8967f1.pdf?productCode=C24112"
+            },
+            {
+              "pin": "13",
+              "value": "0.1uF",
+              "provenance": "MPU-6000/MPU-6050 Product Specification (InvenSense PS-MPU-6000A-00 revision 3.4, 2013-08-19), p.22 sec.7.3 (C2, VDD bypass capacitor on pin 13: ceramic X7R 0.1uF), https://datasheet.lcsc.com/datasheet/pdf/bba2ae92bee94263bbad2d14bc8967f1.pdf?productCode=C24112"
+            },
+            {
+              "pin": "8",
+              "value": "10nF",
+              "provenance": "MPU-6000/MPU-6050 Product Specification (InvenSense PS-MPU-6000A-00 revision 3.4, 2013-08-19), p.22 sec.7.3 (C4, VLOGIC bypass capacitor on pin 8: ceramic X7R 10nF, MPU-6050 only), https://datasheet.lcsc.com/datasheet/pdf/bba2ae92bee94263bbad2d14bc8967f1.pdf?productCode=C24112"
+            },
+            {
+              "pin": "20",
+              "value": "2.2nF",
+              "provenance": "MPU-6000/MPU-6050 Product Specification (InvenSense PS-MPU-6000A-00 revision 3.4, 2013-08-19), p.22 sec.7.3 (C3, charge pump capacitor on pin 20 CPOUT: ceramic X7R 2.2nF 50V), https://datasheet.lcsc.com/datasheet/pdf/bba2ae92bee94263bbad2d14bc8967f1.pdf?productCode=C24112"
+            }
+          ],
+          "nc_pins": {
+            "pins": [
+              "2",
+              "3",
+              "4",
+              "5",
+              "14",
+              "15",
+              "16",
+              "17"
+            ],
+            "provenance": "MPU-6000/MPU-6050 Product Specification (InvenSense PS-MPU-6000A-00 revision 3.4, 2013-08-19), p.21 sec.7.1 Pin Out and Signal Description (pins 2, 3, 4, 5, 14, 15, 16, 17 = NC: not internally connected, may be used for PCB trace routing), https://datasheet.lcsc.com/datasheet/pdf/bba2ae92bee94263bbad2d14bc8967f1.pdf?productCode=C24112"
+          }
+        }
+      },
+      "note": "facts curated 2026-09-25 (039 wave 1). CLKIN (pin 1) and FSYNC (pin 11) say 'connect to GND if unused' (p.21 sec.7.1) — conditional advice, not recorded as must_connect, because a rule cannot see whether the pin is used."
+    },
+    {
+      "lcsc": "C2765186",
+      "fields": {
+        "category": "connector",
+        "facts": {
+          "pull_required": [
+            {
+              "pin": "4",
+              "to": "GND",
+              "expected_value": "5.1k",
+              "provenance": "ST AN5225 (Introduction to USB Type-C Power Delivery), Table 6 (UFP CC termination (Rd) requirements: 5.1 kOhm +/-10% resistor to GND, exposed on both CC1 and CC2 of a sink port), https://www.st.com/resource/en/application_note/an5225-usb-typec-power-delivery-using-stm32-mcus-and-mpus-stmicroelectronics.pdf"
+            },
+            {
+              "pin": "10",
+              "to": "GND",
+              "expected_value": "5.1k",
+              "provenance": "ST AN5225 (Introduction to USB Type-C Power Delivery), Table 6 (UFP CC termination (Rd) requirements: 5.1 kOhm +/-10% resistor to GND, exposed on both CC1 and CC2 of a sink port), https://www.st.com/resource/en/application_note/an5225-usb-typec-power-delivery-using-stm32-mcus-and-mpus-stmicroelectronics.pdf"
+            }
+          ]
+        }
+      },
+      "note": ""
+    },
+    {
+      "lcsc": "C2977777",
+      "fields": {
+        "category": "ic.usb-uart",
+        "facts": {
+          "supply_pins": [
+            {
+              "pins": [
+                "5"
+              ],
+              "name": "VCC",
+              "mode": "5V",
+              "v_operating": [
+                4.0,
+                5.3
+              ],
+              "v_abs_max": [
+                -0.5,
+                6.0
+              ],
+              "provenance": "CH340 manual (1) rev 3C (wch.cn, shipped as the LCSC C2977777 datasheet), p.5 sec.6.1 (absolute maximum: VCC -0.5..6.0V) and sec.6.2 (5V operation, V3 pin carries only its capacitor and is not tied to VCC: 4.0 / 5 / 5.3V), https://atta.szlcsc.com/upload/public/pdf/source/20240313/115CDE92081B1D6CB446704AD5D0F5F2.pdf"
+            },
+            {
+              "pins": [
+                "5"
+              ],
+              "name": "VCC",
+              "mode": "3.3V",
+              "v_operating": [
+                3.1,
+                3.6
+              ],
+              "provenance": "CH340 manual (1) rev 3C (wch.cn, shipped as the LCSC C2977777 datasheet), p.5 sec.6.3 (3.3V operation, V3 tied to VCC: 3.1 / 3.3 / 3.6V for the CH340C/N/K/E/X/B group, NOT the 2.9V floor of the G/T/R group), https://atta.szlcsc.com/upload/public/pdf/source/20240313/115CDE92081B1D6CB446704AD5D0F5F2.pdf"
+            }
+          ],
+          "required_caps": [
+            {
+              "pin": "5",
+              "value": "0.1uF",
+              "provenance": "CH340 manual (1) rev 3C (wch.cn, shipped as the LCSC C2977777 datasheet), p.2 pin table (VCC = 正电源输入端，需要外接 0.1uF 电源退耦电容 — the supply input requires an external 0.1uF decoupling capacitor), https://atta.szlcsc.com/upload/public/pdf/source/20240313/115CDE92081B1D6CB446704AD5D0F5F2.pdf"
+            },
+            {
+              "pin": "8",
+              "value": "0.1uF",
+              "mode": "5V",
+              "provenance": "CH340 manual (1) rev 3C (wch.cn, shipped as the LCSC C2977777 datasheet), p.2 pin table (SOP-8 pin 8 = V3: at 5V the pin takes a 0.1uF decoupling capacitor, at 3.3V it is tied to VCC instead) and p.3 sec.5.1 (same rule in prose), https://atta.szlcsc.com/upload/public/pdf/source/20240313/115CDE92081B1D6CB446704AD5D0F5F2.pdf"
+            }
+          ],
+          "must_connect": [
+            {
+              "pin": "8",
+              "to": "VCC",
+              "mode": "3.3V",
+              "provenance": "CH340 manual (1) rev 3C (wch.cn, shipped as the LCSC C2977777 datasheet), p.3 sec.5.1 (3.3V operation: the V3 pin should be connected to the VCC pin) and p.5 sec.6.3 (the same condition in the 3.3V table), https://atta.szlcsc.com/upload/public/pdf/source/20240313/115CDE92081B1D6CB446704AD5D0F5F2.pdf"
+            }
+          ]
+        }
+      },
+      "note": "facts curated 2026-09-25 (039 wave 1). The manual's pin table leaves SOP-8 pin 4 unlisted and says unused pins may float; pin 4 is NOT recorded as nc_pins because no line states it outright, and this entry only records what the source says."
+    },
+    {
+      "lcsc": "C398355",
+      "fields": {
+        "category": "ic.opamp",
+        "facts": {
+          "supply_pins": [
+            {
+              "pins": [
+                "8"
+              ],
+              "name": "V+",
+              "v_operating": [
+                1.8,
+                5.5
+              ],
+              "v_abs_max": [
+                0.0,
+                6.0
+              ],
+              "provenance": "TLV9061/TLV9062/TLV9064 datasheet (TI SBOS839N, revised July 2026), p.10 sec.6.3 (Recommended Operating Conditions: supply voltage VS = (V+) - (V-) is 1.8V to 5.5V) and sec.6.1 (Absolute Maximum Ratings: supply voltage 0V to 6V — both edges are stated), https://www.ti.com/lit/ds/symlink/tlv9062.pdf"
+            }
+          ],
+          "required_caps": [
+            {
+              "pin": "8",
+              "value": "0.1uF",
+              "provenance": "TLV9061/TLV9062/TLV9064 datasheet (TI SBOS839N, revised July 2026), p.26 sec.8.2 (Power Supply Recommendations: place 0.1uF bypass capacitors close to the power-supply pins) and p.27 sec.8.4.1 (connect low-ESR 0.1uF ceramic bypass capacitors between each supply pin and ground; a single capacitor from V+ to ground is adequate for single-supply operation), https://www.ti.com/lit/ds/symlink/tlv9062.pdf"
+            }
+          ]
+        }
+      },
+      "note": "facts curated 2026-09-25 (039 wave 1). V- (pin 4) is the ground/return of the single supply this part is used in, so the operating range is recorded on V+ against that return; the amplifier is not used as a dual-supply part on any board here."
+    },
+    {
+      "lcsc": "C440747",
+      "fields": {
+        "category": "ic.reference",
+        "facts": {
+          "supply_pins": [
+            {
+              "pins": [
+                "4"
+              ],
+              "name": "VIN",
+              "v_operating": [
+                3.32,
+                5.5
+              ],
+              "v_abs_max": [
+                -0.3,
+                6.0
+              ],
+              "provenance": "REF2025/2030/2033/2041 datasheet (TI SBOS600C, revised January 2017; read 2026-09-25 from the datasheet.sisoog.com mirror of the same PDF, canonical link below), p.4 sec.7.3 (Recommended Operating Conditions: VIN min = VREF + 0.02V, which for REF2033's 3.3V reference is 3.32V, max 5.5V) and sec.7.1 (Absolute Maximum Ratings: VIN -0.3..6V), https://www.ti.com/lit/ds/symlink/ref2033.pdf"
+            }
+          ],
+          "required_caps": [
+            {
+              "pin": "4",
+              "value": "0.1uF",
+              "provenance": "REF2025/2030/2033/2041 datasheet (TI SBOS600C, revised January 2017; read 2026-09-25 from the datasheet.sisoog.com mirror of the same PDF, canonical link below), p.23 sec.11 Power-Supply Recommendations (a supply bypass capacitor between 0.1uF and 10uF is recommended), https://www.ti.com/lit/ds/symlink/ref2033.pdf"
+            }
+          ]
+        },
+        "facts_verified": false
+      },
+      "note": "facts curated 2026-09-25 (039 wave 1) but HELD by the gate (facts_verified: false), so no rule acts on them yet: recording the VIN bypass makes `decap-required-caps` report \"no grounded capacitor found on net NET7\" on 毕设FOC驱动板, where C34 sits between VIN and AGND with an undeclared value (its schematic Name attribute is null). The rule's candidate predicate needs a readable value to call a part a capacitor, so it answers \"missing\" where the honest state is \"the cap is there, its value is not established\" (UNKNOWN). Flip this to true once that rule question is settled — the facts themselves are datasheet-cited and need no rework. The layout guideline (sec.12.1, p.24) also asks for 0.1uF at VREF (pin 5) and VBIAS (pin 1), but that is the layout example for a data-acquisition board; only the supply bypass of sec.11 is recorded as a required cap."
+    },
+    {
       "lcsc": "C47773",
       "fields": {
         "category": "ic.ldo",
@@ -617,6 +876,39 @@
       "note": ""
     },
     {
+      "lcsc": "C51933293",
+      "fields": {
+        "key": "led.emerald_green_0603",
+        "value": "GL0603UG01",
+        "mpn": "GL0603UG01",
+        "manufacturer": "Guiguang light",
+        "deviceUuid": "9907e0d587174bebb17a101619e35cdd",
+        "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+        "footprint_name": "LED0603-RD",
+        "footprint_name_verified": true,
+        "category": "led",
+        "provenance": {
+          "kind": "catalog-select",
+          "source": "LCSC product page C51933293 (read-only bridge lookups, 2026-09-19); the datasheet PDF is linked in the datasheets section below",
+          "designators": [
+            "LED1@ch340g-golden"
+          ],
+          "note": ""
+        },
+        "facts": {
+          "led": {
+            "vf_v": [
+              2.7,
+              3.2
+            ],
+            "if_max_ma": 30.0,
+            "provenance": "GL0603UG01 datasheet (Shantou Guiguang Optoelectronics), p.3 (marked 3 / 8; Maximum absolute nominal value: forward current IF 30 mA, forward voltage Vf 2.7-3.2 V), https://datasheet.lcsc.com/datasheet/pdf/6aa51d5de7e985239d9ee8560a86a092.pdf"
+          }
+        }
+      },
+      "note": ""
+    },
+    {
       "lcsc": "C6186",
       "fields": {
         "category": "ic.ldo",
@@ -645,62 +937,6 @@
             "dropout_max_mv": 1300,
             "condition": "Iout=0.8A, dVout/dVref=1 percent (min 1.1V, max 1.3V)",
             "provenance": "AMS1117 datasheet (Advanced Monolithic Systems), p.3 Electrical Characteristics (Dropout Voltage), https://datasheet.lcsc.com/datasheet/pdf/e6935943fc6b1bbf350a1a0f3e90dc4a.pdf"
-          }
-        }
-      },
-      "note": ""
-    },
-    {
-      "lcsc": "C2765186",
-      "fields": {
-        "category": "connector",
-        "facts": {
-          "pull_required": [
-            {
-              "pin": "4",
-              "to": "GND",
-              "expected_value": "5.1k",
-              "provenance": "ST AN5225 (Introduction to USB Type-C Power Delivery), Table 6 (UFP CC termination (Rd) requirements: 5.1 kOhm +/-10% resistor to GND, exposed on both CC1 and CC2 of a sink port), https://www.st.com/resource/en/application_note/an5225-usb-typec-power-delivery-using-stm32-mcus-and-mpus-stmicroelectronics.pdf"
-            },
-            {
-              "pin": "10",
-              "to": "GND",
-              "expected_value": "5.1k",
-              "provenance": "ST AN5225 (Introduction to USB Type-C Power Delivery), Table 6 (UFP CC termination (Rd) requirements: 5.1 kOhm +/-10% resistor to GND, exposed on both CC1 and CC2 of a sink port), https://www.st.com/resource/en/application_note/an5225-usb-typec-power-delivery-using-stm32-mcus-and-mpus-stmicroelectronics.pdf"
-            }
-          ]
-        }
-      },
-      "note": ""
-    },
-    {
-      "lcsc": "C51933293",
-      "fields": {
-        "key": "led.emerald_green_0603",
-        "value": "GL0603UG01",
-        "mpn": "GL0603UG01",
-        "manufacturer": "Guiguang light",
-        "deviceUuid": "9907e0d587174bebb17a101619e35cdd",
-        "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
-        "footprint_name": "LED0603-RD",
-        "footprint_name_verified": true,
-        "category": "led",
-        "provenance": {
-          "kind": "catalog-select",
-          "source": "LCSC product page C51933293 (read-only bridge lookups, 2026-09-19); the datasheet PDF is linked in the datasheets section below",
-          "designators": [
-            "LED1@ch340g-golden"
-          ],
-          "note": ""
-        },
-        "facts": {
-          "led": {
-            "vf_v": [
-              2.7,
-              3.2
-            ],
-            "if_max_ma": 30.0,
-            "provenance": "GL0603UG01 datasheet (Shantou Guiguang Optoelectronics), p.3 (marked 3 / 8; Maximum absolute nominal value: forward current IF 30 mA, forward voltage Vf 2.7-3.2 V), https://datasheet.lcsc.com/datasheet/pdf/6aa51d5de7e985239d9ee8560a86a092.pdf"
           }
         }
       },

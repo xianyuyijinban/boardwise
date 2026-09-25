@@ -20,12 +20,103 @@ trustworthy enough to place a part with.
 | `params` | the electrical/mechanical parameters **verbatim, units kept** (`"Resistance": "5.1kΩ ±1%"`). No normalisation |
 | `datasheetUrl`, `datasheetPdfUrl` | declared by the source; the PDF URL is empty when the source has none, rather than guessed |
 | `basic` | JLC basic-part flag: `true`/`false` **with evidence**, `null` without |
-| `provenance` | `kind` (`board-extract` / `catalog-select`), `source`, and `designators` — the accumulating track record |
+| `category` | the electrical class from the vocabulary — absent means "not classified", which a rule reports as UNKNOWN rather than guessing from the designator |
+| `facts` | datasheet claims (039's vocabulary: `supply_pins` / `required_caps` / `nc_pins` / `must_connect` / `pull_required` / `ldo` / `led`), each with its own page-cited provenance |
+| `facts_verified` | the gate: written **only when false**, and absent means true. A candidate (`false`) records a claim nobody has reviewed; no rule acts on it until a human flips the flag in review |
+| `provenance` | `kind` (`board-extract` / `catalog-select` / `manual-curation`), `source`, and `designators` — the accumulating track record |
 | `notes` | anything a reader must know: a corrected footprint spelling, an unrecognised part class, a disambiguated key |
 
 Two properties are deliberately *tri-state* (`true` / `false` / `null`). "No
 evidence" and "no" are different answers, and a library whose `basic: false`
 means "we never looked" is worse than one that says `null`.
+
+## The fact intake: `missing` → `add` → curation → the gate (039)
+
+The rules cannot decide anything about a part the shelf knows no facts for, and
+until 039 nothing said *which* facts were owed. Three offline commands close that
+loop; none of them touches the bridge.
+
+```bash
+boardwise parts missing --file board.epro2          # what the shelf owes this board
+boardwise parts missing --file board.eprj3 --json report.json
+boardwise parts show CH340N                         # one entry, in full
+boardwise parts show ic.ch340n --json entry.json
+boardwise parts add TPL2981-30DBVR --lcsc C9900000001
+```
+
+* **`missing`** lists every `U`-prefixed part of a project with the fact keys the
+  shelf has not recorded for it, in vocabulary order, and the identity the rules
+  will look up (MPN first, then the C-number — `find_facts`' exact-match order, so
+  the list and the verdicts can never disagree). **Exit 0 always**: a non-empty
+  list is "the shelf owes work", not a failure. Exit 2 is reserved for an input
+  that cannot be read. A part is owed until it records *every* key, which is the
+  strict reading — an entry with three of seven keys still lists four. A gated
+  candidate's *claim* counts toward the recorded side (the claim is real work
+  already done); what the gate withholds is trust, and the row says so with
+  `unverified`.
+* **`show`** dumps one entry: identity, every fact in full, each provenance line,
+  and the gate. Lookup is exact key → exact MPN → case-insensitive either; a miss
+  is exit 2 **with** up to five substring neighbours, because "no such part" with
+  no "did you mean" is a dead end.
+* **`add`** appends a candidate: identity only, `category` empty, no facts,
+  `facts_verified: false`, `provenance.kind: manual-curation`. A duplicate MPN or
+  C-number is refused (exit 2) pointing at `parts show`. The write is a
+  **JSON-document** edit — a library-wide re-serialisation would reorder keys
+  inside existing entries — so it backs the file up to a `.tmp` sibling, re-parses
+  the result with the real validator, and rolls back if the validator refuses.
+
+### The gate
+
+`facts_verified: false` means *a claim nobody has vouched for*. The gate is
+enforced where the object is built (`PartEntry.__post_init__`), not only in the
+loader: such an entry reads `facts is None` to every consumer, so no rule needs
+to know the field exists, and the claim itself is kept in `candidate_facts` so
+`parts show` can print what there is to review. Flipping the flag — a line in the
+git diff — *is* the review; that is what "verified" physically means here.
+
+Two consequences worth knowing:
+
+* The rules name the difference. "Its shelf entry has no facts" (a curation task)
+  and "it claims facts nobody has verified" (a **review**) are different work
+  orders, and the UNKNOWN row says which one it is; the `missing_fact` line asks
+  for the flip.
+* A candidate is **unclassified** as well as unusable: `_category_state` answers
+  UNKNOWN for it whatever `category` says, so there is no partial trust and no
+  rule has to remember the gate.
+* A candidate may omit `deviceUuid`/`libraryUuid` — `add` is offline and the pair
+  only comes from the bridge. `Verified ⟹ resolvable` still holds: the exemption
+  is exactly the shut gate, and anything else must carry the pair.
+
+### Wave 1 (039), and two rule behaviours it measured
+
+Five ICs the boards actually place were curated: **CH340N** (`ic.usb-uart`),
+**SN65HVD230DR** (`ic.transceiver`), **TLV9062IDR** (`ic.opamp`),
+**REF2033AIDDCR** (`ic.reference`), **MPU-6050** (`ic.sensor`). The last four
+classes were added to `CATEGORY_VOCABULARY` for them: the rules' subject test is
+"category starts with `ic`", so a curated IC with no word for its class would have
+read as *unclassified* — the opposite of what the entry is.
+
+Every fact cites its own page, and each entry records only what its source states.
+Notably **not** recorded: CH340N pin 4 (unlisted in the manual's SOP-8 column, and
+"unused pins may float" is not a declaration), MPU-6050's CLKIN/FSYNC ("connect to
+GND **if unused**" — a rule cannot see whether it is used), and SN65HVD230's RS
+mode select (a choice, not an obligation).
+
+REF2033AIDDCR ships **gated** (`facts_verified: false`): its facts are complete
+and cited, but the VIN bypass requirement makes `decap-required-caps` report "no
+grounded capacitor found" on 毕设FOC驱动板, where C34 sits between VIN and AGND
+with an undeclared value. Two behaviours of that rule, both pre-existing and both
+measured while curating, are why:
+
+* a capacitor with **no readable value** is not a candidate at all
+  (`looks_like_capacitor` wants a value or a decodable MPN), so the honest
+  "the capacitor is there, its value is not established" (UNKNOWN) is reported as
+  "missing" instead;
+* a capacitor whose **both terminals are on the same net** counts as a grounded
+  candidate, so C115 (AGND↔AGND, 330uF) can "satisfy" a requirement on AGND.
+
+Both are rule questions, not shelf questions; fixing them belongs to a batch that
+owns `decap.py`, and the flip of REF2033 is what closes the loop when it lands.
 
 ## Where the identity comes from
 

@@ -39,6 +39,8 @@ from .facts import (
     _NON_IC,
     FactsRule,
     _category_state,
+    _facts_absent_reason,
+    _gate_review_note,
     _identity,
 )
 from .values import decode_eia_3digit, mpn_value_code, parse_capacitance_farads
@@ -372,12 +374,13 @@ class DecapRequiredCaps(FactsRule):
                         state="UNKNOWN",
                         subject=comp.designator,
                         message=(
-                            f"{comp.designator}: its shelf entry has no facts, "
+                            f"{comp.designator}: {_facts_absent_reason(entry)}, "
                             "so its required capacitors are unknown"
                         ),
                         missing_fact=(
                             f"facts for {comp.designator} (entry {entry.lcsc}, "
                             f"{_identity(comp)}): record required_caps"
+                            + _gate_review_note(entry)
                         ),
                     ),
                     None,

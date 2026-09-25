@@ -1054,6 +1054,65 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parts_sub = parts.add_subparsers(dest="parts_command", required=True)
+    parts_missing = parts_sub.add_parser(
+        "missing",
+        help="Offline: which U-prefix parts of a project the facts shelf cannot judge yet.",
+        description=(
+            "Read an .epro2 / .eprj3 project offline and list every U-prefix part with "
+            "the fact keys the shelf is missing for it (and its category state). Exit 0 "
+            "always — this is a report, not a failure: 0 means every part is judgeable, "
+            "and a non-empty list is still exit 0 because 'the shelf has work to do' is "
+            "information, not an error. Exit 2 is reserved for an input that cannot be "
+            "read. --json is the machine shape the AI consumes."
+        ),
+    )
+    parts_missing.add_argument(
+        "--file", required=True, help="The .epro2 / .eprj3 project to read (read-only)."
+    )
+    parts_missing.add_argument(
+        "--library", default=None, help="The shelf to judge against (default blocklib/parts.json)."
+    )
+    parts_missing.add_argument(
+        "--json", dest="json_path", metavar="PATH", help="Write the machine-readable report."
+    )
+    parts_show = parts_sub.add_parser(
+        "show",
+        help="Dump one shelf entry: identity, facts, every provenance line, gate state.",
+        description=(
+            "Human-readable dump of one entry, looked up by MPN or key (exact first, then "
+            "case-insensitive). Not found → exit 2 with up to five substring candidates, "
+            "because 'no such part' without 'did you mean' is a dead end."
+        ),
+    )
+    parts_show.add_argument("query", help="MPN or key, e.g. CH340N or ic.rt9013_33gb.")
+    parts_show.add_argument(
+        "--library", default=None, help="The shelf to read (default blocklib/parts.json)."
+    )
+    parts_show.add_argument(
+        "--json", dest="json_path", metavar="PATH", help="Write the entry as JSON."
+    )
+    parts_add = parts_sub.add_parser(
+        "add",
+        help="Append an unverified candidate entry (facts_verified: false).",
+        description=(
+            "Append a candidate shelf entry: no category, no facts, facts_verified false, "
+            "provenance.kind manual-curation. A duplicate MPN is refused (exit 2) and "
+            "points at `parts show`. The file is edited at the JSON-document level so "
+            "existing entries keep their exact bytes, backed up to a .tmp sibling first, "
+            "and re-parsed with the real validator before the write is called done."
+        ),
+    )
+    parts_add.add_argument("mpn", help="The manufacturer part number to add.")
+    parts_add.add_argument("--lcsc", required=True, help="Its LCSC C-code (e.g. C2977777).")
+    parts_add.add_argument(
+        "--key", default=None, help="Shelf key (default: derived from the MPN)."
+    )
+    parts_add.add_argument(
+        "--library", default=None, help="The shelf to append to (default blocklib/parts.json)."
+    )
+    parts_add.add_argument(
+        "--json", dest="json_path", metavar="PATH", help="Write the machine-readable result."
+    )
     pick = parts_sub.add_parser(
         "select",
         help=(
@@ -4391,6 +4450,483 @@ def _cmd_parts_select(args: argparse.Namespace) -> int:
         return asyncio.run(run())
 
     return result.exit_code
+
+
+# ---------------------------------------------------------------------------
+# The 039 toolchain: missing → add → curation → the verified gate
+# ---------------------------------------------------------------------------
+#
+# One pipeline in three offline subcommands. `missing` states what the shelf
+# cannot judge for a board, `add` scaffolds the entry, a curator fills `category`
+# and `facts` from the datasheet — each fact citing its own page — and
+# `facts_verified` keeps that claim from driving a rule while it is still only a
+# claim. Nothing here touches the bridge.
+
+
+def _parts_library_path(args: argparse.Namespace) -> str:
+    """The shelf a 039 subcommand reads, or writes.
+
+    ``--library`` wins; otherwise the **rules' own** default, imported rather
+    than repeated — two copies of that path is how a curation pass ends up
+    filling a file no rule ever opens.
+    """
+    from boardwise.rules.facts import DEFAULT_LIBRARY_PATH
+
+    return args.library or DEFAULT_LIBRARY_PATH
+
+
+def _shelf_entry(library: object, *, mpn: str, lcsc: str) -> object | None:
+    """One board part → its shelf entry, by exactly the rules' lookup order.
+
+    MPN first, then the C-number, exact match only: this is
+    :func:`boardwise.core.parts.find_facts`' contract on purpose. `missing`
+    must report the part the **review** will find, and a near-miss here would
+    call a part judgeable that the rules still answer UNKNOWN for.
+    """
+    from boardwise.core.parts import find_facts
+
+    entry = find_facts(library, mpn=mpn) if mpn else None
+    if entry is None and lcsc:
+        entry = find_facts(library, lcsc=lcsc)
+    return entry
+
+
+def _facts_in_file(entry: object | None) -> dict:
+    """The facts the entry **claims** — the held-back candidate's included.
+
+    Two different answers live here: `entry.facts` is what a rule may act on,
+    and `entry.candidate_facts` is the claim a human is being asked to review.
+    A report about work the shelf owes has to see the second as well as the
+    first, so neither replaces the other.
+    """
+    if entry is None:
+        return {}
+    return entry.facts if entry.facts is not None else (entry.candidate_facts or {})
+
+
+def _missing_fact_keys(entry: object | None) -> list[str]:
+    """The fact vocabulary minus what the shelf records, **in table order**.
+
+    A held-back candidate's *claim* counts here: the claim is a real reduction in
+    what a curator has to write down, and pretending the entry is empty would
+    overstate the work. What the gate does change is trust, not coverage — so the
+    row carries `unverified` alongside, and "the facts are in but nobody has
+    vouched for them" is visible rather than folded into the count.
+    """
+    from boardwise.core.parts import FACTS_KEYS
+
+    recorded = _facts_in_file(entry)
+    return [key for key in FACTS_KEYS if key not in recorded]
+
+
+def _cmd_parts_missing(args: argparse.Namespace) -> int:
+    """WI-1: the fact-intake list for one project. Exit 0 always.
+
+    Exit 2 is reserved for an input this command cannot read (encrypted
+    backup, unsupported extension, no such file). A non-empty list is
+    **information** — "the shelf owes work here" — never a failure, so it never
+    changes the exit code; a build that exited 1 on it would teach everyone to
+    ignore the code. The count that matters is the missing column, which is why
+    the summary line states it.
+    """
+    import json
+
+    from boardwise.core.parts import FACTS_KEYS, PartError, load_parts
+    from boardwise.rules.facts import IC_PATTERN
+
+    library_path = _parts_library_path(args)
+    try:
+        library = load_parts(library_path)
+    except PartError as exc:
+        print(f"boardwise parts missing: {exc}", file=sys.stderr)
+        return 2
+
+    project = Path(args.file)
+    try:
+        # `schematic` is not optional here. The default view is the netlist, and
+        # for these rules the schematic is the board (task 011's rules are
+        # written against it); an .eprj3 folder project refuses the other view
+        # outright (038 tier A).
+        model, _board = _load_model(project, view="schematic")
+    except (EncryptedProjectError, ValueError, OSError) as exc:
+        print(f"boardwise parts missing: cannot read {project}: {exc}", file=sys.stderr)
+        return 2
+
+    rows: list[dict] = []
+    owed = 0
+    for designator in sorted(model.components):
+        comp = model.components[designator]
+        if not IC_PATTERN.match(designator):
+            continue
+        entry = _shelf_entry(library, mpn=comp.mpn, lcsc=comp.lcsc_part)
+        facts = _facts_in_file(entry)
+        missing = [key for key in FACTS_KEYS if key not in facts]
+        datasheet = (entry.datasheetUrl if entry is not None else "") or comp.datasheet
+        if entry is None:
+            gate = None
+        else:
+            gate = bool(entry.facts_verified)
+        rows.append({
+            "designator": designator,
+            "mpn": comp.mpn,
+            "lcsc": comp.lcsc_part,
+            "value": comp.value,
+            "shelfKey": entry.key if entry is not None else "",
+            "onShelf": entry is not None,
+            "category": entry.category if entry is not None else "",
+            "datasheetUrl": datasheet,
+            "factsVerified": gate,
+            "unverified": gate is False,
+            "factsPresent": sorted(facts),
+            "missing": missing,
+        })
+        owed += 1 if missing else 0
+
+        identity = comp.mpn or comp.lcsc_part or "(no MPN, no C-number)"
+        if entry is None:
+            print(f"{designator} {identity} [no shelf entry] — missing {len(missing)} fact(s)")
+        else:
+            state = (
+                "true"
+                if entry.facts_verified
+                else "false (candidate — held back from the rules)"
+            )
+            print(
+                f"{designator} {identity} [{entry.key}] category={entry.category or '-'} "
+                f"facts={len(facts)} missing={len(missing)} facts_verified={state}"
+            )
+        print(
+            f"    present: {', '.join(sorted(facts)) or '(none)'}"
+            f" — missing: {', '.join(missing) or '(none)'}"
+        )
+        if datasheet:
+            print(f"    datasheet: {datasheet}")
+
+    report = {
+        "command": "parts-missing",
+        "ok": True,
+        "file": str(project),
+        "library": str(library_path),
+        "entriesOnShelf": len(library.parts),
+        "parts": rows,
+        "fullyJudgeable": owed == 0,
+        "vocabulary": list(FACTS_KEYS),
+    }
+    if not rows:
+        print(f"{project}: no U-prefix ICs found — nothing for the shelf to judge here")
+    elif owed == 0:
+        print(
+            f"{len(rows)} U-prefix part(s) are judgeable from {library_path} "
+            "(全部可查; exit 0)"
+        )
+    else:
+        print(
+            f"{len(rows)} U-prefix part(s), {owed} with missing facts "
+            f"against {library_path} (a report, not a failure: exit 0)"
+        )
+    if args.json_path:
+        Path(args.json_path).write_text(
+            json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        print(f"json: {args.json_path}")
+    return 0
+
+
+def _entry_dump(entry: object) -> dict:
+    """One entry as ``parts show --json`` reports it.
+
+    ``facts`` is the claim **in the file** (the candidate's while the gate is
+    shut) and ``factsDriving`` says whether a rule may act on it. Those are two
+    different answers about the same bytes, so the dump keeps both rather than
+    letting a reader assume either.
+    """
+    return {
+        "key": entry.key,
+        "mpn": entry.mpn,
+        "lcsc": entry.lcsc,
+        "value": entry.value,
+        "manufacturer": entry.manufacturer,
+        "footprint_name": entry.footprint_name,
+        "footprint_name_verified": entry.footprint_name_verified,
+        "category": entry.category,
+        "params": dict(sorted(entry.params.items())),
+        "datasheetUrl": entry.datasheetUrl,
+        "datasheetPdfUrl": entry.datasheetPdfUrl,
+        "facts": entry.facts if entry.facts is not None else entry.candidate_facts,
+        "factsVerified": bool(entry.facts_verified),
+        "factsDriving": entry.facts is not None,
+        "provenance": {
+            "kind": entry.provenance.kind,
+            "source": entry.provenance.source,
+            "designators": list(entry.provenance.designators),
+            "note": entry.provenance.note,
+        },
+        "notes": list(entry.notes),
+    }
+
+
+def _cmd_parts_show(args: argparse.Namespace) -> int:
+    """WI-2: one entry in full — identity, facts, provenance, gate state.
+
+    Lookup is exact key → exact MPN → case-insensitive either: a shelf key is
+    typed by hand and an MPN off a screen, so the last step is what makes the
+    command usable. Not found is exit 2 **with** up to five substring
+    candidates, because "no such part" on its own is a dead end and the AI
+    reading this has no other window onto the shelf.
+    """
+    import json
+
+    from boardwise.core.parts import PartError, load_parts
+
+    library_path = _parts_library_path(args)
+    try:
+        library = load_parts(library_path)
+    except PartError as exc:
+        print(f"boardwise parts show: {exc}", file=sys.stderr)
+        return 2
+
+    query = args.query
+    folded = query.casefold()
+    entry = library.get(query)
+    if entry is None:
+        entry = next((part for part in library.parts if part.mpn and part.mpn == query), None)
+    if entry is None:
+        entry = next(
+            (
+                part
+                for part in library.parts
+                if part.key.casefold() == folded
+                or (part.mpn and part.mpn.casefold() == folded)
+            ),
+            None,
+        )
+    if entry is None:
+        near = [
+            part
+            for part in library.parts
+            if folded in part.key.casefold()
+            or folded in (part.mpn or "").casefold()
+            or folded in (part.lcsc or "").casefold()
+        ][:5]
+        print(
+            f"boardwise parts show: no entry for {query!r} in {library_path} "
+            f"({len(library.parts)} entries)",
+            file=sys.stderr,
+        )
+        if near:
+            print("did you mean:", file=sys.stderr)
+            for candidate in near:
+                print(
+                    f"  {candidate.key}  {candidate.mpn or '-'}  {candidate.lcsc or '-'}",
+                    file=sys.stderr,
+                )
+        return 2
+
+    facts = _facts_in_file(entry)
+    print(f"{entry.mpn or entry.key} — {entry.key}")
+    print(f"  lcsc: {entry.lcsc or '-'}")
+    print(f"  value: {entry.value or '-'}")
+    print(f"  manufacturer: {entry.manufacturer or '-'}")
+    print(f"  footprint: {entry.footprint_name or '-'}")
+    print(f"  category: {entry.category or '-'}")
+    print(f"  params: {len(entry.params)} field(s)")
+    print(f"  datasheet: {entry.datasheetUrl or '-'}")
+    print(f"  datasheet pdf: {entry.datasheetPdfUrl or '-'}")
+    if entry.facts_verified:
+        print(
+            "  gate: facts_verified = true (the field's default) — a rule acts on "
+            "the facts below"
+        )
+    else:
+        print(
+            "  gate: facts_verified = false — candidate entry: the facts below are "
+            "recorded but **no rule acts on them**; flipping the flag is the review "
+            "(task 039 §WI-4)"
+        )
+    if facts:
+        print(f"  facts ({len(facts)}):")
+        for key in sorted(facts):
+            print(f"    {key}: {json.dumps(facts[key], ensure_ascii=False, sort_keys=True)}")
+    else:
+        print("  facts: (none recorded)")
+    print("  provenance:")
+    print(f"    kind: {entry.provenance.kind or '-'}")
+    print(f"    source: {entry.provenance.source or '-'}")
+    print(f"    note: {entry.provenance.note or '-'}")
+    for designator in entry.provenance.designators:
+        print(f"    designator: {designator}")
+    if entry.notes:
+        print("  notes:")
+        for note in entry.notes:
+            print(f"    - {note}")
+
+    if args.json_path:
+        Path(args.json_path).write_text(
+            json.dumps(
+                {"command": "parts-show", "ok": True, "library": str(library_path),
+                 "entry": _entry_dump(entry)},
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        print(f"json: {args.json_path}")
+    return 0
+
+
+def _candidate_key(mpn: str, lcsc: str) -> str:
+    """``candidate.<slug>`` — the shelf's own naming rule, under a candidate prefix.
+
+    :func:`boardwise.core.parts.make_key` is reused rather than re-derived: one
+    naming rule per project, and the *prefix* is what says "not curated yet" —
+    never a different slug style, which would make two parts from one MPN.
+    """
+    from boardwise.core.parts import make_key
+
+    return make_key(
+        category="candidate", value="", mpn=mpn, footprint_name="", title="", lcsc=lcsc
+    )
+
+
+def _cmd_parts_add(args: argparse.Namespace) -> int:
+    """WI-3: append a candidate entry — identity only, gate shut.
+
+    The write happens at the **JSON-document** level, not through `save_parts`:
+    a library-wide re-serialisation reorders keys inside existing entries
+    (`entry_to_json`'s field order is not every entry's), and a curation tool
+    that rewrites 94 entries' bytes to add a 95th cannot be reviewed. The
+    backup and the re-parse are the price of that choice.
+    """
+    import json
+    import shutil
+
+    from boardwise.core.parts import (
+        PartEntry,
+        PartError,
+        PartLibrary,
+        PartProvenance,
+        entry_to_json,
+        library_from_json,
+        library_to_json,
+        load_parts,
+    )
+
+    library_path = Path(_parts_library_path(args))
+    if library_path.is_file():
+        try:
+            raw = json.loads(library_path.read_text(encoding="utf-8"))
+            library = library_from_json(raw, str(library_path))
+        except (OSError, ValueError) as exc:
+            print(f"boardwise parts add: cannot use {library_path}: {exc}", file=sys.stderr)
+            return 2
+    else:
+        library = PartLibrary()
+        raw = library_to_json(library)
+
+    # Identity is compared case-insensitively, deliberately stricter than the
+    # shelf's own exact-match lookup: an entry differing only in case is a
+    # duplicate to fix, not a second part to keep.
+    for existing in library.parts:
+        same_mpn = existing.mpn and existing.mpn.casefold() == args.mpn.casefold()
+        same_lcsc = existing.lcsc and existing.lcsc.casefold() == args.lcsc.casefold()
+        if same_mpn or same_lcsc:
+            which = "mpn" if same_mpn else "lcsc"
+            identity = args.mpn if same_mpn else args.lcsc
+            print(
+                f"boardwise parts add: {which} {identity!r} is already on the shelf "
+                f"as {existing.key}; inspect it with "
+                f"`boardwise parts show {existing.key}`",
+                file=sys.stderr,
+            )
+            return 2
+
+    key = args.key or _candidate_key(args.mpn, args.lcsc)
+    taken = library.get(key)
+    if taken is not None:
+        print(
+            f"boardwise parts add: key {key!r} is taken by {taken.mpn or taken.lcsc}; "
+            "pass --key to name this one differently",
+            file=sys.stderr,
+        )
+        return 2
+
+    candidate = PartEntry(
+        key=key,
+        mpn=args.mpn,
+        lcsc=args.lcsc,
+        facts_verified=False,
+        provenance=PartProvenance(
+            kind="manual-curation",
+            note=(
+                "candidate scaffolded by `parts add` (039): identity only — no "
+                "category, no facts, and the uuids the bridge fills have not been "
+                "resolved yet"
+            ),
+        ),
+        notes=[
+            "candidate: facts_verified is false, so no rule acts on this entry. "
+            "Fill category and facts from the datasheet (every fact cites its own "
+            "page), then flip the flag in review (task 039 §WI-4)."
+        ],
+    )
+    raw.setdefault("parts", []).append(entry_to_json(candidate))
+
+    backup = library_path.with_suffix(library_path.suffix + ".tmp")
+    existed = library_path.is_file()
+    if existed:
+        shutil.copy2(library_path, backup)
+    try:
+        library_path.parent.mkdir(parents=True, exist_ok=True)
+        library_path.write_text(
+            json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+    except OSError as exc:
+        print(f"boardwise parts add: cannot write {library_path}: {exc}", file=sys.stderr)
+        return 2
+    try:
+        # The validator, not the writer, is what makes the write done: a file
+        # that only the writer can read is a broken shelf.
+        reloaded = load_parts(library_path)
+    except PartError as exc:
+        if existed:
+            shutil.copy2(backup, library_path)
+        else:
+            library_path.unlink(missing_ok=True)
+        print(
+            f"boardwise parts add: the entry was refused by the validator, rolled "
+            f"back: {exc}",
+            file=sys.stderr,
+        )
+        return 2
+
+    print(f"candidate appended: {key} → {library_path} (now {len(reloaded.parts)} entries)")
+    if existed:
+        print(f"  backup: {backup}")
+    print("  gate: facts_verified = false — curate the facts, then flip the flag in review")
+    print(f"next: boardwise parts show {key}")
+    if args.json_path:
+        Path(args.json_path).write_text(
+            json.dumps(
+                {
+                    "command": "parts-add",
+                    "ok": True,
+                    "library": str(library_path),
+                    "backup": str(backup) if existed else "",
+                    "key": key,
+                    "mpn": candidate.mpn,
+                    "lcsc": candidate.lcsc,
+                    "factsVerified": False,
+                    "entriesOnShelf": len(reloaded.parts),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        print(f"json: {args.json_path}")
+    return 0
 
 
 #: The verification phase's clock (task 020 §WI-2), read when the phase runs —
@@ -12715,6 +13251,9 @@ BRIDGE_COMMANDS = {
 
 PARTS_COMMANDS = {
     "select": _cmd_parts_select,
+    "missing": _cmd_parts_missing,
+    "show": _cmd_parts_show,
+    "add": _cmd_parts_add,
 }
 
 BOM_COMMANDS = {
