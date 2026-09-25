@@ -58,6 +58,19 @@ boardwise parts add TPL2981-30DBVR --lcsc C9900000001
   and the gate. Lookup is exact key → exact MPN → case-insensitive either; a miss
   is exit 2 **with** up to five substring neighbours, because "no such part" with
   no "did you mean" is a dead end.
+* **`fetch`** (039 批②) gets a datasheet and turns it into a **candidate** entry:
+  the engineer's channel is `--file <local PDF>`; otherwise the entry's own LCSC
+  links are downloaded (`datasheetPdfUrl` first, then the product page) into
+  `.tmp_datasheets/` (gitignored). Either way the PDF's text is dumped page by
+  page beside it (`<MPN>.txt`, `<<<page N>>>` markers so a fact can cite its
+  page), a narrow extractor proposes `supply_pins` / `required_caps` / `nc_pins`
+  records that quote their own line — and the entry is written with
+  `facts_verified: false`. Two deliberate limits: an entry whose facts already
+  drive rules is never overwritten without `--force` (an unverified guess does
+  not replace something a human vouched for), and when the extractor proposes
+  nothing the library is not touched at all (there is no claim, so the gate stays
+  open). The third channel — the vendor's own site — is the AI's, via WebSearch;
+  the failure output hands over the queries to start from.
 * **`add`** appends a candidate: identity only, `category` empty, no facts,
   `facts_verified: false`, `provenance.kind: manual-curation`. A duplicate MPN or
   C-number is refused (exit 2) pointing at `parts show`. The write is a

@@ -761,7 +761,17 @@ def test_checkup_writes_report_markdown_beside_the_json(fake_bridge, tmp_path):
     markdown = (tmp_path / "out" / "report.md").read_text(encoding="utf-8")
     report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
     assert markdown.startswith("# boardwise checkup 报告")
-    assert "**结论：1 项 ERROR**（退出码 1）" in markdown
+    # 039 批②: the conclusion carries both halves — what the checks found, and
+    # whether the datasheet gate let the review finish. The error count is still
+    # the first thing on the line; the unreviewed-parts caveat follows it.
+    assert "**结论：1 项 ERROR" in markdown and "（退出码 1）" in markdown
+    assert report["summary"]["unreviewedParts"] > 0
+    assert report["summary"]["mayClaimPassed"] is False
+    assert f"{report['summary']['unreviewedParts']} 颗器件缺手册未审" in markdown
+    assert "## 未审器件（" in markdown
+    assert "## 警告分诊（" in markdown
+    assert "layout_review" not in report, "the aesthetics switch is off by default"
+    assert "## 布局审美" not in markdown
     assert "## 主机 DRC" in markdown and "## 模块" in markdown
     assert "## AI 槽位" in markdown and "【结论先行】" in markdown
     assert report["ai_slots"]["summary_template"].rstrip() in markdown
