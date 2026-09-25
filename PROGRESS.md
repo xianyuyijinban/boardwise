@@ -31,9 +31,9 @@ collects the current truth and the pointers.
   - `docs/images/gs-03-daemon-start.png`
   - `PROGRESS.md`
 
-## Current baseline (2026-09-25, 037 move-block 收官, M3 五片全满; published on GitHub)
+## Current baseline (2026-09-25, 038 eprj3 A 档; published on GitHub)
 
-- pytest: **1611 passed** (run with `--basetemp=.tmp_pt_home` on Windows —
+- pytest: **1627 passed** (run with `--basetemp=.tmp_pt_home` on Windows —
   the host's safe-delete hook otherwise eats the summary line and fakes
   exit 1)
 - connector: **419 pass / 0 fail** (`cd connector && npm test`)
@@ -118,3 +118,5 @@ point. Full measurement history: `tasks/010c-coordinate-convention.md`
 - 036b 029 位号池同款盲点修复: 共用函数 `addcomponent.designator_pool`（页面 ∪ 工程导出，036/029 不漂移）；029 用既有 `--file` 快照取全局位号**零新增桥调用**；apply 侧补工程级 `designator_taken` exit 4 零写入（主代理裁决 apply 严于 plan）；测试 +3 + 框架改 1 条已申报；pytest **1573**，connector 419 / tsc 不变，变异 1/1（3 红）；真机未跑（离线可证，"静默改名"事实系 036 真机实测）（`tasks/036-insert-subcircuit.md` §036b，`outputs/036b_*`）
 
 - 037 move-block（M3 第 5 片收官，局部移动功能块；connector/daemon 零改动仍 **0.4.23**）: 探针定论**宿主不拖线**（modify_primitive 移件、线端点留原地）→ 重路径（组内线/边界线删除 + wire_route 正交重画，connector 三件现成零改动）；入口 `edit plan --move --designators … --dx/--dy`（网格整数倍否则拒）；五种拒绝（边界 label/netflag/总线、非器件图元、压点、位号找不到/一对多、off-grid）；**验收主判据 = 网表恒等**（活网表逐脚岛屿比对，一脚变了 exit 2）；幂等/stale 判据 = plan 自己的 postconditions（036 先例）；真机：多器件块 (U1,U2) by (100,0) applied+saved（网表 12 脚零差异、幂等零写入、stale exit 4）、单器件 (50,50) applied+saved；主代理裁决三处全批（线段判 T→点集成员判定 / 组内线不做同形状平移 / cmdKey 报错举证重试一次）；边界带 label 形状本机造不出（place_netlabel 不可用）仅离线用例——环境限制已注明；两条宿主新习性入 SKILL 坑 26（不拖线 / 上报的线是点集不是路径，照抄会画幻影对角线挂死宿主）；pytest **1611**（+38 over 1573），connector 419 / tsc 不变，变异 3/3 CAUGHT；**M3 五片（016/029/035/036/037）至此全满**（`tasks/037-move-block.md` §交卷记录，`outputs/037_*`）
+
+- 038 eprj3 适配（V4 离线格式 A 档只读 SCH_PAGE；connector/daemon 零改动仍 **0.4.23**）: 新 `parsers/eprj3.py` 文件夹读取器（`<name>.eprj3` 索引取 name/owner_uuid——补上"只有 .epro2 才带工程 uuid"老缺口；`sch/**/*.esch2` 按路径序粘成同一条记录流，`iter_epru_records`/`split_documents` 原样复用；`yAxisDirection` 只认字面量 `up`、按规范翻转表翻 y 并剥字段，信封/body 两位置都收——规范未说明位置、官方示例 0 次出现，真样本到了第一件事核对）；`load_epru_text` 内部判 `looks_like_eprj3` 成唯一容器缝（8 处调用点一行未动，主代理已批此偏离）；`_pin_key_for(meta)` 按格式选 PIN 键（eprj3=PIN 行自身 `id`，V3=合成 `e<zIndex>`——实测 V3 夹具 12 条 PIN 行 id≠e<zIndex>、统一换键必打红 V3，故按格式分支）；`_load_model` 认目录 + `--view pcb` 对 eprj3 诚实报错"B 档未开"（坑 14 教训：空模型会被误读成干净板）；`--latest` 认 eprj3 目录；夹具=自有手写合成（2 器件/一线/netlabel/GND 旗，进 `tests/fixtures/eprj3_synth/`）+ 官方示例工程（**无许可**，gitignored `.tmp_eprj3_ref/` 只对照不入库）；pytest **1627**（+16 over 1611），connector 419 / tsc 不变，变异 2/2 CAUGHT（y 轴错向 / PIN 键退回合成键，各 2 红）；真机 V3 checkup 一轮无回归（只碰 test 窗）；离线 eval 读数齐全但无同注解集历史基线——"逐字节不变"**未声明**，替代论证 = 三文件 diff 审阅（V3 路径靠 `is_dir`/`*.eprj3` 守卫物理进不了新分支）+ V3 锚点测试（47 器件/40 网/zIndex 键原样）；终验待朋友真实 V4 样本（`tasks/038-eprj3-tierA.md` §交卷记录，`outputs/038_*`）

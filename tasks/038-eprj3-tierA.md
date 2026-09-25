@@ -73,3 +73,24 @@ connector on V4 在线探针：doctor 8 项、`sys.probe` 8 关键成员、activ
 ## 交卷记录
 
 （子代理交文本，主代理 append 并复验。）
+
+### 主代理复验（2026-09-25）
+
+- 交卷文本：`outputs/038_summary.txt`；证据 `outputs/038_probe.txt` / `038_pytest.txt`。
+- **sha256 抽核 7/7 一致**：eprj3.py / epru_stream.py / schematic.py / cli.py / test_038_eprj3.py /
+  合成夹具两件，与 `038_pytest.txt` 表逐字节相同。
+- **三线主代理复跑全绿**：pytest **1627 passed**（108.8s，`--basetemp=.tmp_pt_home`）/
+  connector **419 pass 0 fail** / `tsc --noEmit` 干净。
+- **git status 只出现预期文件**：M cli/epru_stream/schematic + 新 eprj3.py、test_038、fixtures/eprj3_synth；
+  `tasks/017-eval-set-expansion.md`（永久草稿）不入提交。
+- **V3 红线**：三文件 diff 逐 hunk 审阅——新分支全由 `looks_like_eprj3`（目录含 `*.eprj3` 或 `.eprj3`
+  文件）与 `_pin_key_for(meta)`（缺省 `"zIndex"`）把守，`.epro2` 物理上进不了新分支；
+  `_collect_symbols` 默认参数路径行为逐字节不变。eval 无同集历史基线（如实降级声明，
+  替代论证 = diff 审阅 + 47 器件/40 网/zIndex 锚点测试）。真机 checkup 子代理已跑（test 窗，无回归）。
+- **两处偏离裁决**：① 分派放 `load_epru_text` 内部而非改 8 处调用点——**批准**（爆炸半径更小，
+  同一容器缝，效果相同）；② `yAxisDirection` 信封/body 两位置都收——**批准**（规范未说明时的
+  防御姿态；真样本终验第一件事核对此条）。
+- 文档：SKILL.md §3.2 补 eprj3 条目（只读 SCH_PAGE / pcb 诚实报错 / `--latest` 认目录 /
+  owner_uuid 修老缺口）；坑表**不新增**（本批为离线格式工作，未踩真机坑）。
+- 遗留（照旧挂着）：朋友真实 V4 样本终验（yAxisDirection / NC 引脚 id / CANVAS 缺失定案）；
+  connector-on-V4 在线探针（工作项 4，等朋友机器）；`.eprj3` 当 plan 快照属写路径侧，A 档未开。

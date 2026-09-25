@@ -242,13 +242,28 @@ def read_project_meta(path: str | Path) -> dict[str, Any]:
     return {}
 
 def load_epru_text(path: str | Path) -> tuple[str, dict[str, Any]]:
-    """Return the ``.epru`` payload and project metadata of an ``.epro2`` file.
+    """The project's record stream and metadata — **whatever container it is in**.
+
+    One seam, three containers: a ``.epro2`` ZIP (one ``.epru`` stream inside it),
+    and — since 038 — an **eprj3 folder** (one file per document, glued back into a
+    single stream by :mod:`boardwise.parsers.eprj3`). Every caller above this line
+    keeps taking ``(text, meta)`` and never learns which one it got, which is what
+    made the V4 read-only tier a pure increment instead of eight call-site edits.
 
     Raises :class:`EncryptedProjectError` — with advice to re-export without
     the encryption option — when the file is not a readable ZIP, when its
-    entries are flagged encrypted, or when nothing decodes.
+    entries are flagged encrypted, or when nothing decodes. An eprj3 folder that
+    cannot be read raises the same class from the reader (one refusal type for
+    "this input is not readable", whatever the reason).
     """
     source_path = Path(path)
+    from .eprj3 import Eprj3Error, load_eprj3_text, looks_like_eprj3
+
+    if looks_like_eprj3(source_path):
+        try:
+            return load_eprj3_text(source_path)
+        except Eprj3Error as exc:
+            raise EncryptedProjectError(str(exc)) from exc
     hint = (
         "This project backup cannot be read. EasyEDA Pro's \"save as (local)\" "
         "dialog has an optional encryption checkbox — if the export was "

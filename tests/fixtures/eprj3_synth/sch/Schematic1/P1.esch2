@@ -1,0 +1,35 @@
+{"type":"DOCHEAD"}||{"docType":"SCH_PAGE","uuid":"page-1","editVersion":"2.3.0"}|
+{"type":"CANVAS"}||{"originX":0,"originY":0,"unit":"0.01inch"}|
+{"type":"DOCHEAD"}||{"docType":"SYMBOL","uuid":"sym-1","editVersion":"2.3.0"}|
+{"type":"META","id":"META"}||{"title":"R","docType":"SYMBOL"}|
+{"type":"PIN","id":"e1"}||{"x":0.0,"y":0.0,"zIndex":2}|
+{"type":"ATTR","id":"a0"}||{"parentId":"e1","key":"Pin Number","value":"1"}|
+{"type":"ATTR","id":"b0"}||{"parentId":"e1","key":"Pin Name","value":"P1"}|
+{"type":"ATTR","id":"c0"}||{"parentId":"e1","key":"Pin Type","value":"1"}|
+{"type":"PIN","id":"e2"}||{"x":20.0,"y":0.0,"zIndex":3}|
+{"type":"ATTR","id":"a1"}||{"parentId":"e2","key":"Pin Number","value":"2"}|
+{"type":"ATTR","id":"b1"}||{"parentId":"e2","key":"Pin Name","value":"P2"}|
+{"type":"ATTR","id":"c1"}||{"parentId":"e2","key":"Pin Type","value":"1"}|
+{"type":"COMPONENT","id":"c-inst-u1"}||{"partId":"inst-u1","x":300.0,"y":-500.0,"rotation":0,"isMirror":false,"zIndex":10}|
+{"type":"ATTR","id":"d-inst-u1"}||{"parentId":"inst-u1","key":"Designator","value":"U1"}|
+{"type":"ATTR","id":"e-inst-u1"}||{"parentId":"inst-u1","key":"Device","value":"dev-U1"}|
+{"type":"ATTR","id":"f-inst-u1"}||{"parentId":"inst-u1","key":"Symbol","value":"sym-1"}|
+{"type":"ATTR","id":"g-inst-u1"}||{"parentId":"inst-u1","key":"Footprint","value":"fp-1"}|
+{"type":"COMPONENT","id":"c-inst-u2"}||{"partId":"inst-u2","x":400.0,"y":-500.0,"rotation":0,"isMirror":false,"zIndex":10}|
+{"type":"ATTR","id":"d-inst-u2"}||{"parentId":"inst-u2","key":"Designator","value":"U2"}|
+{"type":"ATTR","id":"e-inst-u2"}||{"parentId":"inst-u2","key":"Device","value":"dev-U2"}|
+{"type":"ATTR","id":"f-inst-u2"}||{"parentId":"inst-u2","key":"Symbol","value":"sym-1"}|
+{"type":"ATTR","id":"g-inst-u2"}||{"parentId":"inst-u2","key":"Footprint","value":"fp-1"}|
+{"type":"WIRE","id":"grp-1"}||{"zIndex":40}|
+{"type":"LINE"}||{"lineGroup":"grp-1","startX":300.0,"startY":-500.0,"endX":400.0,"endY":-500.0}|
+{"type":"ATTR","id":"net-1"}||{"parentId":"grp-1","key":"NET","value":"SIG_A"}|
+{"type":"DOCHEAD"}||{"docType":"SYMBOL","uuid":"sym-gnd","editVersion":"2.3.0"}|
+{"type":"META","id":"META"}||{"title":"Ground-GND","docType":"SYMBOL"}|
+{"type":"PIN","id":"e1"}||{"x":0.0,"y":0.0,"zIndex":2}|
+{"type":"ATTR","id":"a0"}||{"parentId":"e1","key":"Pin Number","value":"1"}|
+{"type":"ATTR","id":"b0"}||{"parentId":"e1","key":"Pin Name","value":"P1"}|
+{"type":"ATTR","id":"c0"}||{"parentId":"e1","key":"Pin Type","value":"1"}|
+{"type":"COMPONENT","id":"c-gnd"}||{"partId":"flag-gnd","x":420.0,"y":-500.0,"rotation":0,"isMirror":false,"zIndex":41}|
+{"type":"ATTR","id":"net-gnd"}||{"parentId":"flag-gnd","key":"Global Net Name","value":"GND"}|
+{"type":"ATTR","id":"sym-gnd-attr"}||{"parentId":"flag-gnd","key":"Symbol","value":"sym-gnd"}|
+{"type":"ATTR","id":"dev-gnd"}||{"parentId":"flag-gnd","key":"Device","value":"dev-gnd"}|
