@@ -821,10 +821,9 @@
               "provenance": "REF2025/2030/2033/2041 datasheet (TI SBOS600C, revised January 2017; read 2026-09-25 from the datasheet.sisoog.com mirror of the same PDF, canonical link below), p.23 sec.11 Power-Supply Recommendations (a supply bypass capacitor between 0.1uF and 10uF is recommended), https://www.ti.com/lit/ds/symlink/ref2033.pdf"
             }
           ]
-        },
-        "facts_verified": false
+        }
       },
-      "note": "facts curated 2026-09-25 (039 wave 1) but HELD by the gate (facts_verified: false), so no rule acts on them yet: recording the VIN bypass makes `decap-required-caps` report \"no grounded capacitor found on net NET7\" on 毕设FOC驱动板, where C34 sits between VIN and AGND with an undeclared value (its schematic Name attribute is null). The rule's candidate predicate needs a readable value to call a part a capacitor, so it answers \"missing\" where the honest state is \"the cap is there, its value is not established\" (UNKNOWN). Flip this to true once that rule question is settled — the facts themselves are datasheet-cited and need no rework. The layout guideline (sec.12.1, p.24) also asks for 0.1uF at VREF (pin 5) and VBIAS (pin 1), but that is the layout example for a data-acquisition board; only the supply bypass of sec.11 is recorded as a required cap."
+      "note": "facts curated 2026-09-25 (039 wave 1), verified and driving since 039 批①b: the VIN bypass requirement is checked by `decap-required-caps`, which now answers UNKNOWN (\"a capacitor is present but its value cannot be established, so the required 0.1uF cannot be checked\") instead of claiming no capacitor at all — the thesis board's C34 on NET7, whose schematic Name is null, is the case that held this entry back. The layout guideline (sec.12.1, p.24) also asks for 0.1uF at VREF (pin 5) and VBIAS (pin 1), but that is the layout example for a data-acquisition board; only the supply bypass of sec.11 is recorded as a required cap."
     },
     {
       "lcsc": "C47773",
