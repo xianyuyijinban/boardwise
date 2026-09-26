@@ -29,6 +29,7 @@ from pathlib import Path
 import pytest
 
 from boardwise.bridge.protocol import ErrorCodes, BridgeError
+from boardwise.core.model import ProjectModel
 from boardwise.cli import (
     _cmd_checkup,
     _cmd_review,
@@ -488,6 +489,13 @@ def _model_with(components: dict, nets: dict):
 
 
 def test_the_merge_unions_components_and_nets_and_records_clashes():
+    """040b: the per-page tier's merge is now "one board of the project".
+
+    The merged model is a one-board project (the façade reads straight through),
+    and a name that appears in two page models is a **cross-page** repeat, not a
+    same-page clash — the tier can tell those apart, and it cannot tell boards
+    apart, so this is the reading it must state.
+    """
     notes: list[str] = []
     first = _model_with({"R1": _component("R1", "1k")}, {"VCC": [("R1", "1")]})
     second = _model_with(
@@ -497,12 +505,19 @@ def test_the_merge_unions_components_and_nets_and_records_clashes():
 
     merged = _merge_schematic_models([first, second], notes=notes)
 
+    assert isinstance(merged, ProjectModel) and len(merged.boards) == 1
+    assert merged.board_titles() == ["per-page"], (
+        "the tier cannot attribute pages to boards, and says so in the title"
+    )
     assert sorted(merged.components) == ["C1", "R1"]
-    assert merged.components["R1"].value == "1k", "the first page wins; the clash is recorded"
-    assert merged.duplicate_designators == ["R1"]
+    assert merged.components["R1"].value == "1k", "the first page wins"
+    assert merged.duplicate_designators == [], "not a same-page clash"
+    assert merged.boards[0].cross_page_designators == {"R1": []}, (
+        "more than one page, page ids unknown for plain DesignModels"
+    )
     assert sorted(merged.nets) == ["GND", "VCC"]
     assert merged.nets["VCC"].pins == [("R1", "1"), ("C1", "1")]
-    assert "cross-page connectivity" in " ".join(notes)
+    assert "cannot attribute a page to a board" in " ".join(notes)
 
 
 def test_a_single_page_merge_adds_no_cross_page_note():

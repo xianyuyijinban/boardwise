@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from boardwise.core.annotations import annotations_from_json
-from boardwise.core.model import Component, DesignModel, Net, Pin
+from boardwise.core.model import Component, DesignModel, Net, Pin, ProjectModel
 from boardwise.engines.review_eval import (
     evaluate_annotations,
     load_board_model,
@@ -370,11 +370,16 @@ def test_the_report_names_a_draft_set_and_keeps_raw_fractions():
 
 
 def test_load_board_model_parses_the_schematic_side_of_an_epro2():
-
+    """040b: the schematic side is a project (one model per board). The golden
+    fixture declares a single board, so it reads as one — the counts are the
+    fixture's own."""
 
     model = load_board_model(Path("tests/fixtures/ch340_golden.epro2"))
-    assert len(model.components) == 17
-    assert len(model.nets) == 13
+    assert isinstance(model, ProjectModel)
+    (board_model,) = model.boards
+    assert (len(board_model.components), len(board_model.nets)) == (17, 13)
+    assert model.component_count() == 17 and model.net_count() == 13
+    assert board_model.board.title == "Board1"
 
 
 def test_load_board_model_rejects_unknown_sources(tmp_path):

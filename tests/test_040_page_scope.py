@@ -24,6 +24,7 @@ from boardwise.core.model import DesignModel
 from boardwise.parsers.epru_stream import iter_epru_records, load_epru_text
 from boardwise.parsers.schematic import (
     _wire_head_groups,
+    build_project_model,
     build_schematic_model,
     collect_page_layout,
 )
@@ -38,14 +39,22 @@ def _pins(model, designator: str) -> dict[str, str | None]:
     return {pin.number: pin.net for pin in model.components[designator].pins}
 
 
-@pytest.fixture(scope="module")
-def foc() -> DesignModel:
-    return build_schematic_model(FOC)
+def _board(project, title: str):
+    """One board's model by title — the 040b reading of "the model with X on it"."""
+    matches = [b for b in project.boards if b.board.title == title]
+    assert matches, (title, project.board_titles())
+    return matches[0]
 
 
 @pytest.fixture(scope="module")
-def motor() -> DesignModel:
-    return build_schematic_model(MOTOR)
+def foc():
+    """The 毕设 project: three boards (040b). Its refs live on specific boards."""
+    return build_project_model(FOC)
+
+
+@pytest.fixture(scope="module")
+def motor():
+    return build_project_model(MOTOR)
 
 
 # --------------------------------------------------------------------------
@@ -59,34 +68,41 @@ def test_c115_bridges_the_24v_rail_and_the_return_net(foc):
     Before 040 the model said both pins were on AGND — the weld of three pages
     (F1) plus a symbol graphic that shorted the capacitor bank's two rails
     (F3). `tests/fixtures/ProPrj_毕设FOC驱动板_*.epro2`'s PCB3 says the same as
-    this assertion: {'1': '+24V', '2': 'PGND'}.
+    this assertion: {'1': '+24V', '2': 'PGND'}, and C115 is on Board3.
     """
-    assert _pins(foc, "C115") == {"1": "+24V", "2": "PGND"}
+    assert _pins(_board(foc, "Board3"), "C115") == {"1": "+24V", "2": "PGND"}
 
 
 def test_the_whole_330uF_bank_still_reads_two_nets(foc):
-    """The bank's other electrolytics, from the same page and the same copper."""
-    for designator in ("C116", "C17"):
-        assert _pins(foc, designator) == {"1": "+24V", "2": "PGND"}, designator
-    assert _pins(foc, "D2") == {"1": "PGND", "2": "+24V"}
+    """The bank's other electrolytics, on the boards that carry them, and the
+    same copper layer agreeing each time."""
+    board1, board3 = _board(foc, "Board1"), _board(foc, "Board3")
+    assert _pins(board3, "C116") == {"1": "+24V", "2": "PGND"}
+    # Board1's own 24V input stage, same shape, same reading.
+    assert _pins(board1, "C17") == {"1": "+24V", "2": "PGND"}
+    assert _pins(board3, "D2") == {"1": "PGND", "2": "+24V"}
     # CN3 is the 24V input connector. Pins 3/4 are marked NO_CONNECT in the file
     # (a 2-pole XT30 with four footprint pads), so the model reads them as
     # unconnected — which it did before 040 too, and which the copper agrees
     # with ({1: PGND, 2: +24V, 3: None, 4: None}). 039d's probe printed NET8 for
     # pin 3 because it reported the cluster of an NC pin; the model has never
     # given an NC pin a net.
-    assert _pins(foc, "CN3") == {"1": "PGND", "2": "+24V", "3": None, "4": None}
+    assert _pins(board3, "CN3") == {"1": "PGND", "2": "+24V", "3": None, "4": None}
+    # The MOTC-sense RC caps are Board1's; their net is unnamed in the drawing
+    # (the copper calls it $1N66627), which is why the model auto-names it.
+    assert _pins(board1, "C40") == {"1": "AGND", "2": "NET13"}
 
 
 def test_u5_is_the_ch340n_of_the_other_three_boards(foc):
     """pin 5 -> VCC, not AGND; and the pin that is really grounded is 3."""
-    assert _pins(foc, "U5") == {
+    board1 = _board(foc, "Board1")
+    assert _pins(board1, "U5") == {
         "1": "D+", "2": "D-", "3": "GND", "4": None,
         "5": "VCC", "6": "RX", "7": "TX", "8": "VCC",
     }
     # PCB1 of the same archive (U5's board) says {5: VCC, 8: VCC, 3: GND,
     # 4: None}; so does the schematic's own symbol (Pin Name VCC on pin 5).
-    assert "U5" not in foc.duplicate_designators
+    assert "U5" not in board1.repeated_designators()
 
 
 def test_the_header_brackets_no_longer_short_u2s_columns(foc):
@@ -95,28 +111,40 @@ def test_the_header_brackets_no_longer_short_u2s_columns(foc):
     pins its own stub wire with its own NET label (IC-, IC+, SLC / GLC, SHC,
     GHC), and PCB3 confirms six *different* nets. F3 keeps them apart.
 
-    Asserted through net membership rather than `components["U2"].pins`, because
-    U2's designator is also used on another page of this multi-board project —
-    the model keeps the last placement per designator (040b's problem), while
-    the nets still carry every placement's pins. The pre-040 model put
-    U2.2/U2.4/U2.6 on one net and U2.8/U2.10/U2.12 on another; both triples were
-    wrong.
+    040b makes this a direct assertion: the board carrying that header is its own
+    model now, so `Board3.components["U2"]` **is** the 2x6 header. (Before 040b a
+    project-wide dict let the *other* U2 — the 28-pin part on Board1 — overwrite
+    it, and the assertion had to go through net membership.)
     """
-    def net_of(member):
-        return sorted(
-            name for name, net in foc.nets.items() if member in net.pins
-        )
-
-    assert "IC-" in net_of(("U2", "2"))
-    assert "IC+" in net_of(("U2", "4"))
-    assert "SLC" in net_of(("U2", "6"))
-    assert "GLC" in net_of(("U2", "8"))
+    board3 = _board(foc, "Board3")
+    u2 = board3.components["U2"]
+    assert len(u2.pins) == 12, "the 2x6 header, complete"
+    by_net = {pin.number: pin.net for pin in u2.pins}
+    assert by_net == {
+        "1": "PGND", "2": "IC-", "3": "PGND", "4": "IC+", "5": "PGND", "6": "SLC",
+        "7": "+24V", "8": "GLC", "9": "+24V", "10": "SHC", "11": "+24V", "12": "GHC",
+    }
     # No net holds two of the three bracket-mates any more.
     for triple in (("2", "4", "6"), ("8", "10", "12")):
         members = {("U2", number) for number in triple}
-        for name, net in foc.nets.items():
+        for name, net in board3.nets.items():
             shared = members & set(net.pins)
             assert len(shared) <= 1, (name, sorted(shared))
+
+
+def test_both_u2s_survive_as_complete_parts(foc):
+    """The worked example for 040b §WI-2: the 毕设 project places two different
+    parts under one name, on two boards. Both are now whole — 12 pins on Board3,
+    33 on Board1 — instead of the later one silently overwriting the earlier.
+    """
+    board1, board3 = _board(foc, "Board1"), _board(foc, "Board3")
+    assert (len(board1.components["U2"].pins), len(board3.components["U2"].pins)) == (
+        33, 12,
+    )
+    assert board1.components["U2"].footprint != board3.components["U2"].footprint, (
+        "two different parts, which is why one name cannot hold both"
+    )
+    assert foc.multi_board_designators()["U2"] == ["Board1", "Board3"]
 
 
 # --------------------------------------------------------------------------
@@ -173,19 +201,25 @@ def test_a_wire_group_belongs_to_exactly_one_page():
 
 def test_pages_are_not_welded(foc, motor):
     """F1: no pin's net can leave its own page. The pre-040 model had a single
-    141-pin cluster spanning three pages on the 毕设 board; the fix shows up as
-    a *net count that goes up* (85 -> 112 and 113 -> 121) and as nets whose
-    members all come from one page. Checked through the nets' own members: a
-    designator that exists on two pages appears in two nets, which is the
-    visible form of the repeat (040b re-scopes the model per board).
+    141-pin cluster spanning three pages on the 毕设 project; the fix shows up as
+    a *net count that goes up* (85 -> 112 per board, 113 -> 121) and as nets
+    whose members all come from one page.
+
+    040b: the counts are per board now, and the per-board numbers are what the
+    040 measurement of the same fix was reading through a project-wide dict.
     """
-    assert len(foc.nets) == 112
-    assert len(motor.nets) == 121
+    board3 = _board(foc, "Board3")
+    assert [len(b.nets) for b in foc.boards] == [90, 13, 35]
+    # The 高速电机控制器 project: two boards with the designer's own titles
+    # (板名自定义 — the board *is* the unit, not a board numbered by us).
+    assert [len(b.nets) for b in motor.boards] == [94, 50]
+    assert motor.board_titles() != ["Board1", "Board2"]
     # The old weld's signature: one net with 100+ members. None is left.
-    assert max(len(net.pins) for net in foc.nets.values()) < 100
+    for board_model in (*foc.boards, *motor.boards):
+        assert max(len(net.pins) for net in board_model.nets.values()) < 100
     # +24V and PGND are the bank's rails, and they no longer share a net.
-    assert ("C115", "1") in foc.nets["+24V"].pins
-    assert ("C115", "1") not in foc.nets["PGND"].pins
+    assert ("C115", "1") in board3.nets["+24V"].pins
+    assert ("C115", "1") not in board3.nets["PGND"].pins
 
 
 def test_the_drawings_still_carry_the_hazard_the_model_now_ignores(motor, foc):
@@ -256,22 +290,47 @@ def _graphic_bridges(path) -> list[tuple[str, str, tuple, tuple]]:
 # --------------------------------------------------------------------------
 
 
-def test_the_model_separates_same_page_from_cross_page_repeats(foc, motor):
-    # 毕设: U15 and U16 appear twice *within* page 5f0f; 28 refs appear once on
-    # each of two or three pages.
-    assert foc.duplicate_designators == ["U15", "U16"]
-    assert len(foc.cross_page_designators) == 28
-    assert sorted(foc.cross_page_designators["C1"]) == [
-        "0876ea4e415ed158",
-        "40daf13560b1086b",
-        "5f0f4e169f1745e789501f939bb10851",
-    ]
-    assert foc.repeated_designators() == sorted(
-        foc.duplicate_designators + list(foc.cross_page_designators)
-    )
-    # 高速电机控制器: same split, other numbers.
-    assert motor.duplicate_designators == ["U15", "U16", "U17", "U20"]
-    assert len(motor.cross_page_designators) == 12
+def test_the_model_separates_the_three_kinds_of_repeat(foc, motor):
+    """One name, three readings — and 040b is what made the third one visible.
+
+    Board1: U15/U16 twice on page 5f0f (same page, same netlist).
+    Board3: 28 names that are also on another board (cross-board).
+    Neither board repeats a name across *its own* pages on the 毕设 project; the
+    高速电机控制器 project does (below), which is why the middle class has a test.
+    """
+    board1, board3 = _board(foc, "Board1"), _board(foc, "Board3")
+    assert board1.duplicate_designators == ["U15", "U16"]
+    assert board1.cross_page_designators == {}
+    assert len(board3.cross_board_designators) == 28
+    assert board3.cross_board_designators["C1"] == ["Board1", "Board2", "Board3"]
+    assert foc.multi_board_designators()["C1"] == ["Board1", "Board2", "Board3"]
+    # the union of the three classes is the 30 refs oracle A1 ruled on
+    assert len(foc.repeated_designators()) == 30
+    assert "U15" in foc.repeated_designators() and "U16" in foc.repeated_designators()
+    # 高速电机控制器: same-page repeats again, and 12 cross-board names. Neither
+    # real multi-board fixture repeats a name across *its own* pages (their
+    # second pages are the empty ones), which is why the middle class is tested
+    # on a synthetic model — it is a pure function of the fields, and the fixture
+    # set cannot produce it.
+    same_page = {name for b in motor.boards for name in b.duplicate_designators}
+    assert same_page == {"U15", "U16", "U17", "U20"}
+    assert len(motor.multi_board_designators()) == 12
+    for board_model in (*foc.boards, *motor.boards):
+        assert board_model.cross_page_designators == {}
+
+
+def test_the_middle_class_names_the_pages_of_one_board():
+    """A name on two pages of one board is one netlist's clash (040 §WI-3), and
+    since 040b its message says so instead of blaming another board."""
+    from boardwise.core.model import BoardModel, BoardRef
+
+    board = BoardModel(board=BoardRef(uuid="b", title="Board1"))
+    board.cross_page_designators = {"R1": ["pageA", "pageB"]}
+    (finding,) = DuplicateDesignators().check(board)
+    assert finding.severity == "ERROR"
+    assert "pages of one board" in finding.message
+    assert "pageA" in finding.message and "pageB" in finding.message
+    assert "Board1" not in finding.message, "the board is the finding's own field"
 
 
 def test_single_page_boards_have_neither_kind():
@@ -283,39 +342,40 @@ def test_single_page_boards_have_neither_kind():
         assert model.cross_page_designators == {}, name
 
 
-def test_the_rule_reports_both_kinds_and_names_the_pages(foc):
-    """Both kinds are reported (the severity question is a ruling, see
-    `CROSS_PAGE_REPEAT_IS_A_DEFECT`); what is new in 040 is that the cross-page
-    finding names the pages, so a reader can tell the two apart."""
-    findings = DuplicateDesignators().check(foc)
-    by_message = {finding.message: finding for finding in findings}
-    same_page = [
-        finding for finding in findings
-        if finding.message.startswith(("U15 is used by more than one placed part on one page",
-                                       "U16 is used by more than one placed part on one page"))
-    ]
-    cross = [
-        finding for finding in findings
-        if finding.message.startswith("C1 is placed once on each of 3 pages")
-    ]
-    assert len(same_page) == 2, list(by_message)[:4]
-    assert len(cross) == 1
-    # the pages are named, so a reader can see which board is which
-    assert "40daf135" in cross[0].message and "5f0f4e16" in cross[0].message
+def test_the_rule_reports_all_three_kinds_and_names_the_subject(foc):
+    """Three classes, all ERROR (oracle A1, unchanged), and the message says which
+    class it is: same page, another page of the same board, or another board."""
+    findings = []
+    for board_model in foc.boards:
+        findings.extend(DuplicateDesignators().check(board_model))
+    same_page = [f for f in findings if "more than one placed part on one page" in f.message]
+    cross_board = [f for f in findings if "more than one board" in f.message]
+    assert sorted(f.message.split()[0] for f in same_page) == ["U15", "U16"]
+    assert "C1 is placed on more than one board (Board1、Board2、Board3)" == (
+        cross_board[0].message.split(";")[0]
+    ), cross_board[0].message
+    assert len(cross_board) == 28, "one report per name, not one per board"
+    assert {f.severity for f in findings} == {"ERROR"}
     assert len(findings) == len(foc.repeated_designators()) == 30
 
 
-def test_an_injected_same_page_repeat_is_still_a_violation():
-    """The injected `duplicate-designator` variant is a *cross-page* repeat by
-    construction (011d: "append a new SCH_PAGE holding a copy of R24"), so it is
-    listed under `cross_page_designators` — and the rule still reports it as an
-    ERROR, which its signed record demands."""
-    model = build_schematic_model(
+def test_an_injected_same_board_repeat_is_still_a_violation():
+    """The injected `duplicate-designator` variant appends a *second page* to a
+    one-board project (011d: "a second page carries a second R24"). 040b folds an
+    unregistered page into the project's single board, so the repeat is the
+    middle class — one netlist, two pages — and the rule still reports ERROR,
+    which the variant's signed record demands."""
+    project = build_project_model(
         Path("reviewsets/injected/duplicate-designator.epro2")
     )
-    assert model.duplicate_designators == []
-    assert list(model.cross_page_designators) == ["R24"]
-    finding = DuplicateDesignators().check(model)[0]
+    (board_model,) = project.boards
+    assert board_model.board.title == "Board1"
+    assert len(board_model.board.page_uuids) == 2, (
+        "the orphan page is Board1's second page (040b §WI-0.2)"
+    )
+    assert board_model.duplicate_designators == []
+    assert board_model.cross_page_designators == {"R24": ["6e27da4006bdba32", "7cf2e588251788482543fdc2"]}
+    (finding,) = DuplicateDesignators().check(board_model)
     assert finding.severity == "ERROR" and "R24" in finding.message
 
 

@@ -24,7 +24,7 @@ from boardwise.parsers.board_source import (
     load_exported_project,
     load_local_project,
 )
-from boardwise.parsers.schematic import build_schematic_model
+from boardwise.parsers.schematic import build_project_model
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCES = ROOT / "blocklib" / "sources"
@@ -88,13 +88,21 @@ def test_an_export_carries_the_library_identity_it_needs():
 
 @pytest.mark.parametrize("path", EXPORTS, ids=lambda p: p.name[:28])
 def test_the_export_reader_agrees_with_the_proven_parser_on_every_fixture(path):
-    """Same designators, same devices — checked against 005's parser."""
+    """Same designators, same devices — checked against 005's parser.
+
+    040b: the parser's answer is a **project** (one model per board), so the
+    comparison is against every board's designators, not against one merged
+    dict — which is also the stronger statement, since a merged dict was what
+    let two boards' same-named parts overwrite each other.
+    """
     project = load_exported_project(path)
-    model = strip_dangling_nets(build_schematic_model(path))
+    parser_project = build_project_model(path)
     mine = {placement.designator for placement in project.placements}
-    assert mine == set(model.components), (
-        f"{path.name}: the export reader and build_schematic_model disagree"
+    assert mine == set(parser_project.designators()), (
+        f"{path.name}: the export reader and build_project_model disagree"
     )
+    for board_model in parser_project.boards:
+        assert set(board_model.components) <= mine
     assert all(placement.device_uuid for placement in project.placements)
 
 

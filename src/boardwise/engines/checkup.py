@@ -21,17 +21,20 @@ grouping could not be made, say that instead of inventing one.**
 
 from __future__ import annotations
 
+import collections
 import re
 from pathlib import Path
 from typing import Any, Iterable
 
-from ..core.model import Component, DesignModel, is_ground_net
+from ..core.model import Component, DesignModel, Net, is_ground_net
 from ..core.parts import DESIGNATOR_CATEGORIES
 
 #: How the components were grouped, per module and for the report header.
 MODULE_BASIS_PAGE = "page"
 MODULE_BASIS_CONNECTIVITY = "connectivity"
 MODULE_BASIS_UNATTRIBUTED = "unattributed"
+#: The project level: each board is grouped by the two rules above (040b).
+MODULE_BASIS_BOARD = "board"
 
 #: Where the page attribution came from. `archive` is the extra pass over the
 #: archive's `SCH_PAGE` documents; `per-page` means the tier itself handed one
@@ -190,6 +193,49 @@ def page_attribution_from_archive(path) -> dict[str, dict]:
     return {uuid: {**page, "components": sorted(page["components"])} for uuid, page in pages.items()}
 
 
+def _model_components(model) -> dict[str, Component]:
+    """A model's components, whether it is one board or a project (040b).
+
+    For a project the boards are merged **by name, first board wins** — the shape
+    these readers ask for ("is this name here", "how big is this"). Anything that
+    needs the per-board truth takes a board model instead: the module grouping
+    does exactly that.
+    """
+    from ..core.model import ProjectModel
+
+    if not isinstance(model, ProjectModel):
+        return model.components
+    merged: dict[str, Component] = {}
+    for board_model in model.boards:
+        for designator, component in board_model.components.items():
+            merged.setdefault(designator, component)
+    return merged
+
+
+def _model_nets(model) -> dict[str, Net]:
+    """A model's nets, merged **by name** for a project (040b).
+
+    A net name that exists on two boards is one entry here, because every reader
+    of this helper matches nets by name (the warning triage asks "which module is
+    this net in"). Net *instances* stay per board in the model.
+    """
+    from ..core.model import ProjectModel
+
+    if not isinstance(model, ProjectModel):
+        return model.nets
+    merged: dict[str, Net] = {}
+    for board_model in model.boards:
+        for name, net in board_model.nets.items():
+            existing = merged.get(name)
+            if existing is None:
+                merged[name] = Net(name=name, pins=list(net.pins))
+                continue
+            for pin in net.pins:
+                if pin not in existing.pins:
+                    existing.pins.append(pin)
+    return merged
+
+
 def _cluster_designators(model: DesignModel) -> list[list[str]]:
     """Connected components of the **non-ground** net graph, as designator lists.
 
@@ -218,17 +264,18 @@ def _cluster_designators(model: DesignModel) -> list[list[str]]:
         if ra != rb:
             parent[rb] = ra
 
-    for component in model.components.values():
+    components = _model_components(model)
+    for component in components.values():
         find(component.designator)
-    for name, net in model.nets.items():
+    for name, net in _model_nets(model).items():
         if is_ground_net(name):
             continue
-        designators = [ref for ref, _pin in net.pins if ref in model.components]
+        designators = [ref for ref, _pin in net.pins if ref in components]
         for other in designators[1:]:
             union(designators[0], other)
 
     clusters: dict[str, list[str]] = {}
-    for designator in sorted(model.components):
+    for designator in sorted(components):
         clusters.setdefault(find(designator), []).append(designator)
     return [sorted(members) for members in clusters.values()]
 
@@ -275,7 +322,8 @@ def _name_cluster(designators: Iterable[str], model: DesignModel) -> tuple[str, 
     recognise this block") rather than a guess.
     """
     refs = list(designators)
-    parts = [model.components[ref] for ref in refs if ref in model.components]
+    components = _model_components(model)
+    parts = [components[ref] for ref in refs if ref in components]
     functional = _functional_parts(parts)
 
     def hits_of(pattern) -> list[str]:
@@ -328,11 +376,23 @@ def _name_cluster(designators: Iterable[str], model: DesignModel) -> tuple[str, 
 def _sample(designators: list[str], model: DesignModel) -> str:
     """Up to four of the hitting designators, with the part name that matched."""
     shown = []
+    components = _model_components(model)
     for designator in designators[:4]:
-        component = model.components.get(designator)
+        component = components.get(designator)
         name = str(component.props.get("device_name") or component.value or "") if component else ""
         shown.append(f"{designator}={name.strip()[:28]}" if name else designator)
     return "、".join(shown) + ("…" if len(designators) > 4 else "")
+
+
+def _board_fact(board_model) -> dict:
+    """One board's line in the report's `boards` list (the schema's board entry)."""
+    return {
+        "uuid": board_model.board.uuid,
+        "title": board_model.board.title,
+        "pages": list(board_model.board.page_uuids),
+        "components": len(board_model.components),
+        "nets": len(board_model.nets),
+    }
 
 
 def modules_section(
@@ -341,6 +401,8 @@ def modules_section(
     findings: list[dict],
     attribution: dict[str, dict] | None = None,
     attribution_source: str = PAGE_ATTRIBUTION_UNRESOLVED,
+    basis: str | None = None,
+    board: str = "",
 ) -> tuple[list[dict], dict]:
     """The `modules` array, plus the header facts the caller reports.
 
@@ -356,10 +418,121 @@ def modules_section(
     * **connectivity** — otherwise. A single-page design has no page split to
       honour, and the net graph is the only structure left.
 
+    ``board`` names the board whose findings this call may claim (040b): a
+    project's per-board pass skips findings another board produced, so nothing is
+    listed twice and nothing lands in a board's `未归属` just because it was
+    judged next door.
+
+    040b: on a **project** the rule is applied **per board** — a board's pages
+    are its own, and connectivity does not cross boards — so every module carries
+    the board it belongs to. The *choice* between the two rules stays a
+    project-level one (``basis`` carries it in, decided once from the project's
+    own page evidence): a board with a single drawn page must not lose that page
+    as its structure just because the board next to it has three. A finding is
+    matched to modules **of its own board** when it states one: two boards can
+    both hold a ``U2``, and a Board1 finding about ``U2`` must not be attached to
+    Board3's part of the same name.
+
     Either way, components that no page claims and findings that no module claims
     land in one `未归属` module rather than disappearing: an unattributed part is
     information, and a dropped one is a lie by omission.
     """
+    from ..core.model import ProjectModel
+
+    if isinstance(model, ProjectModel) and len(model.boards) == 1:
+        # A one-board project is one board: 040b adds a field to its modules and
+        # changes nothing else about them, so a single-board report's notes,
+        # basis and module names are what they were (WI-4).
+        board_model = model.boards[0]
+        modules, facts = modules_section(
+            model=board_model,
+            findings=findings,
+            attribution=attribution,
+            attribution_source=attribution_source,
+            basis=basis,
+            board=board_model.board.title,
+        )
+        for module in modules:
+            # The board rides on the module whenever there *is* a project to
+            # attribute (the renderer/console only print it when there are
+            # several); a plain model's modules stay exactly as they were.
+            module["board"] = board_model.board.title
+        facts["boards"] = [_board_fact(board_model)]
+        return modules, facts
+
+    if isinstance(model, ProjectModel):
+        all_pages_with_components = [
+            page
+            for page in (attribution or {}).values()
+            if page.get("components")
+        ]
+        project_basis = (
+            MODULE_BASIS_PAGE
+            if len(all_pages_with_components) >= 2
+            else MODULE_BASIS_CONNECTIVITY
+        )
+        modules: list[dict] = []
+        facts: dict[str, Any] = {
+            "moduleBasis": MODULE_BASIS_BOARD,
+            "insideBoardBasis": project_basis,
+            "pageAttribution": attribution_source,
+            "boards": [_board_fact(board_model) for board_model in model.boards],
+            "notes": [],
+        }
+        pages_seen = 0
+        pages_with_components = 0
+        for board_model in model.boards:
+            board_pages = set(board_model.board.page_uuids)
+            board_attribution = (
+                {
+                    page_uuid: page
+                    for page_uuid, page in (attribution or {}).items()
+                    if page_uuid in board_pages
+                }
+                if attribution
+                else None
+            )
+            board_modules, board_facts = modules_section(
+                model=board_model,
+                findings=findings,
+                attribution=board_attribution,
+                attribution_source=attribution_source,
+                basis=project_basis,
+                board=board_model.board.title,
+            )
+            for module in board_modules:
+                module["board"] = board_model.board.title
+                if module.get("basis") == MODULE_BASIS_UNATTRIBUTED:
+                    module["name"] = f"{board_model.board.title}/{UNATTRIBUTED_NAME}"
+            modules.extend(board_modules)
+            pages_seen += board_facts.get("pageCount", 0)
+            pages_with_components += board_facts.get("pagesWithComponents", 0)
+            facts["notes"].extend(
+                f"{board_model.board.title}: {note}" for note in board_facts["notes"]
+            )
+        facts["moduleCount"] = len(modules)
+        # Two pages called "P1" on two *different* boards are still a reader trap
+        # once they sit in one list (measured: this fixture's three pages are all
+        # titled P1). Each board's own disambiguation cannot see across boards, so
+        # the project level re-checks: the board title first, the page uuid as the
+        # last resort.
+        merged_names = collections.Counter(module["name"] for module in modules)
+        for module in modules:
+            if merged_names[module["name"]] > 1:
+                module["name"] = f"{module['board']}/{module['name']}"
+        still_shared = collections.Counter(module["name"] for module in modules)
+        for module in modules:
+            if still_shared[module["name"]] > 1 and module.get("pages"):
+                module["name"] = f"{module['name']}@{module['pages'][0][:8]}"
+        if attribution is not None:
+            facts["pageCount"] = pages_seen
+            facts["pagesWithComponents"] = pages_with_components
+        facts["notes"].append(
+            f"本工程有 {len(model.boards)} 块板（{'、'.join(model.board_titles())}）："
+            "模块按板再按页/连通性划分，findings 带板归属"
+        )
+        return modules, facts
+
     facts: dict[str, Any] = {
         # `moduleBasis`, not `basis`: this dict is merged into the report's
         # `source` block, where a bare `basis` would read like the source's own.
@@ -375,7 +548,12 @@ def modules_section(
         page for page in (attribution or {}).values() if page.get("components")
     ] if attribution is not None else []
 
-    if len(pages_with_components) >= 2:
+    use_pages = (
+        basis == MODULE_BASIS_PAGE
+        if basis is not None
+        else len(pages_with_components) >= 2
+    )
+    if use_pages and pages_with_components:
         facts["moduleBasis"] = MODULE_BASIS_PAGE
         chosen = sorted(pages_with_components, key=lambda p: (p.get("title") or "", p["uuid"]))
         title_counts: dict[str, int] = {}
@@ -383,8 +561,9 @@ def modules_section(
             title = page.get("title") or page["uuid"]
             title_counts[title] = title_counts.get(title, 0) + 1
         # Both kinds of repeat leave one placement out of the model, so both
-        # make a page's ref list ambiguous — `repeated_designators()` is exactly
-        # "this name does not resolve to one placement" (040 §WI-3).
+        # make a page's ref list ambiguous — the model's own list is exactly
+        # "this name does not resolve to one placement" within its board
+        # (040 §WI-3; 040b scoped it per board).
         ambiguous = model.repeated_designators()
         for page in chosen:
             components = [ref for ref in page["components"] if ref in model.components]
@@ -403,8 +582,8 @@ def modules_section(
             if collisions:
                 notes.append(
                     f"该页含 {len(collisions)} 个重号位号（{'、'.join(collisions[:6])}）："
-                    "模型按位号索引，跨页重号记在 model.crossPageDesignators"
-                    "（多板工程合法），同页重号记在 model.duplicateDesignators（缺陷）"
+                    "模型按位号索引，同名跨板记在 model.crossBoardDesignators"
+                    "（该板与其他板同名），同名同板跨页记在同板模型的 crossPageDesignators"
                 )
             modules.append({
                 "name": name,
@@ -452,8 +631,25 @@ def modules_section(
     finding_modules: list[list[int]] = [[] for _ in modules]
     unmatched_findings: list[int] = []
     for index, finding in enumerate(findings):
+        if board and finding.get("board") and finding["board"] != board:
+            # Another board's finding: not this board's business, and *not*
+            # "unattributed" either — attributing it here would double-count it.
+            continue
         refs = set(finding.get("refs") or [])
-        hits = [position for position, members in enumerate(refs_by_module) if refs & members]
+        hits = [
+            position
+            for position, members in enumerate(refs_by_module)
+            if refs & members
+            # 040b: a finding that states its board only matches modules of that
+            # board. Two boards can both hold a `U2`, and attaching a Board1
+            # claim about it to Board3's part would be a wrong attribution that
+            # looks like a fact.
+            and (
+                not finding.get("board")
+                or not modules[position].get("board")
+                or finding["board"] == modules[position]["board"]
+            )
+        ]
         if hits:
             for position in hits:
                 finding_modules[position].append(index)
@@ -506,6 +702,29 @@ def _prefix_of(designator: str) -> str:
     return match.group(0).upper() if match else ""
 
 
+def _parts_with_boards(model) -> list[tuple[str, Component, list[str]]]:
+    """``(designator, component, board titles)`` — one row per **placement** (040b).
+
+    A project yields one row per board placement rather than one per name: two
+    boards can hold two *different* parts under one name (the 毕设 project's `U2`
+    is a 2x6 header on Board3 and a 28-pin part on Board1), and a single merged
+    row would have to pick one part's MPN to describe both. A plain model yields
+    one row per component with no boards — the shape before 040b.
+    """
+    from ..core.model import ProjectModel
+
+    if not isinstance(model, ProjectModel):
+        return [
+            (designator, component, [])
+            for designator, component in sorted(model.components.items())
+        ]
+    rows: list[tuple[str, Component, list[str]]] = []
+    for board_model in model.boards:
+        for designator, component in sorted(board_model.components.items()):
+            rows.append((designator, component, [board_model.board.title]))
+    return rows
+
+
 def unknown_parts(model: DesignModel) -> list[dict]:
     """The parts a model must look up before its review means anything.
 
@@ -525,8 +744,7 @@ def unknown_parts(model: DesignModel) -> list[dict]:
     from ..rules.values import mpn_value_code
 
     out: list[dict] = []
-    for designator in sorted(model.components):
-        component = model.components[designator]
+    for designator, component, boards in _parts_with_boards(model):
         reasons: list[str] = []
         mpn = (component.mpn or "").strip()
         if not mpn:
@@ -546,8 +764,19 @@ def unknown_parts(model: DesignModel) -> list[dict]:
             "supplier": component.lcsc_part,
             "reasons": reasons,
             "question": UNKNOWN_PART_QUESTION,
+            **_board_field(boards),
         })
     return out
+
+
+def _board_field(boards: list[str]) -> dict:
+    """``{"boards": [...]}`` for a multi-board model, ``{}`` for one board.
+
+    Added, never renamed (the schema rule): a single-board report's rows are
+    byte-for-byte what they were, and a project's rows say which board they are
+    about.
+    """
+    return {"boards": boards} if boards else {}
 
 
 # --------------------------------------------------------------------------
@@ -631,11 +860,13 @@ def unreviewed_parts(
     from ..core.parts import FACTS_KEYS, find_facts
     from ..rules.facts import IC_PATTERN
 
-    known = {entry["designator"]: entry for entry in unknown_parts(model)}
+    known = {
+        (entry["designator"], tuple(entry.get("boards") or [])): entry
+        for entry in unknown_parts(model)
+    }
     folder = Path(datasheet_dir) if datasheet_dir else None
     out: list[dict] = []
-    for designator in sorted(model.components):
-        component = model.components[designator]
+    for designator, component, boards in _parts_with_boards(model):
         is_ic = bool(IC_PATTERN.match(designator))
         entry = None
         if library is not None:
@@ -648,7 +879,7 @@ def unreviewed_parts(
             facts = entry.facts if entry.facts is not None else (entry.candidate_facts or {})
         gated = bool(entry is not None and not entry.facts_verified)
         no_driving_facts = entry is None or entry.facts is None
-        reasons = list(known.get(designator, {}).get("reasons") or [])
+        reasons = list(known.get((designator, tuple(boards)), {}).get("reasons") or [])
         if not (is_ic and no_driving_facts) and not reasons:
             continue
         if is_ic and no_driving_facts and not reasons:
@@ -711,6 +942,7 @@ def unreviewed_parts(
                 [key for key in FACTS_KEYS if key not in facts] if is_ic else []
             ),
             "channels": channels,
+            **_board_field(boards),
         })
     return out
 
@@ -778,7 +1010,7 @@ def warning_triage_slots(
         for designator in module.get("components") or []:
             module_of.setdefault(designator, module.get("name", ""))
     net_modules: dict[str, str] = {}
-    for name, net in (model.nets or {}).items():
+    for name, net in (_model_nets(model) or {}).items():
         for designator, _pin in net.pins:
             module = module_of.get(designator)
             if module:
@@ -1010,6 +1242,7 @@ def render_report_markdown(report: dict) -> str:
 
     project = source.get("project") or {}
     title = project.get("friendlyName") or project.get("name") or source.get("file") or "(unknown)"
+    boards = model.get("boards") or []
     lines: list[str] = [
         "# boardwise checkup 报告",
         "",
@@ -1020,8 +1253,19 @@ def render_report_markdown(report: dict) -> str:
         f"- 模型：{model.get('components', '?')} 器件 / {model.get('nets', '?')} 网"
         + (f"，位号 {'、'.join(model.get('designators') or [])}" if model.get("designators") else ""),
         f"- 计数：{errors} ERROR / {warnings} WARN / {summary.get('infoCount', 0)} INFO",
-        "",
     ]
+    if len(boards) > 1:
+        # 040b: the totals above are sums over the boards; without this line
+        # "155 器件" would read as one netlist's worth.
+        lines.append(
+            "- 板："
+            + "、".join(
+                f"`{board['title']}`（{len(board['pages'])} 页 / "
+                f"{board['components']} 器件 / {board['nets']} 网）"
+                for board in boards
+            )
+        )
+    lines.append("")
     if source.get("notes"):
         lines.append("> " + "；".join(str(note) for note in source["notes"]))
         lines.append("")
@@ -1124,11 +1368,14 @@ def render_report_markdown(report: dict) -> str:
     lines.append("")
     if not modules:
         lines.append("（没有可分组的结构。）")
-    for module in modules:
+
+    def _render_module(module: dict, heading: str) -> None:
         components = "、".join(module.get("components") or []) or "（无）"
-        lines.append(f"### {module.get('name')}（{len(module.get('components') or [])} 器件）")
+        lines.append(f"{heading} {module.get('name')}（{len(module.get('components') or [])} 器件）")
         lines.append("")
         lines.append(f"- 依据：{module.get('basis')}")
+        if len(boards) > 1 and module.get("board"):
+            lines.append(f"- 板：{module['board']}")
         if module.get("pages"):
             lines.append(f"- 页：{'、'.join(module['pages'])}")
         lines.append(f"- 器件：{components}")
@@ -1141,10 +1388,35 @@ def render_report_markdown(report: dict) -> str:
             lines.append(f"- 注：{module['note']}")
         lines.append("")
 
+    if len(boards) > 1:
+        # Per board first (040b §WI-4): a project's modules never mix boards, and
+        # the heading is what says so.
+        for board in boards:
+            lines.append(f"### {board['title']}")
+            lines.append("")
+            for module in modules:
+                if module.get("board") == board["title"]:
+                    _render_module(module, "####")
+    else:
+        for module in modules:
+            _render_module(module, "###")
+
     lines.append(f"## 规则 findings（{len(findings)}）")
     lines.append("")
     if not findings:
         lines.append("无。")
+    elif len(boards) > 1:
+        # One extra column when the project has more than one board: a finding's
+        # board is otherwise only in the JSON, and a reader scanning the table
+        # cannot tell Board1's `U2` finding from Board3's.
+        lines.append("| # | 级别 | 规则 | 板 | 位号 | 说明 |")
+        lines.append("|---|---|---|---|---|---|")
+        for index, finding in enumerate(findings):
+            lines.append(
+                f"| {index} | {_cell(finding.get('severity'))} | {_cell(finding.get('rule_id'))} "
+                f"| {_cell(finding.get('board'))} "
+                f"| {_cell('、'.join(finding.get('refs') or []))} | {_cell(finding.get('message'))} |"
+            )
     else:
         lines.append("| # | 级别 | 规则 | 位号 | 说明 |")
         lines.append("|---|---|---|---|---|")

@@ -60,10 +60,60 @@ BUILTIN_RULES: list[Rule] = [
 
 
 def run_review(model: DesignModel) -> list[Finding]:
-    """Apply all built-in rules and return findings, most severe first."""
+    """Apply all built-in rules and return findings, most severe first.
+
+    **Per board** (040b §WI-3): given a :class:`ProjectModel`, every rule runs on
+    each board's own model and each finding carries that board's title. The rules
+    themselves are untouched — a rule still judges one netlist, which is exactly
+    why the boards must come to it separately. Given a plain
+    :class:`DesignModel` (an ``.enet`` input, or one board's model on its own)
+    the behaviour is what it always was, with ``board`` left empty.
+    """
+    from ..core.model import ProjectModel
+
+    if not isinstance(model, ProjectModel):
+        return _run_rules(model, BUILTIN_RULES)
+
     findings: list[Finding] = []
-    for rule in BUILTIN_RULES:
+    for board_model in model.boards:
+        board_findings = _run_rules(board_model, BUILTIN_RULES)
+        title = board_model.board.title
+        for finding in board_findings:
+            finding.board = title
+        findings.extend(board_findings)
+    findings.sort(key=lambda f: (SEVERITY_ORDER[f.severity], f.rule_id))
+    return findings
+
+
+def _run_rules(model: DesignModel, rules: list[Rule]) -> list[Finding]:
+    """One model, one rule list, sorted — the shape every caller of ``check`` uses."""
+    findings: list[Finding] = []
+    for rule in rules:
         findings.extend(rule.check(model))
+    findings.sort(key=lambda f: (SEVERITY_ORDER[f.severity], f.rule_id))
+    return findings
+
+
+def check_rules(model: object, rules: list[Rule] | None = None) -> list[Finding]:
+    """``rule.check`` for a model that may be a project: per board, board stamped.
+
+    The single-rule CLI paths (``review --rule``, ``edit plan``, the repair
+    flows) used to call ``rule.check(model)`` directly, which since 040b can be
+    handed a project. One function so they cannot disagree about how a project is
+    reviewed — and so the board attribution is not re-implemented per command.
+    """
+    from ..core.model import ProjectModel
+
+    rules = BUILTIN_RULES if rules is None else rules
+    model_obj: object = model
+    if not isinstance(model_obj, ProjectModel):
+        return _run_rules(model_obj, rules)  # type: ignore[arg-type]
+    findings: list[Finding] = []
+    for board_model in model_obj.boards:
+        board_findings = _run_rules(board_model, rules)
+        for finding in board_findings:
+            finding.board = board_model.board.title
+        findings.extend(board_findings)
     findings.sort(key=lambda f: (SEVERITY_ORDER[f.severity], f.rule_id))
     return findings
 
@@ -76,7 +126,14 @@ def severity_counts(findings: list[Finding]) -> dict[str, int]:
 
 
 def render_markdown(findings: list[Finding], model_meta: dict[str, Any]) -> str:
-    """Render a human-readable report, findings grouped by severity."""
+    """Render a human-readable report, findings grouped by severity.
+
+    **Per board when the findings span more than one** (040b §WI-4): a project's
+    report that mixes three boards' findings under one heading makes the reader
+    check every ref's board to know which netlist a claim is about. A
+    single-board report is byte-for-byte what it always was — no board heading,
+    no change.
+    """
     counts = severity_counts(findings)
     lines = [
         "# boardwise review report",
@@ -92,6 +149,29 @@ def render_markdown(findings: list[Finding], model_meta: dict[str, Any]) -> str:
         lines.append("No findings.")
         lines.append("")
         return "\n".join(lines)
+
+    titles: list[str] = []
+    for finding in findings:
+        if finding.board and finding.board not in titles:
+            titles.append(finding.board)
+    if len(titles) > 1:
+        for title in titles:
+            lines.append(f"## {title}")
+            lines.append("")
+            _append_severity_groups(lines, [f for f in findings if f.board == title])
+        unassigned = [f for f in findings if not f.board]
+        if unassigned:
+            lines.append("## (no board)")
+            lines.append("")
+            _append_severity_groups(lines, unassigned)
+        return "\n".join(lines)
+
+    _append_severity_groups(lines, findings)
+    return "\n".join(lines)
+
+
+def _append_severity_groups(lines: list[str], findings: list[Finding]) -> None:
+    """Append the ERROR/WARN/INFO blocks of one severity sweep, in that order."""
     for severity in ("ERROR", "WARN", "INFO"):
         group = [f for f in findings if f.severity == severity]
         if not group:
@@ -103,7 +183,6 @@ def render_markdown(findings: list[Finding], model_meta: dict[str, Any]) -> str:
             for item in finding.evidence:
                 lines.append(f"  - {item}")
         lines.append("")
-    return "\n".join(lines)
 
 
 #: A designator standing alone in prose: a short alpha prefix then digits, not
