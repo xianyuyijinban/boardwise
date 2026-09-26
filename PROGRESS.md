@@ -4,6 +4,24 @@ Living index. Details live in `tasks/*.md` (one book per task) and
 `docs/implementation-log.md` (the connector debugging arc). This file only
 collects the current truth and the pointers.
 
+## [2026-09-26] 042 解析器 parentId 双程挂载（增量保存丢件修复）
+
+### Problem / Task
+- ROBOT ctrl FOC 盲审发现解析模型静默丢 5/49 颗器件（含全板电源 AMS1117）：宿主增量保存把 COMPONENT 记录按 firstTicket 插回文档中段、新 ATTR 追加到文档尾（parentId 指回），"ATTR 紧邻组件"假设失效；位移 ATTR 块还会把邻居改名（C11 曾被串名成 R14）。
+
+### Resolution
+- `_split_page` 改双程：parentId 优先、邻接兜底（NET/NO_CONNECT/Global Net Name 规则不变）；ParseStats 补 `attrs_attached_by_parent_id` / `instances_without_designator`。
+- 高速板同类病灶一并治愈（85→145 位号）；blocklib 重收 94→109（harvest --verify 补窗口提示透传）；AMS1117 facts 经侧车镜像到 C369933。
+- SKILL 坑表 +坑 28；MPN 4K7 解码偏差转 043 跟进；find_facts 自身 C 号优先记为候选。
+
+### Verification
+- pytest 1757 passed（`--basetemp=.tmp_pt_home`）；connector 419 pass / 0 fail；tsc 干净；harvest 幂等（--check 通过）；ROBOT epro2 验收 49 器件、与工程 PCB 位号逐字一致。
+
+### Commit
+- Branch: `main`
+- Commit: `5f7cd58`（代码/测试/任务书 042+043）；SKILL.md 坑 28 与本记录随后续文档提交
+- Status: committed
+
 ## [2026-09-21] M3 入口复核与上手文档收尾
 
 ### Problem / Task
@@ -31,9 +49,9 @@ collects the current truth and the pointers.
   - `docs/images/gs-03-daemon-start.png`
   - `PROGRESS.md`
 
-## Current baseline (2026-09-26, 040b 一板一模型; published on GitHub)
+## Current baseline (2026-09-26, 042 解析器 parentId 双程挂载; published on GitHub)
 
-- pytest: **1736 passed** (run with `--basetemp=.tmp_pt_home` on Windows —
+- pytest: **1757 passed** (run with `--basetemp=.tmp_pt_home` on Windows —
   the host's safe-delete hook otherwise eats the summary line and fakes
   exit 1)
 - connector: **419 pass / 0 fail** (`cd connector && npm test`)
