@@ -74,3 +74,13 @@ PCB1（匿名公司板，boost 电源链）实证了审查工具的**需求边�
 
 §3 验证板增补：PCB1（能力失配质疑必须命中 控制器5A级 vs L2-2.62A vs
 D2-3A 一组；设计意图槽位填出后，电感 finding 升级为确定判决）。
+
+## §7 交卷记录（M1，2026-09-26 深夜，commit `6bf91e4`）
+
+**交付**：`core/architecture.py`（新，~600 行纯函数 `generate_architecture(model) → ArchResult{markdown, section}`；五节=电源树/模拟链/控制链/总线表/设计意图槽位（§6）；判不出一律 `TODO` 槽，固定英文槽键；确定性是契约——同输入逐字节相同，全排序、无时间戳、无随机、无网络）；CLI `boardwise arch <file> [--out]`（复用 checkup `--file` 离线加载，多板工程逐板一节）；checkup 集成=`<out>/architecture.md` + report.json `architecture` 节（生成失败**键缺席**，layout_review 同款），schema `/3→/4`；SKILL **§3.1b 架构走查**（强制环节：逐槽填或标不适用、设计意图槽显式问工程师并固化为活文档、目的论走查、架构发现与规则 finding **分开计数**）；`docs/bridge.md`/`getting-started.md` 命令表同步。
+
+**灵魂验证（ROBOT）**：模拟链 7 条含 `U+`（members `DRV1.6(PGND1)` — `R4.2(2)` — `U1.21(PA7)`，证据行 `邻接 R4→GND`）与 `W+`（含 `R5.`），8 槽全 `TODO`——主代理亲填：polarity=双向(FOC 相电流) × reference=GND × gainStage=无 → **双向×单电源ADC×无偏置=链不闭合**，盲审漏掉的高优 finding 在骨架上机械浮出，044 前提闭环。控制链 7 条含 `TIM1_CH1/2/3` + `U1.44(PA10)`（网名 vs 端点复用功能入口在）。开发中修掉两个口径坑：①驱动器回流转脚（PGND）误当供电脚会把采样链吞进电源轨——`_SUPPLY_PIN`/`_RETURN_PIN` 分家；②退化返回脚不能当链锚点。
+
+**复验（主代理亲自）**：在线 checkup ROBOT 窗（只读，inst-032902818）与离线 09-16 夹具的 architecture.md 逐字节一致——唯一 diff 是 `NET54↔NET55` 匿名自动网重编号（坑 25 已记载的宿主行为，非缺陷）；毕设夹具回归 3 板/11 轨/252 槽；report.json schema=`boardwise.checkup/4`、architecture 节计数与 markdown 一致；pytest **1774**（+10 over 1764 卫生闸门基线，主代理全量复跑），connector **419**/tsc 不变（零改动）；eval 未动（本切片零规则变更）；证据 `outputs/044_checkup_robot/`（在线）与 `.tmp_044_verify/`（离线双板）。
+
+**没做（归后续切片）**：§6 能力失配质疑的自动生成（需设计意图槽先被填 + 工程师答一次）；架构 finding 独立计数的实测数字（等一次真实 AI 走查）；`arch --json` 出口（section 目前只在 checkup 报告里）。
