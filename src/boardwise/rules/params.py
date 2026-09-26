@@ -25,6 +25,7 @@ from .base import Finding, FindingTarget, Outcome
 from .facts import FactsRule
 from .values import (
     decode_eia_3digit,
+    mpn_resistance_readings,
     mpn_value_code,
     parse_capacitance_farads,
 )
@@ -138,6 +139,28 @@ def _human_value(quantity: float, kind: str) -> str:
     return f"{quantity:.6g}"
 
 
+def _closest_reading(
+    readings: list[tuple[float, str]], declared: float | None
+) -> tuple[float, str]:
+    """The reading the comparison is made against: the one nearest the board's own.
+
+    A mid-letter MPN can have several legitimate readings (task 043), and the
+    comparison — and therefore the amplitude a violation quotes — has to be made
+    against a specific one. The board's own declared value is the only evidence
+    that distinguishes them, so the nearest reading (by amplitude, i.e. by
+    ``|log|`` distance) is the one: a part whose readings are ``{4.7k, 74.7k}``
+    on a board that says ``4.7k`` is being compared against 4.7 kΩ, and the row
+    carries the other readings as evidence so the choice is visible.
+
+    A value the parser could not read (``None``) or a non-positive one has no
+    distance to anything: the smallest reading is used, and that path's message
+    says the value field is unparsable anyway.
+    """
+    if declared is None or declared <= 0:
+        return readings[0]
+    return min(readings, key=lambda item: abs(math.log(item[0] / declared)))
+
+
 class ValueMpnMatch(FactsRule):
     """PARAM-4: the board's value field agrees with the MPN's decoded value.
 
@@ -178,8 +201,16 @@ class ValueMpnMatch(FactsRule):
             kind = _kind_of(comp, entry)
             if kind is None:
                 continue  # neither resistor nor capacitor by any evidence
+            # 043: a resistor MPN may state its value in the trade's **mid-letter**
+            # notation (`4K7` = 4.7 kΩ), which is not an EIA code at all — and the
+            # EIA reader used to mine a wrong code out of it (`RC0603FR-074K7L`
+            # came back as "074" = 70 kΩ, task 043's reported WARN). The
+            # mid-letter readings are tried first, for resistors only.
+            readings: list[tuple[float, str]] = (
+                mpn_resistance_readings(comp.mpn or "") if kind == "resistor" else []
+            )
             code = mpn_value_code(comp.mpn or "")
-            if code is None:
+            if not readings and code is None:
                 rows.append((
                     Outcome(
                         rule_id=self.id,
@@ -201,12 +232,29 @@ class ValueMpnMatch(FactsRule):
                 continue
             if kind == "resistor":
                 declared = parse_resistance_ohms(comp.value or "")
-                decoded = decode_eia_3digit(code, 1.0)
+                if readings:
+                    decoded, notation = _closest_reading(readings, declared)
+                    label = f"value {notation!r}"
+                else:
+                    decoded = decode_eia_3digit(code, 1.0)
+                    label = f"code {code}"
                 unit = "Ω"
             else:
                 declared = parse_capacitance_farads(comp.value or "")
                 decoded = decode_eia_3digit(code, 1e-12)
+                label = f"code {code}"
                 unit = "F"
+            # An MPN whose notation has several legitimate readings says so: the
+            # comparison below is made against the one nearest the board's own
+            # value, and a reader has to be able to see the others.
+            notation_evidence = (
+                [
+                    "MPN notation readings: "
+                    + " / ".join(f"{value:g} ({text})" for value, text in readings)
+                ]
+                if len(readings) > 1
+                else []
+            )
             if declared is None:
                 rows.append((
                     Outcome(
@@ -236,9 +284,10 @@ class ValueMpnMatch(FactsRule):
                         subject=comp.designator,
                         message=(
                             f"{comp.designator}: board value "
-                            f"{declared:.4g} {unit} matches MPN code "
-                            f"{code} ({decoded:.4g} {unit})"
+                            f"{declared:.4g} {unit} matches MPN "
+                            f"{label} ({decoded:.4g} {unit})"
                         ),
+                        evidence=list(notation_evidence),
                     ),
                     None,
                 ))
@@ -269,6 +318,7 @@ class ValueMpnMatch(FactsRule):
                             evidence=[
                                 f"{comp.designator} value {comp.value!r}",
                                 f"{comp.designator} mpn {comp.mpn!r}",
+                                *notation_evidence,
                             ],
                         ),
                         None,
@@ -302,6 +352,7 @@ class ValueMpnMatch(FactsRule):
                         evidence=[
                             f"{comp.designator} value {comp.value!r}",
                             f"{comp.designator} mpn {comp.mpn!r}",
+                            *notation_evidence,
                         ],
                     ),
                     "WARN",

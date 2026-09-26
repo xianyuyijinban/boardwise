@@ -19,6 +19,7 @@ from boardwise.rules.params import (
 )
 from boardwise.rules.values import (
     decode_eia_3digit,
+    mpn_resistance_readings,
     mpn_value_code,
     parse_capacitance_farads,
 )
@@ -205,6 +206,66 @@ def test_the_mpn_code_finder_refuses_notations_that_are_not_eia():
     # Unchanged from before 015: this one is None by *ambiguity* (225 vs the
     # packaging group 000), which is the pre-existing reason, not a refusal.
     assert mpn_value_code("C1608X5R1V225KT000E") is None
+
+
+def test_the_mid_letter_resistance_notation_decodes():
+    """Task 043: the trade prints a multiplier *inside* the value.
+
+    ``4K7`` is 4.7 kΩ, ``4R7`` is 4.7 Ω, ``10K2`` is 10.2 kΩ, ``1M0`` is 1 MΩ —
+    and the EIA three-digit reader used to mine a *wrong code* out of that shape
+    (``RC0603FR-074K7L`` came back as ``074`` = 70 kΩ, which is the WARN 043 was
+    filed for). These are the readings the decoder must produce, in ohms.
+    """
+    def values(mpn: str) -> list[float]:
+        return [value for value, _notation in mpn_resistance_readings(mpn)]
+
+    assert values("4K7") == [4700.0]
+    assert values("4R7") == [4.7]
+    assert values("10K2") == [10200.0]
+    assert values("1M0") == [1000000.0]
+    assert values("200K") == [200000.0]
+    assert values("4R70") == [4.7]
+    assert values("R47") == [0.47]      # no mantissa: the letter starts the value
+    assert values("2R2") == [2.2]
+    assert 47400.0 in values("47K4")    # two readings; see the case below
+    # The vendor-prefix case, verbatim: Yageo's `-07` is a coding, and by shape it
+    # reads as a longer mantissa. Both readings are legitimate, so both are
+    # returned and the rule lets the board's own value choose.
+    assert mpn_resistance_readings("RC0603FR-074K7L") == [
+        (4700.0, "4K7"), (74700.0, "74K7"),
+    ]
+    assert mpn_resistance_readings("RC0603FR-07200KL") == [(200000.0, "200K")]
+    assert values("RCA03392KFLF") == [2000.0, 92000.0, 392000.0]
+    assert mpn_resistance_readings("FRC0805F4R70TS") == [(4.7, "4R70")]
+
+
+def test_the_mid_letter_decoder_refuses_what_it_cannot_read():
+    """The refusals are as important as the readings (043): a guess here becomes
+    a false BOM contradiction, which is exactly what the batch was filed for.
+
+    * the **shunt** convention (``R005``/``R100``/``3R005``) writes thousandths
+      with the coding digits in front of the ``R`` — ``JER2512F3R005`` is a 5 mΩ
+      part, and reading it as 3.005 Ω would turn a correct board into a
+      violation. It stays UNKNOWN, as before 043;
+    * lowercase ``m`` (milli in some houses, mega in others);
+    * an MPN that states its value in EIA three-digit form has *no* mid-letter
+      reading at all — that path is untouched;
+    * a zero-ohm reading is not evidence of anything.
+    """
+    assert mpn_resistance_readings("RE2512F3R001") == []
+    assert mpn_resistance_readings("JER2512F3R005") == []
+    assert mpn_resistance_readings("RE1206F1R000") == []
+    assert mpn_resistance_readings("RE1206F1R100") == []
+    assert mpn_resistance_readings("1m0") == []
+    assert mpn_resistance_readings("0R0") == []
+    assert mpn_resistance_readings("") == []
+    # EIA-only MPNs: the decoder that owns them is `mpn_value_code`, unchanged.
+    assert mpn_resistance_readings("FRC0805J471 TS") == []
+    assert mpn_value_code("FRC0805J471 TS") == "471"
+    # A capacitor MPN can contain mid-letter-looking groups (X7R9 reads as 7.9 Ω),
+    # which is why only a caller that already knows the part is a resistor may
+    # consult this decoder — the rule gates on `_kind_of` before calling it.
+    assert mpn_resistance_readings("CC0603KRX7R9BB104")
 
 
 def test_a_capacitor_is_never_claimed_from_an_mpn_code_alone():
@@ -426,6 +487,69 @@ def test_param4_the_tolerance_is_per_kind_and_the_boundary_is_inclusive():
     assert "22.00x" in ok["C36"]
     assert [o.subject for o in states["VIOLATION"]] == ["C37"]
     assert "25.00x apart" in states["VIOLATION"][0].message
+
+
+def test_param4_a_mid_letter_mpn_matches_the_board_value():
+    """Task 043's own case: the 高速板's R27.
+
+    ``RC0603FR-074K7L`` states 4.7 kΩ in the mid-letter notation, the board says
+    ``4.7kΩ``, and before 043 the EIA reader mined ``074`` out of that MPN and
+    reported a 14.89x contradiction. The row is now OK, names the notation it
+    read, and carries the MPN's *other* legitimate reading as evidence (by shape
+    ``74K7`` is readable too, and a reader has to be able to see that).
+    """
+    lib = _library(_ldo_entry(), _uart_entry())
+    model = DesignModel()
+    model.components["R27"] = Component(
+        uid="r27", designator="R27", value="4.7kΩ", mpn="RC0603FR-074K7L",
+        pins=[Pin("1", "A", "VCC")])
+    rule = ValueMpnMatch(library=lib)
+    assert rule.check(model) == [], "043: no WARN for a matching mid-letter MPN"
+    states = _states(rule, model)
+    assert states["VIOLATION"] == [] and states["UNKNOWN"] == []
+    (ok,) = states["OK"]
+    assert ok.subject == "R27"
+    assert "4700" in ok.message and "'4K7'" in ok.message
+    assert any("74700" in line and "74K7" in line for line in ok.evidence), ok.evidence
+
+
+def test_param4_a_mid_letter_mpn_that_really_disagrees_is_still_a_violation():
+    """The other half: the widened reader must not turn a real BOM mismatch into
+    silence. The comparison is made against the **closest** of the MPN's readings
+    — the most favourable one, which is what keeps the amplitude doctrine's
+    "don't kill it dead" behaviour (2026-09-21) intact — so 1 MΩ against a part
+    whose readings are 4.7 kΩ / 74.7 kΩ is a WARN quoting the closer of the two.
+    """
+    lib = _library(_ldo_entry(), _uart_entry())
+    model = DesignModel()
+    model.components["R27"] = Component(
+        uid="r27", designator="R27", value="1MΩ", mpn="RC0603FR-074K7L",
+        pins=[Pin("1", "A", "VCC")])
+    states = _states(ValueMpnMatch(library=lib), model)
+    (violation,) = states["VIOLATION"]
+    assert violation.subject == "R27"
+    assert "13.39x apart" in violation.message
+    assert any("74K7" in line and "4K7" in line for line in violation.evidence), (
+        "the violation quotes all the readings it could have been"
+    )
+
+
+def test_param4_a_big_enough_gap_against_an_ambiguous_mpn_is_still_waived():
+    """The amplitude path applies to the closest reading, so a 100 kΩ declared
+    against a `{4.7k, 74.7k}` MPN lands on "1.34x, below the 3x tolerance" — an OK
+    row that quotes both numbers, exactly as the ruling asks. Pinned because the
+    alternative (measuring against the *first* reading) would fire a WARN here.
+    """
+    lib = _library(_ldo_entry(), _uart_entry())
+    model = DesignModel()
+    model.components["R27"] = Component(
+        uid="r27", designator="R27", value="100kΩ", mpn="RC0603FR-074K7L",
+        pins=[Pin("1", "A", "VCC")])
+    states = _states(ValueMpnMatch(library=lib), model)
+    assert states["VIOLATION"] == []
+    (ok,) = states["OK"]
+    assert "1.34x" in ok.message
+    assert any("74K7" in line for line in ok.evidence)
 
 
 def test_param4_a_resistor_at_the_r_tolerance_is_not_waived():

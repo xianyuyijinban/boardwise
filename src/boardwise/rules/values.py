@@ -142,6 +142,76 @@ def decode_eia_3digit(code: str, base: float) -> float | None:
     return mantissa * (10.0 ** exponent) * base
 
 
+#: The trade's **mid-letter** resistance notation: the multiplier takes the place
+#: of the decimal point, ``4K7`` = 4.7 kΩ, ``4R7`` = 4.7 Ω, ``10K2`` = 10.2 kΩ,
+#: ``1M0`` = 1 MΩ. The letters and what they multiply by (uppercase ``M`` only:
+#: lowercase ``m`` is milli in some houses and mega in others, so it is refused).
+_MID_LETTER_BASE = {"R": 1.0, "K": 1e3, "M": 1e6}
+
+#: ``<mantissa><letter><fraction>``, the mantissa being the digit run directly
+#: before the letter (a run longer than three digits contributes its last three).
+_MID_LETTER_RE = re.compile(r"(\d*)([RKM])(\d*)", re.IGNORECASE)
+
+
+def mpn_resistance_readings(mpn: str) -> list[tuple[float, str]]:
+    """Every legitimate reading of the MPN's mid-letter resistance notation.
+
+    Why a *list* and not one number: a vendor prefixes its own coding to the
+    value, and by shape that prefix is indistinguishable from a longer mantissa.
+    Yageo's ``RC0603FR-074K7L`` is a 4.7 kΩ part whose value text is ``4K7``
+    ("07" is the vendor's code), but ``074K7`` reads just as grammatically as
+    ``74K7`` = 74.7 kΩ. Deciding between them from the string alone is guessing,
+    so this returns the **set** of readings, deduplicated by value; the caller
+    matches the board's own declared value against them, and an MPN whose readings
+    *all* disagree is still a contradiction.
+
+    Returns ``[(ohms, notation_text), …]`` — empty when the MPN states its value
+    in EIA three-digit form instead (``FRC0805J471``) or in no readable form at
+    all. What it refuses, deliberately:
+
+    * lowercase ``m`` (milli vs mega);
+    * ``R`` followed by **three** digits — ``R005``, ``R100``, ``3R005``: the
+      shunt convention, where the digits before the ``R`` are part of the part's
+      coding rather than a mantissa (measured: ``JER2512F3R005`` is a 5 mΩ
+      shunt, and reading it as 3.005 Ω would turn a correct board into a
+      violation). Those MPNs still answer UNKNOWN, exactly as before 043.
+
+    **This is the resistor decoder.** Capacitor MPNs contain mid-letter-looking
+    groups incidentally (``CC0603KRX7R9BB104`` reads as 7R9 / 3K / 603K), so only
+    a caller that already knows the part is a resistor may consult it.
+    """
+    if not mpn:
+        return []
+    token = mpn.strip().split()[0] if mpn.strip() else ""
+    readings: dict[float, str] = {}
+    for match in _MID_LETTER_RE.finditer(token):
+        run, raw_letter, fraction = match.group(1), match.group(2), match.group(3)
+        if raw_letter == "m":
+            continue  # lowercase m: milli in some houses, mega in others
+        letter = raw_letter.upper()
+        if len(fraction) > 2:
+            continue  # the shunt form (`R005`) and any longer tail
+        base = _MID_LETTER_BASE[letter]
+        # Mantissa candidates: the suffixes of the digit run that do not start
+        # with a zero ("074" -> "74", "4"), or nothing at all when the letter is
+        # the only thing before the fraction ("R47" = 0.47 Ω).
+        trimmed = run[-3:]
+        candidates = (
+            [trimmed[index:] for index in range(len(trimmed)) if not trimmed[index:].startswith("0")]
+            if trimmed
+            else [""]
+        )
+        for mantissa in candidates:
+            digits = mantissa + fraction
+            if not digits:
+                continue
+            value = int(digits) / (10 ** len(fraction)) * base
+            if value <= 0:
+                continue  # a zero-ohm reading is not evidence of anything
+            readings.setdefault(value, f"{mantissa}{letter}{fraction}")
+    return sorted(readings.items())
+
+
 def mpn_value_code(mpn: str) -> str | None:
     """The EIA value code inside an MPN, or None when absent/ambiguous/refused.
 
