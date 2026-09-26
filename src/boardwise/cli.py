@@ -1429,17 +1429,17 @@ def _load_model(
         # SKILL pit 14).
         if view == "pcb":
             raise ValueError(PCB_TIER_ERROR)
-        from .parsers.schematic import build_schematic_model
+        from .parsers.schematic import build_project_model
 
-        return build_schematic_model(path, parse_stats=parse_stats), None
+        return build_project_model(path, parse_stats=parse_stats), None
     if suffix == ".enet":
         return parse_enet(path), None
     if suffix == ".epro2":
         source = load_epro2_source(path)
         if view == "schematic":
-            from .parsers.schematic import build_schematic_model
+            from .parsers.schematic import build_project_model
 
-            return build_schematic_model(path, parse_stats=parse_stats), None
+            return build_project_model(path, parse_stats=parse_stats), None
         # One parse, two views: geometry and netlist stay consistent because
         # both read the same cached PCB context.
         return build_design_model(source), build_board_geometry(source)
@@ -1795,6 +1795,107 @@ def _pcb_view_read_nothing(
     return True
 
 
+def _model_designators(model: object) -> set[str]:
+    """The designators a schematic model states, one board or a whole project.
+
+    The schematic view returns a :class:`~boardwise.core.model.ProjectModel`
+    since 040b, so a consumer that only wants "which names are in here" must not
+    have to know how many boards it is looking at. The PCB view and ``.enet``
+    inputs stay plain :class:`DesignModel`\\ s and take the first branch.
+    """
+    from .core.model import ProjectModel
+
+    if isinstance(model, ProjectModel):
+        return set(model.designators())
+    return set(model.components)
+
+
+def _model_component_counts(model: object) -> tuple[int, int]:
+    """``(components, nets)`` for a console line — placed parts and net instances.
+
+    A project's numbers are sums over its boards: three boards really do place
+    three boards' worth of parts, and their nets are not one netlist.
+    """
+    from .core.model import ProjectModel
+
+    if isinstance(model, ProjectModel):
+        return model.component_count(), model.net_count()
+    return len(model.components), len(model.nets)
+
+
+def _board_for_designator(model: object, designator: str, *, action: str):
+    """The board model holding ``designator``, or a refusal naming the boards.
+
+    Returns ``(board_model, message)`` — exactly one of them is set. A name on
+    one board picks that board (and for a plain single model this is a no-op); a
+    name on several is an ambiguity a write must not resolve by itself (040b
+    §WI-4, the same rule ``edit plan`` has always applied to pages).
+    """
+    from .core.model import ProjectModel
+
+    if not isinstance(model, ProjectModel):
+        return model, ""
+    holders = [
+        board_model
+        for board_model in model.boards
+        if designator.upper() in {name.upper() for name in board_model.components}
+    ]
+    if len(holders) == 1:
+        return holders[0], ""
+    if not holders:
+        return None, (
+            f"{action}: no board holds designator {designator!r} "
+            f"({', '.join(model.board_titles())})"
+        )
+    return None, (
+        f"{action}: 位号 {designator} 出现在 {len(holders)} 块板上"
+        f"（{'、'.join(b.board.title for b in holders)}）—— 不猜是哪一块（§2.3）"
+    )
+
+
+def _model_counts_fields(model: object) -> dict:
+    """``{"components": …, "nets": …}`` for an attempt/log record.
+
+    A project's numbers are sums over its boards (040b), so every record that
+    reports "how big was the model" goes through here instead of reaching for
+    ``model.components``, which is a single-board read by contract.
+    """
+    components, nets = _model_component_counts(model)
+    return {"components": components, "nets": nets}
+
+
+def _single_board_model(model: object, *, what: str) -> object:
+    """The project's **one** board model, or a refusal naming its boards (040b).
+
+    Commands that are not board-aware (a single-file edit, a comparison against
+    one golden page) must not silently pick a board out of a multi-board
+    project: the wrong board is the same class of mistake as the wrong view, and
+    it would act on the wrong netlist. The message names the boards so the
+    caller knows what to pass instead.
+    """
+    from .core.model import ProjectModel
+
+    if not isinstance(model, ProjectModel):
+        return model
+    if len(model.boards) == 1:
+        return model.boards[0]
+    raise ValueError(
+        f"{what} needs one board, but the project has {len(model.boards)} "
+        f"({', '.join(model.board_titles())}) — give a single-board export, or "
+        "use a command that reports per board"
+    )
+
+
+def _board_sections(findings: list) -> list[str]:
+    """The board titles a set of findings spans, in first-seen order (empty skipped)."""
+    titles: list[str] = []
+    for finding in findings:
+        title = getattr(finding, "board", "")
+        if title and title not in titles:
+            titles.append(title)
+    return titles
+
+
 def _cmd_review(args: argparse.Namespace) -> int:
     live = bool(getattr(args, "live", False))
     live_notes: list[str] = []
@@ -1871,9 +1972,9 @@ def _cmd_review(args: argparse.Namespace) -> int:
         parse_stats.pins_dropped_no_number, parse_stats.components_without_symbol
     )
 
+    components, nets = _model_component_counts(model)
     print(
-        f"boardwise review: {source} "
-        f"({len(model.components)} components, {len(model.nets)} nets)"
+        f"boardwise review: {source} ({components} components, {nets} nets)"
     )
     if board is not None:
         print(
@@ -1884,8 +1985,21 @@ def _cmd_review(args: argparse.Namespace) -> int:
         f"findings: {counts['ERROR']} ERROR, "
         f"{counts['WARN']} WARN, {counts['INFO']} INFO"
     )
-    for finding in findings:
-        print(f"[{finding.severity}] {finding.rule_id}: {finding.message}")
+    # Per board only when there is more than one (040b §WI-4): a single-board
+    # project's console is byte-for-byte what it was.
+    titles = _board_sections(findings)
+    if len(titles) > 1:
+        for title in titles:
+            print(f"[board] {title}")
+            for finding in findings:
+                if finding.board == title:
+                    print(f"  [{finding.severity}] {finding.rule_id}: {finding.message}")
+        for finding in findings:
+            if not finding.board:
+                print(f"[{finding.severity}] {finding.rule_id}: {finding.message}")
+    else:
+        for finding in findings:
+            print(f"[{finding.severity}] {finding.rule_id}: {finding.message}")
 
     if args.json_path:
         Path(args.json_path).write_text(render_json(findings), encoding="utf-8")
@@ -1893,13 +2007,13 @@ def _cmd_review(args: argparse.Namespace) -> int:
     if args.md_path:
         meta = {
             "source": source,
-            "components": len(model.components),
-            "nets": len(model.nets),
+            "components": components,
+            "nets": nets,
         }
         summary = _chinese_summary(
             findings,
             counts,
-            set(model.components),
+            _model_designators(model),
             empty_pcb_view=empty_pcb_view,
             parse_drop_hint=parse_drop_hint(
                 parse_stats.pins_dropped_no_number,
@@ -1965,6 +2079,12 @@ CHECKUP_TIERS: dict[str, str] = {
 #: is not a default the caller should have to restate.
 CHECKUP_VIEW = "schematic"
 
+#: The board title the per-page tier's merged model carries (040b). A single-page
+#: export does not contain the ``SCH``/``BOARD`` documents, so that tier cannot
+#: say which board a page belongs to; naming the merged board after the tier is
+#: how a report stays honest about it (see :func:`_merge_schematic_models`).
+PER_PAGE_BOARD_TITLE = "per-page"
+
 
 def _checkup_report(
     *,
@@ -2006,21 +2126,7 @@ def _checkup_report(
             "attempts": attempts,
             "notes": notes,
         },
-        "model": {
-            "view": CHECKUP_VIEW,
-            "components": len(model.components),
-            "nets": len(model.nets),
-            "designators": sorted(model.components),
-            # 040 §WI-3: two kinds of repeat, kept apart. `duplicateDesignators`
-            # is the defect (one name, two parts, one page); the cross-page map
-            # is a multi-board project numbering each board's own R1, listed
-            # with the pages so a reader can see which board is which.
-            "duplicateDesignators": sorted(model.duplicate_designators),
-            "crossPageDesignators": {
-                designator: sorted(pages)
-                for designator, pages in sorted(model.cross_page_designators.items())
-            },
-        },
+        "model": _checkup_model_section(model),
         "summary": summary,
         "pending": {},
         "drc": drc,
@@ -2059,47 +2165,134 @@ def _write_checkup_markdown(out_dir: Path, report: dict) -> Path:
     return path
 
 
+def _checkup_model_section(model: object) -> dict:
+    """The report's `model` block, for one board or a whole project (040b).
+
+    Schema: **fields are added, never renamed** (031's precedent). A single-board
+    project reports exactly what it always did — ``components``/``nets``/
+    ``designators``/``duplicateDesignators``/``crossPageDesignators`` — plus the
+    two 040b additions, ``boards`` and ``crossBoardDesignators``, which are empty/
+    absent-meaning for one board. A multi-board project reports the sums (placed
+    parts, net instances) and the per-board breakdown, so a reader can tell a
+    155-part project from a 121-name one.
+    """
+    from .core.model import ProjectModel
+
+    if isinstance(model, ProjectModel):
+        return {
+            "view": CHECKUP_VIEW,
+            "components": model.component_count(),
+            "nets": model.net_count(),
+            "designators": model.designators(),
+            "boards": [
+                {
+                    "uuid": board_model.board.uuid,
+                    "title": board_model.board.title,
+                    "pages": list(board_model.board.page_uuids),
+                    "components": len(board_model.components),
+                    "nets": len(board_model.nets),
+                }
+                for board_model in model.boards
+            ],
+            "duplicateDesignators": [
+                name for name in model.repeated_designators()
+                if any(name in b.duplicate_designators for b in model.boards)
+            ],
+            "crossPageDesignators": {
+                designator: sorted(pages)
+                for board_model in model.boards
+                for designator, pages in sorted(board_model.cross_page_designators.items())
+            },
+            "crossBoardDesignators": model.multi_board_designators(),
+        }
+    return {
+        "view": CHECKUP_VIEW,
+        "components": len(model.components),
+        "nets": len(model.nets),
+        "designators": sorted(model.components),
+        # 040 §WI-3: two kinds of repeat, kept apart. `duplicateDesignators`
+        # is the defect (one name, two parts, one page); the cross-page map
+        # is one board drawn on several sheets, listed with the pages.
+        "duplicateDesignators": sorted(model.duplicate_designators),
+        "crossPageDesignators": {
+            designator: sorted(pages)
+            for designator, pages in sorted(model.cross_page_designators.items())
+        },
+    }
+
+
 def _merge_schematic_models(models: list, *, notes: list[str]) -> object:
-    """Union per-page models into one.
+    """Union per-page models into **one board** of a one-board project (040b).
 
     Why a merge at all: the per-page tier is what runs when the project-download
-    gate is closed, and one page's model is not a project's. Components are keyed
-    by designator (the model's own key), nets by name — so a net that appears on
-    two pages keeps every pin it was seen with, and a designator that appears
-    twice is recorded in ``duplicate_designators`` rather than silently winning.
+    gate is closed, and one page's model is not a project's. Each page export
+    carries its own page and nothing else — the ``SCH``/``BOARD`` documents that
+    state the board chain live in other documents — so this tier **cannot** say
+    which board a page belongs to, and it must not pretend to: the merged board
+    is titled ``per-page`` and the note says so.
 
-    **What this cannot do is stated, not hidden**: two pages connected only by a
-    net label are two pins with the same net name in the merged model, which is
-    agreement by *name*, not a connectivity proof. That is why the caller labels
-    the tier ``per-page`` instead of ``project-file``.
+    The verdicts survive that gap, which is why merging is still the right move
+    rather than a refusal: with oracle A1 standing, a name on two pages is an
+    ERROR whether the pages are two sheets of one board or two boards. So the
+    clash goes to :attr:`DesignModel.cross_page_designators` with the page uuids
+    (the reading this tier *does* have), a same-page clash in any one page stays
+    a ``duplicate_designator``, and the message a reader sees is built from those.
+
+    Components are keyed by designator and nets by name, so a net that appears on
+    two pages keeps every pin it was seen with. **What this cannot do is stated,
+    not hidden**: two pages connected only by a net label are two pins with the
+    same net name, which is agreement by *name*, not a connectivity proof.
     """
-    from .core.model import DesignModel, Net
+    from .core.model import BoardModel, BoardRef, Net, ProjectModel
 
-    merged = DesignModel()
+    merged = BoardModel(board=BoardRef(uuid="", title=PER_PAGE_BOARD_TITLE))
+    project = ProjectModel(source="", boards=[merged])
+    pages: list[str] = []
     for model in models:
-        for designator, component in model.components.items():
-            if designator in merged.components:
-                if designator not in merged.duplicate_designators:
-                    merged.duplicate_designators.append(designator)
-                continue
-            merged.components[designator] = component
-        for name, net in model.nets.items():
-            existing = merged.nets.get(name)
-            if existing is None:
-                merged.nets[name] = Net(name=name, pins=list(net.pins))
-                continue
-            for pin in net.pins:
-                if pin not in existing.pins:
-                    existing.pins.append(pin)
-        for key, value in model.raw.items():
-            merged.raw.setdefault(key, value)
+        boards = getattr(model, "boards", None)
+        for board_model in boards or [model]:
+            pages.extend(board_model.board.page_uuids if boards else ())
+            for designator, component in board_model.components.items():
+                if designator in merged.components:
+                    # Cross-page repeat: the pages this tier can name, sorted and
+                    # deduped, and never a `duplicate_designator` (that field means
+                    # "twice on one page", which this tier can still tell apart).
+                    seen = merged.cross_page_designators.setdefault(designator, [])
+                    for page in board_model.board.page_uuids if boards else []:
+                        if page not in seen:
+                            seen.append(page)
+                    continue
+                merged.components[designator] = component
+            for name, net in board_model.nets.items():
+                existing = merged.nets.get(name)
+                if existing is None:
+                    merged.nets[name] = Net(name=name, pins=list(net.pins))
+                    continue
+                for pin in net.pins:
+                    if pin not in existing.pins:
+                        existing.pins.append(pin)
+            for name in board_model.duplicate_designators:
+                if name not in merged.duplicate_designators:
+                    merged.duplicate_designators.append(name)
+            for key, value in board_model.raw.items():
+                merged.raw.setdefault(key, value)
     merged.duplicate_designators.sort()
+    for name in merged.cross_page_designators:
+        merged.cross_page_designators[name].sort()
+    if pages:
+        merged.board = BoardRef(
+            uuid="", title=PER_PAGE_BOARD_TITLE, page_uuids=tuple(sorted(set(pages)))
+        )
     if len(models) > 1:
         notes.append(
-            f"merged {len(models)} per-page models by designator/net name — cross-page "
-            "connectivity is agreement by net name, not a traced connection"
+            f"merged {len(models)} per-page models into one board titled "
+            f"{PER_PAGE_BOARD_TITLE!r} by designator/net name — this tier cannot "
+            "attribute a page to a board (the board documents are not in a "
+            "single-page export), so a name on two pages is reported as one "
+            "netlist on several pages; cross-page connectivity is agreement by "
+            "net name, not a traced connection"
         )
-    return merged
+    return project
 
 
 def _archive_bytes(payload: object, label: str) -> bytes:
@@ -2258,7 +2451,7 @@ async def _checkup_ladder(
                 "tier": "project-file", "ok": True,
                 "ms": round((time.perf_counter() - started) * 1000, 1),
                 "bytes": len(blob), "sha256": hashlib.sha256(blob).hexdigest(),
-                "components": len(model.components), "nets": len(model.nets),
+                **_model_counts_fields(model),
             })
             attribution = {
                 "source": PAGE_ATTRIBUTION_ARCHIVE,
@@ -2328,7 +2521,9 @@ async def _checkup_ladder(
                         uuid: {
                             "uuid": uuid,
                             "title": page_titles.get(uuid, ""),
-                            "components": sorted(page_models[uuid].components),
+                            "components": sorted(
+                                _model_designators(page_models[uuid])
+                            ),
                         }
                         for uuid in reopened
                     },
@@ -2379,7 +2574,7 @@ async def _checkup_ladder(
             attempts.append({
                 "tier": "netlist", "ok": True,
                 "ms": round((time.perf_counter() - started) * 1000, 1),
-                "components": len(model.components), "nets": len(model.nets),
+                **_model_counts_fields(model),
                 **({"note": geometry_problem} if geometry_problem else {}),
             })
             notes.append(
@@ -2477,7 +2672,7 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
             "hostVersion": "", "connectorVersion": "", "file": str(path),
         }
         attempts.append({"tier": "file", "ok": True, "path": str(path),
-                         "components": len(model.components), "nets": len(model.nets)})
+                         **_model_counts_fields(model)})
         # No editor, so no host DRC. Both sections say *that*, rather than
         # carrying zeroes a reader could mistake for a clean board.
         drc = {
@@ -2623,6 +2818,16 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         f"  model: {report['model']['components']} components, {report['model']['nets']} nets "
         f"(view {CHECKUP_VIEW})"
     )
+    boards = report["model"].get("boards") or []
+    if len(boards) > 1:
+        # 040b: a project's totals above are sums over these boards, so the
+        # breakdown must be visible next to them — otherwise "155 components"
+        # reads as one netlist's worth.
+        print("  boards: " + " | ".join(
+            f"{board['title']} ({len(board['pages'])} 页, "
+            f"{board['components']} 器件, {board['nets']} 网)"
+            for board in boards
+        ))
     if report["model"]["designators"]:
         print(f"  designators: {', '.join(report['model']['designators'])}")
     print(f"  drc: {_drc_line('schematic', drc['schematic'])} | {_drc_line('pcb', drc['pcb'])}")
@@ -2649,10 +2854,21 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         print(f"  note: {note}")
     print(f"  modules: {len(modules)}（basis {source.get('moduleBasis')}，"
           f"pageAttribution {source.get('pageAttribution')}）")
-    for module in modules:
-        print(f"    {module['name']}: {len(module['components'])} 器件"
-              + (f"，findings {module['findings']}" if module.get("findings") else "")
-              + (f" — {module['note']}" if module.get("note") else ""))
+
+    def _module_line(module: dict) -> str:
+        return (f"{module['name']}: {len(module['components'])} 器件"
+                + (f"，findings {module['findings']}" if module.get("findings") else "")
+                + (f" — {module['note']}" if module.get("note") else ""))
+
+    if len(boards) > 1:
+        for board in boards:
+            print(f"    [{board['title']}]")
+            for module in modules:
+                if module.get("board") == board["title"]:
+                    print(f"      {_module_line(module)}")
+    else:
+        for module in modules:
+            print(f"    {_module_line(module)}")
     print(f"  ai_slots: unknown_parts {len(slots['unknown_parts'])}，"
           f"canvas_images {len(canvas)}" + (f"（{canvas_note}）" if canvas_note else "")
           + "，summary_template 已留槽")
@@ -2681,6 +2897,10 @@ def _finding_payload(finding: object) -> dict:
     other tasks read (`review-mark` consumes it), and a second spelling would let
     the two drift into disagreeing about what a finding looks like. The engine
     itself is untouched — this is the report assembling what the rule wrote.
+
+    ``board`` rides along inside ``asdict`` since 040b (it is a field of
+    :class:`Finding`), so a report's findings say which board each one is about
+    without a second mapping here.
     """
     from dataclasses import asdict
 
@@ -3957,8 +4177,7 @@ def _audit_persistence_verified(model: object, census: dict) -> None:
             role="cli",
             ok=True,
             persistence="saved_verified",
-            components=len(model.components),
-            nets=len(model.nets),
+            **_model_counts_fields(model),
             primitives=fingerprint_total(census),
         )
     except (Exception, SystemExit):  # noqa: BLE001 — logging must not break a run
@@ -6947,11 +7166,17 @@ def _boardwise_designator(model, designator: str) -> str | None:
     Exact match first (that is the file's spelling), case-insensitive second
     (a human typing ``u3`` means ``U3``). The model's spelling is returned so
     every later comparison in one run uses a single string.
+
+    040b: a project answers with every board's names. Whether the *ambiguity*
+    of one name on two boards is acceptable is a separate question, asked where
+    the caller knows what it is doing (`_board_for_designator` for a write, the
+    duplicate rule for a review) — resolving a name is not the place to refuse.
     """
-    if designator in model.components:
+    names = _model_designators(model)
+    if designator in names:
         return designator
     wanted = designator.strip().upper()
-    for name in model.components:
+    for name in names:
         if name.upper() == wanted:
             return name
     return None
@@ -7154,6 +7379,15 @@ def _cmd_edit_plan_value(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 5
+    # Board-aware ambiguity (040b §WI-4). A name placed on two boards is
+    # ambiguous for a *repair* even though each board's netlist is fine — which
+    # board's part would this edit touch? — and the refusal names them: "one of
+    # several" is not an answer a user can act on.
+    board_model, refusal = _board_for_designator(model, designator, action="edit plan")
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return 5
+    model = board_model
     if any(
         name.upper() == designator.upper()
         for name in model.repeated_designators()

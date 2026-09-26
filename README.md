@@ -84,7 +84,7 @@ refused) — `3` is never "the board is clean". A check that could not run is
 | Section | What it holds |
 |---|---|
 | `source` | which tier answered (`project-file` → `per-page` → `netlist` → `file`), the project/page identity, host and connector versions, what was tried and what was noted |
-| `model` | the parsed design: component and net counts, designators, `duplicateDesignators` (one name, two parts, one page) and `crossPageDesignators` (a name on two pages, with the pages — a multi-board project numbering each board's own `R1`) |
+| `model` | the parsed design: component and net counts, designators, `boards` (title, pages, parts, nets — a project's counts are sums over these), `duplicateDesignators` (one name, two parts, one page), `crossPageDesignators` (one board drawn on several sheets) and `crossBoardDesignators` (a name on two boards, with the boards) |
 | `summary` | the split the exit code comes from: `errors[]` / `warnings[]`, each with a `ref` back into the report |
 | `drc` | `schematic` (the editor's ERC **counts only**, with the per-page readings and the basis for their total) and `pcb` (its per-item tree, mapped: groups, leaf sentences, totals) |
 | `modules` | pages (multi-page projects) or connectivity clusters, each with its components, its findings by index and the evidence for its name |
@@ -382,7 +382,7 @@ boardwise checkup --file board.epro2 --out DIR       # 没编辑器：离线兜�
 | 段 | 内容 |
 |---|---|
 | `source` | 这一轮用的是哪一级（`project-file` → `per-page` → `netlist` → `file`）、工程/页身份、宿主与 connector 版本、逐级 `attempts` 与 `notes` |
-| `model` | 解析出的设计：器件数/网络数、位号、`duplicateDesignators`（同一页同一名两个件＝缺陷）与 `crossPageDesignators`（同一名落在多页＝多板工程各板自有 R1，附页归属） |
+| `model` | 解析出的设计：器件数/网络数、位号、`boards`（板名/页/器件/网；工程的合计数是各板之和）、`duplicateDesignators`（同页同名两个件＝缺陷）、`crossPageDesignators`（同一块板画在多张页）与 `crossBoardDesignators`（同名跨板，附板名） |
 | `summary` | 退出码由它决定：`errors[]` / `warnings[]`，每条带 `ref` 指回报告里对应位置 |
 | `drc` | `schematic`（主机 ERC **只有聚合计数**，附逐页读数与合计口径）与 `pcb`（主机逐条树映射后的 groups/叶子句子/totals） |
 | `modules` | 多页工程按页、单页按连通性；每块含器件、findings 索引、命名依据 |

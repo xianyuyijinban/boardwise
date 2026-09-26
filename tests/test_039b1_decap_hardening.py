@@ -122,9 +122,12 @@ def _model(
 
 
 def _states(rule, model) -> dict[str, list]:
+    """Outcome states for one model — or per board, for a project (040b)."""
+    boards = getattr(model, "boards", None) or [model]
     grouped: dict[str, list] = {state: [] for state in OUTCOME_STATES}
-    for outcome in rule.outcomes(model):
-        grouped[outcome.state].append(outcome)
+    for board_model in boards:
+        for outcome in rule.outcomes(board_model):
+            grouped[outcome.state].append(outcome)
     return grouped
 
 

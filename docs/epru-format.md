@@ -100,11 +100,34 @@ The record stream is not one flat board — it is a library plus the design.
  "editVersion":"3.2.91","user":{"uuid":"a29b576e85021282"}}
 ```
 
-**Consequence:** everything "board" comes from the single `PCB` document.
+**Consequence:** everything *copper* comes from the single `PCB` document.
 `LAYER` (2,628 records), `PRIMITIVE` (622), `ATTR` (2,420) and friends are
 repeated once per document, which is why the whole-file census is dominated by
 library content. Anything that counts records for board-level purposes must
 segment first.
+
+### 3.1 A project can hold several boards, and the stream says which pages belong to which **[confirmed]**
+
+Measured 2026-09-26 on six real exports (1 to 3 boards each; the 毕设 project has
+3 boards, 3 schematics and 4 pages, one board owning two of them — a board is not
+a page):
+
+```
+SCH_PAGE.META.schematic  ->  SCH.META.board  ->  BOARD.META.title
+```
+
+The same chain in the **folder** format lives in the index JSON:
+`profile.sheets[<page uuid>].schematic_uuid` → `profile.schematics[<uuid>].board`
+→ `profile.boards[<uuid>].title`. The official example's `P1.esch2` really does
+carry its sheet uuid in the `SCH_PAGE` DOCHEAD (`ea6d0c40a1576515`), which is
+what makes the link resolvable without path guessing; a sample that declares
+neither (`tests/fixtures/eprj3_synth`) is one implicit board.
+
+A page whose `schematic` reference dangles is a page no schematic registers
+(measured: an injected orphan page), and it must not be guessed into a board:
+one board → fold in, several → an explicit `unattached` group.
+`boardwise.parsers.schematic.board_partition` is the one reader of all this, and
+`build_project_model` turns it into one model per board (040b).
 
 ## 4. Units and coordinate frame
 
