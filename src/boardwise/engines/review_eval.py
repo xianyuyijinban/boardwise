@@ -163,15 +163,28 @@ def evaluate_annotations(
     *,
     split: str = SPLIT_DEV,
 ) -> BoardEvaluation:
-    """Pair one board's oracle records against the rules' findings."""
+    """Pair one board's oracle records against the rules' findings.
+
+    ``model`` may be a whole project (040b): the rules then run **per board**,
+    exactly as ``boardwise review`` runs them, and the counts aggregate over the
+    boards. The oracle's records are project-scoped (they name refs, not boards),
+    so pairing is unchanged — which is the point: the batch changed the model
+    the rules read, not the verdicts they reach.
+    """
+    from ..core.model import ProjectModel
+
     items = aset.items_for_split(split)
     defects = [item for item in items if item.kind == "defect"]
     exceptions = [item for item in items if item.kind == "exception"]
     excluded_holdout = len(aset.items) - len(items)
 
+    board_models: list[DesignModel] = (
+        list(model.boards) if isinstance(model, ProjectModel) else [model]
+    )
     findings: list[Finding] = []
-    for rule in rules:
-        findings.extend(rule.check(model))
+    for board_model in board_models:
+        for rule in rules:
+            findings.extend(rule.check(board_model))
     severity = severity_counts(findings)
 
     metrics = {
@@ -181,9 +194,17 @@ def evaluate_annotations(
         metric.violations = sum(
             1 for finding in findings if finding.rule_id == metric.rule_id
         )
-        metric.outcome_counts = _rule_outcome_counts(
-            next(rule for rule in rules if rule.id == metric.rule_id), model
-        )
+        rule = next(rule for rule in rules if rule.id == metric.rule_id)
+        per_board = [
+            counts
+            for counts in (_rule_outcome_counts(rule, board_model) for board_model in board_models)
+            if counts is not None
+        ]
+        if per_board:
+            metric.outcome_counts = {
+                state: sum(counts[state] for counts in per_board)
+                for state in per_board[0]
+            }
     for item in defects:
         if item.rule_hint in metrics:
             metrics[item.rule_hint].defects_hinted += 1
@@ -306,8 +327,8 @@ def evaluate_annotations(
     return BoardEvaluation(
         board=aset.board,
         source=aset.source,
-        component_count=len(model.components),
-        net_count=len(model.nets),
+        component_count=sum(len(m.components) for m in board_models),
+        net_count=sum(len(m.nets) for m in board_models),
         severity_counts=severity,
         metrics=[metrics[rule.id] for rule in rules],
         queries=sum(1 for item in items if item.kind == "query"),
@@ -458,11 +479,15 @@ def _render_split_totals(
 
 
 def load_board_model(source: str | Path) -> DesignModel:
-    """The schematic netlist for an annotated board.
+    """The schematic model for an annotated board.
 
     M1 reviews schematics, so ``.epro2`` goes through the schematic parser
     (the PCB-netlist view that ``boardwise review`` defaults to is empty for
     schematic-only exports — measured 2026-09-19 on the golden fixture).
+
+    Since 040b a ``.epro2`` yields a :class:`ProjectModel` (one model per board);
+    the harness runs the rules per board, as the CLI does. ``.enet`` netlists stay
+    a single :class:`DesignModel` — they have no boards to partition.
     """
     path = Path(source)
     if not path.is_file():
@@ -473,9 +498,9 @@ def load_board_model(source: str | Path) -> DesignModel:
 
         return parse_enet(path)
     if suffix == ".epro2":
-        from ..parsers.schematic import build_schematic_model
+        from ..parsers.schematic import build_project_model
 
-        return build_schematic_model(path)
+        return build_project_model(path)
     raise ValueError(
         f"{path}: unsupported board source {suffix or '(no suffix)'}; "
         "expected .epro2 or .enet"

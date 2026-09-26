@@ -29,6 +29,7 @@ import pytest
 from boardwise.core.model import Component, DesignModel, Net
 from boardwise.engines.checkup import (
     FAMILY_DOMINANCE,
+    MODULE_BASIS_BOARD,
     MODULE_BASIS_CONNECTIVITY,
     MODULE_BASIS_PAGE,
     MODULE_BASIS_UNATTRIBUTED,
@@ -102,6 +103,11 @@ def test_an_unreadable_archive_yields_nothing_rather_than_an_empty_grouping(tmp_
 
 
 def test_modules_from_pages_disambiguate_repeated_titles_and_flag_collisions():
+    """040b: the 毕设 project's modules are per board first.
+
+    Each module says which board it belongs to, the board list is in the facts,
+    and the pages still disambiguate where a board owns several.
+    """
     pages = page_attribution_from_archive(BISHE)
     model, _ = _load(BISHE)
 
@@ -110,14 +116,20 @@ def test_modules_from_pages_disambiguate_repeated_titles_and_flag_collisions():
         attribution_source=PAGE_ATTRIBUTION_ARCHIVE,
     )
 
-    assert facts["moduleBasis"] == MODULE_BASIS_PAGE
+    assert facts["moduleBasis"] == MODULE_BASIS_BOARD
+    assert [board["title"] for board in facts["boards"]] == ["Board1", "Board2", "Board3"]
     assert facts["pageCount"] == 4 and facts["pagesWithComponents"] == 3
+    assert all(module.get("board") in {"Board1", "Board2", "Board3"} for module in modules)
     names = [module["name"] for module in modules]
-    assert all("（" in name for name in names), f"repeated titles must be disambiguated: {names}"
+    # Every page on this fixture is titled "P1" (three of them, on three boards),
+    # and three modules called "P1" in one list is a reader trap: 040b prefixes
+    # the board, which is also the thing that tells them apart.
+    assert names == ["Board1/P1", "Board2/P1", "Board3/P1"], names
+    assert len(set(names)) == len(names)
     assert all(module["pages"] for module in modules)
-    # The fixture really does reuse designators across pages (30 of them), and the
-    # module says so instead of quietly listing the same ref twice.
-    assert any("跨页重号" in (module.get("note") or "") for module in modules)
+    # The fixture really does reuse designators across boards (28 of them), and
+    # the page module for such a ref says so instead of quietly listing it twice.
+    assert any("重号" in (module.get("note") or "") for module in modules)
 
 
 def _load(path: Path):

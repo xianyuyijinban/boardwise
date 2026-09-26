@@ -53,6 +53,12 @@ class Finding:
     (``None``) for every rule that has nothing to change, and it is what makes
     a finding repairable — see task 016's ``core.changeplan``, which refuses to
     act on a finding that carries no target.
+
+    ``board`` is the title of the board whose model produced this finding (040b
+    §WI-3). It is stamped by the runner (:func:`boardwise.engines.review.run_review`),
+    not by the rule — a rule judges a netlist and does not need to know which
+    board it came from. Empty means "not read per board": an ``.enet`` input, or
+    a caller that ran a single rule on a model directly.
     """
 
     rule_id: str
@@ -61,6 +67,7 @@ class Finding:
     level: str
     evidence: list[str] = field(default_factory=list)
     target: FindingTarget | None = None
+    board: str = ""
 
 
 class Rule:

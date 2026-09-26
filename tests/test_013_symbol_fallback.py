@@ -25,7 +25,10 @@ from pathlib import Path
 
 import pytest
 
-from boardwise.parsers.schematic import build_schematic_model
+from boardwise.parsers.schematic import (
+    build_project_model,
+    build_schematic_model,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 BISHE = FIXTURES / "ProPrj_毕设FOC驱动板_2026-09-17.epro2"
@@ -56,24 +59,42 @@ PAD_NET_EVIDENCE = {
 
 
 def _designators_without_pins(model) -> list[str]:
-    return sorted(des for des, comp in model.components.items() if not comp.pins)
+    """Every pin-less part. Takes a board or a project (040b: per board)."""
+    boards = getattr(model, "boards", None) or [model]
+    return sorted(
+        designator
+        for board_model in boards
+        for designator, comp in board_model.components.items()
+        if not comp.pins
+    )
+
+
+def _parts(project, designator: str) -> list:
+    """Every placement of one designator — one per board that carries it (040b)."""
+    return [
+        board_model.components[designator]
+        for board_model in project.boards
+        if designator in board_model.components
+    ]
 
 
 def test_every_early_placed_part_parses_with_pins():
     """The 25 used to come out pin-less and silently dropped every connection.
 
-    Two layers: no component on the board is pin-less any more (the census
+    Two layers: no component on any board is pin-less any more (the census
     that found the bug), and each of the 25 by name carries pins on **every**
     net-bearing pad -- a pin that instantiates but sits net-less would be the
-    same connectivity loss wearing a different coat.
+    same connectivity loss wearing a different coat. 040b checks every
+    *placement*, since a name can now exist on more than one board.
     """
-    model = build_schematic_model(BISHE)
-    assert _designators_without_pins(model) == []
+    project = build_project_model(BISHE)
+    assert _designators_without_pins(project) == []
     for designator in EARLY_PLACED_25:
-        pins = model.components[designator].pins
-        assert pins, f"{designator}: still pin-less after the fallback"
-        netless = [pin.number for pin in pins if pin.net is None]
-        assert netless == [], f"{designator}: pins without a net: {netless}"
+        placements = _parts(project, designator)
+        assert placements, f"{designator}: no placement found"
+        for component in placements:
+            netless = [pin.number for pin in component.pins if pin.net is None]
+            assert netless == [], f"{designator}: pins without a net: {netless}"
 
 
 def test_oscillator_load_caps_match_the_pcb_side_pad_net():
@@ -88,13 +109,14 @@ def test_oscillator_load_caps_match_the_pcb_side_pad_net():
     placements disagree with the schematic for pre-existing reasons recorded
     in the 013 handover, none of them touched by this fix.)
     """
-    model = build_schematic_model(BISHE)
+    project = build_project_model(BISHE)
     for designator, expected in PAD_NET_EVIDENCE.items():
-        actual = {pin.number: pin.net for pin in model.components[designator].pins}
-        assert actual == expected, (
-            f"{designator}: schematic {actual} disagrees with the PCB-side "
-            f"PAD_NET evidence {expected}"
-        )
+        for component in _parts(project, designator):
+            actual = {pin.number: pin.net for pin in component.pins}
+            assert actual == expected, (
+                f"{designator}: schematic {actual} disagrees with the PCB-side "
+                f"PAD_NET evidence {expected}"
+            )
 
 
 def test_instance_attr_outranks_the_library_symbol():

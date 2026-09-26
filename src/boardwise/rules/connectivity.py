@@ -106,45 +106,30 @@ class DecouplingPerIC(Rule):
         return findings
 
 
-#: Does a designator repeated **across pages** count as a defect?
-#:
-#: True = the two signed rulings stand: oracle A1 (2026-09-19) ruled the 毕设
-#: board's 30 cross-page repeats ERROR defects ("the netlist, the BOM and the
-#: layout are all PROJECT-scoped, so two different parts answer to one name"),
-#: and the injected ``duplicate-designator`` variant (011d, signed the same day)
-#: *is* a cross-page repeat by construction ("a second page carries a second
-#: R24") whose record demands severity ERROR.
-#:
-#: False = 040 §WI-3's reading, that a multi-board project numbers each board's
-#: own parts so a repeat across pages is legitimate. 040 implemented the
-#: *distinction* (the model now says which kind a repeat is) but left this True:
-#: flipping it would overturn an oracle ruling the task book did not cite, drop
-#: the eval's high-priority precision 0.97 -> 0.88 and the injected variant's
-#: only defect with it. The measured cost of False is in
-#: ``outputs/040_summary.txt``; the flip is this one word and is the oracle's
-#: call, not the parser's.
-CROSS_PAGE_REPEAT_IS_A_DEFECT = True
-
-
 class DuplicateDesignators(OutcomeRule):
     """CONN-1 (task 011c): one designator must mean exactly one part.
 
-    Two kinds of repeat, and 040 §WI-3 made the parser tell them apart (on the
-    毕设 board: 30 refs repeat across 3 pages that are three boards; two of them,
-    U15/U16, repeat *within* one page):
+    Three kinds of repeat, and 040b makes the parser tell them apart (the 毕设
+    project is the worked example: 3 boards, 30 refs, of which 28 are one name on
+    two or three boards and 2 — U15, U16 — repeat *within* one page):
 
-    * **twice on one page** — two parts answer to one name inside one netlist,
-      which is what binds BOM, layout and review together. The parser records
-      these in ``model.duplicate_designators``.
-    * **once each on two pages** — either a multi-board project numbering each
-      board's own ``R1``, or one design drawn across subsheets. The parser
-      records these in ``model.cross_page_designators``, with the pages.
+    * **twice on one page** — two parts answer to one name inside one netlist.
+      ``model.duplicate_designators``.
+    * **once on each of two pages of one board** — one design drawn across
+      sheets, so the name still resolves to two parts in one netlist.
+      ``model.cross_page_designators``.
+    * **on more than one board** — ``model.cross_board_designators`` says which
+      boards, and the first one listed reports it, so a project-scoped claim is
+      made once instead of once per board.
 
-    Both are reported, and the message says which kind it is and on which pages
-    — the reading is no longer "somewhere, twice". Whether the second kind is a
-    defect is a ruling, not a parser question: see
-    :data:`CROSS_PAGE_REPEAT_IS_A_DEFECT` (True today, on oracle A1 plus the
-    signed injected variant).
+    All three are ERROR, which is the oracle's A1 ruling (2026-09-19) unchanged:
+    "the netlist, the BOM and the layout are all PROJECT-scoped, so two different
+    parts answer to one name". 040 left a switch here
+    (``CROSS_PAGE_REPEAT_IS_A_DEFECT``) because it could not tell the second kind
+    from the third; now that it can, the switch has no reading left to guard and
+    is gone. What 040b adds is not a verdict but a *subject*: the message says
+    which board(s) the name spans, so "same board, another sheet" and "another
+    board" read differently.
     """
 
     id = "conn-duplicate-designators"
@@ -191,31 +176,62 @@ class DuplicateDesignators(OutcomeRule):
                 "ERROR",
             ))
         for designator, pages in sorted(model.cross_page_designators.items()):
+            # An empty page list is what a consumer states when it knows a name
+            # is on more than one page but cannot name them (the per-page tier
+            # merging hand-built models). Say that, rather than "0 pages".
             where = "、".join(page[:8] for page in pages)
-            defect = CROSS_PAGE_REPEAT_IS_A_DEFECT
+            if pages:
+                message = (
+                    f"{designator} is placed once on each of {len(pages)} pages "
+                    f"of one board ({where}); one netlist holds the name twice, "
+                    "so the model kept only the last placement"
+                )
+                evidence = [
+                    f"designator {designator} on {len(pages)} pages: "
+                    + ", ".join(pages)
+                ]
+            else:
+                message = (
+                    f"{designator} is placed on more than one page of one board "
+                    "(page ids unavailable in this reading); one netlist holds "
+                    "the name twice"
+                )
+                evidence = [f"designator {designator} on more than one page"]
             rows.append((
                 Outcome(
                     rule_id=self.id,
-                    state="VIOLATION" if defect else "OK",
+                    state="VIOLATION",
+                    subject=designator,
+                    message=message,
+                    evidence=evidence,
+                ),
+                "ERROR",
+            ))
+        for designator, titles in sorted(
+            getattr(model, "cross_board_designators", {}).items()
+        ):
+            # One report per name, from the first board that carries it: the
+            # claim is project-scoped, so repeating it on every board would make
+            # one defect look like three.
+            board = getattr(model, "board", None)
+            if titles and board is not None and titles[0] != board.title:
+                continue
+            where = "、".join(titles)
+            rows.append((
+                Outcome(
+                    rule_id=self.id,
+                    state="VIOLATION",
                     subject=designator,
                     message=(
-                        f"{designator} is placed once on each of {len(pages)} "
-                        f"pages ({where}) -- "
-                        + (
-                            "every board of a multi-board project numbers its own "
-                            "parts, so this is reported, not graded"
-                            if not defect else
-                            "the model kept only the last placement, and a "
-                            "project-scoped netlist/BOM cannot hold one name for "
-                            "two parts"
-                        )
+                        f"{designator} is placed on more than one board ({where}); "
+                        "the project's netlist, BOM and layout share one name for "
+                        "two parts (oracle ruling A1, 2026-09-19)"
                     ),
                     evidence=[
-                        f"designator {designator} on {len(pages)} pages: "
-                        + ", ".join(pages)
+                        f"designator {designator} on boards: " + ", ".join(titles)
                     ],
                 ),
-                "ERROR" if defect else "INFO",
+                "ERROR",
             ))
         if not rows:
             rows.append((

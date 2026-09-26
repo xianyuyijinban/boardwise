@@ -58,7 +58,16 @@ from boardwise.core.geometry import (
     COORD_PRECISION as _COORD_PRECISION,
 )
 from boardwise.core.geometry import transform_point as _transform_point
-from boardwise.core.model import Component, DesignModel, Net, Pin
+from boardwise.core.model import (
+    BoardModel,
+    BoardRef,
+    Component,
+    DesignModel,
+    MultiBoardProjectError,
+    Net,
+    Pin,
+    ProjectModel,
+)
 
 from .epru_stream import (
     ParseStats,
@@ -203,18 +212,30 @@ def _iter_schematic_records(text: str, stats: ParseStats) -> list[Any]:
     ``DEVICE`` documents contribute only their ``META`` (the device title the
     generator uses as a library-search keyword); everything else (PCB,
     FOOTPRINT, ...) is skipped after counting.
+
+    ``SCH`` and ``BOARD`` documents contribute only their ``META`` too, and for
+    one reason: they carry the board chain (040b §WI-1), which is
+
+        ``SCH_PAGE.META.schematic`` → ``SCH.META.board`` → ``BOARD.META.title``
+
+    — measured 2026-09-26 to hit on every real fixture (1 to 3 boards each) and
+    to dangle exactly once, on the injected orphan page. Nothing else about those
+    documents is read: their rules and their empty bodies are not part numbers.
     """
     out: list[Any] = []
     keep = False
-    is_device = False
+    meta_only = False
     for record in iter_epru_records(text, stats):
         if record.type == "DOCHEAD":
             doc_type = record.body.get("docType")
             keep = doc_type in ("SCH_PAGE", "SYMBOL", "DEVICE")
-            is_device = doc_type == "DEVICE"
+            meta_only = doc_type in ("SCH", "BOARD")
+            if keep or meta_only:
+                out.append(record)
+            continue
         if keep:
             out.append(record)
-        elif is_device and record.type == "META":
+        elif meta_only and record.type == "META":
             out.append(record)
     return out
 
@@ -226,6 +247,187 @@ def _collect_device_titles(records: list[Any]) -> dict[str, str]:
         for uuid, meta in _collect_device_meta(records).items()
         if meta.get("title")
     }
+
+
+#: The title a board gets when the container declares none: a project with no
+#: ``BOARD`` document (every library-only or single-sheet export), and the folder
+#: format's synthetic sample. One implicit board is what such a project is — not
+#: a board we invented a name for.
+IMPLICIT_BOARD_TITLE = "Board1"
+
+#: The title of the group holding pages whose ``schematic`` reference dangles in
+#: a project that has **more than one** board (040b §WI-0.2). ASCII and stable,
+#: because it lands in a report and in a finding's ``board``: the report's own
+#: prose says, in the reader's language, that these pages are in no board
+#: document.
+UNATTACHED_BOARD_TITLE = "unattached"
+
+
+def board_partition(
+    records: list[Any], *, project_meta: dict[str, Any] | None = None
+) -> list[BoardRef]:
+    """Group a project's ``SCH_PAGE`` documents into boards (040b §WI-1).
+
+    The container states the chain itself, so this reads it rather than
+    inferring one (039d had to match designator sets to guess the page↔board
+    map — that guess is what this function replaces):
+
+    * ``.epro2``: ``SCH_PAGE.META.schematic`` → ``SCH.META.board`` →
+      ``BOARD.META.title``. Measured 2026-09-26 on six real fixtures: 100% hit
+      (毕设 3 boards / 3 schematics / 4 pages, 高速电机控制器 2/2/3, the other
+      four single-board), and the one dangling reference is the injected
+      ``duplicate-designator`` orphan page.
+    * eprj3 folder: the same chain lives in the index JSON —
+      ``profile.sheets[page_uuid].schematic_uuid`` →
+      ``profile.schematics[uuid].board`` → ``profile.boards[uuid].title`` (the
+      official example's ``P1.esch2`` really does carry the sheet uuid in its
+      ``SCH_PAGE`` DOCHEAD: ``ea6d0c40a1576515``). The 038 synthetic sample
+      declares neither ``boards`` nor ``sheets``, so it lands on the implicit
+      board — which is why the folder path must tolerate both.
+
+    Boards come back in container order (``zIndex``, then uuid), each with its
+    pages in stream order. A board with no page is kept: "this board has no
+    schematic in the export" is a reading, and silently dropping it would make a
+    three-board project look like a two-board one.
+
+    Pages whose reference dangles are folded into the single board when there is
+    exactly one, and otherwise land in :data:`UNATTACHED_BOARD_TITLE` — the
+    report has to be able to say "this page is in no board document" instead of
+    picking one (§WI-0.2).
+    """
+    page_uuids = [
+        str(record.body.get("uuid") or "")
+        for record in records
+        if record.type == "DOCHEAD" and record.body.get("docType") == "SCH_PAGE"
+    ]
+    if str((project_meta or {}).get("format") or "") == "eprj3":
+        boards, page_to_schematic = _board_chain_from_index(project_meta or {})
+    else:
+        boards, page_to_schematic = _board_chain_from_records(records)
+
+    board_of_page: dict[str, str] = {}
+    orphan_pages: list[str] = []
+    for page_uuid in page_uuids:
+        schematic = page_to_schematic.get(page_uuid)
+        board_uuid = boards.get("schematic_board", {}).get(schematic or "")
+        if board_uuid in boards["order"]:
+            board_of_page[page_uuid] = board_uuid
+        else:
+            orphan_pages.append(page_uuid)
+
+    if not boards["order"]:
+        # No BOARD document at all (or a folder index without profile.boards):
+        # one implicit board holds the project.
+        return [
+            BoardRef(uuid="", title=IMPLICIT_BOARD_TITLE, page_uuids=tuple(page_uuids))
+        ]
+
+    if orphan_pages and len(boards["order"]) == 1:
+        for page_uuid in orphan_pages:
+            board_of_page[page_uuid] = boards["order"][0]
+        orphan_pages = []
+
+    refs: list[BoardRef] = []
+    for board_uuid in boards["order"]:
+        pages = tuple(
+            page_uuid for page_uuid in page_uuids if board_of_page.get(page_uuid) == board_uuid
+        )
+        refs.append(
+            BoardRef(
+                uuid=board_uuid,
+                title=boards["titles"].get(board_uuid) or board_uuid,
+                page_uuids=pages,
+            )
+        )
+    if orphan_pages:
+        refs.append(
+            BoardRef(
+                uuid="",
+                title=UNATTACHED_BOARD_TITLE,
+                page_uuids=tuple(orphan_pages),
+            )
+        )
+    return refs
+
+
+def _board_chain_from_records(
+    records: list[Any],
+) -> tuple[dict[str, Any], dict[str, str | None]]:
+    """The board chain as the ``.epro2`` record stream states it.
+
+    Returns ``(boards, page_to_schematic)`` where ``boards`` is
+    ``{"order": [...], "titles": {...}, "schematic_board": {...}}``.
+    """
+    order: list[str] = []
+    titles: dict[str, str] = {}
+    z_index: dict[str, Any] = {}
+    schematic_board: dict[str, str] = {}
+    page_to_schematic: dict[str, str | None] = {}
+    doc_type = uuid = ""
+    for record in records:
+        if record.type == "DOCHEAD":
+            doc_type = str(record.body.get("docType") or "")
+            uuid = str(record.body.get("uuid") or "")
+            continue
+        if record.type != "META":
+            continue
+        body = record.body
+        if doc_type == "BOARD":
+            order.append(uuid)
+            titles[uuid] = str(body.get("title") or "")
+            z_index[uuid] = body.get("zIndex")
+        elif doc_type == "SCH":
+            schematic_board[uuid] = str(body.get("board") or "")
+        elif doc_type == "SCH_PAGE":
+            page_to_schematic[uuid] = body.get("schematic")
+    # zIndex is the container's own board order; uuid breaks ties so two runs of
+    # the same file never disagree.
+    order.sort(key=lambda board_uuid: (
+        z_index.get(board_uuid) if isinstance(z_index.get(board_uuid), (int, float)) else 10**6,
+        board_uuid,
+    ))
+    return (
+        {"order": order, "titles": titles, "schematic_board": schematic_board},
+        page_to_schematic,
+    )
+
+
+def _board_chain_from_index(
+    project_meta: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, str | None]]:
+    """The same chain, as the folder format's index JSON states it (WI-0)."""
+    profile = project_meta.get("profile")
+    profile = profile if isinstance(profile, dict) else {}
+    boards_raw = profile.get("boards") or {}
+    schematics_raw = profile.get("schematics") or {}
+    sheets_raw = profile.get("sheets") or {}
+    order: list[str] = []
+    titles: dict[str, str] = {}
+    z_index: dict[str, Any] = {}
+    if isinstance(boards_raw, dict):
+        for board_uuid, board in boards_raw.items():
+            order.append(str(board_uuid))
+            if isinstance(board, dict):
+                titles[str(board_uuid)] = str(board.get("title") or "")
+                z_index[str(board_uuid)] = board.get("zIndex")
+    schematic_board: dict[str, str] = {}
+    if isinstance(schematics_raw, dict):
+        for schematic_uuid, schematic in schematics_raw.items():
+            if isinstance(schematic, dict):
+                schematic_board[str(schematic_uuid)] = str(schematic.get("board") or "")
+    page_to_schematic: dict[str, str | None] = {}
+    if isinstance(sheets_raw, dict):
+        for sheet_uuid, sheet in sheets_raw.items():
+            if isinstance(sheet, dict):
+                page_to_schematic[str(sheet_uuid)] = sheet.get("schematic_uuid")
+    order.sort(key=lambda board_uuid: (
+        z_index.get(board_uuid) if isinstance(z_index.get(board_uuid), (int, float)) else 10**6,
+        board_uuid,
+    ))
+    return (
+        {"order": order, "titles": titles, "schematic_board": schematic_board},
+        page_to_schematic,
+    )
 
 
 #: The DEVICE ``META.attributes`` keys the resolver needs, mapped to the
@@ -444,10 +646,21 @@ def _split_page(records: list[Any]) -> _PageSplit:
     for record in records:
         body = record.body
         if record.type == "DOCHEAD":
-            # A new document: only SCH_PAGE carries connectivity, and its uuid
-            # is the page every record after it belongs to. (The grouper also
-            # ends the attribute run, as it always did.)
-            page = str(body.get("uuid") or "") if body.get("docType") == "SCH_PAGE" else ""
+            # A new SCH_PAGE: its uuid is the page every record after it belongs
+            # to (the grouper also ends the attribute run, as it always did).
+            #
+            # Any *other* document leaves the page as it is, deliberately. A
+            # library document can sit **inside** a page's record run — measured
+            # 2026-09-26 on the folder format, where a page file is
+            # ``SCH_PAGE`` + the symbols it uses + the page's own components and
+            # wires, and on all seven real ``.epro2`` fixtures the reverse also
+            # holds (no ``COMPONENT`` and no grouped ``LINE`` ever sits in a
+            # ``SYMBOL``/``DEVICE`` document). Blanking the page there would
+            # orphan those instances from the page they are drawn on, which is
+            # exactly what the board filter then sees as "this board has no
+            # parts".
+            if body.get("docType") == "SCH_PAGE":
+                page = str(body.get("uuid") or "")
             current = None
             continue
         if body is None:
@@ -891,10 +1104,80 @@ def collect_part_placements(path: str | Path) -> dict[tuple[float, float], str]:
     return out
 
 
+def build_project_model(
+    path: str | Path, *, parse_stats: ParseStats | None = None
+) -> ProjectModel:
+    """Parse a schematic project into **one :class:`BoardModel` per board**.
+
+    The boards come from the container's own chain (:func:`board_partition`), so
+    a project that declares three boards yields three models and one that
+    declares none yields one. Within a board, pages keep 040's page-scoped
+    connectivity; across boards, nothing is shared — which is what makes the
+    two ``U2``s of the 毕设 project both survive instead of the later one
+    overwriting the earlier (040b §WI-2).
+
+    ``parse_stats`` is the same caller-owned counter object
+    ``build_schematic_model`` takes; every board's parse fills the same one.
+    """
+    text, meta = load_epru_text(Path(path))
+    stats = _stats_for(parse_stats, path, meta)
+    records = _iter_schematic_records(text, stats)
+
+    split = _split_page(records)
+    symbols = _collect_symbols(records, stats, pin_key=_pin_key_for(meta))
+    device_meta = _collect_device_meta(records)
+
+    project = ProjectModel(source=str(path), project_raw={"project": dict(meta)})
+    for ref in board_partition(records, project_meta=meta):
+        board_model = BoardModel(board=ref)
+        _fill_board_model(
+            board_model, _board_slice(split, ref.page_uuids), symbols, device_meta, stats
+        )
+        project.boards.append(board_model)
+
+    # One project-scoped fact per board: which of this board's designators other
+    # boards also use, and in which order (so exactly one board reports it).
+    cross = project.multi_board_designators()
+    for board_model in project.boards:
+        board_model.cross_board_designators = {
+            designator: titles
+            for designator, titles in cross.items()
+            if board_model.board.title in titles
+        }
+    return project
+
+
+def _board_slice(split: _PageSplit, page_uuids: tuple[str, ...]) -> _PageSplit:
+    """The part of a project-wide :class:`_PageSplit` that belongs to one board."""
+    pages = set(page_uuids)
+    return _PageSplit(
+        instances=[inst for inst in split.instances if inst.page in pages],
+        loose=[item for item in split.loose if item.page in pages],
+        segments={
+            group: segs
+            for group, segs in split.segments.items()
+            if split.pages.get(group) in pages
+        },
+        wire_groups={
+            group for group in split.wire_groups if split.pages.get(group) in pages
+        },
+        pages={
+            group: page for group, page in split.pages.items() if page in pages
+        },
+    )
+
+
 def build_schematic_model(
     path: str | Path, *, parse_stats: ParseStats | None = None
 ) -> DesignModel:
-    """Parse a schematic-only ``.epro2`` into a :class:`DesignModel`.
+    """Parse a **single-board** schematic into a :class:`DesignModel`.
+
+    The project's one board comes back as a :class:`BoardModel` (a
+    :class:`DesignModel` with its board identity attached), so every existing
+    consumer keeps its shape: the fields, the two repeat lists and the rules'
+    input are what they were. A project with more than one board raises
+    :class:`MultiBoardProjectError` — see :func:`build_project_model` for the
+    entry point that handles those, and 040b §WI-2 for why a single model cannot.
 
     Raises the same errors :func:`boardwise.parsers.epru.load_epro2_source`
     raises for unreadable or encrypted inputs; the CLI turns those into exit
@@ -905,21 +1188,42 @@ def build_schematic_model(
     what was dropped. The returned model is the same either way — the counters
     are the only difference.
     """
-    text, meta = load_epru_text(Path(path))
-    stats = _stats_for(parse_stats, path, meta)
-    records = _iter_schematic_records(text, stats)
+    project = build_project_model(path, parse_stats=parse_stats)
+    if len(project.boards) > 1:
+        raise MultiBoardProjectError(
+            f"{path}: {len(project.boards)} boards "
+            f"({', '.join(project.board_titles())}) — a project is not one "
+            "model; use build_project_model()"
+        )
+    if not project.boards:
+        return DesignModel()
+    return project.boards[0]
 
-    split = _split_page(records)
+
+def _fill_board_model(
+    model: BoardModel,
+    split: _PageSplit,
+    symbols: dict[str, _SymbolDef],
+    device_meta: dict[str, dict[str, str]],
+    stats: ParseStats,
+) -> None:
+    """Fill one board's model from the records of its own pages (040b §WI-2).
+
+    Everything below reads only ``split``, which
+    :func:`build_project_model` has already narrowed to this board: that
+    narrowing *is* the batch. The rules are 040's (page-scoped connectivity,
+    wire-head-only groups) and the two repeat lists are 040's classification
+    computed per board, so "same page", "same board, several pages" and "also on
+    another board" are now three different readings instead of one.
+    """
     instances, segments = split.instances, split.segments
     loose = [item.body for item in split.loose]
-    symbols = _collect_symbols(records, stats, pin_key=_pin_key_for(meta))
-    device_meta = _collect_device_meta(records)
 
-    model = DesignModel()
     components: dict[str, Component] = {}
     # designator -> {page uuid: placements seen}, so a designator that repeats
-    # can be told apart: twice on one page is a clash in one netlist, once each
-    # on two pages is a multi-board project numbering its own parts (040 §WI-3).
+    # can be told apart **within this board**: twice on one page is a clash in
+    # one netlist, once each on two pages is one board drawn on several sheets
+    # (040 §WI-3; across boards it is not a repeat at all any more).
     placements_seen: dict[str, dict[str, int]] = {}
     # (instance, component, [(pin number, page point, ez key, pin name)])
     placed: list[tuple[_Instance, Component, list[tuple[str, Point, str, str]]]] = []
@@ -1149,7 +1453,7 @@ def build_schematic_model(
                 net.pins.append(member)
     model.nets = nets
 
-    # --- how a repeated designator reads (040 §WI-3)
+    # --- how a repeated designator reads **within this board** (040 §WI-3, 040b)
     for designator in sorted(placements_seen):
         pages_of = placements_seen[designator]
         if sum(pages_of.values()) < 2:
@@ -1159,11 +1463,11 @@ def build_schematic_model(
             # CONN-1 is about. (Defect dominates when both kinds are true.)
             model.duplicate_designators.append(designator)
         elif len(pages_of) > 1:
-            # one placement per page, several pages: a multi-board project
-            # numbering each board's own parts. Recorded with the pages, for
-            # the rule to report as information (040 §WI-3).
+            # one placement per page, several pages of *this board*: one design
+            # drawn across sheets, so the name still resolves to two parts in
+            # one netlist. (Until 040b this bucket also held the cross-board
+            # repeats, which is exactly what it must no longer do.)
             model.cross_page_designators[designator] = sorted(pages_of)
-    return model
 
 
 def net_labels_of(

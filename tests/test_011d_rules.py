@@ -118,9 +118,17 @@ def _golden_like_model(vin_net="+5V", vcc_cap_value="2.2uF") -> DesignModel:
 
 
 def _states(rule, model) -> dict[str, list]:
+    """Outcome states for one model — or, for a project, for **each board** (040b).
+
+    A rule judges one netlist, so on a multi-board project it is run per board and
+    the rows are concatenated; a ref that exists on two boards appears on both,
+    which is what the assertions below want (every placement must be waived).
+    """
+    boards = getattr(model, "boards", None) or [model]
     grouped: dict[str, list] = {state: [] for state in OUTCOME_STATES}
-    for outcome in rule.outcomes(model):
-        grouped[outcome.state].append(outcome)
+    for board_model in boards:
+        for outcome in rule.outcomes(board_model):
+            grouped[outcome.state].append(outcome)
     return grouped
 
 

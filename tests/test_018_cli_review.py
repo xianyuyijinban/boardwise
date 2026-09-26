@@ -367,11 +367,15 @@ def test_the_json_schema_is_the_one_the_harness_reads(tmp_path, capsys):
 
     assert set(payload) == {"summary", "findings"}
     assert payload["summary"] == {"ERROR": 0, "WARN": 0, "INFO": 27}
-    keys = {"rule_id", "severity", "message", "level", "evidence", "target", "refs"}
+    # `board` joined the finding schema in 040b (per-board runs). An `.enet`
+    # input has no boards, so it stays empty here — the key is always present,
+    # which is what a reader can rely on.
+    keys = {"rule_id", "severity", "message", "level", "evidence", "target", "refs", "board"}
     assert payload["findings"], "the fixture must produce findings or this pins nothing"
     for finding in payload["findings"]:
         assert set(finding) == keys
         assert isinstance(finding["refs"], list)
+        assert finding["board"] == "", "an .enet netlist has no boards"
     assert "中文摘要" not in raw, "the Chinese summary belongs to --md only"
 
 

@@ -171,6 +171,7 @@ def test_load_annotations_reads_the_bishe_a_and_b_rulings():
     """
     from pathlib import Path
 
+    from boardwise.core.model import ProjectModel
     from boardwise.core.parts import load_parts
     from boardwise.engines.review_eval import load_board_model
     from boardwise.rules.decap import DecapRequiredCaps
@@ -219,17 +220,24 @@ def test_load_annotations_reads_the_bishe_a_and_b_rulings():
     assert "U7" not in b2.topic and "U6" not in b2.topic
 
     model = load_board_model(aset.source)
-    # 040 §WI-3: the oracle's 30 refs are the designators this model cannot
-    # resolve to one placement. 28 of them repeat once per page (the pages are
-    # three boards); U15 and U16 repeat *within* one page. Both kinds are listed
-    # by `repeated_designators()`, which is the union of the two fields the
-    # parser now fills separately -- asserting on `duplicate_designators` alone
-    # would silently drop 28 records.
+    # 040b: the project is three boards now, so the oracle's 30 refs split by the
+    # board that can see them — 28 names are on more than one board (reported
+    # once, by the first board that carries them) and U15/U16 repeat twice within
+    # one page of Board1. The union is what has to match the records.
+    assert isinstance(model, ProjectModel)
     assert sorted(item.ref for item in duplicates) == model.repeated_designators()
-    assert model.duplicate_designators == ["U15", "U16"], (
+    cross = model.multi_board_designators()
+    assert len(cross) == 28, "28 names are on more than one board"
+    assert cross["C1"] == ["Board1", "Board2", "Board3"]
+    assert cross["R8"] == ["Board1", "Board3"]
+    assert model.board_titles() == ["Board1", "Board2", "Board3"]
+    assert model.boards[0].duplicate_designators == ["U15", "U16"], (
         "the same-page repeats: page 5f0f carries U15 and U16 twice each"
     )
-    assert len(model.cross_page_designators) == 28
+    assert model.boards[0].cross_page_designators == {}, (
+        "Board1's two pages share no designator: 5f0f is the drawn one and "
+        "b0342 is the deleted P2"
+    )
     # The mpn exception refs and the rule's own output must not drift apart.
     # After 015 batch 1 three of the ten records -- R43's shunt and C115/C116's
     # electrolytics, the A2a rulings ("the decoder read the part number
@@ -245,11 +253,31 @@ def test_load_annotations_reads_the_bishe_a_and_b_rulings():
     mpn_exceptions = [i for i in exceptions if i.rule_hint == "param-value-mpn-match"]
     assert len(mpn_exceptions) == 10
     mpn_rule = ValueMpnMatch(library=load_parts("blocklib/parts.json"))
+
+    def outcomes_per_board(rule):
+        """Subject -> outcome, running the rule on each board (040b).
+
+        A ref that exists on two boards must reach the same verdict on both —
+        asserted here rather than silently taking one, because that equality is
+        what makes "one project scope" a reading instead of an assumption.
+        """
+        collected: dict[str, object] = {}
+        for board_model in model.boards:
+            for outcome in rule.outcomes(board_model):
+                seen = collected.get(outcome.subject)
+                if seen is not None:
+                    assert seen.state == outcome.state, (
+                        outcome.subject, seen.state, outcome.state,
+                    )
+                    continue
+                collected[outcome.subject] = outcome
+        return collected
+
     a2a = {"C115", "C116", "R43"}
     a2b = {"U10", "U14", "C28", "C29", "C36", "C42", "C44"}
     assert {item.ref for item in mpn_exceptions} == a2a | a2b
-    outcomes = {o.subject: o for o in mpn_rule.outcomes(model)}
-    assert not [o for o in mpn_rule.outcomes(model) if o.state == "VIOLATION"]
+    outcomes = outcomes_per_board(mpn_rule)
+    assert not [o for o in outcomes.values() if o.state == "VIOLATION"]
     # The three A2a refs are still on the board and still read by the rule:
     # UNKNOWN ("this notation is not EIA"), never a contradiction.
     for ref in a2a:
@@ -261,5 +289,7 @@ def test_load_annotations_reads_the_bishe_a_and_b_rulings():
         assert "015 batch-2" in outcomes[ref].message, ref
     # ... and the same for B1: the defect is the finding the rule reports.
     decap = DecapRequiredCaps(library=load_parts("blocklib/parts.json"))
-    violations = [o for o in decap.outcomes(model) if o.state == "VIOLATION"]
+    violations = [
+        o for o in outcomes_per_board(decap).values() if o.state == "VIOLATION"
+    ]
     assert [o.subject for o in violations] == ["U11 pin5"]
