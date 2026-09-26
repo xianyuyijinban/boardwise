@@ -207,6 +207,13 @@ warn 逐条进 `warning_triage[]`，**把每条的 `verdict` 填成 有益/有�
 - 写动作一律带 `pageUuid`（守卫实测拦下过两次错位写，见坑 1）。
 - 破坏性/外向型操作（删除、推送、发布）先确认再动手；git 变更逐次经岳点头。
 
+**R4 工程文件永不入库（2026-09-26 起，公司板红线）**：真实工程容器
+（`.epro2/.eprj2/.eprj3/.epru/.esch/.epcb`）**一律不 commit**——公司板进公开仓库 =
+设计泄漏，删文件没用，历史里还在。审查产物只进 `outputs/`、`.tmp_*`（均 gitignore）；
+不 harvest 公司板进 blocklib，不做成夹具。机械防线：`tools/check_repo_hygiene.py`
+（pytest `tests/test_repo_hygiene.py` 常跑 + 本机 pre-commit 钩子已装）；新夹具要入库 =
+在同一笔提交里**显式**加 `ALLOWLIST` 路径，那就是评审时刻。
+
 ## 5. bridge 高频动作速查（全表：`docs/bridge.md` §4）
 
 调用形态：`boardwise bridge call --action <名字> --params '<JSON>'`；
