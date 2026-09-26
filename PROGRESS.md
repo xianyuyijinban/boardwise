@@ -51,12 +51,12 @@ collects the current truth and the pointers.
 
 ## Current baseline (2026-09-26, 042 解析器 parentId 双程挂载; published on GitHub)
 
-- pytest: **1757 passed** (run with `--basetemp=.tmp_pt_home` on Windows —
+- pytest: **1762 passed** (run with `--basetemp=.tmp_pt_home` on Windows —
   the host's safe-delete hook otherwise eats the summary line and fakes
   exit 1)
 - connector: **419 pass / 0 fail** (`cd connector && npm test`)
 - `npx tsc --noEmit`: clean
-- connector version: **0.4.23** (`connector/extension.json`)
+- connector version: **0.4.24** (`connector/extension.json`)
 - Verified host: EasyEDA Pro **3.2.186** (the only host the bridge is
   calibrated against; every real-host fact in the task books names it)
 
