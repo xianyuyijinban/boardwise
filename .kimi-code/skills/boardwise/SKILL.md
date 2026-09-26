@@ -323,8 +323,10 @@ typeof 全在位、activate 冷启动正常派发、render 实跑 308KB PNG—�
 - **不动 git**：不 `commit` / `add` / `checkout` / `restore`。任何 git 变更逐次经岳点头。
 - **pytest 必带 `--basetemp=.tmp_pt_home`**：Windows 上否则汇总行被吞、假 exit 1。
   命令：`.venv/Scripts/python.exe -m pytest tests/ -q --basetemp=.tmp_pt_home`。
-- **三线全绿才交卷**：pytest / `cd connector && npm test`（= build + `node --test`）/
-  `npm run typecheck`（= `tsc --noEmit`；以 `connector/package.json` 实际脚本名为准）。
+- **四线全绿才交卷**：pytest / `cd connector && npm test`（= build + `node --test`）/
+  `npm run typecheck`（= `tsc --noEmit`；以 `connector/package.json` 实际脚本名为准）/
+  `cd dsh-plugin && npm run typecheck && npm test && npm run build`（045 起；`npm run smoke`
+  要真 daemon + 夹具，属真机验收不进默认线）。
 - **变异验证 ≥2 个**：改一行源码 → 测试必须红 → 还原后 `sha256` 一致。
   **还原用 `cp` 备份做，禁用 `git checkout --`**（它会拉回 HEAD，把未提交的改动整个冲掉）。
 - **append 落盘后立刻 `grep -c` 独立计数**：出现 2 就是双执行，按偏移截断重写。
