@@ -327,6 +327,10 @@ typeof 全在位、activate 冷启动正常派发、render 实跑 308KB PNG—�
   `npm run typecheck`（= `tsc --noEmit`；以 `connector/package.json` 实际脚本名为准）/
   `cd dsh-plugin && npm run typecheck && npm test && npm run build`（045 起；`npm run smoke`
   要真 daemon + 夹具，属真机验收不进默认线）。
+- **新功能同步 dsh-plugin（045 §7，岳定的长期纪律）**：CLI 命令面变更时检查 dsh-plugin
+  工具面要不要跟（跟=工具+bump+重 pack；不跟在交卷记录写明理由）；release 从 v0.4.26 起
+  带第三附件 boardwise-dsh tgz；市场上架后 registry 版本同步 PR。漂移哨兵
+  `tests/test_dsh_plugin_sync.py` 常跑。
 - **变异验证 ≥2 个**：改一行源码 → 测试必须红 → 还原后 `sha256` 一致。
   **还原用 `cp` 备份做，禁用 `git checkout --`**（它会拉回 HEAD，把未提交的改动整个冲掉）。
 - **append 落盘后立刻 `grep -c` 独立计数**：出现 2 就是双执行，按偏移截断重写。

@@ -81,3 +81,21 @@ dsh-plugin/
 **真机验收（主代理亲手，岳授权）**：官方 `dsh plugin --profile headless add file:…tgz` 装入（dsh.bundle  reconcile 自动进层栈）；`--dump-config` 组合树里 `tool-boardwise` 层在册；headless 单发任务实测两轮——第一轮（无 env）DeepSeek 模型发现工具、调用、收到**设计好的报错**（PATH 上 Python3.14 无 boardwise + "set BOARDWISE_EXE"hint），第二轮 `BOARDWISE_EXE=<仓库venv python>` 返回真 doctor 输出（多窗 `WINDOW_UNSPECIFIED` 按设计列出候选窗口）。**工具注册/发现/执行/错误路径在真 dsh 运行时全链 PASS**。
 
 **遗留**：`BOARDWISE_EXE` 持久化（建议岳的 `Open-DeepSeekHarness.ps1` 加一行 `$env:BOARDWISE_EXE='E:\boardwise\.venv\Scripts\python.exe'`，待岳点头）；web/desktop profile 未装（同一条 add 命令，profile 名换一下）；npm registry 发布照旧不做。
+
+## §7 市场上架（到时候）与同步纪律（岳 2026-09-27 定）
+
+**上架路径**：dsh-market 仓库只是市场**应用**，目录在 curated
+**awesome-dsh-plugin registry**——上架 = 向 registry 提一个 PR（一条目），
+市场与站点一天内自动拾取；别向 dsh-market 本仓 PR 条目。安装源的优先级是
+**npm 验证包 → 作者 GitHub Release 预构建 tarball → 仓库源码**；我们走第二档：
+**release 从 v0.4.26 起带第三附件 `boardwise-dsh-<version>.tgz`**（exe/eext/dsh
+三件套），registry 条目指向 release tarball，不发 npm registry 照旧。
+时机由岳定（朋友验证过后），本任务保持 open 直到上架。
+
+**同步纪律（长期，写进 SKILL 交付纪律）**：每次 boardwise 出新功能——
+1. 落盘时检查 dsh-plugin 工具面要不要跟（新 CLI 命令/新参数该不该暴露成 dsh
+   工具；该就跟，不该在任务书交卷记录里说一句为什么不跟）；
+2. 跟了就要 `dsh-plugin` 版本 bump + `npm pack` 重出 tgz；
+3. release 时三件套一起发；（上架后）registry 条目版本同步 PR。
+机械哨兵：`tests/test_dsh_plugin_sync.py` 钉死"插件 spawn 的每个 CLI 命令名
+必须在 cli.py 存在"（改名/删除方向）；反向（新命令未包装）属评审判断不拦截。
