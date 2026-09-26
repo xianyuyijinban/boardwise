@@ -69,6 +69,7 @@ boardwise checkup --file <导出.epro2> --out <目录>       # 断连兜底：�
 ```
 
 产出（`--out` 目录内）：`report.json`（契约）· `report.md`（人读，同一份内容）·
+`architecture.md`（架构骨架，§3.1b 必须逐槽走）·
 `canvas-<页名>.png`（每张原理图页一张，PCB 页不出图）。
 
 - **退出码**：`0` 无 ERROR / `1` 有 ERROR（主机 ERC fatalError/error、主机 PCB DRC 逐条、
@@ -81,7 +82,7 @@ boardwise checkup --file <导出.epro2> --out <目录>       # 断连兜底：�
 - 只读：`doc.open` 只切焦点、`userInterface` 恒 false（不弹底部面板），每个阶段 `finally`
   把焦点复位。旧版 connector 缺某个动作时报告会记 `note` 并降级，不会瞎报。
 
-**审查三步与 AI 槽位（报告 schema /3：`ai_slots` 加三个一等节就是清单，逐条做完再答用户）**：
+**审查三步与 AI 槽位（报告 schema /4：`ai_slots` 加四个一等节就是清单，逐条做完再答用户）**：
 
 ① **ERC 先行**：主机 ERC/DRC 读数在 `drc` 段——error 已在报告头部错误段，先解决；
 warn 逐条进 `warning_triage[]`，**把每条的 `verdict` 填成 有益/有害/无害、`reason` 写理由**。
@@ -114,6 +115,28 @@ warn 逐条进 `warning_triage[]`，**把每条的 `verdict` 填成 有益/有�
 **不要重算工具已经算过的东西**：DRC 计数与 PCB 逐条在 `drc` 段、模块划分在 `modules` 段、
 规则 findings 在 `findings` 段（`summary` 里的 `ref` 指回它们）。模型只补四件事：
 **填警告分诊、查不熟的器件、看画布、写总结**。总结写完把 `report.md`（含图）交用户。
+
+### 3.1b 架构走查（044 起的强制环节，不是可选阅读）
+
+checkup 每次都会在 `--out` 里写 `architecture.md`（`report.json` 的 `architecture` 节是它的计数
+摘要：几轨/几条模拟链/控制链/总线类、欠多少 TODO 槽；生成不了时该键缺席）。**出报告后必须打开它
+逐槽走一遍**——044 的动机就是 ROBOT 板盲审漏掉"FOC 采样无偏置"：器件级规则全对，链级意图没人推。
+单点跑同一份骨架用 `boardwise arch <工程文件> [--out <path>]`。
+
+- **逐槽填 `TODO` 或显式写"不适用"**，一个槽都不许空着走：槽位键是固定英文
+  （`quantity`/`range`/`polarity`/`reference`/`gainStage`/`filter`/`sourceImpedance`/
+  `endpointConsistency`/`completeness`…），每条链、每张轨各一组。**填不出来不许猜。**
+- **设计意图槽位（`targetVoltage`/`continuousCurrent`/`peakCurrent`/`operatingCases`）
+  填不了就显式问工程师**：这些数只在他脑中，图自身可以完全自洽（044 §6）。答一次就把答案
+  留在 `architecture.md` 里，**以后 finding 以它为尺**；需求变了改这里（活文档）。
+- **对每条链做目的论走查**：这条链是干什么的 → 端到端能闭合吗。骨架里
+  `- evidence: 邻接 R4→GND` 这类行就是为这一步准备的（成员两端各接什么，工具照抄，判断是你的）。
+- **不自洽的槽位写进最终结论，并与规则引擎 finding 分开计数**：`summary` 里的 ERROR/WARN 是
+  规则引擎的；架构走查的发现单独成段，写明"架构走查 · 链 `<网名>` · 槽位 `<key>`"，
+  别让读者以为是规则报的。
+- 网名与端点复用功能（`endpointConsistency`）是同一类走查的机械入口：网名说它是什么功能、
+  端点引脚说它是什么功能，两者对不上就是问题（TIM1 案的形态）。跨板链在单板模型里看不到，
+  骨架会写明"控制器候选：无"，那种板以别处的控制器为准。
 
 ### 3.2 断连兜底与单点命令
 

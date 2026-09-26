@@ -153,7 +153,9 @@ def test_the_promoted_section_keeps_the_v2_slot_name(capsys, tmp_path, monkeypat
     capsys.readouterr()
     assert code == 0
     report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
-    assert report["schema"] == "boardwise.checkup/3"
+    # 044 M1 bumped the schema to /4 (the architecture section); the /3 sections
+    # this test is about are unchanged, which is the compatibility claim.
+    assert report["schema"] == "boardwise.checkup/4"
     assert report["ai_slots"]["unknown_parts"] == report["unreviewed_parts"]
     assert report["unreviewed_parts"], "this board has parts with no MPN"
     old_fields = {"designator", "name", "value", "footprint", "mpn", "supplier",
