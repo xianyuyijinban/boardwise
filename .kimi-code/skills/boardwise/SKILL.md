@@ -214,6 +214,12 @@ warn 逐条进 `warning_triage[]`，**把每条的 `verdict` 填成 有益/有�
 （pytest `tests/test_repo_hygiene.py` 常跑 + 本机 pre-commit 钩子已装）；新夹具要入库 =
 在同一笔提交里**显式**加 `ALLOWLIST` 路径，那就是评审时刻。
 
+**R4b 公司板命名规范（2026-09-26 起）**：公司板在**一切公开产物**——commit 信息、
+任务书、issue、release notes、文档、测试名——只用 `PCB1`/`PCB2`/`PCB3`… 匿名代号；
+产品名、应用场景、客户、关键型号（能反推出产品的芯片/方案组合）**零出现**。方法论
+数字可以留（如"5A 级控制器 vs 2.62A 电感"是教训本体），能定位到"是谁的板"的信息
+一律抹掉。提交前 `grep -rli` 自查一遍。
+
 ## 5. bridge 高频动作速查（全表：`docs/bridge.md` §4）
 
 调用形态：`boardwise bridge call --action <名字> --params '<JSON>'`；
