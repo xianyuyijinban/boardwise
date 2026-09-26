@@ -13,9 +13,10 @@
    ```bash
    .venv/Scripts/python.exe -m pytest tests/ -q --basetemp=.tmp_pt_home
    cd connector && npm test && npm run typecheck
+   cd dsh-plugin && npm run typecheck && npm test && npm run build
    ```
 
-   三线（pytest / connector / tsc）全绿才交卷。
+   四线（pytest / connector / dsh-plugin / tsc）全绿才交卷。
 3. **真机只碰 `test` / `test2`**：动手前先 `boardwise bridge status`（daemon 会自行死亡），
    `doc.list` 报的焦点工程名与任务书**逐字一致**才算对上身份。**禁地**：毕设FOC驱动板、
    `CH340G.eprj2`、`ROBOT ctrl FOC.eprj2`，以及一切真实工程；任务书没点名 = 不许写。
