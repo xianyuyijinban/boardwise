@@ -1355,6 +1355,40 @@ def build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true", help="Print the machine-readable report.",
     )
 
+    arch = sub.add_parser(
+        "arch",
+        help=(
+            "Offline: the architecture skeleton for an export (task 044 M1) — "
+            "power tree / analog chains / control chains / buses / intent slots, "
+            "every judgement a tool cannot make left as a TODO slot."
+        ),
+        description=(
+            "Generate the architecture skeleton an AI must walk and fill (task 044). "
+            "It is a skeleton and nothing more: the tool lists the chains it can see "
+            "in the netlist, writes one block of fixed-key slots per chain, and "
+            "leaves every question it cannot answer (a rail's source, a chain's "
+            "polarity / reference / gain, any design-intent number) as `TODO`. "
+            "Deterministic: the same model produces byte-identical markdown, so the "
+            "artifact can be diffed and kept as a living document. Offline: no "
+            "editor, no daemon, no network. A multi-board project is walked per "
+            "board (checkup's own rule) and prints one section block per board. "
+            "Exit 0 generated / 2 the input cannot be used."
+        ),
+    )
+    arch.add_argument("file", help="The .epro2 / .enet export to read (read-only).")
+    arch.add_argument(
+        "--out", default=None,
+        help="Write the markdown here instead of stdout (created if missing).",
+    )
+    arch.add_argument(
+        "--library", default=None,
+        help=(
+            "The curated shelf, for the two pieces of evidence it adds: the "
+            "`ic.mcu` classification and its regulators' output voltages "
+            "(default blocklib/parts.json)."
+        ),
+    )
+
     settings = sub.add_parser(
         "config",
         help=(
@@ -2058,7 +2092,13 @@ def _cmd_review(args: argparse.Namespace) -> int:
 #: **only when the aesthetics switch is on** — a `/2` reader that iterates the
 #: top-level sections still finds everything it knew, plus one alias
 #: (`ai_slots.unknown_parts` is the same list as `unreviewed_parts`).
-CHECKUP_SCHEMA = "boardwise.checkup/3"
+#:
+#: `/4` since 044 M1: the report carries an `architecture` section — the count
+#: summary of the architecture skeleton written beside it as `architecture.md`
+#: (chains, rails, the fixed slot vocabulary, and what is still `TODO`). Like
+#: `layout_review` it is **absent** rather than empty when it could not be
+#: generated, so "no skeleton" and "a skeleton with nothing in it" stay apart.
+CHECKUP_SCHEMA = "boardwise.checkup/4"
 
 #: What each tier actually read, spelled for the report's own header.
 #:
@@ -2101,6 +2141,7 @@ def _checkup_report(
     unreviewed_parts: list[dict] | None = None,
     warning_triage: list[dict] | None = None,
     layout_review: dict | None = None,
+    architecture: dict | None = None,
 ) -> dict:
     """Assemble the report: what was read (batch 2), what was found (batch 3),
     what it means and what the model still has to do (batch 4).
@@ -2110,6 +2151,11 @@ def _checkup_report(
     `layout_review` (the aesthetics switch, **absent** when off) — and bumped the
     schema to `/3`. The v2 slot name `ai_slots.unknown_parts` is kept as an alias
     of the first one, so a reader written against `/2` keeps working.
+
+    044 M1 added `architecture` (the count summary of the `architecture.md`
+    skeleton written beside the report) and bumped the schema to `/4`. It follows
+    `layout_review`'s rule exactly: **absent, not empty**, when the skeleton could
+    not be generated.
 
     Every section is real by now. `pending` is kept as an **empty** object rather
     than removed: a consumer that learned to read it finds "nothing owed" instead
@@ -2140,6 +2186,10 @@ def _checkup_report(
     # scored anything yet" are two different states of the report (039 批② §WI-3).
     if layout_review is not None:
         body["layout_review"] = layout_review
+    # Same rule for the architecture skeleton (044 M1): a report with no skeleton
+    # says nothing here rather than carrying an empty one.
+    if architecture is not None:
+        body["architecture"] = architecture
     return body
 
 
@@ -2148,6 +2198,22 @@ def _write_checkup_report(out_dir: Path, report: dict) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "report.json"
     path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def _write_architecture(out_dir: Path, markdown: str) -> Path:
+    """Write ``architecture.md`` beside the report (044 M1).
+
+    A file rather than a report section, because the artifact is meant to be
+    walked, annotated and **diffed** by a human (and kept as the living record of
+    the design's intent). ``report.json`` carries the count summary and points
+    here with its `file` key.
+    """
+    from .core.architecture import ARCH_FILE_NAME
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / ARCH_FILE_NAME
+    path.write_text(markdown, encoding="utf-8")
     return path
 
 
@@ -2776,6 +2842,16 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         summary["conclusion"] = verdict
 
     triage = warning_triage_slots(model=model, drc=drc, findings=findings, modules=modules)
+    # 044 M1: the architecture skeleton — generated here (before the report is
+    # assembled) because the report carries its count summary. "Cannot generate"
+    # is a note and an **absent** key, never an empty section.
+    from .core.architecture import generate_architecture
+
+    architecture = None
+    try:
+        architecture = generate_architecture(model, library=shelf)
+    except Exception as exc:  # noqa: BLE001 - a report must still be written
+        notes.append(f"架构骨架生成失败（{type(exc).__name__}: {exc}）：report.json 无 architecture 键")
     aesthetics_on, aesthetics_source = _checkup_aesthetics(args)
     slots = {
         # The v2 name kept as an alias of the promoted section: same list, one
@@ -2810,9 +2886,15 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
             if aesthetics_on
             else None
         ),
+        architecture=(architecture.section if architecture is not None else None),
     )
     report_path = _write_checkup_report(out_dir, report)
     report_md_path = _write_checkup_markdown(out_dir, report)
+    architecture_path = (
+        _write_architecture(out_dir, architecture.markdown)
+        if architecture is not None
+        else None
+    )
 
     print(
         f"  model: {report['model']['components']} components, {report['model']['nets']} nets "
@@ -2874,7 +2956,17 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
           + "，summary_template 已留槽")
     print(f"  report: {report_path}")
     print(f"  report.md: {report_md_path}")
+    if architecture_path is not None and architecture is not None:
+        totals = architecture.section["totals"]
+        print(f"  architecture: {architecture_path}")
+        print(
+            f"    {len(architecture.section['boards'])} 板 / {totals['rails']} 轨 / "
+            f"{totals['analogChains']} 模拟链 / {totals['controlChains']} 控制链 / "
+            f"{totals['buses']} 总线类；TODO 槽位 {totals['todoSlots']}（AI 逐槽填，见 SKILL 架构走查）"
+        )
     print("  pending: none（批 4 已把 modules / ai_slots / report.md / 画布图补齐）")
+    if architecture is None:
+        print("  note: 架构骨架未生成（见 notes）——report.json 里没有 architecture 键")
     if summary["warnings"]:
         # 末尾「提醒」段：warn 不决定退出码，但决定读者下一步看哪儿。
         print(f"  reminder: {summary['warnCount']} warning(s)")
@@ -5709,6 +5801,68 @@ def _cmd_parts_fetch(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 # config (039 批② WI-3): the user-level settings file
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# architecture skeleton (task 044 M1)
+# ---------------------------------------------------------------------------
+
+
+def _architecture_shelf_evidence(args: argparse.Namespace):
+    """``(library | None, note)`` for the architecture generator.
+
+    Reuses the checkup shelf loader, so "which shelf" has one answer for both
+    commands. The generator treats a shelf it cannot read as *absent evidence*
+    (more TODOs), never as an empty shelf — and the note says which it was.
+    """
+    from boardwise.core.parts import PartError, load_parts
+    from boardwise.rules.facts import DEFAULT_LIBRARY_PATH
+
+    path = getattr(args, "library", None) or DEFAULT_LIBRARY_PATH
+    try:
+        return load_parts(path), ""
+    except PartError as exc:
+        return None, f"货架 {path} 读不了（{exc}）：架构骨架按「没有货架证据」生成"
+
+
+def _cmd_arch(args: argparse.Namespace) -> int:
+    """``boardwise arch`` — the architecture skeleton, offline and deterministic.
+
+    The model comes from the same offline loader `checkup --file` uses, so the
+    two commands can never disagree about what the board is. A multi-board project
+    is walked **per board** (the project is not one welded netlist) and prints one
+    section block per board. Exit 0 generated / 2 the input cannot be used.
+    """
+    from boardwise.core.architecture import generate_architecture
+
+    path = Path(args.file)
+    try:
+        model, _board = _load_model(path, view=CHECKUP_VIEW)
+    except EncryptedProjectError as exc:
+        print(f"boardwise arch: {exc}", file=sys.stderr)
+        return 2
+    except ValueError as exc:
+        print(f"boardwise arch: {path}: {exc}", file=sys.stderr)
+        return 2
+
+    library, note = _architecture_shelf_evidence(args)
+    if note:
+        print(f"note: {note}", file=sys.stderr)
+    result = generate_architecture(model, library=library)
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(result.markdown, encoding="utf-8")
+        totals = result.section["totals"]
+        print(f"architecture: {out_path}")
+        print(
+            f"  {len(result.section['boards'])} 板 / {totals['rails']} 轨 / "
+            f"{totals['analogChains']} 模拟链 / {totals['controlChains']} 控制链 / "
+            f"{totals['buses']} 总线类；TODO 槽位 {totals['todoSlots']}"
+        )
+    else:
+        print(result.markdown, end="")
+    return 0
 
 
 def _cmd_config_get(args: argparse.Namespace) -> int:
@@ -14179,6 +14333,8 @@ def main(argv: list[str] | None = None) -> int:
         return PINTABLE_COMMANDS[args.pintable_command](args)
     if args.command == "validate":
         return _cmd_validate(args)
+    if args.command == "arch":
+        return _cmd_arch(args)
     if args.command == "bridge":
         return BRIDGE_COMMANDS[args.bridge_command](args)
     return 2  # unreachable: subparsers are required

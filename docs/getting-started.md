@@ -237,8 +237,9 @@ boardwise checkup --out checkup
 
 它自己做完这些事：把焦点工程整份抓下来（抓不到就逐页抓、再不行只读网表——报告里会写它用了哪一级），
 跑编辑器的 ERC 与 PCB DRC，跑 boardwise 的规则，把器件按页或按连通性分成模块，
-给每张原理图页出一张 PNG，最后写出 `checkup/report.json`（机器读）、`checkup/report.md`（人读）
-和 `checkup/canvas-*.png`（画布图）。
+给每张原理图页出一张 PNG，写出 `checkup/report.json`（机器读）、`checkup/report.md`（人读）、
+`checkup/architecture.md`（架构骨架：电源树/模拟链/控制链/总线表 + 设计意图槽位，判不出来的
+都留 `TODO`）和 `checkup/canvas-*.png`（画布图）。
 
 预期：终端先打一行结论（ERROR 几条），再打模块、槽位和两份报告的路径。
 退出码 `1` 表示**发现了** ERROR（不是命令失败）、`0` 表示没有、`2` 表示参数/文件不可用、
@@ -249,6 +250,8 @@ boardwise checkup --out checkup
 只会说"DRC/连接性已审，N 颗器件缺手册未审"）、`warning_triage`（每条警告一格，`verdict` 填
 有益/有害/无害 + 理由）、`canvas_images`（要看的画布图）、`summary_template`（总结模板）。
 `ai_slots.unknown_parts` 是 `unreviewed_parts` 的旧名字，内容同一份。
+报告还会带一个 `architecture` 节（`architecture.md` 的计数摘要）；那一份骨架要**逐槽走一遍**，
+填不了的设计意图显式问工程师——单个工程想单独出骨架：`boardwise arch path/to/board.epro2`。
 
 想要**布局审美评分**（拓扑可辨 / 流向明确 / 文字可读 / 分组合理 / 网络标识规范，五轴各 1–5 分）
 就打开开关——默认关，因为它要求驱动模型有视觉能力：
