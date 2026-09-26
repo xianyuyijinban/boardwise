@@ -120,6 +120,12 @@ class _Instance:
     is_mirror: bool
     z_index: Any = None
     attrs: dict[str, str] = field(default_factory=dict)
+    #: The ``id`` of the ``COMPONENT`` record this placement was read from.
+    #: It is what an attribute's ``parentId`` names when it belongs to this
+    #: instance, and it is the only way to file an attribute that the editor
+    #: wrote far away from its component (042 §WI-1) — "ATTR follows
+    #: COMPONENT" is not a property of an incrementally saved document.
+    record_id: str = ""
     #: The common ``parentId`` of the trailing attributes — the instance's
     #: container id in the original document. ``NO_CONNECT`` references pins
     #: through it (``"<container>-e<pin element id>"``).
@@ -460,6 +466,13 @@ def _collect_device_meta(records: list[Any]) -> dict[str, dict[str, str]]:
     The META is per-DEVICE, not per-instance, so two placements of the same
     device share one entry; the join key is the instance's ``Device`` attr
     (a DEVICE document uuid, confirmed 28/28 on the golden board in 005).
+
+    ``is_part`` is 042 §WI-2's addition: ``"yes"`` when the library device
+    declares a ``Designator`` template, ``"no"`` for a power symbol, a net flag
+    or the page frame. It is the only fact in the record stream that says "this
+    placement is supposed to have a name", which is what lets a parse say how
+    many placements it could **not** name instead of silently dropping them
+    (see :class:`boardwise.core.geometry.ParseStats`).
     """
     out: dict[str, dict[str, str]] = {}
     uuid = ""
@@ -489,8 +502,56 @@ def _collect_device_meta(records: list[Any]) -> dict[str, dict[str, str]]:
             symbol = str(attributes.get("Symbol") or "").strip()
             if symbol and symbol != "null":
                 meta["symbol"] = symbol
+            # Whether the *library* device is a part or a symbol (042 §WI-2):
+            # a real part's META declares the designator it will be assigned
+            # (``"R?"``/``"U?"``) and its ``Convert to PCB``/``Add into BOM``
+            # flags, while a power symbol, a net flag and the page frame carry
+            # only Symbol/Name/Description. Measured on all eight fixtures
+            # (2026-09-26): every instance that ends up with no designator is
+            # either the frame or a device with ``is_part == "no"``, and
+            # ``llc_board.epro2``'s ``DC+`` flag is the case that defeats the
+            # alternative title convention (``Ground-GND``/``Power-5V``) —
+            # its title has no hyphen and both its ``Global Net Name`` and
+            # ``Name`` attributes are empty strings.
+            meta["is_part"] = "yes" if str(attributes.get("Designator") or "").strip() else "no"
         out[uuid] = meta
     return out
+
+
+def _looks_like_a_nameless_part(
+    inst: Any, device_meta: dict[str, dict[str, str]]
+) -> bool:
+    """Was this placement supposed to have a designator and did not get one?
+
+    Called only for instances that arrive at the parts pass with no usable
+    designator, and answers whether that is *expected*. ``False`` covers the
+    three kinds of placement that legitimately have none:
+
+    * the title-block frame (``zIndex`` absent) — a page, not a placement;
+    * a power symbol or net flag — the library DEVICE declares no
+      ``Designator`` template, and its ``Global Net Name``/``Name`` names the
+      net it stands for;
+    * the same when the DEVICE document is not in the file at all, judged by
+      those two attributes instead.
+
+    Everything else is a part the parse could not name, which is what
+    042 §WI-2 counts. A missing DEVICE document counts as "unexplained" on
+    purpose — "no library document" is not evidence of "not a part", and
+    assuming it is would reproduce the silence being fixed. Measured
+    2026-09-26 on all eight fixtures: 0 on the golden, llc, 药箱, 毕设 and
+    synthetic eprj3 boards; 5 on ``robot_live.epro2`` and 67 on the 高速板
+    **before** :func:`_split_page` filed the displaced attribute blocks — the
+    parts the model was missing, to the count — and 0 on all eight after.
+    """
+    if inst.z_index is None:
+        return False
+    meta = device_meta.get((inst.attrs.get("Device") or "").strip())
+    if meta is not None:
+        return meta.get("is_part") == "yes"
+    return not (
+        (inst.attrs.get("Global Net Name") or "").strip()
+        or (inst.attrs.get("Name") or "").strip()
+    )
 
 
 def _symbol_uuid_of(inst: Any, device_meta: dict[str, dict[str, str]]) -> str:
@@ -603,18 +664,57 @@ def _wire_head_groups(records: list[Any]) -> set[str]:
     return groups
 
 
-def _split_page(records: list[Any]) -> _PageSplit:
+def _split_page(records: list[Any], parse_stats: ParseStats | None = None) -> _PageSplit:
     """Group page records into component instances, loose ATTRs, wire segments.
 
     A ``COMPONENT`` record owns the ATTR records that immediately follow it —
-    except the page-level kinds whose ``parentId`` points elsewhere (``NET``
-    labels point at a ``lineGroup``, ``NO_CONNECT`` at a symbol pin, a
-    standalone ``Global Net Name`` at a flag uuid). Those are collected as
-    *loose* attributes so they can be resolved page-wide.
+    and, when they are not there, the ones that **name its record id**. The
+    second half is 042 §WI-1, and it is not a refinement: EasyEDA Pro's
+    incremental save inserts a changed ``COMPONENT`` back at its old ``ticket``
+    position while its ATTRs are appended to the end of the document, so
+    "ATTR follows COMPONENT" is a property of untouched parts only. Measured
+    2026-09-26 on ``robot_live.epro2``: R4 / U8 / USB1 / SWD were read with no
+    attributes at all (and with them C11, the 0603 capacitor whose own block
+    was displaced, so the parse gave *its* designator to the component that had
+    been drawn next to the block) — six parts mis-read on one page, silently,
+    because a component with no Designator is simply not a part downstream.
+
+    One ATTR is filed in this order:
+
+    1. ``NET`` / ``NO_CONNECT`` — page-level, always loose: their ``parentId``
+       is a wire group or a symbol pin, never a component.
+    2. the **page frame** and ``Global Net Name`` — also page-level. The frame
+       is the one ``COMPONENT`` with no ``zIndex`` (the same marker
+       :func:`_fill_board_model` and :func:`collect_page_layout` use for "this
+       is the page, not a placement"), and the attributes it names are the
+       page's own metadata (``Width``/``Height``/``Page Size``/``@Page Name``).
+       They stay in the loose list, which is where :func:`collect_page_layout`
+       reads ``sheet_attrs`` from — attaching them would move a page's
+       geometry onto an instance and change that reading for no gain (measured:
+       it does, on the 高速板, whose two frames declare 1655x1170 and
+       1170x825). ``Global Net Name`` keeps the rule it always had: loose
+       unless the instance it follows claims it, because its ``parentId`` is a
+       *library* template id (shared by every GND flag) or a container id.
+    3. the record id its ``parentId`` names, when that id is a ``COMPONENT``
+       drawn on the **same page** — the 042 half.
+    4. the instance it follows, exactly as before.
+
+    Step 4 is what leaves documents that do not parent ATTRs to components
+    alone: the synthetic ``eprj3`` page (``tests/fixtures/eprj3_synth``)
+    parents every ATTR to something else, and on the untouched parts of all
+    eight real fixtures steps 3 and 4 agree — 042's regression tests assert that
+    agreement on the fixture set rather than assuming it.
+
+    ``parse_stats`` (task 042 §WI-1) counts the attributes that only step 3
+    could place. It is optional so the four other callers keep their behaviour;
+    :func:`build_project_model` is the one that passes it.
 
     Every instance and every loose attribute carries the ``SCH_PAGE`` it came
     from: a page is a coordinate system, and a multi-board project's pages are
     different boards, so nothing here may be pooled across them (040 §WI-1).
+    The record-id index is page-checked for the same reason — a displaced
+    block must not be moved onto another board by a parentId that matches its
+    uuid there.
     """
     split = _PageSplit()
     split.wire_groups = _wire_head_groups(records)
@@ -623,7 +723,39 @@ def _split_page(records: list[Any]) -> _PageSplit:
     segments = split.segments
     page = ""
 
+    # --- pass 1: every COMPONENT, so pass 2 can resolve a record id in either
+    # direction. (The incremental save writes a displaced block *after* its
+    # component as measured, but nothing in the format promises that, and a
+    # lookup that only worked backwards would be a second silent drop.)
+    for record in records:
+        body = record.body
+        if record.type == "DOCHEAD":
+            if body is not None and body.get("docType") == "SCH_PAGE":
+                page = str(body.get("uuid") or "")
+            continue
+        if record.type != "COMPONENT" or body is None:
+            continue
+        instance = _Instance(
+            part_id=str(body.get("partId") or ""),
+            x=float(body.get("x") or 0),
+            y=_page_y(body.get("y")),
+            rotation=float(body.get("rotation") or 0),
+            is_mirror=bool(body.get("isMirror") or False),
+            z_index=body.get("zIndex"),
+            record_id=str(record.id or ""),
+            page=page,
+        )
+        instances.append(instance)
+
+    by_record_id: dict[str, _Instance] = {}
+    for instance in instances:
+        if instance.record_id:
+            by_record_id.setdefault(instance.record_id, instance)
+
+    # --- pass 2: the walk itself, unchanged except for step 3 above.
+    page = ""
     current: _Instance | None = None
+    next_instance = 0
 
     def owned_by_instance(attr: dict[str, Any]) -> bool:
         parent = attr.get("parentId")
@@ -667,26 +799,40 @@ def _split_page(records: list[Any]) -> _PageSplit:
             current = None
             continue
         if record.type == "COMPONENT":
-            current = _Instance(
-                part_id=str(body.get("partId") or ""),
-                x=float(body.get("x") or 0),
-                y=_page_y(body.get("y")),
-                rotation=float(body.get("rotation") or 0),
-                is_mirror=bool(body.get("isMirror") or False),
-                z_index=body.get("zIndex"),
-                page=page,
-            )
-            instances.append(current)
+            current = instances[next_instance]  # pass 1 appended it in this order
+            next_instance += 1
             continue
         if record.type == "ATTR":
-            if current is not None and owned_by_instance(body):
-                value = body.get("value")
-                key = str(body.get("key"))
-                current.attrs[key] = "" if value is None else str(value)
-                if not current.container_id and body.get("parentId"):
-                    current.container_id = str(body.get("parentId"))
+            key = str(body.get("key"))
+            named: _Instance | None = None
+            if key not in ("NET", "NO_CONNECT", "Global Net Name"):
+                candidate = by_record_id.get(str(body.get("parentId") or ""))
+                if (
+                    candidate is not None
+                    and candidate.page == page
+                    and candidate.z_index is not None
+                ):
+                    named = candidate
+            if named is not None:
+                owner = named
+            elif current is not None and owned_by_instance(body):
+                owner = current
             else:
                 loose.append(_LooseAttr(page=page, body=body))
+                continue
+            value = body.get("value")
+            owner.attrs[key] = "" if value is None else str(value)
+            # The container id is the common parentId of the instance's own
+            # ATTRs, and ``NO_CONNECT`` addresses a pin through it
+            # (``"<container>-e<pin element id>"``). A rescued instance had no
+            # attributes to take one from, so its first one must supply it.
+            if not owner.container_id and body.get("parentId"):
+                owner.container_id = str(body.get("parentId"))
+            if parse_stats is not None and owner is not current:
+                # Filed by the record id it names, not by its neighbour: this
+                # is the only count that says "the document was edited, so
+                # adjacency was not enough".
+                parse_stats.attrs_attached_by_parent_id += 1
             continue
         if record.type == "ELE_PLACEHOLDER":
             # A placeholder is part of the element it precedes — it must NOT
@@ -1123,7 +1269,7 @@ def build_project_model(
     stats = _stats_for(parse_stats, path, meta)
     records = _iter_schematic_records(text, stats)
 
-    split = _split_page(records)
+    split = _split_page(records, stats)
     symbols = _collect_symbols(records, stats, pin_key=_pin_key_for(meta))
     device_meta = _collect_device_meta(records)
 
@@ -1232,7 +1378,15 @@ def _fill_board_model(
     for inst in instances:
         designator = (inst.attrs.get("Designator") or "").strip()
         if not designator or designator.endswith("?"):
-            continue  # power symbols and the title-block frame are not parts
+            # Power symbols and the title-block frame are not parts — but a
+            # placement the *library* says is a part has to be reported when it
+            # arrives here nameless, because that is exactly how 042's five
+            # lost parts (and the 高速板's 67) were being dropped: no
+            # designator, so no component, so nothing in the model and nothing
+            # in the report (042 §WI-2).
+            if _looks_like_a_nameless_part(inst, device_meta):
+                stats.instances_without_designator += 1
+            continue
         # 013: instance-first symbol uuid, DEVICE META as the fallback for
         # early-placed parts whose instance ATTR never carried one. Pin-less
         # components were the symptom: without the symbol document the pins
@@ -1565,7 +1719,8 @@ class PageLayout:
     wires: list[WireRun] = field(default_factory=list)
     labels: list[NetLabelAnchor] = field(default_factory=list)
     #: The sheet symbol's own declared geometry (``Width``/``Height``/
-    #: ``Border``/``Title Block Position``/... , as strings).
+    #: ``Border``/``Title Block Position``/... , as strings). Read from the page
+    #: frame's own attributes since 042 — see :func:`collect_page_layout`.
     sheet_attrs: dict[str, str] = field(default_factory=dict)
     #: The sheet element's anchor, file coordinates.
     sheet_origin: Point = (0.0, 0.0)
@@ -1658,6 +1813,18 @@ def _flag_kind(net: str, title: str) -> str:
     return "Power"
 
 
+#: The ATTR keys that describe the *sheet* rather than a part — page size, the
+#: border, the title-block box, the drawing regions. They stay page-level in
+#: ``_split_page`` (see step 2 there), which is why this reader still takes them
+#: from the loose list: the page frame is the page, and pooling its geometry is
+#: what ``sheet_attrs`` has always meant.
+_SHEET_ATTR_KEYS: tuple[str, ...] = (
+    "Width", "Height", "Border", "Size", "Page Size", "Blade Width",
+    "Title Block", "Title Block Position", "Region Start",
+    "X Region Count", "Y Region Count",
+)
+
+
 def collect_page_layout(path: str | Path) -> PageLayout:
     """Extract the golden page's *layout* (replay input) — task 006b.
 
@@ -1666,6 +1833,12 @@ def collect_page_layout(path: str | Path) -> PageLayout:
     positions and orientations, wire polylines, and the anchors of the
     *visible* net labels. Coordinates stay in **file** space; the replay
     generator owns the file->canvas conversion.
+
+    A flag's or a part's *identity* comes from the instance's own attributes,
+    which is why 042's parentId rule shows up here as data and not as code: an
+    instance whose attribute block was displaced now carries its
+    ``Designator``/``Symbol``, so this reader sees the same parts the
+    connectivity pass does instead of nameless orphans.
     """
     text, meta = load_epru_text(Path(path))
     stats = ParseStats(source=str(path), editor_version=meta.get("editorVersion"))
@@ -1760,9 +1933,7 @@ def collect_page_layout(path: str | Path) -> PageLayout:
     # --- the sheet's declared geometry (A4 / 1170 x 825 / border / ...)
     for body in loose:
         key = str(body.get("key") or "")
-        if key in ("Width", "Height", "Border", "Size", "Page Size", "Blade Width",
-                   "Title Block", "Title Block Position", "Region Start",
-                   "X Region Count", "Y Region Count"):
+        if key in _SHEET_ATTR_KEYS:
             value = body.get("value")
             if value is not None:
                 layout.sheet_attrs[key] = str(value)

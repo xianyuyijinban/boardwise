@@ -446,6 +446,17 @@ class ParseStats:
     not resolve (so it contributes no pins). ``schematic.py``'s
     ``_collect_symbols`` and the symbol lookups in ``build_schematic_model`` /
     ``build_pin_offsets`` are the only writers.
+
+    Task 042 §WI-1 adds two more, and they answer two different questions about
+    the same walk. ``attrs_attached_by_parent_id`` says **how the attributes
+    arrived**: a count of the ones filed by the record id they name rather than
+    by the component they follow, which is non-zero exactly when the document
+    has been incrementally saved (see ``schematic._split_page``).
+    ``instances_without_designator`` says **what is still unnamed**: a placed
+    component that the library device says is a part, that carries no usable
+    designator, and that is neither the page frame nor a net flag. Before 042
+    that number was 5 on ``robot_live.epro2`` and 67 on the 高速板, and nothing
+    reported it — the parts simply were not in the model.
     """
 
     source: str = ""
@@ -466,6 +477,15 @@ class ParseStats:
     #: Components (and net-naming power flags) whose symbol document did not
     #: resolve, so they were modelled with no pins at all.
     components_without_symbol: int = 0
+    #: ATTRs filed by the record id they name rather than by the component they
+    #: follow — the count of what only the parentId rule could place (task 042
+    #: §WI-1). Never counted for the page-level kinds (``NET`` /
+    #: ``NO_CONNECT`` / ``Global Net Name``), whose parentId is not a component.
+    attrs_attached_by_parent_id: int = 0
+    #: Placed components the library calls a part that ended up with no
+    #: usable designator, so the model drops them. Excludes the page frame
+    #: and the net flags, which have no designator by design (task 042 §WI-2).
+    instances_without_designator: int = 0
     edit_version: str | None = None
     editor_version: str | None = None
 
@@ -484,6 +504,8 @@ class ParseStats:
             "malformed_records": self.malformed_records,
             "pins_dropped_no_number": self.pins_dropped_no_number,
             "components_without_symbol": self.components_without_symbol,
+            "attrs_attached_by_parent_id": self.attrs_attached_by_parent_id,
+            "instances_without_designator": self.instances_without_designator,
             "edit_version": self.edit_version,
             "editor_version": self.editor_version,
         }

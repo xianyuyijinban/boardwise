@@ -81,6 +81,8 @@ async def collect_footprint_names(
     *,
     client: object = None,
     corrections: LibraryCorrections | None = None,
+    target_project: str | None = None,
+    target_instance: str | None = None,
 ) -> tuple[dict[tuple[str, str], str], list[str]]:
     """Ask the library what each device's footprint is called — by device.
 
@@ -100,8 +102,27 @@ async def collect_footprint_names(
     One chain per distinct device uuid pair (not per entry, not per board), and
     a failure is per device: it is reported and that entry stays unverified.
     ``client`` is injectable so the whole path can be driven by a stub.
+
+    ``target_project`` / ``target_instance`` are the **window hint** the daemon
+    routes by (023), and they are not optional in practice: with more than one
+    editor window connected the daemon refuses a request that names no project —
+    measured 2026-09-26, ``4 editor windows are connected and the request named
+    no project`` for every one of the 87 devices, which left ``--verify``
+    answering about **0** devices. The hint rides each *frame*, not the
+    connection, so it has to be forwarded per call rather than set once on the
+    client. A library lookup does not depend on the project; any window answers
+    the same question, and naming one is exactly the caller answering "which
+    window?" instead of the daemon guessing.
     """
     from boardwise.engines.harvest import devices_to_verify, footprint_uuid_of_device
+
+    # Only sent when a hint is given: a one-window daemon needs none, and a
+    # stub client's `call` should not have to grow a keyword it never reads.
+    hint: dict[str, str] = {}
+    if target_project:
+        hint["target_project"] = target_project
+    if target_instance:
+        hint["target_instance"] = target_instance
 
     wanted = devices_to_verify(sources, corrections=corrections)
     problems: list[str] = []
@@ -123,7 +144,9 @@ async def collect_footprint_names(
             device_uuid, library_uuid = pair
             try:
                 device = await client.call(
-                    "lib.device.get", {"uuid": device_uuid, "libraryUuid": library_uuid}
+                    "lib.device.get",
+                    {"uuid": device_uuid, "libraryUuid": library_uuid},
+                    **hint,
                 )
             except Exception as exc:  # noqa: BLE001 — one device failing is not fatal
                 problems.append(
@@ -143,6 +166,7 @@ async def collect_footprint_names(
                 footprint = await client.call(
                     "lib.footprint.get",
                     {"uuid": footprint_uuid, "libraryUuid": library_uuid},
+                    **hint,
                 )
             except Exception as exc:  # noqa: BLE001
                 problems.append(
@@ -346,6 +370,27 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--project",
+        default=None,
+        metavar="NAME_OR_UUID",
+        help=(
+            "Which editor window answers --verify, by project name or uuid "
+            "(023's window hint). Required in practice as soon as more than one "
+            "editor window is connected: the daemon refuses a request that "
+            "names no project rather than picking one."
+        ),
+    )
+    parser.add_argument(
+        "--instance",
+        default=None,
+        metavar="INSTANCE_ID",
+        help=(
+            "The same hint by window instance id (`boardwise bridge status` "
+            "prints it), for a window that cannot be named by its project. "
+            "Preferred over --project when both are given."
+        ),
+    )
+    parser.add_argument(
         "--check",
         action="store_true",
         help="Re-harvest and compare against the file on disk instead of writing.",
@@ -454,7 +499,12 @@ def _cli(argv: list[str] | None = None) -> int:
     if args.verify:
         try:
             answers, problems = asyncio.run(
-                collect_footprint_names(sources, corrections=corrections)
+                collect_footprint_names(
+                    sources,
+                    corrections=corrections,
+                    target_project=args.project,
+                    target_instance=args.instance,
+                )
             )
         except Exception as exc:  # noqa: BLE001 — the CLI must not traceback
             print(f"harvest_parts: --verify could not reach the bridge: {exc}",

@@ -115,6 +115,39 @@
       ]
     },
     {
+      "key": "cap.100n_0603.c14663",
+      "value": "100nF",
+      "mpn": "CC0603KRX7R9BB104",
+      "lcsc": "C14663",
+      "manufacturer": "YAGEO(国巨)",
+      "deviceUuid": "96b39256cc3f4d80bd3b503deb4f3328",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "C0603",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "容值:100nF;精度:±10%;额定电压:50V;温度系数:X7R;",
+        "Supplier Footprint": "0603",
+        "Temperature Coefficient": "X7R",
+        "Tolerance": "±10%",
+        "Voltage Rating": "50V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/CC0603KRX7R9BB104/15331.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/23ccee80ee542e7cf156a772bb589942.pdf?productCode=C14663",
+      "basic": null,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_ROBOT ctrl FOC_2026-09-16.epro2",
+        "designators": [
+          "C11@ProPrj_ROBOT ctrl FOC_2026-09-16"
+        ],
+        "note": "CC0603KRX7R9BB104"
+      },
+      "notes": [
+        "unrecognised JLCPCB Part Class 'Basic Part'; basic left unknown",
+        "key disambiguated with the C-number: more than one part shares the value/footprint slug"
+      ]
+    },
+    {
       "key": "cap.100n_0603.c6119867",
       "value": "100nF",
       "mpn": "CGA0603X7R104K500JT",
@@ -138,14 +171,29 @@
         "kind": "board-extract",
         "source": "tests/fixtures/ProPrj_ROBOT ctrl FOC_2026-09-16.epro2; tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
         "designators": [
+          "C12@ProPrj_高速电机控制器_2026-09-16",
           "C13@ProPrj_ROBOT ctrl FOC_2026-09-16",
+          "C13@ProPrj_高速电机控制器_2026-09-16",
           "C14@ProPrj_ROBOT ctrl FOC_2026-09-16",
           "C16@ProPrj_ROBOT ctrl FOC_2026-09-16",
           "C17@ProPrj_ROBOT ctrl FOC_2026-09-16",
           "C18@ProPrj_ROBOT ctrl FOC_2026-09-16",
           "C22@ProPrj_高速电机控制器_2026-09-16",
+          "C24@ProPrj_高速电机控制器_2026-09-16",
+          "C25@ProPrj_高速电机控制器_2026-09-16",
           "C26@ProPrj_高速电机控制器_2026-09-16",
-          "C45@ProPrj_高速电机控制器_2026-09-16"
+          "C2@ProPrj_高速电机控制器_2026-09-16",
+          "C30@ProPrj_高速电机控制器_2026-09-16",
+          "C31@ProPrj_高速电机控制器_2026-09-16",
+          "C34@ProPrj_高速电机控制器_2026-09-16",
+          "C35@ProPrj_高速电机控制器_2026-09-16",
+          "C37@ProPrj_高速电机控制器_2026-09-16",
+          "C39@ProPrj_高速电机控制器_2026-09-16",
+          "C43@ProPrj_高速电机控制器_2026-09-16",
+          "C45@ProPrj_高速电机控制器_2026-09-16",
+          "C5@ProPrj_高速电机控制器_2026-09-16",
+          "C6@ProPrj_高速电机控制器_2026-09-16",
+          "C9@ProPrj_高速电机控制器_2026-09-16"
         ],
         "note": "CGA0603X7R104K500JT"
       },
@@ -272,7 +320,39 @@
       ]
     },
     {
-      "key": "cap.10n_0603",
+      "key": "cap.10n_0603.c107059",
+      "value": "10nF",
+      "mpn": "CC0603KRX7R0BB103",
+      "lcsc": "C107059",
+      "manufacturer": "YAGEO(国巨)",
+      "deviceUuid": "6c88b373606148a3b8dd514a2e2bd88c",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "C0603",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "容值:10nF;精度:±10%;额定电压:100V;温度系数:X7R;",
+        "Supplier Footprint": "0603",
+        "Temperature Coefficient": "X7R",
+        "Tolerance": "±10%",
+        "Voltage Rating": "100V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/CC0603KRX7R0BB103/108275.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/23ccee80ee542e7cf156a772bb589942.pdf?productCode=C107059",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "C59@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "CC0603KRX7R0BB103"
+      },
+      "notes": [
+        "key disambiguated with the C-number: more than one part shares the value/footprint slug"
+      ]
+    },
+    {
+      "key": "cap.10n_0603.c5137477",
       "value": "10nF",
       "mpn": "FCC0603B103K500CT",
       "lcsc": "C5137477",
@@ -295,11 +375,14 @@
         "kind": "board-extract",
         "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
         "designators": [
-          "C17@ProPrj_高速电机控制器_2026-09-16"
+          "C17@ProPrj_高速电机控制器_2026-09-16",
+          "C23@ProPrj_高速电机控制器_2026-09-16"
         ],
         "note": "FCC0603B103K500CT"
       },
-      "notes": []
+      "notes": [
+        "key disambiguated with the C-number: more than one part shares the value/footprint slug"
+      ]
     },
     {
       "key": "cap.10u_0603",
@@ -333,7 +416,39 @@
       "notes": []
     },
     {
-      "key": "cap.10u_0805",
+      "key": "cap.10u_0805.c6119887",
+      "value": "10uF",
+      "mpn": "CGA0805X5R106K250MT",
+      "lcsc": "C6119887",
+      "manufacturer": "HRE(芯声)",
+      "deviceUuid": "a2127b75892543e6b4abc8f17f8606eb",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "C0805",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "容值:10uF;精度:±10%;额定电压:25V;温度系数:X5R;",
+        "Supplier Footprint": "0805",
+        "Temperature Coefficient": "X5R",
+        "Tolerance": "±10%",
+        "Voltage Rating": "25V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/CGA0805X5R106K250MT/7062593.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/3a22e8f8c78f4776a918a5db3401442a.pdf?productCode=C6119887",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "C18@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "CGA0805X5R106K250MT"
+      },
+      "notes": [
+        "key disambiguated with the C-number: more than one part shares the value/footprint slug"
+      ]
+    },
+    {
+      "key": "cap.10u_0805.c6119889",
       "value": "10uF",
       "mpn": "CGA0805X5R106K500MT",
       "lcsc": "C6119889",
@@ -360,7 +475,9 @@
         ],
         "note": "CGA0805X5R106K500MT"
       },
-      "notes": []
+      "notes": [
+        "key disambiguated with the C-number: more than one part shares the value/footprint slug"
+      ]
     },
     {
       "key": "cap.10u_1210",
@@ -547,9 +664,40 @@
         "kind": "board-extract",
         "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
         "designators": [
+          "C20@ProPrj_高速电机控制器_2026-09-16",
           "C21@ProPrj_高速电机控制器_2026-09-16"
         ],
         "note": "FCC0402N200J500AT"
+      },
+      "notes": []
+    },
+    {
+      "key": "cap.22u_0805",
+      "value": "22uF",
+      "mpn": "CGA0805X5R226M250MT",
+      "lcsc": "C6119899",
+      "manufacturer": "HRE(芯声)",
+      "deviceUuid": "4acf8fb5deca4743a24a1f4bce4a182c",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "C0805",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "容值:22uF;精度:±20%;额定电压:25V;温度系数:X5R;",
+        "Supplier Footprint": "0805",
+        "Temperature Coefficient": "X5R",
+        "Tolerance": "±20%",
+        "Voltage Rating": "25V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/CGA0805X5R226M250MT/7062605.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/0356e7e2d4800aee5564f85a0f299a35.pdf?productCode=C6119899",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "C10@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "CGA0805X5R226M250MT"
       },
       "notes": []
     },
@@ -612,13 +760,82 @@
         "kind": "board-extract",
         "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
         "designators": [
-          "C40@ProPrj_高速电机控制器_2026-09-16"
+          "C15@ProPrj_高速电机控制器_2026-09-16",
+          "C32@ProPrj_高速电机控制器_2026-09-16",
+          "C38@ProPrj_高速电机控制器_2026-09-16",
+          "C40@ProPrj_高速电机控制器_2026-09-16",
+          "C46@ProPrj_高速电机控制器_2026-09-16"
         ],
         "note": "HGC0603R5225K500NTHJ"
       },
       "notes": [
         "key disambiguated with the C-number: more than one part shares the value/footprint slug"
       ]
+    },
+    {
+      "key": "cap.2u2_0603.c99228",
+      "value": "2.2uF",
+      "mpn": "0603B225K250NT",
+      "lcsc": "C99228",
+      "manufacturer": "FH(风华)",
+      "deviceUuid": "08f22f3729714e96bd81f1732205ea9c",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "C0603",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "容值:2.2uF;精度:±10%;额定电压:25V;温度系数:X7R;",
+        "Supplier Footprint": "0603",
+        "Temperature Coefficient": "X7R",
+        "Tolerance": "±10%",
+        "Voltage Rating": "25V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/0603B225K250NT/100441.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/09fe2daf22580a99fa7fea93ccb20fb7.pdf?productCode=C99228",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "C28@ProPrj_高速电机控制器_2026-09-16",
+          "C29@ProPrj_高速电机控制器_2026-09-16",
+          "C36@ProPrj_高速电机控制器_2026-09-16",
+          "C44@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "0603B225K250NT"
+      },
+      "notes": [
+        "key disambiguated with the C-number: more than one part shares the value/footprint slug"
+      ]
+    },
+    {
+      "key": "cap.2u2_0805",
+      "value": "2.2uF",
+      "mpn": "HHV0805R7225K101NSLJ",
+      "lcsc": "C22367838",
+      "manufacturer": "Chinocera(华瓷)",
+      "deviceUuid": "0ff41821810342149e7a584b330426f0",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "C0805",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "容值:2.2uF;精度:±10%;额定电压:100V;温度系数:X7R;",
+        "Supplier Footprint": "0805",
+        "Temperature Coefficient": "X7R",
+        "Tolerance": "±10%",
+        "Voltage Rating": "100V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/HHV0805R7225K101NSLJ/23841143.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/707f5efa560db530a9a3f335aac8371d.pdf?productCode=C22367838",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "C49@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "HHV0805R7225K101NSLJ"
+      },
+      "notes": []
     },
     {
       "key": "cap.47n_0603",
@@ -709,6 +926,36 @@
           "C1@ProPrj_高速电机控制器_2026-09-16"
         ],
         "note": "HHV1206R7475K101NSPJ"
+      },
+      "notes": []
+    },
+    {
+      "key": "cap.56p_0603",
+      "value": "56pF",
+      "mpn": "CC0603JRNPO9BN560",
+      "lcsc": "C107053",
+      "manufacturer": "YAGEO(国巨)",
+      "deviceUuid": "e06a9947cd494728895f874f611cce03",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "C0603",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "容值:56pF;精度:±5%;额定电压:50V;温度系数:NP0;",
+        "Supplier Footprint": "0603",
+        "Temperature Coefficient": "NP0",
+        "Tolerance": "±5%",
+        "Voltage Rating": "50V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/CC0603JRNPO9BN560/108269.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/4eca2bb4b507f1633db47e922d632b95.pdf?productCode=C107053",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "C7@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "CC0603JRNPO9BN560"
       },
       "notes": []
     },
@@ -958,6 +1205,50 @@
       "notes": [
         "the library spells this footprint 'CONN-TH_3P-P7.62_L12.4-W22.9-EX1.9'; the project's document said 'conn-th_3p-p7.62_l12.4-w22.9-ex1.9'. The library's spelling is kept (006b's vocabulary rule)."
       ]
+    },
+    {
+      "key": "conn.hx_pz2_54_1x4p_wz",
+      "value": "",
+      "mpn": "HX PZ2.54-1x4P WZ",
+      "lcsc": "C32713263",
+      "manufacturer": "hanxia(韩下)",
+      "deviceUuid": "0092bbc8f4c241ed95fc15c7f77d40ad",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "HDR-TH_4P-P2.54-H-M-W10.3",
+      "footprint_name_verified": true,
+      "params": {
+        "Circluar Pins/Square Pins": "方针",
+        "Color": "黑色",
+        "Contact Material": "黄铜",
+        "Contact Plating": "金",
+        "Current Rating": "3A",
+        "Description": "插针结构:1x4P;间距:2.54mm;行距:-;圆针/方针:方针;安装方式:弯插;排数:单排;总PIN位数:4P;额定电流:3A;额定电压:1kV;配合针长度:6mm;塑高:2.5mm;端接针长度:3mm;触头材质:黄铜;触头镀层:金;工作温度:-40℃~+105℃;颜色:黑色;",
+        "Insulation Height": "2.5mm",
+        "Length of End Connection Pin": "3mm",
+        "Length of Mating Pin": "6mm",
+        "Mounting Type": "弯插",
+        "Number of Pins": "4P",
+        "Number of Rows": "单排",
+        "Operating Temperature": "-40℃~+105℃",
+        "Pin Structure": "1x4P",
+        "Pitch": "2.54mm",
+        "Row Spacing": "-",
+        "Supplementary Features": "-",
+        "Supplier Footprint": "弯插,P=2.54mm",
+        "Voltage Rating (Max)": "1kV"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/HX%2520PZ2.54-1x4P%2520WZ/34444543.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/1487f0d8e18e6402cb685e7df1b04665.pdf?productCode=C32713263",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_ROBOT ctrl FOC_2026-09-16.epro2",
+        "designators": [
+          "SWD@ProPrj_ROBOT ctrl FOC_2026-09-16"
+        ],
+        "note": "HX PZ2.54-1x4P WZ"
+      },
+      "notes": []
     },
     {
       "key": "conn.hx_pz2_54_2x6p_tp",
@@ -1291,6 +1582,8 @@
       "manufacturer": "SHOU HAN(首韩)",
       "deviceUuid": "45fb1c7fbc5b42ebbb9f47d092c4f3dc",
       "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "USB-C-SMD_TYPE-C-16PIN-2MD-073",
+      "footprint_name_verified": true,
       "params": {
         "Center Height": "-",
         "Connect-Disconnect Life": "5千次",
@@ -1314,8 +1607,9 @@
       "basic": false,
       "provenance": {
         "kind": "board-extract",
-        "source": "blocklib/sources/thesis_FOC_board.eprj2; tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2; tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "source": "blocklib/sources/thesis_FOC_board.eprj2; tests/fixtures/ProPrj_ROBOT ctrl FOC_2026-09-16.epro2; tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2; tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
         "designators": [
+          "USB1@ProPrj_ROBOT ctrl FOC_2026-09-16",
           "USB1@ProPrj_毕设FOC驱动板_2026-09-17",
           "USB1@ProPrj_高速电机控制器_2026-09-16",
           "USB1@thesis_FOC_board"
@@ -1342,9 +1636,7 @@
             "provenance": "ST AN5225 (Introduction to USB Type-C Power Delivery), Table 6 (UFP CC termination (Rd) requirements: 5.1 kOhm +/-10% resistor to GND, exposed on both CC1 and CC2 of a sink port), https://www.st.com/resource/en/application_note/an5225-usb-typec-power-delivery-using-stm32-mcus-and-mpus-stmicroelectronics.pdf"
           }
         ]
-      },
-      "footprint_name": "USB-C-SMD_TYPE-C-16PIN-2MD-073",
-      "footprint_name_verified": true
+      }
     },
     {
       "key": "conn.wafer_mx1_25_4pzz",
@@ -1657,6 +1949,44 @@
       "notes": []
     },
     {
+      "key": "diode.smcj64ca",
+      "value": "",
+      "mpn": "SMCJ64CA",
+      "lcsc": "C41411749",
+      "manufacturer": "R+O(宏嘉诚)",
+      "deviceUuid": "bc9609e775b54a8ba1e7a4ffb5f4e8a9",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "SMC_L6.9-W5.9-LS7.9-BI",
+      "footprint_name_verified": true,
+      "params": {
+        "Clamping Voltage": "103V",
+        "Description": "极性:双向;反向截止电压(Vrwm):64V;钳位电压:103V;峰值脉冲电流(Ipp):14.6A;峰值脉冲功率(Ppp):1.5kW;击穿电压:78.6V;",
+        "Number of Channels": "双路",
+        "Operating Temperature": "-55℃~+150℃",
+        "Peak Pulse Current (Ipp)": "14.6A",
+        "Peak Pulse Power Dissipation (Ppp)": "1.5kW",
+        "Polarity": "双向",
+        "Reverse Leakage Current (Ir)": "1uA",
+        "Reverse Stand-Off Voltage (Vrwm)": "64V",
+        "Supplier Footprint": "SMC(DO-214AB)",
+        "Type": "TVS",
+        "Voltage - Breakdown": "78.6V",
+        "level of protection": "IEC 61000-4-2"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/SMCJ64CA/43223692.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/63434cf44d11833c6d7a145dda2ad39c.pdf?productCode=C41411749",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "D2@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "SMCJ64CA_C41411749"
+      },
+      "notes": []
+    },
+    {
       "key": "fet.agm12n10a",
       "value": "",
       "mpn": "AGM12N10A",
@@ -1784,7 +2114,77 @@
       ]
     },
     {
-      "key": "ic.ams1117_3_3",
+      "key": "ic.ams1117_3_3.c369933",
+      "value": "",
+      "mpn": "AMS1117-3.3",
+      "lcsc": "C369933",
+      "manufacturer": "KEXIN(科信)",
+      "deviceUuid": "7e2225c5c1344a088864b5c6d7cd4d40",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "SOT-223-4_L6.5-W3.5-P2.30-LS7.0-BR",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "输出极性:正极;工作电压:18V;输出电压:3.3V;输出电流:1A;电源纹波抑制比(PSRR):-;输出类型:固定;",
+        "Features": "热关断",
+        "Noise": "-",
+        "Number of Outputs": "1",
+        "Operating Temperature": "-",
+        "Output Configuration": "正极",
+        "Output Current": "1A",
+        "Output Type": "固定",
+        "Output Voltage": "3.3V",
+        "Power Supply Rejection Ratio (PSRR)": "-",
+        "Supplier Footprint": "SOT-223-4",
+        "Voltage - Supply": "18V",
+        "Voltage Dropout": "1.3V@(800mA)",
+        "standby current": "8mA"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/AMS1117-3.3/343670.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/e5408b0c1fb31927bfdb8bd9d6e3f83a.pdf?productCode=C369933",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_ROBOT ctrl FOC_2026-09-16.epro2",
+        "designators": [
+          "U8@ProPrj_ROBOT ctrl FOC_2026-09-16"
+        ],
+        "note": "AMS1117-3.3_C369933"
+      },
+      "notes": [
+        "facts mirrored from C6186 on 2026-09-26 (042 follow-up). C6186 and C369933 are two LCSC listings of the same part number (AMS1117-3.3) and the datasheet facts are properties of that part number, not of one supplier's listing -- the provenance strings below name the AMS1117 datasheet for both. The mirror exists because `core.parts.find_facts` resolves by MPN first: with only the C6186 entry carrying facts, a board part recorded as C369933 got the facts-less listing instead (ROBOT's U8, and the pillbox's U11 which is C6186 itself).",
+        "key disambiguated with the C-number: more than one part shares the value/footprint slug"
+      ],
+      "category": "ic.ldo",
+      "facts": {
+        "supply_pins": [
+          {
+            "pins": [
+              "3"
+            ],
+            "name": "VIN",
+            "v_abs_max": [
+              null,
+              15.0
+            ],
+            "provenance": "AMS1117 datasheet (Advanced Monolithic Systems), p.2 Absolute Maximum Ratings (Input Voltage 15V, upper limit only; no operating input range is stated for the fixed 3.3V part beyond Vout+dropout), https://datasheet.lcsc.com/datasheet/pdf/e6935943fc6b1bbf350a1a0f3e90dc4a.pdf"
+          }
+        ],
+        "required_caps": [
+          {
+            "pin": "2",
+            "value": "22uF",
+            "provenance": "AMS1117 datasheet (Advanced Monolithic Systems), p.4 Stability (the series requires an output capacitor as part of frequency compensation; 22uF solid tantalum ensures stability for all operating conditions), https://datasheet.lcsc.com/datasheet/pdf/e6935943fc6b1bbf350a1a0f3e90dc4a.pdf"
+          }
+        ],
+        "ldo": {
+          "dropout_max_mv": 1300.0,
+          "condition": "Iout=0.8A, dVout/dVref=1 percent (min 1.1V, max 1.3V)",
+          "provenance": "AMS1117 datasheet (Advanced Monolithic Systems), p.3 Electrical Characteristics (Dropout Voltage), https://datasheet.lcsc.com/datasheet/pdf/e6935943fc6b1bbf350a1a0f3e90dc4a.pdf"
+        }
+      }
+    },
+    {
+      "key": "ic.ams1117_3_3.c6186",
       "value": "",
       "mpn": "AMS1117-3.3",
       "lcsc": "C6186",
@@ -1822,7 +2222,8 @@
         "note": "AMS1117-3.3_C6186"
       },
       "notes": [
-        "the library spells this footprint 'SOT-223-3_L6.5-W3.4-P2.30-LS7.0-BR'; the project's document said 'sot-223-3_l6.5-w3.4-p2.30-ls7.0-br'. The library's spelling is kept (006b's vocabulary rule)."
+        "the library spells this footprint 'SOT-223-3_L6.5-W3.4-P2.30-LS7.0-BR'; the project's document said 'sot-223-3_l6.5-w3.4-p2.30-ls7.0-br'. The library's spelling is kept (006b's vocabulary rule).",
+        "key disambiguated with the C-number: more than one part shares the value/footprint slug"
       ],
       "category": "ic.ldo",
       "facts": {
@@ -1861,6 +2262,8 @@
       "manufacturer": "WCH(南京沁恒)",
       "deviceUuid": "f809d2f6af2d4c2eb58795bc97ecb0d8",
       "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "SOIC-16_L9.9-W3.9-P1.27-LS6.0-BL",
+      "footprint_name_verified": true,
       "params": {
         "JLCPCB Part Class": "Extended Part",
         "Voltage - Supply": "5V；3.3V"
@@ -1940,9 +2343,7 @@
             "mode": "3.3V"
           }
         ]
-      },
-      "footprint_name": "SOIC-16_L9.9-W3.9-P1.27-LS6.0-BL",
-      "footprint_name_verified": true
+      }
     },
     {
       "key": "ic.ch340n",
@@ -2025,16 +2426,16 @@
           {
             "pin": "8",
             "value": "0.1uF",
-            "mode": "5V",
-            "provenance": "CH340 manual (1) rev 3C (wch.cn, shipped as the LCSC C2977777 datasheet), p.2 pin table (SOP-8 pin 8 = V3: at 5V the pin takes a 0.1uF decoupling capacitor, at 3.3V it is tied to VCC instead) and p.3 sec.5.1 (same rule in prose), https://atta.szlcsc.com/upload/public/pdf/source/20240313/115CDE92081B1D6CB446704AD5D0F5F2.pdf"
+            "provenance": "CH340 manual (1) rev 3C (wch.cn, shipped as the LCSC C2977777 datasheet), p.2 pin table (SOP-8 pin 8 = V3: at 5V the pin takes a 0.1uF decoupling capacitor, at 3.3V it is tied to VCC instead) and p.3 sec.5.1 (same rule in prose), https://atta.szlcsc.com/upload/public/pdf/source/20240313/115CDE92081B1D6CB446704AD5D0F5F2.pdf",
+            "mode": "5V"
           }
         ],
         "must_connect": [
           {
             "pin": "8",
             "to": "VCC",
-            "mode": "3.3V",
-            "provenance": "CH340 manual (1) rev 3C (wch.cn, shipped as the LCSC C2977777 datasheet), p.3 sec.5.1 (3.3V operation: the V3 pin should be connected to the VCC pin) and p.5 sec.6.3 (the same condition in the 3.3V table), https://atta.szlcsc.com/upload/public/pdf/source/20240313/115CDE92081B1D6CB446704AD5D0F5F2.pdf"
+            "provenance": "CH340 manual (1) rev 3C (wch.cn, shipped as the LCSC C2977777 datasheet), p.3 sec.5.1 (3.3V operation: the V3 pin should be connected to the VCC pin) and p.5 sec.6.3 (the same condition in the 3.3V table), https://atta.szlcsc.com/upload/public/pdf/source/20240313/115CDE92081B1D6CB446704AD5D0F5F2.pdf",
+            "mode": "3.3V"
           }
         ]
       }
@@ -2961,6 +3362,8 @@
       "manufacturer": "Guiguang light",
       "deviceUuid": "9907e0d587174bebb17a101619e35cdd",
       "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "LED0603-RD",
+      "footprint_name_verified": true,
       "params": {},
       "datasheetUrl": "",
       "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/6aa51d5de7e985239d9ee8560a86a092.pdf",
@@ -2984,9 +3387,7 @@
           "if_max_ma": 30.0,
           "provenance": "GL0603UG01 datasheet (Shantou Guiguang Optoelectronics), p.3 (marked 3 / 8; Maximum absolute nominal value: forward current IF 30 mA, forward voltage Vf 2.7-3.2 V), https://datasheet.lcsc.com/datasheet/pdf/6aa51d5de7e985239d9ee8560a86a092.pdf"
         }
-      },
-      "footprint_name": "LED0603-RD",
-      "footprint_name_verified": true
+      }
     },
     {
       "key": "led.ncd0805r1",
@@ -3032,6 +3433,7 @@
           "LED1@ProPrj_高速电机控制器_2026-09-16",
           "LED1@thesis_FOC_board",
           "LED2@ProPrj_毕设FOC驱动板_2026-09-17",
+          "LED2@ProPrj_高速电机控制器_2026-09-16",
           "LED4@thesis_FOC_board"
         ],
         "note": "NCD0805R1"
@@ -3099,6 +3501,8 @@
         "kind": "board-extract",
         "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
         "designators": [
+          "R11@ProPrj_高速电机控制器_2026-09-16",
+          "R25@ProPrj_高速电机控制器_2026-09-16",
           "R50@ProPrj_高速电机控制器_2026-09-16"
         ],
         "note": "RE1206F1R000"
@@ -3241,6 +3645,7 @@
         "kind": "board-extract",
         "source": "tests/fixtures/ProPrj_ROBOT ctrl FOC_2026-09-16.epro2",
         "designators": [
+          "R4@ProPrj_ROBOT ctrl FOC_2026-09-16",
           "R5@ProPrj_ROBOT ctrl FOC_2026-09-16"
         ],
         "note": "RE1206F1R100"
@@ -3382,6 +3787,8 @@
         "kind": "board-extract",
         "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
         "designators": [
+          "R12@ProPrj_高速电机控制器_2026-09-16",
+          "R32@ProPrj_高速电机控制器_2026-09-16",
           "R3@ProPrj_高速电机控制器_2026-09-16",
           "R51@ProPrj_高速电机控制器_2026-09-16",
           "R8@ProPrj_高速电机控制器_2026-09-16"
@@ -3391,6 +3798,39 @@
       "notes": [
         "key disambiguated with the C-number: more than one part shares the value/footprint slug"
       ]
+    },
+    {
+      "key": "res.120_0603",
+      "value": "120Ω",
+      "mpn": "FRC0603F1200TS",
+      "lcsc": "C2906988",
+      "manufacturer": "FOJAN(富捷)",
+      "deviceUuid": "7bfd1e68904d4dd29093369c04e8e745",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "R0603",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "电阻类型:厚膜电阻;阻值:120Ω;精度:±1%;功率:100mW;工作电压:75V;温度系数:±100ppm/℃;",
+        "Operating Temperature": "-55℃~+155℃",
+        "Power(Watts)": "100mW",
+        "Supplier Footprint": "0603",
+        "Temperature Coefficient": "±100ppm/℃",
+        "Tolerance": "±1%",
+        "Type": "厚膜电阻",
+        "Voltage-Supply(Max)": "75V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/FRC0603F1200TS/3180501.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/106fb934f95f063b695dad1b31b1eab8.pdf?productCode=C2906988",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "R28@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "FRC0603F1200TS"
+      },
+      "notes": []
     },
     {
       "key": "res.150k_0603",
@@ -3428,6 +3868,44 @@
       ]
     },
     {
+      "key": "res.15k_0603",
+      "value": "15kΩ",
+      "mpn": "FRC0603F1502TS",
+      "lcsc": "C2906995",
+      "manufacturer": "FOJAN(富捷)",
+      "deviceUuid": "291de3b3e66d474da2bf331de848c2ac",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "R0603",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "电阻类型:厚膜电阻;阻值:15kΩ;精度:±1%;功率:100mW;工作电压:75V;温度系数:±100ppm/℃;",
+        "Operating Temperature": "-55℃~+155℃",
+        "Power(Watts)": "100mW",
+        "Supplier Footprint": "0603",
+        "Temperature Coefficient": "±100ppm/℃",
+        "Tolerance": "±1%",
+        "Type": "厚膜电阻",
+        "Voltage-Supply(Max)": "75V"
+      },
+      "datasheetUrl": "",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/106fb934f95f063b695dad1b31b1eab8.pdf?productCode=C2906995",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "R13@ProPrj_高速电机控制器_2026-09-16",
+          "R14@ProPrj_高速电机控制器_2026-09-16",
+          "R18@ProPrj_高速电机控制器_2026-09-16",
+          "R1@ProPrj_高速电机控制器_2026-09-16",
+          "R5@ProPrj_高速电机控制器_2026-09-16",
+          "R7@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "FRC0603F1502TS"
+      },
+      "notes": []
+    },
+    {
       "key": "res.1k_0603",
       "value": "1kΩ",
       "mpn": "FRC0603F1001TS",
@@ -3454,6 +3932,13 @@
         "kind": "board-extract",
         "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
         "designators": [
+          "R10@ProPrj_高速电机控制器_2026-09-16",
+          "R15@ProPrj_高速电机控制器_2026-09-16",
+          "R16@ProPrj_高速电机控制器_2026-09-16",
+          "R2@ProPrj_高速电机控制器_2026-09-16",
+          "R4@ProPrj_高速电机控制器_2026-09-16",
+          "R9@ProPrj_高速电机控制器_2026-09-16",
+          "U10@ProPrj_高速电机控制器_2026-09-16",
           "U14@ProPrj_高速电机控制器_2026-09-16"
         ],
         "note": "FRC0603F1001TS"
@@ -3644,6 +4129,112 @@
       ]
     },
     {
+      "key": "res.47_0603",
+      "value": "47Ω",
+      "mpn": "0603WAF470JT5E",
+      "lcsc": "C23182",
+      "manufacturer": "UNI-ROYAL(厚声)",
+      "deviceUuid": "30c556c386a243b7a67095bdcfdddb7e",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "R0603",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "电阻类型:厚膜电阻;阻值:47Ω;精度:±1%;功率:100mW;工作电压:75V;温度系数:±100ppm/℃;",
+        "Operating Temperature": "-55℃~+155℃",
+        "Power(Watts)": "100mW",
+        "Supplier Footprint": "0603",
+        "Temperature Coefficient": "±100ppm/℃",
+        "Tolerance": "±1%",
+        "Type": "厚膜电阻",
+        "Voltage-Supply(Max)": "75V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/0603WAF470JT5E/23909.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/0a975aaa49b7c97f38a963127be4a823.pdf?productCode=C23182",
+      "basic": null,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "R26@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "0603WAF470JT5E"
+      },
+      "notes": [
+        "unrecognised JLCPCB Part Class 'Basic Part'; basic left unknown"
+      ]
+    },
+    {
+      "key": "res.4k7_0603",
+      "value": "4.7kΩ",
+      "mpn": "RC0603FR-074K7L",
+      "lcsc": "C99782",
+      "manufacturer": "YAGEO(国巨)",
+      "deviceUuid": "7f373bdc80e0446ab3e47e7c4abe868f",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "R0603",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "电阻类型:厚膜电阻;阻值:4.7kΩ;精度:±1%;功率:100mW;工作电压:75V;温度系数:±100ppm/℃;",
+        "Operating Temperature": "-55℃~+155℃",
+        "Power(Watts)": "100mW",
+        "Supplier Footprint": "0603",
+        "Temperature Coefficient": "±100ppm/℃",
+        "Tolerance": "±1%",
+        "Type": "厚膜电阻",
+        "Voltage-Supply(Max)": "75V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/RC0603FR-074K7L/100996.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/b426be3ce22c6de3e0c3a2248e49159e.pdf?productCode=C99782",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "R27@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "RC0603FR-074K7L"
+      },
+      "notes": []
+    },
+    {
+      "key": "res.4o7_0805",
+      "value": "4.7Ω",
+      "mpn": "FRC0805F4R70TS",
+      "lcsc": "C2933459",
+      "manufacturer": "FOJAN(富捷)",
+      "deviceUuid": "2360611d518941f6af2d2e8bbc07f6f6",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "footprint_name": "R0805",
+      "footprint_name_verified": true,
+      "params": {
+        "Description": "电阻类型:厚膜电阻;阻值:4.7Ω;精度:±1%;功率:125mW;工作电压:150V;温度系数:±200ppm/℃;",
+        "Operating Temperature": "-55℃~+155℃",
+        "Power(Watts)": "125mW",
+        "Supplier Footprint": "0805",
+        "Temperature Coefficient": "±200ppm/℃",
+        "Tolerance": "±1%",
+        "Type": "厚膜电阻",
+        "Voltage-Supply(Max)": "150V"
+      },
+      "datasheetUrl": "https://item.szlcsc.com/datasheet/FRC0805F4R70TS/3279561.html",
+      "datasheetPdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/106fb934f95f063b695dad1b31b1eab8.pdf?productCode=C2933459",
+      "basic": false,
+      "provenance": {
+        "kind": "board-extract",
+        "source": "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
+        "designators": [
+          "R33@ProPrj_高速电机控制器_2026-09-16",
+          "R34@ProPrj_高速电机控制器_2026-09-16",
+          "R35@ProPrj_高速电机控制器_2026-09-16",
+          "R36@ProPrj_高速电机控制器_2026-09-16",
+          "R37@ProPrj_高速电机控制器_2026-09-16",
+          "R38@ProPrj_高速电机控制器_2026-09-16"
+        ],
+        "note": "FRC0805F4R70TS"
+      },
+      "notes": []
+    },
+    {
       "key": "res.5k1_0402",
       "value": "5.1kΩ",
       "mpn": "FRC0402J512 TS",
@@ -3668,10 +4259,12 @@
       "basic": false,
       "provenance": {
         "kind": "board-extract",
-        "source": "tests/fixtures/ProPrj_ROBOT ctrl FOC_2026-09-16.epro2",
+        "source": "tests/fixtures/ProPrj_ROBOT ctrl FOC_2026-09-16.epro2; tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
         "designators": [
           "R10@ProPrj_ROBOT ctrl FOC_2026-09-16",
-          "R14@ProPrj_ROBOT ctrl FOC_2026-09-16"
+          "R14@ProPrj_ROBOT ctrl FOC_2026-09-16",
+          "R22@ProPrj_高速电机控制器_2026-09-16",
+          "R24@ProPrj_高速电机控制器_2026-09-16"
         ],
         "note": "FRC0402J512 TS"
       },

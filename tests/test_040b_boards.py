@@ -317,21 +317,51 @@ def test_single_board_findings_are_unchanged(name):
     "name", ["llc_board.epro2", "ProPrj_ROBOT ctrl FOC_2026-09-16.epro2",
              "ProPrj_智能药箱_2026-09-17.epro2"]
 )
-def test_other_single_board_fixtures_are_unchanged(name):
+def test_other_single_board_fixtures_keep_their_frozen_severities(name):
     """Severity counts, frozen from the pre-040b parser (measured with
     `.tmp_040b/compare_findings.py`, which diffs rule|severity|message|evidence
     per fixture against the 040 parser: all twelve single-board fixtures came out
-    **identical**, including the six injected variants)."""
+    **identical**, including the six injected variants).
+
+    042 §WI-1 re-measured the ROBOT row: the parse had been reading that board
+    with 5 of its 49 parts missing (the AMS1117 regulator, the USB-C socket, the
+    SWD header, the U-phase shunt and a decoupling capacitor), so *every* rule
+    asking about the power entry was answering on a board that did not contain
+    one — which is why the row read "no findings at all". With the parts back,
+    the decoupling rule finds one WARN.
+
+    042's shelf re-harvest then moved the ROBOT and 智能药箱 rows for one round,
+    and that change had **one** cause in the facts layer rather than in the
+    parser: the regenerated shelf held two LCSC listings of the same MPN
+    (``AMS1117-3.3``: ``ic.ams1117_3_3.c6186``, which carried the curated
+    datasheet facts, and ``ic.ams1117_3_3.c369933``, which carried none), and
+    ``core.parts.find_facts`` searches **MPN first** — so both boards' AMS1117
+    resolved to the facts-less listing (药箱's U11 *is* C6186, its own listing).
+    Without the facts, U8/U11 had no required-decap figure (each board's
+    ``decap-required-caps`` WARN disappeared) and the pillbox's VCC stopped being
+    a *known* supply domain, which un-skipped four RC pairs the rule deliberately
+    ignores on a known rail (4 INFO). Neither board changed; the shelf did.
+
+    Resolved the same day by **mirroring the curated facts onto the second
+    listing in the sidecar** — the facts are properties of the part number, and
+    their provenance names the same AMS1117 datasheet — which is the ruling's
+    choice over changing `find_facts`' contract. Both listings now carry the
+    facts, so both boards resolve to one of them and the rows below are back to
+    what they were before the re-harvest: the decap WARN each board earns.
+    """
     project = build_project_model(FIXTURES / name)
     assert len(project.boards) == 1
     counts = collections.Counter(f.severity for f in run_review(project))
     assert counts == collections.Counter(_EXPECTED_SEVERITY[name])
 
 
-#: Severity counts per single-board fixture, measured on the pre-040b parser.
+#: Severity counts per single-board fixture. Measured on the pre-040b parser;
+#: the ROBOT and 智能药箱 rows went through 042's shelf re-harvest — frozen
+#: facts-less for one round, then restored by mirroring the AMS1117 facts onto
+#: the second LCSC listing in the sidecar (see the test above).
 _EXPECTED_SEVERITY = {
     "llc_board.epro2": {"ERROR": 0, "WARN": 0, "INFO": 0},
-    "ProPrj_ROBOT ctrl FOC_2026-09-16.epro2": {"ERROR": 0, "WARN": 0, "INFO": 0},
+    "ProPrj_ROBOT ctrl FOC_2026-09-16.epro2": {"ERROR": 0, "WARN": 1, "INFO": 0},
     "ProPrj_智能药箱_2026-09-17.epro2": {"ERROR": 0, "WARN": 1, "INFO": 0},
 }
 
