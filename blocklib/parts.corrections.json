@@ -28,6 +28,16 @@
       "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
     },
     {
+      "lcsc": "C107053",
+      "pdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/4eca2bb4b507f1633db47e922d632b95.pdf?productCode=C107053",
+      "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
+    },
+    {
+      "lcsc": "C107059",
+      "pdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/23ccee80ee542e7cf156a772bb589942.pdf?productCode=C107059",
+      "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
+    },
+    {
       "lcsc": "C113803",
       "pdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/23ccee80ee542e7cf156a772bb589942.pdf?productCode=C113803",
       "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
@@ -63,6 +73,11 @@
       "note": "PDF link read off the LCSC datasheet page https://item.szlcsc.com/datasheet/CH340G/14927.html (2026-09-19)"
     },
     {
+      "lcsc": "C14663",
+      "pdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/23ccee80ee542e7cf156a772bb589942.pdf?productCode=C14663",
+      "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
+    },
+    {
       "lcsc": "C14858",
       "pdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/02336ea48ea44ca18c72517dd3cb7b47.pdf?productCode=C14858",
       "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
@@ -80,6 +95,11 @@
     {
       "lcsc": "C19077606",
       "pdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/63434cf44d11833c6d7a145dda2ad39c.pdf?productCode=C19077606",
+      "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
+    },
+    {
+      "lcsc": "C22367838",
+      "pdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/707f5efa560db530a9a3f335aac8371d.pdf?productCode=C22367838",
       "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
     },
     {
@@ -105,6 +125,11 @@
     {
       "lcsc": "C22984",
       "pdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/0a975aaa49b7c97f38a963127be4a823.pdf?productCode=C22984",
+      "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
+    },
+    {
+      "lcsc": "C23182",
+      "pdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/0a975aaa49b7c97f38a963127be4a823.pdf?productCode=C23182",
       "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
     },
     {
@@ -183,6 +208,16 @@
       "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
     },
     {
+      "lcsc": "C2906988",
+      "pdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/106fb934f95f063b695dad1b31b1eab8.pdf?productCode=C2906988",
+      "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
+    },
+    {
+      "lcsc": "C2906995",
+      "pdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/106fb934f95f063b695dad1b31b1eab8.pdf?productCode=C2906995",
+      "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
+    },
+    {
       "lcsc": "C2907002",
       "pdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/106fb934f95f063b695dad1b31b1eab8.pdf?productCode=C2907002",
       "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
@@ -200,6 +235,11 @@
     {
       "lcsc": "C2933440",
       "pdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/106fb934f95f063b695dad1b31b1eab8.pdf?productCode=C2933440",
+      "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
+    },
+    {
+      "lcsc": "C2933459",
+      "pdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/106fb934f95f063b695dad1b31b1eab8.pdf?productCode=C2933459",
       "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
     },
     {
@@ -223,6 +263,11 @@
       "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
     },
     {
+      "lcsc": "C32713263",
+      "pdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/1487f0d8e18e6402cb685e7df1b04665.pdf?productCode=C32713263",
+      "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
+    },
+    {
       "lcsc": "C32713279",
       "pdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/020c4429d2f5d5816bf822d48a433935.pdf?productCode=C32713279",
       "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
@@ -238,6 +283,11 @@
       "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
     },
     {
+      "lcsc": "C369933",
+      "pdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/e5408b0c1fb31927bfdb8bd9d6e3f83a.pdf?productCode=C369933",
+      "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
+    },
+    {
       "lcsc": "C398355",
       "pdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/b3f500e21835dc38634fe987feaa838a.pdf?productCode=C398355",
       "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
@@ -245,6 +295,11 @@
     {
       "lcsc": "C404969",
       "pdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/0f7c26967406a0a8af9ec0be0f7db719.pdf?productCode=C404969",
+      "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
+    },
+    {
+      "lcsc": "C41411749",
+      "pdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/63434cf44d11833c6d7a145dda2ad39c.pdf?productCode=C41411749",
       "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
     },
     {
@@ -383,8 +438,18 @@
       "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
     },
     {
+      "lcsc": "C6119887",
+      "pdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/3a22e8f8c78f4776a918a5db3401442a.pdf?productCode=C6119887",
+      "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
+    },
+    {
       "lcsc": "C6119889",
       "pdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/739990a3f06d34efecb01197be80dfef.pdf?productCode=C6119889",
+      "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
+    },
+    {
+      "lcsc": "C6119899",
+      "pdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/0356e7e2d4800aee5564f85a0f299a35.pdf?productCode=C6119899",
       "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
     },
     {
@@ -470,6 +535,16 @@
     {
       "lcsc": "C98732",
       "pdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/e258adf1ce44622bb05a5787d35fc0fa.pdf?productCode=C98732",
+      "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
+    },
+    {
+      "lcsc": "C99228",
+      "pdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/09fe2daf22580a99fa7fea93ccb20fb7.pdf?productCode=C99228",
+      "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
+    },
+    {
+      "lcsc": "C99782",
+      "pdfUrl": "https://datasheet.lcsc.com/datasheet/pdf/b426be3ce22c6de3e0c3a2248e49159e.pdf?productCode=C99782",
       "note": "datasheet PDF link read from the LCSC product page; recorded in the corrections sidecar because a board declares a datasheet web page and not a file, so an offline harvest cannot derive it."
     }
   ],
@@ -758,6 +833,40 @@
         }
       },
       "note": "facts curated 2026-09-25 (039 wave 1). The manual's pin table leaves SOP-8 pin 4 unlisted and says unused pins may float; pin 4 is NOT recorded as nc_pins because no line states it outright, and this entry only records what the source says."
+    },
+    {
+      "lcsc": "C369933",
+      "fields": {
+        "category": "ic.ldo",
+        "facts": {
+          "supply_pins": [
+            {
+              "pins": [
+                "3"
+              ],
+              "name": "VIN",
+              "v_abs_max": [
+                null,
+                15.0
+              ],
+              "provenance": "AMS1117 datasheet (Advanced Monolithic Systems), p.2 Absolute Maximum Ratings (Input Voltage 15V, upper limit only; no operating input range is stated for the fixed 3.3V part beyond Vout+dropout), https://datasheet.lcsc.com/datasheet/pdf/e6935943fc6b1bbf350a1a0f3e90dc4a.pdf"
+            }
+          ],
+          "required_caps": [
+            {
+              "pin": "2",
+              "value": "22uF",
+              "provenance": "AMS1117 datasheet (Advanced Monolithic Systems), p.4 Stability (the series requires an output capacitor as part of frequency compensation; 22uF solid tantalum ensures stability for all operating conditions), https://datasheet.lcsc.com/datasheet/pdf/e6935943fc6b1bbf350a1a0f3e90dc4a.pdf"
+            }
+          ],
+          "ldo": {
+            "dropout_max_mv": 1300,
+            "condition": "Iout=0.8A, dVout/dVref=1 percent (min 1.1V, max 1.3V)",
+            "provenance": "AMS1117 datasheet (Advanced Monolithic Systems), p.3 Electrical Characteristics (Dropout Voltage), https://datasheet.lcsc.com/datasheet/pdf/e6935943fc6b1bbf350a1a0f3e90dc4a.pdf"
+          }
+        }
+      },
+      "note": "facts mirrored from C6186 on 2026-09-26 (042 follow-up). C6186 and C369933 are two LCSC listings of the same part number (AMS1117-3.3) and the datasheet facts are properties of that part number, not of one supplier's listing -- the provenance strings below name the AMS1117 datasheet for both. The mirror exists because `core.parts.find_facts` resolves by MPN first: with only the C6186 entry carrying facts, a board part recorded as C369933 got the facts-less listing instead (ROBOT's U8, and the pillbox's U11 which is C6186 itself)."
     },
     {
       "lcsc": "C398355",

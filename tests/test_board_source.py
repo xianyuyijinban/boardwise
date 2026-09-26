@@ -78,7 +78,11 @@ def test_an_export_carries_the_library_identity_it_needs():
     assert project.kind == "epro2-export"
     assert project.name == "ROBOT ctrl FOC"
     assert project.materialised
-    assert len(project.placements) == 44
+    # 49, not 44: the export reader goes through the parser's `_split_page`, so
+    # 042 §WI-1's displaced-block fix reaches it too. The file's own DEVICE
+    # documents are untouched by that (60) — the change is which placements the
+    # reader can see, and the PCB document lists all 49 of them.
+    assert len(project.placements) == 49
     assert len(project.devices) == 60
     device = next(d for d in project.devices.values() if d.is_real_part)
     assert device.library_uuid == "0819f05c4eef4c71ace90d822a990e87"
@@ -149,7 +153,9 @@ def test_the_same_board_is_unharvestable_as_an_edit_log_and_fine_as_an_export():
         load_board_source(SOURCES / "ROBOT_ctrl_FOC.eprj2")
     exported = load_board_source(ROBOT)
     real = [d for d in exported.referable_devices().values() if d.is_real_part]
-    assert len(real) == 15
+    # 19, not 15: the four real parts whose attribute blocks the editor had
+    # displaced are visible again (042 §WI-1) — and the board's PCB lists them.
+    assert len(real) == 19
     assert all(d.attributes.get("Supplier Part") for d in real)
 
 

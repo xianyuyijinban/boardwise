@@ -212,7 +212,11 @@ def test_pages_are_not_welded(foc, motor):
     assert [len(b.nets) for b in foc.boards] == [90, 13, 35]
     # The 高速电机控制器 project: two boards with the designer's own titles
     # (板名自定义 — the board *is* the unit, not a board numbered by us).
-    assert [len(b.nets) for b in motor.boards] == [94, 50]
+    # 042 §WI-1 re-measured this pair: the board's displaced attribute blocks
+    # put 60 parts back into the model (63 -> 114 and 34 -> 49 components), and
+    # the recovered pins join existing nets. The 毕设 numbers above are
+    # untouched by that fix, which is the point of asserting both here.
+    assert [len(b.nets) for b in motor.boards] == [89, 53]
     assert motor.board_titles() != ["Board1", "Board2"]
     # The old weld's signature: one net with 100+ members. None is left.
     for board_model in (*foc.boards, *motor.boards):
@@ -307,14 +311,18 @@ def test_the_model_separates_the_three_kinds_of_repeat(foc, motor):
     # the union of the three classes is the 30 refs oracle A1 ruled on
     assert len(foc.repeated_designators()) == 30
     assert "U15" in foc.repeated_designators() and "U16" in foc.repeated_designators()
-    # 高速电机控制器: same-page repeats again, and 12 cross-board names. Neither
+    # 高速电机控制器: same-page repeats again, and 18 cross-board names. Neither
     # real multi-board fixture repeats a name across *its own* pages (their
     # second pages are the empty ones), which is why the middle class is tested
     # on a synthetic model — it is a pure function of the fields, and the fixture
-    # set cannot produce it.
+    # set cannot produce it. The cross-board count was 12 before 042 §WI-1 put
+    # that board's 60 displaced parts back into the model: C1/C2/C5/C6/C7/C8 are
+    # the six names the board's two halves now share, and they are real — the PCB
+    # lists six capacitors the schematic parse could not see.
     same_page = {name for b in motor.boards for name in b.duplicate_designators}
     assert same_page == {"U15", "U16", "U17", "U20"}
-    assert len(motor.multi_board_designators()) == 12
+    assert len(motor.multi_board_designators()) == 18
+    assert motor.multi_board_designators()["C8"] == ["控制板", "驱动板"]
     for board_model in (*foc.boards, *motor.boards):
         assert board_model.cross_page_designators == {}
 

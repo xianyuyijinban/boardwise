@@ -187,7 +187,11 @@ def test_the_committed_library_is_v2_with_its_curated_fact_entries():
     library = load_parts("blocklib/parts.json")
     assert library.version == 2
     # 011d added the golden board's LED (C51933293) as a catalog-select entry.
-    assert len(library.parts) == 94
+    # 042's re-harvest took the shelf from 94 to 109 entries: the 15 parts the
+    # pre-042 parser could not see on ROBOT and the 高速板 (both boards' own PCB
+    # lists them) reached the harvest, and three slugs became ambiguous, so the
+    # entries sharing them now carry their C-number.
+    assert len(library.parts) == 109
     with_facts = sorted(p.key for p in library.parts if p.facts is not None)
     with_category = sorted(p.key for p in library.parts if p.category)
     # 011d sec.1/2 added a fourth: the Type-C receptacle (oracle-approved
@@ -196,8 +200,16 @@ def test_the_committed_library_is_v2_with_its_curated_fact_entries():
     # REF2033AIDDCR). REF2033 came through one round **gated** (`facts_verified:
     # false`, because the decap rule misread its board); 039 批①b fixed the rule
     # and flipped it, so the category list and the facts list agree again.
+    #
+    # ``ic.ams1117_3_3`` is spelled ``ic.ams1117_3_3.c6186`` since 042's
+    # re-harvest: the shelf now holds that listing *and* ``.c369933`` — two LCSC
+    # listings of one MPN. Both carry the curated datasheet facts, because the
+    # facts are properties of the part number: the second listing was frozen
+    # facts-less for one round, which is what moved the two severity rows in
+    # `test_040b_boards`, and the sidecar mirror put them back.
     assert with_facts == [
-        "conn.type_c_16pin_2md_073", "ic.ams1117_3_3", "ic.ch340g",
+        "conn.type_c_16pin_2md_073", "ic.ams1117_3_3.c369933",
+        "ic.ams1117_3_3.c6186", "ic.ch340g",
         "ic.ch340n", "ic.mpu_6050", "ic.ref2033aiddcr", "ic.rt9013_33gb",
         "ic.sn65hvd230dr", "ic.tlv9062idr", "led.emerald_green_0603",
     ]
