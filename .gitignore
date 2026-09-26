@@ -12,6 +12,12 @@ connector/node_modules/
 connector/dist/
 connector/*.eext
 
+# dsh plugin (045): same rule — lib/ and the pack tarball are reproducible
+# from source (`npm run build` / `npm pack`), so they stay out of git.
+dsh-plugin/node_modules/
+dsh-plugin/lib/
+dsh-plugin/*.tgz
+
 # PyInstaller's output for the single-file friend build (028 batch 3a). The
 # artifact is a release attachment, not a source file: `packaging/build_exe.py`
 # rebuilds it byte-for-byte from the sources plus the connector bundle.

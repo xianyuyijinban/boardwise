@@ -1,0 +1,5 @@
+# Same rule the connector follows: build artifacts and installed packages are
+# reproducible from source, so they are never committed.
+node_modules/
+lib/
+*.tgz
