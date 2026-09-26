@@ -221,3 +221,48 @@ def test_a_board_with_no_verifiable_device_is_not_an_error():
     answers, problems = run(client, sources=[SOURCES / "highspeed_motor_ctrl.eprj2"])
     assert answers == {} and problems == []
     assert client.calls == [], "an unreadable board produced bridge calls"
+
+
+def test_the_window_hint_rides_every_frame_and_nothing_is_sent_without_one():
+    """The daemon refuses an unhinted read as soon as two windows are open (023).
+
+    Measured 2026-09-26 on this machine: 4 editor windows connected, and all 87
+    devices came back "the request named no project" — `--verify` answered about
+    **0** devices and wrote an unverified shelf. The hint is per *frame*, not per
+    connection, so it has to be forwarded on both hops of the chain.
+
+    The second half is the compatibility half: a caller that passes no hint must
+    send no hint keyword at all, so a stub (or any pre-023 client) does not have
+    to grow a keyword it never reads — which is also what keeps the other tests
+    in this file working unchanged.
+    """
+    class HintRecording(StubBridge):
+        def __init__(self):
+            super().__init__()
+            self.hints: list[dict] = []
+
+        async def call(self, action: str, params: dict, **hints):
+            self.hints.append(hints)
+            return await super().call(action, params)
+
+    hinted = HintRecording()
+    asyncio.run(
+        TOOL.collect_footprint_names(
+            [PILLBOX], client=hinted,
+            target_project="ROBOT ctrl FOC", target_instance="inst-1",
+        )
+    )
+    assert hinted.hints, "no call was made"
+    assert all(h == {"target_project": "ROBOT ctrl FOC", "target_instance": "inst-1"}
+               for h in hinted.hints)
+
+    plain = HintRecording()
+    asyncio.run(TOOL.collect_footprint_names([PILLBOX], client=plain))
+    assert plain.hints and all(h == {} for h in plain.hints)
+
+    parser = TOOL.build_parser()
+    assert parser.parse_args(["--sources", "x", "--verify"]).project is None
+    hinted_args = parser.parse_args(
+        ["--sources", "x", "--verify", "--project", "P", "--instance", "I"]
+    )
+    assert (hinted_args.project, hinted_args.instance) == ("P", "I")

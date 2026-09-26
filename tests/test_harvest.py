@@ -76,13 +76,21 @@ HARVEST_SOURCES = [PILLBOX, THESIS, HIGHS, ROBOT, PILLBOX_EPRO2, THESIS_EPRO2]
 #: Measured 2026-09-17 (the library was topped up with the two `.epro2` exports
 #: of the pillbox and the thesis board on top of the four 2026-09-16 sources).
 #: Per board, then merged.
+#:
+#: Re-measured 2026-09-26 for the two `.epro2` boards that were harvested with
+#: the pre-042 parser: 高速 47 -> 60 and ROBOT 15 -> 19, because each board's
+#: displaced attribute blocks had been hiding 13 and 4 of its real parts (the
+#: file's own PCB documents list them). The four `.eprj2` sources and the two
+#: 2026-09-17 exports are unchanged. MERGED_ENTRIES is the *uncorrected*
+#: harvest's size (92 -> 107), which is the merge the assertion below reads;
+#: with the corrections sidecar applied it is 109.
 PILLBOX_ENTRIES = 13
 THESIS_ENTRIES = 41
-HIGHS_ENTRIES = 47
-ROBOT_ENTRIES = 15
+HIGHS_ENTRIES = 60
+ROBOT_ENTRIES = 19
 PILLBOX_EPRO2_ENTRIES = 13
 THESIS_EPRO2_ENTRIES = 35
-MERGED_ENTRIES = 92
+MERGED_ENTRIES = 107
 #: Designators on parts that two or more boards share, which is why the
 #: per-board totals exceed the library size by this much.
 SHARED_ENTRIES = (
