@@ -44,6 +44,14 @@ DATAS = [
         REPO / ".kimi-code" / "skills" / "boardwise" / "SKILL.md",
         "resources/.kimi-code/skills/boardwise",
     ),
+    # The curated shelf, and deliberately *only* that one file out of
+    # `blocklib/`. `blocklib/sources/` is 22 MB of project containers kept as
+    # read-only review input — carrying them inside a downloadable exe is what
+    # the hygiene guard's red line is about; `parts.corrections.json` is a
+    # curation sidecar read by `tools/`, never by the CLI's load path. Without
+    # parts.json a frozen process read a *missing* file as an empty shelf, and
+    # every facts-driven rule went quiet without saying so.
+    (REPO / "blocklib" / "parts.json", "resources/blocklib"),
 ]
 
 for _source, _target in DATAS:
