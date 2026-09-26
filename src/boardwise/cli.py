@@ -1198,8 +1198,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Build quantity; decides the price tier and the stock requirement.",
     )
     pick.add_argument(
-        "--library", default="blocklib/parts.json",
-        help="Path to the curated library (default: %(default)s).",
+        "--library", default=None,
+        help=(
+            "Path to the curated library (default: the shelf this install "
+            "reads — `blocklib/parts.json` from a checkout, the copy the exe "
+            "carries when frozen)."
+        ),
     )
     pick.add_argument(
         "--online", action="store_true",
@@ -1245,8 +1249,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--spec", required=True, help="Path to the board spec whose BOM is wanted.",
     )
     export.add_argument(
-        "--library", default="blocklib/parts.json",
-        help="Path to the curated library (default: %(default)s).",
+        "--library", default=None,
+        help=(
+            "Path to the curated library (default: the shelf this install "
+            "reads — `blocklib/parts.json` from a checkout, the copy the exe "
+            "carries when frozen)."
+        ),
     )
     export.add_argument(
         "--out", default="",
@@ -2662,9 +2670,9 @@ def _checkup_shelf(args: argparse.Namespace):
     which is a different claim from "the shelf could not be read".
     """
     from boardwise.core.parts import PartError, load_parts
-    from boardwise.rules.facts import DEFAULT_LIBRARY_PATH
+    from boardwise.rules.facts import default_library_path
 
-    path = getattr(args, "library", None) or DEFAULT_LIBRARY_PATH
+    path = getattr(args, "library", None) or default_library_path()
     try:
         return load_parts(path), ""
     except PartError as exc:
@@ -4723,8 +4731,10 @@ def _cmd_bom_export(args: argparse.Namespace) -> int:
     except BlockError as exc:
         print(f"boardwise bom export: {args.spec}: {exc}", file=sys.stderr)
         return 2
+    from boardwise.rules.facts import default_library_path
+
     try:
-        library = load_library(args.library)
+        library = load_library(args.library or default_library_path())
     except BomError as exc:
         print(f"boardwise bom export: {exc}", file=sys.stderr)
         return 2
@@ -4905,9 +4915,10 @@ def _cmd_parts_select(args: argparse.Namespace) -> int:
 
     from boardwise.core.parts import PartError, load_parts
     from boardwise.engines.select import resolve_by_lcsc, select
+    from boardwise.rules.facts import default_library_path
 
     try:
-        library = load_parts(args.library)
+        library = load_parts(args.library or default_library_path())
     except PartError as exc:
         print(f"boardwise parts select: {exc}", file=sys.stderr)
         return 2
@@ -5011,16 +5022,25 @@ def _cmd_parts_select(args: argparse.Namespace) -> int:
 # claim. Nothing here touches the bridge.
 
 
-def _parts_library_path(args: argparse.Namespace) -> str:
+def _parts_library_path(args: argparse.Namespace, *, writable: bool = False) -> str:
     """The shelf a 039 subcommand reads, or writes.
 
     ``--library`` wins; otherwise the **rules' own** default, imported rather
     than repeated — two copies of that path is how a curation pass ends up
     filling a file no rule ever opens.
-    """
-    from boardwise.rules.facts import DEFAULT_LIBRARY_PATH
 
-    return args.library or DEFAULT_LIBRARY_PATH
+    ``writable`` picks which of the two spellings that default is: reading asks
+    the process (:func:`~boardwise.rules.facts.default_library_path`), which
+    frozen is the copy the exe carries; a **write** stays on the repo-relative
+    constant, because curating a shelf edits a file on disk and the frozen copy
+    lives inside PyInstaller's extraction directory — a write there would report
+    success and disappear with the process.
+    """
+    from boardwise.rules.facts import DEFAULT_LIBRARY_PATH, default_library_path
+
+    if args.library:
+        return args.library
+    return DEFAULT_LIBRARY_PATH if writable else default_library_path()
 
 
 def _shelf_entry(library: object, *, mpn: str, lcsc: str) -> object | None:
@@ -5374,7 +5394,7 @@ def _cmd_parts_add(args: argparse.Namespace) -> int:
         load_parts,
     )
 
-    library_path = Path(_parts_library_path(args))
+    library_path = Path(_parts_library_path(args, writable=True))
     if library_path.is_file():
         try:
             raw = json.loads(library_path.read_text(encoding="utf-8"))
@@ -5627,7 +5647,7 @@ def _cmd_parts_fetch(args: argparse.Namespace) -> int:
     )
     from boardwise.engines.datasheet import candidate_facts, pages_from_marked_text
 
-    library_path = _parts_library_path(args)
+    library_path = _parts_library_path(args, writable=True)
     try:
         library = load_parts(library_path)
     except PartError as exc:
@@ -5816,9 +5836,9 @@ def _architecture_shelf_evidence(args: argparse.Namespace):
     (more TODOs), never as an empty shelf — and the note says which it was.
     """
     from boardwise.core.parts import PartError, load_parts
-    from boardwise.rules.facts import DEFAULT_LIBRARY_PATH
+    from boardwise.rules.facts import default_library_path
 
-    path = getattr(args, "library", None) or DEFAULT_LIBRARY_PATH
+    path = getattr(args, "library", None) or default_library_path()
     try:
         return load_parts(path), ""
     except PartError as exc:
@@ -11144,9 +11164,9 @@ def _facts_library():
     Never raises: the apply runs either way, on weaker evidence, and says so.
     """
     from .engines.bom import BomError, load_library
-    from .rules.facts import DEFAULT_LIBRARY_PATH
+    from .rules.facts import default_library_path
 
-    path = Path(DEFAULT_LIBRARY_PATH)
+    path = Path(default_library_path())
     try:
         library = load_library(path)
     except (BomError, OSError) as exc:

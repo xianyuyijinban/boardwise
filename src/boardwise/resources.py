@@ -5,11 +5,11 @@ Two states, one API (028 batch 3a):
 * **running from a checkout** — this file lives at ``src/boardwise/resources.py``,
   so the repo root is two parents up and the resources are exactly the ones the
   developer just built (``connector/dist/index.js``, ``connector/extension.json``,
-  ``.kimi-code/skills/boardwise/SKILL.md``).
+  ``.kimi-code/skills/boardwise/SKILL.md``, ``blocklib/parts.json``).
 * **running from a frozen PyInstaller exe** — the same files are unpacked under
   ``sys._MEIPASS/resources/`` by the spec's ``--add-data`` entries, so the exe
-  carries its own connector bundle and its own SKILL.md and needs neither a
-  checkout nor a copy of the repo beside it.
+  carries its own connector bundle, its own SKILL.md and its own curated shelf
+  and needs neither a checkout nor a copy of the repo beside it.
 
 Why this module exists at all: ``update-connector`` used to resolve its default
 bundle with ``Path(__file__).resolve().parents[2]``. That is right from a
@@ -26,9 +26,17 @@ says "run npm run build", `install-skill` says which path it looked at).
 
 The frozen layout mirrors the repo tree under ``resources/`` — the same relative
 parts in both states (``connector/dist/index.js``,
-``connector/extension.json``, ``.kimi-code/skills/boardwise/SKILL.md``), so the
-spec's ``--add-data`` lines and the two states' expectations cannot drift apart
-in the way a per-resource special case would eventually drift.
+``connector/extension.json``, ``.kimi-code/skills/boardwise/SKILL.md``,
+``blocklib/parts.json``), so the spec's ``--add-data`` lines and the two states'
+expectations cannot drift apart in the way a per-resource special case would
+eventually drift.
+
+The curated shelf is the one resource with a *second* consumer shape: the rules
+read it as the default of a path that used to be spelled relative to the working
+directory. A frozen process has no working directory that means anything, so
+``rules.facts.default_library_path`` resolves the shelf through
+:func:`parts_library` — one answer to "which shelf", the same way the connector
+bundle has one answer for "which bundle".
 """
 
 from __future__ import annotations
@@ -45,6 +53,7 @@ FROZEN_SUBDIR = "resources"
 _BUNDLE_PARTS = ("connector", "dist", "index.js")
 _EXTENSION_PARTS = ("connector", "extension.json")
 _SKILL_PARTS = (".kimi-code", "skills", "boardwise", "SKILL.md")
+_PARTS_LIBRARY_PARTS = ("blocklib", "parts.json")
 
 
 def is_frozen() -> bool:
@@ -95,3 +104,16 @@ def connector_extension_json() -> Path:
 def skill_md() -> Path:
     """The SKILL.md this install would write into the user-level skill directory."""
     return resource_root().joinpath(*_SKILL_PARTS)
+
+
+def parts_library() -> Path:
+    """The curated shelf (``blocklib/parts.json``) this install judges parts against.
+
+    Read-only by nature: frozen, this path lives inside PyInstaller's extraction
+    directory, which is deleted when the process exits. Curating a shelf writes
+    to a file on disk, so the writing subcommands deliberately keep the
+    repo-relative spelling (``rules.facts.DEFAULT_LIBRARY_PATH``) instead of
+    resolving through here — a write into the extraction directory would report
+    success and vanish.
+    """
+    return resource_root().joinpath(*_PARTS_LIBRARY_PARTS)

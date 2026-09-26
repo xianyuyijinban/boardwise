@@ -38,9 +38,39 @@ LEVEL = "L2-facts"
 #: An IC by designation is ``U`` followed by a digit — ``U1``/``U3``/``U5``,
 #: never ``USB1`` (a connector whose prefix merely *starts* with U).
 IC_PATTERN = re.compile(r"^U\d")
-#: Where the lazy library loads from when a test does not inject one. The CLI
-#: runs from the repository root, so the relative default matches it.
+#: Where the lazy library loads from when a test does not inject one, spelled
+#: relative to the repository root — the CLI's documented working directory and
+#: the spelling every ``--library`` default and doc quotes. **Frozen there is no
+#: repository**: a friend's exe has no ``blocklib/`` beside it, so the relative
+#: spelling resolved to a *missing* file, which `core.parts.load_parts`
+#: deliberately reads as an empty shelf — the exe silently lost every
+#: facts-driven rule. A process-dependent default belongs in
+#: :func:`default_library_path`, not in a module constant.
 DEFAULT_LIBRARY_PATH = "blocklib/parts.json"
+
+
+def default_library_path() -> str:
+    """The shelf this process reads when no caller named one.
+
+    From a checkout that is :data:`DEFAULT_LIBRARY_PATH` — unchanged, because
+    the constant is what the CLI's help text, docs and `--library` defaults are
+    all written against. Frozen it is the copy the exe carries, resolved through
+    :mod:`boardwise.resources` the same way the connector bundle is.
+
+    A frozen process that cannot name its extraction directory is a broken
+    bootstrap: the constant is returned so the caller behaves exactly as it did
+    before (an empty shelf, and every caller that cares already reports the path
+    it looked at) rather than raising out of a rule run.
+    """
+    from .. import resources
+
+    if not resources.is_frozen():
+        return DEFAULT_LIBRARY_PATH
+    try:
+        return str(resources.parts_library())
+    except RuntimeError:
+        return DEFAULT_LIBRARY_PATH
+
 
 # Subject category classification. A shelf entry can be an IC, explicitly
 # something else, or carry no category at all (measured: the golden board's
@@ -120,11 +150,17 @@ class FactsRule(OutcomeRule):
     """Base for rules that read the curated shelf.
 
     The library is injectable (tests pass a tiny synthetic shelf); without
-    injection it loads lazily from :data:`DEFAULT_LIBRARY_PATH`, because
-    module-level BUILTIN_RULES instances outlive any single run.
+    injection it loads lazily from :func:`default_library_path` — this process's
+    shelf — because module-level BUILTIN_RULES instances outlive any single run
+    and are built at import, long before a frozen process could resolve anything.
+
+    ``library_path`` is the *override*: empty means "whatever shelf this process
+    reads" (``""`` rather than the constant, so that resolving it stays a
+    runtime decision and a checkout and a frozen exe cannot disagree about what
+    the default is).
     """
 
-    library_path: str = DEFAULT_LIBRARY_PATH
+    library_path: str = ""
 
     def __init__(self, library: PartLibrary | None = None) -> None:
         self._library = library
@@ -134,7 +170,7 @@ class FactsRule(OutcomeRule):
         if self._library is None:
             from ..core.parts import load_parts
 
-            self._library = load_parts(self.library_path)
+            self._library = load_parts(self.library_path or default_library_path())
         return self._library
 
     def entry_for(self, comp: Component) -> PartEntry | None:
@@ -1339,6 +1375,7 @@ class UsbCcPulldown(FactsRule):
 
 __all__ = [
     "DEFAULT_LIBRARY_PATH",
+    "default_library_path",
     "DomainVsRange",
     "FactsRule",
     "LdoDropout",
