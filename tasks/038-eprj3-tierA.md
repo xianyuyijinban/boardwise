@@ -94,3 +94,19 @@ connector on V4 在线探针：doctor 8 项、`sys.probe` 8 关键成员、activ
   owner_uuid 修老缺口）；坑表**不新增**（本批为离线格式工作，未踩真机坑）。
 - 遗留（照旧挂着）：朋友真实 V4 样本终验（yAxisDirection / NC 引脚 id / CANVAS 缺失定案）；
   connector-on-V4 在线探针（工作项 4，等朋友机器）；`.eprj3` 当 plan 快照属写路径侧，A 档未开。
+
+## V4.1.60 真机实测（2026-09-27，xianyuyijinban老电脑，结果包 `v4-test`）
+
+- **V4.1.60 本地保存仍是单文件 `.eprj2`（V3 格式）**——本机未出现 `.eprj3` 文件夹格式；
+  checkup 经 `sys.get_project_file` 拿到的整工程归档同样按 V3 管线满血解析
+  （UAV遥控器：45 器件/48 网，600.9 ms，Board1_1 板链正确读出）。
+- **工作项 4（connector-on-V4 在线探针）已闭环**：doctor 8/8、`activate()` 正常派发、
+  自动配对首连即信任、V3 命名空间全套在位且 8/8 关键方法 arity 与 3.2.149 逐一相同；
+  V4 新增命名空间 `lib_SimulationModel` / `sys_ExternalApi` / `sys_Help` / `sys_Math`（超集，无删减）。
+- **结论修正**：eprj3 Tier-A 支持保留，但紧迫性重定级——V4 本地工程不走 eprj3，
+  该格式大概率是云端/协作或未来格式；真实 V4 样本终验（yAxisDirection / NC 引脚 id /
+  CANVAS 缺失定案）依然挂着，等出现真 eprj3 样本再核。
+- 适配动作：`extension.json` engines `~3.2.0` → `>=3.2.0`（V4.1.60 当前不拦截，防未来收紧），
+  connector 版本号不动（0.4.25），eext 与 exe 附件已在 v0.4.26 就地换新。
+- 已知项：doctor 离线预检把 `D:\lceda`（元件库）当安装树读不出版本报 SKIP——
+  在线检查覆盖，登记为已知限制不修；V4 启动器有参数白名单（`--remote-debugging-port` 报 bad option）。

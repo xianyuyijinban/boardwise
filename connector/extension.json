@@ -6,7 +6,7 @@
   "version": "0.4.25",
   "publisher": "boardwise",
   "engines": {
-    "eda": "~3.2.0"
+    "eda": ">=3.2.0"
   },
   "license": "MIT",
   "categories": "Other",
