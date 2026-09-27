@@ -52,6 +52,12 @@ DATAS = [
     # parts.json a frozen process read a *missing* file as an empty shelf, and
     # every facts-driven rule went quiet without saying so.
     (REPO / "blocklib" / "parts.json", "resources/blocklib"),
+    # The port-metadata sidecar (`draw` / `validate --port-meta`, task 047).
+    # Read-only, like the shelf: without it the frozen exe's level and
+    # power-tree gates answer "cannot tell" and refuse the spec (045b
+    # measured exactly that in a clean directory), which is honest but not a
+    # working install.
+    (REPO / "blocklib" / "blocks.portmeta.json", "resources/blocklib"),
 ]
 
 for _source, _target in DATAS:

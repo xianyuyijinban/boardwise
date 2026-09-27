@@ -50,8 +50,10 @@ boardwise review path/to/board.epro2 --json report.json --md report.md
 `--latest` prints which file it picked (with its mtime) before it reviews, so the run
 is never ambiguous about what was read.
 
-An `.epro2` is reviewed in the **pcb** view by default; a schematic-only export needs
-`--view schematic` (its pcb view reads nothing).
+An `.epro2` is reviewed in the **schematic** view by default — the design's own
+truth. The **pcb** view reads the PCB document's separate copy and is asked for by
+name (`--view pcb`) when the board itself is the subject; it goes stale whenever the
+schematic changed and the board was not re-synced.
 
 Installing this on a fresh Windows machine — Python, the editor `.eext`, the daemon —
 is its own walkthrough: [`docs/install.md`](docs/install.md) (Chinese, written for a
@@ -355,8 +357,9 @@ boardwise review path/to/board.epro2 --json report.json --md report.md
 `--latest` 会先打印挑中了哪个文件（含最后修改时间），再开始审查——"最新"只有在说清是哪份
 导出时才有意义。
 
-`.epro2` 缺省按 **PCB 视图**审查；只画了原理图的导出要加 `--view schematic`（缺省视图在
-它上面读到的是 0 器件 0 网络）。
+`.epro2` 缺省按 **schematic 视图**审查——原理图是设计真相。**PCB 视图**读的是 PCB 文档
+自己那份副本，要审板级内容（焊盘 / 走线 / 过孔）得显式加 `--view pcb`；原理图改了而板子
+没同步时，那份副本是旧的。
 
 ### 一键审查（`checkup`）
 

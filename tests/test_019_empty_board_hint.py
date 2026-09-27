@@ -1,10 +1,12 @@
 """review 空板视图提示（任务 019）——全离线，用**真实夹具**：
 
-`.epro2` 的 `--view` 缺省是 `pcb`。只画了原理图的导出在 pcb 视图里就是
-"0 components, 0 nets" + "board: 0 pads, 0 tracks, 0 vias"，018 之前这句话就是
-全部——读的人没有理由知道该加 `--view schematic`，只会以为导出是空的（016 场景 6
-的教训 B，Kimi 自己踩过）。这里钉两件事：**该说的时候说**（控制台一行英文 +
-`--md` 中文摘要里一句中文），**不该说的时候一个字都不加**（`--json` 逐字节不变）。
+2026-09-27（任务 047）起 `.epro2` 的 `--view` **缺省是 `schematic`**，所以这里每条
+用例都**显式**写 `--view pcb`：提示本来就是在钉"读者点名要 pcb 视图、导出却只有原理图"
+这件事，默认翻转后它反而只可能在这种情况下出现（见 `cli._pcb_view_read_nothing`）。
+只画了原理图的导出在 pcb 视图里就是 "0 components, 0 nets" + "board: 0 pads, 0 tracks,
+0 vias"，读的人没有理由知道该改回 `--view schematic`，只会以为导出是空的（016 场景 6
+的教训 B，Kimi 自己踩过）。这里钉两件事：**该说的时候说**（控制台一行英文 + `--md`
+中文摘要里一句中文），**不该说的时候一个字都不加**（`--json` 逐字节不变）。
 
 夹具是现成的、不许动：
 - `EMPTY_PCB = tests/fixtures/ch340_golden.epro2`：真实的原理图导出，pcb 视图
@@ -60,12 +62,14 @@ def _lines(out: str) -> list[str]:
 
 
 # --------------------------------------------------------------------------
-# 1. 触发：`.epro2` + 缺省 view + 全空
+# 1. 触发：`.epro2` + 显式 --view pcb + 全空
 # --------------------------------------------------------------------------
 
 
 def test_the_console_says_why_the_pcb_view_read_nothing(capsys):
-    code = cli.main(["review", str(EMPTY_PCB)])
+    # 047 起文件默认是 schematic，所以 pcb 视图必须点名要（这也正是提示现在
+    # 唯一还能出现的场合：读者要的是板子，导出里没有板子）。
+    code = cli.main(["review", str(EMPTY_PCB), "--view", "pcb"])
     out = capsys.readouterr().out
 
     assert code == 0
@@ -81,7 +85,9 @@ def test_the_console_says_why_the_pcb_view_read_nothing(capsys):
 def test_the_note_is_last_even_when_the_reports_are_written(tmp_path, capsys):
     md = tmp_path / "r.md"
     json_path = tmp_path / "r.json"
-    code = cli.main(["review", str(EMPTY_PCB), "--json", str(json_path), "--md", str(md)])
+    code = cli.main(
+        ["review", str(EMPTY_PCB), "--view", "pcb", "--json", str(json_path), "--md", str(md)]
+    )
     out = capsys.readouterr().out
 
     assert code == 0
@@ -98,7 +104,7 @@ def test_latest_on_an_empty_backup_gets_the_note_too(tmp_path, capsys):
     picked = root / "empty_backup.epro2"
     picked.write_bytes(EMPTY_PCB.read_bytes())
 
-    code = cli.main(["review", "--latest", str(root)])
+    code = cli.main(["review", "--latest", str(root), "--view", "pcb"])
     out = capsys.readouterr().out
 
     assert code == 0
@@ -113,7 +119,7 @@ def test_latest_on_an_empty_backup_gets_the_note_too(tmp_path, capsys):
 
 def test_the_md_summary_carries_the_chinese_hint(tmp_path, capsys):
     md = tmp_path / "r.md"
-    assert cli.main(["review", str(EMPTY_PCB), "--md", str(md)]) == 0
+    assert cli.main(["review", str(EMPTY_PCB), "--view", "pcb", "--md", str(md)]) == 0
     capsys.readouterr()
     text = md.read_text(encoding="utf-8")
 
@@ -157,7 +163,9 @@ def test_the_json_report_is_the_untouched_empty_report(tmp_path, capsys):
     json_path = tmp_path / "r.json"
     md = tmp_path / "r.md"
     assert (
-        cli.main(["review", str(EMPTY_PCB), "--json", str(json_path), "--md", str(md)])
+        cli.main(
+            ["review", str(EMPTY_PCB), "--view", "pcb", "--json", str(json_path), "--md", str(md)]
+        )
         == 0
     )
     capsys.readouterr()
@@ -174,9 +182,12 @@ def test_the_json_report_is_the_untouched_empty_report(tmp_path, capsys):
 def test_the_json_is_byte_identical_with_and_without_the_markdown(tmp_path, capsys):
     plain = tmp_path / "plain.json"
     both = tmp_path / "both.json"
-    assert cli.main(["review", str(EMPTY_PCB), "--json", str(plain)]) == 0
+    assert cli.main(["review", str(EMPTY_PCB), "--view", "pcb", "--json", str(plain)]) == 0
     assert (
-        cli.main(["review", str(EMPTY_PCB), "--json", str(both), "--md", str(tmp_path / "r.md")])
+        cli.main(
+            ["review", str(EMPTY_PCB), "--view", "pcb", "--json", str(both),
+             "--md", str(tmp_path / "r.md")]
+        )
         == 0
     )
     capsys.readouterr()
@@ -195,14 +206,15 @@ def test_a_schematic_review_of_the_same_file_gets_no_note(tmp_path, capsys):
     text = md.read_text(encoding="utf-8")
 
     assert code == 0
-    # 同一个文件在 schematic 视图里有内容——这就是提示存在的理由。
+    # 同一个文件在 schematic 视图里有内容——这就是提示存在的理由。（047 起这也
+    # 就是不带 --view 时的答案，但这条用例钉的是**不该说的时候一个字都不加**。）
     assert "(17 components, 13 nets)" in out
     assert EMPTY_PCB_VIEW_NOTE not in out
     assert EMPTY_PCB_VIEW_HINT not in text
 
 
 def test_a_board_the_pcb_view_can_read_gets_no_note(capsys):
-    code = cli.main(["review", str(FILLED_PCB)])
+    code = cli.main(["review", str(FILLED_PCB), "--view", "pcb"])
     out = capsys.readouterr().out
 
     assert code == 0

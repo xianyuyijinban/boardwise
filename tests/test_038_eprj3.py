@@ -303,3 +303,20 @@ def test_review_reads_a_folder_project(monkeypatch, tmp_path, capsys):
     payload = json.loads((tmp_path / "r.json").read_text(encoding="utf-8"))
     assert payload.get("findings") is not None
     assert "2 components" in capsys.readouterr().out
+
+
+def test_review_needs_no_view_spelling_for_a_folder_project(tmp_path, capsys):
+    """047: the file default is the schematic view, which is the folder's only one.
+
+    Before the flip a bare `review <folder>` was refused by name ("B 档未开"),
+    because the *pcb* view was what a bare call asked for. The refusal was
+    correct — the folder has no board tier — but it is no longer what the
+    default names, so the same call now reads the folder it was pointed at.
+    Pinned here because the SKILL's "必须显式 --view schematic" line is about the
+    old default.
+    """
+    code = cli.main(["review", str(FIXTURE), "--json", str(tmp_path / "r.json")])
+    out = capsys.readouterr().out
+    assert code in (0, 1), out
+    assert "2 components" in out
+    assert (tmp_path / "r.json").is_file()

@@ -187,19 +187,32 @@ def _append_severity_groups(lines: list[str], findings: list[Finding]) -> None:
 
 #: A designator standing alone in prose: a short alpha prefix then digits, not
 #: glued to a longer word (`U1` yes, `PC14`/`3V3`/`FRC0805J471` no).
-_DESIGNATOR_TOKEN = re.compile(r"(?<![A-Za-z0-9_])([A-Za-z]{1,4})(\d{1,4})(?![A-Za-z0-9_])")
+#:
+#: The prefix is *up to five* letters because `SCREW1..4` — the mounting holes
+#: on the thesis FOC board, measured in 017 — are real designators an allow-list
+#: of at most four could never see, so the finding that names one lost its ref
+#: and the canvas lost its mark. A wider *shape* is not a looser judgement:
+#: every candidate this matches still has to appear in
+#: :data:`DESIGNATOR_PREFIXES`, and that list is what keeps the part numbers out.
+_DESIGNATOR_TOKEN = re.compile(r"(?<![A-Za-z0-9_])([A-Za-z]{1,5})(\d{1,4})(?![A-Za-z0-9_])")
 
 #: The prefixes accepted as designators: the shelf table's own prefixes (the
 #: project's existing statement of what a designator prefix means) plus the few
 #: families it does not name. **An allow-list, not a heuristic on the shape** —
 #: `AMS1117`, `SS34` and `CH340G` all *look* like designators, and a shape-only
-#: rule would hand them to the canvas as refs that resolve to nothing.
+#: rule would hand them to the canvas as refs that resolve to nothing. This same
+#: list is why the five-letter shape above is safe: `SCREW` is named here and
+#: `FRC0805J471` (`FRC` + `0805`, followed by `J`) is not.
 DESIGNATOR_PREFIXES: frozenset[str] = frozenset(DESIGNATOR_CATEGORIES) | frozenset(
     {
         "RV", "RP", "RT",   # potentiometer / preset
         "FB",               # ferrite bead
         "NT", "ZD", "TVS",  # thermistor / zener / TVS
         "VR", "BT", "MK", "MIC", "TH", "ZZ",
+        # Mounting hole / structural part: a designator the board really has,
+        # in no shelf category (nothing to look up facts for) — named here so a
+        # finding that mentions one still gets a mark on the canvas.
+        "SCREW",
     }
 )
 

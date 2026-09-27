@@ -6,6 +6,10 @@
 3. `review --json` 的 schema 一个字节不变（评测 harness 只读它）；
 4. `edit apply` 连不上 daemon → 退出码 **3**（页状态不可陈述），不是 2。
 
+任务 047 加第 5 条：**文件默认走 schematic 视图**（017 裁定：schematic 是设计真相，
+pcb 视图读的是 PCB 文档的陈旧副本），显式 `--view pcb` 仍读 pcb。此前钉 pcb 数字的
+用例一律改成显式点名 pcb——它们本来就在测 pcb 视图，只是默认变了。
+
 没有 socket、没有编辑器、没有真机动作：唯一被替换的是 `_open_cli` 返回的 client
 类，它连 `open()` 都不成功。摘要的期望值写死在断言里，不用"跑一遍再抄"的方式
 生成——否则改坏了实现，测试会跟着一起改。
@@ -49,6 +53,9 @@ ENET = FIXTURES / "board24v.enet"
 EPRO2 = FIXTURES / "llc_board.epro2"
 #: 17 components, 2 WARN including one repairable finding (U3 carries a target).
 MISMATCH = ROOT / "reviewsets" / "injected" / "value-mpn-mismatch.epro2"
+#: 0 components / 0 nets in the pcb view, 17 / 13 in the schematic one: the ruler
+#: task 047 uses to say which view a bare `review <file>` actually reads.
+CH340 = FIXTURES / "ch340_golden.epro2"
 
 
 def _backup(directory: Path, name: str, mtime: float, data: bytes = b"x") -> Path:
@@ -173,8 +180,12 @@ def test_latest_reviews_the_newest_export_end_to_end(tmp_path, capsys):
     md = tmp_path / "report.md"
     json_path = tmp_path / "report.json"
 
+    # `--view pcb` on purpose: this test is about *which file* `--latest` picks,
+    # and the pcb view is the one whose numbers it pins (the file default became
+    # schematic in 047; the default is pinned in its own test below).
     code = cli.main(
-        ["review", "--latest", str(root), "--md", str(md), "--json", str(json_path)]
+        ["review", "--latest", str(root), "--view", "pcb",
+         "--md", str(md), "--json", str(json_path)]
     )
     captured = capsys.readouterr()
 
@@ -184,6 +195,42 @@ def test_latest_reviews_the_newest_export_end_to_end(tmp_path, capsys):
     assert str(older) not in captured.out
     assert "(47 components, 25 nets)" in captured.out
     assert f"Source: {picked}" in md.read_text(encoding="utf-8")
+
+
+def test_a_file_is_reviewed_in_the_schematic_view_by_default(capsys):
+    """Task 047: the file default is the schematic, not the PCB netlist.
+
+    017 ruled the schematic view to be the design's truth: the pcb view reads
+    the *PCB document's* own copy, which goes stale when the schematic changed
+    and the board was not re-synced — the review then reports parts of a design
+    that is no longer there. `ch340_golden.epro2` shows the difference in one
+    file: 0 components in the pcb view, 17 in the schematic (and the M1 rules
+    are written against the latter).
+    """
+    code = cli.main(["review", str(CH340)])
+    out = capsys.readouterr().out
+
+    assert code == 0
+    assert "(17 components, 13 nets)" in out, "the file default must be the schematic view"
+    # No `board:` line: BoardGeometry only exists for the pcb view.
+    assert "board:" not in out
+    # …and the 019 "you probably meant the schematic" note cannot fire, because
+    # the schematic view did read something.
+    assert "pcb view read nothing" not in out
+
+
+def test_an_explicit_pcb_view_still_reads_the_pcb_document(capsys):
+    """The flip must not have taken the board-level view away (047).
+
+    Same fixture, asked for by name: 0 components (this export carries no board
+    content) and the copper line that only the pcb view can print.
+    """
+    code = cli.main(["review", str(CH340), "--view", "pcb"])
+    out = capsys.readouterr().out
+
+    assert code == 0
+    assert "(0 components, 0 nets)" in out
+    assert "board: 0 pads, 0 tracks, 0 vias" in out
 
 
 # --------------------------------------------------------------------------

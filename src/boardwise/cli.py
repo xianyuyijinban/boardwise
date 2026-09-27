@@ -92,10 +92,12 @@ LATEST_DEFAULT_DIRS: tuple[str, ...] = ("~/Downloads", "~/Desktop", "E:/LC Proje
 PROJECT_BACKUP_SUFFIX = ".epro2"
 
 #: Printed (task 019 §1) when the pcb view of a `.epro2` reads nothing at all.
-#: The most likely reason is that the export carries only a schematic, and the
-#: default view cannot say that by itself: the run then reports "0 components,
-#: 0 nets" as a fact and the reader concludes the export is empty. English,
-#: like the rest of the console output. Fires on
+#: The most likely reason is that the export carries only a schematic, and only
+#: a reader who asked for the pcb view by name can be told so: the run reports
+#: "0 components, 0 nets" as a fact and they conclude the export is empty.
+#: (Since 047 the *default* answer for a file is the schematic view, so this note
+#: fires on an explicit `--view pcb` — which is exactly when the hint helps.)
+#: English, like the rest of the console output. Fires on
 #: :func:`_pcb_view_read_nothing` only — never on a board with content.
 EMPTY_PCB_VIEW_NOTE = (
     "note: pcb view read nothing from this file — for a schematic review, "
@@ -204,6 +206,13 @@ def _version_text() -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    # Which sidecar a bare `--port-meta` means depends on the *process* (a
+    # checkout ships one beside the code, a frozen exe carries its own copy);
+    # resolving it here is pure path arithmetic with no I/O, so an argparse
+    # default can hold the answer and `%(default)s` keeps saying what it is.
+    # 045b made the same move for the shelf's `--library` default.
+    from .core.portmeta import default_port_meta_path
+
     parser = argparse.ArgumentParser(
         prog="boardwise",
         description="AI harness for EasyEDA Pro: offline design review (stage 1).",
@@ -253,16 +262,21 @@ def build_parser() -> argparse.ArgumentParser:
     review.add_argument(
         "--view",
         choices=("pcb", "schematic"),
-        # Resolved in `_cmd_review`: `pcb` for a file (the historical default),
-        # `schematic` for --live (a live model is a page model). A plain default
-        # here would make `review --live` refuse its own sensible view.
+        # Resolved in `_cmd_review`: `schematic` for a file (017's ruling: the
+        # schematic is the design's truth) and `schematic` for --live (a live
+        # model is a page model). A plain default here would make
+        # `review --live` refuse its own sensible view.
         default=None,
         help=(
-            "Which model of a .epro2 backup to review: pcb (the default for a "
-            "file, the PCB netlist view) or schematic (the parsed schematic, the "
-            "view the 011 review rules are written against — use it for "
-            "schematic-only exports, where the pcb view is empty). With --live "
-            "the default is schematic, because the live data path yields pages."
+            "Which model of a .epro2 backup to review: schematic (the parsed "
+            "schematic — **the default**, and the view the 011 review rules are "
+            "written against) or pcb (the PCB netlist view, for board-level "
+            "content: pads, tracks, vias). The schematic is the default because "
+            "the pcb view reads the PCB document's own copy of the design, which "
+            "goes stale whenever the schematic changed and the board was not "
+            "re-synced — a review of such a file reports parts of a design that "
+            "is no longer there (017). With --live the view is always schematic: "
+            "the live data path yields pages."
         ),
     )
     review.add_argument(
@@ -1007,7 +1021,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     draw.add_argument(
-        "--port-meta", default="blocklib/blocks.portmeta.json",
+        "--port-meta", default=default_port_meta_path(),
         help=(
             "Spec mode only: the port-metadata sidecar the pre-draw validation "
             "reads (default: %(default)s, same convention as `validate`). "
@@ -1338,7 +1352,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Curated part library a `part` reference can cite (default: %(default)s).",
     )
     validate.add_argument(
-        "--port-meta", default="blocklib/blocks.portmeta.json",
+        "--port-meta", default=default_port_meta_path(),
         help=(
             "Port-metadata sidecar saying what each port is electrically "
             "(default: %(default)s). Voltage, direction and IO level are "
@@ -1444,14 +1458,14 @@ def _load_model(
 ) -> tuple[object, object | None]:
     """Return ``(DesignModel, BoardGeometry | None)`` for a supported input.
 
-    ``view`` picks which model a ``.epro2`` backup yields: ``pcb`` (the
-    default, the netlist view ``review`` has always used) or ``schematic``
-    (the parsed schematic, which is what the 011-family rules are written
-    against — a schematic-only export yields an empty pcb view, measured
-    2026-09-19). ``BoardGeometry`` is only available for the pcb view of a
-    ``.epro2``; both views come from one parse of the file. Raises
-    :class:`EncryptedProjectError` for an unreadable backup and ``ValueError``
-    for an unsupported extension.
+    ``view`` picks which model a ``.epro2`` backup yields: ``schematic`` (the
+    parsed schematic, which is what the 011-family rules are written against —
+    and what ``review`` asks for by default since 047, because the schematic is
+    the design's truth) or ``pcb`` (the PCB document's own netlist view, asked
+    for by name when the board itself is the subject). ``BoardGeometry`` is only
+    available for the pcb view of a ``.epro2``; both views come from one parse of
+    the file. Raises :class:`EncryptedProjectError` for an unreadable backup and
+    ``ValueError`` for an unsupported extension.
 
     ``parse_stats`` (task 020 §WI-1) is an optional caller-owned
     :class:`boardwise.core.geometry.ParseStats` the schematic parse fills in.
@@ -1817,8 +1831,9 @@ def _pcb_view_read_nothing(
 
     * the input is a project backup (an `.enet` netlist has no view to pick, so
       an empty one means an empty netlist, not a wrong view);
-    * ``view`` is ``pcb`` — the default, explicit or implicit, since the
-      default is what quietly produced the shrug;
+    * ``view`` is ``pcb`` — since 047 that means the reader asked for it by name
+      (the file default is the schematic view), which is the case where the hint
+      is worth printing: "you asked for the board, this export has no board";
     * the model **and** the copper are empty: no components, no nets, no pads,
       no tracks, no vias. A board with copper but no netlist is not an empty
       read, and telling its reader to switch views would be a wrong hint —
@@ -1989,7 +2004,12 @@ def _cmd_review(args: argparse.Namespace) -> int:
         if source is None:
             return 2
         path = Path(source)
-        view = args.view or "pcb"
+        # The schematic is the file default (task 047, on 017's ruling): the pcb
+        # view reads the *PCB document's* copy of the design, which goes stale
+        # when the schematic changed and the board was not re-synced — the review
+        # then reports a design that is no longer there. `--view pcb` still reads
+        # it, deliberately and by name, for board-level content.
+        view = args.view or "schematic"
         # The parse reports what it dropped into this (task 020 §WI-1); the model
         # itself is unchanged, so `--json` and every rule's input are byte-for-byte
         # what they were. Only the schematic view fills it — see `_load_model`.

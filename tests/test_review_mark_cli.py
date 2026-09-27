@@ -101,6 +101,31 @@ def test_the_reader_keeps_a_real_designator_out_of_a_part_number():
     assert finding_refs(finding) == ["C116"]
 
 
+def test_a_five_letter_prefix_is_read_when_the_allowlist_names_it():
+    """`SCREW1..4` are designators (017): the thesis FOC board's mounting holes.
+
+    The shape used to cap the prefix at four letters, so a finding that named
+    one lost its ref and `review-mark` lost the mark with it. The length is read
+    here, the allow-list entry is what makes it a designator, and the case folds
+    like every other ref.
+    """
+    finding = Finding(
+        rule_id="conn-duplicate-designators",
+        severity="WARN",
+        message="SCREW1 and SCREW4 share a designator",
+        level="L1",
+        evidence=["SCREW4 pin1 @ GND"],
+    )
+    assert finding_refs(finding) == ["SCREW4", "SCREW1"]
+
+
+def test_a_lowercase_five_letter_prefix_folds_to_the_same_ref():
+    finding = Finding(
+        rule_id="x", severity="WARN", message="", level="L1", evidence=["screw2 孔"]
+    )
+    assert finding_refs(finding) == ["SCREW2"]
+
+
 def test_render_json_states_the_refs_of_every_finding():
     payload = json.loads(render_json([
         Finding(rule_id="decoupling-per-ic", severity="WARN", message="U1 缺电容",

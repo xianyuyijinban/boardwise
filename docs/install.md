@@ -221,8 +221,10 @@ rem 看完清掉标记
 ```
 
 `review` 的退出码：`1` 表示有 ERROR 级发现（是"发现问题"，不是命令失败）、`0` 表示没有、
-`2` 表示文件读不了。`.epro2` 的 `--view` 缺省是 `pcb`；只画了原理图的工程在 pcb 视图里
-读到的是 0 器件 0 网络，这时要加 `--view schematic`（终端和 `--md` 报告都会提示这一句）。
+`2` 表示文件读不了。`.epro2` 的 `--view` 缺省是 `schematic`（设计真相）；要审板级内容
+（焊盘 / 走线 / 过孔）显式加 `--view pcb`——它读 PCB 文档自己那份副本，原理图改了而板子没
+同步时那份副本是旧的。点名 `--view pcb` 而导出里只画了原理图时读到的是 0 器件 0 网络，
+终端和 `--md` 报告都会提示改回 `--view schematic`。
 全部参数看 `boardwise review --help`；
 `review-mark` 的用法、截图注意事项（`bridge screenshot` 在 3.2.186 上返回的是缓存空帧，
 别拿它当证据）见 [`getting-started.md`](getting-started.md) 第 5 步。
