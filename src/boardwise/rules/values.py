@@ -195,9 +195,10 @@ def mpn_resistance_readings(mpn: str) -> list[tuple[float, str]]:
     matches the board's own declared value against them, and an MPN whose readings
     *all* disagree is still a contradiction.
 
-    Four shapes are read, each one's whitelist written out at its own helper --
-    the mid-letter notation below, 厚声's three-figures-plus-letter-exponent
-    field (:func:`_letter_exponent_reading`), the E-96 four-figure code
+    Five shapes are read, each one's whitelist written out at its own helper --
+    the mid-letter notation below, 厚声's three-figures-plus-exponent field in
+    both its alphabets (:func:`_letter_exponent_reading`,
+    :func:`_numeric_exponent_reading`), the E-96 four-figure code
     (:func:`_e96_reading`) and the shunt field between a tolerance letter and
     its ``R`` (:func:`_shunt_reading`). They are additive on purpose (task 046):
     an MPN where two conventions are by shape indistinguishable keeps *both*
@@ -251,6 +252,7 @@ def mpn_resistance_readings(mpn: str) -> list[tuple[float, str]]:
             readings.setdefault(value, f"{mantissa}{letter}{fraction}")
     for reading in (
         _letter_exponent_reading(token),
+        _numeric_exponent_reading(token),
         _e96_reading(token),
         _shunt_reading(token),
     ):
@@ -275,12 +277,24 @@ _SIZE_HEADS = (
 #: is a 2.2 Ω part (220 x 10^-2) and ``0603WAF330JT5E`` is 33 Ω (330 x 10^-1).
 #: The whole field is anchored on the size head, the power/tolerance letters and
 #: the taping suffix; a numeric exponent (``0603WAF1002T5E`` = 100 x 10^2) is
-#: *not* read here — that family is a four-figure field and stays where it was.
+#: read by its own sibling below, not here.
 _LETTER_EXPONENT_FIELD_RE = re.compile(
     r"^(?:01005|0201|0402|0603|0805|1206|1210|1812|2010|2512)"
     r"[A-Z0-9]{2,4}(\d{3})([JKL])T[A-Z0-9]+$"
 )
 _LETTER_EXPONENT = {"J": -1, "K": -2, "L": -3}
+
+#: The same 厚声 field with a **numeric** exponent (task 048) — the same three
+#: significant figures, a digit instead of a letter, and the same size head /
+#: power-tolerance letters / taping suffix anchors: ``0603WAF1002T5E`` =
+#: 100 x 10^2 = 10 kΩ, ``0805W8F1003T5E`` = 100 x 10^3 = 100 kΩ. The 5% (E-24)
+#: members of the family lead the field with a ``0`` — ``0805W8J0103T5E`` =
+#: 010 x 10^3 = 10 kΩ, the worked example in the ordering rule — which the same
+#: reading handles, a leading zero leaving the significand unchanged.
+_NUMERIC_EXPONENT_FIELD_RE = re.compile(
+    r"^(?:01005|0201|0402|0603|0805|1206|1210|1812|2010|2512)"
+    r"[A-Z0-9]{2,4}(\d{3})(\d)T[A-Z0-9]+$"
+)
 
 
 def _letter_exponent_reading(token: str) -> tuple[float, str] | None:
@@ -300,6 +314,27 @@ def _letter_exponent_reading(token: str) -> tuple[float, str] | None:
     if value <= 0:
         return None
     return value, f"{figures}{letter} (letter-exponent field)"
+
+
+def _numeric_exponent_reading(token: str) -> tuple[float, str] | None:
+    """厚声's three-figures-plus-digit-exponent field, or None.
+
+    Five of the six shapes this module reads state the value *inside* an MPN
+    whose other fields are letters; this one is the reason a plate of 厚声
+    part numbers came back UNKNOWN: ``0603WAF1002T5E`` and ``0805W8F1003T5E``
+    state 10 kΩ and 100 kΩ in the same ordering grammar as 046's ``220K``, only
+    with a digit exponent, and no other reader owns the ``...T5E`` tail (the
+    E-96 reader needs the token to *end* in four figures, and the mid-letter
+    reader finds no ``R``/``K``/``M`` in ``WAF1002T5E``).
+    """
+    m = _NUMERIC_EXPONENT_FIELD_RE.match(token)
+    if m is None:
+        return None
+    figures, exponent = m.group(1), m.group(2)
+    value = int(figures) * (10.0 ** int(exponent))
+    if value <= 0:
+        return None
+    return value, f"{figures}{exponent} (numeric-exponent field)"
 
 
 #: The four-figure package sizes (task 046). This is :data:`_PACKAGE_TAILS` plus

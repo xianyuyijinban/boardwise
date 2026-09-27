@@ -1525,16 +1525,19 @@ def _fill_board_model(
         if meta.get("symbol"):
             component.props["library_symbol_uuid"] = meta["symbol"]
         # Which pages this designator was placed on. The assignment below keeps
-        # only the last placement per designator (the "one designator, one
-        # component" contract; 040b re-scopes it per board), and the two kinds
-        # of repeat are not the same thing (040 §WI-3, measured on the 毕设
-        # board: 30 refs repeat across three pages that are three boards) —
-        # same page = two parts answer to one name in one netlist (a real
-        # clash), different pages = another board numbering its own R1.
+        # only the **first** placement per designator — the one the copper layer
+        # agrees with (049: on the thesis-FOC board's U15/U16 the first copy's
+        # pins are the PCB's pins, the later copy's power pins are unwired); the
+        # "one designator, one component" contract itself is unchanged, and 040b
+        # re-scopes it per board. The two kinds of repeat are not the same thing
+        # (040 §WI-3, measured on the 毕设 board: 30 refs repeat across three
+        # pages that are three boards) — same page = two parts answer to one name
+        # in one netlist (a real clash), different pages = another board
+        # numbering its own R1.
         pages_of = placements_seen.setdefault(designator, {})
         pages_of[inst.page] = pages_of.get(inst.page, 0) + 1
-        components[designator] = component
-        model.components[designator] = component
+        components.setdefault(designator, component)
+        model.components.setdefault(designator, component)
         symbol_def = symbols.get(symbol_uuid)
         pins: list[tuple[str, Point, str, str]] = []
         if symbol_def is not None:
@@ -1591,12 +1594,19 @@ def _fill_board_model(
                 nc_set.add((container, f"e{ez}"))
 
     pin_nodes: dict[tuple[str, str, str], Any] = {}
-    for inst, component, pins in placed:
+    for placement, (inst, component, pins) in enumerate(placed):
         for number, point, ez, _pin_name in pins:
             # (page, designator, number): the designator alone is not an
-            # identity once two pages can hold it (040 §WI-1).
+            # identity once two pages can hold it (040 §WI-1) — plus the
+            # placement itself (049 P1): two placements sharing one designator
+            # on one page share one node per pin number otherwise, and the union
+            # below welds every island they sit on into one cluster. Measured on
+            # the DCDC board: `100NF` x4 and `10UF` x2 welded e10225 (GND),
+            # e10783, e11449 (VCCA), e14930 (VCC) and e38515 (+5V) into one
+            # island, named by the alphabetically first label ("+5V") — so
+            # U10's VOUT, drawn on the VCC wire, read as +5V.
             key = (inst.page, component.designator, number)
-            node = ("p",) + key
+            node = key + (placement,)
             pin_nodes[key] = node
             uf.find(node)
             if (inst.container_id, ez) in nc_set:
@@ -1695,11 +1705,11 @@ def _fill_board_model(
 
     # --- fill Pin.net and reverse-build nets
     nets: dict[str, Net] = {}
-    for inst, component, pins in placed:
+    for placement, (inst, component, pins) in enumerate(placed):
         for number, point, ez, pin_name in pins:
-            # the pin's own page: the designator alone is ambiguous once two
-            # pages can hold it (040 §WI-1).
-            node = pin_nodes[(inst.page, component.designator, number)]
+            # the pin's own page and its own placement (040 §WI-1, 049 P1): the
+            # same node the union pass above attached.
+            node = (inst.page, component.designator, number, placement)
             name = labels.get(uf.find(node), "")
             is_nc = (inst.container_id, ez) in nc_set
             component.pins.append(

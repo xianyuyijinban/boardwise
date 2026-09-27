@@ -200,11 +200,18 @@ def test_the_two_u2s_are_both_complete(foc):
 def test_the_project_totals_count_parts_not_names(foc):
     """155 placements over 121 names: the sum is the honest project total, and
     `designators()` is the name-level one. Both are exposed, because a reader
-    who sees only one of them cannot tell which question it answered."""
+    who sees only one of them cannot tell which question it answered.
+
+    049 re-measured the net total: 138 -> 147, the same Board1 island split the
+    page test above records (the duplicate-designator pin nodes no longer weld).
+    The two numbers this test is *about* — placements and names — are unchanged,
+    which is what makes the pair worth asserting together: P1 moved connectivity,
+    not the roster.
+    """
     assert foc.component_count() == 155
     assert len(foc.designators()) == 121
     assert sum(len(b.components) for b in foc.boards) == 155
-    assert foc.net_count() == 138
+    assert foc.net_count() == 147
 
 
 # --------------------------------------------------------------------------

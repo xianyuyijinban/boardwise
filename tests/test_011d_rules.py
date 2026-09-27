@@ -297,11 +297,87 @@ def test_the_letter_exponent_field_is_read_as_a_low_ohm_reading():
     # same field without one is not read (it is not a part number this house
     # prints), so dropping the head requirement turns this line red.
     assert 2.2 not in values("WAF220KT5E")
-    # The *numeric* exponent family (`1002` = 100 x 10^2 = 10 kΩ) is a
-    # four-figure field and stays unread here -- widening this shape to digits
-    # would move MPNs that belong to another task's gap, not this one's.
-    assert values("0603WAF1002T5E") == []
-    assert values("0805W8F1003T5E") == []
+    # The *numeric* exponent family (`1002` = 100 x 10^2 = 10 kΩ) is a sibling
+    # judgment with its own witness — task 048, the test below. What this shape
+    # owns is the **letter** alphabet, and the notation text says which reader
+    # spoke: widening this regex to digits would relabel 048's readings.
+    assert mpn_resistance_readings("0603WAF220KT5E")[0][1] == (
+        "220K (letter-exponent field)"
+    )
+
+
+def test_the_numeric_exponent_field_is_read():
+    """Task 048: the same 厚声 ordering field as 046's ``220K``, with a **digit**
+    exponent instead of a letter — three significant figures and a power of ten.
+    ``0603WAF1002T5E`` is 100 x 10^2 = 10 kΩ and ``0805W8F1003T5E`` is
+    100 x 10^3 = 100 kΩ; before this reading existed both came back UNKNOWN
+    ("contains no decodable EIA value code"), which is the plate of UNKNOWNs
+    046's own report left open on the two 毕设 boards.
+
+    The 5% (E-24) members of the family put a ``0`` in front of the two
+    significant figures — ``0805W8J0103T5E`` = 010 x 10^3 = 10 kΩ is the worked
+    example in the ordering rule — and the same reading handles them, because a
+    leading zero leaves the significand unchanged.
+    """
+    def values(mpn: str) -> list[float]:
+        return [value for value, _notation in mpn_resistance_readings(mpn)]
+
+    assert mpn_resistance_readings("0603WAF1002T5E") == [
+        (10000.0, "1002 (numeric-exponent field)"),
+    ]
+    assert mpn_resistance_readings("0805W8F1003T5E") == [
+        (100000.0, "1003 (numeric-exponent field)"),
+    ]
+    # The 5% form: `0` prefix, two significant figures, digit exponent.
+    assert mpn_resistance_readings("0805W8J0103T5E") == [
+        (10000.0, "0103 (numeric-exponent field)"),
+    ]
+    assert mpn_resistance_readings("0805W8J0100T5E") == [
+        (10.0, "0100 (numeric-exponent field)"),
+    ]
+    assert values("0603WAJ0122T5E") == [1200.0]
+    # The size head is this shape's guard too, and the exclusive witness for it:
+    # the same field without a head is not a part number this house prints.
+    assert values("WAF1002T5E") == []
+    # ...and the tape suffix is part of the shape: `0603WAF1002` (no tail) is a
+    # plain four-figure E-96 reading, which the E-96 reader owns.
+    assert mpn_resistance_readings("0603WAF1002") == [(10000.0, "1002 (E-96)")]
+    # A zero-ohm jumper reads as nothing (a zero reading is not evidence).
+    assert values("0603WAF0000T5E") == []
+    # **Overlap with `_e96_reading` (task 048's analysis, pinned):** the two
+    # shapes cannot both fire on this family, because this one requires the token
+    # to end in `T<tape code>` while E-96 requires it to end in four figures. The
+    # proof is the notation text — no E-96 label appears on a `...T5E` token even
+    # though `1003` would be a legal E-96 code.
+    assert not [
+        text for _value, text in mpn_resistance_readings("0805W8F1003T5E")
+        if "(E-96)" in text
+    ]
+    # Where both *could* read the same token they agree, so the value-keyed
+    # dedup in the readings set has nothing to arbitrate: `1003` = 100 x 10^3 by
+    # either convention.
+    assert values("0805W8F1003") == [100000.0]
+    # Untouched: the 046 letter alphabet, and a capacitor MPN whose `1608` is not
+    # a size head at all (the shape cannot swallow it).
+    assert (2.2, "220K (letter-exponent field)") in mpn_resistance_readings(
+        "0603WAF220KT5E"
+    )
+    assert mpn_resistance_readings("C1608X5R1V225KT000E") == [
+        (5.1, "5R1"), (5000.0, "5K"), (25000.0, "25K"), (225000.0, "225K"),
+    ]
+    # The rule-level conversion this exists for: the 毕设FOC board's R20/R23
+    # declare 100 kΩ against this MPN and used to be UNKNOWN -- now an OK row
+    # quoting the field the reader saw.
+    lib = _library(_ldo_entry())
+    model = DesignModel()
+    for ref in ("R20", "R23"):
+        model.components[ref] = Component(
+            uid=ref.lower(), designator=ref, value="100kΩ",
+            mpn="0805W8F1003T5E", pins=[Pin("1", "A", "VCC")])
+    states = _states(ValueMpnMatch(library=lib), model)
+    assert states["VIOLATION"] == [] and states["UNKNOWN"] == []
+    assert sorted(o.subject for o in states["OK"]) == ["R20", "R23"]
+    assert all("1003" in o.message for o in states["OK"])
 
 
 def test_the_e96_four_figure_code_is_read():

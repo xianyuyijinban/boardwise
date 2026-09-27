@@ -207,16 +207,26 @@ def test_pages_are_not_welded(foc, motor):
 
     040b: the counts are per board now, and the per-board numbers are what the
     040 measurement of the same fix was reading through a project-wide dict.
+
+    049 re-measured Board1: 90 -> 99 nets. The parser stopped sharing one pin
+    node between two placements of the *same* designator on one page (049-P1),
+    so the islands that node used to weld stay apart — 9 more nets on the board
+    with the duplicates (its 155 components / 121 names are unchanged). The
+    property this test is about — no net spanning two pages — is untouched;
+    what moved is the count of the islands the page holds.
     """
     board3 = _board(foc, "Board3")
-    assert [len(b.nets) for b in foc.boards] == [90, 13, 35]
+    assert [len(b.nets) for b in foc.boards] == [99, 13, 35]
     # The 高速电机控制器 project: two boards with the designer's own titles
     # (板名自定义 — the board *is* the unit, not a board numbered by us).
     # 042 §WI-1 re-measured this pair: the board's displaced attribute blocks
     # put 60 parts back into the model (63 -> 114 and 34 -> 49 components), and
     # the recovered pins join existing nets. The 毕设 numbers above are
     # untouched by that fix, which is the point of asserting both here.
-    assert [len(b.nets) for b in motor.boards] == [89, 53]
+    # 049 re-measured the first board too: 89 -> 104 nets, from the same
+    # duplicate-designator split (this board clashes on U15/U16/U17/U20; the
+    # second board has none and stays at 53).
+    assert [len(b.nets) for b in motor.boards] == [104, 53]
     assert motor.board_titles() != ["Board1", "Board2"]
     # The old weld's signature: one net with 100+ members. None is left.
     for board_model in (*foc.boards, *motor.boards):
