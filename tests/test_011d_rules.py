@@ -268,6 +268,147 @@ def test_the_mid_letter_decoder_refuses_what_it_cannot_read():
     assert mpn_resistance_readings("CC0603KRX7R9BB104")
 
 
+def test_the_letter_exponent_field_is_read_as_a_low_ohm_reading():
+    """Task 046 G1: 厚声 prints a ≤±1% part's resistance as three figures plus an
+    exponent *character*, and the small exponents are letters — ``J`` = 10^-1,
+    ``K`` = 10^-2. So ``0603WAF220KT5E`` (verified 2.2 Ω ±1% on the LCSC product
+    page) is ``220 x 10^-2``, and the mid-letter reader's ``220K`` = 220 kΩ /
+    ``20K`` = 20 kΩ are both wrong for it: the rule quoted "decodes to 2e+04 Ω"
+    for a board that correctly declares 2.2 Ω.
+
+    The reading is **added**, not swapped in: shape-wise the same characters
+    really are the mid-letter notation too, so the set keeps both and the board's
+    own value chooses (043's doctrine). ``0603WAF330JT5E`` is the neighbour that
+    pins the other exponent letter at 33 Ω — it read as 33 Ω through the EIA code
+    before this change and must not drift.
+    """
+    def values(mpn: str) -> list[float]:
+        return [value for value, _notation in mpn_resistance_readings(mpn)]
+
+    assert mpn_resistance_readings("0603WAF220KT5E") == [
+        (2.2, "220K (letter-exponent field)"),
+        (20000.0, "20K"),
+        (220000.0, "220K"),
+    ]
+    assert mpn_resistance_readings("0603WAF330JT5E") == [
+        (33.0, "330J (letter-exponent field)"),
+    ]
+    # The size head is the whole guard, and this is its exclusive witness: the
+    # same field without one is not read (it is not a part number this house
+    # prints), so dropping the head requirement turns this line red.
+    assert 2.2 not in values("WAF220KT5E")
+    # The *numeric* exponent family (`1002` = 100 x 10^2 = 10 kΩ) is a
+    # four-figure field and stays unread here -- widening this shape to digits
+    # would move MPNs that belong to another task's gap, not this one's.
+    assert values("0603WAF1002T5E") == []
+    assert values("0805W8F1003T5E") == []
+
+
+def test_the_e96_four_figure_code_is_read():
+    """Task 046 G2: the E-96 four-figure code (three significant figures plus a
+    power of ten) at the end of a token. Viking's ``AR03BTCX5001`` is a 5.00 kΩ
+    part, and ``5001`` is the code; before this reading existed the mid-letter
+    reader's ``R03`` = 0.03 Ω was the only thing the rule could quote (it asked
+    how a board declaring 5 kΩ could be 166666x off).
+
+    The four-figure package guard is its own list (2512 included, which the
+    three-figure guard never needed) and the leading-zero rule is separate —
+    each has its witness below, so neither can be dropped silently.
+    """
+    def values(mpn: str) -> list[float]:
+        return [value for value, _notation in mpn_resistance_readings(mpn)]
+
+    assert mpn_resistance_readings("AR03BTCX5001") == [
+        (0.03, "R03"),
+        (5000.0, "5001 (E-96)"),
+    ]
+    # A group that completes a size is a size: 1206 / 2512 would read as 120 MΩ
+    # / 251 GΩ without the guard.
+    assert values("AR03BTCX1206") == [0.03]
+    assert values("AR03BTCX2512") == [0.03]
+    # A leading zero is not a significant figure.
+    assert values("AR03BTCX0500") == [0.03]
+    # The group has to be a whole run at the token's end: `...05001`'s tail is
+    # not a code of its own (the lookbehind), and a longer run is not read.
+    assert values("AR03BTCX05001") == [0.03]
+    # A single tolerance letter after the figures is part of the shape.
+    assert (5000.0, "5001 (E-96)") in mpn_resistance_readings("AR03BTCX5001F")
+
+
+def test_a_polymer_electrolytic_mpn_is_not_read_as_a_capacitor_code():
+    """Task 046 G3: Aishi's ``SPZ``/``SPA`` polymer parts print their capacitance
+    in **microfarads** — ``SPZ1HM100E07O00RAXXX`` is a 10 µF part, and the EIA
+    path (whose capacitor base unit is the picofarad) read its ``100`` as 10 pF.
+
+    The capacitor path returns a single code, so there is no reading *set* to add
+    the right value to: the honest answer is to refuse the token, which the rule
+    reports as UNKNOWN, never as a contradiction. The series prefix is the guard
+    and this MPN is its exclusive witness; the ordinary EIA capacitor code is
+    untouched right below it.
+    """
+    assert mpn_value_code("SPZ1HM100E07O00RAXXX") is None
+    assert mpn_value_code("SPZ0J101E05O00RAXXX") is None
+    # Unchanged: a plain three-figure capacitor code is still read.
+    assert mpn_value_code("CC0603KRX7R9BB104") == "104"
+    # ...and at the rule level the part is UNKNOWN, never a VIOLATION -- which
+    # is the whole point of the oracle's exception ruling.
+    lib = _library(_ldo_entry())
+    model = DesignModel()
+    model.components["C71"] = Component(
+        uid="c71", designator="C71", value="10uF",
+        mpn="SPZ1HM100E07O00RAXXX", pins=[Pin("1", "A", "VCC")])
+    # The real board's C71/C72 carry the MPN and an *empty* value, so they are
+    # skipped outright (no kind evidence -- the pre-existing behaviour that 046
+    # does not change, and the reason these two never reached the eval).
+    model.components["C72"] = Component(
+        uid="c72", designator="C72", value="",
+        mpn="SPZ1HM100E07O00RAXXX", pins=[Pin("1", "A", "VCC")])
+    states = _states(ValueMpnMatch(library=lib), model)
+    assert states["VIOLATION"] == []
+    assert {o.subject for o in states["UNKNOWN"]} == {"C71"}
+    assert all(o.subject != "C72" for o in states["OK"])
+
+
+def test_the_shunt_field_between_a_tolerance_letter_and_r():
+    """Task 046 G4: ``FRL1210FR400TS`` (FOJAN, verified 400 mΩ ±1%) writes its
+    fraction right after the ``R`` with the tolerance letter in front — ``FR400``
+    — so the shape is ``<tolerance letter>R<digits>`` and the value is
+    ``digits / 10^len``. The EIA path used to read the ``400`` as 40 Ω, and the
+    ``R``-as-decimal-point guard could not stop it because the character in front
+    of the ``R`` is a letter, not a digit.
+
+    Three neighbours pin the guard's edges: ``AR03BTCX5001`` (``A`` is not a
+    tolerance letter), ``RC0603FR-074K7L`` (that ``R`` is followed by a dash) and
+    ``JER2512F3R005`` (a digit in front of the ``R`` — 043's refusal, which stays
+    a refusal).
+    """
+    assert mpn_resistance_readings("FRL1210FR400TS") == [
+        (0.4, "FR400 (shunt field)"),
+    ]
+    # The EIA reader must not mine the `400` out of that field either.
+    assert mpn_value_code("FRL1210FR400TS") is None
+    # Neighbours, unchanged byte for byte.
+    assert mpn_resistance_readings("AR03BTCX5001") == [
+        (0.03, "R03"), (5000.0, "5001 (E-96)"),
+    ]
+    assert mpn_resistance_readings("RC0603FR-074K7L") == [
+        (4700.0, "4K7"), (74700.0, "74K7"),
+    ]
+    assert mpn_resistance_readings("JER2512F3R005") == []
+    assert mpn_value_code("JER2512F3R005") is None
+    # The rule reads the board's 400 mΩ against it: the FPC board's R1 is this
+    # part, and the pcb view's `40 Ω` was the decoder's error, not the board's.
+    lib = _library(_ldo_entry())
+    model = DesignModel()
+    model.components["R1"] = Component(
+        uid="r1", designator="R1", value="400mΩ",
+        mpn="FRL1210FR400TS", pins=[Pin("1", "A", "VCC")])
+    states = _states(ValueMpnMatch(library=lib), model)
+    assert states["VIOLATION"] == [] and states["UNKNOWN"] == []
+    (ok,) = states["OK"]
+    assert ok.subject == "R1" and "0.4" in ok.message
+
+
 def test_a_capacitor_is_never_claimed_from_an_mpn_code_alone():
     """CH340G decodes to "34 pF"; only the shelf's category (or the value
     field, or the C-designator+code conjunction) may call something a cap."""
