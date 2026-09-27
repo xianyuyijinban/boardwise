@@ -3402,6 +3402,7 @@ def _cmd_review_eval(args: argparse.Namespace) -> int:
 
         from . import __version__ as _tool_version
         from .engines.review_eval import (
+            fix_success_payload,
             rulebody_fingerprint,
             ruleset_fingerprint,
             unknown_reason_category,
@@ -3421,13 +3422,12 @@ def _cmd_review_eval(args: argparse.Namespace) -> int:
                 "rule_count": len(rule_ids),
                 "rulebody": rulebody_fingerprint(),
             },
-            # 017 sec.5: the field exists, the number does not -- "edit apply then
-            # re-review comes back resolved" is 016's measurement, and reporting 0
-            # here would read as "every repair failed".
-            "fix_success": {
-                "status": "pending-016",
-                "note": "depends on 016's edit apply -> resolved probe; no data yet",
-            },
+            # 017 sec.5's slot, filled by the M3 close-out. The status says what
+            # the numbers are: registered by hand from the five slices' task
+            # books, not measured by this run. It is deliberately not a single
+            # bare rate -- a `rate` beside this report's board numbers would be
+            # read as "how those boards came out", which is a different question.
+            "fix_success": fix_success_payload(),
             "boards": [
                 {
                     "board": evaluation.board,

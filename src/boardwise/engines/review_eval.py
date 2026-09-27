@@ -30,6 +30,13 @@ passed. **Locate success** says how many findings name a part or a pin a reader
 can go and look at (017 sec.5: a non-empty ``target``, or text whose designators
 resolve). Both are rendered **after** every pre-017 section, and no earlier
 number is rewritten by their arrival.
+
+A third slot, **fix success** (017 sec.5), is *not* measured here: "edit apply,
+then re-review comes back resolved" is a real-host result, so the slot prints
+what :data:`FIX_CASES` records — one entry per live repair execution, taken from
+the five M3 task books' own submission records. See the block above
+:func:`fix_success_rows` for the counting rule and for why a register that is
+filled by hand beats a number this harness cannot take.
 """
 
 from __future__ import annotations
@@ -509,6 +516,391 @@ def _fmt_ratio(numerator: int, denominator: int, ratio: float | None) -> str:
     return f"{numerator}/{denominator} = {ratio:.2f}"
 
 
+# ---------------------------------------------------------------------------
+# fix success — the M3 register (017 sec.5's slot, filled by the M3 close-out)
+# ---------------------------------------------------------------------------
+#
+# 017 sec.5 declared this slot and deliberately printed no number in it
+# ("depends on 016 ... this build reports no number rather than 0"), because
+# "edit apply, then re-review comes back resolved" was 016's measurement and had
+# not been taken on a real machine yet. It has now been taken five times over
+# (016 / 029 / 035 / 036 / 037 — one per M3 change kind), and this is where the
+# results are recorded.
+#
+# **This is a register, not a measurement.** Every entry below is one real-host
+# repair execution, transcribed from the task books' own submission records; the
+# register is *not* recomputed when ``review-eval`` runs. A live case cannot be
+# re-run from this harness, and a number that moved with the harness would be
+# measuring the harness. A new live case is registered **by hand** after it has
+# been run, with its source; nothing here is inferred, and a kind with no
+# recorded case prints ``—`` rather than a guess.
+#
+# The counting rule, fixed here so the register cannot drift into a favourable
+# reading of itself:
+#
+# * an entry counts as an **attempt** when it is a real-host repair execution
+#   whose purpose was to land the change — not one that was preceded by an
+#   operator-made failure condition (a hand-edited value, a taken designator, a
+#   full ladder, a killed daemon) and not a deliberate idempotence replay;
+# * an attempt **succeeded** when its record says applied + saved + the re-review
+#   came back resolved. 036 and 037 have no driving rule (the request is the
+#   entry point), so there "resolved" is the gate 036 sec.3 defines: the plan's
+#   own postconditions read back, and the finding set not growing.
+#
+# A pre-fix execution that failed is counted as a failed attempt, not dropped:
+# 029-b's case a and 035's round-1 are part of how those slices became correct,
+# and a register that only kept the retries would be a register of retries.
+#
+# What is *not* in the tally: the refusals, idempotence replays, interruptions
+# and un-simulable shapes the same task books record. They are registered with
+# their own outcomes (and never with one of the two attempt outcomes), because
+# they are the designed answers to a stale snapshot, a taken designator, a full
+# ladder, a repeat run or a dead daemon — folding them into the denominator would
+# report the safety rails as defects. Raw live logs (``outputs/0*_live.txt``)
+# hold further executions the task books do not register as cases (e.g.
+# ``036_live.txt:103``'s first T1 attempt, refused by the findings gate before
+# its wording fix); they are named in the per-kind comments and deliberately not
+# counted, because the register's job is to be reproducible from the task books
+# alone.
+
+#: The five M3 change kinds, in the order the slices were cut (016 → 037).
+FIX_SUCCESS_KINDS = (
+    "component-value",
+    "add-component",
+    "patch-pin",
+    "insert-subcircuit",
+    "move-block",
+)
+
+#: One outcome vocabulary for the register, so a case cannot be quietly
+#: recategorised by re-wording it. Only the first two are attempts.
+FIX_OUTCOME_APPLIED = "applied+saved+resolved"
+FIX_OUTCOME_FAILED = "failed_before_save"
+FIX_OUTCOME_REFUSED = "refused_by_design"
+FIX_OUTCOME_IDEMPOTENT = "already_applied"
+FIX_OUTCOME_INTERRUPTED = "unknown_after_interrupt"
+FIX_OUTCOME_NOT_SIMULABLE = "not_simulable"
+FIX_OUTCOME_RECHECK = "persistence_recheck"
+
+#: The outcomes that mean "this run was trying to land the change".
+FIX_ATTEMPT_OUTCOMES = (FIX_OUTCOME_APPLIED, FIX_OUTCOME_FAILED)
+
+
+@dataclass(frozen=True)
+class FixCase:
+    """One real-host execution, as a task book records it."""
+
+    kind: str
+    case: str
+    outcome: str
+    source: str
+
+
+@dataclass(frozen=True)
+class FixSuccess:
+    """One change kind's line: how many attempts, how many of them landed."""
+
+    kind: str
+    attempts: int
+    applied_saved_resolved: int
+    source: str
+
+    @property
+    def rate(self) -> float | None:
+        if not self.attempts:
+            return None
+        return self.applied_saved_resolved / self.attempts
+
+
+#: One task-book section per kind, for the rendered ``source:``.
+FIX_SUCCESS_SOURCES = {
+    "component-value": "tasks/016-review-to-local-edit.md §十.7–§十.8",
+    "add-component": "tasks/029-edit-add-component.md §六",
+    "patch-pin": "tasks/035-patch-pin.md §交卷记录",
+    "insert-subcircuit": "tasks/036-insert-subcircuit.md §交卷记录",
+    "move-block": "tasks/037-move-block.md §交卷记录",
+}
+
+#: The register itself.
+#:
+#: component-value (016) — one repair, and it is the slice's whole live story:
+#: apply wrote Value 4.7k → 1k, read it back independently, saved
+#: (``saved_unverified``), and the re-review of the re-exported board found the
+#: ``param-value-mpn-match`` violation gone (§十.7 场景 1 + §十.8 场景 6).
+#: 场景 2–5 were the rails being exercised, not repairs.
+FIX_CASES: tuple[FixCase, ...] = (
+    FixCase(
+        "component-value",
+        "场景 1 成功：plan → preview → apply（U3 的 Value 4.7k → 1k）",
+        FIX_OUTCOME_APPLIED,
+        "tasks/016-review-to-local-edit.md §十.7 波②场景实测",
+    ),
+    FixCase(
+        "component-value",
+        "场景 6 重开验证：编辑器整关重开后 Value 仍为 1k（saved_verified）",
+        FIX_OUTCOME_RECHECK,
+        "tasks/016-review-to-local-edit.md §十.8 场景 6 终裁",
+    ),
+    FixCase(
+        "component-value",
+        "场景 2 值已被人工改动（apply 前手改成 2.2k）→ exit 4 零写入",
+        FIX_OUTCOME_REFUSED,
+        "tasks/016-review-to-local-edit.md §十.7",
+    ),
+    FixCase(
+        "component-value",
+        "场景 3 重复执行（同一 plan 连跑两次）→ already_applied 零写入",
+        FIX_OUTCOME_IDEMPOTENT,
+        "tasks/016-review-to-local-edit.md §十.7",
+    ),
+    FixCase(
+        "component-value",
+        "场景 4 保存失败（宿主无手段模拟）",
+        FIX_OUTCOME_NOT_SIMULABLE,
+        "tasks/016-review-to-local-edit.md §十.7 波②场景实测 + outputs/016_scene4_save_path.txt",
+    ),
+    FixCase(
+        "component-value",
+        "场景 5 执行中断（taskkill daemon）→ 回读、不重试",
+        FIX_OUTCOME_INTERRUPTED,
+        "tasks/016-review-to-local-edit.md §十.7",
+    ),
+    # add-component (029): case a is the same shape run three times — 029-b's
+    # honest failure (only one end connected), 029-c's success, 029-d's rerun
+    # with the re-review folded into apply — plus 029-d's new shape (a page with
+    # no GND geometry, grounded through a power-flag). b/c/d/f were the
+    # idempotence, repeat, ladder-full and daemon-killed rails.
+    FixCase(
+        "add-component",
+        "029-b case a：只连上 NET4 一端 → connection_not_established，未保存",
+        FIX_OUTCOME_FAILED,
+        "tasks/029-edit-add-component.md §029-b · 交卷",
+    ),
+    FixCase(
+        "add-component",
+        "029-c case a：两端连通、范围 +1、save、活工程重审 findings 0",
+        FIX_OUTCOME_APPLIED,
+        "tasks/029-edit-add-component.md §029-c · 交卷",
+    ),
+    FixCase(
+        "add-component",
+        "029-d case a 重跑：apply 内置重审 resolved",
+        FIX_OUTCOME_APPLIED,
+        "tasks/029-edit-add-component.md §029-d · 交卷",
+    ),
+    FixCase(
+        "add-component",
+        "029-d 新形态：页面无 GND 几何 → power-flag 接地，全链真成功",
+        FIX_OUTCOME_APPLIED,
+        "tasks/029-edit-add-component.md §029-d · 交卷",
+    ),
+    FixCase(
+        "add-component",
+        "029-c b 人工先补 C5(22uF) → already_applied、write.calls=0",
+        FIX_OUTCOME_IDEMPOTENT,
+        "tasks/029-edit-add-component.md §029-c · 交卷",
+    ),
+    FixCase(
+        "add-component",
+        "029-c c 同一 plan 再 apply → designator_taken exit 4 零写入",
+        FIX_OUTCOME_REFUSED,
+        "tasks/029-edit-add-component.md §029-c · 交卷",
+    ),
+    FixCase(
+        "add-component",
+        "029-c d 阶梯 9 位占满 → plan exit 5、原点无件",
+        FIX_OUTCOME_REFUSED,
+        "tasks/029-edit-add-component.md §029-c · 交卷",
+    ),
+    FixCase(
+        "add-component",
+        "029-c f apply 中途杀 daemon → unknown: range_unreadable exit 3、不重试",
+        FIX_OUTCOME_INTERRUPTED,
+        "tasks/029-edit-add-component.md §029-c · 交卷",
+    ),
+    # patch-pin (035): round-1's disconnect was an honest failure (the wire was
+    # deleted, the export still reported the pin on its old net); round-3 ran all
+    # three forms once (A disconnect on the real shelf, B connect and C reconnect
+    # on a test-only shelf, each applied + saved + re-review resolved); round-4
+    # re-ran the reconnect jig that the phantom-difference check had refused
+    # (§交卷记录 round-4: "重跑 applied + saved"; the run's own readout in the
+    # live log 035d_live.txt:49–77 says "re-review: resolved").
+    FixCase(
+        "patch-pin",
+        "round-1 disconnect：删线成功，但导出网表仍报 NET4=[U3.2,U3.4] → exit 2 未保存",
+        FIX_OUTCOME_FAILED,
+        "tasks/035-patch-pin.md §交卷记录 round-1",
+    ),
+    FixCase(
+        "patch-pin",
+        "round-3 A disconnect（真架 nc_pins:[\"4\"]）",
+        FIX_OUTCOME_APPLIED,
+        "tasks/035-patch-pin.md §交卷记录 round-3",
+    ),
+    FixCase(
+        "patch-pin",
+        "round-3 B connect（悬空脚接 GND）",
+        FIX_OUTCOME_APPLIED,
+        "tasks/035-patch-pin.md §交卷记录 round-3",
+    ),
+    FixCase(
+        "patch-pin",
+        "round-3 C reconnect（错网 → GND）",
+        FIX_OUTCOME_APPLIED,
+        "tasks/035-patch-pin.md §交卷记录 round-3",
+    ),
+    FixCase(
+        "patch-pin",
+        "round-4 reconnect 夹具重跑（自动网词表 + 两名同岛修复后）",
+        FIX_OUTCOME_APPLIED,
+        "tasks/035-patch-pin.md §交卷记录 round-4 + outputs/035d_live.txt:49-77",
+    ),
+    FixCase(
+        "patch-pin",
+        "三形态幂等重放 → already_applied 零写入",
+        FIX_OUTCOME_IDEMPOTENT,
+        "tasks/035-patch-pin.md §交卷记录 round-3",
+    ),
+    FixCase(
+        "patch-pin",
+        "stale（手改 plan 的 beforeNet / 先接错网）→ exit 4 零写入",
+        FIX_OUTCOME_REFUSED,
+        "tasks/035-patch-pin.md §交卷记录 round-3 / round-4",
+    ),
+    # insert-subcircuit (036): both templates landed (T1 with its deletion leg,
+    # T2 pure create); the findings gate decides "resolved" here. The task book
+    # records one further T1 execution in the live log (036_live.txt:103, refused
+    # by the gate before its wording fix) as a defect found and fixed, not as a
+    # case — a reading the main agent may overrule.
+    FixCase(
+        "insert-subcircuit",
+        "T1 rc-lowpass 插入（含删除腿）：applied + saved + 计划自身 postconditions 回读",
+        FIX_OUTCOME_APPLIED,
+        "tasks/036-insert-subcircuit.md §交卷记录",
+    ),
+    FixCase(
+        "insert-subcircuit",
+        "T2 divider 插入（纯 create）：applied + saved + 计划自身 postconditions 回读",
+        FIX_OUTCOME_APPLIED,
+        "tasks/036-insert-subcircuit.md §交卷记录",
+    ),
+    FixCase(
+        "insert-subcircuit",
+        "T2 stale（先删锚点网线）→ exit 4 anchor_moved 零写入",
+        FIX_OUTCOME_REFUSED,
+        "tasks/036-insert-subcircuit.md §交卷记录",
+    ),
+    FixCase(
+        "insert-subcircuit",
+        "两模板幂等重放 → already_applied 零写入",
+        FIX_OUTCOME_IDEMPOTENT,
+        "tasks/036-insert-subcircuit.md §交卷记录",
+    ),
+    # move-block (037): both shapes landed with the netlist identical (12 pins)
+    # and no finding added — the postconditions and the gate 036 sec.3 defines.
+    FixCase(
+        "move-block",
+        "多器件块 (U1,U2) by (100,0)：applied + saved + 网表恒等 12 脚零差异",
+        FIX_OUTCOME_APPLIED,
+        "tasks/037-move-block.md §交卷记录",
+    ),
+    FixCase(
+        "move-block",
+        "单器件 (U1) by (50,50)：applied + saved（0 线需重画）",
+        FIX_OUTCOME_APPLIED,
+        "tasks/037-move-block.md §交卷记录",
+    ),
+    FixCase(
+        "move-block",
+        "两种形状幂等重放 → already_applied 零写入",
+        FIX_OUTCOME_IDEMPOTENT,
+        "tasks/037-move-block.md §交卷记录",
+    ),
+    FixCase(
+        "move-block",
+        "stale（手挪 U1 五格）→ exit 4 stale_pose 零写入",
+        FIX_OUTCOME_REFUSED,
+        "tasks/037-move-block.md §交卷记录",
+    ),
+    FixCase(
+        "move-block",
+        "边界带 label 的形状（本机 place_netlabel 不可用，造不出）",
+        FIX_OUTCOME_NOT_SIMULABLE,
+        "tasks/037-move-block.md §交卷记录",
+    ),
+)
+
+
+def fix_success_rows(cases: tuple[FixCase, ...] = FIX_CASES) -> list[FixSuccess]:
+    """The register, grouped into one row per kind (always all five, in order)."""
+    rows: list[FixSuccess] = []
+    for kind in FIX_SUCCESS_KINDS:
+        mine = [case for case in cases if case.kind == kind]
+        attempts = [case for case in mine if case.outcome in FIX_ATTEMPT_OUTCOMES]
+        rows.append(
+            FixSuccess(
+                kind=kind,
+                attempts=len(attempts),
+                applied_saved_resolved=sum(
+                    1 for case in attempts if case.outcome == FIX_OUTCOME_APPLIED
+                ),
+                source=FIX_SUCCESS_SOURCES.get(kind, ""),
+            )
+        )
+    return rows
+
+
+def fix_success_total(
+    cases: tuple[FixCase, ...] = FIX_CASES,
+) -> tuple[int, int]:
+    """``(attempts, applied_saved_resolved)`` over every registered kind."""
+    rows = fix_success_rows(cases)
+    return (
+        sum(row.attempts for row in rows),
+        sum(row.applied_saved_resolved for row in rows),
+    )
+
+
+def fix_success_payload() -> dict:
+    """The register as the JSON report's ``fix_success`` slot (017 sec.5).
+
+    Same numbers as the text report's block, plus the cases they were counted
+    from, so a reader of the JSON can audit each count without opening the task
+    books. The status says what the slot *is*: registered, not re-measured.
+    """
+    rows = fix_success_rows()
+    attempts, landed = fix_success_total()
+    return {
+        "status": "registered",
+        "note": (
+            "M3's real-host repair results, registered by hand from the task books' "
+            "submission records; not re-measured by this run, and a kind with no "
+            "recorded case reports null rather than 0"
+        ),
+        "kinds": [
+            {
+                "kind": row.kind,
+                "attempts": row.attempts,
+                "applied_saved_resolved": row.applied_saved_resolved,
+                "rate": row.rate,
+                "source": row.source,
+            }
+            for row in rows
+        ],
+        "total": {"attempts": attempts, "applied_saved_resolved": landed},
+        "cases": [
+            {
+                "kind": case.kind,
+                "case": case.case,
+                "outcome": case.outcome,
+                "source": case.source,
+                "counted_as_attempt": case.outcome in FIX_ATTEMPT_OUTCOMES,
+            }
+            for case in FIX_CASES
+        ],
+    }
+
+
 def render_text_report(
     evaluations: list[BoardEvaluation],
     *,
@@ -664,9 +1056,27 @@ def _render_coverage(
         lines.append(
             f"    {rule_id:26} " + _fmt_ratio(found, here, found / here)
         )
+    # 017 sec.5's slot, filled by the M3 close-out (see FIX_CASES above): the
+    # numbers are a register of real-host repair executions, not something this
+    # run measured. The line names it, because a reader who takes them for a
+    # reading of the boards in this report would be reading them wrong.
     lines.append(
-        "\n  fix success (017 sec.5): pending — depends on 016 (edit apply -> "
-        "resolved probe); this build reports no number rather than 0"
+        "\n  fix success (017 sec.5) — M3's live repair results, registered from "
+        "the task books and not re-measured by this run:"
+    )
+    for row in fix_success_rows():
+        lines.append(
+            f"    {row.kind:24} applied+saved+resolved "
+            + _fmt_ratio(row.applied_saved_resolved, row.attempts, row.rate)
+            + f" (source: {row.source})"
+        )
+    attempts, landed = fix_success_total()
+    lines.append(
+        f"    {'total':24} applied+saved+resolved "
+        + _fmt_ratio(landed, attempts, landed / attempts if attempts else None)
+        + " (a repeat run, a refused write or a killed daemon is a designed "
+        "answer, not a failed repair — those executions are listed as cases, "
+        "not counted here)"
     )
     lines.append(
         "  provenance: tool boardwise "
