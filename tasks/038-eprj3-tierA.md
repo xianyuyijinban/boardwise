@@ -97,9 +97,13 @@ connector on V4 在线探针：doctor 8 项、`sys.probe` 8 关键成员、activ
 
 ## V4.1.60 真机实测（2026-09-27，xianyuyijinban老电脑，结果包 `v4-test`）
 
-- **V4.1.60 本地保存仍是单文件 `.eprj2`（V3 格式）**——本机未出现 `.eprj3` 文件夹格式；
-  checkup 经 `sys.get_project_file` 拿到的整工程归档同样按 V3 管线满血解析
+- **V4.1.60 本地保存仍是单文件 `.eprj2`，但它与 V3 一样只是 SQLite 工程壳**
+  （实测：`schematics`/`documents`/`boards` 等内容表全 0 行，图纸不随文件走）——
+  本机未出现 `.eprj3` 文件夹格式；checkup 经 `sys.get_project_file` 拿到的整工程归档
+  （.epro2 文本）按 V3 管线满血解析，**V4 归档与 V3 同格式、解析零适配**
   （UAV遥控器：45 器件/48 网，600.9 ms，Board1_1 板链正确读出）。
+  附带结论：xianyuyijinban带回的 `.eprj2.zip` 样本是空壳，**不能当夹具**——要真实 V4 板仍需
+  从 V4 机器导出 `.epro2`（与 V3 同一课：`.eprj2` 永远不是图纸）。
 - **工作项 4（connector-on-V4 在线探针）已闭环**：doctor 8/8、`activate()` 正常派发、
   自动配对首连即信任、V3 命名空间全套在位且 8/8 关键方法 arity 与 3.2.149 逐一相同；
   V4 新增命名空间 `lib_SimulationModel` / `sys_ExternalApi` / `sys_Help` / `sys_Math`（超集，无删减）。
