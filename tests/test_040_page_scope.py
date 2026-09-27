@@ -421,13 +421,20 @@ def _signature(path) -> dict:
 #: The three single-page boards whose reading 040 must not touch. The hash is
 #: the assertion; the counts are there so a failure says *what* moved. Re-derive
 #: with `.tmp_040/signatures.py` (kept with the batch) and paste.
+#:
+#: ``llc_board.epro2`` was re-derived on 2026-09-27 **because the parser learned
+#: to read that file's module pins** (049: their ``Pin Number`` attributes are
+#: appended to the end of the SYMBOL document and are now filed by ``parentId``).
+#: 7 pins of U9 are read that were dropped before, so the count moved 111 -> 118
+#: and the hash with it; components and nets are unchanged (47 / 40). The two
+#: golden CH340 boards are byte-identical to their 040 reading.
 FROZEN_SIGNATURES = {
     "ch340_golden.epro2": (
         "1d3c8953046ae5e5416b98e5ea5f576ae17fed106586ed74350eee11c5319caf", 17, 13, 66),
     "ProPrj_CH340G_2026-09-13.epro2": (
         "1d3c8953046ae5e5416b98e5ea5f576ae17fed106586ed74350eee11c5319caf", 17, 13, 66),
     "llc_board.epro2": (
-        "b5a73eae4ab28c9794e092ce068be3b446fbcd8048e83ff40760caf8e569fb69", 47, 40, 111),
+        "a8e25f46305e25095b6d1371e2d44f04abe0e65e941fa9df2ccc824f8897e168", 47, 40, 118),
 }
 
 

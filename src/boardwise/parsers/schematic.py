@@ -18,7 +18,11 @@ Pro 3.2.149):
   *symbol* uuid, not the instance's.
 - A SYMBOL document defines pins: ``PIN`` records whose ``(x, y)`` is the
   connection point in symbol-local coordinates, with the pin number in a
-  ``Pin Number`` ATTR whose ``parentId`` is ``"e<pin zIndex>"``.
+  ``Pin Number`` ATTR that *names* the pin through ``parentId`` — either the
+  synthesised ``"e<pin zIndex>"`` (V3 exports) or the ``PIN`` row's own ``id``
+  (measured on 3.2.186's incrementally saved symbols, where that id is a hash).
+  The attribute may sit anywhere in the document: 3.2.186 appends a changed
+  pin's attributes to the **end** of it (049, ``docs/epru-format.md`` §8.1).
 - Wires: a ``WIRE`` head record followed by ``LINE`` segments; segments of
   one wire share a ``lineGroup``. A ``NET`` ATTR whose ``parentId`` is a
   ``lineGroup`` names that wire (usually empty — most nets are unnamed).
@@ -854,105 +858,207 @@ def _split_page(records: list[Any], parse_stats: ParseStats | None = None) -> _P
     return split
 
 
+#: The three ATTR keys that describe one pin. Everything else a SYMBOL document
+#: carries (``Device``, ``Value``, ``Add into BOM``, the ``ELE_PLACEHOLDER``
+#: twins) describes the symbol or an element, not a pin.
+_PIN_ATTR_KEYS = ("Pin Number", "Pin Name", "Pin Type")
+
+
+@dataclass
+class _PinRun:
+    """One ``PIN`` record of a SYMBOL document, with the attributes that name it.
+
+    A run is kept as a mutable object rather than three local strings because
+    its attributes can arrive **after** the next ``PIN`` has already opened
+    (see :func:`_collect_symbols`): the run has to stay addressable until its
+    document ends, so that a late attribute can still be filed to it.
+    """
+
+    point: Point
+    ref: str
+    number: str = ""
+    name: str = ""
+    type: str = ""
+
+
+def _pin_ref(record: Any, pin_key: str) -> str:
+    """The key that ties a PIN to the attributes and NO_CONNECT parents naming it.
+
+    V3 (``.epro2``) keys them by the *synthesised* ``e<zIndex>`` (measured: 12 of
+    the golden fixture's PIN rows have an ``id`` that is NOT ``e<zIndex>``, and
+    its NO_CONNECT parents carry ``-e<zIndex>``); eprj3 keys them by the PIN row's
+    own ``id`` (038 §1, spec + example: ``PIN id:"e1"`` with ``ATTR
+    parentId:"e1"``). Branching on the format is what the V3 regression demanded.
+    """
+    if pin_key == "pin_id" and record.id:
+        return str(record.id)
+    return f"e{record.body.get('zIndex')}"
+
+
+def _fill_pin_attr(run: _PinRun, key: str, value: str) -> bool:
+    """Write one pin attribute into ``run`` unless it already carries one.
+
+    Returns whether it was written, which is what lets a caller fall through to
+    its next candidate: a field is never overwritten (first writer wins), so a
+    duplicate attribute can only land on a pin that has none."""
+    if key == "Pin Number":
+        if run.number:
+            return False
+        run.number = value
+    elif key == "Pin Name":
+        if run.name:
+            return False
+        run.name = value
+    else:
+        if run.type:
+            return False
+        run.type = value
+    return True
+
+
+def _commit_symbol(
+    records: list[Any], symbols: dict[str, _SymbolDef],
+    parse_stats: ParseStats | None, pin_key: str,
+) -> None:
+    """Turn one buffered SYMBOL document into a :class:`_SymbolDef`.
+
+    Two phases, and the order is the whole point: every ``PIN`` of the document
+    is collected **first**, so that an attribute appearing anywhere in that
+    document — before its pin as easily as after it — can be filed to the run it
+    names by ``parentId``. Both spellings of a pin's id are indexed (the PIN
+    row's own ``id`` and the format's ref), because a file may use either.
+
+    Then the attributes are attributed in stream order:
+
+    1. to the run its ``parentId`` names, when that run is still missing the
+       key — this is 042's rule (``parentId``, not position) one level down,
+       and it is what recovers a pin whose number was appended to the end of
+       the document;
+    2. otherwise to the **open run** (the last ``PIN`` seen) when it is missing
+       the key — the pre-049 stream-adjacency rule, kept as the fallback for
+       documents that parent their attributes to something this module does not
+       index (the synthetic streams in the tests use ``<uuid>-e<n>``).
+
+    A field is never overwritten, so nothing that adjacency already placed moves.
+
+    ``parse_stats`` (task 020 §WI-1) counts the runs that end the document with
+    no number: such a pin is not in the symbol's pin map, so the whole pin —
+    name, position and every connection it makes — is dropped. Counting changes
+    nothing about the returned symbol.
+    """
+    symbol = _SymbolDef(uuid="")
+    runs: list[_PinRun] = []
+    # Two indexes, never one: a pin's own record id and its format ref can
+    # *collide across pins* — the eprj3 stream in the tests numbers its pins
+    # ``id=e1,e2,…`` while the synthesised ref for the same rows is
+    # ``e2,e3,…``, so merging them into one dict silently hands one pin's
+    # attributes to its neighbour. Each lookup therefore picks its own side
+    # first: an attribute's ``parentId`` is a record id when some pin answers to
+    # it (measured on every fixture: all 82 of the golden board's and all 330 of
+    # the DCDC board's Pin Number parents name the PIN row's own id), and the
+    # open-run lookup uses the row's own id, which cannot be ambiguous.
+    by_id: dict[str, _PinRun] = {}
+    by_ref: dict[str, _PinRun] = {}
+    for record in records:
+        if record.type == "DOCHEAD":
+            symbol.uuid = str(record.body.get("uuid") or "")
+            continue
+        body = record.body
+        if record.type == "META":
+            symbol.title = str(body.get("title") or "")
+            continue
+        if record.type != "PIN":
+            continue
+        run = _PinRun(
+            point=(round(float(body.get("x") or 0), COORD_PRECISION),
+                   round(_page_y(body.get("y")), COORD_PRECISION)),
+            ref=_pin_ref(record, pin_key),
+        )
+        runs.append(run)
+        if record.id:
+            by_id.setdefault(str(record.id), run)
+        by_ref.setdefault(run.ref, run)
+
+    def run_named_by(ref: str) -> _PinRun | None:
+        """The run an attribute's ``parentId`` names, by either spelling."""
+        return by_id.get(ref) or by_ref.get(ref)
+
+    open_run: _PinRun | None = None
+    for record in records:
+        if record.type == "DOCHEAD":
+            open_run = None
+            continue
+        body = record.body
+        if record.type == "PIN":
+            open_run = by_id.get(str(record.id or "")) or by_ref.get(
+                _pin_ref(record, pin_key)
+            )
+            continue
+        if record.type != "ATTR" or body.get("key") not in _PIN_ATTR_KEYS:
+            continue
+        value = str(body.get("value") or "").strip()
+        if not value or value == "null":
+            continue
+        named = run_named_by(str(body.get("parentId") or ""))
+        for run in (named, open_run):
+            if run is not None and _fill_pin_attr(run, str(body.get("key")), value):
+                break
+
+    for run in runs:
+        if not run.number:
+            if parse_stats is not None:
+                # The run ended with a position but no number: the pin is
+                # dropped (there is no key to file it under). Counted, never
+                # guessed at — a name-only pin has no identity to key on.
+                parse_stats.pins_dropped_no_number += 1
+            continue
+        symbol.pins[run.number] = (run.point, run.ref)
+        if run.name:
+            symbol.pin_names[run.number] = run.name
+        if run.type:
+            symbol.pin_types[run.number] = run.type
+    if symbol.uuid:
+        symbols.setdefault(symbol.uuid, symbol)
+
+
 def _collect_symbols(
     records: list[Any], parse_stats: ParseStats | None = None, *,
     pin_key: str = "zIndex",
 ) -> dict[str, _SymbolDef]:
     """Group SYMBOL documents into ``uuid -> pin number -> (point, ez key)``.
 
-    Pin numbers are paired **by stream order**, not by ``parentId``: a ``PIN``
-    record opens a run and the following ``Pin Number`` ATTR belongs to it.
-    The parentId-based linkage looks tempting (``e<zIndex>``) but is measured
-    unreliable — the resistor symbol ships ``PIN z=2`` with ``Pin Number``
-    parented to ``e17`` — because those ids come from the original library
-    document, which the export re-serialises.
+    A document is handed to :func:`_commit_symbol` as a whole, because a pin's
+    attributes are filed by the ``parentId`` that names the pin and not by
+    stream position: 3.2.186's incremental save appends a changed pin's
+    ``Pin Number`` to the **end** of the symbol document (measured 2026-09-27 on
+    the 级联多电平 module symbol, where the eight signal pins' numbers sit in one
+    block after the last ``PIN``, each naming its own pin's record id — the same
+    displacement 042 measured for components one level up). Position alone loses
+    those numbers twice over: the absent pins are dropped, and the block is
+    absorbed by whichever run happens to be open last. Measured on that fixture,
+    the shape cost 14 pins (7 per module instance, two instances) and gave the
+    survivor the wrong number; on the FPC board the same shape (attributes
+    *before* their pins) shifted every number of the PS7516 symbol by one.
 
     Each pin run also carries ``Pin Name`` and ``Pin Type`` ATTRs, and they
-    arrive in an arbitrary order relative to ``Pin Number`` (measured: the
-    USB-C symbol emits Pin Name first, then Pin Number, then Pin Type). So the
-    run stays **open** until the next ``PIN`` record, and every ATTR that names
-    the pin is attributed to the current run — a number is only written once
-    the run closes, which is also why the runs are flushed at document
-    boundaries. Getting this wrong silently attributes one pin's name to its
-    neighbour, which is worse than an empty name because it looks like data.
-
-    ``parse_stats`` (task 020 §WI-1) is where a run that closes **without** a
-    number is counted. Such a pin is not in the symbol's pin map, so the whole
-    pin — name, position and every connection it makes — is dropped; that used
-    to be invisible. Counting changes nothing about the returned symbols.
+    arrive in an arbitrary order relative to ``Pin Number`` (measured: the USB-C
+    symbol emits Pin Name first, then Pin Number, then Pin Type), which is why
+    each key is filled independently rather than by position in the run.
     """
     symbols: dict[str, _SymbolDef] = {}
-    current: _SymbolDef | None = None
-    in_symbol = False
-    pin_open: Point | None = None
-    pin_ez: str | None = None
-    run_number: str = ""
-    run_name: str = ""
-    run_type: str = ""
-
-    def flush() -> None:
-        """Commit the open pin run, if any, to the current symbol."""
-        nonlocal pin_open, pin_ez, run_number, run_name, run_type
-        if current is not None and pin_open is not None:
-            if run_number:
-                current.pins[run_number] = (pin_open, pin_ez or "")
-                if run_name:
-                    current.pin_names[run_number] = run_name
-                if run_type:
-                    current.pin_types[run_number] = run_type
-            elif parse_stats is not None:
-                # The run closed with a position but no number: the pin is
-                # dropped (there is no key to file it under). Counted, never
-                # guessed at — a name-only pin has no identity to key on.
-                parse_stats.pins_dropped_no_number += 1
-        pin_open, pin_ez, run_number, run_name, run_type = None, None, "", "", ""
-
+    buffer: list[Any] = []  # the records of the open SYMBOL document
+    buffering = False
     for record in records:
         if record.type == "DOCHEAD":
-            flush()
-            if current is not None and current.uuid:
-                symbols.setdefault(current.uuid, current)
-            in_symbol = record.body.get("docType") == "SYMBOL"
-            current = _SymbolDef(uuid=str(record.body.get("uuid") or "")) if in_symbol else None
+            if buffering:
+                _commit_symbol(buffer, symbols, parse_stats, pin_key)
+            buffering = record.body.get("docType") == "SYMBOL"
+            buffer = [record] if buffering else []
             continue
-        if not in_symbol or current is None:
-            continue
-        body = record.body
-        if record.type == "META":
-            current.title = str(body.get("title") or "")
-            continue
-        if record.type == "PIN":
-            flush()
-            pin_open = (round(float(body.get("x") or 0), COORD_PRECISION),
-                        round(_page_y(body.get("y")), COORD_PRECISION))
-            # The key that ties a PIN to the attributes and NO_CONNECT parents
-            # that reference it. V3 (`.epro2`) keys them by the *synthesised*
-            # `e<zIndex>` (measured: 12 of the golden fixture's PIN rows have an
-            # `id` that is NOT `e<zIndex>`, and its NO_CONNECT parents carry
-            # `-e<zIndex>`); eprj3 keys them by the PIN row's own `id` (038 §1,
-            # spec + example: `PIN id:"e1"` with `ATTR parentId:"e1"`).
-            # Branching on the format is what the V3 regression demanded.
-            if pin_key == "pin_id" and record.id:
-                pin_ez = str(record.id)
-            else:
-                pin_ez = f"e{body.get('zIndex')}"
-            continue
-        if record.type == "ATTR" and pin_open is not None:
-            key = body.get("key")
-            value = str(body.get("value") or "").strip()
-            if value and value != "null":
-                if key == "Pin Number":
-                    run_number = value
-                elif key == "Pin Name":
-                    run_name = value
-                elif key == "Pin Type":
-                    run_type = value
-            continue
-        if record.type == "ELE_PLACEHOLDER":
-            continue  # part of the element stream, never a run boundary
-    flush()
-    if current is not None and current.uuid:
-        symbols.setdefault(current.uuid, current)
+        if buffering:
+            buffer.append(record)
+    if buffering:
+        _commit_symbol(buffer, symbols, parse_stats, pin_key)
     return symbols
 
 
