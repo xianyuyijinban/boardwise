@@ -1,0 +1,55 @@
+{
+  "schema": "boardwise-review-annotations/1",
+  "board": "FPC触屏游戏机_2026-09-27",
+  "source": "tests/fixtures/FPC触屏游戏机_2026-09-27.epro2",
+  "split_default": "holdout",
+  "reviewed_by": "xianyuyijinban",
+  "reviewed_at": "2026-09-27",
+  "notes": "Task 017 batch-2 board (oracle's own design, pulled live via bridge 2026-09-27). Eval view: schematic. pcb-view phantom findings eliminated by raw-record verification before ruling: USB CC R24/R27 are 5.1K in the SCH records (correct design; the pcb view read 10k from stale PCB-doc copies), and the param-value-mpn-match R1 line does not exist in the SCH view (R1's Value is empty there). B1 ruled defect under the oracle's standing decap standard, stated this session and recorded for facts intake: VCC-to-ground decoupling should be 100nF + 2.2uF (tantalum preferred) -- '以后都按这种标准来'. A1 batch: 7 param-rc-cutoff INFO numbers ruled observation (oracle: RC应该没啥问题 -- the RC values are within design intent; the rule reports, it does not grade). Parse caveat noted: 12 pin(s) dropped during parse (missing pin number).",
+  "items": [
+    {
+      "ref": "U5",
+      "rule_hint": "decap-required-caps",
+      "kind": "defect",
+      "severity": "WARN",
+      "note": "Ruling (oracle xianyuyijinban, 2026-09-27): defect. U5 = RT9013-33GB (SOT-23-5 LDO); its output pin 5 on VCC has only a 100nF grounded capacitor where the datasheet asks >= 1uF of output bulk. The oracle's standing standard (stated 2026-09-27, facts-intake candidate): VCC-to-ground decoupling = 100nF + 2.2uF, tantalum preferred. The bulk capacitor is missing."
+    }
+  ],
+  "observations": [
+    {
+      "ref": "R12",
+      "topic": "param-rc-cutoff",
+      "note": "Ruling A1 (oracle xianyuyijinban, 2026-09-27; one decision covering all 7 INFO lines): observation. RC R12(10k) + C11(10UF) on TVDD: fc = 2 Hz. The RC values are within design intent (oracle: RC应该没啥问题); the number is recorded, not judged."
+    },
+    {
+      "ref": "R12",
+      "topic": "param-rc-cutoff",
+      "note": "Ruling A1 (same batch): observation. RC R12(10k) + C12(100nF) on TVDD: fc = 159 Hz."
+    },
+    {
+      "ref": "R12",
+      "topic": "param-rc-cutoff",
+      "note": "Ruling A1 (same batch): observation. RC R12(10k) + C13(100nF) on TVDD: fc = 159 Hz."
+    },
+    {
+      "ref": "R30",
+      "topic": "param-rc-cutoff",
+      "note": "Ruling A1 (same batch): observation. RC R30(10k) + C73(100nF) on NRST: fc = 159 Hz -- the reset-pin RC time constant is intended."
+    },
+    {
+      "ref": "R11",
+      "topic": "param-rc-cutoff",
+      "note": "Ruling A1 (same batch): observation. RC R11(10k) + C11(10UF) on TVDD: fc = 2 Hz."
+    },
+    {
+      "ref": "R11",
+      "topic": "param-rc-cutoff",
+      "note": "Ruling A1 (same batch): observation. RC R11(10k) + C12(100nF) on TVDD: fc = 159 Hz."
+    },
+    {
+      "ref": "R11",
+      "topic": "param-rc-cutoff",
+      "note": "Ruling A1 (same batch): observation. RC R11(10k) + C13(100nF) on TVDD: fc = 159 Hz."
+    }
+  ]
+}

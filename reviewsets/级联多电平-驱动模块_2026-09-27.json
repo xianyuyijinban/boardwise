@@ -1,0 +1,87 @@
+{
+  "schema": "boardwise-review-annotations/1",
+  "board": "级联多电平-驱动模块_2026-09-27",
+  "source": "tests/fixtures/级联多电平-驱动模块_2026-09-27.epro2",
+  "split_default": "holdout",
+  "reviewed_by": "xianyuyijinban",
+  "reviewed_at": "2026-09-27",
+  "notes": "Task 017 batch-1 board (oracle's own design, pulled live via bridge 2026-09-27). Eval view: schematic (findings identical in both views here; only model size differs, 46 vs 42). All 4 WARNs ruled exception -- the param-value-mpn-match decoder misreads all four MPNs; external datasheet evidence was gathered before ruling and the oracle confirmed both values on design knowledge (译码器错了，证实了。2R1就是2.2欧，5kR1就是5KΩ). The four decodes are filed as MPN-decoder gaps (follow-up task). A3: 10 param-rc-cutoff INFO numbers ruled observation (oracle: RC应该没啥问题). Parse caveat: 14 pin(s) dropped during parse (missing pin number).",
+  "items": [
+    {
+      "ref": "2R1",
+      "rule_hint": "param-value-mpn-match",
+      "kind": "exception",
+      "note": "Ruling A1 (oracle xianyuyijinban, 2026-09-27; one decision covering 2R1/2R2): exception. The MPN 0603WAF220KT5E is a Uni-Royal thick-film 0603 resistor of 2.2 ohm +/-1% (verified on the LCSC product page); the board value 2.2 ohm is CORRECT and the decoder's 2e+04 ohm reading is wrong -- a decoder gap on this manufacturer's embedded value code, filed for the decoder task. Oracle on design knowledge: 2R1 就是 2.2 欧."
+    },
+    {
+      "ref": "2R2",
+      "rule_hint": "param-value-mpn-match",
+      "kind": "exception",
+      "note": "Ruling A1 (same batch as 2R1): exception. Twin part, same MPN, same decoder gap, same external evidence."
+    },
+    {
+      "ref": "5kR1",
+      "rule_hint": "param-value-mpn-match",
+      "kind": "exception",
+      "note": "Ruling A2 (oracle xianyuyijinban, 2026-09-27; one decision covering 5kR1/5kR2): exception. AR03BTCX5001 is a Viking AR03 precision thin-film 0603 resistor; its trailing 5001 is the E-96 four-figure code for 5.00 kohm (500 x 10^1). The board value 5000 ohm is CORRECT; the decoder's 0.03 ohm is absurd (a 0.03 ohm precision thin-film part does not exist) -- decoder gap, filed. Oracle on design knowledge: 5kR1 就是 5KΩ."
+    },
+    {
+      "ref": "5kR2",
+      "rule_hint": "param-value-mpn-match",
+      "kind": "exception",
+      "note": "Ruling A2 (same batch as 5kR1): exception. Twin part, same MPN, same decoder gap, same reasoning."
+    }
+  ],
+  "observations": [
+    {
+      "ref": "DTR2",
+      "topic": "param-rc-cutoff",
+      "note": "Ruling A3 (oracle xianyuyijinban, 2026-09-27; one decision covering all 10 INFO lines): observation. RC DTR2(50k) + 103C2(10nF) on DTA: fc = 318 Hz. RC values within design intent (oracle: RC应该没啥问题); numbers recorded, not judged."
+    },
+    {
+      "ref": "DTR1",
+      "topic": "param-rc-cutoff",
+      "note": "Ruling A3 (same batch): observation. RC DTR1(50k) + 103C3(10nF) on DTB: fc = 318 Hz."
+    },
+    {
+      "ref": "5kR1",
+      "topic": "param-rc-cutoff",
+      "note": "Ruling A3 (same batch): observation. RC 5kR1(5k) + 105C1(1uF) on D5V: fc = 32 Hz."
+    },
+    {
+      "ref": "5kR1",
+      "topic": "param-rc-cutoff",
+      "note": "Ruling A3 (same batch): observation. RC 5kR1(5k) + 103C1(10nF) on D5V: fc = 3,183 Hz."
+    },
+    {
+      "ref": "5kR1",
+      "topic": "param-rc-cutoff",
+      "note": "Ruling A3 (same batch): observation. RC 5kR1(5k) + 105C4(1uF) on D5V: fc = 32 Hz."
+    },
+    {
+      "ref": "5kR1",
+      "topic": "param-rc-cutoff",
+      "note": "Ruling A3 (same batch): observation. RC 5kR1(5k) + 103C4(10nF) on D5V: fc = 3,183 Hz."
+    },
+    {
+      "ref": "5kR2",
+      "topic": "param-rc-cutoff",
+      "note": "Ruling A3 (same batch): observation. RC 5kR2(5k) + 105C1(1uF) on D5V: fc = 32 Hz."
+    },
+    {
+      "ref": "5kR2",
+      "topic": "param-rc-cutoff",
+      "note": "Ruling A3 (same batch): observation. RC 5kR2(5k) + 103C1(10nF) on D5V: fc = 3,183 Hz."
+    },
+    {
+      "ref": "5kR2",
+      "topic": "param-rc-cutoff",
+      "note": "Ruling A3 (same batch): observation. RC 5kR2(5k) + 105C4(1uF) on D5V: fc = 32 Hz."
+    },
+    {
+      "ref": "5kR2",
+      "topic": "param-rc-cutoff",
+      "note": "Ruling A3 (same batch): observation. RC 5kR2(5k) + 103C4(10nF) on D5V: fc = 3,183 Hz."
+    }
+  ]
+}

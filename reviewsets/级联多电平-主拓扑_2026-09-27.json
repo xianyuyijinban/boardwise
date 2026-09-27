@@ -1,0 +1,10 @@
+{
+  "schema": "boardwise-review-annotations/1",
+  "board": "级联多电平-主拓扑_2026-09-27",
+  "source": "tests/fixtures/级联多电平-主拓扑_2026-09-27.epro2",
+  "split_default": "holdout",
+  "reviewed_by": "xianyuyijinban",
+  "reviewed_at": "2026-09-27",
+  "notes": "Task 017 batch-1 board (oracle's own design, pulled live via bridge 2026-09-27). Eval view: schematic. Zero findings in either view. Ruling A1 (oracle xianyuyijinban, 2026-09-27): confirmed CLEAN by design knowledge (这五个板子没有看到明显的暗部，看着挺干净的) -- this is the set's first oracle-confirmed clean negative sample. Parser-side caveats recorded (not board defects, no oracle items): 14 pin(s) dropped during parse (missing pin number); U3 does not exist in the schematic view at all (it lives only in the PCB document) while U1/U2 read only 3 pins each in the schematic view; model sizes differ between views (57 vs 58 components). These go to parser follow-up, not to this set.",
+  "items": []
+}
