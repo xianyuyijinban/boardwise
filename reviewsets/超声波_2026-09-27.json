@@ -1,0 +1,18 @@
+{
+  "schema": "boardwise-review-annotations/1",
+  "board": "超声波_2026-09-27",
+  "source": "tests/fixtures/超声波_2026-09-27.epro2",
+  "split_default": "holdout",
+  "reviewed_by": "xianyuyijinban",
+  "reviewed_at": "2026-09-27",
+  "notes": "Task 017 batch-2 board (oracle's own early design, pulled live via bridge 2026-09-27). Eval view: schematic (the harness calibre; raw .epru records verified the SCH document is the design truth -- the PCB doc carried stale attribute copies that produced phantom findings in the pcb view: USB CC R1/R2 read as 10k there, but the SCH records say 5.1K and are correct). Single finding, ruled defect. Oracle's words: the part should have been wired for 3.3 V because the whole system runs on 3.3 V (挂错了，应该是挂的3.3伏，因为它整个系统供电是3.3V). Side note recorded but not ruled: C4's Value is empty in the SCH document (drawing hygiene, no rule fired).",
+  "items": [
+    {
+      "ref": "U2",
+      "rule_hint": "decap-required-caps",
+      "kind": "defect",
+      "severity": "WARN",
+      "note": "Ruling (oracle xianyuyijinban, 2026-09-27): defect. U2 = CH340N; pin 8 is the V3 pin. With the whole system powered at 3.3 V, the datasheet's 3.3 V mode requires V3 tied to VCC; the board instead leaves pin 8 on NET1 with only U2.8 + C4.1 on that net (and C4's Value is empty in SCH). The rule's premise (facts declare VCC wiring for the active mode) matches the design intent, so the mismatch is a real wiring defect, not an exception."
+    }
+  ]
+}

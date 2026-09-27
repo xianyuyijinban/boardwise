@@ -18,6 +18,12 @@ REVIEWSETS = REPO / "reviewsets"
 FROZEN_ROSTER: dict[str, str] = {
     "ch340g_golden.json": "dev",
     "ProPrj_毕设FOC驱动板_2026-09-17.json": "holdout",
+    "DCDC-12V9V转5V3V3_2026-09-27.json": "holdout",
+    "FPC触屏游戏机_2026-09-27.json": "holdout",
+    "毕设滤波采样_2026-09-27.json": "holdout",
+    "级联多电平-主拓扑_2026-09-27.json": "holdout",
+    "级联多电平-驱动模块_2026-09-27.json": "holdout",
+    "超声波_2026-09-27.json": "holdout",
 }
 
 

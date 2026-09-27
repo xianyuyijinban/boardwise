@@ -37,13 +37,19 @@ FPC触屏游戏机、超声波、云台、24V FOC驱动板、UAV遥控器、ROBO
 
 5 窗在线拉取 .epro2 跑 review（拉取法：`sys.get_project_file` → 本地解码，免手动导出；此法可替代人工导出步骤）：
 
-| 板 | 器件/网 | ERROR/WARN/INFO | 角色判定 |
+**视图口径（2026-09-27 裁定，溯及本表）**：finding 计数必须声明视图。`review` 文件默认 pcb 视图会读 PCB 文档的
+陈旧副本（幻影 finding 的根因），**schematic 视图才是设计真相**（4 处原始记录实证：FPC R24/R27 SCH Value=5.1K、
+DCDC `100NF`/`10UF` 位号 SCH 为真、毕设滤波采样 R3/R6=330 与 U1/U7/U8×3 实体 SCH 为真）。
+下表已统一改写为 sch 视图真值（与 2026-09-27 eval 报告逐板核对一致）；F28379D/LLC 两行系在线初查值，
+未按 sch 口径复核（一不入库、一仅 dev 夹具，不进 eval，不影响结论）。
+
+| 板 | 器件/网（sch） | ERROR/WARN/INFO（sch） | 角色判定 |
 |---|---|---|---|
-| F28379D开发板26式V2 | 311/210 | 0/0/582 | **朋友的板（第三方，xianyuyijinban 2026-09-27 定性）**：不入库，本地只读评测。超 15–100 上限；用途=大规模干净锚点 + facts 沙漠 UNKNOWN 考场；arch 骨架已验证可跑（9 轨/54 TODO 槽） |
-| 级联多电平-主拓扑 | 58/33 | 0/0/0 | 干净正常样例，holdout 候选（待入库权裁决） |
-| LLC全桥副边 | 47/25 | 0/0/0 | **= dev 夹具 `llc_board.epro2`**（文件哈希异，47 器件逐值/40 网逐名全同）→ 只 dev 侧，永无 holdout 资格 |
-| 级联多电平-驱动模块 | 42/33 | 0/4/10 | 4 WARN 全为 MPN 译码误报（逐条外证，见下）→ "合理例外"样例，holdout 候选 |
-| 毕设滤波采样 | 56/32 | 0/2/22 | 2 WARN 同为译码误报 → "合理例外"样例，holdout 候选 |
+| F28379D开发板26式V2 | 311/210（在线初查） | 0/0/582（在线初查） | **朋友的板（第三方，xianyuyijinban 2026-09-27 定性）**：不入库，本地只读评测。超 15–100 上限；用途=大规模干净锚点 + facts 沙漠 UNKNOWN 考场；arch 骨架已验证可跑（9 轨/54 TODO 槽） |
+| 级联多电平-主拓扑 | 57/37 | 0/0/0 | 干净正常样例，已签名 clean（xianyuyijinban：看着挺干净的；附注：14 pins dropped、U3 仅存 PCB 文档，解析器跟进），holdout |
+| LLC全桥副边 | 47/25（在线初查） | 0/0/0（在线初查） | **= dev 夹具 `llc_board.epro2`**（文件哈希异，47 器件逐值/40 网逐名全同）→ 只 dev 侧，永无 holdout 资格 |
+| 级联多电平-驱动模块 | 46/33 | 0/4/10 | 4 WARN 全为 MPN 译码误报（逐条外证，见下；xianyuyijinban：译码器错了，证实了）→ "合理例外"样例，holdout；10 INFO 裁 observation |
+| 毕设滤波采样 | 56/28 | 3/2/4 | **真实带病板**（sch 视图才现形）：3 ERROR=U1/U7/U8 复制没重标注（defect）、2 WARN=R3/R6 手改值 330≠实料 1k（defect）、4 INFO=observation，holdout |
 
 **WARN 误报外证**（裁定依据，同时是 3 个新 MPN 译码缺口的立案证据）：`0603WAF220KT5E`=厚声 2.2Ω±1%
 （立创商城页实证，译码器误读 20kΩ）；`AR03BTCX5001`=Viking 精密薄膜 5.00kΩ（5001=E-96 码，误读 0.03Ω）；
@@ -98,31 +104,32 @@ FPC触屏游戏机、超声波、云台、24V FOC驱动板、UAV遥控器、ROBO
 
 ## 八、验收
 
-- 8–12 块板全部有签名标注 JSON + 变异验证通过；
-- `outputs/017_eval_{dev,holdout}.txt` 报告含 §五全部指标（修复成功率字段允许暂缺并注明依赖 016）；
-- dev/holdout 冻结测试绿；既有 1145+ 测试与 connector 279 不降；
-- 一份《泛化结论》落 outputs：新集合上规则族的真实表现排名 + missing_fact top-N + 给规则改进的输入清单。
+- [x] 8–12 块板全部有签名标注 JSON + 变异验证通过 —— 新 7 板全签名（6 板xianyuyijinban裁决 + 级联主拓扑 clean signed）；`tests/test_017_roster.py` 花名册冻结，变异 CAUGHT；
+- [x] `outputs/017_eval_{dev,holdout}.txt` 报告含 §五全部指标（修复成功率字段暂缺并注明依赖 016，harness 按纪律报 pending 不报 0）；
+- [x] dev/holdout 冻结测试绿；既有 1145+ 测试与 connector 279 不降 —— 收官全量 pytest **1816 passed**（127s，2026-09-27 亲跑），connector 未动；
+- [x] 《泛化结论》落 `outputs/017_generalization.md`：规则族排名 + missing_fact top-N + 规则改进输入清单。头条：holdout 检出 42/42=1.00、高优精确 42/46=0.91（4 假阳全=已立案 MPN 译码缺口）、UNKNOWN 覆盖 0.63、定位 0.80。
 
 ## 九、待xianyuyijinban裁决清单
 
-- [ ] 选板：§二b 已实测 3 块 holdout 候选（级联×2 + 毕设滤波采样），**入库权待xianyuyijinban逐板裁决**；DCDC/触屏游戏机/超声波/UAV遥控器 4 块待xianyuyijinban开窗（bridge 拉取）或手动导出 .epro2
+- [x] 选板：6 板全部入库（xianyuyijinban下放入库权后执行，级联×2 xianyuyijinban后续放行，ALLOWLIST 22→31）；UAV遥控器未开窗，放弃（集合已达标 8 真实板）
 - [x] ~~board24v triage 裁决~~ → 2026-09-27 xianyuyijinban裁决出局（早期版无意义，FOC 谱系由毕设FOC代表）
 - [x] F28379D 定性 → 朋友的板，本地只读不入库（2026-09-27 xianyuyijinban定性）
-- [ ] 标注节奏：一次性排期 vs 裁一块落一块
+- [x] 标注节奏 → 裁一块落一块，2026-09-27 单日裁完 6 板 12 项（triage 草稿 pcb 视图版作废，sch 视图重出后裁决）
+- [x] 6 板 finding 裁决（2026-09-27 xianyuyijinban，12 项终稿，落进各标注 JSON 的 note）：超声波 B1=defect（CH340N V3 挂错）；DCDC A1=defect×2（位号=容值）；FPC B1=defect（RT9013 缺 2.2µF bulk，xianyuyijinban定常驻 decap 标准）；毕设滤波采样 A1=defect×3（U1/U7/U8 复制没重标注）、A2=defect×2（R3/R6 手改值）；级联主拓扑=clean signed；级联驱动 A1/A2=exception×4（译码器缺口）；全部 RC 批次=observation
 
 ### 二c、候选池普查第二批（2026-09-27 下午，connector 0.4.25 热更后；入库权xianyuyijinban已下放："你觉得可以进仓就可以进仓"）
 
 新开 6 窗：高速电机控制器 / ROBOT ctrl FOC / 毕设FOC驱动板（均已在仓夹具，身份不变）+ 3 块新候选 + 第一批的毕设滤波采样入库。
 
-| 板 | 器件/网 | ERROR/WARN/INFO | 角色判定 |
+| 板 | 器件/网（sch） | ERROR/WARN/INFO（sch） | 角色判定（xianyuyijinban 2026-09-27 裁决后） |
 |---|---|---|---|
-| 超声波 | 24/20 | 0/6/0 | **疑似真实带病板**（xianyuyijinban早期作品）：USB CC 下拉 R1/R2=10k≠5.1k ×2、LED 串阻 20k 超窗、decap ×3——待xianyuyijinban裁决 | **已进仓** `超声波_2026-09-27.epro2`，holdout 候选 |
-| 12V9V转5V3.3V DC-DC | 29/9 | 0/2/0 | decap ×2 待裁 | **已进仓** `DCDC-12V9V转5V3V3_2026-09-27.epro2`，holdout 候选 |
-| FPC触屏游戏机 | 56/51 | 0/4/11 | USB CC ×2 + decap + R1 MPN 译码误报（`FRL1210FR400TS`=FOJAN 400mΩ，板值 0.4Ω 对，误读 40Ω——第 4 个译码缺口，已外证）→ 缺陷+例外混合样例 | **已进仓** `FPC触屏游戏机_2026-09-27.epro2`，holdout 候选 |
-| 毕设滤波采样 | 56/32 | 0/2/22 | 第一批已普查（2 WARN=译码误报） | **已进仓** `毕设滤波采样_2026-09-27.epro2`，holdout 候选 |
+| 超声波 | 24/20 | 0/1/0 | **真实带病板确认**：1 WARN=defect——U2(CH340N) pin8(V3) 在 3.3V 系统该挂 VCC 没挂（xianyuyijinban：挂错了）；pcb 视图的 CC 下拉/LED/ decap 幻影全灭 | **已进仓** `超声波_2026-09-27.epro2`，holdout |
+| 12V9V转5V3.3V DC-DC | 29/11 | 2/0/0 | 2 ERROR=defect×2：`100NF`/`10UF` 位号=容值（xianyuyijinban：当时不成熟）；画布异常=解析器疑似并网（U10 pin5 真实挂 VCC/3.3V 被并进 +5V），另立案非板病 | **已进仓** `DCDC-12V9V转5V3V3_2026-09-27.epro2`，holdout |
+| FPC触屏游戏机 | 56/60 | 0/1/7 | 缺陷+例外混合确认：1 WARN=defect——U5(RT9013-33GB) pin5 只有 100nF（xianyuyijinban定常驻标准：VCC 对地=100nF+2.2µF 钽）；7 INFO=observation；pcb 视图的 CC 5.1K/R1 MPN 幻影全灭（`FRL1210FR400TS`=FOJAN 400mΩ 误读 40Ω=第 4 个译码缺口，sch 视图该 finding 不存在） | **已进仓** `FPC触屏游戏机_2026-09-27.epro2`，holdout |
+| 毕设滤波采样 | 56/28 | 3/2/4 | 见 §二b 更正行（3E+2W 全 defect，4I observation） | **已进仓** `毕设滤波采样_2026-09-27.epro2`，holdout |
 
 入库裁决执行：4 块均为个人学习/毕设谱系板，无公司痕迹，ALLOWLIST 22→29（同 commit 收录）。
-**拦截待确认**：级联多电平-主拓扑 / 级联多电平-驱动模块——拓扑像电源产品线（级联多电平+LLC 族），R4 保守不入库，等xianyuyijinban定性。
+**拦截已放行**：级联多电平-主拓扑 / 级联多电平-驱动模块——xianyuyijinban 2026-09-27 定性放行入库（ALLOWLIST 29→31，`7ace9ac`），花名册冻结测试收录。
 夹具新鲜度未核：高速电机/ROBOT/毕设FOC 三窗的在线工程与仓内夹具是否同版，另列。
 
 **同批修复（普查暴露的真漏洞）**：repo 卫生闸门对非 ASCII 文件名失明——git quotepath 转义后的引号使 `(/|$)` 锚失配，

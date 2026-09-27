@@ -1,0 +1,25 @@
+{
+  "schema": "boardwise-review-annotations/1",
+  "board": "DCDC-12V9V转5V3V3_2026-09-27",
+  "source": "tests/fixtures/DCDC-12V9V转5V3V3_2026-09-27.epro2",
+  "split_default": "holdout",
+  "reviewed_by": "xianyuyijinban",
+  "reviewed_at": "2026-09-27",
+  "notes": "Task 017 batch-2 board (oracle's own design, pulled live via bridge 2026-09-27). Eval view: schematic. Both ERRORs verified against raw .epru records before ruling: components whose Designator literally reads '100NF' (two of them, same page) and '10UF' (two of them, same page, Value=10uF). Oracle's words for the cause: the designators were renamed to the capacitance values -- an immature practice at the time (他把位号改成了电容的容值，应该是当时不成熟的一种体现). Separately verified by the oracle on canvas: U10 (RT9013-33GB) pin 5 (Vout) is wired to net VCC (3.3 V output) -- the schematic-view model's claim that pin 5 and both legs of 10UH sit on +5V is a PARSER net-merge suspicion (follow-up task, not a board defect and not an oracle item; also the likely root of the pwr-*/path-ldo 'conflicting voltage sources' UNKNOWNs on this board). pcb-view-only findings (2 decap WARNs with all-100nF inputs) were stale PCB-doc attribute copies; the SCH-view decap outcome is OK (10UF provides 10uF >= 1uF).",
+  "items": [
+    {
+      "ref": "100NF",
+      "rule_hint": "conn-duplicate-designators",
+      "kind": "defect",
+      "severity": "ERROR",
+      "note": "Ruling A1 (oracle xianyuyijinban, 2026-09-27; one decision covering both refs in the batch): defect. Two capacitors on one schematic page both carry the Designator '100NF' -- the designator was overwritten with the capacitance value (an immature practice at the time, the oracle's words). Duplicate designators make the BOM and netlist ambiguous about which physical part is which. Verified real in the raw SCH records before ruling."
+    },
+    {
+      "ref": "10UF",
+      "rule_hint": "conn-duplicate-designators",
+      "kind": "defect",
+      "severity": "ERROR",
+      "note": "Ruling A1 (oracle xianyuyijinban, 2026-09-27; same batch decision as 100NF): defect. Two capacitors on one page both designated '10UF' (Value=10uF on each), for the same cause and the same consequence."
+    }
+  ]
+}
