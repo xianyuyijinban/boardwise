@@ -16,11 +16,12 @@
 夹具只读：`llc_board.epro2`（实测丢 14 个脚：两份 SYMBOL 文档各 7 个有名脚，
 Q1G/Q1S/Q2G/…）、`ch340_golden.epro2`（0）。
 
-覆盖范围的**诚实说明**：这两个计数只有 `--view schematic` 会填。pcb 视图（缺省）
-的模型来自 PCB 文档（`parsers/epro2_model.py`），根本不读 SYMBOL 文档，计数
-"恒为 0"是结构决定的、不是量出来的——所以 `_load_model` 不往那里塞统计，
-`cli._parse_drop_note` 也不把 0 当作"没丢东西"的证据来渲染。末尾两条测试把这条
-边界也钉住，免得以后有人以为 pcb 视图的静默等于没丢。
+覆盖范围的**诚实说明**：这两个计数只有 `--view schematic` 会填。pcb 视图的模型来自
+PCB 文档（`parsers/epro2_model.py`），根本不读 SYMBOL 文档，计数"恒为 0"是结构决定的、
+不是量出来的——所以 `_load_model` 不往那里塞统计，`cli._parse_drop_note` 也不把 0 当作
+"没丢东西"的证据来渲染。末尾两条测试把这条边界也钉住，免得以后有人以为 pcb 视图的
+静默等于没丢。（047 起 `review` 对文件的缺省视图是 schematic，这条边界要靠**显式**
+`--view pcb` 才碰得到。）
 """
 
 from __future__ import annotations
@@ -337,7 +338,7 @@ def test_the_json_is_byte_identical_with_and_without_the_markdown(tmp_path, caps
 
 
 def test_the_pcb_view_never_fills_the_drop_counters():
-    # 缺省视图的模型来自 PCB 文档：它不读 SYMBOL 文档，所以这两个计数是**结构
+    # pcb 视图的模型来自 PCB 文档：它不读 SYMBOL 文档，所以这两个计数是**结构
     # 上**的 0（不是"量出来没丢"）。谁要改这条通路，先改这条测试。
     stats = ParseStats()
     model, board = cli._load_model(LLC, view="pcb", parse_stats=stats)
@@ -348,9 +349,9 @@ def test_the_pcb_view_never_fills_the_drop_counters():
 
 
 def test_the_pcb_view_of_the_same_file_gets_no_note(capsys):
-    # 同一份文件、缺省视图：丢脚确实存在（schematic 视图报 14），但 pcb 视图的
-    # 报告没有漏掉任何它本该看到的东西——那句话在那里会是假的。
-    code = cli.main(["review", str(LLC)])
+    # 同一份文件、显式 pcb 视图：丢脚确实存在（schematic 视图报 14），但 pcb 视图
+    # 的报告没有漏掉任何它本该看到的东西——那句话在那里会是假的。
+    code = cli.main(["review", str(LLC), "--view", "pcb"])
     out = capsys.readouterr().out
     assert code == 0
     assert "note:" not in out

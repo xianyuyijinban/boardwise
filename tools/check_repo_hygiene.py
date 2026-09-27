@@ -23,10 +23,16 @@ import subprocess
 import sys
 
 # Project-container formats this guard watches. `.eprj3` is a *directory*
-# (V4 folder format), so the pattern matches any path containing it.
-_CONTAINER_RE = re.compile(r"\.(epro2|epro|eprj2|eprj3|epru|esch|epcb)(/|$)", re.IGNORECASE)
+# (V4 folder format), so the pattern matches any path containing it. `.esch2` is
+# the V4 sheet file inside such a folder: `esch` followed by a version digit,
+# which the `(/|$)` anchor never sees — the file was invisible to this guard
+# until 047, and a company V4 sheet could have entered the repo silently. It is
+# listed before `esch` for readability only; the anchor makes the order moot.
+_CONTAINER_RE = re.compile(
+    r"\.(epro2|epro|eprj2|eprj3|epru|esch2|esch|epcb)(/|$)", re.IGNORECASE
+)
 
-# The 31 project containers tracked as of 2026-09-27, each individually
+# The 32 project containers tracked as of 2026-09-27, each individually
 # approved (own teaching/DIY boards + synthetic/golden fixtures). Frozen.
 # (Paths are matched against NUL-separated `git ls-files -z` output, so
 # non-ASCII names compare literally — never add the quoted/escaped form.)
@@ -55,6 +61,10 @@ ALLOWLIST: frozenset[str] = frozenset(
         "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
         "tests/fixtures/ch340_golden.epro2",
         "tests/fixtures/eprj3_synth/eprj3_synth.eprj3",
+        # The synthetic V4 fixture's own sheet file (038). Approved when it was
+        # added; the regex simply could not see it until 047, which is why the
+        # allowlist grew rather than the file being moved.
+        "tests/fixtures/eprj3_synth/sch/Schematic1/P1.esch2",
         "tests/fixtures/llc_board.epro2",
         "tests/fixtures/毕设滤波采样_2026-09-27.epro2",
         "tests/fixtures/级联多电平-主拓扑_2026-09-27.epro2",

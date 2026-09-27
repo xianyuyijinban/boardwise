@@ -35,6 +35,17 @@ PORT_META_VERSION = 1
 #: The three fields, kept here rather than written out three times.
 PORT_META_FIELDS = ("direction", "voltage", "level")
 
+#: Where the sidecar is looked for when a caller does not name one, spelled
+#: relative to the repository root — the spelling `draw --port-meta` and
+#: `validate --port-meta` have always shown in their help text. **Frozen there is
+#: no repository**: a friend's exe has no ``blocklib/`` beside it, so the relative
+#: spelling was a *missing* file, the levels and power-tree gates answered "cannot
+#: tell", and the draw was refused (045b §七 measured exactly that in a clean
+#: directory). A process-dependent default belongs in :func:`default_port_meta_path`,
+#: not in a module constant — the same fix, for the same reason, as
+#: ``rules.facts.DEFAULT_LIBRARY_PATH`` (045b).
+DEFAULT_PORT_META_PATH = "blocklib/blocks.portmeta.json"
+
 _SECTION_KEYS = ("ports", "notes", "provenance")
 _TOP_KEYS = ("kind", "version", "blocks", "notes")
 
@@ -200,13 +211,39 @@ def load_port_meta(path: str | Path) -> PortMeta:
     return meta
 
 
+def default_port_meta_path() -> str:
+    """The sidecar this process reads when no caller named one (task 047).
+
+    From a checkout that is :data:`DEFAULT_PORT_META_PATH` — unchanged, because
+    the constant is what the CLI's help text and both ``--port-meta`` defaults
+    are written against. Frozen it is the copy the exe carries, resolved through
+    :mod:`boardwise.resources` the same way the connector bundle is.
+
+    A frozen process that cannot name its extraction directory is a broken
+    bootstrap: the constant is returned so the caller behaves exactly as it did
+    before (the sidecar is simply not found, the levels and power-tree gates say
+    "cannot tell" and the spec is refused) rather than raising out of a command
+    line. Same shape as ``rules.facts.default_library_path``.
+    """
+    from .. import resources
+
+    if not resources.is_frozen():
+        return DEFAULT_PORT_META_PATH
+    try:
+        return str(resources.portmeta_sidecar())
+    except RuntimeError:
+        return DEFAULT_PORT_META_PATH
+
+
 __all__ = [
+    "DEFAULT_PORT_META_PATH",
     "PORT_META_FIELDS",
     "PORT_META_KIND",
     "PORT_META_VERSION",
     "PortMeta",
     "PortMetaError",
     "TemplatePortMeta",
+    "default_port_meta_path",
     "load_port_meta",
     "port_meta_from_json",
 ]

@@ -88,11 +88,14 @@ def test_review_exit_code_on_error(tmp_path):
 
 def test_review_epro2_fixture_smoke(tmp_path):
     # One file in, full report out: the same reviewer as .enet, plus the
-    # board line that only a backup can provide.
+    # board line that only a backup can provide. `--view pcb` is explicit
+    # because that line *is* the pcb view (047 made the file default the
+    # schematic view; a bare `review <file>` no longer prints `board:`).
     json_path = tmp_path / "report.json"
     md_path = tmp_path / "report.md"
     result = run_cli(
-        "review", str(EPRU_FIXTURE), "--json", str(json_path), "--md", str(md_path)
+        "review", str(EPRU_FIXTURE), "--view", "pcb",
+        "--json", str(json_path), "--md", str(md_path),
     )
     assert result.returncode == 0, result.stderr
     assert "(47 components, 25 nets)" in result.stdout

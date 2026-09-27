@@ -145,13 +145,16 @@ checkup 每次都会在 `--out` 里写 `architecture.md`（`report.json` 的 `ar
 
 - **手动导出 + 离线审查**（断连兜底）：编辑器 → 文件 → 导出 → **工程备份**，另存 `.epro2`
   （**导出时取消"加密"**，加密的读不了 → 退出码 2）。然后
-  `boardwise review <导出.epro2> --view schematic --json report.json --md report.md`
-  —— 看原理图**必须** `--view schematic`（011 家族规则对着 schematic 模型写；默认 `pcb` 视图在
-  schematic-only 导出上是空的）。不知道文件在哪：`review --latest [<目录>]` 自动挑最新的 `.epro2`
-  并先打印它选了哪个。退出码 `0`/`1` 同 3.1，`2` = 文件读不了。
-- **eprj3 文件夹工程（V4，038 A 档只读）**：`boardwise review <工程目录> --view schematic --json ...`
+  `boardwise review <导出.epro2> --json report.json --md report.md`
+  —— 看原理图不用带参数：**047 起文件缺省视图就是 `schematic`**（011 家族规则对着
+  schematic 模型写，而 schematic 是设计真相）。要审板级内容（焊盘/走线/过孔）显式
+  `--view pcb`：它读 PCB 文档自己那份副本，原理图改了而板子没同步时那份副本是旧的
+  （017 的幻影 finding 就是这么来的）。不知道文件在哪：`review --latest [<目录>]` 自动挑最新
+  的 `.epro2` 并先打印它选了哪个。退出码 `0`/`1` 同 3.1，`2` = 文件读不了。
+- **eprj3 文件夹工程（V4，038 A 档只读）**：`boardwise review <工程目录> --json ...`
   —— 目录内含 `<同名>.eprj3` 索引即识别（`sch/**/*.esch2` 逐页粘成一条记录流，原理图模型满血；
-  必须显式 `--view schematic`）。`--view pcb` 对 eprj3 **诚实报错**"B 档未开"，不给空模型；
+  文件夹只有 schematic 这一档，047 起缺省正是它，不必再显式写）。`--view pcb` 对 eprj3
+  **诚实报错**"B 档未开"，不给空模型；
   `--latest` 认 eprj3 目录（按索引 mtime 参选）；工程 uuid 从索引 `owner_uuid` 取
   （补了"只有 .epro2 才带工程 uuid"的老缺口）。**一律只读**：写路径走 bridge API，不落盘。
 - **器件事实库（039 parts 工具链，纯离线）**：`boardwise parts missing --file <工程>` 列出每颗
@@ -296,7 +299,7 @@ checkup 每次都会在 `--out` 里写 `architecture.md`（`report.json` 的 `ar
 | 11 | **坐标契约**：文件 ≡ 画布，y 向上；`.epro2` 存 `y = −canvas`，解析器只在边界取反一次；旋转 文件角 CCW、API 角 CW，`θ_file ≡ −θ_API` | 改任何坐标/角度前先读 `PROGRESS.md` 的 Coordinate contract（这项历史代价最大） |
 | 12 | 已知**实现偏差**：断 daemon 时 `edit apply` 曾返 `2`（契约应为 `3` = 页状态不可陈述） | 018 §A 已定修（改 `cli.py` 该处 `return 3` + 补测试）；读到 2 时按"连不上"理解，别当成"效果不在板上" |
 | 13 | **编辑器整关重开后读数可能是同步滞后的陈旧视图**：器件已持久化却短暂"消失"（R1 实测：08:58 读无、09:03 复活，值与 uuid 原样），追平后恢复 | 重启编辑器后**别立即信 readback**——判"丢件"前隔几十秒复读或导出复核；否则会把持久化误判成失效、甚至重复放置。出处 `outputs/016_scene6_final.txt` |
-| 14 | **`review` 读 `.epro2` 缺省 view=board**：审原理图内容必须 `--view schematic`；缺省 view 对空 PCB 工程报 `0 components` 且无任何提示 | 审原理图永远带 `--view schematic`；拿到 "0 组件 0 网" 先想 view，再想导出。出处 `outputs/016_scene6_final.txt` 教训 B |
+| 14 | **`review` 读 `.epro2` 的视图口径**（047 翻转）：缺省 view 是 **schematic**（设计真相）；`--view pcb` 读的是 PCB 文档自己那份副本，原理图改了而板子没同步时它是**旧的**（017 的幻影 finding 根因） | 审原理图不用带参数；审板级内容才 `--view pcb`。拿到 "0 组件 0 网" 先想 view，再想导出——显式 pcb 视图空时会补一行提示。出处 `outputs/016_scene6_final.txt` 教训 B、017 视图口径裁定 |
 | 15 | `sch.geometry` 响应键是 `components/wires/pins/netlabels/bboxes/meta`——**没有 `parts`** | 写诊断脚本先打印 `list(d.keys())` 再取值；拿不存在的键 `.get()` 恒空，会编造出"空页"假象。出处 `outputs/016_scene6_final.txt` 教训 C |
 | 16 | **热更/自更新后页面 reload，焦点抛到家页**（`type:home`，uuid 形似 `tab_page1`） | 热更后立刻读/写页面前先 `doc.open` 定点，否则动作落在家页报错。出处 025 批 1 |
 | 17 | **主机 ERC 计数是 host-wide，不按页**：多页逐页调 `sch.drc_check` 各报同一读数（4 页都 `{warn:1}`），求和会编出 4 倍错误数；PCB DRC 树**没有 severity 字段**，叶子的 `parentId` 第二段才是编辑器自己的页签名 | ERC 计数全工程只报一次（标 `host-wide`）；PCB 叶子 severity 用 parentId 分流，读不出按 ERROR 并标 `assumed`。出处 `outputs/025c_checkup_live.txt`、025 批 3 |

@@ -5,11 +5,13 @@ Two states, one API (028 batch 3a):
 * **running from a checkout** — this file lives at ``src/boardwise/resources.py``,
   so the repo root is two parents up and the resources are exactly the ones the
   developer just built (``connector/dist/index.js``, ``connector/extension.json``,
-  ``.kimi-code/skills/boardwise/SKILL.md``, ``blocklib/parts.json``).
+  ``.kimi-code/skills/boardwise/SKILL.md``, ``blocklib/parts.json``,
+  ``blocklib/blocks.portmeta.json``).
 * **running from a frozen PyInstaller exe** — the same files are unpacked under
   ``sys._MEIPASS/resources/`` by the spec's ``--add-data`` entries, so the exe
-  carries its own connector bundle, its own SKILL.md and its own curated shelf
-  and needs neither a checkout nor a copy of the repo beside it.
+  carries its own connector bundle, its own SKILL.md, its own curated shelf and
+  its own port-metadata sidecar, and needs neither a checkout nor a copy of the
+  repo beside it.
 
 Why this module exists at all: ``update-connector`` used to resolve its default
 bundle with ``Path(__file__).resolve().parents[2]``. That is right from a
@@ -27,16 +29,19 @@ says "run npm run build", `install-skill` says which path it looked at).
 The frozen layout mirrors the repo tree under ``resources/`` — the same relative
 parts in both states (``connector/dist/index.js``,
 ``connector/extension.json``, ``.kimi-code/skills/boardwise/SKILL.md``,
-``blocklib/parts.json``), so the spec's ``--add-data`` lines and the two states'
-expectations cannot drift apart in the way a per-resource special case would
-eventually drift.
+``blocklib/parts.json``, ``blocklib/blocks.portmeta.json``), so the spec's
+``--add-data`` lines and the two states' expectations cannot drift apart in the
+way a per-resource special case would eventually drift.
 
-The curated shelf is the one resource with a *second* consumer shape: the rules
-read it as the default of a path that used to be spelled relative to the working
-directory. A frozen process has no working directory that means anything, so
+Two resources have a *second* consumer shape: they are read as the default of a
+path that used to be spelled relative to the working directory. A frozen process
+has no working directory that means anything, so
 ``rules.facts.default_library_path`` resolves the shelf through
-:func:`parts_library` — one answer to "which shelf", the same way the connector
-bundle has one answer for "which bundle".
+:func:`parts_library` and ``core.portmeta.default_port_meta_path`` resolves the
+sidecar through :func:`portmeta_sidecar` — one answer each to "which shelf" and
+"which sidecar", the same way the connector bundle has one answer for "which
+bundle". Both keep the repo-relative spelling from a checkout, so only the frozen
+answer changes.
 """
 
 from __future__ import annotations
@@ -54,6 +59,7 @@ _BUNDLE_PARTS = ("connector", "dist", "index.js")
 _EXTENSION_PARTS = ("connector", "extension.json")
 _SKILL_PARTS = (".kimi-code", "skills", "boardwise", "SKILL.md")
 _PARTS_LIBRARY_PARTS = ("blocklib", "parts.json")
+_PORT_META_PARTS = ("blocklib", "blocks.portmeta.json")
 
 
 def is_frozen() -> bool:
@@ -117,3 +123,17 @@ def parts_library() -> Path:
     success and vanish.
     """
     return resource_root().joinpath(*_PARTS_LIBRARY_PARTS)
+
+
+def portmeta_sidecar() -> Path:
+    """The port-metadata sidecar (``blocklib/blocks.portmeta.json``) — task 047.
+
+    The `draw` and `validate` commands read it as the default of ``--port-meta``;
+    spelled relative to the working directory it was simply *missing* for a
+    frozen exe started anywhere else, and the level / power-tree gates then
+    answered "cannot tell" and refused the spec (045b §七 measured that in a
+    clean directory). Read-only: both consumers only load it (nothing writes a
+    sidecar through the CLI), so resolving it through the bundle is safe in a
+    way it would not be for the shelf.
+    """
+    return resource_root().joinpath(*_PORT_META_PARTS)

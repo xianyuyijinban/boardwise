@@ -781,9 +781,10 @@ def _render_split_totals(
 def load_board_model(source: str | Path) -> DesignModel:
     """The schematic model for an annotated board.
 
-    M1 reviews schematics, so ``.epro2`` goes through the schematic parser
-    (the PCB-netlist view that ``boardwise review`` defaults to is empty for
-    schematic-only exports — measured 2026-09-19 on the golden fixture).
+    M1 reviews schematics, so ``.epro2`` goes through the schematic parser (the
+    same model ``boardwise review`` yields by default since 047; the PCB-netlist
+    view is empty for schematic-only exports — measured 2026-09-19 on the golden
+    fixture).
 
     Since 040b a ``.epro2`` yields a :class:`ProjectModel` (one model per board);
     the harness runs the rules per board, as the CLI does. ``.enet`` netlists stay

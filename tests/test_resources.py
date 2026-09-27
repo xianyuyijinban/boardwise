@@ -1,16 +1,17 @@
 """Where the shipped resources are found: checkout vs frozen exe (028 batch 3a).
 
 Two states, one API, and the difference is the whole point of the batch: the
-single exe has to carry its own connector bundle, its own SKILL.md and its own
-curated part shelf, so the paths a friend's machine resolves must come out of
-PyInstaller's extraction directory rather than out of
-``Path(__file__).parents[2]`` — which, frozen, points at a directory that does
-not exist.
+single exe has to carry its own connector bundle, its own SKILL.md, its own
+curated part shelf and its own port-metadata sidecar, so the paths a friend's
+machine resolves must come out of PyInstaller's extraction directory rather than
+out of ``Path(__file__).parents[2]`` — which, frozen, points at a directory that
+does not exist.
 
-The shelf is the resource with a second consumer shape: the rules read it as the
-default of a path spelling that used to be relative to the working directory, so
-"the default shelf" is pinned here through the rule that reads it, not only
-through the path helper (044b).
+Two resources have a second consumer shape: the rules read the shelf, and `draw`
+/ `validate` read the sidecar, as the default of a path spelling that used to be
+relative to the working directory. So "the default shelf" is pinned here through
+the rule that reads it (044b) and "the default sidecar" through the parser that
+consumes it (047), not only through the path helpers.
 
 The frozen state is simulated the way PyInstaller creates it: ``sys.frozen`` set
 and ``sys._MEIPASS`` pointing at the extraction root.
@@ -48,6 +49,7 @@ def test_a_checkout_resolves_to_the_repo():
     assert resources.connector_extension_json() == REPO_ROOT / "connector" / "extension.json"
     assert resources.skill_md() == REPO_ROOT / ".kimi-code" / "skills" / "boardwise" / "SKILL.md"
     assert resources.parts_library() == REPO_ROOT / "blocklib" / "parts.json"
+    assert resources.portmeta_sidecar() == REPO_ROOT / "blocklib" / "blocks.portmeta.json"
 
 
 def test_the_checkout_paths_are_real_files():
@@ -57,6 +59,7 @@ def test_the_checkout_paths_are_real_files():
     assert resources.connector_extension_json().is_file()
     assert resources.skill_md().is_file()
     assert resources.parts_library().is_file()
+    assert resources.portmeta_sidecar().is_file()
 
 
 def test_a_frozen_process_resolves_inside_the_bundle(frozen):
@@ -74,6 +77,9 @@ def test_a_frozen_process_resolves_inside_the_bundle(frozen):
     )
     assert resources.parts_library() == (
         frozen / resources.FROZEN_SUBDIR / "blocklib" / "parts.json"
+    )
+    assert resources.portmeta_sidecar() == (
+        frozen / resources.FROZEN_SUBDIR / "blocklib" / "blocks.portmeta.json"
     )
     # Not the checkout: that is the bug being pinned. Frozen, the repo may not
     # exist at all (a friend's machine), so the resolved paths must not be the
@@ -171,6 +177,67 @@ def test_a_frozen_process_without_an_extraction_root_keeps_the_old_answer(monkey
     assert default_library_path() == DEFAULT_LIBRARY_PATH
 
 
+def test_the_default_port_meta_sidecar_is_the_bundled_copy_when_frozen(frozen, monkeypatch):
+    """The same shape for `--port-meta`, and for the same reason (047).
+
+    `draw` and `validate` read the sidecar through a default that used to be the
+    relative spelling ``blocklib/blocks.portmeta.json``: from a friend's exe
+    started anywhere else that is a *missing* file, so the levels and power-tree
+    gates answered "cannot tell" and refused the spec (045b §七 measured exactly
+    that). The bundled copy is what the frozen process must resolve, whatever the
+    working directory is; a checkout keeps the spelling its help text shows.
+    """
+    from boardwise.cli import build_parser
+    from boardwise.core.portmeta import (
+        DEFAULT_PORT_META_PATH,
+        default_port_meta_path,
+        load_port_meta,
+    )
+
+    bundle = frozen / resources.FROZEN_SUBDIR / "blocklib"
+    bundle.mkdir(parents=True)
+    shutil.copyfile(
+        REPO_ROOT / "blocklib" / "blocks.portmeta.json", bundle / "blocks.portmeta.json"
+    )
+    monkeypatch.chdir(frozen)
+
+    assert resources.is_frozen() is True
+    assert default_port_meta_path() == str(resources.portmeta_sidecar())
+    assert Path(default_port_meta_path()).is_file()
+    # The old spelling resolves to nothing from here — the bug itself.
+    assert not Path(DEFAULT_PORT_META_PATH).is_file()
+    # …and a bare `--port-meta` really reads the bundled sidecar: the parser's
+    # default is the resolved path, so nothing downstream has to know which
+    # process it is running in.
+    args = build_parser().parse_args(["validate", "--spec", "blocklib/specs/x.json"])
+    assert args.port_meta == str(resources.portmeta_sidecar())
+    assert load_port_meta(args.port_meta).blocks, "the bundled sidecar must be readable"
+
+
+def test_a_checkout_still_shows_the_relative_port_meta_spelling():
+    # The checkout answer is deliberately unchanged: the relative spelling is
+    # what the CLI's help text documents, and 045b kept the shelf's spelling for
+    # the same reason. Only the frozen answer moves.
+    from boardwise.cli import build_parser
+    from boardwise.core.portmeta import DEFAULT_PORT_META_PATH, default_port_meta_path
+
+    assert resources.is_frozen() is False
+    assert default_port_meta_path() == DEFAULT_PORT_META_PATH
+    for command in ("draw", "validate"):
+        args = build_parser().parse_args([command, "--spec", "blocklib/specs/x.json"])
+        assert args.port_meta == DEFAULT_PORT_META_PATH
+
+
+def test_a_frozen_process_without_an_extraction_root_keeps_the_port_meta_answer(monkeypatch):
+    # Same courtesy as the shelf: a broken bootstrap returns the constant rather
+    # than raising out of `build_parser()`.
+    from boardwise.core.portmeta import DEFAULT_PORT_META_PATH, default_port_meta_path
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.delattr(sys, "_MEIPASS", raising=False)
+    assert default_port_meta_path() == DEFAULT_PORT_META_PATH
+
+
 def _spec_datas() -> set[tuple[str, ...]]:
     """The frozen-relative path of every ``DATAS`` entry in ``boardwise.spec``.
 
@@ -203,6 +270,7 @@ def test_the_spec_embeds_every_resource_this_module_resolves():
             resources.connector_extension_json,
             resources.skill_md,
             resources.parts_library,
+            resources.portmeta_sidecar,
         )
     }
     assert _spec_datas() == resolved
