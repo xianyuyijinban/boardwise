@@ -5,7 +5,7 @@ vi.mock('node:child_process', () => ({ spawn: vi.fn() }))
 
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { apply } from '../src/index.ts'
 import { installSpawn, spawnedCommand } from './fake-child.ts'
 
@@ -83,7 +83,7 @@ describe('boardwise_checkup: argument assembly', () => {
     const mock = installSpawn((child, _command, args) => {
       const out = flagValue(args, '--out') as string
       outExisted = existsSync(out)
-      for (const name of ['report.json', 'report.md', 'architecture.md']) writeFileSync(join(out, name), '{}')
+      for (const name of ['report.json', 'report.md', 'architecture.md', 'design-intent.md']) writeFileSync(join(out, name), '{}')
       child.out('findings: 0 ERROR, 1 WARN\n')
       child.finish(0)
     })
@@ -99,6 +99,7 @@ describe('boardwise_checkup: argument assembly', () => {
     expect(text).toContain('boardwise_checkup: exit 0')
     expect(text).toContain(`report.json: ${join(out, 'report.json')} [present]`)
     expect(text).toContain(`architecture.md: ${join(out, 'architecture.md')} [present]`)
+    expect(text).toContain(`design-intent.md: ${join(out, 'design-intent.md')} [present]`)
     expect(text).toContain('findings: 0 ERROR, 1 WARN')
   })
 
@@ -184,6 +185,7 @@ describe('boardwise_arch: argument assembly', () => {
     const out = join(tempDir(), 'arch.md')
     const mock = installSpawn(child => {
       writeFileSync(out, '# arch')
+      writeFileSync(join(dirname(out), 'design-intent.md'), '# intent')
       child.out(`architecture: ${out}\n`)
       child.finish(0)
     })
@@ -192,6 +194,7 @@ describe('boardwise_arch: argument assembly', () => {
 
     expect(spawnedCommand(mock)).toEqual([process.env['BOARDWISE_EXE'] as string, 'arch', file, '--out', out])
     expect(text).toContain(`architecture: ${out} [present]`)
+    expect(text).toContain(`design-intent: ${join(dirname(out), 'design-intent.md')} [present]`)
   })
 
   it('requires the file argument', async () => {

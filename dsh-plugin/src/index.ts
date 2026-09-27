@@ -60,8 +60,8 @@ export function apply(ctx: Context): void {
       'Designs are named exactly once: file= runs fully offline on an exported .epro2/.enet backup ' +
       '(no editor, no daemon), while project= or instance= reads the project open in the editor ' +
       'through the local bridge daemon — the live path only reads, it never edits. ' +
-      'boardwise writes report.json, report.md and architecture.md into `out` (a fresh temp directory when ' +
-      'omitted) and this tool returns those paths, the CLI stdout and its exit code: 0 = a model was read and ' +
+      'boardwise writes report.json, report.md, architecture.md and design-intent.md into `out` (a fresh temp ' +
+      'directory when omitted) and this tool returns those paths, the CLI stdout and its exit code: 0 = a model was read and ' +
       'nothing is an ERROR, 2 = the input cannot be used, 3 = the online state cannot be stated ' +
       '(usually several editor windows are connected, so name one with project=/instance=). ' +
       'A timeout longer than 10 minutes means the plugin gave up on it.',
@@ -86,7 +86,7 @@ export function apply(ctx: Context): void {
       out: {
         type: 'string',
         description:
-          `Directory for report.json / report.md / architecture.md (created if missing). ` +
+          `Directory for report.json / report.md / architecture.md / design-intent.md (created if missing). ` +
           `Default: a fresh temp directory with the prefix "${OUT_DIR_PREFIX}".`,
       },
     },
@@ -118,6 +118,9 @@ export function apply(ctx: Context): void {
         { label: 'report.json', path: join(outDir, 'report.json') },
         { label: 'report.md', path: join(outDir, 'report.md') },
         { label: 'architecture.md', path: join(outDir, 'architecture.md') },
+        // Generated and overwritten every run — the answer sheet, by contrast, is
+        // `design-intent.md`: created once, then read-only (053 §2.2).
+        { label: 'design-intent.md', path: join(outDir, 'design-intent.md') },
       ])
     },
     timeoutMs: CHECKUP_TIMEOUT_MS,
@@ -129,7 +132,9 @@ export function apply(ctx: Context): void {
       'Generate the architecture skeleton boardwise builds for one exported .epro2/.enet (task 044): power tree, ' +
       'analog chains, control chains, buses and design-intent slots, with every judgement a tool cannot make left ' +
       'as a TODO slot for the engineer to fill. Offline and deterministic — the same model yields byte-identical ' +
-      'markdown, so the artifact can be diffed and kept as the living record of designed intent. ' +
+      'markdown. The skeleton is **generated and overwritten**; the answers belong in the paired `design-intent.md` ' +
+      'beside `out` (created once as an all-TODO template, then read-only, 053 §2.2) and are merged back into the ' +
+      'report`s architecture section. ' +
       'Without `out` the markdown comes back on stdout (long; it may be truncated); with `out` it is written to that ' +
       'file and the path is returned. Exit 0 = generated, 2 = the input cannot be used.',
     parameters: {
@@ -155,6 +160,9 @@ export function apply(ctx: Context): void {
         await ensureDirectory(tool, dirname(out))
         argv.push('--out', out)
         artifacts.push({ label: 'architecture', path: out })
+        // The CLI keeps the pair: the skeleton at `out`, the engineer's answers
+        // in `design-intent.md` beside it.
+        artifacts.push({ label: 'design-intent', path: join(dirname(out), 'design-intent.md') })
       }
       return await executeCli(tool, argv, ARCH_TIMEOUT_MS, exec, artifacts)
     },

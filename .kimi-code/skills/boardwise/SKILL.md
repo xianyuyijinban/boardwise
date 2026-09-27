@@ -69,7 +69,8 @@ boardwise checkup --file <导出.epro2> --out <目录>       # 断连兜底：�
 ```
 
 产出（`--out` 目录内）：`report.json`（契约）· `report.md`（人读，同一份内容）·
-`architecture.md`（架构骨架，§3.1b 必须逐槽走）·
+`architecture.md`（架构骨架，§3.1b 必须逐槽走；**自动生成、每次覆盖，手填无效**）·
+`design-intent.md`（**设计意图**，工程师所有：不存在时建全 TODO 模板，存在则生成器一字不改）·
 `canvas-<页名>.png`（每张原理图页一张，PCB 页不出图）。
 
 - **退出码**：`0` 无 ERROR / `1` 有 ERROR（主机 ERC fatalError/error、主机 PCB DRC 逐条、
@@ -82,7 +83,7 @@ boardwise checkup --file <导出.epro2> --out <目录>       # 断连兜底：�
 - 只读：`doc.open` 只切焦点、`userInterface` 恒 false（不弹底部面板），每个阶段 `finally`
   把焦点复位。旧版 connector 缺某个动作时报告会记 `note` 并降级，不会瞎报。
 
-**审查三步与 AI 槽位（报告 schema /4：`ai_slots` 加四个一等节就是清单，逐条做完再答用户）**：
+**审查三步与 AI 槽位（报告 schema /5：`ai_slots` 加四个一等节就是清单，逐条做完再答用户）**：
 
 ① **ERC 先行**：主机 ERC/DRC 读数在 `drc` 段——error 已在报告头部错误段，先解决；
 warn 逐条进 `warning_triage[]`，**把每条的 `verdict` 填成 有益/有害/无害、`reason` 写理由**。
@@ -99,7 +100,7 @@ warn 逐条进 `warning_triage[]`，**把每条的 `verdict` 填成 有益/有�
 去耦/上下拉/限流/耐压，顺手确认可用型号）。拿到手册当场核完继续审，**三通道全灭**
 才让它留在未审器件里。**该节非空时不得宣称"审查通过"**——结论只能用
 `summary.conclusion` 那句（"DRC/连接性已审，N 颗器件缺手册未审"），
-`summary.mayClaimPassed` 就是这道闸。
+`summary.mayClaimPassed` 就是这道闸（**窄义**：只回答这一件事——没别的意思）。
 
 ③ **整图布局（审美开关，默认关）**：开关开着报告才有 `layout_review` 节（五轴：
 拓扑可辨/流向明确/文字可读/分组合理/网络标识规范），对着 `canvas_images[]` 逐轴打 1–5 分
@@ -118,17 +119,40 @@ warn 逐条进 `warning_triage[]`，**把每条的 `verdict` 填成 有益/有�
 
 ### 3.1b 架构走查（044 起的强制环节，不是可选阅读）
 
-checkup 每次都会在 `--out` 里写 `architecture.md`（`report.json` 的 `architecture` 节是它的计数
-摘要：几轨/几条模拟链/控制链/总线类、欠多少 TODO 槽；生成不了时该键缺席）。**出报告后必须打开它
-逐槽走一遍**——044 的动机就是 ROBOT 板盲审漏掉"FOC 采样无偏置"：器件级规则全对，链级意图没人推。
-单点跑同一份骨架用 `boardwise arch <工程文件> [--out <path>]`。
+checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起：
+
+- `architecture.md`——**自动生成、每次覆盖，手填无效**（第二行横幅就这么写着）；
+- `design-intent.md`——**设计意图，归工程师/AI 提案所有**：不存在时生成器建一份与骨架同构的全 TODO
+  模板，存在则**一字不改**。答案写这里才留得住（052 §2.2 实测：填在 `architecture.md` 里的
+  `targetVoltage: 3.3V`，重生成后回到 `TODO`）。
+
+每个槽一个**稳定 ID**：`<projectUuid>/<boardUuid>/<sectionKey>/<slotKey>`（`sectionKey` =
+`<节>:<对象>`，节 = power/analog/control/bus/intent）。行内格式：`| 稳定 ID | 槽位 | 值 | 来源 | sig= |`，
+来源写 `engineer@2026-09-27` / `ai-proposal@…` / `ai-confirmed@…`；`sig=` 是该槽**关联对象的签名**
+（电源树节点集 / 链路器件序列 / 总线成员集），**别手改 sig**——它是"图纸有没有动过"的判据。
+
+`report.json` 的 `architecture` 节是**骨架 ⊕ 意图的合并视图**：`slots[]` 每槽带 `value`/`source`/
+`stale`，`totals.{slots,filled,stale,todoSlots}`，`intent.{file,present,filled,stale,orphans}`。
+某个槽关联的对象被改画过（签名不符），该槽标 `stale: 图纸已变，此槽待复核`——**不删你的值、不覆盖、
+不阻断出报告**；复核完把 `design-intent.md` 里那行的 `sig=` 换成报告给的新值即可。图纸里已无该对象
+的行（orphan）同样保留并标 stale，不静默删。**出报告后必须逐槽走一遍**——044 的动机就是 ROBOT 板盲审
+漏掉"FOC 采样无偏置"：器件级规则全对，链级意图没人推。
+单点跑同一份骨架子加意图文件用 `boardwise arch <工程文件> [--out <path>]`（`design-intent.md`
+落在 `--out` 的同目录）。
 
 - **逐槽填 `TODO` 或显式写"不适用"**，一个槽都不许空着走：槽位键是固定英文
   （`quantity`/`range`/`polarity`/`reference`/`gainStage`/`filter`/`sourceImpedance`/
   `endpointConsistency`/`completeness`…），每条链、每张轨各一组。**填不出来不许猜。**
 - **设计意图槽位（`targetVoltage`/`continuousCurrent`/`peakCurrent`/`operatingCases`）
   填不了就显式问工程师**：这些数只在他脑中，图自身可以完全自洽（044 §6）。答一次就把答案
-  留在 `architecture.md` 里，**以后 finding 以它为尺**；需求变了改这里（活文档）。
+  写进 `design-intent.md`（**不是** `architecture.md`），**以后 finding 以它为尺**；需求变了改那里
+  （活文档）。AI 提案先写 `ai-proposal@日期`，工程师点头后改 `ai-confirmed@日期`。
+- **完整结论看 `completion.verdict`**（053 §2.2）：`scope{rules,boards,pages}` / `errors` /
+  `unreviewedParts` / `warningsPendingTriage` / `architectureSlots{total,filled,stale}` /
+  `openTodos` / `sourceVersions{ruleset,rulebody}`，三态 `complete`（errors=0 ∧ 未审=0 ∧ stale=0 ∧
+  待分诊=0）/ `complete-with-open-items`（errors=0 但有开放项）/ `incomplete`（errors>0 或 未审>0）。
+  `summary.mayClaimPassed` 是**窄义**字段（只回答「有没有器件缺手册未审」），**别拿它当"通过"
+  的完整结论**；`verdictWhy` 直接列出是哪些开放项。
 - **对每条链做目的论走查**：这条链是干什么的 → 端到端能闭合吗。骨架里
   `- evidence: 邻接 R4→GND` 这类行就是为这一步准备的（成员两端各接什么，工具照抄，判断是你的）。
 - **不自洽的槽位写进最终结论，并与规则引擎 finding 分开计数**：`summary` 里的 ERROR/WARN 是

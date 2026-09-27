@@ -153,9 +153,9 @@ def test_the_promoted_section_keeps_the_v2_slot_name(capsys, tmp_path, monkeypat
     capsys.readouterr()
     assert code == 0
     report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
-    # 044 M1 bumped the schema to /4 (the architecture section); the /3 sections
-    # this test is about are unchanged, which is the compatibility claim.
-    assert report["schema"] == "boardwise.checkup/4"
+    # 053 §2.2 bumped the schema to /5 (`completion`); the /3 sections this test
+    # is about are unchanged, which is the compatibility claim.
+    assert report["schema"] == "boardwise.checkup/5"
     assert report["ai_slots"]["unknown_parts"] == report["unreviewed_parts"]
     assert report["unreviewed_parts"], "this board has parts with no MPN"
     old_fields = {"designator", "name", "value", "footprint", "mpn", "supplier",
@@ -186,6 +186,165 @@ def test_the_conclusion_may_not_claim_a_pass_while_parts_are_unreviewed(
     assert "通过" not in conclusion_line
     assert f"{count} 颗器件缺手册未审" in conclusion_line
     assert f"## 未审器件（{count}）" in markdown
+
+
+# -------------------- 053 §2.2: completion — the complete statement
+
+
+def _completion(**overrides) -> dict:
+    """`_completion_section` on a shaped board: only the inputs it reads."""
+    from boardwise.cli import _completion_section
+
+    kwargs = {
+        "model": DesignModel(),
+        "summary": {"errorCount": 0},
+        "unreviewed": [],
+        "triage": [],
+        "architecture": {"totals": {"slots": 10, "filled": 4, "stale": 0}},
+    }
+    kwargs.update(overrides)
+    return _completion_section(**kwargs)
+
+
+def test_completion_verdict_has_exactly_three_states():
+    """053 §2.2's enumerated conditions, one case each.
+
+    `complete` is the four conditions the task book spells out (errors=0 ∧
+    未审=0 ∧ stale=0 ∧ 待分诊=0); a slot still `TODO` does not gate it — it is
+    *reported* as `openTodos`, because a skeleton asking a question is not an
+    unfinished check.
+    """
+    clean = _completion()
+    assert clean["verdict"] == "complete" and clean["verdictWhy"] == []
+    assert clean["openTodos"] == 6 and clean["architectureSlots"] == {
+        "total": 10, "filled": 4, "stale": 0,
+    }
+
+    # errors=0 but an open item: a drawing that moved under a recorded answer ...
+    stale = _completion(architecture={"totals": {"slots": 10, "filled": 4, "stale": 2}})
+    assert stale["verdict"] == "complete-with-open-items"
+    assert "stale" in stale["verdictWhy"][0] and stale["architectureSlots"]["stale"] == 2
+    # ... or a warning nobody has triaged yet.
+    pending = _completion(triage=[{"verdict": ""}, {"verdict": "无害"}, {"verdict": ""}])
+    assert pending["verdict"] == "complete-with-open-items"
+    assert pending["warningsPendingTriage"] == 2
+    assert "待分诊" in pending["verdictWhy"][0]
+
+    # Either of the two checks that mean "the review did not cover the board".
+    assert _completion(summary={"errorCount": 3})["verdict"] == "incomplete"
+    unreviewed = _completion(unreviewed=[{"designator": "U9"}])
+    assert unreviewed["verdict"] == "incomplete"
+    assert unreviewed["unreviewedParts"] == 1
+    # Both at once keeps `incomplete`, and says both.
+    both = _completion(summary={"errorCount": 1}, unreviewed=[{"designator": "U9"}])
+    assert both["verdict"] == "incomplete" and len(both["verdictWhy"]) == 2
+
+
+def test_completion_scope_and_versions_are_measured_not_guessed():
+    from boardwise.engines.review import BUILTIN_RULES
+    from boardwise.engines.review_eval import rulebody_fingerprint, ruleset_fingerprint
+
+    section = _completion()
+    assert section["scope"]["rules"] == len(BUILTIN_RULES) > 0
+    assert section["scope"]["boards"] == 1, "a plain model is one board"
+    rule_ids = [rule.id for rule in BUILTIN_RULES]
+    assert section["sourceVersions"]["ruleset"] == ruleset_fingerprint(rule_ids)
+    assert section["sourceVersions"]["rulebody"] == rulebody_fingerprint()
+    # No skeleton: the slot counts are zeroes rather than a missing key, and the
+    # verdict is not allowed to read "no skeleton" as "nothing stale".
+    no_skeleton = _completion(architecture=None)
+    assert no_skeleton["architectureSlots"] == {"total": 0, "filled": 0, "stale": 0}
+    assert any("架构骨架未生成" in reason for reason in no_skeleton["verdictWhy"])
+
+
+def test_the_report_carries_a_completion_section_end_to_end(capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("BOARDWISE_HOME", str(tmp_path / "home"))
+    code = cli.main([
+        "checkup", "--file", str(BOARD), "--out", str(tmp_path / "out"),
+        "--library", str(SHELF),
+    ])
+    printed = capsys.readouterr().out
+    assert code == 0
+    report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
+    completion = report["completion"]
+    assert set(completion) >= {
+        "scope", "errors", "unreviewedParts", "warningsPendingTriage",
+        "architectureSlots", "openTodos", "sourceVersions", "verdict",
+    }
+    # This board has unreviewed parts, so the complete statement is `incomplete`
+    # even though nothing is an ERROR — and it says why.
+    assert completion["unreviewedParts"] == report["summary"]["unreviewedParts"] > 0
+    assert completion["errors"] == 0
+    assert completion["verdict"] == "incomplete"
+    assert completion["architectureSlots"]["total"] == report["architecture"]["totals"]["slots"]
+    assert completion["openTodos"] == report["architecture"]["totals"]["todoSlots"]
+    # The narrow field is untouched: same name, same value, same meaning.
+    assert report["summary"]["mayClaimPassed"] is False
+    markdown = (tmp_path / "out" / "report.md").read_text(encoding="utf-8")
+    assert "## 完成状态（completion）" in markdown
+    assert "**verdict：`incomplete`**" in markdown
+    assert "窄义" in markdown and "mayClaimPassed" in markdown
+    assert f"completion: {completion['verdict']}" in printed
+
+
+def test_a_clean_gate_end_to_end_reaches_complete_with_open_items(capsys, tmp_path, monkeypatch):
+    """The other two states, through the real command.
+
+    Every fixture board has unreviewed parts (the datasheet gate is what the real
+    shelves measure), so the gate is lifted here to see what the *rest* of the
+    statement says: no ERROR and nothing unjudged, but a warning still waiting for
+    triage → `complete-with-open-items`, not `complete`. Triaging it (the model's
+    step ②) and clearing the architecture's open slots is what moves the verdict.
+    """
+    monkeypatch.setenv("BOARDWISE_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(cli, "unreviewed_parts", lambda *args, **kwargs: [])
+    assert cli.main([
+        "checkup", "--file", str(BOARD), "--out", str(tmp_path / "out"),
+        "--library", str(SHELF),
+    ]) == 0
+    printed = capsys.readouterr().out
+    report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
+    completion = report["completion"]
+    assert completion["errors"] == 0 and completion["unreviewedParts"] == 0
+    assert completion["warningsPendingTriage"] > 0
+    assert completion["verdict"] == "complete-with-open-items"
+    assert any("待分诊" in reason for reason in completion["verdictWhy"])
+    assert "completion: complete-with-open-items" in printed
+
+    # ... and with nothing open at all (no warning to triage, no unreviewed part,
+    # nothing stale) the same command reaches `complete` with an empty reason list.
+    monkeypatch.setattr(cli, "warning_triage_slots", lambda **kwargs: [])
+    assert cli.main([
+        "checkup", "--file", str(BOARD), "--out", str(tmp_path / "out2"),
+        "--library", str(SHELF),
+    ]) == 0
+    capsys.readouterr()
+    report = json.loads((tmp_path / "out2" / "report.json").read_text(encoding="utf-8"))
+    assert report["completion"]["verdict"] == "complete"
+    assert report["completion"]["verdictWhy"] == []
+    markdown = (tmp_path / "out2" / "report.md").read_text(encoding="utf-8")
+    assert "**verdict：`complete`**（无 ERROR、无未审、无 stale、无待分诊）" in markdown
+
+
+def test_the_schema_bump_only_adds_fields(capsys, tmp_path, monkeypatch):
+    """/5 adds `completion`; every /4 key and shape is still there (031's rule)."""
+    monkeypatch.setenv("BOARDWISE_HOME", str(tmp_path / "home"))
+    assert cli.main([
+        "checkup", "--file", str(BOARD), "--out", str(tmp_path / "out"),
+        "--library", str(SHELF),
+    ]) == 0
+    capsys.readouterr()
+    report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
+    assert report["schema"] == "boardwise.checkup/5"
+    for key in ("source", "model", "summary", "pending", "drc", "modules", "findings",
+                "unreviewed_parts", "warning_triage", "ai_slots", "architecture"):
+        assert key in report, key
+    # The architecture section's /4 shape, plus the merged view's own keys.
+    section = report["architecture"]
+    assert {"file", "boards", "totals", "slotKeys", "chains", "generator"} <= set(section)
+    assert {"slots", "filled", "stale", "todoSlots"} <= set(section["totals"])
+    assert {"file", "present", "projectUuid", "filled", "stale", "orphans"} <= set(section["intent"])
+    assert section["totals"]["filled"] == 0 or section["intent"]["present"]
 
 
 # ------------------------------- parts fetch: the two channels it owns

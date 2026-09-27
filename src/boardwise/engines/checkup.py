@@ -26,6 +26,7 @@ import re
 from pathlib import Path
 from typing import Any, Iterable
 
+from ..core.architecture import STALE_MARK
 from ..core.model import Component, DesignModel, Net, is_ground_net
 from ..core.parts import DESIGNATOR_CATEGORIES
 
@@ -1270,6 +1271,43 @@ def render_report_markdown(report: dict) -> str:
         lines.append("> " + "；".join(str(note) for note in source["notes"]))
         lines.append("")
 
+    # --- 053 §2.2: the complete statement first, because it is the answer to the
+    # one question a reader has ("is this done?"), and because 052 §2.2 measured
+    # that `summary.mayClaimPassed` was being read as exactly that answer.
+    completion = report.get("completion") or {}
+    if completion:
+        scope = completion.get("scope") or {}
+        architecture_slots = completion.get("architectureSlots") or {}
+        versions = completion.get("sourceVersions") or {}
+        lines.append("## 完成状态（completion）")
+        lines.append("")
+        lines.append(
+            f"**verdict：`{completion.get('verdict')}`**"
+            + ("（" + "；".join(completion.get("verdictWhy") or []) + "）"
+               if completion.get("verdictWhy") else "（无 ERROR、无未审、无 stale、无待分诊）")
+        )
+        lines.append("")
+        lines.append(
+            f"- 检查范围：{scope.get('rules', '?')} 条规则 / {scope.get('boards', '?')} 块板"
+            f" / {scope.get('pages', '?')} 页"
+        )
+        lines.append(
+            f"- 欠账：ERROR {completion.get('errors', 0)} · 未审器件 "
+            f"{completion.get('unreviewedParts', 0)} · 待分诊 warning "
+            f"{completion.get('warningsPendingTriage', 0)} · 架构槽位 stale "
+            f"{architecture_slots.get('stale', 0)}（槽位 {architecture_slots.get('total', 0)}，"
+            f"已填 {architecture_slots.get('filled', 0)}，TODO {completion.get('openTodos', 0)}）"
+        )
+        lines.append(
+            f"- 源版本：ruleset `{versions.get('ruleset', '?')}` · rulebody "
+            f"`{versions.get('rulebody') or 'unavailable (frozen, no source)'}`"
+        )
+        lines.append(
+            "- 注意：`summary.mayClaimPassed` 是**窄义**字段（只回答「有没有器件缺手册未审」）；"
+            "完整结论以本节的 `verdict` 为准。"
+        )
+        lines.append("")
+
     # --- errors first: the reader's next action lives here.
     lines.append("## 错误（ERROR）")
     lines.append("")
@@ -1491,6 +1529,64 @@ def render_report_markdown(report: dict) -> str:
             ) or "无"
         ))
         lines.append(f"- {layout.get('note', '')}")
+        lines.append("")
+
+    # --- 044 M1 / 053 §2.2: the merged view (skeleton ⊕ design intent). The
+    # skeleton file is generated and cannot be filled by hand; the answers live in
+    # `design-intent.md`, and this section is where a reader sees them together
+    # with the `stale` marks the drawing change produced.
+    architecture = report.get("architecture") or {}
+    if architecture:
+        intent = architecture.get("intent") or {}
+        arch_slots = architecture.get("slots") or []
+        arch_totals = architecture.get("totals") or {}
+        filled_rows = [slot for slot in arch_slots if slot.get("filled") or slot.get("stale")]
+        lines.append(f"## 架构骨架 ⊕ 设计意图（合并视图）—— {len(arch_slots)} 槽")
+        lines.append("")
+        lines.append(f"- 骨架：`{architecture.get('file')}`（自动生成，手填无效）")
+        lines.append(
+            f"- 设计意图：`{intent.get('file')}`（工程师所有，生成器只读）——"
+            + ("本次读入并合并" if intent.get("present")
+               else "本次不存在，已建全 TODO 模板")
+            + f"；projectUuid `{intent.get('projectUuid', '')}`"
+        )
+        lines.append(
+            f"- 槽位：合计 {arch_totals.get('slots', 0)} / 已填 {arch_totals.get('filled', 0)} / "
+            f"**stale {arch_totals.get('stale', 0)}** / 待填 {arch_totals.get('todoSlots', 0)}"
+        )
+        lines.append(
+            f"- 骨架计数：{arch_totals.get('rails', 0)} 轨 / {arch_totals.get('analogChains', 0)} 模拟链 / "
+            f"{arch_totals.get('controlChains', 0)} 控制链 / {arch_totals.get('buses', 0)} 总线类"
+        )
+        if filled_rows:
+            stale_count = arch_totals.get("stale", 0)
+            lines.append("")
+            lines.append("| 槽位 | 值 | 来源 | 状态 |")
+            lines.append("|---|---|---|---|")
+            for slot in filled_rows:
+                if slot.get("stale"):
+                    state = slot.get("staleReason") or "stale"
+                elif slot.get("orphan"):
+                    state = "图纸里已无此对象（不删，只标）"
+                else:
+                    state = "已填"
+                lines.append(
+                    f"| `{_cell(slot.get('id'))}` | {_cell(slot.get('value'))} "
+                    f"| {_cell(slot.get('source') or '—')} | {_cell(state)} |"
+                )
+            if stale_count:
+                lines.append("")
+                lines.append(
+                    f"> **{stale_count} 个槽位的图纸已变（`{STALE_MARK}`）**："
+                    "记录的值一个字没动，只是标出来待复核——复核完把 `design-intent.md` "
+                    "里那行的 `sig=` 换成报告 `architecture.slots[]` 给的新值即可。"
+                )
+        if arch_totals.get("todoSlots"):
+            lines.append("")
+            lines.append(
+                f"- 其余 {arch_totals.get('todoSlots')} 槽仍是 `TODO`（欠账不是空白）："
+                f"逐槽填进 `design-intent.md`（填不出来就**显式问工程师**，不许编）。"
+            )
         lines.append("")
 
     lines.append("## AI 槽位（要模型做的三件事）")

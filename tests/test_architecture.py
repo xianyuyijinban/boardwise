@@ -31,12 +31,16 @@ from boardwise import cli
 from boardwise.core.architecture import (
     ANALOG_SLOTS,
     ARCH_FILE_NAME,
+    BANNER,
     CONTROL_SLOTS,
+    INTENT_FILE_NAME,
     INTENT_SLOTS,
     POWER_SLOTS,
     SLOT_VOCABULARY,
+    STALE_MARK,
     TODO,
     generate_architecture,
+    parse_intent,
 )
 from boardwise.core.model import Component, DesignModel, Net, Pin
 from boardwise.parsers.schematic import build_project_model
@@ -63,6 +67,14 @@ def _slots_in(markdown: str, slot: str) -> list[str]:
         line for line in markdown.splitlines()
         if line.startswith(f"- {slot}: ")
     ]
+
+
+def _fill(template: str, id_fragment: str, value: str, source: str = "engineer@2026-09-27") -> str:
+    """Fill one intent row the way an engineer would: value + source, `sig=` untouched."""
+    row = next(line for line in template.splitlines() if id_fragment in line)
+    return template.replace(
+        row, row.replace(f"| {TODO} | {TODO} |", f"| {value} | {source} |"), 1
+    )
 
 
 # ---------------------------------------------------------------- determinism
@@ -246,7 +258,9 @@ def test_checkup_writes_the_architecture_beside_the_report(tmp_path, capsys):
     out = capsys.readouterr().out
     assert code == 0
     report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
-    assert report["schema"] == "boardwise.checkup/4"
+    # /5 since 053 §2.2 (`completion`); `architecture` keeps its shape and gains
+    # the merged view's extras (`slots`, `intent`, `totals.filled`/`stale`).
+    assert report["schema"] == "boardwise.checkup/5"
     section = report["architecture"]
     assert section["file"] == ARCH_FILE_NAME
     assert section["totals"]["analogChains"] >= 1
@@ -265,6 +279,9 @@ def test_checkup_writes_the_architecture_beside_the_report(tmp_path, capsys):
     ).markdown
     assert text == expected
     assert "architecture.md" in out
+    # ... and the engineer-owned half was created beside it, because there was
+    # none (053 §2.2's "first run writes the template").
+    assert (tmp_path / "out" / INTENT_FILE_NAME).is_file()
 
 
 def test_the_key_is_absent_when_the_skeleton_cannot_be_generated(tmp_path, capsys, monkeypatch):
@@ -293,6 +310,15 @@ def test_the_arch_command_prints_or_writes_the_skeleton(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "architecture:" in out and "TODO 槽位" in out
     assert path.read_text(encoding="utf-8").startswith("# 架构骨架（architecture.md）")
+    # 053 §2.2: the same pair as checkup — the intent file is created beside it,
+    # and the second run only reads it.
+    intent = tmp_path / INTENT_FILE_NAME
+    assert intent.is_file() and out.count("design-intent:") == 1
+    before = intent.read_bytes()
+    assert cli.main(["arch", str(GOLDEN), "--out", str(path)]) == 0
+    out = capsys.readouterr().out
+    assert intent.read_bytes() == before, "an existing intent file is never rewritten"
+    assert "一字未改" in out
 
     assert cli.main(["arch", str(GOLDEN)]) == 0
     assert capsys.readouterr().out.startswith("# 架构骨架（architecture.md）")
@@ -300,3 +326,161 @@ def test_the_arch_command_prints_or_writes_the_skeleton(tmp_path, capsys):
     code = cli.main(["arch", str(tmp_path / "nope.epro2")])
     assert code == 2
     assert "boardwise arch:" in capsys.readouterr().err
+
+
+# ------------------------------------------- 053 §2.2: intent & completion
+
+
+def test_architecture_md_says_hand_fills_are_lost():
+    """The banner is the whole reason the pair exists: 052 §2.2 reproduced a
+    filled `targetVoltage: 3.3V` coming back as `TODO` because the generated file
+    was the file the engineer was told to fill. The generated file now says so, on
+    its own second line, and points at the one that is kept."""
+    result = generate_architecture(build_project_model(ROBOT))
+    header = result.markdown.splitlines()
+    assert header[0] == "# 架构骨架（architecture.md）"
+    assert header[1] == ""
+    assert header[2] == BANNER
+    assert INTENT_FILE_NAME in BANNER and "手填无效" in BANNER and "只读" in BANNER
+    # The rendered skeleton still writes its slots as TODO — the banner changes
+    # where a fill is safe, not what the artifact says.
+    assert f"- voltage: {TODO}" in result.markdown
+    assert all(row.count(TODO) == len(INTENT_SLOTS)
+               for row in result.markdown.splitlines() if row.startswith("| 轨 "))
+    assert result.section["totals"]["filled"] == 0
+
+
+def test_the_intent_template_is_isomorphic_to_the_skeleton():
+    """One row per slot, same order, same stable ids — the merge joins on them."""
+    result = generate_architecture(build_project_model(ROBOT))
+    slots = result.section["slots"]
+    template = result.intent_markdown
+    parsed = parse_intent(template)
+    assert len(parsed) == len(slots) > 0, "every slot has exactly one row"
+    assert list(parsed) == [slot["id"] for slot in slots], "and in the skeleton's order"
+    for slot in slots:
+        # `<projectUuid>/<boardUuid>/<sectionKey>/<slotKey>` — four segments, the
+        # fourth being the fixed English key the AI fills.
+        project, board, section_key, key = slot["id"].split("/")
+        assert project and board and ":" in section_key
+        assert key == slot["key"]
+        assert section_key == f"{slot['sectionKind']}:{slot['object']}"
+        assert slot["value"] == TODO and not slot["filled"] and not slot["stale"]
+        assert slot["signature"].startswith("sha256:")
+    # Values and sources start as TODO/空: the tool does not guess a design intent.
+    assert all(record["value"] == "" and record["source"] == "" for record in parsed.values())
+    # Filling is what the engineer does, and it survives being read back.
+    slot = slots[0]
+    filled = _fill(template, slot["id"], "3.3V")
+    merged = generate_architecture(
+        build_project_model(ROBOT), intent_text=filled
+    ).section
+    assert merged["totals"]["filled"] == 1
+    assert merged["totals"]["todoSlots"] == len(slots) - 1
+    answer = next(entry for entry in merged["slots"] if entry["id"] == slot["id"])
+    assert answer["value"] == "3.3V" and answer["source"] == "engineer@2026-09-27"
+    assert answer["filled"] and not answer["stale"]
+
+
+def test_a_changed_drawing_marks_the_slot_stale_and_keeps_the_answer():
+    """053 §2.2's stale rule: mark, never delete and never overwrite."""
+    board = build_project_model(ROBOT)
+    template = generate_architecture(board).intent_markdown
+    slot = next(
+        entry for entry in generate_architecture(board).section["slots"]
+        if entry["object"] == "+12V" and entry["key"] == "voltage"
+    )
+    filled = _fill(template, slot["id"], "12V")
+
+    # The drawing moves: another part's pin lands on the rail (the node set the
+    # signature is taken over changes) — exactly what a re-draw does.
+    board.nets["+12V"].pins.append(("X2", "9"))
+    merged = generate_architecture(board, intent_text=filled).section
+    entry = next(item for item in merged["slots"] if item["id"] == slot["id"])
+    assert entry["stale"] is True and entry["staleReason"] == STALE_MARK
+    assert "图纸已变" in entry["staleReason"] and "待复核" in entry["staleReason"]
+    # Neither deleted nor overwritten: the recorded answer is still the answer.
+    assert entry["value"] == "12V" and entry["source"] == "engineer@2026-09-27"
+    assert entry["recordedSignature"] == slot["signature"] != entry["signature"]
+    assert merged["totals"]["stale"] >= 1
+    # Every other slot's recorded signature still matches, so the mark is specific
+    # rather than "anything is stale once anything changes".
+    on_rail = [item for item in merged["slots"]
+               if item["object"] == "+12V" and not item["orphan"]]
+    assert all(item["stale"] for item in on_rail)
+    untouched = next(item for item in merged["slots"] if item["object"] == "BOOT0")
+    assert not untouched["stale"]
+
+
+def test_an_intent_row_whose_object_is_gone_is_listed_not_dropped():
+    """The other half of "不静默删": a row whose rail/chain no longer exists in
+    the drawing is shown as an orphan, marked stale, value intact."""
+    board = build_project_model(ROBOT)
+    merged = generate_architecture(
+        board,
+        intent_text=(
+            "| file-x/board-y/analog:GHOST_net/range | GHOST_net · range | 0–5 V "
+            "| engineer@2026-09-27 | sig=sha256:deadbeefdeadbeef |\n"
+        ),
+    ).section
+    orphan = next(item for item in merged["slots"] if item["object"] == "GHOST_net")
+    assert orphan["orphan"] is True and orphan["stale"] is True
+    assert orphan["value"] == "0–5 V", "the recorded answer survives"
+    assert "已无此对象" in orphan["staleReason"]
+    assert merged["intent"]["orphans"] == 1 and merged["totals"]["stale"] == 1
+
+
+def test_the_merged_view_is_deterministic_in_model_plus_intent_file():
+    """044's contract, in the two halves 053 §2.2 states: the skeleton is a
+    function of the model, the merged view of (model + intent file)."""
+    board = build_project_model(ROBOT)
+    template = generate_architecture(board).intent_markdown
+    intent = _fill(template, "/power:+12V/voltage |", "12V")
+
+    first = generate_architecture(board, intent_text=intent)
+    second = generate_architecture(build_project_model(ROBOT), intent_text=intent)
+    assert first.markdown == second.markdown
+    assert json.dumps(first.section, ensure_ascii=False, sort_keys=True) == json.dumps(
+        second.section, ensure_ascii=False, sort_keys=True
+    )
+    # A *different* intent file is allowed to differ — that is the second half of
+    # the contract, not a violation of the first.
+    other = generate_architecture(board, intent_text=template)
+    assert other.section["totals"]["filled"] == 0
+    assert other.markdown == first.markdown
+
+
+def test_checkup_reads_the_intent_file_and_creates_it_only_once(tmp_path, capsys):
+    """End to end: run 1 creates the template, run 2 merges a hand-filled row and
+    leaves the file byte-identical (the 052 §2.2 defect, closed)."""
+    out = tmp_path / "out"
+    argv = ["checkup", "--file", str(ROBOT), "--out", str(out), "--library", str(SHELF)]
+    assert cli.main(argv) == 0
+    capsys.readouterr()
+    intent_path = out / INTENT_FILE_NAME
+    assert intent_path.is_file()
+    template = intent_path.read_text(encoding="utf-8")
+    intent_path.write_text(
+        _fill(template, "/power:+12V/voltage |", "12V"), encoding="utf-8"
+    )
+    filled_bytes = intent_path.read_bytes()
+
+    assert cli.main(argv) == 0
+    out_text = capsys.readouterr().out
+    report = json.loads((out / "report.json").read_text(encoding="utf-8"))
+    # The fill reached the report's merged view ...
+    assert report["architecture"]["intent"]["present"] is True
+    assert report["architecture"]["totals"]["filled"] == 1
+    entry = next(item for item in report["architecture"]["slots"]
+                 if item["object"] == "+12V" and item["key"] == "voltage")
+    assert entry["value"] == "12V" and entry["source"] == "engineer@2026-09-27"
+    # ... the engineer's file was not touched (byte for byte) ...
+    assert intent_path.read_bytes() == filled_bytes
+    assert "设计意图：读" in out_text and "（已存在：只读合并，一字未改）" in out_text
+    assert "本次新建" not in out_text
+    # ... and the human report shows the merged view with the value in it.
+    markdown = (out / "report.md").read_text(encoding="utf-8")
+    assert "## 架构骨架 ⊕ 设计意图（合并视图）" in markdown
+    assert "| `" + entry["id"] + "` | 12V | engineer@2026-09-27 | 已填 |" in markdown
+    # The generated skeleton, by contrast, is regenerated every run: it says so.
+    assert (out / ARCH_FILE_NAME).read_text(encoding="utf-8").splitlines()[2] == BANNER

@@ -239,7 +239,10 @@ boardwise checkup --out checkup
 跑编辑器的 ERC 与 PCB DRC，跑 boardwise 的规则，把器件按页或按连通性分成模块，
 给每张原理图页出一张 PNG，写出 `checkup/report.json`（机器读）、`checkup/report.md`（人读）、
 `checkup/architecture.md`（架构骨架：电源树/模拟链/控制链/总线表 + 设计意图槽位，判不出来的
-都留 `TODO`）和 `checkup/canvas-*.png`（画布图）。
+都留 `TODO`；**自动生成、每次覆盖**，第二行横幅写明「手填无效」）、
+`checkup/design-intent.md`（**设计意图**，归你所有：不存在时建一份全 TODO 模板，之后生成器对它
+只读、一字不改——`architecture.md` 里手填的东西下次就没了，填这里才留得住）和
+`checkup/canvas-*.png`（画布图）。
 
 预期：终端先打一行结论（ERROR 几条），再打模块、槽位和两份报告的路径。
 退出码 `1` 表示**发现了** ERROR（不是命令失败）、`0` 表示没有、`2` 表示参数/文件不可用、
@@ -250,8 +253,13 @@ boardwise checkup --out checkup
 只会说"DRC/连接性已审，N 颗器件缺手册未审"）、`warning_triage`（每条警告一格，`verdict` 填
 有益/有害/无害 + 理由）、`canvas_images`（要看的画布图）、`summary_template`（总结模板）。
 `ai_slots.unknown_parts` 是 `unreviewed_parts` 的旧名字，内容同一份。
-报告还会带一个 `architecture` 节（`architecture.md` 的计数摘要）；那一份骨架要**逐槽走一遍**，
-填不了的设计意图显式问工程师——单个工程想单独出骨架：`boardwise arch path/to/board.epro2`。
+报告还带两节结论：`architecture`（骨架 ⊕ `design-intent.md` 的**合并视图**：已填的值进报告、
+仍 `TODO` 的仍 `TODO`；某个槽关联的对象被改画后，该槽标 `stale: 图纸已变，此槽待复核`——不删你写的值、
+不覆盖、也不阻断出报告）和 `completion`（**完整结论**：检查范围 `scope`、欠账与源版本，`verdict` 三态
+`complete` / `complete-with-open-items` / `incomplete`）。`summary.mayClaimPassed` 是**窄义**字段
+（只回答「有没有器件缺手册未审」），要问"能不能说这板过了"请看 `completion.verdict`。
+骨架要**逐槽走一遍**，填不了的设计意图显式问工程师，答案写进 `design-intent.md`；单个工程想单独出骨架子
+加意图文件：`boardwise arch path/to/board.epro2 --out checkup/architecture.md`。
 
 想要**布局审美评分**（拓扑可辨 / 流向明确 / 文字可读 / 分组合理 / 网络标识规范，五轴各 1–5 分）
 就打开开关——默认关，因为它要求驱动模型有视觉能力：
