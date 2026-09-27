@@ -432,7 +432,11 @@ def test_the_json_schema_is_the_one_the_harness_reads(tmp_path, capsys):
 
 
 def _plan_file(tmp_path: Path) -> Path:
-    """`edit plan` output for the injected board's U3 — offline, no daemon."""
+    """`edit plan` output for the injected board's U3 — offline, no daemon.
+
+    The value is passed explicitly: since 052 §2.1 this rule's finding records
+    the contradiction and no repair, so `edit plan` refuses to pick one.
+    """
     out = tmp_path / "plan.json"
     args = build_parser().parse_args(
         [
@@ -440,6 +444,7 @@ def _plan_file(tmp_path: Path) -> Path:
             "--file", str(MISMATCH),
             "--rule", "param-value-mpn-match",
             "--designator", "U3",
+            "--after", "1k",
             "-o", str(out),
         ]
     )
