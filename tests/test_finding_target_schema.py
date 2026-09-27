@@ -235,6 +235,22 @@ def test_the_real_rules_fill_the_target_of_their_own_kind(kind):
     )
 
 
+def test_the_contradiction_kind_states_no_repair_direction():
+    """052 §2.1: one kind's target is deliberately empty where it used to advise.
+
+    `param-value-mpn-match` finds that the board's value and the MPN disagree.
+    Until 052 the target carried the MPN's decoded value as `suggested_after`,
+    which reads as "write this" — and 048 ruled that on 17 parts the *MPN* was
+    the wrong field. The value is an empty string today, and the two candidate
+    repairs are named in the message instead; the schema is unchanged, since an
+    empty string is the shape 016 wrote for "nothing here".
+    """
+    target = cli._finding_payload(_component_value_finding())["target"]
+    assert target["expected_before"] == "4.7kΩ"
+    assert target["suggested_after"] == ""
+    assert isinstance(target["suggested_after"], str)
+
+
 def test_the_two_report_paths_agree_finding_for_finding():
     """`checkup`'s payload and `review --json`'s must be the same document.
 

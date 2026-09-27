@@ -604,9 +604,12 @@ def build_parser() -> argparse.ArgumentParser:
             "The M3 loop's middle: `edit plan` turns one finding into a "
             "ChangePlan (data, inspectable), `edit preview` re-checks it "
             "offline against the snapshot, `edit apply` executes it on the live "
-            "canvas — one write, then a read-back, a save and a re-review. Only "
-            "`param-value-mpn-match` findings are repairable in this slice; a "
-            "plan for anything else is refused by name. Exit 0 applied (or "
+            "canvas — one write, then a read-back, a save and a re-review. "
+            "`--file` repairs one component's value (`param-value-mpn-match`, "
+            "whose finding records a contradiction rather than a repair, so the "
+            "direction is stated with it); the other kinds are reached by "
+            "`--report` / `--insert` / `--move`, and a rule outside that table "
+            "is refused by name. Exit 0 applied (or "
             "already applied) / 2 the promised effect is not on the board (a "
             "refused write, a read-back that disagrees, a save the editor "
             "refused, a re-review that still reports the finding) / 3 the "
@@ -624,9 +627,11 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Parse the snapshot, run one rule, take the VIOLATION finding for "
             "that designator and assemble the plan. Refuses (exit 5) when the "
-            "rule is unknown, is not repairable, has no violation there, or the "
-            "designator is ambiguous in the file — a plan that cannot be acted "
-            "on is worse than no plan."
+            "rule is unknown, is not repairable, has no violation there, the "
+            "designator is ambiguous in the file, or the finding records a "
+            "contradiction without a repair direction and the operator has "
+            "stated none (--after / --direction, 052 §2.1) — a plan that "
+            "cannot be acted on is worse than no plan."
         ),
     )
     edit_plan.add_argument(
@@ -655,7 +660,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     edit_plan.add_argument(
         "--after", default=None,
-        help="The value to write (default: the finding's own suggested value).",
+        help=(
+            "The value to write. Required for `param-value-mpn-match` unless the "
+            "finding carries a suggestion of its own, which since 052 §2.1 it "
+            "does not: that finding records a contradiction whose two repairs are "
+            "fixing Value to the MPN's decoded value or swapping in a part that "
+            "matches the design value, and the direction is the operator's to "
+            "state (--after names the value of the first)."
+        ),
+    )
+    edit_plan.add_argument(
+        "--direction", choices=EDIT_DIRECTIONS, default=None,
+        help=(
+            "Which field the repair writes (052 §2.1), for the --file path "
+            "only: `value` repairs the board's Value field and still needs "
+            "--after <value>; `mpn` would repair the MPN/LCSC field, whose change "
+            "kind this build does not have, so it is refused and says so. Neither "
+            "flag leaves the direction unstated, and a plan is not built then — "
+            "the MPN-decoded value is a candidate, not the answer (048)."
+        ),
     )
     edit_plan.add_argument(
         "-o", "--out", dest="out_path", default=None, metavar="PATH",
@@ -7307,6 +7330,23 @@ def _edit_target_kwargs(args: argparse.Namespace) -> dict[str, str | None]:
     }
 
 
+#: The values `edit plan --direction` accepts, and what each one means (052
+#: §2.1). Named for the **field the repair writes**, not for the side one
+#: believes: a `param-value-mpn-match` finding says the board's Value and the
+#: MPN disagree, and which of the two is the wrong one is a design decision.
+EDIT_DIRECTIONS = ("value", "mpn")
+
+
+def _edit_direction(args: argparse.Namespace) -> str:
+    """Which field this repair writes, as the operator stated it — ``""`` if none.
+
+    ``""`` is not "either is fine": since 052 §2.1 a finding that records a
+    contradiction carries no direction, and the value path refuses to build a
+    plan while this is empty.
+    """
+    return str(getattr(args, "direction", "") or "").strip()
+
+
 #: The rules whose findings this build can repair, mapped to the change kind a
 #: plan for them must name. A rule *absent* from this table is answered rather
 #: than ignored: a plan asked for such findings is refused by name, because
@@ -7559,8 +7599,27 @@ def _cmd_edit_plan(args: argparse.Namespace) -> int:
     be built from what was asked — an unknown rule id, a rule this build cannot
     repair, no violation for that designator, an ambiguous designator, no
     verified recipe, an exhausted landing ladder, a net with no connection
-    option, or a before/after pair the plan's own validation would refuse.
+    option, a contradiction whose repair direction the operator has not stated
+    (052 §2.1), or a before/after pair the plan's own validation would refuse.
     """
+    if _edit_direction(args) and (
+        getattr(args, "move", False)
+        or getattr(args, "insert", None)
+        or getattr(args, "report", None)
+    ):
+        # A switch that cannot mean anything here is refused rather than ignored
+        # (`--pin`'s rule, 035 四轮): "which field is the wrong one" is the value
+        # path's question (052 §2.1), while 029/035/036/037 build their plan from
+        # a recipe, a pin, a template or a request — never from a value/MPN
+        # contradiction.
+        print(
+            "boardwise edit plan: --direction belongs to the --file value path "
+            "(052 §2.1) — --report / --insert / --move take their repair from the "
+            "finding's own recipe or from the request, so there is no value/MPN "
+            "contradiction for a direction to resolve",
+            file=sys.stderr,
+        )
+        return 5
     if getattr(args, "move", False):
         return _cmd_edit_plan_move(args)
     if getattr(args, "insert", None):
@@ -7682,6 +7741,19 @@ def _cmd_edit_plan_value(args: argparse.Namespace) -> int:
         return 5
 
     before = finding.target.expected_before
+    direction = _edit_direction(args)
+    if direction == "mpn":
+        # 052 §2.1 fixed the rule side; changing the MPN/LCSC field is a change
+        # kind of its own and is not in this batch. Refused with the reason, not
+        # silently downgraded to a value write.
+        print(
+            "boardwise edit plan: --direction mpn 本 build 未开放：改 MPN/LCSC 需要一个新的 "
+            "change kind（052 §2.1 本批只做规则侧收口，新 kind 不在本批）\n"
+            f"  finding: [{finding.severity}] {finding.rule_id}: {finding.message}\n"
+            "  改 Value 一侧仍可走既有通道：--direction value --after <要写入的值>",
+            file=sys.stderr,
+        )
+        return 5
     after = (args.after if args.after is not None else finding.target.suggested_after)
     after = (after or "").strip()
     if not before:
@@ -7693,11 +7765,30 @@ def _cmd_edit_plan_value(args: argparse.Namespace) -> int:
         )
         return 5
     if not after:
-        print(
-            f"boardwise edit plan: no value to write for {designator} — pass "
-            "--after, or use a rule whose finding carries a suggestion",
-            file=sys.stderr,
-        )
+        # 052 §2.1: this finding records a contradiction and no repair, and the
+        # two repairs it names are not equivalent. Building a plan from the
+        # MPN's decoded value here is exactly the default 048's ruling removed
+        # (17 thesis-sampling parts whose *MPN column* is the wrong field), so
+        # the operator states the direction — and, for the value side, the
+        # value itself: what to write is a design decision, not something this
+        # command may read off the part number.
+        lines = [
+            f"boardwise edit plan: {designator} 的 finding 只记录矛盾，不指定修法（052 §2.1）——",
+            f"  finding: [{finding.severity}] {finding.rule_id}: {finding.message}",
+        ]
+        if direction == "value":
+            lines.append(
+                "  --direction value 说定了方向，但没给 --after：规则不再提供要写入的值"
+                "（写什么值由设计意图与核实过的料号事实决定），补齐后即可建 plan",
+            )
+        else:
+            lines += [
+                "  plan 不替操作者选方向，也不把 MPN 解码值当默认值。两个候选：",
+                "  --direction value --after <要写入的值>   改 Value（既有 component-value 通道）",
+                "  --direction mpn                           改 MPN/LCSC（本 build 未开放，只报明理由）",
+                "  048 裁决：17 颗器件写错的是 MPN 字段——写回 MPN 解码值不是安全默认。",
+            ]
+        print("\n".join(lines), file=sys.stderr)
         return 5
     if after == before:
         print(
@@ -7726,6 +7817,14 @@ def _cmd_edit_plan_value(args: argparse.Namespace) -> int:
         f"view {args.view})"
     )
     print(f"finding: [{finding.severity}] {finding.rule_id}: {finding.message}")
+    if direction == "value":
+        # The direction is not a plan field (the plan's key set is frozen and
+        # `change.before/after` already records the repair); printing it is what
+        # keeps --direction from being a switch that silently does nothing.
+        print(
+            "direction: value — the board's Value field is the one this repair "
+            "writes, with the value the operator supplied"
+        )
     print(
         f"plan: {designator}.{EDIT_WRITE_KEY} {before!r} -> {after!r} "
         f"({plan.change.kind})"

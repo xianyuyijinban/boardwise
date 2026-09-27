@@ -31,7 +31,11 @@ class FindingTarget:
 
     ``expected_before`` / ``suggested_after`` are *as written on the board*,
     not normalised numbers, because they are what a repair has to compare
-    against and write back.
+    against and write back. ``suggested_after`` is the rule's **proposal**, and
+    a rule that cannot justify one leaves it empty rather than guessing (052
+    §2.1: ``param-value-mpn-match`` names two repairs and picks neither, so its
+    target carries the contradiction and no direction). Empty therefore means
+    "this rule suggests nothing", never "write nothing".
     """
 
     component_ref: str = ""

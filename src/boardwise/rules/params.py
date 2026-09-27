@@ -13,6 +13,10 @@ code, because two rules look at the same resistor:
   part's MPN. A board can pass one and fail the other: a 1k board value
   gives a legal current while contradicting a 470-ohm MPN -- exactly the
   golden board's U3.
+
+That last rule reports a contradiction and **not** a repair (052 §2.1): its
+finding names both candidate fixes and carries no suggested value, because
+which field is the wrong one is a design decision (048's ruling).
 """
 
 from __future__ import annotations
@@ -82,6 +86,22 @@ LED_DOMAIN_TOLERANCE_V = 0.05
 MPN_AMPLITUDE_TOLERANCE_R = 3.0
 MPN_AMPLITUDE_TOLERANCE_C = 25.0
 
+#: 052 §2.1: a contradiction names **both** repairs and the rule chooses
+#: neither. Fixing the board value to the MPN's decoded value is one option
+#: (the part number is the true one); swapping in a part that matches the board
+#: value is the other (the design value is the true one) -- and 048 ruled on 17
+#: thesis-sampling parts where the *MPN column* was the wrong field, so writing
+#: the decoded value back is not a safe default. A fixed template, so both
+#: directions are always named in the same words whatever the amplitude or the
+#: part; the amplitude tolerances above are a noise policy, not evidence that
+#: the part number is the accurate side.
+MPN_REPAIR_DIRECTIONS = (
+    " -- two repairs fit this contradiction and this rule picks neither "
+    "(052 §2.1, 修复方向由设计意图决定): fix Value to {mpn_value} "
+    "(若料号属实), or fix the MPN/LCSC to a part matching {board_value} "
+    "(若设计值属实)"
+)
+
 
 def parse_resistance_ohms(value: str) -> float | None:
     """Re-exported helper: the L1 parser is the one ohm parser."""
@@ -109,7 +129,7 @@ def _kind_of(comp: Component, entry) -> str | None:
 #: Engineering prefixes for :func:`_human_value`, largest scale first. The two
 #: spans differ because the value parsers do: a resistor value may be a bare
 #: number (``470``) while a capacitor value *must* name its unit, so a
-#: capacitor suggestion always ends in ``pF``/``nF``/``uF``/``mF``.
+#: capacitor candidate always ends in ``pF``/``nF``/``uF``/``mF``.
 _RESISTOR_PREFIXES = ((1e6, "M"), (1e3, "k"), (1.0, ""))
 _CAPACITOR_PREFIXES = ((1e-3, "mF"), (1e-6, "uF"), (1e-9, "nF"), (1e-12, "pF"))
 
@@ -118,11 +138,12 @@ def _human_value(quantity: float, kind: str) -> str:
     """A decoded SI quantity written the way a person writes the value.
 
     ``1000.0`` ohms becomes ``"1k"`` and ``1e-7`` farads becomes ``"100nF"``,
-    so a suggestion can be typed back into the editor unchanged. The output is
-    required to survive a round trip through the value parsers inside the
-    rule's own tolerance — a *suggested* value nobody can parse would make the
-    repair loop fail to close, which is worse than no suggestion at all
-    (``tests/test_016_*`` pins the round trip across the whole EIA code space).
+    so the candidate a message quotes can be typed back into the editor
+    unchanged. Since 052 §2.1 this is *not* a suggestion the finding carries —
+    it is the text of the "fix Value" candidate in
+    :data:`MPN_REPAIR_DIRECTIONS` — but the round trip still matters, because
+    it is the value an operator would paste into ``--after`` (``tests/test_016_*``
+    pins the round trip across the whole EIA code space).
 
     Six significant digits is deliberate: the quantities this formatter sees
     are EIA codes (a two-digit mantissa times a power of ten), so six digits
@@ -178,7 +199,15 @@ class ValueMpnMatch(FactsRule):
     :data:`MPN_AMPLITUDE_TOLERANCE_R`): a small ratio is OK **with its
     amplitude quoted in the message**, so the row says what was seen instead
     of passing in silence, and it enters no precision denominator. Bigger
-    ratios keep the violation and now quote the amplitude too."""
+    ratios keep the violation and now quote the amplitude too.
+
+    **A violation reports a contradiction, not a repair** (052 §2.1, after
+    048). The finding's target carries the board's own value as
+    ``expected_before`` and an **empty** ``suggested_after``: the rule has two
+    candidates (:data:`MPN_REPAIR_DIRECTIONS`) and enough evidence for
+    neither, so both are named in the message and the direction is left to the
+    design intent. ``edit plan`` refuses to build a plan without one being
+    stated — see ``cli._cmd_edit_plan_value``."""
 
     id = "param-value-mpn-match"
     title = "The board's value field matches the MPN's decoded value"
@@ -333,11 +362,14 @@ class ValueMpnMatch(FactsRule):
                 )
                 # Task 016: the one row in the codebase that carries a
                 # structured target, which is what makes this the first
-                # repairable rule. The suggested value is the MPN's own
-                # decoded quantity written back in a human notation the value
-                # parsers read (`_human_value`), so a repair closes the loop:
-                # fix the board value to it and this very rule answers OK on
-                # the next pass.
+                # repairable rule. Since 052 §2.1 the target names the
+                # contradiction and **no** repair: `suggested_after` is empty
+                # because the rule has two candidates and evidence for
+                # neither, and `edit plan` refuses to pick one for the
+                # operator. The message names both, with the MPN's decoded
+                # quantity written back in a human notation the value parsers
+                # read (`_human_value`) so the "fix Value" candidate can be
+                # typed straight into `--after`.
                 rows.append((
                     Outcome(
                         rule_id=self.id,
@@ -348,6 +380,10 @@ class ValueMpnMatch(FactsRule):
                             f"{declared:.4g} {unit} contradicts its MPN "
                             f"({comp.mpn!r} decodes to {decoded:.4g} {unit}) "
                             f"-- BOM and schematic disagree ({amplitude})"
+                            + MPN_REPAIR_DIRECTIONS.format(
+                                mpn_value=_human_value(decoded, kind),
+                                board_value=comp.value,
+                            )
                         ),
                         evidence=[
                             f"{comp.designator} value {comp.value!r}",
@@ -359,7 +395,7 @@ class ValueMpnMatch(FactsRule):
                     FindingTarget(
                         component_ref=comp.designator,
                         expected_before=comp.value,
-                        suggested_after=_human_value(decoded, kind),
+                        suggested_after="",
                     ),
                 ))
         return rows

@@ -101,7 +101,18 @@ def _apply_args(*extra: str):
 
 
 def _write_plan(tmp_path: Path, snapshot: Path = MISMATCH, *extra: str):
-    """Run `edit plan` against the fixture and return its exit code + file."""
+    """Run `edit plan` against the fixture and return its exit code + file.
+
+    The value is stated here, always: since 052 §2.1 the finding records the
+    contradiction and no repair, so `edit plan` refuses unless the operator says
+    what to write (`--after`) or which field to repair (`--direction`). ``1k`` —
+    the MPN's decoded value — is what these tests mean by "the repair"; it is
+    passed explicitly rather than read off the finding, which is the whole point
+    of the change (the refusal itself is pinned in the tests below).
+    """
+    extra = tuple(extra)
+    if "--after" not in extra:
+        extra = ("--after", "1k", *extra)
     out = tmp_path / "plan.json"
     code = _cmd_edit_plan(
         _plan_args(
@@ -157,6 +168,9 @@ def test_plan_states_every_field_of_the_schema(tmp_path, capsys):
     assert payload["change"] == {
         "kind": "component-value", "before": "4.7kΩ", "after": "1k",
     }
+    # `after` is the value the operator stated (`_write_plan` passes `--after 1k`
+    # because 052 §2.1 left the finding with no value of its own), and the
+    # `expectedValue` above is the board's own — never the MPN's decoding.
     assert payload["preconditions"] == [
         f"pageUuid {FIXTURE_PAGE_UUID} is still the focused page",
         "designator U3 still resolves on the page",
@@ -168,7 +182,12 @@ def test_plan_states_every_field_of_the_schema(tmp_path, capsys):
     assert "projectUuid is empty" in out, "the downgrade is stated, not silent"
 
 
-def test_after_overrides_the_findings_own_suggestion(tmp_path):
+def test_after_is_the_value_the_plan_writes(tmp_path):
+    """`--after` is the operator's value, plan and no one else's (052 §2.1).
+
+    2.2k is neither the board value nor the MPN's decoding: it is a design
+    decision, which is exactly what this flag is for.
+    """
     code, path = _write_plan(tmp_path, MISMATCH, "--after", "2.2k")
     assert code == 0
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -248,6 +267,116 @@ def test_a_plan_that_changes_nothing_is_refused(tmp_path, capsys):
 
 
 # --------------------------------------------------------------------------
+# 4b: 052 sec.2.1 — the finding states the contradiction, the operator the repair
+# --------------------------------------------------------------------------
+
+
+def test_the_violation_names_both_repairs_and_picks_neither():
+    """048 made the old default unsafe: 17 parts had the *MPN* field wrong.
+
+    So the message carries both candidates — fix the board value to the MPN's
+    decoded value, or re-pick the part to match the board value — and names the
+    design intent as the thing that decides.
+    """
+    (finding,) = ValueMpnMatch().check(build_schematic_model(str(MISMATCH)))
+    message = finding.message
+    # The contradiction itself, unchanged: both sides and the amplitude.
+    assert "board value 4700 Ω contradicts its MPN" in message
+    assert "'FRC0805J102 TS' decodes to 1000 Ω" in message
+    assert "4.70x apart" in message
+    # Direction one: the part number is the true one -> write its decoded value.
+    assert "fix Value to 1k (若料号属实)" in message
+    # Direction two: the design value is the true one -> re-pick the part.
+    assert "fix the MPN/LCSC to a part matching 4.7kΩ (若设计值属实)" in message
+    assert "修复方向由设计意图决定" in message
+    # And the finding carries none of it as a value to write.
+    assert finding.target is not None
+    assert finding.target.expected_before == "4.7kΩ"
+    assert finding.target.suggested_after == ""
+
+
+def test_plan_refuses_a_finding_that_states_no_repair_direction(tmp_path, capsys):
+    """The CLI does not pick the direction the rule declined to pick."""
+    out = tmp_path / "plan.json"
+    code = _cmd_edit_plan(
+        _plan_args(
+            "--file", str(MISMATCH), "--rule", "param-value-mpn-match",
+            "--designator", "U3", "-o", str(out),
+        )
+    )
+    err = capsys.readouterr().err
+    assert code == 5, err
+    assert not out.exists(), "a refused plan writes nothing"
+    # Both candidates are on the screen, in the rule's own words…
+    assert "fix Value to 1k" in err and "part matching 4.7kΩ" in err
+    # …and both ways to state one are printed.
+    assert "--direction value --after <要写入的值>" in err
+    assert "--direction mpn" in err
+    # The refusal cites the ruling that made the old default unsafe.
+    assert "052 §2.1" in err
+    assert "048" in err and "MPN 解码值不是安全默认" in err
+
+
+def test_direction_value_still_needs_the_value_the_operator_chose(tmp_path, capsys):
+    """`value` says which field; it does not say what to write.
+
+    The rule no longer supplies a value, and this command does not re-derive one
+    from the MPN — that derivation is what 048 ruled against, and doing it here
+    would be the same default wearing a flag.
+    """
+    code = _cmd_edit_plan(
+        _plan_args("--file", str(MISMATCH), "--rule", "param-value-mpn-match",
+                   "--designator", "U3", "--direction", "value")
+    )
+    err = capsys.readouterr().err
+    assert code == 5, err
+    assert "说定了方向，但没给 --after" in err
+    assert "--after" in err
+
+
+def test_direction_value_walks_the_component_value_path_it_always_did(
+    tmp_path, capsys
+):
+    code, path = _write_plan(tmp_path, MISMATCH, "--direction", "value")
+    out = capsys.readouterr().out
+    assert code == 0, out
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["change"] == {
+        "kind": "component-value", "before": "4.7kΩ", "after": "1k",
+    }
+    # The direction is a statement, not a plan field: the schema stays frozen.
+    assert set(payload["change"]) == {"kind", "before", "after"}
+    assert set(payload["target"]) == {"primitiveId", "designator", "expectedValue"}
+    assert "direction: value" in out
+
+
+def test_direction_mpn_is_refused_with_the_missing_change_kind(tmp_path, capsys):
+    code = _cmd_edit_plan(
+        _plan_args("--file", str(MISMATCH), "--rule", "param-value-mpn-match",
+                   "--designator", "U3", "--direction", "mpn")
+    )
+    err = capsys.readouterr().err
+    assert code == 5, err
+    assert "改 MPN/LCSC 需要一个新的 change kind" in err
+    assert "052 §2.1" in err and "新 kind 不在本批" in err
+    # The refusal points at the direction that does work, and shows the finding.
+    assert "--direction value --after <要写入的值>" in err
+    assert "fix Value to 1k" in err
+
+
+def test_a_direction_off_the_value_path_is_refused_not_ignored(tmp_path, capsys):
+    """A switch that cannot mean anything is refused (`--pin`'s rule, 035 四轮)."""
+    code = _cmd_edit_plan(
+        _plan_args("--report", str(tmp_path / "report.json"),
+                   "--rule", "decap-required-caps", "--designator", "U1",
+                   "--direction", "value")
+    )
+    err = capsys.readouterr().err
+    assert code == 5, err
+    assert "--direction belongs to the --file value path" in err
+
+
+# --------------------------------------------------------------------------
 # 5: the finding's target, threaded from the one rule that produces it
 # --------------------------------------------------------------------------
 
@@ -262,17 +391,22 @@ def test_the_violation_row_carries_a_target_and_the_other_rows_do_not():
     assert target is not None
     assert target.component_ref == "U3"
     assert target.expected_before == "4.7kΩ"
-    assert target.suggested_after == "1k"
+    # 052 §2.1: the contradiction is recorded, the repair is not — the two
+    # candidates live in the message and the direction is the operator's.
+    assert target.suggested_after == ""
     # Empty by construction, not by oversight: the primitiveId only exists on
     # the editor's canvas (§2.3), and a value change touches no connection.
     assert target.primitive_id == ""
     assert target.pin_refs == [] and target.net_refs == []
 
-    # The suggestion closes the loop the rule itself measures: it parses back
-    # to the MPN's decoded quantity inside the rule's own tolerance.
+    # The candidate the message names is written the way the value parsers read
+    # it, so it can be pasted into `--after` unchanged: it closes the loop the
+    # rule itself measures, inside the rule's own tolerance.
     decoded = decode_eia_3digit("102", 1.0)
     assert decoded == 1000.0
-    assert abs(parse_resistance_ohms(target.suggested_after) - decoded) <= 1e-3 * decoded
+    candidate = _human_value(decoded, "resistor")
+    assert f"fix Value to {candidate} " in findings[0].message
+    assert abs(parse_resistance_ohms(candidate) - decoded) <= 1e-3 * decoded
 
     # OK/UNKNOWN rows produce no finding at all, exactly as before: every other
     # subject in the four-state table stays silent.
@@ -282,9 +416,9 @@ def test_the_violation_row_carries_a_target_and_the_other_rows_do_not():
     assert [f.rule_id for f in findings] == ["param-value-mpn-match"]
 
 
-def test_every_suggested_value_round_trips_through_its_own_parser():
-    """The whole EIA code space, both kinds: a suggestion the parser cannot
-    read back would make the repair loop unable to close."""
+def test_every_repair_candidate_round_trips_through_its_own_parser():
+    """The whole EIA code space, both kinds: a candidate the parser cannot read
+    back is a value an operator cannot paste into `--after`."""
     for mantissa in range(10, 100):
         for exponent in range(10):
             code = f"{mantissa}{exponent}"
@@ -302,8 +436,9 @@ def test_every_suggested_value_round_trips_through_its_own_parser():
 
 
 def test_a_hand_built_model_threads_one_target_per_contradiction():
-    """No library and no fixture: the rule's own arithmetic decides the
-    suggestion, for both kinds and their two different tolerances."""
+    """No library and no fixture: the rule's own arithmetic decides the numbers
+    it quotes, for both kinds and their two different tolerances — and (052
+    §2.1) every target it produces records the contradiction and no repair."""
     model = DesignModel()
     for designator, value, mpn in (
         ("R1", "4.7k", "FRC0805J102 TS"),   # 4700 vs 1000 = 4.7x: a resistor
@@ -314,13 +449,20 @@ def test_a_hand_built_model_threads_one_target_per_contradiction():
             uid=designator, designator=designator, value=value, mpn=mpn,
         )
     rule = ValueMpnMatch(library=PartLibrary(parts=[]))
-    targets = {finding.target.component_ref: finding.target
-               for finding in rule.check(model)}
+    findings = {finding.target.component_ref: finding
+                for finding in rule.check(model)}
+    targets = {ref: finding.target for ref, finding in findings.items()}
     assert set(targets) == {"R1", "C1"}
     assert targets["R1"].expected_before == "4.7k"
-    assert targets["R1"].suggested_after == "1k"
+    assert targets["R1"].suggested_after == ""
     assert targets["C1"].expected_before == "100nF"
-    assert targets["C1"].suggested_after == "1nF"
+    assert targets["C1"].suggested_after == ""
+    # Each kind's candidate is written for its own parser, and the other
+    # direction is named in the same sentence.
+    assert "fix Value to 1k " in findings["R1"].message
+    assert "part matching 4.7k" in findings["R1"].message
+    assert "fix Value to 1nF " in findings["C1"].message
+    assert "part matching 100nF" in findings["C1"].message
     assert {o.subject: o.state for o in rule.outcomes(model)} == {
         "R1": "VIOLATION", "C1": "VIOLATION", "R2": "OK",
     }
@@ -807,6 +949,52 @@ def test_apply_fails_when_the_independent_readback_disagrees(
     assert code == 2, out
     assert "DID NOT MATCH" in out
     assert daemon.saves() == [], "a change that did not land is not saved"
+
+
+def test_a_resolved_review_is_not_what_accepts_the_change(stub_daemon, tmp_path, capsys):
+    """016's acceptance is "the read-back equals the planned value", not "the
+    warning went away" — 052 §2.1's sentence, as an assertion.
+
+    The snapshot handed to `apply` here is the **fixed** board (`_fresh_snapshot`
+    copies `fixed-base.epro2`, U3 = 1k), so the re-review this command runs at
+    the end would report the finding resolved. The page, however, keeps the old
+    value: the write did not land. The read-back is what decides, it is read
+    before the save, and a disagreement returns exit 2 without ever reaching the
+    re-review — no `postReview` in the report at all.
+    """
+    code, plan = _write_plan(tmp_path)
+    assert code == 0
+    daemon = stub_daemon(_StubEditor())
+    original = daemon.call
+
+    async def _keeps_the_old_value(action, params=None, **hint):
+        data = await original(action, params, **hint)
+        if action == "sch.set_component_attribute":
+            daemon.other["Value"] = daemon.value = "4.7kΩ"
+        return data
+
+    daemon.call = _keeps_the_old_value
+    report = tmp_path / "apply.json"
+    capsys.readouterr()
+    code = _cmd_edit_apply(
+        _apply_args(
+            str(plan), "--file", str(_fresh_snapshot(tmp_path)),
+            "--json", str(report),
+        )
+    )
+    out = capsys.readouterr().out
+    assert code == 2, out
+    assert "DID NOT MATCH" in out
+    assert daemon.saves() == [], "a change that did not land is not saved"
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["verification"]["observed"] == "4.7kΩ"
+    assert payload["verification"]["matched"] is False
+    assert payload["reason"] == "readback_mismatch"
+    assert payload["postReview"] == {}, (
+        "the re-review would have called this resolved — the snapshot is the fixed "
+        "board — so it is left empty: the read-back is what accepts a change, and "
+        "it disagrees"
+    )
 
 
 def test_apply_reports_clobbered_keys_loudly(stub_daemon, tmp_path, capsys):
