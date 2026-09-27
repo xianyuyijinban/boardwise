@@ -817,6 +817,93 @@ def test_a_keep_out_region_is_respected():
     assert "keepouts[0]" in found[0].evidence
 
 
+def _detour_segments() -> list[LayoutSegment]:
+    """The base divider with its tap redrawn as an L-shaped detour.
+
+    One wire out of the junction on the chain, right, down and back to R2.1's
+    tip — still one node, still named by the label (which sits mid-span on the
+    horizontal run). What it adds is a *bounding box* far bigger than the line:
+    the box sweeps the whole rectangle between the two runs, which is what the
+    three keep-out cases below are about.
+    """
+    return [
+        _segments()[0],
+        LayoutSegment(net="MID", points=[
+            (COL, 300.0), (COL + 300.0, 300.0),
+            (COL + 300.0, 250.0), (COL, 250.0),
+        ]),
+    ]
+
+
+def _bounds_of(points) -> tuple[float, float, float, float]:
+    """The bounding box of a polyline, restated here so the cases stay independent."""
+    xs = [point[0] for point in points]
+    ys = [point[1] for point in points]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def _check_with_keepouts(keepouts: list) -> readability.CheckResult:
+    """The detour case, checked against the given keep-outs and nothing else."""
+    case = _case(segments=_detour_segments())
+    return check(
+        case.plan, case.circuit, case.presentation, case.profiles,
+        page_box=PAGE, keepouts=keepouts,
+    )
+
+
+def test_a_wire_that_detours_around_a_keep_out_is_not_inside_it():
+    """An L whose bounding box covers the keep-out while both runs pass it by.
+
+    The bounding box of a polyline is not the polyline. Measuring the box would
+    report this wire as "inside" a region it never entered — and it would make
+    "route around a keep-out" unsatisfiable, because an L-shaped detour's box
+    *always* covers whatever it went around. The wire half of constraint 6 is
+    therefore measured per sub-segment, with constraint 4's own clip test.
+    """
+    keep = (COL + 100.0, 255.0, COL + 200.0, 295.0)
+    left, bottom, right, top = _bounds_of(_detour_segments()[1].points)
+    assert left < keep[0] and right > keep[2] and bottom < keep[1] and top > keep[3], (
+        "the case is only worth checking while the bounding box really does "
+        f"cover the keep-out: box {(left, bottom, right, top)}, keep-out {keep}"
+    )
+    assert _check_with_keepouts([keep]).hard_violations == []
+
+
+def test_a_sub_segment_that_really_enters_a_keep_out_is_reported_once():
+    """The same shape, with the keep-out moved onto one sub-segment.
+
+    Exactly one finding, naming the segment that entered — the per-sub-segment
+    rule is strict, not lenient: a detour that really cuts into a keep-out is
+    still a wire inside a reserved region, and the evidence says which one and
+    where it was measured.
+    """
+    keep = (COL + 290.0, 260.0, COL + 310.0, 290.0)
+    result = _check_with_keepouts([keep])
+    found = _of(result, KIND_OUT_OF_PAGE)
+    assert [item.objects for item in found] == [("segments[1]",)]
+    assert "segments[1]" in found[0].evidence
+    assert "keepouts[0]" in found[0].evidence
+    assert "runs through keep-out" in found[0].evidence
+    assert "near (400, 275)" in found[0].evidence
+    assert len(result.hard_violations) == 1, _kinds(result)
+
+
+def test_a_wire_riding_a_keep_out_edge_is_on_the_border_not_inside_it():
+    """The boundary口径 is constraint 4's: a positive-length interior overlap.
+
+    A wire running exactly along a keep-out edge is on the border of the region,
+    not in it — the same rule that lets a wire run along a part's outline
+    without "crossing" the body. The control below moves the keep-out one unit
+    towards the wire, so where the boundary actually is is pinned too: the rule
+    is a boundary, not a licence to ignore the region.
+    """
+    on_the_edge = (COL + 150.0, 300.0, COL + 220.0, 330.0)
+    one_unit_in = (COL + 150.0, 299.0, COL + 220.0, 330.0)
+    assert _of(_check_with_keepouts([on_the_edge]), KIND_OUT_OF_PAGE) == []
+    found = _of(_check_with_keepouts([one_unit_in]), KIND_OUT_OF_PAGE)
+    assert [item.objects for item in found] == [("segments[1]",)]
+
+
 def test_without_a_page_box_the_page_boundary_is_not_judged():
     """The plan carries no page size, so an unstated page is *not* evaluated."""
     assert _run(_case(page_box=None)).hard_violations == []
