@@ -26,8 +26,10 @@ import sys
 # (V4 folder format), so the pattern matches any path containing it.
 _CONTAINER_RE = re.compile(r"\.(epro2|epro|eprj2|eprj3|epru|esch|epcb)(/|$)", re.IGNORECASE)
 
-# The 22 project containers tracked as of 2026-09-26, each individually
+# The 29 project containers tracked as of 2026-09-27, each individually
 # approved (own teaching/DIY boards + synthetic/golden fixtures). Frozen.
+# (Paths are matched against NUL-separated `git ls-files -z` output, so
+# non-ASCII names compare literally — never add the quoted/escaped form.)
 ALLOWLIST: frozenset[str] = frozenset(
     {
         "blocklib/sources/ROBOT_ctrl_FOC.eprj2",
@@ -44,11 +46,18 @@ ALLOWLIST: frozenset[str] = frozenset(
         "tests/fixtures/CH340G.eprj2",
         "tests/fixtures/CH340G_backup/CH340G_2026-09-13-18-21.epro2",
         "tests/fixtures/CH340G_backup/CH340G_2026-09-13-20-21.epro2",
+        "tests/fixtures/DCDC-12V9V转5V3V3_2026-09-27.epro2",
+        "tests/fixtures/FPC触屏游戏机_2026-09-27.epro2",
         "tests/fixtures/ProPrj_CH340G_2026-09-13.epro2",
         "tests/fixtures/ProPrj_ROBOT ctrl FOC_2026-09-16.epro2",
+        "tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2",
+        "tests/fixtures/ProPrj_智能药箱_2026-09-17.epro2",
+        "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
         "tests/fixtures/ch340_golden.epro2",
         "tests/fixtures/eprj3_synth/eprj3_synth.eprj3",
         "tests/fixtures/llc_board.epro2",
+        "tests/fixtures/毕设滤波采样_2026-09-27.epro2",
+        "tests/fixtures/超声波_2026-09-27.epro2",
         "tools/eprj2-recon/ch340g_decrypted.epru",
         "tools/eprj2-recon/ch340g_final.epru",
         "tools/eprj2-recon/ch340g_merged.epru",
@@ -65,13 +74,17 @@ _BANNER = (
 
 
 def _git(*args: str) -> list[str]:
-    out = subprocess.run(
-        ["git", *args], capture_output=True, text=True, encoding="utf-8"
-    )
+    # `-z`: NUL-separated, no quoting — git's default quotepath escaping would
+    # hide non-ASCII paths from the container regex (the closing quote breaks
+    # the `(/|$)` anchor), which is exactly the path a company board takes.
+    out = subprocess.run(["git", *args, "-z"], capture_output=True)
     if out.returncode != 0:
-        print(f"repo hygiene: git {' '.join(args)} failed: {out.stderr.strip()}", file=sys.stderr)
+        print(
+            f"repo hygiene: git {' '.join(args)} failed: {out.stderr.decode('utf-8', 'replace').strip()}",
+            file=sys.stderr,
+        )
         raise SystemExit(2)
-    return [ln for ln in out.stdout.splitlines() if ln.strip()]
+    return [p for p in out.stdout.decode("utf-8").split("\0") if p]
 
 
 def violations(paths: list[str]) -> list[str]:

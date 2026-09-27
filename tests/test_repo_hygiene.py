@@ -39,10 +39,12 @@ def test_allowlist_matches_current_tracked_containers():
     guard = _load_guard()
 
     out = subprocess.run(
-        ["git", "ls-files"], capture_output=True, text=True, encoding="utf-8", cwd=REPO
+        ["git", "ls-files", "-z"], capture_output=True, cwd=REPO
     )
     tracked = {
-        p for p in out.stdout.splitlines() if guard._CONTAINER_RE.search(p)
+        p
+        for p in out.stdout.decode("utf-8").split("\0")
+        if p and guard._CONTAINER_RE.search(p)
     }
     assert guard.ALLOWLIST == tracked, (
         f"allowlist drift: only-in-allowlist={sorted(guard.ALLOWLIST - tracked)}, "
