@@ -1107,6 +1107,86 @@ def test_usbcc_a_connector_without_requirements_is_not_applicable():
                for o in states["NOT_APPLICABLE"])
 
 
+def _usb_model_with_the_socket_grounded():
+    """The FPC board's shape (049 P3): the socket has a foot on each of the two
+    nets — its CC pin on the CC net, its GND pin on ``GND`` — and it comes first
+    in the net's member order, ahead of the real pull-down."""
+    model = _usb_model()
+    model.components["USB1"].pins.append(Pin("1", "GND", "GND"))
+    model.nets["GND"].pins.insert(0, ("USB1", "1"))
+    return model
+
+
+def test_usbcc_the_sockets_own_gnd_foot_does_not_shadow_the_pulldown():
+    """049 P3, the 017 leftover: "a part with a foot on both nets" used to be the
+    whole resistor test, and the socket satisfies it by construction. Whenever it
+    came first, the real pull-down's value was never read and the rule could only
+    answer UNKNOWN — measured on the FPC board, whose R24/R27 are 5.1K exactly as
+    declared.
+    """
+    lib = _library(_usb_entry())
+    rule = UsbCcPulldown(library=lib)
+    model = _usb_model_with_the_socket_grounded()
+
+    assert rule._resistance_to(model, "NET5", "GND") == (5100.0, "R24")
+    assert rule._resistance_to(model, "NET6", "GND") == (5100.0, "R27")
+
+    states = _states(rule, model)
+    assert {o.subject for o in states["OK"]} == {"USB1 pin4", "USB1 pin10"}
+    assert not states["VIOLATION"] and not states["UNKNOWN"]
+    assert all("R24" in o.message or "R27" in o.message for o in states["OK"])
+
+
+def test_usbcc_a_connector_alone_stays_the_unreadable_candidate():
+    """With nothing resistor-like on the net, the socket keeps the *old* reading.
+
+    The caller turns "no candidate at all" into an ERROR, so filling that branch
+    from a bridging non-resistor would report the model's own duplicate-name
+    artifact as a board defect — measured 2026-09-27 on the injected
+    ``duplicate-designator`` board, where the duplicate name makes the model keep
+    the other page's R24 and the CC net reads as having no resistor at all.
+    """
+    lib = _library(_usb_entry())
+    rule = UsbCcPulldown(library=lib)
+    model = _usb_model_with_the_socket_grounded()
+    model.components.pop("R24")
+    model.nets["NET5"] = Net("NET5", [("USB1", "10")])
+
+    assert rule._resistance_to(model, "NET5", "GND") == (None, "USB1")
+    states = _states(rule, model)
+    assert [o.subject for o in states["UNKNOWN"]] == ["USB1 pin10"]
+    assert not [o for o in states["VIOLATION"] if o.subject == "USB1 pin10"]
+
+
+def test_usbcc_a_capacitor_on_the_net_is_not_read_as_the_resistor():
+    """A declared non-resistor is never the answer, whatever its value parses to."""
+    lib = _library(_usb_entry(), PartEntry(
+        key="cap.c0g", value="C", mpn="CAP-1", lcsc="C3", category="capacitor"))
+    rule = UsbCcPulldown(library=lib)
+    model = _usb_model()
+    model.components["C40"] = Component(
+        uid="c40", designator="C40", value="1uF", mpn="CAP-1", lcsc_part="C3",
+        pins=[Pin("1", "A", "NET5"), Pin("2", "B", "GND")])
+    model.nets["NET5"].pins.insert(0, ("C40", "1"))
+    model.nets["GND"].pins.append(("C40", "2"))
+
+    assert rule._resistance_to(model, "NET5", "GND") == (5100.0, "R24")
+
+
+def test_the_fpc_boards_cc_pulldowns_are_ok_with_the_socket_on_both_nets():
+    """The 017 leftover, closed on the real holdout board (049 P3)."""
+    from boardwise.core.parts import load_parts
+    from boardwise.engines.review_eval import load_board_model
+
+    model = load_board_model("tests/fixtures/FPC触屏游戏机_2026-09-27.epro2")
+    rule = UsbCcPulldown(library=load_parts("blocklib/parts.json"))
+    states = _states(rule, model)
+    assert {o.subject for o in states["OK"]} == {"USB1 pin4", "USB1 pin10"}
+    assert not states["VIOLATION"] and not states["UNKNOWN"]
+    assert sorted(o.message.split(":")[1].strip().split()[0]
+                  for o in states["OK"]) == ["R24", "R27"]
+
+
 # ------------------------------------------------- golden-board measurement
 
 

@@ -11,10 +11,16 @@
    `components_without_symbol`；
 2. **说出来**：控制台一行英文 note（同 019 的接法）+ `--md` 中文摘要一句
    （`rules.i18n.parse_drop_hint`），两句话都**只报非 0 的项**；
-3. **不多说**：正常样本（ch340 金色板）一个字都不加，`--json` 逐字节不变。
+3. **不多说**：正常样本一个字都不加，`--json` 逐字节不变。
 
-夹具只读：`llc_board.epro2`（实测丢 14 个脚：两份 SYMBOL 文档各 7 个有名脚，
-Q1G/Q1S/Q2G/…）、`ch340_golden.epro2`（0）。
+**049 起计数变了，口径没变（本节 2026-09-27 修订）**：`llc_board.epro2` 的 14 个脚
+**不是**"文件里没有脚号"——原始记录里两份 module SYMBOL 文档各有一整块 `Pin Number`
+ATTR 被增量保存追加到了文档**末尾**（`parentId` 指回各自 PIN 记录），020 当时只按流
+顺序配对，于是 7 个脚丢号、吸收那一块的那个脚还被写错号。049 按 `parentId` 归档后这
+14 个脚全部读到（`tests/test_049_parser_defects.py` 钉形状）。所以：
+**真实夹具现在一个都不丢**，这份文件的计数断言从 14 改成 0，"计到数 / 说出来"这两条
+性质改由**合成流**承载（下面 §2 的 `_unnumbered` 现场：一份真正没有任何 `Pin Number`
+ATTR 的 PIN 记录，也就是唯一还该被丢掉、该被报出来的形状）。
 
 覆盖范围的**诚实说明**：这两个计数只有 `--view schematic` 会填。pcb 视图的模型来自
 PCB 文档（`parsers/epro2_model.py`），根本不读 SYMBOL 文档，计数"恒为 0"是结构决定的、
@@ -42,12 +48,14 @@ FIXTURES = ROOT / "tests" / "fixtures"
 LLC = FIXTURES / "llc_board.epro2"
 CH340 = FIXTURES / "ch340_golden.epro2"
 
-#: Measured on `llc_board.epro2` (2026-09-22): the file carries the same
-#: transistor-array SYMBOL document twice, and each copy ships 7 unnumbered
-#: but *named* pins (Q1G/Q1S/Q2G/Q2S/Q3G/Q3S/Q4G). The assertion below is
-#: `>= 1` on purpose — a library fix that numbers those pins must not turn this
-#: file red; the *fact* under test is "counted and said out loud".
-LLC_DROPPED_PINS_MEASURED = 14
+#: Measured on `llc_board.epro2` (2026-09-22, re-measured 2026-09-27): the file
+#: carries the same transistor-array SYMBOL document twice, and each copy ships 7
+#: pins whose numbers are appended to the **end** of the document. 020 read those
+#: as "unnumbered" and counted 14 drops; 049 files them by `parentId` and reads
+#: all 14. The number below is therefore the count 049 *recovered*, not a count
+#: the parser drops — pinned so that a regression that starts dropping them again
+#: fails here by name.
+LLC_RECOVERED_PINS_MEASURED = 14
 
 
 def _lines(out: str) -> list[str]:
@@ -103,7 +111,11 @@ def _symbol_doc(uuid: str, pins: list[tuple[float, float, int, str | None, str]]
     """A SYMBOL document. Each pin is ``(x, y, zIndex, number, name)``.
 
     ``number=None`` is the defect under test: the PIN record is there, its
-    ``Pin Name`` is there, and the ``Pin Number`` never arrives.
+    ``Pin Name`` is there, and the ``Pin Number`` never arrives. (Since 049 a
+    ``Pin Number`` that arrives somewhere else in the document is still found
+    by its ``parentId`` — see ``tests/test_049_parser_defects.py`` — so this is
+    now the *only* shape that drops a pin, and therefore the shape every drop
+    test in this file builds.)
     """
     out = [_doc_head("SYMBOL", uuid), _record("META", {"title": "SYNTH"})]
     for x, y, z, number, name in pins:
@@ -114,45 +126,81 @@ def _symbol_doc(uuid: str, pins: list[tuple[float, float, int, str | None, str]]
     return out
 
 
+def _unnumbered(tmp_path: Path, name: str = "two_unnumbered_pins.epro2") -> Path:
+    """A board whose symbol has two pins with no ``Pin Number`` anywhere.
+
+    The `Pin Name` is present and the position is present — what is missing is
+    the identity, which is why the pin has to be dropped rather than guessed at.
+    """
+    return _write_backup(
+        tmp_path,
+        name,
+        [
+            _doc_head("SCH_PAGE", "page1"),
+            *_component("part1", "sym1", "Q1"),
+            *_symbol_doc(
+                "sym1",
+                [
+                    (0.0, 0.0, 1, "1", "G1"),      # numbered: kept
+                    (10.0, 0.0, 2, None, "Q1S"),   # no Pin Number anywhere: dropped
+                    (20.0, 0.0, 3, None, "Q2G"),   # ditto
+                ],
+            ),
+        ],
+    )
+
+
 # --------------------------------------------------------------------------
-# 1. 真实样本：llc 的原理图视图必须说话
+# 1. 真实样本：llc 的 14 个脚现在读得到，所以它不再报丢脚
 # --------------------------------------------------------------------------
 
 
-def test_the_llc_schematic_review_says_what_the_parse_dropped(capsys):
+def test_the_llc_schematic_review_reads_the_pins_the_file_carries(capsys):
+    """049 re-reading of this test's subject: the file's 14 "unnumbered" pins
+    were numbered all along, in a block appended to the end of each module
+    SYMBOL document. The review says nothing about dropping now — and the
+    recovered pins are *on nets*, which is the whole point ("dropped" meant
+    "silently unconnected").
+    """
     code = cli.main(["review", str(LLC), "--view", "schematic"])
     out = capsys.readouterr().out
 
     assert code == 0
-    # 前提：这份文件在原理图视图里确实解析出了东西（否则测的是别的事）。
     assert "(47 components" in out
-    lines = _lines(out)
-    assert lines[-1].startswith("note: ")
-    assert "pin(s) dropped during parse (missing pin number)" in lines[-1]
-    assert PARSE_DROP_NOTE_TAIL in lines[-1], "必须说出后果：覆盖不完整"
-    # 计数是解析器自己数的，不是猜的：数字与实测一致，且 ≥1（任务书的底线）。
-    reported = int(lines[-1].split("note: ")[1].split(" pin(s)")[0])
-    assert reported == LLC_DROPPED_PINS_MEASURED
-    assert reported >= 1
-    # 一个器件都没丢符号，就不许提器件那半句。
-    assert "component(s)" not in lines[-1]
+    assert "note:" not in out, "every pin of this board is read now"
+
+    stats = ParseStats()
+    model = build_schematic_model(LLC, parse_stats=stats)
+    assert stats.pins_dropped_no_number == 0
+    # U9 is the module: 10 pins, names and nets, where 020 could read only 3.
+    pins = {pin.number: (pin.name, pin.net) for pin in model.components["U9"].pins}
+    assert len(pins) == 10, "the 7 pins 020 counted as dropped are back"
+    assert pins["3"] == ("Q1G", "CHG") and pins["4"] == ("Q1S", "CHS")
+    assert LLC_RECOVERED_PINS_MEASURED == 14
 
 
-def test_the_parse_count_is_what_the_parser_counts():
+def test_the_parse_count_is_what_the_parser_counts(tmp_path):
     # 同一个文件、同一个入口：独立数一遍，与 CLI 报的必须是同一个数。
     stats = ParseStats()
     build_schematic_model(LLC, parse_stats=stats)
-    assert stats.pins_dropped_no_number == LLC_DROPPED_PINS_MEASURED
+    assert stats.pins_dropped_no_number == 0
     assert stats.components_without_symbol == 0
+
+    # 计数本身没有被拆掉：合成流里那两个真没脚号的脚照样数、照样报。
+    stats = ParseStats()
+    model = build_schematic_model(_unnumbered(tmp_path), parse_stats=stats)
+    assert stats.pins_dropped_no_number == 2
+    assert [pin.number for pin in model.components["Q1"].pins] == ["1"]
 
 
 def test_the_md_summary_carries_the_chinese_hint(tmp_path, capsys):
     md = tmp_path / "r.md"
-    assert cli.main(["review", str(LLC), "--view", "schematic", "--md", str(md)]) == 0
+    path = _unnumbered(tmp_path)
+    assert cli.main(["review", str(path), "--view", "schematic", "--md", str(md)]) == 0
     capsys.readouterr()
     text = md.read_text(encoding="utf-8")
 
-    hint = parse_drop_hint(LLC_DROPPED_PINS_MEASURED, 0)
+    hint = parse_drop_hint(2, 0)
     assert hint in text
     assert "审查覆盖不完整，结果可能漏报" in hint
     # 位置：中文摘要节内、"没有发现问题"结论之后（它解释的正是这句话）；报告开头
@@ -349,8 +397,9 @@ def test_the_pcb_view_never_fills_the_drop_counters():
 
 
 def test_the_pcb_view_of_the_same_file_gets_no_note(capsys):
-    # 同一份文件、显式 pcb 视图：丢脚确实存在（schematic 视图报 14），但 pcb 视图
-    # 的报告没有漏掉任何它本该看到的东西——那句话在那里会是假的。
+    # 同一份文件、显式 pcb 视图：pcb 视图的报告没有漏掉任何它本该看到的东西
+    # ——那句话在那里会是假的。（049 前这条注释说"schematic 视图报 14"，现在两侧
+    # 都是 0：schematic 侧因为脚号被按 parentId 找回来了，pcb 侧一如既往。）
     code = cli.main(["review", str(LLC), "--view", "pcb"])
     out = capsys.readouterr().out
     assert code == 0

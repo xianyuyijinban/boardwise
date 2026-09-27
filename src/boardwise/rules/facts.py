@@ -1240,9 +1240,32 @@ class UsbCcPulldown(FactsRule):
 
         None ohms with a designator means "a candidate exists but its value
         does not parse" -- UNKNOWN territory. None designator means no
-        candidate at all."""
+        candidate at all.
+
+        A part the shelf calls something **other than a resistor** is never the
+        answer. That filter is the 017 leftover: the Type-C socket has a foot on
+        each of the two nets by construction (its CC pin on ``net``, its GND
+        pins on ``to_net``), so it passes the two-feet test -- and whenever it
+        came first in the net's member order it *shadowed* the real pull-down,
+        whose value was never read (measured on the FPC board: R24/R27 are 5.1K
+        exactly as designed, yet the rule could only answer UNKNOWN, because
+        ``parse_resistance_ohms('TYPE-C ...')`` is None and the row was built
+        from the connector). A part with **no** shelf entry still counts as
+        resistor-like when its value parses as a resistance -- the same "value
+        before prefix" reading the rule's own docstring takes (the U3 lesson).
+
+        A non-resistor that bridges the two nets is kept as the **fallback**
+        answer when nothing resistor-like is on the net at all. That is not
+        politeness: the caller's "no candidate" branch is an ERROR, and the
+        bridging non-resistor is exactly the case where the answer is "a part is
+        there but its value is not a resistance" (UNKNOWN). Measured 2026-09-27
+        on the injected duplicate-designator board: the duplicate name makes the
+        model keep the *other* page's R24, so the CC net reads as having no
+        resistor while the board has one -- answering ERROR there would be the
+        model's own duplicate-name artifact read as a board defect."""
         if not net:
             return None, None
+        shadow: Component | None = None
         for designator, _pin in model.nets.get(net, Net("x", [])).pins:
             comp = model.components.get(designator)
             if comp is None:
@@ -1250,9 +1273,27 @@ class UsbCcPulldown(FactsRule):
             nets = [p.net for p in comp.pins if p.net]
             if to_net not in nets:
                 continue
-            ohms = parse_resistance_ohms(comp.value or "")
-            return ohms, comp.designator
+            if self._resistor_like(comp):
+                return parse_resistance_ohms(comp.value or ""), comp.designator
+            if shadow is None:
+                shadow = comp
+        if shadow is not None:
+            return parse_resistance_ohms(shadow.value or ""), shadow.designator
         return None, None
+
+    def _resistor_like(self, comp: Component) -> bool:
+        """Whether the shelf -- or, for a part the shelf does not know, the
+        value's own unit -- says this part is a resistor.
+
+        The shelf wins when it declares a category: a connector or a capacitor
+        is not made a resistor by a value that happens to parse (a 0402 ferrite
+        bead's ``600`` is 600 ohms to the ohm parser). An undeclared or absent
+        entry falls back to the value, which is how the rule has always let a
+        part with no MPN be judged at all."""
+        entry = self.entry_for(comp)
+        if entry is not None and entry.category:
+            return entry.category == "resistor"
+        return parse_resistance_ohms(comp.value or "") is not None
 
     def _rows(self, model: DesignModel) -> list[tuple[Outcome, str | None]]:
         rows: list[tuple[Outcome, str | None]] = []

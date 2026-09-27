@@ -414,6 +414,44 @@ truncated last line of the fixture.
 - `stats.records_by_type` is the **whole-file** census; `stats.pcb_records`
   and the element lists are PCB-document only. Do not compare them directly.
 
+### 8.1 Schematics: a SYMBOL pin attribute is owned by `parentId` **[confirmed]**
+
+A SYMBOL document's pins arrive as `PIN` records and their attributes
+(`Pin Number`, `Pin Name`, `Pin Type`) as `ATTR` records whose `parentId` is the
+pin's element id — the `PIN` row's own `id`, or the synthesised `e<zIndex>` a V3
+export writes for `NO_CONNECT` parents. **Position is not ownership** (042's
+lesson, one level down): 3.2.186's incremental save appends a changed pin's
+attributes to the **end** of the document.
+
+Measured 2026-09-27:
+
+- the 级联多电平 module symbol (`f371d0767f223ad5` in both `级联多电平-*` fixtures,
+  and the same library part in `llc_board.epro2`) keeps `Pin Number` `'3'..'10'`
+  in one block *after* its last `PIN` row, each naming its own pin's record id
+  (`52d927f901cf5fe5` …). Reading them by position loses 7 pins per placement
+  (14 on the main board's two instances) and writes the wrong number onto the
+  pin that happened to be open last;
+- the FPC board's PS7516 symbol is the **other** order — every pin's attributes
+  precede its `PIN` row — which shifts each number onto its neighbour (12 pins
+  lost, U8's ground pin sitting on an auto-named island);
+- a run that reaches the end of the document with a position but no
+  `Pin Number` **anywhere** is a genuinely unnumbered pin: there is no key to
+  file it under, so the whole pin (name, position, connections) is dropped and
+  counted in `ParseStats.pins_dropped_no_number`. Since 049 no committed fixture
+  drops one.
+
+Two conventions that bite when reading these ids:
+
+- a `PIN` row's `id` and the synthesised `e<zIndex>` **may differ** (12 of the
+  golden fixture's PIN rows), and one pin's ref can equal a *neighbour's* id
+  (the synthetic eprj3 stream: `id=e1,e2` with refs `e2,e3`) — keep the two
+  indexes apart, never merged into one dict;
+- a device that exists **only in the PCB document** has no schematic record at
+  all, so the schematic model cannot see it. Measured: `U3` on
+  `级联多电平-主拓扑_2026-09-27` — the string `U3` occurs exactly once in the
+  2 MB stream, as a PCB `Designator`, and the PCB view reads it with 10 pads and
+  no nets. That is a source fact, not a parse gap.
+
 ## 9. Deviations from the earlier survey
 
 The notes in `docs/api-survey.md` and the task brief were right about the
