@@ -28,7 +28,24 @@ Determinism is a contract, not a nicety: two runs on the same model produce
 byte-identical markdown. Everything iterates in sorted order, nothing carries a
 timestamp, and a chain's member list is sorted — a skeleton that varies between
 runs cannot be diffed, and a diff is how a human reviews it (and how the intent
-slots stay a living document).
+slots stay a living document). The contract is stated in two halves since 053
+§2.2, because the artifact is now two files:
+
+* the **skeleton** (``architecture.md``) is deterministic with respect to the
+  **model** — it is generated and overwritten, so a hand edit there is lost;
+* the **merged view** (``report.json``'s ``architecture`` section) is
+  deterministic with respect to **(model + the design-intent file)** — the
+  engineer-owned half, which this module only ever reads.
+
+:data:`INTENT_FILE_NAME` is that second half. It is created once, as an all-TODO
+template isomorphic to the skeleton, and never rewritten afterwards (052 §2.2's
+measured defect was the opposite: a filled ``targetVoltage: 3.3V`` came back as
+``TODO`` on the next run). Each slot is addressed by a stable id
+``<projectUuid>/<boardUuid>/<sectionKey>/<slotKey>`` and carries the **signature**
+of the object it is about (a rail's node set, a chain's member sequence, a bus
+family's nets). When the drawing changes underneath a recorded answer, the slot
+is marked :data:`STALE_MARK` in the merged view — not deleted, not overwritten,
+and the run still reports.
 
 Offline and self-contained: the model in, markdown and a count summary out. No
 network, no clock, no randomness, no bridge.
@@ -36,6 +53,8 @@ network, no clock, no randomness, no bridge.
 
 from __future__ import annotations
 
+import hashlib
+import os
 import re
 from dataclasses import dataclass, field
 
@@ -50,6 +69,32 @@ from .power_domains import (
 
 #: The file name the report points at (the CLI writes it beside report.json).
 ARCH_FILE_NAME = "architecture.md"
+
+#: The engineer-owned half of the pair (053 §2.2). ``architecture.md`` is
+#: generated and rewritten on every run, so a hand-filled skeleton loses the fill
+#: (052 §2.2 reproduces exactly that); the answers live here instead. This module
+#: only ever **reads** it: absent, a caller writes :func:`render_intent_template`;
+#: present, not one character of it is changed.
+INTENT_FILE_NAME = "design-intent.md"
+
+#: ``architecture.md``'s second line. The banner is the whole point of splitting
+#: the two files: a reader who opens the generated file must be told, in the file
+#: itself, where a hand-fill is safe.
+BANNER = (
+    "> **自动生成，手填无效——设计意图请填 `design-intent.md`**"
+    "（生成器对该文件只读：不存在就建全 TODO 模板，存在则一字不改）。"
+)
+
+#: The mark the merged view carries on a slot whose recorded signature no longer
+#: matches the drawing (053 §2.2). Explicit, never silent: the recorded value
+#: stays exactly where it is, it is only flagged as needing a second look.
+STALE_MARK = "stale: 图纸已变，此槽待复核"
+
+#: The provenance spelling the intent file's `来源` column uses: who wrote the
+#: answer, and when. Free text is the value; this is the *source* column, so a
+#: `TODO` value with an `ai-proposal@…` source is still readable as a proposal.
+PROVENANCE_KINDS = ("engineer", "ai-proposal", "ai-confirmed")
+
 
 #: The slot placeholder. One spelling, so a reader (or a test, or the AI) can
 #: find every slot the same way and count what is still owed.
@@ -191,11 +236,300 @@ class ArchResult:
     ``markdown`` is the artifact itself (written to ``architecture.md``);
     ``section`` is the count summary the checkup report carries under
     ``architecture`` — the chains' names and members plus the per-board counts,
-    so a machine can see what the AI was asked to walk without parsing prose.
+    so a machine can see what the AI was asked to walk without parsing prose. It
+    is the **merged view** since 053 §2.2: ``section["slots"]`` is the skeleton's
+    slots with the design-intent file's answers merged in (a filled slot carries
+    its value and source, a TODO stays `TODO`, a slot whose object changed carries
+    :data:`STALE_MARK`).
+
+    ``intent_markdown`` is the paired ``design-intent.md`` — the all-TODO template
+    a caller writes **only when that file does not exist yet**, and ``intent_present``
+    says whether the merge had a file to read at all.
     """
 
     markdown: str
     section: dict
+    intent_markdown: str = ""
+    intent_present: bool = False
+
+
+# ---------------------------------------------------------------------------
+# 053 §2.2 — the stable slot id, the object signature, and the intent file
+# ---------------------------------------------------------------------------
+
+
+def _part(text: str) -> str:
+    """One slash-free segment of a stable slot id.
+
+    The id's whole contract is that a consumer can split it on ``/`` and find the
+    project, the board, the section and the slot — so a title that happens to
+    contain a slash (or whitespace) is folded to ``_`` rather than allowed to
+    invent an extra segment. This is a *fixing* of the id, not a rename: the same
+    title always folds the same way, so the id stays stable across runs.
+    """
+    folded = re.sub(r"\s+", "_", str(text or "").replace("/", "_"))
+    return folded or "_"
+
+
+def _project_uuid(model: object, given: str = "") -> tuple[str, str]:
+    """``(projectUuid, where it came from)`` for the slot ids.
+
+    The live tiers read the real one out of `doc.list`'s focused project
+    (`source.project.projectUuid`), which is the answer to prefer — it is the
+    editor's own identity and it survives a file being renamed. An offline tier
+    has no such number, so the model's source file name is folded into a stable
+    digest instead: ``file-<12 hex>``. A digest rather than the name itself,
+    because an id has to survive odd characters; the human-readable file name is
+    kept beside it in the template's metadata (`projectSource`).
+    """
+    if given:
+        return _part(given), "doc.list 的 focusedProject.projectUuid"
+    source = str(getattr(model, "source", "") or "")
+    name = os.path.basename(source)
+    if name:
+        digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:12]
+        return f"file-{digest}", f"离线档按文件名折叠（{name}）"
+    return "project", "无来源（空模型）"
+
+
+def _board_uuid(board: object, title: str) -> str:
+    """The container's board uuid, or the board title when it has none.
+
+    A project with no ``BOARD`` document gets an *implicit* board whose
+    :class:`~boardwise.core.model.BoardRef.uuid` is empty (040b), and a plain
+    single-board model has no board ref at all; the title is the honest stand-in
+    in both cases, and it is what the report's own `model.boards[]` names.
+    """
+    ref = getattr(board, "board", None)
+    uuid = getattr(ref, "uuid", "") if ref is not None else ""
+    return _part(uuid or title)
+
+
+def object_signature(members: list[str]) -> str:
+    """``sha256:<16 hex>`` over an object's members — the stale test's fingerprint.
+
+    What is hashed is the *shape of the object the slot is about*, never the
+    slot's own key: a rail's node set (its pins, sorted), a chain's member
+    sequence (sorted, designator and pin name included, because a symbol rename is
+    a drawing change too), a bus family's nets. The digest is truncated to 16 hex
+    because it is compared for equality by a human eyeballing a diff, not by an
+    adversary — and it is digests rather than the members themselves so that a
+    slot row stays one line of markdown.
+    """
+    digest = hashlib.sha256("|".join(members).encode("utf-8")).hexdigest()
+    return f"sha256:{digest[:16]}"
+
+
+def _slot_record(
+    *,
+    project_uuid: str,
+    board_uuid: str,
+    title: str,
+    kind: str,
+    obj: str,
+    key: str,
+    signature: str,
+) -> dict:
+    """One skeleton slot, before the intent file is merged into it.
+
+    ``sectionKey`` is ``<kind>:<object>`` (``power:U+``, ``analog:U+``,
+    ``intent:U+``…), which keeps the id's documented four segments while still
+    naming *which* rail or chain the slot belongs to. The kinds are disjoint by
+    construction — a rail is never also listed as a chain (044 §2's fixed
+    classification order) — so `<kind>:<object>` is unique within a board.
+    """
+    section_key = f"{kind}:{obj}"
+    return {
+        "id": f"{project_uuid}/{board_uuid}/{section_key}/{key}",
+        "board": title,
+        "boardUuid": board_uuid,
+        "section": section_key,
+        "sectionKind": kind,
+        "object": obj,
+        "key": key,
+        "label": SLOT_LABELS.get(key, ""),
+        "value": TODO,
+        "source": "",
+        "filled": False,
+        "stale": False,
+        "staleReason": "",
+        "orphan": False,
+        "signature": signature,
+        "recordedSignature": "",
+    }
+
+
+def _cells(line: str) -> list[str]:
+    """A markdown table row's cells, honouring ``\\|`` as a literal pipe."""
+    placeholder = "\x00"
+    row = line.strip().replace("\\|", placeholder)
+    if not row.startswith("|"):
+        return []
+    cells = [cell.replace(placeholder, "|").strip() for cell in row.split("|")]
+    if cells and cells[0] == "":
+        cells = cells[1:]
+    if cells and cells[-1] == "":
+        cells = cells[:-1]
+    return cells
+
+
+def parse_intent(text: str) -> dict[str, dict]:
+    """``design-intent.md`` -> ``{slot id: {value, source, signature}}``.
+
+    Deliberately forgiving, because the file belongs to a human: only rows whose
+    first cell looks like a four-segment slot id are read, an unknown extra column
+    is ignored, and a value of ``TODO``/empty counts as unfilled rather than as an
+    answer. A row whose `sig=` cell is empty records *no* signature — the merge
+    then cannot claim the slot is current, so it simply leaves it unflagged
+    instead of calling it stale on a guess.
+    """
+    out: dict[str, dict] = {}
+    for line in str(text or "").splitlines():
+        cells = _cells(line)
+        if len(cells) < 4:
+            continue
+        slot_id = cells[0]
+        if slot_id.count("/") != 3 or ":" not in slot_id:
+            continue
+        value = cells[2]
+        source = cells[3]
+        signature = cells[4] if len(cells) > 4 else ""
+        if signature.startswith("sig="):
+            signature = signature[4:].strip()
+        out[slot_id] = {
+            "value": "" if value == TODO else value,
+            "source": "" if source == TODO else source,
+            "signature": "" if signature in (TODO, "—", "-") else signature,
+        }
+    return out
+
+
+def merge_intent(slots: list[dict], records: dict[str, dict] | None) -> tuple[list[dict], dict]:
+    """skeleton slots ⊕ the intent file's answers — 053 §2.2's merged view.
+
+    Three rules, and each one exists because the alternative is silent loss:
+
+    * a recorded value goes in with its source; a `TODO` stays `TODO`;
+    * a recorded signature that no longer equals the object's current one marks
+      the slot :data:`STALE_MARK` — **the recorded value stays exactly as written**
+      (no delete, no overwrite), and the caller is told, not blocked;
+    * a recorded row whose object is **gone from the drawing** is listed too
+      (``orphan: true``, marked stale) instead of being dropped, because a slot
+      that silently disappears is the failure mode this whole file exists to stop.
+
+    Returns ``(merged slots, counts)``; the counts are what the report's
+    ``architecture`` section and the completion verdict read.
+    """
+    records = records or {}
+    known: set[str] = set()
+    merged: list[dict] = []
+    filled = 0
+    stale = 0
+    for slot in slots:
+        entry = dict(slot)
+        known.add(entry["id"])
+        record = records.get(entry["id"])
+        if record:
+            if record["value"]:
+                entry["value"] = record["value"]
+                entry["filled"] = True
+            entry["source"] = record["source"]
+            entry["recordedSignature"] = record["signature"]
+            if record["signature"] and record["signature"] != entry["signature"]:
+                entry["stale"] = True
+                entry["staleReason"] = STALE_MARK
+        filled += 1 if entry["filled"] else 0
+        stale += 1 if entry["stale"] else 0
+        merged.append(entry)
+    for slot_id in sorted(records):
+        if slot_id in known:
+            continue
+        record = records[slot_id]
+        parts = slot_id.split("/")
+        if len(parts) != 4:
+            continue  # not a slot id: nothing to place it against
+        _, _, section_key, key = parts
+        kind = section_key.split(":", 1)[0]
+        merged.append({
+            "id": slot_id,
+            "board": "",
+            "boardUuid": parts[1],
+            "section": section_key,
+            "sectionKind": kind,
+            "object": section_key.split(":", 1)[1] if ":" in section_key else "",
+            "key": key,
+            "label": SLOT_LABELS.get(key, ""),
+            "value": record["value"] or TODO,
+            "source": record["source"],
+            "filled": bool(record["value"]),
+            "stale": True,
+            "staleReason": STALE_MARK + "（图纸里已无此对象——不删，只标）",
+            "orphan": True,
+            "signature": "",
+            "recordedSignature": record["signature"],
+        })
+        filled += 1 if record["value"] else 0
+        stale += 1
+    return merged, {
+        "slots": len(merged),
+        "filled": filled,
+        "stale": stale,
+        "orphans": sum(1 for entry in merged if entry["orphan"]),
+    }
+
+
+def render_intent_template(
+    slots: list[dict],
+    *,
+    project_uuid: str,
+    project_source: str = "",
+) -> str:
+    """The first ``design-intent.md``: isomorphic to the skeleton, all TODO.
+
+    Written by a caller **only when the file does not exist** (:func:`parse_intent`
+    is the other half). The signature column is this file's metadata area: it
+    records what the object looked like when the row was created, which is what
+    makes :data:`STALE_MARK` possible later without the tool ever editing the row.
+    """
+    lines: list[str] = [
+        "# 设计意图（design-intent.md）",
+        "",
+        "> 这份文件**归工程师所有**：生成器对它只读——不存在时建一份全 TODO 模板，存在则**一字不改**。"
+        "归档骨架在 `" + ARCH_FILE_NAME + "`（自动生成，手填无效）。",
+        "> 值格式：自由文本；来源标注写在同一行的「来源」列（"
+        + " / ".join(f"`{kind}@2026-09-27`" for kind in PROVENANCE_KINDS) + "）。",
+        "> 稳定 ID：`<projectUuid>/<boardUuid>/<sectionKey>/<slotKey>`；"
+        "`sectionKey` = `<节>:<对象>`（节：power / analog / control / bus / intent）。",
+        "> 「sig=」列是该槽**关联对象的签名**（电源树节点集 / 链路器件序列 / 总线成员集）。"
+        "图纸一变，checkup 会把该槽标 `" + STALE_MARK + "`，但**不会改写这一行**——"
+        "复核完，把这一行的 sig 换成报告里 `architecture.slots[]` 给的新值即可。",
+        "> 填不了的**显式写「不适用」，别留空**；值里不要写 `|`（表格分隔符），要写就写 `\\|`。",
+        "",
+        f"projectUuid: {project_uuid}",
+        f"projectSource: {project_source or '（未知）'}",
+        f"generator: boardwise.core.architecture（044 M1 骨架 / 053 §2.2 意图合并）",
+        "",
+    ]
+    boards: dict[str, list[dict]] = {}
+    for slot in slots:
+        boards.setdefault(slot["board"] or "（板未知）", []).append(slot)
+    if not slots:
+        lines.append("（这份模型没有任何槽位：没有电源轨、没有链、没有命中协议网名的网。）")
+        lines.append("")
+    for title, board_slots in boards.items():
+        board_uuid = board_slots[0]["boardUuid"]
+        lines.append(f"## 板：{title}（boardUuid `{board_uuid}`）")
+        lines.append("")
+        lines.append("| 稳定 ID | 槽位 | 值 | 来源 | sig= |")
+        lines.append("|---|---|---|---|---|")
+        for slot in board_slots:
+            label = f"{slot['key']} · {slot['label']}" if slot["label"] else slot["key"]
+            lines.append(
+                f"| {slot['id']} | {slot['object']} · {label} | {TODO} | {TODO} "
+                f"| sig={slot['signature']} |"
+            )
+        lines.append("")
+    return "\n".join(lines).rstrip("\n") + "\n"
 
 
 @dataclass
@@ -508,11 +842,28 @@ def _render_board(
     lines: list[str],
     section_board: dict,
     section_chains: dict,
+    section_slots: list[dict],
+    *,
+    project_uuid: str,
 ) -> None:
-    """Append one board's five sections, and fill the machine summary in place."""
+    """Append one board's five sections, and fill the machine summary in place.
+
+    ``section_slots`` collects one record per slot in the same order the document
+    writes them (power tree → analog → control → bus → intent), each with its
+    stable id and the signature of the object it is about — 053 §2.2's join key,
+    which is what lets the intent file's answers be merged back in without ever
+    parsing prose.
+    """
     rails, chains, buses, unclassified = _chains_and_rails(board, library, title)
     control = [chain for chain in chains if chain.kind == KIND_CONTROL]
     analog = [chain for chain in chains if chain.kind == KIND_ANALOG]
+    board_uuid = _board_uuid(board, title)
+
+    def add_slot(kind: str, obj: str, key: str, signature: str) -> None:
+        section_slots.append(_slot_record(
+            project_uuid=project_uuid, board_uuid=board_uuid, title=title,
+            kind=kind, obj=obj, key=key, signature=signature,
+        ))
 
     lines.append(f"## 板：{title}（{len(board.components)} 器件 / {len(board.nets)} 网）")
     lines.append("")
@@ -568,6 +919,11 @@ def _render_board(
             + ("、".join(f"`{item}`" for item in rail.loads) or "（无）")
         )
         lines.append("")
+        # The slot's signature is the rail's node set — what "this rail" means
+        # structurally, so a drawing that re-wires it flags the recorded answer.
+        rail_signature = object_signature(rail.loads)
+        for key in POWER_SLOTS:
+            add_slot(KIND_POWER, rail.net, key, rail_signature)
 
     # --- 2. analog chains
     lines.append(f"### 2. 模拟链（{len(analog)} 条）")
@@ -589,6 +945,7 @@ def _render_board(
         for slot in chain.slots:
             lines.append(f"- {slot}: {TODO}  # {SLOT_LABELS.get(slot, '')}")
         lines.append("")
+        _chain_slots(chain, add_slot)
 
     # --- 3. control chains
     lines.append(f"### 3. 控制链（{len(control)} 条）")
@@ -610,6 +967,7 @@ def _render_board(
         for slot in chain.slots:
             lines.append(f"- {slot}: {TODO}  # {SLOT_LABELS.get(slot, '')}")
         lines.append("")
+        _chain_slots(chain, add_slot)
 
     # --- 4. buses
     lines.append(f"### 4. 总线表（{len(buses)} 类）")
@@ -627,26 +985,37 @@ def _render_board(
         for slot in BUS_SLOTS:
             lines.append(f"- {slot}: {TODO}  # {SLOT_LABELS.get(slot, '')}")
         lines.append("")
+        # A bus family's signature is its net set: adding or losing a member net
+        # is a change the recorded completeness judgement has to hear about.
+        family_signature = object_signature(sorted(buses[family]))
+        for slot in BUS_SLOTS:
+            add_slot(KIND_BUS, family, slot, family_signature)
 
     # --- 5. intent slots (§6)
     lines.append(f"### 5. 设计意图槽位（{len(rails) + len(chains)} 条对象）")
     lines.append("")
     lines.append(
         "这些数只存在于工程师脑中：工具推不出来，AI 也不许编。"
-        "**推断不了的显式问工程师**，答后把这里固化成审查基准（活文档）：以后 finding 以它为尺，"
-        "需求变了就改这里。"
+        "**推断不了的显式问工程师**，答后把答案写进 `" + INTENT_FILE_NAME + "`"
+        "（这份骨架是自动生成的，手填无效）：以后 finding 以它为尺，需求变了就改那里。"
     )
     lines.append("")
     lines.append("| 对象 | " + " | ".join(INTENT_SLOTS) + " |")
     lines.append("|---|" + "---|" * len(INTENT_SLOTS))
+    rail_signatures = {rail.net: object_signature(rail.loads) for rail in rails}
+    chain_signatures = {chain.name: object_signature(chain.members) for chain in chains}
     for rail in rails:
         lines.append(f"| 轨 `{rail.net}` | " + " | ".join(TODO for _ in INTENT_SLOTS) + " |")
+        for key in INTENT_SLOTS:
+            add_slot(KIND_INTENT, rail.net, key, rail_signatures[rail.net])
     for chain in chains:
         label = "模拟链" if chain.kind == KIND_ANALOG else "控制链"
         lines.append(
             f"| {label} `{chain.name}` | "
             + " | ".join(TODO for _ in INTENT_SLOTS) + " |"
         )
+        for key in INTENT_SLOTS:
+            add_slot(KIND_INTENT, chain.name, key, chain_signatures[chain.name])
     lines.append("")
 
     # --- the leftovers, counted rather than dropped
@@ -697,8 +1066,25 @@ def _render_board(
     )
 
 
+def _chain_slots(chain: "_Chain", add_slot) -> None:
+    """Register one chain's own slots (``analog:U+`` → ``quantity``/``range``/…).
+
+    The chain's *design-intent* row (``intent:U+`` → ``targetVoltage``/…) is
+    registered by the §5 loop instead, where the document writes it — one object,
+    two kinds of question, two stable ids, one place each.
+    """
+    signature = object_signature(chain.members)
+    kind = KIND_CONTROL if chain.kind == KIND_CONTROL else KIND_ANALOG
+    for key in chain.slots:
+        add_slot(kind, chain.name, key, signature)
+
+
 def generate_architecture(
-    model: DesignModel | object, *, library: PartLibrary | None = None
+    model: DesignModel | object,
+    *,
+    library: PartLibrary | None = None,
+    intent_text: str | None = None,
+    project_uuid: str = "",
 ) -> ArchResult:
     """The architecture skeleton for one board or a whole project.
 
@@ -712,6 +1098,14 @@ def generate_architecture(
     ``ic.mcu`` classification and its regulators' output voltages). Without it the
     skeleton is still generated — with more `TODO`s, which is the honest answer
     when the shelf is not readable.
+
+    ``intent_text`` is the **raw text of the directory's** ``design-intent.md``,
+    or ``None`` when that file does not exist yet (053 §2.2). It is read, never
+    written: the merged view in ``section["slots"]`` is a pure function of
+    ``(model, intent_text)``, so two runs over the same pair produce the same
+    bytes *and* the same answer to "did the drawing move under this slot?".
+    ``project_uuid`` is the live tier's ``focusedProject.projectUuid``; offline it
+    is derived from the model's source file (see :func:`_project_uuid`).
     """
     from .model import ProjectModel
 
@@ -723,13 +1117,16 @@ def generate_architecture(
         ]
     else:
         boards = [("Board1", model)]
+    project_uuid, project_source = _project_uuid(model, project_uuid)
 
     lines: list[str] = [
         "# 架构骨架（architecture.md）",
         "",
+        BANNER,
         "> 工具只列**骨架与槽位**，判不出来的一律留 `" + TODO + "`——填槽与自洽性走查是 AI 的活"
         "（SKILL「架构走查」）；推断不了的设计意图要**显式问工程师**，不许编。",
-        "> 生成器：`boardwise arch`（044 M1）。确定性输出：同输入逐字节相同。",
+        "> 生成器：`boardwise arch`（044 M1）。骨架对**模型**确定：同输入逐字节相同；"
+        "报告里的合并视图（骨架 ⊕ " + INTENT_FILE_NAME + "）对**（模型 + 意图文件）**确定。",
         "> 槽位键（英文）是给机器解析用的，" + TODO + " 是**欠账**不是空白。",
         "",
     ]
@@ -737,33 +1134,59 @@ def generate_architecture(
     section_chains: dict[str, list] = {
         "rails": [], "analog": [], "control": [], "bus": [],
     }
+    section_slots: list[dict] = []
     for title, board in boards:
         section_board: dict = {}
         if len(boards) > 1:
             lines.append(f"<!-- board: {title} -->")
             lines.append("")
-        _render_board(board, library, title, lines, section_board, section_chains)
+        _render_board(
+            board, library, title, lines, section_board, section_chains,
+            section_slots, project_uuid=project_uuid,
+        )
         section_boards.append(section_board)
 
     totals = {
         key: sum(board[key] for board in section_boards)
         for key in ("rails", "analogChains", "controlChains", "buses", "unclassifiedNets")
     }
+    merged_slots, counts = merge_intent(section_slots, parse_intent(intent_text or ""))
     # Every slot the AI owes, counted one way: chains and rails each carry their
-    # own slots plus an intent block, and each bus family carries its own.
-    todo_slots = (
-        len(section_chains["rails"]) * (len(POWER_SLOTS) + len(INTENT_SLOTS))
-        + len(section_chains["analog"]) * (len(ANALOG_SLOTS) + len(INTENT_SLOTS))
-        + len(section_chains["control"]) * (len(CONTROL_SLOTS) + len(INTENT_SLOTS))
-        + len(section_chains["bus"]) * len(BUS_SLOTS)
-    )
+    # own slots plus an intent block, and each bus family carries its own. The
+    # merged view is what is counted, so a filled slot lowers `todoSlots` — that
+    # number is the *outstanding* work, not the skeleton's size (`slots` is that).
+    todo_slots = counts["slots"] - counts["filled"]
 
     section = {
         "file": ARCH_FILE_NAME,
+        "intent": {
+            "file": INTENT_FILE_NAME,
+            "present": intent_text is not None,
+            "projectUuid": project_uuid,
+            "projectSource": project_source,
+            "filled": counts["filled"],
+            "stale": counts["stale"],
+            "orphans": counts["orphans"],
+        },
         "boards": section_boards,
-        "totals": {**totals, "intentObjects": totals["rails"] + totals["analogChains"] + totals["controlChains"], "todoSlots": todo_slots},
+        "totals": {
+            **totals,
+            "intentObjects": totals["rails"] + totals["analogChains"] + totals["controlChains"],
+            "slots": counts["slots"],
+            "filled": counts["filled"],
+            "stale": counts["stale"],
+            "todoSlots": todo_slots,
+        },
+        "slots": merged_slots,
         "slotKeys": {kind: list(slots) for kind, slots in SLOT_VOCABULARY.items()},
         "chains": section_chains,
-        "generator": "boardwise.core.architecture（044 M1：骨架；能力失配质疑见任务书 §6，未在本切片生成）",
+        "generator": "boardwise.core.architecture（044 M1：骨架；053 §2.2：设计意图合并视图）",
     }
-    return ArchResult(markdown="\n".join(lines).rstrip("\n") + "\n", section=section)
+    return ArchResult(
+        markdown="\n".join(lines).rstrip("\n") + "\n",
+        section=section,
+        intent_markdown=render_intent_template(
+            section_slots, project_uuid=project_uuid, project_source=project_source,
+        ),
+        intent_present=intent_text is not None,
+    )

@@ -72,8 +72,11 @@ boardwise checkup --file board.epro2 --out DIR      # no editor: offline fallbac
 ```
 
 What lands in `--out`: `report.json` (the contract), `report.md` (the same content
-for a human) and `canvas-<page>.png` (one per schematic page; PCB pages are not
-rendered yet).
+for a human), `canvas-<page>.png` (one per schematic page; PCB pages are not
+rendered yet) and **a pair of architecture files** — `architecture.md`, the
+generated skeleton (**rewritten on every run**: its second line says hand-fills
+are lost), and `design-intent.md`, the engineer-owned design intent (created once
+as an all-`TODO` template, then **read-only**: the generator never rewrites it).
 
 Exit codes: `0` no ERROR / `1` an ERROR was found (an ERC `error`/`fatalError`
 count, a PCB DRC leaf, or a rule's ERROR finding) / `2` unusable input /
@@ -81,7 +84,7 @@ count, a PCB DRC leaf, or a rule's ERROR finding) / `2` unusable input /
 refused) — `3` is never "the board is clean". A check that could not run is
 `{checked: false, reason}` and carries no counts.
 
-`report.json` is `schema: "boardwise.checkup/2"`:
+`report.json` is `schema: "boardwise.checkup/5"`:
 
 | Section | What it holds |
 |---|---|
@@ -91,8 +94,18 @@ refused) — `3` is never "the board is clean". A check that could not run is
 | `drc` | `schematic` (the editor's ERC **counts only**, with the per-page readings and the basis for their total) and `pcb` (its per-item tree, mapped: groups, leaf sentences, totals) |
 | `modules` | pages (multi-page projects) or connectivity clusters, each with its components, its findings by index and the evidence for its name |
 | `findings` | the offline rule engine's findings, the same shape `review --json` uses |
-| `ai_slots` | what is left to a model: `unknown_parts` (with why each is listed), `canvas_images`, `summary_template` |
+| `unreviewed_parts` | the datasheet gate: parts no rule can judge yet, each with the three ways to get its datasheet |
+| `warning_triage` | one slot per warning the report knows about, with `verdict`/`reason` left for a model |
+| `architecture` | the **merged view** of the skeleton and `design-intent.md`: `slots[]` (stable id `projectUuid/boardUuid/sectionKey/slotKey`, value, source, `stale`), `intent{}`, `totals{slots,filled,stale,todoSlots}` — **absent**, not empty, when the skeleton could not be generated |
+| `completion` | the complete statement: `scope{rules,boards,pages}`, `errors`, `unreviewedParts`, `warningsPendingTriage`, `architectureSlots{total,filled,stale}`, `openTodos`, `sourceVersions{ruleset,rulebody}` and `verdict` (`complete` / `complete-with-open-items` / `incomplete`) |
+| `ai_slots` | what is left to a model: `unknown_parts` (an alias of `unreviewed_parts`), `canvas_images`, `summary_template` |
 | `pending` | empty — present so a reader can tell "nothing owed" from "key missing" |
+
+`summary.mayClaimPassed` is **narrow on purpose** (it answers one question: "did
+the datasheet gate leave a part unjudged?"). For "is this review complete?", read
+`completion.verdict`. A slot whose recorded answer no longer matches the drawing
+is marked `stale: 图纸已变，此槽待复核` in the merged view — the recorded value is
+never deleted or overwritten, and the run is never blocked by it.
 
 The input type is picked from the extension:
 
@@ -116,6 +129,28 @@ each message states its limits):
 - `duplicate-designators`, `nc-and-must-connect`, `library-pin-consistency` — connectivity.
 - `supply-on-known-domain`, `domain-vs-range`, `ldo-dropout`, `usb-cc-pulldown` — power & paths.
 - `decap-required-caps`, `led-current`, `divider-output`, `rc-cutoff`, `value-mpn-match` — parameters.
+
+### Evaluating the rules (`review-eval`)
+
+`boardwise review-eval --annotations <set.json>… --split dev|holdout` scores the
+offline rules against the oracle-annotated sets in `reviewsets/`. Four numbers are
+routinely misread, so they are spelled out here:
+
+- **112/183 is not "61% of the circuits went unreviewed."** It is the share of
+  (rule × board) pairs where the rule reached at least one `UNKNOWN` outcome —
+  a missing *fact* (the shelf has no entry for that part), not a missing review.
+- **79/91 is not an editor highlighting success rate.** It counts findings whose
+  `target` or text already names a part or pin — a *location clue* a downstream
+  marker can use, not a verified highlight in the editor.
+- **12/14 (fix success) is a task-book registration, not a prospective
+  measurement.** It is the M3 close-out's record of live repair results; it is not
+  a success rate measured on users.
+- **59/59 (holdout detection and high-priority precision) is regression evidence,
+  not a proof of generalisation.** Those boards' failures already drove rule
+  changes (046/048), so they cannot stand in for unseen samples:
+  `outputs/017_generalization.md`, and the roles in
+  `tasks/017-eval-set-expansion.md` §九 — the current 15 boards are *regression*,
+  new boards enter as *unseen-validation* (frozen on arrival, never tuned against).
 
 ### Live bridge
 
@@ -373,14 +408,17 @@ boardwise checkup --file board.epro2 --out DIR       # 没编辑器：离线兜�
 ```
 
 `--out` 目录里：`report.json`（契约）、`report.md`（同一份内容，人读）、
-`canvas-<页名>.png`（每张原理图页一张；PCB 页暂不出图）。
+`canvas-<页名>.png`（每张原理图页一张；PCB 页暂不出图），以及**一对架构文件**——
+`architecture.md`（自动生成的骨架，**每次覆盖**，第二行横幅写明手填无效）与
+`design-intent.md`（**设计意图，归你所有**：不存在时建全 TODO 模板，之后生成器对它**只读**、
+一字不改——答案写这里才留得住）。
 
 退出码：`0` 无 ERROR / `1` 发现 ERROR（主机 ERC 的 error/fatalError 计数、主机 PCB DRC 的逐条、
 自有规则的 ERROR finding 任一命中）/ `2` 输入不可用 / `3` **在线状态不可陈述**（daemon 不通、
 扩展没连上、三级数据路全被拒）——`3` 绝不等于"板子干净"。没跑成的检查记成
 `{checked: false, reason}` 且**不带任何计数**。
 
-`report.json` 的 schema 是 `"boardwise.checkup/2"`：
+`report.json` 的 schema 是 `"boardwise.checkup/5"`：
 
 | 段 | 内容 |
 |---|---|
@@ -390,8 +428,16 @@ boardwise checkup --file board.epro2 --out DIR       # 没编辑器：离线兜�
 | `drc` | `schematic`（主机 ERC **只有聚合计数**，附逐页读数与合计口径）与 `pcb`（主机逐条树映射后的 groups/叶子句子/totals） |
 | `modules` | 多页工程按页、单页按连通性；每块含器件、findings 索引、命名依据 |
 | `findings` | 离线规则引擎的结果，形态与 `review --json` 一致 |
-| `ai_slots` | 留给模型的三件事：`unknown_parts`（含上榜原因）、`canvas_images`、`summary_template` |
+| `unreviewed_parts` | 手册闸：规则还判不了的器件，每颗列出三条取手册的通道 |
+| `warning_triage` | 每条已知警告一格，`verdict`/`reason` 留给模型填 |
+| `architecture` | 骨架与 `design-intent.md` 的**合并视图**：`slots[]`（稳定 ID `projectUuid/boardUuid/sectionKey/slotKey`、值、来源、`stale`）、`intent{}`、`totals{slots,filled,stale,todoSlots}`——骨架生成不了时该键**缺席**而不是空 |
+| `completion` | **完整结论**：`scope{rules,boards,pages}`、`errors`、`unreviewedParts`、`warningsPendingTriage`、`architectureSlots{total,filled,stale}`、`openTodos`、`sourceVersions{ruleset,rulebody}`、`verdict`（`complete` / `complete-with-open-items` / `incomplete`） |
+| `ai_slots` | 留给模型的三件事：`unknown_parts`（=`unreviewed_parts` 的旧名）、`canvas_images`、`summary_template` |
 | `pending` | 空——留着这个键，好让读者能区分"没有欠账"和"键不见了" |
+
+`summary.mayClaimPassed` 是**窄义**字段（只回答一件事：手册闸有没有留下未审器件）；要问"这轮审查
+完整了吗"，看 `completion.verdict`。合并视图里，某个槽记录下的答案与当前图纸不符时会被标
+`stale: 图纸已变，此槽待复核`——**记录的值不删不覆盖**，也不阻断出报告。
 
 按扩展名自动选择解析器：`.enet` 走网表，`.epro2` 走工程备份（额外打印焊盘 /
 走线 / 过孔数量）。备份若勾选了加密导出则无法读取，此时会提示重新导出时取消
@@ -410,6 +456,22 @@ boardwise checkup --file board.epro2 --out DIR       # 没编辑器：离线兜�
 如果你手上是一台干净的 Windows 机器，从零装到第一次审查看
 [`docs/install.md`](docs/install.md)：装 Python → `scripts/install.bat` → 编辑器里导入 `.eext` →
 配对 → `doctor` 全绿 → 第一次审查，每一步都有脚本和"应该看到什么"，面向硬件工程师、全程中文。
+
+### 评测（`review-eval`）
+
+`boardwise review-eval --annotations <标注.json>… --split dev|holdout` 拿 `reviewsets/` 里xianyuyijinban裁决过的
+标注集给离线规则打分。四个数字常被误读，这里一次说清：
+
+- **112/183 不是"61% 的电路没审到"**——它是 (规则 × 板) 组合里规则至少给出一个 `UNKNOWN` 的比例，
+  即**缺事实**（货架没有这颗料的条目），不是"没审"。
+- **79/91 不是编辑器高亮成功率**——它数的是 finding 的 `target`/文本**本身已带位号或引脚**的条数，
+  是给下游打标用的**定位线索**，不等于真机高亮成功。
+- **12/14（修复成功率）是任务书登记口径，不是前瞻实测**——它是 M3 收官记录的实机修复结果，
+  不是在用户身上测出来的成功率。
+- **59/59（holdout 检出与高优精确）是回归证据，不是泛化证明**——这些板上的失败已经参与过规则迭代
+  （046/048），不能当未见样本的证明；见 `outputs/017_generalization.md`，角色分家见
+  `tasks/017-eval-set-expansion.md` §九：现 15 板 = **regression** 红线，新板 = **unseen-validation**
+  （进仓即冻结、不参与规则调参）。
 
 ### 实时桥
 

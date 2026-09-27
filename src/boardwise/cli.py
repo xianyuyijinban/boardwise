@@ -2149,7 +2149,17 @@ def _cmd_review(args: argparse.Namespace) -> int:
 #: (chains, rails, the fixed slot vocabulary, and what is still `TODO`). Like
 #: `layout_review` it is **absent** rather than empty when it could not be
 #: generated, so "no skeleton" and "a skeleton with nothing in it" stay apart.
-CHECKUP_SCHEMA = "boardwise.checkup/4"
+#:
+#: `/5` since 053 §2.2 (the review close-out): the report carries `completion` —
+#: one section that says what the run *covered* (rules/boards/pages), what it
+#: still owes (`unreviewedParts`, `warningsPendingTriage`, the architecture's
+#: `architectureSlots{total,filled,stale}` and `openTodos`), which versions
+#: produced it (`sourceVersions`), and the resulting three-state `verdict`. It is
+#: the answer to the 052 §2.2 finding that `summary.mayClaimPassed` — which only
+#: ever asked "are there unreviewed parts?" — was being read downstream as a
+#: complete pass. `mayClaimPassed` keeps its name and its narrow meaning; this
+#: section is the complete statement. Fields are added, never renamed (031).
+CHECKUP_SCHEMA = "boardwise.checkup/5"
 
 #: What each tier actually read, spelled for the report's own header.
 #:
@@ -2193,6 +2203,7 @@ def _checkup_report(
     warning_triage: list[dict] | None = None,
     layout_review: dict | None = None,
     architecture: dict | None = None,
+    completion: dict | None = None,
 ) -> dict:
     """Assemble the report: what was read (batch 2), what was found (batch 3),
     what it means and what the model still has to do (batch 4).
@@ -2207,6 +2218,13 @@ def _checkup_report(
     skeleton written beside the report) and bumped the schema to `/4`. It follows
     `layout_review`'s rule exactly: **absent, not empty**, when the skeleton could
     not be generated.
+
+    053 §2.2 added `completion` (the run's coverage, what it still owes, the
+    source versions and the three-state `verdict`) and bumped the schema to `/5`;
+    `architecture` now carries the **merged view** (the skeleton with
+    `design-intent.md`'s answers folded in) rather than the bare skeleton. No
+    existing field changed meaning, which is why the three older sections and
+    `summary.mayClaimPassed` are untouched.
 
     Every section is real by now. `pending` is kept as an **empty** object rather
     than removed: a consumer that learned to read it finds "nothing owed" instead
@@ -2241,6 +2259,11 @@ def _checkup_report(
     # says nothing here rather than carrying an empty one.
     if architecture is not None:
         body["architecture"] = architecture
+    # 053 §2.2: the complete statement, always present (unlike `layout_review`,
+    # which is a switch): the verdict is what a downstream reader should ask, and
+    # "the section is missing" must never be how it learns there is nothing to say.
+    if completion is not None:
+        body["completion"] = completion
     return body
 
 
@@ -2256,9 +2279,13 @@ def _write_architecture(out_dir: Path, markdown: str) -> Path:
     """Write ``architecture.md`` beside the report (044 M1).
 
     A file rather than a report section, because the artifact is meant to be
-    walked, annotated and **diffed** by a human (and kept as the living record of
-    the design's intent). ``report.json`` carries the count summary and points
-    here with its `file` key.
+    walked, annotated and **diffed** by a human. ``report.json`` carries the count
+    summary and points here with its `file` key.
+
+    **Overwritten on every run**, deliberately: this file is generated, and 053
+    §2.2 moved the answers a hand edit used to leave here into
+    :func:`_write_design_intent`'s file, so the banner on its second line can say
+    "手填无效" without lying.
     """
     from .core.architecture import ARCH_FILE_NAME
 
@@ -2266,6 +2293,137 @@ def _write_architecture(out_dir: Path, markdown: str) -> Path:
     path = out_dir / ARCH_FILE_NAME
     path.write_text(markdown, encoding="utf-8")
     return path
+
+
+def _load_design_intent(out_dir: Path, notes: list[str]) -> str | None:
+    """The engineer-owned ``design-intent.md`` beside the report — or ``None``.
+
+    Read-only by construction: this function never writes, and the caller only
+    passes the text to the generator. An unreadable file is a *note* and a merge
+    over `TODO`s, never an overwrite — 053 §2.2's "不静默删、不覆盖、不阻断" applies
+    to a file the tool cannot even parse.
+    """
+    from .core.architecture import INTENT_FILE_NAME
+
+    path = out_dir / INTENT_FILE_NAME
+    if not path.exists():
+        return None
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        notes.append(
+            f"设计意图文件读不了（{type(exc).__name__}: {exc}）：合并视图按全 TODO 出，"
+            f"文件一个字没动"
+        )
+        return None
+
+
+def _write_design_intent(out_dir: Path, markdown: str) -> Path | None:
+    """Create ``design-intent.md`` **only when it does not exist** (053 §2.2).
+
+    The one place that could reproduce 052 §2.2's defect, so it is the one place
+    that must not: a filled ``targetVoltage: 3.3V`` came back as ``TODO`` because
+    the generator overwrote the file it was told to keep. Creation is exclusive
+    (`open("x")`), so two runs racing each other still cannot clobber an existing
+    file — and the existing one wins even then. Returns ``None`` when the file was
+    already there.
+    """
+    from .core.architecture import INTENT_FILE_NAME
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / INTENT_FILE_NAME
+    try:
+        with path.open("x", encoding="utf-8") as handle:
+            handle.write(markdown)
+    except FileExistsError:
+        return None
+    return path
+
+
+def _completion_section(
+    *,
+    model: object,
+    summary: dict,
+    unreviewed: list[dict],
+    triage: list[dict],
+    architecture: dict | None,
+) -> dict:
+    """`completion` — coverage, what is still owed, the source versions, the verdict.
+
+    053 §2.2's replacement for reading `summary.mayClaimPassed` as "done". The
+    verdict's three states are exactly the enumerated conditions, so a reader can
+    derive them without this function:
+
+    * ``incomplete`` — ``errors > 0`` **or** unreviewed parts remain (a part no
+      rule could judge means the review did not cover the board);
+    * ``complete`` — ``errors = 0`` **and** unreviewed = 0 **and** stale = 0
+      **and** nothing waiting for triage;
+    * ``complete-with-open-items`` — two checks passed, but the residual open
+      items are non-empty (a slot whose drawing moved under it, a warning nobody
+      has triaged yet).
+
+    `openTodos` (the architecture's unfilled slots) is *reported* but does not
+    gate: the enumerated conditions for ``complete`` are the four above, and a
+    TODO slot is the skeleton still asking a question rather than an unfinished
+    check. `verdictWhy` spells out which of them were non-empty, so no reader has
+    to reconstruct the arithmetic.
+    """
+    from .core.model import ProjectModel
+
+    boards = len(model.boards) if isinstance(model, ProjectModel) else 1
+    pages = (
+        sum(len(board.board.page_uuids) for board in model.boards)
+        if isinstance(model, ProjectModel) else 0
+    )
+    errors = int(summary.get("errorCount", 0) or 0)
+    unreviewed_count = len(unreviewed)
+    pending = sum(1 for entry in triage if not (entry.get("verdict") or "").strip())
+    slots = (architecture or {}).get("totals") or {}
+    empty = {"total": 0, "filled": 0, "stale": 0}
+    architecture_slots = {
+        "total": int(slots.get("slots", 0) or 0),
+        "filled": int(slots.get("filled", 0) or 0),
+        "stale": int(slots.get("stale", 0) or 0),
+    } if architecture is not None else dict(empty)
+    open_todos = max(architecture_slots["total"] - architecture_slots["filled"], 0)
+
+    why: list[str] = []
+    if errors:
+        why.append(f"{errors} 项 ERROR")
+    if unreviewed_count:
+        why.append(f"{unreviewed_count} 颗器件缺手册未审")
+    if architecture_slots["stale"]:
+        why.append(f"{architecture_slots['stale']} 个架构槽位的图纸已变（stale）")
+    if pending:
+        why.append(f"{pending} 条 warning 待分诊")
+    if architecture is None:
+        why.append("架构骨架未生成（report.json 无 architecture 键）")
+
+    if errors or unreviewed_count:
+        verdict = "incomplete"
+    elif architecture_slots["stale"] or pending:
+        verdict = "complete-with-open-items"
+    else:
+        verdict = "complete"
+
+    from .engines.review import BUILTIN_RULES
+    from .engines.review_eval import rulebody_fingerprint, ruleset_fingerprint
+
+    rule_ids = [rule.id for rule in BUILTIN_RULES]
+    return {
+        "scope": {"rules": len(rule_ids), "boards": boards, "pages": pages},
+        "errors": errors,
+        "unreviewedParts": unreviewed_count,
+        "warningsPendingTriage": pending,
+        "architectureSlots": architecture_slots,
+        "openTodos": open_todos,
+        "sourceVersions": {
+            "ruleset": ruleset_fingerprint(rule_ids),
+            "rulebody": rulebody_fingerprint(),
+        },
+        "verdict": verdict,
+        "verdictWhy": why,
+    }
 
 
 def _write_checkup_markdown(out_dir: Path, report: dict) -> Path:
@@ -2877,6 +3035,13 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         model, library=shelf, datasheet_dir=Path(UNREVIEWED_DATASHEET_DIR)
     )
     summary["unreviewedParts"] = len(unreviewed)
+    # **Narrow on purpose** (053 §2.2): this field answers exactly one question —
+    # "did the datasheet gate leave any part unjudged?" — and the name is kept
+    # (downstream and friends read it) rather than widened, because widening it
+    # would move the meaning under those readers' feet. The complete statement is
+    # `completion.verdict` (rules/boards/pages covered, unreviewed parts, stale
+    # architecture slots, warnings still waiting for triage); a reader that wants
+    # "may I say this board passed?" must ask that, not this.
     summary["mayClaimPassed"] = not unreviewed
     # The conclusion carries both halves. With errors present the count stays first
     # (that is the reader's next action); with none, the datasheet gate is the whole
@@ -2893,14 +3058,22 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         summary["conclusion"] = verdict
 
     triage = warning_triage_slots(model=model, drc=drc, findings=findings, modules=modules)
-    # 044 M1: the architecture skeleton — generated here (before the report is
-    # assembled) because the report carries its count summary. "Cannot generate"
-    # is a note and an **absent** key, never an empty section.
+    # 044 M1 / 053 §2.2: the architecture skeleton — generated here (before the
+    # report is assembled) because the report carries its merged view. "Cannot
+    # generate" is a note and an **absent** key, never an empty section. The
+    # design intent beside the report is read (never written here) and merged in;
+    # a slot whose object moved under a recorded answer comes back `stale`.
     from .core.architecture import generate_architecture
 
+    intent_text = _load_design_intent(out_dir, notes)
     architecture = None
     try:
-        architecture = generate_architecture(model, library=shelf)
+        architecture = generate_architecture(
+            model,
+            library=shelf,
+            intent_text=intent_text,
+            project_uuid=(source.get("project") or {}).get("projectUuid") or "",
+        )
     except Exception as exc:  # noqa: BLE001 - a report must still be written
         notes.append(f"架构骨架生成失败（{type(exc).__name__}: {exc}）：report.json 无 architecture 键")
     aesthetics_on, aesthetics_source = _checkup_aesthetics(args)
@@ -2938,6 +3111,10 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
             else None
         ),
         architecture=(architecture.section if architecture is not None else None),
+        completion=_completion_section(
+            model=model, summary=summary, unreviewed=unreviewed, triage=triage,
+            architecture=(architecture.section if architecture is not None else None),
+        ),
     )
     report_path = _write_checkup_report(out_dir, report)
     report_md_path = _write_checkup_markdown(out_dir, report)
@@ -2946,6 +3123,26 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         if architecture is not None
         else None
     )
+    # 053 §2.2: created once, never rewritten. `_write_design_intent` returns None
+    # when an engineer's file is already there — that None is the whole feature.
+    intent_path = (
+        _write_design_intent(out_dir, architecture.intent_markdown)
+        if architecture is not None and architecture.intent_markdown
+        else None
+    )
+    if architecture is not None:
+        counts = architecture.section["totals"]
+        if architecture.intent_present:
+            notes.append(
+                f"设计意图：读 {intent_path or (out_dir / 'design-intent.md')}——"
+                f"{counts['filled']}/{counts['slots']} 槽已填，{counts['stale']} 槽图纸已变"
+                f"（stale，不删不覆盖）"
+            )
+        else:
+            notes.append(
+                f"设计意图：{out_dir / 'design-intent.md'} 不存在，已建全 TODO 模板"
+                f"（{counts['slots']} 槽，sig= 是每槽关联对象的签名；此后生成器对它就只读）"
+            )
 
     print(
         f"  model: {report['model']['components']} components, {report['model']['nets']} nets "
@@ -3013,8 +3210,17 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         print(
             f"    {len(architecture.section['boards'])} 板 / {totals['rails']} 轨 / "
             f"{totals['analogChains']} 模拟链 / {totals['controlChains']} 控制链 / "
-            f"{totals['buses']} 总线类；TODO 槽位 {totals['todoSlots']}（AI 逐槽填，见 SKILL 架构走查）"
+            f"{totals['buses']} 总线类；槽位 {totals['slots']}（已填 {totals['filled']} / "
+            f"stale {totals['stale']} / 待填 {totals['todoSlots']}）"
         )
+        print(
+            f"  design-intent: {out_dir / 'design-intent.md'}"
+            + ("（本次新建，全 TODO 模板）" if intent_path is not None
+               else "（已存在：只读合并，一字未改）")
+        )
+    print(f"  completion: {report['completion']['verdict']}"
+          + ("（" + "；".join(report["completion"]["verdictWhy"]) + "）"
+             if report["completion"]["verdictWhy"] else "（无 ERROR、无未审、无 stale、无待分诊）"))
     print("  pending: none（批 4 已把 modules / ai_slots / report.md / 画布图补齐）")
     if architecture is None:
         print("  note: 架构骨架未生成（见 notes）——report.json 里没有 architecture 键")
@@ -5954,6 +6160,10 @@ def _cmd_arch(args: argparse.Namespace) -> int:
     two commands can never disagree about what the board is. A multi-board project
     is walked **per board** (the project is not one welded netlist) and prints one
     section block per board. Exit 0 generated / 2 the input cannot be used.
+
+    With ``--out PATH`` it keeps the pair the way ``checkup`` does: the skeleton
+    at ``PATH`` (overwritten — it is generated) and ``design-intent.md`` beside it
+    (created only if absent, else read and merged, never rewritten).
     """
     from boardwise.core.architecture import generate_architecture
 
@@ -5970,17 +6180,32 @@ def _cmd_arch(args: argparse.Namespace) -> int:
     library, note = _architecture_shelf_evidence(args)
     if note:
         print(f"note: {note}", file=sys.stderr)
-    result = generate_architecture(model, library=library)
+    notes: list[str] = []
     if args.out:
         out_path = Path(args.out)
         out_path.parent.mkdir(parents=True, exist_ok=True)
+        intent_text = _load_design_intent(out_path.parent, notes)
+    else:
+        out_path = None
+        intent_text = None
+    result = generate_architecture(model, library=library, intent_text=intent_text)
+    totals = result.section["totals"]
+    for item in notes:
+        print(f"note: {item}", file=sys.stderr)
+    if out_path is not None:
         out_path.write_text(result.markdown, encoding="utf-8")
-        totals = result.section["totals"]
+        intent_path = _write_design_intent(out_path.parent, result.intent_markdown)
         print(f"architecture: {out_path}")
         print(
             f"  {len(result.section['boards'])} 板 / {totals['rails']} 轨 / "
             f"{totals['analogChains']} 模拟链 / {totals['controlChains']} 控制链 / "
-            f"{totals['buses']} 总线类；TODO 槽位 {totals['todoSlots']}"
+            f"{totals['buses']} 总线类；槽位 {totals['slots']}（已填 {totals['filled']} / "
+            f"stale {totals['stale']} / TODO 槽位 {totals['todoSlots']}）"
+        )
+        print(
+            f"design-intent: {out_path.parent / 'design-intent.md'}"
+            + ("（本次新建，全 TODO 模板）" if intent_path is not None
+               else "（已存在：只读合并，一字未改）")
         )
     else:
         print(result.markdown, end="")
