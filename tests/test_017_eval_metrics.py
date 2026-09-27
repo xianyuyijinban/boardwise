@@ -33,8 +33,20 @@ from boardwise.core.model import (
 )
 from boardwise.engines.review import BUILTIN_RULES
 from boardwise.engines.review_eval import (
+    FIX_CASES,
+    FIX_ATTEMPT_OUTCOMES,
+    FIX_OUTCOME_APPLIED,
+    FIX_OUTCOME_FAILED,
+    FIX_OUTCOME_IDEMPOTENT,
+    FIX_OUTCOME_INTERRUPTED,
+    FIX_OUTCOME_NOT_SIMULABLE,
+    FIX_OUTCOME_RECHECK,
+    FIX_OUTCOME_REFUSED,
+    FIX_SUCCESS_KINDS,
     UNKNOWN_REASON_PATTERNS,
     evaluate_annotations,
+    fix_success_rows,
+    fix_success_total,
     render_text_report,
     rulebody_fingerprint,
     ruleset_fingerprint,
@@ -608,16 +620,29 @@ def test_a_build_without_rule_sources_says_so_instead_of_guessing(
     assert "unavailable" in line
 
 
-def test_fix_success_is_declared_pending_016_and_prints_no_number():
+def test_fix_success_now_prints_the_registered_m3_numbers():
+    """017 sec.5's slot was left unfilled on purpose; the M3 close-out fills it.
+
+    What is pinned here is that the slot *reports*, and that it reports the
+    register — one line per change kind, the total, and a rate next to every
+    fraction. The numbers themselves are pinned by the register tests below;
+    this one is about the report saying them.
+    """
     text = render_text_report(
         [evaluate_annotations(_aset([]), _model(), [_GoldenOutcome()])],
         split="dev",
         rule_ids=["golden-outcome"],
     )
-    line = next(l for l in text.splitlines() if "fix success" in l)
-    assert "016" in line
-    assert "pending" in line
-    assert "0.00" not in line
+    lines = text.splitlines()
+    start = next(index for index, line in enumerate(lines) if "fix success" in line)
+    assert "pending" not in lines[start], "the slot is no longer a promise to fill later"
+    body = lines[start + 1 : start + 7]
+    for kind in FIX_SUCCESS_KINDS:
+        line = next(item for item in body if item.strip().startswith(kind))
+        assert "applied+saved+resolved" in line
+        assert "(source: tasks/" in line
+    total = next(item for item in body if item.strip().startswith("total"))
+    assert f"{FIX_SUCCESS_TOTAL[1]}/{FIX_SUCCESS_TOTAL[0]}" in total
 
 
 def test_the_json_report_keeps_the_field_slots_017_asks_for(tmp_path):
@@ -641,7 +666,12 @@ def test_the_json_report_keeps_the_field_slots_017_asks_for(tmp_path):
     )
     assert code == 0
     payload = json.loads(out.read_text(encoding="utf-8"))
-    assert payload["fix_success"]["status"] == "pending-016"
+    assert payload["fix_success"]["status"] == "registered"
+    assert payload["fix_success"]["total"] == {
+        "attempts": FIX_SUCCESS_TOTAL[0],
+        "applied_saved_resolved": FIX_SUCCESS_TOTAL[1],
+    }
+    assert {row["kind"] for row in payload["fix_success"]["kinds"]} == set(FIX_SUCCESS_KINDS)
     assert payload["provenance"]["rule_count"] == len(BUILTIN_RULES)
     assert payload["provenance"]["ruleset"] == ruleset_fingerprint(
         [rule.id for rule in BUILTIN_RULES]
@@ -660,3 +690,101 @@ def test_the_json_report_keeps_the_field_slots_017_asks_for(tmp_path):
         per_rule["conn-nc-and-must-connect"]["findings_located"]
         <= per_rule["conn-nc-and-must-connect"]["findings_total"]
     )
+
+
+# ---------------------------------------------------------------------------
+# the M3 register behind the slot (M3 close-out)
+# ---------------------------------------------------------------------------
+#
+# The numbers below are the ones the five task books record, counted by hand
+# from their submission sections. They are re-stated here as literals on purpose:
+# a test that read its expectation out of the register would agree with any
+# register, including one that had lost a case. The three tests after this one
+# check that every entry is *traceable* — to a task book that exists, to a
+# section that exists in it, and to a live log where one is named — because the
+# only way this slot can lie is by citing something that was never written.
+
+#: kind -> (attempts, applied+saved+resolved), as the task books record them.
+FIX_SUCCESS_TOTAL = (14, 12)
+
+FIX_SUCCESS_EXPECTED = {
+    "component-value": (1, 1),
+    "add-component": (4, 3),
+    "patch-pin": (5, 4),
+    "insert-subcircuit": (2, 2),
+    "move-block": (2, 2),
+}
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_the_register_counts_the_cases_the_task_books_record():
+    """One row per kind, and the counts are the task books' own."""
+    rows = {row.kind: (row.attempts, row.applied_saved_resolved) for row in fix_success_rows()}
+    assert rows == FIX_SUCCESS_EXPECTED
+    assert fix_success_total() == FIX_SUCCESS_TOTAL
+
+
+def test_the_register_covers_exactly_the_kinds_changeplan_can_execute():
+    """The M3 kinds and the plan kinds are one list, kept honest from both ends."""
+    from boardwise.core.changeplan import SUPPORTED_KINDS
+
+    assert set(FIX_SUCCESS_KINDS) == set(SUPPORTED_KINDS), (
+        "a change kind with no registered live case (or a register row for a kind "
+        "the format cannot execute) has to be decided, not left to drift"
+    )
+    assert tuple(FIX_SUCCESS_KINDS) == tuple(SUPPORTED_KINDS), "and in the same order"
+
+
+def test_only_the_two_attempt_outcomes_count_as_attempts():
+    """The counting rule, read off the vocabulary rather than restated.
+
+    A designed refusal (stale, taken designator, full ladder), an idempotence
+    replay, a killed daemon and an un-simulable shape are *not* failed repairs,
+    and the register has to say so structurally — if one of them ever counts,
+    this test is where it shows.
+    """
+    assert set(FIX_ATTEMPT_OUTCOMES) == {FIX_OUTCOME_APPLIED, FIX_OUTCOME_FAILED}
+    for case in FIX_CASES:
+        assert case.outcome in {
+            FIX_OUTCOME_APPLIED, FIX_OUTCOME_FAILED, FIX_OUTCOME_REFUSED,
+            FIX_OUTCOME_IDEMPOTENT, FIX_OUTCOME_INTERRUPTED,
+            FIX_OUTCOME_NOT_SIMULABLE, FIX_OUTCOME_RECHECK,
+        }, case
+
+
+@pytest.mark.parametrize("case", FIX_CASES, ids=lambda c: f"{c.kind}-{c.case[:22]}")
+def test_every_registered_case_cites_a_task_book_and_a_section(case):
+    """Each entry's `source` names a file that exists and a section in it.
+
+    Paragraph-number markers are checked as substrings of the task book's own
+    text; the register's whole claim is "this is written down somewhere", so a
+    citation that names nothing is the one failure mode worth a test.
+    """
+    for fragment in case.source.split(" + "):
+        path, _, where = fragment.partition(" ")
+        if path.startswith("outputs/"):
+            path = path.split(":")[0]
+        assert path.startswith(("tasks/", "outputs/")), case.source
+        file = ROOT / path
+        assert file.is_file(), f"{case.kind}: cited {path}, which does not exist"
+        if not path.startswith("tasks/"):
+            continue
+        assert where.strip(), f"{case.kind}: {path} is cited without a section"
+        text = file.read_text(encoding="utf-8")
+        # Every word of the section line has to be in the task book — "§交卷记录
+        # round-3" pins both the section and *which round* of it, and an en dash
+        # inside a marker ("§十.7–§十.8") is an alternative, not a word.
+        for token in where.lstrip("§").replace("–", " ").split():
+            assert token in text, (
+                f"{case.kind}: {path} does not contain {token!r} — the citation "
+                "points at something that is not in the task book"
+            )
+
+
+def test_a_kind_with_no_recorded_case_reports_nothing_rather_than_zero():
+    """The empty register is the honest empty: `—`, and a null rate in JSON."""
+    rows = fix_success_rows(cases=())
+    assert [row.attempts for row in rows] == [0] * len(FIX_SUCCESS_KINDS)
+    assert all(row.rate is None for row in rows)
+    assert fix_success_total(cases=()) == (0, 0)

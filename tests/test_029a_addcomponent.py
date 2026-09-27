@@ -1213,3 +1213,87 @@ def test_the_report_target_schema_is_explicit(monkeypatch):
         isinstance(item, str) for item in emitted["net_refs"])
     assert isinstance(emitted["expected_before"], str)
     assert isinstance(emitted["suggested_after"], str)
+
+
+# --------------------------------------------------------------------------
+# 13. 029-b 遗留③: the shelf is *used* by the probe, not just handed to it
+# --------------------------------------------------------------------------
+
+
+def test_the_probe_uses_the_shelf_where_only_the_shelf_can_decide(monkeypatch, tmp_path, capsys):
+    """The half a spy cannot see: with a shelf in hand, the answer changes.
+
+    `test_the_apply_hands_the_facts_shelf_to_the_idempotence_probe` asserts the
+    shelf *reaches* the probe. This one asserts the probe *judges* with it. The
+    part already on the net — C5 — carries no board value and an MPN no decoder
+    turns into farads (`X7R22UF25V`), so "is a grounded capacitor already here?"
+    has two different answers:
+
+    * without a shelf: no candidate at all → `missing`, which is the answer that
+      would let apply create a second capacitor next to the one already there;
+    * with a shelf that knows the MPN's category: the capacitor **is** there and
+      its value is not readable → `unreadable`, naming C5 (029 §二.1: no value
+      evidence is UNKNOWN, never "nothing there").
+
+    Both runs are the real `edit apply` with the real `_facts_library()` reading
+    a temporary `blocklib/parts.json`; only the bridge and the project export are
+    stood in for.
+    """
+    from boardwise.core.parts import PartEntry, PartLibrary, save_parts
+
+    def boarded():
+        model = _model(components={"U1": "IC", "C5": ""},
+                       nets={"VCC": [("U1", "1"), ("C5", "1")], "GND": [("C5", "2")]})
+        model.components["C5"].mpn = "X7R22UF25V"
+        return model
+
+    def apply_once(name):
+        before = boarded()
+        after = boarded()
+        after.components["C7"] = Component(
+            uid="uid-C7", designator="C7", value="0.1uF",
+            pins=[Pin("1", "1", "VCC"), Pin("2", "2", "GND")],
+        )
+        after.nets["VCC"].pins.append(("C7", "1"))
+        after.nets["GND"].pins.append(("C7", "2"))
+        _stub_bridge(monkeypatch, _FakeBridge(
+            geometry=_geometry(components=[("U1", 0.0, 0.0)], wires=[[(0, 0), (5, 0)]]),
+            after_geometry=_geometry(components=[("U1", 0.0, 0.0), ("C7", 0.0, -5.0)],
+                                     wires=[[(0, 0), (5, 0)]]),
+        ))
+        _stub_model(monkeypatch, [before, after])
+        _stub_post_review(monkeypatch, "resolved")
+        out_path = tmp_path / f"{name}.json"
+        code = cli.main(["edit", "apply", str(_plan(tmp_path)), "--json", str(out_path)])
+        out = capsys.readouterr().out
+        assert code == 0, out
+        return json.loads(out_path.read_text(encoding="utf-8")), out
+
+    monkeypatch.chdir(tmp_path)  # `_facts_library()` reads blocklib/parts.json here
+
+    without, out = apply_once("without-shelf")
+    assert without["idempotence"]["state"] == "missing", (
+        "with no shelf the weaker route really cannot tell — and the report says so"
+    )
+    assert without["idempotence"]["cap"] == ""
+    assert "no facts" in out and "from the page alone" in out, (
+        "an absent shelf is a note on the run, never a silent downgrade"
+    )
+
+    save_parts(
+        PartLibrary(parts=[PartEntry(
+            key="cap.test", mpn="X7R22UF25V", lcsc="C9999", category="capacitor",
+            # A verified entry must carry the `deviceUuid`/`libraryUuid` pair
+            # `sch.place_component` needs: the loader refuses one with empty uuids
+            # (core/parts.py:911-916), which is why they are spelled out here.
+            deviceUuid="a" * 32, libraryUuid="b" * 32,
+        )]),
+        tmp_path / "blocklib" / "parts.json",
+    )
+    with_shelf, _out = apply_once("with-shelf")
+    assert with_shelf["idempotence"]["state"] == "unreadable", (
+        "on the shelf's evidence the capacitor is there; its value stays unreadable, "
+        "which is a different statement from 'nothing there'"
+    )
+    assert with_shelf["idempotence"]["cap"] == "C5"
+    assert "decide_required_cap" in with_shelf["idempotence"]["how"]
