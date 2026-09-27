@@ -854,7 +854,7 @@ def _check_bodies(
                 continue
             if any(_same_point(tip, end) for tip in part.pins.values() for end in ends):
                 continue
-            hit = _first_body_crossing(segment.points, part.body)
+            hit = _first_box_crossing(segment.points, part.body)
             if hit is None:
                 continue
             out.append(HardViolation(
@@ -867,16 +867,24 @@ def _check_bodies(
     return out
 
 
-def _first_body_crossing(
-    points: list[tuple[float, float]], body: Box
+def _first_box_crossing(
+    points: list[tuple[float, float]], box: Box
 ) -> tuple[float, float] | None:
     """The midpoint of the first sub-edge with positive-length overlap, or None.
 
-    Strict interior: the body box is inset by :data:`TOL`, so a wire running
-    along the outline (or touching a corner) does not count as crossing it.
+    The one ruler for "a polyline crosses this box", used by constraint 4 (a
+    wire crossing a part's drawn body) and by the wire half of constraint 6 (a
+    wire entering a keep-out): both ask the same question about the same two
+    kinds of geometry, and two copies would be two tolerances.
+
+    Strict interior: the box is inset by :data:`TOL`, so a wire running along
+    the outline (or touching only a corner) has no positive-length interior
+    overlap and does not count as crossing it. Measured per sub-edge — the
+    bounding box of an L-shaped detour covers the box it went around, which is
+    exactly the false positive this per-segment clip removes.
     """
     for start, end in _edges(points):
-        inside = _clip_to_box(start, end, body)
+        inside = _clip_to_box(start, end, box)
         if inside is None:
             continue
         t0, t1 = inside
@@ -966,18 +974,44 @@ def _check_page(
     052 sec.6): the drawing stays in the area it is allowed to use. Objects are
     part bodies, wires and text boxes; a body is only checked when the profile
     states one, since an unstated extent is not a measured zero.
+
+    The keep-out half measures the two kinds of object differently, and
+    deliberately so. A part's body and a text box **are** rectangles, so their
+    own box is the object and the box test is the test. A wire is a *polyline*,
+    and a polyline's bounding box is not the line: an L-shaped detour around a
+    keep-out still has a box that covers it, so a box test would report a wire
+    that never entered the region — the false positive that made "go around a
+    keep-out" unsatisfiable. Wires are therefore clipped sub-segment by
+    sub-segment with :func:`_first_box_crossing` (the same Liang–Barsky test
+    constraint 4 uses, at the same :data:`TOL`), and the boundary semantics are
+    that constraint's too: **positive-length overlap with the interior counts as
+    entering**. A sub-segment running exactly along a keep-out edge, or touching
+    only a corner, has no such overlap and is *not* reported — a keep-out states
+    a region, and a wire on its outline is on the border of it, not inside it.
+
+    The page half keeps the bounding box for every object, wires included: a
+    page is an axis-aligned rectangle, and such a rectangle contains a set of
+    points exactly when it contains their bounding box, so there the box *is*
+    the line and the two tests cannot disagree.
     """
     out: list[HardViolation] = []
-    objects: list[tuple[str, Box]] = []
+    # (name, bounding box, polyline) — the polyline is None for the two object
+    # kinds that really are boxes.
+    objects: list[tuple[str, Box, list[tuple[float, float]] | None]] = []
     for part in placed:
         if part.body is not None:
-            objects.append((f"parts[{part.part_id}]", part.body))
+            objects.append((f"parts[{part.part_id}]", part.body, None))
     for index, segment in enumerate(layout_plan.segments):
-        objects.append((f"segments[{index}]", _bounds(segment.points)))
-    objects.extend((name, box) for name, box, _part, _text in _text_boxes(layout_plan))
+        objects.append((
+            f"segments[{index}]", _bounds(segment.points), list(segment.points),
+        ))
+    objects.extend(
+        (name, box, None)
+        for name, box, _part, _text in _text_boxes(layout_plan)
+    )
 
     if page is not None:
-        for name, box in objects:
+        for name, box, _points in objects:
             escaped = _outside(box, page)
             if not escaped:
                 continue
@@ -987,15 +1021,27 @@ def _check_page(
                 f"{name} {_box_text(box)} leaves the page {_box_text(page)} on "
                 f"{escaped}",
             ))
-    for name, box in objects:
+    for name, box, points in objects:
         for index, keep in enumerate(keepouts):
-            if not _overlap(box, keep):
+            if points is None:
+                if not _overlap(box, keep):
+                    continue
+                out.append(HardViolation(
+                    KIND_OUT_OF_PAGE,
+                    (name,),
+                    f"{name} {_box_text(box)} is inside keep-out "
+                    f"keepouts[{index}] {_box_text(keep)}",
+                ))
+                continue
+            hit = _first_box_crossing(points, keep)
+            if hit is None:
                 continue
             out.append(HardViolation(
                 KIND_OUT_OF_PAGE,
                 (name,),
-                f"{name} {_box_text(box)} is inside keep-out "
-                f"keepouts[{index}] {_box_text(keep)}",
+                f"{name} {_box_text(box)} runs through keep-out "
+                f"keepouts[{index}] {_box_text(keep)} near "
+                f"({hit[0]:g}, {hit[1]:g})",
             ))
     return out
 

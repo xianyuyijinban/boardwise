@@ -1131,6 +1131,34 @@ def test_compiling_twice_gives_byte_identical_plans():
     assert first.candidates[0].to_jsonable() == second.candidates[0].to_jsonable()
 
 
+def test_the_rendered_preview_is_byte_identical_across_two_compiles():
+    """Determinism carried all the way to the file a reviewer opens.
+
+    `outputs/053b_preview/` is regenerated from these scenarios by
+    `tools/053b_previews.py`, so the previews are only worth reviewing if a
+    second compile of the same input renders the *same bytes*: otherwise the
+    picture is a snapshot of one run rather than of the revision, and two reviews
+    of one drawing would be looking at different files. Same input, same SVG
+    text — for the ranked best and for the runner-up, so the tie-break that
+    picked it is covered too.
+    """
+    scene = scenes()[7]
+    first = compile_scene(scene)
+    second = compile_scene(scene)
+    assert first.ok and second.ok
+
+    def preview(result: dc.CompileResult, index: int) -> str:
+        return svgpreview.render_svg(
+            result.candidates[index], library(),
+            page_box=scene.budget.page_box, keepouts=scene.budget.keepouts,
+            title=f"053b scene {scene.number}: {scene.title}",
+        )
+
+    assert preview(first, 0) == preview(second, 0)
+    assert preview(first, 1) == preview(second, 1)
+    assert preview(first, 0).startswith("<svg")
+
+
 def test_text_boxes_come_from_font_metrics_not_from_a_character_count():
     """053 sec.4: 文字 bbox 参与避障（不靠字符数估算）— the layout.py:1055 gap."""
     narrow = dc.text_width("iiiiii")
@@ -1190,11 +1218,12 @@ def _overlaps(left, right) -> bool:
 def test_the_router_searches_around_an_obstacle_instead_of_through_it():
     """A wall between the two ends costs a bend and is never crossed.
 
-    The search is exercised directly (and deterministically) here: the integration
-    path through a keep-out is not usable, because the readability checker tests a
-    wire's *bounding box* against a keep-out, so an L-shaped detour around one still
-    reports as "inside" it. That is the checker's own documented simplification;
-    what this compiler owes is the search itself, so the search is what is pinned.
+    The search is exercised directly and deterministically here, on a wall the
+    router is handed rather than one a compiler run happens to produce. The
+    integration path — a keep-out the whole drawing has to route around and still
+    pass the independent checker — is the next test; what *this* one pins is the
+    search itself: a route exists, it is orthogonal, it never enters the
+    obstacle, and it has a bend.
     """
     router = dc._Router(
         grid=5.0, residue=(0.0, 0.0), boxes=[(-10.0, -10.0, 10.0, 10.0)],
@@ -1218,6 +1247,53 @@ def test_the_router_searches_around_an_obstacle_instead_of_through_it():
         # orthogonal, and never crossing the box's interior
         assert _close_zero(start[0] - end[0]) or _close_zero(start[1] - end[1])
         assert not _segment_hits_box(start, end, (-10.0, -10.0, 10.0, 10.0))
+
+
+def test_a_wire_detours_around_a_keep_out_instead_of_refusing_the_drawing():
+    """A keep-out between the two ends of a promised net is gone around.
+
+    The integration counterpart of the search above, and the drawing that used to
+    be impossible to produce: while the checker measured a wire's *bounding box*
+    against a keep-out, an L-shaped detour around one still reported as "inside"
+    it, so the gate refused every variant and the compiler reported
+    `layout-unsat` for a circuit it could perfectly well have drawn. With the
+    wire measured sub-segment by sub-segment, the detour is a legal drawing.
+
+    The keep-out is put between the two pins of the divider's promised tap net —
+    the box's *bounding box* is what the old rule looked at, so the assertions
+    below that every sub-segment misses it while the box covers it are exactly
+    the regression.
+    """
+    scene = scenes()[1]
+    health = best_of(scene)[1]
+    lower = pin_point(health, "R2.1")
+    upper = pin_point(health, "R1.2")
+    assert lower is not None and upper is not None
+    blocker = (lower[0] - 10.0, lower[1] + 10.0, lower[0] + 10.0, upper[1] - 10.0)
+    result = dc.compile(
+        scene.circuit, scene.presentation, library(),
+        dc.CompileBudget(keepouts=(blocker,)),
+    )
+    assert result.ok, render(result)
+    plan = result.candidates[0]
+
+    drawn = [segment for segment in plan.segments if segment.net == "TAP"]
+    assert len(drawn) == 1, "the promised net is one wire, never downgraded to a name"
+    points = drawn[0].points
+    assert (points[0], points[-1]) in ((lower, upper), (upper, lower)), points
+    for start, end in zip(points, points[1:]):
+        assert not _segment_hits_box(start, end, blocker), (start, end)
+    xs = [point[0] for point in points]
+    ys = [point[1] for point in points]
+    box = (min(xs), min(ys), max(xs), max(ys))
+    assert _overlaps(box, blocker), (
+        "the detour's bounding box still covers the keep-out, which is why the "
+        f"old box rule refused this drawing: box {box}, keep-out {blocker}"
+    )
+    assert readability.check(
+        plan, scene.circuit, scene.presentation, library(),
+        keepouts=(blocker,),
+    ).hard_violations == []
 
 
 def _close_zero(value: float) -> bool:
@@ -1421,6 +1497,54 @@ def test_a_keep_out_over_a_body_is_refused_rather_than_drawn_through():
         readability.KIND_OUT_OF_PAGE in " ".join(item.violations)
         for item in result.rejected
     ), [item.violations for item in result.rejected]
+
+
+def test_an_obligated_net_that_cannot_be_wired_is_layout_unsat_never_a_label():
+    """A promised net with no route inside the budget: refused, and *measured*.
+
+    The case 053 sec.4's `layout-unsat` exists for on the routing side, built by
+    trapping one end: a small keep-out is put around a pin of the net the
+    `direct-wire` obligation promises, with the pin's own part left outside it.
+    Every wire has to land exactly on that tip, so every route enters the
+    reserved region — and the promise forbids answering with a name instead.
+
+    What the refusal owes (053 sec.4): the category, the *measured* reason
+    ("could not be joined inside the searched corridor"), the wording of a finite
+    search ("not found inside the budget", never "no solution"), and an action
+    that changes the answer — here the keep-out, or the obligation itself.
+    """
+    scene = scenes()[1]
+    health = best_of(scene)[1]
+    trapped_pin = pin_point(health, "R1.2")
+    assert trapped_pin is not None
+    trap = (
+        trapped_pin[0] - 5.0, trapped_pin[1] - 5.0,
+        trapped_pin[0] + 5.0, trapped_pin[1] + 5.0,
+    )
+    result = dc.compile(
+        scene.circuit, scene.presentation, library(),
+        dc.CompileBudget(keepouts=(trap,)),
+    )
+
+    assert result.candidates == []
+    assert result.categories() == ["layout-unsat"]
+    (failure,) = result.failures
+    assert failure.subject == "TAP", failure.subject
+    assert "direct-wire obligation" in failure.detail
+    assert "could not be joined inside the searched corridor" in failure.detail
+    assert "not found inside the budget" in failure.detail, failure.detail
+    assert "move the keep-out" in failure.action
+    assert "direct-wire obligation" in failure.action
+
+    # The accounting the twelve-scene table uses: every variant the ladder built
+    # is recorded as refused, each with its own reason and category, and none of
+    # them claims there is no solution. This is a *thirteenth*, standalone case —
+    # adding it to `scenes()` would move the table's 9 produced / 3 refused.
+    assert len(result.rejected) == len(dc.CompileBudget().spacing_ladder)
+    assert all(item.failure is not None for item in result.rejected)
+    assert {item.failure.category for item in result.rejected} == {"layout-unsat"}
+    assert all(item.reason for item in result.rejected)
+    assert sorted(scenes()) == list(range(1, 13))
 
 
 def test_every_candidate_carries_the_checkers_own_verdict():
