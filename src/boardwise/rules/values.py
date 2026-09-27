@@ -62,14 +62,28 @@ _CODE_RE = re.compile(r"(\d{3})")
 #:   (``C1608X5R1V225KT000E``'s ``1V225``): that part refuses either way, and
 #:   refusing a token whose digits are already unreadable costs nothing.
 #:
-#: The three guards must stay independent: each one owns witnesses the other
-#: two leave alone, because a witness refused by two guards cannot detect the
-#: loss of either (a mutation that disabled one stayed green while every
-#: voltage-tail witness was also matched by the R pattern -- measured
-#: 2026-09-21, task 015 sec.4.2).
+#: The guards must stay independent: each one owns witnesses the others leave
+#: alone, because a witness refused by two guards cannot detect the loss of
+#: either (a mutation that disabled one stayed green while every voltage-tail
+#: witness was also matched by the R pattern -- measured 2026-09-21, task 015
+#: sec.4.2).
 _R_NOTATION_RE = re.compile(r"\d[Rr]\d{1,3}")
 _VOLTAGE_TAIL_RE = re.compile(r"\d{3}[A-Z]\d{3}")
 _ELECTROLYTIC_RE = re.compile(r"\d[xX]\d|\d+[Vv]\d{3}")
+
+#: The shunt convention with the coding *in front of* the ``R`` (task 046):
+#: ``FRL1210FR400TS`` states 400 mΩ as ``FR400``. The letter has to be one of
+#: the tolerance letters and has to sit immediately before the ``R``, which is
+#: what keeps this off ``AR03BTCX5001`` (``A`` is not a tolerance letter),
+#: ``RC0603FR-074K7L`` (that ``R`` is followed by a dash) and
+#: ``JER2512F3R005`` (a digit in front of the ``R`` -- 043's refusal, unchanged).
+_SHUNT_FIELD_RE = re.compile(r"[FJKD]R(\d{2,3})")
+
+#: Polymer-electrolytic series whose digits are a capacitance in
+#: **microfarads** (task 046): ``SPZ1HM100E07O00RAXXX`` is a 10 µF Aishi part,
+#: and this decoder's capacitor base unit is the picofarad -- reading its
+#: ``100`` as an EIA code is what produced "10 pF" for a 10 µF part.
+_POLYMER_SERIES_HEADS = ("SPZ", "SPA")
 
 
 def _digit_run(token: str, index: int) -> str:
@@ -115,7 +129,23 @@ def _non_eia_notation(token: str) -> bool:
         _ELECTROLYTIC_RE.search(token)
         or _r_as_decimal_point(token)
         or _voltage_rating_tail(token)
+        or _SHUNT_FIELD_RE.search(token)
     )
+
+
+def _foreign_unit_code(token: str) -> bool:
+    """True when the token's digits are a value in a unit this decoder does not read.
+
+    Only the polymer-electrolytic series so far (task 046): ``SPZ``/``SPA`` part
+    numbers print their capacitance in microfarads, so a three-digit group in
+    one of them would have to be decoded against a µF base -- which the EIA
+    path cannot do (the caller's base is picofarads) and must therefore not
+    touch. Reading ``SPZ1HM100E07O00RAXXX``'s ``100`` against that base is what
+    reported 10 pF for a 10 µF part; refusing the token reports UNKNOWN instead,
+    which is the honest answer for a string whose digits this decoder does not
+    know how to scale.
+    """
+    return token.startswith(_POLYMER_SERIES_HEADS)
 
 
 def parse_capacitance_farads(value: str) -> float | None:
@@ -154,7 +184,7 @@ _MID_LETTER_RE = re.compile(r"(\d*)([RKM])(\d*)", re.IGNORECASE)
 
 
 def mpn_resistance_readings(mpn: str) -> list[tuple[float, str]]:
-    """Every legitimate reading of the MPN's mid-letter resistance notation.
+    """Every legitimate reading of the MPN's resistance notation.
 
     Why a *list* and not one number: a vendor prefixes its own coding to the
     value, and by shape that prefix is indistinguishable from a longer mantissa.
@@ -164,6 +194,16 @@ def mpn_resistance_readings(mpn: str) -> list[tuple[float, str]]:
     so this returns the **set** of readings, deduplicated by value; the caller
     matches the board's own declared value against them, and an MPN whose readings
     *all* disagree is still a contradiction.
+
+    Four shapes are read, each one's whitelist written out at its own helper --
+    the mid-letter notation below, 厚声's three-figures-plus-letter-exponent
+    field (:func:`_letter_exponent_reading`), the E-96 four-figure code
+    (:func:`_e96_reading`) and the shunt field between a tolerance letter and
+    its ``R`` (:func:`_shunt_reading`). They are additive on purpose (task 046):
+    an MPN where two conventions are by shape indistinguishable keeps *both*
+    readings, because the caller -- the board's own declared value -- is the only
+    thing that can choose, and dropping the right reading is what turns a correct
+    board into a violation.
 
     Returns ``[(ohms, notation_text), …]`` — empty when the MPN states its value
     in EIA three-digit form instead (``FRC0805J471``) or in no readable form at
@@ -209,7 +249,111 @@ def mpn_resistance_readings(mpn: str) -> list[tuple[float, str]]:
             if value <= 0:
                 continue  # a zero-ohm reading is not evidence of anything
             readings.setdefault(value, f"{mantissa}{letter}{fraction}")
+    for reading in (
+        _letter_exponent_reading(token),
+        _e96_reading(token),
+        _shunt_reading(token),
+    ):
+        if reading is not None:
+            value, text = reading
+            readings.setdefault(value, text)
     return sorted(readings.items())
+
+
+#: The size codes that head a part number (task 046). Requiring one is what
+#: keeps :func:`_letter_exponent_reading` -- whose field is three digits and a
+#: letter, exactly the shape the mid-letter reader also mangles -- off every
+#: token that is not a 厚声 (Uni-Royal) part number.
+_SIZE_HEADS = (
+    "01005", "0201", "0402", "0603", "0805", "1206", "1210", "1812", "2010",
+    "2512",
+)
+
+#: 厚声's ordering rule for a ≤±1% part's resistance: three significant figures
+#: followed by an exponent character, and the small exponents are written as
+#: letters — ``J`` = 10^-1, ``K`` = 10^-2, ``L`` = 10^-3. So ``0603WAF220KT5E``
+#: is a 2.2 Ω part (220 x 10^-2) and ``0603WAF330JT5E`` is 33 Ω (330 x 10^-1).
+#: The whole field is anchored on the size head, the power/tolerance letters and
+#: the taping suffix; a numeric exponent (``0603WAF1002T5E`` = 100 x 10^2) is
+#: *not* read here — that family is a four-figure field and stays where it was.
+_LETTER_EXPONENT_FIELD_RE = re.compile(
+    r"^(?:01005|0201|0402|0603|0805|1206|1210|1812|2010|2512)"
+    r"[A-Z0-9]{2,4}(\d{3})([JKL])T[A-Z0-9]+$"
+)
+_LETTER_EXPONENT = {"J": -1, "K": -2, "L": -3}
+
+
+def _letter_exponent_reading(token: str) -> tuple[float, str] | None:
+    """厚声's three-figures-plus-letter-exponent field, or None.
+
+    ``0603WAF220KT5E`` is the witness this exists for (task 046): its ``220K``
+    is 2.2 Ω, while the mid-letter reader takes the same characters for
+    ``220K`` = 220 kΩ and, dropping the leading ``2``, for 20 kΩ as well — the
+    reading the rule quoted as "decodes to 2e+04 Ω" for a part the board
+    correctly declares as 2.2 Ω.
+    """
+    m = _LETTER_EXPONENT_FIELD_RE.match(token)
+    if m is None:
+        return None
+    figures, letter = m.group(1), m.group(2)
+    value = int(figures) * (10.0 ** _LETTER_EXPONENT[letter])
+    if value <= 0:
+        return None
+    return value, f"{figures}{letter} (letter-exponent field)"
+
+
+#: The four-figure package sizes (task 046). This is :data:`_PACKAGE_TAILS` plus
+#: 2512: the three-figure guard above never needed 2512, and a four-figure field
+#: ending in one of these is a size, not a value.
+_E96_PACKAGE_TAILS = ("0402", "0603", "0805", "1206", "1210", "2512")
+
+#: The E-96 four-figure code at the very end of the token — three significant
+#: figures and a power of ten (``5001`` = 500 x 10^1 = 5.00 kΩ), optionally
+#: followed by a single tolerance letter (``5001F``). The lookbehind keeps it
+#: off the tail of a longer digit run (``...05001``).
+_E96_FIELD_RE = re.compile(r"(?<!\d)(\d{4})([A-Za-z])?$")
+
+
+def _e96_reading(token: str) -> tuple[float, str] | None:
+    """The E-96 four-figure code, or None (absent, guarded or ambiguous).
+
+    The witness is Viking's ``AR03BTCX5001`` (task 046): a 5.00 kΩ part, whose
+    ``5001`` this reader turns into 500 x 10^1 Ω, while the mid-letter reader
+    reads the same token as 0.03 Ω (``R03``) — the reading the rule quoted as
+    "decodes to 0.03 Ω". Two candidates with different values are ambiguity and
+    add nothing at all.
+    """
+    candidates: dict[float, str] = {}
+    for m in _E96_FIELD_RE.finditer(token):
+        figures = m.group(1)
+        if figures in _E96_PACKAGE_TAILS or figures.startswith("0"):
+            continue
+        value = int(figures[:3]) * (10.0 ** int(figures[3]))
+        if value <= 0:
+            continue
+        candidates.setdefault(value, figures)
+    if len(candidates) != 1:
+        return None
+    value, figures = next(iter(candidates.items()))
+    return value, f"{figures} (E-96)"
+
+
+def _shunt_reading(token: str) -> tuple[float, str] | None:
+    """The ``FR400`` shunt field, or None.
+
+    ``FRL1210FR400TS`` states 400 mΩ as ``FR400`` (task 046): a tolerance
+    letter, the ``R`` decimal point, then the fraction's digits, with the
+    hundredths written out rather than dropped. ``R`` alone (``AR03BTCX5001``)
+    and ``R`` after a digit (``JER2512F3R005``, 043) are not this shape.
+    """
+    m = _SHUNT_FIELD_RE.search(token)
+    if m is None:
+        return None
+    digits = m.group(1)
+    value = int(digits) / (10.0 ** len(digits))
+    if value <= 0:
+        return None
+    return value, f"{m.group(0)} (shunt field)"
 
 
 def mpn_value_code(mpn: str) -> str | None:
@@ -228,12 +372,16 @@ def mpn_value_code(mpn: str) -> str | None:
     (:func:`_non_eia_notation`) is None as well: the digits in it are a
     resistance, a voltage rating or an electrolytic capacitance, and reading
     them as an EIA code is what produced 3.3e-11 F for a 330 uF part
-    (task 015).
+    (task 015). A shunt's ``R`` field counts here (``FRL1210FR400TS``'s ``400``
+    is 400 mΩ, task 046), and so does a token whose digits are a value in a unit
+    this decoder does not read at all (:func:`_foreign_unit_code`): a polymer
+    electrolytic prints microfarads, so reading ``SPZ1HM100E07O00RAXXX``'s
+    ``100`` against the picofarad base is what reported 10 pF for a 10 µF part.
     """
     if not mpn:
         return None
     token = mpn.strip().split()[0] if mpn.strip() else ""
-    if not token or _non_eia_notation(token):
+    if not token or _non_eia_notation(token) or _foreign_unit_code(token):
         return None
     candidates: list[str] = []
     for m in _CODE_RE.finditer(token):
