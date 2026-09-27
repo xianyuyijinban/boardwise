@@ -26,7 +26,7 @@ import sys
 # (V4 folder format), so the pattern matches any path containing it.
 _CONTAINER_RE = re.compile(r"\.(epro2|epro|eprj2|eprj3|epru|esch|epcb)(/|$)", re.IGNORECASE)
 
-# The 29 project containers tracked as of 2026-09-27, each individually
+# The 31 project containers tracked as of 2026-09-27, each individually
 # approved (own teaching/DIY boards + synthetic/golden fixtures). Frozen.
 # (Paths are matched against NUL-separated `git ls-files -z` output, so
 # non-ASCII names compare literally — never add the quoted/escaped form.)
@@ -57,6 +57,8 @@ ALLOWLIST: frozenset[str] = frozenset(
         "tests/fixtures/eprj3_synth/eprj3_synth.eprj3",
         "tests/fixtures/llc_board.epro2",
         "tests/fixtures/毕设滤波采样_2026-09-27.epro2",
+        "tests/fixtures/级联多电平-主拓扑_2026-09-27.epro2",
+        "tests/fixtures/级联多电平-驱动模块_2026-09-27.epro2",
         "tests/fixtures/超声波_2026-09-27.epro2",
         "tools/eprj2-recon/ch340g_decrypted.epru",
         "tools/eprj2-recon/ch340g_final.epru",
