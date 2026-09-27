@@ -20,18 +20,29 @@ Matching is deterministic and deliberately narrow:
 
 Queries are excluded from every numerator; they are counted, so the report
 shows how much of the board the oracle has not ruled on yet.
+
+Two further aggregates are read out of the same run (task 017 sec.5).
+**UNKNOWN coverage** says how often a rule that reached a conclusion could not
+decide — counted per (rule x board) pair, with the ``missing_fact`` sentences
+clustered by reason — because UNKNOWN is a signpost, not a failure, and a rule
+that says "I cannot tell" instead of judging must not look like a rule that
+passed. **Locate success** says how many findings name a part or a pin a reader
+can go and look at (017 sec.5: a non-empty ``target``, or text whose designators
+resolve). Both are rendered **after** every pre-017 section, and no earlier
+number is rewritten by their arrival.
 """
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..core.annotations import AnnotationSet
 from ..core.model import DesignModel
-from ..rules.base import OUTCOME_STATES, Finding, Rule
-from .review import severity_counts
+from ..rules.base import OUTCOME_STATES, Finding, Outcome, Rule
+from .review import finding_refs, severity_counts
 
 SPLIT_DEV = "dev"
 SPLIT_HOLDOUT = "holdout"
@@ -45,6 +56,76 @@ SPLIT_CHOICES = (SPLIT_DEV, SPLIT_HOLDOUT, SPLIT_ALL)
 #: this reason).
 HIGH_PRIORITY_SEVERITIES = ("ERROR", "WARN")
 
+#: How many missing_fact clusters the report prints (017 sec.5 "top-N").
+UNKNOWN_CLUSTER_TOP_N = 8
+
+#: The reason vocabulary the harness reads out of ``Outcome.missing_fact``
+#: (017 sec.5: "missing_fact clustering"). Ordered, and the **first** match
+#: wins, which is why the narrow wordings come first: every shelf-facts sentence
+#: starts with "facts for ...", and "identify the part and record ..." is one of
+#: those, so the narrower statement has to be tested before the general one.
+#:
+#: Derived here rather than added to :class:`~boardwise.rules.base.Outcome` on
+#: purpose. That prose is the only machine-readable signal the four-state
+#: protocol carries about *why* a rule could not decide, and it already exists
+#: on every UNKNOWN outcome (the constructor refuses one without it). A new
+#: field would have to be filled correctly by every rule for the aggregate to
+#: mean anything, and would say nothing until the whole rule pack was touched;
+#: classifying the sentence keeps the burden in one place and makes a rule whose
+#: wording the harness does not know show up as ``rule:<id>`` -- visible, and
+#: never silently filed under "other".
+UNKNOWN_REASON_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
+    (category, re.compile(pattern))
+    for category, pattern in (
+        # The part's identity is not in the curated shelf: the work is intake.
+        ("shelf-part-unknown", r"identify the part and record"),
+        # The entry exists, the fact keys are empty (or still a candidate
+        # awaiting the facts_verified flip -- the 039 gate's wording).
+        ("shelf-facts-missing", r"\bfacts for "),
+        # An obligation is prose, so connectivity alone cannot check it.
+        ("free-text-target", r"is free text"),
+        # Pin numbers / symbol pins: needs the library or the bridge, not a fact.
+        ("resolver-missing", r"library resolver|library symbol "),
+        # The pin's net is absent, or is on a net that cannot serve the rule.
+        ("pin-net-unusable", r"\ba net on |\ba net for |the pin has no net"),
+        # No source names the net's voltage, or two sources disagree.
+        (
+            "domain-unknown",
+            r"no source names the voltage|known voltage on"
+            r"|conflicting voltage sources|supply-pin net voltage",
+        ),
+        # A declared window/range the rule needs does not exist.
+        (
+            "window-undeclared",
+            r"series-resistance window|input-range fact|input range for",
+        ),
+        # A value on the board side is missing or unparseable.
+        ("value-unreadable", r"readable value|parseable value"),
+        # ... and the one value that has to come out of an MPN code.
+        ("mpn-undecodable", r"decodable EIA value code"),
+    )
+)
+
+
+def unknown_reason_category(outcome: Outcome) -> str:
+    """The machine-readable reason an outcome is UNKNOWN (017 sec.5).
+
+    One of :data:`UNKNOWN_REASON_PATTERNS`, or ``rule:<rule_id>`` when no
+    pattern matches — the fallback names the rule whose wording is unrecognised,
+    which is the backlog entry, not a bucket to hide it in.
+    """
+    for category, pattern in UNKNOWN_REASON_PATTERNS:
+        if pattern.search(outcome.missing_fact):
+            return category
+    return f"rule:{outcome.rule_id}"
+
+
+def _clip(text: str, limit: int = 140) -> str:
+    """Truncate, never paraphrase: the full text lives in the source object."""
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
+
 
 def _ref_pattern(ref: str) -> re.Pattern[str]:
     """A designator as a whole token: ``U1`` must not match ``U10``/``XU1``."""
@@ -57,6 +138,24 @@ def _mentions(finding: Finding, ref: str) -> bool:
         if pattern.search(evidence):
             return True
     return bool(pattern.search(finding.message))
+
+
+def _locates(finding: Finding) -> bool:
+    """Whether a finding's claim names something a reader can go and look at.
+
+    Two ways, both from task 017 sec.5: the structured ``target`` (016) names a
+    component/pin/net, or the text names a designator, read with the same
+    :func:`~boardwise.engines.review.finding_refs` the JSON renderer marks
+    findings with. A ``FindingTarget`` left entirely empty is *not* a location —
+    it is a rule that built the object without filling it — and neither is a
+    finding whose prose names no part; both are the measurement, not a bug in it.
+    """
+    target = finding.target
+    if target is not None and (
+        target.component_ref or target.primitive_id or target.pin_refs or target.net_refs
+    ):
+        return True
+    return bool(finding_refs(finding))
 
 
 @dataclass
@@ -77,7 +176,21 @@ class RuleMetrics:
     fp_on_exception: int = 0  # this rule's finding violated an exception
     fp_unexplained: int = 0  # this rule's finding matched no record at all
     violations: int = 0  # findings emitted
+    #: Findings this rule emitted that a reader can go and look at (017 sec.5,
+    #: :func:`_locates`). Its denominator is :attr:`findings_total` -- **every**
+    #: finding, including one that carries neither a target nor a designator,
+    #: because "how often a claim can be located" is only a measurement if the
+    #: ones that cannot are counted as misses.
+    findings_located: int = 0
     outcome_counts: dict[str, int] | None = None  # None = legacy rule
+    #: (rule x board) pairs over the four-state protocol (017 sec.5): how many
+    #: boards this rule reached at least one conclusion on, and how many of those
+    #: conclusions included an UNKNOWN. A board the rule returned *no* outcome
+    #: rows for is not a pair — the measure is "how often a rule that ruled
+    #: could not decide", not "how many boards exist", and a rule that reached no
+    #: conclusion at all has nothing to be covered here.
+    outcome_pairs: int = 0
+    unknown_pairs: int = 0
     #: The same three buckets restricted to **high-priority** findings -- the
     #: ones the rules assert at ERROR/WARN. A determinate claim is what the
     #: graduation criterion (011e sec.4.1) grades; an INFO is a report, and
@@ -115,6 +228,20 @@ class RuleMetrics:
     def hp_precision(self) -> float | None:
         return self.hp_tp / self.hp_findings if self.hp_findings else None
 
+    @property
+    def findings_total(self) -> int:
+        """Every finding this rule emitted, at any severity -- the denominator
+        of :attr:`locate_rate`. The same number as :attr:`violations`, named for
+        what it counts *here* (011e sec.4.1 grades a different question with that
+        one)."""
+        return self.violations
+
+    @property
+    def locate_rate(self) -> float | None:
+        if not self.findings_total:
+            return None
+        return self.findings_located / self.findings_total
+
 
 @dataclass
 class BoardEvaluation:
@@ -135,25 +262,31 @@ class BoardEvaluation:
     #: exactly the priority list for the next rule batch (task 011c sec.3.0).
     unregistered: list[str] = field(default_factory=list)
     reviewed: bool = False
+    #: Every UNKNOWN outcome the rules reached on this board, **verbatim** (017
+    #: sec.5). The counts live in the metrics; the sentences are kept because the
+    #: cluster report has to show what is inside a bucket, and because "which
+    #: fact to record next" is answered by the sentence, not by the category.
+    unknowns: list[Outcome] = field(default_factory=list)
 
     @property
     def violations(self) -> int:
         return sum(m.violations for m in self.metrics)
 
 
-def _rule_outcome_counts(rule: Rule, model: DesignModel) -> dict[str, int] | None:
-    """Four-state counts from a rule that implements the Outcome protocol."""
+def _rule_outcomes(rule: Rule, model: DesignModel) -> list[Outcome] | None:
+    """A rule's outcomes, or ``None`` for a rule that does not make them.
+
+    The one call site that runs a rule's four-state side: the counts and the
+    UNKNOWN sentences (017 sec.5) are both read from this list, so a rule is
+    asked once per board and cannot answer differently to two readers.
+    """
     outcomes_method = getattr(rule, "outcomes", None)
     if outcomes_method is None:
         return None
     try:
-        outcomes = outcomes_method(model)
+        return list(outcomes_method(model))
     except NotImplementedError:
         return None
-    counts = {state: 0 for state in OUTCOME_STATES}
-    for outcome in outcomes:
-        counts[outcome.state] = counts.get(outcome.state, 0) + 1
-    return counts
 
 
 def evaluate_annotations(
@@ -186,25 +319,42 @@ def evaluate_annotations(
         for rule in rules:
             findings.extend(rule.check(board_model))
     severity = severity_counts(findings)
+    findings_by_rule: dict[str, list[Finding]] = {}
+    for finding in findings:
+        findings_by_rule.setdefault(finding.rule_id, []).append(finding)
 
     metrics = {
         rule.id: RuleMetrics(rule_id=rule.id) for rule in rules
     }
+    unknowns: list[Outcome] = []
     for metric in metrics.values():
-        metric.violations = sum(
-            1 for finding in findings if finding.rule_id == metric.rule_id
-        )
+        own = findings_by_rule.get(metric.rule_id, [])
+        metric.violations = len(own)
+        metric.findings_located = sum(1 for finding in own if _locates(finding))
         rule = next(rule for rule in rules if rule.id == metric.rule_id)
-        per_board = [
-            counts
-            for counts in (_rule_outcome_counts(rule, board_model) for board_model in board_models)
-            if counts is not None
-        ]
-        if per_board:
-            metric.outcome_counts = {
-                state: sum(counts[state] for counts in per_board)
-                for state in per_board[0]
-            }
+        totals: dict[str, int] = {state: 0 for state in OUTCOME_STATES}
+        makes_outcomes = False
+        for board_model in board_models:
+            outcomes = _rule_outcomes(rule, board_model)
+            if outcomes is None:
+                continue
+            makes_outcomes = True
+            if outcomes:
+                metric.outcome_pairs += 1
+            board_unknown = False
+            for outcome in outcomes:
+                totals[outcome.state] = totals.get(outcome.state, 0) + 1
+                if outcome.state != "UNKNOWN":
+                    continue
+                board_unknown = True
+                unknowns.append(outcome)
+            if board_unknown:
+                metric.unknown_pairs += 1
+        if makes_outcomes:
+            # A rule that implements the protocol keeps a counts row even when it
+            # reached no conclusion here: that is 0s, not "legacy" (the row a
+            # rule with no ``outcomes()`` at all gets).
+            metric.outcome_counts = totals
     for item in defects:
         if item.rule_hint in metrics:
             metrics[item.rule_hint].defects_hinted += 1
@@ -336,6 +486,7 @@ def evaluate_annotations(
         cross_matches=cross_matches,
         unregistered=unregistered,
         reviewed=aset.is_reviewed,
+        unknowns=unknowns,
     )
 
 
@@ -348,10 +499,8 @@ def _unregistered_line(item: object) -> str:
     severity = getattr(item, "severity", "") or ""
     kind = getattr(item, "kind", "")
     note = getattr(item, "note", "")
-    if len(note) > 140:
-        note = note[:137].rstrip() + "..."
     head = f"{item.ref} [{kind}" + (f", {severity}" if severity else "") + "]"
-    return f"{head} hint {item.rule_hint!r}: {note}"
+    return f"{head} hint {item.rule_hint!r}: {_clip(note)}"
 
 
 def _fmt_ratio(numerator: int, denominator: int, ratio: float | None) -> str:
@@ -432,7 +581,158 @@ def render_text_report(
         )
     if len(evaluations) > 1:
         lines.extend(_render_split_totals(evaluations, split))
+    lines.extend(_render_coverage(evaluations, rule_ids))
     return "\n".join(lines) + "\n"
+
+
+def _render_coverage(
+    evaluations: list[BoardEvaluation], rule_ids: list[str]
+) -> list[str]:
+    """UNKNOWN coverage, locate success, fix-success and provenance (017 sec.5).
+
+    **Appended after every existing section on purpose.** The numbers above this
+    block are frozen baselines (011e / 014 / 015b), and 017 may add a metric, not
+    rewrite one: the first line of this block is the first character of the
+    report a 017 run changes.
+    """
+    from .. import __version__
+
+    lines: list[str] = []
+    flagged = sum(m.unknown_pairs for e in evaluations for m in e.metrics)
+    pairs = sum(m.outcome_pairs for e in evaluations for m in e.metrics)
+    lines.append(
+        "\n  UNKNOWN coverage (017 sec.5) — (rule x board) pairs the rule ruled "
+        "on, with at least one UNKNOWN: "
+        + _fmt_ratio(flagged, pairs, flagged / pairs if pairs else None)
+        + "; a pair is one board on which the rule reached an outcome"
+    )
+    legacy: list[str] = []
+    for rule_id in rule_ids:
+        rows = [m for e in evaluations for m in e.metrics if m.rule_id == rule_id]
+        if not rows:
+            continue
+        if not any(row.outcome_counts is not None for row in rows):
+            legacy.append(rule_id)
+            continue
+        unknown = sum(row.unknown_pairs for row in rows)
+        ruled = sum(row.outcome_pairs for row in rows)
+        lines.append(
+            f"    {rule_id:26} "
+            + _fmt_ratio(unknown, ruled, unknown / ruled if ruled else None)
+        )
+    if legacy:
+        lines.append(
+            "    legacy (no outcome protocol, so in no pair here): "
+            + ", ".join(legacy)
+        )
+    unknowns = [outcome for evaluation in evaluations for outcome in evaluation.unknowns]
+    if unknowns:
+        clusters: dict[str, list[Outcome]] = {}
+        for outcome in unknowns:
+            clusters.setdefault(unknown_reason_category(outcome), []).append(outcome)
+        ranked = sorted(clusters.items(), key=lambda entry: (-len(entry[1]), entry[0]))
+        # The sentence inside a bucket, not just its size: "which fact to record
+        # next" is answered by the text. The sample is the first occurrence in
+        # evaluation order (rule order, then the rule's own order), so the same
+        # run always prints the same line -- it shows the bucket, it does not
+        # summarise it.
+        shown = ranked[:UNKNOWN_CLUSTER_TOP_N]
+        lines.append(
+            f"    missing_fact clusters: {len(ranked)} reason category(ies), "
+            + (f"top {len(shown)} by count:" if len(shown) < len(ranked) else "by count:")
+        )
+        for category, group in shown:
+            texts = {outcome.missing_fact for outcome in group}
+            lines.append(
+                f"      {len(group):>5}  {category:24} "
+                f"({len(texts)} distinct text(s))"
+            )
+            lines.append(f"             e.g. {_clip(group[0].missing_fact)}")
+    located = sum(m.findings_located for e in evaluations for m in e.metrics)
+    total = sum(m.findings_total for e in evaluations for m in e.metrics)
+    lines.append(
+        "\n  locate success (017 sec.5) — findings whose target names a part/pin "
+        "or whose text names a designator, every severity: "
+        + _fmt_ratio(located, total, located / total if total else None)
+    )
+    for rule_id in rule_ids:
+        rows = [m for e in evaluations for m in e.metrics if m.rule_id == rule_id]
+        here = sum(row.findings_total for row in rows)
+        if not here:
+            continue
+        found = sum(row.findings_located for row in rows)
+        lines.append(
+            f"    {rule_id:26} " + _fmt_ratio(found, here, found / here)
+        )
+    lines.append(
+        "\n  fix success (017 sec.5): pending — depends on 016 (edit apply -> "
+        "resolved probe); this build reports no number rather than 0"
+    )
+    lines.append(
+        "  provenance: tool boardwise "
+        f"{__version__}, ruleset {ruleset_fingerprint(rule_ids)} over "
+        f"{len(rule_ids)} rule id(s), rulebody "
+        + (rulebody_fingerprint() or "unavailable (frozen, no source)")
+    )
+    return lines
+
+
+def ruleset_fingerprint(rule_ids: list[str]) -> str:
+    """A short digest of the rule **set** a report was measured with (017 sec.5).
+
+    The digest covers the ordered rule ids, not the rules' bodies: a rule's id is
+    its contract-level identity, so adding, removing or reordering rules moves
+    this number, while a change inside a rule's body does not.
+    :func:`rulebody_fingerprint` is the other half — what those rules *say* —
+    and the report prints both, because a number measured before a rule
+    improvement and a number measured after it are different measurements even
+    when the set is identical.
+    """
+    return hashlib.sha256("\n".join(rule_ids).encode("utf-8")).hexdigest()[:8]
+
+
+def rulebody_fingerprint(rules_dir: str | Path | None = None) -> str | None:
+    """sha256/8 over the rules package's **source files**, or ``None`` if unreadable.
+
+    Recipe: take every ``*.py`` that sits directly in ``src/boardwise/rules/``,
+    sort by file name, feed each file's name and then its bytes into one sha256,
+    and keep the first 8 hex digits. Names are part of the stream so that moving
+    a rule between files cannot leave the digest unchanged.
+
+    What it covers: the rule bodies, their shared helpers in that directory
+    (``base.py``), their wording (``i18n.py``) — everything that decides what a
+    rule concludes and how it says it. What it does **not** cover, and the reason
+    both segments are printed: anything a rule *calls* from outside the
+    directory. ``engines/`` and ``core/`` helpers, the parsers, the curated shelf
+    (``blocklib/parts.json``) and the harness itself can all move a number
+    without moving this digest, so a report still needs the commit it was run at.
+
+    ``None`` means "this build cannot see its own rule sources", which is the
+    frozen state: a PyInstaller onefile carries the rules in the PYZ as bytecode,
+    and ``packaging/boardwise.spec``'s ``datas`` adds the connector bundle, the
+    manifest, SKILL.md and the shelf — no Python sources. The caller prints
+    ``rulebody unavailable (frozen, no source)``: a missing digest must not read
+    as an unchanged one, and a release build must not fail on a bookkeeping line.
+    """
+    try:
+        directory = (
+            Path(rules_dir)
+            if rules_dir is not None
+            else Path(__file__).resolve().parent.parent / "rules"
+        )
+        if not directory.is_dir():
+            return None
+        sources = sorted(path for path in directory.iterdir() if path.suffix == ".py")
+        if not sources:
+            return None
+        digest = hashlib.sha256()
+        for path in sources:
+            digest.update(path.name.encode("utf-8"))
+            digest.update(b"\x00")
+            digest.update(path.read_bytes())
+    except OSError:
+        return None
+    return digest.hexdigest()[:8]
 
 
 def _render_split_totals(

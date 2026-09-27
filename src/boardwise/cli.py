@@ -3378,8 +3378,36 @@ def _cmd_review_eval(args: argparse.Namespace) -> int:
         ).rstrip("\n")
     )
     if args.json_path:
+        from collections import Counter
+
+        from . import __version__ as _tool_version
+        from .engines.review_eval import (
+            rulebody_fingerprint,
+            ruleset_fingerprint,
+            unknown_reason_category,
+        )
+
+        rule_ids = [rule.id for rule in BUILTIN_RULES]
         payload = {
             "split": args.split,
+            # 017 sec.5: what a run has to record about itself before its numbers
+            # can be compared with another run's. Two rule segments: *which* rules
+            # ran (ids + order) and what they *say* (the sources) -- rule
+            # improvement moves the second and often not the first. ``rulebody``
+            # is null in a frozen build, which ships bytecode and no sources.
+            "provenance": {
+                "tool": _tool_version,
+                "ruleset": ruleset_fingerprint(rule_ids),
+                "rule_count": len(rule_ids),
+                "rulebody": rulebody_fingerprint(),
+            },
+            # 017 sec.5: the field exists, the number does not -- "edit apply then
+            # re-review comes back resolved" is 016's measurement, and reporting 0
+            # here would read as "every repair failed".
+            "fix_success": {
+                "status": "pending-016",
+                "note": "depends on 016's edit apply -> resolved probe; no data yet",
+            },
             "boards": [
                 {
                     "board": evaluation.board,
@@ -3391,6 +3419,29 @@ def _cmd_review_eval(args: argparse.Namespace) -> int:
                     "queries_excluded": evaluation.queries,
                     "holdout_excluded": evaluation.excluded_holdout,
                     "cross_matches": evaluation.cross_matches,
+                    # 017 sec.5: the UNKNOWN outcomes verbatim, plus the pairs
+                    # the coverage ratio counts.
+                    "unknown_coverage": {
+                        "pairs": sum(m.outcome_pairs for m in evaluation.metrics),
+                        "with_unknown": sum(m.unknown_pairs for m in evaluation.metrics),
+                        "reasons": dict(
+                            sorted(
+                                Counter(
+                                    unknown_reason_category(outcome)
+                                    for outcome in evaluation.unknowns
+                                ).items()
+                            )
+                        ),
+                        "unknowns": [
+                            {
+                                "rule_id": outcome.rule_id,
+                                "subject": outcome.subject,
+                                "missing_fact": outcome.missing_fact,
+                                "reason": unknown_reason_category(outcome),
+                            }
+                            for outcome in evaluation.unknowns
+                        ],
+                    },
                     "rules": [
                         {
                             "rule_id": metric.rule_id,
@@ -3413,6 +3464,14 @@ def _cmd_review_eval(args: argparse.Namespace) -> int:
                             "hp_false_positives_unexplained": metric.hp_fp_unexplained,
                             "hp_precision": metric.hp_precision,
                             "outcomes": metric.outcome_counts,
+                            # 017 sec.5: locate success -- findings that name a
+                            # part or pin, over **all** findings at any severity,
+                            # and the (rule x board) pairs UNKNOWN coverage counts.
+                            "findings_total": metric.findings_total,
+                            "findings_located": metric.findings_located,
+                            "locate_rate": metric.locate_rate,
+                            "outcome_pairs": metric.outcome_pairs,
+                            "unknown_pairs": metric.unknown_pairs,
                         }
                         for metric in evaluation.metrics
                     ],

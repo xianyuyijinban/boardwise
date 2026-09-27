@@ -567,7 +567,12 @@ def test_review_eval_measures_the_real_annotation_set():
     # score, or disappear.
     mpn_line = next(line for line in lines if "param-value-mpn-match" in line)
     assert "0/1 = 0.00" in mpn_line
-    assert result.stdout.count("0.00") == 1
+    # 017 sec.5 scoped this count to the measured table: the two new blocks
+    # (UNKNOWN coverage, locate success) are appended *after* it and carry their
+    # own fractions, including zeros for rules that always decided. This count
+    # is about the per-rule quality table on this board -- one 0.00, the mpn
+    # rule's recall -- and that reading is unchanged.
+    assert result.stdout.split("UNKNOWN coverage")[0].count("0.00") == 1
     # 011d: every hint implemented, the no-registered-rule column empty, and
     # no queries left open.
     assert "queries excluded: 0" in result.stdout
