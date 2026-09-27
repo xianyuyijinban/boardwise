@@ -110,3 +110,40 @@ datasheet would serve both.
   holdout board**: useful precisely because a rule that starts over-firing on it
   would show up as precision loss rather than as a missed defect.
 * `.enet` has no pages ⇒ no CONN-1 signal, as above.
+
+---
+
+## Refresh — 2026-09-27, current engine (043 shipped in v0.4.24)
+
+Re-ran the current engine on the same fixture before xianyuyijinban's ruling session:
+
+```
+boardwise review tests/fixtures/board24v.enet
+findings: 0 ERROR / 0 WARN / 27 INFO        (was: 0 / 15 / 27 at 011e)
+param-value-mpn-match outcomes: VIOLATION 0 / OK 9 / UNKNOWN 24 / N/A 0
+```
+
+**All 15 of A1's WARNs are gone, and they went two different ways — the split
+is the honest part:**
+
+* **9 → OK**: exactly the A1b six (`C53…C58`, `106` = 10 µF agreeing with the
+  board) and the A1c three (`R39/R40/R43`, four-character `R001` = 0.001 Ω
+  agreeing). 043's mid-letter/four-character decoder now *agrees* where it used
+  to misread agreement as contradiction. These nine need no ruling — they are
+  the decoder's regression suite passing on a real board.
+* **6+18 → UNKNOWN**: A1a's six aluminium-electrolytic part numbers
+  (`PA50V330M10x15`) are abstained, not false-fired, along with 18 more the
+  decoder makes no claim about. Abstention is the designed behavior (UNKNOWN =
+  signpost, §C backlog), and it means **A1 as a ruling ask is moot**: there is
+  nothing left to rule `exception` on. The M2 rule-side consequence paragraph
+  in A1 is likewise **done** (043: four-char R-notation, ambiguity handling).
+
+What still stands for the oracle:
+
+* **A2** (27 × INFO rc-cutoff): unchanged, still `observation`-class.
+* **§C facts backlog**: unchanged and now *more* visible — 24 UNKNOWNs on this
+  board are the intake list the 017 UNKNOWN-coverage metric will cluster.
+* **§D's framing is confirmed**: no defect candidates; this board's value is an
+  abstention-heavy holdout where *any future WARN* is precision-loss signal by
+  construction. The 017 draft's "已确诊 15 条 MPN 矛盾" line is **stale** —
+  those were decoder defects, fixed and now proven silent on the same board.
