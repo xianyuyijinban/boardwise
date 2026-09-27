@@ -100,7 +100,7 @@ class DesignModel:
     raw: dict[str, Any] = field(default_factory=dict)
     #: Designators placed **twice on one page**: two parts answer to one name
     #: in one netlist, which is what CONN-1 is about. The dict key above keeps
-    #: only the last placement, so without this list the clash would be silent
+    #: only the first placement, so without this list the clash would be silent
     #: (task 011c sec.3.2). Empty for single-page boards without clashes.
     duplicate_designators: list[str] = field(default_factory=list)
     #: Designator -> the pages it is placed on, for designators that appear on

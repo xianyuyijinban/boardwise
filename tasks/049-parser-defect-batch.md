@@ -88,6 +88,229 @@ cp outputs/049_base_schematic.py     src/boardwise/parsers/schematic.py   # 撤�
 
 ---
 
+## P1 落地记录（oracle 裁决后，2026-09-27；上文"未落盘"是裁决前的历史，保留）
+
+**裁决词**（xianyuyijinban 2026-09-27，经主代理转达）：**"049-P1 补 2 条标注后落地"**。
+
+### 落地动作
+
+- `cp outputs/049_p1_schematic_ready.py src/boardwise/parsers/schematic.py`，
+  装后 sha256 = `7cb231bac10b851538918964b22e9cbe7a5a115d5f13623a4cc8c8a609925527`
+  （与补丁文件逐字节一致，等于 049 记录的"装上"哈希）。
+- 复核 DCDC 读数（与xianyuyijinban裁决逐条一致）：
+  `U10 = 1 VIN→+5V / 2 GND→GND / 3 CE→+5V / 4 NC→None / 5 VOUT→**VCC**`；
+  `10UH = 1→VCCA / 2→VCC`（不再同网）；`+5V / VCC / VCCA / GND` 四网分开。
+
+### 2 条 decap WARN 的证据（全文见 `outputs/049b_p1_copper_evidence.txt`）
+
+规则看到的事实（Board1）：`U15 pin8 @ NET88`、`U16 pin8 @ NET96` —— 两条都是
+**单成员网**（网里只有那个脚自己），规则据此报 `no grounded capacitor found`。逐颗：
+
+| 项 | 值 |
+|---|---|
+| U15 / U16 | **TLV9062IDR**（双运放，LCSC `C398355`，SOIC-8），货架条目 `ic.tlv9062idr`（`ic.opamp`） |
+| 货架 required_caps | `{pin: "8", value: "0.1uF, TI SBOS839N p.26 §8.2 / p.27 §8.4.1"}`；supply_pins `{pins: ["8"], name: "V+"}` |
+| 重名情况 | 两个位号**同页各放两次**（PCB 上各只有一颗）；`conn-duplicate-designators` 已注 defect |
+| 模型保留的那份放置点 | U15 `rec=2195a4a0`（x=1190,y=876）、U16 `rec=72f75693`（x=1460,y=1090）：**U15 的 pin4/pin8 没有接任何走线；U16 八个脚全都没接** |
+| 被丢掉的那份放置点 | U15 `rec=fd9ab37d`、U16 `ad2fcbd2`：**pin8 走线落在 VCCA 上**，VCCA 上有 `C43`（100nF，MPN `CC0805KRX7R9BB104`）+ `C44`（原理图值 2.2uF）跨到 AGND |
+| **铜层口径（决定性）** | Board1 PCB（`ab812fb7…`，105 器件 / 92 网，U15/U16 各一颗）：
+`U15 pads = 1:IA, 2:$1N74290, 3:$1N74291, 4:**AGND**, 5:$1N74285, 6:$1N74284, 7:IB, 8:**VCCA**`；
+`U16 = 1:IC, 4:**AGND**, 8:**VCCA**`；`C43 = 100nF AGND↔VCCA`、`C44 = 100nF AGND↔VCCA` |
+
+即：**物理器件的 V+ 挂在 VCCA 上，且有 100nF×2 到 AGND —— 0.1uF 退耦要求是满足的**。
+两条 WARN 描述的是"模型保留的那份放置点"（原理图上没接电源脚的副本），不是板子的电源脚。
+
+### 判断：**不动标注**（走任务书的"歧义"分支）
+
+任务书给的判别是"该电源脚就近确无合规退耦电容（或值读不出）→ 注 defect；有任何歧义
+（比如其实有电容但规则看不见）→ 不动标注、整理证据报告"。本条落在后者的**字面情形**：
+电源脚所属的那个位号在图纸上有两份放置点，其中一份（与铜层一致的那份）**有**退耦电容
+（VCCA: C43/C44 → AGND），模型保留的是另一份没接线的副本。把这两条注成 defect，等于
+把"重名位号里模型挑了副本"读成"板子缺退耦"——与铜层矛盾。
+故 `reviewsets/ProPrj_毕设FOC驱动板_2026-09-17.json` **一字未改**（items 仍 43 条，未加 2 条）。
+
+### eval 终态（`outputs/049b_eval_{holdout,dev}.{txt,json}`）
+
+| 指标 | 048 落地态（P1 前） | P1 落地（无标注，本树） | 备注 |
+|---|---|---|---|
+| holdout 检出 | **59/59** | **59/59** | 未变（DCDC 那 2 条 defect 仍 2/2 检出） |
+| holdout 高优精确 | **59/59** | **59/61** | 分母＋2＝毕设FOC Board1 的两条 decap WARN（无 oracle 记录） |
+| holdout locate | 81/93 | 81/93 | 未变 |
+| holdout UNKNOWN 覆盖 | 114/183 | **113/183** | DCDC 的 `domain-unknown` 14→11 条（+5V 冲突消失，新多一条 "no source names the voltage of net 'VCC'"）、`path-ldo-dropout` 12/13→11/13 |
+| dev | 4/5、4/5 | 4/5、4/5（locate 81/93） | 未变 |
+
+holdout 文本 diff 的全部变化（逐条）：
+① DCDC 表头 `11 nets → 13 nets`（P1 拆网）；其 OK 行 +1/+1/+1（`pwr-supply-on-known-domain`、
+`pwr-domain-vs-range`、`path-ldo-dropout` 各由 UNKNOWN 转 OK：U10 pin1 的电压冲突消失，
+LDO 头寸 5.0−3.3=1.7V 可算）；UNKNOWN 行 `path-ldo-dropout 1→0`、两条 pwr `9→8`；**findings 不变**
+（2 ERROR，仍是那两条已注 defect 的重名位号）→ 该板既有 2 条标注**无影响**。
+② 毕设FOC 表头 `138 nets → 147 nets`，`decap-required-caps` 1→3 条（1 检出 + 2 无记录）。
+③ 毕设滤波采样 `28 nets → 41 nets`，`param-rc-cutoff` INFO 4→2 条（两条重名 RC 对被拆开）。
+④ 合计：高优精确 59/59→59/61；UNKNOWN 覆盖 114→113；locate 明细
+`decap-required-caps 4/4→6/6`、`param-rc-cutoff 16/26→14/24`。
+
+### 定向 pytest（`--basetemp=.tmp_pt_049`）：206 passed / **3 failed**
+
+三条失败都是"被 P1 改变读数"的旧钉（与注不注无关，P1 落地的任一形态都会红）：
+
+| 用例 | 旧值 → 现值 | 性质 |
+|---|---|---|
+| `test_040_page_scope.py::test_pages_are_not_welded` | 毕设 Board1 网数 `90 → 99` | 040 F1 的**观测值**（"页不互焊"这条性质本身未变，只是重名拆开后网变多） |
+| `test_040b_boards.py::test_the_project_totals_count_parts_not_names` | 项目总网数 `138 → 147` | 同上（器件数/位号数不变：155/121） |
+| `test_review_eval.py::test_the_bishe_boards_a_section_is_detected_and_explained` | 该板 `hp_fp_unexplained` `0 → 2` | 015 定的"该板高优未解释列为空"契约——**只有**注了 2 条或换 keep-first 才能回到 0；单纯重钉会削弱这条契约，故**未重钉**，留待裁决 |
+
+（前两条的 99/147 在 P1 落地后的**三种形态下都相同**——拆开的是岛，不是计数来源。）
+
+### 三个候选处置（实测数字，供主代理/oracle 定）
+
+| 选项 | 代码 | holdout 检出 | 高优精确 | 毕设 test_review_eval | 与铜层一致 |
+|---|---|---|---|---|---|
+| (i) 本树现状 | P1 落地、不标注 | 59/59 | **59/61** | 红（需重钉或改口径） | 否（读副本） |
+| (ii) P1 + 按原裁决注 2 条 defect | 同上＋`reviewsets/…毕设FOC….json` +2 | 59/59 | 61/61 | 绿 | **否**——标注与铜层矛盾（物理器件有 C43/C44） |
+| (iii) P1 + 模型改保留**第一份**放置点 | `components[designator] = component` → `setdefault(...)`（2 行） | 59/59 | **59/59** | 绿 | **是**：毕设 U15 → `1 OUTA=IA, 8 VCC=VCCA, 4 VEE/GND=AGND`，与 PCB 逐脚一致；DCDC 读数不变 |
+| (iv) 撤回 P1 | `cp outputs/049_base_schematic.py …` | 59/59 | 59/59 | 绿 | 否（DCDC 的 U10 pin5 又错读 +5V） |
+
+(iii) 的实测证据：`outputs/049b_keepfirst_eval_holdout.txt` / `_dev.txt`（holdout 59/59、dev 4/5，
+locate 79/91）；代价是 `conn-duplicate-designators` 的规则文案"the model kept only the last
+placement"与 docstring 要改口径（属规则文案，非判定逻辑）。**未擅自落地**——它改的是
+"一个位号保留哪份放置点"这条既有契约，不在本次裁决范围内。
+
+### 附带发现（登记，不判）
+
+TLV9062IDR 这份**符号库文档自身**把两半画在同一坐标上：`pin1 OUTA 与 pin7 OUTB 都在
+local (50,0)`，`pin2/pin6` 都在 `(-30,10)`，`pin3/pin5` 都在 `(-30,-10)`（证据 §[4]）。
+后果：任何一个 TLV9062 放置点都天然把 OUTA/OUTB 等短接；而铜层是 `U15.1=IA`、`U15.7=IB`
+（分开的）。也就是说**这张原理图用这个符号无法表达铜层的接法**——原理图与铜层在 U15/U16
+的 1/7 脚上不一致（现象级事实，是否算板子缺陷由 oracle 判；本批不动）。
+
+---
+
+## P1 终局：keep-first（主代理裁决 2026-09-27，替代"注 2 条"）
+
+**主代理裁决四点理由**（原话摘录）：
+
+1. **铜层证据决定性**：U15/U16 的 V+ 物理在 VCCA 并有 100nF×2 到 AGND；那两条 WARN 是
+   "模型挑了副本"的产物，注成 defect 会制造与物理事实矛盾的**假标注**；
+2. **xianyuyijinban的裁决意图**（P1 落地 + eval 干净）在 keep-first 下**完全达成**；
+3. **既有 43＋2 条标注一字不动**（不动 `reviewsets/*.json`）；
+4. xianyuyijinban拍板时未见铜层证据，**证据优先于裁决字面**；完整记录留他改判权。
+
+### 落地
+
+- `cp outputs/049b_keepfirst_schematic.py src/boardwise/parsers/schematic.py`，装后 sha256 =
+  **`60b8e1e1b30bed134dd1b8e6447a723d15e0fb22f0838839a98fe172e6432892`**（与
+  `outputs/049b_keepfirst_schematic.py` 逐字节一致）。相对 P1-keep-last 只差 2 行：
+  `components[designator] = component` → `.setdefault(designator, component)`（同一处理
+  `model.components`），即**一个位号保留文档里第一份放置点**。
+- 随后按上文"文案口径"改了同一文件的注释，**终态 sha256 =
+  `f7a35363a0cef165488735aa880146f5bf7e19d69192be5a49b1e1e29339648e`**；与 keep-first 文件的
+  差异**只有 `_fill_board_model` 里那段注释**（`diff -u outputs/049b_keepfirst_schematic.py
+  src/boardwise/parsers/schematic.py` 逐行可核，无代码差异）。
+
+### keep-first 的证据
+
+| 口径 | 毕设FOC Board1 U15 的脚 | 与铜层 |
+|---|---|---|
+| 原理图 keep-first（本树） | `1 OUTA=IA, 2 INA-=NET19, 3 INA+=NET24, 4 VEE/GND=**AGND**, 5 INB+=NET24, 6 INB-=NET19, 7 OUTB=IA, 8 VCC=**VCCA**` | 电源脚 `4=AGND / 8=VCCA` **逐脚一致** |
+| Board1 PCB（`ab812fb7…`） | `1=IA, 2=$1N74290, 3=$1N74291, 4=**AGND**, 5=$1N74285, 6=$1N74284, 7=IB, 8=**VCCA**`；`C43/C44 = 100nF AGND↔VCCA` | 基准 |
+| 原理图 keep-last（上一版） | `8 VCC=NET88`（悬空、无电容）→ 两条 decap WARN | 不一致 |
+
+DCDC 板的xianyuyijinban裁决读数在 keep-first 下**不变**：`U10 = 1 VIN→+5V / 2 GND→GND / 3 CE→+5V /
+4 NC→None / 5 VOUT→VCC`，`10UH = 1→VCCA / 2→VCC`，四网分开；该板 findings 仍 `2 ERROR`
+（两条已注的重名位号缺陷，2/2 检出）。
+
+### 文案口径（规则文案，非判定逻辑）
+
+| 位置 | 改动 |
+|---|---|
+| `src/boardwise/rules/connectivity.py:172` | `...one page; the model kept only the last placement` → `...one page; the model kept the first placement` |
+| `src/boardwise/rules/connectivity.py:187` | `so the model kept only the last placement` → `so the model kept the first placement` |
+| `src/boardwise/rules/connectivity.py` 类 docstring | 新增一段 **"Which placement the model keeps (049, measured: first)"**：keep-first 的理由（铜层：毕设 U15/U16 第一份的脚就是 PCB 的脚，后一份电源脚悬空），以及"读者不知道网表描述的是哪一份就用不了它" |
+| `src/boardwise/core/model.py:103` 注释 | `keeps only the last placement` → `keeps only the first placement` |
+| `src/boardwise/parsers/schematic.py:1527` 注释 | 改成 `keeps only the **first** placement per designator — the one the copper layer agrees with (049: …)` |
+
+**未动**：`reviewsets/*.json`（xianyuyijinban的 30 条重名位号注记里那句 "silently keeps only the last
+placement" 是**签署过的历史记录**，一字未改）；`reviewsets/*-triage.md` 三份 017 草稿引用的
+也是当时打印的旧文案（历史稿，不追改）；`outputs/011e_triage_raw.txt` 等历史证据同理。
+规则文案没有测试钉死（`grep` 确认 `tests/` 无引用），故无测试文案同步项。
+
+### 三条失败用例的处理
+
+| 用例 | 处理 | 说明 |
+|---|---|---|
+| `test_040_page_scope.py::test_pages_are_not_welded` | 重钉 `[90, 13, 35]` → **`[99, 13, 35]`**；`motor` `[89, 53]` → **`[104, 53]`** | 注释写明：049-P1 让同页重名位号不再共用一个引脚节点，被焊并的岛分开（毕设 Board1 有 U15/U16、高速板有 U15/U16/U17/U20；无重名的板不变）；**"任何网不跨页"这条性质本身未变**，器件的 155/121 也不变 |
+| `test_040b_boards.py::test_the_project_totals_count_parts_not_names` | 重钉 `138` → **`147`** | 同一拆岛效应；该用例真正钉的"placement 数 vs 名数"两个数**未动** |
+| `test_review_eval.py::test_the_bishe_boards_a_section_is_detected_and_explained` | **不重钉、直接转绿** | keep-first 下这两条 WARN 消失，`hp_fp_unexplained` 回到 **0** —— 015 定的"该板高优未解释列为空"契约完整保住（这正是选项 (ii) 需要"削弱契约"的地方） |
+
+### eval 终态（`outputs/049c_eval_{holdout,dev}.{txt,json}`）
+
+| 指标 | 048 落地态 | 049-P1 keep-last（上一版） | **049-P1 keep-first（终局）** |
+|---|---|---|---|
+| holdout 检出 | 59/59 | 59/59 | **59/59 = 1.00** |
+| holdout 高优精确 | 59/59 | 59/61 | **59/59 = 1.00** |
+| holdout locate | 81/93 | 81/93 | 79/91 |
+| holdout UNKNOWN 覆盖 | 114/183 | 113/183 | **112/183** |
+| dev | 4/5、4/5 | 4/5、4/5 | 4/5、4/5 |
+
+holdout 文本 diff 的全部变化（逐条）：
+
+1. **DCDC** 表头 `11 nets → 13 nets`（P1 拆岛）；OK 行 `pwr-supply-on-known-domain`、
+   `pwr-domain-vs-range`、`path-ldo-dropout` 各 `0 → 1`（UNKNOWN 转 OK：U10 pin1 的电压冲突
+   消失；LDO 头寸 5.0−3.3 = 1.7 V 可算）；UNKNOWN 行 `9→8 / 9→8 / 1→0`；
+   **findings 不变**（2 ERROR，两条已注缺陷仍 2/2 检出）→ 该板既有标注无影响。
+2. **毕设FOC** 表头 `138 nets → 147 nets`；`decap-required-caps` **保持 1 条**
+   （`U11 pin5: the grounded capacitor on 'NET10' is only 100nF (< required 1uF)` ——
+   与已注 defect 记录 `ref=U11` 配对，1/1 检出、0 未解释）。
+3. **毕设滤波采样** `28 nets → 41 nets`；`param-rc-cutoff` INFO `4 → 2` 条（两条重名 RC 对被拆开）。
+4. **高速电机控制器** 首板网数 `89 → 104`（同源；该板无标注，只影响报表数字）。
+5. 合计：高优精确 `59/59`（多出来的两条 WARN 消失）；UNKNOWN 覆盖 `114 → 112`
+   （DCDC `path-ldo-dropout` 12/13→11/13、`conn-usb-cc-pulldown` 1/11→0/11；
+   `domain-unknown` 14→11 条：`'+5V' 冲突`那条消失、新多一条 `no source names the voltage
+   of net 'VCC'`；`value-unreadable` 3→2）。
+6. locate `81/93 → 79/91`（分母跟着少两条 finding；`param-rc-cutoff 16/26→14/24`、
+   `decap-required-caps 4/4` 不变）——比例仍是 0.87。
+7. 级联多电平-主拓扑（signed-clean）与驱动模块：**逐字节未变**。
+
+### 定向与全量测试（终局）
+
+- 定向（`--basetemp=.tmp_pt_049`）：`test_049_parser_defects` + `test_020_parse_drops` +
+  `test_038_eprj3` + `test_040_page_scope` + `test_040b_boards` + `test_042_attr_parentid` +
+  `test_011d_rules` + `test_facts_rules` + `test_facts_library` + `test_017_eval_metrics` +
+  `test_017_roster` + `test_review_eval` + `test_rules` + `test_module_hygiene`
+  → **275 passed**（含三条原失败用例）。
+- 全量：**1841 passed / 0 failed**（140.86s，exit 0）。比 049 那轮的 1840 多 1 条，是我把
+  048 未提交版里被覆盖的 4 条 P3 用例并回 `tests/test_011d_rules.py` 后该文件 53 条的影响。
+
+### 交卷现场的一处事故与修复（如实记录）
+
+跑全量时我**中途 kill 了一次 pytest**（当时刚重钉完 040/040b，那一轮已过期）。被 kill 的那一刻
+`tests/test_injected_variants.py::test_check_reports_drift_without_rewriting_the_fixture`
+正在执行"把 golden 字节写进 `reviewsets/injected/v3-decap-missing.epro2` 再靠 `finally` 还原"
+这一步，于是**还原没跑到**，夹具被留成了 golden 板的字节（73725 → 80347）。处置：
+
+1. 先把被污染的字节备份到 `.tmp_049b/v3-decap-missing.clobbered.epro2`（备查，不覆盖）；
+2. 用 `git show HEAD:reviewsets/injected/v3-decap-missing.epro2 > …`（**不用** `git checkout --`）
+   写回提交态字节，`cmp` 逐字节相等，sha256 `b7d80cd3704be8d58b44f68df18ac64dfc7f36af4fbda3876abf99a0b8e73c6c`；
+3. 复核：`tests/test_injected_variants.py` **36 passed**、`make_variants.py --check` 输出
+   "7 board(s) and their annotation sets rebuild with identical content"、exit 0；该文件已从
+   `git status` 消失（＝与 HEAD 一致）。
+
+**对读数无影响**：污染发生在 18:29，049c 的 eval 产物是 18:28 落的（且污染内容＝golden 板，
+若被读到，`injected-v3-decap-missing` 会读成 17 器件；两份 eval 文本里它都是 16 器件 / 12 网 /
+0 finding）。恢复后我又**原样重跑**了一遍 049c holdout+dev，数字与污染前完全一致（见上表）。
+教训：**跑全量期间不要并发跑别的读夹具的作业，更不要中途 kill 全量**——那条用例的还原靠
+`finally`，进程被杀就没有 finally。
+
+### 附：keep-first 未消除的第二层限制（登记）
+
+拆岛只解决"跨岛焊并"。位号冲突本身仍在：`model.components` 只能给一个位号一份放置点，
+而**网成员表仍汇总所有放置点**，所以同一个位号会出现在多张网上（DCDC 例：
+`('10UF','2')` 同时在 `+5V` 与 `VCC`，`('100NF','1')` 同时在 `GND`、`VCC`、`VCCA`）。
+这是"一个位号两个器件"无法在单张网表里表达的部分，`conn-duplicate-designators` 已经在报它；
+keep-first 只是把"保留哪一份"选成与铜层一致的那一份。
+
+---
+
 ## P2 级联 14 pin dropped + U3 仅存 PCB 文档（调查定性：一半 bug、一半实情）
 
 ### 14 个丢脚：**bug**（形状未覆盖）

@@ -205,3 +205,104 @@ A 路要真兑现，落地后还需按 eval 定义复跑核对（本交卷未跑
    按"zero-ohm reading is not evidence"的既有约定处理，未改）。
 4. `毕设滤波采样` 板的 `CGA0603X7R104K500JT`（10 颗电容）仍是 UNKNOWN —— 那是**电压尾**形状
    （`104K500`）的白名单口子，与 048 无关，属另一块 backlog。
+
+---
+
+## 落地记录（2026-09-27，coder 子代理）：**已落地**（推翻上文"未落地"状态，调查历史保留）
+
+### 一、oracle 裁决词与落地动作
+
+> oracle xianyuyijinban 2026-09-27 裁决（**方案 A**）：毕设滤波采样 17 颗电阻的 **MPN 列写错 = 真缺陷**，
+> `注 defect 落地 048`。原话记录：**"是真缺陷，注 defect 落地"**。
+
+落地动作（主代理指令，逐条执行）：
+
+1. `cp outputs/048_numeric_exponent.values.py src/boardwise/rules/values.py` →
+   sha256 `56a71790599c15bc2165f33efd699913ecf9e5f25d7486f17611feacd5572849`（与本任务书 §一 记录的
+   patch 态**逐字一致**，无出入）。
+2. `cp outputs/048_numeric_exponent.test_011d_rules.py tests/test_011d_rules.py` →
+   sha256 `3620676cde22452fe848cefd2e13e1418d5e6bbcc0b0719d557b1935f991d572`（同样一致）。
+3. `reviewsets/毕设滤波采样_2026-09-27.json` 的 `items[]` 追加 **17 条 defect**（split_default=holdout，
+   故不写 `split` 字段）；`severity` 先在 patch 态 eval 里逐条核对，实际全部是 **WARN**（与既有
+   R3/R6 两条同形状）；`(ref, rule_hint, kind)` 与既有 5 条不撞。加载器自验：
+   `load_annotations` 无异常、`len(items)` **5 → 22**、`items_for_split('holdout') == 22`、
+   `(ref, kind)` 无重复。
+
+### 二、17 条标注清单（ref + 板值 + 解码读数）
+
+| ref | MPN | 板值（`Value`） | 解码读数 | 倍数 |
+|---|---|---|---|---|
+| `R2` | `0805W8J0103T5E` | 33kΩ | 10 kΩ | 3.30x |
+| `R5` | `0805W8J0103T5E` | 33kΩ | 10 kΩ | 3.30x |
+| `R30` | `0603WAF1002T5E` | 3.3k | 10 kΩ | 3.03x |
+| `R31` | 同上 | 3.3k | 10 kΩ | 3.03x |
+| `R32` | 同上 | 1k | 10 kΩ | 10.00x |
+| `R33` | 同上 | 220 | 10 kΩ | 45.45x |
+| `R34` | 同上 | 3.3k | 10 kΩ | 3.03x |
+| `R35` | 同上 | 3.3k | 10 kΩ | 3.03x |
+| `R36` | 同上 | 1k | 10 kΩ | 10.00x |
+| `R37` | 同上 | 220 | 10 kΩ | 45.45x |
+| `R38` | 同上 | 1k | 10 kΩ | 10.00x |
+| `R39` | 同上 | 1k | 10 kΩ | 10.00x |
+| `R40` | 同上 | 1k | 10 kΩ | 10.00x |
+| `R41` | 同上 | 0 | 10 kΩ | 比值无定义 |
+| `R42` | 同上 | 1k | 10 kΩ | 10.00x |
+| `R43` | 同上 | 470 | 10 kΩ | 21.28x |
+| `R44` | 同上 | 470 | 10 kΩ | 21.28x |
+
+note 写法：`R2` 段与 `R30` 段各写**批次说明**（含裁决词与根因：MPN 列写错 / 15 颗共用一个
+10 kΩ 料号），其余 15 条为简短引用（各自写清本颗板值）。**未动**该文件的 `notes` 字段与
+`observations[]`（主代理指令只要求 `items[]`）。
+
+### 三、eval 实测 vs 推算
+
+命令同 048，落 `outputs/048b_eval_{holdout,dev}.{txt,json}`：
+
+| 指标（holdout） | 046 基线 | 048 patch（未注） | 推算（A 路） | **落地后实测** |
+|---|---|---|---|---|
+| 检出（injected + native） | 42/42 = 1.00 | 42/42 = 1.00 | 59/59 = 1.00 | **59/59 = 1.00** ✓ |
+| 高优精确 | 42/42 = 1.00 | 42/59 = 0.71 | 59/59 = 1.00 | **59/59 = 1.00** ✓ |
+| x-catch / missed / 无记录误报 | 0 / 0 / 0 | 0 / 0 / **17** | 0 / 0 / 0 | **0 / 0 / 0** ✓ |
+| 毕设滤波采样 `param-value-mpn-match` | 2/2（VIOL 2 / UNK 27） | 2/19（VIOL 19 / UNK 10） | det 17 对应 | **19/19（VIOL 19 / 板级 det 19）** ✓ |
+| dev | 4/5 / 4/5 | 4/5 / 4/5 | 逐字不变 | **4/5 / 4/5 逐字不变** ✓ |
+
+**推算全部兑现，无一条不符。**
+
+**UNKNOWN 覆盖实测值 = `114/183 = 0.62`（不是 99）——逐条解释**：
+
+1. 该指标数的是 **(rule × board) 配对**中"至少有一条 UNKNOWN 的配对"数
+   （`outcome_pairs` / `unknown_pairs`），**不是 UNKNOWN 条数**。`毕设滤波采样` 即便少掉 17 条
+   UNKNOWN，仍剩 10 条（`C1/C2/C8/C9/C11/C12/C77/C78/C79/C80` 的 `CGA0603X7R104K500JT`），
+   配对照样成立。
+2. 而且**标注根本不影响解码与 outcome**：同树同规则、只把 17 条标注去掉的 A/B 测量
+   （`.tmp_048b_ab.py`，in-process，绕开 CLI 快照）得 `114/183` **两边完全相同** →
+   048 落地对覆盖率的贡献是 **0**。
+3. 与 048 那次的 `116/183` 相比少 2，来源是 **049 的在途解析器改动**（`src/boardwise/parsers/
+   schematic.py` mtime 17:34:23，`.tmp_049/schematic_with_p1_ready.py` 17:34:17）：`FPC触屏游戏机`
+   板的 `conn-usb-cc-pulldown` 配对由 `3/11` 变 `1/11`（该板 nets 60 → 59，两条 UNKNOWN 变 OK），
+   **与 048 无关**。该 A/B 同时复现了 CLI 的两组数字（42/59 → 59/59），互为交叉验证。
+4. 真正按预期掉的是 UNKNOWN **条数**：`毕设滤波采样` 的 `param-value-mpn-match` UNKNOWN
+   `27 → 10`（−17），eval 侧 `mpn-undecodable` 事实簇 `120 → 101`（−19 = 17 板内 + 2 毕设FOC）。
+
+### 四、定向测试
+
+```
+.venv/Scripts/python.exe -m pytest tests/test_011d_rules.py tests/test_annotations.py \
+    tests/test_review_eval.py tests/test_017_eval_metrics.py tests/test_injected_variants.py \
+    -q --basetemp=.tmp_pt_048
+→ 160 passed
+```
+
+（`test_011d_rules.py` 49 个 def，含 048 新测试；标注加载器/评测/指标/注入变体全绿。）
+未跑全量（主代理统一跑）。
+
+### 五、落地后的状态与遗留
+
+- **048 已落地**：`values.py` 的数值指数读法 + 测试 + 17 条 defect 标注都在 tree 里
+  （上面两个 patch 态 sha256 即当前文件哈希）。
+- 本任务书 §五"红线破了→未落地"的**调查历史保留**（那是裁决前的真实状态），以本段为准。
+- 遗留不变：`0603WAF0000T5E`（0 Ω 跳线）仍拒读；`毕设滤波采样` 的
+  `CGA0603X7R104K500JT`×10 仍 UNKNOWN（电压尾形状的 backlog）；`R2/R5` 的 3.30x 刚过 3x 阈值，
+  阈值按 015 裁决不动。
+- 复核提醒：`outputs/048b_*` 落在 049 在途解析器改动**之后**，它的 FPC 数字与 046 时代基线
+  不同是 049 的账；主代理收工后应重跑一次作为最终口径。

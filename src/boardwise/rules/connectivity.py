@@ -130,6 +130,15 @@ class DuplicateDesignators(OutcomeRule):
     is gone. What 040b adds is not a verdict but a *subject*: the message says
     which board(s) the name spans, so "same board, another sheet" and "another
     board" read differently.
+
+    **Which placement the model keeps (049, measured: first).** One name cannot
+    hold two placements, so the model picks one — and since 049 it keeps the
+    **first** one in the document. The copper layer is what decided it: on the
+    thesis-FOC board both U15 and U16 are placed twice on one page, and the
+    *first* placement's pins are the ones the PCB agrees with (U15's V+ on VCCA
+    with its 100nF return, VEE/GND on AGND), while the later copy leaves those
+    power pins unwired. The rule therefore says so in the message, because a
+    reader who cannot tell which placement the netlist describes cannot use it.
     """
 
     id = "conn-duplicate-designators"
@@ -169,7 +178,7 @@ class DuplicateDesignators(OutcomeRule):
                     subject=designator,
                     message=(
                         f"{designator} is used by more than one placed part on "
-                        "one page; the model kept only the last placement"
+                        "one page; the model kept the first placement"
                     ),
                     evidence=[f"duplicate designator {designator}"],
                 ),
@@ -184,7 +193,7 @@ class DuplicateDesignators(OutcomeRule):
                 message = (
                     f"{designator} is placed once on each of {len(pages)} pages "
                     f"of one board ({where}); one netlist holds the name twice, "
-                    "so the model kept only the last placement"
+                    "so the model kept the first placement"
                 )
                 evidence = [
                     f"designator {designator} on {len(pages)} pages: "

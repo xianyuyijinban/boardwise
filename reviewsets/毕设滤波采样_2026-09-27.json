@@ -41,6 +41,125 @@
       "kind": "defect",
       "severity": "WARN",
       "note": "Ruling A2 (same batch as R6): defect. Twin position, same MPN, same hand-edited 330 value text, same ruling."
+    },
+    {
+      "ref": "R2",
+      "rule_hint": "param-value-mpn-match",
+      "kind": "defect",
+      "severity": "WARN",
+      "note": "Ruling A4 (oracle xianyuyijinban, 2026-09-27; one decision covering the 17 MPN WARNs of this board, taken after the 048 decoder gap was closed): defect. R2's MPN 0805W8J0103T5E decodes to 10 kohm -- 厚声's 5% (E-24) ordering field with a numeric exponent, 010 x 10^3, readable only since task 048 -- while the schematic declares 33kohm. Order per the BOM and the board gets 10 kohm parts where 33 kohm was designed: the MPN column was filled in wrong. Oracle: 是真缺陷，注 defect 落地。"
+    },
+    {
+      "ref": "R5",
+      "rule_hint": "param-value-mpn-match",
+      "kind": "defect",
+      "severity": "WARN",
+      "note": "Ruling A4 (same batch as R2): defect. Twin position, same MPN 0805W8J0103T5E (10 kohm) against board value 33kohm, same root cause, same ruling."
+    },
+    {
+      "ref": "R30",
+      "rule_hint": "param-value-mpn-match",
+      "kind": "defect",
+      "severity": "WARN",
+      "note": "Ruling A4 (same batch; one note covering R30-R44): defect. All fifteen resistors R30-R44 carry the SAME MPN 0603WAF1002T5E = 10 kohm (厚声 numeric-exponent field: 100 x 10^2), while their Value fields declare fifteen different resistances. R30's is 3.3k. Order per the BOM and fifteen positions get 10 kohm parts: the MPN column was filled in wrong, the same root cause as R2/R5."
+    },
+    {
+      "ref": "R31",
+      "rule_hint": "param-value-mpn-match",
+      "kind": "defect",
+      "severity": "WARN",
+      "note": "Ruling A4 (same batch as R30): defect. Same MPN 0603WAF1002T5E (10 kohm) against board value 3.3k."
+    },
+    {
+      "ref": "R32",
+      "rule_hint": "param-value-mpn-match",
+      "kind": "defect",
+      "severity": "WARN",
+      "note": "Ruling A4 (same batch as R30): defect. Same MPN 0603WAF1002T5E (10 kohm) against board value 1k."
+    },
+    {
+      "ref": "R33",
+      "rule_hint": "param-value-mpn-match",
+      "kind": "defect",
+      "severity": "WARN",
+      "note": "Ruling A4 (same batch as R30): defect. Same MPN 0603WAF1002T5E (10 kohm) against board value 220."
+    },
+    {
+      "ref": "R34",
+      "rule_hint": "param-value-mpn-match",
+      "kind": "defect",
+      "severity": "WARN",
+      "note": "Ruling A4 (same batch as R30): defect. Same MPN 0603WAF1002T5E (10 kohm) against board value 3.3k."
+    },
+    {
+      "ref": "R35",
+      "rule_hint": "param-value-mpn-match",
+      "kind": "defect",
+      "severity": "WARN",
+      "note": "Ruling A4 (same batch as R30): defect. Same MPN 0603WAF1002T5E (10 kohm) against board value 3.3k."
+    },
+    {
+      "ref": "R36",
+      "rule_hint": "param-value-mpn-match",
+      "kind": "defect",
+      "severity": "WARN",
+      "note": "Ruling A4 (same batch as R30): defect. Same MPN 0603WAF1002T5E (10 kohm) against board value 1k."
+    },
+    {
+      "ref": "R37",
+      "rule_hint": "param-value-mpn-match",
+      "kind": "defect",
+      "severity": "WARN",
+      "note": "Ruling A4 (same batch as R30): defect. Same MPN 0603WAF1002T5E (10 kohm) against board value 220."
+    },
+    {
+      "ref": "R38",
+      "rule_hint": "param-value-mpn-match",
+      "kind": "defect",
+      "severity": "WARN",
+      "note": "Ruling A4 (same batch as R30): defect. Same MPN 0603WAF1002T5E (10 kohm) against board value 1k."
+    },
+    {
+      "ref": "R39",
+      "rule_hint": "param-value-mpn-match",
+      "kind": "defect",
+      "severity": "WARN",
+      "note": "Ruling A4 (same batch as R30): defect. Same MPN 0603WAF1002T5E (10 kohm) against board value 1k."
+    },
+    {
+      "ref": "R40",
+      "rule_hint": "param-value-mpn-match",
+      "kind": "defect",
+      "severity": "WARN",
+      "note": "Ruling A4 (same batch as R30): defect. Same MPN 0603WAF1002T5E (10 kohm) against board value 1k."
+    },
+    {
+      "ref": "R41",
+      "rule_hint": "param-value-mpn-match",
+      "kind": "defect",
+      "severity": "WARN",
+      "note": "Ruling A4 (same batch as R30): defect. Same MPN 0603WAF1002T5E (10 kohm) against board value 0 -- a zero-ohm position carrying a 10 kohm part number."
+    },
+    {
+      "ref": "R42",
+      "rule_hint": "param-value-mpn-match",
+      "kind": "defect",
+      "severity": "WARN",
+      "note": "Ruling A4 (same batch as R30): defect. Same MPN 0603WAF1002T5E (10 kohm) against board value 1k."
+    },
+    {
+      "ref": "R43",
+      "rule_hint": "param-value-mpn-match",
+      "kind": "defect",
+      "severity": "WARN",
+      "note": "Ruling A4 (same batch as R30): defect. Same MPN 0603WAF1002T5E (10 kohm) against board value 470. (The 017 draft had already logged this row by hand as 一块空白 -- a value/MPN inconsistency the decoder of the day could not read; the 048 reading makes it a finding.)"
+    },
+    {
+      "ref": "R44",
+      "rule_hint": "param-value-mpn-match",
+      "kind": "defect",
+      "severity": "WARN",
+      "note": "Ruling A4 (same batch as R30): defect. Same MPN 0603WAF1002T5E (10 kohm) against board value 470, twin of R43."
     }
   ],
   "observations": [
