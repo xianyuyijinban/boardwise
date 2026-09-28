@@ -258,9 +258,10 @@ def test_checkup_writes_the_architecture_beside_the_report(tmp_path, capsys):
     out = capsys.readouterr().out
     assert code == 0
     report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
-    # /5 since 053 §2.2 (`completion`); `architecture` keeps its shape and gains
-    # the merged view's extras (`slots`, `intent`, `totals.filled`/`stale`).
-    assert report["schema"] == "boardwise.checkup/5"
+    # /5 since 053 §2.2 (`completion`), /6 since 058 (`needs_datasheet`);
+    # `architecture` keeps its shape and gains the merged view's extras
+    # (`slots`, `intent`, `totals.filled`/`stale`).
+    assert report["schema"] == "boardwise.checkup/6"
     section = report["architecture"]
     assert section["file"] == ARCH_FILE_NAME
     assert section["totals"]["analogChains"] >= 1

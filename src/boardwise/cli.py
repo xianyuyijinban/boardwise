@@ -33,9 +33,13 @@ from .engines.checkup import (
     PAGE_ATTRIBUTION_ARCHIVE,
     PAGE_ATTRIBUTION_PER_PAGE,
     PAGE_ATTRIBUTION_UNRESOLVED,
+    TRIGGER_FACTS,
+    TRIGGER_MARKED,
     UNREVIEWED_DATASHEET_DIR,
     layout_review_section,
+    marked_parts,
     modules_section,
+    needs_datasheet_section,
     order_modules_by_warnings,
     page_attribution_from_archive,
     render_report_markdown,
@@ -359,6 +363,70 @@ def build_parser() -> argparse.ArgumentParser:
         dest="aesthetics",
         action="store_false",
         help="Turn it off for this run only, whatever the configuration says.",
+    )
+
+    need_datasheet = sub.add_parser(
+        "need-datasheet",
+        help=(
+            "Mark a device/pin the review cannot explain yet, so the report stops "
+            "short of a pass (058 ⓪: ask for the datasheet before judging it)."
+        ),
+        description=(
+            "The ⓪ 先问再判 step's input (issue #8). Records what the reviewer "
+            "cannot establish from the drawing and the material at hand — a pin "
+            "whose function is unknown, a whole device whose behaviour has to be "
+            "read out of its datasheet — and merges it into the `needs_datasheet` "
+            "section of an existing `checkup` report. The report's gate is then "
+            "recomputed: `completion.verdict` becomes `incomplete`, "
+            "`summary.conclusion` says how many pins are waiting, and `report.md` "
+            "is re-rendered with the section that forbids claiming a pass while "
+            "it is non-empty. Idempotent per `(part, pin)`: marking again updates "
+            "the reason instead of adding a row. Purely offline — no editor, no "
+            "daemon. Exit 0 applied / 2 bad input / 3 no report.json to mark up."
+        ),
+    )
+    need_datasheet.add_argument(
+        "--out",
+        default="checkup",
+        metavar="DIR",
+        help=(
+            "The `checkup --out` directory holding report.json (and the sidecar "
+            "needs-datasheet.json). Default: %(default)s."
+        ),
+    )
+    need_datasheet.add_argument(
+        "--part",
+        required=True,
+        metavar="REF",
+        help="The designator whose function is not established (e.g. U7).",
+    )
+    need_datasheet.add_argument(
+        "--pins",
+        default="",
+        metavar="P1,P2",
+        help=(
+            "Comma-separated pin names (or numbers) that cannot be explained. "
+            "Omit it for 'the whole device' — the entry then says so."
+        ),
+    )
+    need_datasheet.add_argument(
+        "--reason",
+        required=True,
+        help=(
+            "Why it cannot be judged — what the datasheet would have to say. "
+            "Required: it is the only pointer to what to ask for."
+        ),
+    )
+    need_datasheet.add_argument(
+        "--json",
+        dest="json_path",
+        nargs="?",
+        const="-",
+        metavar="PATH",
+        help=(
+            "Write the merged result (the marked entries, the recomputed "
+            "`completion`, the conclusion) as JSON. `-` prints it instead."
+        ),
     )
 
     review_eval = sub.add_parser(
@@ -2366,7 +2434,18 @@ def _cmd_review(args: argparse.Namespace) -> int:
 #: ever asked "are there unreviewed parts?" — was being read downstream as a
 #: complete pass. `mayClaimPassed` keeps its name and its narrow meaning; this
 #: section is the complete statement. Fields are added, never renamed (031).
-CHECKUP_SCHEMA = "boardwise.checkup/5"
+#:
+#: `/6` since 058 (the datasheet gate's ⓪ step, issue #8): the report carries
+#: `needs_datasheet` — **one** list of what the review still depends on, with two
+#: triggers. `facts` is the 039 gate's own seed (`unreviewed_parts`, carried over
+#: unchanged and still reported under its own name); `marked` is what the
+#: *reviewer* could not establish, written down before judging a pin through
+#: `boardwise need-datasheet` (issue #8: an FB/ICG pair judged with no datasheet,
+#: both verdicts wrong the next day). The gate moved with it: `completion` now
+#: counts `needsDatasheet` (marked parts, one per part however many pins) and
+#: `needsDatasheet > 0` is `incomplete`. `summary.mayClaimPassed` is untouched —
+#: it still answers only the unreviewed question (053's narrow discipline).
+CHECKUP_SCHEMA = "boardwise.checkup/6"
 
 #: What each tier actually read, spelled for the report's own header.
 #:
@@ -2407,6 +2486,7 @@ def _checkup_report(
     modules: list[dict],
     slots: dict,
     unreviewed_parts: list[dict] | None = None,
+    needs_datasheet: list[dict] | None = None,
     warning_triage: list[dict] | None = None,
     layout_review: dict | None = None,
     architecture: dict | None = None,
@@ -2433,6 +2513,14 @@ def _checkup_report(
     existing field changed meaning, which is why the three older sections and
     `summary.mayClaimPassed` are untouched.
 
+    058 added `needs_datasheet` — the ⓪ 先问再判 worklist (058 §二): the facts
+    trigger is `unreviewed_parts` carried over as it stands, the marked one is
+    empty at generation time because no reviewer has read the board yet (a mark
+    is merged in afterwards by `boardwise need-datasheet`). Like
+    `unreviewed_parts` it is **always present**: an empty list is the honest
+    "nothing is unknown yet", which is what the renderer's empty/non-empty gate
+    reads. Schema bumped to `/6`.
+
     Every section is real by now. `pending` is kept as an **empty** object rather
     than removed: a consumer that learned to read it finds "nothing owed" instead
     of a missing key, and the next batch that owes something has a place to say
@@ -2455,6 +2543,9 @@ def _checkup_report(
         "modules": modules,
         "findings": findings,
         "unreviewed_parts": list(unreviewed_parts or []),
+        # 058: always present, empty list included — the reviewer's mark channel
+        # exists from the first report on (`boardwise need-datasheet` fills it).
+        "needs_datasheet": list(needs_datasheet or []),
         "warning_triage": list(warning_triage or []),
         "ai_slots": slots,
     }
@@ -2547,43 +2638,42 @@ def _write_design_intent(out_dir: Path, markdown: str) -> Path | None:
     return path
 
 
-def _completion_section(
+def _completion_body(
     *,
-    model: object,
+    scope: dict,
     summary: dict,
     unreviewed: list[dict],
     triage: list[dict],
     architecture: dict | None,
+    needs_datasheet: list[dict] | None = None,
 ) -> dict:
-    """`completion` — coverage, what is still owed, the source versions, the verdict.
+    """`completion` from counts a caller already has — one shape, two callers.
 
-    053 §2.2's replacement for reading `summary.mayClaimPassed` as "done". The
-    verdict's three states are exactly the enumerated conditions, so a reader can
-    derive them without this function:
+    `_completion_section` (a live run) and `_completion_from_report` (re-gating an
+    existing report after `boardwise need-datasheet`) both land here, so the
+    verdict's rules exist once and a section written by either path says the same
+    thing. 053 §2.2's three states, and the condition 058 added:
 
     * ``incomplete`` — ``errors > 0`` **or** unreviewed parts remain (a part no
-      rule could judge means the review did not cover the board);
+      rule could judge means the review did not cover the board) **or** the
+      reviewer marked pins/devices whose function is not established yet;
     * ``complete`` — ``errors = 0`` **and** unreviewed = 0 **and** stale = 0
-      **and** nothing waiting for triage;
-    * ``complete-with-open-items`` — two checks passed, but the residual open
+      **and** nothing waiting for triage **and** no marked unknown;
+    * ``complete-with-open-items`` — the two above passed, but the residual open
       items are non-empty (a slot whose drawing moved under it, a warning nobody
       has triaged yet).
 
     `openTodos` (the architecture's unfilled slots) is *reported* but does not
-    gate: the enumerated conditions for ``complete`` are the four above, and a
-    TODO slot is the skeleton still asking a question rather than an unfinished
-    check. `verdictWhy` spells out which of them were non-empty, so no reader has
-    to reconstruct the arithmetic.
+    gate: a TODO slot is the skeleton still asking a question rather than an
+    unfinished check. `verdictWhy` spells out which conditions were non-empty, so
+    no reader has to reconstruct the arithmetic.
     """
-    from .core.model import ProjectModel
-
-    boards = len(model.boards) if isinstance(model, ProjectModel) else 1
-    pages = (
-        sum(len(board.board.page_uuids) for board in model.boards)
-        if isinstance(model, ProjectModel) else 0
-    )
     errors = int(summary.get("errorCount", 0) or 0)
     unreviewed_count = len(unreviewed)
+    # One per part however many pins it carries, and the facts seed it may also
+    # have is *not* added again — `unreviewedParts` already counts that part and
+    # 058 §二 says the same question is not counted twice (`marked_parts`).
+    marked_count = len(marked_parts(needs_datasheet))
     pending = sum(1 for entry in triage if not (entry.get("verdict") or "").strip())
     slots = (architecture or {}).get("totals") or {}
     empty = {"total": 0, "filled": 0, "stale": 0}
@@ -2599,6 +2689,8 @@ def _completion_section(
         why.append(f"{errors} 项 ERROR")
     if unreviewed_count:
         why.append(f"{unreviewed_count} 颗器件缺手册未审")
+    if marked_count:
+        why.append(f"{marked_count} 项管脚/器件待手册（审查者标记）")
     if architecture_slots["stale"]:
         why.append(f"{architecture_slots['stale']} 个架构槽位的图纸已变（stale）")
     if pending:
@@ -2606,7 +2698,7 @@ def _completion_section(
     if architecture is None:
         why.append("架构骨架未生成（report.json 无 architecture 键）")
 
-    if errors or unreviewed_count:
+    if errors or unreviewed_count or marked_count:
         verdict = "incomplete"
     elif architecture_slots["stale"] or pending:
         verdict = "complete-with-open-items"
@@ -2618,9 +2710,10 @@ def _completion_section(
 
     rule_ids = [rule.id for rule in BUILTIN_RULES]
     return {
-        "scope": {"rules": len(rule_ids), "boards": boards, "pages": pages},
+        "scope": dict(scope),
         "errors": errors,
         "unreviewedParts": unreviewed_count,
+        "needsDatasheet": marked_count,
         "warningsPendingTriage": pending,
         "architectureSlots": architecture_slots,
         "openTodos": open_todos,
@@ -2631,6 +2724,222 @@ def _completion_section(
         "verdict": verdict,
         "verdictWhy": why,
     }
+
+
+def _completion_section(
+    *,
+    model: object,
+    summary: dict,
+    unreviewed: list[dict],
+    triage: list[dict],
+    architecture: dict | None,
+    needs_datasheet: list[dict] | None = None,
+) -> dict:
+    """`completion` for a **live run** — the coverage counts come from the model.
+
+    053 §2.2's replacement for reading `summary.mayClaimPassed` as "done", and
+    since 058 §二 the section that carries the datasheet gate's own count
+    (`needsDatasheet`, the reviewer's marks). The verdict rules live in
+    :func:`_completion_body`.
+    """
+    from .core.model import ProjectModel
+
+    boards = len(model.boards) if isinstance(model, ProjectModel) else 1
+    pages = (
+        sum(len(board.board.page_uuids) for board in model.boards)
+        if isinstance(model, ProjectModel) else 0
+    )
+    return _completion_body(
+        scope={"rules": _builtin_rule_count(), "boards": boards, "pages": pages},
+        summary=summary,
+        unreviewed=unreviewed,
+        triage=triage,
+        architecture=architecture,
+        needs_datasheet=needs_datasheet,
+    )
+
+
+def _builtin_rule_count() -> int:
+    from .engines.review import BUILTIN_RULES
+
+    return len([rule.id for rule in BUILTIN_RULES])
+
+
+def _completion_from_report(report: dict, *, needs_datasheet: list[dict]) -> dict:
+    """Re-gate an **existing** report after `boardwise need-datasheet` (058 §三).
+
+    The marking command does not re-run anything: the sections it does not touch
+    (findings, DRC, warning triage, architecture) are read back out of the report
+    and fed to the same :func:`_completion_body`. What it must *not* do is keep
+    the old verdict: adding an unknown pin to a report that said `complete` is
+    exactly the hole 058 closed, so the section is rebuilt rather than patched.
+
+    `scope` is the one field carried over: how many rules/boards/pages the run
+    covered is a fact about that run, and a marking operation observes nothing
+    new about the board. It is derived from the model section only for a report
+    old enough to have no `completion` at all.
+    """
+    previous = report.get("completion") or {}
+    model_section = report.get("model") or {}
+    boards = model_section.get("boards") or []
+    scope = dict(previous.get("scope") or {})
+    scope.setdefault("rules", _builtin_rule_count())
+    scope.setdefault("boards", len(boards) or 1)
+    scope.setdefault("pages", sum(len(board.get("pages") or []) for board in boards))
+    return _completion_body(
+        scope=scope,
+        summary=report.get("summary") or {},
+        unreviewed=report.get("unreviewed_parts") or [],
+        triage=report.get("warning_triage") or [],
+        architecture=report.get("architecture"),
+        needs_datasheet=needs_datasheet,
+    )
+
+
+# --------------------------------------------------------------------------
+# needs_datasheet: the reviewer's mark channel (058 §三)
+# --------------------------------------------------------------------------
+
+#: The sidecar beside `report.json` that keeps the reviewer's marks. It is a
+#: plain JSON object with one `marks` array (not JSONL) so the file is one
+#: readable document that a human can open, diff and edit — and so the merge is
+#: idempotent by construction: the merge key is `(part, pin)` and a repeat
+#: **updates the reason in place**.
+NEEDS_DATASHEET_FILE = "needs-datasheet.json"
+NEEDS_DATASHEET_SIDECAR_SCHEMA = "boardwise.needs-datasheet/1"
+
+#: Exit code for "there is no report to mark up" (058 §三). The same 3 `checkup`
+#: uses for "the state cannot be stated": here the statement is missing.
+NEED_DATASHEET_NO_REPORT = 3
+
+
+class NeedDatasheetError(Exception):
+    """The mark could not be applied (no report, unreadable sidecar, bad args)."""
+
+
+def _load_need_marks(out_dir: Path) -> list[dict]:
+    """The reviewer's marks from the sidecar beside the report — ``[]`` if none.
+
+    A file that cannot be read or parsed is a hard stop for the command that
+    would add to it (it must not overwrite an audit trail it could not read),
+    but only a missing file for `checkup`, which never writes this file.
+    """
+    path = Path(out_dir) / NEEDS_DATASHEET_FILE
+    if not path.is_file():
+        return []
+    import json
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise NeedDatasheetError(
+            f"{path}: 审查者标记侧车读不了（{type(exc).__name__}: {exc}）——"
+            "不覆盖读不出来的审计痕迹"
+        ) from exc
+    if isinstance(payload, list):  # a bare array is the same information
+        marks = payload
+    elif isinstance(payload, dict):
+        marks = payload.get("marks") or []
+    else:
+        marks = []
+    return [dict(mark) for mark in marks if isinstance(mark, dict)]
+
+
+def _write_need_marks(out_dir: Path, marks: list[dict]) -> Path:
+    """Write the sidecar back (created if missing) and say where."""
+    import json
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / NEEDS_DATASHEET_FILE
+    path.write_text(
+        json.dumps(
+            {"schema": NEEDS_DATASHEET_SIDECAR_SCHEMA, "marks": marks},
+            ensure_ascii=False,
+            indent=2,
+        ) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _merge_need_mark(
+    marks: list[dict], *, part: str, pins: list[str], reason: str
+) -> tuple[list[dict], int, int]:
+    """Merge one invocation into the sidecar's marks, keyed by ``(part, pin)``.
+
+    Returns ``(marks, added, updated)``. One row **per pin** is what makes the
+    repeat idempotent (058 §三: "同一 (part, pin) 重复标记 = 更新 reason、不新增
+    条目"): a pin already on the list has its reason replaced, a new one is
+    appended, and an empty ``pins`` means the whole device (stored as ``pin=""``,
+    which is its own key and therefore never duplicates the pin-level rows).
+    """
+    wanted = list(pins) or [""]
+    now = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    out = [dict(mark) for mark in marks]
+    added = updated = 0
+    for pin in wanted:
+        index = next(
+            (
+                position
+                for position, mark in enumerate(out)
+                if str(mark.get("part") or "").strip() == part
+                and str(mark.get("pin") or "").strip() == pin
+            ),
+            None,
+        )
+        row = {"part": part, "pin": pin, "reason": reason, "at": now}
+        if index is None:
+            out.append(row)
+            added += 1
+        else:
+            out[index] = {**out[index], **row}
+            updated += 1
+    return out, added, updated
+
+
+def _review_conclusion(summary: dict, *, unreviewed_count: int, marked_count: int) -> str:
+    """`summary.conclusion` — the one line that may be quoted as the verdict.
+
+    The datasheet gate in one sentence. `unreviewed_parts` (the facts trigger) is
+    the sentence 039 wrote; 058 §二 adds the reviewer's marks as a second clause,
+    because a report whose only unknown is a pin the reviewer flagged must not
+    read as a plain "无 ERROR". `summary.mayClaimPassed` is untouched: it stays
+    the **narrow** answer to "is any part unreviewed?".
+    """
+    errors = int(summary.get("errorCount", 0) or 0)
+    verdict = "无 ERROR" if not errors else f"{errors} 项 ERROR"
+    if unreviewed_count:
+        text = (
+            f"{verdict}；另有 {unreviewed_count} 颗器件缺手册未审"
+            if errors
+            else f"DRC/连接性已审，{unreviewed_count} 颗器件缺手册未审"
+        )
+    else:
+        text = verdict
+    if marked_count:
+        text += f"；另有 {marked_count} 项管脚待手册（已标记）"
+    return text
+
+
+def _apply_needs_datasheet(report: dict, needs_datasheet: list[dict]) -> dict:
+    """Re-gate a report in place after a mark: section + completion + conclusion.
+
+    Exactly the three things a mark can change, and nothing else — `summary.
+    mayClaimPassed` keeps its narrow meaning (053), `unreviewed_parts` and the
+    facts seed are not recomputed (nothing was re-read), and the rule engine is
+    not re-run. `completion` is **rebuilt** (see :func:`_completion_from_report`),
+    so a report that said `complete` cannot survive being told about a pin nobody
+    can explain yet.
+    """
+    report["schema"] = CHECKUP_SCHEMA
+    report["needs_datasheet"] = needs_datasheet
+    report["completion"] = _completion_from_report(report, needs_datasheet=needs_datasheet)
+    report["summary"]["conclusion"] = _review_conclusion(
+        report.get("summary") or {},
+        unreviewed_count=len(report.get("unreviewed_parts") or []),
+        marked_count=len(marked_parts(needs_datasheet)),
+    )
+    return report
 
 
 def _write_checkup_markdown(out_dir: Path, report: dict) -> Path:
@@ -3250,19 +3559,36 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
     # architecture slots, warnings still waiting for triage); a reader that wants
     # "may I say this board passed?" must ask that, not this.
     summary["mayClaimPassed"] = not unreviewed
-    # The conclusion carries both halves. With errors present the count stays first
+    # 058 §二: the same gate, generalized — one list of what the review depends
+    # on, with the facts seed as its first trigger. At generation time the
+    # reviewer's marks are empty by construction (nobody has read the board yet);
+    # `boardwise need-datasheet` merges them in afterwards.
+    needs_datasheet = needs_datasheet_section(unreviewed, [], findings)
+    try:
+        stale_marks = _load_need_marks(out_dir)
+    except NeedDatasheetError as exc:
+        # A sidecar nobody can read is a note here, never a crash: `checkup` is
+        # the command that must always produce a report, and it is not the one
+        # that owns that file (only `need-datasheet` writes it).
+        stale_marks = []
+        notes.append(f"审查者标记侧车读不了（{exc}）：本次报告按 marked 为空出，文件一个字没动")
+    if stale_marks:
+        # The sidecar survives a re-run, so this report would *look* as if the
+        # reviewer had marked nothing. Say so instead (`need-datasheet` is
+        # idempotent, so re-merging costs one command).
+        notes.append(
+            f"侧车 {NEEDS_DATASHEET_FILE} 里有 {len(stale_marks)} 条审查者标记（按 (part, pin) 计）"
+            f"未并入本次报告（checkup 生成时 marked 为空）：跑 `boardwise need-datasheet` 重新合并"
+        )
+    # The conclusion carries every half. With errors present the count stays first
     # (that is the reader's next action); with none, the datasheet gate is the whole
     # of what may be said — and nothing on the line claims a pass while parts have
-    # no datasheet.
-    verdict = "无 ERROR" if not summary.get("errorCount") else f"{summary['errorCount']} 项 ERROR"
-    if unreviewed:
-        summary["conclusion"] = (
-            f"{verdict}；另有 {len(unreviewed)} 颗器件缺手册未审"
-            if summary.get("errorCount")
-            else f"DRC/连接性已审，{len(unreviewed)} 颗器件缺手册未审"
-        )
-    else:
-        summary["conclusion"] = verdict
+    # no datasheet or pins are still waiting for one.
+    summary["conclusion"] = _review_conclusion(
+        summary,
+        unreviewed_count=len(unreviewed),
+        marked_count=len(marked_parts(needs_datasheet)),
+    )
 
     triage = warning_triage_slots(model=model, drc=drc, findings=findings, modules=modules)
     # 044 M1 / 053 §2.2: the architecture skeleton — generated here (before the
@@ -3311,6 +3637,7 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         tier=tier, source=source, model=model, attempts=attempts, notes=notes,
         drc=drc, findings=findings, summary=summary, modules=modules, slots=slots,
         unreviewed_parts=unreviewed,
+        needs_datasheet=needs_datasheet,
         warning_triage=triage,
         layout_review=(
             layout_review_section(source=aesthetics_source, pages=canvas)
@@ -3321,6 +3648,7 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         completion=_completion_section(
             model=model, summary=summary, unreviewed=unreviewed, triage=triage,
             architecture=(architecture.section if architecture is not None else None),
+            needs_datasheet=needs_datasheet,
         ),
     )
     report_path = _write_checkup_report(out_dir, report)
@@ -3409,6 +3737,13 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
     print(f"  ai_slots: unknown_parts {len(slots['unknown_parts'])}，"
           f"canvas_images {len(canvas)}" + (f"（{canvas_note}）" if canvas_note else "")
           + "，summary_template 已留槽")
+    # 058: the gate's own list, next to the slot count — the reader's ⓪ step.
+    print(
+        f"  needs_datasheet: {len(needs_datasheet)} 条"
+        f"（facts {len(unreviewed)} / 审查者标记 {len(marked_parts(needs_datasheet))}）"
+        + (f" —— {out_dir / NEEDS_DATASHEET_FILE} 里的标记请跑 `boardwise need-datasheet` 合并"
+           if stale_marks else "")
+    )
     print(f"  report: {report_path}")
     print(f"  report.md: {report_md_path}")
     if architecture_path is not None and architecture is not None:
@@ -3443,6 +3778,154 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
            "(a model was obtained and nothing is an ERROR)")
     )
     return exit_code
+
+
+def _cmd_need_datasheet(args: argparse.Namespace) -> int:
+    """``boardwise need-datasheet`` — write down what the reviewer cannot explain.
+
+    058 §三 / issue #8's缺口③: the SOP's ⓪ step has to be an *action* before any
+    verdict, not a passive door. This is its input: the reviewer names the device
+    (and optionally the pins) whose function the drawing and the material at hand
+    cannot establish, and says why. The report then closes its gate over it —
+    `needs_datasheet[]` gains a `marked` entry, `completion.verdict` becomes
+    `incomplete`, `summary.conclusion` says it out loud, and `report.md` is
+    re-rendered with the section that forbids claiming a pass while it is there.
+
+    A **pure file operation**: no editor, no daemon, no rule engine. It reads
+    ``<out>/report.json`` plus the sidecar ``<out>/needs-datasheet.json``, merges
+    the mark and writes both back. Idempotent by ``(part, pin)``: marking the same
+    pin again updates its reason instead of adding a second row.
+
+    Exit codes: **0** applied · **2** unusable input (no `--part`/`--reason`, an
+    unreadable report or sidecar) · **3** there is no ``report.json`` to mark up
+    (run `boardwise checkup` first) — the same 3 the review commands use for "the
+    state cannot be stated", because here the statement does not exist yet.
+    """
+    import json
+    import re
+
+    out_dir = Path(args.out)
+    report_path = out_dir / "report.json"
+    if not report_path.is_file():
+        print(
+            f"boardwise need-datasheet: {report_path} 不存在——先跑 `boardwise checkup`"
+            "（本命令只把标记并进一份已有报告，不生成报告）",
+            file=sys.stderr,
+        )
+        return NEED_DATASHEET_NO_REPORT
+
+    part = (args.part or "").strip()
+    if not part:
+        print("boardwise need-datasheet: --part 不能为空", file=sys.stderr)
+        return 2
+    # `--pins` is optional: no pins means the whole device is the unknown (058 §三).
+    pins = [pin.strip() for pin in re.split(r"[,\s、]+", args.pins or "") if pin.strip()]
+    reason = (args.reason or "").strip()
+    if not reason:
+        print(
+            "boardwise need-datasheet: --reason 必填——写清「为什么解释不了」；"
+            "它是这份清单里唯一指向该查什么的线索",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        marks = _load_need_marks(out_dir)
+    except NeedDatasheetError as exc:
+        print(f"boardwise need-datasheet: {exc}", file=sys.stderr)
+        return 2
+    except (OSError, ValueError) as exc:
+        print(
+            f"boardwise need-datasheet: {report_path}: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return 2
+    if not isinstance(report, dict):
+        print(f"boardwise need-datasheet: {report_path} 不是一个 report 对象", file=sys.stderr)
+        return 2
+
+    # A mark for a designator the report does not carry is still recorded — the
+    # reviewer may be looking at a board the report read worse than they can — but
+    # never silently: a typo that disappears into the gate is worse than one that
+    # is refused, because the gate would then hold a question about no part.
+    designators = set((report.get("model") or {}).get("designators") or [])
+    if designators and part not in designators:
+        print(
+            f"boardwise need-datasheet: 报告里的位号没有 {part}"
+            f"（model.designators 不含它，共 {len(designators)} 个位号）——标记照记，请核对位号",
+            file=sys.stderr,
+        )
+
+    marks, added, updated = _merge_need_mark(marks, part=part, pins=pins, reason=reason)
+    # Rebuilt from the report's own sections, never from a fresh read: the mark
+    # adds a question, it does not re-run the review (`unreviewed_parts` stays the
+    # facts seed it was, and `mayClaimPassed` keeps its narrow meaning).
+    needs_datasheet = needs_datasheet_section(
+        report.get("unreviewed_parts") or [],
+        marks,
+        report.get("findings") or [],
+    )
+    _apply_needs_datasheet(report, needs_datasheet)
+    sidecar_path = _write_need_marks(out_dir, marks)
+    _write_checkup_report(out_dir, report)
+    report_md_path = _write_checkup_markdown(out_dir, report)
+
+    for line in _need_datasheet_lines(report, needs_datasheet, added=added, updated=updated):
+        print(line)
+    if args.json_path is not None:
+        payload = json.dumps(
+            {
+                "part": part,
+                "pins": pins,
+                "reason": reason,
+                "added": added,
+                "updated": updated,
+                "needs_datasheet": needs_datasheet,
+                "completion": report["completion"],
+                "conclusion": report["summary"].get("conclusion", ""),
+                "report": str(report_path),
+                "sidecar": str(sidecar_path),
+                "reportMd": str(report_md_path),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        if (args.json_path or "") in ("", "-"):
+            print(payload)
+        else:
+            Path(args.json_path).write_text(payload + "\n", encoding="utf-8")
+            print(f"  json: {args.json_path}")
+    return 0
+
+
+def _need_datasheet_lines(
+    report: dict, needs_datasheet: list[dict], *, added: int, updated: int
+) -> list[str]:
+    """The command's own report: what was merged, and where the gate now stands.
+
+    One line spells out whether the mark was new or a repeat — "已存在，已更新" is
+    the wording 058 §三 asks for, and it is what tells a caller the second run of
+    the same command changed nothing but the reason. Then the section's two
+    counts, the conclusion the report is now allowed to quote, and the verdict.
+    """
+    facts = sum(1 for entry in needs_datasheet if entry.get("trigger") == TRIGGER_FACTS)
+    marked = [entry for entry in needs_datasheet if entry.get("trigger") == TRIGGER_MARKED]
+    if added and not updated:
+        state = "已新增"
+    elif updated and not added:
+        state = "已存在，已更新"
+    else:
+        state = f"已存在，已更新（另新增 {added} 条）"
+    completion = report.get("completion") or {}
+    why = "；".join(completion.get("verdictWhy") or []) or "无 ERROR、无未审、无 stale、无待分诊"
+    return [
+        f"  mark: {state}（新增 {added} / 更新 {updated} 条）",
+        f"  needs_datasheet: facts {facts} 条 / 审查者标记 {len(marked)} 项",
+        f"  conclusion: {report.get('summary', {}).get('conclusion', '')}",
+        f"  completion: {completion.get('verdict')}（{why}）",
+        f"  report: {report.get('schema')} 已重算并写回；report.md 已重渲染",
+    ]
 
 
 def _finding_payload(finding: object) -> dict:
@@ -16504,6 +16987,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_review_eval(args)
     if args.command == "review-mark":
         return _cmd_review_mark(args)
+    if args.command == "need-datasheet":
+        return _cmd_need_datasheet(args)
     if args.command == "edit":
         return EDIT_COMMANDS[args.edit_command](args)
     if args.command == "doctor":

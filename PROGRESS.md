@@ -4,6 +4,26 @@ Living index. Details live in `tasks/*.md` (one book per task) and
 `docs/implementation-log.md` (the connector debugging arc). This file only
 collects the current truth and the pointers.
 
+## [2026-09-28] 058 审查 SOP 手册闸前置（issue #8：`needs_datasheet[]` 双触发 + 「先问再判」；agent-77 执行，主代理架构+验收；connector/daemon 零改动仍 **0.4.25**）
+
+### Problem / Task
+issue #8 事故：审查者绕过 `checkup` 走 `bridge call sch.netlist` + 人工清单，在**没手册**的情况下对一块市电输入三相 BLDC 板的辅源 IC 的 `FB`/`ICG` 两脚下了判定，次日拿到手册证明两条全错（FB 悬空是厂家认可用法、板上 4.7kΩ 设定 12V 与需求一致；ICG 是相对输出的参考点、接输出侧正确）。三缺口：①闸只长在 checkup 报告里，绕开 checkup 就没有；②闸判据是"规则缺 fact"（facts 驱动），不是"审查者读不懂的管脚"；③"工程师给手册"是被动通道，SOP 没有**事前停下来索取**的一步。任务书 `tasks/058-review-needs-datasheet.md`（主代理方案：SKILL+报告 schema+新命令+模板四处，**规则引擎一字不动**）。
+
+### Resolution
+- **SKILL 审查三步变四步**（`.kimi-code/skills/boardwise/SKILL.md`）：**⓪ 先问再判**（事前阻塞，排在 ① ERC 之前）——判定任何器件/管脚之前先把"功能建立不起来的器件与管脚"列成 `needs_datasheet[]` 清单，非空时一次性向用户索取手册，资料到位前依赖项只能写「无法确认（等资料）」；**消歧段写死**：「不许涂绿」是事后标记（已有）、「先问再判」是事前动作（本步），两阶段不合并；边界写死：能独立算的先算（分压/耐压/降额/驱动电流），只挂起依赖未知功能的条目，不自动联网抓手册。②手册闸改口：`needs_datasheet[]` 是唯一未知项清单，`unreviewed_parts[]` 是其 facts 子集。§3.1b 的 completion 枚举主代理补 `needsDatasheet` 一词。
+- **报告 schema /5→/6**（只加不改名，031）：`needs_datasheet[]` 一等节双触发——facts（`unreviewed_parts` 原样纳入，三通道随行）与 marked（审查者标记，checkup 生成时为空）；同 part 两源命中 marked 优先展示 + `factSeed:true`、计数只算一次；`dependentFindings` 从 `findings[]` 按 refs/`target.component_ref` 计算（`<rule>@<part>`，纯报告层后处理）。`completion` 平铺加 `needsDatasheet`（去重 marked part 数）；verdict 规则加 `needsDatasheet>0 ⇒ incomplete`，`verdictWhy` 加"N 项管脚/器件待手册（审查者标记）"；`summary.conclusion` 加"；另有 N 项管脚待手册（已标记）"。**`summary.mayClaimPassed` 窄义一字未动**（053 纪律）；`_completion_section` 拆 `_completion_body` 保证 live 与 from_report 两路径 verdict 规则只有一份实现。
+- **新命令 `boardwise need-datasheet`**（触发源②的输入口）：`--out <dir> --part U7 --pins FB,ICG --reason "…"`，读 report.json + 侧车 `needs-datasheet.json`（审计痕迹），按 **(part,pin) 幂等**合并（重复标记只更新 reason），重算 completion/conclusion 并写回 + 重渲染 report.md；**纯文件操作**（BridgeClient 打桩抛异常仍 exit 0 实证）；无 report.json → exit 3；reason 空白拒 exit 2；不在报告里的位号照记 + stderr 警告；侧车坏了 checkup 记 note 不崩、need-datasheet exit 2 不动文件。checkup 重跑时侧车有历史标记会加 `source.notes` 提示重新合并（不静默忘掉）。
+- **报告模板**：report.md 新节「本报告依赖的未知项」（未审器件之后、主机 DRC 之前），**非空时节首固定一行"本节非空期间，本报告不得宣称审查通过。"**；`SUMMARY_TEMPLATE` 加同名槽位。
+
+### Verification
+- 离线场景 7 条（证据 `outputs/058_offline_scenarios.txt`，真 CLI 跑 ch340_golden 夹具）：①checkup 生成即带 facts 种子（schema=/6、与 unreviewed 逐字段一致）；②标记 U1:FB,ICG → 闸全翻（verdict=incomplete、conclusion 带字、dependentFindings 命中 `decap-required-caps@U1`、report.md marked 表渲染）；**②b 干净板 `complete` 被一枚标记翻成 `incomplete` 而 `mayClaimPassed` 仍 True**（窄义纪律 + 缺口②正解的实证）；③重复标记幂等（侧车仍 2 行、报告仍 1 条）；④无 report.json → exit 3 不创建任何文件；⑤侧车坏两态；⑥位号不在报告照记+警告；⑦不碰编辑器实证。
+- **定向 736 passed（36 文件，91s）**；新增 `test_058_needs_datasheet.py` **12**；`test_039c`/`test_architecture` 三处 `/5`→`/6` 字面量是 schema 升级必然镜像（非放水）；`test_dsh_plugin_sync`/`test_action_catalogue` 绿（新命令零桥动作，无需登记）。
+- **变异 3 组 CAUGHT**（cp+sha256 还原）：M1 completion 不重建 → 3 红；M2 幂等键退恒新增 → 1 红；M3 闸行被吞 → 3 红。
+- **主代理亲跑全量 pytest 2242 passed**（270s，2230+12），**eval holdout 59/59 双 1.00 亲测**；SKILL/cli/checkup/测试 diff 主代理逐块过目。
+- 文档同步：`docs/bridge.md` 命令导读、`docs/getting-started.md` 用户指南；用户级 skill 副本需 `boardwise install-skill` 刷新（执行代理未跑，写 home 需用户触发）。
+
+### Commit
+见下方提交（本条落盘时 hash 待定，提交后回填）。
 ## [2026-09-28] 056 画法编译器 阶段 C2a：多模块单页编译（纯离线；agent-76 执行，主代理架构+验收；connector/daemon 零改动仍 **0.4.25**）
 
 ### Problem / Task
