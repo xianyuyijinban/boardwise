@@ -33,11 +33,13 @@ from .engines.checkup import (
     PAGE_ATTRIBUTION_ARCHIVE,
     PAGE_ATTRIBUTION_PER_PAGE,
     PAGE_ATTRIBUTION_UNRESOLVED,
+    TRIAGE_VERDICTS,
     TRIGGER_FACTS,
     TRIGGER_MARKED,
     UNREVIEWED_DATASHEET_DIR,
     layout_review_section,
     marked_parts,
+    merge_triage_sidecar,
     modules_section,
     needs_datasheet_section,
     order_modules_by_warnings,
@@ -426,6 +428,73 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Write the merged result (the marked entries, the recomputed "
             "`completion`, the conclusion) as JSON. `-` prints it instead."
+        ),
+    )
+
+    triage = sub.add_parser(
+        "triage",
+        help=(
+            "Record the verdict for one warning of an existing `checkup` report "
+            "(有益/有害/无害 + reason), so a re-run cannot drop it (issue #12)."
+        ),
+        description=(
+            "xianyuyijinban's step ② as an action: one warning, one verdict, one "
+            "reason. Writes the verdict into `warning_triage[]` of an existing "
+            "`checkup` report **and** into the sidecar `warning-triage.json` beside "
+            "it — which is what makes the judgement survive the next `checkup` "
+            "(issue #12: the slots were the only AI channel with no way back in). "
+            "The report's gate is recomputed on the spot: "
+            "`completion.warningsPendingTriage` drops, `report.md` is re-rendered "
+            "with the verdict in the table. Idempotent per `key`: a second run for "
+            "the same key updates it rather than adding a row. Purely offline — no "
+            "editor, no daemon. Exit 0 applied / 2 bad input (including a key the "
+            "report does not carry) / 3 no report.json to triage."
+        ),
+    )
+    triage.add_argument(
+        "--out",
+        required=True,
+        metavar="DIR",
+        help=(
+            "The `checkup --out` directory holding report.json (and the sidecar "
+            "warning-triage.json). Required: the verdict is written into that "
+            "report, so guessing the directory would write it into the wrong one."
+        ),
+    )
+    triage.add_argument(
+        "--key",
+        required=True,
+        metavar="KEY",
+        help=(
+            "The `warning_triage[].key` of the warning being judged (e.g. "
+            "`boardwise-rule:xtal-load-caps:Y1`). Unknown keys are refused by name."
+        ),
+    )
+    triage.add_argument(
+        "--verdict",
+        required=True,
+        choices=list(TRIAGE_VERDICTS),
+        metavar="VERDICT",
+        help="One of: " + " / ".join(TRIAGE_VERDICTS) + ".",
+    )
+    triage.add_argument(
+        "--reason",
+        required=True,
+        help=(
+            "Why that verdict — what makes the warning harmless or harmful. "
+            "Required: it is the only pointer to what the judgement rested on."
+        ),
+    )
+    triage.add_argument(
+        "--json-path",
+        "--json",
+        dest="json_path",
+        nargs="?",
+        const="-",
+        metavar="PATH",
+        help=(
+            "Write the merged result (the slots, the recomputed `completion`, the "
+            "conclusion) as JSON. `-` prints it instead."
         ),
     )
 
@@ -2995,7 +3064,9 @@ def _merge_need_mark(
     return out, added, updated
 
 
-def _review_conclusion(summary: dict, *, unreviewed_count: int, marked_count: int) -> str:
+def _review_conclusion(
+    summary: dict, *, unreviewed_count: int, marked_count: int, pending_triage: int = 0
+) -> str:
     """`summary.conclusion` — the one line that may be quoted as the verdict.
 
     The datasheet gate in one sentence. `unreviewed_parts` (the facts trigger) is
@@ -3003,6 +3074,14 @@ def _review_conclusion(summary: dict, *, unreviewed_count: int, marked_count: in
     because a report whose only unknown is a pin the reviewer flagged must not
     read as a plain "无 ERROR". `summary.mayClaimPassed` is untouched: it stays
     the **narrow** answer to "is any part unreviewed?".
+
+    `pending_triage` is the third clause (063 §4): a report with warnings nobody
+    has judged yet owes that judgement, so once `boardwise triage` writes one the
+    line has to say so — it is the same arithmetic `completion.verdictWhy`
+    spells out. Only the triage command passes it: at generation time the slots
+    are the AI's to fill and the report's own line stays the one 039 wrote (the
+    pending count lives in `completion`), which keeps this string from becoming a
+    second, silently-widening verdict.
     """
     errors = int(summary.get("errorCount", 0) or 0)
     verdict = "无 ERROR" if not errors else f"{errors} 项 ERROR"
@@ -3016,6 +3095,8 @@ def _review_conclusion(summary: dict, *, unreviewed_count: int, marked_count: in
         text = verdict
     if marked_count:
         text += f"；另有 {marked_count} 项管脚待手册（已标记）"
+    if pending_triage:
+        text += f"；另有 {pending_triage} 条 warning 待分诊"
     return text
 
 
@@ -3036,6 +3117,119 @@ def _apply_needs_datasheet(report: dict, needs_datasheet: list[dict]) -> dict:
         report.get("summary") or {},
         unreviewed_count=len(report.get("unreviewed_parts") or []),
         marked_count=len(marked_parts(needs_datasheet)),
+    )
+    return report
+
+
+# --------------------------------------------------------------------------
+# warning_triage: the AI's verdict channel (063 §2, issue #12)
+# --------------------------------------------------------------------------
+
+#: The sidecar beside `report.json` that keeps the AI's triage verdicts. It is a
+#: plain JSON object with one `entries` array (not JSONL) for the same reason
+#: `needs-datasheet.json` is: a human must be able to open, diff and edit it —
+#: and the merge is idempotent by construction, because the matching key is the
+#: slot's own `key` and a repeat **updates the verdict in place**.
+WARNING_TRIAGE_FILE = "warning-triage.json"
+WARNING_TRIAGE_SIDECAR_VERSION = 1
+
+#: Exit code for "there is no report to triage" (063 §4). The same 3 the review
+#: commands use for "the state cannot be stated": here the statement does not
+#: exist yet.
+TRIAGE_NO_REPORT = 3
+
+
+class WarningTriageError(Exception):
+    """The verdict could not be applied (no report, unreadable sidecar, bad args)."""
+
+
+def _load_triage_entries(out_dir: Path) -> list[dict]:
+    """The AI's verdicts from the sidecar beside the report — ``[]`` if none.
+
+    A file that cannot be read or parsed is a hard stop for the command that
+    would add to it (it must not overwrite an audit trail it could not read), but
+    only a missing file for `checkup`, which never writes this file.
+    """
+    path = Path(out_dir) / WARNING_TRIAGE_FILE
+    if not path.is_file():
+        return []
+    import json
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise WarningTriageError(
+            f"{path}: 分诊侧车读不了（{type(exc).__name__}: {exc}）——"
+            "不覆盖读不出来的审计痕迹"
+        ) from exc
+    if isinstance(payload, list):  # a bare array is the same information
+        entries = payload
+    elif isinstance(payload, dict):
+        entries = payload.get("entries") or []
+    else:
+        entries = []
+    return [dict(entry) for entry in entries if isinstance(entry, dict)]
+
+
+def _write_triage_entries(out_dir: Path, entries: list[dict]) -> Path:
+    """Write the sidecar back (created if missing) and say where."""
+    import json
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / WARNING_TRIAGE_FILE
+    path.write_text(
+        json.dumps(
+            {"version": WARNING_TRIAGE_SIDECAR_VERSION, "entries": entries},
+            ensure_ascii=False,
+            indent=2,
+        ) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _merge_triage_entry(
+    entries: list[dict], *, key: str, verdict: str, reason: str, source: str, text: str
+) -> tuple[list[dict], int, int]:
+    """Merge one verdict into the sidecar's entries, keyed by the slot's `key`.
+
+    Returns ``(entries, added, updated)``. One row **per key** is what makes the
+    repeat idempotent (063 §4: "重复执行同一 key = 更新，不新增行"): a key already
+    on the list has its verdict and reason replaced, a new one is appended.
+    ``source``/``text`` ride along only so a human reading the sidecar knows what
+    the key was about — the match never looks at them (063 §2).
+    """
+    row = {"key": key, "verdict": verdict, "reason": reason, "source": source, "text": text}
+    out = [dict(entry) for entry in entries]
+    for index, entry in enumerate(out):
+        if str(entry.get("key") or "") == key:
+            out[index] = {**entry, **row}
+            return out, 0, 1
+    out.append(row)
+    return out, 1, 0
+
+
+def _apply_warning_triage(report: dict, triage: list[dict]) -> dict:
+    """Re-gate a report in place after a verdict: section + completion + conclusion.
+
+    Exactly the three things a verdict can change, and nothing else — the rule
+    engine is not re-run, `unreviewed_parts` and the facts seed are not
+    recomputed, and `summary.mayClaimPassed` keeps its narrow meaning (053).
+    `completion` is **rebuilt** rather than patched (see
+    :func:`_completion_from_report`), so the pending count a reader sees is the
+    one this section now has; `needs_datasheet` is passed back through unchanged
+    because a verdict moves no datasheet.
+    """
+    report["schema"] = CHECKUP_SCHEMA
+    report["warning_triage"] = triage
+    report["completion"] = _completion_from_report(
+        report, needs_datasheet=report.get("needs_datasheet") or []
+    )
+    report["summary"]["conclusion"] = _review_conclusion(
+        report.get("summary") or {},
+        unreviewed_count=len(report.get("unreviewed_parts") or []),
+        marked_count=len(marked_parts(report.get("needs_datasheet") or [])),
+        pending_triage=int(report["completion"].get("warningsPendingTriage") or 0),
     )
     return report
 
@@ -3689,6 +3883,31 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
     )
 
     triage = warning_triage_slots(model=model, drc=drc, findings=findings, modules=modules)
+    # 063 §3: the slots are regenerated from the board on every run, and a
+    # verdict is *not* derivable from the board — so the report would otherwise
+    # read as if nobody had judged anything (issue #12). Read the sidecar back in
+    # and fold it onto the fresh slots by key.
+    try:
+        stale_triage = _load_triage_entries(out_dir)
+    except WarningTriageError as exc:
+        # Same discipline as the datasheet sidecar above: unreadable is a note
+        # here, never a crash — `checkup` is not the command that owns that file.
+        stale_triage = []
+        notes.append(f"分诊侧车读不了（{exc}）：本次报告的 warning_triage 按未分诊出，文件一个字没动")
+    triage, triage_merged, triage_unmatched = merge_triage_sidecar(triage, stale_triage)
+    if triage_merged:
+        notes.append(
+            f"侧车 {WARNING_TRIAGE_FILE} 里的 {triage_merged} 条分诊结论已并入本次报告（按 key 匹配）"
+            f"（`boardwise triage` 写入）"
+        )
+    if triage_unmatched:
+        # Never deleted: a warning that disappeared from the board is exactly the
+        # judgement a reader wants to keep, so the entry stays in the sidecar as
+        # the audit trail and only the *match* fails.
+        notes.append(
+            f"侧车 {WARNING_TRIAGE_FILE} 里另有 {triage_unmatched} 条分诊结论没有对应槽位"
+            f"（旧警告可能已消失）：条目留在侧车当审计轨迹，不删"
+        )
     # 044 M1 / 053 §2.2: the architecture skeleton — generated here (before the
     # report is assembled) because the report carries its merged view. "Cannot
     # generate" is a note and an **absent** key, never an empty section. The
@@ -3716,8 +3935,11 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         "canvas_images_note": canvas_note,
         "summary_template": summary_template(),
         "warning_triage_note": (
-            "逐条把 warning_triage[].verdict 填成 有益/有害/无害，并在 .reason 写理由"
-            "（xianyuyijinban的审查三步之②）；主机 ERC 的条目没有逐条文本，只能对着计数与画布图判"
+            "逐条用 `boardwise triage --out " + str(out_dir) + " --key <key> --verdict "
+            + "|".join(TRIAGE_VERDICTS) + " --reason …` 填"
+            "（槽位的 key 写在每条 warning_triage[] 里——它是这条警告的身份；写完命令会重算 "
+            "completion 并重渲染 report.md）。主机 ERC 的条目没有逐条文本，只能对着计数与画布图判"
+            "（xianyuyijinban的审查三步之②）"
         ),
         "aesthetics": {
             "enabled": aesthetics_on,
@@ -3841,6 +4063,16 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         f"（facts {len(unreviewed)} / 审查者标记 {len(marked_parts(needs_datasheet))}）"
         + (f" —— {out_dir / NEEDS_DATASHEET_FILE} 里的标记请跑 `boardwise need-datasheet` 合并"
            if stale_marks else "")
+    )
+    # 063: the same line for the verdict channel — how many warnings still owe a
+    # judgement, what the sidecar contributed, and the command that fixes both.
+    pending_triage = sum(1 for entry in triage if not (entry.get("verdict") or "").strip())
+    print(
+        f"  warning_triage: {len(triage)} 条（待分诊 {pending_triage}）"
+        + (f"，侧车 {WARNING_TRIAGE_FILE} 已并入 {triage_merged} 条" if triage_merged else "")
+        + (f"，另 {triage_unmatched} 条没匹配上（留在侧车）" if triage_unmatched else "")
+        + (f" —— 逐条用 `boardwise triage --out {out_dir} --key <key> --verdict "
+           + "|".join(TRIAGE_VERDICTS) + " --reason …` 填" if pending_triage else "")
     )
     print(f"  report: {report_path}")
     print(f"  report.md: {report_md_path}")
@@ -4020,6 +4252,188 @@ def _need_datasheet_lines(
     return [
         f"  mark: {state}（新增 {added} / 更新 {updated} 条）",
         f"  needs_datasheet: facts {facts} 条 / 审查者标记 {len(marked)} 项",
+        f"  conclusion: {report.get('summary', {}).get('conclusion', '')}",
+        f"  completion: {completion.get('verdict')}（{why}）",
+        f"  report: {report.get('schema')} 已重算并写回；report.md 已重渲染",
+    ]
+
+
+def _cmd_triage(args: argparse.Namespace) -> int:
+    """``boardwise triage`` — one warning, one verdict, one reason (issue #12).
+
+    The step-② slot with no way back in: `warning_triage[]` is generated fresh by
+    every `checkup`, and a verdict is the one thing about it that cannot be
+    derived from the board — so filling it by hand used to mean losing it on the
+    next run, with `completion.warningsPendingTriage` still holding its old value
+    (issue #12, measured on the real board). This is the command that writes it
+    down twice: into the report's slot (where the gate is read from) and into the
+    sidecar ``<out>/warning-triage.json`` (where it survives a regeneration).
+
+    A **pure file operation**: no editor, no daemon, no rule engine. It reads
+    ``<out>/report.json`` plus the sidecar, matches the row by its own ``key``
+    (which `checkup` stamped at generation time, 063 §1), writes the verdict and
+    reason, re-gates `completion` and re-renders `report.md`. Idempotent by
+    ``key``: judging the same warning again updates it instead of adding a row.
+
+    Exit codes: **0** applied · **2** unusable input (an unreadable report or
+    sidecar, an empty `--reason`, or a ``--key`` the report does not carry — a
+    typo must not be silently recorded against nothing) · **3** there is no
+    ``report.json`` to triage (run `boardwise checkup` first).
+    """
+    import json
+
+    out_dir = Path(args.out)
+    report_path = out_dir / "report.json"
+    if not report_path.is_file():
+        print(
+            f"boardwise triage: {report_path} 不存在——先跑 `boardwise checkup`"
+            "（本命令只把判决并进一份已有报告，不生成报告）",
+            file=sys.stderr,
+        )
+        return TRIAGE_NO_REPORT
+
+    key = (args.key or "").strip()
+    if not key:
+        print("boardwise triage: --key 不能为空", file=sys.stderr)
+        return 2
+    verdict = args.verdict
+    reason = (args.reason or "").strip()
+    if not reason:
+        print(
+            "boardwise triage: --reason 必填——写清判成这个 verdict 的依据；"
+            "它是这条判决唯一的落点，缺了它下一个人只能把同一条警告重判一遍",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        entries = _load_triage_entries(out_dir)
+    except WarningTriageError as exc:
+        print(f"boardwise triage: {exc}", file=sys.stderr)
+        return 2
+    except (OSError, ValueError) as exc:
+        print(
+            f"boardwise triage: {report_path}: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return 2
+    if not isinstance(report, dict):
+        print(f"boardwise triage: {report_path} 不是一个 report 对象", file=sys.stderr)
+        return 2
+
+    triage = [dict(slot) for slot in (report.get("warning_triage") or [])]
+    matched = [slot for slot in triage if str(slot.get("key") or "") == key]
+    if not matched:
+        # Refused rather than recorded: a verdict written against a key nothing
+        # carries would be a judgement about no warning, and the caller would
+        # never learn the typo. The keys the report does carry are listed so the
+        # next attempt can name one of them.
+        print(f"boardwise triage: 报告里没有 key = {key} 的槽位", file=sys.stderr)
+        if not any(str(slot.get("key") or "") for slot in triage):
+            # A report generated before this batch carries no keys at all: there
+            # is nothing to match on, and inventing one here would be guessing.
+            print(
+                "  报告里的槽位没有 key（本命令要 063 之后生成的 report.json）："
+                "先重跑 `boardwise checkup`",
+                file=sys.stderr,
+            )
+        else:
+            pending = [slot for slot in triage if not (slot.get("verdict") or "").strip()]
+            if pending:
+                print(f"  当前待分诊的 key（{len(pending)} 条）：", file=sys.stderr)
+                for slot in pending:
+                    print(f"    {slot.get('key')}", file=sys.stderr)
+            else:
+                print(
+                    "  当前没有待分诊的 key（每条都已判过；要改判就重复执行已判的 key）",
+                    file=sys.stderr,
+                )
+        return 2
+
+    # Every row carrying this key is the same warning by construction (that is
+    # what the key is for), so a key that appears twice is judged once, in both
+    # places — never half-answered.
+    for slot in matched:
+        slot["verdict"] = verdict
+        slot["reason"] = reason
+    first = matched[0]
+    entries, added, updated = _merge_triage_entry(
+        entries,
+        key=key,
+        verdict=verdict,
+        reason=reason,
+        source=str(first.get("source") or ""),
+        text=str(first.get("text") or ""),
+    )
+    # Rebuilt from the report's own sections, never from a fresh read: a verdict
+    # judges a warning, it does not re-run the review.
+    _apply_warning_triage(report, triage)
+    sidecar_path = _write_triage_entries(out_dir, entries)
+    _write_checkup_report(out_dir, report)
+    report_md_path = _write_checkup_markdown(out_dir, report)
+
+    for line in _triage_lines(
+        report, triage, entries, key=key, added=added, updated=updated, matched=len(matched)
+    ):
+        print(line)
+    if args.json_path is not None:
+        payload = json.dumps(
+            {
+                "key": key,
+                "verdict": verdict,
+                "reason": reason,
+                "added": added,
+                "updated": updated,
+                "warning_triage": triage,
+                "completion": report["completion"],
+                "conclusion": report["summary"].get("conclusion", ""),
+                "report": str(report_path),
+                "sidecar": str(sidecar_path),
+                "reportMd": str(report_md_path),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        if (args.json_path or "") in ("", "-"):
+            print(payload)
+        else:
+            Path(args.json_path).write_text(payload + "\n", encoding="utf-8")
+            print(f"  json: {args.json_path}")
+    return 0
+
+
+def _triage_lines(
+    report: dict,
+    triage: list[dict],
+    entries: list[dict],
+    *,
+    key: str,
+    added: int,
+    updated: int,
+    matched: int,
+) -> list[str]:
+    """The command's own report: what was written, and where the gate now stands.
+
+    Same five lines `need-datasheet` prints (058 §三), for the same reason: the
+    "已存在，已更新" wording is what tells a caller the second run of the same
+    command changed nothing but the reason, and the counts after it are the
+    report's own — how many warnings now carry a verdict, and what the gate says.
+    """
+    if added and not updated:
+        state = "已新增"
+    elif updated and not added:
+        state = "已存在，已更新"
+    else:
+        state = f"已存在，已更新（另新增 {added} 条）"
+    judged = sum(1 for slot in triage if (slot.get("verdict") or "").strip())
+    completion = report.get("completion") or {}
+    why = "；".join(completion.get("verdictWhy") or []) or "无 ERROR、无未审、无 stale、无待分诊"
+    return [
+        f"  key: {key}（{matched} 条槽位）",
+        f"  verdict: {state}（新增 {added} / 更新 {updated} 条）",
+        f"  warning_triage: 已分诊 {judged}/{len(triage)} 条（待分诊 {len(triage) - judged}），"
+        f"侧车 {WARNING_TRIAGE_FILE} {len(entries)} 条",
         f"  conclusion: {report.get('summary', {}).get('conclusion', '')}",
         f"  completion: {completion.get('verdict')}（{why}）",
         f"  report: {report.get('schema')} 已重算并写回；report.md 已重渲染",
@@ -18609,6 +19023,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_review_mark(args)
     if args.command == "need-datasheet":
         return _cmd_need_datasheet(args)
+    if args.command == "triage":
+        return _cmd_triage(args)
     if args.command == "edit":
         return EDIT_COMMANDS[args.edit_command](args)
     if args.command == "doctor":

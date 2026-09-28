@@ -1147,6 +1147,48 @@ def _walk_leafs_with_ref(group: dict, ref: str) -> list[tuple[str, dict]]:
     return out
 
 
+def triage_key(
+    entry: dict,
+    *,
+    label: str = "",
+    rule_id: str = "",
+    refs: list[str] | None = None,
+) -> str:
+    """The stable identity of one `warning_triage[]` slot — what the sidecar matches on.
+
+    One recipe per source (063 §1), because a warning is identified by different
+    things depending on where the report learned about it:
+
+    * ``host-erc:<severity>`` — the host's counts have no per-item identity
+      beyond their kind, so the kind *is* the identity;
+    * ``pcb-drc:<severity>:<label>:<net>`` — a leaf is identified by its rule
+      name (``ruleName``/``errorType``) and the net it names, which is what
+      stays put when the explanation text or the leaf order moves;
+    * ``boardwise-rule:<rule_id>:<refs>`` — a finding is identified the way 036
+      identifies findings: the rule plus the designators its evidence names.
+
+    ``label``, ``rule_id`` and ``refs`` are the ingredients the **source** data
+    carries and the slot itself does not (its public shape is unchanged — 063 §1
+    adds `key` and nothing else), so the generator hands them over. Computed
+    **once**, here, and then stamped onto the slot: the merge and the `triage`
+    command read ``entry["key"]`` and never recompute it, which is what keeps a
+    key from drifting away from the row it names.
+    """
+    source = str(entry.get("source") or "")
+    severity = str(entry.get("severity") or "")
+    if source == "host-erc":
+        return f"host-erc:{severity}"
+    if source == "pcb-drc":
+        net = str((entry.get("attribution") or {}).get("net") or "")
+        return ":".join(("pcb-drc", severity, label, net))
+    if source == "boardwise-rule":
+        return f"boardwise-rule:{rule_id}:{','.join(str(ref) for ref in (refs or []))}"
+    # A source this batch does not know about (a future slot maker): its own
+    # source and text still make a unique, stable key rather than a silent
+    # collision with the finding recipe above.
+    return ":".join((source or "(no source)", severity, str(entry.get("text") or "")))
+
+
 def warning_triage_slots(
     *,
     model: DesignModel,
@@ -1168,6 +1210,12 @@ def warning_triage_slots(
 
     What the rule engine was told is left `""`: `verdict` (one of
     :data:`TRIAGE_VERDICTS`) and `reason` are the AI's to fill, per xianyuyijinban's step ②.
+
+    Every row carries a `key` (:func:`triage_key`, 063 §1): the row's stable
+    identity, so `boardwise triage` can write a verdict back into it and
+    `checkup` can put that verdict back after a re-run (issue #12: the slots were
+    the one AI channel with no way back in). The key is computed here and never
+    recomputed — a re-generated slot that keeps its key keeps its verdict.
     """
     module_of: dict[str, str] = {}
     for module in modules:
@@ -1190,7 +1238,7 @@ def warning_triage_slots(
         for kind, count in sorted(per_kind.items()):
             if not _is_warning_kind(kind):
                 continue
-            out.append({
+            slot = {
                 "source": "host-erc",
                 "severity": kind,
                 "count": count,
@@ -1204,7 +1252,8 @@ def warning_triage_slots(
                     f"pagesChecked={schematic.get('pagesChecked')}, "
                     f"countsBasis={schematic.get('countsBasis')}",
                 ],
-            })
+            }
+            out.append({"key": triage_key(slot), **slot})
     pcb = drc.get("pcb") or {}
     for group in pcb.get("groups") or []:
         for ref, leaf in _walk_leafs_with_ref(group, f"drc.pcb.groups[{group.get('index')}]"):
@@ -1214,7 +1263,7 @@ def warning_triage_slots(
             net = str(leaf.get("net") or "")
             label = leaf.get("ruleName") or leaf.get("errorType") or "(no rule name)"
             explanation = str(leaf.get("explanation") or "")
-            out.append({
+            slot = {
                 "source": "pcb-drc",
                 "severity": severity or "unknown",
                 "severitySource": leaf.get("severitySource") or "",
@@ -1230,13 +1279,14 @@ def warning_triage_slots(
                 "verdict": "",
                 "reason": "",
                 "evidence": [ref, f"globalIndex={leaf.get('globalIndex')}"],
-            })
+            }
+            out.append({"key": triage_key(slot, label=str(label)), **slot})
     for index, finding in enumerate(findings):
         if str(finding.get("severity") or "").upper() != "WARN":
             continue
         refs = [str(ref) for ref in (finding.get("refs") or [])]
         module = next((module_of[ref] for ref in refs if ref in module_of), None)
-        out.append({
+        slot = {
             "source": "boardwise-rule",
             "severity": "WARN",
             "count": 1,
@@ -1251,8 +1301,67 @@ def warning_triage_slots(
             "verdict": "",
             "reason": "",
             "evidence": [f"findings[{index}] rule {finding.get('rule_id')}", *refs],
+        }
+        out.append({
+            "key": triage_key(slot, rule_id=str(finding.get("rule_id") or ""), refs=refs),
+            **slot,
         })
     return out
+
+
+def merge_triage_sidecar(
+    slots: list[dict], entries: list[dict] | None
+) -> tuple[list[dict], int, int]:
+    """Put the sidecar's verdicts back onto freshly generated `warning_triage[]` slots.
+
+    Returns ``(slots, merged, unmatched)``. This is the answer to issue #12's
+    second half: the slots are regenerated from the board on every `checkup`, so
+    what the AI decided about a warning is *not* derivable and has to be kept
+    beside the report (`warning-triage.json`) and folded back in here. Matching is
+    by ``key`` alone (063 §2 — `source`/`text` are in the sidecar so a human can
+    read it, never to match on), and a slot that keeps its key keeps its verdict.
+
+    ``merged`` counts the entries that actually carried a verdict and landed on a
+    slot; ``unmatched`` counts the sidecar's entries whose key has no slot this
+    time — a warning that disappeared, or one the tinkerer renamed. Those are
+    **reported, never deleted**: the sidecar is the audit trail of what was
+    judged, and a re-run of `checkup` is not the place to forget a judgement. An
+    entry whose verdict is empty counts as neither: its key landed, but there is
+    no decision in it to fold in.
+    """
+    by_key: dict[str, dict] = {}
+    for slot in slots:
+        key = str(slot.get("key") or "")
+        if key:
+            by_key.setdefault(key, slot)
+
+    decisions: dict[str, dict] = {}
+    unmatched = 0
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            unmatched += 1
+            continue
+        key = str(entry.get("key") or "")
+        if not key or key not in by_key:
+            unmatched += 1
+            continue
+        if not str(entry.get("verdict") or "").strip():
+            continue  # a row with no decision is not one to put back
+        decisions[key] = entry
+
+    out: list[dict] = []
+    for slot in slots:
+        entry = decisions.get(str(slot.get("key") or ""))
+        verdict = str((entry or {}).get("verdict") or "").strip()
+        if entry is None or not verdict:
+            out.append(slot)
+            continue
+        out.append({
+            **slot,
+            "verdict": verdict,
+            "reason": str(entry.get("reason") or "").strip(),
+        })
+    return out, len(decisions), unmatched
 
 
 def order_modules_by_warnings(
@@ -1718,13 +1827,16 @@ def render_report_markdown(report: dict) -> str:
         lines.append("没有需要分诊的警告（主机 ERC 无 warn 计数、PCB DRC 无 warn 级叶子、规则无 WARN）。")
     else:
         lines.append(
-            "逐条填 `verdict`（" + " / ".join(TRIAGE_VERDICTS) + "）与 `reason`（xianyuyijinban的审查三步之②）。"
+            "逐条填 `verdict`（" + " / ".join(TRIAGE_VERDICTS) + "）与 `reason`（xianyuyijinban的审查三步之②）："
+            "用 `boardwise triage --out <本目录> --key <key> --verdict "
+            + "|".join(TRIAGE_VERDICTS) + " --reason …` 写回（key 见下表，它是这条警告的身份；"
+            "判决同时写进 `warning-triage.json`，所以重跑 `checkup` 不会丢）。"
             "主机 ERC 的条目**没有逐条文本**——它的答复只有按 kind 的合计（见 drc.schematic），"
             "逐条详情在编辑器底部面板且没有读取接口。"
         )
         lines.append("")
-        lines.append("| # | 来源 | 级别 | 计数 | 归属模块 | 文本 | verdict | 理由 |")
-        lines.append("|---|---|---|---|---|---|---|---|")
+        lines.append("| # | key | 来源 | 级别 | 计数 | 归属模块 | 文本 | verdict | 理由 |")
+        lines.append("|---|---|---|---|---|---|---|---|---|")
         for index, entry in enumerate(triage):
             attribution = entry.get("attribution") or {}
             module = attribution.get("module") or (
@@ -1732,7 +1844,8 @@ def render_report_markdown(report: dict) -> str:
             )
             text = entry.get("text") or f"（无逐条文本：{entry.get('textUnavailable', '')}）"
             lines.append(
-                f"| {index} | {_cell(entry.get('source'))} | {_cell(entry.get('severity'))} "
+                f"| {index} | {_cell(entry.get('key'))} | {_cell(entry.get('source'))} "
+                f"| {_cell(entry.get('severity'))} "
                 f"| {_cell(entry.get('count'))} | {_cell(module)} | {_cell(text)} "
                 f"| {_cell(entry.get('verdict') or '（待填）')} | {_cell(entry.get('reason') or '（待填）')} |"
             )
