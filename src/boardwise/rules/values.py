@@ -155,7 +155,19 @@ def parse_capacitance_farads(value: str) -> float | None:
     m = _CAP_RE.match(value.strip())
     if m is None:
         return None
-    return float(m.group(1)) * _CAP_UNITS[m.group(2).lower()]
+    # GREEK SMALL LETTER MU (U+03BC) and MICRO SIGN (U+00B5) are one unit to a
+    # reader and two code points to Python: ``_CAP_RE``'s ``re.IGNORECASE``
+    # folds them together (both casefold to U+03BC), so ``22μF`` *matches* and
+    # then arrives here as ``"μf"`` — a key :data:`_CAP_UNITS` never held, and
+    # the lookup raised ``KeyError`` out of the rule (task 055's defect: a
+    # Greek-mu value, an everyday IME spelling, crashed the decap rule where
+    # the contract is "unreadable -> None -> UNKNOWN"). The key is normalised
+    # to the micro sign and read with ``.get``: the map is now total, so an
+    # unrecognised unit is None like any other unreadable value.
+    factor = _CAP_UNITS.get(m.group(2).lower().replace("\u03bc", "\u00b5"))
+    if factor is None:
+        return None
+    return float(m.group(1)) * factor
 
 
 def decode_eia_3digit(code: str, base: float) -> float | None:

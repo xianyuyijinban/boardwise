@@ -4,6 +4,12 @@ Living index. Details live in `tasks/*.md` (one book per task) and
 `docs/implementation-log.md` (the connector debugging arc). This file only
 collects the current truth and the pointers.
 
+## [2026-09-28] defect：`parse_capacitance_farads` 希腊 μ（U+03BC）拼法抛 KeyError crash 修复（055 顺带发现，agent-75 执行，主代理复验；connector/daemon 零改动仍 **0.4.25**）
+
+- **根因**：`_CAP_RE` 的 `re.IGNORECASE` 把 μ（U+03BC GREEK SMALL LETTER MU）与 µ（U+00B5 MICRO SIGN）折叠成同一码点——`22μF` **匹配得上**正则，却以 `"μf"` 这个 `_CAP_UNITS` 从未持有的键进查表，KeyError 一路穿出 decap 规则（`engines/review.py::_run_rules` 无兜、`review_eval._rule_outcomes` 只兜 NotImplementedError）；GBK 控制台把它显示成 `'��f'`。日常 IME 拼法的板值就能让审查路径崩，而合同是"读不出 → None → UNKNOWN"。
+- **修复**（`rules/values.py` 一处）：键先 `.lower().replace("\u03bc","\u00b5")` 归一再用 `.get` 全化——map 对任何可达键不再抛；修前全类扫描证实 mu 家族是正则可达而 map 缺失的**唯一**键类（没有第二种"垃圾单位"悬案）。修后 `22μF/4.7μF/22ΜF` → 正确读数、`4.7μ`（无单位字母）→ None；曾崩的最小板现在干净返回（22µF ≥ 0.1µF 无 finding），欠容场景如实 WARN。六个调用点（decap×3、params×3、cli 比较表）全部按"None=读不出"复核成立。
+- **验证**：新增 2 测试（转义写法防编辑器归一化吃掉测试点）；定向 55 + 318 绿；变异 M1 去归一化 → 1 红（CAUGHT，cp+sha256 还原）；M2 `.get`→`[]` 不红如实记（全化查表是对"未来正则/map 分叉"的纵深防御，当前不可独立观测——崩溃面已被 M1 覆盖）；**主代理亲跑全量 2196 passed，eval holdout 59/59 双 1.00 亲测**。
+- **遗留**：`engines/generate.py:53` `_DECOUPLING_HINTS` 是子串提示不是解析器，希腊 mu 拼法静默不匹配（只影响生成布局的分组猜测、从不抛）——行为缺口非 crash，归 056+ 顺手批；不进 SKILL 坑表（非真机现场坑）。
 ## [2026-09-28] 055 画图编译器收尾批（G1 文法角色脚 / G2 写 Value / G3 场景合规 / G6 文案；connector/daemon 零改动仍 **0.4.25**）
 
 ### Problem / Task
@@ -25,7 +31,7 @@ collects the current truth and the pointers.
 - Branch: `main`
 - Commit: `50ca8b6`（代码/测试/文档/任务书 055+056 合同；本行随推送补记）
 - Status: committed
-- 遗留：G4/G5 归 056/057；顺带发现 `parse_capacitance_farads` 对希腊 μ（U+03BC）抛 KeyError 的 defect 另派 agent-75 修；值容差等价显式未决；真机值拼写必须带单位字母（坑 34/36）。
+- 遗留：G4/G5 归 056/057；顺带发现 `parse_capacitance_farads` 对希腊 μ（U+03BC）抛 KeyError 的 defect 由 agent-75 修复（见下条）；值容差等价显式未决；真机值拼写必须带单位字母（坑 34）。
 ## [2026-09-28] 054 画法编译器落图（阶段 C1：单模块进编辑器）
 
 ### Problem / Task
