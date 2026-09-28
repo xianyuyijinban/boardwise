@@ -114,12 +114,14 @@ from boardwise.core.layoutplan import (
 )
 from boardwise.core.presentationspec import LABEL_LABEL, PresentationSpec
 from boardwise.core.symbolprofile import (
+    FLAG_GLYPH_ROTATION_OFFSETS,
     Box,
     SymbolPin,
     SymbolPose,
     SymbolProfile,
     check_box,
     flag_glyph_box,
+    flag_glyph_kind,
     role_siblings,
 )
 
@@ -2690,35 +2692,47 @@ def _tap_stub(
     )
 
 
-def _flag_rotation(direction: tuple[float, float]) -> float:
+def _flag_rotation(direction: tuple[float, float], kind: str) -> float:
     """The rotation the **editor** is given so the flag's glyph hangs away.
 
     ``direction`` is the way the flag leaves its pin — the pin's own escape
     direction — and the glyph is meant to hang further out that way, clear of the
-    wire it names.
+    wire it names. ``kind`` is the flag's own family
+    (:func:`~boardwise.core.symbolprofile.flag_glyph_kind`), because the library
+    hangs the two on opposite sides at the same rotation.
 
-    The compass is the 053B one turned by 180 (060 sec.3, the oracle's ruling):
-    the library's ground symbol hangs its bars *below* its connection point
-    (``Ground-GND``, ``BBOX (-10, 0, 10, -19)``), so a flag anchored below its pin
-    is drawn at ``0``, not at ``180``. 054-059 landed every GND flag upside down
-    because the mapping assumed the opposite natural pose (evidence:
-    ``outputs/057_live/e1b/plan.page.json`` vs ``.../render.png``).
+    The compass is 053B's, still (``(0,1)`` up -> ``0``, left -> ``90``, down ->
+    ``180``, right -> ``270``), turned by the family's own offset
+    (:data:`~boardwise.core.symbolprofile.FLAG_GLYPH_ROTATION_OFFSETS`). That
+    shared offset is the point: the box ``flag_glyph_box`` reserves for a flag is
+    computed from the *same* number, so a compass that turned a different amount
+    from the box would put the plan's reservation on the far side of the glyph it
+    reserves room for.
 
-    The library's *rail* symbols are the other way up (``Power-VCC`` /
-    ``Power-5V``: ``(-5, 10, 5, 0)`` / ``(-5, 10, 5, 5)`` — a bar **above** the
-    connection), so this uniform compass is right for a ground flag and one turn
-    off for a rail flag. That is a reported finding, not a silent third case:
-    060 sec.3 ruled the uniform flip, the E1 page carries ground flags only, and
-    the two families' evidence is written up in
-    ``tools/060_flag_glyph_evidence.py`` for the next ruling.
+    ``gnd`` — the library's ground symbol hangs its bars *below* its connection
+    point (``Ground-GND``, ``BBOX (-10, 0, 10, -19)``), so a flag leaving its pin
+    downwards is drawn at ``0``, not at ``180``; 054-059 landed every GND flag
+    upside down because the mapping assumed the opposite natural pose (evidence:
+    ``outputs/057_live/e1b/plan.page.json`` vs ``.../render.png``). That is the
+    family whose offset is 180, so this half is 060 sec.3's mapping unchanged.
+
+    ``rail`` — ``Power-*`` is the other way up (``Power-VCC`` / ``Power-5V``:
+    ``(-5, 10, 5, 0)`` / ``(-5, 10, 5, 5)`` — a bar **above** the connection), so
+    the same 180 that fixed the ground family flipped every rail flag: 060's
+    reported finding, 064's fix. The offset is 0 for this family, which is 053B's
+    original mapping — the one 060's uniform flip took away from it. Both
+    halves are pinned at their live-measured values in
+    ``outputs/064_railflag/``.
     """
     if direction == (0.0, 1.0):
-        return 180.0
-    if direction == (-1.0, 0.0):
-        return 270.0
-    if direction == (0.0, -1.0):
-        return 0.0
-    return 90.0
+        base = 0.0
+    elif direction == (-1.0, 0.0):
+        base = 90.0
+    elif direction == (0.0, -1.0):
+        base = 180.0
+    else:
+        base = 270.0
+    return (base + FLAG_GLYPH_ROTATION_OFFSETS[kind]) % 360.0
 
 
 def _flag_plan(
@@ -3597,13 +3611,14 @@ def _build_candidate(
                     labels.append(label)
                     solids.append(label.bbox)
                 continue
+            family = flag_glyph_kind(profile)
             for member, point in expression.points:
                 part_id, _, token = member.partition(".")
                 direction = _pin_direction(
                     ctx, part_id, token, placed.poses,
                 ) or (0.0, -1.0)
                 anchor, lead = _flag_anchor(router, point, direction, blocked)
-                rotation = _flag_rotation(direction)
+                rotation = _flag_rotation(direction, family)
                 symbols.append(LayoutPowerSymbol(
                     symbol_ref=ref,
                     symbol_hash=profile.geometry_hash(),
@@ -3835,7 +3850,8 @@ compress_path = _compress
 #: declare.
 wire_junctions = _junctions
 #: The rotation the editor is given for a flag (so its glyph hangs away from the
-#: pin it names) — see :func:`_flag_rotation`.
+#: pin it names) — the escape direction **and the flag's own family**, see
+#: :func:`_flag_rotation`.
 flag_rotation = _flag_rotation
 #: The box a flag's glyph occupies at that rotation — the one box the compiler's
 #: occupancy, the page compiler's extents and the SVG preview all reserve.
