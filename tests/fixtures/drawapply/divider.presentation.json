@@ -1,0 +1,10 @@
+{
+  "grammarRef": "voltage-divider",
+  "modules": [
+    {"id": "divider", "parts": ["R1", "R2"], "role": "divider"}
+  ],
+  "portRoles": {"VIN": "input", "TAP": "output"},
+  "directWiringObligations": [
+    {"nets": ["VIN", "TAP", "GND"], "note": "the whole ladder is wired"}
+  ]
+}

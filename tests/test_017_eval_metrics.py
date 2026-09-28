@@ -636,7 +636,10 @@ def test_fix_success_now_prints_the_registered_m3_numbers():
     lines = text.splitlines()
     start = next(index for index, line in enumerate(lines) if "fix success" in line)
     assert "pending" not in lines[start], "the slot is no longer a promise to fill later"
-    body = lines[start + 1 : start + 7]
+    # One line per registered kind plus the total; spelled out of the register's
+    # own length so a newly registered kind cannot fall outside the window read
+    # here (054's drawing kind was appended last and joined it that way).
+    body = lines[start + 1 : start + 2 + len(FIX_SUCCESS_KINDS)]
     for kind in FIX_SUCCESS_KINDS:
         line = next(item for item in body if item.strip().startswith(kind))
         assert "applied+saved+resolved" in line
@@ -693,11 +696,12 @@ def test_the_json_report_keeps_the_field_slots_017_asks_for(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# the M3 register behind the slot (M3 close-out)
+# the register behind the slot (M3 close-out, extended by 054's drawing kind)
 # ---------------------------------------------------------------------------
 #
-# The numbers below are the ones the five task books record, counted by hand
-# from their submission sections. They are re-stated here as literals on purpose:
+# The numbers below are the ones the six task books record (016 §十.7–§十.8,
+# 029/035/036/037 §交卷记录, 054 §五 with its run reports), counted by hand from
+# their own accounts. They are re-stated here as literals on purpose:
 # a test that read its expectation out of the register would agree with any
 # register, including one that had lost a case. The three tests after this one
 # check that every entry is *traceable* — to a task book that exists, to a
@@ -705,7 +709,7 @@ def test_the_json_report_keeps_the_field_slots_017_asks_for(tmp_path):
 # only way this slot can lie is by citing something that was never written.
 
 #: kind -> (attempts, applied+saved+resolved), as the task books record them.
-FIX_SUCCESS_TOTAL = (14, 12)
+FIX_SUCCESS_TOTAL = (17, 15)
 
 FIX_SUCCESS_EXPECTED = {
     "component-value": (1, 1),
@@ -713,6 +717,7 @@ FIX_SUCCESS_EXPECTED = {
     "patch-pin": (5, 4),
     "insert-subcircuit": (2, 2),
     "move-block": (2, 2),
+    "draw-module": (3, 3),
 }
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -726,7 +731,7 @@ def test_the_register_counts_the_cases_the_task_books_record():
 
 
 def test_the_register_covers_exactly_the_kinds_changeplan_can_execute():
-    """The M3 kinds and the plan kinds are one list, kept honest from both ends."""
+    """The registered kinds and the plan kinds are one list, honest from both ends."""
     from boardwise.core.changeplan import SUPPORTED_KINDS
 
     assert set(FIX_SUCCESS_KINDS) == set(SUPPORTED_KINDS), (

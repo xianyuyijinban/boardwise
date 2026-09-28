@@ -1,0 +1,76 @@
+{
+  "profiles": [
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "R0402",
+      "title": "Resistor",
+      "body": [-10.0, -20.0, 10.0, 20.0],
+      "pins": [
+        {"number": "1", "name": "1", "tip": [0.0, 50.0], "direction": "up"},
+        {"number": "2", "name": "2", "tip": [0.0, -50.0], "direction": "down"}
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "R-AXIAL",
+      "title": "Resistor, axial",
+      "body": [-20.0, -10.0, 20.0, 10.0],
+      "pins": [
+        {"number": "1", "name": "1", "tip": [-50.0, 0.0], "direction": "left"},
+        {"number": "2", "name": "2", "tip": [50.0, 0.0], "direction": "right"}
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "C0402",
+      "title": "Capacitor",
+      "body": [-8.0, -12.0, 8.0, 12.0],
+      "pins": [
+        {"number": "1", "name": "1", "tip": [0.0, 40.0], "direction": "up"},
+        {"number": "2", "name": "2", "tip": [0.0, -40.0], "direction": "down"}
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "AMS1117-3.3",
+      "title": "AMS1117-3.3",
+      "body": [-40.0, -30.0, 40.0, 30.0],
+      "pins": [
+        {"number": "3", "name": "VIN", "tip": [-60.0, 0.0], "direction": "left",
+         "electricalRole": "VIN", "roleSource": "pin-name"},
+        {"number": "2", "name": "VOUT", "tip": [60.0, 0.0], "direction": "right",
+         "electricalRole": "VOUT", "roleSource": "pin-name"},
+        {"number": "1", "name": "GND", "tip": [0.0, -60.0], "direction": "down",
+         "electricalRole": "GND", "roleSource": "pin-name"}
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "PWR-GND",
+      "title": "PWR-GND",
+      "body": [-6.0, 0.0, 6.0, 18.0],
+      "pins": []
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "PWR-VIN",
+      "title": "PWR-VIN",
+      "body": [-6.0, 0.0, 6.0, 18.0],
+      "pins": []
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "PWR-OUT",
+      "title": "PWR-OUT",
+      "body": [-6.0, 0.0, 6.0, 18.0],
+      "pins": []
+    }
+  ]
+}

@@ -932,6 +932,48 @@ def _editor_rotation(rotation: float) -> float:
     return (-float(rotation)) % 360.0
 
 
+def editor_pose(rotation: float, mirror: bool) -> tuple[float, bool]:
+    """The ``(rotation, mirror)`` pair to hand the editor for a **file** pose (054).
+
+    Measured 2026-09-28 on 3.2.186 (C25744 placed at all eight ``(rotation,
+    mirror)`` pairs on a scratch page and the pins read back with
+    `sch.component_pins`; raw rows in `outputs/054_c1/08_mirror_probe.json`):
+
+    =========== ======= ============== ==============
+    asked ``R`` mirror  pin 1 offset   pin 2 offset
+    =========== ======= ============== ==============
+    0           no      (-20, 0)       (20, 0)
+    0           yes     (20, 0)        (-20, 0)
+    90          no      (0, 20)        (0, -20)
+    90          yes     (0, 20)        (0, -20)
+    180         no      (20, 0)        (-20, 0)
+    180         yes     (-20, 0)       (20, 0)
+    270         no      (0, -20)       (0, 20)
+    270         yes     (0, -20)       (0, 20)
+    =========== ======= ============== ==============
+
+    The API's transform is ``mirror_x ∘ CW(R)``: the mirror is applied **after**
+    the rotation, about the canvas' vertical axis. `core.geometry.transform_point`
+    is ``CCW(angle) ∘ mirror_x`` — the mirror *before* the rotation. The two agree
+    at ``0``/``180`` and differ at ``90``/``270``, where conjugating by the
+    reflection gives ``mirror_x ∘ CCW(R_editor) = CCW(R) ∘ mirror_x`` exactly when
+    ``R_editor = R``. So:
+
+    * ``mirror=False`` — the angle is negated (:func:`_editor_rotation`, the
+      2026-09-14 measurement);
+    * ``mirror=True`` — the angle is handed over **unchanged**.
+
+    Getting the second case wrong is not cosmetic: a mirrored 90° part sent the
+    negated angle lands with its two pads exchanged, which is how 054's pin
+    read-back caught it (the first C1 run on the live editor reported ``R1.1
+    reads back at (85, 710) but the plan expects (85, 750)`` and stopped before
+    drawing a single wire).
+    """
+    if mirror:
+        return (float(rotation) % 360.0, True)
+    return ((-float(rotation)) % 360.0, False)
+
+
 def print_gate(plan: ActionPlan, model: DesignModel, source: str, frame: SheetFrame | None) -> None:
     """The gate: what will happen, in full, before anything executes."""
     print(f"GATE: {plan.summary()}  [plan source: {source}]")
