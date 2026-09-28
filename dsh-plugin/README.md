@@ -55,9 +55,9 @@ npm pack                       # 产出 boardwise-dsh-<version>.tgz
 装进 profile（tarball 方式，不进 npm registry）：
 
 ```sh
-dsh plugin --profile web add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.1.0.tgz
+dsh plugin --profile web add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.1.1.tgz
 # headless / desktop 是**不同** profile，各装一次
-dsh plugin --profile headless add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.1.0.tgz
+dsh plugin --profile headless add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.1.1.tgz
 ```
 
 包内 `dsh.bundle.patch` 会把本插件插进 profile 的 layer stack（row id `tool-boardwise`）。
@@ -70,6 +70,28 @@ dsh --profile web --dump-config | grep tool-boardwise
 让模型跑一次 `boardwise_doctor`：daemon 在线应看到 `PASS` 行与逐项结论；
 多窗口在线时那 4 项会写「未验证」（daemon 设计上不猜窗口），
 用 `project=` / `instance=` 指定一个窗口即转 PASS。
+
+### 已验证的 dsh 版本
+
+| dsh | 结果 | 证据 |
+|---|---|---|
+| `0.1.7-rc.2` | ✔ 全通 | 2026-09-29 实测：`plugin add` exit 0、bundle patch 生效、4 工具注册 4/4、`boardwise_arch` 真调 exit 0 |
+| `0.2.0-rc.1` | ✔ 全通 | 同一轮实测，输出与 0.1.7-rc.2 **逐字节相同** |
+
+原始日志与结论：`outputs/066_dsh_matrix/VERDICT.md`（零 FAIL 格）。
+
+- **peer 范围**：`@deepseek-ai/dsh-tools` peerDep 自 0.1.1 起是三分支范围
+  `>=0.0.1-rc.1 <0.3.0 || >=0.1.7-rc.2 <0.2.0-0 || >=0.2.0-rc.1 <0.3.0-0`
+  （0.1.0 是 `<0.2.0`）。**为什么必须分三段**：node-semver 只放行「范围里存在同
+  major.minor.patch、且自身带预发布标签的比较符」的预发布版本，所以单段 `<0.3.0` 看着宽、
+  实际把 `0.1.7-rc.2` / `0.2.0-rc.1` 静默排除（npm 路径报 `ERESOLVE`）；把这两版的 tuple
+  显式列进 `||` 分支，npm 消费者才装得上。
+- **覆盖表**（npm 自带 semver 实测）：`0.0.1-rc.1` ✔、`0.1.7-rc.2` ✔、`0.2.0-rc.1` ✔、
+  `0.1.7` ✔、`0.2.0` ✔、`0.3.0` ✘。**更老的 rc（`0.1.0-rc.6`、`0.1.5-rc.x` 之类）不在 npm
+  路径覆盖内**——每一版都要自己的同 tuple 分支，而它们从未实跑过；dsh 自己的 profile 安装走
+  pnpm（`autoInstallPeers: false`，不强制 peer），不受这条边界影响。
+- **未验证区间**：低于 `0.1.0-rc.6` 的 dsh 从未实跑过（peerDep 下界 `0.0.1-rc.1` 只是语义边界，
+  不等于实测边界）。`cordis` peerDep `^4.0.1` 未动（实测 4.0.4 类型与插件内完全一致）。
 
 ## 开发
 
