@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -703,10 +705,11 @@ def test_the_json_report_keeps_the_field_slots_017_asks_for(tmp_path):
 # 029/035/036/037 §交卷记录, 054 §五 with its run reports), counted by hand from
 # their own accounts. They are re-stated here as literals on purpose:
 # a test that read its expectation out of the register would agree with any
-# register, including one that had lost a case. The three tests after this one
-# check that every entry is *traceable* — to a task book that exists, to a
-# section that exists in it, and to a live log where one is named — because the
-# only way this slot can lie is by citing something that was never written.
+# register, including one that had lost a case. The tests that follow check that
+# every entry is *traceable* — to a file that exists, to a section that exists in
+# it, to the live log where one is named, and to a file the repo itself tracks
+# rather than one only this machine happens to have — because the only way this
+# slot can lie is by citing something that was never written.
 
 #: kind -> (attempts, applied+saved+resolved), as the task books record them.
 FIX_SUCCESS_TOTAL = (17, 15)
@@ -758,6 +761,23 @@ def test_only_the_two_attempt_outcomes_count_as_attempts():
         }, case
 
 
+def _cited_paths(source: str) -> list[tuple[str, str]]:
+    """`source` as (path, section) pairs, split the one way the citation reads.
+
+    A `source` is fragments joined by ` + ` (`tasks/X.md §五 + outputs/Y.json`),
+    the path is the fragment's first word, and a live-log citation carries a
+    `:start-end` line range that the file name stops before. Every reader of a
+    citation goes through here, so the two tests below cannot drift apart.
+    """
+    cited = []
+    for fragment in source.split(" + "):
+        path, _, where = fragment.partition(" ")
+        if path.startswith("outputs/"):
+            path = path.split(":")[0]
+        cited.append((path, where))
+    return cited
+
+
 @pytest.mark.parametrize("case", FIX_CASES, ids=lambda c: f"{c.kind}-{c.case[:22]}")
 def test_every_registered_case_cites_a_task_book_and_a_section(case):
     """Each entry's `source` names a file that exists and a section in it.
@@ -766,10 +786,7 @@ def test_every_registered_case_cites_a_task_book_and_a_section(case):
     text; the register's whole claim is "this is written down somewhere", so a
     citation that names nothing is the one failure mode worth a test.
     """
-    for fragment in case.source.split(" + "):
-        path, _, where = fragment.partition(" ")
-        if path.startswith("outputs/"):
-            path = path.split(":")[0]
+    for path, where in _cited_paths(case.source):
         assert path.startswith(("tasks/", "outputs/")), case.source
         file = ROOT / path
         assert file.is_file(), f"{case.kind}: cited {path}, which does not exist"
@@ -785,6 +802,48 @@ def test_every_registered_case_cites_a_task_book_and_a_section(case):
                 f"{case.kind}: {path} does not contain {token!r} — the citation "
                 "points at something that is not in the task book"
             )
+
+
+@pytest.fixture(scope="module")
+def tracked_paths() -> set[str]:
+    """Every path `git ls-files` claims — the index a clean checkout starts from.
+
+    Asked once for the module, not once per case. `skip` rather than red when
+    there is no git to ask (a source tree unpacked outside a checkout has no
+    index): a test that cannot answer its own question must not answer "no".
+    """
+    if shutil.which("git") is None:
+        pytest.skip("no `git` on PATH — whether a cited file is tracked is unanswerable")
+    try:
+        out = subprocess.run(["git", "ls-files", "-z"], capture_output=True, cwd=ROOT)
+    except OSError as exc:  # a `git` that cannot even be run is no git to ask
+        pytest.skip(f"`git` is not runnable here ({exc})")
+    if out.returncode != 0:
+        pytest.skip(
+            "not a git working tree — there is no index to check citations "
+            f"against ({out.stderr.decode('utf-8', 'replace').strip()})"
+        )
+    return {path for path in out.stdout.decode("utf-8", "replace").split("\0") if path}
+
+
+@pytest.mark.parametrize("case", FIX_CASES, ids=lambda c: f"{c.kind}-{c.case[:22]}")
+def test_every_registered_case_cites_a_tracked_file(case, tracked_paths):
+    """The cited file has to be *in the repo*, not merely on this machine.
+
+    `outputs/` is git-ignored, so acceptance evidence there is only in the repo
+    because someone force-added it: a citation can pass the test above on the
+    machine that wrote the file and still be broken for every clean checkout.
+    Asking the index instead moves that discovery to the machine that can still
+    fix it — issue #9, where eleven 054/035d citations had never been `git
+    add`ed. Only tracked-ness is checked here; existence and the section marker
+    stay the test above's business, so one claim fails in one place.
+    """
+    for path, _ in _cited_paths(case.source):
+        assert path in tracked_paths, (
+            f"{case.kind}: cites {path}, which `git ls-files` does not claim — "
+            "`git add -f` it (outputs/ is ignored), or a clean checkout fails "
+            "where this machine passes"
+        )
 
 
 def test_a_kind_with_no_recorded_case_reports_nothing_rather_than_zero():

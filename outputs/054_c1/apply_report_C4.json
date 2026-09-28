@@ -1,0 +1,223 @@
+{
+  "command": "apply",
+  "ok": true,
+  "kind": "draw-module",
+  "module": "voltage-divider (2 part(s); nets GND, TAP, VIN)",
+  "outcome": "already_applied",
+  "reason": "already_applied",
+  "exitCode": 0,
+  "planPath": "outputs/054_c1/plan.json",
+  "plan": {
+    "kind": "draw-module",
+    "candidate": 0,
+    "layoutSha256": "68643297e7bae4ceb61bd510013cdd3911d7c929e106741b73692eb5d446653e",
+    "circuitSha256": "e3159a81fc22006fb7556896fb36fc7f3bd848c3152223672250f1dd35251766",
+    "presentationSha256": "69269aee0b1e1fb65fddc3625e6c3623543ce3c5c6a9a290974ad576e5207ac3",
+    "profiles": [
+      {
+        "symbolRef": "0402WGF1002TCE",
+        "geometryHash": "3618162f1b2df08d092e301f8da02e1dcbad05c97b57e0e174d915e8d9d5f4e0"
+      },
+      {
+        "symbolRef": "PWR-GND",
+        "geometryHash": "cf0b073bf168fc101c5a19d53218fa9f2471b74c976d853894310831ae699deb"
+      },
+      {
+        "symbolRef": "PWR-VIN",
+        "geometryHash": "06bc430da05f4d0de3f63acd0304e8225fa49ded13cac6df3d2d7fb7f7b3bf3a"
+      }
+    ],
+    "downgrades": [
+      "net TAP: the compiler drew a net label at (115, 690), and this host cannot place one (`sch.place_netlabel` is measured unusable, 029) — the net is named on the wire itself instead (`sch.place_wire` net=…), so the netlist carries the name while the canvas shows the stub without its label text"
+    ],
+    "notes": [
+      "the layout is 053 stage B's candidate 0 (68643297e7ba…)",
+      "the designator pool is the page (0 designator(s)) ∪ the project export (1 more)",
+      "1 junction(s) are expected where the drawing tees; the editor draws those itself, and `sch.geometry` has no junction section, so this batch does not claim to verify them",
+      "4 text box(es) in the layout are the editor's own annotations (designator and value are drawn by the host when a part is placed); C1 places no text primitive, so the drawn text is the host's"
+    ]
+  },
+  "parts": [
+    {
+      "specId": "R1",
+      "designator": "R1",
+      "value": "10k",
+      "lcsc": "C25744",
+      "symbolRef": "0402WGF1002TCE",
+      "prefix": "R",
+      "x": 85.0,
+      "y": 730.0,
+      "rotation": 90.0,
+      "mirror": true,
+      "pins": [
+        {
+          "number": "1",
+          "dx": 0.0,
+          "dy": 20.0
+        },
+        {
+          "number": "2",
+          "dx": -0.0,
+          "dy": -20.0
+        }
+      ]
+    },
+    {
+      "specId": "R2",
+      "designator": "R3",
+      "value": "10k",
+      "lcsc": "C25744",
+      "symbolRef": "0402WGF1002TCE",
+      "prefix": "R",
+      "x": 85.0,
+      "y": 650.0,
+      "rotation": 90.0,
+      "mirror": true,
+      "pins": [
+        {
+          "number": "1",
+          "dx": 0.0,
+          "dy": 20.0
+        },
+        {
+          "number": "2",
+          "dx": -0.0,
+          "dy": -20.0
+        }
+      ]
+    }
+  ],
+  "identity": {
+    "focusedProjectName": "/test",
+    "focusedProjectUuid": "ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489",
+    "focusedPage": "25fec5cf5b6aaccf",
+    "consistent": true
+  },
+  "page": {
+    "uuid": "25fec5cf5b6aaccf",
+    "created": false,
+    "name": "",
+    "focusedBefore": "25fec5cf5b6aaccf",
+    "censusBefore": {
+      "components": [
+        "R1",
+        "R3"
+      ],
+      "wireCount": 3,
+      "netflagCount": 2,
+      "digest": "bb6ea7909dd80e77090653b8a9ef694aef6b0c5dfcc5cd47e3db7bc197ae3a47"
+    }
+  },
+  "guards": {
+    "checked": {
+      "circuitSha256": true,
+      "presentationSha256": true,
+      "layoutSha256": true,
+      "profiles": true,
+      "pageUuid": true,
+      "census": true
+    },
+    "expectCensus": "",
+    "problems": [],
+    "basis": "digests re-read from the files the run was pointed at (a flag that was not given is reported as NOT checked, never as a pass); the library geometry table from --profiles; the page's identity from the listing; the primitive census from the live page, judged after the plan's own postconditions so that a page holding this drawing is not read as a page somebody changed"
+  },
+  "idempotence": {
+    "state": "satisfied",
+    "satisfied": true,
+    "live": [],
+    "canvas": [],
+    "partsOnPage": [
+      "R1",
+      "R3"
+    ],
+    "how": "engines/drawapply.postcondition_problems — the plan's own postconditions (there is no rule for this kind, so the plan states what done means)"
+  },
+  "write": {
+    "calls": 0,
+    "placed": [],
+    "connections": []
+  },
+  "verification": {},
+  "range": {},
+  "findings": {},
+  "save": {},
+  "render": {
+    "path": "outputs\\054_c1\\render.png",
+    "bytes": 162426,
+    "format": "image/png",
+    "scope": "page",
+    "activatedPageUuid": "25fec5cf5b6aaccf",
+    "sha256": "96b2bdb056032fa2843abbdcff2e3c83217e77155c8383c83f43c92416d26e2e"
+  },
+  "persistence": "not_attempted (nothing was written)",
+  "steps": [
+    {
+      "action": "doc.list",
+      "purpose": "read the focused project and page",
+      "ok": true,
+      "wrote": false,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sys.identity",
+      "purpose": "confirm the editor's two layers of focus agree",
+      "ok": true,
+      "wrote": false,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.geometry",
+      "purpose": "read the page before writing",
+      "ok": true,
+      "wrote": false,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.netlist",
+      "purpose": "read the editor's own netlist (the probe's membership leg)",
+      "ok": true,
+      "wrote": false,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.component_pins",
+      "purpose": "read R1's own pin coordinates",
+      "ok": true,
+      "wrote": false,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.component_pins",
+      "purpose": "read R3's own pin coordinates",
+      "ok": true,
+      "wrote": false,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "export.render",
+      "purpose": "render the finished page (a document render, not a viewport screenshot)",
+      "ok": true,
+      "wrote": false,
+      "code": "",
+      "message": "",
+      "unknown": false
+    }
+  ],
+  "notes": [
+    "the plan's postconditions already hold on this page — a repeat run, or the drawing was made by hand; nothing was written (idempotent)"
+  ],
+  "final": "already satisfied; the page was not touched",
+  "durationMs": 2851
+}

@@ -1,0 +1,325 @@
+{
+  "command": "apply",
+  "ok": false,
+  "kind": "draw-module",
+  "module": "voltage-divider (2 part(s); nets GND, TAP, VIN)",
+  "outcome": "unknown",
+  "reason": "verification_disagrees",
+  "exitCode": 3,
+  "planPath": "outputs/054_c6/plan_wrong_profile.json",
+  "plan": {
+    "kind": "draw-module",
+    "candidate": 0,
+    "layoutSha256": "b3214fd1b789fd950f53d8fc445cd08ae77b51afbf4e07166a8f738e726e2ab4",
+    "circuitSha256": "c983a3883c3ee9af595c932f42e0e7b1060849e3682691ce29924e9646f63758",
+    "presentationSha256": "69269aee0b1e1fb65fddc3625e6c3623543ce3c5c6a9a290974ad576e5207ac3",
+    "profiles": [
+      {
+        "symbolRef": "AMS1117-3.3",
+        "geometryHash": "df40994bacc8e05c8aadeed2ee417012356f7167ad695820d93325c347b81c2b"
+      },
+      {
+        "symbolRef": "C0402",
+        "geometryHash": "c987d9fffcb183ba5e476084e12d35e59c8ae077cfb77e8efda98cd706db6074"
+      },
+      {
+        "symbolRef": "PWR-GND",
+        "geometryHash": "cf0b073bf168fc101c5a19d53218fa9f2471b74c976d853894310831ae699deb"
+      },
+      {
+        "symbolRef": "PWR-OUT",
+        "geometryHash": "1f52beea8b23459e036d5a69d038934af4081461f6272d8fb10b6302a264b8af"
+      },
+      {
+        "symbolRef": "PWR-VIN",
+        "geometryHash": "06bc430da05f4d0de3f63acd0304e8225fa49ded13cac6df3d2d7fb7f7b3bf3a"
+      },
+      {
+        "symbolRef": "R-AXIAL",
+        "geometryHash": "e18deaa6b5e09a2c0a49895ef3a83d244c69c0dc20bd0dfc477df5d41ded2578"
+      },
+      {
+        "symbolRef": "R0402",
+        "geometryHash": "234ca8a7ff6a800fe421aa7f2dd548874d90550e9dc54fd53216eb5b616f7da0"
+      }
+    ],
+    "downgrades": [
+      "net TAP: the compiler drew a net label at (120, 630), and this host cannot place one (`sch.place_netlabel` is measured unusable, 029) — the net is named on the wire itself instead (`sch.place_wire` net=…), so the netlist carries the name while the canvas shows the stub without its label text"
+    ],
+    "notes": [
+      "the layout is 053 stage B's candidate 0 (b3214fd1b789…)",
+      "the designator pool is the page (0 designator(s)) ∪ the project export (3 more)",
+      "1 junction(s) are expected where the drawing tees; the editor draws those itself, and `sch.geometry` has no junction section, so this batch does not claim to verify them",
+      "4 text box(es) in the layout are the editor's own annotations (designator and value are drawn by the host when a part is placed); C1 places no text primitive, so the drawn text is the host's"
+    ]
+  },
+  "parts": [
+    {
+      "specId": "R1",
+      "designator": "R4",
+      "value": "10k",
+      "lcsc": "C25744",
+      "symbolRef": "R0402",
+      "prefix": "R",
+      "x": 90.0,
+      "y": 700.0,
+      "rotation": 0.0,
+      "mirror": false,
+      "pins": [
+        {
+          "number": "1",
+          "dx": 0.0,
+          "dy": 50.0
+        },
+        {
+          "number": "2",
+          "dx": 0.0,
+          "dy": -50.0
+        }
+      ]
+    },
+    {
+      "specId": "R2",
+      "designator": "R5",
+      "value": "10k",
+      "lcsc": "C25744",
+      "symbolRef": "R0402",
+      "prefix": "R",
+      "x": 90.0,
+      "y": 560.0,
+      "rotation": 0.0,
+      "mirror": false,
+      "pins": [
+        {
+          "number": "1",
+          "dx": 0.0,
+          "dy": 50.0
+        },
+        {
+          "number": "2",
+          "dx": 0.0,
+          "dy": -50.0
+        }
+      ]
+    }
+  ],
+  "identity": {
+    "focusedProjectName": "/test",
+    "focusedProjectUuid": "ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489",
+    "focusedPage": "1589c598bae2c12e",
+    "consistent": true
+  },
+  "page": {
+    "uuid": "1589c598bae2c12e",
+    "created": false,
+    "name": "",
+    "focusedBefore": "1589c598bae2c12e",
+    "censusBefore": {
+      "components": [],
+      "wireCount": 0,
+      "netflagCount": 0,
+      "digest": "5d2ace3b212a4f19371b8d9fe42461eead8941d3b824682855ec84ea5a483741"
+    }
+  },
+  "guards": {
+    "checked": {
+      "circuitSha256": true,
+      "presentationSha256": true,
+      "layoutSha256": false,
+      "profiles": true,
+      "pageUuid": true,
+      "census": true
+    },
+    "expectCensus": "",
+    "problems": [],
+    "basis": "digests re-read from the files the run was pointed at (a flag that was not given is reported as NOT checked, never as a pass); the library geometry table from --profiles; the page's identity from the listing; the primitive census from the live page, judged after the plan's own postconditions so that a page holding this drawing is not read as a page somebody changed"
+  },
+  "idempotence": {
+    "state": "not_satisfied",
+    "satisfied": false,
+    "live": [
+      "R4.1 is not in the editor's netlist at all (the part or the pin did not land)",
+      "R4.2 is not in the editor's netlist at all (the part or the pin did not land)",
+      "R5.1 is not in the editor's netlist at all (the part or the pin did not land)",
+      "R5.2 is not in the editor's netlist at all (the part or the pin did not land)"
+    ],
+    "canvas": [
+      "R4 is not on the page (the plan places it at (90, 700))",
+      "R5 is not on the page (the plan places it at (90, 560))",
+      "net VIN: no wire vertex at (90, 750) on the page, but the plan draws a wire reaching it",
+      "net VIN: no wire vertex at (90, 780) on the page, but the plan draws a wire reaching it",
+      "net TAP: no wire vertex at (90, 630) on the page, but the plan draws a wire reaching it",
+      "net TAP: no wire vertex at (120, 630) on the page, but the plan draws a wire reaching it",
+      "net TAP: no wire vertex at (90, 610) on the page, but the plan draws a wire reaching it",
+      "net TAP: no wire vertex at (90, 650) on the page, but the plan draws a wire reaching it",
+      "net GND: no wire vertex at (90, 510) on the page, but the plan draws a wire reaching it",
+      "net GND: no wire vertex at (90, 480) on the page, but the plan draws a wire reaching it",
+      "net GND: the plan draws 30 units of wire and the page holds 0 — a segment did not land",
+      "net TAP: the plan draws 70 units of wire and the page holds 0 — a segment did not land",
+      "net VIN: the plan draws 30 units of wire and the page holds 0 — a segment did not land"
+    ],
+    "partsOnPage": [],
+    "how": "engines/drawapply.postcondition_problems — the plan's own postconditions (there is no rule for this kind, so the plan states what done means)"
+  },
+  "write": {
+    "calls": 2,
+    "placed": [
+      {
+        "designator": "R4",
+        "value": "10k",
+        "lcsc": "C25744",
+        "x": 90.0,
+        "y": 700.0,
+        "rotation": 0.0,
+        "mirror": false,
+        "answered": true
+      },
+      {
+        "designator": "R5",
+        "value": "10k",
+        "lcsc": "C25744",
+        "x": 90.0,
+        "y": 560.0,
+        "rotation": 0.0,
+        "mirror": false,
+        "answered": true
+      }
+    ],
+    "connections": [],
+    "pool": {
+      "source": "the page's designators ∪ the project export's",
+      "size": 3
+    },
+    "pins": {
+      "R4.1": [
+        70.0,
+        700.0
+      ],
+      "R4.2": [
+        110.0,
+        700.0
+      ],
+      "R5.1": [
+        70.0,
+        560.0
+      ],
+      "R5.2": [
+        110.0,
+        560.0
+      ]
+    },
+    "pinReadback": {
+      "problems": [
+        "R4.1 reads back at (70, 700) but the plan expects (90, 750) — off by (-20.0, -50.0) units, more than the 2.5-unit tolerance: the library symbol on this host is not the one the drawing was laid out with (054 C6)",
+        "R4.2 reads back at (110, 700) but the plan expects (90, 650) — off by (+20.0, +50.0) units, more than the 2.5-unit tolerance: the library symbol on this host is not the one the drawing was laid out with (054 C6)",
+        "R5.1 reads back at (70, 560) but the plan expects (90, 610) — off by (-20.0, -50.0) units, more than the 2.5-unit tolerance: the library symbol on this host is not the one the drawing was laid out with (054 C6)",
+        "R5.2 reads back at (110, 560) but the plan expects (90, 510) — off by (+20.0, +50.0) units, more than the 2.5-unit tolerance: the library symbol on this host is not the one the drawing was laid out with (054 C6)"
+      ],
+      "tolerance": 2.5,
+      "wireLegDeferred": "the canvas leg's wire half is not checked here: no wire has been drawn yet (the plan's wires are checked after they are, in `verification`)"
+    }
+  },
+  "verification": {},
+  "range": {},
+  "findings": {},
+  "save": {},
+  "render": {},
+  "persistence": "",
+  "steps": [
+    {
+      "action": "doc.list",
+      "purpose": "read the focused project and page",
+      "ok": true,
+      "wrote": false,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sys.identity",
+      "purpose": "confirm the editor's two layers of focus agree",
+      "ok": true,
+      "wrote": false,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.geometry",
+      "purpose": "read the page before writing",
+      "ok": true,
+      "wrote": false,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.netlist",
+      "purpose": "read the editor's own netlist (the probe's membership leg)",
+      "ok": true,
+      "wrote": false,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sys.get_project_file",
+      "purpose": "export the live project for the idempotence probe and the range check",
+      "ok": true,
+      "wrote": false,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.place_component",
+      "purpose": "place R4 (10k, C25744) at (90, 700) rot 0",
+      "ok": true,
+      "wrote": true,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.place_component",
+      "purpose": "place R5 (10k, C25744) at (90, 560) rot 0",
+      "ok": true,
+      "wrote": true,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.geometry",
+      "purpose": "read the page again to find the placed parts and their pins",
+      "ok": true,
+      "wrote": false,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.component_pins",
+      "purpose": "read R4's own pin coordinates",
+      "ok": true,
+      "wrote": false,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.component_pins",
+      "purpose": "read R5's own pin coordinates",
+      "ok": true,
+      "wrote": false,
+      "code": "",
+      "message": "",
+      "unknown": false
+    }
+  ],
+  "notes": [
+    "引脚回读与 plan 期望不符（容差半格），在拉线之前停下：R4.1 reads back at (70, 700) but the plan expects (90, 750) — off by (-20.0, -50.0) units, more than the 2.5-unit tolerance: the library symbol on this host is not the one the drawing was laid out with (054 C6)；R4.2 reads back at (110, 700) but the plan expects (90, 650) — off by (+20.0, +50.0) units, more than the 2.5-unit tolerance: the library symbol on this host is not the one the drawing was laid out with (054 C6)；R5.1 reads back at (70, 560) but the plan expects (90, 610) — off by (-20.0, -50.0) units, more than the 2.5-unit tolerance: the library symbol on this host is not the one the drawing was laid out with (054 C6)；R5.2 reads back at (110, 560) but the plan expects (90, 510) — off by (+20.0, +50.0) units, more than the 2.5-unit tolerance: the library symbol on this host is not the one the drawing was laid out with (054 C6) —— 器件已放、线没有画；现场见报告（不清理、不重试、不保存）"
+  ],
+  "final": "",
+  "durationMs": 2933
+}
