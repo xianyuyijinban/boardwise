@@ -68,6 +68,7 @@ class _FakeEditor:
         unresolved: tuple[str, ...] = (),
         timeouts: tuple[str, ...] = (),
         render_ok: bool = True,
+        value_write_lands: bool = True,
     ):
         self.page = page
         self.exists = exists
@@ -84,14 +85,26 @@ class _FakeEditor:
         self.timeouts = set(timeouts)
         self.render_ok = render_ok
         self.created = False
+        #: The attribute map the page keeps per part (`OtherProperty`), and
+        #: whether `sch.set_component_attribute` actually lands in it — the
+        #: second one is how 055 G2's "the value did not land" is faked.
+        self.values: dict[str, dict] = {}
+        self.value_write_lands = value_write_lands
 
     # ---------------------------------------------------------- the page
 
     def add(self, designator: str, x: float, y: float, *, rotation: float = 0.0,
-            mirror: bool = False, lcsc: str = "C25744") -> None:
+            mirror: bool = False, lcsc: str = "C25744",
+            value: str | None = None) -> None:
         self.components[designator] = {
             "x": x, "y": y, "rotation": rotation, "mirror": mirror, "lcsc": lcsc,
         }
+        if value is not None:
+            self.set_value(designator, value)
+
+    def set_value(self, designator: str, value: str) -> None:
+        """Write `OtherProperty.Value` the way the editor does — one key at a time."""
+        self.values.setdefault(designator, {})["Value"] = value
 
     def wire(self, net: str, points) -> None:
         self.wires.append({"net": net, "points": [list(point) for point in points]})
@@ -105,7 +118,9 @@ class _FakeEditor:
                 {"primitiveId": f"c-{name}",
                  "state": {"Designator": name, "X": item["x"], "Y": item["y"],
                            "ComponentType": "part", "Rotation": item["rotation"],
-                           "Mirror": item["mirror"]}}
+                           "Mirror": item["mirror"],
+                           **({"OtherProperty": dict(self.values[name])}
+                              if name in self.values else {})}}
                 for name, item in sorted(self.components.items())
             ]
             + ([{"primitiveId": "sheet-1",
@@ -215,6 +230,32 @@ class _FakeEditor:
             self.writes.append((action, params))
             self.wire(str(params.get("net") or ""), params.get("points") or [])
             return {"uuid": f"w-{len(self.wires)}", "net": params.get("net")}
+        if action == "sch.set_component_attribute":
+            # The connector's own contract (actions.ts): one merged write of
+            # `otherProperty`, then a read-back, and `applied` = the read-back
+            # equals the target. A fake that answered `applied: true` without
+            # storing the value would make 055 G2's independent read-back the only
+            # thing standing between the flow and a wrong conclusion.
+            self.writes.append((action, params))
+            primitive = str(params.get("primitiveId") or "")
+            designator = primitive[2:] if primitive.startswith("c-") else ""
+            key = str(params.get("key") or "Value")
+            value = str(params.get("value") or "")
+            if not designator or designator not in self.components:
+                raise _BridgeError("NOT_FOUND", f"no primitive {primitive!r} on the page")
+            if self.value_write_lands:
+                self.set_value(designator, value)
+            read_back = self.values.get(designator, {}).get(key, "")
+            return {
+                "primitiveId": primitive,
+                "attributes": {key: value},
+                "applied": self.value_write_lands and read_back == value,
+                "wrote": True,
+                "otherPropertyAfter": dict(self.values.get(designator, {})),
+                **({} if read_back == value else {
+                    "mismatched": [f"{key}: wanted {value!r}, read {read_back!r}"],
+                }),
+            }
         if action == "sch.place_power":
             self.writes.append((action, params))
             self.flag(str(params.get("net") or ""), float(params.get("x") or 0.0),
@@ -267,8 +308,14 @@ def _stub_export(monkeypatch, *, components=None, findings=None, sequence=None):
     monkeypatch.setattr(cli, "_baseline_findings", lambda model: list(findings or []))
 
 
-def _plan(tmp_path: Path, *, page: str = "", pool=(), name: str = "plan.json"):
-    """The fixture drawing as a plan, built the way `draw plan` builds it."""
+def _plan(tmp_path: Path, *, page: str = "", pool=(), name: str = "plan.json",
+          page_editor=None):
+    """The fixture drawing as a plan, built the way `draw plan` builds it.
+
+    ``page_editor`` supplies the page the plan records a census of — the shape a
+    plan built against a page that already holds something has (036b's pool, and
+    055 G2's "the write's scope is this plan's parts").
+    """
     from boardwise.core.circuitspec import CircuitSpec
     from boardwise.core.presentationspec import PresentationSpec
     from boardwise.engines import drawcompiler
@@ -287,7 +334,7 @@ def _plan(tmp_path: Path, *, page: str = "", pool=(), name: str = "plan.json"):
     baseline = None
     if page:
         baseline = drawapply.canvas_census(
-            _FakeEditor(page=page).geometry()
+            (page_editor or _FakeEditor(page=page)).geometry()
         )
         baseline.page_uuid = page
     plan = drawapply.module_plan(
@@ -317,11 +364,12 @@ def _live_netlist_for(plan: ChangePlan) -> dict:
 
 
 def _page_with(plan: ChangePlan) -> _FakeEditor:
-    """An editor whose page already *is* the plan."""
+    """An editor whose page already *is* the plan — including the written values."""
     editor = _FakeEditor(page="page-1", netlists=[_live_netlist_for(plan)])
     for part in plan.change.draw_parts:
         editor.add(part.designator, part.x, part.y, rotation=part.rotation,
-                   mirror=part.mirror, lcsc=part.lcsc)
+                   mirror=part.mirror, lcsc=part.lcsc,
+                   value=part.value if part.value_key else None)
     for wire in plan.change.draw_wires:
         editor.wire(wire.net, wire.points)
     for flag in plan.change.draw_flags:
@@ -475,10 +523,23 @@ def test_the_first_apply_lands_the_drawing_on_a_new_page(monkeypatch, tmp_path, 
     assert [action for action, _params in editor.writes] == [
         "sch.doc.new",
         "sch.place_component", "sch.place_component",
+        "sch.set_component_attribute", "sch.set_component_attribute",
         "sch.place_wire", "sch.place_wire", "sch.place_wire", "sch.place_wire",
         "sch.place_power", "sch.place_power",
         "sch.doc.save",
-    ], "the order the task book fixes: parts, pins, wires, flags, save"
+    ], "the order 055 §二 fixes: parts, values, pins, wires, flags, save"
+    # 055 G2: every write went to a part this plan placed, one key each.
+    value_writes = [params for action, params in editor.writes
+                    if action == "sch.set_component_attribute"]
+    assert [item["primitiveId"] for item in value_writes] == ["c-R1", "c-R2"], (
+        "the write's scope is the plan's own parts — nothing outside it is touched"
+    )
+    assert {item["key"] for item in value_writes} == {"Value"}
+    assert [item["value"] for item in value_writes] == ["10k", "10k"]
+    assert all(item["pageUuid"] == editor.page for item in value_writes), (
+        "every write carries the page guard (SKILL §4: 写动作一律带 pageUuid)"
+    )
+    assert editor.values == {"R1": {"Value": "10k"}, "R2": {"Value": "10k"}}
     payload = json.loads(report.read_text(encoding="utf-8"))
     assert payload["persistence"] == "saved_unverified"
     assert payload["verification"]["ok"] is True
@@ -615,8 +676,94 @@ def test_a_mirrored_part_is_placed_at_its_own_angle(monkeypatch, tmp_path, capsy
     assert "verification_disagrees" not in printed
 
 
+# --------------------------------------------------- the value write (055 G2)
+
+
+def test_the_apply_writes_each_parts_value_and_reads_it_back(monkeypatch, tmp_path, capsys):
+    """055 G2: the CircuitSpec's value is the design value, so it lands on the part."""
+    plan_path, plan = _plan(tmp_path)
+    editor = _FakeEditor(
+        exists=False, netlists=[{"components": {}}, _live_netlist_for(plan)]
+    )
+    _stub_editor(monkeypatch, editor)
+    _stub_export(monkeypatch, components={}, findings=[])
+    report = tmp_path / "apply.json"
+    code = cli.main([
+        "draw", "apply", str(plan_path), "--new-page", "--project", "test",
+        "--json", str(report),
+    ])
+    printed = capsys.readouterr().out
+    assert code == 0, printed
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    values = payload["write"]["values"]
+    assert [item["designator"] for item in values] == ["R1", "R2"]
+    assert [item["key"] for item in values] == ["Value", "Value"]
+    assert [item["value"] for item in values] == ["10k", "10k"]
+    assert [item["readBack"] for item in values] == ["10k", "10k"], (
+        "the read-back is the page's own answer, not the write's"
+    )
+    assert all(item["applied"] for item in values)
+    assert payload["write"]["valueReadback"]["problems"] == []
+    assert payload["write"]["valueReadback"]["written"] == 2
+    assert payload["verification"]["canvas"] == []
+    assert "sch.set_component_attribute" in payload["write"]["valueChannel"]
+
+
+def test_a_value_that_does_not_land_stops_the_run_before_any_wire(monkeypatch, tmp_path, capsys):
+    """The write's own postcondition: the page must state the value the plan wrote."""
+    plan_path, plan = _plan(tmp_path)
+    editor = _FakeEditor(
+        exists=False, netlists=[{"components": {}}, _live_netlist_for(plan)],
+        value_write_lands=False,      # the host accepts the call and stores nothing
+    )
+    _stub_editor(monkeypatch, editor)
+    _stub_export(monkeypatch, components={}, findings=[])
+    report = tmp_path / "apply.json"
+    code = cli.main([
+        "draw", "apply", str(plan_path), "--new-page", "--project", "test",
+        "--json", str(report),
+    ])
+    printed = capsys.readouterr().out
+    assert code == 3, printed
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["reason"] == "value_readback_disagrees"
+    problems = payload["write"]["valueReadback"]["problems"]
+    assert len(problems) == 2, problems
+    assert "R1 is on the page but states no Value at all" in problems[0]
+    assert "the plan writes '10k'" in problems[0]
+    assert "R2 is on the page but states no Value at all" in problems[1]
+    actions = [action for action, _params in editor.writes]
+    assert "sch.place_wire" not in actions and "sch.place_power" not in actions
+    assert "sch.doc.save" not in actions, "a value that did not land never saves"
+    assert any("写值与回读不符" in item for item in payload["notes"])
+
+
+def test_the_value_write_never_touches_a_part_outside_the_plan(monkeypatch, tmp_path, capsys):
+    """036's scope guard, one level down: this module's parts, and nothing else."""
+    page = _FakeEditor(page="page-1")
+    page.add("U9", 500.0, -500.0, lcsc="C25744", value="SOMEBODY-ELSES-VALUE")
+    plan_path, plan = _plan(tmp_path, page="page-1", page_editor=page)
+    page.netlists = [_live_netlist_for(plan)]
+    _stub_editor(monkeypatch, page)
+    _stub_export(monkeypatch, components={}, findings=[])
+    code = cli.main(["draw", "apply", str(plan_path), "--page", "page-1"])
+    printed = capsys.readouterr().out
+    assert code == 0, printed
+    assert [params["primitiveId"] for action, params in page.writes
+            if action == "sch.set_component_attribute"] == ["c-R1", "c-R2"]
+    assert page.values["U9"] == {"Value": "SOMEBODY-ELSES-VALUE"}, (
+        "范围外一个属性不动 (055 §二)"
+    )
+    assert page.values["R1"] == {"Value": "10k"}
+    assert page.values["R2"] == {"Value": "10k"}
+
+
 def test_a_repeat_apply_writes_nothing_at_all(monkeypatch, tmp_path, capsys):
-    """C4: the plan's own postconditions, read on the page, say `already_applied`."""
+    """C4: the plan's own postconditions, read on the page, say `already_applied`.
+
+    The values are part of those postconditions since 055 G2, so a repeat run
+    also says the design values are already on the page.
+    """
     plan_path, plan = _plan(tmp_path)
     editor = _page_with(plan)
     _stub_editor(monkeypatch, editor)

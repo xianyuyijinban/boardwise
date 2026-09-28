@@ -34,9 +34,9 @@ number is rewritten by their arrival.
 A third slot, **fix success** (017 sec.5), is *not* measured here: "edit apply,
 then re-review comes back resolved" is a real-host result, so the slot prints
 what :data:`FIX_CASES` records — one entry per live repair execution, taken from
-the five M3 task books' own submission records. See the block above
-:func:`fix_success_rows` for the counting rule and for why a register that is
-filled by hand beats a number this harness cannot take.
+the slice's own task book and run report (each row's ``source`` names them). See
+the block above :func:`fix_success_rows` for the counting rule and for why a
+register that is filled by hand beats a number this harness cannot take.
 """
 
 from __future__ import annotations
@@ -517,7 +517,7 @@ def _fmt_ratio(numerator: int, denominator: int, ratio: float | None) -> str:
 
 
 # ---------------------------------------------------------------------------
-# fix success — the M3 register (017 sec.5's slot, filled by the M3 close-out)
+# fix success — the repair register (017 sec.5's slot, filled slice by slice)
 # ---------------------------------------------------------------------------
 #
 # 017 sec.5 declared this slot and deliberately printed no number in it
@@ -961,9 +961,10 @@ def fix_success_payload() -> dict:
     return {
         "status": "registered",
         "note": (
-            "M3's real-host repair results, registered by hand from the task books' "
-            "submission records; not re-measured by this run, and a kind with no "
-            "recorded case reports null rather than 0"
+            "live repair results, registered by hand for every change kind the plan "
+            "register covers — each row's source names the task book and the run "
+            "report it was transcribed from; not re-measured by this run, and a kind "
+            "with no recorded case reports null rather than 0"
         ),
         "kinds": [
             {
@@ -1144,13 +1145,14 @@ def _render_coverage(
         lines.append(
             f"    {rule_id:26} " + _fmt_ratio(found, here, found / here)
         )
-    # 017 sec.5's slot, filled by the M3 close-out (see FIX_CASES above): the
+    # 017 sec.5's slot, filled by the plan register (see FIX_CASES above): the
     # numbers are a register of real-host repair executions, not something this
     # run measured. The line names it, because a reader who takes them for a
     # reading of the boards in this report would be reading them wrong.
     lines.append(
-        "\n  fix success (017 sec.5) — M3's live repair results, registered from "
-        "the task books and not re-measured by this run:"
+        "\n  fix success (017 sec.5) — live repair results, registered per change "
+        "kind from the slices' task books and their run reports, and not "
+        "re-measured by this run:"
     )
     for row in fix_success_rows():
         lines.append(

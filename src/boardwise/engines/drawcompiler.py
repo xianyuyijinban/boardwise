@@ -2009,7 +2009,7 @@ def _pin_direction(
 
 
 def _relation_failures(ctx: _Context, placed: _Placement) -> list[GrammarFailure]:
-    """Relations the placement could not keep — a lock's doing, or a bug.
+    """Relations the placement could not keep — a lock's doing, or the symbol's shape.
 
     A lock the engineer set is honoured *exactly* (never snapped, never moved),
     so when honouring it breaks a relation the conflict is between the lock and
@@ -2017,6 +2017,14 @@ def _relation_failures(ctx: _Context, placed: _Placement) -> list[GrammarFailure
     action that resolves it. 053 sec.5 scenario 12: "报告冲突+可选动作，不静默忽略
     锁定". The measurement itself is shared with :func:`check_grammar` (one ruler
     for the word "relation" in both layers).
+
+    With no lock involved this is **a refusal, not a bug report** (055 G1): the
+    placement stage tries a variant and refuses it when a relation would break,
+    so "our own placement broke it" is the rejection reason. When the measurement
+    can say *why* — the pin the branch hangs off does not sit on the side the
+    relation asks for, which is the measured single-sided AMS1117 (054 C3, pit
+    33) — the failure names that pin instead, because "change the side
+    preferences or use another symbol" is then an answer the reader can act on.
     """
     out: list[GrammarFailure] = []
     for item, points in _relation_violations(
@@ -2032,12 +2040,32 @@ def _relation_failures(ctx: _Context, placed: _Placement) -> list[GrammarFailure
             part_id for part_id in (item.subject, item.object)
             if ctx.locked(part_id) is not None
         )
-        where = (
-            "the lock(s) "
-            + ", ".join(f"{LOCK_PREFIX}[{part_id}]" for part_id in locked)
-            if locked
-            else "this plan's own placement (a compiler bug — report it)"
-        )
+        if locked:
+            where = (
+                "the lock(s) "
+                + ", ".join(f"{LOCK_PREFIX}[{part_id}]" for part_id in locked)
+            )
+            action = (
+                "move or drop the lock that conflicts (the other relations put "
+                f"{item.subject} and {item.object} where they are), or change the "
+                "presentation's side preferences if the whole drawing is meant to "
+                "run the other way"
+            )
+        else:
+            shape = _pin_side_note(ctx, item, placed)
+            where = shape or (
+                "the placement this variant chose (no lock is involved) — "
+                f"{item.object} and {item.subject} are not where the relation asks"
+            )
+            action = (
+                "change the presentation's side preferences so the drawing runs "
+                "the way this symbol's pins actually leave it, or use a symbol "
+                "whose pin leaves on the side the relation asks for (053 sec.2 "
+                "forbids renumbering pins to fit the layout); if a legal drawing "
+                "is expected from this symbol as it is, report the run — a "
+                "compiler that refuses every variant has not found a legal "
+                "drawing, not proven that none exists"
+            )
         out.append(GrammarFailure(
             category=FAILURE_PRESENTATION_POOR,
             subject=locked[0] if locked else item.subject,
@@ -2047,14 +2075,64 @@ def _relation_failures(ctx: _Context, placed: _Placement) -> list[GrammarFailure
                 f"{_point_text(points[1])}, and the constraint's own reason is "
                 f"{item.reason!r}"
             ),
-            action=(
-                "move or drop the lock that conflicts (the other relations put "
-                f"{item.subject} and {item.object} where they are), or change the "
-                "presentation's side preferences if the whole drawing is meant to "
-                "run the other way"
-            ),
+            action=action,
         ))
     return out
+
+
+def _pin_side_note(ctx: _Context, item: Any, placed: _Placement) -> str:
+    """Why this symbol's own pin geometry is what breaks the relation, or ``""``.
+
+    Measured, never guessed: the relation has to be an order kind, the two parts
+    have to share a net, and the object's **own pin on that net** — the pin a
+    branch hangs off — has to sit on the wrong side of the object's origin for
+    the relation. That is the shape of the symbol this repo measured (AMS1117
+    drawn with VIN/VOUT/GND down one side and a duplicate VOUT on the other, 054
+    C3): with the connected pin directly above or below the origin, every branch
+    that hangs off it lands on the wrong side of the core, and the drawing is
+    refused rather than bent (053 sec.2's "禁止换脚号迁就版式").
+
+    The comparison uses :func:`_relation_holds` — the same ruler that decided the
+    relation is broken — so the note cannot disagree with the measurement it
+    explains.
+    """
+    if item.kind not in (ABOVE, BELOW, LEFT_OF, RIGHT_OF):
+        return ""
+    origin = placed.origins.get(item.object)
+    if origin is None:
+        return ""
+    shared = sorted(
+        set(_part_nets(ctx.circuit, item.subject).values())
+        & set(_part_nets(ctx.circuit, item.object).values())
+    )
+    if not shared:
+        return ""
+    token = _token_on(ctx.circuit, item.object, shared[0])
+    pin = _pin_point(ctx, item.object, token, placed.poses, placed.origins)
+    if not token or pin is None:
+        return ""
+    if _relation_holds(
+        item.kind, (pin, origin), grid=ctx.budget.grid,
+        near_limit=ctx.budget.near_limit, lateral=ctx.lateral(),
+        progress=ctx.progress,
+    ):
+        return ""
+    return (
+        f"the shape of {item.object}'s own symbol — the pin the branch hangs off, "
+        f"{item.object}.{token} on net {shared[0]}, sits at {_point_text(pin)}, which "
+        f"is not {_side_word(item.kind)} {item.object}'s origin "
+        f"{_point_text(origin)}, so the branch this symbol allows lands on the "
+        "wrong side of it"
+    )
+
+
+def _side_word(kind: str) -> str:
+    return {
+        LEFT_OF: "to the left of",
+        RIGHT_OF: "to the right of",
+        ABOVE: "above",
+        BELOW: "below",
+    }[kind]
 
 
 def _point_text(point: tuple[float, float]) -> str:

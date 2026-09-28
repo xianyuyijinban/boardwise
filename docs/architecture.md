@@ -104,7 +104,8 @@ on purpose, because the compiler is the part that must work with no editor:
   `circuit-invalid`, `layout-unsat`, `presentation-poor`) are the vocabulary
   every caller reports in.
 * **the landing step** (`engines/drawapply.py`, 054) turns one candidate into a
-  `ChangePlan` of kind `draw-module` (`core/changeplan.py`, the fifth kind, and
+  `ChangePlan` of kind `draw-module` (`core/changeplan.py`, the kind 054 added,
+  after the five M3 slices, and
   the only one whose payload is "what the page should become" rather than "one
   edit to what is there"). It supplies the three things a layout cannot know —
   the recipe (LCSC + value), the designators (page ∪ project pool, 036b) and the
@@ -114,9 +115,12 @@ on purpose, because the compiler is the part that must work with no editor:
   geometry table, the page's identity and the page's primitive census.
 * **`draw apply`** (`cli.py`) executes that plan on the live editor: guards →
   the plan's own postconditions read on the page (`already_applied` writes
-  nothing) → the parts → a **pin read-back against the plan's expected offsets
-  before any wire** → the wires and flags → both verification legs (the editor's
-  own netlist *within the plan's own pins*, and the canvas) → the range, the
+  nothing) → the parts → **each part's design value, written into the editor's
+  own `Value` attribute** (055 G2, `sch.set_component_attribute`; the plan states
+  the key, and a plan that states none writes nothing) → a **pin read-back
+  against the plan's expected offsets before any wire** → the wires and flags →
+  both verification legs (the editor's own netlist *within the plan's own pins*,
+  and the canvas — which includes the values read back) → the range, the
   findings' one-way rule, the save and the render.
 
 The three rules the pair leans on: an offline plan is never landed without a page

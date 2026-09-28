@@ -33,6 +33,7 @@ from boardwise.core.changeplan import (
     DRAW_FLAG_POWER,
     DRAW_GRID,
     DRAW_MODULE_KIND,
+    DRAW_VALUE_KEY,
     ChangePlan,
     ChangePlanError,
 )
@@ -93,13 +94,24 @@ def _live(*components) -> dict[tuple[str, str], str]:
     return out
 
 
-def _geometry(*, components, wires=(), netflags=(), bboxes=None) -> dict:
-    """A `sch.geometry` dump in the shape 3.2.186 sends (036's helper's shape)."""
+def _geometry(*, components, wires=(), netflags=(), bboxes=None,
+              values: dict | None = None) -> dict:
+    """A `sch.geometry` dump in the shape 3.2.186 sends (036's helper's shape).
+
+    ``values`` is ``designator -> the part's Value``, written where the editor
+    keeps it (``state.OtherProperty.Value`` — the channel
+    `sch.set_component_attribute` writes, and the one `resolve_on_page` reads).
+    A dump with no ``values`` is a page nobody has written a value on, which is
+    what a drawing's own first read looks like.
+    """
+    values = dict(values or {})
     return {
         "components": [
             {"primitiveId": f"p-{name}",
              "state": {"Designator": name, "X": x, "Y": y, "ComponentType": "part",
-                       "Rotation": rotation, "Mirror": mirror}}
+                       "Rotation": rotation, "Mirror": mirror,
+                       **({"OtherProperty": {"Value": values[name]}}
+                          if name in values else {})}}
             for name, x, y, rotation, mirror in components
         ]
         + [{"primitiveId": "sheet-1",
@@ -123,7 +135,7 @@ def _geometry(*, components, wires=(), netflags=(), bboxes=None) -> dict:
 
 
 def _page_matching(plan: ChangePlan) -> dict:
-    """A page that *is* the plan: every part, every wire, every flag."""
+    """A page that *is* the plan: every part, every wire, every flag, every value."""
     components = [
         (part.designator, part.x, part.y, part.rotation, part.mirror)
         for part in plan.change.draw_parts
@@ -133,7 +145,12 @@ def _page_matching(plan: ChangePlan) -> dict:
         for index, wire in enumerate(plan.change.draw_wires)
     ]
     netflags = [(flag.net, flag.x, flag.y) for flag in plan.change.draw_flags]
-    return _geometry(components=components, wires=wires, netflags=netflags)
+    values = {
+        part.designator: part.value
+        for part in plan.change.draw_parts if part.value_key
+    }
+    return _geometry(components=components, wires=wires, netflags=netflags,
+                     values=values)
 
 
 def _pins_from_plan(plan: ChangePlan) -> dict[tuple[str, str], tuple[float, float]]:
@@ -517,6 +534,86 @@ def test_the_flag_count_is_part_of_the_canvas_leg(plan: ChangePlan) -> None:
 def test_unread_pins_are_reported_rather_than_passed(plan: ChangePlan) -> None:
     state = drawapply.postcondition_problems(plan, geometry=_page_matching(plan), pins={})
     assert state["canvas"] and "not read back" in state["canvas"][0]
+
+
+# ------------------------------------------------- 4b. the value write (055 G2)
+
+
+def test_the_plan_declares_the_value_write_and_its_key(plan: ChangePlan) -> None:
+    """The design value lands in the editor's own `Value`, and the plan says so."""
+    assert all(part.value_key == DRAW_VALUE_KEY for part in plan.change.draw_parts)
+    assert DRAW_VALUE_KEY == "Value"
+    payload = _plan_payload(plan)
+    assert [part["valueKey"] for part in payload["change"]["parts"]] == ["Value", "Value"]
+    # …and the postconditions say what "done" means for it, part by part.
+    assert sum(
+        "carries Value=" in line and "set_component_attribute" in line
+        for line in plan.expected_postcondition
+    ) == len(plan.change.draw_parts)
+
+
+def test_a_plan_that_claims_no_write_keeps_its_old_document(plan: ChangePlan) -> None:
+    """A pre-055 `draw-module` plan stays readable, and no write is invented for it."""
+    payload = _plan_payload(plan)
+    for part in payload["change"]["parts"]:
+        part.pop("valueKey")
+    back = ChangePlan.from_jsonable(payload)
+    assert all(part.value_key == "" for part in back.change.draw_parts)
+    assert "valueKey" not in back.to_jsonable()["change"]["parts"][0]
+    page = _page_matching(back)
+    for part in page["components"]:
+        part["state"].pop("OtherProperty", None)
+    assert drawapply.value_problems(back, page) == [], (
+        "a plan that claims no write is not judged on a value nobody wrote"
+    )
+
+
+def test_a_value_that_does_not_read_back_is_a_canvas_problem(plan: ChangePlan) -> None:
+    """055 G2: the read-back after the write, as the canvas leg's own line."""
+    page = _page_matching(plan)
+    page["components"][0]["state"]["OtherProperty"]["Value"] = "4k7"
+    problems = drawapply.value_problems(plan, page)
+    assert len(problems) == 1
+    assert "R1.Value reads '4k7'" in problems[0]
+    assert "'10k'" in problems[0] and "OtherProperty.Value" in problems[0]
+    state = drawapply.postcondition_problems(
+        plan, geometry=page, pins=_pins_from_plan(plan),
+    )
+    assert state["canvas"] == problems, "the leg is the same function the flow calls"
+
+
+def test_a_part_that_states_no_value_at_all_is_a_different_problem(plan: ChangePlan) -> None:
+    """'the value is empty' and 'the primitive has no such key' are different facts."""
+    page = _page_matching(plan)
+    for component in page["components"]:
+        component["state"].pop("OtherProperty", None)
+    problems = drawapply.value_problems(plan, page)
+    assert len(problems) == 2
+    assert all("states no Value at all" in item for item in problems)
+
+
+def test_a_part_that_did_not_land_is_left_to_the_parts_leg(plan: ChangePlan) -> None:
+    """One fault, one line: the value leg is silent about a part that is not there."""
+    page = _page_matching(plan)
+    page["components"] = [
+        item for item in page["components"]
+        if item["state"].get("Designator") != "R1"
+    ]
+    assert drawapply.value_problems(plan, page) == []
+    state = drawapply.postcondition_problems(
+        plan, geometry=page, pins=_pins_from_plan(plan),
+    )
+    assert any("is not on the page" in item for item in state["canvas"])
+
+
+def test_an_ambiguous_designator_cannot_be_judged(plan: ChangePlan) -> None:
+    page = _page_matching(plan)
+    clone = json.loads(json.dumps(page["components"][0]))
+    clone["primitiveId"] = "p-R1-again"
+    clone["state"]["OtherProperty"]["Value"] = "1k"
+    page["components"].append(clone)
+    problems = drawapply.value_problems(plan, page)
+    assert problems and "resolves to 2 primitives" in problems[0]
 
 
 # ------------------------------------------------- 5. the refusals say why

@@ -26,6 +26,17 @@ Three properties this module enforces rather than trusts:
 
 The vocabularies, with the clause each item comes from.
 
+**A role is a set of pins, not a pin** (055 G1). The measured AMS1117 symbol
+carries VOUT twice — once on each side of the body — and a grammar that reads
+only the id-sorted first pin of a role reports a part whose duplicate is wired as
+"the spec states no connection". So the rule this module states, once, is:
+**any** pin of a role being a net member connects that role; a role's pin written
+into ``nc[]`` is *explicitly handled* (recorded, never a "missing fact") and never
+how the role gets its net; and two pins of one role on two different nets is a
+contradiction, refused naming both nets because the pins are one node inside the
+symbol. :func:`role_pins_connected` is that rule; :func:`role_pins` is only a
+reading of "a" pin and must not be used to answer "is this role connected".
+
 **Constraint kinds.** `subject` and `object` are both **part ids**; the `reason`
 carries the clause-level precision, because a bare kind cannot say *which end*
 of a part it means.
@@ -125,6 +136,7 @@ __all__ = [
     "GrammarResult",
     "RelativeConstraint",
     "RoleBinding",
+    "RoleConnection",
     "bound_result",
     "connected_net_sets",
     "declares_modules",
@@ -135,12 +147,15 @@ __all__ = [
     "net_clause",
     "net_provenance",
     "nets_of_class",
+    "nc_pins_of",
     "part_clause",
     "pins_of_part",
     "profile_for",
     "profile_pin_for",
     "refused_result",
     "role_pins",
+    "role_pins_connected",
+    "role_pins_of",
     "series_paths",
     "shared_module",
     "two_terminal_parts",
@@ -592,6 +607,151 @@ def pins_of_part(circuit: CircuitSpec, part_id: str) -> dict[str, str]:
     return out
 
 
+#: How a role's pins were resolved against the CircuitSpec (055 G1).
+#: ``connected`` is every pin of the role the spec puts on a net, ``nets`` what
+#: those pins are on, ``nc`` the role's pins the spec lists in ``nc[]``. The two
+#: rules of 055 G1 are expressed by these three fields and nowhere else:
+#: **any** same-role pin on a net connects the role, and an explicit NC is
+#: "handled" (recorded, never a missing fact) without connecting anything.
+@dataclass(frozen=True)
+class RoleConnection:
+    """One electrical role of one part, as the CircuitSpec connects it."""
+
+    role: str
+    #: ``(spec pin token, how it matched)`` for every pin of this role the spec
+    #: puts on a net, in the profile's id order. ``how`` is
+    #: :func:`profile_pin_for`'s answer (``"number"`` / ``"name"``).
+    connected: tuple[tuple[str, str], ...] = ()
+    #: The nets those pins sit on — distinct, ascending.
+    nets: tuple[str, ...] = ()
+    #: The role's pins the spec lists in ``nc[]`` (spec tokens), ascending.
+    nc: tuple[str, ...] = ()
+    #: Every pin of this role the profile carries (spec tokens), in id order.
+    #: Kept so a refusal can name all of them — "connect one of these" is the
+    #: actionable form of "this role has no net".
+    tokens: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.role:
+            raise GrammarError("RoleConnection.role is empty")
+
+    @property
+    def net(self) -> str:
+        """The one net this role is on, or ``""`` when it is not on exactly one.
+
+        Empty covers three different facts — nothing connected, several pins on
+        several nets, and several pins agreeing on one net is *not* one of them
+        (that answer is the net). A caller that has to explain reads
+        :attr:`connected` / :attr:`nets` / :attr:`nc` rather than this.
+        """
+        return self.nets[0] if len(self.nets) == 1 else ""
+
+    @property
+    def token(self) -> str:
+        """The spec token of the pin this role resolved to, or ``""``."""
+        return self.connected[0][0] if self.connected else ""
+
+    @property
+    def how(self) -> str:
+        """How that token matched (``"number"`` / ``"name"``), or ``""``."""
+        return self.connected[0][1] if self.connected else ""
+
+    @property
+    def all_nc(self) -> bool:
+        """Is *every* pin of this role an explicit no-connect?
+
+        The one shape where NC is not "handled, keep going": a role with no pin
+        anywhere cannot carry its node, and the failure has to name the pins
+        rather than leave the reader with a silent half-bound core.
+        """
+        return bool(self.tokens) and len(self.nc) == len(self.tokens)
+
+    def note(self) -> str:
+        """One evidence clause for a role that has several pins, or ``""``.
+
+        A duplicated pin is a fact the reader of a binding has to see: which of
+        the role's pins the binding used, and that the other one is an explicit
+        NC rather than an omission (055 G1's motivating symbol).
+        """
+        if len(self.tokens) < 2:
+            return ""
+        parts: list[str] = []
+        if self.connected:
+            if len(self.connected) > 1:
+                pins = ", ".join(token for token, _how in self.connected)
+                parts.append(
+                    f"pins {pins} are all on net {self.nets[0]} — one role, one node"
+                )
+            else:
+                parts.append(
+                    f"pin {self.token} carries the net {self.nets[0]}"
+                )
+        if self.nc:
+            parts.append(
+                "pin(s) " + ", ".join(self.nc) + " are listed in nc[] "
+                "(an explicit no-connect, not a missing fact)"
+            )
+        rest = [
+            token for token in self.tokens
+            if token not in self.nc and token not in {item[0] for item in self.connected}
+        ]
+        if rest:
+            parts.append("pin(s) " + ", ".join(rest) + " are not mentioned at all")
+        return f"{self.role}: " + "; ".join(parts)
+
+
+def role_pins_connected(
+    circuit: CircuitSpec, part_id: str, profile: SymbolProfile, role: str
+) -> RoleConnection:
+    """Resolve **one role of one part** against the CircuitSpec (055 G1).
+
+    The rule, and the reason it is not "the first pin of the role":
+
+    * every pin the profile gives this role is considered, and **any** of them
+      being a net member means the role is connected — a real symbol duplicates
+      a supply pin (the measured AMS1117 has VOUT on both sides of the body), and
+      a circuit may connect either one of the two;
+    * a pin listed in ``nc[]`` is **explicitly handled**: it is recorded in
+      :attr:`RoleConnection.nc` and never reported as a missing fact, and it is
+      never how the role gets its net;
+    * two of the role's pins on *two different* nets is not a choice to be made
+      here — it is a contradiction (the pins are the same node inside the
+      symbol, so the drawing would short those nets). The caller refuses it
+      naming both nets; ``nets`` therefore has more than one entry.
+
+    A spec pin token is matched by number first, then by name, through
+    :func:`profile_pin_for` — the same ruler the callers already used.
+    """
+    pins_of_role = role_pins_of(profile).get(role, ())
+    part_pins = pins_of_part(circuit, part_id)
+    nc = nc_pins_of(circuit, part_id)
+    connected: list[tuple[str, str]] = []
+    tokens: list[str] = []
+    nc_tokens: list[str] = []
+    for pin in pins_of_role:
+        token, how = profile_pin_for(part_pins, pin)
+        if token:
+            tokens.append(token)
+            connected.append((token, how))
+            continue
+        # Not on a net. Which spelling the spec used for it is what a reader has
+        # to write in nc[] or in a net member, so try the pin's own two names
+        # against nc[] and report the one that hits.
+        tokens.append(pin.number or pin.name)
+        if pin.number and pin.number in nc:
+            nc_tokens.append(pin.number)
+        elif pin.name and pin.name in nc:
+            nc_tokens.append(pin.name)
+    return RoleConnection(
+        role=role,
+        connected=tuple(connected),
+        nets=tuple(sorted({part_pins[token] for token, _how in connected})),
+        nc=tuple(sorted(nc_tokens)),
+        tokens=tuple(tokens),
+    )
+
+
+
 def connected_net_sets(circuit: CircuitSpec) -> dict[str, tuple[str, ...]]:
     """``part id → its distinct nets`` (sorted), for every part with a connection.
 
@@ -770,22 +930,54 @@ def profile_pin_for(part_pins: Mapping[str, str], pin: SymbolPin) -> tuple[str, 
     return ("", "")
 
 
-def role_pins(profile: SymbolProfile) -> dict[str, SymbolPin]:
-    """``electrical role → its pin`` for one profile, id-sorted and stable.
+def role_pins_of(profile: SymbolProfile) -> dict[str, tuple[SymbolPin, ...]]:
+    """``electrical role → **every** pin of it``, id-sorted and stable.
 
     The role is the profile's own ``electricalRole`` where it has one; where it
     does not, the pin's *name* is mapped through
     :data:`~boardwise.core.symbolprofile.ROLE_BY_PIN_NAME` — 053 sec.3 asks for
     exactly these two sources ("SymbolProfile electricalRole 或引脚名
-    VIN/VOUT/GND"). Where a role has several pins (two GND pins is ordinary),
-    the id-sorted first wins and the caller's evidence says so.
+    VIN/VOUT/GND").
+
+    **A role is not one pin** (055 G1). Two GND pins are ordinary, and the real
+    AMS1117 symbol this repo measured carries a *duplicated* VOUT on the other
+    side of the body; a judgment that reads only the id-sorted first pin then
+    reports a connected part as "no connection". So this returns them all, in id
+    order, and the resolution rule lives in :func:`role_pins_connected`.
     """
-    out: dict[str, SymbolPin] = {}
+    out: dict[str, list[SymbolPin]] = {}
     for pin in sorted(profile.pins, key=lambda item: (item.number, item.name)):
         role = pin.electrical_role or ROLE_BY_PIN_NAME.get(pin.name.strip().upper(), "")
-        if role and role not in out:
-            out[role] = pin
-    return out
+        if role:
+            out.setdefault(role, []).append(pin)
+    return {role: tuple(pins) for role, pins in out.items()}
+
+
+def role_pins(profile: SymbolProfile) -> dict[str, SymbolPin]:
+    """``electrical role → its id-sorted first pin`` — a *reading*, not the ruler.
+
+    For callers that only need to name *a* pin of a role (an evidence string, a
+    report line). It is deliberately not how "is this role connected" is
+    answered: that question is about every pin of the role and belongs to
+    :func:`role_pins_connected` (055 G1 — the duplicated supply pin).
+    """
+    return {
+        role: pins[0] for role, pins in role_pins_of(profile).items() if pins
+    }
+
+
+def nc_pins_of(circuit: CircuitSpec, part_id: str) -> frozenset[str]:
+    """The pin **tokens** of this part the spec lists in ``nc[]``.
+
+    Explicit no-connects, by the CircuitSpec's own rule (053 sec.2): "没给连接"
+    and "NC" are different facts, and only the second one is a decision. Read
+    here rather than in each grammar because the spelling is the spec's
+    (``<partId>.<pin>``, already validated on the way in).
+    """
+    prefix = f"{part_id}."
+    return frozenset(
+        item.pin[len(prefix):] for item in circuit.nc if item.pin.startswith(prefix)
+    )
 
 
 # --------------------------------------------------------------- next batch

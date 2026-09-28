@@ -4,6 +4,28 @@ Living index. Details live in `tasks/*.md` (one book per task) and
 `docs/implementation-log.md` (the connector debugging arc). This file only
 collects the current truth and the pointers.
 
+## [2026-09-28] 055 画图编译器收尾批（G1 文法角色脚 / G2 写 Value / G3 场景合规 / G6 文案；connector/daemon 零改动仍 **0.4.25**）
+
+### Problem / Task
+054 §九遗留的四个独立 correctness 缺口（G4 findings 工程级合并语义 / G5 写入后拒绝 rollback 归 056/057）：真机 AMS1117 重复 VOUT 脚让 `ldo` 文法误报 "neither a net member nor an explicit nc"（失败文案自称 compiler bug）；`draw apply` 不写器件 Value（导出 `value=''`，decap 只能靠 MPN 的 EIA 码）；053 LDO 场景 100n 输出与本仓 facts（≥22µF）打架；register 文案残留 "M3's / five slices" 旧口径。任务书 `tasks/055-draw-followups-g1-g6.md`（主代理裁决先行：文法双修路、Value 要写、场景合规化）。
+
+### Resolution
+- **G1 文法角色脚**（`engines/grammar/base.py`+`ldo.py`+`drawcompiler.py`）：词汇表先立「a role is a set of pins, not a pin」——新增 `role_pins_of`/`nc_pins_of`/`role_pins_connected` 一处收三条规则：**任一**同角色脚连网即算该角色已连；写进 `nc[]` 算显式处理并记 evidence；同角色两脚落两个网 = `circuit-invalid` 点名两网（符号内部连通等于短路）；全脚显式 nc = circuit-invalid（不是 facts-missing：spec 说了话是拓扑不成立），无成员也无 nc 仍 facts-missing（沉默不等于 NC）。`drawcompiler` 无锁分支失败文案**不再自称 compiler bug**，可测时报实测坐标（判据复用 `_relation_holds` 同一把尺）、测不出只说是这个 variant 自己的摆放问题。三形态真机 profile 实测：重复脚连网+主脚 nc / 主脚连网+重复脚 nc / 两脚都连，全部绑定核心、`grep "compiler bug"` = 0；B 形态补 `sidePreferences.output=bottom` 后 3 候选出图（默认侧无解是几何约束的合法结果不是文法缺陷）。
+- **G2 写 Value**（`core/changeplan.py`+`engines/drawapply.py`+`cli.py`）：plan 用 `valueKey` 逐件声明（**只在非空时写**，声明不写值的 plan 文档不变；旧五种 kind 序列化一字未动，往返测试全绿）；通道=016 同一 `sch.set_component_attribute` **零新增**，范围=plan 自己的 draw_parts；执行序=放件→写值→（同一把 geometry 读）引脚+值回读→走线，值写不进/回读不符**在拉线前** exit 3 `value_readback_disagrees`（不清理不重试不保存）；比较用精确串相等（OtherProperty 存的就是写进去的串；容差等价是另一次口径决策，显式未决）。真机两页：**P10 分压**（R7/R8 10k，`values 2/2 written · read back and equal`）与 **P11 LDO**（10u/22u/AMS1117-3.3 三件值全回读一致、findings new []、saved）applied+saved，渲染图主代理亲眼复核（岛屿 `VIN5={C6.1,U3.3}`/`3V3={C7.1,U3.2}`/`GND={C6.2,C7.2,U3.1}` 三分立，重复 VOUT 4 号脚留右不接线）；范围外零写实测：054 落的 11 件仍 `value=''`。P9 用 tests/fixtures 假库（竖排 ±50）跑出设计内 exit 3（引脚回读不符、件已放未保存），变 SKILL 坑 35。
+- **G3 场景合规**：`ldo_circuit` 输出电容 100n→**22µF**（U+00B5，规则读得出的拼法）+ docstring 动机；9 过 3 拒计数分类与其余场景几何哈希逐字节不变；**申报**（未顺手改断言）：场景 8/9 几何摘要两片叶子随值文字变宽 1 单位（`texts[3]/x` +0.5、`bbox[2]` +1.0，`µ`=8 宽于 `n`=7 的必然结果，无断言钉住）——主代理裁决接受（摘要是指纹不是冻结合同，值变正是本项目的）。
+- **G6 文案**：`review_eval.py` JSON note/文本头/模块 docstring/区块横幅 + `cli.py` 注释共 6 处 "M3's/five slices" → "按 kind 登记、来源见每行 source"（再加 kind 不必回来改）；先 grep 确认无断言钉旧文案；`docs/architecture.md` 执行序补"写值"步、stale "fifth kind" 改 "the kind 054 added"。
+- **decap 通道实测**（离线回放真机导出，不写画布）：`decap-required-caps` 取值=**先读板值、读不出回落 MPN EIA 码**——板值必须带单位字母（`'22u'` 读不出仍走 MPN、`'22µF'` 读得出则不依赖 MPN），值拼写口径写进 SKILL 坑 34。
+
+### Verification
+- 定向：grammar 36（+7）/ drawcompiler 46（+4）/ 054×2 78 / 017×2 80 / 相邻家族全绿；**12 场景 9 过 3 拒与几何哈希与 055 前基线逐字节一致**（`outputs/055_g2/21_scene_delta.txt` 可核）；`test_dsh_plugin_sync.py` 全绿（CLI 面零新增）。
+- 变异 3 组 CAUGHT：`role_pins_connected` 退第一只脚→8 红；`value_problems` 退恒真→4 红；`value_key=""`→9 红；均 cp+sha256/cmp 还原。
+- **主代理亲跑全量 pytest 2194 passed（193.6s，+20 over 2174），eval holdout 59/59 双 1.00（G6 后复测）**；渲染两张主代理亲眼看（分压教科书形；LDO 三岛分立经编辑器网表回读证实）。
+
+### Commit
+- Branch: `main`
+- Commit: 见本条下方一行（代码/测试/文档 055）
+- Status: committed
+- 遗留：G4/G5 归 056/057；顺带发现 `parse_capacitance_farads` 对希腊 μ（U+03BC）抛 KeyError 的 defect 另派 agent-75 修；值容差等价显式未决；真机值拼写必须带单位字母（坑 34/36）。
 ## [2026-09-28] 054 画法编译器落图（阶段 C1：单模块进编辑器）
 
 ### Problem / Task

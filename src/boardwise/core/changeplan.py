@@ -48,6 +48,7 @@ __all__ = [
     "DRAW_FLAG_POWER",
     "DRAW_GRID",
     "DRAW_MODULE_KIND",
+    "DRAW_VALUE_KEY",
     "INSERT_SUBCIRCUIT_KIND",
     "INSERT_TEMPLATES",
     "MOVE_BLOCK_KIND",
@@ -126,6 +127,17 @@ SUPPORTED_KINDS: tuple[str, ...] = (
     MOVE_BLOCK_KIND,
     DRAW_MODULE_KIND,
 )
+
+#: The attribute key a compiled drawing writes its design **values** into (055
+#: G2). The value in a CircuitSpec is the design intent, so landing the drawing
+#: means landing it: without this write the placed part carries the library
+#: device's own name and an empty `Value` (measured 054 C3), and every rule that
+#: reads a value has to fall back to the MPN. `Value` is the key the editor's own
+#: attribute channel uses (`sch.set_component_attribute` writes `otherProperty`,
+#: the only attribute namespace this host has — 016's edit path writes the same
+#: key), and a plan that states no key writes nothing (a pre-055 `draw-module`
+#: plan stays executable instead of silently gaining a write).
+DRAW_VALUE_KEY = "Value"
 
 #: The routing/landing grid a local move has to stay on (029's
 #: `engines/layout.GRID`, echoed here because `core` may not import `engines`).
@@ -436,7 +448,13 @@ class PlanDrawPart:
     * ``pins`` is the expected pin geometry, which is what the placement
       read-back is compared against;
     * ``spec_id`` is the CircuitSpec's own id, kept so a report can say which
-      designed part this is when the designator differs from it.
+      designed part this is when the designator differs from it;
+    * ``value`` is the design value, and since 055 G2 ``value_key`` says the plan
+      **writes** it: apply puts ``value`` into that attribute key of the placed
+      part through the editor's own attribute channel and reads it back. Empty
+      ``value_key`` means the plan claims no write (a pre-055 plan), and then the
+      value is only what the read-back compares against — which is exactly what
+      it was before this field existed.
     """
 
     spec_id: str = ""
@@ -444,6 +462,9 @@ class PlanDrawPart:
     prefix: str = ""
     lcsc: str = ""
     value: str = ""
+    #: The attribute key ``value`` is written into (``"Value"``, see
+    #: :data:`DRAW_VALUE_KEY`), or ``""`` when the plan claims no value write.
+    value_key: str = ""
     footprint: str = ""
     symbol_ref: str = ""
     symbol_hash: str = ""
@@ -830,6 +851,10 @@ class ChangePlan:
                         "y": item.y,
                         "rotation": item.rotation,
                         "mirror": item.mirror,
+                        # Written only when the plan claims the write, so a plan
+                        # that claims nothing keeps the document it had (the
+                        # kind-aware rule this method exists for).
+                        **({"valueKey": item.value_key} if item.value_key else {}),
                         "pins": [
                             {"number": pin.number, "dx": pin.dx, "dy": pin.dy}
                             for pin in item.pins
@@ -1696,6 +1721,10 @@ def _draw_change_from(change: dict[str, Any]) -> PlanChange:
       a value), a library symbol **with its geometry hash**, a landing point and
       its expected pins as offsets; no two share a designator, and no two spec
       ids collide;
+    * a part may state the attribute key its value is written into
+      (``valueKey``, 055 G2) — absent means it claims no write, which is not an
+      error, because the write is a claim the plan makes rather than a rule apply
+      invents;
     * every wire has at least two points, no repeated consecutive point, and each
       consecutive pair is axis-aligned (the orthogonal routing discipline 029-c
       measured the hard way: a diagonal `sch.place_wire` never returns);
@@ -1863,6 +1892,7 @@ def _draw_parts_from(value: Any, profile_hashes: list[tuple[str, str]]) -> list[
             prefix=str(item.get("prefix") or "").strip(),
             lcsc=lcsc,
             value=value,
+            value_key=_draw_value_key(item.get("valueKey"), spot),
             footprint=str(item.get("footprint") or ""),
             symbol_ref=ref,
             symbol_hash=digest,
@@ -1873,6 +1903,24 @@ def _draw_parts_from(value: Any, profile_hashes: list[tuple[str, str]]) -> list[
             pins=pins,
         ))
     return out
+
+
+def _draw_value_key(value: Any, spot: str) -> str:
+    """``item.valueKey`` — which attribute key this part's value is written into.
+
+    Absent or empty means the plan claims no write (a pre-055 plan, or a
+    hand-written one), and apply then only compares the value it reads; a stated
+    key must be a non-empty string, because "write into a key called ''" is not
+    an instruction the editor's channel can carry out.
+    """
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ChangePlanError(
+            f"{spot}.valueKey must be the attribute key the part's value is written "
+            f"into (a string), got {value!r}"
+        )
+    return value.strip()
 
 
 def _draw_pins_from(value: Any, spot: str) -> list[PlanDrawPin]:

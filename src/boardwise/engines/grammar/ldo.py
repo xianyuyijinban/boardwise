@@ -12,12 +12,15 @@ by designator, value or symbol name; it is found by its **pins' electrical
 roles**:
 
 1. A part is a **core candidate** when its SymbolProfile gives it a `VIN`, a
-   `VOUT` and a `GND` pin (`base.role_pins`: the profile's own `electricalRole`
+   `VOUT` and a `GND` pin (`base.role_pins_of`: the profile's own `electricalRole`
    where it has one, otherwise the pin *name* through `ROLE_BY_PIN_NAME` — the
-   two sources 053 sec.3 names), **and** each of those pins is on a net in the
-   CircuitSpec. A spec pin token is matched by pin number first, then by pin
-   name, and which one matched goes into the evidence: a binding matched by name
-   is a weaker claim than one matched by number.
+   two sources 053 sec.3 names), **and** each of those roles is on a net in the
+   CircuitSpec. **A role is a set of pins** (055 G1): any pin of the role being a
+   net member connects it — the measured AMS1117 draws VOUT on both sides of the
+   body — and a pin listed in `nc[]` is explicitly handled (`base.
+   role_pins_connected`). A spec pin token is matched by pin number first, then
+   by pin name, and which one matched goes into the evidence: a binding matched
+   by name is a weaker claim than one matched by number.
 2. `in` / `out` / `gnd` are the nets on those three pins, and they must be three
    *different* nets. A core whose VIN and VOUT share a net is shorted: refused as
    `circuit-invalid`, naming the net (053 sec.5 scenario 11's input class).
@@ -81,6 +84,7 @@ from .base import (
     GrammarResult,
     RelativeConstraint,
     RoleBinding,
+    RoleConnection,
     bound_result,
     connected_net_sets,
     evidence,
@@ -90,11 +94,10 @@ from .base import (
     net_provenance,
     part_clause,
     part_provenance,
-    pins_of_part,
     profile_for,
-    profile_pin_for,
     refused_result,
     role_pins,
+    role_pins_connected,
     two_terminal_parts,
     weakest_provenance,
 )
@@ -136,6 +139,10 @@ class _Core:
     gnd_net: str
     #: ``(role, spec pin token, how the token matched)`` for VIN / VOUT / GND.
     pin_match: tuple[tuple[str, str, str], ...] = ()
+    #: One clause per role that has several pins (a duplicated supply pin, an
+    #: explicit NC beside a wired one — 055 G1). Evidence, not geometry: which
+    #: pin of the role the binding used, and why the others are not a gap.
+    role_notes: tuple[str, ...] = ()
     module: str = ""
     profile: SymbolProfile | None = None
 
@@ -414,40 +421,79 @@ def _core_from(
 ) -> tuple[_Core | None, GrammarFailure | None]:
     """One part read as a regulator core, or the reason it could not be.
 
-    ``(core, None)`` when the three pins bind; ``(None, failure)`` when the
-    symbol says enough to call the part a core but the circuit contradicts it
-    (a pin left unconnected, or two of its supply pins shorted); ``(None, None)``
-    when the part is simply not a regulator — not a failure, because most parts
-    on a page are not.
+    ``(core, None)`` when the three roles bind; ``(None, failure)`` when the
+    symbol says enough to call the part a core but the circuit contradicts it (a
+    role with no net at all, a role whose every pin is an explicit NC, two pins
+    of one role on two nets, or two of its supply roles shorted together);
+    ``(None, None)`` when the part is simply not a regulator — not a failure,
+    because most parts on a page are not.
+
+    **Each role is resolved over all of its pins** (`base.role_pins_connected`,
+    055 G1), which is what makes the real AMS1117 shape bind: its VOUT is drawn
+    on both sides of the body, the circuit connects *one* of the two, and the
+    other is either NC or not mentioned at all. Reading only the id-sorted first
+    pin reported such a core as "the spec states no connection".
     """
     roles = role_pins(profile)
     if any(role not in roles for role in CORE_PIN_ROLES):
         return None, None
 
-    part_pins = pins_of_part(circuit, part.id)
-    resolved: dict[str, tuple[str, str, str]] = {}
+    resolved: dict[str, RoleConnection] = {}
     for role in CORE_PIN_ROLES:
-        pin = roles[role]
-        token, matched = profile_pin_for(part_pins, pin)
-        if not token:
+        connection = role_pins_connected(circuit, part.id, profile, role)
+        if connection.net:
+            resolved[role] = connection
+            continue
+        if connection.all_nc:
             return None, GrammarFailure(
-                category=FAILURE_FACTS_MISSING,
+                category=FAILURE_CIRCUIT_INVALID,
                 subject=part.id,
                 detail=(
-                    f"{part.id} ({part.symbol_ref}) has a {role} pin "
-                    f"(number={pin.number!r}, name={pin.name!r}) but the "
-                    "CircuitSpec states no connection for it — neither a net "
-                    "member nor an explicit nc"
+                    f"{part.id} ({part.symbol_ref}) leaves every {role} pin "
+                    f"({', '.join(connection.tokens)}) as an explicit nc, so the "
+                    f"core has no {role} node and cannot form in→core→out"
                 ),
                 action=(
-                    f"add <{part.id}.{pin.number or pin.name}> to a net in "
-                    "CircuitSpec.nets[].members, or list it in nc[] if it really "
-                    "is unconnected"
+                    f"connect one of {_tokens(part.id, connection.tokens)} to a "
+                    "net in CircuitSpec.nets[].members — an LDO whose supply pin "
+                    "is unconnected is not a regulator here"
                 ),
             )
-        resolved[role] = (role, token, matched)
+        if len(connection.nets) > 1:
+            return None, GrammarFailure(
+                category=FAILURE_CIRCUIT_INVALID,
+                subject=part.id,
+                detail=(
+                    f"{part.id} ({part.symbol_ref}) has its {role} pins "
+                    f"({', '.join(token for token, _how in connection.connected)}) "
+                    f"on {len(connection.nets)} different nets ("
+                    f"{', '.join(connection.nets)}) — the pins are one node inside "
+                    "the symbol, so this connects those nets together"
+                ),
+                action=(
+                    "put the duplicate pins on one net (whichever the symbol's "
+                    "own pin table says is the same node), or split the part into "
+                    "two symbols if they really are different outputs"
+                ),
+            )
+        pin = roles[role]
+        return None, GrammarFailure(
+            category=FAILURE_FACTS_MISSING,
+            subject=part.id,
+            detail=(
+                f"{part.id} ({part.symbol_ref}) has a {role} pin "
+                f"(number={pin.number!r}, name={pin.name!r}) but the CircuitSpec "
+                "states no connection for it — neither a net member nor an "
+                "explicit nc"
+            ),
+            action=(
+                f"add <{part.id}.{pin.number or pin.name}> to a net in "
+                "CircuitSpec.nets[].members, or list it in nc[] if it really "
+                "is unconnected"
+            ),
+        )
 
-    nets = {role: part_pins[token] for role, (_r, token, _how) in resolved.items()}
+    nets = {role: connection.nets[0] for role, connection in resolved.items()}
     if len(set(nets.values())) != len(nets):
         counts = {net: list(nets.values()).count(net) for net in set(nets.values())}
         shared = sorted(net for net, count in counts.items() if count > 1)[0]
@@ -473,14 +519,24 @@ def _core_from(
             out_net=nets["VOUT"],
             gnd_net=nets["GND"],
             pin_match=tuple(
-                (resolved[role][0], resolved[role][1], resolved[role][2])
+                (role, resolved[role].token, resolved[role].how)
                 for role in CORE_PIN_ROLES
+            ),
+            role_notes=tuple(
+                note for note in (
+                    resolved[role].note() for role in CORE_PIN_ROLES
+                ) if note
             ),
             module=module_of_part(presentation, part.id),
             profile=profile,
         ),
         None,
     )
+
+
+def _tokens(part_id: str, tokens: tuple[str, ...]) -> str:
+    """``<U1.2>, <U1.4>`` — the spellings the spec would use for these pins."""
+    return ", ".join(f"<{part_id}.{token}>" for token in tokens)
 
 
 def _caps_on(
@@ -507,24 +563,23 @@ def _aux_caps(
 
     The other pins come from the same profile role table, so a branch is tied to
     the pin it serves rather than to a net name: its far end is that pin, its
-    near end the core's ground.
+    near end the core's ground. A role is resolved over **all** of its pins
+    (`base.role_pins_connected`, the same ruler the three core roles use, 055
+    G1), so a duplicated EN pin behaves like a duplicated VOUT.
     """
     if core.profile is None:
         return ()
     roles = role_pins(core.profile)
-    part_pins = pins_of_part(circuit, core.part_id)
     edges = two_terminal_parts(circuit)
     chain_nets = {core.in_net, core.out_net, core.gnd_net}
     out: list[tuple[str, str, str]] = []
     for role in sorted(roles):
         if role in CORE_PIN_ROLES:
             continue
-        token, _how = profile_pin_for(part_pins, roles[role])
-        if not token:
+        connection = role_pins_connected(circuit, core.part_id, core.profile, role)
+        if not connection.net or connection.net in chain_nets:
             continue
-        net = part_pins[token]
-        if net in chain_nets:
-            continue
+        net = connection.net
         for part_id in sorted(edges):
             if part_id == core.part_id:
                 continue
@@ -532,7 +587,7 @@ def _aux_caps(
                 continue
             if core.module and core.module not in modules_of_part(presentation, part_id):
                 continue
-            out.append((part_id, f"{role} pin (spec token {token})", net))
+            out.append((part_id, f"{role} pin (spec token {connection.token})", net))
     return tuple(out)
 
 
@@ -542,13 +597,16 @@ def _spec_net_clause(circuit: CircuitSpec, net_id: str) -> str:
 
 
 def _profile_clause(core: _Core) -> str:
-    return (
+    clause = (
         f"profile {core.symbol_ref}: "
         + ", ".join(
             f"{role}→spec pin {token} (matched by {how})"
             for role, token, how in core.pin_match
         )
     )
+    if core.role_notes:
+        clause += "; " + "; ".join(core.role_notes)
+    return clause
 
 
 def _side_kind(side: str, default: str) -> str:
