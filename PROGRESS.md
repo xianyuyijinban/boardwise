@@ -4,6 +4,16 @@ Living index. Details live in `tasks/*.md` (one book per task) and
 `docs/implementation-log.md` (the connector debugging arc). This file only
 collects the current truth and the pointers.
 
+## [2026-09-28] 057 离线半合并（PR #10，wushi2333 执行/Opus，主代理验收；connector/daemon 零改动仍 **0.4.25**）
+
+### 范围
+057（C2b 编辑器半）的**离线半**七块全部落码，**真机半 E1–E7 未执行**（执行机无立创 EDA，按 R3 不替代——纪律正确；逐步清单在 `tools/057_live_runbook.md`，真机验收归 059）。七块：①页文档走 `draw compile/plan/apply` 同三条命令零新增旗标（`pagecompiler.wants_page` 收窄：≥2 模块 / 有 flow / 模块自带 grammarRef / 有页级锁 才走页级，054 单模块文档输出一字不变）；②census→keepout（件/线/旗标逐个转具名 keepout，件用 `bboxIds` 实测外框，测不到 ±50 假定框并点名；`relocate_around_keepouts` 开关默认关保 056 语义，CLI census 场景打开）；③页级锁 `userLocks[].scope="page"`（只钉位置，origin = P − L(代次)，锁矛盾/出页/压 keepout/互撞 → presentation-poor 点名锁，模块锁序列化不变 digest 中性）；④G4 `verification.nets` 逐网回读（crossModule/oneNet），findings 按身份只减不增；**页标签补 10 单位具名短线**（坑 9 引脚尖放不了标签，不补则 G4 合不起来，downgrades 写明）；⑤`draw discard`（位号+坐标+值三腿核身份，坑 32 被宿主并线整批拒删，先线后旗标后件，幂等 `nothing_to_discard`，`--save` 才保存，超时先回读不重试）；⑦顺手三项全落（分压 signal 顶=显式 input/source 端口声明制且 power 优先；O2 用精确 memo 9s→1.2s/变体达标且**哈希零变化**（比任务书"逃逸+gap 带"原案更保守，搜索面积未降记残余热点）；希腊 mu hint 与 `rules/values.py` 同款归一）。⑥范围外逐项对比对**所有** draw apply 生效（自动网名豁免=坑 25，改一件 exit 2 不保存）。
+
+### 主代理验收（非复述 PR 自述）
+PR 树拉本地 worktree 亲跑：全量 **2343 passed / 0 failed / 3 skipped**（2282 基线+64 新增；唯一一红是 worktree 未构建 connector/dist 的环境问题，主仓拷入后 14/14 绿）；**eval holdout 59/59 双 1.00** 亲跑；合并后 `git diff pr-10..main` = **0 行**（合并树与验收树逐字节一致，全量不重复跑）。关键 diff 亲读：discard 身份核对/census_keepouts/census_changes/wants_page/页锁推导/分压 signal 顶/SKILL 增补。E6 CH340G **如实被拒**（核心/晶振/USB 无文法 facts-missing；RT9013 VIN/GND/EN 同侧在 ldo 文法下 48 种 sidePreferences 全部无解）——未特调，正是 059 缺口清单。15 项自决全部接受；两处"记 058"编号撞车（058=issue #8），应读作 059。执行方变异 5 组 CAUGHT、定向 329、connector 419/419、dsh 48+1、tsc 干净。
+
+### Commit
+`986ecb3`（merge PR #10，+4755/−42）。
 ## [2026-09-28] issue #9 修复：register 引用必须被 git 认领（agent-78 执行断言半，主代理执行证据半+验收；connector/daemon 零改动仍 **0.4.25**）
 
 - **病**：`FIX_CASES` 有 11 条 case 的 `source` 引用从未提交的 `outputs/054_c*/…`、`outputs/035d_live.txt`（`outputs/` 在 .gitignore:46），开发机全绿、干净检出挂 11 条——054 起潜伏（引入者 `aa61768`），非 058 回归。
