@@ -33,7 +33,7 @@ from boardwise.core.circuitspec import CircuitSpec
 from boardwise.core.presentationspec import PresentationSpec, PresentationSpecError
 from boardwise.core.symbolprofile import SymbolPin, SymbolProfile
 from boardwise.engines import grammar
-from boardwise.engines.grammar import ldo, rc_lowpass, voltage_divider
+from boardwise.engines.grammar import base, ldo, rc_lowpass, voltage_divider
 from boardwise.engines.grammar.base import (
     ABOVE,
     CONSTRAINT_KINDS,
@@ -91,8 +91,12 @@ def _net(net_id: str, cls: str, members: list[str],
     }
 
 
-def _circuit(parts: list[dict], nets: list[dict]) -> CircuitSpec:
-    return CircuitSpec.from_dict({"parts": parts, "nets": nets})
+def _circuit(parts: list[dict], nets: list[dict],
+             nc: list[str] | None = None) -> CircuitSpec:
+    payload: dict = {"parts": parts, "nets": nets}
+    if nc:
+        payload["nc"] = list(nc)
+    return CircuitSpec.from_dict(payload)
 
 
 def _presentation(grammar_ref: str = "", **overrides) -> PresentationSpec:
@@ -671,6 +675,164 @@ def test_ldo_caps_are_collected_from_the_cores_own_module():
     assert result.parts_of("in_caps") == ()
     assert result.parts_of("out_caps") == ("C2",)
     assert [item.nets for item in _obligations(result, OWNED_BRANCH)] == [("3V3",)]
+
+
+# ------------------------------------------------- 055 G1: duplicated role pins
+
+
+#: The measured AMS1117 symbol (054 C3, LCSC C6186): GND/VOUT/VIN down the left
+#: side and a **duplicate VOUT** (pin 4) on the right. The tips are the ones
+#: `sch.component_pins` reported; the duplication is what 055 G1 is about.
+def _duplicate_vout_profile(symbol_ref: str = "AMS1117-3.3-C6186") -> SymbolProfile:
+    rows = (
+        ("1", "GND", (-45.0, 10.0), "left"),
+        ("2", "VOUT", (-45.0, 0.0), "left"),
+        ("3", "VIN", (-45.0, -10.0), "left"),
+        ("4", "VOUT", (45.0, 0.0), "right"),
+    )
+    return SymbolProfile(
+        symbol_ref=symbol_ref, title=symbol_ref,
+        body=(-35.5, -20.5, 35.5, 20.5),
+        pins=[
+            SymbolPin(
+                number=number, name=role, tip=tip, direction=direction,
+                direction_source="body-box", electrical_role=role,
+                role_source="pin-name",
+            )
+            for number, role, tip, direction in rows
+        ],
+    )
+
+
+def _duplicate_vout_circuit(*, out_members: list[str], nc: list[str] | None = None,
+                            symbol_ref: str = "AMS1117-3.3-C6186") -> CircuitSpec:
+    """The AMS1117 shape: which VOUT pin is wired, and which is an explicit NC."""
+    return _circuit(
+        [
+            _part("U1", symbol_ref, "AMS1117-3.3"),
+            _part("C1", "C0805", "10u"),
+            _part("C2", "C0805", "22u"),
+        ],
+        [
+            _net("VIN5", "power", ["U1.3", "C1.1"]),
+            _net("3V3", "power", out_members),
+            _net("GND", "gnd", ["U1.1", "C1.2", "C2.2"]),
+        ],
+        nc=nc,
+    )
+
+
+def _duplicate_vout_profiles() -> dict:
+    return _ldo_profiles(
+        symbol_ref="AMS1117-3.3-C6186",
+        profile=_duplicate_vout_profile(),
+        caps=("C0805",),
+    )
+
+
+def test_role_pins_of_returns_every_pin_of_a_role_and_role_pins_the_first():
+    """`role_pins` is a reading of "a" pin; the set is what a judgment may read."""
+    profile = _duplicate_vout_profile()
+    every = base.role_pins_of(profile)
+    assert [pin.number for pin in every["VOUT"]] == ["2", "4"], "id-sorted"
+    assert [pin.number for pin in every["VIN"]] == ["3"]
+    assert sorted(every) == ["GND", "VIN", "VOUT"]
+    assert base.role_pins(profile)["VOUT"].number == "2"
+
+
+def test_a_role_is_connected_when_any_of_its_pins_is_a_net_member():
+    """055 G1 (a): the duplicate VOUT wired, the left one NC — this used to be refused."""
+    circuit_spec = _duplicate_vout_circuit(out_members=["U1.4", "C2.1"], nc=["U1.2"])
+    result = _bind(circuit_spec, _presentation("ldo"), _duplicate_vout_profiles())
+
+    assert result.ok is True
+    assert result.parts_of("core") == ("U1",)
+    assert result.net_of("out") == "3V3"
+    assert result.parts_of("out_caps") == ("C2",)
+    core = result.bindings_for("core")[0]
+    assert "VOUT→spec pin 4 (matched by number)" in core.evidence
+    assert "listed in nc[]" in core.evidence, (
+        "the duplicate that was left alone is recorded as an explicit NC, not a gap"
+    )
+    assert "neither a net member nor an explicit nc" not in core.evidence
+
+
+def test_the_left_duplicate_wired_and_the_right_one_nc_still_binds():
+    """055 G1 (a), the other way round: nothing about the fix prefers one pin."""
+    circuit_spec = _duplicate_vout_circuit(out_members=["U1.2", "C2.1"], nc=["U1.4"])
+    result = _bind(circuit_spec, _presentation("ldo"), _duplicate_vout_profiles())
+
+    assert result.ok is True
+    assert result.net_of("out") == "3V3"
+    core = result.bindings_for("core")[0]
+    assert "VOUT→spec pin 2 (matched by number)" in core.evidence
+    assert "listed in nc[]" in core.evidence
+
+
+def test_both_duplicate_pins_on_one_net_are_one_node_not_a_short():
+    """Both VOUT pins wired to 3V3: one role on one node — a bind, not a short."""
+    circuit_spec = _duplicate_vout_circuit(
+        out_members=["U1.2", "U1.4", "C2.1"]
+    )
+    result = _bind(circuit_spec, _presentation("ldo"), _duplicate_vout_profiles())
+
+    assert result.ok is True
+    assert result.net_of("out") == "3V3"
+    assert "pins 2, 4 are all on net 3V3" in result.bindings_for("core")[0].evidence
+    assert "one role, one node" in result.bindings_for("core")[0].evidence
+
+
+def test_duplicate_pins_on_two_nets_are_refused_as_a_short_between_them():
+    """The pins are one node inside the symbol: two nets is a contradiction."""
+    circuit_spec = _circuit(
+        [
+            _part("U1", "AMS1117-3.3-C6186", "AMS1117-3.3"),
+            _part("C1", "C0805", "10u"),
+            _part("C2", "C0805", "22u"),
+        ],
+        [
+            _net("VIN5", "power", ["U1.3", "C1.1"]),
+            _net("3V3", "power", ["U1.2", "C2.1"]),
+            _net("VA", "power", ["U1.4"]),
+            _net("GND", "gnd", ["U1.1", "C1.2", "C2.2"]),
+        ],
+    )
+    result = _bind(circuit_spec, _presentation("ldo"), _duplicate_vout_profiles())
+
+    assert result.ok is False
+    (failure,) = result.failures
+    assert failure.category == FAILURE_CIRCUIT_INVALID
+    assert failure.subject == "U1"
+    assert "VOUT" in failure.detail and "2, 4" in failure.detail
+    assert "3V3" in failure.detail and "VA" in failure.detail
+
+
+def test_every_duplicate_pin_nc_is_refused_naming_all_of_them():
+    """A role whose every pin is NC has no node to bind — named, never silent."""
+    circuit_spec = _duplicate_vout_circuit(
+        out_members=["C2.1"], nc=["U1.2", "U1.4"]
+    )
+    result = _bind(circuit_spec, _presentation("ldo"), _duplicate_vout_profiles())
+
+    assert result.ok is False
+    (failure,) = result.failures
+    assert failure.category == FAILURE_CIRCUIT_INVALID
+    assert failure.subject == "U1"
+    assert "every VOUT pin" in failure.detail
+    assert "2, 4" in failure.detail
+    assert "<U1.2>" in failure.action and "<U1.4>" in failure.action
+
+
+def test_an_unmentioned_duplicate_is_still_a_facts_missing_refusal():
+    """055 G1 (b) does not turn silence into a decision: NC must be written."""
+    circuit_spec = _duplicate_vout_circuit(out_members=["C2.1"])
+    result = _bind(circuit_spec, _presentation("ldo"), _duplicate_vout_profiles())
+
+    assert result.ok is False
+    (failure,) = result.failures
+    assert failure.category == FAILURE_FACTS_MISSING
+    assert "VOUT pin" in failure.detail
+    assert "nc[]" in failure.action
 
 
 # ------------------------------------------------------------ cross-grammar

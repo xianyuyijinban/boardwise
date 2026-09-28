@@ -50,6 +50,7 @@ from ..core.changeplan import (
     DRAW_FLAG_POWER,
     DRAW_GRID,
     DRAW_MODULE_KIND,
+    DRAW_VALUE_KEY,
     ChangePlan,
     PlanChange,
     PlanDrawBaseline,
@@ -60,6 +61,7 @@ from ..core.changeplan import (
     PlanIsland,
     PlanSource,
     PlanTarget,
+    resolve_on_page,
 )
 from ..core.circuitspec import CircuitSpec
 from ..core.geometry import transform_point
@@ -89,6 +91,7 @@ __all__ = [
     "postcondition_problems",
     "profile_table",
     "source_digest",
+    "value_problems",
 ]
 
 #: The deviation a pin read-back may show and still be the plan's pin: half a
@@ -425,6 +428,7 @@ class _Built:
     notes: list[str] = field(default_factory=list)
 
 
+
 def islands_from_circuit(
     circuit: CircuitSpec, designators: Mapping[str, str]
 ) -> list[PlanIsland]:
@@ -547,6 +551,13 @@ def module_plan(
             prefix=prefix,
             lcsc=number,
             value=value,
+            # 055 G2: the design value is what lands in the editor's own `Value`
+            # attribute. The CircuitSpec's value *is* the design intent — the MPN
+            # is a part number, not a value — so a plan that only recorded it would
+            # leave the placed part with the library device's name and an empty
+            # Value (measured 054 C3), and every value-reading rule would have to
+            # fall back to the MPN's EIA code.
+            value_key=DRAW_VALUE_KEY,
             footprint=spec_part.params.get("footprint", "") if spec_part.params else "",
             symbol_ref=part.symbol_ref,
             symbol_hash=profile.geometry_hash(),
@@ -768,6 +779,13 @@ def _postconditions(built: _Built, islands: Sequence[PlanIsland]) -> list[str]:
         + f" from its origin (tolerance {HALF_GRID:g} units, half a lattice step)"
         for item in built.parts
     ]
+    lines.extend(
+        f"{item.designator} carries {item.value_key}={item.value!r} on the page, read "
+        "back through the editor's own attribute channel "
+        "(sch.set_component_attribute)"
+        for item in built.parts
+        if item.value_key
+    )
     lines.extend(
         f"a wire carrying net {item.net} is on the page from "
         f"({item.points[0][0]:g}, {item.points[0][1]:g}) to "
@@ -992,6 +1010,69 @@ def placement_problems(
     return _part_problems(plan, geometry, pins)
 
 
+def value_problems(plan: ChangePlan, geometry: Any) -> list[str]:
+    """Is every value the plan **writes** the value the page now states? (055 G2)
+
+    The comparison the write needs and the plan's own postconditions promise:
+    the design value goes into the editor's attribute channel, and the only
+    honest way to say it landed is to read the part back. The reader is
+    :func:`~boardwise.core.changeplan.resolve_on_page` — the same
+    ``state.Designator || state.OtherProperty.Designator`` resolution and the
+    same ``OtherProperty.Value`` precedence the 016 edit path reads, because
+    ``OtherProperty`` *is* the channel ``sch.set_component_attribute`` writes and
+    comparing against anywhere else would compare against a copy that cannot
+    change.
+
+    Three facts, three answers:
+
+    * a part the plan does not claim a write for (``value_key`` empty) is not
+      judged — that is what an empty key means, and it is how a pre-055 plan
+      stays executable;
+    * a part that is not on the page is **not** reported here: the parts leg owns
+      "it did not land", and saying it twice would make one fault look like two;
+    * a part that is there but states another value (or states no ``Value`` at
+      all, which is a different fact and is said as such) is the problem this leg
+      exists for.
+
+    The comparison is exact, deliberately: the channel stores the string it was
+    given and the connector's own ``applied`` is defined as an exact match against
+    the same map, so a different string is a different value here. A drawing that
+    needs ``4.7k`` == ``4.7kΩ`` semantics would be a *tolerance* decision, and
+    this batch does not make it.
+    """
+    problems: list[str] = []
+    for part in plan.change.draw_parts:
+        if not part.value_key or not part.value:
+            continue
+        found = resolve_on_page(geometry, part.designator)
+        if found.ambiguous:
+            problems.append(
+                f"{part.designator} resolves to {found.matching} primitives on the "
+                f"page, so which one carries {part.value_key}={part.value!r} cannot "
+                "be stated (the plan places one part per designator)"
+            )
+            continue
+        component = found.component
+        if component is None:
+            continue
+        if not component.value_key:
+            problems.append(
+                f"{part.designator} is on the page but states no {part.value_key} at "
+                f"all, and the plan writes {part.value!r} into it — 'the value is "
+                "empty' and 'the primitive has no such key' are different facts"
+            )
+            continue
+        if component.value != part.value:
+            problems.append(
+                f"{part.designator}.{part.value_key} reads {component.value!r} on the "
+                f"page and the plan writes {part.value!r} "
+                f"(read from {component.value_key}) — the value did not land "
+                "(055 G2: the design value is written through "
+                "sch.set_component_attribute and read back)"
+            )
+    return problems
+
+
 def postcondition_problems(
     plan: ChangePlan,
     *,
@@ -1016,8 +1097,10 @@ def postcondition_problems(
       each part at its planned point and pose, does each expected pin sit within
       half a lattice step of its expected offset (that is
       :func:`placement_problems`), is each planned wire's own endpoints on the
-      page under that net, and (when the caller read the page before the writes)
-      did exactly the promised number of flags appear.
+      page under that net, does every part the plan claims a value write for
+      state that value (that is :func:`value_problems`, 055 G2), and (when the
+      caller read the page before the writes) did exactly the promised number of
+      flags appear.
     """
     state: dict[str, list[str]] = {"live": [], "canvas": []}
     if live is not None:
@@ -1025,6 +1108,7 @@ def postcondition_problems(
     if geometry is not None:
         state["canvas"].extend(_part_problems(plan, geometry, pins or {}))
         state["canvas"].extend(_wire_problems(plan, geometry))
+        state["canvas"].extend(value_problems(plan, geometry))
         if flags_before is not None:
             expected = len(plan.change.draw_flags)
             now = addcomponent.netflag_count(geometry)

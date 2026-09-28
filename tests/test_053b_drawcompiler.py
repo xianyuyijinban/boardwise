@@ -113,6 +113,32 @@ def flag(ref: str) -> SymbolProfile:
     )
 
 
+def ams1117_duplicate_vout(ref: str = "AMS1117-3.3-C6186") -> SymbolProfile:
+    """The **measured** AMS1117 shape (054 C3, LCSC C6186): VOUT appears twice.
+
+    GND/VOUT/VIN sit down the left side, ten units apart, and a second VOUT hangs
+    off the right — the geometry that made `ldo`'s "in left, out right" rule
+    unsatisfiable and that 055 G1 fixed the grammar half of (a duplicated role
+    pin is not "the spec states no connection"). The tips are the ones
+    `sch.component_pins` reported for C6186; the body is that run's measured bbox.
+    """
+    rows = (
+        ("1", "GND", (-45.0, 10.0), "left"),
+        ("2", "VOUT", (-45.0, 0.0), "left"),
+        ("3", "VIN", (-45.0, -10.0), "left"),
+        ("4", "VOUT", (45.0, 0.0), "right"),
+    )
+    return SymbolProfile(
+        symbol_ref=ref, title=f"{ref} (measured)", body=(-35.5, -20.5, 35.5, 20.5),
+        pins=[
+            SymbolPin(number=number, name=role, tip=tip, direction=direction,
+                      direction_source="body-box", electrical_role=role,
+                      role_source="pin-name")
+            for number, role, tip, direction in rows
+        ],
+    )
+
+
 def library(**overrides: SymbolProfile) -> dict[str, SymbolProfile]:
     """The default book: every symbol the scenarios use, flags included.
 
@@ -123,6 +149,7 @@ def library(**overrides: SymbolProfile) -> dict[str, SymbolProfile]:
         "R0402": resistor(), "R-AXIAL": resistor_axial(),
         "C0402": capacitor(), "C0805": capacitor_axial(),
         "AMS1117-3.3": regulator(), "AMS1117-ADJ": regulator("AMS1117-ADJ", aux=True),
+        "AMS1117-3.3-C6186": ams1117_duplicate_vout(),
     }
     for name in ("PWR-GND", "PWR-VIN", "PWR-OUT", "PWR-VIN5", "PWR-3V3"):
         book[name] = flag(name)
@@ -260,10 +287,20 @@ def rc_presentation(shunts: tuple[str, ...] = ("C1",)):
 
 
 def ldo_circuit(*, aux: bool = False, symbol: str = "AMS1117-3.3") -> CircuitSpec:
+    """053 sec.5 scenarios 8/9's circuit, with an output capacitor that passes facts.
+
+    The output cap is **22µF**, not 100nF (055 G3): this repo's facts require an
+    AMS1117's output to carry at least 22µF, so the example circuit is compliant
+    rather than a circuit its own `decap-required-caps` rule has to warn about —
+    which also matters live, where `draw apply` refuses to save a drawing that
+    adds a finding (036's rule). The value's box is unchanged (`22µF` and `100n`
+    have the same advance width in the compiler's glyph table), so the geometry
+    the scenarios pin does not move.
+    """
     parts = [
         part("U1", symbol, symbol),
         part("C1", "C0805", "10u"),
-        part("C2", "C0402", "100n"),
+        part("C2", "C0402", "22µF"),
     ]
     nets = [
         net("VIN5", "power", ["U1.3", "C1.1"]),
@@ -760,6 +797,135 @@ def test_scene_09_ldo_aux_branches_hang_off_their_own_core_pin():
     )
     assert nr_branch[1] == nr_pin[1] and nr_branch[0] > nr_pin[0]
     assert on_a_wire(plan, en_branch) and on_a_wire(plan, nr_branch)
+
+
+def _duplicate_vout_circuit(*, out_members: list[str],
+                            nc: list[str] | None = None) -> CircuitSpec:
+    """The measured AMS1117 shape: which of its two VOUT pins the circuit uses."""
+    return circuit(
+        [
+            part("U1", "AMS1117-3.3-C6186", "AMS1117-3.3"),
+            part("C1", "C0805", "10u"),
+            part("C2", "C0805", "22u"),
+        ],
+        [
+            net("VIN5", "power", ["U1.3", "C1.1"]),
+            net("3V3", "power", out_members),
+            net("GND", "gnd", ["U1.1", "C1.2", "C2.2"]),
+        ],
+        nc,
+    )
+
+
+def test_scene_08b_the_ams1117_duplicate_vout_never_reads_as_a_compiler_bug():
+    """055 G1: the measured AMS1117 (VOUT twice) must bind, then draw or refuse by name.
+
+    Three forms of the same symbol — the duplicate VOUT wired with the original
+    left NC, the original wired with the duplicate NC, and both wired to one net —
+    each have to end in a drawing or in a refusal that names its reason. Before
+    055 G1 the first and third came back `facts-missing` ("the CircuitSpec states
+    no connection") and the second said "a compiler bug — report it".
+
+    053 sec.5's default sides are *not* relaxed for this symbol: it leaves its
+    pins down one side, so a refusal is a legal outcome — only an unnamed or
+    self-accusing one is not.
+    """
+    page = (0.0, 0.0, 1170.0, 825.0)
+    cases = {
+        "duplicate wired, original nc": (["U1.4", "C2.1"], ["U1.2"], "layout-unsat"),
+        "original wired, duplicate nc": (["U1.2", "C2.1"], ["U1.4"], "presentation-poor"),
+        "both wired to one net": (["U1.2", "U1.4", "C2.1"], None, "layout-unsat"),
+    }
+    for name, (members, nc, category) in cases.items():
+        spec = _duplicate_vout_circuit(out_members=members, nc=nc)
+        result = dc.compile(
+            spec, ldo_presentation(), library(), dc.CompileBudget(page_box=page),
+        )
+        text = render(result)
+        assert "compiler bug" not in text, (name, text)
+        assert "neither a net member nor an explicit nc" not in text, (name, text)
+        assert result.grammar is not None and result.grammar.ok, (
+            name, "the grammar binds a duplicated role pin", text,
+        )
+        assert result.grammar.net_of("out") == "3V3", (name, text)
+        if result.candidates:
+            # The picture, when one comes out, places the core it bound.
+            assert result.candidates[0].part("U1") is not None, name
+        else:
+            assert result.categories() == [category], (name, text)
+            assert all(item.detail and item.action for item in result.failures), name
+    # The two refusals are not the same refusal: the shape one explains itself
+    # through the core's own pin (055 G1's whole point), and the chain one names
+    # the symbol's pose set.
+    shape = cc = None
+    for members, nc in (
+        (["U1.2", "C2.1"], ["U1.4"]),      # the original VOUT, down the left side
+        (["U1.4", "C2.1"], ["U1.2"]),      # the duplicate, on the right
+    ):
+        result = dc.compile(
+            _duplicate_vout_circuit(out_members=members, nc=nc),
+            ldo_presentation(), library(), dc.CompileBudget(page_box=page),
+        )
+        (failure,) = result.failures
+        if members[0] == "U1.2":
+            shape = failure
+        else:
+            cc = failure
+    assert "the pin the branch hangs off, U1.2 on net 3V3" in shape.detail
+    assert "side preferences" in shape.action and "another" not in shape.action
+    assert "no legal pose" in cc.detail and "AMS1117-3.3-C6186" in cc.detail
+
+
+def test_scene_08c_a_duplicated_role_pin_nc_is_recorded_as_handled():
+    """055 G1 (b): the pin written into `nc[]` is a decision, not a gap."""
+    spec = _duplicate_vout_circuit(out_members=["U1.4", "C2.1"], nc=["U1.2"])
+    result = dc.compile(
+        spec, ldo_presentation(), library(),
+        dc.CompileBudget(page_box=(0.0, 0.0, 1170.0, 825.0)),
+    )
+    core = result.grammar.bindings_for("core")[0]
+    assert "VOUT→spec pin 4 (matched by number)" in core.evidence
+    assert "pin(s) 2 are listed in nc[]" in core.evidence
+    assert "explicit no-connect, not a missing fact" in core.evidence
+
+
+def test_scene_08d_every_duplicate_pin_nc_is_a_named_circuit_invalid_refusal():
+    """The one shape NC cannot save: a role with no pin anywhere, named pin by pin."""
+    spec = _duplicate_vout_circuit(out_members=["C2.1"], nc=["U1.2", "U1.4"])
+    result = dc.compile(
+        spec, ldo_presentation(), library(),
+        dc.CompileBudget(page_box=(0.0, 0.0, 1170.0, 825.0)),
+    )
+    assert result.candidates == []
+    assert result.categories() == ["circuit-invalid"]
+    (failure,) = result.failures
+    assert "every VOUT pin" in failure.detail and "2, 4" in failure.detail
+    assert "<U1.2>" in failure.action and "<U1.4>" in failure.action
+
+
+def test_scene_08e_the_same_circuit_draws_once_the_sides_match_the_symbol():
+    """The refusal above is about the **sides**, not about the pin mapping.
+
+    The same circuit — the measured AMS1117 with its left VOUT wired — draws as
+    soon as the presentation states the side this symbol's pins actually leave
+    on (053 sec.3: the grammar follows `sidePreferences`). That is the input-side
+    fix the LDO's real-machine run recorded, and stating it is what turns "no
+    legal layout" into a drawing rather than into a bent symbol.
+    """
+    spec = _duplicate_vout_circuit(out_members=["U1.2", "C2.1"], nc=["U1.4"])
+    scene = Scene(
+        8, "the measured AMS1117, sides stated", spec,
+        ldo_presentation(sidePreferences={"input": "left", "output": "bottom"}),
+    )
+    result = dc.compile(
+        spec, scene.presentation, library(),
+        dc.CompileBudget(page_box=(0.0, 0.0, 1170.0, 825.0)),
+    )
+    assert result.ok, render(result)
+    assert len(result.candidates) >= 3, render(result)
+    plan = result.candidates[0]
+    assert plan.part("U1") is not None and plan.part("C2") is not None
+    assert_independently_clean(plan, scene)
 
 
 # ---------------------------------------------------------------- 场景 10–12

@@ -3858,11 +3858,13 @@ def _cmd_review_eval(args: argparse.Namespace) -> int:
                 "rule_count": len(rule_ids),
                 "rulebody": rulebody_fingerprint(),
             },
-            # 017 sec.5's slot, filled by the M3 close-out. The status says what
-            # the numbers are: registered by hand from the five slices' task
-            # books, not measured by this run. It is deliberately not a single
-            # bare rate -- a `rate` beside this report's board numbers would be
-            # read as "how those boards came out", which is a different question.
+            # 017 sec.5's slot, filled by the plan register
+            # (`engines/review_eval.FIX_CASES`, one entry per executable change
+            # kind). The status says what the numbers are: registered by hand from
+            # each slice's task book and run report, not measured by this run. It
+            # is deliberately not a single bare rate -- a `rate` beside this
+            # report's board numbers would be read as "how those boards came
+            # out", which is a different question.
             "fix_success": fix_success_payload(),
             "boards": [
                 {
@@ -5115,6 +5117,16 @@ def _render_draw_apply(report: dict, args: argparse.Namespace) -> int:
                 f"({item['x']:g}, {item['y']:g}) rot {item['rotation']:g} — "
                 + ("answered" if item["answered"] else "NO ANSWER (see the steps)")
             )
+        for item in write.get("values") or []:
+            print(
+                f"    value {item['designator']:<4} {item['key']}={item['value']!r} on "
+                f"{item['primitiveId'] or '(no primitive id)'} — "
+                + (
+                    "read back " + repr(item["readBack"]) if item.get("resolved")
+                    else "NOT WRITTEN (see the steps)"
+                )
+                + (" [read-back did not confirm]" if item.get("mismatched") else "")
+            )
         for item in write.get("connections") or []:
             kind = item.get("kind")
             if kind == "power-flag":
@@ -5137,6 +5149,15 @@ def _render_draw_apply(report: dict, args: argparse.Namespace) -> int:
         block = report.get(key) or {}
         if block:
             print(f"  {label:<7} {_json.dumps(block, ensure_ascii=False)}")
+    value_readback = (report.get("write") or {}).get("valueReadback") or {}
+    if value_readback:
+        print(
+            f"  values  {value_readback.get('written', 0)}/"
+            f"{value_readback.get('declared', 0)} written · "
+            + ("read back and equal"
+               if not value_readback.get("problems")
+               else "NOT equal: " + "; ".join(value_readback["problems"]))
+        )
     if report.get("save"):
         print(f"  save    {_json.dumps(report['save'], ensure_ascii=False)}")
     if report.get("render"):
@@ -5596,6 +5617,7 @@ async def _draw_apply_flow(client, bridge_error, plan, args, started: float) -> 
     # pin read-back below refuses.
     from .engines.draw import editor_pose
 
+    primitive_ids: dict[str, str] = {}
     for part in parts:
         pose_rotation, pose_mirror = editor_pose(part.rotation, bool(part.mirror))
         place_params: dict = {
@@ -5620,6 +5642,9 @@ async def _draw_apply_flow(client, bridge_error, plan, args, started: float) -> 
             "mirror": part.mirror, "answered": isinstance(placed, dict),
         }
         report["write"]["placed"].append(entry)
+        primitive = str((placed or {}).get("uuid") or "") if isinstance(placed, dict) else ""
+        if primitive:
+            primitive_ids[part.designator] = primitive
         if placed is None:
             last = records[-1]
             readback = await call(
@@ -5648,10 +5673,141 @@ async def _draw_apply_flow(client, bridge_error, plan, args, started: float) -> 
                 "page — continuing, because the page is the authority"
             )
 
+    # ---- 5b. the values (055 G2): the design value, into the part ---------
+    #
+    # The order is the task book's: place, write Value, read the pins back, wire.
+    # The write is what makes the drawing the *design* rather than a picture of
+    # it — without it a placed part carries the library device's name and an
+    # empty Value (measured 054 C3), and every value-reading rule has to fall
+    # back to the MPN's EIA code. The channel is the existing
+    # `sch.set_component_attribute` (016's edit path writes the same key through
+    # it), the scope is the plan's own parts and nothing else, and a part whose
+    # plan claims no key is not written to at all.
+    from .core.changeplan import resolve_on_page
+
+    needs_ids = [
+        part.designator for part in parts
+        if part.value_key and not primitive_ids.get(part.designator, "")
+    ]
+    if needs_ids:
+        # A placement that answered nothing but landed (the branch above checked
+        # that) has no id in its answer, so the page supplies it. One read, before
+        # any value write, and only when a placement left a gap.
+        ids_geometry = await call(
+            "sch.geometry", {},
+            "read the page to resolve the placed parts whose answer carried no id",
+        )
+        for designator in needs_ids:
+            found = resolve_on_page(ids_geometry or {}, designator)
+            if found.component is not None and not found.ambiguous:
+                primitive_ids[designator] = found.component.primitive_id
+
+    value_entries: list[dict] = []
+    unresolved: list[str] = []
+    for part in parts:
+        if not part.value_key or not part.value:
+            # 055 G2's empty-value rule: no value and no key mean nothing is
+            # written and nothing is reported — an absent value is not an error.
+            continue
+        primitive = primitive_ids.get(part.designator, "")
+        entry: dict = {
+            "designator": part.designator,
+            "key": part.value_key,
+            "value": part.value,
+            "primitiveId": primitive,
+            "resolved": bool(primitive),
+            "answered": False,
+            "applied": False,
+            "readBack": "",
+            "mismatched": [],
+            "clobberedOtherKeys": [],
+        }
+        value_entries.append(entry)
+        if not primitive:
+            # Nothing to write to. The pin read-back below reports the part as not
+            # on the page, which is the real fault; here it is only recorded.
+            unresolved.append(part.designator)
+            continue
+        written = await call(
+            "sch.set_component_attribute",
+            {"primitiveId": primitive, "key": part.value_key, "value": part.value,
+             "pageUuid": page},
+            f"write {part.designator}.{part.value_key}={part.value!r} on the placed part",
+            writes=True,
+        )
+        report["write"]["calls"] += 1
+        data = written if isinstance(written, dict) else {}
+        entry.update({
+            "answered": isinstance(written, dict),
+            "applied": bool(data.get("applied")),
+            "readBackAfter": data.get("readBackAfter", ""),
+            "mismatched": data.get("mismatched") or [],
+            "clobberedOtherKeys": data.get("clobberedOtherKeys") or [],
+        })
+        if written is None:
+            notes.append(
+                f"{part.designator}.{part.value_key} was not written "
+                f"([{records[-1]['code']}] {records[-1]['message']}) — the writes are "
+                "never retried, and the read-back below is what decides whether the "
+                "value is on the page"
+            )
+        elif entry["clobberedOtherKeys"]:
+            notes.append(
+                f"writing {part.designator}.{part.value_key} reports it clobbered "
+                f"other keys: {entry['clobberedOtherKeys']} — the connector merges the "
+                "existing attribute map, so this is the merge failing, not a "
+                "cosmetic difference"
+            )
+        elif not entry["applied"]:
+            notes.append(
+                f"the action's own read-back does not confirm "
+                f"{part.designator}.{part.value_key}={part.value!r} "
+                f"(mismatched={entry['mismatched'] or '[]'}) — the independent "
+                "read-back below is what decides"
+            )
+    report["write"]["values"] = value_entries
+    report["write"]["valueChannel"] = (
+        "sch.set_component_attribute (the host's only attribute namespace is "
+        "`otherProperty`, which is where the key Value lives — 016 reads the same key "
+        "there, and `sch.readback` carries no value at all: pit 3)"
+    )
+    if unresolved:
+        notes.append(
+            "these parts could not be resolved on the page, so their "
+            f"value was not written: {', '.join(sorted(unresolved))} — the pin "
+            "read-back below is what decides whether they landed"
+        )
+
     # ---- 6. protection 3: the pin read-back, before any wire --------------
     placed_geometry = await call(
         "sch.geometry", {}, "read the page again to find the placed parts and their pins"
     )
+    values = drawapply.value_problems(plan, placed_geometry or {})
+    for entry in value_entries:
+        looked_up = resolve_on_page(placed_geometry or {}, entry["designator"])
+        entry["readBack"] = (
+            looked_up.component.value
+            if looked_up.component is not None and not looked_up.ambiguous
+            else ""
+        )
+    report["write"]["valueReadback"] = {
+        "problems": values,
+        "basis": (
+            "the plan's own parts, read back through "
+            "`core.changeplan.resolve_on_page` (state.OtherProperty.Value) — the same "
+            "reader the 016 edit path uses; the comparison is exact, because the "
+            "channel stores the string it was given"
+        ),
+        "written": len([entry for entry in value_entries if entry["resolved"]]),
+        "declared": len(value_entries),
+    }
+    if values:
+        notes.append(
+            "写值与回读不符（055 G2：设计值写进 Value 后逐件回读），在拉线之前停下："
+            + "；".join(values)
+            + " —— 器件与值已写、线没有画；现场见报告（不清理、不重试、不保存）"
+        )
+        return done(3, "unknown", "value_readback_disagrees")
     pins = await read_pins(placed_geometry if isinstance(placed_geometry, dict) else {})
     report["write"]["pins"] = {
         f"{designator}.{pin}": list(point)

@@ -268,15 +268,18 @@ boardwise draw apply   plan.json --project test \
 → ② 守卫（双 spec 摘要 + 布局摘要 + 库几何表 + 页身份；**显式** `--expect-census` 也在这关）
 → ③ 探针（plan 自己的 postconditions，双证齐全 = `already_applied` exit 0 零写入）
 → ④ 页既不是 plan 成品也不是 plan 基线 → `canvas_changed` exit 4 零写入
-→ ⑤ 位号池（页面 ∪ 工程导出）→ ⑥ 放件 → ⑦ **引脚回读**（容差半格；不符**在拉线前**停住 exit 3）
-→ ⑧ 走线（`net` 承载网名）→ ⑨ 旗标（`place_power`）→ ⑩ 双证回读（活网表按**本 plan 自己的引脚**判分区；
-页面外同名同网只报 `sharedWithOutsidePins`）→ ⑪ 范围（无删除 → 导出新鲜）+ findings 只减不增
-→ ⑫ 保存（`saved_unverified`，要 `saved_verified` 得走 `boardwise persistence` 的关闭重开）
-→ ⑬ `export.render` 出图（`already_applied` 也出图：图是证据不是写）。
+→ ⑤ 位号池（页面 ∪ 工程导出）→ ⑥ 放件 → ⑦ **写 Value**（055 起：plan 用 `valueKey` 逐件
+声明，无 key/无值**不写不报**；`sch.set_component_attribute` 既有通道零新增）
+→ ⑧ **引脚回读**（容差半格，同一把 geometry 读同时做值回读；引脚不符、值写不进/回读不符
+**都在拉线前**停住 exit 3）→ ⑨ 走线（`net` 承载网名）→ ⑩ 旗标（`place_power`）→ ⑪ 双证回读
+（活网表按**本 plan 自己的引脚**判分区；页面外同名同网只报 `sharedWithOutsidePins`）
+→ ⑫ 范围（无删除 → 导出新鲜）+ findings 只减不增
+→ ⑬ 保存（`saved_unverified`，要 `saved_verified` 得走 `boardwise persistence` 的关闭重开）
+→ ⑭ `export.render` 出图（`already_applied` 也出图：图是证据不是写）。
 
 退出码：**0** 落图并被双证确认（或 already_applied 零写入）/ **2** 承诺的效果不在（写被拒、
 保存被拒、range/旗标数不对、findings 增长）/ **3** 页状态不可陈述或回读不符（超时、拔 daemon、
-引脚回读不符、postconditions 不满足——**在拉线前**停）/ **4** 守卫拒绝（摘要 stale、库几何变了、
+引脚/值回读不符、postconditions 不满足——**在拉线前**停）/ **4** 守卫拒绝（摘要 stale、库几何变了、
 页不是 plan 的、画布被动过、位号被占、半成品件在页上）/ **5** plan 或输入不可用。
 
 幂等与 stale：`draw apply` 同 plan 再跑 → `already_applied` 零写入（C4）；手工动过画布再跑 →
@@ -286,8 +289,8 @@ exit 4 零写入（C5）；库几何不符 → exit 4 零写入（C6，写前那
 **LDO（C3）现场有两条真机事实，照坑 33/34 走**：真机 AMS1117 符号的 VIN/VOUT/GND 全在**同一侧**
 （外加一颗重复 VOUT），`ldo` 文法的默认"in 左 out 右"**无合法姿态**——要么按坑 33 用
 `sidePreferences`（这是一个**说明**"下面那条输出支路"，不是"输出在下方"），要么换一颗符号；
-另有坑 34：本仓库 facts 要求 AMS1117 输出 ≥22µF，而 053 场景是 100n，于是 `decap-required-caps`
-会涨 finding、`draw apply` 按 036 规矩**拒绝保存**（图落好了、没落盘）。
+另有坑 34：本仓库 facts 要求 AMS1117 输出 ≥22µF（053 场景值 055 起已同步为 22µF），拿 100n
+输出落图 `decap-required-caps` 会涨 finding、`draw apply` 按 036 规矩**拒绝保存**（图落好了、没落盘）。
 
 ## 4. 真机纪律（写操作前逐条对，命中即停）
 
@@ -395,8 +398,9 @@ exit 4 零写入（C5）；库几何不符 → exit 4 零写入（C6，写前那
 | 30 | **编辑器网表是工程级，不是页级**（054 C7 实测）：同名网跨页合并——第二页落了同名 `VIN` 的模块后，本页网表答 `R4.1 is on net 'VIN' with ['R1.1', 'R4.1']`，而 `R1.1` 在**另一页**。按"岛屿成员完全相等"判会拒掉一张完全按 plan 连好的图，且会拒掉**每一个**与先前模块同名的后续模块 | 判据收窄为：**plan 自己的引脚集合内**分区必须精确（模块内部短路/漏连仍然 exit 3），集合外的同网公司只作**证据**报告（`verification.sharedWithOutsidePins`）。跨页同名要不要合并是命名决策（052 labelPolicy，C2+）。出处 `outputs/054_c7/apply_C7_stdout.txt`、`outputs/054_c2/apply_report.json` |
 | 31 | **`export.render` 的 `format` 词表是 `png|svg|pdf`**（054 首跑实测）：给 `image/png` 回 `[BAD_REQUEST] export.render needs params.format in png \| svg \| pdf`——图没出，但落图已经保存（那次 C1 的报告如实写了"没有图"） | 出图一律 `{"format":"png","scope":"page","pageUuid":<页>}`；报告里 `render.ok=False` 时按"缺证据"处理，别当成落图失败。出处 `outputs/054_c1/apply_report.json` |
 | 32 | **相接的线会被宿主合并成一个 primitive、结点在点表里重复**（054 复核 035 的坑 24②）：054 画的分压抽头两条线（横支 + 竖干）落成一条 primitive，点表 `[(115,690),(85,690),(85,710),(85,690),(85,670),(85,690)]`——计划 4 条线上报 3 条 | 画布腿只判「计划里每条线的**两个端点**在不在该网的点集里 + 该网总长不短」，**不要**按 primitive 计数或按相邻对判几何（035 的附着判据同源）。出处 `outputs/054_c1/14_final_page_state.json`、`outputs/054_c1/apply_report.json` |
-| 33 | **真机 AMS1117 符号是"单侧出脚"**（054 C3 实测三颗：C6186 / C351785 / C5205141 同一族）：引脚 1 GND、2 VOUT、3 VIN 全在**左侧**（y 各差 10），另有一颗**重复 VOUT**（4 号）在右侧；于是 `ldo` 文法默认的"in 左 core 中 out 右"**没有任何合法姿态**（`draw compile` 给 0 候选、`[presentation-poor]`，编译器自己的措辞是"right-of(C2,U1) is not honoured by this plan's own placement (a compiler bug — report it)"）。另：`role_pins` 按 id 排序取**第一个** VOUT（=左下的 2 号），而 `ldo._core_of` 用 `profile_pin_for` 只认**net 成员**——把 2 号写进 `nc[]`、只连 4 号，文法仍报"VOUT pin (number='2') … neither a net member nor an explicit nc" | 两条出路，都在**输入**侧改：① `sidePreferences` 把 output 换成与符号几何相合的一侧（实测 `{"input":"left","output":"bottom"}` → 3 候选、evidence pass；文法本来就"跟着 sidePreferences 走"，053 sec.3 原文）——注意它是**说明哪一侧放输出支路**，不是"输出在下方"；② 换一颗 VIN/VOUT 反向的 LDO 符号。**不要**改编译器去迁就符号（053 sec.2 红线：不许为凑版式改脚号）。出处 `outputs/054_c3/{02_measured_parts.json,04_candidate_symbols.txt,05_side_default.txt,plan_C3b.json}` |
-| 34 | **落图后的导出 `value` 字段是空的**（054 C3 实测）：`draw apply` 只写位号/坐标/镜像/旋转/LCSC，导出里 `value=''` 而 `mpn` 是库器件名（`CL05B104KO5NNNC`）——`decap-required-caps` 靠 MPN 的 EIA 码读值（104→100nF、226→22µF），所以**换成 MPN 解不出容值的料号，这条规则会判 unknown**。连带两条：① 本仓库 facts 要求 **AMS1117 输出 ≥22µF**，053 场景的 100n 输出电容 → 规则报 `decap-required-caps|WARN|U1\|2\|3V3`，`draw apply` 按 036 规矩（finding 只减不增）**拒绝保存**——图在页面上、两腿双证都过、就是没落盘（C3a 现场）；② findings 是**工程级**的，所以后续模块的 22µF 挂在同名 3V3 上会把这颗 U1 的 finding **消掉**（C3b 报告 `resolved: 1, new: 0`） | 需要"值"的规则要么某处写 Value（本批不写，`sch.set_component_attribute` 是既有通道），要么保证 MPN 可解；LDO 输出电容按 facts 用 ≥22µF（C45783 = 22µF 0805 实测可解），别照抄 053 场景的 100n 去落图，否则每次都会被自己的规则挡在保存前。出处 `outputs/054_c3/{apply_report.json,apply_report_C3b.json,09_measured_22u.txt}` |
+| 33 | **真机 AMS1117 符号是"单侧出脚"**（054 C3 实测三颗：C6186 / C351785 / C5205141 同一族）：引脚 1 GND、2 VOUT、3 VIN 全在**左侧**（y 各差 10），另有一颗**重复 VOUT**（4 号）在右侧；于是 `ldo` 文法默认的"in 左 core 中 out 右"**没有任何合法姿态**（`draw compile` 给 0 候选、`[presentation-poor]`，编译器自己的措辞是"right-of(C2,U1) is not honoured by this plan's own placement (a compiler bug — report it)"）。另：`role_pins` 按 id 排序取**第一个** VOUT（=左下的 2 号），而 `ldo._core_of` 用 `profile_pin_for` 只认**net 成员**——把 2 号写进 `nc[]`、只连 4 号，文法仍报"VOUT pin (number='2') … neither a net member nor an explicit nc" | **文法侧已由 055 G1 修好**：角色=**脚的集合**——任一同角色脚连网即算该角色已连、显式写进 `nc[]` 算"已处理"（`role_pins` 取 id 第一只脚、nc 不算数的说法作废；同角色两脚落两个网 = `circuit-invalid` 点名两网；失败文案不再自称 "compiler bug"，改报实测坐标与可执行动作）。**几何侧**仍只有两条出路，都在**输入**侧改：① `sidePreferences` 把 output 换成与符号几何相合的一侧（实测 `{"input":"left","output":"bottom"}` → 3 候选、evidence pass；文法本来就"跟着 sidePreferences 走"，053 sec.3 原文）——注意它是**说明哪一侧放输出支路**，不是"输出在下方"；② 换一颗 VIN/VOUT 反向的 LDO 符号。**不要**改编译器去迁就符号（053 sec.2 红线：不许为凑版式改脚号）。出处 `outputs/054_c3/{02_measured_parts.json,04_candidate_symbols.txt,05_side_default.txt,plan_C3b.json}`、`outputs/055_g1/{compile_outputs.txt,compile_B_sides_bottom.txt}` |
+| 34 | **落图后的导出 `value` 字段是空的**（054 C3 实测）：`draw apply` 只写位号/坐标/镜像/旋转/LCSC，导出里 `value=''` 而 `mpn` 是库器件名（`CL05B104KO5NNNC`）——`decap-required-caps` 靠 MPN 的 EIA 码读值（104→100nF、226→22µF），所以**换成 MPN 解不出容值的料号，这条规则会判 unknown**。连带两条：① 本仓库 facts 要求 **AMS1117 输出 ≥22µF**，053 场景的 100n 输出电容 → 规则报 `decap-required-caps|WARN|U1\|2\|3V3`，`draw apply` 按 036 规矩（finding 只减不增）**拒绝保存**——图在页面上、两腿双证都过、就是没落盘（C3a 现场）；② findings 是**工程级**的，所以后续模块的 22µF 挂在同名 3V3 上会把这颗 U1 的 finding **消掉**（C3b 报告 `resolved: 1, new: 0`） | **055 起 `draw apply` 逐件写 `Value` 并回读**（plan 用 `valueKey` 声明，无 key/无值不写不报，`sch.set_component_attribute` 既有通道）；规则的取值顺序是**先读板值、读不出回落 MPN 的 EIA 码**——板值必须**带单位字母**才读得出（055 实测：`'22u'` 读不出仍走 MPN，`'22uF'`/`'22µF'` 读得出；CircuitSpec 里的值拼写照此写）。LDO 输出电容按 facts 用 ≥22µF（C45783 = 22µF 0805 实测可解）；053 场景值已同步改 22µF（055 G3），照抄场景去落图不会再被自己的规则挡。出处 `outputs/054_c3/{apply_report.json,apply_report_C3b.json,09_measured_22u.txt}`、`outputs/055_g2/{15_apply_ldo.txt,18_decap_channel.txt}` |
+| 35 | **`tests/fixtures/drawapply/library.json` 是测试假库**（055 P9 实测）：里头的 R0402 是竖排 ±50，真机 0402（C25744）是横排 ±20——拿它跑真机 `draw apply`，库几何守卫（看的是文档）过得了，**引脚回读**过不去：拉线前 exit 3、件已放、未保存（055 P9 页就是这么来的，设计内拒绝不是事故） | 真机落图一律用**实测库**（§3.3 的探针量法；054 起存 `outputs/054_c1/measured_library.json`）；假库只服务离线测试。库几何守卫看不到编辑器侧几何，最后一道闸永远是放完后的引脚回读。出处 `outputs/055_g2/`（P9 申请记录与 exit 3 报告） |
 宿主版本：**3.2.149 是实测下限**（2026-09-23 在 3.2.149.88089769 上实测：打标/缩放等 8 个关键成员
 typeof 全在位、activate 冷启动正常派发、render 实跑 308KB PNG——旧立论"3.2.183 以下这些接口不存在"
 已被证伪，见 `tasks/027-editor-api-floor.md`）；**3.2.186 是唯一校准对象**。低于 149 没有证据，doctor 照卡。
