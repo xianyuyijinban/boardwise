@@ -1,0 +1,782 @@
+{
+  "command": "apply",
+  "ok": false,
+  "kind": "draw-module",
+  "module": "ldo (3 part(s); nets 3V3, GND, VIN5)",
+  "outcome": "failed",
+  "reason": "new_findings",
+  "exitCode": 2,
+  "planPath": "outputs/054_c3/plan.json",
+  "plan": {
+    "kind": "draw-module",
+    "candidate": 0,
+    "layoutSha256": "3f8a1e0a23c890e9f0543888c25c38857a7f8cf259be482140132059a1c11799",
+    "circuitSha256": "ec3ec5650c6f5e6d065b1fd814b83b68b07a4eb8a0168197b9ac37c4deea09b6",
+    "presentationSha256": "11d02394d575674b029ae1cba003a995f53a723afb53c7f2a0874e0a402a19cd",
+    "profiles": [
+      {
+        "symbolRef": "AMS1117-3.3-C6186",
+        "geometryHash": "0d5777fd67b4a2417534eaec48398120c4b9400e2ecbe1283233c016a570efb5"
+      },
+      {
+        "symbolRef": "C0402-C1525",
+        "geometryHash": "3a17b6ed2ce8adfe9870ca798ea5fbabfbaca474b5e63578809be18a8437e089"
+      },
+      {
+        "symbolRef": "C0805-C15850",
+        "geometryHash": "54296a9c210bc1e3fe6447d6d5ea783f4484d2d75314e4911bb623d615090ee7"
+      },
+      {
+        "symbolRef": "PWR-3V3",
+        "geometryHash": "64bc5d01c24941e05a25b1fc22c10a3b107a030a7331ce744c76ebc8529980f5"
+      },
+      {
+        "symbolRef": "PWR-GND",
+        "geometryHash": "cf0b073bf168fc101c5a19d53218fa9f2471b74c976d853894310831ae699deb"
+      },
+      {
+        "symbolRef": "PWR-VIN5",
+        "geometryHash": "84bfd83b3d78ff05c93374873db26fa15cf3dc3fe05e11e005c31ad7ae5c8a99"
+      }
+    ],
+    "downgrades": [],
+    "notes": [
+      "the layout is 053 stage B's candidate 0 (3f8a1e0a23c8…)",
+      "the designator pool is the page (0 designator(s)) ∪ the project export (5 more)",
+      "6 text box(es) in the layout are the editor's own annotations (designator and value are drawn by the host when a part is placed); C1 places no text primitive, so the drawn text is the host's"
+    ]
+  },
+  "parts": [
+    {
+      "specId": "C1",
+      "designator": "C2",
+      "value": "10u",
+      "lcsc": "C15850",
+      "symbolRef": "C0805-C15850",
+      "prefix": "C",
+      "x": 155.0,
+      "y": 720.0,
+      "rotation": 90.0,
+      "mirror": true,
+      "pins": [
+        {
+          "number": "1",
+          "dx": 0.0,
+          "dy": 20.0
+        },
+        {
+          "number": "2",
+          "dx": -0.0,
+          "dy": -20.0
+        }
+      ]
+    },
+    {
+      "specId": "C2",
+      "designator": "C3",
+      "value": "100n",
+      "lcsc": "C1525",
+      "symbolRef": "C0402-C1525",
+      "prefix": "C",
+      "x": 95.0,
+      "y": 710.0,
+      "rotation": 90.0,
+      "mirror": true,
+      "pins": [
+        {
+          "number": "1",
+          "dx": 0.0,
+          "dy": 20.0
+        },
+        {
+          "number": "2",
+          "dx": -0.0,
+          "dy": -20.0
+        }
+      ]
+    },
+    {
+      "specId": "U1",
+      "designator": "U1",
+      "value": "AMS1117-3.3",
+      "lcsc": "C6186",
+      "symbolRef": "AMS1117-3.3-C6186",
+      "prefix": "U",
+      "x": 260.0,
+      "y": 730.0,
+      "rotation": 180.0,
+      "mirror": true,
+      "pins": [
+        {
+          "number": "1",
+          "dx": -45.0,
+          "dy": -10.0
+        },
+        {
+          "number": "2",
+          "dx": -45.0,
+          "dy": 0.0
+        },
+        {
+          "number": "3",
+          "dx": -45.0,
+          "dy": 10.0
+        },
+        {
+          "number": "4",
+          "dx": 45.0,
+          "dy": -0.0
+        }
+      ]
+    }
+  ],
+  "identity": {
+    "focusedProjectName": "/test",
+    "focusedProjectUuid": "ea80fff642fa86cdc95882ab0201b0bb7ee6d966412a8958fec3ff95fa13f489",
+    "focusedPage": "89c44c015811fddd",
+    "consistent": true
+  },
+  "page": {
+    "uuid": "89c44c015811fddd",
+    "created": false,
+    "name": "",
+    "focusedBefore": "89c44c015811fddd",
+    "censusBefore": {
+      "components": [],
+      "wireCount": 0,
+      "netflagCount": 0,
+      "digest": "5d2ace3b212a4f19371b8d9fe42461eead8941d3b824682855ec84ea5a483741"
+    },
+    "censusAfter": {
+      "components": [
+        "C2",
+        "C3",
+        "U1"
+      ],
+      "wireCount": 5,
+      "netflagCount": 3,
+      "digest": "260c436c077a01de95dff22d6c995fcc8a4337f603c24c2628ff5eb449810f58"
+    }
+  },
+  "guards": {
+    "checked": {
+      "circuitSha256": true,
+      "presentationSha256": true,
+      "layoutSha256": false,
+      "profiles": true,
+      "pageUuid": true,
+      "census": true
+    },
+    "expectCensus": "",
+    "problems": [],
+    "basis": "digests re-read from the files the run was pointed at (a flag that was not given is reported as NOT checked, never as a pass); the library geometry table from --profiles; the page's identity from the listing; the primitive census from the live page, judged after the plan's own postconditions so that a page holding this drawing is not read as a page somebody changed"
+  },
+  "idempotence": {
+    "state": "not_satisfied",
+    "satisfied": false,
+    "live": [
+      "C2.1 is not in the editor's netlist at all (the part or the pin did not land)",
+      "U1.3 is not in the editor's netlist at all (the part or the pin did not land)",
+      "C3.1 is not in the editor's netlist at all (the part or the pin did not land)",
+      "U1.2 is not in the editor's netlist at all (the part or the pin did not land)",
+      "C2.2 is not in the editor's netlist at all (the part or the pin did not land)",
+      "C3.2 is not in the editor's netlist at all (the part or the pin did not land)",
+      "U1.1 is not in the editor's netlist at all (the part or the pin did not land)"
+    ],
+    "canvas": [
+      "C2 is not on the page (the plan places it at (155, 720))",
+      "C3 is not on the page (the plan places it at (95, 710))",
+      "U1 is not on the page (the plan places it at (260, 730))",
+      "net VIN5: no wire vertex at (155, 740) on the page, but the plan draws a wire reaching it",
+      "net VIN5: no wire vertex at (215, 740) on the page, but the plan draws a wire reaching it",
+      "net 3V3: no wire vertex at (95, 730) on the page, but the plan draws a wire reaching it",
+      "net 3V3: no wire vertex at (215, 730) on the page, but the plan draws a wire reaching it",
+      "net GND: no wire vertex at (155, 700) on the page, but the plan draws a wire reaching it",
+      "net GND: no wire vertex at (155, 670) on the page, but the plan draws a wire reaching it",
+      "net GND: no wire vertex at (95, 690) on the page, but the plan draws a wire reaching it",
+      "net GND: no wire vertex at (95, 660) on the page, but the plan draws a wire reaching it",
+      "net GND: no wire vertex at (215, 720) on the page, but the plan draws a wire reaching it",
+      "net GND: no wire vertex at (185, 720) on the page, but the plan draws a wire reaching it",
+      "net 3V3: the plan draws 130 units of wire and the page holds 0 — a segment did not land",
+      "net GND: the plan draws 90 units of wire and the page holds 0 — a segment did not land",
+      "net VIN5: the plan draws 60 units of wire and the page holds 0 — a segment did not land"
+    ],
+    "partsOnPage": [],
+    "how": "engines/drawapply.postcondition_problems — the plan's own postconditions (there is no rule for this kind, so the plan states what done means)"
+  },
+  "write": {
+    "calls": 11,
+    "placed": [
+      {
+        "designator": "C2",
+        "value": "10u",
+        "lcsc": "C15850",
+        "x": 155.0,
+        "y": 720.0,
+        "rotation": 90.0,
+        "mirror": true,
+        "answered": true
+      },
+      {
+        "designator": "C3",
+        "value": "100n",
+        "lcsc": "C1525",
+        "x": 95.0,
+        "y": 710.0,
+        "rotation": 90.0,
+        "mirror": true,
+        "answered": true
+      },
+      {
+        "designator": "U1",
+        "value": "AMS1117-3.3",
+        "lcsc": "C6186",
+        "x": 260.0,
+        "y": 730.0,
+        "rotation": 180.0,
+        "mirror": true,
+        "answered": true
+      }
+    ],
+    "connections": [
+      {
+        "kind": "wire",
+        "net": "VIN5",
+        "route": [
+          [
+            155.0,
+            740.0
+          ],
+          [
+            215.0,
+            740.0
+          ]
+        ],
+        "fromPin": "C1.1",
+        "ok": true
+      },
+      {
+        "kind": "wire",
+        "net": "3V3",
+        "route": [
+          [
+            95.0,
+            730.0
+          ],
+          [
+            95.0,
+            735.0
+          ],
+          [
+            215.0,
+            735.0
+          ],
+          [
+            215.0,
+            730.0
+          ]
+        ],
+        "fromPin": "C2.1",
+        "ok": true
+      },
+      {
+        "kind": "wire",
+        "net": "GND",
+        "route": [
+          [
+            155.0,
+            700.0
+          ],
+          [
+            155.0,
+            670.0
+          ]
+        ],
+        "fromPin": "C1.2",
+        "ok": true
+      },
+      {
+        "kind": "wire",
+        "net": "GND",
+        "route": [
+          [
+            95.0,
+            690.0
+          ],
+          [
+            95.0,
+            660.0
+          ]
+        ],
+        "fromPin": "C2.2",
+        "ok": true
+      },
+      {
+        "kind": "wire",
+        "net": "GND",
+        "route": [
+          [
+            215.0,
+            720.0
+          ],
+          [
+            185.0,
+            720.0
+          ]
+        ],
+        "fromPin": "U1.1",
+        "ok": true
+      },
+      {
+        "kind": "power-flag",
+        "kind0": "Ground",
+        "net": "GND",
+        "symbolRef": "PWR-GND",
+        "at": [
+          155.0,
+          670.0
+        ],
+        "onPin": "",
+        "ok": true
+      },
+      {
+        "kind": "power-flag",
+        "kind0": "Ground",
+        "net": "GND",
+        "symbolRef": "PWR-GND",
+        "at": [
+          95.0,
+          660.0
+        ],
+        "onPin": "",
+        "ok": true
+      },
+      {
+        "kind": "power-flag",
+        "kind0": "Ground",
+        "net": "GND",
+        "symbolRef": "PWR-GND",
+        "at": [
+          185.0,
+          720.0
+        ],
+        "onPin": "",
+        "ok": true
+      }
+    ],
+    "pool": {
+      "source": "the page's designators ∪ the project export's",
+      "size": 5
+    },
+    "pins": {
+      "C2.1": [
+        155.0,
+        740.0
+      ],
+      "C2.2": [
+        155.0,
+        700.0
+      ],
+      "C3.1": [
+        95.0,
+        730.0
+      ],
+      "C3.2": [
+        95.0,
+        690.0
+      ],
+      "U1.1": [
+        215.0,
+        720.0
+      ],
+      "U1.2": [
+        215.0,
+        730.0
+      ],
+      "U1.3": [
+        215.0,
+        740.0
+      ],
+      "U1.4": [
+        305.0,
+        730.0
+      ]
+    },
+    "pinReadback": {
+      "problems": [],
+      "tolerance": 2.5,
+      "wireLegDeferred": "the canvas leg's wire half is not checked here: no wire has been drawn yet (the plan's wires are checked after they are, in `verification`)"
+    }
+  },
+  "verification": {
+    "action": "sch.netlist (live) + sch.geometry (canvas)",
+    "live": [],
+    "canvas": [],
+    "liveText": "",
+    "canvasText": "",
+    "islands": [
+      {
+        "pin": "C2.1",
+        "net": "VIN5",
+        "mates": [
+          "C2.1",
+          "U1.3"
+        ],
+        "others": []
+      },
+      {
+        "pin": "U1.3",
+        "net": "VIN5",
+        "mates": [
+          "C2.1",
+          "U1.3"
+        ],
+        "others": []
+      },
+      {
+        "pin": "C3.1",
+        "net": "3V3",
+        "mates": [
+          "C3.1",
+          "U1.2"
+        ],
+        "others": []
+      },
+      {
+        "pin": "U1.2",
+        "net": "3V3",
+        "mates": [
+          "C3.1",
+          "U1.2"
+        ],
+        "others": []
+      },
+      {
+        "pin": "C2.2",
+        "net": "GND",
+        "mates": [
+          "C2.2",
+          "C3.2",
+          "U1.1"
+        ],
+        "others": [
+          "C1.2",
+          "R3.2"
+        ]
+      },
+      {
+        "pin": "C3.2",
+        "net": "GND",
+        "mates": [
+          "C2.2",
+          "C3.2",
+          "U1.1"
+        ],
+        "others": [
+          "C1.2",
+          "R3.2"
+        ]
+      },
+      {
+        "pin": "U1.1",
+        "net": "GND",
+        "mates": [
+          "C2.2",
+          "C3.2",
+          "U1.1"
+        ],
+        "others": [
+          "C1.2",
+          "R3.2"
+        ]
+      }
+    ],
+    "sharedWithOutsidePins": [
+      "C1.2",
+      "R3.2"
+    ],
+    "ok": true
+  },
+  "range": {
+    "basis": "the live project export plus the canvas census — this run deletes nothing, so the export recomputes (035)",
+    "expected": [
+      "C2",
+      "C3",
+      "U1"
+    ],
+    "added": [
+      "C2",
+      "C3",
+      "U1"
+    ],
+    "removed": [],
+    "unchanged": 0,
+    "flags": {
+      "before": 0,
+      "after": 3,
+      "expected": 3
+    },
+    "wires": {
+      "before": 0,
+      "after": 5,
+      "planned": 5,
+      "note": "the host may merge or split a polyline, so the count is evidence and the endpoint/length check above is the judgement"
+    }
+  },
+  "findings": {
+    "basis": "the findings the project reported when the plan was built",
+    "baseline": [],
+    "after": [
+      "decap-required-caps|WARN|U1|2|3V3"
+    ],
+    "new": [
+      "decap-required-caps|WARN|U1|2|3V3"
+    ],
+    "resolved": []
+  },
+  "save": {},
+  "render": {},
+  "persistence": "",
+  "steps": [
+    {
+      "action": "doc.list",
+      "purpose": "read the focused project and page",
+      "ok": true,
+      "wrote": false,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sys.identity",
+      "purpose": "confirm the editor's two layers of focus agree",
+      "ok": true,
+      "wrote": false,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.geometry",
+      "purpose": "read the page before writing",
+      "ok": true,
+      "wrote": false,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.netlist",
+      "purpose": "read the editor's own netlist (the probe's membership leg)",
+      "ok": true,
+      "wrote": false,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sys.get_project_file",
+      "purpose": "export the live project for the idempotence probe and the range check",
+      "ok": true,
+      "wrote": false,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.place_component",
+      "purpose": "place C2 (10u, C15850) at (155, 720) rot 90",
+      "ok": true,
+      "wrote": true,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.place_component",
+      "purpose": "place C3 (100n, C1525) at (95, 710) rot 90",
+      "ok": true,
+      "wrote": true,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.place_component",
+      "purpose": "place U1 (AMS1117-3.3, C6186) at (260, 730) rot 180",
+      "ok": true,
+      "wrote": true,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.geometry",
+      "purpose": "read the page again to find the placed parts and their pins",
+      "ok": true,
+      "wrote": false,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.component_pins",
+      "purpose": "read C2's own pin coordinates",
+      "ok": true,
+      "wrote": false,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.component_pins",
+      "purpose": "read C3's own pin coordinates",
+      "ok": true,
+      "wrote": false,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.component_pins",
+      "purpose": "read U1's own pin coordinates",
+      "ok": true,
+      "wrote": false,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.place_wire",
+      "purpose": "draw the wire of net 'VIN5' (155, 740) → (215, 740) (2 point(s), from C1.1)",
+      "ok": true,
+      "wrote": true,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.place_wire",
+      "purpose": "draw the wire of net '3V3' (95, 730) → (95, 735) → (215, 735) → (215, 730) (4 point(s), from C2.1)",
+      "ok": true,
+      "wrote": true,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.place_wire",
+      "purpose": "draw the wire of net 'GND' (155, 700) → (155, 670) (2 point(s), from C1.2)",
+      "ok": true,
+      "wrote": true,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.place_wire",
+      "purpose": "draw the wire of net 'GND' (95, 690) → (95, 660) (2 point(s), from C2.2)",
+      "ok": true,
+      "wrote": true,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.place_wire",
+      "purpose": "draw the wire of net 'GND' (215, 720) → (185, 720) (2 point(s), from U1.1)",
+      "ok": true,
+      "wrote": true,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.place_power",
+      "purpose": "place a Ground flag named 'GND' at (155, 670)",
+      "ok": true,
+      "wrote": true,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.place_power",
+      "purpose": "place a Ground flag named 'GND' at (95, 660)",
+      "ok": true,
+      "wrote": true,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.place_power",
+      "purpose": "place a Ground flag named 'GND' at (185, 720)",
+      "ok": true,
+      "wrote": true,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.geometry",
+      "purpose": "read the page back independently after the writes",
+      "ok": true,
+      "wrote": false,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.netlist",
+      "purpose": "read the editor's own netlist again",
+      "ok": true,
+      "wrote": false,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.component_pins",
+      "purpose": "read C2's own pin coordinates",
+      "ok": true,
+      "wrote": false,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.component_pins",
+      "purpose": "read C3's own pin coordinates",
+      "ok": true,
+      "wrote": false,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sch.component_pins",
+      "purpose": "read U1's own pin coordinates",
+      "ok": true,
+      "wrote": false,
+      "code": "",
+      "message": "",
+      "unknown": false
+    },
+    {
+      "action": "sys.get_project_file",
+      "purpose": "export the live project for the idempotence probe and the range check",
+      "ok": true,
+      "wrote": false,
+      "code": "",
+      "message": "",
+      "unknown": false
+    }
+  ],
+  "notes": [
+    "工程级网表：本页之外还有引脚和本模块同名同网（C1.2, R3.2）—— 这是 EasyEDA 的网表按**工程**算、同名网跨页合并的结果（054 C7 实测）；模块内部分区已按 plan 自己的引脚判定通过，跨页同名是否要合并是命名决策（labelPolicy，C2+），本批不改",
+    "新增 finding（apply 后重跑全规则，集合只许减不许增）：decap-required-caps|WARN|U1|2|3V3 —— 事故报告；没有保存"
+  ],
+  "final": "",
+  "durationMs": 10032
+}

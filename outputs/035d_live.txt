@@ -1,0 +1,177 @@
+035d 真机：round-4 两件事（范围核对分家重跑 + edit plan --pin）（本机 3.2.186 + connector 0.4.23）
+date: 2026-09-24T21:56:38+08:00
+只碰 test 窗 instance inst-094842387-86etbxar（doc.list 焦点工程 friendlyName='test' 逐字一致）；ROBOT/test2 全程未寻址
+must_connect 事实仍为测试编造，只在临时 cwd：%TEMP%\bw035c\shelf\blocklib\parts.json（真库未写；git status 无它）
+
+=========================================================================
+一、被幻影拦下的 reconnect 夹具重跑（错网 = pin5↔pin1 的两成员自动网）
+=========================================================================
+夹具：新 scratch 页 P5(856653dc743192b2)，U3@(300,300) + 两条线：
+  ① net=GND 的 pin2->(150,300) 与 pin4->(345,300)->pin2（宿主合并成一个 primitive 7ffeaeed0a3c13b2）
+  ② **不给 net** 的 pin5->(345,330)->pin1（宿主自动命名，两成员）
+  活网表：U3 {1:'$57N2', 2:'GND', 4:'GND', 5:'$57N2'}   geometry 两个 primitive
+
+--- checkup（临时架）：一个 designator 上两条 conn-nc finding ---
+  [ERROR] U3 pin4 is declared NC but sits on net 'GND' with U3.2
+     target: {"component_ref": "U3", "primitive_id": "", "pin_refs": ["4"], "net_refs": ["GND"], "expected_before": "GND", "suggested_after": ""}
+  [ERROR] U3 pin5 must connect to net 'GND' but sits on 'NET3'
+     target: {"component_ref": "U3", "primitive_id": "", "pin_refs": ["5"], "net_refs": ["NET3", "GND"], "expected_before": "NET3", "suggested_after": "GND"}
+
+--- (a) edit plan 不给 --pin -> 拒绝并列候选 ---
+boardwise edit plan: 2 conn-nc-and-must-connect findings for U3 (pins: 4, 5) — say which one with --pin <number>; 一条 designator 上多条 pin 级 finding 时不许挑第一条（035 四轮）
+  exit=0
+
+--- (b) edit plan --pin 5 -> 命中 pin5（reconnect）---
+boardwise edit plan: C:\Users\xiangyu\AppData\Local\Temp\bw035c\d1_checkup\report.json → reconnect U3 pin5 NET3 → GND
+finding: [ERROR] conn-nc-and-must-connect: U3 pin5 must connect to net 'GND' but sits on 'NET3'
+pin: U3 pin5 at (345, 310)
+disconnect: wire b398e8501e5237b5 — the wire b398e8501e5237b5 carrying net '' has an endpoint on the pin at (345, 310) (its other end is (345, 330))
+connect: pin5→GND via wire — a short wire to the existing 'GND' segment at (345, 300), 10 units away (limit 100)
+snapshot: sha256 10c5d634b5caaf5dea6a6cca9971125d62922adea9a3afe5eb6ad61b55d3badc  pageUuid 856653dc743192b2  host 3.2.186
+note: projectUuid is empty: a .epro2's metadata carries no project uuid (measured), so `edit apply` reports what doc.list calls the focused project and the plan does not pretend to know it
+note: the snapshot holds 57 schematic pages, so no single pageUuid could be named; pageUuid is empty and the page guard degrades to the focused page
+note: pageUuid '856653dc743192b2' comes from the checkup report's source block, not from the snapshot (a whole-project export names no single page), so the page guard still has a page to enforce
+plan written to C:/Users/xiangyu/AppData/Local/Temp/bw035c/d1_plan.json
+
+--- (c) edit plan --pin 9 -> 无匹配，诚实报错 ---
+boardwise edit plan: U3 pin9: no conn-nc-and-must-connect finding matches that pin — --pin has to name a pin the report's findings carry
+  exit=5
+
+--- stale（把 beforeNet 改成 NC_WRONG）-> exit 4 零写入 ---
+  on      pin5→GND via wire — a short wire to the existing 'GND' segment at (345, 300), 10 units away (limit 100)
+  note: U3 pin5 is on '$57N2' in the live netlist, but the plan expects 'NC_WRONG' — 快照已失效，前置条件失败；没有写
+
+--- 【修复前】apply：范围核对已不再用导出，但被**自动网两名写法**拦住（NET3 vs $57N2）-> exit 4 零写入 ---
+boardwise edit apply: reconnect U3 pin5 NET3 → GND  [refused: stale_before]
+  pin     U3 pin5 at (345, 310)  observed '$57N2'
+  note: U3 pin5 is on '$57N2' in the live netlist, but the plan expects 'NET3' — 快照已失效，前置条件失败；没有写
+
+--- 【修复后（自动网词表 + 两名同岛）】apply -> applied + saved ---
+boardwise edit apply: reconnect U3 pin5 NET3 → GND  [applied]
+  ok      doc.list                   confirm the focused page is the plan's page
+  ok      sys.identity               confirm the editor's two layers of focus agree
+  ok      sch.geometry               read the page before writing
+  ok      sch.component_pins         read the pin's own coordinates on the canvas
+  ok      sys.get_project_file       export the live project for the idempotence probe and the range check
+  ok      sch.netlist                read the editor's own netlist for the pin's current connection (an export does not recompute for a deletion)
+  ok      sch.delete_primitives      delete the wire b398e8501e5237b5 attached to U3 pin5
+  ok      sch.place_wire             draw the wire from U3 pin5 at (345, 310) to (345, 300), carrying net 'GND'
+  ok      sch.geometry               read the page back independently after the writes
+  ok      sch.netlist                read the editor's own netlist
+  ok      sys.get_project_file       export the live project for the idempotence probe and the range check
+  ok      sch.doc.save               persist the change
+  ok      sys.get_project_file       export the live project for the idempotence probe and the range check
+  ok      sys.get_project_file       export the live project for the idempotence probe and the range check
+  ok      sch.netlist                read the editor's own netlist for the re-review (an export does not recompute for a deletion)
+  pin     U3 pin5 at (345, 310)  observed '$57N2'
+  probe   U3 pin5 → VIOLATION
+  off     delete wire b398e8501e5237b5 — the wire b398e8501e5237b5 carrying net '' has an endpoint on the pin at (345, 310) (its other end is (345, 330))
+  on      pin5→GND via wire — a short wire to the existing 'GND' segment at (345, 300), 10 units away (limit 100)
+  range   {"attachmentGone": true, "wireEndpointsOnPin": ["7ffeaeed0a3c13b2"], "flagOnPin": false, "netLabelOnPin": false, "wiresThroughPin": [], "wiresVanished": ["b398e8501e5237b5"], "wiresAppeared": []}
+  live    U3 pin5 net 'GND' (wanted 'GND') — ok
+  canvas  {'attachmentGone': True, 'wireEndpointsOnPin': ['7ffeaeed0a3c13b2'], 'flagOnPin': False, 'netLabelOnPin': False, 'wiresThroughPin': [], 'wiresVanished': ['b398e8501e5237b5'], 'wiresAppeared': []}  — ok
+  export  attached (accident report only) (net 'GND'); 范围外零差异
+  persistence: saved_unverified
+  re-review: resolved — conn-nc-and-must-connect reports U3 pin5 as satisfied  [connectivity: sch.netlist (live) over the export]
+  note: persistence is capped at saved_unverified: this bridge has no close/reopen action (009d), so only a separate reopen can promote it to saved_verified
+boardwise edit apply: repaired, verified, saved and re-reviewed as resolved
+
+--- 幂等重放 ---
+  probe   U3 pin5 → OK
+  off     delete wire b398e8501e5237b5 — the wire b398e8501e5237b5 carrying net '' has an endpoint on the pin at (345, 310) (its other end is (345, 330))
+  on      pin5→GND via wire — a short wire to the existing 'GND' segment at (345, 300), 10 units away (limit 100)
+  note: U3 pin5 is already as the shelf asks (U3 pin5 reaches its must_connect target net 'GND') — a repeat run or a hand repair; nothing was written (idempotent)
+boardwise edit apply: already satisfied; the page was not touched
+--- 现场复核 ---
+  LIVE : U3 {1:'', 2:'GND', 4:'GND', 5:'GND'}（pin1 离开错网 ✔）
+  geometry: 一个合并 primitive 7ffeaeed0a3c13b2 GND [150,300,255,300,345,300,345,290,345,300,345,310]
+
+  【更正】上面 (a) 的 "exit=0" 是管道里 tee 的返回值，命令真实退出码：
+    (a) 不给 --pin -> exit 5（拒绝并列候选）；(b) --pin 5 -> exit 0；(c) --pin 9 -> exit 5
+
+=========================================================================
+二、纯 create 路径（029/connect 形态）维持导出核对 —— 真机对照
+=========================================================================
+夹具：新 scratch 页 P5(1fe55dde6a7ede8c)，U3@(300,300) + 一条 net=GND 的 pin2->(150,300) 线；pin5 悬空
+  活网表: U3 {2:'GND'}（导出把悬空脚读成单成员自动网 NET6）
+--- checkup（临时架）：单条 finding（不给 --pin 也能建 plan，--pin 是可选的）---
+  [ERROR] U3 pin5 must connect to net 'GND' and touches no net (alone on 'NET6')
+     target: {"component_ref": "U3", "primitive_id": "", "pin_refs": ["5"], "net_refs": ["GND"], "expected_before": "", "suggested_after": "GND"}
+--- plan（无 --pin）---
+boardwise edit plan: C:\Users\xiangyu\AppData\Local\Temp\bw035c\d2_checkup\report.json → connect U3 pin5 (no net) → GND
+finding: [ERROR] conn-nc-and-must-connect: U3 pin5 must connect to net 'GND' and touches no net (alone on 'NET6')
+pin: U3 pin5 at (345, 310)
+connect: pin5→GND via wire — a short wire to the existing 'GND' segment at (255, 300), 91 units away (limit 100)
+--- apply（exit 0 applied；console 现在打印范围核对用的仪器）---
+boardwise edit apply: connect U3 pin5 (no net) → GND  [applied]
+  ok      doc.list                   confirm the focused page is the plan's page
+  ok      sys.identity               confirm the editor's two layers of focus agree
+  ok      sch.geometry               read the page before writing
+  ok      sch.component_pins         read the pin's own coordinates on the canvas
+  ok      sys.get_project_file       export the live project for the idempotence probe and the range check
+  ok      sch.place_wire             draw the wire from U3 pin5 at (345, 310) to (255, 300), carrying net 'GND'
+  ok      sch.geometry               read the page back independently after the writes
+  ok      sch.netlist                read the editor's own netlist
+  ok      sys.get_project_file       export the live project for the idempotence probe and the range check
+  ok      sch.doc.save               persist the change
+  ok      sys.get_project_file       export the live project for the idempotence probe and the range check
+  ok      sys.get_project_file       export the live project for the idempotence probe and the range check
+  pin     U3 pin5 at (345, 310)  observed 'NET6'
+  probe   U3 pin5 → VIOLATION
+  on      pin5→GND via wire — a short wire to the existing 'GND' segment at (255, 300), 91 units away (limit 100)
+  range   {"wireEndpointsOnPin": ["4081e07a5e33c339"], "flagOnPin": false, "netLabelOnPin": false, "wiresThroughPin": []}
+  live    U3 pin5 net 'GND' (wanted 'GND') — ok
+  canvas  {'wireEndpointsOnPin': ['4081e07a5e33c339'], 'flagOnPin': False, 'netLabelOnPin': False, 'wiresThroughPin': []}  — ok
+  export  attached (accident report only) (net 'GND'); 范围外零差异
+  范围核对 project export (both sides) — 纯 create，导出会重算
+  persistence: saved_unverified
+  re-review: resolved — conn-nc-and-must-connect reports U3 pin5 as satisfied  [connectivity: project export]
+  note: persistence is capped at saved_unverified: this bridge has no close/reopen action (009d), so only a separate reopen can promote it to saved_verified
+boardwise edit apply: repaired, verified, saved and re-reviewed as resolved
+
+=========================================================================
+收尾：零残留复核
+=========================================================================
+两个 scratch 页（856653dc743192b2、1fe55dde6a7ede8c）均已 doc.delete_page 删除；焦点复位 P1。
+doc.list documents: 6 [('schematic1',''), ('P4',''), ('P3',''), ('P1','ACTIVE'), ('P2',''), ('PCB1','')]
+focused project: [('test', True)]    sys.identity: consistent=True | active page b4298962367251c8
+P1 geometry: components [('b5ba3517c5abec68','sheet')] / wires [] / netlabels []
+ROBOT/test2 未寻址；未碰 git/PROGRESS/SKILL.md；真库 blocklib/parts.json 未写（git status 无它）。
+
+=========================================================================
+补采：纯 create 路径用**当前构建**重跑一遍（上面第二节那次跑在 export 文案改动之前）
+=========================================================================
+说明：上面第二节的 apply 输出里那一行 `export attached (accident report only)` 是旧文案；
+      当前构建已按分家改成 delete 路径才用该文案、纯 create 打印 judged(...)。功能一字未变，仅字符串。
+      下面这次是当前构建（冻结 sha256 94c54f42…/7c4e4d6f…）的真机输出。
+夹具：新 scratch 页 P5(fef2c7c2bb02cefd)，U3@(300,300) + 一条 net=GND 的 pin2->(150,300) 线；pin5 悬空
+  checkup（临时架）: U3 pin5 must connect to net 'GND' and touches no net (alone on 'NET6')
+  plan（无 --pin，单条命中）: boardwise edit plan: C:\Users\xiangyu\AppData\Local\Temp\bw035c\d3_checkup\report.json → connect U3 pin5 (no net) → GND
+  apply:
+boardwise edit apply: connect U3 pin5 (no net) → GND  [applied]
+  ok      doc.list                   confirm the focused page is the plan's page
+  ok      sys.identity               confirm the editor's two layers of focus agree
+  ok      sch.geometry               read the page before writing
+  ok      sch.component_pins         read the pin's own coordinates on the canvas
+  ok      sys.get_project_file       export the live project for the idempotence probe and the range check
+  ok      sch.place_wire             draw the wire from U3 pin5 at (345, 310) to (255, 300), carrying net 'GND'
+  ok      sch.geometry               read the page back independently after the writes
+  ok      sch.netlist                read the editor's own netlist
+  ok      sys.get_project_file       export the live project for the idempotence probe and the range check
+  ok      sch.doc.save               persist the change
+  ok      sys.get_project_file       export the live project for the idempotence probe and the range check
+  ok      sys.get_project_file       export the live project for the idempotence probe and the range check
+  pin     U3 pin5 at (345, 310)  observed 'NET6'
+  probe   U3 pin5 → VIOLATION
+  on      pin5→GND via wire — a short wire to the existing 'GND' segment at (255, 300), 91 units away (limit 100)
+  range   {"wireEndpointsOnPin": ["a925b768481fb8bf"], "flagOnPin": false, "netLabelOnPin": false, "wiresThroughPin": []}
+  live    U3 pin5 net 'GND' (wanted 'GND') — ok
+  canvas  {'wireEndpointsOnPin': ['a925b768481fb8bf'], 'flagOnPin': False, 'netLabelOnPin': False, 'wiresThroughPin': []}  — ok
+  export  judged (the out-of-scope check's own reading, both sides) (net 'GND'); 范围外零差异
+  范围核对 project export (both sides) — 纯 create，导出会重算
+  persistence: saved_unverified
+  re-review: resolved — conn-nc-and-must-connect reports U3 pin5 as satisfied  [connectivity: project export]
+  note: persistence is capped at saved_unverified: this bridge has no close/reopen action (009d), so only a separate reopen can promote it to saved_verified
+boardwise edit apply: repaired, verified, saved and re-reviewed as resolved
+
+收尾（补采后）：该页 fef2c7c2bb02cefd 已删除；doc.list 6 文档、P1 ACTIVE、focused test、P1 geometry 1 器件 0 线 0 旗标。

@@ -4,6 +4,15 @@ Living index. Details live in `tasks/*.md` (one book per task) and
 `docs/implementation-log.md` (the connector debugging arc). This file only
 collects the current truth and the pointers.
 
+## [2026-09-28] issue #9 修复：register 引用必须被 git 认领（agent-78 执行断言半，主代理执行证据半+验收；connector/daemon 零改动仍 **0.4.25**）
+
+- **病**：`FIX_CASES` 有 11 条 case 的 `source` 引用从未提交的 `outputs/054_c*/…`、`outputs/035d_live.txt`（`outputs/` 在 .gitignore:46），开发机全绿、干净检出挂 11 条——054 起潜伏（引入者 `aa61768`），非 058 回归。
+- **修（两半）**：①证据半（主代理）：11 个文件全部在位（共 ~131KB），`git add -f` 入库，与仓库 389 个 force-add 先例同惯例——夹具放 inputs（tests/fixtures）、证据放 outputs，不迁。②断言半（agent-78）：`test_017_eval_metrics.py` 新增 `test_every_registered_case_cites_a_tracked_file`（40 条参数化）——每条 `source` 引用的每个路径必须被 `git ls-files` **认领**（索引口径：staged 即算 tracked），让「引用未提交文件」在开发机上就报错而非等干净检出；解析抽成 `_cited_paths()` 单一事实源（原存在性测试改调用，两套口径永不漂移）；git 调用仿 `test_repo_hygiene` 先例一次性 `-z` 全集（实测 40 条只 fork 1 次）；无 git/非工作树三分支 `pytest.skip` 写明理由不误红。新断言独立成测试不并入旧测试：skip 只覆盖 git 依赖的那一条主张。
+- **验证**：定向 118 passed（78+40）；变异 2 组 CAUGHT——V1 引用未跟踪文件 → 新断言红而同条 case 的存在性测试仍绿（正是本病）；V2 断言退回 existence-only → 病重新隐没全绿（证明断言防的就是它）；cp+cmp 还原哈希一致。**主代理亲跑全量 2282 passed**（207s，2242+40）；纯测试面改动，eval 不受影响（58 刚亲测 59/59 双 1.00）。
+- **裁决**：PROGRESS/tasks 里 054 批的「78 绿」是当时实况的历史记录，不回溯改数字；新计数记在本条。`outputs/054_c*` 通配展示串（`FIX_SUCCESS_SOURCES` 渲染用）非真路径，不入断言。
+
+### Commit
+见下方提交（本条落盘时 hash 待定，提交后回填）。
 ## [2026-09-28] 058 审查 SOP 手册闸前置（issue #8：`needs_datasheet[]` 双触发 + 「先问再判」；agent-77 执行，主代理架构+验收；connector/daemon 零改动仍 **0.4.25**）
 
 ### Problem / Task
