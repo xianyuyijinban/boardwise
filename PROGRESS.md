@@ -4,6 +4,10 @@ Living index. Details live in `tasks/*.md` (one book per task) and
 `docs/implementation-log.md` (the connector debugging arc). This file only
 collects the current truth and the pointers.
 
+## [2026-09-28] 063 收口（issue #12）：warning_triage 侧车 + `boardwise triage` 写回命令（connector/daemon 零改动仍 **0.4.25**）
+
+#12（岳亲笔，真机复现）：`warning_triage[]` 是唯一留不住的 AI 槽位——填了 verdict 没有命令重算 completion，重跑 checkup 覆盖 report.json **整份静默丢**。同构对齐 058 needs-datasheet：①槽位嵌身份键 `key`（`triage_key` 三配方：host-erc 按 severity / pcb-drc 按 label+net / 规则 WARN 按 rule_id+refs，生成处一次算好，合并方与命令方只读不重算）；②侧车 `warning-triage.json`（只有 triage 命令写，按 key 幂等 upsert），checkup 生成时并入并提示 并入 N/未匹配 M（未匹配不删=审计轨迹）；③新命令 `boardwise triage --out --key --verdict --reason`：写槽+侧车+重算 completion（`_completion_from_report` 本来就现读 triage——#12 担心的"不现读"不成立，缺的只是触发重算的手）+重渲染 report.md，未知 key exit 2 并列待分诊清单，exit 码 0/2/3 对齐 need-datasheet；④发现性：`warning_triage_note` 与 report.md 分诊表（加 key 列）点名命令，SKILL.md SOP ① 补命令、docs/bridge.md 命令表补 triage 行（主代理收口）。测试 +15（含 #12 全程回归：checkup→填 3 条→重跑→verdict 还在 pending=0），全量 **2404 passed**（执行方两轮 + 主代理亲跑），变异 3 组 CAUGHT。遗留：host-erc/pcb-drc 两种 key 只单测钉配方未过活板（下次真机批带一程）；侧车只增不清（同 needs-datasheet）。任务书 `tasks/063-warning-triage-sidecar.md`。
+
 ## [2026-09-28] 062：install-skill --agent + 三条分发通道（岳裁：不维护 harness 路径表，让用户的 AI 自行配置；connector/daemon 零改动仍 **0.4.25**）
 
 岳追问 #11 收口——"codex/hermes/… 后续都能装上吗"，并裁决：**不要我们配路径，要让用户的 AI 自行配置**。三条通道：①`install-skill --agent`（新增）纯打印不写文件——SKILL.md 绝对路径 + 给用户 AI 的中文引导（目录名 boardwise、异版先备份 `.bak-<日期>`、装完自验证），与 `--harness`/`--uninstall` 互斥 exit 2（argparse 表达不了三态互斥：组 `{--uninstall,--agent}` + `--harness`×`--agent` 走命令内检查，两条都是 exit 2 且有测试）；②`AGENTS.md` 新增「给 clone 本仓库的 AI」段（三条红线原文逐字节未动，cmp 留证）；③README 双语 + getting-started + SKILL.md 各补引导句。doctor 末尾加一行指向 `--agent` 的 hint（print 非 DoctorCheck，不计入 n/n）。kimi/claude 已知落点保留。测试 +9（agent flag 7 + doctor footer 2），全量 **2389 passed**（执行方跑两轮 + 主代理亲跑一轮），变异 3 组 CAUGHT。顺手修 getting-started「doctor 8/8」→「10/10」。任务书 `tasks/062-install-skill-agent.md`。

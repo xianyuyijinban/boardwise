@@ -109,7 +109,9 @@ boardwise checkup --file <导出.epro2> --out <目录>       # 断连兜底：�
   issue #8 踩的是后者缺席，不是前者。
 
 ① **ERC 先行**：主机 ERC/DRC 读数在 `drc` 段——error 已在报告头部错误段，先解决；
-warn 逐条进 `warning_triage[]`，**把每条的 `verdict` 填成 有益/有害/无害、`reason` 写理由**。
+warn 逐条进 `warning_triage[]`，**把每条的 `verdict` 填成 有益/有害/无害、`reason` 写理由**——
+填法：`boardwise triage --out <checkup目录> --key <key> --verdict … --reason …`
+（report.md「警告分诊」表里有 `key` 列；填了立即重算 completion，重跑 checkup 经侧车并入不丢）。
 主机 ERC **没有逐条文本**（只有 host-wide 合计，039 真机 probe 实证，§6 坑 27），
 对着计数与画布图判，要看文本得去编辑器底部面板；PCB DRC 叶子和自有规则 WARN 是带文本的。
 含警告的模块已排在 `modules` 前头（`source.modulesOrderedBy = "warnings-first"`，
