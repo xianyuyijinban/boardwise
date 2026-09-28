@@ -4,6 +4,33 @@ Living index. Details live in `tasks/*.md` (one book per task) and
 `docs/implementation-log.md` (the connector debugging arc). This file only
 collects the current truth and the pointers.
 
+## [2026-09-28] 054 画法编译器落图（阶段 C1：单模块进编辑器）
+
+### Problem / Task
+- 053 B 的编译器只会离线下图；052 路线阶段 3 要的是"接入编辑器——放置、实际引脚回读、布线、最终渲染、保存"。本批是第一刀：把一张 `LayoutPlan` 经 `ChangePlan` 落到 test 工程的一页，并做到源哈希 stale、范围外不动、放置后引脚回读、超时不盲重试四个保护。
+
+### Resolution
+- `core/changeplan.py` 新增第五种 change kind `draw-module`（parts/wires/flags/islands/baseline/downgrades + 三个摘要 + 库几何表），旧四种的序列化逐字节不动（kind-aware writer＋往返测试）。
+- `engines/drawapply.py`：`LayoutPlan + 库符号 → ChangePlan`（配方、位号池[页面∪工程导出]、旗标词表与 net label 降级声明、库几何表核验、引脚**偏移**期望、netlist 岛屿期望、`canvas_census`/`guard_problems`/`postcondition_problems`）；`postcondition_problems` 与 036 同形（`{"live","canvas"}` + `all_satisfied`）。
+- CLI `draw` 命令组：`compile`（ranked 表 + 四分类 + SVG/布局落盘）、`plan`（候选→ChangePlan，`--page` 时读页面普查/位号池/findings 基线）、`apply`（守卫→探针→位号→放件→**拉线前引脚回读**→走线→旗标→双证回读→范围→findings 只减不增→保存→`export.render` 出图）；退出码 0/2/3/4/5 与 edit 家族同义。
+- 真机落成：test 工程 P5 页（分压 10k/10k + VIN/GND 旗 + TAP 抽头）、P6 页（RC 低通，1a11845a3a6e2d03）、P8 页（LDO 22u/10u，79a8d1a4c1ddb916）三页已保存；P7 页（89c44c015811fddd）留着 C3a 那张"双证过、被自己的规则挡在保存前"的 LDO 图（未落盘）；C6/C7 用的临时页已 `doc.delete_page` 清掉，工程另有原有四个空页。
+- 真机用例 **C1–C7 全部跑过**（C3 分两次：见下）。C3 的两条真机事实值得单列：① 真机 AMS1117 符号（C6186/C351785/C5205141 同族）VIN/VOUT/GND 全在同一侧 + 右侧重复 VOUT，`ldo` 文法默认"in 左 out 右"**无合法姿态**（默认侧 `draw compile` 0 候选），改 `sidePreferences.output=bottom`（文法本就跟着 sidePreferences 走）后 3 候选通过；② 本仓库 facts 要求 AMS1117 输出 **≥22µF**，053 场景的 100n 输出电容让 `decap-required-caps` 涨一条 finding → `draw apply` 按 036 规矩**拒绝保存**（C3a：图落好、双证过、没落盘，exit 2），换 22µF（C45783）后落盘干净（C3b：applied + saved，且该 finding 因**工程级网表**同名 3V3 合并被 C3b 的 22µF 消掉，报告 `resolved: 1, new: 0`）。另实测：落图后导出的 `value` 字段为空，`decap` 规则靠 MPN 的 EIA 码读值。
+- **五条**新实测入坑表（SKILL 坑 29–34）：① 宿主 `(rotation, mirror)` 是 `mirror_x ∘ CW(R)`（先转后镜像），镜像姿态要交原角，`_editor_rotation` 的取负只对 `mirror=False` 成立（C1 首跑由引脚回读抓出两脚对调）；② 编辑器网表是**工程级**，同名网跨页合并，模块验收的成员关系改在 "plan 自己的引脚集合内" 判、集合外只报 `sharedWithOutsidePins`；③ `export.render` 的 `format` 词表是 `png|svg|pdf`（给 `image/png` 回 BAD_REQUEST，图没出而落图已保存——报告如实写缺图）。
+- 落图前必须先"量"符号库：编辑器不给库几何（`lib.symbol.get` 明说 no geometry），所以探针放一颗真器件→读 `sch.component_pins`+`bboxes`→删探针→写成 `SymbolProfile`（C25744 引脚 ±20/body ±10.5×±4.5；C1525 引脚 ±20/body ±10.5×±8.5）。
+
+### Verification
+- 定向 pytest：`tests/test_054_drawapply.py`（52）+ `tests/test_054_draw_cli.py`（26）= 78 绿（basetemp `.tmp_pt_72`）；相邻 8 个 edit/053/cli 家族套件 698 绿；layer/action-catalogue/dsh-sync 全绿。
+- 变异 3 组全 CAUGHT 并按 sha256 还原：M1 引脚回读退恒真→2 红；M2 位号池退页面级（plan 侧+apply 侧两处）→2 红；M3 普查守卫短路→1 红。
+- 注册表补齐（agent-73，主代理裁决"登记不豁免"）：`draw-module` 入 `FIX_SUCCESS_KINDS` 末位（3 attempts/3 applied，总账 14/12→17/15），10 行 FixCase 源指本任务书 §九+`outputs/054_c*/apply_report*.json`；`test_017_eval_metrics.py` 78 绿（含 10 条新溯源用例），变异 2 组 CAUGHT（删 kind→4 红、翻 outcome→3 红）；核校出 8 条实录与初报出入（C3b 配方值、C7 "中途拔"证据边界、C3a 护栏在写入后触发、页标签回收等），已全部写进任务书 §九。
+- **主代理亲跑全量 pytest 2174 passed（141.0s），eval holdout 59/59 双 1.00 保持**；connector 419/419、dsh 48+1、tsc 干净（agent-72 交卷批次）。
+- 真机证据落 `outputs/054_c1|054_c2|054_c3|054_c6|054_c7/`：三次 `applied`（分压 / RC / LDO-C3b，C3b 那次另有一条 finding `resolved: 1, new: 0`）+ 一次 `failed: new_findings` 零保存（LDO-C3a：双证过、被工程自己的 decap 规则挡在保存前）+ 两次 `already_applied`（双证 live ok + canvas ok、range +2 件、flags +2、findings 零增长、`saved_unverified`）、两次 `already_applied` 零写入、一次手工移动后 exit 4 零写入（并将件移回后复核 already_applied）、一次库几何守卫 exit 4 零写入、一次编辑器侧几何不符 exit 3（2 件已放、0 线、未保存）、一次拔 daemon unknown + 重跑读回 already_applied 零写入（页上无重复件）；渲染图人眼复核（PNG 2362×1672，分压链/RC 支路可读）。
+
+### Commit
+- Branch: `main`
+- Commit: `aa61768`（代码/测试/夹具/任务书 054 + SKILL 坑 29–34 + architecture.md）；本记录与 README 重写随后续文档提交
+- Status: committed
+- Files: `src/boardwise/engines/drawapply.py`（新）, `src/boardwise/engines/draw.py`, `src/boardwise/core/changeplan.py`, `src/boardwise/cli.py`, `tests/test_054_drawapply.py`（新）, `tests/test_054_draw_cli.py`（新）, `tests/fixtures/drawapply/`（新）, `.kimi-code/skills/boardwise/SKILL.md`, `docs/architecture.md`, `PROGRESS.md`
+
 ## [2026-09-27] 052 原理图审查复核与绘制方向建议
 
 ### Problem / Task
