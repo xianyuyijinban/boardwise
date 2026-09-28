@@ -137,6 +137,7 @@ from boardwise.core.symbolprofile import (
     SymbolProfile,
     check_box,
     flag_glyph_box,
+    flag_glyph_kind,
 )
 from boardwise.core.geometry import transform_point
 
@@ -1614,7 +1615,7 @@ def _add_flag(
                 "labels at both ends"
             ),
         )
-    rotation = drawcompiler.flag_rotation(direction)
+    rotation = drawcompiler.flag_rotation(direction, flag_glyph_kind(profile))
     symbol = LayoutPowerSymbol(
         symbol_ref=profile.symbol_ref,
         symbol_hash=profile.geometry_hash(),

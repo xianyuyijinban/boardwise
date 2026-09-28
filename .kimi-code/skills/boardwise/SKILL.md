@@ -304,7 +304,11 @@ boardwise draw apply   plan.json --project test \
 （活网表按**本 plan 自己的引脚**判分区；页面外同名同网只报 `sharedWithOutsidePins`）
 → ⑫ 范围（无删除 → 导出新鲜）+ findings 只减不增
 → ⑬ 保存（`saved_unverified`，要 `saved_verified` 得走 `boardwise persistence` 的关闭重开）
-→ ⑭ `export.render` 出图（`already_applied` 也出图：图是证据不是写）。
+→ ⑭ `export.render` 出图（`already_applied` 也出图：图是证据不是写）
+→ ⑮ **旗标朝向核对**（坑 42 的手法、坑 43 的事实）：出图时一并要 `format=svg`，解
+`c_partid="netflag"` 组逐颗读"连接点 → 字形往哪边伸"，与 plan 里每颗旗标的 `rotation`
+对表；GND 与 PWR-* 两家自然姿态相反，离线预览画的是统一约定盒、看不出这个差
+（照抄姿势与判据见 `outputs/064_railflag/`）。
 
 退出码：**0** 落图并被双证确认（或 already_applied 零写入）/ **2** 承诺的效果不在（写被拒、
 保存被拒、range/旗标数不对、findings 增长）/ **3** 页状态不可陈述或回读不符（超时、拔 daemon、
@@ -468,6 +472,7 @@ exit 4 零写入（C5）；库几何不符 → exit 4 零写入（C6，写前那
 | 40 | **INFO 级 report-only 规则也挡保存**（057 E1 实测）：`param-rc-cutoff` 命中 → `new_findings` exit 2 不保存（036 规矩按身份不看严重度）；该规则对**自带电压声明的轨名**（`5V0`/`+5V` 形态，011c whitelist）跳过，对 `VIN` 这类非声明名不跳过 | 电容与分压电阻共处的输入轨，轨名写成电压声明形态——这是命名约定，不是版式问题（与坑 34 同族）。出处 `outputs/057_live/e1/apply.txt`、`e1b/apply.json` |
 | 41 | **模块级文法 finding 在 `draw plan` 命令行完全不可见**（057 E1 实测）：同一张图几何逐字节相同，轨名 `VIN`→`5V0` 后 `grammarFindings` 从 1 变 0，而 CLI 全文 0 处提及；离线 compile 只给计数不给文本 | 判据看 `verdict=pass` + `plan.evidence.grammarFindings`，别只看 CLI 文本。出处 `outputs/057_live/e1/plan2.txt` |
 | 42 | （工具技巧，非坑）`bridge call --action export.render {"format":"svg"}` 的 SVG `<text>` 节点是**渲染内容的机器可读记录**（位号/值/网名逐个可 grep） | 模型看不到图时用它做"渲染里到底画了什么"的证据；人眼复核仍走 PNG。出处 `outputs/057_live/e1b/render_text_extract.txt` |
+| 43 | **旗标自然姿态按符号分家**（库内 SYMBOL BBOX 实测 + 064 真机四姿态复测）：`Ground-*` 的 bars 挂在连接点**下方**（`Ground-GND BBOX (-10,0,10,-19)`），`Power-*` 的 bar 在连接点**上方**（`Power-VCC (-5,10,5,0)`、`Power-5V (-5,10,5,5)`）——同一个编辑器 rotation，两家字形朝向**相反**，所以罗盘（`drawcompiler._flag_rotation`）与字形盒（`symbolprofile.flag_glyph_box`）都必须**按符号分**，分类单点放 `symbolprofile.flag_glyph_kind`（按旗标名末段是不是地网名判）。**离线预览看不出来**：本仓库每颗旗标 profile 都写同一个约定盒 `(-6,0,6,18)`，预览画的是这个理想化盒、两家一模一样 | 060 的"全体 +180"只对 GND 成立（当时的 E1 页只有 GND 旗标），PWR-* 类全被翻反、3V3 那批场景哈希随之申报——**任何动旗标罗盘/字形盒的改动，前后都按坑 42 的手法解 `c_partid="netflag"` 组核"连接点→字形伸向"（四姿态逐颗，PWR-* 与 GND 对照）**；离线侧只用逐场景叶子级 diff 申报（`tools/064_flag_delta_audit.py`），digest 单独列、不作证据。出处 `outputs/064_railflag/`（真机 8/8 与罗盘逐数吻合）、`outputs/057_live/lib.json` |
 宿主版本：**3.2.149 是实测下限**（2026-09-23 在 3.2.149.88089769 上实测：打标/缩放等 8 个关键成员
 typeof 全在位、activate 冷启动正常派发、render 实跑 308KB PNG——旧立论"3.2.183 以下这些接口不存在"
 已被证伪，见 `tasks/027-editor-api-floor.md`）；**3.2.186 是唯一校准对象**。低于 149 没有证据，doctor 照卡。
@@ -493,6 +498,15 @@ typeof 全在位、activate 冷启动正常派发、render 实跑 308KB PNG—�
   一个缺口/一个文件域；多缺口的大批拆成串行小批（并行会同文件撞车），每批目标半小时内交卷。
   子代理上下文 500k 是 TaskStop 红线，但设计目标是**根本到不了**——上下文越重幻觉越多、
   返工越多（060 三缺口合一批：41 万 tokens、跑满 2h timeout 被斩，实证）。
+- **删除一律进回收站，禁 `rm` / `unlink` 直删**（xianyuyijinban 2026-09-28 定）——包括临时目录、
+  变异备份、废弃产物，没有例外。Git Bash 里用 Windows 原生通道：
+
+  ```bash
+  # 文件（路径用绝对路径）：
+  powershell -NoProfile -Command "Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile('D:\\path\\file', 'OnlyErrorDialogs', 'SendToRecycleBin')"
+  # 目录（第三参同，方法换 DeleteDirectory）：
+  powershell -NoProfile -Command "Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory('D:\\path\\dir', 'OnlyErrorDialogs', 'SendToRecycleBin')"
+  ```
 - **append 落盘后立刻 `grep -c` 独立计数**：出现 2 就是双执行，按偏移截断重写。
 - 真机作业前先 `boardwise bridge status`（**daemon 会自行死亡**，死了先 `bridge start`）。
 - 新增动作：`protocol.py` 目录 + connector handler + `docs/bridge.md` §4 三处必须同步

@@ -39,11 +39,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
+from .model import is_ground_net
+
 __all__ = [
     "DIRECTIONS",
     "DIRECTION_SOURCE_BODY",
     "DEFAULT_POSES",
-    "FLAG_GLYPH_ROTATION_OFFSET",
+    "FLAG_GLYPH_KINDS",
+    "FLAG_GLYPH_KIND_GND",
+    "FLAG_GLYPH_KIND_RAIL",
+    "FLAG_GLYPH_ROTATION_OFFSETS",
     "POSE_ROTATIONS",
     "POSES_SOURCE_DECLARED",
     "POSES_SOURCE_UNRESTRICTED",
@@ -59,6 +64,7 @@ __all__ = [
     "SymbolText",
     "check_box",
     "flag_glyph_box",
+    "flag_glyph_kind",
     "from_parsed_symbol",
     "role_of_pin",
     "role_siblings",
@@ -100,9 +106,24 @@ POSES_SOURCE_DECLARED = "declared"
 #: Where an electrical role came from.
 ROLE_SOURCE_PIN_NAME = "pin-name"
 
-#: The rotation a flag profile's **glyph box** is measured at, relative to the
-#: rotation the editor is given — see :func:`flag_glyph_box`.
-FLAG_GLYPH_ROTATION_OFFSET = 180.0
+#: The two families a power flag can belong to, by the side its library symbol
+#: hangs the glyph on at rotation 0 — see :func:`flag_glyph_kind`. ``"gnd"`` is
+#: the ``Ground-*`` family (bars *below* the connection), ``"rail"`` the
+#: ``Power-*`` one (a bar *above* it).
+FLAG_GLYPH_KIND_GND = "gnd"
+FLAG_GLYPH_KIND_RAIL = "rail"
+FLAG_GLYPH_KINDS: tuple[str, ...] = (FLAG_GLYPH_KIND_GND, FLAG_GLYPH_KIND_RAIL)
+
+#: The turn from the rotation the editor is given to the rotation this module's
+#: glyph convention (``(-6, 0, 6, 18)`` — the glyph *away from* the connection)
+#: is measured at, **per family**: see :func:`flag_glyph_box`. Written as one
+#: table per family because both halves of the 060 fix — the rotation a flag is
+#: drawn at and the box the drawing reserves — have to turn by the same amount,
+#: and two constants in two files would eventually disagree.
+FLAG_GLYPH_ROTATION_OFFSETS: dict[str, float] = {
+    FLAG_GLYPH_KIND_GND: 180.0,
+    FLAG_GLYPH_KIND_RAIL: 0.0,
+}
 
 #: The pin-name tokens this build maps to a role, and nothing else.
 #:
@@ -412,6 +433,40 @@ class SymbolProfile:
 # -------------------------------------------------------------- flag glyphs
 
 
+def flag_glyph_kind(profile: SymbolProfile) -> str:
+    """Which family of power flag ``profile`` is: ``"gnd"`` or ``"rail"``.
+
+    The two families hang their glyph on **opposite sides** of the connection at
+    the same rotation, measured in the library's own SYMBOL documents
+    (``outputs/060_layout/flag_glyph_evidence.txt``, ``outputs/057_live/lib.json``):
+    ``Ground-GND`` carries ``BBOX (-10, 0, 10, -19)`` — connection at the top of
+    the stem, bars running *below* it — while ``Power-VCC`` / ``Power-5V`` carry
+    ``(-5, 10, 5, 0)`` / ``(-5, 10, 5, 5)``, a bar *above* the connection. 064's
+    live probe (``outputs/064_railflag/``) re-measured both on the canvas.
+
+    So "which rotation does this flag want" and "which box does it occupy" are
+    facts about the *symbol*, not about flags in general, and both callers
+    (:func:`flag_glyph_box` here, ``drawcompiler._flag_rotation``) have to ask
+    first. 060 turned every flag by the ground family's 180 and landed every
+    rail flag upside down; this function is the single place that keeps the two
+    apart.
+
+    The judgement is the flag's **name**: a flag library title ends in the net
+    the flag stands for (``Ground-GND`` / ``Power-VCC``; this repo's own books
+    spell the same pair ``PWR-GND`` / ``PWR-<net>``), so the family is decided by
+    :func:`~boardwise.core.model.is_ground_net` — the one place this repo calls a
+    name ground — applied to the name's hyphen-separated tokens. The glyph box
+    cannot decide it: every library this repo ships states the *convention* box
+    ``(-6, 0, 6, 18)`` for a ground and a rail flag alike, which is exactly how
+    six batches of one family drawn backwards stayed invisible offline.
+    """
+    reference = (profile.symbol_ref or profile.title or "").upper()
+    for token in reference.split("-"):
+        if is_ground_net(token.strip()):
+            return FLAG_GLYPH_KIND_GND
+    return FLAG_GLYPH_KIND_RAIL
+
+
 def flag_glyph_box(
     profile: SymbolProfile, *, rotation: float, anchor: tuple[float, float]
 ) -> Box | None:
@@ -424,14 +479,14 @@ def flag_glyph_box(
     (``(-6, 0, 6, 18)`` for ``PWR-GND`` and for every ``PWR-<rail>``).
 
     The editor's own power symbols do not all hang that way, and that is the fact
-    this function exists for. Read out of an export's own SYMBOL documents
-    (``Ground-GND`` carries ``BBOX (-10, 0, 10, -19)``: connection at the top of
-    the stem, bars running *below* it; ``Power-VCC`` and ``Power-5V`` carry
-    ``(-5, 10, 5, 0)`` and ``(-5, 10, 5, 5)``: a bar *above* the connection), the
-    two families hang on opposite sides. So the box a drawing must reserve is not
-    the profile's box at the rotation the editor is given, but the box that hangs
-    away from the pin — :data:`FLAG_GLYPH_ROTATION_OFFSET` from it. The evidence
-    and the read-back are in ``tools/060_flag_glyph_evidence.py``.
+    this function exists for. Read out of an export's own SYMBOL documents (see
+    :func:`flag_glyph_kind` for the two BBOXes), the two families hang on
+    opposite sides — so the box a drawing must reserve is not the profile's box
+    at the rotation the editor is given, but the box that hangs away from the
+    pin, turned by **that family's own** offset
+    (:data:`FLAG_GLYPH_ROTATION_OFFSETS`). The same offset is what
+    ``drawcompiler._flag_rotation`` adds to the compass, so the number in the
+    plan and the box reserved for it can never describe opposite sides.
 
     One function for the compiler's occupancy, the page compiler's extents and
     the SVG preview, because all three draw this one box: a preview that computed
@@ -443,7 +498,7 @@ def flag_glyph_box(
     from .geometry import transform_point
 
     x0, y0, x1, y1 = profile.body
-    angle = rotation + FLAG_GLYPH_ROTATION_OFFSET
+    angle = rotation + FLAG_GLYPH_ROTATION_OFFSETS[flag_glyph_kind(profile)]
     corners = [
         transform_point(
             x, y, rotation=angle, mirror=False, ox=anchor[0], oy=anchor[1],

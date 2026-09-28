@@ -806,38 +806,100 @@ def test_scene_09_ldo_aux_branches_hang_off_their_own_core_pin():
 
 
 def test_a_flag_is_rotated_so_its_glyph_hangs_away_from_the_pin():
-    """060 sec.3: the ground symbol hangs *below* its connection, so the compass flips.
+    """060 sec.3 + 064: the compass is read **per family**, and so is the box.
 
-    The library's own ``Ground-GND`` symbol carries ``BBOX (-10, 0, 10, -19)``:
-    its connection sits at the top of the stem and the bars run below it (read out
-    of an export's own SYMBOL documents — `tools/060_flag_glyph_evidence.py`). A
-    flag anchored *below* its pin is therefore drawn at rotation ``0``, not
-    ``180``, and the box the drawing reserves — the glyph hanging away from the
-    pin — is on the far side of the anchor from it.
+    The library hangs the two families on opposite sides at the same rotation.
+    ``Ground-GND`` carries ``BBOX (-10, 0, 10, -19)`` — connection at the top of
+    the stem, bars running *below* it — while ``Power-VCC`` / ``Power-5V`` carry
+    ``(-5, 10, 5, 0)`` / ``(-5, 10, 5, 5)``, a bar *above* the connection (read
+    out of an export's own SYMBOL documents, 064's live probe). A ground flag
+    anchored *below* its pin is therefore drawn at ``0``, not ``180`` (060's
+    ruling), and a rail flag anchored the same way at ``180``, not ``0`` (064:
+    060 turned every flag by the ground family's 180 and put the rail family's
+    glyph on its own pin's side).
 
-    Nothing offline pinned this number: 054-059 passed every test with the whole
-    compass 180 out and landed every GND flag upside down.
+    The box the drawing reserves must follow the same split, or the plan and its
+    reservation would describe opposite sides of the anchor — which is why the
+    loop below checks both numbers against one direction.
+
+    Nothing offline pinned these numbers before: 054-059 passed every test with
+    the whole compass 180 out and landed every GND flag upside down.
     """
-    profile = flag("PWR-GND")
-    anchor = (0.0, 0.0)
-    for direction, rotation in (
-        ((0.0, 1.0), 180.0),
-        ((-1.0, 0.0), 270.0),
-        ((0.0, -1.0), 0.0),
-        ((1.0, 0.0), 90.0),
+    for ref, kind, rotations in (
+        ("PWR-GND", "gnd", (
+            ((0.0, 1.0), 180.0), ((-1.0, 0.0), 270.0),
+            ((0.0, -1.0), 0.0), ((1.0, 0.0), 90.0),
+        )),
+        ("PWR-VIN", "rail", (
+            ((0.0, 1.0), 0.0), ((-1.0, 0.0), 90.0),
+            ((0.0, -1.0), 180.0), ((1.0, 0.0), 270.0),
+        )),
     ):
-        assert dc.flag_rotation(direction) == rotation, direction
-        box = flag_glyph_box(profile, rotation=rotation, anchor=anchor)
-        assert box is not None
-        centre = ((box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0)
-        away = (
-            (centre[0] - anchor[0]) * direction[0]
-            + (centre[1] - anchor[1]) * direction[1]
-        )
-        assert away > 0.0, (
-            f"the glyph box {box} hangs on the same side of {anchor} as the pin "
-            f"it names (escaping {direction}) — 060 sec.3's whole point"
-        )
+        profile = flag(ref)
+        assert symbolprofile.flag_glyph_kind(profile) == kind, ref
+        anchor = (0.0, 0.0)
+        for direction, rotation in rotations:
+            assert dc.flag_rotation(direction, kind) == rotation, (kind, direction)
+            box = flag_glyph_box(profile, rotation=rotation, anchor=anchor)
+            assert box is not None
+            centre = ((box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0)
+            away = (
+                (centre[0] - anchor[0]) * direction[0]
+                + (centre[1] - anchor[1]) * direction[1]
+            )
+            assert away > 0.0, (
+                f"the {kind} glyph box {box} hangs on the same side of {anchor} as "
+                f"the pin it names (escaping {direction}) — 060 sec.3's whole point, "
+                "and 064's per-family half of it"
+            )
+
+
+def test_the_two_flag_families_are_exactly_half_a_turn_apart():
+    """064: one number per family, 180 apart — the compass cannot be uniform.
+
+    ``Ground-*``'s bars hang below its connection and ``Power-*``'s bar sits
+    above it, so for the same escape the two families want rotations that differ
+    by exactly half a turn. Stated as its own test because the whole of 060's bug
+    was one compass answering for both, and a later "simplification" that folds
+    the two tables back together would have to break this line first.
+    """
+    for direction in ((0.0, 1.0), (-1.0, 0.0), (0.0, -1.0), (1.0, 0.0)):
+        ground = dc.flag_rotation(direction, "gnd")
+        rail = dc.flag_rotation(direction, "rail")
+        assert (ground - rail) % 360.0 == 180.0, (direction, ground, rail)
+
+
+def test_the_flag_family_is_read_off_the_symbols_own_name():
+    """064 sec.1: ``flag_glyph_kind`` — the one place a flag's family is decided.
+
+    The glyph box cannot answer it. Every library this repo ships states the same
+    *convention* box ``(-6, 0, 6, 18)`` for a ground and a rail flag, so offline
+    the name is all that is left — and the names are the measured ones: the
+    editor's own library titles its flags ``Ground-GND`` / ``Power-VCC`` /
+    ``Power-5V`` (family prefix, then the net), and this repo's books spell the
+    pair ``PWR-GND`` / ``PWR-<net>``. Both spellings are judged by
+    ``core.model.is_ground_net``, the one place a name is called ground.
+    """
+    for ref, kind in (
+        ("PWR-GND", "gnd"),
+        ("PWR-GNDA", "gnd"),
+        ("PWR-VSS", "gnd"),
+        ("Ground-GND", "gnd"),
+        ("GND", "gnd"),
+        ("PWR-VIN", "rail"),
+        ("PWR-3V3", "rail"),
+        ("PWR-5V0", "rail"),
+        ("Power-VCC", "rail"),
+        ("Power-5V", "rail"),
+    ):
+        assert symbolprofile.flag_glyph_kind(flag(ref)) == kind, ref
+    # A profile that carries only a title is judged the same way (a parsed symbol
+    # may reach the book without a ref), and a name that is no ground name is a
+    # rail — the flag the editor's own library draws with a bar above it.
+    titled = SymbolProfile(
+        symbol_ref="", title="Power-SENSE", body=(-6.0, 0.0, 6.0, 18.0),
+    )
+    assert symbolprofile.flag_glyph_kind(titled) == "rail"
 
 
 def test_a_ground_flag_below_its_pin_is_drawn_hanging_in_the_preview():
@@ -906,6 +968,44 @@ def test_a_ground_flag_below_its_pin_is_drawn_hanging_in_the_preview():
     )
     for rect in hanging:
         assert float(rect.get("height")) > 0.0
+
+
+def test_a_rail_flag_below_its_pin_is_drawn_hanging_the_other_way():
+    """064: the same scenario's rail flag, which 060 had turned upside down.
+
+    The divider's ``VIN`` flag leaves its pin **upwards**, so its glyph has to
+    hang upwards too — and the rail family's natural pose makes that rotation
+    ``0`` (053B's mapping), while 060 handed the editor ``180``: 060 sec.3's
+    uniform flip was read off the ground family alone (its ``BBOX`` hangs the
+    other way) and the E1 page that verified it carries GND flags only.
+
+    The box is asserted beside the number on purpose: it must stay *above* the
+    anchor exactly as it did under 060 (the reservations did not move — only the
+    number handed to the editor did), which is what makes this batch's scenario
+    declaration a rotation-only change.
+    """
+    scene = scenes()[1]
+    result, plan = best_of(scene)
+    assert result.ok
+    rails = [item for item in plan.power_symbols if item.net == "VIN"]
+    assert rails, "the ladder's rail is named by a flag"
+    book = library()
+    for symbol in rails:
+        assert symbol.rotation == 0.0, (
+            f"a rail flag anchored above its pin is drawn at 0 (the Power-* family's "
+            f"own pose), not {symbol.rotation} — 060's uniform 180 turned every rail "
+            "flag upside down (064 sec.2)"
+        )
+        box = flag_glyph_box(
+            book[symbol.symbol_ref], rotation=symbol.rotation,
+            anchor=(symbol.x, symbol.y),
+        )
+        assert box is not None
+        assert box[1] >= symbol.y - 1e-6, (
+            f"the glyph box {box} starts above the anchor row {symbol.y}: a rail flag "
+            "above its pin hangs its bar upwards (064)"
+        )
+        assert box[3] > symbol.y, "the box occupies the rows over the anchor"
 
 
 def test_a_branch_goes_to_the_side_the_grammar_reads_for_it():
