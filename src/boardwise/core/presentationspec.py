@@ -19,11 +19,44 @@ Two properties are enforced here rather than trusted:
   义务优先，跨模块/高扇出才许标签". So `local` may only be `wire`; the two
   outer cases may be `wire` (a stricter choice) or `label`.
 
+**A module is a group on a page, and a page holds several of them.** The module
+list is not decoration: the phase-C page compiler (056) compiles *each module on
+its own* — as a call to the single-module pipeline — and places the resulting
+frames on the page. So a module may state the two things that are true of one
+group and not of the page:
+
+* `grammar_ref` — which drawing grammar the module follows. A single-grammar
+  page states it once at the top; a page that mixes an LDO with a divider states
+  it per module, and a module that states none inherits the document's.
+* `presentation` — the module's own overrides, of which this build reads
+  `sidePreferences`: the sides a grammar should read along are a property of the
+  *symbols in that group* (the repo's measured AMS1117 puts its input and output
+  on the same side), and one page can hold a group whose symbols want the
+  default sides and one whose symbols do not.
+
+`flow` is the module-level main-flow partial order — "this group feeds that
+one". It is a **soft** reading aid and never a hard constraint: the page
+compiler places modules in an order that respects it, and a diagram that
+contradicts it is a ranking loss rather than a refusal. The two forms are the
+plain pair (``["pwr", "sense"]``) and the object
+(``{"from": "pwr", "to": "sense", "mainPath": true}``); `mainPath` marks the
+edge the reader is meant to follow, which is the one edge the page may draw as a
+*whole wire* across the module boundary instead of naming it at both ends.
+
 What this module deliberately does **not** check: that `modules[*].parts`,
-`mainPaths` steps and `userLocks[*].partId` name parts that exist. Those are
-CircuitSpec facts, and the cross-check belongs to whoever holds both documents —
-the phase-B compiler. Validating them here would either duplicate the circuit
-schema in this file or accept a document that silently refers to nothing.
+`flow` endpoints, `mainPaths` steps and `userLocks[*].partId` name parts and
+modules that exist. Those are CircuitSpec facts (and module-name facts), and the
+cross-check belongs to whoever holds both documents — the phase-B compiler and,
+for modules, the page compiler. Validating them here would either duplicate the
+circuit schema in this file or accept a document that silently refers to nothing.
+
+**Serialisation stays byte-stable for a document that says nothing new.** The
+`grammarRef` / `presentation` keys of a module and the top-level `flow` list are
+written **only when stated**, because a LayoutPlan's geometry digest pins the
+presentation digest: an untouched 053 spec has to hash — and therefore compile —
+to exactly the plan it did before this batch. The fields are additions, not
+changes: absent reads as "this module inherits", and a page that declares no
+flow is the page whose modules are read in name order.
 """
 
 from __future__ import annotations
@@ -39,16 +72,19 @@ from .symbolprofile import POSE_ROTATIONS
 
 __all__ = [
     "DEFAULT_SIDE_PREFERENCES",
+    "FLOW_EDGE_KEYS",
     "GRAMMARS",
     "LABEL_LABEL",
     "LABEL_MODES",
     "LABEL_WIRE",
+    "MODULE_PRESENTATION_KEYS",
     "PATH_STEP_NET",
     "PATH_STEP_PART",
     "PRESENTATION_SPEC_KIND",
     "PRESENTATION_SPEC_VERSION",
     "SIDES",
     "DirectWiringObligation",
+    "FlowEdge",
     "LabelPolicy",
     "PresentationModule",
     "PresentationPath",
@@ -101,6 +137,7 @@ _TOP_KEYS = (
     "kind",
     "specVersion",
     "modules",
+    "flow",
     "mainPaths",
     "feedbackPaths",
     "portRoles",
@@ -110,8 +147,14 @@ _TOP_KEYS = (
     "sidePreferences",
     "userLocks",
 )
-_MODULE_KEYS = ("id", "parts", "role")
+_MODULE_KEYS = ("id", "parts", "role", "grammarRef", "presentation")
+#: What a module's own `presentation` object may override. Closed for the same
+#: reason every schema here is closed: a key this build does not read would be
+#: an intent nobody honours. The side preferences are the ones a *group's
+#: symbols* decide; `userLocks` and the label policy are page-wide facts.
+MODULE_PRESENTATION_KEYS = ("sidePreferences",)
 _PATH_KEYS = ("id", "chain", "note")
+_FLOW_EDGE_KEYS = ("from", "to", "mainPath")
 _OBLIGATION_KEYS = ("nets", "note")
 _LABEL_POLICY_KEYS = ("local", "crossModule", "highFanout")
 _LOCK_KEYS = ("partId", "x", "y", "rotation")
@@ -133,15 +176,42 @@ class PresentationSpecError(ValueError):
 
 @dataclass
 class PresentationModule:
-    """One functional group: its parts and what the group is for.
+    """One functional group: its parts, what the group is for, and how it draws.
 
     The module is what makes "电容归侧" decidable — a decoupling capacitor and
     the IC it belongs to are one group, and a group has one place on the page.
+    It is also the unit the page compiler (056) compiles: each module goes
+    through the single-module pipeline on its own, so the two fields below are
+    *this group's* answers rather than the page's.
+
+    ``grammar_ref`` empty means "the document's grammar"; ``side_preferences``
+    empty means "the document's sides". Both are overrides, and both are
+    per-group because both are properties of the symbols in the group (053
+    sec.3's measured AMS1117 needs a non-default output side; a divider's
+    default sides are fine) rather than of the page they sit on.
     """
 
     id: str
     parts: list[str] = field(default_factory=list)
     role: str = ""
+    grammar_ref: str = ""
+    side_preferences: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class FlowEdge:
+    """One module-level flow direction: ``from`` feeds ``to`` (056 sec.1).
+
+    A partial order, not a path: the page compiler places the modules in an
+    order that respects every edge, and a page that states no edge is read in
+    module-name order. ``main_path`` marks the edge the reader is meant to
+    follow — the one case where the cross-module connection may be drawn as a
+    whole wire instead of naming the net at both ends (056 sec.2).
+    """
+
+    from_module: str
+    to_module: str
+    main_path: bool = False
 
 
 @dataclass
@@ -201,6 +271,10 @@ class PresentationSpec:
     """The whole presentation intent, in normal form."""
 
     modules: list[PresentationModule] = field(default_factory=list)
+    #: Module-level flow directions (056 sec.1). A partial order over module ids:
+    #: the page compiler reads it to order the page and to find the edges it may
+    #: wire as one whole connection. Empty = read the modules in name order.
+    flow: list[FlowEdge] = field(default_factory=list)
     main_paths: list[PresentationPath] = field(default_factory=list)
     feedback_paths: list[PresentationPath] = field(default_factory=list)
     #: net id -> one of :data:`PORT_DIRECTIONS`. The same vocabulary the
@@ -225,17 +299,51 @@ class PresentationSpec:
         """The preferred side for a role, or "" when the spec has no preference."""
         return self.side_preferences.get(role, "")
 
+    def module(self, module_id: str) -> PresentationModule | None:
+        """The module with this id, or ``None``."""
+        for item in self.modules:
+            if item.id == module_id:
+                return item
+        return None
+
+    def modules_of_part(self, part_id: str) -> list[str]:
+        """Every module that claims this part — one, none, or the contradiction."""
+        return [item.id for item in self.modules if part_id in item.parts]
+
+    def sides_for_module(self, module: PresentationModule) -> dict[str, str]:
+        """The sides a module draws with: the document's, overridden by its own."""
+        merged = dict(self.side_preferences)
+        merged.update(module.side_preferences)
+        return merged
+
+    def main_path_edges(self) -> list[FlowEdge]:
+        """The flow edges marked `mainPath` (056 sec.2's whole-wire exception)."""
+        return [edge for edge in self.flow if edge.main_path]
+
     # --------------------------------------------------------------- JSON
 
     def to_jsonable(self) -> dict[str, Any]:
-        """Coordinates appear exactly once, under `userLocks`."""
+        """Coordinates appear exactly once, under `userLocks`.
+
+        The per-module `grammarRef` / `presentation` and the top-level `flow`
+        are written **only when stated**: a document that says nothing new
+        serialises exactly as it did before the page layer existed, which is what
+        keeps an existing spec's digest (and therefore every plan compiled from
+        it) byte-identical (053B's scene hashes are a contract).
+        """
         return {
             "kind": PRESENTATION_SPEC_KIND,
             "specVersion": self.spec_version,
-            "modules": [
-                {"id": module.id, "parts": list(module.parts), "role": module.role}
-                for module in self.modules
-            ],
+            "modules": [_module_json(module) for module in self.modules],
+            **(
+                {"flow": [
+                    {"from": edge.from_module, "to": edge.to_module,
+                     "mainPath": edge.main_path}
+                    for edge in self.flow
+                ]}
+                if self.flow
+                else {}
+            ),
             "mainPaths": [_path_json(path) for path in self.main_paths],
             "feedbackPaths": [_path_json(path) for path in self.feedback_paths],
             "portRoles": dict(self.port_roles),
@@ -274,6 +382,7 @@ class PresentationSpec:
             )
         return cls(
             modules=_modules_from(root),
+            flow=_flow_from(root),
             main_paths=_paths_from(root, "mainPaths"),
             feedback_paths=_paths_from(root, "feedbackPaths"),
             port_roles=_port_roles(root),
@@ -327,6 +436,18 @@ def _path_json(path: PresentationPath) -> dict[str, Any]:
     return {"id": path.id, "chain": list(path.chain), "note": path.note}
 
 
+def _module_json(module: PresentationModule) -> dict[str, Any]:
+    """One module, with its overrides written only when it states them."""
+    out: dict[str, Any] = {
+        "id": module.id, "parts": list(module.parts), "role": module.role,
+    }
+    if module.grammar_ref:
+        out["grammarRef"] = module.grammar_ref
+    if module.side_preferences:
+        out["presentation"] = {"sidePreferences": dict(module.side_preferences)}
+    return out
+
+
 def _modules_from(root: dict[str, Any]) -> list[PresentationModule]:
     out: list[PresentationModule] = []
     seen: set[str] = set()
@@ -350,7 +471,98 @@ def _modules_from(root: dict[str, Any]) -> list[PresentationModule]:
             id=module_id,
             parts=parts,
             role=_text(body.get("role"), f"{spot}.role", required=True),
+            grammar_ref=_module_grammar(body.get("grammarRef"), f"{spot}.grammarRef"),
+            side_preferences=_module_presentation(body.get("presentation"), spot),
         ))
+    return out
+
+
+def _module_grammar(value: Any, where: str) -> str:
+    """A module's own grammar, or "" for "the document's"."""
+    if value is None or value == "":
+        return ""
+    grammar = _text(value, where, required=True)
+    if grammar not in GRAMMARS:
+        raise PresentationSpecError(
+            f"{where} is {grammar!r}; this build knows {', '.join(GRAMMARS)} — a "
+            "module states one of them or states nothing and inherits the "
+            "document's grammarRef"
+        )
+    return grammar
+
+
+def _module_presentation(value: Any, where: str) -> dict[str, str]:
+    """A module's `presentation` overrides: this build reads side preferences."""
+    if value is None:
+        return {}
+    body = _object(value, f"{where}.presentation")
+    _check_keys(body, MODULE_PRESENTATION_KEYS, f"{where}.presentation")
+    raw = body.get("sidePreferences")
+    if raw is None:
+        return {}
+    sides = _object(raw, f"{where}.presentation.sidePreferences")
+    out: dict[str, str] = {}
+    for role, side in sides.items():
+        if side not in SIDES:
+            raise PresentationSpecError(
+                f"{where}.presentation.sidePreferences.{role} is {side!r}; "
+                f"expected one of {', '.join(SIDES)}"
+            )
+        out[str(role)] = side
+    return out
+
+
+def _flow_from(root: dict[str, Any]) -> list[FlowEdge]:
+    """The module-level flow edges, in the two forms the spec accepts.
+
+    A plain pair (``["pwr", "sense"]``) states direction and nothing else, and
+    the object form adds the one thing a pair cannot carry — `mainPath`. Both
+    normalise to :class:`FlowEdge`, so the compiler reads one shape.
+    """
+    out: list[FlowEdge] = []
+    seen: set[tuple[str, str, bool]] = set()
+    for index, item in enumerate(_list(root.get("flow"), "flow")):
+        spot = f"flow[{index}]"
+        if isinstance(item, list):
+            if len(item) != 2:
+                raise PresentationSpecError(
+                    f"{spot} is a list of {len(item)} entr(ies); the short form of "
+                    "a flow edge is a pair ['<from module>', '<to module>'] — the "
+                    "object form {'from': …, 'to': …, 'mainPath': …} carries the "
+                    "main-path mark"
+                )
+            edge = FlowEdge(
+                from_module=_text(item[0], f"{spot}[0]", required=True),
+                to_module=_text(item[1], f"{spot}[1]", required=True),
+            )
+        else:
+            body = _object(item, spot)
+            _check_keys(body, _FLOW_EDGE_KEYS, spot)
+            mark = body.get("mainPath", False)
+            if not isinstance(mark, bool):
+                raise PresentationSpecError(
+                    f"{spot}.mainPath must be a boolean, got {mark!r}"
+                )
+            edge = FlowEdge(
+                from_module=_text(body.get("from"), f"{spot}.from", required=True),
+                to_module=_text(body.get("to"), f"{spot}.to", required=True),
+                main_path=mark,
+            )
+        if edge.from_module == edge.to_module:
+            raise PresentationSpecError(
+                f"{spot} flows from {edge.from_module!r} to itself — a group does "
+                "not feed itself, and an edge like this says nothing about order"
+            )
+        key = (edge.from_module, edge.to_module, edge.main_path)
+        if key in seen:
+            raise PresentationSpecError(
+                f"{spot} repeats the edge "
+                f"{edge.from_module!r} -> {edge.to_module!r}"
+                + (" (mainPath)" if edge.main_path else "")
+                + " — one direction is one edge"
+            )
+        seen.add(key)
+        out.append(edge)
     return out
 
 

@@ -162,10 +162,17 @@ __all__ = [
     "RejectedCandidate",
     "check_grammar",
     "compile",
+    "compress_path",
+    "flag_rotation",
     "font_text_box",
+    "lattice_router",
     "layered_key",
+    "one_bend_route",
+    "profile_book",
     "rank_key",
+    "span_free",
     "text_width",
+    "wire_junctions",
 ]
 
 
@@ -3583,6 +3590,36 @@ def _junctions(segments: Sequence[LayoutSegment]) -> list[LayoutJunction]:
                     net=segment.net, x=point[0], y=point[1],
                 ))
     return out
+
+
+# ------------------------------------------- the primitives a page layer reuses
+#
+# The page-level compiler (056) draws the wires that cross a module boundary with
+# the *same* lattice search, the same one-bend shortcut and the same junction rule
+# a module's own drawing uses — reusing them rather than growing a second
+# implementation, because two searches would eventually disagree about what a
+# legal wire is and the disagreement would show up as a drawing the checker
+# refuses. The names below are those objects under public names; nothing here
+# computes anything, so an existing compile cannot be affected by their presence.
+#: The orthogonal lattice search, with its obstacle, blocked-point and
+#: foreign-edge rules (056 sec.2's page router is this one).
+lattice_router = _Router
+#: The one-bend shortcut tried before the search.
+one_bend_route = _elbow_route
+#: "Can this straight wire be drawn as it is?" — boxes, foreign runs, foreign
+#: anchors all considered.
+span_free = _span_free
+#: Collapse collinear runs, so a wire's vertices are its bends.
+compress_path = _compress
+#: Every wire vertex that tees into another wire's span — the dots the plan must
+#: declare.
+wire_junctions = _junctions
+#: The compass rotation a flag is drawn at (its stem points away from the pin).
+flag_rotation = _flag_rotation
+#: ``symbolRef -> SymbolProfile``, with the refusal of a book that disagrees with
+#: itself: a part checked against the wrong symbol's pins is the one silent
+#: failure mode this pipeline refuses to have.
+profile_book = _profile_book
 
 
 def _plan_bbox(ctx: _Context, plan: LayoutPlan) -> Box:

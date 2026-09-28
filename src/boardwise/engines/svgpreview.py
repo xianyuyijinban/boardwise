@@ -66,6 +66,7 @@ _COLOURS = {
     "text": "#444444",
     "textBox": "#e0a800",
     "keepout": "#cc3333",
+    "frame": "#7c3aed",
     "caption": "#222222",
 }
 
@@ -76,6 +77,7 @@ def render_svg(
     *,
     page_box: Box | None = None,
     keepouts: Sequence[Box] = (),
+    frames: Sequence[tuple[str, Box]] = (),
     title: str = "",
     scale: float = 1.0,
 ) -> str:
@@ -85,7 +87,10 @@ def render_svg(
     turns a placed origin into a visible body, a pin and a glyph. ``page_box``
     states the sheet the drawing is meant for; when it is ``None`` the drawing's
     own bounding box (plus :data:`PREVIEW_MARGIN`) becomes the frame, which is
-    the same convention the compiler uses for "no page was stated".
+    the same convention the compiler uses for "no page was stated". ``frames`` are
+    the named module frames of a *page* (056), drawn as outlines so a reviewer can
+    see which group owns which part of the sheet; the parameter defaults to empty,
+    and a single drawing's preview is byte-identical whether or not it is used.
     """
     if scale <= 0:
         raise ValueError(f"scale must be positive, got {scale!r}")
@@ -122,6 +127,13 @@ def render_svg(
     for keep in keepouts:
         parts.append(rect(keep, fill="none", stroke=_COLOURS["keepout"],
                           **{"stroke-dasharray": "4 3"}))
+    for name, frame in frames:
+        parts.append(rect(frame, fill="none", stroke=_COLOURS["frame"],
+                          **{"stroke-dasharray": "6 4", "stroke-width": "1.4"}))
+        parts.append(
+            f'<text x="{x(frame[0]) + 5:.3f}" y="{y(frame[3]) + 13:.3f}" '
+            f'fill="{_COLOURS["frame"]}" font-size="12">{escape(str(name))}</text>'
+        )
 
     for symbol in layout_plan.power_symbols:
         profile = book.get(symbol.symbol_ref)
