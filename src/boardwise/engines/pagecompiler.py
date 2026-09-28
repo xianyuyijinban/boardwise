@@ -150,6 +150,8 @@ from .grammar.base import (
 __all__ = [
     "FRAME_PADDING",
     "GAP_LADDER",
+    "KIND_PAGE_LOCK_CONFLICT",
+    "KIND_PAGE_LOCK_CONTRADICTION",
     "PAGE_COMPILER_NAME",
     "PageCandidate",
     "PageCompileBudget",
@@ -157,6 +159,7 @@ __all__ = [
     "PageRejection",
     "compile_page",
     "page_layered_key",
+    "wants_page",
 ]
 
 #: What a caller writes into the page's notes and its evidence. The compiler is
@@ -195,6 +198,41 @@ PAGE_SEARCH_MARGIN = 60.0
 #: a crowded page can be given more room without ever squeezing text (the same
 #: idea as the module compiler's spacing ladder).
 GAP_LADDER: tuple[float, ...] = (1.0, 1.6)
+
+#: The two page-lock refusals (057 sec.3). Page-compiler kinds, not checker
+#: kinds: a lock that cannot be honoured is decided while the frames are being
+#: placed, before there is a page for `readability.check_page` to read — and the
+#: nine's own `user-lock-violated` still re-checks every honoured lock on the
+#: merged drawing, independently.
+#:
+#: ``page-lock-contradiction`` — two page locks in one module ask for two
+#: different module origins (the module's own drawing puts the two parts at a
+#: distance the two lock points do not have).
+#: ``page-lock-conflict`` — the origin a lock derives puts the module's frame off
+#: the page, on a keep-out, on another locked module, or leaves the unlocked
+#: modules no room.
+KIND_PAGE_LOCK_CONTRADICTION = "page-lock-contradiction"
+KIND_PAGE_LOCK_CONFLICT = "page-lock-conflict"
+
+
+def wants_page(presentation_spec: PresentationSpec) -> bool:
+    """Does this presentation ask for a *page* rather than a single drawing?
+
+    057 sec.1's rule ("PresentationSpec 有 modules[] 即走页级"), read so that the
+    single-module documents that exist keep their path: 053/054's specs group
+    their parts into **one** module and have always been compiled as one
+    drawing (the divider fixture 054 lands is exactly that). What only a page can
+    mean is: two or more modules, a module-level ``flow``, a module that states
+    its own grammar, or a lock measured on the page. Any one of them routes the
+    document to :func:`compile_page`; none of them keeps it on
+    `drawcompiler.compile`, whose output is then byte-for-byte what it was.
+    """
+    return (
+        len(presentation_spec.modules) >= 2
+        or bool(presentation_spec.flow)
+        or any(module.grammar_ref for module in presentation_spec.modules)
+        or bool(presentation_spec.page_locks())
+    )
 
 
 class PageCompileError(ValueError):
@@ -237,6 +275,16 @@ class PageCompileBudget:
     module_budget: drawcompiler.CompileBudget = field(
         default_factory=drawcompiler.CompileBudget
     )
+    #: 057 sec.2: may the arrangement be *moved* off the keep-outs, as a rigid
+    #: body, when its anchored position lands on one? Off by default, and the
+    #: default is 056's contract: a keep-out is a reserved region the anchored
+    #: arrangement must not touch (056 scene 6 refuses exactly that). A page drawn
+    #: onto a sheet that already holds a drawing is the other reading: the
+    #: keep-outs are the census of what is there (`drawapply.census_keepouts`),
+    #: and the new drawing belongs in the room that is left — so `draw plan` on a
+    #: live page turns this on. Nothing is squeezed either way: the frames, gaps
+    #: and texts stay what they are, only the arrangement's translation changes.
+    relocate_around_keepouts: bool = False
 
 
 @dataclass
@@ -461,8 +509,10 @@ def compile_page(
         + f"), frame padding {budget.frame_padding:g}"
     )
 
-    # 1. the page's own facts: who owns which part, where the flow points.
+    # 1. the page's own facts: who owns which part, where the flow points, and
+    #    whether every page lock names a placed part at a point of this page.
     blockers = _reference_failures(circuit_spec, presentation_spec)
+    blockers.extend(_page_lock_failures(circuit_spec, presentation_spec, budget))
     if blockers:
         result.failures = blockers
         return result
@@ -706,6 +756,67 @@ def _reference_failures(
     return out
 
 
+def _lock_name(lock: UserLock) -> str:
+    """How a refusal names a lock: the path an author finds it under."""
+    scope = "page" if lock.is_page else "module"
+    return f"presentationSpec.userLocks[{lock.part_id}@{scope}]"
+
+
+def _page_lock_failures(
+    circuit_spec: CircuitSpec,
+    presentation_spec: PresentationSpec,
+    budget: PageCompileBudget,
+) -> list[GrammarFailure]:
+    """The facts about a page lock that no arrangement can change (057 sec.3).
+
+    A page lock names a part (it has to exist and sit in a module — the lock
+    moves *that module*) and a point (it has to be on the page: "锁点必须落页内").
+    Both are input facts, checked once, before any module is compiled; what a
+    lock does to a particular arrangement is the placement's question.
+    """
+    out: list[GrammarFailure] = []
+    parts = set(circuit_spec.part_ids())
+    page = budget.page_box
+    assert page is not None  # `_check_budget` refuses a page without one
+    for lock in presentation_spec.page_locks():
+        name = _lock_name(lock)
+        if lock.part_id not in parts:
+            out.append(GrammarFailure(
+                category=FAILURE_FACTS_MISSING,
+                subject=name,
+                detail=(
+                    f"the page lock names {lock.part_id}, which CircuitSpec.parts "
+                    "does not declare — a lock moves a part's module, and there is "
+                    "no part to move"
+                ),
+                action="fix the lock's partId, or drop the lock",
+            ))
+            continue
+        if not presentation_spec.modules_of_part(lock.part_id):
+            # The part-in-no-module refusal of `_reference_failures` names it
+            # already; a second line here would be the same fact twice.
+            continue
+        if not (
+            page[0] - 1e-6 <= lock.x <= page[2] + 1e-6
+            and page[1] - 1e-6 <= lock.y <= page[3] + 1e-6
+        ):
+            out.append(GrammarFailure(
+                category=FAILURE_PRESENTATION_POOR,
+                subject=name,
+                detail=(
+                    f"the page lock puts {lock.part_id} at "
+                    f"{_point_text((lock.x, lock.y))}, which is outside the page "
+                    f"{page[0]:g},{page[1]:g}–{page[2]:g},{page[3]:g} — a lock point "
+                    "is a point of the page (057 sec.3)"
+                ),
+                action=(
+                    "move the lock point onto the page, or state the page the lock "
+                    "was measured on (--page-box)"
+                ),
+            ))
+    return out
+
+
 def _flow_cycle(
     flow: Sequence[FlowEdge], module_ids: Iterable[str]
 ) -> list[str]:
@@ -885,9 +996,12 @@ def _module_view(
         ],
         label_policy=presentation_spec.label_policy,
         side_preferences=presentation_spec.sides_for_module(module),
+        # Module locks only: a page lock is measured on a page the module
+        # compile does not have, and it is honoured by the placement (the
+        # module's origin), never by bending the module's own drawing (057 sec.3).
         user_locks=[
             lock for lock in presentation_spec.user_locks
-            if lock.part_id in part_ids
+            if lock.part_id in part_ids and not lock.is_page
         ],
     )
     return sub_circuit, sub_presentation
@@ -1109,9 +1223,11 @@ def _assemble(
     """One variant -> one gated page, or the measured reason there is none."""
     index = {name: position for position, name in enumerate(variant.order)}
     assembled: list[_Assembled] = []
+    sources: dict[str, LayoutPlan] = {}
     for module in ctx.modules:
         candidates = ctx.results[module.id].candidates
         source = candidates[min(variant.generation, len(candidates) - 1)]
+        sources[module.id] = source
         plan = _copy_plan(source)
         ports, failure = _module_ports(ctx, module, plan, variant, index)
         if failure is not None:
@@ -1125,11 +1241,15 @@ def _assemble(
         ))
     by_id = {item.module.id: item for item in assembled}
 
-    offsets, placed_frames, failure, need = _place(
-        assembled, variant, ctx.budget
+    locked, failure = _lock_origins(ctx, variant, sources)
+    if failure is not None:
+        return None, failure, [], None, KIND_PAGE_LOCK_CONTRADICTION
+
+    offsets, placed_frames, failure, need, kind = _place(
+        assembled, variant, ctx.budget, locked
     )
     if failure is not None:
-        return None, failure, [], need, ""
+        return None, failure, [], need, kind
 
     drawn = _merge(by_id, variant.order, offsets)
     wired = _wire_shared_nets(ctx, variant, index, by_id, drawn, placed_frames)
@@ -1652,10 +1772,13 @@ def _module_boxes(plan: LayoutPlan, book: Mapping[str, SymbolProfile]) -> list[B
 
 
 def _place(
-    assembled: Sequence[_Assembled], variant: _Variant, budget: PageCompileBudget
+    assembled: Sequence[_Assembled],
+    variant: _Variant,
+    budget: PageCompileBudget,
+    locked: Mapping[str, tuple[tuple[float, float], tuple[UserLock, ...]]] | None = None,
 ) -> tuple[
     dict[str, tuple[float, float]], dict[str, Box], GrammarFailure | None,
-    tuple[float, float] | None,
+    tuple[float, float] | None, str,
 ]:
     """Frames on the page's grid, flow order respected, gaps kept.
 
@@ -1670,11 +1793,117 @@ def _place(
     enforces, because every module's offset is snapped to the compilation lattice
     (a module's pin tips have to stay on one lattice for the cross-module wires to
     exist at all) and snapping can move two frames up to a step closer together.
+
+    Two 057 additions, each a no-op when it does not apply (so a page with no page
+    lock and no relocation is placed exactly as 056 placed it):
+
+    * **page locks** (``locked``: module -> the origin its locks derive): a locked
+      module sits at that origin, exactly (never snapped — the locked part has to
+      land *on* the lock point), and the unlocked modules are arranged in the
+      variant's grid shape around it: the locked frames are obstacles, kept a
+      module gap away;
+    * **relocation around keep-outs** (``budget.relocate_around_keepouts``): an
+      arrangement whose anchored position lands on a keep-out is translated, as a
+      rigid body, to the nearest lattice position where it does not
+      (:func:`_relocate`). When there is none it stays where the anchor put it,
+      and the gate refuses it with 056's own `page-keepout-conflict` — the
+      refusal a caller reads is the same one, now meaning "nowhere on the page".
     """
-    order = variant.order
-    columns = max(1, min(variant.columns, len(order)))
+    page = budget.page_box
+    assert page is not None  # `_check_budget` refuses a page without one
+    inner = (
+        page[0] + PAGE_MARGIN, page[1] + PAGE_MARGIN,
+        page[2] - PAGE_MARGIN, page[3] - PAGE_MARGIN,
+    )
+    relocate = budget.relocate_around_keepouts and bool(budget.keepouts)
+    if not locked:
+        offsets, frames, failure, need = _arrange(
+            assembled, variant.order, variant.columns, variant.rung, budget
+        )
+        if failure is None and relocate:
+            moved = _relocate(offsets, frames, list(budget.keepouts), inner, budget.grid)
+            if moved is not None:
+                offsets, frames = moved
+        return offsets, frames, failure, need, ""
+
+    by_id = {item.module.id: item for item in assembled}
+    offsets = {}
+    frames = {}
+    for name in sorted(locked):
+        origin, _locks = locked[name]
+        frame = by_id[name].frame
+        offsets[name] = origin
+        frames[name] = (
+            frame[0] + origin[0], frame[1] + origin[1],
+            frame[2] + origin[0], frame[3] + origin[1],
+        )
+    failure = _locked_frame_failure(frames, locked, inner, budget)
+    if failure is not None:
+        return offsets, frames, failure, None, KIND_PAGE_LOCK_CONFLICT
+
+    free = [item for item in assembled if item.module.id not in locked]
+    if free:
+        order = tuple(name for name in variant.order if name not in locked)
+        free_offsets, free_frames, failure, need = _arrange(
+            free, order, min(variant.columns, len(order)), variant.rung, budget
+        )
+        if failure is not None:
+            return offsets, frames, failure, need, ""
+        walls = [
+            _grow(box, budget.module_gap + budget.grid)
+            for _name, box in sorted(frames.items())
+        ]
+        obstacles = walls + (list(budget.keepouts) if relocate else [])
+        moved = _relocate(free_offsets, free_frames, obstacles, inner, budget.grid)
+        if moved is None:
+            names = sorted({
+                name for name, box in frames.items()
+                for placed in free_frames.values()
+                if _overlaps(_grow(box, budget.module_gap), placed)
+            }) or sorted(frames)
+            return offsets, frames, _lock_failure(
+                [lock for name in names for lock in locked[name][1]],
+                (
+                    f"{variant.label}: the unlocked module(s) "
+                    + ", ".join(sorted(free_frames))
+                    + " find no position on the page that keeps a "
+                    f"{budget.module_gap:g}-unit gap from the locked module(s) "
+                    + ", ".join(names)
+                    + (" and stays clear of the keep-outs" if relocate else "")
+                    + " — the locks leave no room for the rest of the page"
+                ),
+                "move the lock point so the locked module leaves room for the "
+                "others, state a larger page, or lock the other modules too",
+            ), None, KIND_PAGE_LOCK_CONFLICT
+        free_offsets, free_frames = moved
+        offsets.update(free_offsets)
+        frames.update(free_frames)
+    occupied = _union(frames.values())
+    need = (
+        occupied[2] - occupied[0] + 2 * PAGE_MARGIN,
+        occupied[3] - occupied[1] + 2 * PAGE_MARGIN,
+    )
+    return offsets, frames, None, need, ""
+
+
+def _arrange(
+    assembled: Sequence[_Assembled],
+    order: Sequence[str],
+    columns_wanted: int,
+    rung: float,
+    budget: PageCompileBudget,
+) -> tuple[
+    dict[str, tuple[float, float]], dict[str, Box], GrammarFailure | None,
+    tuple[float, float] | None,
+]:
+    """056's grid arrangement of `assembled` in `order`, anchored top-left.
+
+    Split out of :func:`_place` unchanged, so the modules a page lock does not
+    pin are arranged exactly the way every module was before 057.
+    """
+    columns = max(1, min(columns_wanted, len(order)))
     rows = math.ceil(len(order) / columns)
-    gap = variant.rung * budget.module_gap + budget.grid
+    gap = rung * budget.module_gap + budget.grid
     by_id = {item.module.id: item for item in assembled}
     widths: list[float] = []
     heights: list[float] = []
@@ -1739,6 +1968,209 @@ def _place(
             ),
         ), need
     return offsets, frames, None, need
+
+
+def _lock_origins(
+    ctx: _Context, variant: _Variant, sources: Mapping[str, LayoutPlan]
+) -> tuple[
+    dict[str, tuple[tuple[float, float], tuple[UserLock, ...]]], GrammarFailure | None
+]:
+    """``module -> (origin, locks)`` for every module a page lock pins (057 sec.3).
+
+    For this variant's generation the module's own drawing puts the locked part
+    at L (module-local); the page puts the module at ``P − L``, so the part lands
+    on the lock point P in every candidate — different generations, different
+    origins, which is the lock doing its job (it constrains the part, not the
+    frame). Two locks in one module that derive two origins cannot both hold in
+    this generation: that is a contradiction, named with both locks.
+    """
+    owner: dict[str, str] = {}
+    for module in ctx.modules:
+        for part_id in module.parts:
+            owner[part_id] = module.id
+    derived: dict[str, list[tuple[tuple[float, float], UserLock]]] = {}
+    for lock in ctx.presentation.page_locks():
+        module_id = owner.get(lock.part_id)
+        if module_id is None:
+            continue
+        part = sources[module_id].part(lock.part_id)
+        if part is None:
+            continue
+        origin = (round(lock.x - part.x, 6), round(lock.y - part.y, 6))
+        derived.setdefault(module_id, []).append((origin, lock))
+    out: dict[str, tuple[tuple[float, float], tuple[UserLock, ...]]] = {}
+    for module_id in sorted(derived):
+        rows = derived[module_id]
+        first_origin, first_lock = rows[0]
+        for origin, lock in rows[1:]:
+            if abs(origin[0] - first_origin[0]) > 1e-6 or abs(
+                origin[1] - first_origin[1]
+            ) > 1e-6:
+                return {}, GrammarFailure(
+                    category=FAILURE_PRESENTATION_POOR,
+                    subject=f"{_lock_name(first_lock)} + {_lock_name(lock)}",
+                    detail=(
+                        f"{variant.label}: module {module_id!r} is pinned by two page "
+                        f"locks that disagree — {first_lock.part_id} at "
+                        f"{_point_text((first_lock.x, first_lock.y))} puts the "
+                        f"module's origin at {_point_text(first_origin)}, "
+                        f"{lock.part_id} at {_point_text((lock.x, lock.y))} puts it "
+                        f"at {_point_text(origin)}: the module's own drawing keeps "
+                        "the two parts at a distance the two lock points do not have"
+                    ),
+                    action=(
+                        "keep one of the two page locks, or move a lock point so "
+                        "the two agree with the module's drawing (or lock the "
+                        "module's inner arrangement with module locks too)"
+                    ),
+                )
+        out[module_id] = (first_origin, tuple(lock for _origin, lock in rows))
+    return out, None
+
+
+def _locked_frame_failure(
+    frames: Mapping[str, Box],
+    locked: Mapping[str, tuple[tuple[float, float], tuple[UserLock, ...]]],
+    inner: Box,
+    budget: PageCompileBudget,
+) -> GrammarFailure | None:
+    """Can the locked frames stand where their locks put them? (057 sec.3)
+
+    Three ways they cannot, each naming the lock(s) that caused it — the lock
+    takes part in the ranking with no privilege, so a candidate it makes illegal
+    is refused rather than bent: a frame off the page, a frame on a keep-out,
+    two locked frames closer than the module gap.
+    """
+    for name in sorted(frames):
+        box = frames[name]
+        locks = locked[name][1]
+        if (
+            box[0] < inner[0] - 1e-6 or box[1] < inner[1] - 1e-6
+            or box[2] > inner[2] + 1e-6 or box[3] > inner[3] + 1e-6
+        ):
+            return _lock_failure(
+                list(locks),
+                (
+                    f"the page lock(s) put module {name!r}'s frame at "
+                    f"{_box_text(box)}, which leaves the page's usable area "
+                    f"{_box_text(inner)} (a {PAGE_MARGIN:g}-unit margin inside the "
+                    "sheet) — the module is a rigid body and is not cut to fit"
+                ),
+                "move the lock point further inside the page, or state a larger page",
+            )
+        for index, keep in enumerate(budget.keepouts):
+            if _overlaps(box, keep):
+                return _lock_failure(
+                    list(locks),
+                    (
+                        f"the page lock(s) put module {name!r}'s frame "
+                        f"{_box_text(box)} on keepouts[{index}] {_box_text(keep)} — "
+                        "a reserved region and a module cannot share the canvas"
+                    ),
+                    "move the lock point off the keep-out, or move the keep-out",
+                )
+    names = sorted(frames)
+    for position, left in enumerate(names):
+        for right in names[position + 1:]:
+            if _overlaps(_grow(frames[left], budget.module_gap), frames[right]):
+                return _lock_failure(
+                    list(locked[left][1]) + list(locked[right][1]),
+                    (
+                        f"the page locks put module {left!r} at "
+                        f"{_box_text(frames[left])} and module {right!r} at "
+                        f"{_box_text(frames[right])} — closer than the "
+                        f"{budget.module_gap:g}-unit module gap (or on top of each "
+                        "other)"
+                    ),
+                    "move one of the lock points so the two frames keep the module gap",
+                )
+    return None
+
+
+def _lock_failure(locks: Sequence[UserLock], detail: str, action: str) -> GrammarFailure:
+    names = sorted({_lock_name(lock) for lock in locks})
+    return GrammarFailure(
+        category=FAILURE_PRESENTATION_POOR,
+        subject=" + ".join(names),
+        detail=detail,
+        action=action,
+    )
+
+
+def _relocate(
+    offsets: Mapping[str, tuple[float, float]],
+    frames: Mapping[str, Box],
+    obstacles: Sequence[Box],
+    inner: Box,
+    grid: float,
+) -> tuple[dict[str, tuple[float, float]], dict[str, Box]] | None:
+    """The nearest lattice translation that takes the frames off every obstacle.
+
+    ``None`` when there is none inside the page; the frames unchanged when they
+    were clear already (so an arrangement that fits is left exactly where it was).
+    The group moves as one rigid body — a gap, a frame or a text size never
+    changes — and the candidate translations are the ones that put the group's
+    edge flush against an obstacle's edge (or leave it where it is, or push it to
+    the page's own edge), each snapped *away* from the obstacle onto the lattice:
+    those are the positions a rigid box can come to rest at. Ties are broken by
+    the smallest displacement, then the smallest vertical move, then left before
+    right, so two runs pick the same.
+    """
+    boxes = list(obstacles)
+    if not _collides(list(frames.values()), boxes):
+        return dict(offsets), dict(frames)
+    union = _union(frames.values())
+    low_x, high_x = inner[0] - union[0], inner[2] - union[2]
+    low_y, high_y = inner[1] - union[1], inner[3] - union[3]
+    xs = {0.0}
+    ys = {0.0}
+    for box in boxes:
+        xs.add(math.ceil((box[2] - union[0]) / grid - 1e-9) * grid)
+        xs.add(math.floor((box[0] - union[2]) / grid + 1e-9) * grid)
+        ys.add(math.ceil((box[3] - union[1]) / grid - 1e-9) * grid)
+        ys.add(math.floor((box[1] - union[3]) / grid + 1e-9) * grid)
+    xs.add(math.ceil(low_x / grid - 1e-9) * grid)
+    xs.add(math.floor(high_x / grid + 1e-9) * grid)
+    ys.add(math.ceil(low_y / grid - 1e-9) * grid)
+    ys.add(math.floor(high_y / grid + 1e-9) * grid)
+    shifts = sorted(
+        (
+            (dx, dy) for dx in xs for dy in ys
+            if low_x - 1e-6 <= dx <= high_x + 1e-6
+            and low_y - 1e-6 <= dy <= high_y + 1e-6
+        ),
+        key=lambda item: (abs(item[0]) + abs(item[1]), abs(item[1]), item[0], item[1]),
+    )
+    placed = list(frames.items())
+    for dx, dy in shifts:
+        moved = [
+            (box[0] + dx, box[1] + dy, box[2] + dx, box[3] + dy)
+            for _name, box in placed
+        ]
+        if _collides(moved, boxes):
+            continue
+        return (
+            {name: (offset[0] + dx, offset[1] + dy) for name, offset in offsets.items()},
+            {name: box for (name, _old), box in zip(placed, moved)},
+        )
+    return None
+
+
+def _collides(frames: Sequence[Box], obstacles: Sequence[Box]) -> bool:
+    """Does any frame share area with any obstacle? (the keep-out rule's own test)"""
+    if not frames:
+        return False
+    union = _union(frames)
+    for box in obstacles:
+        if not _overlaps(union, box):
+            continue
+        if any(_overlaps(frame, box) for frame in frames):
+            return True
+    return False
+
+
+def _box_text(box: Box) -> str:
+    return f"({box[0]:g}, {box[1]:g})–({box[2]:g}, {box[3]:g})"
 
 
 def _pull_inside(
@@ -1987,17 +2419,22 @@ def _route(
         if corridor[0] <= point[0] <= corridor[2]
         and corridor[1] <= point[1] <= corridor[3]
     )
-    router = drawcompiler.lattice_router(
+    router = _PageRouter(
         grid=grid,
         residue=residue,
         boxes=boxes,
         bounds=corridor,
     )
     router.blocked = set(blocked)
+    # Only the foreign wires the corridor holds: a step between two lattice nodes
+    # inside the corridor can only run along, turn on or cross a segment that
+    # reaches the corridor, so the rest is dead weight for every node's scan
+    # (the same filtering the obstacle boxes get above — 057 sec.7.2).
     router.edges = [
         (item.points[index], item.points[index + 1])
         for item in existing if item.net != net_id
         for index in range(len(item.points) - 1)
+        if _touches(_bounds(item.points[index:index + 2]), corridor)
     ]
     elbow = drawcompiler.one_bend_route(router, start, end, blocked)
     points = elbow
@@ -2031,6 +2468,55 @@ def _route(
     points = [start, *points[1:-1], end]
     del by_id
     return LayoutSegment(net=net_id, points=points), None
+
+
+class _PageRouter(drawcompiler.lattice_router):
+    """The module compiler's lattice search, with its per-node answers remembered.
+
+    057 sec.7.2 (the 10–14 s/variant hot spot): profiling scene 7's shape put the
+    whole cost in the search's per-step questions — "is this node a wall", "is
+    this step free", "is this node inside a foreign wire" — each of which scans
+    every obstacle box and every foreign edge, and each of which the Dijkstra asks
+    again for every arrival direction of the same node. The answers depend only
+    on the node (or the ordered pair of nodes) and on the furniture, which does
+    not change once the search starts, so they are remembered. **The rules are the
+    parent's own** (this class only caches their answers): the search visits the
+    same nodes in the same order and returns the same path, which is why the
+    module compiler's router is untouched and the page's wires are unchanged.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._walls: dict[tuple[int, int], bool] = {}
+        self._steps: dict[tuple[tuple[int, int], tuple[int, int]], bool] = {}
+        self._crossings: dict[tuple[int, int], tuple[int, int] | None] = {}
+
+    def _wall(self, node: tuple[int, int]) -> bool:
+        known = self._walls.get(node)
+        if known is None:
+            known = self._walls[node] = super()._wall(node)
+        return known
+
+    def _step_free(self, node: tuple[int, int], other: tuple[int, int]) -> bool:
+        key = (node, other)
+        known = self._steps.get(key)
+        if known is None:
+            known = self._steps[key] = super()._step_free(node, other)
+        return known
+
+    def _crossing(self, node: tuple[int, int]) -> tuple[int, int] | None:
+        if node in self._crossings:
+            return self._crossings[node]
+        found = self._crossings[node] = super()._crossing(node)
+        return found
+
+
+def _touches(left: Box, right: Box) -> bool:
+    """Do two boxes share a point (edges included)? A segment is a thin box."""
+    return (
+        left[0] <= right[2] + 1e-6 and right[0] <= left[2] + 1e-6
+        and left[1] <= right[3] + 1e-6 and right[1] <= left[3] + 1e-6
+    )
 
 
 def _corridor(
@@ -2161,7 +2647,7 @@ def _gate(
         return None, _page_failure(variant, page_check), [
             item.render() for item in page_check.hard_violations
         ], None, page_check.hard_violations[0].kind
-    view = _page_presentation_view(ctx, offsets)
+    view = _page_presentation_view(ctx, offsets, page.plan)
     drawing_check = readability.check(
         page.plan,
         ctx.circuit,
@@ -2305,7 +2791,9 @@ def _page_failure(variant: _Variant, checked: readability.CheckResult) -> Gramma
 
 
 def _page_presentation_view(
-    ctx: _Context, offsets: Mapping[str, tuple[float, float]]
+    ctx: _Context,
+    offsets: Mapping[str, tuple[float, float]],
+    merged: LayoutPlan | None = None,
 ) -> PresentationSpec:
     """The presentation as the *page* reads it: the locks translated with their modules.
 
@@ -2314,8 +2802,13 @@ def _page_presentation_view(
     page's version of the lock is the module-local one plus the module's own
     offset. Passing the untranslated locks to the nine would report every lock in
     the drawing as violated — the page would be measuring an engineer's coordinates
-    against a frame that did not exist when they were written (057 owns
-    page-level locks).
+    against a frame that did not exist when they were written.
+
+    A **page** lock (057 sec.3) is already in page coordinates and is passed as it
+    is — the nine's own `user-lock-violated` then checks, independently of the
+    placement that derived the origin, that the part really is on the lock point.
+    It pins a position, so its rotation is read from the drawing (the pose is the
+    module's, and a module lock on the same part still checks it).
     """
     owner: dict[str, str] = {}
     for module in ctx.modules:
@@ -2323,6 +2816,14 @@ def _page_presentation_view(
             owner[part_id] = module.id
     locks: list[UserLock] = []
     for lock in ctx.presentation.user_locks:
+        if lock.is_page:
+            part = merged.part(lock.part_id) if merged is not None else None
+            locks.append(UserLock(
+                part_id=lock.part_id, x=lock.x, y=lock.y,
+                rotation=part.rotation if part is not None else 0.0,
+                scope=lock.scope,
+            ))
+            continue
         dx, dy = offsets.get(owner.get(lock.part_id, ""), (0.0, 0.0))
         locks.append(UserLock(
             part_id=lock.part_id, x=lock.x + dx, y=lock.y + dy,
@@ -2365,6 +2866,11 @@ def _no_candidate_failures(result: PageCompileResult) -> list[GrammarFailure]:
     # main-path edge whose mark has to be dropped. Both are measured and named, and
     # reporting only one of them would send the caller back with half the answer.
     for kind in (
+        # 057 sec.3: a lock that makes every candidate illegal is named first —
+        # it is the input the author wrote to pin the page, so it is the first
+        # thing to reconsider ("全部非法 → presentation-poor 点名锁").
+        KIND_PAGE_LOCK_CONTRADICTION,
+        KIND_PAGE_LOCK_CONFLICT,
         readability.KIND_PAGE_KEEPOUT_CONFLICT,
         readability.KIND_MAIN_PATH_EDGE_NOT_WIRED,
     ):
