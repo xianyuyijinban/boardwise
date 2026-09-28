@@ -146,6 +146,35 @@ def test_the_capacitance_parser_requires_a_unit():
     assert parse_capacitance_farads("") is None
 
 
+def test_the_capacitance_parser_reads_the_greek_mu_spelling():
+    """Task 055: MICRO SIGN and GREEK SMALL LETTER MU are one unit to a reader
+    and two code points to Python.
+
+    ``re.IGNORECASE`` folds them together (both casefold to U+03BC), so the
+    Greek spelling *matched* the pattern and then reached the unit map as a key
+    it did not hold — ``KeyError: 'μf'`` out of the decap rule, where the
+    contract is "unreadable -> None". All three spellings below are what a
+    keyboard or an IME produces for the same capacitor value.
+    """
+    assert parse_capacitance_farads("22\u03bcF") == pytest.approx(2.2e-5)
+    assert parse_capacitance_farads("4.7\u03bcF") == pytest.approx(4.7e-6)
+    assert parse_capacitance_farads("4.7\u03bcf") == pytest.approx(4.7e-6)
+    # The same unit spelled with the capital mu, and with the micro sign.
+    assert parse_capacitance_farads("22\u039cF") == pytest.approx(2.2e-5)
+    assert parse_capacitance_farads("22\u00b5F") == pytest.approx(2.2e-5)
+    # The unit letter is still required: a Greek mu alone is a bare number.
+    assert parse_capacitance_farads("4.7\u03bc") is None
+
+
+def test_the_capacitance_parser_returns_none_for_units_it_does_not_read():
+    """The parser answers, it never raises (task 055): what it cannot read is
+    None — a rule reporting UNKNOWN is an answer, a traceback out of the review
+    path is not. The unit map's own totality is pinned by the Greek-mu cases
+    above, whose spelling reaches the lookup and must not find a ``KeyError``."""
+    for spelling in ("22uFarad", "22F", "22kF", "F", "22", ""):
+        assert parse_capacitance_farads(spelling) is None
+
+
 def test_the_eia_decoder_decodes_in_the_callers_unit():
     assert decode_eia_3digit("471", 1.0) == pytest.approx(470.0)
     assert decode_eia_3digit("104", 1e-12) == pytest.approx(1e-7)
