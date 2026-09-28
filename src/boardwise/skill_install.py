@@ -1,9 +1,19 @@
-"""Install (or remove) the user-level copy of SKILL.md (028 batch 3b).
+"""Install (or remove) the user-level copy of SKILL.md (028 batch 3b, 061).
 
 ``boardwise install-skill`` is the last step of the friend install path: the exe
 already carries SKILL.md (028 §二.1), so a machine with no repo can still put the
-agent-facing checklist where Kimi Code looks for it
-(``~/.kimi-code/skills/boardwise/SKILL.md``).
+agent-facing checklist where the agent reads it. Two agents read a user-level
+SKILL.md and they look in two different directories (issue #11):
+
+* Kimi Code → ``~/.kimi-code/skills/boardwise/SKILL.md``
+* Claude Code → ``~/.claude/skills/boardwise/SKILL.md``
+
+One file serves both: it is the same SKILL.md either way, and the frontmatter it
+already carries (``name`` + ``description``) is exactly what Claude Code keys
+off — so there is no content fork to keep in sync, only two destinations. The
+harness is therefore a *parameter* of every call here, never a hardcoded path:
+:data:`HARNESSES` is the list, and which of them a run touches is the caller's
+business (the CLI defaults to all of them).
 
 Three rules, and the second one is the point of the whole module:
 
@@ -30,10 +40,30 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-#: Where the user-level skill directory lives. ``BOARDWISE_SKILL_HOME`` overrides
-#: it — the same escape hatch shape as ``BOARDWISE_HOME`` for the daemon's state,
-#: and what lets a test drive the whole flow inside a tmp directory.
+#: The agent harnesses that read a user-level SKILL.md, in the order every run
+#: reports them. A second harness is two lines here (plus its own doctor line in
+#: the CLI) — which is the point: issue #11 was a harness the installer silently
+#: never wrote to, and the fix has to make the set of them visible, not implicit.
+HARNESSES: tuple[str, ...] = ("kimi", "claude")
+
+#: The harness's own directory under the home directory. Its existence *is* the
+#: signal that this harness is on this machine (see :func:`skill_statuses`),
+#: which is why it is named apart from the skill directory inside it: "nothing
+#: installed" and "harness not in use here" are different answers and doctor
+#: must not turn the second into an alarm.
+HARNESS_DIRS: dict[str, str] = {"kimi": ".kimi-code", "claude": ".claude"}
+
+#: Where the user-level skill directory lives, per harness. The override is the
+#: same escape hatch shape as ``BOARDWISE_HOME`` for the daemon's state, and what
+#: lets a test drive the whole flow inside a tmp directory. Each harness has its
+#: own variable and each only covers its own side — one env var redirecting both
+#: would make "install for Claude Code only" impossible to express in a test, and
+#: would let a stale exported value quietly write somewhere nobody asked for.
 SKILL_HOME_ENV = "BOARDWISE_SKILL_HOME"
+SKILL_HOME_ENVS: dict[str, str] = {
+    "kimi": SKILL_HOME_ENV,
+    "claude": "BOARDWISE_SKILL_HOME_CLAUDE",
+}
 
 #: The file name the user-level skill is expected to have.
 SKILL_NAME = "SKILL.md"
@@ -71,23 +101,163 @@ class UninstallOutcome:
     removed_directory: bool = False
 
 
-def skill_dir(home: Path | None = None) -> Path:
-    """The user-level skill directory, honouring :data:`SKILL_HOME_ENV`."""
+@dataclass(frozen=True)
+class SkillStatus:
+    """What is *at* one harness's skill path right now — doctor's raw material.
+
+    ``state`` is one of:
+
+    ``current``
+        the installed SKILL.md is byte-for-byte the one this build carries;
+    ``stale``
+        a SKILL.md is installed and it is *not* this build's — an older install,
+        or somebody's edit. The build's own copy is the authority (that is the
+        whole reason to install one), so this is worth saying out loud;
+    ``missing``
+        the harness is here, nothing is installed for it;
+    ``unreadable``
+        something is at the path and could not be read; ``reason`` carries the
+        OS message, because "cannot read it" without the reason is the kind of
+        dead end this module exists to avoid;
+    ``harness-absent``
+        the harness itself is not on this machine (no ``~/.kimi-code`` /
+        ``~/.claude``, and no override pointing at one), so there is nothing to
+        report about its skill. A *skip* in doctor's terms: not a fault.
+
+    Read-only by construction: this is a fact, and :func:`run_doctor` (the CLI's
+    pure half) decides what it is worth, which is why the judgement words —
+    "ok", "skipped" — are not in here.
+    """
+
+    harness: str
+    path: Path
+    state: str
+    reason: str = ""
+
+
+def _known_harness(harness: str) -> str:
+    """``harness`` unchanged, or ``ValueError`` — a typo must not pick a path.
+
+    Every entry point validates through here: a misspelled harness that fell
+    through to "the kimi default" would install into the wrong agent's directory
+    and report success, which is the class of silent wrong-place write this
+    module's rules are about.
+    """
+    if harness not in HARNESS_DIRS:
+        raise ValueError(
+            f"unknown harness {harness!r}; known harnesses: {', '.join(HARNESSES)}"
+        )
+    return harness
+
+
+def harness_dir(harness: str) -> Path:
+    """The harness's own directory (``~/.kimi-code`` / ``~/.claude``)."""
+    return Path.home() / HARNESS_DIRS[_known_harness(harness)]
+
+
+def skill_dir(home: Path | None = None, *, harness: str = "kimi") -> Path:
+    """The user-level skill directory for ``harness``, honouring its override.
+
+    Precedence is explicit argument → environment override → the harness's own
+    default location. ``home`` is how the tests and the CLI drive one exact
+    directory; the override is how a user with an unusual layout does.
+    """
     if home is not None:
         return Path(home)
-    override = os.environ.get(SKILL_HOME_ENV)
+    override = os.environ.get(SKILL_HOME_ENVS[_known_harness(harness)])
     if override:
         return Path(override)
-    return Path.home() / ".kimi-code" / "skills" / "boardwise"
+    return harness_dir(harness) / "skills" / "boardwise"
 
 
-def skill_path(home: Path | None = None) -> Path:
-    """The user-level SKILL.md itself."""
-    return skill_dir(home) / SKILL_NAME
+def skill_path(home: Path | None = None, *, harness: str = "kimi") -> Path:
+    """The user-level SKILL.md itself, for ``harness``."""
+    return skill_dir(home, harness=harness) / SKILL_NAME
 
 
-def install(source: Path, home: Path | None = None, *, today: str | None = None) -> InstallOutcome:
-    """Put ``source`` at the user-level SKILL.md, backing up anything different.
+def _harness_in_use(harness: str) -> bool:
+    """Does anything on this machine say this harness is used?
+
+    Two signals and either is enough:
+
+    * the harness's own directory exists (``~/.kimi-code`` / ``~/.claude``);
+    * the user pointed this harness at a skill directory of their own through its
+      override — somebody who exports ``BOARDWISE_SKILL_HOME_CLAUDE`` has said,
+      in the only way available, that this harness is theirs. Judging *that*
+      against a default home directory would report the harness absent for the
+      one person who was explicit about it (and would make every test that
+      drives the flow through the variable blind).
+
+    With neither signal, the harness is not installed and its skill is not
+    missing: it is not this machine's business. Doctor skips those instead of
+    printing a red line for an editor the user has never run.
+    """
+    if os.environ.get(SKILL_HOME_ENVS[harness]):
+        return True
+    return harness_dir(harness).is_dir()
+
+
+def _bundled_bytes(source: Path) -> bytes:
+    """The SKILL.md this build carries, or :class:`SkillInstallError`.
+
+    Shared by :func:`install` and :func:`skill_statuses` so both refuse the same
+    two things (an unreadable source, an empty one) with the same words. The
+    error is a ``RuntimeError``, which is also what ``resources.skill_md()``
+    raises for a broken bundle — doctor catches that one class for both.
+    """
+    source = Path(source)
+    try:
+        wanted = source.read_bytes()
+    except OSError as exc:
+        raise SkillInstallError(f"cannot read the bundled SKILL.md at {source}: {exc}") from exc
+    if not wanted:
+        raise SkillInstallError(f"the bundled SKILL.md at {source} is empty")
+    return wanted
+
+
+def skill_statuses(source: Path) -> tuple[SkillStatus, ...]:
+    """Judge every harness's installed copy against ``source`` — one per harness.
+
+    Offline and read-only: no harness is asked anything, the filesystem is the
+    whole evidence (061 §三). The two states that must not be conflated are
+    "this harness has nothing installed" (``missing``: a fault worth a doctor
+    line) and "this harness is not on this machine" (``harness-absent``: a skip).
+    """
+    wanted = _bundled_bytes(source)
+    statuses: list[SkillStatus] = []
+    for harness in HARNESSES:
+        path = skill_path(harness=harness)
+        if not _harness_in_use(harness):
+            statuses.append(SkillStatus(harness, path, "harness-absent"))
+            continue
+        try:
+            installed = path.read_bytes()
+        except FileNotFoundError:
+            statuses.append(SkillStatus(harness, path, "missing"))
+        except OSError as exc:
+            # Present and unreadable (permissions, a directory in its place, a
+            # lock) — the one case where the OS message is the finding.
+            statuses.append(SkillStatus(harness, path, "unreadable", reason=str(exc)))
+        else:
+            statuses.append(
+                SkillStatus(harness, path, "current" if installed == wanted else "stale")
+            )
+    return tuple(statuses)
+
+
+def install(
+    source: Path,
+    home: Path | None = None,
+    *,
+    harness: str = "kimi",
+    today: str | None = None,
+) -> InstallOutcome:
+    """Put ``source`` at ``harness``'s user-level SKILL.md, backing up any different file.
+
+    ``harness`` only decides the destination: there is no per-harness variant of
+    the file (see the module docstring), and a run that wants both harnesses
+    calls this twice — one destination per call is what makes the CLI's exit code
+    able to say *which* side failed.
 
     ``today`` (``YYYY-MM-DD``) is injectable so the backup name is deterministic
     in tests; in the field it is today's date, which is what makes two backups on
@@ -96,13 +266,8 @@ def install(source: Path, home: Path | None = None, *, today: str | None = None)
     displaced twice.
     """
     source = Path(source)
-    destination = skill_path(home)
-    try:
-        wanted = source.read_bytes()
-    except OSError as exc:
-        raise SkillInstallError(f"cannot read the bundled SKILL.md at {source}: {exc}") from exc
-    if not wanted:
-        raise SkillInstallError(f"the bundled SKILL.md at {source} is empty")
+    destination = skill_path(home, harness=harness)
+    wanted = _bundled_bytes(source)
 
     previous: bytes | None = None
     if destination.exists():
@@ -138,14 +303,18 @@ def install(source: Path, home: Path | None = None, *, today: str | None = None)
     )
 
 
-def uninstall(home: Path | None = None) -> UninstallOutcome:
-    """Remove the user-level SKILL.md, and the skill directory if it empties.
+def uninstall(home: Path | None = None, *, harness: str = "kimi") -> UninstallOutcome:
+    """Remove ``harness``'s user-level SKILL.md, and the skill directory if it empties.
+
+    Same one-destination-per-call shape as :func:`install`: ``--uninstall`` for
+    both harnesses is two calls, so a failure on one side still leaves the other
+    one's result reportable.
 
     The directory is only removed when it is empty: a friend (or I) may have put
     something else in there, and a recursive delete is not what "--uninstall"
     promises.
     """
-    destination = skill_path(home)
+    destination = skill_path(home, harness=harness)
     directory = destination.parent
     if not destination.exists():
         return UninstallOutcome("absent", destination)

@@ -20,7 +20,7 @@ Gerber / BOM / boardwise / bridge / connector / 画布打标 / 改器件值。
 第一条命令（无编辑器也能跑，确认这份安装能不能干活）：
 
 ```bash
-boardwise doctor            # 7 项全绿 = 装好了；退出 0 = 全绿，1 = 有红项
+boardwise doctor            # 10 项全绿（skip 不算红）= 装好了；退出 0 = 全绿，1 = 有红项
 ```
 
 - **只做审查（离线）**：不需要编辑器、不需要 daemon。给一个 `.epro2` 就能跑 `review`。

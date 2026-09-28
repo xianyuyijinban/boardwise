@@ -980,17 +980,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="The same choice by window key, for a window that cannot name a project.",
     )
 
+    # The harness list comes from the module that writes to them: a harness added
+    # there (and given a doctor line) must not need a second edit here to be
+    # reachable from `--harness`, which is the shape the silently-missing Claude
+    # Code copy had (issue #11).
+    from . import skill_install
+
     install_skill = sub.add_parser(
         "install-skill",
-        help="Copy the bundled SKILL.md into the user-level Kimi Code skill directory.",
+        help=(
+            "Copy the bundled SKILL.md into the user-level skill directory of each "
+            "agent harness (Kimi Code, Claude Code)."
+        ),
         description=(
-            "Writes the SKILL.md this build carries to "
-            "~/.kimi-code/skills/boardwise/SKILL.md (override the directory with "
-            "BOARDWISE_SKILL_HOME). Idempotent: an identical file says 'already "
+            "Writes the SKILL.md this build carries where the agent reads it: "
+            "~/.kimi-code/skills/boardwise/SKILL.md for Kimi Code (override the "
+            "directory with BOARDWISE_SKILL_HOME) and "
+            "~/.claude/skills/boardwise/SKILL.md for Claude Code (override with "
+            "BOARDWISE_SKILL_HOME_CLAUDE). --harness picks one side; the default is "
+            "all of them, because this toolchain is meant to work under either agent "
+            "and one of them having no SOP is exactly the state that is impossible to "
+            "notice from the outside. Idempotent: an identical file says 'already "
             "current' and is left alone. A *different* file is backed up to "
             "SKILL.md.bak-<date> first — never silently overwritten. --uninstall "
-            "removes the installed copy, and the directory when it empties."
+            "removes the installed copy from the selected harnesses, and each "
+            "directory when it empties."
         ),
+    )
+    install_skill.add_argument(
+        "--harness", choices=(*skill_install.HARNESSES, "all"), default="all",
+        help="Which agent harness to act on (default: all of them).",
     )
     install_skill.add_argument(
         "--uninstall", action="store_true",
@@ -17615,6 +17634,12 @@ class DoctorProbe:
     #: The roots the offline scan looked under — for its skip message, so the
     #: reader learns *where* doctor looked instead of just that it found nothing.
     offline_editor_roots: tuple[str, ...] = ()
+    #: What `skill_install.skill_statuses()` found for each agent harness
+    #: (`skill_install.SkillStatus`, 061): one entry per harness, read offline
+    #: from the two user-level skill directories. Empty when the build could not
+    #: read its own SKILL.md — "not gathered" and "no harness installed" are
+    #: different answers, and the empty tuple means the former.
+    skill_statuses: tuple = ()
     #: The in-repo connector version (`connector/extension.json`), '' when absent.
     local_connector_version: str = ""
     ping: dict | None = None
@@ -17687,6 +17712,111 @@ def _editor_floor_label(*, offline: bool) -> str:
     return f"编辑器版本 ≥ {floor_text}"
 
 
+def _skill_label(harness: str) -> str:
+    """One skill line's label: which harness, and what is being judged."""
+    return f"审查 SOP（SKILL.md）已装进 {harness} 且与本构建一致"
+
+
+def _skill_checks(statuses: tuple) -> list[DoctorCheck]:
+    """One line per agent harness: is the SOP the agent reads the one this build ships?
+
+    061's whole point. `install-skill` used to write only Kimi Code's directory,
+    so a Claude Code user got the toolchain *without its SOP* and nothing said so.
+    The states come from `skill_install.skill_statuses()`, which is offline and
+    read-only, and they are told apart by what the reader should do:
+
+    * ``harness-absent`` — **skip**: the harness is not on this machine, so there
+      is nothing to conclude. A red line for an editor nobody runs is the false
+      alarm this report keeps being cleaned of;
+    * ``missing`` / ``stale`` — **red**: the agent is working without this
+      build's checklist (or with somebody's older copy, which is worse than
+      nothing because it reads as done);
+    * ``unreadable`` — **red**, with the OS reason in the detail: something is at
+      the path and cannot be read, which is a fact about this machine rather
+      than a guess, and the fix starts with looking at it;
+    * ``current`` — green.
+
+    An empty tuple means the *build* could not say what its own SKILL.md is
+    (`resources.skill_md()` raised, or the file is unreadable/empty), so nothing
+    can be compared: one skipped line, because "cannot tell" is not "wrong".
+    """
+    from . import skill_install
+
+    if not statuses:
+        return [
+            DoctorCheck(
+                name="skill",
+                label=_skill_label("本机的各个 agent"),
+                ok=True,
+                skipped=True,
+                detail=(
+                    "跳过：本构建没有可读的 SKILL.md（resources.skill_md() 读不到）"
+                    "—— 没有可比对的权威副本，这一项不作结论"
+                ),
+            )
+        ]
+
+    checks: list[DoctorCheck] = []
+    for status in statuses:
+        name = f"skill-{status.harness}"
+        if status.state == "harness-absent":
+            checks.append(
+                DoctorCheck(
+                    name=name,
+                    label=_skill_label(status.harness),
+                    ok=True,
+                    skipped=True,
+                    detail=(
+                        f"跳过：本机没有 {skill_install.harness_dir(status.harness)}"
+                        f"，{status.harness} 不在用 —— 这一项不作结论"
+                    ),
+                )
+            )
+            continue
+        if status.state == "current":
+            checks.append(
+                DoctorCheck(
+                    name=name,
+                    label=_skill_label(status.harness),
+                    ok=True,
+                    detail=f"{status.path} 与本构建带的 SKILL.md 逐字节一致",
+                )
+            )
+            continue
+        if status.state == "unreadable":
+            checks.append(
+                DoctorCheck(
+                    name=name,
+                    label=_skill_label(status.harness),
+                    ok=False,
+                    detail=f"{status.path} 读不出来：{status.reason}",
+                    fix=(
+                        "先看上面的 OS 原因（权限、文件被占用、路径上是个目录），"
+                        "再跑 `boardwise install-skill` 重装这一份"
+                    ),
+                )
+            )
+            continue
+        if status.state == "stale":
+            detail = (
+                f"{status.path} 装的是旧版/异版：与本构建带的 SKILL.md 不一致"
+                "—— 本构建带的才是权威（`install-skill` 会把旧的那份备份成 "
+                "SKILL.md.bak-<日期>）"
+            )
+        else:  # "missing"
+            detail = f"{status.path} 没有这个文件——{status.harness} 读不到审查 SOP"
+        checks.append(
+            DoctorCheck(
+                name=name,
+                label=_skill_label(status.harness),
+                ok=False,
+                detail=detail,
+                fix="boardwise install-skill",
+            )
+        )
+    return checks
+
+
 def run_doctor(p: DoctorProbe) -> list[DoctorCheck]:
     """Judge one :class:`DoctorProbe`. Pure: no socket, no daemon, no editor."""
     checks: list[DoctorCheck] = []
@@ -17695,7 +17825,9 @@ def run_doctor(p: DoctorProbe) -> list[DoctorCheck]:
     # Issue #3: the floor is the first thing to fix and was the last thing
     # decidable — it sat behind daemon → extension → .eext → restart → pairing.
     # The install tree answers it offline, so it is judged first and says what to
-    # do before any of the six lines below can even be read.
+    # do before any of the socket-bound lines below can even be read. (061 put the
+    # two skill lines between them: also offline, also answerable before anything
+    # is connected.)
     offline = _editor_version_key(p.offline_editor_version)
     running = _editor_version_key(p.editor_version)
     if not p.offline_editor_path and not p.offline_editor_version:
@@ -17782,6 +17914,12 @@ def run_doctor(p: DoctorProbe) -> list[DoctorCheck]:
                 ),
             )
         )
+
+    # The other offline answer, right behind the editor's (061): whether each
+    # agent on this machine reads the SOP this build ships. Offline like the
+    # version line and placed with it — before anything that needs a socket, so a
+    # machine with no daemon yet still learns that its agent has no SOP.
+    checks.extend(_skill_checks(p.skill_statuses))
 
     reachable = p.ping is not None
     checks.append(
@@ -18068,13 +18206,17 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     exit 1 otherwise, each line carrying its own fix. The whole point is the
     disconnected case — daemon down, extension not loaded, an old editor — so
     that case is the one built first: nothing here raises, and every check says
-    what it could not verify instead of crashing. The one line that needs no
-    socket is judged from the editor's install tree and printed first (issue #3):
-    upgrading the editor is the first fix, so it must not wait on the six that
-    follow it.
+    what it could not verify instead of crashing. The two lines that need no
+    socket are judged from this disk and printed first: the editor's install tree
+    (issue #3) and, since 061, whether each agent harness on this machine reads
+    the SKILL.md this build ships. Both are read here, before the socket is
+    touched, because they are exactly the answers a machine with nothing set up
+    yet can still give.
     """
     import asyncio
     import json
+
+    from . import resources, skill_install
 
     BridgeClient, BridgeError, port, token = _open_cli(args)
     probe = DoctorProbe(
@@ -18090,6 +18232,16 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     if scan.install is not None:
         probe.offline_editor_path = str(scan.install.path)
         probe.offline_editor_version = scan.install.version
+    # The second offline answer, gathered here for the same reason (061): the two
+    # user-level skill directories are files on this disk, and "did the install
+    # path everyone is told to run actually put the SOP where my agent looks?" is
+    # decidable before a socket exists. A build that cannot read its own SKILL.md
+    # leaves the field empty, and the doctor line for it is a skip — the bundle
+    # being broken is not a second thing to blame the user for.
+    try:
+        probe.skill_statuses = skill_install.skill_statuses(resources.skill_md())
+    except RuntimeError:
+        pass
 
     async def run() -> int:
         try:
@@ -18141,58 +18293,71 @@ def _local_version() -> str:
 
 
 def _cmd_install_skill(args: argparse.Namespace) -> int:
-    """Install (or remove) the user-level copy of SKILL.md (028 §三.2).
+    """Install (or remove) the user-level copy of SKILL.md, one harness at a time (028 §三.2, 061).
 
+    Every selected harness gets its own line and its own try, so a run that
+    cannot write one side still writes the other — and says which one failed.
     Exit codes: 0 for every outcome the user asked for — installed, updated,
     already current, removed, and "there was nothing to remove" — because a
     second run of an idempotent command is a success, not a failure. 1 is
-    reserved for a filesystem step that actually failed, whose message names the
-    path and the OS reason.
+    reserved for at least one harness whose filesystem step actually failed,
+    whose line names the path and the OS reason.
 
     The source is the *bundled* SKILL.md (``resources.skill_md()``), not a path
     the caller passes: the whole point is that the exe carries the checklist it
     installs, so "install the skill" cannot mean "install whatever is on disk
-    next to me".
+    next to me". The same file goes to every harness: Claude Code finds a skill
+    by its frontmatter, which this SKILL.md already carries, so there is nothing
+    to rewrite per harness — only a second destination.
     """
     from . import resources, skill_install
 
+    harnesses = skill_install.HARNESSES if args.harness == "all" else (args.harness,)
+    failed = False
+
     if args.uninstall:
-        try:
-            outcome = skill_install.uninstall()
-        except skill_install.SkillInstallError as exc:
-            print(f"boardwise install-skill: {exc}", file=sys.stderr)
-            return 1
-        if outcome.outcome == "absent":
-            print(f"boardwise install-skill: nothing to remove at {outcome.path}")
-            return 0
-        tail = " (and the now-empty directory)" if outcome.removed_directory else ""
-        print(f"boardwise install-skill: removed {outcome.path}{tail}")
-        return 0
+        for harness in harnesses:
+            try:
+                outcome = skill_install.uninstall(harness=harness)
+            except skill_install.SkillInstallError as exc:
+                print(f"boardwise install-skill [{harness}]: {exc}", file=sys.stderr)
+                failed = True
+                continue
+            if outcome.outcome == "absent":
+                print(f"boardwise install-skill [{harness}]: nothing to remove at {outcome.path}")
+                continue
+            tail = " (and the now-empty directory)" if outcome.removed_directory else ""
+            print(f"boardwise install-skill [{harness}]: removed {outcome.path}{tail}")
+        return 1 if failed else 0
 
     try:
         source = resources.skill_md()
     except RuntimeError as exc:
         print(f"boardwise install-skill: {exc}", file=sys.stderr)
         return 1
-    try:
-        outcome = skill_install.install(source)
-    except skill_install.SkillInstallError as exc:
-        print(f"boardwise install-skill: {exc}", file=sys.stderr)
-        return 1
-
-    if outcome.outcome == "current":
-        print(f"boardwise install-skill: already current — {outcome.path} matches {source}")
-        return 0
-    print(
-        f"boardwise install-skill: {outcome.outcome} {outcome.path} "
-        f"({source.stat().st_size} bytes from {source})"
-    )
-    if outcome.backup is not None:
+    for harness in harnesses:
+        try:
+            outcome = skill_install.install(source, harness=harness)
+        except skill_install.SkillInstallError as exc:
+            print(f"boardwise install-skill [{harness}]: {exc}", file=sys.stderr)
+            failed = True
+            continue
+        if outcome.outcome == "current":
+            print(
+                f"boardwise install-skill [{harness}]: already current — "
+                f"{outcome.path} matches {source}"
+            )
+            continue
         print(
-            f"  the file that was there is kept at {outcome.backup} "
-            f"({outcome.previous_bytes} bytes)"
+            f"boardwise install-skill [{harness}]: {outcome.outcome} {outcome.path} "
+            f"({source.stat().st_size} bytes from {source})"
         )
-    return 0
+        if outcome.backup is not None:
+            print(
+                f"  the file that was there is kept at {outcome.backup} "
+                f"({outcome.previous_bytes} bytes)"
+            )
+    return 1 if failed else 0
 
 
 def _repo_connector_version() -> str:
