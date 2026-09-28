@@ -33,7 +33,13 @@ import pytest
 from boardwise.core.circuitspec import CircuitSpec
 from boardwise.core.layoutplan import LayoutPlan
 from boardwise.core.presentationspec import PresentationSpec
-from boardwise.core.symbolprofile import SymbolPin, SymbolPose, SymbolProfile
+from boardwise.core import symbolprofile
+from boardwise.core.symbolprofile import (
+    SymbolPin,
+    SymbolPose,
+    SymbolProfile,
+    flag_glyph_box,
+)
 from boardwise.engines import drawcompiler as dc
 from boardwise.engines import readability
 from boardwise.engines import svgpreview
@@ -799,6 +805,210 @@ def test_scene_09_ldo_aux_branches_hang_off_their_own_core_pin():
     assert on_a_wire(plan, en_branch) and on_a_wire(plan, nr_branch)
 
 
+def test_a_flag_is_rotated_so_its_glyph_hangs_away_from_the_pin():
+    """060 sec.3: the ground symbol hangs *below* its connection, so the compass flips.
+
+    The library's own ``Ground-GND`` symbol carries ``BBOX (-10, 0, 10, -19)``:
+    its connection sits at the top of the stem and the bars run below it (read out
+    of an export's own SYMBOL documents — `tools/060_flag_glyph_evidence.py`). A
+    flag anchored *below* its pin is therefore drawn at rotation ``0``, not
+    ``180``, and the box the drawing reserves — the glyph hanging away from the
+    pin — is on the far side of the anchor from it.
+
+    Nothing offline pinned this number: 054-059 passed every test with the whole
+    compass 180 out and landed every GND flag upside down.
+    """
+    profile = flag("PWR-GND")
+    anchor = (0.0, 0.0)
+    for direction, rotation in (
+        ((0.0, 1.0), 180.0),
+        ((-1.0, 0.0), 270.0),
+        ((0.0, -1.0), 0.0),
+        ((1.0, 0.0), 90.0),
+    ):
+        assert dc.flag_rotation(direction) == rotation, direction
+        box = flag_glyph_box(profile, rotation=rotation, anchor=anchor)
+        assert box is not None
+        centre = ((box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0)
+        away = (
+            (centre[0] - anchor[0]) * direction[0]
+            + (centre[1] - anchor[1]) * direction[1]
+        )
+        assert away > 0.0, (
+            f"the glyph box {box} hangs on the same side of {anchor} as the pin "
+            f"it names (escaping {direction}) — 060 sec.3's whole point"
+        )
+
+
+def test_a_ground_flag_below_its_pin_is_drawn_hanging_in_the_preview():
+    """The plan's rotation and the preview agree, and both say "hanging".
+
+    Two assertions, catching two different things:
+
+    * a ground flag whose pin escapes **downwards** carries rotation ``0`` — the
+      number the editor is given, and the one 054-059 got wrong;
+    * the preview draws that flag's glyph **below its anchor dot**, with the dot
+      on the glyph's top edge — the connection at the stem's tip, the bars
+      hanging. Before 060 the preview drew the box from the plan's rotation
+      directly, which at the corrected number would have put the glyph *over* the
+      wire instead of under it (`core.symbolprofile.flag_glyph_box` is the one
+      place the two now share).
+    """
+    scene = scenes()[1]
+    result, plan = best_of(scene)
+    assert result.ok
+    ground = [item for item in plan.power_symbols if item.net == "GND"]
+    assert ground, "the ladder's ground is named by a flag"
+    book = library()
+    for symbol in ground:
+        assert symbol.rotation == 0.0, (
+            f"a GND flag anchored below its pin is drawn at 0, not "
+            f"{symbol.rotation} (060 sec.3)"
+        )
+        box = flag_glyph_box(
+            book[symbol.symbol_ref], rotation=symbol.rotation,
+            anchor=(symbol.x, symbol.y),
+        )
+        assert box is not None
+        assert box[3] <= symbol.y + 1e-6, (
+            f"the glyph box {box} starts below the anchor row {symbol.y}: a flag "
+            "below its pin hangs its bars downwards (060 sec.3)"
+        )
+        assert box[1] < symbol.y, "the box occupies the rows under the anchor"
+
+    root = ElementTree.fromstring(svgpreview.render_svg(plan, book))
+    circles = [
+        item for item in root.iter()
+        if item.tag.endswith("circle") and item.get("fill") == "#b45309"
+    ]
+    rects = [
+        item for item in root.iter()
+        if item.tag.endswith("rect") and item.get("stroke") == "#b45309"
+    ]
+    assert len(circles) == len(plan.power_symbols) > len(ground)
+    assert len(rects) == len(plan.power_symbols)
+    # A glyph whose top edge lands on an anchor dot is one hanging *below* its
+    # connection ("bars below the stem's tip"); a rail flag points the other way
+    # and its box's top edge is not at the dot's row. Exactly the ground flags
+    # must match — one per ground flag, which is the E1 picture's own case.
+    hanging = [
+        rect for rect in rects
+        if any(
+            abs(float(rect.get("x")) + float(rect.get("width")) / 2.0
+                - float(circle.get("cx"))) < 1e-6
+            and abs(float(rect.get("y")) - float(circle.get("cy"))) < 1e-6
+            for circle in circles
+        )
+    ]
+    assert len(hanging) == len(ground), (
+        f"{len(hanging)} flag glyph(s) start at their anchor dot and hang below "
+        f"it; every one of the {len(ground)} ground flag(s) must (060 sec.3)"
+    )
+    for rect in hanging:
+        assert float(rect.get("height")) > 0.0
+
+
+def test_a_branch_goes_to_the_side_the_grammar_reads_for_it():
+    """060 sec.1: 电容各归所属节点的**那一侧** — the measured symbol's single side is not it.
+
+    The live E1 render (059) put an LDO's input and output capacitors on top of
+    each other down one side, because the branch followed the core's own pin and
+    the measured AMS1117 leaves VIN *and* VOUT on the left. With the module
+    stating its sides, the input capacitor belongs on the input side and the
+    output capacitor on the output side — and both still have to reach their own
+    pin, which is what the placement and the router have to arrange together.
+    """
+    page = (0.0, 0.0, 1170.0, 825.0)
+    spec = _duplicate_vout_circuit(out_members=["U1.2", "C2.1"], nc=["U1.4"])
+    presentation = ldo_presentation(
+        sidePreferences={"input": "left", "output": "bottom"},
+        modules=[module("pwr", ["U1", "C1", "C2"], "regulator")],
+        portRoles={"VIN5": "input", "3V3": "output"},
+    )
+    result = dc.compile(
+        spec, presentation, library(), dc.CompileBudget(page_box=page),
+    )
+    assert result.ok, render(result)
+    plan = result.candidates[0]
+    core = plan.part("U1")
+    in_cap, out_cap = plan.part("C1"), plan.part("C2")
+    assert core is not None and in_cap is not None and out_cap is not None
+    assert in_cap.x < core.x, (
+        f"the input capacitor is on the input side (left of {core.x:g}), not at "
+        f"{in_cap.x:g} (060 sec.1)"
+    )
+    # The decisive fact is *which way* the branch leaves its pin. A capacitor
+    # hanging below its pin shares the pin's column; one pushed sideways off the
+    # pin (the old reading, and the live E1 render's two-caps-one-side) sits a
+    # lane away in x. Both the position and the column are asserted, so a
+    # placement that merely drifts downwards cannot pass this test.
+    vout_tip, out_tip = pin_point(plan, "U1.2"), pin_point(plan, "C2.1")
+    assert vout_tip is not None and out_tip is not None
+    assert out_cap.y < core.y, (
+        f"the output capacitor is on the output side (below {core.y:g}), not at "
+        f"{out_cap.y:g} (060 sec.1)"
+    )
+    assert out_tip[0] == vout_tip[0] and out_tip[1] < vout_tip[1], (
+        f"the output capacitor hangs below its own VOUT pin at {vout_tip}, not "
+        f"sideways off it (its rail pin reads {out_tip}) — 060 sec.1"
+    )
+    # Both capacitors are wired to the pins they serve, and the input rail is not
+    # routed through the core's body to get there.
+    assert on_a_wire(plan, pin_point(plan, "C1.1"))
+    assert on_a_wire(plan, pin_point(plan, "C2.1"))
+    assert on_a_wire(plan, pin_point(plan, "U1.3"))
+    assert on_a_wire(plan, pin_point(plan, "U1.2"))
+    assert readability.check(
+        plan, spec, presentation, library(), page_box=page,
+    ).hard_violations == []
+
+
+def test_a_roles_other_pins_are_wired_as_one_node_and_nc_is_the_exception():
+    """060 sec.2: 重复脚默认都接上，`nc[]` 是显式例外（岳裁决 a 方案）.
+
+    A role's several pins are one node inside the symbol, so wiring one of them
+    wires the role: the picture must show the pad connected, not an empty pin
+    beside a wired one (059's 岳: "有一个 VOUT 空悬（负责散热的大引脚）"). The spec
+    does not have to spell the duplicate out; listing it in ``nc[]`` still keeps
+    it off, because that is a stated decision rather than an omission.
+    """
+    page = (0.0, 0.0, 1170.0, 825.0)
+    presentation = ldo_presentation()
+    default = dc.compile(
+        _duplicate_vout_circuit(out_members=["U1.2", "C2.1"]),
+        presentation, library(), dc.CompileBudget(page_box=page),
+    )
+    assert default.ok, render(default)
+    plan = default.candidates[0]
+    drawn = readability.derive_netlist(plan, library())
+    u1_2, u1_4 = pin_point(plan, "U1.2"), pin_point(plan, "U1.4")
+    assert u1_2 is not None and u1_4 is not None
+    assert on_a_wire(plan, u1_4), (
+        "the duplicate VOUT pad is wired by default (060 sec.2) — an empty pad "
+        "beside a wired one is the shape 059 was sent back for"
+    )
+    assert drawn.group_of("U1.2") == drawn.group_of("U1.4"), (
+        "the two VOUT pins are one node in the drawing"
+    )
+
+    explicit = dc.compile(
+        _duplicate_vout_circuit(out_members=["U1.2", "C2.1"], nc=["U1.4"]),
+        presentation, library(), dc.CompileBudget(page_box=page),
+    )
+    assert explicit.ok, render(explicit)
+    quiet = explicit.candidates[0]
+    assert not on_a_wire(quiet, pin_point(quiet, "U1.4")), (
+        "an explicit nc[] is still an explicit no-connect (岳裁决: nc 降为显式例外)"
+    )
+    # The rule the checker grades this node against is the same one the compiler
+    # wires it with, and it says which pins are "the same role".
+    profile = library()["AMS1117-3.3-C6186"]
+    assert {pin.number for pin in symbolprofile.role_siblings(profile, "2")} == {
+        pin.number for pin in profile.pins
+        if pin.name == "VOUT" and pin.number != "2"
+    }
+
+
 def _duplicate_vout_circuit(*, out_members: list[str],
                             nc: list[str] | None = None) -> CircuitSpec:
     """The measured AMS1117 shape: which of its two VOUT pins the circuit uses."""
@@ -820,21 +1030,24 @@ def _duplicate_vout_circuit(*, out_members: list[str],
 def test_scene_08b_the_ams1117_duplicate_vout_never_reads_as_a_compiler_bug():
     """055 G1: the measured AMS1117 (VOUT twice) must bind, then draw or refuse by name.
 
-    Three forms of the same symbol — the duplicate VOUT wired with the original
-    left NC, the original wired with the duplicate NC, and both wired to one net —
-    each have to end in a drawing or in a refusal that names its reason. Before
-    055 G1 the first and third came back `facts-missing` ("the CircuitSpec states
-    no connection") and the second said "a compiler bug — report it".
+    055 G1's rule is that a role is a **set of pins** and each of the three forms
+    has to end in a drawing or in a refusal that names its reason. Before 055 G1
+    the first and third came back `facts-missing` ("the CircuitSpec states no
+    connection") and the second said "a compiler bug — report it".
 
-    053 sec.5's default sides are *not* relaxed for this symbol: it leaves its
-    pins down one side, so a refusal is a legal outcome — only an unnamed or
-    self-accusing one is not.
+    060 sec.1/2 moved two of the three: a capacitor goes to the side the grammar
+    reads for it (so the symbol's single-sided pin set no longer decides the
+    drawing), and a role's other pins are wired as the same node (so "both wired"
+    is not a duplicate statement but the default shape). The far pad with the near
+    pin NC'd still has no legal pose — 坑 33's geometry, and the refusal names it.
     """
     page = (0.0, 0.0, 1170.0, 825.0)
-    cases = {
+    cases: dict[str, tuple[list[str], list[str] | None, str]] = {
+        # (members of 3V3, nc[], the only category a refusal may use — "" means
+        # this form must draw, which is what 060 sec.1/2 changed for two of them)
         "duplicate wired, original nc": (["U1.4", "C2.1"], ["U1.2"], "layout-unsat"),
-        "original wired, duplicate nc": (["U1.2", "C2.1"], ["U1.4"], "presentation-poor"),
-        "both wired to one net": (["U1.2", "U1.4", "C2.1"], None, "layout-unsat"),
+        "original wired, duplicate nc": (["U1.2", "C2.1"], ["U1.4"], ""),
+        "both wired to one net": (["U1.2", "U1.4", "C2.1"], None, ""),
     }
     for name, (members, nc, category) in cases.items():
         spec = _duplicate_vout_circuit(out_members=members, nc=nc)
@@ -850,14 +1063,20 @@ def test_scene_08b_the_ams1117_duplicate_vout_never_reads_as_a_compiler_bug():
         assert result.grammar.net_of("out") == "3V3", (name, text)
         if result.candidates:
             # The picture, when one comes out, places the core it bound.
+            assert category == "", (name, "this form draws nowadays", text)
             assert result.candidates[0].part("U1") is not None, name
         else:
+            assert category, (name, "this form must draw", text)
             assert result.categories() == [category], (name, text)
             assert all(item.detail and item.action for item in result.failures), name
-    # The two refusals are not the same refusal: the shape one explains itself
-    # through the core's own pin (055 G1's whole point), and the chain one names
-    # the symbol's pose set.
-    shape = cc = None
+    # One of the two shapes 055 G1 documented as a refusal still refuses, and by
+    # the same route: the far VOUT pad on the net with the near pin NC'd has no
+    # pose that puts VIN and that pad on one line (坑 33's geometry, untouched).
+    # The other one draws now: 060 sec.1 sends an LDO's capacitor to the side the
+    # grammar reads for it instead of to the core's own pin line, so the
+    # single-sided pin set stops deciding this drawing. What must not come back
+    # is an unnamed or self-accusing refusal.
+    shape = None
     for members, nc in (
         (["U1.2", "C2.1"], ["U1.4"]),      # the original VOUT, down the left side
         (["U1.4", "C2.1"], ["U1.2"]),      # the duplicate, on the right
@@ -866,14 +1085,17 @@ def test_scene_08b_the_ams1117_duplicate_vout_never_reads_as_a_compiler_bug():
             _duplicate_vout_circuit(out_members=members, nc=nc),
             ldo_presentation(), library(), dc.CompileBudget(page_box=page),
         )
+        text = render(result)
+        assert "compiler bug" not in text, (members, text)
+        assert "neither a net member nor an explicit nc" not in text, (members, text)
+        if result.candidates:
+            assert result.candidates[0].part("U1") is not None, (members, text)
+            continue
         (failure,) = result.failures
-        if members[0] == "U1.2":
-            shape = failure
-        else:
-            cc = failure
-    assert "the pin the branch hangs off, U1.2 on net 3V3" in shape.detail
-    assert "side preferences" in shape.action and "another" not in shape.action
-    assert "no legal pose" in cc.detail and "AMS1117-3.3-C6186" in cc.detail
+        shape = failure
+    assert shape is not None, "the far-pad shape still has no legal pose"
+    assert "no legal pose" in shape.detail and "AMS1117-3.3-C6186" in shape.detail
+    assert shape.action, "a refusal always carries what to change"
 
 
 def test_scene_08c_a_duplicated_role_pin_nc_is_recorded_as_handled():

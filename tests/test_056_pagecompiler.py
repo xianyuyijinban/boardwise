@@ -908,9 +908,17 @@ def test_a_module_may_override_the_document_s_side_preferences():
     """056 sec.1: 模块可带自己的 presentation 覆盖（`sidePreferences`）.
 
     The repo's *measured* AMS1117 (LCSC C6186) puts VIN, VOUT and GND on one side
-    and repeats VOUT on the other, so `ldo`'s default "input left, output right"
-    has no legal pose — the module that draws it has to say which sides its own
-    symbols want, and it has to say it *for that module only* (054 C3's finding).
+    and repeats VOUT on the other. 054 C3 read that as "`ldo`'s default
+    'input left, output right' has no legal pose", so the module had to say which
+    sides its own symbols want — and it has to say it *for that module only*.
+
+    060 sec.1 changed the first half of that reading and keeps the second: the
+    capacitor now goes to the side the grammar reads for it (instead of to whatever
+    side the core's pin happens to escape on), so the *default* sides draw this
+    symbol too — with the core in the pose whose pins leave the body perpendicular
+    to them, and the output capacitor on the other side of the core from the input
+    one. What the module's override changes is therefore not "refusal vs drawing"
+    but the side the output branch sits on, which is what this test now pins.
     """
     measured = b053.ams1117_duplicate_vout()
     book = library(**{measured.symbol_ref: measured})
@@ -938,11 +946,19 @@ def test_a_module_may_override_the_document_s_side_preferences():
             "presentation": {"sidePreferences": {"input": "left", "output": "bottom"}},
         }],
     })
-    refused = pc.compile_page(circuit_spec, without, book, PAGE)
-    assert not refused.ok
-    assert refused.failures[0].subject == "modules[pwr]"
-    assert "could not be drawn" in refused.failures[0].detail
-    assert refused.modules["pwr"].ok is False
+    as_read = pc.compile_page(circuit_spec, without, book, PAGE)
+    assert as_read.ok, as_read.render_failures()
+    core = module_of(as_read.pages[0], "pwr")
+    assert core.grammar_ref == "ldo"
+    # The default reading order: the output capacitor on the other side of the core
+    # from the input one, both legs of the chain in the module's own frame.
+    in_cap = as_read.pages[0].plan.part("C1")
+    out_cap = as_read.pages[0].plan.part("C2")
+    part_core = as_read.pages[0].plan.part("U1")
+    assert in_cap.x < out_cap.x and in_cap.x < part_core.x < out_cap.x, (
+        "the default sides put the input branch left of the core and the output "
+        "branch right of it (053 sec.3's table)"
+    )
 
     accepted = pc.compile_page(circuit_spec, overridden, book, PAGE)
     assert accepted.ok, accepted.render_failures()

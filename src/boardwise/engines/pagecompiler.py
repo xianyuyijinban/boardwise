@@ -136,6 +136,7 @@ from boardwise.core.symbolprofile import (
     SymbolPose,
     SymbolProfile,
     check_box,
+    flag_glyph_box,
 )
 from boardwise.core.geometry import transform_point
 
@@ -2952,11 +2953,14 @@ def _body_box(profile: SymbolProfile, part: LayoutPart) -> Box | None:
 def _glyph_box(
     profile: SymbolProfile, rotation: float, origin: tuple[float, float]
 ) -> Box | None:
-    """A flag's glyph box: its body at its rotation, no pins (flags have none)."""
-    return _body_box(profile, LayoutPart(
-        part_id="", symbol_ref=profile.symbol_ref, x=origin[0], y=origin[1],
-        rotation=rotation, mirror=False,
-    ))
+    """A flag's glyph box: the one box `drawcompiler.flag_box` reserves (060).
+
+    A flag profile states its glyph *away from the pin*; the number in the plan
+    is the rotation the editor is given. Deriving the box here from the plan's
+    own rotation would put the page's keep-outs on the other side of the flag
+    from the glyph the compiler reserved room for.
+    """
+    return flag_glyph_box(profile, rotation=rotation, anchor=origin)
 
 
 def _posed_pin(profile: SymbolProfile, part: LayoutPart, pin: Any) -> tuple[float, float]:

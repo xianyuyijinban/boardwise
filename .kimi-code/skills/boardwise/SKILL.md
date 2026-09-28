@@ -489,6 +489,10 @@ typeof 全在位、activate 冷启动正常派发、render 实跑 308KB PNG—�
   `tests/test_dsh_plugin_sync.py` 常跑。
 - **变异验证 ≥2 个**：改一行源码 → 测试必须红 → 还原后 `sha256` 一致。
   **还原用 `cp` 备份做，禁用 `git checkout --`**（它会拉回 HEAD，把未提交的改动整个冲掉）。
+- **派单纪律：串行小批，不派两小时黑箱**（xianyuyijinban 2026-09-28 定）：一个任务书只装
+  一个缺口/一个文件域；多缺口的大批拆成串行小批（并行会同文件撞车），每批目标半小时内交卷。
+  子代理上下文 500k 是 TaskStop 红线，但设计目标是**根本到不了**——上下文越重幻觉越多、
+  返工越多（060 三缺口合一批：41 万 tokens、跑满 2h timeout 被斩，实证）。
 - **append 落盘后立刻 `grep -c` 独立计数**：出现 2 就是双执行，按偏移截断重写。
 - 真机作业前先 `boardwise bridge status`（**daemon 会自行死亡**，死了先 `bridge start`）。
 - 新增动作：`protocol.py` 目录 + connector handler + `docs/bridge.md` §4 三处必须同步

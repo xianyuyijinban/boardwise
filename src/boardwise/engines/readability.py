@@ -164,7 +164,12 @@ from boardwise.core.geometry import transform_point
 from boardwise.core.layoutplan import LayoutPlan
 from boardwise.core.pagelayoutplan import PageLayoutPlan
 from boardwise.core.presentationspec import PresentationSpec
-from boardwise.core.symbolprofile import Box, SymbolProfile, check_box
+from boardwise.core.symbolprofile import (
+    Box,
+    SymbolProfile,
+    check_box,
+    role_siblings,
+)
 
 __all__ = [
     "CHECKER_NAME",
@@ -699,7 +704,7 @@ def check(
     net = _derive(layout_plan, placed)
 
     violations: list[HardViolation] = []
-    violations.extend(_check_netlist(circuit_spec, net))
+    violations.extend(_check_netlist(circuit_spec, net, profile_map))
     violations.extend(_check_wire_ends(layout_plan, net))
     violations.extend(_check_junctions(layout_plan))
     violations.extend(_check_bodies(layout_plan, placed))
@@ -729,7 +734,9 @@ def check(
 
 
 def _check_netlist(
-    circuit_spec: CircuitSpec, net: DerivedNetlist
+    circuit_spec: CircuitSpec,
+    net: DerivedNetlist,
+    profile_map: Mapping[str, SymbolProfile],
 ) -> list[HardViolation]:
     """Constraint 1: the plan's partition *and* naming are the spec's.
 
@@ -755,10 +762,7 @@ def _check_netlist(
     """
     out: list[HardViolation] = []
     nc_pins = {item.pin for item in circuit_spec.nc}
-    spec_net_of: dict[str, str] = {}
-    for spec_net in circuit_spec.nets:
-        for pin in spec_net.members:
-            spec_net_of[pin] = spec_net.id
+    spec_net_of = _role_node_expectations(circuit_spec, profile_map)
     domain = {pin for pin in net.pin_points if pin not in nc_pins}
     merged: set[tuple[str, ...]] = set()
 
@@ -784,7 +788,10 @@ def _check_netlist(
         ))
 
     for spec_net in circuit_spec.nets:
-        present = [pin for pin in spec_net.members if pin in domain]
+        present = sorted(
+            pin for pin, net_id in spec_net_of.items()
+            if net_id == spec_net.id and pin in domain
+        )
         if len(present) < 2:
             continue
         nodes: dict[tuple[str, ...], list[str]] = {}
@@ -827,6 +834,49 @@ def _check_netlist(
             + what
             + " — a name is a claim about which node this is (052 sec.4)",
         ))
+    return out
+
+
+def _role_node_expectations(
+    circuit_spec: CircuitSpec, profile_map: Mapping[str, SymbolProfile]
+) -> dict[str, str]:
+    """``pin -> the net it is on``, a role's other pins included (060 sec.2).
+
+    The pins of one role are **one node inside the symbol**
+    (`core.symbolprofile.role_siblings`): the measured AMS1117 draws VOUT on both
+    sides of its body, and a spec that puts one of them on a net puts the node
+    there. So the expectation this checker grades the drawing against includes
+    them — a drawing that leaves one of them floating is reported, and a drawing
+    that wires it is not reported as an "undeclared connection".
+
+    Two spec statements are never bent: a pin in ``nc[]`` is an explicit
+    no-connect, and a pin the spec itself puts on *another* net is the one-role-
+    two-nets contradiction `circuit-invalid` owns.
+    """
+    declared: dict[str, str] = {}
+    for spec_net in circuit_spec.nets:
+        for member in spec_net.members:
+            declared[member] = spec_net.id
+    nc_pins = {item.pin for item in circuit_spec.nc}
+    out = dict(declared)
+    for member in sorted(declared):
+        net_id = declared[member]
+        part_id, _, token = member.partition(".")
+        part = circuit_spec.part(part_id)
+        profile = profile_map.get(part.symbol_ref) if part is not None else None
+        if profile is None:
+            continue
+        for pin in role_siblings(profile, token):
+            spelling = pin.number or pin.name
+            if not spelling or spelling in nc_pins:
+                continue
+            siblings_net = (
+                declared.get(f"{part_id}.{spelling}")
+                or declared.get(f"{part_id}.{pin.name}")
+            )
+            if siblings_net and siblings_net != net_id:
+                continue
+            out.setdefault(f"{part_id}.{spelling}", net_id)
     return out
 
 
