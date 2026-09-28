@@ -119,6 +119,8 @@ from boardwise.core.symbolprofile import (
     SymbolPose,
     SymbolProfile,
     check_box,
+    flag_glyph_box,
+    role_siblings,
 )
 
 from . import readability
@@ -144,6 +146,7 @@ from .grammar.base import (
     VISIBLE_TAP,
     GrammarFailure,
     GrammarResult,
+    nc_pins_of,
 )
 from .readability import CHECKER_NAME, DEFAULT_GRID, derive_netlist
 
@@ -160,6 +163,7 @@ __all__ = [
     "KIND_OBLIGATION_MISSING",
     "KIND_RELATION_BROKEN",
     "RejectedCandidate",
+    "SIDE_ROLES",
     "check_grammar",
     "compile",
     "compress_path",
@@ -251,6 +255,18 @@ BRANCH_ROLES: tuple[str, ...] = (
     "out_caps",
     "aux_branch",
 )
+
+#: Which `sidePreferences` entry a branch role is read against (052 sec.4's side
+#: vocabulary). A branch whose role names a side goes on **that** side when the
+#: presentation states it (060 sec.1: the measured AMS1117 leaves VIN and VOUT on
+#: one side, which is what put an LDO's input and output capacitors on top of each
+#: other); when the presentation states nothing, the side is only the grammar's
+#: default *reading order* and the branch follows the pin it hangs off — the
+#: symbol's own geometry decides. A role that names no side (`aux_branch`,
+#: `tap_branch`, `shunt`) is never moved by a side preference: an EN/NR branch
+#: hangs off the pin it serves, and the RC's shunt states its own line
+#: (`same-row` with its series element, checked before this).
+SIDE_ROLES: dict[str, str] = {"in_caps": "input", "out_caps": "output"}
 
 #: The sides a text block may be put on, in the order they are tried.
 TEXT_SIDES: tuple[str, ...] = ("right", "left", "above", "below")
@@ -818,11 +834,13 @@ class _Slot:
     chain part sits on the line itself; a branch part carries three facts that
     decide its geometry — none of them a constant:
 
-    * ``basis`` — where its offset from the owner's pin runs: ``line`` along the
-      line a same-line kind names (053 sec.3's RC shunt: "the shunt's out-side
-      pin lands on the trunk row"), ``tap`` along the tap direction, ``pin``
-      along the owner's own pin direction (the LDO's EN/NR branches), ``across``
-      perpendicular to the chain (the default when nothing says);
+    * ``basis`` — where its offset from the owner's pin runs: ``side`` along the
+      side the grammar states for it (060 sec.1: "the input capacitor belongs on
+      the input side"), ``line`` along the line a same-line kind names (053
+      sec.3's RC shunt: "the shunt's out-side pin lands on the trunk row"),
+      ``tap`` along the tap direction, ``pin`` along the owner's own pin
+      direction (the LDO's EN/NR branches), ``across`` perpendicular to the chain
+      (the default when nothing says);
     * ``sign`` — which way, from the rank order, so `left-of` puts the input
       capacitor on the left without this module knowing what a capacitor is;
     * ``other_net`` — the net the branch does *not* share with its owner, whose
@@ -1103,7 +1121,8 @@ def _prepare(
         if not is_branch or not owner:
             continue
         slot = _branch_slot(
-            circuit_spec, binding, item.part_id, item.role, owner, axis, ranks,
+            circuit_spec, presentation_spec, binding, item.part_id, item.role,
+            owner, axis, ranks,
         )
         if slot is None:
             order_failures.append(GrammarFailure(
@@ -1176,6 +1195,7 @@ def _branch_owner(
 
 def _branch_slot(
     circuit_spec: CircuitSpec,
+    presentation_spec: PresentationSpec,
     binding: GrammarResult,
     part_id: str,
     role: str,
@@ -1195,7 +1215,8 @@ def _branch_slot(
     pins_here = sorted(pin for pin, net in nets.items() if net == shared_net)
     pins_there = sorted(pin for pin, net in nets.items() if net == other_net)
     basis, offset_axis, sign, from_order = _branch_basis(
-        circuit_spec, binding, part_id, owner, shared_net, axis, ranks,
+        circuit_spec, presentation_spec, binding, part_id, role, owner, shared_net,
+        axis, ranks,
     )
     return _Slot(
         part_id=part_id, role=role, kind="branch", axis=axis,
@@ -1230,8 +1251,10 @@ def _shared_nets(
 
 def _branch_basis(
     circuit_spec: CircuitSpec,
+    presentation_spec: PresentationSpec,
     binding: GrammarResult,
     part_id: str,
+    role: str,
     owner: str,
     shared_net: str,
     axis: str,
@@ -1239,10 +1262,19 @@ def _branch_basis(
 ) -> tuple[str, str, int, bool]:
     """``(basis, offset axis, sign, sign came from an order kind)``.
 
-    Read in the order the grammar states things: a same-line kind with the owner
-    is the strongest statement (the branch's shared pin lands on that line), then
-    the tap kind (the stub's axis), then nothing — and the last resort, resolved
-    at placement time, is the owner's own pin direction.
+    Read in the order the grammar states things, strongest first: a same-line kind
+    with the owner (the branch's shared pin lands on that line — the RC shunt's
+    own statement, and the one 053 sec.3 draws as "the trunk is one row"); the tap
+    kind (the stub's axis); the **side** the grammar reads for this branch's role
+    (060 sec.1: an LDO's input capacitor belongs on the side the input is read on,
+    wherever the presentation put it — the measured AMS1117 leaves VIN *and* VOUT
+    down one side, which is what stacked an LDO's two capacitors on one); and last
+    the owner's own pin direction, resolved at placement time.
+
+    The owner's pose is what makes a stated side reachable: a pin that escapes
+    *away* from its branch's side is refused (`_stated_sides_are_reachable`), so a
+    side the symbol's pins leave perpendicular to is honoured by a bend at the pin
+    tip rather than by a wire doubling back through the body.
 
     The sign only comes from the rank order when an order kind says which end of
     the chain the branch belongs at. Without one, the rank of a part nothing
@@ -1276,7 +1308,46 @@ def _branch_basis(
             # stub's axis. Which *side* the tap leaves is not stated by the
             # grammar, so it leaves on the positive side of the line.
             return ("tap", "x" if item.kind == HORIZONTAL_TAP else "y", 1, False)
+    side = _side_basis(binding, role, part_id, owner)
+    if side is not None:
+        return side
     return ("pin", "", 1, ordered)
+
+
+def _side_basis(
+    binding: GrammarResult,
+    role: str,
+    part_id: str,
+    owner: str,
+) -> tuple[str, str, int, bool] | None:
+    """The ``side`` basis for this branch, when its role has a side to read.
+
+    The role must name a `sidePreferences` entry (:data:`SIDE_ROLES`): an EN/NR
+    branch or a tap branch has no side that speaks about it, so nothing moves
+    them off the pin they serve.
+
+    The axis and sign come from the `left-of`/`right-of`/`above`/`below` kind the
+    grammar paired this branch with, read through `grammar/base.py`'s own
+    definitions ("left-of — subject on the power side when that side is the left
+    one") and through which end of the pair the branch is. That kind is the
+    presentation's `sidePreferences` entry for the role — the stated one, or
+    053 sec.3's default reading order ("in 左 core 中 out 右") when the document
+    states none, which is what the grammar's `_side_kind(side, default)` resolves.
+    """
+    if not SIDE_ROLES.get(role):
+        return None
+    for item in binding.constraints:
+        if item.kind not in (ABOVE, BELOW, LEFT_OF, RIGHT_OF):
+            continue
+        if {part_id, owner} != {item.subject, item.object}:
+            continue
+        own = item.subject == part_id
+        if item.kind in (LEFT_OF, RIGHT_OF):
+            left = item.kind == LEFT_OF
+            return ("side", "x", -1 if left == own else 1, True)
+        above = item.kind == ABOVE
+        return ("side", "y", 1 if above == own else -1, True)
+    return None
 
 
 def _branch_body_direction(ctx: _Context, slot: _Slot) -> tuple[float, float]:
@@ -1383,19 +1454,22 @@ def _pose_satisfies(
 ) -> bool:
     """Does this pose put the pins where the relations need them?"""
     if slot.kind == "chain":
-        order = _chain_pin_order(ctx, slot.part_id)
+        if not _stated_sides_are_reachable(ctx, slot.part_id, pose):
+            return False
+        order = _chain_pin_pairs(ctx, slot.part_id)
         if order is None:
             return True
-        power_pin = _pin_of_token(profile, order[0])
-        ground_pin = _pin_of_token(profile, order[1])
-        if power_pin is None or ground_pin is None:
-            return True
-        tips = (_posed_tip(power_pin, pose), _posed_tip(ground_pin, pose))
-        if not _on_one_line(tips, ctx.progress):
-            return False
-        return (
-            _dot(tips[0], ctx.progress) < _dot(tips[1], ctx.progress)
-        )
+        for power_token, ground_token in order:
+            power_pin = _pin_of_token(profile, power_token)
+            ground_pin = _pin_of_token(profile, ground_token)
+            if power_pin is None or ground_pin is None:
+                return True
+            tips = (_posed_tip(power_pin, pose), _posed_tip(ground_pin, pose))
+            if not _on_one_line(tips, ctx.progress):
+                continue
+            if _dot(tips[0], ctx.progress) < _dot(tips[1], ctx.progress):
+                return True
+        return False
     if not slot.pin_shared or not slot.pin_other:
         return True
     body = ctx.body_dirs.get(slot.part_id)
@@ -1411,15 +1485,66 @@ def _pose_satisfies(
     return _dot(tips[0], body) < _dot(tips[1], body)
 
 
-def _chain_pin_order(ctx: _Context, part_id: str) -> tuple[str, str] | None:
-    """``(pin on the earlier net, pin on the later net)`` of this part's chain.
+def _branch_side_direction(slot: _Slot) -> tuple[float, float]:
+    """The page direction a ``side`` branch's offset runs in (see `_branch_basis`)."""
+    if slot.offset_axis == "x":
+        return (float(slot.sign), 0.0)
+    return (0.0, float(slot.sign))
+
+
+def _stated_sides_are_reachable(
+    ctx: _Context, owner_id: str, pose: SymbolPose
+) -> bool:
+    """Can every branch that names a side leave its own pin without doubling back?
+
+    060 sec.1: a branch goes on the side the grammar states for it, and the pin it
+    hangs off must not escape the *other* way — a wire from a pin that points away
+    from its own branch has to double back through the body the pin belongs to.
+    The owner's pose is refused instead of the drawing being bent, which keeps
+    053 sec.5's refusals honest: a symbol whose supply pins all leave one side
+    still cannot honour "input left, output right" (no legal pose — the shape
+    054 C3 measured), while a side the pins leave *perpendicular* to is fine (the
+    measured AMS1117's output below its own left-hand VOUT pin).
+    """
+    for other in ctx.slots.values():
+        if (
+            other.kind != "branch"
+            or other.owner != owner_id
+            or other.basis != "side"
+        ):
+            continue
+        direction = _pin_direction(
+            ctx, owner_id, _shared_token(ctx, other), {owner_id: pose},
+        )
+        if direction is None:
+            continue
+        want = _branch_side_direction(other)
+        if direction[0] * want[0] + direction[1] * want[1] < 0.0:
+            return False
+    return True
+
+
+def _chain_pin_pairs(
+    ctx: _Context, part_id: str
+) -> list[tuple[str, str]] | None:
+    """``(pin on the earlier net, pin on the later net)`` pairs, every combination.
 
     Only the nets the `direct-wire` obligations place *on the chain* count. A pin
     on a net the chain does not name (the LDO's ground, the NR pin) is left
     unconstrained here: where it goes is the symbol's own business, and forcing
     it onto the axis would be this module inventing an arrangement.
+
+    More than one pair is the normal case for a symbol that carries a role on
+    several pins (060 sec.2: the measured AMS1117's VOUT is on both sides of the
+    body). The pose is accepted when **any** of the pairs lies on the chain in
+    order — the pins are one node inside the symbol, so the drawing may run the
+    chain through whichever of them the symbol's own geometry allows and wire the
+    rest as the same node. Without this the chain's pin was chosen by pin id
+    alone, and the pair it picked first (VIN with the *far* VOUT) is not collinear
+    in any pose: a drawing with both output pins connected was refused as
+    "no legal pose" (055 G1's shape, measured again in 060 sec.2).
     """
-    nets = _part_nets(ctx.circuit, part_id)
+    nets = _chain_nets(ctx, part_id)
     ranked = sorted(
         ((ctx.chain_net_rank[net], pin) for pin, net in nets.items()
          if net in ctx.chain_net_rank),
@@ -1427,7 +1552,36 @@ def _chain_pin_order(ctx: _Context, part_id: str) -> tuple[str, str] | None:
     )
     if len(ranked) < 2 or ranked[0][0] == ranked[-1][0]:
         return None
-    return (ranked[0][1], ranked[-1][1])
+    earlier = [pin for rank, pin in ranked if rank == ranked[0][0]]
+    later = [pin for rank, pin in ranked if rank == ranked[-1][0]]
+    return [(power, ground) for power in earlier for ground in later]
+
+
+def _chain_nets(ctx: _Context, part_id: str) -> dict[str, str]:
+    """``spec pin token -> net`` for one part, a role's other pins included.
+
+    The same rule the net's own points get in :func:`_sibling_members` (060
+    sec.2), applied where the *chain* reads the symbol: a role carried on several
+    pins is one node, so the chain may run through whichever of them the symbol's
+    geometry allows. Reading only the spec's own members here is what kept a
+    circuit that wires the far VOUT pin from ever finding a legal pose.
+    """
+    nets = dict(_part_nets(ctx.circuit, part_id))
+    part = ctx.circuit.part(part_id)
+    profile = ctx.book.get(part.symbol_ref) if part is not None else None
+    if profile is None:
+        return nets
+    nc = nc_pins_of(ctx.circuit, part_id)
+    for token, net_id in sorted(nets.items()):
+        for pin in role_siblings(profile, token):
+            spelling = pin.number or pin.name
+            if not spelling or spelling in nc:
+                continue
+            here = nets.get(spelling, nets.get(pin.name, ""))
+            if here and here != net_id:
+                continue
+            nets.setdefault(spelling, net_id)
+    return nets
 
 
 def _on_one_line(
@@ -1906,11 +2060,12 @@ def _branch_offset_direction(
 ) -> tuple[float, float]:
     """Which way the offset from the owner's pin runs — see :class:`_Slot`.
 
-    ``line``/``tap`` carry their own axis; ``pin`` reads the owner's own pin
-    direction from its profile under its chosen pose (which is why the pose
-    choice comes first); ``across`` is perpendicular to the chain.
+    ``side``/``line``/``tap`` carry their own axis (the side the grammar states,
+    the line a same-line kind names, the stub's axis); ``pin`` reads the owner's
+    own pin direction from its profile under its chosen pose (which is why the
+    pose choice comes first); ``across`` is perpendicular to the chain.
     """
-    if slot.basis in ("line", "tap"):
+    if slot.basis in ("side", "line", "tap"):
         if slot.basis == "line" and not slot.sign_from_order:
             resolved = _beyond_owner(ctx, slot, poses, origins)
             if resolved is not None:
@@ -2207,7 +2362,7 @@ def _expressions(ctx: _Context, placed: _Placement) -> dict[str, _Expression]:
     out: dict[str, _Expression] = {}
     for net in sorted(ctx.circuit.nets, key=lambda item: item.id):
         points: list[tuple[str, tuple[float, float]]] = []
-        for member in sorted(net.members):
+        for member in sorted(set(net.members) | _sibling_members(ctx, net)):
             part_id, _, token = member.partition(".")
             point = _pin_point(ctx, part_id, token, placed.poses, placed.origins)
             if point is not None:
@@ -2219,6 +2374,42 @@ def _expressions(ctx: _Context, placed: _Placement) -> dict[str, _Expression]:
             net=net.id, style=style, points=tuple(points), reason=reason,
         )
     return out
+
+
+def _sibling_members(ctx: _Context, net: Any) -> set[str]:
+    """Pins this net is on although the spec did not spell them out (060 sec.2).
+
+    The ruling: a role's several pins are **one node inside the symbol**, so a
+    spec that puts one of them on a net puts the role there, and the drawing
+    wires the rest of them. Two exceptions, both the spec's own words:
+
+    * a pin listed in ``nc[]`` is an explicit no-connect and stays off the net
+      ("nc 降为显式例外");
+    * a pin the spec puts on *another* net is the contradiction the grammar
+      refuses as `circuit-invalid` (one role, two nets) — nothing is invented for
+      it here, because inventing a connection would hide the refusal.
+
+    The rule itself is `core.symbolprofile.role_siblings`, so the readability
+    checker's own expectation of this node is computed from the same definition.
+    """
+    extra: set[str] = set()
+    for member in sorted(net.members):
+        part_id, _, token = member.partition(".")
+        part = ctx.circuit.part(part_id)
+        profile = ctx.book.get(part.symbol_ref) if part is not None else None
+        if profile is None:
+            continue
+        nc = nc_pins_of(ctx.circuit, part_id)
+        declared = _part_nets(ctx.circuit, part_id)
+        for pin in role_siblings(profile, token):
+            spelling = pin.number or pin.name
+            if not spelling or spelling in nc:
+                continue
+            here = declared.get(spelling, declared.get(pin.name, ""))
+            if here and here != net.id:
+                continue
+            extra.add(f"{part_id}.{spelling}")
+    return extra - set(net.members)
 
 
 def _expression_style(
@@ -2500,14 +2691,34 @@ def _tap_stub(
 
 
 def _flag_rotation(direction: tuple[float, float]) -> float:
-    """The compass rotation a flag is drawn at (stem pointing away from the pin)."""
+    """The rotation the **editor** is given so the flag's glyph hangs away.
+
+    ``direction`` is the way the flag leaves its pin — the pin's own escape
+    direction — and the glyph is meant to hang further out that way, clear of the
+    wire it names.
+
+    The compass is the 053B one turned by 180 (060 sec.3, the oracle's ruling):
+    the library's ground symbol hangs its bars *below* its connection point
+    (``Ground-GND``, ``BBOX (-10, 0, 10, -19)``), so a flag anchored below its pin
+    is drawn at ``0``, not at ``180``. 054-059 landed every GND flag upside down
+    because the mapping assumed the opposite natural pose (evidence:
+    ``outputs/057_live/e1b/plan.page.json`` vs ``.../render.png``).
+
+    The library's *rail* symbols are the other way up (``Power-VCC`` /
+    ``Power-5V``: ``(-5, 10, 5, 0)`` / ``(-5, 10, 5, 5)`` — a bar **above** the
+    connection), so this uniform compass is right for a ground flag and one turn
+    off for a rail flag. That is a reported finding, not a silent third case:
+    060 sec.3 ruled the uniform flip, the E1 page carries ground flags only, and
+    the two families' evidence is written up in
+    ``tools/060_flag_glyph_evidence.py`` for the next ruling.
+    """
     if direction == (0.0, 1.0):
-        return 0.0
-    if direction == (-1.0, 0.0):
-        return 90.0
-    if direction == (0.0, -1.0):
         return 180.0
-    return 270.0
+    if direction == (-1.0, 0.0):
+        return 270.0
+    if direction == (0.0, -1.0):
+        return 0.0
+    return 90.0
 
 
 def _flag_plan(
@@ -3302,6 +3513,14 @@ def _build_candidate(
         blocked = _blocked_points(
             ctx, placed, net_id, labels, symbols, segments,
         )
+        # The search knows the same walls the straight-run tests do. Without this
+        # the lattice router only avoids boxes and foreign wire runs, and happily
+        # routes a wire *through* a foreign pin tip — which is a connection in the
+        # editor's model, so the drawing is refused by the checker as an
+        # undeclared short instead of being routed around the pin (measured on
+        # 060 sec.1's capacitor placement, where a wire from the output pin has to
+        # pass the ground pin ten units away).
+        router.blocked = blocked
         if expression.style == "wire" and net_id in tap_nets:
             # The stub goes down *before* the trunk: it leaves the junction and
             # reaches past every branch root on this node, so the trunk's own
@@ -3384,21 +3603,22 @@ def _build_candidate(
                     ctx, part_id, token, placed.poses,
                 ) or (0.0, -1.0)
                 anchor, lead = _flag_anchor(router, point, direction, blocked)
+                rotation = _flag_rotation(direction)
                 symbols.append(LayoutPowerSymbol(
                     symbol_ref=ref,
                     symbol_hash=profile.geometry_hash(),
                     net=net_id,
                     x=anchor[0],
                     y=anchor[1],
-                    rotation=_flag_rotation(direction),
+                    rotation=rotation,
                 ))
                 if lead is not None and _key(anchor) != _key(point):
                     segments.append(
                         LayoutSegment(net=net_id, points=[point, anchor])
                     )
-                glyph = _part_box(
-                    profile, SymbolPose(int(_flag_rotation(direction)), False), anchor,
-                )
+                glyph = flag_glyph_box(
+                    profile, rotation=rotation, anchor=anchor,
+                ) or (anchor[0], anchor[1], anchor[0], anchor[1])
                 occupied.append(glyph)
                 solids.append(glyph)
         router.boxes = solids
@@ -3614,8 +3834,12 @@ compress_path = _compress
 #: Every wire vertex that tees into another wire's span — the dots the plan must
 #: declare.
 wire_junctions = _junctions
-#: The compass rotation a flag is drawn at (its stem points away from the pin).
+#: The rotation the editor is given for a flag (so its glyph hangs away from the
+#: pin it names) — see :func:`_flag_rotation`.
 flag_rotation = _flag_rotation
+#: The box a flag's glyph occupies at that rotation — the one box the compiler's
+#: occupancy, the page compiler's extents and the SVG preview all reserve.
+flag_box = flag_glyph_box
 #: ``symbolRef -> SymbolProfile``, with the refusal of a book that disagrees with
 #: itself: a part checked against the wrong symbol's pins is the one silent
 #: failure mode this pipeline refuses to have.
@@ -3647,10 +3871,13 @@ def _plan_bbox(ctx: _Context, plan: LayoutPlan) -> Box:
     for symbol in plan.power_symbols:
         profile = ctx.book.get(symbol.symbol_ref)
         if profile is not None:
-            boxes.append(_part_box(
-                profile, SymbolPose(int(symbol.rotation), False),
-                (symbol.x, symbol.y),
-            ))
+            boxes.append(
+                flag_glyph_box(
+                    profile, rotation=symbol.rotation,
+                    anchor=(symbol.x, symbol.y),
+                )
+                or (symbol.x, symbol.y, symbol.x, symbol.y)
+            )
         else:
             boxes.append((symbol.x, symbol.y, symbol.x, symbol.y))
     for segment in plan.segments:

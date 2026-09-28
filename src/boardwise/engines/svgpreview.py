@@ -15,7 +15,11 @@ What the picture shows, and why each element is there:
   because a reviewer who sees only glyphs cannot tell whether a text was measured
   or estimated;
 * every **wire**, **junction**, **label** and **flag**, with a label's anchor dot
-  separate from its text (they are different facts in `LayoutPlan`);
+  separate from its text (they are different facts in `LayoutPlan`). A flag's box
+  is the one `drawcompiler` reserves — the glyph hanging away from the pin
+  (`core.symbolprofile.flag_glyph_box`, 060) — so the two cannot disagree about
+  which side of the anchor the flag occupies, which is how 054-059's upside-down
+  flags stayed invisible;
 * a caption with the plan's geometry digest, the compiler's notes and the raw soft
   metrics — never a score (052 sec.6), just the numbers the ranking used.
 
@@ -32,7 +36,12 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from boardwise.core.layoutplan import LayoutPlan
-from boardwise.core.symbolprofile import Box, SymbolPose, SymbolProfile
+from boardwise.core.symbolprofile import (
+    Box,
+    SymbolPose,
+    SymbolProfile,
+    flag_glyph_box,
+)
 
 __all__ = [
     "PREVIEW_FONT_SIZE",
@@ -137,8 +146,9 @@ def render_svg(
 
     for symbol in layout_plan.power_symbols:
         profile = book.get(symbol.symbol_ref)
-        pose = SymbolPose(rotation=int(symbol.rotation), mirror=False)
-        glyph = _body_box(profile, pose, (symbol.x, symbol.y))
+        glyph = flag_glyph_box(
+            profile, rotation=symbol.rotation, anchor=(symbol.x, symbol.y),
+        ) if profile is not None else None
         if glyph is not None:
             parts.append(rect(glyph, fill="none", stroke=_COLOURS["flag"],
                               **{"stroke-width": "1.2"}))

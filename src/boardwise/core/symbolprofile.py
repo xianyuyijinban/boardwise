@@ -43,6 +43,7 @@ __all__ = [
     "DIRECTIONS",
     "DIRECTION_SOURCE_BODY",
     "DEFAULT_POSES",
+    "FLAG_GLYPH_ROTATION_OFFSET",
     "POSE_ROTATIONS",
     "POSES_SOURCE_DECLARED",
     "POSES_SOURCE_UNRESTRICTED",
@@ -57,7 +58,10 @@ __all__ = [
     "SymbolProfileError",
     "SymbolText",
     "check_box",
+    "flag_glyph_box",
     "from_parsed_symbol",
+    "role_of_pin",
+    "role_siblings",
 ]
 
 #: An axis-aligned box in canvas units (0.01 in), as ``(min_x, min_y, max_x,
@@ -95,6 +99,10 @@ POSES_SOURCE_DECLARED = "declared"
 
 #: Where an electrical role came from.
 ROLE_SOURCE_PIN_NAME = "pin-name"
+
+#: The rotation a flag profile's **glyph box** is measured at, relative to the
+#: rotation the editor is given — see :func:`flag_glyph_box`.
+FLAG_GLYPH_ROTATION_OFFSET = 180.0
 
 #: The pin-name tokens this build maps to a role, and nothing else.
 #:
@@ -399,6 +407,98 @@ class SymbolProfile:
             return cls.from_dict(payload)
         except SymbolProfileError as exc:
             raise SymbolProfileError(f"{source}: {exc}") from exc
+
+
+# -------------------------------------------------------------- flag glyphs
+
+
+def flag_glyph_box(
+    profile: SymbolProfile, *, rotation: float, anchor: tuple[float, float]
+) -> Box | None:
+    """The page box a rail/ground **flag**'s glyph occupies, or ``None``.
+
+    A flag profile is a symbol with no pins: its origin *is* the connection point
+    (a pin-less profile is how the compiler identifies a flag), and its ``body``
+    is 053B's convention — the glyph's extent taken **away from the pin** the
+    flag names. Every library this repo ships states it that way
+    (``(-6, 0, 6, 18)`` for ``PWR-GND`` and for every ``PWR-<rail>``).
+
+    The editor's own power symbols do not all hang that way, and that is the fact
+    this function exists for. Read out of an export's own SYMBOL documents
+    (``Ground-GND`` carries ``BBOX (-10, 0, 10, -19)``: connection at the top of
+    the stem, bars running *below* it; ``Power-VCC`` and ``Power-5V`` carry
+    ``(-5, 10, 5, 0)`` and ``(-5, 10, 5, 5)``: a bar *above* the connection), the
+    two families hang on opposite sides. So the box a drawing must reserve is not
+    the profile's box at the rotation the editor is given, but the box that hangs
+    away from the pin — :data:`FLAG_GLYPH_ROTATION_OFFSET` from it. The evidence
+    and the read-back are in ``tools/060_flag_glyph_evidence.py``.
+
+    One function for the compiler's occupancy, the page compiler's extents and
+    the SVG preview, because all three draw this one box: a preview that computed
+    its own would be self-consistent and wrong, which is exactly how six batches
+    of upside-down flags stayed invisible (`outputs/057_live/e1b/render.png`).
+    """
+    if profile.body is None:
+        return None
+    from .geometry import transform_point
+
+    x0, y0, x1, y1 = profile.body
+    angle = rotation + FLAG_GLYPH_ROTATION_OFFSET
+    corners = [
+        transform_point(
+            x, y, rotation=angle, mirror=False, ox=anchor[0], oy=anchor[1],
+        )
+        for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1))
+    ]
+    xs = [point[0] for point in corners]
+    ys = [point[1] for point in corners]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+# ------------------------------------------------- one role, several pins
+
+
+def role_of_pin(pin: SymbolPin) -> str:
+    """The electrical role this pin plays: the profile's own, else its pin name."""
+    role = (pin.electrical_role or "").strip()
+    if role:
+        return role
+    return ROLE_BY_PIN_NAME.get((pin.name or "").strip().upper(), "")
+
+
+def role_siblings(profile: SymbolProfile, token: str) -> tuple[SymbolPin, ...]:
+    """Every **other** pin of `profile` that plays the same role as `token` does.
+
+    060 sec.2: a symbol may carry one role on several pins — the measured AMS1117
+    draws VOUT on both sides of its body, one of them the pad that carries the
+    heat. Those pins are **one node inside the symbol**, so connecting one
+    connects the role, and an empty pad beside a wired one is a shape an engineer
+    does not draw. The ruling is that they are all connected by default, and
+    `nc[]` is the explicit exception.
+
+    Both halves of that live here, because both halves have to mean the same
+    thing: the compiler wires the siblings it finds, and the readability checker
+    expects them on the role's node. Two implementations would eventually
+    disagree about which pins are "the same role", and the disagreement would
+    show up as a drawing that is wired correctly and reported as an undeclared
+    short.
+    """
+    if not token:
+        return ()
+    here = None
+    for pin in profile.pins:
+        if token in (pin.number, pin.name):
+            here = pin
+            break
+    if here is None:
+        return ()
+    role = role_of_pin(here)
+    if not role:
+        return ()
+    return tuple(
+        pin for pin in profile.pins
+        if pin is not here and role_of_pin(pin) == role
+    )
 
 
 # ------------------------------------------------------------------ extract
