@@ -269,7 +269,12 @@ def _decoupling_next_to_host(model: DesignModel, host: str) -> set[str]:
     for designator, component in model.components.items():
         if designator == host:
             continue
-        if any(hint in component.value for hint in _DECOUPLING_HINTS):
+        # The Greek small mu (U+03BC) is what a Chinese/Greek IME types for
+        # "micro"; the hints spell the MICRO SIGN (U+00B5). Folded the way
+        # `rules/values.parse_capacitance_farads` folds its unit key (the defect
+        # batch's fix), so `22μF` is a capacitor here exactly as it is there.
+        value = component.value.replace("μ", "µ")
+        if any(hint in value for hint in _DECOUPLING_HINTS):
             shares = {
                 net.name
                 for net in model.nets.values()

@@ -315,6 +315,37 @@ exit 4 零写入（C5）；库几何不符 → exit 4 零写入（C6，写前那
 另有坑 34：本仓库 facts 要求 AMS1117 输出 ≥22µF（053 场景值 055 起已同步为 22µF），拿 100n
 输出落图 `decap-required-caps` 会涨 finding、`draw apply` 按 036 规矩**拒绝保存**（图落好了、没落盘）。
 
+**057：一页多模块（页文档）与 `draw discard`——不加命令、不加旗标，同三条命令**：
+
+- **什么算"页"**：PresentationSpec 有 ≥2 个 `modules[]`、或写了 `flow`、或某模块自带 `grammarRef`、
+  或有页级锁（`pagecompiler.wants_page`）→ 走页级编译；恰一个模块（054 夹具那种）走原单模块路径，输出一字不变。
+  页级 `draw compile` **必须给 `--page-box`**，产物是 `candN.page.json`（`kind=boardwise-page-layout-plan`）+
+  带模块虚线框的 `candN.svg`。
+- **`draw plan`（页）**：页级编译后把选中候选的 `plan` 字段交给同一个 `module_plan`，产出的仍是
+  `draw-module` plan（layoutSha256 = 页文档 `plan` 的几何哈希），旁边写 `<plan>.page.json`。带 `--page`
+  时读页面 census，**每个既有图元（件/线/旗标，件用 `bboxIds` 实测外框）转 keepout**，模块组整体平移避开；
+  全被占 → `presentation-poor` 点名"existing R5 …"。页文档里的跨模块标签在本机放不了（坑 9），**没有线
+  到达的标签点会补一段 10 单位具名短线**（downgrades 里写明），否则两边同名网在工程级网表里合不起来。
+- **`draw apply`**：`--layout` 可给页文档；位置参数也可直接给页文档（需 `--circuit/--presentation/--profiles`
+  + `--page`/`--new-page`），运行时现建 plan 再走原流程；页文档的"过期守卫" = 它的模块框对页面现状的
+  keepout 规则（压到既有图元 → exit 4 零写入）；要"页面任何变动都拒"用 `draw plan --page` 产的 plan
+  （census 摘要精确）或 `--expect-census`。**所有落图**新增范围外逐项对比：落图前已在页上的每个图元
+  （位号/值/LCSC/网/坐标/姿态/线点）必须原样，改了一件 → exit 2 不保存（`range.outOfScope`）。
+  报告 `verification.nets` 逐网列出编辑器网表回读名，跨模块网标 `crossModule`、`oneNet`（G4）。
+  findings 只减不增按身份（`rule|severity|位号|脚|命名网`），不按计数。
+- **页级锁**：`userLocks[]` 加 `"scope": "page"`（不写 rotation；位姿归模块）→ 该件在每个候选都落在
+  页坐标 P（origin = P − 模块内坐标，逐代次不同是对的）；锁点出页 / 两把锁矛盾 / 锁住的框出页、压
+  keepout、与另一锁住的框冲突 → `presentation-poor` 点名锁。模块锁（默认 scope）与页锁可同件共存。
+- **`draw discard <plan.json|page.json>`**：只删该 plan 自己画的东西。件按**位号 + 坐标 + 值**（无 valueKey
+  的旧 plan 用 LCSC）核身份，旗标按网 + 点，线要求**每个点都在 plan 的线上**（被宿主并进别人线的 primitive
+  不删，坑 32）；**任何一件不符整批拒删**（exit 4，零删除）。先线、再旗标、后件（每相每次 ≤30 id，分批
+  会写进报告）；删后回读：目标全无 + 范围外逐项不变。第二遍 = `nothing_to_discard` exit 0。`--save` 才保存；
+  超时/断连先回读、不重试（exit 3）。页文档需 `--circuit/--presentation/--profiles`，按坐标 + 前缀 + 值找件。
+- **已知缺口（057 离线实测，`tools/057_scenarios.py`）**：CH340G 核心/晶振/USB 侧**没有文法**（只有
+  divider/RC/LDO），页级编译对这三组报 `facts-missing`；金样板上的 RT9013（VIN/GND/EN 同在左侧）在 `ldo`
+  文法下 48 种 sidePreferences **全部无合法姿态**——坑 33 的"改输入侧"对它无效。真机 E1–E7 的操作清单见
+  `tools/057_live_runbook.md`。
+
 ## 4. 真机纪律（写操作前逐条对，命中即停）
 
 **R1 身份判定**：动手前，`doc.list` 报的焦点工程名与任务书**逐字一致**，且页特征
