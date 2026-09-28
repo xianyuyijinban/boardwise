@@ -71,12 +71,20 @@ from ..core.symbolprofile import SymbolProfile, SymbolPose
 from . import addcomponent
 
 __all__ = [
+    "CENSUS_CLEARANCE",
+    "CENSUS_FALLBACK_HALF",
+    "DiscardSelection",
     "DrawPlanError",
     "HALF_GRID",
+    "LABEL_STUB_LENGTH",
     "SOURCE_BASIS",
     "all_satisfied",
     "canvas_census",
+    "census_changes",
     "census_digest",
+    "census_items",
+    "census_keepouts",
+    "discard_selection",
     "designator_problems",
     "expected_pin_points",
     "flag_kind",
@@ -106,6 +114,13 @@ HALF_GRID = DRAW_GRID / 2.0
 #: defaults are on the day of the run — see :func:`flag_kind`.
 FLAG_SYMBOL_GROUND = "PWR-GND"
 FLAG_SYMBOL_POWER_PREFIX = "PWR-"
+
+#: How long the named stub is that stands in for a label this host cannot place
+#: (057 sec.4): two lattice steps out of the label's anchor, towards its text box,
+#: so it stays inside the room the compiler reserved for the label. Only drawn on
+#: the page path, and only where no planned wire of the net already reaches the
+#: anchor — see :func:`module_plan`'s ``label_stubs``.
+LABEL_STUB_LENGTH = 2 * DRAW_GRID
 
 #: What the plan's ``source.inputSha256`` is a digest **of**. Spelled out because
 #: a digest whose basis is not written down is a number nobody can reproduce.
@@ -468,8 +483,24 @@ def module_plan(
     baseline: PlanDrawBaseline | None = None,
     baseline_findings: Sequence[str] = (),
     notes: Sequence[str] = (),
+    label_stubs: bool = False,
+    module_label: str = "",
 ) -> ChangePlan:
     """One compiled drawing, as the plan a human authorises (054 §四.1).
+
+    Two 057 keywords, both off by default so a single-module plan is built
+    exactly as before:
+
+    * ``label_stubs`` — a label this host cannot place is otherwise carried by
+      the wire of its net; a page states a shared net with a label at a *pin tip*
+      (056's port), and a pin no wire of that net reaches would land on an
+      unnamed net, so the two modules' same-named nets would never merge in the
+      editor's project-wide netlist (G4). With it, such a label becomes a short
+      stub wire carrying the name (:data:`LABEL_STUB_LENGTH`, towards the label's
+      own text box) — declared in ``downgrades`` like every other landing
+      adaptation;
+    * ``module_label`` — how the plan's target names what it draws (a page names
+      its modules; the default is the presentation's grammar, as 054 wrote it).
 
     The three things the layout cannot know are settled here, in this order:
     the **recipe** (a symbol ref is not a part: every part needs an LCSC number and
@@ -643,6 +674,30 @@ def module_plan(
                 "the rail flag carries the same name in the editor's netlist"
             )
             continue
+        anchor = (label.x, label.y)
+        carried = any(
+            wire.net == label.net and _on_polyline(anchor, wire.points)
+            for wire in built.wires
+        )
+        if label_stubs and not carried:
+            stub = _label_stub(label)
+            built.wires.append(PlanDrawWire(
+                net=label.net,
+                points=[anchor, stub],
+                from_pin=pin_at(anchor),
+                purpose="name stub (057: stands in for a label this host cannot place)",
+            ))
+            built.downgrades.append(
+                f"net {label.net}: the compiler drew a net label at "
+                f"({label.x:g}, {label.y:g}), and this host cannot place one "
+                "(`sch.place_netlabel` is measured unusable, 029); no planned wire of "
+                f"{label.net} reaches that point, so a {LABEL_STUB_LENGTH:g}-unit stub "
+                f"({label.x:g}, {label.y:g}) → ({stub[0]:g}, {stub[1]:g}) carries the "
+                "name instead — without it the pin would sit on an unnamed net and the "
+                "page's same-named nets would never merge in the editor's project-wide "
+                "netlist (057 sec.4)"
+            )
+            continue
         built.downgrades.append(
             f"net {label.net}: the compiler drew a net label at "
             f"({label.x:g}, {label.y:g}), and this host cannot place one "
@@ -710,7 +765,8 @@ def module_plan(
             page_uuid=(baseline.page_uuid if baseline is not None else ""),
         ),
         target=PlanTarget(
-            module=f"{presentation.grammar_ref} ({len(built.parts)} part(s); nets {module_line})",
+            module=f"{module_label or presentation.grammar_ref} "
+            f"({len(built.parts)} part(s); nets {module_line})",
         ),
         change=PlanChange(
             kind=DRAW_MODULE_KIND,
@@ -731,6 +787,33 @@ def module_plan(
         preconditions=_preconditions(built, baseline, baseline_findings),
         expected_postcondition=_postconditions(built, islands),
     )
+
+
+def _label_stub(label: Any) -> tuple[float, float]:
+    """The far end of a label's name stub: out of the anchor, towards its text.
+
+    The direction is the one the compiler put the text box in (the anchor is the
+    electrical point, the box is where the room was reserved), read off the box's
+    centre along its dominant axis; the length is :data:`LABEL_STUB_LENGTH`, or
+    the box's own reach in that direction when that is shorter — never less than
+    one lattice step, and always a whole number of them, so the stub's end stays
+    on the lattice the anchor is on.
+    """
+    x, y = float(label.x), float(label.y)
+    box = label.bbox
+    cx, cy = (box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0
+    dx, dy = cx - x, cy - y
+    if abs(dx) >= abs(dy) and abs(dx) > 1e-9:
+        direction = (1.0 if dx > 0 else -1.0, 0.0)
+        reach = (box[2] - x) if dx > 0 else (x - box[0])
+    elif abs(dy) > 1e-9:
+        direction = (0.0, 1.0 if dy > 0 else -1.0)
+        reach = (box[3] - y) if dy > 0 else (y - box[1])
+    else:
+        direction, reach = (0.0, 1.0), LABEL_STUB_LENGTH
+    length = min(LABEL_STUB_LENGTH, max(DRAW_GRID, reach))
+    length = max(DRAW_GRID, (length // DRAW_GRID) * DRAW_GRID)
+    return (round(x + direction[0] * length, 6), round(y + direction[1] * length, 6))
 
 
 def _preconditions(
@@ -1326,3 +1409,437 @@ def _wire_problems(plan: ChangePlan, geometry: Any) -> list[str]:
                 f"{have:g} — a segment did not land"
             )
     return problems
+
+
+# ------------------------------------------ 057: the page that is already there
+#
+# Three questions a drawing landed on a *non-empty* page has to answer, and one a
+# drawing taken *off* a page does:
+#
+# * what is already on the page, item by item (:func:`census_items`) — the
+#   054 census counts designators, wires and flags, which is enough to notice a
+#   page changed but not to say *what* changed, and 057 sec.2's acceptance is
+#   "既有图元零改动 — 数量、坐标、值逐项";
+# * where the new drawing may not go (:func:`census_keepouts`) — every existing
+#   primitive becomes a keep-out the page compiler plans around;
+# * did the landing leave everything it did not draw exactly as it was
+#   (:func:`census_changes`);
+# * which primitives on the page *are* this plan's, and only those
+#   (:func:`discard_selection`, 057 sec.5).
+
+#: The clear space kept around every existing primitive when it becomes a
+#: keep-out: one lattice step. A module frame already carries its own padding
+#: (`pagecompiler.FRAME_PADDING`), so this only has to make a zero-width wire a
+#: box with area — the keep-out rule is "shares area", and a line has none.
+CENSUS_CLEARANCE = DRAW_GRID
+
+#: The half-size of the box an existing component gets when the page could not
+#: measure it (`sch.geometry` reports a component's extent only when asked by id,
+#: `bboxIds`). Ten lattice steps each way is the size of a small IC with its pin
+#: stubs; the note that goes with it says the box is an assumption, not a reading.
+CENSUS_FALLBACK_HALF = 10 * DRAW_GRID
+
+
+def _state(entry: Any) -> dict[str, Any]:
+    state = (entry or {}).get("state") if isinstance(entry, dict) else None
+    return state if isinstance(state, dict) else {}
+
+
+def _text(value: Any) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _num(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _line_points(state: Mapping[str, Any]) -> list[tuple[float, float]]:
+    """A wire's point list, in either shape the host has been seen to send."""
+    line = state.get("Line") or state.get("Points") or state.get("points") or []
+    if not isinstance(line, (list, tuple)) or not line:
+        return []
+    out: list[tuple[float, float]] = []
+    if isinstance(line[0], (list, tuple)):
+        for pair in line:
+            if len(pair) >= 2 and _num(pair[0]) is not None and _num(pair[1]) is not None:
+                out.append((float(pair[0]), float(pair[1])))
+        return out
+    coords = list(line)
+    for index in range(0, len(coords) - 1, 2):
+        x, y = _num(coords[index]), _num(coords[index + 1])
+        if x is not None and y is not None:
+            out.append((x, y))
+    return out
+
+
+def census_items(geometry: Any) -> list[dict[str, Any]]:
+    """Every primitive the page holds, one row each, with its identity fields.
+
+    The rows are what "zero change" is judged on: a part's designator, value,
+    LCSC number, origin and pose; a flag's net and origin; a wire's net and its
+    point list. Keyed by the page's own primitive id — the one identity the host
+    keeps stable across reads. The sheet (the drawing frame) is the page, not an
+    item on it, and is left out.
+    """
+    rows: list[dict[str, Any]] = []
+    if not isinstance(geometry, dict):
+        return rows
+    for entry in geometry.get("components") or []:
+        state = _state(entry)
+        kind = _text(state.get("ComponentType")) or "part"
+        if kind == "sheet":
+            continue
+        other = state.get("OtherProperty")
+        other = other if isinstance(other, dict) else {}
+        rows.append({
+            "id": str((entry or {}).get("primitiveId") or state.get("PrimitiveId") or ""),
+            "kind": "netflag" if kind == "netflag" else "part",
+            "designator": _text(state.get("Designator")) or _text(other.get("Designator")),
+            "value": _text(other.get("Value")) if "Value" in other else _text(state.get("Value")),
+            "lcsc": _text(state.get("SupplierId")),
+            "net": _text(state.get("Net")),
+            "x": _num(state.get("X")),
+            "y": _num(state.get("Y")),
+            "rotation": _num(state.get("Rotation")),
+            "mirror": bool(state.get("Mirror")),
+        })
+    for entry in geometry.get("wires") or []:
+        state = _state(entry)
+        rows.append({
+            "id": str((entry or {}).get("primitiveId") or state.get("PrimitiveId") or ""),
+            "kind": "wire",
+            "net": _text(state.get("Net")),
+            "points": [list(point) for point in _line_points(state)],
+        })
+    return sorted(rows, key=lambda row: (row["kind"], row["id"]))
+
+
+def census_keepouts(
+    geometry: Any,
+    *,
+    clearance: float = CENSUS_CLEARANCE,
+    fallback_half: float = CENSUS_FALLBACK_HALF,
+) -> tuple[list[tuple[float, float, float, float]], list[str], list[str]]:
+    """Every existing primitive as a keep-out: ``(boxes, labels, notes)`` (057 sec.2).
+
+    ``labels[i]`` says which primitive ``boxes[i]`` came from, so a refusal that
+    names ``keepouts[3]`` can be read back as "the existing R5". A component's box
+    is its **measured** extent from the dump's ``bboxes`` map (the caller asks for
+    it with ``bboxIds``); a component the page did not measure gets a
+    :data:`CENSUS_FALLBACK_HALF` box around its origin and a note saying so — an
+    assumed box is a weaker keep-out, and the reader has to know which ones are.
+    A wire is one box per segment. Every box is grown by ``clearance``.
+    """
+    boxes: list[tuple[float, float, float, float]] = []
+    labels: list[str] = []
+    notes: list[str] = []
+    if not isinstance(geometry, dict):
+        return boxes, labels, notes
+    raw = geometry.get("bboxes")
+    measured = raw if isinstance(raw, dict) else {}
+    unmeasured: list[str] = []
+    for row in census_items(geometry):
+        if row["kind"] == "wire":
+            points = [tuple(point) for point in row["points"]]
+            for start, end in zip(points, points[1:]):
+                boxes.append((
+                    min(start[0], end[0]) - clearance, min(start[1], end[1]) - clearance,
+                    max(start[0], end[0]) + clearance, max(start[1], end[1]) + clearance,
+                ))
+                labels.append(
+                    f"existing wire {row['id']}" + (f" ({row['net']})" if row["net"] else "")
+                )
+            continue
+        name = row["designator"] or (
+            f"{row['net']} flag" if row["kind"] == "netflag" and row["net"] else row["kind"]
+        )
+        box = measured.get(row["id"])
+        values = (
+            [_num(box.get(key)) for key in ("minX", "minY", "maxX", "maxY")]
+            if isinstance(box, dict) else [None]
+        )
+        if None not in values:
+            x0, y0, x1, y1 = (float(value) for value in values)  # type: ignore[arg-type]
+            box_value = (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+        elif row["x"] is not None and row["y"] is not None:
+            box_value = (
+                row["x"] - fallback_half, row["y"] - fallback_half,
+                row["x"] + fallback_half, row["y"] + fallback_half,
+            )
+            unmeasured.append(name)
+        else:
+            unmeasured.append(f"{name} (no position either — not a keep-out)")
+            continue
+        boxes.append((
+            box_value[0] - clearance, box_value[1] - clearance,
+            box_value[2] + clearance, box_value[3] + clearance,
+        ))
+        labels.append(f"existing {name} {row['id']}")
+    if unmeasured:
+        notes.append(
+            f"{len(unmeasured)} existing component(s) had no measured extent, so each "
+            f"is kept out with an assumed ±{fallback_half:g} box around its origin: "
+            + ", ".join(sorted(unmeasured))
+        )
+    return boxes, labels, notes
+
+
+def _stable_net(row: Mapping[str, Any]) -> str:
+    """A wire's net as an identity: an editor-generated name is not one.
+
+    Measured 2026-09-25 (036, pit 25): the host renumbers an auto net
+    (``NET3`` → ``NET4``, ``$1N5`` …) when wiring changes *elsewhere*, so a wire
+    nobody touched can come back with another auto name. A *named* net carries
+    intent and stays in the comparison — the same rule the findings signature
+    applies (`cli._finding_signature`).
+    """
+    from ..rules.facts import is_auto_net
+
+    net = row.get("net") or ""
+    return "(auto)" if row.get("kind") == "wire" and is_auto_net(net) else net
+
+
+def _identity(row: Mapping[str, Any]) -> tuple:
+    if row["kind"] == "wire":
+        return ("wire", _stable_net(row), tuple(tuple(point) for point in row["points"]))
+    return (
+        row["kind"], row["designator"], row["value"], row["lcsc"], row["net"],
+        row["x"], row["y"], row["rotation"], row["mirror"],
+    )
+
+
+def census_changes(
+    before: Sequence[Mapping[str, Any]],
+    after: Sequence[Mapping[str, Any]],
+    *,
+    ignore_ids: Iterable[str] = (),
+) -> list[str]:
+    """What happened to the primitives that were on the page before (057 sec.2).
+
+    Every row of ``before`` — except ``ignore_ids``, the ones the run itself was
+    meant to touch (a discard's own targets) — must still be on the page, with
+    the same identity fields (designator, value, LCSC number, net, origin, pose;
+    a wire's net and point list). A row that is gone or that changed is one line.
+    New rows are not judged here: what a run *adds* is the range check's
+    business, and this function is the one that says "and nothing else moved".
+    """
+    skip = set(ignore_ids)
+    now = {row["id"]: row for row in after if row.get("id")}
+    problems: list[str] = []
+    for row in before:
+        ident = row.get("id") or ""
+        if not ident or ident in skip:
+            continue
+        name = row.get("designator") or (
+            f"{row.get('net')} {row['kind']}" if row.get("net") else row["kind"]
+        )
+        found = now.get(ident)
+        if found is None:
+            problems.append(f"existing {name} ({ident}) is no longer on the page")
+            continue
+        if _identity(found) != _identity(row):
+            fields = [
+                key for key in ("designator", "value", "lcsc", "net", "x", "y",
+                                "rotation", "mirror", "points")
+                if (
+                    _stable_net(row) != _stable_net(found) if key == "net"
+                    else row.get(key) != found.get(key)
+                )
+            ]
+            problems.append(
+                f"existing {name} ({ident}) changed: "
+                + ", ".join(f"{key} {row.get(key)!r} → {found.get(key)!r}" for key in fields)
+            )
+    return problems
+
+
+@dataclass
+class DiscardSelection:
+    """Which primitives on the page are this plan's, and whether that is certain.
+
+    ``parts``/``flags``/``wires`` are ``(primitive id, what)`` pairs the discard
+    may delete. ``mismatches`` are the reasons the whole batch is refused — one
+    is enough (057 sec.5: "任何一件身份不符 → 整批拒删"). ``absent`` are the
+    plan's items the page does not hold at all, which is not a mismatch: a second
+    discard finds everything absent (its idempotence).
+    """
+
+    parts: list[tuple[str, str]] = field(default_factory=list)
+    flags: list[tuple[str, str]] = field(default_factory=list)
+    wires: list[tuple[str, str]] = field(default_factory=list)
+    mismatches: list[str] = field(default_factory=list)
+    absent: list[str] = field(default_factory=list)
+    matched: list[str] = field(default_factory=list)
+
+    @property
+    def ids(self) -> list[str]:
+        """Every id to delete, lines before parts (057 sec.5's order)."""
+        return [ident for ident, _what in self.wires + self.flags + self.parts]
+
+    @property
+    def empty(self) -> bool:
+        return not (self.parts or self.flags or self.wires)
+
+
+def _on_polyline(point: tuple[float, float], points: Sequence[tuple[float, float]]) -> bool:
+    """Is `point` a vertex of the polyline or on one of its segments?"""
+    if len(points) == 1:
+        return _near(point, points[0], 1e-6)
+    for start, end in zip(points, points[1:]):
+        if (
+            min(start[0], end[0]) - 1e-6 <= point[0] <= max(start[0], end[0]) + 1e-6
+            and min(start[1], end[1]) - 1e-6 <= point[1] <= max(start[1], end[1]) + 1e-6
+            and abs(
+                (end[0] - start[0]) * (point[1] - start[1])
+                - (end[1] - start[1]) * (point[0] - start[0])
+            ) <= 1e-6
+        ):
+            return True
+    return False
+
+
+def discard_selection(plan: ChangePlan, geometry: Any) -> DiscardSelection:
+    """The plan's own primitives on the page, identity checked (057 sec.5).
+
+    Three identity legs for a part, and all three must hold before it may be
+    deleted: the **designator** (exactly one component answers to it), the
+    **position** (its origin within half a lattice step of the plan's), and the
+    **value** — the `Value` the plan wrote (055 G2), or, for a plan that claims no
+    value write, the LCSC number the part was placed from. A part whose
+    designator the plan left empty (a page document discarded without its plan)
+    is found **by position** instead, and then its designator prefix stands in
+    for the designator leg.
+
+    A flag is the plan's when exactly one net flag, of the plan's net, sits on the
+    plan's point. A wire is the plan's when it carries the plan's net and **every**
+    point it reports lies on the plan's own wiring of that net; a wire that
+    touches the plan's wiring and reaches beyond it has been merged by the host
+    with somebody else's (pit 32: touching wires become one primitive), and
+    deleting it would delete their wire too — a mismatch, never a partial delete.
+    """
+    selection = DiscardSelection()
+    rows = census_items(geometry)
+    part_rows = [row for row in rows if row["kind"] == "part"]
+    flag_rows = [row for row in rows if row["kind"] == "netflag"]
+    wire_rows = [row for row in rows if row["kind"] == "wire"]
+
+    for part in plan.change.draw_parts:
+        spot = (part.x, part.y)
+        if part.designator:
+            named = [
+                row for row in part_rows
+                if row["designator"].upper() == part.designator.upper()
+            ]
+            label = part.designator
+        else:
+            named = [
+                row for row in part_rows
+                if row["x"] is not None and row["y"] is not None
+                and _near((row["x"], row["y"]), spot, HALF_GRID)
+                and row["designator"].upper().startswith(part.prefix.upper())
+            ]
+            label = f"{part.spec_id} (found by position ({spot[0]:g}, {spot[1]:g}))"
+        if not named:
+            selection.absent.append(f"part {label}")
+            continue
+        if len(named) > 1:
+            selection.mismatches.append(
+                f"part {label}: {len(named)} components answer to it "
+                f"({', '.join(row['id'] for row in named)}) — which one is the plan's "
+                "cannot be stated"
+            )
+            continue
+        row = named[0]
+        legs: list[str] = []
+        if (
+            row["x"] is None or row["y"] is None
+            or not _near((row["x"], row["y"]), spot, HALF_GRID)
+        ):
+            legs.append(
+                f"it is at ({row['x']}, {row['y']}), the plan put it at "
+                f"({spot[0]:g}, {spot[1]:g})"
+            )
+        if part.value_key and part.value:
+            if row["value"] != part.value:
+                legs.append(f"its Value is {row['value']!r}, the plan wrote {part.value!r}")
+        elif part.lcsc and row["lcsc"]:
+            if row["lcsc"] != part.lcsc:
+                legs.append(f"it was placed from {row['lcsc']}, the plan places {part.lcsc}")
+        else:
+            legs.append(
+                "the plan claims no value write and the page reports no LCSC number, "
+                "so the part's third identity leg cannot be read"
+            )
+        if legs:
+            selection.mismatches.append(
+                f"part {label} ({row['designator'] or 'no designator'}, {row['id']}): "
+                + "; ".join(legs)
+            )
+            continue
+        selection.parts.append((row["id"], row["designator"]))
+        selection.matched.append(f"part {row['designator']} ({row['id']})")
+
+    for flag in plan.change.draw_flags:
+        spot = (flag.x, flag.y)
+        here = [
+            row for row in flag_rows
+            if row["x"] is not None and row["y"] is not None
+            and _near((row["x"], row["y"]), spot, HALF_GRID)
+        ]
+        label = f"{flag.kind} flag {flag.net} at ({spot[0]:g}, {spot[1]:g})"
+        if not here:
+            selection.absent.append(label)
+            continue
+        mine = [row for row in here if row["net"] == flag.net]
+        if len(here) > 1 or not mine:
+            selection.mismatches.append(
+                f"{label}: the page has "
+                + ", ".join(f"a {row['net'] or '(no net)'} flag {row['id']}" for row in here)
+                + " there"
+            )
+            continue
+        selection.flags.append((mine[0]["id"], flag.net))
+        selection.matched.append(f"flag {flag.net} ({mine[0]['id']})")
+
+    planned: dict[str, list[list[tuple[float, float]]]] = {}
+    for wire in plan.change.draw_wires:
+        planned.setdefault(wire.net, []).append(
+            [(float(point[0]), float(point[1])) for point in wire.points]
+        )
+    for net, polylines in sorted(planned.items()):
+        mine: list[dict[str, Any]] = []
+        for row in wire_rows:
+            if row["net"] != net:
+                continue
+            points = [(float(point[0]), float(point[1])) for point in row["points"]]
+            on = [any(_on_polyline(point, line) for line in polylines) for point in points]
+            if not any(on):
+                continue
+            if not all(on):
+                stray = [point for point, hit in zip(points, on) if not hit]
+                selection.mismatches.append(
+                    f"wire {row['id']} ({net}) reaches the plan's wiring and also "
+                    + ", ".join(f"({x:g}, {y:g})" for x, y in stray[:3])
+                    + ", which the plan never drew — the host merged it with another "
+                    "wire (pit 32), and deleting it would delete that wire too"
+                )
+                continue
+            mine.append(row)
+            selection.wires.append((row["id"], net))
+            selection.matched.append(f"wire {net} ({row['id']})")
+        for line in polylines:
+            reached = [
+                end for end in (line[0], line[-1])
+                if any(
+                    _near(end, (float(point[0]), float(point[1])), 1e-6)
+                    for row in mine for point in row["points"]
+                )
+            ]
+            if len(reached) < 2:
+                selection.absent.append(
+                    f"wire {net} ({line[0][0]:g}, {line[0][1]:g}) → "
+                    f"({line[-1][0]:g}, {line[-1][1]:g})"
+                )
+    return selection

@@ -77,6 +77,9 @@ __all__ = [
     "LABEL_LABEL",
     "LABEL_MODES",
     "LABEL_WIRE",
+    "LOCK_SCOPES",
+    "LOCK_SCOPE_MODULE",
+    "LOCK_SCOPE_PAGE",
     "MODULE_PRESENTATION_KEYS",
     "PATH_STEP_NET",
     "PATH_STEP_PART",
@@ -157,7 +160,15 @@ _PATH_KEYS = ("id", "chain", "note")
 _FLOW_EDGE_KEYS = ("from", "to", "mainPath")
 _OBLIGATION_KEYS = ("nets", "note")
 _LABEL_POLICY_KEYS = ("local", "crossModule", "highFanout")
-_LOCK_KEYS = ("partId", "x", "y", "rotation")
+_LOCK_KEYS = ("partId", "x", "y", "rotation", "scope")
+
+#: What a lock's coordinates are relative to (057 sec.3). ``module`` — the
+#: default, and the only reading before 057 — is the module's own drawing: the
+#: page translates the lock with its module. ``page`` pins the part to a point
+#: of the *page*: the page compiler derives the module's origin from it.
+LOCK_SCOPE_MODULE = "module"
+LOCK_SCOPE_PAGE = "page"
+LOCK_SCOPES: tuple[str, ...] = (LOCK_SCOPE_MODULE, LOCK_SCOPE_PAGE)
 
 #: Keys that mean "a place on the canvas" — refused everywhere except inside a
 #: `userLocks` entry (052 sec.4).
@@ -258,12 +269,31 @@ class UserLock:
     The one legitimate coordinate in this document, and the one input the
     compiler may not quietly ignore: 053 sec.5 scenario 12 requires a lock that
     conflicts with the grammar to be *reported*, never dropped.
+
+    ``scope`` says what ``x``/``y`` are measured in (057 sec.3):
+
+    * ``module`` (the default, and every lock written before 057) — the
+      module's own drawing. The page translates the lock with its module;
+      ``rotation`` is part of the lock.
+    * ``page`` — the page itself. The part lands at exactly ``(x, y)`` in every
+      page candidate, and the page compiler derives the module's origin from it
+      (``origin = P − L(generation)``). A page lock pins a **position**: the
+      part's pose is its module's drawing (a module lock states it), so a page
+      lock carries no rotation.
+
+    One part may carry one lock of each scope: the module lock arranges the part
+    inside its module, the page lock puts that arrangement on the page.
     """
 
     part_id: str
     x: float = 0.0
     y: float = 0.0
     rotation: float = 0.0
+    scope: str = LOCK_SCOPE_MODULE
+
+    @property
+    def is_page(self) -> bool:
+        return self.scope == LOCK_SCOPE_PAGE
 
 
 @dataclass
@@ -294,6 +324,10 @@ class PresentationSpec:
 
     def locked_part_ids(self) -> list[str]:
         return [lock.part_id for lock in self.user_locks]
+
+    def page_locks(self) -> list[UserLock]:
+        """The locks measured on the page (057 sec.3), in document order."""
+        return [lock for lock in self.user_locks if lock.is_page]
 
     def side_for(self, role: str) -> str:
         """The preferred side for a role, or "" when the spec has no preference."""
@@ -358,15 +392,7 @@ class PresentationSpec:
                 "highFanout": self.label_policy.high_fanout,
             },
             "sidePreferences": dict(self.side_preferences),
-            "userLocks": [
-                {
-                    "partId": lock.part_id,
-                    "x": lock.x,
-                    "y": lock.y,
-                    "rotation": lock.rotation,
-                }
-                for lock in self.user_locks
-            ],
+            "userLocks": [_lock_json(lock) for lock in self.user_locks],
         }
 
     @classmethod
@@ -434,6 +460,24 @@ def presentation_sha256(spec: PresentationSpec) -> str:
 
 def _path_json(path: PresentationPath) -> dict[str, Any]:
     return {"id": path.id, "chain": list(path.chain), "note": path.note}
+
+
+def _lock_json(lock: UserLock) -> dict[str, Any]:
+    """One lock, in the shape its scope has.
+
+    A module lock serialises exactly as every lock did before 057 (no `scope`
+    key): a spec that says nothing new keeps its digest, and with it every plan
+    compiled from it (the same rule the module overrides and `flow` follow). A
+    page lock states its scope and no rotation — it pins a position.
+    """
+    if lock.is_page:
+        return {"partId": lock.part_id, "x": lock.x, "y": lock.y, "scope": lock.scope}
+    return {
+        "partId": lock.part_id,
+        "x": lock.x,
+        "y": lock.y,
+        "rotation": lock.rotation,
+    }
 
 
 def _module_json(module: PresentationModule) -> dict[str, Any]:
@@ -700,19 +744,38 @@ def _grammar(root: dict[str, Any]) -> str:
 
 def _locks_from(root: dict[str, Any]) -> list[UserLock]:
     out: list[UserLock] = []
-    seen: set[str] = set()
+    seen: set[tuple[str, str]] = set()
     for index, item in enumerate(_list(root.get("userLocks"), "userLocks")):
         spot = f"userLocks[{index}]"
         body = _object(item, spot)
         _check_keys(body, _LOCK_KEYS, spot)
         part_id = _text(body.get("partId"), f"{spot}.partId", required=True)
-        if part_id in seen:
+        scope = body.get("scope", LOCK_SCOPE_MODULE)
+        if scope not in LOCK_SCOPES:
             raise PresentationSpecError(
-                f"{spot}.partId is {part_id!r}, already locked — two locks on one "
-                "part are two answers to where it goes"
+                f"{spot}.scope is {scope!r}; expected one of {', '.join(LOCK_SCOPES)} "
+                "— a lock is measured in its module's drawing or on the page"
             )
-        seen.add(part_id)
+        if (part_id, scope) in seen:
+            raise PresentationSpecError(
+                f"{spot}.partId is {part_id!r}, already locked"
+                + (" on the page" if scope == LOCK_SCOPE_PAGE else "")
+                + " — two locks on one part are two answers to where it goes"
+            )
+        seen.add((part_id, scope))
         numbers = [_number(body.get(key), f"{spot}.{key}") for key in ("x", "y")]
+        if scope == LOCK_SCOPE_PAGE:
+            if "rotation" in body:
+                raise PresentationSpecError(
+                    f"{spot} is a page lock with a rotation — a page lock pins where "
+                    "the part lands on the page, and its pose belongs to the module's "
+                    "drawing: state the pose with a module lock on the same part "
+                    "(the two scopes may be combined, 057 sec.3)"
+                )
+            out.append(UserLock(
+                part_id=part_id, x=numbers[0], y=numbers[1], scope=LOCK_SCOPE_PAGE,
+            ))
+            continue
         rotation = _number(body.get("rotation", 0), f"{spot}.rotation")
         if rotation not in POSE_ROTATIONS:
             raise PresentationSpecError(

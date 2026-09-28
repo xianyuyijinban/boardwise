@@ -1336,6 +1336,57 @@ def build_parser() -> argparse.ArgumentParser:
         "--port", type=int, default=None, help="Daemon port (default: 61190).",
     )
 
+    # ---- 057 sec.5: the explicit clean-up ---------------------------------
+    draw_discard = draw_sub.add_parser(
+        "discard",
+        help="On the live page: delete exactly one plan's drawing, identity-checked.",
+        description=(
+            "Take one landed drawing back off its page (057 G5): the plan's own "
+            "primitives and nothing else. Every part is identified by designator, "
+            "position and value before anything is deleted, every flag by net and "
+            "point, every wire by net and by all of its points lying on the plan's "
+            "wiring — one mismatch refuses the whole batch (exit 4, nothing "
+            "deleted). Lines go first, then flags, then parts; the page is read back "
+            "and everything outside the plan must be unchanged. A second run finds "
+            "nothing and says so (exit 0). A page document is accepted with "
+            "--circuit/--presentation/--profiles (its parts are then found by "
+            "position). Exit 0 discarded or nothing to discard / 2 a delete refused "
+            "or the read-back disagrees / 3 state unknown (never retried) / 4 "
+            "identity mismatch or guard refused / 5 unusable input."
+        ),
+    )
+    draw_discard.add_argument(
+        "plan", help="The draw-module plan that was applied, or the page document.",
+    )
+    draw_discard.add_argument(
+        "--page", default=None, metavar="UUID",
+        help="The page the drawing is on (required when the plan is not bound to one).",
+    )
+    for flag, text in (
+        ("--circuit", "Page document only: the CircuitSpec (values and recipes)."),
+        ("--presentation", "Page document only: the PresentationSpec."),
+        ("--profiles", "Page document only: the symbol library."),
+    ):
+        draw_discard.add_argument(flag, default=None, metavar="PATH", help=text)
+    draw_discard.add_argument(
+        "--save", action="store_true",
+        help="Save the page after a verified clean-up (default: leave it unsaved).",
+    )
+    draw_discard.add_argument(
+        "--json", dest="json_path", metavar="PATH", help="Write the machine-readable result."
+    )
+    draw_discard.add_argument(
+        "--project", default=None, metavar="NAME_OR_UUID",
+        help="Which editor window to clean (023 routing hint; the daemon will not guess).",
+    )
+    draw_discard.add_argument(
+        "--instance", default=None, metavar="INSTANCE_ID",
+        help="The same choice by window key.",
+    )
+    draw_discard.add_argument(
+        "--port", type=int, default=None, help="Daemon port (default: 61190).",
+    )
+
     persist = sub.add_parser(
         "persistence",
         help=(
@@ -5125,11 +5176,11 @@ def _draw_pairs(values: list[str] | None, flag: str) -> dict[str, str]:
     return out
 
 
-def _draw_compile(args: argparse.Namespace, *, page_box):
-    """Compile the two specs. Raises :class:`_DrawInputError` for anything unreadable."""
+def _draw_inputs(args: argparse.Namespace):
+    """``(circuit, presentation, profiles)`` from the three flags, or :class:`_DrawInputError`."""
     from .core.circuitspec import CircuitSpec, CircuitSpecError
     from .core.presentationspec import PresentationSpec, PresentationSpecError
-    from .engines import drawapply, drawcompiler
+    from .engines import drawapply
 
     try:
         circuit = CircuitSpec.load(args.circuit)
@@ -5143,8 +5194,33 @@ def _draw_compile(args: argparse.Namespace, *, page_box):
         profiles = drawapply.load_library(args.profiles)
     except (drawapply.DrawPlanError, OSError) as exc:
         raise _DrawInputError(f"--profiles {args.profiles}: {exc}") from exc
+    return circuit, presentation, profiles
+
+
+def _draw_compile(args: argparse.Namespace, *, page_box):
+    """Compile the two specs. Raises :class:`_DrawInputError` for anything unreadable."""
+    from .engines import drawcompiler
+
+    circuit, presentation, profiles = _draw_inputs(args)
     budget = drawcompiler.CompileBudget(page_box=page_box)
     return drawcompiler.compile(circuit, presentation, profiles, budget), circuit, presentation, profiles
+
+
+def _draw_is_page(args: argparse.Namespace) -> bool:
+    """Does ``--presentation`` ask for a page (057 sec.1)? ``False`` when unreadable.
+
+    Read once, up front, so each command can pick its path before anything else
+    runs; an unreadable file answers ``False`` and the single-module path then
+    reports the read error in its own words, exactly as it always did.
+    """
+    from .core.presentationspec import PresentationSpec, PresentationSpecError
+    from .engines import pagecompiler
+
+    try:
+        presentation = PresentationSpec.load(args.presentation)
+    except (PresentationSpecError, OSError):
+        return False
+    return pagecompiler.wants_page(presentation)
 
 
 def _draw_rank_lines(result) -> list[str]:
@@ -5188,7 +5264,15 @@ def _cmd_draw_compile(args: argparse.Namespace) -> int:
     exists, the action that would fix the input) or when an input cannot be read.
     Nothing here touches the editor: the drawing and its evidence come from the
     two specs and the library.
+
+    A presentation that asks for a *page* (057 sec.1: several modules, a module
+    flow, a module grammar or a page lock — `pagecompiler.wants_page`) is
+    compiled by the page compiler instead, on the same command: the candidates
+    are page documents (``candN.page.json``) and the previews carry the module
+    frames. A single-module presentation takes the path it always took.
     """
+    if _draw_is_page(args):
+        return _cmd_draw_compile_page(args)
     try:
         page_box = _draw_page_box(args.page_box)
         result, _circuit, _presentation, profiles = _draw_compile(args, page_box=page_box)
@@ -5300,6 +5384,7 @@ async def _draw_live_context(client, args, call, notes: list[str]):
         else:
             context["focused"] = focused
     geometry = await call("sch.geometry", {}, "read the page's primitives (the census)")
+    context["geometry"] = geometry if isinstance(geometry, dict) else None
     if isinstance(geometry, dict):
         census = drawapply.canvas_census(geometry)
         census.page_uuid = page
@@ -5407,9 +5492,15 @@ def _cmd_draw_plan(args: argparse.Namespace) -> int:
     the plan written; 5 when an input cannot be read or the drawing cannot be
     made executable (no LCSC number, a missing value, a rail flag the host's
     vocabulary cannot name); 3 when the daemon is unreachable for the live legs.
+
+    A page-level presentation (057 sec.1) is compiled by the page compiler and the
+    chosen page's merged drawing — its ``plan`` field — becomes the plan, through
+    the same `drawapply.module_plan`: see :func:`_cmd_draw_plan_page`.
     """
     import asyncio
 
+    if _draw_is_page(args):
+        return _cmd_draw_plan_page(args)
     try:
         page_box = _draw_page_box(args.page_box)
         result, circuit, presentation, profiles = _draw_compile(args, page_box=page_box)
@@ -5708,7 +5799,9 @@ async def _draw_render(call, page: str, args, report: dict, notes: list[str],
     )
 
 
-async def _draw_apply_flow(client, bridge_error, plan, args, started: float) -> int:
+async def _draw_apply_flow(
+    client, bridge_error, plan, args, started: float, extra: dict | None = None
+) -> int:
     """Execute one `draw-module` plan against a running editor (054 §三).
 
     The order is the task book's, and each step exists because a measurement put
@@ -5741,7 +5834,7 @@ async def _draw_apply_flow(client, bridge_error, plan, args, started: float) -> 
 
     from .core.circuitspec import CircuitSpec
     from .core.presentationspec import PresentationSpec
-    from .core.layoutplan import LayoutPlan, LayoutPlanError
+    from .core.layoutplan import LayoutPlanError
     from .engines import addcomponent, drawapply, patchpin
 
     records: list[dict] = []
@@ -5799,6 +5892,9 @@ async def _draw_apply_flow(client, bridge_error, plan, args, started: float) -> 
         "final": "",
         "durationMs": 0,
     }
+    # 057: a page document landed through this flow says so, and carries the
+    # plan the run built from it (the page route builds it at apply time).
+    report.update(extra or {})
 
     def done(code: int, outcome: str, reason: str = "") -> int:
         report["exitCode"] = code
@@ -5845,12 +5941,21 @@ async def _draw_apply_flow(client, bridge_error, plan, args, started: float) -> 
             presentation_sha256 = PresentationSpec.load(args.presentation).sha256()
         else:
             presentation_sha256 = ""
+        page_document = getattr(args, "_page_document", None)
         if args.layout:
             try:
-                layout_sha256 = LayoutPlan.load(args.layout).geometry_sha256()
-            except LayoutPlanError as exc:
+                # 057 sec.1: a page document is accepted where a layout is, and
+                # its `plan` field is what the layout guard digests — the page's
+                # guard evidence is inherited from the drawing it places, not a
+                # second set invented for pages.
+                layout_sha256, layout_page = _draw_layout_digest(args.layout)
+                if layout_page is not None and page_document is None:
+                    page_document = layout_page
+            except (LayoutPlanError, ValueError) as exc:
                 notes.append(f"--layout {args.layout} could not be read ({exc})")
                 layout_sha256 = ""
+        elif page_document is not None:
+            layout_sha256 = page_document.plan.geometry_sha256()
         else:
             layout_sha256 = ""
         profiles = drawapply.load_library(args.profiles) if args.profiles else None
@@ -6387,6 +6492,7 @@ async def _draw_apply_flow(client, bridge_error, plan, args, started: float) -> 
         "canvasText": "; ".join(after_state["canvas"]),
         "islands": islands,
         "sharedWithOutsidePins": shared,
+        "nets": _draw_net_readback(plan, islands, page_document),
         "ok": drawapply.all_satisfied(after_state),
     }
     if shared:
@@ -6457,6 +6563,29 @@ async def _draw_apply_flow(client, bridge_error, plan, args, started: float) -> 
             )
             report["range"] = diff
             return done(2, "failed", "range_flag_diff")
+        # 057 sec.2: what was on the page before the run is still there, item by
+        # item — designator, value, LCSC, net, origin, pose; a wire's net and its
+        # point list. The counts above cannot see a moved part or a wire the host
+        # merged with one of ours (pit 32), and "既有图元零改动" is the claim.
+        items_before = drawapply.census_items(geometry)
+        changed = drawapply.census_changes(items_before, drawapply.census_items(verify))
+        diff["outOfScope"] = {
+            "items": len(items_before),
+            "changed": changed,
+            "basis": (
+                "every primitive the page held before the first write (sch.geometry, "
+                "by primitive id), compared field by field with the page after the "
+                "writes — drawapply.census_changes"
+            ),
+        }
+        if changed:
+            notes.append(
+                "范围外图元被改动（落图前已在页上的图元逐项对比）："
+                + "；".join(changed)
+                + " —— 事故报告；没有保存"
+            )
+            report["range"] = diff
+            return done(2, "failed", "range_out_of_scope")
     else:
         notes.append(
             "the page could not be read before the writes, so the +N range could not be "
@@ -6562,7 +6691,12 @@ def _cmd_draw_apply(args: argparse.Namespace) -> int:
     import time
 
     from .core.changeplan import DRAW_MODULE_KIND, ChangePlan, ChangePlanError
+    from .core.pagelayoutplan import PAGE_LAYOUT_PLAN_KIND
 
+    if _draw_document_kind(args.plan) == PAGE_LAYOUT_PLAN_KIND:
+        # 057 sec.1: the same command eats a page document and lands its `plan`
+        # field through the path below (see `_cmd_draw_apply_page`).
+        return _cmd_draw_apply_page(args)
     try:
         plan = ChangePlan.load(args.plan)
     except ChangePlanError as exc:
@@ -6614,10 +6748,1145 @@ def _cmd_draw_apply(args: argparse.Namespace) -> int:
     return asyncio.run(run())
 
 
+# --------------------------------------------------------------------------
+# 057 stage C2b: the page family — `draw compile|plan|apply` on a page
+# document, and `draw discard`
+#
+# No new command for a page (057 sec.1, ruled): a presentation that asks for a
+# page (`pagecompiler.wants_page`) takes the page compiler on the same three
+# commands, and a page document (`kind=boardwise-page-layout-plan`) is accepted
+# wherever a drawing is — its `plan` field is a plain 053 LayoutPlan, and it is
+# handed to the existing path (`drawapply.module_plan`, `_draw_apply_flow`)
+# rather than to a second one. `draw discard` is the one new verb (057 sec.5):
+# taking a plan's own drawing back off a page, identity-checked.
+# --------------------------------------------------------------------------
+
+#: How many primitive ids one `sch.delete_primitives` call is handed by `draw
+#: discard`. The daemon budgets 150 s for a delete (pit 2: ~3.7 s per primitive,
+#: so ~40 of them); the discard deletes in 057 sec.5's order — lines, then flags,
+#: then parts — one call per phase, and a phase longer than this is split and the
+#: split is *reported* (pit 2 forbids a quiet split, not a declared one).
+DISCARD_BATCH = 30
+
+
+def _draw_document_kind(path: str) -> str:
+    """The ``kind`` a JSON document states, or ``""`` (unreadable or no kind)."""
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    return str(payload.get("kind") or "") if isinstance(payload, dict) else ""
+
+
+def _draw_layout_digest(path: str):
+    """``(geometry digest, page document or None)`` for a ``--layout`` file.
+
+    A LayoutPlan digests itself; a page document (057 sec.1) is read through its
+    own schema — which re-checks its derived verdict and digest — and its
+    ``plan`` field is what is digested, because that drawing is what a plan built
+    from the page places.
+    """
+    from .core.layoutplan import LayoutPlan
+    from .core.pagelayoutplan import PAGE_LAYOUT_PLAN_KIND, PageLayoutPlan
+
+    if _draw_document_kind(path) == PAGE_LAYOUT_PLAN_KIND:
+        page = PageLayoutPlan.load(path)
+        return page.plan.geometry_sha256(), page
+    return LayoutPlan.load(path).geometry_sha256(), None
+
+
+def _draw_page_budget(page_box, keepouts=(), relocate: bool = False):
+    from .engines import pagecompiler
+
+    return pagecompiler.PageCompileBudget(
+        page_box=page_box,
+        keepouts=tuple(tuple(float(value) for value in box) for box in keepouts),
+        relocate_around_keepouts=relocate,
+    )
+
+
+def _draw_page_rank_lines(result) -> list[str]:
+    """The ranked pages, one line each — the layers, the frames, the digest."""
+    lines: list[str] = []
+    for index, item in enumerate(result.ranked[: len(result.pages)]):
+        frames = ", ".join(
+            f"{module.id}@({module.origin[0]:g}, {module.origin[1]:g})"
+            for module in item.page.modules
+        )
+        lines.append(
+            f"  [{index}] {item.describe_key()} | {frames} | "
+            f"{item.page.page_geometry_sha256()[:12]}…"
+        )
+    return lines
+
+
+def _draw_keepout_names(text: str, labels: Sequence[str]) -> str:
+    """``keepouts[3]`` -> ``keepouts[3] (existing R5 c-R5)`` in a refusal line."""
+    if not labels:
+        return text
+
+    def name(match: "re.Match[str]") -> str:
+        index = int(match.group(1))
+        if 0 <= index < len(labels):
+            return f"{match.group(0)} ({labels[index]})"
+        return match.group(0)
+
+    return re.sub(r"keepouts\[(\d+)\]", name, text)
+
+
+def _write_page_previews(args, result, profiles, page_box, keepouts=()) -> list[Path]:
+    """One SVG (module frames drawn) and one page document per candidate."""
+    from .engines import svgpreview
+
+    out = Path(args.out_path) if args.out_path else Path("outputs") / "054_drawcompile"
+    written: list[Path] = []
+    for index, page in enumerate(result.pages):
+        path = out / f"cand{index + 1}.svg"
+        svgpreview.write_preview(
+            path, page.plan, profiles, page_box=page_box, keepouts=tuple(keepouts),
+            frames=[(module.id, module.frame) for module in page.modules],
+            title=(
+                f"draw compile (page): candidate {index + 1}/{len(result.pages)} — "
+                f"{result.ranked[index].describe_key()}"
+            ),
+        )
+        written.append(path)
+        document = out / f"cand{index + 1}.page.json"
+        page.dump(document)
+        written.append(document)
+    return written
+
+
+def _cmd_draw_compile_page(args: argparse.Namespace) -> int:
+    """``draw compile`` for a page (057 sec.1): the page compiler, same flags.
+
+    ``--page-box`` is required: a page places its modules on a sheet, and the
+    frames, the gaps and every keep-out are absolute. Exit 0 with at least one
+    page, 5 when the page compiler refused or an input cannot be read — the same
+    two answers the single-module path gives.
+    """
+    from .engines import pagecompiler
+
+    try:
+        page_box = _draw_page_box(args.page_box)
+        circuit, presentation, profiles = _draw_inputs(args)
+    except _DrawInputError as exc:
+        print(f"boardwise draw compile: {exc}", file=sys.stderr)
+        return 5
+    if page_box is None:
+        print(
+            "boardwise draw compile: this presentation describes a page "
+            f"({len(presentation.modules)} module(s)) and a page is compiled onto a "
+            "sheet — give --page-box x0,y0,x1,y1 (the frames, the gaps and the "
+            "keep-outs are all absolute)",
+            file=sys.stderr,
+        )
+        return 5
+    result = pagecompiler.compile_page(
+        circuit, presentation, profiles, _draw_page_budget(page_box)
+    )
+    print(
+        f"boardwise draw compile: page of {len(presentation.modules)} module(s) — "
+        f"{len(result.pages)} page candidate(s), {len(result.failures)} failure(s), "
+        f"{len(result.rejected)} variant(s) rejected"
+    )
+    if result.pages:
+        print("  ranked (best first; the layers are compared, never summed):")
+        for line in _draw_page_rank_lines(result):
+            print(line)
+    if result.failures:
+        print("  failures (053 §四's four categories, at page scale):")
+        for line in result.render_failures().splitlines():
+            print(f"    {line}")
+    for note in result.notes:
+        print(f"  note: {note}")
+    written = _write_page_previews(args, result, profiles, page_box)
+    for path in written:
+        print(f"  wrote {path}")
+    if args.json_path:
+        payload = {
+            "command": "compile",
+            "document": "page",
+            "ok": bool(result.ok),
+            "pages": [
+                {
+                    "index": index,
+                    "key": item.describe_key(),
+                    "metrics": dict(item.metrics),
+                    "geometrySha256": item.page.page_geometry_sha256(),
+                    "planGeometrySha256": item.page.plan.geometry_sha256(),
+                    "verdict": item.page.verdict,
+                    "modules": [
+                        {
+                            "id": module.id, "origin": list(module.origin),
+                            "frame": list(module.frame),
+                            "ports": [
+                                {"net": port.net, "kind": port.kind,
+                                 "partner": port.partner}
+                                for port in module.ports
+                            ],
+                        }
+                        for module in item.page.modules
+                    ],
+                }
+                for index, item in enumerate(result.ranked[: len(result.pages)])
+            ],
+            "failures": [
+                {"category": item.category, "subject": item.subject,
+                 "detail": item.detail, "action": item.action}
+                for item in result.failures
+            ],
+            "categories": result.categories(),
+            "rejected": [
+                {"variant": item.variant, "reason": item.reason}
+                for item in result.rejected
+            ],
+            "modules": {
+                name: {"ok": compiled.ok, "categories": compiled.categories()}
+                for name, compiled in result.modules.items()
+            },
+            "notes": list(result.notes),
+            "previews": [str(path) for path in written],
+        }
+        Path(args.json_path).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    if not result.ok:
+        print(
+            "boardwise draw compile: no legal page came out — the categories above "
+            "say why, each naming the module, the lock or the keep-out it is about",
+            file=sys.stderr,
+        )
+        return 5
+    return 0
+
+
+def _draw_page_notes(page, keep_labels: Sequence[str], keep_notes: Sequence[str]) -> list[str]:
+    """What a plan built from a page says about the page it came from."""
+    kinds = page.port_kinds()
+    lines = [
+        f"the drawing is page {page.page_geometry_sha256()[:12]}… (its merged plan "
+        f"{page.plan.geometry_sha256()[:12]}…), {len(page.modules)} module(s): "
+        + "; ".join(
+            f"{module.id} [{', '.join(module.parts)}] at "
+            f"({module.origin[0]:g}, {module.origin[1]:g})"
+            for module in page.modules
+        ),
+    ]
+    if kinds:
+        lines.append(
+            "shared nets, as the page states them: "
+            + ", ".join(
+                f"{net}={'/'.join(sorted(styles))}" for net, styles in sorted(kinds.items())
+            )
+            + " — a label/flag on each side is joined by *name* in the editor's "
+            "project-wide netlist (054 C7), which the apply's netlist read-back checks"
+        )
+    if keep_labels:
+        lines.append(
+            f"compiled around {len(keep_labels)} keep-out(s) taken from the page's "
+            "census (every existing primitive, 057 sec.2); the arrangement was moved "
+            "off them as a rigid body where it had to be"
+        )
+    lines.extend(keep_notes)
+    return lines
+
+
+def _draw_plan_from_page(
+    page,
+    circuit,
+    presentation,
+    profiles,
+    *,
+    candidate: int = 0,
+    lcsc=None,
+    values=None,
+    pool=(),
+    baseline=None,
+    baseline_findings=(),
+    notes=(),
+):
+    """A page document's merged drawing, as the same `draw-module` plan (057 sec.1).
+
+    The page's `plan` field goes through `drawapply.module_plan` unchanged —
+    the guards, the postconditions, the designators and the value writes are the
+    single-module ones — with the two page adaptations that function names:
+    labels become named stub wires where no wire carries the name, and the
+    target names the page's modules.
+    """
+    from .engines import drawapply
+
+    return drawapply.module_plan(
+        page.plan, circuit, presentation, profiles,
+        candidate_index=candidate,
+        lcsc_by_part=lcsc or {},
+        values_by_part=values or {},
+        pool=list(pool),
+        baseline=baseline,
+        baseline_findings=list(baseline_findings),
+        notes=list(notes),
+        label_stubs=True,
+        module_label="page " + "+".join(module.id for module in page.modules),
+    )
+
+
+async def _draw_census_keepouts_live(call, geometry, notes: list[str]):
+    """``(boxes, labels, measured geometry)`` — the page's census as keep-outs.
+
+    One more `sch.geometry`, this time with every existing component's id in
+    ``bboxIds``: the plain read carries origins, not extents, and a keep-out has
+    to be the thing's size (057 sec.2). A read that fails falls back to the
+    first dump and the assumed boxes, and the note says which were assumed.
+    """
+    from .engines import drawapply
+
+    ids = [
+        str(entry.get("primitiveId") or "")
+        for entry in (geometry or {}).get("components") or []
+        if isinstance(entry, dict)
+        and str(((entry.get("state") or {}).get("ComponentType")) or "") != "sheet"
+        and entry.get("primitiveId")
+    ]
+    measured = geometry
+    if ids:
+        answer = await call(
+            "sch.geometry", {"bboxIds": ids},
+            "measure every existing component's extent (the census keep-outs, 057 §二)",
+        )
+        if isinstance(answer, dict):
+            measured = answer
+        else:
+            notes.append(
+                "the page's components could not be measured (bboxIds read failed); "
+                "their keep-outs are assumed boxes around their origins"
+            )
+    boxes, labels, keep_notes = drawapply.census_keepouts(measured)
+    notes.extend(keep_notes)
+    return boxes, labels, measured
+
+
+def _cmd_draw_plan_page(args: argparse.Namespace) -> int:
+    """``draw plan`` for a page (057 sec.1-3).
+
+    The page is compiled here (the specs are the input, as for a single module)
+    and candidate N's merged drawing becomes the `draw-module` plan. Bound to a
+    live page (``--page``/``--project``/``--instance``), three more things happen,
+    all of them reads: the census of what is already on the page becomes the
+    page compiler's keep-outs (057 sec.2: every existing primitive, measured),
+    and the arrangement is moved off them; the designator pool is the page's and
+    the project export's; the project's findings become the baseline. The page
+    document the plan was built from is written beside the plan
+    (``<plan>.page.json``) — it is what ``draw apply --layout`` digests and what
+    ``draw discard`` can be handed.
+    """
+    import asyncio
+
+    from .engines import drawapply, pagecompiler
+
+    try:
+        page_box = _draw_page_box(args.page_box)
+        circuit, presentation, profiles = _draw_inputs(args)
+        lcsc = _draw_pairs(args.lcsc, "--lcsc")
+        values = _draw_pairs(args.value, "--value")
+    except _DrawInputError as exc:
+        print(f"boardwise draw plan: {exc}", file=sys.stderr)
+        return 5
+    if page_box is None:
+        print(
+            "boardwise draw plan: this presentation describes a page and a page is "
+            "compiled onto a sheet — give --page-box x0,y0,x1,y1",
+            file=sys.stderr,
+        )
+        return 5
+    report: dict = {
+        "command": "plan",
+        "document": "page",
+        "ok": False,
+        "outcome": "",
+        "reason": "",
+        "exitCode": 0,
+        "module": "",
+        "candidate": args.candidate,
+        "plan": None,
+        "page": None,
+        "pageDocument": "",
+        "keepouts": [],
+        "live": {},
+        "poolSource": "",
+        "notes": [],
+        "final": "",
+    }
+    notes: list[str] = report["notes"]
+
+    def refuse(reason: str, message: str, lines: Sequence[str] = ()) -> int:
+        print(f"boardwise draw plan: {message}", file=sys.stderr)
+        for line in lines:
+            print(f"  {line}", file=sys.stderr)
+        report["exitCode"] = 5
+        report["outcome"] = "refused"
+        report["reason"] = reason
+        notes.append(message)
+        notes.extend(lines)
+        return _render_draw_plan(report, args)
+
+    def build(context: dict | None) -> int:
+        keep_boxes: list = []
+        keep_labels: list[str] = []
+        keep_notes: list[str] = []
+        if context is not None:
+            keep_boxes = list(context.get("keepouts") or [])
+            keep_labels = list(context.get("keepoutLabels") or [])
+            keep_notes = list(context.get("keepoutNotes") or [])
+        report["keepouts"] = [
+            {"box": list(box), "from": label}
+            for box, label in zip(keep_boxes, keep_labels)
+        ]
+        result = pagecompiler.compile_page(
+            circuit, presentation, profiles,
+            _draw_page_budget(page_box, keep_boxes, relocate=bool(keep_boxes)),
+        )
+        if not result.ok:
+            return refuse(
+                "compile_refused",
+                "the page compiler refused this page; nothing to plan",
+                [
+                    _draw_keepout_names(line, keep_labels)
+                    for line in result.render_failures().splitlines()
+                ],
+            )
+        if args.candidate < 0 or args.candidate >= len(result.pages):
+            return refuse(
+                "candidate_out_of_range",
+                f"--candidate {args.candidate} is out of range — {len(result.pages)} "
+                f"page(s) came out (0-{len(result.pages) - 1})",
+            )
+        page = result.pages[args.candidate]
+        try:
+            plan = _draw_plan_from_page(
+                page, circuit, presentation, profiles,
+                candidate=args.candidate, lcsc=lcsc, values=values,
+                pool=(context or {}).get("pool") or [],
+                baseline=(context or {}).get("census"),
+                baseline_findings=(context or {}).get("findings") or [],
+                notes=[
+                    f"the layout is the page compiler's candidate {args.candidate} "
+                    f"({page.page_geometry_sha256()[:12]}…)",
+                    f"the designator pool is {report['poolSource'] or 'empty (offline)'}",
+                    *_draw_page_notes(page, keep_labels, keep_notes),
+                ],
+            )
+        except drawapply.DrawPlanError as exc:
+            return refuse("cannot_build_plan", str(exc))
+        if args.out_path:
+            plan.dump(args.out_path)
+            target = Path(args.out_path)
+            document = target.with_name(target.stem + ".page.json")
+            page.dump(document)
+            report["pageDocument"] = str(document)
+            notes.append(
+                f"the page document this plan was built from is {document} — give it "
+                "to `draw apply --layout` (the layout guard digests its `plan`) or to "
+                "`draw discard`"
+            )
+        else:
+            print(json.dumps(plan.to_jsonable(), ensure_ascii=False, indent=2))
+        report["plan"] = plan.to_jsonable()
+        report["page"] = {
+            "geometrySha256": page.page_geometry_sha256(),
+            "planGeometrySha256": page.plan.geometry_sha256(),
+            "modules": [
+                {"id": module.id, "origin": list(module.origin),
+                 "frame": list(module.frame), "parts": list(module.parts)}
+                for module in page.modules
+            ],
+            "key": result.ranked[args.candidate].describe_key(),
+            "candidates": len(result.pages),
+        }
+        report["module"] = plan.target.module
+        report["exitCode"] = 0
+        report["ok"] = True
+        report["outcome"] = "planned"
+        report["final"] = (
+            f"page of {len(page.modules)} module(s): {len(plan.change.draw_parts)} "
+            f"part(s), {len(plan.change.draw_wires)} wire(s), "
+            f"{len(plan.change.draw_flags)} flag(s)"
+            + (f", compiled around {len(keep_boxes)} existing primitive(s)" if keep_boxes else "")
+        )
+        return _render_draw_plan(report, args)
+
+    if not (args.page or args.project or args.instance):
+        return build(None)
+
+    BridgeClient, BridgeError, port, token = _open_cli(args)
+
+    async def run() -> int:
+        try:
+            client = await BridgeClient.open(
+                _bridge_uri(port), token, "cli", client="boardwise-cli"
+            )
+        except (OSError, BridgeError) as exc:
+            print(
+                f"boardwise draw plan: daemon not reachable on 127.0.0.1:{port} ({exc})",
+                file=sys.stderr,
+            )
+            return 3
+        try:
+            async def call(action, params, purpose):
+                try:
+                    return await client.call(action, params, **_edit_target_kwargs(args))
+                except BridgeError as exc:
+                    notes.append(f"{action} failed ([{getattr(exc, 'code', '')}] {exc})")
+                    return None
+
+            context = await _draw_live_context(client, args, call, notes)
+            report["live"] = {
+                "pageUuid": context["pageUuid"],
+                "pageSource": context["pageSource"],
+                "projectUuid": context["projectUuid"],
+                "poolSize": len(context["pool"]),
+                "findings": len(context["findings"]),
+            }
+            report["poolSource"] = context["poolSource"]
+            geometry = context.get("geometry")
+            if isinstance(geometry, dict):
+                keep_notes: list[str] = []
+                boxes, labels, _measured = await _draw_census_keepouts_live(
+                    call, geometry, keep_notes
+                )
+                context["keepouts"] = boxes
+                context["keepoutLabels"] = labels
+                context["keepoutNotes"] = keep_notes
+                report["live"]["keepouts"] = len(boxes)
+            return build(context)
+        finally:
+            await client.close()
+
+    return asyncio.run(run())
+
+
+def _draw_net_readback(plan, islands, page_document) -> list[dict]:
+    """G4 (057 sec.4): every planned net, as the editor's own netlist names it.
+
+    One row per net of two or more of the plan's pins: the live net name(s) its
+    pins answer with, and whether they are **one** net. With a page document the
+    row also says which modules the net spans — a cross-module net stated by
+    same-named labels/flags is one net only because the editor merges names
+    project-wide (054 C7), and this is where that is read back rather than
+    assumed. The judgement (exact partition within the plan's pins) is
+    `drawapply.postcondition_problems`'s live leg; this is its evidence, by net.
+    """
+    spec_module: dict[str, str] = {}
+    if page_document is not None:
+        for module in page_document.modules:
+            for part_id in module.parts:
+                spec_module[part_id] = module.id
+    designator_module = {
+        part.designator: spec_module.get(part.spec_id, "")
+        for part in plan.change.draw_parts
+    }
+    groups: dict[tuple[str, ...], list[dict]] = {}
+    for row in islands:
+        groups.setdefault(tuple(row["mates"]), []).append(row)
+    out: list[dict] = []
+    for mates, rows in sorted(groups.items()):
+        if len(mates) < 2:
+            continue
+        names = sorted({row["net"] for row in rows})
+        modules = sorted(
+            {designator_module.get(member.partition(".")[0], "") for member in mates}
+            - {""}
+        )
+        out.append({
+            "pins": list(mates),
+            "liveNets": names,
+            "oneNet": len(names) == 1 and bool(names[0]),
+            "modules": modules,
+            "crossModule": len(modules) > 1,
+            "others": sorted({member for row in rows for member in row["others"]}),
+        })
+    return out
+
+
+def _cmd_draw_apply_page(args: argparse.Namespace) -> int:
+    """``draw apply <page.json>`` (057 sec.1): land a page document directly.
+
+    The document's ``plan`` field is handed to the existing path: this builds the
+    `draw-module` plan from it at apply time (`_draw_plan_from_page` — the same
+    builder `draw plan` uses, with the live page's pool, census and findings) and
+    runs `_draw_apply_flow` on it, so every guard, write, read-back and refusal
+    is the single-module one. What a page document adds is checked first:
+
+    * ``--circuit/--presentation/--profiles`` are **required** — they are the
+      recipe (LCSC numbers, values) and the guard inputs, and the page's own
+      ``source`` digests must match them (a stale document is refused before the
+      daemon is even asked, exit 4);
+    * the page must still be **free where the document draws**: its frames are
+      checked against the live page's census keep-outs with the page domain's own
+      rule (`readability.check_page`'s `page-keepout-conflict`) — a canvas that
+      changed under the document's frames is refused, exit 4, nothing written.
+      For "refuse on *any* change", land the plan `draw plan --page` wrote (its
+      census digest is exact) or pass ``--expect-census``.
+    """
+    import asyncio
+
+    from .core.pagelayoutplan import PageLayoutPlan, PageLayoutPlanError
+    from .engines import drawapply, readability
+
+    started = time.time()
+    try:
+        page = PageLayoutPlan.load(args.plan)
+    except PageLayoutPlanError as exc:
+        print(f"boardwise draw apply: {exc}", file=sys.stderr)
+        return 5
+    missing = [
+        flag for flag, value in (
+            ("--circuit", args.circuit), ("--presentation", args.presentation),
+            ("--profiles", args.profiles),
+        ) if not value
+    ]
+    if missing:
+        print(
+            f"boardwise draw apply: {args.plan} is a page document; landing one needs "
+            + ", ".join(missing)
+            + " — the circuit supplies each part's LCSC number and value, and all "
+            "three are the guard inputs its digests are checked against",
+            file=sys.stderr,
+        )
+        return 5
+    if not (args.page or args.new_page):
+        print(
+            "boardwise draw apply: a page document is not bound to a page — give "
+            "--page <uuid> (an existing page) or --new-page",
+            file=sys.stderr,
+        )
+        return 5
+    try:
+        circuit, presentation, profiles = _draw_inputs(args)
+    except _DrawInputError as exc:
+        print(f"boardwise draw apply: {exc}", file=sys.stderr)
+        return 5
+    report: dict = {
+        "command": "apply",
+        "document": "page",
+        "ok": False,
+        "module": "page " + "+".join(module.id for module in page.modules),
+        "outcome": "",
+        "reason": "",
+        "exitCode": 0,
+        "planPath": str(args.plan),
+        "page": {"uuid": args.page or "", "created": False},
+        "guards": {"checked": {}, "problems": []},
+        "notes": [],
+        "final": "",
+    }
+    stale = [
+        f"{label}: the page document was compiled against {stated[:12]}… and the file "
+        f"now hashes to {current[:12]}… — recompile the page"
+        for label, stated, current in (
+            ("circuitSha256", page.plan.source.circuit_sha256, circuit.sha256()),
+            ("presentationSha256", page.plan.source.presentation_sha256,
+             presentation.sha256()),
+        )
+        if stated != current
+    ]
+    if stale:
+        report["guards"] = {"checked": {"circuitSha256": True, "presentationSha256": True},
+                            "problems": stale}
+        report["exitCode"] = 4
+        report["outcome"] = "refused"
+        report["reason"] = "guard_refused"
+        report["notes"].append("守卫未过（页文档的源哈希与给出的 spec 不符）：没有连接编辑器、没有写")
+        return _render_draw_apply(report, args)
+
+    BridgeClient, BridgeError, port, token = _open_cli(args)
+
+    async def run() -> int:
+        try:
+            client = await BridgeClient.open(
+                _bridge_uri(port), token, "cli", client="boardwise-cli"
+            )
+        except (OSError, BridgeError) as exc:
+            print(
+                f"boardwise draw apply: daemon not reachable on 127.0.0.1:{port} ({exc})",
+                file=sys.stderr,
+            )
+            return 3
+        notes: list[str] = report["notes"]
+        try:
+            async def call(action, params, purpose):
+                try:
+                    return await client.call(action, params, **_edit_target_kwargs(args))
+                except BridgeError as exc:
+                    notes.append(f"{action} failed ([{getattr(exc, 'code', '')}] {exc})")
+                    return None
+
+            context = await _draw_live_context(client, args, call, notes)
+            baseline = None
+            if args.page:
+                geometry = context.get("geometry")
+                if not isinstance(geometry, dict):
+                    report["exitCode"] = 3
+                    report["outcome"] = "unknown"
+                    report["reason"] = "guard_unreadable"
+                    notes.append(
+                        "the page could not be read, so whether it is still free where "
+                        "the page document draws cannot be stated; nothing was written"
+                    )
+                    return _render_draw_apply(report, args)
+                boxes, labels, _measured = await _draw_census_keepouts_live(
+                    call, geometry, notes
+                )
+                checked = readability.check_page(
+                    page, circuit, presentation, profiles, keepouts=boxes,
+                )
+                conflicts = [
+                    _draw_keepout_names(item.render(), labels)
+                    for item in checked.hard_violations
+                    if item.kind == readability.KIND_PAGE_KEEPOUT_CONFLICT
+                ]
+                report["guards"]["checked"]["pageFree"] = True
+                report["guards"]["keepouts"] = len(boxes)
+                if conflicts:
+                    report["guards"]["problems"].extend(conflicts)
+                    report["exitCode"] = 4
+                    report["outcome"] = "refused"
+                    report["reason"] = "canvas_changed"
+                    notes.append(
+                        "页上已有的图元压在页文档的模块框上（057 §二：页文档的守卫 = 它的"
+                        "框对页面现状的 keepout 规则）：没有发出任何写动作"
+                    )
+                    return _render_draw_apply(report, args)
+                baseline = context.get("census")
+            try:
+                plan = _draw_plan_from_page(
+                    page, circuit, presentation, profiles,
+                    pool=context.get("pool") or [],
+                    baseline=baseline,
+                    baseline_findings=context.get("findings") or [],
+                    notes=[
+                        f"built at apply time from the page document {args.plan}",
+                        f"the designator pool is {context.get('poolSource') or '(none read)'}",
+                        *_draw_page_notes(page, [], []),
+                    ],
+                )
+            except drawapply.DrawPlanError as exc:
+                report["exitCode"] = 5
+                report["outcome"] = "refused"
+                report["reason"] = "cannot_build_plan"
+                notes.append(str(exc))
+                return _render_draw_apply(report, args)
+            args._page_document = page
+            return await _draw_apply_flow(
+                client, BridgeError, plan, args, started,
+                extra={
+                    "document": "page",
+                    "pageGeometrySha256": page.page_geometry_sha256(),
+                    "builtPlan": plan.to_jsonable(),
+                    "preflight": list(notes),
+                },
+            )
+        finally:
+            await client.close()
+
+    return asyncio.run(run())
+
+
+def _render_draw_discard(report: dict, args: argparse.Namespace) -> int:
+    """Print the human summary of a discard, write ``--json``, exit."""
+    code = int(report.get("exitCode") or 0)
+    reason = report.get("reason") or ""
+    print(
+        f"boardwise draw discard: {report.get('module') or '(plan)'} — "
+        f"{report.get('outcome')}{': ' + reason if reason else ''}"
+    )
+    print(f"  page    {report.get('page') or '(none)'}")
+    selection = report.get("selection") or {}
+    for key, label in (("matched", "match"), ("absent", "absent"), ("mismatches", "MISMATCH")):
+        for line in selection.get(key) or []:
+            print(f"  {label:<7} {line}")
+    for phase in report.get("deletes") or []:
+        print(
+            f"  delete  {phase['phase']}: asked {len(phase['ids'])}, deleted "
+            f"{len(phase.get('deleted') or [])}, not found "
+            f"{len(phase.get('notFound') or [])}, failed {len(phase.get('failed') or [])}"
+            + ("" if phase.get("answered", True) else " — NO ANSWER")
+        )
+    verify = report.get("verify") or {}
+    if verify:
+        print(
+            f"  verify  remaining {verify.get('remaining') or []} · out of scope "
+            f"{verify.get('outOfScope') or 'unchanged'}"
+        )
+    if report.get("save"):
+        print(f"  save    {json.dumps(report['save'], ensure_ascii=False)}")
+    for note in report.get("notes") or []:
+        print(f"  note: {note}")
+    if report.get("final"):
+        print(f"boardwise draw discard: {report['final']}")
+    if args.json_path:
+        Path(args.json_path).write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    return code
+
+
+def _cmd_draw_discard(args: argparse.Namespace) -> int:
+    """``draw discard <plan.json|page.json>``: take a plan's drawing off a page (057 sec.5).
+
+    The explicit cleanup verb — a run never deletes on its own (057 sec.5's
+    ruling). What it deletes is exactly the plan's own primitives, and it
+    proves each one is the plan's before it touches any: a part by designator,
+    position and value (`drawapply.discard_selection`), a flag by net and
+    point, a wire by net and by every one of its points lying on the plan's own
+    wiring. **One mismatch refuses the whole batch** — nothing is deleted and
+    the report names the part that did not match (exit 4). Lines go first, then
+    flags, then parts; the page is read back afterwards, and everything that was
+    not the plan's must be exactly as it was (the out-of-scope census).
+
+    A second run finds nothing of the plan on the page and says so
+    (`nothing_to_discard`, exit 0). ``--save`` saves afterwards, the way `draw
+    apply` does; without it the page is left unsaved. A page document is
+    accepted too (with ``--circuit``, ``--presentation`` and ``--profiles`` to
+    rebuild what the landing drew) — its parts carry no designators, so each is
+    found by position, and its designator prefix and value are the other legs.
+
+    Exit 0 discarded (or nothing to discard) / 2 a delete was refused, the
+    read-back still shows a target, or something outside the plan changed / 3
+    the page's state cannot be stated (a timeout, a dropped connection — never
+    retried) / 4 identity mismatch or a guard refused, nothing deleted / 5 the
+    input is unusable.
+    """
+    import asyncio
+
+    from .core.changeplan import DRAW_MODULE_KIND, ChangePlan, ChangePlanError
+    from .core.pagelayoutplan import PAGE_LAYOUT_PLAN_KIND, PageLayoutPlan, PageLayoutPlanError
+    from .engines import drawapply
+
+    started = time.time()
+    by_position = False
+    if _draw_document_kind(args.plan) == PAGE_LAYOUT_PLAN_KIND:
+        missing = [
+            flag for flag, value in (
+                ("--circuit", args.circuit), ("--presentation", args.presentation),
+                ("--profiles", args.profiles),
+            ) if not value
+        ]
+        if missing:
+            print(
+                f"boardwise draw discard: {args.plan} is a page document; discarding "
+                "one needs " + ", ".join(missing) + " to rebuild what its landing "
+                "drew (the parts' values and the name stubs are not in the document)",
+                file=sys.stderr,
+            )
+            return 5
+        try:
+            page = PageLayoutPlan.load(args.plan)
+            circuit, presentation, profiles = _draw_inputs(args)
+            plan = _draw_plan_from_page(
+                page, circuit, presentation, profiles,
+                # The recipe is not what identifies a landed part here (its
+                # written value is), so a part the spec gives no LCSC number is
+                # still discardable.
+                lcsc={part.id: part.lcsc or "(unknown)" for part in circuit.parts},
+            )
+        except (PageLayoutPlanError, _DrawInputError, drawapply.DrawPlanError) as exc:
+            print(f"boardwise draw discard: {exc}", file=sys.stderr)
+            return 5
+        for part in plan.change.draw_parts:
+            part.designator = ""
+        by_position = True
+    else:
+        try:
+            plan = ChangePlan.load(args.plan)
+        except ChangePlanError as exc:
+            print(f"boardwise draw discard: {exc}", file=sys.stderr)
+            return 5
+        if plan.change.kind != DRAW_MODULE_KIND:
+            print(
+                f"boardwise draw discard: the plan's change.kind is {plan.change.kind!r}; "
+                f"this command takes a {DRAW_MODULE_KIND!r} plan's drawing off its page",
+                file=sys.stderr,
+            )
+            return 5
+    page_uuid = args.page or plan.source.page_uuid
+    if not page_uuid:
+        print(
+            "boardwise draw discard: the plan is not bound to a page — give --page "
+            "<uuid> (the page the drawing was landed on)",
+            file=sys.stderr,
+        )
+        return 5
+    report: dict = {
+        "command": "discard",
+        "ok": False,
+        "module": plan.target.module,
+        "outcome": "",
+        "reason": "",
+        "exitCode": 0,
+        "planPath": str(args.plan),
+        "identifiedBy": (
+            "position + designator prefix + value (a page document carries no "
+            "designators)" if by_position else "designator + position + value"
+        ),
+        "page": page_uuid,
+        "identity": {},
+        "selection": {},
+        "deletes": [],
+        "verify": {},
+        "save": {},
+        "persistence": "",
+        "steps": [],
+        "notes": [],
+        "final": "",
+        "durationMs": 0,
+    }
+    records: list[dict] = report["steps"]
+    notes: list[str] = report["notes"]
+
+    def done(code: int, outcome: str, reason: str = "") -> int:
+        report["exitCode"] = code
+        report["outcome"] = outcome
+        report["ok"] = code == 0
+        if reason:
+            report["reason"] = reason
+        report["durationMs"] = int((time.time() - started) * 1000)
+        return _render_draw_discard(report, args)
+
+    BridgeClient, BridgeError, port, token = _open_cli(args)
+
+    async def run() -> int:
+        try:
+            client = await BridgeClient.open(
+                _bridge_uri(port), token, "cli", client="boardwise-cli"
+            )
+        except (OSError, BridgeError) as exc:
+            print(
+                f"boardwise draw discard: daemon not reachable on 127.0.0.1:{port} ({exc})",
+                file=sys.stderr,
+            )
+            return 3
+        try:
+            async def call(action, params, purpose, *, writes=False):
+                try:
+                    data = await client.call(action, params, **_edit_target_kwargs(args))
+                except BridgeError as exc:
+                    records.append(_edit_step(action, purpose, False, exc, wrote=writes))
+                    return None
+                records.append(_edit_step(action, purpose, True, wrote=writes))
+                return data
+
+            # ---- the page, and the editor's identity -----------------------
+            listing = await call("doc.list", {}, "read the focused project and page")
+            listing = listing if isinstance(listing, dict) else {}
+            for project in listing.get("projects") or []:
+                if isinstance(project, dict) and project.get("focused"):
+                    report["identity"]["focusedProjectName"] = str(
+                        project.get("name") or project.get("projectUuid") or ""
+                    )
+            report["identity"]["focusedProjectUuid"] = _focused_project_uuid(listing)
+            listed = {
+                str(item.get("uuid"))
+                for item in listing.get("documents") or []
+                if isinstance(item, dict)
+            }
+            if listed and page_uuid not in listed:
+                notes.append(
+                    f"page {page_uuid} is not among the focused project's documents — "
+                    "nothing was deleted"
+                )
+                return done(4, "refused", "page_missing")
+            if _active_document_uuid(listing) != page_uuid:
+                await call("doc.focus", {"pageUuid": page_uuid}, "focus the page to clean")
+                refreshed = await call("doc.list", {}, "confirm the focused page moved")
+                if not isinstance(refreshed, dict) or _active_document_uuid(refreshed) != page_uuid:
+                    notes.append(
+                        f"the editor would not focus page {page_uuid} — nothing was deleted"
+                    )
+                    return done(4, "refused", "page_not_focused")
+            identity = await call(
+                "sys.identity", {}, "confirm the editor's two layers of focus agree"
+            )
+            if isinstance(identity, dict):
+                report["identity"]["consistent"] = identity.get("consistent")
+                if identity.get("consistent") is False:
+                    notes.append(
+                        "the editor's two identity layers disagree — nothing was deleted"
+                    )
+                    return done(4, "refused", "focus_inconsistent")
+
+            # ---- identity: which primitives are the plan's ------------------
+            before = await call("sch.geometry", {}, "read the page before deleting anything")
+            if not isinstance(before, dict):
+                last = records[-1]
+                notes.append("the page could not be read; nothing was deleted")
+                return done(3 if last["unknown"] else 4,
+                            "unknown" if last["unknown"] else "refused", "page_unreadable")
+            selection = drawapply.discard_selection(plan, before)
+            report["selection"] = {
+                "matched": list(selection.matched),
+                "absent": list(selection.absent),
+                "mismatches": list(selection.mismatches),
+            }
+            if selection.mismatches:
+                notes.append(
+                    "身份不符，整批拒删（057 §五：位号 + 值 + 坐标三者一致才动，任何一件不符"
+                    "不删半个）：没有删除任何图元"
+                )
+                return done(4, "refused", "identity_mismatch")
+            if selection.empty:
+                report["final"] = (
+                    "nothing of this plan is on the page — nothing to discard "
+                    f"({len(selection.absent)} planned item(s) absent)"
+                )
+                report["persistence"] = "not_attempted (nothing was deleted)"
+                return done(0, "nothing_to_discard", "nothing_to_discard")
+            if selection.absent:
+                notes.append(
+                    "part of the plan is not on the page (a run that stopped half-way, "
+                    "or a partial clean-up): " + "; ".join(selection.absent)
+                    + " — only what is there, and is the plan's, is deleted"
+                )
+
+            # ---- the deletes: lines first, then flags, then parts -----------
+            for phase, items in (
+                ("wires", selection.wires), ("flags", selection.flags),
+                ("parts", selection.parts),
+            ):
+                ids = [ident for ident, _what in items]
+                for offset in range(0, len(ids), DISCARD_BATCH):
+                    chunk = ids[offset:offset + DISCARD_BATCH]
+                    if len(ids) > DISCARD_BATCH and offset == 0:
+                        notes.append(
+                            f"{phase}: {len(ids)} id(s) are deleted in "
+                            f"{-(-len(ids) // DISCARD_BATCH)} call(s) of at most "
+                            f"{DISCARD_BATCH} (the daemon's delete budget is ~40 "
+                            "primitives, pit 2) — declared, not hidden"
+                        )
+                    answer = await call(
+                        "sch.delete_primitives",
+                        {"pageUuid": page_uuid, "primitiveIds": chunk},
+                        f"delete the plan's {phase} ({len(chunk)} id(s))",
+                        writes=True,
+                    )
+                    row = {
+                        "phase": phase, "ids": chunk,
+                        "answered": isinstance(answer, dict),
+                        "deleted": list((answer or {}).get("deleted") or []),
+                        "notFound": list((answer or {}).get("notFound") or []),
+                        "failed": list((answer or {}).get("failed") or []),
+                    }
+                    report["deletes"].append(row)
+                    if answer is None:
+                        last = records[-1]
+                        after = await call(
+                            "sch.geometry", {},
+                            "read the page back after a delete went unanswered",
+                        )
+                        remaining = sorted(
+                            set(selection.ids)
+                            & {row["id"] for row in drawapply.census_items(after or {})}
+                        )
+                        report["verify"] = {"remaining": remaining}
+                        notes.append(
+                            f"the {phase} delete "
+                            + (
+                                f"went UNKNOWN ([{last['code']}] {last['message']}); "
+                                if last["unknown"]
+                                else f"was refused ([{last['code']}] {last['message']}); "
+                            )
+                            + f"{len(remaining)} of the plan's primitive(s) are still on "
+                            "the page — nothing was retried (016's rule), nothing saved"
+                        )
+                        return done(3 if last["unknown"] else 2,
+                                    "unknown" if last["unknown"] else "failed",
+                                    "delete_unanswered")
+                    if row["failed"]:
+                        notes.append(
+                            f"the host refused to delete {len(row['failed'])} of the "
+                            f"plan's {phase}: {row['failed']} — stopped, nothing saved"
+                        )
+                        return done(2, "failed", "delete_refused")
+
+            # ---- read back: the targets are gone, nothing else moved --------
+            after = await call("sch.geometry", {}, "read the page back after the deletes")
+            if not isinstance(after, dict):
+                notes.append(
+                    "the read-back after the deletes failed — the page's state cannot "
+                    "be stated; nothing was saved"
+                )
+                return done(3, "unknown", "readback_unavailable")
+            rows_after = drawapply.census_items(after)
+            remaining = sorted(set(selection.ids) & {row["id"] for row in rows_after})
+            changed = drawapply.census_changes(
+                drawapply.census_items(before), rows_after, ignore_ids=selection.ids,
+            )
+            still = drawapply.discard_selection(plan, after)
+            report["verify"] = {
+                "remaining": remaining,
+                "outOfScope": changed,
+                "planStillMatches": list(still.matched),
+                "basis": (
+                    "sch.geometry after the deletes: every deleted id is gone, the plan's "
+                    "identity check finds nothing of it any more, and every primitive "
+                    "that was not the plan's is field-for-field what it was"
+                ),
+            }
+            if remaining or still.matched:
+                notes.append(
+                    "the read-back still shows the plan's primitive(s): "
+                    + ", ".join(remaining + list(still.matched))
+                    + " — not saved"
+                )
+                return done(2, "failed", "discard_incomplete")
+            if changed:
+                notes.append(
+                    "范围外图元在删除后变了（不在 plan 里的图元逐项对比）："
+                    + "；".join(changed) + " —— 事故报告；没有保存"
+                )
+                return done(2, "failed", "out_of_scope_changed")
+
+            # ---- save, only when asked (apply's flag) ------------------------
+            if args.save:
+                saved = await call("sch.doc.save", {}, "persist the clean-up", writes=True)
+                if saved is None:
+                    last = records[-1]
+                    report["save"] = {"ok": False, "code": last["code"],
+                                      "message": last["message"]}
+                    if last["unknown"]:
+                        report["persistence"] = "unknown"
+                        notes.append(
+                            "the save's outcome is unknown — the clean-up is verified on "
+                            "the page, whether it reached the file cannot be stated, and "
+                            "nothing was retried"
+                        )
+                        return done(3, "unknown", "save_unknown")
+                    report["persistence"] = "deleted_on_canvas"
+                    notes.append(
+                        f"the editor refused the save ([{last['code']}] {last['message']})"
+                    )
+                    return done(2, "failed", "save_refused")
+                report["save"] = {"ok": True, "answered": saved}
+                report["persistence"] = "saved_unverified"
+            else:
+                report["persistence"] = "not_saved (--save not given)"
+            report["final"] = (
+                f"{len(selection.wires)} wire(s), {len(selection.flags)} flag(s) and "
+                f"{len(selection.parts)} part(s) of the plan deleted from page "
+                f"{page_uuid}, read back gone; nothing else on the page changed"
+                + ("; saved" if args.save else "; not saved (--save)")
+            )
+            return done(0, "discarded")
+        finally:
+            await client.close()
+
+    return asyncio.run(run())
+
+
 DRAW_COMMANDS = {
     "compile": _cmd_draw_compile,
     "plan": _cmd_draw_plan,
     "apply": _cmd_draw_apply,
+    "discard": _cmd_draw_discard,
 }
 
 

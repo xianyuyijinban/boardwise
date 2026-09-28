@@ -449,3 +449,55 @@ see `docs/persistence-baseline.md` for the four-scenario checklist.
   invariant in the self-check).
 - No PCB anything (task 007). The generic solver remains for boards without
   reference geometry, and is still "legal but ugly" by design.
+
+## The compiled page (057: `draw compile|plan|apply` on a page, `draw discard`)
+
+054 landed one compiled module; 056 compiled several modules into one page
+offline; 057 lands that page. There is **no new landing command and no new
+flag** — the three `draw` commands take a page on the same flags:
+
+| input | `draw compile` | `draw plan` | `draw apply` |
+|---|---|---|---|
+| a presentation with ≥2 modules, a `flow`, a module `grammarRef` or a page lock | page compiler; `candN.page.json` + framed `candN.svg`; `--page-box` required | the chosen page's `plan` field → the same `draw-module` plan; `<plan>.page.json` written beside it | — |
+| a page document (`kind=boardwise-page-layout-plan`) | — | — | as `--layout` (digests its `plan`), or as the positional (needs `--circuit/--presentation/--profiles` and `--page`/`--new-page`; the plan is built at apply time) |
+
+**A non-empty page** (`draw plan --page`): every primitive already on the page
+(part, wire segment, flag — parts at their `bboxIds`-measured extent) becomes a
+keep-out, and the arrangement moves off them as a rigid body
+(`PageCompileBudget.relocate_around_keepouts`; nothing is squeezed). A page the
+census fills is `presentation-poor`, the keep-out named by what it is ("existing
+R5 c-17"). After the landing, **every primitive that was on the page before is
+compared field by field** (designator, value, LCSC, net, origin, pose; a wire's
+point list) — one changed item is exit 2 and no save (`range.outOfScope`). This
+applies to every `draw apply`, single module or page.
+
+**Page locks**: a `userLocks[]` entry with `"scope": "page"` (x, y only — the pose
+is the module's) pins the part to that page point in every candidate: the
+module's origin is `P − L(generation)`. A lock point off the page, two locks in
+one module that disagree, a locked frame off the page / on a keep-out / on
+another locked frame are `presentation-poor` naming the lock(s). A module lock
+and a page lock may sit on the same part.
+
+**Shared nets (G4)**: a net that spans modules is named at each end (label or
+flag); this host cannot place a net label, so a label whose point no planned wire
+reaches becomes a 10-unit **named stub** (declared in the plan's downgrades) —
+otherwise the pin sits on an unnamed net and the two modules' same-named nets
+never merge in the editor's project-wide netlist. The apply report's
+`verification.nets` lists every net's live name(s), `crossModule` and `oneNet`;
+findings may only shrink, judged by identity (`rule|severity|designator|pins|named
+nets`), never by count.
+
+**`draw discard <plan.json|page.json>`** takes one landed drawing back off its
+page, and only that: a part is the plan's by designator + position + value (the
+LCSC number for a pre-055 plan), a flag by net + point, a wire by net and *every*
+point lying on the plan's own wiring (a primitive the host merged with somebody
+else's wire, pit 32, is never deleted). One mismatch refuses the whole batch
+(exit 4, nothing deleted). Lines go first, then flags, then parts (≤30 ids per
+call, a split is reported); the page is read back — targets gone, everything else
+unchanged. A second run answers `nothing_to_discard` (exit 0). `--save` saves; a
+timeout is read back and never retried (exit 3). A page document is discarded
+with `--circuit/--presentation/--profiles`, its parts found by position, prefix
+and value.
+
+Offline evidence: `tools/057_scenarios.py` (writes `outputs/057_offline/`); the
+real-machine steps for E1–E7 are `tools/057_live_runbook.md`.
