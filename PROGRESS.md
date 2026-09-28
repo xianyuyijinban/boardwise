@@ -4,6 +4,10 @@ Living index. Details live in `tasks/*.md` (one book per task) and
 `docs/implementation-log.md` (the connector debugging arc). This file only
 collects the current truth and the pointers.
 
+## [2026-09-28] 061 收口（issue #11）：install-skill 认 harness + doctor skill 检查（connector/daemon 零改动仍 **0.4.25**）
+
+README 说「Claude Code 也行」但 SOP 只装给 Kimi Code——`install-skill` 写死 `~/.kimi-code/`，doctor 没有「skill 装没装」这一项，Claude Code 用户拿到没有 SOP 的 toolchain 且无人能发现（issue #11，岳亲笔）。修复：`skill_install.py` 加 harness 维度（`HARNESSES=("kimi","claude")`，落点 `~/.kimi-code|/.claude/skills/boardwise/`，env 覆盖各自独立 `BOARDWISE_SKILL_HOME{,_CLAUDE}`，同一份 SKILL.md 无内容分叉——frontmatter 的 `name`/`description` 正是 Claude Code 的识别字段）；CLI `--harness {kimi,claude,all}` **默认 all**，每侧独立执行各打一行、全部尝试后定退出码；新增 `skill_statuses()` 五态（current/stale/missing/unreadable/harness-absent），doctor 每 harness 一行 `skill-<harness>`（missing/stale/unreadable 红带 fix，harness-absent skipped 不误报），探针离线采集保持 `run_doctor` 纯。不写 `~/CLAUDE.md`（用户全局配置，侵入越界）。测试 +28（skill_install 18 + doctor 10），全量 **2380 passed**（主代理亲跑），变异 3 组 CAUGHT。顺手两处过期文档：getting-started 预期输出改双侧两行、SKILL.md doctor「7 项」→「10 项」。真机 `install-skill` 已补装：kimi 侧旧版（47KB→70KB，备份 .bak-2026-09-28）、claude 侧新装。任务书 `tasks/061-skill-harness-claude.md`。060② 岳裁：**重复脚默认都接上**（nc 降为显式例外），已固化进 `tasks/060-draw-layout-quality.md`。
+
 ## [2026-09-28] 059 真机验收收口：E1–E7 全过 + 坑 36 归因=宿主 + persistence 子集判据（connector/daemon 零改动仍 **0.4.25**）
 
 ### 真机验收（057 的 E1–E7，test 工程，全过）

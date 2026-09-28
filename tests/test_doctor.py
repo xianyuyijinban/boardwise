@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from boardwise import __version__
+from boardwise import __version__, resources, skill_install
 from boardwise.bridge.protocol import BridgeError, ErrorCodes
 from boardwise.cli import (
     DOCTOR_PROBE_CHECKS,
@@ -39,6 +39,7 @@ from boardwise.cli import (
     run_doctor,
     scan_editor_install,
 )
+from boardwise.skill_install import SkillStatus
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -51,6 +52,33 @@ ALL_PRESENT = {
 }
 
 
+def skill_status(harness: str, state: str, reason: str = "") -> SkillStatus:
+    """One `SkillStatus`-shaped fact: what is at `harness`'s skill path.
+
+    The path is built like the real one (the harness's own directory under a home
+    directory) so the detail lines a test asserts on carry a path that reads like
+    the field's, without any test needing this machine's home.
+    """
+    return SkillStatus(
+        harness,
+        Path(f"C:/Users/me/{skill_install.HARNESS_DIRS[harness]}/skills/boardwise/SKILL.md"),
+        state,
+        reason,
+    )
+
+
+def skill_states(**states) -> tuple:
+    """Both harnesses' statuses, one state each — `skill_statuses.copy()` for tests.
+
+    Default `current`, because that is what the machine this fixture describes
+    looks like: `install-skill` was run and the copy matches the build.
+    """
+    return tuple(
+        skill_status(harness, states.get(harness, "current"))
+        for harness in skill_install.HARNESSES
+    )
+
+
 def healthy_probe(**overrides) -> DoctorProbe:
     """A probe of a working installation, with fields overridable one at a time.
 
@@ -58,7 +86,9 @@ def healthy_probe(**overrides) -> DoctorProbe:
     about the bridge path, and each case of the offline pre-check has its own
     test below. A fixture that claimed an install tree would also be a second
     input to the version line, so the floor cases would no longer be testing what
-    they say they test.
+    they say they test. The skill statuses *are* filled in — they are their own
+    two offline lines (061), gathered by the same run, and the cases that want a
+    missing or absent one say so through `skill_statuses=`.
     """
     values = {
         "port": 61190,
@@ -66,6 +96,7 @@ def healthy_probe(**overrides) -> DoctorProbe:
         "connector_version": "0.4.5",
         "editor_version": "3.2.186",
         "local_connector_version": "0.4.5",
+        "skill_statuses": skill_states(),
         "ping": {"pong": True, "version": "0.1.0", "connector": True, "pairedFingerprint": "ab12cd34"},
         "probe": {"version": "3.2.186", "connector": "0.4.5", "topLevel": [], "checks": ALL_PRESENT},
         "documents": {
@@ -101,6 +132,31 @@ def _no_real_editor(monkeypatch, tmp_path_factory):
     monkeypatch.setenv(EDITOR_INSTALL_ENV, str(tmp_path_factory.mktemp("no-editor")))
 
 
+@pytest.fixture(autouse=True)
+def skill_homes(monkeypatch, tmp_path_factory):
+    """The two skill lines are judged against directories this test owns (061).
+
+    Same reason as the editor pin above: doctor reads `~/.kimi-code` and
+    `~/.claude` off the real disk, and this machine has both (one of them an
+    older copy of the file), so without this the line counts below would be a
+    property of the developer's machine rather than of the code.
+
+    Both sides are filled with the SKILL.md this build carries — that is what a
+    machine which ran `install-skill` looks like, and it is the state the green
+    cases are about. A test that wants the red or the skipped shape reaches into
+    the returned mapping (or unsets the variable, for "harness not installed").
+    """
+    source = resources.skill_md()
+    root = tmp_path_factory.mktemp("skill-homes")
+    homes = {}
+    for harness in skill_install.HARNESSES:
+        home = root / harness / "skills" / "boardwise"
+        skill_install.install(source, home, harness=harness)
+        monkeypatch.setenv(skill_install.SKILL_HOME_ENVS[harness], str(home))
+        homes[harness] = home
+    return homes
+
+
 def install_tree(root: Path, version: str, name: str = "lceda-pro") -> Path:
     """A directory shaped like an editor install tree, manifest included."""
     tree = root / name
@@ -117,11 +173,13 @@ def test_a_working_installation_is_all_green():
         (entry.name, True) for entry in checks
     ], [(entry.name, entry.ok, entry.detail) for entry in checks]
     assert all(entry.fix == "" for entry in checks), "a green line must not carry a fix"
-    # The eight lines, the offline pre-check first (issue #3). This probe says
-    # nothing about an install tree, so that line is a skip rather than a claim.
+    # The ten lines, the offline ones first (issue #3 for the editor, 061 for the
+    # two agent harnesses). This probe says nothing about an install tree, so
+    # that line is a skip rather than a claim; the skill lines do have their
+    # statuses, so they are verdicts.
     assert [entry.name for entry in checks] == [
-        "editor-install", "daemon", "connector", "methods", "editor-version",
-        "daemon-version", "connector-version", "project",
+        "editor-install", "skill-kimi", "skill-claude", "daemon", "connector",
+        "methods", "editor-version", "daemon-version", "connector-version", "project",
     ]
     assert check(checks, "editor-install").skipped is True
 
@@ -131,10 +189,12 @@ def test_nothing_listening_is_reported_per_line_with_a_fix():
         port=61190, daemon_version="0.1.0", local_connector_version="0.4.5",
         ping_error="connection refused",
     ))
-    # Seven red lines; the offline pre-check has no install to read here (no
-    # page for it was gathered), so it skips instead of going red.
-    assert [entry.ok for entry in checks] == [True] + [False] * 7
+    # Seven red lines; the two offline ones before them have nothing to judge —
+    # no install tree was gathered, and this probe brought no skill statuses — so
+    # they skip instead of going red.
+    assert [entry.ok for entry in checks] == [True, True] + [False] * 7
     assert check(checks, "editor-install").skipped is True
+    assert check(checks, "skill").skipped is True
     assert all(entry.fix for entry in checks if not entry.ok), "every failing line must say what to do"
     assert "connection refused" in check(checks, "daemon").detail
     assert "61190" in check(checks, "daemon").detail
@@ -444,7 +504,7 @@ def test_the_offline_line_comes_first_and_names_the_tree_it_read():
         offline_editor_version="3.2.186.b52e3e87",
     ))
     assert [entry.name for entry in checks][0] == "editor-install"
-    assert len(checks) == 8
+    assert len(checks) == 10
     entry = checks[0]
     assert entry.ok is True and entry.skipped is False
     assert r"D:\lceda-pro" in entry.detail
@@ -467,8 +527,10 @@ def test_an_old_install_tree_is_red_before_anything_is_connected():
     assert "先升级编辑器到 ≥3.2.149" in entry.fix
     assert "其余检查项都排在它后面" in entry.fix
     assert "https://pro.easyeda.com/" in entry.fix
-    # …and only then the six prerequisites of the bridge path.
-    assert [c.name for c in checks][1] == "daemon"
+    # …and only then the skill line (this probe brought no statuses, so it skips)
+    # and the bridge path's own lines.
+    assert [c.name for c in checks][1] == "skill"
+    assert [c.name for c in checks][2] == "daemon"
 
 
 def test_an_old_editor_still_connected_is_red_on_both_version_lines():
@@ -643,6 +705,96 @@ def test_the_pinned_search_replaces_the_built_in_locations(monkeypatch, tmp_path
 
 
 # --------------------------------------------------------------------------
+# the skill lines: does each agent on this machine read the SOP we ship? (061)
+# --------------------------------------------------------------------------
+#
+# Issue #11: `install-skill` wrote Kimi Code's skill directory and nothing else,
+# so a Claude Code user had the toolchain without its SOP — and since doctor had
+# no line for it, nothing could reveal that. The two lines below are judged from
+# the filesystem alone (no socket), and the rule that matters most is the one
+# about *not* shouting: a harness that is not on this machine is a skip, because
+# "Claude Code is missing its SOP" is not a fact about a machine that never ran
+# Claude Code.
+
+
+def test_each_harness_with_the_sop_this_build_ships_is_green():
+    checks = run_doctor(healthy_probe())
+    for harness in skill_install.HARNESSES:
+        entry = check(checks, f"skill-{harness}")
+        assert entry.ok is True and entry.skipped is False
+        assert entry.fix == ""
+        assert harness in entry.label
+        assert str(skill_status(harness, "current").path) in entry.detail
+
+
+def test_a_harness_that_never_got_the_sop_is_red_with_the_install_fix():
+    checks = run_doctor(healthy_probe(skill_statuses=skill_states(claude="missing")))
+
+    entry = check(checks, "skill-claude")
+    assert entry.ok is False and entry.skipped is False
+    assert entry.fix == "boardwise install-skill"
+    assert "claude" in entry.label
+    assert str(skill_status("claude", "missing").path) in entry.detail
+    # The neighbour's verdict does not leak into this one, in either direction.
+    assert check(checks, "skill-kimi").ok is True
+    assert [c.name for c in checks if not c.ok] == ["skill-claude"]
+
+
+def test_a_stale_copy_is_red_and_says_which_copy_is_authoritative():
+    # An installed copy that is not this build's is worse than none: it reads as
+    # done. The line has to say which of the two files wins.
+    checks = run_doctor(healthy_probe(skill_statuses=skill_states(kimi="stale")))
+
+    entry = check(checks, "skill-kimi")
+    assert entry.ok is False
+    assert entry.fix == "boardwise install-skill"
+    assert "旧版/异版" in entry.detail
+    assert "权威" in entry.detail
+    assert "SKILL.md.bak-" in entry.detail, "the fix keeps the displaced file"
+
+
+def test_an_unreadable_copy_is_red_and_carries_the_os_reason():
+    statuses = (
+        skill_status("kimi", "unreadable", reason="[WinError 5] Access is denied"),
+        skill_status("claude", "current"),
+    )
+    entry = check(run_doctor(healthy_probe(skill_statuses=statuses)), "skill-kimi")
+
+    assert entry.ok is False
+    assert "[WinError 5] Access is denied" in entry.detail
+    assert "boardwise install-skill" in entry.fix
+
+
+def test_a_harness_that_is_not_on_this_machine_is_skipped_not_flagged():
+    checks = run_doctor(healthy_probe(skill_statuses=skill_states(claude="harness-absent")))
+
+    entry = check(checks, "skill-claude")
+    assert entry.skipped is True and entry.ok is True
+    assert entry.fix == ""
+    assert "跳过" in entry.detail and "不作结论" in entry.detail
+    assert ".claude" in entry.detail
+    # A skip is not a fault: the report stays green, and nothing is "to fix".
+    assert [c.name for c in checks if not c.ok] == []
+
+
+def test_a_build_that_cannot_say_what_its_own_skill_md_is_skips():
+    """One skipped line, not two verdicts.
+
+    An empty `skill_statuses` is "nothing was gathered" — the build could not
+    read its own SKILL.md (`resources.skill_md()` raised, or the file is empty).
+    With no authority to compare against, what is installed cannot be judged, so
+    the report says so instead of calling every harness stale.
+    """
+    checks = run_doctor(healthy_probe(skill_statuses=()))
+
+    assert [c.name for c in checks if c.name.startswith("skill")] == ["skill"]
+    entry = check(checks, "skill")
+    assert entry.ok is True and entry.skipped is True
+    assert "resources.skill_md()" in entry.detail
+    assert [c.name for c in checks if not c.ok] == []
+
+
+# --------------------------------------------------------------------------
 # the CLI itself
 # --------------------------------------------------------------------------
 
@@ -676,18 +828,20 @@ def test_doctor_without_a_daemon_exits_1_with_fixes(tmp_path):
     )
     assert result.returncode == 1, result.stdout + result.stderr
     assert "Traceback" not in result.stderr
-    # Seven red lines and one skip: the offline pre-check looked where it was
-    # told to, found nothing, and says so instead of inventing a version.
+    # The same seven red lines as before, plus one skip and three passes out of
+    # ten: the offline pre-check looked where it was told to, found nothing, and
+    # says so instead of inventing a version, and the two skill lines are green
+    # (the autouse fixture installed both sides).
     assert result.stdout.count("FAIL") == 7
     assert result.stdout.count("SKIP") == 1
     assert "boardwise bridge start" in result.stdout
-    assert "1/8" in result.stdout
+    assert "3/10" in result.stdout
     payload = json.loads((tmp_path / "doctor.json").read_text(encoding="utf-8"))
     assert payload["ok"] is False
     assert payload["port"] == port
     assert [entry["name"] for entry in payload["checks"]] == [
-        "editor-install", "daemon", "connector", "methods", "editor-version",
-        "daemon-version", "connector-version", "project",
+        "editor-install", "skill-kimi", "skill-claude", "daemon", "connector",
+        "methods", "editor-version", "daemon-version", "connector-version", "project",
     ]
     assert payload["checks"][0]["skipped"] is True
     assert payload["versions"]["daemon"] == __version__
@@ -701,8 +855,8 @@ def test_the_cli_says_upgrade_before_anything_is_connected(tmp_path):
     """End to end, the issue's machine: old editor, no daemon, no extension.
 
     The one thing this machine can already know is the answer, so it is the one
-    thing the report starts with — and it does not need the other six lines to
-    have a verdict first.
+    thing the report starts with — and it does not need any of the lines behind
+    it to have a verdict first.
     """
     port = _free_port()
     install_tree(tmp_path, "3.2.148.88089769")
@@ -718,7 +872,11 @@ def test_the_cli_says_upgrade_before_anything_is_connected(tmp_path):
     assert "编辑器安装版本 ≥ 3.2.149" in lines[0]
     assert "3.2.148.88089769" in result.stdout
     assert "先升级编辑器到 ≥3.2.149" in result.stdout
-    assert "0/8" in result.stdout
+    # Eight red (the editor and the seven bridge prerequisites) out of ten: the
+    # two skill lines are green here, and they were judged offline like the
+    # editor line — a machine with nothing connected still knows its agents have
+    # the SOP this build ships.
+    assert "2/10" in result.stdout
     assert "8 项需要处理" in result.stdout
     assert result.stdout.count("FAIL") == 8
 
@@ -860,7 +1018,7 @@ def test_the_cli_gathers_the_three_payloads_and_goes_green(fake_daemon, capsys, 
     out = capsys.readouterr().out
     assert code == 0
     assert daemon.calls == ["ping", "sys.probe", "doc.list"]
-    assert out.count("PASS") == 8
+    assert out.count("PASS") == 10
     assert out.count("FAIL") == 0
     assert out.splitlines()[0].lstrip().startswith("PASS")
     assert str(tree) in out
@@ -883,12 +1041,12 @@ def test_a_daemon_that_answers_without_a_connector_still_reports_every_line(fake
     assert daemon.calls == ["ping"]
     # Required reading: from the repo, `connector/extension.json` exists, so the
     # connector-version comparison is one of the five failing lines rather than a
-    # skip. The two green lines are the daemon (it answered) and the daemon
-    # version (this CLI and the stub agree); the one skip is the offline
-    # pre-check, which found no install tree because this test pinned the search
-    # to an empty directory.
+    # skip. The four green lines are the daemon (it answered), the daemon version
+    # (this CLI and the stub agree) and the two skill lines (the autouse fixture
+    # installed both sides); the one skip is the offline pre-check, which found
+    # no install tree because this test pinned the search to an empty directory.
     assert out.count("FAIL") == 5
-    assert out.count("PASS") == 2
+    assert out.count("PASS") == 4
     assert out.count("SKIP") == 1
     assert "离线没找到编辑器安装" in out
     assert "未验证" in out
@@ -917,3 +1075,107 @@ def test_doctor_never_needs_an_action_that_is_not_read_only(fake_daemon):
         assert spec is not None
         assert spec.risk == "read", action
     assert ErrorCodes.NO_CONNECTOR == "NO_CONNECTOR"
+
+
+# --------------------------------------------------------------------------
+# the skill lines through the CLI: the real directories, real files (061)
+# --------------------------------------------------------------------------
+
+
+def _working_machine(fake_daemon, tmp_path, monkeypatch):
+    """A machine where everything but the skill copy under test works.
+
+    The daemon, the extension, the editor version and the focused project are all
+    green, so the only red line these tests can produce is the skill one they
+    arranged — which is what makes the line *counts* meaningful.
+    """
+    daemon = fake_daemon(_FakeDaemon(
+        ping={"pong": True, "version": __version__, "connector": True, "pairedFingerprint": "ab12cd34"},
+        probe={"version": "3.2.186", "connector": _repo_connector_version(), "checks": ALL_PRESENT},
+        documents={
+            "projects": [{"projectUuid": "proj-1", "friendlyName": "test", "focused": True,
+                          "schematics": [], "pcbs": []}],
+            "active": {"uuid": "page-1", "type": "page"},
+        },
+    ))
+    install_tree(tmp_path, "3.2.186.b52e3e87")
+    monkeypatch.setenv(EDITOR_INSTALL_ENV, str(tmp_path))
+    return daemon
+
+
+def test_the_cli_calls_out_a_harness_that_never_got_the_sop(
+    fake_daemon, capsys, tmp_path, monkeypatch, skill_homes
+):
+    """Issue #11 end to end: everything else is fine, Claude Code has no SOP."""
+    _working_machine(fake_daemon, tmp_path, monkeypatch)
+    (skill_homes["claude"] / "SKILL.md").unlink()
+
+    code = _cmd_doctor(_doctor_args(json_path=tmp_path / "d.json"))
+
+    out = capsys.readouterr().out
+    assert code == 1
+    assert out.count("FAIL") == 1, out
+    assert "9/10" in out
+    payload = json.loads((tmp_path / "d.json").read_text(encoding="utf-8"))
+    assert payload["ok"] is False
+    entry = [item for item in payload["checks"] if item["name"] == "skill-claude"][0]
+    assert entry["ok"] is False and entry["skipped"] is False
+    assert entry["fix"] == "boardwise install-skill"
+    assert "skill-kimi" in [item["name"] for item in payload["checks"]]
+    assert [item["name"] for item in payload["checks"] if item["ok"] is False] == ["skill-claude"]
+
+
+def test_the_cli_calls_out_a_stale_copy(fake_daemon, capsys, tmp_path, monkeypatch, skill_homes):
+    _working_machine(fake_daemon, tmp_path, monkeypatch)
+    (skill_homes["kimi"] / "SKILL.md").write_bytes(b"# an older SKILL.md was here\n")
+
+    code = _cmd_doctor(_doctor_args())
+
+    out = capsys.readouterr().out
+    assert code == 1
+    assert out.count("FAIL") == 1, out
+    assert "旧版/异版" in out
+    assert "boardwise install-skill" in out
+
+
+def test_the_cli_skips_a_harness_that_is_not_installed_and_stays_green(
+    fake_daemon, capsys, tmp_path, monkeypatch, skill_homes
+):
+    """Claude Code is not on this machine: a skip, and the run is still a pass.
+
+    The whole point of the skip: a red line here would tell a user who never
+    installed Claude Code to fix something that is not wrong.
+    """
+    _working_machine(fake_daemon, tmp_path, monkeypatch)
+    monkeypatch.delenv(skill_install.SKILL_HOME_ENVS["claude"])
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "no-home-at-all")
+
+    code = _cmd_doctor(_doctor_args())
+
+    out = capsys.readouterr().out
+    assert code == 0, out
+    assert out.count("PASS") == 9
+    assert out.count("SKIP") == 1
+    # The skip counts as "通过" in the summary, like every other skip doctor
+    # prints: it is not a verdict against anything.
+    assert "10/10" in out
+    assert "不在用" in out
+
+
+def test_the_cli_gathers_the_skill_statuses_offline(tmp_path):
+    """No daemon at all: the skill lines still answer (that is why they are offline).
+
+    The one thing a machine with nothing set up can still be told is whether its
+    agents have the SOP — so the lines must be judged before any socket is
+    opened, and a dead daemon must not turn them into "未验证".
+    """
+    port = _free_port()
+    result = subprocess.run(
+        [sys.executable, "-m", "boardwise.cli", "doctor", "--port", str(port)],
+        capture_output=True, text=True, encoding="utf-8", env=_env(tmp_path, port), timeout=60,
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "Traceback" not in result.stderr
+    skill_lines = [line for line in result.stdout.splitlines() if "审查 SOP" in line]
+    assert len(skill_lines) == 2, result.stdout
+    assert all(line.lstrip().startswith("PASS") for line in skill_lines), skill_lines

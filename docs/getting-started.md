@@ -41,8 +41,10 @@
 5. 回编辑器，点一次 boardwise 菜单里的 `Reconnect`（编辑器启动时扩展可能先于 daemon 醒来）。
    预期：在**另一个**命令行窗口里跑 `D:\boardwise\boardwise.exe bridge status`，看到
    `connector: connected` 与你打开的工程名。
-6. 装上 agent 用的清单：`D:\boardwise\boardwise.exe install-skill`。
-   预期：`boardwise install-skill: installed C:\Users\<你>\.kimi-code\skills\boardwise\SKILL.md (25366 bytes …)`；
+6. 装上 agent 用的清单：`D:\boardwise\boardwise.exe install-skill`（默认 Kimi Code 和 Claude Code 两侧都装）。
+   预期两行：`boardwise install-skill [kimi]: installed C:\Users\<你>\.kimi-code\skills\boardwise\SKILL.md (…)`
+   和 `boardwise install-skill [claude]: installed C:\Users\<你>\.claude\skills\boardwise\SKILL.md (…)`；
+   只装一侧加 `--harness kimi`（或 `claude`）。
    再跑一次会变成 `already current`（它不会重复写，也不会覆盖你改过的文件——会先备份成 `SKILL.md.bak-<日期>`）。
 7. 自检：`D:\boardwise\boardwise.exe doctor`。
    预期：最后一行 `boardwise doctor: 8/8 项通过`。若同时开着多个编辑器窗口，加
