@@ -12,7 +12,7 @@ collects the current truth and the pointers.
 - **裁决**：PROGRESS/tasks 里 054 批的「78 绿」是当时实况的历史记录，不回溯改数字；新计数记在本条。`outputs/054_c*` 通配展示串（`FIX_SUCCESS_SOURCES` 渲染用）非真路径，不入断言。
 
 ### Commit
-见下方提交（本条落盘时 hash 待定，提交后回填）。
+`db9ed97`（13 files, +4725/−8，含 11 个证据文件入库）。
 ## [2026-09-28] 058 审查 SOP 手册闸前置（issue #8：`needs_datasheet[]` 双触发 + 「先问再判」；agent-77 执行，主代理架构+验收；connector/daemon 零改动仍 **0.4.25**）
 
 ### Problem / Task
