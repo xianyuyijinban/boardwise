@@ -23,7 +23,7 @@ collects the current truth and the pointers.
 
 ### Commit
 - Branch: `main`
-- Commit: 见本条下方一行（代码/测试/文档 055）
+- Commit: `50ca8b6`（代码/测试/文档/任务书 055+056 合同；本行随推送补记）
 - Status: committed
 - 遗留：G4/G5 归 056/057；顺带发现 `parse_capacitance_farads` 对希腊 μ（U+03BC）抛 KeyError 的 defect 另派 agent-75 修；值容差等价显式未决；真机值拼写必须带单位字母（坑 34/36）。
 ## [2026-09-28] 054 画法编译器落图（阶段 C1：单模块进编辑器）
