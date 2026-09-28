@@ -83,7 +83,26 @@ boardwise checkup --file <导出.epro2> --out <目录>       # 断连兜底：�
 - 只读：`doc.open` 只切焦点、`userInterface` 恒 false（不弹底部面板），每个阶段 `finally`
   把焦点复位。旧版 connector 缺某个动作时报告会记 `note` 并降级，不会瞎报。
 
-**审查三步与 AI 槽位（报告 schema /5：`ai_slots` 加四个一等节就是清单，逐条做完再答用户）**：
+**审查四步与 AI 槽位（报告 schema /6：`ai_slots` 加四个一等节就是清单，逐条做完再答用户）**：
+
+⓪ **先问再判（事前动作，阻塞——058 起是第一步，做在①之前）**：动手判定任何器件/管脚之前，
+先把**「功能建立不起来的器件与管脚」**列成一张清单，它就是报告里的 `needs_datasheet[]`：
+两个触发源，一个清单——
+
+- **触发源①（facts）报告生成时就带着**：规则判不了的器件（= `unreviewed_parts[]` 原样纳入）。
+- **触发源②（marked）是你的活**：图上读不懂的管脚、或整颗行为不明的新器件，在**下任何判定之前**
+  用 `boardwise need-datasheet --out <checkup目录> --part U7 --pins FB,ICG --reason "为什么解释不了"`
+  写进报告（`--pins` 可省 = 整颗器件；按 `(part, pin)` 幂等，重复标记只更新 reason；
+  命令会重算 `completion` 并重渲染 `report.md`，纯文件操作、不碰编辑器）。
+- 清单非空时**一次性向用户索取**对应手册/资料；**资料到位前不得对依赖它的条目下"通过/不符合"
+  结论**，只能写「无法确认（等资料）」。
+- **边界（写死）**：**不是**"等齐所有手册才准开工"——**能独立算的先算**（分压、耐压、降额、
+  驱动电流照算不误），只把**依赖未知器件功能**的条目挂起；**不**默认自动联网抓手册
+  （`parts fetch` 的三通道现状不动，官网通道仍然是你的 WebSearch 活）。
+- **消歧：「不许涂绿」与「先问再判」是两件事，分属两个阶段，不许合并成一句。**
+  「不许涂绿」是**事后标记**（判不了就如实说判不了——早就有）；「先问再判」是**事前动作**
+  （判之前先把未知项列出来、要资料——本步）。事后如实 + 事前索取，两道都得有：
+  issue #8 踩的是后者缺席，不是前者。
 
 ① **ERC 先行**：主机 ERC/DRC 读数在 `drc` 段——error 已在报告头部错误段，先解决；
 warn 逐条进 `warning_triage[]`，**把每条的 `verdict` 填成 有益/有害/无害、`reason` 写理由**。
@@ -92,15 +111,19 @@ warn 逐条进 `warning_triage[]`，**把每条的 `verdict` 填成 有益/有�
 含警告的模块已排在 `modules` 前头（`source.modulesOrderedBy = "warnings-first"`，
 每个模块带 `warningFindings`），分模块**先审含警告的**。
 
-② **分模块 + 手册闸**：`unreviewed_parts[]` 每颗带三通道状态（`channels.engineer/lcsc/official`）。
-遇到不熟的器件**不许跳过、不许涂绿**——按通道取手册：工程师给的 PDF 放 `.tmp_datasheets/`
+② **分模块 + 手册闸**：手册闸的唯一未知项清单是 `needs_datasheet[]`（⓪ 的两源合一）——
+`unreviewed_parts[]` 是它的 **facts 触发子集**，保留原名不动，三通道状态
+（`channels.engineer/lcsc/official`）就在那些条目里。遇到不熟的器件**不许跳过、不许涂绿**——
+按通道取手册：工程师给的 PDF 放 `.tmp_datasheets/`
 （`boardwise parts fetch <mpn> --file <PDF>` 落进去）；立创通道 `parts fetch <mpn>`
 自动从库条目链接下载并提取候选事实；官网通道永远是你的活
 （`channels.official.suggestedQueries` 给了查询词，WebSearch 找规格书，核**周边配置**：
 去耦/上下拉/限流/耐压，顺手确认可用型号）。拿到手册当场核完继续审，**三通道全灭**
 才让它留在未审器件里。**该节非空时不得宣称"审查通过"**——结论只能用
-`summary.conclusion` 那句（"DRC/连接性已审，N 颗器件缺手册未审"），
-`summary.mayClaimPassed` 就是这道闸（**窄义**：只回答这一件事——没别的意思）。
+`summary.conclusion` 那句（"DRC/连接性已审，N 颗器件缺手册未审；另有 M 项管脚待手册（已标记）"），
+`summary.mayClaimPassed` 就是这道闸（**窄义**：只回答"有没有器件缺手册未审"——没别的意思）；
+**完整结论/总闸看 `completion.verdict`**（`needsDatasheet > 0` ⇒ `incomplete`，与
+`unreviewedParts > 0` 一样让它进不了 `complete`）。
 
 ③ **整图布局（审美开关，默认关）**：开关开着报告才有 `layout_review` 节（五轴：
 拓扑可辨/流向明确/文字可读/分组合理/网络标识规范），对着 `canvas_images[]` 逐轴打 1–5 分
@@ -148,9 +171,9 @@ checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起
   写进 `design-intent.md`（**不是** `architecture.md`），**以后 finding 以它为尺**；需求变了改那里
   （活文档）。AI 提案先写 `ai-proposal@日期`，工程师点头后改 `ai-confirmed@日期`。
 - **完整结论看 `completion.verdict`**（053 §2.2）：`scope{rules,boards,pages}` / `errors` /
-  `unreviewedParts` / `warningsPendingTriage` / `architectureSlots{total,filled,stale}` /
-  `openTodos` / `sourceVersions{ruleset,rulebody}`，三态 `complete`（errors=0 ∧ 未审=0 ∧ stale=0 ∧
-  待分诊=0）/ `complete-with-open-items`（errors=0 但有开放项）/ `incomplete`（errors>0 或 未审>0）。
+  `unreviewedParts` / `needsDatasheet` / `warningsPendingTriage` / `architectureSlots{total,filled,stale}` /
+  `openTodos` / `sourceVersions{ruleset,rulebody}`，三态 `complete`（errors=0 ∧ 未审=0 ∧ 标记=0 ∧ stale=0 ∧
+  待分诊=0）/ `complete-with-open-items`（errors=0 但有开放项）/ `incomplete`（errors>0 或 未审>0 或 标记>0）。
   `summary.mayClaimPassed` 是**窄义**字段（只回答「有没有器件缺手册未审」），**别拿它当"通过"
   的完整结论**；`verdictWhy` 直接列出是哪些开放项。
 - **对每条链做目的论走查**：这条链是干什么的 → 端到端能闭合吗。骨架里

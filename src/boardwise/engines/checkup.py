@@ -949,6 +949,169 @@ def unreviewed_parts(
 
 
 # --------------------------------------------------------------------------
+# needs_datasheet — ⓪ 先问再判: what the report still depends on (058, issue #8)
+# --------------------------------------------------------------------------
+
+#: The two triggers a `needs_datasheet[]` entry can carry. `facts` is the seed
+#: `checkup` computes by itself — the shelf has nothing a rule may act on, so
+#: the *report* already knows this part is a question. `marked` is the
+#: reviewer's own claim that **they** cannot establish what a device or a pin
+#: does, entered before any verdict through `boardwise need-datasheet`.
+TRIGGER_FACTS = "facts"
+TRIGGER_MARKED = "marked"
+
+#: The fixed first line of the report.md section while it is non-empty. This is
+#: the whole gate 058 exists for: issue #8's review judged an FB/ICG pair with
+#: no datasheet, and the two judgements were both wrong the next day. A report
+#: that still depends on an unread datasheet must not be readable as a pass.
+NEEDS_DATASHEET_BLOCK = "本节非空期间，本报告不得宣称审查通过。"
+
+#: What a marked row means, spelled for the report's reader.
+MARKED_ENTRY_NOTE = (
+    "审查者标记：这些管脚/器件的作用无法从图纸与手上资料建立；"
+    "资料到位前，只能写「无法确认（等资料）」，不许写「通过/不符合」"
+)
+
+
+def dependent_findings(findings: list[dict] | None, part: str) -> list[str]:
+    """The `findings[]` rows that name ``part``, as ``<rule_id>@<part>`` refs.
+
+    Read out of the finding's own `refs` (the designators its evidence names —
+    ``engines/review.finding_refs``) plus its plan target, the same two sources
+    the Chinese summary reads, so "a finding about U7" means one thing in this
+    report. Derived here rather than stored on the finding: the rule engine is
+    untouched (058 §二 — this is a reading of what a rule already wrote).
+    """
+    out: list[str] = []
+    for finding in findings or []:
+        if not isinstance(finding, dict):
+            continue
+        named = [str(ref) for ref in (finding.get("refs") or [])]
+        target = finding.get("target")
+        if isinstance(target, dict):
+            component_ref = str(target.get("component_ref") or "")
+            if component_ref and component_ref not in named:
+                named.insert(0, component_ref)
+        if part not in named:
+            continue
+        ref = f"{finding.get('rule_id')}@{part}"
+        if ref not in out:
+            out.append(ref)
+    return out
+
+
+def marked_parts(entries: list[dict] | None) -> list[str]:
+    """The distinct parts **the reviewer** marked, in report order.
+
+    Exactly the number `completion.needsDatasheet` reports and the number
+    `summary.conclusion` says out loud: one per part whatever the number of
+    pins, so a part that is also a facts seed is counted once (058 §二).
+    """
+    out: list[str] = []
+    for entry in entries or []:
+        if not isinstance(entry, dict) or entry.get("trigger") != TRIGGER_MARKED:
+            continue
+        part = str(entry.get("part") or "")
+        if part and part not in out:
+            out.append(part)
+    return out
+
+
+def needs_datasheet_section(
+    unreviewed: list[dict] | None,
+    marked: list[dict] | None,
+    findings: list[dict] | None = None,
+) -> list[dict]:
+    """The `needs_datasheet[]` section — the ⓪ 先问再判 worklist (058 §二).
+
+    One section, two triggers, so the review has **one** list of what it depends
+    on instead of a facts-only gate that a reviewer walking around `checkup`
+    never meets (issue #8's缺口① and ②):
+
+    * **facts** — every `unreviewed_parts[]` row carried over as it stands
+      (`channels` included; that section itself is untouched, 053's narrow
+      discipline). `checkup` writes these by itself.
+    * **marked** — pin-level rows the reviewer wrote down (``{"part","pin",
+      "reason"}``; an empty ``pin`` means the whole part: see
+      ``boardwise.cli._cmd_need_datasheet``). They are folded into **one entry
+      per part** here, because the gate is per part and one datasheet answers
+      every pin of it.
+
+    When a part is hit by both triggers the marked entry wins — the reviewer's
+    own words are the more specific claim — and carries ``factSeed: true`` so
+    the seed (its channels, MPN, missing facts) is not lost; the part is then
+    counted once by :func:`marked_parts`. A facts row copied here keeps its
+    designator under ``part``; everything else about it is unchanged.
+    """
+    seed_by_part: dict[str, dict] = {}
+    for row in unreviewed or []:
+        if not isinstance(row, dict):
+            continue
+        part = str(row.get("designator") or "")
+        if part:
+            seed_by_part.setdefault(part, row)
+
+    grouped: dict[str, list[dict]] = {}
+    order: list[str] = []
+    for mark in marked or []:
+        if not isinstance(mark, dict):
+            continue
+        part = str(mark.get("part") or "").strip()
+        if not part:
+            continue
+        if part not in grouped:
+            grouped[part] = []
+            order.append(part)
+        grouped[part].append(mark)
+
+    def _seed_fields(seed: dict | None) -> dict:
+        return {
+            "channels": (seed.get("channels") or {}) if seed is not None else {},
+            "mpn": (seed.get("mpn") or "") if seed is not None else "",
+            "supplier": (seed.get("supplier") or "") if seed is not None else "",
+            "missingFacts": list(seed.get("missingFacts") or []) if seed is not None else [],
+        }
+
+    out: list[dict] = []
+    for part, seed in seed_by_part.items():
+        if part in grouped:
+            continue  # marked wins; the seed's fields travel on that entry
+        out.append({
+            "part": part,
+            "pins": [],
+            "trigger": TRIGGER_FACTS,
+            "reason": "；".join(str(reason) for reason in (seed.get("reasons") or [])),
+            "dependentFindings": dependent_findings(findings, part),
+            "factSeed": True,
+            **_seed_fields(seed),
+        })
+    for part in order:
+        pins: list[str] = []
+        reasons: list[str] = []
+        whole_part = False
+        for mark in grouped[part]:
+            pin = str(mark.get("pin") or "").strip()
+            if not pin:
+                whole_part = True
+            elif pin not in pins:
+                pins.append(pin)
+            reason = str(mark.get("reason") or "").strip()
+            if reason and reason not in reasons:
+                reasons.append(reason)
+        seed = seed_by_part.get(part)
+        out.append({
+            "part": part,
+            "pins": [] if whole_part else pins,
+            "trigger": TRIGGER_MARKED,
+            "reason": "；".join(reasons),
+            "dependentFindings": dependent_findings(findings, part),
+            "factSeed": seed is not None,
+            **_seed_fields(seed),
+        })
+    return out
+
+
+# --------------------------------------------------------------------------
 # warning triage (039 批② §WI-2)
 # --------------------------------------------------------------------------
 
@@ -1193,6 +1356,10 @@ SUMMARY_TEMPLATE = """\
   2. 再确认 <条目>：<找谁/查什么>
   3. 存疑项：<unknown_parts 里需要查规格书的器件，逐条写结论>
 
+【本报告依赖的未知项】（needs_datasheet；**这一节空着才允许写"通过"**）
+  - <位号/管脚>：<为什么解释不了> —— 需要：<哪份手册的哪一节，或找谁要>
+  - 清单非空时，依赖它的条目只能写「无法确认（等资料）」，不许写「通过/不符合」
+
 <可选一段：读画布图看到的问题（摆放、位号可读性、网络标识、区分度）>
 """
 
@@ -1353,6 +1520,75 @@ def render_report_markdown(report: dict) -> str:
                 )
         lines.append("")
         lines.append(f"每个器件问同一件事：{UNKNOWN_PART_QUESTION}")
+    lines.append("")
+
+    # --- 058 ⓪: what the report still depends on. It sits right after 未审器件
+    # because it *contains* that section (the facts trigger) plus the reviewer's
+    # own marks, and because its fixed first line is a gate the reader must meet
+    # before the DRC tables below. Existing sections keep their order and wording.
+    needs = report.get("needs_datasheet") or []
+    facts_rows = [entry for entry in needs if entry.get("trigger") == TRIGGER_FACTS]
+    marked_rows = [entry for entry in needs if entry.get("trigger") == TRIGGER_MARKED]
+    lines.append(
+        f"## 本报告依赖的未知项（needs_datasheet：facts {len(facts_rows)} 条 / "
+        f"审查者标记 {len(marked_rows)} 项）"
+    )
+    lines.append("")
+    if not needs:
+        lines.append(
+            "无：没有规则判不了的器件，也没有审查者标记的未知管脚。本节为空，"
+            "报告才有资格谈「通过」——完整的结论仍以 `completion.verdict` 为准。"
+        )
+    else:
+        lines.append(NEEDS_DATASHEET_BLOCK)
+        lines.append("")
+        if facts_rows:
+            lines.append(f"### facts 触发（规则判不了的器件，{len(facts_rows)} 条）")
+            lines.append("")
+            lines.append(
+                "| 位号 | MPN | 供应商 | 缺哪些 fact | 为什么在清单上 | 依赖的 findings "
+                "| 工程师给 | 立创找 | 官网搜 |"
+            )
+            lines.append("|---|---|---|---|---|---|---|---|---|")
+            for entry in facts_rows:
+                channels = entry.get("channels") or {}
+                lines.append(
+                    f"| {_cell(entry.get('part'))} | {_cell(entry.get('mpn'))} "
+                    f"| {_cell(entry.get('supplier'))} "
+                    f"| {_cell('、'.join(entry.get('missingFacts') or []) or '—')} "
+                    f"| {_cell(entry.get('reason') or '—')} "
+                    f"| {_cell('、'.join(entry.get('dependentFindings') or []) or '—')} "
+                    f"| {_channel_cell(channels.get('engineer'))} "
+                    f"| {_channel_cell(channels.get('lcsc'))} "
+                    f"| {_channel_cell(channels.get('official'))} |"
+                )
+            lines.append("")
+        if marked_rows:
+            lines.append(f"### 审查者标记（读不懂的管脚，{len(marked_rows)} 项）")
+            lines.append("")
+            lines.append(
+                "| 位号 | 管脚 | 为什么解释不了 | 依赖的 findings "
+                "| 工程师给 | 立创找 | 官网搜 |"
+            )
+            lines.append("|---|---|---|---|---|---|---|")
+            for entry in marked_rows:
+                channels = entry.get("channels") or {}
+                pins = "、".join(str(pin) for pin in (entry.get("pins") or []))
+                lines.append(
+                    f"| {_cell(entry.get('part'))} | {_cell(pins or '（整颗器件）')} "
+                    f"| {_cell(entry.get('reason') or '（没写理由）')} "
+                    f"| {_cell('、'.join(entry.get('dependentFindings') or []) or '—')} "
+                    f"| {_channel_cell(channels.get('engineer'))} "
+                    f"| {_channel_cell(channels.get('lcsc'))} "
+                    f"| {_channel_cell(channels.get('official'))} |"
+                )
+            lines.append("")
+            lines.append(MARKED_ENTRY_NOTE)
+            lines.append("")
+        lines.append(
+            "同一器件两源命中时按 marked 展示（该条 `factSeed: true`），计数只算一次；"
+            f"每个器件问同一件事：{UNKNOWN_PART_QUESTION}"
+        )
     lines.append("")
 
     lines.append("## 主机 DRC")

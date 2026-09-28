@@ -253,6 +253,16 @@ boardwise checkup --out checkup
 只会说"DRC/连接性已审，N 颗器件缺手册未审"）、`warning_triage`（每条警告一格，`verdict` 填
 有益/有害/无害 + 理由）、`canvas_images`（要看的画布图）、`summary_template`（总结模板）。
 `ai_slots.unknown_parts` 是 `unreviewed_parts` 的旧名字，内容同一份。
+`needs_datasheet` 是这份报告**唯一**的未知项清单（上面那节是它的 **facts 触发子集**）：自己读不懂
+哪颗器件的哪只脚，就在**下判定之前**记进报告——
+
+```bash
+boardwise need-datasheet --out checkup --part U7 --pins FB,ICG --reason "FB 悬空是否认可用法 / ICG 参考点不明"
+```
+
+按 `(part, pin)` 幂等（重复标记只更新理由），纯文件操作、不连编辑器；它会重算 `completion` 并重渲染
+`report.md`。有标记在，`completion.verdict` 就是 `incomplete`，资料到位前只能写「无法确认（等资料）」，
+不许对依赖这只脚的条目下"通过/不符合"结论——这正是 issue #8 那两条错判缺的那一步。
 报告还带两节结论：`architecture`（骨架 ⊕ `design-intent.md` 的**合并视图**：已填的值进报告、
 仍 `TODO` 的仍 `TODO`；某个槽关联的对象被改画后，该槽标 `stale: 图纸已变，此槽待复核`——不删你写的值、
 不覆盖、也不阻断出报告）和 `completion`（**完整结论**：检查范围 `scope`、欠账与源版本，`verdict` 三态
