@@ -51,6 +51,50 @@ kind                                    what it refuses
 ``required-pin-not-connected``          a declared net member is connected to nothing
 ======================================  ==========================================
 
+**The page-level domain (056 sec.3), a second vocabulary beside the nine.** Once
+several modules are drawn on one page, four questions stop being answerable
+inside a module, and :func:`check_page` asks them — the nine constraints above
+are unchanged and keep their names, their order and their meanings:
+
+==================================  ==========================================
+kind                                what it refuses
+==================================  ==========================================
+``module-frame-overflow``           a module frame leaves the stated page
+``module-frame-overlap``            two module frames overlap, or are closer than
+                                    the page's own module-gap constant
+``geometry-outside-module-frames``  a part, a text, a name anchor or a wire end
+                                    that lies in no module frame at all
+``module-part-unassigned``          a placed part belongs to no module, or to two
+``wire-through-module-frame``       a wire runs through a frame that is not one
+                                    of the frames its own two ends are in, or
+                                    leaves one of them and comes back
+``shared-net-expression-split``     one shared net stated a wire in one place and
+                                    a name in another, or a label in one module
+                                    and a flag in the other
+``main-path-edge-not-wired``        a flow edge the presentation marks
+                                    `mainPath` whose connection is not a wire
+``page-keepout-conflict``           a stated keep-out lands on a module frame
+==================================  ==========================================
+
+Two of those deserve the reason they exist. ``wire-through-module-frame`` is
+*not* the nine's ``wire-through-body``: a wire may legally pass through the empty
+part of a module's frame (between its bodies), and the rule the page owes is that
+it does not — "绕行义务在线不在框" (056 sec.3) — except for the one escape run
+between a port and its own frame's edge. And ``shared-net-expression-split`` is
+the page's version of ``uniform-gnd``: two modules that name the same net must
+name it the same way, because the join happens **by name**, and a net that is a
+wire in one module and a label in the other is a drawing whose reader cannot tell
+whether the two are one connection (the exception is a whole ``mainPath`` edge,
+which is one wire and no name at either end).
+
+What this domain deliberately does **not** do: it does not require the frames to
+be *exactly* the module's bounding box. A frame is a stated page fact, and what
+the checker tests is what makes it usable — that it holds its module's own
+geometry, that it is clear of the other frames, that it is on the page, and that
+the wires respect it. Recomputing the exact box would be re-running the
+compiler's own bounding computation, which is the one thing an independent check
+may not do.
+
 **Object names.** Violations name what they are about, with the document area as
 the prefix, so a reader can go straight to it: plan side ``parts[R1]``,
 ``segments[0]``, ``junctions[2]``, ``labels[3]``, ``powerSymbols[0]``,
@@ -118,6 +162,7 @@ from typing import Any, Callable
 from boardwise.core.circuitspec import CircuitSpec
 from boardwise.core.geometry import transform_point
 from boardwise.core.layoutplan import LayoutPlan
+from boardwise.core.pagelayoutplan import PageLayoutPlan
 from boardwise.core.presentationspec import PresentationSpec
 from boardwise.core.symbolprofile import Box, SymbolProfile, check_box
 
@@ -126,14 +171,26 @@ __all__ = [
     "DEFAULT_GRID",
     "HARD_KINDS",
     "KIND_DANGLING_WIRE_END",
+    "KIND_GEOMETRY_OUTSIDE_FRAMES",
+    "KIND_MAIN_PATH_EDGE_NOT_WIRED",
+    "KIND_MODULE_FRAME_OVERFLOW",
+    "KIND_MODULE_FRAME_OVERLAP",
+    "KIND_MODULE_PART_UNASSIGNED",
     "KIND_NC_PIN_CONNECTED",
     "KIND_NETLIST_PARTITION",
     "KIND_OUT_OF_PAGE",
+    "KIND_PAGE_KEEPOUT_CONFLICT",
     "KIND_REQUIRED_PIN_NOT_CONNECTED",
+    "KIND_SHARED_NET_EXPRESSION_SPLIT",
     "KIND_TEXT_OVERLAP",
     "KIND_UNDECLARED_JUNCTION",
     "KIND_USER_LOCK_VIOLATED",
     "KIND_WIRE_THROUGH_BODY",
+    "KIND_WIRE_THROUGH_MODULE_FRAME",
+    "PAGE_CHECKER_NAME",
+    "PAGE_HIGH_FANOUT",
+    "PAGE_KINDS",
+    "PAGE_MODULE_GAP",
     "PRECISION",
     "TOL",
     "UNMEASURED",
@@ -142,6 +199,7 @@ __all__ = [
     "HardViolation",
     "ReadabilityError",
     "check",
+    "check_page",
     "derive_netlist",
 ]
 
@@ -193,6 +251,47 @@ HARD_KINDS: tuple[str, ...] = (
     KIND_NC_PIN_CONNECTED,
     KIND_REQUIRED_PIN_NOT_CONNECTED,
 )
+
+# ------------------------------------------------- the page-level domain (056)
+
+#: What a caller writes into ``PageLayoutPlan.pageEvidence.checker``. A second
+#: vocabulary, not a tenth constraint: the nine above judge a drawing, these
+#: judge a *page* made of drawings, and a report that merged the two would make
+#: "which layer refused" unanswerable (052 sec.8).
+PAGE_CHECKER_NAME = "boardwise-page-readability/1"
+
+KIND_MODULE_FRAME_OVERFLOW = "module-frame-overflow"
+KIND_MODULE_FRAME_OVERLAP = "module-frame-overlap"
+KIND_GEOMETRY_OUTSIDE_FRAMES = "geometry-outside-module-frames"
+KIND_MODULE_PART_UNASSIGNED = "module-part-unassigned"
+KIND_WIRE_THROUGH_MODULE_FRAME = "wire-through-module-frame"
+KIND_SHARED_NET_EXPRESSION_SPLIT = "shared-net-expression-split"
+KIND_MAIN_PATH_EDGE_NOT_WIRED = "main-path-edge-not-wired"
+KIND_PAGE_KEEPOUT_CONFLICT = "page-keepout-conflict"
+
+#: The eight page kinds, in the order :func:`check_page` reports them.
+PAGE_KINDS: tuple[str, ...] = (
+    KIND_MODULE_FRAME_OVERFLOW,
+    KIND_MODULE_FRAME_OVERLAP,
+    KIND_GEOMETRY_OUTSIDE_FRAMES,
+    KIND_MODULE_PART_UNASSIGNED,
+    KIND_WIRE_THROUGH_MODULE_FRAME,
+    KIND_SHARED_NET_EXPRESSION_SPLIT,
+    KIND_MAIN_PATH_EDGE_NOT_WIRED,
+    KIND_PAGE_KEEPOUT_CONFLICT,
+)
+
+#: The clear space two module frames must keep (056 sec.2's "模块间距 ≥ 页级
+#: 常量"). Echoed here the way :data:`DEFAULT_GRID` is, so the number the rule is
+#: applied with is visible where it is applied; `engines/pagecompiler.py` places
+#: frames with it and passes its own if it uses another.
+PAGE_MODULE_GAP = 40.0
+
+#: Member count above which a net is a *bus* and is always expressed by name
+#: (053 sec.7's high fan-out). Echoed for the same reason as the gap above: the
+#: main-path rule needs it to tell "this edge must be wired" from "this net may
+#: never be a long wire tree", and the compiler passes its own budget's value.
+PAGE_HIGH_FANOUT = 3
 
 
 class ReadabilityError(ValueError):
@@ -1616,3 +1715,814 @@ class _UnionFind:
         root_left, root_right = self.find(left), self.find(right)
         if root_left != root_right:
             self._parent[root_right] = root_left
+
+
+# ============================================== the page-level domain (056 sec.3)
+#
+# The nine constraints above judge one drawing. These eight judge a page made of
+# several — where the frames sit, what happens to a wire when it leaves a module,
+# and whether two modules say the same thing about a shared net. The two domains
+# are separate functions on purpose: `check` is the 053 contract and keeps its
+# inputs, its order and its meaning, and nothing here changes what it returns.
+
+
+def module_frames(page_layout: PageLayoutPlan) -> dict[str, Box]:
+    """``module id -> stated frame``, refusing a document with no module.
+
+    A small reader rather than a policy: the frames are the *document's* facts,
+    and :func:`check_page` verifies them against the geometry instead of
+    recomputing them (see the module docstring).
+    """
+    return {module.id: module.frame for module in page_layout.modules}
+
+
+def check_page(
+    page_layout: PageLayoutPlan,
+    circuit_spec: CircuitSpec,
+    presentation_spec: PresentationSpec,
+    profiles: Mapping[str, SymbolProfile] | Iterable[SymbolProfile],
+    *,
+    keepouts: Sequence[Box] = (),
+    module_gap: float = PAGE_MODULE_GAP,
+    high_fanout: int = PAGE_HIGH_FANOUT,
+) -> CheckResult:
+    """Run the eight page constraints and measure the page's soft metrics.
+
+    ``page_layout`` is a :class:`~boardwise.core.pagelayoutplan.PageLayoutPlan`:
+    the merged drawing plus the module placement facts. The *drawing* half of the
+    contract is the nine constraints, checked by :func:`check` on the merged plan
+    — this function never re-judges it, and a caller that wants both runs both.
+    The page box the frames are tested against is the document's own
+    ``page_box`` (a page without one has nothing to be outside of).
+
+    The module membership used here comes from the **presentation spec**, not from
+    the document's own ``modules[*].parts``: the split is an input, and a document
+    whose split disagrees with the spec it claims to come from is a
+    :class:`ReadabilityError` rather than a page finding, because there is no
+    reading of the page that makes both true.
+
+    ``keepouts`` are the page-level reserved regions (a title block, a reserved
+    area). ``module_gap`` is the clear space two frames must keep, ``high_fanout``
+    the member count at which a net stops being a local connection (053 sec.7) —
+    the caller passes the values it compiled with; the defaults are this module's
+    own statement of the same rules. The lattice grid is deliberately *not* a
+    parameter: the page domain measures frames and wires, not lattice alignment.
+    """
+    for value, expected in (
+        (page_layout, PageLayoutPlan),
+        (circuit_spec, CircuitSpec),
+        (presentation_spec, PresentationSpec),
+    ):
+        if not isinstance(value, expected):
+            raise ReadabilityError(
+                f"{expected.__name__} expected, got {type(value).__name__}"
+            )
+    if isinstance(module_gap, bool) or not isinstance(module_gap, (int, float)) or module_gap <= 0:
+        raise ReadabilityError(
+            f"module_gap must be a positive number of canvas units, got {module_gap!r}"
+        )
+    if isinstance(high_fanout, bool) or not isinstance(high_fanout, int) or high_fanout < 1:
+        raise ReadabilityError(
+            f"high_fanout must be a positive integer, got {high_fanout!r}"
+        )
+    reserved: list[Box] = []
+    for index, item in enumerate(keepouts):
+        box = check_box(item, f"keepouts[{index}]", ReadabilityError)
+        if box is None:
+            raise ReadabilityError(
+                f"keepouts[{index}] is not a box — an absent keep-out is one the "
+                "caller should not have listed"
+            )
+        reserved.append(box)
+
+    frames = _checked_frames(page_layout, presentation_spec)
+    plan = page_layout.plan
+    placed = _placed_parts(plan, _profile_map(profiles))
+    membership = _part_membership(plan, presentation_spec)
+    cross = _cross_module_wires(plan, frames)
+
+    violations: list[HardViolation] = []
+    violations.extend(_check_frames_on_the_page(frames, page_layout.page_box))
+    violations.extend(_check_frame_separation(frames, module_gap))
+    violations.extend(_check_geometry_framed(plan, placed, frames, membership))
+    violations.extend(_check_part_membership(plan, membership))
+    violations.extend(_check_wires_clear_of_frames(plan, frames))
+    violations.extend(_check_shared_expressions(
+        plan, circuit_spec, presentation_spec, frames, cross,
+    ))
+    violations.extend(_check_main_paths(
+        presentation_spec, circuit_spec, frames, cross, high_fanout,
+    ))
+    violations.extend(_check_page_keepouts(frames, reserved))
+
+    metrics, reasons = _page_metrics(plan, presentation_spec, frames, cross)
+    return CheckResult(
+        hard_violations=violations, soft_metrics=metrics, soft_reasons=reasons,
+    )
+
+
+# ------------------------------------------------------------- page: readers
+
+
+def _checked_frames(
+    page_layout: PageLayoutPlan, presentation_spec: PresentationSpec
+) -> dict[str, Box]:
+    """The frames, after checking the document and the spec agree on the split.
+
+    Two documents describe the split — the presentation (what the author asked
+    for) and the page (what the compiler placed). They are allowed to *further
+    detail* it (a grammar per module) but not to disagree about which parts form
+    a module: a page whose frames group different parts from the spec it names is
+    a page about a different circuit, and no finding would say so.
+    """
+    wanted = {module.id: sorted(module.parts) for module in presentation_spec.modules}
+    found = {module.id: sorted(module.parts) for module in page_layout.modules}
+    if wanted != found:
+        only_here = sorted(set(found) - set(wanted))
+        only_there = sorted(set(wanted) - set(found))
+        detail = []
+        if only_here:
+            detail.append(f"the page places {', '.join(only_here)}, the spec does not")
+        if only_there:
+            detail.append(f"the spec declares {', '.join(only_there)}, the page does not")
+        for module_id in sorted(set(wanted) & set(found)):
+            if wanted[module_id] != found[module_id]:
+                detail.append(
+                    f"module {module_id!r} holds {', '.join(found[module_id])} on "
+                    f"the page and {', '.join(wanted[module_id])} in the spec"
+                )
+        raise ReadabilityError(
+            "the page document's module split is not the presentation spec's ("
+            + "; ".join(detail)
+            + ") — the checker reads the membership from the spec, so a page that "
+            "groups other parts is not the page this spec describes"
+        )
+    return module_frames(page_layout)
+
+
+def _part_membership(
+    layout_plan: LayoutPlan, presentation_spec: PresentationSpec
+) -> dict[str, tuple[str, ...]]:
+    """``placed part -> the modules that claim it``, sorted."""
+    out: dict[str, tuple[str, ...]] = {}
+    for part in layout_plan.parts:
+        out[part.part_id] = tuple(
+            sorted(module.id for module in presentation_spec.modules
+                   if part.part_id in module.parts)
+        )
+    return out
+
+
+def _part_extent(part: _PlacedPart) -> Box:
+    """A placed part's own box: its body unioned with its pin tips.
+
+    The tips are part of the part's extent — a symbol's pin usually reaches past
+    its body — and text avoidance in the compiler treats them as occupied, so
+    the frame has to hold them too.
+    """
+    xs: list[float] = []
+    ys: list[float] = []
+    if part.body is not None:
+        xs.extend((part.body[0], part.body[2]))
+        ys.extend((part.body[1], part.body[3]))
+    for point in part.pins.values():
+        xs.append(point[0])
+        ys.append(point[1])
+    if not xs:
+        return (0.0, 0.0, 0.0, 0.0)
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def _inside(point: tuple[float, float], box: Box) -> bool:
+    return (
+        box[0] - TOL <= point[0] <= box[2] + TOL
+        and box[1] - TOL <= point[1] <= box[3] + TOL
+    )
+
+
+def _box_inside(inner: Box, outer: Box) -> bool:
+    return (
+        inner[0] >= outer[0] - TOL and inner[1] >= outer[1] - TOL
+        and inner[2] <= outer[2] + TOL and inner[3] <= outer[3] + TOL
+    )
+
+
+def _frames_of(point: tuple[float, float], frames: Mapping[str, Box]) -> tuple[str, ...]:
+    """Every frame the point lies in, in module-id order."""
+    return tuple(
+        name for name, box in sorted(frames.items()) if _inside(point, box)
+    )
+
+
+# ------------------------------------------------------- page: the eight rules
+
+
+def _check_frames_on_the_page(
+    frames: Mapping[str, Box], page: Box | None
+) -> list[HardViolation]:
+    """A frame that leaves the sheet is a page that does not fit."""
+    if page is None:
+        return []
+    out = []
+    for name, box in sorted(frames.items()):
+        leaving = _outside(box, page)
+        if not leaving:
+            continue
+        out.append(HardViolation(
+            kind=KIND_MODULE_FRAME_OVERFLOW,
+            objects=(f"pageLayout.modules[{name}]",),
+            evidence=(
+                f"the frame {_box_text(box)} leaves the page {_box_text(page)}: "
+                f"{leaving} — the page layer is expected to enlarge the page, move "
+                "the module or refuse, never to draw outside the sheet"
+            ),
+        ))
+    return out
+
+
+def _check_frame_separation(
+    frames: Mapping[str, Box], module_gap: float
+) -> list[HardViolation]:
+    """Frames must not overlap, and must keep the page's clear space."""
+    names = sorted(frames)
+    out = []
+    for index, left in enumerate(names):
+        for right in names[index + 1:]:
+            gap = _box_gap(frames[left], frames[right])
+            if gap > module_gap - TOL:
+                continue
+            overlap = _overlap(frames[left], frames[right])
+            out.append(HardViolation(
+                kind=KIND_MODULE_FRAME_OVERLAP,
+                objects=(f"pageLayout.modules[{left}]", f"pageLayout.modules[{right}]"),
+                evidence=(
+                    (
+                        f"the two frames overlap ({_box_text(frames[left])} and "
+                        f"{_box_text(frames[right])}) — each frame is a rigid body "
+                        "on the page, and two bodies cannot share canvas"
+                    )
+                    if overlap
+                    else (
+                        f"the frames are {gap:g} canvas units apart, and the page's "
+                        f"module gap is {module_gap:g} — the clear space is what "
+                        "keeps two modules' annotations (a flag's stem, a label's "
+                        "box) off each other"
+                    )
+                ),
+            ))
+    return out
+
+
+def _check_geometry_framed(
+    plan: LayoutPlan,
+    placed: list[_PlacedPart],
+    frames: Mapping[str, Box],
+    membership: Mapping[str, tuple[str, ...]],
+) -> list[HardViolation]:
+    """Everything the page draws lies inside some module frame.
+
+    The frames are the page's way of saying "this is where module M is", so a
+    piece of geometry in no frame is either a frame that does not hold its own
+    drawing or a drawing that the page does not account for; both make every
+    other page constraint meaningless, which is why this is checked first.
+    """
+    if not frames:
+        return []
+    out: list[HardViolation] = []
+
+    def framed(box: Box) -> bool:
+        """Is this box held by some module frame? (containment, not overlap)"""
+        return any(_box_inside(box, frame) for frame in frames.values())
+
+    for part in sorted(placed, key=lambda item: item.part_id):
+        box = _part_extent(part)
+        if framed(box):
+            continue
+        out.append(HardViolation(
+            kind=KIND_GEOMETRY_OUTSIDE_FRAMES,
+            objects=(f"parts[{part.part_id}]",),
+            evidence=(
+                f"the part's extent {_box_text(box)} is in no module frame — the "
+                "modules that claim it are "
+                + (", ".join(membership.get(part.part_id, ())) or "none")
+            ),
+        ))
+    for index, text in enumerate(plan.texts):
+        if framed(text.bbox):
+            continue
+        out.append(HardViolation(
+            kind=KIND_GEOMETRY_OUTSIDE_FRAMES,
+            objects=(f"texts[{index}]",),
+            evidence=(
+                f"the text {text.text!r} occupies {_box_text(text.bbox)}, which is "
+                "in no module frame — a text the page placed outside every module "
+                "belongs to no group, and nothing keeps the next module off it"
+            ),
+        ))
+    for index, label in enumerate(plan.labels):
+        if framed(label.bbox) and _frames_of((label.x, label.y), frames):
+            continue
+        out.append(HardViolation(
+            kind=KIND_GEOMETRY_OUTSIDE_FRAMES,
+            objects=(f"labels[{index}]",),
+            evidence=(
+                f"the label {label.text!r} anchors at ({label.x:g}, {label.y:g}) "
+                f"with its box at {_box_text(label.bbox)}, and neither is inside a "
+                "module frame"
+            ),
+        ))
+    for index, symbol in enumerate(plan.power_symbols):
+        if _frames_of((symbol.x, symbol.y), frames):
+            continue
+        out.append(HardViolation(
+            kind=KIND_GEOMETRY_OUTSIDE_FRAMES,
+            objects=(f"powerSymbols[{index}]",),
+            evidence=(
+                f"the flag for net {symbol.net!r} anchors at "
+                f"({symbol.x:g}, {symbol.y:g}), which is in no module frame"
+            ),
+        ))
+    for index, segment in enumerate(plan.segments):
+        for end, point in (("start", segment.points[0]), ("end", segment.points[-1])):
+            if _frames_of(point, frames):
+                continue
+            out.append(HardViolation(
+                kind=KIND_GEOMETRY_OUTSIDE_FRAMES,
+                objects=(f"segments[{index}]",),
+                evidence=(
+                    f"the wire's {end} ({point[0]:g}, {point[1]:g}) is in no module "
+                    f"frame — a wire end belongs inside the module whose drawing it "
+                    f"is part of (net {segment.net!r})"
+                ),
+            ))
+    return out
+
+
+def _check_part_membership(
+    plan: LayoutPlan, membership: Mapping[str, tuple[str, ...]]
+) -> list[HardViolation]:
+    """Every placed part belongs to exactly one module (056 sec.1)."""
+    out = []
+    for part in plan.parts:
+        owners = membership.get(part.part_id, ())
+        if len(owners) == 1:
+            continue
+        if len(owners) > 1:
+            out.append(HardViolation(
+                kind=KIND_MODULE_PART_UNASSIGNED,
+                objects=(f"parts[{part.part_id}]",),
+                evidence=(
+                    f"the part is claimed by modules {', '.join(owners)} — a part "
+                    "belongs to one group, and which one is what decides where its "
+                    "branches hang and which frame holds it"
+                ),
+            ))
+            continue
+        out.append(HardViolation(
+            kind=KIND_MODULE_PART_UNASSIGNED,
+            objects=(f"parts[{part.part_id}]",),
+            evidence=(
+                "the part is placed on the page but belongs to no module — the "
+                "page compiler groups the circuit into modules, and a part outside "
+                "every group has no frame that has to hold it"
+            ),
+        ))
+    return out
+
+
+def _interior_runs(
+    points: Sequence[tuple[float, float]], box: Box
+) -> list[tuple[int, int]]:
+    """Contiguous runs of sub-segments with a positive-length interior in `box`.
+
+    Contiguity is what makes "the wire entered this frame once" checkable: a wire
+    that leaves a module and comes back has two runs, and a wire that only passes
+    through has a run without either end of the wire in the frame.
+    """
+    runs: list[tuple[int, int]] = []
+    for index, (start, end) in enumerate(_edges(points)):
+        inside = _clip_to_box(start, end, box) is not None
+        if not inside:
+            continue
+        if runs and runs[-1][1] == index - 1:
+            runs[-1] = (runs[-1][0], index)
+        else:
+            runs.append((index, index))
+    return runs
+
+
+def _check_wires_clear_of_frames(
+    plan: LayoutPlan, frames: Mapping[str, Box]
+) -> list[HardViolation]:
+    """A wire may only run inside the frames its own two ends are in — once each.
+
+    The page's version of `wire-through-body`, and deliberately not the same
+    rule: a module frame is mostly empty canvas, so a wire *may* legally pass
+    through the space between two of a module's parts while breaking nothing the
+    nine constraints can see. 056 sec.3's rule is that it may not: the drawn
+    connection leaves through one frame edge and arrives through the other's,
+    and the wire's own module gets exactly one escape run.
+    """
+    if not frames:
+        return []
+    out: list[HardViolation] = []
+    for index, segment in enumerate(plan.segments):
+        points = segment.points
+        ends = {_frames_of(points[0], frames), _frames_of(points[-1], frames)}
+        allowed = {name for group in ends for name in group}
+        for name, frame in sorted(frames.items()):
+            runs = _interior_runs(points, frame)
+            if not runs:
+                continue
+            if name not in allowed:
+                out.append(HardViolation(
+                    kind=KIND_WIRE_THROUGH_MODULE_FRAME,
+                    objects=(f"segments[{index}]", f"pageLayout.modules[{name}]"),
+                    evidence=(
+                        f"net {segment.net!r} runs through module {name!r}'s frame "
+                        f"{_box_text(frame)} although neither of the wire's ends is "
+                        "in it — a neighbouring module's drawing is a body the page "
+                        "routes around, and the detour is the wire's obligation "
+                        "(056 sec.3)"
+                    ),
+                ))
+                continue
+            if len(runs) > 1:
+                out.append(HardViolation(
+                    kind=KIND_WIRE_THROUGH_MODULE_FRAME,
+                    objects=(f"segments[{index}]", f"pageLayout.modules[{name}]"),
+                    evidence=(
+                        f"net {segment.net!r} has {len(runs)} separate runs inside "
+                        f"module {name!r}'s frame — a wire leaves its own module "
+                        "once and arrives at the other's once; a wire that re-enters "
+                        "is one whose escape was not routed around the frame"
+                    ),
+                ))
+    return out
+
+
+def _cross_module_wires(
+    plan: LayoutPlan, frames: Mapping[str, Box]
+) -> list[tuple[int, str, str, str]]:
+    """``(segment index, net, module A, module B)`` for every wire spanning frames."""
+    out: list[tuple[int, str, str, str]] = []
+    for index, segment in enumerate(plan.segments):
+        start = _frames_of(segment.points[0], frames)
+        end = _frames_of(segment.points[-1], frames)
+        if not start or not end:
+            continue
+        first = start[0]
+        last = end[0] if end[0] != first else (end[1] if len(end) > 1 else "")
+        if last and last != first:
+            out.append((index, segment.net, first, last))
+    return out
+
+
+def _name_anchors(
+    plan: LayoutPlan, frames: Mapping[str, Box]
+) -> dict[tuple[str, str], set[str]]:
+    """``(module, net) -> the kinds of name stated there``, inside a frame.
+
+    A *set*, because a module may state one net twice (a label added beside the
+    flag it already carries) and that is exactly the mix the consistency rule is
+    about — recording only one kind per pair would let the second statement hide
+    behind the first. Only the names *inside* a frame count: a label sitting in the
+    page gap is already reported as geometry outside every frame, and reading it as
+    one module's statement would be a guess about which module it belongs to.
+    """
+    out: dict[tuple[str, str], set[str]] = {}
+    for label in plan.labels:
+        for name in _frames_of((label.x, label.y), frames):
+            out.setdefault((name, label.net), set()).add("label")
+    for symbol in plan.power_symbols:
+        for name in _frames_of((symbol.x, symbol.y), frames):
+            out.setdefault((name, symbol.net), set()).add("flag")
+    return out
+
+
+def _nets_by_module(
+    circuit_spec: CircuitSpec, presentation_spec: PresentationSpec
+) -> dict[str, tuple[str, ...]]:
+    """``net id -> the modules that own members of it``, sorted.
+
+    The scoping question every shared-net rule starts from, answered from the two
+    documents and the circuit's own membership — never from the page's port
+    table, which is the compiler's account of the same thing.
+    """
+    out: dict[str, tuple[str, ...]] = {}
+    for net in circuit_spec.nets:
+        owners = {member.partition(".")[0] for member in net.members}
+        found = sorted(
+            module.id for module in presentation_spec.modules
+            if owners & set(module.parts)
+        )
+        out[net.id] = tuple(found)
+    return out
+
+
+def _check_shared_expressions(
+    plan: LayoutPlan,
+    circuit_spec: CircuitSpec,
+    presentation_spec: PresentationSpec,
+    frames: Mapping[str, Box],
+    cross: Sequence[tuple[int, str, str, str]],
+) -> list[HardViolation]:
+    """One shared net is stated one way on the page (056 sec.3's consistency).
+
+    The join between two modules happens **by name** in the editor (054 C7: the
+    netlist is project-level), so the page may not leave a shared net half-wired
+    and half-named, and may not name it with a flag in one module and a label in
+    the other. The one exception is the whole `mainPath` edge: there the
+    connection is a wire end to end, so no name is required at either end.
+    """
+    anchors = _name_anchors(plan, frames)
+    wired: dict[str, set[str]] = {}
+    for _index, net, left, right in cross:
+        wired.setdefault(net, set()).update((left, right))
+    out: list[HardViolation] = []
+    for net_id, modules in sorted(_nets_by_module(circuit_spec, presentation_spec).items()):
+        if len(modules) < 2:
+            continue
+        stated: dict[str, list[str]] = {"label": [], "flag": []}
+        for module_id in modules:
+            for kind in sorted(anchors.get((module_id, net_id), ())):
+                stated[kind].append(module_id)
+        if stated["label"] and stated["flag"]:
+            out.append(HardViolation(
+                kind=KIND_SHARED_NET_EXPRESSION_SPLIT,
+                objects=(f"circuitSpec.nets[{net_id}]",),
+                evidence=(
+                    "the net is a label on "
+                    + ", ".join(sorted(set(stated["label"])))
+                    + " and a flag on "
+                    + ", ".join(sorted(set(stated["flag"])))
+                    + " — two drawings that name one net must name it the same way "
+                    "(056 sec.3): the join happens by name, and a reader cannot tell "
+                    "a flag from a label without checking both"
+                ),
+            ))
+        joined = wired.get(net_id, set())
+        named = sorted(set(stated["label"]) | set(stated["flag"]))
+        if joined and named:
+            out.append(HardViolation(
+                kind=KIND_SHARED_NET_EXPRESSION_SPLIT,
+                objects=(f"circuitSpec.nets[{net_id}]",),
+                evidence=(
+                    "the net is drawn as a wire between "
+                    + " and ".join(sorted(joined))
+                    + " and stated by name on " + ", ".join(named)
+                    + " — a connection is either a wire from end to end or a name "
+                    "at every end (056 sec.3: '一段线接一半再变标签' is what this "
+                    "refuses)"
+                ),
+            ))
+        if len(joined) > 2:
+            out.append(HardViolation(
+                kind=KIND_SHARED_NET_EXPRESSION_SPLIT,
+                objects=(f"circuitSpec.nets[{net_id}]",),
+                evidence=(
+                    "the net is wired across "
+                    + ", ".join(sorted(joined))
+                    + f" ({len(joined)} modules) — a cross-module wire is a whole "
+                    "flow edge between two modules; a net that reaches more of them "
+                    "is expressed by name at each (053 sec.7's high fan-out rule, and "
+                    "056 sec.3's exception is one edge wide)"
+                ),
+            ))
+    return out
+
+
+def _shared_nets(
+    nets_by_module: Mapping[str, tuple[str, ...]], left: str, right: str
+) -> list[str]:
+    """The circuit's nets that have members in both modules, sorted."""
+    return sorted(
+        net_id for net_id, modules in nets_by_module.items()
+        if left in modules and right in modules
+    )
+
+
+def _is_bus(net: Any, high_fanout: int) -> bool:
+    """Is this net one that is always expressed by name (053 sec.7)?"""
+    return net.cls == "gnd" or (
+        net.cls == "power" and len(net.members) > high_fanout
+    )
+
+
+def _check_main_paths(
+    presentation_spec: PresentationSpec,
+    circuit_spec: CircuitSpec,
+    frames: Mapping[str, Box],
+    cross: Sequence[tuple[int, str, str, str]],
+    high_fanout: int,
+) -> list[HardViolation]:
+    """A `mainPath` edge the reader is meant to follow is a wire, or it says so.
+
+    056 sec.3: a main-path edge that ended up named instead of wired is reported
+    and *named* — never silently downgraded. The rule here is the checkable half
+    of that: the edge must be joined by a cross-module wire of a net the two
+    modules share that is not a bus (a ground or a wide rail may never become a
+    long wire tree, so a main-path mark on one is a contradiction the
+    presentation has to resolve rather than a wire the page should draw).
+    """
+    nets_by_module = _nets_by_module(circuit_spec, presentation_spec)
+    out: list[HardViolation] = []
+    for edge in presentation_spec.main_path_edges():
+        pair = {edge.from_module, edge.to_module}
+        if not pair <= set(frames):
+            continue  # a page that does not place both modules: the compiler refuses
+        shared = _shared_nets(nets_by_module, edge.from_module, edge.to_module)
+        eligible = [
+            net_id for net_id in shared
+            if not _is_bus(circuit_spec.net(net_id), high_fanout)
+        ]
+        wired = [
+            net_id for _index, net_id, left, right in cross
+            if {left, right} == pair and net_id in eligible
+        ]
+        if wired:
+            continue
+        out.append(HardViolation(
+            kind=KIND_MAIN_PATH_EDGE_NOT_WIRED,
+            objects=(
+                f"presentationSpec.flow[{edge.from_module}->{edge.to_module}]",
+            ),
+            evidence=(
+                "the presentation marks this edge main-path, but no wire joins the "
+                f"two modules ({_main_path_reason(shared, eligible)}) — the edge is "
+                "wired end to end or the mark is dropped; a main-path edge is not "
+                "downgraded to a name quietly"
+            ),
+        ))
+    return out
+
+
+def _main_path_reason(shared: Sequence[str], eligible: Sequence[str]) -> str:
+    """Why a main-path edge has no wire: which of its shared nets it could use."""
+    if not shared:
+        return "the two modules share no net at all"
+    buses = [net_id for net_id in shared if net_id not in set(eligible)]
+    if not eligible:
+        return (
+            "the nets they share are all buses, which are always expressed by "
+            f"name ({', '.join(buses)})"
+        )
+    return (
+        "the nets they share that could be wired are "
+        + ", ".join(eligible)
+        + (
+            ", and " + ", ".join(buses) + " is a bus"
+            if buses
+            else ""
+        )
+    )
+
+
+def _check_page_keepouts(
+    frames: Mapping[str, Box], keepouts: Sequence[Box]
+) -> list[HardViolation]:
+    """A page-level keep-out may not land on a module."""
+    out = []
+    for index, keep in enumerate(keepouts):
+        for name, frame in sorted(frames.items()):
+            if not _overlap(keep, frame):
+                continue
+            out.append(HardViolation(
+                kind=KIND_PAGE_KEEPOUT_CONFLICT,
+                objects=(f"keepouts[{index}]", f"pageLayout.modules[{name}]"),
+                evidence=(
+                    f"the keep-out {_box_text(keep)} overlaps module {name!r}'s "
+                    f"frame {_box_text(frame)} — a reserved region and a module "
+                    "cannot share the canvas, and the page may not shrink the "
+                    "module's own drawing to get out of the way"
+                ),
+            ))
+    return out
+
+
+# ------------------------------------------------------- page: soft metrics
+
+
+def _page_metrics(
+    plan: LayoutPlan,
+    presentation_spec: PresentationSpec,
+    frames: Mapping[str, Box],
+    cross: Sequence[tuple[int, str, str, str]],
+) -> tuple[dict[str, float], dict[str, list[str]]]:
+    """The page's raw optimization values, one reason per value (052 sec.6).
+
+    ``page_cross_module_wire_length``, ``page_backflow_length``,
+    ``page_crossings``, ``page_bends``, ``page_min_module_gap`` and ``page_area``
+    — never a total, and never mixed with the drawing's own metrics: this is what
+    the page layer ranks on, and a single number would let a shorter wire buy back
+    a backwards reading order.
+    """
+    metrics: dict[str, float] = {}
+    reasons: dict[str, list[str]] = {}
+
+    lengths = [
+        (index, _polyline_length(plan.segments[index].points))
+        for index, _net, _left, _right in cross
+    ]
+    metrics["page_cross_module_wire_length"] = sum(
+        length for _index, length in lengths
+    )
+    reasons["page_cross_module_wire_length"] = [
+        f"segments[{index}] (net {plan.segments[index].net!r}) crosses "
+        f"{left} -> {right}: {length:g} units"
+        for (index, length), (_i, _net, left, right) in zip(lengths, cross)
+    ] or ["no wire crosses a module boundary on this page"]
+
+    backflow: list[str] = []
+    total_backflow = 0.0
+    centres = {
+        name: ((box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0)
+        for name, box in frames.items()
+    }
+    for edge in presentation_spec.flow:
+        if edge.from_module not in centres or edge.to_module not in centres:
+            continue
+        left, right = frames[edge.from_module], frames[edge.to_module]
+        if _overlap(left, right) or _share_a_column(left, right):
+            continue  # the flow runs down the page between two stacked frames
+        dx = centres[edge.to_module][0] - centres[edge.from_module][0]
+        if dx >= 0.0:
+            continue
+        total_backflow += abs(dx)
+        backflow.append(
+            f"flow {edge.from_module} -> {edge.to_module} runs "
+            f"{abs(dx):g} units against the page's reading direction"
+            + (" (main-path)" if edge.main_path else "")
+        )
+    metrics["page_backflow_length"] = total_backflow
+    reasons["page_backflow_length"] = backflow or [
+        "every flow edge runs in the page's reading direction (left to right "
+        "within a row, then the next row down)"
+    ]
+
+    crossings = [
+        f"segments[{left}] x segments[{right}] at ({point[0]:g}, {point[1]:g})"
+        for left, right, point in _crossings(plan)
+        if {left, right} & {index for index, _net, _l, _r in cross}
+    ]
+    metrics["page_crossings"] = float(len(crossings))
+    if crossings:
+        reasons["page_crossings"] = crossings
+
+    bends = [
+        f"segments[{index}] (net {plan.segments[index].net!r}): "
+        f"{_bend_count(plan.segments[index].points)} bend(s)"
+        for index, _net, _left, _right in cross
+        if _bend_count(plan.segments[index].points)
+    ]
+    metrics["page_bends"] = float(
+        sum(
+            _bend_count(plan.segments[index].points)
+            for index, _net, _left, _right in cross
+        )
+    )
+    if bends:
+        reasons["page_bends"] = bends
+
+    gaps = [
+        (left, right, _box_gap(frames[left], frames[right]))
+        for index, left in enumerate(sorted(frames))
+        for right in sorted(frames)[index + 1:]
+    ]
+    metrics["page_min_module_gap"] = (
+        min(gap for _l, _r, gap in gaps) if gaps else UNMEASURED
+    )
+    reasons["page_min_module_gap"] = [
+        f"{left} to {right}: {gap:g} units" for left, right, gap in gaps
+    ] or ["a single module on the page, so there is no gap to measure"]
+
+    if frames:
+        box = _frame_bounds(frames.values())
+        metrics["page_area"] = (box[2] - box[0]) * (box[3] - box[1])
+        reasons["page_area"] = [
+            f"the module frames occupy {box[2] - box[0]:g} x "
+            f"{box[3] - box[1]:g} = {metrics['page_area']:g} units^2"
+        ]
+    else:
+        metrics["page_area"] = UNMEASURED
+        reasons["page_area"] = ["no module on the page, so it occupies nothing"]
+    return metrics, reasons
+
+
+def _share_a_column(left: Box, right: Box) -> bool:
+    """Do two frames sit one above the other (their x ranges overlap)?
+
+    The reading order is left to right within a row and then the next row down, so
+    a flow that runs between two stacked frames is *going the right way* however
+    their centres happen to line up; only a flow that has to travel back to the
+    left is what "backflow" names.
+    """
+    return min(left[2], right[2]) - max(left[0], right[0]) > TOL
+
+
+def _frame_bounds(frames: Iterable[Box]) -> Box:
+    boxes = list(frames)
+    return (
+        min(box[0] for box in boxes), min(box[1] for box in boxes),
+        max(box[2] for box in boxes), max(box[3] for box in boxes),
+    )

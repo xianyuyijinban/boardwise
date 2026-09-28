@@ -4,6 +4,28 @@ Living index. Details live in `tasks/*.md` (one book per task) and
 `docs/implementation-log.md` (the connector debugging arc). This file only
 collects the current truth and the pointers.
 
+## [2026-09-28] 056 画法编译器 阶段 C2a：多模块单页编译（纯离线；agent-76 执行，主代理架构+验收；connector/daemon 零改动仍 **0.4.25**）
+
+### Problem / Task
+054 落图最小闭环、055 收尾后，单模块编译器（053B）之上缺"一页纸装多个模块"的页级编译层：模块间怎么摆、共享网怎么表态、main-path 边怎么直连、页级可读性怎么查。任务书 `tasks/056-draw-stage-c2a-page.md`（主代理架构：页级编译是对单模块管线的**调用**不是修改；分层排序合法性→电路表达→可读性→紧凑；拒绝计入分母）。
+
+### Resolution
+- **数据流九步**（`engines/pagecompiler.py`，新增 2696 行）：①页级引用检查（漏分/重分/flow 点名不存在模块/flow 有环/模块无文法 → 拒绝）→ ②逐模块构造模块局部视图（子 CircuitSpec：网保留 id/class、成员按模块过滤；子 Presentation：单模块 + grammarRef + sidePreferences 覆盖 + 过滤后的 portRoles/布线义务/锁）→ ③**调用** `drawcompiler.compile()`（零改动复用）→ ④端口点（每共享网在每模块的"向页面表态"点）→ ⑤外接框（模块自身图形+padding）→ ⑥放置（flow 拓扑序 × 列数 × 间距 × 模块内候选代次，页左上锚定，格点吸附）→ ⑦跨模块线（仅 main-path 边且两端相邻且该网只跨两模块 → 整条直连；复用模块内格点寻路）→ ⑧双闸（`readability.check` 九条跑合并图 + `readability.check_page` **页级八条**跑页文档）→ ⑨分层字典序排序 3–8 候选。
+- **页文档**（`core/pagelayoutplan.py`，新增 689 行，`kind=boardwise-page-layout-plan`）：`plan` 字段 = 完整 053 LayoutPlan（**schema 原封不动**，draw apply 现有路径可直接吃）+ `modules[]`（origin/frame/internalGeometrySha256/ports[kind: label|flag|wire]）+ flow + pageBox + pageEvidence + 派生 verdict/geometrySha256（读入重算校验）。
+- **既有文件只消化性改动**：`drawcompiler.py` +7 公开别名（`__all__`，零行为变——12 场景几何哈希逐字节不变实证）；`readability.py` 文件末尾**追加**页级域 8 条（九条一字未动）；`svgpreview.py` +可选 `frames`（默认空 ⇒ 053B 字节不变测试仍绿）；`presentationspec.py` +flow/模块两键（**仅写明时序列化** = digest 中性，否则 053B 硬不变量全破）。
+- **零工具面变更**：无 CLI/bridge/dsh 动作；页级编译仅引擎 API + `tools/056_previews.py`（185 行 tracked，场景唯一事实源）可达。**057 CLI 决策已先行裁决**：`draw compile` 吃同命令（PresentationSpec 有 modules[] 即页级），`draw apply` 吃 page.json 内部透传 plan；dsh 是否暴露 draw 仍是岳的显式决定。
+
+### Verification
+- **8 场景 5 出图 / 3 拒绝**（拒绝计分母 0.625）：场景 1 LDO+分压共享 VIN/GND（GND 4 旗标零跨模块线）；场景 3 两条 main-path 整条端口直连线（335 单位 2 折点不穿框）；场景 4 装不下 → presentation-poor 报"最小排布需 855×385"+enlarge 动作不挤字；场景 5 模块内短路 → circuit-invalid 只点名 sense 模块 pwr 不背锅；场景 6 keepout 罩全排布 → presentation-poor 点名 keepouts[0]；场景 7 高扇出 GND 6 成员全旗标零 GND 线；场景 8 两遍+两个不同 PYTHONHASHSEED 子进程输出逐字节相同。
+- **定向 362 passed**（`.tmp_pt_77`）：新增 `test_056_pagecompiler` **34**；回归 053a×37/053b×46+36+56/054×28+59/assemble×27 零波及；房子规矩 45 全绿。**053B 硬不变量亲测**：9 出图场景候选 geometry_sha256 与批次开始逐字节相同。
+- **变异 3 组 CAUGHT**（cp+sha256 还原，无 git）：M1 页级"线在自己框内只许一次逃逸"退恒真 → 场景 3/7 红；M2 模块局部视图不做成员过滤 → 场景 1/2 红；M3 总线规则短路允许高扇出网画线 → 场景 7 红。**500k 上下文看门狗首次实战**：agent-76 至 507k 被 TaskStop + resume 压缩续跑，代理自行恢复变异现场（`.056bak` 哈希核对），机制验证成功。
+- **主代理亲跑全量 pytest 2230 passed**（202s，2196+34），**eval holdout 59/59 双 1.00 亲测**；预览 `outputs/056_preview/`（gitignore）18 文件两遍 byte-identical，主代理亲眼看 `056_scene03_cand1.svg`（三模块虚线框、3V3 主干直连三端口、GND 全旗标）与 `056_scene07_cand1.svg`（6 GND 旗标零跨模块 GND 线）——通过。
+
+### 主代理五项裁决（056 落盘生效）
+①漏分/重分分类口径：批准 presentation-poor（仓库 053B 钉死测试优先于任务书 circuit-invalid 措辞；分组是 presentation 层陈述）；②分压文法"顶部必须 power 类网"缺口（信号源驱动的分压编不出来）记 057/后续；③跨模块寻路热点（10–14s/变体）正交改进（逃逸到框边+gap 带寻路）记 057 候选；④`directWiringObligations` 维持模块内，mainPath 是页级唯一强制画线装置（冲突 → presentation-poor 点名边）；⑤057 CLI 形状如上（draw compile/apply 同命令吃 page 文档，dsh 暴露与否留岳定）。
+
+### Commit
+见下方提交（本条落盘时 hash 待定，提交后回填）。
 ## [2026-09-28] defect：`parse_capacitance_farads` 希腊 μ（U+03BC）拼法抛 KeyError crash 修复（055 顺带发现，agent-75 执行，主代理复验；connector/daemon 零改动仍 **0.4.25**）
 
 - **根因**：`_CAP_RE` 的 `re.IGNORECASE` 把 μ（U+03BC GREEK SMALL LETTER MU）与 µ（U+00B5 MICRO SIGN）折叠成同一码点——`22μF` **匹配得上**正则，却以 `"μf"` 这个 `_CAP_UNITS` 从未持有的键进查表，KeyError 一路穿出 decap 规则（`engines/review.py::_run_rules` 无兜、`review_eval._rule_outcomes` 只兜 NotImplementedError）；GBK 控制台把它显示成 `'��f'`。日常 IME 拼法的板值就能让审查路径崩，而合同是"读不出 → None → UNKNOWN"。
