@@ -4,6 +4,10 @@ Living index. Details live in `tasks/*.md` (one book per task) and
 `docs/implementation-log.md` (the connector debugging arc). This file only
 collects the current truth and the pointers.
 
+## [2026-09-28] 062：install-skill --agent + 三条分发通道（岳裁：不维护 harness 路径表，让用户的 AI 自行配置；connector/daemon 零改动仍 **0.4.25**）
+
+岳追问 #11 收口——"codex/hermes/… 后续都能装上吗"，并裁决：**不要我们配路径，要让用户的 AI 自行配置**。三条通道：①`install-skill --agent`（新增）纯打印不写文件——SKILL.md 绝对路径 + 给用户 AI 的中文引导（目录名 boardwise、异版先备份 `.bak-<日期>`、装完自验证），与 `--harness`/`--uninstall` 互斥 exit 2（argparse 表达不了三态互斥：组 `{--uninstall,--agent}` + `--harness`×`--agent` 走命令内检查，两条都是 exit 2 且有测试）；②`AGENTS.md` 新增「给 clone 本仓库的 AI」段（三条红线原文逐字节未动，cmp 留证）；③README 双语 + getting-started + SKILL.md 各补引导句。doctor 末尾加一行指向 `--agent` 的 hint（print 非 DoctorCheck，不计入 n/n）。kimi/claude 已知落点保留。测试 +9（agent flag 7 + doctor footer 2），全量 **2389 passed**（执行方跑两轮 + 主代理亲跑一轮），变异 3 组 CAUGHT。顺手修 getting-started「doctor 8/8」→「10/10」。任务书 `tasks/062-install-skill-agent.md`。
+
 ## [2026-09-28] 061 收口（issue #11）：install-skill 认 harness + doctor skill 检查（connector/daemon 零改动仍 **0.4.25**）
 
 README 说「Claude Code 也行」但 SOP 只装给 Kimi Code——`install-skill` 写死 `~/.kimi-code/`，doctor 没有「skill 装没装」这一项，Claude Code 用户拿到没有 SOP 的 toolchain 且无人能发现（issue #11，岳亲笔）。修复：`skill_install.py` 加 harness 维度（`HARNESSES=("kimi","claude")`，落点 `~/.kimi-code|/.claude/skills/boardwise/`，env 覆盖各自独立 `BOARDWISE_SKILL_HOME{,_CLAUDE}`，同一份 SKILL.md 无内容分叉——frontmatter 的 `name`/`description` 正是 Claude Code 的识别字段）；CLI `--harness {kimi,claude,all}` **默认 all**，每侧独立执行各打一行、全部尝试后定退出码；新增 `skill_statuses()` 五态（current/stale/missing/unreadable/harness-absent），doctor 每 harness 一行 `skill-<harness>`（missing/stale/unreadable 红带 fix，harness-absent skipped 不误报），探针离线采集保持 `run_doctor` 纯。不写 `~/CLAUDE.md`（用户全局配置，侵入越界）。测试 +28（skill_install 18 + doctor 10），全量 **2380 passed**（主代理亲跑），变异 3 组 CAUGHT。顺手两处过期文档：getting-started 预期输出改双侧两行、SKILL.md doctor「7 项」→「10 项」。真机 `install-skill` 已补装：kimi 侧旧版（47KB→70KB，备份 .bak-2026-09-28）、claude 侧新装。任务书 `tasks/061-skill-harness-claude.md`。060② 岳裁：**重复脚默认都接上**（nc 降为显式例外），已固化进 `tasks/060-draw-layout-quality.md`。

@@ -27,6 +27,10 @@ boardwise doctor            # 10 项全绿（skip 不算红）= 装好了；退�
 - **要读/写活着的编辑器**：需要 daemon（`boardwise bridge start`，前台窗口）+ 编辑器里的
   connector 扩展（`.eext`）。缺一不可，报错分别是 `daemon not reachable` / `NO_CONNECTOR`。
 - 开发态用仓库解释器：`E:\boardwise\.venv\Scripts\python.exe -m boardwise.cli <命令>`。
+- **把这份 skill 装到别的 agent 上**：`boardwise install-skill` 写进 Kimi Code / Claude Code 的
+  用户级 skill 目录（`--harness {kimi,claude,all}`，默认全装；目标位置已有异版先备份成
+  `SKILL.md.bak-<日期>`）；别的 harness 跑 `boardwise install-skill --agent` —— 它**打印一段
+  引导指令**，整段粘给你的 AI，放哪儿由它自己按自己的约定定（我们不维护 harness 路径表）。
 
 ## 2. 三个进程与两条入口
 
