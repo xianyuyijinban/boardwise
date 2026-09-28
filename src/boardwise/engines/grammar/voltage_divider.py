@@ -51,6 +51,20 @@ part belongs to this grammar and it having to guess:
 Both are *additions to*, not replacements for, the table: `upper_arm`,
 `lower_arm`, `tap`, `in`, `gnd` bind exactly as the table says, and `ROLES`
 below is the table itself.
+
+**A signal-driven top (057 sec.7.1).** Step 1 reads the top of the chain from
+the net's `power` class. A divider driven by a *signal* source (a sensor output
+scaled into an ADC, a logic level divided down) has no power net to start from,
+and until 057 it was refused as `facts-missing` with nothing the author could
+state to get it drawn. The second branch accepts a `signal`-class top **only
+when the author says it is a port** — the net is declared an explicit input
+(`PresentationSpec.portRoles[net]` or `CircuitSpec.openInterfaces[].direction`
+is `input` or `source`, :data:`SIGNAL_TOP_DIRECTIONS`). Declared, not guessed:
+"the net at the end of the chain that is not ground" would bind any series pair
+in any circuit. The branch is consulted **only when the power branch finds no
+chain**, so every circuit that binds from a power rail binds exactly as before
+(same chain, same evidence, same refusals) — the power reading stays the
+first reading.
 """
 
 from __future__ import annotations
@@ -124,6 +138,17 @@ TAP_BRANCH = "tap_branch"
 #: A divider needs a midpoint: a single arm from power to ground is not one.
 MIN_ARMS = 2
 
+#: The port directions that make a `signal`-class net an acceptable top of the
+#: chain (057 sec.7.1): the net is an explicit input the divider is driven from.
+#: The vocabulary is `circuitspec.PORT_DIRECTIONS`; `load`, `output` and
+#: `feedback` describe a net the divider drives or reads back, not its source.
+SIGNAL_TOP_DIRECTIONS: tuple[str, ...] = ("input", "source")
+
+#: What kind of net the top of a chain is: the table's power rail, or a declared
+#: signal input port (the 057 branch).
+TOP_POWER = "power"
+TOP_SIGNAL = "signal"
+
 
 @dataclass(frozen=True)
 class _Chain:
@@ -134,6 +159,7 @@ class _Chain:
     arms: tuple[str, ...]
     taps: tuple[str, ...]
     module: str = ""
+    top: str = TOP_POWER
 
     def describe(self) -> str:
         """``VIN→R1→TAP→R2→GND`` — the spelling a report prints."""
@@ -164,7 +190,10 @@ class VoltageDividerGrammar:
     ) -> GrammarResult:
         power = nets_of_class(circuit, "power")
         ground = nets_of_class(circuit, "gnd")
-        missing = _missing_class_failures(power, ground)
+        signal_tops = _signal_tops(circuit, presentation)
+        # A declared signal input stands in for the missing rail (057 sec.7.1);
+        # with neither, the refusal is the table's own, word for word.
+        missing = _missing_class_failures(power or signal_tops, ground)
         if missing:
             return refused_result(missing)
 
@@ -172,6 +201,16 @@ class VoltageDividerGrammar:
         chains, failures = self._chains(presentation, edges, power, ground)
         if failures:
             return refused_result(failures)
+        if not chains and signal_tops:
+            chains, failures = self._chains(
+                presentation, edges, signal_tops, ground, top=TOP_SIGNAL
+            )
+            if failures:
+                return refused_result(failures)
+            if not chains:
+                return refused_result([_no_chain_failure(
+                    circuit, edges, power + signal_tops, ground
+                )])
         if not chains:
             return refused_result([_no_chain_failure(circuit, edges, power, ground)])
         return self._result(circuit, presentation, edges, chains)
@@ -184,6 +223,8 @@ class VoltageDividerGrammar:
         edges: dict[str, tuple[str, str]],
         power: tuple[str, ...],
         ground: tuple[str, ...],
+        *,
+        top: str = TOP_POWER,
     ) -> tuple[list[_Chain], list[GrammarFailure]]:
         """Every candidate ladder, canonically ordered, plus any refusal.
 
@@ -191,6 +232,9 @@ class VoltageDividerGrammar:
         reading of one rail), then by net and part id. It is a stable tie-break,
         not a claim that the first candidate is the only reading — the runners-up
         are named in every binding's evidence.
+
+        ``power`` is the set of nets a chain may start from: the power rails, or
+        (``top=TOP_SIGNAL``) the declared signal input ports.
         """
         found: list[_Chain] = []
         for in_net in power:
@@ -207,6 +251,7 @@ class VoltageDividerGrammar:
                             arms=arms,
                             taps=nets[1:-1],
                             module=shared_module(presentation, arms),
+                            top=top,
                         )
                     )
         found.sort(
@@ -261,13 +306,19 @@ class VoltageDividerGrammar:
             )
 
         for role, net_id in (("in", chain.in_net), ("gnd", chain.gnd_net)):
+            if role == "in" and chain.top == TOP_SIGNAL:
+                end = (
+                    "signal-input end (a declared input port, not a rail: "
+                    f"{_port_clause(circuit, presentation, net_id)} — 057 sec.7.1)"
+                )
+            else:
+                end = f"{'power' if role == 'in' else 'ground'} end"
             bindings.append(
                 RoleBinding(
                     role=role,
                     part_id=net_id,
                     evidence=evidence(
-                        f"role={role}: the "
-                        f"{'power' if role == 'in' else 'ground'} end of the chain "
+                        f"role={role}: the {end} of the chain "
                         f"{chain.describe()}",
                         _spec_net_clause(circuit, net_id),
                         f"provenance={net_provenance(circuit, net_id)}",
@@ -445,6 +496,45 @@ def _missing_class_failures(
             )
         )
     return out
+
+
+def _signal_tops(
+    circuit: CircuitSpec, presentation: PresentationSpec
+) -> tuple[str, ...]:
+    """The `signal`-class nets the author declared as the divider's input port.
+
+    Two places may say it, and either is a declaration: the presentation's
+    ``portRoles`` (how the drawing should read the net) and the circuit's
+    ``openInterfaces`` (the net is exposed, not terminated). The direction has
+    to be one of :data:`SIGNAL_TOP_DIRECTIONS`; id-sorted, like every other net
+    list this grammar walks, so two runs start from the same net.
+    """
+    declared = {
+        net_id for net_id, direction in presentation.port_roles.items()
+        if direction in SIGNAL_TOP_DIRECTIONS
+    } | {
+        item.net for item in circuit.open_interfaces
+        if item.direction in SIGNAL_TOP_DIRECTIONS
+    }
+    return tuple(sorted(
+        net.id for net in circuit.nets
+        if net.cls == "signal" and net.id in declared
+    ))
+
+
+def _port_clause(
+    circuit: CircuitSpec, presentation: PresentationSpec, net_id: str
+) -> str:
+    """Where the signal top was declared a port, for the binding's evidence."""
+    places = []
+    if presentation.port_roles.get(net_id) in SIGNAL_TOP_DIRECTIONS:
+        places.append(f"portRoles[{net_id}]={presentation.port_roles[net_id]}")
+    places.extend(
+        f"openInterfaces[{item.net}].direction={item.direction}"
+        for item in circuit.open_interfaces
+        if item.net == net_id and item.direction in SIGNAL_TOP_DIRECTIONS
+    )
+    return ", ".join(places) or f"{net_id} (declared)"
 
 
 def _arm_role(index: int, count: int) -> str:
