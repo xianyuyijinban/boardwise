@@ -23,7 +23,7 @@ issue #8 事故：审查者绕过 `checkup` 走 `bridge call sch.netlist` + 人�
 - 文档同步：`docs/bridge.md` 命令导读、`docs/getting-started.md` 用户指南；用户级 skill 副本需 `boardwise install-skill` 刷新（执行代理未跑，写 home 需用户触发）。
 
 ### Commit
-见下方提交（本条落盘时 hash 待定，提交后回填）。
+`9318506`（10 files, +1359/−55；本条为回填 hash 的小提交，hash 以 git log 为准）。
 ## [2026-09-28] 056 画法编译器 阶段 C2a：多模块单页编译（纯离线；agent-76 执行，主代理架构+验收；connector/daemon 零改动仍 **0.4.25**）
 
 ### Problem / Task
