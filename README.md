@@ -2,593 +2,255 @@
 
 English | [中文](#中文)
 
-## English
+An agent harness for hardware engineers.
 
-boardwise is an AI harness for [EasyEDA Pro](https://pro.easyeda.com/) (JLCEDA Pro).
-The long-term vision is a three-in-one tool — **review + generate + simulate** —
-built on a design-rule library curated from professional hardware engineering
-practice. Two pieces exist today:
+It lets an AI assistant (Claude Code, DeepSeek, Kimi Code — any of them)
+actually read your schematic — components, nets, pins, not screenshots —
+and do real work on it: review the board, mark the problems, edit with
+your sign-off, export the fab files. EasyEDA Pro is the platform we know
+inside-out today; KiCad is next, and the architecture has been
+multi-platform from day one.
 
-1. **An offline reviewer (stage 1).** Reads a schematic netlist exported from
-   EasyEDA (`.enet`, UTF-8 JSON) or a project backup (`.epro2`), runs a rule
-   engine, and prints a report where every finding carries concrete evidence
-   (component / pin / net references). One file in, full report out — no
-   separate netlist export, no editor.
-2. **A live bridge (v0, read-mostly).** A local daemon plus an EasyEDA
-   extension, so the reviewer can also ask *what is open right now*, draw
-   markers on the exact primitives a finding refers to, and export fab files —
-   and, behind per-page guards, place, move and delete primitives. Writes are
-   gated and audited. See [`docs/bridge.md`](docs/bridge.md).
+## What it does
 
-### Install
+**Review.** With the editor open, one command:
 
 ```bash
-pip install .
+boardwise checkup
 ```
 
-The offline reviewer uses only the Python standard library (Python >= 3.10).
-The bridge additionally needs [`websockets`](https://pypi.org/project/websockets/),
-which `pip install .` brings in; `boardwise review` still works without it.
+You get a report: ERC/DRC, fourteen design-rule families, which parts
+still lack datasheets, and every finding pointing at a concrete
+component, pin and net — with markers drawn on the canvas where the
+problems are. On real boards it has caught things the designer had
+missed — a current-sense circuit with no bias, that kind of problem.
+You don't find those by matching rules against a netlist; you have to
+check whether the architecture makes sense together.
 
-### Usage
+**Edit.** Find a problem, get a change preview; nothing moves until you
+approve; afterwards it reads back and re-reviews to confirm the problem
+is actually gone. Edit kinds today: change a component value, add a
+missing part, repair a single pin connection, insert an RC/divider
+subcircuit, move a functional block.
 
-```bash
-# Print a summary to the terminal
-boardwise review path/to/board.enet
+**Export.** BOM, netlist, Gerber, pick-and-place — one command each.
 
-# Single-file review: an .epro2 project backup needs no netlist export
-boardwise review path/to/board.epro2
+**Draw.** You state the circuit intent — a divider, an RC low-pass, an
+LDO; parts, values, which pin joins which net — and the drawing
+compiler turns it into a sheet a human can read: where parts sit, how
+wires run, where text goes so it doesn't sit on a wire. Wrong
+connectivity, not enough room, a conflict with your locked placement —
+it refuses rather than hand you a bad drawing. It compiles offline, and
+it can also land a module into the open editor itself — placement, pin
+readback before any wire, save, and a render of the result.
+Multi-module pages are next.
 
-# Don't know where the export landed? Review the newest .epro2 in a directory
-boardwise review --latest                # no argument: ~/Downloads, ~/Desktop, E:\LC Project
-boardwise review --latest D:\exports     # or name one directory (scanned one level deep)
+## Architecture and roadmap
 
-# Also write machine-readable and human-readable reports
-boardwise review path/to/board.epro2 --json report.json --md report.md
+Three layers, all on your own machine — nothing goes through a cloud:
+
+```
+AI assistant
+  │  calls short commands (CLI / skill / dsh plugin)
+  ▼
+offline engine      parse · review rules · drawing compiler · change plans
+  │  loopback only
+  ▼
+daemon + editor extension      reads design data; writes go preview → approve → readback
+  ▼
+EasyEDA Pro (today) · KiCad (planned)
 ```
 
-`--latest` prints which file it picked (with its mtime) before it reviews, so the run
-is never ambiguous about what was read.
+Standing rules: the workflow lives in tools, not in prompts; every
+conclusion carries evidence; writes are preview → authorize → readback;
+on a timeout or disconnect it reads back first and never blindly
+retries.
 
-An `.epro2` is reviewed in the **schematic** view by default — the design's own
-truth. The **pcb** view reads the PCB document's separate copy and is asked for by
-name (`--view pcb`) when the board itself is the subject; it goes stale whenever the
-schematic changed and the board was not re-synced.
-
-Installing this on a fresh Windows machine — Python, the editor `.eext`, the daemon —
-is its own walkthrough: [`docs/install.md`](docs/install.md) (Chinese, written for a
-hardware engineer who does not write code).
-
-### One-command review (`checkup`)
-
-With the editor open and the daemon running, one command does the whole review —
-data, the editor's own checks, the offline rules, the module grouping, a canvas
-PNG per schematic page, and the two reports:
-
-```bash
-boardwise checkup                                   # focused project -> ./checkup/
-boardwise checkup --project <name|uuid> --out DIR   # pick the window
-boardwise checkup --file board.epro2 --out DIR      # no editor: offline fallback
-```
-
-What lands in `--out`: `report.json` (the contract), `report.md` (the same content
-for a human), `canvas-<page>.png` (one per schematic page; PCB pages are not
-rendered yet) and **a pair of architecture files** — `architecture.md`, the
-generated skeleton (**rewritten on every run**: its second line says hand-fills
-are lost), and `design-intent.md`, the engineer-owned design intent (created once
-as an all-`TODO` template, then **read-only**: the generator never rewrites it).
-
-Exit codes: `0` no ERROR / `1` an ERROR was found (an ERC `error`/`fatalError`
-count, a PCB DRC leaf, or a rule's ERROR finding) / `2` unusable input /
-`3` **the online state cannot be stated** (no daemon, no connector, every data tier
-refused) — `3` is never "the board is clean". A check that could not run is
-`{checked: false, reason}` and carries no counts.
-
-`report.json` is `schema: "boardwise.checkup/5"`:
-
-| Section | What it holds |
+| Stage | Status |
 |---|---|
-| `source` | which tier answered (`project-file` → `per-page` → `netlist` → `file`), the project/page identity, host and connector versions, what was tried and what was noted |
-| `model` | the parsed design: component and net counts, designators, `boards` (title, pages, parts, nets — a project's counts are sums over these), `duplicateDesignators` (one name, two parts, one page), `crossPageDesignators` (one board drawn on several sheets) and `crossBoardDesignators` (a name on two boards, with the boards) |
-| `summary` | the split the exit code comes from: `errors[]` / `warnings[]`, each with a `ref` back into the report |
-| `drc` | `schematic` (the editor's ERC **counts only**, with the per-page readings and the basis for their total) and `pcb` (its per-item tree, mapped: groups, leaf sentences, totals) |
-| `modules` | pages (multi-page projects) or connectivity clusters, each with its components, its findings by index and the evidence for its name |
-| `findings` | the offline rule engine's findings, the same shape `review --json` uses |
-| `unreviewed_parts` | the datasheet gate: parts no rule can judge yet, each with the three ways to get its datasheet |
-| `warning_triage` | one slot per warning the report knows about, with `verdict`/`reason` left for a model |
-| `architecture` | the **merged view** of the skeleton and `design-intent.md`: `slots[]` (stable id `projectUuid/boardUuid/sectionKey/slotKey`, value, source, `stale`), `intent{}`, `totals{slots,filled,stale,todoSlots}` — **absent**, not empty, when the skeleton could not be generated |
-| `completion` | the complete statement: `scope{rules,boards,pages}`, `errors`, `unreviewedParts`, `warningsPendingTriage`, `architectureSlots{total,filled,stale}`, `openTodos`, `sourceVersions{ruleset,rulebody}` and `verdict` (`complete` / `complete-with-open-items` / `incomplete`) |
-| `ai_slots` | what is left to a model: `unknown_parts` (an alias of `unreviewed_parts`), `canvas_images`, `summary_template` |
-| `pending` | empty — present so a reader can tell "nothing owed" from "key missing" |
+| Schematic review (rule families + datasheet gate + eval harness) | Usable, in maintenance |
+| Review-to-local-edit (preview / authorize / readback / re-review) | Usable |
+| Drawing compiler (divider / RC / LDO) | Single modules land in the editor; multi-module next |
+| Full schematic capture → PCB → SPICE simulation | In that order |
+| KiCad platform | Planned |
 
-`summary.mayClaimPassed` is **narrow on purpose** (it answers one question: "did
-the datasheet gate leave a part unjudged?"). For "is this review complete?", read
-`completion.verdict`. A slot whose recorded answer no longer matches the drawing
-is marked `stale: 图纸已变，此槽待复核` in the merged view — the recorded value is
-never deleted or overwritten, and the run is never blocked by it.
+One sentence on how the review rules are scored: the annotated eval
+sets are signed and split into a tuning pile and an acceptance pile,
+and the acceptance pile is never used for tuning. That is why the
+scores are believable. Details in `outputs/017_generalization.md`.
 
-The input type is picked from the extension:
+## Install & supported environments
 
-| Input | What it is | What you get |
-|---|---|---|
-| `.enet` | schematic netlist export (UTF-8 JSON) | netlist review |
-| `.epro2` | project backup (board + netlist in one file) | netlist review **plus** a board line (pads / tracks / vias) |
+Three artifacts in [Releases](https://github.com/xianyuyijinban/boardwise/releases):
 
-An encrypted `.epro2` export cannot be read — the reviewer says so and asks you
-to re-export with the encryption option disabled, rather than failing with a
-stack trace.
+| File | For |
+|---|---|
+| `boardwise-windows-x.x.x.exe` | Anyone who doesn't want Python: single-file CLI, part library embedded |
+| `boardwise-connector-x.x.x.eext` | Everyone: the extension you import into EasyEDA |
+| `boardwise-dsh-x.x.x.tgz` | DeepSeek users: the dsh plugin, optional |
 
-Exit code is `1` when any ERROR-level finding exists, `0` otherwise; `2` means
-the input could not be read at all.
+Environment: Windows. Python ≥ 3.10 (source installs only; 3.9 and
+below are not supported). EasyEDA Pro **3.2.149 / 3.2.186 / V4.1.60**
+are all verified on real machines; older versions are not guaranteed.
+macOS/Linux are untested — the offline review probably runs, the bridge
+is unverified.
 
-Built-in rules (14 across the connectivity, power/path and parameter families;
-each message states its limits):
+Fastest path: [`docs/install.md`](docs/install.md) (Chinese — every
+step says what you should see). For the impatient: `pip install .` →
+import the `.eext` in the editor → `boardwise doctor` all green →
+`boardwise checkup`.
 
-- `xtal-load-caps` — crystal pins should each see a capacitor to ground.
-- `shunt-sense-link` — milliohm shunts should reach a sense input on an IC.
-- `duplicate-designators`, `nc-and-must-connect`, `library-pin-consistency` — connectivity.
-- `supply-on-known-domain`, `domain-vs-range`, `ldo-dropout`, `usb-cc-pulldown` — power & paths.
-- `decap-required-caps`, `led-current`, `divider-output`, `rc-cutoff`, `value-mpn-match` — parameters.
+## Common errors & notes
 
-### Evaluating the rules (`review-eval`)
+- **Nothing connects** — nine times out of ten it's one of three: the
+  daemon isn't running (`boardwise bridge start`), the extension's
+  *external interaction* permission wasn't granted, or the extension
+  never activated. The extension's **About…** menu tells you which.
+- **Several project windows open** — name one: `--project <name>`. It
+  refuses to guess.
+- **Encrypted `.epro2` export** — unreadable; re-export with encryption
+  off.
+- **A `.eprj2` file holds no drawing** — it's just the project shell.
+  Read live through the bridge, or export an `.epro2` backup.
+- **Exit code 3 is not "the board is clean"** — it means the online
+  state could not be stated. Whatever could not run is marked
+  `{checked: false}` with no counts.
+- **It always previews before touching your drawing.** Don't skip the
+  confirmation out of habit — the readback after your yes is the point,
+  not the ceremony.
+- Canvas screenshots return a cached frame on 3.2.186 — use the OS
+  snipping tool when you need a real one.
 
-`boardwise review-eval --annotations <set.json>… --split dev|holdout` scores the
-offline rules against the oracle-annotated sets in `reviewsets/`. Four numbers are
-routinely misread, so they are spelled out here:
+## Acknowledgments
 
-- **112/183 is not "61% of the circuits went unreviewed."** It is the share of
-  (rule × board) pairs where the rule reached at least one `UNKNOWN` outcome —
-  a missing *fact* (the shelf has no entry for that part), not a missing review.
-- **79/91 is not an editor highlighting success rate.** It counts findings whose
-  `target` or text already names a part or pin — a *location clue* a downstream
-  marker can use, not a verified highlight in the editor.
-- **12/14 (fix success) is a task-book registration, not a prospective
-  measurement.** It is the M3 close-out's record of live repair results; it is not
-  a success rate measured on users.
-- **59/59 (holdout detection and high-priority precision) is regression evidence,
-  not a proof of generalisation.** Those boards' failures already drove rule
-  changes (046/048), so they cannot stand in for unseen samples:
-  `outputs/017_generalization.md`, and the roles in
-  `tasks/017-eval-set-expansion.md` §九 — the current 15 boards are *regression*,
-  new boards enter as *unseen-validation* (frozen on arrival, never tuned against).
+We're glad these projects exist:
 
-### Live bridge
+- [easyeda-agent](https://github.com/zhoushoujianwork/easyeda-agent)
+  (zhoushoujianwork) — our thanks for the ideas and the inspiration in
+  the details. It is their continued progress that let us sidestep the
+  pitfalls and reach our own goals faster and more efficiently.
+- [@jlceda/pro-api-types](https://www.npmjs.com/package/@jlceda/pro-api-types) —
+  the official API type definitions the connector stands on.
+- The EasyEDA team — opening real extension APIs to the community is
+  what makes any of this possible. Thank you.
 
-```bash
-cd connector && npm install && node build.mjs   # build the editor extension
-boardwise bridge start                          # run the daemon (foreground, Ctrl-C to stop)
-boardwise doctor                                # 7 checks: daemon · extension · versions · project (exit 1 + a fix per line)
-boardwise bridge status                         # daemon up? connector attached? paired with whom?
-boardwise bridge screenshot shot.png --fit      # canvas capture (3.2.186: returns a cached frame — prefer the OS snip)
-boardwise bridge highlight <uuid> --color "#FF0000"
-boardwise bridge highlight --clear
-boardwise review-mark report.json               # draw a `review --json` pass on the schematic (`clear` removes it)
-boardwise bridge export-fab --out fab/          # Gerber + P&P + BOM + manifest.json
-boardwise bridge revoke                         # forget the paired connector
-```
+## License
 
-New to this? [`docs/getting-started.md`](docs/getting-started.md) walks the whole path — install
-the editor, import the `.eext`, start the daemon, get `doctor` green, then the first review and the
-first fab export — with the expected output at every step.
+MIT
 
-### Comparing against the golden board (`compare`)
-
-`boardwise compare` is the referee for AI-drawn designs (task 005): it parses a
-candidate `.epro2` into a design model and diffs it against the golden board at
-three levels — components (presence, footprint, value, lcsc), nets (names and
-members), and **per-pin** net mappings (every pin of every common component).
-Values compare with engineering normalisation (`10k` == `10K` == `10000`);
-designators, net names and pin numbers are exact.
-
-```bash
-boardwise compare candidate.epro2                 # vs tests/fixtures/ch340_golden.epro2
-boardwise compare candidate.epro2 --golden other.epro2
-boardwise compare candidate.epro2 --json          # machine-readable (AI loop)
-```
-
-Exit codes follow the review semantics: `0` no differences, `1` differences
-found (one human-readable line each, sorted), `2` bad input — a missing or
-encrypted file prints a reason instead of a traceback. The golden fixture is a
-schematic-only project, so both sides are parsed through the schematic model
-(`parsers/schematic.py`); the per-pin report is the acceptance gate for
-`boardwise draw` (task 005's vertical slice).
-
-### Drawing a golden board from scratch (`draw`)
-
-`boardwise draw` (task 006) closes the loop the referee opened: it takes the
-golden board's connectivity as the only design input, draws the schematic on a
-blank page of the open project through the bridge, and diffs the editor's own
-understanding against the golden netlist per pin. It prints the action plan
-and waits for confirmation before touching anything (`--yes` skips), names
-nets with net flags and net ports (never the net-label API that hangs on the
-measured host), and reports every failed placement and every candidate-source
-decision.
-
-```bash
-boardwise draw --from tests/fixtures/ch340_golden.epro2
-boardwise draw --from tests/fixtures/ch340_golden.epro2 --yes \
-    --screenshot drawn.png
-```
-
-Exit codes: `0` drawn and zero differences, `1` differences or failed
-actions, `2` bad input, aborted gate, or no daemon. Requires connector 0.3.0+
-and the write actions it ships; the operator manual, the machine-probe
-checklist and the measured host traps are in [`docs/draw.md`](docs/draw.md).
-
-### Assembling a board from blocks (`--spec`, task 008a)
-
-The second design source: instead of replaying one golden page, the page is
-**composed**. A block template (`blocklib/blocks/*.json`) carries a block's parts,
-the symbol geometry they need, its internal wires and flags, its parameters and
-its ports; a board spec (`blocklib/specs/*.json`) says which blocks, where, with
-which numbers, and how their ports are wired. Blocks are tied together by net
-**names** only, and the assembled page goes through the *same* replay planner,
-the same five hard constraints and the same lint as a golden replay.
-
-```bash
-# offline: does the specification reproduce the golden?
-boardwise compare --spec blocklib/specs/ch340g_usb_uart.json \
-    --golden tests/fixtures/ch340_golden.epro2 \
-    --overrides tests/fixtures/ch340_golden.overrides.json
-boardwise lint --spec blocklib/specs/ch340g_usb_uart.json      # 0 violations
-
-# draw it (the two checks above run as gates before any bridge call)
-boardwise draw --spec blocklib/specs/ch340g_usb_uart.json \
-    --golden tests/fixtures/ch340_golden.epro2 --render out.png
-```
-
-Template format, the coordinate contract, the three refusals (a boundary that
-cuts a wire, two circuits that would share a net name, a rail port with no flag)
-and what 008a explicitly does **not** claim: [`docs/blocks.md`](docs/blocks.md).
-
-### Choosing a part (`parts select`, task 008b)
-
-`blocklib/parts.json` is a shelf of **verified** parts, harvested from boards the
-designer already built: MPN, LCSC C-number, the library's device and footprint
-uuids, the **library** footprint name (`R0402`, never the human `0402`), and the
-electrical parameters verbatim.
-
-```bash
-boardwise parts select "100nF 0805"            # offline, zero network
-boardwise parts select "5mΩ 2512" --json
-boardwise parts select "330mΩ 0805" --online   # explicit opt-in: JLC SMT compare
-boardwise parts select "CH340N" --resolve      # resolve the C-number via the bridge
-boardwise bom export --spec blocklib/specs/ch340g_usb_uart.json --out bom.csv
-                                               # the BOM the spec implies: JLC's
-                                               # five columns + open questions
-```
-
-An explicit resistance query is **gated** (#202): the value must come from a
-named field and match numerically, the SI prefix is case-sensitive (`330mΩ` is
-`0.33Ω`, never `33Ω`), nothing in an MPN or a C-number can supply a resistance,
-and **no exact candidate means exit code 1** rather than a fuzzy recommendation.
-A size word maps to a library name only through an explicit table. The online
-path never runs from the connector (the webview cannot make cross-origin
-fetches) and the tests never touch a network. See
-[`docs/parts.md`](docs/parts.md).
-
-The daemon listens on `127.0.0.1:61190` only (`--port` / `BOARDWISE_PORT`). It keeps two
-secrets apart: `~/.boardwise/token` for the CLI, and `~/.boardwise/connector-token` for the
-editor. **There is nothing to paste** — the connector generates its own token on first run and
-the daemon trusts the first one to connect (trust on first use), then only that one. It also
-reports which random source produced it (Web Crypto, or a `Math.random` fallback) in the log panel
-and in **About…**; see `docs/bridge.md` §9. Every request is appended to
-`~/.boardwise/audit/YYYY-MM-DD.jsonl`; `boardwise bridge revoke` forgets the pairing so the next
-connector pairs afresh.
-
-Three things account for nearly every "nothing connects": the daemon is not
-running, the extension's **external interaction** permission was not granted,
-or the extension never reached `activate()`. The extension's **About…** menu item
-reports which, and shows the pairing fingerprint to match against
-`boardwise bridge status`. Since 0.2.5 the connector does not wait for
-`activate()` at all: the connection starts when the extension's bundle is
-evaluated — the one window the host measurably keeps alive — and every later
-evaluation reuses that connection instead of opening another one. It says so in
-the log panel (`connect: url=…`) rather than failing silently; if no editor
-global was bound at evaluation time, the panel says that too.
-Full protocol, error codes and a step-by-step verification checklist:
-[`docs/bridge.md`](docs/bridge.md).
-
-### Architecture
-
-Architecture diagram: placeholder (TBD).
-
-```
-src/boardwise/
-  core/model.py          # normalized design model (DesignModel / Component / Net / Pin)
-  core/geometry.py       # BoardGeometry: pads / tracks / vias / pours / outline
-  core/compare.py        # golden-vs-candidate referee (identity-aware since 0.3.8)
-  core/verify.py         # placement verification: golden pins -> placed pins (F2/F4)
-  core/candidate.py      # candidate model from the editor (netlist first, geometry fallback)
-  core/blocks.py         # block templates + board specs: schema, loaders, parameter checks
-  core/parts.py          # curated part library: schema, the value gate, the footprint table
-  parsers/enet.py        # .enet netlist -> DesignModel
-  parsers/epru.py        # .epro2 -> documents -> BoardGeometry (one parse)
-  parsers/epro2_model.py # .epro2 -> DesignModel (same parse, netlist view)
-  parsers/schematic.py   # .epro2 schematic page -> DesignModel (+ DEVICE META join)
-  parsers/eprj2.py       # .eprj2 local project -> documents + library identity
-  rules/base.py          # Rule / Finding framework
-  rules/connectivity.py  # first L1 connectivity rules
-  engines/review.py      # run rules -> findings -> markdown / json reports
-  engines/generate.py    # DesignModel -> ActionPlan (offline, self-checked)
-  engines/replay.py      # the golden page's own layout, translated to the new page
-  engines/cut.py         # .epro2 + a designer's boundary -> a block template
-  engines/bom.py         # board spec + the shelf -> the bill of materials
-  engines/assemble.py    # block templates + a board spec -> a drawable design
-  engines/harvest.py     # boards -> the curated part library (idempotent)
-  engines/catalog.py     # JLC SMT catalog client (opt-in, behind a fetcher seam)
-  engines/select.py      # part selection: offline ranking, online compare, C# resolve
-  engines/draw.py        # run_draw: gate, placements, placement check, wires, diff
-  bridge/protocol.py     # frame envelope, action catalogue, error codes
-  bridge/daemon.py       # loopback WebSocket server: auth, routing, audit
-  bridge/client.py       # what the CLI uses to talk to the daemon
-  cli.py                 # boardwise review | draw | lint | compare | parts | bridge ...
-
-blocklib/                # block library + board specs (data; see docs/blocks.md)
-  blocks/*.json          #   one file per block: parts, symbol geometry, wires, ports, params
-  specs/*.json           #   a board: which blocks, where, connections, parameter values
-  parts.json             #   the curated part library (see docs/parts.md)
-  sources/*.eprj2        #   xianyuyijinban's boards, the harvest's input (read-only);
-                         #   exported boards live in tests/fixtures/*.epro2
-tools/                   # offline tools, not part of the installed package
-  extract_block.py       #   cut a block out of a board, or re-derive a committed one
-  harvest_parts.py       #   harvest the part library (--check, --verify)
-
-connector/               # TypeScript extension (the only code that touches eda.*)
-  src/protocol.ts        #   mirror of bridge/protocol.py
-  src/transport.ts       #   handshake, heartbeat, reconnect
-  src/actions.ts         #   document.current / sch|pcb.readback / screenshot / highlight
-  src/index.ts           #   menu commands (reconnect, stop, re-pair, auto-connect, about)
-  dist/index.js          #   built artifact the editor loads
-```
-
-Both `.epro2` views come from **one** parse: `load_epro2_source()` decodes the
-backup once, and geometry and netlist are two views of the same cached PCB
-context, cross-referenced by designator. Format notes live in
-[`docs/epru-format.md`](docs/epru-format.md).
+---
 
 ## 中文
 
-boardwise 是一个面向 EasyEDA 专业版（嘉立创EDA）的 AI 画板 harness。愿景是
-「审查 + 生成 + 仿真」三合一，核心护城河是职业硬件工程师的设计规则库。
-目前已有两块：
+硬件工程师的 Agent Harness。
 
-1. **离线审查器（第一阶段）**——读取 EasyEDA 导出的网表文件（`.enet`，UTF-8
-   JSON）**或工程备份文件（`.epro2`，单文件即含板子与网表）**，跑规则引擎，
-   输出带证据（器件 / 引脚 / 网络）的审查报告。一个文件进、一份报告出，不需
-   要单独导网表。
-2. **实时桥（v0，只读为主）**——本地 daemon + EasyEDA 扩展，让审查器还能知道
-   「现在开着什么」、在发现项对应的图元上画标记、导出制板文件；并且在逐页守
-   卫之后可以放置、移动、删除图元。写操作受控且可审计。协议与验证清单见
-   [`docs/bridge.md`](docs/bridge.md)。
+让 AI 助手（Claude Code、DeepSeek、Kimi Code……哪个都行）真正读懂你的
+原理图——器件、网络、引脚，不是截图——然后替你干活：审板子、标问题、
+按你的授权改图、导出制板文件。目前吃透的是立创 EDA 专业版，KiCad 是
+下一个平台，架构从一开始就按多平台设计。
 
-### 安装
+### 它能做什么
+
+**审板子。** 编辑器开着，一条命令：
 
 ```bash
-pip install .
+boardwise checkup
 ```
 
-离线审查路径只依赖 Python 标准库（Python >= 3.10）。桥额外需要
-[`websockets`](https://pypi.org/project/websockets/)，由 `pip install .` 一并装上；
-没装也不影响 `boardwise review`。
+输出一份报告：ERC/DRC、十四类设计规则、哪些器件还缺数据手册、每条问题
+各自指着具体的器件、引脚和网络；顺手把问题标记在画布上。它在真板子上
+抓到过设计者自己没注意到的问题——比如一个该做偏置而没做的电流采样
+电路。这类问题不是查规则书能查出来的，得先理解整个架构自不自洽。
 
-### 使用
+**改图。** 发现问题后，它给修改预览，你点头它才动，动完自己回读、再跑
+一遍审查确认问题真的消失。已经支持的改法：改器件值、补一颗缺失的器件、
+修单个引脚连接、插入 RC/分压子电路、局部移动一个功能块。
 
-```bash
-# 终端打印摘要
-boardwise review path/to/board.enet
+**导出。** BOM、网表、Gerber、坐标文件，各一条命令。
 
-# 单文件审查：.epro2 工程备份，无需另导网表
-boardwise review path/to/board.epro2
+**画图。** 你写电路意图——分压、RC 低通、LDO，器件、参数、哪个脚接
+哪个网——画法编译器负责把它变成一张能给人看的图：器件怎么摆、线怎么
+走、字放哪不压线。接法错、空间不够、和你的锁定冲突，它宁可拒绝也不交
+出一张烂图。离线出图之外，它已经能把一个模块直接落进开着的编辑器——
+放件、拉线前先回读引脚、保存、再出一张渲染图。多模块整页是下一步。
 
-# 不知道导出文件存哪了：直接审目录里最新的那个 .epro2
-boardwise review --latest                     # 不带目录：扫 ~/Downloads、~/Desktop、E:\LC Project
-boardwise review --latest D:\exports          # 或指定一个目录（含一层子目录）
+### 架构和规划
 
-# 同时输出 JSON / Markdown 报告
-boardwise review path/to/board.epro2 --json report.json --md report.md
+三层，全跑在你自己电脑上，不经过任何云端：
+
+```
+AI 助手
+  │  调很短的命令（CLI / skill / dsh 插件）
+  ▼
+离线引擎      解析工程文件 · 审查规则 · 画法编译 · 修改计划
+  │  本机回环
+  ▼
+daemon + 编辑器扩展      读工程数据，写之前先预览、你授权、它回读
+  ▼
+立创 EDA 专业版（现在） · KiCad（规划）
 ```
 
-`--latest` 会先打印挑中了哪个文件（含最后修改时间），再开始审查——"最新"只有在说清是哪份
-导出时才有意义。
+规矩就几条：工作流住在工具里，不住在 prompt 里；每个结论带证据；
+写操作一律预览 → 授权 → 回读；超时断连先读回，绝不盲目重试。
 
-`.epro2` 缺省按 **schematic 视图**审查——原理图是设计真相。**PCB 视图**读的是 PCB 文档
-自己那份副本，要审板级内容（焊盘 / 走线 / 过孔）得显式加 `--view pcb`；原理图改了而板子
-没同步时，那份副本是旧的。
+路线图：
 
-### 一键审查（`checkup`）
-
-编辑器开着、daemon 在跑时，一条命令做完整轮审查——取数据、跑编辑器自己的 ERC/DRC、
-跑离线规则、分模块、每张原理图页出一张画布图，最后写两份报告：
-
-```bash
-boardwise checkup                                   # 焦点工程 → ./checkup/
-boardwise checkup --project <名|uuid> --out DIR      # 多窗口时指哪打哪
-boardwise checkup --file board.epro2 --out DIR       # 没编辑器：离线兜底
-```
-
-`--out` 目录里：`report.json`（契约）、`report.md`（同一份内容，人读）、
-`canvas-<页名>.png`（每张原理图页一张；PCB 页暂不出图），以及**一对架构文件**——
-`architecture.md`（自动生成的骨架，**每次覆盖**，第二行横幅写明手填无效）与
-`design-intent.md`（**设计意图，归你所有**：不存在时建全 TODO 模板，之后生成器对它**只读**、
-一字不改——答案写这里才留得住）。
-
-退出码：`0` 无 ERROR / `1` 发现 ERROR（主机 ERC 的 error/fatalError 计数、主机 PCB DRC 的逐条、
-自有规则的 ERROR finding 任一命中）/ `2` 输入不可用 / `3` **在线状态不可陈述**（daemon 不通、
-扩展没连上、三级数据路全被拒）——`3` 绝不等于"板子干净"。没跑成的检查记成
-`{checked: false, reason}` 且**不带任何计数**。
-
-`report.json` 的 schema 是 `"boardwise.checkup/5"`：
-
-| 段 | 内容 |
+| 阶段 | 状态 |
 |---|---|
-| `source` | 这一轮用的是哪一级（`project-file` → `per-page` → `netlist` → `file`）、工程/页身份、宿主与 connector 版本、逐级 `attempts` 与 `notes` |
-| `model` | 解析出的设计：器件数/网络数、位号、`boards`（板名/页/器件/网；工程的合计数是各板之和）、`duplicateDesignators`（同页同名两个件＝缺陷）、`crossPageDesignators`（同一块板画在多张页）与 `crossBoardDesignators`（同名跨板，附板名） |
-| `summary` | 退出码由它决定：`errors[]` / `warnings[]`，每条带 `ref` 指回报告里对应位置 |
-| `drc` | `schematic`（主机 ERC **只有聚合计数**，附逐页读数与合计口径）与 `pcb`（主机逐条树映射后的 groups/叶子句子/totals） |
-| `modules` | 多页工程按页、单页按连通性；每块含器件、findings 索引、命名依据 |
-| `findings` | 离线规则引擎的结果，形态与 `review --json` 一致 |
-| `unreviewed_parts` | 手册闸：规则还判不了的器件，每颗列出三条取手册的通道 |
-| `warning_triage` | 每条已知警告一格，`verdict`/`reason` 留给模型填 |
-| `architecture` | 骨架与 `design-intent.md` 的**合并视图**：`slots[]`（稳定 ID `projectUuid/boardUuid/sectionKey/slotKey`、值、来源、`stale`）、`intent{}`、`totals{slots,filled,stale,todoSlots}`——骨架生成不了时该键**缺席**而不是空 |
-| `completion` | **完整结论**：`scope{rules,boards,pages}`、`errors`、`unreviewedParts`、`warningsPendingTriage`、`architectureSlots{total,filled,stale}`、`openTodos`、`sourceVersions{ruleset,rulebody}`、`verdict`（`complete` / `complete-with-open-items` / `incomplete`） |
-| `ai_slots` | 留给模型的三件事：`unknown_parts`（=`unreviewed_parts` 的旧名）、`canvas_images`、`summary_template` |
-| `pending` | 空——留着这个键，好让读者能区分"没有欠账"和"键不见了" |
+| 原理图审查（规则族 + 数据手册闸 + 评测体系） | 可用，维护中 |
+| 审查到局部修改（预览/授权/回读/复查） | 可用 |
+| 画法编译器（分压/RC/LDO） | 单模块已能落进编辑器，多模块下一步 |
+| 完整原理图绘制 → PCB → SPICE 仿真 | 按序推进 |
+| KiCad 平台 | 规划中 |
 
-`summary.mayClaimPassed` 是**窄义**字段（只回答一件事：手册闸有没有留下未审器件）；要问"这轮审查
-完整了吗"，看 `completion.verdict`。合并视图里，某个槽记录下的答案与当前图纸不符时会被标
-`stale: 图纸已变，此槽待复核`——**记录的值不删不覆盖**，也不阻断出报告。
+审查规则的评测方式说一句人话：我们有一套签名标注过的评测集，分成
+调参用和验收用两摞，验收那摞不许参与规则调试——分数因此是可以信的。
+细节在 `outputs/017_generalization.md`。
 
-按扩展名自动选择解析器：`.enet` 走网表，`.epro2` 走工程备份（额外打印焊盘 /
-走线 / 过孔数量）。备份若勾选了加密导出则无法读取，此时会提示重新导出时取消
-加密，而不是抛栈。
+### 安装包和环境支持
 
-存在 ERROR 级发现时退出码为 `1`，否则为 `0`；输入根本读不出来时为 `2`。
+[Releases](https://github.com/xianyuyijinban/boardwise/releases) 里三样：
 
-内置规则（连通、电源/路径、参数三族共 14 条，message 中如实标注了局限性）：
+| 文件 | 给谁 |
+|---|---|
+| `boardwise-windows-x.x.x.exe` | 不想装 Python 的人：单文件 CLI，器件库已内嵌 |
+| `boardwise-connector-x.x.x.eext` | 所有人：立创 EDA 里导入的扩展 |
+| `boardwise-dsh-x.x.x.tgz` | DeepSeek 用户：dsh 插件，可选 |
 
-- `xtal-load-caps`：晶振每个引脚网络上应各有一个落到地的电容。
-- `shunt-sense-link`：毫欧级分流电阻应能到达某个 IC 的采样引脚。
-- `duplicate-designators`、`nc-and-must-connect`、`library-pin-consistency`：连通性。
-- `supply-on-known-domain`、`domain-vs-range`、`ldo-dropout`、`usb-cc-pulldown`：电源与路径。
-- `decap-required-caps`、`led-current`、`divider-output`、`rc-cutoff`、`value-mpn-match`：参数。
+环境：Windows；Python ≥ 3.10（仅开发/源码安装需要，3.10 以下不支持）；
+立创 EDA 专业版 **3.2.149 / 3.2.186 / V4.1.60** 都真机验证过，更低版本
+不保证。macOS/Linux 没测过——理论上离线审查能跑，桥没验证。
 
-如果你手上是一台干净的 Windows 机器，从零装到第一次审查看
-[`docs/install.md`](docs/install.md)：装 Python → `scripts/install.bat` → 编辑器里导入 `.eext` →
-配对 → `doctor` 全绿 → 第一次审查，每一步都有脚本和"应该看到什么"，面向硬件工程师、全程中文。
+最快的路：`docs/install.md`（给朋友看的版本，全程中文，每步写了
+"应该看到什么"）。熟手：`pip install .` → 编辑器导入 `.eext` →
+`boardwise doctor` 全绿 → `boardwise checkup`。
 
-### 评测（`review-eval`）
+### 常见错误和注意事项
 
-`boardwise review-eval --annotations <标注.json>… --split dev|holdout` 拿 `reviewsets/` 里xianyuyijinban裁决过的
-标注集给离线规则打分。四个数字常被误读，这里一次说清：
+- **连不上**，九成是三件事之一：daemon 没起（`boardwise bridge start`）、
+  扩展的"外部交互"权限没给、扩展没激活。扩展菜单里的 **About…** 会直接
+  告诉你卡在哪步。
+- **开了好几个工程窗口**：命令要指名，`--project <名字>`，否则它拒绝猜。
+- **`.epro2` 导出时勾了加密**：读不了，重新导一次别勾加密。
+- **`.eprj2` 单文件里没有图纸**：那只是工程壳，图纸要么在线走桥读，
+  要么导出 `.epro2` 备份。
+- **退出码 3 不是"板子干净"**：是在线状态读不出来。审查没跑成的部分
+  报告里会写 `{checked: false}`，不带计数。
+- **它要改你的图之前**一定会先给预览，别图快跳确认——确认完它自己
+  还会回读验证，这一步省不掉也不该省。
+- 画布截图在 3.2.186 上返回的是缓存帧，要真实截图请用系统截图工具。
 
-- **112/183 不是"61% 的电路没审到"**——它是 (规则 × 板) 组合里规则至少给出一个 `UNKNOWN` 的比例，
-  即**缺事实**（货架没有这颗料的条目），不是"没审"。
-- **79/91 不是编辑器高亮成功率**——它数的是 finding 的 `target`/文本**本身已带位号或引脚**的条数，
-  是给下游打标用的**定位线索**，不等于真机高亮成功。
-- **12/14（修复成功率）是任务书登记口径，不是前瞻实测**——它是 M3 收官记录的实机修复结果，
-  不是在用户身上测出来的成功率。
-- **59/59（holdout 检出与高优精确）是回归证据，不是泛化证明**——这些板上的失败已经参与过规则迭代
-  （046/048），不能当未见样本的证明；见 `outputs/017_generalization.md`，角色分家见
-  `tasks/017-eval-set-expansion.md` §九：现 15 板 = **regression** 红线，新板 = **unseen-validation**
-  （进仓即冻结、不参与规则调参）。
+### 致谢
 
-### 实时桥
+站在这些项目的肩膀上，我们很庆幸它们存在：
 
-```bash
-cd connector && npm install && node build.mjs   # 构建编辑器扩展
-boardwise bridge start                          # 起 daemon（前台，Ctrl-C 停）
-boardwise doctor                                # 七项体检：daemon · 扩展 · 版本 · 焦点工程（未通过则逐条给建议，退出 1）
-boardwise bridge status                         # daemon 在不在？扩展接没接上？跟谁配对的？
-boardwise bridge screenshot shot.png --fit      # 画布截图（3.2.186 实测恒返回缓存空帧——优先用系统截图）
-boardwise bridge highlight <uuid> --color "#FF0000"
-boardwise bridge highlight --clear
-boardwise review-mark report.json               # 把 `review --json` 的发现画到原理图上（`clear` 清掉）
-boardwise bridge export-fab --out fab/          # Gerber + 坐标 + BOM + manifest.json
-boardwise bridge revoke                         # 忘掉已配对的扩展
-```
+- [easyeda-agent](https://github.com/zhoushoujianwork/easyeda-agent)（zhoushoujianwork）——
+  感谢 EasyEDA-Agent 提供的一些思路和细节上的灵感。正是他们的不断前进，
+  才让我们少踩了坑，能够以更高效、更快速的方式接近自己的目标。
+- [@jlceda/pro-api-types](https://www.npmjs.com/package/@jlceda/pro-api-types)——
+  官方 API 类型定义，connector 开发站在它上面。
+- 立创 EDA 团队——愿意把扩展接口真正开放给社区，这个项目才有机会存在。谢谢。
 
-第一次装？看 [`docs/getting-started.md`](docs/getting-started.md)：装编辑器 → 导入 `.eext` →
-起 daemon → doctor 全绿 → 第一次 review 与第一次导出打板文件，每一步都写了预期输出。
+### License
 
-### 与黄金板比对（`compare`）
-
-`boardwise compare` 是「AI 画得对不对」的裁判（任务 005）：把候选 `.epro2` 解析成设计模型，
-与黄金板做三级比对——器件级（在位、footprint、value、lcsc）、网络级（名字与成员）、
-以及**逐 pin** 的引脚-网络映射（共有器件的每个脚）。value 带工程记数归一化
-（`10k` == `10K` == `10000`）；位号、网络名、引脚号精确比对。
-
-```bash
-boardwise compare candidate.epro2                 # 默认对 tests/fixtures/ch340_golden.epro2
-boardwise compare candidate.epro2 --golden other.epro2
-boardwise compare candidate.epro2 --json          # 机器读格式（给 AI 闭环）
-```
-
-退出码与 review 一致：`0` 无差异，`1` 有差异（每条一行人读输出，按位号排序），
-`2` 输入错误——文件缺失或加密时给出原因而不是堆栈。黄金夹具是纯原理图工程，
-两侧都走原理图模型（`parsers/schematic.py`）；逐 pin 报告就是 `boardwise draw`
-（005 垂直切片）的验收闸门。
-
-### 从零重画黄金板（`draw`）
-
-`boardwise draw`（任务 006）把裁判闭成环：以黄金板的连通性为唯一设计输入，通过桥在当前
-工程的空白图页上重画原理图，再把编辑器自己理解到的网表与黄金板逐 pin 比对。执行前打印
-动作计划并等待人工确认（`--yes` 跳过）；网络命名一律用电源旗标/网络端口（不用在该宿主上
-实测会挂起的 net-label API）；每个失败的放置、每个候选来源的选择都如实写进报告。
-
-```bash
-boardwise draw --from tests/fixtures/ch340_golden.epro2
-boardwise draw --from tests/fixtures/ch340_golden.epro2 --yes \
-    --screenshot drawn.png
-```
-
-退出码：`0` 画完且零差异，`1` 有差异或有失败动作，`2` 输入错误、闸门中止或 daemon 不在。
-需要 connector 0.3.0+ 及其写动作；操作手册、真机探针步骤与实测宿主陷阱见
-[`docs/draw.md`](docs/draw.md)。
-
-### 按块装配画板（`--spec`，任务 008a）
-
-第二个设计来源：不再回放某一页黄金，而是**把页面拼出来**。块模板
-（`blocklib/blocks/*.json`）自带一个块的器件、它们需要的符号几何、块内导线与旗标、
-参数与对外端口；板规格（`blocklib/specs/*.json`）说明用哪些块、摆在哪、数值多少、
-端口之间怎么连。块与块之间**只靠网名**相连，装配出来的页面走的是**同一个**回放规划器、
-同一套五条硬约束、同一条 lint。
-
-```bash
-# 离线：规格能不能复现黄金？
-boardwise compare --spec blocklib/specs/ch340g_usb_uart.json \
-    --golden tests/fixtures/ch340_golden.epro2 \
-    --overrides tests/fixtures/ch340_golden.overrides.json
-boardwise lint --spec blocklib/specs/ch340g_usb_uart.json      # 0 violations
-
-# 画出来（上面两项会作为闸门，在碰任何桥动作之前先跑）
-boardwise draw --spec blocklib/specs/ch340g_usb_uart.json \
-    --golden tests/fixtures/ch340_golden.epro2 --render out.png
-```
-
-模板格式、坐标契约、三条拒绝（边界切到导线 / 两个电路最终同名 / 轨道端口没有旗标可命名）
-以及 008a **明确不主张**的东西，见 [`docs/blocks.md`](docs/blocks.md)。
-
-### 选件（`parts select`，任务 008b）
-
-`blocklib/parts.json` 是一份**已验证**器件的货架，从设计者自己画过的板上收割：MPN、
-立创 C 号、库 device/封装 uuid、**库词汇表**的封装名（`R0402`，不是人读的 `0402`），
-以及电气参数原文（单位保留）。
-
-```bash
-boardwise parts select "100nF 0805"            # 离线，零网络
-boardwise parts select "5mΩ 2512" --json
-boardwise parts select "330mΩ 0805" --online   # 显式 opt-in：JLC SMT 比对
-boardwise parts select "CH340N" --resolve      # 按 C 号走桥解析身份
-boardwise bom export --spec blocklib/specs/ch340g_usb_uart.json --out bom.csv
-                                               # 规格蕴含的 BOM：立创五列 + 开放问题清单
-```
-
-显式阻值查询**带门禁**（#202 纪律）：数值必须来自具名属性字段并做数值相等匹配，
-SI 前缀区分大小写（`330mΩ` 等于 `0.33Ω`，永不等 `33Ω`），料号/C 号里的数字不能当阻值，
-**无精确候选时退出码 1**、不给模糊推荐。封装词只经一张显式表映射到库名。
-在线路径**不从 connector 发出**（webview 不能跨域 fetch），测试也从不打真网络。
-详见 [`docs/parts.md`](docs/parts.md)。
-
-daemon 只监听 `127.0.0.1:61190`（可用 `--port` / `BOARDWISE_PORT` 改），并把两个密钥分开存：
-CLI 用 `~/.boardwise/token`，编辑器用 `~/.boardwise/connector-token`。**没有东西需要粘贴**——
-connector 首次运行会自己生成一个 token，daemon 信任第一个连上来的（TOFU，首次使用即信任），
-之后只认它；它还会在日志面板和 **About…** 里说明这个 token 来自哪个随机源（Web Crypto，
-还是 `Math.random` 兜底），见 `docs/bridge.md` §9。每个请求都会落到
-`~/.boardwise/audit/YYYY-MM-DD.jsonl`；`boardwise bridge revoke` 会忘掉配对，下一个连上来的
-扩展重新配对。
-
-「连不上」几乎总是这三件事之一：daemon 没起、扩展的**外部交互权限**没授权、
-扩展根本没跑到 `activate()`。扩展的 **About…** 菜单会告诉你卡在哪一步，
-并显示配对指纹，可与 `boardwise bridge status` 对照。第三件事自 0.2.5 起不再存在：
-connector **不再等 `activate()`**——bundle 求值时（实测宿主唯一会保活的窗口）就发起连接，
-之后的重求值复用同一条连接而不是再开一条；日志面板会打 `connect: url=…`，
-若求值时编辑器全局还没绑上，面板里也会明说。
-自 0.2.4 起这套兜底**可观测且可手动触发**：每个延迟探针的结论都会记录并在 About 里显示
-（`self-arm: …`），而且**打开 About… 本身就会触发连接**——菜单是实测唯一不依赖 activate
-也能跑的入口。
-
-### 架构
-
-架构图：占位（待补）。目录结构见上方英文节——含 `bridge/`（daemon 侧）与
-`connector/`（扩展侧，唯一接触 `eda.*` 的代码）。
+MIT
