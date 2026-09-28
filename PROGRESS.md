@@ -25,7 +25,7 @@ collects the current truth and the pointers.
 ①漏分/重分分类口径：批准 presentation-poor（仓库 053B 钉死测试优先于任务书 circuit-invalid 措辞；分组是 presentation 层陈述）；②分压文法"顶部必须 power 类网"缺口（信号源驱动的分压编不出来）记 057/后续；③跨模块寻路热点（10–14s/变体）正交改进（逃逸到框边+gap 带寻路）记 057 候选；④`directWiringObligations` 维持模块内，mainPath 是页级唯一强制画线装置（冲突 → presentation-poor 点名边）；⑤057 CLI 形状如上（draw compile/apply 同命令吃 page 文档，dsh 暴露与否留岳定）。
 
 ### Commit
-见下方提交（本条落盘时 hash 待定，提交后回填）。
+`0459e74`（9 files, +6050/−12；本条为回填 hash 的小提交，hash 以 git log 为准）。
 ## [2026-09-28] defect：`parse_capacitance_farads` 希腊 μ（U+03BC）拼法抛 KeyError crash 修复（055 顺带发现，agent-75 执行，主代理复验；connector/daemon 零改动仍 **0.4.25**）
 
 - **根因**：`_CAP_RE` 的 `re.IGNORECASE` 把 μ（U+03BC GREEK SMALL LETTER MU）与 µ（U+00B5 MICRO SIGN）折叠成同一码点——`22μF` **匹配得上**正则，却以 `"μf"` 这个 `_CAP_UNITS` 从未持有的键进查表，KeyError 一路穿出 decap 规则（`engines/review.py::_run_rules` 无兜、`review_eval._rule_outcomes` 只兜 NotImplementedError）；GBK 控制台把它显示成 `'��f'`。日常 IME 拼法的板值就能让审查路径崩，而合同是"读不出 → None → UNKNOWN"。
