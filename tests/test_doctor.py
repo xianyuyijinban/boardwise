@@ -1179,3 +1179,45 @@ def test_the_cli_gathers_the_skill_statuses_offline(tmp_path):
     skill_lines = [line for line in result.stdout.splitlines() if "审查 SOP" in line]
     assert len(skill_lines) == 2, result.stdout
     assert all(line.lstrip().startswith("PASS") for line in skill_lines), skill_lines
+
+
+def test_the_footer_points_the_other_harnesses_at_the_prompt(
+    fake_daemon, capsys, tmp_path, monkeypatch, skill_homes
+):
+    """062: one line of information, and the pass count above it must not move.
+
+    The two skill lines say whether *this build's* two known harnesses read the
+    SOP. Any other harness is the agent's own business — doctor does not guess
+    where it looks — so the footer names the command that hands the job over. It
+    is a ``print`` and not a ``DoctorCheck`` precisely so that it cannot become an
+    eleventh line: adding a check is a claim about this machine, and this is not.
+    """
+    _working_machine(fake_daemon, tmp_path, monkeypatch)
+
+    assert _cmd_doctor(_doctor_args(json_path=tmp_path / "d.json")) == 0
+
+    out = capsys.readouterr().out
+    assert out.count("PASS") == 10 and out.count("FAIL") == 0, out
+    assert "10/10" in out, "the footer is not a check, so nothing was added to the count"
+    hint = [line for line in out.splitlines() if "install-skill --agent" in line]
+    assert len(hint) == 1, out
+    assert not hint[0].lstrip().startswith(("PASS", "SKIP", "FAIL")), hint
+    payload = json.loads((tmp_path / "d.json").read_text(encoding="utf-8"))
+    assert len(payload["checks"]) == 10, "the footer is not an 11th check either"
+
+
+def test_the_footer_is_there_when_a_check_is_red_too(
+    fake_daemon, capsys, tmp_path, monkeypatch, skill_homes
+):
+    # A green run is not the only reader who has a second harness: the line is
+    # about the *report*, so it stays under the red one as well — and still
+    # contributes nothing to the 9/10.
+    _working_machine(fake_daemon, tmp_path, monkeypatch)
+    (skill_homes["claude"] / "SKILL.md").unlink()
+
+    assert _cmd_doctor(_doctor_args()) == 1
+
+    out = capsys.readouterr().out
+    assert "9/10" in out and "10/10" not in out
+    assert "install-skill --agent" in out
+    assert out.splitlines()[-1].strip().endswith("粘给你的 AI 让它自己装。"), out

@@ -46,8 +46,10 @@
    和 `boardwise install-skill [claude]: installed C:\Users\<你>\.claude\skills\boardwise\SKILL.md (…)`；
    只装一侧加 `--harness kimi`（或 `claude`）。
    再跑一次会变成 `already current`（它不会重复写，也不会覆盖你改过的文件——会先备份成 `SKILL.md.bak-<日期>`）。
+   用的不是这两个 agent（Codex / Hermes 之类）？跑 `D:\boardwise\boardwise.exe install-skill --agent`：
+   它打印一段引导指令，整段粘给你在用的 AI，装进哪个目录由它自己定（它知道自己的约定）。
 7. 自检：`D:\boardwise\boardwise.exe doctor`。
-   预期：最后一行 `boardwise doctor: 8/8 项通过`。若同时开着多个编辑器窗口，加
+   预期：最后一行 `boardwise doctor: 10/10 项通过`。若同时开着多个编辑器窗口，加
    `--instance <窗口 id>` 指定问哪一个（`bridge status` 会打印每个窗口的 id）。
 
 > 配对与隐私（一句话）：配对 token 是**在你自己机器上**生成的（`%USERPROFILE%\.boardwise\`），

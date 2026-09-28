@@ -990,7 +990,8 @@ def build_parser() -> argparse.ArgumentParser:
         "install-skill",
         help=(
             "Copy the bundled SKILL.md into the user-level skill directory of each "
-            "agent harness (Kimi Code, Claude Code)."
+            "agent harness (Kimi Code, Claude Code), or — with --agent — print the "
+            "prompt that has any other harness's AI install it itself."
         ),
         description=(
             "Writes the SKILL.md this build carries where the agent reads it: "
@@ -1004,16 +1005,37 @@ def build_parser() -> argparse.ArgumentParser:
             "current' and is left alone. A *different* file is backed up to "
             "SKILL.md.bak-<date> first — never silently overwritten. --uninstall "
             "removes the installed copy from the selected harnesses, and each "
-            "directory when it empties."
+            "directory when it empties. --agent writes nothing: it prints the "
+            "absolute path of the bundled SKILL.md and a paragraph to hand to an "
+            "agent this build knows nothing about (Codex, Hermes, ...), whose skill "
+            "directory *it* knows and we would only be guessing at (062)."
+        ),
+    )
+    # `--uninstall` and `--agent` are the two that contradict each other outright
+    # (tear the copy down / write nothing at all), and argparse refuses that pair
+    # with a usage error (exit 2) instead of letting one silently win. `--harness`
+    # stays out of the group: it legitimately combines with `--uninstall`, and a
+    # group refuses *every* pair of its members, so putting all three in would
+    # break `--uninstall --harness claude`. Its clash with `--agent` is refused in
+    # the command instead, the same way `compare` refuses `--spec` next to a
+    # candidate (the two are equally exclusive; only argparse's shape differs).
+    # The default is None rather than "all" so that spelling the default out is
+    # still visible to that check.
+    action = install_skill.add_mutually_exclusive_group()
+    action.add_argument(
+        "--uninstall", action="store_true",
+        help="Remove the installed copy instead of installing one.",
+    )
+    action.add_argument(
+        "--agent", action="store_true",
+        help=(
+            "Print the absolute path of the bundled SKILL.md and a prompt to paste "
+            "into any other agent harness, which installs it itself. Writes nothing."
         ),
     )
     install_skill.add_argument(
-        "--harness", choices=(*skill_install.HARNESSES, "all"), default="all",
+        "--harness", choices=(*skill_install.HARNESSES, "all"), default=None,
         help="Which agent harness to act on (default: all of them).",
-    )
-    install_skill.add_argument(
-        "--uninstall", action="store_true",
-        help="Remove the installed copy instead of installing one.",
     )
 
     compare = sub.add_parser(
@@ -18292,6 +18314,80 @@ def _local_version() -> str:
     return str(__version__)
 
 
+def _print_agent_install_prompt() -> int:
+    """Print the paste-and-go prompt for the harnesses this build does not know (062).
+
+    Nothing is written, and that is the design rather than an omission. The one
+    fact an installer needs is where the *other* agent looks for a skill, and
+    that agent holds it while we would be maintaining a table of guesses — and
+    the guess is what cost issue #11 in the first place. So this hands over the
+    two things this build does know: the absolute path of the SKILL.md it
+    carries, and the rules the install path already follows (directory
+    ``boardwise``, file ``SKILL.md``, back up a different file as
+    ``SKILL.md.bak-<date>``, then verify it landed). The agent's own convention
+    finishes the job, in the agent's own words — the paragraph below is written
+    as a prompt, because that is what it is: it addresses the AI, not a log.
+
+    Exit 0 whatever the pasted AI goes on to do (we never see that part), and 1
+    only when this build cannot read the SKILL.md the prompt would name — a
+    prompt to copy a file that is not there is worse than no prompt.
+    """
+    from . import resources
+
+    try:
+        source = resources.skill_md()
+        bundled = source.read_bytes()
+    except RuntimeError as exc:
+        print(f"boardwise install-skill --agent: {exc}", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        # The OS message already names the path, which is what the user needs to
+        # see: a bundle that broke between the exe being built and being run.
+        print(
+            f"boardwise install-skill --agent: cannot read the bundled SKILL.md: {exc}",
+            file=sys.stderr,
+        )
+        return 1
+    if not bundled:
+        print(
+            f"boardwise install-skill --agent: the bundled SKILL.md at {source} is empty",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"本构建自带的 SKILL.md：{source}")
+    print()
+    print("把下面这段整段粘给你在用的 AI（Codex / Hermes / 任何 agent harness）：")
+    print()
+    print("----- 从这里开始复制 -----")
+    print("【任务】把 boardwise 的 SKILL.md 装进你自己 harness 的用户级 skill 目录。")
+    print()
+    print(f"源文件：{source}")
+    print("目标：你自己 harness 的用户级 skill 目录下，目录名 boardwise，文件名 SKILL.md")
+    print(
+        "      （这个目录在哪由你自己 harness 的约定决定 —— 你知道自己的约定，"
+        "不确定就查你自己的文档，别猜）"
+    )
+    print()
+    print(
+        "装完请自验证：用你自己发现 skill 的方式确认 boardwise/SKILL.md 已经在场、"
+        "能被读到，并回报你实际写入的绝对路径。"
+    )
+    print()
+    print(
+        "如果目标位置已有一份 SKILL.md 且内容与源文件不同，先把它备份成 "
+        "SKILL.md.bak-<今天的日期> 再覆盖 —— 那份文件可能是旧安装或手改版，"
+        "别无声丢掉；内容相同就什么都不用做。"
+    )
+    print("----- 复制到此结束 -----")
+    print()
+    print(
+        "上面这段整段粘给你在用的 AI 就行（Codex / Hermes / 任何 agent harness）"
+        "—— 它自己知道该放哪儿。"
+    )
+    return 0
+
+
 def _cmd_install_skill(args: argparse.Namespace) -> int:
     """Install (or remove) the user-level copy of SKILL.md, one harness at a time (028 §三.2, 061).
 
@@ -18309,10 +18405,32 @@ def _cmd_install_skill(args: argparse.Namespace) -> int:
     next to me". The same file goes to every harness: Claude Code finds a skill
     by its frontmatter, which this SKILL.md already carries, so there is nothing
     to rewrite per harness — only a second destination.
+
+    ``--agent`` is not a third destination but the way out of the list (062):
+    :func:`_print_agent_install_prompt` writes nothing and is handled first, so
+    the flag cannot pick up any of the filesystem work below by accident.
     """
     from . import resources, skill_install
 
-    harnesses = skill_install.HARNESSES if args.harness == "all" else (args.harness,)
+    if args.agent:
+        if args.harness is not None:
+            # The pair argparse cannot see: the group holds `--uninstall` next to
+            # `--agent` only, because `--harness` is a legitimate companion of
+            # `--uninstall`. Same shape as `compare`'s `--spec` + candidate
+            # refusal, and the same exit code.
+            print(
+                "boardwise install-skill: --agent prints a prompt for a harness this "
+                "build does not know, --harness installs for one it does; give one",
+                file=sys.stderr,
+            )
+            return 2
+        return _print_agent_install_prompt()
+
+    # None is `--harness`'s default (see the parser): "every harness" is the
+    # default, and writing the default out is still a refusal next to `--agent`.
+    harnesses = (
+        skill_install.HARNESSES if args.harness in (None, "all") else (args.harness,)
+    )
     failed = False
 
     if args.uninstall:
@@ -18392,6 +18510,16 @@ def _finish_doctor(checks: list[DoctorCheck], probe: DoctorProbe, args: argparse
     )
     if failed:
         print(f"  先修第一项：{failed[0].label}")
+    # 062: the two skill lines above cover the harnesses this build knows where to
+    # write to. Every other one (Codex, Hermes, ...) is the *agent's* own business
+    # — its skill directory is a fact it holds and we would only be guessing at —
+    # so doctor names the command that hands the job over, as information rather
+    # than as a check: it is no verdict on this machine and must not move the
+    # "n/n 项通过" above.
+    print(
+        "  用别的 agent harness？`boardwise install-skill --agent` 打印一段引导指令，"
+        "粘给你的 AI 让它自己装。"
+    )
     if args.json_path:
         Path(args.json_path).write_text(
             json.dumps(

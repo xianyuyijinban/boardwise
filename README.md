@@ -100,6 +100,16 @@ step says what you should see). For the impatient: `pip install .` →
 import the `.eext` in the editor → `boardwise doctor` all green →
 `boardwise checkup`.
 
+Getting the review checklist into your AI: `boardwise install-skill`
+installs it for Kimi Code and Claude Code (one side only: `--harness kimi`
+or `--harness claude`; a different file already there is backed up to
+`SKILL.md.bak-<date>`, never quietly replaced). Using another agent —
+Codex, Hermes, anything? `boardwise install-skill --agent` prints a short
+prompt to paste into your AI, and it puts the file where it looks for
+skills, which it knows better than we do. If your AI is working inside a
+clone of this repo, [`AGENTS.md`](AGENTS.md) already points it at the
+checklist — nothing to install.
+
 ## Common errors & notes
 
 - **Nothing connects** — nine times out of ten it's one of three: the
@@ -224,6 +234,13 @@ daemon + 编辑器扩展      读工程数据，写之前先预览、你授权�
 最快的路：`docs/install.md`（给朋友看的版本，全程中文，每步写了
 "应该看到什么"）。熟手：`pip install .` → 编辑器导入 `.eext` →
 `boardwise doctor` 全绿 → `boardwise checkup`。
+
+把审查清单装进你的 AI：`boardwise install-skill` 给 Kimi Code 和 Claude Code 装上
+（只装一侧加 `--harness kimi` 或 `--harness claude`；目标位置已有别的版本会先备份成
+`SKILL.md.bak-<日期>`，不会静默覆盖）。用的不是这两个 agent——Codex、Hermes
+之类——跑 `boardwise install-skill --agent`：它打印一段引导指令，粘给你在用的 AI，
+放哪儿由它自己定，它比我们清楚。AI 就在本仓库 clone 里干活的话，根目录
+[`AGENTS.md`](AGENTS.md) 已经指到了清单，不用装。
 
 ### 常见错误和注意事项
 

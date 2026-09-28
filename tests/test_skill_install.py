@@ -1,4 +1,4 @@
-"""``boardwise install-skill``: install, idempotence, backup, uninstall (028 §三.2, 061).
+"""``boardwise install-skill``: install, idempotence, backup, uninstall, --agent (028 §三.2, 061, 062).
 
 The rule worth testing hardest is the second one: a file that is already at the
 destination and differs must be *kept* — copied to ``SKILL.md.bak-<date>`` before
@@ -18,6 +18,7 @@ the moment it ran a bare ``install-skill``.
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -436,3 +437,144 @@ def test_a_bundled_file_that_cannot_be_read_is_an_error_not_a_verdict(tmp_path):
     empty.write_bytes(b"")
     with pytest.raises(skill_install.SkillInstallError, match="is empty"):
         skill_install.skill_statuses(empty)
+
+
+# --------------------------------------------------------------------------
+# --agent: the prompt for the harnesses we deliberately do not know (062)
+# --------------------------------------------------------------------------
+#
+# 岳's call after issue #11: a table of harness skill directories is a permanent
+# guess, wrong the moment a new agent appears — so a harness this build does not
+# know gets a *prompt* instead, which its own AI finishes with the one fact only
+# that AI holds (where it looks for skills). The tests below are therefore about
+# two things: that the paragraph says what it has to say, and that the command
+# itself writes nothing at all — pasting a prompt must never be a way to get a
+# surprise write on this machine.
+
+
+def tree(root: Path) -> dict:
+    """Every path under ``root`` with a fingerprint — ``{}`` when it does not exist.
+
+    "Zero filesystem change" is a claim about the disk, so it is measured on the
+    disk: a message that merely *reads* as read-only would not catch a mutation
+    that writes the file and reports nothing.
+    """
+    if not root.exists():
+        return {}
+    return {
+        str(path.relative_to(root)): (
+            ("dir",) if path.is_dir()
+            else ("file", hashlib.sha256(path.read_bytes()).hexdigest())
+        )
+        for path in sorted(root.rglob("*"))
+    }
+
+
+def test_the_agent_flag_prints_the_prompt_and_writes_nothing(tmp_path, monkeypatch, capsys, skill_homes):
+    source = tmp_path / "SKILL.md"
+    source.write_bytes(NEW)
+    monkeypatch.setattr("boardwise.resources.skill_md", lambda: source)
+    before = tree(tmp_path)
+
+    assert cli_main(["install-skill", "--agent"]) == 0
+
+    out = capsys.readouterr().out
+    assert out.count(str(source)) == 2, (
+        "the absolute path outside the block *and* inside it: the pasted part has "
+        "to stand on its own, it is the part that travels to the other agent"
+    )
+    assert "boardwise" in out and "SKILL.md" in out, "the directory name and the file name"
+    assert "bak-" in out, "the backup rule, the same one the install path follows"
+    assert "验证" in out, "the other agent has to check that it landed"
+    assert "粘给你" in out and "AI" in out, "and the human line that says what to do with it"
+    assert ".kimi-code" not in out and ".claude" not in out, (
+        "no path table — the whole point is that *the other agent* knows its own"
+    )
+
+    assert tree(tmp_path) == before, "zero filesystem change"
+    for directory in skill_homes.values():
+        assert not directory.exists(), "not even the directory is created"
+
+
+def test_the_agent_flag_leaves_an_installed_copy_alone(tmp_path, monkeypatch, capsys, skill_homes):
+    # The difference between the two flags in one test: `--harness kimi` would
+    # replace the file it finds here, backing it up first; `--agent` prints a
+    # paragraph, and the older copy that paragraph describes is still where it was.
+    kimi = skill_homes["kimi"]
+    kimi.mkdir(parents=True)
+    (kimi / "SKILL.md").write_bytes(OLD)
+    source = tmp_path / "SKILL.md"
+    source.write_bytes(NEW)
+    monkeypatch.setattr("boardwise.resources.skill_md", lambda: source)
+
+    assert cli_main(["install-skill", "--agent"]) == 0
+
+    capsys.readouterr()
+    assert (kimi / "SKILL.md").read_bytes() == OLD, "the copy that was there is still the copy"
+    assert list(kimi.glob("SKILL.md.bak-*")) == [], "and nothing was backed up on its behalf"
+
+
+def test_agent_and_uninstall_is_refused_by_the_parser(capsys, skill_homes):
+    """``--agent`` is a third job, not a switch on the job the other two do.
+
+    The pair argparse can see: "tear the copy down" and "write nothing at all"
+    contradict each other outright, so the group refuses it as a usage error.
+    """
+    with pytest.raises(SystemExit) as excinfo:
+        cli_main(["install-skill", "--agent", "--uninstall"])
+    assert excinfo.value.code == 2
+    assert "not allowed with argument" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("harness", ["kimi", "all"])
+def test_agent_and_harness_is_refused_with_the_same_exit_code(harness, capsys, skill_homes):
+    """The pair argparse *cannot* see, refused identically (exit 2).
+
+    ``--harness`` sits outside the mutually exclusive group because it is a
+    legitimate companion of ``--uninstall`` ("remove the copy on this side only")
+    and a group refuses every pair among its members — so the ``--agent`` clash
+    is refused in the command, the way ``compare`` refuses ``--spec`` next to a
+    candidate. ``all`` is in the list because it is the default spelled out: the
+    parser's default for ``--harness`` is ``None`` precisely so that writing the
+    default down is still visible here.
+    """
+    assert cli_main(["install-skill", "--agent", "--harness", harness]) == 2
+    err = capsys.readouterr().err
+    assert "--agent" in err and "--harness" in err, err
+
+
+def test_the_harness_default_is_still_every_harness(tmp_path, monkeypatch, capsys, skill_homes):
+    # `--harness` defaults to None now instead of "all" (so the group above can
+    # see an explicit "all"): the meaning of *not passing it* must not have moved
+    # with the spelling.
+    source = tmp_path / "SKILL.md"
+    source.write_bytes(NEW)
+    monkeypatch.setattr("boardwise.resources.skill_md", lambda: source)
+
+    assert cli_main(["install-skill"]) == 0
+    out = capsys.readouterr().out
+    for harness, directory in skill_homes.items():
+        assert (directory / "SKILL.md").read_bytes() == NEW
+        assert f"[{harness}]" in out
+
+
+def test_agent_exits_1_when_the_bundled_skill_cannot_be_read(tmp_path, monkeypatch, capsys):
+    # A prompt to copy a file that is not there is worse than no prompt, so the
+    # three shapes a broken bundle takes all exit 1 rather than printing a
+    # paragraph that names an uncopyable path.
+    def no_bundle():
+        raise RuntimeError("this build carries no SKILL.md")
+
+    monkeypatch.setattr("boardwise.resources.skill_md", no_bundle)
+    assert cli_main(["install-skill", "--agent"]) == 1
+    assert "this build carries no SKILL.md" in capsys.readouterr().err
+
+    monkeypatch.setattr("boardwise.resources.skill_md", lambda: tmp_path / "nope.md")
+    assert cli_main(["install-skill", "--agent"]) == 1
+    assert "nope.md" in capsys.readouterr().err
+
+    empty = tmp_path / "empty.md"
+    empty.write_bytes(b"")
+    monkeypatch.setattr("boardwise.resources.skill_md", lambda: empty)
+    assert cli_main(["install-skill", "--agent"]) == 1
+    assert "is empty" in capsys.readouterr().err
