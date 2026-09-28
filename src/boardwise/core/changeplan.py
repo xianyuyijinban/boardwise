@@ -33,6 +33,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .model import is_ground_net
+from .symbolprofile import POSE_ROTATIONS
+
 __all__ = [
     "ADD_COMPONENT_KIND",
     "COMPONENT_VALUE_KIND",
@@ -40,6 +43,11 @@ __all__ = [
     "CONNECTION_LABEL",
     "CONNECTION_POWER_FLAG",
     "CONNECTION_WIRE",
+    "DRAW_FLAG_GROUND",
+    "DRAW_FLAG_KINDS",
+    "DRAW_FLAG_POWER",
+    "DRAW_GRID",
+    "DRAW_MODULE_KIND",
     "INSERT_SUBCIRCUIT_KIND",
     "INSERT_TEMPLATES",
     "MOVE_BLOCK_KIND",
@@ -57,6 +65,11 @@ __all__ = [
     "PlanAttachment",
     "PlanChange",
     "PlanConnection",
+    "PlanDrawBaseline",
+    "PlanDrawFlag",
+    "PlanDrawPart",
+    "PlanDrawPin",
+    "PlanDrawWire",
     "PlanIsland",
     "PlanMove",
     "PlanPart",
@@ -95,12 +108,23 @@ INSERT_SUBCIRCUIT_KIND = "insert-subcircuit"
 #: part's pose before it moves, the wires it will redraw, and its own
 #: postconditions (the poses *and* the netlist identity).
 MOVE_BLOCK_KIND = "move-block"
+#: 054: a whole **compiled drawing** lands on a page — the first kind whose
+#: payload is not "one change to what is there" but "this is what the page should
+#: become": every part with its pose and its symbol, every wire, every rail flag.
+#: Like `insert-subcircuit` and `move-block` it has no driving rule; unlike them
+#: its input is a `LayoutPlan` (053 stage B) rather than a finding, a template or
+#: a delta. What apply re-checks is therefore the plan's own postconditions plus
+#: the guards a compiled drawing needs and a local edit does not: both spec
+#: digests, the layout's geometry digest, the profile geometry table, the page's
+#: identity and the page's primitive baseline (`engines/drawapply.py`).
+DRAW_MODULE_KIND = "draw-module"
 SUPPORTED_KINDS: tuple[str, ...] = (
     COMPONENT_VALUE_KIND,
     ADD_COMPONENT_KIND,
     PATCH_PIN_KIND,
     INSERT_SUBCIRCUIT_KIND,
     MOVE_BLOCK_KIND,
+    DRAW_MODULE_KIND,
 )
 
 #: The routing/landing grid a local move has to stay on (029's
@@ -151,6 +175,13 @@ CONNECTION_WIRE = "wire"
 CONNECTION_LABEL = "label"
 CONNECTION_POWER_FLAG = "power-flag"
 CONNECTION_KINDS: tuple[str, ...] = (CONNECTION_WIRE, CONNECTION_LABEL, CONNECTION_POWER_FLAG)
+
+#: The flag kinds `sch.place_power` takes (054): the connector's own vocabulary,
+#: not a new one. A flag is a real library component and the only mechanism that
+#: can *create* a rail connection where the page has none (029-d).
+DRAW_FLAG_GROUND = "Ground"
+DRAW_FLAG_POWER = "Power"
+DRAW_FLAG_KINDS: tuple[str, ...] = (DRAW_FLAG_GROUND, DRAW_FLAG_POWER)
 
 _SHA256_RE = re.compile(r"\A[0-9a-f]{64}\Z")
 
@@ -239,6 +270,11 @@ class PlanTarget:
     #: net's own wire, not from a part). Exactly one of (designator, pin) /
     #: anchor_net is set, and the validation enforces it.
     anchor_net: str = ""
+    #: `draw-module` only (054): what is being drawn, as the presentation spec
+    #: named it — the module id plus the grammar it was bound to. There is no
+    #: component to name here: a compiled drawing is many parts at once, and the
+    #: human authorising it is authorising a *module*.
+    module: str = ""
 
 
 @dataclass
@@ -368,6 +404,117 @@ class PlanAttachment:
 
 
 @dataclass
+class PlanDrawPin:
+    """One pin of a planned part, as an **offset from the part's origin** (054).
+
+    A relative offset rather than a page point, because that is the thing that is
+    the same for the plan and for the editor after placement: the plan's absolute
+    expectation is ``(part.x + dx, part.y + dy)``, and the comparison the
+    acceptance asks for ("引脚回读=plan 期望，容差半格") is the part's own pin
+    geometry seen through its pose. ``dx``/``dy`` are already posed by the
+    compiler's own transform (`core.geometry.transform_point`, mirror then CCW
+    rotation), so apply needs no second ruler.
+    """
+
+    number: str = ""
+    dx: float = 0.0
+    dy: float = 0.0
+
+
+@dataclass
+class PlanDrawPart:
+    """One part of a compiled drawing: what it is, where it goes, how it is posed.
+
+    Every field is load-bearing at apply time:
+
+    * ``designator`` is what the plan **allocates** (the page's own pool decides
+      it, 036b), and it is what the postconditions name;
+    * ``symbol_ref``/``symbol_hash`` are the library symbol and its
+      :meth:`~boardwise.core.symbolprofile.SymbolProfile.geometry_hash` — the
+      plan refuses to be executed against a library whose symbol changed shape
+      (the pin tips would land somewhere else, silently);
+    * ``pins`` is the expected pin geometry, which is what the placement
+      read-back is compared against;
+    * ``spec_id`` is the CircuitSpec's own id, kept so a report can say which
+      designed part this is when the designator differs from it.
+    """
+
+    spec_id: str = ""
+    designator: str = ""
+    prefix: str = ""
+    lcsc: str = ""
+    value: str = ""
+    footprint: str = ""
+    symbol_ref: str = ""
+    symbol_hash: str = ""
+    x: float = 0.0
+    y: float = 0.0
+    rotation: float = 0.0
+    mirror: bool = False
+    pins: list[PlanDrawPin] = field(default_factory=list)
+
+
+@dataclass
+class PlanDrawWire:
+    """One wire the drawing needs: its net, its polyline, and where it starts.
+
+    ``from_pin`` is ``<specId>.<pin>`` when the wire leaves a pin this same plan
+    places — recorded because such a wire's *first* point is a coordinate the
+    editor only confirms after placement, so the read-back has to know which end
+    is the plan's claim and which is the editor's own answer.
+    """
+
+    net: str = ""
+    points: list[tuple[float, float]] = field(default_factory=list)
+    from_pin: str = ""
+    purpose: str = ""
+
+
+@dataclass
+class PlanDrawFlag:
+    """One rail flag placed on a pin (a real library component, 029-d).
+
+    ``kind`` is the connector's own vocabulary (``Ground``/``Power``), decided by
+    `engines.addcomponent.power_flag_kind` from the net's *name* — the same
+    judgement the 029 family makes, not a second regex. ``symbol_ref``/``symbol_hash``
+    are what the layout plan drew, checked the same way a part's symbol is.
+    """
+
+    net: str = ""
+    kind: str = ""
+    symbol_ref: str = ""
+    symbol_hash: str = ""
+    x: float = 0.0
+    y: float = 0.0
+    rotation: float = 0.0
+    on_pin: str = ""
+
+
+@dataclass
+class PlanDrawBaseline:
+    """The page's own primitive census, as the plan was built against it (054).
+
+    The guard a *drawing* needs and a local edit does not: a compiled module lands
+    on a page, and "somebody moved/added something by hand since the plan was
+    made" has to be detectable **before** the first write (054's C5). Designators,
+    wire count and flag count are the census; ``digest`` is the same census hashed,
+    so a report can quote one string. An empty ``digest`` means the plan was built
+    **offline** and records no baseline — a fact, not a missing guard, exactly as
+    `core.layoutplan.LayoutTarget.snapshot_sha256` is.
+    """
+
+    page_uuid: str = ""
+    components: list[str] = field(default_factory=list)
+    wire_count: int = 0
+    netflag_count: int = 0
+    digest: str = ""
+    #: Were the *findings* baseline read with the census? An offline plan cannot
+    #: know the project's findings, and apply must report "unknown" rather than
+    #: pretend zero is a baseline (036's rule, made explicit here).
+    findings_read: bool = False
+
+
+@dataclass
 class PlanChange:
     """The change itself, in whichever shape its kind uses.
 
@@ -425,6 +572,39 @@ class PlanChange:
     #: because the acceptance question "was this a verified recipe?" is
     #: unanswerable from the part fields alone.
     recipe_source: str = ""
+    # ---- `draw-module` (054) ------------------------------------------------
+    #: Which candidate of the compiled result this is, and the digests it was
+    #: built from: the LayoutPlan's own geometry digest (which pins the picture,
+    #: 052 sec.4) plus both spec digests. Held here rather than in `PlanSource`
+    #: because `PlanSource` has one shape for every kind and its keys are pinned
+    #: by 016's round-trip test; a draw plan's source question is "are these two
+    #: specs and this drawing still the ones I compiled", which is three digests
+    #: and not one file.
+    candidate: int = 0
+    layout_sha256: str = ""
+    circuit_sha256: str = ""
+    presentation_sha256: str = ""
+    #: The library symbols' geometry, as ``[symbolRef, geometryHash]`` pairs,
+    #: sorted. This is the table apply re-computes from the profiles document it
+    #: is handed: a symbol whose geometry changed between plan and apply would put
+    #: every pin tip somewhere else, and the hash is how that is caught **before**
+    #: a single write (054 §四.1's "双 spec 哈希 / 图元基线" guard, one level down).
+    profile_hashes: list[tuple[str, str]] = field(default_factory=list)
+    draw_parts: list[PlanDrawPart] = field(default_factory=list)
+    draw_wires: list[PlanDrawWire] = field(default_factory=list)
+    draw_flags: list[PlanDrawFlag] = field(default_factory=list)
+    draw_baseline: PlanDrawBaseline = field(default_factory=PlanDrawBaseline)
+    #: What the landing gives up and says so (054 §三 step 6): a net label the
+    #: plan drew but this host cannot place (`sch.place_netlabel` is measured
+    #: unusable, 029) becomes a wire-carried net name, and the line here is the
+    #: declaration. Never silent: "同一语义换个说法" is a downgrade, and a plan
+    #: that performed one without saying so would be a plan whose drawing is not
+    #: what was authorised.
+    draw_downgrades: list[str] = field(default_factory=list)
+    #: Free-form lines about the drawing that are not postconditions: which
+    #: junctions the editor will draw itself, which texts it annotates, what the
+    #: compiler's own notes said.
+    draw_notes: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -621,6 +801,80 @@ class ChangePlan:
                 ],
                 "baselineFindings": list(self.change.baseline_findings),
             }
+        if self.change.kind == DRAW_MODULE_KIND:
+            target.update({
+                "module": self.target.module,
+                "pageUuid": self.source.page_uuid,
+            })
+            change = {
+                "kind": self.change.kind,
+                "candidate": int(self.change.candidate),
+                "layoutSha256": self.change.layout_sha256,
+                "circuitSha256": self.change.circuit_sha256,
+                "presentationSha256": self.change.presentation_sha256,
+                "profiles": [
+                    {"symbolRef": ref, "geometryHash": digest}
+                    for ref, digest in self.change.profile_hashes
+                ],
+                "parts": [
+                    {
+                        "specId": item.spec_id,
+                        "designator": item.designator,
+                        "prefix": item.prefix,
+                        "lcsc": item.lcsc,
+                        "value": item.value,
+                        "footprint": item.footprint,
+                        "symbolRef": item.symbol_ref,
+                        "symbolHash": item.symbol_hash,
+                        "x": item.x,
+                        "y": item.y,
+                        "rotation": item.rotation,
+                        "mirror": item.mirror,
+                        "pins": [
+                            {"number": pin.number, "dx": pin.dx, "dy": pin.dy}
+                            for pin in item.pins
+                        ],
+                    }
+                    for item in self.change.draw_parts
+                ],
+                "wires": [
+                    {
+                        "net": item.net,
+                        "points": [list(point) for point in item.points],
+                        "fromPin": item.from_pin,
+                        "purpose": item.purpose,
+                    }
+                    for item in self.change.draw_wires
+                ],
+                "flags": [
+                    {
+                        "net": item.net,
+                        "kind": item.kind,
+                        "symbolRef": item.symbol_ref,
+                        "symbolHash": item.symbol_hash,
+                        "x": item.x,
+                        "y": item.y,
+                        "rotation": item.rotation,
+                        "onPin": item.on_pin,
+                    }
+                    for item in self.change.draw_flags
+                ],
+                "islands": [
+                    {"pin": item.pin, "mates": list(item.mates)}
+                    for item in self.change.islands
+                ],
+                "baseline": {
+                    "pageUuid": self.change.draw_baseline.page_uuid,
+                    "components": list(self.change.draw_baseline.components),
+                    "wireCount": int(self.change.draw_baseline.wire_count),
+                    "netflagCount": int(self.change.draw_baseline.netflag_count),
+                    "digest": self.change.draw_baseline.digest,
+                    "findingsRead": self.change.draw_baseline.findings_read,
+                },
+                "downgrades": list(self.change.draw_downgrades),
+                "notes": list(self.change.draw_notes),
+                "baselineFindings": list(self.change.baseline_findings),
+            }
         return {
             "planVersion": self.plan_version,
             "source": {
@@ -695,6 +949,18 @@ class ChangePlan:
                 source=_source_from(source, digest),
                 target=_move_target_from(target),
                 change=_move_change_from(change),
+                preconditions=_string_list(payload, "preconditions"),
+                expected_postcondition=_string_list(payload, "expectedPostcondition"),
+            )
+        if kind == DRAW_MODULE_KIND:
+            # Also no `target.designator`: 054's payload is a whole drawing, and
+            # what it names is a module (the part list *is* the target). Its
+            # `target.pageUuid` is read into `source.page_uuid`, where the page
+            # guard every kind uses reads it from.
+            return cls(
+                source=_draw_source_from(source, target, digest),
+                target=_draw_target_from(target),
+                change=_draw_change_from(change),
                 preconditions=_string_list(payload, "preconditions"),
                 expected_postcondition=_string_list(payload, "expectedPostcondition"),
             )
@@ -1380,6 +1646,474 @@ def _insert_attachment_from(change: dict[str, Any]) -> PlanAttachment | None:
         kind=str(kind), primitive_id=primitive_id,
         detail=str(raw.get("detail") or ""), at=point,
     )
+
+
+# ------------------------------------------------------- draw-module (054)
+
+#: The floors of a compiled drawing, in canvas units. A wire may not be shorter
+#: than this and a part may not be closer than this to a page point that is not
+#: its own — the same 5-unit lattice the compiler routes on and 029's landing
+#: ladder enforces (`engines.addcomponent.LANDING_GRID`). Read from here by the
+#: CLI/apply side as well, so the number cannot live in two places and drift.
+DRAW_GRID = 5.0
+
+
+def _draw_source_from(
+    source: dict[str, Any], target: dict[str, Any], digest: str
+) -> PlanSource:
+    """A draw plan's source block: the shared shape, with the page from ``target``.
+
+    The page a drawing lands on is written in ``target.pageUuid`` (it is not "the
+    file the plan was built from" — there is no such file for a compiled
+    drawing), so it is read from there into :attr:`PlanSource.page_uuid`, which is
+    where the guard code of every kind reads it. Reading it twice — once here and
+    once in `_draw_target_from` — is deliberate: the guard is too important to be
+    a field a later refactor can move without noticing.
+    """
+    read = _source_from(source, digest)
+    read.page_uuid = str(target.get("pageUuid") or read.page_uuid or "").strip()
+    return read
+
+
+def _draw_target_from(target: dict[str, Any]) -> PlanTarget:
+    """A draw plan's target: the module it draws (there is no single component)."""
+    return PlanTarget(
+        primitive_id=str(target.get("primitiveId") or ""),
+        expected_value=str(target.get("expectedValue") or ""),
+        module=str(target.get("module") or ""),
+    )
+
+
+def _draw_change_from(change: dict[str, Any]) -> PlanChange:
+    """Read a `draw-module` change, refusing anything apply cannot execute.
+
+    The invariants, each with its own refusal because each one is a way for the
+    plan to *look* executable and not be:
+
+    * the three digests are real sha256s and the profile table is a list of
+      ``[symbolRef, geometryHash]`` pairs — the guards 054 §四.1 names;
+    * at least one part, each naming a spec id, a designator, a recipe (lcsc with
+      a value), a library symbol **with its geometry hash**, a landing point and
+      its expected pins as offsets; no two share a designator, and no two spec
+      ids collide;
+    * every wire has at least two points, no repeated consecutive point, and each
+      consecutive pair is axis-aligned (the orthogonal routing discipline 029-c
+      measured the hard way: a diagonal `sch.place_wire` never returns);
+    * every flag names a rail net and one of the two connector kinds, and the
+      net/kind pair is internally consistent (``GND`` is not a ``Power`` flag);
+    * the islands are pins of these parts (a netlist expectation about a pin the
+      plan does not place would be unchecked in both directions).
+    """
+    candidate = change.get("candidate", 0)
+    if isinstance(candidate, bool) or not isinstance(candidate, int) or candidate < 0:
+        raise ChangePlanError(
+            f"change.candidate must be a non-negative integer (which compiled "
+            f"candidate this is), got {candidate!r}"
+        )
+    digests = {}
+    for key in ("layoutSha256", "circuitSha256", "presentationSha256"):
+        value = change.get(key)
+        if not isinstance(value, str) or not _SHA256_RE.match(value):
+            raise ChangePlanError(
+                f"change.{key} must be 64 hex characters (a sha256), got {value!r} — "
+                "a drawing without the digests it was compiled from cannot be judged "
+                "stale, which is the one guard 054 §四.1 puts before every write"
+            )
+        digests[key] = value
+    profile_hashes = _draw_profile_hashes(change.get("profiles"))
+    parts = _draw_parts_from(change.get("parts"), profile_hashes)
+    wires = _draw_wires_from(change.get("wires"), parts)
+    flags = _draw_flags_from(change.get("flags"), parts)
+    islands = _draw_islands_from(change.get("islands"), parts)
+    baseline = _draw_baseline_from(change.get("baseline"))
+    return PlanChange(
+        kind=DRAW_MODULE_KIND,
+        candidate=candidate,
+        layout_sha256=digests["layoutSha256"],
+        circuit_sha256=digests["circuitSha256"],
+        presentation_sha256=digests["presentationSha256"],
+        profile_hashes=profile_hashes,
+        draw_parts=parts,
+        draw_wires=wires,
+        draw_flags=flags,
+        islands=islands,
+        draw_baseline=baseline,
+        draw_downgrades=_string_list(change, "downgrades"),
+        draw_notes=_string_list(change, "notes"),
+        baseline_findings=_string_list(change, "baselineFindings"),
+    )
+
+
+def _draw_profile_hashes(value: Any) -> list[tuple[str, str]]:
+    """The library geometry table: ``[symbolRef, geometryHash]`` pairs, sorted."""
+    if not isinstance(value, list) or not value:
+        raise ChangePlanError(
+            "change.profiles must list the library symbols this drawing needs as "
+            f"{{symbolRef, geometryHash}}, got {value!r}"
+        )
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise ChangePlanError(
+                f"change.profiles[{index}] must be an object, got {item!r}"
+            )
+        ref = str(item.get("symbolRef") or "").strip()
+        digest = item.get("geometryHash")
+        if not ref:
+            raise ChangePlanError(f"change.profiles[{index}].symbolRef is empty")
+        if ref in seen:
+            raise ChangePlanError(
+                f"change.profiles lists {ref!r} twice — one symbol has one geometry"
+            )
+        if not isinstance(digest, str) or not _SHA256_RE.match(digest):
+            raise ChangePlanError(
+                f"change.profiles[{index}].geometryHash must be 64 hex characters "
+                f"(the SymbolProfile's geometry hash), got {digest!r}"
+            )
+        seen.add(ref)
+        out.append((ref, digest))
+    return sorted(out)
+
+
+def _draw_parts_from(value: Any, profile_hashes: list[tuple[str, str]]) -> list[PlanDrawPart]:
+    if not isinstance(value, list) or not value:
+        raise ChangePlanError(
+            f"change.parts must list the parts this drawing places, got {value!r} — a "
+            "drawing with no parts is not a compilation of any circuit"
+        )
+    known = {ref: digest for ref, digest in profile_hashes}
+    out: list[PlanDrawPart] = []
+    designators: set[str] = set()
+    spec_ids: set[str] = set()
+    for index, item in enumerate(value):
+        spot = f"change.parts[{index}]"
+        if not isinstance(item, dict):
+            raise ChangePlanError(f"{spot} must be an object, got {item!r}")
+        spec_id = str(item.get("specId") or "").strip()
+        designator = str(item.get("designator") or "").strip()
+        if not spec_id:
+            raise ChangePlanError(
+                f"{spot}.specId is empty — the plan has to say which designed part "
+                "this is when the designator differs from the spec's own id"
+            )
+        if spec_id in spec_ids:
+            raise ChangePlanError(f"{spot}.specId is {spec_id!r}, already placed")
+        spec_ids.add(spec_id)
+        if not designator:
+            raise ChangePlanError(
+                f"{spot}.designator is empty — a compiled drawing allocates numbers "
+                "when it lands (053/036b), and the postconditions name them"
+            )
+        if designator in designators:
+            raise ChangePlanError(
+                f"{spot}.designator is {designator!r}, already used — two parts cannot "
+                "share a number, and one of them would silently not be placed"
+            )
+        designators.add(designator)
+        lcsc = str(item.get("lcsc") or "").strip()
+        if not lcsc:
+            raise ChangePlanError(
+                f"{spot}.lcsc is empty — a compiled drawing places library devices, and "
+                "`sch.place_component` needs the orderable number (029 §二.2; an "
+                "unverified part is never placed silently)"
+            )
+        value = str(item.get("value") or "").strip()
+        if not value:
+            raise ChangePlanError(
+                f"{spot}.value is empty — the value is what the read-back and the human "
+                "reviewing the plan compare"
+            )
+        ref = str(item.get("symbolRef") or "").strip()
+        if not ref:
+            raise ChangePlanError(f"{spot}.symbolRef is empty — which library symbol?")
+        if ref not in known:
+            raise ChangePlanError(
+                f"{spot}.symbolRef is {ref!r}, which change.profiles does not describe "
+                f"(it holds {', '.join(sorted(known))}) — a part drawn with a symbol the "
+                "plan has no geometry for cannot be checked after placement"
+            )
+        digest = item.get("symbolHash")
+        if not isinstance(digest, str) or not _SHA256_RE.match(digest):
+            raise ChangePlanError(
+                f"{spot}.symbolHash must be 64 hex characters (the SymbolProfile's "
+                f"geometry hash), got {digest!r}"
+            )
+        if digest != known[ref]:
+            raise ChangePlanError(
+                f"{spot}.symbolHash is {digest!r} but change.profiles says {ref!r} hashes "
+                f"to {known[ref]!r} — the same drawing cannot be built from two "
+                "geometries, and a part placed against the wrong one puts every pin "
+                "somewhere nobody checked"
+            )
+        point = _insert_independent_point([item.get("x"), item.get("y")])
+        if point is None:
+            raise ChangePlanError(
+                f"{spot}.x/.y must be the landing point in canvas units, got "
+                f"{item.get('x')!r} / {item.get('y')!r}"
+            )
+        rotation = _draw_rotation(item.get("rotation", 0), f"{spot}.rotation")
+        mirror = item.get("mirror", False)
+        if not isinstance(mirror, bool):
+            raise ChangePlanError(f"{spot}.mirror must be a boolean, got {mirror!r}")
+        pins = _draw_pins_from(item.get("pins"), spot)
+        out.append(PlanDrawPart(
+            spec_id=spec_id,
+            designator=designator,
+            prefix=str(item.get("prefix") or "").strip(),
+            lcsc=lcsc,
+            value=value,
+            footprint=str(item.get("footprint") or ""),
+            symbol_ref=ref,
+            symbol_hash=digest,
+            x=point[0],
+            y=point[1],
+            rotation=rotation,
+            mirror=mirror,
+            pins=pins,
+        ))
+    return out
+
+
+def _draw_pins_from(value: Any, spot: str) -> list[PlanDrawPin]:
+    """A part's expected pin geometry, as posed offsets from its origin."""
+    if value is None:
+        raise ChangePlanError(
+            f"{spot}.pins is missing — the placement read-back compares the editor's "
+            "pin coordinates against exactly these offsets, and a part with no expected "
+            "pins is a part whose landing cannot be verified (054 §一 protection 3)"
+        )
+    if not isinstance(value, list):
+        raise ChangePlanError(f"{spot}.pins must be a list, got {value!r}")
+    out: list[PlanDrawPin] = []
+    seen: set[str] = set()
+    for index, item in enumerate(value):
+        where = f"{spot}.pins[{index}]"
+        if not isinstance(item, dict):
+            raise ChangePlanError(f"{where} must be an object, got {item!r}")
+        number = str(item.get("number") or "").strip()
+        if not number:
+            raise ChangePlanError(f"{where}.number is empty")
+        if number in seen:
+            raise ChangePlanError(f"{where}.number is {number!r}, already listed")
+        seen.add(number)
+        dx = _draw_number(item.get("dx"), f"{where}.dx")
+        dy = _draw_number(item.get("dy"), f"{where}.dy")
+        out.append(PlanDrawPin(number=number, dx=dx, dy=dy))
+    return out
+
+
+def _draw_wires_from(value: Any, parts: list[PlanDrawPart]) -> list[PlanDrawWire]:
+    if not isinstance(value, list) or not value:
+        raise ChangePlanError(
+            f"change.wires must list the wiring this drawing needs, got {value!r} — 053's "
+            "compiler always produces wiring for a circuit whose obligations are wired"
+        )
+    out: list[PlanDrawWire] = []
+    pin_names = {
+        f"{part.spec_id}.{pin.number}" for part in parts for pin in part.pins
+    }
+    for index, item in enumerate(value):
+        spot = f"change.wires[{index}]"
+        if not isinstance(item, dict):
+            raise ChangePlanError(f"{spot} must be an object, got {item!r}")
+        net = str(item.get("net") or "").strip()
+        if not net:
+            raise ChangePlanError(f"{spot}.net is empty — an unnamed wire is not a net")
+        raw_points = item.get("points")
+        if not isinstance(raw_points, list) or len(raw_points) < 2:
+            raise ChangePlanError(
+                f"{spot}.points must be at least two [x, y] pairs, got {raw_points!r}"
+            )
+        points: list[tuple[float, float]] = []
+        for point_index, pair in enumerate(raw_points):
+            point = _insert_independent_point(pair)
+            if point is None:
+                raise ChangePlanError(
+                    f"{spot}.points[{point_index}] must be [x, y] in canvas units, got "
+                    f"{pair!r}"
+                )
+            points.append(point)
+        for point_index in range(1, len(points)):
+            if points[point_index] == points[point_index - 1]:
+                raise ChangePlanError(
+                    f"{spot}.points[{point_index}] repeats the previous point — a "
+                    "zero-length segment is not a wire"
+                )
+            if not _orthogonal(points[point_index - 1], points[point_index]):
+                raise ChangePlanError(
+                    f"{spot} runs diagonally from {points[point_index - 1]!r} to "
+                    f"{points[point_index]!r} — measured on 3.2.186, a diagonal "
+                    "`sch.place_wire` never returns (029-c), so a plan that asks for one "
+                    "is a plan that hangs"
+                )
+        from_pin = str(item.get("fromPin") or "").strip()
+        if from_pin and from_pin not in pin_names:
+            raise ChangePlanError(
+                f"{spot}.fromPin is {from_pin!r}, which is not a pin of this plan's "
+                f"parts ({', '.join(sorted(pin_names))}) — the read-back resolves that "
+                "end through the placed part, so it has to be one"
+            )
+        out.append(PlanDrawWire(
+            net=net, points=points, from_pin=from_pin,
+            purpose=str(item.get("purpose") or ""),
+        ))
+    return out
+
+
+def _draw_flags_from(value: Any, parts: list[PlanDrawPart]) -> list[PlanDrawFlag]:
+    out: list[PlanDrawFlag] = []
+    pin_names = {
+        f"{part.spec_id}.{pin.number}" for part in parts for pin in part.pins
+    }
+    if value is None:
+        return out
+    if not isinstance(value, list):
+        raise ChangePlanError(f"change.flags must be a list, got {value!r}")
+    for index, item in enumerate(value):
+        spot = f"change.flags[{index}]"
+        if not isinstance(item, dict):
+            raise ChangePlanError(f"{spot} must be an object, got {item!r}")
+        net = str(item.get("net") or "").strip()
+        kind = str(item.get("kind") or "").strip()
+        if not net:
+            raise ChangePlanError(f"{spot}.net is empty")
+        if kind not in DRAW_FLAG_KINDS:
+            raise ChangePlanError(
+                f"{spot}.kind is {kind!r}; this build places "
+                f"{', '.join(DRAW_FLAG_KINDS)} flags only (the connector's own "
+                "vocabulary for `sch.place_power`)"
+            )
+        if (kind == DRAW_FLAG_GROUND) != is_ground_net(net):
+            raise ChangePlanError(
+                f"{spot} places a {kind} flag on net {net!r} — a ground name takes a "
+                f"{DRAW_FLAG_GROUND} flag and a supply name takes a {DRAW_FLAG_POWER} "
+                "one (029-d measured that the flag's kind is what the editor's netlist "
+                "carries, so the wrong one would name the net wrongly on the board)"
+            )
+        point = _insert_independent_point([item.get("x"), item.get("y")])
+        if point is None:
+            raise ChangePlanError(
+                f"{spot}.x/.y must be the flag's own point in canvas units, got "
+                f"{item.get('x')!r} / {item.get('y')!r}"
+            )
+        on_pin = str(item.get("onPin") or "").strip()
+        if on_pin and on_pin not in pin_names:
+            raise ChangePlanError(
+                f"{spot}.onPin is {on_pin!r}, which is not a pin of this plan's parts"
+            )
+        out.append(PlanDrawFlag(
+            net=net,
+            kind=kind,
+            symbol_ref=str(item.get("symbolRef") or "").strip(),
+            symbol_hash=str(item.get("symbolHash") or ""),
+            x=point[0],
+            y=point[1],
+            rotation=_draw_rotation(item.get("rotation", 0), f"{spot}.rotation"),
+            on_pin=on_pin,
+        ))
+    return out
+
+
+def _draw_islands_from(value: Any, parts: list[PlanDrawPart]) -> list[PlanIsland]:
+    """The netlist expectation: for every placed pin, the pins it is one net with."""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ChangePlanError(f"change.islands must be a list, got {value!r}")
+    designators = {part.designator for part in parts}
+    out: list[PlanIsland] = []
+    for index, item in enumerate(value):
+        spot = f"change.islands[{index}]"
+        if not isinstance(item, dict):
+            raise ChangePlanError(f"{spot} must be an object, got {item!r}")
+        pin = str(item.get("pin") or "").strip()
+        if not _draw_pin_name(pin, designators):
+            raise ChangePlanError(
+                f"{spot}.pin is {pin!r}; an island names a pin of a part this plan "
+                f"places ({', '.join(sorted(designators))}) as <designator>.<pin>"
+            )
+        mates = item.get("mates")
+        if not isinstance(mates, list) or not mates or not all(
+            isinstance(mate, str) and mate.strip() for mate in mates
+        ):
+            raise ChangePlanError(
+                f"{spot}.mates must be a non-empty list of <designator>.<pin>, got "
+                f"{mates!r}"
+            )
+        out.append(PlanIsland(pin=pin, mates=[str(mate).strip() for mate in mates]))
+    return out
+
+
+def _draw_pin_name(name: str, designators: set[str]) -> bool:
+    """Is ``name`` a ``<designator>.<pin>`` of one of these parts?"""
+    designator, separator, pin = name.partition(".")
+    return bool(separator and pin) and designator in designators
+
+
+def _draw_baseline_from(value: Any) -> PlanDrawBaseline:
+    if value is None:
+        return PlanDrawBaseline()
+    if not isinstance(value, dict):
+        raise ChangePlanError(
+            f"change.baseline must be an object, got {type(value).__name__}"
+        )
+    digest = value.get("digest") or ""
+    if digest and (not isinstance(digest, str) or not _SHA256_RE.match(digest)):
+        raise ChangePlanError(
+            f"change.baseline.digest must be 64 hex characters, got {digest!r}"
+        )
+    components = value.get("components", [])
+    if not isinstance(components, list) or any(
+        not isinstance(item, str) for item in components
+    ):
+        raise ChangePlanError(
+            f"change.baseline.components must be a list of designators, got {components!r}"
+        )
+    wire_count = value.get("wireCount", 0)
+    netflag_count = value.get("netflagCount", 0)
+    for key, number in (("wireCount", wire_count), ("netflagCount", netflag_count)):
+        if isinstance(number, bool) or not isinstance(number, int) or number < 0:
+            raise ChangePlanError(
+                f"change.baseline.{key} must be a non-negative integer, got {number!r}"
+            )
+    findings_read = value.get("findingsRead", False)
+    if not isinstance(findings_read, bool):
+        raise ChangePlanError(
+            f"change.baseline.findingsRead must be a boolean, got {findings_read!r}"
+        )
+    return PlanDrawBaseline(
+        page_uuid=str(value.get("pageUuid") or "").strip(),
+        components=[str(item) for item in components],
+        wire_count=int(wire_count),
+        netflag_count=int(netflag_count),
+        digest=str(digest),
+        findings_read=findings_read,
+    )
+
+
+def _orthogonal(left: tuple[float, float], right: tuple[float, float]) -> bool:
+    return left[0] == right[0] or left[1] == right[1]
+
+
+def _draw_rotation(value: Any, where: str) -> float:
+    """One of the finite pose set, and it is a *pose* not a free angle (052 §6)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ChangePlanError(f"{where} must be a number in degrees, got {value!r}")
+    number = float(value)
+    if number not in POSE_ROTATIONS:
+        raise ChangePlanError(
+            f"{where} is {value!r}; expected one of "
+            f"{', '.join(str(item) for item in POSE_ROTATIONS)} degrees — the finite "
+            "legal pose set, and a pose outside it is one no SymbolProfile can allow"
+        )
+    return number
+
+
+def _draw_number(value: Any, where: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ChangePlanError(f"{where} must be a number, got {value!r}")
+    return float(value)
 
 
 def add_component_plan(

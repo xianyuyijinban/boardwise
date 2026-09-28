@@ -240,6 +240,55 @@ checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起
   （举证重试，写进报告——盲目重试仍禁）。注意：本机造不出"边界带 label"的现场
   （`place_netlabel` 不可用），该拒绝只有离线用例，别在真机上硬试。
 
+### 3.3 画法编译器落图（054：`draw compile` / `draw plan` / `draw apply`）
+
+053 阶段 B 的编译器离线算出**画法**（`LayoutPlan`：器件+姿态+折线+旗标+文字 bbox，
+`engines/drawcompiler.py`），054 把一张画法落进编辑器的一页。三条命令：
+
+```bash
+boardwise draw compile --circuit C.json --presentation P.json --profiles LIB.json \
+    --page-box 0,0,1170,825 --out outputs/054_x/previews      # 离线：ranked 表 + 四分类 + SVG
+boardwise draw plan    --circuit … --presentation … --profiles … --page-box … \
+    --page <uuid> --project test --lcsc R1=C25744 --out plan.json   # 一候选 → ChangePlan
+boardwise draw apply   plan.json --project test \
+    --circuit … --presentation … --profiles … --layout <cand1.layout.json> \
+    --render render.png --json apply.json                     # 真机：守卫 → 落图 → 回读 → 保存 → 出图
+```
+
+**落图前必须先有"实测符号库"**（本批最关键的一条工序，C1/C2 都是这么过的）：
+编辑器**不提供**库符号几何的读接口（`lib.symbol.get` 明说 no geometry），所以
+`--profiles` 的那份库要**先在真机上量**——在临时页上放一颗真器件（`sch.place_component
+--params '{"lcsc":"C25744","x":400,"y":300}'`），读 `sch.component_pins`（引脚偏移 + PinLength）
+和 `sch.geometry --params '{"bboxIds":[<id>]}'`（实测外框 = body），删掉这颗探针件，
+再把量到的数字写成 `SymbolProfile`（`source` 里写清量法与出处）。
+实测：C25744（0402 10k）引脚 ±20、body ±10.5×±4.5；C1525（0402 100n）引脚 ±20、body ±10.5×±8.5。
+拿**竖排 ±50** 这类没量过的 profile 去落图，引脚回读必然点名不符（C6 现场）。
+
+**apply 的执行序**（`_draw_apply_flow`）：① 页（`--page` 或 `--new-page`；plan 未绑页又没给页 → exit 5）
+→ ② 守卫（双 spec 摘要 + 布局摘要 + 库几何表 + 页身份；**显式** `--expect-census` 也在这关）
+→ ③ 探针（plan 自己的 postconditions，双证齐全 = `already_applied` exit 0 零写入）
+→ ④ 页既不是 plan 成品也不是 plan 基线 → `canvas_changed` exit 4 零写入
+→ ⑤ 位号池（页面 ∪ 工程导出）→ ⑥ 放件 → ⑦ **引脚回读**（容差半格；不符**在拉线前**停住 exit 3）
+→ ⑧ 走线（`net` 承载网名）→ ⑨ 旗标（`place_power`）→ ⑩ 双证回读（活网表按**本 plan 自己的引脚**判分区；
+页面外同名同网只报 `sharedWithOutsidePins`）→ ⑪ 范围（无删除 → 导出新鲜）+ findings 只减不增
+→ ⑫ 保存（`saved_unverified`，要 `saved_verified` 得走 `boardwise persistence` 的关闭重开）
+→ ⑬ `export.render` 出图（`already_applied` 也出图：图是证据不是写）。
+
+退出码：**0** 落图并被双证确认（或 already_applied 零写入）/ **2** 承诺的效果不在（写被拒、
+保存被拒、range/旗标数不对、findings 增长）/ **3** 页状态不可陈述或回读不符（超时、拔 daemon、
+引脚回读不符、postconditions 不满足——**在拉线前**停）/ **4** 守卫拒绝（摘要 stale、库几何变了、
+页不是 plan 的、画布被动过、位号被占、半成品件在页上）/ **5** plan 或输入不可用。
+
+幂等与 stale：`draw apply` 同 plan 再跑 → `already_applied` 零写入（C4）；手工动过画布再跑 →
+exit 4 零写入（C5）；库几何不符 → exit 4 零写入（C6，写前那条腿用 `--profiles` 的库文档，
+编辑器侧那条腿只能靠放完后的引脚回读，所以它是 exit 3 且件已放）。
+
+**LDO（C3）现场有两条真机事实，照坑 33/34 走**：真机 AMS1117 符号的 VIN/VOUT/GND 全在**同一侧**
+（外加一颗重复 VOUT），`ldo` 文法的默认"in 左 out 右"**无合法姿态**——要么按坑 33 用
+`sidePreferences`（这是一个**说明**"下面那条输出支路"，不是"输出在下方"），要么换一颗符号；
+另有坑 34：本仓库 facts 要求 AMS1117 输出 ≥22µF，而 053 场景是 100n，于是 `decap-required-caps`
+会涨 finding、`draw apply` 按 036 规矩**拒绝保存**（图落好了、没落盘）。
+
 ## 4. 真机纪律（写操作前逐条对，命中即停）
 
 **R1 身份判定**：动手前，`doc.list` 报的焦点工程名与任务书**逐字一致**，且页特征
@@ -342,6 +391,12 @@ checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起
 | 26 | **037 两条宿主习性（真机实证）**：① 宿主移动器件**不拖线**——`sch.modify_primitive` 把器件移走，线的上报端点留在原地（连接实际断开）⇒ 移动块必须删线 + 正交重画；② 宿主上报一条线是**点集不是路径**——`[445,320, 445,310, 655,320, 445,320]` 的相邻对里有从没画过的对角线 ⇒ 照抄点集"平移重画"会画出对角线挂死宿主（029-c 的课），按"相邻线段"判 T 会误报（5 单位外的脚落进幻影对角线容差，单器件移动曾被整片误拒）⇒ 附着/通脚判据只能说「**脚在不在上报点集里**」，漏判由网表恒等兜底（exit 2 按脚点名）。附带：`modify_primitive` 间歇抛宿主 `TypeError: Cannot destructure property 'cmdKey'…`（**改动前**抛，器件没动）⇒ 报错先回读位姿，证明没落地才许一次**举证重试**并写进报告 | 移动类流程一律 delete + `wire_route` 正交重画；T/附着判定禁用线段几何，用点集成员判定。出处 `outputs/037_probe.txt`、`outputs/037_live.txt`、`tasks/037-move-block.md` |
 | 27 | **主机 ERC 没有逐项条目**（039 真机 probe 实证）：`sch.drc_check` 答复只有按 kind 合计（`counts/byType/total`），显式 verbose（`strict=true, includeVerboseError=true`）也只给合计、`raw=null`；42 个 action 的目录里**没有任何**能枚举 ERC 条目的动作。PCB DRC 相反——叶子带 `ruleName/explanation/obj1/obj2`，但引用是 netlist 级对象不是位号，归模块只能靠叶子的 `net` | ERC 警告分诊只摆**计数 + kind**、标 `host-wide`、文本空缺写 `textUnavailable`——不许把合计伪造成页内/逐条归属；逐条文本只能人去编辑器底部面板看。出处 `outputs/039c_erc_probe.txt` |
 | 28 | **增量保存拆散 ATTR 邻接**（042 真机实证）：宿主增量保存把 COMPONENT 记录按 firstTicket 插回文档中段、新 ATTR 追加到文档尾（`parentId` 指回组件记录 id），且位移 ATTR 块会紧跟**另一颗**器件的块——按"ATTR 紧邻组件"归属不仅丢件，还会把邻居**改名**（ROBOT 49 丢 5 颗含全板电源、C11 被串名成 R14）。epro2 是 zip，**直接 grep 压缩包等于什么都没查** | 解析一律按 `parentId` 双程挂载（042 起 `_split_page` 如此）；ParseStats 看 `attrs_attached_by_parent_id` / `instances_without_designator`；查 epro2 内容先 unzip。出处 `tasks/042-parser-attr-parentid.md`、`outputs/042_evidence.txt` |
+| 29 | **镜像与旋转的复合顺序是"先转后镜像"**（054 真机实测，八组采样）：CI 一处校准：`sch.place_component` 的 `(rotation, mirror)` 组合在画布上的效果是 `mirror_x ∘ CW(R)`——**镜子在旋转之后**、绕画布竖轴翻；而 `core.geometry.transform_point` 是**镜像再旋转**。两者在 0/180 一致、在 **90/270 不一致**：镜像姿态要**原角**交给 API，不取负（`mirror=False` 才取负）。错法后果 = 两脚对调（C1 首跑就被引脚回读抓住：`R1.1 reads back at (85, 710) but the plan expects (85, 750)`）。附带：`_editor_rotation` 的取负**只对 mirror=False 成立**，`draw.py` 的 006 回放把 mirror 与取负一起传（同款潜在偏差，未验，见遗留） | 落图/回放一律走 `engines/draw.py::_editor_pose(rotation, mirror)`，别自己拼角度；`engines/draw.py::_editor_rotation(rotation)` 仅在 mirror=False 时可用。出处 `outputs/054_c1/08_mirror_probe.json`、`tasks/054-draw-stage-c-editor.md` |
+| 30 | **编辑器网表是工程级，不是页级**（054 C7 实测）：同名网跨页合并——第二页落了同名 `VIN` 的模块后，本页网表答 `R4.1 is on net 'VIN' with ['R1.1', 'R4.1']`，而 `R1.1` 在**另一页**。按"岛屿成员完全相等"判会拒掉一张完全按 plan 连好的图，且会拒掉**每一个**与先前模块同名的后续模块 | 判据收窄为：**plan 自己的引脚集合内**分区必须精确（模块内部短路/漏连仍然 exit 3），集合外的同网公司只作**证据**报告（`verification.sharedWithOutsidePins`）。跨页同名要不要合并是命名决策（052 labelPolicy，C2+）。出处 `outputs/054_c7/apply_C7_stdout.txt`、`outputs/054_c2/apply_report.json` |
+| 31 | **`export.render` 的 `format` 词表是 `png|svg|pdf`**（054 首跑实测）：给 `image/png` 回 `[BAD_REQUEST] export.render needs params.format in png \| svg \| pdf`——图没出，但落图已经保存（那次 C1 的报告如实写了"没有图"） | 出图一律 `{"format":"png","scope":"page","pageUuid":<页>}`；报告里 `render.ok=False` 时按"缺证据"处理，别当成落图失败。出处 `outputs/054_c1/apply_report.json` |
+| 32 | **相接的线会被宿主合并成一个 primitive、结点在点表里重复**（054 复核 035 的坑 24②）：054 画的分压抽头两条线（横支 + 竖干）落成一条 primitive，点表 `[(115,690),(85,690),(85,710),(85,690),(85,670),(85,690)]`——计划 4 条线上报 3 条 | 画布腿只判「计划里每条线的**两个端点**在不在该网的点集里 + 该网总长不短」，**不要**按 primitive 计数或按相邻对判几何（035 的附着判据同源）。出处 `outputs/054_c1/14_final_page_state.json`、`outputs/054_c1/apply_report.json` |
+| 33 | **真机 AMS1117 符号是"单侧出脚"**（054 C3 实测三颗：C6186 / C351785 / C5205141 同一族）：引脚 1 GND、2 VOUT、3 VIN 全在**左侧**（y 各差 10），另有一颗**重复 VOUT**（4 号）在右侧；于是 `ldo` 文法默认的"in 左 core 中 out 右"**没有任何合法姿态**（`draw compile` 给 0 候选、`[presentation-poor]`，编译器自己的措辞是"right-of(C2,U1) is not honoured by this plan's own placement (a compiler bug — report it)"）。另：`role_pins` 按 id 排序取**第一个** VOUT（=左下的 2 号），而 `ldo._core_of` 用 `profile_pin_for` 只认**net 成员**——把 2 号写进 `nc[]`、只连 4 号，文法仍报"VOUT pin (number='2') … neither a net member nor an explicit nc" | 两条出路，都在**输入**侧改：① `sidePreferences` 把 output 换成与符号几何相合的一侧（实测 `{"input":"left","output":"bottom"}` → 3 候选、evidence pass；文法本来就"跟着 sidePreferences 走"，053 sec.3 原文）——注意它是**说明哪一侧放输出支路**，不是"输出在下方"；② 换一颗 VIN/VOUT 反向的 LDO 符号。**不要**改编译器去迁就符号（053 sec.2 红线：不许为凑版式改脚号）。出处 `outputs/054_c3/{02_measured_parts.json,04_candidate_symbols.txt,05_side_default.txt,plan_C3b.json}` |
+| 34 | **落图后的导出 `value` 字段是空的**（054 C3 实测）：`draw apply` 只写位号/坐标/镜像/旋转/LCSC，导出里 `value=''` 而 `mpn` 是库器件名（`CL05B104KO5NNNC`）——`decap-required-caps` 靠 MPN 的 EIA 码读值（104→100nF、226→22µF），所以**换成 MPN 解不出容值的料号，这条规则会判 unknown**。连带两条：① 本仓库 facts 要求 **AMS1117 输出 ≥22µF**，053 场景的 100n 输出电容 → 规则报 `decap-required-caps|WARN|U1\|2\|3V3`，`draw apply` 按 036 规矩（finding 只减不增）**拒绝保存**——图在页面上、两腿双证都过、就是没落盘（C3a 现场）；② findings 是**工程级**的，所以后续模块的 22µF 挂在同名 3V3 上会把这颗 U1 的 finding **消掉**（C3b 报告 `resolved: 1, new: 0`） | 需要"值"的规则要么某处写 Value（本批不写，`sch.set_component_attribute` 是既有通道），要么保证 MPN 可解；LDO 输出电容按 facts 用 ≥22µF（C45783 = 22µF 0805 实测可解），别照抄 053 场景的 100n 去落图，否则每次都会被自己的规则挡在保存前。出处 `outputs/054_c3/{apply_report.json,apply_report_C3b.json,09_measured_22u.txt}` |
 宿主版本：**3.2.149 是实测下限**（2026-09-23 在 3.2.149.88089769 上实测：打标/缩放等 8 个关键成员
 typeof 全在位、activate 冷启动正常派发、render 实跑 308KB PNG——旧立论"3.2.183 以下这些接口不存在"
 已被证伪，见 `tasks/027-editor-api-floor.md`）；**3.2.186 是唯一校准对象**。低于 149 没有证据，doctor 照卡。

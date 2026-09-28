@@ -89,6 +89,44 @@ adds is a *source* of geometry (a block library) and a *composition rule*
 (translate the block, name the nets); the plan-building path is untouched.
 `docs/blocks.md` is the format and pipeline reference.
 
+### Where a drawn layout comes from (053), and how it lands (054)
+
+Two batches added the drawing compiler and the landing step; they are separate
+on purpose, because the compiler is the part that must work with no editor:
+
+* **the compiler** (`engines/drawcompiler.py`, 053 stage B) turns a
+  `CircuitSpec` + a `PresentationSpec` + a **symbol library** into 3-8 legal
+  `LayoutPlan`s (`core/layoutplan.py`), best first, with an independent
+  readability gate (`engines/readability.py`) and a grammar checker
+  (`check_grammar`) as the acceptance. It emits **no coordinates from a
+  reference drawing**: the geometry is computed from pin axes, the lattice and
+  the stated page. Its four refusal categories (`facts-missing`,
+  `circuit-invalid`, `layout-unsat`, `presentation-poor`) are the vocabulary
+  every caller reports in.
+* **the landing step** (`engines/drawapply.py`, 054) turns one candidate into a
+  `ChangePlan` of kind `draw-module` (`core/changeplan.py`, the fifth kind, and
+  the only one whose payload is "what the page should become" rather than "one
+  edit to what is there"). It supplies the three things a layout cannot know —
+  the recipe (LCSC + value), the designators (page ∪ project pool, 036b) and the
+  rail flags (`sch.place_power`'s vocabulary, with the label downgrade declared,
+  because `sch.place_netlabel` is unusable on this host) — and it owns the guards
+  a drawing needs: both spec digests, the layout's geometry digest, the library
+  geometry table, the page's identity and the page's primitive census.
+* **`draw apply`** (`cli.py`) executes that plan on the live editor: guards →
+  the plan's own postconditions read on the page (`already_applied` writes
+  nothing) → the parts → a **pin read-back against the plan's expected offsets
+  before any wire** → the wires and flags → both verification legs (the editor's
+  own netlist *within the plan's own pins*, and the canvas) → the range, the
+  findings' one-way rule, the save and the render.
+
+The three rules the pair leans on: an offline plan is never landed without a page
+it was built against (`--page`, or a page `--new-page` creates and reads back); a
+pose is handed to the editor through `engines/draw.py::_editor_pose` (the mirror
+and rotation conventions are *not* the same as `core.geometry.transform_point`'s
+— 054 measured both); and a library profile must be **measured** on the machine it
+is landed on (`lib.symbol.get` carries no geometry), which is the workflow
+`SKILL.md` §3.3 spells out.
+
 ## Three coordinate spaces (v0.3, 2026-09-16; corrected 2026-09-18)
 
 Three spaces coexist and only two of them are ours to convert between. Getting

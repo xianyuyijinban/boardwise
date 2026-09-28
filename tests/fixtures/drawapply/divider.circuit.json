@@ -1,0 +1,11 @@
+{
+  "parts": [
+    {"id": "R1", "symbolRef": "R0402", "value": "10k", "lcsc": "C25744", "provenance": "verified_recipe"},
+    {"id": "R2", "symbolRef": "R0402", "value": "10k", "lcsc": "C25744", "provenance": "verified_recipe"}
+  ],
+  "nets": [
+    {"id": "VIN", "class": "power", "members": ["R1.1"], "provenance": "verified_recipe"},
+    {"id": "TAP", "class": "signal", "members": ["R1.2", "R2.1"], "provenance": "verified_recipe"},
+    {"id": "GND", "class": "gnd", "members": ["R2.2"], "provenance": "verified_recipe"}
+  ]
+}

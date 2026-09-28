@@ -562,14 +562,24 @@ def _fmt_ratio(numerator: int, denominator: int, ratio: float | None) -> str:
 # its wording fix); they are named in the per-kind comments and deliberately not
 # counted, because the register's job is to be reproducible from the task books
 # alone.
+#
+# 054's drawing stage (C1) added a sixth kind to ``changeplan`` — ``draw-module``,
+# a whole compiled drawing landing on a page — and it is registered here on the
+# same terms, one row per live execution with its source. That task book has no
+# §交卷记录 yet, so its cases cite the section that states the case (§五) *and*
+# the run directory that holds the report (``outputs/054_c*/apply_report*.json``);
+# the counts are read off those reports.
 
-#: The five M3 change kinds, in the order the slices were cut (016 → 037).
+#: Every kind ``changeplan`` can execute, in the order the slices were cut: the
+#: five M3 change kinds (016 → 037), then the drawing stage's kind (054). One
+#: register, one accounting — the guard in test_017 keeps both ends honest.
 FIX_SUCCESS_KINDS = (
     "component-value",
     "add-component",
     "patch-pin",
     "insert-subcircuit",
     "move-block",
+    "draw-module",
 )
 
 #: One outcome vocabulary for the register, so a case cannot be quietly
@@ -619,6 +629,7 @@ FIX_SUCCESS_SOURCES = {
     "patch-pin": "tasks/035-patch-pin.md §交卷记录",
     "insert-subcircuit": "tasks/036-insert-subcircuit.md §交卷记录",
     "move-block": "tasks/037-move-block.md §交卷记录",
+    "draw-module": "tasks/054-draw-stage-c-editor.md §五 + outputs/054_c*/apply_report*.json",
 }
 
 #: The register itself.
@@ -828,11 +839,88 @@ FIX_CASES: tuple[FixCase, ...] = (
         FIX_OUTCOME_NOT_SIMULABLE,
         "tasks/037-move-block.md §交卷记录",
     ),
+    # draw-module (054 C1): a whole compiled drawing lands on a page — every part
+    # with its pose and symbol, every wire, every rail flag — and, like 036/037,
+    # there is no driving rule, so "resolved" is the 036 sec.3 gate read for this
+    # kind: **the plan's own postconditions read back live** (the netlist islands
+    # pin by pin, the wire endpoints, the pin positions within half a grid, the
+    # range guard) **and the finding set not growing**, then the drawing saved.
+    # Saved is at the level this bridge reaches — ``saved_unverified``; 009d
+    # leaves no close/reopen to promote it (the 016 row above is the same level).
+    # The rails are registered, never counted: C3a is the *project's own* decap
+    # rule refusing the drawing as specified (exit 2, nothing saved; the run's
+    # own field calls it ``failed``), C5 is a part moved by hand, C6 is a library
+    # whose geometry is not the one the plan was laid out with (its second leg
+    # says ``unknown``/exit 3 after placing two parts and stopping before the
+    # wires), C4 and C7's post-restart rerun are replays, and C7 is the
+    # interruption — the run ended ``unknown`` and was not retried blind, and the
+    # daemon's death (a restart the connector answers at 00:54:34,
+    # ``outputs/054_c7/03_bridge_start.log``) is what the rerun had to survive.
+    FixCase(
+        "draw-module",
+        "C1 分压模块落新页（R1/R3 10k + VIN/GND 旗 + TAP）：applied + saved + 双证回读零差异",
+        FIX_OUTCOME_APPLIED,
+        "tasks/054-draw-stage-c-editor.md §五 C1 + outputs/054_c1/apply_report.json",
+    ),
+    FixCase(
+        "draw-module",
+        "C2 RC 低通模块落新页（R4 10k / C1 100n）：applied + saved + 电容归 OUT 侧回读通过",
+        FIX_OUTCOME_APPLIED,
+        "tasks/054-draw-stage-c-editor.md §五 C2 + outputs/054_c2/apply_report.json",
+    ),
+    FixCase(
+        "draw-module",
+        "C3a LDO（10u/100n）：工程自身 decap-required-caps 规则拦下 → exit 2、未保存（设计内拒绝）",
+        FIX_OUTCOME_REFUSED,
+        "tasks/054-draw-stage-c-editor.md §五 C3 + outputs/054_c3/apply_report.json",
+    ),
+    FixCase(
+        "draw-module",
+        "C3b LDO 改配方（输出电容 100n → 22u，C4/C5/U2）：applied + saved + 新增 0、旧 finding 1 条消除",
+        FIX_OUTCOME_APPLIED,
+        "tasks/054-draw-stage-c-editor.md §五 C3 + outputs/054_c3/apply_report_C3b.json",
+    ),
+    FixCase(
+        "draw-module",
+        "C4 C1 同 plan 复跑 → already_applied、write.calls=0、无重复器件",
+        FIX_OUTCOME_IDEMPOTENT,
+        "tasks/054-draw-stage-c-editor.md §五 C4 + outputs/054_c1/apply_report_C4.json",
+    ),
+    FixCase(
+        "draw-module",
+        "C5 手工挪 R1 后同 plan → part_present_unfinished exit 4 零写入（还原位姿后复跑 already_applied）",
+        FIX_OUTCOME_REFUSED,
+        "tasks/054-draw-stage-c-editor.md §五 C5 + outputs/054_c1/apply_report_C5.json",
+    ),
+    FixCase(
+        "draw-module",
+        "C6a 改 profiles 文档（库几何指纹变）→ guard_refused exit 4 零写入",
+        FIX_OUTCOME_REFUSED,
+        "tasks/054-draw-stage-c-editor.md §五 C6 + outputs/054_c6/apply_report_C6a.json",
+    ),
+    FixCase(
+        "draw-module",
+        "C6b 库里实测几何 ≠ plan：引脚回读不符，在拉线前停下（放下 2 件 0 线、未保存、exit 3）",
+        FIX_OUTCOME_REFUSED,
+        "tasks/054-draw-stage-c-editor.md §五 C6 + outputs/054_c6/apply_report_C6b.json",
+    ),
+    FixCase(
+        "draw-module",
+        "C7 中途拔 daemon → unknown exit 3、未保存、不重试（重启后先回读）",
+        FIX_OUTCOME_INTERRUPTED,
+        "tasks/054-draw-stage-c-editor.md §五 C7 + outputs/054_c7/apply_report_C7.json",
+    ),
+    FixCase(
+        "draw-module",
+        "C7 daemon 重启后复跑 → already_applied 零写入、无重复器件",
+        FIX_OUTCOME_IDEMPOTENT,
+        "tasks/054-draw-stage-c-editor.md §五 C7 + outputs/054_c7/apply_report_C7_rerun.json",
+    ),
 )
 
 
 def fix_success_rows(cases: tuple[FixCase, ...] = FIX_CASES) -> list[FixSuccess]:
-    """The register, grouped into one row per kind (always all five, in order)."""
+    """One row per kind ``changeplan`` can execute, in that order."""
     rows: list[FixSuccess] = []
     for kind in FIX_SUCCESS_KINDS:
         mine = [case for case in cases if case.kind == kind]
