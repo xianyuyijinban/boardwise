@@ -1391,7 +1391,8 @@ def build_parser() -> argparse.ArgumentParser:
         "persistence",
         help=(
             "Snapshot the live page and compare it across a real close-and-reopen "
-            "(read-only). Exit 0 identical / 1 different / 2 bad input / 3 undecidable."
+            "(read-only). Exit 0 the snapshot's content survived / 1 it is missing "
+            "or changed / 2 bad input / 3 undecidable."
         ),
         description=(
             "The third persistence state — saved_verified — is the only one that "
@@ -1401,7 +1402,9 @@ def build_parser() -> argparse.ArgumentParser:
             "human act, and this command turns its result into a verdict. Snapshot "
             "while the page is as drawn, close and reopen the project, then compare "
             "against the snapshot. Read-only on both legs, so it cannot change what "
-            "it measures. See docs/persistence-baseline.md."
+            "it measures. The comparison asks whether the snapshot's content is "
+            "still there — content added after the snapshot is listed as extras and "
+            "does not fail it. See docs/persistence-baseline.md."
         ),
     )
     persist.add_argument(
@@ -1410,7 +1413,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     persist.add_argument(
         "--baseline", default=None,
-        help="A snapshot to compare the live page against; equal means saved_verified.",
+        help=(
+            "A snapshot to compare the live page against; all of its content still "
+            "present means saved_verified (extras are reported, not failed)."
+        ),
     )
 
     lint = sub.add_parser(
@@ -7956,8 +7962,9 @@ def _cmd_persistence(args: argparse.Namespace) -> int:
     """Snapshot the live page, and compare it across a real close-and-reopen.
 
     Read-only on both legs (``sch.netlist`` + ``sch.geometry``), so measuring
-    is not also changing. Exit 0 identical / 1 different / 2 bad input or an
-    unreachable editor / 3 could not decide.
+    is not also changing. Exit 0 the snapshot's content is all there / 1 it is
+    missing or changed / 2 bad input or an unreachable editor / 3 could not
+    decide.
 
     Why this exists at all: `saved_verified` is the only persistence state that
     means the bytes reached the file, and **no bridge action can establish it**
@@ -8022,7 +8029,7 @@ def _cmd_persistence(args: argparse.Namespace) -> int:
 
 
 def _compare_persistence(baseline: dict, current: dict) -> int:
-    """0 identical / 1 different / 3 could not decide.
+    """0 the snapshot's content survived / 1 it did not / 3 could not decide.
 
     Two independent halves, because they fail independently: the **netlist**
     (connectivity, parsed by the same reader the diff uses) and a **primitive
@@ -8030,6 +8037,17 @@ def _compare_persistence(baseline: dict, current: dict) -> int:
     pass — "we could not look" and "it is identical" are the two answers this
     must never blur, which is also the reason the census is compared rather
     than the raw dumps: the dumps carry generated ids that change every render.
+
+    The comparison is a **subset** one, because that is the question a reopen
+    answers: *is what the snapshot held still there?* Both halves split their
+    differences by direction — **missing or changed** (the snapshot's own
+    content gone, or come back different) is a failed save and exits 1;
+    **extra in the reopened page** is reported and counted, and does **not**
+    fail the run, because a project that grew after the snapshot (another page
+    drawn, a part added by hand) says nothing about whether this content
+    persisted. Measured 2026-09-28: a snapshot with zero losses still judged
+    NOT saved_verified because 20 components and 40 net members had been added
+    after it.
     """
     from boardwise.core.candidate import NetlistFormatError, candidate_from_netlist
     from boardwise.core.compare import compare_models
@@ -8054,9 +8072,14 @@ def _compare_persistence(baseline: dict, current: dict) -> int:
             return 3
 
     report = compare_models(models["baseline"], models["reopened"])
-    if not report.is_empty:
+    failing = [d for d in report.differences if not d.is_extra]
+    extras = [d for d in report.differences if d.is_extra]
+    if failing:
         print("boardwise persistence: the reopened page is NOT what was drawn:")
-        print(report.render())
+        for difference in failing:
+            print(f"  {difference.render()}")
+        print(f"  {len(failing)} snapshot item(s) missing or changed")
+        _print_persistence_extras(extras)
         print("persistence: NOT saved_verified — the reopened content differs")
         return 1
 
@@ -8071,25 +8094,60 @@ def _compare_persistence(baseline: dict, current: dict) -> int:
             file=sys.stderr,
         )
         return 3
-    if census["baseline"] != census["reopened"]:
-        print("boardwise persistence: the reopened page's primitives differ:")
-        for name in sorted(set(census["baseline"]) | set(census["reopened"])):
-            before = census["baseline"].get(name, 0)
-            after = census["reopened"].get(name, 0)
-            if before != after:
-                print(f"  {name}: {before} -> {after}")
+    lost: list[str] = []
+    gained: list[str] = []
+    for name in sorted(set(census["baseline"]) | set(census["reopened"])):
+        before = census["baseline"].get(name, 0)
+        after = census["reopened"].get(name, 0)
+        if after < before:
+            lost.append(f"  {name}: {before} -> {after}")
+        elif after > before:
+            gained.append(f"  {name}: {before} -> {after}")
+    if lost:
+        print("boardwise persistence: the reopened page's primitives differ — "
+              "primitives the snapshot had are gone:")
+        print("\n".join(lost))
+        if gained:
+            print("  and gained (not a failure):")
+            print("\n".join(f"  {line}" for line in gained))
         print("persistence: NOT saved_verified")
         return 1
 
     reopened = models["reopened"]
-    print(
-        "boardwise persistence: the reopened page matches the snapshot "
+    counts = (
         f"({len(reopened.components)} components, {len(reopened.nets)} nets, "
         f"{fingerprint_total(census['reopened'])} primitives)"
     )
+    if gained or extras:
+        print(
+            "boardwise persistence: the snapshot's content is all still there "
+            f"{counts} — the page has since grown"
+        )
+    else:
+        print(f"boardwise persistence: the reopened page matches the snapshot {counts}")
+    if gained:
+        print("  primitives gained since the snapshot (not a failure):")
+        print("\n".join(f"  {line}" for line in gained))
+    _print_persistence_extras(extras)
     print("persistence: saved_verified — the content survived a close-and-reopen")
     _audit_persistence_verified(reopened, census["reopened"])
     return 0
+
+
+def _print_persistence_extras(extras: list) -> None:
+    """List what the reopened page holds that the snapshot did not — a note.
+
+    Its own function so the two verdicts print it the same way: extras are
+    information either way, never part of the failure count. An empty list
+    prints nothing, so the pass case with an unchanged project reads exactly as
+    it did before this rule existed.
+    """
+    if not extras:
+        return
+    print(f"  extras: {len(extras)} item(s) in the reopened page, absent from the snapshot"
+          " (not a failure):")
+    for difference in extras:
+        print(f"    {difference.render()}")
 
 
 def _audit_persistence_verified(model: object, census: dict) -> None:

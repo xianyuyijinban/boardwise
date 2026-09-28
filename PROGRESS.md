@@ -4,6 +4,20 @@ Living index. Details live in `tasks/*.md` (one book per task) and
 `docs/implementation-log.md` (the connector debugging arc). This file only
 collects the current truth and the pointers.
 
+## [2026-09-28] 059 真机验收收口：E1–E7 全过 + 坑 36 归因=宿主 + persistence 子集判据（connector/daemon 零改动仍 **0.4.25**）
+
+### 真机验收（057 的 E1–E7，test 工程，全过）
+E1 原配方 exit 2（坑 40：INFO 级 `param-rc-cutoff` 也挡保存）→ runbook 配方 VIN→5V0 后全链 exit 0（`verification.nets` 5V0/GND oneNet✔ crossModule✔）；E2 census→keepout（含罩满 exit 5）；E3 页锁 (800,500) 精确回读 + 四类冲突 exit 5 点名；E4 三跑（工程级覆盖不报 / 新轨 3V3B 报出 / 补容 resolved）；E5 discard 幂等/整批拒删/复原后删成；E6 CH340G 编译即拒（如实：无文法 + RT9013 同侧脚 48 姿态无解）；E7 过期守卫 exit 4 零写入。渲染岳亲看揪出三缺口 → `tasks/060-draw-layout-quality.md`（①电容按归属脚分侧；②重复脚视觉义务——VOUT 散热脚空悬，**待岳裁 a/b/c**；③GND 旗标整体反 180°——岳已裁全翻 180°，根因 `drawcompiler.py:2502 _flag_rotation` 罗盘映射与立创库电源符号自然姿态整体反 180°，svgpreview 同约定须同步修，053B/056/057 场景哈希申报制）。
+
+### 坑 36 归因定案（`outputs/059_attr/VERDICT.md`）
+`sch.modify_primitive` 清空 `otherProperty` = **宿主行为**（3.2.186 `sch_PrimitiveComponent.modify`）：connector 白名单只发 `{x,y}`（decoy 十项哨兵零落地），清空后键集逐键等于调用前键集（含任何库器件都不声明的探针键 `ZZZ-CUSTOM`）⇒ 空表出自宿主自己的器件视图。路径②（裸宿主最小实参）当前不可构造（`sys.probe` 白名单只读、bridge 无 eval；拒用 `sys.self_update` 热更——破坏性），缺口已申报待裁。
+
+### persistence `--baseline` 子集判据
+`compare.py` 新增 `Difference.is_extra` / `EXTRA_DETAILS`，`_compare_persistence` 按方向两态：缺失/不符 → exit 1；多出 → 逐条列 note 不失败（E1 实测 60 条全是 extra——快照零缺失曾被等值判据误报 NOT saved_verified）。census 半边同规则。变异 2 组 CAUGHT。
+
+### 测试与现场
+全量 **2352 passed**（主代理亲跑 173.73s；2282 基线 +70）；connector 419、dsh 48+1、tsc 干净（零改动）。SKILL 坑表补 36–42（36 含归因定案）；runbook E1 配方修正 VIN→5V0。test 工程图页 19→11（删 P3–P7/P9/P13/P14，`sch.doc.save` 已固化；R11 残留空键随 P13 一并清掉）。061 任务书落盘（issue #11：install-skill 认 harness + doctor skill 检查）。
+
 ## [2026-09-28] 057 离线半合并（PR #10，wushi2333 执行/Opus，主代理验收；connector/daemon 零改动仍 **0.4.25**）
 
 ### 范围

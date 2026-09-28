@@ -18,6 +18,12 @@ Normalisation rules are fixed here on purpose (they are the contract):
 - **designator / net name / pin number**: exact strings, case-sensitive
   (``1`` and ``01`` are different pins).
 - **footprint / lcsc**: exact strings after trimming.
+
+The report is **strict**: every difference, in either direction, is a difference.
+A *subset* reading ("the candidate must still contain the golden") is not a
+property of this module — it belongs to the caller that needs it
+(``boardwise persistence --baseline``), which splits the two directions with
+:attr:`Difference.is_extra` rather than matching the detail prose itself.
 """
 
 from __future__ import annotations
@@ -55,6 +61,33 @@ class Difference:
             f"golden={self.golden!r} candidate={self.candidate!r}"
         )
 
+    @property
+    def is_extra(self) -> bool:
+        """The candidate holds this and the golden does not — additive content.
+
+        A **subset** comparison (``boardwise persistence --baseline``: "is what I
+        snapshotted still there?") tolerates exactly this direction, because a
+        project that grew after the snapshot is not a failed save. Every other
+        detail — a component/net/pin/member missing on the candidate side, or a
+        field that came back different — is a loss or a change, and no subset
+        reading makes it a pass. Kept next to the details themselves so the
+        direction is classified where the strings are written, never by a caller
+        matching prose of its own.
+        """
+        return self.detail in EXTRA_DETAILS
+
+
+#: The detail strings whose direction is "candidate only" — see
+#: :attr:`Difference.is_extra`. Every ``Difference`` this module constructs uses
+#: one of the strings in this file, so the set is exhaustive by construction;
+#: ``tests/test_persistence.py`` pins that.
+EXTRA_DETAILS = frozenset({
+    "component extra in candidate",
+    "net extra in candidate",
+    "member extra in candidate",
+    "pin extra in candidate",
+})
+
 
 @dataclass
 class ComparisonReport:
@@ -63,6 +96,15 @@ class ComparisonReport:
     component_differences: list[Difference] = field(default_factory=list)
     net_differences: list[Difference] = field(default_factory=list)
     pin_differences: list[Difference] = field(default_factory=list)
+
+    @property
+    def differences(self) -> list[Difference]:
+        """All three levels as one list, in report order."""
+        return [
+            *self.component_differences,
+            *self.net_differences,
+            *self.pin_differences,
+        ]
 
     @property
     def total(self) -> int:

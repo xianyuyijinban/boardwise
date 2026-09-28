@@ -35,7 +35,7 @@ boardwise bridge call --action sys.identity          # consistent 必须是 true
   {"id": "R1", "symbolRef": "<0402 电阻实测>", "value": "10k", "lcsc": "C25744", "provenance": "verified_recipe"},
   {"id": "R2", "symbolRef": "<0402 电阻实测>", "value": "10k", "lcsc": "C25744", "provenance": "verified_recipe"}],
  "nets": [
-  {"id": "VIN", "class": "power", "members": ["U1.3", "C1.1", "R1.1"], "provenance": "verified_recipe"},
+  {"id": "5V0", "class": "power", "members": ["U1.3", "C1.1", "R1.1"], "provenance": "verified_recipe"},
   {"id": "3V3", "class": "power", "members": ["U1.2", "C2.1"], "provenance": "verified_recipe"},
   {"id": "TAP", "class": "signal", "members": ["R1.2", "R2.1"], "provenance": "verified_recipe"},
   {"id": "GND", "class": "gnd", "members": ["U1.1", "C1.2", "C2.2", "R2.2"], "provenance": "verified_recipe"}]}
@@ -51,9 +51,16 @@ boardwise bridge call --action sys.identity          # consistent 必须是 true
    "presentation": {"sidePreferences": {"input": "left", "output": "bottom"}}},
   {"id": "sense", "parts": ["R1", "R2"], "role": "divider", "grammarRef": "voltage-divider"}],
  "flow": [["pwr", "sense"]],
- "portRoles": {"VIN": "input", "3V3": "output"},
- "directWiringObligations": [{"nets": ["VIN", "3V3"], "note": "the regulator's own rails are wired"}]}
+ "portRoles": {"5V0": "input", "3V3": "output"},
+ "directWiringObligations": [{"nets": ["5V0", "3V3"], "note": "the regulator's own rails are wired"}]}
 ```
+
+> **配方修正（2026-09-28 岳裁决，059 真机实测）**：输入轨原名 `VIN`。实测发现 `100nF` 电容与
+> 10k 分压同挂 `VIN` 会命中工程规则 `param-rc-cutoff`（INFO，report-only），`draw apply` 的
+> "findings 只减不增"按身份不看严重度 → exit 2 不保存（图落好了没落盘，与 054 C3a 同形，
+> 证据 `outputs/057_live/e1/apply.txt`）。把轨名写成**自带电压声明的形态**（`5V0`/`+5V` 类，
+> 011c whitelist）规则即按"已知电源轨=去耦"跳过，exit 0 正常保存（证据 `outputs/057_live/e1b/`）。
+> 这不是版式问题，是命名约定：**电容与分压电阻共处的输入轨，轨名用电压声明形态**。
 
 下文 `SPECS` = `--circuit e1.circuit.json --presentation e1.presentation.json --profiles <实测库>`，
 `BOX` = `--page-box 0,0,1170,825`（A4 实测框，SKILL §3.3）。
@@ -69,7 +76,7 @@ boardwise draw apply   outputs/057_e1/plan.json --project test $SPECS \
     --json outputs/057_e1/apply.json
 ```
 
-算过：apply exit 0；`apply.json` 的 `verification.nets` 里 `crossModule: true` 的行（VIN、GND）全是
+算过：apply exit 0；`apply.json` 的 `verification.nets` 里 `crossModule: true` 的行（5V0、GND）全是
 `oneNet: true`；`range.outOfScope.changed == []`；`render.png` **人眼看**（052 问法：哪颗电容属于哪路
 电源？信号怎么走？改到愿意交给同事要几分钟？）。关闭重开工程后 `boardwise persistence …` 比对一致，
 再跑一次同一条 `draw apply` → `already_applied` exit 0 零写入。
