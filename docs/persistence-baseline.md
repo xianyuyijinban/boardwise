@@ -17,7 +17,7 @@
 | `unknown` | the run stopped with writes acknowledged or unanswered, so what is on the page cannot be stated | `draw` |
 | `placed` | written, and the editor's own readback agrees | `draw` (the netlist compare) |
 | `saved_unverified` | the save API answered ok, nothing checked the disk | `draw` |
-| `saved_verified` | content survived a close-and-reopen and compared equal | **only scenario A** |
+| `saved_verified` | the snapshot's content came back after a close-and-reopen | **only scenario A** |
 
 Only `saved_verified` is "persisted". `draw` can never reach it — `doc.open` moves
 the focused tab without reloading it from disk, and there is no close-project
@@ -106,9 +106,26 @@ Judgement:
 | outcome | meaning |
 |---|---|
 | exit **0** + `persistence: saved_verified — the content survived a close-and-reopen` | **pass** — this is the only pass in this file |
-| exit **1** + `NOT what was drawn` | **fail** — this is issue #216's shape; keep the output and the two snapshots |
+| … with a `the snapshot's content is all still there … the page has since grown` first line and an `extras:` block | still a **pass**: the snapshot came back whole, and the page holds content that was added *after* it. Read the extras to confirm that is what happened |
+| exit **1** + `NOT what was drawn` | **fail** — snapshot content is missing or came back changed; this is issue #216's shape. Keep the output and the two snapshots |
 | exit **1** + `primitives differ` | **fail**, and the per-type table says which half moved |
 | exit **3** + `cannot decide` | **no verdict** — one side had no netlist text or no readable geometry. Record it as undecidable; do **not** record it as a pass |
+
+**What "compares" means: a subset, and why.** The comparison asks one question —
+*is what the snapshot held still there?* Both halves split their differences by
+direction (`src/boardwise/cli.py::_compare_persistence`,
+`core/compare.py::Difference.is_extra`):
+
+* **missing or changed** — a component / net / net member / pin the snapshot had
+  is gone, or a field came back different, or the page holds fewer primitives of
+  some kind: a persistence failure, exit **1**;
+* **extra in the reopened page** — content the snapshot never had: printed under
+  `extras:` with a count, and **not** a failure. Measured 2026-09-28: a snapshot
+  with zero missing items was judged NOT `saved_verified` because 20 components
+  and 40 net members had been drawn on other pages after it was taken. A reopen
+  cannot distinguish "my work was lost" from "someone drew more afterwards", so
+  failing on the second reading would have made the state unusable exactly when
+  it mattered.
 
 A pass also writes one line to the audit log; check it arrived:
 

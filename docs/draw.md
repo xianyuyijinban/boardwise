@@ -395,7 +395,7 @@ with its qualifier attached:
 | `unknown` | the run stopped with writes acknowledged or unanswered | what is on the page **cannot be stated** |
 | `placed` | the netlist compare | written, and the editor's own readback agrees. **Not saved** |
 | `saved_unverified` | a `sch.doc.save` that answered ok | the editor accepted a save; nothing checked the disk |
-| `saved_verified` | a close-and-reopen that compares equal | the content reached the file |
+| `saved_verified` | a close-and-reopen in which the snapshot's content is all still present (content added afterwards is reported as extras, not failed) | the content reached the file |
 
 `unknown` is not a weaker rung on the ladder — it is the statement that the
 ladder cannot be climbed. It exists because of a measured defect: killing the

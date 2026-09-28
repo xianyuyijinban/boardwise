@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -162,6 +163,142 @@ def test_a_reopen_with_a_different_page_is_not_verified(capsys):
     assert code == 1
     assert "primitives differ" in printed
     assert "wires/Wire: 33 -> 30" in printed
+
+
+# --------------------------------------------------------------------------
+# the subset rule: "is what I snapshotted still there?"
+# --------------------------------------------------------------------------
+
+
+def _grown_netlist() -> str:
+    """The measured netlist plus one component, one net and one net member.
+
+    The shape a snapshot-then-work-on-other-pages run leaves behind: the
+    snapshot's own content is untouched, everything new is additive.
+    """
+    grown = json.loads(_netlist_text())
+    grown["components"]["gge999"] = {
+        "props": {
+            "Designator": "R99",
+            "Value": "10k",
+            "Footprint": "0402",
+            "Supplier Part": "C25744",
+        },
+        "pinInfoMap": {
+            "1": {"name": "1", "number": "1", "net": "GND", "props": {}},
+            "2": {"name": "2", "number": "2", "net": "NEWNET", "props": {}},
+        },
+    }
+    return json.dumps(grown)
+
+
+def test_a_reopen_that_only_gained_content_is_still_verified(capsys, tmp_path, monkeypatch):
+    """The subset rule, on the shape that was measured on 2026-09-28.
+
+    A snapshot whose own content came back **complete** was still judged NOT
+    saved_verified because 20 components and 40 net members had been drawn on
+    other pages after it was taken (all of them "extra in candidate"). What a
+    reopen can answer is "did the snapshot's content survive", and content added
+    afterwards answers that the same way an unchanged project does.
+    """
+    from boardwise.bridge import daemon as daemon_module
+
+    monkeypatch.setattr(daemon_module, "BOARDWISE_HOME", tmp_path)
+    code = _compare_persistence(_snapshot(), _snapshot(netlist_text=_grown_netlist()))
+    printed = capsys.readouterr().out
+
+    assert code == 0, "an additive change is not a failed save"
+    assert "persistence: saved_verified" in printed
+    assert "the page has since grown" in printed
+    assert "extras: 3 item(s)" in printed, "counted and said out loud"
+    assert "component extra in candidate" in printed
+    assert "net extra in candidate" in printed
+    assert "member extra in candidate" in printed
+    assert "NOT saved_verified" not in printed
+    # Only a pass writes the audit line, and this is a pass.
+    records = _audit_records(tmp_path)
+    assert [r["action"] for r in records] == [daemon_module.AUDIT_PERSISTENCE_VERIFIED]
+
+
+def test_an_unchanged_reopen_reports_no_extras(capsys, tmp_path, monkeypatch):
+    """`extras: 0` is the unchanged project, and it reads exactly as it did before."""
+    from boardwise.bridge import daemon as daemon_module
+
+    monkeypatch.setattr(daemon_module, "BOARDWISE_HOME", tmp_path)
+    code = _compare_persistence(_snapshot(), _snapshot())
+    printed = capsys.readouterr().out
+
+    assert code == 0
+    assert "extras:" not in printed
+    assert "persistence: saved_verified" in printed
+
+
+def test_a_component_lost_in_the_reopen_is_not_verified(capsys):
+    """The subset rule is a subset, not a truce: a loss still fails the run."""
+    thinned = json.loads(_netlist_text())
+    del thinned["components"]["gge57"]
+
+    code = _compare_persistence(_snapshot(), _snapshot(netlist_text=json.dumps(thinned)))
+    printed = capsys.readouterr().out
+    assert code == 1
+    assert "the reopened page is NOT what was drawn" in printed
+    assert "component missing in candidate" in printed
+    assert "NOT saved_verified" in printed
+    assert "persistence: saved_verified" not in printed
+
+
+def test_a_value_changed_in_the_reopen_is_not_verified(capsys):
+    """A field that came back different is a loss of what was snapshotted."""
+    changed = json.loads(_netlist_text())
+    changed["components"]["gge55"]["props"]["Value"] = "9.1K"
+
+    code = _compare_persistence(_snapshot(), _snapshot(netlist_text=json.dumps(changed)))
+    printed = capsys.readouterr().out
+    assert code == 1
+    assert "value differs" in printed
+    assert "1 snapshot item(s) missing or changed" in printed
+
+
+def test_the_census_tolerates_primitives_gained_but_not_lost(capsys):
+    """Same split on the geometry half, in both directions.
+
+    `sch.geometry` reads the focused page, so "gained" here means the page grew
+    after the snapshot — as tolerated as the netlist's extras. A primitive the
+    snapshot held and the page no longer does is the failure the census exists
+    for.
+    """
+    geometry = _geometry()
+    fewer = json.loads(json.dumps(geometry))
+    fewer["wires"] = fewer["wires"][:-3]
+
+    code = _compare_persistence(_snapshot(geometry=fewer), _snapshot(geometry=geometry))
+    printed = capsys.readouterr().out
+    assert code == 0
+    assert "primitives gained since the snapshot" in printed
+    assert "wires/Wire: 30 -> 33" in printed
+    assert "persistence: saved_verified" in printed
+
+    code = _compare_persistence(_snapshot(geometry=geometry), _snapshot(geometry=fewer))
+    printed = capsys.readouterr().out
+    assert code == 1
+    assert "primitives the snapshot had are gone" in printed
+    assert "wires/Wire: 33 -> 30" in printed
+
+
+def test_every_extra_direction_is_declared_and_nothing_else_is():
+    """A subset run classifies by direction, so the directions are pinned here.
+
+    Scanned against the module's own literals rather than enumerated by hand: a
+    new difference branch in `compare_models` whose direction is "candidate
+    only" must be declared in `EXTRA_DETAILS`, or `boardwise persistence
+    --baseline` would fail a run for content that was merely added later.
+    """
+    from boardwise.core import compare as compare_module
+
+    source = Path(compare_module.__file__).read_text(encoding="utf-8")
+    literals = set(re.findall(r'"([^"]*extra in candidate)"', source))
+    assert literals, "the scan found no directions at all — the pattern drifted"
+    assert literals == set(compare_module.EXTRA_DETAILS)
 
 
 def test_a_missing_netlist_is_undecidable_not_a_pass(capsys):
