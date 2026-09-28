@@ -1,6 +1,6 @@
 {
   "name": "boardwise-dsh",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "DeepSeek Harness (dsh) tools for boardwise: checkup / arch / doctor / bridge, spawned from the local boardwise CLI. Thin adapter — every judgement stays in the Python side.",
   "license": "MIT",
@@ -19,7 +19,7 @@
     "prepack": "npm run build"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-tools": ">=0.0.1-rc.1 <0.2.0",
+    "@deepseek-ai/dsh-tools": ">=0.0.1-rc.1 <0.3.0 || >=0.1.7-rc.2 <0.2.0-0 || >=0.2.0-rc.1 <0.3.0-0",
     "@deepseek-ai/cordis": "^4.0.1"
   },
   "dsh": {

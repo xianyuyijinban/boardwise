@@ -33,7 +33,8 @@
 3. 四线里的 dsh-plugin 线全绿：`npm run typecheck && npm test && npm run build`，
    然后 `npm pack` 出 `boardwise-dsh-0.1.1.tgz`（旧 0.1.0 tgz 删掉——**进回收站**，
    PowerShell VisualBasic FileIO DeleteFile，见 SKILL §7）。
-4. pytest 侧只跑哨兵：`.venv/Scripts/python.exe -m pytest tests/test_dsh_plugin_sync.py -q --basetemp=.tmp_pt_home`。
+4. pytest 侧只跑哨兵：`.venv/Scripts/python.exe -m pytest tests/test_dsh_plugin_sync.py -q --basetemp=.tmp_pt_067`
+   （**用 `.tmp_pt_067`，不是 `.tmp_pt_home`**——065 批次与本批并行，全量基线目录是它们的）。
 5. **dsh-market 上架调研（只读）**：`export https_proxy=http://127.0.0.1:7890`，
    读 https://github.com/dsh-market/dsh-market 的 README.md 与 UPDATE-API-V1.md，
    在交卷消息里回答：上架要提交什么（格式/字段/PR 流程）、我们的 tgz 不发 npm registry
