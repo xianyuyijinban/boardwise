@@ -151,7 +151,8 @@ def test_the_promoted_section_keeps_the_v2_slot_name(capsys, tmp_path, monkeypat
         "--library", str(SHELF),
     ])
     capsys.readouterr()
-    assert code == 0
+    # 073：这份板的 verdict 是 incomplete（有器件缺手册未审）→ 退出码 3（原为 0）。
+    assert code == 3
     report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
     # 053 §2.2 bumped the schema to /5 (`completion`), 058 to /6
     # (`needs_datasheet`); the /3 sections this test is about are unchanged, which
@@ -173,7 +174,8 @@ def test_the_conclusion_may_not_claim_a_pass_while_parts_are_unreviewed(
         "--library", str(SHELF),
     ])
     capsys.readouterr()
-    assert code == 0
+    # 073：有器件缺手册未审 = incomplete → 3（原为 0）。
+    assert code == 3
     report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
     count = report["summary"]["unreviewedParts"]
     assert count > 0
@@ -279,7 +281,8 @@ def test_the_report_carries_a_completion_section_end_to_end(capsys, tmp_path, mo
         "--library", str(SHELF),
     ])
     printed = capsys.readouterr().out
-    assert code == 0
+    # 073：`incomplete` 现在也决定退出码（3，原为 0）——报告照写。
+    assert code == 3
     report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
     completion = report["completion"]
     assert set(completion) >= {
@@ -361,10 +364,13 @@ def test_a_run_that_could_not_build_the_skeleton_does_not_reach_complete(
         raise RuntimeError("skeleton builder fell over")
 
     monkeypatch.setattr("boardwise.core.architecture.generate_architecture", no_skeleton)
+    # 073: the verdict is `incomplete` (no skeleton), so the exit code is 3 — this
+    # assertion was `== 0` until this batch, and the change of the code is exactly
+    # what the batch is for.
     assert cli.main([
         "checkup", "--file", str(BOARD), "--out", str(tmp_path / "out"),
         "--library", str(SHELF),
-    ]) == 0
+    ]) == 3
     printed = capsys.readouterr().out
     assert "架构骨架生成失败" in printed, "the failure is a note, not a crash"
     report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
@@ -398,10 +404,11 @@ def test_a_run_that_could_not_build_the_skeleton_does_not_quote_a_pass(
         raise RuntimeError("skeleton builder fell over")
 
     monkeypatch.setattr("boardwise.core.architecture.generate_architecture", no_skeleton)
+    # 073: `incomplete` (no skeleton) now decides the code too: 3, not 0.
     assert cli.main([
         "checkup", "--file", str(BOARD), "--out", str(tmp_path / "out"),
         "--library", str(SHELF),
-    ]) == 0
+    ]) == 3
     capsys.readouterr()
     report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
     assert report["completion"]["verdict"] == "incomplete"
@@ -481,10 +488,11 @@ def test_the_conclusion_quotes_a_pass_exactly_when_the_verdict_is_complete():
 def test_the_schema_bump_only_adds_fields(capsys, tmp_path, monkeypatch):
     """/5 adds `completion`; every /4 key and shape is still there (031's rule)."""
     monkeypatch.setenv("BOARDWISE_HOME", str(tmp_path / "home"))
+    # 073：BOARD 的 verdict 是 incomplete → 3（原为 0）。
     assert cli.main([
         "checkup", "--file", str(BOARD), "--out", str(tmp_path / "out"),
         "--library", str(SHELF),
-    ]) == 0
+    ]) == 3
     capsys.readouterr()
     report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
     assert report["schema"] == "boardwise.checkup/6"
@@ -784,7 +792,8 @@ def test_the_report_says_how_the_modules_were_ordered(capsys, tmp_path, monkeypa
         "--library", str(SHELF),
     ])
     capsys.readouterr()
-    assert code == 0
+    # 073：incomplete → 3（原为 0）。
+    assert code == 3
     report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
     assert report["source"]["modulesOrderedBy"] == "warnings-first"
     assert all("warningFindings" in module for module in report["modules"])
@@ -847,9 +856,10 @@ def test_the_aesthetics_switch_is_off_by_default_and_the_section_is_absent(
 ):
     monkeypatch.setenv("BOARDWISE_HOME", str(tmp_path / "home"))
     out = tmp_path / "default"
+    # 073：incomplete → 3（原为 0），开关不影响这件事。
     assert cli.main([
         "checkup", "--file", str(BOARD), "--out", str(out), "--library", str(SHELF),
-    ]) == 0
+    ]) == 3
     capsys.readouterr()
     report = json.loads((out / "report.json").read_text(encoding="utf-8"))
     assert "layout_review" not in report, "off means absent, not empty"
@@ -860,7 +870,7 @@ def test_the_aesthetics_switch_is_off_by_default_and_the_section_is_absent(
     assert cli.main([
         "checkup", "--file", str(BOARD), "--out", str(out_on), "--library", str(SHELF),
         "--aesthetics",
-    ]) == 0
+    ]) == 3
     capsys.readouterr()
     layout = _layout_of(out_on)
     assert layout["enabled"] is True and layout["source"] == "cli"
@@ -878,7 +888,7 @@ def test_the_config_turns_it_on_and_the_cli_flag_wins_over_it(
     out = tmp_path / "from-config"
     assert cli.main([
         "checkup", "--file", str(BOARD), "--out", str(out), "--library", str(SHELF),
-    ]) == 0
+    ]) == 3  # 073：incomplete → 3（原为 0），开关不影响这件事
     capsys.readouterr()
     layout = _layout_of(out)
     assert layout["enabled"] is True and layout["source"] == "config"
@@ -887,7 +897,7 @@ def test_the_config_turns_it_on_and_the_cli_flag_wins_over_it(
     assert cli.main([
         "checkup", "--file", str(BOARD), "--out", str(out_off), "--library", str(SHELF),
         "--no-aesthetics",
-    ]) == 0
+    ]) == 3
     capsys.readouterr()
     report = json.loads((out_off / "report.json").read_text(encoding="utf-8"))
     assert "layout_review" not in report, "the single-run override wins"

@@ -124,13 +124,15 @@ EMPTY_PCB_VIEW_NOTE = (
 #: Fires on :func:`_model_read_nothing`, which is the same predicate
 #: :func:`_pcb_view_read_nothing` narrows (task 019's note is the more specific
 #: sentence for "you asked for the pcb view and this export has no board", so it
-#: wins where both could apply). Where `review` says this on the console,
-#: `checkup` gates it: `completion.coverage.parseIncomplete` → `verdict:
-#: incomplete` with the same sentence in `verdictWhy`.
+#: wins where both could apply). Both commands acted on it from 073 on: `checkup`
+#: gates it (`completion.coverage.modelEmpty` → `verdict: incomplete`, with the
+#: same sentence in `verdictWhy`) and `review` stops being a 0 too — either way the
+#: shell sees exit 3 (`INCOMPLETE_EXIT_CODE`), because a run that read nothing has
+#: no result to hand a CI.
 EMPTY_MODEL_NOTE = (
     "note: read nothing from this file — 0 components and 0 nets; a truncated or "
     "damaged archive reads this way, and an empty project is not a clean board "
-    "either (checkup gates it as verdict: incomplete)"
+    "either (verdict: incomplete → exit 3)"
 )
 
 #: The same statement in the `--md` report's Chinese summary (issue #29). The
@@ -138,7 +140,8 @@ EMPTY_MODEL_NOTE = (
 #: `EMPTY_PCB_VIEW_NOTE` / the empty-view hint before them.
 EMPTY_MODEL_HINT = (
     "提示：这个输入读出来是空的（0 器件 0 网络）——归档可能被截断或损坏，"
-    "合法空工程同样不是「干净板」：`boardwise checkup` 会把它记成 `verdict: incomplete`。"
+    "合法空工程同样不是「干净板」：`boardwise checkup` 会把它记成 "
+    "`verdict: incomplete`、`review`/`checkup` 都以 **exit 3** 告终。"
 )
 
 #: The tail every parse-drop note shares (task 020 §WI-1). The numbers are
@@ -147,6 +150,24 @@ EMPTY_MODEL_HINT = (
 #: exists — a reader who is told only the counts will take the report as
 #: complete anyway.
 PARSE_DROP_NOTE_TAIL = " — review coverage is incomplete"
+
+#: The exit code of a run whose **verdict is not a statement** (073). `review` and
+#: `checkup` returned 0 for `verdict: incomplete` as long as no ERROR was found, and
+#: a CI reads 0 as "passed" — the review had not seen the whole board and said so
+#: only inside the JSON. It is the **same 3** this CLI already uses for "the state
+#: cannot be stated" (`review --live` with no model, a write whose outcome is
+#: unknown, an update with no conclusion inside its budget): one family, one code,
+#: never a fourth.
+INCOMPLETE_EXIT_CODE = 3
+
+#: What exit 3 means, in the one sentence both commands print (073). The exit-0
+#: wording ("a model was obtained and nothing is an ERROR") would read as a pass,
+#: which is exactly the reading this code exists to prevent — so `incomplete` gets
+#: its own sentence, and both commands say the same one.
+INCOMPLETE_EXIT_SENTENCE = (
+    "审查没看全（verdict: incomplete）—— 结果不可陈述，不是「板子干净」，"
+    "也不是「命令失败」"
+)
 
 
 def _parse_drop_note(pins_dropped: int, components_without_symbol: int) -> str:
@@ -2371,6 +2392,28 @@ def _pcb_view_read_nothing(
     return _model_read_nothing(model, board)
 
 
+def _exit_code_with_verdict(exit_code: int, verdict: str) -> int:
+    """The run's exit code once the verdict is known (073).
+
+    One question, one answer: **was anything stated?** An `incomplete` verdict
+    means the review did not see the whole board (no model at all, parts no rule
+    could judge, a skeleton that was never generated, coverage that is missing), so
+    there is no statement to hand a CI — exit 3, the code this CLI uses everywhere
+    else for "cannot say". It only ever raises a 0: an ERROR keeps its 1, and a bad
+    input keeps its 2 (that code is decided and returned before this function is
+    reached).
+
+    `complete-with-open-items` **stays 0** on purpose: an open item (a stale
+    architecture slot, a warning nobody triaged, a rule that withheld its
+    conclusion) is a statement *about* the board, with a hole named in it;
+    `incomplete` is the absence of one. Widening this to the open-items verdict
+    would move the exit code of most real boards, which is not what was ruled.
+    """
+    if int(exit_code) == 0 and verdict == "incomplete":
+        return INCOMPLETE_EXIT_CODE
+    return int(exit_code)
+
+
 def _model_designators(model: object) -> set[str]:
     """The designators a schematic model states, one board or a whole project.
 
@@ -2615,6 +2658,32 @@ def _cmd_review(args: argparse.Namespace) -> int:
         )
         print(f"Markdown report written to {args.md_path}")
 
+    # 073: the verdict, and it asks the same question `checkup` gates on — one
+    # function (`_model_read_nothing`) decides what "this reading saw nothing at all"
+    # means, so the two commands cannot disagree about the *predicate*.
+    #
+    # **Scope of that agreement, stated because it is narrower than it sounds**: the
+    # predicate is only consulted for a **file** input (both `empty_pcb_view` and
+    # `empty_model` are gated on `path is not None`, which is 019/072's doing — the
+    # note is about a file, and `--live` cannot pick a view to blame). A live run
+    # whose tiers all succeeded on an *empty* project therefore still returns 0 here,
+    # while `checkup` on the same project returns 3 (`coverage.modelEmpty` is not
+    # path-gated). That asymmetry is pre-existing, outside this task's ruling, and
+    # reported as a boundary finding rather than changed on the quiet.
+    #
+    # Everything else `review` can say, it says: `rules_errored` and the parse drops
+    # are coverage gaps, which are `complete-with-open-items` in `checkup` terms and
+    # stay 0.
+    #
+    # Printed **before** the notes below rather than after them: 019 §1's discipline
+    # is that the *hint* (what to do with this run — fix the view, re-export the
+    # archive) is the last line, and the exit code is not a hint to act on something
+    # in the file. The two cannot contradict each other: the hint fires on the same
+    # predicate this sentence does.
+    read_nothing = empty_pcb_view or empty_model
+    if read_nothing:
+        print(f"note: exit {INCOMPLETE_EXIT_CODE} —— {INCOMPLETE_EXIT_SENTENCE}")
+
     # Last lines of the console output, after the report paths: a note is the
     # one thing a reader has to act on, so it must not be buried between the
     # census and a "written to" line. The first two cannot fire together — the
@@ -2636,7 +2705,9 @@ def _cmd_review(args: argparse.Namespace) -> int:
     if drop_note:
         print(drop_note)
 
-    return 1 if counts["ERROR"] else 0
+    return _exit_code_with_verdict(
+        1 if counts["ERROR"] else 0, "incomplete" if read_nothing else "complete"
+    )
 
 
 # --------------------------------------------------------------------------
@@ -4125,8 +4196,13 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
       report instead of being marked pending);
     * **2** the input cannot be used (mutually exclusive arguments, an unreadable
       `--file`, an unsupported extension);
-    * **3** the online state cannot be stated (no daemon, no connector, or every
-      tier refused). Never an empty model dressed up as a clean board.
+    * **3** nothing may be stated: the online state cannot be read (no daemon, no
+      connector, every tier refused) **or** the run's `completion.verdict` is
+      `incomplete` — the review did not see the whole board (an empty model, parts
+      no rule could judge, a skeleton that was never generated, missing coverage),
+      which 073 made an exit code instead of a sentence only the JSON carried.
+      Never an empty model dressed up as a clean board. `complete-with-open-items`
+      stays 0: an open item is a yes-with-a-hole, not an absent answer.
 
     A DRC that could **not** run is not an error and not a pass: it leaves the
     section at `{checked: false, reason}` and adds no counts, so exit 0 can never
@@ -4421,6 +4497,13 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         needs_datasheet=needs_datasheet,
         coverage=coverage,
     )
+    # 073, decided **once**, here: the verdict now decides the exit code, and the
+    # report carries `summary.exitCode` — so writing it back into the summary the
+    # report is built from is what makes the process exit code, `report.json`'s
+    # `summary.exitCode` and `report.md`'s 「（退出码 N）」 one value instead of three
+    # renderings that can drift (#15). `drc.summarise` set 0/1 from the error list;
+    # this only ever raises a 0, so an ERROR keeps its 1.
+    summary["exitCode"] = _exit_code_with_verdict(summary["exitCode"], completion["verdict"])
     # The conclusion carries every half, and it is written **after** the
     # architecture section exists (071 §5, issue #21). With errors present the
     # count stays first (that is the reader's next action); with none, the gates
@@ -4589,7 +4672,8 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
     exit_code = int(summary["exitCode"])
     print(
         f"  exit: {exit_code} "
-        + ("(ERROR present — see the errors above)" if exit_code else
+        + ("(ERROR present — see the errors above)" if exit_code == 1 else
+           f"({INCOMPLETE_EXIT_SENTENCE})" if exit_code == INCOMPLETE_EXIT_CODE else
            "(a model was obtained and nothing is an ERROR)")
     )
     return exit_code

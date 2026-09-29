@@ -26,7 +26,9 @@ TS 里不重算任何审查结论（任务书 045 §1）。
   描述里写明优先用只读动作；写动作走 CLI，服从既有的真机身份纪律。
 - **返回值** = `exit code` + `cli`（怎么找到的）+ `command` + 产物路径（`report.json` /
   `report.md` / `architecture.md`，逐个标 `present` / `MISSING`）+ stdout（必要时 stderr）。
-  非零 exit 是**结果**不是失败（doctor / checkup 就用 exit 报告状态）。
+  非零 exit 是**结果**不是失败（doctor / checkup 就用 exit 报告状态）；
+  `checkup` 的 `3` = **说不清**（在线状态读不出来，或 `completion.verdict` 是 `incomplete`——
+  审查没看全：空模型 / 器件缺手册未审 / 骨架没生成 / 覆盖有缺口），**不是通过**（073）。
 - **stdout 截断**：超过 32KB 时留头 16KB + 尾 16KB，中间标出丢了多少字节；stdout/stderr 里
   任何 token 形状的值一律打码（`token=***`）——daemon token 永不进日志或返回值。
 - 运行时**零依赖**（只用 node 内置模块）；`@deepseek-ai/cordis` 与 `@deepseek-ai/dsh-tools`

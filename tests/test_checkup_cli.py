@@ -274,7 +274,7 @@ def test_checkup_reads_the_whole_project_when_the_project_archive_works(
     _FakeBridgeClient.answers = _live_answers()
     args = _checkup_args(out=str(tmp_path / "out"))
 
-    assert _cmd_checkup(args) == 0
+    assert _cmd_checkup(args) == 3, "073：这份 run 的 verdict 是 incomplete → 3（原为 0）"
 
     report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
     from boardwise.cli import CHECKUP_SCHEMA
@@ -304,7 +304,7 @@ def test_a_closed_project_gate_falls_to_per_page_exports_and_says_so(
     _FakeBridgeClient.answers = _live_answers(project_refusal=True, page_blob=_document_archive())
     args = _checkup_args(out=str(tmp_path / "out"))
 
-    assert _cmd_checkup(args) == 0
+    assert _cmd_checkup(args) == 3, "073：这份 run 的 verdict 是 incomplete → 3（原为 0）"
 
     report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
     assert report["source"]["tier"] == "per-page"
@@ -339,7 +339,7 @@ def test_no_usable_export_falls_to_the_netlist_tier_which_is_connectivity_only(
     )
     args = _checkup_args(out=str(tmp_path / "out"))
 
-    assert _cmd_checkup(args) == 0
+    assert _cmd_checkup(args) == 3, "073：这份 run 的 verdict 是 incomplete → 3（原为 0）"
 
     report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
     assert report["source"]["tier"] == "netlist"
@@ -395,7 +395,7 @@ def test_no_connector_never_becomes_a_model(fake_bridge, capsys, tmp_path):
 
 def test_the_file_fallback_never_touches_the_bridge(fake_bridge, tmp_path):
     args = _checkup_args(file=str(GOLDEN), out=str(tmp_path / "out"))
-    assert _cmd_checkup(args) == 0
+    assert _cmd_checkup(args) == 3, "073：这份 run 的 verdict 是 incomplete → 3（原为 0）"
     assert _FakeBridgeClient.opened == 0, "--file is the disconnected path"
 
     report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
@@ -934,7 +934,9 @@ def test_a_single_page_per_page_run_reports_no_unproven_nets(
         project_refusal=True, page_blob=_document_archive()
     )
 
-    assert _cmd_checkup(_checkup_args(out=str(tmp_path / "out"))) == 0
+    assert _cmd_checkup(_checkup_args(out=str(tmp_path / "out"))) == 3, (
+        "073：这份 run 的 verdict 是 incomplete → 3（原为 0）"
+    )
 
     report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
     assert report["source"]["tier"] == "per-page"
@@ -1051,7 +1053,7 @@ def test_findings_are_filled_and_have_the_same_shape_review_json_uses(
         return findings
 
     monkeypatch.setattr(cli_module, "run_review", spy)
-    assert _cmd_checkup(args) == 0
+    assert _cmd_checkup(args) == 3, "073：这份 run 的 verdict 是 incomplete → 3（原为 0）"
 
     findings = captured["findings"]
     assert findings, "the golden fixture is expected to produce at least one finding"
@@ -1098,7 +1100,7 @@ def test_the_offline_fallback_asks_no_editor_and_says_there_was_no_drc(
     fake_bridge, tmp_path
 ):
     args = _checkup_args(file=str(GOLDEN), out=str(tmp_path / "out"))
-    assert _cmd_checkup(args) == 0
+    assert _cmd_checkup(args) == 3, "073：这份 run 的 verdict 是 incomplete → 3（原为 0）"
     assert _FakeBridgeClient.opened == 0
     assert "sch.drc_check" not in _FakeBridgeClient.history
 
@@ -1112,8 +1114,14 @@ def test_the_offline_fallback_asks_no_editor_and_says_there_was_no_drc(
 
 
 def test_a_drc_that_could_not_run_is_not_a_clean_board(fake_bridge, capsys, tmp_path):
-    """Both DRCs refusing must leave the sections un-checked *and* exit 0 —
-    which is only honest because the sections carry the reason."""
+    """Both DRCs refusing must leave the sections un-checked, which is only honest
+    because the sections carry the reason.
+
+    073 moved the exit code of this shape from 0 to 3: the reading is `incomplete`
+    (its parts have no datasheet facts, and neither host check ran), and a CI must
+    not read that as a pass. The report's own `summary.exitCode` and the process
+    code are the same value — that pairing is this assertion's real subject (#15).
+    """
     answers = _live_answers(drc=False)
     answers["sch.drc_check"] = BridgeError(ErrorCodes.NO_CONNECTOR, "gone")
     answers["pcb.drc_check"] = BridgeError(
@@ -1122,14 +1130,15 @@ def test_a_drc_that_could_not_run_is_not_a_clean_board(fake_bridge, capsys, tmp_
     _FakeBridgeClient.answers = answers
     args = _checkup_args(out=str(tmp_path / "out"))
 
-    assert _cmd_checkup(args) == 0
+    assert _cmd_checkup(args) == 3, "073：这份 run 的 verdict 是 incomplete → 3（原为 0）"
 
     report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
     assert report["drc"]["schematic"]["checked"] is False
     assert "NO_CONNECTOR" in report["drc"]["schematic"]["reason"]
     assert report["drc"]["pcb"]["checked"] is False
     assert "指定的主题消息" in report["drc"]["pcb"]["reason"]
-    assert report["summary"]["errors"] == [] and report["summary"]["exitCode"] == 0
+    assert report["completion"]["verdict"] == "incomplete"
+    assert report["summary"]["errors"] == [] and report["summary"]["exitCode"] == 3
     printed = capsys.readouterr().out
     assert "schematic: not checked" in printed and "pcb: not checked" in printed
 
@@ -1150,7 +1159,7 @@ def test_every_page_is_opened_and_the_focus_is_put_back(fake_bridge, tmp_path):
     _FakeBridgeClient.answers = answers
     args = _checkup_args(out=str(tmp_path / "out"))
 
-    assert _cmd_checkup(args) == 0
+    assert _cmd_checkup(args) == 3, "073：这份 run 的 verdict 是 incomplete → 3（原为 0）"
 
     from boardwise.cli import _read_online_drc
 
@@ -1218,7 +1227,7 @@ def test_canvas_images_are_rendered_per_page_and_named_relative(fake_bridge, tmp
     _FakeBridgeClient.answers = {**_live_answers(), "export.render": _render_answer()}
     args = _checkup_args(out=str(tmp_path / "out"))
 
-    assert _cmd_checkup(args) == 0
+    assert _cmd_checkup(args) == 3, "073：这份 run 的 verdict 是 incomplete → 3（原为 0）"
 
     report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
     images = report["ai_slots"]["canvas_images"]
@@ -1263,7 +1272,7 @@ def test_a_render_that_is_not_a_png_is_not_written_as_one(fake_bridge, tmp_path)
     }
     args = _checkup_args(out=str(tmp_path / "out"))
 
-    assert _cmd_checkup(args) == 0
+    assert _cmd_checkup(args) == 3, "073：这份 run 的 verdict 是 incomplete → 3（原为 0）"
 
     report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
     image = report["ai_slots"]["canvas_images"][0]
@@ -1304,7 +1313,7 @@ def test_a_png_timeout_falls_back_to_svg_and_keeps_the_png_error(fake_bridge, tm
     _FakeBridgeClient.answers = {**_live_answers(), "export.render": _png_then_svg_answer()}
     args = _checkup_args(out=str(tmp_path / "out"))
 
-    assert _cmd_checkup(args) == 0
+    assert _cmd_checkup(args) == 3, "073：这份 run 的 verdict 是 incomplete → 3（原为 0）"
 
     report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
     image = report["ai_slots"]["canvas_images"][0]
@@ -1334,7 +1343,9 @@ def test_a_png_timeout_whose_svg_fallback_also_fails_keeps_both_errors(fake_brid
     }
     args = _checkup_args(out=str(tmp_path / "out"))
 
-    assert _cmd_checkup(args) == 0, "两张图都没出，但板子的结论没变 —— 退出码只看规则与 DRC"
+    # 073：出图失败与退出码无关——现在的退出码由 verdict 定（这份 run 是
+    # incomplete → 3，原为 0），图片的成败不进这个算术。
+    assert _cmd_checkup(args) == 3, "两张图都没出，板子的结论没变；073 后退出码只看 verdict"
 
     image = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))[
         "ai_slots"
@@ -1358,7 +1369,8 @@ def test_a_png_bad_request_does_not_fall_back(fake_bridge, tmp_path):
     }
     args = _checkup_args(out=str(tmp_path / "out"))
 
-    assert _cmd_checkup(args) == 0, "出图失败不改板子结论；这张假板本来就没有 ERROR"
+    # 073：这张假板没有 ERROR，但它的 verdict 是 incomplete（未审器件）→ 3（原为 0）。
+    assert _cmd_checkup(args) == 3, "出图失败不改板子结论；退出码由 verdict 决定"
 
     image = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))[
         "ai_slots"
@@ -1374,7 +1386,7 @@ def test_a_healthy_png_render_adds_no_new_fields(fake_bridge, tmp_path):
     _FakeBridgeClient.answers = {**_live_answers(), "export.render": _render_answer()}
     args = _checkup_args(out=str(tmp_path / "out"))
 
-    assert _cmd_checkup(args) == 0
+    assert _cmd_checkup(args) == 3, "073：这份 run 的 verdict 是 incomplete → 3（原为 0）"
 
     image = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))[
         "ai_slots"
@@ -1388,7 +1400,7 @@ def test_a_healthy_png_render_adds_no_new_fields(fake_bridge, tmp_path):
 def test_the_offline_path_writes_markdown_and_no_canvas(fake_bridge, tmp_path):
     args = _checkup_args(file=str(GOLDEN), out=str(tmp_path / "out"))
 
-    assert _cmd_checkup(args) == 0
+    assert _cmd_checkup(args) == 3, "073：这份 run 的 verdict 是 incomplete → 3（原为 0）"
 
     report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
     assert report["ai_slots"]["canvas_images"] == []

@@ -113,10 +113,17 @@ def _board(tmp_path: Path) -> Path:
 
 
 def _checkup(board: Path, out: Path) -> dict:
-    """Run the offline `checkup` and read the report it wrote."""
+    """Run the offline `checkup` and read the report it wrote.
+
+    073: the exit code is decided by the verdict, so the assertion is the pairing
+    (`incomplete` → 3, else 0) and not a bare number: it was `== 0` until this batch.
+    """
     code = cli.main(["checkup", "--file", str(board), "--out", str(out)])
-    assert code == 0, f"checkup exited {code} on the synthetic board"
-    return _read(out)
+    report = _read(out)
+    verdict = report["completion"]["verdict"]
+    expected = 3 if verdict == "incomplete" else 0
+    assert code == expected, f"checkup exited {code} for verdict {verdict} (073)"
+    return report
 
 
 def _triage(out: Path, *argv: str) -> int:

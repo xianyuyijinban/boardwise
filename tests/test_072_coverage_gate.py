@@ -237,9 +237,11 @@ def test_a_truncated_archive_reports_incomplete_and_says_so(tmp_path, capsys):
     markdown = (out / "report.md").read_text(encoding="utf-8")
     assert "**verdict：`incomplete`**" in markdown
     assert "覆盖" in markdown, "the coverage section is rendered, not only stored"
-    # Exit code stays the documented one ("ERROR or not"): the *verdict* is the
-    # 053 contract a CI reads, and #29's ruling keeps exit 2 for structural damage.
-    assert code == 0
+    # 073 changed this: the *verdict* is the 053 contract a CI reads, and an
+    # `incomplete` one now decides the exit code too — 3, "nothing may be stated"
+    # (this assertion was `== 0`; the behaviour change is this batch's purpose).
+    # #29's ruling still keeps exit 2 for structural damage.
+    assert code == 3
 
 
 def test_the_intact_archive_of_the_very_same_bytes_has_a_clean_coverage(tmp_path, capsys):
@@ -280,7 +282,7 @@ def test_an_empty_enet_is_read_as_an_empty_board_not_silence(tmp_path, capsys):
     code = cli.main(["review", str(empty)])
     output = capsys.readouterr().out
 
-    assert code == 0
+    assert code == 3, "073：空模型 → verdict incomplete → exit 3（原为 0）"
     assert "(0 components, 0 nets)" in output
     assert cli.EMPTY_MODEL_NOTE in output, (
         "the reader has to be told the file read as nothing at all"
@@ -293,7 +295,7 @@ def test_the_pcb_view_hint_survives_the_unified_stance(capsys):
     code = cli.main(["review", str(GOLDEN), "--view", "pcb"])
     output = capsys.readouterr().out
 
-    assert code == 0
+    assert code == 3, "073：没读到就是 incomplete → 3（原为 0），即便是「看错视图」的形态"
     assert cli.EMPTY_PCB_VIEW_NOTE in output
     assert cli.EMPTY_MODEL_NOTE not in output
 
@@ -439,7 +441,9 @@ def test_a_rule_that_raises_still_produces_a_report(monkeypatch, tmp_path, capsy
     assert any(victim.id in reason for reason in report["completion"]["verdictWhy"])
     # The other rules ran to the end: their findings are still in the report.
     assert report["findings"], "the surviving rules still report"
-    assert code in (0, 1)
+    # 073: this reading is `incomplete` (unreviewed parts), so 3 — a crashed rule is
+    # a coverage *gap* (complete-with-open-items), not the reason for the code.
+    assert code == 3
 
 
 def test_review_survives_a_rule_that_raises_and_says_which_one(monkeypatch, capsys):
