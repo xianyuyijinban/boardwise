@@ -199,11 +199,16 @@ def _closest_reading(
     ``074K7``'s two readings differ in exactly that (the whole run is the
     notation, the suffix is the vendor-prefix guess).
 
-    A value the parser could not read (``None``) or a non-positive one has no
-    distance to anything: the smallest reading is used, and that path's message
-    says the value field is unparsable anyway.
+    A value the parser could not read (``None``), a non-positive one, or a
+    non-finite one has no distance to anything: the smallest reading is used, and
+    that path's message says the value field is unparsable anyway. The non-finite
+    case is issue #31: ``item[0] / inf`` is ``0.0`` and ``math.log`` of it raises
+    ``ValueError``, so an infinite declared value -- which ``float`` produces in
+    silence from a long enough run of digits -- took the whole review down here
+    before the parsers refused it and before this guard existed (both gates stay:
+    this function is called with values from callers that are not the parsers).
     """
-    if declared is None or declared <= 0:
+    if declared is None or not math.isfinite(declared) or declared <= 0:
         return readings[0]
     return min(readings, key=lambda item: abs(math.log(item[0] / declared)))
 

@@ -4,6 +4,8 @@ measured expectations."""
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from boardwise.core.model import Component, DesignModel, Net, Pin
@@ -1814,3 +1816,204 @@ def test_071_every_accusation_over_this_repos_own_corpus_names_its_anchor():
         f"only {len(accused)} accusation(s) in the whole corpus: the gate may have "
         "gone back to refusing everything"
     )
+
+
+# ------------------------------------- issues #27 / #31: the input has no ceiling
+
+
+def test_027_a_string_over_the_cap_is_never_decompiled():
+    """Issue #27: the decoders read a bounded number of characters, not a shape.
+
+    The regexes are grammatical and unbounded -- ``_MID_LETTER_RE``'s ``\\d*`` and
+    ``_ELECTROLYTIC_RE``'s ``\\d+[Vv]\\d{3}`` each backtrack over the digit run from
+    every start position -- so a pure-digit string costs O(n²): the issue reports
+    ``run_review`` at 28 s for an MPN of 32000 digits (8.3 s on the machine this
+    was written on), each doubling x4. The repair is a length
+    precheck at every entry that can be handed an outside string, **not** a
+    bounded regex, and the difference is not stylistic: ``\\d{0,3}`` would undo
+    071's infix repair, which needs the whole run ``060310`` before it can strip
+    the size code ``0603`` -- handed only the last three digits it spells the
+    pseudo-reading ``310K0`` again (issue #24).
+
+    Every witness below is a string the **uncapped** decoder reads: a pin that
+    already came back unreadable would stay green with the precheck removed. The
+    cap is measured on the first whitespace-separated token, the piece the
+    decoders read (an MPN's ``" TS"`` tail is a packaging note).
+    """
+    from boardwise.rules.values import parse_resistance_ohms
+
+    digits = "1" * 1002  # a multiple of three: the one the EIA finder *does* read
+    assert mpn_value_code(digits) is None
+    assert mpn_value_code_anchor(digits) == (None, "")
+    assert mpn_resistance_readings("1" * 1000 + "K") == []
+    assert mpn_resistance_candidates("1" * 1000 + "K") == []
+    assert parse_resistance_ohms("1" * 1000) is None
+    assert parse_capacitance_farads("1" * 1000 + "uF") is None
+    # At the rule level a decoder that no longer reads the token says so: the
+    # part is UNKNOWN, not a silent OK off a reading nobody can vouch for.
+    state, rows = _state_of("resistor", "1kΩ", "1" * 1000 + "K")
+    assert state == "UNKNOWN", rows
+    assert "contains no decodable EIA value code" in rows[0].message
+    # 64 characters of first token are read, 65 are not -- the cap's own edge.
+    assert mpn_value_code("X" * 61 + "471") == "471"
+    assert mpn_value_code("X" * 62 + "471") is None
+    # ...and it is the *first token* that is measured, so a packaging note after
+    # a space does not push a readable MPN over the cap.
+    assert mpn_value_code("471 " + "Y" * 200) == "471"
+    assert mpn_value_code("X" * 62 + "471" + " " + "Y" * 200) is None
+
+
+#: The two lengths issue #27's timing pin compares, in characters of pure digits.
+#: The larger is eight times the smaller and the criterion is that the time grows
+#: no faster than the length; a quadratic decoder costs ~64x. Both are measured in
+#: the same run, so the machine cancels out of the ratio -- a **degenerate
+#: criterion, not a performance baseline** (the 057 issue-#20 idiom): it cannot
+#: see a small slowdown and is not meant to; what it sees is the shape where the
+#: decoder walks every suffix of the run.
+TIMING_SMALL_MPN = 1000
+TIMING_LARGE_MPN = TIMING_SMALL_MPN * 8
+
+#: The issue's own loose ceiling for the small run, and the slack the ratio check
+#: allows for that run's noise. The ceiling is a *relative upper bound*: the
+#: pre-fix cost at 1000 characters is 0.008 s on the machine this was written on
+#: and 8.3 s at 32000, so 0.5 s is not a baseline anything is tuned against -- it
+#: is the order of magnitude where "one unreadable MPN" would become a wall-clock
+#: event, and the ratio check below is what actually fires on the defect.
+TIMING_CEILING_S = 0.5
+TIMING_SLACK_S = 0.05
+
+
+def test_027_run_review_over_a_digits_only_mpn_is_bounded():
+    """Issue #27, end to end: one long value must not become a wall-clock event.
+
+    The rule ``run_review`` applies is the rule that reads the MPN, so this is the
+    frame the issue reports in (28 s for a 32000-digit MPN) at the length the
+    issue's own test used. Post-fix both runs cost the rule suite's fixed work and
+    the MPN's length does not enter the cost at all.
+    """
+    from boardwise.engines.review import run_review
+
+    def elapsed(mpn: str) -> float:
+        model, _designator = _one_part("resistor", "1kΩ", mpn)
+        started = time.perf_counter()
+        run_review(model)
+        return time.perf_counter() - started
+
+    elapsed("RC0603FR-074K7L")  # warm the rule suite, not the decoder
+    small = elapsed("1" * TIMING_SMALL_MPN)
+    large = elapsed("1" * TIMING_LARGE_MPN)
+    assert small < TIMING_CEILING_S, (
+        f"{TIMING_SMALL_MPN} digits took {small:.2f} s (> {TIMING_CEILING_S:g} s)"
+    )
+    assert large <= small * (TIMING_LARGE_MPN / TIMING_SMALL_MPN) + TIMING_SLACK_S, (
+        f"{TIMING_LARGE_MPN} digits took {large:.2f} s against "
+        f"{small:.2f} s for {TIMING_SMALL_MPN}: {TIMING_LARGE_MPN / TIMING_SMALL_MPN:g}x "
+        "the digits cost far more than the length ratio (a degenerate criterion "
+        "-- see TIMING_SMALL_MPN)"
+    )
+
+
+def test_031_an_overflowing_board_value_no_longer_takes_the_review_down():
+    """Issue #31: ``float`` overflows in silence, and ``math.log`` then raised.
+
+    ``parse_resistance_ohms("1" * 400)`` came back as ``inf`` -- no error -- and
+    ``params._closest_reading`` divided the decoded reading by it, ``log(0.0)``,
+    which raised ``ValueError`` out of ``run_review``: one unreadable value field
+    took the whole review down, converting "cannot read this" into "no report".
+    Both halves of the fix are exercised here: the value is refused as unreadable,
+    and the row the rule emits is the UNKNOWN it emits for any unparseable value.
+    """
+    from boardwise.engines.review import run_review
+    from boardwise.rules.values import parse_resistance_ohms
+
+    assert parse_resistance_ohms("1" * 400) is None
+    assert parse_capacitance_farads("1" * 400 + "uF") is None
+    mpn = "RK73H1JTTD1002F"  # an anchored reading: the path that reached math.log
+    model, designator = _one_part("resistor", "1" * 400, mpn)
+    run_review(model)  # pre-fix: ValueError out of here
+    # The row the rule emits is the one it emits for any unparseable value field.
+    # The part's *kind* has to come from somewhere and `_kind_of` reads it out of
+    # the value as its last resort, so the shelf is what says this is a resistor
+    # (a value the parser refuses carries no kind at all, and the rule has nothing
+    # to judge -- the pre-existing path for "cannot tell what this part is").
+    entry = PartEntry(
+        key="resistor.test", value="10kΩ", mpn=mpn, lcsc="C1", category="resistor",
+    )
+    states = _states(ValueMpnMatch(library=_library(entry)), model)
+    assert not states["VIOLATION"], states["VIOLATION"]
+    assert [outcome.subject for outcome in states["UNKNOWN"]] == [designator]
+    unknown = states["UNKNOWN"][0]
+    assert "empty or unparsable" in unknown.message
+    assert unknown.missing_fact == f"a parseable value field on {designator}"
+    # The same MPN against a readable value still accuses, so the UNKNOWN above
+    # is about the value field (and not the fixture having gone silent).
+    state, _rows = _state_of("resistor", "47kΩ", mpn)
+    assert state == "VIOLATION"
+
+
+def test_031_the_finite_gate_does_not_depend_on_the_length_cap(monkeypatch):
+    """The first of the two gates, on its own (the cap is widened away here).
+
+    An overflow is "this value cannot be read", which is what every parser in
+    ``rules/values.py`` answers for a string it does not recognise -- so the
+    refusal sits in the parsers beside the length precheck rather than being left
+    to the caller. Widening the cap is exactly the state the precheck would leave
+    behind if somebody raised it for a legitimate long spelling, and the overflow
+    still has to come back None.
+    """
+    from boardwise.rules import values
+    from boardwise.rules.values import parse_resistance_ohms
+
+    monkeypatch.setattr(values, "_too_long", lambda text: False)
+    assert parse_resistance_ohms("1" * 400) is None
+    assert parse_capacitance_farads("1" * 400 + "uF") is None
+
+
+def test_031_the_reading_choice_survives_a_non_finite_declared_value():
+    """The second gate: ``_closest_reading``'s own guard (issue #31, suggestion 2).
+
+    The choice of candidate is a distance from the board's declared value, and an
+    infinite or NaN declared value has no distance to anything -- ``item[0] / inf``
+    is ``0.0`` and ``log`` of it raises. The function answers with the same
+    conservative fallback it uses for "no declared value at all": the first
+    reading, which is the one the message already says the value field could not
+    be parsed for.
+    """
+    from boardwise.rules.params import _closest_reading
+    from boardwise.rules.values import ANCHOR_MID_LETTER
+
+    readings = [(4700.0, "4K7", ""), (74700.0, "74K7", ANCHOR_MID_LETTER)]
+    for declared in (float("inf"), float("-inf"), float("nan")):
+        assert _closest_reading(readings, declared) == readings[0]
+    assert _closest_reading(readings, 4700.0) == readings[0]
+    assert _closest_reading(readings, 74700.0) == readings[1]
+
+
+def test_027_the_cap_changes_no_token_it_does_not_cover(monkeypatch):
+    """The cap is a bound on *cost*, not a change of grammar (071's own corpus).
+
+    For every part number in this repository that fits under the cap, the four
+    entry points must answer exactly what they answer with the cap lifted -- which
+    is what the pre-fix tree answers, since the only other change in this batch is
+    the finite gate and no finite quantity changes a reading. A cap that quietly
+    started refusing 40-character tokens (or that was typed as, say, 16) fails
+    here, and so does a precheck that measured something other than the token the
+    decoders read.
+    """
+    from boardwise.rules import values
+    from boardwise.rules.values import parse_resistance_ohms
+
+    def snapshot(token: str) -> tuple:
+        return (
+            mpn_resistance_candidates(token),
+            mpn_value_code_anchor(token),
+            parse_resistance_ohms(token),
+            parse_capacitance_farads(token),
+        )
+
+    tokens = [t for t in _corpus_tokens() if len(t) <= values._MAX_DECODED_CHARS]
+    assert len(tokens) > 1000, f"the corpus shrank to {len(tokens)} short tokens"
+    capped = {token: snapshot(token) for token in tokens}
+    monkeypatch.setattr(values, "_MAX_DECODED_CHARS", 10 ** 6)
+    uncapped = {token: snapshot(token) for token in tokens}
+    assert capped == uncapped
