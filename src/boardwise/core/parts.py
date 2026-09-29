@@ -875,12 +875,29 @@ def _facts_from_json(raw: Any, where: str) -> dict[str, Any]:
     if "ldo" in raw:
         entry = raw["ldo"]
         spot = f"{where}.ldo"
-        _check_keys(entry, ("dropout_max_mv", "condition", "provenance"), spot)
-        facts["ldo"] = {
+        _check_keys(entry, ("dropout_max_mv", "condition", "provenance", "fixed_output"), spot)
+        record: dict[str, Any] = {
             "dropout_max_mv": _fact_number(entry.get("dropout_max_mv"), f"{spot}.dropout_max_mv"),
             "condition": _require_nonempty(entry.get("condition"), f"{spot}.condition"),
             "provenance": _fact_provenance(entry.get("provenance"), f"{spot}.provenance"),
         }
+        # Optional (issue #17 point two): the part's own fixed output voltage,
+        # page-cited like every other fact, so the domain inference can quote a
+        # datasheet instead of decoding the MPN suffix. An adjustable part
+        # simply has no such fact (there is no voltage to state), and a part
+        # nobody has curated one for falls back to the suffix decode, which the
+        # report then labels as the guess it is.
+        if "fixed_output" in entry:
+            fixed = entry["fixed_output"]
+            fspot = f"{spot}.fixed_output"
+            _check_keys(fixed, ("volts", "provenance"), fspot)
+            record["fixed_output"] = {
+                "volts": _fact_number(fixed.get("volts"), f"{fspot}.volts"),
+                "provenance": _fact_provenance(
+                    fixed.get("provenance"), f"{fspot}.provenance"
+                ),
+            }
+        facts["ldo"] = record
 
     return facts
 

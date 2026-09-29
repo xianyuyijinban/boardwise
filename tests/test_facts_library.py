@@ -103,6 +103,40 @@ def test_an_unknown_key_inside_a_fact_is_rejected():
         entry_from_json(_base_entry(facts=facts), "<test>")
 
 
+def test_an_ldo_may_declare_its_fixed_output_voltage_with_a_page():
+    """Issue #17 point two's optional fact, page-cited like every other one."""
+    facts = {"ldo": {
+        "dropout_max_mv": 400, "condition": "Iout=500mA", "provenance": DS,
+        "fixed_output": {"volts": 3.3,
+                         "provenance": "Toy datasheet rev 1, p.4 sec.2, "
+                                       "https://example.com/toy.pdf"},
+    }}
+    entry = entry_from_json(_base_entry(facts=facts, category="ic.ldo"), "<test>")
+    assert entry.facts["ldo"]["fixed_output"]["volts"] == 3.3
+    assert "p.4" in entry.facts["ldo"]["fixed_output"]["provenance"]
+    # Absent stays absent: an entry that owes the fact round-trips without it.
+    plain = entry_from_json(
+        _base_entry(facts={"ldo": {"dropout_max_mv": 400, "condition": "x",
+                                   "provenance": DS}}), "<test>")
+    assert "fixed_output" not in plain.facts["ldo"]
+
+
+def test_a_fixed_output_voltage_fact_needs_a_number_and_a_page():
+    for bad, message in (
+        ({"provenance": DS}, "number"),
+        ({"volts": 3.3}, "provenance"),
+        ({"volts": 3.3, "provenance": "Toy datasheet rev 1"}, "URL"),
+        ({"volts": 3.3, "provenance": "Toy datasheet rev 1, https://example.com/toy.pdf"},
+         "page, section"),
+        ({"volts": "3.3", "provenance": DS}, "number"),
+        ({"volts": 3.3, "provenance": DS, "typ": 1}, "typ"),
+    ):
+        facts = {"ldo": {"dropout_max_mv": 400, "condition": "x",
+                         "provenance": DS, "fixed_output": bad}}
+        with pytest.raises(PartError, match=message):
+            entry_from_json(_base_entry(facts=facts), "<test>")
+
+
 def test_ranges_must_be_pairs_of_numbers():
     for bad in ([1.0], [1.0, 2.0, 3.0], ["1", "2"], [True, 2.0], [5.0, 1.0]):
         facts = {"supply_pins": [{"pins": ["1"], "name": "VIN",

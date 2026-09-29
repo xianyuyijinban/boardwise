@@ -21,7 +21,7 @@ trustworthy enough to place a part with.
 | `datasheetUrl`, `datasheetPdfUrl` | declared by the source; the PDF URL is empty when the source has none, rather than guessed |
 | `basic` | JLC basic-part flag: `true`/`false` **with evidence**, `null` without |
 | `category` | the electrical class from the vocabulary — absent means "not classified", which a rule reports as UNKNOWN rather than guessing from the designator |
-| `facts` | datasheet claims (039's vocabulary: `supply_pins` / `required_caps` / `nc_pins` / `must_connect` / `pull_required` / `ldo` / `led`), each with its own page-cited provenance |
+| `facts` | datasheet claims (039's vocabulary: `supply_pins` / `required_caps` / `nc_pins` / `must_connect` / `pull_required` / `ldo` / `led`), each with its own page-cited provenance. Since issue #17 an `ldo` record may also carry the optional `fixed_output` (`{"volts": 3.3, "provenance": "…, p.3 …"}`): the domain inference then quotes that page instead of decoding the part number, and labels an entry that has none as the **guess** it is |
 | `facts_verified` | the gate: written **only when false**, and absent means true. A candidate (`false`) records a claim nobody has reviewed; no rule acts on it until a human flips the flag in review |
 | `provenance` | `kind` (`board-extract` / `catalog-select` / `manual-curation`), `source`, and `designators` — the accumulating track record |
 | `notes` | anything a reader must know: a corrected footprint spelling, an unrecognised part class, a disambiguated key |
