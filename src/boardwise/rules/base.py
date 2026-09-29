@@ -7,6 +7,7 @@ allowed for now, but the field is an architectural commitment.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -121,13 +122,80 @@ class Outcome:
             )
 
 
+#: The subjects this reads: a designator, optionally followed by one pin, as
+#: ``Outcome`` writes them (``"U1"``, ``"U1 pin16"``). Whole-subject, so
+#: everything else — a sentence, two designators joined by a slash, a pin the
+#: shape cannot read — matches nothing and yields no target at all.
+_SUBJECT = re.compile(r"^([A-Za-z]{1,5}\d{1,4})(?:\s+pin\s*([A-Za-z0-9_]+))?$")
+
+
+def target_from_subject(subject: str) -> FindingTarget | None:
+    """The structured target an :class:`Outcome`'s own subject already states.
+
+    ``subject`` names what was judged in the model's own spelling, so the
+    designator in it does **not** go through the prose reader's allow-list of
+    prefixes: that list exists to keep *part numbers* out of free text
+    (``AMS1117``, ``CH340G``), and applied here it would drop real designators
+    the shelf has never heard of — issue #13 measured a board whose parts are
+    spelled ``xR67``, which no allow-list of prefixes would ever name.
+
+    What the shape does not state is left empty, and what it cannot parse it
+    does not guess: an empty subject, prose, or two parts at once returns
+    ``None``, so the callers fall back to the text exactly as they did before
+    issue #16 rather than inventing an identity. ``"U1"`` fills only
+    ``component_ref``, ``"U1 pin16"`` adds ``pin_refs=["16"]``; nets, values and
+    repair directions are not in a subject and stay empty.
+    """
+    match = _SUBJECT.match((subject or "").strip())
+    if match is None:
+        return None
+    designator, pin = match.group(1), match.group(2)
+    return FindingTarget(component_ref=designator, pin_refs=[pin] if pin else [])
+
+
 class OutcomeRule(Rule):
     """A rule that can also explain its silence, in four-state vocabulary.
 
     Legacy rules keep overriding only :meth:`check`; the harness then derives
     VIOLATION rows from their findings and reports their other states as
     "legacy" rather than inventing OK/UNKNOWN counts they never made.
+
+    A rule of this family states what it judged in ``Outcome.subject``, so its
+    findings are built through :meth:`finding_from_row` — that is where the
+    subject becomes the finding's structured identity (issue #16).
     """
 
     def outcomes(self, model: DesignModel) -> list[Outcome]:
         raise NotImplementedError
+
+    def finding_from_row(
+        self,
+        outcome: Outcome,
+        severity: str,
+        target: FindingTarget | None = None,
+    ) -> Finding:
+        """One report row as a :class:`Finding`, carrying its structured identity.
+
+        ``Outcome.subject`` is the rule's own claim about what it judged, and
+        the finding is the same claim — dropping the subject here is issue #16:
+        every ``OutcomeRule``'s findings arrived with ``target is None`` (151 of
+        the 154 findings on the fixture set), so the only thing downstream could
+        identify them by was the prose reader, which reads part numbers
+        (``RT9013``) and capacitor values (``C104``) as designators.
+
+        An explicit ``target`` still wins: rows built for a repair carry fields
+        (``expected_before``, ``suggested_after``) that a subject cannot state,
+        and 016's ``param-value-mpn-match`` rows already come with one.
+        """
+        return Finding(
+            rule_id=self.id,
+            severity=severity,
+            level=self.level,
+            message=outcome.message,
+            evidence=list(outcome.evidence),
+            target=(
+                target
+                if target is not None
+                else target_from_subject(outcome.subject)
+            ),
+        )

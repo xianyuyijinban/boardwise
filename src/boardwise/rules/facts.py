@@ -195,7 +195,8 @@ class FactsRule(OutcomeRule):
         A row is ``(outcome, severity)``, optionally followed by a third
         element carrying the row's :class:`FindingTarget` (task 016). Only
         ``param-value-mpn-match`` produces the three-element form; every other
-        caller passes pairs and is unaffected.
+        caller passes pairs and is unaffected — their target is derived from the
+        row's own ``subject`` (:meth:`OutcomeRule.finding_from_row`, issue #16).
         """
         findings: list[Finding] = []
         for row in rows:
@@ -204,14 +205,7 @@ class FactsRule(OutcomeRule):
             if outcome.state != "VIOLATION":
                 continue
             findings.append(
-                Finding(
-                    rule_id=self.id,
-                    severity=severity or "ERROR",
-                    level=self.level,
-                    message=outcome.message,
-                    evidence=list(outcome.evidence),
-                    target=target,
-                )
+                self.finding_from_row(outcome, severity or "ERROR", target)
             )
         return findings
 
@@ -632,15 +626,7 @@ class LibraryPinConsistency(OutcomeRule):
         for outcome, severity in self._rows(model):
             if outcome.state != "VIOLATION":
                 continue
-            findings.append(
-                Finding(
-                    rule_id=self.id,
-                    severity=severity or "ERROR",
-                    level=self.level,
-                    message=outcome.message,
-                    evidence=list(outcome.evidence),
-                )
-            )
+            findings.append(self.finding_from_row(outcome, severity or "ERROR"))
         return findings
 
     def _rows(self, model: DesignModel) -> list[tuple[Outcome, str | None]]:

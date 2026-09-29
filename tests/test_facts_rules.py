@@ -7,7 +7,7 @@ import pytest
 
 from boardwise.core.model import Component, DesignModel, Net, Pin
 from boardwise.core.parts import PartEntry, PartLibrary
-from boardwise.rules.base import OUTCOME_STATES
+from boardwise.rules.base import OUTCOME_STATES, FindingTarget, target_from_subject
 from boardwise.rules.connectivity import CrystalLoadCaps, DuplicateDesignators
 from boardwise.rules.facts import (
     DomainVsRange,
@@ -114,6 +114,25 @@ def test_conn1_flags_a_designator_two_parts_claim():
     assert states["VIOLATION"][0].subject == "U1"
     findings = DuplicateDesignators().check(model)
     assert findings and findings[0].severity == "ERROR"
+
+
+def test_conn1_findings_carry_the_designator_as_a_structured_target():
+    """Issue #16: the rule that judges *identity* had none of its own.
+
+    `conn-duplicate-designators` says a designator means exactly one part, and
+    its findings named that part only in prose ("duplicate designator U1") — so
+    `review-mark` and (063) `triage_key` read the ref back out of a sentence.
+    `Outcome.subject` said `U1` all along (the row asserted above); what was
+    missing is the carrying, and that is what `OutcomeRule.finding_from_row`
+    does now: every rule in this family gets the structured identity its own
+    subject already stated.
+    """
+    model = DesignModel()
+    model.duplicate_designators = ["U1"]
+    (finding,) = DuplicateDesignators().check(model)
+    assert finding.target is not None
+    assert finding.target.component_ref == "U1"
+    assert finding.target.pin_refs == []
 
 
 def test_conn1_is_ok_when_every_designator_is_unique():
@@ -401,3 +420,61 @@ def test_xtal_a_two_pad_crystal_without_caps_is_still_flagged():
     model.nets["NET2"] = Net("NET2", [("X1", "1")])
     findings = CrystalLoadCaps().check(model)
     assert len(findings) == 1 and "NET2" in findings[0].message
+
+
+# --------------------------------- the subject an Outcome already states (#16)
+
+
+def test_a_pin_subject_fills_the_pin_reference_as_well():
+    """``"U1 pin9"`` is a designator *and* a pin — both reach the target.
+
+    `conn-library-pins` is read here because it is the one `OutcomeRule` whose
+    `check` builds its findings without going through `FactsRule.findings_from`
+    — the conversion exists in two places, so the identity is asserted in two.
+    The pin is what keeps two findings on one part apart in the triage key
+    (`pin:9` / `pin:2`), which is the whole reason the subject carries it.
+    """
+    def resolver(comp):
+        return {"U1": {"1", "2", "3"}}.get(comp.designator)
+
+    model = _model()
+    model.components["U1"].pins = [
+        Pin("1", "A", "NET2"),   # on both
+        Pin("9", "B", "NET4"),   # board-only
+    ]
+    findings = LibraryPinConsistency(resolver=resolver).check(model)
+    board_only = next(f for f in findings if "U1 pin9" in f.message)
+    assert board_only.target == FindingTarget(
+        component_ref="U1", pin_refs=["9"],
+    )
+    library_only = next(f for f in findings if "U1 pin2" in f.message)
+    assert library_only.target == FindingTarget(
+        component_ref="U1", pin_refs=["2"],
+    )
+
+
+def test_a_subject_that_is_not_a_designator_fills_no_target():
+    """Conservative on purpose: prose is never parsed into an identity.
+
+    Subjects that are sentences ("designator uniqueness", "RC survey") or that
+    name two parts at once ("R5/C12") get **no** target, and a pin the shape
+    cannot read leaves the whole subject unparsed rather than filling half of
+    it. Inventing a `component_ref` out of prose would be issue #16's own defect
+    in the other direction — the reader already read `RT9013` and `C104` as
+    parts, and the fix may not add new fake identities while removing old ones.
+    """
+    assert target_from_subject("designator uniqueness") is None
+    assert target_from_subject("RC survey") is None
+    assert target_from_subject("library pin comparison") is None
+    assert target_from_subject("R5/C12") is None
+    assert target_from_subject("") is None
+    assert target_from_subject("U1 pin") is None
+    assert target_from_subject("U1 pin16 extra") is None
+    # …and the shapes it does read, including the designators no prefix
+    # allow-list would ever name (`xR67`, issue #13's own board).
+    assert target_from_subject("U1") == FindingTarget(component_ref="U1")
+    assert target_from_subject(" EC3 ") == FindingTarget(component_ref="EC3")
+    assert target_from_subject("xR67") == FindingTarget(component_ref="xR67")
+    assert target_from_subject("U1 pin16") == FindingTarget(
+        component_ref="U1", pin_refs=["16"]
+    )

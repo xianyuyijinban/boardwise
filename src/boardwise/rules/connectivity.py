@@ -157,15 +157,7 @@ class DuplicateDesignators(OutcomeRule):
             # board's single OK row.
             if severity is None:
                 continue
-            findings.append(
-                Finding(
-                    rule_id=self.id,
-                    severity=severity,
-                    level=self.level,
-                    message=outcome.message,
-                    evidence=list(outcome.evidence),
-                )
-            )
+            findings.append(self.finding_from_row(outcome, severity))
         return findings
 
     def _rows(self, model: DesignModel) -> list[tuple[Outcome, str | None]]:

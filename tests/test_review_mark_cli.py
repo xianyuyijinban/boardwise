@@ -26,13 +26,20 @@ from boardwise.cli import (
     FindingsError,
     _cmd_review_mark,
     _load_findings,
+    _load_model,
     build_parser,
     marks_from_findings,
 )
-from boardwise.engines.review import finding_refs, render_json
+from boardwise.engines.review import check_rules, finding_refs, render_json
 from boardwise.rules.base import Finding
 
 ROOT = Path(__file__).resolve().parents[1]
+
+#: Issue #16's two measured boards. Both are repo fixtures, read-only here: the
+#: LED finding on the injected contradiction board, and the decap finding on the
+#: thesis board whose capacitor carries `C104` as its *value*.
+VALUE_MPN_BOARD = ROOT / "reviewsets" / "injected" / "value-mpn-mismatch.epro2"
+FOC_BOARD = ROOT / "tests" / "fixtures" / "ProPrj_毕设FOC驱动板_2026-09-17.epro2"
 
 #: What `boardwise review --json` writes, trimmed to the fields that matter here.
 REPORT = {
@@ -124,6 +131,104 @@ def test_a_lowercase_five_letter_prefix_folds_to_the_same_ref():
         rule_id="x", severity="WARN", message="", level="L1", evidence=["screw2 孔"]
     )
     assert finding_refs(finding) == ["SCREW2"]
+
+
+# --------------------------------------------------------------------------
+# the structured target, and when the prose is not read at all (issue #16)
+# --------------------------------------------------------------------------
+
+
+def test_a_finding_about_one_pin_does_not_hand_the_canvas_a_whole_net():
+    """Issue #16's second half: a target that is there is believed, alone.
+
+    `conn-nc-and-must-connect`'s finding is about **U5 pin4**, and its message
+    prints the members of GND to explain itself. Reading the prose *as well as*
+    the target made that one finding mark 16 refs on the canvas — U5 and every
+    co-member of its net. The rule stated what it is about; the text is the
+    fallback for findings that state nothing, not an addition to the ones that do
+    (the same priority `triage_identity` uses, 070).
+    """
+    model, _geometry = _load_model(
+        ROOT / "reviewsets" / "injected" / "nc-pin-grounded.epro2", view="schematic"
+    )
+    findings = [
+        finding for finding in check_rules(model)
+        if finding.rule_id == "conn-nc-and-must-connect"
+    ]
+    assert len(findings) == 1
+    finding = findings[0]
+    assert finding.target is not None and finding.target.component_ref == "U5"
+    assert finding_refs(finding) == ["U5"], (
+        "the net's co-members are diagnosis, not the subject"
+    )
+
+
+def test_a_part_number_in_the_message_is_not_a_ref():
+    """Issue #16, instance 1: `RT9013` is an LDO part number, not a designator.
+
+    Measured on `param-led-current`'s own board, where the message reads
+    "supply side VCC = 3.3 V per U5 RT9013-33GB output". The token shape reads
+    `RT` + `9013`, and `RT` is on the prefix allow-list — so prose alone hands
+    the canvas a part that is not on the board, and the triage key names it too.
+    The rule's subject (`LED1`, the thing whose current was judged) is what the
+    finding is about, and since issue #16 it is read from `target`.
+
+    The price of the ruling is visible here: `U3` (the series resistor the
+    message names) and `U5` (the LDO whose output sets the domain) are prose
+    only, so they lose their marks. A rule that wants them marked has to say so
+    in its target — the follow-up issue #16 names, not something the reader may
+    guess back out of a sentence.
+    """
+    model, _geometry = _load_model(VALUE_MPN_BOARD, view="schematic")
+    findings = [
+        finding for finding in check_rules(model)
+        if finding.rule_id == "param-led-current"
+    ]
+    assert len(findings) == 1
+    refs = finding_refs(findings[0])
+    assert "RT9013" not in refs
+    assert refs == ["LED1"]
+
+
+def test_a_capacitor_value_is_not_read_as_a_designator():
+    """Issue #16, instance 2: `C104` is a *value*, `C26` is the part.
+
+    The thesis board's decap finding carries `C26 value 'C104'` as evidence —
+    the EIA code `104` with the shelf's own `C` in front of it, which the token
+    shape reads as a designator (`C` + `104`). The finding's subject is `U11
+    pin5`, so the capacitor is not even its subject; the fix reads the target.
+    """
+    model, _geometry = _load_model(FOC_BOARD, view="schematic")
+    findings = [
+        finding for finding in check_rules(model)
+        if finding.rule_id == "decap-required-caps"
+        and finding.target is not None
+        and finding.target.component_ref == "U11"
+    ]
+    assert len(findings) == 1
+    finding = findings[0]
+    assert "C26 value 'C104'" in finding.evidence, "the issue's own evidence line"
+    refs = finding_refs(finding)
+    assert "C104" not in refs
+    assert refs == ["U11"]
+
+
+def test_a_quoted_value_is_not_read_as_a_designator_without_a_target():
+    """The belt for the rules that carry no target at all (issue #16).
+
+    `C26 value 'C104'` is a *value* idiom: the designator is outside the quotes
+    and the value is inside them, whatever the value happens to look like. The
+    prose reader keeps the part and drops the quoted span — this is the path the
+    legacy rules still take, and the one that has no `target` to be believed
+    instead. `param-rc-cutoff`'s own evidence lines are the real-world shape
+    (`R12 value '10K'`), which is where the idiom comes from.
+    """
+    finding = Finding(
+        rule_id="param-rc-cutoff", severity="INFO", level="L2",
+        message="RC R12(1e+04Ω) + C11(10UF) on 'TVDD'",
+        evidence=["R12 value '10K'", "C11 value '10UF'", "C26 value 'C104'"],
+    )
+    assert finding_refs(finding) == ["R12", "C11", "C26"]
 
 
 def test_render_json_states_the_refs_of_every_finding():

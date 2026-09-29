@@ -266,9 +266,15 @@ def test_the_summary_names_the_rule_the_part_and_the_numbers(tmp_path, capsys):
     text = md.read_text(encoding="utf-8")
 
     assert "共 2 条发现：0 错误 / 2 警告 / 0 提示" in text
+    # One designator, and it is the rule's own subject (issue #16): the finding
+    # judges the LED's current, and `U3` (its series resistor) and `U5` (the LDO
+    # whose output sets the domain) were only named in the message. They used to
+    # be listed here because the summary read the prose as well as the target;
+    # the English finding line below still names both, which is where a reader
+    # looks for the diagnosis.
     assert (
         "- [警告] LED 限流电阻（param-led-current）："
-        "位号 LED1/U3/U5；关键数值 4700Ω、3.3 V" in text
+        "位号 LED1；关键数值 4700Ω、3.3 V" in text
     )
     assert (
         "- [警告] 位号值与 MPN 是否一致（param-value-mpn-match）："
@@ -276,8 +282,10 @@ def test_the_summary_names_the_rule_the_part_and_the_numbers(tmp_path, capsys):
     )
     # `RT9013` is part of U5's part number ("per U5 RT9013-33GB"), which the
     # designator reader reads as an `RT` designator; the board has no RT9013,
-    # so the summary must not name it.
+    # so the summary must not name it (and since issue #16 the finding itself
+    # carries `LED1` as its target, so the reader never sees that part number).
     assert "RT9013" not in text.split("## WARN")[0]
+    assert "U3(4700Ω)" in text, "the message keeps the parts the subject does not name"
     assert "contradicts its MPN" in text, "the English message body is not translated"
 
 
