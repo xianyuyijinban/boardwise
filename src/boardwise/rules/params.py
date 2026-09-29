@@ -27,6 +27,7 @@ from ..core.model import Component, DesignModel, is_ground_net
 from ..core.power_domains import domain_of, infer_net_domains
 from .base import Finding, FindingTarget, Outcome
 from .facts import FactsRule
+from .unproven import unproven_nets, unproven_outcome
 from .values import (
     decode_eia_3digit,
     mpn_resistance_readings,
@@ -731,6 +732,31 @@ class DividerOutput(FactsRule):
                     ]
                     if not loads:
                         continue  # an unloaded divider has no declared range
+                    # Issue #19: both halves of this rule are net-shaped — the
+                    # loads are whoever shares the tap, and the rail voltage is
+                    # inferred from a net that may hold another page's regulator.
+                    # On a welded name neither is established, so the tap is not
+                    # judged (the WARN that leaves a load's declared range and the
+                    # OK that fits it are the same unproven claim).
+                    welded = unproven_nets(model, (tap, top_net))
+                    if welded:
+                        rows.append((
+                            unproven_outcome(
+                                self.id,
+                                f"{upper_desig}/{bottom_desig}",
+                                welded,
+                                what=(
+                                    "what its tap feeds and what its rail is "
+                                    "(both are read from these nets' members)"
+                                ),
+                                evidence=[
+                                    f"divider {upper_desig}/{bottom_desig}: "
+                                    f"tap {tap}, rail {top_net}"
+                                ],
+                            ),
+                            None,
+                        ))
+                        continue
                     self._check_tap(
                         rows, model, guesses, upper_desig, bottom_desig,
                         r_up, r_down, volts, source, tap, loads,

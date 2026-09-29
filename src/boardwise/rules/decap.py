@@ -52,6 +52,7 @@ from .facts import (
     _gate_review_note,
     _identity,
 )
+from .unproven import unproven_nets, unproven_outcome
 from .values import decode_eia_3digit, mpn_value_code, parse_capacitance_farads
 
 
@@ -434,7 +435,13 @@ class DecapRequiredCaps(FactsRule):
                     (p.net for p in comp.pins if p.number == str(pin)), None
                 )
                 volts, _source, why_not = domain_of(guesses, net)
-                if volts is None:
+                if volts is None or unproven_nets(model, (net,)):
+                    # Issue #19's second half, on the mode question: the voltage
+                    # may have been inferred from an LDO's output pin on a page
+                    # that only *shares the net's name*, so the active mode is not
+                    # established either. Same answer as "voltage unknown", and
+                    # the mode-tagged record below reports it as UNKNOWN rather
+                    # than silently not applying.
                     voltage_known = False
                     continue
                 if operating[0] <= volts <= operating[1] and record.get("mode"):
@@ -638,6 +645,29 @@ class DecapRequiredCaps(FactsRule):
                         f"a net for {comp.designator} pin{pin} that is not a "
                         f"ground net (it is on {net!r} today)"
                     ),
+                ),
+                None,
+            ))
+            return
+
+        # Issue #19: the per-page tier welded this net with every page that spells
+        # the name the same way, so "a grounded capacitor of the required value is
+        # on it" is not established — the capacitor may be on the other board (the
+        # measured false pass), and "there is none" is not established either (a
+        # cross-sheet capacitor on a one-board project is legal). Both directions
+        # are withheld: the row is UNKNOWN.
+        welded = unproven_nets(model, (net,))
+        if welded:
+            rows.append((
+                unproven_outcome(
+                    self.id,
+                    f"{comp.designator} pin{pin}",
+                    welded,
+                    what=(
+                        "whether a grounded capacitor of the required value "
+                        f"{required_text!r} sits on it"
+                    ),
+                    evidence=evidence,
                 ),
                 None,
             ))

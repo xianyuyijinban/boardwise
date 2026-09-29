@@ -110,6 +110,37 @@ class DesignModel:
     #: to hold both kinds under one name. ``repeated_designators()`` is what a
     #: consumer that merely needs "is this name ambiguous here?" should call.
     cross_page_designators: dict[str, list[str]] = field(default_factory=dict)
+    #: Net names whose **membership is not a verified connection**, with the
+    #: pages each name was seen on. Empty for every model that comes out of one
+    #: export — which is every model except the merged per-page one (issue #19,
+    #: :func:`boardwise.cli._merge_schematic_models`): a single export's netlist
+    #: *is* its connectivity, so its nets are proven by construction.
+    #:
+    #: The per-page tier reads one page at a time and holds no document that says
+    #: which board a page belongs to. Merging two pages by net **name** therefore
+    #: welds two boards' netlists together wherever the names agree (`VCC`,
+    #: `+5V`, `GND` are the common ones), and a rule that then finds a capacitor
+    #: on "VCC" cannot tell whose board it is on. A name listed here was seen on
+    #: more than one page, so a rule whose conclusion depends on which *other*
+    #: parts sit on it must refuse (``boardwise.rules.unproven``) rather than
+    #: conclude pass or fail.
+    #:
+    #: The value is the page uuids the name was seen on. As with
+    #: :attr:`cross_page_designators`, an **empty tuple** is what a caller states
+    #: when it knows the name is on more than one page but cannot name them (a
+    #: merge of models that carry no page ids) — so the test is ``is not None``,
+    #: never truthiness.
+    unproven_nets: dict[str, tuple[str, ...]] = field(default_factory=dict)
+
+    def unproven_pages(self, name: str | None) -> tuple[str, ...] | None:
+        """The pages ``name`` was seen on when it is unproven, else ``None``.
+
+        ``()`` is a real answer ("more than one page, page ids unknown"), so
+        callers test ``is not None``.
+        """
+        if not name:
+            return None
+        return self.unproven_nets.get(name)
 
     def repeated_designators(self) -> list[str]:
         """Every designator this model cannot resolve to exactly one placement.
@@ -211,6 +242,11 @@ class ProjectModel:
     (first-board-wins) is exactly the silent loss this batch removes, one level
     up. Consumers that can be board-aware use :attr:`boards` directly.
 
+    ``unproven_nets`` is read here too, with one deliberate difference — it
+    **answers** on a multi-board project instead of raising, because there is
+    nothing welded to report there (see its own docstring). A rule is handed
+    whatever model the caller has, so "cannot answer" must not become a crash.
+
     ``project_raw`` keeps the untouched top-level blocks of the *project*;
     ``raw`` (the façade) keeps reading the single board's, as before.
     """
@@ -292,3 +328,28 @@ class ProjectModel:
     def cross_page_designators(self) -> dict[str, list[str]]:
         """The one board's several-page repeats (040b façade)."""
         return self.single_board().cross_page_designators
+
+    @property
+    def unproven_nets(self) -> dict[str, tuple[str, ...]]:
+        """The project's welded net names — empty unless it is one merged board.
+
+        Not the raising façade the fields above use, deliberately: a **multi-board
+        project** has nothing welded, because the container's own document chain
+        attributes every page to a board (:func:`boardwise.parsers.schematic.board_partition`),
+        so each board's netlist is its own. And the rules are handed whatever
+        model the caller has, so a read that cannot answer "unproven?" must answer
+        "no" rather than raise out of a rule run.
+        """
+        if len(self.boards) != 1:
+            return {}
+        return self.boards[0].unproven_nets
+
+    def unproven_pages(self, name: str | None) -> tuple[str, ...] | None:
+        """As :meth:`DesignModel.unproven_pages`, on the project's one board.
+
+        ``None`` for a multi-board project — which is what every net there is:
+        attributed to a board by the container, therefore proven.
+        """
+        if len(self.boards) != 1:
+            return None
+        return self.boards[0].unproven_pages(name)

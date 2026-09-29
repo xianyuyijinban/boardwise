@@ -33,6 +33,12 @@ from ..core.power_domains import (
 )
 from .base import Finding, FindingTarget, Outcome, OutcomeRule
 from .connectivity import parse_resistance_ohms
+from .unproven import (
+    unproven_message,
+    unproven_missing_fact,
+    unproven_nets,
+    unproven_outcome,
+)
 
 LEVEL = "L2-facts"
 #: An IC by designation is ``U`` followed by a digit — ``U1``/``U3``/``U5``,
@@ -422,6 +428,30 @@ def pin_ruling(comp: Component, entry: PartEntry, model: DesignModel, pin: str) 
     kind, target = obligation
     net = _pin_net(comp, pin)
     if kind == "nc":
+        # Issue #19: "declared NC but sits on net 'VCC' with R4.2" and "declared
+        # NC and touches no net" are both readings of *who else is on this net*,
+        # and the per-page merge welds pages by name. On such a net neither
+        # answer is established — the company may be the other board's parts
+        # (the measured false *pass*: an NC pin that looks connected next door),
+        # and "alone on it" is exactly what a welded name can fake. So the
+        # refusal covers both directions, which is why it is UNKNOWN.
+        welded = unproven_nets(model, (net,))
+        if welded:
+            return PinRuling(
+                state=PIN_UNKNOWN,
+                message=unproven_message(
+                    f"{comp.designator} pin{pin}",
+                    welded,
+                    what=(
+                        "whether it shares this net with any other pin "
+                        "(which is what decides a declared-NC pin)"
+                    ),
+                ),
+                evidence=[f"{comp.designator} pin{pin} @ {net or '(no net)'}"]
+                if net
+                else [],
+                missing_fact=unproven_missing_fact(welded),
+            )
         connected, how = nc_violation(model, comp, pin)
         if not connected:
             return PinRuling(
@@ -453,6 +483,26 @@ def pin_ruling(comp: Component, entry: PartEntry, model: DesignModel, pin: str) 
                 f"{comp.designator} pin{pin} reaches its must_connect target net "
                 f"{target!r}"
             ),
+        )
+    # Issue #19, the other half: the pin not being on its target is a per-pin
+    # fact (its own net name), but "therefore it dangles" and "therefore it is on
+    # the wrong net" are both read from the net's membership — `pin_dangles`
+    # counts the pins that share it. On a welded name that count is not this
+    # board's, so the connect/reconnect decision is not established.
+    welded = unproven_nets(model, (net,))
+    if welded:
+        return PinRuling(
+            state=PIN_UNKNOWN,
+            message=unproven_message(
+                f"{comp.designator} pin{pin}",
+                welded,
+                what=(
+                    f"whether it dangles or sits on some other net (which is what "
+                    f"the repair towards {target!r} depends on)"
+                ),
+            ),
+            evidence=[f"{comp.designator} pin{pin} @ {net or '(no net)'}"],
+            missing_fact=unproven_missing_fact(welded),
         )
     dangles, how = pin_dangles(model, comp, pin)
     if dangles:
@@ -810,6 +860,24 @@ class SupplyOnKnownDomain(FactsRule):
                 evidence = (
                     [f"{comp.designator} pin{pin} @ {net}"] if net else []
                 )
+                # Issue #19: the voltage comes from the net's *name* or from an
+                # LDO's output pin, and the second source can be a part on a page
+                # that only shares the name. On an unproven net no voltage is
+                # asserted — the OK row below would be claiming the other board's
+                # regulator for this pin.
+                welded = unproven_nets(model, (net,))
+                if welded:
+                    rows.append((
+                        unproven_outcome(
+                            self.id,
+                            f"{comp.designator} pin{pin}",
+                            welded,
+                            what=f"the voltage this pin's net {net!r} is at",
+                            evidence=evidence,
+                        ),
+                        None,
+                    ))
+                    continue
                 if volts is not None:
                     rows.append((
                         Outcome(
@@ -927,6 +995,28 @@ class DomainVsRange(FactsRule):
             for pin, records in sorted(by_pin.items()):
                 net = _pin_net(comp, pin)
                 volts, _source, why_not = domain_of(guesses, net)
+                # Issue #19: every range verdict below is a function of this
+                # voltage, and the voltage may have been inferred from an LDO
+                # that is on another page. An unproven net therefore gets no
+                # verdict — neither the ERROR of exceeding an absolute maximum
+                # nor the OK of fitting a window, because both would be claims
+                # about a netlist that may be two boards welded.
+                welded = unproven_nets(model, (net,))
+                if welded:
+                    rows.append((
+                        unproven_outcome(
+                            self.id,
+                            f"{comp.designator} pin{pin}",
+                            welded,
+                            what=f"the voltage this pin's net {net!r} is at",
+                            evidence=(
+                                [f"{comp.designator} pin{pin} @ {net}"]
+                                if net else []
+                            ),
+                        ),
+                        None,
+                    ))
+                    continue
                 if volts is None:
                     rows.append((
                         Outcome(
@@ -1130,6 +1220,32 @@ class LdoDropout(FactsRule):
                 continue
             vin, _s, vin_why = domain_of(guesses, _pin_net(comp, str(in_pin)))
             vout, _s2, vout_why = domain_of(guesses, _pin_net(comp, str(out_pin)))
+            # Issue #19: headroom is the difference of two inferred rail
+            # voltages, and either inference may have taken its source from
+            # another page's part. On an unproven rail the subtraction is not
+            # established — which covers both the ERROR ("cannot hold its rated
+            # voltage") and the OK.
+            welded = unproven_nets(
+                model,
+                (_pin_net(comp, str(in_pin)), _pin_net(comp, str(out_pin))),
+            )
+            if welded:
+                rows.append((
+                    unproven_outcome(
+                        self.id,
+                        comp.designator,
+                        welded,
+                        what="the headroom between its input and output rails",
+                        evidence=[
+                            f"{comp.designator} pin{in_pin} @ "
+                            f"{_pin_net(comp, str(in_pin))}",
+                            f"{comp.designator} pin{out_pin} @ "
+                            f"{_pin_net(comp, str(out_pin))}",
+                        ],
+                    ),
+                    None,
+                ))
+                continue
             if vin is None or vout is None:
                 missing = [w for w in (vin_why, vout_why) if w]
                 rows.append((
@@ -1331,6 +1447,28 @@ class UsbCcPulldown(FactsRule):
                     ))
                     continue
                 ohms, r_desig = self._resistance_to(model, net, to_net)
+                # Issue #19: the pull-down search reads the parts that *share this
+                # net*, so on a welded name the resistor it finds (or fails to
+                # find) may be the other board's. The missing-resistor ERROR is
+                # the dangerous direction — a real board's absence hidden by a
+                # same-named net next door — and the OK direction is the same
+                # mistake mirrored, so both are withheld.
+                welded = unproven_nets(model, (net,))
+                if welded:
+                    rows.append((
+                        unproven_outcome(
+                            self.id,
+                            f"{comp.designator} pin{pin}",
+                            welded,
+                            what=(
+                                f"whether a resistor to {to_net!r} sits on this "
+                                "pin's net"
+                            ),
+                            evidence=evidence,
+                        ),
+                        None,
+                    ))
+                    continue
                 if r_desig is None:
                     rows.append((
                         Outcome(
