@@ -1977,9 +1977,12 @@ def _branch_anchor(
       that junction (the midpoint of their pins on the net). Anchoring it on the
       owner's own pin instead would hang the branch beside the upper arm rather
       than off the tap, which is the difference 053 sec.3's "抽点中点" names;
-    * everything else — the owner's pin on the shared net. The RC shunt's root
-      then lands on the trunk row exactly as its `same-row` says, and the LDO's
-      input capacitor lands on the input rail.
+    * everything else — the owner's pin on the shared net, as
+      :func:`_shared_token` reads it: one pin when the role has one, and the pin
+      across the body from the input branch when the role has several (065
+      sec.1). The RC shunt's root then lands on the trunk row exactly as its
+      `same-row` says, and the LDO's input capacitor lands on the input rail —
+      its output capacitor on the other one.
     """
     if slot.basis == "tap":
         junction = _tap_junction(ctx, slot.shared_net, poses, origins)
@@ -2020,11 +2023,100 @@ def _tap_junction(
 
 
 def _shared_token(ctx: _Context, slot: _Slot) -> str:
-    """The owner's spec pin token on the net this branch shares."""
+    """The owner's spec pin token on the net this branch shares.
+
+    Which of several pins, when the role is carried on more than one (060 sec.2),
+    is a question about the *picture* and not only about the node: the pin the
+    branch hangs on is the side of the symbol the branch is drawn on. 065 sec.1
+    reads the pin itself — an output branch hangs on the pin that lies across the
+    body from the pin its input sibling hangs on, so an LDO's two capacitors land
+    one on each side of the core instead of both under its left-hand VOUT pad
+    (岳, on the E1 render: "C1 放左边、C2 放右边，不行吗？"). A symbol whose pins
+    of that role all sit on one side has no opposite pin and keeps 060's answer.
+    """
+    opposite = _opposite_side_token(ctx, slot)
+    if opposite:
+        return opposite
     owner_nets = _part_nets(ctx.circuit, slot.owner)
     for pin, net in sorted(owner_nets.items()):
         if net == slot.shared_net:
             return pin
+    return ""
+
+
+def _opposite_side_token(ctx: _Context, slot: _Slot) -> str:
+    """The owner's pin on this branch's net that lies across the body, or ``""``.
+
+    Only an **output** branch asks: the reference is the pin the same owner's
+    *input* branch hangs on, and a candidate is opposite when the two pin tips,
+    measured from the body's centre, point away from each other — the dot product
+    of the two offsets is negative. Strictly negative, so a pin leaving a
+    perpendicular side is not called opposite: two supply pins at right angles to
+    each other state no pair of sides to separate.
+
+    Reading this in the symbol's own frame is what makes it answerable before a
+    pose is chosen (the placement stage asks :func:`_shared_token` while it is
+    still accepting poses): a pose is a rotation or a mirror about the part's
+    origin, and both keep dot products, so "across the body" means the same thing
+    in every pose the symbol may be drawn in.
+
+    The candidates are the owner's pins on the shared net as :func:`_chain_nets`
+    reads it — the spec's own members **and** a role's other pins, minus the ones
+    the spec lists in ``nc[]`` — because a duplicate pad the spec left unwritten
+    is still a pin the drawing may hang the branch on (060 sec.2 wires it either
+    way). The most clearly opposite pin wins, by the smallest dot product, so the
+    answer does not depend on pin ids when several lie over there.
+    """
+    if SIDE_ROLES.get(slot.role) != "output":
+        return ""
+    reference = _input_sibling_token(ctx, slot)
+    profile = ctx.book.get(_symbol_ref(ctx, slot.owner))
+    if not reference or profile is None or profile.body is None:
+        return ""
+    anchor = _pin_of_token(profile, reference)
+    if anchor is None:
+        return ""
+    box = profile.body
+    centre = ((box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0)
+    ahead = (anchor.tip[0] - centre[0], anchor.tip[1] - centre[1])
+    found = ""
+    best = 0.0
+    for pin, net in sorted(_chain_nets(ctx, slot.owner).items()):
+        if net != slot.shared_net or pin == reference:
+            continue
+        candidate = _pin_of_token(profile, pin)
+        if candidate is None:
+            continue
+        side = (candidate.tip[0] - centre[0], candidate.tip[1] - centre[1])
+        dot = ahead[0] * side[0] + ahead[1] * side[1]
+        if dot < best:
+            found, best = pin, dot
+    return found
+
+
+def _input_sibling_token(ctx: _Context, slot: _Slot) -> str:
+    """The pin the owner's own **input** branch hangs on — 065's reference side.
+
+    The input branch is the branch of the same owner whose role names the
+    ``input`` side preference (`in_caps`), and its pin is read by
+    :func:`_shared_token` itself — which asks this question only for an output
+    role, so the two cannot recurse. Branches are read in part-id order, so a
+    module with several input capacitors answers the same way every time.
+    """
+    others = sorted(
+        (
+            item for item in ctx.slots.values()
+            if item.kind == "branch"
+            and item.owner == slot.owner
+            and item.part_id != slot.part_id
+            and SIDE_ROLES.get(item.role) == "input"
+        ),
+        key=lambda item: item.part_id,
+    )
+    for other in others:
+        token = _shared_token(ctx, other)
+        if token:
+            return token
     return ""
 
 
