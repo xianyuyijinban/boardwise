@@ -252,10 +252,14 @@ def test_completion_scope_and_versions_are_measured_not_guessed():
     assert section["sourceVersions"]["ruleset"] == ruleset_fingerprint(rule_ids)
     assert section["sourceVersions"]["rulebody"] == rulebody_fingerprint()
     # No skeleton: the slot counts are zeroes rather than a missing key, and the
-    # verdict is not allowed to read "no skeleton" as "nothing stale".
+    # verdict is not allowed to read "no skeleton" as "nothing stale". The
+    # architecture walk is a mandatory step of the flow (044 / SKILL §3.1b), so a
+    # run that never produced a skeleton is the *least* informed shape there is —
+    # it cannot come out of the gate with the highest confidence (issue #14).
     no_skeleton = _completion(architecture=None)
     assert no_skeleton["architectureSlots"] == {"total": 0, "filled": 0, "stale": 0}
     assert any("架构骨架未生成" in reason for reason in no_skeleton["verdictWhy"])
+    assert no_skeleton["verdict"] == "incomplete"
 
 
 def test_the_report_carries_a_completion_section_end_to_end(capsys, tmp_path, monkeypatch):
@@ -325,6 +329,42 @@ def test_a_clean_gate_end_to_end_reaches_complete_with_open_items(capsys, tmp_pa
     assert report["completion"]["verdictWhy"] == []
     markdown = (tmp_path / "out2" / "report.md").read_text(encoding="utf-8")
     assert "**verdict：`complete`**（无 ERROR、无未审、无 stale、无待分诊）" in markdown
+
+
+def test_a_run_that_could_not_build_the_skeleton_does_not_reach_complete(
+    capsys, tmp_path, monkeypatch
+):
+    """Issue #14, through the real command.
+
+    `generate_architecture` throwing is a `note` and an absent key — "a report must
+    still be written" — but the absent key makes the slot counts read as all zeroes,
+    and a gate that only asks "is anything stale" answered `complete` for the shape
+    with the *least* information. The architecture walk is a mandatory step (044 /
+    SKILL §3.1b), so a run that never built a skeleton has to come out lower than
+    the identical run that did.
+    """
+    monkeypatch.setenv("BOARDWISE_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(cli, "unreviewed_parts", lambda *args, **kwargs: [])
+    monkeypatch.setattr(cli, "warning_triage_slots", lambda **kwargs: [])
+
+    def no_skeleton(*args, **kwargs):
+        raise RuntimeError("skeleton builder fell over")
+
+    monkeypatch.setattr("boardwise.core.architecture.generate_architecture", no_skeleton)
+    assert cli.main([
+        "checkup", "--file", str(BOARD), "--out", str(tmp_path / "out"),
+        "--library", str(SHELF),
+    ]) == 0
+    printed = capsys.readouterr().out
+    assert "架构骨架生成失败" in printed, "the failure is a note, not a crash"
+    report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
+    assert "architecture" not in report, "absent, not empty"
+    completion = report["completion"]
+    assert completion["architectureSlots"] == {"total": 0, "filled": 0, "stale": 0}
+    assert completion["unreviewedParts"] == 0
+    assert completion["warningsPendingTriage"] == 0
+    assert completion["verdict"] == "incomplete"
+    assert any("架构骨架未生成" in reason for reason in completion["verdictWhy"])
 
 
 def test_the_schema_bump_only_adds_fields(capsys, tmp_path, monkeypatch):
