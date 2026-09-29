@@ -25,11 +25,70 @@ the digits look like".
   all, or a token written in a notation that only *looks* like an EIA code
   (see :func:`_non_eia_notation`) -- is None, and the rule reports UNKNOWN
   instead of guessing.
+
+Two bounds hold at every entry point above, because these parsers are handed
+whatever a board or a BOM line happens to contain (issues #27/#31): a first
+whitespace-separated token longer than :data:`_MAX_DECODED_CHARS` is not
+decompiled at all, and a quantity that ``float`` overflowed to a non-finite
+number is None like any other unreadable value. Neither is a new verdict — both
+answer what this module already answers for a string it does not recognise.
 """
 
 from __future__ import annotations
 
+import math
 import re
+
+#: How much of an outside string the decoders will look at (issue #27).
+#:
+#: The regexes below are grammatical, not bounded, and two of them scan a digit
+#: run from every start position: ``_MID_LETTER_RE``'s ``\d*`` and
+#: ``_ELECTROLYTIC_RE``'s ``\d+[Vv]\d{3}``. A value field or an MPN that is one
+#: long run of digits therefore costs O(n²). The issue reports 28 s for an MPN of
+#: 32000 digits and this machine measures 8.3 s for the same call; both scale x4
+#: per doubling.
+#:
+#: **The shape of the repair is the point.** The obvious alternative -- bounding
+#: the regex (``\d{0,3}``) -- would undo 071's infix repair: the mid-letter reader
+#: has to see the *whole* run ``060310`` before it can strip the size code
+#: ``0603`` that heads it, and handed only the last three digits it spells the
+#: pseudo-reading ``310K0`` again, the reading a board declaring 310 kΩ passed on
+#: (issue #24). So the *length* is checked, not the digits: past the cap the
+#: string is one this decoder cannot read -- the same answer it gives a notation
+#: it does not recognise -- and the regexes only ever run on a bounded string, so
+#: the quadratic term is O(64²), which is nothing. The cap is measured on the
+#: first whitespace-separated token, the piece the decoders read.
+_MAX_DECODED_CHARS = 64
+
+
+def _too_long(text: str | None) -> bool:
+    """True when ``text``'s first whitespace-separated token exceeds the cap.
+
+    The token, not the whole string: that is the piece the decoders read (an
+    MPN's ``" TS"`` tail is a packaging note, not code), and it is how every entry
+    point below slices it anyway. Only the length is asked -- what makes a long
+    string unreadable here is the cost of the question, not its digits.
+    """
+    if not text:
+        return False
+    stripped = text.strip()
+    return bool(stripped) and len(stripped.split(maxsplit=1)[0]) > _MAX_DECODED_CHARS
+
+
+def _finite(quantity: float | None) -> float | None:
+    """``quantity`` when it is a finite number, else None (issue #31).
+
+    ``float`` overflows in silence: ``"1" * 400`` parses to ``inf`` and reports no
+    error, and an infinite board value reached ``params._closest_reading``'s
+    ``math.log(decoded / declared)`` as ``log(0.0)`` -- a ``ValueError`` out of
+    ``run_review``, one unreadable value field taking the whole report down. This
+    module answers "cannot be read" for every string it does not recognise, and an
+    overflow is one of those.
+    """
+    if quantity is None:
+        return None
+    return quantity if math.isfinite(quantity) else None
+
 
 _CAP_UNITS = {
     "pf": 1e-12,
@@ -219,8 +278,13 @@ def _foreign_unit_code(token: str) -> bool:
 
 
 def parse_capacitance_farads(value: str) -> float | None:
-    """Board capacitor value -> farads, with an explicit unit required."""
-    if not value:
+    """Board capacitor value -> farads, with an explicit unit required.
+
+    Two refusals come before the grammar: a first token longer than the cap is not
+    read at all (issue #27), and a quantity that overflowed to a non-finite float
+    is not a capacitance this can state (issue #31).
+    """
+    if not value or _too_long(value):
         return None
     m = _CAP_RE.match(value.strip())
     if m is None:
@@ -237,7 +301,7 @@ def parse_capacitance_farads(value: str) -> float | None:
     factor = _CAP_UNITS.get(m.group(2).lower().replace("\u03bc", "\u00b5"))
     if factor is None:
         return None
-    return float(m.group(1)) * factor
+    return _finite(float(m.group(1)) * factor)
 
 
 def decode_eia_3digit(code: str, base: float) -> float | None:
@@ -391,29 +455,37 @@ def parse_resistance_ohms(value: str) -> float | None:
     4700 Ω, while the mid-letter scan would take the ``7K`` after the dot for
     7000 Ω. Every string the board grammar already reads keeps its exact value,
     so this is additive -- what it refuses today it goes on refusing.
+
+    Two refusals come before the grammar (issues #27/#31): a first token longer
+    than the cap is not read at all, and a quantity that overflowed to a
+    non-finite float is not a resistance this can state -- ``"1" * 400`` used to
+    come back as ``inf`` and took the whole review down when the rule divided a
+    decoded reading by it.
     """
     text = (value or "").strip()
-    if not text:
+    if not text or _too_long(text):
         return None
     body = _OHM_SUFFIX_RE.sub("", text).strip()
     if not body:
         return None
     match = _R_DECIMAL_RE.fullmatch(body)
     if match is not None:
-        return float(f"{match.group(1)}.{match.group(2)}")
+        return _finite(float(f"{match.group(1)}.{match.group(2)}"))
     match = _LEADING_R_RE.fullmatch(body)
     if match is not None:
-        return float(f"0.{match.group(1)}")
+        return _finite(float(f"0.{match.group(1)}"))
     match = _PLAIN_OHMS_RE.fullmatch(body)
     if match is not None:
-        return float(match.group(1)) * _PLAIN_OHMS_MULTIPLIERS[match.group(2)]
+        return _finite(
+            float(match.group(1)) * _PLAIN_OHMS_MULTIPLIERS[match.group(2)]
+        )
     readings = _mid_letter_readings(body, vendor_prefix=False)
     if len(readings) != 1:
         return None  # absent or ambiguous -- both are "cannot read"
     value_ohms, (text_read, _anchor) = next(iter(readings.items()))
     if text_read.upper() != body.upper():
         return None  # the notation does not span the value field
-    return value_ohms
+    return _finite(value_ohms)
 
 
 def mpn_resistance_readings(mpn: str) -> list[tuple[float, str]]:
@@ -460,6 +532,9 @@ def mpn_resistance_readings(mpn: str) -> list[tuple[float, str]]:
     **This is the resistor decoder.** Capacitor MPNs contain mid-letter-looking
     groups incidentally (``CC0603KRX7R9BB104`` reads as 7R9), so only a caller
     that already knows the part is a resistor may consult it.
+
+    It delegates, so the length cap of :func:`mpn_resistance_candidates` (issue
+    #27) covers this entry point too: a first token over the cap answers ``[]``.
     """
     return [
         (value, text) for value, text, _anchor in mpn_resistance_candidates(mpn)
@@ -476,8 +551,12 @@ def mpn_resistance_candidates(mpn: str) -> list[tuple[float, str, str]]:
     a string that merely contains digits is not evidence enough to accuse a BOM
     line of being wrong. :func:`mpn_resistance_readings` is this minus the anchor,
     for callers that only want the numbers.
+
+    A first token over the length cap is not decompiled at all (issue #27) -- the
+    whole scan below (``_mid_letter_readings``' backtracks among it) is quadratic
+    in the token's length, and an MPN that long is not a part number.
     """
-    if not mpn:
+    if not mpn or _too_long(mpn):
         return []
     token = mpn.strip().split()[0] if mpn.strip() else ""
     readings = dict(_mid_letter_readings(token))
@@ -677,8 +756,13 @@ def mpn_value_code(mpn: str) -> str | None:
     (``188`` and ``104``), ambiguity turned the whole token into None, and a
     100 nF part the board declares correctly reported "contains no decodable
     value code" -- a silent miss, which is what issue #22 measured.
+
+    A first token over the length cap answers None without being scanned (issue
+    #27): the guards below are quadratic in the token's length -- each one walks
+    or backtracks over the whole digit run -- and a string that long is not a part
+    number.
     """
-    if not mpn:
+    if not mpn or _too_long(mpn):
         return None
     token = mpn.strip().split()[0] if mpn.strip() else ""
     if not token or _non_eia_notation(token) or _foreign_unit_code(token):
@@ -738,7 +822,14 @@ def mpn_value_code_anchor(mpn: str) -> tuple[str | None, str]:
     asks it the same question: is the reading anchored? Here the anchor is the
     package context (:func:`has_package_context`) -- the one thing that turns
     three digits into a code field. ``None`` code keeps ``""``.
+
+    The length cap (issue #27) is stated here as well as inside
+    :func:`mpn_value_code`, because this is an entry point of its own: a first
+    token over the cap answers ``(None, "")`` -- no code and no anchor to ask
+    :func:`has_package_context` about.
     """
+    if _too_long(mpn):
+        return None, ""
     code = mpn_value_code(mpn)
     if code is None:
         return None, ""
