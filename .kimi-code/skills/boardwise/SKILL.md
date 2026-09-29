@@ -179,7 +179,10 @@ checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起
 - **完整结论看 `completion.verdict`**（053 §2.2）：`scope{rules,boards,pages}` / `errors` /
   `unreviewedParts` / `needsDatasheet` / `warningsPendingTriage` / `architectureSlots{total,filled,stale}` /
   `openTodos` / `sourceVersions{ruleset,rulebody}`，三态 `complete`（errors=0 ∧ 未审=0 ∧ 标记=0 ∧ stale=0 ∧
-  待分诊=0）/ `complete-with-open-items`（errors=0 但有开放项）/ `incomplete`（errors>0 或 未审>0 或 标记>0）。
+  待分诊=0 ∧ **架构骨架生成了**）/ `complete-with-open-items`（errors=0 但有开放项）/
+  `incomplete`（errors>0 **或** `summary.errors` 列表非空——主机 boolean 答复/整组截断时"错的条目在、
+  计数未知"，闸与 `exitCode` 同源（issue #15）——**或** 未审>0 **或** 标记>0 **或** 架构骨架没生成，
+  强制环节缺席不给最高置信度（issue #14））。
   `summary.mayClaimPassed` 是**窄义**字段（只回答「有没有器件缺手册未审」），**别拿它当"通过"
   的完整结论**；`verdictWhy` 直接列出是哪些开放项。
 - **对每条链做目的论走查**：这条链是干什么的 → 端到端能闭合吗。骨架里

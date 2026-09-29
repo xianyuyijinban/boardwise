@@ -509,3 +509,84 @@ def test_the_offline_section_says_there_was_no_editor_to_ask():
     assert "totals" not in section
     summary = summarise(drc={"schematic": section, "pcb": section}, findings=[])
     assert summary["errors"] == [] and summary["exitCode"] == 0
+
+
+#: A healthy skeleton, so the tests below measure the DRC and nothing else.
+HEALTHY_ARCHITECTURE = {"totals": {"slots": 10, "filled": 10, "stale": 0}}
+
+
+def _completion_for(summary: dict) -> dict:
+    """The real `_completion_body` fed a real `summarise` answer."""
+    from boardwise.cli import _completion_body
+
+    return _completion_body(
+        scope={"rules": 1, "boards": 1, "pages": 1},
+        summary=summary,
+        unreviewed=[],
+        triage=[],
+        architecture=HEALTHY_ARCHITECTURE,
+    )
+
+
+def test_the_verdict_reads_the_same_gate_that_decided_the_exit_code():
+    """Issue #15: one checkup said "exit 1" and "verdict complete" at once.
+
+    A host answer that is a boolean and did not pass is *real* errors the host
+    will not enumerate: `summarise` keeps them in the `errors` list — that is what
+    the exit code is derived from — but with `count: None`, so `errorCount` stays
+    0. The completion gate read the sum only, so a run whose error count is
+    *unknown* came out with the highest confidence while the console said the
+    board was dirty. The gate is now the list (and `countsIncomplete`), i.e. the
+    same decision `exitCode` already made.
+    """
+    drc = _sections(
+        sch_readings=[_sch_reading("p1", {**MEASURED_SCH_PAYLOAD, "mode": "boolean",
+                                          "counts": None, "passed": False})],
+        pcb_reading=None,
+    )
+    summary = summarise(drc=drc, findings=[])
+
+    # The split before the fix: errors are real, their number is not.
+    assert summary["errors"] and summary["errorCount"] == 0
+    assert summary["exitCode"] == 1 and summary["countsIncomplete"] is True
+
+    section = _completion_for(summary)
+    assert section["verdict"] == "incomplete", "the exit code and the verdict cannot disagree"
+    assert any("不可枚举" in reason for reason in section["verdictWhy"])
+
+    # `summarise` always pairs `countsIncomplete` with an entry, so this guards the
+    # other order: a summary that says its counts are incomplete without listing
+    # one (an older report, a hand-built one) is not a clean bill of health either.
+    unknown = _completion_for({"errorCount": 0, "errors": [], "countsIncomplete": True})
+    assert unknown["verdict"] == "incomplete"
+    assert any("不可知" in reason for reason in unknown["verdictWhy"])
+
+
+def test_a_boolean_that_passed_is_not_an_error_and_the_offline_path_stays_clean():
+    """The other half of issue #15: the gate must not over-fire.
+
+    `passed: true` is a verdict without counts (nothing to enumerate), and the
+    offline `--file` path has `checked: false` everywhere — both leave `errors`
+    empty and `exitCode` 0, so both keep the verdict the rest of the statement
+    earns. Only a *failed* boolean-without-counts is an error.
+    """
+    passed = summarise(
+        drc=_sections(
+            sch_readings=[_sch_reading("p1", {**MEASURED_SCH_PAYLOAD, "mode": "boolean",
+                                              "counts": None, "passed": True})],
+            pcb_reading=None,
+        ),
+        findings=[],
+    )
+    assert passed["errors"] == [] and passed["exitCode"] == 0
+    assert _completion_for(passed)["verdict"] == "complete"
+
+    offline = summarise(
+        drc={"schematic": offline_section("离线路径不调 DRC"),
+             "pcb": offline_section("离线路径不调 DRC")},
+        findings=[],
+    )
+    assert offline["errors"] == [] and offline["exitCode"] == 0
+    assert offline["countsIncomplete"] is False
+    section = _completion_for(offline)
+    assert section["verdict"] == "complete" and section["verdictWhy"] == []

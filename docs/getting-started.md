@@ -270,7 +270,9 @@ boardwise need-datasheet --out checkup --part U7 --pins FB,ICG --reason "FB 悬�
 报告还带两节结论：`architecture`（骨架 ⊕ `design-intent.md` 的**合并视图**：已填的值进报告、
 仍 `TODO` 的仍 `TODO`；某个槽关联的对象被改画后，该槽标 `stale: 图纸已变，此槽待复核`——不删你写的值、
 不覆盖、也不阻断出报告）和 `completion`（**完整结论**：检查范围 `scope`、欠账与源版本，`verdict` 三态
-`complete` / `complete-with-open-items` / `incomplete`）。`summary.mayClaimPassed` 是**窄义**字段
+`complete` / `complete-with-open-items` / `incomplete`；`incomplete` 的触发条件里有两条容易忘：
+主机 DRC 是 boolean 答复且未通过时（错的条目在、计数未知，退出码已经说脏）按有错算，与 `summary.exitCode`
+同源；架构骨架没能生成时也降级——强制环节缺席，不许用最少的信心说最多的话）。`summary.mayClaimPassed` 是**窄义**字段
 （只回答「有没有器件缺手册未审」），要问"能不能说这板过了"请看 `completion.verdict`。
 骨架要**逐槽走一遍**，填不了的设计意图显式问工程师，答案写进 `design-intent.md`；单个工程想单独出骨架子
 加意图文件：`boardwise arch path/to/board.epro2 --out checkup/architecture.md`。

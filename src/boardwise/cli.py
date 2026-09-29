@@ -2816,16 +2816,25 @@ def _completion_body(
     `_completion_section` (a live run) and `_completion_from_report` (re-gating an
     existing report after `boardwise need-datasheet`) both land here, so the
     verdict's rules exist once and a section written by either path says the same
-    thing. 053 §2.2's three states, and the condition 058 added:
+    thing. 053 §2.2's three states, and the conditions 058, #14 and #15 added:
 
-    * ``incomplete`` — ``errors > 0`` **or** unreviewed parts remain (a part no
-      rule could judge means the review did not cover the board) **or** the
-      reviewer marked pins/devices whose function is not established yet;
-    * ``complete`` — ``errors = 0`` **and** unreviewed = 0 **and** stale = 0
-      **and** nothing waiting for triage **and** no marked unknown;
-    * ``complete-with-open-items`` — the two above passed, but the residual open
-      items are non-empty (a slot whose drawing moved under it, a warning nobody
-      has triaged yet).
+    * ``incomplete`` — the summary owes anything that means the review did not
+      finish:
+      ``errorCount > 0``, **or** the summary's own ``errors`` list is non-empty —
+      the very list `drc.summarise` decided ``exitCode`` on, so entries that carry
+      no count at all (a host that answered a boolean, a DRC tree the host
+      truncated: the errors are real, only their number is unknown) count as
+      errors here too, **or** unreviewed parts remain (a part no rule could judge
+      means the review did not cover the board), **or** the reviewer marked
+      pins/devices whose function is not established yet, **or** there is **no
+      architecture skeleton** (the architecture walk is a mandatory step of the
+      flow, so the run with the least information cannot carry the highest
+      confidence);
+    * ``complete`` — none of the above **and** stale = 0 **and** nothing waiting
+      for triage;
+    * ``complete-with-open-items`` — the ``complete`` conditions hold except the
+      residual open items, which are non-empty (a slot whose drawing moved under
+      it, a warning nobody has triaged yet).
 
     `openTodos` (the architecture's unfilled slots) is *reported* but does not
     gate: a TODO slot is the skeleton still asking a question rather than an
@@ -2833,6 +2842,16 @@ def _completion_body(
     no reader has to reconstruct the arithmetic.
     """
     errors = int(summary.get("errorCount", 0) or 0)
+    # The gate below is the one `drc.summarise` already used to decide `exitCode`:
+    # the *list* of error entries, not only its sum. A boolean answer that did not
+    # pass carries no count (`count: None`), so it adds nothing to `errorCount`
+    # while the exit code — and the board — is still dirty; gating on the sum alone
+    # let one and the same checkup print "exit 1" and `verdict complete` (#15).
+    # Both keys are read defensively: a caller may hand in a summary that has only
+    # the older count.
+    error_entries = summary.get("errors")
+    error_entries = error_entries if isinstance(error_entries, list) else []
+    counts_incomplete = bool(summary.get("countsIncomplete"))
     unreviewed_count = len(unreviewed)
     # One per part however many pins it carries, and the facts seed it may also
     # have is *not* added again — `unreviewedParts` already counts that part and
@@ -2851,6 +2870,17 @@ def _completion_body(
     why: list[str] = []
     if errors:
         why.append(f"{errors} 项 ERROR")
+    elif error_entries:
+        # The sum is 0 because nothing countable is in there — a boolean answer
+        # that did not pass, a tree the host truncated, or a zero the host stated
+        # itself. The exit code is 1 all the same (the same list decided it), so
+        # the verdict says so too (#15).
+        why.append(
+            f"{len(error_entries)} 条 ERROR 条目不可枚举（主机 boolean 答复或整组截断）："
+            "条目在、可枚举计数为 0，退出码按有错算"
+        )
+    if counts_incomplete and not error_entries:
+        why.append("主机 DRC 答复不完整（boolean 或整组截断），有没有错、错几条都不可知")
     if unreviewed_count:
         why.append(f"{unreviewed_count} 颗器件缺手册未审")
     if marked_count:
@@ -2862,7 +2892,11 @@ def _completion_body(
     if architecture is None:
         why.append("架构骨架未生成（report.json 无 architecture 键）")
 
-    if errors or unreviewed_count or marked_count:
+    if (
+        errors or error_entries or counts_incomplete
+        or unreviewed_count or marked_count
+        or architecture is None
+    ):
         verdict = "incomplete"
     elif architecture_slots["stale"] or pending:
         verdict = "complete-with-open-items"
