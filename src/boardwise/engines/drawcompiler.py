@@ -3200,6 +3200,17 @@ class _Router:
         self.bounds = bounds
         self.blocked: set[tuple[float, float]] = set()
         self.edges: list[tuple[tuple[float, float], tuple[float, float]]] = []
+        #: The net each edge belongs to, in step with ``edges`` (074): a refusal
+        #: that says *which* foreign wire a lead ran through has to be able to name
+        #: it, and "another net's run" is not a name. Both writers of ``edges`` in
+        #: this module keep the two lists the same length —
+        #: :func:`_set_foreign_edges`, which records the net of every run it
+        #: collects, and :meth:`add_edge`, which reaches for no net in particular
+        #: and so records none. A caller that assigns ``edges`` itself (057's page
+        #: router does) leaves the names behind, and a reader that finds the two
+        #: lists out of step reports the run without naming its net rather than
+        #: naming the wrong one.
+        self.edge_nets: list[str] = []
 
     # ------------------------------------------------------------ geometry
 
@@ -3218,6 +3229,9 @@ class _Router:
     def add_edge(self, start: tuple[float, float], end: tuple[float, float]) -> None:
         if _key(start) != _key(end):
             self.edges.append((start, end))
+            # ``edge_nets`` stays the same length as ``edges`` (see the attribute's
+            # own note): a run added here is not being drawn by any one net.
+            self.edge_nets.append("")
 
     def _in_bounds(self, node: tuple[int, int]) -> bool:
         point = self.point(node)
@@ -3496,6 +3510,119 @@ def _span_free(
         if _strictly_on_segment(point, start, end):
             return False
     return True
+
+
+def _set_foreign_edges(
+    router: _Router, segments: Sequence[LayoutSegment], net_id: str
+) -> None:
+    """``router.edges`` = every wire but this net's own, with the net it belongs to.
+
+    This net's own runs are left out, so the lead a flag hangs off is never in its
+    own way, and every other run lands in ``edges`` and ``edge_nets`` together so
+    the two lists cannot drift (074's refusal names the foreign net, and a name
+    pointing at the wrong run would be worse than no name at all).
+    """
+    router.edges = []
+    router.edge_nets = []
+    for segment in segments:
+        if segment.net == net_id:
+            continue
+        for start, end in zip(segment.points, segment.points[1:]):
+            router.edges.append((start, end))
+            router.edge_nets.append(segment.net)
+
+
+def _proper_crossing(
+    a: tuple[float, float],
+    b: tuple[float, float],
+    c: tuple[float, float],
+    d: tuple[float, float],
+) -> tuple[float, float] | None:
+    """Where two segments cross *through* each other, or ``None``.
+
+    ``readability._proper_crossing``'s own ruler, in this module's tolerance: the
+    crossing has to be strictly interior to **both** runs, so a shared endpoint, a
+    tee (either end landing on the other's span) and a collinear overlap are all
+    excluded — each of them is something else, and the tee is the declared
+    junction 053 sec.2 puts a dot on.
+    """
+    ab_len = math.hypot(b[0] - a[0], b[1] - a[1])
+    cd_len = math.hypot(d[0] - c[0], d[1] - c[1])
+    if ab_len <= 1e-6 or cd_len <= 1e-6:
+        return None
+    abc = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+    abd = (b[0] - a[0]) * (d[1] - a[1]) - (b[1] - a[1]) * (d[0] - a[0])
+    cda = (d[0] - c[0]) * (a[1] - c[1]) - (d[1] - c[1]) * (a[0] - c[0])
+    cdb = (d[0] - c[0]) * (b[1] - c[1]) - (d[1] - c[1]) * (b[0] - c[0])
+    eps_ab = 1e-6 * ab_len
+    eps_cd = 1e-6 * cd_len
+    if not (
+        ((abc > eps_ab and abd < -eps_ab) or (abc < -eps_ab and abd > eps_ab))
+        and ((cda > eps_cd and cdb < -eps_cd) or (cda < -eps_cd and cdb > eps_cd))
+    ):
+        return None
+    denominator = (b[0] - a[0]) * (d[1] - c[1]) - (b[1] - a[1]) * (d[0] - c[0])
+    if abs(denominator) <= 1e-6:
+        return None
+    t = (
+        (c[0] - a[0]) * (d[1] - c[1]) - (c[1] - a[1]) * (d[0] - c[0])
+    ) / denominator
+    return _rounded((a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])))
+
+
+def _foreign_crossing(
+    router: _Router,
+    start: tuple[float, float],
+    end: tuple[float, float],
+) -> tuple[tuple[float, float], str, tuple[tuple[float, float], tuple[float, float]]] | None:
+    """``(point, foreign net, foreign run)`` for the first wire this run cuts through.
+
+    ``router.edges`` is every wire but the one being drawn, so the run a flag hangs
+    off is never in its own way. A crossing *through* a foreign wire is not a
+    connection in the editor's model (054 C7's measured behaviour, which is why the
+    gate counts crossings as a soft metric) — but it is not nothing either: for a
+    **flag's** lead it is 074's defect, an unmissable picture of "this name is
+    hung on that net" (岳, on the landed P23: 「第一眼以为5V和3V3的旗标短接在一块了」).
+    """
+    for index, foreign in enumerate(router.edges):
+        point = _proper_crossing(start, end, foreign[0], foreign[1])
+        if point is None:
+            continue
+        net = (
+            router.edge_nets[index]
+            if len(router.edge_nets) == len(router.edges)
+            else ""
+        )
+        return point, net, foreign
+    return None
+
+
+def _lead_crossing(
+    router: _Router, lead: Sequence[tuple[float, float]]
+) -> str | None:
+    """The first foreign wire this lead runs *through*, described, or ``None``.
+
+    Every sub-segment of the lead, not just its ends: 069 sec.10's own shape is a
+    run out and then a turn, and it is precisely the **turn** that crossed the
+    rail on the page 岳 rejected (measured on E1: the run (110, 730)-(60, 730) is
+    clear, the run (60, 730)-(60, 755) goes through the 5V0 rail (50, 740)-(110,
+    740) at (60, 740)). A lead that *ends* on a foreign wire is not this rule's
+    business: an anchor there is refused by ``_vertex_clear``/``blocked`` before
+    this is asked, and the answer is "that point is a connection", never "draw it
+    anyway".
+    """
+    for start, end in zip(lead, lead[1:]):
+        hit = _foreign_crossing(router, start, end)
+        if hit is None:
+            continue
+        point, net, foreign = hit
+        name = f"net {net}'s wire " if net else "the wire "
+        return (
+            f"its run {_point_text(start)}-{_point_text(end)} crosses {name}"
+            f"{_point_text(foreign[0])}-{_point_text(foreign[1])} at "
+            f"{_point_text(point)}"
+        )
+    return None
 
 
 def _geometry_nodes(
@@ -3881,11 +4008,7 @@ def _build_candidate(
     )
     for net_id in _net_order(ctx, expressions):
         expression = expressions[net_id]
-        router.edges = [
-            (start, end)
-            for segment in segments if segment.net != net_id
-            for start, end in zip(segment.points, segment.points[1:])
-        ]
+        _set_foreign_edges(router, segments, net_id)
         blocked = _blocked_points(
             ctx, placed, net_id, labels, symbols, segments,
         )
@@ -3966,28 +4089,36 @@ def _build_candidate(
             ]
             for member, point in far:
                 if named == "flag":
-                    _flag_pins(
+                    failure = _flag_pins(
                         ctx, placed, net_id, profile, ref, [(member, point)],
                         router, segments, symbols, occupied, solids, blocked,
                         bodies, stub=True,
                     )
+                    if failure is not None:
+                        return None, failure, []
                     continue
-                _stub_label(
+                failure = _stub_label(
                     ctx, placed, net_id, member, point, router, segments,
                     labels, occupied, solids, blocked,
                 )
+                if failure is not None:
+                    return None, failure, []
             for member, point in near:
                 if named == "flag":
-                    _flag_pins(
+                    failure = _flag_pins(
                         ctx, placed, net_id, profile, ref, [(member, point)],
                         router, segments, symbols, occupied, solids, blocked,
                         bodies,
                     )
+                    if failure is not None:
+                        return None, failure, []
                     continue
-                _stub_label(
+                failure = _stub_label(
                     ctx, placed, net_id, member, point, router, segments,
                     labels, occupied, solids, blocked,
                 )
+                if failure is not None:
+                    return None, failure, []
             notes.append(
                 f"net {net_id}: " + ", ".join(expression.detached)
                 + " sit on the far side of their own body from "
@@ -4020,10 +4151,12 @@ def _build_candidate(
                     labels.append(label)
                     solids.append(label.bbox)
                 continue
-            _flag_pins(
+            failure = _flag_pins(
                 ctx, placed, net_id, profile, ref, expression.points,
                 router, segments, symbols, occupied, solids, blocked, bodies,
             )
+            if failure is not None:
+                return None, failure, []
         router.boxes = solids
 
     # 069 sec.7's own supply, *after* every net is routed: 岳 read the landed P23
@@ -4041,17 +4174,15 @@ def _build_candidate(
         pin = _power_flag_pin(ctx, expression)
         if profile is None or pin is None:
             continue
-        router.edges = [
-            (start, end)
-            for segment in segments if segment.net != net_id
-            for start, end in zip(segment.points, segment.points[1:])
-        ]
+        _set_foreign_edges(router, segments, net_id)
         blocked = _blocked_points(ctx, placed, net_id, labels, symbols, segments)
         router.blocked = blocked
-        anchor = _rail_flag(
+        anchor, failure = _rail_flag(
             ctx, net_id, expression, pin, profile, ref, router, segments,
             symbols, occupied, solids, blocked, bodies,
         )
+        if failure is not None:
+            return None, failure, []
         notes.append(
             f"net {net_id}: a power net carries its own flag — hung at "
             f"{_point_text(anchor)} by a {FLAG_JOG:g}-unit vertical run off the "
@@ -4203,6 +4334,7 @@ def _flag_anchor(
     fits: Callable[[tuple[float, float], float], bool] | None = None,
     up: bool = True,
     boxes: Sequence[Box] | None = None,
+    crossings: list[str] | None = None,
 ) -> tuple[tuple[float, float], tuple[tuple[float, float], ...] | None, float]:
     """Where a flag's anchor goes, the lead that reaches it, and which way it hangs.
 
@@ -4227,6 +4359,18 @@ def _flag_anchor(
     foreign wire or outside the page, and the pad it names is then brought out
     elsewhere instead — **nearest first** (069 sec.11: 近位真的被占才许走远), then
     farther, and only when nothing anywhere fits does the flag end on its pin.
+
+    074 adds one more refusal to that ladder, and it is the last word: a lead that
+    cuts **through another net's wire** is not drawn. 岳 read the landed page and
+    said it plainly (「第一眼以为5V和3V3的旗标短接在一块了」) — an electrician's
+    first reading of "this name hangs across that rail" is a short, and a drawing
+    whose first reading is a short is wrong however the netlist came out. So a rung
+    that everything else accepted is refused, the ladder goes on to the next shape
+    (farther out, the other way up/down, another escape direction — the caller's
+    loop), and every refusal is appended to ``crossings`` so the caller can report
+    the measured reason when *no* rung survives instead of drawing a short or a
+    flag standing on its own pin. A rung the box test already refused is not
+    recorded: it was never a candidate, and the crossing on it proves nothing.
     """
     lengths: list[float] = []
     for length in (
@@ -4277,6 +4421,13 @@ def _flag_anchor(
                     if not _span_free(router, corner, anchor, blocked, boxes):
                         continue
                 if fits is not None and not fits(anchor, hang):
+                    continue
+                # 074: the last word, and only over rungs that pass everything
+                # else — see the docstring. Recorded, never drawn.
+                crossed = _lead_crossing(router, lead)
+                if crossed is not None:
+                    if crossings is not None:
+                        crossings.append(crossed)
                     continue
                 return anchor, lead, hang
     return _rounded(point), None, natural
@@ -4395,6 +4546,53 @@ def _place_flag(
     solids.append(glyph)
 
 
+def _flag_crossing_failure(
+    net_id: str,
+    pin: tuple[float, float],
+    crossings: Sequence[str],
+    subject: str,
+) -> GrammarFailure:
+    """The refusal 074 states when every lead a name could hang on crosses a wire.
+
+    ``crossings`` is the ladder's own measurement: each entry names the run that
+    crossed, the foreign net it crossed and the point they met at, so the report
+    says *which* conductor is in the way instead of "no legal placement" — 053
+    sec.5 scenario 10's rule, and the reason the whole rung list is kept rather
+    than the last one (a report that names one obstacle is actionable; one that
+    names none is a puzzle).
+
+    It is a ``layout-unsat`` and not a downgrade on purpose: the alternative the
+    ladder would otherwise take — 069 sec.8's flag standing on its own pin — is the
+    form 岳 rejected on the landed page (「第一眼以为5V和3V3的旗标短接在一块了」), and
+    silently producing *that* is what this batch exists to stop. Nothing here adds
+    a junction to make a crossing look intended, either: a dot on a foreign wire
+    would join two nets the CircuitSpec keeps apart.
+    """
+    more = (
+        "" if len(crossings) == 1
+        else f" — {len(crossings)} rung(s) were measured, the first one above"
+    )
+    return GrammarFailure(
+        category=FAILURE_LAYOUT_UNSAT,
+        subject=net_id,
+        detail=(
+            f"{subject}: no flag for net {net_id!r} at {_point_text(pin)} can be "
+            "hung here — every lead that fits inside the region crosses another "
+            "net's wire, and a flag lead through another net's conductor is read "
+            "as a short before anything else (岳, on the landed page: "
+            "「第一眼以为5V和3V3的旗标短接在一块了」). Measured: "
+            + crossings[0] + more
+        ),
+        action=(
+            "move the part whose run is named above — or the run itself — so this "
+            "pin has a side to hang its flag on that no other net crosses, or "
+            "enlarge the region so the lead can reach around it; the drawing is "
+            "refused rather than hung across another net's wire, and no junction is "
+            "welded on to make a crossing look intended"
+        ),
+    )
+
+
 def _rail_flag(
     ctx: _Context,
     net_id: str,
@@ -4409,7 +4607,7 @@ def _rail_flag(
     solids: list[Box],
     blocked: set[tuple[float, float]],
     bodies: Sequence[Box] | None = None,
-) -> tuple[float, float]:
+) -> tuple[tuple[float, float] | None, GrammarFailure | None]:
     """Hang a rail's own flag from the rail, by a short **vertical** run.
 
     069 sec.7, from 岳's own hand: a rail that is drawn as a wire says nothing in
@@ -4425,6 +4623,13 @@ def _rail_flag(
     down. Only when no run fits anywhere does the flag stand *on* the rail itself —
     a legal placement (its anchor is a conductor on the wire) and better than a
     rail with no flag at all.
+
+    Returns ``(anchor, failure)``: 074 added the second half, because a run that
+    **crosses another net's wire** is not drawn (see :func:`_flag_anchor`) — that is
+    the one refusal this ladder cannot answer with "stand on the rail": standing
+    there changes no picture 岳 would read as a short, but standing on the *pin*
+    after every run crossed would, so the pair below is the honest answer. A run
+    refused for want of room still ends on the rail, exactly as it always did.
     """
     family = flag_glyph_kind(profile)
     natural = 1.0 if family != FLAG_GLYPH_KIND_GND else -1.0
@@ -4437,6 +4642,7 @@ def _rail_flag(
         )
     on_the_rail: tuple[tuple[float, float], float] | None = None
     room = _flag_room(router, solids, inner, blocked)
+    crossings: list[str] = []
     # 069 sec.8: 被占就沿轨继续走 — the reaches are tried in 岳's own order (his VIN's
     # 30 out, then a jog's length), and then **farther** along the rail, because a
     # flag that has nowhere to stand still must not end up touching its neighbours.
@@ -4459,6 +4665,7 @@ def _rail_flag(
             anchor, lead, placed_hang = _flag_anchor(
                 router, attach, (0.0, hang), blocked,
                 leads=(FLAG_JOG,), fits=fits, up=natural > 0.0, boxes=bodies,
+                crossings=crossings,
             )
             if lead is not None:
                 _place_flag(
@@ -4466,7 +4673,7 @@ def _rail_flag(
                     _flag_rotation((0.0, placed_hang), family), lead,
                     segments, symbols, occupied, solids,
                 )
-                return anchor
+                return anchor, None
             if on_the_rail is None:
                 rotation = _flag_rotation((0.0, hang), family)
                 if room(
@@ -4479,14 +4686,21 @@ def _rail_flag(
             net_id, profile, ref, on_the_rail[0], on_the_rail[1], None,
             segments, symbols, occupied, solids,
         )
-        return on_the_rail[0]
+        return on_the_rail[0], None
+    if crossings:
+        # Every run 岳 would read as "this rail's name" goes through another net's
+        # wire. 074 refuses the drawing rather than hiding the flag on the pin.
+        return None, _flag_crossing_failure(
+            net_id, pin[1], crossings,
+            "the rail carries no flag at all on this drawing",
+        )
     # Nothing fits anywhere: the flag stands on the rail's own pin.
     rotation = _flag_rotation((0.0, natural), family)
     _place_flag(
         net_id, profile, ref, pin[1], rotation, None,
         segments, symbols, occupied, solids,
     )
-    return pin[1]
+    return pin[1], None
 
 
 def _flag_attach_point(
@@ -4551,7 +4765,7 @@ def _flag_pins(
     bodies: Sequence[Box] | None = None,
     *,
     stub: bool = False,
-) -> None:
+) -> GrammarFailure | None:
     """Put this net's flag on each of ``members``, on a lead out of its own pin.
 
     One flag per pin, all of them stating the same net: that is what makes a
@@ -4564,6 +4778,12 @@ def _flag_pins(
     text, the page's edge, and **another net's wire**. Where the nearest lead does
     not fit, the ladder reaches shorter and then farther, and only if nothing
     anywhere fits does the flag end on its own pin.
+
+    Returns the refusal when there is nothing legal to draw: 074's ``layout-unsat``
+    when the pin's every lead crosses another net's wire (see
+    :func:`_flag_crossing_failure` — the flag standing on the crowded pin is the
+    form 岳 rejected, so it is not taken), and ``None`` in every other case, the pin
+    fallback included.
     """
     inner = None
     if ctx.budget.page_box is not None:
@@ -4594,6 +4814,7 @@ def _flag_pins(
         # above) still has room *below*, and a lead that leaves a pin tip in another
         # direction is a legal wire.
         hung = False
+        crossings: list[str] = []
         for direction in [
             escape,
             *(
@@ -4608,6 +4829,7 @@ def _flag_pins(
                 fits=fits,
                 up=natural,
                 boxes=bodies,
+                crossings=crossings,
             )
             if lead is None:
                 continue  # nothing fits that way — try the next side
@@ -4618,6 +4840,14 @@ def _flag_pins(
             )
             hung = True
             break
+        if not hung and crossings:
+            # 074: this pad's flag could have hung 岳's way anywhere it fitted — and
+            # every one of those leads cut through another net's wire. Refused with
+            # the measurement, not drawn on the pin.
+            return _flag_crossing_failure(
+                net_id, point, crossings,
+                f"{member} is named by a flag of its own (069 sec.1)",
+            )
         if not hung:
             _place_flag(
                 net_id, profile, ref, point,
@@ -4638,7 +4868,7 @@ def _stub_label(
     occupied: list[Box],
     solids: list[Box],
     blocked: set[tuple[float, float]],
-) -> None:
+) -> GrammarFailure | None:
     """069 sec.1's other half: a **label** where a rail would have had a flag.
 
     A net that is neither a rail nor a ground has no flag in anyone's library —
@@ -4648,21 +4878,41 @@ def _stub_label(
     short stub and the name is put at the end of it. The pad that kept the wire
     is brought out the same way, so its cluster is named too — a label on the pin
     itself would land in the part's own annotation.
+
+    074 treats this stub exactly as it treats a flag's lead: the run is the same
+    line doing the same job (「这个网从这里出去」), so a run that crosses another
+    net's wire is refused the same way and the candidate reported as 074's
+    ``layout-unsat`` when no stub survives. The stub's own ladder is climbed to its
+    end first — 069 sec.1 brings the pad out *its own way*, and the rungs it has are
+    074 sec.3's distance ladder and the turn. A ladder that left on another side
+    would be 074 sec.3's 换逃逸方向, and it is not added here: no offline drawing asks
+    for it (measured: the pad's own direction answers all six stub calls the
+    twenty-four scenarios and the E1 shapes make), and a pad whose own side is
+    sealed is the loud ``layout-unsat`` rather than a stub pointing somewhere the
+    symbol does not.
     """
     part_id, _, token = member.partition(".")
     direction = _pin_direction(
         ctx, part_id, token, placed.poses,
     ) or (0.0, -1.0)
+    crossings: list[str] = []
     anchor, lead, _hang = _flag_anchor(
         router, point, direction, blocked,
         leads=(SIBLING_LEAD,),
         fits=lambda here, _hang: _label_fits(ctx, net_id, here),
+        crossings=crossings,
     )
+    if lead is None and crossings:
+        return _flag_crossing_failure(
+            net_id, point, crossings,
+            f"{member} is named by a net label of its own (069 sec.1)",
+        )
     if lead is not None:
         segments.append(LayoutSegment(net=net_id, points=list(lead)))
     label = _label_for(ctx, net_id, part_id, token, anchor, placed, occupied)
     labels.append(label)
     solids.append(label.bbox)
+    return None
 
 
 def _label_fits(ctx: _Context, net_id: str, anchor: tuple[float, float]) -> bool:
