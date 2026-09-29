@@ -223,6 +223,18 @@ FLAG_LEAD = 30.0
 #: end of the turn.
 FLAG_JOG = 25.0
 
+#: Where the host prints a flag's own name: a single line **above** the anchor,
+#: between these two distances from it. Measured on the landed pages (P22's hand
+#: drawing and the v3 page): a rail's name 10 units up, a ground's 15 — the glyph
+#: itself hangs up or down from the anchor by 18, so the name is inside that span
+#: for a rail and just past it for a ground. And the margin a flag keeps between
+#: this whole box and anything else — 069 sec.8 (岳: 「3V3的旗标标识和5V的导线重合了」)
+#: is about *touching*, so the box the placement keeps free is the glyph, the name
+#: and the clearance.
+FLAG_TEXT_NEAR = 6.0
+FLAG_TEXT_REACH = 16.0
+FLAG_CLEARANCE = 5.0
+
 #: How far a **duplicate pad across the body** is brought out before its own flag
 #: goes on (069 sec.1). 岳's hand-drawn AMS1117 brings a far pad out 40-60 units
 #: and puts the flag on the end of that stub instead of running a wire over the
@@ -4124,7 +4136,7 @@ def _flag_anchor(
     blocked: set[tuple[float, float]],
     *,
     leads: Sequence[float] = (),
-    fits: Callable[[tuple[float, float]], bool] | None = None,
+    fits: Callable[[tuple[float, float], float], bool] | None = None,
     up: bool = True,
 ) -> tuple[tuple[float, float], tuple[tuple[float, float], ...] | None, float]:
     """Where a flag's anchor goes, the lead that reaches it, and which way it hangs.
@@ -4147,11 +4159,16 @@ def _flag_anchor(
 
     ``leads`` are lengths to try before the default ladder, and ``fits`` is how a
     stub that has to *reach* somewhere is chosen (069 sec.1's far pad): the lead may
-    be clear while the glyph at its end lands on a neighbouring part or outside the
-    page, and the pad it names is then brought out shorter instead.
+    be clear while the flag's own box at its end lands on a neighbouring part, on a
+    foreign wire or outside the page, and the pad it names is then brought out
+    elsewhere instead — shorter first, then **farther** (069 sec.8: 宁可走远也不许贴上),
+    and only when nothing anywhere fits does the flag end on its pin.
     """
     lengths: list[float] = []
-    for length in (*leads, FLAG_LEAD, router.grid * 2.0, 0.0):
+    for length in (
+        *leads, FLAG_LEAD, router.grid * 2.0,
+        2.0 * FLAG_LEAD, 4.0 * FLAG_LEAD, 0.0,
+    ):
         if length not in lengths:
             lengths.append(length)
     natural = 1.0 if up else -1.0
@@ -4163,21 +4180,26 @@ def _flag_anchor(
         if _close(length, 0.0):
             return anchor, None, natural
         if direction[1] != 0.0:
-            hang = math.copysign(1.0, direction[1])
+            hangs: tuple[float, ...] = (math.copysign(1.0, direction[1]),)
         else:
-            hang = natural
-        # The anchor is a conductor of its own: a flag placed on a *foreign* pin tip
-        # or inside a foreign wire's span would join two nets the spec keeps apart
-        # (measured: a rail's flag run 10 units up landed exactly on the pin above
-        # it). `_span_free` guards the run's interior; the far end needs its own
-        # test, which is also what `_vertex_clear` means for a wire vertex.
-        if _key(anchor) in blocked or not _vertex_clear(router, anchor):
-            continue
-        if not _span_free(router, point, anchor, blocked):
-            continue
-        if fits is not None and not fits(anchor):
-            continue
-        return anchor, (_rounded(point), anchor), hang
+            # A horizontal lead leaves the hang open, so 069 sec.8's 换侧 is a real
+            # choice here: the family's own side first (a rail lifts, a ground
+            # hangs), then the other one, because a flag that has nowhere to stand
+            # on one side of its run may still stand on the other.
+            hangs = (natural, -natural)
+        for hang in hangs:
+            # The anchor is a conductor of its own: a flag placed on a *foreign* pin
+            # tip or inside a foreign wire's span would join two nets the spec keeps
+            # apart (measured: a rail's flag run 10 units up landed exactly on the pin
+            # above it). `_span_free` guards the run's interior; the far end needs its
+            # own test, which is also what `_vertex_clear` means for a wire vertex.
+            if _key(anchor) in blocked or not _vertex_clear(router, anchor):
+                continue
+            if not _span_free(router, point, anchor, blocked):
+                continue
+            if fits is not None and not fits(anchor, hang):
+                continue
+            return anchor, (_rounded(point), anchor), hang
     return _rounded(point), None, natural
 
 
@@ -4187,6 +4209,68 @@ def _inside(box: Box, outer: Box) -> bool:
         box[0] >= outer[0] - 1e-6 and box[1] >= outer[1] - 1e-6
         and box[2] <= outer[2] + 1e-6 and box[3] <= outer[3] + 1e-6
     )
+
+
+def _flag_box(
+    profile: SymbolProfile, rotation: float, anchor: tuple[float, float], net_id: str
+) -> Box:
+    """Everything one flag occupies: its glyph, its name text, and a margin.
+
+    069 sec.8 — 岳, on the landed P23 page: 「3V3的旗标标识和5V的导线重合了」. The glyph
+    box alone is **not** the flag: the host prints the net's name beside it (one line
+    *above* the anchor, between :data:`FLAG_TEXT_NEAR` and :data:`FLAG_TEXT_REACH` —
+    measured on the landed pages), so a flag that keeps only its glyph clear still
+    touches its neighbours. This is the box the placement keeps free of foreign
+    wiring: the glyph, that line, and the clearance.
+    """
+    glyph = flag_glyph_box(profile, rotation=rotation, anchor=anchor)
+    if glyph is None:
+        glyph = (anchor[0], anchor[1], anchor[0], anchor[1])
+    half = text_width(net_id) / 2.0 + 2.0
+    text = (
+        anchor[0] - half, anchor[1] + FLAG_TEXT_NEAR,
+        anchor[0] + half, anchor[1] + FLAG_TEXT_REACH,
+    )
+    return (
+        min(glyph[0], text[0]) - FLAG_CLEARANCE,
+        min(glyph[1], text[1]) - FLAG_CLEARANCE,
+        max(glyph[2], text[2]) + FLAG_CLEARANCE,
+        max(glyph[3], text[3]) + FLAG_CLEARANCE,
+    )
+
+
+def _flag_room(
+    router: _Router,
+    solids: Sequence[Box],
+    inner: Box | None,
+    blocked: set[tuple[float, float]],
+) -> Callable[[Box], bool]:
+    """Is this box free of everything the drawing has already put down?
+
+    Three questions, the first two of which the placement already asked about its
+    glyph and the third of which is 069 sec.8's:
+
+    * does it land on a part or a text box, or leave the page;
+    * does it swallow a **foreign connection** — another net's pin tip, flag anchor
+      or wire vertex (a flag on one of those joins two nets the spec keeps apart);
+    * does it **touch a foreign net's wire**? ``router.edges`` is every wire but this
+      net's own, so the rail the flag hangs from is not in its own way, while the
+      neighbouring rail 岳 found a glyph grazing is.
+    """
+    def free(box: Box) -> bool:
+        if any(_overlaps(box, solid) for solid in solids):
+            return False
+        if inner is not None and not _inside(box, inner):
+            return False
+        for start, end in router.edges:
+            if _segment_hits_box(start, end, box):
+                return False
+        for point in blocked:
+            if box[0] <= point[0] <= box[2] and box[1] <= point[1] <= box[3]:
+                return False
+        return True
+
+    return free
 
 
 def _place_flag(
@@ -4259,40 +4343,37 @@ def _rail_flag(
             page[2] - PAGE_MARGIN, page[3] - PAGE_MARGIN,
         )
     on_the_rail: tuple[tuple[float, float], float] | None = None
-    for reach in (FLAG_LEAD, FLAG_JOG, 0.0):
+    room = _flag_room(router, solids, inner, blocked)
+    # 069 sec.8: 被占就沿轨继续走 — the reaches are tried in 岳's own order (his VIN's
+    # 30 out, then a jog's length), and then **farther** along the rail, because a
+    # flag that has nowhere to stand still must not end up touching its neighbours.
+    for reach in (FLAG_LEAD, FLAG_JOG, 2.0 * FLAG_LEAD, 4.0 * FLAG_LEAD, 0.0):
         attach = _flag_attach_point(expression, pin, segments, reach)
         if _key(attach) in blocked or not _vertex_clear(router, attach):
             # The foot of the run is a conductor too: a point on the rail that is
             # also a foreign pin tip (two nets meeting at a point) would join them.
             continue
         for hang in (natural, -natural):
-            rotation = _flag_rotation((0.0, hang), family)
+            def fits(
+                anchor: tuple[float, float], _hang: float = hang
+            ) -> bool:
+                return room(_flag_box(
+                    profile, _flag_rotation((0.0, _hang), family), anchor, net_id,
+                ))
 
-            def glyph_at(
-                anchor: tuple[float, float], _rotation: float = rotation
-            ) -> Box:
-                return flag_glyph_box(
-                    profile, rotation=_rotation, anchor=anchor,
-                ) or (anchor[0], anchor[1], anchor[0], anchor[1])
-
-            def fits(anchor: tuple[float, float]) -> bool:
-                box = glyph_at(anchor)
-                if any(_overlaps(box, solid) for solid in solids):
-                    return False
-                return inner is None or _inside(box, inner)
-
-            anchor, lead, _hang = _flag_anchor(
+            anchor, lead, placed_hang = _flag_anchor(
                 router, attach, (0.0, hang), blocked,
                 leads=(FLAG_JOG,), fits=fits, up=natural > 0.0,
             )
             if lead is not None:
                 _place_flag(
-                    net_id, profile, ref, anchor, rotation, lead,
+                    net_id, profile, ref, anchor,
+                    _flag_rotation((0.0, placed_hang), family), lead,
                     segments, symbols, occupied, solids,
                 )
                 return anchor
-            if on_the_rail is None and fits(attach):
-                on_the_rail = (attach, rotation)
+            if on_the_rail is None and fits(attach, hang):
+                on_the_rail = (attach, _flag_rotation((0.0, hang), family))
     if on_the_rail is not None:
         _place_flag(
             net_id, profile, ref, on_the_rail[0], on_the_rail[1], None,
@@ -4377,10 +4458,11 @@ def _flag_pins(
     sec.1). Every flag stands upright (069 sec.7, see :func:`_flag_anchor`).
 
     ``stub`` is the reaching form: 069 sec.1's 40–60 for a pad brought out to its
-    own flag. It tries the long lead first and keeps the glyph off everything the
-    drawing has already put down — a part, a text, the page's edge. Where nothing
-    that long fits, the ordinary ladder is used rather than a stub the page would
-    refuse.
+    own flag. Every flag's whole box — glyph, its name text and a margin, 069
+    sec.8 — is kept off everything the drawing has already put down: a part, a
+    text, the page's edge, and **another net's wire**. Where the nearest lead does
+    not fit, the ladder reaches shorter and then farther, and only if nothing
+    anywhere fits does the flag end on its own pin.
     """
     inner = None
     if ctx.budget.page_box is not None:
@@ -4391,37 +4473,53 @@ def _flag_pins(
         )
     family = flag_glyph_kind(profile)
     natural = family != FLAG_GLYPH_KIND_GND
+    room = _flag_room(router, solids, inner, blocked)
     for member, point in members:
         part_id, _, token = member.partition(".")
-        direction = _pin_direction(
+        escape = _pin_direction(
             ctx, part_id, token, placed.poses,
         ) or (0.0, -1.0)
-        hang = math.copysign(1.0, direction[1]) if direction[1] != 0.0 else (
-            1.0 if natural else -1.0
-        )
-        rotation = _flag_rotation((0.0, hang), family)
 
-        def glyph_at(anchor: tuple[float, float], _rotation: float = rotation) -> Box:
-            return flag_glyph_box(
-                profile, rotation=_rotation, anchor=anchor,
-            ) or (anchor[0], anchor[1], anchor[0], anchor[1])
+        def fits(anchor: tuple[float, float], _hang: float) -> bool:
+            return room(_flag_box(
+                profile, _flag_rotation((0.0, _hang), family), anchor, net_id,
+            ))
 
-        def fits(anchor: tuple[float, float]) -> bool:
-            box = glyph_at(anchor)
-            if any(_overlaps(box, solid) for solid in solids):
-                return False
-            return inner is None or _inside(box, inner)
-
-        anchor, lead, _hang = _flag_anchor(
-            router, point, direction, blocked,
-            leads=(SIBLING_LEAD,) if stub else (),
-            fits=fits if stub else None,
-            up=natural,
-        )
-        _place_flag(
-            net_id, profile, ref, anchor, rotation, lead,
-            segments, symbols, occupied, solids,
-        )
+        # The pin's own escape first, then every other direction: 069 sec.8's 换侧 is
+        # about the picture, not about the symbol — a pad whose own side is crowded
+        # (the measured AMS1117 with its input capacitor ten units away, its rail ten
+        # above) still has room *below*, and a lead that leaves a pin tip in another
+        # direction is a legal wire.
+        hung = False
+        for direction in [
+            escape,
+            *(
+                other for other in
+                ((0.0, 1.0), (0.0, -1.0), (-1.0, 0.0), (1.0, 0.0))
+                if other != escape
+            ),
+        ]:
+            anchor, lead, hang = _flag_anchor(
+                router, point, direction, blocked,
+                leads=(SIBLING_LEAD,) if stub else (),
+                fits=fits,
+                up=natural,
+            )
+            if lead is None:
+                continue  # nothing fits that way — try the next side
+            _place_flag(
+                net_id, profile, ref, anchor,
+                _flag_rotation((0.0, hang), family), lead,
+                segments, symbols, occupied, solids,
+            )
+            hung = True
+            break
+        if not hung:
+            _place_flag(
+                net_id, profile, ref, point,
+                _flag_rotation((0.0, 1.0 if natural else -1.0), family), None,
+                segments, symbols, occupied, solids,
+            )
 
 
 def _stub_label(
@@ -4454,7 +4552,7 @@ def _stub_label(
     anchor, lead, _hang = _flag_anchor(
         router, point, direction, blocked,
         leads=(SIBLING_LEAD,),
-        fits=lambda here: _label_fits(ctx, net_id, here),
+        fits=lambda here, _hang: _label_fits(ctx, net_id, here),
     )
     if lead is not None:
         segments.append(LayoutSegment(net=net_id, points=list(lead)))

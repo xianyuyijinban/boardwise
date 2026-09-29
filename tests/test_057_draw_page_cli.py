@@ -510,6 +510,46 @@ def test_a_page_label_no_wire_reaches_becomes_a_named_stub(tmp_path, capsys):
 # ------------------------------------------------------------ E1: empty page
 
 
+def test_069_a_flagged_nets_wires_are_drawn_unnamed_and_a_signal_keeps_its_name(
+    monkeypatch, tmp_path, capsys
+):
+    """069 sec.9：有旗网的导线不落网名（旗本身就是名字），无旗信号网照旧。
+
+    岳 on the landed page: 「有了旗标就不要反复标注网络标识了。看着很乱啊」— the host
+    prints a wire's net name on the canvas, so a rail that the drawing *also* states
+    with a flag was saying it twice. A flagged net's wires are placed **unnamed**
+    (the flag names the net and the geometry joins them — exactly what 岳's own hand
+    drawing looks like to the editor), while a net with no flag keeps its name on the
+    wire, which is the only thing carrying it (057 sec.4's named stub).
+    """
+    editor = _PageEditor()
+    code, plan_path, circuit, presentation = _plan_page(monkeypatch, tmp_path, editor)
+    assert code == 0
+    plan = ChangePlan.load(plan_path)
+    # The editor's own netlist still *names* those nets — the flag is what names
+    # them, which is why dropping the wire's name costs the netlist nothing.
+    editor.netlists = [{"components": {}}, _netlist_for(plan)]
+    assert _apply(editor, plan_path, circuit, presentation, tmp_path)[0] == 0
+    calls = [params for action, params in editor.writes if action == "sch.place_wire"]
+    assert len(calls) == len(plan.change.draw_wires), [params for params in calls]
+    flagged = {item.net for item in plan.change.draw_flags if item.net}
+    assert flagged, "premise: this page draws flags"
+    named = set()
+    for wire, params in zip(plan.change.draw_wires, calls):
+        if wire.net in flagged:
+            assert "net" not in params, (
+                f"{wire.net} carries a flag and must be drawn unnamed, so the host "
+                f"prints its name once: {params}"
+            )
+            continue
+        assert params.get("net") == wire.net, (wire.net, params)
+        named.add(wire.net)
+    assert "TAP" in named, (
+        "a net with no flag keeps its name on the wire — that is what carries it "
+        f"(057 sec.4); the named nets were {sorted(named)}"
+    )
+
+
 def test_e1_an_empty_page_lands_the_whole_page_and_reads_the_shared_nets_back(
     monkeypatch, tmp_path, capsys
 ):
@@ -644,9 +684,15 @@ def test_e2_a_page_the_census_fills_is_presentation_poor_naming_what_is_there(
 def test_e2_a_landing_that_changes_an_existing_wire_is_not_saved(
     monkeypatch, tmp_path, capsys
 ):
-    """057 sec.2's hard line: one existing primitive changed = the run failed."""
+    """057 sec.2's hard line: one existing primitive changed = the run failed.
+
+    The existing wire is **unnamed** on purpose: 069 sec.9 draws a flagged net's
+    wires without a name (the flag states it), so a wire left by an earlier landing
+    of that net is unnamed too, and the fake host merges "every new wire of the same
+    net" into it by that name.
+    """
     editor = _PageEditor()
-    editor.add_wire("GND", [(1100, 60), (1120, 60)], ident="w-old-gnd")
+    editor.add_wire("", [(1100, 60), (1120, 60)], ident="w-old-gnd")
     code, plan_path, circuit, presentation = _plan_page(monkeypatch, tmp_path, editor)
     assert code == 0
     plan = ChangePlan.load(plan_path)
@@ -797,9 +843,10 @@ def test_e5_a_wire_the_host_merged_with_a_foreign_one_is_never_deleted(
 ):
     editor, plan_path, plan, _circuit, _presentation = _landed(monkeypatch, tmp_path, capsys)
     wire = plan.change.draw_wires[0]
+    # Found by *geometry*: 069 sec.9 draws a flagged net's wires unnamed, so their
+    # net name is no longer what identifies them on the page.
     for item in editor.items.values():
-        if item["kind"] == "wire" and item["net"] == wire.net and list(
-            wire.points[0]) in item["points"]:
+        if item["kind"] == "wire" and list(wire.points[0]) in item["points"]:
             item["points"].append([9999.0, 9999.0])
             break
     code, report = _discard(plan_path)

@@ -1176,9 +1176,12 @@ def test_an_output_branch_hangs_on_the_pad_across_the_body_from_the_input():
         f"({out_tip[0]:g}) of the core at {core.x:g}"
     )
     # 060 sec.2's shorting duty survives the move: the pad the branch no longer
-    # hangs on is still on the net, and every pin of both capacitors is wired.
+    # hangs on is still on the net, and every pin of both capacitors is wired. A
+    # pad whose own corner has no room left for a flag by 069 sec.8 carries one on
+    # its tip instead — which is a conductor, so the pin is connected either way.
     for member in ("U1.2", "U1.4", "C1.1", "C2.1"):
-        assert on_a_wire(plan, pin_point(plan, member)), member
+        tip = pin_point(plan, member)
+        assert on_a_wire(plan, tip) or _flag_on(plan, tip), member
     assert readability.check(
         plan, spec, presentation, library(), page_box=page,
     ).hard_violations == []
@@ -1360,6 +1363,19 @@ def _joined_by_a_wire(plan: LayoutPlan, first, second) -> bool:
     )
 
 
+def _flag_on(plan: LayoutPlan, point) -> bool:
+    """Does a flag stand exactly on this point?
+
+    069 sec.8's last resort: a flag whose whole box has nowhere clear to go (a
+    crowded corner of the module) stands on its own pin, whose tip is a conductor —
+    the pin is then connected by the flag itself, with no stub.
+    """
+    return any(
+        abs(symbol.x - point[0]) < 1e-6 and abs(symbol.y - point[1]) < 1e-6
+        for symbol in plan.power_symbols
+    )
+
+
 def _ldo_pair_circuit(*, out_members: list[str]) -> CircuitSpec:
     """The measured AMS1117 with a **single** input capacitor and no output one.
 
@@ -1479,10 +1495,12 @@ def test_a_far_pad_is_named_where_it_stands_and_the_rest_keeps_its_wire():
     named = {
         member for member, tip in (("U1.2", near), ("U1.4", far))
         if any(_joined_by_a_wire(plan, tip, (s.x, s.y)) for s in flags)
+        or _flag_on(plan, tip)
     }
     assert named == {"U1.2", "U1.4"}, (
-        "both islands of this net state its name — the far pad at its own stub and "
-        f"the wired cluster at the pad that kept the wire; named={named}"
+        "both islands of this net state its name — the far pad on its own stub (or, "
+        "when nothing clear is left around it, on its own tip: 069 sec.8's last "
+        f"resort) and the wired cluster at the pad that kept the wire; named={named}"
     )
     derived = readability.derive_netlist(plan, library())
     assert len(set(derived.group_of(pin) for pin in ("U1.2", "U1.4", "C2.1"))) == 1, (
@@ -1773,9 +1791,10 @@ def test_a_rail_flag_stands_upright_on_a_short_vertical_run():
         f"VIN5's flag hangs on a vertical line: {lead}"
     )
     run = abs(lead[1][1] - lead[0][1])
-    assert 20.0 <= run <= 40.0, (
-        f"VIN5's flag is {run:g} units off the rail — 岳's run is 20-40 (his own "
-        "are 20 and 30)"
+    assert 20.0 <= run <= 4.0 * dc.FLAG_LEAD, (
+        f"VIN5's flag is {run:g} units off the rail — 岳's run is 20-40 (his own are "
+        "20 and 30), and 069 sec.8 lets it reach *farther* when the short run would "
+        "leave the flag's box touching a neighbouring wire"
     )
     assert (lead[1][1] > lead[0][1]) == (flags[0].rotation == 0.0), (
         f"a rail's glyph hangs away along its run: run {lead}, rotation "
@@ -1789,6 +1808,76 @@ def test_a_rail_flag_stands_upright_on_a_short_vertical_run():
         f"the run starts on the rail itself at {lead[0]}, not in mid-air "
         f"(the net's own points are {sorted(wiring)})"
     )
+
+
+def test_a_flags_whole_box_keeps_clear_of_the_other_nets_wires():
+    """069 sec.8：旗标整盒（glyph + 名文字 + margin）不得贴上别网导线。
+
+    岳 on the landed page: 「3V3的旗标标识和5V的导线重合了」 — the flag's glyph grazed a
+    neighbouring rail and the name the host prints with it was squeezed against the
+    next net's vertical run. The anchor-only test 069 v2 added cannot see either: the
+    box a flag occupies is its glyph **and** that name line (the host prints it just
+    above the anchor), grown by a margin.
+
+    Measured on a drawing whose module has room for it: *no* flag's box touches any
+    other net's wire. On a drawing whose corner is crowded (the measured AMS1117 with
+    its input capacitor ten units from its own pins) some flag has nowhere clear to
+    stand — and then 069 sec.8's last resort applies: it stands **on its own pin**
+    (a conductor), never in mid-air and never moved off the net it names.
+    """
+    page = (0.0, 0.0, 1170.0, 825.0)
+    result = dc.compile(
+        ldo_circuit(), ldo_presentation(), library(), dc.CompileBudget(page_box=page),
+    )
+    assert result.ok, render(result)
+    plan = result.candidates[0]
+    book = library()
+    for symbol in plan.power_symbols:
+        box = dc._flag_box(
+            book[symbol.symbol_ref], symbol.rotation, (symbol.x, symbol.y), symbol.net,
+        )
+        for segment in plan.segments:
+            if segment.net == symbol.net:
+                continue
+            for start, end in zip(segment.points, segment.points[1:]):
+                assert not dc._segment_hits_box(start, end, box), (
+                    f"{symbol.net}'s flag at ({symbol.x:g}, {symbol.y:g}) puts its own "
+                    f"box {box} on {segment.net}'s wire {start}→{end} — 岳's 「旗标标识"
+                    "和导线重合」"
+                )
+
+    crowded = dc.compile(
+        _duplicate_vout_circuit(out_members=["U1.2", "U1.4", "C2.1"]),
+        ldo_presentation(
+            sidePreferences={"input": "left", "output": "bottom"},
+            modules=[module("pwr", ["U1", "C1", "C2"], "regulator")],
+            portRoles={"VIN5": "input", "3V3": "output"},
+        ),
+        library(), dc.CompileBudget(page_box=page),
+    )
+    assert crowded.ok, render(crowded)
+    tight = crowded.candidates[0]
+    tips = {
+        pin_point(tight, member)
+        for member in ("U1.1", "U1.2", "U1.3", "U1.4", "C1.1", "C1.2", "C2.1", "C2.2")
+    }
+    for symbol in tight.power_symbols:
+        box = dc._flag_box(
+            book[symbol.symbol_ref], symbol.rotation, (symbol.x, symbol.y), symbol.net,
+        )
+        touching = [
+            segment.net for segment in tight.segments if segment.net != symbol.net
+            and any(
+                dc._segment_hits_box(start, end, box)
+                for start, end in zip(segment.points, segment.points[1:])
+            )
+        ]
+        if touching:
+            assert (symbol.x, symbol.y) in tips, (
+                f"{symbol.net}'s flag at ({symbol.x:g}, {symbol.y:g}) still touches "
+                f"{touching} and does not stand on a pin — a crowded corner may only "
+                "end with the flag on its own pin (069 sec.8)"
+            )
 
 
 def test_scene_08b_the_ams1117_duplicate_vout_never_reads_as_a_compiler_bug():

@@ -370,8 +370,11 @@ def _page_with(plan: ChangePlan) -> _FakeEditor:
         editor.add(part.designator, part.x, part.y, rotation=part.rotation,
                    mirror=part.mirror, lcsc=part.lcsc,
                    value=part.value if part.value_key else None)
+    # A flagged net's wires are drawn **unnamed** (069 sec.9: the flag states the
+    # name), so a page that already holds this plan holds them the same way.
+    flagged = drawapply.unnamed_nets(plan)
     for wire in plan.change.draw_wires:
-        editor.wire(wire.net, wire.points)
+        editor.wire("" if wire.net in flagged else wire.net, wire.points)
     for flag in plan.change.draw_flags:
         editor.flag(flag.net, flag.x, flag.y)
     return editor
