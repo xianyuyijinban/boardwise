@@ -455,8 +455,8 @@ def module_of(page: PageLayoutPlan, module_id: str) -> PageModule:
 # ------------------------------------------------------------- 场景 1–3、7、8
 
 
-def test_scene_01_a_rail_across_two_modules_is_named_and_the_ground_is_flagged():
-    """056 sec.4 scene 1: 出图；GND 全旗标；VIN 默认跨模块标签."""
+def test_scene_01_a_rail_across_two_modules_is_flagged_and_so_is_the_ground():
+    """056 sec.4 scene 1 + 069 sec.7: 出图；GND 全旗标；VIN 也按旗陈述（不再降级 label）."""
     scene = scenes()[1]
     result, page = best_of(scene)
     assert 3 <= len(result.pages) <= 8, render(result)
@@ -464,15 +464,58 @@ def test_scene_01_a_rail_across_two_modules_is_named_and_the_ground_is_flagged()
 
     stated = net_names(page)
     assert stated["GND"] == {"flag"}, stated["GND"]
-    assert stated["VIN"] == {"label"}, stated["VIN"]
-    # One statement per module, both of them labels: the join is by name.
+    assert stated["VIN"] == {"flag"}, stated["VIN"]
+    # One statement per module, both of them flags: the join is by name, and the
+    # rail is marked the way 岳 reads a rail (069 sec.7) — a flag at each end, not
+    # the text-only statement the landed page was sent back for.
     for module_id in scene.module_ids:
         port = module_of(page, module_id).port("VIN")
-        assert port is not None and port.kind == "label", module_id
+        assert port is not None and port.kind == "flag", module_id
     # The ground is flagged at every member pin of both modules, and no wire
-    # crosses a module boundary for it.
+    # crosses a module boundary for either of them.
     assert len([item for item in page.plan.power_symbols if item.net == "GND"]) == 4
     assert [segment.net for segment in cross_wires(page)] == []
+
+
+def test_069_a_rail_between_modules_is_stated_by_its_flag_and_the_module_keeps_it():
+    """069 sec.7 (page half): 跨模块电源网按旗陈述，模块自己画的旗与引线留得住。
+
+    岳 read the landed P23 page and asked why its 5 V rail had no flag: the rail was
+    drawn as a wire inside its module, the page re-stated it with a label, and
+    `_drop_statements` took the module's own flag and its lead away with it. A rail
+    is a bus at **any** fan-out now, so the port is a flag, the module's flag and the
+    run that reaches it are still on the page, and the two ends join by name.
+
+    The neighbours are asserted with it, because the rule is narrow: a **signal** is
+    still named (a label, never a flag), and a **ground** behaves exactly as it did.
+    """
+    scene = scenes()[1]
+    result, page = best_of(scene)
+    assert_both_layers_clean(page, scene)
+
+    for module_id in scene.module_ids:
+        port = module_of(page, module_id).port("VIN")
+        assert port is not None and port.kind == "flag", module_id
+
+    vins = [item for item in page.plan.power_symbols if item.net == "VIN"]
+    assert vins, "the module's own rail flag survives the page's re-statement"
+    for symbol in vins:
+        reaching = [
+            segment for segment in page.plan.segments
+            if segment.net == "VIN"
+            and abs(segment.points[-1][0] - symbol.x) < 1e-6
+            and abs(segment.points[-1][1] - symbol.y) < 1e-6
+        ]
+        assert reaching, (
+            f"the run that reaches VIN's flag at ({symbol.x}, {symbol.y}) is still "
+            "drawn — a flag with no wire under it connects nothing"
+        )
+
+    # A signal that crosses a boundary is untouched: named, not flagged. And the
+    # ground's own bus behaviour (every member, every module) is unchanged.
+    stated = net_names(page)
+    assert stated["TAP"] == {"label"}, stated["TAP"]
+    assert stated["GND"] == {"flag"}, stated["GND"]
 
 
 def test_scene_02_a_three_edge_flow_is_placed_in_reading_order():
@@ -490,11 +533,12 @@ def test_scene_02_a_three_edge_flow_is_placed_in_reading_order():
         if item.metrics.get("page_backflow_length", 0.0) > 0.0
     ]
     assert wrapped, [item.describe_key() for item in result.ranked]
-    # The chain is named across both boundaries, the ground flagged everywhere.
+    # The chain's rails are flagged across both boundaries (069 sec.7: a rail is a
+    # bus at any fan-out), the ground flagged everywhere.
     stated = net_names(page)
     assert stated["GND"] == {"flag"}
-    assert stated["3V3"] == {"label"}
-    assert stated["3V3F"] == {"label"}
+    assert stated["3V3"] == {"flag"}
+    assert stated["3V3F"] == {"flag"}
     assert cross_wires(page) == []
 
 

@@ -94,7 +94,7 @@ None of them say "no solution".
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from heapq import heappop, heappush
 from typing import Any
@@ -114,6 +114,7 @@ from boardwise.core.layoutplan import (
 )
 from boardwise.core.presentationspec import LABEL_LABEL, PresentationSpec
 from boardwise.core.symbolprofile import (
+    FLAG_GLYPH_KIND_GND,
     FLAG_GLYPH_ROTATION_OFFSETS,
     Box,
     SymbolPin,
@@ -214,6 +215,20 @@ STUB = 30.0
 
 #: How far a flag's anchor sits from the pin it names, when the lead wire fits.
 FLAG_LEAD = 30.0
+
+#: How far the short **vertical bend** runs when a flag's lead would be horizontal
+#: (069 sec.7, 岳: 「旗标一定要竖直摆放不能平放」): his own drawing turns 20 units up
+#: from VIN's stub to the flag, and 30 from the left VOUT pad. A flag is never laid
+#: on its side, so a horizontal lead turns by this much and the flag hangs at the
+#: end of the turn.
+FLAG_JOG = 25.0
+
+#: How far a **duplicate pad across the body** is brought out before its own flag
+#: goes on (069 sec.1). 岳's hand-drawn AMS1117 brings a far pad out 40-60 units
+#: and puts the flag on the end of that stub instead of running a wire over the
+#: part to its twin; the same number is 069 sec.3's ceiling, beyond which a power
+#: pin's reach is a long run rather than a stub.
+SIBLING_LEAD = 50.0
 
 #: Minimum gap between two boxes that must not touch.
 GAP = 20.0
@@ -2413,12 +2428,23 @@ class _Expression:
       join by name in the netlist;
     * ``label`` — a net that crosses a module boundary or has high fan-out, where
       `labelPolicy` allows a name instead of a wire.
+
+    ``detached`` is empty for every net but the one shape 069 sec.2 rules on: a
+    role whose pads leave the body on **opposite sides**. Those pads are not
+    joined by a wire — each is brought out on its own stub and given the same
+    flag — so they are listed here, the wire is drawn through the rest, and
+    ``pivot`` names the pad of that rest which states the net's own name. A
+    detached pad and the wired cluster are one node in the spec and two islands
+    on the page, and only a name on each of them makes the drawing say what the
+    spec means (the readability checker derives the netlist from the flags).
     """
 
     net: str
     style: str
     points: tuple[tuple[str, tuple[float, float]], ...]
     reason: str
+    detached: tuple[str, ...] = ()
+    pivot: str = ""
 
 
 def _obligation_nets(ctx: _Context) -> set[str]:
@@ -2464,9 +2490,178 @@ def _expressions(ctx: _Context, placed: _Placement) -> dict[str, _Expression]:
         if not points:
             continue
         style, reason = _expression_style(ctx, net.id, net.cls, len(points), obligated)
+        detached: tuple[str, ...] = ()
+        pivot = ""
+        if style == "wire" and _sibling_name_form(ctx, net.id, net.cls):
+            detached, pivot = _detached_pins(ctx, net.id, points)
         out[net.id] = _Expression(
             net=net.id, style=style, points=tuple(points), reason=reason,
+            detached=detached, pivot=pivot,
         )
+    return out
+
+
+def _power_needs_flag(
+    ctx: _Context, net_id: str, symbols: Sequence[LayoutPowerSymbol]
+) -> bool:
+    """Is this a rail the plan states without a flag of its own? (069 sec.7)
+
+    The ruling: every power net is stated by a power flag inside the module it
+    supplies — 岳, finding the 5 V rail on the landed page named by text alone
+    (「只有文本没有旗 = 缺陷」). A rail drawn as a *wire* has no flag of its own (053
+    sec.7 draws what is local, and this is the one case text was standing in for),
+    so the compiler supplies one. Everything else is left exactly as it is: a bus
+    expressed by flags at every pin, a single-pin rail, and 069 sec.1's far pad
+    brought out to its own flag all already carry one.
+    """
+    net = ctx.circuit.net(net_id)
+    if net is None or net.cls != "power":
+        return False
+    return not any(symbol.net == net_id for symbol in symbols)
+
+
+def _power_flag_pin(
+    ctx: _Context, expression: _Expression
+) -> tuple[str, tuple[float, float]] | None:
+    """The pin a rail's own flag goes on: the core's, or the first point there is.
+
+    Which pin is a question about the picture, and a rail belongs to the part it
+    *supplies*: 岳 hangs his input flag on VIN itself. The chain's own pin is that
+    part's pin, so it wins; a rail whose parts are all branches (nothing it
+    supplies) takes its first point by member id, which is the same answer on
+    every run.
+    """
+    ordered = sorted(expression.points)
+    for member, point in ordered:
+        slot = ctx.slots.get(member.partition(".")[0])
+        if slot is not None and slot.kind == "chain":
+            return member, point
+    return ordered[0] if ordered else None
+
+
+def _sibling_name_form(ctx: _Context, net_id: str, cls: str) -> str:
+    """How 069 sec.1 names the pads of a net it splits: ``"flag"`` or ``"label"``.
+
+    A rail is named by its power flag and a ground by the ground flag — the kinds
+    the net already has, which is 053 sec.7's own "one style throughout" read for
+    a net of that class — and every other net by a label, which no library has to
+    carry. ``""`` is the answer for a rail whose flag symbol the library does not
+    carry: the two islands 069 makes are joined by a name and nothing else, so
+    such a net keeps 060 sec.2's wire rather than being split into halves nothing
+    could state.
+    """
+    if cls in ("power", "gnd"):
+        return "flag" if _flag_plan(ctx, net_id, cls)[0] is not None else ""
+    return "label"
+
+
+def _detached_pins(
+    ctx: _Context,
+    net_id: str,
+    points: Sequence[tuple[str, tuple[float, float]]],
+) -> tuple[tuple[str, ...], str]:
+    """``(pads named at their own stub, the pad that keeps the wire)`` — 069 sec.2.
+
+    The ruling, from 岳's hand drawing: *「相隔较远的两根同属性引脚不要相连，
+    引出来打网络标签即可」* — two pads of one role that the body itself separates
+    are not joined by a wire. "相隔较远" is 065's own reading of the shape, the
+    dot product of the two pads' offsets from the body's centre: they leave the
+    body on opposite sides. Each such pad is brought out on a short stub and
+    given the same flag, and the net is joined by *name* — 060 sec.2's electrical
+    obligation is unchanged, only the form it is drawn in (out of scope: the
+    compiler's grammar, the netlist and the readability partition all still see
+    one node).
+
+    Which pad keeps the wire is a question about the picture: the one the rest of
+    the net already hangs off. 065 sec.1 puts the output capacitor on the pad
+    across from the input pin, so the near pad is the one with somewhere to go
+    and the far one has nothing but its own name. A net with no other member at
+    all has no such anchor: both pads are named and no wire is drawn between them,
+    which is 岳's own answer for the pair on its own.
+
+    Pads of one role on **one** side are never touched: they are a short jumper
+    apart, and 060 sec.2's wire between them stays exactly as it was.
+    """
+    by_part: dict[str, list[tuple[str, tuple[float, float]]]] = {}
+    for member, point in points:
+        by_part.setdefault(member.partition(".")[0], []).append((member, point))
+    detached: list[str] = []
+    pivot = ""
+    for part_id in sorted(by_part):
+        entries = by_part[part_id]
+        if len(entries) < 2:
+            continue
+        offsets = _body_offsets(ctx, part_id, [item[0] for item in entries])
+        if len(offsets) < 2:
+            continue
+        across = {
+            member for member, _ in entries
+            if member.partition(".")[2] in offsets
+            and any(
+                other != member and other.partition(".")[2] in offsets
+                and _dot(
+                    offsets[member.partition(".")[2]], offsets[other.partition(".")[2]]
+                ) < 0.0
+                for other, _ in entries
+            )
+        }
+        if not across:
+            # Every pad of this role leaves the body the same way (or at right
+            # angles): there is no pair the part sits between, so 060 sec.2's own
+            # drawing stands, wire and all.
+            continue
+        others = [item for item in points if item[0].partition(".")[0] != part_id]
+        if not others:
+            detached.extend(sorted(across))
+            continue
+        keeper, _ = min(
+            entries,
+            key=lambda item: (
+                min(
+                    math.hypot(item[1][0] - other[0], item[1][1] - other[1])
+                    for _, other in others
+                ),
+                item[0],
+            ),
+        )
+        keeper_token = keeper.partition(".")[2]
+        if keeper_token not in offsets:
+            continue
+        far = [
+            member for member in sorted(across)
+            if member != keeper
+            and _dot(
+                offsets[member.partition(".")[2]], offsets[keeper_token]
+            ) < 0.0
+        ]
+        if not far:
+            continue
+        detached.extend(far)
+        pivot = keeper
+    return tuple(detached), pivot
+
+
+def _body_offsets(
+    ctx: _Context, part_id: str, members: Sequence[str]
+) -> dict[str, tuple[float, float]]:
+    """``pin token -> its tip seen from the body's centre``, in symbol terms.
+
+    Read in the symbol's own frame, exactly as :func:`_opposite_side_token` does:
+    a pose is a rotation and a mirror about the part's origin, and both keep dot
+    products, so "across the body" is the same statement in every pose the symbol
+    may be drawn in.
+    """
+    profile = ctx.profile(part_id)
+    if profile.body is None:
+        return {}
+    box = profile.body
+    centre = ((box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0)
+    out: dict[str, tuple[float, float]] = {}
+    for member in members:
+        token = member.partition(".")[2]
+        pin = _pin_of_token(profile, token)
+        if pin is not None:
+            out[token] = (pin.tip[0] - centre[0], pin.tip[1] - centre[1])
     return out
 
 
@@ -2475,7 +2670,9 @@ def _sibling_members(ctx: _Context, net: Any) -> set[str]:
 
     The ruling: a role's several pins are **one node inside the symbol**, so a
     spec that puts one of them on a net puts the role there, and the drawing
-    wires the rest of them. Two exceptions, both the spec's own words:
+    expresses the rest of them as well — wired to it, or (069 sec.2, when the body
+    separates them) brought out on their own stub under the same flag. Two
+    exceptions, both the spec's own words:
 
     * a pin listed in ``nc[]`` is an explicit no-connect and stays off the net
       ("nc 降为显式例外");
@@ -2785,45 +2982,37 @@ def _tap_stub(
 
 
 def _flag_rotation(direction: tuple[float, float], kind: str) -> float:
-    """The rotation the **editor** is given so the flag's glyph hangs away.
+    """The rotation the **editor** is given so the flag **stands upright**.
 
-    ``direction`` is the way the flag leaves its pin — the pin's own escape
-    direction — and the glyph is meant to hang further out that way, clear of the
-    wire it names. ``kind`` is the flag's own family
-    (:func:`~boardwise.core.symbolprofile.flag_glyph_kind`), because the library
-    hangs the two on opposite sides at the same rotation.
+    069 sec.7 — 岳, reading the landed P23 page: 「旗标一定要竖直摆放不能平放影响观感」
+    — so this answers **0 or 180** and nothing else, and 053B's compass (which
+    turned a flag sideways for a horizontal lead) is retired. His own AMS1117
+    drawing is the same statement: every ``Power-VCC`` there is 0 and every ground
+    0 or 180, because every flag is reached by a *vertical* run — a horizontal
+    stub turns a short way up or down first (:func:`_flag_anchor`).
 
-    The compass is 053B's, still (``(0,1)`` up -> ``0``, left -> ``90``, down ->
-    ``180``, right -> ``270``), turned by the family's own offset
-    (:data:`~boardwise.core.symbolprofile.FLAG_GLYPH_ROTATION_OFFSETS`). That
-    shared offset is the point: the box ``flag_glyph_box`` reserves for a flag is
-    computed from the *same* number, so a compass that turned a different amount
-    from the box would put the plan's reservation on the far side of the glyph it
-    reserves room for.
+    Which of the two is still 064's table, unchanged: at rotation 0 a ground's
+    bars hang *below* their connection point (``Ground-GND``, ``BBOX (-10, 0, 10,
+    -19)``) and a rail's bar stands *above* its own (``Power-VCC`` / ``Power-5V``,
+    ``(-5, 10, 5, 0)``), so the number that hangs the glyph *away* along
+    ``direction`` is the ground's 180 and the rail's 0 — the family offset
+    (:data:`~boardwise.core.symbolprofile.FLAG_GLYPH_ROTATION_OFFSETS`) added to a
+    base of 0 for an upward hang and 180 for a downward one. That shared offset is
+    the point: the box ``flag_glyph_box`` reserves comes from the *same* number, so
+    a rotation that turned a different amount would reserve room on the wrong side
+    of the glyph (060's bug, both families; 064's fix, both families).
 
-    ``gnd`` — the library's ground symbol hangs its bars *below* its connection
-    point (``Ground-GND``, ``BBOX (-10, 0, 10, -19)``), so a flag leaving its pin
-    downwards is drawn at ``0``, not at ``180``; 054-059 landed every GND flag
-    upside down because the mapping assumed the opposite natural pose (evidence:
-    ``outputs/057_live/e1b/plan.page.json`` vs ``.../render.png``). That is the
-    family whose offset is 180, so this half is 060 sec.3's mapping unchanged.
-
-    ``rail`` — ``Power-*`` is the other way up (``Power-VCC`` / ``Power-5V``:
-    ``(-5, 10, 5, 0)`` / ``(-5, 10, 5, 5)`` — a bar **above** the connection), so
-    the same 180 that fixed the ground family flipped every rail flag: 060's
-    reported finding, 064's fix. The offset is 0 for this family, which is 053B's
-    original mapping — the one 060's uniform flip took away from it. Both
-    halves are pinned at their live-measured values in
-    ``outputs/064_railflag/``.
+    ``direction`` is therefore the way the glyph must hang — ``+y`` up, ``-y``
+    down. The compiler's own placement only ever passes those two (a horizontal
+    lead is bent first). A horizontal one is still answered, because the page layer
+    calls this for a port on a vertical module boundary: there the family's
+    natural hang is the answer — a rail lifts, a ground hangs down.
     """
-    if direction == (0.0, 1.0):
-        base = 0.0
-    elif direction == (-1.0, 0.0):
-        base = 90.0
-    elif direction == (0.0, -1.0):
-        base = 180.0
+    if direction[1] != 0.0:
+        up = direction[1] > 0.0
     else:
-        base = 270.0
+        up = kind != FLAG_GLYPH_KIND_GND
+    base = 0.0 if up else 180.0
     return (base + FLAG_GLYPH_ROTATION_OFFSETS[kind]) % 360.0
 
 
@@ -3143,12 +3332,6 @@ def _compress(points: Sequence[tuple[float, float]]) -> list[tuple[float, float]
     return out
 
 
-def _net_points(
-    ctx: _Context, expression: _Expression
-) -> list[tuple[float, float]]:
-    return [point for _, point in expression.points]
-
-
 # ------------------------------------------------------- stage 3c: the plan
 
 
@@ -3292,16 +3475,28 @@ def _connect_net(
     that geometry is left alone rather than reached a second time along the same
     line.
 
+    A pad in ``expression.detached`` is not part of this wire at all (069 sec.2:
+    it carries its own flag instead of a run over the body), so the trunk and the
+    attachments are computed from the rest.
+
     Returns ``None`` when the net could not be drawn inside the corridor (the
     caller falls back to a name, or refuses the candidate — never to a wire that
     pretends to connect something it does not).
     """
-    points = sorted({_key(point) for point in _net_points(ctx, expression)})
+    points = sorted({
+        _key(point) for member, point in expression.points
+        if member not in expression.detached
+    })
+    if not points:
+        # 069 sec.2: every pad of this net is a far duplicate, so each one is
+        # named at its own stub and there is nothing left for a wire to join.
+        return [], "no wire: every pin of this net is named at its own stub"
     if len(points) == 1:
         return [], "one pin: nothing to wire"
     chain_points = sorted({
         _key(point) for member, point in expression.points
-        if ctx.slots.get(member.partition(".")[0]) is not None
+        if member not in expression.detached
+        and ctx.slots.get(member.partition(".")[0]) is not None
         and ctx.slots[member.partition(".")[0]].kind == "chain"
     })
     if not existing and _collinear(points):
@@ -3678,6 +3873,52 @@ def _build_candidate(
                 ] + list(drawn_segments)
                 if drawn_segments:
                     notes.append(f"net {net_id}: {why}")
+        if expression.style == "wire" and expression.detached:
+            # 069 sec.2: the far pad is named where it stands, and the wired
+            # cluster gets the same name — the two islands are one node in the
+            # spec, and only a name on each of them says so.
+            net = ctx.circuit.net(net_id)
+            cls = net.cls if net is not None else "power"
+            named = _sibling_name_form(ctx, net_id, cls)
+            profile, ref = _flag_plan(ctx, net_id, cls)
+            far = [
+                (member, point) for member, point in expression.points
+                if member in expression.detached
+            ]
+            near = [
+                (member, point) for member, point in expression.points
+                if member == expression.pivot
+            ]
+            for member, point in far:
+                if named == "flag":
+                    _flag_pins(
+                        ctx, placed, net_id, profile, ref, [(member, point)],
+                        router, segments, symbols, occupied, solids, blocked,
+                        stub=True,
+                    )
+                    continue
+                _stub_label(
+                    ctx, placed, net_id, member, point, router, segments,
+                    labels, occupied, solids, blocked,
+                )
+            for member, point in near:
+                if named == "flag":
+                    _flag_pins(
+                        ctx, placed, net_id, profile, ref, [(member, point)],
+                        router, segments, symbols, occupied, solids, blocked,
+                    )
+                    continue
+                _stub_label(
+                    ctx, placed, net_id, member, point, router, segments,
+                    labels, occupied, solids, blocked,
+                )
+            notes.append(
+                f"net {net_id}: " + ", ".join(expression.detached)
+                + " sit on the far side of their own body from "
+                + (expression.pivot or "the rest of the net")
+                + f", so each is brought out on a stub and named by its own "
+                f"{named} instead of being wired across the part (069 sec.2)"
+            )
         if expression.style == "label":
             for member, point in expression.points:
                 part_id, _, token = member.partition(".")
@@ -3703,31 +3944,44 @@ def _build_candidate(
                     labels.append(label)
                     solids.append(label.bbox)
                 continue
-            family = flag_glyph_kind(profile)
-            for member, point in expression.points:
-                part_id, _, token = member.partition(".")
-                direction = _pin_direction(
-                    ctx, part_id, token, placed.poses,
-                ) or (0.0, -1.0)
-                anchor, lead = _flag_anchor(router, point, direction, blocked)
-                rotation = _flag_rotation(direction, family)
-                symbols.append(LayoutPowerSymbol(
-                    symbol_ref=ref,
-                    symbol_hash=profile.geometry_hash(),
-                    net=net_id,
-                    x=anchor[0],
-                    y=anchor[1],
-                    rotation=rotation,
-                ))
-                if lead is not None and _key(anchor) != _key(point):
-                    segments.append(
-                        LayoutSegment(net=net_id, points=[point, anchor])
-                    )
-                glyph = flag_glyph_box(
-                    profile, rotation=rotation, anchor=anchor,
-                ) or (anchor[0], anchor[1], anchor[0], anchor[1])
-                occupied.append(glyph)
-                solids.append(glyph)
+            _flag_pins(
+                ctx, placed, net_id, profile, ref, expression.points,
+                router, segments, symbols, occupied, solids, blocked,
+            )
+        router.boxes = solids
+
+    # 069 sec.7's own supply, *after* every net is routed: 岳 read the landed P23
+    # page and asked why its 5 V rail had no flag (「P23 5V部分为什么不给旗标？」), so
+    # a rail drawn as a wire carries one — hung off the rail by a short vertical run
+    # (:func:`_rail_flag`), at the pin the rail supplies. Placed last on purpose:
+    # those runs are obstacles for the router, and put in the per-net loop they
+    # cost one 053B scenario 4 s → 40 s of search (measured) without changing a
+    # single drawing.
+    for net_id in _net_order(ctx, expressions):
+        expression = expressions[net_id]
+        if expression.style != "wire" or not _power_needs_flag(ctx, net_id, symbols):
+            continue
+        profile, ref = _flag_plan(ctx, net_id, "power")
+        pin = _power_flag_pin(ctx, expression)
+        if profile is None or pin is None:
+            continue
+        router.edges = [
+            (start, end)
+            for segment in segments if segment.net != net_id
+            for start, end in zip(segment.points, segment.points[1:])
+        ]
+        blocked = _blocked_points(ctx, placed, net_id, labels, symbols, segments)
+        router.blocked = blocked
+        anchor = _rail_flag(
+            ctx, net_id, expression, pin, profile, ref, router, segments,
+            symbols, occupied, solids, blocked,
+        )
+        notes.append(
+            f"net {net_id}: a power net carries its own flag — hung at "
+            f"{_point_text(anchor)} by a {FLAG_JOG:g}-unit vertical run off the "
+            f"rail its pin {pin[0]} supplies (069 sec.7); a rail named by text "
+            "alone would be found by chasing names"
+        )
         router.boxes = solids
 
     junctions = _junctions(segments)
@@ -3868,26 +4122,369 @@ def _flag_anchor(
     point: tuple[float, float],
     direction: tuple[float, float],
     blocked: set[tuple[float, float]],
-) -> tuple[tuple[float, float], tuple[float, float] | None]:
-    """Where a flag's anchor goes: a short lead out of the pin, or the pin itself.
+    *,
+    leads: Sequence[float] = (),
+    fits: Callable[[tuple[float, float]], bool] | None = None,
+    up: bool = True,
+) -> tuple[tuple[float, float], tuple[tuple[float, float], ...] | None, float]:
+    """Where a flag's anchor goes, the lead that reaches it, and which way it hangs.
+
+    Returns ``(anchor, lead, hang)``: ``lead`` is the straight run from the point to
+    the anchor (``None`` when the flag sits *on* the point — a legal placement,
+    since the flag's own anchor is a conductor there), and ``hang`` is ``+1``/``-1``,
+    the vertical :func:`_flag_rotation` turns into 0 or 180.
 
     A flag is placed *on* the wire that reaches it (that is what makes the editor
-    see the connection), so the lead is drawn from the pin tip and the anchor is
-    its far end. When even the shortest lead is blocked, the flag sits on the pin
-    tip itself — a legal placement (the flag's own anchor is a conductor at the
-    tip), and reported in the plan's notes rather than hidden.
+    see the connection). A **vertical** lead is the whole story and the glyph hangs
+    further out along it. A **horizontal** one cannot: 069 sec.7 draws flags
+    upright, so the glyph rises (a rail, ``up``) or hangs down (a ground) from the
+    end of the run — and the run stays *straight*, which matters beyond the picture:
+    the page layer recognizes a flag's lead by being a two-point run to its anchor
+    (`pagecompiler._is_lead`), so a bent one would be left dangling when a page
+    re-states the net. A rail's flag is therefore hung from the rail itself, by a
+    vertical run of its own (:func:`_rail_flag`) — which is 岳's own VIN: out along
+    the rail, then up to the flag.
+
+    ``leads`` are lengths to try before the default ladder, and ``fits`` is how a
+    stub that has to *reach* somewhere is chosen (069 sec.1's far pad): the lead may
+    be clear while the glyph at its end lands on a neighbouring part or outside the
+    page, and the pad it names is then brought out shorter instead.
     """
-    for length in (FLAG_LEAD, router.grid * 2.0, 0.0):
-        anchor = (
+    lengths: list[float] = []
+    for length in (*leads, FLAG_LEAD, router.grid * 2.0, 0.0):
+        if length not in lengths:
+            lengths.append(length)
+    natural = 1.0 if up else -1.0
+    for length in lengths:
+        anchor = _rounded((
             point[0] + direction[0] * length,
             point[1] + direction[1] * length,
-        )
+        ))
         if _close(length, 0.0):
-            return (_rounded(anchor), None)
+            return anchor, None, natural
+        if direction[1] != 0.0:
+            hang = math.copysign(1.0, direction[1])
+        else:
+            hang = natural
+        # The anchor is a conductor of its own: a flag placed on a *foreign* pin tip
+        # or inside a foreign wire's span would join two nets the spec keeps apart
+        # (measured: a rail's flag run 10 units up landed exactly on the pin above
+        # it). `_span_free` guards the run's interior; the far end needs its own
+        # test, which is also what `_vertex_clear` means for a wire vertex.
+        if _key(anchor) in blocked or not _vertex_clear(router, anchor):
+            continue
         if not _span_free(router, point, anchor, blocked):
             continue
-        return (_rounded(anchor), _rounded(point))
-    return (_rounded(point), None)
+        if fits is not None and not fits(anchor):
+            continue
+        return anchor, (_rounded(point), anchor), hang
+    return _rounded(point), None, natural
+
+
+def _inside(box: Box, outer: Box) -> bool:
+    """Is this box within ``outer``? The same tolerance the overflow check uses."""
+    return (
+        box[0] >= outer[0] - 1e-6 and box[1] >= outer[1] - 1e-6
+        and box[2] <= outer[2] + 1e-6 and box[3] <= outer[3] + 1e-6
+    )
+
+
+def _place_flag(
+    net_id: str,
+    profile: SymbolProfile,
+    ref: str,
+    anchor: tuple[float, float],
+    rotation: float,
+    lead: Sequence[tuple[float, float]] | None,
+    segments: list[LayoutSegment],
+    symbols: list[LayoutPowerSymbol],
+    occupied: list[Box],
+    solids: list[Box],
+) -> None:
+    """Record one flag: the symbol, the lead that reaches it, and the box it takes."""
+    symbols.append(LayoutPowerSymbol(
+        symbol_ref=ref,
+        symbol_hash=profile.geometry_hash(),
+        net=net_id,
+        x=anchor[0],
+        y=anchor[1],
+        rotation=rotation,
+    ))
+    if lead is not None:
+        segments.append(LayoutSegment(net=net_id, points=list(lead)))
+    glyph = flag_glyph_box(
+        profile, rotation=rotation, anchor=anchor,
+    ) or (anchor[0], anchor[1], anchor[0], anchor[1])
+    occupied.append(glyph)
+    solids.append(glyph)
+
+
+def _rail_flag(
+    ctx: _Context,
+    net_id: str,
+    expression: _Expression,
+    pin: tuple[str, tuple[float, float]],
+    profile: SymbolProfile,
+    ref: str,
+    router: _Router,
+    segments: list[LayoutSegment],
+    symbols: list[LayoutPowerSymbol],
+    occupied: list[Box],
+    solids: list[Box],
+    blocked: set[tuple[float, float]],
+) -> tuple[float, float]:
+    """Hang a rail's own flag from the rail, by a short **vertical** run.
+
+    069 sec.7, from 岳's own hand: a rail that is drawn as a wire says nothing in
+    the one way he reads a rail (「P23 5V部分为什么不给旗标？」), so its flag hangs a
+    short vertical run off the rail and stands upright — his VIN, out along the
+    rail and then up to the flag. The run is the only line this adds, and it is a
+    straight two-point one, which is also what lets the page layer drop it cleanly
+    if it re-states this net at a module boundary.
+
+    Where along the rail the flag hangs is a question about the room: the run goes
+    at 069 sec.1's reach out from the pin first (岳's drawing), then at 069's own
+    jog length, then straight off the pin; and either way up (a rail lifts) or
+    down. Only when no run fits anywhere does the flag stand *on* the rail itself —
+    a legal placement (its anchor is a conductor on the wire) and better than a
+    rail with no flag at all.
+    """
+    family = flag_glyph_kind(profile)
+    natural = 1.0 if family != FLAG_GLYPH_KIND_GND else -1.0
+    inner = None
+    if ctx.budget.page_box is not None:
+        page = ctx.budget.page_box
+        inner = (
+            page[0] + PAGE_MARGIN, page[1] + PAGE_MARGIN,
+            page[2] - PAGE_MARGIN, page[3] - PAGE_MARGIN,
+        )
+    on_the_rail: tuple[tuple[float, float], float] | None = None
+    for reach in (FLAG_LEAD, FLAG_JOG, 0.0):
+        attach = _flag_attach_point(expression, pin, segments, reach)
+        if _key(attach) in blocked or not _vertex_clear(router, attach):
+            # The foot of the run is a conductor too: a point on the rail that is
+            # also a foreign pin tip (two nets meeting at a point) would join them.
+            continue
+        for hang in (natural, -natural):
+            rotation = _flag_rotation((0.0, hang), family)
+
+            def glyph_at(
+                anchor: tuple[float, float], _rotation: float = rotation
+            ) -> Box:
+                return flag_glyph_box(
+                    profile, rotation=_rotation, anchor=anchor,
+                ) or (anchor[0], anchor[1], anchor[0], anchor[1])
+
+            def fits(anchor: tuple[float, float]) -> bool:
+                box = glyph_at(anchor)
+                if any(_overlaps(box, solid) for solid in solids):
+                    return False
+                return inner is None or _inside(box, inner)
+
+            anchor, lead, _hang = _flag_anchor(
+                router, attach, (0.0, hang), blocked,
+                leads=(FLAG_JOG,), fits=fits, up=natural > 0.0,
+            )
+            if lead is not None:
+                _place_flag(
+                    net_id, profile, ref, anchor, rotation, lead,
+                    segments, symbols, occupied, solids,
+                )
+                return anchor
+            if on_the_rail is None and fits(attach):
+                on_the_rail = (attach, rotation)
+    if on_the_rail is not None:
+        _place_flag(
+            net_id, profile, ref, on_the_rail[0], on_the_rail[1], None,
+            segments, symbols, occupied, solids,
+        )
+        return on_the_rail[0]
+    # Nothing fits anywhere: the flag stands on the rail's own pin.
+    rotation = _flag_rotation((0.0, natural), family)
+    _place_flag(
+        net_id, profile, ref, pin[1], rotation, None,
+        segments, symbols, occupied, solids,
+    )
+    return pin[1]
+
+
+def _flag_attach_point(
+    expression: _Expression,
+    pin: tuple[str, tuple[float, float]],
+    segments: Sequence[LayoutSegment],
+    reach: float,
+) -> tuple[float, float]:
+    """A point ``reach`` along the net's own wiring from this pin, or the pin.
+
+    A rail's flag hangs off the rail, not off a stub drawn over it: the run out is
+    the wiring that is already there (岳's VIN again), so the flag's vertical run
+    is the only line this adds. When the pin is not an end of any of the net's own
+    wires — a single-pin rail, or one the wiring has not reached — the pin is the
+    answer and the flag hangs straight off it.
+    """
+    point = pin[1]
+    for segment in segments:
+        if segment.net != expression.net or len(segment.points) < 2:
+            continue
+        points = [_rounded(item) for item in segment.points]
+        for index in (0, -1):
+            if _close(points[index][0], point[0]) and _close(points[index][1], point[1]):
+                return _walk(points, index, reach)
+    return point
+
+
+def _walk(
+    points: Sequence[tuple[float, float]], index: int, reach: float
+) -> tuple[float, float]:
+    """``reach`` units along this polyline, starting at ``points[index]``."""
+    step = 1 if index == 0 else -1
+    walked = 0.0
+    position = index
+    while 0 <= position + step < len(points):
+        start, end = points[position], points[position + step]
+        leg = math.hypot(end[0] - start[0], end[1] - start[1])
+        if leg > 0.0 and walked + leg >= reach:
+            ratio = (reach - walked) / leg
+            return _rounded((
+                start[0] + (end[0] - start[0]) * ratio,
+                start[1] + (end[1] - start[1]) * ratio,
+            ))
+        walked += leg
+        position += step
+    return _rounded(points[index])
+
+
+def _flag_pins(
+    ctx: _Context,
+    placed: _Placement,
+    net_id: str,
+    profile: SymbolProfile,
+    ref: str,
+    members: Sequence[tuple[str, tuple[float, float]]],
+    router: _Router,
+    segments: list[LayoutSegment],
+    symbols: list[LayoutPowerSymbol],
+    occupied: list[Box],
+    solids: list[Box],
+    blocked: set[tuple[float, float]],
+    *,
+    stub: bool = False,
+) -> None:
+    """Put this net's flag on each of ``members``, on a lead out of its own pin.
+
+    One flag per pin, all of them stating the same net: that is what makes a
+    flag-joined net what 岳 drew — the pad, a short stub, the flag's name (069
+    sec.1). Every flag stands upright (069 sec.7, see :func:`_flag_anchor`).
+
+    ``stub`` is the reaching form: 069 sec.1's 40–60 for a pad brought out to its
+    own flag. It tries the long lead first and keeps the glyph off everything the
+    drawing has already put down — a part, a text, the page's edge. Where nothing
+    that long fits, the ordinary ladder is used rather than a stub the page would
+    refuse.
+    """
+    inner = None
+    if ctx.budget.page_box is not None:
+        page = ctx.budget.page_box
+        inner = (
+            page[0] + PAGE_MARGIN, page[1] + PAGE_MARGIN,
+            page[2] - PAGE_MARGIN, page[3] - PAGE_MARGIN,
+        )
+    family = flag_glyph_kind(profile)
+    natural = family != FLAG_GLYPH_KIND_GND
+    for member, point in members:
+        part_id, _, token = member.partition(".")
+        direction = _pin_direction(
+            ctx, part_id, token, placed.poses,
+        ) or (0.0, -1.0)
+        hang = math.copysign(1.0, direction[1]) if direction[1] != 0.0 else (
+            1.0 if natural else -1.0
+        )
+        rotation = _flag_rotation((0.0, hang), family)
+
+        def glyph_at(anchor: tuple[float, float], _rotation: float = rotation) -> Box:
+            return flag_glyph_box(
+                profile, rotation=_rotation, anchor=anchor,
+            ) or (anchor[0], anchor[1], anchor[0], anchor[1])
+
+        def fits(anchor: tuple[float, float]) -> bool:
+            box = glyph_at(anchor)
+            if any(_overlaps(box, solid) for solid in solids):
+                return False
+            return inner is None or _inside(box, inner)
+
+        anchor, lead, _hang = _flag_anchor(
+            router, point, direction, blocked,
+            leads=(SIBLING_LEAD,) if stub else (),
+            fits=fits if stub else None,
+            up=natural,
+        )
+        _place_flag(
+            net_id, profile, ref, anchor, rotation, lead,
+            segments, symbols, occupied, solids,
+        )
+
+
+def _stub_label(
+    ctx: _Context,
+    placed: _Placement,
+    net_id: str,
+    member: str,
+    point: tuple[float, float],
+    router: _Router,
+    segments: list[LayoutSegment],
+    labels: list[LayoutLabel],
+    occupied: list[Box],
+    solids: list[Box],
+    blocked: set[tuple[float, float]],
+) -> None:
+    """069 sec.1's other half: a **label** where a rail would have had a flag.
+
+    A net that is neither a rail nor a ground has no flag in anyone's library —
+    its name on the page is a label (`sch.place_netlabel`'s job, which this host
+    cannot do yet, pit 9: the plan's label is carried by the wire's own net name
+    instead). The form is the same as the rail half: the pad is brought out on a
+    short stub and the name is put at the end of it. The pad that kept the wire
+    is brought out the same way, so its cluster is named too — a label on the pin
+    itself would land in the part's own annotation.
+    """
+    part_id, _, token = member.partition(".")
+    direction = _pin_direction(
+        ctx, part_id, token, placed.poses,
+    ) or (0.0, -1.0)
+    anchor, lead, _hang = _flag_anchor(
+        router, point, direction, blocked,
+        leads=(SIBLING_LEAD,),
+        fits=lambda here: _label_fits(ctx, net_id, here),
+    )
+    if lead is not None:
+        segments.append(LayoutSegment(net=net_id, points=list(lead)))
+    label = _label_for(ctx, net_id, part_id, token, anchor, placed, occupied)
+    labels.append(label)
+    solids.append(label.bbox)
+
+
+def _label_fits(ctx: _Context, net_id: str, anchor: tuple[float, float]) -> bool:
+    """Can this net's label sit at this anchor and still be on the page?
+
+    A label's *box* is typography that moves around its anchor, but every one of
+    the four placements stays within one text width sideways or one line step
+    vertically of it. Requiring that much room inside the page margin is what
+    keeps 069's label stub from pushing the drawing out of the region — the same
+    guard the flag half gets from its glyph box.
+    """
+    page = ctx.budget.page_box
+    if page is None:
+        return True
+    inner = (
+        page[0] + PAGE_MARGIN, page[1] + PAGE_MARGIN,
+        page[2] - PAGE_MARGIN, page[3] - PAGE_MARGIN,
+    )
+    across = text_width(net_id) + TEXT_GAP
+    along = TEXT_SIZE + TEXT_GAP
+    return (
+        inner[0] + across <= anchor[0] <= inner[2] - across
+        and inner[1] + along <= anchor[1] <= inner[3] - along
+    )
 
 
 def _junctions(segments: Sequence[LayoutSegment]) -> list[LayoutJunction]:
@@ -4210,6 +4807,39 @@ def check_grammar(
     out.extend(_obligation_findings(
         layout_plan, circuit_spec, binding, book, settings,
     ))
+    out.extend(_power_flag_findings(layout_plan, circuit_spec))
+    return out
+
+
+def _power_flag_findings(
+    layout_plan: LayoutPlan, circuit_spec: CircuitSpec
+) -> list[GrammarFinding]:
+    """069 sec.7: a rail the plan draws carries a power flag of its own.
+
+    岳 read the landed P23 page and asked why its 5 V input rail had none: the net
+    was stated by a text label and nothing else. The compiler supplies that flag
+    (:func:`_build_candidate`); this is the check over the finished plan, and it
+    reports the cases the compiler could not supply — a library with no flag
+    symbol for the net, or a rail no flag could be reached from. A rail nothing is
+    placed for is out of scope: there is no drawing to mark.
+    """
+    placed = {part.part_id for part in layout_plan.parts}
+    flagged = {symbol.net for symbol in layout_plan.power_symbols if symbol.net}
+    out: list[GrammarFinding] = []
+    for net in circuit_spec.nets:
+        if net.cls != "power" or net.id in flagged:
+            continue
+        if not any(member.partition(".")[0] in placed for member in net.members):
+            continue
+        out.append(GrammarFinding(
+            kind=KIND_OBLIGATION_MISSING,
+            objects=(f"circuitSpec.nets[{net.id}]",),
+            detail=(
+                f"power net {net.id!r} is drawn without a power flag — a rail is "
+                "named by its own flag at the pin it supplies, and text alone "
+                "leaves the reader chasing a name (069 sec.7)"
+            ),
+        ))
     return out
 
 
@@ -4480,7 +5110,18 @@ def _direct_wire_finding(
     derived: Any,
     net_id: str,
 ) -> GrammarFinding | None:
-    """Is this promised net drawn as a wire rather than named?"""
+    """Is this promised net drawn as a wire rather than named?
+
+    069 sec.3 changes the *form* the promise may be kept in and not the promise:
+    a net whose pads a part separates (its role on both sides of the body) is
+    drawn pad by pad — a stub and the same flag at each of them — and then no one
+    segment reaches two of its declared pins. That is 岳's own drawing of the
+    case, so it counts as kept when the net is *named* on the page and every one
+    of its declared pins is brought out on a wire: the chain is then visible at
+    every pin, which is what "not found by chasing names" means. A net with a
+    bare pin, or with nothing stating its name anywhere, still fails — the
+    complaint the obligation exists to make.
+    """
     points = _net_member_points(layout_plan, circuit_spec, book, net_id)
     if not points:
         return None
@@ -4490,13 +5131,22 @@ def _direct_wire_finding(
                 1 for _, point in points if _on_polyline(point, segment.points)
             ) >= 2:
                 return None
+        named = any(
+            symbol.net == net_id for symbol in layout_plan.power_symbols
+        ) or any(label.net == net_id for label in layout_plan.labels)
+        if named and all(
+            any(_on_polyline(point, segment.points) for segment in layout_plan.segments)
+            for _, point in points
+        ):
+            return None
         return GrammarFinding(
             kind=KIND_OBLIGATION_MISSING,
             objects=(f"circuitSpec.nets[{net_id}]",),
             detail=(
                 f"net {net_id!r} is promised as a direct wire, but no segment "
-                f"reaches two of its {len(points)} pins — the chain has to be "
-                "found by chasing names"
+                f"reaches two of its {len(points)} pins and the net is not "
+                "brought out at every pin under its own name either — the chain "
+                "has to be found by chasing names"
             ),
         )
     member, point = points[0]

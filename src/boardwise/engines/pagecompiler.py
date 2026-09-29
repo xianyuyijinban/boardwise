@@ -1435,11 +1435,19 @@ def _net_style(
 ) -> tuple[str, str]:
     """``(label | flag | wire, why)`` for one shared net, for this arrangement.
 
-    The order of the questions is 056 sec.2's order of priorities, and each answer
-    is a *page-level* statement about a net that spans modules:
+    The questions are 056 sec.2's, with 069 sec.7's edit to the first one:
 
-    1. a **bus** (a ground, or a rail wider than the high-fan-out threshold) is
-       always a flag: it may never grow into a page-wide wire tree (053 sec.7);
+    1. a **bus** — a ground, and now *any* power net — is expressed by its flag at
+       every end (053 sec.7: it may never grow into a page-wide wire tree). 岳
+       reads a rail by its flag (「P23 5V部分为什么不给旗标？」: a rail the page states
+       by text alone is the defect), and the fan-out threshold that used to let a
+       small rail be named is gone. The one exception is the edge the presentation
+       itself marks `mainPath`: that mark asks for **one run** between the two
+       modules, which is 056 sec.2's contract and cannot be kept by a flag at each
+       end — so a main-path *rail* is still a whole wire when the modules are
+       adjacent (and is refused and named when they are not, 056 sec.3). A
+       main-path mark on a *ground* is still refused the same way: a ground is
+       never a wire.
     2. a net shared by exactly two modules, with a `mainPath` edge between them,
        and the two modules adjacent on this page, is a **whole wire** — the one
        case where the connection is drawn end to end;
@@ -1448,20 +1456,23 @@ def _net_style(
     """
     net = ctx.circuit.net(net_id)
     modules = ctx.nets_by_module[net_id]
+    main_path = len(modules) == 2 and bool(_main_path_edges(ctx, set(modules)))
     if net is not None and _is_bus(net, ctx.budget.module_budget.high_fanout):
-        profile, ref = _flag_profile(ctx, net)
-        if profile is None:
+        if not (main_path and net.cls == "power"):
+            profile, ref = _flag_profile(ctx, net)
+            if profile is None:
+                return (
+                    PAGE_PORT_LABEL,
+                    f"the library carries no flag symbol {ref!r}, so this bus is "
+                    "named by labels at both ends (one style throughout)",
+                )
             return (
-                PAGE_PORT_LABEL,
-                f"the library carries no flag symbol {ref!r}, so this bus is named "
-                "by labels at both ends (one style throughout)",
+                PAGE_PORT_FLAG,
+                f"a bus of {len(net.members)} member(s) is expressed by its flag at "
+                "every end (053 sec.7: it may never become a page-wide wire tree; "
+                "069 sec.7: a rail is a bus at any fan-out)",
             )
-        return (
-            PAGE_PORT_FLAG,
-            f"a bus of {len(net.members)} member(s) is expressed by its flag at "
-            "every end (053 sec.7: it may never become a page-wide wire tree)",
-        )
-    if len(modules) == 2 and _main_path_edges(ctx, set(modules)):
+    if main_path:
         if _adjacent(index[modules[0]], index[modules[1]], variant.columns, len(index)):
             return (
                 PAGE_PORT_WIRE,
@@ -3076,9 +3087,7 @@ def _is_bus(net: SpecNet | None, high_fanout: int) -> bool:
     """Is this net always expressed by name (053 sec.7)?"""
     if net is None:
         return False
-    return net.cls == "gnd" or (
-        net.cls == "power" and len(net.members) > high_fanout
-    )
+    return net.cls in ("gnd", "power")
 
 
 def _adjacent(left: int, right: int, columns: int, count: int) -> bool:
