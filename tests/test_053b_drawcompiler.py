@@ -1511,6 +1511,180 @@ def test_a_far_pad_is_named_where_it_stands_and_the_rest_keeps_its_wire():
     ).hard_violations == []
 
 
+def test_a_far_pads_flag_stands_a_stub_clear_of_the_rails_own_flag():
+    """069 sec.10 的旗标半边：远侧脚的旗必须与输入轨的旗水平拉开一整段 stub。
+
+    岳 on the landed v4 page: 「不行，现在第一眼以为5V和3V3的旗标短接在一块了，这个
+    必须改」. The two glyphs that read as one were the far pad's 3V3 and the input
+    rail's own VIN5, stacked on the same column — the pad's own gate was only ten
+    units above its twin. The claim is horizontal and it is a *measured gap*: the
+    rail's flag hangs straight off its pin, so the whole separation is the far pad's
+    stub, which leaves in the direction **away** from the rail and runs a full
+    :data:`SIBLING_LEAD`. Two whole flag boxes (glyph, the name the host prints, and
+    069 sec.8's clearance) then do not touch, and neither reads as the other's wire.
+    """
+    page = (0.0, 0.0, 1170.0, 825.0)
+    spec = _duplicate_vout_circuit(out_members=["U1.2", "U1.4", "C2.1"])
+    presentation = ldo_presentation(
+        sidePreferences={"input": "left", "output": "bottom"},
+        modules=[module("pwr", ["U1", "C1", "C2"], "regulator")],
+        portRoles={"VIN5": "input", "3V3": "output"},
+    )
+    result = dc.compile(spec, presentation, library(), dc.CompileBudget(page_box=page))
+    assert result.ok, render(result)
+    plan = result.candidates[0]
+    book = library()
+
+    far = pin_point(plan, "U1.2")
+    assert far is not None, "premise: the pad across the body has a tip"
+    on_the_rail = [symbol for symbol in plan.power_symbols if symbol.net == "VIN5"]
+    assert len(on_the_rail) == 1, (
+        "the input rail states itself with one flag at the pin it supplies "
+        f"(069 sec.7): {[(s.net, s.x, s.y) for s in plan.power_symbols]}"
+    )
+    rail_flag = on_the_rail[0]
+    mine = [
+        symbol for symbol in plan.power_symbols
+        if symbol.net == "3V3" and _joined_by_a_wire(plan, far, (symbol.x, symbol.y))
+    ]
+    assert len(mine) == 1, (
+        f"the far pad at {far} reaches exactly one 3V3 flag of its own; "
+        f"the plan gives it {[(s.x, s.y) for s in mine]}"
+    )
+    flag = mine[0]
+
+    gap = abs(flag.x - rail_flag.x)
+    assert gap >= dc.SIBLING_LEAD - 1e-6, (
+        f"the far pad's flag at ({flag.x:g}, {flag.y:g}) is only {gap:g} units from "
+        f"the input rail's flag at ({rail_flag.x:g}, {rail_flag.y:g}) horizontally — "
+        "岳 read exactly that pair as shorted; the stub has to carry the flag a whole "
+        f"sibling lead ({dc.SIBLING_LEAD:g}) away from the rail's column"
+    )
+    assert abs(flag.x - far[0]) >= dc.SIBLING_LEAD - 1e-6, (
+        f"the far pad's stub is {abs(flag.x - far[0]):g} horizontal units — the lead "
+        "that separates the two flags is this one (069 sec.1's stub)"
+    )
+
+    far_box = dc._flag_box(book[flag.symbol_ref], flag.rotation, (flag.x, flag.y), flag.net)
+    rail_box = dc._flag_box(
+        book[rail_flag.symbol_ref], rail_flag.rotation, (rail_flag.x, rail_flag.y),
+        rail_flag.net,
+    )
+    assert (
+        far_box[2] < rail_box[0] or rail_box[2] < far_box[0]
+        or far_box[3] < rail_box[1] or rail_box[3] < far_box[1]
+    ), (
+        f"the far pad's flag box {far_box} and the rail's {rail_box} overlap — two "
+        "whole flag boxes (glyph + name + clearance) are what 岳 reads as one symbol"
+    )
+
+
+def test_a_free_pad_takes_the_near_stub_and_its_capacitor_hugs_the_pad():
+    """069 sec.11：近位空着时旗就落 40–60 的 stub 上，输出电容贴回那只脚 15–25。
+
+    岳 after the v4 render: 「右侧的旗标和电容离器件太远了贴近一点」. The avoidance
+    ladder had walked the far pad's flag out to the fourth rung and stretched the
+    capacitor's own drop to a full lane while the near slots were empty — the ladder
+    is 就近优先, and it may only walk away when the near slot is *taken*.
+
+    The numbers are his own, measured off P22: the far pad's stub is 40–60 (a sibling
+    lead, never the ladder's 60/120 rungs) and the flag at its end is no more than 60
+    from the pad it names; the output capacitor hangs 15–25 off the pad it decouples.
+    Every flag stays upright (069 sec.7).
+    """
+    page = (0.0, 0.0, 1170.0, 825.0)
+    spec = _duplicate_vout_circuit(out_members=["U1.2", "U1.4", "C2.1"])
+    presentation = ldo_presentation(
+        sidePreferences={"input": "left", "output": "bottom"},
+        modules=[module("pwr", ["U1", "C1", "C2"], "regulator")],
+        portRoles={"VIN5": "input", "3V3": "output"},
+    )
+    result = dc.compile(spec, presentation, library(), dc.CompileBudget(page_box=page))
+    assert result.ok, render(result)
+    plan = result.candidates[0]
+
+    far, near = pin_point(plan, "U1.2"), pin_point(plan, "U1.4")
+    cap = pin_point(plan, "C2.1")
+    assert None not in (far, near, cap), (far, near, cap)
+
+    stub = [
+        symbol for symbol in plan.power_symbols
+        if symbol.net == "3V3" and _joined_by_a_wire(plan, far, (symbol.x, symbol.y))
+    ]
+    assert len(stub) == 1, f"the far pad is named on its own stub; got {stub}"
+    reach = abs(stub[0].x - far[0])
+    assert 40.0 <= reach <= 60.0, (
+        f"the far pad's flag is {reach:g} horizontal units out — the near slot is "
+        f"free (nothing between {far} and it), so 岳's stub (40-60) fits and the "
+        "ladder must not walk out to 60/120 rungs"
+    )
+    straight = math.hypot(stub[0].x - far[0], stub[0].y - far[1])
+    assert straight <= 60.0, (
+        f"the far pad's flag stands {straight:g} units off the pad it names — 069 "
+        "sec.11 keeps a flagged pad within reach of it (≤60)"
+    )
+
+    # The rail's own flag at the pad that kept the wire: near, and never beyond 60.
+    kept = pin_point(plan, "U1.4")
+    assert _joined_by_a_wire(plan, kept, cap), (
+        f"the capacitor at {cap} must stay wired to the pad it decouples ({kept})"
+    )
+    hang = math.dist(cap, kept)
+    assert 15.0 <= hang <= 25.0, (
+        f"the output capacitor's pin is {hang:g} units from the pad it decouples — "
+        "岳's own AMS1117 hangs it 15-25 down the short rail (069 sec.11), and 60 was "
+        "what the ladder stretched it to before"
+    )
+    for symbol in plan.power_symbols:
+        off = math.hypot(symbol.x - kept[0], symbol.y - kept[1])
+        if symbol.net != "3V3":
+            continue
+        assert off <= 60.0 or (symbol.x, symbol.y) == (stub[0].x, stub[0].y), (
+            f"a flagged pad is {off:g} units from its own pin — 069 sec.11's ceiling "
+            "is 60, and only the far pad's own stub may be the one that reaches"
+        )
+
+    assert {symbol.rotation for symbol in plan.power_symbols} <= {0.0, 180.0}, (
+        "069 sec.7: every flag stands upright — "
+        f"{[(s.net, s.rotation) for s in plan.power_symbols]}"
+    )
+
+
+def test_a_parts_own_annotation_does_not_push_its_flag_away():
+    """069 sec.11 的另一半：器件自己的位号/值文字不是旗标的障碍物。
+
+    The second thing that had walked the flags out on the v4 page was the flag *box*
+    itself: it was held a whole clearance (:data:`dc.FLAG_CLEARANCE`) away from every
+    solid, and a part's annotation — the reference and value text the host prints
+    beside the symbol — counted as one. A rail's flag that merely grazed that text was
+    therefore pushed to a farther rung of the ladder. The annotation is not a
+    conductor: 069 sec.8's 「不许贴上」 is about the drawing's conductors (another net's
+    wire, a foreign pin tip), and all that is wrong at a text box is a true overlap
+    (``_check_text`` is text-on-text).
+
+    Measured on 053b's own LDO scene (the same call the 064 audit makes): the rail's
+    flag takes 岳's short run — his own are 20 and 30 — and the annotation beside it
+    does not move it out to the ladder's 60.
+    """
+    scene = scenes()[8]
+    plan = compile_scene(scene).best()
+    assert plan is not None, "premise: 053b scene 8 draws"
+    rail = [symbol for symbol in plan.power_symbols if symbol.net == "VIN5"]
+    assert len(rail) == 1, (
+        f"the input rail carries one flag (069 sec.7): {plan.power_symbols}"
+    )
+    lead = _flag_lead(plan, rail[0])
+    assert lead is not None and len(lead) == 2, (
+        f"the rail's flag is reached by one straight vertical run (lead read: {lead})"
+    )
+    run = abs(lead[1][1] - lead[0][1])
+    assert 20.0 <= run <= 40.0, (
+        f"the rail's flag hangs {run:g} units off the rail — 岳's short run is 20-40, "
+        "and 60 is the rung the flag box landed on while a part's own annotation text "
+        "was treated as an obstacle (069 sec.11)"
+    )
+
+
 def test_duplicate_pads_on_one_side_keep_060s_short_jumper():
     """069 的边界：同侧重复脚仍走 060 sec.2 的实体短接，不给每只脚各打一颗旗。
 

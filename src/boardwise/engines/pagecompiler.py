@@ -1674,15 +1674,23 @@ def _drop_statements(plan: LayoutPlan, net_id: str) -> None:
 
 
 def _is_lead(points: Sequence[tuple[float, float]], anchor: tuple[float, float]) -> bool:
-    """Is this segment just a flag's lead — a straight run to the anchor?
+    """Is this segment just a flag's lead — a run to the anchor, straight or bent?
 
-    A lead is what `_flag_anchor` draws: two points, one of them the anchor. A
-    longer polyline that merely *ends* at the anchor is the module's own wiring and
-    is left where it is (removing it would take a local topology with it).
+    A lead is what `_flag_anchor` draws: the pin, at most one corner, and the
+    anchor. 069 sec.10 made the corner the normal shape (岳's own VIN runs out 40 and
+    turns 20 up, his left VOUT pad 60 then 30), so a bent lead counts — what still
+    does not is a longer polyline that merely *ends* at the anchor: that is the
+    module's own wiring, and removing it would take a local topology with it.
     """
-    return len(points) == 2 and _round(anchor) in {
-        _round(points[0]), _round(points[-1])
-    }
+    at_anchor = [
+        index for index, point in enumerate(points)
+        if _round(point) == _round(anchor)
+    ]
+    if not at_anchor:
+        return False
+    if len(points) <= 3:
+        return True
+    return False
 
 
 def _flag_profile(
