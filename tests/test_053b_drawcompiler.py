@@ -23,6 +23,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -170,6 +171,28 @@ def ams1117_duplicate_vout_flipped(ref: str = "AMS1117-3.3-C6186-M") -> SymbolPr
     )
 
 
+def regulator_two_vout_one_side(
+    ref: str = "LDO-2VOUT-ONE-SIDE",
+) -> SymbolProfile:
+    """A regulator whose VOUT is carried on two pads leaving the **same** side.
+
+    The counterpart of the measured AMS1117 for 069: here the two pads the symbol
+    duplicates are neighbours on one side, so nothing separates them and 060
+    sec.2's short jumper is the whole story (岳's rule is about pads that are
+    "相隔较远"). Built from the plain three-pin regulator so the *only* difference
+    to the symbols the other tests use is where the second VOUT pad sits.
+    """
+    base = regulator(ref)
+    return SymbolProfile(
+        symbol_ref=ref, title=f"{ref} (two pads, one side)", body=base.body,
+        pins=[
+            *base.pins,
+            SymbolPin(number="4", tip=(60.0, -20.0), name="VOUT", direction="right",
+                      electrical_role="VOUT", role_source="pin-name"),
+        ],
+    )
+
+
 def library(**overrides: SymbolProfile) -> dict[str, SymbolProfile]:
     """The default book: every symbol the scenarios use, flags included.
 
@@ -181,6 +204,7 @@ def library(**overrides: SymbolProfile) -> dict[str, SymbolProfile]:
         "C0402": capacitor(), "C0805": capacitor_axial(),
         "AMS1117-3.3": regulator(), "AMS1117-ADJ": regulator("AMS1117-ADJ", aux=True),
         "AMS1117-3.3-C6186": ams1117_duplicate_vout(),
+        "LDO-2VOUT-ONE-SIDE": regulator_two_vout_one_side(),
     }
     for name in ("PWR-GND", "PWR-VIN", "PWR-OUT", "PWR-VIN5", "PWR-3V3"):
         book[name] = flag(name)
@@ -837,50 +861,50 @@ def test_scene_09_ldo_aux_branches_hang_off_their_own_core_pin():
     assert on_a_wire(plan, en_branch) and on_a_wire(plan, nr_branch)
 
 
-def test_a_flag_is_rotated_so_its_glyph_hangs_away_from_the_pin():
-    """060 sec.3 + 064: the compass is read **per family**, and so is the box.
+def test_a_flag_stands_upright_and_its_glyph_hangs_away_from_the_pin():
+    """069 sec.7 + 060 sec.3 + 064: 旗标只许竖直，字形仍朝外、仍按家分。
 
-    The library hangs the two families on opposite sides at the same rotation.
-    ``Ground-GND`` carries ``BBOX (-10, 0, 10, -19)`` — connection at the top of
-    the stem, bars running *below* it — while ``Power-VCC`` / ``Power-5V`` carry
-    ``(-5, 10, 5, 0)`` / ``(-5, 10, 5, 5)``, a bar *above* the connection (read
-    out of an export's own SYMBOL documents, 064's live probe). A ground flag
-    anchored *below* its pin is therefore drawn at ``0``, not ``180`` (060's
-    ruling), and a rail flag anchored the same way at ``180``, not ``0`` (064:
-    060 turned every flag by the ground family's 180 and put the rail family's
-    glyph on its own pin's side).
+    岳 read the landed P23 page and refused a flag lying on its side
+    (「旗标一定要竖直摆放不能平放影响观感」): his own AMS1117 has every
+    ``Power-VCC`` at 0 and every ground at 0 or 180, because every flag there is
+    reached by a vertical run. So the compass 053B/064 shared is retired —
+    ``flag_rotation`` answers **0 or 180** for every direction — while the truth
+    behind it is kept: the glyph hangs *away* from the pin it names (060 sec.3),
+    and it does so **per family**, because ``Ground-GND`` carries
+    ``BBOX (-10, 0, 10, -19)`` — bars *below* the connection — and ``Power-*`` a
+    bar *above* it (064's live probe).
 
-    The box the drawing reserves must follow the same split, or the plan and its
-    reservation would describe opposite sides of the anchor — which is why the
-    loop below checks both numbers against one direction.
-
-    Nothing offline pinned these numbers before: 054-059 passed every test with
-    the whole compass 180 out and landed every GND flag upside down.
+    Two things are checked per direction, and neither implies the other: the
+    number is one of the two upright ones, and the box the drawing reserves for
+    that number hangs on the far side of the anchor (straight up or down, never
+    sideways). A vertical lead hangs the glyph further out along itself; a
+    horizontal one — which the page layer passes for a port on a vertical module
+    boundary, the compiler having bent its own — hangs it the family's natural
+    way, a rail up and a ground down.
     """
-    for ref, kind, rotations in (
-        ("PWR-GND", "gnd", (
-            ((0.0, 1.0), 180.0), ((-1.0, 0.0), 270.0),
-            ((0.0, -1.0), 0.0), ((1.0, 0.0), 90.0),
-        )),
-        ("PWR-VIN", "rail", (
-            ((0.0, 1.0), 0.0), ((-1.0, 0.0), 90.0),
-            ((0.0, -1.0), 180.0), ((1.0, 0.0), 270.0),
-        )),
-    ):
+    for ref, kind in (("PWR-GND", "gnd"), ("PWR-VIN", "rail")):
         profile = flag(ref)
         assert symbolprofile.flag_glyph_kind(profile) == kind, ref
-        anchor = (0.0, 0.0)
-        for direction, rotation in rotations:
-            assert dc.flag_rotation(direction, kind) == rotation, (kind, direction)
-            box = flag_glyph_box(profile, rotation=rotation, anchor=anchor)
+        for direction in ((0.0, 1.0), (0.0, -1.0), (-1.0, 0.0), (1.0, 0.0)):
+            rotation = dc.flag_rotation(direction, kind)
+            assert rotation in (0.0, 180.0), (
+                f"a {kind} flag escaping {direction} is asked for rotation "
+                f"{rotation} — 069 sec.7 draws flags upright and nothing else"
+            )
+            box = flag_glyph_box(profile, rotation=rotation, anchor=(0.0, 0.0))
             assert box is not None
             centre = ((box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0)
-            away = (
-                (centre[0] - anchor[0]) * direction[0]
-                + (centre[1] - anchor[1]) * direction[1]
+            assert abs(centre[0]) < 1e-6, (
+                f"the {kind} glyph box {box} is not centred on its anchor's column: "
+                f"an upright flag hangs straight up or straight down of the point "
+                "it names"
             )
-            assert away > 0.0, (
-                f"the {kind} glyph box {box} hangs on the same side of {anchor} as "
+            hang = (
+                direction[1] if direction[1] != 0.0
+                else (1.0 if kind == "rail" else -1.0)
+            )
+            assert centre[1] * hang > 0.0, (
+                f"the {kind} glyph box {box} hangs on the same side of the anchor as "
                 f"the pin it names (escaping {direction}) — 060 sec.3's whole point, "
                 "and 064's per-family half of it"
             )
@@ -890,15 +914,29 @@ def test_the_two_flag_families_are_exactly_half_a_turn_apart():
     """064: one number per family, 180 apart — the compass cannot be uniform.
 
     ``Ground-*``'s bars hang below its connection and ``Power-*``'s bar sits
-    above it, so for the same escape the two families want rotations that differ
-    by exactly half a turn. Stated as its own test because the whole of 060's bug
-    was one compass answering for both, and a later "simplification" that folds
-    the two tables back together would have to break this line first.
+    above it, so for the same *vertical* escape the two families want rotations
+    that differ by exactly half a turn. Stated as its own test because the whole
+    of 060's bug was one compass answering for both, and a later "simplification"
+    that folds the two tables back together would have to break this line first.
+
+    Only vertical escapes are listed (069 sec.7): a horizontal one is bent into a
+    vertical before it reaches this function, and the page layer, which passes one
+    for a vertical module boundary, gets each family's own natural hang — the same
+    number for both, which is the *boxes* telling them apart and not the digits.
     """
-    for direction in ((0.0, 1.0), (-1.0, 0.0), (0.0, -1.0), (1.0, 0.0)):
+    for direction in ((0.0, 1.0), (0.0, -1.0)):
         ground = dc.flag_rotation(direction, "gnd")
         rail = dc.flag_rotation(direction, "rail")
         assert (ground - rail) % 360.0 == 180.0, (direction, ground, rail)
+    for direction in ((-1.0, 0.0), (1.0, 0.0)):
+        ground = dc.flag_rotation(direction, "gnd")
+        rail = dc.flag_rotation(direction, "rail")
+        assert ground in (0.0, 180.0) and rail in (0.0, 180.0), (direction, ground, rail)
+        assert ground == 0.0 and rail == 0.0, (
+            "a horizontal escape is answered with the family's natural hang — a "
+            "ground's bars below, a rail's bar above — which is the same number for "
+            "both families because their glyphs are mirror images"
+        )
 
 
 def test_the_flag_family_is_read_off_the_symbols_own_name():
@@ -1240,11 +1278,16 @@ def test_a_single_sided_role_and_an_nc_pad_keep_060s_own_pin():
 def test_a_roles_other_pins_are_wired_as_one_node_and_nc_is_the_exception():
     """060 sec.2: 重复脚默认都接上，`nc[]` 是显式例外（岳裁决 a 方案）.
 
-    A role's several pins are one node inside the symbol, so wiring one of them
-    wires the role: the picture must show the pad connected, not an empty pin
-    beside a wired one (059's 岳: "有一个 VOUT 空悬（负责散热的大引脚）"). The spec
-    does not have to spell the duplicate out; listing it in ``nc[]`` still keeps
-    it off, because that is a stated decision rather than an omission.
+    A role's several pins are one node inside the symbol, so bringing one of them
+    onto a net brings the role: the picture must show the pad connected, not an
+    empty pin beside a connected one (059's 岳: "有一个 VOUT 空悬（负责散热的大引脚）").
+    The spec does not have to spell the duplicate out; listing it in ``nc[]`` still
+    keeps it off, because that is a stated decision rather than an omission.
+
+    069 sec.2 changed the *form* this duty is drawn in and not the duty: on the
+    measured AMS1117 the duplicate pad sits across the body, so it is now brought
+    out on its own stub to its own flag rather than joined by a run over the part.
+    What is asserted here is therefore "connected", which both forms satisfy.
     """
     page = (0.0, 0.0, 1170.0, 825.0)
     presentation = ldo_presentation()
@@ -1298,6 +1341,453 @@ def _duplicate_vout_circuit(*, out_members: list[str],
             net("GND", "gnd", ["U1.1", "C1.2", "C2.2"]),
         ],
         nc,
+    )
+
+
+def _runs_through(segment, point) -> bool:
+    """Does this one wire run pass through the point?"""
+    return any(
+        _on_segment(point, start, end)
+        for start, end in zip(segment.points, segment.points[1:])
+    )
+
+
+def _joined_by_a_wire(plan: LayoutPlan, first, second) -> bool:
+    """Is there **one** wire run carrying both points? (069's question exactly.)"""
+    return any(
+        _runs_through(segment, first) and _runs_through(segment, second)
+        for segment in plan.segments
+    )
+
+
+def _ldo_pair_circuit(*, out_members: list[str]) -> CircuitSpec:
+    """The measured AMS1117 with a **single** input capacitor and no output one.
+
+    One part per net keeps 069's question on the pads themselves: with nothing
+    else on the output rail, "which pad keeps the wire" has no second answer.
+    """
+    return circuit(
+        [part("U1", "AMS1117-3.3-C6186", "AMS1117-3.3"), part("C1", "C0805", "10u")],
+        [
+            net("VIN5", "power", ["U1.3", "C1.1"]),
+            net("3V3", "power", out_members),
+            net("GND", "gnd", ["U1.1", "C1.2"]),
+        ],
+    )
+
+
+def test_pads_a_body_separates_are_named_by_their_own_flags_and_not_wired():
+    """069 sec.2： 相隔较远的两根同属性脚不连实体线，各引短线打同名旗标。
+
+    岳's hand drawing of U1 is the ground truth: his AMS1117 carries VOUT on both
+    sides, and each of those pads leaves the body on its **own** short stub into
+    its own rail flag — there is no wire over the part joining them (his P22:
+    pin 2 out to the left flag, pin 4's own short rail on the right). The net is
+    joined by *name*, which is 060 sec.2's electrical obligation kept in the form
+    an engineer actually draws.
+
+    The hard claims: no single wire run touches both pads; each pad has one flag
+    of the same net at the end of its own stub, inside 岳's 40-60 range (never
+    further); the pads are still one node in the checker's own derivation; and the
+    grammar's `direct-wire` promise is not reported as broken by this form.
+    """
+    page = (0.0, 0.0, 1170.0, 825.0)
+    spec = _ldo_pair_circuit(out_members=["U1.2", "U1.4"])
+    presentation = ldo_presentation(parts=("U1", "C1"))
+    result = dc.compile(spec, presentation, library(), dc.CompileBudget(page_box=page))
+    assert result.ok, render(result)
+    plan = result.candidates[0]
+
+    near, far = pin_point(plan, "U1.2"), pin_point(plan, "U1.4")
+    assert near is not None and far is not None
+    assert not _joined_by_a_wire(plan, near, far), (
+        f"the two VOUT pads at {near} and {far} are joined by a wire run — 069 "
+        f"forbids the run; segments read {[s.points for s in plan.segments]}"
+    )
+
+    flags = [symbol for symbol in plan.power_symbols if symbol.net == "3V3"]
+    assert len(flags) == 2, (
+        f"one same-named flag per pad is what joins this net by name; the plan "
+        f"carries {[(s.net, s.x, s.y) for s in plan.power_symbols]}"
+    )
+    assert {symbol.symbol_ref for symbol in flags} == {"PWR-3V3"}
+    for member, tip in (("U1.2", near), ("U1.4", far)):
+        mine = [
+            symbol for symbol in flags
+            if _joined_by_a_wire(plan, tip, (symbol.x, symbol.y))
+        ]
+        assert len(mine) == 1, (
+            f"{member} at {tip} must reach exactly one of the two flags of its own "
+            f"net; the plan gives it {[(s.x, s.y) for s in mine]}"
+        )
+        reach = math.hypot(mine[0].x - tip[0], mine[0].y - tip[1])
+        assert 10.0 <= reach <= 60.0, (
+            f"{member}'s flag is {reach:g} units away — 岳's stub is a short lead "
+            "(40-60), never a long run"
+        )
+
+    derived = readability.derive_netlist(plan, library())
+    assert derived.group_of("U1.2") == derived.group_of("U1.4") == ("U1.2", "U1.4"), (
+        "the two pads are one node in the spec and have to be one node in the "
+        f"drawing — the checker reads {derived.groups}"
+    )
+    checked = readability.check(plan, spec, presentation, library(), page_box=page)
+    assert checked.hard_violations == [], [v.render() for v in checked.hard_violations]
+    assert not [
+        finding for finding in plan.evidence.grammar_findings
+        if "3V3" in finding
+    ], plan.evidence.grammar_findings
+
+
+def test_a_far_pad_is_named_where_it_stands_and_the_rest_keeps_its_wire():
+    """069 sec.2 on the E1 shape: 只有离得远的那只脚改旗标，其余照旧接线。
+
+    The measured AMS1117 with its output capacitor on the far pad (065 sec.1 hangs
+    it across from the input pin). Here the net *does* have another member, so one
+    pad keeps the wire (the one the capacitor already hangs off) and the pad
+    across the body is named at its own stub. The claim that matters for the
+    picture is the one 岳 sent the batch back for: the run over the top of the
+    part is gone — no wire touches both pads — while the capacitor's branch and
+    the net's identity are exactly what they were.
+    """
+    page = (0.0, 0.0, 1170.0, 825.0)
+    spec = _duplicate_vout_circuit(out_members=["U1.2", "U1.4", "C2.1"])
+    presentation = ldo_presentation(
+        sidePreferences={"input": "left", "output": "bottom"},
+        modules=[module("pwr", ["U1", "C1", "C2"], "regulator")],
+        portRoles={"VIN5": "input", "3V3": "output"},
+    )
+    result = dc.compile(spec, presentation, library(), dc.CompileBudget(page_box=page))
+    assert result.ok, render(result)
+    plan = result.candidates[0]
+    core = plan.part("U1")
+    near, far = pin_point(plan, "U1.2"), pin_point(plan, "U1.4")
+    out_tip = pin_point(plan, "C2.1")
+    assert core is not None and None not in (near, far, out_tip)
+    assert near[0] < core.x < far[0], (near, far, core.x)
+
+    assert not _joined_by_a_wire(plan, near, far), (
+        f"pin 2 at {near} and pin 4 at {far} are still joined by a run over the "
+        f"part (069 sec.2 forbids it): {[s.points for s in plan.segments]}"
+    )
+    # The pad the output capacitor hangs off keeps its wiring, both to the
+    # capacitor and to the net's own name.
+    assert _joined_by_a_wire(plan, far, out_tip), (
+        f"the capacitor at {out_tip} must stay wired to the pad it hangs on ({far})"
+    )
+    flags = [symbol for symbol in plan.power_symbols if symbol.net == "3V3"]
+    named = {
+        member for member, tip in (("U1.2", near), ("U1.4", far))
+        if any(_joined_by_a_wire(plan, tip, (s.x, s.y)) for s in flags)
+    }
+    assert named == {"U1.2", "U1.4"}, (
+        "both islands of this net state its name — the far pad at its own stub and "
+        f"the wired cluster at the pad that kept the wire; named={named}"
+    )
+    derived = readability.derive_netlist(plan, library())
+    assert len(set(derived.group_of(pin) for pin in ("U1.2", "U1.4", "C2.1"))) == 1, (
+        f"3V3 is one node in the spec: {derived.groups}"
+    )
+    assert readability.check(
+        plan, spec, presentation, library(), page_box=page,
+    ).hard_violations == []
+
+
+def test_duplicate_pads_on_one_side_keep_060s_short_jumper():
+    """069 的边界：同侧重复脚仍走 060 sec.2 的实体短接，不给每只脚各打一颗旗。
+
+    岳's rule is about pads that are 相隔较远 — far apart. Two neighbouring pads on
+    one side of the body are a short jumper apart, and that jumper is what 060
+    sec.2 drew and what stays: nothing here is "the far side", so the split must
+    not fire. The claims are complementary on purpose: one wire run carrying both
+    pads, and at most the *rail's* own flag (069 sec.7) rather than one per pad.
+    """
+    page = (0.0, 0.0, 1170.0, 825.0)
+    spec = circuit(
+        [part("U1", "LDO-2VOUT-ONE-SIDE", "LDO"), part("C1", "C0805", "10u"),
+         part("C2", "C0805", "22u")],
+        [
+            net("VIN5", "power", ["U1.3", "C1.1"]),
+            net("3V3", "power", ["U1.2", "C2.1"]),
+            net("GND", "gnd", ["U1.1", "C1.2", "C2.2"]),
+        ],
+    )
+    result = dc.compile(spec, ldo_presentation(), library(), dc.CompileBudget(page_box=page))
+    assert result.ok, render(result)
+    plan = result.candidates[0]
+    posts = pin_point(plan, "U1.2"), pin_point(plan, "U1.4")
+    assert None not in posts
+    assert _joined_by_a_wire(plan, *posts), (
+        f"two pads of one role on one side are a short jumper apart and stay "
+        f"wired (060 sec.2): {[s.points for s in plan.segments]}"
+    )
+    flags = [symbol for symbol in plan.power_symbols if symbol.net == "3V3"]
+    assert len(flags) <= 1, (
+        "the pads are on one side, so 069 sec.2 must not fire: no per-pad flag, at "
+        f"most the rail's own (069 sec.7) — {[(s.x, s.y) for s in flags]}"
+    )
+    assert readability.check(
+        plan, spec, ldo_presentation(), library(), page_box=page,
+    ).hard_violations == []
+
+
+def test_a_single_sided_role_and_an_nc_pad_are_left_exactly_as_060_drew_them():
+    """069 的下界：单侧符号（RT9013 形状）不分脚，`nc[]` 的脚既不连线也不挂旗。
+
+    Two shapes the new rule may not touch. A role with a single pin has no second
+    pad to be far from, and a pad the spec writes into ``nc[]`` is withdrawn —
+    060 sec.2's explicit exception, which 069 does not reopen. Both are measured
+    the same way: the drawing's own netlist still says what the spec says, the net
+    is one wire (069 sec.2 detached nothing), and the withdrawn pad carries no flag
+    of the net it was withdrawn from.
+    """
+    page = (0.0, 0.0, 1170.0, 825.0)
+    # (a) one VOUT pin, on the right: the RT9013 shape of 057's gap list.
+    result = dc.compile(
+        ldo_circuit(), ldo_presentation(), library(), dc.CompileBudget(page_box=page),
+    )
+    assert result.ok, render(result)
+    plan = result.candidates[0]
+    vout, out_tip = pin_point(plan, "U1.2"), pin_point(plan, "C2.1")
+    assert _joined_by_a_wire(plan, vout, out_tip), (
+        "the output rail is still drawn as the wire 060 sec.2 left — one pin per "
+        "role means nothing is detached (069 sec.2)"
+    )
+    assert len([s for s in plan.power_symbols if s.net == "3V3"]) == 1, (
+        "and the rail carries exactly its own flag (069 sec.7), not one per pin: "
+        f"{[(s.net, s.x, s.y) for s in plan.power_symbols]}"
+    )
+
+    # (b) the duplicate pad written into nc[]: off the net, and no flag on it.
+    spec = _duplicate_vout_circuit(out_members=["U1.2", "C2.1"], nc=["U1.4"])
+    presentation = ldo_presentation(
+        sidePreferences={"input": "left", "output": "bottom"},
+        modules=[module("pwr", ["U1", "C1", "C2"], "regulator")],
+        portRoles={"VIN5": "input", "3V3": "output"},
+    )
+    result = dc.compile(spec, presentation, library(), dc.CompileBudget(page_box=page))
+    assert result.ok, render(result)
+    plan = result.candidates[0]
+    quiet = pin_point(plan, "U1.4")
+    assert not on_a_wire(plan, quiet), "an explicit nc[] is still a no-connect"
+    assert not [
+        symbol for symbol in plan.power_symbols
+        if symbol.net == "3V3"
+        and math.hypot(symbol.x - quiet[0], symbol.y - quiet[1]) <= 60.0
+    ], "069 must not bring a pad the spec withdrew out under a flag of its own"
+
+
+def test_a_net_that_is_no_rail_or_ground_is_named_with_its_own_label():
+    """069 sec.1's other half：非电源网用 netlabel，不借电源旗的形。
+
+    岳's rule spells the name by the net's own kind ("该网已有旗标种类则沿用——电源网用
+    电源旗、地网用地旗、其它网用 netlabel"). A signal the symbol carries on two pads
+    the body separates is therefore brought out pad by pad and named by a label at
+    the end of each stub — and no PWR-* symbol may appear on it, even though the
+    library happens to carry a flag under this net's name. The electrical claim is
+    the same as the rail case: one node, joined by the name.
+    """
+    page = (0.0, 0.0, 1170.0, 825.0)
+    spec = circuit(
+        [part("U1", "AMS1117-3.3-C6186", "AMS1117-3.3"), part("C1", "C0805", "10u")],
+        [
+            net("VIN5", "power", ["U1.3", "C1.1"]),
+            net("3V3", "signal", ["U1.2", "U1.4"]),
+            net("GND", "gnd", ["U1.1", "C1.2"]),
+        ],
+    )
+    presentation = ldo_presentation(parts=("U1", "C1"))
+    result = dc.compile(spec, presentation, library(), dc.CompileBudget(page_box=page))
+    assert result.ok, render(result)
+    plan = result.candidates[0]
+    near, far = pin_point(plan, "U1.2"), pin_point(plan, "U1.4")
+    assert None not in (near, far)
+    assert not _joined_by_a_wire(plan, near, far), (
+        "the run over the part is gone for a signal too: "
+        f"{[s.points for s in plan.segments]}"
+    )
+    assert not [symbol for symbol in plan.power_symbols if symbol.net == "3V3"], (
+        "a net that is neither a rail nor a ground is named by a label, never by a "
+        f"PWR-* flag: {[(s.net, s.symbol_ref) for s in plan.power_symbols]}"
+    )
+    labels = [label for label in plan.labels if label.net == "3V3"]
+    assert len(labels) == 2, (
+        f"one label of the same net per pad: {[(l.net, l.x, l.y) for l in plan.labels]}"
+    )
+    for member, tip in (("U1.2", near), ("U1.4", far)):
+        mine = [
+            label for label in labels
+            if _joined_by_a_wire(plan, tip, (label.x, label.y))
+        ]
+        assert len(mine) == 1, (
+            f"{member} at {tip} must reach one of its own net's labels on its own "
+            f"stub; the plan gives it {[(l.x, l.y) for l in mine]}"
+        )
+    derived = readability.derive_netlist(plan, library())
+    assert derived.group_of("U1.2") == derived.group_of("U1.4"), (
+        f"the two pads are one node in the spec: {derived.groups}"
+    )
+    assert readability.check(
+        plan, spec, presentation, library(), page_box=page,
+    ).hard_violations == []
+
+
+def _flag_lead(plan: LayoutPlan, symbol) -> list[tuple[float, float]] | None:
+    """The wire run that reaches this flag, from its pin to the anchor (or None)."""
+    for segment in plan.segments:
+        if segment.net != symbol.net or len(segment.points) < 2:
+            continue
+        last = segment.points[-1]
+        if abs(last[0] - symbol.x) < 1e-6 and abs(last[1] - symbol.y) < 1e-6:
+            return [tuple(point) for point in segment.points]
+    return None
+
+
+def test_a_rail_drawn_as_a_wire_carries_its_own_flag():
+    """069 sec.7：电源网必须有电源旗，只有文本没有旗 = 缺陷（岳看 P23 的裁决）.
+
+    岳 read the landed P23 page and asked why its 5 V rail had no flag at all: the
+    net was drawn as a wire and stated by a text label, so nothing on the page said
+    "power" in the one way the drawing says it. The compiler now supplies the flag
+    — at the pin the rail *supplies* (the core's own pin on it), on 069 sec.1's stub
+    — which is exactly the shape of his own VIN: a short run out of the pin and the
+    rail's name on the end of it.
+    """
+    page = (0.0, 0.0, 1170.0, 825.0)
+    result = dc.compile(
+        ldo_circuit(), ldo_presentation(), library(), dc.CompileBudget(page_box=page),
+    )
+    assert result.ok, render(result)
+    plan = result.candidates[0]
+    vout_pin = pin_point(plan, "U1.3")
+    flags = [symbol for symbol in plan.power_symbols if symbol.net == "VIN5"]
+    assert len(flags) == 1, (
+        "the input rail is drawn as a wire and carries its own flag — "
+        f"{[(s.net, s.x, s.y) for s in plan.power_symbols]}"
+    )
+    lead = _flag_lead(plan, flags[0])
+    assert lead is not None and len(lead) >= 2, (
+        "the flag is reached by a lead from the pin it names, not dropped on the "
+        f"wire (plan wires: {[s.points for s in plan.segments]})"
+    )
+    assert lead[0] == vout_pin, (
+        f"VIN5's flag is hung on {lead[0]}, not on the core's own pin {vout_pin} — "
+        "a rail belongs to the part it supplies (069 sec.7)"
+    )
+    assert flags[0].rotation in (0.0, 180.0)
+    assert readability.check(
+        plan, ldo_circuit(), ldo_presentation(), library(), page_box=page,
+    ).hard_violations == []
+
+
+def test_a_rail_the_plan_draws_without_a_flag_is_reported():
+    """069 sec.7's other half: 检出——plan 上漏了旗，检查器要点名那条网。
+
+    The compiler supplies the flag; this is what happens when it cannot (a library
+    without the net's flag symbol, or a rail no flag could be reached from). The
+    statement is checked on a plan that *has* been drawn and then had the flag
+    taken away, so the finding is about the picture and not about the compiler's
+    intentions.
+    """
+    page = (0.0, 0.0, 1170.0, 825.0)
+    result = dc.compile(
+        ldo_circuit(), ldo_presentation(), library(), dc.CompileBudget(page_box=page),
+    )
+    assert result.ok, render(result)
+    plan = result.candidates[0]
+    assert any(symbol.net == "VIN5" for symbol in plan.power_symbols), "premise"
+    plan.power_symbols = [
+        symbol for symbol in plan.power_symbols if symbol.net != "VIN5"
+    ]
+    findings = dc.check_grammar(
+        plan, ldo_circuit(), ldo_presentation(), library(),
+    )
+    named = [item for item in findings if "VIN5" in item.detail]
+    assert named, (
+        "a power net drawn without a power flag is a finding — "
+        f"the checker reported {[item.detail for item in findings]}"
+    )
+    assert "power flag" in named[0].detail and named[0].kind == dc.KIND_OBLIGATION_MISSING
+
+
+def test_a_rail_flag_stands_upright_on_a_short_vertical_run():
+    """069 sec.7：旗标一律竖直（rot ∈ {0,180}），rail 的旗挂在一小段竖线端。
+
+    岳 refused the flat flag on the landed page and pointed at his own drawing for
+    the rule: every ``Power-VCC`` in it is 0 and every ground 0 or 180, because
+    each flag is reached by a *vertical* run — his VIN comes out along the rail and
+    turns 20 units up to the flag. His other half is 「P23 5V部分为什么不给旗标？」:
+    the rail has a flag at all.
+
+    Measured on a circuit whose input rail is drawn as a wire: the rail's flag
+    hangs off the rail by one short vertical run (20–40, his 20 and 30), and the
+    glyph points away from the rail along it — 0 when the run goes up, 180 when the
+    only room is below. No flag in the plan is 90 or 270.
+    """
+    page = (0.0, 0.0, 1170.0, 825.0)
+    result = dc.compile(
+        ldo_circuit(), ldo_presentation(), library(), dc.CompileBudget(page_box=page),
+    )
+    assert result.ok, render(result)
+    plan = result.candidates[0]
+
+    assert plan.power_symbols, "premise: this drawing carries flags"
+    for symbol in plan.power_symbols:
+        assert symbol.rotation in (0.0, 180.0), (
+            f"{symbol.net}'s flag is drawn at {symbol.rotation} — 069 sec.7 puts "
+            "every flag upright, and 90/270 is the flat flag 岳 refused"
+        )
+
+    # ... and on a drawing whose power pins escape *horizontally*, which is where
+    # the retired compass laid a flag on its side (VIN to the left, pin 4 to the
+    # right on the measured AMS1117: their flags were 90/270 before 069 sec.7).
+    sideways = dc.compile(
+        _duplicate_vout_circuit(out_members=["U1.2", "U1.4", "C2.1"]),
+        ldo_presentation(
+            sidePreferences={"input": "left", "output": "bottom"},
+            modules=[module("pwr", ["U1", "C1", "C2"], "regulator")],
+            portRoles={"VIN5": "input", "3V3": "output"},
+        ),
+        library(), dc.CompileBudget(page_box=page),
+    )
+    assert sideways.ok, render(sideways)
+    for symbol in sideways.candidates[0].power_symbols:
+        assert symbol.rotation in (0.0, 180.0), (
+            f"{symbol.net}'s flag is drawn at {symbol.rotation} on a drawing whose "
+            "pins escape horizontally — the compass that answered 90/270 there is "
+            "what 岳 refused"
+        )
+
+    flags = [symbol for symbol in plan.power_symbols if symbol.net == "VIN5"]
+    assert len(flags) == 1, (
+        "the input rail carries its own flag (069 sec.7) — "
+        f"{[(s.net, s.x, s.y, s.rotation) for s in plan.power_symbols]}"
+    )
+    lead = _flag_lead(plan, flags[0])
+    assert lead is not None and len(lead) == 2, (
+        f"VIN5's flag is reached by one straight run (lead read: {lead}) — a bent "
+        "polyline here is also what the page layer cannot drop cleanly when it "
+        "re-states a net at a module boundary"
+    )
+    assert abs(lead[1][0] - lead[0][0]) < 1e-6, (
+        f"VIN5's flag hangs on a vertical line: {lead}"
+    )
+    run = abs(lead[1][1] - lead[0][1])
+    assert 20.0 <= run <= 40.0, (
+        f"VIN5's flag is {run:g} units off the rail — 岳's run is 20-40 (his own "
+        "are 20 and 30)"
+    )
+    assert (lead[1][1] > lead[0][1]) == (flags[0].rotation == 0.0), (
+        f"a rail's glyph hangs away along its run: run {lead}, rotation "
+        f"{flags[0].rotation} (069 sec.7 + 064's family table)"
+    )
+    wiring = {
+        tuple(point) for segment in plan.segments if segment.net == "VIN5"
+        for point in segment.points
+    }
+    assert lead[0] in wiring, (
+        f"the run starts on the rail itself at {lead[0]}, not in mid-air "
+        f"(the net's own points are {sorted(wiring)})"
     )
 
 

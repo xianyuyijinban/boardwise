@@ -468,10 +468,28 @@ def test_an_offline_page_plan_is_a_draw_module_plan_of_the_pages_drawing(tmp_pat
 
 
 def test_a_page_label_no_wire_reaches_becomes_a_named_stub(tmp_path, capsys):
-    """G4's ground: the divider's VIN pin must carry the name, or it never merges."""
+    """G4's ground: the divider's VIN pin must carry the name, or it never merges.
+
+    069 sec.7 moved the *default* for a rail from a label to a flag, so the label
+    this test is about now comes from the one route a rail can still take one: a
+    library that carries no flag symbol for the net (`_net_style`'s "the library
+    carries no flag symbol" answer). The downgrade it exercises — a label at a bare
+    pin tip is not placeable on this host, so a named stub carries the name — is
+    unchanged either way.
+    """
     circuit, presentation = write_specs(tmp_path)
+    book = json.loads(LIBRARY.read_text(encoding="utf-8"))
+    book["profiles"] = [
+        profile for profile in book["profiles"]
+        if profile["symbolRef"] != "PWR-VIN"
+    ]
+    flagged_less = tmp_path / "library.no-PWR-VIN.json"
+    flagged_less.write_text(json.dumps(book), encoding="utf-8")
     out = tmp_path / "plan.json"
-    assert cli.main(_plan_args(circuit, presentation, "--out", str(out))) == 0
+    assert cli.main([
+        "draw", "plan", "--circuit", str(circuit), "--presentation", str(presentation),
+        "--profiles", str(flagged_less), "--page-box", PAGE_BOX, "--out", str(out),
+    ]) == 0
     capsys.readouterr()
     plan = ChangePlan.load(out)
     page = PageLayoutPlan.load(tmp_path / "plan.page.json")
