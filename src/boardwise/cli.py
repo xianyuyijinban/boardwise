@@ -11437,9 +11437,11 @@ def marks_from_findings(findings: list[dict]) -> tuple[list[dict], list[dict]]:
     The refs come from the report's own ``refs`` field when it has one (written
     by `render_json` since 012v2 §八) and are otherwise read out of the finding
     with :func:`boardwise.engines.review.finding_refs` — so an older report file
-    still marks. That reading starts at the finding's structured ``target``
-    (070, issue #13) and only then scans the prose, which is why a report whose
-    finding names its part in ``target`` alone still gets a mark; the
+    still marks. That reading trusts the finding's structured ``target`` alone
+    when one is present (016, issue #16) and scans the prose only when there is
+    none (070, issue #13) — which is why a report whose finding names its part
+    in ``target`` alone still gets a mark, and a part number in the prose no
+    longer lights up the canvas; the
     reconstructed :class:`~boardwise.rules.base.Finding` carries the target's
     ``component_ref`` for the same reason. A finding that names no ref at all is
     returned in `skipped` rather than dropped: "this finding cannot be pointed

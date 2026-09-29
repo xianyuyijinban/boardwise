@@ -225,26 +225,54 @@ DESIGNATOR_PREFIXES: frozenset[str] = frozenset(DESIGNATOR_CATEGORIES) | frozens
 )
 
 
+#: A quoted value in a finding's prose: `C26 value 'C104'` / `value "10uF"`.
+#: The quoted span is the *value* of the part named just before it, and a value
+#: may look like a designator — `C104` is an EIA capacitance code that the token
+#: shape reads as `C` + `104` (issue #16 measured exactly that line). Dropped
+#: before the prose is scanned; the designator that precedes it is outside the
+#: quotes and stays readable.
+_VALUE_QUOTED = re.compile(r"\bvalues?\s+'[^']*'|\bvalues?\s+\"[^\"]*\"", re.IGNORECASE)
+
+
 def finding_refs(finding: Finding) -> list[str]:
     """The designators a finding names, in first-seen order and deduplicated.
 
-    The **structured** identity is read first: ``target.component_ref`` is the
-    designator the rule itself put on the finding (task 016's
-    :class:`~boardwise.rules.base.FindingTarget`), in the model's own spelling.
-    Prose is a heuristic and it leaks — issue #13 measured it twice over:
-    `EC` was not in :data:`DESIGNATOR_PREFIXES`, and a board whose designators
-    are spelled `xR67` yields the prefix `xR`, which no allow-list of prefixes
-    would ever name. Both findings still carried ``target.component_ref``
-    (``EC3`` / ``xR67``), and neither was read, so the finding *had* no ref: the
-    canvas lost its mark and (063) the triage key degenerated to no identity at
-    all. A rule that says what it is about is believed; the text is the fallback.
+    The **structured** identity is read first, and — when it is there — *alone*:
+    ``target.component_ref`` is the designator the rule itself put on the finding
+    (task 016's :class:`~boardwise.rules.base.FindingTarget`, filled from the
+    rule's own ``Outcome.subject`` since issue #16), in the model's own spelling.
+    A rule that says what it is about is believed.
 
-    Then ``evidence`` and ``message`` — evidence entries point at components by
-    contract ("``C116 pin1 @ VM``"), while a message is prose and may mention a
-    part number. A finding may name several parts (a decoupling violation names
-    the IC *and* the capacitor), so this returns a list; the caller decides how
-    many marks that becomes.
+    Prose is a heuristic and it leaks in both directions, which is what the two
+    issues measured. Issue #13 read the target too little: `EC` was not in
+    :data:`DESIGNATOR_PREFIXES`, and a board whose designators are spelled `xR67`
+    yields the prefix `xR`, which no allow-list of prefixes would ever name —
+    both findings carried ``target.component_ref`` (``EC3`` / ``xR67``) and
+    neither was read, so the finding *had* no ref: the canvas lost its mark and
+    (063) the triage key degenerated to no identity at all. Issue #16 read it
+    too loosely: the prose was scanned *as well*, so a finding about `U5 pin4`
+    arrived with all 16 members of the net its message printed, a part number
+    (`RT9013`, read as `RT` + `9013`, and `RT` is on the prefix allow-list) and a
+    capacitor value (`C104`) came back as parts of the board. Both are the same
+    reading, and it is the one :func:`boardwise.engines.checkup.triage_identity`
+    already uses: the structured claim, or the text when there is none.
+
+    The text is the fallback, and it stays for the rules that carry no target —
+    evidence entries point at components by contract ("``C116 pin1 @ VM``"),
+    while a message is prose and may mention a part number. One idiom is read as
+    what it is: the quoted span in ``C26 value 'C104'`` is a value
+    (:data:`_VALUE_QUOTED`), so `C104` is not a ref while `C26` still is. A
+    finding may name several parts (a decoupling violation names the IC *and* the
+    capacitor), so this returns a list; the caller decides how many marks that
+    becomes — and a rule that wants an auxiliary part marked says so in its own
+    target, rather than relying on this reader to guess it back out of a
+    sentence.
     """
+    target = getattr(finding, "target", None)
+    component = str(getattr(target, "component_ref", "") or "").strip()
+    if component:
+        return [component]
+
     refs: list[str] = []
     seen: set[str] = set()
 
@@ -254,10 +282,10 @@ def finding_refs(finding: Finding) -> list[str]:
             seen.add(ref)
             refs.append(ref)
 
-    target = getattr(finding, "target", None)
-    add(str(getattr(target, "component_ref", "") or ""))
     for text in [*finding.evidence, finding.message]:
-        for prefix, number in _DESIGNATOR_TOKEN.findall(text or ""):
+        for prefix, number in _DESIGNATOR_TOKEN.findall(
+            _VALUE_QUOTED.sub("", text or "")
+        ):
             if prefix.upper() not in DESIGNATOR_PREFIXES:
                 continue
             add(f"{prefix.upper()}{number}")

@@ -1480,7 +1480,10 @@ def test_the_report_states_a_target_and_stays_compatible():
     ]))
     first, second = payload["findings"]
     assert first["target"]["component_ref"] == "U3"
-    assert first["refs"] == ["U3"], "refs still read evidence, not the target"
+    # The ref comes from the target (since issue #16 the target is read *and* is
+    # the only thing read when it is there); the evidence names the same part,
+    # which is why this line reads the same before and after that change.
+    assert first["refs"] == ["U3"]
     # Every finding keeps the old keys, and a rule that says nothing new gets
     # `target: null` rather than a missing key.
     for key in ("rule_id", "severity", "message", "level", "evidence", "refs", "target"):
