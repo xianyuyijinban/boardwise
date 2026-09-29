@@ -355,13 +355,15 @@ def test_the_collision_is_said_out_loud_in_the_report_notes(capsys, tmp_path, mo
 
     `checkup` never produces two identical identities on a real board (the
     structured identity covers them), so the rule engine is stubbed here to hand
-    it exactly that — the note is what is under test, not the rule.
+    it exactly that — the note is what is under test, not the rule. The stub
+    takes ``**kwargs`` because `checkup` hands the runner a collector for broken
+    rules (#30 fork 2).
     """
     monkeypatch.setenv("BOARDWISE_HOME", str(tmp_path / "home"))
     board, out = _board(tmp_path), tmp_path / "out"
     monkeypatch.setattr(
         cli, "run_review",
-        lambda model: [
+        lambda model, **kwargs: [
             Finding(rule_id=WARN_RULE, severity="WARN", message="同一个判定", level="L2-facts",
                     evidence=[], target=FindingTarget(component_ref="U9"))
         ] * 2,

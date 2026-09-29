@@ -338,7 +338,7 @@ def test_a_clean_gate_end_to_end_reaches_complete_with_open_items(capsys, tmp_pa
     assert report["completion"]["verdict"] == "complete"
     assert report["completion"]["verdictWhy"] == []
     markdown = (tmp_path / "out2" / "report.md").read_text(encoding="utf-8")
-    assert "**verdict：`complete`**（无 ERROR、无未审、无 stale、无待分诊）" in markdown
+    assert "**verdict：`complete`**（无 ERROR、无未审、无 stale、无待分诊、无覆盖缺口）" in markdown
 
 
 def test_a_run_that_could_not_build_the_skeleton_does_not_reach_complete(
