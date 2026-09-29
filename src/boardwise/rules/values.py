@@ -55,12 +55,20 @@ _CODE_RE = re.compile(r"(\d{3})")
 #: * ``_VOLTAGE_TAIL_RE`` -- value, tolerance letter, voltage rating:
 #:   ``HGC1206R5106K500NSPJ``'s ``106K500`` reads 10 uF, +/-10%, 50 V, so its
 #:   second group is a rating and neither group is a value on its own.
-#: * ``_ELECTROLYTIC_RE`` -- the electrolytic layout, a case size
-#:   (``PA50V330M10x15``'s ``10x15``) or a voltage printed before the value
-#:   (``50V330``), where ``330M`` is 330 uF with a tolerance letter and not an
-#:   EIA code at all. The second marker also fires on TDK's voltage code
+#: * ``_ELECTROLYTIC_RE`` -- the electrolytic layouts: a case size
+#:   (``PA50V330M10x15``'s ``10x15``); a voltage printed before the value
+#:   (``50V330``); or the trade's voltage code, tolerance letter and
+#:   capacitance (``1VM101`` = 35 V, +/-20 %, 100 uF -- issue 18). The figures
+#:   in the last two shapes are microfarads, never the EIA code their shape
+#:   mimics. The voltage-code marker also fires on TDK's voltage code
 #:   (``C1608X5R1V225KT000E``'s ``1V225``): that part refuses either way, and
-#:   refusing a token whose digits are already unreadable costs nothing.
+#:   refusing a token whose digits are already unreadable costs nothing. Its
+#:   tolerance letter is pinned to the trade's ``[MKGJT]`` on purpose: a
+#:   letter-blind class also swallows the ceramics whose EIA code follows a
+#:   dielectric run -- ``CC0603KRX7R9BB104`` reads as ``9BB104``, and that part
+#:   is decoded correctly today (measured over 5452 candidate tokens harvested
+#:   from this repo's tests, fixtures, docs and reviewsets: 8 ceramics lost
+#:   without the pin, none with it).
 #:
 #: The guards must stay independent: each one owns witnesses the others leave
 #: alone, because a witness refused by two guards cannot detect the loss of
@@ -69,7 +77,7 @@ _CODE_RE = re.compile(r"(\d{3})")
 #: sec.4.2).
 _R_NOTATION_RE = re.compile(r"\d[Rr]\d{1,3}")
 _VOLTAGE_TAIL_RE = re.compile(r"\d{3}[A-Z]\d{3}")
-_ELECTROLYTIC_RE = re.compile(r"\d[xX]\d|\d+[Vv]\d{3}")
+_ELECTROLYTIC_RE = re.compile(r"\d[xX]\d|\d+[Vv]\d{3}|\d[A-Z][MKGJT]\d{3}")
 
 #: The shunt convention with the coding *in front of* the ``R`` (task 046):
 #: ``FRL1210FR400TS`` states 400 mΩ as ``FR400``. The letter has to be one of

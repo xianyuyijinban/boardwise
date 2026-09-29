@@ -474,6 +474,44 @@ def test_a_polymer_electrolytic_mpn_is_not_read_as_a_capacitor_code():
     assert all(o.subject != "C72" for o in states["OK"])
 
 
+def test_an_electrolytic_voltage_code_before_the_value_is_not_an_eia_code():
+    """Issue 18: ``ERR1VM101E07OT`` is a 100 µF aluminium electrolytic whose
+    code reads ``1V`` (the trade's voltage code, 35 V on the supplier's own
+    entry) + ``M`` (±20 %) + ``101`` (100 µF, the capacitance **in
+    microfarads**). The electrolytic guard knew only a printed voltage
+    (``50V330``) and a case size (``10x15``), so this shape slipped past it and
+    the ``101`` was read against the picofarad base as 100 pF — turning the
+    board's correct 100 µF declaration into a BOM contradiction.
+
+    The refusal is of the whole token, and the tolerance letter is pinned to
+    the trade's ``[MKGJT]``: a letter-blind class would swallow the ceramic
+    witnesses below as well (``...R9BB104`` reads as ``9BB104``). Each voltage
+    code and tolerance letter here decodes to a wrong code without the guard,
+    and none of them is caught by the other three guards — which is what makes
+    a mutation in this branch visible.
+    """
+    assert mpn_value_code("ERR1VM101E07OT") is None
+    # The family: the voltage code varies (0J / 1C / 1E / 1H / 1V / 2A, 1V
+    # being the 35 V above), and so does the tolerance letter.
+    assert mpn_value_code("ERR0JM101E07OT") is None
+    assert mpn_value_code("ERR1CM221E11OT") is None
+    assert mpn_value_code("ERR1EM471E13OT") is None
+    assert mpn_value_code("ERR1HM102E16OT") is None
+    assert mpn_value_code("ERR2AM101E07OT") is None
+    assert mpn_value_code("ERR1VK471E13OT") is None
+    assert mpn_value_code("ERR1VJ101E07OT") is None
+    assert mpn_value_code("ERR1VG220E11OT") is None
+    # The ceramic parts whose EIA code sits behind a dielectric run keep being
+    # read — refusing them is the regression the tolerance class prevents.
+    assert mpn_value_code("CC0603KRX7R9BB104") == "104"
+    assert mpn_value_code("CC0805KRX7R9BB104") == "104"
+    assert mpn_value_code("CC0603KRX7R9BB103") == "103"
+    assert mpn_value_code("CC0402JRNPO9BN300") == "300"
+    assert mpn_value_code("CC0603JRNPO9BN560") == "560"
+    assert mpn_value_code("CL10A225KA8NNNC") == "225"
+    assert mpn_value_code("GRM1885C1H122JA01D") == "122"
+
+
 def test_the_shunt_field_between_a_tolerance_letter_and_r():
     """Task 046 G4: ``FRL1210FR400TS`` (FOJAN, verified 400 mΩ ±1%) writes its
     fraction right after the ``R`` with the tolerance letter in front — ``FR400``
@@ -898,6 +936,31 @@ def test_param4_matching_values_are_ok_and_undecodable_are_unknown():
     # "no evidence" is not a question the rule can ask).
     assert "C4" not in unknown_subjects
     assert all(o.subject != "C4" for o in states["OK"])
+
+
+def test_param4_an_electrolytic_mpn_is_unknown_not_a_contradiction():
+    """Issue 18, at the rule level: the board's 100 µF electrolytic (value
+    ``100uF``, MPN ``ERR1VM101E07OT``) reports UNKNOWN and raises nothing —
+    the 100 pF the decoder used to read out of that MPN is the artifact, not
+    the board's value.
+
+    The same decision as 015's ``PA50V330M…`` electrolytics and 046's polymer
+    series: a token written in a notation this decoder does not read is
+    refused as a whole, and the rule says "not a notation I read" instead of
+    guessing a value out of its digits.
+    """
+    lib = _library(_ldo_entry(), _uart_entry())
+    model = DesignModel()
+    model.components["C1"] = Component(
+        uid="c1", designator="C1", value="100uF", mpn="ERR1VM101E07OT",
+        pins=[Pin("1", "A", "VCC")])
+    rule = ValueMpnMatch(library=lib)
+    states = _states(rule, model)
+    assert states["VIOLATION"] == []
+    assert rule.check(model) == []
+    (unknown,) = states["UNKNOWN"]
+    assert unknown.subject == "C1"
+    assert "notation that is not EIA" in unknown.message
 
 
 # ------------------------------------------------------------ PARAM-1
