@@ -203,10 +203,18 @@ _DESIGNATOR_TOKEN = re.compile(r"(?<![A-Za-z0-9_])([A-Za-z]{1,5})(\d{1,4})(?![A-
 #: rule would hand them to the canvas as refs that resolve to nothing. This same
 #: list is why the five-letter shape above is safe: `SCREW` is named here and
 #: `FRC0805J471` (`FRC` + `0805`, followed by `J`) is not.
+#:
+#: A missing prefix is a **silent** loss — the finding keeps its prose and loses
+#: its ref, so `review-mark` loses the mark and (since 063) `triage_key` loses
+#: the identity with it. `EC` (electrolytic capacitor) was missing exactly that
+#: way (issue #13: the shelf's `C` does not cover the two-letter form); it is
+#: added here, but the standing fix is :func:`finding_refs` reading the
+#: structured ``target`` first rather than growing this list.
 DESIGNATOR_PREFIXES: frozenset[str] = frozenset(DESIGNATOR_CATEGORIES) | frozenset(
     {
         "RV", "RP", "RT",   # potentiometer / preset
         "FB",               # ferrite bead
+        "EC",               # electrolytic capacitor (`C` does not cover it)
         "NT", "ZD", "TVS",  # thermistor / zener / TVS
         "VR", "BT", "MK", "MIC", "TH", "ZZ",
         # Mounting hole / structural part: a designator the board really has,
@@ -220,34 +228,51 @@ DESIGNATOR_PREFIXES: frozenset[str] = frozenset(DESIGNATOR_CATEGORIES) | frozens
 def finding_refs(finding: Finding) -> list[str]:
     """The designators a finding names, in first-seen order and deduplicated.
 
-    Read out of ``evidence`` first and ``message`` second — evidence entries
-    point at components by contract ("``C116 pin1 @ VM``"), while a message is
-    prose and may mention a part number. A finding may name several parts (a
-    decoupling violation names the IC *and* the capacitor), so this returns a
-    list; the caller decides how many marks that becomes.
+    The **structured** identity is read first: ``target.component_ref`` is the
+    designator the rule itself put on the finding (task 016's
+    :class:`~boardwise.rules.base.FindingTarget`), in the model's own spelling.
+    Prose is a heuristic and it leaks — issue #13 measured it twice over:
+    `EC` was not in :data:`DESIGNATOR_PREFIXES`, and a board whose designators
+    are spelled `xR67` yields the prefix `xR`, which no allow-list of prefixes
+    would ever name. Both findings still carried ``target.component_ref``
+    (``EC3`` / ``xR67``), and neither was read, so the finding *had* no ref: the
+    canvas lost its mark and (063) the triage key degenerated to no identity at
+    all. A rule that says what it is about is believed; the text is the fallback.
+
+    Then ``evidence`` and ``message`` — evidence entries point at components by
+    contract ("``C116 pin1 @ VM``"), while a message is prose and may mention a
+    part number. A finding may name several parts (a decoupling violation names
+    the IC *and* the capacitor), so this returns a list; the caller decides how
+    many marks that becomes.
     """
     refs: list[str] = []
     seen: set[str] = set()
+
+    def add(ref: str) -> None:
+        ref = ref.strip()
+        if ref and ref not in seen:
+            seen.add(ref)
+            refs.append(ref)
+
+    target = getattr(finding, "target", None)
+    add(str(getattr(target, "component_ref", "") or ""))
     for text in [*finding.evidence, finding.message]:
         for prefix, number in _DESIGNATOR_TOKEN.findall(text or ""):
             if prefix.upper() not in DESIGNATOR_PREFIXES:
                 continue
-            ref = f"{prefix.upper()}{number}"
-            if ref in seen:
-                continue
-            seen.add(ref)
-            refs.append(ref)
+            add(f"{prefix.upper()}{number}")
     return refs
 
 
 def render_json(findings: list[Finding]) -> str:
     """Render a machine-readable report.
 
-    Each finding also carries ``refs`` — the designators its evidence names —
-    which is what `boardwise review-mark` marks on the live canvas. Derived here
-    rather than added to :class:`Finding`, so the rules (and their tests) are
-    untouched: this is a reading of what a rule already wrote, not a new claim
-    the rule makes.
+    Each finding also carries ``refs`` — the designators its target and its
+    evidence name (see :func:`finding_refs`) — which is what `boardwise
+    review-mark` marks on the live canvas and what 063's triage key is built
+    from. Derived here rather than added to :class:`Finding`, so the rules (and
+    their tests) are untouched: this is a reading of what a rule already wrote,
+    not a new claim the rule makes.
     """
     payload = {
         "summary": severity_counts(findings),
