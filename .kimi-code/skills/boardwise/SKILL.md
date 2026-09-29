@@ -83,6 +83,14 @@ boardwise checkup --file <导出.epro2> --out <目录>       # 断连兜底：�
 - **报告自己说数据从哪来**（`source.tier`，缺一级就如实降级）：
   `project-file` 整工程归档（满血）→ `per-page` 逐页导出合并（跨页连通性按网名，
   不是追出来的连线）→ `netlist` 仅连通性（无值/无 MPN/无位姿）→ `file` 离线文件。
+  **per-page 档里跨页同名的网不是已验证的连接**（issue #19）：按网找协同器件的 7 条规则
+  （`decap-required-caps` / `conn-nc-and-must-connect` / `conn-usb-cc-pulldown` /
+  `param-divider-output` / `path-ldo-dropout` / `pwr-domain-vs-range` /
+  `pwr-supply-on-known-domain`）对出现在多于一个页的网名**一律不下通过/违规结论，只报 UNKNOWN**
+  ——同名可能是同一块板的另一张页（真连），也可能是另一块板碰巧同名（假连），这一档分不出来。
+  报告在 `source.unprovenNets`（网名 + 各自出现在哪些页 + 拒绝的规则名单）与 notes/档位说明里写明；
+  `per-page` 档位说明就是那句「agreement by name is not a verified connection」。
+  **单页工程与 project-file 档行为一字不变**（单页的网按构造即为已验证）。
   `drc.*.checked=false` + `reason` 一律是"**没查**"，不是"零错误"。
 - 只读：`doc.open` 只切焦点、`userInterface` 恒 false（不弹底部面板），每个阶段 `finally`
   把焦点复位。旧版 connector 缺某个动作时报告会记 `note` 并降级，不会瞎报。

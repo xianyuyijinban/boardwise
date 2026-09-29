@@ -80,6 +80,10 @@ from .parsers.enet import parse_enet
 from .parsers.epro2_model import build_design_model
 from .parsers.epru import EncryptedProjectError, build_board_geometry, load_epro2_source
 from .rules.i18n import EMPTY_PCB_VIEW_HINT, finding_line, parse_drop_hint, summary_section
+# Issue #19: the rule ids whose verdicts depend on which parts sit on a net. The
+# per-page tier's own label and note count them, and `rules/unproven.py` owns the
+# list so the count cannot drift from the rules that obey it.
+from .rules.unproven import NET_MEMBERSHIP_RULES
 
 #: Input extensions the reviewer understands, and what each one is.
 SUPPORTED_SUFFIXES: dict[str, str] = {
@@ -2619,7 +2623,16 @@ CHECKUP_SCHEMA = "boardwise.checkup/6"
 #: cannot be trusted to say what it reviewed (025 §2 阶段 A).
 CHECKUP_TIERS: dict[str, str] = {
     "project-file": "整工程归档（sys.get_project_file → 临时 .epro2 → 离线管线）：满血",
-    "per-page": "逐页归档合并（doc.open + sys.get_document_file × N）：跨页连通性不保证",
+    # Issue #19: the per-page tier welds pages by net *name*, so a name on two
+    # pages is not a verified connection — and the rules that judge a net by the
+    # parts on it therefore refuse. Both halves are in the label (the mechanism
+    # and how many rules obey it), because a reader who only sees "跨页连通性不保证"
+    # has no way to know that whole verdicts are being withheld.
+    "per-page": (
+        "逐页归档合并（doc.open + sys.get_document_file × N）：跨页同名网不是已验证的"
+        "连接（agreement by name is not a verified connection），按网找协同器件的 "
+        f"{len(NET_MEMBERSHIP_RULES)} 条规则对它们一律不下通过/违规结论，只报 UNKNOWN"
+    ),
     "netlist": "在线网表 + 几何（sch.netlist / sch.geometry → candidate）：仅连通性",
     "file": "离线文件（--file）：不连编辑器",
 }
@@ -3356,12 +3369,33 @@ def _merge_schematic_models(models: list, *, notes: list[str]) -> object:
     two pages keeps every pin it was seen with. **What this cannot do is stated,
     not hidden**: two pages connected only by a net label are two pins with the
     same net name, which is agreement by *name*, not a connectivity proof.
+
+    Since issue #19 that gap is **data, not only a note**. A net name that turns
+    up on more than one page is recorded in
+    :attr:`~boardwise.core.model.DesignModel.unproven_nets` with the pages it was
+    seen on, and the rules that judge a net by the parts sitting on it refuse
+    their conclusions about such a name (``rules/unproven.py``). The reason is
+    the one this docstring already gives: a rule that finds a capacitor on
+    "VCC" cannot tell whether that capacitor shares the name or the board, and
+    reporting either answer would be inventing the connection — the measured
+    defect was a real WARN vanishing because the *other* board's capacitor
+    happened to be called "VCC" too. Nets on a single page are proven by
+    construction, so a one-page project's model is unchanged (and carries no
+    unproven set at all).
     """
     from .core.model import BoardModel, BoardRef, Net, ProjectModel
+    from .rules.unproven import NET_MEMBERSHIP_RULES, UNPROVEN_BY_NAME
 
     merged = BoardModel(board=BoardRef(uuid="", title=PER_PAGE_BOARD_TITLE))
     project = ProjectModel(source="", boards=[merged])
     pages: list[str] = []
+    #: net name -> the pages it was seen on, and on how many *page models*. The
+    #: second count is what marks a name unproven: a merge of models that carry no
+    #: page ids (hand-built ones, the unit tests) still knows a name was seen
+    #: twice, it just cannot name the pages — the same `()` convention
+    #: `cross_page_designators` uses.
+    net_pages: dict[str, list[str]] = {}
+    net_pages_seen: dict[str, int] = {}
     for model in models:
         boards = getattr(model, "boards", None)
         for board_model in boards or [model]:
@@ -3378,6 +3412,11 @@ def _merge_schematic_models(models: list, *, notes: list[str]) -> object:
                     continue
                 merged.components[designator] = component
             for name, net in board_model.nets.items():
+                net_pages_seen[name] = net_pages_seen.get(name, 0) + 1
+                seen_pages = net_pages.setdefault(name, [])
+                for page in board_model.board.page_uuids if boards else []:
+                    if page not in seen_pages:
+                        seen_pages.append(page)
                 existing = merged.nets.get(name)
                 if existing is None:
                     merged.nets[name] = Net(name=name, pins=list(net.pins))
@@ -3393,6 +3432,11 @@ def _merge_schematic_models(models: list, *, notes: list[str]) -> object:
     merged.duplicate_designators.sort()
     for name in merged.cross_page_designators:
         merged.cross_page_designators[name].sort()
+    merged.unproven_nets = {
+        name: tuple(sorted(net_pages.get(name, [])))
+        for name, count in net_pages_seen.items()
+        if count > 1
+    }
     if pages:
         merged.board = BoardRef(
             uuid="", title=PER_PAGE_BOARD_TITLE, page_uuids=tuple(sorted(set(pages)))
@@ -3406,6 +3450,19 @@ def _merge_schematic_models(models: list, *, notes: list[str]) -> object:
             "netlist on several pages; cross-page connectivity is agreement by "
             "net name, not a traced connection"
         )
+        if merged.unproven_nets:
+            # Issue #19: the same gap, said where a reader can act on it. The
+            # count is the rule list's own length, so the note cannot drift from
+            # what the rules do.
+            notes.append(
+                f"{len(merged.unproven_nets)} net name(s) appear on more than one "
+                f"page ({'、'.join(sorted(merged.unproven_nets))}): "
+                f"{UNPROVEN_BY_NAME}, so the "
+                f"{len(NET_MEMBERSHIP_RULES)} rules that judge a net by the parts "
+                f"on it ({', '.join(NET_MEMBERSHIP_RULES)}) refuse every "
+                "conclusion about those names and report UNKNOWN — neither a pass "
+                "nor a violation is established for them"
+            )
     return project
 
 
@@ -3843,6 +3900,33 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         # --- 阶段 D（只做原理图页）：each page rendered to a PNG in --out.
         canvas = _render_canvas_images(args, out_dir, notes=notes)
         canvas_note = "" if canvas else "没有页面可出图，或每一页的 render 都失败了（见 notes）" 
+
+    # Issue #19, in the machine-readable half of the report: a per-page merge
+    # welds the pages by net **name**, so the names seen on more than one page are
+    # not verified connections and the rules that judge a net by the parts on it
+    # refuse on them. Named here (with the pages and the rule ids) because the
+    # prose note is not something a consumer can act on. **Absent** when the
+    # reading has no such name — "read the whole project, nothing is welded" and
+    # "somebody looked and found none" would otherwise read the same.
+    # Every board is read rather than the `model.unproven_nets` façade: a
+    # multi-board project answers `{}` there (nothing is welded across a board
+    # partition), and reading the boards keeps this working for any model shape.
+    unproven: dict[str, tuple[str, ...]] = {}
+    for board_model in (getattr(model, "boards", None) or [model]):
+        for name, pages in (board_model.unproven_nets or {}).items():
+            unproven.setdefault(name, tuple(pages))
+    if unproven:
+        source["unprovenNets"] = {
+            "count": len(unproven),
+            "nets": sorted(unproven),
+            "pages": {name: list(pages) for name, pages in sorted(unproven.items())},
+            "rulesRefused": list(NET_MEMBERSHIP_RULES),
+            "note": (
+                "这些网名在多于一个页里出现，本档无法把页归属到板，因此「同名」不构成"
+                "已验证连接：名单里的规则对它们一律不下通过/违规结论，只报 UNKNOWN"
+                "（agreement by name is not a verified connection）"
+            ),
+        }
 
     findings = [_finding_payload(finding) for finding in run_review(model)]
     summary = drc_summarise(drc=drc, findings=findings)

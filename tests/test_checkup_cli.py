@@ -528,6 +528,421 @@ def test_a_single_page_merge_adds_no_cross_page_note():
 
 
 # --------------------------------------------------------------------------
+# issue #19: a net welded by name is not a verified connection
+# --------------------------------------------------------------------------
+#
+# The issue's own recipe, kept in the shape it states: board 1's U1 needs 1 uF on
+# `VCC` and on `+5V` and has neither; board 2 is a *different* board that happens
+# to call its own rail `VCC` and carries C9 (1 uF) on it. Read per board, that is
+# two WARNs. Read through the per-page merge — which cannot tell the two boards
+# apart — one of them used to vanish, because the rule found a capacitor that is
+# not on this board at all.
+#
+# The fix does not bring the WARN back (it never was board 1's capacitor): it
+# refuses to conclude either way and says UNKNOWN. Both directions matter, so
+# both are asserted: `VCC` (whose name is on both pages) is UNKNOWN, and `+5V`
+# (whose name is on one page only) keeps its honest WARN.
+
+PROV = "issue-19 fixture datasheet, p.1, http://example.com/ds.pdf"
+PAGE_1 = "aaaa1111aaaa111111"
+PAGE_2 = "bbbb2222bbbb222222"
+
+
+def _part(designator: str, *, value: str = "", mpn: str = "", pins=()):
+    from boardwise.core.model import Component, Pin
+
+    return Component(
+        uid=f"u-{designator}",
+        designator=designator,
+        value=value,
+        mpn=mpn,
+        pins=[Pin(str(number), "", net) for number, net in pins],
+    )
+
+
+def _page_project(page_uuid: str, title: str, components: dict, nets: dict):
+    """One page archive's parse result, as the ladder hands it to the merge."""
+    from boardwise.core.model import BoardModel, BoardRef, Net, ProjectModel
+
+    board = BoardModel(
+        board=BoardRef(uuid=f"b-{page_uuid}", title=title, page_uuids=(page_uuid,))
+    )
+    board.components.update(components)
+    for name, pins in nets.items():
+        board.nets[name] = Net(name=name, pins=list(pins))
+    return ProjectModel(source="", boards=[board])
+
+
+def _regulator_entry(mpn: str = "REG1", lcsc: str = "C1") -> object:
+    """A shelf IC needing 1 uF on each of its two supply pins (VCC and +5V)."""
+    from boardwise.core.parts import PartEntry
+
+    return PartEntry(
+        key="ic.regulator",
+        mpn=mpn,
+        lcsc=lcsc,
+        category="ic.ldo",
+        facts={
+            "supply_pins": [
+                {"pins": ["1"], "name": "VCC", "v_operating": [2.2, 5.5], "provenance": PROV},
+                {"pins": ["2"], "name": "+5V", "v_operating": [2.2, 5.5], "provenance": PROV},
+            ],
+            "required_caps": [
+                {"pin": "1", "value": "1uF", "provenance": PROV},
+                {"pin": "2", "value": "1uF", "provenance": PROV},
+            ],
+        },
+    )
+
+
+def _two_board_recipe():
+    """``(shelf, board1, board2)`` — the issue's boards, one per page model."""
+    from boardwise.core.parts import PartLibrary
+
+    shelf = PartLibrary(parts=[_regulator_entry()])
+    first = _page_project(
+        PAGE_1,
+        "Board1",
+        {"U1": _part("U1", mpn="REG1", pins=[("1", "VCC"), ("2", "+5V")])},
+        {"VCC": [("U1", "1")], "+5V": [("U1", "2")]},
+    )
+    second = _page_project(
+        PAGE_2,
+        "Board2",
+        {"C9": _part("C9", value="1uF", pins=[("1", "VCC"), ("2", "GND")])},
+        {"VCC": [("C9", "1")], "GND": [("C9", "2")]},
+    )
+    return shelf, first, second
+
+
+def test_a_net_seen_on_two_pages_is_recorded_as_unproven_with_its_pages():
+    """The model carries the gap, not only the report's prose.
+
+    `cross_page_designators` has recorded "this name is on two pages" since 040b;
+    issue #19 is the same fact for **nets**, and it is what the rules read.
+    """
+    _shelf, first, second = _two_board_recipe()
+    notes: list[str] = []
+
+    merged = _merge_schematic_models([first, second], notes=notes)
+
+    assert merged.unproven_nets == {"VCC": (PAGE_1, PAGE_2)}, (
+        "only the name both pages draw; GND is page 2's alone, +5V page 1's"
+    )
+    assert merged.boards[0].unproven_pages("VCC") == (PAGE_1, PAGE_2)
+    assert merged.boards[0].unproven_pages("+5V") is None
+    assert merged.unproven_nets["VCC"] == (PAGE_1, PAGE_2), "the facade reads through"
+    # The tier says it in words too — the mechanism, the nets, and how many rules
+    # obey it (issue #19 asks for the count in the note, not only in the code).
+    from boardwise.rules.unproven import NET_MEMBERSHIP_RULES
+
+    note = " ".join(notes)
+    assert "VCC" in note and "UNKNOWN" in note
+    assert f"{len(NET_MEMBERSHIP_RULES)} rules that judge a net by the parts on it" in note
+    assert "agreement by name is not a verified connection" in note
+
+
+def test_a_name_on_one_page_only_is_not_unproven():
+    """The other half of the marking: a one-page project's nets are proven."""
+    _shelf, first, _second = _two_board_recipe()
+    notes: list[str] = []
+    single = _merge_schematic_models([first], notes=notes)
+    assert single.unproven_nets == {}
+    assert notes == [], "one page is not a merge"
+
+    # Two pages that share no net *name* are welded nowhere either.
+    other = _page_project(PAGE_2, "Board2", {"C9": _part("C9", value="1uF")}, {"VBAT": [("C9", "1")]})
+    disjoint = _merge_schematic_models(
+        [_page_project(PAGE_1, "Board1", {"R1": _part("R1")}, {"RAIL": [("R1", "1")]}), other],
+        notes=[],
+    )
+    assert disjoint.unproven_nets == {}
+
+
+def test_the_merge_refuses_the_capacitor_that_may_belong_to_the_other_board():
+    """The issue's defect, at the rule: the WARN must not silently vanish.
+
+    Before the fix this said OK — board 2's C9 satisfied board 1's ``VCC``
+    requirement — and the honest reading (the name is not a connection) is
+    UNKNOWN. The ``+5V`` requirement, whose name is on one page only, still gets
+    its WARN: the refusal is about unproven names, not about being quiet.
+    """
+    from boardwise.rules.decap import DecapRequiredCaps
+
+    shelf, first, second = _two_board_recipe()
+    merged = _merge_schematic_models([first, second], notes=[])
+    rule = DecapRequiredCaps(library=shelf)
+    model = merged.boards[0]
+
+    states = {outcome.subject: outcome for outcome in rule.outcomes(model)}
+    assert states["U1 pin1"].state == "UNKNOWN", "VCC is on two pages: no conclusion"
+    assert "VCC" in states["U1 pin1"].message
+    assert "not a verified connection" in states["U1 pin1"].missing_fact
+    assert states["U1 pin2"].state == "VIOLATION", "+5V is page 1's own net"
+
+    findings = rule.check(model)
+    assert [finding.message for finding in findings] and "VCC" not in " ".join(
+        finding.message for finding in findings
+    ), "nothing may claim the VCC requirement is met (or unmet)"
+
+
+def test_the_same_two_boards_read_separately_still_report_two_missing_caps():
+    """The reference the issue fixes against: per board, nothing changed.
+
+    The project-file tier partitions by board, so each board is judged on its own
+    netlist — board 1 is missing both capacitors, and board 2's C9 is its own.
+    """
+    from boardwise.engines.review import check_rules
+    from boardwise.core.model import ProjectModel
+    from boardwise.rules.decap import DecapRequiredCaps
+
+    shelf, first, second = _two_board_recipe()
+    project = ProjectModel(source="", boards=[first.boards[0], second.boards[0]])
+
+    missing = [
+        finding
+        for finding in check_rules(project, [DecapRequiredCaps(library=shelf)])
+        if finding.rule_id == "decap-required-caps"
+    ]
+    assert len(missing) == 2, "both of board 1's requirements are violated here"
+    assert {finding.board for finding in missing} == {"Board1"}
+    assert all("no grounded capacitor found" in finding.message for finding in missing)
+
+
+def test_a_declared_nc_pin_on_a_welded_net_is_not_called_connected():
+    """CONN-2's direction: the other board's part must not make an NC pin look wired.
+
+    ``pin_company`` counts who shares the net, and the merge welds the names, so
+    "sits on net 'VCC' with R1.1" could be board 2's R1. Neither the violation nor
+    the pass is established, so the pin is UNKNOWN.
+    """
+    from boardwise.core.parts import PartEntry, PartLibrary
+    from boardwise.rules.facts import NcAndMustConnect
+
+    entry = PartEntry(
+        key="ic.nc",
+        mpn="NC1",
+        lcsc="C7",
+        category="ic.uart",
+        facts={"nc_pins": {"pins": ["1"], "provenance": PROV}},
+    )
+    first = _page_project(PAGE_1, "Board1", {"U4": _part("U4", mpn="NC1", pins=[("1", "VCC")])}, {"VCC": [("U4", "1")]})
+    second = _page_project(PAGE_2, "Board2", {"R1": _part("R1", pins=[("1", "VCC")])}, {"VCC": [("R1", "1")]})
+
+    merged = _merge_schematic_models([first, second], notes=[])
+    rule = NcAndMustConnect(library=PartLibrary(parts=[entry]))
+    (outcome,) = rule.outcomes(merged.boards[0])
+
+    assert outcome.state == "UNKNOWN"
+    assert "VCC" in outcome.message
+    assert "not a verified connection" in outcome.missing_fact
+    assert rule.check(merged.boards[0]) == [], "the false ERROR is gone with the false pass"
+
+
+def test_a_voltage_from_the_other_boards_regulator_is_not_asserted():
+    """PWR-1/PWR-2's direction: board 2's LDO must not power board 1's pins.
+
+    The rail is named ``RAILX`` — not a whitelisted rail spelling — so the only
+    source for its voltage is the LDO's output pin, and that LDO is on page 2.
+    Welded, the rules used to find 3.3 V for board 1's pin; the honest answer is
+    that no voltage is established.
+    """
+    from boardwise.core.parts import PartEntry, PartLibrary
+    from boardwise.rules.facts import DomainVsRange, SupplyOnKnownDomain
+
+    ldo = PartEntry(
+        key="ic.ldo",
+        mpn="LDO1",
+        lcsc="C2",
+        category="ic.ldo",
+        facts={
+            "ldo": {"fixed_output": {"volts": 3.3, "provenance": PROV}},
+            "supply_pins": [
+                {"pins": ["1"], "name": "VIN", "v_operating": [2.2, 5.5], "provenance": PROV}
+            ],
+            "required_caps": [{"pin": "2", "value": "1uF", "provenance": PROV}],
+        },
+    )
+    load = PartEntry(
+        key="ic.load",
+        mpn="LOAD1",
+        lcsc="C3",
+        category="ic.mcu",
+        facts={
+            "supply_pins": [
+                {"pins": ["1"], "name": "VDD", "v_operating": [3.0, 3.6], "provenance": PROV}
+            ]
+        },
+    )
+    shelf = PartLibrary(parts=[ldo, load])
+    # Page 2 draws the regulator: its output pin (2) sits on RAILX.
+    second = _page_project(
+        PAGE_2, "Board2",
+        {"U2": _part("U2", mpn="LDO1", pins=[("1", "VIN2"), ("2", "RAILX")])},
+        {"VIN2": [("U2", "1")], "RAILX": [("U2", "2")]},
+    )
+    # Page 1 draws a load on the same *name*.
+    first = _page_project(
+        PAGE_1, "Board1",
+        {"U3": _part("U3", mpn="LOAD1", pins=[("1", "RAILX")])},
+        {"RAILX": [("U3", "1")]},
+    )
+
+    merged = _merge_schematic_models([first, second], notes=[])
+    model = merged.boards[0]
+    assert merged.unproven_nets == {"RAILX": (PAGE_1, PAGE_2)}
+
+    states = {o.subject: o for o in SupplyOnKnownDomain(library=shelf).outcomes(model)}
+    unknown = states["U3 pin1"]
+    assert unknown.state == "UNKNOWN"
+    assert "RAILX" in unknown.message and "not a verified connection" in unknown.missing_fact
+    range_states = {o.subject: o for o in DomainVsRange(library=shelf).outcomes(model)}
+    assert range_states["U3 pin1"].state == "UNKNOWN"
+    assert "RAILX" in range_states["U3 pin1"].message
+
+
+def test_every_rule_the_tier_refuses_on_is_a_builtin_rule():
+    """The registry the note's count is read from cannot drift.
+
+    An id that is not a built-in rule would put a number in the tier note that
+    no rule answers for; a duplicate would inflate it.
+    """
+    from boardwise.engines.review import BUILTIN_RULES
+    from boardwise.rules.unproven import NET_MEMBERSHIP_RULES
+
+    ids = {rule.id for rule in BUILTIN_RULES}
+    assert len(set(NET_MEMBERSHIP_RULES)) == len(NET_MEMBERSHIP_RULES)
+    assert set(NET_MEMBERSHIP_RULES) <= ids, sorted(set(NET_MEMBERSHIP_RULES) - ids)
+
+
+def test_the_per_page_tier_label_names_the_refusal_and_its_rule_count():
+    """Issue #19 asks the tier's own line to stop saying only "按网名近似"."""
+    from boardwise.cli import CHECKUP_TIERS
+    from boardwise.rules.unproven import NET_MEMBERSHIP_RULES
+
+    label = CHECKUP_TIERS["per-page"]
+    assert "UNKNOWN" in label
+    assert f"{len(NET_MEMBERSHIP_RULES)} 条规则" in label
+
+
+MOTOR = FIXTURES / "ProPrj_高速电机控制器_2026-09-16.epro2"
+
+
+def _page_archives(fixture: Path) -> tuple[list[str], list[bytes]]:
+    """One document export per schematic page, split the way the host splits them.
+
+    The construction `_document_archive` uses (the fixture's real record stream,
+    cut at its `DOCHEAD` lines), generalised to a project with several pages: each
+    page keeps its own records plus every SYMBOL/DEVICE/FOOTPRINT document, which
+    is what `getDocumentFile` answers for the focused page.
+    """
+    from boardwise.parsers.epru_stream import load_epru_text
+
+    text, _meta = load_epru_text(fixture)
+    groups: dict[tuple, list[str]] = {}
+    order: list[tuple] = []
+    current: tuple | None = None
+    for line in text.split("\n"):
+        if line.startswith('{"type":"DOCHEAD"'):
+            body = json.loads(line.split("||", 1)[1].rstrip("|"))
+            current = (body.get("docType"), body.get("uuid"))
+            order.append(current)
+        if current is not None:
+            groups.setdefault(current, []).append(line)
+    library: list[str] = []
+    for key in order:
+        if key[0] in ("SYMBOL", "DEVICE", "FOOTPRINT"):
+            library.extend(groups[key])
+    pages = [key[1] for key in order if key[0] == "SCH_PAGE"]
+    blobs: list[bytes] = []
+    for page in pages:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("page.epru", "\n".join(groups[("SCH_PAGE", page)] + library))
+        blobs.append(buffer.getvalue())
+    return pages, blobs
+
+
+def test_the_per_page_tier_reports_the_net_names_it_could_not_prove(
+    fake_bridge, capsys, tmp_path
+):
+    """A real multi-page project through the real ladder: the report says which names.
+
+    The rule-level tests above pin what a welded name does to a verdict; this one
+    pins that the *report* of a per-page run names the welded nets, the pages each
+    was seen on, and the rules that refused — plus the sentence the rules quote.
+    """
+    from boardwise.rules.unproven import NET_MEMBERSHIP_RULES
+
+    page_uuids, blobs = _page_archives(MOTOR)
+    assert len(page_uuids) > 1, "the fixture this is about must be a multi-page project"
+
+    answers = _live_answers(project_refusal=True)
+    answers["doc.list"]["documents"] = [
+        {"uuid": uuid, "name": f"P{index + 1}", "type": "page"}
+        for index, uuid in enumerate(page_uuids)
+    ] + [{"uuid": "5dc38976c1fa45ce", "name": "PCB1", "type": "pcb"}]
+    answers["doc.list"]["active"] = {"uuid": page_uuids[0], "type": "page"}
+    pending = list(blobs)
+    answers["sys.get_document_file"] = lambda action, params: _archive_payload(
+        pending.pop(0), scope="document"
+    )
+    _FakeBridgeClient.answers = answers
+
+    assert _cmd_checkup(_checkup_args(out=str(tmp_path / "out"))) in (0, 1)
+
+    report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
+    assert report["source"]["tier"] == "per-page"
+    unproven = report["source"]["unprovenNets"]
+    assert unproven["count"] == len(unproven["nets"]) > 0
+    assert unproven["rulesRefused"] == list(NET_MEMBERSHIP_RULES), (
+        "the report says which rules refuse, and it is the registry's own list"
+    )
+    assert "PGND" in unproven["nets"], (
+        "this fixture's pages each draw their own GND but share PGND — measured, "
+        "and the point of the section: the names, not the classes of name"
+    )
+    assert all(
+        len(pages_seen) >= 2 for pages_seen in unproven["pages"].values()
+    ), "only names seen on more than one page are listed"
+    assert all(
+        set(pages_seen) <= set(page_uuids)
+        for pages_seen in unproven["pages"].values()
+    ), "the pages a name was seen on are the pages this run actually read"
+
+    notes = " ".join(report["source"]["notes"])
+    assert "agreement by name is not a verified connection" in notes
+    assert "UNKNOWN" in notes
+    # ... and the tier's own line says it before the notes do.
+    assert "UNKNOWN" in report["source"]["tierLabel"]
+    # The human report carries both, because a reader who only opens report.md
+    # must not be told "跨页连通性不保证" and left to guess what that cost.
+    markdown = (tmp_path / "out" / "report.md").read_text(encoding="utf-8")
+    assert "agreement by name is not a verified connection" in markdown
+    assert "一律不下通过/违规结论" in markdown
+
+
+def test_a_single_page_per_page_run_reports_no_unproven_nets(
+    fake_bridge, capsys, tmp_path
+):
+    """One page is not a merge: nothing is welded, so the section is **absent**.
+
+    Absent rather than empty on purpose: "this reading has no welded name" and
+    "nobody looked" must not read the same in a report a consumer acts on.
+    """
+    _FakeBridgeClient.answers = _live_answers(
+        project_refusal=True, page_blob=_document_archive()
+    )
+
+    assert _cmd_checkup(_checkup_args(out=str(tmp_path / "out"))) == 0
+
+    report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
+    assert report["source"]["tier"] == "per-page"
+    assert "unprovenNets" not in report["source"]
+    assert "not a verified connection" not in " ".join(report["source"]["notes"])
+
+
+# --------------------------------------------------------------------------
 # review --live: the same rules over the same ladder
 # --------------------------------------------------------------------------
 
