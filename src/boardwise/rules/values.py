@@ -1,9 +1,14 @@
 """Value decoding and unit parsing helpers for the PARAM rules (task 011d).
 
-Three parsers live here, all *whitelist* parsers: they either recognise the
+Four parsers live here, all *whitelist* parsers: they either recognise the
 string or return None — "unparseable" must never become "zero" or "whatever
 the digits look like".
 
+- :func:`parse_resistance_ohms` — board resistor values (``10kΩ``, ``4R7``,
+  ``0R01``, and the trade's mid-letter ``4K7``). Moved here from
+  ``rules/connectivity.py`` by 071 §2: the board's Value field and an MPN are
+  read by one module, because the rule that compares the two had one grammar
+  for each side and the mid-letter spelling fell between them (issue #23).
 - :func:`parse_capacitance_farads` — board capacitor values (``100nF``,
   ``0.1uF``, ``22pF``). A bare number without a unit is None: for capacitors
   the convention-less number is ambiguous by two orders of magnitude and the
@@ -38,6 +43,63 @@ _CAP_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*(pF|nF|uF|µF|MF)$", re.IGNORECASE)
 #: Package sizes that legitimately end in three digits -- a trailing group
 #: completing one of these is the part's *size*, never its value.
 _PACKAGE_TAILS = ("0402", "0603", "0805", "1206", "1210")
+
+#: The same sizes written the **metric** way: three figures, the two dimensions
+#: in tenths of a millimetre -- ``105`` = 1.0x0.5 mm (= 0402), ``160``/``188`` =
+#: 1.6x0.8 mm (= 0603, TDK's and Murata's spellings of it), ``201`` = 0805,
+#: ``321``/``322`` = 1206/1210, ``451``/``453`` = 1812.
+#:
+#: This is the industry's finite size list, not a manufacturer's private shape
+#: (071 §3), and it is a *grammar* fact: a part number states its size once, at
+#: the front (``GRM188``R71C104KA01D, ``C1608``X5R1A105KT). The guard built on
+#: it fires only on a token's **first** digit run, which is what keeps it off the
+#: value codes sharing a spelling: ``105`` is also 1 uF, and ``CL10A105KA8NNNC``'s
+#: ``105`` sits behind ``CL10`` and stays a value.
+_METRIC_SIZE_CODES = ("105", "160", "188", "201", "321", "322", "451", "453")
+
+#: The imperial (four-figure) sizes, longest first, for the prefix strip below.
+_IMPERIAL_SIZE_CODES = (
+    "01005", "0201", "0402", "0603", "0805", "1206", "1210", "1812", "2010",
+    "2512",
+)
+
+#: Every size code, longest first: which one a digit run starts with is decided
+#: here, and ``2010`` must win over ``201`` before it can be stripped.
+_SIZE_CODE_PREFIXES = _IMPERIAL_SIZE_CODES + _METRIC_SIZE_CODES
+
+#: The **components** of a size code as whole digit runs, for asking "does this
+#: token state a package size of its own?" (the anchor below).
+_SIZE_CODE_RUNS = frozenset(_IMPERIAL_SIZE_CODES + _METRIC_SIZE_CODES)
+
+#: The three syntactic **anchors** a decoded reading can carry (071 §1, oracle
+#: ruling 2026-09-29, option C -- "锚点闸"). A reading with an anchor may support
+#: a WARN; a reading without one is a string that merely *contains* three digits,
+#: and such a reading may contradict a board only in silence (UNKNOWN).
+#:
+#: The anchor is not a shape whitelist -- that is the enumeration that failed
+#: (issues #18, #22-#26). It is the weaker question "is this value stated in a
+#: *code field*", and the three answers are the three ways a token can say so:
+#:
+#: * :data:`ANCHOR_E96_LETTER` -- the four figures sit in a field whose grammar
+#:   names a letter right at them: the E-96 code followed by a tolerance letter
+#:   (``RK73H1JTTD1002F``'s ``1002F``), 厚声's ordering field with its
+#:   ``T``-taping tail (``0603WAF1002T5E``, ``0805W8J0103T5E`` -- the letter's
+#:   exact meaning differs by house, tolerance here and taping there; what the
+#:   anchor states is that the four figures are a code field, not a bare run of
+#:   digits), and the shunt field between a tolerance letter and its ``R``;
+#: * :data:`ANCHOR_MID_LETTER` -- the trade's mid-letter notation read in its
+#:   canonical form (the whole digit run after the package size comes off:
+#:   ``CRCW060310K0FKEA`` -> ``10K0``). The *shorter* readings of the same run are
+#:   the vendor-prefix guesses (``074K7`` also reading as ``4K7``) and carry no
+#:   anchor, because by construction one of them is wrong;
+#: * :data:`ANCHOR_PACKAGE_CONTEXT` -- the EIA three-digit code in a token that
+#:   also states a package size (``CC0603``KRX7R9BB104, ``GRM188``R71C104KA01D).
+#:   The size field is what makes the three digits a code field rather than
+#:   whatever digits happen to be in the string -- which is exactly what the
+#:   five electrolytics of issue #25 lacked (``UVR1H101MPD``, ``50YXF100MEFC``).
+ANCHOR_E96_LETTER = "值码带相邻容差字母"
+ANCHOR_MID_LETTER = "中缀正规形"
+ANCHOR_PACKAGE_CONTEXT = "值码带封装语境"
 
 _CODE_RE = re.compile(r"(\d{3})")
 
@@ -203,6 +265,157 @@ _MID_LETTER_BASE = {"R": 1.0, "K": 1e3, "M": 1e6}
 _MID_LETTER_RE = re.compile(r"(\d*)([RKM])(\d*)", re.IGNORECASE)
 
 
+def _without_leading_size(run: str) -> str:
+    """``run`` with a leading package size code removed (071 §3②).
+
+    ``CRCW0603``10K0FKEA states 10.0 kΩ in its own field, but the digit run in
+    front of the ``K`` is ``060310``: read whole it also spells ``310K0`` =
+    310 kΩ, a reading that crosses the size field into the value field -- and a
+    board declaring 310K **passed** on it (issue #24). The size is grammar, not
+    mantissa, so it comes off first. A run that was nothing but the size leaves
+    no mantissa at all (:func:`_mid_letter_readings` then produces no reading),
+    which is the same rule from the other side: ``CC0603KRX7R9BB104``'s
+    ``603K`` was read off its size field.
+    """
+    for size in _SIZE_CODE_PREFIXES:
+        if run.startswith(size):
+            return run[len(size):]
+    return run
+
+
+def _mid_letter_readings(
+    token: str, *, vendor_prefix: bool = True
+) -> dict[float, tuple[str, str]]:
+    """The trade's mid-letter readings inside ``token``: value -> (text, anchor).
+
+    The one implementation of the notation (071 §2): the board's Value field
+    (:func:`parse_resistance_ohms`) and a part number
+    (:func:`mpn_resistance_readings`) are read by the same scan, because a
+    ``4K7`` typed into an editor and a ``4K7`` printed inside an MPN are one
+    grammar and "one verdict has one implementation" is the repository's rule.
+    One flag separates the two callers, and only one: ``vendor_prefix``. Inside
+    an MPN the digits in front of the letter can be a manufacturer's code
+    (``074K7``), so every suffix is a candidate; a Value field states the value
+    and nothing else, so ``47R`` is 47 Ω and not 47 Ω or 7 Ω.
+
+    The **longest** candidate is the notation as written and carries
+    :data:`ANCHOR_MID_LETTER` (071 §1 C); the shorter ones are the vendor-prefix
+    guesses and carry none -- by construction at most one of them is right, so a
+    verdict may not rest on one of them.
+
+    Two refusals are grammar, not vendor shapes (071 §3②/§4):
+
+    * the digit run may carry the package size in front of the mantissa
+      (``0603``10``K0``), which comes off before anything is read;
+    * a letter with **no** digit run in front of it states no value:
+      ``WR06X1002FTL``'s ``R06`` was read as 0.06 Ω and ``GRM188R71C104KA01D``'s
+      ``R71`` as 0.71 Ω, both of them the series-name letter followed by the
+      series' own numbering (issues #25/#26). A letter right after a letter is
+      the same case -- the digit run before it is empty by construction, since
+      ``_MID_LETTER_RE``'s first group is the *whole* run of digits the letter
+      follows.
+    """
+    readings: dict[float, tuple[str, str]] = {}
+    for match in _MID_LETTER_RE.finditer(token):
+        run, raw_letter, fraction = match.group(1), match.group(2), match.group(3)
+        if raw_letter == "m":
+            continue  # lowercase m: milli in some houses, mega in others
+        letter = raw_letter.upper()
+        if len(fraction) > 2:
+            continue  # the shunt form (`R005`) and any longer tail
+        run = _without_leading_size(run)
+        if not run:
+            continue  # no mantissa: a series name, or the size code alone
+        base = _MID_LETTER_BASE[letter]
+        trimmed = run[-3:]
+        # Mantissa candidates: inside a part number every suffix of the digit
+        # run that does not start with a zero ("074" -> "74", "4"), because a
+        # vendor's own prefix in front of the value is indistinguishable from a
+        # longer mantissa; in a Value field the run itself, because there is no
+        # vendor prefix to guess at.
+        if vendor_prefix:
+            candidates = [
+                trimmed[index:]
+                for index in range(len(trimmed))
+                if not trimmed[index:].startswith("0")
+            ]
+        else:
+            # No vendor prefix to guess at, so the run itself is the mantissa --
+            # unless it starts with a zero, which is not a significant figure in
+            # either reading (`0K1` states nothing; the spellings that do start
+            # that way, `0R5`/`0R01`, are the board grammar's and are read above
+            # it).
+            candidates = [] if trimmed.startswith("0") else [trimmed]
+        for position, mantissa in enumerate(candidates):
+            digits = mantissa + fraction
+            if not digits:
+                continue
+            value = int(digits) / (10 ** len(fraction)) * base
+            if value <= 0:
+                continue
+            anchor = ANCHOR_MID_LETTER if position == 0 else ""
+            readings.setdefault(value, (f"{mantissa}{letter}{fraction}", anchor))
+    return readings
+
+
+#: The ohm suffix a board value may carry (``10kΩ``, ``10 ohm``), and the three
+#: spellings of the *board* grammar: ``R`` as the decimal point (``0R01``),
+#: ``R`` in front (``R010``), and a bare number with an optional ``k``/``m``/``M``.
+_OHM_SUFFIX_RE = re.compile(r"(?i)\s*(?:ohms?|\u03a9)\s*$")
+_R_DECIMAL_RE = re.compile(r"(\d+)[Rr](\d+)")
+_LEADING_R_RE = re.compile(r"[Rr](\d+)")
+_PLAIN_OHMS_RE = re.compile(r"(\d+(?:\.\d+)?)([kKmM]?)")
+_PLAIN_OHMS_MULTIPLIERS = {"": 1.0, "k": 1e3, "K": 1e3, "m": 1e-3, "M": 1e6}
+
+
+def parse_resistance_ohms(value: str) -> float | None:
+    """A board resistor value -> ohms, or None when it is not one this reads.
+
+    Moved here from ``rules/connectivity.py`` (071 §2) so that the rule comparing
+    a Value field with an MPN reads both sides in one module. The defect that
+    moved it: the trade's mid-letter spelling (``4K7`` = 4.7 kΩ) is read by
+    :func:`_mid_letter_readings` for **MPNs**, while the board side answered None
+    -- and a rule handed a value it cannot parse skips the part entirely, which
+    is worse than a miss (issue #23).
+
+    Two grammars, tried in this order:
+
+    * the **board grammar** an editor accepts: a unit suffix, ``R`` as the
+      decimal point (``0R01``, ``4R7``), a leading ``R`` (``R010``), milliohms
+      (``10m``), or a bare number with a ``k``/``m``/``M`` multiplier;
+    * the trade's **mid-letter** notation (``4K7``, ``1K0``, ``2M2``, ``100R``),
+      which must span the whole value: a Value field states one value, so
+      ``10MF`` is a millifarad capacitor and not ``10M``.
+
+    The order is load-bearing, not stylistic: ``4.7kΩ`` is the board grammar's
+    4700 Ω, while the mid-letter scan would take the ``7K`` after the dot for
+    7000 Ω. Every string the board grammar already reads keeps its exact value,
+    so this is additive -- what it refuses today it goes on refusing.
+    """
+    text = (value or "").strip()
+    if not text:
+        return None
+    body = _OHM_SUFFIX_RE.sub("", text).strip()
+    if not body:
+        return None
+    match = _R_DECIMAL_RE.fullmatch(body)
+    if match is not None:
+        return float(f"{match.group(1)}.{match.group(2)}")
+    match = _LEADING_R_RE.fullmatch(body)
+    if match is not None:
+        return float(f"0.{match.group(1)}")
+    match = _PLAIN_OHMS_RE.fullmatch(body)
+    if match is not None:
+        return float(match.group(1)) * _PLAIN_OHMS_MULTIPLIERS[match.group(2)]
+    readings = _mid_letter_readings(body, vendor_prefix=False)
+    if len(readings) != 1:
+        return None  # absent or ambiguous -- both are "cannot read"
+    value_ohms, (text_read, _anchor) = next(iter(readings.items()))
+    if text_read.upper() != body.upper():
+        return None  # the notation does not span the value field
+    return value_ohms
+
+
 def mpn_resistance_readings(mpn: str) -> list[tuple[float, str]]:
     """Every legitimate reading of the MPN's resistance notation.
 
@@ -216,60 +429,58 @@ def mpn_resistance_readings(mpn: str) -> list[tuple[float, str]]:
     *all* disagree is still a contradiction.
 
     Five shapes are read, each one's whitelist written out at its own helper --
-    the mid-letter notation below, 厚声's three-figures-plus-exponent field in
-    both its alphabets (:func:`_letter_exponent_reading`,
-    :func:`_numeric_exponent_reading`), the E-96 four-figure code
-    (:func:`_e96_reading`) and the shunt field between a tolerance letter and
-    its ``R`` (:func:`_shunt_reading`). They are additive on purpose (task 046):
-    an MPN where two conventions are by shape indistinguishable keeps *both*
-    readings, because the caller -- the board's own declared value -- is the only
-    thing that can choose, and dropping the right reading is what turns a correct
-    board into a violation.
+    the mid-letter notation (:func:`_mid_letter_readings`), 厚声's
+    three-figures-plus-exponent field in both its alphabets
+    (:func:`_letter_exponent_reading`, :func:`_numeric_exponent_reading`), the
+    E-96 four-figure code (:func:`_e96_reading`) and the shunt field between a
+    tolerance letter and its ``R`` (:func:`_shunt_reading`). They are additive
+    on purpose (task 046): an MPN where two conventions are by shape
+    indistinguishable keeps *both* readings, because the caller -- the board's
+    own declared value -- is the only thing that can choose, and dropping the
+    right reading is what turns a correct board into a violation.
 
     Returns ``[(ohms, notation_text), …]`` — empty when the MPN states its value
     in EIA three-digit form instead (``FRC0805J471``) or in no readable form at
-    all. What it refuses, deliberately:
+    all. This is the shape every existing caller wants; a verdict that has to say
+    *how far it may trust* a reading asks
+    :func:`mpn_resistance_candidates`, which carries the anchor alongside. What
+    it refuses, deliberately:
 
     * lowercase ``m`` (milli vs mega);
     * ``R`` followed by **three** digits — ``R005``, ``R100``, ``3R005``: the
       shunt convention, where the digits before the ``R`` are part of the part's
       coding rather than a mantissa (measured: ``JER2512F3R005`` is a 5 mΩ
       shunt, and reading it as 3.005 Ω would turn a correct board into a
-      violation). Those MPNs still answer UNKNOWN, exactly as before 043.
+      violation). Those MPNs still answer UNKNOWN, exactly as before 043;
+    * a letter with no digit run in front of it (``WR06X1002FTL``, ``AR03BTCX5001``)
+      and a package size code in front of one (``CRCW060310K0FKEA``): see
+      :func:`_mid_letter_readings` -- 071 §3②/§4 turned both of those
+      pseudo-readings off.
 
     **This is the resistor decoder.** Capacitor MPNs contain mid-letter-looking
-    groups incidentally (``CC0603KRX7R9BB104`` reads as 7R9 / 3K / 603K), so only
-    a caller that already knows the part is a resistor may consult it.
+    groups incidentally (``CC0603KRX7R9BB104`` reads as 7R9), so only a caller
+    that already knows the part is a resistor may consult it.
+    """
+    return [
+        (value, text) for value, text, _anchor in mpn_resistance_candidates(mpn)
+    ]
+
+
+def mpn_resistance_candidates(mpn: str) -> list[tuple[float, str, str]]:
+    """Every reading with the syntactic anchor it carries: ``(ohms, text, anchor)``.
+
+    ``anchor`` is one of :data:`ANCHOR_E96_LETTER`, :data:`ANCHOR_MID_LETTER`,
+    :data:`ANCHOR_PACKAGE_CONTEXT` or ``""`` for a reading that carries none
+    (071 §1 C). The rule that compares a board value with an MPN asks this one:
+    a reading with an anchor may support a WARN, an unanchored one may not --
+    a string that merely contains digits is not evidence enough to accuse a BOM
+    line of being wrong. :func:`mpn_resistance_readings` is this minus the anchor,
+    for callers that only want the numbers.
     """
     if not mpn:
         return []
     token = mpn.strip().split()[0] if mpn.strip() else ""
-    readings: dict[float, str] = {}
-    for match in _MID_LETTER_RE.finditer(token):
-        run, raw_letter, fraction = match.group(1), match.group(2), match.group(3)
-        if raw_letter == "m":
-            continue  # lowercase m: milli in some houses, mega in others
-        letter = raw_letter.upper()
-        if len(fraction) > 2:
-            continue  # the shunt form (`R005`) and any longer tail
-        base = _MID_LETTER_BASE[letter]
-        # Mantissa candidates: the suffixes of the digit run that do not start
-        # with a zero ("074" -> "74", "4"), or nothing at all when the letter is
-        # the only thing before the fraction ("R47" = 0.47 Ω).
-        trimmed = run[-3:]
-        candidates = (
-            [trimmed[index:] for index in range(len(trimmed)) if not trimmed[index:].startswith("0")]
-            if trimmed
-            else [""]
-        )
-        for mantissa in candidates:
-            digits = mantissa + fraction
-            if not digits:
-                continue
-            value = int(digits) / (10 ** len(fraction)) * base
-            if value <= 0:
-                continue  # a zero-ohm reading is not evidence of anything
-            readings.setdefault(value, f"{mantissa}{letter}{fraction}")
+    readings = dict(_mid_letter_readings(token))
     for reading in (
         _letter_exponent_reading(token),
         _numeric_exponent_reading(token),
@@ -277,9 +488,11 @@ def mpn_resistance_readings(mpn: str) -> list[tuple[float, str]]:
         _shunt_reading(token),
     ):
         if reading is not None:
-            value, text = reading
-            readings.setdefault(value, text)
-    return sorted(readings.items())
+            value, text, anchor = reading
+            readings.setdefault(value, (text, anchor))
+    return sorted(
+        (value, text, anchor) for value, (text, anchor) in readings.items()
+    )
 
 
 #: The size codes that head a part number (task 046). Requiring one is what
@@ -317,7 +530,7 @@ _NUMERIC_EXPONENT_FIELD_RE = re.compile(
 )
 
 
-def _letter_exponent_reading(token: str) -> tuple[float, str] | None:
+def _letter_exponent_reading(token: str) -> tuple[float, str, str] | None:
     """厚声's three-figures-plus-letter-exponent field, or None.
 
     ``0603WAF220KT5E`` is the witness this exists for (task 046): its ``220K``
@@ -325,6 +538,12 @@ def _letter_exponent_reading(token: str) -> tuple[float, str] | None:
     ``220K`` = 220 kΩ and, dropping the leading ``2``, for 20 kΩ as well — the
     reading the rule quoted as "decodes to 2e+04 Ω" for a part the board
     correctly declares as 2.2 Ω.
+
+    The field's own grammar (size head, letters, exponent letter, ``T`` tail) is
+    what makes it a code field, so this reading carries
+    :data:`ANCHOR_E96_LETTER` -- ``0603WAF1002T5E``'s family is the witness the
+    anchor was ruled for (071 §1 C, oracle ruling 2026-09-29: the board's 19
+    signed MPN defects stay WARNs, and they are all read by that field).
     """
     m = _LETTER_EXPONENT_FIELD_RE.match(token)
     if m is None:
@@ -333,10 +552,10 @@ def _letter_exponent_reading(token: str) -> tuple[float, str] | None:
     value = int(figures) * (10.0 ** _LETTER_EXPONENT[letter])
     if value <= 0:
         return None
-    return value, f"{figures}{letter} (letter-exponent field)"
+    return value, f"{figures}{letter} (letter-exponent field)", ANCHOR_E96_LETTER
 
 
-def _numeric_exponent_reading(token: str) -> tuple[float, str] | None:
+def _numeric_exponent_reading(token: str) -> tuple[float, str, str] | None:
     """厚声's three-figures-plus-digit-exponent field, or None.
 
     Five of the six shapes this module reads state the value *inside* an MPN
@@ -346,6 +565,10 @@ def _numeric_exponent_reading(token: str) -> tuple[float, str] | None:
     with a digit exponent, and no other reader owns the ``...T5E`` tail (the
     E-96 reader needs the token to *end* in four figures, and the mid-letter
     reader finds no ``R``/``K``/``M`` in ``WAF1002T5E``).
+
+    Same anchor as its sibling: the field is pinned by the size head and the
+    ``T`` tail, so the four figures sit in a code field rather than in a run of
+    digits that happens to be three long.
     """
     m = _NUMERIC_EXPONENT_FIELD_RE.match(token)
     if m is None:
@@ -354,7 +577,7 @@ def _numeric_exponent_reading(token: str) -> tuple[float, str] | None:
     value = int(figures) * (10.0 ** int(exponent))
     if value <= 0:
         return None
-    return value, f"{figures}{exponent} (numeric-exponent field)"
+    return value, f"{figures}{exponent} (numeric-exponent field)", ANCHOR_E96_LETTER
 
 
 #: The four-figure package sizes (task 046). This is :data:`_PACKAGE_TAILS` plus
@@ -369,16 +592,24 @@ _E96_PACKAGE_TAILS = ("0402", "0603", "0805", "1206", "1210", "2512")
 _E96_FIELD_RE = re.compile(r"(?<!\d)(\d{4})([A-Za-z])?$")
 
 
-def _e96_reading(token: str) -> tuple[float, str] | None:
+def _e96_reading(token: str) -> tuple[float, str, str] | None:
     """The E-96 four-figure code, or None (absent, guarded or ambiguous).
 
     The witness is Viking's ``AR03BTCX5001`` (task 046): a 5.00 kΩ part, whose
-    ``5001`` this reader turns into 500 x 10^1 Ω, while the mid-letter reader
-    reads the same token as 0.03 Ω (``R03``) — the reading the rule quoted as
-    "decodes to 0.03 Ω". Two candidates with different values are ambiguity and
-    add nothing at all.
+    ``5001`` this reader turns into 500 x 10^1 Ω -- while the mid-letter reader
+    used to read the same token as 0.03 Ω (``R03``) and the rule quoted that
+    figure. Since 071 §4 the ``R03`` pseudo-reading is gone (a series-name
+    letter followed by the series' numbering is not a value), so the surviving
+    reading is this one; the ambiguity guard below stays for the tokens where
+    two *real* four-figure candidates still disagree.
+
+    The anchor is the **trailing tolerance letter** (071 §1 C): ``RK73H1JTTD1002F``
+    states ``1002F``, and the letter is what pins the four figures as a value
+    code. A bare four-figure run at the end of a token (``AR03BTCX5001``) carries
+    none -- it may still *match* the board's value, but it may not, by itself,
+    accuse the board of being wrong.
     """
-    candidates: dict[float, str] = {}
+    candidates: dict[float, tuple[str, bool]] = {}
     for m in _E96_FIELD_RE.finditer(token):
         figures = m.group(1)
         if figures in _E96_PACKAGE_TAILS or figures.startswith("0"):
@@ -386,20 +617,27 @@ def _e96_reading(token: str) -> tuple[float, str] | None:
         value = int(figures[:3]) * (10.0 ** int(figures[3]))
         if value <= 0:
             continue
-        candidates.setdefault(value, figures)
+        candidates.setdefault(value, (figures, m.group(2) is not None))
     if len(candidates) != 1:
         return None
-    value, figures = next(iter(candidates.items()))
-    return value, f"{figures} (E-96)"
+    value, (figures, lettered) = next(iter(candidates.items()))
+    return value, f"{figures} (E-96)", ANCHOR_E96_LETTER if lettered else ""
 
 
-def _shunt_reading(token: str) -> tuple[float, str] | None:
+def _shunt_reading(token: str) -> tuple[float, str, str] | None:
     """The ``FR400`` shunt field, or None.
 
     ``FRL1210FR400TS`` states 400 mΩ as ``FR400`` (task 046): a tolerance
     letter, the ``R`` decimal point, then the fraction's digits, with the
     hundredths written out rather than dropped. ``R`` alone (``AR03BTCX5001``)
     and ``R`` after a digit (``JER2512F3R005``, 043) are not this shape.
+
+    The tolerance letter the shape starts with is an anchor in the same sense as
+    the E-96 one (071 §1 C): a coded field, not a run of digits. Declared rather
+    than assumed: the ruling's three anchors do not name this shape, and the
+    reading it produces is the one the FPC board's ``R1`` is declared against
+    (400 mΩ), so anchoring it keeps THIS MESSAGE SET honest — a shunt whose
+    board value is wrong is a BOM contradiction a reader has to see.
     """
     m = _SHUNT_FIELD_RE.search(token)
     if m is None:
@@ -408,7 +646,7 @@ def _shunt_reading(token: str) -> tuple[float, str] | None:
     value = int(digits) / (10.0 ** len(digits))
     if value <= 0:
         return None
-    return value, f"{m.group(0)} (shunt field)"
+    return value, f"{m.group(0)} (shunt field)", ANCHOR_E96_LETTER
 
 
 def mpn_value_code(mpn: str) -> str | None:
@@ -432,6 +670,13 @@ def mpn_value_code(mpn: str) -> str | None:
     this decoder does not read at all (:func:`_foreign_unit_code`): a polymer
     electrolytic prints microfarads, so reading ``SPZ1HM100E07O00RAXXX``'s
     ``100`` against the picofarad base is what reported 10 pF for a 10 µF part.
+
+    A token's **leading** metric size code is a size too, on the same footing as
+    the trailing imperial one (:data:`_METRIC_SIZE_CODES`, 071 §3①): reading
+    ``GRM188R71C104KA01D``'s ``188`` as a value put two candidates in the list
+    (``188`` and ``104``), ambiguity turned the whole token into None, and a
+    100 nF part the board declares correctly reported "contains no decodable
+    value code" -- a silent miss, which is what issue #22 measured.
     """
     if not mpn:
         return None
@@ -446,6 +691,14 @@ def mpn_value_code(mpn: str) -> str | None:
         # Package guard: the group completes a size code -> it is a size.
         if len(before) >= 1 and (before[-1] + code) in _PACKAGE_TAILS:
             continue
+        # Leading metric size guard: a whole three-figure run at the front of
+        # the token, spelled as one of the metric sizes, is the size field.
+        if (
+            code in _METRIC_SIZE_CODES
+            and _digit_run(token, m.start()) == code
+            and not any(ch.isdigit() for ch in before)
+        ):
+            continue
         if after == "":
             candidates.append(code)
             continue
@@ -458,3 +711,35 @@ def mpn_value_code(mpn: str) -> str | None:
     if len(distinct) != 1:
         return None  # absent or ambiguous -- both are "cannot decode"
     return distinct[0]
+
+
+def has_package_context(mpn: str) -> bool:
+    """True when the MPN's first token states a package size of its own.
+
+    The predicate behind :data:`ANCHOR_PACKAGE_CONTEXT` (071 §1 C): a whole
+    digit run that IS a size code, imperial or metric (``CC0603``KRX7R9BB104,
+    ``GRM188``R71C104KA01D). It is the difference between a three-digit value
+    code and three digits that happen to sit in a string -- the electrolitics of
+    issue #25 (``UVR1H101MPD``, ``50YXF100MEFC``, ``NRWA221M35V``,
+    ``16ZLH470MEFC``, ``EEU-FC1H101``) carry no size at all.
+    """
+    if not mpn:
+        return False
+    token = mpn.strip().split()[0] if mpn.strip() else ""
+    return any(
+        match.group(0) in _SIZE_CODE_RUNS for match in re.finditer(r"\d+", token)
+    )
+
+
+def mpn_value_code_anchor(mpn: str) -> tuple[str | None, str]:
+    """``(code, anchor)`` -- :func:`mpn_value_code` with the anchor it carries.
+
+    A capacitor's value code is a *string reading* like any other, so 071 §1 C
+    asks it the same question: is the reading anchored? Here the anchor is the
+    package context (:func:`has_package_context`) -- the one thing that turns
+    three digits into a code field. ``None`` code keeps ``""``.
+    """
+    code = mpn_value_code(mpn)
+    if code is None:
+        return None, ""
+    return code, (ANCHOR_PACKAGE_CONTEXT if has_package_context(mpn) else "")

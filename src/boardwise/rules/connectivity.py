@@ -17,34 +17,17 @@ LEVEL = "L1-connectivity"
 
 
 def parse_resistance_ohms(value: str) -> float | None:
-    """Tolerantly parse a resistor value string into ohms.
+    """Re-exported: the one ohm parser lives in ``rules/values.py`` (071 §2).
 
-    Accepted forms include ``"10mΩ"`` (0.01), ``"1mΩ"`` (0.001),
-    ``"0.01"`` (0.01), ``"0R01"`` / ``"4R7"`` (R as decimal separator),
-    ``"R010"`` (0.01), ``"10kΩ"`` / ``"10K"`` (1e4), ``"1MΩ"`` (1e6),
-    ``"10Ω"`` / ``"10 ohm"`` (10). Returns None when unparseable.
+    It used to live here, with the trade's mid-letter notation (``4K7``)
+    missing — so a board value written that way was None, and every rule reading
+    a resistance skipped the part instead of judging it. The grammar now sits
+    beside the MPN decoder that already knew the notation, and this function
+    stays as the import path every caller already uses.
     """
-    s = value.strip()
-    if not s:
-        return None
-    # Drop unit suffixes: Ω, ohm, ohms (any case).
-    s = re.sub(r"(?i)\s*(?:ohms?|Ω)\s*$", "", s).strip()
-    if not s:
-        return None
-    # "0R01" / "4R7": R acts as the decimal separator.
-    m = re.fullmatch(r"(\d+)[Rr](\d+)", s)
-    if m:
-        return float(f"{m.group(1)}.{m.group(2)}")
-    # "R010": leading R means 0.xxx.
-    m = re.fullmatch(r"[Rr](\d+)", s)
-    if m:
-        return float(f"0.{m.group(1)}")
-    # Plain number with an optional k/m/M multiplier suffix.
-    m = re.fullmatch(r"(\d+(?:\.\d+)?)([kKmM]?)", s)
-    if not m:
-        return None
-    multiplier = {"": 1.0, "k": 1e3, "K": 1e3, "m": 1e-3, "M": 1e6}[m.group(2)]
-    return float(m.group(1)) * multiplier
+    from .values import parse_resistance_ohms as _parse
+
+    return _parse(value)
 
 
 def _nets_with_prefix(model: DesignModel, prefix: str) -> set[str]:

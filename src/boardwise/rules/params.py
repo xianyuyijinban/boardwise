@@ -16,7 +16,15 @@ code, because two rules look at the same resistor:
 
 That last rule reports a contradiction and **not** a repair (052 §2.1): its
 finding names both candidate fixes and carries no suggested value, because
-which field is the wrong one is a design decision (048's ruling).
+which field is the wrong one is a design decision (048's ruling). **Since 071 §1
+it only accuses where the reading has a syntactic anchor** (oracle ruling
+2026-09-29, option C): both sides of the comparison are strings, so the reading
+has to be a *code field* -- an E-96/厚声 code with its tolerance letter, the
+trade's mid-letter notation in its canonical form, or an EIA three-digit code in
+a token that states a package size -- and a reading without one contradicts the
+board in silence (UNKNOWN, "字符串解码无锚点，低置信"). Matching a declared value
+never requires an anchor: this gate withholds verdicts, it does not tighten
+them.
 """
 
 from __future__ import annotations
@@ -30,8 +38,8 @@ from .facts import FactsRule
 from .unproven import unproven_nets, unproven_outcome
 from .values import (
     decode_eia_3digit,
-    mpn_resistance_readings,
-    mpn_value_code,
+    mpn_resistance_candidates,
+    mpn_value_code_anchor,
     parse_capacitance_farads,
 )
 
@@ -96,6 +104,12 @@ MPN_AMPLITUDE_TOLERANCE_C = 25.0
 #: directions are always named in the same words whatever the amplitude or the
 #: part; the amplitude tolerances above are a noise policy, not evidence that
 #: the part number is the accurate side.
+#:
+#: **Anchored only, since 071 §1 C**: a row quotes this template only when the
+#: reading that contradicts the board carries a syntactic anchor (a code field --
+#: see :data:`boardwise.rules.values.ANCHOR_E96_LETTER` and its siblings). The
+#: unanchored case is UNKNOWN instead, because a string that merely contains
+#: digits may not, by itself, tell a designer their BOM line is wrong.
 MPN_REPAIR_DIRECTIONS = (
     " -- two repairs fit this contradiction and this rule picks neither "
     "(052 §2.1, 修复方向由设计意图决定): fix Value to {mpn_value} "
@@ -105,8 +119,13 @@ MPN_REPAIR_DIRECTIONS = (
 
 
 def parse_resistance_ohms(value: str) -> float | None:
-    """Re-exported helper: the L1 parser is the one ohm parser."""
-    from .connectivity import parse_resistance_ohms as _parse
+    """Re-exported helper: ``rules/values.py`` holds the one ohm parser (071 §2).
+
+    The re-export used to point at the L1 copy in ``rules/connectivity.py``,
+    which is why this module read board values with a *different* grammar from
+    the one it read MPNs with. Both now come from ``values.py``.
+    """
+    from .values import parse_resistance_ohms as _parse
 
     return _parse(value)
 
@@ -139,12 +158,13 @@ def _human_value(quantity: float, kind: str) -> str:
     """A decoded SI quantity written the way a person writes the value.
 
     ``1000.0`` ohms becomes ``"1k"`` and ``1e-7`` farads becomes ``"100nF"``,
-    so the candidate a message quotes can be typed back into the editor
-    unchanged. Since 052 §2.1 this is *not* a suggestion the finding carries —
-    it is the text of the "fix Value" candidate in
-    :data:`MPN_REPAIR_DIRECTIONS` — but the round trip still matters, because
-    it is the value an operator would paste into ``--after`` (``tests/test_016_*``
-    pins the round trip across the whole EIA code space).
+    so the quantity a message quotes can be typed back into the editor
+    unchanged: it is the text of the "fix Value" candidate in
+    :data:`MPN_REPAIR_DIRECTIONS` (the anchored contradiction), and it is what
+    the UNKNOWN row's ``missing_fact`` quantifies the disagreement with. The
+    round trip still matters either way, because it is the value an operator
+    would paste into ``--after`` (``tests/test_016_*`` pins the round trip
+    across the whole EIA code space).
 
     Six significant digits is deliberate: the quantities this formatter sees
     are EIA codes (a two-digit mantissa times a power of ten), so six digits
@@ -162,9 +182,9 @@ def _human_value(quantity: float, kind: str) -> str:
 
 
 def _closest_reading(
-    readings: list[tuple[float, str]], declared: float | None
-) -> tuple[float, str]:
-    """The reading the comparison is made against: the one nearest the board's own.
+    readings: list[tuple[float, str, str]], declared: float | None
+) -> tuple[float, str, str]:
+    """The candidate the comparison is made against: the one nearest the board's own.
 
     A mid-letter MPN can have several legitimate readings (task 043), and the
     comparison — and therefore the amplitude a violation quotes — has to be made
@@ -173,6 +193,11 @@ def _closest_reading(
     ``|log|`` distance) is the one: a part whose readings are ``{4.7k, 74.7k}``
     on a board that says ``4.7k`` is being compared against 4.7 kΩ, and the row
     carries the other readings as evidence so the choice is visible.
+
+    The anchor travels with the chosen candidate (071 §1 C): which reading a
+    contradiction rests on decides whether the rule may accuse at all, and
+    ``074K7``'s two readings differ in exactly that (the whole run is the
+    notation, the suffix is the vendor-prefix guess).
 
     A value the parser could not read (``None``) or a non-positive one has no
     distance to anything: the smallest reading is used, and that path's message
@@ -186,26 +211,54 @@ def _closest_reading(
 class ValueMpnMatch(FactsRule):
     """PARAM-4: the board's value field agrees with the MPN's decoded value.
 
-    The decoder is a whitelist (EIA three-digit codes, package codes guarded);
-    an MPN that decodes to nothing is UNKNOWN ("contains no decodable value"),
-    never a guessed match. R24/R27 have no MPN at all and stay UNKNOWN for
-    exactly that reason. **UNKNOWN is the verdict for a refused notation too**
-    (``R`` as the decimal point, a voltage rating after the value, an
-    electrolytic part number -- task 015): those strings do carry a value, but
-    not one this decoder reads, and hard-reading them turned a 330 uF part
-    into a 3.3e-11 F contradiction.
+    The decoder is a whitelist (EIA three-digit codes, package sizes guarded,
+    the trade's mid-letter and exponent notations); an MPN that decodes to
+    nothing is UNKNOWN ("contains no decodable value"), never a guessed match.
+    R24/R27 have no MPN at all and stay UNKNOWN for exactly that reason.
+    **UNKNOWN is the verdict for a refused notation too** (``R`` as the decimal
+    point, a voltage rating after the value, an electrolytic part number --
+    task 015): those strings do carry a value, but not one this decoder reads,
+    and hard-reading them turned a 330 uF part into a 3.3e-11 F contradiction.
 
     A *readable* MPN that disagrees with the board's value is judged by
     amplitude, not by equality (ruling of 2026-09-21, see
     :data:`MPN_AMPLITUDE_TOLERANCE_R`): a small ratio is OK **with its
     amplitude quoted in the message**, so the row says what was seen instead
-    of passing in silence, and it enters no precision denominator. Bigger
-    ratios keep the violation and now quote the amplitude too.
+    of passing in silence, and it enters no precision denominator.
+
+    **Since 071 §1 a bigger ratio is UNKNOWN, not a violation** -- the
+    bleed-stop of oracle ruling 2026-09-29. The whole verdict rests on two
+    strings (the Value field, and an MPN read by an enumeration of vendor
+    notations), and an enumeration of private shapes never ends: with one
+    **Since 071 §1 C an accusation also needs the reading to be anchored** --
+    oracle ruling 2026-09-29, taken after the full stop ("every decoded string
+    reading is UNKNOWN") turned out to silence nineteen signed defects on the
+    oracle's own sampling board (rulings A2/A4, `reviewsets/毕设滤波采样_*.json`).
+    The enumeration of vendor shapes is abandoned either way -- with one shape
+    patched (#18), an external harness produced five more within hours, across
+    four manufacturers and three voltage-code positions (#25) -- but the *line*
+    is no longer "is it a string" (everything is) and not "which shape is it"
+    (which never ends). It is: **is the value stated in a code field?** Three
+    ways a token can say so, and a reading that carries none contradicts the
+    board in silence:
+
+    * :data:`~boardwise.rules.values.ANCHOR_E96_LETTER` -- four figures in a
+      field whose grammar names a letter at them (``RK73H1JTTD1002F``'s
+      ``1002F``, ``0603WAF1002T5E``'s field with its ``T`` tail, the shunt
+      field between a tolerance letter and its ``R``);
+    * :data:`~boardwise.rules.values.ANCHOR_MID_LETTER` -- the mid-letter
+      notation in its canonical form (``CRCW060310K0FKEA`` -> ``10K0``);
+    * :data:`~boardwise.rules.values.ANCHOR_PACKAGE_CONTEXT` -- an EIA
+      three-digit code in a token that also states a package size
+      (``CC0603``KRX7R9BB104, ``GRM188``R71C104KA01D).
+
+    A **match** never needs an anchor, and neither does the amplitude waiver
+    below: this gate withholds verdicts, it does not tighten them.
 
     **A violation reports a contradiction, not a repair** (052 §2.1, after
-    048). The finding's target carries the board's own value as
-    ``expected_before`` and an **empty** ``suggested_after``: the rule has two
-    candidates (:data:`MPN_REPAIR_DIRECTIONS`) and enough evidence for
+    048): the finding's target carries the board's own value as
+    ``expected_before`` and an **empty** ``suggested_after``, because the rule
+    has two candidates (:data:`MPN_REPAIR_DIRECTIONS`) and enough evidence for
     neither, so both are named in the message and the direction is left to the
     design intent. ``edit plan`` refuses to build a plan without one being
     stated — see ``cli._cmd_edit_plan_value``."""
@@ -215,7 +268,11 @@ class ValueMpnMatch(FactsRule):
     level = LEVEL
     source = (
         "house rule (EIA three-digit code cross-check); the contradiction is "
-        "a BOM/schematic mismatch, not a hazard"
+        "a BOM/schematic mismatch, not a hazard. Since 071 §1 C (oracle ruling "
+        "2026-09-29) a disagreement is a WARN only when the MPN reading carries "
+        "a syntactic anchor (a code field: E-96/厚声 letter, canonical "
+        "mid-letter form, EIA code with package context); an unanchored "
+        "reading is UNKNOWN"
     )
 
     def outcomes(self, model: DesignModel) -> list[Outcome]:
@@ -235,11 +292,16 @@ class ValueMpnMatch(FactsRule):
             # notation (`4K7` = 4.7 kΩ), which is not an EIA code at all — and the
             # EIA reader used to mine a wrong code out of it (`RC0603FR-074K7L`
             # came back as "074" = 70 kΩ, task 043's reported WARN). The
-            # mid-letter readings are tried first, for resistors only.
-            readings: list[tuple[float, str]] = (
-                mpn_resistance_readings(comp.mpn or "") if kind == "resistor" else []
+            # mid-letter readings are tried first, for resistors only — and they
+            # are asked for *with their anchors* (071 §1 C), because the reading a
+            # contradiction rests on is what decides whether the rule may accuse.
+            candidates: list[tuple[float, str, str]] = (
+                mpn_resistance_candidates(comp.mpn or "") if kind == "resistor" else []
             )
-            code = mpn_value_code(comp.mpn or "")
+            readings: list[tuple[float, str]] = [
+                (value, text) for value, text, _anchor in candidates
+            ]
+            code, code_anchor = mpn_value_code_anchor(comp.mpn or "")
             if not readings and code is None:
                 rows.append((
                     Outcome(
@@ -262,16 +324,18 @@ class ValueMpnMatch(FactsRule):
                 continue
             if kind == "resistor":
                 declared = parse_resistance_ohms(comp.value or "")
-                if readings:
-                    decoded, notation = _closest_reading(readings, declared)
+                if candidates:
+                    decoded, notation, anchor = _closest_reading(candidates, declared)
                     label = f"value {notation!r}"
                 else:
                     decoded = decode_eia_3digit(code, 1.0)
+                    anchor = code_anchor
                     label = f"code {code}"
                 unit = "Ω"
             else:
                 declared = parse_capacitance_farads(comp.value or "")
                 decoded = decode_eia_3digit(code, 1e-12)
+                anchor = code_anchor
                 label = f"code {code}"
                 unit = "F"
             # An MPN whose notation has several legitimate readings says so: the
@@ -361,16 +425,62 @@ class ValueMpnMatch(FactsRule):
                     f"a zero side ({declared:.4g} vs {decoded:.4g} {unit}) "
                     "leaves the ratio undefined, so no tolerance applies"
                 )
+                # 071 §1 C, the anchor gate (oracle ruling 2026-09-29). The
+                # reading may accuse the board only if the token states the value
+                # in a *code field* -- an E-96/厚声 code with its letter, the
+                # canonical mid-letter form, or an EIA code with a package size
+                # in the same token. The enumeration of vendor shapes is not what
+                # this decides (it never ends: after #18, five more shapes in
+                # hours, four manufacturers, three voltage-code positions -- #25);
+                # it decides whether the digits are a value at all. An unanchored
+                # reading still *matches* (that is the board's own value agreeing
+                # with it) and still waives an amplitude below the tolerance, but
+                # it may not be the only witness against a BOM line.
+                if not anchor:
+                    rows.append((
+                        Outcome(
+                            rule_id=self.id,
+                            state="UNKNOWN",
+                            subject=comp.designator,
+                            message=(
+                                f"{comp.designator}: board value "
+                                f"{declared:.4g} {unit} contradicts its MPN "
+                                f"({comp.mpn!r} decodes to {decoded:.4g} {unit}) "
+                                f"-- BOM and schematic disagree ({amplitude}), "
+                                "but the reading carries no syntactic anchor: "
+                                "字符串解码无锚点，低置信 "
+                                "(071 §1 C -- three digits found in a string are "
+                                "not evidence that a BOM line is wrong, so the "
+                                "contradiction is withheld)"
+                            ),
+                            evidence=[
+                                f"{comp.designator} value {comp.value!r}",
+                                f"{comp.designator} mpn {comp.mpn!r}",
+                                *notation_evidence,
+                            ],
+                            missing_fact=(
+                                f"a syntactic anchor for the reading that "
+                                f"disagrees on {comp.designator} (board value "
+                                f"{comp.value!r} vs MPN {comp.mpn!r} decoding to "
+                                f"{_human_value(decoded, kind)}) -- a code field "
+                                "around the digits, or a fact that corroborates "
+                                "one side"
+                            ),
+                        ),
+                        None,
+                    ))
+                    continue
                 # Task 016: the one row in the codebase that carries a
                 # structured target, which is what makes this the first
                 # repairable rule. Since 052 §2.1 the target names the
                 # contradiction and **no** repair: `suggested_after` is empty
-                # because the rule has two candidates and evidence for
-                # neither, and `edit plan` refuses to pick one for the
-                # operator. The message names both, with the MPN's decoded
-                # quantity written back in a human notation the value parsers
-                # read (`_human_value`) so the "fix Value" candidate can be
-                # typed straight into `--after`.
+                # because the rule has two candidates and evidence for neither,
+                # and `edit plan` refuses to pick one for the operator. The
+                # message names both, with the MPN's decoded quantity written
+                # back in a human notation the value parsers read
+                # (`_human_value`) so the "fix Value" candidate can be typed
+                # straight into `--after` -- and names the anchor, so a reader can
+                # see what let this row speak (071 §1 C).
                 rows.append((
                     Outcome(
                         rule_id=self.id,
@@ -380,7 +490,8 @@ class ValueMpnMatch(FactsRule):
                             f"{comp.designator}: board value "
                             f"{declared:.4g} {unit} contradicts its MPN "
                             f"({comp.mpn!r} decodes to {decoded:.4g} {unit}) "
-                            f"-- BOM and schematic disagree ({amplitude})"
+                            f"-- BOM and schematic disagree ({amplitude}；"
+                            f"锚点：{anchor})"
                             + MPN_REPAIR_DIRECTIONS.format(
                                 mpn_value=_human_value(decoded, kind),
                                 board_value=comp.value,

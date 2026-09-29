@@ -51,7 +51,22 @@ WARN_RULE = "param-value-mpn-match"
 #: 100x apart, well past the 25x capacitor tolerance, so the rule reports a WARN
 #: on each part that carries it. This is the #13 shape — one rule, one warning
 #: per part, and a designator (`EC1`) whose prefix the prose reader never knew.
-MPN = "GRM31CR61A107ME19L"
+#:
+#: **Re-pointed by 071 §1 C, and this is the reason.** The board's parts used to
+#: carry ``GRM31CR61A107ME19L``, a Murata part whose size is spelled ``31`` —
+#: Murata's *own* two-figure code, which is not one of the industry's size
+#: spellings (four-figure imperial, three-figure metric). Under the anchor gate a
+#: reading that carries no syntactic anchor may not accuse a BOM line, so that
+#: MPN now answers UNKNOWN on the two capacitors (the shape #25 measured:
+#: electrolytics whose digits are not a code field) and the #13 key scenario —
+#: two warnings of ONE rule, one verdict each — would have lost its subject.
+#: ``CC1206KKX7R0BB107`` states the same 100 uF with the package size ``1206``
+#: *in* the token, so the reading is anchored and the warnings come back exactly
+#: as the issue reports them. ``test_the_unanchored_electrolytic_shape_is_unknown``
+#: below pins what happened to the retired spelling, so the change is a
+#: measurement rather than a memory.
+MPN = "CC1206KKX7R0BB107"
+RETIRED_MPN = "GRM31CR61A107ME19L"
 PARTS = [("EC1", "1uF"), ("EC3", "1uF"), ("R7", "10k")]
 
 
@@ -445,3 +460,41 @@ def test_a_sidecar_key_from_before_the_fix_is_reported_and_never_migrated(
     assert "已并入 1 条" in printed and "另 1 条没匹配上" in printed
     # checkup never writes that file: the audit trail is the triage command's.
     assert _sidecar(out)["entries"] == entries
+
+def test_the_unanchored_electrolytic_shape_is_unknown():
+    """071 §1 C, pinned where this file felt it: the retired MPN stops accusing.
+
+    ``GRM31CR61A107ME19L`` is a real 100 uF part and its ``107`` really is the
+    EIA code for 100 uF — and that is exactly the case the anchor gate answers
+    with silence: Murata's ``31`` is a *manufacturer's* size spelling, not one of
+    the industry's (four-figure imperial / three-figure metric), so the reading
+    carries no syntactic anchor and may not be the only witness against a BOM
+    line. A part whose token states the size (``CC1206KKX7R0BB107``, the MPN the
+    tests above use) says the same 100 uF and is allowed to warn.
+
+    This is the #25 shape measured on this repository's own part numbers
+    (``UVR1H101MPD``, ``50YXF100MEFC``, ``EEU-FC1H101`` …), and it is why the
+    board above had to be re-pointed rather than the gate loosened again.
+    """
+    from boardwise.core.model import Component, DesignModel, Pin
+    from boardwise.rules.params import ValueMpnMatch
+
+    def decision(mpn: str) -> tuple[str, str]:
+        model = DesignModel()
+        model.components["EC1"] = Component(
+            uid="ec1", designator="EC1", value="1uF", mpn=mpn,
+            pins=[Pin("1", "A", "SIG")],
+        )
+        rule = ValueMpnMatch()
+        findings = rule.check(model)
+        outcomes = {o.state: o for o in rule.outcomes(model)}
+        return (
+            findings[0].severity if findings else "-",
+            outcomes["UNKNOWN"].message if "UNKNOWN" in outcomes else "",
+        )
+
+    severity, message = decision(RETIRED_MPN)
+    assert severity == "-", "no warning: an unanchored reading may not accuse"
+    assert "字符串解码无锚点，低置信" in message
+    assert "107" in message, "the row still says what it read, it just does not accuse"
+    assert decision(MPN)[0] == "WARN", "the anchored spelling of the same value warns"

@@ -19,8 +19,10 @@ from boardwise.rules.params import (
 )
 from boardwise.rules.values import (
     decode_eia_3digit,
+    mpn_resistance_candidates,
     mpn_resistance_readings,
     mpn_value_code,
+    mpn_value_code_anchor,
     parse_capacitance_farads,
 )
 
@@ -254,7 +256,11 @@ def test_the_mid_letter_resistance_notation_decodes():
     assert values("1M0") == [1000000.0]
     assert values("200K") == [200000.0]
     assert values("4R70") == [4.7]
-    assert values("R47") == [0.47]      # no mantissa: the letter starts the value
+    assert values("R47") == []
+    # 071 §4: a letter with no digit run in front of it states no value at all
+    # (`R47` is a series' own numbering), so this reading is gone. The board-side
+    # spelling ``R47`` = 0.47 Ω is read by `parse_resistance_ohms`'s board
+    # grammar, which is a different question from "what does this MPN say".
     assert values("2R2") == [2.2]
     assert 47400.0 in values("47K4")    # two readings; see the case below
     # The vendor-prefix case, verbatim: Yageo's `-07` is a coding, and by shape it
@@ -423,19 +429,23 @@ def test_the_e96_four_figure_code_is_read():
     def values(mpn: str) -> list[float]:
         return [value for value, _notation in mpn_resistance_readings(mpn)]
 
+    # 071 §4: the mid-letter `R03` reading is gone (a series-name letter with no
+    # mantissa), so the E-96 code is the token's only reading -- which is exactly
+    # what the board's 5 kΩ is compared against.
     assert mpn_resistance_readings("AR03BTCX5001") == [
-        (0.03, "R03"),
         (5000.0, "5001 (E-96)"),
     ]
     # A group that completes a size is a size: 1206 / 2512 would read as 120 MΩ
-    # / 251 GΩ without the guard.
-    assert values("AR03BTCX1206") == [0.03]
-    assert values("AR03BTCX2512") == [0.03]
+    # / 251 GΩ without the guard. Since 071 §4 the `R03` reading is gone as well,
+    # so the witness is "no reading at all" -- and it still fails if the guard
+    # goes (the group would come back as 1.2e8 / 2.51e11).
+    assert values("AR03BTCX1206") == []
+    assert values("AR03BTCX2512") == []
     # A leading zero is not a significant figure.
-    assert values("AR03BTCX0500") == [0.03]
+    assert values("AR03BTCX0500") == []
     # The group has to be a whole run at the token's end: `...05001`'s tail is
     # not a code of its own (the lookbehind), and a longer run is not read.
-    assert values("AR03BTCX05001") == [0.03]
+    assert values("AR03BTCX05001") == []
     # A single tolerance letter after the figures is part of the shape.
     assert (5000.0, "5001 (E-96)") in mpn_resistance_readings("AR03BTCX5001F")
 
@@ -530,9 +540,11 @@ def test_the_shunt_field_between_a_tolerance_letter_and_r():
     ]
     # The EIA reader must not mine the `400` out of that field either.
     assert mpn_value_code("FRL1210FR400TS") is None
-    # Neighbours, unchanged byte for byte.
+    # Neighbours, unchanged except where 071 §4 removed a reading of its own:
+    # `AR03BTCX5001`'s `R03` = 0.03 Ω was a series name, not a value, so its only
+    # reading now is the E-96 one.
     assert mpn_resistance_readings("AR03BTCX5001") == [
-        (0.03, "R03"), (5000.0, "5001 (E-96)"),
+        (5000.0, "5001 (E-96)"),
     ]
     assert mpn_resistance_readings("RC0603FR-074K7L") == [
         (4700.0, "4K7"), (74700.0, "74K7"),
@@ -679,7 +691,14 @@ def test_decap_the_v3_record_is_checked_when_5v_mode_is_active():
 
 def test_param4_a_contradiction_past_the_tolerance_is_the_violation():
     """4.7k against a 470-ohm MPN is 10x: past the R tolerance (2026-09-21),
-    so it stays the WARN it always was -- now with the amplitude quoted."""
+    so it stays the WARN it always was -- now with the amplitude and the anchor
+    quoted.
+
+    The anchor is what 071 §1 C added to this row: ``FRC0805J471 TS`` states its
+    size (``0805``) in the same token, so the three digits are a code field and
+    the reading may accuse the BOM line. Without it the same ratio would be
+    UNKNOWN -- the amplitude and the ruling are quoted either way, which is what
+    keeps both rows auditable rather than silent."""
     lib = _library(_ldo_entry(), _uart_entry())
     model = DesignModel()
     model.components["U3"] = Component(
@@ -687,11 +706,18 @@ def test_param4_a_contradiction_past_the_tolerance_is_the_violation():
         mpn="FRC0805J471 TS", lcsc_part="C2907329",
         pins=[Pin("1", "A", "VCC")],
     )
-    findings = ValueMpnMatch(library=lib).check(model)
-    assert len(findings) == 1 and findings[0].severity == "WARN"
-    assert "470" in findings[0].message and "4700" in findings[0].message
-    assert "10.00x apart" in findings[0].message
-    assert "3x tolerance" in findings[0].message
+    rule = ValueMpnMatch(library=lib)
+    (finding,) = rule.check(model)
+    assert finding.severity == "WARN"
+    assert finding.target is not None and finding.target.component_ref == "U3"
+    states = _states(rule, model)
+    assert states["UNKNOWN"] == []
+    (violation,) = states["VIOLATION"]
+    assert violation.subject == "U3"
+    assert "470" in violation.message and "4700" in violation.message
+    assert "10.00x apart" in violation.message
+    assert "3x tolerance" in violation.message
+    assert "锚点：值码带封装语境" in violation.message
 
 
 def test_param4_a_contradiction_below_the_tolerance_is_ok_with_its_amplitude():
@@ -738,7 +764,10 @@ def test_param4_the_amplitude_tolerances_are_the_oracles_ruling():
 
 def test_param4_the_tolerance_is_per_kind_and_the_boundary_is_inclusive():
     """A capacitor at an amplitude no resistor could reach: 10x and 22x are
-    OK (the graduation board's five), and the ratio is at-or-above -> keep.
+    OK (the graduation board's five), and 25x -- at the tolerance -- is the
+    boundary. 071 §1 moved that row's *state* (VIOLATION -> UNKNOWN) and left
+    the arithmetic alone, which is what this test pins: the three OK rows keep
+    their amplitudes and so does the withheld one.
 
     The two kinds are read off the shelf category first, then the value's
     unit, which is what lets a 1k-ohm part under a U designator be judged at
@@ -769,8 +798,9 @@ def test_param4_the_tolerance_is_per_kind_and_the_boundary_is_inclusive():
     assert "10.00x" in ok["C28"] and "25x tolerance" in ok["C28"]
     assert "10.00x" in ok["C29"]
     assert "22.00x" in ok["C36"]
-    assert [o.subject for o in states["VIOLATION"]] == ["C37"]
-    assert "25.00x apart" in states["VIOLATION"][0].message
+    assert states["VIOLATION"] == []
+    (unknown,) = [o for o in states["UNKNOWN"] if o.subject == "C37"]
+    assert "25.00x apart" in unknown.message
 
 
 def test_param4_a_mid_letter_mpn_matches_the_board_value():
@@ -802,7 +832,12 @@ def test_param4_a_mid_letter_mpn_that_really_disagrees_is_still_a_violation():
     silence. The comparison is made against the **closest** of the MPN's readings
     — the most favourable one, which is what keeps the amplitude doctrine's
     "don't kill it dead" behaviour (2026-09-21) intact — so 1 MΩ against a part
-    whose readings are 4.7 kΩ / 74.7 kΩ is a WARN quoting the closer of the two.
+    whose readings are 4.7 kΩ / 74.7 kΩ is a WARN quoting the closer of the two
+    and naming every reading it could have been.
+
+    The anchor is why this row may speak (071 §1 C): ``074K7``'s longest reading
+    is the notation as written (the shorter ``4K7`` is the vendor-prefix guess),
+    so the reading the comparison lands on is a code field.
     """
     lib = _library(_ldo_entry(), _uart_entry())
     model = DesignModel()
@@ -813,6 +848,7 @@ def test_param4_a_mid_letter_mpn_that_really_disagrees_is_still_a_violation():
     (violation,) = states["VIOLATION"]
     assert violation.subject == "R27"
     assert "13.39x apart" in violation.message
+    assert "锚点：中缀正规形" in violation.message
     assert any("74K7" in line and "4K7" in line for line in violation.evidence), (
         "the violation quotes all the readings it could have been"
     )
@@ -836,10 +872,12 @@ def test_param4_a_big_enough_gap_against_an_ambiguous_mpn_is_still_waived():
     assert any("74K7" in line for line in ok.evidence)
 
 
-def test_param4_a_resistor_at_the_r_tolerance_is_not_waived():
-    """3x exactly is the violation side ("ratio >= threshold"), and the same
-    ratio is a long way under the capacitor tolerance -- the boundary test
-    that keeps the two constants from being swapped."""
+def test_param4_the_two_tolerances_are_not_swapped_at_their_boundaries():
+    """3x exactly lands on the violation side ("ratio >= threshold"), and the same
+    ratio is a long way under the capacitor tolerance -- the boundary test that
+    keeps the two constants from being swapped. 071 §1 C left both arithmetic
+    paths exactly where they were and split the two rows by *anchor* instead
+    (see the assertions below)."""
     lib = _library(_ldo_entry(), _uart_entry())
     model = DesignModel()
     model.components["R9"] = Component(
@@ -852,17 +890,24 @@ def test_param4_a_resistor_at_the_r_tolerance_is_not_waived():
         uid="c10", designator="C10", value="2.49uF", mpn="CL10B104KB8NNNC",
         pins=[Pin("1", "A", "VCC")])  # 24.9x -- just under, still waived
     states = _states(ValueMpnMatch(library=lib), model)
+    # Two rows at their tolerance boundaries, and 071 §1 C splits them by anchor
+    # rather than by kind: `FRC0805J102 TS` states its size (0805 -> ③) and warns,
+    # while `CL10B104KB8NNNC` states no size at all -- its `104` is three digits
+    # in a string, so 25x is withheld. The arithmetic is identical in both.
     violations = {o.subject: o.message for o in states["VIOLATION"]}
-    assert sorted(violations) == ["C9", "R9"]
+    assert sorted(violations) == ["R9"]
     assert "3.00x apart" in violations["R9"]
-    assert "25.00x apart" in violations["C9"]
+    withheld = {o.subject: o.message for o in states["UNKNOWN"]}
+    assert sorted(withheld) == ["C9"]
+    assert "25.00x apart" in withheld["C9"]
     assert any(o.subject == "C10" for o in states["OK"])
 
 
 def test_param4_a_zero_side_leaves_the_ratio_undefined_and_stays_a_violation():
     """``min <= 0``: 0/0 and x/0 are not amplitudes. A 0-ohm value against a
     470-ohm MPN still contradicts, and the message says why it was not
-    waived instead of inventing a ratio."""
+    waived instead of inventing a ratio (071 §1 C: the reading is anchored, so
+    the row may say so out loud)."""
     lib = _library(_ldo_entry(), _uart_entry())
     model = DesignModel()
     model.components["R0"] = Component(
@@ -900,6 +945,9 @@ def test_param4_the_a2a_exceptions_become_unknown_not_contradictions():
     # "judged" means graded by amplitude, so the witness has to be one that
     # is actually past the tolerance: U10 as it stands on the real board
     # (1k vs 471 = 2.13x) is OK now, while 10k against the same MPN is not.
+    # 071 §1 C keeps that row a WARN (the MPN states its size, `0805`) while the
+    # three refused tokens above are UNKNOWN, so the two families meet here and
+    # are told apart by their own messages.
     model.components["U10"] = Component(
         uid="u10", designator="U10", value="1kΩ", mpn="FRC0805J471 TS",
         pins=[Pin("1", "A", "VCC")])
@@ -910,8 +958,11 @@ def test_param4_the_a2a_exceptions_become_unknown_not_contradictions():
     assert [o.subject for o in states["VIOLATION"]] == ["U11"]
     unknown = {o.subject for o in states["UNKNOWN"]}
     assert {"R43", "C115", "C116"} <= unknown
+    assert "U11" not in unknown
     assert "U10" not in unknown, "a decoded code is judged, never refused"
     assert any(o.subject == "U10" for o in states["OK"])
+    refused = next(o for o in states["UNKNOWN"] if o.subject == "R43")
+    assert "contains no decodable EIA value code" in refused.message
 
 
 def test_param4_matching_values_are_ok_and_undecodable_are_unknown():
@@ -1448,3 +1499,318 @@ def test_decoupling_per_ic_is_retired_from_the_builtin_rules():
     # Retirement is not deletion: the rule is still importable, still its own
     # id, still runnable on its own (its own tests stay in test_rules.py).
     assert DecouplingPerIC().id == "decoupling-per-ic"
+
+
+# ---------------------------------------------- 071: the MPN bleed-stop batch
+
+
+def _one_part(kind: str, value: str, mpn: str):
+    """One component on its own board, with the shelf's kind left to the value."""
+    model = DesignModel()
+    designator = "R1" if kind == "resistor" else "C1"
+    model.components[designator] = Component(
+        uid=designator.lower(), designator=designator, value=value, mpn=mpn,
+        pins=[Pin("1", "A", "VCC")],
+    )
+    return model, designator
+
+
+def _state_of(kind: str, value: str, mpn: str) -> tuple[str, list[object]]:
+    model, designator = _one_part(kind, value, mpn)
+    rule = ValueMpnMatch(library=_library(_ldo_entry(), _uart_entry()))
+    states = _states(rule, model)
+    for state, rows in states.items():
+        if any(o.subject == designator for o in rows):
+            return state, rows
+    return "<no row>", []
+
+
+def test_071_the_metric_size_code_is_not_a_value_code():
+    """Issue #22: ``GRM188R71C104KA01D`` is a 100 nF capacitor whose ``188`` is
+    the metric size (1.6x0.8 mm), not a value.
+
+    Read as a value it put two candidates in the EIA reader's list, ambiguity
+    turned the whole token into None, and the rule reported "contains no
+    decodable value code" for a part the board declares correctly -- a *silent
+    miss* dressed up as honesty. The size code is grammar (071 §3①): the metric
+    sizes are a finite industry list, and a token states its size once, at the
+    front.
+    """
+    assert mpn_value_code("GRM188R71C104KA01D") == "104"
+    # The value code sharing a metric size's spelling is not touched as long as
+    # it is not the token's *leading* field: `CL10A105KA8NNNC` is 1 uF and 105
+    # is also the 0402 metric size.
+    assert mpn_value_code("CL10A105KA8NNNC") == "105"
+    assert mpn_value_code("CL10B105KA8NNNC") == "105"
+    assert mpn_value_code("GRM1885C1H122JA01D") == "122"
+    assert mpn_value_code("CC0603KRX7R9BB104") == "104"
+    # At the rule level the miss becomes a verdict it can state: 100 nF declared
+    # and 104 in the MPN agree.
+    state, rows = _state_of("capacitor", "100nF", "GRM188R71C104KA01D")
+    assert state == "OK", rows
+    assert "0.0000001" in rows[0].message or "1e-07" in rows[0].message
+    # ...and a part that really disagrees is an honest WARN: the token states its
+    # size (`188` -> anchor ③), 100 uF against the code's 100 nF is 1000x, far
+    # past the 25x capacitor tolerance.
+    state, rows = _state_of("capacitor", "100uF", "GRM188R71C104KA01D")
+    assert state == "VIOLATION", rows
+    assert "锚点：值码带封装语境" in rows[0].message
+
+
+def test_071_a_board_value_in_the_mid_letter_notation_is_read():
+    """Issue #23: ``4K7`` is 4.7 kΩ, and the board side could not read it.
+
+    The two parsers disagreed about one notation: the MPN decoder knew
+    ``4K7``/``1K0``/``2M2``/``100R`` (task 043) and the board parser did not, so
+    a rule handed a value it could not read skipped the part outright -- no row
+    at all, which is worse than a UNKNOWN. 071 §2 merged them into one
+    implementation in `rules/values.py`.
+    """
+    from boardwise.rules.connectivity import parse_resistance_ohms
+
+    for text, ohms in (("4K7", 4700.0), ("1K0", 1000.0), ("2M2", 2.2e6), ("100R", 100.0)):
+        assert parse_resistance_ohms(text) == pytest.approx(ohms)
+    assert mpn_resistance_readings("4K7") == [(4700.0, "4K7")]
+    state, rows = _state_of("resistor", "4K7", "RC0603FR-074K7L")
+    assert state == "OK", rows
+    # The reverse example the task book named: `0R5` was already the board
+    # grammar's 0.5 Ω (R as the decimal point) and keeps it -- that branch runs
+    # first, which is also what keeps `4.7kΩ` at 4700 instead of the mid-letter
+    # reader's 7000.
+    assert parse_resistance_ohms("0R5") == 0.5
+    assert parse_resistance_ohms("4.7kΩ") == 4700.0
+    assert mpn_resistance_readings("0R5") == []
+
+
+def test_071_a_package_size_prefix_is_not_a_mantissa():
+    """Issue #24: the digit run in front of a letter may head with the size.
+
+    ``CRCW0603``10K0FKEA is a 10.0 kΩ part, and read whole its run spells
+    ``060310``: as a mantissa that is ``310K0`` = 310 kΩ, a reading that crosses
+    the size field into the value field. A board declaring 310K **passed** on it
+    -- a false pass built on a reading that is not a code field. The size comes
+    off first (071 §3②), the true reading survives, and a board that really
+    disagrees now gets an honest WARN (071 §1 C: the canonical mid-letter form is
+    an anchor).
+    """
+    assert mpn_resistance_readings("CRCW060310K0FKEA") == [(10000.0, "10K0")]
+    state, rows = _state_of("resistor", "310kΩ", "CRCW060310K0FKEA")
+    assert state == "VIOLATION", rows
+    assert "1e+04" in rows[0].message, "the row quotes the true reading, not 310 kΩ"
+    assert "锚点：中缀正规形" in rows[0].message
+    state, _rows = _state_of("resistor", "10kΩ", "CRCW060310K0FKEA")
+    assert state == "OK"
+    # The second witness of the same issue, and of anchor ①: KOA's E-96 field
+    # with its tolerance letter.
+    assert mpn_resistance_readings("RK73H1JTTD1002F") == [(10000.0, "1002 (E-96)")]
+    state, rows = _state_of("resistor", "47kΩ", "RK73H1JTTD1002F")
+    assert state == "VIOLATION" and "锚点：值码带相邻容差字母" in rows[0].message
+
+
+def test_071_a_series_name_letter_states_no_value():
+    """Issue #26: a letter with no digit run in front of it is a series name.
+
+    ``WR06X1002FTL``'s ``R06`` was read as 0.06 Ω and ``GRM188R71C104KA01D``'s
+    ``R71`` as 0.71 Ω -- in both cases the series' own letter followed by the
+    series' numbering, and the digits that follow belong to another field
+    (``1002`` is an E-96 code no reader owns yet, ``104`` is the value code).
+    A letter right after a letter is the same case, because the digit run before
+    the letter is then empty by construction (071 §4).
+    """
+    assert mpn_resistance_readings("WR06X1002FTL") == []
+    assert mpn_resistance_readings("AR03BTCX5001") == [(5000.0, "5001 (E-96)")]
+    state, rows = _state_of("resistor", "1kΩ", "WR06X1002FTL")
+    assert state == "UNKNOWN", rows
+    # The old reading made this a contradiction (0.06 Ω against 1 kΩ is 16666x),
+    # i.e. a WARN on a part whose value the decoder simply cannot read.
+    assert "0.06" not in rows[0].message
+
+
+def _electrolytic_witnesses() -> list[tuple[str, str, str]]:
+    """The five electrolytics issue #25 names, the capacitance each states, and shape.
+
+    Four manufacturers and three voltage positions, which is the issue's own count
+    and the reason the gate had to be a class rather than a shape:
+
+    * Nichicon ``UVR1H101MPD`` and Rubycon ``16ZLH470MEFC`` -- the trade's voltage
+      code (``1H`` = 50 V, ``ZLH``) in front of the capacitance;
+    * Panasonic ``EEU-FC1H101`` and Chemi-con ``50YXF100MEFC`` -- a series field
+      with the voltage code inside it;
+    * ``NRWA221M35V`` -- the printed voltage as a suffix.
+
+    None of them states a package size, so none of the digits is a code field
+    (071 §1 C): that is exactly what ``ANCHOR_PACKAGE_CONTEXT`` asks.
+    """
+    return [
+        ("UVR1H101MPD", "100uF", "Nichicon VR, voltage code 1H in front"),
+        ("50YXF100MEFC", "100uF", "Chemi-con YXF, voltage code inside the series"),
+        ("NRWA221M35V", "220uF", "printed voltage as a suffix"),
+        ("16ZLH470MEFC", "470uF", "Rubycon ZLH, voltage code in the series"),
+        ("EEU-FC1H101", "100uF", "Panasonic FC, voltage code in the series"),
+    ]
+
+
+def test_071_the_electrolytic_family_is_unknown_never_a_warn():
+    """Issue #25's class, at the rule level: five electrolytic parts, no WARN.
+
+    Every witness here is one the decoder **does read** -- its digits land in a
+    three-figure group, so ``mpn_value_code`` returns a code, the rule compares a
+    100 uF board against "10 pF" and would call it a BOM contradiction. That is
+    the shape of every false WARN this batch exists for, and 071 §1 C closes it as
+    a class: the reading carries no syntactic anchor, so it may not accuse,
+    whatever the next voltage position turns out to be.
+    """
+    for mpn, value, shape in _electrolytic_witnesses():
+        code, anchor = mpn_value_code_anchor(mpn)
+        assert code is not None, (
+            f"{mpn} ({shape}): the witness must be one the decoder *reads*, "
+            "otherwise it was already UNKNOWN before 071"
+        )
+        assert anchor == "", f"{mpn} ({shape}): no package size, so no anchor"
+        state, rows = _state_of("capacitor", value, mpn)
+        assert state == "UNKNOWN", f"{mpn} ({shape}): {state} {(rows[0].message if rows else '')}"
+        assert "字符串解码无锚点，低置信" in rows[0].message
+    # The refused family stays refused (task 015 / #18): the gate does not have to
+    # do the work the decoder's own guards already do.
+    for mpn, value in (
+        ("ERR1VM101E07OT", "100uF"),
+        ("PA50V330M10x15", "330uF"),
+        ("SPZ1HM100E07O00RAXXX", "10uF"),
+    ):
+        state, rows = _state_of("capacitor", value, mpn)
+        assert state == "UNKNOWN", mpn
+        assert "contains no decodable EIA value code" in rows[0].message
+
+
+def test_071_the_three_anchors_are_what_lets_a_reading_accuse():
+    """071 §1 C: the three anchors, the unanchored case, and the anchor's labels.
+
+    The ruling's own examples, at both layers -- the readings layer that decides
+    which anchor a reading carries, and the rule layer where the anchor is the
+    difference between a WARN and a UNKNOWN. The unanchored half is the point of
+    the option: those readings are not refused (they still *match* a board that
+    agrees with them, and they still waive an amplitude below the tolerance), they
+    are simply not allowed to be the only witness against a BOM line.
+    """
+    from boardwise.rules.values import (
+        ANCHOR_E96_LETTER,
+        ANCHOR_MID_LETTER,
+        ANCHOR_PACKAGE_CONTEXT,
+        mpn_resistance_candidates,
+        mpn_value_code_anchor,
+    )
+
+    # ① a four-figure code with a letter at the digits: E-96 with its tolerance
+    # letter, 厚声's ordering field with its T tail, the shunt field.
+    assert mpn_resistance_candidates("RK73H1JTTD1002F") == [
+        (10000.0, "1002 (E-96)", ANCHOR_E96_LETTER)
+    ]
+    assert mpn_resistance_candidates("0603WAF1002T5E") == [
+        (10000.0, "1002 (numeric-exponent field)", ANCHOR_E96_LETTER)
+    ]
+    assert mpn_resistance_candidates("FRL1210FR400TS") == [
+        (0.4, "FR400 (shunt field)", ANCHOR_E96_LETTER)
+    ]
+    # ...and without the adjacent letter there is no anchor: `5001` at the end of
+    # a token is four digits, not a statement.
+    assert mpn_resistance_candidates("AR03BTCX5001") == [
+        (5000.0, "5001 (E-96)", "")
+    ]
+    # ② the canonical mid-letter form: the whole run, after the size comes off.
+    assert mpn_resistance_candidates("CRCW060310K0FKEA") == [
+        (10000.0, "10K0", ANCHOR_MID_LETTER)
+    ]
+    # The shorter reading of `074K7` is the vendor-prefix guess, so it carries
+    # none -- at most one of the two can be right.
+    assert mpn_resistance_candidates("RC0603FR-074K7L") == [
+        (4700.0, "4K7", ""),
+        (74700.0, "74K7", ANCHOR_MID_LETTER),
+    ]
+    # ③ an EIA three-digit code with a package size in the same token.
+    assert mpn_value_code_anchor("CC0603KRX7R9BB104") == ("104", ANCHOR_PACKAGE_CONTEXT)
+    assert mpn_value_code_anchor("GRM188R71C104KA01D") == ("104", ANCHOR_PACKAGE_CONTEXT)
+    # ...and three digits with no size spelling anywhere in the token carry none
+    # (the #25 shape, and the value code that shares a metric size's spelling).
+    assert mpn_value_code_anchor("CL10B104KB8NNNC") == ("104", "")
+    assert mpn_value_code_anchor("UVR1H101MPD") == ("101", "")
+
+    # At the rule layer, one witness per anchor and two without: the same shape of
+    # disagreement, three WARNs and two withheld rows.
+    for kind, value, mpn, expected in (
+        ("resistor", "310kΩ", "CRCW060310K0FKEA", "VIOLATION"),
+        ("resistor", "47kΩ", "RK73H1JTTD1002F", "VIOLATION"),
+        ("resistor", "3300", "0603WAF1002T5E", "VIOLATION"),
+        ("resistor", "330", "MF1/4W-1K±1%-ST52", "VIOLATION"),
+        ("capacitor", "100uF", "GRM188R71C104KA01D", "VIOLATION"),
+        # 100 uF against the 104 code's 100 nF is 1000x, past the 25x capacitor
+        # tolerance -- and it is withheld, because `CL10B104KB8NNNC` states no
+        # package size anywhere (as a resistor, `104` = 100 kΩ would be 100x).
+        ("capacitor", "100uF", "CL10B104KB8NNNC", "UNKNOWN"),
+        ("capacitor", "100uF", "UVR1H101MPD", "UNKNOWN"),
+    ):
+        state, rows = _state_of(kind, value, mpn)
+        assert state == expected, f"{mpn}: {state} {rows[0].message[:120] if rows else ''}"
+
+
+def _corpus_tokens() -> list[str]:
+    """The repository's own part-number tokens (the #18 batch's notch).
+
+    A whitespace-free run of at least four characters carrying at least three
+    consecutive digits, harvested from the string literals of `tests/` and
+    `reviewsets/` -- deliberately dumber than the decoder, so a token the decoder
+    refuses is still *in* the corpus.
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    token_re = re.compile(r"[A-Za-z0-9][A-Za-z0-9._\-\u00b5\u03bc/]{3,}")
+    digit_re = re.compile(r"\d{3}")
+    tokens: set[str] = set()
+    for folder in ("tests", "reviewsets"):
+        for path in (root / folder).rglob("*"):
+            if not path.is_file() or path.suffix.lower() not in {".py", ".json", ".md"}:
+                continue
+            if "__pycache__" in path.parts:
+                continue
+            for match in token_re.finditer(path.read_text(encoding="utf-8", errors="replace")):
+                token = match.group(0).strip("._-")
+                if len(token) >= 4 and digit_re.search(token):
+                    tokens.add(token)
+    return sorted(tokens)
+
+
+def test_071_every_accusation_over_this_repos_own_corpus_names_its_anchor():
+    """071 §1 C as an invariant, over every part number in this repository.
+
+    The anchor gate is not a shape whitelist -- "which tokens are refused" is the
+    enumeration that failed -- so what a corpus can pin is the two-sided property
+    the gate actually is: **every** accusation the rule makes over the repo's own
+    tokens names the anchor that let it accuse, and the corpus **still produces**
+    accusations. A rule that quietly went back to refusing everything would fail
+    the second half; one that went back to accusing on any string would fail the
+    first. Each token is asked as a resistor declared at 1 kΩ and as a capacitor
+    declared at 100 nF, so a token that happens to match one form cannot hide an
+    accusation in the other.
+
+    This is also the gate's mutation witness: take the anchor test out of the
+    rule and the corpus fills with accusations that cannot name an anchor.
+    """
+    tokens = _corpus_tokens()
+    assert len(tokens) > 1000, f"the corpus shrank to {len(tokens)} tokens"
+    rule = ValueMpnMatch()
+    accused: list[tuple[str, str]] = []
+    for token in tokens:
+        for kind, value in (("resistor", "1kΩ"), ("capacitor", "100nF")):
+            model, _designator = _one_part(kind, value, token)
+            findings = rule.check(model)
+            if findings:
+                accused.append((f"{kind}:{token}", findings[0].message))
+    unnamed = [item for item in accused if "锚点：" not in item[1]]
+    assert unnamed == [], (
+        f"{len(unnamed)} accusation(s) that cannot name an anchor: {unnamed[:5]}"
+    )
+    assert len(accused) >= 5, (
+        f"only {len(accused)} accusation(s) in the whole corpus: the gate may have "
+        "gone back to refusing everything"
+    )
