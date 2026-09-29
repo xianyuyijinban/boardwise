@@ -1045,8 +1045,8 @@ def test_findings_are_filled_and_have_the_same_shape_review_json_uses(
 
     real_run_review = cli_module.run_review
 
-    def spy(model):
-        findings = real_run_review(model)
+    def spy(model, **kwargs):
+        findings = real_run_review(model, **kwargs)
         captured["findings"] = findings
         return findings
 
@@ -1067,15 +1067,21 @@ def test_an_error_finding_alone_is_exit_one(fake_bridge, tmp_path, monkeypatch):
     """No shipped fixture yields an ERROR-severity finding (the rules are tuned
     to WARN — measured on ch340_golden / llc_board / the injected boards), so the
     finding is injected here to exercise *the integration*: findings → summary →
-    exit code."""
+    exit code.
+
+    The stub takes ``**kwargs`` because `checkup` now hands the rule runner a
+    collector for broken rules (#30 fork 2, `run_review(model, rules_errored=…)`);
+    a double has to carry the real signature.
+    """
     import boardwise.cli as cli_module
     from boardwise.rules.base import Finding
 
     _FakeBridgeClient.answers = _live_answers()
     monkeypatch.setattr(
         cli_module, "run_review",
-        lambda model: [Finding(rule_id="param-value-mpn-match", severity="ERROR",
-                               level="L2", message="U3 value vs MPN", evidence=["U3 pin1 @ VCC"])],
+        lambda model, **kwargs: [Finding(rule_id="param-value-mpn-match", severity="ERROR",
+                                        level="L2", message="U3 value vs MPN",
+                                        evidence=["U3 pin1 @ VCC"])],
     )
     args = _checkup_args(out=str(tmp_path / "out"))
 

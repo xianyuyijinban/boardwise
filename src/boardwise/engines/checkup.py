@@ -1697,12 +1697,14 @@ def render_report_markdown(report: dict) -> str:
         scope = completion.get("scope") or {}
         architecture_slots = completion.get("architectureSlots") or {}
         versions = completion.get("sourceVersions") or {}
+        coverage = completion.get("coverage") or {}
         lines.append("## 完成状态（completion）")
         lines.append("")
         lines.append(
             f"**verdict：`{completion.get('verdict')}`**"
             + ("（" + "；".join(completion.get("verdictWhy") or []) + "）"
-               if completion.get("verdictWhy") else "（无 ERROR、无未审、无 stale、无待分诊）")
+               if completion.get("verdictWhy")
+               else "（无 ERROR、无未审、无 stale、无待分诊、无覆盖缺口）")
         )
         lines.append("")
         lines.append(
@@ -1716,6 +1718,23 @@ def render_report_markdown(report: dict) -> str:
             f"{architecture_slots.get('stale', 0)}（槽位 {architecture_slots.get('total', 0)}，"
             f"已填 {architecture_slots.get('filled', 0)}，TODO {completion.get('openTodos', 0)}）"
         )
+        # #30's gate, rendered from the section's own numbers — `render only what
+        # the JSON says`, and absent (not "all clean") when the section is older
+        # than the gate and has no `coverage` key at all.
+        if coverage:
+            lines.append(
+                "- 覆盖：解析"
+                + ("不完整" if coverage.get("parseIncomplete") else "完整")
+                + ("（空模型：归档读不出内容）" if coverage.get("modelEmpty") else "")
+                + f" · 少页 {coverage.get('pagesDropped', 0)}"
+                + f" · 规则 withheld 结论 {coverage.get('rulesRefused', 0)}"
+                + f" · 解析丢弃记录 {coverage.get('recordsDropped', 0)}"
+                + f" · 规则报错 {len(coverage.get('rulesErrored') or [])}"
+                + (
+                    "（" + "、".join(coverage.get("rulesErrored") or []) + "）"
+                    if coverage.get("rulesErrored") else ""
+                )
+            )
         lines.append(
             f"- 源版本：ruleset `{versions.get('ruleset', '?')}` · rulebody "
             f"`{versions.get('rulebody') or 'unavailable (frozen, no source)'}`"

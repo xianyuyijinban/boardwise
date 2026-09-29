@@ -115,6 +115,32 @@ EMPTY_PCB_VIEW_NOTE = (
     "re-run with --view schematic"
 )
 
+#: Printed when an input reads as **nothing at all** — 0 components, 0 nets (and,
+#: for a board backup, 0 pads/tracks/vias): issue #29's shape. A truncated or
+#: damaged archive is the likely cause (the reader opens fine; its record stream
+#: stops in the middle), and the stance is `空 ≠ 干净` — a legitimate empty project
+#: gets this note too, deliberately.
+#:
+#: Fires on :func:`_model_read_nothing`, which is the same predicate
+#: :func:`_pcb_view_read_nothing` narrows (task 019's note is the more specific
+#: sentence for "you asked for the pcb view and this export has no board", so it
+#: wins where both could apply). Where `review` says this on the console,
+#: `checkup` gates it: `completion.coverage.parseIncomplete` → `verdict:
+#: incomplete` with the same sentence in `verdictWhy`.
+EMPTY_MODEL_NOTE = (
+    "note: read nothing from this file — 0 components and 0 nets; a truncated or "
+    "damaged archive reads this way, and an empty project is not a clean board "
+    "either (checkup gates it as verdict: incomplete)"
+)
+
+#: The same statement in the `--md` report's Chinese summary (issue #29). The
+#: English console note and this sentence are one fact in two languages, like
+#: `EMPTY_PCB_VIEW_NOTE` / the empty-view hint before them.
+EMPTY_MODEL_HINT = (
+    "提示：这个输入读出来是空的（0 器件 0 网络）——归档可能被截断或损坏，"
+    "合法空工程同样不是「干净板」：`boardwise checkup` 会把它记成 `verdict: incomplete`。"
+)
+
 #: The tail every parse-drop note shares (task 020 §WI-1). The numbers are
 #: written by :func:`_parse_drop_note`; the *consequence* is one sentence in
 #: one place, because "coverage is incomplete" is the whole reason the note
@@ -2230,6 +2256,7 @@ def _chinese_summary(
     designators: set[str],
     *,
     empty_pcb_view: bool = False,
+    empty_model_hint: str = "",
     parse_drop_hint: str = "",
 ) -> str:
     """The Chinese summary section for a set of findings (task 018 §C.3).
@@ -2249,9 +2276,17 @@ def _chinese_summary(
     (``rules.i18n.parse_drop_hint`` builds it from the counters). Both hints can
     in principle be asked for at once, and they are two paragraphs then — each
     stays its own paragraph, which is what makes them read.
+
+    ``empty_model_hint`` (issue #29) says the same thing about a reading that came
+    out empty: "共 0 条发现" over a 0-component model is the sentence most likely
+    to be read as a pass, and this is the paragraph that stops it. The caller
+    passes the wording only when :func:`_model_read_nothing` says so, and it passes
+    it *instead of* ``EMPTY_PCB_VIEW_HINT`` where both could apply (a wrong view is
+    a finer diagnosis than a damaged file).
     """
     hints = [
         EMPTY_PCB_VIEW_HINT if empty_pcb_view else "",
+        empty_model_hint,
         parse_drop_hint,
     ]
     return summary_section(
@@ -2287,35 +2322,53 @@ def _with_chinese_summary(markdown: str, section: str) -> str:
     return "\n".join([*lines[:insert_at], *section.split("\n"), *lines[insert_at:]])
 
 
+def _model_read_nothing(model: object, board: object | None) -> bool:
+    """Did this reading come out **empty** — no parts, no nets, no copper?
+
+    The unified stance behind issue #29: 0 components and 0 nets is not "a clean
+    board", it is "nothing was read", and the likeliest cause for a file input is
+    a truncated or damaged archive (the ZIP opens fine; its record stream stops in
+    the middle, and the parser's correct tolerance turns that into an empty
+    model). A legitimate empty project is covered by the same sentence —
+    `空 ≠ 干净`, the cost xianyuyijinban accepted when he ruled on #29.
+
+    The copper clause is the one task 019 §1 measured: a board whose copper is
+    there but whose netlist is empty is **not** an empty read, and telling its
+    reader the file may be damaged would be a wrong hint — worse than silence.
+    ``board`` is ``None`` whenever the reading has no board geometry to show
+    (every schematic view, every ``.enet``), which is not evidence either way, so
+    it is only consulted when it is there.
+    """
+    components, nets = _model_component_counts(model)
+    if components or nets:
+        return False
+    return not (board is not None and (board.pads or board.tracks or board.vias))
+
+
 def _pcb_view_read_nothing(
     path: Path, view: str, model: object, board: object | None
 ) -> bool:
     """Was this a `.epro2` reviewed in the pcb view that read *nothing*?
 
-    All three of task 019 §1's conditions in one place, because the hint is
-    only allowed to fire on exactly this shape:
+    Task 019 §1's conditions, in one place, because the hint is only allowed to
+    fire on exactly this shape — and it is now the **narrower** of two readers of
+    one predicate (:func:`_model_read_nothing`, since #29):
 
     * the input is a project backup (an `.enet` netlist has no view to pick, so
       an empty one means an empty netlist, not a wrong view);
     * ``view`` is ``pcb`` — since 047 that means the reader asked for it by name
       (the file default is the schematic view), which is the case where the hint
       is worth printing: "you asked for the board, this export has no board";
-    * the model **and** the copper are empty: no components, no nets, no pads,
-      no tracks, no vias. A board with copper but no netlist is not an empty
-      read, and telling its reader to switch views would be a wrong hint —
-      worse than silence.
+    * the model **and** the copper are empty — see :func:`_model_read_nothing`.
+
+    Where both sentences could apply this one wins: a schematic-only export asked
+    for with `--view pcb` is a fine file and a wrong view, not a damaged archive.
 
     The wording is English or Chinese; the trigger is only ever this predicate.
     """
     if view != "pcb" or path.suffix.lower() != PROJECT_BACKUP_SUFFIX:
         return False
-    if model.components or model.nets:
-        return False
-    # A board whose copper is there but whose netlist is empty is *not* an empty
-    # read: pointing its reader at another view would send them somewhere worse.
-    if board is not None and (board.pads or board.tracks or board.vias):
-        return False
-    return True
+    return _model_read_nothing(model, board)
 
 
 def _model_designators(model: object) -> set[str]:
@@ -2488,12 +2541,19 @@ def _cmd_review(args: argparse.Namespace) -> int:
             print(f"boardwise: {path}: {exc}", file=sys.stderr)
             return 2
 
-    findings = run_review(model)
+    rules_errored: list[str] = []
+    findings = run_review(model, rules_errored=rules_errored)
     counts = severity_counts(findings)
     # Computed once, read twice: the console line and the Chinese summary line
     # are two renderings of the same fact, and a change to the conditions must
     # not be able to make them disagree (task 019 §1, §2).
     empty_pcb_view = path is not None and _pcb_view_read_nothing(path, view, model, board)
+    # Issue #29: 0 components and 0 nets is "nothing was read", not "a clean
+    # board". The pcb-view sentence above is the more specific one where it
+    # applies, so the two are exclusive rather than additive.
+    empty_model = (
+        not empty_pcb_view and path is not None and _model_read_nothing(model, board)
+    )
     # Same rule for the drop counters: one pair of numbers, rendered once in
     # English for the console and once in Chinese for the summary.
     drop_note = _parse_drop_note(
@@ -2543,6 +2603,7 @@ def _cmd_review(args: argparse.Namespace) -> int:
             counts,
             _model_designators(model),
             empty_pcb_view=empty_pcb_view,
+            empty_model_hint=EMPTY_MODEL_HINT if empty_model else "",
             parse_drop_hint=parse_drop_hint(
                 parse_stats.pins_dropped_no_number,
                 parse_stats.components_without_symbol,
@@ -2556,11 +2617,22 @@ def _cmd_review(args: argparse.Namespace) -> int:
 
     # Last lines of the console output, after the report paths: a note is the
     # one thing a reader has to act on, so it must not be buried between the
-    # census and a "written to" line. The two cannot fire together — the empty
-    # view is a pcb-view reading and the counters are a schematic-parse one —
-    # so neither has to concede being last.
+    # census and a "written to" line. The first two cannot fire together — the
+    # empty view is a pcb-view reading and the empty model is the unified
+    # predicate it narrows — and the counters are a schematic-parse fact, so
+    # neither has to concede being last.
+    if rules_errored:
+        # #30 fork 2: the run survives a broken rule, so saying *which* one is the
+        # only way a reader can tell a partial report from a complete one here.
+        print(
+            f"note: {len(rules_errored)} rule(s) raised and were skipped "
+            f"({', '.join(rules_errored)}) — their conclusions are missing from this "
+            "report; checkup records them as completion.coverage.rulesErrored"
+        )
     if empty_pcb_view:
         print(EMPTY_PCB_VIEW_NOTE)
+    elif empty_model:
+        print(EMPTY_MODEL_NOTE)
     if drop_note:
         print(drop_note)
 
@@ -2815,6 +2887,128 @@ def _write_design_intent(out_dir: Path, markdown: str) -> Path | None:
     return path
 
 
+def _clean_coverage() -> dict:
+    """The coverage section of a reading in which **nothing** was known to be missing.
+
+    The neutral value `_completion_body` falls back to when its caller has no
+    coverage to hand in (a unit test building a section from counts alone, a report
+    written before the gate existed). It is not a claim that the reading was
+    complete: the caller that knows is the one that computed this.
+    """
+    return {
+        "parseIncomplete": False,
+        "modelEmpty": False,
+        "pagesDropped": 0,
+        "rulesRefused": 0,
+        "recordsDropped": 0,
+        "rulesErrored": [],
+    }
+
+
+def _coverage_section(
+    *,
+    model: object,
+    board: object | None,
+    attempts: list[dict],
+    parse_stats: ParseStats,
+    rules_errored: list[str],
+) -> dict:
+    """The coverage gate's **facts**, read off the parse the report is about (#30).
+
+    The five fields the verdict criteria name, plus ``modelEmpty`` — the one piece
+    of that reading the five cannot express (the difference between "no input at
+    all" and "some coverage missing") — each one a way this run *failed to cover
+    the board* rather than a defect it found. That is the whole gap issue #30
+    measured: every gate `completion` had until now counted "known bad things", so
+    any path that made the review fail, stop early or look at less than the whole
+    board landed in `complete` whenever the residual bad news happened to be zero.
+
+    * ``parseIncomplete`` — the record stream did not read cleanly
+      (``ParseStats.malformed_records``: records the parser had to skip, which is
+      what a cut stream leaves behind — 0 on every intact fixture, measured), or
+      the reading came out empty (``modelEmpty``, the extreme form, issue #29);
+    * ``modelEmpty`` — 0 components and 0 nets (and 0 copper, for a backup). Its
+      own field because the verdict must tell "there was no input at all"
+      (``incomplete``) from "some part of the coverage is missing"
+      (``complete-with-open-items``);
+    * ``pagesDropped`` — per-page archives whose export or parse failed, from the
+      tier ladder's own record (``attempts[tier=per-page].pages[].ok``). Before
+      this, one failed page among nine read as a complete project;
+    * ``rulesRefused`` — conclusions this model actually **withheld** because its
+      net names are unproven (:func:`boardwise.engines.review.refused_conclusions`).
+      **Not** `source.unprovenNets.rulesRefused`, which is the length of the rule
+      registry ("how many rules are capable of refusing") — see that function;
+    * ``recordsDropped`` — `ParseStats`'s two drop counters, summed. The split
+      itself is in ``source.parseStats`` (the audit trail, added by this task).
+      These used to reach the console only, which left the CI path (`--file`)
+      unable to see them in the report at all;
+    * ``rulesErrored`` — ids of rules that raised while running (fork 2). The run
+      survives them now; this is how the report says so.
+    """
+    from .engines.review import refused_conclusions
+
+    model_empty = _model_read_nothing(model, board)
+    records_dropped = int(parse_stats.pins_dropped_no_number) + int(
+        parse_stats.components_without_symbol
+    )
+    return {
+        "parseIncomplete": bool(model_empty or parse_stats.malformed_records),
+        "modelEmpty": bool(model_empty),
+        "pagesDropped": sum(
+            1
+            for attempt in attempts
+            if attempt.get("tier") == "per-page"
+            for page in (attempt.get("pages") or [])
+            if not page.get("ok")
+        ),
+        "rulesRefused": int(refused_conclusions(model)),
+        "recordsDropped": records_dropped,
+        "rulesErrored": sorted(set(rules_errored)),
+    }
+
+
+def _coverage_reasons(coverage: dict) -> list[str]:
+    """`verdictWhy`'s coverage clauses, one per failed field, in field order.
+
+    Every reason says **what kind of coverage** is missing, because the reader's
+    next action differs: "the file may be truncated" (re-export it), "5 pages never
+    arrived" (re-run with the export permission), "7 conclusions were withheld"
+    (the tier cannot attribute a page to a board), "3 records were dropped" (the
+    report under-covers this board), "this rule crashed" (a boardwise bug).
+    """
+    reasons: list[str] = []
+    if coverage.get("modelEmpty"):
+        reasons.append(
+            "模型为空（0 器件 0 网络）：归档读不出内容/模型为空，可能被截断或损坏 —— "
+            "整次审查没有输入"
+        )
+    elif coverage.get("parseIncomplete"):
+        reasons.append(
+            "解析流中途结束（有无法解析的记录行）：审查覆盖不完整，文件可能被截断或损坏"
+        )
+    if coverage.get("pagesDropped"):
+        reasons.append(
+            f"{coverage['pagesDropped']} 个页的导出/解析失败（per-page 档）：这些页没有进模型"
+        )
+    if coverage.get("rulesRefused"):
+        reasons.append(
+            f"{coverage['rulesRefused']} 条规则结论被 withheld（网名未经证实，issue #19："
+            "agreement by name is not a verified connection）"
+        )
+    if coverage.get("recordsDropped"):
+        reasons.append(
+            f"解析丢弃 {coverage['recordsDropped']} 项记录（管脚无编号 / 器件无符号，"
+            "见 source.parseStats）：覆盖不完整，结果可能漏报"
+        )
+    errored = coverage.get("rulesErrored") or []
+    if errored:
+        reasons.append(
+            f"{len(errored)} 条规则执行出错（{'、'.join(errored)}）：它们的结论缺失，"
+            "报告照出但少了一部分"
+        )
+    return reasons
+
+
 def _completion_body(
     *,
     scope: dict,
@@ -2823,13 +3017,14 @@ def _completion_body(
     triage: list[dict],
     architecture: dict | None,
     needs_datasheet: list[dict] | None = None,
+    coverage: dict | None = None,
 ) -> dict:
     """`completion` from counts a caller already has — one shape, two callers.
 
     `_completion_section` (a live run) and `_completion_from_report` (re-gating an
     existing report after `boardwise need-datasheet`) both land here, so the
     verdict's rules exist once and a section written by either path says the same
-    thing. 053 §2.2's three states, and the conditions 058, #14 and #15 added:
+    thing. 053 §2.2's three states, and the conditions 058, #14, #15 and #30 added:
 
     * ``incomplete`` — the summary owes anything that means the review did not
       finish:
@@ -2842,17 +3037,26 @@ def _completion_body(
       pins/devices whose function is not established yet, **or** there is **no
       architecture skeleton** (the architecture walk is a mandatory step of the
       flow, so the run with the least information cannot carry the highest
-      confidence);
+      confidence), **or** the whole review had **no input** (``coverage.modelEmpty``:
+      the extreme form of a coverage failure — 053 §2.2's "incomplete" and the
+      ruling on issue #29 agree that an empty model is weaker than "some items
+      open");
     * ``complete`` — none of the above **and** stale = 0 **and** nothing waiting
-      for triage;
+      for triage **and** no coverage failure at all;
     * ``complete-with-open-items`` — the ``complete`` conditions hold except the
       residual open items, which are non-empty (a slot whose drawing moved under
-      it, a warning nobody has triaged yet).
+      it, a warning nobody has triaged yet, or any of #30's coverage failures).
 
     `openTodos` (the architecture's unfilled slots) is *reported* but does not
     gate: a TODO slot is the skeleton still asking a question rather than an
     unfinished check. `verdictWhy` spells out which conditions were non-empty, so
     no reader has to reconstruct the arithmetic.
+
+    ``coverage`` is the gate of issue #30 (:func:`_coverage_section` computes it
+    where the parse is). A caller that passes none gets
+    :func:`_clean_coverage` — the reading this section had before the gate existed
+    — which is why a section can still be built from counts alone and why a report
+    written by an older build re-gates to the same verdict it had.
     """
     errors = int(summary.get("errorCount", 0) or 0)
     # The gate below is the one `drc.summarise` already used to decide `exitCode`:
@@ -2879,6 +3083,7 @@ def _completion_body(
         "stale": int(slots.get("stale", 0) or 0),
     } if architecture is not None else dict(empty)
     open_todos = max(architecture_slots["total"] - architecture_slots["filled"], 0)
+    coverage = dict(_clean_coverage() if coverage is None else coverage)
 
     why: list[str] = []
     if errors:
@@ -2904,14 +3109,20 @@ def _completion_body(
         why.append(f"{pending} 条 warning 待分诊")
     if architecture is None:
         why.append("架构骨架未生成（report.json 无 architecture 键）")
+    # #30: the coverage failures come last, so every clause the earlier batches
+    # put first keeps its place in `verdictWhy` (a reader has been reading them
+    # in that order since 053).
+    coverage_reasons = _coverage_reasons(coverage)
+    why.extend(coverage_reasons)
 
     if (
         errors or error_entries or counts_incomplete
         or unreviewed_count or marked_count
         or architecture is None
+        or coverage["modelEmpty"]
     ):
         verdict = "incomplete"
-    elif architecture_slots["stale"] or pending:
+    elif architecture_slots["stale"] or pending or coverage_reasons:
         verdict = "complete-with-open-items"
     else:
         verdict = "complete"
@@ -2928,6 +3139,7 @@ def _completion_body(
         "warningsPendingTriage": pending,
         "architectureSlots": architecture_slots,
         "openTodos": open_todos,
+        "coverage": coverage,
         "sourceVersions": {
             "ruleset": ruleset_fingerprint(rule_ids),
             "rulebody": rulebody_fingerprint(),
@@ -2945,6 +3157,7 @@ def _completion_section(
     triage: list[dict],
     architecture: dict | None,
     needs_datasheet: list[dict] | None = None,
+    coverage: dict | None = None,
 ) -> dict:
     """`completion` for a **live run** — the coverage counts come from the model.
 
@@ -2952,6 +3165,12 @@ def _completion_section(
     since 058 §二 the section that carries the datasheet gate's own count
     (`needsDatasheet`, the reviewer's marks). The verdict rules live in
     :func:`_completion_body`.
+
+    ``coverage`` (#30) is computed by the caller — :func:`_coverage_section`, which
+    needs the parse, the tier ladder's attempts and the rule errors, none of which
+    this function has. It is **not** derived from ``model``: the flag is a fact
+    about the *reading* (`_model_read_nothing` also consults the copper), and the
+    re-gate path has no model at all, only a report.
     """
     from .core.model import ProjectModel
 
@@ -2967,6 +3186,7 @@ def _completion_section(
         triage=triage,
         architecture=architecture,
         needs_datasheet=needs_datasheet,
+        coverage=coverage,
     )
 
 
@@ -2989,6 +3209,11 @@ def _completion_from_report(report: dict, *, needs_datasheet: list[dict]) -> dic
     covered is a fact about that run, and a marking operation observes nothing
     new about the board. It is derived from the model section only for a report
     old enough to have no `completion` at all.
+
+    ``coverage`` is carried over the same way, and this is the reason #30's gate is
+    *stored* in the report rather than recomputed here: re-gating must not be a way
+    to lose a gate. A report written before the coverage section existed has none,
+    and falls back to the neutral reading it was gated with.
     """
     previous = report.get("completion") or {}
     model_section = report.get("model") or {}
@@ -2997,6 +3222,8 @@ def _completion_from_report(report: dict, *, needs_datasheet: list[dict]) -> dic
     scope.setdefault("rules", _builtin_rule_count())
     scope.setdefault("boards", len(boards) or 1)
     scope.setdefault("pages", sum(len(board.get("pages") or []) for board in boards))
+    coverage = previous.get("coverage")
+    coverage = dict(coverage) if isinstance(coverage, dict) else None
     return _completion_body(
         scope=scope,
         summary=report.get("summary") or {},
@@ -3004,6 +3231,7 @@ def _completion_from_report(report: dict, *, needs_datasheet: list[dict]) -> dic
         triage=report.get("warning_triage") or [],
         architecture=report.get("architecture"),
         needs_datasheet=needs_datasheet,
+        coverage=coverage,
     )
 
 
@@ -3116,6 +3344,8 @@ def _review_conclusion(
     pending_triage: int = 0,
     skeleton_missing: bool = False,
     stale_slots: int = 0,
+    coverage_missing: bool = False,
+    coverage_gaps: int = 0,
 ) -> str:
     """`summary.conclusion` — the one line that may be quoted as the verdict.
 
@@ -3135,11 +3365,18 @@ def _review_conclusion(
     said `incomplete` (no skeleton) while the conclusion said "无 ERROR" with no
     clause at all.
 
-    The invariant the five clauses buy, and the reason every gate has one:
+    `coverage_missing` and `coverage_gaps` are the sixth and seventh (#30): a
+    reading with **no input** may not quote "无 ERROR" (that is issue #29's whole
+    point — the empty model used to read as a clean board), and neither may one
+    whose coverage is missing in some narrower way (pages that never arrived,
+    withheld conclusions, dropped records, a rule that crashed).
+
+    The invariant the seven clauses buy, and the reason every gate has one:
     **the conclusion is exactly "无 ERROR" if and only if the verdict is
     `complete`**. The gates are the ones :func:`_completion_body` decides on, so
     a gate added there and not here is a bug — `tests/test_039c_review_flow.py`
-    asserts the pairing over every combination of them.
+    asserts the pairing over every combination of them, and
+    `tests/test_072_coverage_gate.py` extends it over the coverage section.
     """
     errors = int(summary.get("errorCount", 0) or 0)
     verdict = "无 ERROR" if not errors else f"{errors} 项 ERROR"
@@ -3164,6 +3401,13 @@ def _review_conclusion(
         # enumerated, `completion` counts that as incomplete and the exit code
         # is 1 — so the quotable line may not say "无 ERROR" in silence.
         text += "；另有主机 DRC 答复不完整（条目不可枚举，退出码按有错算）"
+    if coverage_missing:
+        text += "；整次审查没有输入（模型为空/归档读不出内容，可能被截断或损坏）"
+    if coverage_gaps:
+        text += (
+            f"；另有 {coverage_gaps} 类覆盖缺口（少页/规则 withheld/解析丢弃记录/规则报错，"
+            "逐条见 completion.verdictWhy 与 completion.coverage）"
+        )
     return text
 
 
@@ -3181,6 +3425,31 @@ def _conclusion_skeleton_gates(*, architecture: object, completion: dict) -> dic
     return {
         "skeleton_missing": architecture is None,
         "stale_slots": int(slots.get("stale") or 0),
+    }
+
+
+def _completion_coverage_gates(*, completion: dict) -> dict:
+    """The coverage gates :func:`_review_conclusion` repeats (#30, #21's shape).
+
+    Same discipline, one batch later: read from the `completion` the verdict was
+    built from. The two clauses are split because they are two different
+    statements — "there was no input **at all**" (the strongest thing this section
+    can say) versus "coverage is missing in N ways". `coverage_gaps` counts
+    **kinds**, not instances: it is a pointer, and the sentences (with their
+    numbers) are in `completion.verdictWhy`.
+    """
+    coverage = (completion or {}).get("coverage") or {}
+    missing = bool(coverage.get("modelEmpty"))
+    gaps = [
+        bool(coverage.get("parseIncomplete")) and not missing,
+        bool(coverage.get("pagesDropped")),
+        bool(coverage.get("rulesRefused")),
+        bool(coverage.get("recordsDropped")),
+        bool(coverage.get("rulesErrored")),
+    ]
+    return {
+        "coverage_missing": missing,
+        "coverage_gaps": sum(1 for gap in gaps if gap),
     }
 
 
@@ -3205,6 +3474,7 @@ def _apply_needs_datasheet(report: dict, needs_datasheet: list[dict]) -> dict:
         **_conclusion_skeleton_gates(
             architecture=report.get("architecture"), completion=report["completion"]
         ),
+        **_completion_coverage_gates(completion=report["completion"]),
     )
     return report
 
@@ -3321,6 +3591,7 @@ def _apply_warning_triage(report: dict, triage: list[dict]) -> dict:
         **_conclusion_skeleton_gates(
             architecture=report.get("architecture"), completion=report["completion"]
         ),
+        **_completion_coverage_gates(completion=report["completion"]),
     )
     return report
 
@@ -3877,7 +4148,7 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
     if args.file:
         path = Path(args.file)
         try:
-            model, _board = _load_model(path, view=CHECKUP_VIEW, parse_stats=parse_stats)
+            model, board = _load_model(path, view=CHECKUP_VIEW, parse_stats=parse_stats)
         except EncryptedProjectError as exc:
             print(f"boardwise checkup: {exc}", file=sys.stderr)
             return 2
@@ -3921,7 +4192,7 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
             for note in notes:
                 print(f"  note: {note}", file=sys.stderr)
             return 3
-        model, _board, tier, source, attribution = loaded
+        model, board, tier, source, attribution = loaded
         project_name = (source.get("project") or {}).get("friendlyName") or (
             (source.get("project") or {}).get("name") or "(project unknown)"
         )
@@ -3975,7 +4246,31 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
             ),
         }
 
-    findings = [_finding_payload(finding) for finding in run_review(model)]
+    # #30: the gate's own facts, computed where the parse and the tier ladder are.
+    # `rules_errored` is filled by the rule walk itself (fork 2) — a rule that
+    # raises is skipped, named here, and the report is written anyway.
+    rules_errored: list[str] = []
+    findings = [
+        _finding_payload(finding) for finding in run_review(model, rules_errored=rules_errored)
+    ]
+    coverage = _coverage_section(
+        model=model, board=board, attempts=attempts,
+        parse_stats=parse_stats, rules_errored=rules_errored,
+    )
+    # What the parse saw, in the report rather than only on the console (#30's
+    # adjacent gap): `coverage.recordsDropped` is the sum of the two drop
+    # counters, and this is the audit trail a reader checks it against.
+    source["parseStats"] = parse_stats.as_dict()
+    if coverage["modelEmpty"]:
+        notes.append(
+            "模型为空（0 器件 0 网络）：归档读不出内容/模型为空，可能被截断或损坏——"
+            "这不是干净板（completion.coverage.parseIncomplete / modelEmpty）"
+        )
+    if rules_errored:
+        notes.append(
+            f"{len(rules_errored)} 条规则执行出错（{'、'.join(rules_errored)}）："
+            "它们的结论缺失，报告照出（completion.coverage.rulesErrored）"
+        )
     summary = drc_summarise(drc=drc, findings=findings)
 
     # --- the curated shelf: the facts-driven sections read it (039 批②).
@@ -4124,15 +4419,18 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         model=model, summary=summary, unreviewed=unreviewed, triage=triage,
         architecture=architecture_section,
         needs_datasheet=needs_datasheet,
+        coverage=coverage,
     )
     # The conclusion carries every half, and it is written **after** the
     # architecture section exists (071 §5, issue #21). With errors present the
     # count stays first (that is the reader's next action); with none, the gates
     # that hold the verdict back are what may be said — and nothing on the line
     # claims a pass while parts have no datasheet, pins wait for one, the
-    # skeleton was never generated, a slot's drawing moved under it, or the
-    # triage backlog is non-empty. It is built from the `completion` section the
-    # report carries, so the line and the verdict are one arithmetic.
+    # skeleton was never generated, a slot's drawing moved under it, the
+    # triage backlog is non-empty, or the reading covered less than the board
+    # (#30: nothing arrived, pages went missing, conclusions were withheld,
+    # records were dropped, a rule crashed). It is built from the `completion`
+    # section the report carries, so the line and the verdict are one arithmetic.
     summary["conclusion"] = _review_conclusion(
         summary,
         unreviewed_count=len(unreviewed),
@@ -4141,6 +4439,7 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         **_conclusion_skeleton_gates(
             architecture=architecture_section, completion=completion
         ),
+        **_completion_coverage_gates(completion=completion),
     )
     report = _checkup_report(
         tier=tier, source=source, model=model, attempts=attempts, notes=notes,
@@ -4277,7 +4576,8 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         )
     print(f"  completion: {report['completion']['verdict']}"
           + ("（" + "；".join(report["completion"]["verdictWhy"]) + "）"
-             if report["completion"]["verdictWhy"] else "（无 ERROR、无未审、无 stale、无待分诊）"))
+             if report["completion"]["verdictWhy"]
+             else "（无 ERROR、无未审、无 stale、无待分诊、无覆盖缺口）"))
     print("  pending: none（批 4 已把 modules / ai_slots / report.md / 画布图补齐）")
     if architecture is None:
         print("  note: 架构骨架未生成（见 notes）——report.json 里没有 architecture 键")
@@ -4433,7 +4733,7 @@ def _need_datasheet_lines(
     else:
         state = f"已存在，已更新（另新增 {added} 条）"
     completion = report.get("completion") or {}
-    why = "；".join(completion.get("verdictWhy") or []) or "无 ERROR、无未审、无 stale、无待分诊"
+    why = "；".join(completion.get("verdictWhy") or []) or "无 ERROR、无未审、无 stale、无待分诊、无覆盖缺口"
     return [
         f"  mark: {state}（新增 {added} / 更新 {updated} 条）",
         f"  needs_datasheet: facts {facts} 条 / 审查者标记 {len(marked)} 项",
@@ -4627,7 +4927,7 @@ def _triage_lines(
         state = f"已存在，已更新（另新增 {added} 条）"
     judged = sum(1 for slot in triage if (slot.get("verdict") or "").strip())
     completion = report.get("completion") or {}
-    why = "；".join(completion.get("verdictWhy") or []) or "无 ERROR、无未审、无 stale、无待分诊"
+    why = "；".join(completion.get("verdictWhy") or []) or "无 ERROR、无未审、无 stale、无待分诊、无覆盖缺口"
     return [
         f"  key: {key}（{matched} 条槽位）",
         f"  verdict: {state}（新增 {added} / 更新 {updated} 条）",

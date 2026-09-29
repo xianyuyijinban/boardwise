@@ -59,7 +59,7 @@ BUILTIN_RULES: list[Rule] = [
 ]
 
 
-def run_review(model: DesignModel) -> list[Finding]:
+def run_review(model: DesignModel, *, rules_errored: list[str] | None = None) -> list[Finding]:
     """Apply all built-in rules and return findings, most severe first.
 
     **Per board** (040b §WI-3): given a :class:`ProjectModel`, every rule runs on
@@ -68,15 +68,19 @@ def run_review(model: DesignModel) -> list[Finding]:
     why the boards must come to it separately. Given a plain
     :class:`DesignModel` (an ``.enet`` input, or one board's model on its own)
     the behaviour is what it always was, with ``board`` left empty.
+
+    ``rules_errored`` is the collector :func:`_run_rules` writes broken rule ids
+    into (#30 fork 2); a caller that hands one in gets a **partial report**
+    instead of an exception.
     """
     from ..core.model import ProjectModel
 
     if not isinstance(model, ProjectModel):
-        return _run_rules(model, BUILTIN_RULES)
+        return _run_rules(model, BUILTIN_RULES, rules_errored=rules_errored)
 
     findings: list[Finding] = []
     for board_model in model.boards:
-        board_findings = _run_rules(board_model, BUILTIN_RULES)
+        board_findings = _run_rules(board_model, BUILTIN_RULES, rules_errored=rules_errored)
         title = board_model.board.title
         for finding in board_findings:
             finding.board = title
@@ -85,13 +89,79 @@ def run_review(model: DesignModel) -> list[Finding]:
     return findings
 
 
-def _run_rules(model: DesignModel, rules: list[Rule]) -> list[Finding]:
-    """One model, one rule list, sorted — the shape every caller of ``check`` uses."""
+def _run_rules(
+    model: DesignModel, rules: list[Rule], *, rules_errored: list[str] | None = None
+) -> list[Finding]:
+    """One model, one rule list, sorted — the shape every caller of ``check`` uses.
+
+    ``rules_errored`` is what decides how a **broken rule** is handled, and it is
+    the caller's choice on purpose (#30 fork 2, the measured failure: a bare
+    ``RuntimeError`` out of ``_run_rules`` aborted `checkup` and left a
+    half-written ``--out``):
+
+    * a caller that hands in a collector is asking for a *partial report* — each
+      rule that raises is caught, its id is appended to the collector, and the
+      remaining rules run to the end. The report says what is missing
+      (`completion.coverage.rulesErrored`, and the verdict drops) instead of never
+      being written.
+    * a caller that passes nothing keeps the exception. That is `check_rules`,
+      which serves `edit plan` and the repair flows: there, "the rule crashed" and
+      "the rule found nothing" must not collapse into the same answer, so a bug
+      stays a hard stop rather than a silent "nothing to plan".
+    """
     findings: list[Finding] = []
     for rule in rules:
-        findings.extend(rule.check(model))
+        try:
+            findings.extend(rule.check(model))
+        except Exception:  # noqa: BLE001 — one broken rule may not kill the whole report
+            if rules_errored is None:
+                raise
+            rules_errored.append(rule.id)
     findings.sort(key=lambda f: (SEVERITY_ORDER[f.severity], f.rule_id))
     return findings
+
+
+def refused_conclusions(model: object) -> int:
+    """How many conclusions this reading's unproven nets **actually** withheld (#19/#30).
+
+    Not the same number as `source.unprovenNets.rulesRefused`, and the two are
+    kept apart on purpose:
+
+    * ``rulesRefused`` (the existing field) is the **length of the registry**:
+      "how many rules are capable of refusing a net-shaped judgement" — 7 on every
+      per-page reading, whether or not one of them had anything to refuse.
+    * this counts **instances**: one per `(rule, subject)` whose UNKNOWN outcome
+      names :data:`UNPROVEN_BY_NAME` as the fact it is missing — the verdicts this
+      reading actually withheld. That is the number the coverage gate can act on.
+
+    Zero by construction for every reading but the per-page tier, and the rule walk
+    is skipped entirely there: a refusal is scoped to names the merge welded blind
+    (``DesignModel.unproven_nets``), so a model with no such name cannot withhold
+    anything — and running the seven rules' outcome walks is not free (each loads
+    the shelf).
+    """
+    from ..core.model import ProjectModel
+    from ..rules.unproven import NET_MEMBERSHIP_RULES, UNPROVEN_BY_NAME
+
+    boards = model.boards if isinstance(model, ProjectModel) else [model]
+    if not any(getattr(board, "unproven_nets", None) for board in boards):
+        return 0
+    rules = [
+        rule
+        for rule in BUILTIN_RULES
+        if rule.id in NET_MEMBERSHIP_RULES and hasattr(rule, "outcomes")
+    ]
+    total = 0
+    for board_model in boards:
+        if not getattr(board_model, "unproven_nets", None):
+            continue
+        for rule in rules:
+            for outcome in rule.outcomes(board_model):
+                if outcome.state != "UNKNOWN":
+                    continue
+                if UNPROVEN_BY_NAME in (outcome.missing_fact or ""):
+                    total += 1
+    return total
 
 
 def check_rules(model: object, rules: list[Rule] | None = None) -> list[Finding]:

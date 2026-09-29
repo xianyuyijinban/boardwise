@@ -45,6 +45,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..core.model import Component, DesignModel, Net, Pin
+from .enet import optional_object, require_object
 from .epru import DEVICE_DOC_TYPE, FOOTPRINT_DOC_TYPE, Epro2Source, PcbContext
 
 __all__ = ["DeviceMeta", "device_metas", "footprint_titles", "build_design_model"]
@@ -81,16 +82,24 @@ def _clean(value: Any) -> str:
 
 
 def device_metas(source: Epro2Source) -> dict[str, DeviceMeta]:
-    """Return DEVICE document uuid -> its library metadata."""
+    """Return DEVICE document uuid -> its library metadata.
+
+    The two dict-shaped fields it joins are shape-gated (:class:`NetlistShapeError`,
+    issue #28): a record stream whose DEVICE ``attributes`` is a list is a damaged
+    file, and saying *where* beats an ``AttributeError`` from inside this walk —
+    everything downstream reads these attributes as a mapping.
+    """
     metas: dict[str, DeviceMeta] = {}
     for document in source.documents_of_type(DEVICE_DOC_TYPE):
         for record in document.records:
             if record.type != "META" or record.body is None or document.uuid is None:
                 continue
+            where = f"DEVICE {document.uuid}"
+            body = require_object(record.body, where)
             metas[document.uuid] = DeviceMeta(
                 uuid=document.uuid,
-                title=str(record.body.get("title") or ""),
-                attributes=dict(record.body.get("attributes") or {}),
+                title=str(body.get("title") or ""),
+                attributes=optional_object(body.get("attributes"), f"{where}.attributes"),
             )
     return metas
 
