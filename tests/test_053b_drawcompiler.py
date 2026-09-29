@@ -23,6 +23,8 @@
 
 from __future__ import annotations
 
+import ast
+import inspect
 import math
 import re
 from dataclasses import dataclass, field
@@ -1195,6 +1197,85 @@ def test_the_pad_across_the_body_follows_the_symbol_not_a_constant_side():
     the **left** VOUT. An implementation that simply preferred one side (the
     right-hand pad, the higher pin id) would put both capacitors on one side
     again — this is the case that tells the two rules apart.
+
+    074 changed one thing about this drawing: on the default spacing ladder (1x,
+    1.5x, 2.2x) the pad across the body has no side left to hang its own flag on
+    that no other net crosses — the rail runs at y=745 ten units above the pad row
+    and the VIN and GND pins seal the other three sides, so the ladder is exhausted
+    and the compiler refuses the shape by name instead of drawing the lead that
+    used to cut the rail (see
+    :func:`test_a_pad_whose_every_side_is_sealed_is_layout_unsat_and_names_the_conductor`).
+    One rung more room (3.5x as well as 2.2x) and the same circuit draws with no
+    crossing at all, which is the drawing this test is about: 074 refuses a
+    defective picture, never the circuit.
+    """
+    page = (0.0, 0.0, 1170.0, 825.0)
+    ref = "AMS1117-3.3-C6186-M"
+    book = library(**{ref: ams1117_duplicate_vout_flipped(ref)})
+    spec = circuit(
+        [part("U1", ref, "AMS1117-3.3"), part("C1", "C0805", "10u"),
+         part("C2", "C0805", "22u")],
+        [
+            net("VIN5", "power", ["U1.3", "C1.1"]),
+            net("3V3", "power", ["U1.2", "U1.4", "C2.1"]),
+            net("GND", "gnd", ["U1.1", "C1.2", "C2.2"]),
+        ],
+    )
+    presentation = ldo_presentation(
+        sidePreferences={"input": "right", "output": "bottom"},
+        modules=[module("pwr", ["U1", "C1", "C2"], "regulator")],
+        portRoles={"VIN5": "input", "3V3": "output"},
+    )
+    result = dc.compile(
+        spec, presentation, book,
+        dc.CompileBudget(page_box=page, spacing_ladder=(2.2, 3.5)),
+    )
+    assert result.ok, render(result)
+    plan = result.candidates[0]
+    core = plan.part("U1")
+    in_pin = pin_point(plan, "U1.3", book)
+    pads = [pin_point(plan, "U1.2", book), pin_point(plan, "U1.4", book)]
+    in_tip, out_tip = pin_point(plan, "C1.1", book), pin_point(plan, "C2.1", book)
+    assert core is not None
+    assert None not in (*pads, in_pin, in_tip, out_tip)
+    # "Across the body" is read off the drawing: the VOUT pad on the far side of
+    # the core from the input pin (065 sec.1's own question, as an axis test).
+    across = [
+        pad for pad in pads if (pad[0] - core.x) * (in_pin[0] - core.x) < 0
+    ]
+    assert len(across) == 1, (
+        f"the mirrored symbol puts exactly one VOUT pad on the far side of the body "
+        f"from VIN: pads {pads} against the input pin at {in_pin}"
+    )
+    far = across[0]
+    near = [pad for pad in pads if pad != far][0]
+    assert far[0] < core.x < in_pin[0], (far, core.x, in_pin)
+    assert out_tip[0] == far[0], (
+        f"the output capacitor hangs below the pad across the body at {far}, not "
+        f"at {out_tip} — the reference is the input pin, wherever the symbol puts it"
+    )
+    assert in_tip[0] > core.x > out_tip[0], (
+        f"the mirrored symbol mirrors the drawing: input at {in_tip[0]:g}, output "
+        f"at {out_tip[0]:g}, core at {core.x:g}"
+    )
+
+
+def test_a_pad_whose_every_side_is_sealed_is_layout_unsat_and_names_the_conductor():
+    """074 sec.3/4 的编译级实例：梯子穷尽 → layout-unsat，报实测原因与建议动作.
+
+    The mirrored AMS1117 on the **default** spacing ladder is the offline shape where
+    074's ladder really is exhausted: the rail runs ten units above the pad row, and
+    the VIN pin, the GND pin and the core's own body seal the other three sides, so
+    every lead the pad's flag could hang on cuts the rail or lands on a conductor.
+    岳 read that drawing and refused the form (「第一眼以为5V和3V3的旗标短接在一块了」),
+    so the compiler has one honest answer left — and it must *say* it: which run,
+    which conductor, where they met, and what to move. A silent "no candidate" would
+    send the caller looking for a bug in the compiler, and a junction welded on to
+    make the crossing look intended would join two nets the spec keeps apart.
+
+    The same circuit draws cleanly on a roomier ladder (see
+    :func:`test_the_pad_across_the_body_follows_the_symbol_not_a_constant_side`):
+    this is 074 refusing a defective picture, never the circuit.
     """
     page = (0.0, 0.0, 1170.0, 825.0)
     ref = "AMS1117-3.3-C6186-M"
@@ -1214,23 +1295,27 @@ def test_the_pad_across_the_body_follows_the_symbol_not_a_constant_side():
         portRoles={"VIN5": "input", "3V3": "output"},
     )
     result = dc.compile(spec, presentation, book, dc.CompileBudget(page_box=page))
-    assert result.ok, render(result)
-    plan = result.candidates[0]
-    core = plan.part("U1")
-    in_pin = pin_point(plan, "U1.3", book)
-    near, far = pin_point(plan, "U1.2", book), pin_point(plan, "U1.4", book)
-    in_tip, out_tip = pin_point(plan, "C1.1", book), pin_point(plan, "C2.1", book)
-    assert core is not None
-    assert None not in (in_pin, near, far, in_tip, out_tip)
-    assert far[0] < core.x < in_pin[0], (far, core.x, in_pin)
-    assert out_tip[0] == far[0], (
-        f"the output capacitor hangs below the pad across the body at {far}, not "
-        f"at {out_tip} — the reference is the input pin, wherever the symbol puts it"
+    assert not result.ok, (
+        "the default ladder drew this shape again — if the crossing it used to draw "
+        f"is back, 074's gate is off: {render(result)}"
     )
-    assert in_tip[0] > core.x > out_tip[0], (
-        f"the mirrored symbol mirrors the drawing: input at {in_tip[0]:g}, output "
-        f"at {out_tip[0]:g}, core at {core.x:g}"
+    assert result.categories() == ["layout-unsat"], result.render_failures()
+    measured = [
+        item.failure for item in result.rejected
+        if item.failure is not None
+        and item.failure.category == dc.FAILURE_LAYOUT_UNSAT
+        and "crosses net" in item.failure.detail
+    ]
+    assert measured, (
+        "no variant says which conductor the pad's lead would have crossed: "
+        f"{[(item.variant, item.reason) for item in result.rejected]}"
     )
+    failure = measured[0]
+    assert "U1.2 is named by a flag of its own" in failure.detail or (
+        "U1.4 is named by a flag of its own" in failure.detail
+    ), f"the refusal does not name the pad: {failure.detail}"
+    assert " at (" in failure.detail, failure.detail
+    assert failure.action and "junction" in failure.action, failure.action
 
 
 def test_a_single_sided_role_and_an_nc_pad_keep_060s_own_pin():
@@ -1512,16 +1597,27 @@ def test_a_far_pad_is_named_where_it_stands_and_the_rest_keeps_its_wire():
 
 
 def test_a_far_pads_flag_stands_a_stub_clear_of_the_rails_own_flag():
-    """069 sec.10 的旗标半边：远侧脚的旗必须与输入轨的旗水平拉开一整段 stub。
+    """069 sec.10 的旗标半边：远侧脚的旗必须与输入轨的旗明显分家，不是同一列的两个字形。
 
     岳 on the landed v4 page: 「不行，现在第一眼以为5V和3V3的旗标短接在一块了，这个
     必须改」. The two glyphs that read as one were the far pad's 3V3 and the input
     rail's own VIN5, stacked on the same column — the pad's own gate was only ten
-    units above its twin. The claim is horizontal and it is a *measured gap*: the
-    rail's flag hangs straight off its pin, so the whole separation is the far pad's
-    stub, which leaves in the direction **away** from the rail and runs a full
-    :data:`SIBLING_LEAD`. Two whole flag boxes (glyph, the name the host prints, and
-    069 sec.8's clearance) then do not touch, and neither reads as the other's wire.
+    units above its twin. The claim was horizontal in that drawing and it is a
+    *measured gap*: the rail's flag hangs straight off its pin, so the whole
+    separation was the far pad's stub running a full :data:`SIBLING_LEAD` away.
+
+    074 keeps the claim and changes the direction it is met in. The stub that used
+    to carry the flag **up** (a whole sibling lead sideways, then a turn over the
+    rail) cut the rail on the way — the very form 岳 rejected — so the ladder
+    refuses that turn, and on this pad's own side of the rail the only clear place
+    for a whole flag box (glyph + the name the host prints + 069 sec.8's clearance)
+    is 30 units out and 25 **down**, away from the rail. So what is asserted here is
+    what 岳 actually asked for: the pad's flag hangs on the rail-free side of the
+    rail, and two whole flag boxes do not touch. Measured cause of the shorter
+    stub: the 50-unit rungs are refused by the gate (the turn crosses the rail at
+    (135, 740)) and by 069 sec.8's box (hanging down at (135, 705) collides with
+    C1's own annotation text at x≤133) — 069's ladder then lands on
+    :data:`FLAG_LEAD`.
     """
     page = (0.0, 0.0, 1170.0, 825.0)
     spec = _duplicate_vout_circuit(out_members=["U1.2", "U1.4", "C2.1"])
@@ -1537,6 +1633,7 @@ def test_a_far_pads_flag_stands_a_stub_clear_of_the_rails_own_flag():
 
     far = pin_point(plan, "U1.2")
     assert far is not None, "premise: the pad across the body has a tip"
+    rail_y = pin_point(plan, "U1.3")[1]
     on_the_rail = [symbol for symbol in plan.power_symbols if symbol.net == "VIN5"]
     assert len(on_the_rail) == 1, (
         "the input rail states itself with one flag at the pin it supplies "
@@ -1553,16 +1650,13 @@ def test_a_far_pads_flag_stands_a_stub_clear_of_the_rails_own_flag():
     )
     flag = mine[0]
 
-    gap = abs(flag.x - rail_flag.x)
-    assert gap >= dc.SIBLING_LEAD - 1e-6, (
-        f"the far pad's flag at ({flag.x:g}, {flag.y:g}) is only {gap:g} units from "
-        f"the input rail's flag at ({rail_flag.x:g}, {rail_flag.y:g}) horizontally — "
-        "岳 read exactly that pair as shorted; the stub has to carry the flag a whole "
-        f"sibling lead ({dc.SIBLING_LEAD:g}) away from the rail's column"
+    assert (flag.y > rail_y) == (far[1] > rail_y), (
+        f"the far pad's flag at ({flag.x:g}, {flag.y:g}) came out on the other side "
+        f"of the input rail (y={rail_y:g}) from the pad it names at {far} — the run "
+        "that reaches it would have to cross the rail to get there (074 sec.3)"
     )
-    assert abs(flag.x - far[0]) >= dc.SIBLING_LEAD - 1e-6, (
-        f"the far pad's stub is {abs(flag.x - far[0]):g} horizontal units — the lead "
-        "that separates the two flags is this one (069 sec.1's stub)"
+    assert _lead_crossings(plan) == [], (
+        "the pad's own run cuts another net's wire: " + "; ".join(_lead_crossings(plan))
     )
 
     far_box = dc._flag_box(book[flag.symbol_ref], flag.rotation, (flag.x, flag.y), flag.net)
@@ -1580,17 +1674,23 @@ def test_a_far_pads_flag_stands_a_stub_clear_of_the_rails_own_flag():
 
 
 def test_a_free_pad_takes_the_near_stub_and_its_capacitor_hugs_the_pad():
-    """069 sec.11：近位空着时旗就落 40–60 的 stub 上，输出电容贴回那只脚 15–25。
+    """069 sec.11：近位空着时旗就落最近的净档上，输出电容贴回那只脚 15–25。
 
     岳 after the v4 render: 「右侧的旗标和电容离器件太远了贴近一点」. The avoidance
     ladder had walked the far pad's flag out to the fourth rung and stretched the
     capacitor's own drop to a full lane while the near slots were empty — the ladder
     is 就近优先, and it may only walk away when the near slot is *taken*.
 
-    The numbers are his own, measured off P22: the far pad's stub is 40–60 (a sibling
-    lead, never the ladder's 60/120 rungs) and the flag at its end is no more than 60
-    from the pad it names; the output capacitor hangs 15–25 off the pad it decouples.
-    Every flag stays upright (069 sec.7).
+    The numbers are his own, measured off P22: the far pad's stub is his 40–60 band
+    where that band fits, and never the ladder's 60/120 rungs; the flag at its end is
+    no more than 60 from the pad it names; the output capacitor hangs 15–25 off the
+    pad it decouples; and every flag stays upright (069 sec.7). **074 moved the
+    floor of the band on this shape to :data:`FLAG_LEAD` (30)**, and the reason is
+    measured rather than chosen: the 50-unit rungs are refused by the gate (the
+    upward turn crosses the rail at (135, 740)) and by 069 sec.8's box (hanging down
+    at (135, 705) collides with C1's own annotation text, which reaches x=133). 30
+    is 069's own next rung and it is *nearer* the pad, so 「太远了」 is not what
+    happened here; the page-level E1 landing keeps 岳's 50 (see the v6 render).
     """
     page = (0.0, 0.0, 1170.0, 825.0)
     spec = _duplicate_vout_circuit(out_members=["U1.2", "U1.4", "C2.1"])
@@ -1613,10 +1713,10 @@ def test_a_free_pad_takes_the_near_stub_and_its_capacitor_hugs_the_pad():
     ]
     assert len(stub) == 1, f"the far pad is named on its own stub; got {stub}"
     reach = abs(stub[0].x - far[0])
-    assert 40.0 <= reach <= 60.0, (
-        f"the far pad's flag is {reach:g} horizontal units out — the near slot is "
-        f"free (nothing between {far} and it), so 岳's stub (40-60) fits and the "
-        "ladder must not walk out to 60/120 rungs"
+    assert dc.FLAG_LEAD - 1e-6 <= reach <= 60.0, (
+        f"the far pad's flag is {reach:g} horizontal units out — the near slots are "
+        f"what the ladder must take first (nothing between {far} and it), and 069's "
+        "own rungs stop at 60/120 only when everything nearer is taken"
     )
     straight = math.hypot(stub[0].x - far[0], stub[0].y - far[1])
     assert straight <= 60.0, (
@@ -2054,6 +2154,442 @@ def test_a_flags_whole_box_keeps_clear_of_the_other_nets_wires():
             )
 
 
+# --------------------------------------- 074 旗引线不得穿越别网导体（硬规则）
+
+
+def _same_point(left, right) -> bool:
+    return abs(left[0] - right[0]) < 1e-6 and abs(left[1] - right[1]) < 1e-6
+
+
+def _e1_presentation() -> PresentationSpec:
+    """The module shape E1 lands: the measured AMS1117 with its own capacitors."""
+    return ldo_presentation(
+        sidePreferences={"input": "left", "output": "bottom"},
+        modules=[module("pwr", ["U1", "C1", "C2"], "regulator")],
+        portRoles={"VIN5": "input", "3V3": "output"},
+    )
+
+
+def _flag_lead_runs(plan: LayoutPlan) -> list[tuple[str, list[tuple[float, float]]]]:
+    """Every run that exists only to carry a name: a flag's lead (074's own case).
+
+    A run is a flag's lead when its far end is a flag's anchor, and `_place_flag`
+    is the only thing that writes one — so this is the set 074 sec.2 hardens.
+    """
+    anchors = [(symbol.x, symbol.y) for symbol in plan.power_symbols]
+    out = []
+    for segment in plan.segments:
+        if len(segment.points) < 2:
+            continue
+        if any(_same_point(tuple(segment.points[-1]), anchor) for anchor in anchors):
+            out.append((segment.net, [tuple(point) for point in segment.points]))
+    return out
+
+
+def _lead_crossings(plan: LayoutPlan) -> list[str]:
+    """Every place a flag lead **cuts through** another net's wire, described.
+
+    The ruler is the compiler's own (`drawcompiler._proper_crossing`): strictly
+    interior to both runs. The check is written out here rather than taken from the
+    module's answer, because the claim is about the *drawing* and not about the
+    compiler's opinion of it (053 sec.6).
+    """
+    out = []
+    for net, points in _flag_lead_runs(plan):
+        for start, end in zip(points, points[1:]):
+            for segment in plan.segments:
+                if segment.net == net:
+                    continue
+                for other_start, other_end in zip(segment.points, segment.points[1:]):
+                    point = dc._proper_crossing(start, end, other_start, other_end)
+                    if point is not None:
+                        out.append(
+                            f"{net} run {start}→{end} cuts {segment.net} "
+                            f"({other_start[0]:g}, {other_start[1]:g})→"
+                            f"({other_end[0]:g}, {other_end[1]:g}) at {point}"
+                        )
+    return out
+
+
+def _stub_run(plan: LayoutPlan, net_id: str) -> tuple[list[tuple[float, float]], object]:
+    """The one run of ``net_id`` that ends on one of its own labels, and the label."""
+    anchors = [(label.net, label.x, label.y) for label in plan.labels]
+    for segment in plan.segments:
+        if segment.net != net_id or len(segment.points) < 2:
+            continue
+        last = tuple(segment.points[-1])
+        for anchor_net, x, y in anchors:
+            if anchor_net == net_id and _same_point(last, (x, y)):
+                return [tuple(point) for point in segment.points], (x, y)
+    raise AssertionError(
+        f"no run of {net_id} reaches a label of its own: "
+        f"{[s.points for s in plan.segments]} / "
+        f"{[(l.net, l.x, l.y) for l in plan.labels]}"
+    )
+
+
+def _side_of(value: float, rail_y: float) -> int:
+    return 1 if value > rail_y else (-1 if value < rail_y else 0)
+
+
+def test_a_pads_flag_lead_never_cuts_through_another_nets_wire():
+    """074：旗引线穿越别网导体 = 硬拒；梯子必须找到零穿越解（岳 P23 裁决）.
+
+    岳 read the landed P23 page and said it in one line: 「不行，现在第一眼以为5V和
+    3V3的旗标短接在一块了，这个必须改」. The measured form was pin 2's 3V3 flag — a
+    run out of the pad and a turn up, and the **turn** went through the input rail at
+    (135, 740). No junction dot, so the netlist was right, and the picture still read
+    as a short: 「一眼不读成衔接」 is the requirement, and an electrician's first
+    reading is the one that counts.
+
+    The pad's own ladder answers it (069 sec.3, 074 sec.3): the crossing turns are
+    refused one at a time and the flag ends up hanging on the pad's own side of the
+    rail, where no conductor is across it. Two claims: **no** flag lead of **any**
+    candidate cuts another net's wire, and the pad's flag is still a lead — never
+    069 sec.8's flag standing on its own pin, which is the form 岳 rejected.
+    """
+    page = (0.0, 0.0, 1170.0, 825.0)
+    spec = _duplicate_vout_circuit(out_members=["U1.2", "U1.4", "C2.1"])
+    result = dc.compile(
+        spec, _e1_presentation(), library(), dc.CompileBudget(page_box=page),
+    )
+    assert result.ok, render(result)
+    plan = result.candidates[0]
+
+    for candidate in result.candidates:
+        assert _lead_crossings(candidate) == [], (
+            f"a flag lead of {candidate.geometry_sha256()[:12]} cuts through another "
+            f"net's wire — 岳 reads that as a short: {_lead_crossings(candidate)}"
+        )
+
+    near = pin_point(plan, "U1.2")
+    rail_y = pin_point(plan, "U1.3")[1]
+    assert near is not None
+    mine = [
+        symbol for symbol in plan.power_symbols
+        if symbol.net == "3V3" and _joined_by_a_wire(plan, near, (symbol.x, symbol.y))
+    ]
+    assert len(mine) == 1, (
+        "069 sec.1: the pad across the body is named by a flag at the end of its own "
+        f"run — the plan gives it {[(s.x, s.y) for s in mine]}"
+    )
+    flag = mine[0]
+    lead = _flag_lead(plan, flag)
+    assert lead is not None and len(lead) >= 2, (
+        f"3V3's flag at ({flag.x:g}, {flag.y:g}) is not reached by a run of its own "
+        f"(plan wires: {[s.points for s in plan.segments]})"
+    )
+    assert flag.rotation in (0.0, 180.0), (
+        f"the flag stands at {flag.rotation} — 069 sec.7 allows 0 or 180 only"
+    )
+    assert _side_of(flag.y, rail_y) == _side_of(near[1], rail_y), (
+        f"pin 2's flag hangs at y={flag.y:g} while the pad is at y={near[1]:g} and the "
+        f"input rail runs at y={rail_y:g} — 074 sec.3 hangs the flag on the side with "
+        "no rail across it, never over one"
+    )
+    assert abs(flag.y - rail_y) > abs(near[1] - rail_y), (
+        f"pin 2's flag at ({flag.x:g}, {flag.y:g}) is no farther from the rail "
+        f"(y={rail_y:g}) than the pad itself — the run only reaches, it does not "
+        "climb past the conductor it must avoid"
+    )
+
+
+def test_a_pads_label_stub_never_cuts_through_another_nets_wire():
+    """074 sec.2：069① 的 netlabel stub 与旗引线同一把尺——穿越同样硬拒。
+
+    The same pad, the same crossing, the same drawing — the only difference is the
+    name form: a **signal** is named by a label (069 sec.1), so the run out of the
+    pad ends at a label instead of a flag. 074 treats it as the same line doing the
+    same job (「这个网从这里出去」), so the same refusal applies and the same ladder
+    answers it: the stub still leaves the pad, still runs a sibling lead (40-60),
+    and no longer climbs through the rail.
+    """
+    page = (0.0, 0.0, 1170.0, 825.0)
+    spec = circuit(
+        [part("U1", "AMS1117-3.3-C6186", "AMS1117-3.3"),
+         part("C1", "C0805", "10u"), part("C2", "C0805", "22u")],
+        [
+            net("VIN5", "power", ["U1.3", "C1.1"]),
+            net("3V3", "signal", ["U1.2", "U1.4", "C2.1"]),
+            net("GND", "gnd", ["U1.1", "C1.2", "C2.2"]),
+        ],
+    )
+    result = dc.compile(
+        spec, _e1_presentation(), library(), dc.CompileBudget(page_box=page),
+    )
+    assert result.ok, render(result)
+    plan = result.candidates[0]
+    for candidate in result.candidates:
+        assert _lead_crossings(candidate) == [], (
+            f"a stub of {candidate.geometry_sha256()[:12]} cuts through another "
+            f"net's wire: {_lead_crossings(candidate)}"
+        )
+
+    labels = [label for label in plan.labels if label.net == "3V3"]
+    assert len(labels) == 2, (
+        f"one label of the same net per pad (069 sec.1): "
+        f"{[(l.net, l.x, l.y) for l in plan.labels]}"
+    )
+    near = pin_point(plan, "U1.2")
+    rail_y = pin_point(plan, "U1.3")[1]
+    assert near is not None
+    stub, anchor = _stub_run(plan, "3V3")
+    assert _same_point(stub[0], near), (
+        f"the run 074 judges leaves pin 2 at {stub[0]}, and pin 2 is at {near}"
+    )
+    assert max(abs(stub[-1][0] - stub[0][0]), abs(stub[-1][1] - stub[0][1])) >= (
+        dc.SIBLING_LEAD - 1e-6
+    ), (
+        f"the pad's own run is {stub} — 069 sec.1 gives the pad a sibling lead "
+        f"({dc.SIBLING_LEAD:g}) and the label stands at {anchor}"
+    )
+    assert all(_side_of(point[1], rail_y) == _side_of(near[1], rail_y)
+               for point in stub), (
+        f"the stub {stub} crosses to the rail's own side (y={rail_y:g}) — the pad is "
+        f"at y={near[1]:g} and 074 keeps the run on that side"
+    )
+
+
+def test_the_crossing_ruler_reads_a_cut_and_not_a_join():
+    """074 sec.1 的尺子：严格内部穿越才算穿越——共享端点/T 型/共线重叠都不算.
+
+    Cutting through and joining are different pictures and the drawing has different
+    words for them: a run that cuts a foreign wire joins nothing (054 C7's measured
+    behaviour — which is why the gate keeps counting crossings as a soft metric),
+    while a run whose **end** lands on another net's wire is a tee, the junction 053
+    sec.2 puts a dot on and the editor makes a connection out of. 074 refuses the
+    first for a lead and must never mistake it for the second — otherwise "refuse
+    the crossing" quietly becomes "refuse the join", and no junction is welded on to
+    make a crossing look intended either.
+
+    The ruler is checked against `readability._proper_crossing`, which the contract
+    has used since 053: two rulers for one word drift, and the drift shows up as a
+    drawing that is refused on one reading and accepted on the other.
+    """
+    cases = [
+        # a proper cut: strictly interior to both runs
+        ((0.0, 0.0), (100.0, 0.0), (50.0, -50.0), (50.0, 50.0)),
+        # corners of the same square: still a cut, at an off-grid point
+        ((0.0, 0.0), (30.0, 30.0), (0.0, 30.0), (30.0, 0.0)),
+        # a tee: one run's end lands inside the other's span
+        ((0.0, 0.0), (100.0, 0.0), (50.0, 0.0), (50.0, 50.0)),
+        ((0.0, 0.0), (100.0, 0.0), (50.0, 50.0), (50.0, 0.0)),
+        # end to end: a shared endpoint
+        ((0.0, 0.0), (50.0, 0.0), (50.0, 0.0), (50.0, 50.0)),
+        # collinear overlap: two runs along one line
+        ((0.0, 0.0), (100.0, 0.0), (50.0, 0.0), (150.0, 0.0)),
+        ((0.0, 0.0), (100.0, 0.0), (100.0, 0.0), (150.0, 0.0)),
+        # parallel, and a run that stops short
+        ((0.0, 0.0), (100.0, 0.0), (0.0, 20.0), (100.0, 20.0)),
+        ((0.0, 0.0), (40.0, 0.0), (50.0, -50.0), (50.0, 50.0)),
+        # a degenerate run is nothing at all
+        ((10.0, 10.0), (10.0, 10.0), (0.0, 10.0), (20.0, 10.0)),
+    ]
+    for a, b, c, d in cases:
+        mine = dc._proper_crossing(a, b, c, d)
+        theirs = readability._proper_crossing(a, b, c, d)
+        assert (mine is None) == (theirs is None), (
+            f"{a}→{b} against {c}→{d}: the compiler reads {mine} and the checker "
+            f"reads {theirs} — one word, two rulers"
+        )
+        if mine is not None:
+            assert _same_point(mine, theirs), (mine, theirs)
+    assert dc._proper_crossing(*cases[0]) is not None
+    assert dc._proper_crossing(*cases[1]) is not None
+    for tee in cases[2:]:
+        assert dc._proper_crossing(*tee) is None, (
+            f"{tee} is a join (a tee, a shared end, an overlap or nothing at all), "
+            "not a crossing: 074 refuses a cut, and a joint is the connection the "
+            "page is made of"
+        )
+
+    # And on a drawing: a lead that starts on its **own** net's wiring is the tee
+    # that *is* the connection — 069 sec.7 hangs the rail's flag off the pin the rail
+    # supplies, so the run shares its endpoint with the rail's own wire and must not
+    # be read as a crossing of anything.
+    page = (0.0, 0.0, 1170.0, 825.0)
+    result = dc.compile(
+        ldo_circuit(), ldo_presentation(), library(), dc.CompileBudget(page_box=page),
+    )
+    assert result.ok, render(result)
+    assert _lead_crossings(result.candidates[0]) == [], (
+        "a flag lead of the plain LDO drawing is reported as cutting a wire: "
+        f"{_lead_crossings(result.candidates[0])}"
+    )
+
+
+def test_a_pad_sealed_on_every_side_is_layout_unsat_with_the_conductor_named():
+    """074 sec.3/4：四向都穿越 = 梯子穷尽 → layout-unsat，报实测原因与建议动作.
+
+    The ladder's last word (074 sec.3): distance rungs, the turn, and every side of
+    the pad. When every one of them cuts another net's wire there is no drawing to
+    make — and the answer is not silence, and not 069 sec.8's flag on its own pin
+    (the form 岳 rejected), but a refusal that says **which** run crossed **which**
+    conductor **where** and what to move (053 sec.5 scenario 10's rule). A message
+    that names no obstacle is a puzzle; a junction welded onto the crossing to make
+    it look intended is a short.
+
+    The seals here are four wires five units from the pin — closer than every rung
+    the ladder has — so each of the four directions is measured and each one comes
+    back crossed.
+    """
+    pin = (200.0, 200.0)
+    router = dc.lattice_router(
+        grid=UNIT, residue=(0.0, 0.0), boxes=(), bounds=(0.0, 0.0, 400.0, 400.0),
+    )
+    router.edges = [
+        ((195.0, 150.0), (195.0, 250.0)),  # west of the pin, 5 units out
+        ((205.0, 150.0), (205.0, 250.0)),  # east
+        ((150.0, 205.0), (250.0, 205.0)),  # north
+        ((150.0, 195.0), (250.0, 195.0)),  # south
+    ]
+    router.edge_nets = ["5V0", "5V0", "GND", "GND"]
+
+    west: list[str] = []
+    for direction in ((1.0, 0.0), (0.0, 1.0), (0.0, -1.0), (-1.0, 0.0)):
+        crossings: list[str] = []
+        anchor, lead, _hang = dc._flag_anchor(
+            router, pin, direction, set(),
+            leads=(dc.SIBLING_LEAD,), crossings=crossings,
+        )
+        assert lead is None and anchor == pin, (
+            f"the lead out of {pin} towards {direction} was drawn as {lead} — every "
+            "rung of it cuts one of the four wires five units away (074 sec.3)"
+        )
+        assert crossings, f"direction {direction} was refused without a reason"
+        if direction == (-1.0, 0.0):
+            west = crossings
+
+    failure = dc._flag_crossing_failure(
+        "3V3", pin, west, "U1.2 is named by a flag of its own (069 sec.1)",
+    )
+    assert failure.category == dc.FAILURE_LAYOUT_UNSAT, (
+        f"a pad whose every lead crosses a wire is {failure.category}, not a "
+        "downgrade: silently drawing it is what this batch exists to stop"
+    )
+    assert failure.subject == "3V3"
+    for piece in (
+        "U1.2 is named by a flag of its own (069 sec.1)",
+        "its run (200, 200)-(150, 200)",
+        "crosses net 5V0's wire (195, 150)-(195, 250) at (195, 200)",
+    ):
+        assert piece in failure.detail, (
+            f"the refusal does not name {piece!r} — 074 sec.4 wants the measured "
+            f"reason: {failure.detail}"
+        )
+    assert failure.action, "a refusal without an action is a puzzle (053 sec.4)"
+    assert "junction" in failure.action, (
+        "the action has to say the crossing is not repaired with a junction — a dot "
+        f"there would join two nets the spec keeps apart: {failure.action}"
+    )
+
+
+def test_a_lead_that_cuts_another_net_refuses_that_variant_and_names_the_run():
+    """074 sec.4：拒绝要出现在编译器的答复里，逐变体、带实测原因（不是静默丢弃）.
+
+    The ladder turning down a crossing rung is invisible on its own: a variant that
+    loses a pad's flag has to *say so*, or the caller only sees fewer candidates and
+    no reason. This is the other half of the drawing claim in
+    :func:`test_a_pads_flag_lead_never_cuts_through_another_nets_wire` — the same
+    compile, read from the refusal side: some variant is refused as
+    ``layout-unsat``, the refusal names the run and the net it crossed, and no
+    variant is refused without a name.
+    """
+    page = (0.0, 0.0, 1170.0, 825.0)
+    spec = _duplicate_vout_circuit(out_members=["U1.2", "U1.4", "C2.1"])
+    result = dc.compile(
+        spec, _e1_presentation(), library(), dc.CompileBudget(page_box=page),
+    )
+    assert result.ok, render(result)
+    refused = [
+        item for item in result.rejected
+        if item.failure is not None
+        and item.failure.category == dc.FAILURE_LAYOUT_UNSAT
+    ]
+    assert refused, (
+        "the crossing rung of the E1 shape is refused by the ladder, but the "
+        f"compiler's answer says nothing about it: "
+        f"{[(item.variant, item.reason) for item in result.rejected]}"
+    )
+    for item in refused:
+        assert "crosses net" in item.failure.detail and " at (" in item.failure.detail, (
+            f"variant {item.variant} was refused as layout-unsat without naming the "
+            f"conductor it crossed: {item.failure.detail}"
+        )
+        assert item.failure.action
+    assert any("VIN5" in item.failure.detail for item in refused), (
+        "the measured crossing on this shape is the input rail VIN5 being cut by pin "
+        f"2's own run: {[item.failure.detail for item in refused]}"
+    )
+
+
+def test_every_statement_of_the_074_refusal_fits_its_own_signature():
+    """074 的拒绝只有一个构造器：三处调用都必须与签名对得上.
+
+    The batch adds one refusal and three call sites — a pad's flag, the rail's flag,
+    a stub's label. One of them passed the pin as ``(member, point)`` *and* the two
+    halves separately, which only a page where a rail's every run is crossed would
+    have reached: no offline scenario has one, so no drawing test could see it, and
+    the failure would have been a `TypeError` where a refusal belongs. A refusal
+    that cannot be built is no refusal at all, so the calls are checked against the
+    signature the way the compiler itself would bind them.
+    """
+    source = Path(dc.__file__).read_text(encoding="utf-8")
+    calls = [
+        node for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call)
+        and getattr(node.func, "id", "") == "_flag_crossing_failure"
+    ]
+    assert len(calls) >= 3, (
+        "premise: the pad's flag, the rail's flag and the label's stub each state "
+        f"this refusal — the module calls it {len(calls)} time(s)"
+    )
+    expected = len(inspect.signature(dc._flag_crossing_failure).parameters)
+    for node in calls:
+        assert len(node.args) == expected and not node.keywords, (
+            f"line {node.lineno} of {Path(dc.__file__).name} passes "
+            f"{len(node.args)} argument(s) to _flag_crossing_failure, whose "
+            f"signature takes {expected} — the refusal cannot be built there"
+        )
+
+
+def test_only_a_leads_run_is_gated_and_ordinary_wiring_still_crosses():
+    """074 sec.2 的范围：只有旗引线/stub 硬化，普通信号布线维持 crossings 软指标.
+
+    Crossing is how a dense schematic is drawn: a few wires with nowhere else to go
+    pass over each other, and the contract counts them (`readability`'s soft metric)
+    instead of forbidding them. 074 changes that for one thing only — the run that
+    exists to carry a **name** — because that is the run 岳 read as a short. So the
+    router's own answer is compared against the gate's: the same geometry is a legal
+    wire and an illegal lead.
+    """
+    router = dc.lattice_router(
+        grid=UNIT, residue=(0.0, 0.0), boxes=(), bounds=(0.0, 0.0, 400.0, 400.0),
+    )
+    router.edges = [((100.0, 100.0), (100.0, 300.0))]
+    router.edge_nets = ["GND"]
+    run = [(50.0, 200.0), (250.0, 200.0)]
+    assert dc.one_bend_route(router, run[0], run[1], set()) == run, (
+        "ordinary wiring no longer crosses another net's wire — 074 hardens a flag's "
+        "lead, and widening that to the router would refuse drawings 岳 never "
+        "complained about"
+    )
+    assert dc._lead_crossing(router, run) is not None, (
+        "the very same geometry, judged as a lead, is refused (074 sec.1)"
+    )
+
+    page = (0.0, 0.0, 1170.0, 825.0)
+    result = dc.compile(
+        ldo_circuit(), ldo_presentation(), library(), dc.CompileBudget(page_box=page),
+    )
+    assert result.ok, render(result)
+    metrics = result.candidates[0].evidence.soft_metrics
+    assert "crossings" in metrics, (
+        "crossings must stay a counted soft metric of every drawing — the gate's "
+        f"layers are {sorted(metrics)}"
+    )
+
+
 def test_scene_08b_the_ams1117_duplicate_vout_never_reads_as_a_compiler_bug():
     """055 G1: the measured AMS1117 (VOUT twice) must bind, then draw or refuse by name.
 
@@ -2160,6 +2696,12 @@ def test_scene_08e_the_same_circuit_draws_once_the_sides_match_the_symbol():
     on (053 sec.3: the grammar follows `sidePreferences`). That is the input-side
     fix the LDO's real-machine run recorded, and stating it is what turns "no
     legal layout" into a drawing rather than into a bent symbol.
+
+    074 costs this shape one of the three variants it used to offer: on that
+    variant the GND pad's own flag has no side left to hang on that no other net
+    crosses, so the ladder refuses the variant by name instead of drawing the lead
+    that cut a neighbour. Two drawings remain, and neither of them carries a flag
+    lead through another net's conductor.
     """
     spec = _duplicate_vout_circuit(out_members=["U1.2", "C2.1"], nc=["U1.4"])
     scene = Scene(
@@ -2171,9 +2713,14 @@ def test_scene_08e_the_same_circuit_draws_once_the_sides_match_the_symbol():
         dc.CompileBudget(page_box=(0.0, 0.0, 1170.0, 825.0)),
     )
     assert result.ok, render(result)
-    assert len(result.candidates) >= 3, render(result)
+    assert len(result.candidates) >= 2, render(result)
     plan = result.candidates[0]
     assert plan.part("U1") is not None and plan.part("C2") is not None
+    assert _lead_crossings(plan) == [], _lead_crossings(plan)
+    for item in result.rejected:
+        if item.failure is not None:
+            assert item.failure.category == dc.FAILURE_LAYOUT_UNSAT
+            assert "crosses net" in item.failure.detail, item.failure.detail
     assert_independently_clean(plan, scene)
 
 
