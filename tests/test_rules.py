@@ -133,6 +133,32 @@ def test_zero_ohm_jumper_is_not_a_shunt():
         ("10kΩ", 10000.0),
         ("1MΩ", 1e6),
         ("0Ω", 0.0),
+        # 071 §2: the trade's mid-letter notation, which the board side could not
+        # read at all before -- a rule handed an unreadable value skips the part
+        # entirely, which is worse than a miss (issue #23).
+        ("4K7", 4700.0),
+        ("4k7", 4700.0),
+        ("1K0", 1000.0),
+        ("2M2", 2.2e6),
+        ("100R", 100.0),
+        ("47R", 47.0),
+        ("22R", 22.0),
+        ("10R", 10.0),
+        ("4K7Ω", 4700.0),
+        # The reverse example 071 called out: `0R5` is the *board* grammar's
+        # (`R` as the decimal point, inherited from connectivity), and that branch
+        # is tried first, so this value keeps the 0.5 it always had. The MPN-side
+        # reader still refuses it (a bare `0` mantissa is not a value).
+        ("0R5", 0.5),
+        # `4.7kΩ` is the board grammar's 4700 and must not go through the
+        # mid-letter scan, which would read the `7K` after the dot as 7000.
+        ("4.7kΩ", 4700.0),
+        # `R47` = 0.47 Ω is the board grammar's too (a leading `R` means 0.xxx),
+        # while the MPN side refuses the same spelling: inside a part number a
+        # leading letter with no digit run in front of it is a series name (071
+        # §4). One grammar, two questions -- "what does this board declare" vs
+        # "what does this part number say".
+        ("R47", 0.47),
     ],
 )
 def test_parse_resistance_ohms(text, ohms):
@@ -142,3 +168,51 @@ def test_parse_resistance_ohms(text, ohms):
 @pytest.mark.parametrize("text", ["", "  ", "abc", "n/a"])
 def test_parse_resistance_ohms_rejects_garbage(text):
     assert parse_resistance_ohms(text) is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "10MF",   # a millifarad capacitor, not `10M`: the notation must span it
+        "1MF",
+        "4K7 1%",  # a tolerance is not part of the value field
+        "0K1",     # no mantissa
+        "R", "K", "M",  # a letter alone states nothing
+        "K47", "M22",  # a letter with no digit run in front of it states nothing
+    ],
+)
+def test_the_mid_letter_reading_must_span_the_whole_value_field(text):
+    """071 §2: the Value field *is* the value, so the notation has to cover it.
+
+    The MPN reader hands back every reading a vendor field could be (``074K7``),
+    because a part number carries prefixes; a board value carries none, and
+    ``10MF`` is a millifarad capacitor rather than ``10M`` = 10 MΩ — which is
+    what `_kind_of` would otherwise call a resistor (the value-unit inference
+    asks the resistance parser first).
+
+    ``K47``/``M22`` are the empty-run guard's own witnesses on this side: with no
+    digit run in front of the letter there is no mantissa, and the board grammar
+    (which reads ``R47`` as 0.47 Ω) does not read a leading ``K``/``M`` that way
+    at all.
+    """
+    assert parse_resistance_ohms(text) is None
+
+
+def test_one_ohm_parser_reads_the_board_and_the_mpn():
+    """071 §2, the repository's "one verdict, one implementation" rule.
+
+    The board-value parser and the MPN decoder used to read the mid-letter
+    notation differently (one knew it, the other did not), so the two sides of
+    one comparison disagreed about what the same spelling meant. Now there is one
+    implementation in `rules/values.py` and `connectivity` re-exports it, which
+    is what these two identities pin.
+    """
+    from boardwise.rules import connectivity, params, values
+
+    assert connectivity.parse_resistance_ohms is not values.parse_resistance_ohms
+    for text in ("4K7", "4.7kΩ", "0R01", "10mΩ", "1MΩ", "470"):
+        assert connectivity.parse_resistance_ohms(text) == values.parse_resistance_ohms(text)
+        assert params.parse_resistance_ohms(text) == values.parse_resistance_ohms(text)
+    # The MPN side keeps its own entry point (per-kind: only a known resistor may
+    # ask it), and it reads the same notation through the same scan.
+    assert values.mpn_resistance_readings("4K7") == [(4700.0, "4K7")]

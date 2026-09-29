@@ -14,7 +14,8 @@ What the fake editor cannot decide is decided here, on the engines directly:
 4. **discard's identity** — designator + position + value, a merged wire is never
    a partial delete, a page document is found by position;
 5. **the leftovers** — the divider's signal-driven top (O1), the page router's
-   memo being answer-for-answer the module router (O2, with the scene-7 time),
+   memo being answer-for-answer the module router (O2, with the scene-7 route
+   timed *against that router* rather than against a wall clock: issue #20),
    the Greek mu decoupling hint.
 
 The 053B / 056 hard invariants are the existing batteries' (their scene hashes
@@ -511,7 +512,32 @@ def test_o2_the_page_routers_memo_answers_exactly_as_the_module_router(monkeypat
     assert with_memo == without and with_memo
 
 
-def test_o2_scene_7s_shape_routes_under_two_seconds_a_variant(monkeypatch):
+#: How much slower than the search fallback the page router may be before the
+#: relative check below calls it a regression (issue #20). Deliberately wide: the
+#: measurement is a *degenerate criterion*, not a performance baseline — the
+#: page router with its memo is currently ~7x **faster** than the module router
+#: it replaces, so this factor only fires when it does orders of magnitude more
+#: work than the thing it was written to replace.
+SEARCH_FACTOR = 4.0
+
+
+def test_o2_scene_7s_shape_routes_within_a_factor_of_the_search(monkeypatch):
+    """Same route, judged against the search *on this machine* (issue #20).
+
+    The assertion used to be wall-clock (`slowest variant < 2.0 s`), which
+    measured the machine rather than the code: the oracle's A/B showed the
+    pre-069 code at the same 2.2-3.3 s on his hardware, so the test fired on
+    that hardware for a regression that did not exist. What is asserted now is
+    the *ratio* to the module router the page router falls back to
+    (``drawcompiler.lattice_router``), timed in the same run: both sides move
+    with the machine, so only their quotient is a statement about this code.
+
+    This is a **degenerate criterion, not a performance baseline** (issue #20,
+    suggestion 1). It cannot see a small slowdown, and it is not meant to: the
+    memo's correctness is the byte-equality test above, and what is left for
+    time to guard is the shape where the page router stops memoising and does
+    the search's work many times over.
+    """
     scene = m056.scenes()[7]
     original = pagecompiler._assemble
     times: list[float] = []
@@ -523,16 +549,28 @@ def test_o2_scene_7s_shape_routes_under_two_seconds_a_variant(monkeypatch):
         finally:
             times.append(time.perf_counter() - started)
 
+    def slowest_variant() -> float:
+        """The slowest variant of a run, best of two: the old test's own reading."""
+        best: float | None = None
+        for _attempt in range(2):
+            times.clear()
+            pagecompiler.compile_page(
+                scene.circuit, scene.presentation, m056.library(), scene.budget,
+            )
+            slowest = max(times)
+            best = slowest if best is None else min(best, slowest)
+        assert best is not None
+        return best
+
     monkeypatch.setattr(pagecompiler, "_assemble", timed)
-    best = None
-    for _attempt in range(2):
-        times.clear()
-        pagecompiler.compile_page(
-            scene.circuit, scene.presentation, m056.library(), scene.budget,
-        )
-        slowest = max(times)
-        best = slowest if best is None else min(best, slowest)
-    assert best is not None and best < 2.0, f"slowest variant took {best:.2f} s"
+    with_memo = slowest_variant()
+    monkeypatch.setattr(pagecompiler, "_PageRouter", drawcompiler.lattice_router)
+    by_search = slowest_variant()
+    assert with_memo <= by_search * SEARCH_FACTOR, (
+        f"the page router took {with_memo:.2f} s on its slowest variant against "
+        f"the search's {by_search:.2f} s: more than {SEARCH_FACTOR:g}x the "
+        "fallback it replaces (a degenerate criterion -- see SEARCH_FACTOR)"
+    )
 
 
 # ------------------------------------------------ the Greek-mu decoupling hint

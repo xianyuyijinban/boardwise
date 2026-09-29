@@ -178,7 +178,17 @@ def test_the_conclusion_may_not_claim_a_pass_while_parts_are_unreviewed(
     count = report["summary"]["unreviewedParts"]
     assert count > 0
     assert report["summary"]["mayClaimPassed"] is False
-    assert report["summary"]["conclusion"] == f"DRC/连接性已审，{count} 颗器件缺手册未审"
+    # 071 §5 (issue #21): the generation-time line carries the triage backlog
+    # too, so it and `completion` are one arithmetic. This board has warnings
+    # nobody has judged yet, and that is one of the reasons its verdict is
+    # `incomplete` -- the quotable line may not leave it out.
+    pending = report["completion"]["warningsPendingTriage"]
+    assert report["completion"]["verdict"] == "incomplete"
+    assert report["summary"]["conclusion"] == (
+        f"DRC/连接性已审，{count} 颗器件缺手册未审"
+        + (f"；另有 {pending} 条 warning 待分诊" if pending else "")
+    )
+    assert "无 ERROR" not in report["summary"]["conclusion"]
     assert "通过" not in report["summary"]["conclusion"]
     markdown = (tmp_path / "out" / "report.md").read_text(encoding="utf-8")
     conclusion_line = next(
@@ -365,6 +375,107 @@ def test_a_run_that_could_not_build_the_skeleton_does_not_reach_complete(
     assert completion["warningsPendingTriage"] == 0
     assert completion["verdict"] == "incomplete"
     assert any("架构骨架未生成" in reason for reason in completion["verdictWhy"])
+
+
+def test_a_run_that_could_not_build_the_skeleton_does_not_quote_a_pass(
+    capsys, tmp_path, monkeypatch
+):
+    """071 §5 (issue #21), through the real command: the same run, one line down.
+
+    `summary.conclusion` is the report's *quotable* line — the one a reader
+    copies into a chat, a ticket or a commit message — and it read
+    errors/unreviewed/marked only. So this very run, whose verdict is
+    `incomplete` because the mandatory architecture walk produced nothing, said
+    "无 ERROR" with no clause at all: the line was a seventh gate that had not
+    followed the other six. It follows them now, and the invariant below is what
+    keeps a *future* gate from falling off it too.
+    """
+    monkeypatch.setenv("BOARDWISE_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(cli, "unreviewed_parts", lambda *args, **kwargs: [])
+    monkeypatch.setattr(cli, "warning_triage_slots", lambda **kwargs: [])
+
+    def no_skeleton(*args, **kwargs):
+        raise RuntimeError("skeleton builder fell over")
+
+    monkeypatch.setattr("boardwise.core.architecture.generate_architecture", no_skeleton)
+    assert cli.main([
+        "checkup", "--file", str(BOARD), "--out", str(tmp_path / "out"),
+        "--library", str(SHELF),
+    ]) == 0
+    capsys.readouterr()
+    report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
+    assert report["completion"]["verdict"] == "incomplete"
+    conclusion = report["summary"]["conclusion"]
+    assert conclusion != "无 ERROR", "the least-informed run may not quote a pass"
+    assert "架构骨架未生成" in conclusion
+    markdown = (tmp_path / "out" / "report.md").read_text(encoding="utf-8")
+    assert f"**结论：{conclusion}**" in markdown, "report.md quotes that very line"
+
+
+def test_the_conclusion_quotes_a_pass_exactly_when_the_verdict_is_complete():
+    """071 §5's cross-assertion, over every combination of the report's gates.
+
+    One arithmetic, two sections: `completion.verdict` decides, and
+    `summary.conclusion` says the same thing in a sentence. The assertion is
+    two-sided on purpose -- the conclusion is *exactly* "无 ERROR" if and only if
+    the verdict is `complete` -- so a gate added to one side and not the other
+    fails here whatever it is called. (The one gate with no clause of its own
+    would be the bug this test exists for: #21 was `architecture is None`.)
+    """
+    import itertools
+
+    from boardwise.cli import (
+        _completion_section,
+        _conclusion_skeleton_gates,
+        _review_conclusion,
+    )
+    from boardwise.engines.checkup import TRIGGER_MARKED, marked_parts
+    from boardwise.engines.review_eval import load_board_model
+
+    model = DesignModel()
+    checked = 0
+    for errors, incomplete, unreviewed, marked, skeleton, stale, pending in itertools.product(
+        (0, 1), (False, True), (0, 2), (0, 1), (True, False), (0, 3), (0, 1)
+    ):
+        summary = {"errorCount": errors, "countsIncomplete": incomplete}
+        unreviewed_rows = [{"designator": f"U{i}"} for i in range(unreviewed)]
+        marked_rows = [
+            {"trigger": TRIGGER_MARKED, "part": f"U{i}"} for i in range(marked)
+        ]
+        triage_rows = [
+            {"key": f"k{i}", "verdict": "" if i < pending else "defect"}
+            for i in range(pending)
+        ]
+        architecture = (
+            {"totals": {"slots": 8, "filled": 8, "stale": stale}} if skeleton else None
+        )
+        completion = _completion_section(
+            model=model,
+            summary=summary,
+            unreviewed=unreviewed_rows,
+            triage=triage_rows,
+            architecture=architecture,
+            needs_datasheet=marked_rows,
+        )
+        conclusion = _review_conclusion(
+            summary,
+            unreviewed_count=len(unreviewed_rows),
+            marked_count=len(marked_parts(marked_rows)),
+            pending_triage=int(completion["warningsPendingTriage"] or 0),
+            **_conclusion_skeleton_gates(
+                architecture=architecture, completion=completion
+            ),
+        )
+        checked += 1
+        verdict = completion["verdict"]
+        assert conclusion, "the line is never empty"
+        assert (conclusion == "无 ERROR") == (verdict == "complete"), (
+            f"errors={errors} incomplete={incomplete} unreviewed={unreviewed} "
+            f"marked={marked} skeleton={skeleton} stale={stale} pending={pending}: "
+            f"conclusion={conclusion!r} verdict={verdict!r} "
+            f"why={completion['verdictWhy']}"
+        )
+    assert checked == 2**7 and load_board_model(str(BOARD)) is not None
 
 
 def test_the_schema_bump_only_adds_fields(capsys, tmp_path, monkeypatch):

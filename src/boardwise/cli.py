@@ -3109,7 +3109,13 @@ def _merge_need_mark(
 
 
 def _review_conclusion(
-    summary: dict, *, unreviewed_count: int, marked_count: int, pending_triage: int = 0
+    summary: dict,
+    *,
+    unreviewed_count: int,
+    marked_count: int,
+    pending_triage: int = 0,
+    skeleton_missing: bool = False,
+    stale_slots: int = 0,
 ) -> str:
     """`summary.conclusion` — the one line that may be quoted as the verdict.
 
@@ -3119,13 +3125,21 @@ def _review_conclusion(
     read as a plain "无 ERROR". `summary.mayClaimPassed` is untouched: it stays
     the **narrow** answer to "is any part unreviewed?".
 
-    `pending_triage` is the third clause (063 §4): a report with warnings nobody
-    has judged yet owes that judgement, so once `boardwise triage` writes one the
-    line has to say so — it is the same arithmetic `completion.verdictWhy`
-    spells out. Only the triage command passes it: at generation time the slots
-    are the AI's to fill and the report's own line stays the one 039 wrote (the
-    pending count lives in `completion`), which keeps this string from becoming a
-    second, silently-widening verdict.
+    `pending_triage` is the third clause (063 §4), `skeleton_missing` and
+    `stale_slots` the fourth and fifth (071 §5, issue #21): a report with
+    warnings nobody has judged yet, one whose architecture skeleton was never
+    generated, or one whose recorded drawing moved under it all owe something,
+    so the line has to say so — it is the same arithmetic
+    `completion.verdictWhy` spells out. Those two were the clauses that made this
+    string a *second* verdict, silently narrower than the first: `completion`
+    said `incomplete` (no skeleton) while the conclusion said "无 ERROR" with no
+    clause at all.
+
+    The invariant the five clauses buy, and the reason every gate has one:
+    **the conclusion is exactly "无 ERROR" if and only if the verdict is
+    `complete`**. The gates are the ones :func:`_completion_body` decides on, so
+    a gate added there and not here is a bug — `tests/test_039c_review_flow.py`
+    asserts the pairing over every combination of them.
     """
     errors = int(summary.get("errorCount", 0) or 0)
     verdict = "无 ERROR" if not errors else f"{errors} 项 ERROR"
@@ -3139,9 +3153,35 @@ def _review_conclusion(
         text = verdict
     if marked_count:
         text += f"；另有 {marked_count} 项管脚待手册（已标记）"
+    if skeleton_missing:
+        text += "；架构骨架未生成（报告里没有 architecture 一节，未审项不可枚举）"
+    if stale_slots:
+        text += f"；另有 {stale_slots} 个架构槽位的图纸已变（stale）"
     if pending_triage:
         text += f"；另有 {pending_triage} 条 warning 待分诊"
+    if summary.get("countsIncomplete"):
+        # #15's shape, one level up: the host answered but its answer cannot be
+        # enumerated, `completion` counts that as incomplete and the exit code
+        # is 1 — so the quotable line may not say "无 ERROR" in silence.
+        text += "；另有主机 DRC 答复不完整（条目不可枚举，退出码按有错算）"
     return text
+
+
+def _conclusion_skeleton_gates(*, architecture: object, completion: dict) -> dict:
+    """The two architecture gates :func:`_review_conclusion` repeats (071 §5).
+
+    Read from the **same** values `completion` was built from, so the quotable
+    line cannot disagree with the verdict: the skeleton's absence is the key
+    being absent (044's "absent, not empty"), and the stale count is what
+    :func:`_completion_body` counted. Kept in one place because issue #21 was
+    exactly a gate that had been added to `completion` and not to the line
+    beside it.
+    """
+    slots = (completion or {}).get("architectureSlots") or {}
+    return {
+        "skeleton_missing": architecture is None,
+        "stale_slots": int(slots.get("stale") or 0),
+    }
 
 
 def _apply_needs_datasheet(report: dict, needs_datasheet: list[dict]) -> dict:
@@ -3161,6 +3201,10 @@ def _apply_needs_datasheet(report: dict, needs_datasheet: list[dict]) -> dict:
         report.get("summary") or {},
         unreviewed_count=len(report.get("unreviewed_parts") or []),
         marked_count=len(marked_parts(needs_datasheet)),
+        pending_triage=int(report["completion"].get("warningsPendingTriage") or 0),
+        **_conclusion_skeleton_gates(
+            architecture=report.get("architecture"), completion=report["completion"]
+        ),
     )
     return report
 
@@ -3274,6 +3318,9 @@ def _apply_warning_triage(report: dict, triage: list[dict]) -> dict:
         unreviewed_count=len(report.get("unreviewed_parts") or []),
         marked_count=len(marked_parts(report.get("needs_datasheet") or [])),
         pending_triage=int(report["completion"].get("warningsPendingTriage") or 0),
+        **_conclusion_skeleton_gates(
+            architecture=report.get("architecture"), completion=report["completion"]
+        ),
     )
     return report
 
@@ -3987,16 +4034,6 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
             f"侧车 {NEEDS_DATASHEET_FILE} 里有 {len(stale_marks)} 条审查者标记（按 (part, pin) 计）"
             f"未并入本次报告（checkup 生成时 marked 为空）：跑 `boardwise need-datasheet` 重新合并"
         )
-    # The conclusion carries every half. With errors present the count stays first
-    # (that is the reader's next action); with none, the datasheet gate is the whole
-    # of what may be said — and nothing on the line claims a pass while parts have
-    # no datasheet or pins are still waiting for one.
-    summary["conclusion"] = _review_conclusion(
-        summary,
-        unreviewed_count=len(unreviewed),
-        marked_count=len(marked_parts(needs_datasheet)),
-    )
-
     triage = warning_triage_slots(model=model, drc=drc, findings=findings, modules=modules)
     collided = disambiguated_triage_keys(triage)
     if collided:
@@ -4082,6 +4119,29 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         },
     }
 
+    architecture_section = architecture.section if architecture is not None else None
+    completion = _completion_section(
+        model=model, summary=summary, unreviewed=unreviewed, triage=triage,
+        architecture=architecture_section,
+        needs_datasheet=needs_datasheet,
+    )
+    # The conclusion carries every half, and it is written **after** the
+    # architecture section exists (071 §5, issue #21). With errors present the
+    # count stays first (that is the reader's next action); with none, the gates
+    # that hold the verdict back are what may be said — and nothing on the line
+    # claims a pass while parts have no datasheet, pins wait for one, the
+    # skeleton was never generated, a slot's drawing moved under it, or the
+    # triage backlog is non-empty. It is built from the `completion` section the
+    # report carries, so the line and the verdict are one arithmetic.
+    summary["conclusion"] = _review_conclusion(
+        summary,
+        unreviewed_count=len(unreviewed),
+        marked_count=len(marked_parts(needs_datasheet)),
+        pending_triage=int(completion.get("warningsPendingTriage") or 0),
+        **_conclusion_skeleton_gates(
+            architecture=architecture_section, completion=completion
+        ),
+    )
     report = _checkup_report(
         tier=tier, source=source, model=model, attempts=attempts, notes=notes,
         drc=drc, findings=findings, summary=summary, modules=modules, slots=slots,
@@ -4093,12 +4153,8 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
             if aesthetics_on
             else None
         ),
-        architecture=(architecture.section if architecture is not None else None),
-        completion=_completion_section(
-            model=model, summary=summary, unreviewed=unreviewed, triage=triage,
-            architecture=(architecture.section if architecture is not None else None),
-            needs_datasheet=needs_datasheet,
-        ),
+        architecture=architecture_section,
+        completion=completion,
     )
     report_path = _write_checkup_report(out_dir, report)
     report_md_path = _write_checkup_markdown(out_dir, report)
