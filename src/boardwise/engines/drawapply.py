@@ -1351,6 +1351,23 @@ def _part_problems(
     return problems
 
 
+def unnamed_nets(plan: ChangePlan) -> set[str]:
+    """The nets this plan's wires are drawn **without a name** for (069 sec.9).
+
+    A net the plan states with a flag carries its name on the flag; naming its wires
+    too prints the name twice, which is what 岳 sent the landed page back for
+    (「有了旗标就不要反复标注网络标识了。看着很乱啊」). `draw apply` therefore places
+    those wires unnamed — which is exactly what a hand-drawn rail looks like to the
+    editor (岳's own P22: its wires answer ``Net: ""`` while its flags carry the
+    names, and the netlist still joins them by geometry).
+
+    The two places that read a landed wire back — the canvas leg and the discard —
+    therefore match those wires by **geometry**: the page has no name to match them
+    by, and the netlist leg is what says which net they are on.
+    """
+    return {item.net for item in plan.change.draw_flags if item.net}
+
+
 def _wire_problems(plan: ChangePlan, geometry: Any) -> list[str]:
     """Each planned wire's own endpoints, under the net it belongs to.
 
@@ -1361,6 +1378,11 @@ def _wire_problems(plan: ChangePlan, geometry: Any) -> list[str]:
     are vertices of that net's own wiring on the page, and that the net's total
     length did not shrink. The netlist leg is the acceptance's main judgement;
     this one says "the drawn thing is on the canvas".
+
+    A net in :func:`unnamed_nets` has no name on the page to be found under (069
+    sec.9), so its wires' ends are measured against the page's wiring as a whole and
+    its length against the plan's total — *which* net those wires belong to is the
+    netlist leg's judgement, and the ends still have to be on the canvas.
     """
     vertices: dict[str, set[tuple[float, float]]] = {}
     lengths: dict[str, float] = {}
@@ -1387,8 +1409,12 @@ def _wire_problems(plan: ChangePlan, geometry: Any) -> list[str]:
         lengths[net] = lengths.get(net, 0.0) + total
     problems: list[str] = []
     planned_length: dict[str, float] = {}
+    unnamed = unnamed_nets(plan)
+    everywhere = {spot for spots in vertices.values() for spot in spots}
     for wire in plan.change.draw_wires:
         have = vertices.get(wire.net, set())
+        if not have and wire.net in unnamed:
+            have = everywhere
         for end in (wire.points[0], wire.points[-1]):
             spot = (round(end[0], 6), round(end[1], 6))
             if spot not in have:
@@ -1401,7 +1427,21 @@ def _wire_problems(plan: ChangePlan, geometry: Any) -> list[str]:
             + abs(wire.points[index][1] - wire.points[index - 1][1])
             for index in range(1, len(wire.points))
         )
+    # The unnamed wires (069 sec.9) cannot be counted per net — the page holds them
+    # under no name — so their lengths are compared as one bucket. They are still
+    # counted: a segment that did not land is exactly as visible here.
+    unnamed_wanted = sum(
+        value for net, value in planned_length.items() if net in unnamed
+    )
+    if unnamed_wanted and lengths.get("", 0.0) + HALF_GRID < unnamed_wanted:
+        problems.append(
+            f"the plan draws {unnamed_wanted:g} units of unnamed wire (nets "
+            + ", ".join(sorted(net for net in planned_length if net in unnamed))
+            + f") and the page holds {lengths.get('', 0.0):g} — a segment did not land"
+        )
     for net, wanted in sorted(planned_length.items()):
+        if net in unnamed:
+            continue
         have = lengths.get(net, 0.0)
         if have + HALF_GRID < wanted:
             problems.append(
@@ -1808,10 +1848,16 @@ def discard_selection(plan: ChangePlan, geometry: Any) -> DiscardSelection:
         planned.setdefault(wire.net, []).append(
             [(float(point[0]), float(point[1])) for point in wire.points]
         )
+    unnamed = unnamed_nets(plan)
     for net, polylines in sorted(planned.items()):
         mine: list[dict[str, Any]] = []
         for row in wire_rows:
-            if row["net"] != net:
+            # 069 sec.9: a flagged net's wires are drawn *unnamed*, so the page holds
+            # them under no name (or under the host's own auto name) — they are the
+            # plan's when their geometry lies on the plan's wiring, and the "touches
+            # the plan's wiring and reaches beyond it" test below is what still
+            # refuses a wire the host merged with somebody else's.
+            if row["net"] != net and not (net in unnamed and not row["net"]):
                 continue
             points = [(float(point[0]), float(point[1])) for point in row["points"]]
             on = [any(_on_polyline(point, line) for line in polylines) for point in points]

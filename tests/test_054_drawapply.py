@@ -135,13 +135,20 @@ def _geometry(*, components, wires=(), netflags=(), bboxes=None,
 
 
 def _page_matching(plan: ChangePlan) -> dict:
-    """A page that *is* the plan: every part, every wire, every flag, every value."""
+    """A page that *is* the plan: every part, every wire, every flag, every value.
+
+    The wires of a net the plan *flags* come back **unnamed** (069 sec.9: `draw
+    apply` places them without a name, so the flag is the only place the canvas
+    states it — which is what a hand-drawn rail looks like to the editor), so the
+    fake page reports them the same way the host does.
+    """
     components = [
         (part.designator, part.x, part.y, part.rotation, part.mirror)
         for part in plan.change.draw_parts
     ]
+    flagged = drawapply.unnamed_nets(plan)
     wires = [
-        (f"w-{index}", wire.net, wire.points)
+        (f"w-{index}", "" if wire.net in flagged else wire.net, wire.points)
         for index, wire in enumerate(plan.change.draw_wires)
     ]
     netflags = [(flag.net, flag.x, flag.y) for flag in plan.change.draw_flags]

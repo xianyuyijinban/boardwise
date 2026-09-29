@@ -6907,20 +6907,30 @@ async def _draw_apply_flow(
         return done(3, "unknown", "verification_disagrees")
 
     # ---- 7. the wires -----------------------------------------------------
+    #
+    # The host prints a wire's net name on the canvas, so a wire that carries a name
+    # the drawing *also* states with a flag says it twice — 岳, on the landed page:
+    # 「有了旗标就不要反复标注网络标识了。看着很乱啊」. A net the plan flags is
+    # therefore drawn **unnamed**: the flag names it and the geometry joins them
+    # (his own hand drawing does exactly that — its wires carry no name and its flags
+    # do). A net with no flag keeps its name on the wire, which is what carries it
+    # (057 sec.4's named stub, and 035's "the only thing holding this wire").
+    flagged = drawapply.unnamed_nets(plan)
     executed: list[dict] = []
     for wire in plan.change.draw_wires:
         params: dict = {
             "points": [list(point) for point in wire.points],
-            "net": wire.net,
             "pageUuid": page,
         }
+        if wire.net and wire.net not in flagged:
+            params["net"] = wire.net
         answered = await call(
             "sch.place_wire", params,
             f"draw the wire of net {wire.net!r} "
             + " → ".join(f"({x:g}, {y:g})" for x, y in wire.points)
             + f" ({len(wire.points)} point(s)"
             + (f", from {wire.from_pin}" if wire.from_pin else "")
-            + ")",
+            + (")" if "net" in params else ") carrying no name — its flag states it"),
             writes=True,
         )
         report["write"]["calls"] += 1
