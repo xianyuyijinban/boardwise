@@ -145,6 +145,31 @@ def ams1117_duplicate_vout(ref: str = "AMS1117-3.3-C6186") -> SymbolProfile:
     )
 
 
+def ams1117_duplicate_vout_flipped(ref: str = "AMS1117-3.3-C6186-M") -> SymbolProfile:
+    """The measured AMS1117 turned round: its single-sided pins on the **right**.
+
+    Same shape, same duplicate VOUT, mirrored in x — nothing about this regulator
+    is written into the rule 065 sec.1 adds, so the answer has to come out
+    mirrored too (the output branch on the *left* pad). The body box is symmetric
+    in x, so only the tips and the escape directions move.
+    """
+    base = ams1117_duplicate_vout(ref)
+    across = {"left": "right", "right": "left", "up": "down", "down": "up"}
+    return SymbolProfile(
+        symbol_ref=ref, title=f"{base.title} (flipped in x)", body=base.body,
+        pins=[
+            SymbolPin(
+                number=pin.number, name=pin.name,
+                tip=(-pin.tip[0], pin.tip[1]),
+                direction=across.get(pin.direction, pin.direction),
+                direction_source=pin.direction_source,
+                electrical_role=pin.electrical_role, role_source=pin.role_source,
+            )
+            for pin in base.pins
+        ],
+    )
+
+
 def library(**overrides: SymbolProfile) -> dict[str, SymbolProfile]:
     """The default book: every symbol the scenarios use, flags included.
 
@@ -497,13 +522,20 @@ def anchors_with(plan: LayoutPlan, net_id: str) -> list[tuple[float, float]]:
     return out
 
 
-def pin_point(plan: LayoutPlan, member: str) -> tuple[float, float] | None:
-    """Where the plan puts a spec pin, through the profile and the plan's pose."""
+def pin_point(
+    plan: LayoutPlan, member: str, book: dict | None = None
+) -> tuple[float, float] | None:
+    """Where the plan puts a spec pin, through the profile and the plan's pose.
+
+    ``book`` names which library to read the symbol from, for the tests that
+    compile against a symbol the default book does not carry (065's flipped
+    regulator); the default is the module's own book.
+    """
     part_id, _, token = member.partition(".")
     placed = plan.part(part_id)
     if placed is None:
         return None
-    profile = library().get(placed.symbol_ref)
+    profile = (book or library()).get(placed.symbol_ref)
     if profile is None:
         return None
     pin = profile.pin(token)
@@ -1061,6 +1093,148 @@ def test_a_branch_goes_to_the_side_the_grammar_reads_for_it():
     assert readability.check(
         plan, spec, presentation, library(), page_box=page,
     ).hard_violations == []
+
+
+def test_an_output_branch_hangs_on_the_pad_across_the_body_from_the_input():
+    """065 sec.1: 分侧的参照物是**脚**——输出电容挂与输入脚异侧的那只 VOUT 脚。
+
+    The measured AMS1117 carries VOUT twice, one pad down each side, and 060
+    hung the output branch on the first pin by id — the left-hand one, the same
+    side 060 had just sent the input capacitor to. On the E1 render that put both
+    capacitors under the core's left edge (岳: "C1 放左边、C2 放右边，不行吗？
+    这样看着真的好怪，也好挤呀"). The output branch now hangs on the *pad across the
+    body* from the pin the input branch hangs on, so the input capacitor leaves
+    on the input side and the output capacitor on the other one.
+    """
+    page = (0.0, 0.0, 1170.0, 825.0)
+    spec = _duplicate_vout_circuit(out_members=["U1.2", "U1.4", "C2.1"])
+    presentation = ldo_presentation(
+        sidePreferences={"input": "left", "output": "bottom"},
+        modules=[module("pwr", ["U1", "C1", "C2"], "regulator")],
+        portRoles={"VIN5": "input", "3V3": "output"},
+    )
+    result = dc.compile(spec, presentation, library(), dc.CompileBudget(page_box=page))
+    assert result.ok, render(result)
+    plan = result.candidates[0]
+    core = plan.part("U1")
+    near, far = pin_point(plan, "U1.2"), pin_point(plan, "U1.4")
+    in_tip, out_tip = pin_point(plan, "C1.1"), pin_point(plan, "C2.1")
+    assert core is not None
+    assert None not in (near, far, in_tip, out_tip)
+    # The premises this test is about: the two VOUT pads are on opposite sides of
+    # the body, and the input capacitor hangs off the left-hand VIN pin.
+    assert near[0] < core.x < far[0], (near, far, core.x)
+    assert in_tip[0] < core.x, (in_tip, core.x)
+    # 065: the output branch hangs below the *far* pad (the module asks for the
+    # output side "bottom"), not below the near one — and the two capacitors
+    # therefore leave the core on opposite sides. Both halves are asserted: a
+    # branch that merely drifted to another lane would pass a side test alone.
+    assert out_tip[0] == far[0] and out_tip[1] < far[1], (
+        f"the output capacitor hangs below the far VOUT pad at {far} (065 sec.1), "
+        f"not at {out_tip}"
+    )
+    assert out_tip[0] > core.x > in_tip[0], (
+        f"input capacitor left ({in_tip[0]:g}), output capacitor right "
+        f"({out_tip[0]:g}) of the core at {core.x:g}"
+    )
+    # 060 sec.2's shorting duty survives the move: the pad the branch no longer
+    # hangs on is still on the net, and every pin of both capacitors is wired.
+    for member in ("U1.2", "U1.4", "C1.1", "C2.1"):
+        assert on_a_wire(plan, pin_point(plan, member)), member
+    assert readability.check(
+        plan, spec, presentation, library(), page_box=page,
+    ).hard_violations == []
+
+
+def test_the_pad_across_the_body_follows_the_symbol_not_a_constant_side():
+    """065 sec.1 reads the input *pin*, so turning the symbol round turns the answer.
+
+    The same measured AMS1117 with its single-sided pins mirrored into the right
+    half: VIN is now the right-hand pin, and the pad across the body from it is
+    the **left** VOUT. An implementation that simply preferred one side (the
+    right-hand pad, the higher pin id) would put both capacitors on one side
+    again — this is the case that tells the two rules apart.
+    """
+    page = (0.0, 0.0, 1170.0, 825.0)
+    ref = "AMS1117-3.3-C6186-M"
+    book = library(**{ref: ams1117_duplicate_vout_flipped(ref)})
+    spec = circuit(
+        [part("U1", ref, "AMS1117-3.3"), part("C1", "C0805", "10u"),
+         part("C2", "C0805", "22u")],
+        [
+            net("VIN5", "power", ["U1.3", "C1.1"]),
+            net("3V3", "power", ["U1.2", "U1.4", "C2.1"]),
+            net("GND", "gnd", ["U1.1", "C1.2", "C2.2"]),
+        ],
+    )
+    presentation = ldo_presentation(
+        sidePreferences={"input": "right", "output": "bottom"},
+        modules=[module("pwr", ["U1", "C1", "C2"], "regulator")],
+        portRoles={"VIN5": "input", "3V3": "output"},
+    )
+    result = dc.compile(spec, presentation, book, dc.CompileBudget(page_box=page))
+    assert result.ok, render(result)
+    plan = result.candidates[0]
+    core = plan.part("U1")
+    in_pin = pin_point(plan, "U1.3", book)
+    near, far = pin_point(plan, "U1.2", book), pin_point(plan, "U1.4", book)
+    in_tip, out_tip = pin_point(plan, "C1.1", book), pin_point(plan, "C2.1", book)
+    assert core is not None
+    assert None not in (in_pin, near, far, in_tip, out_tip)
+    assert far[0] < core.x < in_pin[0], (far, core.x, in_pin)
+    assert out_tip[0] == far[0], (
+        f"the output capacitor hangs below the pad across the body at {far}, not "
+        f"at {out_tip} — the reference is the input pin, wherever the symbol puts it"
+    )
+    assert in_tip[0] > core.x > out_tip[0], (
+        f"the mirrored symbol mirrors the drawing: input at {in_tip[0]:g}, output "
+        f"at {out_tip[0]:g}, core at {core.x:g}"
+    )
+
+
+def test_a_single_sided_role_and_an_nc_pad_keep_060s_own_pin():
+    """065 sec.1's floor: 单侧符号零变化，`nc[]` 仍把那只脚撤出候选。
+
+    Two shapes where nothing may move. A role whose pins are all on one side has
+    no pad to cross to — the branch hangs on the only pin there is, as 060 left
+    it. And a duplicate pad the spec lists in ``nc[]`` is not a candidate at all:
+    it was withdrawn by the spec, and moving the branch onto a pad the engineer
+    marked no-connect would undo 060 sec.2's exception rather than apply 065.
+    """
+    page = (0.0, 0.0, 1170.0, 825.0)
+    # (a) the plain three-pin regulator: one VOUT pin, on the right.
+    result = dc.compile(
+        ldo_circuit(), ldo_presentation(), library(), dc.CompileBudget(page_box=page),
+    )
+    assert result.ok, render(result)
+    plan = result.candidates[0]
+    core = plan.part("U1")
+    vout, out_tip = pin_point(plan, "U1.2"), pin_point(plan, "C2.1")
+    assert core is not None and vout is not None and out_tip is not None
+    assert out_tip[1] == vout[1] and out_tip[0] > vout[0], (
+        f"the output branch leaves its own pin at {vout} on that pin's row, as it "
+        f"did before 065 — it reads {out_tip} (060 sec.1, unchanged)"
+    )
+
+    # (b) the duplicate pad written into nc[] stays withdrawn.
+    spec = _duplicate_vout_circuit(out_members=["U1.2", "C2.1"], nc=["U1.4"])
+    presentation = ldo_presentation(
+        sidePreferences={"input": "left", "output": "bottom"},
+        modules=[module("pwr", ["U1", "C1", "C2"], "regulator")],
+        portRoles={"VIN5": "input", "3V3": "output"},
+    )
+    result = dc.compile(spec, presentation, library(), dc.CompileBudget(page_box=page))
+    assert result.ok, render(result)
+    plan = result.candidates[0]
+    near, far = pin_point(plan, "U1.2"), pin_point(plan, "U1.4")
+    out_tip = pin_point(plan, "C2.1")
+    assert None not in (near, far, out_tip)
+    assert out_tip[0] == near[0] and out_tip[1] < near[1], (
+        f"the output capacitor stays under the pad the spec wired at {near}, not "
+        f"under the nc[] pad at {far} (its rail pin reads {out_tip})"
+    )
+    assert not on_a_wire(plan, far), "an explicit nc[] is still a no-connect"
+    assert on_a_wire(plan, near)
 
 
 def test_a_roles_other_pins_are_wired_as_one_node_and_nc_is_the_exception():
