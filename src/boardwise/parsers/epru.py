@@ -46,6 +46,13 @@ from .epru_stream import (
     split_documents,
 )
 
+# The board view reads the same record bodies the netlist view does, out of the
+# same decoded stream, so it refuses a wrong shape with the same class and the same
+# sentence shape (`require_object`/`optional_object`: the position of the first
+# thing that is not an object). `enet` imports nothing from here, so this is not a
+# cycle — `epro2_model` already reads these two names out of the same module.
+from .enet import NetlistShapeError, optional_object, shape_of
+
 from ..core.geometry import (
     BoardGeometry,
     BoardOutline,
@@ -274,11 +281,37 @@ def _path_points(path: Any) -> list[Point]:
     return points
 
 
-def _pad_diameter(pad: dict[str, Any]) -> tuple[float, float, str]:
-    """Return ``(width, height, shape)`` from a pad's ``defaultPad`` block."""
-    block = pad.get("defaultPad") or {}
+def _pad_diameter(pad: dict[str, Any], where: str) -> tuple[float, float, str]:
+    """Return ``(width, height, shape)`` from a pad's ``defaultPad`` block.
+
+    ``defaultPad`` is shape-gated (073, the same family #28 and 072 closed for
+    ``props``/``pinInfoMap``/DEVICE ``attributes``): it used to be read as
+    ``pad.get("defaultPad") or {}``, which turned a non-empty list or string into an
+    ``AttributeError`` from inside ``block.get`` (a bare traceback, exit 1 — the code
+    that means "the board has an ERROR"). ``None`` and a missing key stay "no such
+    block" (that is what ``or {}`` tolerated, and real files write it).
+    """
+    block = optional_object(pad.get("defaultPad"), where)
     shape = str(block.get("padType") or "")
     return _as_float(block.get("width")), _as_float(block.get("height")), shape
+
+
+def _layer_list(value: Any, where: str) -> list[Any]:
+    """A list-shaped field of a record body, or :class:`NetlistShapeError`.
+
+    ``None`` — a missing key or an explicit ``null`` — is "no such layer" and stays
+    tolerated, exactly as ``body.get(key) or []`` had it. Everything else must be a
+    list: a string used to be split into characters (``list("12")`` → ``["1", "2"]``,
+    a silent wrong layer set) and a number used to raise ``TypeError`` out of
+    ``list()`` as a bare traceback with exit 1.
+    """
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise NetlistShapeError(
+            f"{where} 不是列表（期望数组，实际是 {shape_of(value)}）"
+        )
+    return list(value)
 
 
 def _hole_diameter(pad: dict[str, Any]) -> float | None:
@@ -301,7 +334,9 @@ def pad_templates(document: Document) -> list[PadTemplate]:
         if record.type != "PAD" or record.body is None:
             continue
         body = record.body
-        width, height, shape = _pad_diameter(body)
+        width, height, shape = _pad_diameter(
+            body, f"PAD 记录 {record.id or '(无 id)'}.defaultPad"
+        )
         templates.append(
             PadTemplate(
                 id=record.id or "",
@@ -463,7 +498,14 @@ def collect_pcb_context(
                 y=_as_float(body.get("y")),
                 angle=_as_float(angle),
                 layer_id=body.get("layerId"),
-                attrs=dict(body.get("attrs") or {}),
+                # 073: `attrs` is a mapping or it is a damaged file. `dict(...)` used
+                # to swallow a list-of-pairs silently, refuse a list-of-strings and a
+                # string with the interpreter's own "dictionary update sequence…"
+                # message, and crash on a number with a bare `TypeError` (exit 1 —
+                # "the board has an ERROR"). One gate, one sentence, exit 2.
+                attrs=optional_object(
+                    body.get("attrs"), f"COMPONENT 记录 {record.id or '(无 id)'}.attrs"
+                ),
             )
             context.placements.append(placement)
             context.by_id[placement.id] = placement
@@ -506,7 +548,10 @@ def collect_pcb_context(
                     hole_diameter=_as_float(body.get("holeDiameter")),
                     via_diameter=_as_float(body.get("viaDiameter")),
                     via_type=str(body.get("viaType") or ""),
-                    unused_inner_layers=list(body.get("unusedInnerLayers") or []),
+                    unused_inner_layers=_layer_list(
+                        body.get("unusedInnerLayers"),
+                        f"VIA 记录 {record.id or '(无 id)'}.unusedInnerLayers",
+                    ),
                 )
             )
         elif rtype == "LINE":

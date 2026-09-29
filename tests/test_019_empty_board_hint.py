@@ -17,7 +17,12 @@
 
 `.enet` 的"全空"用例在 tmp_path 里现写一个空网表：`.enet` 没有视图可选，空就是
 真空，给它一句"请加 `--view schematic`"是彻头彻尾的错话——这也是唯一能触发
-"后缀条件"的用例（有内容的文件是被"有内容"挡住的，不是被后缀挡住的）。
+"后缀条件"的用例（有内容的文件是被"有内容"挡住的那条腿，不是被后缀挡住的）。
+
+**073 的行为变更**：这些用例跑的都是"读到 0 器件 0 网络"的输入，而 073 把
+`verdict: incomplete` 变成退出码 **3**（"没读到"不是"干净板"，CI 别当通过）——
+所以下面凡是空输入的断言都由 `0` 改成 `3`。有内容的两条（schematic 视图的同一个
+文件、`llc_board` 的 pcb 视图）不动，仍是 `0`；这是本研究批的目的，不是副作用。
 """
 
 from __future__ import annotations
@@ -72,7 +77,9 @@ def test_the_console_says_why_the_pcb_view_read_nothing(capsys):
     code = cli.main(["review", str(EMPTY_PCB), "--view", "pcb"])
     out = capsys.readouterr().out
 
-    assert code == 0
+    # 073：pcb 视图读到 0 器件 0 网络 = verdict incomplete → exit 3（原为 0）。
+    assert code == 3
+    assert cli.INCOMPLETE_EXIT_SENTENCE in out
     # 前提：这份文件在 pcb 视图里确实是全空的（否则这个测试什么也没钉住）。
     assert "(0 components, 0 nets)" in out
     assert "board: 0 pads, 0 tracks, 0 vias" in out
@@ -90,7 +97,7 @@ def test_the_note_is_last_even_when_the_reports_are_written(tmp_path, capsys):
     )
     out = capsys.readouterr().out
 
-    assert code == 0
+    assert code == 3, "073：空输入不再是 0"
     assert f"JSON report written to {json_path}" in out
     assert f"Markdown report written to {md}" in out
     assert _lines(out)[-1] == EMPTY_PCB_VIEW_NOTE
@@ -107,7 +114,7 @@ def test_latest_on_an_empty_backup_gets_the_note_too(tmp_path, capsys):
     code = cli.main(["review", "--latest", str(root), "--view", "pcb"])
     out = capsys.readouterr().out
 
-    assert code == 0
+    assert code == 3, "073：空输入不再是 0"
     assert str(picked) in out
     assert _lines(out)[-1] == EMPTY_PCB_VIEW_NOTE
 
@@ -119,7 +126,9 @@ def test_latest_on_an_empty_backup_gets_the_note_too(tmp_path, capsys):
 
 def test_the_md_summary_carries_the_chinese_hint(tmp_path, capsys):
     md = tmp_path / "r.md"
-    assert cli.main(["review", str(EMPTY_PCB), "--view", "pcb", "--md", str(md)]) == 0
+    assert cli.main(["review", str(EMPTY_PCB), "--view", "pcb", "--md", str(md)]) == 3, (
+        "073：空输入不再是 0"
+    )
     capsys.readouterr()
     text = md.read_text(encoding="utf-8")
 
@@ -166,7 +175,7 @@ def test_the_json_report_is_the_untouched_empty_report(tmp_path, capsys):
         cli.main(
             ["review", str(EMPTY_PCB), "--view", "pcb", "--json", str(json_path), "--md", str(md)]
         )
-        == 0
+        == 3  # 073：空输入不再是 0
     )
     capsys.readouterr()
     raw = json_path.read_text(encoding="utf-8")
@@ -182,13 +191,13 @@ def test_the_json_report_is_the_untouched_empty_report(tmp_path, capsys):
 def test_the_json_is_byte_identical_with_and_without_the_markdown(tmp_path, capsys):
     plain = tmp_path / "plain.json"
     both = tmp_path / "both.json"
-    assert cli.main(["review", str(EMPTY_PCB), "--view", "pcb", "--json", str(plain)]) == 0
+    assert cli.main(["review", str(EMPTY_PCB), "--view", "pcb", "--json", str(plain)]) == 3  # 073
     assert (
         cli.main(
             ["review", str(EMPTY_PCB), "--view", "pcb", "--json", str(both),
              "--md", str(tmp_path / "r.md")]
         )
-        == 0
+        == 3  # 073：空输入不再是 0
     )
     capsys.readouterr()
     assert plain.read_bytes() == both.read_bytes()
@@ -228,7 +237,7 @@ def test_an_empty_enet_never_gets_the_view_note(tmp_path, capsys):
     code = cli.main(["review", str(_empty_enet(tmp_path))])
     out = capsys.readouterr().out
 
-    assert code == 0
+    assert code == 3, "073：空 .enet 同样是「没读到」→ 3"
     assert "(0 components, 0 nets)" in out
     assert EMPTY_PCB_VIEW_NOTE not in out
 

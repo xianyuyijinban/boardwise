@@ -62,8 +62,11 @@ export function apply(ctx: Context): void {
       'through the local bridge daemon — the live path only reads, it never edits. ' +
       'boardwise writes report.json, report.md, architecture.md and design-intent.md into `out` (a fresh temp ' +
       'directory when omitted) and this tool returns those paths, the CLI stdout and its exit code: 0 = a model was read and ' +
-      'nothing is an ERROR, 2 = the input cannot be used, 3 = the online state cannot be stated ' +
-      '(usually several editor windows are connected, so name one with project=/instance=). ' +
+      'nothing is an ERROR, 1 = an ERROR was found, 2 = the input cannot be used, 3 = nothing may be stated ' +
+      '(the online state cannot be read — usually several editor windows are connected, so name one with ' +
+      'project=/instance= — or the report\'s completion.verdict is `incomplete`, i.e. the review did not see the ' +
+      'whole board: an empty model, parts with no datasheet, no architecture skeleton, missing coverage). ' +
+      'Exit 3 is never a pass; read completion.verdict for which of the two it is. ' +
       'A timeout longer than 10 minutes means the plugin gave up on it.',
     parameters: {
       file: {

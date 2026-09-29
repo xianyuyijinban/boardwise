@@ -78,8 +78,11 @@ boardwise checkup --file <导出.epro2> --out <目录>       # 断连兜底：�
 `canvas-<页名>.png`（每张原理图页一张，PCB 页不出图）。
 
 - **退出码**：`0` 无 ERROR / `1` 有 ERROR（主机 ERC fatalError/error、主机 PCB DRC 逐条、
-  自有规则 ERROR 任一命中）/ `2` 输入不可用 / `3` 在线状态不可陈述（daemon 不通、没 connector、
-  三级数据路全被拒）——`3` 绝不是"板子干净"。
+  自有规则 ERROR 任一命中）/ `2` 输入不可用 / `3` 说不清——在线状态不可陈述（daemon 不通、
+  没 connector、三级数据路全被拒）**或 `completion.verdict` 是 `incomplete`**（073：审查没看全——
+  没读到模型 / 有器件缺手册未审 / 骨架没生成 / 覆盖有缺口）。优先级：坏输入 `2` > 有 ERROR `1`
+  > incomplete `3` > `0`；`complete-with-open-items` **仍是 `0`**。`3` 绝不是"板子干净"，
+  CI 里也别当通过。
 - **报告自己说数据从哪来**（`source.tier`，缺一级就如实降级）：
   `project-file` 整工程归档（满血）→ `per-page` 逐页导出合并（跨页连通性按网名，
   不是追出来的连线）→ `netlist` 仅连通性（无值/无 MPN/无位姿）→ `file` 离线文件。
@@ -214,7 +217,9 @@ checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起
   schematic 模型写，而 schematic 是设计真相）。要审板级内容（焊盘/走线/过孔）显式
   `--view pcb`：它读 PCB 文档自己那份副本，原理图改了而板子没同步时那份副本是旧的
   （017 的幻影 finding 就是这么来的）。不知道文件在哪：`review --latest [<目录>]` 自动挑最新
-  的 `.epro2` 并先打印它选了哪个。退出码 `0`/`1` 同 3.1，`2` = 文件读不了。
+  的 `.epro2` 并先打印它选了哪个。退出码 `0`/`1` 同 3.1，`2` = 文件读不了，
+  `3` = **读出来是空的**（0 器件 0 网络：归档可能被截断/损坏，或 `--view pcb` 看了一份只有
+  原理图的导出——"没读到"不是"干净板"，073 起不再退 `0`）。
 - **eprj3 文件夹工程（V4，038 A 档只读）**：`boardwise review <工程目录> --json ...`
   —— 目录内含 `<同名>.eprj3` 索引即识别（`sch/**/*.esch2` 逐页粘成一条记录流，原理图模型满血；
   文件夹只有 schematic 这一档，047 起缺省正是它，不必再显式写）。`--view pcb` 对 eprj3
@@ -542,7 +547,8 @@ typeof 全在位、activate 冷启动正常派发、render 实跑 308KB PNG—�
 | 打标成功但看不到 | 标记画在最后聚焦的画布上；加 `--page <uuid>` 或先点一下目标页 |
 | 命令答的是别的工程 | 多层焦点不一致（坑 1）：关掉多余编辑器窗口，`document.current` 双查 |
 | 工程文件里多了东西 | `~/.boardwise/audit/` 当天日志逐动作可查 |
-| `review` 退出 2 | `.epro2` 是加密导出 → 重新导出并取消加密 |
+| `review` 退出 2 | `.epro2` 是加密导出 → 重新导出并取消加密；也见结构坏（072/073：明文一句话报位置，无 traceback） |
+| `review`/`checkup` 退出 3 | **不是"板子干净"**：daemon/connector 不在，或 `completion.verdict` 是 `incomplete`（看 `completion.verdictWhy`）。空模型（0 器件 0 网络）多半是导出不全/被截断，或 `--view pcb` 看了一份只有原理图的导出 |
 
 装环境与首次跑通，看 `docs/getting-started.md`（6 步，给非程序员写的）；
 桥的协议与全部动作看 `docs/bridge.md`；画板流看 `docs/draw.md`。

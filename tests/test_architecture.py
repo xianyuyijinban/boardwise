@@ -256,7 +256,7 @@ def test_checkup_writes_the_architecture_beside_the_report(tmp_path, capsys):
         "--library", str(SHELF),
     ])
     out = capsys.readouterr().out
-    assert code == 0
+    assert code == 3, "073：这份板的 verdict 是 incomplete（未审器件）→ 3（原为 0）"
     report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
     # /5 since 053 §2.2 (`completion`), /6 since 058 (`needs_datasheet`);
     # `architecture` keeps its shape and gains the merged view's extras
@@ -298,7 +298,7 @@ def test_the_key_is_absent_when_the_skeleton_cannot_be_generated(tmp_path, capsy
         "--library", str(SHELF),
     ])
     capsys.readouterr()
-    assert code == 0
+    assert code == 3, "073：GOLDEN 的 verdict 是 incomplete → 3（原为 0）"
     report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
     assert "architecture" not in report
     assert not (tmp_path / "out" / ARCH_FILE_NAME).exists()
@@ -456,7 +456,7 @@ def test_checkup_reads_the_intent_file_and_creates_it_only_once(tmp_path, capsys
     leaves the file byte-identical (the 052 §2.2 defect, closed)."""
     out = tmp_path / "out"
     argv = ["checkup", "--file", str(ROBOT), "--out", str(out), "--library", str(SHELF)]
-    assert cli.main(argv) == 0
+    assert cli.main(argv) == 3, "073：这份板的 verdict 是 incomplete → 3（原为 0）"
     capsys.readouterr()
     intent_path = out / INTENT_FILE_NAME
     assert intent_path.is_file()
@@ -466,7 +466,7 @@ def test_checkup_reads_the_intent_file_and_creates_it_only_once(tmp_path, capsys
     )
     filled_bytes = intent_path.read_bytes()
 
-    assert cli.main(argv) == 0
+    assert cli.main(argv) == 3, "073：二次运行同样是 incomplete → 3（原为 0）"
     out_text = capsys.readouterr().out
     report = json.loads((out / "report.json").read_text(encoding="utf-8"))
     # The fill reached the report's merged view ...

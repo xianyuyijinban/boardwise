@@ -57,10 +57,19 @@ MARKED_REASON = "FB 悬空是否认可用法 / ICG 参考点不明"
 
 
 def _checkup(out: Path, *extra: str) -> dict:
-    """Run the offline `checkup` and read the report it wrote."""
+    """Run the offline `checkup` and read the report it wrote.
+
+    073: the exit code is decided by the verdict, so the helper asserts the
+    **pairing** rather than a bare number (it was `== 0` until this batch): a
+    reading that is `incomplete` — which the golden fixture's is, 4 parts without a
+    datasheet — exits 3, anything else 0. The report is written either way.
+    """
     code = cli.main(["checkup", "--file", str(GOLDEN), "--out", str(out), *extra])
-    assert code == 0, f"checkup exited {code} on the golden fixture"
-    return json.loads((out / "report.json").read_text(encoding="utf-8"))
+    report = json.loads((out / "report.json").read_text(encoding="utf-8"))
+    verdict = report["completion"]["verdict"]
+    expected = 3 if verdict == "incomplete" else 0
+    assert code == expected, f"checkup exited {code} for verdict {verdict} (073)"
+    return report
 
 
 def _mark(out: Path, *argv: str) -> int:

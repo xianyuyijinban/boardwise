@@ -223,12 +223,14 @@ def test_an_explicit_pcb_view_still_reads_the_pcb_document(capsys):
     """The flip must not have taken the board-level view away (047).
 
     Same fixture, asked for by name: 0 components (this export carries no board
-    content) and the copper line that only the pcb view can print.
+    content) and the copper line that only the pcb view can print. 073: that same
+    "0 components, 0 nets" is a verdict of `incomplete`, so the exit code is 3
+    (it was 0 until this batch) — a reading with nothing in it is not a pass.
     """
     code = cli.main(["review", str(CH340), "--view", "pcb"])
     out = capsys.readouterr().out
 
-    assert code == 0
+    assert code == 3, "073：pcb 视图读到空 = incomplete → 3"
     assert "(0 components, 0 nets)" in out
     assert "board: 0 pads, 0 tracks, 0 vias" in out
 
