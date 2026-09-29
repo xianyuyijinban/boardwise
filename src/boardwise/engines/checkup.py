@@ -1147,12 +1147,55 @@ def _walk_leafs_with_ref(group: dict, ref: str) -> list[tuple[str, dict]]:
     return out
 
 
+def triage_identity(
+    target: dict | None,
+    refs: list[str] | None,
+) -> list[str]:
+    """The identity tokens of one `boardwise-rule` slot — structured first.
+
+    Priority (issue #13, 岳's first recommendation): the finding's **structured**
+    target (016) before the `refs` heuristic, because the heuristic reads prose
+    through an allow-list of prefixes and therefore *leaks* — a finding whose
+    evidence is empty and whose designator prefix is not on that list arrives
+    with ``refs == []`` and the key degenerates to no identity at all. Measured
+    on the real board: `EC1`/`EC3` (prefix `EC` missing) and a board spelled
+    `xR67` (the token's prefix reads as `xR`) each produced *ten* findings
+    sharing one degenerate key, and one `triage` command then wrote one verdict
+    into all of them.
+
+    The shape: ``component_ref`` first (the part the rule is about, in the
+    model's own spelling), then the finding's pin refs and net refs, each
+    sorted and tagged (``pin:8``, ``net:NET178``) so they cannot be read as
+    designators. Everything the rule says structurally is used — a rule that
+    reports per pin (``decap-required-caps``) or per net has its pins and nets
+    *in the key*, which is what keeps two of its findings on one part apart
+    without falling back to the uniqueness suffix. Only a finding with no
+    structured identity at all falls back to ``refs`` (the 063 recipe, kept so
+    keys that were already unique and stable — `xtal-load-caps:R7` — do not
+    move under an existing sidecar).
+    """
+    target = target if isinstance(target, dict) else {}
+    component = str(target.get("component_ref") or "").strip()
+    pins = sorted(
+        {str(pin).strip() for pin in (target.get("pin_refs") or []) if str(pin).strip()}
+    )
+    nets = sorted(
+        {str(net).strip() for net in (target.get("net_refs") or []) if str(net).strip()}
+    )
+    if component:
+        return [component, *[f"pin:{pin}" for pin in pins], *[f"net:{net}" for net in nets]]
+    if pins or nets:
+        return [*[f"pin:{pin}" for pin in pins], *[f"net:{net}" for net in nets]]
+    return [str(ref) for ref in (refs or [])]
+
+
 def triage_key(
     entry: dict,
     *,
     label: str = "",
     rule_id: str = "",
     refs: list[str] | None = None,
+    target: dict | None = None,
 ) -> str:
     """The stable identity of one `warning_triage[]` slot — what the sidecar matches on.
 
@@ -1164,15 +1207,16 @@ def triage_key(
     * ``pcb-drc:<severity>:<label>:<net>`` — a leaf is identified by its rule
       name (``ruleName``/``errorType``) and the net it names, which is what
       stays put when the explanation text or the leaf order moves;
-    * ``boardwise-rule:<rule_id>:<refs>`` — a finding is identified the way 036
-      identifies findings: the rule plus the designators its evidence names.
+    * ``boardwise-rule:<rule_id>:<identity>`` — a finding is identified by the
+      structured ``target`` when it has one, and by the designators its prose
+      names when it does not (see :func:`triage_identity`, issue #13).
 
-    ``label``, ``rule_id`` and ``refs`` are the ingredients the **source** data
-    carries and the slot itself does not (its public shape is unchanged — 063 §1
-    adds `key` and nothing else), so the generator hands them over. Computed
-    **once**, here, and then stamped onto the slot: the merge and the `triage`
-    command read ``entry["key"]`` and never recompute it, which is what keeps a
-    key from drifting away from the row it names.
+    ``label``, ``rule_id``, ``refs`` and ``target`` are the ingredients the
+    **source** data carries and the slot itself does not (its public shape is
+    unchanged — 063 §1 adds `key` and nothing else), so the generator hands them
+    over. Computed **once**, here, and then stamped onto the slot: the merge and
+    the `triage` command read ``entry["key"]`` and never recompute it, which is
+    what keeps a key from drifting away from the row it names.
     """
     source = str(entry.get("source") or "")
     severity = str(entry.get("severity") or "")
@@ -1182,11 +1226,88 @@ def triage_key(
         net = str((entry.get("attribution") or {}).get("net") or "")
         return ":".join(("pcb-drc", severity, label, net))
     if source == "boardwise-rule":
-        return f"boardwise-rule:{rule_id}:{','.join(str(ref) for ref in (refs or []))}"
+        return f"boardwise-rule:{rule_id}:{','.join(triage_identity(target, refs))}"
     # A source this batch does not know about (a future slot maker): its own
     # source and text still make a unique, stable key rather than a silent
     # collision with the finding recipe above.
     return ":".join((source or "(no source)", severity, str(entry.get("text") or "")))
+
+
+#: What the uniqueness pass appends to the 2nd, 3rd … slot that still shares an
+#: identity after every structured field has been used: `…#2`, `…#3`. Plain and
+#: deterministic on purpose — the same board re-run produces the same keys, so a
+#: verdict written against `…#2` lands on it again (issue #13).
+TRIAGE_KEY_SUFFIX = "#"
+
+
+def triage_order(slot: dict, target: dict | None) -> tuple[str, str, str, str]:
+    """The **stable** sort key the uniqueness pass orders colliding slots by.
+
+    Issue #13, 岳's third recommendation: a collision must not be silent, and
+    the suffix that resolves it must be a function of the input alone — so the
+    order is the finding's own structured identity first (`component_ref`,
+    `pin_refs`, `net_refs` — the same fields :func:`triage_identity` reads) and
+    the slot's text last, which is what separates two host/PCB rows that share a
+    key. Rows that tie on all four keep their report order (``sorted`` is
+    stable), so the ordering is total for any input.
+    """
+    target = target if isinstance(target, dict) else {}
+    return (
+        str(target.get("component_ref") or ""),
+        ",".join(sorted(str(pin) for pin in (target.get("pin_refs") or []))),
+        ",".join(sorted(str(net) for net in (target.get("net_refs") or []))),
+        str(slot.get("text") or ""),
+    )
+
+
+def disambiguate_triage_keys(
+    pending: list[tuple[str, tuple[str, str, str, str], dict]],
+) -> tuple[list[dict], list[str]]:
+    """``(slots, collided_keys)`` — suffix the slots that still share a key.
+
+    063 made a key the slot's identity; #13 measured what happens when two slots
+    claim the same one: they are one warning as far as `boardwise triage` can
+    tell, so a single verdict is written into both. The structured identity
+    (:func:`triage_identity`) removes the collisions this codebase can see
+    coming; this pass is the **assertion** that none is left, and it is loud
+    rather than silent either way — the returned ``collided_keys`` are what the
+    report's own `notes` say out loud (issue #13: 撞车曾是 bug，不许再静默).
+
+    ``pending`` is ``[(key, order, slot), …]`` in report order, ``order`` from
+    :func:`triage_order`. The first slot of a colliding group keeps the plain
+    key and the rest get ``#2``/``#3`` … in that stable order; the slot dicts
+    handed in are not mutated.
+    """
+    groups: dict[str, list[int]] = {}
+    for index, (key, _order, _slot) in enumerate(pending):
+        groups.setdefault(key, []).append(index)
+
+    slots = [slot for _key, _order, slot in pending]
+    collided: list[str] = []
+    for key, indices in groups.items():
+        if len(indices) < 2:
+            continue
+        collided.append(key)
+        ordered = sorted(indices, key=lambda index: pending[index][1])
+        for position, index in enumerate(ordered[1:], start=2):
+            slots[index] = {**slots[index], "key": f"{key}{TRIAGE_KEY_SUFFIX}{position}"}
+    return slots, sorted(collided)
+
+
+def disambiguated_triage_keys(slots: list[dict]) -> list[str]:
+    """The base keys :func:`disambiguate_triage_keys` had to suffix, sorted.
+
+    Read back off the generated slots so the caller can put the collision in the
+    report's `notes` without threading a second return value through
+    :func:`warning_triage_slots` (whose list-of-slots return is a contract).
+    """
+    bases: list[str] = []
+    for slot in slots:
+        key = str(slot.get("key") or "")
+        base, separator, tail = key.rpartition(TRIAGE_KEY_SUFFIX)
+        if separator and base and tail.isdigit() and base not in bases:
+            bases.append(base)
+    return sorted(bases)
 
 
 def warning_triage_slots(
@@ -1216,6 +1337,16 @@ def warning_triage_slots(
     `checkup` can put that verdict back after a re-run (issue #12: the slots were
     the one AI channel with no way back in). The key is computed here and never
     recomputed — a re-generated slot that keeps its key keeps its verdict.
+
+    **No two rows leave here with the same key** (issue #13). The finding recipe
+    reads the structured target first (:func:`triage_identity`) so the collision
+    the issue measured — two `param-value-mpn-match` findings on `EC1`/`EC3`
+    sharing one degenerate key, one `triage` command writing into both — cannot
+    be built; whatever identity is still duplicated after that (two PCB leaves
+    of one rule on no net, genuinely identical rows) goes through
+    :func:`disambiguate_triage_keys`, which suffixes `#2`/`#3` in a stable order
+    instead of letting two judgements become one. Callers put the collision in
+    the report's `notes` via :func:`disambiguated_triage_keys`.
     """
     module_of: dict[str, str] = {}
     for module in modules:
@@ -1228,7 +1359,13 @@ def warning_triage_slots(
             if module:
                 net_modules.setdefault(name, module)
 
-    out: list[dict] = []
+    pending: list[tuple[str, tuple[str, str, str, str], dict]] = []
+
+    def add_row(key: str, slot: dict, target: dict | None = None) -> None:
+        """One row, with the two things the row itself does not carry: its key
+        (stamped, never recomputed) and the sort order the uniqueness pass needs."""
+        pending.append((key, triage_order(slot, target), {"key": key, **slot}))
+
     schematic = drc.get("schematic") or {}
     if schematic.get("checked") and not schematic.get("countsKnown") is False:
         # The per-kind counts live under `totals` in the section `drc.py` builds
@@ -1253,7 +1390,7 @@ def warning_triage_slots(
                     f"countsBasis={schematic.get('countsBasis')}",
                 ],
             }
-            out.append({"key": triage_key(slot), **slot})
+            add_row(triage_key(slot), slot)
     pcb = drc.get("pcb") or {}
     for group in pcb.get("groups") or []:
         for ref, leaf in _walk_leafs_with_ref(group, f"drc.pcb.groups[{group.get('index')}]"):
@@ -1280,11 +1417,12 @@ def warning_triage_slots(
                 "reason": "",
                 "evidence": [ref, f"globalIndex={leaf.get('globalIndex')}"],
             }
-            out.append({"key": triage_key(slot, label=str(label)), **slot})
+            add_row(triage_key(slot, label=str(label)), slot)
     for index, finding in enumerate(findings):
         if str(finding.get("severity") or "").upper() != "WARN":
             continue
         refs = [str(ref) for ref in (finding.get("refs") or [])]
+        target = finding.get("target")
         module = next((module_of[ref] for ref in refs if ref in module_of), None)
         slot = {
             "source": "boardwise-rule",
@@ -1302,11 +1440,15 @@ def warning_triage_slots(
             "reason": "",
             "evidence": [f"findings[{index}] rule {finding.get('rule_id')}", *refs],
         }
-        out.append({
-            "key": triage_key(slot, rule_id=str(finding.get("rule_id") or ""), refs=refs),
-            **slot,
-        })
-    return out
+        add_row(
+            triage_key(
+                slot, rule_id=str(finding.get("rule_id") or ""), refs=refs, target=target
+            ),
+            slot,
+            target,
+        )
+    slots, _collided = disambiguate_triage_keys(pending)
+    return slots
 
 
 def merge_triage_sidecar(

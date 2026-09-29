@@ -37,6 +37,7 @@ from .engines.checkup import (
     TRIGGER_FACTS,
     TRIGGER_MARKED,
     UNREVIEWED_DATASHEET_DIR,
+    disambiguated_triage_keys,
     layout_review_section,
     marked_parts,
     merge_triage_sidecar,
@@ -2204,23 +2205,19 @@ def _review_source(args: argparse.Namespace) -> str | None:
 def _finding_refs_for_summary(finding, designators: set[str]) -> list[str]:
     """A finding's designators, for the Chinese summary.
 
-    Read the same way `review-mark` reads them (:func:`finding_refs`), plus the
-    plan target when there is one — a repairable finding names the part it
-    would change even if its prose does not (task 016's `target`).
+    Read the same way `review-mark` reads them (:func:`finding_refs`) — which
+    since 070 starts at task 016's structured `target` and only then reads the
+    prose, so a repairable finding names the part it would change even when its
+    prose does not.
 
-    Then kept only if the board actually has that designator. The reader is an
-    allow-list of *prefixes* (`RT`, `C`, `U`, …) applied to prose, so a part
-    number sneaks through: on the injected value-mpn board the LED rule's
-    evidence says "per U5 RT9013-33GB output", and `RT9013` reads as a preset
-    designator. Naming a part the board does not contain would be worse than
-    naming none (the Chinese line is the one a reader trusts fastest).
+    Then kept only if the board actually has that designator. The prose reader is
+    an allow-list of *prefixes* (`RT`, `C`, `U`, …), so a part number sneaks
+    through: on the injected value-mpn board the LED rule's evidence says "per U5
+    RT9013-33GB output", and `RT9013` reads as a preset designator. Naming a part
+    the board does not contain would be worse than naming none (the Chinese line
+    is the one a reader trusts fastest).
     """
-    refs = [ref for ref in finding_refs(finding) if ref in designators]
-    target = getattr(finding, "target", None)
-    designator = getattr(target, "component_ref", "") if target is not None else ""
-    if designator in designators and designator not in refs:
-        refs.insert(0, designator)
-    return refs
+    return [ref for ref in finding_refs(finding) if ref in designators]
 
 
 def _chinese_summary(
@@ -3883,6 +3880,20 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
     )
 
     triage = warning_triage_slots(model=model, drc=drc, findings=findings, modules=modules)
+    collided = disambiguated_triage_keys(triage)
+    if collided:
+        # 070 (issue #13): a key is the slot's identity, so two slots sharing one
+        # were judged as one warning and a single verdict landed in both. The
+        # structured reading of the finding removes the collision this codebase
+        # can see coming; when the identity is *still* duplicated the suffix
+        # keeps the two judgements apart, and this note is what keeps that from
+        # being silent (the issue's own requirement: 撞车不许静默).
+        notes.append(
+            f"warning_triage 里有 {len(collided)} 组槽位身份完全相同"
+            f"（{'、'.join(collided)}）：已按 (component_ref, pin_refs, net_refs, message) "
+            f"稳定序加 `#2`/`#3` 后缀消歧——同输入同 key，重跑仍能并上；"
+            f"撞车本身曾是 bug（issue #13，一条 triage 把判定写进两颗器件）"
+        )
     # 063 §3: the slots are regenerated from the board on every run, and a
     # verdict is *not* derivable from the board — so the report would otherwise
     # read as if nobody had judged anything (issue #12). Read the sidecar back in
@@ -4354,6 +4365,20 @@ def _cmd_triage(args: argparse.Namespace) -> int:
     # Every row carrying this key is the same warning by construction (that is
     # what the key is for), so a key that appears twice is judged once, in both
     # places — never half-answered.
+    #
+    # 070 (issue #13) made that construction true rather than assumed: slot
+    # generation no longer emits a duplicate key, so a report that still carries
+    # one was written before the fix or edited by hand. Writing the verdict into
+    # both is the only thing left to do about the rows in hand, but it is said
+    # out loud — silently judging N warnings as one is exactly the bug the issue
+    # measured (one command, one verdict, two parts).
+    if len(matched) > 1:
+        print(
+            f"boardwise triage: 注意 key = {key} 在报告里出现 {len(matched)} 次"
+            "（070 起 checkup 生成的槽位不会共用 key；这份报告是旧版或手改的）："
+            "本次判定写进了全部匹配槽位，要分开判定请重跑 `boardwise checkup` 取新 key",
+            file=sys.stderr,
+        )
     for slot in matched:
         slot["verdict"] = verdict
         slot["reason"] = reason
@@ -11337,6 +11362,25 @@ def _load_findings(source: str) -> tuple[list[dict], str]:
     return findings, label
 
 
+def _report_target(entry: dict):
+    """A report finding's structured ``target`` as a :class:`FindingTarget`.
+
+    Only ``component_ref`` is carried over: that is the one field
+    :func:`boardwise.engines.review.finding_refs` reads, and the rest of the
+    target describes a *repair* (016), which this path is not. ``None`` when the
+    finding has no target or an empty one — a report written before 016, or a
+    hand-edited file — because "no structured identity" is a case the refs
+    reader handles by falling back to prose.
+    """
+    from .rules.base import FindingTarget
+
+    target = entry.get("target")
+    if not isinstance(target, dict):
+        return None
+    component = str(target.get("component_ref") or "").strip()
+    return FindingTarget(component_ref=component) if component else None
+
+
 def marks_from_findings(findings: list[dict]) -> tuple[list[dict], list[dict]]:
     """``(marks, skipped)`` for :func:`boardwise.engines.review.render_json` output.
 
@@ -11347,11 +11391,15 @@ def marks_from_findings(findings: list[dict]) -> tuple[list[dict], list[dict]]:
     rule-verdict may therefore light up twice, which is the honest picture.
 
     The refs come from the report's own ``refs`` field when it has one (written
-    by `render_json` since 012v2 §八) and are otherwise read out of the evidence
+    by `render_json` since 012v2 §八) and are otherwise read out of the finding
     with :func:`boardwise.engines.review.finding_refs` — so an older report file
-    still marks. A finding that names no ref at all is returned in `skipped`
-    rather than dropped: "this finding cannot be pointed at" is information, and
-    a silent gap in the count is not.
+    still marks. That reading starts at the finding's structured ``target``
+    (070, issue #13) and only then scans the prose, which is why a report whose
+    finding names its part in ``target`` alone still gets a mark; the
+    reconstructed :class:`~boardwise.rules.base.Finding` carries the target's
+    ``component_ref`` for the same reason. A finding that names no ref at all is
+    returned in `skipped` rather than dropped: "this finding cannot be pointed
+    at" is information, and a silent gap in the count is not.
     """
     from .engines.review import finding_refs
     from .rules.base import Finding
@@ -11380,6 +11428,7 @@ def marks_from_findings(findings: list[dict]) -> tuple[list[dict], list[dict]]:
                     message=message,
                     level=str(entry.get("level") or ""),
                     evidence=evidence,
+                    target=_report_target(entry),
                 )
             )
         if not refs:
@@ -11743,6 +11792,9 @@ def _findings_naming(rule, model, designator: str) -> list:
     Read through :func:`finding_refs` — the same reading ``review-mark`` marks
     the canvas with — so "which findings will this edit silence" is answered by
     the report's own definition of "names a designator", not by a second one.
+    Since 070 that reading starts at the finding's structured ``target`` and
+    falls back to the prose, so a finding whose evidence is empty but whose
+    target names the part is found here too (issue #13).
     """
     wanted = designator.upper()
     return [
