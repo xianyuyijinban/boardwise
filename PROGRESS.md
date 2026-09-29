@@ -4,6 +4,10 @@ Living index. Details live in `tasks/*.md` (one book per task) and
 `docs/implementation-log.md` (the connector debugging arc). This file only
 collects the current truth and the pointers.
 
+## [2026-09-29] 071：MPN 解码止血批——锚点闸（岳裁「先止血再架构」+「锚点闸 C」；connector/daemon 零改动仍 **0.4.25**）
+
+岳外部 harness 连抓六条 MPN 案卷（#18→#22–#26），根因一句话：**MPN 是查询键不是文档**，正则解码是枚举厂商私有语法、枚举永远做不完（#18 补一个 witness，#25 几小时内拿出 5 个四家主流厂）。岳裁先止血后架构；主闸撞上 eval 里岳签字的 A4 那 19 条真阳性（`0603WAF1002T5E` 族 E-96 电阻，holdout recall 1.00→0.00、47 条下游钉子红），按纪律停下请裁；岳裁 **C 锚点闸**：**读法没有语法锚点就不许指控**——WARN 只给三类带锚读法（①E-96 带相邻容差字母 ②中缀正规形（剥完尺寸码）③EIA 带封装码语境），裸数字串矛盾 → UNKNOWN「字符串解码无锚点，低置信」，匹配→判过不变。实测三方对照：A4 的 19 条**全保住**（holdout/dev recall 与 HEAD 逐值相同，59/59 precision 1.00）、#25 五颗电解**全灭**、#24 两颗从假通过/漏报变**诚实 WARN**、47 条钉子 45 条自动回绿（2 条 test_070 EC1/EC3 按新语义改测试——Murata 自家两位尺寸码 `31` 不在行业尺寸集故无锚，夹具换 `CC1206KKX7R0BB107` 有锚 + 新增退休形态钉子）。配套：#23 板值/MPN 两解析器并一个（委托 values.py 唯一实现，`4K7` 族不再整件跳过，`0R5` 实测零变化）；尺寸码按「行业标准有限集是语法不是形态」补公制 3 位 + 中缀 run 剥前导尺寸码（#22 GRM188 解出 104、#24 CRCW 产真值 10K0）；中缀空 run/字母后字母不产读法（#26 WR06 伪读法死）；#21 conclusion 补全闸与 verdict 同源（2^7 组合交叉不变式）；#20 墙钟改相对判据（×4，注释「退化判据不是性能基线」——M6a 改回墙钟在本机 PASS、在岳机器红，判据随机器翻转实证）。语料回归（2261 token）：解码变化 72 全是伪读法消亡零真值、**WARN→UNKNOWN 迁移 0**、漏报→可查 5（ROBOT ctrl FOC 的 100R/120R/470R 族）、意外 0；读数锚点分布 186/888 带锚（~21% 有资格指控）。测试全量 **2530 passed**（执行方两轮 + 主代理亲跑），变异 4 组 CAUGHT。遗留→072 架构批：E-96 值码不在末尾形态（#26 建议 2）、电解/系列语法、harvest 扩被动件 + `value` fact 带 provenance + 规则 facts 优先（facts 落地后 UNKNOWN 恢复检查力）、UNKNOWN 可见性增强；`MPN_REPAIR_DIRECTIONS`/edit-cli component-value 修复路径休眠保留（退休不是删除，facts 路径捡回）。任务书 `tasks/071-mpn-bleed-stop.md`，证据 `evidence/071/`。
+
 ## [2026-09-29] issue #14–#19 六连修：岳外部 harness 抓的一批审查管线漏洞（五批串行收口；connector/daemon 零改动仍 **0.4.25**）
 
 岳用外部 harness 独立测试抓出六个真漏洞（全部带复现与根因），五批串行修完，全量 2437→**2498 passed**（每批执行方+主代理双跑），变异每批 ≥2 全 CAUGHT，六个 issue 均已 comment 待验证（**不关**，提出人确认才关）。
