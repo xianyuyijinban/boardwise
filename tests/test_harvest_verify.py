@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -266,3 +267,63 @@ def test_the_window_hint_rides_every_frame_and_nothing_is_sent_without_one():
         ["--sources", "x", "--verify", "--project", "P", "--instance", "I"]
     )
     assert (hinted_args.project, hinted_args.instance) == ("P", "I")
+
+
+# --------------------------------------------------------------------------
+# the default source list (#38)
+# --------------------------------------------------------------------------
+
+
+def test_the_default_sources_are_the_committed_ones():
+    """The shipped `--check` run must harvest the six boards the library was
+    built from, read from `blocklib/harvest.sources.json`."""
+    entries = json.loads(
+        (ROOT / "blocklib" / "harvest.sources.json").read_text(encoding="utf-8")
+    )
+    assert TOOL._default_sources() == [ROOT / entry for entry in entries]
+    assert all(path.is_file() for path in TOOL._default_sources()), entries
+
+
+def test_an_unreadable_source_list_says_which_file(tmp_path):
+    missing = tmp_path / "harvest.sources.json"
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(TOOL, "DEFAULT_SOURCES_FILE", missing)
+    try:
+        with pytest.raises(ValueError) as missing_read:
+            TOOL._default_sources()
+        assert str(missing) in str(missing_read.value)
+
+        broken = tmp_path / "broken.json"
+        broken.write_text("{not json", encoding="utf-8")
+        monkey.setattr(TOOL, "DEFAULT_SOURCES_FILE", broken)
+        with pytest.raises(ValueError) as bad_json:
+            TOOL._default_sources()
+        assert str(broken) in str(bad_json.value)
+    finally:
+        monkey.undo()
+
+
+def test_an_explicit_source_list_still_wins(tmp_path):
+    """`--sources` is untouched: a named board is harvested even when the
+    committed list cannot be read at all (the sidecar is switched off here
+    because one board cannot anchor all eleven curated C-numbers)."""
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(TOOL, "DEFAULT_SOURCES_FILE", tmp_path / "nope.json")
+    try:
+        shelf = tmp_path / "shelf.json"
+        code = TOOL._cli(
+            ["--sources", str(PILLBOX), "--corrections-file", "-", "--out", str(shelf)]
+        )
+        assert code == 0
+        assert json.loads(shelf.read_text(encoding="utf-8"))["parts"]
+    finally:
+        monkey.undo()
+
+
+def test_the_shipped_check_run_needs_no_arguments(capsys):
+    """The acceptance command: from the repository root, `harvest_parts.py
+    --check` with no `--sources` reproduces the committed shelf (1.5 s)."""
+    code = TOOL._cli(["--check"])
+    captured = capsys.readouterr()
+    assert code == 0, captured.out + captured.err
+    assert "matches a fresh harvest" in captured.out

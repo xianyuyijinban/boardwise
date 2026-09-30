@@ -6,8 +6,14 @@
 Offline by default: it reads the boards as files and writes JSON, touching
 neither the network nor the editor.
 
+    python tools/harvest_parts.py --check                    # the committed six
     python tools/harvest_parts.py --sources ... --verify     # needs the bridge
     python tools/harvest_parts.py --sources ... --check      # re-run, compare
+
+``--sources`` is optional: without it the boards come from
+``blocklib/harvest.sources.json``, the six files the committed library was
+harvested from (#38). The glob the older examples printed covers two of them,
+and a harvest from two boards cannot reproduce the shelf.
 
 ``--verify`` asks the **library** what each footprint is really called, through
 ``lib.footprint.get`` (the same action 006b used to confirm `R0402`/`R0805`).
@@ -64,6 +70,29 @@ from boardwise.engines.harvest import (  # noqa: E402
     strip_bridge_decided,
     strip_bridge_decided_notes,
 )
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+#: The harvest's source list is a committed file, so the shipped default run
+#: (`--check`, no arguments) harvests the boards the library was actually built
+#: from instead of whatever glob the reader remembers (#38).
+DEFAULT_SOURCES_FILE = REPO_ROOT / "blocklib" / "harvest.sources.json"
+
+
+def _default_sources() -> list[Path]:
+    """The six boards in `blocklib/harvest.sources.json`, repo-relative."""
+    try:
+        entries = json.loads(DEFAULT_SOURCES_FILE.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise ValueError(f"{DEFAULT_SOURCES_FILE} is missing") from None
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{DEFAULT_SOURCES_FILE} is not valid JSON: {exc}") from None
+    if not isinstance(entries, list) or not all(isinstance(e, str) for e in entries):
+        raise ValueError(
+            f"{DEFAULT_SOURCES_FILE} must be a JSON array of repository-relative "
+            f"path strings"
+        )
+    return [REPO_ROOT / entry for entry in entries]
 
 
 def _expand(patterns: list[str]) -> list[Path]:
@@ -353,7 +382,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--sources",
         nargs="+",
         metavar="PATH",
-        help="Board files (.eprj2 local project or .epro2 export). Globs allowed.",
+        help=(
+            "Board files (.eprj2 local project or .epro2 export). Globs allowed. "
+            "Default: the list in blocklib/harvest.sources.json."
+        ),
     )
     parser.add_argument(
         "--out",
@@ -472,9 +504,14 @@ def _cli(argv: list[str] | None = None) -> int:
             )
         return _run_rehome(args)
 
-    if not args.sources:
-        parser.error("--sources is required (unless --rehome is given)")
-    sources = _expand(args.sources)
+    if args.sources:
+        sources = _expand(args.sources)
+    else:
+        try:
+            sources = _default_sources()
+        except ValueError as exc:
+            print(f"harvest_parts: {exc}", file=sys.stderr)
+            return 2
     if not sources:
         print("harvest_parts: no source files matched", file=sys.stderr)
         return 2

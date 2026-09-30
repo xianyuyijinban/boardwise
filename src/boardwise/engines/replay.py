@@ -485,7 +485,7 @@ def build_replay_plan(
         Placement(
             designator=designator,
             x=placed[designator].x + dx,
-            y=-placed[designator].y + dy,
+            y=placed[designator].y + dy,
             bbox=_shift(box, dx, dy),
         )
         for designator, box in sorted(golden_boxes.items())

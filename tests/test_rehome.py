@@ -471,11 +471,17 @@ def test_the_command_refuses_to_do_two_jobs_at_once(tmp_path, capsys):
     assert "run it alone" in capsys.readouterr().err
 
 
-def test_sources_are_still_required_without_rehome(capsys):
-    with pytest.raises(SystemExit) as info:
-        TOOL._cli([])
-    assert info.value.code == 2
-    assert "--sources is required" in capsys.readouterr().err
+def test_sources_are_optional_but_a_missing_list_names_its_file(monkeypatch, tmp_path, capsys):
+    """#38 flipped this: the harvest's source list is a committed file, so the
+    command runs without `--sources` and only refuses when that file cannot be
+    read — by name, and before anything is written."""
+    missing = tmp_path / "harvest.sources.json"
+    monkeypatch.setattr(TOOL, "DEFAULT_SOURCES_FILE", missing)
+    code = TOOL._cli([])
+    captured = capsys.readouterr()
+    assert code == 2
+    assert str(missing) in captured.err
+    assert "written" not in captured.out
 
 
 def save_library_like_committed(path: Path, *, healthy: bool = False) -> None:

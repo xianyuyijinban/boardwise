@@ -1907,8 +1907,9 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     validate.add_argument(
-        "--root", default=".",
-        help="Directory declared input paths are read relative to (default: %(default)s).",
+        "--root", default=None,
+        help="Directory declared input paths are read relative to (default: the "
+        "directory the spec itself lives in).",
     )
     validate.add_argument(
         "--block", default="",
@@ -9936,7 +9937,10 @@ def _cmd_validate(args: argparse.Namespace) -> int:
         table=table,
         library=library,
         target=args.target,
-        root=args.root,
+        # Declared inputs resolve beside the spec, same as the block templates
+        # they name and same as `draw` (#36: defaulting to the cwd made the
+        # shipped spec fail from any other directory).
+        root=args.root if args.root is not None else Path(args.spec).resolve().parent,
         mcu_block_id=args.block,
         mcu_component=args.mcu_component,
         benchmark=args.benchmark,
