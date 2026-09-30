@@ -22,8 +22,20 @@ The three gates are the task book's, verbatim:
    boards. Both directions compare at **pin level**: a net name on both sides is
    not agreement, because the schematic's ``SPI1_SCK`` is on ball PA3 while the
    firmware's is on PB6 — the same name, two different balls, and the name alone
-   cannot tell (issue #35). The vocabulary check is a fourth gate implied by the
-   contract: an unknown ``function`` is already refused at load time.
+   cannot tell (issue #35).
+
+   Pin level needs a ball on **both** sides, and a block port does not always
+   have one. ``role`` is the block's own name for the port, which on a
+   board-extract is the net name at the cut and on a hand-authored block is
+   whatever the author called the function — ``SPI_SCK``, ``GND``, ``D+``. A pin
+   table is written in balls. So a port yields a ball only when it has
+   evidence: an explicit ``ball`` field, or a ``role`` that is itself spelled
+   like a ball. With neither, the port is **withheld** from the pin-level
+   comparison and the report says so in a note (issue #48) — it can never come
+   out as a defect, because a functional name subtracted from a set of balls is
+   a difference that means nothing, and reporting it called a perfect board
+   wrong. The vocabulary check is a fourth gate implied by the contract: an
+   unknown ``function`` is already refused at load time.
 
 Nothing here compares against the golden ``.epro2``: the pin table is a
 *generation-side* artifact, so the answer may not be consulted (008c's closed-book
@@ -34,8 +46,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from ..core.blocks import BlockTemplate, BoardSpec
-from ..core.pintable import PinTable
+from ..core.blocks import BlockPort, BlockTemplate, BoardSpec
+from ..core.pintable import PinTable, looks_like_port_pin
 
 #: How a finding is classified. The split is the task book's, and it carries the
 #: *judgement*: a defect blocks, an open question does not but must be printed.
@@ -278,21 +290,47 @@ def check_pin_table(
             mcu_ports = {
                 role: port for role, port in _ports_on(instance.template)
             }
-            # net -> the roles the MCU block's own ports carry on it. A port's
-            # role and a pin table's ``number`` are both the ball's name, so this
-            # is what the firmware's pin set is compared against — a net name
-            # alone says nothing about *which* pin the schematic wired.
-            spec_mcu_roles: dict[str, set[str]] = {}
-            spec_signal_nets: dict[str, list[str]] = {}
+            # net -> {role: ball} for the MCU block's own ports, where a ball
+            # is ``""`` on a port that gives no evidence of one. A pin table is
+            # written in balls, so this is what the firmware's pin set is
+            # compared against; a net name alone says nothing about *which* ball
+            # the schematic wired, and neither does a functional role (issue #48).
+            spec_mcu_wiring: dict[str, dict[str, str]] = {}
+            spec_signal_nets: dict[str, list[tuple[str, str]]] = {}
+            ballless_roles: set[str] = set()
             for connection in spec.connections:
                 for block_id, role in connection.ports:
                     if block_id != mcu_block_id:
                         continue
-                    spec_mcu_roles.setdefault(connection.net, set()).add(role)
                     port = mcu_ports.get(role)
+                    ball = _ball_of(port)
+                    spec_mcu_wiring.setdefault(connection.net, {})[role] = ball
+                    if not ball:
+                        ballless_roles.add(role)
                     if port is None or port.net_class != "signal":
                         continue
-                    spec_signal_nets.setdefault(connection.net, []).append(role)
+                    spec_signal_nets.setdefault(connection.net, []).append((role, ball))
+            # Withheld ports, named one by one. A check that could not run has to
+            # say so: the alternative is silence that reads as a pass on the
+            # ports that *were* compared, and a reader has no way to tell which
+            # those were.
+            for role in sorted(ballless_roles):
+                report.findings.append(
+                    PinFinding(
+                        kind=NOTE,
+                        rule="spec-difference",
+                        message=(
+                            f"the MCU block's port {role!r} has no ball-name evidence "
+                            "— its role is not spelled as a ball and the port "
+                            "declares no `ball` — so the pin-level comparison for "
+                            "that port was withheld. It is *not* a pass, and it is "
+                            "not a defect either: nothing about that port is known "
+                            "to disagree with the firmware. Fill in the port's "
+                            "`ball` on the block to have it compared."
+                        ),
+                        evidence=[f"port {role!r}: no ball"],
+                    )
+                )
             # Direction 1: firmware named a net the spec never connects.
             spec_nets = {connection.net for connection in spec.connections}
             unnamed = [pin for pin in table.pins if not pin.net]
@@ -324,8 +362,20 @@ def check_pin_table(
                         )
                     )
                     continue
-                roles = spec_mcu_roles.get(net, set())
-                unwired = sorted(set(pins) - roles)
+                wiring = spec_mcu_wiring.get(net, {})
+                balls = {ball for ball in wiring.values() if ball}
+                if wiring and not balls:
+                    # Every MCU port the spec puts on this net names no ball, so
+                    # there is nothing the pin set can be differenced against.
+                    # Withheld above; not matched, and never a defect.
+                    continue
+                where = ", ".join(
+                    sorted(
+                        role if not ball or ball == role else f"{role} on {ball}"
+                        for role, ball in wiring.items()
+                    )
+                )
+                unwired = sorted(set(pins) - balls)
                 if unwired:
                     # The net is in the spec, so the name agrees — but the spec
                     # wires it to another ball, and "the firmware uses a pin the
@@ -338,12 +388,12 @@ def check_pin_table(
                             message=(
                                 f"firmware puts {', '.join(unwired)} on net {net!r}, "
                                 f"which the spec connects to the MCU block's port(s) "
-                                f"{', '.join(sorted(roles)) or '(none)'} — the firmware "
+                                f"{where or '(none)'} — the firmware "
                                 "uses a pin the schematic does not wire"
                             ),
                             evidence=[
                                 f"net {net}",
-                                "spec: " + (", ".join(sorted(roles)) or "(no port)"),
+                                "spec: " + (where or "(no port)"),
                                 "firmware: " + ", ".join(pins),
                             ],
                         )
@@ -356,10 +406,13 @@ def check_pin_table(
             for net in sorted(spec_signal_nets):
                 if net in firmware_nets:
                     continue
+                entries = spec_signal_nets[net]
                 elsewhere = sorted(
-                    f"{role} on {net_of_pin[role]!r}"
-                    for role in spec_signal_nets[net]
-                    if role in net_of_pin
+                    {
+                        f"{ball} on {net_of_pin[ball]!r}"
+                        for role, ball in entries
+                        if ball and ball in net_of_pin
+                    }
                 )
                 if elsewhere:
                     # The pin table *has* grown into this ball — on another net.
@@ -371,7 +424,7 @@ def check_pin_table(
                             rule="spec-difference",
                             message=(
                                 f"the spec connects the MCU block's port(s) "
-                                f"{', '.join(sorted(spec_signal_nets[net]))} to net "
+                                f"{', '.join(sorted(role for role, _ in entries))} to net "
                                 f"{net!r}, but the firmware puts the same pin on "
                                 f"{', '.join(elsewhere)} — one ball cannot be on "
                                 "two nets"
@@ -380,13 +433,18 @@ def check_pin_table(
                         )
                     )
                     continue
+                if not any(ball for _, ball in entries):
+                    # No port on this net names a ball, so "the firmware has not
+                    # grown into it" would be a claim about a ball nobody named.
+                    # Withheld above; an open question here would repeat #48.
+                    continue
                 report.findings.append(
                     PinFinding(
                         kind=OPEN_QUESTION,
                         rule="spec-difference",
                         message=(
                             f"the spec connects the MCU block's port(s) "
-                            f"{', '.join(sorted(spec_signal_nets[net]))} to net "
+                            f"{', '.join(sorted(role for role, _ in entries))} to net "
                             f"{net!r}, but the firmware pin table never uses it — "
                             "either the firmware has not grown into that pin yet or "
                             "the pin table is incomplete"
@@ -396,6 +454,25 @@ def check_pin_table(
                 )
 
     return report
+
+
+def _ball_of(port: BlockPort | None) -> str:
+    """The ball a port sits on, or ``""`` when the block gives no evidence.
+
+    ``ball`` is the evidence a block author writes down; a ``role`` that is
+    itself spelled like a ball is the other kind, and is what every ball-named
+    test block has been relying on since #35. Anything else — ``SPI_SCK``,
+    ``GND``, ``D+`` — is a *function*, and comparing one against the pin table's
+    pin numbers produces a difference that means nothing (issue #48), so this
+    returns nothing and the caller withholds the port.
+    """
+    if port is None:
+        return ""
+    if port.ball:
+        return port.ball
+    if looks_like_port_pin(port.role):
+        return port.role
+    return ""
 
 
 def _ports_on(template: BlockTemplate):
