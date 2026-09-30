@@ -1,6 +1,6 @@
 """Value decoding and unit parsing helpers for the PARAM rules (task 011d).
 
-Four parsers live here, all *whitelist* parsers: they either recognise the
+Five parsers live here, all *whitelist* parsers: they either recognise the
 string or return None — "unparseable" must never become "zero" or "whatever
 the digits look like".
 
@@ -17,6 +17,11 @@ the digits look like".
 - :func:`decode_eia_3digit` — the EIA three-digit value code (``471`` ->
   47x10^1). The *base unit depends on the part kind*: ohms for resistors,
   picofarads for capacitors, so the caller supplies the multiplier.
+- :func:`parse_voltage_volts` — a rail voltage (``5V``, ``3.3 V``, and the
+  mid-letter ``3V3`` the port sidecar itself uses; issue #53). Added here
+  because the power-tree gate was comparing two volt spellings as strings,
+  which is the same "one quantity, one implementation" gap as #51 and #52 —
+  in a third module.
 - :func:`mpn_value_code` — extract the EIA code from an MPN, whitelisted to
   the shapes the big manufacturers actually print: the code at the end of the
   string, optionally followed by a single tolerance letter (``...225K``), or
@@ -1018,3 +1023,91 @@ def mpn_value_code_anchor(mpn: str) -> tuple[str | None, str]:
     if code is None:
         return None, ""
     return code, (ANCHOR_PACKAGE_CONTEXT if has_package_context(mpn) else "")
+
+
+# --------------------------------------------------------------------------
+# voltage — the third quantity of this family (issue #53)
+# --------------------------------------------------------------------------
+
+#: A rail voltage as one field. An optional sign, then one of two grammars:
+#:
+#: * the trade's **mid-letter** notation read in volts (``3V3`` = 3.3 V, ``1V8``
+#:   = 1.8 V). This is the R/K/M notation with the unit letter in the middle
+#:   instead of a prefix, and it is not a hypothetical spelling: the repository
+#:   writes it. ``blocklib/blocks.portmeta.json`` declares the CH340's VCC rail
+#:   as ``"voltage": "3V3"``, so a parser that does not read it reads half the
+#:   repository's own rails wrong.
+#: * a number with an optional ``V`` that may stand off it by a space (``3.3``,
+#:   ``3.30V``, ``3.3 V``, ``5V``) — the editor grammar, the same shape
+#:   :func:`parse_capacitance_farads`'s ``100nF`` branch has.
+#:
+#: The two cannot overlap, and that is the whole point of writing them as two
+#: branches rather than one alternation: the mid-letter one *requires* a
+#: fraction after the ``V``, so ``3V`` is the suffix grammar's alone and no
+#: string is read by both. The same split :func:`parse_capacitance_farads`
+#: states for the same reason — every string one grammar reads keeps the exact
+#: value, so a new grammar is additive.
+_VOLTAGE_RE = re.compile(
+    r"(?P<sign>[+-]?)"
+    r"(?:"
+    r"(?P<int>\d*)[Vv](?P<frac>\d{1,2})"
+    r"|"
+    r"(?P<num>\d+(?:\.\d+)?|\.\d+)\s*[Vv]?"
+    r")"
+)
+
+
+def parse_voltage_volts(value: str) -> float | None:
+    """A rail voltage -> volts, or None when it is not one this reads.
+
+    Added by issue #53. The defect it closes is not a wrong number but a
+    *comparison that had no number to make*: ``validate_spec``'s power-tree
+    gate asked ``port.voltage != source.voltage`` on the raw strings, so a
+    source declaring ``3V3`` and a sink declaring ``3.3V`` — the same rail,
+    written the two ways this repository itself writes it — was reported as a
+    VIOLATION. The gate is fail-closed by design, so the cost of a missing
+    parser was a correctly wired board stopped at gate four.
+
+    A sign is part of the field, not decoration: ``+24V`` and ``-12V`` name a
+    real supply and a real rail, and a grammar that refused the sign would make
+    the one spelling that carries polarity the one spelling that cannot be
+    compared. The number is the reading either way.
+
+    What is refused is everything this cannot state, and it is refused the way
+    the other two parsers refuse: empty, a first token over the cap
+    (:func:`_too_long`, issue #27), a string with no number in it (``abc``),
+    more than one token (``5V 1A``), a doubled unit (``3V3V``), and a
+    mid-letter mantissa that is empty or starts with a zero. That last pair
+    follows the mid-letter grammar's own rule rather than inventing one —
+    ``V3`` and ``0V5`` are the shape ``0K1`` is refused by, and
+    :func:`_mid_letter_readings` is where the reasoning is written down.
+
+    Deliberately **not** here: prefixes. A rail is stated in volts; ``5V``/``12V``
+    /``3V3`` cover the vocabulary of ``blocks.portmeta.json``. ``5V5`` and
+    ``3300mV`` are a different question (and would want the same
+    package-size-free treatment this parser has, which
+    :func:`_mid_letter_readings` cannot give it: it strips *package size codes*
+    off a mantissa, so it would read the ``1206`` in a 1206 V rail as a size
+    and refuse the field).
+
+    :func:`_finite` closes it (issue #31), like every other parser here.
+    """
+    if not value or _too_long(value):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    match = _VOLTAGE_RE.fullmatch(text)
+    if match is None:
+        return None
+    fraction = match.group("frac")
+    if fraction is not None:
+        whole = match.group("int")
+        if not whole or whole.startswith("0"):
+            return None  # ``V3`` states no value; ``0V5`` is not significant
+        magnitude = int(whole + fraction) / (10 ** len(fraction))
+    else:
+        magnitude = float(match.group("num"))
+    if match.group("sign") == "-":
+        magnitude = -magnitude
+    return _finite(magnitude)

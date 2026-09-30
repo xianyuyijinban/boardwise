@@ -60,6 +60,7 @@ because pretending to agree is the one thing these gates must never do.
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -68,6 +69,7 @@ from typing import Any, Iterable
 from ..core.blocks import BoardSpec, BlockPort
 from ..core.parts import PartLibrary
 from ..core.pintable import PinTable
+from ..rules.values import parse_voltage_volts
 from .pintable_check import PinFinding, check_pin_table
 
 #: How a finding is to be read. ``violation`` and ``undecidable`` both block;
@@ -888,6 +890,42 @@ def _gate_levels(spec: BoardSpec) -> Gate:
 # --------------------------------------------------------------------------
 
 
+def _same_voltage(sink: str, source: str) -> bool:
+    """True when a sink asks for the voltage a source provides.
+
+    Both spellings are read as volts first, by the repository's one voltage
+    parser (:func:`boardwise.rules.values.parse_voltage_volts`), and compared as
+    numbers. The question the gate is really asking is "same rail?", and a
+    rail has one voltage however it is written: ``3V3`` and ``3.3V`` are the
+    same 3.3 V, and the gate said they were not because it compared the strings
+    (issue #53). That is not a theoretical spelling pair —
+    ``blocklib/blocks.portmeta.json`` declares the CH340's VCC as ``3V3`` while
+    ``3.3V`` is what most people type, and a VIOLATION here stops a board that
+    is wired correctly.
+
+    Two decisions the string comparison did not have to make:
+
+    * **the reading is the repository's, not this gate's.** ``_MID_LETTER_KINDS``
+      in ``rules/values.py`` is where the R/K/M notation is read; a fourth copy
+      of it here is the defect #51 and #52 are about.
+    * **a voltage neither parser reads is compared as written.** ``+3.3V`` against
+      ``-3.3V`` is still a mismatch, ``5VDC`` against ``5V`` is still a
+      mismatch, and the gate does not stop to declare itself undecidable over a
+      spelling it has no better word for — the same verdict it reached before,
+      which is the fail-closed direction. Guessing would not fail closed; it
+      would invent a pass.
+
+    :func:`math.isclose`, not ``==``, because ``3.3`` and ``3.30`` are one
+    voltage and their two routes through :func:`float` are not guaranteed to
+    land on the same bit (issue #39's argument, the third quantity it applies
+    to).
+    """
+    asked, provided = parse_voltage_volts(sink), parse_voltage_volts(source)
+    if asked is None or provided is None:
+        return sink == source  # unreadable: the string is the whole of it
+    return math.isclose(asked, provided, rel_tol=1e-9)
+
+
 def _gate_power_tree(spec: BoardSpec) -> Gate:
     title = "every rail has exactly one source, and it feeds what the sinks ask for"
     findings: list[Finding] = []
@@ -976,7 +1014,7 @@ def _gate_power_tree(spec: BoardSpec) -> Gate:
                         evidence=[where(port, who), f"source: {source.voltage}"],
                     )
                 )
-            elif port.voltage != source.voltage:
+            elif not _same_voltage(port.voltage, source.voltage):
                 findings.append(
                     Finding(
                         kind=VIOLATION,
