@@ -121,6 +121,10 @@ EMPTY_PCB_VIEW_NOTE = (
 #: stops in the middle), and the stance is `空 ≠ 干净` — a legitimate empty project
 #: gets this note too, deliberately.
 #:
+#: Wording note (075): this sentence blames a **file**, so it is only ever printed
+#: for a file input — `review --live` has `LIVE_EMPTY_MODEL_NOTE` below for the
+#: same reading with no file in it.
+#:
 #: Fires on :func:`_model_read_nothing`, which is the same predicate
 #: :func:`_pcb_view_read_nothing` narrows (task 019's note is the more specific
 #: sentence for "you asked for the pcb view and this export has no board", so it
@@ -142,6 +146,28 @@ EMPTY_MODEL_HINT = (
     "提示：这个输入读出来是空的（0 器件 0 网络）——归档可能被截断或损坏，"
     "合法空工程同样不是「干净板」：`boardwise checkup` 会把它记成 "
     "`verdict: incomplete`、`review`/`checkup` 都以 **exit 3** 告终。"
+)
+
+#: The live path's own empty reading (075). `EMPTY_MODEL_NOTE` above blames a
+#: *file* ("a truncated or damaged archive reads this way"), which would be a
+#: wrong hint for `review --live`: there is no file, and the connector answered.
+#: So the state gets its own sentence — and the same exit code, because it is the
+#: same state `checkup` gates on (`completion.coverage.modelEmpty`).
+#:
+#: Distinct from `_cmd_review`'s other live exit 3: "no tier produced a model" is
+#: "the online state cannot be stated", this one is "a model was obtained and
+#: there is nothing in it". Both mean nothing was reviewed.
+LIVE_EMPTY_MODEL_NOTE = (
+    "note: the live read got a model, but it is empty — 0 components and 0 nets; "
+    "nothing was reviewed (verdict: incomplete → exit 3)"
+)
+
+#: The same statement in the `--md` report's Chinese summary, like
+#: `EMPTY_MODEL_HINT` before it.
+LIVE_EMPTY_MODEL_HINT = (
+    "提示：在线读到的模型是空的（0 器件 0 网络）——模型拿到了，但里面没有可审的内容；"
+    "这与「根本没拿到模型」（在线状态不可陈述）不是一件事，`checkup` 对同一个工程同样以 "
+    "`verdict: incomplete` / **exit 3** 告终。"
 )
 
 #: The tail every parse-drop note shares (task 020 §WI-1). The numbers are
@@ -345,7 +371,9 @@ def build_parser() -> argparse.ArgumentParser:
             "2): the same offline rules over a model loaded through checkup's "
             "tier ladder (project archive → per-page archives → netlist). "
             "Mutually exclusive with a file argument and with --latest. Exit 3 "
-            "when the online state cannot be stated."
+            "when the online state cannot be stated, and also when the model it "
+            "did obtain is empty (0 components and 0 nets) — a live reading with "
+            "nothing in it is not a pass either, and checkup answers 3 for it."
         ),
     )
 
@@ -2414,6 +2442,46 @@ def _exit_code_with_verdict(exit_code: int, verdict: str) -> int:
     return int(exit_code)
 
 
+def _regate_exit_code(summary: dict, verdict: str) -> int:
+    """The exit code a **re-gate** leaves in the report (075).
+
+    `boardwise need-datasheet` and `boardwise triage` rebuild `completion` from
+    the report's own sections and write it back — and until 075 they left
+    `summary.exitCode` alone, so a `complete` board (exit 0) that got one mark
+    read `verdict: incomplete` next to 「（退出码 0）」 in the same file. The code is
+    recomputed here with the *same* mapping the run itself used
+    (:func:`_exit_code_with_verdict`), so the three renderings stay one value
+    (#15): marking a pin moves 0 → 3, and a report whose gate opens again (the
+    mark gone, the last warning triaged) moves 3 → 0.
+
+    The base is **recovered from the recorded code** instead of being stored
+    beside it, which is sound because that mapping is one-way: it only ever
+    raises a 0, and the codes a *written* report can carry are 0, 1 and 3 (a bad
+    input returns before any report exists, and nothing else writes 3 into one).
+    A recorded 3 is therefore always a 0 the verdict raised, and undoing that one
+    raise recovers the base exactly — one value, one mapping, no second field to
+    drift out of sync with it.
+
+    This is **not** the command's own exit code: `need-datasheet`/`triage`
+    succeeded if they wrote the report, which is a different question from what
+    the report now says about the board.
+    """
+    recorded = int(summary.get("exitCode") or 0)
+    base = 0 if recorded == INCOMPLETE_EXIT_CODE else recorded
+    return _exit_code_with_verdict(base, verdict)
+
+
+def _recorded_exit_code(report: dict) -> int:
+    """The exit code a `checkup` report records — read, never derived (075).
+
+    `summary.exitCode` is the one value the run decided (073) and the re-gates
+    keep in step with the verdict (:func:`_regate_exit_code`), so a console line
+    that computed a second one would be exactly the drift #15 was about. This
+    only reads it back out of the report.
+    """
+    return int((report.get("summary") or {}).get("exitCode") or 0)
+
+
 def _model_designators(model: object) -> set[str]:
     """The designators a schematic model states, one board or a whole project.
 
@@ -2597,6 +2665,17 @@ def _cmd_review(args: argparse.Namespace) -> int:
     empty_model = (
         not empty_pcb_view and path is not None and _model_read_nothing(model, board)
     )
+    # 075: the live path's own empty reading, and the hole 073 left open here. The
+    # two file branches above are gated on `path is not None` (019/072's doing:
+    # those sentences are about a *file*, and a live run cannot pick a view to
+    # blame), so a live run that **obtained** a model with nothing in it returned
+    # 0 — while `checkup` on the same project returns 3 (`coverage.modelEmpty` is
+    # not path-gated). Same predicate, same reading, so the same answer. The live
+    # ladder is schematic-only (no board geometry exists, so the copper clause
+    # never applies) and the state has its own sentence: "no tier produced a
+    # model" (the exit 3 before this) is a different thing from "a model came
+    # back empty".
+    live_empty_model = live and _model_read_nothing(model, board)
     # Same rule for the drop counters: one pair of numbers, rendered once in
     # English for the console and once in Chinese for the summary.
     drop_note = _parse_drop_note(
@@ -2646,7 +2725,11 @@ def _cmd_review(args: argparse.Namespace) -> int:
             counts,
             _model_designators(model),
             empty_pcb_view=empty_pcb_view,
-            empty_model_hint=EMPTY_MODEL_HINT if empty_model else "",
+            empty_model_hint=(
+                EMPTY_MODEL_HINT if empty_model
+                else LIVE_EMPTY_MODEL_HINT if live_empty_model
+                else ""
+            ),
             parse_drop_hint=parse_drop_hint(
                 parse_stats.pins_dropped_no_number,
                 parse_stats.components_without_symbol,
@@ -2662,14 +2745,12 @@ def _cmd_review(args: argparse.Namespace) -> int:
     # function (`_model_read_nothing`) decides what "this reading saw nothing at all"
     # means, so the two commands cannot disagree about the *predicate*.
     #
-    # **Scope of that agreement, stated because it is narrower than it sounds**: the
-    # predicate is only consulted for a **file** input (both `empty_pcb_view` and
-    # `empty_model` are gated on `path is not None`, which is 019/072's doing — the
-    # note is about a file, and `--live` cannot pick a view to blame). A live run
-    # whose tiers all succeeded on an *empty* project therefore still returns 0 here,
-    # while `checkup` on the same project returns 3 (`coverage.modelEmpty` is not
-    # path-gated). That asymmetry is pre-existing, outside this task's ruling, and
-    # reported as a boundary finding rather than changed on the quiet.
+    # **Scope of that agreement**, which 075 widened to the live path: the file
+    # branches keep their own gates (`empty_pcb_view` / `empty_model` are gated on
+    # `path is not None`, 019/072's doing — those notes are about a *file*), and
+    # the live branch answers the same question with `live_empty_model`, so a live
+    # run that obtained an empty model is exit 3 exactly like `checkup`'s
+    # `coverage.modelEmpty`. Three readings, one predicate, one answer.
     #
     # Everything else `review` can say, it says: `rules_errored` and the parse drops
     # are coverage gaps, which are `complete-with-open-items` in `checkup` terms and
@@ -2680,16 +2761,17 @@ def _cmd_review(args: argparse.Namespace) -> int:
     # archive) is the last line, and the exit code is not a hint to act on something
     # in the file. The two cannot contradict each other: the hint fires on the same
     # predicate this sentence does.
-    read_nothing = empty_pcb_view or empty_model
+    read_nothing = empty_pcb_view or empty_model or live_empty_model
     if read_nothing:
         print(f"note: exit {INCOMPLETE_EXIT_CODE} —— {INCOMPLETE_EXIT_SENTENCE}")
 
     # Last lines of the console output, after the report paths: a note is the
     # one thing a reader has to act on, so it must not be buried between the
-    # census and a "written to" line. The first two cannot fire together — the
-    # empty view is a pcb-view reading and the empty model is the unified
-    # predicate it narrows — and the counters are a schematic-parse fact, so
-    # neither has to concede being last.
+    # census and a "written to" line. The first three cannot fire together — the
+    # empty view is a pcb-view reading, the empty model is the file-input
+    # predicate, and the live one is the branch where there is no file at all —
+    # and the counters are a schematic-parse fact, so none of them has to concede
+    # being last.
     if rules_errored:
         # #30 fork 2: the run survives a broken rule, so saying *which* one is the
         # only way a reader can tell a partial report from a complete one here.
@@ -2702,6 +2784,11 @@ def _cmd_review(args: argparse.Namespace) -> int:
         print(EMPTY_PCB_VIEW_NOTE)
     elif empty_model:
         print(EMPTY_MODEL_NOTE)
+    elif live_empty_model:
+        # Its own sentence rather than `EMPTY_MODEL_NOTE`: there is no archive to
+        # blame here, and the state it has to be told apart from is the exit 3
+        # above ("no tier produced a model").
+        print(LIVE_EMPTY_MODEL_NOTE)
     if drop_note:
         print(drop_note)
 
@@ -3527,16 +3614,24 @@ def _completion_coverage_gates(*, completion: dict) -> dict:
 def _apply_needs_datasheet(report: dict, needs_datasheet: list[dict]) -> dict:
     """Re-gate a report in place after a mark: section + completion + conclusion.
 
-    Exactly the three things a mark can change, and nothing else — `summary.
+    Exactly the things a mark can change, and nothing else — `summary.
     mayClaimPassed` keeps its narrow meaning (053), `unreviewed_parts` and the
     facts seed are not recomputed (nothing was re-read), and the rule engine is
     not re-run. `completion` is **rebuilt** (see :func:`_completion_from_report`),
     so a report that said `complete` cannot survive being told about a pin nobody
     can explain yet.
+
+    075 added the fourth thing: `summary.exitCode` follows the recomputed verdict
+    (:func:`_regate_exit_code`), because the report records the run's exit code
+    and a gate that moved has to move it — `report.md` needs no separate fix, it
+    renders `summary.exitCode` and the caller re-renders it.
     """
     report["schema"] = CHECKUP_SCHEMA
     report["needs_datasheet"] = needs_datasheet
     report["completion"] = _completion_from_report(report, needs_datasheet=needs_datasheet)
+    report["summary"]["exitCode"] = _regate_exit_code(
+        report["summary"], report["completion"]["verdict"]
+    )
     report["summary"]["conclusion"] = _review_conclusion(
         report.get("summary") or {},
         unreviewed_count=len(report.get("unreviewed_parts") or []),
@@ -3641,18 +3736,25 @@ def _merge_triage_entry(
 def _apply_warning_triage(report: dict, triage: list[dict]) -> dict:
     """Re-gate a report in place after a verdict: section + completion + conclusion.
 
-    Exactly the three things a verdict can change, and nothing else — the rule
+    Exactly the things a verdict can change, and nothing else — the rule
     engine is not re-run, `unreviewed_parts` and the facts seed are not
     recomputed, and `summary.mayClaimPassed` keeps its narrow meaning (053).
     `completion` is **rebuilt** rather than patched (see
     :func:`_completion_from_report`), so the pending count a reader sees is the
     one this section now has; `needs_datasheet` is passed back through unchanged
     because a verdict moves no datasheet.
+
+    075 added `summary.exitCode` to what a re-gate recomputes
+    (:func:`_regate_exit_code`): a verdict that turns `complete` cannot leave the
+    report recording the exit code of the verdict it replaced.
     """
     report["schema"] = CHECKUP_SCHEMA
     report["warning_triage"] = triage
     report["completion"] = _completion_from_report(
         report, needs_datasheet=report.get("needs_datasheet") or []
+    )
+    report["summary"]["exitCode"] = _regate_exit_code(
+        report["summary"], report["completion"]["verdict"]
     )
     report["summary"]["conclusion"] = _review_conclusion(
         report.get("summary") or {},
@@ -4806,7 +4908,9 @@ def _need_datasheet_lines(
     One line spells out whether the mark was new or a repeat — "已存在，已更新" is
     the wording 058 §三 asks for, and it is what tells a caller the second run of
     the same command changed nothing but the reason. Then the section's two
-    counts, the conclusion the report is now allowed to quote, and the verdict.
+    counts, the conclusion the report is now allowed to quote, the verdict, and
+    (075) the exit code the **report** now records — named apart from this
+    command's own, which is 0 whenever the mark was applied.
     """
     facts = sum(1 for entry in needs_datasheet if entry.get("trigger") == TRIGGER_FACTS)
     marked = [entry for entry in needs_datasheet if entry.get("trigger") == TRIGGER_MARKED]
@@ -4823,6 +4927,8 @@ def _need_datasheet_lines(
         f"  needs_datasheet: facts {facts} 条 / 审查者标记 {len(marked)} 项",
         f"  conclusion: {report.get('summary', {}).get('conclusion', '')}",
         f"  completion: {completion.get('verdict')}（{why}）",
+        f"  exitCode: {_recorded_exit_code(report)}"
+        "（报告记录的**板态**退出码，随 verdict 重算；本命令自己的退出码是 0——它只改报告）",
         f"  report: {report.get('schema')} 已重算并写回；report.md 已重渲染",
     ]
 
@@ -4998,10 +5104,12 @@ def _triage_lines(
 ) -> list[str]:
     """The command's own report: what was written, and where the gate now stands.
 
-    Same five lines `need-datasheet` prints (058 §三), for the same reason: the
+    Same lines `need-datasheet` prints (058 §三), for the same reason: the
     "已存在，已更新" wording is what tells a caller the second run of the same
     command changed nothing but the reason, and the counts after it are the
     report's own — how many warnings now carry a verdict, and what the gate says.
+    The `exitCode:` line is the report's own value too (075), named apart from
+    this command's exit code.
     """
     if added and not updated:
         state = "已新增"
@@ -5019,6 +5127,8 @@ def _triage_lines(
         f"侧车 {WARNING_TRIAGE_FILE} {len(entries)} 条",
         f"  conclusion: {report.get('summary', {}).get('conclusion', '')}",
         f"  completion: {completion.get('verdict')}（{why}）",
+        f"  exitCode: {_recorded_exit_code(report)}"
+        "（报告记录的**板态**退出码，随 verdict 重算；本命令自己的退出码是 0——它只改报告）",
         f"  report: {report.get('schema')} 已重算并写回；report.md 已重渲染",
     ]
 
