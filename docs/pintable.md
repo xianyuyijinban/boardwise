@@ -73,7 +73,8 @@ passed.
    into the evidence. (The "one pin under two names" negative case.)
 3. **The two-way difference against the spec**, compared at **pin level**: a net
    name both sides carry is not agreement when they mean different balls (a
-   port's `role` and a pin table's `number` are both the ball's name).
+   pin table's `number` is a ball; a block port's `role` is only a ball when the
+   author spelled it that way — see below).
    * firmware names a net the spec never connects ⇒ **defect** — the firmware
      uses a pin the schematic does not wire;
    * firmware puts a pin on a net the spec *does* connect, but to another ball
@@ -88,6 +89,43 @@ passed.
 
    Power and ground ports are excluded from direction 2 — `GND` is not a port
    the firmware forgot.
+
+### Where a port's ball comes from, and what happens when it does not (#48)
+
+Pin level needs a ball on **both** sides. The pin table has one on every row. A
+block port does not, and the reason is that the two name different things:
+
+| What the pin table calls a pin | What a block template calls a port |
+|---|---|
+| `PA5` — a ball, always | `PA5` on a hand-authored MCU block, or `SPI_SCK` / `GND` / `D+` on a block cut out of a board |
+
+Every block in `blocklib/blocks/` was cut out of a golden board, where the port's
+role **is** the net name at the cut — a functional name. Subtracting `SPI_SCK`
+from a set of balls is never empty, so a perfect board came out DEFECT, and
+mirrored, a functional name never matched a pin number so a ball the firmware
+*was* using was reported as a pin it had not grown into (issue #48).
+
+So a port yields a ball only when it has evidence, in this order:
+
+1. an explicit **`ball`** field on the port (`"ball": "PA5"`);
+2. a **`role`** that is itself spelled as a ball (`PA5`, `PC12`) — this is what
+   every ball-named test block has relied on since #35, and it keeps working
+   unchanged;
+3. otherwise the port is **withheld**: it takes no part in the pin-level
+   comparison, and one **note** names it — *"the MCU block's port 'SPI_SCK' has
+   no ball-name evidence … the pin-level comparison for that port was
+   withheld. It is *not* a pass, and it is not a defect either."*
+
+Withheld can never produce a defect, and it does not produce an open question
+either: "the firmware has not grown into that pin yet" is a claim about a ball
+nobody named. A net whose every MCU port is withheld is not counted in
+`matched_nets` — an uncomparable net is not a matched one.
+
+Filling in `ball` on the block gets the comparison back; the loader refuses a
+`ball` that is not spelled as a ball, because the one field that must not hold a
+function name is exactly the field that would then be hiding one. See
+[blocks.md](blocks.md) for what the field is a claim about (the *package a
+template draws*, not the function).
 
 ## The `.ioc` cross-check
 
@@ -152,3 +190,4 @@ printed in every case. Without `--spec`, gate 3 says it did not run.
 | `inputs/smart_pillbox/pintable.json` | the smart pillbox table (28 pins) |
 | `inputs/smart_pillbox/firmware-mcu/Smartbox.ioc` | the baseline |
 | `tests/test_pintable.py` | contract, gates, the five conflict shapes, both real inputs |
+| `tests/test_081_role_vs_ball.py` | #48: withheld ports, the `ball` field, its three shapes |

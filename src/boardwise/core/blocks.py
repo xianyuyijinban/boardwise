@@ -189,6 +189,38 @@ def _as_str(value: Any, where: str, *, allow_empty: bool = True) -> str:
     return text
 
 
+def _as_ball(value: Any, where: str) -> str | None:
+    """Read an optional ``ball`` field, and refuse anything that is not a ball.
+
+    ``None``/absent means "this port names no ball", which is a legitimate thing
+    for a block to say — the firmware pin check then withholds that port rather
+    than comparing a functional name against pin numbers (issue #48). A *filled*
+    in value is a claim about the package the template draws, so it has to be
+    spelled like one: accepting ``"SPI_SCK"`` here would put a function name into
+    the one field whose whole job is to not be a function name, and the defect
+    would be invisible from the file.
+
+    The shape comes from :func:`boardwise.core.pintable.looks_like_port_pin`.
+    ``core/pintable.py`` imports this module, so a module-level import here
+    would be a cycle; the import is therefore inside the function, which runs
+    long after both modules exist.
+    """
+    from .pintable import looks_like_port_pin
+
+    text = _as_str(value, where)
+    if not text:
+        return None
+    if not looks_like_port_pin(text):
+        raise BlockError(
+            f"{where}: {text!r} is not a ball name (expected an STM32 port pin "
+            "like 'PA5'). `ball` says which ball of the package this template "
+            "draws this port is on — write the ball the symbol pins out, or "
+            "leave the field out and let the pin check withhold the port. A "
+            "function name here is what issue #48 was about."
+        )
+    return text
+
+
 def _as_float(value: Any, where: str, default: float = 0.0) -> float:
     if value is None:
         return default
@@ -293,6 +325,26 @@ class BlockPort:
 
     A template with none of them is not invalid — it is *silent*, and the three
     gates that read them answer "cannot tell" for it rather than passing it.
+
+    ``ball`` is the fourth optional field and the only one that is about the
+    part rather than about the net. ``role`` is a name the *block* uses; on a
+    board-extract it is the net name at the cut, and on a hand-authored block it
+    is whatever the author called the function (``SPI_SCK``, ``GND``, ``RX``).
+    A pin table, by contrast, is written in ball names (``PA5``), and the
+    firmware pin check compares the two — so a functional role gives it nothing
+    to compare and the check has to *withhold* rather than pretend (issue #48).
+
+    ``ball`` is where the block author supplies the missing evidence: ``"ball":
+    "PA5"`` says **this port, on the package this template draws, is that ball**.
+    A template's symbol draws one specific package, so the claim is about that
+    package and not about the function: a part whose function is movable between
+    balls (``SPI_SCK`` can be several of them depending on the part) has no
+    single answer, and an author who cannot commit to the package being drawn
+    must leave ``ball`` out rather than write the first ball the datasheet
+    happens to list. The loader checks the value is spelled like a ball
+    (:func:`boardwise.core.pintable.looks_like_port_pin` — the one copy of that
+    judgement in this repository) so a functional name cannot slip into the
+    field that exists precisely to *not* be one.
     """
 
     role: str
@@ -304,6 +356,9 @@ class BlockPort:
     direction: str = ""
     voltage: str = ""
     level: str = ""
+    #: The ball this port is on the drawn package, or ``None`` when the block
+    #: gives no evidence. Optional, and never a functional name.
+    ball: str | None = None
 
     @property
     def is_signal(self) -> bool:
@@ -713,7 +768,8 @@ def template_from_json(raw: Any, *, where: str = "<block>") -> BlockTemplate:
             raise BlockError(f"{spot}: expected an object")
         _check_keys(
             body,
-            ("role", "net", "net_class", "position", "direction", "voltage", "level"),
+            ("role", "net", "net_class", "position", "direction", "voltage", "level",
+             "ball"),
             spot,
         )
         role = _as_str(_require(body, "role", spot), f"{spot}.role", allow_empty=False)
@@ -735,6 +791,7 @@ def template_from_json(raw: Any, *, where: str = "<block>") -> BlockTemplate:
             )
         voltage = _as_str(body.get("voltage"), f"{spot}.voltage")
         level = _as_str(body.get("level"), f"{spot}.level")
+        ball = _as_ball(body.get("ball"), f"{spot}.ball")
         # One knob per job: a rail's magnitude is `voltage` and a signal's domain
         # is `level`, and putting either on the wrong class would mean the power
         # tree and the level check could disagree about one port.
@@ -777,6 +834,7 @@ def template_from_json(raw: Any, *, where: str = "<block>") -> BlockTemplate:
                 direction=direction,
                 voltage=voltage,
                 level=level,
+                ball=ball,
             )
         )
 
@@ -895,6 +953,9 @@ def _port_to_json(port: BlockPort) -> dict[str, Any]:
     them conditionally is what keeps the round-trip byte-stable. ``position``
     joins them for the same reason: a geometry-less block has none, and writing
     ``[0, 0]`` for it is precisely the lie the 2026-09-17 ruling forbids.
+    ``ball`` is one of them for the same reason again — the five committed
+    blocks are not MCU blocks and none of them names a ball, so writing
+    ``"ball": null`` into all of them would be a diff with no meaning.
     """
     body: dict[str, Any] = {
         "role": port.role,
@@ -909,6 +970,8 @@ def _port_to_json(port: BlockPort) -> dict[str, Any]:
         body["voltage"] = port.voltage
     if port.level:
         body["level"] = port.level
+    if port.ball:
+        body["ball"] = port.ball
     return body
 
 

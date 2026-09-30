@@ -68,7 +68,7 @@ cut in canvas space.)
 | `origin_file`, `bbox_file` | the cut: where the block's zero is, and the boundary that was drawn (absolute file coordinates, provenance only) |
 | `symbols` | symbol uuid → `offsets` / `body` / `pin_names`. Geometry travels with the block; positions do not |
 | `components[]` | `ref`, `symbol`, `placement{x,y,rotation,mirror}`, `device{}`, `footprint`, `params{}`, `pins[]` |
-| `interface[]` | `role`, `net`, `net_class` (`power`/`signal`/`gnd`), `position` (required iff the block has geometry), optional `direction`/`voltage`/`level` |
+| `interface[]` | `role`, `net`, `net_class` (`power`/`signal`/`gnd`), `position` (required iff the block has geometry), optional `direction`/`voltage`/`level`/`ball` |
 | `params[]` | `name`, `role`, `default`, `constraint`, `provenance` |
 | `geometry` | `wires[]`, `flags[]`, `labels[]` — the block's internal copper and naming |
 
@@ -83,6 +83,36 @@ Two deliberate choices inside `components[]`:
 * **`params{}` maps a component property to a parameter name**, rather than
   inlining a value. "Every number is a parameter" (constitution item 4) is only
   true if the number has one place to live, and that place is the board spec.
+
+### `ball` is a claim about the package, not about the function
+
+`interface[].ball` is optional, and it is the only interface field that is about
+the part rather than about the net:
+
+```json
+{"role": "SPI_SCK", "net": "SPI1_SCK", "net_class": "signal", "ball": "PA5"}
+```
+
+It reads: **on the package this template draws, this port is PA5**. A template's
+symbol draws one specific package, so the claim is scoped to that package and
+never travels to another part. That is the whole reason the field is separate
+from `role`: a part whose function is movable between balls (`SPI_SCK` sits on
+several of them depending on the part) has no single honest answer, so a block
+author who cannot commit to the package being drawn must leave the field out.
+
+Leaving it out is not an error. `role` alone is enough for a port whose role is
+already spelled as a ball (`PA5`), and for everything else the firmware pin check
+**withholds** the port from its pin-level comparison and says so in a note —
+never a defect, and never a claim that the firmware has not used a ball nobody
+named. See [pintable.md](pintable.md § Where a port's ball comes from).
+
+The loader checks a filled-in `ball` is spelled like a ball
+(`core.pintable.looks_like_port_pin` — the one copy of that judgement in this
+repository) and refuses anything else by name, because the one field that must
+not contain a function name is exactly the field that would then be hiding one.
+None of the five committed blocks carries a `ball`: they are not MCU blocks, so
+none has a ball to declare, and writing one would be inventing evidence nobody
+measured.
 
 ## Parameter constraints are executable
 
