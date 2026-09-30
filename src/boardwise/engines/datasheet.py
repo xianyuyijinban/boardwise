@@ -43,20 +43,57 @@ SUPPLY_NAMES = (
     "V+",
 )
 
-_PIN_NUMBER = re.compile(r"\b(?:pin|pins|PIN|Pins|引脚)\s*#?\s*(\d{1,3})\b")
+_PIN_NUMBER = re.compile(r"\b(?:pin|pins|引脚)\s*#?\s*(\d{1,3})\b", re.IGNORECASE)
+#: The three ways a PDF hands back a minus: U+2212 MINUS SIGN, U+2013 EN DASH,
+#: U+2014 EM DASH. ASCII `-` is in the same class.
+_MINUS = "\u2212\u2013\u2014-"
+_MINUS_TABLE = str.maketrans(_MINUS, "-" * len(_MINUS))
+#: ...and the three of those that are **unambiguously** a separator when they
+#: stand alone between two numbers. ASCII `-` is not on this list, because a
+#: datasheet writes both `-40 -20 V` (a sign, then the next column) and
+#: `1.62 - 3.6 V` (a hyphen between two positive columns) with one character.
+_DASH = "\u2212\u2013\u2014"
+#: One specification number, **sign included**. The sign is read only when it
+#: *hugs the digits* — `–0.3`, `-0.5V`, and never `- 1.55`, which is how a
+#: specification column writes "name - min max". The lookbehind keeps the same
+#: three characters from being a sign when they are not: the hyphen of a part
+#: number (`MPU-6050`, `JS-001`) sits between a letter and its digits, and
+#: without the guard those became a supply voltage of -6050 V (079 #34/#49).
+#: `2.375V-3.46V` still reads, because the `-` there is consumed by the
+#: separator before this fragment ever sees it.
+_NUM = rf"(?<![\w.])[{_MINUS}]?\d+(?:\.\d+)?"
 #: A range must end in a **unit** `V`, not in the first letter of the next word:
 #: the 039 批② demo caught `Figure 4-24 VDD - off comparator` being read as
 #: "4 V to 24 V" with pin 24 (the figure number). `(?![\w])` is what makes `V`
-#: a unit again.
+#: a unit again. Both ends carry a sign: `-0.5V to 6.5V` is a below-ground
+#: allowance, not "0.5 to 6.5 V" (079 #49), and `-6V to -0.5V` is a legal
+#: all-negative range.
 _RANGE = re.compile(
-    r"(\d+(?:\.\d+)?)\s*V?\s*(?:to|~|–|—|-|\.\.)\s*(\d+(?:\.\d+)?)\s*V(?![\w+/])"
-    r"|(\d+(?:\.\d+)?)\s*V\s*(?:to|~|–|—|-)\s*(\d+(?:\.\d+)?)\s*V(?![\w+/])",
+    rf"({_NUM})\s*V?\s*(?:to|~|[{_DASH}]|\.\.|(?:-(?=\s)|(?<=\S)-))\s*({_NUM})\s*V(?![\w+/])"
+    rf"|({_NUM})\s*V\s*(?:to|~|[{_DASH}]|(?:-(?=\s)|(?<=\S)-))\s*({_NUM})\s*V(?![\w+/])",
     re.IGNORECASE,
 )
-_TRIPLE = re.compile(r"\b(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s*V(?![\w+/])")
+#: No leading `\b`: a word boundary cannot sit before a minus sign, and `\b`
+#: silently dropped it, which is how `-1.5 -1.0 -0.5 V` came back as
+#: `[-1.0, 0.5]` — the sign of the **first** column lost and the sign of the
+#: third one read onto the second. `_NUM`'s own lookbehind is the left guard.
+_TRIPLE = re.compile(rf"({_NUM})\s+({_NUM})\s+({_NUM})\s*V(?![\w+/])")
 #: The most common table shape in a TI/Infineon specification row: a **min and a
-#: max** with one unit — `Supply voltage, VCC 3 3.6 V`, `VDD -0.5 6.5 V`.
-_PAIR = re.compile(r"(?<![\d.])([−–—-]?\s?\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s*V(?![\w+/])")
+#: max** with one unit — `Supply voltage, VCC 3 3.6 V`, `VDD -0.5 6.5 V`. The
+#: sign hugs the min (`VCC –0.3 6 V`) and never crosses a space: 079 #34 measured
+#: `VBAT Backup operating voltage - 1.55 3.6 V` reading its column-separating
+#: hyphen as a minus and reporting a VBAT range that starts below ground.
+_PAIR = re.compile(rf"({_NUM})\s+(\d+(?:\.\d+)?)\s*V(?![\w+/])")
+
+
+def _signed_float(text: str) -> float:
+    """The number a range endpoint wrote, with whatever minus it spelled it with.
+
+    One implementation for every caller (071's "one judgment, one
+    implementation"): `_RANGE`, `_TRIPLE` and `_PAIR` all hand their endpoint
+    text here rather than each carrying its own chain of `replace` calls.
+    """
+    return float(text.translate(_MINUS_TABLE).replace(" ", ""))
 #: Figure and table **captions** are not specifications: "Figure 4-24 VDD - off
 #: comparator" is a pointer to a picture, and every number on it belongs to the
 #: numbering, not to the part.
@@ -82,7 +119,25 @@ def _probe(line: str) -> str:
         text = pattern.sub(replacement, text)
     return text
 _CAP_VALUE = re.compile(r"(\d+(?:\.\d+)?)\s*(µ|μ|u|n|p)\s?F\b", re.IGNORECASE)
-_DECOUPLING = re.compile(r"bypass|decoupl|退耦|去耦", re.IGNORECASE)
+#: A capacitor is a **component**, and the noun that says so is `capacitor` —
+#: `Capacitance` is a property of some other part and is never a BOM line.
+#: 079 #50: the old `bypass|decoupl` gate was a whitelist of the two rows that
+#: happened to spell it, and it dropped `Charge Pump Capacitor (Pin 20)` from
+#: the MPU-6050 external-components table.
+_CAP_PART = re.compile(r"\bcapacitors?\b|电容器", re.IGNORECASE)
+#: …and the property reading, which must **not** be collected: `Input
+#: Capacitance (Pin 8) 10pF` is a characteristic of pin 8, not a part to buy,
+#: and collecting it would make the decap rule report a missing capacitor that
+#: the datasheet never asked for.
+_CAP_SPEC = re.compile(r"\bcapacitance\b|\b容值\b", re.IGNORECASE)
+#: Chinese `电容` carries both readings — `电容 C8` is the part, `电容 10pF` is
+#: its value — so it only counts as a part inside a heading that says the page
+#: is listing parts.
+_CAP_ZH = re.compile(r"电容")
+_BOM_SECTION = re.compile(
+    r"Bill of Materials|External Components|外部元件|Application|应用电路",
+    re.IGNORECASE,
+)
 _NC_LINE = re.compile(r"\bNC\b|空脚|no connect", re.IGNORECASE)
 _NC_VERDICT = re.compile(
     r"not internally connected|no connect|must be left|leave (?:it )?unconnected|"
@@ -95,7 +150,8 @@ _SECTION = re.compile(
     r"(Absolute Maximum Ratings|Recommended Operating Conditions|"
     r"Recommended Operating|Electrical Characteristics|Specifications|"
     r"Pin Configuration and Functions|Pin Functions|Pin Descriptions|"
-    r"绝对最大值|推荐工作条件|电气特性|引脚)",
+    r"Bill of Materials|External Components|"
+    r"绝对最大值|推荐工作条件|电气特性|引脚|外部元件|应用电路)",
     re.IGNORECASE,
 )
 _ABS_MAX = re.compile(r"absolute maximum|绝对最大", re.IGNORECASE)
@@ -171,21 +227,35 @@ def _range_of(line: str) -> list[float] | None:
     match = _RANGE.search(line)
     if match:
         low_text, high_text = match.group(1) or match.group(3), match.group(2) or match.group(4)
-        low, high = float(low_text), float(high_text)
+        low, high = _signed_float(low_text), _signed_float(high_text)
         return [low, high] if low < high else None
     match = _TRIPLE.search(line)
     if match:
-        low, high = float(match.group(1)), float(match.group(3))
+        low, high = _signed_float(match.group(1)), _signed_float(match.group(3))
         return [low, high] if low < high else None
     match = _PAIR.search(line)
     if match:
         # A datasheet writes a negative limit with a typographic minus as often as
         # with `-`: `VCC –0.3 6 V` is -0.3 V, and reading it as +0.3 V would turn a
         # below-ground allowance into an operating range.
-        low = float(match.group(1).replace("−", "-").replace("–", "-").replace("—", "-").replace(" ", ""))
-        high = float(match.group(2))
+        low, high = _signed_float(match.group(1)), _signed_float(match.group(2))
         return [low, high] if low < high else None
     return None
+
+
+def _is_capacitor_part(probe: str, section: str) -> bool:
+    """Does this line name a capacitor **component**, rather than a capacitance?
+
+    Three readings, one judgment: the component noun (`Capacitor`, `电容器`)
+    answers it outright; the property noun (`Capacitance`, `容值`) answers it no;
+    and the Chinese `电容`, which spells both, counts only under a heading that
+    is listing parts.
+    """
+    if _CAP_SPEC.search(probe):
+        return False
+    if _CAP_PART.search(probe):
+        return True
+    return bool(_CAP_ZH.search(probe)) and bool(_BOM_SECTION.search(section))
 
 
 _NAMES_RE = "|".join(re.escape(name) for name in SUPPLY_NAMES)
@@ -299,7 +369,7 @@ def candidate_facts(
                         near_misses.append(
                             f"p.{number}: '{_quote(line)}'（有电压范围但没有引脚号，对着引脚表补）"
                         )
-            if _DECOUPLING.search(probe) and re.search(r"\bpin", probe, re.IGNORECASE):
+            if _is_capacitor_part(probe, section) and _PIN_NUMBER.search(probe):
                 value = _CAP_VALUE.search(probe)
                 pin = _pin_from(probe, "PIN")
                 if value is not None and pin and len(caps) < MAX_PER_KIND:
