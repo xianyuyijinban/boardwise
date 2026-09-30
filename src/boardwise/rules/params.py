@@ -543,6 +543,18 @@ class LedCurrent(FactsRule):
     WARN (a BOM/design contradiction, the LED works or does not), while a LED
     with **no** series resistance at all is ERROR -- 0 ohm is a short across
     the rail, which is destructive rather than marginal.
+
+    **Issue #19 follow-up (076): both reads are net-shaped.** The series
+    resistance is found by *sharing a net with the LED*, and the window's
+    voltage is read off that resistor's far net -- which, like every domain in
+    this harness, may be named by an LDO's output pin wherever it sits. The
+    per-page merge welds net names across pages, so on a welded name the
+    resistor may be the other board's and the rail the other board's
+    regulator; neither the OK nor the missing-resistor ERROR is then
+    established, and the row is UNKNOWN naming the net and the pages
+    (:meth:`_watched` lists exactly the nets that are read). A reading with no
+    unproven names -- single page, project file, netlist, ``--file`` -- is
+    byte-for-byte what it was.
     """
 
     id = "param-led-current"
@@ -574,13 +586,19 @@ class LedCurrent(FactsRule):
 
     def _series_resistance(
         self, model: DesignModel, led: Component
-    ) -> list[tuple[Component, float, str]]:
+    ) -> list[tuple[Component, float, str, tuple[str, ...]]]:
         """Resistors sharing a net with the LED, with their other-end nets.
 
         Resistors are identified by their value parsing as a resistance --
         **not** by the R designator prefix (the U3 lesson: an 0805 resistor
-        lived under a U prefix)."""
-        found: list[tuple[Component, float, str]] = []
+        lived under a U prefix).
+
+        The fourth element is the net(s) the resistor and the LED **share** --
+        the pairing evidence this rule reads. Returned rather than recomputed,
+        because issue #19's follow-up (076) has to test those names *before* the
+        pair is judged: welded by the per-page merge, the resistor this rule
+        adopts may be the other board's part."""
+        found: list[tuple[Component, float, str, tuple[str, ...]]] = []
         led_nets = {pin.net for pin in led.pins if pin.net}
         for comp in model.components.values():
             if comp.designator == led.designator:
@@ -589,19 +607,57 @@ class LedCurrent(FactsRule):
             if ohms is None or ohms <= 0:
                 continue
             nets = [pin.net for pin in comp.pins if pin.net]
-            if not any(net in led_nets for net in nets):
+            shared = tuple(dict.fromkeys(net for net in nets if net in led_nets))
+            if not shared:
                 continue
             other = [net for net in nets if net not in led_nets]
             for net in other or nets:
-                found.append((comp, ohms, net))
+                found.append((comp, ohms, net, shared))
         return found
+
+    def _watched(
+        self,
+        resistors: list[tuple[Component, float, str, tuple[str, ...]]],
+        supply_net: str,
+    ) -> list[str]:
+        """Every net this LED's verdict reads, in the order it reads them (076).
+
+        Two reads, which is why there are two sources here:
+
+        * the nets the rule **pairs** on -- each candidate series resistance is
+          found by sharing one of them with the LED, so a welded name can hand
+          this board another board's resistor (and, with it, a total that sums
+          parts from two boards);
+        * ``supply_net`` -- the net whose voltage the window is judged in. For
+          the LED rule that voltage may come from an LDO's output pin wherever
+          it sits (the golden board's own path), which on a welded name may be
+          the other page's regulator.
+
+        Ground is not filtered out of the pairing set: where the LED and the
+        resistor happen to meet on a ground net, that net *is* the pairing and
+        this rule reads its pins like any other. What it never reads is who else
+        sits on the LED's own ground side -- it asks whether that net is ground
+        **by name** -- so a ground name only the LED touches is not evidence
+        here.
+
+        One net per entry however it was reached: a resistor whose both nets are
+        the LED's own (a part across the LED) puts its supply net in the pairing
+        set as well, and a name listed twice would make the refusal read
+        "``'VCC'`` and ``'VCC'`` were each seen on more than one page".
+        """
+        watched = dict.fromkeys(
+            net for _c, _o, _n, shared in resistors for net in shared
+        )
+        if supply_net:
+            watched.setdefault(supply_net, None)
+        return list(watched)
 
     def _supply_side(
         self,
         led: Component,
-        resistors: list[tuple[Component, float, str]],
+        resistors: list[tuple[Component, float, str, tuple[str, ...]]],
         guesses: dict,
-    ) -> tuple[list[tuple[Component, float, str]], float | None, str]:
+    ) -> tuple[list[tuple[Component, float, str, tuple[str, ...]]], float | None, str]:
         """The series resistors on the supply side, and the rail behind them.
 
         A resistor counts when it shares a net with the LED **and** its far
@@ -617,14 +673,14 @@ class LedCurrent(FactsRule):
         UNKNOWN, because summing an empty path would read as 0 ohm and report
         a missing resistor that is on the board.
         """
-        path: list[tuple[Component, float, str]] = []
+        path: list[tuple[Component, float, str, tuple[str, ...]]] = []
         volts: float | None = None
         net_name = ""
-        for comp, ohms, net in resistors:
+        for comp, ohms, net, shared in resistors:
             value, _source, _why = domain_of(guesses, net)
             if value is None:
                 continue
-            path.append((comp, ohms, net))
+            path.append((comp, ohms, net, shared))
             if volts is None:
                 volts, net_name = value, net
         if path:
@@ -649,7 +705,7 @@ class LedCurrent(FactsRule):
             path, supply_volts, supply_net = self._supply_side(
                 led, resistors, guesses
             )
-            total = sum(ohms for _c, ohms, _n in path)
+            total = sum(ohms for _c, ohms, _n, _s in path)
             evidence = [
                 f"{led.designator} pins "
                 + ", ".join(
@@ -660,10 +716,37 @@ class LedCurrent(FactsRule):
                 evidence.append(
                     "series resistance "
                     + "+".join(
-                        f"{comp.designator}({ohms:.4g}\u03a9)" for comp, ohms, _n in path
+                        f"{comp.designator}({ohms:.4g}\u03a9)"
+                        for comp, ohms, _n, _s in path
                     )
                     + f" = {total:.4g} \u03a9"
                 )
+            # Issue #19 follow-up (076). This rule's two reads are the pairing
+            # (which resistor shares a net with the LED) and the rail's voltage,
+            # and the per-page merge welds net names blind: board 2's resistor
+            # becomes board 1's series resistance, and board 2's regulator names
+            # board 1's rail. Neither the pass (a legal 1k in the window) nor the
+            # failure (no resistor at all, 0 ohm across the rail) is established
+            # on such a name, so the row is UNKNOWN -- and it is filed *before*
+            # the branches below, because "nothing names the rail" is also a
+            # conclusion about nets this reading cannot attribute to a board.
+            welded = unproven_nets(model, self._watched(resistors, supply_net))
+            if welded:
+                rows.append((
+                    unproven_outcome(
+                        self.id,
+                        led.designator,
+                        welded,
+                        what=(
+                            "whether any resistor at all is in series with it, "
+                            "and what the rail behind that path is at (both are "
+                            "read from these nets' pins)"
+                        ),
+                        evidence=evidence,
+                    ),
+                    None,
+                ))
+                continue
             if supply_volts is None:
                 rows.append((
                     Outcome(
@@ -725,7 +808,8 @@ class LedCurrent(FactsRule):
                 ))
                 continue
             resistors_text = "+".join(
-                f"{comp.designator}({ohms:.4g}\u03a9)" for comp, ohms, _n in path
+                f"{comp.designator}({ohms:.4g}\u03a9)"
+                for comp, ohms, _n, _s in path
             )
             # Quote the evidence that named the rail: the whole 011 family is
             # built on "who says so", and on the golden board the answer is an
@@ -1018,6 +1102,18 @@ class RcCutoff(FactsRule):
     state now says what is true -- a measurement was taken and nothing was
     violated -- and the finding channel stays exactly as it was (INFO), which
     is why ``check()`` keys off the row's severity hint rather than its state.
+
+    **Issue #19 follow-up (076): the pair is a membership claim too.** The
+    report-only shape made this rule look like it read one part's own values,
+    which is why #19's first pass left it out -- but "these two parts are one
+    network" is read from a *net's* members (the pair is whatever shares a
+    non-ground net, plus that capacitor being grounded), and the per-page merge
+    welds net names blind. Welded, board 2's capacitor became board 1's
+    partner and the board got a cutoff it does not have; the row is UNKNOWN on
+    such a net now, naming the net and the pages, with ``check()`` filing
+    nothing either way. A single-page reading (and every project-file, netlist
+    and ``--file`` reading) carries no unproven names and is byte-for-byte what
+    it was.
     """
 
     id = "param-rc-cutoff"
@@ -1040,6 +1136,7 @@ class RcCutoff(FactsRule):
 
     def _rows(self, model: DesignModel) -> list[tuple[Outcome, str | None]]:
         guesses = infer_net_domains(model, self.library)
+        rows: list[tuple[Outcome, str | None]] = []
         pairs: list[tuple[Component, float, Component, float, str]] = []
         resistors: dict[str, float] = {}
         capacitors: dict[str, float] = {}
@@ -1050,6 +1147,8 @@ class RcCutoff(FactsRule):
             farads = parse_capacitance_farads(comp.value or "")
             if farads is not None:
                 capacitors[comp.designator] = farads
+        #: The pairs this rule looked at, refused ones included, so the survey row
+        #: below states "no pair exists here" only when that is true.
         seen: set[tuple[str, str]] = set()
         for r_desig, ohms in resistors.items():
             r_nets = [
@@ -1071,6 +1170,50 @@ class RcCutoff(FactsRule):
                 capped = [net for net in c_nets if is_ground_net(net)]
                 if not shared or not capped:
                     continue
+                # Issue #19 follow-up (076). A resistor and a capacitor are "one
+                # network" here because they **share a non-ground net**, and the
+                # per-page merge welds those names across pages. On a welded name
+                # the partner may be the other board's part, so the cutoff is not
+                # this board's number — filing it measures a network no page
+                # draws (岳's reproduction: fc = 159 Hz welded, nothing at all
+                # when the pair is real). Both directions are withheld, so the
+                # row is UNKNOWN.
+                #
+                # This is the pair's own net, and the only net the verdict reads:
+                # the resistor's far terminal is never looked at by this rule,
+                # and the capacitor's ground side is read **by name**
+                # (`is_ground_net`), not by membership. It is also *not* checked
+                # on purpose: a ground name sits on every page of a multi-sheet
+                # board by construction, so refusing on it would refuse every RC
+                # pair there — a false alarm, not a closed hole.
+                #
+                # The pair is marked seen either way: a refusal must not sit
+                # beside a survey row claiming no pair was found (the same call
+                # `param-divider-output` makes for a welded divider).
+                welded = unproven_nets(model, shared)
+                if welded:
+                    seen.add(key)
+                    rows.append((
+                        unproven_outcome(
+                            self.id,
+                            f"{r_desig}/{c_desig}",
+                            welded,
+                            what=(
+                                f"whether {r_desig} and {c_desig} are one network "
+                                "at all (this rule's pair is read from these "
+                                "nets' pins)"
+                            ),
+                            evidence=[
+                                f"{r_desig} + {c_desig} share {shared[0]!r}",
+                                f"{r_desig} value "
+                                f"{model.components[r_desig].value!r}",
+                                f"{c_desig} value "
+                                f"{model.components[c_desig].value!r}",
+                            ],
+                        ),
+                        None,
+                    ))
+                    continue
                 # A pair sharing a *known supply rail* is decoupling, not a
                 # signal low-pass (the golden board's U3+C6 on VCC): the RC
                 # rule would otherwise file every decoupling cap as a
@@ -1082,8 +1225,7 @@ class RcCutoff(FactsRule):
                     model.components[r_desig], ohms,
                     model.components[c_desig], farads, shared[0],
                 ))
-        rows: list[tuple[Outcome, str | None]] = []
-        if not pairs:
+        if not seen:
             rows.append((
                 Outcome(
                     rule_id=self.id,

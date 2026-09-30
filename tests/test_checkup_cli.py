@@ -548,7 +548,7 @@ PAGE_1 = "aaaa1111aaaa111111"
 PAGE_2 = "bbbb2222bbbb222222"
 
 
-def _part(designator: str, *, value: str = "", mpn: str = "", pins=()):
+def _part(designator: str, *, value: str = "", mpn: str = "", footprint: str = "", pins=()):
     from boardwise.core.model import Component, Pin
 
     return Component(
@@ -556,6 +556,7 @@ def _part(designator: str, *, value: str = "", mpn: str = "", pins=()):
         designator=designator,
         value=value,
         mpn=mpn,
+        footprint=footprint,
         pins=[Pin(str(number), "", net) for number, net in pins],
     )
 
@@ -801,6 +802,211 @@ def test_a_voltage_from_the_other_boards_regulator_is_not_asserted():
     assert "RAILX" in range_states["U3 pin1"].message
 
 
+# --------------------------------------------------------------------------
+# issue #19 follow-up (076): the two parameter rules that also read members
+# --------------------------------------------------------------------------
+#
+# `param-rc-cutoff` and `param-led-current` were not in #19's first pass, and the
+# registry's own docstring said why: they "read one part's own values". That is
+# true of the numbers they print and false of the question they ask — each finds
+# its cooperating part **by sharing a net with it**. The RC rule pairs a resistor
+# with a capacitor on a common net; the LED rule adopts every resistance that
+# shares a net with the LED and reads the window's voltage off that resistor's
+# far side. A welded name hands each of them the other board's part, and neither
+# said so: the pair printed `fc = 159 Hz` and the LED printed OK (岳's
+# reproduction: same model, the only variable being `unproven_nets`).
+#
+# So both refuse now — and both keep measuring when the page is the only one.
+# The refusal is about the welded *name*; a rule that goes quiet everywhere would
+# be the other bug, and every test below is paired against that half.
+
+def _welded_rc_recipe():
+    """``(first, second)``: a 10k on one board and a 100nF on the other.
+
+    Both draw a net called ``SIG``, so the per-page merge pairs them:
+    1/(2*pi*10k*100nF) = 159 Hz, of a capacitor that is not board 1's.
+    """
+    return (
+        _page_project(
+            PAGE_1, "Board1",
+            {"R1": _part("R1", value="10k", pins=[("1", "SIG"), ("2", "IN")])},
+            {"SIG": [("R1", "1")], "IN": [("R1", "2")]},
+        ),
+        _page_project(
+            PAGE_2, "Board2",
+            {"C9": _part("C9", value="100nF", pins=[("1", "SIG"), ("2", "GND")])},
+            {"SIG": [("C9", "1")], "GND": [("C9", "2")]},
+        ),
+    )
+
+
+def _one_page_rc_project():
+    """The same two parts on **one** page — the pairing is then proven."""
+    return _page_project(
+        PAGE_1, "Board1",
+        {
+            "R1": _part("R1", value="10k", pins=[("1", "SIG"), ("2", "IN")]),
+            "C9": _part("C9", value="100nF", pins=[("1", "SIG"), ("2", "GND")]),
+        },
+        {
+            "SIG": [("R1", "1"), ("C9", "1")],
+            "IN": [("R1", "2")],
+            "GND": [("C9", "2")],
+        },
+    )
+
+
+def _rc_states(model):
+    from boardwise.core.parts import PartLibrary
+    from boardwise.rules.params import RcCutoff
+
+    rule = RcCutoff(library=PartLibrary(parts=[]))
+    return rule, {outcome.subject: outcome for outcome in rule.outcomes(model)}
+
+
+def _led_part(anode_net: str = "LEDN") -> object:
+    return _part("LED1", footprint="LED0603", pins=[("1", "GND"), ("2", anode_net)])
+
+
+def test_the_welded_rc_pair_is_not_measured_as_one_network():
+    """The capacitor is on the other board, so the 159 Hz is not this board's.
+
+    Read per board this pair does not exist at all; the per-page merge welds the
+    two ``SIG`` names into one net and the rule measures a network that no page
+    draws.
+    """
+    first, second = _welded_rc_recipe()
+    merged = _merge_schematic_models([first, second], notes=[])
+    assert merged.unproven_nets == {"SIG": (PAGE_1, PAGE_2)}, "the name both pages draw"
+
+    rule, states = _rc_states(merged.boards[0])
+    row = states["R1/C9"]
+    assert row.state == "UNKNOWN", "the pairing is not established"
+    assert "SIG" in row.message and "not a verified connection" in row.missing_fact
+    assert "159" not in row.message, "no number is filed for a pair nobody proved"
+    assert "RC survey" not in states, (
+        "a pair *was* found here — it is the conclusion that is withheld, so the "
+        "'no pair found' survey row must not be filed beside it (the same call "
+        "`param-divider-output` makes for a welded divider)"
+    )
+    assert rule.check(merged.boards[0]) == [], "and no INFO finding is filed"
+
+
+def test_the_same_rc_pair_on_one_page_is_still_measured():
+    """One page is not a merge: the pairing is proven and the number stands."""
+    merged = _merge_schematic_models([_one_page_rc_project()], notes=[])
+    assert merged.unproven_nets == {}
+
+    _rule, states = _rc_states(merged.boards[0])
+    assert states["R1/C9"].state == "OK"
+    assert "fc = 159" in states["R1/C9"].message
+
+
+def test_the_welded_led_series_resistor_is_not_adopted():
+    """Board 2's resistor is not board 1's series resistance.
+
+    ``R9`` is found only because both boards call their net ``LEDN``. Adopted
+    welded, the LED reads as a legal 1k in the 3V3 window — a pass for a board
+    that may have no series resistor at all (which would be the ERROR, 0 ohm
+    across the rail).
+    """
+    from boardwise.core.parts import PartLibrary
+    from boardwise.rules.params import LedCurrent
+
+    first = _page_project(
+        PAGE_1, "Board1", {"LED1": _led_part()},
+        {"GND": [("LED1", "1")], "LEDN": [("LED1", "2")]},
+    )
+    second = _page_project(
+        PAGE_2, "Board2",
+        {"R9": _part("R9", value="1k", pins=[("1", "LEDN"), ("2", "3V3")])},
+        {"LEDN": [("R9", "1")], "3V3": [("R9", "2")]},
+    )
+    merged = _merge_schematic_models([first, second], notes=[])
+    assert merged.unproven_nets == {"LEDN": (PAGE_1, PAGE_2)}
+
+    rule = LedCurrent(library=PartLibrary(parts=[]))
+    (row,) = rule.outcomes(merged.boards[0])
+    assert row.state == "UNKNOWN"
+    assert "LEDN" in row.message and "not a verified connection" in row.missing_fact
+    assert rule.check(merged.boards[0]) == [], "the OK it used to print is gone"
+
+
+def test_the_same_led_and_resistor_on_one_page_are_still_graded():
+    """The other half: one page, one resistor, the oracle's own OK."""
+    from boardwise.core.parts import PartLibrary
+    from boardwise.rules.params import LedCurrent
+
+    merged = _merge_schematic_models(
+        [_page_project(
+            PAGE_1, "Board1",
+            {
+                "LED1": _led_part(),
+                "R9": _part("R9", value="1k", pins=[("1", "LEDN"), ("2", "3V3")]),
+            },
+            {
+                "GND": [("LED1", "1")],
+                "LEDN": [("LED1", "2"), ("R9", "1")],
+                "3V3": [("R9", "2")],
+            },
+        )],
+        notes=[],
+    )
+    assert merged.unproven_nets == {}
+
+    (row,) = LedCurrent(library=PartLibrary(parts=[])).outcomes(merged.boards[0])
+    assert row.state == "OK"
+    assert "R9" in row.message and "[470, 2200]" in row.message
+
+
+def test_the_led_window_does_not_read_the_other_boards_regulator():
+    """The LED rule's second read: the rail behind the series resistor.
+
+    Here the resistor and the LED *are* on one page — the pairing is proven —
+    but the only thing naming ``RAILX`` is an LDO drawn on the other board, so
+    the 3.3 V window is not established for this LED either.
+    """
+    from boardwise.core.parts import PartEntry, PartLibrary
+    from boardwise.rules.params import LedCurrent
+
+    ldo = PartEntry(
+        key="ic.ldo", mpn="LDO1", lcsc="C2", category="ic.ldo",
+        facts={
+            "ldo": {"fixed_output": {"volts": 3.3, "provenance": PROV}},
+            "supply_pins": [
+                {"pins": ["1"], "name": "VIN", "v_operating": [2.2, 5.5], "provenance": PROV}
+            ],
+            "required_caps": [{"pin": "2", "value": "1uF", "provenance": PROV}],
+        },
+    )
+    first = _page_project(
+        PAGE_1, "Board1",
+        {
+            "LED1": _led_part(),
+            "R9": _part("R9", value="1k", pins=[("1", "LEDN"), ("2", "RAILX")]),
+        },
+        {
+            "GND": [("LED1", "1")],
+            "LEDN": [("LED1", "2"), ("R9", "1")],
+            "RAILX": [("R9", "2")],
+        },
+    )
+    second = _page_project(
+        PAGE_2, "Board2",
+        {"U2": _part("U2", mpn="LDO1", pins=[("1", "VIN2"), ("2", "RAILX")])},
+        {"VIN2": [("U2", "1")], "RAILX": [("U2", "2")]},
+    )
+    merged = _merge_schematic_models([first, second], notes=[])
+    assert merged.unproven_nets == {"RAILX": (PAGE_1, PAGE_2)}, (
+        "LEDN is page 1's own name, so only the rail is welded"
+    )
+
+    rule = LedCurrent(library=PartLibrary(parts=[ldo]))
+    (row,) = rule.outcomes(merged.boards[0])
+    assert row.state == "UNKNOWN"
+    assert "RAILX" in row.message and "not a verified connection" in row.missing_fact
+
+
 def test_every_rule_the_tier_refuses_on_is_a_builtin_rule():
     """The registry the note's count is read from cannot drift.
 
@@ -813,6 +1019,172 @@ def test_every_rule_the_tier_refuses_on_is_a_builtin_rule():
     ids = {rule.id for rule in BUILTIN_RULES}
     assert len(set(NET_MEMBERSHIP_RULES)) == len(NET_MEMBERSHIP_RULES)
     assert set(NET_MEMBERSHIP_RULES) <= ids, sorted(set(NET_MEMBERSHIP_RULES) - ids)
+
+
+def _registry_case(rule_id: str):
+    """``(rule, model)``: a board carrying exactly the parts ``rule_id`` judges.
+
+    One case per id the registry lists, with **every net on the board unproven**
+    — the strongest welding the per-page merge can produce. ``_registry_case``
+    raises rather than guessing, so an id added to the list without a case here
+    is a failing test rather than a silently weaker sweep.
+    """
+    from boardwise.core.model import DesignModel, Net
+    from boardwise.core.parts import PartEntry, PartLibrary
+    from boardwise.rules.decap import DecapRequiredCaps
+    from boardwise.rules.facts import (
+        DomainVsRange,
+        LdoDropout,
+        NcAndMustConnect,
+        SupplyOnKnownDomain,
+        UsbCcPulldown,
+    )
+    from boardwise.rules.params import DividerOutput, LedCurrent, RcCutoff
+
+    def model_of(components: dict, nets: dict):
+        model = DesignModel()
+        model.components.update(components)
+        model.nets = {name: Net(name, list(pins)) for name, pins in nets.items()}
+        model.unproven_nets = {name: (PAGE_1, PAGE_2) for name in model.nets}
+        return model
+
+    if rule_id == "conn-nc-and-must-connect":
+        entry = PartEntry(
+            key="ic.nc", mpn="NC1", lcsc="C7", category="ic.uart",
+            facts={"must_connect": [{"pin": "1", "to": "GND", "provenance": PROV}]},
+        )
+        # The pin is on VCC, its target is GND: deciding whether it dangles or
+        # sits elsewhere counts who shares VCC.
+        return NcAndMustConnect(library=PartLibrary(parts=[entry])), model_of(
+            {"U4": _part("U4", mpn="NC1", pins=[("1", "VCC")])},
+            {"VCC": [("U4", "1")], "GND": []},
+        )
+    if rule_id == "conn-usb-cc-pulldown":
+        entry = PartEntry(
+            key="conn.type_c", mpn="TYPE-C 16PIN", lcsc="C2765186", category="connector",
+            facts={"pull_required": [
+                {"pin": "4", "to": "GND", "expected_value": "5.1k", "provenance": PROV},
+            ]},
+        )
+        return UsbCcPulldown(library=PartLibrary(parts=[entry])), model_of(
+            {
+                "USB1": _part("USB1", mpn="TYPE-C 16PIN", pins=[("4", "CC2")]),
+                "R27": _part("R27", value="5.1K", pins=[("1", "CC2"), ("2", "GND")]),
+            },
+            {"CC2": [("USB1", "4"), ("R27", "1")], "GND": [("R27", "2")]},
+        )
+    if rule_id == "decap-required-caps":
+        return DecapRequiredCaps(
+            library=PartLibrary(parts=[_regulator_entry()])
+        ), model_of(
+            {"U1": _part("U1", mpn="REG1", pins=[("1", "VCC"), ("2", "+5V")])},
+            {"VCC": [("U1", "1")], "+5V": [("U1", "2")]},
+        )
+    if rule_id == "param-divider-output":
+        entry = PartEntry(
+            key="ic.load", mpn="LOAD1", lcsc="C9", category="ic.mcu",
+            facts={"supply_pins": [{"pins": ["3"], "name": "EN",
+                                    "v_operating": [1.0, 2.0], "provenance": PROV}]},
+        )
+        return DividerOutput(library=PartLibrary(parts=[entry])), model_of(
+            {
+                "R1": _part("R1", value="10k", pins=[("1", "+5V"), ("2", "TAP")]),
+                "R2": _part("R2", value="10k", pins=[("1", "TAP"), ("2", "GND")]),
+                "U9": _part("U9", mpn="LOAD1", pins=[("3", "TAP")]),
+            },
+            {
+                "+5V": [("R1", "1")],
+                "TAP": [("R1", "2"), ("R2", "1"), ("U9", "3")],
+                "GND": [("R2", "2")],
+            },
+        )
+    if rule_id == "param-led-current":
+        return LedCurrent(library=PartLibrary(parts=[])), model_of(
+            {
+                "LED1": _led_part("NET4"),
+                "R5": _part("R5", value="1k", pins=[("1", "NET4"), ("2", "3V3")]),
+            },
+            {
+                "GND": [("LED1", "1")],
+                "NET4": [("LED1", "2"), ("R5", "1")],
+                "3V3": [("R5", "2")],
+            },
+        )
+    if rule_id == "param-rc-cutoff":
+        return RcCutoff(library=PartLibrary(parts=[])), model_of(
+            {
+                "R1": _part("R1", value="10k", pins=[("1", "SIG"), ("2", "MID")]),
+                "C1": _part("C1", value="100nF", pins=[("1", "MID"), ("2", "GND")]),
+            },
+            {
+                "SIG": [("R1", "1")],
+                "MID": [("R1", "2"), ("C1", "1")],
+                "GND": [("C1", "2")],
+            },
+        )
+    if rule_id == "path-ldo-dropout":
+        entry = PartEntry(
+            key="ic.ldo", mpn="LDO1", lcsc="C2", category="ic.ldo",
+            facts={
+                "ldo": {"dropout_max_mv": 400.0, "condition": "Iout=500mA",
+                        "provenance": PROV},
+                "supply_pins": [{"pins": ["1"], "name": "VIN",
+                                 "v_operating": [2.2, 5.5], "provenance": PROV}],
+                "required_caps": [{"pin": "2", "value": "1uF", "provenance": PROV}],
+            },
+        )
+        return LdoDropout(library=PartLibrary(parts=[entry])), model_of(
+            {"U2": _part("U2", mpn="LDO1", pins=[("1", "+5V"), ("2", "3V3")])},
+            {"+5V": [("U2", "1")], "3V3": [("U2", "2")]},
+        )
+    if rule_id in ("pwr-supply-on-known-domain", "pwr-domain-vs-range"):
+        entry = PartEntry(
+            key="ic.mcu", mpn="LOAD1", lcsc="C3", category="ic.mcu",
+            facts={"supply_pins": [{"pins": ["1"], "name": "VDD",
+                                    "v_operating": [3.0, 3.6], "provenance": PROV}]},
+        )
+        rule_cls = (
+            SupplyOnKnownDomain
+            if rule_id == "pwr-supply-on-known-domain"
+            else DomainVsRange
+        )
+        return rule_cls(library=PartLibrary(parts=[entry])), model_of(
+            {"U3": _part("U3", mpn="LOAD1", pins=[("1", "RAILX")])},
+            {"RAILX": [("U3", "1")]},
+        )
+    raise AssertionError(
+        f"no registry case for {rule_id!r} — add one with the rule, so the sweep "
+        "stays as wide as the registry"
+    )
+
+
+def test_no_listed_rule_concludes_on_a_board_whose_every_net_is_welded():
+    """The registry's **other** direction, measured for every id it lists.
+
+    #19's contract is one sentence — on a net the merge welded blind, no rule
+    concludes either way — and the registry is where "which rules" is written
+    down. A list that only ever grows tests for the rule a bug was reported
+    against cannot say whether the rest obey; this one board per rule can. Two
+    halves, and both are needed:
+
+    * **no conclusion**: every net is unproven, so an ``OK`` or a ``VIOLATION``
+      row is a rule reading a welded netlist as if it were traced;
+    * **and a refusal**: at least one row carries the merge's own sentence, so
+      "withheld" is told apart from "had nothing to say".
+    """
+    from boardwise.rules.unproven import NET_MEMBERSHIP_RULES, UNPROVEN_BY_NAME
+
+    for rule_id in NET_MEMBERSHIP_RULES:
+        rule, model = _registry_case(rule_id)
+        outcomes = rule.outcomes(model)
+        states = {outcome.state for outcome in outcomes}
+        assert not states & {"OK", "VIOLATION"}, (rule_id, states)
+        refused = [
+            outcome
+            for outcome in outcomes
+            if UNPROVEN_BY_NAME in (outcome.missing_fact or "")
+        ]
+        assert refused, (rule_id, [outcome.state for outcome in outcomes])
 
 
 def test_the_per_page_tier_label_names_the_refusal_and_its_rule_count():
