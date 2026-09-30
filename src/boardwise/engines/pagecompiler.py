@@ -21,7 +21,8 @@ The data flow, in the order it runs (056 sec.6 asks for this picture):
       -> 7. per variant: the cross-module wires (the `mainPath` edges)
       -> 8. per variant: the gate — readability.check on the merged drawing and
                               readability.check_page on the page
-      -> 9. layered ranking, 3-8 geometry-distinct candidates
+      -> 9. layered ranking, then the first `max_candidates` (8 by default)
+              geometry-distinct pages, best first
 
 **Four decisions worth stating** (each of them is a place where the obvious
 alternative is worse):
@@ -331,8 +332,15 @@ class PageCandidate:
 class PageCompileResult:
     """The compiler's whole answer: pages, refusals, and what each module cost.
 
-    ``pages`` is what a caller draws or lands (3-8 geometry-distinct pages, best
-    first); ``failures`` is why there is none, in 053 sec.4's categories, each
+    ``pages`` is what a caller draws or lands: 1 to ``budget.max_candidates``
+    (8 by default) geometry-distinct pages, best first. ``ranked`` keeps every
+    page that passed the gate and ``pages`` is that list's first
+    ``max_candidates``, so a short list means the gate refused variants or two
+    arrangements drew the same page — there is no promised minimum, and the
+    twenty-four offline scenarios measure 3, 4, 5, 6 and 8 (056's own shapes
+    reach the ceiling, 057's two reach four). Zero pages is a refusal that names
+    its category and action, never an empty success;
+    ``failures`` is why there is none, in 053 sec.4's categories, each
     naming the module it belongs to where one does; ``rejected`` is the audit
     trail of the variants that were built and lost; and ``modules`` keeps every
     module's own `CompileResult`, because "which group is the problem" is the
@@ -1150,7 +1158,8 @@ def _placement_orders(ctx: _Context) -> list[tuple[str, ...]]:
 
 
 #: How many topological orders of the flow are enumerated. Six is far more than
-#: the 3-8 candidate window needs, and the cut keeps a page with many modules from
+#: the candidate window (8 pages at most) needs, and the cut keeps a page with
+#: many modules from
 #: enumerating factorially many orders (056 sec.2's "不做全排列爆炸").
 MAX_ORDERS = 6
 
