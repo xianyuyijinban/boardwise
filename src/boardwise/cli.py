@@ -1152,7 +1152,8 @@ def build_parser() -> argparse.ArgumentParser:
             "and one of them having no SOP is exactly the state that is impossible to "
             "notice from the outside. Idempotent: an identical file says 'already "
             "current' and is left alone. A *different* file is backed up to "
-            "SKILL.md.bak-<date> first — never silently overwritten. --uninstall "
+            "SKILL.md.bak-<YYYYMMDD-HHMMSS> first — never silently overwritten, and "
+            "never overwritten by a second install on the same day either. --uninstall "
             "removes the installed copy from the selected harnesses, and each "
             "directory when it empties. --agent writes nothing: it prints the "
             "absolute path of the bundled SKILL.md and a paragraph to hand to an "
@@ -18973,7 +18974,7 @@ def _skill_checks(statuses: tuple) -> list[DoctorCheck]:
             detail = (
                 f"{status.path} 装的是旧版/异版：与本构建带的 SKILL.md 不一致"
                 "—— 本构建带的才是权威（`install-skill` 会把旧的那份备份成 "
-                "SKILL.md.bak-<日期>）"
+                "SKILL.md.bak-<年月日-时分秒>）"
             )
         else:  # "missing"
             detail = f"{status.path} 没有这个文件——{status.harness} 读不到审查 SOP"
@@ -19474,7 +19475,7 @@ def _print_agent_install_prompt() -> int:
     two things this build does know: the absolute path of the SKILL.md it
     carries, and the rules the install path already follows (directory
     ``boardwise``, file ``SKILL.md``, back up a different file as
-    ``SKILL.md.bak-<date>``, then verify it landed). The agent's own convention
+    ``SKILL.md.bak-<YYYYMMDD-HHMMSS>``, then verify it landed). The agent's own convention
     finishes the job, in the agent's own words — the paragraph below is written
     as a prompt, because that is what it is: it addresses the AI, not a log.
 
@@ -19526,8 +19527,8 @@ def _print_agent_install_prompt() -> int:
     print()
     print(
         "如果目标位置已有一份 SKILL.md 且内容与源文件不同，先把它备份成 "
-        "SKILL.md.bak-<今天的日期> 再覆盖 —— 那份文件可能是旧安装或手改版，"
-        "别无声丢掉；内容相同就什么都不用做。"
+        "SKILL.md.bak-<年月日-时分秒> 再覆盖 —— 那份文件可能是旧安装或手改版，"
+        "别无声丢掉，也别覆盖已经存在的同名备份；内容相同就什么都不用做。"
     )
     print("----- 复制到此结束 -----")
     print()

@@ -28,8 +28,20 @@ import sys
 # which the `(/|$)` anchor never sees — the file was invisible to this guard
 # until 047, and a company V4 sheet could have entered the repo silently. It is
 # listed before `esch` for readability only; the anchor makes the order moot.
+#
+# The `(?:\.[^/]*)?` before the anchor (080, #41) closes the derived-suffix
+# escape: `board.eprj2.bak`, `.orig`, `.backup`, `.old`, `.txt` are the same
+# project container under another name, and every one of them would otherwise
+# have walked straight past this guard while staying untracked-by-gitignore.
+# 047 decided the opposite way — that a derived copy is "not the container the
+# pattern is about" — and 080 reverses it: the red line outranks the false
+# positive, because a false positive costs one allowlist line in the same commit
+# while a false negative leaks a company board into public history. The leading
+# dot is what keeps this from eating the `docs/esch2-format-notes.md` and
+# `notes/epro2.md` shape, where the container name is the stem rather than an
+# extension, and the `[^/]*` cannot run past a directory boundary.
 _CONTAINER_RE = re.compile(
-    r"\.(epro2|epro|eprj2|eprj3|epru|esch2|esch|epcb)(/|$)", re.IGNORECASE
+    r"\.(epro2|epro|eprj2|eprj3|epru|esch2|esch|epcb)(?:\.[^/]*)?(/|$)", re.IGNORECASE
 )
 
 # The 32 project containers tracked as of 2026-09-27, each individually

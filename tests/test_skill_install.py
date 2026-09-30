@@ -1,10 +1,11 @@
 """``boardwise install-skill``: install, idempotence, backup, uninstall, --agent (028 §三.2, 061, 062).
 
 The rule worth testing hardest is the second one: a file that is already at the
-destination and differs must be *kept* — copied to ``SKILL.md.bak-<date>`` before
-the new one lands. On a friend's machine the alternative is an edit vanishing
-with no trace, and "no trace" is also what makes it unprovable afterwards, so the
-tests assert on the bytes of the backup rather than on the message.
+destination and differs must be *kept* — copied to
+``SKILL.md.bak-<YYYYMMDD-HHMMSS>`` before the new one lands. On a friend's
+machine the alternative is an edit vanishing with no trace, and "no trace" is
+also what makes it unprovable afterwards, so the tests assert on the bytes of
+the backup rather than on the message.
 
 Since 061 there are two destinations and the same file goes to both (Kimi Code
 reads ``~/.kimi-code/skills/boardwise/``, Claude Code ``~/.claude/skills/``), so
@@ -98,13 +99,60 @@ def test_a_different_file_is_backed_up_before_it_is_replaced(home, source):
     home.mkdir(parents=True)
     (home / "SKILL.md").write_bytes(OLD)
 
-    outcome = skill_install.install(source, home, today="2026-09-23")
+    outcome = skill_install.install(source, home, now="20260923-101500")
 
     assert outcome.outcome == "updated"
-    assert outcome.backup == home / "SKILL.md.bak-2026-09-23"
+    assert outcome.backup == home / "SKILL.md.bak-20260923-101500"
     assert outcome.backup.read_bytes() == OLD, "the displaced file survives, byte for byte"
     assert outcome.previous_bytes == len(OLD)
     assert (home / "SKILL.md").read_bytes() == NEW
+
+
+def test_two_installs_on_one_day_leave_two_backups(home, source):
+    """Two installs on the same day must not share a backup file (#40).
+
+    The stamp used to be a bare date, so the second install of the day wrote the
+    same name and the first backup was gone — the only record of whatever the
+    first file was. No clock is pinned here on purpose: the point is what the
+    field default does, and a pinned stamp would hide exactly that.
+    """
+    home.mkdir(parents=True)
+    (home / "SKILL.md").write_bytes(OLD)
+
+    first = skill_install.install(source, home)
+    (home / "SKILL.md").write_bytes(b"# a hand edit, kept as a backup too\n")
+    second = skill_install.install(source, home)
+
+    assert first.backup != second.backup
+    assert first.backup.exists() and second.backup.exists(), (
+        "the first backup is still there: it is the only record of the first file"
+    )
+    assert first.backup.read_bytes() == OLD
+    assert len(list(home.glob("SKILL.md.bak-*"))) == 2
+    for path in (first.backup, second.backup):
+        stamp = path.name.removeprefix("SKILL.md.bak-").split("-")[0:2]
+        assert stamp[0].isdigit() and len(stamp[0]) == 8, path.name
+        assert stamp[1].isdigit() and len(stamp[1]) == 6, (
+            f"{path.name}: the stamp carries a time, not just a date (#40)"
+        )
+
+
+def test_a_taken_backup_name_gets_a_suffix_instead_of_overwriting(home, source):
+    """Two installs inside one second are still two backups, not one (#40).
+
+    The time part makes same-day collisions unlikely, not impossible, and the
+    backups are the only record of a hand-edited SKILL.md — so an occupied name
+    is stepped over rather than written over.
+    """
+    home.mkdir(parents=True)
+    (home / "SKILL.md").write_bytes(OLD)
+    first = skill_install.install(source, home, now="20260923-101500")
+
+    (home / "SKILL.md").write_bytes(b"# a hand edit, kept as a backup too\n")
+    second = skill_install.install(source, home, now="20260923-101500")
+
+    assert second.backup == home / "SKILL.md.bak-20260923-101500-2"
+    assert first.backup.read_bytes() == OLD, "the earlier backup was not overwritten"
 
 
 def test_uninstall_removes_the_file_and_the_empty_directory(home, source):
@@ -251,10 +299,10 @@ def test_a_different_file_is_backed_up_on_the_claude_side_too(source, skill_home
     directory.mkdir(parents=True)
     (directory / "SKILL.md").write_bytes(OLD)
 
-    outcome = skill_install.install(source, harness="claude", today="2026-09-23")
+    outcome = skill_install.install(source, harness="claude", now="20260923-101500")
 
     assert outcome.outcome == "updated"
-    assert outcome.backup == directory / "SKILL.md.bak-2026-09-23"
+    assert outcome.backup == directory / "SKILL.md.bak-20260923-101500"
     assert outcome.backup.read_bytes() == OLD
     assert (directory / "SKILL.md").read_bytes() == NEW
 
