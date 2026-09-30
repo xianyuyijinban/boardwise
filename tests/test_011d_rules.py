@@ -26,6 +26,7 @@ from boardwise.rules.values import (
     mpn_value_code,
     mpn_value_code_anchor,
     parse_capacitance_farads,
+    parse_resistance_ohms,
 )
 
 PROV = "test datasheet, p.1, http://example.com/ds.pdf"
@@ -969,17 +970,25 @@ def test_param4_a_mid_letter_mpn_matches_the_board_value():
     assert any("74700" in line and "74K7" in line for line in ok.evidence), ok.evidence
 
 
-def test_param4_a_mid_letter_mpn_that_really_disagrees_is_still_a_violation():
-    """The other half: the widened reader must not turn a real BOM mismatch into
-    silence. The comparison is made against the **closest** of the MPN's readings
-    — the most favourable one, which is what keeps the amplitude doctrine's
-    "don't kill it dead" behaviour (2026-09-21) intact — so 1 MΩ against a part
-    whose readings are 4.7 kΩ / 74.7 kΩ is a WARN quoting the closer of the two
-    and naming every reading it could have been.
+def test_078_an_unlocated_mid_letter_mpn_that_disagrees_is_withheld():
+    """**071 -> 078 decision change.** Issue #32: the row this test used to pin is
+    no longer a WARN, and the reason is the anchor, not the comparison.
 
-    The anchor is why this row may speak (071 §1 C): ``074K7``'s longest reading
-    is the notation as written (the shorter ``4K7`` is the vendor-prefix guess),
-    so the reading the comparison lands on is a code field.
+    071 §1 C read ``074K7``'s **longest** candidate (``74K7``) as the notation as
+    written and anchored it, so a 1 MΩ board against a 4.7 kΩ part accused the
+    BOM -- quoting ``74K7``, a reading that a Yageo date code invented. But the
+    ``07`` in front of ``4K7`` is not a package size, so
+    :func:`~boardwise.rules.values._without_leading_size` cannot strip it and the
+    run was never **located**: ``74K7`` is as much a guess as ``4K7`` is, and by
+    078 A1 neither may accuse alone. The comparison is unchanged (still against
+    the *closest* reading, still naming all of them in the evidence); only the
+    anchor went, and the row becomes an honest UNKNOWN.
+
+    So the **teeth move to a located MPN**: ``CRCW0603``10``K0``FKEA's run *is*
+    the value field once the size comes off it, it keeps the mid-letter anchor,
+    and a real disagreement is still a WARN. Pinned here rather than left to
+    071's own test so that "the mid-letter anchor still has teeth" and "an
+    unlocated one does not" are asserted against each other.
     """
     lib = _library(_ldo_entry(), _uart_entry())
     model = DesignModel()
@@ -987,13 +996,28 @@ def test_param4_a_mid_letter_mpn_that_really_disagrees_is_still_a_violation():
         uid="r27", designator="R27", value="1MΩ", mpn="RC0603FR-074K7L",
         pins=[Pin("1", "A", "VCC")])
     states = _states(ValueMpnMatch(library=lib), model)
+    assert states["VIOLATION"] == []
+    (unknown,) = states["UNKNOWN"]
+    assert unknown.subject == "R27"
+    assert "13.39x apart" in unknown.message, unknown.message
+    assert "字符串解码无锚点，低置信" in unknown.message, (
+        "the row has to say why it is withholding the contradiction, not just "
+        "go quiet: the pseudo-reading lost its anchor (#32)"
+    )
+    assert any("74K7" in line and "4K7" in line for line in unknown.evidence), (
+        "the withheld row still names every reading it could have been"
+    )
+
+    # The teeth, on a run that was located: same rule, same anchor, a WARN.
+    model = DesignModel()
+    model.components["R27"] = Component(
+        uid="r27", designator="R27", value="1MΩ", mpn="CRCW060310K0FKEA",
+        pins=[Pin("1", "A", "VCC")])
+    states = _states(ValueMpnMatch(library=lib), model)
+    assert states["UNKNOWN"] == []
     (violation,) = states["VIOLATION"]
     assert violation.subject == "R27"
-    assert "13.39x apart" in violation.message
-    assert "锚点：中缀正规形" in violation.message
-    assert any("74K7" in line and "4K7" in line for line in violation.evidence), (
-        "the violation quotes all the readings it could have been"
-    )
+    assert "锚点：中缀正规形" in violation.message, violation.message
 
 
 def test_param4_a_big_enough_gap_against_an_ambiguous_mpn_is_still_waived():
@@ -1760,7 +1784,17 @@ def test_071_a_board_value_in_the_mid_letter_notation_is_read():
     # reader's 7000.
     assert parse_resistance_ohms("0R5") == 0.5
     assert parse_resistance_ohms("4.7kΩ") == 4700.0
-    assert mpn_resistance_readings("0R5") == []
+    # 078 A2: the MPN side now reads it too, and the two agree. `0R5` as a whole
+    # token is the **board** grammar's spelling (that is what the line above is
+    # about) and stays the board grammar's -- `parse_resistance_ohms` still
+    # resolves it there first, so nothing moved for a Value field. What moved is
+    # that the MPN scan no longer refuses a zero head in front of its own `R`,
+    # because a Yageo date code puts a value's zero head inside an MPN's run
+    # (`RL0805FR-070R1L` -> `070R1`, whose 0.1 Ω is the part's real value and
+    # whose `07` is not a size code). See `test_078_...` for that part; this
+    # line is the spelling's own consistency, not its origin story.
+    assert mpn_resistance_readings("0R5") == [(0.5, "0R5")]
+    assert mpn_resistance_readings("0R0") == []  # still states no value
 
 
 def test_071_a_package_size_prefix_is_not_a_mantissa():
@@ -1897,15 +1931,18 @@ def test_071_the_three_anchors_are_what_lets_a_reading_accuse():
     assert mpn_resistance_candidates("AR03BTCX5001") == [
         (5000.0, "5001 (E-96)", "")
     ]
-    # ② the canonical mid-letter form: the whole run, after the size comes off.
+    # ② the located mid-letter form: the whole run, after the size comes off.
     assert mpn_resistance_candidates("CRCW060310K0FKEA") == [
         (10000.0, "10K0", ANCHOR_MID_LETTER)
     ]
-    # The shorter reading of `074K7` is the vendor-prefix guess, so it carries
-    # none -- at most one of the two can be right.
+    # **071 -> 078 decision change.** 071 anchored `074K7`'s *longest* candidate
+    # (`74K7`) as "the notation as written"; 078 A1 anchors the *located* one
+    # instead, and `07` is a date code, not a size -- so the run was never
+    # located and **neither** reading carries the anchor (issue #32). The two
+    # readings are still both returned (046), and both still match and waive.
     assert mpn_resistance_candidates("RC0603FR-074K7L") == [
         (4700.0, "4K7", ""),
-        (74700.0, "74K7", ANCHOR_MID_LETTER),
+        (74700.0, "74K7", ""),
     ]
     # ③ an EIA three-digit code with a package size in the same token.
     assert mpn_value_code_anchor("CC0603KRX7R9BB104") == ("104", ANCHOR_PACKAGE_CONTEXT)
@@ -1915,13 +1952,20 @@ def test_071_the_three_anchors_are_what_lets_a_reading_accuse():
     assert mpn_value_code_anchor("CL10B104KB8NNNC") == ("104", "")
     assert mpn_value_code_anchor("UVR1H101MPD") == ("101", "")
 
-    # At the rule layer, one witness per anchor and two without: the same shape of
-    # disagreement, three WARNs and two withheld rows.
+    # At the rule layer, one witness per anchor and three without: the same shape
+    # of disagreement, three WARNs and three withheld rows (078 took the fourth
+    # back -- see the comment on `MF1/4W-1K±1%-ST52`).
     for kind, value, mpn, expected in (
         ("resistor", "310kΩ", "CRCW060310K0FKEA", "VIOLATION"),
         ("resistor", "47kΩ", "RK73H1JTTD1002F", "VIOLATION"),
         ("resistor", "3300", "0603WAF1002T5E", "VIOLATION"),
-        ("resistor", "330", "MF1/4W-1K±1%-ST52", "VIOLATION"),
+        # **071 -> 078 decision change.** This one warned on the mid-letter
+        # anchor: `1K` is the token's whole run, but the strip located nothing
+        # (there is no size code in `MF1/4W-1K±1%-ST52`), so 078 A1 leaves it
+        # unanchored and the 3.03x row is withheld rather than raised. Same
+        # reason as `RC0603FR-074K7L`, same issue (#32) -- pinned here so the
+        # ruling's own witness list is not quietly shorter.
+        ("resistor", "330", "MF1/4W-1K±1%-ST52", "UNKNOWN"),
         ("capacitor", "100uF", "GRM188R71C104KA01D", "VIOLATION"),
         # 100 uF against the 104 code's 100 nF is 1000x, past the 25x capacitor
         # tolerance -- and it is withheld, because `CL10B104KB8NNNC` states no
@@ -1931,6 +1975,128 @@ def test_071_the_three_anchors_are_what_lets_a_reading_accuse():
     ):
         state, rows = _state_of(kind, value, mpn)
         assert state == expected, f"{mpn}: {state} {rows[0].message[:120] if rows else ''}"
+
+
+# --------------------------------------- issue #32: the date code took the anchor
+
+
+def test_078_a_date_code_is_not_a_located_value_field():
+    """Issue #32, at the readings layer: Yageo's ``07``/``08`` before the value
+    is a **date code**, not a package size, so it cannot be stripped and the run
+    in front of the letter was never located.
+
+    071 §1 C read the longest candidate as "the notation as written" and anchored
+    it, which handed the anchor to ``710K``/``74K7``/``71K`` -- readings a date
+    code invented -- while the true ``10K``/``4K7``/``1K`` were left unanchored,
+    and ``RL0805FR-070R1L``'s real 0.1 Ω was not read at all. 078 A1/A2: the
+    anchor belongs to a run the size strip **actually** took content off
+    (``CRCW0603``10``K0``FKEA), every reading of an untouched run carries none,
+    and a zero tail in front of the notation's own ``R`` is read.
+
+    All six rows of the contract, plus the three anchors that must not move.
+    """
+    from boardwise.rules.values import (
+        ANCHOR_MID_LETTER,
+        ANCHOR_PACKAGE_CONTEXT,
+        mpn_resistance_candidates,
+        mpn_value_code_anchor,
+    )
+
+    # Four Yageo parts: the date code is swallowed by the longest reading, so the
+    # pseudo-reading and the true one come back **unanchored**, and both are still
+    # returned (046's "both readings are legitimate").
+    assert mpn_resistance_candidates("RC0402FR-0710KL") == [
+        (10000.0, "10K", ""), (710000.0, "710K", ""),
+    ]
+    assert mpn_resistance_candidates("RC0603FR-074K7L") == [
+        (4700.0, "4K7", ""), (74700.0, "74K7", ""),
+    ]
+    assert mpn_resistance_candidates("RC0805FR-071KL") == [
+        (1000.0, "1K", ""), (71000.0, "71K", ""),
+    ]
+    # The false positive the issue is named for: the true value comes back (078
+    # A2) and the date code's reading comes back beside it, unanchored.
+    assert mpn_resistance_candidates("RL0805FR-070R1L") == [
+        (0.1, "0R1", ""), (70.1, "70R1", ""),
+    ]
+    # The one case where the strip *did* locate the value field: unchanged.
+    assert mpn_resistance_candidates("CRCW060310K0FKEA") == [
+        (10000.0, "10K0", ANCHOR_MID_LETTER)
+    ]
+    # ...and the two anchor producers that are not this reader do not move.
+    assert mpn_resistance_candidates("RK73H1JTTD1002F") == [
+        (10000.0, "1002 (E-96)", "值码带相邻容差字母")
+    ]
+    assert mpn_resistance_candidates("0603WAF1002T5E") == [
+        (10000.0, "1002 (numeric-exponent field)", "值码带相邻容差字母")
+    ]
+    assert mpn_value_code_anchor("CC0603KRX7R9BB104") == ("104", ANCHOR_PACKAGE_CONTEXT)
+
+
+def test_078_a_zero_head_is_read_before_an_r_and_still_refused_before_the_others():
+    """078 A2's edges. The relaxation is one letter wide, and that is the whole
+    of it: ``0K1`` states nothing and ``0u1`` is the capacitor notation's own
+    refusal -- both keep it, because the **board** value grammar owns those
+    spellings (``0R5``/``0R01``/``0.1uF``) and an MPN scan is a different
+    question.
+
+    ``0R5``/``0R01`` being readable on the MPN side is not a new grammar, it is
+    the same reading the board parser already gave those strings; what was
+    refused before was the *shape*, and the shape is what a date code wears.
+    The shunt form is untouched in the other direction: ``R`` with **three**
+    digits is refused before the mantissa is even enumerated.
+    """
+    assert mpn_resistance_readings("070R1") == [(0.1, "0R1"), (70.1, "70R1")]
+    assert mpn_resistance_readings("0R1") == [(0.1, "0R1")]
+    assert mpn_resistance_readings("0K1") == []
+    assert mpn_resistance_readings("0M1") == []
+    assert parse_capacitance_farads("0u1") is None
+    assert mpn_resistance_readings("0R0") == []
+    assert mpn_resistance_readings("JER2512F3R005") == []
+    assert mpn_resistance_readings("RE2512F3R001") == []
+    # The board side is a separate question and did not move: `0K1` states
+    # nothing there either, and `0R5` is still the board grammar's 0.5 Ω -- the
+    # branch that runs before the mid-letter scan is untouched.
+    assert parse_resistance_ohms("0K1") is None
+    assert parse_resistance_ohms("0R5") == pytest.approx(0.5)
+    assert parse_capacitance_farads("0u1") is None
+
+
+def test_078_the_zero_point_one_part_no_longer_accuses_a_correct_board():
+    """Issue #32's worst cell, end to end: ``RL0805FR-070R1L`` is a 0.1 Ω part and
+    a board that says ``0.1`` is **right**.
+
+    Before 078 the only reading was its date code's ``70R1`` = 70.1 Ω, anchored
+    by 071's "longest candidate", so a correct board drew a WARN at 701x -- a
+    false positive on the most expensive side of the gate. Now the true reading
+    is back and matches, so the row is OK.
+
+    ``70.1`` on the board is OK too, and that is the honest price of an MPN this
+    module cannot disambiguate: two readings, the board's own value picks one,
+    and either board is a part somebody could have meant. 046's "both readings
+    are legitimate" is what buys it; the anchor is not consulted for a match.
+    """
+    for value in ("0.1", "0.1Ω", "70.1"):
+        state, rows = _state_of("resistor", value, "RL0805FR-070R1L")
+        assert state == "OK", f"{value}: {state} {rows[0].message if rows else ''}"
+    # ...and the grid the other way: a real disagreement is now withheld rather
+    # than raised on a pseudo-reading. 10x is past the 3x tolerance and no
+    # reading is anchored, so this is an honest UNKNOWN, not a WARN quoting
+    # `710K` -- there is no such reading to accuse with.
+    state, rows = _state_of("resistor", "100k", "RC0402FR-0710KL")
+    assert state == "UNKNOWN", rows
+    assert "字符串解码无锚点，低置信" in rows[0].message
+    assert "7.1e+05" in rows[0].message, "the row still quotes what it compared against"
+    state, rows = _state_of("resistor", "470", "RC0603FR-074K7L")
+    assert state == "UNKNOWN", rows
+    assert "字符串解码无锚点，低置信" in rows[0].message
+    # The matches the issue's other two rows name, and the located MPN's teeth.
+    for value, mpn in (("10k", "RC0402FR-0710KL"), ("4.7k", "RC0603FR-074K7L")):
+        state, _rows = _state_of("resistor", value, mpn)
+        assert state == "OK", f"{value} vs {mpn}"
+    state, rows = _state_of("resistor", "47k", "CRCW060310K0FKEA")
+    assert state == "VIOLATION", rows
+    assert "锚点：中缀正规形" in rows[0].message
 
 
 def _corpus_tokens() -> list[str]:

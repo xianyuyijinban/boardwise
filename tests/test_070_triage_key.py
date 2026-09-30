@@ -65,6 +65,15 @@ WARN_RULE = "param-value-mpn-match"
 #: as the issue reports them. ``test_the_unanchored_electrolytic_shape_is_unknown``
 #: below pins what happened to the retired spelling, so the change is a
 #: measurement rather than a memory.
+#:
+#: **``R7`` answers UNKNOWN since 078 A1, and never was a finding worth having.**
+#: The synthetic board gives all three parts the same capacitor symbol, so ``R7``
+#: is a 10 kΩ "resistor" wearing a 100 nF part number; what the rule compared
+#: against was the mid-letter reading of ``X7R0`` = 7 Ω. 071 anchored that
+#: pseudo-reading as "the notation as written" and the WARN came back; 078 A1
+#: found the run (``7``) was never *located* — nothing was stripped off it — so
+#: the accusation is withheld (issue #32). ``test_078_...`` in
+#: ``tests/test_011d_rules.py`` pins the same shape at its own layer.
 MPN = "CC1206KKX7R0BB107"
 RETIRED_MPN = "GRM31CR61A107ME19L"
 PARTS = [("EC1", "1uF"), ("EC3", "1uF"), ("R7", "10k")]
@@ -402,9 +411,8 @@ def test_issue_13_two_findings_of_one_rule_get_two_verdicts(capsys, tmp_path, mo
     assert keys == [
         f"boardwise-rule:{WARN_RULE}:EC1",
         f"boardwise-rule:{WARN_RULE}:EC3",
-        f"boardwise-rule:{WARN_RULE}:R7",
     ], "each part is one warning, because the key is an identity and not a heuristic"
-    assert before["completion"]["warningsPendingTriage"] == 3
+    assert before["completion"]["warningsPendingTriage"] == 2
 
     ec1, ec3 = keys[0], keys[1]
     assert _triage(out, "--key", ec1, "--verdict", "无害", "--reason", "1uF 是设计值，料号该改") == 0
@@ -414,8 +422,7 @@ def test_issue_13_two_findings_of_one_rule_get_two_verdicts(capsys, tmp_path, mo
     judged = _read(out)
     assert _verdict_of(judged, ec1) == "无害"
     assert _verdict_of(judged, ec3) == "", "the other part keeps its own, still-empty judgement"
-    assert _verdict_of(judged, keys[2]) == ""
-    assert judged["completion"]["warningsPendingTriage"] == 2
+    assert judged["completion"]["warningsPendingTriage"] == 1
 
     # Judging the second one differently is the whole point of `verdict` — and it
     # is exactly what the shared key used to make impossible.
@@ -424,12 +431,25 @@ def test_issue_13_two_findings_of_one_rule_get_two_verdicts(capsys, tmp_path, mo
     after = _checkup(board, out)
     printed = capsys.readouterr().out
     assert (_verdict_of(after, ec1), _verdict_of(after, ec3)) == ("无害", "有害")
-    assert _verdict_of(after, keys[2]) == ""
-    assert after["completion"]["warningsPendingTriage"] == 1
+    assert after["completion"]["warningsPendingTriage"] == 0
     assert "已并入 2 条" in printed
     markdown = (out / "report.md").read_text(encoding="utf-8")
     assert "| 无害 | 1uF 是设计值，料号该改 |" in markdown
     assert "| 有害 | 这颗真错了 |" in markdown
+    # `R7` is measured, not remembered: 078 A1 took its anchor away (the mid-letter
+    # reading of `X7R0` is off a run nothing was stripped from), so the part is a
+    # row that is not a warning -- and it was never a finding worth having.
+    from boardwise.core.model import Component, DesignModel, Pin
+    from boardwise.rules.params import ValueMpnMatch
+
+    model = DesignModel()
+    model.components["R7"] = Component(
+        uid="r7", designator="R7", value="10k", mpn=MPN, pins=[Pin("1", "A", "SIG")]
+    )
+    rule = ValueMpnMatch()
+    assert rule.check(model) == []
+    (unknown,) = [o for o in rule.outcomes(model) if o.state == "UNKNOWN"]
+    assert "字符串解码无锚点，低置信" in unknown.message, unknown.message
 
 
 def test_a_sidecar_key_from_before_the_fix_is_reported_and_never_migrated(
