@@ -44,6 +44,7 @@ from pathlib import Path
 from typing import Any
 
 from .model import is_ground_net
+from .values import parse_capacitance_farads, parse_resistance_ohms
 
 #: Written into every template and spec so a stale file fails loudly instead of
 #: being read with today's rules.
@@ -82,29 +83,65 @@ class BlockError(ValueError):
 # parameter constraints — the executable half of `params`
 # --------------------------------------------------------------------------
 
-#: A resistor written either as an SI quantity (``10k``, ``2.2kΩ``, ``470Ω``) or
-#: in the R-notation (``4R7``). Units are optional because a schematic value
-#: field routinely omits them; the point of the check is to reject *nonsense*,
-#: not to disambiguate ``5.1K`` (the constraint name already says which it is).
-_RESISTOR_RE = re.compile(
+#: The farad unit spelled the way the authoritative parser does not read it.
+#: ``core/values.py`` (:func:`~boardwise.core.values.parse_capacitance_farads`)
+#: is the one implementation of what a capacitor value is (071 §2, issue #52),
+#: and its suffix grammar holds ``pF``/``nF``/``uF``/``µF``/``mF`` plus the
+#: trade's mid-letter ``4u7``. A constraint that had to name that grammar a
+#: second time is how ``4u7`` came to be a load error in a block template while
+#: every rule in the repository read it as 4.7 µF.
+#:
+#: This pattern is the *old* grammar, kept whole and consulted only for a value
+#: the parser has already declined, so delegating cannot **shrink** what a
+#: template was allowed to say: a bare ``1F`` (a supercapacitor's own unit), a
+#: ``k`` before it, and a space between the number and the prefix are all
+#: spellings this constraint has always accepted. Direction still fails closed
+#: — this is a whitelist too, and a value neither side reads is still rejected —
+#: but a spelling a board may legitimately carry never becomes a load error
+#: because the parser happens to be narrower on that one shape. Widening the
+#: parser itself is 078/079's grammar to decide, not this module's.
+_CAPACITOR_UNPARSED_RE = re.compile(
+    r"^(?P<num>[0-9]*\.?[0-9]+)\s*(?P<prefix>p|n|u|µ|μ|m|k|K)?\s*(?P<unit>F|f)$"
+)
+
+#: The ohm-side counterpart, the same old grammar: the SI prefixes and the
+#: spaced spellings the resistance parser does not read. ``1G`` is a gigaohm,
+#: ``1meg`` a megaohm spelled out, ``10 kΩ`` the same value with a space —
+#: ordinary engineering spellings this constraint accepted before #52 and would
+#: have started rejecting on delegation alone.
+_RESISTOR_UNPARSED_RE = re.compile(
     r"^(?P<int>[0-9]+)R(?P<frac>[0-9]+)$"
     r"|^(?P<num>[0-9]*\.?[0-9]+)\s*(?P<prefix>m|k|K|M|G|R|meg)?\s*(?P<unit>Ω|ohm|Ohm|OHM|R)?$"
 )
-#: A capacitance: the farad unit is required, because ``5.1K`` and ``100nF``
-#: differ exactly by it and a constraint that accepts both checks nothing.
-_CAPACITOR_RE = re.compile(
-    r"^(?P<num>[0-9]*\.?[0-9]+)\s*(?P<prefix>p|n|u|µ|μ|m|k|K)?\s*(?P<unit>F|f)$"
-)
+
+#: A frequency is out of scope for the value parsers (``12MHz`` is a rate, not a
+#: quantity a board value states), so this grammar stays this module's own.
 _FREQUENCY_RE = re.compile(
     r"^(?P<num>[0-9]*\.?[0-9]+)\s*(?P<prefix>k|K|M|G)?\s*(?P<unit>Hz|hz)?$"
 )
 
 
-def _check_quantity(value: str, pattern: re.Pattern[str], what: str) -> str | None:
+def _check_quantity(
+    value: str, what: str, parses, unparsed: re.Pattern[str]
+) -> str | None:
+    """``None`` when ``value`` is a ``what`` this module accepts, else the reason.
+
+    ``parses`` is the authoritative parser
+    (:func:`~boardwise.core.values.parse_resistance_ohms`,
+    :func:`~boardwise.core.values.parse_capacitance_farads`) and it decides;
+    ``unparsed`` is the supplementary pattern above, consulted only for a value
+    the parser does not read. A constraint that accepts both checks nothing is
+    the point of the constraint, so the empty case and the "obviously not a
+    quantity" case keep their two separate messages: an empty parameter is a
+    hole in the file, a typo is a wrong value, and whoever reads the error
+    needs to be told which one happened.
+    """
     text = (value or "").strip()
     if not text:
         return f"is empty; a {what} value is required"
-    return None if pattern.match(text) else f"is not a {what} value: {value!r}"
+    if parses(text) is not None or unparsed.match(text):
+        return None
+    return f"is not a {what} value: {value!r}"
 
 
 def _check_free_text(value: str) -> str | None:
@@ -112,15 +149,22 @@ def _check_free_text(value: str) -> str | None:
 
 
 def _check_resistor(value: str) -> str | None:
-    return _check_quantity(value, _RESISTOR_RE, "resistor")
+    return _check_quantity(
+        value, "resistor", parse_resistance_ohms, _RESISTOR_UNPARSED_RE
+    )
 
 
 def _check_capacitor(value: str) -> str | None:
-    return _check_quantity(value, _CAPACITOR_RE, "capacitor")
+    return _check_quantity(
+        value, "capacitor", parse_capacitance_farads, _CAPACITOR_UNPARSED_RE
+    )
 
 
 def _check_frequency(value: str) -> str | None:
-    return _check_quantity(value, _FREQUENCY_RE, "frequency")
+    text = (value or "").strip()
+    if not text:
+        return "is empty; a frequency value is required"
+    return None if _FREQUENCY_RE.match(text) else f"is not a frequency value: {value!r}"
 
 
 #: The constraint registry. A parameter's ``constraint`` must name one of these;
