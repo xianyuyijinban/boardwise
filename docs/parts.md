@@ -182,11 +182,18 @@ Two traps the readers document rather than work around:
 ## Harvesting
 
 ```bash
-python tools/harvest_parts.py --sources blocklib/sources/*.eprj2 \
+python tools/harvest_parts.py \
     --out blocklib/parts.json          # offline; no network, no editor
-python tools/harvest_parts.py --sources ... --check    # re-harvest and diff
-python tools/harvest_parts.py --sources ... --verify   # also ask the library
+python tools/harvest_parts.py --check                 # re-harvest and diff
+python tools/harvest_parts.py --verify                # also ask the library
 ```
+
+The boards come from `blocklib/harvest.sources.json` — a JSON array of
+repository-relative paths — unless `--sources` names them. That file is the
+single source the tests read too, so the shipped command, the shelf and the
+suite cannot name three different sets of boards. Naming `--sources` yourself
+(including the old `blocklib/sources/*.eprj2` glob) still works, but that glob
+covers 2 of the 6 harvestable boards: see the measured counts below.
 
 Rules the tool keeps:
 
@@ -212,13 +219,27 @@ Rules the tool keeps:
   rather than merely removed. The library's spelling is adopted because that is
   the vocabulary a consumer must use; a difference is recorded.
 
-Measured on the four boards, in the formats they arrived in: `smart_pillbox`
-→ 13 entries, `thesis_FOC_board` → 41, `ProPrj_高速电机控制器` (`.epro2`) → 47,
-`ProPrj_ROBOT ctrl FOC` (`.epro2`) → 15; shared parts merge, so the shelf holds
-**85 entries**. The two edit-log-only `.eprj2` files are still passed to the tool
-and are still skipped with that reason — the same boards, harvested and refused,
-side by side in one report. `CH340N` (C2977777) is on **all four**, which is the
-strongest provenance in the file.
+Measured 2026-09-30 by `python tools/harvest_parts.py --check` with no
+`--sources`, over the six boards in `blocklib/harvest.sources.json`, in the
+formats they arrived in: `smart_pillbox` → 13 entries, `thesis_FOC_board` → 41,
+`ProPrj_高速电机控制器_2026-09-16` (`.epro2`) → 60,
+`ProPrj_ROBOT ctrl FOC_2026-09-16` (`.epro2`) → 19,
+`ProPrj_智能药箱_2026-09-17` (`.epro2`) → 13,
+`ProPrj_毕设FOC驱动板_2026-09-17` (`.epro2`) → 35; shared parts merge, so the
+shelf holds **109 entries**. The two edit-log-only `.eprj2` files are still
+passed to the tool and are still skipped with that reason — the same boards,
+harvested and refused, side by side in one report. `CH340N` (C2977777) is on
+**all six**, which is the strongest provenance in the file.
+
+**The glob this section used to print cannot rebuild the shelf.** It matched
+four `.eprj2` files, two of which are the edit-log-only ones, so it harvested
+`smart_pillbox` + `thesis_FOC_board` alone: measured 2026-09-30, **52** entries
+against the shelf's 109 — 57 short — and it did not even get that far, because
+`C369933` (AMS1117-3.3) is on no glob source and the sidecar's `curated` record
+for it is a field overlay rather than a whole entry, so the run died at
+`harvest_parts: curated[C369933]: 'key' is required and must not be empty`
+(exit 2, nothing written). Both facts are the reason the source list is a
+committed file now.
 
 **A case-only spelling difference is not a conflict.** The same footprint arrives
 as `R0603` from an export and `r0603` from a local project (the editor case-folds
@@ -240,7 +261,7 @@ meaningful order to preserve.
 ```bash
 python tools/harvest_parts.py --rehome                     # needs the bridge
 python tools/backfill_datasheets.py                        # needs the network
-python tools/harvest_parts.py --sources ... --verify        # writes the library
+python tools/harvest_parts.py --verify                  # writes the library
 ```
 
 Two facts about a part are **not in any board**, and both are kept in
@@ -373,6 +394,7 @@ from a catalog row would silently downgrade the provenance.
 | `tools/backfill_datasheets.py` | the datasheet-link CLI (network, per C-number, resumable) |
 | `blocklib/parts.json` | the library |
 | `blocklib/parts.corrections.json` | the sidecar the library is harvested with |
+| `blocklib/harvest.sources.json` | the six boards the library is harvested from (the `--sources` default) |
 | `tests/test_parts_library.py` | schema + the value gate + the vocabulary table |
 | `tests/test_harvest.py` | counts, idempotence, reconcile, conflicts, verification |
 | `tests/test_harvest_verify.py` | the verify chain, stubbed (including its three failures) |

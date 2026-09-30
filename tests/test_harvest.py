@@ -69,9 +69,15 @@ LIBRARY = ROOT / "blocklib" / "parts.json"
 #: re-anchorings and the datasheet links the boards cannot supply.
 CORRECTIONS = ROOT / "blocklib" / "parts.corrections.json"
 
-#: The harvest the committed library comes from. One list, so the artifact and
-#: the tests cannot drift apart.
-HARVEST_SOURCES = [PILLBOX, THESIS, HIGHS, ROBOT, PILLBOX_EPRO2, THESIS_EPRO2]
+#: The harvest the committed library comes from, read from the same file the
+#: tool defaults to (#38): one list, so the artifact, the tool and these tests
+#: cannot drift apart.
+HARVEST_SOURCES = [
+    ROOT / entry
+    for entry in json.loads(
+        (ROOT / "blocklib" / "harvest.sources.json").read_text(encoding="utf-8")
+    )
+]
 
 #: Measured 2026-09-17 (the library was topped up with the two `.epro2` exports
 #: of the pillbox and the thesis board on top of the four 2026-09-16 sources).

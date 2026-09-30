@@ -351,6 +351,23 @@ def test_replay_without_bodies_still_bounds_parts(page, model, offsets, frame):
     assert plan.geometry
 
 
+def test_geometry_sits_where_the_placements_sit(page, bodies, model, offsets, frame):
+    """`plan.geometry` and `plan.placements` name the same components, so their
+    origins must translate the golden page the same way (#47: geometry used to
+    negate y, the one left-over of the 010c coordinate flip, and no consumer
+    ever noticed)."""
+    plan = build_replay_plan(model, page, frame, offsets, bodies)
+    steps = {step.designator: step for step in plan.placements}
+    assert plan.geometry
+    assert any(box.y != 0.0 for box in plan.geometry), "the golden page is not on y=0"
+    for box in plan.geometry:
+        step = steps[box.designator]
+        assert (box.x, box.y) == (step.x, step.y), (
+            f"{box.designator}: geometry origin {box.x, box.y} is not the "
+            f"placement origin {step.x, step.y}"
+        )
+
+
 # --------------------------------------------------------------------------
 # the endpoint overhang tolerance
 # --------------------------------------------------------------------------

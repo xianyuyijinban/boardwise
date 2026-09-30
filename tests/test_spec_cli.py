@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,7 @@ from boardwise.engines.assemble import assemble
 ROOT = Path(__file__).resolve().parents[1]
 SPEC_DIR = ROOT / "blocklib" / "specs"
 SPEC = SPEC_DIR / "ch340g_usb_uart.json"
+SMOKE_SPEC = SPEC_DIR / "ams1117_smoke.json"
 GOLDEN = ROOT / "tests" / "fixtures" / "ch340_golden.epro2"
 SIDECAR = ROOT / "tests" / "fixtures" / "ch340_golden.overrides.json"
 
@@ -318,3 +320,37 @@ def test_validate_benchmark_still_catches_the_leak(capsys):
     captured = capsys.readouterr()
     assert code == 1
     assert "self-reference" in captured.out
+
+
+def test_validate_resolves_declared_inputs_beside_the_spec(monkeypatch, capsys):
+    """#36: the declared inputs a spec names are relative to the spec's own
+    directory, not to the cwd, so validating the shipped smoke spec works from
+    anywhere.
+
+    The cwd is a *system* temp directory on purpose: pytest's `tmp_path` sits
+    under `--basetemp=.tmp_pt_home`, whose `../..` is the repository root, and
+    the smoke spec's input `../../inputs/...` would resolve to the real
+    `inputs/` there — the test would pass even with the cwd fallback back.
+    """
+    elsewhere = Path(tempfile.mkdtemp())
+    monkeypatch.chdir(elsewhere)
+    assert not (elsewhere / ".." / ".." / "inputs").exists(), (
+        "this cwd makes the declared input reachable; pick another"
+    )
+    code = cli.main(["validate", "--spec", str(SMOKE_SPEC)])
+    captured = capsys.readouterr()
+    assert code == 0, captured.out
+    assert "sources — every declared input is real: pass" in captured.out
+
+
+def test_an_explicit_root_still_wins(tmp_path, monkeypatch, capsys):
+    """Naming a root is still the way to validate a spec whose inputs are
+    written relative to somewhere else entirely — a root that does not hold
+    them is still a failing run."""
+    monkeypatch.chdir(tmp_path)
+    code = cli.main(
+        ["validate", "--spec", str(SMOKE_SPEC), "--root", str(tmp_path / "elsewhere")]
+    )
+    captured = capsys.readouterr()
+    assert code == 1, captured.out
+    assert "declared-input-exists" in captured.out
