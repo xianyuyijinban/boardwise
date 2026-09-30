@@ -27,6 +27,8 @@ Validation is deliberately strict and loud:
 
 * an unknown key is an error, not a silently ignored field — the whole point of
   a template is that a human can read it and know it says what it means;
+* a field of the wrong shape is an error that *names* it, so a malformed file is
+  a `BlockError` about a field rather than a traceback out of the reader;
 * a parameter names a **constraint** from :data:`CONSTRAINTS`, and every value
   (the template's default and any the board spec assigns) is checked against it;
 * an unknown constraint is an error. Falling back to "no constraint" would make
@@ -556,11 +558,17 @@ def template_from_json(raw: Any, *, where: str = "<block>") -> BlockTemplate:
         if not uuid:
             raise BlockError(f"{spot}: the symbol uuid must not be empty")
         offsets: dict[str, Point] = {}
-        for number, point in (_require(body, "offsets", spot) or {}).items():
+        raw_offsets = _require(body, "offsets", spot)
+        if not isinstance(raw_offsets, dict):
+            raise BlockError(f"{spot}.offsets: expected an object")
+        for number, point in raw_offsets.items():
             offsets[str(number)] = _as_point(point, f"{spot}.offsets[{number}]")
+        raw_names = body.get("pin_names") or {}
+        if not isinstance(raw_names, dict):
+            raise BlockError(f"{spot}.pin_names: expected an object")
         names = {
             str(number): _as_str(name, f"{spot}.pin_names[{number}]")
-            for number, name in (body.get("pin_names") or {}).items()
+            for number, name in raw_names.items()
         }
         box = body.get("body")
         symbols[uuid] = BlockSymbol(
@@ -650,7 +658,10 @@ def template_from_json(raw: Any, *, where: str = "<block>") -> BlockTemplate:
         )
 
         binds: dict[str, str] = {}
-        for prop, param_name in (body.get("params") or {}).items():
+        raw_binds = body.get("params") or {}
+        if not isinstance(raw_binds, dict):
+            raise BlockError(f"{spot}.params: expected an object")
+        for prop, param_name in raw_binds.items():
             text = _as_str(param_name, f"{spot}.params[{prop}]", allow_empty=False)
             if text not in seen_params:
                 raise BlockError(
@@ -1396,25 +1407,34 @@ def load_board_spec(
             SpecReference(id=ref_id, kind=ref_kind, path=path, ref=ref, note=note)
         )
 
+    raw_param_evidence = raw.get("param_evidence") or {}
+    if not isinstance(raw_param_evidence, dict):
+        raise BlockError(f"{file}.param_evidence: expected an object")
     param_evidence = {
         key: _as_evidence(value, f"{file}.param_evidence[{key}]")
-        for key, value in (raw.get("param_evidence") or {}).items()
+        for key, value in raw_param_evidence.items()
     }
 
+    raw_params = raw.get("params") or {}
+    if not isinstance(raw_params, dict):
+        raise BlockError(f"{file}.params: expected an object")
     params = {
         _as_str(key, f"{file}.params key", allow_empty=False): _as_str(
             value, f"{file}.params[{key}]"
         )
-        for key, value in (raw.get("params") or {}).items()
+        for key, value in raw_params.items()
     }
 
     sheet = raw.get("sheet") or {}
     if not isinstance(sheet, dict):
         raise BlockError(f"{file}.sheet: expected an object")
     _check_keys(sheet, ("attrs", "origin"), f"{file}.sheet")
+    raw_attrs = sheet.get("attrs") or {}
+    if not isinstance(raw_attrs, dict):
+        raise BlockError(f"{file}.sheet.attrs: expected an object")
     sheet_attrs = {
         _as_str(key, f"{file}.sheet.attrs key"): _as_str(value, f"{file}.sheet.attrs[{key}]")
-        for key, value in (sheet.get("attrs") or {}).items()
+        for key, value in raw_attrs.items()
     }
     sheet_origin = (
         (0.0, 0.0)

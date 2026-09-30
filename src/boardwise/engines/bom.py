@@ -19,6 +19,13 @@ Two rules carry over from the library's own discipline (#202):
    different values is a defect in the specification, and it is reported as one
    rather than silently becoming one row with one of the two numbers.
 
+"Different" means different *values*, not different spellings: one C-number
+carrying ``100nF`` on one board and ``0.1uF`` on another is one 100 nF part
+(issue #39), and the two are compared through the value parsers of
+:mod:`boardwise.rules.values` before they are called a conflict. A value neither
+parser can read is compared as written — a disagreement nobody can decode is
+still a disagreement, and "cannot read it" must never become "so it is fine".
+
 Nothing is skipped in silence, either: a part with no binding at all — an
 abstract `Res_0602` placeholder, say — produces an open question naming its
 designator, because a BOM that quietly omits a part is worse than no BOM.
@@ -28,6 +35,7 @@ from __future__ import annotations
 
 import csv
 import io
+import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,6 +43,7 @@ from pathlib import Path
 from .assemble import assemble
 from ..core.blocks import BlockComponent, BoardSpec, DeviceBinding, designator_map
 from ..core.parts import PartEntry, PartLibrary, PartError, load_parts
+from ..rules.values import parse_capacitance_farads, parse_resistance_ohms
 
 #: The columns a JLC upload expects, in its order. Kept to exactly these five so
 #: the file can be handed to the fab; everything else a reader might want (MPN,
@@ -189,6 +198,44 @@ def _value_for(spec: BoardSpec, block_id: str, component: BlockComponent) -> str
     return ""
 
 
+def _quantity(text: str) -> tuple[str, float] | None:
+    """``(kind, amount)`` when a value field is one this module can read.
+
+    The kind travels with the number because the two parsers do not share a
+    unit: 100 ohms and 100 nF are two different parts, and a comparison that
+    forgot that would call them one.
+    """
+    ohms = parse_resistance_ohms(text)
+    if ohms is not None:
+        return "resistance", ohms
+    farads = parse_capacitance_farads(text)
+    if farads is not None:
+        return "capacitance", farads
+    return None
+
+
+def _values_agree(first: str, second: str) -> bool:
+    """True when two Comment fields are the same value, however they are spelled.
+
+    ``100nF`` and ``0.1uF`` are one 100 nF part, and a BOM that called that a
+    conflict would clear the Comment of a row the two boards agree on (issue
+    #39). The comparison goes through the value parsers, so ``10uF`` /
+    ``10UF`` and ``4u7`` / ``4.7uF`` are one value too.
+
+    Equality is :func:`math.isclose`, not ``==``: ``100nF`` decodes to
+    ``1.0000000000000001e-07`` and ``0.1uF`` to ``1e-07``, so exact comparison
+    would trade one false conflict for another. A value neither parser reads is
+    compared as written — unreadable is not the same as equal, and refusing to
+    call it a conflict would be the silent pass this module exists to avoid.
+    """
+    if first == second:
+        return True
+    left, right = _quantity(first), _quantity(second)
+    if left is not None and right is not None and left[0] == right[0]:
+        return math.isclose(left[1], right[1], rel_tol=1e-9)
+    return False
+
+
 def build_bom(spec: BoardSpec, library: PartLibrary) -> BomReport:
     """Derive the bill from a spec and the shelf.
 
@@ -230,11 +277,12 @@ def build_bom(spec: BoardSpec, library: PartLibrary) -> BomReport:
                 row.declared_footprints.append(component.footprint)
             values_seen[entry.lcsc][designator] = value
             comment = value or entry.mpn or entry.key
-            if comment != row.comment:
+            if not _values_agree(comment, row.comment):
                 # One C-number, two values: the BOM would have to print one of
                 # them, so it prints **neither** and says so. (#202's discipline:
                 # an unresolvable disagreement is reported, never averaged into a
-                # plausible-looking number.)
+                # plausible-looking number.) Two spellings of one value are not
+                # two values, and `_values_agree` is what says so.
                 report.open_questions.append(
                     f"{entry.lcsc}: two components carry different values "
                     f"({designator}={comment!r} against {row.comment!r}); the same "

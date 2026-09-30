@@ -154,6 +154,10 @@ Three refusals, all of them open questions in the report rather than rows:
   because a BOM that quietly omits a part is worse than no BOM;
 * one C-number carrying two different values — the row appears with an empty
   `Comment`, because the export will not pick one of the two numbers (#202).
+  "Different" means different *values*, not different spellings: `100nF` and
+  `0.1uF` are compared through the value parsers of `rules/values.py` and are
+  one value (#39), while a value neither parser can read is compared as written
+  — unreadable never becomes "so it is fine".
 
 The designators in the file are the **page** designators, so a board that places
 one block twice gets one line listing both instances' refs. The export runs the

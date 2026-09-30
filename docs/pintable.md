@@ -71,13 +71,20 @@ passed.
 2. **One pin, one row.** A number appearing twice is two contradictory claims
    about one ball of silicon; the later row would silently win. Both readings go
    into the evidence. (The "one pin under two names" negative case.)
-3. **The two-way difference against the spec.**
+3. **The two-way difference against the spec**, compared at **pin level**: a net
+   name both sides carry is not agreement when they mean different balls (a
+   port's `role` and a pin table's `number` are both the ball's name).
    * firmware names a net the spec never connects ⇒ **defect** — the firmware
      uses a pin the schematic does not wire;
+   * firmware puts a pin on a net the spec *does* connect, but to another ball
+     ⇒ **defect** too (the `SPI1_SCK` of issue #35: the spec wires PA3, the
+     firmware PB6). Such a net is not counted in `matched_nets`;
    * the spec connects an MCU signal port the firmware never names ⇒
      **open question**, listed but *not* blocking. A board may legitimately have
      a pin the firmware has not grown into yet, and calling that a defect would
-     make the checker wrong about real boards.
+     make the checker wrong about real boards. The exception is a port the
+     firmware *does* use — on another net: that is one ball on two nets, so it
+     is a defect, not a board ahead of its firmware.
 
    Power and ground ports are excluded from direction 2 — `GND` is not a port
    the firmware forgot.

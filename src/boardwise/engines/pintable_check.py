@@ -19,8 +19,11 @@ The three gates are the task book's, verbatim:
    to the MCU block the firmware never mentions ⇒ **open question**, listed
    separately: the board may legitimately have a pin the firmware has not grown
    into yet, and calling that a defect would make the checker wrong about real
-   boards. The vocabulary check is a fourth gate implied by the contract: an
-   unknown ``function`` is already refused at load time.
+   boards. Both directions compare at **pin level**: a net name on both sides is
+   not agreement, because the schematic's ``SPI1_SCK`` is on ball PA3 while the
+   firmware's is on PB6 — the same name, two different balls, and the name alone
+   cannot tell (issue #35). The vocabulary check is a fourth gate implied by the
+   contract: an unknown ``function`` is already refused at load time.
 
 Nothing here compares against the golden ``.epro2``: the pin table is a
 *generation-side* artifact, so the answer may not be consulted (008c's closed-book
@@ -272,6 +275,24 @@ def check_pin_table(
                 )
             )
         else:
+            mcu_ports = {
+                role: port for role, port in _ports_on(instance.template)
+            }
+            # net -> the roles the MCU block's own ports carry on it. A port's
+            # role and a pin table's ``number`` are both the ball's name, so this
+            # is what the firmware's pin set is compared against — a net name
+            # alone says nothing about *which* pin the schematic wired.
+            spec_mcu_roles: dict[str, set[str]] = {}
+            spec_signal_nets: dict[str, list[str]] = {}
+            for connection in spec.connections:
+                for block_id, role in connection.ports:
+                    if block_id != mcu_block_id:
+                        continue
+                    spec_mcu_roles.setdefault(connection.net, set()).add(role)
+                    port = mcu_ports.get(role)
+                    if port is None or port.net_class != "signal":
+                        continue
+                    spec_signal_nets.setdefault(connection.net, []).append(role)
             # Direction 1: firmware named a net the spec never connects.
             spec_nets = {connection.net for connection in spec.connections}
             unnamed = [pin for pin in table.pins if not pin.net]
@@ -288,8 +309,8 @@ def check_pin_table(
                     )
                 )
             for net in sorted(table.nets()):
+                pins = sorted(p.number for p in table.pins if p.net == net)
                 if net not in spec_nets:
-                    pins = sorted(p.number for p in table.pins if p.net == net)
                     report.findings.append(
                         PinFinding(
                             kind=DEFECT,
@@ -302,24 +323,62 @@ def check_pin_table(
                             evidence=[f"net {net}"],
                         )
                     )
-                else:
-                    report.matched_nets += 1
+                    continue
+                roles = spec_mcu_roles.get(net, set())
+                unwired = sorted(set(pins) - roles)
+                if unwired:
+                    # The net is in the spec, so the name agrees — but the spec
+                    # wires it to another ball, and "the firmware uses a pin the
+                    # schematic does not wire" is exactly that (issue #35: the
+                    # name-only comparison counted this net as matched).
+                    report.findings.append(
+                        PinFinding(
+                            kind=DEFECT,
+                            rule="spec-difference",
+                            message=(
+                                f"firmware puts {', '.join(unwired)} on net {net!r}, "
+                                f"which the spec connects to the MCU block's port(s) "
+                                f"{', '.join(sorted(roles)) or '(none)'} — the firmware "
+                                "uses a pin the schematic does not wire"
+                            ),
+                            evidence=[
+                                f"net {net}",
+                                "spec: " + (", ".join(sorted(roles)) or "(no port)"),
+                                "firmware: " + ", ".join(pins),
+                            ],
+                        )
+                    )
+                    continue
+                report.matched_nets += 1
             # Direction 2: the spec connects a signal port the firmware never named.
-            mcu_ports = {
-                role: port for role, port in _ports_on(instance.template)
-            }
-            spec_signal_nets: dict[str, list[str]] = {}
-            for connection in spec.connections:
-                for block_id, role in connection.ports:
-                    if block_id != mcu_block_id:
-                        continue
-                    port = mcu_ports.get(role)
-                    if port is None or port.net_class != "signal":
-                        continue
-                    spec_signal_nets.setdefault(connection.net, []).append(role)
             firmware_nets = table.nets()
+            net_of_pin = {pin.number: pin.net for pin in table.pins}
             for net in sorted(spec_signal_nets):
                 if net in firmware_nets:
+                    continue
+                elsewhere = sorted(
+                    f"{role} on {net_of_pin[role]!r}"
+                    for role in spec_signal_nets[net]
+                    if role in net_of_pin
+                )
+                if elsewhere:
+                    # The pin table *has* grown into this ball — on another net.
+                    # That is not a board with a pin the firmware has not used
+                    # yet, it is two nets claiming one ball, so it is a defect.
+                    report.findings.append(
+                        PinFinding(
+                            kind=DEFECT,
+                            rule="spec-difference",
+                            message=(
+                                f"the spec connects the MCU block's port(s) "
+                                f"{', '.join(sorted(spec_signal_nets[net]))} to net "
+                                f"{net!r}, but the firmware puts the same pin on "
+                                f"{', '.join(elsewhere)} — one ball cannot be on "
+                                "two nets"
+                            ),
+                            evidence=[f"net {net}"] + elsewhere,
+                        )
+                    )
                     continue
                 report.findings.append(
                     PinFinding(
