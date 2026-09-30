@@ -25,6 +25,9 @@ Three things it refuses to paper over:
 * **An ambiguous net name.** Two blocks whose nets end up with the same page
   name without a connection joining them is exactly the mistake that would make
   two circuits quietly become one; it is reported with both sides named.
+* **One cluster, two connection names.** Two connections that end up joining the
+  same cluster disagree about what the page net is called, and only one of them
+  could win — issue #45. Refused, with both connections named.
 
 Naming anchors come from one of **two paths**, and which one applies is decided
 by whether the template carries geometry (2026-09-17 ruling):
@@ -56,6 +59,7 @@ from dataclasses import dataclass, field
 
 from boardwise.core.blocks import (
     DESIGNATOR_STRIDE,
+    BlockConnection,
     BlockError,
     BlockComponent,
     BlockTemplate,
@@ -264,13 +268,41 @@ def _resolve_nets(
 
     # --- the page name of every cluster, and the ambiguity check
     named: dict[tuple[str, str], str] = {}
+    claimants: dict[tuple[str, str], list[BlockConnection]] = {}
     for connection in spec.connections:
         for block_id, role in connection.ports:
             block = spec.instance(block_id)
             assert block is not None
             port = block.template.port(role)
             assert port is not None
-            named[groups.find((block_id, port.net))] = connection.net
+            root = groups.find((block_id, port.net))
+            claims = claimants.setdefault(root, [])
+            if all(seen is not connection for seen in claims):
+                claims.append(connection)
+            named[root] = connection.net
+    doubles = {
+        root: claims
+        for root, claims in claimants.items()
+        if len({claim.net for claim in claims}) > 1
+    }
+    if doubles:
+        # The reverse direction of the clash below was already a refusal; this
+        # one used to be `named[root] = ...`, i.e. the later connection silently
+        # renamed the earlier one's net and the earlier name vanished from the
+        # page (#45).
+        rendered = []
+        for _root, claims in sorted(doubles.items()):
+            for claim in claims:
+                rendered.append(
+                    f"  connection {claim.net!r}: "
+                    + ", ".join(f"{b}.{role}" for b, role in claim.ports)
+                )
+        raise AssemblyError(
+            "two connections join one cluster under different names; a single "
+            "net cannot carry two page names, and the second one would silently "
+            "rename the first. Merge them into one connection, or move a port "
+            "onto a net of its own:\n" + "\n".join(rendered)
+        )
 
     by_name: dict[str, list[tuple[str, str]]] = {}
     page_net_of_member: dict[tuple[str, str], str] = {}
