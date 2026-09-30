@@ -108,7 +108,9 @@ boardwise checkup --file <导出.epro2> --out <目录>       # 断连兜底：�
 - **触发源②（marked）是你的活**：图上读不懂的管脚、或整颗行为不明的新器件，在**下任何判定之前**
   用 `boardwise need-datasheet --out <checkup目录> --part U7 --pins FB,ICG --reason "为什么解释不了"`
   写进报告（`--pins` 可省 = 整颗器件；按 `(part, pin)` 幂等，重复标记只更新 reason；
-  命令会重算 `completion` 并重渲染 `report.md`，纯文件操作、不碰编辑器）。
+  命令会重算 `completion` 并重渲染 `report.md`，纯文件操作、不碰编辑器。**报告里记录的那个
+  退出码也一起重算**（075）：标上去 `0 → 3`，标记没了回 `0`——命令**自己的**退出码不是它，
+  把标记并进报告成功就是 `0`）。
 - 清单非空时**一次性向用户索取**对应手册/资料；**资料到位前不得对依赖它的条目下"通过/不符合"
   结论**，只能写「无法确认（等资料）」。
 - **边界（写死）**：**不是**"等齐所有手册才准开工"——**能独立算的先算**（分压、耐压、降额、
@@ -122,7 +124,8 @@ boardwise checkup --file <导出.epro2> --out <目录>       # 断连兜底：�
 ① **ERC 先行**：主机 ERC/DRC 读数在 `drc` 段——error 已在报告头部错误段，先解决；
 warn 逐条进 `warning_triage[]`，**把每条的 `verdict` 填成 有益/有害/无害、`reason` 写理由**——
 填法：`boardwise triage --out <checkup目录> --key <key> --verdict … --reason …`
-（report.md「警告分诊」表里有 `key` 列；填了立即重算 completion，重跑 checkup 经侧车并入不丢）。
+（report.md「警告分诊」表里有 `key` 列；填了立即重算 completion 与报告里记录的退出码
+（075——命令自己的退出码是 `0`），重跑 checkup 经侧车并入不丢）。
 主机 ERC **没有逐条文本**（只有 host-wide 合计，039 真机 probe 实证，§6 坑 27），
 对着计数与画布图判，要看文本得去编辑器底部面板；PCB DRC 叶子和自有规则 WARN 是带文本的。
 含警告的模块已排在 `modules` 前头（`source.modulesOrderedBy = "warnings-first"`，
@@ -219,7 +222,9 @@ checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起
   （017 的幻影 finding 就是这么来的）。不知道文件在哪：`review --latest [<目录>]` 自动挑最新
   的 `.epro2` 并先打印它选了哪个。退出码 `0`/`1` 同 3.1，`2` = 文件读不了，
   `3` = **读出来是空的**（0 器件 0 网络：归档可能被截断/损坏，或 `--view pcb` 看了一份只有
-  原理图的导出——"没读到"不是"干净板"，073 起不再退 `0`）。
+  原理图的导出——"没读到"不是"干净板"，073 起不再退 `0`）。**`review --live` 同一档**（075）：
+  在线拿到了模型但模型是空的（0 器件 0 网）也退 `3`，与 `checkup` 的 `coverage.modelEmpty`
+  对齐——它与「根本没拿到模型」是两句话，两句话都不许读成通过。
 - **eprj3 文件夹工程（V4，038 A 档只读）**：`boardwise review <工程目录> --json ...`
   —— 目录内含 `<同名>.eprj3` 索引即识别（`sch/**/*.esch2` 逐页粘成一条记录流，原理图模型满血；
   文件夹只有 schematic 这一档，047 起缺省正是它，不必再显式写）。`--view pcb` 对 eprj3
@@ -557,7 +562,7 @@ typeof 全在位、activate 冷启动正常派发、render 实跑 308KB PNG—�
 | 命令答的是别的工程 | 多层焦点不一致（坑 1）：关掉多余编辑器窗口，`document.current` 双查 |
 | 工程文件里多了东西 | `~/.boardwise/audit/` 当天日志逐动作可查 |
 | `review` 退出 2 | `.epro2` 是加密导出 → 重新导出并取消加密；也见结构坏（072/073：明文一句话报位置，无 traceback） |
-| `review`/`checkup` 退出 3 | **不是"板子干净"**：daemon/connector 不在，或 `completion.verdict` 是 `incomplete`（看 `completion.verdictWhy`）。空模型（0 器件 0 网络）多半是导出不全/被截断，或 `--view pcb` 看了一份只有原理图的导出 |
+| `review`/`checkup` 退出 3 | **不是"板子干净"**：daemon/connector 不在，或 `completion.verdict` 是 `incomplete`（看 `completion.verdictWhy`）。空模型（0 器件 0 网络）多半是导出不全/被截断，或 `--view pcb` 看了一份只有原理图的导出。**`review --live` 也一样**（075）：在线拿到了模型、但模型是空的也退 3（与「根本没拿到模型」是两句不同的话，都不许读成通过） |
 
 装环境与首次跑通，看 `docs/getting-started.md`（6 步，给非程序员写的）；
 桥的协议与全部动作看 `docs/bridge.md`；画板流看 `docs/draw.md`。
