@@ -716,7 +716,7 @@ Notes that matter operationally:
 | `PAGE_MISMATCH` | The page (or PCB/board) the action was given is not the one the editor has focused | A call aimed at a tab that is not in front — the guard exists so a write cannot land on the wrong page. Focus it first (`doc.focus`, or `doc.open` if it is not open) and re-check with `doc.list` |
 | `NOT_FOUND` | The uuid / primitive id / designator the action named does not exist: not in the project, not on the page, or with no open tab | A stale reference — the document was renamed or deleted, the primitive is gone, or the tab is closed. Re-read `doc.list` / `sch.geometry` and address what the editor actually reports |
 | `TIMEOUT` | The connector did not answer within the action's timeout | Editor busy, modal dialog open, or a half-dead socket (§10) |
-| `DISCONNECTED` | The socket died before an answer arrived — raised by the **client**, never by the daemon (once the socket is gone nobody is left to answer) | Daemon stopped or the editor closed mid-call. A write whose answer never came **may still have landed**: read the document back before retrying |
+| `DISCONNECTED` | The answer never arrived, whoever was waiting for it — raised by the **client** when the daemon connection dies, and by the **daemon** when the window it was waiting on goes away while the call is in flight | Daemon stopped or the editor closed mid-call. A write whose answer never came **may still have landed**: read the document back before retrying |
 | `INTERNAL` | Anything else; `message` carries the text | A bug — read the audit log |
 
 Codes are stable identifiers, not English prose: clients branch on `code`, humans read `message`.

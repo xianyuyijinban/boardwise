@@ -1071,12 +1071,14 @@ class ErrorCodes:
     CONNECTOR_ERROR = "CONNECTOR_ERROR"
     #: The connector did not answer in time.
     TIMEOUT = "TIMEOUT"
-    #: The daemon connection died before an answer arrived. Raised by the
-    #: **client**, never by the daemon: once the socket is gone nobody is left to
-    #: answer. It exists as its own code because "the transport died" and "the
-    #: action failed" are not the same fact — a write whose answer never came may
-    #: still have landed in the editor, and a caller that cannot tell them apart
-    #: will report a half-drawn page as untouched (M0-P0d follow-up, 2026-09-18).
+    #: The answer never arrived, whoever was waiting for it. Raised by the
+    #: **client** when the daemon connection dies, and by the **daemon** when the
+    #: window it was waiting on goes away while the call is in flight (#43) — in
+    #: both cases there is nobody left to answer. It exists as its own code
+    #: because "the transport died" and "the action failed" are not the same fact
+    #: — a write whose answer never came may still have landed in the editor, and
+    #: a caller that cannot tell them apart will report a half-drawn page as
+    #: untouched (M0-P0d follow-up, 2026-09-18).
     DISCONNECTED = "DISCONNECTED"
     #: Anything else; ``error.message`` carries the text.
     INTERNAL = "INTERNAL"

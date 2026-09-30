@@ -420,8 +420,11 @@ Two properties are structural, not oversights:
   (`sch.geometry`), reports what it saw — or that it **could not look**, which is
   not the same as "it is empty" — and never re-issues the call, because a retry
   after a write that landed is a duplicate part. Transport deaths are normalised
-  into `BridgeError(DISCONNECTED)` by `bridge/client.py`, the one layer that knows
-  about `websockets`.
+  into `BridgeError(DISCONNECTED)` by the layer that owns the transport:
+  `bridge/client.py` when the daemon connection dies, and `bridge/daemon.py`
+  when the editor's window closes while the call is already on the wire (#43 —
+  reporting that second case as `CONNECTOR_ERROR` is what used to make an
+  in-flight write read as `not_placed`).
 
 The exit code for an unknown outcome is **3** ("cannot say"), distinct from 2
 ("nothing was executed"), and it **outranks both 0 and 1**: "the diff happened to

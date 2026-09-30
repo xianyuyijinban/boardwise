@@ -2293,6 +2293,85 @@ def test_connector_error_is_relayed(tmp_path):
     run(scenario())
 
 
+def test_a_window_that_vanishes_mid_call_answers_disconnected(tmp_path):
+    """#43: a write already on the wire, and then the editor's window went away.
+
+    Nobody will ever learn whether the editor acted on it, so the answer is
+    "unknown" (`DISCONNECTED`) and not "the connector refused" (`CONNECTOR_ERROR`).
+    The two are not interchangeable: `engines/draw.py` treats the first as
+    "the page may have changed, read it back" and the second as a refusal it may
+    report as `not_placed` — which, for a placement that did land, is a page that
+    was drawn and reported as untouched.
+
+    The connector here is a real socket: the request is read **off the wire**
+    before the close, so this is genuinely "in flight" rather than a request that
+    was never sent.
+    """
+    async def scenario():
+        daemon = _daemon(tmp_path)
+        server, port = await _start(daemon)
+        async with server:
+            conn_ws, _ = await _hello(port, "connector", token="t", instanceId=WINDOW_A)
+            cli_ws, _ = await _hello(port, "cli")
+
+            forwarded: list[dict] = []
+
+            async def read_then_vanish():
+                forwarded.append(decode_frame(await conn_ws.recv()))
+                await conn_ws.close()
+
+            task = asyncio.create_task(read_then_vanish())
+            await cli_ws.send(request_frame(
+                "sch.place_component", {"designator": "R1"}, id="w"
+            ))
+            reply = decode_frame(await cli_ws.recv())
+            await task
+
+            assert forwarded and forwarded[0]["action"] == "sch.place_component", forwarded
+            assert reply["ok"] is False
+            assert reply["error"]["code"] == ErrorCodes.DISCONNECTED
+            assert reply["error"]["message"] == (
+                "connector disconnected while the call was in flight"
+            )
+            await cli_ws.close()
+
+    run(scenario())
+
+
+def test_a_refusal_from_the_connector_is_still_a_connector_error(tmp_path):
+    """The other half of #43, so the fix cannot be over-applied.
+
+    A connector that *answers* knows the outcome — it did not do the thing — so
+    that path keeps `CONNECTOR_ERROR` (spelled here without a code, the way a
+    connector that forgot to name one sends it, to pin the daemon's own fallback
+    at `daemon.py:1432` as well).
+    """
+    async def scenario():
+        daemon = _daemon(tmp_path)
+        server, port = await _start(daemon)
+        async with server:
+            conn_ws, _ = await _hello(port, "connector", token="t", instanceId=WINDOW_A)
+            fake = FakeConnector(conn_ws, errors={
+                "sch.place_component": {"message": "the editor refused"},
+            })
+            task = asyncio.create_task(fake.serve())
+
+            cli_ws, _ = await _hello(port, "cli")
+            await cli_ws.send(request_frame(
+                "sch.place_component", {"designator": "R1"}, id="w"
+            ))
+            reply = decode_frame(await cli_ws.recv())
+
+            assert reply["ok"] is False
+            assert reply["error"]["code"] == ErrorCodes.CONNECTOR_ERROR
+            assert reply["error"]["code"] != ErrorCodes.DISCONNECTED
+            assert reply["error"]["message"] == "the editor refused"
+            task.cancel()
+            await cli_ws.close()
+
+    run(scenario())
+
+
 def test_connector_may_not_call_editor_actions_on_itself(tmp_path):
     async def scenario():
         daemon = _daemon(tmp_path)

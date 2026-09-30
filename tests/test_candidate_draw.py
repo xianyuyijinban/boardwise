@@ -24,6 +24,7 @@ from boardwise.core.candidate import (
 )
 from boardwise.core.model import Component, DesignModel, Net, Pin
 from boardwise.engines.draw import (
+    DISCONNECTED_CODE,
     PERSISTENCE_NOT_PLACED,
     PERSISTENCE_PLACED,
     PERSISTENCE_SAVED_UNVERIFIED,
@@ -893,6 +894,18 @@ def test_the_timeout_code_the_flow_watches_for_is_the_one_the_daemon_sends():
     assert TIMEOUT_CODE == ErrorCodes.TIMEOUT
 
 
+def test_the_disconnected_code_the_flow_watches_for_is_the_one_the_daemon_sends():
+    """The same copy, one code over: `DISCONNECTED` has two producers.
+
+    `bridge/client.py` raises it when the daemon connection dies, and since #43
+    `bridge/daemon.py` raises it when the editor's window goes away while a call
+    is in flight. The flow holds its own copy of the string (`engines/` does not
+    import `bridge/`), so this is what keeps the two halves speaking the same
+    word.
+    """
+    assert DISCONNECTED_CODE == ErrorCodes.DISCONNECTED
+
+
 def test_a_timed_out_write_reads_the_page_back_and_is_never_retried():
     """The ruling's core case (M0-P0d, 裁决 2).
 
@@ -1199,6 +1212,51 @@ def test_not_placed_still_belongs_to_a_refusal_before_any_write():
     assert result.acknowledged_writes == []
     assert result.unknown_writes == []
     assert "not one write was acknowledged" in PERSISTENCE_WORDS[PERSISTENCE_NOT_PLACED]
+
+
+def test_a_write_cut_short_by_a_vanishing_connector_is_unknown_not_not_placed():
+    """#43, seen from the flow: the mirror of the refusal test above.
+
+    The bridge raises this when the editor's window disappears with the request
+    already on the wire — the part may be on the page, and nobody will ever be
+    told. Reporting `not_placed` there is the bug this fixes: a page that was
+    drawn and reported as untouched is how a second run ends up drawing it twice.
+    So the flow must read the page back, list the write as unanswered, and settle
+    on `unknown`.
+    """
+    client = FaultClient(
+        _geo(),
+        fail={"sch.place_component": (
+            BridgeError(
+                ErrorCodes.DISCONNECTED,
+                "connector disconnected while the call was in flight",
+            ),
+            None,
+        )},
+    )
+    result = _run(run_draw(
+        client, _golden_model(), confirm=lambda: True, offsets=GOLDEN_OFFSETS,
+    ))
+
+    looks = [
+        r for r in result.records
+        if r.action == "sch.geometry" and "read the page back" in r.summary
+    ]
+    assert len(looks) == 2, "every unanswered write gets its own look"
+    assert all(r.ok for r in looks), "the page is still readable — the window that died was not the socket"
+
+    actions = [a for a, _p in client.calls]
+    assert actions.count("sch.place_component") == 2, (
+        f"the write may have landed, so it must not be re-issued: {actions}"
+    )
+
+    assert result.persistence != PERSISTENCE_NOT_PLACED, (
+        "the write may be on the page, so the report may not claim it is not"
+    )
+    assert "nothing was written" not in PERSISTENCE_WORDS[result.persistence]
+    assert result.unknown_writes, "the writes that never answered must be listed"
+    assert [r.action for r in result.unknown_writes] == ["sch.place_component"] * 2
+    assert all(r.disconnected for r in result.unknown_writes)
 
 
 # --------------------------------------------------------------------------

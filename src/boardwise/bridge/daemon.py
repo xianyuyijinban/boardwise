@@ -1507,10 +1507,22 @@ class BridgeDaemon:
             # disconnected" could fail them all; with a hub, failing another
             # window's in-flight call because a *different* window closed would
             # invent a failure that never happened.
+            #
+            # `DISCONNECTED`, not `CONNECTOR_ERROR` (#43): the request is already
+            # on the wire, so nobody will ever learn whether the editor acted on
+            # it. `CONNECTOR_ERROR` means the connector *answered* and refused —
+            # an outcome, and a safe one to report as "not done". This is the
+            # same fact the client reports when the daemon connection itself dies,
+            # and a write whose answer never arrived may still have landed, so
+            # callers read the document back instead of concluding "nothing was
+            # written".
             for call in list(self.pending.values()):
                 if call.window.websocket is websocket and not call.future.done():
                     call.future.set_exception(
-                        BridgeError(ErrorCodes.CONNECTOR_ERROR, "connector disconnected")
+                        BridgeError(
+                            ErrorCodes.DISCONNECTED,
+                            "connector disconnected while the call was in flight",
+                        )
                     )
             self.audit(action="disconnect", role=connection.role or "-", ok=True,
                        peer=peer, actions=connection.seen_actions,

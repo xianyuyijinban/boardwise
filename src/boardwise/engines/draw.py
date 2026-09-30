@@ -76,11 +76,13 @@ class StepRecord:
     #: telling the editor to cancel (`bridge/daemon.py:615-616`), so a write can
     #: still land after the caller has given up (M0-P0d, 2026-09-18).
     timed_out: bool = False
-    #: The daemon connection died while this action was in flight. Same
-    #: consequence as a timeout and for the same reason — an answer never
-    #: arrived, so nobody knows whether it landed — and measured on the real
-    #: host: killing the daemon mid-draw left five parts on the page while the
-    #: report said nothing had been written (M0-P0d follow-up, 2026-09-18).
+    #: The transport for this action went away while it was in flight — the
+    #: daemon connection died, or the editor's window closed under the call the
+    #: daemon had already put on the wire. Same consequence as a timeout and for
+    #: the same reason — an answer never arrived, so nobody knows whether it
+    #: landed — and measured on the real host: killing the daemon mid-draw left
+    #: five parts on the page while the report said nothing had been written
+    #: (M0-P0d follow-up, 2026-09-18).
     disconnected: bool = False
     #: This record is a **write attempt**. Set by `_call_write` rather than
     #: derived from the action name, because `engines/` does not import the
@@ -94,9 +96,10 @@ class StepRecord:
 
 
 #: The error codes that mean "we never learned what happened". Both are raised
-#: or normalised by the layer that owns the transport (`bridge/client.py` for
-#: the disconnect, `bridge/daemon.py` for the timeout), and both are read here
-#: by string because `engines/` does not import `bridge/`.
+#: or normalised by the layer that owns the transport (`bridge/daemon.py` for the
+#: timeout and for a window that vanished mid-call, `bridge/client.py` for a dead
+#: daemon connection), and both are read here by string because `engines/` does
+#: not import `bridge/`.
 TIMEOUT_CODE = "TIMEOUT"
 DISCONNECTED_CODE = "DISCONNECTED"
 
