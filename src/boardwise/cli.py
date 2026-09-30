@@ -1335,7 +1335,9 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         description=(
             "The compiler that turns a CircuitSpec + PresentationSpec + a symbol "
-            "library into 3-8 legal drawings, best first. It prints the ranking "
+            "library into the legal drawings that survived its hard gate, best "
+            "first — at most eight, and one or two is a normal success. It prints "
+            "the ranking "
             "(the layers are compared, never summed), the four refusal categories "
             "with the action that would fix each one, and writes one SVG preview "
             "and one LayoutPlan JSON per candidate. Nothing here touches the "

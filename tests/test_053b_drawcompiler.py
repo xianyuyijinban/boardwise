@@ -1684,13 +1684,21 @@ def test_a_free_pad_takes_the_near_stub_and_its_capacitor_hugs_the_pad():
     The numbers are his own, measured off P22: the far pad's stub is his 40–60 band
     where that band fits, and never the ladder's 60/120 rungs; the flag at its end is
     no more than 60 from the pad it names; the output capacitor hangs 15–25 off the
-    pad it decouples; and every flag stays upright (069 sec.7). **074 moved the
-    floor of the band on this shape to :data:`FLAG_LEAD` (30)**, and the reason is
-    measured rather than chosen: the 50-unit rungs are refused by the gate (the
-    upward turn crosses the rail at (135, 740)) and by 069 sec.8's box (hanging down
-    at (135, 705) collides with C1's own annotation text, which reaches x=133). 30
-    is 069's own next rung and it is *nearer* the pad, so 「太远了」 is not what
-    happened here; the page-level E1 landing keeps 岳's 50 (see the v6 render).
+    pad it decouples; and every flag stays upright (069 sec.7).
+
+    **082 restored the band's floor to 40 on this shape** by giving a far pad's own
+    ladder the low end of 069 sec.1's 40–60 band as a second rung
+    (:func:`~boardwise.engines.drawcompiler._flag_pins`), where 074 had dropped it to
+    :data:`FLAG_LEAD` (30). The geometry is measured, not chosen, and the reason the
+    50 could not simply be reached is still the two refusals 074 recorded: the upward
+    turn crosses the input rail at (135, 740), which 074 refuses by name, and a whole
+    25-unit jog down at (135, 705) lands on C1's own annotation (which reaches x=133).
+    **The 40 rung is refused by neither, because its turn is half a jog (12.5) down**:
+    measured anchor (145, 717.5) for a pad at (185, 730) — horizontal reach 40,
+    straight 41.9 — with the other five flags on the page unmoved and all
+    twenty-four offline scenarios byte-identical. The 50 stays the first rung, so the
+    page-level E1 landing keeps 岳's 50 (see the v6 render), and a shape with no room
+    at 40 still lands on the nearer 30.
     """
     page = (0.0, 0.0, 1170.0, 825.0)
     spec = _duplicate_vout_circuit(out_members=["U1.2", "U1.4", "C2.1"])
@@ -1713,10 +1721,11 @@ def test_a_free_pad_takes_the_near_stub_and_its_capacitor_hugs_the_pad():
     ]
     assert len(stub) == 1, f"the far pad is named on its own stub; got {stub}"
     reach = abs(stub[0].x - far[0])
-    assert dc.FLAG_LEAD - 1e-6 <= reach <= 60.0, (
-        f"the far pad's flag is {reach:g} horizontal units out — the near slots are "
-        f"what the ladder must take first (nothing between {far} and it), and 069's "
-        "own rungs stop at 60/120 only when everything nearer is taken"
+    assert 40.0 - 1e-6 <= reach <= 60.0, (
+        f"the far pad's flag is {reach:g} horizontal units out — 岳's 40-60 band, and "
+        f"082 measured 40 exactly (the half-jog turn at (145, 717.5)); the near slots "
+        f"are what the ladder must take first (nothing between {far} and it), and "
+        "069's own rungs stop at 60/120 only when everything nearer is taken"
     )
     straight = math.hypot(stub[0].x - far[0], stub[0].y - far[1])
     assert straight <= 60.0, (

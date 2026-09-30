@@ -95,12 +95,15 @@ Two batches added the drawing compiler and the landing step; they are separate
 on purpose, because the compiler is the part that must work with no editor:
 
 * **the compiler** (`engines/drawcompiler.py`, 053 stage B) turns a
-  `CircuitSpec` + a `PresentationSpec` + a **symbol library** into 3-8 legal
-  `LayoutPlan`s (`core/layoutplan.py`), best first, with an independent
-  readability gate (`engines/readability.py`) and a grammar checker
-  (`check_grammar`) as the acceptance. It emits **no coordinates from a
-  reference drawing**: the geometry is computed from pin axes, the lattice and
-  the stated page. Its four refusal categories (`facts-missing`,
+  `CircuitSpec` + a `PresentationSpec` + a **symbol library** into up to eight
+  legal `LayoutPlan`s (`core/layoutplan.py`), best first — one per variant that
+  survives the hard gate, so the count is however many survived (one or two is a
+  normal success; the gate refuses variants, it does not replace them), and none
+  at all is a refusal carrying its category, its measured reason and an
+  action — with an independent readability gate (`engines/readability.py`) and a
+  grammar checker (`check_grammar`) as the acceptance. It emits **no coordinates
+  from a reference drawing**: the geometry is computed from pin axes, the
+  lattice and the stated page. Its four refusal categories (`facts-missing`,
   `circuit-invalid`, `layout-unsat`, `presentation-poor`) are the vocabulary
   every caller reports in.
 * **the landing step** (`engines/drawapply.py`, 054) turns one candidate into a

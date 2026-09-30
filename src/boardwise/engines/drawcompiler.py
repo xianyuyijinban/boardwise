@@ -48,9 +48,17 @@ Then the candidates are **gated** and **ranked**:
   (grammar findings), then readability (crossings, bends, wire length), then
   compactness. Layers are compared in order and never summed, so no amount of
   "fewer millimetres" can buy back a broken relation (052 sec.6, 053 sec.7);
-* 3-8 candidates come out, best first, each carrying its evidence
-  (`LayoutEvidence`: checker name, hard violations, grammar findings, raw soft
-  metrics with a reason each) and the plan's two source digests.
+* at most `budget.max_candidates` candidates come out — 8 by default, and the
+  ceiling is structural rather than a promise: the finite search stops after
+  that many variants and one variant yields at most one plan. **There is no
+  lower bound.** A variant the gate refuses is gone, not repaired, so one or two
+  candidates is an ordinary success (074's zero-crossing rule costs scene 08e
+  its third). `budget.min_candidates` (3 by default) is carried and handed down
+  to each module budget and **nothing reads it**: it is not a floor, and it is
+  not validated either. Zero is never a quiet empty list — it is a refusal that
+  names itself (the four categories below). Each surviving candidate carries its
+  evidence (`LayoutEvidence`: checker name, hard violations, grammar findings,
+  raw soft metrics with a reason each) and the plan's two source digests.
 
 **The four failure categories** (053 sec.4). The first two belong to the grammar
 layer and travel through unchanged; the last two are computed here:
@@ -475,11 +483,15 @@ class Candidate:
 class CompileResult:
     """The compiler's whole answer: candidates, refusals, and what it tried.
 
-    ``candidates`` is what the caller draws (3-8 legal plans, best first);
-    ``failures`` is why nothing could be drawn, in 053 sec.4's four categories;
-    ``rejected`` is the audit trail of the variants that were built and lost. A
-    refusal is never an empty success: a result with no candidate and no failure
-    would be the "invalid spec" answer the contract exists to avoid.
+    ``candidates`` is what the caller draws: at least one and at most
+    ``budget.max_candidates`` (8 by default) legal plans, best first. Fewer is
+    normal output, not a defect — every variant the gate refused is simply not
+    in the list; ``failures`` is why nothing could be drawn, in 053 sec.4's four
+    categories; ``rejected`` is the audit trail of the variants that were built
+    and lost. A refusal is never an empty success: a result with no candidate
+    and no failure would be the "invalid spec" answer the contract exists to
+    avoid, and the compiler's own zero-candidate path refuses that by naming a
+    reason even when it has none to name.
     """
 
     candidates: list[LayoutPlan] = field(default_factory=list)
@@ -528,8 +540,13 @@ def compile(  # noqa: A001 - the name 053 sec.4 fixes for the entry point
 
     The four stages, the gate and the layered ranking are in the module
     docstring. A refusal returns ``candidates == []`` with the reasons in
-    ``failures``; a success returns 3-8 plans, best first, each with its
-    evidence filled in and its source digests pinned.
+    ``failures`` — ``ok`` is then False, ``best()`` is None, ``failures`` is
+    never empty, and each entry carries a category, the measured detail and an
+    action, so zero candidates is a named ``layout-unsat``-or-worse answer
+    rather than a silent empty table; a success returns 1 to
+    ``budget.max_candidates`` plans (8 by default), best first, each with its
+    evidence filled in and its source digests pinned. Two is a success, not a
+    shortfall: the gate removes variants and nothing promises a minimum.
     """
     for value, expected in (
         (circuit_spec, CircuitSpec),
@@ -4825,7 +4842,19 @@ def _flag_pins(
         ]:
             anchor, lead, hang = _flag_anchor(
                 router, point, direction, blocked,
-                leads=(SIBLING_LEAD,) if stub else (),
+                # 069 sec.1's band is 40-60 and :data:`SIBLING_LEAD` is its
+                # middle, so 40 is the **second** rung of a far pad's own ladder:
+                # a shape that fits it without giving up the 50 is drawn 岳's 40
+                # out rather than the nearer :data:`FLAG_LEAD` (measured 082 on
+                # 053b's duplicate-VOUT shape — the 40 rung turns **half** a jog
+                # down instead of a whole one, and that half turn is what clears
+                # C1's own annotation; the 50 stays first, so every drawing that
+                # reached 50 still does, E1 included), and a shape with no room
+                # at 40 still lands on the nearer rung. The label half
+                # (:func:`_stub_label`) keeps 069's single rung: a label box is
+                # one text line, not a glyph plus a name, and 074 measured all
+                # six of its calls answered by the pad's own direction.
+                leads=(SIBLING_LEAD, 40.0) if stub else (),
                 fits=fits,
                 up=natural,
                 boxes=bodies,
