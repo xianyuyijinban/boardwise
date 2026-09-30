@@ -179,6 +179,119 @@ def test_the_capacitance_parser_returns_none_for_units_it_does_not_read():
         assert parse_capacitance_farads(spelling) is None
 
 
+def test_the_capacitance_parser_reads_the_trade_mid_letter_notation():
+    """Issue #23: the trade writes a capacitor as ``4u7``, and this reader did
+    not know it.
+
+    The resistance side has read the same notation since 071 (``4K7``); the
+    capacitor half is that notation one quantity along, and what the missing
+    half cost was not a wrong number but *silence* -- a rule handed a value it
+    cannot read skips the part entirely, so a board writing ``4u7`` produced no
+    ``param-rc-cutoff`` pair while the same part spelled ``4.7uF`` was measured.
+
+    ``u``/``n``/``p`` are the units the trade prints, and the fraction is the
+    digits after the decimal point, exactly as in ``4K70``. A field with no
+    fraction after the unit letter (``100n``, ``22u``) is **not** read: the shape
+    this batch reads is the one the design fixed, and the difference matters --
+    the shelf's own slug spelling is ``100n``, and a board declaring a value that
+    way turns an invisible RC pair into a finding (see the refusal test below and
+    ``tasks/077-capacitance-infix.md`` §交卷).
+    """
+    assert parse_capacitance_farads("4u7") == pytest.approx(4.7e-6)
+    assert parse_capacitance_farads("2n2") == pytest.approx(2.2e-9)
+    assert parse_capacitance_farads("5p1") == pytest.approx(5.1e-12)
+    assert parse_capacitance_farads("1u0") == pytest.approx(1e-6)
+    assert parse_capacitance_farads("4u70") == pytest.approx(4.7e-6)
+    # The unit letter is case-insensitive, and the micro letter has three
+    # spellings (055): MICRO SIGN, GREEK SMALL LETTER MU, GREEK CAPITAL MU.
+    assert parse_capacitance_farads("4U7") == pytest.approx(4.7e-6)
+    assert parse_capacitance_farads("4\u00b57") == pytest.approx(4.7e-6)
+    assert parse_capacitance_farads("4\u03bc7") == pytest.approx(4.7e-6)
+    assert parse_capacitance_farads("4\u039c7") == pytest.approx(4.7e-6)
+    # The strings this parser read before keep their exact values: the suffix
+    # grammar names its unit and ends there, so the two grammars do not overlap.
+    assert parse_capacitance_farads("100nF") == pytest.approx(1e-7)
+    assert parse_capacitance_farads("0.1uF") == pytest.approx(1e-7)
+    assert parse_capacitance_farads("1mF") == pytest.approx(1e-3)
+
+
+def test_the_capacitance_mid_letter_notation_refuses_its_neighbours():
+    """``m``/``M`` is not one of this notation's letters, and 071's structural
+    refusals hold in the capacitor notation as they do in the resistance one.
+
+    A millifarad part is far enough outside the trade's vocabulary that the
+    tokens spelling it are pseudo-readings rather than values, which is why the
+    mid-letter ``m`` is out -- while ``1mF``, the unit spelled out in full, is
+    still the suffix grammar's. The other refusals are 071 §3②/§4 read across:
+    the notation is the whole field or it is not a reading of it, a letter with no
+    digit run in front of it states no value, a leading zero is not a significant
+    figure, and a digit run longer than three figures is not a mantissa whose tail
+    the notation can take (``4u700`` is not ``4u70``).
+
+    The last group is where this notation is narrower than the resistance side's,
+    and it is a **recorded gap rather than an oversight**: the fraction is
+    required, so ``100n`` -- which ``core/parts.quantity_slug`` calls the
+    schematic spelling of 100 nF, and which the shelf addresses a part by -- is
+    still unread. Reading it is not a regex question: a board declaring ``1n``
+    exists in this repo (the RC insert scenario of ``tests/test_036_subcircuit.py``),
+    and reading it makes a previously invisible RC pair a finding, which ``edit
+    apply``'s "a change may not add findings" gate then refuses to save. The
+    decision belongs to that gate; ``tasks/077-capacitance-infix.md`` §交卷
+    records the measurement for the next batch.
+    """
+    assert parse_capacitance_farads("4m7") is None
+    assert parse_capacitance_farads("4M7") is None
+    assert parse_capacitance_farads("1mF") == pytest.approx(1e-3)
+    # The notation is the whole field: a trailing letter is a character the
+    # reading does not cover, and a designator in front of it is not a value.
+    assert parse_capacitance_farads("4u7F") is None
+    assert parse_capacitance_farads("C4u7") is None
+    assert parse_capacitance_farads("4u7 ") == pytest.approx(4.7e-6)  # ...bar margin
+    # Grammar refusals, the same two as the resistance side's `0K1` / `4K700`.
+    assert parse_capacitance_farads("u7") is None
+    assert parse_capacitance_farads("0u1") is None
+    assert parse_capacitance_farads("4u700") is None
+    assert parse_capacitance_farads("12345u7") is None
+    # The recorded gap: a field with no fraction after the unit letter.
+    assert parse_capacitance_farads("100n") is None
+    assert parse_capacitance_farads("330u") is None
+    assert parse_capacitance_farads("22u") is None
+    assert parse_capacitance_farads("1n") is None
+    # The bare number without a unit is still refused (011's own rule): the
+    # mid-letter notation does not turn `100` into anything.
+    assert parse_capacitance_farads("100") is None
+
+
+def test_the_capacitance_notation_never_mines_a_part_number():
+    """A part number is not a capacitance, and two independent refusals hold it.
+
+    The three witnesses the design names are what a field of this notation would
+    otherwise spell: ``2N2222`` is a transistor and ``1N4148``/``2N7002`` are
+    its diode-shaped relatives, and the digits after their ``N`` run four long --
+    refused by the two-digit cap on the fraction, which is the resistance
+    notation's own cap (``4K70`` takes two digits, ``4K700`` none).
+
+    The second witness set is what the whole-field rule refuses: ``IRF540N`` and
+    ``CL10A225KA8NNNC`` hold a mid-letter group that does not cover the field
+    (``540N``, ``8N``), and a unit letter inside a string does not make the
+    string a capacitance -- ``250uA`` is a current and ``510nm`` a wavelength.
+    A reader that scanned for the notation anywhere in its input would take every
+    one of them, which is the reading 071 §4 turned off for the resistance side.
+
+    ``5n4`` at the end is the same figures as ``540n`` and it *is* read, so what
+    the assertions above pin is the shape and not a reader gone quiet.
+    """
+    for part_number in (
+        "2N2222", "1N4148", "2N7002", "1N4007", "2N5401", "1N5819",
+        "IRF540N", "CL10A225KA8NNNC", "DRV8313PWPR", "250uA", "510nm",
+    ):
+        assert parse_capacitance_farads(part_number) is None, part_number
+    # ...and the notation those part numbers resemble is read, so what the
+    # assertions above pin is the shape and not a reader gone quiet.
+    assert parse_capacitance_farads("2n2") == pytest.approx(2.2e-9)
+    assert parse_capacitance_farads("5n4") == pytest.approx(5.4e-9)
+
+
 def test_the_eia_decoder_decodes_in_the_callers_unit():
     assert decode_eia_3digit("471", 1.0) == pytest.approx(470.0)
     assert decode_eia_3digit("104", 1e-12) == pytest.approx(1e-7)
@@ -632,6 +745,33 @@ def test_decap_an_unknown_cap_value_is_unknown_not_ok():
     states = _states(DecapRequiredCaps(library=lib), model)
     u5 = [o for o in states["UNKNOWN"] if o.subject == "U5 pin5"]
     assert len(u5) == 1 and "C9" in u5[0].missing_fact
+
+
+def test_decap_a_cap_written_in_the_trade_notation_meets_its_requirement():
+    """The other consumer of the value field (issue #23).
+
+    This C9 is a capacitor the shelf knows by its C-number but whose MPN says no
+    value code, so the **board's own value** is the only thing that can establish
+    one. Written ``4u7`` it establishes nothing before this batch: the part still
+    counts as a capacitor (route 2 of ``looks_like_capacitor``), its value is
+    unreadable, and the row is UNKNOWN -- "a readable value for capacitor C9",
+    which is the same board saying "I cannot tell" about a value it can see.
+
+    With the reading in place the comparison happens and the pin is satisfied:
+    the board's 4.7 uF is not below the requirement's 1 uF, which is the
+    engineering meaning of the rule's comparison (``>=``).
+    """
+    lib = _library(_ldo_entry(), _uart_entry())
+    model = _golden_like_model(vcc_cap_value="4u7")
+    model.components["C9"].mpn = ""
+    model.components["C9"].lcsc_part = "C999"
+    lib.parts.append(PartEntry(
+        key="cap.c9", value="C9", mpn="C9-MPN", lcsc="C999",
+        category="capacitor"))
+    states = _states(DecapRequiredCaps(library=lib), model)
+    satisfied = [o for o in states["OK"] if o.subject == "U5 pin5"]
+    assert len(satisfied) == 1, states
+    assert not [o for o in states["UNKNOWN"] if o.subject == "U5 pin5"]
 
 
 def test_decap_components_without_facts_are_unknown():
@@ -1237,6 +1377,45 @@ def test_param3_an_rc_pair_reports_its_cutoff_as_info():
     assert not states["VIOLATION"]
     reported = [o for o in states["OK"] if "fc =" in o.message]
     assert len(reported) == 1 and reported[0].subject == "R1/C1"
+
+
+def test_param3_an_rc_pair_spelled_in_the_trade_notation_is_measured():
+    """Issue #23's reproduction, end to end: ``C1 = 4u7`` used to lose its pair.
+
+    Both halves of this network are the trade's spelling -- a ``10K`` resistor
+    and a ``4u7`` capacitor -- and the row this board produced before the
+    reading existed was the survey row: *"no resistor-to-ground capacitor pair
+    (RC low-pass topology) was found on this board"*. The topology was there;
+    the capacitor was invisible, because a part whose value the parser cannot
+    read never enters the rule's inventory. That sentence is gone, not kept as
+    an alternative branch: with the reading in place there is nothing left for
+    it to describe.
+
+    fc = 1/(2*pi*1k*4.7uF) = 33.86 Hz.
+    """
+    lib = _library(_ldo_entry())
+    model = DesignModel()
+    model.components["R1"] = Component(
+        uid="r1", designator="R1", value="1K",
+        pins=[Pin("1", "A", "SIG"), Pin("2", "B", "MID")])
+    model.components["C1"] = Component(
+        uid="c1", designator="C1", value="4u7",
+        pins=[Pin("1", "A", "MID"), Pin("2", "B", "GND")])
+    model.nets = {
+        "SIG": Net("SIG", [("R1", "1")]),
+        "MID": Net("MID", [("R1", "2"), ("C1", "1")]),
+        "GND": Net("GND", [("C1", "2")]),
+    }
+    rule = RcCutoff(library=lib)
+    states = _states(rule, model)
+    reported = [o for o in states["OK"] if "fc =" in o.message]
+    assert len(reported) == 1 and reported[0].subject == "R1/C1"
+    assert "fc = 34 Hz" in reported[0].message
+    # The evidence lines quote the field as the board spells it, so the reading
+    # the number rests on is visible in the row itself.
+    assert "C1 value '4u7'" in reported[0].evidence
+    # Pre-fix this board's only OK row was the survey sentence.
+    assert not [o for o in states["OK"] if "no resistor-to-ground" in o.message]
 
 
 def test_param3_no_rc_pair_is_reported_not_silent():
@@ -2017,3 +2196,41 @@ def test_027_the_cap_changes_no_token_it_does_not_cover(monkeypatch):
     monkeypatch.setattr(values, "_MAX_DECODED_CHARS", 10 ** 6)
     uncapped = {token: snapshot(token) for token in tokens}
     assert capped == uncapped
+
+
+# ------------------------------- issue #23: the capacitance mid-letter notation
+
+
+def test_023_the_capacitance_parser_reads_only_fields_that_state_a_value():
+    """The anchoring invariant over this repository's own corpus (071 §1 C).
+
+    This reader is handed a Value field, which states a value, and -- through the
+    same module -- whatever else a caller has, which may only *contain* one by
+    accident (a part number). What a corpus can pin is the property that keeps the
+    two apart: every string the parser reads is one of its two grammars **as the
+    whole field** -- the unit-suffix form or the trade's notation -- and never a
+    group mined out of a longer string.
+
+    Measured over the tokens below, 108 of them hold a mid-letter group that is
+    not a reading of the field: ``CL10A225KA8NNNC`` -> 8 nF, ``DRV8313PWPR`` ->
+    313 pF, ``250uA`` -> 250 uF, ``510nm`` -> 510 nF, ``IRF540N`` -> 540 nF. A
+    reader relaxed to a substring search reads every one of them; this corpus is
+    what says so, and it is the #18 batch's own harvest (deliberately dumber than
+    the decoder, so a string the reader refuses is still *in* it).
+    """
+    import re
+
+    suffix = re.compile(r"\d+(?:\.\d+)?\s*(?:pF|nF|uF|MF)", re.IGNORECASE)
+    notation = re.compile(r"\d+[unp\u00b5\u03bc]\d{1,2}", re.IGNORECASE)
+
+    tokens = _corpus_tokens()
+    assert len(tokens) > 1000, f"the corpus shrank to {len(tokens)} tokens"
+    read = sorted(t for t in tokens if parse_capacitance_farads(t) is not None)
+    # The corpus does read capacitor values (`100nF`, `22uF`, `1.2nF`), so
+    # "nothing is read" would be a reader gone quiet, not a pass.
+    assert len(read) >= 5, f"only {len(read)} token(s) readable: {read}"
+    outside = [t for t in read if not (suffix.fullmatch(t) or notation.fullmatch(t))]
+    assert outside == [], (
+        f"{len(outside)} token(s) read as a capacitance without being one of the "
+        f"two grammars as a whole field: {outside[:5]}"
+    )
