@@ -10,9 +10,10 @@ the digits look like".
   read by one module, because the rule that compares the two had one grammar
   for each side and the mid-letter spelling fell between them (issue #23).
 - :func:`parse_capacitance_farads` — board capacitor values (``100nF``,
-  ``0.1uF``, ``22pF``). A bare number without a unit is None: for capacitors
-  the convention-less number is ambiguous by two orders of magnitude and the
-  011 family exists because a guess got recorded as a fact.
+  ``0.1uF``, ``22pF``, and the trade's mid-letter ``4u7``/``2n2``/``5p1``). A
+  bare number without a unit is None: for capacitors the convention-less
+  number is ambiguous by two orders of magnitude and the 011 family exists
+  because a guess got recorded as a fact.
 - :func:`decode_eia_3digit` — the EIA three-digit value code (``471`` ->
   47x10^1). The *base unit depends on the part kind*: ohms for resistors,
   picofarads for capacitors, so the caller supplies the multiplier.
@@ -280,15 +281,34 @@ def _foreign_unit_code(token: str) -> bool:
 def parse_capacitance_farads(value: str) -> float | None:
     """Board capacitor value -> farads, with an explicit unit required.
 
+    Two grammars, tried in this order:
+
+    * the **unit suffix** an editor accepts: ``100nF``, ``0.1uF``, ``22pF``,
+      ``1mF`` (and the Greek-mu spellings, normalised below);
+    * the trade's **mid-letter** notation, the capacitor half of the one the
+      resistance side has read since 071: ``4u7`` = 4.7 µF, ``2n2`` = 2.2 nF,
+      ``5p1`` = 5.1 pF (issue #23). The defect it closes was not a wrong
+      number but a *silent* one -- a rule handed a value it cannot read skips
+      the part entirely, so a board writing ``4u7`` lost its ``param-rc-cutoff``
+      pair, while the same part spelled ``4.7uF`` was measured. Read by
+      :func:`_mid_letter_farads`, which requires the notation to span the field.
+
+    Every string the suffix grammar reads keeps its exact value: the two grammars
+    cannot overlap at all -- the suffix form names its unit and ends there
+    (``100nF``), while a mid-letter reading has to span the whole field, and a
+    trailing ``F`` is a character it does not cover (``4u7F`` is not this
+    notation).
+
     Two refusals come before the grammar: a first token longer than the cap is not
     read at all (issue #27), and a quantity that overflowed to a non-finite float
     is not a capacitance this can state (issue #31).
     """
     if not value or _too_long(value):
         return None
-    m = _CAP_RE.match(value.strip())
+    text = value.strip()
+    m = _CAP_RE.match(text)
     if m is None:
-        return None
+        return _mid_letter_farads(text)
     # GREEK SMALL LETTER MU (U+03BC) and MICRO SIGN (U+00B5) are one unit to a
     # reader and two code points to Python: ``_CAP_RE``'s ``re.IGNORECASE``
     # folds them together (both casefold to U+03BC), so ``22μF`` *matches* and
@@ -302,6 +322,94 @@ def parse_capacitance_farads(value: str) -> float | None:
     if factor is None:
         return None
     return _finite(float(m.group(1)) * factor)
+
+
+def _cap_spelling(text: str) -> str:
+    """``text`` with every micro spelling read as one letter (task 055's lesson).
+
+    MICRO SIGN (U+00B5), GREEK SMALL LETTER MU (U+03BC) and the GREEK CAPITAL
+    LETTER MU (U+039C) the two of them upper-case to are one unit to a reader and
+    three code points to Python, so :data:`_CAP_MID_LETTER_RE`'s
+    ``re.IGNORECASE`` matches all three. The reading they produce is spelled
+    ``U``; comparing it to the field as written would refuse ``4µ7`` -- a value
+    the scan has just read.
+    """
+    return (
+        text.replace("\u00b5", "u")
+        .replace("\u03bc", "u")
+        .replace("\u039c", "u")
+        .upper()
+    )
+
+
+#: The capacitance notation **as a whole field**: the digits of the mantissa, one
+#: unit letter, and the digits after it that carry the fraction (``4u7`` = 4.7 µF,
+#: ``2n2`` = 2.2 nF, ``5p1`` = 5.1 pF, ``4u70`` = 4.70 µF).
+#:
+#: It is written out here rather than left to the scan below because this is the
+#: shape question -- *is the field the notation* -- and the scan answers the
+#: different one, *what is it worth*. The two are not each other's spare tyre:
+#: every witness below is refused by the guard named, and by that one only.
+#:
+#: * this pattern owns the **anchoring** (``C4u7``: a designator in front of the
+#:   notation is not a value field) and the **presence** of a fraction;
+#: * the scan owns the fraction's **length** (``2N2222``: four digits after the
+#:   letter, the same cap the resistance notation puts on ``4K700``), the size-code
+#:   strip, the empty digit run and the leading zero (``12345u7``, ``0603u1``,
+#:   ``u7``, ``0u1``).
+#:
+#: The fraction is **required**, which is where this notation is narrower than the
+#: resistance side's: ``100n`` (the shelf's own slug spelling of 100 nF) and ``22u``
+#: are still unread, and that gap is recorded in ``tasks/077-capacitance-infix.md``
+#: rather than opened here -- a witness for it is a scenario whose board declares
+#: such a value, and the repo has one (``tests/test_036_subcircuit.py``'s RC insert
+#: declares ``1n``): reading it turns a previously invisible RC pair into a
+#: finding, which ``edit apply``'s own "a change may not add findings" gate then
+#: refuses to save. Widening is a decision about that gate, not about a regex.
+_CAP_NOTATION_FIELD_RE = re.compile(r"\d+[unp\u00b5\u03bc]\d+", re.IGNORECASE)
+
+
+def _mid_letter_farads(text: str) -> float | None:
+    """The mid-letter reading of a field written exactly that way, or None.
+
+    Anchoring, one quantity along from the resistance side's
+    (:func:`parse_resistance_ohms`): the notation has to span the field, so a
+    reading that covers only part of a longer string is not a reading of it. The
+    witnesses say why that is not pedantry -- a Value field and a part number are
+    read by the same module (:func:`_mid_letter_readings`), and a merchant part
+    number is full of mid-letter-shaped groups that are not values: ``2N2222`` is
+    a transistor whose ``2N2`` would read as 2.2 nF, ``1N4148`` a diode whose
+    ``1N4`` would read as 1.4 nF. What refuses those two is the scan's own cap on
+    the fraction -- four digits after the letter is the tail the resistance
+    notation refuses in ``4K700`` -- while the whole-field match below refuses
+    ``C4u7`` and ``540N``, which are not the notation at all. ``2n2`` is the
+    capacitance and ``2N2222`` is not a capacitor.
+
+    Two questions, in this order, and neither answers the other:
+
+    * **is the field the notation** (:data:`_CAP_NOTATION_FIELD_RE`, a whole-field
+      match) -- what is read has to *be* the field, not sit inside it, and the
+      field has to carry the digits after the letter;
+    * **what is it worth** -- the scan the resistance side uses
+      (:func:`_mid_letter_readings`), which owns the fraction's length, the
+      size-code strip, the mantissa's three figures and the meaning of the
+      fraction.
+
+    Its own refusal is ``vendor_prefix=False``: a Value field states the value and
+    nothing else, so the digit run in front of the unit letter is the mantissa
+    rather than a manufacturer's code. That is the resistance side's own rule,
+    ``47R`` reading as 47 Ω -- and it is why ``0u1`` states nothing here, as
+    ``0K1`` states nothing there.
+    """
+    if _CAP_NOTATION_FIELD_RE.fullmatch(text) is None:
+        return None  # not this notation as a whole field
+    readings = _mid_letter_readings(text, kind="capacitance", vendor_prefix=False)
+    if len(readings) != 1:
+        return None  # absent or ambiguous -- both are "cannot read"
+    farads, (text_read, _anchor) = next(iter(readings.items()))
+    if _cap_spelling(text_read) != _cap_spelling(text):
+        return None  # the reading does not cover the field's own figures
+    return _finite(farads)
 
 
 def decode_eia_3digit(code: str, base: float) -> float | None:
@@ -318,15 +426,41 @@ def decode_eia_3digit(code: str, base: float) -> float | None:
     return mantissa * (10.0 ** exponent) * base
 
 
-#: The trade's **mid-letter** resistance notation: the multiplier takes the place
-#: of the decimal point, ``4K7`` = 4.7 kΩ, ``4R7`` = 4.7 Ω, ``10K2`` = 10.2 kΩ,
-#: ``1M0`` = 1 MΩ. The letters and what they multiply by (uppercase ``M`` only:
-#: lowercase ``m`` is milli in some houses and mega in others, so it is refused).
+#: The trade's **mid-letter** notations: the multiplier takes the place of the
+#: decimal point. One notation per quantity, one scan over both
+#: (:func:`_mid_letter_readings`) -- "one verdict has one implementation" is the
+#: repository's rule (071 §2).
+#:
+#: * resistance — ``4K7`` = 4.7 kΩ, ``4R7`` = 4.7 Ω, ``10K2`` = 10.2 kΩ,
+#:   ``1M0`` = 1 MΩ. Uppercase ``M`` only: lowercase ``m`` is milli in some
+#:   houses and mega in others, so it is refused;
+#: * capacitance (issue #23) — ``4u7`` = 4.7 µF, ``2n2`` = 2.2 nF, ``5p1`` =
+#:   5.1 pF: ``u``/``n``/``p`` are the units the trade prints. ``m``/``M``
+#:   (``4m7`` = 4.7 mF) is refused, for a blunter reason than the resistance
+#:   letter: a millifarad part is far enough outside the vocabulary that the
+#:   tokens spelling it are pseudo-readings rather than values. The unit
+#:   spelled out in full is still read — ``1mF`` is the suffix grammar's, above.
+#:
+#: The micro letter has three code points (MICRO SIGN, GREEK SMALL LETTER MU,
+#: and the GREEK CAPITAL LETTER MU both upper-case to) and they are one unit
+#: (task 055); the scan matches all three, and :func:`_cap_spelling` is what a
+#: caller compares a field against.
 _MID_LETTER_BASE = {"R": 1.0, "K": 1e3, "M": 1e6}
+_CAP_MID_LETTER_BASE = {"U": 1e-6, "N": 1e-9, "P": 1e-12}
 
 #: ``<mantissa><letter><fraction>``, the mantissa being the digit run directly
 #: before the letter (a run longer than three digits contributes its last three).
 _MID_LETTER_RE = re.compile(r"(\d*)([RKM])(\d*)", re.IGNORECASE)
+_CAP_MID_LETTER_RE = re.compile(r"(\d*)([unp\u00b5\u03bc])(\d*)", re.IGNORECASE)
+
+#: The two notations in the one shape :func:`_mid_letter_readings` dispatches on:
+#: ``kind`` -> (scan, letters-and-multipliers). The scan spells its letters and
+#: the table says what they are worth, so the reading looks the letter up in the
+#: table of the notation it was scanned by.
+_MID_LETTER_KINDS = {
+    "resistance": (_MID_LETTER_RE, _MID_LETTER_BASE),
+    "capacitance": (_CAP_MID_LETTER_RE, _CAP_MID_LETTER_BASE),
+}
 
 
 def _without_leading_size(run: str) -> str:
@@ -348,19 +482,26 @@ def _without_leading_size(run: str) -> str:
 
 
 def _mid_letter_readings(
-    token: str, *, vendor_prefix: bool = True
+    token: str, *, vendor_prefix: bool = True, kind: str = "resistance"
 ) -> dict[float, tuple[str, str]]:
     """The trade's mid-letter readings inside ``token``: value -> (text, anchor).
 
-    The one implementation of the notation (071 §2): the board's Value field
-    (:func:`parse_resistance_ohms`) and a part number
+    The one implementation of the notations (071 §2), one scan per quantity
+    (:data:`_MID_LETTER_KINDS`): the board's Value field
+    (:func:`parse_resistance_ohms`, :func:`_mid_letter_farads`) and a part number
     (:func:`mpn_resistance_readings`) are read by the same scan, because a
     ``4K7`` typed into an editor and a ``4K7`` printed inside an MPN are one
-    grammar and "one verdict has one implementation" is the repository's rule.
-    One flag separates the two callers, and only one: ``vendor_prefix``. Inside
+    grammar and "one verdict has one implementation" is the repository's rule --
+    and a ``4u7`` is that notation read in the capacitor's unit (issue #23).
+    One flag separates the callers, and only one: ``vendor_prefix``. Inside
     an MPN the digits in front of the letter can be a manufacturer's code
     (``074K7``), so every suffix is a candidate; a Value field states the value
     and nothing else, so ``47R`` is 47 Ω and not 47 Ω or 7 Ω.
+
+    ``kind`` picks the notation: ``"resistance"`` (``R``/``K``/``M``) or
+    ``"capacitance"`` (``u``/``n``/``p`` and the micro spellings). Which letters
+    a notation holds and what each is worth is the whole of the difference
+    between them; every structural refusal below is one rule for both.
 
     The **longest** candidate is the notation as written and carries
     :data:`ANCHOR_MID_LETTER` (071 §1 C); the shorter ones are the vendor-prefix
@@ -376,21 +517,32 @@ def _mid_letter_readings(
       ``R71`` as 0.71 Ω, both of them the series-name letter followed by the
       series' own numbering (issues #25/#26). A letter right after a letter is
       the same case -- the digit run before it is empty by construction, since
-      ``_MID_LETTER_RE``'s first group is the *whole* run of digits the letter
-      follows.
+      the scan's first group is the *whole* run of digits the letter follows.
+
+    What this returns is a **reading**, not a verdict: it scans for the notation
+    wherever it sits in the token, and it is the caller that asks whether the
+    reading spans the field it was handed (:func:`parse_resistance_ohms`,
+    :func:`_mid_letter_farads`). That question is 071 §1 C's anchor in the
+    Value-field form, and it is what keeps a part number out of the capacitor
+    notation -- ``2N2222`` contains ``2N2``.
     """
+    scan, bases = _MID_LETTER_KINDS[kind]
     readings: dict[float, tuple[str, str]] = {}
-    for match in _MID_LETTER_RE.finditer(token):
+    for match in scan.finditer(token):
         run, raw_letter, fraction = match.group(1), match.group(2), match.group(3)
         if raw_letter == "m":
             continue  # lowercase m: milli in some houses, mega in others
         letter = raw_letter.upper()
+        if letter == "\u039c":
+            letter = "U"  # both micro spellings upper-case to the Greek capital
+        if letter not in bases:
+            continue  # the scan and its table are one whitelist, spelled twice
         if len(fraction) > 2:
             continue  # the shunt form (`R005`) and any longer tail
         run = _without_leading_size(run)
         if not run:
             continue  # no mantissa: a series name, or the size code alone
-        base = _MID_LETTER_BASE[letter]
+        base = bases[letter]
         trimmed = run[-3:]
         # Mantissa candidates: inside a part number every suffix of the digit
         # run that does not start with a zero ("074" -> "74", "4"), because a
@@ -408,7 +560,9 @@ def _mid_letter_readings(
             # unless it starts with a zero, which is not a significant figure in
             # either reading (`0K1` states nothing; the spellings that do start
             # that way, `0R5`/`0R01`, are the board grammar's and are read above
-            # it).
+            # it). In the capacitor notation the same refusal leaves `0u1`
+            # unread, and there the suffix grammar holds the spellings that do
+            # state the value (`0.1uF`, `100nF`).
             candidates = [] if trimmed.startswith("0") else [trimmed]
         for position, mantissa in enumerate(candidates):
             digits = mantissa + fraction
