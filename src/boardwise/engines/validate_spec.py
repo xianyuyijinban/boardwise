@@ -69,7 +69,7 @@ from typing import Any, Iterable
 from ..core.blocks import BoardSpec, BlockPort
 from ..core.parts import PartLibrary
 from ..core.pintable import PinTable
-from ..rules.values import parse_voltage_volts
+from ..core.values import parse_voltage_volts
 from .pintable_check import PinFinding, check_pin_table
 
 #: How a finding is to be read. ``violation`` and ``undecidable`` both block;
@@ -894,7 +894,7 @@ def _same_voltage(sink: str, source: str) -> bool:
     """True when a sink asks for the voltage a source provides.
 
     Both spellings are read as volts first, by the repository's one voltage
-    parser (:func:`boardwise.rules.values.parse_voltage_volts`), and compared as
+    parser (:func:`boardwise.core.values.parse_voltage_volts`), and compared as
     numbers. The question the gate is really asking is "same rail?", and a
     rail has one voltage however it is written: ``3V3`` and ``3.3V`` are the
     same 3.3 V, and the gate said they were not because it compared the strings

@@ -8,13 +8,21 @@ strictness levels (task 005):
 2. **net level** — net-name sets, then per-net member sets;
 3. **pin level** — the core: for common components, every pin's net mapping.
 
-Normalisation rules are fixed here on purpose (they are the contract):
+Normalisation rules are fixed here on purpose (they are the contract) — but the
+*implementation* of the value rule is not this module's own, it is the one value
+parser the repository has (071 §2, "one verdict has one implementation"):
 
 - **value**: case-insensitive; engineering-notation equality when both sides
-  parse unambiguously (``10k`` == ``10K`` == ``10000``). A lowercase ``m``
-  multiplier is treated as ambiguous (milli on a resistor, micro on old
-  capacitor markings) and forces degenerate string comparison; so does any
-  multi-token value (``472M 1KV`` never numerically equals ``472M``).
+  parse to the same quantity (``10k`` == ``10K`` == ``10000``), read by
+  :func:`boardwise.core.values.parse_resistance_ohms` /
+  :func:`~boardwise.core.values.parse_capacitance_farads` and compared with
+  :func:`math.isclose`, so the trade's mid-letter spelling is inherited
+  (``4K7`` == ``4700``, ``4u7`` == ``4.7uF``; issue #51) and ``0.1uF`` no
+  longer differs from ``100nF`` on a float's last bit (issue #39). The kind
+  travels with the number — ``100Ω`` and ``100nF`` are two parts, not one — and
+  a value neither parser reads (a multi-token ``472M 1KV``, ``22u``) degrades
+  to string comparison, which is 005's contract: unreadable is not the same as
+  equal, and a pass-by-silence here would clear a design that differs.
 - **designator / net name / pin number**: exact strings, case-sensitive
   (``1`` and ``01`` are different pins).
 - **footprint / lcsc**: exact strings after trimming.
@@ -28,11 +36,13 @@ property of this module — it belongs to the caller that needs it
 
 from __future__ import annotations
 
-import re
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
 from boardwise.core.model import DesignModel, Net
+
+from .values import parse_capacitance_farads, parse_resistance_ohms
 
 #: Difference levels, in report order.
 COMPONENT_LEVEL = "component"
@@ -155,76 +165,73 @@ class ComparisonReport:
 # value normalisation
 # --------------------------------------------------------------------------
 
-#: A single engineering quantity: number, optional SI prefix, optional unit.
-#: The prefix and unit are validated, not free-form, so ``472M 1KV`` (two
-#: tokens) never matches this pattern and degrades to string comparison.
-_QUANTITY_RE = re.compile(
-    r"^(?P<num>[0-9]*\.?[0-9]+)\s*(?P<prefix>[pnuµμkKMR]|meg)?\s*"
-    r"(?P<unit>Ω|ohm|Ohm|OHM|F|H)?$",
-)
 
-#: SI prefixes that are safe to interpret case-insensitively. Lowercase ``m``
-#: is deliberately absent: on resistors it would be milli, on older capacitor
-#: markings micro — the same string, two meanings four orders apart. A value
-#: that only parses with ``m`` is therefore ambiguous and degrades to string
-#: comparison instead of guessing.
-_UNAMBIGUOUS_PREFIXES: dict[str, float] = {
-    "p": 1e-12,
-    "n": 1e-9,
-    "u": 1e-6,
-    "µ": 1e-6,
-    "μ": 1e-6,
-    "k": 1e3,
-    "K": 1e3,
-    "M": 1e6,
-    "meg": 1e6,
-    "R": 1.0,  # resistor decimal marker: 4R7 == 4.7
-}
+def _quantity(text: str) -> tuple[str, float] | None:
+    """``(kind, amount)`` when ``text`` is a value this repository reads.
 
+    The parsing is delegated, not repeated: this module used to carry its own
+    grammar (``_QUANTITY_RE`` and friends) and that copy is what let two bugs
+    this repository had already fixed elsewhere reach the ``compare`` verdict —
+    it did not read the trade's mid-letter spelling (``4K7``, ``4u7``), so two
+    designs stating the *same* part were reported as different, and it decided
+    equality with ``==``, so ``0.1uF`` (``1e-07``) differed from ``100nF``
+    (``1.0000000000000001e-07``). Issues #23 and #39 fixed the authoritative
+    parsers; compare was the copy that did not get the news (issue #51,
+    071 §2 "one verdict has one implementation").
 
-#: The resistor decimal marker: ``4R7`` means 4.7 Ω — the R *is* the decimal
-#: point, so it is handled before the general quantity pattern.
-_RESISTOR_R_RE = re.compile(r"^(?P<int>[0-9]+)R(?P<frac>[0-9]+)$")
+    The kind travels with the number, as it does in
+    :func:`boardwise.engines.bom._quantity` — the two grammars do not share a
+    unit, and ``100Ω`` next to ``100nF`` is two different parts, not one value
+    spelled two ways.
 
-
-def _parse_quantity(text: str) -> float | None:
-    """Parse one engineering quantity to a plain number, or ``None``.
-
-    Returns ``None`` for anything ambiguous or multi-token — the caller then
-    falls back to string comparison. See the module docstring for the rules
-    and the ``472M`` capacitor trap.
+    The parsers are imported at module level from the sibling
+    :mod:`boardwise.core.values`, which is where they live since 083 moved them
+    down out of ``rules/``. A sibling import cannot cycle, so there is nothing
+    here to defer: the deferred-import shape 081 used in this package was for
+    a *different* layer, and the layering test (``tests/test_layer_rules.py``)
+    reads imports at any depth anyway.
     """
-    stripped = text.strip()
-    if not stripped or any(ch.isspace() for ch in stripped):
-        return None
-    r_match = _RESISTOR_R_RE.match(stripped)
-    if r_match:
-        return float(f"{r_match.group('int')}.{r_match.group('frac')}")
-    match = _QUANTITY_RE.match(stripped)
-    if match is None:
-        return None
-    prefix = match.group("prefix")
-    number = float(match.group("num"))
-    if prefix is None:
-        return number
-    multiplier = _UNAMBIGUOUS_PREFIXES.get(prefix)
-    if multiplier is None:
-        return None  # ambiguous prefix (lowercase m): refuse to guess
-    return number * multiplier
+    ohms = parse_resistance_ohms(text)
+    if ohms is not None:
+        return "resistance", ohms
+    farads = parse_capacitance_farads(text)
+    if farads is not None:
+        return "capacitance", farads
+    return None
 
 
 def values_equal(golden: str, candidate: str) -> bool:
-    """Compare two component values under the task-005 normalisation rules."""
+    """Compare two component values under the task-005 normalisation rules.
+
+    Three steps, in this order, and the order is the contract:
+
+    1. the same string is the same value;
+    2. the same string case-folded is the same value (``10k`` / ``10K``) — bom's
+       comparison has no such step, but compare's does, so it stays;
+    3. both sides read as the *same kind* of quantity → they are the same value
+       when :func:`math.isclose` says so, with a relative tolerance because
+       ``0.1uF`` and ``100nF`` are one part whose two spellings differ in the
+       last bit of a float (issue #39).
+
+    Anything else is not equal. A value the parsers cannot read — a multi-token
+    ``472M 1KV``, a unit-less ``22u``, a bare ``10H`` — falls through to the
+    string comparison that already said "not equal", which is 005's refusal to
+    guess. Note what step 3 does *not* have to do: it no longer needs a list of
+    prefixes too ambiguous to trust. A lowercase ``m`` used to be blacklisted
+    because the same string means milli on a resistor and micro on an old
+    capacitor marking; the dispatch above settles it structurally, because
+    ``parse_capacitance_farads`` refuses a value with no farad unit, so ``10m``
+    is 10 milliohms and only that.
+    """
     g = (golden or "").strip()
     c = (candidate or "").strip()
     if g == c:
         return True
     if g.lower() == c.lower():
         return True  # case-insensitive equality, e.g. ``10k`` vs ``10K``
-    g_num = _parse_quantity(g)
-    c_num = _parse_quantity(c)
-    if g_num is not None and c_num is not None:
-        return g_num == c_num
+    left, right = _quantity(g), _quantity(c)
+    if left is not None and right is not None and left[0] == right[0]:
+        return math.isclose(left[1], right[1], rel_tol=1e-9)
     return False  # degenerate: string comparison already said "not equal"
 
 
