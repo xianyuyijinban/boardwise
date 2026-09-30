@@ -128,7 +128,7 @@ def refused_conclusions(model: object) -> int:
     kept apart on purpose:
 
     * ``rulesRefused`` (the existing field) is the **length of the registry**:
-      "how many rules are capable of refusing a net-shaped judgement" — 7 on every
+      "how many rules are capable of refusing a net-shaped judgement" — 9 on every
       per-page reading, whether or not one of them had anything to refuse.
     * this counts **instances**: one per `(rule, subject)` whose UNKNOWN outcome
       names :data:`UNPROVEN_BY_NAME` as the fact it is missing — the verdicts this
@@ -137,7 +137,7 @@ def refused_conclusions(model: object) -> int:
     Zero by construction for every reading but the per-page tier, and the rule walk
     is skipped entirely there: a refusal is scoped to names the merge welded blind
     (``DesignModel.unproven_nets``), so a model with no such name cannot withhold
-    anything — and running the seven rules' outcome walks is not free (each loads
+    anything — and running the listed rules' outcome walks is not free (each loads
     the shelf).
     """
     from ..core.model import ProjectModel

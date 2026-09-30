@@ -43,8 +43,16 @@ no unproven names at all and behaves exactly as it did before issue #19.
 **Which rules these are** is a *list*, not a search: :data:`NET_MEMBERSHIP_RULES`
 holds the ids of every rule whose conclusion depends on which other parts sit on
 a net. It is what the report's tier note counts ("N rules refuse"), and
-``tests/test_checkup_cli.py`` guards it against drift in both directions — an id
-in the list that is not a built-in rule, and a listed rule that stops refusing.
+``tests/test_checkup_cli.py`` guards it in **both** directions, which 076 made
+mechanical rather than claimed:
+
+* an id that is not a built-in rule, or a duplicate, fails
+  ``test_every_rule_the_tier_refuses_on_is_a_builtin_rule``;
+* and ``test_no_listed_rule_concludes_on_a_board_whose_every_net_is_welded``
+  gives **every** listed id a board of its own (``_registry_case``, which raises
+  on an id it has no recipe for) with every net unproven, and asserts the rule
+  concludes nothing *and* refuses at least one row — so "a listed rule that
+  stops refusing" is a failing test rather than a sentence here.
 """
 
 from __future__ import annotations
@@ -65,18 +73,38 @@ UNPROVEN_BY_NAME = "agreement by name is not a verified connection"
 #: makes:
 #:
 #: * the cooperating part on the net — ``decap-required-caps`` (a capacitor),
-#:   ``conn-usb-cc-pulldown`` (a resistor), ``param-divider-output`` (a load);
+#:   ``conn-usb-cc-pulldown`` (a resistor), ``param-divider-output`` (a load),
+#:   ``param-led-current`` (the LED's series resistance), ``param-rc-cutoff``
+#:   (the resistor's partner capacitor);
 #: * the pin's **company** — ``conn-nc-and-must-connect`` ("alone on this net" and
 #:   "shares it with another pin" are the same reading, one netlist over);
 #: * the net's **voltage**, which the domain inference takes from an LDO's output
 #:   pin wherever it is — ``pwr-supply-on-known-domain``, ``pwr-domain-vs-range``,
 #:   ``path-ldo-dropout``.
 #:
+#: The two parameter rules joined the list in 076, and their absence before that
+#: was a **misreading of their own code**: they print one part's values, but both
+#: *find their partner* by sharing a net with it — ``param-rc-cutoff`` pairs a
+#: resistor with a capacitor that shares a non-ground net and is grounded,
+#: ``param-led-current`` adopts every resistance sharing a net with the LED and
+#: reads the window's voltage off that resistor's far net. A welded name hands
+#: each of them the other board's part, so both are net-shaped rules in the sense
+#: this list means. What each one reads, exactly:
+#:
+#: * ``param-led-current`` — the nets the LED and a candidate resistor share
+#:   (ground included when that is where they meet: the rule reads that net's
+#:   pins like any other), plus the net whose voltage the window is judged in;
+#: * ``param-rc-cutoff`` — the non-ground net the pair shares (that filter is the
+#:   rule's own, not this list's). The resistor's far net is never read, and the
+#:   capacitor's ground side is read **by name** (:func:`is_ground_net`), never by
+#:   membership — which also matters practically: a ground name is on every page
+#:   of a multi-sheet board, so refusing on it would refuse every RC pair there.
+#:
 #: The rules that are **not** here, and why: ``conn-duplicate-designators`` reads
 #: names, ``conn-library-pin-consistency`` reads one part's pins against the
-#: library symbol, and ``param-led-current`` / ``param-rc-cutoff`` /
-#: ``param-value-mpn-match`` read one part's own values. None of them asks "what
-#: else is on this net", so a welded netlist cannot move their verdicts.
+#: library symbol, and ``param-value-mpn-match`` reads one part's own board value
+#: against its own MPN. None of them asks "what else is on this net", so a welded
+#: netlist cannot move their verdicts.
 #:
 #: The two L1 heuristics that *do* ask (`xtal-load-caps`, `shunt-sense-link`) are
 #: missing on purpose, and it is a declared gap rather than an oversight: both are
@@ -90,6 +118,8 @@ NET_MEMBERSHIP_RULES: tuple[str, ...] = (
     "conn-usb-cc-pulldown",
     "decap-required-caps",
     "param-divider-output",
+    "param-led-current",
+    "param-rc-cutoff",
     "path-ldo-dropout",
     "pwr-domain-vs-range",
     "pwr-supply-on-known-domain",
