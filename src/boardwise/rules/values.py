@@ -503,10 +503,15 @@ def _mid_letter_readings(
     a notation holds and what each is worth is the whole of the difference
     between them; every structural refusal below is one rule for both.
 
-    The **longest** candidate is the notation as written and carries
-    :data:`ANCHOR_MID_LETTER` (071 §1 C); the shorter ones are the vendor-prefix
-    guesses and carry none -- by construction at most one of them is right, so a
-    verdict may not rest on one of them.
+    The **located** candidate carries :data:`ANCHOR_MID_LETTER` (071 §1 C): the
+    one read off a run the size code was stripped off, so that run *is* the
+    value field (``CRCW0603``10``K0``). A run that came through the strip
+    untouched was never located -- ``RL0805FR-070R1L``'s ``07`` is a date code,
+    not a size -- so every reading off it is a vendor-prefix guess and carries
+    none (078 A1, issue #32). All of them are still returned: 046's "both
+    readings are legitimate" and the amplitude waiver do not need an anchor, and
+    dropping the right reading is what turns a correct board into a violation.
+    The anchor only decides who is allowed to *accuse*.
 
     Two refusals are grammar, not vendor shapes (071 §3②/§4):
 
@@ -539,9 +544,13 @@ def _mid_letter_readings(
             continue  # the scan and its table are one whitelist, spelled twice
         if len(fraction) > 2:
             continue  # the shunt form (`R005`) and any longer tail
-        run = _without_leading_size(run)
-        if not run:
+        located_run = _without_leading_size(run)
+        if not located_run:
             continue  # no mantissa: a series name, or the size code alone
+        # 078 A1: did the strip *locate* the value segment? Only a run the size
+        # code came off is one -- see the anchor line below.
+        located = len(located_run) < len(run)
+        run = located_run
         base = bases[letter]
         trimmed = run[-3:]
         # Mantissa candidates: inside a part number every suffix of the digit
@@ -555,6 +564,23 @@ def _mid_letter_readings(
                 for index in range(len(trimmed))
                 if not trimmed[index:].startswith("0")
             ]
+            # 078 A2: a tail that is exactly one ``0`` is no mantissa in either
+            # reading, but in front of the resistance notation's own ``R`` it is
+            # the board's spelling of a sub-ohm value. Yageo's date code is what
+            # puts a value's zero head inside the run (``RL0805FR-070R1L``'s
+            # ``07``), so refusing the ``0`` refused the part's real value --
+            # 0.1 Ω was absent from the readings while its date code's 70.1 Ω
+            # sat there alone and took the blame for a correctly written board
+            # (issue #32). One letter, one shape: ``0K1``/``0u1`` and the
+            # capacitor side stay refused (the value grammar owns those
+            # spellings, as the comment below says), and ``R`` with three
+            # digits is refused above, before this line.
+            if letter == "R":
+                candidates.extend(
+                    trimmed[index:]
+                    for index in range(len(trimmed))
+                    if trimmed[index:] == "0"
+                )
         else:
             # No vendor prefix to guess at, so the run itself is the mantissa --
             # unless it starts with a zero, which is not a significant figure in
@@ -571,7 +597,11 @@ def _mid_letter_readings(
             value = int(digits) / (10 ** len(fraction)) * base
             if value <= 0:
                 continue
-            anchor = ANCHOR_MID_LETTER if position == 0 else ""
+            anchor = (
+                ANCHOR_MID_LETTER
+                if located and position == 0
+                else ""  # 078 A1: see the note at the strip
+            )
             readings.setdefault(value, (f"{mantissa}{letter}{fraction}", anchor))
     return readings
 

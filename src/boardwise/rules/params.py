@@ -195,9 +195,14 @@ def _closest_reading(
     carries the other readings as evidence so the choice is visible.
 
     The anchor travels with the chosen candidate (071 §1 C): which reading a
-    contradiction rests on decides whether the rule may accuse at all, and
-    ``074K7``'s two readings differ in exactly that (the whole run is the
-    notation, the suffix is the vendor-prefix guess).
+    contradiction rests on decides whether the rule may accuse at all. Since 078
+    A1 that anchor belongs to a **located** value segment -- one the package-size
+    strip actually took content off (``CRCW0603``10``K0``FKEA``) -- and to
+    nothing else, so ``074K7``'s two readings now carry none between them: a
+    Yageo date code in front of ``4K7`` is not a size, the run was never
+    located, and ``74K7`` may no longer accuse on its own (issue #32). Which
+    reading is *closest* is a separate question and this is still how it is
+    answered.
 
     A value the parser could not read (``None``), a non-positive one, or a
     non-finite one has no distance to anything: the smallest reading is used, and
