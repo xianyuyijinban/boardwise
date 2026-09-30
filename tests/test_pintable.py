@@ -8,7 +8,9 @@ The rules this file pins, in the order they matter:
 * one pin number, one row ("one pin under two names" negative case);
 * the two-way difference against the spec: firmware uses a pin the schematic
   does not connect ⇒ **defect**; the schematic connects a signal port the
-  firmware never names ⇒ **open question**, listed but not blocking;
+  firmware never names ⇒ **open question**, listed but not blocking. Both
+  directions compare at **pin level**: a net name both sides carry is not
+  agreement when they mean different balls (issue #35);
 * ``.ioc`` is the baseline, and a disagreement between it and the firmware is
   **reported, never resolved** — neither side is believed silently.
 
@@ -293,6 +295,59 @@ def test_a_spec_port_the_firmware_never_uses_is_an_open_question_not_a_defect():
     assert questions[0].kind == OPEN_QUESTION
     assert "PB6" in questions[0].message
     assert "never uses it" in questions[0].message
+
+
+# --------------------------------------------------------------------------
+# gate 3, at pin level: the same net name on two different balls (issue #35)
+# --------------------------------------------------------------------------
+
+
+def test_the_same_net_on_another_ball_is_a_defect():
+    """The issue's shape: the spec wires PA3 to SPI1_SCK, the firmware PB6.
+
+    Comparing net names alone called this agreement — the net is in the spec,
+    so it was counted as matched — while the two sides name different balls, so
+    nothing about the board is agreed.
+    """
+    tmpl = mcu_template("PA3", "PB6")
+    spec = spec_connecting(tmpl, ("SPI1_SCK", "PA3"))
+    pintable = table(("PB6", "SPI_SCK", "SPI1_SCK"))
+    report = check_pin_table(pintable, spec=spec, mcu_block_id="mcu")
+    assert not report.ok
+    unwired = [f for f in report.defects if f.rule == "spec-difference"]
+    assert len(unwired) == 1
+    assert "PB6" in unwired[0].message and "PA3" in unwired[0].message
+    assert "schematic does not wire" in unwired[0].message
+    assert report.matched_nets == 0, "a net whose ball disagrees is not matched"
+
+
+def test_the_same_net_on_the_same_ball_still_passes():
+    tmpl = mcu_template("PA3", "PB6")
+    spec = spec_connecting(tmpl, ("SPI1_SCK", "PA3"))
+    pintable = table(("PA3", "SPI_SCK", "SPI1_SCK"))
+    report = check_pin_table(pintable, spec=spec, mcu_block_id="mcu")
+    assert report.ok, [f.render() for f in report.findings]
+    assert report.matched_nets == 1
+
+
+def test_a_spec_net_the_firmware_uses_on_another_net_is_a_defect():
+    """The other half of the same rule: PA3 is on two nets, one of them the firmware's.
+
+    Direction 1 already refuses the firmware's own net (PA3 is not on the ball
+    the spec wires to SPI1_MISO); direction 2 must not read the schematic's
+    SPI1_SCK as "a pin the firmware has not grown into" either, because the
+    firmware *has* grown into that ball — on a different net.
+    """
+    tmpl = mcu_template("PA3", "PB6")
+    spec = spec_connecting(tmpl, ("SPI1_SCK", "PA3"), ("SPI1_MISO", "PB6"))
+    pintable = table(("PA3", "SPI_SCK", "SPI1_MISO"))
+    report = check_pin_table(pintable, spec=spec, mcu_block_id="mcu")
+    assert not report.ok
+    doubled = [f for f in report.defects if "one ball cannot be on two nets" in f.message]
+    assert len(doubled) == 1
+    assert "SPI1_SCK" in doubled[0].message and "PA3" in doubled[0].message
+    assert "SPI1_MISO" in doubled[0].message
+    assert not report.open_questions, "a ball on two nets is not a board ahead of its firmware"
 
 
 def test_the_matched_nets_are_counted():

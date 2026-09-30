@@ -6,7 +6,8 @@ The rules this file pins, in the order they matter:
   binding that resolves to nothing is an open question rather than a choice;
 * a part with no binding at all is *named* in that list — a BOM that quietly
   omits a part is worse than no BOM;
-* one C-number carrying two values is a defect and prints neither value;
+* one C-number carrying two values is a defect and prints neither value — but
+  two *spellings* of one value (``100nF`` and ``0.1uF``) are not two values;
 * the designators in the file are the **page** designators, so a board that
   places one block twice gets one row with both instances' refs.
 """
@@ -17,6 +18,8 @@ import csv
 import io
 import json
 from pathlib import Path
+
+import pytest
 
 from boardwise.core.blocks import BlockInstance, BoardSpec, template_from_json
 from boardwise.core.parts import PartLibrary
@@ -196,6 +199,95 @@ def test_two_values_for_one_c_number_print_neither():
     assert any("two components carry different values" in question for question in report.open_questions)
     assert report.rows[0].comment == "", "the export picked one of the two values"
     assert report.rows[0].quantity == 2, "the part is still placed; only its value is unclear"
+
+
+def test_220nF_against_100nF_is_still_a_conflict():
+    library = PartLibrary(parts=[part("cap.100n_0402", "C1525")])
+    spec = spec_with(
+        instance(
+            "a",
+            template(
+                component("C1", lcsc="C1525", value_param="v1"),
+                component("C2", lcsc="C1525", value_param="v2"),
+                params=[
+                    {"name": "v1", "role": "a", "default": "100nF",
+                     "constraint": "capacitor_value", "provenance": "hand"},
+                    {"name": "v2", "role": "b", "default": "220nF",
+                     "constraint": "capacitor_value", "provenance": "hand"},
+                ],
+            ),
+        )
+    )
+    report = build_bom(spec, library)
+    assert not report.ok, "two capacitances are two values, however they are written"
+    assert report.rows[0].comment == ""
+
+
+@pytest.mark.parametrize(
+    "first,second",
+    [
+        ("100nF", "0.1uF"),  # the issue's pair
+        ("100nF", "100NF"),  # only the case differs
+        ("4u7", "4.7uF"),  # the trade's mid-letter spelling
+        ("5.1k", "5.1K"),  # the same, on the resistance side
+        ("10uF", "0.01mF"),  # a decade apart, same quantity
+    ],
+)
+def test_two_spellings_of_one_value_are_not_a_conflict(first, second):
+    """One C-number, one value, two ways of writing it (issue #39).
+
+    Calling this a disagreement cleared the Comment of a row the boards agree
+    on and made the export exit 1 — the export refusing a BOM because two
+    people spelled 100 nF differently.
+    """
+    library = PartLibrary(parts=[part("cap.100n_0402", "C1525")])
+    spec = spec_with(
+        instance(
+            "a",
+            template(
+                component("C1", lcsc="C1525", value_param="v1"),
+                component("C2", lcsc="C1525", value_param="v2"),
+                params=[
+                    {"name": "v1", "role": "a", "default": first,
+                     "constraint": "free_text", "provenance": "hand"},
+                    {"name": "v2", "role": "b", "default": second,
+                     "constraint": "free_text", "provenance": "hand"},
+                ],
+            ),
+        )
+    )
+    report = build_bom(spec, library)
+    assert report.ok, report.open_questions
+    assert report.open_questions == []
+    row = report.rows[0]
+    assert row.quantity == 2 and row.comment == first, "the first spelling is what the row prints"
+
+
+def test_a_value_nobody_can_read_is_compared_as_written():
+    """Undecodable is not the same as equal: the old verdict has to survive.
+
+    Nothing here may let a disagreement through because no parser read it.
+    """
+    library = PartLibrary(parts=[part("conn.01x02", "C124378")])
+    spec = spec_with(
+        instance(
+            "a",
+            template(
+                component("J1", lcsc="C124378", value_param="v1"),
+                component("J2", lcsc="C124378", value_param="v2"),
+                params=[
+                    {"name": "v1", "role": "a", "default": "CONN_A",
+                     "constraint": "free_text", "provenance": "hand"},
+                    {"name": "v2", "role": "b", "default": "CONN_B",
+                     "constraint": "free_text", "provenance": "hand"},
+                ],
+            ),
+        )
+    )
+    report = build_bom(spec, library)
+    assert not report.ok
+    assert any("two components carry different values" in q for q in report.open_questions)
+    assert report.rows[0].comment == ""
 
 
 def test_the_designators_are_the_page_designators_not_the_template_refs():

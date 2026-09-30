@@ -5,7 +5,8 @@ ignores is a field the writer thinks is doing something. These tests pin the
 three rules that make that true — unknown keys are an error, an unknown
 constraint is an error, and a parameter's value is checked against its
 constraint at every place it can enter (the template's default and the spec's
-assignment).
+assignment) — and a fourth that makes an error actionable: a field of the wrong
+shape is refused by name, never by a traceback out of the reader.
 """
 
 from __future__ import annotations
@@ -187,6 +188,62 @@ def test_a_pin_must_belong_to_its_symbol():
     body["components"][0]["pins"].append({"number": "9", "name": "x", "net": "IN"})
     with pytest.raises(BlockError, match="has no offset"):
         template_from_json(body)
+
+
+@pytest.mark.parametrize(
+    "setter,path",
+    [
+        (lambda body: body["symbols"]["sym1"].__setitem__("offsets", [["1", [0.0, 0.0]]]),
+         "symbols[sym1].offsets"),
+        (lambda body: body["symbols"]["sym1"].__setitem__("pin_names", [["1", "a"]]),
+         "symbols[sym1].pin_names"),
+        (lambda body: body["components"][0].__setitem__("params", [["value", "r1_value"]]),
+         "components[0].params"),
+    ],
+    ids=["offsets", "pin_names", "params"],
+)
+def test_a_mapping_field_written_as_a_list_names_itself(setter, path):
+    """A malformed field is refused as a `BlockError` that names it (#37).
+
+    These three were read as ``(x or {}).items()``, so a non-empty list came out
+    of the reader as a bare `AttributeError` — no field name, no file, and a
+    stack trace where a schema violation belongs.
+    """
+    body = minimal_template()
+    setter(body)
+    with pytest.raises(BlockError) as caught:
+        template_from_json(body)
+    message = str(caught.value)
+    assert f"{path}: expected an object" in message, message
+
+
+@pytest.mark.parametrize(
+    "setter,path",
+    [
+        (lambda spec: spec.__setitem__("param_evidence", [["usb.r24_value", ["intent"]]]),
+         "param_evidence"),
+        (lambda spec: spec.__setitem__("params", [["usb.r24_value", "5.1K"]]), "params"),
+        (lambda spec: spec.__setitem__("sheet", {"attrs": [["page", "1"]]}), "sheet.attrs"),
+    ],
+    ids=["param_evidence", "params", "sheet.attrs"],
+)
+def test_a_spec_mapping_field_written_as_a_list_names_itself(setter, path):
+    """The same three fields on the board-spec side, closed out with the family.
+
+    The spec reader resolves ``../blocks/*.json`` relative to the spec file, so a
+    malformed copy has to sit beside the committed one for its blocks to load at
+    all — which is where this file's other spec-error tests put theirs.
+    """
+    raw = json.loads(SPEC.read_text(encoding="utf-8"))
+    setter(raw)
+    bad = SPEC.parent / "_bad_shape.json"
+    try:
+        bad.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+        with pytest.raises(BlockError) as caught:
+            load_board_spec(bad)
+    finally:
+        bad.unlink(missing_ok=True)
+    assert f"{path}: expected an object" in str(caught.value)
 
 
 def test_net_class_is_derived_from_the_board_not_from_the_name():

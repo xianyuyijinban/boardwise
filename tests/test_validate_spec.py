@@ -810,7 +810,11 @@ def test_a_spec_without_a_ledger_is_still_a_product_spec(tmp_path):
 
 
 def mcu_spec(tmp_path: Path, *, mcu_pins=("PA1", "PA2"), connections=None, blocks=("mcu",)):
-    templates = {"ic.testmcu": template_body("ic.testmcu", [port("A"), port("B")], pins=mcu_pins)}
+    # The ports are named after the balls they carry, not "A"/"B": since 080 (#35)
+    # gate 3 compares the firmware's pin numbers against the block's port roles,
+    # so a role that is not a pin name would read as "the schematic wires some
+    # other ball to this net" and fail every agreeing fixture.
+    templates = {"ic.testmcu": template_body("ic.testmcu", [port("PA1"), port("PA2")], pins=mcu_pins)}
     return build(
         tmp_path,
         spec_json(
@@ -858,7 +862,7 @@ def test_asking_for_more_pins_than_the_symbol_has_is_refused(tmp_path):
         tmp_path,
         mcu_pins=("PA1",),
         connections=[
-            {"net": "N1", "ports": [["mcu", "A"], ["mcu", "B"]], "evidence": ["intent"]}
+            {"net": "N1", "ports": [["mcu", "PA1"], ["mcu", "PA2"]], "evidence": ["intent"]}
         ],
     )
     report = validate_spec(spec, target="some_board.epro2", table=pin_table(("PA1", "GPIO", "N1")))
@@ -874,14 +878,14 @@ def test_two_instances_of_the_mcu_template_are_ambiguous(tmp_path):
             {"id": "mcu2", "template": "ic.testmcu", "at": [0.0, 0.0], "evidence": ["intent"]},
         ],
         connections=[
-            {"net": "N1", "ports": [["mcu1", "A"], ["mcu2", "B"]], "evidence": ["intent"]},
+            {"net": "N1", "ports": [["mcu1", "PA1"], ["mcu2", "PA2"]], "evidence": ["intent"]},
         ],
         references=[reference("intent", "intent", path="intent.md")],
     )
     spec = build(
         tmp_path,
         raw,
-        {"ic.testmcu": template_body("ic.testmcu", [port("A"), port("B")], pins=("PA1",))},
+        {"ic.testmcu": template_body("ic.testmcu", [port("PA1"), port("PA2")], pins=("PA1",))},
     )
     report = validate_spec(spec, target="some_board.epro2", table=pin_table(("PA1", "GPIO", "N1")))
     assert report.gate("pin-budget").status == UNDECIDABLE_GATE
@@ -903,7 +907,7 @@ def test_a_pin_table_that_agrees_with_the_spec_passes(tmp_path):
     spec = mcu_spec(
         tmp_path,
         connections=[
-            {"net": "LED1", "ports": [["mcu", "A"], ["mcu", "B"]], "evidence": ["intent"]}
+            {"net": "LED1", "ports": [["mcu", "PA1"], ["mcu", "PA2"]], "evidence": ["intent"]}
         ],
     )
     table = pin_table(("PA1", "GPIO", "LED1"))
