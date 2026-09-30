@@ -21,8 +21,10 @@ Three rules, and the second one is the point of the whole module:
    current" and touches nothing — no rewrite, no new backup file.
 2. **Never silently overwrite.** A different file already at the destination is
    *somebody's* file — an older install, or a hand edit — so it is copied to
-   ``SKILL.md.bak-<date>`` before the new one lands, and the backup's path is
-   reported. On a friend's machine the alternative is losing an edit with no
+   ``SKILL.md.bak-<YYYYMMDD-HHMMSS>`` before the new one lands, and the backup's
+   path is reported. The stamp has a time part and an existing backup is never
+   overwritten, so two installs on one day each leave their own file behind
+   (#40). On a friend's machine the alternative is losing an edit with no
    trace, which is the failure this rule exists to prevent.
 3. **Total on the filesystem.** A destination that cannot be read, written or
    removed raises :class:`SkillInstallError` with the path and the OS message;
@@ -37,7 +39,7 @@ from __future__ import annotations
 import os
 import shutil
 from dataclasses import dataclass
-from datetime import date
+from datetime import datetime
 from pathlib import Path
 
 #: The agent harnesses that read a user-level SKILL.md, in the order every run
@@ -67,6 +69,11 @@ SKILL_HOME_ENVS: dict[str, str] = {
 
 #: The file name the user-level skill is expected to have.
 SKILL_NAME = "SKILL.md"
+
+# Backup stamps carry a time part (#40): a date-only stamp made two installs on
+# the same day write the same backup name, so the second one silently displaced
+# the first. Seconds are still not uniqueness — the retry suffix below is.
+_STAMP_FORMAT = "%Y%m%d-%H%M%S"
 
 
 class SkillInstallError(RuntimeError):
@@ -245,12 +252,30 @@ def skill_statuses(source: Path) -> tuple[SkillStatus, ...]:
     return tuple(statuses)
 
 
+def _free_backup_path(destination: Path, now: str | None) -> Path:
+    """A backup path for ``destination`` that no backup already occupies.
+
+    The clock is a parameter so tests get a deterministic name; in the field it
+    is the current time down to the second. Two installs inside the same second
+    are still the same name, so an occupied name gets a ``-2``/``-3`` suffix
+    rather than being overwritten — "never silently overwrite" covers the
+    backups too, and they are the only record of a hand-edited SKILL.md.
+    """
+    stamp = now or datetime.now().strftime(_STAMP_FORMAT)
+    candidate = destination.with_name(f"{SKILL_NAME}.bak-{stamp}")
+    suffix = 1
+    while candidate.exists():
+        suffix += 1
+        candidate = destination.with_name(f"{SKILL_NAME}.bak-{stamp}-{suffix}")
+    return candidate
+
+
 def install(
     source: Path,
     home: Path | None = None,
     *,
     harness: str = "kimi",
-    today: str | None = None,
+    now: str | None = None,
 ) -> InstallOutcome:
     """Put ``source`` at ``harness``'s user-level SKILL.md, backing up any different file.
 
@@ -259,11 +284,10 @@ def install(
     calls this twice — one destination per call is what makes the CLI's exit code
     able to say *which* side failed.
 
-    ``today`` (``YYYY-MM-DD``) is injectable so the backup name is deterministic
-    in tests; in the field it is today's date, which is what makes two backups on
-    two days distinguishable and two on the same day identical — the second one
-    then simply replaces the first, which is fine: it is the same file being
-    displaced twice.
+    ``now`` (``YYYYMMDD-HHMMSS``) is the injectable clock behind the backup
+    name, so the tests can pin it. The field default is the current time, and
+    the name is then free of collisions on its own: two installs on the same day
+    are two different files, not the second one overwriting the first (#40).
     """
     source = Path(source)
     destination = skill_path(home, harness=harness)
@@ -280,8 +304,7 @@ def install(
 
     backup: Path | None = None
     if previous is not None:
-        stamp = today or date.today().isoformat()
-        backup = destination.with_name(f"{SKILL_NAME}.bak-{stamp}")
+        backup = _free_backup_path(destination, now)
         try:
             shutil.copyfile(destination, backup)
         except OSError as exc:

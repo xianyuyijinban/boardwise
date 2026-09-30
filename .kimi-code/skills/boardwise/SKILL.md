@@ -29,7 +29,8 @@ boardwise doctor            # 10 项全绿（skip 不算红）= 装好了；退�
 - 开发态用仓库解释器：`E:\boardwise\.venv\Scripts\python.exe -m boardwise.cli <命令>`。
 - **把这份 skill 装到别的 agent 上**：`boardwise install-skill` 写进 Kimi Code / Claude Code 的
   用户级 skill 目录（`--harness {kimi,claude,all}`，默认全装；目标位置已有异版先备份成
-  `SKILL.md.bak-<日期>`）；别的 harness 跑 `boardwise install-skill --agent` —— 它**打印一段
+  `SKILL.md.bak-<年月日-时分秒>`，同一天装两次是两个备份文件、后者不覆盖前者）；别的 harness 跑
+  `boardwise install-skill --agent` —— 它**打印一段
   引导指令**，整段粘给你的 AI，放哪儿由它自己按自己的约定定（我们不维护 harness 路径表）。
 
 ## 2. 三个进程与两条入口
@@ -411,10 +412,13 @@ exit 4 零写入（C5）；库几何不符 → exit 4 零写入（C6，写前那
 
 **R4 工程文件永不入库（2026-09-26 起，公司板红线）**：真实工程容器
 （`.epro2/.eprj2/.eprj3/.epru/.esch/.epcb`）**一律不 commit**——公司板进公开仓库 =
-设计泄漏，删文件没用，历史里还在。审查产物只进 `outputs/`、`.tmp_*`（均 gitignore）；
-不 harvest 公司板进 blocklib，不做成夹具。机械防线：`tools/check_repo_hygiene.py`
-（pytest `tests/test_repo_hygiene.py` 常跑 + 本机 pre-commit 钩子已装）；新夹具要入库 =
-在同一笔提交里**显式**加 `ALLOWLIST` 路径，那就是评审时刻。
+设计泄漏，删文件没用，历史里还在。**派生副本同罪**（080/#41，推翻 047 的放行）：
+`foo.epro2.bak/.orig/.backup/.old/.txt` 是同一容器换件马甲，守卫正则的
+`(?:\.[^/]*)?` 后缀段一并拦，误报代价=同一提交里一行 ALLOWLIST。审查产物只进
+`outputs/`、`.tmp_*`（均 gitignore）；不 harvest 公司板进 blocklib，不做成夹具。
+机械防线：`tools/check_repo_hygiene.py`（pytest `tests/test_repo_hygiene.py` 常跑 +
+本机 pre-commit 钩子已装）；新夹具要入库 = 在同一笔提交里**显式**加 `ALLOWLIST`
+路径，那就是评审时刻。
 
 **R4b 公司板命名规范（2026-09-26 起）**：公司板在**一切公开产物**——commit 信息、
 任务书、issue、release notes、文档、测试名——只用 `PCB1`/`PCB2`/`PCB3`… 匿名代号；

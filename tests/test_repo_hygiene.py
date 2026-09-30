@@ -76,17 +76,30 @@ def test_a_v4_sheet_file_trips_the_guard():
     ]
 
 
-def test_a_temporary_copy_of_a_sheet_file_does_not_trip_the_guard():
-    """`foo.esch2.tmp` is not the container the pattern is about.
+def test_a_derived_copy_of_a_container_trips_the_guard():
+    """`foo.esch2.tmp` is a company sheet under another name, and must be caught.
 
-    The anchor is what keeps the guard from swallowing every file that merely
-    starts with a container's name — `bar.epro2.tmp` and `bar.esch2.bak` are
-    ordinary files (and `.tmp_*` scratch trees full of them are the normal
-    working state of this repo).
+    047 pinned the opposite decision — a derived copy was "not the container the
+    pattern is about" — which left `bar.epro2.bak` / `.orig` / `.backup` / `.old`
+    / `.txt` walking past R4 while gitignore did not cover them either (#41). 080
+    reverses it: the red line outranks the false positive, because a false
+    positive costs one ALLOWLIST line in the same commit while a false negative
+    puts a company board into public history for good.
     """
     guard = _load_guard()
 
-    assert guard.violations(["foo/bar.esch2.tmp"]) == []
-    assert guard.violations(["foo/bar.esch2.bak", "foo/bar.epro2.txt"]) == []
-    # A file that merely *contains* the name is not the name either.
+    for path in (
+        "foo/bar.esch2.tmp",
+        "foo/bar.esch2.bak",
+        "foo/bar.epro2.txt",
+        "foo/bar.eprj2.orig",
+        "foo/bar.epro.backup",
+        "foo/bar.epcb.old",
+        "foo/bar.epru.bak",
+        "foo/bar.epro2.bak.2026-09-30",
+    ):
+        assert guard.violations([path]) == [path], path
+    # A file that merely *contains* the name is not the name either: here the
+    # container name is the stem, with no leading dot to make it an extension.
     assert guard.violations(["docs/esch2-format-notes.md"]) == []
+    assert guard.violations(["notes/epro2.md"]) == []

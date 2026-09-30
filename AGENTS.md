@@ -33,6 +33,6 @@
   **仓库内文件，clone 下来直接读，零安装**。要审板子先读它。
 - 你的 harness 若有用户级 skill 目录：把这份文件复制成
   `<你的用户级 skills>/boardwise/SKILL.md`（约定在哪你自己知道；已有一份异版先备份成
-  `SKILL.md.bak-<日期>` 再覆盖），复制完用你自己发现 skill 的方式确认它在场。
+  `SKILL.md.bak-<年月日-时分秒>` 再覆盖，别覆盖已经存在的同名备份），复制完用你自己发现 skill 的方式确认它在场。
 - 手上只有 exe、没有仓库：`boardwise install-skill`（Kimi Code / Claude Code 两处）或
   `boardwise install-skill --agent`——后者打印一段引导指令，粘给你在用的 AI，它自己装。
