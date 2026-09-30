@@ -356,7 +356,12 @@ def compare_models(
     return report
 
 
-def reconcile_names(candidate: DesignModel, golden: DesignModel) -> DesignModel:
+def reconcile_names(
+    candidate: DesignModel,
+    golden: DesignModel,
+    *,
+    skipped: list[str] | None = None,
+) -> DesignModel:
     """Rename the candidate's nets to the golden names, matched by membership.
 
     Calibration-mode preprocessing. The editor names nets *it* finds unnamed
@@ -368,18 +373,51 @@ def reconcile_names(candidate: DesignModel, golden: DesignModel) -> DesignModel:
     its name and surfaces as a real difference. Deliberately *not* used by
     the draw verdict, where the drawn board carries our names explicitly and
     names must match verbatim.
+
+    A rename whose target name is **already taken** is abandoned, never merged
+    and never overwritten (issue #46): the candidate keeps the name the editor
+    gave it, and the reason is appended to ``skipped`` when the caller passes a
+    list. The messages are word-for-word the ones
+    :func:`boardwise.engines.draw._reconcile_derived_names` writes, because the
+    two implementations are held to one behaviour until they are merged.
     """
     golden_by_members: dict[frozenset, str] = {}
     for name, net in golden.nets.items():
         golden_by_members.setdefault(frozenset(net.pins), name)
 
     renamed: dict[str, str] = {}
-    taken: set[str] = set()
+    taken: dict[str, str] = {}  # golden name -> the candidate net that took it
     for name, net in candidate.nets.items():
         match = golden_by_members.get(frozenset(net.pins))
-        if match and match not in taken:
-            renamed[name] = match
-            taken.add(match)
+        if match is None:
+            continue
+        if match in taken:
+            if skipped is not None:
+                skipped.append(
+                    f"rename {name!r} -> {match!r} skipped: {taken[match]!r} was "
+                    f"already renamed to {match!r}"
+                )
+            continue
+        renamed[name] = match
+        taken[match] = name
+
+    # A rename onto a name another candidate net **keeps** would weld two
+    # clusters into one (`nets.setdefault` used to merge them): the net already
+    # called `NET1` and the one being renamed to `NET1` are different circuits,
+    # and only one of them ever earned the name. A net that is itself being
+    # renamed *away* does not block it — a cycle of renames is a permutation,
+    # and each member of it lands on the name the golden gave that cluster.
+    # (One pass, in candidate order: a net dropped here does not hand its name
+    # to somebody else in the same pass.)
+    for name, match in list(renamed.items()):
+        if match != name and match in candidate.nets and renamed.get(match, match) == match:
+            del renamed[name]
+            taken.pop(match, None)
+            if skipped is not None:
+                skipped.append(
+                    f"rename {name!r} -> {match!r} skipped: the candidate already "
+                    f"carries a net called {match!r}"
+                )
 
     import copy as _copy
 
@@ -393,6 +431,11 @@ def reconcile_names(candidate: DesignModel, golden: DesignModel) -> DesignModel:
     nets: dict[str, Net] = {}
     for name, net in candidate.nets.items():
         new_name = renamed.get(name, name)
+        # One candidate net per output name: the loop above refuses every
+        # rename onto a name another candidate net already carries, and
+        # ``taken`` keeps two renames off one target. So ``setdefault`` never
+        # fires here — it used to, and merging two clusters into one net under
+        # a name one of them never had is the collision #46 closes.
         entry = nets.setdefault(new_name, Net(name=new_name))
         for member in net.pins:
             if member not in entry.pins:

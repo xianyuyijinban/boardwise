@@ -294,6 +294,48 @@ def test_two_circuits_sharing_a_name_is_refused(spec):
         spec.connections = original
 
 
+def test_two_connections_over_one_shared_port_are_refused(spec):
+    """Issue #45: two connections join one cluster, and the second name won.
+
+    `D_STAR` reuses `usb.D+` — a port `D+` already carries — and reaches for
+    `uart.RX` at the same time. The union-find therefore welds the D+ cluster and
+    the RX cluster into one, and that cluster is claimed by three connections
+    under three names. `named[root] = connection.net` used to keep the last one
+    and drop the others without a word: the page carried `D_STAR`, and the spec
+    still asked for `D+` and `RX`.
+    """
+    from boardwise.core.blocks import BlockConnection
+
+    spec.connections = list(spec.connections) + [
+        BlockConnection(net="D_STAR", ports=[("usb", "D+"), ("uart", "RX")])
+    ]
+    with pytest.raises(AssemblyError) as excinfo:
+        assemble(spec)
+    message = str(excinfo.value)
+    # Every disputed name is on the table, and so is every connection that
+    # claimed the cluster — a refusal nobody can act on is half a refusal.
+    for net in ("D+", "RX", "D_STAR"):
+        assert repr(net) in message, message
+    assert "usb.D+" in message and "uart.RX" in message, message
+    # …and only the cluster at fault: `D-` shares the block, not the net.
+    assert repr("D-") not in message, message
+
+
+def test_one_shared_port_under_one_name_still_assembles(spec):
+    """The other direction of #45: sharing a *port* is only a defect when the two connections disagree about the name. Two connections that both call the joined net `D+` must leave the assembled netlist byte-for-byte what the single connection produced."""
+    from boardwise.core.blocks import BlockConnection
+
+    single = {name: set(net.pins) for name, net in assemble(spec).model.nets.items()}
+
+    twin = [c for c in spec.connections if c.net == "D+"][0]
+    spec.connections = list(spec.connections) + [
+        BlockConnection(net="D+", ports=list(twin.ports))
+    ]
+    design = assemble(spec)
+    assert [c.net for c in design.connections].count("D+") == 2
+    assert {name: set(net.pins) for name, net in design.model.nets.items()} == single
+
+
 def _one_block_spec(*, net_class: str, with_flag: bool, with_label: bool) -> BoardSpec:
     """A hand-minimal board: one block, one port, nothing else."""
     raw = {

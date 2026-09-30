@@ -585,6 +585,8 @@ def _reconcile_derived_names(
     golden: DesignModel,
     candidate: DesignModel,
     pin_maps: dict[str, Any] | None = None,
+    *,
+    skipped: list[str] | None = None,
 ) -> int:
     """Rename candidate nets to the golden's, matched by exact membership.
 
@@ -600,6 +602,13 @@ def _reconcile_derived_names(
     translation the same two-member cluster looks different on each side and
     the rename never fires — measured 2026-09-15 (NET6 vs $16N3, electrically
     the same wire F3 had just connected).
+
+    A rename whose target name is **already taken** is abandoned, never merged
+    and never overwritten (issue #46): ``candidate.nets[new] = net`` used to
+    drop the net that was already sitting under that name, pins and all. The
+    reason is appended to ``skipped`` when the caller passes a list, word for
+    word as :func:`boardwise.core.compare.reconcile_names` writes it — the two
+    implementations are held to one behaviour until they are merged.
     """
     translate: dict[tuple[str, str], tuple[str, str]] = {}
     for designator, pin_map in (pin_maps or {}).items():
@@ -618,14 +627,38 @@ def _reconcile_derived_names(
         golden_by_members.setdefault(members(net.pins), name)
 
     renamed: dict[str, str] = {}
-    taken: set[str] = set()
+    taken: dict[str, str] = {}  # golden name -> the candidate net that took it
     for name, net in candidate.nets.items():
         if name in golden.nets:
             continue  # already the right name; leave it alone
         match = golden_by_members.get(members(net.pins))
-        if match and match not in taken and match != name:
-            renamed[name] = match
-            taken.add(match)
+        if match is None:
+            continue
+        if match in taken:
+            if skipped is not None:
+                skipped.append(
+                    f"rename {name!r} -> {match!r} skipped: {taken[match]!r} was "
+                    f"already renamed to {match!r}"
+                )
+            continue
+        renamed[name] = match
+        taken[match] = name
+
+    # A rename onto a name another candidate net **keeps** would overwrite it
+    # (`candidate.nets[new] = net`, pins and all). A net that is itself being
+    # renamed *away* does not block it — a cycle of renames is a permutation,
+    # and each member of it lands on the name the golden gave that cluster.
+    # (One pass, in candidate order: a net dropped here does not hand its name
+    # to somebody else in the same pass.)
+    for name, match in list(renamed.items()):
+        if match != name and match in candidate.nets and renamed.get(match, match) == match:
+            del renamed[name]
+            taken.pop(match, None)
+            if skipped is not None:
+                skipped.append(
+                    f"rename {name!r} -> {match!r} skipped: the candidate already "
+                    f"carries a net called {match!r}"
+                )
 
     if not renamed:
         return 0
@@ -638,7 +671,7 @@ def _reconcile_derived_names(
         if net is None:
             continue
         net.name = new
-        candidate.nets[new] = net
+        candidate.nets[new] = net  # `new` is in no other net: the loop above said so
     return len(renamed)
 
 
@@ -1558,7 +1591,8 @@ async def run_draw(
     #     "net missing" + "net extra" for nets that were in fact identical.
     # (b) pin numbers: the maps from step 2b.
     candidate = strip_dangling_nets(candidate)
-    renamed = _reconcile_derived_names(model, candidate, pin_maps)
+    kept_names: list[str] = []
+    renamed = _reconcile_derived_names(model, candidate, pin_maps, skipped=kept_names)
     if renamed:
         result.records.append(
             StepRecord(
@@ -1567,6 +1601,18 @@ async def run_draw(
                 True,
                 "the editor derives its own names ($11N…) for clusters the "
                 "golden source left unnamed; matched by members, not by name",
+            )
+        )
+    if kept_names:
+        # Not a failure: the nets keep the names the editor gave them and the
+        # comparison below reports them as the differences they are. Recorded
+        # because "why did this cluster not get renamed" used to have no answer.
+        result.records.append(
+            StepRecord(
+                "candidate.reconcile",
+                f"{len(kept_names)} net(s) kept the editor's name",
+                True,
+                "; ".join(kept_names),
             )
         )
     result.comparison = compare_models(model, candidate, pin_maps=pin_maps)
