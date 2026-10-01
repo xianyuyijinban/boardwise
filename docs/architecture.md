@@ -125,6 +125,23 @@ on purpose, because the compiler is the part that must work with no editor:
   both verification legs (the editor's own netlist *within the plan's own pins*,
   and the canvas — which includes the values read back) → the range, the
   findings' one-way rule, the save and the render.
+* **the page compiler** (`engines/pagecompiler.py`, 056) composes several
+  modules into one page document (`core/pagelayoutplan.py`): modules keep their
+  own compiled interiors, inter-module nets are named at each end (G4), page
+  locks pin a part to an absolute page point, and everything already on the
+  page becomes a named keep-out. `draw compile` takes the page path whenever
+  the presentation carries `modules[]`; `draw apply` digests the page
+  document's embedded plan — no new commands, no new flags (057).
+* **the grammars** (`engines/grammar/`, 053 stage B) are where "a divider looks
+  like a divider" lives: each grammar binds a circuit structurally (never by
+  designator prefix or value) and emits the constraints and obligations the
+  compiler votes on. The vocabulary of constraint kinds is defined once, in
+  `engines/grammar/base.py`'s docstring. Since 060–074 the compiler also
+  enforces xianyuyijinban's drawing rulings (cap on its owning pin's side,
+  far same-role pins joined by name, every rail flagged, flags vertical,
+  flagged nets' wires unnamed, no flag-lead crossing a foreign conductor) as
+  hard constraints — `docs/schematic-conventions.md` R6–R10 is their written
+  form.
 
 The three rules the pair leans on: an offline plan is never landed without a page
 it was built against (`--page`, or a page `--new-page` creates and reads back); a

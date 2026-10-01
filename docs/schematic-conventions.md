@@ -75,6 +75,7 @@ endpoint run put U1.16 back into VCC.
 | golden replay (006b default) | inherits R1–R4 from the human page; lint only verifies |
 | **block assembly (008a)** | inherits R1–R4 from the blocks it is composed of; the spec's block placement decides the whitespace moats, and the same lint verifies |
 | solver fallback | must satisfy R1 (blocks from `Component.block` metadata) and R3; R4 via per-topology placement templates (future) |
+| **drawing compiler (053+)** | R6–R10 are compile-time hard constraints — a candidate that breaks one is rejected, not scored down; the independent readability gate (`engines/readability.py`) re-checks survivors |
 | layout lint | checkable subset today: overlap / off-frame / through-body / orphan naming; block-aware checks (wire stays inside block bbox; label at block boundary) are queued behind 006c |
 | gate 3 (human) | full rubric R1–R4, judged by xianyuyijinban on the render |
 
@@ -86,3 +87,55 @@ replay patch. **Block assembly (008a) deliberately does not synthesize them eith
 R1 conformance is the whitespace moat the spec's placement creates, and a caption primitive
 would need its own lint surface. Recorded here so the omission is a decision, not an
 oversight.
+
+## Compiler-era rulings (060–074, ruled by xianyuyijinban on live renders 2026-09-28/29)
+
+These bind the **drawing compiler** (`engines/drawcompiler.py` / `engines/pagecompiler.py`)
+and are enforced as hard constraints at compile time — a candidate that breaks one is
+rejected, not scored down. The reference renders live in `outputs/069_ldo_example/`
+(the hand-drawn P22 exemplar) and `evidence/074/` (P23 v5/v6).
+
+### R6 — A capacitor hangs on its owning pin's physical side
+
+The decoupling rule "caps touch their IC's power pins" (R4) is pinned to the *pin*, not
+the device's bounding side. When the symbol offers a same-role pin on the opposite face
+(measured: pin tips whose dot product across the body centre is strictly negative), the
+output capacitor hangs on that opposite pin. On the single-sided AMS1117 symbol this put
+the input cap left on the VIN side and the output cap right on the duplicate VOUT pin —
+ruled correct against the hand-drawn exemplar (065).
+
+### R7 — Far same-role pins join by name, never by a wire
+
+Two pins of the same role on *opposite faces* of a body are "far apart": they are **not**
+bridged with a physical wire. Each gets a short stub carrying a same-named flag
+(power/ground) or net label (other nets); the net merges by name. Same-side same-role
+pins still wire directly (069①; the electrical obligation from 060② is unchanged — every
+same-role pin is connected, only the *form* changed).
+
+### R8 — Every power net carries at least one power flag
+
+A rail named only by wire text is a **defect** (069③). The compiler runs a closing pass
+that adds the flag; a wire whose net has a flag then carries **no name of its own**
+(069⑨ — the flag *is* the name; hand-drawn pages show empty `Net` fields on such wires).
+Flag placement hugs the device: a power-pin stub prefers a 50-unit lead, backing off
+30/10/0 when occupied, 60 at most (069②), and the whole flag box (glyph + text + margin)
+stays clear of foreign wires (069⑧).
+
+### R9 — Flags are always vertical
+
+Flag rotation is ∈ {0°, 180°}; 90°/270° are forbidden (069④). The two glyph families have
+opposite natural poses in the library (measured 064: `Ground-GND` bar below the connect
+point, `Power-VCC` bar above), so the rotation offset is per-family — ground glyphs +180,
+rail glyphs +0 — from one shared table; compass and glyph box can never drift to opposite
+sides again.
+
+### R10 — A flag lead never crosses a foreign conductor
+
+A flag lead, a far-pin stub, or a rail-flag jog crossing **another net's** wire or pin is
+a hard defect (074) — crossing without a junction dot reads as a short to the human eye
+even when the netlist keeps two islands. Shared endpoints, T-taps and collinear overlap
+are *not* crossings, and no fake junction may be planted to dodge the rule. A violating
+candidate is rejected and the anchor ladder re-seats the flag; ordinary signal routing
+crossings stay a soft metric. Exhausted ladders report `layout-unsat` with the conductor
+named — the compiler never silently ships a crossing.
+

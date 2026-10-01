@@ -1,10 +1,21 @@
-# Drawing with boardwise (`boardwise draw`, task 006 / 006b)
+# Drawing with boardwise (`boardwise draw`)
 
-`boardwise draw` redraws a golden board — currently the CH340 USB-UART
-schematic — on a **blank page of the open EasyEDA Pro project**, and diffs what
-the editor actually understood against the golden netlist, pin by pin. Zero
-differences is the definition of "drawn correctly"; since 006b the drawing also
-has to be *readable*, which is why the layout is replayed rather than solved.
+Two flows share this command family:
+
+- **The drawing compiler (053–074, the main line).** You state circuit intent —
+  a `CircuitSpec` (what the circuit is) plus a `PresentationSpec` (how a human
+  should read it) — and `draw compile` turns it into ranked `LayoutPlan`s
+  offline, behind an independent readability gate; `draw plan` / `draw apply`
+  land one into the open editor, and `draw discard` takes it back off.
+  Grammars today: voltage divider, RC low-pass, LDO; several modules compose
+  onto one page. See **The compiled page** below and `docs/architecture.md`;
+  the drawing rules it enforces are `docs/schematic-conventions.md` R6–R10.
+- **The golden replay (006/006b, this document's original flow).** Redraws a
+  golden board — currently the CH340 USB-UART schematic — on a **blank page of
+  the open EasyEDA Pro project**, and diffs what the editor actually
+  understood against the golden netlist, pin by pin. Zero differences is the
+  definition of "drawn correctly"; since 006b the drawing also has to be
+  *readable*, which is why the layout is replayed rather than solved.
 
 This page is the operator manual: what the flow does, what must be measured on
 the machine before it can be trusted, and the step-by-step verification
@@ -504,3 +515,23 @@ and value.
 
 Offline evidence: `tools/057_scenarios.py` (writes `outputs/057_offline/`); the
 real-machine steps for E1–E7 are `tools/057_live_runbook.md`.
+
+## Flag and naming rules on compiled pages (060–074)
+
+After 057 landed pages, xianyuyijinban ruled five drawing conventions on the
+live renders; they are compile-time hard constraints, written up as R6–R10 in
+`docs/schematic-conventions.md`. The visible consequences on any compiled page:
+
+- capacitors hang on their owning pin's physical side (input cap by the input
+  pin, output cap by the output pin — even when the symbol duplicates the pin
+  on the far face);
+- same-role pins on opposite faces of a body join **by name** (a short stub
+  with a flag or label each), never by a wire across the part;
+- every power net carries at least one flag, flags are always vertical
+  (0°/180°), and a wire on a flagged net carries no text name of its own;
+- a flag lead never crosses a foreign net's conductor — the compiler rejects
+  such a candidate outright and reports `layout-unsat` rather than shipping a
+  crossing.
+
+The apply report's `verification.nets` and the readability evidence are what
+prove these held; the renders under `evidence/074/` show the before/after.
