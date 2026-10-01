@@ -1,11 +1,14 @@
 """The drawing grammars of 053 stage B (053 sec.3, 052 sec.5).
 
-Three grammars, one per idiom the first slice is about, each a `bind` over the
-two specs of stage A:
+Four grammars, one per idiom the drawing compiler is about, each a `bind` over
+the two specs of stage A:
 
     voltage-divider   两电阻竖排同轴，抽头可见
     rc-lowpass        in→R→out 主干水平，C 从 out 节点向下支路到地
     ldo               in 左 core 中 out 右，电容各归所属节点
+    power-entry       连接器终结轨的输入端，两轨各一条实体横线，支路在轨间竖放
+                      （088；entry 靠 `openInterfaces[].part` 这条事实通道绑上，
+                      不靠拓扑——并联支路与连接器在图上是同构的）
 
 Two things this package is not. It does not compute coordinates — the compiler
 does, and `RelativeConstraint` has no place to put one (053 sec.4). And it does
@@ -32,7 +35,7 @@ from typing import Mapping
 from ...core.circuitspec import CircuitSpec
 from ...core.presentationspec import GRAMMARS, PresentationSpec
 from ...core.symbolprofile import SymbolProfile
-from . import ldo, rc_lowpass, voltage_divider
+from . import ldo, power_entry, rc_lowpass, voltage_divider
 from .base import (
     ABOVE,
     ADJACENT,
@@ -69,15 +72,18 @@ from .base import (
     refused_result,
 )
 
-#: The three grammar names this build implements, spelled as `GRAMMARS` in
+#: The four grammar names this build implements, spelled as `GRAMMARS` in
 #: `presentationspec` spells them: the spec's literal and the implementation's
 #: name are the same string, so a lookup cannot half-match.
-NAMES: tuple[str, ...] = (voltage_divider.NAME, rc_lowpass.NAME, ldo.NAME)
+NAMES: tuple[str, ...] = (
+    voltage_divider.NAME, rc_lowpass.NAME, ldo.NAME, power_entry.NAME,
+)
 
 _CLASSES: dict[str, type] = {
     voltage_divider.NAME: voltage_divider.VoltageDividerGrammar,
     rc_lowpass.NAME: rc_lowpass.RcLowpassGrammar,
     ldo.NAME: ldo.LdoGrammar,
+    power_entry.NAME: power_entry.PowerEntryGrammar,
 }
 
 #: Every role any grammar may bind, per grammar, table roles first and this
@@ -86,6 +92,7 @@ ROLES_BY_GRAMMAR: dict[str, tuple[str, ...]] = {
     voltage_divider.NAME: voltage_divider.ROLES + voltage_divider.EXTRA_ROLES,
     rc_lowpass.NAME: rc_lowpass.ROLES,
     ldo.NAME: ldo.ROLES + ldo.EXTRA_ROLES,
+    power_entry.NAME: power_entry.ROLES,
 }
 
 __all__ = [
@@ -94,6 +101,7 @@ __all__ = [
     "bind",
     "grammar_for",
     "ldo",
+    "power_entry",
     "rc_lowpass",
     "voltage_divider",
     # the shared vocabulary, re-exported so a consumer imports one module

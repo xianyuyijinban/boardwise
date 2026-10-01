@@ -974,6 +974,11 @@ def _module_view(
             SpecOpenInterface(
                 net=item.net, direction=item.direction, role=item.role,
                 provenance=item.provenance,
+                # 088's optional key travels with the interface: the fact "this
+                # open end is realised by CN1" is about the module's own
+                # connector, and dropping it here would strip exactly the
+                # evidence `power-entry` binds its `entry` role from.
+                part=item.part,
             )
             for item in circuit_spec.open_interfaces
             if item.net in net_ids

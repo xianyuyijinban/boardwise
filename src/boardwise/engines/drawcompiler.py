@@ -285,8 +285,14 @@ CROSS_COST = 2.0
 #: The roles that bind a **chain** element: the series line the drawing is read
 #: along. Verbatim from 053 sec.3's three tables (`upper_arm`/`lower_arm` the
 #: divider's arms, `series` the RC's element, `core` the regulator), plus this
-#: batch's `middle_arm` for the multi-tap ladder.
-CHAIN_ROLES: tuple[str, ...] = ("upper_arm", "lower_arm", "middle_arm", "series", "core")
+#: batch's `middle_arm` for the multi-tap ladder and 088's `entry` — the power
+#: inlet, which is the one part the two rails run to and from. A role that is in
+#: neither tuple is treated structurally: bound to a part, it would get no slot
+#: of its own and land on the free shelf, which is why 088's `entry` had to be
+#: named here rather than left to fall through.
+CHAIN_ROLES: tuple[str, ...] = (
+    "upper_arm", "lower_arm", "middle_arm", "series", "core", "entry",
+)
 
 #: The roles that bind an element **hanging off** a chain node (053 sec.3:
 #: 并联支路 / 多 C 并联 / 电容各归所属节点 / NR 电容), plus this batch's

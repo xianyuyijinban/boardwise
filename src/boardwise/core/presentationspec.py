@@ -104,12 +104,13 @@ PRESENTATION_SPEC_KIND = "boardwise-presentation-spec"
 #: have is refused rather than guessed at.
 PRESENTATION_SPEC_VERSION = 1
 
-#: The three drawing grammars this build knows (053 sec.2 — "本批只认这三个字面
-#: 量"). Empty means the spec does not choose one; a fourth literal is a refusal,
-#: not a fallback to a generic layout: a grammar is a set of promises about what
-#: will be visible, and pretending to keep promises nobody wrote is worse than
-#: saying the grammar is not known.
-GRAMMARS: tuple[str, ...] = ("voltage-divider", "rc-lowpass", "ldo")
+#: The drawing grammars this build knows (053 sec.2 — "本批只认这三个字面量", and
+#: 088 adds the fourth, `power-entry`). Empty means the spec does not choose one;
+#: a literal that is not in this tuple is a refusal, not a fallback to a generic
+#: layout: a grammar is a set of promises about what will be visible, and
+#: pretending to keep promises nobody wrote is worse than saying the grammar is
+#: not known.
+GRAMMARS: tuple[str, ...] = ("voltage-divider", "rc-lowpass", "ldo", "power-entry")
 
 #: How a net may be expressed locally (052 sec.5: a key local topology is drawn
 #: as wire; a label across modules or at high fan-out).

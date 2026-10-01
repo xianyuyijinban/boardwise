@@ -125,7 +125,7 @@ class RcLowpassGrammar:
 
     def __init__(self, profiles: Mapping[str, SymbolProfile] | None = None) -> None:
         # Structural judgment: nothing here reads the profiles. They are taken
-        # for a uniform construction across the three grammars.
+        # for a uniform construction across the grammars.
         self.profiles: dict[str, SymbolProfile] = dict(profiles or {})
 
     # -------------------------------------------------------------- binding

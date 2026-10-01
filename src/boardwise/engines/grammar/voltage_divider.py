@@ -180,7 +180,7 @@ class VoltageDividerGrammar:
     def __init__(self, profiles: Mapping[str, SymbolProfile] | None = None) -> None:
         # The divider's judgment is purely topological, so nothing here reads
         # the profiles; they are accepted for a uniform construction across the
-        # three grammars, and carried for the compiler's own use.
+        # grammars, and carried for the compiler's own use.
         self.profiles: dict[str, SymbolProfile] = dict(profiles or {})
 
     # -------------------------------------------------------------- binding

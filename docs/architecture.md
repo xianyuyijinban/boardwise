@@ -141,7 +141,11 @@ on purpose, because the compiler is the part that must work with no editor:
   far same-role pins joined by name, every rail flagged, flags vertical,
   flagged nets' wires unnamed, no flag-lead crossing a foreign conductor) as
   hard constraints — `docs/schematic-conventions.md` R6–R10 is their written
-  form.
+  form. 088 adds the fourth grammar, `power-entry` (the supply inlet: two solid
+  rails, branches hanging between them, the inlet spanning the two rows at the
+  input end) — and the first that binds a part from a **stated fact** rather
+  than from topology (`openInterfaces[].part`), because a connector and a
+  parallel branch are the same shape between the same two nets.
 
 The three rules the pair leans on: an offline plan is never landed without a page
 it was built against (`--page`, or a page `--new-page` creates and reads back); a

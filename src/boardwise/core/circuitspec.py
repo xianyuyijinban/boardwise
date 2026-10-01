@@ -129,7 +129,7 @@ _TOP_KEYS = (
 _PART_KEYS = ("id", "symbolRef", "value", "mpn", "lcsc", "params", "provenance")
 _NET_KEYS = ("id", "class", "members", "provenance", "memberProvenance", "scope")
 _NC_KEYS = ("pin", "provenance")
-_INTERFACE_KEYS = ("net", "direction", "role", "provenance")
+_INTERFACE_KEYS = ("net", "direction", "role", "provenance", "part")
 _CONNECTION_KEYS = ("from", "to", "provenance")
 
 #: Keys that mean "a place on the canvas". A CircuitSpec is *meaning*, so no
@@ -223,12 +223,24 @@ class SpecOpenInterface:
     An open interface is *not* a dangling error — 052 sec.6 says so by name
     ("开放接口和显式 NC 不是非法悬空"). Recording it is what lets the
     readability checker tell the two apart.
+
+    ``part`` (088, **optional**) says *which connector part* realises this open
+    interface: the fact a net's endpoint is a component, rather than a name
+    floating on a wire. A ``direction`` of `input`/`source` is the direction a
+    supply enters from, and without ``part`` the drawing grammar cannot tell a
+    feeding connector from a parallel branch — the two are isomorphic on the
+    drawing (`power-entry` §一). It is optional on purpose: an interface that
+    states no part is an ordinary open interface, and a document written before
+    this field existed must still round-trip byte for byte (the field is only
+    written when it says something). Nothing here checks that the part exists —
+    that is a grammar's judgment to report with its own wording, not a parser's.
     """
 
     net: str
     direction: str = ""
     role: str = ""
     provenance: str = ""
+    part: str = ""
 
 
 @dataclass
@@ -351,6 +363,10 @@ class CircuitSpec:
                     "direction": interface.direction,
                     "role": interface.role,
                     "provenance": interface.provenance,
+                    # Optional (088): written only when it says something, so a
+                    # document that does not use it hashes and round-trips as
+                    # it did before the field existed.
+                    **({"part": interface.part} if interface.part else {}),
                 }
                 for interface in self.open_interfaces
             ],
@@ -735,6 +751,11 @@ def _interfaces_from(root: dict[str, Any], net_ids: set[str]) -> list[SpecOpenIn
             direction=direction,
             role=_text(body.get("role"), f"{spot}.role", required=True),
             provenance=_provenance(body.get("provenance"), f"{spot}.provenance"),
+            # 088's optional key. Not checked against `parts` here on purpose:
+            # naming a part that does not exist is a circuit the *grammar*
+            # refuses with its own wording, and a parser that guessed would
+            # take that message away from the layer that can explain it.
+            part=_text(body.get("part"), f"{spot}.part"),
         ))
     return out
 
