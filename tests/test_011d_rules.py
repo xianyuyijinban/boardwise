@@ -191,12 +191,9 @@ def test_the_capacitance_parser_reads_the_trade_mid_letter_notation():
     ``param-rc-cutoff`` pair while the same part spelled ``4.7uF`` was measured.
 
     ``u``/``n``/``p`` are the units the trade prints, and the fraction is the
-    digits after the decimal point, exactly as in ``4K70``. A field with no
-    fraction after the unit letter (``100n``, ``22u``) is **not** read: the shape
-    this batch reads is the one the design fixed, and the difference matters --
-    the shelf's own slug spelling is ``100n``, and a board declaring a value that
-    way turns an invisible RC pair into a finding (see the refusal test below and
-    ``tasks/077-capacitance-infix.md`` §交卷).
+    digits after the decimal point, exactly as in ``4K70``. A field whose value is
+    a whole number of its unit needs no fraction at all, and 087 reads that shape
+    too (``100n``, ``22u``) -- the test below says why, and what it cost.
     """
     assert parse_capacitance_farads("4u7") == pytest.approx(4.7e-6)
     assert parse_capacitance_farads("2n2") == pytest.approx(2.2e-9)
@@ -216,6 +213,48 @@ def test_the_capacitance_parser_reads_the_trade_mid_letter_notation():
     assert parse_capacitance_farads("1mF") == pytest.approx(1e-3)
 
 
+def test_the_capacitance_parser_reads_the_fraction_free_trade_spelling():
+    """087: ``100n`` is 100 nF, and the reason it is a *value* is this repository's
+    own shelf.
+
+    ``core/parts.quantity_slug`` calls this spelling "the schematic spelling" and
+    the shelf addresses parts by it -- the key is ``cap.100n_0402`` -- so 077's
+    narrow shape left one project with two spellings of the same value, which is
+    the complaint 071 §2 filed about the resistance side. The resistance reader has
+    always taken the fraction as optional (``47R``, ``100K``); 087 brings the
+    capacitor side onto the same rule, and ``540N`` shows what that costs: a
+    MOSFET's suffix is now a reading **only when the whole field is that suffix**,
+    and ``IRF540N`` still reads nothing (below).
+    """
+    assert parse_capacitance_farads("100n") == pytest.approx(1e-7)
+    assert parse_capacitance_farads("330u") == pytest.approx(3.3e-4)
+    assert parse_capacitance_farads("22u") == pytest.approx(2.2e-5)
+    assert parse_capacitance_farads("1n") == pytest.approx(1e-9)
+    assert parse_capacitance_farads("540N") == pytest.approx(5.4e-7)
+    # Same three micro spellings as the fraction shape, same case-insensitivity.
+    assert parse_capacitance_farads("22U") == pytest.approx(2.2e-5)
+    assert parse_capacitance_farads("22µ") == pytest.approx(2.2e-5)
+    assert parse_capacitance_farads("22μ") == pytest.approx(2.2e-5)
+    assert parse_capacitance_farads("22Μ") == pytest.approx(2.2e-5)
+    # It is the same value as the suffix spelling, not a second scale: 100n and
+    # 100nF agree to the last bit of the float (issue #39's rule).
+    assert parse_capacitance_farads("100n") == pytest.approx(
+        parse_capacitance_farads("100nF"), rel=1e-12
+    )
+    # ...and what an empty fraction must NOT become: a bare number is still a bare
+    # number, and a leading zero is still no significant figure.
+    assert parse_capacitance_farads("100") is None
+    assert parse_capacitance_farads("0n") is None
+    assert parse_capacitance_farads("00n") is None
+    # A part number is not a value, and the anchoring is what says so: 087 widened
+    # the *shape*, never the anchor.
+    assert parse_capacitance_farads("IRF540N") is None
+    assert parse_capacitance_farads("0603n") is None
+    assert parse_capacitance_farads("12345n") is None
+    assert parse_capacitance_farads("4u7F") is None
+    assert parse_capacitance_farads("C4u7") is None
+
+
 def test_the_capacitance_mid_letter_notation_refuses_its_neighbours():
     """``m``/``M`` is not one of this notation's letters, and 071's structural
     refusals hold in the capacitor notation as they do in the resistance one.
@@ -229,16 +268,14 @@ def test_the_capacitance_mid_letter_notation_refuses_its_neighbours():
     figure, and a digit run longer than three figures is not a mantissa whose tail
     the notation can take (``4u700`` is not ``4u70``).
 
-    The last group is where this notation is narrower than the resistance side's,
-    and it is a **recorded gap rather than an oversight**: the fraction is
-    required, so ``100n`` -- which ``core/parts.quantity_slug`` calls the
-    schematic spelling of 100 nF, and which the shelf addresses a part by -- is
-    still unread. Reading it is not a regex question: a board declaring ``1n``
-    exists in this repo (the RC insert scenario of ``tests/test_036_subcircuit.py``),
-    and reading it makes a previously invisible RC pair a finding, which ``edit
-    apply``'s "a change may not add findings" gate then refuses to save. The
-    decision belongs to that gate; ``tasks/077-capacitance-infix.md`` §交卷
-    records the measurement for the next batch.
+    The last group is what 087 removed: the fraction used to be **required**, so
+    ``100n`` -- which ``core/parts.quantity_slug`` calls the schematic spelling of
+    100 nF, and which the shelf addresses a part by -- was unread, and that gap is
+    now closed (the reading is pinned in the test above). What did **not** move
+    with it is the anchoring: the notation is still the whole field, so a
+    designator in front (``C4u7``), a trailing unit letter (``4u7F``), a package
+    size in front of the mantissa (``0603n``) and a mantissa longer than three
+    figures (``12345u7``) are all still not readings of a value.
     """
     assert parse_capacitance_farads("4m7") is None
     assert parse_capacitance_farads("4M7") is None
@@ -253,11 +290,12 @@ def test_the_capacitance_mid_letter_notation_refuses_its_neighbours():
     assert parse_capacitance_farads("0u1") is None
     assert parse_capacitance_farads("4u700") is None
     assert parse_capacitance_farads("12345u7") is None
-    # The recorded gap: a field with no fraction after the unit letter.
-    assert parse_capacitance_farads("100n") is None
-    assert parse_capacitance_farads("330u") is None
-    assert parse_capacitance_farads("22u") is None
-    assert parse_capacitance_farads("1n") is None
+    # ...and the two that keep their meaning when the fraction is empty: the
+    # leading zero (``0u1``'s rule) and the size-code strip / long mantissa.
+    assert parse_capacitance_farads("0n") is None
+    assert parse_capacitance_farads("0603n") is None
+    assert parse_capacitance_farads("12345n") is None
+    assert parse_capacitance_farads("u") is None
     # The bare number without a unit is still refused (011's own rule): the
     # mid-letter notation does not turn `100` into anything.
     assert parse_capacitance_farads("100") is None
@@ -1442,6 +1480,41 @@ def test_param3_an_rc_pair_spelled_in_the_trade_notation_is_measured():
     assert not [o for o in states["OK"] if "no resistor-to-ground" in o.message]
 
 
+def test_param3_an_rc_pair_with_a_fraction_free_capacitor_is_measured():
+    """The same end-to-end leg with the spelling 087 opened: ``C1 = 100n``.
+
+    This is the shape the shelf addresses a part by, and it is the shape the RC
+    insert scenario in ``tests/test_036_subcircuit.py`` declares (``--c 1n``). 077
+    measured what it cost before opening it: the pair this rule could not see
+    appears, and `edit apply`'s "a change may not add findings" gate stops the
+    save. That gate is 036's to decide and this batch did not touch it -- what is
+    pinned here is the rule's half: the pair is measured, and the number is the
+    one the two values state.
+
+    fc = 1/(2*pi*1k*100nF) = 1591.55 Hz.
+    """
+    lib = _library(_ldo_entry())
+    model = DesignModel()
+    model.components["R1"] = Component(
+        uid="r1", designator="R1", value="1K",
+        pins=[Pin("1", "A", "SIG"), Pin("2", "B", "MID")])
+    model.components["C1"] = Component(
+        uid="c1", designator="C1", value="100n",
+        pins=[Pin("1", "A", "MID"), Pin("2", "B", "GND")])
+    model.nets = {
+        "SIG": Net("SIG", [("R1", "1")]),
+        "MID": Net("MID", [("R1", "2"), ("C1", "1")]),
+        "GND": Net("GND", [("C1", "2")]),
+    }
+    states = _states(RcCutoff(library=lib), model)
+    reported = [o for o in states["OK"] if "fc =" in o.message]
+    assert len(reported) == 1 and reported[0].subject == "R1/C1"
+    assert "fc = 1,592 Hz" in reported[0].message
+    # The evidence quotes the field as the board spells it, fraction-free.
+    assert "C1 value '100n'" in reported[0].evidence
+    assert not [o for o in states["OK"] if "no resistor-to-ground" in o.message]
+
+
 def test_param3_no_rc_pair_is_reported_not_silent():
     lib = _library(_ldo_entry())
     states = _states(RcCutoff(library=lib), DesignModel())
@@ -2377,17 +2450,25 @@ def test_023_the_capacitance_parser_reads_only_fields_that_state_a_value():
     whole field** -- the unit-suffix form or the trade's notation -- and never a
     group mined out of a longer string.
 
-    Measured over the tokens below, 108 of them hold a mid-letter group that is
-    not a reading of the field: ``CL10A225KA8NNNC`` -> 8 nF, ``DRV8313PWPR`` ->
-    313 pF, ``250uA`` -> 250 uF, ``510nm`` -> 510 nF, ``IRF540N`` -> 540 nF. A
-    reader relaxed to a substring search reads every one of them; this corpus is
-    what says so, and it is the #18 batch's own harvest (deliberately dumber than
-    the decoder, so a string the reader refuses is still *in* it).
+    Measured over the tokens below, 39 of them are refused as a field while an
+    unanchored scan would read one out of them (``_mid_letter_readings`` over the
+    whole token: ``CL10A225KA8NNNC`` -> 8 nF, ``DRV8313PWPR`` -> 313 pF,
+    ``250uA`` -> 250 uF, ``510nm`` -> 510 nF, ``IRF540N`` -> 540 nF). A reader
+    relaxed to a substring search reads every one of them; this corpus is what
+    says so, and it is the #18 batch's own harvest (deliberately dumber than the
+    decoder, so a string the reader refuses is still *in* it). That count was 43
+    before 087 and fell by four, because ``100n``/``330u``/``540n``/``540N`` are
+    now readings of the *whole field* rather than groups mined out of one; the
+    measurement is reproduced by ``evidence/087/probe_invariant_count.py``.
+
+    The notation pattern below carries the fraction as optional for the same
+    reason the reader does (087): ``100n`` *is* the notation as a whole field, so
+    a pattern that still demanded a fraction would call it a mining accident.
     """
     import re
 
     suffix = re.compile(r"\d+(?:\.\d+)?\s*(?:pF|nF|uF|MF)", re.IGNORECASE)
-    notation = re.compile(r"\d+[unp\u00b5\u03bc]\d{1,2}", re.IGNORECASE)
+    notation = re.compile(r"\d+[unp\u00b5\u03bc]\d{0,2}", re.IGNORECASE)
 
     tokens = _corpus_tokens()
     assert len(tokens) > 1000, f"the corpus shrank to {len(tokens)} tokens"

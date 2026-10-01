@@ -370,8 +370,11 @@ def _cap_spelling(text: str) -> str:
 
 
 #: The capacitance notation **as a whole field**: the digits of the mantissa, one
-#: unit letter, and the digits after it that carry the fraction (``4u7`` = 4.7 µF,
-#: ``2n2`` = 2.2 nF, ``5p1`` = 5.1 pF, ``4u70`` = 4.70 µF).
+#: unit letter, and the digits after it that carry the fraction if there are any
+#: (``4u7`` = 4.7 µF, ``2n2`` = 2.2 nF, ``5p1`` = 5.1 pF, ``4u70`` = 4.70 µF,
+#: ``100n`` = 100 nF, ``22u`` = 22 µF -- the fraction-free spelling the trade
+#: prints whenever the value is a whole number of its unit, and the one
+#: ``core/parts.quantity_slug`` calls "the schematic spelling").
 #:
 #: It is written out here rather than left to the scan below because this is the
 #: shape question -- *is the field the notation* -- and the scan answers the
@@ -379,21 +382,28 @@ def _cap_spelling(text: str) -> str:
 #: every witness below is refused by the guard named, and by that one only.
 #:
 #: * this pattern owns the **anchoring** (``C4u7``: a designator in front of the
-#:   notation is not a value field) and the **presence** of a fraction;
-#: * the scan owns the fraction's **length** (``2N2222``: four digits after the
-#:   letter, the same cap the resistance notation puts on ``4K700``), the size-code
-#:   strip, the empty digit run and the leading zero (``12345u7``, ``0603u1``,
-#:   ``u7``, ``0u1``).
+#:   notation is not a value field) and the **presence of a mantissa** -- digits
+#:   in front of the unit letter, which the resistance side requires too (``u7``
+#:   states nothing, ``0u1`` says 0.1 in a spelling this reader does not own);
+#: * the scan owns the fraction's **presence and length** (``100n`` and ``22u``
+#:   state the value outright; ``2N2222``'s four digits after the letter are the
+#:   cap the resistance notation puts on ``4K700``), the size-code strip and the
+#:   leading zero (``12345u7``, ``0603u1``).
 #:
-#: The fraction is **required**, which is where this notation is narrower than the
-#: resistance side's: ``100n`` (the shelf's own slug spelling of 100 nF) and ``22u``
-#: are still unread, and that gap is recorded in ``tasks/077-capacitance-infix.md``
-#: rather than opened here -- a witness for it is a scenario whose board declares
-#: such a value, and the repo has one (``tests/test_036_subcircuit.py``'s RC insert
-#: declares ``1n``): reading it turns a previously invisible RC pair into a
-#: finding, which ``edit apply``'s own "a change may not add findings" gate then
-#: refuses to save. Widening is a decision about that gate, not about a regex.
-_CAP_NOTATION_FIELD_RE = re.compile(r"\d+[unp\u00b5\u03bc]\d+", re.IGNORECASE)
+#: The fraction is **optional** as of 087. 077 read the shape with the fraction
+#: required and recorded the gap rather than opening it, and the gap was this
+#: repository's own: ``core/parts.quantity_slug`` calls ``100n`` "the schematic
+#: spelling" and addresses shelf parts by it (``cap.100n_0402``), so the shelf and
+#: the board were two spellings of one value (071 §2, same family, same reason).
+#: What opening it cost was measured before it was decided: the four tokens this
+#: repository's own corpus gains are ``100n``/``330u``/``540n``/``540N``, no board
+#: changes state, no eval case moves -- and one scenario does, on purpose
+#: (``tests/test_036_subcircuit.py``'s RC insert declares ``1n``; reading it turns
+#: a previously invisible RC pair into a finding, which ``edit apply``'s own "a
+#: change may not add findings" gate then refuses to save). That gate's 口径 is a
+#: separate decision and was not touched here; the scenario's own expectation is
+#: what was re-pinned, with the measurement written down in its comment.
+_CAP_NOTATION_FIELD_RE = re.compile(r"\d+[unp\u00b5\u03bc]\d*", re.IGNORECASE)
 
 
 def _mid_letter_farads(text: str) -> float | None:
@@ -409,18 +419,20 @@ def _mid_letter_farads(text: str) -> float | None:
     ``1N4`` would read as 1.4 nF. What refuses those two is the scan's own cap on
     the fraction -- four digits after the letter is the tail the resistance
     notation refuses in ``4K700`` -- while the whole-field match below refuses
-    ``C4u7`` and ``540N``, which are not the notation at all. ``2n2`` is the
-    capacitance and ``2N2222`` is not a capacitor.
+    ``C4u7``, which is not the notation at all. ``540N`` *is* the notation (540 nF,
+    087 on), and the part number that contains it, ``IRF540N``, is refused by the
+    anchoring rather than by its shape. ``2n2`` is the capacitance and ``2N2222``
+    is not a capacitor.
 
     Two questions, in this order, and neither answers the other:
 
     * **is the field the notation** (:data:`_CAP_NOTATION_FIELD_RE`, a whole-field
       match) -- what is read has to *be* the field, not sit inside it, and the
-      field has to carry the digits after the letter;
+      field has to carry digits in front of the unit letter;
     * **what is it worth** -- the scan the resistance side uses
-      (:func:`_mid_letter_readings`), which owns the fraction's length, the
-      size-code strip, the mantissa's three figures and the meaning of the
-      fraction.
+      (:func:`_mid_letter_readings`), which owns the fraction's presence and
+      length, the size-code strip, the mantissa's three figures and the meaning of
+      the fraction.
 
     Its own refusal is ``vendor_prefix=False``: a Value field states the value and
     nothing else, so the digit run in front of the unit letter is the mantissa
@@ -462,11 +474,15 @@ def decode_eia_3digit(code: str, base: float) -> float | None:
 #:   ``1M0`` = 1 MΩ. Uppercase ``M`` only: lowercase ``m`` is milli in some
 #:   houses and mega in others, so it is refused;
 #: * capacitance (issue #23) — ``4u7`` = 4.7 µF, ``2n2`` = 2.2 nF, ``5p1`` =
-#:   5.1 pF: ``u``/``n``/``p`` are the units the trade prints. ``m``/``M``
-#:   (``4m7`` = 4.7 mF) is refused, for a blunter reason than the resistance
-#:   letter: a millifarad part is far enough outside the vocabulary that the
-#:   tokens spelling it are pseudo-readings rather than values. The unit
-#:   spelled out in full is still read — ``1mF`` is the suffix grammar's, above.
+#:   5.1 pF: ``u``/``n``/``p`` are the units the trade prints. The fraction is the
+#:   digits after the decimal point when there are any, and a whole number of the
+#:   unit needs none: ``100n`` = 100 nF and ``22u`` = 22 µF are the trade's own
+#:   spelling for those values (087, and the resistance side has always read the
+#:   same way round). ``m``/``M`` (``4m7`` = 4.7 mF) is refused, for a blunter
+#:   reason than the resistance letter: a millifarad part is far enough outside
+#:   the vocabulary that the tokens spelling it are pseudo-readings rather than
+#:   values. The unit spelled out in full is still read — ``1mF`` is the suffix
+#:   grammar's, above.
 #:
 #: The micro letter has three code points (MICRO SIGN, GREEK SMALL LETTER MU,
 #: and the GREEK CAPITAL LETTER MU both upper-case to) and they are one unit
