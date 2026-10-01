@@ -167,6 +167,35 @@ def test_the_three_write_surfaces_are_where_they_belong():
     }
 
 
+def test_page_addressed_placements_declare_pageuuid():
+    """A placement that targets a page must name that page in its params.
+
+    `sch.place_netlabel` and `sch.place_text` already carry `pageUuid` so a
+    caller can refuse to draw into a page the editor is not focused on (#44).
+    The three siblings that draw the same way — wire, power flag, net port —
+    must declare it too, otherwise the guard is only reachable on part of the
+    placement surface and the catalogue reads as if the guard were universal.
+    """
+    for name in ("sch.place_wire", "sch.place_power", "sch.place_netport"):
+        action = next(a for a in ACTIONS if a.name == name)
+        assert "pageUuid" in action.params, (
+            f"{name} places into the focused page but does not declare pageUuid"
+        )
+
+
+def test_doc_open_is_risk_write_like_doc_focus():
+    """#44: `doc.open` was filed as `read` next to the other focus movers.
+
+    `doc.focus` has been `write` all along, and neither call changes a byte of
+    the project — both decide which page the next placement lands on. Leaving
+    one of the pair at `read` makes the risk field answer "does it change
+    content?" when the editor's real question is "what can this move me onto?".
+    """
+    by_name = {action.name: action for action in ACTIONS}
+    assert by_name["doc.open"].risk == "write"
+    assert by_name["doc.open"].risk == by_name["doc.focus"].risk
+
+
 def test_read_actions_never_claim_to_write():
     for action in ACTIONS:
         if action.risk != "read":

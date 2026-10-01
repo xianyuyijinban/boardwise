@@ -200,11 +200,11 @@ class Action:
     #: because a forgotten risk is a silently ungated action.
     #:
     #: * ``read`` — cannot change project content. Reads, probes, exports, and
-    #:   view-only annotations (``canvas.highlight``) live here; so does
-    #:   ``doc.open``, which changes the editor's active document but not a
-    #:   single byte of what the project contains.
+    #:   view-only annotations (``canvas.highlight``) live here.
     #: * ``write`` — changes existing content in place (place, wire, attribute
-    #:   writes, rename, save).
+    #:   writes, rename, save), or moves the editor's focus. ``doc.open`` and
+    #:   ``doc.focus`` change no byte of the project, but they decide which page
+    #:   the placement actions land on, so they are write.
     #: * ``create`` — produces a **new document**. The daemon refuses these
     #:   unless ``params.confirm is True`` (``CONFIRMATION_REQUIRED``).
     risk: str
@@ -680,9 +680,12 @@ ACTIONS: tuple[Action, ...] = (
     Action(
         name="sch.place_wire",
         summary="Place a wire polyline, optionally naming its net.",
-        params=("points", "net"),
+        params=("points", "net", "pageUuid"),
         returns="{uuid}",
-        params_schema="points: [[x, y], …] (2+ points); net: optional net name carried by the wire",
+        params_schema=(
+            "points: [[x, y], …] (2+ points); net: optional net name carried by the wire; "
+            "pageUuid: refuse to write unless the focused page matches"
+        ),
         risk="write",
     ),
     Action(
@@ -720,9 +723,12 @@ ACTIONS: tuple[Action, ...] = (
             "Place a power / ground net flag (a real library component placed "
             "by the editor, named with the given net)."
         ),
-        params=("kind", "net", "x", "y", "rotation", "mirror"),
+        params=("kind", "net", "x", "y", "rotation", "mirror", "pageUuid"),
         returns="{uuid}",
-        params_schema="kind: 'Power' | 'Ground' | 'AnalogGround' | 'ProtectGround'",
+        params_schema=(
+            "kind: 'Power' | 'Ground' | 'AnalogGround' | 'ProtectGround'; "
+            "pageUuid: refuse to write unless the focused page matches"
+        ),
         risk="write",
     ),
     Action(
@@ -732,9 +738,12 @@ ACTIONS: tuple[Action, ...] = (
             "LAST resort only: xianyuyijinban's rule bans I/O ports for signal naming — "
             "the draw flow names signals with label actions and never emits one."
         ),
-        params=("direction", "net", "x", "y", "rotation", "mirror"),
+        params=("direction", "net", "x", "y", "rotation", "mirror", "pageUuid"),
         returns="{uuid}",
-        params_schema="direction: 'IN' | 'OUT' | 'BI'",
+        params_schema=(
+            "direction: 'IN' | 'OUT' | 'BI'; "
+            "pageUuid: refuse to write unless the focused page matches"
+        ),
         risk="write",
     ),
     # --- 012: delete / move / rotate by id (the AI's basic edit verbs) -------
@@ -976,7 +985,7 @@ ACTIONS: tuple[Action, ...] = (
         params=("uuid",),
         returns="{uuid, tabId, opened, activated, document: {uuid, name, type, active}}",
         params_schema="uuid: schematic page / schematic / PCB uuid (from doc.list)",
-        risk="read",
+        risk="write",
     ),
     Action(
         name="pcb.doc.new",

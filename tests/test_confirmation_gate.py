@@ -30,9 +30,11 @@ run = tb.run
 TOKEN = tb.TOKEN
 
 #: Actions from each risk class, so the gate's scope is asserted, not assumed.
+#: `doc.open` is a write since #44: it moves no bytes, but it decides which page
+#: the next placement lands on, same as the `doc.focus` it now sits beside.
 CREATE_ACTIONS = ("sch.doc.new", "pcb.doc.new")
-WRITE_ACTIONS = ("sch.place_wire", "doc.rename", "sch.doc.save")
-READ_ACTIONS = ("doc.list", "sch.geometry", "doc.open")
+WRITE_ACTIONS = ("sch.place_wire", "doc.rename", "sch.doc.save", "doc.open")
+READ_ACTIONS = ("doc.list", "sch.geometry", "canvas.highlight")
 
 
 # --------------------------------------------------------------------------
