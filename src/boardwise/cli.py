@@ -3100,18 +3100,28 @@ def _coverage_section(
       net names are unproven (:func:`boardwise.engines.review.refused_conclusions`).
       **Not** `source.unprovenNets.rulesRefused`, which is the length of the rule
       registry ("how many rules are capable of refusing") — see that function;
-    * ``recordsDropped`` — `ParseStats`'s two drop counters, summed. The split
+    * ``recordsDropped`` — `ParseStats`'s three drop counters, summed. The split
       itself is in ``source.parseStats`` (the audit trail, added by this task).
       These used to reach the console only, which left the CI path (`--file`)
-      unable to see them in the report at all;
+      unable to see them in the report at all. The three are not equal in
+      weight, which is why the sum is what gates and the audit trail keeps the
+      split: ``pins_dropped_no_number`` loses one pin's connections,
+      ``components_without_symbol`` loses one part's pins, and
+      ``instances_without_designator`` (task 042 §WI-2) loses the **whole
+      part** — no usable designator means it is not in the model at all, hence
+      invisible to every rule that reads the model, the highest severity of
+      the three. That last one was counted but never wired here (issue #33),
+      so a board carrying 67 unnamed parts read as ``complete``;
     * ``rulesErrored`` — ids of rules that raised while running (fork 2). The run
       survives them now; this is how the report says so.
     """
     from .engines.review import refused_conclusions
 
     model_empty = _model_read_nothing(model, board)
-    records_dropped = int(parse_stats.pins_dropped_no_number) + int(
-        parse_stats.components_without_symbol
+    records_dropped = (
+        int(parse_stats.pins_dropped_no_number)
+        + int(parse_stats.components_without_symbol)
+        + int(parse_stats.instances_without_designator)
     )
     return {
         "parseIncomplete": bool(model_empty or parse_stats.malformed_records),
@@ -3159,8 +3169,8 @@ def _coverage_reasons(coverage: dict) -> list[str]:
         )
     if coverage.get("recordsDropped"):
         reasons.append(
-            f"解析丢弃 {coverage['recordsDropped']} 项记录（管脚无编号 / 器件无符号，"
-            "见 source.parseStats）：覆盖不完整，结果可能漏报"
+            f"解析丢弃 {coverage['recordsDropped']} 项记录（管脚无编号 / 器件无符号 / "
+            "器件无位号，见 source.parseStats）：覆盖不完整，结果可能漏报"
         )
     errored = coverage.get("rulesErrored") or []
     if errored:
@@ -4440,7 +4450,7 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         parse_stats=parse_stats, rules_errored=rules_errored,
     )
     # What the parse saw, in the report rather than only on the console (#30's
-    # adjacent gap): `coverage.recordsDropped` is the sum of the two drop
+    # adjacent gap): `coverage.recordsDropped` is the sum of the three drop
     # counters, and this is the audit trail a reader checks it against.
     source["parseStats"] = parse_stats.as_dict()
     if coverage["modelEmpty"]:
