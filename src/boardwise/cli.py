@@ -196,7 +196,11 @@ INCOMPLETE_EXIT_SENTENCE = (
 )
 
 
-def _parse_drop_note(pins_dropped: int, components_without_symbol: int) -> str:
+def _parse_drop_note(
+    pins_dropped: int,
+    components_without_symbol: int,
+    instances_without_designator: int = 0,
+) -> str:
     """The console note for a schematic parse that dropped things, or ``""``.
 
     English, like the rest of the console output, and printed only when a
@@ -205,16 +209,30 @@ def _parse_drop_note(pins_dropped: int, components_without_symbol: int) -> str:
     dropped" would be a claim about a parse that did not happen. A zeroed item
     therefore contributes nothing instead of "0".
 
-    The two facts are separate claims and stay separately worded: a dropped pin
-    is a connection the reviewer never saw, a component without a symbol is a
-    whole part whose pins are all missing. Both mean the same thing to the
-    reader — the report under-covers this board — so both carry the same tail.
+    The three facts are separate claims and stay separately worded, because
+    they are not the same size of loss:
+
+    * a dropped pin is one connection the reviewer never saw;
+    * a component without a symbol is a whole part whose pins are all missing;
+    * a placement with no usable designator is a whole part that is **not in
+      the model at all** — no component, so no rule that reads the model ever
+      sees it (042 §WI-2). The most severe of the three, and the one a board
+      carrying dozens of them used to render as silence here while
+      ``coverage.recordsDropped`` already counted it.
+
+    All three mean the same thing to the reader — the report under-covers this
+    board — so all three carry the same tail.
     """
     parts: list[str] = []
     if pins_dropped:
         parts.append(f"{pins_dropped} pin(s) dropped during parse (missing pin number)")
     if components_without_symbol:
         parts.append(f"{components_without_symbol} component(s) without a resolvable symbol")
+    if instances_without_designator:
+        parts.append(
+            f"{instances_without_designator} component(s) dropped during parse "
+            f"(no usable designator)"
+        )
     if not parts:
         return ""
     return "note: " + " and ".join(parts) + PARSE_DROP_NOTE_TAIL
@@ -2680,10 +2698,14 @@ def _cmd_review(args: argparse.Namespace) -> int:
     # model" (the exit 3 before this) is a different thing from "a model came
     # back empty".
     live_empty_model = live and _model_read_nothing(model, board)
-    # Same rule for the drop counters: one pair of numbers, rendered once in
-    # English for the console and once in Chinese for the summary.
+    # Same rule for the drop counters: one set of numbers, rendered once in
+    # English for the console and once in Chinese for the summary. All three
+    # producers reach the console now (086); `instances_without_designator` is
+    # the one that used to be counted and gate-closed but never spoken of.
     drop_note = _parse_drop_note(
-        parse_stats.pins_dropped_no_number, parse_stats.components_without_symbol
+        parse_stats.pins_dropped_no_number,
+        parse_stats.components_without_symbol,
+        parse_stats.instances_without_designator,
     )
 
     components, nets = _model_component_counts(model)
@@ -2737,6 +2759,7 @@ def _cmd_review(args: argparse.Namespace) -> int:
             parse_drop_hint=parse_drop_hint(
                 parse_stats.pins_dropped_no_number,
                 parse_stats.components_without_symbol,
+                parse_stats.instances_without_designator,
             ),
         )
         Path(args.md_path).write_text(

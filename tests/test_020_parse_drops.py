@@ -22,6 +22,13 @@ ATTR 被增量保存追加到了文档**末尾**（`parentId` 指回各自 PIN �
 性质改由**合成流**承载（下面 §2 的 `_unnumbered` 现场：一份真正没有任何 `Pin Number`
 ATTR 的 PIN 记录，也就是唯一还该被丢掉、该被报出来的形状）。
 
+**086 起计数器有三个，console 也说三件事（本节 2026-09-30 补）**：`ParseStats` 里一直
+还有第三个丢弃计数器 `instances_without_designator`（042 §WI-2），085 把它接进了
+`coverage.recordsDropped`，但 `_parse_drop_note` 仍只带两个参数——于是那块 67 颗器件
+的板在 JSON 报告里记着"丢了记录"，控制台却一个字不说。086 给 `_parse_drop_note` 补上
+第三参与第三种子句。它和前两个不是一回事：丢的是**整颗器件**，它根本不在模型里，所以
+每条读模型的规则都看不见它（见 §2 末的钉子）。前两个计数器的断言与零语义原样不动。
+
 覆盖范围的**诚实说明**：这两个计数只有 `--view schematic` 会填。pcb 视图的模型来自
 PCB 文档（`parsers/epro2_model.py`），根本不读 SYMBOL 文档，计数"恒为 0"是结构决定的、
 不是量出来的——所以 `_load_model` 不往那里塞统计，`cli._parse_drop_note` 也不把 0 当作
@@ -97,6 +104,27 @@ def _component(part_id: str, symbol: str, designator: str) -> list[str]:
         _attr("Designator", designator, symbol),
         _attr("Symbol", symbol, symbol),
         _attr("Device", "dev-" + designator, symbol),
+    ]
+
+
+def _nameless_part(part_id: str, symbol: str, z_index: int = 5) -> list[str]:
+    """A placement the library says is a part, arriving with no designator.
+
+    042 §WI-2's shape: no ``Designator`` ATTR, and no ``DEVICE META`` document in
+    the file to say "this placement is not a part" either — so
+    ``_looks_like_a_nameless_part`` answers yes and the instance is counted. A
+    ``zIndex`` is required (the title-block frame has none, and a page is not a
+    part). Unlike the two counters above, this one is not a pin-level defect:
+    the whole component never enters the model, so no rule reading the model
+    can see it.
+    """
+    return [
+        _record(
+            "COMPONENT",
+            {"partId": part_id, "x": 300, "y": 400, "rotation": 0, "zIndex": z_index},
+        ),
+        _attr("Symbol", symbol, symbol),
+        _attr("Device", "dev-nameless", symbol),
     ]
 
 
@@ -279,24 +307,81 @@ def test_a_component_without_a_resolvable_symbol_is_counted(tmp_path, capsys):
     )
 
 
-def test_the_console_note_joins_both_facts_and_omits_the_absent_one():
-    # 两项都非 0：一句话说两件事，顺序 = 引脚、器件。
-    both = _parse_drop_note(7, 3)
-    assert both == (
+def test_the_console_note_joins_all_three_facts_and_omits_the_absent_ones():
+    # 三项都非 0：一句话说三件事，顺序 = 引脚、符号、位号。
+    every = _parse_drop_note(7, 3, 11)
+    assert every == (
         "note: 7 pin(s) dropped during parse (missing pin number) "
-        "and 3 component(s) without a resolvable symbol" + PARSE_DROP_NOTE_TAIL
+        "and 3 component(s) without a resolvable symbol "
+        "and 11 component(s) dropped during parse (no usable designator)"
+        + PARSE_DROP_NOTE_TAIL
+    )
+    # 两位数（085 边界②里那张 67 颗器件的板：只有它有话可说，照样说得出来）。
+    assert _parse_drop_note(0, 0, 67) == (
+        "note: 67 component(s) dropped during parse (no usable designator)"
+        + PARSE_DROP_NOTE_TAIL
     )
     # 为 0 的项不出现，也不写 "0" —— 0 在这里不是证据（pcb 视图根本不填计数）。
     assert _parse_drop_note(0, 0) == ""
+    assert _parse_drop_note(0, 0, 0) == ""
     assert "0 " not in _parse_drop_note(0, 3)
     assert "component(s)" not in _parse_drop_note(5, 0)
-    # 中文侧同源：同样的取舍。
+    assert "0 " not in _parse_drop_note(5, 0, 2)
+    assert "pin(s)" not in _parse_drop_note(0, 0, 4)
+    # 中文侧同源：同一组三个计数、同样的取舍（086 起中英都是三项）。
     assert parse_drop_hint(7, 3) == (
         "提示：解析中有7 个引脚因缺少引脚号被丢弃、3 个器件未能解析符号"
         "——审查覆盖不完整，结果可能漏报。"
     )
     assert parse_drop_hint(0, 0) == ""
     assert parse_drop_hint(0, 3).startswith("提示：解析中有3 个器件")
+    assert parse_drop_hint(0, 0, 67) == (
+        "提示：解析中有67 个器件因无可用位号被丢弃——审查覆盖不完整，结果可能漏报。"
+    )
+    assert "0 个" not in parse_drop_hint(5, 0, 2)
+
+
+def test_a_part_with_no_usable_designator_now_says_so_on_the_console(tmp_path, capsys):
+    """085 边界②：一个整颗从模型里消失的器件，console 此前**一个字都不说**。
+
+    085 把第三个计数器接进了 ``coverage.recordsDropped``（JSON 报告里看得见），
+    但 console 这一行仍只有两个计数器，于是那块 67 颗器件的板在报告里被标成
+    丢记录、在控制台上却一片安静。现在第三种子句接上了，实测：只有位号这一项
+    非 0 时，最后一行就是它自己。
+    """
+    path = _write_backup(
+        tmp_path,
+        "nameless_part.epro2",
+        [
+            _doc_head("SCH_PAGE", "page1"),
+            *_component("part1", "sym1", "Q1"),
+            *_nameless_part("part2", "sym1"),
+            *_symbol_doc("sym1", [(0.0, 0.0, 1, "1", "G1")]),
+        ],
+    )
+
+    stats = ParseStats()
+    model = build_schematic_model(path, parse_stats=stats)
+
+    # 计数：只有第三个非 0，另两个照旧是 0。
+    assert stats.instances_without_designator == 1
+    assert (stats.pins_dropped_no_number, stats.components_without_symbol) == (0, 0)
+    # 后果：整颗器件不在模型里（不是「没脚」，是「没有这个器件」）。
+    assert list(model.components) == ["Q1"]
+
+    code = cli.main(["review", str(path), "--view", "schematic"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert _lines(out)[-1] == (
+        "note: 1 component(s) dropped during parse (no usable designator)"
+        + PARSE_DROP_NOTE_TAIL
+    )
+
+    # 中文摘要侧是同一组计数（086 起中英同口径）：md 里这句话钉的是 cli.py
+    # 中文调用点的接线——它曾经缺席而 console 有，两侧同源是本批钉的东西。
+    md = tmp_path / "r.md"
+    assert cli.main(["review", str(path), "--view", "schematic", "--md", str(md)]) == 0
+    assert "1 个器件因无可用位号被丢弃" in md.read_text(encoding="utf-8")
 
 
 def test_a_synthetic_backup_with_both_defects_says_both(tmp_path, capsys):
