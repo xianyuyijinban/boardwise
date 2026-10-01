@@ -44,7 +44,11 @@ from boardwise.core.candidate import (
     candidate_from_geometry,
     candidate_from_netlist,
 )
-from boardwise.core.compare import ComparisonReport, compare_models
+from boardwise.core.compare import (
+    ComparisonReport,
+    compare_models,
+    plan_membership_renames,
+)
 from boardwise.core.model import DesignModel
 from boardwise.core.overrides import AppliedOverrides, apply_overrides
 from boardwise.core.verify import PlacementReport
@@ -606,12 +610,18 @@ def _reconcile_derived_names(
     the rename never fires — measured 2026-09-15 (NET6 vs $16N3, electrically
     the same wire F3 had just connected).
 
-    A rename whose target name is **already taken** is abandoned, never merged
-    and never overwritten (issue #46): ``candidate.nets[new] = net`` used to
-    drop the net that was already sitting under that name, pins and all. The
-    reason is appended to ``skipped`` when the caller passes a list, word for
-    word as :func:`boardwise.core.compare.reconcile_names` writes it — the two
-    implementations are held to one behaviour until they are merged.
+    The decision is :func:`boardwise.core.compare.plan_membership_renames`,
+    shared with :func:`boardwise.core.compare.reconcile_names` — one judgement,
+    two applications. This path is the ``respect_golden_names=True`` side: a
+    candidate net whose name is already a golden name is left alone, because
+    the drawn board carries our names explicitly and a match is the right
+    answer. A rename whose target name is **already taken** is abandoned, never
+    merged and never overwritten (issue #46) — ``candidate.nets[new] = net``
+    used to drop the net already sitting under that name, pins and all — and
+    the reason is appended to ``skipped`` when the caller passes a list.
+
+    This path applies in place: the candidate is mutated and the number of
+    renames comes back.
     """
     translate: dict[tuple[str, str], tuple[str, str]] = {}
     for designator, pin_map in (pin_maps or {}).items():
@@ -622,46 +632,13 @@ def _reconcile_derived_names(
                 designator, str(golden_number),
             )
 
-    def members(pins) -> frozenset:
-        return frozenset(translate.get(pin, pin) for pin in pins)
-
-    golden_by_members: dict[frozenset, str] = {}
-    for name, net in golden.nets.items():
-        golden_by_members.setdefault(members(net.pins), name)
-
-    renamed: dict[str, str] = {}
-    taken: dict[str, str] = {}  # golden name -> the candidate net that took it
-    for name, net in candidate.nets.items():
-        if name in golden.nets:
-            continue  # already the right name; leave it alone
-        match = golden_by_members.get(members(net.pins))
-        if match is None:
-            continue
-        if match in taken:
-            if skipped is not None:
-                skipped.append(
-                    f"rename {name!r} -> {match!r} skipped: {taken[match]!r} was "
-                    f"already renamed to {match!r}"
-                )
-            continue
-        renamed[name] = match
-        taken[match] = name
-
-    # A rename onto a name another candidate net **keeps** would overwrite it
-    # (`candidate.nets[new] = net`, pins and all). A net that is itself being
-    # renamed *away* does not block it — a cycle of renames is a permutation,
-    # and each member of it lands on the name the golden gave that cluster.
-    # (One pass, in candidate order: a net dropped here does not hand its name
-    # to somebody else in the same pass.)
-    for name, match in list(renamed.items()):
-        if match != name and match in candidate.nets and renamed.get(match, match) == match:
-            del renamed[name]
-            taken.pop(match, None)
-            if skipped is not None:
-                skipped.append(
-                    f"rename {name!r} -> {match!r} skipped: the candidate already "
-                    f"carries a net called {match!r}"
-                )
+    renamed = plan_membership_renames(
+        golden.nets,
+        candidate.nets,
+        translate=translate,
+        respect_golden_names=True,
+        skipped=skipped,
+    )
 
     if not renamed:
         return 0

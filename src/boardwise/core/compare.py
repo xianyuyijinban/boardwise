@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Mapping
 
 from boardwise.core.model import DesignModel, Net
 
@@ -363,6 +363,97 @@ def compare_models(
     return report
 
 
+def plan_membership_renames(
+    golden_nets: Mapping[str, Net],
+    candidate_nets: Mapping[str, Net],
+    *,
+    translate: Mapping[tuple[str, str], tuple[str, str]] | None = None,
+    respect_golden_names: bool = False,
+    skipped: list[str] | None = None,
+) -> dict[str, str]:
+    """Decide which candidate nets take a golden name, and refuse the rest.
+
+    The one decision behind both membership-reconcile paths: a candidate net
+    whose *member set* is identical to a golden net's is renamed to the golden
+    name, and nothing else is. Returns ``{old candidate name: golden name}`` —
+    the plan only; each caller applies it in its own way (immutably in
+    :func:`reconcile_names`, in place in
+    :func:`boardwise.engines.draw._reconcile_derived_names`).
+
+    Two policy knobs, both explicit because the two callers genuinely differ
+    and neither difference is settled here (086):
+
+    * ``translate`` — rewrite a pin's addressing before comparing member sets,
+      as ``(designator, placed number) -> (designator, golden number)``. A
+      drifted part's placed pins carry pad-name numbers (``A5``), so without
+      the translation the same two-member cluster reads different on each side.
+      The draw path builds one from its ``pin_maps``; the calibration path
+      passes ``None`` because both sides are already in the same addressing.
+    * ``respect_golden_names`` — skip a candidate net that already carries a
+      golden name. ``True`` for the draw path (a name that exists on the
+      golden side is the right one already, and the drawn board carries our
+      names explicitly); ``False`` for calibration, which asks "same
+      connectivity?" and so lets a name that is *also* a golden name be
+      permuted onto the cluster the golden gave that name — the CH340
+      geometry has four such nets, cycled, and every rename has to happen.
+
+    A rename whose target name is **already taken** is abandoned, never merged
+    and never overwritten (issue #46): the first rename to a name keeps it, a
+    second gives up and says so, and a rename onto a name another candidate
+    net *keeps* is refused too. A net that is itself being renamed *away* does
+    not block it — a cycle of renames is a permutation, and each member of it
+    lands on the name the golden gave that cluster. This function is the
+    **only** source of the ``skipped`` wording, so the two callers report the
+    same input in the same words.
+    """
+    translate = translate or {}
+
+    def members(pins) -> frozenset:
+        return frozenset(translate.get(pin, pin) for pin in pins)
+
+    golden_by_members: dict[frozenset, str] = {}
+    for name, net in golden_nets.items():
+        golden_by_members.setdefault(members(net.pins), name)
+
+    renamed: dict[str, str] = {}
+    taken: dict[str, str] = {}  # golden name -> the candidate net that took it
+    for name, net in candidate_nets.items():
+        if respect_golden_names and name in golden_nets:
+            continue  # already the right name; leave it alone
+        match = golden_by_members.get(members(net.pins))
+        if match is None:
+            continue
+        if match in taken:
+            if skipped is not None:
+                skipped.append(
+                    f"rename {name!r} -> {match!r} skipped: {taken[match]!r} was "
+                    f"already renamed to {match!r}"
+                )
+            continue
+        renamed[name] = match
+        taken[match] = name
+
+    # A rename onto a name another candidate net **keeps** would weld two
+    # clusters into one (compare's `nets.setdefault` used to merge them; draw's
+    # `candidate.nets[new] = net` dropped the incumbent, pins and all). The net
+    # already called `NET1` and the one being renamed to `NET1` are different
+    # circuits, and only one of them ever earned the name. A net that is itself
+    # being renamed *away* does not block it — a cycle of renames is a
+    # permutation, and each member of it lands on the name the golden gave that
+    # cluster. (One pass, in candidate order: a net dropped here does not hand
+    # its name to somebody else in the same pass.)
+    for name, match in list(renamed.items()):
+        if match != name and match in candidate_nets and renamed.get(match, match) == match:
+            del renamed[name]
+            taken.pop(match, None)
+            if skipped is not None:
+                skipped.append(
+                    f"rename {name!r} -> {match!r} skipped: the candidate already "
+                    f"carries a net called {match!r}"
+                )
+    return renamed
+
+
 def reconcile_names(
     candidate: DesignModel,
     golden: DesignModel,
@@ -381,50 +472,24 @@ def reconcile_names(
     the draw verdict, where the drawn board carries our names explicitly and
     names must match verbatim.
 
-    A rename whose target name is **already taken** is abandoned, never merged
-    and never overwritten (issue #46): the candidate keeps the name the editor
-    gave it, and the reason is appended to ``skipped`` when the caller passes a
-    list. The messages are word-for-word the ones
-    :func:`boardwise.engines.draw._reconcile_derived_names` writes, because the
-    two implementations are held to one behaviour until they are merged.
+    The decision is :func:`plan_membership_renames`, shared with
+    :func:`boardwise.engines.draw._reconcile_derived_names` — one judgement, two
+    applications. Calibration is the ``respect_golden_names=False`` side: a
+    candidate net whose name is *also* a golden name may still be sitting on
+    another golden cluster, and permuting those is the point of comparing by
+    membership rather than by name. A rename whose target name is **already
+    taken** is abandoned, never merged and never overwritten (issue #46), and
+    the reason is appended to ``skipped`` when the caller passes a list.
+
+    This path applies immutably: the candidate is left alone and a new
+    :class:`DesignModel` comes back.
     """
-    golden_by_members: dict[frozenset, str] = {}
-    for name, net in golden.nets.items():
-        golden_by_members.setdefault(frozenset(net.pins), name)
-
-    renamed: dict[str, str] = {}
-    taken: dict[str, str] = {}  # golden name -> the candidate net that took it
-    for name, net in candidate.nets.items():
-        match = golden_by_members.get(frozenset(net.pins))
-        if match is None:
-            continue
-        if match in taken:
-            if skipped is not None:
-                skipped.append(
-                    f"rename {name!r} -> {match!r} skipped: {taken[match]!r} was "
-                    f"already renamed to {match!r}"
-                )
-            continue
-        renamed[name] = match
-        taken[match] = name
-
-    # A rename onto a name another candidate net **keeps** would weld two
-    # clusters into one (`nets.setdefault` used to merge them): the net already
-    # called `NET1` and the one being renamed to `NET1` are different circuits,
-    # and only one of them ever earned the name. A net that is itself being
-    # renamed *away* does not block it — a cycle of renames is a permutation,
-    # and each member of it lands on the name the golden gave that cluster.
-    # (One pass, in candidate order: a net dropped here does not hand its name
-    # to somebody else in the same pass.)
-    for name, match in list(renamed.items()):
-        if match != name and match in candidate.nets and renamed.get(match, match) == match:
-            del renamed[name]
-            taken.pop(match, None)
-            if skipped is not None:
-                skipped.append(
-                    f"rename {name!r} -> {match!r} skipped: the candidate already "
-                    f"carries a net called {match!r}"
-                )
+    renamed = plan_membership_renames(
+        golden.nets,
+        candidate.nets,
+        respect_golden_names=False,
+        skipped=skipped,
+    )
 
     import copy as _copy
 
