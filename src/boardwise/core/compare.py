@@ -214,9 +214,12 @@ def values_equal(golden: str, candidate: str) -> bool:
        last bit of a float (issue #39).
 
     Anything else is not equal. A value the parsers cannot read — a multi-token
-    ``472M 1KV``, a unit-less ``22u``, a bare ``10H`` — falls through to the
-    string comparison that already said "not equal", which is 005's refusal to
-    guess. Note what step 3 does *not* have to do: it no longer needs a list of
+    ``472M 1KV``, a bare ``10H``, a ``5.1K`` in a capacitance slot — falls through
+    to the string comparison that already said "not equal", which is 005's refusal
+    to guess. (A unit-less ``22u`` used to be listed there, and 087 closed it: the
+    fraction-free spelling is read, so ``22u`` and ``22uF`` meet at step 3 instead
+    of being reported as a difference between two spellings of one part.) Note
+    what step 3 does *not* have to do: it no longer needs a list of
     prefixes too ambiguous to trust. A lowercase ``m`` used to be blacklisted
     because the same string means milli on a resistor and micro on an old
     capacitor marking; the dispatch above settles it structurally, because

@@ -38,8 +38,11 @@ What each file pins:
 * the delegations themselves, at the level the defect was reported at —
   ``values_equal``, ``check_constraint``, the power-tree gate;
 * the **refusals**, which are the half a fix like this usually loses: a
-  multi-token value, a lowercase ``m``, a unit-less capacitor, ``5.1K`` as a
-  capacitance, an empty parameter, a voltage neither parser reads;
+  multi-token value, a lowercase ``m``, ``5.1K`` as a capacitance, an empty
+  parameter, a voltage neither parser reads — and, since 087 read the
+  fraction-free ``22u``, the one refusal this list used to hold that has become
+  an equality (``test_the_fraction_free_capacitor_spelling_is_one_value_not_a_
+  false_difference``);
 * the #52 divergence matrix as a regression net — the spellings the old
   constraint accepted must still load, because delegating to a parser that is
   narrower on one axis (``1G``, ``1meg``, a bare ``1F``) would turn a repair
@@ -109,7 +112,6 @@ def test_two_spellings_of_one_value_are_equal(golden, candidate):
         ("1m", "1mF"),
         ("0.001", "1mF"),
         ("472M", "472M 1KV"),  # multi-token degrades to string comparison
-        ("22u", "22uF"),  # a capacitor with no unit is not a capacitance
         ("10H", "10"),  # a henry is not a quantity this repository reads
         ("abc", "10k"),
         ("4K7", ""),
@@ -117,6 +119,28 @@ def test_two_spellings_of_one_value_are_equal(golden, candidate):
 )
 def test_two_values_that_are_not_one_value_are_not_equal(golden, candidate):
     assert values_equal(golden, candidate) is False
+
+
+def test_the_fraction_free_capacitor_spelling_is_one_value_not_a_false_difference():
+    """087 closes this file's own boundary case: ``22u`` is 22 µF, and compare used
+    to call that a design difference.
+
+    083 filed it as a known boundary — the parser could not read ``22u``, so
+    ``values_equal`` fell through to its string comparison and reported a
+    candidate that merely respelled a part as a changed board. That is the worst
+    kind of compare bug: a false difference sends a designer to hunt for a change
+    that is not there. 087 opened the fraction-free spelling, so the two strings
+    now parse to the same quantity and compare's step 3 answers on the numbers.
+    The kind still travels with the number, so this is not "compare compares
+    numbers": ``22u`` is 22 µF and never 22 Ω.
+    """
+    assert values_equal("22u", "22uF") is True
+    assert values_equal("100n", "100nF") is True
+    assert values_equal("100n", "0.1uF") is True
+    assert values_equal("22U", "22uF") is True, "the unit letter is case-insensitive"
+    # ...and the neighbour that must stay unequal: the same digits, ohms.
+    assert values_equal("22u", "22") is False
+    assert values_equal("100n", "100") is False
 
 
 def test_a_lowercase_m_is_read_as_milliohms_and_still_never_matches_10k():

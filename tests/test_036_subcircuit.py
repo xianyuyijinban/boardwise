@@ -1086,9 +1086,43 @@ def test_preview_refuses_a_stale_snapshot_for_an_insert_plan(tmp_path, capsys):
     assert "快照已失效" in capsys.readouterr().err
 
 
-def test_apply_insert_rc_lowpass_deletes_places_wires_and_saves(
+def test_apply_insert_rc_lowpass_writes_the_circuit_and_stops_at_its_measurement(
     monkeypatch, tmp_path, capsys
 ):
+    """The whole mechanical leg of an RC insert, and where it now stops.
+
+    **What this scenario is for**: the apply mechanics of an insert — off the old
+    net first, then both parts, then their wires, then the ground flag — read back
+    twice (the editor's own netlist and the canvas) and compared against the plan's
+    postconditions. None of that is about values.
+
+    **What 087 changed about it**: the plan's shunt capacitor declares ``1n``, and
+    087 opened the fraction-free spelling, so ``1n`` is read as 1 nF where 077 read
+    nothing at all. The resistor (``1k``) was always readable, so the insert now
+    creates the one thing the pre-087 blindness hid: ``param-rc-cutoff`` has an RC
+    pair to report and files an INFO measurement row (fc = 1/(2*pi*1k*1n) =
+    159,155 Hz). 036's gate counts findings **by identity and not by severity**
+    (SKILL pit 40 says so out loud), so a report-only measurement the insert caused
+    is a "new finding" and the run stops before the save.
+
+    The gate is **not** weakened here and the fixture is **not** bent to hide this:
+    the scenario keeps the value the CLI documents (``--c 1n``), and the refusal is
+    pinned as the behaviour it now is. Two reasons that is the honest re-pin rather
+    than a convenient one:
+
+    * the refusal is pre-existing 036 behaviour, not something 087 invented —
+      SKILL pit 40 records exactly this trap for ``param-rc-cutoff`` on a board that
+      already spelled its values readably (``4u7``, ``1nF``). 087 only widened the
+      set of spellings that reach it;
+    * the save leg of ``edit apply`` for an insert is still covered here, by
+      ``test_apply_insert_divider_is_a_pure_create_and_judges_the_export`` — a
+      divider creates no measurement, so it reaches ``sch.doc.save`` and exit 0.
+
+    What a batch *could* argue about is the gate's 口径 (an INFO measurement the
+    change itself caused arguably should not block a save). That is 036's decision,
+    not this one's, and the task book for 087 forbids touching the gate; the
+    measurement is written down here so the next reader has it.
+    """
     plan_path, _plan = _rc_plan(tmp_path)
     bridge = _rc_bridge()
     _stub_bridge(monkeypatch, bridge)
@@ -1097,21 +1131,31 @@ def test_apply_insert_rc_lowpass_deletes_places_wires_and_saves(
 
     code = cli.main(["edit", "apply", str(plan_path), "--json", str(result)])
     printed = capsys.readouterr().out
-    assert code == 0, printed
+    assert code == 2, printed
+    assert "new_findings" in printed
+    # Every mechanical write still happens, in the same order ... and the save
+    # does not, because the finding gate runs after the writes and before it.
     assert [action for action, _ in bridge.writes] == [
         "sch.delete_primitives",
         "sch.place_component", "sch.place_component",
         "sch.place_wire", "sch.place_wire", "sch.place_wire",
         "sch.place_power",
-        "sch.doc.save",
-    ], "off the old net first, then both parts, then their wires, then the save"
+    ], "off the old net first, then both parts, then their wires -- and no save"
     report = json.loads(result.read_text(encoding="utf-8"))
-    assert report["outcome"] == "applied"
+    assert report["outcome"] == "failed" and report["reason"] == "new_findings"
+    # The circuit itself verifies: both postcondition legs are clean and the range
+    # diff names the vanished attachment, so the refusal is the gate's and not the
+    # mechanics'.
     assert report["verification"]["live"] == [] and report["verification"]["canvas"] == []
     assert report["range"]["wiresVanished"] == ["w-attach"]
     assert "canvas identity" in report["rangeBasis"]
-    assert report["findings"]["new"] == []
-    assert report["persistence"] == "saved_unverified"
+    assert report["persistence"] == "", "the run stopped before the save"
+    # The new finding is named, not merely counted: it is the cutoff measurement
+    # this insert caused, and it quotes the value field as the board spells it.
+    assert len(report["findings"]["new"]) == 1
+    grown = report["findings"]["new"][0]
+    assert grown.startswith("param-rc-cutoff|INFO|RC R1"), grown
+    assert "C1(1n)" in grown and "fc = 159,155 Hz" in grown
     # The node's wires are placed **without** a net name, so the editor names the
     # island itself (036 §3: compare islands, not names).
     wire_calls = [params for action, params in bridge.writes if action == "sch.place_wire"]
@@ -1245,7 +1289,13 @@ def test_apply_insert_fails_when_a_rule_reports_something_new(
     monkeypatch, tmp_path, capsys
 ):
     """There is no rule of our own to re-review, so every rule gets a say: the
-    finding set may shrink, never grow."""
+    finding set may shrink, never grow.
+
+    Two rules answer this insert, not one. The LDO's supply pin is left on a net
+    with no capacitor, which `decap-required-caps` reports; and since 087 reads the
+    fraction-free ``1n``, `param-rc-cutoff` has the inserted pair to measure and
+    files its report-only row (see the test above for that half on its own).
+    """
     plan_path, _plan = _rc_plan(tmp_path)
     bridge = _rc_bridge()
     _stub_bridge(monkeypatch, bridge)
@@ -1268,6 +1318,8 @@ def test_apply_insert_fails_when_a_rule_reports_something_new(
     assert "new_findings" in printed
     report = json.loads((tmp_path / "a.json").read_text(encoding="utf-8"))
     assert report["findings"]["new"], "the new lines are printed, not just counted"
+    assert any(item.startswith("decap-required-caps|") for item in report["findings"]["new"]), \
+        report["findings"]["new"]
     assert "sch.doc.save" not in [action for action, _ in bridge.writes]
 
 
