@@ -535,15 +535,23 @@ def test_the_report_renders_the_coverage_section_from_the_json(tmp_path):
 
 
 def test_the_parse_stats_reach_the_report(tmp_path):
-    """Issue #30's adjacent gap: the two drop counters were console-only."""
+    """Issue #30's adjacent gap: the drop counters were console-only (#33: three)."""
     _code, report, _out = _checkup(tmp_path, GOLDEN, name="stats-out")
 
     stats = report["source"]["parseStats"]
     assert stats["pins_dropped_no_number"] == 0
     assert stats["components_without_symbol"] == 0
-    # ... and the gate's own number is their sum, read from one place.
+    assert stats["instances_without_designator"] == 0
+    # ... and the gate's own number is their sum, read from one place. This
+    # fixture parses clean, so all three are 0 and the equality cannot tell the
+    # terms apart — `test_the_records_dropped_sum_reads_all_three_counters` is
+    # where the wiring is pinned down, on distinct values. What this one holds
+    # is the *contract*: the sum has three terms, so unwiring the third here
+    # reads as a broken assertion rather than a passing one.
     assert report["completion"]["coverage"]["recordsDropped"] == (
-        stats["pins_dropped_no_number"] + stats["components_without_symbol"]
+        stats["pins_dropped_no_number"]
+        + stats["components_without_symbol"]
+        + stats["instances_without_designator"]
     )
 
 
@@ -576,10 +584,93 @@ def test_the_coverage_section_reads_the_tier_ladder_and_the_parse():
     )
 
     assert coverage["pagesDropped"] == 2, "two pages of three never arrived"
-    assert coverage["recordsDropped"] == 3, "2 pins + 1 part without a symbol"
+    assert coverage["recordsDropped"] == 3, (
+        "2 pins + 1 part without a symbol, and 0 parts without a designator"
+    )
     assert coverage["parseIncomplete"] is True and coverage["modelEmpty"] is False
     assert coverage["rulesErrored"] == ["decap-required-caps", "led"], "ids, deduped+sorted"
     assert coverage["rulesRefused"] == 0, "nothing is welded here, so nothing is refused"
+
+
+def test_the_records_dropped_sum_reads_all_three_counters():
+    """Issue #33: ``instances_without_designator`` is a producer too, so it gates.
+
+    The three counters carry **distinct** values and two ungated counters carry
+    live decoy values, so the sum names the exact three fields: swap the third
+    term for any other ``ParseStats`` int and the total moves off 10. Equal
+    values would not witness that — adding a zeroed field looks identical.
+    """
+    from boardwise.cli import _coverage_section
+    from boardwise.core.geometry import ParseStats
+
+    model = DesignModel()
+    model.components["U1"] = Component(uid="u1", designator="U1", pins=[Pin("1", "VIN", "VCC")])
+    model.nets = {"VCC": Net("VCC", [("U1", "1")])}
+    stats = ParseStats(
+        pins_dropped_no_number=2,
+        components_without_symbol=3,
+        instances_without_designator=5,
+        # Not gated, and deliberately non-zero so a wrong term cannot add up.
+        pads_without_net=9,
+        empty_body_records=11,
+    )
+
+    coverage = _coverage_section(
+        model=model, board=None, attempts=[], parse_stats=stats, rules_errored=[],
+    )
+
+    assert coverage["recordsDropped"] == 10, (
+        "2 pins + 3 parts without a symbol + 5 parts without a designator; "
+        "pads_without_net=9 / empty_body_records=11 are not producers and must "
+        "not be in the sum"
+    )
+
+
+#: The `ParseStats` counters `coverage.recordsDropped` sums. Named explicitly
+#: (not read from `_coverage_section`'s source) so that rewiring the sum has to
+#: come through here too.
+DROP_COUNTERS: tuple[str, ...] = (
+    "pins_dropped_no_number",
+    "components_without_symbol",
+    "instances_without_designator",
+)
+
+#: The int counters on `ParseStats` that deliberately do **not** gate, and why.
+NOT_WIRED: dict[str, str] = {
+    "total_records": "a total, not a loss — it is what the drops are counted against",
+    "pcb_records": "records seen in the PCB document, not dropped",
+    "pads_without_net": "an unnamed pad is still a pad on the board; not a record loss",
+    "empty_body_records": "a body with no geometry is still a component in the model",
+    "malformed_records": "gates on its own field — coverage.parseIncomplete",
+    "attrs_attached_by_parent_id": "counts how attributes arrived, not what was lost",
+}
+
+
+def test_every_int_counter_on_parse_stats_is_gated_or_explained():
+    """The drift gate issue #33 asks for: a new drop counter cannot go unwired.
+
+    Scans `ParseStats` backwards, so adding a counter that drops records — and
+    forgetting to wire it into `coverage.recordsDropped`, which is exactly how
+    #33 shipped — turns this test red instead of silently under-reporting.
+    Declining to gate one is allowed, but only by saying why, here.
+    """
+    import dataclasses
+    import typing
+
+    from boardwise.core.geometry import ParseStats
+
+    hints = typing.get_type_hints(ParseStats)
+    int_fields = {f.name for f in dataclasses.fields(ParseStats) if hints[f.name] is int}
+
+    assert int_fields, "the scan found no int field — has the scan itself gone stale?"
+    assert not int_fields - set(DROP_COUNTERS) - set(NOT_WIRED), (
+        "these ParseStats counters are neither summed into coverage.recordsDropped "
+        "nor registered in NOT_WIRED: gate them, or say here why not"
+    )
+    assert not set(DROP_COUNTERS) - int_fields, (
+        "DROP_COUNTERS names a field ParseStats no longer has — a rename left the "
+        "gate reading a name that is gone"
+    )
 
 
 def test_refused_conclusions_counts_instances_not_the_registry(monkeypatch):
