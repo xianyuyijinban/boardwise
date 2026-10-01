@@ -41,9 +41,11 @@ compiler turns it into a sheet a human can read: where parts sit, how
 wires run, where text goes so it doesn't sit on a wire. Wrong
 connectivity, not enough room, a conflict with your locked placement —
 it refuses rather than hand you a bad drawing. It compiles offline, and
-it can also land a module into the open editor itself — placement, pin
-readback before any wire, save, and a render of the result.
-Multi-module pages are next.
+it can also land into the open editor itself — placement, pin readback
+before any wire, save, and a render of the result. Several modules
+compose onto one page: what is already on the page becomes keep-outs,
+your locked placements are honoured, every rail gets a flag, and one
+`draw discard` takes a landed page back off.
 
 ## Architecture and roadmap
 
@@ -70,7 +72,7 @@ retries.
 |---|---|
 | Schematic review (rule families + datasheet gate + eval harness) | Usable, in maintenance |
 | Review-to-local-edit (preview / authorize / readback / re-review) | Usable |
-| Drawing compiler (divider / RC / LDO) | Single modules land in the editor; multi-module next |
+| Drawing compiler (divider / RC / LDO) | Modules and multi-module pages land in the editor |
 | Full schematic capture → PCB → SPICE simulation | In that order |
 | KiCad platform | Planned |
 
@@ -183,8 +185,10 @@ boardwise checkup
 **画图。** 你写电路意图——分压、RC 低通、LDO，器件、参数、哪个脚接
 哪个网——画法编译器负责把它变成一张能给人看的图：器件怎么摆、线怎么
 走、字放哪不压线。接法错、空间不够、和你的锁定冲突，它宁可拒绝也不交
-出一张烂图。离线出图之外，它已经能把一个模块直接落进开着的编辑器——
-放件、拉线前先回读引脚、保存、再出一张渲染图。多模块整页是下一步。
+出一张烂图。离线出图之外，它已经能直接落进开着的编辑器——放件、
+拉线前先回读引脚、保存、再出一张渲染图。多个模块能组合进同一页：
+页上已有的图元自动变成禁布区、你锁定的位置被尊重、每条电源轨都有
+旗标，一条 `draw discard` 能把落好的整页撤下来。
 
 ### 架构和规划
 
@@ -211,7 +215,7 @@ daemon + 编辑器扩展      读工程数据，写之前先预览、你授权�
 |---|---|
 | 原理图审查（规则族 + 数据手册闸 + 评测体系） | 可用，维护中 |
 | 审查到局部修改（预览/授权/回读/复查） | 可用 |
-| 画法编译器（分压/RC/LDO） | 单模块已能落进编辑器，多模块下一步 |
+| 画法编译器（分压/RC/LDO） | 单模块与多模块整页均已能落进编辑器 |
 | 完整原理图绘制 → PCB → SPICE 仿真 | 按序推进 |
 | KiCad 平台 | 规划中 |
 
