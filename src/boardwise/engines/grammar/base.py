@@ -1,4 +1,4 @@
-"""The vocabulary the three drawing grammars share (053 sec.3, 052 sec.5).
+"""The vocabulary the drawing grammars share (053 sec.3, 052 sec.5).
 
 A *drawing grammar* answers one question: given that this circuit is a voltage
 divider, what must the drawing make visible? Its answer has three parts — the
@@ -231,8 +231,11 @@ FAILURE_CATEGORIES: tuple[str, ...] = (
 #: The role names that bind a **net** (every other role binds a part). The role
 #: vocabulary itself is per grammar; this half of it is common, which is why it
 #: is stated once: `in` / `out` / `gnd` / `tap` are the same four names in
-#: voltage-divider, rc-lowpass and ldo (053 sec.3).
-NET_ROLES: tuple[str, ...] = ("in", "out", "gnd", "tap")
+#: voltage-divider, rc-lowpass and ldo (053 sec.3), and `rail` (088) is the
+#: supply bus of `power-entry`. A net role is what makes
+#: :meth:`RoleBinding.to_jsonable` report ``target: "net"`` for it, and what the
+#: compiler's slot pass skips when it walks bindings looking for parts.
+NET_ROLES: tuple[str, ...] = ("in", "out", "gnd", "tap", "rail")
 
 #: What :attr:`RoleBinding.part_id` is holding — the same field carries either,
 #: because a CircuitSpec names parts and nets by the same kind of stable logical
@@ -883,7 +886,7 @@ def declares_modules(presentation: PresentationSpec) -> bool:
 def shared_module(presentation: PresentationSpec, part_ids: Sequence[str]) -> str:
     """The one module every part is in, or ``""`` (none, or several answers).
 
-    The scoping rule of the three grammars: where a presentation has declared
+    The scoping rule of the grammars: where a presentation has declared
     modules, a grammar instance lives inside one of them, and a chain or a
     branch that would cross a boundary is either refused or left unbound
     (052 sec.5: a branch must not read as crossing into another module).
