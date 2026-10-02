@@ -47,6 +47,54 @@ grammar only checks that what it was told is about *this* module's branches.
 **Absent** `branchOrder` the drawing is byte-for-byte 088's: the compiler lays the
 branches out by part id, exactly as it did before.
 
+**095: the order has three sources, and the middle one is the contract.** 088b
+made 「TVS 贴入口」 declarable in every presentation; 095 lets the drawing read the
+same fact from `DesignIntent`, where A2/A3 already put it — so the fact is stated
+once and both the review and the drawing read it. The order is read from the
+first source that speaks, in this order:
+
+1. `PresentationSpec.modules[].branchOrder` — the drawing's own declaration, still
+   first: what the sheet says about itself outranks anything else (**absence of
+   it is not a statement**, so a declared order is never second-guessed);
+2. the **intent**, when nothing is declared: a decision or a block that says one
+   of this module's branches clamps the rail's spikes (`decisions[subject=<id>]`
+   whose prose names a TVS/clamp, or a `blocks[]` whose `kind` does and whose
+   `parts` list the branch) puts those branches nearest the inlet, the rest
+   follow in designator order. The evidence names the entry it was read from, the
+   contract's path and the entry's own `provenance` — an `ai_asserted` claim is
+   carried out and **marked a draft** (052 §4: a guess may be drawn, never
+   silently read as a requirement), and the binding's own weakest-provenance line
+   weakens with it;
+3. neither → the designator order, byte-for-byte 088's drawing.
+
+**Both sources speaking is a refusal, not a precedence.** When a `branchOrder`
+exists *and* the contract states which branches clamp, the two are two statements
+of one fact — 岳's 「支路顺序」, said twice — and this grammar does not grade one
+against the other: if the declared order puts a non-clamping branch before a
+clamping one (i.e. the declared order denies what the contract asserts), the bind
+is refused `circuit-invalid` with **both originals quoted** — the declared list as
+written and the contract entry with its provenance — so a person decides which of
+the two is wrong (the discipline A3a R1 applied on the review side). Two sources
+that agree are not a conflict: the declaration is used, and the agreement is
+written into the evidence.
+
+What is compared is the *claim*, not a permutation: the intent says "these
+branches clamp, so they stand before the rest", and it does **not** order the
+clamping branches among themselves — that part of the derived order is this
+grammar's own designator tie-break, and refusing over a tie-break would be a
+false alarm — which the live discipline treats as costing what a wrong delete
+costs (R2, `tasks/012-basic-experience.md`). Measured: `branchOrder=[C116,D1,C115]` with a
+contract saying `D1` clamps is refused (C116 stands before D1); the same
+declaration with the clamping branch first is carried out as declared.
+
+The clause list is deliberately short — `tvs`, `clamp`/`钳位`, `泄放` — because
+the contract's prose is prose: 浪涌/`surge` also names an inrush current, and a
+bulk capacitor decoupling a rail is not a bleeder. A contract that wants a
+structural statement (rather than a sentence a person reads) is a later batch's
+field; today the grammar reads what is written and says where it read it, and the
+same limit 053 §6 puts on designators applies here: nothing is inferred from a
+part's value, package or prefix.
+
 **The constraints.** The rails are rows, so:
 
 * `same-row` between the `entry` and each `shunt`: every part's rail-side pin
@@ -133,9 +181,11 @@ like this, awaiting the ruling" pins.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Mapping
 
 from ...core.circuitspec import CircuitSpec, SpecOpenInterface
+from ...core.designintent import DesignIntent, IntentSource
 from ...core.presentationspec import SIDES, PresentationSpec
 from ...core.symbolprofile import SymbolProfile
 from .base import (
@@ -144,9 +194,11 @@ from .base import (
     FAILURE_CIRCUIT_INVALID,
     FAILURE_FACTS_MISSING,
     GND_OUTLET,
+    GrammarError,
     LEFT_OF,
     NEAR,
     OWNED_BRANCH,
+    PROVENANCE_AI,
     RIGHT_OF,
     SAME_ROW,
     UNIFORM_GND,
@@ -171,6 +223,7 @@ from .base import (
 )
 
 __all__ = [
+    "CLAMP_TOKENS",
     "GRAMMAR",
     "NAME",
     "ROLES",
@@ -188,6 +241,21 @@ ROLES: tuple[str, ...] = ("entry", "shunt", "rail", "gnd")
 #: module, and a part named there is not what feeds the rail.
 ENTRY_DIRECTIONS: tuple[str, ...] = ("input", "source")
 
+#: The words a contract entry uses to say one of these branches **clamps** the
+#: rail — 泄放类, the family 088b's R12 ruled belongs nearest the inlet. Read from
+#: the prose of `decisions[]` (or from a `blocks[].kind`), never from a designator,
+#: a value or a package name (053 §6).
+#:
+#: The list is short on purpose. A contract is prose, and a token that is *nearly*
+#: right reads a bulk capacitor as a bleeder: 浪涌/`surge` also names a capacitor's
+#: inrush current (「输入大电容提供浪涌电流」 is not a clamping statement), and
+#: `diode` alone names a rectifier. What is stated is read and the entry is quoted
+#: in the evidence, so a reader sees the sentence the order came from; a contract
+#: that wants to state this structurally is a later batch's field (the module
+#: docstring says so).
+CLAMP_TOKENS: tuple[str, ...] = ("tvs", "clamp", "钳位", "泄放")
+
+
 
 class PowerEntryGrammar:
     """088's power-entry grammar. Structural; the entry comes from a stated fact."""
@@ -203,8 +271,19 @@ class PowerEntryGrammar:
     # -------------------------------------------------------------- binding
 
     def bind(
-        self, circuit: CircuitSpec, presentation: PresentationSpec
+        self,
+        circuit: CircuitSpec,
+        presentation: PresentationSpec,
+        *,
+        intent: IntentSource | DesignIntent | None = None,
     ) -> GrammarResult:
+        """Bind, reading the branch order from the declaration or the contract.
+
+        ``intent`` is **optional and absent by default**: a bind that is handed no
+        contract behaves exactly as it did before 095 — the order is the
+        declaration's, or the designator's (the module docstring has the three
+        sources and what a disagreement does).
+        """
         power = nets_of_class(circuit, "power")
         ground = nets_of_class(circuit, "gnd")
         missing = _missing_class_failures(power, ground)
@@ -223,13 +302,13 @@ class PowerEntryGrammar:
         entry = named[0].part
         scope = _scope(presentation, entry)
         shunts = _shunts(circuit, presentation, rail, gnd, entry, scope)
-        order, problem = _declared_order(
-            circuit, presentation, scope, shunts, entry, rail, gnd
+        reading = _order_reading(
+            circuit, presentation, scope, shunts, entry, rail, gnd, intent
         )
-        if problem is not None:
-            return refused_result([problem])
+        if reading.failure is not None:
+            return refused_result([reading.failure])
         return self._result(
-            circuit, presentation, rail, gnd, entry, order, named, scope
+            circuit, presentation, rail, gnd, entry, named, scope, reading
         )
 
     # ------------------------------------------------------------- internals
@@ -241,10 +320,22 @@ class PowerEntryGrammar:
         rail: str,
         gnd: str,
         entry: str,
-        shunts: tuple[str, ...],
         named: list[SpecOpenInterface],
         scope: str,
+        reading: _OrderReading,
     ) -> GrammarResult:
+        """Everything bound, in the order the drawing will use (095 §一).
+
+        ``reading.order`` is what every ordered thing here reads — the shunt
+        bindings, their three constraints, the shape the evidence prints and the
+        branch list in the `owned-branch` reason. 088b already did this with the
+        *completed declaration* (its `_result` took the order in the parameter
+        named `shunts`); 095 keeps that reading and adds one more source that can
+        fill it, so a contract-ordered drawing's whole binding reads in its own
+        order rather than in the designator order it was deliberately drawn
+        against.
+        """
+        shunts = reading.order
         in_side = presentation.side_for("input") or "left"
         if in_side not in SIDES:
             in_side = "left"
@@ -259,7 +350,7 @@ class PowerEntryGrammar:
         )
         shape = _describe(rail, gnd, entry, shunts)
         rivals = _claim_note(named)
-        order_note = _order_note(presentation, scope, shunts)
+        order_note = reading.note
 
         bindings: list[RoleBinding] = [
             RoleBinding(
@@ -319,7 +410,7 @@ class PowerEntryGrammar:
                         f"{_pin_on(circuit, part_id, gnd) or '?'}→{gnd}",
                         f"inlet chosen: {shape}",
                         order_note,
-                        f"provenance={weakest_provenance(part_provenance(circuit.part(part_id)), prov)}",
+                        f"provenance={_binding_provenance(circuit, part_id, prov, reading)}",
                         rivals,
                     ),
                 )
@@ -367,12 +458,12 @@ class PowerEntryGrammar:
                 )
             )
 
-        # 088b §二: the declared order, carried out between neighbours. Only
-        # stated when the document states one — an undeclared drawing gets no
+        # 088b §二: the stated order, carried out between neighbours. Only stated
+        # when a source states one — an undeclared, uncontracted drawing gets no
         # extra relation, which is what keeps 088's own constraint list (and its
-        # geometry) exactly as it was.
-        declaration = _branch_order_of(presentation, scope)
-        pairs = zip(shunts, shunts[1:]) if declaration else ()
+        # geometry) exactly as it was. 095 §一 adds the contract as a second
+        # source; the chain it emits is the same kind over the order it gave.
+        pairs = zip(reading.order, reading.order[1:]) if reading.chained else ()
         for near_id, far_id in pairs:
             constraints.append(
                 RelativeConstraint(
@@ -380,9 +471,8 @@ class PowerEntryGrammar:
                     subject=near_id,
                     object=far_id,
                     reason=(
-                        f"088b sec.2: the document states this module's branch "
-                        f"order (branchOrder), and {near_id} is the branch next to "
-                        f"the inlet {entry} before {far_id} — nothing stands "
+                        f"088b sec.2: {reading.origin}, and {near_id} is the branch "
+                        f"next to the inlet {entry} before {far_id} — nothing stands "
                         f"between them on the rail, and {near_id} is the one "
                         "nearer the inlet; a TVS nearest the inlet is what the "
                         "order is for (a spike is clamped before it reaches the "
@@ -758,6 +848,399 @@ def _order_note(
         stated
         + f"; not named there, so drawn after them in designator order: "
         + ", ".join(rest)
+    )
+
+
+# ------------------------------------------------------------------ the order
+
+
+#: The clause the `adjacent` chain's reason opens with when the order came from
+#: the drawing's own declaration (088b's wording, unchanged: a declared drawing's
+#: constraint list and its reasons are byte-for-byte 088b's).
+_DECLARED_ORIGIN = "the document states this module's branch order (branchOrder)"
+
+#: …and when it came from the contract instead (095 §一.2).
+_INTENT_ORIGIN = (
+    "the design intent states this module's branch order (the contract's own "
+    "decisions, not branchOrder)"
+)
+
+
+@dataclass(frozen=True)
+class _Claim:
+    """One contract entry that says a branch clamps the rail (095 §一.2)."""
+
+    part_id: str
+    where: str
+    text: str
+    provenance: str
+
+    def clause(self) -> str:
+        """The entry as the evidence and the refusal quote it:原文 + 出处 + 来源."""
+        return f"{self.where}: {self.text!r} (provenance={self.provenance})"
+
+
+@dataclass(frozen=True)
+class _OrderReading:
+    """What the three sources of the branch order came to (095 §一).
+
+    ``order`` is what the drawing uses; ``chained`` says whether a source spoke
+    at all (no source → no `adjacent` chain, 088's constraint list); ``note`` is
+    the evidence clause; ``origin`` opens the chain's own reason; ``provenance``
+    holds the contract's provenance for the branches **the contract placed** —
+    empty whenever the drawing rests on the declaration or on a designator.
+    """
+
+    order: tuple[str, ...]
+    chained: bool
+    note: str
+    origin: str
+    provenance: dict[str, str]
+    failure: GrammarFailure | None = None
+
+
+def _order_reading(
+    circuit: CircuitSpec,
+    presentation: PresentationSpec,
+    scope: str,
+    shunts: tuple[str, ...],
+    entry: str,
+    rail: str,
+    gnd: str,
+    intent: IntentSource | DesignIntent | None,
+) -> _OrderReading:
+    """The branch order, from the first source that speaks (095 §一).
+
+    Three sources, in this order: the presentation's declaration, then the
+    contract, then the designator order. A declaration and a contract that both
+    speak are checked against each other (``_clamp_claims`` says what the contract
+    claims); a declaration alone, or a contract alone, is carried out; nothing
+    speaking at all is 088's drawing, byte for byte.
+    """
+    declaration = _branch_order_of(presentation, scope)
+    claims, path = _clamp_claims(intent, shunts)
+    if not claims:
+        # No contract, or a contract that says nothing about this module's
+        # branches — 088b, byte for byte.
+        if not declaration:
+            return _OrderReading(
+                order=shunts, chained=False, note="", origin="", provenance={},
+            )
+        order, failure = _declared_order(
+            circuit, presentation, scope, shunts, entry, rail, gnd
+        )
+        return _OrderReading(
+            order=order,
+            chained=True,
+            note=_order_note(presentation, scope, shunts),
+            origin=_DECLARED_ORIGIN,
+            provenance={},
+            failure=failure,
+        )
+
+    clamps = sorted(part_id for part_id in shunts if part_id in claims)
+    rest = sorted(part_id for part_id in shunts if part_id not in claims)
+    derived = tuple(clamps) + tuple(rest)
+    if not declaration:
+        return _OrderReading(
+            order=derived,
+            chained=True,
+            note=_intent_note(
+                claims, path, scope, clamps, rest, declared=False, agreed=False
+            ),
+            origin=_INTENT_ORIGIN,
+            provenance={part_id: claims[part_id].provenance for part_id in clamps},
+        )
+
+    order, failure = _declared_order(
+        circuit, presentation, scope, shunts, entry, rail, gnd
+    )
+    if failure is not None:
+        # The declaration cannot be carried out at all: 088b's refusal, unchanged.
+        # A contract does not make an order naming the inlet executable.
+        return _OrderReading(
+            order=shunts, chained=True, note="", origin=_DECLARED_ORIGIN,
+            provenance={}, failure=failure,
+        )
+    offenders = _order_conflict(order, clamps)
+    if offenders:
+        return _OrderReading(
+            order=order,
+            chained=True,
+            note="",
+            origin=_DECLARED_ORIGIN,
+            provenance={},
+            failure=_conflict_failure(
+                scope, declaration, order, offenders, clamps, claims, path
+            ),
+        )
+    agreed = tuple(order) == derived
+    return _OrderReading(
+        order=order,
+        chained=True,
+        note=(
+            _order_note(presentation, scope, shunts)
+            + "; "
+            + _intent_note(
+                claims, path, scope, clamps, rest, declared=True, agreed=agreed
+            )
+        ),
+        origin=_origin_clause(agreed),
+        provenance={},
+    )
+
+
+def _clamp_claims(
+    intent: IntentSource | DesignIntent | None, shunts: tuple[str, ...]
+) -> tuple[dict[str, _Claim], str]:
+    """``(claims, contract path)`` — which of this module's branches clamp.
+
+    Read from two places, both of them the contract's own words (095 §一.2):
+
+    * ``decisions[subject=<part>]``, whose ``decision`` (or ``rationale``) prose
+      names the clamping family — 岳's 2026-10-02 ruling, stated once where the
+      decisions live;
+    * ``blocks[]``, when the block's ``kind`` names the family and its ``parts``
+      list the branch — the same claim, written as a block instead of a sentence.
+
+    A claim about a part that is **not** one of this module's branches is not read
+    here, which is the scope rule the rest of this grammar already uses: a part
+    across another module's nets is that module's business, and its own drawing is
+    where its contract entry lands (088 §一.3).
+    """
+    document, path = _intent_document(intent)
+    if document is None:
+        return {}, ""
+    named = set(shunts)
+    claims: dict[str, _Claim] = {}
+    for decision in document.decisions:
+        if not _names_clamp(decision.decision, decision.rationale):
+            continue
+        if decision.subject not in named:
+            continue
+        claims.setdefault(decision.subject, _Claim(
+            part_id=decision.subject,
+            where=f"decisions[subject={decision.subject!r}]",
+            text=(
+                decision.decision if _names_clamp(decision.decision)
+                else decision.rationale
+            ),
+            provenance=decision.provenance,
+        ))
+    for block in document.blocks:
+        if not _names_clamp(block.kind):
+            continue
+        for part_id in block.parts:
+            if part_id not in named:
+                continue
+            claims.setdefault(part_id, _Claim(
+                part_id=part_id,
+                where=f"blocks[id={block.id!r}].kind",
+                text=block.kind,
+                provenance=block.provenance,
+            ))
+    return claims, path
+
+
+def _intent_document(
+    intent: IntentSource | DesignIntent | None,
+) -> tuple[DesignIntent | None, str]:
+    """``(document, path)`` — the contract this bind reads, and where it came from.
+
+    Both spellings are accepted because both reach a grammar naturally: the CLI
+    hands over an :class:`IntentSource` (094's carrier — the document *and* the
+    path a finding has to name), a test or an in-memory caller a bare
+    :class:`DesignIntent`. A value that is neither is refused rather than ignored:
+    a contract nothing can read would leave the drawing on its default order while
+    the caller believes the contract was consumed.
+    """
+    if intent is None:
+        return None, ""
+    if isinstance(intent, IntentSource):
+        return intent.document, str(intent.path or "")
+    if isinstance(intent, DesignIntent):
+        return intent, ""
+    raise GrammarError(
+        f"intent must be an IntentSource or a DesignIntent, got "
+        f"{type(intent).__name__} — a contract this module cannot read is a "
+        "contract it may not silently do without"
+    )
+
+
+def _names_clamp(*texts: str) -> bool:
+    """Does this prose name the clamping family (:data:`CLAMP_TOKENS`)?"""
+    haystack = " ".join(texts).casefold()
+    return any(token.casefold() in haystack for token in CLAMP_TOKENS)
+
+
+def _binding_provenance(
+    circuit: CircuitSpec, part_id: str, prov: str, reading: _OrderReading
+) -> str:
+    """One branch's weakest fact, the contract included when it placed it.
+
+    The claim's own provenance joins the chain only where the contract placed the
+    branch (095 §一.2): then the drawing rests on the sentence the order came from,
+    and an `ai_asserted` entry makes the binding a visible draft (052 §4).
+    Composed rather than passed unconditionally, because `weakest_provenance` reads
+    an empty value as `unstated` — weaker than every real provenance, which would
+    make every untouched drawing look like a draft.
+    """
+    sources = [part_provenance(circuit.part(part_id)), prov]
+    claim = reading.provenance.get(part_id, "")
+    if claim:
+        sources.append(claim)
+    return weakest_provenance(*sources)
+
+
+def _origin_clause(agreed: bool) -> str:
+    """What the `adjacent` chain's reason opens with, in each of the three states."""
+    if agreed:
+        return (
+            "the document states this module's branch order (branchOrder) and the "
+            "design intent states the same one (the contract's own decisions)"
+        )
+    return _DECLARED_ORIGIN
+
+
+def _intent_note(
+    claims: dict[str, _Claim],
+    path: str,
+    scope: str,
+    clamps: list[str],
+    rest: list[str],
+    *,
+    declared: bool,
+    agreed: bool,
+) -> str:
+    """The contract's claim as the binding evidence states it (095 §一.2).
+
+    Three things a reader of the evidence has to be able to check without opening
+    the contract: **which entry** said it (quoted), **where the contract is**, and
+    **who said it** — the entry's own `provenance`, with a draft spelled out as a
+    draft (052 §4). When the document declared no order, the same clause says that
+    the contract's order is what the drawing carries out; when the declaration is
+    what is carried out, it says which of the two the drawing rests on — and
+    *agreement* is only claimed where the two orders really are the same one
+    (``agreed``): a declaration that merely satisfies the claim, ordering the
+    clamping branches the other way round, is stated as satisfied, not as equal.
+    """
+    where = (
+        f"the contract {path}" if path
+        else "the contract it was handed (no file named — an in-memory document)"
+    )
+    verb = "stands" if len(clamps) == 1 else "stand"
+    stated = ", ".join(claims[part_id].clause() for part_id in clamps)
+    ordering = (
+        f"so {', '.join(clamps)} {verb} nearest the inlet and the rest follow in "
+        f"designator order: {', '.join(rest)}"
+        if rest
+        else (
+            f"so {', '.join(clamps)} {verb} nearest the inlet, and every branch of "
+            "this module is one of them"
+        )
+    )
+    note = f"the design intent states {stated}, {ordering} — read from {where}"
+    if declared and rest and agreed:
+        note += (
+            f"; modules[{scope}].branchOrder states the same order, so nothing is "
+            "re-ordered: the two sources agree"
+        )
+    elif declared and rest:
+        note += (
+            f"; modules[{scope}].branchOrder satisfies the claim — every clamping "
+            "branch stands first — so the declaration is what the drawing carries "
+            "out, and the contract orders nothing among the branches it did not "
+            "name"
+        )
+    elif declared:
+        note += (
+            "; every branch of this module is one of the clamped ones, so the "
+            "contract states nothing about their order among themselves — the "
+            "declaration is what the drawing carries out"
+        )
+    if weakest_provenance(
+        *(claims[part_id].provenance for part_id in clamps)
+    ) == PROVENANCE_AI:
+        note += (
+            "; the contract states it as a draft (ai_asserted) — a guess may be "
+            "read as a hint, and it is "
+            + (
+                "the declaration the drawing carries out (052 sec.4)"
+                if declared
+                else "carried out here because the document declares no order "
+                     "(052 sec.4)"
+            )
+        )
+    return note
+
+
+def _order_conflict(order: tuple[str, ...], clamps: list[str]) -> list[str]:
+    """The branches the declared order puts before **every** clamping one.
+
+    The contract's claim is a set, not a permutation: it says "these clamp, so
+    they stand nearest the inlet, the rest follow", and it orders nothing *inside*
+    either group. So the disagreement is exactly this — a branch the contract did
+    not name standing where a named one belongs — and a different order among the
+    clamping branches themselves is not a conflict: that part of the order is this
+    grammar's own designator tie-break, and refusing over it would be a false
+    alarm (R2, `tasks/012-basic-experience.md`).
+    """
+    clamped = set(clamps)
+    first = min(order.index(part_id) for part_id in clamps if part_id in order)
+    return [
+        part_id for part_id in order[:first] if part_id not in clamped
+    ]
+
+
+def _conflict_failure(
+    scope: str,
+    declaration: tuple[str, ...],
+    order: tuple[str, ...],
+    offenders: list[str],
+    clamps: list[str],
+    claims: dict[str, _Claim],
+    path: str,
+) -> GrammarFailure:
+    """Both originals, side by side, and no verdict (095 §一.3).
+
+    The two sources state one fact — which branch is nearest the inlet — and they
+    contradict each other, so there is nothing to carry out: picking one would be
+    this grammar grading an engineer's declaration against the contract that is
+    the declaration's own source of truth. The refusal quotes the declared list as
+    written and the contract entry with its provenance and its file, names what
+    each of them implies, and asks a person to say which one is wrong.
+    """
+    where = (
+        f"the contract {path}" if path
+        else "the contract it was handed (no file named — an in-memory document)"
+    )
+    stated = "; ".join(claims[part_id].clause() for part_id in clamps)
+    claims_verb = "clamps" if len(clamps) == 1 else "clamp"
+    stands = "stands" if len(clamps) == 1 else "stand"
+    offender_verb = "stands" if len(offenders) == 1 else "stand"
+    return GrammarFailure(
+        category=FAILURE_CIRCUIT_INVALID,
+        subject=clamps[0],
+        detail=(
+            f"modules[{scope}].branchOrder states [{', '.join(declaration)}] from "
+            f"the inlet outwards, so {', '.join(offenders)} {offender_verb} before "
+            f"{', '.join(clamps)}; the design intent states {stated} — read from "
+            f"{where} — so {', '.join(clamps)} {claims_verb} the rail and {stands} "
+            "nearest the inlet. The two sources state the same fact and they "
+            "disagree, and this grammar does not carry either of them out: it will "
+            "not grade the drawing's own declaration against the contract the "
+            "declaration was written from (the review side's rule, A3a R1, applied "
+            "to the drawing). One of the two is wrong and a person says which"
+        ),
+        action=(
+            f"reconcile the two: write modules[{scope}].branchOrder as "
+            f"[{', '.join(clamps)}"
+            + (f", {', '.join(sorted(item for item in order if item not in set(clamps)))}"
+               if any(item not in set(clamps) for item in order) else "")
+            + "] if the contract is right, or change "
+            f"{claims[clamps[0]].where} if the declaration is right — the grammar "
+            "keeps the declaration first and refuses to pick a winner here"
+        ),
     )
 
 

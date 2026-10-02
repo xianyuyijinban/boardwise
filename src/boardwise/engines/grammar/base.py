@@ -103,6 +103,7 @@ from typing import Mapping, Protocol, Sequence, runtime_checkable
 from ...core.circuitspec import (
     PROVENANCE_AI,
     PROVENANCE_ENGINEER,
+    PROVENANCE_USER_STATED,
     PROVENANCE_VERIFIED,
     CircuitSpec,
     SpecNet,
@@ -260,9 +261,18 @@ ROLE_NET = "net"
 #: sec.4), so it is a value of its own rather than an empty string nobody reads.
 PROVENANCE_UNSTATED = "unstated"
 
+#: The same ordering as `core.circuitspec._PROVENANCE_RANK`, which is the one
+#: table that says what the order is (its comment says so, and this copy was
+#: missing a key until 095 A4). `user_stated` is the DesignIntent channel's
+#: spelling of the engineer tier (090 A1), and the grammar had no entry for it
+#: because no fact reaching a grammar could spell it: the tokens a `CircuitSpec`
+#: accepts are the three of `PROVENANCE_KINDS`. A contract is the first document
+#: that can, so a binding whose claim is `user_stated` ranked it as *unstated* —
+#: which made `weakest_provenance` raise `KeyError` one comparison later.
 _PROVENANCE_RANK = {
     PROVENANCE_VERIFIED: 2,
     PROVENANCE_ENGINEER: 1,
+    PROVENANCE_USER_STATED: 1,
     PROVENANCE_AI: 0,
     PROVENANCE_UNSTATED: -1,
 }
@@ -511,7 +521,7 @@ def refused_result(failures: Sequence[GrammarFailure]) -> GrammarResult:
 
 @runtime_checkable
 class DrawingGrammar(Protocol):
-    """One drawing grammar: a name, and a bind over the two specs.
+    """One drawing grammar: a name, and a bind over the two specs and a contract.
 
     Symbol profiles are a **construction** input, not a `bind` parameter: a
     grammar's judgment is a function of (circuit, presentation, library), and
@@ -519,12 +529,25 @@ class DrawingGrammar(Protocol):
     off the call keeps `bind` the two-document signature 053 sec.3 fixes, and
     keeps the compiler's own use of profiles (geometry) separate from the
     grammar's (pin roles).
+
+    `intent` (095 A4) is the one **document** input added to that signature, and
+    it is added because it is a document rather than a library: the fourth
+    contract says what the board is *for*, and a promise about what a drawing must
+    make visible may be stated there instead of in the presentation. It is
+    keyword-only and ``None`` by default — a bind handed no contract behaves
+    exactly as it did before 095 — and every grammar accepts it whether or not it
+    reads one, so one dispatcher call serves all four (a grammar that reads none
+    of it says so where it takes it, the same discipline as an unread profile).
     """
 
     name: str
 
     def bind(
-        self, circuit: CircuitSpec, presentation: PresentationSpec
+        self,
+        circuit: CircuitSpec,
+        presentation: PresentationSpec,
+        *,
+        intent: object | None = None,
     ) -> GrammarResult:
         """Bind this grammar's roles, or refuse with 053 sec.4's categories."""
         ...

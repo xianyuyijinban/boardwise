@@ -99,7 +99,7 @@
 | A2a | 审查规则（params） | 冲突时按 intent 给**方向**：该位号有 `decisions[].value` → 建议改料号/重选件（按 provenance 分级语气）；没有 → 双向列出 + `intent-missing` 点名 `decisions[].value` | 发现→修复依据（**已落地，091**，见 `tests/test_091_intent_direction.py`） |
 | A2b | 审查规则（额定/降额）+ 报告接线 | rail 声明进「耐压 vs 轨压」与「LDO 耗散」两条规则；`checkup` 把合同传进规则走查（A2a 落地记录的「未接线」已补） | **已落地，092**，见 `tests/test_092_rail_ratings.py` 与 §七 |
 | A3 | 架构自洽检查器 | 信号链闭合规则（采样链必须有偏置/参考、开漏必须有上拉、单端 ADC 不许直吃双极性信号……第一批 5–8 条，全部来自真案例）；**分级框架**：违反 `user_stated` = ERROR、违反 `ai_asserted`/`verified_recipe` = WARN、无合同零移动、结构性闭合直接 WARN | **A3a/A3b 均已落地，093/094**，见 `tests/test_093_arch_closure.py`、`tests/test_094_sense_bias.py` 与 §八/§九；F2（nFAULT 无上拉）、F3（NRST 裸奔）由规则复现，F1（采样链偏置不闭合）进 A3b：偏置**算术**判定 + 合同 `closure: "waived"` 豁免通道，且合同接进 `draw/edit apply` 的 findings 走查 |
-| A4 | 绘制侧 | 语法绑定消费 blocks/decisions（TVS/bulk 角色、支路顺序、模块清单由 intent 推出） | 意图→图纸同源 |
+| A4 | 绘制侧 | 语法绑定消费 blocks/decisions（TVS/bulk 角色、支路顺序、模块清单由 intent 推出） | **支路顺序部分已落地（095：power-entry 首吃）**——`branchOrder` > intent > 位号序三来源，冲突并列双源原文拒绝，`dc.compile(..., intent=None)` 可选缝 + CLI `draw compile/plan --intent PATH`；**未落地**：模块清单与 flow 由 blocks 推出的提案器（见下） |
 
 ## 四、通往「毕设水平」的全程路线（A 主线之后的 backlog，记档）
 
@@ -328,3 +328,53 @@ A3b 补上这条通道存在的理由本身——**F1 的采样链偏置**——
    `user_stated` 双向电流采样，而 ROBOT 导出上它没有偏置——新规则报出该板唯一的 **ERROR**，
    退出码从 3（读数不完整）变 1（有错）。这正是「合同发现缺陷要动 verdict」的字面含义，三处
    断言随之改成测量值并写明原因（见交卷报告的碰撞清单）。
+
+## 十、A4 落地记录（095 批，见 `tests/test_095_intent_driven_order.py`）
+
+A1–A3 让 intent 成了**审查**的事实源；A4 让它成为**绘制**的事实源。本批只吃一条事实——
+「哪条支路要贴入口」——理由很实在：088b 的 R12 已经把这句话在**每份** PresentationSpec 里
+声明了一遍（`modules[].branchOrder`），而合同的 `decisions[]` 早就说过一次（「D1 是 TVS，
+贴入口」）。事实说一次，两侧共用；出处（provenance + 条目 + 合同路径）一路进绑定 evidence。
+
+1. **顺序的三来源**（`engines/grammar/power_entry.py`）：`branchOrder`（图纸自己的声明，
+   仍是第一优先）> intent（缺省声明时）> 位号序（两者都没说）。**每份图纸只多一层信息，不
+   多一套规则**：合同推出顺序时发的还是 088b 那一条 `adjacent` 链，只是 reason 的开头一句
+   换成「the design intent states …」——两种来源发同一个 kind、走同一套检查。
+2. **读什么、怎么读**：`decisions[subject=<支路>]` 的 prose（`decision` / `rationale`）或
+   `blocks[].kind`（`parts` 里点名那条支路）里出现 `tvs` / `clamp`·`钳位` / `泄放` →
+   该支路排最靠入口，其余按位号序跟后。token 表**故意短**：`浪涌`/`surge` 也会出现在
+   「输入大电容提供浪涌电流」这种非泄放句子里，`diode` 也包含整流管——合同写的是散文，
+   语法只读已写明的词，并把那一条原文抄进 evidence 让人自己判断。合同里关于**别的模块**
+   支路的条目在这里不读（088 §一.3 的作用域规则：那是那个模块自己的事）。
+3. **冲突 = 拒绝，并列双源原文，谁错人裁**。声明与合同**都说话且不一致**时（声明的序里
+   有非泄放支路站在泄放支路前面）→ `circuit-invalid`，detail 同时给出声明的列表原文与
+   合同的条目原文（含 provenance 与文件），action 给出两种修法。**判据是「claim 这个集合
+   有没有被违反」，不是排列**：合同没有说两条泄放类支路之间谁更靠前，那一段是语法自己的
+   位号 tie-break，拿它拒绝就是假警报（R2 的成本与误删同价）。
+4. **草稿照走但标注**（052 §4）：claim 是 `ai_asserted` 时顺序照执行，但绑定 evidence 写
+   `draft (ai_asserted)`，且该支路绑定的 `provenance=` 行随之落到 `ai_asserted`——图纸
+   只有它最弱的事实那么可靠。`user_stated` 落在 `verified_recipe` 电路上同理（不改强）。
+5. **缝**：`drawcompiler.compile(..., intent=None)` 可选、默认 None（`None` = 与 088/088b
+   逐字节同一张图）；合同同时进**两次语法读**——出约束的绑定，与独立检查器
+   (`check_grammar`) 的重绑。**实测**：`adjacent` 在成品图上的判据是「横向对齐、纵向错开」
+   （`_relation_holds`），与谁更靠入口**无关**（088b 选它的理由），所以「顺序画反了」是
+   编译器 rank 走查拦下的，检查器拦不住；检查器读合同的可分辨证据是「声明被合同否掉时它
+   报 `grammar-binding-unplaced`」，不带合同读同一张图则零 finding。
+6. **一处顺手补的洞**：语法的 provenance 表（`engines/grammar/base.py::_PROVENANCE_RANK`）
+   原本不认 `user_stated`——090 A1 把它定为**同一档的另一种拼法**（工程师档），但语法层
+   没有条目，因为在此之前没有任何能进语法的文档能拼出这个词。合同是本批第一个。
+   实测后果：`weakest_provenance("verified_recipe", "user_stated")` 先把它判成 `unstated`，
+   下一句取表就 `KeyError`。补上该键（档位与 `core/circuitspec._PROVENANCE_RANK` 一致，
+   两表并存的原因见该处注释：空值的读法不同），新测试钉死三档。
+7. **零移动**（申报制证据，`evidence/095/`）：088 的 14 张 + 088b 的 18 张离线预览逐字节
+   不动（`git archive HEAD` 树 vs 工作树各跑一遍生成器，逐文件 `cmp`），两份声明版/缺省版
+   的几何 sha256 在 HEAD 树与工作树上逐字相同；`intent=None` 与不传参的 `GrammarResult`
+   逐字节同一份（测试内断言）。
+8. **未落地（归后续批，A4 的另一半）**：① `blocks[]` 推**模块清单**、`flow` 与
+   bulk/TVS 角色分工的**提案器**（把 intent 变成一份 presentation 草稿，而不是让语法逐条
+   读合同）；② **页级**（057 的 `pagecompiler`）不读合同——页里的模块各自编译，模块边界
+   与页级 flow 由页面文档说了算，本批不动；CLI 在页路径上给了 `--intent` 会**明说**它没被
+   读（R3 纪律：不许静默忽略）；③ CLI 编译侧只认**显式** `--intent PATH`，用户级默认落点
+   `<home>/design-intent/<projectUuid>.json` 够不着——编译发生在读工程之前，那时没有 uuid
+   （`draw plan --page` 的 projectUuid 是编译之后才知道的）。要把默认落点接上，得把编译
+   挪到 live context 之后，那是改 054 流程的活，留记录。

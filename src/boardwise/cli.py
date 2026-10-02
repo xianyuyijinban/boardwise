@@ -1408,6 +1408,19 @@ def build_parser() -> argparse.ArgumentParser:
     draw_compile.add_argument(
         "--json", dest="json_path", metavar="PATH", help="Write the machine-readable result."
     )
+    draw_compile.add_argument(
+        "--intent", default="", metavar="PATH",
+        help=(
+            "The DesignIntent contract the grammar reads (095 A4 / 090 A1) — today "
+            "the branch order of a `power-entry` drawing: a `decisions[]` entry "
+            "that says which branch clamps the rail places it nearest the inlet, so "
+            "the fact is stated once for the review and the drawing alike. Explicit "
+            "path only: this command compiles before anything names a project, so "
+            "the user-level default (`~/.boardwise/design-intent/<uuid>.json`) has "
+            "no uuid to be found from. `PresentationSpec.modules[].branchOrder` "
+            "still outranks it, and the two disagreeing is a refusal naming both."
+        ),
+    )
 
     draw_plan = draw_sub.add_parser(
         "plan",
@@ -1470,6 +1483,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     draw_plan.add_argument(
         "--json", dest="json_path", metavar="PATH", help="Write the machine-readable result."
+    )
+    draw_plan.add_argument(
+        "--intent", default="", metavar="PATH",
+        help=(
+            "The DesignIntent contract the grammar reads (095 A4) — see "
+            "`draw compile --intent`. It travels into the compilation (the layout "
+            "this plan lands was drawn with it) and, since 094, into the findings "
+            "baseline the plan records for a bound page."
+        ),
     )
 
     draw_apply = draw_sub.add_parser(
@@ -6658,13 +6680,55 @@ def _draw_inputs(args: argparse.Namespace):
     return circuit, presentation, profiles
 
 
-def _draw_compile(args: argparse.Namespace, *, page_box):
-    """Compile the two specs. Raises :class:`_DrawInputError` for anything unreadable."""
+def _draw_compile(args: argparse.Namespace, *, page_box, notes: list[str]):
+    """Compile the two specs. Raises :class:`_DrawInputError` for anything unreadable.
+
+    095 A4: the compiler reads the design intent when the caller names one
+    (`--intent PATH`), through **094's own reader** — `_intent_source_for_apply`,
+    the same resolution the findings walk uses: the explicit path, never a file
+    the run did not name, and a named-but-unreadable contract is a note and a run
+    that proceeds on the reading it had before (never a crash, never an overwrite).
+    The user-level default (`<home>/design-intent/<projectUuid>.json`) is **not**
+    reached from here, and that is a measured limit rather than an oversight: this
+    stage compiles from two files, before anything reads a project, so there is no
+    uuid to form the path from. The contract reaches the drawing by path, exactly
+    as it reaches `checkup --export`.
+
+    ``notes`` is the run's own note list, passed in rather than returned: the two
+    callers already print it (`draw plan`'s report, `draw compile`'s notes line),
+    and a note about a contract that could not be read must be visible where the
+    rest of the run's notes are.
+    """
     from .engines import drawcompiler
 
     circuit, presentation, profiles = _draw_inputs(args)
     budget = drawcompiler.CompileBudget(page_box=page_box)
-    return drawcompiler.compile(circuit, presentation, profiles, budget), circuit, presentation, profiles
+    intent = _intent_source_for_apply(args, "", notes)
+    return (
+        drawcompiler.compile(circuit, presentation, profiles, budget, intent=intent),
+        circuit,
+        presentation,
+        profiles,
+    )
+
+
+def _warn_page_intent(args: argparse.Namespace, command: str) -> None:
+    """Say that this run took the page path and therefore reads no contract.
+
+    A named flag that is silently ignored is the failure mode this repo's
+    discipline is built against (「找不到 ≠ 已清」, R3): 095 A4 landed on the
+    single-module compiler, so a page run says so rather than leaving the reader
+    to infer why the order did not move.
+    """
+    if not str(getattr(args, "intent", "") or ""):
+        return
+    print(
+        f"  note: --intent {args.intent} is not read on the page path "
+        f"(057 sec.1: `{command}` compiled a page document); the contract reaches "
+        "the drawing on the single-module path, and page-level consumption is a "
+        "later batch",
+        file=sys.stderr,
+    )
 
 
 def _draw_is_page(args: argparse.Namespace) -> bool:
@@ -6730,13 +6794,19 @@ def _cmd_draw_compile(args: argparse.Namespace) -> int:
     flow, a module grammar or a page lock — `pagecompiler.wants_page`) is
     compiled by the page compiler instead, on the same command: the candidates
     are page documents (``candN.page.json``) and the previews carry the module
-    frames. A single-module presentation takes the path it always took.
+    frames. A single-module presentation takes the path it always took. The page
+    path does not read the contract yet (095 A4 landed on the single-module
+    compiler); ``--intent`` given there says so instead of being ignored.
     """
     if _draw_is_page(args):
+        _warn_page_intent(args, "draw compile")
         return _cmd_draw_compile_page(args)
+    intent_notes: list[str] = []
     try:
         page_box = _draw_page_box(args.page_box)
-        result, _circuit, _presentation, profiles = _draw_compile(args, page_box=page_box)
+        result, _circuit, _presentation, profiles = _draw_compile(
+            args, page_box=page_box, notes=intent_notes
+        )
     except _DrawInputError as exc:
         print(f"boardwise draw compile: {exc}", file=sys.stderr)
         return 5
@@ -6744,6 +6814,8 @@ def _cmd_draw_compile(args: argparse.Namespace) -> int:
         f"boardwise draw compile: {len(result.candidates)} candidate(s), "
         f"{len(result.failures)} failure(s), {len(result.rejected)} variant(s) rejected"
     )
+    for note in intent_notes:
+        print(f"  note: {note}")
     if result.ranked:
         print("  ranked (best first; the layers are compared, never summed):")
         for line in _draw_rank_lines(result):
@@ -6782,7 +6854,7 @@ def _cmd_draw_compile(args: argparse.Namespace) -> int:
                 {"variant": item.variant, "reason": item.reason}
                 for item in result.rejected
             ],
-            "notes": list(result.notes),
+            "notes": [*intent_notes, *result.notes],
             "previews": [str(path) for path in written],
         }
         Path(args.json_path).write_text(
@@ -6965,14 +7037,23 @@ def _cmd_draw_plan(args: argparse.Namespace) -> int:
     A page-level presentation (057 sec.1) is compiled by the page compiler and the
     chosen page's merged drawing — its ``plan`` field — becomes the plan, through
     the same `drawapply.module_plan`: see :func:`_cmd_draw_plan_page`.
+
+    095 A4: ``--intent`` reaches the *compilation* (the order the grammar reads) as
+    well as 094's findings baseline for a bound page, through the same reader
+    (`_intent_source_for_apply`). The page path says so when it is given one — the
+    page compiler does not read the contract yet.
     """
     import asyncio
 
     if _draw_is_page(args):
+        _warn_page_intent(args, "draw plan")
         return _cmd_draw_plan_page(args)
+    notes: list[str] = []
     try:
         page_box = _draw_page_box(args.page_box)
-        result, circuit, presentation, profiles = _draw_compile(args, page_box=page_box)
+        result, circuit, presentation, profiles = _draw_compile(
+            args, page_box=page_box, notes=notes
+        )
     except _DrawInputError as exc:
         print(f"boardwise draw plan: {exc}", file=sys.stderr)
         return 5
@@ -7013,10 +7094,9 @@ def _cmd_draw_plan(args: argparse.Namespace) -> int:
         "plan": None,
         "live": {},
         "poolSource": "",
-        "notes": [],
+        "notes": notes,
         "final": "",
     }
-    notes: list[str] = report["notes"]
     baseline = None
     baseline_findings: list[str] = []
     pool: list[str] = []

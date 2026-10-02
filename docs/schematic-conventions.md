@@ -169,3 +169,15 @@ The model writing the presentation is the one that can tell (it reads `SMCJ28CA`
 the grammar never guesses. Absent = designator order (088's drawing, byte-identical); a
 partial list keeps its stated prefix, the rest follow in designator order, and the
 completion is written into the binding evidence so nothing is silently re-ordered.
+
+**The order has three sources (095 A4): `branchOrder` > the design intent > designator
+order.** The sheet's own declaration still outranks everything — absence of it is not a
+statement — but where no `branchOrder` is written the grammar reads the fact from the
+`DesignIntent` contract, because the same decision was already written there for the
+review side: a `decisions[subject=<branch>]` whose prose (or a `blocks[].kind`) names the
+clamping family puts that branch nearest the inlet, the rest follow in designator order,
+and the quoted entry, its provenance and the contract's path all land in the binding
+evidence. Two sources that both speak and disagree are **refused** (`circuit-invalid`,
+both originals quoted, a person says which is wrong) rather than ranked; two that agree
+say so in the evidence. A contract that names no branch of this module changes nothing,
+so a `branchOrder`-less drawing without one is byte-for-byte 088's.

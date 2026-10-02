@@ -397,6 +397,16 @@ boardwise draw apply   plan.json --project test \
     --render render.png --json apply.json                     # 真机：守卫 → 落图 → 回读 → 保存 → 出图
 ```
 
+**支路顺序的三个来源（095 A4 起）**：`power-entry` 画法里「哪条支路贴入口」按
+`PresentationSpec.modules[].branchOrder` > **DesignIntent 合同** > 位号序 读；后两者都
+没说话时与 088/088b 逐字节一致。合同侧读 `decisions[subject=<支路>]` 的 prose 或
+`blocks[].kind`（写明 `tvs`/`clamp`·`钳位`/`泄放` 才算），原文 + 出处 + provenance 进
+绑定 evidence，`ai_asserted` 照走但标注草稿。**声明与合同不一致 → `circuit-invalid` 拒绝、
+两个来源的原文并列**（谁错人裁，不会自动二选一）。`draw compile` / `draw plan` 用
+`--intent PATH` 把合同交给编译（`dc.compile(..., intent=…)`）；**只认显式路径**——编译发生在
+读工程之前，用户级默认落点 `<home>/design-intent/<projectUuid>.json` 那时还没有 uuid；
+页级（057）路径本批不读合同，给了 `--intent` 会明说没读。
+
 **落图前必须先有"实测符号库"**（本批最关键的一条工序，C1/C2 都是这么过的）：
 编辑器**不提供**库符号几何的读接口（`lib.symbol.get` 明说 no geometry），所以
 `--profiles` 的那份库要**先在真机上量**——在临时页上放一颗真器件（`sch.place_component

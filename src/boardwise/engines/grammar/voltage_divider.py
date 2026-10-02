@@ -186,8 +186,16 @@ class VoltageDividerGrammar:
     # -------------------------------------------------------------- binding
 
     def bind(
-        self, circuit: CircuitSpec, presentation: PresentationSpec
+        self,
+        circuit: CircuitSpec,
+        presentation: PresentationSpec,
+        *,
+        intent: object | None = None,
     ) -> GrammarResult:
+        # 095 A4's contract is taken and not read: only `power-entry` states a
+        # branch order a decision could place (088b's `branchOrder` is its own
+        # field), so this grammar has no clause for a contract entry to fill —
+        # accepted for the uniform signature the dispatcher calls with.
         power = nets_of_class(circuit, "power")
         ground = nets_of_class(circuit, "gnd")
         signal_tops = _signal_tops(circuit, presentation)

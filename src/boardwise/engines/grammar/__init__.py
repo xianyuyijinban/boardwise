@@ -166,6 +166,7 @@ def bind(
     profiles: Mapping[str, SymbolProfile] | None = None,
     *,
     grammar_name: str = "",
+    intent: object | None = None,
 ) -> GrammarResult:
     """Bind the presentation's own grammar over this circuit.
 
@@ -174,6 +175,14 @@ def bind(
     empty the document's choice is used. Either way the name must be one this
     build has: a missing or unknown one is a `facts-missing` refusal naming where
     the choice belongs, never a silent fallback to a generic layout.
+
+    `intent` is the `DesignIntent` a grammar **may** read (095 A4) — the fourth
+    contract, which today only `power-entry` consumes, for the branch order 088b's
+    `branchOrder` stated in every presentation before it. It travels as the same
+    optional, opaque value every grammar's `bind` accepts, so one dispatcher call
+    serves all four and a grammar that reads none of it says so where it takes it.
+    ``None`` (the default) is a drawing that reads no contract, which is every
+    caller before 095 and every drawing without one.
     """
     name = grammar_name or presentation.grammar_ref
     if not name:
@@ -206,4 +215,4 @@ def bind(
                 ),
             )
         ])
-    return _CLASSES[name](profiles).bind(circuit, presentation)
+    return _CLASSES[name](profiles).bind(circuit, presentation, intent=intent)
