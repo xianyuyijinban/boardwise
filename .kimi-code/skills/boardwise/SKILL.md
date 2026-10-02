@@ -173,6 +173,18 @@ checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起
 - `design-intent.md`——**设计意图，归工程师/AI 提案所有**：不存在时生成器建一份与骨架同构的全 TODO
   模板，存在则**一字不改**。答案写这里才留得住（052 §2.2 实测：填在 `architecture.md` 里的
   `targetVoltage: 3.3V`，重生成后回到 `TODO`）。
+- **DesignIntent 合同（090 起的第四份合同，JSON 是源）**——`--intent <path>` 或
+  `~/.boardwise/design-intent/<projectUuid>.json`（`BOARDWISE_HOME` 跟着 `config.json` 挪）。
+  三段：`requirements`（rails/signals/buses）+ `blocks` + `decisions`，每条带 `provenance`
+  （`user_stated` > `verified_recipe` > `ai_asserted`，缺省即草稿）。**有合同时 `design-intent.md`
+  是按合同渲染的视图、每次重渲染（手填无效）**；没有合同时仍是上面的 053 §2.2 逐个文件。
+  生成/重生成只有一处：`boardwise arch <工程文件> --intent <path>`（已填值逐字节保留，图纸里
+  已没有的对象标 `stale` 不删）。`checkup` 只读合同，绝不改写。
+  报告 `intent` 节：`totals{slots,filled,missing,requiredMissing}` + `missing[]`（每槽带 `write`
+  路径）+ `required[]` 的 `intent-missing` 行（点名槽位 + 文件 + 键）+ `hints[]`（
+  `closure-undeclared`：双向电流采样没有 `requires: ["bias-reference"]` 类闭合声明——FOC 偏置案
+  的槽位形态，A1 只提问，A3 升级为规则）。**缺槽不抬 verdict、不动退出码**；填缺口的人是
+  工程师或模型，工具不代填。
 
 每个槽一个**稳定 ID**：`<projectUuid>/<boardUuid>/<sectionKey>/<slotKey>`（`sectionKey` =
 `<节>:<对象>`，节 = power/analog/control/bus/intent）。行内格式：`| 稳定 ID | 槽位 | 值 | 来源 | sig= |`，

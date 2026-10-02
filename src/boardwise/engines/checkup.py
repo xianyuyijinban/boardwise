@@ -1112,6 +1112,210 @@ def needs_datasheet_section(
 
 
 # --------------------------------------------------------------------------
+# intent — the DesignIntent contract's own section (090 A1)
+# --------------------------------------------------------------------------
+
+#: The wording a missing **required** slot is reported with. It is deliberately
+#: in `facts-missing`'s family — the drawing compiler's own token for "a fact the
+#: compiler needed was not stated" — because it says the same thing about a
+#: different consumer: a question the contract owes, never a repair the tool made
+#: up. Every line names the slot, the file and the key to write it in.
+INTENT_MISSING = "intent-missing"
+
+#: The wording a **hint** is reported with: not a required slot, but a statement
+#: the document's own facts say it needs and does not have. The first one is the
+#: ROBOT ctrl FOC bias hole (F1) — a bidirectional current-sense signal with no
+#: closure declaration. A1 only wires the question; A3 turns it into a rule.
+INTENT_HINT_CLOSURE = "closure-undeclared"
+
+#: What the section says about the contract's own posture, once, above the lists.
+INTENT_NOTE = (
+    "工具只校验与提问，永不改写：本节点名缺哪一句、写进哪个文件哪个键；"
+    "填的人是工程师或模型。缺槽**不**抬 verdict（A1 只报告，评级归 A2/A3）——"
+    "重生成契约用 `boardwise arch <export> --intent <path>`（已有答案逐字节保留）。"
+)
+
+#: What an entry whose provenance is the draft default means for a reader, stated
+#: in the section rather than left to the reader's memory of 052 §4.
+INTENT_DRAFT_NOTE = (
+    "弱词 `ai_asserted` = AI 猜的：它可以当提示，**不许**当作判违规的尺子"
+    "（052 §4：未确认的声明只能以明确标注的草稿出门）。"
+)
+
+
+def intent_section(
+    *,
+    facts: dict | None,
+    contract_file: str = "",
+    present: bool = False,
+    read_error: str = "",
+    regenerate: str = "",
+    project_uuid: str = "",
+    contract_version: int = 0,
+) -> dict:
+    """The report's `intent` section — what the contract answers and what it owes.
+
+    Built from :func:`boardwise.core.designintent.merge`'s facts, so the section,
+    the regenerated file and the rendered view are one arithmetic (the report only
+    renders what the JSON says — its own rule since 025). ``missing`` is every slot
+    the enumeration owes and the contract does not answer; ``required`` is the
+    subset the design doc names as a *must* (a rail's voltage declaration, a
+    signal's polarity), and each of those carries its `intent-missing` line.
+    ``hints`` is the questions the document asks back.
+
+    `facts` is ``None`` only when nothing could be enumerated *and* no contract was
+    read — which the caller reports as an absent section rather than an empty one.
+    """
+    facts = facts or {}
+    missing = list(facts.get("missing") or [])
+    required = [row for row in missing if row.get("required")]
+    hints = list(facts.get("hints") or [])
+    stale = list(facts.get("stale") or [])
+    added = list(facts.get("added") or [])
+    extras = list(facts.get("extras") or [])
+    return {
+        "contract": {
+            "file": contract_file,
+            "present": bool(present),
+            "readError": read_error,
+            "intentVersion": contract_version,
+            "regenerate": regenerate,
+        },
+        "projectUuid": project_uuid,
+        "provenance": str(facts.get("provenance") or ""),
+        "draft": bool(facts.get("draft")),
+        "draftReasons": list(facts.get("draftReasons") or []),
+        "totals": {
+            "slots": int(facts.get("slots") or 0),
+            "filled": int(facts.get("filled") or 0),
+            "missing": len(missing),
+            "requiredMissing": len(required),
+            "staleEntries": len(stale),
+            "addedEntries": len(added),
+            "unregisteredAnswers": len(extras),
+            "hints": len(hints),
+        },
+        "missing": missing,
+        "required": required,
+        "intentMissing": [intent_missing_line(row, contract_file) for row in required],
+        "requiredNote": INTENT_MISSING_NOTE,
+        "hints": [{**hint, "line": intent_hint_line(hint, contract_file)} for hint in hints],
+        "stale": stale,
+        "added": added,
+        "unregistered": extras,
+        "unmapped": list(facts.get("unmapped") or []),
+        "note": INTENT_NOTE,
+    }
+
+
+#: What `intent-missing` means, spelled for the reader of report.md.
+INTENT_MISSING_NOTE = (
+    "`intent-missing`（与 `facts-missing` 同族）：这些是**必填槽**，合同里没有声明；"
+    "工具不会替人补，也不会因此拒绝读合同——它只点名缺哪一句、该写进哪个文件哪个键。"
+)
+
+
+def intent_missing_line(row: dict, contract_file: str) -> str:
+    """One missing required slot, as the line a reader acts on.
+
+    Names three things (`facts-missing`'s own discipline): **which slot** (with its
+    stable id, so a machine can find it), **which file**, and **which key** to
+    write. Nothing is invented to fill the gap.
+    """
+    where = contract_file or "（合同路径见 checkup 的 intent.contract.file）"
+    label = f"（{row['label']}）" if row.get("label") else ""
+    return (
+        f"{INTENT_MISSING}: {row.get('where', '')} 的 `{row.get('key', '')}`{label} 没声明 —— "
+        f"写进 `{where}` 的 `{row.get('write', '')}`（槽位 id `{row.get('id', '')}`）；"
+        "工具只提问，不改写"
+    )
+
+
+def intent_hint_line(hint: dict, contract_file: str) -> str:
+    """One hint, as the line a reader acts on — the F1 wiring's own wording."""
+    where = contract_file or "（合同路径见 checkup 的 intent.contract.file）"
+    return (
+        f"{hint.get('token', INTENT_HINT_CLOSURE)}: {hint.get('where', '')} 缺闭合声明 "
+        f"`{hint.get('missing', '')}` —— 写进 `{where}` 的 `{hint.get('write', '')}`；"
+        f"{hint.get('why', '')}（提示不阻拦：升级为规则归 A3）"
+    )
+
+
+def render_intent_markdown(lines: list[str], section: dict) -> None:
+    """Append the report.md rendering of the `intent` section (090 §三).
+
+    Renders the section's own numbers and lines, in its own order — the
+    `report.json` is the contract and the Markdown is what a human reads, so the
+    two must not be able to disagree. Long lists are summarised by count with a
+    pointer, never truncated silently: every required slot and every hint is
+    printed in full, because those are the ones a reader has to act on.
+    """
+    totals = section.get("totals") or {}
+    contract = section.get("contract") or {}
+    lines.append(
+        f"## 设计意图合同（intent）—— {totals.get('slots', 0)} 槽 / 已填 "
+        f"{totals.get('filled', 0)} / 缺 {totals.get('missing', 0)}"
+        f"（必填缺 {totals.get('requiredMissing', 0)}）"
+    )
+    lines.append("")
+    path = contract.get("file") or "（未指定）"
+    if contract.get("readError"):
+        lines.append(f"- 合同：`{path}` —— **读不了**：{contract['readError']}（本次按全 TODO 报告，文件一个字没动）")
+    elif contract.get("present"):
+        lines.append(f"- 合同：`{path}`（本次读入：槽位与答案以它为准）")
+    else:
+        lines.append(
+            f"- 合同：`{path}` **不存在**（本报告的槽位清单来自当前工程的枚举；"
+            "A1 不自动建文件——要生成/重生成契约："
+            f"`{contract.get('regenerate') or 'boardwise arch <export> --intent <path>'}`）"
+        )
+    lines.append(
+        f"- 契约版本：`intentVersion {contract.get('intentVersion', 0)}`；"
+        f"弱词：`{section.get('provenance') or '（无条目）'}`"
+        + ("（**草稿**：" + "；".join((section.get("draftReasons") or [])[:2]) + "）"
+           if section.get("draft") else "")
+    )
+    if section.get("draft"):
+        lines.append(f"- {INTENT_DRAFT_NOTE}")
+    if totals.get("addedEntries") or totals.get("staleEntries") or totals.get("unregisteredAnswers"):
+        lines.append(
+            f"- 重生成差量：新增 TODO 条目 {totals.get('addedEntries', 0)} · "
+            f"图纸里已消失（stale，不删只标）{totals.get('staleEntries', 0)} · "
+            f"枚举已不再问、但合同里还答着的槽 {totals.get('unregisteredAnswers', 0)}"
+        )
+    lines.append("")
+    required = section.get("required") or []
+    if required:
+        lines.append(f"### 必填槽没声明（{len(required)}）—— `{INTENT_MISSING}`")
+        lines.append("")
+        lines.append(section.get("requiredNote") or INTENT_MISSING_NOTE)
+        lines.append("")
+        for row in section.get("intentMissing") or []:
+            lines.append(f"- {row}")
+        lines.append("")
+    hints = section.get("hints") or []
+    if hints:
+        lines.append(f"### 闭合声明提示（{len(hints)}）")
+        lines.append("")
+        for hint in hints:
+            lines.append(f"- {hint.get('line') or intent_hint_line(hint, contract.get('file') or '')}")
+        lines.append("")
+    if section.get("stale"):
+        lines.append(f"### 合同里记着、图纸里已没有的对象（{len(section['stale'])}，不删只标）")
+        lines.append("")
+        for entry in section["stale"]:
+            lines.append(f"- `{entry.get('object')}`（{entry.get('section')}）—— 值保留，只标 stale")
+        lines.append("")
+    if totals.get("missing"):
+        lines.append(
+            f"- 其余 {totals.get('missing', 0) - len(required)} 槽仍是 TODO（欠账不是空白）："
+            f"逐槽填进合同（`{path}`），填不出来就**显式问工程师**，不许编。"
+        )
+    lines.append(f"- {section.get('note', INTENT_NOTE)}")
+    lines.append("")
+
+
+# --------------------------------------------------------------------------
 # warning triage (039 批② §WI-2)
 # --------------------------------------------------------------------------
 
@@ -2098,6 +2302,14 @@ def render_report_markdown(report: dict) -> str:
                 f"逐槽填进 `design-intent.md`（填不出来就**显式问工程师**，不许编）。"
             )
         lines.append("")
+
+    # --- 090 A1: the fourth contract's own section. It sits right after the
+    # merged view because the two answer different halves of one question: the
+    # architecture section says what the *skeleton* owes (the `design-intent.md`
+    # channel), this one what the *contract* answers and still owes.
+    intent_section_report = report.get("intent")
+    if intent_section_report:
+        render_intent_markdown(lines, intent_section_report)
 
     lines.append("## AI 槽位（要模型做的三件事）")
     lines.append("")
