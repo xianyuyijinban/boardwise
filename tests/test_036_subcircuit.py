@@ -3,7 +3,9 @@
 The first slice with **no driving rule**, so these tests are also the statement of
 what replaces one: the plan's own postconditions (probed before the writes and
 re-read after them), the plan's own preconditions, and the rules' verdict on what
-was added (the finding set may shrink, never grow).
+was added — 036's one-way rule, graded by severity since issue #55's ruling B: the
+finding set may shrink, an INFO row never stops the save, a WARN stops it unless the
+caller passed ``--force``, and an ERROR always stops it.
 
 Seams, all deliberate and all named:
 
@@ -25,7 +27,7 @@ from pathlib import Path
 import pytest
 
 from boardwise import cli
-from boardwise.cli import _finding_signature
+from boardwise.cli import _finding_signature, _new_findings_verdict, _signature_severity
 from boardwise.core.changeplan import (
     ADD_COMPONENT_KIND,
     CONNECTION_LABEL,
@@ -767,6 +769,62 @@ def test_the_finding_signature_is_the_subject_not_the_sentence():
     assert "no target here" in _finding_signature(untargeted)
 
 
+def test_the_severity_is_read_from_the_signature_s_second_field():
+    """The gate grades by severity since issue #55's ruling B, so the reading has to
+    be exact: `_finding_signature` joins its fields with ``|`` and the severity is
+    the second one, target or no target."""
+    assert _signature_severity("decap-required-caps|ERROR|U9|1|VIN_RAW") == "ERROR"
+    assert _signature_severity("decap-required-caps|WARN|U9|1|VIN_RAW") == "WARN"
+    assert _signature_severity("param-rc-cutoff|INFO|RC R1(1000Ω) + C1(1n) on 'X5'") == "INFO"
+    from boardwise.rules.base import Finding
+
+    assert _signature_severity(
+        _finding_signature(Finding(rule_id="r", severity="INFO", message="no target", level="L3"))
+    ) == "INFO"
+
+
+def test_a_signature_without_a_readable_severity_is_read_as_error():
+    """宁拦勿放: the gate's job is to stop a save, so an unreadable severity must
+    not buy a pass — an older plan file, a baseline somebody wrote by hand, a field
+    that is not one of the three."""
+    for signature in ("", "a-rule-and-nothing-else", "some-rule|unknown|U9|1|",
+                      "some-rule|warn|U9|1|", "some-rule|0|U9|1|"):
+        assert _signature_severity(signature) == "ERROR", signature
+
+
+def test_the_new_findings_verdict_grades_the_three_tiers():
+    """Ruling B (issue #55) in one place: ERROR always blocks, WARN blocks unless
+    ``force`` released it (and is then named), INFO never blocks."""
+    grown = ["a|ERROR|U9||", "b|WARN|U1|1|3V3", "c|INFO|a measurement"]
+    quiet = _new_findings_verdict(grown, force=False)
+    assert quiet["bySeverity"] == {
+        "ERROR": ["a|ERROR|U9||"],
+        "WARN": ["b|WARN|U1|1|3V3"],
+        "INFO": ["c|INFO|a measurement"],
+    }
+    assert quiet["blocking"] == ["a|ERROR|U9||", "b|WARN|U1|1|3V3"], (
+        "without --force an ERROR and a WARN both stop the save"
+    )
+    assert quiet["forcedWarns"] == [], "nothing was released, so nothing is named"
+
+    forced = _new_findings_verdict(grown, force=True)
+    assert forced["blocking"] == ["a|ERROR|U9||"], "--force never releases an ERROR"
+    assert forced["forcedWarns"] == ["b|WARN|U1|1|3V3"]
+    assert forced["bySeverity"] == quiet["bySeverity"], (
+        "the grouping reports what grew, whether or not it was released"
+    )
+
+    info_only = _new_findings_verdict(["c|INFO|a measurement"], force=False)
+    assert info_only["blocking"] == [] and info_only["forcedWarns"] == [], (
+        "an INFO-only growth stops nothing -- and released nothing to get there"
+    )
+
+    empty = _new_findings_verdict([], force=False)
+    assert empty["blocking"] == [] and empty["bySeverity"] == {
+        "ERROR": [], "WARN": [], "INFO": []
+    }, "all three keys, always: a consumer never has to tell absent from empty"
+
+
 # --------------------------------------------------------------------------
 # 3. the CLI: `edit plan --insert`, `edit preview`, `edit apply`
 # --------------------------------------------------------------------------
@@ -1086,10 +1144,10 @@ def test_preview_refuses_a_stale_snapshot_for_an_insert_plan(tmp_path, capsys):
     assert "快照已失效" in capsys.readouterr().err
 
 
-def test_apply_insert_rc_lowpass_writes_the_circuit_and_stops_at_its_measurement(
+def test_apply_insert_rc_lowpass_writes_the_circuit_and_saves_past_its_measurement(
     monkeypatch, tmp_path, capsys
 ):
-    """The whole mechanical leg of an RC insert, and where it now stops.
+    """The whole mechanical leg of an RC insert, ending where ruling B ends it.
 
     **What this scenario is for**: the apply mechanics of an insert — off the old
     net first, then both parts, then their wires, then the ground flag — read back
@@ -1101,27 +1159,18 @@ def test_apply_insert_rc_lowpass_writes_the_circuit_and_stops_at_its_measurement
     nothing at all. The resistor (``1k``) was always readable, so the insert now
     creates the one thing the pre-087 blindness hid: ``param-rc-cutoff`` has an RC
     pair to report and files an INFO measurement row (fc = 1/(2*pi*1k*1n) =
-    159,155 Hz). 036's gate counts findings **by identity and not by severity**
-    (SKILL pit 40 says so out loud), so a report-only measurement the insert caused
-    is a "new finding" and the run stops before the save.
+    159,155 Hz).
 
-    The gate is **not** weakened here and the fixture is **not** bent to hide this:
-    the scenario keeps the value the CLI documents (``--c 1n``), and the refusal is
-    pinned as the behaviour it now is. Two reasons that is the honest re-pin rather
-    than a convenient one:
+    **What issue #55 changed about it**: 036's gate counted findings **by identity
+    and not by severity**, so that report-only measurement — a row the change itself
+    caused — stopped the run before the save. Ruling B (岳, 2026-10-02) grades the
+    gate: an ERROR always stops the save, a WARN stops it unless the caller passed
+    ``--force``, an INFO never does. So the insert now goes through the save, with
+    the INFO row still named in the report rather than swallowed. The WARN and ERROR
+    tiers of the same gate are pinned next to this test.
 
-    * the refusal is pre-existing 036 behaviour, not something 087 invented —
-      SKILL pit 40 records exactly this trap for ``param-rc-cutoff`` on a board that
-      already spelled its values readably (``4u7``, ``1nF``). 087 only widened the
-      set of spellings that reach it;
-    * the save leg of ``edit apply`` for an insert is still covered here, by
-      ``test_apply_insert_divider_is_a_pure_create_and_judges_the_export`` — a
-      divider creates no measurement, so it reaches ``sch.doc.save`` and exit 0.
-
-    What a batch *could* argue about is the gate's 口径 (an INFO measurement the
-    change itself caused arguably should not block a save). That is 036's decision,
-    not this one's, and the task book for 087 forbids touching the gate; the
-    measurement is written down here so the next reader has it.
+    The fixture keeps the value the CLI documents (``--c 1n``): the scenario was not
+    bent to avoid the measurement.
     """
     plan_path, _plan = _rc_plan(tmp_path)
     bridge = _rc_bridge()
@@ -1131,31 +1180,39 @@ def test_apply_insert_rc_lowpass_writes_the_circuit_and_stops_at_its_measurement
 
     code = cli.main(["edit", "apply", str(plan_path), "--json", str(result)])
     printed = capsys.readouterr().out
-    assert code == 2, printed
-    assert "new_findings" in printed
-    # Every mechanical write still happens, in the same order ... and the save
-    # does not, because the finding gate runs after the writes and before it.
+    assert code == 0, printed
+    # Every mechanical write still happens, in the same order, and the save now
+    # follows them: the gate runs after the writes and INFO does not stop it.
     assert [action for action, _ in bridge.writes] == [
         "sch.delete_primitives",
         "sch.place_component", "sch.place_component",
         "sch.place_wire", "sch.place_wire", "sch.place_wire",
         "sch.place_power",
-    ], "off the old net first, then both parts, then their wires -- and no save"
+        "sch.doc.save",
+    ], "off the old net first, then both parts, then their wires -- and then the save"
     report = json.loads(result.read_text(encoding="utf-8"))
-    assert report["outcome"] == "failed" and report["reason"] == "new_findings"
+    assert report["exitCode"] == 0 and report["ok"] is True
     # The circuit itself verifies: both postcondition legs are clean and the range
-    # diff names the vanished attachment, so the refusal is the gate's and not the
-    # mechanics'.
+    # diff names the vanished attachment.
     assert report["verification"]["live"] == [] and report["verification"]["canvas"] == []
     assert report["range"]["wiresVanished"] == ["w-attach"]
     assert "canvas identity" in report["rangeBasis"]
-    assert report["persistence"] == "", "the run stopped before the save"
+    assert report["persistence"] == "saved_unverified", "the run reached the save"
     # The new finding is named, not merely counted: it is the cutoff measurement
     # this insert caused, and it quotes the value field as the board spells it.
     assert len(report["findings"]["new"]) == 1
     grown = report["findings"]["new"][0]
     assert grown.startswith("param-rc-cutoff|INFO|RC R1"), grown
     assert "C1(1n)" in grown and "fc = 159,155 Hz" in grown
+    assert report["findings"]["newBySeverity"]["INFO"] == [grown]
+    assert report["findings"]["newBySeverity"]["ERROR"] == []
+    assert report["findings"]["newBySeverity"]["WARN"] == []
+    assert report["findings"]["forcedWarns"] == [], (
+        "nothing needed releasing: an INFO is reported, not released"
+    )
+    assert any("INFO" in note and "param-rc-cutoff" in note for note in report["notes"]), (
+        "the run says why a report-only row did not stop it"
+    )
     # The node's wires are placed **without** a net name, so the editor names the
     # island itself (036 §3: compare islands, not names).
     wire_calls = [params for action, params in bridge.writes if action == "sch.place_wire"]
@@ -1163,6 +1220,92 @@ def test_apply_insert_rc_lowpass_writes_the_circuit_and_stops_at_its_measurement
     assert "net" not in wire_calls[0] and "net" not in wire_calls[2], (
         "the two X wires stay unnamed"
     )
+
+
+def _insert_with_grown_findings(monkeypatch, tmp_path, *, error=False):
+    """The RC insert whose after-model reports a decap WARN (and an ERROR when asked).
+
+    Both rules answer the insert: the LDO's supply pin is left on a net with no
+    capacitor (`decap-required-caps`, WARN) and `param-rc-cutoff` has the inserted
+    pair to measure (INFO). ``error`` adds a duplicate designator, which
+    `conn-duplicate-designators` reports as an ERROR.
+    """
+    plan_path, _plan = _rc_plan(tmp_path)
+    bridge = _rc_bridge()
+    _stub_bridge(monkeypatch, bridge)
+    before = _model(components=[("U3", ("", "")), ("U9", ("", ""))],
+                    pins={"U3": ["1", "2", "5"]},
+                    nets={"N1": [("U3", "5"), ("U9", "1")]})
+    grown = _model(components=[("U3", ("", "")), ("U9", ("", "C47773")),
+                               ("R1", ("1k", "")), ("C1", ("1n", ""))],
+                   pins={"U3": ["1", "2", "5"], "U9": ["1", "5"]},
+                   nets={"N1": [("U9", "1"), ("R1", "2")],
+                         "GND": [("C1", "2")],
+                         "X5": [("U3", "5"), ("R1", "1"), ("C1", "1")]})
+    if error:
+        grown.duplicate_designators = ["U9"]
+    _stub_export(monkeypatch, [before, grown])
+    return plan_path, bridge
+
+
+def test_apply_insert_releases_a_warn_finding_when_forced(monkeypatch, tmp_path, capsys):
+    """Ruling B's middle tier: a WARN still stops the save, and ``--force`` is the
+    caller taking responsibility for the ones it has read — out loud, in the report."""
+    plan_path, bridge = _insert_with_grown_findings(monkeypatch, tmp_path)
+    result = tmp_path / "a.json"
+
+    blocked = cli.main(["edit", "apply", str(plan_path), "--json", str(result)])
+    printed = capsys.readouterr().out
+    assert blocked == 2, printed
+    assert "new_findings" in printed
+    report = json.loads(result.read_text(encoding="utf-8"))
+    warns = report["findings"]["newBySeverity"]["WARN"]
+    assert warns == [item for item in report["findings"]["new"] if "|WARN|" in item]
+    assert warns and all(item.startswith("decap-required-caps|") for item in warns), warns
+    assert report["findings"]["forcedWarns"] == [], "no --force, nothing released"
+    assert "sch.doc.save" not in [action for action, _ in bridge.writes]
+
+    # The forced run is a fresh one — a new bridge, a new plan, the same two
+    # readings — because the first run already left its writes on the fake page.
+    plan_path, bridge = _insert_with_grown_findings(monkeypatch, tmp_path)
+    code = cli.main(["edit", "apply", str(plan_path), "--force", "--json", str(result)])
+    printed = capsys.readouterr().out
+    assert code == 0, printed
+    assert bridge.writes[-1][0] == "sch.doc.save", "the released WARN let the save through"
+    report = json.loads(result.read_text(encoding="utf-8"))
+    assert report["findings"]["forcedWarns"] == warns, (
+        "the WARNs --force released are named in the report, not silently dropped"
+    )
+    assert report["findings"]["newBySeverity"]["WARN"] == warns
+    assert report["findings"]["newBySeverity"]["ERROR"] == []
+    assert report["findings"]["newBySeverity"]["INFO"], (
+        "the INFO row is reported too -- grouped, not released"
+    )
+    assert all(_signature_severity(item) == "WARN" for item in report["findings"]["forcedWarns"])
+    assert any("--force" in note and "forcedWarns" in note for note in report["notes"]), (
+        "a released WARN is visible in the notes too"
+    )
+
+
+def test_apply_insert_an_error_finding_is_not_released_by_force(monkeypatch, tmp_path, capsys):
+    """The top tier: ``--force`` is not a licence to save a short circuit. The run
+    stops with the ERROR named, whatever the caller passed."""
+    plan_path, bridge = _insert_with_grown_findings(monkeypatch, tmp_path, error=True)
+    result = tmp_path / "a.json"
+
+    code = cli.main(["edit", "apply", str(plan_path), "--force", "--json", str(result)])
+    printed = capsys.readouterr().out
+    assert code == 2, printed
+    assert "new_findings" in printed
+    report = json.loads(result.read_text(encoding="utf-8"))
+    assert report["findings"]["newBySeverity"]["ERROR"] == [
+        item for item in report["findings"]["new"] if "|ERROR|" in item
+    ]
+    assert any(item.startswith("conn-duplicate-designators|ERROR|") for item
+               in report["findings"]["newBySeverity"]["ERROR"]), report["findings"]
+    assert report["findings"]["forcedWarns"], "the WARNs were released -- the ERROR was not"
+    assert all("|WARN|" in item for item in report["findings"]["forcedWarns"])
+    assert "sch.doc.save" not in [action for action, _ in bridge.writes]
 
 
 def test_apply_insert_is_idempotent_when_the_postconditions_hold(
