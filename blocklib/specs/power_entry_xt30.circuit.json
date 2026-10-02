@@ -1,0 +1,57 @@
+{
+  "kind": "boardwise-circuit-spec",
+  "specVersion": 1,
+  "parts": [
+    {
+      "id": "CN1",
+      "symbolRef": "XT30PW-M36-C9900222726",
+      "value": "XT30PW-M36",
+      "lcsc": "C9900222726",
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "D1",
+      "symbolRef": "SMCJ28CA-C356792",
+      "value": "SMCJ28CA",
+      "lcsc": "C356792",
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "C115",
+      "symbolRef": "CAP-TH-BD10.0-P5.00-C49332876",
+      "value": "330uF",
+      "lcsc": "C49332876",
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "C116",
+      "symbolRef": "CAP-TH-BD10.0-P5.00-C49332876",
+      "value": "330uF",
+      "lcsc": "C49332876",
+      "provenance": "verified_recipe"
+    }
+  ],
+  "nets": [
+    {
+      "id": "+24V",
+      "class": "power",
+      "members": ["CN1.1", "D1.1", "C115.1", "C116.1"],
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "GND",
+      "class": "gnd",
+      "members": ["CN1.2", "D1.2", "C115.2", "C116.2"],
+      "provenance": "verified_recipe"
+    }
+  ],
+  "openInterfaces": [
+    {
+      "net": "+24V",
+      "direction": "input",
+      "role": "rail",
+      "part": "CN1",
+      "provenance": "verified_recipe"
+    }
+  ]
+}

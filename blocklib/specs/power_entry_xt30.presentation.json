@@ -1,0 +1,22 @@
+{
+  "kind": "boardwise-presentation-spec",
+  "specVersion": 1,
+  "grammarRef": "power-entry",
+  "sidePreferences": { "input": "left" },
+  "directWiringObligations": [
+    {
+      "nets": ["+24V", "GND"],
+      "note": "the rails are solid conductors: every member of +24V is wired end to end, and the return GND is too"
+    }
+  ],
+  "modules": [
+    {
+      "id": "inlet",
+      "parts": ["CN1", "D1", "C115", "C116"],
+      "role": "the 24 V power inlet",
+      "grammarRef": "power-entry",
+      "presentation": { "sidePreferences": { "input": "left" } },
+      "branchOrder": ["D1", "C115", "C116"]
+    }
+  ]
+}

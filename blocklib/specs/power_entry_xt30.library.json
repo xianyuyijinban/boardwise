@@ -1,0 +1,64 @@
+{
+  "profiles": [
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "XT30PW-M36-C9900222726",
+      "title": "XT30PW-M36 2-pin power inlet (LCSC C9900222726, measured on the live editor)",
+      "body": [-10.5, -15.5, 10.5, 15.5],
+      "pins": [
+        {"number": "1", "name": "+", "tip": [-20.0, 5.0], "direction": "left",
+         "pinType": "passive"},
+        {"number": "2", "name": "-", "tip": [-20.0, -5.0], "direction": "left",
+         "pinType": "passive"}
+      ],
+      "source": "measured 2026-10-02: C9900222726 placed at (200,600) on test/P24 (probe page 2885d8c09a1a9be3); sch.component_pins answered pin 1 '+' at (180,605) and pin 2 '-' at (180,595), both PinLength 10; its own bbox was [189.5,584.5,210.5,615.5] -> body (-10.5,-15.5,10.5,15.5). Both pins leave the LEFT face, 10 units apart vertically. Evidence: outputs/089/libprobe/pins_conn.json + 07_geometry_probe.json"
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "SMCJ28CA-C356792",
+      "title": "SMCJ28CA bidirectional TVS, SMC/DO-214AB (LCSC C356792, measured)",
+      "body": [-10.5, -5.5, 10.5, 5.5],
+      "pins": [
+        {"number": "1", "name": "K", "tip": [-20.0, 0.0], "direction": "left",
+         "pinType": "passive"},
+        {"number": "2", "name": "A", "tip": [20.0, 0.0], "direction": "right",
+         "pinType": "passive"}
+      ],
+      "source": "measured 2026-10-02: C356792 placed at (500,600) on test/P24; sch.component_pins answered pin 1 'K' at (480,600) and pin 2 'A' at (520,600), both PinLength 20; its own bbox was [489.5,594.5,510.5,605.5] -> body (-10.5,-5.5,10.5,5.5). The part is declared bidirectionally ('双向') yet its pins are still named K/A. Evidence: outputs/089/libprobe/pins_tvs.json + 07_geometry_probe.json"
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "CAP-TH-BD10.0-P5.00-C49332876",
+      "title": "330uF/25V THT electrolytic, D10xL13, P5.00 (LCSC C49332876, measured)",
+      "body": [-10.5, -7.5, 10.5, 7.5],
+      "pins": [
+        {"number": "1", "name": "1", "tip": [-20.0, 0.0], "direction": "left",
+         "pinType": "passive"},
+        {"number": "2", "name": "2", "tip": [20.0, 0.0], "direction": "right",
+         "pinType": "passive"}
+      ],
+      "source": "measured 2026-10-02: C49332876 placed at (800,600) on test/P24; sch.component_pins answered pin 1 at (780,600) and pin 2 at (820,600), both PinLength 10; its own bbox was [789.5,592.5,810.5,607.5] -> body (-10.5,-7.5,10.5,7.5). Footprint CAP-TH_BD10.0-P5.00-D0.6-FD_330UF25V10X13GF is the sample's own package family. Evidence: outputs/089/libprobe/pins_cap.json + 07_geometry_probe.json"
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "PWR-+24V",
+      "title": "PWR-+24V",
+      "body": [-6.0, 0.0, 6.0, 18.0],
+      "pins": [],
+      "source": "flag glyph convention of the compiler (the host places a power flag by kind+net, never from a library profile). Measured on the live host 2026-10-02 for the family: Power flag at (200,450) has its connection point AT the origin (PinLength 5) and its glyph 4.5..10.5 units ABOVE it (bbox [194.5,454.5,205.5,460.5]); Ground flag at (500,450) has the connection point at the origin (PinLength 10) and its bars 9.5..19.5 units BELOW it ([489.5,430.5,510.5,440.5]) — pit 43's two families, re-measured. Evidence: outputs/089/libprobe/pins_flag*.json + 07_geometry_probe.json"
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "PWR-GND",
+      "title": "PWR-GND",
+      "body": [-6.0, 0.0, 6.0, 18.0],
+      "pins": [],
+      "source": "flag glyph convention of the compiler; the measured Ground family hangs below its connection point (see PWR-+24V's source line and SKILL pit 43)"
+    }
+  ]
+}
