@@ -104,10 +104,12 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from functools import partial
 from heapq import heappop, heappush
 from typing import Any
 
 from boardwise.core.circuitspec import CircuitSpec
+from boardwise.core.designintent import DesignIntent, IntentSource
 from boardwise.core.geometry import transform_point
 from boardwise.core.layoutplan import (
     LayoutEvidence,
@@ -542,6 +544,8 @@ def compile(  # noqa: A001 - the name 053 sec.4 fixes for the entry point
     presentation_spec: PresentationSpec,
     profiles: Mapping[str, SymbolProfile] | None = None,
     budget: CompileBudget | None = None,
+    *,
+    intent: IntentSource | DesignIntent | None = None,
 ) -> CompileResult:
     """Compile a drawing, or say why there is none.
 
@@ -554,6 +558,18 @@ def compile(  # noqa: A001 - the name 053 sec.4 fixes for the entry point
     ``budget.max_candidates`` plans (8 by default), best first, each with its
     evidence filled in and its source digests pinned. Two is a success, not a
     shortfall: the gate removes variants and nothing promises a minimum.
+
+    ``intent`` is the `DesignIntent` the grammar may read (095 A4), keyword-only
+    and ``None`` by default: today it is consumed by `power-entry` alone, for the
+    branch order a presentation had to restate until 095. It travels into **both**
+    reads of the grammar — the binding that produces the constraints and the
+    independent checker that grades the finished plan against them
+    (:func:`check_grammar`) — because a checker that re-bound without it would
+    grade the plan against a different order than the one it was drawn with. A
+    library, by contrast, stays a construction input: it is the same for every
+    call on a pair of documents, while a contract is a document of its own. None
+    is a drawing that reads no contract, byte-for-byte the one this compiler made
+    before the batch.
     """
     for value, expected in (
         (circuit_spec, CircuitSpec),
@@ -563,6 +579,13 @@ def compile(  # noqa: A001 - the name 053 sec.4 fixes for the entry point
             raise CompileError(
                 f"{expected.__name__} expected, got {type(value).__name__}"
             )
+    if intent is not None and not isinstance(intent, (IntentSource, DesignIntent)):
+        raise CompileError(
+            f"intent must be an IntentSource or a DesignIntent, got "
+            f"{type(intent).__name__} — a contract the grammar cannot read is not "
+            "the same drawing as no contract, and this one would be silently "
+            "ignored"
+        )
     budget = budget or CompileBudget()
     _check_budget(budget)
     book = _profile_book(profiles)
@@ -579,8 +602,9 @@ def compile(  # noqa: A001 - the name 053 sec.4 fixes for the entry point
         result.failures = blockers
         return result
 
-    # 2. bind; a refusal travels through verbatim.
-    binding = bind_grammar(circuit_spec, presentation_spec, book)
+    # 2. bind; a refusal travels through verbatim. The contract travels with it
+    #    (095 A4): the order a decision states is a binding, not a decoration.
+    binding = bind_grammar(circuit_spec, presentation_spec, book, intent=intent)
     result.grammar = binding
     if not binding.ok:
         result.failures = list(binding.failures)
@@ -597,7 +621,9 @@ def compile(  # noqa: A001 - the name 053 sec.4 fixes for the entry point
         return result
 
     # 4. semantics: roles and relations -> ranks and lanes.
-    prepare = _prepare(circuit_spec, presentation_spec, binding, book, budget)
+    prepare = _prepare(
+        circuit_spec, presentation_spec, binding, book, budget, intent=intent
+    )
     if prepare.failures:
         result.failures = prepare.failures
         return result
@@ -629,7 +655,7 @@ def compile(  # noqa: A001 - the name 053 sec.4 fixes for the entry point
             continue
         seen.add(digest)
         findings = check_grammar(
-            plan, circuit_spec, presentation_spec, book, budget=budget
+            plan, circuit_spec, presentation_spec, book, budget=budget, intent=intent
         )
         plan.evidence = LayoutEvidence(
             checker=CHECKER_NAME,
@@ -941,6 +967,9 @@ class _Context:
     chain: list[str]
     accepted: dict[str, list[SymbolPose]]
     body_dirs: dict[str, tuple[float, float]]
+    #: The contract this compilation reads (095 A4), carried so the gate can
+    #: re-bind the grammar with the same input the constraints came from.
+    intent: IntentSource | DesignIntent | None = None
 
     def profile(self, part_id: str) -> SymbolProfile:
         part = self.circuit.part(part_id)
@@ -1140,6 +1169,8 @@ def _prepare(
     binding: GrammarResult,
     book: dict[str, SymbolProfile],
     budget: CompileBudget,
+    *,
+    intent: IntentSource | DesignIntent | None = None,
 ) -> _Prepare:
     """Stages 2 and 3's inputs: axis, ranks, lanes, poses, lock legality."""
     axis = _axis(binding)
@@ -1214,7 +1245,7 @@ def _prepare(
         circuit=circuit_spec, presentation=presentation_spec, binding=binding,
         book=book, budget=budget, axis=axis, progress=progress,
         chain_net_rank=chain_net_rank, slots=slots, chain=chain_ids,
-        accepted={}, body_dirs={},
+        accepted={}, body_dirs={}, intent=intent,
     )
     failures = list(order_failures)
     for part_id in sorted(slots):
@@ -4337,7 +4368,11 @@ def _build_candidate(
         ctx.circuit,
         ctx.presentation,
         ctx.book,
-        grammar_checker=check_grammar,
+        # 095 A4: the checker re-binds the grammar, so it reads the same three
+        # documents the constraints came from — the contract included. Without it
+        # a plan whose order came from a decision would be graded against the
+        # designator order it was deliberately not drawn with.
+        grammar_checker=partial(check_grammar, intent=ctx.intent),
         page_box=ctx.budget.page_box,
         keepouts=ctx.budget.keepouts,
         grid=ctx.budget.grid,
@@ -5305,6 +5340,7 @@ def check_grammar(
     profiles: Mapping[str, SymbolProfile] | Iterable[SymbolProfile],
     *,
     budget: CompileBudget | None = None,
+    intent: IntentSource | DesignIntent | None = None,
 ) -> list[GrammarFinding]:
     """The drawing grammar's half of the readability contract, over a plan.
 
@@ -5322,12 +5358,19 @@ def check_grammar(
     * is every **bound part** placed at all (a role bound to nothing on the page
       is a finding, not a silent omission).
 
+    ``intent`` is the contract the compiling bind read (095 A4). Independence is
+    about *the compiler's output*, not about its inputs: the checker re-binds the
+    same grammar over the same three documents, so a plan whose branch order came
+    from a decision is graded against that order rather than against the
+    designator default the plan was deliberately not drawn with. Passing none is
+    the pre-095 reading, unchanged.
+
     Findings are values, never exceptions: a plan that fails all three carries
     three lines in its evidence.
     """
     book = _checker_book(profiles)
     out: list[GrammarFinding] = []
-    binding = bind_grammar(circuit_spec, presentation_spec, book)
+    binding = bind_grammar(circuit_spec, presentation_spec, book, intent=intent)
     if not binding.ok:
         return [GrammarFinding(
             kind=KIND_BINDING_UNPLACED,
