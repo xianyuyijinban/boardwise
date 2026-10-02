@@ -97,7 +97,7 @@
 |---|---|---|---|
 | A1 | 文档+持久化+审查报告接线 | checkup 报告挂 `intent` 节（槽位总数/已填/缺失 + `intent-missing` 点名）；`design-intent.md` 改由合同渲染 | 文档活着、不丢、不覆盖 |
 | A2a | 审查规则（params） | 冲突时按 intent 给**方向**：该位号有 `decisions[].value` → 建议改料号/重选件（按 provenance 分级语气）；没有 → 双向列出 + `intent-missing` 点名 `decisions[].value` | 发现→修复依据（**已落地，091**，见 `tests/test_091_intent_direction.py`） |
-| A2b | 审查规则（decap）+ 报告接线 | rail 声明进 decap/额定核算；`checkup` 把合同传进规则走查（见 A2a 落地记录的「未接线」） | 待做 |
+| A2b | 审查规则（额定/降额）+ 报告接线 | rail 声明进「耐压 vs 轨压」与「LDO 耗散」两条规则；`checkup` 把合同传进规则走查（A2a 落地记录的「未接线」已补） | **已落地，092**，见 `tests/test_092_rail_ratings.py` 与 §七 |
 | A3 | 架构自洽检查器 | 信号链闭合规则（采样链必须有偏置/参考、开漏必须有上拉、单端 ADC 不许直吃双极性信号……第一批 5–8 条，全部来自真案例） | FOC 偏置案可由规则查出 |
 | A4 | 绘制侧 | 语法绑定消费 blocks/decisions（TVS/bulk 角色、支路顺序、模块清单由 intent 推出） | 意图→图纸同源 |
 
@@ -163,4 +163,47 @@
    `_cmd_checkup` 里规则走查（`run_review`）发生在 shelf/架构枚举/合同加载**之前**，而默认
    合同路径要用枚举出的 projectUuid，所以诚实接线要把这三步整体提到走查之前（会改 notes
    顺序）。本批先把缝做好、并用真实案例（ctrl FOC 导出 + shipped 合同）在测试里走通；
-   `checkup --intent` 目前仍只驱动报告里的 `intent` 节。
+   `checkup --intent` 目前仍只驱动报告里的 `intent` 节。**（092 A2b 已补上，见 §七）**
+
+## 七、A2b 落地记录（092 批，见 `tests/test_092_rail_ratings.py`）
+
+A2a 把「方向」交给了规则，A2b 花同一条通道问两个**图纸上没有**的问题：*这颗电容的耐压
+够不够它所在的轨*，*这颗 LDO 耗散多少*。两条规则都只读两份现成文档——合同
+（`requirements.rails[].targetVoltage` / `.continuousCurrent`）与货架——都不碰盘。
+
+1. **接线（A2a 的遗留项）**：`_cmd_checkup` 里「shelf 加载 → 架构枚举 → 合同解析」三步整体
+   提到 `run_review(model, intent=…)` **之前**（合同默认位要用枚举出的 projectUuid，这是顺序
+   的硬理由）。合同以 `core.designintent.IntentSource` 进规则，规则自己不读盘（006c 的层表
+   只给 `rules` 留了 `core` 这条路）。**无合同读数逐字节不变**（实测：同一份导出加与不加
+   `--intent`，report.json/report.md/architecture.md/design-intent.md 逐字节一致，除
+   `generatedAt` 与文件名自身的路径）。**notes 顺序有一处变化**：显式 `--intent` 指向的文件
+   不存在时，那条「合同不存在」的 note 从末位提前到首位（它现在在走查之前产生）——既有测试
+   没有钉 notes 序，只有「包含」断言，故无一改。
+2. **两条规则**（`rules/railratings.py`，进 `BUILTIN_RULES` + `INTENT_RULES`）：
+   `pwr-cap-voltage-rating`（R1）与 `path-ldo-dissipation`（R2）。三态一个纪律：**测量永远报
+   （INFO，报比值/报压差）、只有拿得准的越限才 WARN、读不到就 UNKNOWN 并点名去哪补**。
+   **不发明降额标准**：比较就是 `rating >= rail` 与 `P <= 声明的限值`，没有 80% 系数、没有
+   「SOT-223 大约 1 W」这类house rule——装进测量行外衣的判决比沉默更坏。
+3. **取值口（按既有顺序，能读才读）**：
+   - 轨压 = 合同的 `targetVoltage`（需求）→ 否则图上自己的判断（`infer_net_domains`：网名报电压、
+     LDO 输出事实/后缀解码）。两份文档**打架**时不在这里裁（合同是需求、图是图纸，谁错是 A3 的
+     架构自洽问题）；
+   - 电容耐压 = 货架条目的 `Voltage Rating`/`Rated Voltage` 字段（目录的原始声明，**现成数据**
+     ——`blocklib/parts.json` 里 11 颗电容都有）→ 板上 Value 字段里的电压 token（`100nF/50V`）
+     → MPN 的 `value+tolerance+voltage` 电压码（`core.values.mpn_voltage_rating`，即 071 §1 C
+     的锚点写法；`...106M250` = 25 V）。三种读法在 11 颗有目录的电容上**逐一吻合**（测试钉死）；
+   - LDO 限值 = `facts.ldo.max_dissipation_mw`（可选、带出处；这是 092 在 `ldo` 事实里加的第二个
+     可选键，与 `fixed_output` 同款）。**没声明就只报测量行**，不编封装限值。
+4. **报告出口**：INFO 测量行与 UNKNOWN 行都作为 **INFO finding** 进 `report.json`（四态仍在
+   `Outcome.state`）。INFO 恒不拦写入（#55 裁决 B）、不抬 verdict、不动退出码；UNKNOWN 的
+   `missing_fact` 就是那条「写进哪个文件哪个键」的工单（`needs_datasheet` 同族措辞）。
+5. **两条都进了 `NET_MEMBERSHIP_RULES`**（issue #19）：R1 判「谁在这条轨上」、R2 的压差是两个
+   推断轨压之差，都是按网判的结论，per-page 档上对被焊过的网名一律只报 UNKNOWN。
+6. **ctrl FOC 实测（导出 + shipped 合同）**：R1 报 6 条 INFO 测量（C10 2.08x、C7 7.58x、
+   C13/C14/C16/C18 15.15x）、6 条「耐压读不出」UNKNOWN（C5/C6/C9 @+12V，C1/C15/C8 @VCC）与
+   1 条「轨压读不出」UNKNOWN（C17 @VCCA——它有 50 V 耐压，但这条轨谁都没定价）；R2 报 U8
+   （AMS1117-3.3）压差 **8.7 V** 的 INFO 测量行 + 一条 `intent-missing`（VCC 的
+   `continuousCurrent` 没声明）。**该板 C4 不进名单**：它两脚落在 DRV1 的 `NET2`/`NET3`，
+   合同与图上的推断都不把那里当轨——R1 比的是「电容 vs **轨**」，不在轨上的电容没有轨压可比
+   （任务书举例的 C 系名单来自真机工程的编号，本导出档 49 颗件的编号与之不同，实测名单以导出
+   档为准）。

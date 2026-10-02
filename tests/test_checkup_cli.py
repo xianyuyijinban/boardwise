@@ -1137,6 +1137,61 @@ def _registry_case(rule_id: str):
             {"U2": _part("U2", mpn="LDO1", pins=[("1", "+5V"), ("2", "3V3")])},
             {"+5V": [("U2", "1")], "3V3": [("U2", "2")]},
         )
+    if rule_id == "path-ldo-dissipation":
+        # 092 A2b: the headroom it squares against the declared current is a
+        # difference of two rail voltages, and the contract is what declares
+        # them — so the board answers the same way `path-ldo-dropout`'s does.
+        from boardwise.core.designintent import DesignIntent, IntentRail, IntentSource
+        from boardwise.rules.railratings import LdoDissipation
+
+        entry = PartEntry(
+            key="ic.ldo", mpn="LDO1", lcsc="C2", category="ic.ldo",
+            facts={
+                "ldo": {"dropout_max_mv": 400.0, "condition": "Iout=500mA",
+                        "provenance": PROV},
+                "supply_pins": [{"pins": ["1"], "name": "VIN",
+                                 "v_operating": [2.2, 5.5], "provenance": PROV}],
+                "required_caps": [{"pin": "2", "value": "1uF", "provenance": PROV}],
+            },
+        )
+        contract = IntentSource(
+            document=DesignIntent(rails=[
+                IntentRail(net="+5V", slots={"targetVoltage": "5V"}),
+                IntentRail(net="3V3", slots={
+                    "targetVoltage": "3.3V", "continuousCurrent": "1A",
+                }),
+            ]),
+            path="mem://issue-19/dissipation.intent.json",
+        )
+        return LdoDissipation(
+            library=PartLibrary(parts=[entry]), intent=contract
+        ), model_of(
+            {"U2": _part("U2", mpn="LDO1", pins=[("1", "+5V"), ("2", "3V3")])},
+            {"+5V": [("U2", "1")], "3V3": [("U2", "2")]},
+        )
+    if rule_id == "pwr-cap-voltage-rating":
+        # 092 A2b: "a capacitor sits on this rail" is read from the rail net's
+        # members, so a welded rail name hands the rule the other board's part.
+        from boardwise.core.designintent import DesignIntent, IntentRail, IntentSource
+        from boardwise.rules.railratings import CapVoltageRating
+
+        entry = PartEntry(
+            key="cap.100n_0603", mpn="CAP1", lcsc="C8", category="capacitor",
+            params={"Voltage Rating": "50V"},
+        )
+        contract = IntentSource(
+            document=DesignIntent(rails=[
+                IntentRail(net="VCC", slots={"targetVoltage": "24V"}),
+            ]),
+            path="mem://issue-19/rating.intent.json",
+        )
+        return CapVoltageRating(
+            library=PartLibrary(parts=[entry]), intent=contract
+        ), model_of(
+            {"C8": _part("C8", mpn="CAP1", value="100nF",
+                         pins=[("1", "VCC"), ("2", "GND")])},
+            {"VCC": [("C8", "1")], "GND": [("C8", "2")]},
+        )
     if rule_id in ("pwr-supply-on-known-domain", "pwr-domain-vs-range"):
         entry = PartEntry(
             key="ic.mcu", mpn="LOAD1", lcsc="C3", category="ic.mcu",

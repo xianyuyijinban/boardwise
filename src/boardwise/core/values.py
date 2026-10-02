@@ -22,7 +22,7 @@
    ``rules -> core`` was already legal and is the direction the shim uses.
 
 
-Five parsers live here, all *whitelist* parsers: they either recognise the
+Seven readers live here, all *whitelist* parsers: they either recognise the
 string or return None — "unparseable" must never become "zero" or "whatever
 the digits look like".
 
@@ -44,6 +44,14 @@ the digits look like".
   because the power-tree gate was comparing two volt spellings as strings,
   which is the same "one quantity, one implementation" gap as #51 and #52 —
   in a third module.
+- :func:`mpn_voltage_rating` — the rated voltage a capacitor's MPN states in
+  its own ``<value><tolerance><voltage>`` field (``HGC0603R5106M250NTHJ`` ->
+  25 V; 092 A2b). Borrowed from the guard beside it rather than invented:
+  :data:`_VOLTAGE_TAIL_RE` is the shape this module already refuses a value
+  reading for, so the figures in that field are a rating and nothing else.
+- :func:`parse_current_amps` — a current declaration (``5A``, ``500mA``; 092
+  A2b), the one reading the DesignIntent's ``continuousCurrent`` needed and no
+  rule was allowed to write for itself.
 - :func:`mpn_value_code` — extract the EIA code from an MPN, whitelisted to
   the shapes the big manufacturers actually print: the code at the end of the
   string, optionally followed by a single tolerance letter (``...225K``), or
@@ -278,6 +286,53 @@ def _voltage_rating_tail(token: str) -> str | None:
             continue
         return m.group(0)
     return None
+
+
+#: How far the voltage code's multiplier may reach: the tail's last three
+#: figures read as two significant figures and a decimal exponent
+#: (``500`` -> 50 x 10^0 = 50 V, ``101`` -> 100 V, ``102`` -> 1 kV). A code
+#: asking for ten kilovolts in a part whose MPN is being handed to *this*
+#: reader is not a rating worth stating, and refusing it is the answer this
+#: module gives every string it cannot read.
+_MAX_VOLTAGE_CODE_EXPONENT = 2
+
+
+def mpn_voltage_rating(token: str) -> tuple[float, str] | None:
+    """The rated voltage a capacitor's MPN states — ``(volts, the code field)``.
+
+    Added by 092 A2b, and it reads the one code field this module *already*
+    recognises: :data:`_VOLTAGE_TAIL_RE`'s ``<value><tolerance><voltage>``
+    tail, which :func:`_non_eia_notation` refuses a token for because "its
+    second group is a rating". That is the whole reason this reader is allowed
+    to state a number where the MPN's bare digits are not: 071 §1 C's anchor
+    rule — a reading may support a verdict only when the token says *which*
+    field the figures are, and here the part number says so itself
+    (``HGC0603R5106M250NTHJ``'s ``106M250`` = 10 uF, ±20 %, 25 V).
+
+    The voltage is the tail's last three figures: two significant figures and
+    a decimal exponent, the IEEE/EIA spelling (``104K500`` -> 50 V,
+    ``...K101`` -> 100 V). ``None`` for everything else: a token with no tail,
+    a code whose mantissa is zero, and a code asking for more than
+    :data:`_MAX_VOLTAGE_CODE_EXPONENT` — a refusal, never a guess, exactly as
+    :func:`mpn_value_code` answers for a value it cannot read.
+
+    The second element is the matched tail, so a rule can quote the field it
+    read instead of asking a reader to trust a number.
+    """
+    if not token or _too_long(token):
+        return None
+    text = token.strip()
+    found = _voltage_rating_tail(text)
+    if found is None:
+        return None
+    code = found[-3:]
+    mantissa, exponent = int(code[:2]), int(code[2])
+    if mantissa == 0 or exponent > _MAX_VOLTAGE_CODE_EXPONENT:
+        return None
+    volts = _finite(float(mantissa) * (10 ** exponent))
+    if volts is None:
+        return None
+    return volts, found
 
 
 def _non_eia_notation(token: str) -> bool:
@@ -1146,6 +1201,59 @@ def parse_voltage_volts(value: str) -> float | None:
         magnitude = int(whole + fraction) / (10 ** len(fraction))
     else:
         magnitude = float(match.group("num"))
+    if match.group("sign") == "-":
+        magnitude = -magnitude
+    return _finite(magnitude)
+
+
+#: A current declaration: a number, an optional SI prefix and an ``A``. The
+#: **unit is required**, unlike the voltage grammar's optional ``V``: a bare
+#: ``5`` in a rail's ``continuousCurrent`` is ambiguous the same way a bare
+#: number in a capacitor's value field is (011's lesson — "unparseable must
+#: never become a guess"), while ``5A``, ``500mA`` and ``1.5A`` are the
+#: spellings a design doc actually writes. The prefixes are the two the trade
+#: writes for a supply current; ``kA`` is not one a board states.
+_CURRENT_RE = re.compile(
+    r"(?P<sign>[+-]?)"
+    r"(?P<num>\d+(?:\.\d+)?|\.\d+)"
+    r"\s*(?P<prefix>[mMuU\u00b5\u03bc])?"
+    r"(?P<unit>[Aa])"
+)
+
+_CURRENT_PREFIXES: dict[str, float] = {"m": 1e-3, "u": 1e-6, "\u00b5": 1e-6, "\u03bc": 1e-6}
+
+
+def parse_current_amps(value: str) -> float | None:
+    """A current declaration -> amperes, or None when it is not one this reads.
+
+    Added by 092 A2b: the DesignIntent's ``continuousCurrent``/``peakCurrent``
+    are strings a person writes (``"5A"``, ``"15A"``), and the one consumer
+    that needs the number — the LDO dissipation estimate, ``P = (Vin - Vout) x
+    I`` — must not read it with a rule of its own (071 §2's "one quantity, one
+    implementation", the reason the other parsers live here).
+
+    Read: ``5A``, ``5 A``, ``500mA``, ``1.5A``, ``0.25A``, and the µ spelling
+    of milliamps' little brother (``200uA``, ``200µA``). Refused: an empty or
+    over-long field (:func:`_too_long`), a bare number with no unit (``5``), a
+    unit this does not know (``5V``, ``5W``, ``5AH``), a prefix without a unit,
+    and a quantity that overflowed to a non-finite float (:func:`_finite`).
+
+    The **sign is kept**, like :func:`parse_voltage_volts` keeps it: a negative
+    current is the caller's judgment to make (a rail's *rating* cannot be
+    negative, which is a claim about a rail, not about this grammar), and
+    dropping the sign here would silently turn a nonsense declaration into a
+    plausible number.
+    """
+    if not value or _too_long(value):
+        return None
+    text = value.strip()
+    match = _CURRENT_RE.fullmatch(text)
+    if match is None:
+        return None
+    magnitude = float(match.group("num"))
+    prefix = (match.group("prefix") or "").lower()
+    if prefix:
+        magnitude *= _CURRENT_PREFIXES[prefix]
     if match.group("sign") == "-":
         magnitude = -magnitude
     return _finite(magnitude)

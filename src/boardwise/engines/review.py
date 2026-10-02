@@ -31,6 +31,7 @@ from ..rules.params import (
     RcCutoff,
     ValueMpnMatch,
 )
+from ..rules.railratings import CapVoltageRating, LdoDissipation
 
 #: Every rule applied by :func:`run_review`, in execution order. The 011c
 #: facts rules sit after the L1 heuristics: they are slower (library loads)
@@ -57,13 +58,23 @@ BUILTIN_RULES: list[Rule] = [
     RcCutoff(),
     ValueMpnMatch(),
     UsbCcPulldown(),
+    CapVoltageRating(),
+    LdoDissipation(),
 ]
 
-#: The rules that read a **DesignIntent** (091 A2a), by class. One entry today, and
-#: it is a table rather than a name inside :func:`_rules_for` so that the next
-#: consumer (A2b's decap, A3's checker) joins by adding itself here and accepting
-#: the `intent=` keyword.
-INTENT_RULES: tuple[type[Rule], ...] = (ValueMpnMatch,)
+#: The rules that read a **DesignIntent** (091 A2a), by class. It is a table
+#: rather than a name inside :func:`_rules_for` so that the next consumer (A3's
+#: checker) joins by adding itself here and accepting the `intent=` keyword.
+#:
+#: 092 A2b added the two rail-rating rules: both are *driven* by the contract's
+#: `requirements.rails[]` (a rail's `targetVoltage`, an output rail's
+#: `continuousCurrent`), so without one they have no subject at all and file
+#: nothing — which is what keeps a reading that names no intent unchanged.
+INTENT_RULES: tuple[type[Rule], ...] = (
+    ValueMpnMatch,
+    CapVoltageRating,
+    LdoDissipation,
+)
 
 
 def _rules_for(intent: IntentSource | None) -> list[Rule]:

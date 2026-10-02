@@ -44,6 +44,8 @@ RULE_NAMES_ZH: dict[str, str] = {
     "param-led-current": "LED 限流电阻",
     "param-divider-output": "分压输出",
     "param-rc-cutoff": "RC 截止频率",
+    "pwr-cap-voltage-rating": "电容耐压与轨压",
+    "path-ldo-dissipation": "LDO 耗散估算",
 }
 
 #: 严重度 → 中文。三个词与 `severity_counts` 的键一一对应。

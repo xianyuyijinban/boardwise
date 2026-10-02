@@ -36,7 +36,7 @@ from pathlib import Path
 from boardwise.core import designintent as di
 from boardwise.core.model import Component, DesignModel, Pin
 from boardwise.core.parts import PartLibrary, load_parts
-from boardwise.engines.review import BUILTIN_RULES, _rules_for, run_review
+from boardwise.engines.review import BUILTIN_RULES, INTENT_RULES, _rules_for, run_review
 from boardwise.parsers.schematic import build_project_model
 from boardwise.rules.base import FindingTarget
 from boardwise.rules.params import (
@@ -309,6 +309,14 @@ def test_run_review_hands_the_contract_to_the_rule_that_reads_one():
     The instance carrying the contract is **fresh**: `BUILTIN_RULES` outlives any
     single run, so setting the answer on the shared instance would leak this
     reading's contract into the next reading.
+
+    **092 A2b rewrite**: the "every other rule" half used to test
+    `isinstance(rule, ValueMpnMatch)`, because that was the only intent rule when
+    this batch was written. Two rail-rating rules joined `INTENT_RULES` in A2b, so
+    the test now skips **that table** rather than one name — the same claim
+    ("only the rules that read an intent are rebuilt"), stated where the seam
+    itself is written down. Each new carrier's own tests are in
+    `tests/test_092_rail_ratings.py`.
     """
     assert _rules_for(None) is BUILTIN_RULES, "no contract, no copy"
     contract = _source(_contract())
@@ -320,7 +328,8 @@ def test_run_review_hands_the_contract_to_the_rule_that_reads_one():
         rule for rule in BUILTIN_RULES if isinstance(rule, ValueMpnMatch)
     )
     for rule, template in zip(rules, BUILTIN_RULES):
-        if isinstance(rule, ValueMpnMatch):
+        if isinstance(rule, INTENT_RULES):
+            assert rule is not template, rule.id
             continue
         assert rule is template, rule.id
     # ... and the shared instance is still contract-free afterwards.

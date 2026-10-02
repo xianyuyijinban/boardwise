@@ -875,7 +875,12 @@ def _facts_from_json(raw: Any, where: str) -> dict[str, Any]:
     if "ldo" in raw:
         entry = raw["ldo"]
         spot = f"{where}.ldo"
-        _check_keys(entry, ("dropout_max_mv", "condition", "provenance", "fixed_output"), spot)
+        _check_keys(
+            entry,
+            ("dropout_max_mv", "condition", "provenance", "fixed_output",
+             "max_dissipation_mw"),
+            spot,
+        )
         record: dict[str, Any] = {
             "dropout_max_mv": _fact_number(entry.get("dropout_max_mv"), f"{spot}.dropout_max_mv"),
             "condition": _require_nonempty(entry.get("condition"), f"{spot}.condition"),
@@ -895,6 +900,23 @@ def _facts_from_json(raw: Any, where: str) -> dict[str, Any]:
                 "volts": _fact_number(fixed.get("volts"), f"{fspot}.volts"),
                 "provenance": _fact_provenance(
                     fixed.get("provenance"), f"{fspot}.provenance"
+                ),
+            }
+        # Optional (092 A2b): the package's own dissipation limit, page-cited
+        # like every other fact — the yardstick `path-ldo-dissipation` may use
+        # for `P = (Vin - Vout) x I`. An entry that states none leaves the rule
+        # with a measurement and no limit, which is the honest answer: the
+        # limit is a package/thermal claim, and inventing one (a "typical
+        # SOT-223 is 1 W" house rule) is exactly the derating standard this
+        # batch refuses to make up.
+        if "max_dissipation_mw" in entry:
+            limit = entry["max_dissipation_mw"]
+            lspot = f"{spot}.max_dissipation_mw"
+            _check_keys(limit, ("mw", "provenance"), lspot)
+            record["max_dissipation_mw"] = {
+                "mw": _fact_number(limit.get("mw"), f"{lspot}.mw"),
+                "provenance": _fact_provenance(
+                    limit.get("provenance"), f"{lspot}.provenance"
                 ),
             }
         facts["ldo"] = record
