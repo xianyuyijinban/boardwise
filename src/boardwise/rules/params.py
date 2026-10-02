@@ -25,12 +25,32 @@ a token that states a package size -- and a reading without one contradicts the
 board in silence (UNKNOWN, "字符串解码无锚点，低置信"). Matching a declared value
 never requires an anchor: this gate withholds verdicts, it does not tighten
 them.
+
+**Since 091 A2a the direction comes from the design intent where the intent states
+one.** A contract may carry `decisions[].value` for a designator — the quantity the
+design *chose* — and then the finding says **改料号/重选件** (the design value is
+what the board is meant to be) instead of naming both repairs and choosing
+neither; the sentence quotes the answer's provenance, because who said so decides
+whether it is a statement or a question (052 §4). No such value, and both repairs
+are named again with an `intent-missing` line pointing at the key to write (that
+token comes from `core.designintent`, its one home: the report prints it too, and
+`rules` may not import `engines`). All of it goes through :func:`repair_directions`,
+one function for this rule's one production path, and **none of it moves the
+verdict**: severity, the four states and the finding's target are what they were —
+an intent states a direction, and grading by intent is A3's.
 """
 
 from __future__ import annotations
 
 import math
 
+from ..core.circuitspec import PROVENANCE_USER_STATED, PROVENANCE_VERIFIED
+from ..core.designintent import (
+    INTENT_MISSING,
+    SECTION_DECISIONS,
+    IntentSource,
+    write_path,
+)
 from ..core.model import Component, DesignModel, is_ground_net
 from ..core.power_domains import domain_of, infer_net_domains
 from .base import Finding, FindingTarget, Outcome
@@ -116,6 +136,121 @@ MPN_REPAIR_DIRECTIONS = (
     "(若料号属实), or fix the MPN/LCSC to a part matching {board_value} "
     "(若设计值属实)"
 )
+
+#: The direction the design stands behind, in the words a reader acts on (091
+#: A2a). `user_stated` is the engineer's own decision, so the sentence states;
+#: `verified_recipe` is a recipe somebody checked, so it names its basis;
+#: everything weaker is a draft and the sentence **asks** instead — 052 §4's rule
+#: (an `ai_asserted` fact may ride along as a hint, never as a ruler). The three
+#: tokens come from the contract's own vocabulary (`core.circuitspec`), and a
+#: rank missing from this table is read as the draft, which is the safe default.
+_DIRECTION_WORDS: dict[str, str] = {
+    PROVENANCE_USER_STATED: "按设计决策应改料号",
+    PROVENANCE_VERIFIED: "按已验证配方（verified_recipe）应改料号",
+}
+_DIRECTION_DRAFT = "AI 草稿认为应改料号，请确认"
+
+
+def _stated_quantity(text: str, kind: str) -> float | None:
+    """A contract's machine value, read by the parser that reads the board's.
+
+    Two notations, one quantity: the shipped ctrl FOC contract writes the design's
+    value as ``0.1Ω`` while that board's own field says ``100mΩ``. Comparing the
+    two *strings* would call the decision a disagreement with the board, so the
+    comparison goes through the value parsers — the same reading the rule already
+    makes of the two fields it is comparing (048's lesson, one field over).
+    """
+    if kind == "capacitor":
+        return parse_capacitance_farads(text)
+    return parse_resistance_ohms(text)
+
+
+def repair_directions(
+    designator: str,
+    *,
+    mpn_value: str,
+    board_value: str,
+    board_quantity: float | None,
+    kind: str,
+    intent: IntentSource | None,
+) -> str:
+    """What to do about a Value-vs-MPN contradiction — the one place that says it.
+
+    The rule used to know the contradiction and not the repair (052 §2.1: both
+    directions, the choice left to the reader). Since 091 A2a the design intent
+    can answer the direction, and this function is the **single** production path
+    of that answer, so the states cannot drift into two wordings (#55's
+    ``_grade_new_findings`` shape, and 052 §2.1's own lesson that one rule with
+    two candidate repairs must not format them twice).
+
+    Three states:
+
+    * **no contract** (``intent is None``) — byte-for-byte the sentence this rule
+      has ended with since 052: both repairs, in the same words, no direction. A
+      reading that carries no intent document must not change at all;
+    * **the contract states a machine-readable value for this designator**
+      (``decisions[subject=…].value``) — the direction is the *design's*, and it is
+      **改料号/重选件**: the design value is what the board is meant to be, so the
+      MPN/LCSC column is the field to re-pick. The wording names the answer's
+      provenance — who said so decides whether this is a statement (``user_stated``)
+      or a question (``ai_asserted``, 052 §4). If the decision's value does not
+      agree with the board's own field, the sentence says so rather than pretending
+      the board side is fine;
+    * **no such value** — no decision for this designator, or one whose prose states
+      no machine-readable number: both repairs again, plus an `intent-missing` line
+      naming the file and the key to write. That is the honest answer, because
+      "which side is wrong" is exactly what is still undecided.
+    """
+    both = MPN_REPAIR_DIRECTIONS.format(
+        mpn_value=mpn_value, board_value=board_value
+    )
+    if intent is None:
+        return both
+    decision = intent.decision(designator)
+    where = write_path(SECTION_DECISIONS, designator, "value")
+    file_note = (
+        f"，出处 {intent.path}" if intent.path
+        else "，出处见 checkup 的 intent.contract.file"
+    )
+    stated = (decision.stated_value if decision is not None else "") or ""
+    if stated:
+        draft = decision.provenance not in _DIRECTION_WORDS
+        words = _DIRECTION_WORDS.get(decision.provenance, _DIRECTION_DRAFT)
+        text = (
+            f" -- 修复方向由设计意图决定（052 §2.1）：设计决策 {where} = {stated}"
+            f"（provenance {decision.provenance}{file_note}）—— {words}"
+            f"：把 MPN/LCSC 换成与 {stated} 相符的件（重选件）"
+        )
+        if draft:
+            text += "；ai_asserted 是草稿（052 §4），确认前不要照改"
+        else:
+            text += f"；把 Value 改成 MPN 解码值 {mpn_value} 会把电路改错"
+        stated_quantity = _stated_quantity(stated, kind)
+        if stated_quantity is None:
+            text += (
+                f"。注意：决策的值 {stated} 不是本规则能读的量"
+                "——两个字段都要按决策正文人工核实"
+            )
+        elif board_quantity is None or not math.isclose(
+            stated_quantity, board_quantity, rel_tol=1e-3
+        ):
+            text += (
+                f"。注意：决策的值 {stated} 与板上的值 {board_value} 也不一致"
+                "——Value 字段同样要按设计决策核实"
+            )
+        return text
+    return (
+        both
+        + f"；{INTENT_MISSING}: 位号 {designator} 的 `decisions[].value` 没声明 —— "
+        + f"写进 `{intent.path or '（合同路径见 checkup 的 intent.contract.file）'}`"
+        + f" 的 `{where}`"
+        + (
+            f"（已有决策正文，缺的是机读值；provenance {decision.provenance}）"
+            if decision is not None else
+            "（decisions[] 里还没有这个位号）"
+        )
+        + "；方向由设计决策定，未定之前两边都列 —— 工具只提问，不改写"
+    )
 
 
 def parse_resistance_ohms(value: str) -> float | None:
@@ -265,13 +400,18 @@ class ValueMpnMatch(FactsRule):
     A **match** never needs an anchor, and neither does the amplitude waiver
     below: this gate withholds verdicts, it does not tighten them.
 
-    **A violation reports a contradiction, not a repair** (052 §2.1, after
-    048): the finding's target carries the board's own value as
-    ``expected_before`` and an **empty** ``suggested_after``, because the rule
-    has two candidates (:data:`MPN_REPAIR_DIRECTIONS`) and enough evidence for
-    neither, so both are named in the message and the direction is left to the
-    design intent. ``edit plan`` refuses to build a plan without one being
-    stated — see ``cli._cmd_edit_plan_value``."""
+    **A violation reports a contradiction, and since 091 A2a a direction when the
+    design intent states one** (052 §2.1, after 048): the finding's target carries
+    the board's own value as ``expected_before`` and an **empty**
+    ``suggested_after`` — the repair that would fill that field is a *value* write,
+    and the direction the message may now state is 改料号/重选件, which is a
+    different change kind (052 §2.1's closed `--direction mpn`). The message goes
+    through :func:`repair_directions`, the one production path of that wording, so
+    three states — no contract, a decision with a machine value, a decision without
+    one — cannot drift apart. Severity, verdict and the target are untouched by it:
+    an intent states a *direction*, and A3 is where intent reaches grading.
+    ``edit plan`` still refuses to build a plan without a direction being stated —
+    see ``cli._cmd_edit_plan_value``."""
 
     id = "param-value-mpn-match"
     title = "The board's value field matches the MPN's decoded value"
@@ -284,6 +424,20 @@ class ValueMpnMatch(FactsRule):
         "mid-letter form, EIA code with package context); an unanchored "
         "reading is UNKNOWN"
     )
+
+    def __init__(
+        self,
+        library=None,
+        intent: IntentSource | None = None,
+    ) -> None:
+        super().__init__(library)
+        #: The design intent this reading was handed (091 A2a), or ``None`` for a
+        #: reading that carries none — which is every path that does not name one,
+        #: and it keeps this rule byte-for-byte what it was. Handed in at
+        #: construction rather than read off the disk: a rule judges a netlist, and
+        #: where a contract lives (and which one) is the caller's question, not the
+        #: rule's (`engines.review` builds the per-run instance).
+        self.intent = intent
 
     def outcomes(self, model: DesignModel) -> list[Outcome]:
         return [row[0] for row in self._rows(model)]
@@ -491,6 +645,14 @@ class ValueMpnMatch(FactsRule):
                 # (`_human_value`) so the "fix Value" candidate can be typed
                 # straight into `--after` -- and names the anchor, so a reader can
                 # see what let this row speak (071 §1 C).
+                #
+                # Where the design intent states a machine value for this
+                # designator, the *direction* is no longer left open: the design
+                # value is what the board is meant to be, so the message says
+                # 改料号/重选件 and names the answer's provenance (091 A2a). The
+                # wording is built by `repair_directions` -- one function for this
+                # one production path, and `suggested_after` still stays empty
+                # (a re-picked MPN is a change kind this build does not have).
                 rows.append((
                     Outcome(
                         rule_id=self.id,
@@ -502,9 +664,13 @@ class ValueMpnMatch(FactsRule):
                             f"({comp.mpn!r} decodes to {decoded:.4g} {unit}) "
                             f"-- BOM and schematic disagree ({amplitude}；"
                             f"锚点：{anchor})"
-                            + MPN_REPAIR_DIRECTIONS.format(
+                            + repair_directions(
+                                comp.designator,
                                 mpn_value=_human_value(decoded, kind),
                                 board_value=comp.value,
+                                board_quantity=declared,
+                                kind=kind,
+                                intent=self.intent,
                             )
                         ),
                         evidence=[

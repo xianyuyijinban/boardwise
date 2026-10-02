@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from ..core.architecture import STALE_MARK
+from ..core.designintent import INTENT_MISSING
 from ..core.model import Component, DesignModel, Net, is_ground_net
 from ..core.parts import DESIGNATOR_CATEGORIES
 
@@ -1120,7 +1121,12 @@ def needs_datasheet_section(
 #: compiler needed was not stated" — because it says the same thing about a
 #: different consumer: a question the contract owes, never a repair the tool made
 #: up. Every line names the slot, the file and the key to write it in.
-INTENT_MISSING = "intent-missing"
+#:
+#: The string itself is imported above from `core.designintent`, its one home
+#: since 091 A2a: a *rule* reports the same token now (`rules.params`, when a
+#: contradiction has no machine value to take its direction from), and `rules` may
+#: not import `engines` (006c's layer table). It stays in this namespace too, which
+#: is where the report's own readers import it from.
 
 #: The wording a **hint** is reported with: not a required slot, but a statement
 #: the document's own facts say it needs and does not have. The first one is the
