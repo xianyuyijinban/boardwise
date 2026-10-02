@@ -49,6 +49,7 @@ from boardwise.rules.archclosure import (
     MEASUREMENT_GRADE,
     STRUCTURAL_GRADE,
     ArchRailVoltageClash,
+    ArchSenseBiasClosure,
     NrstClosure,
     OpenDrainPullup,
     _is_reset_name,
@@ -744,8 +745,12 @@ def test_the_open_drain_marker_is_optional_and_the_record_schema_stays_closed():
 # ---------------------------------------------------------------------------
 
 
-def test_run_review_hands_the_contract_to_the_five_rules_that_read_one():
-    """091 A2a's seam, now with five carriers — and the shared instances stay clean."""
+def test_run_review_hands_the_contract_to_the_six_rules_that_read_one():
+    """091 A2a's seam, now with six carriers — and the shared instances stay clean.
+
+    094 A3b added `arch-sense-bias-closure`, whose subject (a bidirectional
+    current-sense chain) only exists in a contract.
+    """
     contract = _intent(_rail("+12V", targetVoltage="12V"))
     rules = _rules_for(contract)
     assert [rule.id for rule in rules] == [rule.id for rule in BUILTIN_RULES]
@@ -754,7 +759,7 @@ def test_run_review_hands_the_contract_to_the_five_rules_that_read_one():
     }
     assert set(carriers) == {
         "param-value-mpn-match", "pwr-cap-voltage-rating", "path-ldo-dissipation",
-        "arch-rail-voltage-clash", "arch-opendrain-pullup",
+        "arch-rail-voltage-clash", "arch-opendrain-pullup", "arch-sense-bias-closure",
     }
     assert all(rule.intent is contract for rule in carriers.values())
     assert NrstClosure not in INTENT_RULES, (
@@ -769,7 +774,8 @@ def test_run_review_hands_the_contract_to_the_five_rules_that_read_one():
             continue
         assert rule is template, rule.id
     for template in BUILTIN_RULES:
-        if isinstance(template, (ArchRailVoltageClash, OpenDrainPullup)):
+        if isinstance(template, (ArchRailVoltageClash, OpenDrainPullup,
+                                 ArchSenseBiasClosure)):
             assert template.intent is None, "the shared instance kept no answer"
 
 

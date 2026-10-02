@@ -1100,6 +1100,31 @@ def _registry_case(rule_id: str):
         return NrstClosure(library=PartLibrary(parts=[])), model_of(
             {"U1": mcu}, {"NRST": [("U1", "7")]},
         )
+    if rule_id == "arch-sense-bias-closure":
+        # 094 A3b: the bias arithmetic reads *which resistors* sit on the sense
+        # net and where their far ends go (a divider mid-net or a priced rail), so
+        # a welded name can supply neither the parts nor the rails it squares
+        # against. The contract is what makes the chain a subject at all.
+        from boardwise.core.designintent import (
+            DesignIntent,
+            IntentSignal,
+            IntentSource,
+        )
+        from boardwise.rules.archclosure import ArchSenseBiasClosure
+
+        contract = IntentSource(
+            document=DesignIntent(signals=[
+                IntentSignal(net="U+", slots={"polarity": "bidirectional"},
+                             kind="current-sense"),
+            ]),
+            path="mem://issue-19/bias.intent.json",
+        )
+        return ArchSenseBiasClosure(
+            library=PartLibrary(parts=[]), intent=contract
+        ), model_of(
+            {"R4": _part("R4", value="100mΩ", pins=[("2", "U+"), ("1", "GND")])},
+            {"U+": [("R4", "2")], "GND": [("R4", "1")]},
+        )
     if rule_id == "conn-nc-and-must-connect":
         entry = PartEntry(
             key="ic.nc", mpn="NC1", lcsc="C7", category="ic.uart",

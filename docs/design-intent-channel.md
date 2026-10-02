@@ -98,7 +98,7 @@
 | A1 | 文档+持久化+审查报告接线 | checkup 报告挂 `intent` 节（槽位总数/已填/缺失 + `intent-missing` 点名）；`design-intent.md` 改由合同渲染 | 文档活着、不丢、不覆盖 |
 | A2a | 审查规则（params） | 冲突时按 intent 给**方向**：该位号有 `decisions[].value` → 建议改料号/重选件（按 provenance 分级语气）；没有 → 双向列出 + `intent-missing` 点名 `decisions[].value` | 发现→修复依据（**已落地，091**，见 `tests/test_091_intent_direction.py`） |
 | A2b | 审查规则（额定/降额）+ 报告接线 | rail 声明进「耐压 vs 轨压」与「LDO 耗散」两条规则；`checkup` 把合同传进规则走查（A2a 落地记录的「未接线」已补） | **已落地，092**，见 `tests/test_092_rail_ratings.py` 与 §七 |
-| A3 | 架构自洽检查器 | 信号链闭合规则（采样链必须有偏置/参考、开漏必须有上拉、单端 ADC 不许直吃双极性信号……第一批 5–8 条，全部来自真案例）；**分级框架**：违反 `user_stated` = ERROR、违反 `ai_asserted`/`verified_recipe` = WARN、无合同零移动、结构性闭合直接 WARN | **A3a 已落地，093**，见 `tests/test_093_arch_closure.py` 与 §八；F2（nFAULT 无上拉）与 F3（NRST 裸奔）由规则复现 |
+| A3 | 架构自洽检查器 | 信号链闭合规则（采样链必须有偏置/参考、开漏必须有上拉、单端 ADC 不许直吃双极性信号……第一批 5–8 条，全部来自真案例）；**分级框架**：违反 `user_stated` = ERROR、违反 `ai_asserted`/`verified_recipe` = WARN、无合同零移动、结构性闭合直接 WARN | **A3a/A3b 均已落地，093/094**，见 `tests/test_093_arch_closure.py`、`tests/test_094_sense_bias.py` 与 §八/§九；F2（nFAULT 无上拉）、F3（NRST 裸奔）由规则复现，F1（采样链偏置不闭合）进 A3b：偏置**算术**判定 + 合同 `closure: "waived"` 豁免通道，且合同接进 `draw/edit apply` 的 findings 走查 |
 | A4 | 绘制侧 | 语法绑定消费 blocks/decisions（TVS/bulk 角色、支路顺序、模块清单由 intent 推出） | 意图→图纸同源 |
 
 ## 四、通往「毕设水平」的全程路线（A 主线之后的 backlog，记档）
@@ -257,3 +257,74 @@ A 主线走到这里，intent 第一次**进评级**（090/091/092 都只让它�
    → WARN；**R1 不报**——shipped 合同的 rails 一个 `targetVoltage` 都没填（阴性对照：把
    `+12V` 按图上自己的判定填成 `12V` 后仍不报）。checkup 的 verdict/退出码/schema `/6`
    一个字没动。
+
+## 九、A3b 落地记录（094 批，见 `tests/test_094_sense_bias.py`）
+
+A3a 让 intent 第一次进评级，但它带来的三条规则读的都是**图纸**（异压、上拉、复位脚成员数）。
+A3b 补上这条通道存在的理由本身——**F1 的采样链偏置**——并第一次让规则做**算术**，同时给合同
+一个「明示放弃」的出口，最后把合同接进 `apply` 的 findings 走查（A3a §八.5 留的那半条）。
+
+1. **规则 `arch-sense-bias-closure`**（`rules/archclosure.py`，进 `BUILTIN_RULES` +
+   `INTENT_RULES` + `NET_MEMBERSHIP_RULES`）。主题 = 合同声明 `signals[].kind =
+   "current-sense"` 且 `polarity = "bidirectional"`（或该条 `requires` 里点名 bias 类 token）
+   的链。判定**按算术**，不按「有没有画东西」：`R_sense` = 网上到地的那只电阻（分流），
+   偏置源 `R_th = (R_up‖R_dn) + Rs`（分压中点经串阻；串阻直接接轨时轨内阻记 0，
+   `R_th = Rs`），`V_err = V_bias × R_sense/(R_th + R_sense)`（F1 原式，`V_bias` 由分压比
+   × 轨压算出，轨压取自 `infer_net_domains`）。五档：
+
+   | 档 | 条件 | 级别 |
+   |---|---|---|
+   | 豁免 | 合同 `closure: "waived"` | `user_stated` **INFO**（引 `decisions[]` 的 rationale）/ 更弱档 **WARN**（草稿不能自己豁免自己） |
+   | 无偏置网络 | 网上没有任何通往分压中点或 power-class 轨的电阻路径 | 按 `intent_grade()`（`user_stated` = **ERROR**） |
+   | 弱偏置 | `R_th ≥ R_sense` | 按 `intent_grade()`（F1 实测：**ERROR**） |
+   | 边际 | `R_sense/10 < R_th < R_sense` | **WARN**（比值存疑，数字随行） |
+   | 闭合 | `R_th ≤ R_sense/10`，或网里有**运放输出脚**直连 | **INFO 测量行**（报 R_th 与 V_err） |
+
+   **「1/10」是本规则自声明的判据，不是标准**——写在类 docstring 与 `BIAS_CLOSURE_RATIO`
+   里，每一行都把判据与它被套用的数字一起打印，读者可以反对那个数而不是反对一个藏在表达式
+   里的阈值。**两处不猜**：网上有外来电阻但远端网既不是可定价的 power-class 轨、也不是
+   「一上一下」的分压中点 ⇒ UNKNOWN + 点名去哪补；网上没有到地电阻 ⇒ 「R_sense 读不出来」
+   UNKNOWN。**一处读不出**：网里有运放但输出脚认不出（符号引脚名无 `OUT` 段、货架条目也没记
+   `facts.output_pins`）⇒ UNKNOWN 并点名写进 `parts.corrections.json` 哪里。
+
+2. **合同的豁免通道（本批的合同侧小增量）**：`requirements.signals[].closure`，可选、缺省
+   **不写出**（schema 封闭不变）；唯二取值之一 `"waived"` 是「工程师明示放弃闭合」。未知
+   token 按路径拒收（`requirements.signals[0].closure`）——一个没人读的声明就是没人查的
+   事实。case 文件 `blocklib/intents/robot-ctrl-foc.intent.json` 的 `U+`/`W+` 按 R4 决策补
+   `closure: "waived"`。**A1 的 `closure-undeclared` 提示仍然照旧提问**：它问的是
+   `requires: ["bias-reference"]` 这个槽，而本批的 waiver 是另一条通道（改提示会移动
+   `test_090` 已钉的验收，留给后续批裁决）。
+
+3. **F1 算术逐数对照**（合成模型：3.3V 轨经 1k/1k 分压出 1.65V，10k 串到 0.1Ω 采样节点）：
+
+   | 量 | 报告 F1 原文 | 规则消息 |
+   |---|---|---|
+   | 分压内阻 | 500Ω | `R_th = (R_up‖R_dn) + Rs = 500Ω + 10000Ω` |
+   | 串阻 | 10kΩ | `+ 10000Ω = 10500Ω` |
+   | 采样电阻 | 0.1Ω | `R_sense = 0.1Ω`（R4 → GND） |
+   | 偏置失误电压 | `1.65V × 0.1Ω/(500 + 10k + 0.1) ≈ 15.7µV` | `1.65V × 0.1Ω/(10500Ω + 0.1Ω) ≈ 15.7µV` |
+   | 想要 | 1.65V | `差约 5 个数量级，而想要的是 1.65V` |
+
+4. **ctrl FOC 实测（导出 + shipped 合同）**：规则报 `U+`/`W+` 两行 **INFO 豁免**，引用
+   `decisions[subject='R4']` 的 decision 与 rationale 原文（`W+` 没有自己的 decision，行里
+   照实说「没有为这条链背书的条目」）；**撤掉** waived 的变体合同 → 同两行变 **ERROR 无偏置
+   网络**（导出档 `U+` 只有 3 成员、无 VCC/2 网 = A3a §8.1 的「完全无偏置」形状）。真机现状
+   （有偏置但源阻抗不闭合）由合成模型覆盖，见上表的逐数对照。
+
+5. **合同进 `apply` 走查**（A3a §八.5 的遗留）。`_baseline_findings(model, intent=…)` 多一个
+   携带合同的参数，**基线两侧同一个合同**：`draw plan` / `edit plan` 记基线那一步与
+   `draw apply` / `edit apply` 写后重读都解析
+   `<boardwise home>/design-intent/<projectUuid>.json`（apply 家族没有 `--intent` flag；
+   显式 flag 缺失时是 note + 退回旧读数，不崩）。**实测**：一次把闭环（运放输出直连）改成
+   开环的落图 → 写后重读新增 `arch-sense-bias-closure|ERROR|…|U+` → **exit 2、`sch.doc.save`
+   没被调用**，`--force` 仍 exit 2 且 `forcedWarns` 为空；把合同降成 `ai_asserted` 后同一场景
+   变成 WARN → 不给 `--force` exit 2，给了才放行并在 `forcedWarns` 与 notes 里点名。
+   **口径边界（诚实记录）**：闸比的是「**新增**」签名（036 规则 / #55 裁决 B），所以**写之前
+   板上就有的**自洽 ERROR 不算新增、不拦这次写——本批钉的是「写造成的违规必拦」，不是「带病
+   板一律不许写」。无合同的项目读数逐字节不变（`_baseline_findings(model) ==
+   _baseline_findings(model, intent=None)` 钉死）。
+
+6. **checkup 的退出码移动了一次，且是应该的**：`test_090` 的手写小合同把 `U+` 声明成
+   `user_stated` 双向电流采样，而 ROBOT 导出上它没有偏置——新规则报出该板唯一的 **ERROR**，
+   退出码从 3（读数不完整）变 1（有错）。这正是「合同发现缺陷要动 verdict」的字面含义，三处
+   断言随之改成测量值并写明原因（见交卷报告的碰撞清单）。

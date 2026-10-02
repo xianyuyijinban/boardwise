@@ -203,6 +203,32 @@ checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起
   上拉」也算，F2 nFAULT 案）、`arch-nrst-closure`（控制器 NRST 脚单成员网 = 裸奔，F3 案）。
   详见 §3.2 的一段。
 
+- **094 A3b 起第四条规则 + 合同进 `apply` 走查**（F1 偏置案落地）：
+
+  - `arch-sense-bias-closure`：合同声明 `signals[].kind = "current-sense"` 且
+    `polarity = "bidirectional"`（或该条 `requires` 里点名 bias 类 token）的链，必须真的被
+    偏置住。**判定按算术，不按「有没有画东西」**：偏置源内阻 `R_th = (R_up‖R_dn) + Rs`
+    与采样电阻 `R_sense`（网上到地那只）比 —— `R_th ≥ R_sense` = 形同虚设（按上表分级，
+    `user_stated` ⇒ **ERROR**；实测 F1：`R_th = 10500Ω` vs `R_sense = 0.1Ω`，
+    `V_err = 1.65V × 0.1Ω/(10500Ω + 0.1Ω) ≈ 15.7µV`，想要 1.65V，**差 5 个数量级**）；
+    `R_sense/10 < R_th < R_sense` ⇒ **WARN**（比值存疑，两个数都进消息）；`R_th ≤ R_sense/10`
+    或网里有**运放输出脚**直连 ⇒ **INFO 测量行**（运放输出阻抗 Ω 级，免检分压算术）。
+    **「1/10」是本规则自声明的判据，不是标准**——它写在规则 docstring 与
+    `BIAS_CLOSURE_RATIO` 里，数字随行；拓扑对不上（网上有外来电阻，但远端网既不是可定价的
+    power-class 轨、也不是「一上一下」的分压中点）⇒ **UNKNOWN + 点名去哪补**，不猜。
+  - **合同的豁免通道**：`requirements.signals[].closure = "waived"`（可选键，缺省不写出）——
+    工程师**明示放弃**这条链的闭合。`user_stated` ⇒ **INFO** 并引 `decisions[]` 的 rationale
+    原文（F1 的 R4：「0.1Ω 直采，不加放大器」）；`ai_asserted`/`verified_recipe` ⇒ **WARN**
+    （草稿不能自己豁免自己，052 §4）。shipped 合同
+    `blocklib/intents/robot-ctrl-foc.intent.json` 的 `U+`/`W+` 已按 R4 决策标 `closure: "waived"`；
+    撤掉它，同一条链立刻回到「无偏置网络」的 ERROR。
+  - **合同进 apply 走查**（094 起）：`draw apply` / `edit apply`（以及 `draw plan` /
+    `edit plan` 记基线那一步）的 findings 走查**带合同**——合同从
+    `<BOARDWISE_HOME>/design-intent/<projectUuid>.json` 取（**apply 家族没有 `--intent` flag**），
+    两边同一个合同。所以：**这次写造成的**自洽 ERROR 会真的拦保存、`--force` 也不豁免；
+    写之前板上本来就有的 ERROR 不算「新增」、不拦这次写（闸比的是**新增**，见 §3.3 的
+    `--force` 分工）。
+
 每个槽一个**稳定 ID**：`<projectUuid>/<boardUuid>/<sectionKey>/<slotKey>`（`sectionKey` =
 `<节>:<对象>`，节 = power/analog/control/bus/intent）。行内格式：`| 稳定 ID | 槽位 | 值 | 来源 | sig= |`，
 来源写 `engineer@2026-09-27` / `ai-proposal@…` / `ai-confirmed@…`；`sig=` 是该槽**关联对象的签名**
@@ -298,13 +324,18 @@ checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起
   两条都**不发明降额系数**：测量行永远出，判决只看两个数。
   **093 A3a 起 intent 进评级**（A1 以来第一次口径变化）：合同的 provenance 决定严重度——
   违反 `user_stated` = **ERROR**、违反 `verified_recipe`/`ai_asserted` = **WARN**、无合同不查。
-  三条架构自洽规则进 `BUILTIN_RULES`：`arch-rail-voltage-clash`（合同的 `rails[].targetVoltage`
+  四条架构自洽规则进 `BUILTIN_RULES`：`arch-rail-voltage-clash`（合同的 `rails[].targetVoltage`
   vs 图上自己的判定，**两个来源的原始字段与值都进消息，谁错人裁**）、`arch-opendrain-pullup`
   （货架 `pull_required` 标 `open_drain` 的脚没电阻跨到 power-class 轨 = WARN；合同
   `decisions[]` 里 `user_stated` 的「用 MCU 内部上拉」算闭合——F2 nFAULT 案）、
-  `arch-nrst-closure`（控制器 NRST 脚单成员网 = 裸奔 WARN——F3 案）。**apply 闸**：ERROR 必拦，
-  `--force` 只豁免 WARN（#55 裁决 B）；注意 apply 的走查今天**不带合同**，所以到得了那道闸的
-  是 R2/R3 的结构性 WARN，合同驱动的 R1 ERROR 要等合同接进 apply 那一批。）*
+  `arch-nrst-closure`（控制器 NRST 脚单成员网 = 裸奔 WARN——F3 案）、`arch-sense-bias-closure`
+  （**094 A3b**：双向电流采样链的偏置**算术**——`R_th = R_up‖R_dn + Rs` vs `R_sense`，
+  `R_th ≥ R_sense` 形同虚设按上表分级、`R_sense/10 < R_th < R_sense` WARN、`≤ R_sense/10`
+  或运放输出直连 INFO；合同 `signals[].closure: "waived"` = 工程师明示放弃闭合 ⇒ INFO 引
+  `decisions[]` rationale，草稿豁免 WARN；「1/10」是规则自声明判据，写在 docstring 里——F1 案）。
+  **apply 闸**：ERROR 必拦，`--force` 只豁免 WARN（#55 裁决 B）；**094 A3b 起 apply 的走查
+  也带合同**（基线两侧同一个 `<BOARDWISE_HOME>/design-intent/<projectUuid>.json`），所以
+  「这次写造成的」自洽 ERROR 会真的拦保存，写之前就有的 ERROR 不算新增、不拦这次写。）*
   `--file` 路径**只有 `param-value-mpn-match`（单器件值）可修**，别的规则按名字拒绝
   （029 补器件、035 修脚都走 `--report` 路径，见下条）。`apply` 四道保护：
   写前重读页面 → 只写一个键 → 独立 geometry 回读 → save + 复查；重复执行认 `already_applied` 零写入。
@@ -334,6 +365,10 @@ checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起
   **ERROR 必拦、WARN 要 `--force` 才放行（放行的 WARN 进报告 `findings.forcedWarns` 与 notes，
   不许静默）、INFO 只进报告永不拦**；仍被拦的走 exit 2 并打印新增行。`draw apply` 与
   `edit apply`（insert / move 两条路径）**同一口径**（同一个 `_new_findings_verdict`）。
+  **094 A3b 起这条闸还带合同**：基线（plan 记的那次）与写后重读**同一个** DesignIntent
+  （从 `<BOARDWISE_HOME>/design-intent/<projectUuid>.json` 取），所以「这次写造成的」自洽
+  ERROR（如把双向采样链的偏置改坏 → `arch-sense-bias-closure` ERROR）会真的拦保存、
+  `--force` 也不豁免；写之前板上就有的 ERROR 不算新增、不拦这次写。
   落点是**两件一起**的九宫阶梯（模板自带相对偏移 + bbox 干涉检查），位号池取「页面 ∪ 工程导出」
   （§6 坑 25）。
 - **局部移动一个功能块**（037 `move-block`，要 daemon；无驱动规则——AI 点名移什么，工具保证连接不变）：

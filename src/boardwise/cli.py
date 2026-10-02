@@ -6874,7 +6874,15 @@ async def _draw_live_context(client, args, call, notes: list[str]):
              "host mid-run (036b)"
     )
     if model is not None:
-        context["findings"] = _baseline_findings(model)
+        # 094 A3b: the baseline the plan records is read with the project's
+        # contract, because `apply` re-reads the findings with it — one contract on
+        # both sides, or every intent-driven row would look newly grown.
+        context["findings"] = _baseline_findings(
+            model,
+            intent=_intent_source_for_apply(
+                args, str(context.get("projectUuid") or ""), notes
+            ),
+        )
     return context
 
 
@@ -8067,11 +8075,21 @@ async def _draw_apply_flow(
 
     # ---- 11. no new findings (036's rule, graded by #55's ruling B; the
     #          basis says which baseline) ----------------------------------
+    #
+    # 094 A3b: both reads carry the project's contract — the plan's own recorded
+    # baseline was taken with it (`_draw_live_context`), and this run's re-read
+    # resolves it from the focused project the same way. The gate grades what
+    # *grew*, so an intent-driven ERROR that this write created stops the save
+    # (ERROR never needs `--force`), while the one the board already had is not
+    # "new" and does not block a write that did not create it.
+    intent = _intent_source_for_apply(
+        args, str((report.get("identity") or {}).get("focusedProjectUuid") or ""), notes
+    )
     if plan.change.draw_baseline.findings_read:
         baseline = sorted(plan.change.baseline_findings)
         basis = "the findings the project reported when the plan was built"
     elif before_model is not None:
-        baseline = sorted(_baseline_findings(before_model))
+        baseline = sorted(_baseline_findings(before_model, intent=intent))
         basis = "the findings the project reported at the start of this run"
     else:
         baseline = None
@@ -8083,7 +8101,7 @@ async def _draw_apply_flow(
             "'did this drawing break something?' is reported as unknown, not as clean"
         )
     else:
-        now = set(_baseline_findings(after_model))
+        now = set(_baseline_findings(after_model, intent=intent))
         grown = sorted(now - set(baseline))
         report["findings"] = {
             "basis": basis,
@@ -13380,9 +13398,49 @@ def _finding_signature(finding) -> str:
     ])
 
 
-def _baseline_findings(model) -> list[str]:
-    """Every finding the project's rules report right now, sorted and deduped."""
-    return sorted({_finding_signature(item) for item in run_review(model)})
+def _baseline_findings(model, intent: object | None = None) -> list[str]:
+    """Every finding the project's rules report right now, sorted and deduped.
+
+    ``intent`` is the DesignIntent the walk carries (094 A3b) — the **same**
+    contract on both sides of every comparison this feeds: the plan's recorded
+    baseline and the apply run's own re-read. The gate compares two *sets* of
+    signatures and grades what **grew** (036's rule, #55's ruling B), so a
+    contract present on one side only would make every intent-driven row look like
+    something the write had created. Passing none is the reading this function
+    always was (``run_review(model)``), which is what keeps a project nobody
+    wrote a contract for byte-for-byte unchanged.
+    """
+    return sorted({
+        _finding_signature(item) for item in run_review(model, intent=intent)
+    })
+
+
+def _intent_source_for_apply(
+    args: argparse.Namespace, project_uuid: str, notes: list[str]
+) -> object | None:
+    """The contract an apply/plan run's findings walk reads (094 A3b).
+
+    The path is A2b's: ``--intent PATH`` when the caller named one, otherwise the
+    user-level default ``<home>/design-intent/<projectUuid>.json`` **when it
+    exists** (reading never creates a file — 090 §二·补). Resolved here rather
+    than inside the rule walk for the reason 006c's layer table gives: `rules` may
+    import `core` and nothing above it, so the file is read in the CLI and travels
+    as a `core.designintent.IntentSource`.
+
+    ``None`` for a run that names no project and no file: there is no default
+    location to look in then, and a guessed name (`project.json`) would be
+    somebody else's contract. A contract that is named but unreadable is a note
+    and ``None`` — the run proceeds with the reading it had before this batch,
+    exactly as `checkup` does.
+    """
+    from .core import designintent as di
+
+    if not project_uuid and not str(getattr(args, "intent", "") or ""):
+        return None
+    contract, path, _error = _load_intent_contract(args, project_uuid, notes)
+    if contract is None:
+        return None
+    return di.IntentSource(document=contract, path=str(path or ""))
 
 
 #: The three severities a signature can carry, in the order the report groups
@@ -13649,7 +13707,18 @@ def _cmd_edit_plan_move(args: argparse.Namespace) -> int:
             designators=names,
             dx=dx,
             dy=dy,
-            baseline_findings=_baseline_findings(model),
+            baseline_findings=_baseline_findings(
+                model,
+                intent=_intent_source_for_apply(
+                    args,
+                    str(
+                        (listing.get("projects") or [{}])[0].get("projectUuid")
+                        if isinstance(listing, dict) and listing.get("projects")
+                        else ""
+                    ),
+                    notes,
+                ),
+            ),
         )
 
         print(
@@ -13909,7 +13978,18 @@ def _cmd_edit_plan_insert(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 2
-        baseline = _baseline_findings(model)
+        baseline = _baseline_findings(
+            model,
+            intent=_intent_source_for_apply(
+                args,
+                str(
+                    (listing.get("projects") or [{}])[0].get("projectUuid")
+                    if isinstance(listing, dict) and listing.get("projects")
+                    else ""
+                ),
+                notes,
+            ),
+        )
 
         names = addcomponent.designator_pool(geometry, model)
         # 036b: one shared helper for both builders — the pool is the page **and
@@ -18252,8 +18332,18 @@ async def _edit_apply_insert_flow(
         return done(2, "failed", "range_flag_diff")
 
     # ---- 6b. no new findings (there is no rule of our own to re-review) -----
+    # 094 A3b: the plan's baseline was read with the project's contract, so this
+    # re-read takes it too — from the plan's own recorded projectUuid, which is
+    # the same project the baseline was read for. One contract on both sides.
     baseline = set(plan.change.baseline_findings)
-    now = set(_baseline_findings(after_model)) if after_model is not None else None
+    now = (
+        set(_baseline_findings(
+            after_model,
+            intent=_intent_source_for_apply(args, plan.source.project_uuid, notes),
+        ))
+        if after_model is not None
+        else None
+    )
     if now is None:
         report["findings"] = {"state": "unknown", "baseline": sorted(baseline)}
         notes.append(
@@ -18782,7 +18872,12 @@ async def _edit_apply_move_flow(
             "could not be answered — reported as unknown, not as clean"
         )
     else:
-        now = set(_baseline_findings(after_model))
+        # 094 A3b: the contract the plan's baseline was read with, from the plan's
+        # own recorded projectUuid — one contract on both sides of the comparison.
+        now = set(_baseline_findings(
+            after_model,
+            intent=_intent_source_for_apply(args, plan.source.project_uuid, notes),
+        ))
         grown = sorted(now - baseline)
         report["findings"] = {
             "baseline": sorted(baseline), "after": sorted(now),

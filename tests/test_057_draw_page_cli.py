@@ -332,7 +332,7 @@ def _stub_export(monkeypatch, *, components=None, findings=None, sequence=None):
     def _parse(blob, notes):
         return type("Model", (), {"components": dict(components or {})})()
 
-    def _findings(model):
+    def _findings(model, intent=None):
         if reads is not None:
             return list(reads.pop(0)) if reads else []
         return list(findings or [])
