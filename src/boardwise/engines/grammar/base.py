@@ -70,6 +70,16 @@ of a part it means.
 ``uniform-gnd``  **added by this batch**: this module's ground is expressed one
                  way throughout — one symbol style or one label, never mixed
                  (053 sec.3: "地表达统一（同符号或同标签不混用）")
+``gnd-outlet``   **added by 088b**: this net carries **exactly one** outlet
+                 symbol of its own — the mark that says where the group's ground
+                 rail terminates — placed at the rail's far end (背向 entry 那端)
+                 and standing upright. The obligation names the net; the
+                 compiler reads *which* end from the presentation's input side,
+                 so `sidePreferences.input` mirrors the symbol with the drawing
+                 (088b §一, 岳 2026-10-02: 「底轨要有一个、且只要一个出处符号」).
+                 Distinct from `uniform-gnd`: that one forbids *mixing* styles,
+                 this one requires the net to be *stated* by a symbol rather
+                 than left as a bare conductor.
 ===============  ==========================================================
 
 **Failure categories** (053 sec.4, all four named here; the grammars of this
@@ -111,6 +121,7 @@ __all__ = [
     "FAILURE_FACTS_MISSING",
     "FAILURE_LAYOUT_UNSAT",
     "FAILURE_PRESENTATION_POOR",
+    "GND_OUTLET",
     "HORIZONTAL_TAP",
     "LEFT_OF",
     "MAX_CHAIN_ARMS",
@@ -207,12 +218,14 @@ DIRECT_WIRE = "direct-wire"
 VISIBLE_TAP = "visible-tap"
 OWNED_BRANCH = "owned-branch"
 UNIFORM_GND = "uniform-gnd"
+GND_OUTLET = "gnd-outlet"
 
 OBLIGATION_KINDS: tuple[str, ...] = (
     DIRECT_WIRE,
     VISIBLE_TAP,
     OWNED_BRANCH,
     UNIFORM_GND,
+    GND_OUTLET,
 )
 
 #: The four failure categories of 053 sec.4, in the task book's order.

@@ -51,12 +51,13 @@ for modules, the page compiler. Validating them here would either duplicate the
 circuit schema in this file or accept a document that silently refers to nothing.
 
 **Serialisation stays byte-stable for a document that says nothing new.** The
-`grammarRef` / `presentation` keys of a module and the top-level `flow` list are
-written **only when stated**, because a LayoutPlan's geometry digest pins the
-presentation digest: an untouched 053 spec has to hash — and therefore compile —
-to exactly the plan it did before this batch. The fields are additions, not
-changes: absent reads as "this module inherits", and a page that declares no
-flow is the page whose modules are read in name order.
+`grammarRef` / `presentation` / `branchOrder` keys of a module and the top-level
+`flow` list are written **only when stated**, because a LayoutPlan's geometry
+digest pins the presentation digest: an untouched 053 spec has to hash — and
+therefore compile — to exactly the plan it did before this batch. The fields are
+additions, not changes: absent reads as "this module inherits" (or, for the
+order, "no order stated"), and a page that declares no flow is the page whose
+modules are read in name order.
 """
 
 from __future__ import annotations
@@ -65,7 +66,7 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from .circuitspec import PORT_DIRECTIONS
 from .symbolprofile import POSE_ROTATIONS
@@ -151,7 +152,7 @@ _TOP_KEYS = (
     "sidePreferences",
     "userLocks",
 )
-_MODULE_KEYS = ("id", "parts", "role", "grammarRef", "presentation")
+_MODULE_KEYS = ("id", "parts", "role", "grammarRef", "presentation", "branchOrder")
 #: What a module's own `presentation` object may override. Closed for the same
 #: reason every schema here is closed: a key this build does not read would be
 #: an intent nobody honours. The side preferences are the ones a *group's
@@ -201,6 +202,16 @@ class PresentationModule:
     per-group because both are properties of the symbols in the group (053
     sec.3's measured AMS1117 needs a non-default output side; a divider's
     default sides are fine) rather than of the page they sit on.
+
+    ``branch_order`` is the group's own statement of the order its parallel
+    branches are drawn in, **from the inlet end outwards** — 088b §二, 岳
+    2026-10-02: a TVS belongs nearest the inlet so a spike is clamped before it
+    reaches anything else, and *which* part is the TVS is a fact about values and
+    packages, which no grammar may read (053 sec.6). So the order is declared
+    here and the grammar only carries it out (see `power_entry`): the document
+    states the intent, the grammar keeps the evidence. Empty means "no order
+    stated" — the drawing then keeps 088's designator order, and a document that
+    states nothing serialises exactly as it did before this field existed.
     """
 
     id: str
@@ -208,6 +219,7 @@ class PresentationModule:
     role: str = ""
     grammar_ref: str = ""
     side_preferences: dict[str, str] = field(default_factory=dict)
+    branch_order: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -490,6 +502,8 @@ def _module_json(module: PresentationModule) -> dict[str, Any]:
         out["grammarRef"] = module.grammar_ref
     if module.side_preferences:
         out["presentation"] = {"sidePreferences": dict(module.side_preferences)}
+    if module.branch_order:
+        out["branchOrder"] = list(module.branch_order)
     return out
 
 
@@ -518,8 +532,45 @@ def _modules_from(root: dict[str, Any]) -> list[PresentationModule]:
             role=_text(body.get("role"), f"{spot}.role", required=True),
             grammar_ref=_module_grammar(body.get("grammarRef"), f"{spot}.grammarRef"),
             side_preferences=_module_presentation(body.get("presentation"), spot),
+            branch_order=_module_branch_order(body.get("branchOrder"), spot, parts),
         ))
     return out
+
+
+def _module_branch_order(
+    value: Any, where: str, parts: Sequence[str]
+) -> list[str]:
+    """A module's stated branch order, checked against its own ``parts``.
+
+    Two things are decidable from this document alone, and both are refused here
+    rather than left to the grammar: a designator named twice ("one branch has
+    one place in the order") and a designator the module's own ``parts`` does not
+    list — the order is stated over *this* group, and a designator from outside
+    it is a statement about somebody else's parts. Whether a named part is a
+    *branch* at all is a reading of the circuit (the topology), so that half
+    belongs to the grammar and is refused there (088b §二).
+    """
+    designators = _text_list(value, f"{where}.branchOrder")
+    if not designators:
+        return []
+    seen: set[str] = set()
+    for index, designator in enumerate(designators):
+        spot = f"{where}.branchOrder[{index}]"
+        if designator in seen:
+            raise PresentationSpecError(
+                f"{spot} is {designator!r}, already named — one branch has one "
+                "place in the order, and a repeat says two different things "
+                "about where it goes"
+            )
+        seen.add(designator)
+        if designator not in parts:
+            raise PresentationSpecError(
+                f"{spot} is {designator!r}, which {where}.parts does not list "
+                f"({', '.join(parts)}) — the order is stated over this group's "
+                "own parts, and a designator outside it is a statement about "
+                "another group's drawing"
+            )
+    return designators
 
 
 def _module_grammar(value: Any, where: str) -> str:

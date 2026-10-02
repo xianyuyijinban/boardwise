@@ -910,7 +910,7 @@ def test_the_kind_universes_are_exactly_what_is_documented():
         "adjacent", "near", "horizontal-tap", "vertical-tap",
     )
     assert OBLIGATION_KINDS == (
-        "direct-wire", "visible-tap", "owned-branch", "uniform-gnd",
+        "direct-wire", "visible-tap", "owned-branch", "uniform-gnd", "gnd-outlet",
     )
     assert FAILURE_CATEGORIES == (
         "facts-missing", "circuit-invalid", "layout-unsat", "presentation-poor",

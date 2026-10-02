@@ -988,6 +988,12 @@ def _module_view(
     sub_presentation = PresentationSpec(
         modules=[PresentationModule(
             id=module.id, parts=list(module.parts), role=module.role,
+            # 088b's optional `branchOrder` travels with the group for the same
+            # reason 088's `openInterfaces[].part` travels with the circuit: the
+            # order is this group's own statement about its own branches, and a
+            # slice that dropped it would draw the page's inlet in designator
+            # order while the standalone module used the stated one.
+            branch_order=list(module.branch_order),
         )],
         main_paths=_module_paths(presentation_spec.main_paths, part_ids, net_ids),
         feedback_paths=_module_paths(

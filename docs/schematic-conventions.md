@@ -95,6 +95,9 @@ and are enforced as hard constraints at compile time — a candidate that breaks
 rejected, not scored down. The reference renders live in `outputs/069_ldo_example/`
 (the hand-drawn P22 exemplar) and `evidence/074/` (P23 v5/v6).
 
+R11–R12 are the power-entry rulings, added by 088b (ruled by xianyuyijinban 2026-10-02 on
+the landed 088 sample drawing); R6–R10 stand unchanged.
+
 ### R6 — A capacitor hangs on its owning pin's physical side
 
 The decoupling rule "caps touch their IC's power pins" (R4) is pinned to the *pin*, not
@@ -139,3 +142,30 @@ candidate is rejected and the anchor ladder re-seats the flag; ordinary signal r
 crossings stay a soft metric. Exhausted ladders report `layout-unsat` with the conductor
 named — the compiler never silently ships a crossing.
 
+### R11 — A power inlet's return rail carries exactly one ground outlet symbol
+
+The bottom rail of a power-entry drawing is a solid conductor (088, part of the same ruling)
+**and** carries exactly **one** ground outlet symbol: hung off the rail's far end — the
+member pin away from the inlet, read from `sidePreferences.input`, so the symbol mirrors
+with the drawing — and standing vertical (`rot ∈ {0°, 180°}`, R9). Two marks read as two
+returns (岳 2026-10-02, on the landed sample: 「真实体现得很乱」), and none leaves the
+group's ground as a bare conductor that says nothing about where it leaves. **Unconditional**:
+the grammar states the promise (`gnd-outlet`) on every bind and the compiler places the
+symbol — the case does not have to declare modules (088b's first cut gated it that way and
+the main agent's review took the gate away: 岳's own sample declares no modules either, and
+「加一个接地符号」 has no such premise). 069③'s page-level flag pass is untouched, so a page
+still expresses a ground shared across modules with flags at the module boundary
+(`pagecompiler` port kinds unchanged).
+
+### R12 — Bleeder parts (TVS/diodes) sit nearest the inlet, and the order is declared
+
+A branch that clamps a spike belongs nearest the inlet (岳 2026-10-02: 要及时把电压尖峰泄
+下去). Which branch that is cannot come from the drawing law: a TVS, a bulk capacitor and
+the inlet are the same shape between the same two nets, and 053 §6 forbids a grammar
+reading a designator prefix, a value or a package name. So the **presentation** states the
+order — `PresentationSpec.modules[].branchOrder`, listed from the inlet end outwards — and
+the grammar only carries it out and refuses a statement that is not about its own branches.
+The model writing the presentation is the one that can tell (it reads `SMCJ28CA` as a TVS);
+the grammar never guesses. Absent = designator order (088's drawing, byte-identical); a
+partial list keeps its stated prefix, the rest follow in designator order, and the
+completion is written into the binding evidence so nothing is silently re-ordered.

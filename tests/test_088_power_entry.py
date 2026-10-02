@@ -51,6 +51,7 @@ from boardwise.engines.grammar.base import (
     DIRECT_WIRE,
     FAILURE_CIRCUIT_INVALID,
     FAILURE_FACTS_MISSING,
+    GND_OUTLET,
     LEFT_OF,
     NEAR,
     OWNED_BRANCH,
@@ -483,8 +484,12 @@ def test_the_obligations_are_the_two_rails_one_ground_and_the_owned_branches():
         (DIRECT_WIRE, (GND,)),
         (UNIFORM_GND, (GND,)),
         (OWNED_BRANCH, (RAIL,)),
+        # 2026-10-02 岳裁决②（无条件）：底轨要有且只要一个 GND 出处符号。第五条义务
+        # 由 088b 加，且**不再**门控于"是否声明了模块"——本条断言随之更新。
+        (GND_OUTLET, (GND,)),
     ]
     assert "solid conductor" in result.obligations[0].reason
+    assert "unconditional" in result.obligations[-1].reason
 
 
 def test_the_weakest_provenance_travels_into_the_evidence():
@@ -661,7 +666,16 @@ def test_scene_1_the_sample_compiles_into_two_solid_rails_and_hanging_branches()
 def test_scene_1_the_rail_is_a_solid_wire_and_still_carries_its_069_flag():
     """§二 的实测结论：`direct-wire` 义务在 `_expression_style` 里先于 class 被问，
     所以电源网默认的那条"高扇出即总线"规则压不过它——两条轨都是实体线；同时
-    069 §7 的"电源网要自带旗"照常出，端头旗挂在入口侧的轨脚上。"""
+    069 §7 的"电源网要自带旗"照常出，端头旗挂在入口侧的轨脚上。
+
+    **2026-10-02 岳裁决①确认保持**：088 §七 自报的第一处与样板偏差（样板把 +24V 旗挂在
+    轨远端）**不改**——旗继续挂入口侧轨脚，理由与位置都留在本测试里；088b 把这条注释从
+    「待裁决」转成「裁决确认」，这一半的断言未动。
+
+    **2026-10-02 岳裁决②（无条件）**：底轨要有一个、且只要一个 GND 出处符号——本条原先
+    断言「底轨没有符号」（那是 088 自报的第二处偏差、钉的"今天是这样、待裁决"）。裁决到
+    了，断言随之改成它该有的样子：恰一个 `PWR-GND`、挂在本网离入口最远的那只脚上、竖直。
+    无条件，所以这份不声明模块的 088 夹具同样出符号（门控方案经实测后被主代理否决）。"""
     spec, pres = inlet_circuit(), inlet_presentation(side="right")
     plan = best(spec, pres)
 
@@ -677,11 +691,30 @@ def test_scene_1_the_rail_is_a_solid_wire_and_still_carries_its_069_flag():
         assert touches(rail_wires, point), member
     assert sum(_length(item.points) for item in rail_wires) > 100.0
 
-    # 回来那条也必须是线（`owning` 的旗不是"地表达统一"的替代品）。
+    # 回来那条也必须是线（`owning` 的旗不是"地表达统一"的替代品），**并且**线上有且
+    # 只有一个出处符号：2026-10-02 岳裁决②（无条件）。
     gnd_wires = wire_for(plan, GND)
     for member in ("CN1.2", "D1.2", "C115.2", "C116.2"):
         assert touches(gnd_wires, b053.pin_point(plan, member, library())), member
-    assert [item for item in plan.power_symbols if item.net == GND] == []
+    (outlet,) = [item for item in plan.power_symbols if item.net == GND]
+    assert outlet.symbol_ref == "PWR-GND"
+    assert outlet.rotation in (0.0, 180.0), outlet.rotation
+    entry_pin = b053.pin_point(plan, "CN1.2", library())
+    far = max(
+        ("D1.2", "C115.2", "C116.2"),
+        key=lambda member: abs(
+            b053.pin_point(plan, member, library())[0] - entry_pin[0]
+        ),
+    )
+    far_pin = b053.pin_point(plan, far, library())
+    # 符号由那只远端脚的引线接上：该网有一段线同时碰到脚和符号锚点。
+    assert any(
+        touches([segment], (outlet.x, outlet.y)) and touches([segment], far_pin)
+        for segment in gnd_wires
+    ), far
+    assert abs(outlet.x - far_pin[0]) < abs(outlet.x - entry_pin[0]), (
+        "the outlet hangs at the rail's far end, not at the inlet"
+    )
 
 
 def test_scene_1_the_inlet_terminates_the_rails_at_the_input_end():
