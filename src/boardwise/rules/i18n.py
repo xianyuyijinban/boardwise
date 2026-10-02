@@ -49,6 +49,7 @@ RULE_NAMES_ZH: dict[str, str] = {
     "arch-rail-voltage-clash": "轨压合同与图纸不一致",
     "arch-opendrain-pullup": "开漏输出缺上拉",
     "arch-nrst-closure": "复位脚裸奔",
+    "arch-sense-bias-closure": "双向采样链偏置不闭合",
 }
 
 #: 严重度 → 中文。三个词与 `severity_counts` 的键一一对应。

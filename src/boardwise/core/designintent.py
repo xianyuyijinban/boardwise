@@ -46,7 +46,11 @@ Four rules, and each one exists because its absence was measured:
    voltage declaration is reported as a missing slot (`intent-missing`, the
    wording `facts-missing` already uses for a fact the compiler needed), and a
    bidirectional current-sense signal with no closure declaration gets a
-   *hint* — the question A3 turns into a rule. Neither refuses the document.
+   *hint* — the question A3 turns into a rule. Neither refuses the document. A
+   signal may also **waive** the closure outright (`closure: "waived"`, 094 A3b:
+   F1's R4 decision — "0.1Ω 直采，不加放大器，接受只有正半轴"), and that is a
+   declaration like any other: the rule that checks the closure grades it by who
+   said so and quotes the rationale, rather than asking the same question again.
 4. **An answer, once written, is never lost.** Regeneration (:func:`merge`) adds
    the slots the drawing now owes, marks the objects that disappeared `stale`,
    and touches nothing else: every existing entry's bytes come back identical.
@@ -98,6 +102,8 @@ from .circuitspec import (
 
 __all__ = [
     "BIAS_TOKENS",
+    "CLOSURE_TOKENS",
+    "CLOSURE_WAIVED",
     "CONTRACT_DIR_NAME",
     "DesignIntent",
     "DesignIntentError",
@@ -212,7 +218,8 @@ BUS_SLOT_KEYS: tuple[str, ...] = _unique(BUS_SLOTS)
 ENTRY_KEYS: dict[str, tuple[str, ...]] = {
     SECTION_RAILS: ("net", *RAIL_SLOT_KEYS, "role", "provenance", "stale"),
     SECTION_SIGNALS: (
-        "net", *SIGNAL_SLOT_KEYS, "kind", "adcSwing", "requires", "provenance", "stale",
+        "net", *SIGNAL_SLOT_KEYS, "kind", "adcSwing", "requires", "closure",
+        "provenance", "stale",
     ),
     SECTION_BUSES: ("family", *BUS_SLOT_KEYS, "provenance", "stale"),
     SECTION_BLOCKS: ("id", "kind", "parts", "requires", "feeds", "provenance", "stale"),
@@ -250,6 +257,22 @@ BIAS_TOKENS: tuple[str, ...] = ("bias-reference", "bias", "reference")
 #: shape: a bidirectional phase current into a single-supply ADC).
 KIND_CURRENT_SENSE = "current-sense"
 POLARITY_BIDIRECTIONAL = "bidirectional"
+
+#: The one value ``signals[].closure`` accepts (094 A3b): the engineer says the
+#: chain's closure is **given up on purpose** — F1's R4 decision ("0.1Ω 直采，不加
+#: 放大器，接受只有正半轴"). It is the counterpart of `requires`: `requires` names
+#: what the chain needs, `closure: "waived"` says the need is knowingly unmet, and
+#: the rule that checks the closure reads it before looking at the drawing so the
+#: board is not judged against a requirement its author withdrew.
+#:
+#: **A closed token list, unlike `requires`' free vocabulary.** `requires` names
+#: relationships that come from real cases and will keep arriving (`pullup`,
+#: `isolation`, `gain-stage`…), so this module only fixes its shape; a *waiver*
+#: is one decision with one spelling, and a token a consumer does not read would
+#: be a declaration nobody grades (rule 1: an unknown key is refused, and an
+#: unknown value of a known key is the same hole one level down).
+CLOSURE_WAIVED = "waived"
+CLOSURE_TOKENS: tuple[str, ...] = (CLOSURE_WAIVED,)
 
 #: The two token families a markdown view may print for a stale slot. Same words
 #: the merged architecture view uses (`architecture.STALE_MARK`), shortened to
@@ -315,6 +338,14 @@ class IntentSignal:
     needs from elsewhere to be valid end to end — the statement the F1 bias case
     was missing. ``adc_swing`` is the input range the chain lands on (the fact
     A3's single-ended-ADC rule will compare a bidirectional signal against).
+
+    ``closure`` is the **waiver** (094 A3b), written under the same key in the
+    file and read by :attr:`waived`: the chain's closure is given up on purpose,
+    with the reason in ``decisions[]`` where every other reason lives. It is a
+    declaration, not a silence — A3b's rule files an INFO row quoting the
+    rationale for a `user_stated` waiver and a WARN for a draft one (052 §4: a
+    draft may not exempt itself), while a signal that says nothing is judged
+    against the drawing as before.
     """
 
     net: str
@@ -322,6 +353,7 @@ class IntentSignal:
     kind: str = ""
     adc_swing: str = ""
     requires: list[str] = field(default_factory=list)
+    closure: str = ""
     provenance: str = DEFAULT_PROVENANCE
     stale: bool = False
 
@@ -336,6 +368,11 @@ class IntentSignal:
     def polarity(self) -> str:
         return self.slots.get("polarity", "")
 
+    @property
+    def waived(self) -> bool:
+        """Has the contract given up on this chain's closure (094 A3b)?"""
+        return self.closure == CLOSURE_WAIVED
+
     def to_jsonable(self) -> dict[str, Any]:
         body: dict[str, Any] = {"net": self.net}
         _write_slots(body, self.slots, SIGNAL_SLOT_KEYS)
@@ -345,6 +382,8 @@ class IntentSignal:
             body["adcSwing"] = self.adc_swing
         if self.requires:
             body["requires"] = list(self.requires)
+        if self.closure:
+            body["closure"] = self.closure
         return _with_meta(body, self.provenance, self.stale)
 
 
@@ -1303,6 +1342,8 @@ def _entries_from(raw: Any, where: str, cls: type) -> list[Any]:
                 kwargs[_RENAMED.get(name, name)] = _text_list(
                     body.get(name), f"{spot}.{name}"
                 )
+            elif name == "closure":
+                kwargs["closure"] = _closure_token(body.get(name), f"{spot}.{name}")
             elif name in _SLOT_VOCABULARY.get(cls, ()):
                 value = _text(body.get(name), f"{spot}.{name}")
                 if value:
@@ -1348,6 +1389,25 @@ def _text_list(value: Any, where: str) -> list[str]:
             "`parts` name tokens and logical ids, not structures"
         )
     return [item.strip() for item in value if item.strip()]
+
+
+def _closure_token(value: Any, where: str) -> str:
+    """The signal's waiver token, or nothing — an unreadable one is refused.
+
+    ``""`` (absent) is the normal case and is not written back (rule 1). A value
+    this build does not read is refused by name: `closure` is a *declaration*, and
+    one no consumer grades is exactly the "fact nobody checks" the closed schema
+    exists to stop — the same reading `provenance` gets one function down.
+    """
+    if value is None or value == "":
+        return ""
+    if not isinstance(value, str) or value not in CLOSURE_TOKENS:
+        raise DesignIntentError(
+            f"{where} is {value!r}; expected {', '.join(CLOSURE_TOKENS)}, or absent — "
+            "a closure token this build does not read would be a declaration nobody "
+            "grades"
+        )
+    return value
 
 
 def _boolean(value: Any, where: str) -> bool:

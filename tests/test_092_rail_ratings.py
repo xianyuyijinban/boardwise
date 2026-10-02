@@ -550,20 +550,25 @@ def test_without_a_contract_the_rail_rules_have_no_subject_at_all():
     assert "pwr-cap-voltage-rating" not in ids and "path-ldo-dissipation" not in ids
 
 
-def test_run_review_hands_the_contract_to_the_five_rules_that_read_one():
-    """091 A2a's seam, now with five carriers — and the shared instances stay
+def test_run_review_hands_the_contract_to_the_six_rules_that_read_one():
+    """091 A2a's seam, now with six carriers — and the shared instances stay
     contract-free, because ``BUILTIN_RULES`` outlives any single run.
 
     093 A3a added the two architecture rules that read a contract
-    (``arch-rail-voltage-clash`` and ``arch-opendrain-pullup``); the set below is
-    the seam's own registry (``review.INTENT_RULES``), spelled out here so a rule
-    that starts reading a contract without joining it is a failing test.
+    (``arch-rail-voltage-clash`` and ``arch-opendrain-pullup``), 094 A3b the
+    sense-bias one; the set below is the seam's own registry
+    (``review.INTENT_RULES``), spelled out here so a rule that starts reading a
+    contract without joining it is a failing test.
     """
-    from boardwise.rules.archclosure import ArchRailVoltageClash, OpenDrainPullup
+    from boardwise.rules.archclosure import (
+        ArchRailVoltageClash,
+        ArchSenseBiasClosure,
+        OpenDrainPullup,
+    )
     from boardwise.rules.params import ValueMpnMatch
 
     carriers_of = (ValueMpnMatch, CapVoltageRating, LdoDissipation,
-                   ArchRailVoltageClash, OpenDrainPullup)
+                   ArchRailVoltageClash, OpenDrainPullup, ArchSenseBiasClosure)
     assert _rules_for(None) is BUILTIN_RULES, "no contract, no copy"
     contract = _intent(_rail("+24V", targetVoltage="24V"))
     rules = _rules_for(contract)
@@ -573,7 +578,7 @@ def test_run_review_hands_the_contract_to_the_five_rules_that_read_one():
     }
     assert set(carriers) == {
         "param-value-mpn-match", "pwr-cap-voltage-rating", "path-ldo-dissipation",
-        "arch-rail-voltage-clash", "arch-opendrain-pullup",
+        "arch-rail-voltage-clash", "arch-opendrain-pullup", "arch-sense-bias-closure",
     }
     assert all(rule.intent is contract for rule in carriers.values())
     for rule, template in zip(rules, BUILTIN_RULES):

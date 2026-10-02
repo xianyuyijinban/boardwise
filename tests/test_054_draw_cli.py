@@ -292,7 +292,12 @@ def _stub_editor(monkeypatch, editor: _FakeEditor) -> None:
 
 
 def _stub_export(monkeypatch, *, components=None, findings=None, sequence=None):
-    """Serve the live export, its model and the findings baseline."""
+    """Serve the live export, its model and the findings baseline.
+
+    ``intent`` is the contract the walk carries since 094 A3b — the double takes
+    the keyword and answers the same list, because what these tests read is *when*
+    the baseline is taken, not what a contract would add to it.
+    """
     models = list(sequence) if sequence is not None else None
 
     async def _export(call, notes):
@@ -305,7 +310,9 @@ def _stub_export(monkeypatch, *, components=None, findings=None, sequence=None):
 
     monkeypatch.setattr(cli, "_live_project_export", _export)
     monkeypatch.setattr(cli, "_model_from_export", _parse)
-    monkeypatch.setattr(cli, "_baseline_findings", lambda model: list(findings or []))
+    monkeypatch.setattr(
+        cli, "_baseline_findings", lambda model, intent=None: list(findings or [])
+    )
 
 
 def _plan(tmp_path: Path, *, page: str = "", pool=(), name: str = "plan.json",
@@ -1007,7 +1014,7 @@ def test_a_new_finding_stops_the_run_before_the_save(monkeypatch, tmp_path, caps
     # second read is the one that grew, so the stub answers two different sets.
     calls = {"n": 0}
 
-    def _findings(model):
+    def _findings(model, intent=None):
         calls["n"] += 1
         return [] if calls["n"] == 1 else ["rule|new|thing"]
 

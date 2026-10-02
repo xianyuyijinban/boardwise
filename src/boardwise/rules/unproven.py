@@ -88,7 +88,11 @@ UNPROVEN_BY_NAME = "agreement by name is not a verified connection"
 #:   squares against the declared current is a difference of two inferred rails,
 #:   exactly like ``path-ldo-dropout``'s), and ``arch-rail-voltage-clash`` (093
 #:   A3a: one side of the clash *is* that inference, and a rail priced through an
-#:   LDO on the page next door is not this board's rail).
+#:   LDO on the page next door is not this board's rail);
+#: * both of those at once — ``arch-sense-bias-closure`` (094 A3b) reads *which
+#:   resistors* sit on the sense net and *where their far ends go* (a divider
+#:   mid-net or a power-class rail, whose voltage it prices), so a name the merge
+#:   welded blind can neither supply the parts nor the rail the arithmetic needs.
 #:
 #: The two parameter rules joined the list in 076, and their absence before that
 #: was a **misreading of their own code**: they print one part's values, but both
@@ -136,6 +140,7 @@ NET_MEMBERSHIP_RULES: tuple[str, ...] = (
     "arch-nrst-closure",
     "arch-opendrain-pullup",
     "arch-rail-voltage-clash",
+    "arch-sense-bias-closure",
 )
 
 

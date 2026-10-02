@@ -12,6 +12,7 @@ from ..core.model import DesignModel
 from ..core.parts import DESIGNATOR_CATEGORIES
 from ..rules.archclosure import (
     ArchRailVoltageClash,
+    ArchSenseBiasClosure,
     NrstClosure,
     OpenDrainPullup,
 )
@@ -68,6 +69,7 @@ BUILTIN_RULES: list[Rule] = [
     ArchRailVoltageClash(),
     OpenDrainPullup(),
     NrstClosure(),
+    ArchSenseBiasClosure(),
 ]
 
 #: The rules that read a **DesignIntent** (091 A2a), by class. It is a table
@@ -85,12 +87,18 @@ BUILTIN_RULES: list[Rule] = [
 #: `arch-opendrain-pullup` reads `decisions[]` for the one closure a drawing
 #: cannot show (a pull-up the firmware enables). `arch-nrst-closure` is not here:
 #: the shelf and the netlist are its whole subject.
+#:
+#: 094 A3b added `arch-sense-bias-closure`: the contract's `current-sense` /
+#: `bidirectional` chains (and its new optional ``closure: "waived"`` waiver) are
+#: the subject, and the drawing's own resistors are what the arithmetic is done on
+#: — without a contract there is no chain to ask about.
 INTENT_RULES: tuple[type[Rule], ...] = (
     ValueMpnMatch,
     CapVoltageRating,
     LdoDissipation,
     ArchRailVoltageClash,
     OpenDrainPullup,
+    ArchSenseBiasClosure,
 )
 
 

@@ -44,6 +44,17 @@ of the words:
   satisfied — the 092 discipline ("测量永远报"): silence about a closed structure
   reads exactly like a rule that never looked.
 
+One row of that table is answered **outside** :data:`INTENT_GRADES`, and it is
+worth saying why rather than leaving it to the rule: a `user_stated` **waiver**
+(the contract withdrawing its own requirement, ``closure: "waived"`` — 094 A3b)
+is **INFO**, not ERROR. The two rows point in opposite directions. ERROR is for a
+statement the drawing *contradicts*; a waiver is a statement that stops asking, so
+there is nothing left to contradict — and it is the engineer's own decision, which
+is exactly the kind of thing the tool exists to *report* rather than re-derive.
+:data:`WAIVER_GRADE` / :data:`DRAFT_WAIVER_GRADE` carry the pair: a draft may not
+exempt itself from a requirement it wrote (052 §4), so anything weaker than
+`user_stated` is a WARN.
+
 What each rule reads, and where its subject comes from:
 
 * :class:`ArchRailVoltageClash` — ``arch-rail-voltage-clash``. The contract's
@@ -74,6 +85,32 @@ What each rule reads, and where its subject comes from:
   :func:`boardwise.core.architecture.controller_evidence`) whose NRST/RESET pin
   sits on a net with nothing else on it: no capacitor, no key, no test point, no
   programmer pin (F3's shape, where the label is drawn but nothing is on the net).
+* :class:`ArchSenseBiasClosure` — ``arch-sense-bias-closure`` (094 A3b, case F1).
+  A chain the contract declares a bidirectional current sense needs a bias that
+  can actually hold its node, and this rule *does the arithmetic* rather than
+  asking whether something was drawn: the bias source's Thévenin resistance
+  (``R_th = R_up‖R_dn + Rs``) against the sense resistance, and the voltage the
+  node gets from it (``V_bias × R_sense/(R_th + R_sense)`` — F1's own formula,
+  whose measured answer was 15.7µV against the 1.65V wanted). ``R_th ≥ R_sense``
+  is graded by :func:`intent_grade` over the chain's provenance; the decade in
+  between is a WARN; ``R_th ≤ R_sense/10`` or an op-amp output driving the net is
+  an INFO measurement.
+
+  **The ``1/10`` is this rule's own declared criterion, not a standard** — no
+  datasheet says a bias source must be at most a tenth of the sense resistance. It
+  is published as :data:`BIAS_CLOSURE_RATIO` and printed beside the numbers it was
+  applied to, so a reader can disagree with the figure rather than with a threshold
+  buried in an expression; the class docstring carries the same statement in full.
+  **The topologies it prices** are two instances of one formula: a divider mid-net
+  (``R_up`` to a power-class rail, ``R_dn`` to ground, the mid-point reaching the
+  sense net through a series resistor ``Rs``) and a series resistor straight onto a
+  priced rail (the rail's source impedance is zero). A resistor whose far net is
+  neither is a topology this build cannot price — UNKNOWN naming what to draw,
+  never a guess. New in
+  this batch is the contract's side of it: an optional
+  ``closure: "waived"`` on the signal, which is how the engineer's own decision
+  (F1's R4: "0.1Ω 直采，不加放大器") becomes an INFO row quoting its rationale
+  instead of a violation the tool keeps re-deriving.
 
 Every rule that concludes from "what else is on this net" is listed in
 :data:`boardwise.rules.unproven.NET_MEMBERSHIP_RULES` — on a net the per-page
@@ -83,6 +120,7 @@ as issue #19 requires (see :mod:`boardwise.rules.unproven`).
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 
@@ -93,7 +131,11 @@ from ..core.circuitspec import (
     PROVENANCE_VERIFIED,
 )
 from ..core.designintent import (
+    BIAS_TOKENS,
+    KIND_CURRENT_SENSE,
+    POLARITY_BIDIRECTIONAL,
     SECTION_RAILS,
+    SECTION_SIGNALS,
     IntentDecision,
     IntentSource,
     write_path,
@@ -836,3 +878,808 @@ def _pin_name(comp: Component, number: str) -> str:
         if pin.number == number:
             return pin.name or ""
     return ""
+
+
+# ---------------------------------------------------------------------------
+# R4: the bias a bidirectional sense chain lands on (094 A3b, case F1)
+# ---------------------------------------------------------------------------
+
+
+#: The ratio this rule accepts as a **closed** bias: the bias source's Thévenin
+#: resistance against the sense resistance (``R_th ≤ R_sense/10``).
+#:
+#: **This is this rule's own declared criterion, not a standard**, and it is a
+#: named constant for exactly that reason: no datasheet and no app note says "a
+#: bias source must be at most a tenth of the sense resistance". It is the line
+#: this build draws between "the divider is the node's bias" (it can hold the node
+#: where it says, to within a few percent) and "the divider is a stray load on a
+#: node something else holds" — and a reader is meant to be able to disagree with
+#: the *number* rather than with a threshold hidden in an expression. The
+#: *arithmetic* beside it is F1's own and is not a criterion at all.
+BIAS_CLOSURE_RATIO = 0.1
+
+#: The grade a **`user_stated` waiver** gets (``closure: "waived"``): INFO, with
+#: the decision's rationale quoted. The board is not judged against a requirement
+#: its author withdrew, and the row says which decision withdrew it — so a reader
+#: can disagree with the decision rather than with a silence.
+WAIVER_GRADE = "INFO"
+
+#: The grade a **weaker tier's waiver** gets: WARN. A draft exempting itself from
+#: its own requirement is 052 §4's case exactly (a guess may not be the yardstick
+#: a board is judged against), so the row is loud and names who waived what.
+DRAFT_WAIVER_GRADE = "WARN"
+
+#: The grade a **marginal** ratio gets (``R_sense/10 < R_th < R_sense``): WARN, on
+#: the drawing's own numbers rather than on anybody's provenance. The bias is real
+#: and its ratio is inside the decade the closure criterion wants — "look at this"
+#: rather than "somebody's statement is contradicted".
+MARGIN_GRADE = "WARN"
+
+#: The physics the whole rule rests on, quoted by every failing row (F1's own
+#: sentence, generalised off the 0.1Ω figure).
+BIAS_PHYSICS = (
+    "要让采样节点真坐在偏置电压上，偏置源内阻必须 ≪ 采样电阻 R_sense —— 电阻分压"
+    "（R_up‖R_dn）再经一只串阻 Rs 送进来，物理上做不到（正确形态是运放缓冲/差分"
+    "放大器把偏置电压送到求和点）。"
+)
+
+
+#: The pin-name prefixes that mean "this is the amplifier's output" — the reading
+#: `NrstClosure` makes one function up, and for the same reason: which pin is the
+#: output is written on the symbol, and the netlist is where a rule can read it.
+#: A *segment* has to start with one of these, so `OUT`, `OUTA`, `OUT1`, `VOUT`
+#: and `VOUTA` all count while `SHOUT` and a bare pin number do not.
+OUTPUT_NAME_PREFIXES: tuple[str, ...] = ("out", "vout")
+
+
+def _ohms(value: float) -> str:
+    """One resistance, as a message writes it: ``10500Ω``, ``0.1Ω``, ``10kΩ``."""
+    if value and abs(value) >= 1000 and abs(value) % 1000 == 0:
+        return f"{value / 1000:g}kΩ"
+    return f"{value:g}Ω"
+
+
+def _volts(value: float | None) -> str:
+    """One voltage, in the unit a reader can compare (F1 writes ``15.7µV``)."""
+    if value is None:
+        return "（算不出）"
+    if value == 0:
+        return "0V"
+    magnitude = abs(value)
+    if magnitude < 1e-3:
+        return f"{value * 1e6:.1f}µV"
+    if magnitude < 1:
+        return f"{value * 1e3:.1f}mV"
+    if magnitude >= 1e6:
+        return f"{value / 1e6:g}MV"
+    return f"{value:g}V"
+
+
+def _orders(wanted: float | None, got: float | None) -> str:
+    """How far apart two voltages are, in orders of magnitude (or ``""``)."""
+    if not wanted or not got or wanted <= 0 or got <= 0:
+        return ""
+    ratio = wanted / got
+    if ratio < 10:
+        return ""
+    return f"，差约 {int(math.floor(math.log10(ratio)))} 个数量级"
+
+
+@dataclass(frozen=True)
+class ResistorLeg:
+    """One resistor sitting on a net, with its **other** end read.
+
+    ``net`` is the net it was found on and ``far`` the net on the other side of
+    it; ``far_power`` is :func:`_power_class`'s own reason string when the far net
+    is a priced power rail (empty otherwise), and ``far_is_ground`` says whether
+    the far end is ground — the two facts that decide which role the resistor
+    plays (the shunt, a direct pull to a rail, one leg of a divider, or a stray).
+    """
+
+    designator: str
+    value: str
+    ohms: float
+    net: str
+    far: str
+    far_is_ground: bool
+    far_power: str
+
+
+def _resistor_legs(
+    model: DesignModel, guesses: dict, rule: FactsRule, net: str, *, exclude: str = ""
+) -> list[ResistorLeg]:
+    """Every resistor on ``net`` whose far end can be read, in designator order.
+
+    A part the shelf (or its own value) does not call a resistor is skipped —
+    :func:`_resistor_like`'s one judgement, the same the pull-up rule uses — and a
+    resistor whose value does not parse as a resistance is skipped too: a row that
+    printed ``R17（10kΩ）`` for a value nobody could read would be inventing the
+    number the arithmetic then rests on.
+    """
+    legs: list[ResistorLeg] = []
+    for designator, _pin in _members(model, net):
+        if designator == exclude:
+            continue
+        comp = model.components.get(designator)
+        if not _resistor_like(rule, comp):
+            continue
+        far = next((pin.net for pin in comp.pins if pin.net and pin.net != net), "")
+        if not far:
+            continue
+        ohms = parse_resistance_ohms(comp.value or "")
+        if ohms is None or ohms <= 0:
+            continue
+        legs.append(ResistorLeg(
+            designator=designator,
+            value=(comp.value or ""),
+            ohms=ohms,
+            net=net,
+            far=far,
+            far_is_ground=is_ground_net(far),
+            far_power=_power_class(guesses, far),
+        ))
+    return legs
+
+
+@dataclass(frozen=True)
+class BiasSource:
+    """A bias a chain's net really gets, priced (094 A3b).
+
+    ``r_source`` is the source's own Thévenin resistance **before** the series
+    resistor (R_up‖R_dn for a divider, 0 for a resistor straight onto a rail), and
+    ``v_open`` is the voltage it would hold unloaded (the divider's ratio applied
+    to its rail, or the rail itself). ``v_open`` is ``None`` when the rail behind
+    it cannot be priced — in which case the *resistance* verdict still stands and
+    the row says which rail has to be priced. ``is_divider`` is which of the two
+    shapes this is, so a message can write the terms it actually used
+    (``R_up‖R_dn + Rs``, or ``Rs`` alone) rather than a formula label that does
+    not match the board.
+    """
+
+    designators: tuple[str, ...]
+    shape: str
+    r_source: float
+    v_open: float | None
+    volts_because: str
+    is_divider: bool
+
+
+def _bias_source(
+    model: DesignModel, guesses: dict, rule: FactsRule, leg: ResistorLeg
+) -> BiasSource | None:
+    """Price the bias ``leg`` feeds, or ``None`` when this build cannot price it.
+
+    Two shapes, both instances of the same arithmetic:
+
+    * **a series resistor straight onto a power rail** — the rail is the source
+      and its impedance is zero, so ``R_th`` is the resistor alone;
+    * **a divider mid-net** — ``R_up`` to a power-class rail and ``R_dn`` to
+      ground, which is F1's shape: ``R_th = R_up‖R_dn``, ``V_bias = V_rail ×
+      R_dn/(R_up+R_dn)``.
+
+    Anything else returns ``None``, and the caller then says the topology is not
+    one this build can price instead of guessing what the engineer meant.
+    """
+    far = leg.far
+    if leg.far_power:
+        volts, source, why = domain_of(guesses, far)
+        return BiasSource(
+            designators=(leg.designator,),
+            shape=(
+                f"{leg.designator}（{_ohms(leg.ohms)}）直接上拉到 power-class 轨 "
+                f"{far!r}（依据：{leg.far_power}）—— 轨内阻记 0"
+            ),
+            r_source=0.0,
+            v_open=volts,
+            volts_because=(source if volts is not None else why),
+            is_divider=False,
+        )
+    up: ResistorLeg | None = None
+    down: ResistorLeg | None = None
+    for other in _resistor_legs(model, guesses, rule, far, exclude=leg.designator):
+        if other.far_power and up is None:
+            up = other
+        elif other.far_is_ground and down is None:
+            down = other
+    if up is None or down is None:
+        return None
+    r_source = 1.0 / (1.0 / up.ohms + 1.0 / down.ohms)
+    volts, source, why = domain_of(guesses, up.far)
+    v_open = volts * down.ohms / (up.ohms + down.ohms) if volts is not None else None
+    return BiasSource(
+        designators=(leg.designator, up.designator, down.designator),
+        shape=(
+            f"分压 {up.designator}（{_ohms(up.ohms)}）@{up.far!r} / "
+            f"{down.designator}（{_ohms(down.ohms)}）@GND，中点 {far!r} 经串阻 "
+            f"{leg.designator}（{_ohms(leg.ohms)}）送到 {leg.net!r}"
+        ),
+        r_source=r_source,
+        v_open=v_open,
+        volts_because=(source if volts is not None else why),
+        is_divider=True,
+    )
+
+
+def _is_bias_subject(signal: object) -> bool:
+    """Is this contract entry the subject of the closure question?
+
+    Two spellings, the same chain: a signal whose own ``kind`` says it is a
+    current sense **and** whose polarity is bidirectional (F1's `U+`), or an entry
+    that names a bias token in ``requires`` — a contract may state the closure
+    requirement without spelling the polarity, and that statement is a subject too.
+    """
+    requires = [str(token) for token in (getattr(signal, "requires", None) or [])]
+    if any(token in BIAS_TOKENS for token in requires):
+        return True
+    return (
+        str(getattr(signal, "kind", "")) == KIND_CURRENT_SENSE
+        and str(getattr(signal, "polarity", "")) == POLARITY_BIDIRECTIONAL
+    )
+
+
+def _is_output_name(name: str | None) -> bool:
+    """Is this pin name an amplifier's output? ``OUTA``/``OUT1``/``VOUT`` yes."""
+    return any(
+        segment.lower().startswith(OUTPUT_NAME_PREFIXES)
+        for segment in _NAME_SEPARATORS.split(str(name or ""))
+        if segment
+    )
+
+
+class ArchSenseBiasClosure(FactsRule):
+    """ARCH-4: a bidirectional current-sense chain is biased into its ADC's window.
+
+    F1 (ctrl FOC, `review-findings.md`) is both the case and the arithmetic. Two
+    phase shunts of 0.1Ω are read straight into a single-supply ADC, so each node
+    has to sit at VCC/2 to carry a negative half. The engineer's bias is R10/R16
+    (1k each = a 500Ω source) through R17/R18 (10k) onto the 0.1Ω node:
+
+        1.65V × 0.1Ω / (500Ω + 10000Ω + 0.1Ω) ≈ 15.7µV
+
+    five orders below the 1.65V it wanted. The physics is the whole rule —
+    :data:`BIAS_PHYSICS` — and a rule that can do the arithmetic can refuse to
+    call that a bias.
+
+    **The ``1/10`` is this rule's own declared criterion, not a standard.** No
+    datasheet and no app note says "a bias source must be at most a tenth of the
+    sense resistance"; it is the line this build draws between "the divider is the
+    node's bias" and "the divider is a stray load on a node something else holds",
+    it is published as :data:`BIAS_CLOSURE_RATIO`, and every row prints it beside
+    the numbers it was applied to — so a reader can disagree with the *number*
+    rather than with a threshold hidden in an expression. **The topologies it
+    prices**, both instances of one formula: a **divider mid-net** (``R_up`` to a
+    power-class rail, ``R_dn`` to ground, and the mid-point reaching the sense net
+    through a series resistor ``Rs``, so ``R_th = R_up‖R_dn + Rs`` while ``V_bias``
+    is the divider's own ratio applied to its rail), and a **series resistor
+    straight onto a priced rail** (the rail is the source and its impedance is
+    zero, so ``R_th = Rs``). In both, ``V_err = V_bias × R_sense/(R_th + R_sense)``
+    is what the node actually gets. A resistor whose far net is neither a priced
+    rail nor such a divider is a topology this build cannot price: UNKNOWN, naming
+    what to draw, never a guess.
+
+    **Five rows, decided in this order** (each names its subject, its reason and
+    its numbers):
+
+    * **waived** — the contract's own answer (``closure: "waived"``, the 094 A3b
+      key): the chain is *knowingly* left unclosed (R4: "0.1Ω 直采，不加放大器").
+      A `user_stated` waiver is **INFO** and quotes the rationale from
+      ``decisions[]``; any weaker tier is a **WARN**, because a draft cannot
+      exempt itself from a requirement it wrote (052 §4) — and the row says which
+      tier spoke. The waiver is read *before* the drawing, and it is the reason
+      this key exists: F1's outcome was a decision, not a defect;
+    * **no bias network** — nothing on the net reaches a divider mid-net or a
+      power rail (the shape the shipped export has): graded by
+      :func:`intent_grade` over the signal's own provenance, so the engineer's own
+      statement contradicted by the drawing is an **ERROR**;
+    * **weak bias** — a bias exists and the arithmetic says it does nothing
+      (``R_th ≥ R_sense``), again graded by :func:`intent_grade` (F1's live shape:
+      10500Ω against 0.1Ω);
+    * **marginal** — ``R_sense/10 < R_th < R_sense``: the ratio is inside the
+      closure criterion's decade, so it is a **WARN** carrying both numbers rather
+      than a verdict;
+    * **closed** — ``R_th ≤ R_sense/10``, or the net is driven by an op-amp's
+      output (an amplifier's output impedance is ohms, which makes the Thévenin
+      arithmetic meaningless — so it is checked *first* and stated as its own
+      shape): **INFO measurement** naming R_th, the sense resistance and the
+      voltage the node gets. 092's discipline: "查过且没事" and "根本没看" must not
+      read the same.
+
+    **Two things it refuses to guess** (UNKNOWN, each naming the fact it wants and
+    where to write it): a net that carries foreign resistors but whose topology is
+    neither of the two priced shapes, and a net with no grounded resistor at all
+    (without a sense resistance there is no ratio to compare). And one it cannot
+    read rather than refuses: an op-amp on the net whose output pin is named by
+    neither its symbol nor its shelf entry.
+
+    The subject is the *contract's* statement, so a board nobody wrote a contract
+    for files nothing here (A1/A2's zero-movement reading), and the net this row
+    concludes from is subject to issue #19 — on a name the per-page merge welded
+    blind, every row is UNKNOWN quoting the merge's own sentence.
+    """
+
+    id = "arch-sense-bias-closure"
+    title = "A bidirectional current-sense chain is biased into its ADC's window"
+    level = LEVEL
+    source = (
+        "the contract's requirements.signals[] (kind=current-sense, polarity="
+        "bidirectional, or requires=[bias-reference]; closure=waived for a "
+        "knowing waiver) against the net's own resistors and the rails the drawing "
+        "prices; the arithmetic is F1's (ROBOT ctrl FOC review-findings.md: "
+        "1.65V × 0.1Ω/(500Ω + 10kΩ + 0.1Ω) ≈ 15.7µV against the 1.65V wanted), and "
+        "the 1/10 closure criterion is this rule's own declaration "
+        "(BIAS_CLOSURE_RATIO) rather than a standard"
+    )
+
+    def __init__(self, library=None, intent: IntentSource | None = None) -> None:
+        super().__init__(library)
+        self.intent = intent
+
+    def outcomes(self, model: DesignModel) -> list[Outcome]:
+        return [row[0] for row in self._rows(model)]
+
+    def check(self, model: DesignModel) -> list[Finding]:
+        return [
+            self.finding_from_row(outcome, severity, target)
+            for outcome, severity, target in self._rows(model)
+            if severity is not None
+        ]
+
+    def _rows(
+        self, model: DesignModel
+    ) -> list[tuple[Outcome, str | None, FindingTarget | None]]:
+        if self.intent is None:
+            # No contract, no chain declared bidirectional, no question (A1/A2's
+            # zero-movement reading, kept: a reading that names no intent is
+            # byte-for-byte what it was).
+            return []
+        guesses = infer_net_domains(model, self.library)
+        rows: list[tuple[Outcome, str | None, FindingTarget | None]] = []
+        for signal in self.intent.document.signals:
+            if not _is_bias_subject(signal):
+                continue
+            rows.append(self._row(model, guesses, signal))
+        return rows
+
+    # ------------------------------------------------------------------ rows
+
+    def _row(
+        self, model: DesignModel, guesses: dict, signal: object
+    ) -> tuple[Outcome, str | None, FindingTarget | None]:
+        net = str(getattr(signal, "net", "") or "")
+        target = FindingTarget(net_refs=[net])
+        statement = write_path(SECTION_SIGNALS, net, "kind")
+        where = (
+            f"合同 {statement} = {getattr(signal, 'kind', '')!r}、polarity = "
+            f"{getattr(signal, 'polarity', '')!r}、provenance = "
+            f"{getattr(signal, 'provenance', '')!r}"
+        )
+        evidence = [f"链 {net!r} @ {getattr(signal, 'kind', '')}/"
+                    f"{getattr(signal, 'polarity', '')}", where]
+        swing = str(getattr(signal, "adc_swing", "") or "")
+        if swing:
+            evidence.append(
+                f"合同 {write_path(SECTION_SIGNALS, net, 'adcSwing')} = {swing!r}（"
+                "这条链落进的 ADC 窗口）"
+            )
+        # Issue #19: every row below concludes from what else sits on this net —
+        # including the waiver's citation, which names the designators it found
+        # there — so on a welded name the reading refuses before it judges.
+        welded = unproven_nets(model, (net,))
+        if welded:
+            return (
+                unproven_outcome(
+                    self.id,
+                    net,
+                    welded,
+                    what=(
+                        f"whether the bias on chain {net!r} closes, and which parts "
+                        "on it form that bias"
+                    ),
+                    evidence=evidence,
+                ),
+                MEASUREMENT_GRADE,
+                target,
+            )
+        if getattr(signal, "waived", False):
+            return self._waiver_row(model, intentsignal=signal, net=net,
+                                    evidence=evidence, target=target)
+        # The driven shape is checked **before** any arithmetic: an amplifier's
+        # output impedance is ohms, so a Thévenin ratio computed across it would be
+        # arithmetic about a node that is not held by resistors at all.
+        driving = _opamp_output(model, self, net)
+        if driving is not None:
+            reference, pin_name, because = driving
+            if because:
+                return (
+                    Outcome(
+                        rule_id=self.id,
+                        state="OK",
+                        subject=net,
+                        message=(
+                            f"{net}：网里有运放 {reference} 的输出脚"
+                            + (f"（{pin_name}）" if pin_name else "")
+                            + "直连 —— 偏置由运放输出馈入，输出阻抗在 Ω 级，**闭合成立**"
+                            "（运放闭合形态，免检电阻分压算术：运放按测量行在这里，"
+                            "不是因为查不出问题而沉默）。" + where
+                        ),
+                        evidence=[
+                            *evidence,
+                            f"{reference} 的输出脚 → {net}（判据：{because}）",
+                        ],
+                    ),
+                    MEASUREMENT_GRADE,
+                    target,
+                )
+            return (
+                Outcome(
+                    rule_id=self.id,
+                    state="UNKNOWN",
+                    subject=net,
+                    message=(
+                        f"{net}：网上有运放 {reference}，但**哪一脚是输出读不出来**"
+                        "（符号引脚名里没有 OUT 段，货架条目也没记输出脚）—— 运放闭合"
+                        "成立的判据是「输出直连」，本规则不拿输入脚当输出。修法：把输出"
+                        f"脚写进 blocklib/parts.corrections.json 的 {reference} 条目的 "
+                        "fields.facts.output_pins（引脚号列表），或让符号的引脚名带 OUT。"
+                        + where
+                    ),
+                    evidence=evidence,
+                    missing_fact=(
+                        f"{reference} 的输出脚：符号引脚名与货架 facts 都没说哪一脚是"
+                        "输出 —— 写进 blocklib/parts.corrections.json 的该条目 "
+                        "fields.facts.output_pins，或让符号引脚名带 OUT"
+                    ),
+                ),
+                MEASUREMENT_GRADE,
+                target,
+            )
+        legs = _resistor_legs(model, guesses, self, net)
+        shunts = [leg for leg in legs if leg.far_is_ground]
+        foreign = [leg for leg in legs if not leg.far_is_ground]
+        evidence.append(
+            f"{net} 成员：{_quoted_members(model, net)}"
+            + (
+                "；网上的电阻：" + "、".join(
+                    f"{leg.designator}（{_ohms(leg.ohms)} → {leg.far}）" for leg in legs
+                ) if legs else "；网上没有可读的电阻"
+            )
+        )
+        if not shunts:
+            return (
+                Outcome(
+                    rule_id=self.id,
+                    state="UNKNOWN",
+                    subject=net,
+                    message=(
+                        f"{net}：`{net}` 上没有到地的电阻，所以**采样电阻 R_sense 读不出来**"
+                        " —— 没有它就没有 R_th 与 R_sense 的比值，本规则不下判断，也不"
+                        "替它假定一个阻值。修法：把分流电阻画在 "
+                        f"{net!r} 到地之间（F1 实案是 R4 = 0.1Ω），或在合同里说明这条链"
+                        "的采样方式"
+                    ),
+                    evidence=evidence,
+                    missing_fact=(
+                        f"{net} 的采样电阻：网上没有到地的电阻，判不了偏置源内阻与采样"
+                        "电阻的比值 —— 把分流电阻画在 "
+                        f"{net!r} 到地之间，或在合同 "
+                        f"requirements.signals[net={net}].reference/kind 里说明采样形态"
+                    ),
+                ),
+                MEASUREMENT_GRADE,
+                target,
+            )
+        shunt = shunts[0]
+        if not foreign:
+            return self._unbiased_row(model, signal, net, shunt, evidence, target)
+        source: BiasSource | None = None
+        series: ResistorLeg | None = None
+        for leg in foreign:
+            source = _bias_source(model, guesses, self, leg)
+            if source is not None:
+                series = leg
+                break
+        if source is None or series is None:
+            stray = "、".join(
+                f"{leg.designator}（{_ohms(leg.ohms)} → {leg.far!r}）" for leg in foreign
+            )
+            return (
+                Outcome(
+                    rule_id=self.id,
+                    state="UNKNOWN",
+                    subject=net,
+                    message=(
+                        f"{net}：网上确实有外来电阻（{stray}），但它们的远端网既不是"
+                        "**power-class 轨**，也不是本规则能定价的**分压中点**（那里找不到"
+                        "「一只到轨 + 一只到地」的配对）—— 拓扑对不上，本规则不猜它是"
+                        "什么。修法：把偏置画成规则认得的形态（分压中点经串阻送到 "
+                        f"{net!r}，或运放输出直接馈入），或在合同 "
+                        f"requirements.signals[net={net}].closure 写 \"waived\" 明说这条"
+                        "链放弃闭合"
+                    ),
+                    evidence=evidence,
+                    missing_fact=(
+                        f"{net} 的偏置拓扑：网上有外来电阻（{stray}），但它们的远端网不是"
+                        "可定价的 power-class 轨、也不是有 R_up/R_dn 的分压中点 —— 要么"
+                        f"把图画成规则认得的形态，要么在合同 "
+                        f"requirements.signals[net={net}].closure 写 'waived'"
+                    ),
+                ),
+                MEASUREMENT_GRADE,
+                target,
+            )
+        r_sense = shunt.ohms
+        r_th = source.r_source + series.ohms
+        v_err = (
+            source.v_open * r_sense / (r_th + r_sense)
+            if source.v_open is not None
+            else None
+        )
+        evidence.extend([
+            f"采样电阻 {shunt.designator} = {_ohms(r_sense)} @ {net} → {shunt.far}",
+            f"偏置源：{source.shape}",
+            f"R_th = {source.r_source:g} + {series.ohms:g} = {r_th:g}Ω；V_bias = "
+            + (_volts(source.v_open) if source.v_open is not None else "读不出")
+            + f"（{source.volts_because}）",
+            f"R_sense/10 = {r_sense / 10:g}Ω（判据 BIAS_CLOSURE_RATIO = "
+            f"{BIAS_CLOSURE_RATIO:g}，本规则自声明）",
+        ])
+        r_th_terms = (
+            f"(R_up‖R_dn) + Rs = {source.r_source:g}Ω + {series.ohms:g}Ω"
+            if source.is_divider
+            else f"Rs + 0Ω（串阻直接接轨，轨内阻记 0）= {series.ohms:g}Ω + 0Ω"
+        )
+        arithmetic = (
+            f"R_th = {r_th_terms} = {r_th:g}Ω；V_err = V_bias × "
+            "R_sense/(R_th + R_sense) = "
+            + (
+                f"{_volts(source.v_open)} × {r_sense:g}Ω/({r_th:g}Ω + {r_sense:g}Ω)"
+                f" ≈ {_volts(v_err)}"
+                + _orders(source.v_open, v_err)
+                if source.v_open is not None
+                else "（V_bias 读不出：串阻背后那条轨谁都没定价，抬升电压这一半算不了，"
+                     f"但 R_th = {r_th:g}Ω 已经越线）"
+            )
+        )
+        if r_th >= r_sense:
+            severity, why = intent_grade(signal)
+            return (
+                Outcome(
+                    rule_id=self.id,
+                    state="VIOLATION",
+                    subject=net,
+                    message=(
+                        f"{net}：合同声明这条链是双向电流采样，图纸上「补的偏置」**电气上"
+                        f"不成立** —— 偏置源内阻 R_th = {r_th:g}Ω **大于等于**采样电阻 "
+                        f"R_sense = {r_sense:g}Ω，形同虚设。算术（F1 原式）：{arithmetic}"
+                        + (
+                            f"，而想要的是 {_volts(source.v_open)}"
+                            if source.v_open is not None else ""
+                        )
+                        + "。" + BIAS_PHYSICS + "修法：改成运放缓冲/差分放大器把偏置电压送"
+                        "到求和点（或把这条链在合同 "
+                        f"requirements.signals[net={net}].closure 标 \"waived\" 并写明"
+                        "接受什么后果）。" + where + "。" + why
+                    ),
+                    evidence=evidence,
+                ),
+                severity,
+                target,
+            )
+        if r_th > r_sense * BIAS_CLOSURE_RATIO:
+            return (
+                Outcome(
+                    rule_id=self.id,
+                    state="VIOLATION",
+                    subject=net,
+                    message=(
+                        f"{net}：偏置**比值存疑** —— R_th = {r_th:g}Ω 落在 "
+                        f"R_sense/10（{r_sense / 10:g}Ω）与 R_sense（{r_sense:g}Ω）"
+                        f"之间，低于本规则自声明的闭合判据的十分之一要求（判据 "
+                        f"BIAS_CLOSURE_RATIO = {BIAS_CLOSURE_RATIO:g}，写在 "
+                        "rules/archclosure.py 的模块 docstring 里）。算术（F1 原式）："
+                        f"{arithmetic}。这不是「差 5 个数量级」那种硬伤，而是比值只差一个"
+                        "数量级以内：偏置能抬起来一部分，但节点电压会跟着偏置源与采样"
+                        "电阻的分压走，请确认这个误差在量程内可以接受（要闭合就换运放"
+                        "缓冲）。" + where
+                    ),
+                    evidence=evidence,
+                ),
+                MARGIN_GRADE,
+                target,
+            )
+        return (
+            Outcome(
+                rule_id=self.id,
+                state="OK",
+                subject=net,
+                message=(
+                    f"{net}：偏置**闭合成立** —— R_th = {r_th:g}Ω ≤ R_sense/10 = "
+                    f"{r_sense / 10:g}Ω（判据 BIAS_CLOSURE_RATIO = "
+                    f"{BIAS_CLOSURE_RATIO:g}，本规则自声明）。算术（F1 原式）："
+                    f"{arithmetic}。测量行：查过且闭合，不是一个沉默。" + where
+                ),
+                evidence=evidence,
+            ),
+            MEASUREMENT_GRADE,
+            target,
+        )
+
+    # -------------------------------------------------------------- the two
+    #                                   rows whose words are not arithmetic
+
+    def _waiver_row(
+        self, model: DesignModel, *, intentsignal: object, net: str,
+        evidence: list[str], target: FindingTarget | None,
+    ) -> tuple[Outcome, str | None, FindingTarget | None]:
+        """The contract waived this chain's closure — INFO, or WARN if a draft said so."""
+        provenance = str(getattr(intentsignal, "provenance", "") or "")
+        slot = write_path(SECTION_SIGNALS, net, "closure")
+        decision, draft = self._waiver_decision(model, net)
+        citation = ""
+        if decision is not None:
+            citation = (
+                f"；合同 decisions[subject={decision.subject!r}] = "
+                f"「{decision.decision}」"
+                + (f"（rationale：{decision.rationale}）" if decision.rationale else "")
+                + f"，provenance = {decision.provenance}"
+            )
+        else:
+            citation = (
+                "；合同 decisions[] 里没有为这条链背书的条目（豁免的理由没人写下来 —— "
+                "给该链上的器件补一条 decisions[subject=…]，把接受什么后果写进 rationale）"
+            )
+        draft_note = ""
+        if draft is not None:
+            draft_note = (
+                f"；另有一条 decisions[subject={draft.subject!r}]"
+                f"（{draft.provenance}）提到这条链，但不是 user_stated，不按它背书"
+            )
+        statement = (
+            f"合同 {slot} = {getattr(intentsignal, 'closure', '')!r}（provenance = "
+            f"{provenance}）："
+            + (
+                "这条链的闭合是**工程师明示放弃的**"
+                if provenance == PROVENANCE_USER_STATED
+                else "这条链的闭合被声明放弃，但写这条声明的那一档不是工程师本人"
+            )
+            + citation
+            + f"。读数依据：网成员 {_quoted_members(model, net)}；"
+            f"合同 {write_path(SECTION_SIGNALS, net, 'kind')} = "
+            f"{getattr(intentsignal, 'kind', '')!r}、polarity = "
+            f"{getattr(intentsignal, 'polarity', '')!r}" + draft_note
+        )
+        if provenance == PROVENANCE_USER_STATED:
+            return (
+                Outcome(
+                    rule_id=self.id,
+                    state="OK",
+                    subject=net,
+                    message=(
+                        f"{net}：**豁免（waived）成立** —— {statement}。"
+                        "按合同不查这条链的偏置闭合（INFO 测量行：这是工程师签过字的"
+                        "决定，不是漏掉的检查）。注意豁免的是**闭合检查**：双向信号落进"
+                        "单电源 ADC 仍然只能测正半轴，量程损失是这项决策的代价，不是"
+                        "工具不再关心的事"
+                    ),
+                    evidence=[
+                        *evidence,
+                        f"{slot} = {getattr(intentsignal, 'closure', '')!r}（{provenance}）",
+                        citation.lstrip("；"),
+                    ],
+                ),
+                WAIVER_GRADE,
+                target,
+            )
+        return (
+            Outcome(
+                rule_id=self.id,
+                state="VIOLATION",
+                subject=net,
+                message=(
+                    f"{net}：合同写了**豁免**，但写它的这一条不是工程师本人声明的"
+                    f"（provenance = {provenance}）—— 草稿不能自己豁免自己（052 §4："
+                    "猜出来的需求只能当提示）。" + statement + "。修法：请工程师确认这条"
+                    "豁免（把 provenance 改成 user_stated），或者照图纸把偏置补上"
+                ),
+                evidence=[
+                    *evidence,
+                    f"{slot} = {getattr(intentsignal, 'closure', '')!r}（{provenance}）",
+                    citation.lstrip("；"),
+                ],
+            ),
+            DRAFT_WAIVER_GRADE,
+            target,
+        )
+
+    def _waiver_decision(
+        self, model: DesignModel, net: str
+    ) -> tuple[IntentDecision | None, IntentDecision | None]:
+        """``(the user_stated decision backing the waiver, a draft one)``.
+
+        Identity is exact, as everywhere in this channel (090: one entry is one
+        object): the signal's own net first, then the designators on it — F1's R4
+        decision is written against the *part*, which is where a person writes it.
+        Nothing else is matched, and the prose is not read: the decision is quoted,
+        not interpreted.
+        """
+        if self.intent is None:
+            return None, None
+        subjects = [net] + [des for des, _pin in _members(model, net)]
+        draft: IntentDecision | None = None
+        for subject in subjects:
+            decision = self.intent.decision(subject)
+            if decision is None:
+                continue
+            if decision.provenance == PROVENANCE_USER_STATED:
+                return decision, draft
+            draft = draft or decision
+        return None, draft
+
+    def _unbiased_row(
+        self, model: DesignModel, signal: object, net: str, shunt: ResistorLeg,
+        evidence: list[str], target: FindingTarget | None,
+    ) -> tuple[Outcome, str | None, FindingTarget | None]:
+        """No bias network at all — the shipped export's shape (F1 before the fix)."""
+        severity, why = intent_grade(signal)
+        swing = str(getattr(signal, "adc_swing", "") or "")
+        return (
+            Outcome(
+                rule_id=self.id,
+                state="VIOLATION",
+                subject=net,
+                message=(
+                    f"{net}：合同声明这条链是双向电流采样"
+                    + (f"（adcSwing = {swing!r}）" if swing else "")
+                    + "，但图纸上**没有任何偏置网络** —— 网成员 "
+                    f"{_quoted_members(model, net)} 里，到地的电阻只有 "
+                    f"{shunt.designator}（{_ohms(shunt.ohms)}，采样电阻），没有电阻通往"
+                    "「分压样」中间网（一侧到 power-class 轨、一侧到地的中点），也没有"
+                    "电阻直接上拉到 power-class 轨。双向信号落进单电源 ADC 必须有偏置把"
+                    "它抬到窗口中央，所以这条链在图纸上**不闭合**。" + BIAS_PHYSICS
+                    + "修法：加 R_up/R_dn 分压（F1 实案给的 1.65V 中点）经运放缓冲送"
+                    f"到 {net!r}，或直接把放大器输出馈入；若确实接受只测正半轴，请在合同 "
+                    f"requirements.signals[net={net}].closure 写 \"waived\" 并写明理由。"
+                    + why
+                ),
+                evidence=evidence,
+            ),
+            severity,
+            target,
+        )
+
+
+def _opamp_output(
+    model: DesignModel, rule: FactsRule, net: str
+) -> tuple[str, str, str] | None:
+    """``(designator, pin name, why it is the output)`` for an amplifier on ``net``.
+
+    ``None`` when no amplifier is on the net, and an **empty** ``why`` when one is
+    but its output pin cannot be read (the caller reports UNKNOWN then, naming the
+    fact to write — "the amplifier drives this net" and "the amplifier's *input*
+    sits on this net" are opposite conclusions).
+
+    An op-amp is recognised from the **shelf** (``category: ic.opamp``) — the same
+    source the rest of this file reads parts from, and deliberately not a
+    designator-prefix guess. Which of its pins is the output is then read from two
+    places, in this order: the shelf entry's own ``facts.output_pins`` (explicit
+    data wins), then the **pin name** the netlist carries
+    (:func:`_is_output_name`, the reading ``NrstClosure`` makes for a reset pin).
+    """
+    for designator, pin in _members(model, net):
+        comp = model.components.get(designator)
+        entry = rule.entry_for(comp) if comp is not None else None
+        if entry is None or entry.category != "ic.opamp":
+            continue
+        name = _pin_name(comp, pin)
+        declared = (entry.facts or {}).get("output_pins")
+        if isinstance(declared, (list, tuple)) and str(pin) in {
+            str(item) for item in declared
+        }:
+            return designator, name, (
+                f"货架条目 {entry.mpn or entry.lcsc or designator} 的 "
+                f"facts.output_pins 点名了引脚 {pin}"
+            )
+        if _is_output_name(name):
+            return designator, name, f"引脚名 {name!r}"
+        return designator, name, ""
+    return None

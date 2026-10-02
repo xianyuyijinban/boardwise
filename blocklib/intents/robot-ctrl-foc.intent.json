@@ -26,6 +26,7 @@
         "reference": "GND",
         "kind": "current-sense",
         "adcSwing": "0..3.3V",
+        "closure": "waived",
         "provenance": "user_stated"
       },
       {
@@ -35,6 +36,7 @@
         "reference": "GND",
         "kind": "current-sense",
         "adcSwing": "0..3.3V",
+        "closure": "waived",
         "provenance": "user_stated"
       }
     ],

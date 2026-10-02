@@ -537,9 +537,20 @@ def test_a_contract_that_cannot_be_read_is_a_note_and_never_an_overwrite(
 # ------------------------------------------------------------ the wiring
 
 
-def test_checkup_reports_the_intent_section_without_moving_the_exit_code(
+def test_checkup_reports_the_intent_section_and_the_exit_code_a_rule_moves(
     tmp_path, capsys, home
 ):
+    """A1's section, and the code 094 A3b's rule moves it to.
+
+    The board's verdict with no contract at all is 3 (incomplete reading); with
+    **this** contract it is 1, and the difference is one real finding rather than
+    a report: the contract declares `U+` a bidirectional current sense with
+    `user_stated` provenance, the export has nothing biasing that node, and
+    `arch-sense-bias-closure` files the F1 ERROR. A contract that finds a defect
+    is supposed to move the verdict (093's table: a violated `user_stated`
+    statement is an ERROR); what A1 promised — and this test still pins — is that
+    the *report section* is not a second source of judgement.
+    """
     contract = tmp_path / "foc.json"
     contract.write_text(json.dumps(_contract().to_jsonable(), ensure_ascii=False) + "\n",
                         encoding="utf-8")
@@ -550,8 +561,15 @@ def test_checkup_reports_the_intent_section_without_moving_the_exit_code(
     ]
     code = cli.main(argv)
     out = capsys.readouterr().out
-    assert code == 3, "the same exit code as a run with no contract at all"
+    assert code == 1, code
     report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
+    errors = [
+        finding for finding in report["findings"]
+        if finding["severity"] == "ERROR"
+    ]
+    assert [finding["rule_id"] for finding in errors] == ["arch-sense-bias-closure"], (
+        "the one ERROR on this board is the contract's own chain being unclosed"
+    )
     section = report["intent"]
     assert section["contract"]["present"] is True
     assert section["contract"]["file"] == str(contract)
@@ -618,10 +636,13 @@ def test_checkup_reads_a_contract_from_the_user_level_landing_spot(tmp_path, cap
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(di.render_json(_contract()), encoding="utf-8")
     before = path.read_bytes()
+    # 1, not 3: the contract declares `U+` a bidirectional current sense, and since
+    # 094 A3b `arch-sense-bias-closure` grades that against the drawing — one real
+    # ERROR, so the verdict is "errors found" rather than "incomplete reading".
     assert cli.main([
         "checkup", "--file", str(ROBOT), "--out", str(tmp_path / "out"),
         "--library", str(SHELF),
-    ]) == 3
+    ]) == 1
     capsys.readouterr()
     report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
     assert report["intent"]["contract"]["present"] is True
@@ -634,10 +655,12 @@ def test_checkup_renders_design_intent_md_from_the_contract(tmp_path, capsys, ho
     """`design-intent.md` keeps its name and becomes the contract's **view**."""
     contract = tmp_path / "foc.json"
     contract.write_text(di.render_json(_contract()), encoding="utf-8")
+    # 1 since 094 A3b — see `test_checkup_reports_the_intent_section_and_the_exit_
+    # code_a_rule_moves`: this contract's own chain is unclosed on this export.
     assert cli.main([
         "checkup", "--file", str(ROBOT), "--out", str(tmp_path / "out"),
         "--library", str(SHELF), "--intent", str(contract),
-    ]) == 3
+    ]) == 1
     out = capsys.readouterr().out
     view = (tmp_path / "out" / INTENT_FILE_NAME).read_text(encoding="utf-8")
     assert "由 DesignIntent 合同渲染" in view and "手填无效" in view
