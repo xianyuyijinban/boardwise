@@ -98,7 +98,7 @@
 | A1 | 文档+持久化+审查报告接线 | checkup 报告挂 `intent` 节（槽位总数/已填/缺失 + `intent-missing` 点名）；`design-intent.md` 改由合同渲染 | 文档活着、不丢、不覆盖 |
 | A2a | 审查规则（params） | 冲突时按 intent 给**方向**：该位号有 `decisions[].value` → 建议改料号/重选件（按 provenance 分级语气）；没有 → 双向列出 + `intent-missing` 点名 `decisions[].value` | 发现→修复依据（**已落地，091**，见 `tests/test_091_intent_direction.py`） |
 | A2b | 审查规则（额定/降额）+ 报告接线 | rail 声明进「耐压 vs 轨压」与「LDO 耗散」两条规则；`checkup` 把合同传进规则走查（A2a 落地记录的「未接线」已补） | **已落地，092**，见 `tests/test_092_rail_ratings.py` 与 §七 |
-| A3 | 架构自洽检查器 | 信号链闭合规则（采样链必须有偏置/参考、开漏必须有上拉、单端 ADC 不许直吃双极性信号……第一批 5–8 条，全部来自真案例） | FOC 偏置案可由规则查出 |
+| A3 | 架构自洽检查器 | 信号链闭合规则（采样链必须有偏置/参考、开漏必须有上拉、单端 ADC 不许直吃双极性信号……第一批 5–8 条，全部来自真案例）；**分级框架**：违反 `user_stated` = ERROR、违反 `ai_asserted`/`verified_recipe` = WARN、无合同零移动、结构性闭合直接 WARN | **A3a 已落地，093**，见 `tests/test_093_arch_closure.py` 与 §八；F2（nFAULT 无上拉）与 F3（NRST 裸奔）由规则复现 |
 | A4 | 绘制侧 | 语法绑定消费 blocks/decisions（TVS/bulk 角色、支路顺序、模块清单由 intent 推出） | 意图→图纸同源 |
 
 ## 四、通往「毕设水平」的全程路线（A 主线之后的 backlog，记档）
@@ -207,3 +207,53 @@ A2a 把「方向」交给了规则，A2b 花同一条通道问两个**图纸上�
    合同与图上的推断都不把那里当轨——R1 比的是「电容 vs **轨**」，不在轨上的电容没有轨压可比
    （任务书举例的 C 系名单来自真机工程的编号，本导出档 49 颗件的编号与之不同，实测名单以导出
    档为准）。
+
+## 八、A3a 落地记录（093 批，见 `tests/test_093_arch_closure.py`）
+
+A 主线走到这里，intent 第一次**进评级**（090/091/092 都只让它说话，不动严重度）。052 §4 的
+红线因此第一次需要成文，就是这一张表——它写在 `rules/archclosure.py` 的模块 docstring 里，
+代码里对应 `INTENT_GRADES` + `STRUCTURAL_GRADE`/`MEASUREMENT_GRADE`：
+
+| 情况 | 级别 | 为什么 |
+|---|---|---|
+| 违反 **`user_stated`** intent（工程师自己声明的架构被图纸违反） | **ERROR** | 与一个人说过的话直接矛盾；`edit/draw apply` 的 findings 闸下必拦，`--force` 也放行不了 |
+| 违反 **`verified_recipe`** | **WARN** | 别人验证过的配方，**不是工程师本人声明**（本批的表格只点名两档，中间档的归属是本批的决定，理由与改法都写在表下面） |
+| 违反 **`ai_asserted`** intent（AI 草稿与图纸不一致） | **WARN** | 052 §4：猜出来的需求只能当提示，不能当判违规的依据；行里带「确认前不要照改」 |
+| 无 intent | **不查，零移动** | 无合同读数逐字节不变（A1/A2 口径延续） |
+| 不依赖 intent 的**结构性**闭合 | 违反 **WARN** / 闭合 **INFO 测量行** | 要求来自货架或网表本身（开漏上拉、NRST），有出处、点名、给修法；闭合时出测量行——「查过且没事」与「根本没看」必须能分辨（092 的纪律） |
+
+1. **R1 `arch-rail-voltage-clash`**（A2b 遗留③，依赖合同）：合同的
+   `requirements.rails[net=…].targetVoltage` vs 图上自己的判定（`infer_net_domains`）。
+   **两个来源的原始字段与值都进消息**（「谁错由人裁」——091 A2a 对 MPN/Value 矛盾的同一条
+   拒绝）。图上判不出这条轨的电压 → 不查；合同没声明该槽 → 不查（那是 092 那条规则的
+   `intent-missing`）。进 `INTENT_RULES` 与 `NET_MEMBERSHIP_RULES`。
+2. **R2 `arch-opendrain-pullup`**（F2 nFAULT 案，结构性）：货架 `pull_required` 里**带
+   `open_drain: true` 标记**的脚——所在网成员里有电阻跨到 power-class 轨（网名报电压，或图
+   上由 LDO 输出定价）= 闭合 INFO；没有 = WARN（点名脚、网、手册页、修法 10k 上拉）。合同
+   `decisions[]` 里 `user_stated` 声明「该脚用 MCU 内部上拉」也判闭合（INFO，注明依据=设计
+   决策）；草稿声明不算闭合，但会在 WARN 里被点名（052 §4）。**标记是必要的**：同一个 fact
+   kind 也承载连接器 CC 脚的**下拉到地**要求（`conn-usb-cc-pulldown` 的题目），按「所有
+   pull_required」判会把每个设计正确的 Type-C 座报成缺上拉。**该规则的 subject 不限位号
+   前缀**——`DRV1` 不是 `U<数字>`，而放宽 `IC_PATTERN`（会让这颗件进所有 facts 规则）明确
+   不在本批。
+3. **R3 `arch-nrst-closure`**（F3 案，结构性）：控制器（`core.architecture.controller_evidence`，
+   即货架 `category: ic.mcu` 或符号里 ≥4 个 `P<端口><数字>` 引脚——**复用架构走查的既有识别**，
+   不写第二个识别器）的 NRST/RESET 脚（按**引脚名**分段认，`PG10-NRST` 命中）所在网：成员数
+   = 1（单成员网：无电容/无按键/无测试点/无编程器引出，图纸里那条网络标签底下什么都没有）→
+   WARN；脚不接任何网 → 同样 WARN；成员 > 1 → INFO 测量行。
+4. **数据侧（issue #56 的落地）**：`blocklib/parts.corrections.json` 的 `curated` 段给
+   `C92482`（DRV8313PWPR）补 `category: ic.motor-driver`（`CATEGORY_VOCABULARY` 同步扩一档）
+   + facts——nFAULT(pin18) 的 `pull_required` 标 `open_drain: true`（手册 p.3：open-drain
+   output requires an external pullup）、VM(pin4/11) 各 0.1 µF 的 `required_caps`（同页；喂
+   decap 既有机制）。`parts.json` 由同一 payload 就地更新，**货架仍是「源 + sidecar」的函数**
+   （`tests/test_harvest.py` 的复现测试是这条的看门人）。工具侧的 `IC_PATTERN` 放宽不在本批。
+5. **联动（不改代码）**：自洽 ERROR 在 `edit/draw apply` 的 findings 闸下被 #55 的分级必拦
+   （ERROR 必拦、`--force` 不豁免 WARN 之外的东西 ⇒ exit 2）。**实测的边界**：apply 的
+   `_baseline_findings` 走的是 `run_review(model)`（**不带合同**），所以今天真能到那道闸上的
+   是 R2/R3 的结构性 WARN；合同驱动的 R1 ERROR 要等「把合同接进 apply 走查」那一批
+   （093 §〇 明确「不改代码」），本批钉的是**分级机制**本身。
+6. **ctrl FOC 实测（导出 + shipped 合同）**：R2 报 `DRV1 pin18`（FAULT#）在 `NFAULT`
+   （成员 U1.34 / DRV1.18）无上拉 → WARN；R3 报 `U1 pin7`（PG10-NRST）在单成员网 `NRST`
+   → WARN；**R1 不报**——shipped 合同的 rails 一个 `targetVoltage` 都没填（阴性对照：把
+   `+12V` 按图上自己的判定填成 `12V` 后仍不报）。checkup 的 verdict/退出码/schema `/6`
+   一个字没动。

@@ -550,21 +550,30 @@ def test_without_a_contract_the_rail_rules_have_no_subject_at_all():
     assert "pwr-cap-voltage-rating" not in ids and "path-ldo-dissipation" not in ids
 
 
-def test_run_review_hands_the_contract_to_the_three_rules_that_read_one():
-    """091 A2a's seam, now with three carriers — and the shared instances stay
-    contract-free, because ``BUILTIN_RULES`` outlives any single run."""
+def test_run_review_hands_the_contract_to_the_five_rules_that_read_one():
+    """091 A2a's seam, now with five carriers — and the shared instances stay
+    contract-free, because ``BUILTIN_RULES`` outlives any single run.
+
+    093 A3a added the two architecture rules that read a contract
+    (``arch-rail-voltage-clash`` and ``arch-opendrain-pullup``); the set below is
+    the seam's own registry (``review.INTENT_RULES``), spelled out here so a rule
+    that starts reading a contract without joining it is a failing test.
+    """
+    from boardwise.rules.archclosure import ArchRailVoltageClash, OpenDrainPullup
     from boardwise.rules.params import ValueMpnMatch
 
+    carriers_of = (ValueMpnMatch, CapVoltageRating, LdoDissipation,
+                   ArchRailVoltageClash, OpenDrainPullup)
     assert _rules_for(None) is BUILTIN_RULES, "no contract, no copy"
     contract = _intent(_rail("+24V", targetVoltage="24V"))
     rules = _rules_for(contract)
     assert [rule.id for rule in rules] == [rule.id for rule in BUILTIN_RULES]
     carriers = {
-        rule.id: rule for rule in rules
-        if isinstance(rule, (ValueMpnMatch, CapVoltageRating, LdoDissipation))
+        rule.id: rule for rule in rules if isinstance(rule, carriers_of)
     }
     assert set(carriers) == {
         "param-value-mpn-match", "pwr-cap-voltage-rating", "path-ldo-dissipation",
+        "arch-rail-voltage-clash", "arch-opendrain-pullup",
     }
     assert all(rule.intent is contract for rule in carriers.values())
     for rule, template in zip(rules, BUILTIN_RULES):
@@ -573,7 +582,7 @@ def test_run_review_hands_the_contract_to_the_three_rules_that_read_one():
             continue
         assert rule is template, rule.id
     for template in BUILTIN_RULES:
-        if isinstance(template, (ValueMpnMatch, CapVoltageRating, LdoDissipation)):
+        if isinstance(template, carriers_of):
             assert template.intent is None, "the shared instance kept no answer"
 
 

@@ -366,10 +366,18 @@ def test_other_single_board_fixtures_keep_their_frozen_severities(name):
 #: the ROBOT and 智能药箱 rows went through 042's shelf re-harvest — frozen
 #: facts-less for one round, then restored by mirroring the AMS1117 facts onto
 #: the second LCSC listing in the sidecar (see the test above).
+#:
+#: 093 A3a moved both rows again, and from the rule set rather than from the
+#: parser or the shelf: the three architecture closure rules judge the drawing
+#: itself. ROBOT ctrl FOC gains two WARNs (`arch-opendrain-pullup` on
+#: ``DRV1 pin18``/`NFAULT` and `arch-nrst-closure` on ``U1 pin7``/`NRST` — F2 and
+#: F3, found by hand in the 2026-10-01 review and now found by the rules), and
+#: 智能药箱 gains one INFO measurement (its MCU's reset net **is** closed, and a
+#: satisfied structural closure is reported rather than left silent).
 _EXPECTED_SEVERITY = {
     "llc_board.epro2": {"ERROR": 0, "WARN": 0, "INFO": 0},
-    "ProPrj_ROBOT ctrl FOC_2026-09-16.epro2": {"ERROR": 0, "WARN": 1, "INFO": 0},
-    "ProPrj_智能药箱_2026-09-17.epro2": {"ERROR": 0, "WARN": 1, "INFO": 0},
+    "ProPrj_ROBOT ctrl FOC_2026-09-16.epro2": {"ERROR": 0, "WARN": 3, "INFO": 0},
+    "ProPrj_智能药箱_2026-09-17.epro2": {"ERROR": 0, "WARN": 1, "INFO": 1},
 }
 
 

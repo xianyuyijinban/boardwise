@@ -581,7 +581,7 @@ def _entry_for(component: Component, library: PartLibrary | None):
     return entry
 
 
-def _controller_evidence(component: Component, library: PartLibrary | None) -> str:
+def controller_evidence(component: Component, library: PartLibrary | None) -> str:
     """Why this part may be a controller — or ``""`` when nothing says so.
 
     Two evidence sources, strongest first: the shelf's own classification
@@ -589,6 +589,13 @@ def _controller_evidence(component: Component, library: PartLibrary | None) -> s
     pins). Both are facts about the project; neither is a family-name guess, and
     a part none of them fits simply is not a chain anchor — its identity stays
     unstated rather than being filled in by pattern luck.
+
+    Public since 093 A3a: the architecture walk is no longer the only reader.
+    ``arch-nrst-closure`` asks the same question — "is this a controller?" — and
+    a second recogniser would be a second answer to it (the two-enumerators
+    defect 090 §二 warns about). ``library=None`` (the caller has no shelf in
+    hand) leaves only the symbol evidence, which is what this reading always
+    did with no library.
     """
     entry = _entry_for(component, library)
     if entry is not None and entry.category == "ic.mcu":
@@ -782,7 +789,7 @@ def _chains_and_rails(
     controllers = {
         designator: evidence
         for designator, component in sorted(board.components.items())
-        if (evidence := _controller_evidence(component, library))
+        if (evidence := controller_evidence(component, library))
     }
 
     buses: dict[str, list[str]] = {}
@@ -881,7 +888,7 @@ def _render_board(
     controllers = {
         designator: evidence
         for designator, component in sorted(board.components.items())
-        if (evidence := _controller_evidence(component, library))
+        if (evidence := controller_evidence(component, library))
     }
     if controllers:
         lines.append(

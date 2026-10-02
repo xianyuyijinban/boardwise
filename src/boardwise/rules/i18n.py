@@ -46,6 +46,9 @@ RULE_NAMES_ZH: dict[str, str] = {
     "param-rc-cutoff": "RC 截止频率",
     "pwr-cap-voltage-rating": "电容耐压与轨压",
     "path-ldo-dissipation": "LDO 耗散估算",
+    "arch-rail-voltage-clash": "轨压合同与图纸不一致",
+    "arch-opendrain-pullup": "开漏输出缺上拉",
+    "arch-nrst-closure": "复位脚裸奔",
 }
 
 #: 严重度 → 中文。三个词与 `severity_counts` 的键一一对应。
