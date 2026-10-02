@@ -184,7 +184,9 @@ checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起
   路径）+ `required[]` 的 `intent-missing` 行（点名槽位 + 文件 + 键）+ `hints[]`（
   `closure-undeclared`：双向电流采样没有 `requires: ["bias-reference"]` 类闭合声明——FOC 偏置案
   的槽位形态，A1 只提问，A3 升级为规则）。**缺槽不抬 verdict、不动退出码**；填缺口的人是
-  工程师或模型，工具不代填。
+  工程师或模型，工具不代填。**092 A2b 起合同还进规则走查**（不只是报告的一节）：
+  `rails[].targetVoltage` 喂 `pwr-cap-voltage-rating`，输出轨的 `continuousCurrent` 喂
+  `path-ldo-dissipation`——它们的 finding 与 intent 节是两条独立出口，见 §3.2 的细则。
 
 每个槽一个**稳定 ID**：`<projectUuid>/<boardUuid>/<sectionKey>/<slotKey>`（`sectionKey` =
 `<节>:<对象>`，节 = power/analog/control/bus/intent）。行内格式：`| 稳定 ID | 槽位 | 值 | 来源 | sig= |`，
@@ -271,7 +273,14 @@ checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起
   *（091 A2a：`edit plan` 这条纪律一个字没动；变的是**发现消息**——契约里有该位号的
   `decisions[].value` 时，`param-value-mpn-match` 的 finding 直接说方向 = 改料号/重选件，
   出处与 provenance 一并带出；没有就两个方向都列 + `intent-missing` 点名写进哪个键。
-  合同目前由 API（`run_review(model, intent=…)`）进规则，`checkup --intent` 尚未接线。）*
+  **092 A2b 起 `checkup --intent`（或默认位
+  `~/.boardwise/design-intent/<projectUuid>.json`）真的把合同传进规则走查了**——
+  除了上面这条方向消息，另两条 rail 规则也开始读合同：`pwr-cap-voltage-rating`
+  报「电容耐压 vs 所在轨轨压」（耐压 ≥ 轨压 = INFO 测量行报比值；耐压 < 轨压 = WARN；
+  读不出 = UNKNOWN 并点名 `C? 的耐压（所在轨 +12V=12V）`），`path-ldo-dissipation`
+  报「压差 8.7 V + P=(Vin−Vout)×I」（电流没声明 = `intent-missing` 点名
+  `requirements.rails[net=…].continuousCurrent`；货架声明 `ldo.max_dissipation_mw` 才判超限）。
+  两条都**不发明降额系数**：测量行永远出，判决只看两个数。）*
   `--file` 路径**只有 `param-value-mpn-match`（单器件值）可修**，别的规则按名字拒绝
   （029 补器件、035 修脚都走 `--report` 路径，见下条）。`apply` 四道保护：
   写前重读页面 → 只写一个键 → 独立 geometry 回读 → save + 复查；重复执行认 `already_applied` 零写入。

@@ -4561,134 +4561,27 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
             ),
         }
 
-    # #30: the gate's own facts, computed where the parse and the tier ladder are.
-    # `rules_errored` is filled by the rule walk itself (fork 2) — a rule that
-    # raises is skipped, named here, and the report is written anyway.
-    rules_errored: list[str] = []
-    findings = [
-        _finding_payload(finding) for finding in run_review(model, rules_errored=rules_errored)
-    ]
-    coverage = _coverage_section(
-        model=model, board=board, attempts=attempts,
-        parse_stats=parse_stats, rules_errored=rules_errored,
-    )
-    # What the parse saw, in the report rather than only on the console (#30's
-    # adjacent gap): `coverage.recordsDropped` is the sum of the three drop
-    # counters, and this is the audit trail a reader checks it against.
-    source["parseStats"] = parse_stats.as_dict()
-    if coverage["modelEmpty"]:
-        notes.append(
-            "模型为空（0 器件 0 网络）：归档读不出内容/模型为空，可能被截断或损坏——"
-            "这不是干净板（completion.coverage.parseIncomplete / modelEmpty）"
-        )
-    if rules_errored:
-        notes.append(
-            f"{len(rules_errored)} 条规则执行出错（{'、'.join(rules_errored)}）："
-            "它们的结论缺失，报告照出（completion.coverage.rulesErrored）"
-        )
-    summary = drc_summarise(drc=drc, findings=findings)
-
     # --- the curated shelf: the facts-driven sections read it (039 批②).
+    #
+    # **Moved above the rule walk by 092 A2b** (it used to sit below it): the
+    # architecture enumeration needs the shelf, the contract's default path needs
+    # the projectUuid that enumeration resolves, and the rule walk now reads the
+    # contract — so shelf → enumeration → contract → rules is the only honest
+    # order. The block itself is unchanged; only its position moved, which is why
+    # a few notes below are appended a little earlier than they used to be.
     shelf, shelf_note = _checkup_shelf(args)
     if shelf_note:
         notes.append(shelf_note)
 
-    # --- 阶段 C 的分组 + AI 槽位（025 §2 阶段 C/E）。
-    modules, module_facts = modules_section(
-        model=model,
-        findings=findings,
-        attribution=(attribution or {}).get("pages"),
-        attribution_source=(attribution or {}).get("source", PAGE_ATTRIBUTION_UNRESOLVED),
-    )
-    source.update({key: value for key, value in module_facts.items() if key != "notes"})
-    notes.extend(module_facts.get("notes") or [])
-
-    # 「警告所在模块优先」: attributable warnings move their module to the front.
-    modules = order_modules_by_warnings(modules, findings)
-    warning_modules = [m["name"] for m in modules if m.get("warningFindings")]
-    source["modulesOrderedBy"] = "warnings-first"
-    if warning_modules:
-        notes.append(f"模块按「含警告优先」排序，含警告的模块：{'、'.join(warning_modules)}")
-
-    # 未审器件：the datasheet gate's own section (039 批② §WI-1).
-    unreviewed = unreviewed_parts(
-        model, library=shelf, datasheet_dir=Path(UNREVIEWED_DATASHEET_DIR)
-    )
-    summary["unreviewedParts"] = len(unreviewed)
-    # **Narrow on purpose** (053 §2.2): this field answers exactly one question —
-    # "did the datasheet gate leave any part unjudged?" — and the name is kept
-    # (downstream and friends read it) rather than widened, because widening it
-    # would move the meaning under those readers' feet. The complete statement is
-    # `completion.verdict` (rules/boards/pages covered, unreviewed parts, stale
-    # architecture slots, warnings still waiting for triage); a reader that wants
-    # "may I say this board passed?" must ask that, not this.
-    summary["mayClaimPassed"] = not unreviewed
-    # 058 §二: the same gate, generalized — one list of what the review depends
-    # on, with the facts seed as its first trigger. At generation time the
-    # reviewer's marks are empty by construction (nobody has read the board yet);
-    # `boardwise need-datasheet` merges them in afterwards.
-    needs_datasheet = needs_datasheet_section(unreviewed, [], findings)
-    try:
-        stale_marks = _load_need_marks(out_dir)
-    except NeedDatasheetError as exc:
-        # A sidecar nobody can read is a note here, never a crash: `checkup` is
-        # the command that must always produce a report, and it is not the one
-        # that owns that file (only `need-datasheet` writes it).
-        stale_marks = []
-        notes.append(f"审查者标记侧车读不了（{exc}）：本次报告按 marked 为空出，文件一个字没动")
-    if stale_marks:
-        # The sidecar survives a re-run, so this report would *look* as if the
-        # reviewer had marked nothing. Say so instead (`need-datasheet` is
-        # idempotent, so re-merging costs one command).
-        notes.append(
-            f"侧车 {NEEDS_DATASHEET_FILE} 里有 {len(stale_marks)} 条审查者标记（按 (part, pin) 计）"
-            f"未并入本次报告（checkup 生成时 marked 为空）：跑 `boardwise need-datasheet` 重新合并"
-        )
-    triage = warning_triage_slots(model=model, drc=drc, findings=findings, modules=modules)
-    collided = disambiguated_triage_keys(triage)
-    if collided:
-        # 070 (issue #13): a key is the slot's identity, so two slots sharing one
-        # were judged as one warning and a single verdict landed in both. The
-        # structured reading of the finding removes the collision this codebase
-        # can see coming; when the identity is *still* duplicated the suffix
-        # keeps the two judgements apart, and this note is what keeps that from
-        # being silent (the issue's own requirement: 撞车不许静默).
-        notes.append(
-            f"warning_triage 里有 {len(collided)} 组槽位身份完全相同"
-            f"（{'、'.join(collided)}）：已按 (component_ref, pin_refs, net_refs, message) "
-            f"稳定序加 `#2`/`#3` 后缀消歧——同输入同 key，重跑仍能并上；"
-            f"撞车本身曾是 bug（issue #13，一条 triage 把判定写进两颗器件）"
-        )
-    # 063 §3: the slots are regenerated from the board on every run, and a
-    # verdict is *not* derivable from the board — so the report would otherwise
-    # read as if nobody had judged anything (issue #12). Read the sidecar back in
-    # and fold it onto the fresh slots by key.
-    try:
-        stale_triage = _load_triage_entries(out_dir)
-    except WarningTriageError as exc:
-        # Same discipline as the datasheet sidecar above: unreadable is a note
-        # here, never a crash — `checkup` is not the command that owns that file.
-        stale_triage = []
-        notes.append(f"分诊侧车读不了（{exc}）：本次报告的 warning_triage 按未分诊出，文件一个字没动")
-    triage, triage_merged, triage_unmatched = merge_triage_sidecar(triage, stale_triage)
-    if triage_merged:
-        notes.append(
-            f"侧车 {WARNING_TRIAGE_FILE} 里的 {triage_merged} 条分诊结论已并入本次报告（按 key 匹配）"
-            f"（`boardwise triage` 写入）"
-        )
-    if triage_unmatched:
-        # Never deleted: a warning that disappeared from the board is exactly the
-        # judgement a reader wants to keep, so the entry stays in the sidecar as
-        # the audit trail and only the *match* fails.
-        notes.append(
-            f"侧车 {WARNING_TRIAGE_FILE} 里另有 {triage_unmatched} 条分诊结论没有对应槽位"
-            f"（旧警告可能已消失）：条目留在侧车当审计轨迹，不删"
-        )
     # 044 M1 / 053 §2.2: the architecture skeleton — generated here (before the
     # report is assembled) because the report carries its merged view. "Cannot
     # generate" is a note and an **absent** key, never an empty section. The
     # design intent beside the report is read (never written here) and merged in;
     # a slot whose object moved under a recorded answer comes back `stale`.
+    #
+    # **Moved above the rule walk by 092 A2b** (same reason as the shelf above):
+    # the enumeration is what names the contract's default file, and the rule
+    # walk now takes that contract.
     from .core.architecture import generate_architecture
     from .core import designintent as intent_contract
 
@@ -4788,6 +4681,149 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
             project_uuid=enumerated_uuid,
             contract_version=intent_contract.INTENT_VERSION,
         )
+
+    # 092 A2b: the contract reaches the **rule walk** now, not only the report.
+    # 091 A2a built the seam (`run_review(model, intent=…)`) and left this wiring
+    # undone on purpose, because the default contract path needs the projectUuid
+    # the enumeration resolves — which is exactly why the three steps above had
+    # to move up first. The rules still never touch a disk: the file is read here
+    # and travels as a `core.designintent.IntentSource` (006c's layer table
+    # leaves `rules` no other way to hear about it).
+    from .core.designintent import IntentSource
+
+    intent_source = (
+        IntentSource(document=contract, path=str(contract_path or ""))  # type: ignore[arg-type]
+        if contract is not None
+        else None
+    )
+
+    # #30: the gate's own facts, computed where the parse and the tier ladder are.
+    # `rules_errored` is filled by the rule walk itself (fork 2) — a rule that
+    # raises is skipped, named here, and the report is written anyway.
+    rules_errored: list[str] = []
+    findings = [
+        _finding_payload(finding)
+        for finding in run_review(
+            model, rules_errored=rules_errored, intent=intent_source
+        )
+    ]
+    coverage = _coverage_section(
+        model=model, board=board, attempts=attempts,
+        parse_stats=parse_stats, rules_errored=rules_errored,
+    )
+    # What the parse saw, in the report rather than only on the console (#30's
+    # adjacent gap): `coverage.recordsDropped` is the sum of the three drop
+    # counters, and this is the audit trail a reader checks it against.
+    source["parseStats"] = parse_stats.as_dict()
+    if coverage["modelEmpty"]:
+        notes.append(
+            "模型为空（0 器件 0 网络）：归档读不出内容/模型为空，可能被截断或损坏——"
+            "这不是干净板（completion.coverage.parseIncomplete / modelEmpty）"
+        )
+    if rules_errored:
+        notes.append(
+            f"{len(rules_errored)} 条规则执行出错（{'、'.join(rules_errored)}）："
+            "它们的结论缺失，报告照出（completion.coverage.rulesErrored）"
+        )
+    summary = drc_summarise(drc=drc, findings=findings)
+
+    # --- 阶段 C 的分组 + AI 槽位（025 §2 阶段 C/E）。
+    modules, module_facts = modules_section(
+        model=model,
+        findings=findings,
+        attribution=(attribution or {}).get("pages"),
+        attribution_source=(attribution or {}).get("source", PAGE_ATTRIBUTION_UNRESOLVED),
+    )
+    source.update({key: value for key, value in module_facts.items() if key != "notes"})
+    notes.extend(module_facts.get("notes") or [])
+
+    # 「警告所在模块优先」: attributable warnings move their module to the front.
+    modules = order_modules_by_warnings(modules, findings)
+    warning_modules = [m["name"] for m in modules if m.get("warningFindings")]
+    source["modulesOrderedBy"] = "warnings-first"
+    if warning_modules:
+        notes.append(f"模块按「含警告优先」排序，含警告的模块：{'、'.join(warning_modules)}")
+
+    # 未审器件：the datasheet gate's own section (039 批② §WI-1).
+    unreviewed = unreviewed_parts(
+        model, library=shelf, datasheet_dir=Path(UNREVIEWED_DATASHEET_DIR)
+    )
+    summary["unreviewedParts"] = len(unreviewed)
+    # **Narrow on purpose** (053 §2.2): this field answers exactly one question —
+    # "did the datasheet gate leave any part unjudged?" — and the name is kept
+    # (downstream and friends read it) rather than widened, because widening it
+    # would move the meaning under those readers' feet. The complete statement is
+    # `completion.verdict` (rules/boards/pages covered, unreviewed parts, stale
+    # architecture slots, warnings still waiting for triage); a reader that wants
+    # "may I say this board passed?" must ask that, not this.
+    summary["mayClaimPassed"] = not unreviewed
+    # 058 §二: the same gate, generalized — one list of what the review depends
+    # on, with the facts seed as its first trigger. At generation time the
+    # reviewer's marks are empty by construction (nobody has read the board yet);
+    # `boardwise need-datasheet` merges them in afterwards.
+    needs_datasheet = needs_datasheet_section(unreviewed, [], findings)
+    try:
+        stale_marks = _load_need_marks(out_dir)
+    except NeedDatasheetError as exc:
+        # A sidecar nobody can read is a note here, never a crash: `checkup` is
+        # the command that must always produce a report, and it is not the one
+        # that owns that file (only `need-datasheet` writes it).
+        stale_marks = []
+        notes.append(f"审查者标记侧车读不了（{exc}）：本次报告按 marked 为空出，文件一个字没动")
+    if stale_marks:
+        # The sidecar survives a re-run, so this report would *look* as if the
+        # reviewer had marked nothing. Say so instead (`need-datasheet` is
+        # idempotent, so re-merging costs one command).
+        notes.append(
+            f"侧车 {NEEDS_DATASHEET_FILE} 里有 {len(stale_marks)} 条审查者标记（按 (part, pin) 计）"
+            f"未并入本次报告（checkup 生成时 marked 为空）：跑 `boardwise need-datasheet` 重新合并"
+        )
+    triage = warning_triage_slots(model=model, drc=drc, findings=findings, modules=modules)
+    collided = disambiguated_triage_keys(triage)
+    if collided:
+        # 070 (issue #13): a key is the slot's identity, so two slots sharing one
+        # were judged as one warning and a single verdict landed in both. The
+        # structured reading of the finding removes the collision this codebase
+        # can see coming; when the identity is *still* duplicated the suffix
+        # keeps the two judgements apart, and this note is what keeps that from
+        # being silent (the issue's own requirement: 撞车不许静默).
+        notes.append(
+            f"warning_triage 里有 {len(collided)} 组槽位身份完全相同"
+            f"（{'、'.join(collided)}）：已按 (component_ref, pin_refs, net_refs, message) "
+            f"稳定序加 `#2`/`#3` 后缀消歧——同输入同 key，重跑仍能并上；"
+            f"撞车本身曾是 bug（issue #13，一条 triage 把判定写进两颗器件）"
+        )
+    # 063 §3: the slots are regenerated from the board on every run, and a
+    # verdict is *not* derivable from the board — so the report would otherwise
+    # read as if nobody had judged anything (issue #12). Read the sidecar back in
+    # and fold it onto the fresh slots by key.
+    try:
+        stale_triage = _load_triage_entries(out_dir)
+    except WarningTriageError as exc:
+        # Same discipline as the datasheet sidecar above: unreadable is a note
+        # here, never a crash — `checkup` is not the command that owns that file.
+        stale_triage = []
+        notes.append(f"分诊侧车读不了（{exc}）：本次报告的 warning_triage 按未分诊出，文件一个字没动")
+    triage, triage_merged, triage_unmatched = merge_triage_sidecar(triage, stale_triage)
+    if triage_merged:
+        notes.append(
+            f"侧车 {WARNING_TRIAGE_FILE} 里的 {triage_merged} 条分诊结论已并入本次报告（按 key 匹配）"
+            f"（`boardwise triage` 写入）"
+        )
+    if triage_unmatched:
+        # Never deleted: a warning that disappeared from the board is exactly the
+        # judgement a reader wants to keep, so the entry stays in the sidecar as
+        # the audit trail and only the *match* fails.
+        notes.append(
+            f"侧车 {WARNING_TRIAGE_FILE} 里另有 {triage_unmatched} 条分诊结论没有对应槽位"
+            f"（旧警告可能已消失）：条目留在侧车当审计轨迹，不删"
+        )
+    # 044 M1 / 053 §2.2's architecture skeleton and 090 A1's contract now run
+    # **above the rule walk** (092 A2b): the rule walk reads the contract, and the
+    # contract's default file name comes from the enumeration, so the three steps
+    # belong before `run_review`. What is left here is the report's own view of
+    # them — `architecture`, `intent_report`, `intent_view` and `contract_path`
+    # are bound up there.
     aesthetics_on, aesthetics_source = _checkup_aesthetics(args)
     slots = {
         # The v2 name kept as an alias of the promoted section: same list, one

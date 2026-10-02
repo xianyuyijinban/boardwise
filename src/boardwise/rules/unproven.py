@@ -75,12 +75,15 @@ UNPROVEN_BY_NAME = "agreement by name is not a verified connection"
 #: * the cooperating part on the net — ``decap-required-caps`` (a capacitor),
 #:   ``conn-usb-cc-pulldown`` (a resistor), ``param-divider-output`` (a load),
 #:   ``param-led-current`` (the LED's series resistance), ``param-rc-cutoff``
-#:   (the resistor's partner capacitor);
+#:   (the resistor's partner capacitor), ``pwr-cap-voltage-rating`` (the
+#:   capacitors on a declared rail — 092 A2b);
 #: * the pin's **company** — ``conn-nc-and-must-connect`` ("alone on this net" and
 #:   "shares it with another pin" are the same reading, one netlist over);
 #: * the net's **voltage**, which the domain inference takes from an LDO's output
 #:   pin wherever it is — ``pwr-supply-on-known-domain``, ``pwr-domain-vs-range``,
-#:   ``path-ldo-dropout``.
+#:   ``path-ldo-dropout``, ``path-ldo-dissipation`` (092 A2b: the headroom it
+#:   squares against the declared current is a difference of two inferred rails,
+#:   exactly like ``path-ldo-dropout``'s).
 #:
 #: The two parameter rules joined the list in 076, and their absence before that
 #: was a **misreading of their own code**: they print one part's values, but both
@@ -121,6 +124,8 @@ NET_MEMBERSHIP_RULES: tuple[str, ...] = (
     "param-led-current",
     "param-rc-cutoff",
     "path-ldo-dropout",
+    "path-ldo-dissipation",
+    "pwr-cap-voltage-rating",
     "pwr-domain-vs-range",
     "pwr-supply-on-known-domain",
 )
