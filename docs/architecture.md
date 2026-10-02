@@ -177,6 +177,62 @@ and rotation conventions are *not* the same as `core.geometry.transform_point`'s
 is landed on (`lib.symbol.get` carries no geometry), which is the workflow
 `SKILL.md` §3.3 spells out.
 
+## Where design intent comes from (090 A1)
+
+The three contracts above say how a circuit is built, how it reads and where
+things go. None of them says *why*, and 052 measured what that costs: a rule that
+sees an MPN disagreeing with a Value has no way to know which side is right (17
+parts on one board had the wrong MPN and the right value), and the ROBOT ctrl FOC
+blind review passed a U-phase current chain that cannot close (a bidirectional
+phase current into a single-supply ADC with no bias). Both are questions about
+**intent**.
+
+`core/designintent.py` is the fourth contract — a `DesignIntent` document with
+three sections (`requirements` / `blocks` / `decisions`) plus `intentVersion`, in
+JSON, and it is deliberately **prior** to the other three: it is what a circuit is
+judged against, so it is written first and it is where a conflict is resolved. The
+four rules it holds to, each one because its absence was measured:
+
+* **the schema is closed and an optional field is not written when it says
+  nothing** — an unknown key is refused with its path named, and a slot with no
+  answer is *absent*, never empty (which slot exists is the drawing's answer, not
+  the file's);
+* **provenance rides on every entry** over the repo's one three-state
+  (`user_stated` > `verified_recipe` > `ai_asserted`, ranked in
+  `core/circuitspec.py` and shared with the drawing grammar's
+  `weakest_provenance`), with an unstated basis read as `ai_asserted` — a guess
+  must be visible as a guess (052 §4), and the document's own tier is its weakest
+  entry;
+* **the tool validates and asks, it never rewrites a judgement** — a rail with no
+  voltage declaration is reported as `intent-missing` (the wording `facts-missing`
+  already uses for a fact the compiler needed), and a bidirectional current-sense
+  signal with no closure declaration gets a hint, not a refusal (A3 turns that
+  into a rule);
+* **an answer once written is never lost** — regeneration
+  (`designintent.merge`) adds the slots the drawing now owes, marks a disappeared
+  object `stale`, and touches nothing else: every existing entry's bytes come back
+  identical, so a filled `targetVoltage: 3.3V` cannot come back as `TODO` (the
+  052 §2.2 accident, closed by construction).
+
+Two structural rules keep this from becoming a second opinion about the board:
+the enumeration of rails, chains and bus families is **`core/architecture.py`'s**
+(044 M1 / 053 §2.2 — the same one that renders `architecture.md`), and it is
+**`core`**, so it may not import `engines` (the layer table above). The contract
+lands at `~/.boardwise/design-intent/<projectUuid>.json` (`--intent PATH`
+overrides, `BOARDWISE_HOME` moves both with `config.json`); `checkup` and
+`boardwise arch` **read** it, and `boardwise arch --intent PATH` is the one place
+that writes/regenerates one — a run that was not asked never creates a file in a
+user's home.
+
+The report's `intent` section carries the totals, every owed slot and the
+`intent-missing` lines (*the slot, the file, the key to write*); `design-intent.md`
+keeps its name and becomes the contract's **rendered view** (`parse_intent` reads
+it as it always did, which is what keeps the 053 §2.2 channel and the contract
+from drifting). The exit code does **not** move for any of it: A1 only reports, and
+the schema id stays `/6` for the same reason — `intent` is a reading, not a gate
+(`CHECKUP_SCHEMA`'s comment states it). `docs/design-intent-channel.md` is the
+design document; `tests/test_090_design_intent.py` holds the discipline.
+
 ## Three coordinate spaces (v0.3, 2026-09-16; corrected 2026-09-18)
 
 Three spaces coexist and only two of them are ours to convert between. Getting

@@ -38,6 +38,7 @@ from .engines.checkup import (
     TRIGGER_MARKED,
     UNREVIEWED_DATASHEET_DIR,
     disambiguated_triage_keys,
+    intent_section,
     layout_review_section,
     marked_parts,
     merge_triage_sidecar,
@@ -444,6 +445,19 @@ def build_parser() -> argparse.ArgumentParser:
             "The curated shelf the facts-driven sections read (default: "
             "blocklib/parts.json). `未审器件` uses it to say which facts a part "
             "is missing, and whether the LCSC channel has a datasheet link."
+        ),
+    )
+    checkup.add_argument(
+        "--intent",
+        default="",
+        metavar="PATH",
+        help=(
+            "The DesignIntent contract to read (090 A1) — what the board is *for*: "
+            "rail voltages/currents, each chain's polarity and closure, the blocks "
+            "and the decisions behind them. Default: "
+            "~/.boardwise/design-intent/<projectUuid>.json when that file exists. "
+            "checkup only **reads** it (regeneration is `boardwise arch --intent`), "
+            "and the report's `intent` section names every slot it still owes."
         ),
     )
     aesthetics = checkup.add_mutually_exclusive_group()
@@ -1981,6 +1995,17 @@ def build_parser() -> argparse.ArgumentParser:
             "(default blocklib/parts.json)."
         ),
     )
+    arch.add_argument(
+        "--intent", default="", metavar="PATH",
+        help=(
+            "Read (or create) the DesignIntent contract at PATH and **regenerate** "
+            "it against this drawing (090 A1): the slots the project now owes are "
+            "added as TODO entries, every answer already in the file is preserved "
+            "byte for byte, an object that disappeared is marked `stale` and never "
+            "deleted. Also writes the human view `design-intent.md` beside --out. "
+            "Without this flag nothing is written outside --out."
+        ),
+    )
 
     settings = sub.add_parser(
         "config",
@@ -2928,6 +2953,7 @@ def _checkup_report(
     warning_triage: list[dict] | None = None,
     layout_review: dict | None = None,
     architecture: dict | None = None,
+    intent: dict | None = None,
     completion: dict | None = None,
 ) -> dict:
     """Assemble the report: what was read (batch 2), what was found (batch 3),
@@ -2995,6 +3021,22 @@ def _checkup_report(
     # says nothing here rather than carrying an empty one.
     if architecture is not None:
         body["architecture"] = architecture
+    # 090 A1: the DesignIntent contract's own section. Present whenever the
+    # enumeration it reports against is (`architecture`'s own condition), because
+    # a report whose skeleton could not be generated has no slot list to ask
+    # about — but a section that is *there* is always a complete statement.
+    #
+    # The schema id stays `/6` on purpose, and this is the deviation worth
+    # stating: 044/053/058 bumped it for a section that moved a gate or a
+    # meaning, and this one adds a **reading** — `intent` is absent from the
+    # verdict arithmetic (`completion`, `summary.mayClaimPassed` and the exit
+    # code are untouched, 090 §三), no existing field changes meaning, and a `/6`
+    # reader that iterates the keys it knows finds them all. Bumping it would
+    # have rewritten four existing assertions for a version number that tells
+    # them nothing; the next batch that lets the contract move a gate owns the
+    # bump.
+    if intent is not None:
+        body["intent"] = intent
     # 053 §2.2: the complete statement, always present (unlike `layout_review`,
     # which is a switch): the verdict is what a downstream reader should ask, and
     # "the section is missing" must never be how it learns there is nothing to say.
@@ -3074,6 +3116,60 @@ def _write_design_intent(out_dir: Path, markdown: str) -> Path | None:
     except FileExistsError:
         return None
     return path
+
+
+def _write_design_intent_view(out_dir: Path, markdown: str) -> Path:
+    """Write ``design-intent.md`` as the **contract's view** (090 A1).
+
+    Deliberately the opposite of :func:`_write_design_intent`'s create-once: once a
+    DesignIntent contract exists, the Markdown is not the file an engineer fills —
+    it is the human-readable rendering of the JSON, and it is rewritten every run
+    so the two can never disagree (its own banner says so). The 053 §2.2
+    create-once path stays for the projects that have no contract yet, which is why
+    both functions exist side by side.
+    """
+    from .core.architecture import INTENT_FILE_NAME
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / INTENT_FILE_NAME
+    path.write_text(markdown, encoding="utf-8")
+    return path
+
+
+def _load_intent_contract(
+    args: argparse.Namespace,
+    project_uuid: str,
+    notes: list[str],
+) -> tuple[object | None, Path | None, str]:
+    """``(contract, path, read_error)`` — the DesignIntent contract a run reads (090 A1).
+
+    Two places, one rule: `--intent PATH` is explicit (offline, a test, a second
+    profile) and the user-level default
+    (``~/.boardwise/design-intent/<projectUuid>.json``) is the live convention.
+    The default is read **only when it exists** — a `checkup` that silently
+    created files in a user's home on its first run would be a surprise, and
+    creating the first contract is `boardwise arch --intent`'s job.
+
+    Nothing here writes: reading is the whole contract of this function, and the
+    caller reports what it found. An unreadable file is a note and ``(None, path,
+    error)`` — never an overwrite, never a crash (053 §2.2's discipline).
+    """
+    from .core import designintent as di
+
+    explicit = str(getattr(args, "intent", "") or "")
+    path = Path(explicit) if explicit else di.default_contract_path(project_uuid)
+    if not path.is_file():
+        if explicit:
+            notes.append(
+                f"设计意图合同 {path} 不存在：本次按全 TODO 报告（首次生成用 "
+                f"`boardwise arch {getattr(args, 'file', '') or '<export>'} --intent {path}`）"
+            )
+        return None, path, ""
+    try:
+        return di.DesignIntent.load(path), path, ""
+    except di.DesignIntentError as exc:
+        notes.append(f"设计意图合同读不了（{exc}）：本次按全 TODO 报告，文件一个字没动")
+        return None, path, str(exc)
 
 
 def _clean_coverage() -> dict:
@@ -4594,18 +4690,104 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
     # design intent beside the report is read (never written here) and merged in;
     # a slot whose object moved under a recorded answer comes back `stale`.
     from .core.architecture import generate_architecture
+    from .core import designintent as intent_contract
 
-    intent_text = _load_design_intent(out_dir, notes)
-    architecture = None
+    project_uuid = (source.get("project") or {}).get("projectUuid") or ""
+    # The enumeration comes first, and it comes from **one** call: which rails,
+    # chains and bus families exist (and which keys each owes) is the drawing's
+    # answer, and both the skeleton and the intent section are built from it
+    # (090 §一: reuse the enumeration, do not write a second one).
+    enumeration = None
     try:
-        architecture = generate_architecture(
-            model,
-            library=shelf,
-            intent_text=intent_text,
-            project_uuid=(source.get("project") or {}).get("projectUuid") or "",
+        enumeration = generate_architecture(
+            model, library=shelf, project_uuid=project_uuid
         )
     except Exception as exc:  # noqa: BLE001 - a report must still be written
-        notes.append(f"架构骨架生成失败（{type(exc).__name__}: {exc}）：report.json 无 architecture 键")
+        notes.append(
+            f"架构骨架生成失败（{type(exc).__name__}: {exc}）："
+            "report.json 无 architecture / intent 键"
+        )
+    # 090 A1: the DesignIntent contract — read, never written here (regenerating
+    # one is `boardwise arch --intent`). Its location defaults under the
+    # projectUuid the *enumeration* resolved to (offline that is the file digest,
+    # which `doc.list` supersedes in the live tiers), so the same export always
+    # lands in the same file.
+    contract: object | None = None
+    contract_path: Path | None = None
+    contract_error = ""
+    intent_facts: dict = {}
+    intent_view = ""
+    enumerated_uuid = project_uuid
+    if enumeration is not None:
+        enumerated_uuid = str(
+            (enumeration.section.get("intent") or {}).get("projectUuid") or project_uuid
+        )
+        contract, contract_path, contract_error = _load_intent_contract(
+            args, enumerated_uuid, notes
+        )
+        if contract is not None:
+            try:
+                merged, intent_facts = intent_contract.merge(
+                    contract, enumeration.section["slots"]
+                )
+                # The contract's own view becomes the text the generator merges,
+                # so `architecture` and `intent` cannot disagree about an answer.
+                intent_view = intent_contract.render_markdown(
+                    merged,
+                    enumeration.section["slots"],
+                    contract_file=str(contract_path or ""),
+                )
+            except Exception as exc:  # noqa: BLE001 - a report must still be written
+                notes.append(
+                    f"设计意图合同合并失败（{type(exc).__name__}: {exc}）："
+                    "report.json 的 intent 节按枚举出的槽位报告"
+                )
+                contract, contract_error = None, str(exc)
+                intent_facts, intent_view = {}, ""
+    intent_text = intent_view or _load_design_intent(out_dir, notes)
+    architecture = enumeration
+    # The second call only when there is an intent text the first one did not
+    # have (the contract's view, or the 053 §2.2 Markdown) — otherwise the
+    # enumeration *is* the result, and re-running a pure function would only cost.
+    if enumeration is None or intent_text is not None:
+        try:
+            architecture = generate_architecture(
+                model,
+                library=shelf,
+                intent_text=intent_text,
+                project_uuid=project_uuid,
+            )
+        except Exception as exc:  # noqa: BLE001 - a report must still be written
+            if enumeration is None:
+                notes.append(
+                    f"架构骨架生成失败（{type(exc).__name__}: {exc}）："
+                    "report.json 无 architecture 键"
+                )
+            architecture = enumeration
+    # The intent section reports the contract against the enumeration the
+    # skeleton was built from — one enumeration, two views.
+    intent_report = None
+    if architecture is not None:
+        if not intent_facts:
+            try:
+                _, intent_facts = intent_contract.merge(
+                    contract or intent_contract.DesignIntent(),
+                    architecture.section["slots"],
+                )
+            except Exception:  # noqa: BLE001 - the section reports what it has
+                intent_facts = {}
+        intent_report = intent_section(
+            facts=intent_facts,
+            contract_file=str(contract_path or ""),
+            present=contract is not None,
+            read_error=contract_error,
+            regenerate=(
+                f"boardwise arch {getattr(args, 'file', '') or '<export>'} "
+                f"--intent {contract_path}"
+            ),
+            project_uuid=enumerated_uuid,
+            contract_version=intent_contract.INTENT_VERSION,
+        )
     aesthetics_on, aesthetics_source = _checkup_aesthetics(args)
     slots = {
         # The v2 name kept as an alias of the promoted section: same list, one
@@ -4679,6 +4861,7 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
             else None
         ),
         architecture=architecture_section,
+        intent=intent_report,
         completion=completion,
     )
     report_path = _write_checkup_report(out_dir, report)
@@ -4688,16 +4871,38 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         if architecture is not None
         else None
     )
-    # 053 §2.2: created once, never rewritten. `_write_design_intent` returns None
-    # when an engineer's file is already there — that None is the whole feature.
-    intent_path = (
-        _write_design_intent(out_dir, architecture.intent_markdown)
-        if architecture is not None and architecture.intent_markdown
-        else None
-    )
+    # 090 A1: with a contract in hand the Markdown is its **view** (JSON is the
+    # source) and is rewritten every run; without one, 053 §2.2's create-once
+    # template is what happens — `_write_design_intent` returns None when an
+    # engineer's file is already there, and that None is the whole feature.
+    intent_path = None
+    if intent_view:
+        from .core.architecture import parse_intent
+
+        stale_md = _load_design_intent(out_dir, notes)
+        _write_design_intent_view(out_dir, intent_view)
+        filled_md = [
+            record for record in parse_intent(stale_md or "").values() if record["value"]
+        ]
+        if filled_md:
+            # Never silently discarded: the contract is the source, so the old
+            # hand-filled Markdown is gone from this file — say so instead of
+            # letting an answer disappear without a word (053 §2.2's spirit).
+            notes.append(
+                f"design-intent.md 里有 {len(filled_md)} 条已填答案：本次已按设计意图合同"
+                f"（{contract_path}）重渲染该文件——合同是源，要保留就把这些答案搬进合同"
+            )
+    elif architecture is not None and architecture.intent_markdown:
+        intent_path = _write_design_intent(out_dir, architecture.intent_markdown)
     if architecture is not None:
         counts = architecture.section["totals"]
-        if architecture.intent_present:
+        if intent_view:
+            notes.append(
+                f"设计意图：合同 {contract_path}（读入并合并且人类视图按它重渲染）——"
+                f"槽位 {counts['slots']} / 已填 {counts['filled']}；"
+                f"合同自己的读数见 report.json 的 intent 节"
+            )
+        elif architecture.intent_present:
             notes.append(
                 f"设计意图：读 {intent_path or (out_dir / 'design-intent.md')}——"
                 f"{counts['filled']}/{counts['slots']} 槽已填，{counts['stale']} 槽图纸已变"
@@ -4798,7 +5003,32 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         print(
             f"  design-intent: {out_dir / 'design-intent.md'}"
             + ("（本次新建，全 TODO 模板）" if intent_path is not None
+               else "（契约是源，已按契约重渲染）" if intent_view
                else "（已存在：只读合并，一字未改）")
+        )
+    # 090 A1: the fourth contract's own line — what it answers, what it owes, and
+    # where the missing required slots go. The exit code does **not** move for any
+    # of it (090 §三: A1 only reports; the rating is A2/A3's).
+    if intent_report is not None:
+        intent_totals = intent_report["totals"]
+        contract_row = intent_report["contract"]
+        print(
+            f"  intent: {contract_row['file']}"
+            + ("（读入）" if contract_row["present"] else "（**不存在**：本次按全 TODO 报）")
+            + f" —— 槽位 {intent_totals['slots']} / 已填 {intent_totals['filled']}"
+            f" / 缺 {intent_totals['missing']}（必填缺 {intent_totals['requiredMissing']}）"
+            + f"；provenance {intent_report['provenance'] or '（无条目）'}"
+            + ("（草稿）" if intent_report["draft"] else "")
+        )
+        for line in intent_report["intentMissing"][:4]:
+            print(f"    {line}")
+        if intent_totals["requiredMissing"] > 4:
+            print(f"    （另有 {intent_totals['requiredMissing'] - 4} 条 intent-missing，见 report.md）")
+        for hint in intent_report["hints"]:
+            print(f"    {hint['line']}")
+        print(
+            "    重生成契约："
+            + (contract_row["regenerate"] or "boardwise arch <export> --intent <path>")
         )
     print(f"  completion: {report['completion']['verdict']}"
           + ("（" + "；".join(report["completion"]["verdictWhy"]) + "）"
@@ -10956,6 +11186,14 @@ def _cmd_arch(args: argparse.Namespace) -> int:
     With ``--out PATH`` it keeps the pair the way ``checkup`` does: the skeleton
     at ``PATH`` (overwritten — it is generated) and ``design-intent.md`` beside it
     (created only if absent, else read and merged, never rewritten).
+
+    With ``--intent PATH`` (090 A1) the fourth contract is what is read,
+    **regenerated** (:func:`boardwise.core.designintent.merge`) and written back:
+    the slots the project now owes are added as TODO entries, every answer already
+    in the file survives byte for byte, and an object the drawing no longer has is
+    marked `stale` rather than deleted. The `design-intent.md` view is then
+    rendered **from the contract** (JSON is the source), so the two halves of the
+    channel cannot disagree.
     """
     from boardwise.core.architecture import generate_architecture
 
@@ -10973,20 +11211,36 @@ def _cmd_arch(args: argparse.Namespace) -> int:
     if note:
         print(f"note: {note}", file=sys.stderr)
     notes: list[str] = []
-    if args.out:
-        out_path = Path(args.out)
+    out_path = Path(args.out) if args.out else None
+    if out_path is not None:
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        intent_text = _load_design_intent(out_path.parent, notes)
-    else:
-        out_path = None
-        intent_text = None
+    contract_path = Path(args.intent) if getattr(args, "intent", "") else None
+    contract: object | None = None
+    regen: dict | None = None
+    md_view = ""
+    if contract_path is not None:
+        # The enumeration comes first, because the contract is read *against* it
+        # (which slots exist is the drawing's answer, never the file's).
+        enumeration = generate_architecture(model, library=library).section["slots"]
+        contract, regen, md_view = _regenerate_intent(
+            contract_path, enumeration, notes=notes
+        )
+    intent_text = md_view or (
+        _load_design_intent(out_path.parent, notes) if out_path is not None else None
+    )
     result = generate_architecture(model, library=library, intent_text=intent_text)
     totals = result.section["totals"]
     for item in notes:
         print(f"note: {item}", file=sys.stderr)
     if out_path is not None:
         out_path.write_text(result.markdown, encoding="utf-8")
-        intent_path = _write_design_intent(out_path.parent, result.intent_markdown)
+        if md_view:
+            # The contract is the source, so this file is a view and is rewritten
+            # every run (the no-contract path below keeps 053 §2.2's create-once).
+            _write_design_intent_view(out_path.parent, md_view)
+            intent_path = None
+        else:
+            intent_path = _write_design_intent(out_path.parent, result.intent_markdown)
         print(f"architecture: {out_path}")
         print(
             f"  {len(result.section['boards'])} 板 / {totals['rails']} 轨 / "
@@ -10997,11 +11251,76 @@ def _cmd_arch(args: argparse.Namespace) -> int:
         print(
             f"design-intent: {out_path.parent / 'design-intent.md'}"
             + ("（本次新建，全 TODO 模板）" if intent_path is not None
+               else "（契约是源，已按契约重渲染）" if md_view
                else "（已存在：只读合并，一字未改）")
         )
     else:
         print(result.markdown, end="")
+        if md_view:
+            print(
+                f"note: 契约已重生成（{contract_path}）；人类可读视图要 `--out PATH` "
+                "落在 PATH 旁",
+                file=sys.stderr,
+            )
+    if regen is not None and contract_path is not None:
+        _print_contract_regeneration(contract_path, regen)
     return 0
+
+
+def _regenerate_intent(
+    contract_path: Path, slots: list[dict], *, notes: list[str]
+) -> tuple[object, dict, str]:
+    """Read, merge and write the contract back — the ``arch --intent`` half (090 A1).
+
+    Returns ``(contract, facts, markdown_view)``. A path that does not exist yet is
+    the **first generation**: an empty document against the enumeration, written
+    all-TODO (which is what makes ``--intent`` the one place a contract is
+    created — a run that was not asked to regenerate never writes outside its own
+    output directory).
+
+    An unreadable file is a *note* and a document built from the enumeration
+    alone, and — deliberately — **the file is not written**: a contract this build
+    cannot parse is not one it may overwrite (053 §2.2's discipline, one contract
+    further along).
+    """
+    from boardwise.core import designintent as di
+
+    existed = contract_path.is_file()
+    document = di.DesignIntent()
+    if existed:
+        try:
+            document = di.DesignIntent.load(contract_path)
+        except di.DesignIntentError as exc:
+            notes.append(
+                f"设计意图合同读不了（{exc}）：本次按全 TODO 出，文件一个字没动"
+            )
+            facts = di.validate(document, slots)
+            return document, facts, ""
+    merged, facts = di.merge(document, slots)
+    text = di.render_json(merged)
+    if existed and not facts["added"] and not facts["stale"]:
+        notes.append(f"设计意图合同已是最新（{contract_path}）：一字未改")
+    else:
+        try:
+            contract_path.parent.mkdir(parents=True, exist_ok=True)
+            contract_path.write_text(text, encoding="utf-8")
+        except OSError as exc:
+            notes.append(f"设计意图合同写不进去（{exc}）：本次只在报告里给出槽位")
+    view = di.render_markdown(merged, slots, contract_file=str(contract_path))
+    return merged, facts, view
+
+
+def _print_contract_regeneration(contract_path: Path, facts: dict) -> None:
+    """What the regeneration did, in one line a human can check (090 §二)."""
+    print(f"intent contract: {contract_path}")
+    print(
+        f"  槽位 {facts['slots']} / 已填 {facts['filled']} / 缺 {facts['missingCount']}"
+        f"（必填缺 {facts['requiredMissingCount']}）"
+        + (f"；本次新增 TODO 条目 {len(facts['added'])}" if facts["added"] else "")
+        + (f"；标 stale {len(facts['stale'])}（不删）" if facts["stale"] else "")
+        + f"；provenance {facts['provenance'] or '（无条目）'}"
+        + ("（草稿）" if facts["draft"] else "")
+    )
 
 
 def _cmd_config_get(args: argparse.Namespace) -> int:

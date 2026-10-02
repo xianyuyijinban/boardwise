@@ -54,6 +54,7 @@ __all__ = [
     "PROVENANCE_AI",
     "PROVENANCE_ENGINEER",
     "PROVENANCE_KINDS",
+    "PROVENANCE_USER_STATED",
     "PROVENANCE_VERIFIED",
     "CircuitSpec",
     "CircuitSpecError",
@@ -62,6 +63,7 @@ __all__ = [
     "SpecOpenInterface",
     "SpecPart",
     "spec_sha256",
+    "weakest_provenance",
 ]
 
 #: Identifies the document, the way `blocklib` templates and the port-metadata
@@ -100,10 +102,26 @@ PROVENANCE_KINDS: tuple[str, ...] = (
     PROVENANCE_AI,
 )
 
+#: The engineer tier's spelling in the DesignIntent channel (090 A1): the same
+#: tier as :data:`PROVENANCE_ENGINEER`, named for *who* stated the fact — the
+#: user. It is a **rank in the table below**, not a fourth tier, so the weakest
+#: rule ranks it like every other fact; and it is deliberately **not** in
+#: :data:`PROVENANCE_KINDS`, so this contract's own schema does not change shape
+#: (a `CircuitSpec` still cannot spell it).
+PROVENANCE_USER_STATED = "user_stated"
+
 #: Weakest first: a merged fact is only as good as its weakest part, so a net
 #: built from a verified recipe and an AI guess is an AI guess. Absence ("" ) is
-#: weaker than all three.
-_PROVENANCE_RANK = {PROVENANCE_AI: 0, PROVENANCE_ENGINEER: 1, PROVENANCE_VERIFIED: 2}
+#: weaker than all three. One table for the whole repo: the drawing grammar's
+#: `weakest_provenance` (`engines/grammar/base.py`) and the DesignIntent
+#: contract's are the same ordering, which is only true as long as there is a
+#: single place that says what the order is.
+_PROVENANCE_RANK = {
+    PROVENANCE_AI: 0,
+    PROVENANCE_ENGINEER: 1,
+    PROVENANCE_USER_STATED: 1,
+    PROVENANCE_VERIFIED: 2,
+}
 
 #: What an open interface's `direction` may say — the same vocabulary
 #: `PresentationSpec.portRoles` uses. Defined once, here, because the two must
@@ -836,6 +854,23 @@ def _weakest_first(values: Iterable[str]) -> str | None:
     for value in values:
         out = value if out is None else _weaker(out, value)
     return out
+
+
+def weakest_provenance(*values: str) -> str:
+    """The weakest of these labels, as a token — the one ranking rule, published.
+
+    052 sec.4: a claim is only as good as its weakest fact, so a fold of a
+    `verified_recipe` and an `ai_asserted` fact is an `ai_asserted` one. The
+    spelling `""` is the weakest of all (the fact said nothing), and with no
+    facts at all the answer is `""` too — "nothing was stated" is not the same
+    claim as "confirmed".
+
+    Published rather than private because the DesignIntent contract
+    (`core/designintent.py`, 090 A1) ranks its entries with it: a contract whose
+    worst entry is an AI guess is a draft for the same reason a spec is, and two
+    implementations of "which token is weaker" would eventually disagree.
+    """
+    return _weakest_first(values) or ""
 
 
 def _provenance(value: Any, where: str) -> str:
