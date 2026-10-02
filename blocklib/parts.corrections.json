@@ -1049,6 +1049,36 @@
         }
       },
       "note": ""
+    },
+    {
+      "lcsc": "C92482",
+      "fields": {
+        "category": "ic.motor-driver",
+        "facts": {
+          "required_caps": [
+            {
+              "pin": "4",
+              "value": "0.1uF",
+              "provenance": "DRV8313 datasheet (TI SLVSBA5C), p.3 pin table (VM pin 4: 'Power supply. Connect to motor supply voltage; bypass to GND with two 0.1 uF (for each pin) plus one bulk capacitor rated for VM'; the table was read as the SLVSBA5C text, per the F4 record in outputs/ctrlfoc_20261001/review-findings.md), https://www.ti.com/lit/ds/symlink/drv8313.pdf"
+            },
+            {
+              "pin": "11",
+              "value": "0.1uF",
+              "provenance": "DRV8313 datasheet (TI SLVSBA5C), p.3 pin table (VM pin 11: the same 0.1 uF per-pin bypass as pin 4; two VM pins, two capacitors), https://www.ti.com/lit/ds/symlink/drv8313.pdf"
+            }
+          ],
+          "pull_required": [
+            {
+              "pin": "18",
+              "to": "VCC",
+              "expected_value": "10k",
+              "open_drain": true,
+              "provenance": "DRV8313 datasheet (TI SLVSBA5C), p.3 pin table (nFAULT pin 18, 'OD': 'Fault indication pin. Pulled logic-low with fault condition; open-drain output requires an external pullup'), https://www.ti.com/lit/ds/symlink/drv8313.pdf -- the datasheet states no value for the pull-up; '10k' is the value this shelf records for a logic-rail pull-up, and arch-opendrain-pullup judges presence, not the number"
+            }
+          ]
+        }
+      },
+      "note": "facts curated 2026-10-02 (093 A3a, issue #56 data side). Two claims from the DRV8313 pin table, p.3: nFAULT (pin 18) is an open-drain output that requires an external pull-up (F2: the ctrl FOC board has none, so the driver's only remaining fault path is unreadable), and each VM pin (4, 11) needs its own 0.1 uF bypass (F4: the board has three 10 uF bulk capacitors and no 0.1 uF on +12V). The VM rows feed `decap-required-caps` and the nFAULT row drives `arch-opendrain-pullup`; the IC_PATTERN widening that would put DRV1 through every facts rule is deliberately not part of 093 A3a."
     }
   ]
 }

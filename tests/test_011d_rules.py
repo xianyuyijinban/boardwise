@@ -1774,8 +1774,10 @@ def test_decoupling_per_ic_is_retired_from_the_builtin_rules():
     ids = [rule.id for rule in BUILTIN_RULES]
     assert "decoupling-per-ic" not in ids
     # 16 since 092 A2b added the two rail-rating rules (`pwr-cap-voltage-rating`,
-    # `path-ldo-dissipation`); the id that was retired here is still retired.
-    assert len(ids) == 16
+    # `path-ldo-dissipation`), 19 since 093 A3a added the three architecture
+    # closure rules (`arch-rail-voltage-clash`, `arch-opendrain-pullup`,
+    # `arch-nrst-closure`); the id that was retired here is still retired.
+    assert len(ids) == 19
     # Retirement is not deletion: the rule is still importable, still its own
     # id, still runnable on its own (its own tests stay in test_rules.py).
     assert DecouplingPerIC().id == "decoupling-per-ic"

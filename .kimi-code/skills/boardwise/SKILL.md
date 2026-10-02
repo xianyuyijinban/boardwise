@@ -187,6 +187,21 @@ checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起
   工程师或模型，工具不代填。**092 A2b 起合同还进规则走查**（不只是报告的一节）：
   `rails[].targetVoltage` 喂 `pwr-cap-voltage-rating`，输出轨的 `continuousCurrent` 喂
   `path-ldo-dissipation`——它们的 finding 与 intent 节是两条独立出口，见 §3.2 的细则。
+- **093 A3a 起 intent 进评级**（A1 以来第一次口径变化，`rules/archclosure.py` 的模块
+  docstring 是权威表）：
+
+  | 情况 | 级别 |
+  |---|---|
+  | 违反 `user_stated`（工程师自己声明的架构被图纸违反） | **ERROR**（`apply` 必拦，`--force` 不豁免） |
+  | 违反 `verified_recipe` / `ai_asserted`（草稿不一致） | **WARN**（草稿行带「确认前不要照改」，052 §4） |
+  | 无合同 | 不查，零移动（读数逐字节不变） |
+  | 结构性闭合（开漏上拉、NRST，不依赖合同） | 违反 **WARN** / 闭合 **INFO 测量行** |
+
+  三条规则：`arch-rail-voltage-clash`（合同的 `targetVoltage` vs 图上判定，两个来源的原始值都
+  进消息，谁错人裁）、`arch-opendrain-pullup`（货架 `pull_required` 标了 `open_drain` 的脚——
+  网成员里有电阻跨到 power-class 轨即闭合；合同 `decisions[]` 里 `user_stated` 的「用 MCU 内部
+  上拉」也算，F2 nFAULT 案）、`arch-nrst-closure`（控制器 NRST 脚单成员网 = 裸奔，F3 案）。
+  详见 §3.2 的一段。
 
 每个槽一个**稳定 ID**：`<projectUuid>/<boardUuid>/<sectionKey>/<slotKey>`（`sectionKey` =
 `<节>:<对象>`，节 = power/analog/control/bus/intent）。行内格式：`| 稳定 ID | 槽位 | 值 | 来源 | sig= |`，
@@ -280,7 +295,16 @@ checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起
   读不出 = UNKNOWN 并点名 `C? 的耐压（所在轨 +12V=12V）`），`path-ldo-dissipation`
   报「压差 8.7 V + P=(Vin−Vout)×I」（电流没声明 = `intent-missing` 点名
   `requirements.rails[net=…].continuousCurrent`；货架声明 `ldo.max_dissipation_mw` 才判超限）。
-  两条都**不发明降额系数**：测量行永远出，判决只看两个数。）*
+  两条都**不发明降额系数**：测量行永远出，判决只看两个数。
+  **093 A3a 起 intent 进评级**（A1 以来第一次口径变化）：合同的 provenance 决定严重度——
+  违反 `user_stated` = **ERROR**、违反 `verified_recipe`/`ai_asserted` = **WARN**、无合同不查。
+  三条架构自洽规则进 `BUILTIN_RULES`：`arch-rail-voltage-clash`（合同的 `rails[].targetVoltage`
+  vs 图上自己的判定，**两个来源的原始字段与值都进消息，谁错人裁**）、`arch-opendrain-pullup`
+  （货架 `pull_required` 标 `open_drain` 的脚没电阻跨到 power-class 轨 = WARN；合同
+  `decisions[]` 里 `user_stated` 的「用 MCU 内部上拉」算闭合——F2 nFAULT 案）、
+  `arch-nrst-closure`（控制器 NRST 脚单成员网 = 裸奔 WARN——F3 案）。**apply 闸**：ERROR 必拦，
+  `--force` 只豁免 WARN（#55 裁决 B）；注意 apply 的走查今天**不带合同**，所以到得了那道闸的
+  是 R2/R3 的结构性 WARN，合同驱动的 R1 ERROR 要等合同接进 apply 那一批。）*
   `--file` 路径**只有 `param-value-mpn-match`（单器件值）可修**，别的规则按名字拒绝
   （029 补器件、035 修脚都走 `--report` 路径，见下条）。`apply` 四道保护：
   写前重读页面 → 只写一个键 → 独立 geometry 回读 → save + 复查；重复执行认 `already_applied` 零写入。

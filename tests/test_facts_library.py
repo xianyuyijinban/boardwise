@@ -234,6 +234,10 @@ def test_the_committed_library_is_v2_with_its_curated_fact_entries():
     # REF2033AIDDCR). REF2033 came through one round **gated** (`facts_verified:
     # false`, because the decap rule misread its board); 039 批①b fixed the rule
     # and flipped it, so the category list and the facts list agree again.
+    # 093 A3a added one more: the DRV8313PWPR (issue #56's data side -- an
+    # `ic.motor-driver` category, the nFAULT open-drain pull requirement and one
+    # 0.1uF VM bypass per supply pin), curated through the sidecar so the shelf
+    # stays a function of sources + corrections.
     #
     # ``ic.ams1117_3_3`` is spelled ``ic.ams1117_3_3.c6186`` since 042's
     # re-harvest: the shelf now holds that listing *and* ``.c369933`` — two LCSC
@@ -244,8 +248,9 @@ def test_the_committed_library_is_v2_with_its_curated_fact_entries():
     assert with_facts == [
         "conn.type_c_16pin_2md_073", "ic.ams1117_3_3.c369933",
         "ic.ams1117_3_3.c6186", "ic.ch340g",
-        "ic.ch340n", "ic.mpu_6050", "ic.ref2033aiddcr", "ic.rt9013_33gb",
-        "ic.sn65hvd230dr", "ic.tlv9062idr", "led.emerald_green_0603",
+        "ic.ch340n", "ic.drv8313pwpr", "ic.mpu_6050", "ic.ref2033aiddcr",
+        "ic.rt9013_33gb", "ic.sn65hvd230dr", "ic.tlv9062idr",
+        "led.emerald_green_0603",
     ]
     assert with_category == with_facts
     # The two harvested entries gained keys; the 90 others are untouched.

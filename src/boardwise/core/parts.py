@@ -54,10 +54,18 @@ SCHEMA_VERSION = 2
 #: "category starts with ic", so a part that is an IC could not be judged at all
 #: while its class had no word here — leaving it as "no category" would have made
 #: a curated entry read as unclassified, which is the one thing it is not.
+#:
+#: Extended in 093 A3a by `ic.motor-driver` (DRV8313PWPR): the part that raised
+#: issue #56's data gap is a gate driver with integrated FETs, and the closest
+#: words the table had (`module`, `ic.sensor`) would each have said something
+#: false about it. Extending the table is this project's documented way to
+#: classify a new class of part ("a decision, not a silent fallback") — the
+#: category is what a rule reads before deciding whether it speaks.
 CATEGORY_VOCABULARY = frozenset({
     "resistor", "capacitor", "inductor", "led", "diode", "connector",
     "crystal", "ic.ldo", "ic.usb-uart", "ic.mcu", "ic.charger",
     "ic.transceiver", "ic.opamp", "ic.reference", "ic.sensor",
+    "ic.motor-driver",
     "buzzer", "switch", "module",
 })
 
@@ -851,15 +859,37 @@ def _facts_from_json(raw: Any, where: str) -> dict[str, Any]:
         checked = []
         for i, entry in enumerate(entries):
             spot = f"{where}.pull_required[{i}]"
-            _check_keys(entry, ("pin", "to", "expected_value", "provenance"), spot)
-            checked.append({
+            _check_keys(
+                entry,
+                ("pin", "to", "expected_value", "provenance", "open_drain"),
+                spot,
+            )
+            record: dict[str, Any] = {
                 "pin": _fact_pin(entry.get("pin"), f"{spot}.pin"),
                 "to": _require_nonempty(entry.get("to"), f"{spot}.to"),
                 "expected_value": _require_nonempty(
                     entry.get("expected_value"), f"{spot}.expected_value"
                 ),
                 "provenance": _fact_provenance(entry.get("provenance"), f"{spot}.provenance"),
-            })
+            }
+            # Optional (093 A3a): the marker that says *which way* this pull goes.
+            # A connector's CC pin needs a pull-**down** to ground
+            # (`conn-usb-cc-pulldown` judges it); an open-drain output needs a
+            # pull-**up** to a rail, which is `arch-opendrain-pullup`'s subject.
+            # The two are one fact kind and opposite requirements, so the marker
+            # is what keeps the two rules from judging each other's parts. It is
+            # written only when true: absent means "a pull record that is not an
+            # open-drain output's", which is every record written before this key
+            # existed and must stay byte-identical.
+            if "open_drain" in entry:
+                marker = entry["open_drain"]
+                if not isinstance(marker, bool):
+                    raise PartError(
+                        f"{spot}.open_drain: expected true/false, got {marker!r}"
+                    )
+                if marker:
+                    record["open_drain"] = True
+            checked.append(record)
         facts["pull_required"] = checked
 
     if "led" in raw:

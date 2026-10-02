@@ -76,14 +76,19 @@ UNPROVEN_BY_NAME = "agreement by name is not a verified connection"
 #:   ``conn-usb-cc-pulldown`` (a resistor), ``param-divider-output`` (a load),
 #:   ``param-led-current`` (the LED's series resistance), ``param-rc-cutoff``
 #:   (the resistor's partner capacitor), ``pwr-cap-voltage-rating`` (the
-#:   capacitors on a declared rail — 092 A2b);
+#:   capacitors on a declared rail — 092 A2b), ``arch-opendrain-pullup`` (the
+#:   pull-up resistor an open-drain output needs — 093 A3a);
 #: * the pin's **company** — ``conn-nc-and-must-connect`` ("alone on this net" and
-#:   "shares it with another pin" are the same reading, one netlist over);
+#:   "shares it with another pin" are the same reading, one netlist over), and
+#:   ``arch-nrst-closure``, whose whole judgement is "is this reset pin alone on
+#:   its net" (093 A3a: a count of 1 is the F3 shape, more than 1 is the closure);
 #: * the net's **voltage**, which the domain inference takes from an LDO's output
 #:   pin wherever it is — ``pwr-supply-on-known-domain``, ``pwr-domain-vs-range``,
 #:   ``path-ldo-dropout``, ``path-ldo-dissipation`` (092 A2b: the headroom it
 #:   squares against the declared current is a difference of two inferred rails,
-#:   exactly like ``path-ldo-dropout``'s).
+#:   exactly like ``path-ldo-dropout``'s), and ``arch-rail-voltage-clash`` (093
+#:   A3a: one side of the clash *is* that inference, and a rail priced through an
+#:   LDO on the page next door is not this board's rail).
 #:
 #: The two parameter rules joined the list in 076, and their absence before that
 #: was a **misreading of their own code**: they print one part's values, but both
@@ -128,6 +133,9 @@ NET_MEMBERSHIP_RULES: tuple[str, ...] = (
     "pwr-cap-voltage-rating",
     "pwr-domain-vs-range",
     "pwr-supply-on-known-domain",
+    "arch-nrst-closure",
+    "arch-opendrain-pullup",
+    "arch-rail-voltage-clash",
 )
 
 

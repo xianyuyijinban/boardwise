@@ -10,6 +10,11 @@ from typing import Any
 from ..core.designintent import IntentSource
 from ..core.model import DesignModel
 from ..core.parts import DESIGNATOR_CATEGORIES
+from ..rules.archclosure import (
+    ArchRailVoltageClash,
+    NrstClosure,
+    OpenDrainPullup,
+)
 from ..rules.base import SEVERITY_ORDER, Finding, Rule
 from ..rules.connectivity import (
     CrystalLoadCaps,
@@ -60,6 +65,9 @@ BUILTIN_RULES: list[Rule] = [
     UsbCcPulldown(),
     CapVoltageRating(),
     LdoDissipation(),
+    ArchRailVoltageClash(),
+    OpenDrainPullup(),
+    NrstClosure(),
 ]
 
 #: The rules that read a **DesignIntent** (091 A2a), by class. It is a table
@@ -70,10 +78,19 @@ BUILTIN_RULES: list[Rule] = [
 #: `requirements.rails[]` (a rail's `targetVoltage`, an output rail's
 #: `continuousCurrent`), so without one they have no subject at all and file
 #: nothing — which is what keeps a reading that names no intent unchanged.
+#:
+#: 093 A3a added two more carriers: `arch-rail-voltage-clash` is *driven* by the
+#: same `requirements.rails[].targetVoltage` (and by its provenance, which now
+#: decides the severity — the first time an intent moves a grade), and
+#: `arch-opendrain-pullup` reads `decisions[]` for the one closure a drawing
+#: cannot show (a pull-up the firmware enables). `arch-nrst-closure` is not here:
+#: the shelf and the netlist are its whole subject.
 INTENT_RULES: tuple[type[Rule], ...] = (
     ValueMpnMatch,
     CapVoltageRating,
     LdoDissipation,
+    ArchRailVoltageClash,
+    OpenDrainPullup,
 )
 
 

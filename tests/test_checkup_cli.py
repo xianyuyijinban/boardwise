@@ -1048,6 +1048,58 @@ def _registry_case(rule_id: str):
         model.unproven_nets = {name: (PAGE_1, PAGE_2) for name in model.nets}
         return model
 
+    if rule_id == "arch-rail-voltage-clash":
+        # 093 A3a: one side of the clash is the **drawing's** own net-voltage
+        # inference, and that inference can be taken from a regulator's output
+        # pin on a page that only shares the net's name.
+        from boardwise.core.designintent import DesignIntent, IntentRail, IntentSource
+        from boardwise.rules.archclosure import ArchRailVoltageClash
+
+        contract = IntentSource(
+            document=DesignIntent(rails=[
+                IntentRail(net="+5V", slots={"targetVoltage": "12V"}),
+            ]),
+            path="mem://issue-19/clash.intent.json",
+        )
+        return ArchRailVoltageClash(
+            library=PartLibrary(parts=[]), intent=contract
+        ), model_of(
+            {"U9": _part("U9", mpn="LOAD1", pins=[("1", "+5V")])},
+            {"+5V": [("U9", "1")]},
+        )
+    if rule_id == "arch-opendrain-pullup":
+        # 093 A3a: "a resistor pulls this net up" is read from the net's members.
+        from boardwise.rules.archclosure import OpenDrainPullup
+
+        entry = PartEntry(
+            key="ic.opendrain", mpn="DRVX", lcsc="C1", category="ic.motor-driver",
+            facts={"pull_required": [{
+                "pin": "18", "to": "VCC", "expected_value": "10k",
+                "open_drain": True, "provenance": PROV,
+            }]},
+        )
+        return OpenDrainPullup(library=PartLibrary(parts=[entry])), model_of(
+            {"DRV1": _part("DRV1", mpn="DRVX", pins=[("18", "NFAULT")])},
+            {"NFAULT": [("DRV1", "18")]},
+        )
+    if rule_id == "arch-nrst-closure":
+        # 093 A3a: "is this reset pin alone on its net" is a count of members.
+        from boardwise.core.model import Component, Pin
+        from boardwise.rules.archclosure import NrstClosure
+
+        mcu = Component(
+            uid="u-U1", designator="U1", mpn="STM32X",
+            pins=[
+                Pin("7", "PG10-NRST", "NRST"),
+                Pin("12", "PA0", None),
+                Pin("13", "PA1", None),
+                Pin("14", "PA2", None),
+                Pin("15", "PA3", None),
+            ],
+        )
+        return NrstClosure(library=PartLibrary(parts=[])), model_of(
+            {"U1": mcu}, {"NRST": [("U1", "7")]},
+        )
     if rule_id == "conn-nc-and-must-connect":
         entry = PartEntry(
             key="ic.nc", mpn="NC1", lcsc="C7", category="ic.uart",
