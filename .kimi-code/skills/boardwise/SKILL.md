@@ -268,6 +268,10 @@ checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起
   **规则不再替你选方向也不给值**（052 §2.1：MPN 矛盾有两个修复方向——改 Value 或改 MPN/LCSC，
   048 实证过"MPN 字段写错、设计值对"的真实情形）：不给 `--direction/--after` plan 直接 exit 5 并列出两个候选；
   `--direction mpn` 本 build 未开放（需新 change kind）。方向和值都由你（或工程师的意图）给，工具一个都不猜。
+  *（091 A2a：`edit plan` 这条纪律一个字没动；变的是**发现消息**——契约里有该位号的
+  `decisions[].value` 时，`param-value-mpn-match` 的 finding 直接说方向 = 改料号/重选件，
+  出处与 provenance 一并带出；没有就两个方向都列 + `intent-missing` 点名写进哪个键。
+  合同目前由 API（`run_review(model, intent=…)`）进规则，`checkup --intent` 尚未接线。）*
   `--file` 路径**只有 `param-value-mpn-match`（单器件值）可修**，别的规则按名字拒绝
   （029 补器件、035 修脚都走 `--report` 路径，见下条）。`apply` 四道保护：
   写前重读页面 → 只写一个键 → 独立 geometry 回读 → save + 复查；重复执行认 `already_applied` 零写入。

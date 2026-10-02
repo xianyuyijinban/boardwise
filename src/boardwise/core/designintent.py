@@ -102,11 +102,13 @@ __all__ = [
     "DesignIntent",
     "DesignIntentError",
     "INTENT_VERSION",
+    "INTENT_MISSING",
     "IntentBlock",
     "IntentBus",
     "IntentDecision",
     "IntentRail",
     "IntentSignal",
+    "IntentSource",
     "REQUIRED_SLOTS",
     "SECTION_BLOCKS",
     "SECTION_BUSES",
@@ -148,6 +150,14 @@ PROVENANCE_KINDS: tuple[str, ...] = (
 #: An entry that states no basis is a draft. Spelled, not implied: the reader
 #: sees `ai_asserted` on the row rather than an empty field it has to interpret.
 DEFAULT_PROVENANCE = PROVENANCE_AI
+
+#: The token a **missing answer** is reported with — `facts-missing`'s family, the
+#: drawing compiler's own word for "a fact a consumer needed was not stated"
+#: (090 §一). Single-sourced here since 091 A2a, because two layers report it now:
+#: the report's `intent` section (`engines.checkup`) and a rule's finding
+#: (`rules.params`) — and `rules` may not import `engines` (006c's table), so the
+#: one string needs a home both layers are allowed to read.
+INTENT_MISSING = "intent-missing"
 
 #: The three sections of `requirements`. `buses` is this batch's addition to the
 #: design doc's two lists (see the module docstring): the enumeration owes
@@ -206,7 +216,7 @@ ENTRY_KEYS: dict[str, tuple[str, ...]] = {
     ),
     SECTION_BUSES: ("family", *BUS_SLOT_KEYS, "provenance", "stale"),
     SECTION_BLOCKS: ("id", "kind", "parts", "requires", "feeds", "provenance", "stale"),
-    SECTION_DECISIONS: ("subject", "decision", "rationale", "provenance", "stale"),
+    SECTION_DECISIONS: ("subject", "decision", "rationale", "value", "provenance", "stale"),
 }
 
 #: The question each section answers, printed in the rendered view and in the
@@ -405,11 +415,22 @@ class IntentDecision:
 
     When a rule sees an MPN disagreeing with a Value, the answer to "which side is
     right?" is a decision recorded here: what was chosen and what was accepted.
+
+    ``stated_value`` is the **machine-readable** half of that answer (091 A2a),
+    written in the file under the key ``value``: ``decision`` is prose
+    (``"0.1Ω 直采，不加放大器"``) and a rule comparing two strings cannot read a
+    quantity out of prose. It is the number the design *chose* for this subject,
+    so a rule that finds the board's Value and the MPN disagreeing can say which
+    of the two the design stands behind. Optional, and absent when unstated (rule
+    1) — a decision with prose only is still a decision, and a consumer that
+    needs the number reports a missing `decisions[].value` rather than guessing
+    one out of the sentence.
     """
 
     subject: str
     decision: str
     rationale: str = ""
+    stated_value: str = ""
     provenance: str = DEFAULT_PROVENANCE
     stale: bool = False
 
@@ -424,6 +445,8 @@ class IntentDecision:
         body: dict[str, Any] = {"subject": self.subject, "decision": self.decision}
         if self.rationale:
             body["rationale"] = self.rationale
+        if self.stated_value:
+            body["value"] = self.stated_value
         return _with_meta(body, self.provenance, self.stale)
 
 
@@ -683,6 +706,50 @@ def default_contract_path(project_uuid: str, home: Path | None = None) -> Path:
     from .config import boardwise_home
 
     return (home or boardwise_home()) / CONTRACT_DIR_NAME / contract_filename(project_uuid)
+
+
+# ------------------------------------------------------ the reader's carrier
+
+
+@dataclass(frozen=True)
+class IntentSource:
+    """A contract **as it was read**: the document, and where it came from (091 A2a).
+
+    A consumer — a rule, a checker — is handed one of these rather than a bare
+    :class:`DesignIntent`, for one reason the document cannot answer about itself:
+    the questions it owes are answered **by path** ("写进哪个文件哪个键", 090 §一's
+    own discipline), and a `DesignIntent` does not know which file it was read
+    from. The path travels beside it so a finding can name the file a reader has
+    to edit; it is empty for a document somebody built in memory (a test, a caller
+    with no file), and a consumer then says where the file is to be found rather
+    than inventing a name.
+
+    **Why this lives in `core`** (006c's layer table): reading an intent is a
+    consumer's job, `rules` may import `core` and nothing above it, and `engines`
+    may import both — so a carrier both need has exactly one legal home, and it is
+    this module. The layer rule is also why the *wording* of a consumer's
+    question is not shared from here: the sentence is the consumer's own (the
+    layer-legal half, :func:`write_path`, is what is reused).
+    """
+
+    document: DesignIntent = field(default_factory=DesignIntent)
+    path: str = ""
+
+    @classmethod
+    def load(cls, path: str | Path) -> IntentSource:
+        """Read a contract file, remembering where it came from."""
+        source = Path(path)
+        return cls(document=DesignIntent.load(source), path=str(source))
+
+    def decision(self, subject: str) -> IntentDecision | None:
+        """The decision whose ``subject`` is this identity, or ``None``.
+
+        Exact match only: the subject is the designator as the contract spells it,
+        and a rule asking about ``R4`` gets the answer meant for ``R4`` (090's
+        identity rule — one entry is one object, and a loose match would hand a
+        rule somebody else's decision).
+        """
+        return self.document.entry(SECTION_DECISIONS, subject)
 
 
 def _segment(text: str) -> str:
@@ -1152,6 +1219,8 @@ def render_markdown(
             lines.append(
                 f"- `{decision.subject}`：{decision.decision}"
                 + (f" —— {decision.rationale}" if decision.rationale else "")
+                + (f"；机读值 value：`{decision.stated_value}`"
+                   if decision.stated_value else "")
                 + f"（{decision.provenance}）"
             )
         lines.append("")
@@ -1191,9 +1260,12 @@ _SLOT_VOCABULARY: dict[type, tuple[str, ...]] = {
     IntentBus: BUS_SLOT_KEYS,
 }
 
-#: The one field whose JSON spelling differs from the attribute's (JSON is
-#: camelCase where a Python name cannot be).
-_RENAMED = {"adcSwing": "adc_swing"}
+#: The fields whose JSON spelling differs from the attribute's — two reasons, one
+#: table: `adcSwing` is camelCase because its slot key is a name written by hand,
+#: and `value` is the contract's own word for a decision's machine-readable
+#: statement (091 A2a) while the attribute is ``stated_value`` — `IntentDecision`
+#: already owns ``value(key)``, the entry protocol, and a field cannot shadow it.
+_RENAMED = {"adcSwing": "adc_swing", "value": "stated_value"}
 
 
 def _entries_from(raw: Any, where: str, cls: type) -> list[Any]:

@@ -96,7 +96,8 @@
 | 批 | 消费者 | 闭环 | 证明什么 |
 |---|---|---|---|
 | A1 | 文档+持久化+审查报告接线 | checkup 报告挂 `intent` 节（槽位总数/已填/缺失 + `intent-missing` 点名）；`design-intent.md` 改由合同渲染 | 文档活着、不丢、不覆盖 |
-| A2 | 审查规则（params/decap） | 冲突时按 intent 给**双向**修复建议（改值 or 重选料），rail 声明进 decap/额定核算 | 发现→修复依据 |
+| A2a | 审查规则（params） | 冲突时按 intent 给**方向**：该位号有 `decisions[].value` → 建议改料号/重选件（按 provenance 分级语气）；没有 → 双向列出 + `intent-missing` 点名 `decisions[].value` | 发现→修复依据（**已落地，091**，见 `tests/test_091_intent_direction.py`） |
+| A2b | 审查规则（decap）+ 报告接线 | rail 声明进 decap/额定核算；`checkup` 把合同传进规则走查（见 A2a 落地记录的「未接线」） | 待做 |
 | A3 | 架构自洽检查器 | 信号链闭合规则（采样链必须有偏置/参考、开漏必须有上拉、单端 ADC 不许直吃双极性信号……第一批 5–8 条，全部来自真案例） | FOC 偏置案可由规则查出 |
 | A4 | 绘制侧 | 语法绑定消费 blocks/decisions（TVS/bulk 角色、支路顺序、模块清单由 intent 推出） | 意图→图纸同源 |
 
@@ -130,3 +131,36 @@
    两条相电流链叫 `U+`/`W+`；`+24V`/`IU+`/`IW+` 是这块板在真机工程里的叫法（原稿按它写的）。
    合同按**导出档的名字**写，接线才指得到真实槽位；`+24V` 这种「合同里有、图纸里没有」
    的对象由 `stale` 规则接住（不删只标），测试里正是拿 `+24V` 钉的这条。
+
+## 六、A2a 落地记录（091 批，见 `tests/test_091_intent_direction.py`）
+
+052 评审点 1 的实案是**发现矛盾 ≠ 知道该怎么修**：一块板上 17 颗器件是 MPN 字段写错、
+设计值正确，照「把 Value 改成料号解码值」的建议修会把电路改错。A2a 让 params 规则消费
+意图，方向由合同定。
+
+1. **合同侧多一个可选键**：`decisions[]` 的 `value`（如 `"0.1Ω"`）——`decision` 是散文，
+   机读值才能和 MPN 对拍。可选、缺省**不写出**、`intentVersion` 不升、未知键照旧报错点名；
+   `core.designintent.IntentDecision.stated_value` 是它的属性名（`value(key)` 是条目协议，
+   字段不能遮蔽它，映射在 `_RENAMED` 里）。案例
+   `blocklib/intents/robot-ctrl-foc.intent.json` 的 R4 决策补上了 `value: "0.1Ω"`。
+2. **三态，一个生产者**（`rules/params.py::repair_directions`，规则唯一产出路径都过它）：
+
+   | 合同状态 | 消息 |
+   |---|---|
+   | 无合同（`intent is None`） | 052 原句**逐字节**：两个方向都列、不选（回归钉） |
+   | 该位号有 `value` | 方向 = **改料号/重选件**（设计值是对的），带 `provenance` 与出处文件；`user_stated` 陈述语气，`ai_asserted` 改问句（052 §4），另有「决策值与本板值也不一致」的诚实附句 |
+   | 该位号没有 `value` | 两个方向都列 + `intent-missing` 一行：点名文件与 `decisions[subject='X'].value` |
+
+3. **注入缝**：合同以 `core.designintent.IntentSource`（文档 + 它读自哪个文件）随
+   `run_review(model, intent=…)` 进规则——`rules` 只许 import `core`（006c 层表），所以载体
+   在 core；规则**自己不读盘**，哪份合同是调用方的问题。规则实例是**每次运行新建**的
+   （`engines/review.py::_rules_for`），因为 `BUILTIN_RULES` 比一次运行活得久，把答案设在
+   共享实例上会漏进下一次读取；没给合同时返回 `BUILTIN_RULES` **本身**（不复制）。
+4. **不改判决**：severity / 四态 / evidence / finding target（`suggested_after` 仍为空）
+   三态完全一致——`--direction mpn` 这条 change kind 本 build 仍未开放，`edit plan` 的
+   纪律（052 §2.1：方向和值由操作者给）一个字没动。意图进评级归 A3。
+5. **未接线（留给 A2b）**：`checkup` 的 CLI 还没有把合同传进规则走查——
+   `_cmd_checkup` 里规则走查（`run_review`）发生在 shelf/架构枚举/合同加载**之前**，而默认
+   合同路径要用枚举出的 projectUuid，所以诚实接线要把这三步整体提到走查之前（会改 notes
+   顺序）。本批先把缝做好、并用真实案例（ctrl FOC 导出 + shipped 合同）在测试里走通；
+   `checkup --intent` 目前仍只驱动报告里的 `intent` 节。

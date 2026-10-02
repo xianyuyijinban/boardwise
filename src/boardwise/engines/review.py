@@ -7,6 +7,7 @@ import re
 from dataclasses import asdict
 from typing import Any
 
+from ..core.designintent import IntentSource
 from ..core.model import DesignModel
 from ..core.parts import DESIGNATOR_CATEGORIES
 from ..rules.base import SEVERITY_ORDER, Finding, Rule
@@ -58,8 +59,38 @@ BUILTIN_RULES: list[Rule] = [
     UsbCcPulldown(),
 ]
 
+#: The rules that read a **DesignIntent** (091 A2a), by class. One entry today, and
+#: it is a table rather than a name inside :func:`_rules_for` so that the next
+#: consumer (A2b's decap, A3's checker) joins by adding itself here and accepting
+#: the `intent=` keyword.
+INTENT_RULES: tuple[type[Rule], ...] = (ValueMpnMatch,)
 
-def run_review(model: DesignModel, *, rules_errored: list[str] | None = None) -> list[Finding]:
+
+def _rules_for(intent: IntentSource | None) -> list[Rule]:
+    """The rule list one reading runs.
+
+    Without a contract this returns :data:`BUILTIN_RULES` **itself** — the same
+    objects, in the same order, no copy — so a reading that names no intent stays
+    byte-for-byte what it was before 091 A2a. With one, each rule that reads an
+    intent gets a *fresh instance* carrying it: the module-level instances are
+    shared by every run in the process, so setting the answer on one of them would
+    leak this reading's contract into the next one (the same reason
+    `LibraryPinConsistency` takes its resolver at construction).
+    """
+    if intent is None:
+        return BUILTIN_RULES
+    return [
+        rule.__class__(intent=intent) if isinstance(rule, INTENT_RULES) else rule
+        for rule in BUILTIN_RULES
+    ]
+
+
+def run_review(
+    model: DesignModel,
+    *,
+    rules_errored: list[str] | None = None,
+    intent: IntentSource | None = None,
+) -> list[Finding]:
     """Apply all built-in rules and return findings, most severe first.
 
     **Per board** (040b §WI-3): given a :class:`ProjectModel`, every rule runs on
@@ -72,15 +103,24 @@ def run_review(model: DesignModel, *, rules_errored: list[str] | None = None) ->
     ``rules_errored`` is the collector :func:`_run_rules` writes broken rule ids
     into (#30 fork 2); a caller that hands one in gets a **partial report**
     instead of an exception.
+
+    ``intent`` is the DesignIntent this reading was given (091 A2a) — the answer
+    to "which side of a contradiction does the design stand behind?", which the
+    rules that read one turn into a repair **direction**. It belongs to the
+    reading, not to the process: a caller that names no contract gets the rule list
+    unchanged (:func:`_rules_for`), and the contract's *file* is not read here —
+    the caller resolves it (``IntentSource.load``), because which file a project's
+    intent lives in is the caller's question, and a rule must not reach for a disk.
     """
     from ..core.model import ProjectModel
 
+    rules = _rules_for(intent)
     if not isinstance(model, ProjectModel):
-        return _run_rules(model, BUILTIN_RULES, rules_errored=rules_errored)
+        return _run_rules(model, rules, rules_errored=rules_errored)
 
     findings: list[Finding] = []
     for board_model in model.boards:
-        board_findings = _run_rules(board_model, BUILTIN_RULES, rules_errored=rules_errored)
+        board_findings = _run_rules(board_model, rules, rules_errored=rules_errored)
         title = board_model.board.title
         for finding in board_findings:
             finding.board = title

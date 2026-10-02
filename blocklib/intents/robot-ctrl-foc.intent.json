@@ -80,6 +80,7 @@
       "subject": "R4",
       "decision": "0.1Ω 直采，不加放大器",
       "rationale": "接受低边分流只有正半轴可测、约 7.8bit 有效位",
+      "value": "0.1Ω",
       "provenance": "user_stated"
     }
   ]
