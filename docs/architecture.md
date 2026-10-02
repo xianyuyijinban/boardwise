@@ -145,7 +145,29 @@ on purpose, because the compiler is the part that must work with no editor:
   rails, branches hanging between them, the inlet spanning the two rows at the
   input end) — and the first that binds a part from a **stated fact** rather
   than from topology (`openInterfaces[].part`), because a connector and a
-  parallel branch are the same shape between the same two nets.
+  parallel branch are the same shape between the same two nets. 088b adds the
+  fifth obligation kind, `gnd-outlet` (a power-entry drawing's return rail is
+  stated by exactly one outlet symbol at the rail's far end, unconditional —
+  schematic-conventions R11), and its one new presentation field,
+  `modules[].branchOrder` (the order the branches are drawn in, from the inlet
+  outwards — R12; a module's own statement, absent means designator order, and
+  `pagecompiler._module_view` carries it into the page slice the way it carries
+  `openInterfaces[].part`).
+
+  **Recorded upgrade path (088b, no code change on purpose).** `power-entry`'s
+  branch order is carried by an `adjacent` chain between neighbouring branches
+  because the two horizontal order kinds cannot be read off a right-to-left
+  drawing: `drawcompiler._rank_edges` maps `left-of(A,B)` to `(A,B)` and
+  `right-of(A,B)` to `(B,A)` (one fixed pair, which assumes the chain runs
+  left→right), while the finished plan is graded against the kind's own
+  positional definition (`_relation_holds`), and the side a branch hangs on comes
+  from the same rank comparison (`_branch_basis`'s `sign`) — measured, the honest
+  `right-of(D1, C115)` chain is refused on all six variants of 岳's sample, and
+  flipping the mapping moves the branches to the other side of the inlet.
+  Reading the two horizontal kinds against `progress[0]` and making `sign` agree
+  would let a grammar emit `left-of`/`right-of` directly; it touches a judge all
+  four grammars share, so it belongs to a later batch (measurements and the
+  088b evidence are in `evidence/088b/`).
 
 The three rules the pair leans on: an offline plan is never landed without a page
 it was built against (`--page`, or a page `--new-page` creates and reads back); a

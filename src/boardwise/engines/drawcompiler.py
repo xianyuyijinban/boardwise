@@ -144,6 +144,7 @@ from .grammar.base import (
     FAILURE_FACTS_MISSING,
     FAILURE_LAYOUT_UNSAT,
     FAILURE_PRESENTATION_POOR,
+    GND_OUTLET,
     HORIZONTAL_TAP,
     LEFT_OF,
     NEAR,
@@ -2625,6 +2626,58 @@ def _power_flag_pin(
     return ordered[0] if ordered else None
 
 
+def _gnd_outlet_nets(ctx: _Context) -> set[str]:
+    """The nets their grammar stated an outlet symbol for (088b sec.1).
+
+    Read from the obligations, like every other promise the compiler keeps: the
+    grammar decides *that* a group's ground is stated by a symbol of its own, the
+    compiler decides where the rail's far end is on the drawing it is making.
+    """
+    out: set[str] = set()
+    for item in ctx.binding.obligations:
+        if item.kind == GND_OUTLET:
+            out.update(item.nets)
+    return out
+
+
+def _gnd_outlet_pin(
+    ctx: _Context, expression: _Expression
+) -> tuple[str, tuple[float, float]] | None:
+    """The pin the ground's outlet hangs off: the rail's **far** end.
+
+    岳 2026-10-02: the outlet stands at the end away from the inlet — his own
+    sheet has the connector on one end and the ground's mark on the other, and
+    the flag of the supply rail on the inlet's end (088b sec.1). Which end that
+    is comes from `sidePreferences.input` and from the axis the rail actually
+    runs along, so the same statement draws the mirrored picture when the inlet
+    moves: a rail that runs along x takes its far end on the side the input does
+    *not* enter from (unstated or a vertical preference reads as the book's
+    default, the input on the left), and a rail that runs along y takes it the
+    same way top/bottom. Ties — a rail whose members share the extreme
+    coordinate, or a net of one member — are broken by member id, the stable
+    tie-break the rest of this package uses.
+    """
+    points = sorted(expression.points)
+    if not points:
+        return None
+    side = ctx.presentation.side_for("input") or "left"
+    xs = [point[0] for _, point in points]
+    ys = [point[1] for _, point in points]
+    if max(xs) - min(xs) >= max(ys) - min(ys):
+        farther = max if side != "right" else min
+        at = farther(xs)
+        for member, point in points:
+            if _close(point[0], at):
+                return member, point
+    else:
+        farther = max if side == "bottom" else min
+        at = farther(ys)
+        for member, point in points:
+            if _close(point[1], at):
+                return member, point
+    return points[0]
+
+
 def _sibling_name_form(ctx: _Context, net_id: str, cls: str) -> str:
     """How 069 sec.1 names the pads of a net it splits: ``"flag"`` or ``"label"``.
 
@@ -4214,6 +4267,47 @@ def _build_candidate(
         )
         router.boxes = solids
 
+    # 088b sec.1: a declared group's ground rail is *stated* by exactly one
+    # outlet symbol of its own, hung at the rail's far end (背向入口那端). The
+    # obligation names the net and nothing else: which end is "far" is read from
+    # `sidePreferences.input`, so the symbol mirrors with the drawing instead of
+    # being a second coordinate. Placed after every net for the same measured
+    # reason the rail flags above are — the run is an obstacle for whatever
+    # follows it. A net the plan already states with a symbol of its own, or one
+    # not drawn as a wire, is left exactly as it is: the promise is "stated by
+    # exactly one symbol", and a bus of flags already states it.
+    for net_id in _net_order(ctx, expressions):
+        if net_id not in _gnd_outlet_nets(ctx):
+            continue
+        expression = expressions[net_id]
+        net = ctx.circuit.net(net_id)
+        cls = net.cls if net is not None else "gnd"
+        if expression.style != "wire" or any(
+            symbol.net == net_id for symbol in symbols
+        ):
+            continue
+        profile, ref = _flag_plan(ctx, net_id, cls)
+        pin = _gnd_outlet_pin(ctx, expression)
+        if profile is None or pin is None:
+            continue
+        _set_foreign_edges(router, segments, net_id)
+        blocked = _blocked_points(ctx, placed, net_id, labels, symbols, segments)
+        router.blocked = blocked
+        failure = _flag_pins(
+            ctx, placed, net_id, profile, ref, [pin], router, segments,
+            symbols, occupied, solids, blocked, bodies,
+        )
+        if failure is not None:
+            return None, failure, []
+        notes.append(
+            f"net {net_id}: the group states its return with one outlet symbol — "
+            f"hung at the rail's far end off the pin {pin[0]} "
+            f"(sidePreferences.input={ctx.presentation.side_for('input') or 'left'}"
+            " puts that end away from the inlet, 088b sec.1); the rail stays one "
+            "conductor, and the symbol says where the return leaves the group"
+        )
+        router.boxes = solids
+
     junctions = _junctions(segments)
     plan = LayoutPlan(
         source=LayoutSource(
@@ -5546,6 +5640,11 @@ def _obligation_findings(
                 finding = _uniform_gnd_finding(layout_plan, circuit_spec, net_id)
                 if finding is not None:
                     out.append(finding)
+        elif item.kind == GND_OUTLET:
+            for net_id in item.nets:
+                finding = _gnd_outlet_finding(layout_plan, net_id)
+                if finding is not None:
+                    out.append(finding)
     return out
 
 
@@ -5800,3 +5899,30 @@ def _uniform_gnd_finding(
             ),
         )
     return None
+
+
+def _gnd_outlet_finding(
+    layout_plan: LayoutPlan, net_id: str
+) -> GrammarFinding | None:
+    """Is this group's return stated by **exactly one** outlet symbol? (088b)
+
+    The promise is a count, not a coordinate: the grammar says the group's ground
+    is stated by one symbol of its own and the compiler says where it goes, so
+    what the finished plan can be checked against is "one" — a ground with two
+    marks reads as two returns (岳: 「真实体现得很乱」, the reading 088b answers),
+    and a ground with none reads as a bare conductor named by nothing at all.
+    """
+    symbols = [
+        symbol for symbol in layout_plan.power_symbols if symbol.net == net_id
+    ]
+    if len(symbols) == 1:
+        return None
+    return GrammarFinding(
+        kind=KIND_OBLIGATION_MISSING,
+        objects=(f"circuitSpec.nets[{net_id}]",),
+        detail=(
+            f"net {net_id!r} carries {len(symbols)} outlet symbol(s); the group "
+            "states its return with exactly one, hung at the rail's far end — "
+            "088b sec.1 (岳 2026-10-02: 「底轨要有一个、且只要一个出处符号」)"
+        ),
+    )

@@ -33,12 +33,19 @@ is a fact this grammar cannot derive, and saying so is the point:
    module, as `rc-lowpass` and `ldo` do: a bulk capacitor belonging to the next
    module is that module's business.
 
-**What this grammar does not promise.** The order the branches are drawn in is
-not part of the promise. Nothing in the electrical fact fixes it — three parts
-across the same two nets are three interchangeable edges of a multigraph, and
-053 §6 forbids a scenario-specific constant in a grammar table. The compiler
-lays them out by part id; 岳's hand drawing puts the TVS nearest the inlet, and
-that is a reading of *his* sheet, not a clause of the grammar (088 §五.3).
+**What this grammar does not promise, and what 088b changed.** The order the
+branches are drawn in is *declarable* — `PresentationSpec.modules[].branchOrder`
+states the branches from the inlet end outwards, and the grammar carries it out
+with a chain of `adjacent` between neighbours (see below for why that kind and not
+`left-of`/`right-of`). The electrical fact still fixes nothing: three parts across
+the same two nets are three interchangeable edges of a multigraph, and 053 §6
+forbids a scenario-specific constant in a grammar table — so a part's *identity*
+(which one is the TVS) is still not read here. What 岳's sheet says is a statement
+about his drawing, and the document is where it is written: the model that writes
+the presentation reads the values and packages (`SMCJ28CA` is a TVS), and the
+grammar only checks that what it was told is about *this* module's branches.
+**Absent** `branchOrder` the drawing is byte-for-byte 088's: the compiler lays the
+branches out by part id, exactly as it did before.
 
 **The constraints.** The rails are rows, so:
 
@@ -63,6 +70,27 @@ that is a reading of *his* sheet, not a clause of the grammar (088 §五.3).
   is measured against.
 * `near` between each `shunt` and the `entry`: the branch is this rail's local
   topology and does not read as crossing into another module (052 §5).
+* `adjacent` between **neighbouring branches**, and only where the document
+  states an order (088b §二): "these two stand next to each other along the rail,
+  and this one is the nearer the inlet". Measured: the two horizontal order kinds
+  cannot carry this. `right-of(D1, C115)` — the honest reading for an inlet on the
+  right, "D1 is on the power side when that side is the right one" — is a
+  statement the compiler's rank walk reads the other way round
+  (`drawcompiler._rank_edges` maps `right-of(A, B)` to `(B, A)`, which is what the
+  branch *rank* is built from, while the finished plan is graded against the
+  relation's own definition by `_relation_holds`), so all six variants of 岳's
+  sample came back "the relation right-of(D1, C115) is not honoured"; the same
+  grammar mirrored to `input: left` drew the chain happily, and swapping the rank
+  mapping instead moved the branches to the wrong *side* of the inlet (measured:
+  the side a branch hangs on comes from the same rank comparison). Changing that
+  reading is a change to a judge all four grammars share, so 088b did not make
+  it (the batch's evidence has the measurements and the report states it). What
+  the chain uses instead is the one kind whose statement is true in both
+  orientations and whose check agrees with where the branches land: the pair's
+  own order ("nothing between them" is what `adjacent` says, and the rank walk
+  reads `adjacent(subject, object)` as "subject nearer the power end"). Measured:
+  the chain draws D1 → C115 → C116 from the inlet end on both `input: right` and
+  `input: left`, with the plan's own relation findings empty.
 
 **The obligations.** Two `direct-wire` obligations, **one per rail** (`(rail,)`
 and `(gnd,)`), are the load-bearing ones: **the rails are solid conductors**, not
@@ -91,6 +119,16 @@ what the obligation *names*, not in how the compiler reads one.
 
 `uniform-gnd` says this module's ground is expressed one way throughout, and
 `owned-branch` says each branch reads as hanging off the rail it belongs to.
+`gnd-outlet` (088b §一) is the fifth: this drawing's return rail terminates in
+**exactly one** outlet symbol of its own, hung at the rail's far end and standing
+upright — 岳 2026-10-02: 「底轨要有一个、且只要一个出处符号」. The obligation names
+the net and the compiler reads *which* end from `sidePreferences.input`, so the
+symbol mirrors with the drawing. It is stated on **every** bind: the first cut of
+this batch gated it on a *declared* group to keep 088's own drawings untouched,
+and the 2026-10-02 ruling (confirmed by the main agent on review) took that gate
+away — 岳's sample declares no modules either, and 「加一个接地符号」 has no such
+premise. The four 088 assertions this changes were the batch's own "today it is
+like this, awaiting the ruling" pins.
 """
 
 from __future__ import annotations
@@ -101,9 +139,11 @@ from ...core.circuitspec import CircuitSpec, SpecOpenInterface
 from ...core.presentationspec import SIDES, PresentationSpec
 from ...core.symbolprofile import SymbolProfile
 from .base import (
+    ADJACENT,
     DIRECT_WIRE,
     FAILURE_CIRCUIT_INVALID,
     FAILURE_FACTS_MISSING,
+    GND_OUTLET,
     LEFT_OF,
     NEAR,
     OWNED_BRANCH,
@@ -181,8 +221,16 @@ class PowerEntryGrammar:
             return refused_result([problem])
 
         entry = named[0].part
-        shunts = _shunts(circuit, presentation, rail, gnd, entry)
-        return self._result(circuit, presentation, rail, gnd, entry, shunts, named)
+        scope = _scope(presentation, entry)
+        shunts = _shunts(circuit, presentation, rail, gnd, entry, scope)
+        order, problem = _declared_order(
+            circuit, presentation, scope, shunts, entry, rail, gnd
+        )
+        if problem is not None:
+            return refused_result([problem])
+        return self._result(
+            circuit, presentation, rail, gnd, entry, order, named, scope
+        )
 
     # ------------------------------------------------------------- internals
 
@@ -195,6 +243,7 @@ class PowerEntryGrammar:
         entry: str,
         shunts: tuple[str, ...],
         named: list[SpecOpenInterface],
+        scope: str,
     ) -> GrammarResult:
         in_side = presentation.side_for("input") or "left"
         if in_side not in SIDES:
@@ -210,6 +259,7 @@ class PowerEntryGrammar:
         )
         shape = _describe(rail, gnd, entry, shunts)
         rivals = _claim_note(named)
+        order_note = _order_note(presentation, scope, shunts)
 
         bindings: list[RoleBinding] = [
             RoleBinding(
@@ -268,6 +318,7 @@ class PowerEntryGrammar:
                         f"{_pin_on(circuit, part_id, rail) or '?'}→{rail}, "
                         f"{_pin_on(circuit, part_id, gnd) or '?'}→{gnd}",
                         f"inlet chosen: {shape}",
+                        order_note,
                         f"provenance={weakest_provenance(part_provenance(circuit.part(part_id)), prov)}",
                         rivals,
                     ),
@@ -316,6 +367,31 @@ class PowerEntryGrammar:
                 )
             )
 
+        # 088b §二: the declared order, carried out between neighbours. Only
+        # stated when the document states one — an undeclared drawing gets no
+        # extra relation, which is what keeps 088's own constraint list (and its
+        # geometry) exactly as it was.
+        declaration = _branch_order_of(presentation, scope)
+        pairs = zip(shunts, shunts[1:]) if declaration else ()
+        for near_id, far_id in pairs:
+            constraints.append(
+                RelativeConstraint(
+                    kind=ADJACENT,
+                    subject=near_id,
+                    object=far_id,
+                    reason=(
+                        f"088b sec.2: the document states this module's branch "
+                        f"order (branchOrder), and {near_id} is the branch next to "
+                        f"the inlet {entry} before {far_id} — nothing stands "
+                        f"between them on the rail, and {near_id} is the one "
+                        "nearer the inlet; a TVS nearest the inlet is what the "
+                        "order is for (a spike is clamped before it reaches the "
+                        "next branch), and the grammar reads the order, never the "
+                        "designator or the value"
+                    ),
+                )
+            )
+
         obligations: list[GrammarObligation] = [
             GrammarObligation(
                 kind=DIRECT_WIRE,
@@ -355,6 +431,29 @@ class PowerEntryGrammar:
                 ),
             ),
         ]
+        # 088b §一 (岳 2026-10-02 裁决②, 主代理 2026-10-02 复验裁定「无条件」): every
+        # power-entry drawing states its return rail with exactly one outlet symbol.
+        # The first cut of this batch gated the promise on a *declared* group (so
+        # 088's own module-level scenarios stayed byte-identical); the ruling is
+        # that 「加一个接地符号」 has no such premise — 岳's sample does not declare
+        # modules either, and a promise nobody fires is not the ruling. The gate is
+        # gone: the obligation is stated on every bind, which is what changed the
+        # four 088 assertions this ruling named (they were the "today it is like
+        # this, awaiting the ruling" pins) and the 088 previews with them.
+        obligations.append(
+            GrammarObligation(
+                kind=GND_OUTLET,
+                nets=(gnd,),
+                reason=(
+                    f"088b sec.1 (岳 2026-10-02, unconditional): this drawing states "
+                    f"its return rail {gnd} with exactly one outlet symbol of its "
+                    "own — hung at the far end of the rail, the end away from "
+                    f"the inlet {entry}, and standing upright; a ground left "
+                    "as a bare conductor says nothing about where the return "
+                    "leaves the group"
+                ),
+            )
+        )
         return bound_result(bindings, constraints, obligations)
 
 
@@ -494,10 +593,16 @@ def _shunts(
     rail: str,
     gnd: str,
     entry: str,
+    scope: str,
 ) -> tuple[str, ...]:
-    """Every two-terminal part from the rail to this ground but the inlet."""
+    """Every two-terminal part from the rail to this ground but the inlet.
+
+    Collected in **designator order**, which is the drawing order an undeclared
+    document gets; the declared order is applied afterwards
+    (:func:`_declared_order`), so the collection itself stays a reading of the
+    partition.
+    """
     edges = two_terminal_parts(circuit)
-    scope = _scope(presentation, entry)
     return tuple(
         part_id
         for part_id in sorted(edges)
@@ -509,11 +614,151 @@ def _shunts(
 
 
 def _scope(presentation: PresentationSpec, entry: str) -> str:
-    """The entry's own module, when the presentation declares modules at all."""
+    """The entry's own module, when the presentation declares modules at all.
+
+    Empty means "this drawing is not a declared group": either the presentation
+    declares no modules, or the inlet is in none or in several. The two facts
+    that read the group — where `branchOrder` comes from and whether the ground
+    states an outlet (088b) — are both read from here, so a drawing without a
+    group is 088's drawing.
+    """
     if not declares_modules(presentation):
         return ""
     found = modules_of_part(presentation, entry)
     return found[0] if len(found) == 1 else ""
+
+
+def _declared_order(
+    circuit: CircuitSpec,
+    presentation: PresentationSpec,
+    scope: str,
+    shunts: tuple[str, ...],
+    entry: str,
+    rail: str,
+    gnd: str,
+) -> tuple[tuple[str, ...], GrammarFailure | None]:
+    """The branches in drawing order: the declared ones first, then the rest.
+
+    The document's `branchOrder` is a statement of intent — 岳 2026-10-02: a TVS
+    belongs nearest the inlet — and this grammar's whole part in it is to check
+    that the statement is *about this module's branches* and then to carry it
+    out. Two things are refused, both naming the designator:
+
+    * a designator that is not a shunt of this module at all — it is the inlet,
+      or a part across another net: the drawing has no branch to put there;
+    * a designator that belongs to another module's drawing — the spec layer
+      already refuses that (the order is stated over the declaring module's own
+      `parts`), so reaching here means the two documents disagree.
+
+    A **partial** declaration is completed rather than refused: the named
+    branches keep their stated order and the rest follow in designator order.
+    That is the same reading the module-level `flow` gets ("a partial order over
+    ids, completed by name order"), it keeps "today's order" one rule instead of
+    two, and it is what makes a *declared prefix* mean what it says — refusing
+    would stop a drawing the compiler can make, over a document that already
+    states the half that matters. The completion is stated in the binding
+    evidence, so it is never invisible.
+    """
+    declaration = _branch_order_of(presentation, scope)
+    if not declaration:
+        return shunts, None
+    named = set(shunts)
+    unknown = [part_id for part_id in declaration if part_id not in named]
+    if unknown:
+        return shunts, _order_failure(
+            circuit, presentation, scope, unknown, entry, rail, gnd
+        )
+    rest = sorted(part_id for part_id in shunts if part_id not in set(declaration))
+    return tuple(declaration) + tuple(rest), None
+
+
+def _order_failure(
+    circuit: CircuitSpec,
+    presentation: PresentationSpec,
+    scope: str,
+    unknown: list[str],
+    entry: str,
+    rail: str,
+    gnd: str,
+) -> GrammarFailure:
+    """Name the designator the order cannot be about, and what it is instead."""
+    subject = unknown[0]
+    here = sorted(set(pins_of_part(circuit, subject).values()))
+    if subject == entry:
+        what = (
+            f"it is the inlet of this module (openInterfaces[{rail}].part) — the "
+            "branch order is about the branches that hang between the rails, and "
+            "the inlet terminates them"
+        )
+    elif len(here) != 2:
+        what = (
+            f"it is not a two-terminal part of this module (its connections: "
+            + (", ".join(
+                f"{pin}→{net}"
+                for pin, net in sorted(pins_of_part(circuit, subject).items())
+            ) or "no connection stated")
+            + ")"
+        )
+    else:
+        what = (
+            f"its two pins sit on {here[0]} and {here[1]}, not across {rail} and "
+            f"{gnd} — a branch of this module hangs between those two rails"
+        )
+    others = (
+        ""
+        if len(unknown) == 1
+        else f" ({', '.join(unknown[1:])} too)"
+    )
+    return GrammarFailure(
+        category=FAILURE_CIRCUIT_INVALID,
+        subject=subject,
+        detail=(
+            f"modules[{scope}].branchOrder names {subject!r}, which is not a shunt "
+            f"of this module{others}: {what}. The order states where the branches "
+            "between the rails are drawn, from the inlet outwards — a designator "
+            "outside that set describes a drawing that does not exist"
+        ),
+        action=(
+            f"write modules[{scope}].branchOrder over the parts this module has "
+            "across both rails (the inlet and the parts of other modules are not "
+            "branches here), or drop the designator from the order"
+        ),
+    )
+
+
+def _branch_order_of(
+    presentation: PresentationSpec, scope: str
+) -> tuple[str, ...]:
+    """The entry's own module's stated branch order, or ``()``."""
+    module = presentation.module(scope) if scope else None
+    return tuple(module.branch_order) if module is not None else ()
+
+
+def _order_note(
+    presentation: PresentationSpec, scope: str, shunts: tuple[str, ...]
+) -> str:
+    """What the stated order was read as — including what it left unsaid.
+
+    A partial declaration is completed in designator order, and saying so in the
+    evidence is what keeps the completion from being invisible: a reader of the
+    binding sees which branches the document placed and which it left to the
+    default. Empty when the document states no order at all.
+    """
+    declaration = _branch_order_of(presentation, scope)
+    if not declaration:
+        return ""
+    stated = (
+        f"modules[{scope}].branchOrder states {', '.join(declaration)} from the "
+        "inlet outwards"
+    )
+    rest = [part_id for part_id in shunts if part_id not in set(declaration)]
+    if not rest:
+        return stated + "; every branch of this module is named there"
+    return (
+        stated
+        + f"; not named there, so drawn after them in designator order: "
+        + ", ".join(rest)
+    )
 
 
 # ------------------------------------------------------------------ clauses
