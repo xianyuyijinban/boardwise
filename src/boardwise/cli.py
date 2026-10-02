@@ -1090,6 +1090,7 @@ def build_parser() -> argparse.ArgumentParser:
     edit_apply.add_argument(
         "--json", dest="json_path", metavar="PATH", help="Write the machine-readable result."
     )
+    edit_apply.add_argument("--force", action="store_true", help=FORCE_HELP)
     edit_apply.add_argument(
         "--view", choices=("schematic", "pcb"), default="schematic",
         help="Which model of a .epro2 to re-parse (default: schematic).",
@@ -1468,7 +1469,9 @@ def build_parser() -> argparse.ArgumentParser:
             "already_applied, zero writes); then the parts, a pin read-back against "
             "the plan's expected offsets *before* any wire, the wires and the rail "
             "flags; then both verification legs (the editor's own netlist and the "
-            "canvas), the range on a fresh export and the findings' one-way rule; "
+            "canvas), the range on a fresh export and the findings' one-way rule "
+            "graded by severity (an ERROR always stops the save, a WARN unless "
+            "--force, an INFO never); "
             "then the save and the render. Exit 0 applied (or already applied) / 2 "
             "the promised effect is not there / 3 the state cannot be stated or the "
             "read-back disagrees / 4 a guard refused / 5 the plan is unusable."
@@ -1524,6 +1527,7 @@ def build_parser() -> argparse.ArgumentParser:
     draw_apply.add_argument(
         "--json", dest="json_path", metavar="PATH", help="Write the machine-readable result."
     )
+    draw_apply.add_argument("--force", action="store_true", help=FORCE_HELP)
     draw_apply.add_argument(
         "--project", default=None, metavar="NAME_OR_UUID",
         help="Which editor window to write to (023 routing hint; the daemon will not guess).",
@@ -7018,7 +7022,8 @@ async def _draw_apply_flow(
     5. **the verification** — live netlist (membership, 037's main judgement) and
        canvas (poses, pin tips, wire endpoints, the flag count), then the range on
        a fresh export (this run deletes nothing, so the export is fresh — 035) and
-       the findings' one-way rule (036);
+       the findings' one-way rule (036), graded by severity since issue #55's
+       ruling B: ERROR always stops the save, WARN needs `--force`, INFO never does;
     6. **the save**, the persistence verdict, and the render.
     """
     import time
@@ -7794,7 +7799,8 @@ async def _draw_apply_flow(
         )
     report["range"] = diff
 
-    # ---- 11. no new findings (036's rule; the basis says which) -----------
+    # ---- 11. no new findings (036's rule, graded by #55's ruling B; the
+    #          basis says which baseline) ----------------------------------
     if plan.change.draw_baseline.findings_read:
         baseline = sorted(plan.change.baseline_findings)
         basis = "the findings the project reported when the plan was built"
@@ -7820,10 +7826,15 @@ async def _draw_apply_flow(
             "new": grown,
             "resolved": sorted(set(baseline) - now),
         }
-        if grown:
+        # 036's rule, graded by ruling B (issue #55): ERROR always stops the save,
+        # a WARN stops it unless the caller said --force, an INFO never did.
+        blocking = _grade_new_findings(
+            report, grown, bool(getattr(args, "force", False)), notes
+        )
+        if blocking:
             notes.append(
-                "新增 finding（apply 后重跑全规则，集合只许减不许增）："
-                + "；".join(grown)
+                "新增 finding（apply 后重跑全规则，ERROR 必拦、WARN 要 --force 才放行）："
+                + "；".join(blocking)
                 + " —— 事故报告；没有保存"
             )
             return done(2, "failed", "new_findings")
@@ -7875,7 +7886,8 @@ def _cmd_draw_apply(args: argparse.Namespace) -> int:
       netlist *and* canvas), or they already held and nothing was written
       (`already_applied`);
     * **2** — the promised effect is not on the page: a refused write, a refused
-      save, a range or flag difference, or a new finding;
+      save, a range or flag difference, or a new finding the gate still blocks (an
+      ERROR, or a WARN the caller did not release with `--force`);
     * **3** — the page's state cannot be stated **or** the read-back disagrees with
       the plan: a timeout / dropped connection (nothing is retried), a pin that
       came back off its expected tip, or a postcondition that does not hold after
@@ -13018,6 +13030,99 @@ def _baseline_findings(model) -> list[str]:
     return sorted({_finding_signature(item) for item in run_review(model)})
 
 
+#: The three severities a signature can carry, in the order the report groups
+#: them (`rules.base.Severity`). A signature that names none of them reads as
+#: ERROR below.
+_SIGNATURE_SEVERITIES = ("ERROR", "WARN", "INFO")
+
+#: The `--force` help `draw apply` and `edit apply` both spell (issue #55, ruling
+#: B). One gate with two callers, so one sentence: typed out twice by hand, the
+#: two `--help` texts drift and the reading drifts with them.
+FORCE_HELP = (
+    "Save anyway when every new finding is a WARN — an ERROR still stops the run and "
+    "an INFO never stopped it (issue #55, ruling B). Each WARN released this way is "
+    "named in the report's findings.forcedWarns and in its notes, never silently."
+)
+
+
+def _signature_severity(signature: str) -> str:
+    """The severity inside one `_finding_signature` string (issue #55, ruling B).
+
+    Mirrors that function's field layout and nothing else: the fields are
+    ``|``-joined and the severity is the **second** one, whether the finding
+    carried a structured target or fell back to its message.
+
+    A signature whose second field is not one of the three severities — an older
+    plan file, a baseline somebody wrote by hand — is read as **ERROR**, and so is
+    a signature with no second field at all. The gate's job is to stop a save, and
+    an unreadable severity must not buy a pass the run was never given.
+    """
+    fields = str(signature).split("|")
+    if len(fields) > 1 and fields[1] in _SIGNATURE_SEVERITIES:
+        return fields[1]
+    return "ERROR"
+
+
+def _new_findings_verdict(grown: list[str], force: bool) -> dict:
+    """Grade new-finding signatures and say which of them still stop the save.
+
+    Ruling B (岳, 2026-10-02, issue #55) replaced 036's flat "the set may only
+    shrink" with three tiers, because the flat rule let a *report* stop a run:
+
+    * **ERROR** — a violation the rules are sure of: stops the save, and
+      ``--force`` does not touch it, because no flag makes a short circuit right;
+    * **WARN** — stops the save unless the caller passed ``--force``. Every WARN
+      it releases comes back in ``forcedWarns`` so the report and the notes can
+      name it: a release is visible, never silent;
+    * **INFO** — a measurement (`param-rc-cutoff`'s fc row) or a rule stating its
+      own blind spot (`shunt-sense-link` at its L1 boundary): never blocks, only
+      reported.
+
+    ``bySeverity`` carries all three keys whether or not any signature landed in
+    them, so a consumer reads one shape and never has to tell "absent" from
+    "empty".
+    """
+    by_severity: dict[str, list[str]] = {severity: [] for severity in _SIGNATURE_SEVERITIES}
+    for signature in grown:
+        by_severity[_signature_severity(signature)].append(signature)
+    return {
+        "bySeverity": by_severity,
+        "blocking": by_severity["ERROR"] + ([] if force else by_severity["WARN"]),
+        "forcedWarns": by_severity["WARN"] if force else [],
+    }
+
+
+def _grade_new_findings(
+    report: dict, grown: list[str], force: bool, notes: list[str]
+) -> list[str]:
+    """Record the graded new findings in ``report["findings"]``; return what blocks.
+
+    The one place the three gates (`draw apply`, `edit apply --insert`, `edit apply
+    --move`) share, so their 口径 cannot drift: the caller keeps its own
+    ``report["findings"]`` keys (the draw path adds a ``basis``) and adds this
+    verdict's three, then reports the notes below in its own voice.
+
+    Empty when nothing blocks — either nothing grew, or everything that grew is
+    INFO, or every WARN was released by ``--force``.
+    """
+    verdict = _new_findings_verdict(grown, force)
+    report["findings"]["newBySeverity"] = verdict["bySeverity"]
+    report["findings"]["forcedWarns"] = verdict["forcedWarns"]
+    released = verdict["forcedWarns"]
+    if verdict["bySeverity"]["INFO"]:
+        notes.append(
+            "新增 INFO finding（报告项：测量或规则自陈盲区，永不拦保存）："
+            + "；".join(verdict["bySeverity"]["INFO"])
+        )
+    if released:
+        notes.append(
+            f"--force 放行了 {len(released)} 条新增 WARN finding 的保存："
+            + "；".join(released)
+            + " —— 见报告的 findings.forcedWarns；--force 只豁免 WARN，ERROR 照拦"
+        )
+    return verdict["blocking"]
+
+
 def _cmd_edit_plan_move(args: argparse.Namespace) -> int:
     """``edit plan --move``: a group of parts and a delta -> a ChangePlan (037).
 
@@ -17808,10 +17913,16 @@ async def _edit_apply_insert_flow(
             "new": grown,
             "resolved": sorted(baseline - now),
         }
-        if grown:
+        # 036's rule, graded by ruling B (issue #55) — the same reading `draw apply`
+        # takes, through the same helper: ERROR always stops the save, a WARN stops
+        # it unless the caller said --force, an INFO never did.
+        blocking = _grade_new_findings(
+            report, grown, bool(getattr(args, "force", False)), notes
+        )
+        if blocking:
             notes.append(
-                "新增 finding（apply 后重跑全规则，集合只许减不许增）："
-                + "；".join(grown)
+                "新增 finding（apply 后重跑全规则，ERROR 必拦、WARN 要 --force 才放行）："
+                + "；".join(blocking)
                 + " —— 事故报告；没有保存"
             )
             return done(2, "failed", "new_findings")
@@ -18322,9 +18433,16 @@ async def _edit_apply_move_flow(
             "baseline": sorted(baseline), "after": sorted(now),
             "new": grown, "resolved": sorted(baseline - now),
         }
-        if grown:
+        # 036's rule, graded by ruling B (issue #55) — the same reading `draw apply`
+        # takes, through the same helper: ERROR always stops the save, a WARN stops
+        # it unless the caller said --force, an INFO never did.
+        blocking = _grade_new_findings(
+            report, grown, bool(getattr(args, "force", False)), notes
+        )
+        if blocking:
             notes.append(
-                "新增 finding（apply 后重跑全规则，集合只许减不许增）：" + "；".join(grown)
+                "新增 finding（apply 后重跑全规则，ERROR 必拦、WARN 要 --force 才放行）："
+                + "；".join(blocking)
                 + " —— 事故报告；没有保存"
             )
             return done(2, "failed", "new_findings")
@@ -18471,7 +18589,9 @@ def _cmd_edit_apply(args: argparse.Namespace) -> int:
     Exit codes: 0 the change is on the page and, when the re-review could be
     taken, resolves the finding (or was already there); 2 the promised effect is
     not there — the write was refused, the read-back disagreed, the editor
-    refused the save, or the re-review still reports the finding; 3 the page's
+    refused the save, the re-review still reports the finding, or the new-findings
+    gate still blocks (an ERROR, or a WARN the caller did not release with
+    ``--force``); 3 the page's
     state cannot be stated (the daemon is unreachable, or a timeout / a dropped
     connection with a read-back and no retry); 4 a precondition of the plan is
     broken; 5 the plan or the input is unusable.

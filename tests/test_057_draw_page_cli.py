@@ -625,6 +625,95 @@ def test_e4_a_finding_the_page_resolves_is_reported_resolved(monkeypatch, tmp_pa
     assert report["findings"]["resolved"] == before and report["findings"]["new"] == []
 
 
+def _e4_run(monkeypatch, tmp_path, before, after, *extra):
+    """The E4 shape end to end: an empty page, a plan built against ``before``, applied.
+
+    ``_stub_export``'s sequence serves the plan's own reading first and the apply's
+    fresh one second, so the two findings readings the gate compares are written by
+    the test — as the ``_finding_signature`` strings `run_review` really emits, which
+    is the gate's input. Returns ``(code, report, editor)``.
+    """
+    editor = _PageEditor()
+    circuit, presentation = write_specs(tmp_path)
+    _stub_editor(monkeypatch, editor)
+    _stub_export(monkeypatch, sequence=[list(before), list(after)])
+    out = tmp_path / "plan.json"
+    assert cli.main(_plan_args(circuit, presentation, "--page", "page-1",
+                               "--out", str(out))) == 0
+    plan = ChangePlan.load(out)
+    editor.netlists = [{"components": {}}, _netlist_for(plan)]
+    code, report = _apply(editor, out, circuit, presentation, tmp_path, *extra)
+    return code, report, editor
+
+
+def test_e4_an_info_finding_never_stops_the_save(monkeypatch, tmp_path, capsys):
+    """Ruling B (issue #55) on the land path: an INFO is a report, not a verdict.
+
+    The flat "the set may only shrink" let a report-only row stop a save — 087's
+    live landing was blocked repeatedly by exactly that. The row stays in the
+    report, and the drawing is saved.
+    """
+    before = ["decap-required-caps|WARN|U9|2|3V3"]
+    after = before + ["param-rc-cutoff|INFO|RC R1(1k) + C1(1n) on 'TAP': fc = 159,155 Hz"]
+    code, report, editor = _e4_run(monkeypatch, tmp_path, before, after)
+    assert code == 0, report["notes"]
+    assert report["outcome"] == "applied"
+    assert report["findings"]["new"] == after[1:]
+    assert report["findings"]["newBySeverity"] == {
+        "ERROR": [], "WARN": [], "INFO": after[1:],
+    }
+    assert report["findings"]["forcedWarns"] == [], (
+        "an INFO is reported, not released: nothing was blocking it"
+    )
+    assert report["save"] == {"ok": True, "answered": {"saved": True}}
+    assert report["persistence"] == "saved_unverified"
+    assert "sch.doc.save" in [action for action, _params in editor.writes]
+
+
+def test_e4_force_releases_a_warn_finding_and_names_it(monkeypatch, tmp_path, capsys):
+    """The middle tier on the land path: a WARN stops the save, ``--force`` releases
+    it, and every WARN released is named in the report and in the notes."""
+    before = ["decap-required-caps|WARN|U9|2|3V3"]
+    after = ["decap-required-caps|WARN|U1|2|3V3", "decap-required-caps|WARN|U2|5|VIN"]
+
+    blocked, report, editor = _e4_run(monkeypatch, tmp_path, before, after)
+    assert blocked == 2
+    assert report["reason"] == "new_findings"
+    assert report["findings"]["new"] == after
+    assert report["findings"]["newBySeverity"]["WARN"] == after
+    assert report["findings"]["forcedWarns"] == [], "no --force, nothing released"
+    assert "sch.doc.save" not in [action for action, _params in editor.writes]
+
+    # A fresh run — a new editor, a new plan, the same readings — with --force.
+    code, report, editor = _e4_run(monkeypatch, tmp_path, before, after, "--force")
+    assert code == 0, report["notes"]
+    assert report["findings"]["forcedWarns"] == after, (
+        "the released WARNs are named in the report, never dropped silently"
+    )
+    assert report["findings"]["newBySeverity"]["WARN"] == after
+    assert "sch.doc.save" in [action for action, _params in editor.writes]
+    assert any("--force" in note and "forcedWarns" in note for note in report["notes"]), (
+        "and in the notes, so a reader of the console sees the release too"
+    )
+
+
+def test_e4_force_does_not_release_an_error_finding(monkeypatch, tmp_path, capsys):
+    """The top tier: ``--force`` is not a licence to save a short circuit. The run
+    stops with the ERROR named, and the WARN alongside it is released (it is named
+    as released) without buying the save."""
+    before = ["decap-required-caps|WARN|U9|2|3V3"]
+    after = ["conn-duplicate-designators|ERROR|U1||", "decap-required-caps|WARN|U2|5|VIN"]
+    code, report, editor = _e4_run(monkeypatch, tmp_path, before, after, "--force")
+    assert code == 2
+    assert report["reason"] == "new_findings"
+    assert report["findings"]["newBySeverity"]["ERROR"] == [after[0]]
+    assert report["findings"]["forcedWarns"] == [after[1]]
+    assert "sch.doc.save" not in [action for action, _params in editor.writes]
+    assert "conn-duplicate-designators|ERROR|U1||" in " ".join(report["notes"]), (
+        "the blocking ERROR is named in the notes, not only counted"
+    )
+
+
 # ------------------------------------------------------- E2: a non-empty page
 
 

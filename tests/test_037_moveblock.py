@@ -842,3 +842,65 @@ def test_apply_move_fails_when_a_rule_reports_something_new(monkeypatch, tmp_pat
     report = json.loads((tmp_path / "a.json").read_text(encoding="utf-8"))
     assert report["findings"]["new"]
     assert "sch.doc.save" not in [action for action, _ in bridge.writes]
+
+
+def test_apply_move_releases_a_warn_finding_when_forced(monkeypatch, tmp_path, capsys):
+    """Ruling B (issue #55) on the move path: the grown decap WARNs still stop the
+    save, and ``--force`` releases them — by name, in the report and the notes."""
+    plan_path, _plan = _move_plan(tmp_path)
+    bridge = _move_bridge()
+    _stub_bridge(monkeypatch, bridge)
+    grown = _model(components=[("U9", ("", "C47773"))], pins={"U9": ["1", "5"]},
+                   nets={"VIN_RAW": [("U9", "1")]})
+    _stub_export(monkeypatch, [_model(), grown])
+    result = tmp_path / "a.json"
+
+    blocked = cli.main(["edit", "apply", str(plan_path), "--json", str(result)])
+    printed = capsys.readouterr().out
+    assert blocked == 2, printed
+    report = json.loads(result.read_text(encoding="utf-8"))
+    warns = report["findings"]["newBySeverity"]["WARN"]
+    assert warns and all(item.startswith("decap-required-caps|WARN|") for item in warns), warns
+    assert report["findings"]["newBySeverity"]["ERROR"] == []
+    assert report["findings"]["forcedWarns"] == [], "no --force, nothing released"
+
+    # A fresh run of the same move, this time with --force: the fake page has not
+    # been written to by the blocked run, but the plan and the readings are rebuilt
+    # so the two runs are the same run.
+    plan_path, _plan = _move_plan(tmp_path)
+    bridge = _move_bridge()
+    _stub_bridge(monkeypatch, bridge)
+    _stub_export(monkeypatch, [_model(), grown])
+    code = cli.main(["edit", "apply", str(plan_path), "--force", "--json", str(result)])
+    printed = capsys.readouterr().out
+    assert code == 0, printed
+    report = json.loads(result.read_text(encoding="utf-8"))
+    assert report["findings"]["forcedWarns"] == warns, (
+        "the WARNs --force released are named, never dropped silently"
+    )
+    assert bridge.writes[-1][0] == "sch.doc.save", "the released WARN let the save through"
+    assert any("--force" in note and "forcedWarns" in note for note in report["notes"])
+
+
+def test_apply_move_an_error_finding_is_not_released_by_force(monkeypatch, tmp_path, capsys):
+    """The same gate, the top tier: ``--force`` does not save a run whose new finding
+    is an ERROR — the move is verified and simply not persisted."""
+    plan_path, _plan = _move_plan(tmp_path)
+    bridge = _move_bridge()
+    _stub_bridge(monkeypatch, bridge)
+    grown = _model(components=[("U9", ("", "C47773"))], pins={"U9": ["1", "5"]},
+                   nets={"VIN_RAW": [("U9", "1")]})
+    grown.duplicate_designators = ["U9"]        # conn-duplicate-designators: ERROR
+    _stub_export(monkeypatch, [_model(), grown])
+    result = tmp_path / "a.json"
+
+    code = cli.main(["edit", "apply", str(plan_path), "--force", "--json", str(result)])
+    printed = capsys.readouterr().out
+    assert code == 2, printed
+    assert "new_findings" in printed
+    report = json.loads(result.read_text(encoding="utf-8"))
+    errors = report["findings"]["newBySeverity"]["ERROR"]
+    assert any(item.startswith("conn-duplicate-designators|ERROR|") for item in errors), errors
+    assert report["findings"]["forcedWarns"], "the WARNs were released; the ERROR was not"
+    assert all("|WARN|" in item for item in report["findings"]["forcedWarns"])
+    assert "sch.doc.save" not in [action for action, _ in bridge.writes]
