@@ -46,6 +46,7 @@ from boardwise.core.layoutplan import (
 from boardwise.core.presentationspec import (
     PresentationSpec,
     PresentationSpecError,
+    main_path_wire,
     presentation_sha256,
 )
 from boardwise.core.symbolprofile import (
@@ -406,6 +407,41 @@ def test_a_feedback_path_is_declared_the_same_way_as_a_main_path():
         {"id": "fb", "chain": ["net:OUT", "part:R3", "net:FB"], "note": "kept visible"},
     ]))
     assert spec.feedback_paths[0].chain[0] == "net:OUT"
+
+
+def test_main_path_wire_answers_four_states_and_only_one_of_them_is_a_wire():
+    """096 把"跨模块的网画整条线还是写名字"的判据收进一处，这里直接钉它的四态边界.
+
+    两个调用方问的是同一个函数（`pagecompiler._net_style` 挑端口风格、
+    `readability._check_main_paths` 判哪条跨模块线能满足 mainPath），所以边界错了
+    是两边一起错——096 之前正是"各自留一份判据"让同一条轨对编译器是线、对检查器
+    是总线，画出来了又当场被拒。四态：
+
+    * **gnd** —— 地永远是旗，`mainPath` 标在地上一律不是线（056 sec.3 要**拒**它，
+      不是把它悄悄降级成名字，所以这里答 False 而不是"降级");
+    * **单模块** —— 一个模块内部的网不过界，跨模块的规则轮不到它；
+    * **多模块**（三个及以上）—— 规则要的是"恰好两个"：三个模块之间的每一对都
+      可能被标 mainPath，谁都不是"那一条线"。同一个模块被列两次仍是一对（`set`）;
+    * **未声明网**（`net_class=None`）—— class 在这里只用来认地；电路的未声明网由
+      编译器在别处点名，不是本函数的拒绝理由。
+
+    除这四态外只剩一种正面：非地 + 恰好两个模块 + 那条 flow 边被标了 `mainPath`
+    （没标 → 两端写名字）。
+    """
+    marked = [{"from": "pwr", "to": "sense", "mainPath": True}]
+    spec = PresentationSpec.from_dict(_presentation(flow=marked))
+
+    assert main_path_wire(spec, "power", ["pwr", "sense"]) is True
+    plain = PresentationSpec.from_dict(_presentation(
+        flow=[{"from": "pwr", "to": "sense"}],
+    ))
+    assert main_path_wire(plain, "power", ["pwr", "sense"]) is False
+
+    assert main_path_wire(spec, "gnd", ["pwr", "sense"]) is False      # 地
+    assert main_path_wire(spec, "power", ["pwr"]) is False             # 单模块
+    assert main_path_wire(spec, "power", ["pwr", "sense", "mcu"]) is False
+    assert main_path_wire(spec, "power", ["pwr", "sense", "pwr"]) is True
+    assert main_path_wire(spec, None, ["pwr", "sense"]) is True        # 未声明网
 
 
 def test_the_port_role_vocabulary_is_shared_with_the_circuit_spec():

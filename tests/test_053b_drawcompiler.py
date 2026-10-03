@@ -1263,17 +1263,32 @@ def test_the_pad_across_the_body_follows_the_symbol_not_a_constant_side():
 def test_a_pad_whose_every_side_is_sealed_is_layout_unsat_and_names_the_conductor():
     """074 sec.3/4 的编译级实例：梯子穷尽 → layout-unsat，报实测原因与建议动作.
 
-    The mirrored AMS1117 on the **default** spacing ladder is the offline shape where
-    074's ladder really is exhausted: the rail runs ten units above the pad row, and
-    the VIN pin, the GND pin and the core's own body seal the other three sides, so
-    every lead the pad's flag could hang on cuts the rail or lands on a conductor.
-    岳 read that drawing and refused the form (「第一眼以为5V和3V3的旗标短接在一块了」),
-    so the compiler has one honest answer left — and it must *say* it: which run,
-    which conductor, where they met, and what to move. A silent "no candidate" would
-    send the caller looking for a bug in the compiler, and a junction welded on to
-    make the crossing look intended would join two nets the spec keeps apart.
+    The mirrored AMS1117 is the offline shape where 074's ladder really is
+    exhausted: the rail runs ten units above the pad row, and the VIN pin, the
+    GND pin and the core's own body seal the other three sides, so on the
+    **roomier 2.2 ladder** every lead that pad's flag could hang on cuts the rail
+    or lands on a conductor. 岳 read that drawing and refused the form (「第一眼
+    以为5V和3V3的旗标短接在一块了」), so the compiler has one honest answer left —
+    and it must *say* it: which run, which conductor, where they met, and what to
+    move. A silent "no candidate" would send the caller looking for a bug in the
+    compiler, and a junction welded on to make the crossing look intended would
+    join two nets the spec keeps apart.
 
-    The same circuit draws cleanly on a roomier ladder (see
+    **097 corrected one thing this test used to claim by accident.** It said the
+    failure was the *default* ladder's, and asserted `not result.ok` on the
+    strength of it. Measured (`evidence/097/sealed_pad_probe.py`): the two narrow
+    variants were never refused by 074 at all — they were refused by `_overflow`,
+    because the anchor's estimate counted only net names (`stub + widest net +
+    TEXT_GAP` = 64.5) while U1's own `AMS1117-3.3` printed on U1's left reaches
+    76.5 past the drawing's left edge, which put the drawing 9.5 units outside the
+    margin. 097 measures the text too (see `tests/test_097_annotation_allowance.py`),
+    so those two variants are now drawn — with 岳's own bent lead, right along the
+    pad row and then down, which crosses nothing — and 074's refusal is what is
+    left on the ladder it was written for. Both halves are pinned here: the
+    crossing refusal and its wording, and the fact that the refusal is now the
+    ladder's and not a sheet-margin artefact.
+
+    The same circuit draws cleanly on a roomier ladder too (see
     :func:`test_the_pad_across_the_body_follows_the_symbol_not_a_constant_side`):
     this is 074 refusing a defective picture, never the circuit.
     """
@@ -1295,11 +1310,16 @@ def test_a_pad_whose_every_side_is_sealed_is_layout_unsat_and_names_the_conducto
         portRoles={"VIN5": "input", "3V3": "output"},
     )
     result = dc.compile(spec, presentation, book, dc.CompileBudget(page_box=page))
-    assert not result.ok, (
-        "the default ladder drew this shape again — if the crossing it used to draw "
-        f"is back, 074's gate is off: {render(result)}"
+    assert result.ok, (
+        "the default ladder used to refuse this shape only because the anchor's "
+        "estimate pushed it 9.5 units outside the margin (097): with the estimate "
+        f"measuring the text, nothing should refuse it — {render(result)}"
     )
-    assert result.categories() == ["layout-unsat"], result.render_failures()
+    assert {
+        item.failure.category for item in result.rejected if item.failure is not None
+    } == {dc.FAILURE_LAYOUT_UNSAT}, [
+        (item.variant, item.reason) for item in result.rejected
+    ]
     measured = [
         item.failure for item in result.rejected
         if item.failure is not None

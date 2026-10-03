@@ -351,7 +351,6 @@ def recheck(page: PageLayoutPlan, scene: Scene) -> tuple:
     page_domain = readability.check_page(
         page, scene.circuit, scene.presentation, library(),
         keepouts=scene.budget.keepouts, module_gap=scene.budget.module_gap,
-        high_fanout=scene.budget.module_budget.high_fanout,
     )
     return drawing, page_domain
 
@@ -1105,7 +1104,6 @@ def page_violations(page: PageLayoutPlan, scene: Scene) -> list:
     return readability.check_page(
         page, scene.circuit, scene.presentation, library(),
         keepouts=scene.budget.keepouts, module_gap=scene.budget.module_gap,
-        high_fanout=scene.budget.module_budget.high_fanout,
     ).hard_violations
 
 

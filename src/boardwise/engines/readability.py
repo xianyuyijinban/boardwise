@@ -193,7 +193,6 @@ __all__ = [
     "KIND_WIRE_THROUGH_BODY",
     "KIND_WIRE_THROUGH_MODULE_FRAME",
     "PAGE_CHECKER_NAME",
-    "PAGE_HIGH_FANOUT",
     "PAGE_KINDS",
     "PAGE_MODULE_GAP",
     "PRECISION",
@@ -292,14 +291,13 @@ PAGE_KINDS: tuple[str, ...] = (
 #: frames with it and passes its own if it uses another.
 PAGE_MODULE_GAP = 40.0
 
-#: Member count above which a net is a *bus* and is always expressed by name
-#: (053 sec.7's high fan-out). Echoed for the same reason as the gap above, and
-#: validated where it is accepted — but 069 sec.7 retired the count at page
-#: scale (a rail is a bus at any fan-out) and 096 moved the crossing net's
-#: wire-or-name decision to
-#: :func:`~boardwise.core.presentationspec.main_path_wire`, so no page rule
-#: consults this number any more.
-PAGE_HIGH_FANOUT = 3
+# 097 removed ``PAGE_HIGH_FANOUT``: 069 sec.7 retired the member count at page
+# scale ("a rail is a bus at any fan-out") and 096 moved the crossing net's
+# wire-or-name decision to
+# :func:`~boardwise.core.presentationspec.main_path_wire`, so the constant's only
+# remaining reader was the ``check_page(high_fanout=...)`` parameter that was
+# accepted and validated but consulted by no rule. Both went together — a number
+# kept "for the caller" is a second way of saying what nothing reads.
 
 
 class ReadabilityError(ValueError):
@@ -1797,7 +1795,6 @@ def check_page(
     *,
     keepouts: Sequence[Box] = (),
     module_gap: float = PAGE_MODULE_GAP,
-    high_fanout: int = PAGE_HIGH_FANOUT,
 ) -> CheckResult:
     """Run the eight page constraints and measure the page's soft metrics.
 
@@ -1817,15 +1814,14 @@ def check_page(
     ``keepouts`` are the page-level reserved regions (a title block, a reserved
     area). ``module_gap`` is the clear space two frames must keep — the caller
     passes the values it compiled with; the defaults are this module's own
-    statement of the same rules. ``high_fanout`` is the caller's statement of
-    the member count at which a net stops being a local connection (053 sec.7);
-    **no page rule reads it any more** — 069 sec.7 retired the count at this
-    scale ("a rail is a bus at any fan-out") and the one crossing net a page
-    draws as a wire is the `mainPath` one
-    (:func:`~boardwise.core.presentationspec.main_path_wire`, 096), so it is
-    accepted and validated rather than consulted. The lattice grid is
-    deliberately *not* a parameter: the page domain measures frames and wires,
-    not lattice alignment.
+    statement of the same rules. There is deliberately **no member-count
+    parameter**: 069 sec.7 retired the count at this scale ("a rail is a bus at
+    any fan-out") and the one crossing net a page draws as a wire is the
+    `mainPath` one (:func:`~boardwise.core.presentationspec.main_path_wire`,
+    096), so a parameter nothing consults is not stated at all (097 removed the
+    one that was accepted and validated but never read). The lattice grid is
+    deliberately *not* a parameter either: the page domain measures frames and
+    wires, not lattice alignment.
     """
     for value, expected in (
         (page_layout, PageLayoutPlan),
@@ -1839,10 +1835,6 @@ def check_page(
     if isinstance(module_gap, bool) or not isinstance(module_gap, (int, float)) or module_gap <= 0:
         raise ReadabilityError(
             f"module_gap must be a positive number of canvas units, got {module_gap!r}"
-        )
-    if isinstance(high_fanout, bool) or not isinstance(high_fanout, int) or high_fanout < 1:
-        raise ReadabilityError(
-            f"high_fanout must be a positive integer, got {high_fanout!r}"
         )
     reserved: list[Box] = []
     for index, item in enumerate(keepouts):
