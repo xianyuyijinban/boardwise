@@ -708,6 +708,12 @@ class LedCurrent(FactsRule):
     rail at any other, or at no nameable, voltage is UNKNOWN with the reason
     attached, because the oracle has stated a window for the 3V3 domain only.
 
+    The quantity is read off the **circuit**, not off a list (#14): resistors
+    over the same pair of nets are in parallel and combine (two 2.2 kΩ are
+    1.1 kΩ, not 4.4 kΩ), a segment on either side of the LED is in series and
+    adds, and one part is counted once however many of the LED's nets it
+    touches. :meth:`_series_total` is where that reading lives.
+
     Two properties are deliberate and were measured, not assumed:
 
     * **the LED's own facts are not required.** The verdict is the resistor's
@@ -875,6 +881,56 @@ class LedCurrent(FactsRule):
                 return [], value, pin.net
         return [], None, ""
 
+    def _series_total(
+        self, path: list[tuple[Component, float, str, tuple[str, ...]]]
+    ) -> tuple[float, str]:
+        """The path read as a circuit: ``(ohms, how the number was reached)``.
+
+        Issue #14. The path is a list of *segments*, and a list adds; a circuit
+        does not. Two rules, both of them about the topology rather than about
+        the enumeration:
+
+        * **a part is one part.** A resistor whose both ends sit on the LED's
+          own nets has no far net, so :meth:`_series_resistance` lists it once
+          per net; adopted twice it is added to itself;
+        * **resistors over the same pair of nets are in parallel, and parallel
+          resistances do not add.** One rail behind two resistors that share
+          the LED's net is two parts in parallel: two 2.2 kΩ are 1.1 kΩ, which
+          is inside the oracle's window -- where the sum, 4.4 kΩ, was reported
+          as a WARN above it.
+
+        Segments on **different** nets of the LED's loop stay what they are --
+        series, and they add -- so a path of one segment, which is what every
+        board measured so far has, reads byte-for-byte as it did. A parallel
+        group is printed as ``R5(2200Ω)∥R6(2200Ω)``: the symbol says the two
+        combine, and the combined number is the total the caller prints once.
+        """
+        adopted: dict[str, tuple[Component, float, str, tuple[str, ...]]] = {}
+        for entry in path:
+            adopted.setdefault(entry[0].designator, entry)
+        groups: dict[tuple[tuple[str, ...], str], list[tuple[Component, float]]] = {}
+        order: list[tuple[tuple[str, ...], str]] = []
+        for comp, ohms, net, shared in adopted.values():
+            key = (shared, net)
+            if key not in groups:
+                groups[key] = []
+                order.append(key)
+            groups[key].append((comp, ohms))
+        parts: list[str] = []
+        total = 0.0
+        for key in order:
+            members = groups[key]
+            if len(members) == 1:
+                comp, ohms = members[0]
+                parts.append(f"{comp.designator}({ohms:.4g}\u03a9)")
+                total += ohms
+                continue
+            parts.append(
+                "\u2225".join(f"{c.designator}({o:.4g}\u03a9)" for c, o in members)
+            )
+            total += 1.0 / sum(1.0 / ohms for _comp, ohms in members)
+        return total, "+".join(parts)
+
     def _rows(self, model: DesignModel) -> list[tuple[Outcome, str | None]]:
         guesses = infer_net_domains(model, self.library)
         rows: list[tuple[Outcome, str | None]] = []
@@ -885,7 +941,7 @@ class LedCurrent(FactsRule):
             path, supply_volts, supply_net = self._supply_side(
                 led, resistors, guesses
             )
-            total = sum(ohms for _c, ohms, _n, _s in path)
+            total, resistors_text = self._series_total(path)
             evidence = [
                 f"{led.designator} pins "
                 + ", ".join(
@@ -894,12 +950,7 @@ class LedCurrent(FactsRule):
             ]
             if path:
                 evidence.append(
-                    "series resistance "
-                    + "+".join(
-                        f"{comp.designator}({ohms:.4g}\u03a9)"
-                        for comp, ohms, _n, _s in path
-                    )
-                    + f" = {total:.4g} \u03a9"
+                    f"series resistance {resistors_text} = {total:.4g} \u03a9"
                 )
             # Issue #19 follow-up (076). This rule's two reads are the pairing
             # (which resistor shares a net with the LED) and the rail's voltage,
@@ -987,10 +1038,6 @@ class LedCurrent(FactsRule):
                     "ERROR",
                 ))
                 continue
-            resistors_text = "+".join(
-                f"{comp.designator}({ohms:.4g}\u03a9)"
-                for comp, ohms, _n, _s in path
-            )
             # Quote the evidence that named the rail: the whole 011 family is
             # built on "who says so", and on the golden board the answer is an
             # LDO's facts rather than the net's own name.
