@@ -163,7 +163,7 @@ from boardwise.core.circuitspec import CircuitSpec
 from boardwise.core.geometry import transform_point
 from boardwise.core.layoutplan import LayoutPlan
 from boardwise.core.pagelayoutplan import PageLayoutPlan
-from boardwise.core.presentationspec import PresentationSpec
+from boardwise.core.presentationspec import PresentationSpec, main_path_wire
 from boardwise.core.symbolprofile import (
     Box,
     SymbolProfile,
@@ -293,9 +293,12 @@ PAGE_KINDS: tuple[str, ...] = (
 PAGE_MODULE_GAP = 40.0
 
 #: Member count above which a net is a *bus* and is always expressed by name
-#: (053 sec.7's high fan-out). Echoed for the same reason as the gap above: the
-#: main-path rule needs it to tell "this edge must be wired" from "this net may
-#: never be a long wire tree", and the compiler passes its own budget's value.
+#: (053 sec.7's high fan-out). Echoed for the same reason as the gap above, and
+#: validated where it is accepted — but 069 sec.7 retired the count at page
+#: scale (a rail is a bus at any fan-out) and 096 moved the crossing net's
+#: wire-or-name decision to
+#: :func:`~boardwise.core.presentationspec.main_path_wire`, so no page rule
+#: consults this number any more.
 PAGE_HIGH_FANOUT = 3
 
 
@@ -1812,11 +1815,17 @@ def check_page(
     reading of the page that makes both true.
 
     ``keepouts`` are the page-level reserved regions (a title block, a reserved
-    area). ``module_gap`` is the clear space two frames must keep, ``high_fanout``
-    the member count at which a net stops being a local connection (053 sec.7) —
-    the caller passes the values it compiled with; the defaults are this module's
-    own statement of the same rules. The lattice grid is deliberately *not* a
-    parameter: the page domain measures frames and wires, not lattice alignment.
+    area). ``module_gap`` is the clear space two frames must keep — the caller
+    passes the values it compiled with; the defaults are this module's own
+    statement of the same rules. ``high_fanout`` is the caller's statement of
+    the member count at which a net stops being a local connection (053 sec.7);
+    **no page rule reads it any more** — 069 sec.7 retired the count at this
+    scale ("a rail is a bus at any fan-out") and the one crossing net a page
+    draws as a wire is the `mainPath` one
+    (:func:`~boardwise.core.presentationspec.main_path_wire`, 096), so it is
+    accepted and validated rather than consulted. The lattice grid is
+    deliberately *not* a parameter: the page domain measures frames and wires,
+    not lattice alignment.
     """
     for value, expected in (
         (page_layout, PageLayoutPlan),
@@ -1861,7 +1870,7 @@ def check_page(
         plan, circuit_spec, presentation_spec, frames, cross,
     ))
     violations.extend(_check_main_paths(
-        presentation_spec, circuit_spec, frames, cross, high_fanout,
+        presentation_spec, circuit_spec, frames, cross,
     ))
     violations.extend(_check_page_keepouts(frames, reserved))
 
@@ -2352,28 +2361,24 @@ def _shared_nets(
     )
 
 
-def _is_bus(net: Any, high_fanout: int) -> bool:
-    """Is this net one that is always expressed by name (053 sec.7)?"""
-    return net.cls == "gnd" or (
-        net.cls == "power" and len(net.members) > high_fanout
-    )
-
-
 def _check_main_paths(
     presentation_spec: PresentationSpec,
     circuit_spec: CircuitSpec,
     frames: Mapping[str, Box],
     cross: Sequence[tuple[int, str, str, str]],
-    high_fanout: int,
 ) -> list[HardViolation]:
     """A `mainPath` edge the reader is meant to follow is a wire, or it says so.
 
     056 sec.3: a main-path edge that ended up named instead of wired is reported
     and *named* — never silently downgraded. The rule here is the checkable half
-    of that: the edge must be joined by a cross-module wire of a net the two
-    modules share that is not a bus (a ground or a wide rail may never become a
-    long wire tree, so a main-path mark on one is a contradiction the
-    presentation has to resolve rather than a wire the page should draw).
+    of that: the edge must be joined by a cross-module wire, and which shared net
+    may *be* that wire is not this module's judgement — it is
+    :func:`~boardwise.core.presentationspec.main_path_wire`, the same function the
+    page compiler picks each port's style with (096). A second copy of the rule
+    here (the member-count threshold 069 sec.7 retired: `power` with more than
+    `high_fanout` members is a bus) is what made a four-member rail a wire to the
+    compiler and a bus to the checker, so a page the compiler had just drawn was
+    refused by the checker on the same pass.
     """
     nets_by_module = _nets_by_module(circuit_spec, presentation_spec)
     out: list[HardViolation] = []
@@ -2382,10 +2387,15 @@ def _check_main_paths(
         if not pair <= set(frames):
             continue  # a page that does not place both modules: the compiler refuses
         shared = _shared_nets(nets_by_module, edge.from_module, edge.to_module)
-        eligible = [
-            net_id for net_id in shared
-            if not _is_bus(circuit_spec.net(net_id), high_fanout)
-        ]
+        eligible: list[str] = []
+        for net_id in shared:
+            net = circuit_spec.net(net_id)
+            if main_path_wire(
+                presentation_spec,
+                net.cls if net is not None else None,
+                (edge.from_module, edge.to_module),
+            ):
+                eligible.append(net_id)
         wired = [
             net_id for _index, net_id, left, right in cross
             if {left, right} == pair and net_id in eligible

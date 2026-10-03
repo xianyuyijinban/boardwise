@@ -1854,6 +1854,27 @@ def _snap(value: float, grid: float, residue: float) -> float:
     return round((value - residue) / grid) * grid + residue
 
 
+def _snap_inside(value: float, grid: float, residue: float, inside: int) -> float:
+    """`value` on the lattice, rounded **towards the page's inside** (096).
+
+    ``inside`` is the direction a larger displacement moves the drawing in:
+    ``+1`` for a displacement anchored on the drawing's left or bottom edge
+    (bigger moves it right / up), ``-1`` for its right or top edge. That is the
+    same rule said the other way round — the left and bottom edges round with
+    ``ceil``, the right and top with ``floor`` — because "towards the inside" is
+    a property of the edge the anchor was computed from, not of the axis.
+
+    The distinction from :func:`_snap` is the whole point here: the rounding is
+    this compiler's convenience and the page edge is the author's constraint, so
+    a displacement computed to put the drawing just inside the margin must not
+    be rounded *out* of it. Rounding to the nearest lattice point can land half
+    a step outside — the defect 096 fixes, measured as a 岳 sample that the
+    compiler fitted to a 1170x825 sheet and then refused as too small.
+    """
+    steps = (value - residue) / grid
+    return (math.ceil(steps) if inside > 0 else math.floor(steps)) * grid + residue
+
+
 def _close(left: float, right: float, tol: float = 1e-6) -> bool:
     return abs(left - right) <= tol
 
@@ -2051,6 +2072,24 @@ def _anchor_to_page(
     its coordinates say — for the text placement, for the routing and for the
     readability check alike.
 
+    Both displacements are snapped **towards the page's inside** (096): the
+    margin is the author's constraint and the lattice is this compiler's
+    convenience, so the rounding may not be the thing that puts the drawing
+    outside. Rounding to the nearer lattice point can move it outwards by up to
+    half a step, which is what made the margin the anchor had just left and the
+    margin `_overflow` measures differ — measured on a 岳 sample stated on a
+    1170x825 sheet, the left edge landed 5 units left of the margin and the page
+    was refused as too small while the same circuit without a stated page drew
+    fine. `_overflow`'s 1e-6 is not loosened to hide that: the edge is the edge.
+
+    The rounding is one of two contributions and the smaller one: the allowance
+    above is an estimate (`_annotation_allowance`), and 096 measured it 4 units
+    short of what that sample actually draws on its left — with the displacement
+    left exact, the drawing still lands outside. What the inward snap adds is
+    what covers that shortfall here, not slack in the check; the estimate is
+    still an estimate, and an exact-lattice displacement has nothing to add (096
+    measured both cases).
+
     Skipped when a part is locked, because a lock's coordinates are the
     engineer's: the drawing then stays exactly where the lock put it (053 sec.5
     scenario 12), and the page check reports an overflow if the lock is outside.
@@ -2067,8 +2106,11 @@ def _anchor_to_page(
     side, vertical = _annotation_allowance(ctx)
     dx = page[0] + PAGE_MARGIN + side - min(box[0] for box in placed)
     dy = page[3] - PAGE_MARGIN - vertical - max(box[3] for box in placed)
-    dx = _snap(dx, ctx.budget.grid, residue[0])
-    dy = _snap(dy, ctx.budget.grid, residue[1])
+    # `dx` is anchored on the drawing's left edge and `dy` on its top edge, so a
+    # *larger* dx moves the drawing right (inwards) and a *smaller* dy moves it
+    # down (inwards) — see :func:`_snap_inside` for the other two edges.
+    dx = _snap_inside(dx, ctx.budget.grid, residue[0], inside=1)
+    dy = _snap_inside(dy, ctx.budget.grid, residue[1], inside=-1)
     for part_id in origins:
         origins[part_id] = (origins[part_id][0] + dx, origins[part_id][1] + dy)
 
