@@ -65,9 +65,11 @@ def test_a_stub_that_would_land_on_a_foreign_wire_steps_aside():
     stub, blockers = drawapply._place_label_stub(label, built, {}, ())
     assert stub is not None, blockers
     # 落点不是旧行为的 (280,720)
-    assert stub != (280.0, 720.0)
-    # 且这条 run 真的躲开了那条导线
-    assert drawapply._label_stub_blocked(label, (290.0, 720.0), stub, built, {}, ()) is None
+    assert stub[-1] != (280.0, 720.0)
+    # 且这条 run 每一段都真的躲开了那条导线
+    for head, tail in zip(stub, stub[1:]):
+        assert drawapply._label_stub_blocked(
+            label, head, tail, built, {}, ()) is None
 
 
 def test_the_preferred_run_is_reported_when_it_is_blocked():
@@ -91,7 +93,8 @@ def test_every_direction_blocked_is_refused_naming_the_blockers():
         built.wires.append(drawapply.PlanDrawWire(net="V3", points=points))
     stub, blockers = drawapply._place_label_stub(label, built, {}, ())
     assert stub is None
-    assert len(blockers) == 4, blockers
+    # 四条直线方向 + 两条折线方向，各一条点名（099f 起折线也进拒绝清单）
+    assert len(blockers) == 6, blockers
     assert all("net V3's wire" in line for line in blockers)
 
 
@@ -134,8 +137,8 @@ def test_a_free_stub_lands_exactly_where_057_put_it():
     built = _free_built()
     stub, blockers = drawapply._place_label_stub(label, built, {}, ())
     assert blockers == []
-    assert stub == (280.0, 720.0)
-    assert stub == drawapply._label_stub(label)
+    assert stub == ((290.0, 720.0), (280.0, 720.0))
+    assert stub[-1] == drawapply._label_stub(label)
     assert LABEL_STUB_LENGTH == 10.0
 
 
@@ -144,7 +147,7 @@ def test_a_box_reach_shorter_than_the_stub_caps_the_length():
     label = _label(0.0, 0.0, (-5.0, -4.5, 0.0, 4.5))
     built = _free_built()
     stub, _blockers = drawapply._place_label_stub(label, built, {}, ())
-    assert stub == (-5.0, 0.0)
+    assert stub == ((0.0, 0.0), (-5.0, 0.0))
 
 
 # ------------------------------------------------ 3. 出货规格：099c 那个现场
@@ -194,7 +197,12 @@ def test_the_ch340_page_builds_and_no_stub_touches_another_net():
     # the 099c defect in one line: RXD's stub is no longer the 10-unit run that
     # sat on the V3 route's corner
     rxd = next(item for item in stubs if item.net == "RXD")
-    assert rxd.points != [(290.0, 720.0), (280.0, 720.0)]
+    # 099f: RXD 落成折线（先平移一格再向标签侧），因为左向直线全被 V3 走线堵死；
+    # 无论哪种形状，都不再是 099c 那段落在线上的两点直线
+    assert len(rxd.points) == 3, rxd.points
+    anchor, corner, far = rxd.points
+    assert corner[0] == anchor[0] and corner[1] != anchor[1]   # 一格旁移
+    assert far[1] == corner[1] and far[0] < corner[0]          # 再向标签侧（左）
 
     foreign = [
         (item.points[index], item.points[index + 1], item.net)
@@ -207,14 +215,16 @@ def test_the_ch340_page_builds_and_no_stub_touches_another_net():
         for number, point in drawapply.expected_pin_points(part).items()
     ]
     for stub in stubs:
-        start, end = stub.points[0], stub.points[-1]
-        for a, b, net in foreign:
-            if net == stub.net:
-                continue
-            assert not _segments_touch(start, end, a, b), (stub.net, (start, end), net, (a, b))
-        for part_id, pin, point in pins:
-            if _point_on(start, end, point) and point != start:
-                pytest.fail(f"{stub.net}'s stub runs through {part_id}.{pin} at {point}")
+        for start, end in zip(stub.points, stub.points[1:]):
+            for a, b, net in foreign:
+                if net == stub.net:
+                    continue
+                assert not _segments_touch(start, end, a, b), (
+                    stub.net, (start, end), net, (a, b))
+            for part_id, pin, point in pins:
+                if _point_on(start, end, point) and point != start:
+                    pytest.fail(
+                        f"{stub.net}'s stub runs through {part_id}.{pin} at {point}")
 
 
 def test_a_label_with_no_free_stub_refuses_the_plan(monkeypatch):
@@ -246,5 +256,5 @@ def test_a_boxed_in_label_is_refused_and_every_direction_is_named():
         blocked.wires.append(drawapply.PlanDrawWire(net="V3", points=points))
     stub, blockers = drawapply._place_label_stub(label, blocked, {}, ())
     assert stub is None
-    assert len(blockers) == 4, blockers
+    assert len(blockers) == 6, blockers
     assert all("net V3's wire" in line for line in blockers)

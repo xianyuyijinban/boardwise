@@ -137,6 +137,34 @@ _LABEL_STUB_DIRECTIONS: tuple[tuple[float, float], ...] = (
     (1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0),
 )
 
+#: The perpendicular steps a **bent** stub is tried at (099f), before the same
+#: length ladder runs out along the label's own side. A straight run is blocked
+#: when a foreign conductor sits one lattice step from the pin — 099e's RXD: the
+#: V3 route's corner (285,720) hugged the pin tip at (290,720) for its whole
+#: outward run — and the shape that gets out of there is the one a human draws:
+#: **one step aside, then out to where the label's box is** (069 sec.10's flag
+#: lead shape). Tried after every straight rung, so a drawing that had a clear
+#: straight stub keeps it to the byte.
+LABEL_STUB_STEPS: tuple[float, ...] = (DRAW_GRID, 2 * DRAW_GRID)
+
+
+@dataclass(frozen=True)
+class _StubRun:
+    """One candidate run for a label's name stub (099d straight, 099f bent).
+
+    ``points`` is the polyline the stub would be drawn as, anchor first; ``side``
+    is the direction of its last leg (the label's own side), ``shape`` spells the
+    rung out for the refusal text ("left 10" / "up 5 then left 10") and
+    ``family`` is the coarser name one refusal line is written per ("straight
+    left" / "bent up then left") — a refusal lists one line per family, not one
+    per length rung.
+    """
+
+    points: tuple[tuple[float, float], ...]
+    side: tuple[float, float]
+    shape: str
+    family: str
+
 #: What the plan's ``source.inputSha256`` is a digest **of**. Spelled out because
 #: a digest whose basis is not written down is a number nobody can reproduce.
 SOURCE_BASIS = (
@@ -736,10 +764,21 @@ def module_plan(
                     "(099d, measured on the CH340 page), so no run was drawn; every "
                     "candidate is blocked: " + "; ".join(blockers)
                 )
-            length = math.dist(anchor, stub)
+            length = sum(
+                math.dist(head, tail)
+                for head, tail in zip(stub, stub[1:])
+            )
+            drawn = " → ".join(f"({point[0]:g}, {point[1]:g})" for point in stub)
+            bent_note = (
+                ""
+                if len(stub) == 2 else
+                " (bent: one lattice step aside first, 099f — every straight run "
+                "out of this pin was blocked, and this puts the name back on the "
+                "side the label's box is on)"
+            )
             built.wires.append(PlanDrawWire(
                 net=label.net,
-                points=[anchor, stub],
+                points=[anchor, *stub[1:]],
                 from_pin=pin_at(anchor),
                 purpose="name stub (057: stands in for a label this host cannot place)",
             ))
@@ -748,10 +787,10 @@ def module_plan(
                 f"({label.x:g}, {label.y:g}), and this host cannot place one "
                 "(`sch.place_netlabel` is measured unusable, 029); no planned wire of "
                 f"{label.net} reaches that point, so a {length:g}-unit stub "
-                f"({label.x:g}, {label.y:g}) → ({stub[0]:g}, {stub[1]:g}) carries the "
+                f"{drawn} carries the "
                 "name instead — without it the pin would sit on an unnamed net and the "
                 "page's same-named nets would never merge in the editor's project-wide "
-                "netlist (057 sec.4)"
+                "netlist (057 sec.4)" + bent_note
             )
             continue
         built.downgrades.append(
@@ -858,23 +897,36 @@ def _label_stub(label: Any) -> tuple[float, float]:
     099d: this is the **preferred** candidate only. A stub that lands on or
     crosses another net's conductor is a short in this host's netlist (measured:
     the V3 wire merged into RXD), so :func:`_place_label_stub` tries the other
-    directions and lengths and refuses the drawing when none is free.
+    directions, the other lengths and 099f's bent runs, and refuses the drawing
+    when none is free.
     """
-    far, _direction, _length = _label_stub_candidates(label)[0]
-    return far
+    run = _label_stub_candidates(label)[0]
+    return run.points[-1]
 
 
-def _label_stub_candidates(
-    label: Any,
-) -> list[tuple[tuple[float, float], tuple[float, float], float]]:
-    """``(far end, direction, length)`` for a label's stub, preferred first.
+def _label_stub_candidates(label: Any) -> list[_StubRun]:
+    """The runs a label's name stub is tried as, preferred and simplest first.
 
-    The ladder is 099d's: the preferred run (the label's own text side, at
-    :data:`LABEL_STUB_LENGTH` or the box's reach when that is shorter) first, so
-    a drawing that was free before lands on exactly the same point; then the same
-    length along the rest of the compass; then — the stub still blocked — the
-    :data:`LABEL_STUB_LENGTHS` rungs again in all four directions. A stub that can
-    take none of them is refused, never drawn across a foreign conductor.
+    Three rungs, and the order is the whole point of it:
+
+    1. **straight, preferred first** — the label's own text side at
+       :data:`LABEL_STUB_LENGTH` (or the box's reach when that is shorter), then
+       the same length along the rest of the compass, then the
+       :data:`LABEL_STUB_LENGTHS` rungs in all four directions. A drawing whose
+       stub was free before lands on exactly the point 057 gave it (099d's
+       zero-movement rule);
+    2. **bent, towards the label** (099f) — one perpendicular step out
+       (:data:`LABEL_STUB_STEPS`) and then the same length ladder along the
+       preferred side, for the case a straight run cannot get out at all: 099e's
+       RXD had a foreign wire one lattice step from its pin, every straight rung
+       landed on it, and the only free straight run left pointed *into* the
+       symbol. The bent run is the shape a human draws there (069 sec.10's flag
+       lead), and it puts the name back on the side the label's box is on;
+    3. nothing else: a stub that can take none of them is refused, never drawn
+       across another net's conductor.
+
+    Each segment of a bent run is checked on its own — a two-segment run that is
+    clear at the corner and blocked on the far leg is blocked, not half-drawn.
     """
     x, y = float(label.x), float(label.y)
     box = label.bbox
@@ -897,14 +949,50 @@ def _label_stub_candidates(
     directions = [preferred] + [
         item for item in _LABEL_STUB_DIRECTIONS if item != preferred
     ]
-    out: list[tuple[tuple[float, float], tuple[float, float], float]] = []
+    anchor = (x, y)
+    out: list[_StubRun] = []
+    # The label's own side, straight — 057's rung, and the *first* candidate, so
+    # a drawing whose stub was free lands on exactly the point 057 gave it.
     for length in lengths:
-        for direction in directions:
-            out.append((
-                (round(x + direction[0] * length, 6),
-                 round(y + direction[1] * length, 6)),
-                direction,
-                length,
+        far = (round(x + preferred[0] * length, 6),
+               round(y + preferred[1] * length, 6))
+        out.append(_StubRun(
+            points=(anchor, far), side=preferred,
+            shape=f"{_direction_text(preferred)} {length:g}",
+            family=f"straight {_direction_text(preferred)}",
+        ))
+    # Then the bent runs, before any straight run that would carry the name to
+    # another side of the pin (099f): "aside one step, then out to the label" is
+    # where the label's box is, and 099e measured what the alternative looks
+    # like — a 5-unit stub into the symbol, with the host drawing the name over
+    # its own edge.
+    across = (0.0, 1.0) if preferred[0] != 0.0 else (1.0, 0.0)
+    for step in LABEL_STUB_STEPS:
+        for sign in (1.0, -1.0):
+            corner = (round(x + across[0] * sign * step, 6),
+                      round(y + across[1] * sign * step, 6))
+            for length in lengths:
+                far = (round(corner[0] + preferred[0] * length, 6),
+                       round(corner[1] + preferred[1] * length, 6))
+                step_side = _direction_text((across[0] * sign, across[1] * sign))
+                out.append(_StubRun(
+                    points=(anchor, corner, far), side=preferred,
+                    shape=(
+                        f"{step_side} {step:g} then "
+                        f"{_direction_text(preferred)} {length:g}"
+                    ),
+                    family=f"bent {step_side} then {_direction_text(preferred)}",
+                ))
+    # Only then the rest of the compass: a stub on another side of the pin still
+    # names the net, which is what the stub is for.
+    for length in lengths:
+        for direction in directions[1:]:
+            far = (round(x + direction[0] * length, 6),
+                   round(y + direction[1] * length, 6))
+            out.append(_StubRun(
+                points=(anchor, far), side=direction,
+                shape=f"{_direction_text(direction)} {length:g}",
+                family=f"straight {_direction_text(direction)}",
             ))
     return out
 
@@ -986,23 +1074,35 @@ def _place_label_stub(
     built: "_Built",
     bodies: Mapping[str, tuple[float, float, float, float]],
     pins: Sequence[tuple[str, str, tuple[float, float]]],
-) -> tuple[tuple[float, float] | None, list[str]]:
-    """The first free stub far end, or ``(None, blockers)``.
+) -> tuple[tuple[tuple[float, float], ...] | None, list[str]]:
+    """The first free stub run (anchor first), or ``(None, blockers)``.
 
-    ``blockers`` names what stopped each *direction*'s preferred run — the four
-    lines a refusal quotes — so "it could not be drawn" arrives with the geometry
-    that made it so (053 sec.4's four categories, at page scale).
+    Every *segment* of a candidate is checked on its own (099f): a bent run that
+    is clear at its corner and blocked on its far leg is blocked, never half
+    drawn, and a straight run is the one-segment case of the same walk.
+
+    ``blockers`` names what stopped each rung's preferred run — one line per
+    shape (the four straight directions, then the two bends towards the label) —
+    so "it could not be drawn" arrives with the geometry that made it so
+    (053 sec.4's four categories, at page scale).
     """
     start = (float(label.x), float(label.y))
     blockers: list[str] = []
-    seen_direction: set[tuple[float, float]] = set()
-    for end, direction, _length in _label_stub_candidates(label):
-        reason = _label_stub_blocked(label, start, end, built, bodies, pins)
+    seen_shape: set[str] = set()
+    for run in _label_stub_candidates(label):
+        reason = None
+        for head, tail in zip(run.points, run.points[1:]):
+            reason = _label_stub_blocked(label, head, tail, built, bodies, pins)
+            if reason is not None:
+                break
         if reason is None:
-            return end, blockers
-        if direction not in seen_direction:
-            seen_direction.add(direction)
-            blockers.append(f"{_direction_text(direction)} ({_point_pair(end, end)}): {reason}")
+            return run.points, blockers
+        if run.family not in seen_shape:
+            seen_shape.add(run.family)
+            far = run.points[-1]
+            blockers.append(
+                f"{run.shape} ({_point_pair(far, far)}): {reason}"
+            )
     return None, blockers
 
 
