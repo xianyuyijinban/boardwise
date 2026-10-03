@@ -277,9 +277,30 @@ def _members(model: DesignModel, net: str | None) -> list[tuple[str, str]]:
     return [] if node is None else [(str(des), str(pin)) for des, pin in node.pins]
 
 
+def _read_members(model: DesignModel, net: str | None) -> list[tuple[str, str]]:
+    """The pins *this file reads on its own account*, in designator order.
+
+    ``_members`` answers in the netlist's own order, which is not a design fact:
+    a netlist is a list, ``compare``/``reconcile_names`` reorder it, and the same
+    board read twice can hand the same pins over the other way round (issue #57
+    finding 6). A reading this file makes for itself — the resistors it collects,
+    which of them is the shunt, the amplifier it names — goes through here
+    instead, so a verdict and its evidence are a function of the board rather
+    than of the order a list happened to arrive in. The two places that quote
+    what the *netlist* says (``_quoted_members`` at the ARCH-1/ARCH-3 rows) keep
+    the netlist's own order: their text is already published, and re-ordering it
+    would move rows this batch does not touch.
+    """
+    return sorted(_members(model, net))
+
+
+def _quoted(pins) -> str:
+    """``"U1.7, C73.1"`` — a pin list as the rows quote it."""
+    return ", ".join(f"{des}.{pin}" for des, pin in pins) or "（网里没有成员）"
+
+
 def _quoted_members(model: DesignModel, net: str | None) -> str:
-    members = _members(model, net)
-    return ", ".join(f"{des}.{pin}" for des, pin in members) or "（网里没有成员）"
+    return _quoted(_members(model, net))
 
 
 def _power_class(guesses: dict, net: str | None) -> str:
@@ -995,9 +1016,15 @@ def _resistor_legs(
     resistor whose value does not parse as a resistance is skipped too: a row that
     printed ``R17（10kΩ）`` for a value nobody could read would be inventing the
     number the arithmetic then rests on.
+
+    "In designator order" is a promise this docstring used to make and the code
+    kept only by accident: it walked ``_members``, i.e. the netlist's own order,
+    so the list — and with it ``shunts[0]`` — moved when the netlist did (issue
+    #57 finding 6). It now reads through :func:`_read_members` and the promise is
+    the code.
     """
     legs: list[ResistorLeg] = []
-    for designator, _pin in _members(model, net):
+    for designator, _pin in _read_members(model, net):
         if designator == exclude:
             continue
         comp = model.components.get(designator)
@@ -1019,6 +1046,84 @@ def _resistor_legs(
             far_power=_power_class(guesses, far),
         ))
     return legs
+
+
+#: The word the contract's own vocabulary uses for "this chain is a current
+#: sense" (``KIND_CURRENT_SENSE``), read here as the **block** spelling of the
+#: same claim: an ``IntentBlock`` whose ``kind`` is this says "these parts
+#: realise this job" (A3a), and the part among them that sits on the chain to
+#: ground is the contract's answer to "which resistor is the shunt".
+SENSE_BLOCK_KIND = KIND_CURRENT_SENSE
+
+
+def _declared_sense_parts(intent: IntentSource | None) -> dict[str, str]:
+    """``designator -> "blocks[id='senseU'].parts"`` — the contract's role claims.
+
+    Read as data, like every other consumer of this channel: the block is quoted,
+    not interpreted. A document that carries none — the usual case, and every
+    board without a contract — answers an empty mapping, which is "the contract
+    said nothing", never "the contract said no".
+    """
+    declared: dict[str, str] = {}
+    document = getattr(intent, "document", None)
+    for block in getattr(document, "blocks", None) or []:
+        if str(getattr(block, "kind", "") or "") != SENSE_BLOCK_KIND:
+            continue
+        where = f"blocks[id={getattr(block, 'id', '')!r}].parts"
+        for part in getattr(block, "parts", None) or []:
+            declared.setdefault(str(part), where)
+    return declared
+
+
+def _sense_shunt(
+    intent: IntentSource | None, shunts: list[ResistorLeg]
+) -> tuple[ResistorLeg | None, str, str]:
+    """The sense shunt among ``shunts`` — by electrical role, never by list order.
+
+    Returns ``(leg, declared_where, refusal)``: the shunt and the declaration that
+    named it (empty when the reading fell back to structure), or — ``leg is
+    None`` — the refusal saying why the two sources disagree. Two readings, in
+    this order (issue #57 finding 6):
+
+    * **the contract's role declaration** (A3a): a ``current-sense`` block whose
+      ``parts`` name one of the resistors sitting on this chain to ground;
+    * **the smallest resistance**: a sense shunt *is* the part that is orders of
+      magnitude below the bleeders and dividers around it, so among the
+      resistors to ground the smallest one is the sense part. Ties break on the
+      designator, so the answer is a function of the board rather than of the
+      order a list arrived in — which is the defect this replaces, ``shunts[0]``.
+
+    When the declaration names a part that is **not** the smallest one, the two
+    readings contradict each other and this build does not choose: "the contract
+    is out of date" and "the smallest resistor is a bleeder, not the shunt" are
+    both plausible, and which one to change is the engineer's decision. A
+    declaration that names several of them is the same question in a third form.
+    Both answer ``None`` and a sentence naming the parts and the numbers, which
+    the caller files as a row.
+    """
+    smallest = min(shunts, key=lambda leg: (leg.ohms, leg.designator))
+    declared = _declared_sense_parts(intent)
+    named = [leg for leg in shunts if leg.designator in declared]
+    if not named:
+        return smallest, "", ""
+    if len(named) > 1:
+        listed = "、".join(
+            f"{leg.designator}（{_ohms(leg.ohms)}）"
+            for leg in sorted(named, key=lambda leg: leg.designator)
+        )
+        sources = "、".join(sorted({declared[leg.designator] for leg in named}))
+        return None, "", (
+            f"合同把 {listed} 都声明成这条链的电流采样件（{sources}）—— "
+            "哪一颗是采样电阻，声明本身没说清"
+        )
+    only = named[0]
+    if only.ohms > smallest.ohms:
+        return None, "", (
+            f"声明与结构矛盾：合同 {declared[only.designator]} 点名 "
+            f"{only.designator}（{_ohms(only.ohms)}）是这条链的采样件，而网上到地的"
+            f"电阻里阻值最小的是 {smallest.designator}（{_ohms(smallest.ohms)}）"
+        )
+    return only, declared[only.designator], ""
 
 
 @dataclass(frozen=True)
@@ -1337,7 +1442,7 @@ class ArchSenseBiasClosure(FactsRule):
         shunts = [leg for leg in legs if leg.far_is_ground]
         foreign = [leg for leg in legs if not leg.far_is_ground]
         evidence.append(
-            f"{net} 成员：{_quoted_members(model, net)}"
+            f"{net} 成员：{_quoted(_read_members(model, net))}"
             + (
                 "；网上的电阻：" + "、".join(
                     f"{leg.designator}（{_ohms(leg.ohms)} → {leg.far}）" for leg in legs
@@ -1368,7 +1473,29 @@ class ArchSenseBiasClosure(FactsRule):
                 MEASUREMENT_GRADE,
                 target,
             )
-        shunt = shunts[0]
+        shunt, declared_where, refusal = _sense_shunt(self.intent, shunts)
+        if shunt is None:
+            return (
+                Outcome(
+                    rule_id=self.id,
+                    state="UNKNOWN",
+                    subject=net,
+                    message=(
+                        f"{net}：采样电阻 R_sense 判不出来 —— {refusal}。本规则不替它裁"
+                        "哪一颗：采样电阻是这条链的电气定义（网上到地电阻里阻值最小的"
+                        "那个），而声明是工程师的说法，两者矛盾时改哪一边是他的决定。"
+                        "修法：把合同 blocks[].parts 改成真正的采样件，或把采样件画成 "
+                        f"{net!r} 上到地电阻里阻值最小的那个。" + where
+                    ),
+                    evidence=evidence,
+                    missing_fact=(
+                        f"{net} 的采样电阻：{refusal} —— 要么把合同 blocks[].parts 改成"
+                        "实际的采样件，要么把采样件画成网上到地电阻里阻值最小的那个"
+                    ),
+                ),
+                MEASUREMENT_GRADE,
+                target,
+            )
         if not foreign:
             return self._unbiased_row(model, signal, net, shunt, evidence, target)
         source: BiasSource | None = None
@@ -1415,7 +1542,8 @@ class ArchSenseBiasClosure(FactsRule):
             else None
         )
         evidence.extend([
-            f"采样电阻 {shunt.designator} = {_ohms(r_sense)} @ {net} → {shunt.far}",
+            f"采样电阻 {shunt.designator} = {_ohms(r_sense)} @ {net} → {shunt.far}"
+            + (f"（{declared_where} 点名）" if declared_where else ""),
             f"偏置源：{source.shape}",
             f"R_th = {source.r_source:g} + {series.ohms:g} = {r_th:g}Ω；V_bias = "
             + (_volts(source.v_open) if source.v_open is not None else "读不出")
@@ -1601,10 +1729,15 @@ class ArchSenseBiasClosure(FactsRule):
         decision is written against the *part*, which is where a person writes it.
         Nothing else is matched, and the prose is not read: the decision is quoted,
         not interpreted.
+
+        The designators are read as a set in designator order — the same reading
+        ``_user_stated_pullup`` makes in this file — so *which* decision is cited
+        for a chain with several is a property of the board, not of the order the
+        netlist listed its pins in (issue #57 finding 6).
         """
         if self.intent is None:
             return None, None
-        subjects = [net] + [des for des, _pin in _members(model, net)]
+        subjects = [net] + sorted({des for des, _pin in _members(model, net)})
         draft: IntentDecision | None = None
         for subject in subjects:
             decision = self.intent.decision(subject)
@@ -1631,7 +1764,7 @@ class ArchSenseBiasClosure(FactsRule):
                     f"{net}：合同声明这条链是双向电流采样"
                     + (f"（adcSwing = {swing!r}）" if swing else "")
                     + "，但图纸上**没有任何偏置网络** —— 网成员 "
-                    f"{_quoted_members(model, net)} 里，到地的电阻只有 "
+                    f"{_quoted(_read_members(model, net))} 里，到地的电阻只有 "
                     f"{shunt.designator}（{_ohms(shunt.ohms)}，采样电阻），没有电阻通往"
                     "「分压样」中间网（一侧到 power-class 轨、一侧到地的中点），也没有"
                     "电阻直接上拉到 power-class 轨。双向信号落进单电源 ADC 必须有偏置把"
@@ -1664,8 +1797,11 @@ def _opamp_output(
     places, in this order: the shelf entry's own ``facts.output_pins`` (explicit
     data wins), then the **pin name** the netlist carries
     (:func:`_is_output_name`, the reading ``NrstClosure`` makes for a reset pin).
+
+    The walk is :func:`_read_members`, so "the amplifier on this net" is the same
+    part whichever order the netlist listed it in (issue #57 finding 6).
     """
-    for designator, pin in _members(model, net):
+    for designator, pin in _read_members(model, net):
         comp = model.components.get(designator)
         entry = rule.entry_for(comp) if comp is not None else None
         if entry is None or entry.category != "ic.opamp":
