@@ -112,6 +112,15 @@ LED_DOMAIN_TOLERANCE_V = 0.05
 #:   interpolation over the evidence above, confirmed by the oracle. If a
 #:   real board ever produces a larger disagreement, this is the number to
 #:   re-ask about.
+#:
+#: evidence-boards: ProPrj_毕设FOC驱动板_2026-09-17, ch340g-golden
+#: (machine-readable declaration for tests/test_doc_claims.py — 岳 2026-10-03
+#: ruling on issue #57 finding #7: the docs must not be able to outrun the
+#: data, so any tuning constant that cites board evidence declares the boards
+#: here, and the claim test reads the splits off the reviewset records. The
+#: first of these boards is **holdout**: these two constants predate the split
+#: discipline, and README's eval paragraph says so instead of claiming
+#: otherwise.)
 MPN_AMPLITUDE_TOLERANCE_R = 3.0
 MPN_AMPLITUDE_TOLERANCE_C = 25.0
 
