@@ -1412,9 +1412,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--intent", default="", metavar="PATH",
         help=(
             "The DesignIntent contract the grammar reads (095 A4 / 090 A1) — today "
-            "the branch order of a `power-entry` drawing: a `decisions[]` entry "
-            "that says which branch clamps the rail places it nearest the inlet, so "
-            "the fact is stated once for the review and the drawing alike. Explicit "
+            "the branch order of a `power-entry` drawing and the core of an "
+            "`ic-periphery` one: a `decisions[]` entry that says which branch "
+            "clamps the rail places it nearest the inlet, and a `blocks[]` entry "
+            "whose parts name exactly one multi-pin part of the drawing says which "
+            "part it is arranged around, so the fact is stated once for the review "
+            "and the drawing alike. Explicit "
             "path only: this command compiles before anything names a project, so "
             "the user-level default (`~/.boardwise/design-intent/<uuid>.json`) has "
             "no uuid to be found from. `PresentationSpec.modules[].branchOrder` "

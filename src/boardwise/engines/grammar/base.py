@@ -536,7 +536,7 @@ class DrawingGrammar(Protocol):
     make visible may be stated there instead of in the presentation. It is
     keyword-only and ``None`` by default — a bind handed no contract behaves
     exactly as it did before 095 — and every grammar accepts it whether or not it
-    reads one, so one dispatcher call serves all four (a grammar that reads none
+    reads one, so one dispatcher call serves all five (a grammar that reads none
     of it says so where it takes it, the same discipline as an unread profile).
     """
 

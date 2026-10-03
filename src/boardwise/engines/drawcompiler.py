@@ -300,10 +300,16 @@ CHAIN_ROLES: tuple[str, ...] = (
 #: The roles that bind an element **hanging off** a chain node (053 sec.3:
 #: 并联支路 / 多 C 并联 / 电容各归所属节点 / NR 电容), plus this batch's
 #: `tap_branch`. Both tuples are the grammar's published role vocabulary, not
-#: per-scenario constants: a role in neither is treated structurally.
+#: per-scenario constants: a role in neither is treated structurally. 098's
+#: `bridge` is the same kind of addition `entry` was to :data:`CHAIN_ROLES`: a
+#: part across two of its core's own pins still *hangs off* the pin the drawing
+#: reads it from (the crystal off XI, its other pin reaching XO), and a role
+#: named in neither tuple would be laid on the free shelf instead of at the pin
+#: it belongs to.
 BRANCH_ROLES: tuple[str, ...] = (
     "tap_branch",
     "shunt",
+    "bridge",
     "in_caps",
     "out_caps",
     "aux_branch",

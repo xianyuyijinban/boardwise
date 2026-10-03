@@ -106,13 +106,15 @@ PRESENTATION_SPEC_KIND = "boardwise-presentation-spec"
 #: have is refused rather than guessed at.
 PRESENTATION_SPEC_VERSION = 1
 
-#: The drawing grammars this build knows (053 sec.2 — "本批只认这三个字面量", and
-#: 088 adds the fourth, `power-entry`). Empty means the spec does not choose one;
-#: a literal that is not in this tuple is a refusal, not a fallback to a generic
-#: layout: a grammar is a set of promises about what will be visible, and
-#: pretending to keep promises nobody wrote is worse than saying the grammar is
-#: not known.
-GRAMMARS: tuple[str, ...] = ("voltage-divider", "rc-lowpass", "ldo", "power-entry")
+#: The drawing grammars this build knows (053 sec.2 — "本批只认这三个字面量", 088
+#: adds the fourth, `power-entry`, and 098 the fifth, `ic-periphery`). Empty means
+#: the spec does not choose one; a literal that is not in this tuple is a refusal,
+#: not a fallback to a generic layout: a grammar is a set of promises about what
+#: will be visible, and pretending to keep promises nobody wrote is worse than
+#: saying the grammar is not known.
+GRAMMARS: tuple[str, ...] = (
+    "voltage-divider", "rc-lowpass", "ldo", "power-entry", "ic-periphery",
+)
 
 #: How a net may be expressed locally (052 sec.5: a key local topology is drawn
 #: as wire; a label across modules or at high fan-out).
@@ -153,7 +155,9 @@ _TOP_KEYS = (
     "sidePreferences",
     "userLocks",
 )
-_MODULE_KEYS = ("id", "parts", "role", "grammarRef", "presentation", "branchOrder")
+_MODULE_KEYS = (
+    "id", "parts", "role", "grammarRef", "presentation", "branchOrder", "core",
+)
 #: What a module's own `presentation` object may override. Closed for the same
 #: reason every schema here is closed: a key this build does not read would be
 #: an intent nobody honours. The side preferences are the ones a *group's
@@ -213,6 +217,16 @@ class PresentationModule:
     states the intent, the grammar keeps the evidence. Empty means "no order
     stated" — the drawing then keeps 088's designator order, and a document that
     states nothing serialises exactly as it did before this field existed.
+
+    ``core`` is the group's own statement of **which part the drawing is arranged
+    around** (098 §一) — the one fact a grammar cannot derive from the partition,
+    because every part of a module is a shape with pins and nothing about the
+    connections says which of them the others hang off. It is an optional key for
+    the same reason `branch_order` is: absent means "not stated" (the grammar then
+    reads the intent, then the partition, and refuses when none of them answers), a
+    key this build does not read would be an intent nobody honours, and a document
+    that states nothing serialises exactly as it did before the field existed —
+    same bytes, same digest, same plan.
     """
 
     id: str
@@ -221,6 +235,7 @@ class PresentationModule:
     grammar_ref: str = ""
     side_preferences: dict[str, str] = field(default_factory=dict)
     branch_order: list[str] = field(default_factory=list)
+    core: str = ""
 
 
 @dataclass(frozen=True)
@@ -544,6 +559,8 @@ def _module_json(module: PresentationModule) -> dict[str, Any]:
         out["presentation"] = {"sidePreferences": dict(module.side_preferences)}
     if module.branch_order:
         out["branchOrder"] = list(module.branch_order)
+    if module.core:
+        out["core"] = module.core
     return out
 
 
@@ -573,8 +590,24 @@ def _modules_from(root: dict[str, Any]) -> list[PresentationModule]:
             grammar_ref=_module_grammar(body.get("grammarRef"), f"{spot}.grammarRef"),
             side_preferences=_module_presentation(body.get("presentation"), spot),
             branch_order=_module_branch_order(body.get("branchOrder"), spot, parts),
+            core=_module_core(body.get("core"), f"{spot}.core"),
         ))
     return out
+
+
+def _module_core(value: Any, where: str) -> str:
+    """A module's stated core, or ``""`` for "not stated".
+
+    098 §一: the core is the group's own part, so the only thing this document can
+    decide about it is that it is a part id written down — whether the circuit
+    declares it, and whether it carries enough pins to be the part the others hang
+    off, are readings of the *circuit* and belong to the grammar (the same split
+    `branchOrder` uses, and the same reason the module's `parts` are not
+    cross-checked here).
+    """
+    if value is None or value == "":
+        return ""
+    return _text(value, where, required=True)
 
 
 def _module_branch_order(
