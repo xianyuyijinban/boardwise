@@ -237,7 +237,12 @@ def _iter_schematic_records(text: str, stats: ParseStats) -> list[Any]:
     meta_only = False
     for record in iter_epru_records(text, stats):
         if record.type == "DOCHEAD":
-            doc_type = record.body.get("docType")
+            # A head with no readable body is not a head this reader can use:
+            # ``iter_epru_records`` hands an empty or non-object body on as
+            # ``None`` and promises it never raises for it, so the record is
+            # skipped — the same reading ``epru_stream.split_documents`` makes
+            # of the same field (101 #5).
+            doc_type = (record.body or {}).get("docType")
             keep = doc_type in ("SCH_PAGE", "SYMBOL", "DEVICE")
             meta_only = doc_type in ("SCH", "BOARD")
             if keep or meta_only:
@@ -306,9 +311,9 @@ def board_partition(
     picking one (§WI-0.2).
     """
     page_uuids = [
-        str(record.body.get("uuid") or "")
+        str((record.body or {}).get("uuid") or "")
         for record in records
-        if record.type == "DOCHEAD" and record.body.get("docType") == "SCH_PAGE"
+        if record.type == "DOCHEAD" and (record.body or {}).get("docType") == "SCH_PAGE"
     ]
     if str((project_meta or {}).get("format") or "") == "eprj3":
         boards, page_to_schematic = _board_chain_from_index(project_meta or {})
@@ -376,12 +381,15 @@ def _board_chain_from_records(
     doc_type = uuid = ""
     for record in records:
         if record.type == "DOCHEAD":
-            doc_type = str(record.body.get("docType") or "")
-            uuid = str(record.body.get("uuid") or "")
+            head = record.body or {}
+            doc_type = str(head.get("docType") or "")
+            uuid = str(head.get("uuid") or "")
             continue
         if record.type != "META":
             continue
         body = record.body
+        if body is None:
+            continue  # an empty body states no fact: nothing to read (101 #5)
         if doc_type == "BOARD":
             order.append(uuid)
             titles[uuid] = str(body.get("title") or "")
@@ -482,7 +490,8 @@ def _collect_device_meta(records: list[Any]) -> dict[str, dict[str, str]]:
     uuid = ""
     for record in records:
         if record.type == "DOCHEAD":
-            uuid = str(record.body.get("uuid") or "") if record.body.get("docType") == "DEVICE" else ""
+            head = record.body or {}
+            uuid = str(head.get("uuid") or "") if head.get("docType") == "DEVICE" else ""
             continue
         if not uuid or record.type != "META":
             continue
@@ -795,7 +804,10 @@ def _split_page(records: list[Any], parse_stats: ParseStats | None = None) -> _P
             # orphan those instances from the page they are drawn on, which is
             # exactly what the board filter then sees as "this board has no
             # parts".
-            if body.get("docType") == "SCH_PAGE":
+            # The body may be missing — pass 1 guards the same record the same
+            # way (101 #5): a head with no readable body is not a page head, so
+            # the page in hand is left as it is.
+            if body is not None and body.get("docType") == "SCH_PAGE":
                 page = str(body.get("uuid") or "")
             current = None
             continue
@@ -961,9 +973,14 @@ def _commit_symbol(
     by_ref: dict[str, _PinRun] = {}
     for record in records:
         if record.type == "DOCHEAD":
-            symbol.uuid = str(record.body.get("uuid") or "")
+            symbol.uuid = str((record.body or {}).get("uuid") or "")
             continue
         body = record.body
+        if body is None:
+            # An empty body is nothing to read (the framing contract): the record
+            # is skipped, never turned into a key or a position (101 #5). The
+            # drop is already counted as ``ParseStats.empty_body_records``.
+            continue
         if record.type == "META":
             symbol.title = str(body.get("title") or "")
             continue
@@ -989,6 +1006,8 @@ def _commit_symbol(
             open_run = None
             continue
         body = record.body
+        if body is None:
+            continue  # same skip as above: no key, no ``parentId`` to file by
         if record.type == "PIN":
             open_run = by_id.get(str(record.id or "")) or by_ref.get(
                 _pin_ref(record, pin_key)
@@ -1052,7 +1071,7 @@ def _collect_symbols(
         if record.type == "DOCHEAD":
             if buffering:
                 _commit_symbol(buffer, symbols, parse_stats, pin_key)
-            buffering = record.body.get("docType") == "SYMBOL"
+            buffering = (record.body or {}).get("docType") == "SYMBOL"
             buffer = [record] if buffering else []
             continue
         if buffering:
@@ -1266,11 +1285,8 @@ def collect_symbol_details(path: str | Path) -> dict[str, SymbolDetail]:
     uuid = ""
     for record in records:
         if record.type == "DOCHEAD":
-            uuid = (
-                str(record.body.get("uuid") or "")
-                if record.body.get("docType") == "SYMBOL"
-                else ""
-            )
+            head = record.body or {}
+            uuid = str(head.get("uuid") or "") if head.get("docType") == "SYMBOL" else ""
             continue
         if not uuid or record.body is None:
             continue
