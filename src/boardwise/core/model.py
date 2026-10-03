@@ -57,6 +57,19 @@ class Pin:
     net: str | None = None
 
 
+#: Why a reading cannot prove a net. ``WELDED_BY_NAME`` is issue #19's gap —
+#: the per-page merge joined two pages because they spelled a net name the same
+#: way, which may be two boards. The two truncation codes are 107's: the parser
+#: kept only the first placement of a repeated designator (049's one-designator-
+#: one-component contract), so a placement that is drawn on the sheet and does
+#: connect to the net is missing from ``Net.pins`` — the net's member list came
+#: out short, and a rule that looks a part up *on that net* is looking at a
+#: netlist with a hole in it.
+WELDED_BY_NAME = "welded-by-name"
+TRUNCATED_BY_DESIGNATOR = "truncated-by-duplicate-designator"
+TRUNCATED_BY_CROSS_PAGE_DESIGNATOR = "truncated-by-cross-page-designator"
+
+
 @dataclass
 class Component:
     """One placed component, keyed by designator inside the model."""
@@ -131,6 +144,16 @@ class DesignModel:
     #: merge of models that carry no page ids) — so the test is ``is not None``,
     #: never truthiness.
     unproven_nets: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    #: net name -> ``(reason code, one sentence naming the placements that were
+    #: left out)`` for the names this reading cannot prove **and why**, per the
+    #: codes above. An absent entry means :data:`WELDED_BY_NAME` — the issue #19
+    #: merge, which is still the whole story for a model that came out of one
+    #: export — so a reader written before this field keeps its wording, and a
+    #: net whose membership a dropped placement may have truncated says so
+    #: instead of being read as a net two pages happened to share a name with
+    #: (107). The sentence is stored rather than rebuilt because only the parser
+    #: knows which placement it dropped; it is quoted, never parsed.
+    unproven_reasons: dict[str, tuple[str, str]] = field(default_factory=dict)
 
     def unproven_pages(self, name: str | None) -> tuple[str, ...] | None:
         """The pages ``name`` was seen on when it is unproven, else ``None``.
@@ -141,6 +164,18 @@ class DesignModel:
         if not name:
             return None
         return self.unproven_nets.get(name)
+
+    def unproven_reason(self, name: str | None) -> tuple[str, str]:
+        """``(reason code, detail)`` for an unproven ``name``.
+
+        :data:`WELDED_BY_NAME` with an empty detail is what a name listed in
+        :attr:`unproven_nets` without one says — the pre-107 shape, which is
+        every net of a single-export reading and every name the per-page merge
+        welded.
+        """
+        if not name:
+            return (WELDED_BY_NAME, "")
+        return self.unproven_reasons.get(name, (WELDED_BY_NAME, ""))
 
     def repeated_designators(self) -> list[str]:
         """Every designator this model cannot resolve to exactly one placement.
@@ -353,3 +388,19 @@ class ProjectModel:
         if len(self.boards) != 1:
             return None
         return self.boards[0].unproven_pages(name)
+
+    @property
+    def unproven_reasons(self) -> dict[str, tuple[str, str]]:
+        """The one board's reasons for its unproven names — ``{}`` if many."""
+        if len(self.boards) != 1:
+            return {}
+        return self.boards[0].unproven_reasons
+
+    def unproven_reason(self, name: str | None) -> tuple[str, str]:
+        """As :meth:`DesignModel.unproven_reason`, on the project's one board.
+
+        ``WELDED_BY_NAME`` for a multi-board project, like every net there.
+        """
+        if len(self.boards) != 1:
+            return (WELDED_BY_NAME, "")
+        return self.boards[0].unproven_reason(name)

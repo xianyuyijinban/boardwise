@@ -40,6 +40,22 @@ merge had to weld *blind* (``DesignModel.unproven_nets``), and a model that came
 out of one export — every project-file, netlist and ``--file`` reading — carries
 no unproven names at all and behaves exactly as it did before issue #19.
 
+**A second gap reaches the same channel (107).** The merge's is about *pages*;
+there is another about *placements*. The parser keeps only the first placement of
+a repeated designator (049's one-designator-one-component contract, which the
+copper layer agrees with), so a part that is drawn on the sheet and really does
+connect to a net is simply not a member of it — and the DCDC board is the worked
+example: the dropped copies of ``100NF`` sit on ``VCC``, where the board needs a
+decoupling capacitor. "No capacitor there" was a confident WARN, and it was not
+one: the placement that would satisfy the requirement may be one the model threw
+away. So the parser files each such net in the same ``unproven_nets`` channel,
+carrying its own reason (:attr:`DesignModel.unproven_reasons`), and the refusal
+below says that one instead of the merge's. Both directions are withheld for the
+same reason: a truncated member list establishes neither presence nor absence.
+The verdicts that change are the ones on **nets**, which is the same population
+:data:`NET_MEMBERSHIP_RULES` names; a board with no repeated designator carries
+no such name and is untouched byte for byte.
+
 **Which rules these are** is a *list*, not a search: :data:`NET_MEMBERSHIP_RULES`
 holds the ids of every rule whose conclusion depends on which other parts sit on
 a net. It is what the report's tier note counts ("N rules refuse"), and
@@ -59,7 +75,12 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 
-from ..core.model import DesignModel
+from ..core.model import (
+    TRUNCATED_BY_CROSS_PAGE_DESIGNATOR,
+    TRUNCATED_BY_DESIGNATOR,
+    WELDED_BY_NAME,
+    DesignModel,
+)
 from .base import Outcome
 
 #: The sentence the merge itself uses for the gap, quoted by every refusal so a
@@ -144,22 +165,56 @@ NET_MEMBERSHIP_RULES: tuple[str, ...] = (
 )
 
 
+class RefusedNet(tuple):
+    """One ``(net, pages)`` refusal, carrying **why** this reading cannot prove it.
+
+    A two-element tuple on purpose — every caller here unpacks ``for net, pages
+    in found``, and a third element would be a silent change to thirty call
+    sites. The reason rides along as an attribute instead, and the builders below
+    read it: :data:`boardwise.core.model.WELDED_BY_NAME` (the issue #19 merge)
+    and 107's two truncation codes want different sentences, because the gaps
+    are different facts.
+    """
+
+    def __new__(
+        cls, net: str, pages: tuple[str, ...], reason: str, detail: str
+    ) -> "RefusedNet":
+        self = super().__new__(cls, (net, pages))
+        self.reason = reason
+        self.detail = detail
+        return self
+
+    @property
+    def truncated(self) -> bool:
+        """Was a placement left out of this net, rather than a page welded in?"""
+        return self.reason in (
+            TRUNCATED_BY_DESIGNATOR,
+            TRUNCATED_BY_CROSS_PAGE_DESIGNATOR,
+        )
+
+
 def unproven_nets(
     model: DesignModel, names: Iterable[str | None]
-) -> list[tuple[str, tuple[str, ...]]]:
+) -> list[RefusedNet]:
     """Every ``(net, pages)`` among ``names`` this model calls unproven.
 
     Empty means "all these nets are proven here" — the caller's normal path.
     ``pages`` may be ``()`` ("more than one page, ids unavailable in this
     reading"), which is a real answer and never a "no pages" one.
+
+    The third thing it carries is the **reason**, read from
+    ``model.unproven_reasons`` and defaulting to ``WELDED_BY_NAME``: a name
+    listed as unproven without one says exactly what issue #19 said, and a name
+    whose membership a dropped placement truncated (107) says that instead.
     """
-    found: list[tuple[str, tuple[str, ...]]] = []
+    found: list[RefusedNet] = []
     for name in names:
         if name is None or not name:
             continue
         pages = model.unproven_pages(name)
         if pages is not None:
-            found.append((name, tuple(pages)))
+            reason, detail = model.unproven_reason(name)
+            found.append(RefusedNet(name, tuple(pages), reason, detail))
     return found
 
 
@@ -173,8 +228,15 @@ def _where(pages: Sequence[str]) -> str:
     )
 
 
-def _net_clause(found: Sequence[tuple[str, tuple[str, ...]]]) -> str:
+def _truncated(found: Sequence[RefusedNet]) -> bool:
+    """Is this refusal about a dropped placement rather than a welded page?"""
+    return any(entry.truncated for entry in found)
+
+
+def _net_clause(found: Sequence[RefusedNet]) -> str:
     """``net 'VCC' was seen on 2 pages …`` — one net, or the several that refused."""
+    if _truncated(found):
+        return _truncated_clause(found)
     if len(found) == 1:
         net, pages = found[0]
         return f"net {net!r} was seen on {_where(pages)}"
@@ -185,9 +247,44 @@ def _net_clause(found: Sequence[tuple[str, tuple[str, ...]]]) -> str:
     )
 
 
+#: How a refusal names 107's gap in the words the model used to file it. The
+#: codes are the model's; this is their sentence, and the two are kept apart
+#: because "two pages may be two boards" and "a placement is missing from this
+#: netlist" are not the same claim about the drawing.
+TRUNCATION_PHRASES = {
+    TRUNCATED_BY_DESIGNATOR: (
+        "a netlist in which no placement was left out — this net's membership "
+        "may be truncated by a duplicate designator: "
+    ),
+    TRUNCATED_BY_CROSS_PAGE_DESIGNATOR: (
+        "a netlist in which no placement was left out — this net's membership "
+        "may be truncated by a duplicate designator drawn across pages: "
+    ),
+}
+
+
+def _truncated_clause(found: Sequence[RefusedNet]) -> str:
+    """``net 'VCC' may have members missing from it (…)`` — 107's version."""
+    entries = [entry for entry in found if entry.truncated]
+    if len(entries) == 1:
+        entry = entries[0]
+        return (
+            f"net {entry[0]!r} may have members missing from it "
+            f"({entry.detail})"
+        )
+    return (
+        "nets "
+        + " and ".join(
+            f"{entry[0]!r} may have members missing from it ({entry.detail})"
+            for entry in entries
+        )
+        + " may each be missing members"
+    )
+
+
 def unproven_message(
     subject: str,
-    found: Sequence[tuple[str, tuple[str, ...]]],
+    found: Sequence[RefusedNet],
     *,
     what: str,
 ) -> str:
@@ -198,14 +295,30 @@ def unproven_message(
     same words without owning a row. One builder, so the rule's UNKNOWN and the
     four-state row say the same thing.
     """
+    if _truncated(found):
+        # 107: the withheld conclusion is the same one — is that part on that
+        # net? — and so is the both-directions rule, but the reason a reader is
+        # given is the one that applies: the netlist this rule read is missing
+        # the placement, so neither "it is there" nor "it is not" is established.
+        return (
+            f"{subject}: {_net_clause(found)}, so {what} cannot be established — "
+            "a placement the model did not keep may be the part this judgement "
+            "needs"
+        )
     return (
         f"{subject}: {_net_clause(found)}, so {what} cannot be established — "
         "whether those pages are one board is not in this reading"
     )
 
 
-def unproven_missing_fact(found: Sequence[tuple[str, tuple[str, ...]]]) -> str:
-    """The fact the refusal is missing — the merge's own sentence, quoted."""
+def unproven_missing_fact(found: Sequence[RefusedNet]) -> str:
+    """The fact the refusal is missing — the reading's own sentence, quoted."""
+    if _truncated(found):
+        entries = [entry for entry in found if entry.truncated]
+        phrase = TRUNCATION_PHRASES.get(entries[0].reason)
+        if phrase is None:
+            phrase = "a netlist in which no placement was left out — "
+        return phrase + "; ".join(entry.detail for entry in entries)
     return (
         f"a verified connection for {_net_clause(found)} — this tier cannot "
         f"attribute a page to a board: {UNPROVEN_BY_NAME}"
@@ -215,7 +328,7 @@ def unproven_missing_fact(found: Sequence[tuple[str, tuple[str, ...]]]) -> str:
 def unproven_outcome(
     rule_id: str,
     subject: str,
-    found: Sequence[tuple[str, tuple[str, ...]]],
+    found: Sequence[RefusedNet],
     *,
     what: str,
     evidence: Sequence[str] = (),
@@ -226,7 +339,7 @@ def unproven_outcome(
     depends on, so the row names exactly the names that refused. ``what`` is the
     conclusion being withheld, phrased as the thing the net cannot establish
     ("whether a grounded capacitor sits on it"). The ``missing_fact`` is the
-    merge's own sentence, so the four-state protocol and the tier note read the
+    reading's own sentence, so the four-state protocol and the tier note read the
     same way — and so this UNKNOWN is never mistaken for a rule that decided the
     net is clean.
     """

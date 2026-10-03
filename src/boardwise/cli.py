@@ -4569,21 +4569,46 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
     # Every board is read rather than the `model.unproven_nets` façade: a
     # multi-board project answers `{}` there (nothing is welded across a board
     # partition), and reading the boards keeps this working for any model shape.
-    unproven: dict[str, tuple[str, ...]] = {}
+    #
+    # **107**: a second kind of name joins this list — one whose member list a
+    # dropped placement may have truncated — so the note is written from the
+    # model's own reason rather than assuming the merge's. A consumer reading
+    # "这些网名在多于一个页里出现" about a single-page board would be told a
+    # falsehood about the very thing it is being asked to distrust.
+    from .core.model import WELDED_BY_NAME
+
+    unproven: dict[str, tuple[tuple[str, ...], str]] = {}
     for board_model in (getattr(model, "boards", None) or [model]):
         for name, pages in (board_model.unproven_nets or {}).items():
-            unproven.setdefault(name, tuple(pages))
+            unproven.setdefault(name, (tuple(pages), board_model.unproven_reason(name)[0]))
     if unproven:
-        source["unprovenNets"] = {
-            "count": len(unproven),
-            "nets": sorted(unproven),
-            "pages": {name: list(pages) for name, pages in sorted(unproven.items())},
-            "rulesRefused": list(NET_MEMBERSHIP_RULES),
-            "note": (
+        welded = sorted(
+            name for name, (_pages, reason) in unproven.items() if reason == WELDED_BY_NAME
+        )
+        truncated = sorted(
+            name for name, (_pages, reason) in unproven.items() if reason != WELDED_BY_NAME
+        )
+        notes_about_unproven: list[str] = []
+        if welded:
+            notes_about_unproven.append(
                 "这些网名在多于一个页里出现，本档无法把页归属到板，因此「同名」不构成"
                 "已验证连接：名单里的规则对它们一律不下通过/违规结论，只报 UNKNOWN"
                 "（agreement by name is not a verified connection）"
-            ),
+            )
+        if truncated:
+            notes_about_unproven.append(
+                "这些网名（" + "、".join(truncated) + "）的成员清单可能已被位号重复"
+                "截断：图上重复位号的第 2+ 份 placement 没有进这份网表，被丢弃的那份"
+                "可能就是这张网上的关键件（去耦电容之类）；同一批规则对它们只报 "
+                "UNKNOWN，通过和违规都不成立"
+            )
+        source["unprovenNets"] = {
+            "count": len(unproven),
+            "nets": sorted(unproven),
+            "pages": {name: list(pages) for name, (pages, _r) in sorted(unproven.items())},
+            "reasons": {name: reason for name, (_p, reason) in sorted(unproven.items())},
+            "rulesRefused": list(NET_MEMBERSHIP_RULES),
+            "note": "；".join(notes_about_unproven),
         }
 
     # --- the curated shelf: the facts-driven sections read it (039 批②).
