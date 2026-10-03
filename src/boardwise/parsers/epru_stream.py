@@ -225,20 +225,44 @@ def split_documents(text: str, stats: ParseStats) -> list[Document]:
 # archive reading
 # --------------------------------------------------------------------------
 
+#: The advice every unreadable-archive refusal carries. One string rather than
+#: one per reader, because ``.epru`` and ``project2.json`` are two members of
+#: **one** container: a partially-copied download damages either, and both reads
+#: have to say the same thing about it (101 #4).
+_UNREADABLE_HINT = (
+    "This project backup cannot be read. EasyEDA Pro's \"save as (local)\" "
+    "dialog has an optional encryption checkbox — if the export was "
+    "encrypted, re-export it with that option disabled and try again."
+)
+
 def read_project_meta(path: str | Path) -> dict[str, Any]:
     """Read ``project2.json`` from an ``.epro2`` archive.
 
     Returns an empty dict when the archive has no project metadata, which
     keeps callers from having to special-case older backups.
+
+    An archive that cannot be read raises :class:`EncryptedProjectError` — the
+    same refusal, with the same advice, that :func:`load_epru_text` gives for the
+    ``.epru`` member of that **same** container. This is the reader that re-opens
+    the archive, so its ``BadZipFile``/``RuntimeError`` describes exactly the
+    damage the other read already converts; letting it out raw (101 #4) gave a
+    stack trace and exit 1 to call sites that catch
+    ``EncryptedProjectError``/``ValueError``/``OSError``.
     """
-    with zipfile.ZipFile(path) as archive:
-        for info in archive.infolist():
-            if info.filename.lower().endswith("project2.json"):
-                try:
-                    decoded = json.loads(archive.read(info).decode("utf-8"))
-                except (ValueError, UnicodeDecodeError):
-                    return {}
-                return decoded if isinstance(decoded, dict) else {}
+    source_path = Path(path)
+    try:
+        with zipfile.ZipFile(source_path) as archive:
+            for info in archive.infolist():
+                if info.filename.lower().endswith("project2.json"):
+                    try:
+                        decoded = json.loads(archive.read(info).decode("utf-8"))
+                    except (ValueError, UnicodeDecodeError):
+                        return {}
+                    return decoded if isinstance(decoded, dict) else {}
+    except (zipfile.BadZipFile, RuntimeError) as exc:
+        # BadZipFile: not a ZIP at all, or an entry whose CRC does not match.
+        # RuntimeError is what zipfile raises for encrypted/CRC-broken data.
+        raise EncryptedProjectError(f"{source_path}: {exc}. {_UNREADABLE_HINT}") from exc
     return {}
 
 def load_epru_text(path: str | Path) -> tuple[str, dict[str, Any]]:
@@ -264,11 +288,7 @@ def load_epru_text(path: str | Path) -> tuple[str, dict[str, Any]]:
             return load_eprj3_text(source_path)
         except Eprj3Error as exc:
             raise EncryptedProjectError(str(exc)) from exc
-    hint = (
-        "This project backup cannot be read. EasyEDA Pro's \"save as (local)\" "
-        "dialog has an optional encryption checkbox — if the export was "
-        "encrypted, re-export it with that option disabled and try again."
-    )
+    hint = _UNREADABLE_HINT
     if not zipfile.is_zipfile(source_path):
         raise EncryptedProjectError(
             f"{source_path}: not an EasyEDA .epro2 archive (not a ZIP file). {hint}"
