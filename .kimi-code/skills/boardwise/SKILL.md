@@ -648,6 +648,11 @@ typeof 全在位、activate 冷启动正常派发、render 实跑 308KB PNG—�
   powershell -NoProfile -Command "Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory('D:\\path\\dir', 'OnlyErrorDialogs', 'SendToRecycleBin')"
   ```
 - **append 落盘后立刻 `grep -c` 独立计数**：出现 2 就是双执行，按偏移截断重写。
+- **文档声明钉（doc-claims，xianyuyijinban 2026-10-03 定，issue #57 #7「病在文案」）**：
+  README/docs 里的 load-bearing 声明**必须机器可验**（量化/对拍/grep 判真伪）并在
+  `tests/test_doc_claims.py` 有钉；验不了的散文不许写成断言式口号（要么改写，要么补一个
+  能验的机制）。规则常量凡引用板级证据必须在注释里声明 `evidence-boards:`（逗号分隔，
+  评审集记录可唯一解析）。**声明失效=同批测试红——文案永远不许跑赢数据。**
 - 真机作业前先 `boardwise bridge status`（**daemon 会自行死亡**，死了先 `bridge start`）。
 - 新增动作：`protocol.py` 目录 + connector handler + `docs/bridge.md` §4 三处必须同步
   （`tests/test_action_catalogue.py` 与 `connector/tests/contract-drift.test.mjs` 会拦）。

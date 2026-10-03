@@ -78,8 +78,12 @@ retries.
 
 One sentence on how the review rules are scored: the annotated eval
 sets are signed and split into a tuning pile and an acceptance pile,
-and the acceptance pile is never used for tuning. That is why the
-scores are believable. Details in `outputs/017_generalization.md`.
+and the harness is built so the acceptance pile cannot leak into the
+scores — `--split` defaults to `dev` and holdout records enter no
+denominator. Two tuning constants predate the split discipline; their
+comments declare their evidence boards, and
+`tests/test_doc_claims.py` keeps this paragraph honest.
+Details in `outputs/017_generalization.md`.
 
 ## Install & supported environments
 
@@ -220,7 +224,9 @@ daemon + 编辑器扩展      读工程数据，写之前先预览、你授权�
 | KiCad 平台 | 规划中 |
 
 审查规则的评测方式说一句人话：我们有一套签名标注过的评测集，分成
-调参用和验收用两摞，验收那摞不许参与规则调试——分数因此是可以信的。
+调参用和验收用两摞；harness 在结构上堵死验收摞混进分数——`--split` 默认
+`dev`，验收摞不进任何分母。有两条调参常量先于分堆制度诞生，它们的注释
+里写明了取证板，`tests/test_doc_claims.py` 盯着这段话不许它过期。
 细节在 `outputs/017_generalization.md`。
 
 ### 安装包和环境支持
