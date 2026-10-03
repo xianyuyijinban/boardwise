@@ -55,9 +55,22 @@ def _number(value: Any) -> float | None:
     return float(value)
 
 
-def same_point(a: tuple[float, float] | None, b: tuple[float, float] | None) -> bool:
-    """Are two canvas coordinates the same place? (see :data:`SAME_POINT`)."""
+def same_point(a: tuple[float | None, float | None] | None,
+               b: tuple[float | None, float | None] | None) -> bool:
+    """Are two canvas coordinates the same place? (see :data:`SAME_POINT`).
+
+    A coordinate the host did not report is ``None`` **inside** the tuple —
+    :func:`_number` answers ``None`` for a missing ``state.X`` and for one written
+    as a string — so the guard has to see the elements, not just the tuple:
+    ``(None, 200.0)`` is not "the same place" as anything, and asking was a
+    ``TypeError`` before (100 #9). The sibling reader
+    :func:`boardwise.engines.addcomponent.component_origins` treats exactly this
+    shape as an expected one and skips the component; here the answer is ``False``,
+    which is the same "not this point" the callers already branch on.
+    """
     if a is None or b is None:
+        return False
+    if a[0] is None or a[1] is None or b[0] is None or b[1] is None:
         return False
     return abs(a[0] - b[0]) <= SAME_POINT and abs(a[1] - b[1]) <= SAME_POINT
 

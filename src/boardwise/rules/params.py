@@ -1325,7 +1325,7 @@ class RcCutoff(FactsRule):
             if ohms is not None and ohms > 0:
                 resistors[comp.designator] = ohms
             farads = parse_capacitance_farads(comp.value or "")
-            if farads is not None:
+            if farads is not None and farads > 0:
                 capacitors[comp.designator] = farads
         #: The pairs this rule looked at, refused ones included, so the survey row
         #: below states "no pair exists here" only when that is true.

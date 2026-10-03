@@ -294,8 +294,13 @@ def load_epru_text(path: str | Path) -> tuple[str, dict[str, Any]]:
         raise EncryptedProjectError(f"{source_path}: corrupt archive ({exc}). {hint}") from exc
 
     meta = read_project_meta(source_path)
+    # ``utf-8-sig`` and not ``utf-8``: a BOM is part of the container, and a
+    # leading U+FEFF made ``json.loads`` refuse the stream's **first** record —
+    # counted malformed, dropped, and never reported (100 #19). Both decodes
+    # carry the ``-sig``: a stream that is BOM'd *and* damaged must not lose the
+    # same record a second time through the fallback branch.
     try:
-        text = raw.decode("utf-8")
+        text = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
-        text = raw.decode("utf-8", errors="replace")
+        text = raw.decode("utf-8-sig", errors="replace")
     return text, meta
