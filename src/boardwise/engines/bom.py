@@ -25,6 +25,10 @@ carrying ``100nF`` on one board and ``0.1uF`` on another is one 100 nF part
 :mod:`boardwise.rules.values` before they are called a conflict. A value neither
 parser can read is compared as written — a disagreement nobody can decode is
 still a disagreement, and "cannot read it" must never become "so it is fine".
+A placement that declares **no** value is a third case, and not a value (#17):
+its row prints the entry's fallback (MPN, then key) while nothing has declared
+one, and comparing that fallback as if it were a declaration called a part
+whose placements all agree a disagreement.
 
 Nothing is skipped in silence, either: a part with no binding at all — an
 abstract `Res_0602` placeholder, say — produces an open question naming its
@@ -243,11 +247,20 @@ def build_bom(spec: BoardSpec, library: PartLibrary) -> BomReport:
     in the BOM is the **page** designator — the one that will be drawn — and not
     the template's local one. That is what makes the file match the schematic for
     a board that places one block twice.
+
+    A row's Comment is the value its placements declare; while none declares one
+    it is the entry's fallback (MPN, then key), and a fallback is not a value a
+    later declaration can disagree with (#17 — see the module docstring).
     """
     report = BomReport(spec_name=spec.name)
     refs = designator_map(spec)
     rows: dict[str, BomRow] = {}
     values_seen: dict[str, dict[str, str]] = {}
+    # The value each C-number's placements have declared, and nothing else:
+    # None until one does, "" once a disagreement has been filed (neither value
+    # prints). This is what `row.comment` falls back from, and what a later
+    # declaration is compared against.
+    declared: dict[str, str | None] = {}
 
     for block in spec.blocks:
         for component in block.template.components:
@@ -272,12 +285,27 @@ def build_bom(spec: BoardSpec, library: PartLibrary) -> BomReport:
                 )
                 rows[entry.lcsc] = row
                 values_seen[entry.lcsc] = {}
+                declared[entry.lcsc] = value or None
             row.designators.append(designator)
             if component.footprint:
                 row.declared_footprints.append(component.footprint)
             values_seen[entry.lcsc][designator] = value
-            comment = value or entry.mpn or entry.key
-            if not _values_agree(comment, row.comment):
+            # A placement that declares no value is not a second value (#17):
+            # it prints the entry's fallback (MPN, then key), and reading *that*
+            # string as a declaration filed a disagreement for a part whose
+            # placements all agree -- blanking the Comment and asking one
+            # nonsense question per later placement. Only two declarations can
+            # contradict each other.
+            if not value:
+                continue
+            first = declared[entry.lcsc]
+            if first is None:
+                # The first placement that declares a value names the row; until
+                # then the Comment is the entry's fallback and there is nothing
+                # to disagree with.
+                declared[entry.lcsc] = value
+                row.comment = value
+            elif not _values_agree(value, first):
                 # One C-number, two values: the BOM would have to print one of
                 # them, so it prints **neither** and says so. (#202's discipline:
                 # an unresolvable disagreement is reported, never averaged into a
@@ -285,11 +313,12 @@ def build_bom(spec: BoardSpec, library: PartLibrary) -> BomReport:
                 # two values, and `_values_agree` is what says so.
                 report.open_questions.append(
                     f"{entry.lcsc}: two components carry different values "
-                    f"({designator}={comment!r} against {row.comment!r}); the same "
+                    f"({designator}={value!r} against {first!r}); the same "
                     "physical part cannot have two values and the export will not "
                     "pick one"
                 )
                 row.comment = ""
+                declared[entry.lcsc] = ""
 
     report.rows = [rows[lcsc] for lcsc in sorted(rows)]
     if report.rows:
