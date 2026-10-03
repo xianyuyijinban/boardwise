@@ -2082,13 +2082,18 @@ def _anchor_to_page(
     was refused as too small while the same circuit without a stated page drew
     fine. `_overflow`'s 1e-6 is not loosened to hide that: the edge is the edge.
 
-    The rounding is one of two contributions and the smaller one: the allowance
-    above is an estimate (`_annotation_allowance`), and 096 measured it 4 units
-    short of what that sample actually draws on its left — with the displacement
-    left exact, the drawing still lands outside. What the inward snap adds is
-    what covers that shortfall here, not slack in the check; the estimate is
-    still an estimate, and an exact-lattice displacement has nothing to add (096
-    measured both cases).
+    The rounding was one of two contributions, and 096 found it was covering the
+    smaller one: the allowance above is an estimate (`_annotation_allowance`)
+    and it was 4 units short of what that sample actually draws on its left, so
+    with the displacement left exact on the lattice the drawing still landed
+    outside — the inward snap's 4 units happened to cover the gap, which is luck
+    and not a fix. 097 measured the estimate against the finished drawings and
+    found the missing term (a part's own reference/value text on the part's left
+    side, which the net-name estimate never counted), so the two contributions
+    are now *both* right: the allowance no longer needs the snap to cover it, and
+    a displacement that lands exactly on the lattice still leaves the drawing
+    inside the margin (pinned by `tests/test_097_annotation_allowance.py`).
+    `_overflow`'s 1e-6 is not loosened either way: the edge is the edge.
 
     Skipped when a part is locked, because a lock's coordinates are the
     engineer's: the drawing then stays exactly where the lock put it (053 sec.5
@@ -2097,15 +2102,15 @@ def _anchor_to_page(
     page = ctx.budget.page_box
     if page is None or ctx.presentation.user_locks:
         return
-    placed = [
-        _part_box(ctx.profile(part_id), poses[part_id], origin)
+    placed = {
+        part_id: _part_box(ctx.profile(part_id), poses[part_id], origin)
         for part_id, origin in origins.items()
-    ]
+    }
     if not placed:
         return
-    side, vertical = _annotation_allowance(ctx)
-    dx = page[0] + PAGE_MARGIN + side - min(box[0] for box in placed)
-    dy = page[3] - PAGE_MARGIN - vertical - max(box[3] for box in placed)
+    side, vertical = _annotation_allowance(ctx, placed)
+    dx = page[0] + PAGE_MARGIN + side - min(box[0] for box in placed.values())
+    dy = page[3] - PAGE_MARGIN - vertical - max(box[3] for box in placed.values())
     # `dx` is anchored on the drawing's left edge and `dy` on its top edge, so a
     # *larger* dx moves the drawing right (inwards) and a *smaller* dy moves it
     # down (inwards) — see :func:`_snap_inside` for the other two edges.
@@ -2115,15 +2120,52 @@ def _anchor_to_page(
         origins[part_id] = (origins[part_id][0] + dx, origins[part_id][1] + dy)
 
 
-def _annotation_allowance(ctx: _Context) -> tuple[float, float]:
+def _annotation_allowance(
+    ctx: _Context, placed: Mapping[str, Box]
+) -> tuple[float, float]:
     """``(sideways, vertical)`` room the annotations need beyond the parts.
 
-    The anchor has to leave space for what it is about to draw: a flag's lead and
-    its glyph extend past the pin a rail ends on, and a tap's stub plus the label
-    at its end extend sideways. Both are measured from what the library says (the
-    pin-less symbols *are* the flags) and from the circuit's own net names, so the
-    allowance is about this drawing rather than a fixed border — and anything it
-    still gets wrong is caught by the measured overflow check on the finished plan.
+    The anchor has to leave space for what it is about to draw, and two kinds of
+    annotation reach past the outermost part box:
+
+    * a **net's name** — a flag's lead and its glyph extend past the pin a rail
+      ends on, and a tap's stub plus the label at its end extend sideways. A
+      label's box is ``TEXT_GAP + the name's width`` wide off its anchor and the
+      stub is ``budget.stub`` long, which is the first term;
+    * a **part's own text** — the reference and the value are put on a *side* of
+      the part's box, and when that side is the left one the line reaches
+      ``TEXT_GAP + its own width`` past the part's left edge. Relative to the
+      drawing's left edge (which is what ``dx`` is anchored on) that is
+      ``TEXT_GAP + width - (this part's left - the drawing's left)``, so a wide
+      value on the leftmost part is the worst case and the second term. 096
+      measured exactly that: the leftmost part's ``SMCJ28CA`` printed on its
+      left made the drawing 70 units wide of the parts where the net-name term
+      says 66, and the 4-unit gap was what a page was refused over.
+
+    The answer is the **larger** of the two, not their sum: they describe two
+    different objects, and each is an upper bound only for its own kind — 097
+    measured all four preview families plan by plan (257 plans,
+    `evidence/097/bound_sweep.py`), and while the net-name term alone was short
+    on 23 of them (all with a text at the left edge) and the text term alone on
+    45 (all with a flag there), no plan was short of both. Both are estimates
+    still — they are read off the same font metrics the placement prints with,
+    and anything the placement then does differently (a text pushed to its
+    second side, a flag standing on 069 sec.1's longer reach) is caught by the
+    measured overflow check on the finished plan rather than predicted here.
+
+    ``vertical`` keeps its old shape and that is deliberate: ``FLAG_LEAD`` plus
+    the glyph is the *ordinary* flag, while the flag ladder is adaptive — a lead
+    may go out to :data:`SIBLING_LEAD` (069 sec.1's reaching form) or further
+    along the rungs before it fits, so there is no ceiling to state. Measured
+    over the same 257 plans, every plan compiled against a stated page needed at
+    most 53 vertical units (the estimate is 56); the one plan needing more (68)
+    was compiled with no page at all, where the anchor does not run. That half is
+    therefore the finish line's own to measure, and it is reported as a leftover
+    rather than padded with a number nothing derives.
+
+    ``placed`` is ``part id -> the box that part occupies``
+    (:func:`_part_box`, pin tips included); it is the same per-part box the text
+    placement uses, so the two cannot measure different drawings.
     """
     glyph = max(
         (
@@ -2134,7 +2176,19 @@ def _annotation_allowance(ctx: _Context) -> tuple[float, float]:
         default=0.0,
     )
     widest = max((text_width(net.id) for net in ctx.circuit.nets), default=0.0)
-    return (ctx.budget.stub + widest + TEXT_GAP, FLAG_LEAD + glyph + TEXT_GAP)
+    left = min(box[0] for box in placed.values()) if placed else 0.0
+    text = max(
+        (
+            TEXT_GAP + text_width(line) - (box[0] - left)
+            for part_id, box in placed.items()
+            for _kind, line in _part_lines(ctx, part_id)
+        ),
+        default=0.0,
+    )
+    return (
+        max(ctx.budget.stub + widest + TEXT_GAP, text),
+        FLAG_LEAD + glyph + TEXT_GAP,
+    )
 
 
 def _branch_anchor(
@@ -3025,6 +3079,21 @@ def _line_boxes(part: Box, lines: Sequence[str], side: str) -> list[Box]:
     return out
 
 
+def _part_lines(ctx: _Context, part_id: str) -> tuple[tuple[str, str], ...]:
+    """``(kind, text)`` for every line a part prints: reference, then value.
+
+    The one home for "what a part's text says" (097): the placement prints these
+    lines (:func:`_part_texts`) and the anchor reserves room for them
+    (:func:`_annotation_allowance`) — a second copy would let the reserved width
+    and the printed width disagree, which is the whole of 096's 4-unit shortfall.
+    A part with no value prints one line; the reference is its own spec id.
+    """
+    part = ctx.circuit.part(part_id)
+    if part is not None and part.value:
+        return (("reference", part_id), ("value", part.value))
+    return (("reference", part_id),)
+
+
 def _part_texts(
     ctx: _Context, placed: _Placement, occupied: list[Box]
 ) -> list[LayoutText]:
@@ -3038,12 +3107,9 @@ def _part_texts(
     """
     out: list[LayoutText] = []
     for part_id in sorted(placed.origins):
-        part = ctx.circuit.part(part_id)
         profile = ctx.profile(part_id)
         box = _part_box(profile, placed.poses[part_id], placed.origins[part_id])
-        lines: list[tuple[str, str]] = [("reference", part_id)]
-        if part is not None and part.value:
-            lines.append(("value", part.value))
+        lines = list(_part_lines(ctx, part_id))
         chosen = None
         for side in TEXT_SIDES:
             boxes = _line_boxes(box, [text for _, text in lines], side)

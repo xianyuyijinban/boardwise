@@ -1491,9 +1491,7 @@ def _net_style(
     wire = main_path_wire(
         ctx.presentation, net.cls if net is not None else None, modules,
     )
-    if not wire and net is not None and _is_bus(
-        net, ctx.budget.module_budget.high_fanout
-    ):
+    if not wire and net is not None and _is_bus(net):
         profile, ref = _flag_profile(ctx, net)
         if profile is None:
             return (
@@ -2697,7 +2695,6 @@ def _gate(
         ctx.book,
         keepouts=keepouts,
         module_gap=ctx.budget.module_gap,
-        high_fanout=ctx.budget.module_budget.high_fanout,
     )
     if page_check.hard_violations:
         return None, _page_failure(variant, page_check), [
@@ -3126,14 +3123,15 @@ def _edge_label(ctx: _Context, net_id: str) -> str:
     return f"{edges[0].from_module}->{edges[0].to_module}"
 
 
-def _is_bus(net: SpecNet | None, high_fanout: int) -> bool:
+def _is_bus(net: SpecNet | None) -> bool:
     """Is this net always expressed by name (053 sec.7, 069 sec.7)?
 
     A ground and a rail at any fan-out — 069 sec.7 retired the member count, so
-    ``high_fanout`` is stated by the caller and no longer decides. The one
-    exception to "always" is the `mainPath` mark, and it is deliberately **not**
-    read here: :func:`boardwise.core.presentationspec.main_path_wire` owns that
-    decision for this compiler and for the page checker alike (096).
+    there is no threshold to state or to pass: 097 took the leftover parameter
+    off the signature (it was accepted and never consulted). The one exception to
+    "always" is the `mainPath` mark, and it is deliberately **not** read here:
+    :func:`boardwise.core.presentationspec.main_path_wire` owns that decision for
+    this compiler and for the page checker alike (096).
     """
     if net is None:
         return False
