@@ -443,17 +443,35 @@ def plan_membership_renames(
     # circuits, and only one of them ever earned the name. A net that is itself
     # being renamed *away* does not block it — a cycle of renames is a
     # permutation, and each member of it lands on the name the golden gave that
-    # cluster. (One pass, in candidate order: a net dropped here does not hand
-    # its name to somebody else in the same pass.)
-    for name, match in list(renamed.items()):
-        if match != name and match in candidate_nets and renamed.get(match, match) == match:
-            del renamed[name]
-            taken.pop(match, None)
-            if skipped is not None:
-                skipped.append(
-                    f"rename {name!r} -> {match!r} skipped: the candidate already "
-                    f"carries a net called {match!r}"
-                )
+    # cluster. (A net dropped here does not hand its name to somebody else — the
+    # plan only ever shrinks.)
+    #
+    # Approving a rename is not a one-off decision (issue #57 finding 2). A
+    # rename is approved *because* its target name is being vacated — and the
+    # withdrawal below can withdraw the **vacating net's own** rename, which puts
+    # that name back in use and strands every approval that rested on it. So the
+    # withdrawal is repeated until it settles: each round can only remove
+    # entries (``renamed`` never grows here), so it terminates, and afterwards
+    # "no rename onto a name a candidate net keeps" is a property of the whole
+    # plan rather than of one pass over it. Before this, the stranded approval
+    # pointed at an occupied name and two circuits came out as one net.
+    changed = True
+    while changed:
+        changed = False
+        for name, match in list(renamed.items()):
+            if (
+                match != name
+                and match in candidate_nets
+                and renamed.get(match, match) == match
+            ):
+                del renamed[name]
+                taken.pop(match, None)
+                if skipped is not None:
+                    skipped.append(
+                        f"rename {name!r} -> {match!r} skipped: the candidate already "
+                        f"carries a net called {match!r}"
+                    )
+                changed = True
     return renamed
 
 
@@ -497,6 +515,20 @@ def reconcile_names(
     import copy as _copy
 
     out = DesignModel(raw=dict(candidate.raw))
+    # The safety metadata rides along **verbatim** (issue #57 finding 11). These
+    # three fields exist so that a consumer can *refuse* to conclude — two parts
+    # on one designator, a name placed on several pages, a net the per-page
+    # merge welded blind — and a rebuild that leaves them at their empty
+    # defaults turns every one of those refusals into a pass: an absent entry
+    # reads as "proven". Copied, never rebuilt and never filtered, because an
+    # empty tuple is itself an answer ("more than one page, page ids
+    # unavailable") that a filter would drop one entry at a time.
+    out.duplicate_designators = list(candidate.duplicate_designators)
+    out.cross_page_designators = {
+        name: list(pages)
+        for name, pages in candidate.cross_page_designators.items()
+    }
+    out.unproven_nets = dict(candidate.unproven_nets)
     for designator, component in candidate.components.items():
         clone = _copy.deepcopy(component)
         for pin in clone.pins:
@@ -506,11 +538,16 @@ def reconcile_names(
     nets: dict[str, Net] = {}
     for name, net in candidate.nets.items():
         new_name = renamed.get(name, name)
-        # One candidate net per output name: the loop above refuses every
-        # rename onto a name another candidate net already carries, and
-        # ``taken`` keeps two renames off one target. So ``setdefault`` never
-        # fires here — it used to, and merging two clusters into one net under
-        # a name one of them never had is the collision #46 closes.
+        # One candidate net per output name, and the invariant is upstream's:
+        # ``plan_membership_renames`` keeps two renames off one target
+        # (``taken``) and withdraws every rename onto a name a candidate net
+        # *keeps* — to a fixed point, because withdrawing one can strand
+        # another (issue #57 finding 2). This line used to be documented as
+        # unreachable and it was reachable: a rename approved because its
+        # target was being vacated survived the withdrawal of that vacating
+        # rename, and two clusters met under one name. It cannot merge now, and
+        # a future edit that makes it reachable again would merge silently —
+        # which is why the invariant is named here instead of assumed.
         entry = nets.setdefault(new_name, Net(name=new_name))
         for member in net.pins:
             if member not in entry.pins:
