@@ -1,0 +1,104 @@
+{
+  "kind": "boardwise-circuit-spec",
+  "specVersion": 1,
+  "parts": [
+    {
+      "id": "U1",
+      "symbolRef": "CH340G-C14267",
+      "value": "CH340G",
+      "lcsc": "C14267",
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "X1",
+      "symbolRef": "HC-49S-12M-C389706",
+      "value": "12MHz",
+      "lcsc": "C389706",
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "C1",
+      "symbolRef": "C0603-22P-C140958",
+      "value": "22pF",
+      "lcsc": "C140958",
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "C2",
+      "symbolRef": "C0603-22P-C140958",
+      "value": "22pF",
+      "lcsc": "C140958",
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "C3",
+      "symbolRef": "C0603-100N-C85986",
+      "value": "100nF",
+      "lcsc": "C85986",
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "C4",
+      "symbolRef": "C0603-100N-C85986",
+      "value": "100nF",
+      "lcsc": "C85986",
+      "provenance": "verified_recipe"
+    }
+  ],
+  "nets": [
+    {
+      "id": "VCC",
+      "class": "power",
+      "members": ["U1.16", "C3.1"],
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "GND",
+      "class": "gnd",
+      "members": ["U1.1", "C1.2", "C2.2", "C3.2", "C4.2"],
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "XI",
+      "class": "signal",
+      "members": ["U1.7", "X1.1", "C1.1"],
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "XO",
+      "class": "signal",
+      "members": ["U1.8", "X1.2", "C2.1"],
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "V3",
+      "class": "signal",
+      "members": ["U1.4", "C4.1"],
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "TXD",
+      "class": "signal",
+      "members": ["U1.2"],
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "RXD",
+      "class": "signal",
+      "members": ["U1.3"],
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "D+",
+      "class": "signal",
+      "members": ["U1.5"],
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "D-",
+      "class": "signal",
+      "members": ["U1.6"],
+      "provenance": "verified_recipe"
+    }
+  ]
+}

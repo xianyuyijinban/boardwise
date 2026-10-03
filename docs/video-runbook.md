@@ -233,6 +233,161 @@ ls -l outputs/089/draw/render.png outputs/089/draw/render.svg
 
 ---
 
+## CH340 模块（第二段：五语法之一的 `ic-periphery` 首落）
+
+这一段要演完另一件事：**一句「把这颗 CH340G 和它的外围画到这张新页上」**，人看着画布
+长出 SOP-16 核心、贴着 XI/XO 的 12MHz 晶振簇、VCC 去耦、V3 电容、四条信号名和 VCC/GND 旗；
+然后**撤掉再画一遍**，证明「画坏了能撤、撤了能重画」。产物落在 `outputs/099e/`。
+
+- 目标页 = **P24**（本批新建，空页）；`P1` / `P22` / `P23` 全程不写。
+- 与上一段同一个 daemon / 同一个窗口；写动作前先核身份（第 0 步）。
+
+### 0. 固定值
+
+```bash
+cd /e/boardwise
+SPECS="--circuit blocklib/specs/ch340_serial.circuit.json \
+       --presentation blocklib/specs/ch340_serial.presentation.json \
+       --profiles blocklib/specs/ch340_serial.library.json"
+BOX="--page-box 0,0,1170,825"
+WIN="--project test --instance inst-143042355-nq65k59v"
+P24=<P24 的 pageUuid>     # doc.list 现读
+```
+
+身份（第 1 步同上一段）：`doc.list` 焦点 `test`、页清单含 `P24`；`P24` 上
+`sch.geometry` 应当只有图幅（0 件 0 线 0 旗）。
+
+### 1. 库探测：真符号是「紧凑型」，几何必须实测（坑 35）
+
+上一段的探针手法照用（探针页→放件→`sch.component_pins`/`sch.geometry`→删件删页），
+本批实测写进了 `blocklib/specs/ch340_serial.library.json`：
+
+| 角色 | LCSC | 实测 |
+|---|---|---|
+| CH340G（SOP-16） | C14267 | 16 脚：1-8 左 x=260、9-16 右 x=340，脚距 **10**，PinLength 10；体框 `(-30.5,-45.5,30.5,45.5)` ⇒ **脚端离体框只有 9.5 单位** |
+| 12MHz 晶振 HC-49S | C389706 | 两脚 ±20，体 `(-10.5,-7.5,10.5,7.5)` |
+| 22pF 0603 | C140958 | 脚 1 **在右**、脚 2 在左（rot0），体 `(-10.5,-8.5,10.5,8.5)` |
+| 100nF 0603 | C85986 | 脚 1 在左、脚 2 在右，体同上 |
+| 旗标 | — | `Power` 字形在连接点**上方**、`Ground` 横杠在**下方**（坑 43 两族，本批再测） |
+
+镜头：把 CH340G 那 16 行脚端坐标放大给观众看，说一句「符号有多紧凑决定这张图能不能画」。
+
+### 2. 离线编译：先看清画法，再上机
+
+```bash
+.venv/Scripts/python.exe -m boardwise.cli draw compile $SPECS $BOX \
+    --out outputs/099e/compile --json outputs/099e/compile.json
+```
+
+预期：`1 page candidate(s), 0 failure(s)`；`cand1.svg` 里 U1 的文字在**右侧**、
+四条信号名在**左侧**、晶振簇贴在 XI/XO 那一侧。
+
+> 这一段是整段视频的「专业时刻」：这张图曾经**画不出来**——核心自己的位号/值被 1.5 单位
+> 的包围盒空角挤到左边、正好压在四条信号标签的位置上（099b 修的就是这个）。
+> 文案：**「编译器不许文字压字，宁可拒图也不糊过去。」**
+
+### 3. 落图：plan 与 apply 背靠背（坑 37），WARN 逐条写理由才放行
+
+```bash
+.venv/Scripts/python.exe -m boardwise.cli draw plan $SPECS $BOX --page $P24 $WIN \
+    -o outputs/099e/draw/plan.json --json outputs/099e/draw/plan.report.json
+.venv/Scripts/python.exe -m boardwise.cli draw apply outputs/099e/draw/plan.json $SPECS \
+    --page $P24 --layout outputs/099e/draw/plan.page.json --force \
+    --render outputs/099e/draw/render.png --json outputs/099e/draw/apply.json
+```
+
+预期（本批实测）：plan 报 `6 part(s), 15 wire(s), 6 flag(s)`，位号池是「页面 0 ∪ 工程导出 18」
+⇒ 实际落成 **U2 / C6 / C7 / C10 / C11 / X1**（工程里 U1 已被占，036b 的池子就是这么来的）；
+apply **exit 0**，逐段：
+
+- `guards checked circuitSha256, presentationSha256, layoutSha256, profiles, pageUuid, census`
+- `write 33 call(s)`（6 件 + 6 值 + 15 线 + 6 旗）
+- `verify live ok · canvas ok` ← **双证都过**
+- `range … outOfScope: {items: 0, changed: []}`
+- `values 6/6 written · read back and equal`
+- `save {"ok": true}` / `render … bytes: 187639`（sha256 `ed6e6055…`）/ `persistence: saved_unverified`
+
+> **闸行为实录（这一段唯一一次 `--force`）**：基线里已有
+> `decap-required-caps|WARN|U1|2|VCC`（别的页的 U1），本批新增
+> `decap-required-caps|WARN|U2|4|`——原文是
+> **「U2 pin4 must sit on net 'VCC' in mode '3.3V' but is on 'V3'」**，即规则把 CH340G 判成
+> 3.3V 模式、而 3.3V 模式要求 V3 并到 VCC（不是加电容）。这是**模式提问，不是缺件**：
+> 手册的 5V 模式正是「V3 加 0.1µF 到地」，而本页 C11=100nF 就是那条；模式读不出来是因为
+> `VCC` 只由 PWR-VCC 旗声明、不带电压（坑 40 的命名约定；工程级网表把别页的 VCC 并进来
+> 也给不出本页的电压）。**逐条理由**：图纸按任务书规格画的是 5V 形态、两条 required_caps
+> 都已满足；模式要闭合得靠命名（`5V0` 形态）或 DesignIntent 的
+> `requirements.rails[VCC].targetVoltage`，属命名/合同问题，不是这张图的缺陷 —— 放行，
+> 报告里进 `findings.forcedWarns`。**出 ERROR 就停下报，不许 force。**
+
+### 4. 出图 + 逐条核对
+
+```bash
+$CLI --action export.render --params '{"format":"png","scope":"page","pageUuid":"'$P24'"}' $WIN > /dev/null
+$CLI --action export.render --params '{"format":"svg","scope":"page","pageUuid":"'$P24'"}' $WIN \
+  | .venv/Scripts/python.exe -c "import json,sys,base64; d=json.load(sys.stdin); \
+      open('outputs/099e/draw/render.svg','wb').write(base64.b64decode(d['data']))"
+```
+
+**PNG 给人看，SVG 给机器看**（坑 42/43）。本批实测：
+
+1. **核心**：U2 在 (330,705)，位号/值（`U2` / `CH340G`）由宿主画在符号右侧；
+2. **晶振簇贴晶振脚侧**：X1 在 (110,660)、C6/C7 在 (50,660)/(230,650)，XI/XO 干线在核心左侧；
+3. **去耦贴 VCC 脚**：C10 在 (430,720)，VCC 线 (370,740)→(430,740) + 旗引线到 (400,765)；
+4. **V3 电容贴 V3 脚**：C11 在 (170,690)，V3 走线拐到 (290,710)；
+5. **四条信号名**：D+ / D- / TXD 的名 stub 各 10 单位朝**左**（(280,700)/(280,690)/(280,730)）；
+   **RXD 那条只有 5 单位、朝右**（(290,720)→(295,720)）——因为它左边的同一行 y=720 被 V3
+   走线占着（距引脚 5 单位），另外三个方向分别是 1 号脚（GND，10 上）、4 号脚（V3，10 下）
+   与核心体框；这是「stub 不许压别网导体」的硬规矩逼出来的最优解（099d），名会被宿主画在
+   引脚边上，**与本页下一个要改的地方**（镜头可以点一句「要更好看，得让走线给引脚留出
+   退路」，见遗留项）；
+6. **旗竖直**：6 个 `c_partid="netflag"` 组——5 个 GND 横杠在连接点下方、VCC 字形在上方 ✓。
+
+### 5. 回读验证：逐脚（这一段的核心证据）
+
+```bash
+$CLI --action sch.netlist $WIN   # 导出网表逐脚
+$CLI --action sch.readback $WIN  # 页上 6 件 + 6 旗
+$CLI --action sch.geometry $WIN  # 画布
+```
+
+预期（本批实测逐字）：
+
+```
+C6: 1=XI, 2=GND      C7: 1=XO, 2=GND      C10: 1=VCC, 2=GND     C11: 1=V3, 2=GND
+X1: 1=XI, 2=XO
+U2: 1=GND 2=TXD 3=RXD 4=V3 5=D+ 6=D- 7=XI 8=XO 16=VCC   （9-15 未用，未命名）
+```
+
+**V3 网只有 U2.4 + C11.1、RXD 网只有 U2.3 + 它的 stub** —— 这两条正是 099c 那次
+「V3 被并进 RXD」的真短路现场，现在干净了。
+
+### 6. 撤场重落：画坏了能撤（收尾戏）
+
+```bash
+.venv/Scripts/python.exe -m boardwise.cli draw discard outputs/099e/draw/plan.json $WIN \
+    --save --json outputs/099e/draw/discard.json
+$CLI --action sch.geometry $WIN          # 预期：只剩图幅
+# 再画一遍（同一条 apply；plan 与 apply 之间撞位号池就重 plan 一次，坑 37）
+.venv/Scripts/python.exe -m boardwise.cli draw apply outputs/099e/draw/plan.json $SPECS \
+    --page $P24 --layout outputs/099e/draw/plan.page.json --force \
+    --render outputs/099e/draw/render2.png --json outputs/099e/draw/apply2.json
+```
+
+预期：`discard` 逐件 `match`（本批 13 条线全部 match ✓——**这本身是「没有短路」的旁证**：
+099c 那次因为宿主并了线，`discard` 直接 `identity_mismatch` 拒删）、删完 `verify remaining []`；
+再 apply 仍 **exit 0**，`render2.png` 与 `render.png` **sha256 相同**
+（本批两张都是 `ed6e605588bec8ccbe5e2d371354ffd5a66de97ea0febfc9b9163eabb92da011`，187639 B）。
+
+> 真机实况（演的时候照实说）：本机一次 `sch.delete_primitives` 的预算是 150 s，
+> 13 条线 + 6 旗 + 6 件往往**跑不完一个 discard**（超时后那一次什么都不报、也不算删）；
+> 超时之后宿主还会连着回 `delete returned false`，此时 `doc.open` 把页面重新激活再删就正常。
+> 落图器自己**不重试**（016 的规矩），所以撤场可能要跑两三次——这不是 bug，是这台宿主的脾气。
+
+镜头：`discard` 的输出 + 画布上模块消失的瞬间；再说一句「撤场只删这个 plan 自己画的
+东西，按位号 + 坐标 + 值核身份，一件对不上就整批不删」。
+
+---
+
 ## 审查线（FOC 偏置案的讲法）
 
 > **主线**：「规则全绿的板子，照样藏着五个数量级的错。」这一段不操作命令，讲的是

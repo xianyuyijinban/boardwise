@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -121,6 +122,20 @@ FLAG_SYMBOL_POWER_PREFIX = "PWR-"
 #: the page path, and only where no planned wire of the net already reaches the
 #: anchor — see :func:`module_plan`'s ``label_stubs``.
 LABEL_STUB_LENGTH = 2 * DRAW_GRID
+
+#: The lengths a stub's far end is tried at, in order (099d): the preferred one
+#: first (:data:`LABEL_STUB_LENGTH`, or the text box's own reach when that is
+#: shorter — the rung 057 measured), then the lattice rungs a blocked stub steps
+#: back to or out along before the drawing is refused.
+LABEL_STUB_LENGTHS: tuple[float, ...] = (
+    2 * DRAW_GRID, DRAW_GRID, 3 * DRAW_GRID, 4 * DRAW_GRID, 6 * DRAW_GRID,
+    8 * DRAW_GRID,
+)
+
+#: The four runs a stub can leave its anchor along, before the preferred one.
+_LABEL_STUB_DIRECTIONS: tuple[tuple[float, float], ...] = (
+    (1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0),
+)
 
 #: What the plan's ``source.inputSha256`` is a digest **of**. Spelled out because
 #: a digest whose basis is not written down is a number nobody can reproduce.
@@ -666,6 +681,32 @@ def module_plan(
     on_pins = {
         (flag.on_pin or flag.net) for flag in built.flags if flag.on_pin
     }
+    #: What a name stub may not touch (099d): every placed part's drawn body and
+    #: every one of its pins, computed once for the whole label pass. A stub is a
+    #: wire, so a foreign pin under it is a connection and a foreign body under it
+    #: is `readability`'s wire-through-body — neither is re-checked after this
+    #: layer, which is why the check lives here.
+    stub_bodies: dict[str, tuple[float, float, float, float]] = {}
+    for part in built.parts:
+        profile = profiles.get(part.symbol_ref)
+        if profile is None or profile.body is None:
+            continue
+        pose = SymbolPose(rotation=int(part.rotation) % 360, mirror=part.mirror)
+        x0, y0, x1, y1 = profile.body
+        corners = [
+            transform_point(cx, cy, rotation=pose.rotation, mirror=pose.mirror,
+                            ox=part.x, oy=part.y)
+            for cx, cy in ((x0, y0), (x1, y0), (x1, y1), (x0, y1))
+        ]
+        stub_bodies[part.designator] = (
+            min(point[0] for point in corners), min(point[1] for point in corners),
+            max(point[0] for point in corners), max(point[1] for point in corners),
+        )
+    stub_pins: list[tuple[str, str, tuple[float, float]]] = [
+        (part.designator, number, point)
+        for part in built.parts
+        for number, point in expected_pin_points(part).items()
+    ]
     for label in layout.labels:
         covered = any(flag.net == label.net for flag in built.flags)
         if covered:
@@ -680,7 +721,22 @@ def module_plan(
             for wire in built.wires
         )
         if label_stubs and not carried:
-            stub = _label_stub(label)
+            stub, blockers = _place_label_stub(
+                label, built, stub_bodies, stub_pins,
+            )
+            if stub is None:
+                # 099d: a stub that lands on another net is a short in this host's
+                # netlist (measured: the V3 wire merged into RXD and the live
+                # netlist read the two as one). Drawing it anyway is exactly the
+                # silent failure this refusal replaces.
+                raise DrawPlanError(
+                    f"net {label.net}: the label at ({label.x:g}, {label.y:g}) has no "
+                    "free name stub (057 sec.4) — a stub that lands on or crosses "
+                    "another net's conductor shorts the two in this host's netlist "
+                    "(099d, measured on the CH340 page), so no run was drawn; every "
+                    "candidate is blocked: " + "; ".join(blockers)
+                )
+            length = math.dist(anchor, stub)
             built.wires.append(PlanDrawWire(
                 net=label.net,
                 points=[anchor, stub],
@@ -691,7 +747,7 @@ def module_plan(
                 f"net {label.net}: the compiler drew a net label at "
                 f"({label.x:g}, {label.y:g}), and this host cannot place one "
                 "(`sch.place_netlabel` is measured unusable, 029); no planned wire of "
-                f"{label.net} reaches that point, so a {LABEL_STUB_LENGTH:g}-unit stub "
+                f"{label.net} reaches that point, so a {length:g}-unit stub "
                 f"({label.x:g}, {label.y:g}) → ({stub[0]:g}, {stub[1]:g}) carries the "
                 "name instead — without it the pin would sit on an unnamed net and the "
                 "page's same-named nets would never merge in the editor's project-wide "
@@ -798,22 +854,204 @@ def _label_stub(label: Any) -> tuple[float, float]:
     the box's own reach in that direction when that is shorter — never less than
     one lattice step, and always a whole number of them, so the stub's end stays
     on the lattice the anchor is on.
+
+    099d: this is the **preferred** candidate only. A stub that lands on or
+    crosses another net's conductor is a short in this host's netlist (measured:
+    the V3 wire merged into RXD), so :func:`_place_label_stub` tries the other
+    directions and lengths and refuses the drawing when none is free.
+    """
+    far, _direction, _length = _label_stub_candidates(label)[0]
+    return far
+
+
+def _label_stub_candidates(
+    label: Any,
+) -> list[tuple[tuple[float, float], tuple[float, float], float]]:
+    """``(far end, direction, length)`` for a label's stub, preferred first.
+
+    The ladder is 099d's: the preferred run (the label's own text side, at
+    :data:`LABEL_STUB_LENGTH` or the box's reach when that is shorter) first, so
+    a drawing that was free before lands on exactly the same point; then the same
+    length along the rest of the compass; then — the stub still blocked — the
+    :data:`LABEL_STUB_LENGTHS` rungs again in all four directions. A stub that can
+    take none of them is refused, never drawn across a foreign conductor.
     """
     x, y = float(label.x), float(label.y)
     box = label.bbox
     cx, cy = (box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0
     dx, dy = cx - x, cy - y
     if abs(dx) >= abs(dy) and abs(dx) > 1e-9:
-        direction = (1.0 if dx > 0 else -1.0, 0.0)
+        preferred = (1.0 if dx > 0 else -1.0, 0.0)
         reach = (box[2] - x) if dx > 0 else (x - box[0])
     elif abs(dy) > 1e-9:
-        direction = (0.0, 1.0 if dy > 0 else -1.0)
+        preferred = (0.0, 1.0 if dy > 0 else -1.0)
         reach = (box[3] - y) if dy > 0 else (y - box[1])
     else:
-        direction, reach = (0.0, 1.0), LABEL_STUB_LENGTH
-    length = min(LABEL_STUB_LENGTH, max(DRAW_GRID, reach))
-    length = max(DRAW_GRID, (length // DRAW_GRID) * DRAW_GRID)
-    return (round(x + direction[0] * length, 6), round(y + direction[1] * length, 6))
+        preferred, reach = (0.0, 1.0), LABEL_STUB_LENGTH
+    shortest = max(DRAW_GRID, (min(LABEL_STUB_LENGTH, max(DRAW_GRID, reach))
+                               // DRAW_GRID) * DRAW_GRID)
+    lengths: list[float] = []
+    for rung in (shortest, *LABEL_STUB_LENGTHS):
+        if rung not in lengths:
+            lengths.append(rung)
+    directions = [preferred] + [
+        item for item in _LABEL_STUB_DIRECTIONS if item != preferred
+    ]
+    out: list[tuple[tuple[float, float], tuple[float, float], float]] = []
+    for length in lengths:
+        for direction in directions:
+            out.append((
+                (round(x + direction[0] * length, 6),
+                 round(y + direction[1] * length, 6)),
+                direction,
+                length,
+            ))
+    return out
+
+
+def _stub_inside_body(
+    start: tuple[float, float],
+    end: tuple[float, float],
+    body: tuple[float, float, float, float],
+) -> bool:
+    """Does the run pass **through** the box, rather than touch its outline?
+
+    `readability`'s own ruler for a wire against a part: strictly interior on both
+    axes, so a run along a body's edge (or starting on it) is not a crossing.
+    """
+    x0, y0, x1, y1 = body
+    lo_x, hi_x = sorted((start[0], end[0]))
+    lo_y, hi_y = sorted((start[1], end[1]))
+    return hi_x > x0 and lo_x < x1 and hi_y > y0 and lo_y < y1
+
+
+def _label_stub_blocked(
+    label: Any,
+    start: tuple[float, float],
+    end: tuple[float, float],
+    built: "_Built",
+    bodies: Mapping[str, tuple[float, float, float, float]],
+    pins: Sequence[tuple[str, str, tuple[float, float]]],
+) -> str | None:
+    """Why this stub run may not be drawn, or ``None`` when it is free.
+
+    074's ruler for a lead, plus the *touching* cases 074 leaves to the router: a
+    name stub exists only to carry a net's name, so **crossing** a foreign wire and
+    **landing** on one are the same defect here — the editor merges either into one
+    node (099c's measured short: the V3 route's corner sat on the RXD stub's span,
+    and the live netlist joined V3 into RXD). Own net's wires and own anchor are
+    not obstacles: a stub may share a point with its own net, that is a junction.
+
+    Parts are checked as their drawn bodies (strict interior, the readability
+    ruler) and as their **pin points**: a run through a foreign pin is a
+    connection to that net, whichever machine drew it.
+    """
+    net = label.net
+    for wire in built.wires:
+        if wire.net == net:
+            continue
+        for a, b in zip(wire.points, wire.points[1:]):
+            crossing = _segment_crossing(start, end, a, b)
+            if crossing is not None:
+                return (
+                    f"it crosses net {wire.net}'s wire {_point_pair(a, b)} at "
+                    f"{_point_pair(crossing, crossing)}"
+                )
+            if _on_polyline(end, [a, b]) or _on_polyline(start, [a, b]):
+                return (
+                    f"it lands on net {wire.net}'s wire {_point_pair(a, b)}"
+                )
+            for point in (a, b):
+                if _on_polyline(point, [start, end]):
+                    return (
+                        f"it runs through net {wire.net}'s wire end "
+                        f"{_point_pair(point, point)}"
+                    )
+    for part_id, pin, point in pins:
+        if _near(point, start, 1e-6):
+            continue
+        if _on_polyline(point, [start, end]):
+            return f"it runs through {part_id}.{pin}'s pin at {_point_pair(point, point)}"
+    for part_id, body in bodies.items():
+        if _stub_inside_body(start, end, body):
+            return (
+                f"it runs through the drawn body of {part_id} "
+                f"{_point_pair((body[0], body[1]), (body[2], body[3]))}"
+            )
+    return None
+
+
+def _place_label_stub(
+    label: Any,
+    built: "_Built",
+    bodies: Mapping[str, tuple[float, float, float, float]],
+    pins: Sequence[tuple[str, str, tuple[float, float]]],
+) -> tuple[tuple[float, float] | None, list[str]]:
+    """The first free stub far end, or ``(None, blockers)``.
+
+    ``blockers`` names what stopped each *direction*'s preferred run — the four
+    lines a refusal quotes — so "it could not be drawn" arrives with the geometry
+    that made it so (053 sec.4's four categories, at page scale).
+    """
+    start = (float(label.x), float(label.y))
+    blockers: list[str] = []
+    seen_direction: set[tuple[float, float]] = set()
+    for end, direction, _length in _label_stub_candidates(label):
+        reason = _label_stub_blocked(label, start, end, built, bodies, pins)
+        if reason is None:
+            return end, blockers
+        if direction not in seen_direction:
+            seen_direction.add(direction)
+            blockers.append(f"{_direction_text(direction)} ({_point_pair(end, end)}): {reason}")
+    return None, blockers
+
+
+def _direction_text(direction: tuple[float, float]) -> str:
+    return {
+        (1.0, 0.0): "right", (0.0, 1.0): "up", (-1.0, 0.0): "left",
+        (0.0, -1.0): "down",
+    }.get(direction, f"{direction[0]:g},{direction[1]:g}")
+
+
+def _point_pair(a: tuple[float, float], b: tuple[float, float]) -> str:
+    return f"({a[0]:g}, {a[1]:g})-({b[0]:g}, {b[1]:g})"
+
+
+def _segment_crossing(
+    a: tuple[float, float],
+    b: tuple[float, float],
+    c: tuple[float, float],
+    d: tuple[float, float],
+) -> tuple[float, float] | None:
+    """Where the two runs cross **through** each other, or ``None``.
+
+    :func:`boardwise.engines.drawcompiler._proper_crossing`'s ruler (074's), stated
+    here because this layer is a different module: strictly interior to both runs,
+    so a shared endpoint, a tee and a collinear overlap are *not* crossings — the
+    caller tests those separately, because for a name stub they are connections.
+    """
+    ab_len = math.hypot(b[0] - a[0], b[1] - a[1])
+    cd_len = math.hypot(d[0] - c[0], d[1] - c[1])
+    if ab_len <= 1e-6 or cd_len <= 1e-6:
+        return None
+    abc = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+    abd = (b[0] - a[0]) * (d[1] - a[1]) - (b[1] - a[1]) * (d[0] - a[0])
+    cda = (d[0] - c[0]) * (a[1] - c[1]) - (d[1] - c[1]) * (a[0] - c[0])
+    cdb = (d[0] - c[0]) * (b[1] - c[1]) - (d[1] - c[1]) * (b[0] - c[0])
+    eps_ab = 1e-6 * ab_len
+    eps_cd = 1e-6 * cd_len
+    if not (
+        ((abc > eps_ab and abd < -eps_ab) or (abc < -eps_ab and abd > eps_ab))
+        and ((cda > eps_cd and cdb < -eps_cd) or (cda < -eps_cd and cdb > eps_cd))
+    ):
+        return None
+    denominator = (b[0] - a[0]) * (d[1] - c[1]) - (b[1] - a[1]) * (d[0] - c[0])
+    if abs(denominator) <= 1e-6:
+        return None
+    t = (
+        (c[0] - a[0]) * (d[1] - c[1]) - (c[1] - a[1]) * (d[0] - c[0])
+    ) / denominator
+    return (round(a[0] + t * (b[0] - a[0]), 6), round(a[1] + t * (b[1] - a[1]), 6))
 
 
 def _preconditions(

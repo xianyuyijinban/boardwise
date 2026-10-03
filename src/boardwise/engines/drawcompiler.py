@@ -1772,6 +1772,54 @@ def _part_box(
     return (min(xs), min(ys), max(xs), max(ys))
 
 
+#: How thick a pin's drawn line reserves room against a *neighbouring* text
+#: (099b). A pin is a stroke, not a rectangle, and one unit is the thinnest
+#: extent this compiler's lattice names (:data:`GRID` is five).
+PIN_TEXT_WALL = 1.0
+
+
+def _text_walls(
+    profile: SymbolProfile, pose: SymbolPose, origin: tuple[float, float]
+) -> list[Box]:
+    """What a *neighbouring* text must avoid of this part (099b).
+
+    Its drawn body, plus each pin as the segment that pin is drawn as — never the
+    box around them: :func:`_part_box` bounds the pin *tips*, and the corners of
+    that box are not drawn anywhere. Measured on the 099 CH340 sample: 1.5 units
+    of such a corner decided which side the core's own value went to, which in
+    turn pushed the core's four pin labels onto the symbol, which the readability
+    contract (rightly) refused.
+
+    A pin whose drawn length the profile does not state is an extent nobody
+    measured, so the **whole part box** stands in for it (052 sec.4: an unstated
+    extent is not a measured zero) — a library that does not say how long its
+    pins are keeps the older, stricter reading, box and all.
+    """
+    body = _body_box(profile, pose, origin)
+    walls: list[Box] = [body] if body is not None else []
+    half = PIN_TEXT_WALL / 2.0
+    for pin in profile.pins:
+        if pin.length is None:
+            return [_part_box(profile, pose, origin)]
+        local = {
+            "left": (-1.0, 0.0), "right": (1.0, 0.0),
+            "up": (0.0, 1.0), "down": (0.0, -1.0),
+        }.get(pin.direction)
+        if local is None:
+            # No outward direction (a zero-length or interior pin) draws nothing
+            # outside the body, so there is nothing to reserve for.
+            continue
+        inner = (pin.tip[0] - local[0] * pin.length,
+                 pin.tip[1] - local[1] * pin.length)
+        here = _posed(pin.tip, pose, origin)
+        there = _posed(inner, pose, origin)
+        walls.append((
+            min(here[0], there[0]) - half, min(here[1], there[1]) - half,
+            max(here[0], there[0]) + half, max(here[1], there[1]) + half,
+        ))
+    return walls
+
+
 def _body_box(
     profile: SymbolProfile, pose: SymbolPose, origin: tuple[float, float]
 ) -> Box | None:
@@ -3101,7 +3149,7 @@ def _part_lines(ctx: _Context, part_id: str) -> tuple[tuple[str, str], ...]:
 
 
 def _part_texts(
-    ctx: _Context, placed: _Placement, occupied: list[Box]
+    ctx: _Context, placed: _Placement, occupied: list[Box], walls: list[Box]
 ) -> list[LayoutText]:
     """The reference and value of every placed part, on a side that is free.
 
@@ -3110,18 +3158,30 @@ def _part_texts(
     tried in order and the first free one wins; when no side is free the text is
     placed anyway at the first side, and the hard gate then refuses the whole
     candidate — text is never shrunk to fit (053 sec.5 scenario 10).
+
+    **What decides a side is `walls`, not `occupied`** (099b): keep-outs, the
+    *drawn body* of every other part, and the texts placed so far — plus, for
+    this part's own text, its own full extent (`box`). A part's `_part_box`
+    includes its pin tips, and a pin tip is not something that is drawn: reading
+    it as a wall let 1.5 units of empty bounding-box corner push a core's
+    reference onto the side where its own pin labels had to go (measured on the
+    099 CH340 sample, where that one unit decided the whole page). The part's own
+    extent keeps the old strictness for its own text, which is the reason the
+    tips were put in `occupied` at all ("so a value never prints across its own
+    pins").
     """
     out: list[LayoutText] = []
     for part_id in sorted(placed.origins):
         profile = ctx.profile(part_id)
         box = _part_box(profile, placed.poses[part_id], placed.origins[part_id])
         lines = list(_part_lines(ctx, part_id))
+        blocked = [*walls, box]
         chosen = None
         for side in TEXT_SIDES:
             boxes = _line_boxes(box, [text for _, text in lines], side)
             if all(
                 not _overlaps(candidate, other)
-                for candidate in boxes for other in occupied
+                for candidate in boxes for other in blocked
             ):
                 chosen = boxes
                 break
@@ -3129,6 +3189,7 @@ def _part_texts(
             chosen = _line_boxes(box, [text for _, text in lines], TEXT_SIDES[0])
         for (kind, text), item in zip(lines, chosen):
             occupied.append(item)
+            walls.append(item)
             out.append(LayoutText(
                 kind=kind,
                 text=text,
@@ -3152,12 +3213,15 @@ def _label_for(
     """A label on a pin tip, its box put where it collides with nothing.
 
     The pin's own escape direction is the preferred way out, which is what keeps
-    a label off the part it names.
+    a label off the part it names. The label carries the pin's **owner** — the
+    part this label names a pin of — so the readability contract can tell a
+    label printed over the edge of its own symbol (that symbol's own text) from
+    one printed over somebody else's (099b, `LayoutLabel.part_id`).
     """
     direction = _pin_direction(ctx, part_id, token, placed.poses)
     if direction is None:
         direction = ctx.lateral()
-    return _label_at(net_id, point, direction, occupied)
+    return _label_at(net_id, point, direction, occupied, part_id=part_id)
 
 
 def _label_at(
@@ -3165,6 +3229,8 @@ def _label_at(
     point: tuple[float, float],
     preferred: tuple[float, float],
     occupied: list[Box],
+    *,
+    part_id: str = "",
 ) -> LayoutLabel:
     """A label whose *anchor* is fixed and whose *box* moves around it.
 
@@ -3172,8 +3238,18 @@ def _label_at(
     stays where it is; the box is typography, so it is tried in four directions
     and the first free one wins. Both live in `LayoutLabel` for exactly this
     reason, and the box is the font-metric box for the net's name.
+
+    **A box that collides with everything falls back to the preferred direction**
+    (099b) — the side the pin itself escapes by — and never to a box centred on
+    the anchor. The centred box always straddles the symbol it names, and on a
+    compact symbol (a pin tip less than half a label-width from the drawn body)
+    it is the *only* placement that does; the outward one at least reads as a
+    label beside its pin, and the readability contract exempts the overlap it
+    may have with that one symbol (its own). The centred path stays written down
+    as unreachable: reaching it would mean the four directions were never built.
     """
     box = None
+    fallback = None
     for candidate_direction in _directions(preferred):
         half_x = text_width(net_id) / 2.0 + TEXT_GAP
         half_y = TEXT_SIZE / 2.0 + TEXT_GAP
@@ -3184,16 +3260,18 @@ def _label_at(
         candidate = font_text_box(
             net_id, x=point[0] + offset[0], y=point[1] + offset[1]
         )
+        if fallback is None:
+            fallback = candidate
         if all(not _overlaps(candidate, other) for other in occupied):
             box = candidate
             break
     if box is None:
-        box = font_text_box(
+        box = fallback if fallback is not None else font_text_box(
             net_id, x=point[0], y=point[1] + TEXT_SIZE / 2.0 + TEXT_GAP
         )
     occupied.append(box)
     return LayoutLabel(
-        net=net_id, text=net_id, bbox=box, x=point[0], y=point[1],
+        net=net_id, text=net_id, bbox=box, x=point[0], y=point[1], part_id=part_id,
     )
 
 
@@ -4176,6 +4254,14 @@ def _build_candidate(
     # and travel to the part it belongs to; the checker's rule is the body).
     occupied: list[Box] = list(ctx.budget.keepouts)
     solids: list[Box] = list(ctx.budget.keepouts)
+    #: What a *text* must avoid of the parts placed here (099b): what each of
+    #: them is **drawn as** — its body and the segments its pins are drawn as —
+    #: never the box around them. `_part_box` bounds the pin tips too, and
+    #: reading that box as a wall let an empty bounding-box corner decide a side
+    #: by 1.5 units (the 099 CH340 measurement). `_part_texts` adds each part's
+    #: own full extent for its own text, so a value never prints across its own
+    #: pins; a profile that states no pin length keeps the whole box (`_text_walls`).
+    text_walls: list[Box] = list(ctx.budget.keepouts)
     #: The *conductors* a flag's own lead may not cross: the keep-outs and the parts'
     #: bodies, without the text boxes (`router.boxes` keeps those, so ordinary wiring
     #: still avoids them). 069 sec.11: a text is typography, and treating it as a wall
@@ -4200,8 +4286,9 @@ def _build_candidate(
         if body is not None:
             solids.append(body)
             bodies.append(body)
+        text_walls.extend(_text_walls(profile, pose, origin))
 
-    texts = _part_texts(ctx, placed, occupied)
+    texts = _part_texts(ctx, placed, occupied, text_walls)
     for text in texts:
         solids.append(text.bbox)
     early = _region_failure(ctx, occupied)
