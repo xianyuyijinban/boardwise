@@ -73,7 +73,6 @@ from .symbolprofile import POSE_ROTATIONS
 
 __all__ = [
     "DEFAULT_SIDE_PREFERENCES",
-    "FLOW_EDGE_KEYS",
     "GRAMMARS",
     "LABEL_LABEL",
     "LABEL_MODES",
@@ -87,6 +86,7 @@ __all__ = [
     "PRESENTATION_SPEC_KIND",
     "PRESENTATION_SPEC_VERSION",
     "SIDES",
+    "_FLOW_EDGE_KEYS",
     "DirectWiringObligation",
     "FlowEdge",
     "LabelPolicy",

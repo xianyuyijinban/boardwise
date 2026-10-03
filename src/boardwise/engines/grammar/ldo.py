@@ -104,7 +104,7 @@ from .base import (
 
 __all__ = [
     "AUX_BRANCH",
-    "CORE_ROLES",
+    "CORE_PIN_ROLES",
     "EXTRA_ROLES",
     "GRAMMAR",
     "NAME",

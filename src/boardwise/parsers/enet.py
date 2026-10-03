@@ -123,9 +123,23 @@ def components_of(data: dict) -> dict:
     return require_object(raw, "components")
 
 
+def _clean(value: Any) -> Any:
+    """An explicit JSON ``null`` reads as empty, the way the sibling reader cleans it.
+
+    ``props.get("Value", "")`` defaults only a **missing** key: a key the export
+    wrote as ``null`` came through as ``None`` and was then stringified into the
+    literal ``"None"`` — a phantom pin number that joins every downstream netlist
+    comparison, and an ``AttributeError`` on the first ``value.strip()`` (100 #10).
+    ``epro2_model._clean`` maps ``None -> ""`` for the same reason; this is that
+    mapping, kept local because the two readers share no module. Nothing else
+    changes: a value of any other JSON type is passed through exactly as it was.
+    """
+    return "" if value is None else value
+
+
 def parse_enet(path: str | Path) -> DesignModel:
     """Parse an ``.enet`` file into a :class:`DesignModel`."""
-    text = Path(path).read_text(encoding="utf-8")
+    text = Path(path).read_text(encoding="utf-8-sig")
     data = json.loads(text)
     return enet_dict_to_model(data)
 
@@ -159,20 +173,20 @@ def enet_dict_to_model(data: dict[str, Any]) -> DesignModel:
                 net = None  # unconnected pin: exported as an empty string
             pins.append(
                 Pin(
-                    number=str(info.get("number", pin_key)),
-                    name=str(info.get("name", pin_key)),
+                    number=str(_clean(info.get("number", pin_key))),
+                    name=str(_clean(info.get("name", pin_key))),
                     net=net,
                 )
             )
         model.components[designator] = Component(
             uid=uid,
             designator=designator,
-            value=props.get("Value", ""),
-            footprint=props.get("Footprint", ""),
-            lcsc_part=props.get("Supplier Part", ""),
-            manufacturer=props.get("Manufacturer", ""),
-            mpn=props.get("Manufacturer Part", ""),
-            datasheet=props.get("Datasheet", ""),
+            value=_clean(props.get("Value", "")),
+            footprint=_clean(props.get("Footprint", "")),
+            lcsc_part=_clean(props.get("Supplier Part", "")),
+            manufacturer=_clean(props.get("Manufacturer", "")),
+            mpn=_clean(props.get("Manufacturer Part", "")),
+            datasheet=_clean(props.get("Datasheet", "")),
             props=props,
             pins=pins,
         )

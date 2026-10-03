@@ -293,13 +293,18 @@ def load_eprj3_text(path: str | Path) -> tuple[str, dict[str, Any]]:
         )
     chunks: list[str] = []
     for page in pages:
+        # ``utf-8-sig``: a BOM on the page file made its first line — the page's
+        # own ``DOCHEAD``, which is what declares the document type the y-flip
+        # below keys on — unparseable, so **no** record in the page was flipped
+        # and a y-up board read in the wrong frame (100 #19). Both branches carry
+        # the ``-sig``; a page that is BOM'd *and* undecodable kept the BOM.
         try:
-            chunks.append(transform_text(page.read_text(encoding="utf-8")))
+            chunks.append(transform_text(page.read_text(encoding="utf-8-sig")))
         except OSError as exc:
             raise Eprj3Error(f"{page}: cannot be read ({exc})") from exc
         except UnicodeDecodeError:
             chunks.append(transform_text(
-                page.read_text(encoding="utf-8", errors="replace")))
+                page.read_text(encoding="utf-8-sig", errors="replace")))
     text = "\n".join(chunk.rstrip("\n") for chunk in chunks)
     meta = dict(index)
     meta.setdefault("name", root.name)

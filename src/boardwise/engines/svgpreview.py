@@ -60,6 +60,20 @@ PREVIEW_MARGIN = 40.0
 #: The caption's font size in SVG units (the drawing itself is 1:1).
 PREVIEW_FONT_SIZE = 11.0
 
+#: The caption strip's own metrics, in canvas units: the first line's baseline
+#: below the drawing, the line pitch, and the room a line needs under its own
+#: baseline (descenders plus a little air).
+CAPTION_TOP = 16.0
+CAPTION_LINE_HEIGHT = 15.0
+CAPTION_DESCENT = 14.0
+
+#: What the strip reserved before it was derived from the line count: exactly the
+#: five lines a plan with **at most one note** produces (four fixed lines plus up
+#: to four notes). Those previews keep the height they had, byte for byte; from
+#: the sixth line on the canvas grows, because a hardcoded strip clipped the tail
+#: of the plan's own provenance footer (100 #16).
+CAPTION_MIN_HEIGHT = CAPTION_TOP + 4 * CAPTION_LINE_HEIGHT + CAPTION_DESCENT
+
 _COLOURS = {
     "background": "#ffffff",
     "page": "#f7f7f4",
@@ -123,12 +137,19 @@ def render_svg(
             + "/>"
         )
 
+    #: The strip is derived from the caption it holds — the caption is four fixed
+    #: lines plus up to four notes, and the hardcoded 90 it used to reserve clipped
+    #: everything from the sixth line down: the plan's own provenance footer, the
+    #: geometry digest and the verdict included (100 #16).
+    caption = _caption_lines(layout_plan, title, box, scale)
+    strip = _caption_height(len(caption))
+
     parts: list[str] = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width:.0f}" '
-        f'height="{height + 90:.0f}" viewBox="0 0 {width:.0f} {height + 90:.0f}" '
+        f'height="{height + strip:.0f}" viewBox="0 0 {width:.0f} {height + strip:.0f}" '
         f'font-family="DejaVu Sans, Consolas, monospace" '
         f'font-size="{PREVIEW_FONT_SIZE:g}">',
-        f'<rect x="0" y="0" width="{width:.0f}" height="{height + 90:.0f}" '
+        f'<rect x="0" y="0" width="{width:.0f}" height="{height + strip:.0f}" '
         f'fill="{_COLOURS["background"]}"/>',
         rect(box, fill=_COLOURS["page"], stroke=_COLOURS["border"]),
     ]
@@ -225,7 +246,7 @@ def render_svg(
             f'fill="{_COLOURS["label"]}"/>'
         )
 
-    parts.extend(_caption(layout_plan, title, box, scale, height))
+    parts.extend(_caption(caption, height))
     parts.append("</svg>")
     return "\n".join(parts) + "\n"
 
@@ -275,14 +296,19 @@ def _grid(box: Box, scale: float, x, y) -> list[str]:
     return out
 
 
-def _caption(
-    plan: LayoutPlan, title: str, box: Box, scale: float, height: float
+def _caption_lines(
+    plan: LayoutPlan, title: str, box: Box, scale: float
 ) -> list[str]:
-    """The strip under the drawing: what this is, and the raw numbers."""
+    """The strip's text: what this is, and the raw numbers.
+
+    Four fixed lines plus at most four notes — the count :func:`_caption_height`
+    is fed, so the canvas and the text can never disagree about how tall the
+    strip has to be.
+    """
     metrics = ", ".join(
         f"{key}={value:g}" for key, value in sorted(plan.evidence.soft_metrics.items())
     ) or "soft metrics: not measured"
-    lines = [
+    return [
         title or "boardwise compiled plan (offline preview)",
         f"{PREVIEW_KIND}  geometry {plan.geometry_sha256()[:12]}  "
         f"size {box[2] - box[0]:g} x {box[3] - box[1]:g} units  scale {scale:g}",
@@ -290,10 +316,25 @@ def _caption(
         f"soft metrics: {metrics}",
         *[note[:150] for note in plan.notes[:4]],
     ]
+
+
+def _caption_height(count: int) -> float:
+    """Canvas units the caption strip reserves for ``count`` text lines.
+
+    Never less than :data:`CAPTION_MIN_HEIGHT`, which is what the strip reserved
+    when it was the constant 90 — five lines, the most a plan with one note
+    produces. Only a caption that did not fit grows the canvas.
+    """
+    needed = CAPTION_TOP + (count - 1) * CAPTION_LINE_HEIGHT + CAPTION_DESCENT
+    return max(CAPTION_MIN_HEIGHT, needed)
+
+
+def _caption(lines: list[str], height: float) -> list[str]:
+    """The caption's ``<text>`` elements, laid out on the strip below the drawing."""
     out: list[str] = []
     for index, line in enumerate(lines):
         out.append(
-            f'<text x="8" y="{height + 16 + index * 15:.3f}" '
+            f'<text x="8" y="{height + CAPTION_TOP + index * CAPTION_LINE_HEIGHT:.3f}" '
             f'fill="{_COLOURS["caption"]}">{escape(line)}</text>'
         )
     return out
