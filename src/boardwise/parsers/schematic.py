@@ -1734,6 +1734,31 @@ def _fill_board_model(
             if is_nc or not name:
                 continue
             net = nets.setdefault(name, Net(name=name))
+            # 105: only the placement the model **keeps** may write a member. The
+            # member key is the binary ``(designator, pin)`` — it carries no
+            # placement — so a second placement of the same name used to push the
+            # *same* tuple into a *different* net. On the DCDC board
+            # ``('100NF','1')`` was a member of GND, NET1, VCC and VCCA at once:
+            # one pin on four nets is not a state any layout can produce, and
+            # every consumer of ``net.pins`` (the rules that look a member's
+            # designator up in ``components``, decap's bridging test, checkup's
+            # module union, the netlist export) read it as if it were.
+            #
+            # A dropped placement is not *hidden* by this: it is the placement
+            # `components.setdefault` already discarded in the instances pass,
+            # and the sheet's own statement — two parts answer to one name — is
+            # still recorded in ``duplicate_designators`` /
+            # ``cross_page_designators`` below and reported as an ERROR. What it
+            # may not do is claim a membership. This follows the choice that
+            # pass made — the first placement, which 049 measured the copper
+            # layer agreeing with (U15/U16 on the 毕设 board).
+            #
+            # The net itself is still created above — deliberately, *before* this
+            # line: dropping the net as well would leave ``Pin.net`` naming a net
+            # ``model.nets`` does not carry, which is a worse inconsistency for a
+            # consumer than a net whose member list came out empty.
+            if components.get(component.designator) is not component:
+                continue
             member = (component.designator, number)
             if member not in net.pins:
                 net.pins.append(member)
