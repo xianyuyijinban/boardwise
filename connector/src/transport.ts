@@ -180,6 +180,17 @@ export type TransportOptions = {
    */
   onHelloResponse?: (data: Record<string, unknown>) => void;
   /**
+   * The daemon refused this handshake, with the code it named (issue #57 §12).
+   *
+   * Reported separately from {@link onStatus} because it is a different kind of
+   * fact: the state says the transport stopped, and this says *why*, in the
+   * daemon's own vocabulary. `index.ts` turns it into `paired: false` and the
+   * About box's `REFUSED` line, which is the whole point — a refusal used to be
+   * dropped, so the one sentence that tells the user to run
+   * `boardwise bridge revoke` could never appear.
+   */
+  onHandshakeRefused?: (refusal: HandshakeRefusal) => void;
+  /**
    * The editor's socket facade. Required at runtime — see the note on the
    * `socket` getter below; optional only so tests can inject a fake.
    */
@@ -202,6 +213,19 @@ export type TransportOptions = {
   heartbeatMs?: number;
   /** Heartbeats with no answer before the socket is considered dead. */
   heartbeatMissLimit?: number;
+};
+
+/**
+ * The daemon's refusal of one handshake, in its own words.
+ *
+ * `code` is the error code the daemon sent (`UNAUTHENTICATED`,
+ * `VERSION_MISMATCH`, `BAD_REQUEST`, `PROTOCOL_VIOLATION`), or `''` when the
+ * frame named none — left empty rather than filled with a plausible code,
+ * because "which refusal was this?" is the question the caller has to answer.
+ */
+export type HandshakeRefusal = {
+  code: string;
+  message: string;
 };
 
 /**
@@ -423,7 +447,25 @@ export class Transport {
     );
   }
 
+  /**
+   * Stop for good: no timers, no socket, no heartbeat, and a later `wake` is a
+   * no-op (`{@link wake}` returns on `stopped`). "A stopped transport sends
+   * nothing, ever" is the claim `docs/bridge.md` §7 makes, and this body is the
+   * whole of it.
+   */
   stop(): void {
+    this.teardown();
+    this.setState('stopped');
+  }
+
+  /**
+   * The stopping itself, without the state transition.
+   *
+   * Split out for {@link refuseHandshake}, which has to stop the transport *and*
+   * say why in the state's `detail`: a refusal is a stop whose reason the user
+   * must be able to read, and `stop()` has no reason to give.
+   */
+  private teardown(): void {
     this.stopped = true;
     this.clearTimers();
     if (this.socketId) {
@@ -434,7 +476,6 @@ export class Transport {
       }
     }
     this.socketId = undefined;
-    this.setState('stopped');
   }
 
   private clearTimers() {
@@ -631,8 +672,27 @@ export class Transport {
             (frame.data ?? {}) as Record<string, unknown>,
           );
         } else {
-          this.scheduleReconnect(`daemon rejected handshake: ${frame.error?.code}`);
+          this.refuseHandshake(frame);
         }
+        return;
+      }
+      if (frame.ok === false && frame.id == null) {
+        // The daemon's other way of saying "no": no id at all. A refusal of the
+        // handshake carries none, because nothing was ever accepted for it to
+        // be an answer *to* (issue #57 §12).
+        //
+        // With one exception, and it is why this is a state check rather than a
+        // shape check: `_on_frame` answers a frame of ours it cannot decode the
+        // same way (daemon.py:1646) on a socket it goes on serving. While we are
+        // connected that is a complaint about one frame, never a refusal of the
+        // window — stopping over it would turn a bad frame into a dead one.
+        if (this.state === 'connected') {
+          this.log(
+            `daemon refused a frame we sent: ${frame.error?.code ?? 'no code given'}`,
+          );
+          return;
+        }
+        this.refuseHandshake(frame);
       }
       return;
     }
@@ -701,6 +761,45 @@ export class Transport {
       read,
       this.options.responseContextTimeoutMs ?? RESPONSE_CONTEXT_DEADLINE_MS,
     );
+  }
+
+  /**
+   * The daemon turned this socket away, and said why.
+   *
+   * Two shapes mean this one thing: our `hello` answered with `ok: false`, and
+   * the **frameless** refusal `{"id": null, "ok": false, "error": …}` that
+   * `_close` sends (`daemon.py:1699`) for the whole handshake-refusal family —
+   * `UNAUTHENTICATED`, `VERSION_MISMATCH`, `BAD_REQUEST`, `PROTOCOL_VIOLATION`.
+   * The id is `null` because the daemon accepted nothing it could correlate the
+   * frame with, and that is also why the frame is the last thing this socket
+   * carries: the daemon closes it immediately afterwards.
+   *
+   * Until 0.4.27 only the first shape was recognised, so every refusal the
+   * daemon actually sends was dropped on the floor. The transport then sat in
+   * `handshaking` until three heartbeats had missed (15 s) and reconnected
+   * **blaming the daemon** ("heartbeat timed out") — a loop with the wrong
+   * diagnosis in it, while `status.paired` never went false and the About box
+   * could not show the one sentence that matters here (issue #57 §12).
+   *
+   * So a refusal is **reported and stopped, never retried**: nothing this side
+   * can do clears it — the user has to revoke the pairing, upgrade the build, or
+   * fix the protocol — and a retry loop buries that under a network symptom.
+   * In particular it must not be reported as a heartbeat timeout: that names the
+   * daemon for a decision the daemon made on purpose.
+   */
+  private refuseHandshake(frame: Frame): void {
+    const code = typeof frame.error?.code === 'string' ? frame.error.code : '';
+    const message = typeof frame.error?.message === 'string' ? frame.error.message : '';
+    const line = `daemon refused the handshake: ${code || 'no code given'}`
+      + (message ? ` — ${message}` : '');
+    this.log(line);
+    try {
+      this.options.onHandshakeRefused?.({ code, message });
+    } catch {
+      /* a reporting callback must not be able to keep a refused socket alive */
+    }
+    this.teardown();
+    this.setState('stopped', line);
   }
 
   /**

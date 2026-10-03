@@ -26,10 +26,21 @@ class FakeSocket {
     this.registered = [];
     this.sent = [];
     this.closed = [];
+    /**
+     * Every `onMessage` this socket was ever handed, oldest first.
+     *
+     * The editor keys connections by the id *we* choose and gives each
+     * registration its own callbacks, so this is what makes an orphan
+     * observable: a transport that was replaced without being stopped still
+     * receives its own connection's frames and answers them (issue #57 §18).
+     * `deliver` uses the newest by default, the way the live connection does.
+     */
+    this.listeners = [];
   }
 
   register(id, uri, onMessage, onConnected) {
     this.registered.push({ id, uri });
+    this.listeners.push(onMessage);
     this.onMessage = onMessage;
     this.onConnected = onConnected;
   }
@@ -42,8 +53,8 @@ class FakeSocket {
     this.closed.push(id);
   }
 
-  async deliver(frame) {
-    await this.onMessage?.({ data: JSON.stringify(frame) });
+  async deliver(frame, index = this.listeners.length - 1) {
+    await this.listeners[index]?.({ data: JSON.stringify(frame) });
     // The `hello` a banner triggers is no longer on the wire the moment
     // `deliver` returns: since 021 §2.3 it carries this window's project, read
     // from the host first, so it goes out a few microtasks later. One macrotask
@@ -418,25 +429,156 @@ test('the pairing fingerprint from the daemon is surfaced, never the token', asy
   assert.ok(!logs.join('\n').includes(token), 'nor may the log panel');
 });
 
-test('a refused hello is reported instead of looking connected', async (t) => {
+test('a refusal from the daemon is reported as a refusal, never as a network fault', async (t) => {
+  // The shape `daemon.py` really sends when it turns a connector away:
+  // `error_frame(None, …)` — `{"id": null, "ok": false, …}`. Until 0.4.27 that
+  // frame was dropped on the floor, so the About box could not say the one
+  // sentence that matters here and `lastError` blamed the daemon's heartbeat
+  // (issue #57 §12).
   const { socket, logs, dialogs } = withHost(t);
 
   await connector.activate();
   await socket.deliver(BANNER);
   await socket.deliver({
-    id: 'hello',
+    id: null,
     ok: false,
     error: { code: 'UNAUTHENTICATED', message: 'not the paired connector' },
   });
 
-  assert.equal(connector.getStatus().state, 'reconnecting');
+  const status = connector.getStatus();
+  assert.equal(status.state, 'stopped');
+  assert.equal(status.paired, false, 'the daemon refused us: this window is not paired');
+  assert.equal(status.refusedCode, 'UNAUTHENTICATED');
+  assert.match(
+    String(status.lastError),
+    /UNAUTHENTICATED — not the paired connector/,
+    "the daemon's own code and words, not a symptom of our own",
+  );
   assert.ok(
     logs.some((line) => line.includes('UNAUTHENTICATED')),
     `the reason must be readable in the log panel: ${logs.join('\n')}`,
   );
 
   connector.about();
-  assert.ok(dialogs.at(-1).message.includes('reconnecting'));
+  const about = dialogs.at(-1).message;
+  assert.ok(about.includes('REFUSED — the daemon holds a different pairing'), about);
+  assert.ok(about.includes('boardwise bridge revoke'), about);
+  assert.ok(about.includes('daemon refused the handshake: UNAUTHENTICATED'), about);
+  assert.ok(!about.includes('heartbeat timed out'), `a refusal is not a dead socket: ${about}`);
+});
+
+test('a version refusal names its own remedy, not the pairing one', async (t) => {
+  // Only a *pairing* refusal is answered by `boardwise bridge revoke`; telling
+  // a user whose two halves speak different protocols to revoke the pairing
+  // would be advice that cannot work (issue #57 §12).
+  const { socket, dialogs } = withHost(t);
+
+  await connector.activate();
+  await socket.deliver(BANNER);
+  await socket.deliver({
+    id: null,
+    ok: false,
+    error: { code: 'VERSION_MISMATCH', message: 'connector speaks 2.0, daemon speaks 1.0' },
+  });
+
+  assert.equal(connector.getStatus().refusedCode, 'VERSION_MISMATCH');
+  connector.about();
+  const about = dialogs.at(-1).message;
+  assert.ok(about.includes('VERSION_MISMATCH'), about);
+  assert.ok(!about.includes('boardwise bridge revoke'), about);
+});
+
+test('a manual reconnect after a refusal starts a fresh attempt', async (t) => {
+  // A refusal stops the transport; it must not dead-end the window. The user
+  // runs `boardwise bridge revoke`, clicks Reconnect, and this window pairs.
+  const { socket, dialogs } = withHost(t);
+
+  await connector.activate();
+  await socket.deliver(BANNER);
+  await socket.deliver({
+    id: null, ok: false, error: { code: 'UNAUTHENTICATED', message: 'not the paired one' },
+  });
+  assert.equal(connector.getStatus().state, 'stopped');
+
+  await connector.reconnect();
+  await socket.deliver(BANNER);
+  await socket.deliver({
+    id: 'hello',
+    ok: true,
+    data: { role: 'connector', protocol: '1.0', paired: true, fingerprint: 'abcdef01' },
+  });
+
+  const status = connector.getStatus();
+  assert.equal(status.state, 'connected');
+  assert.equal(status.paired, true);
+  assert.equal(
+    status.refusedCode,
+    undefined,
+    'a refusal must not outlive the connection that was refused',
+  );
+  connector.about();
+  assert.ok(dialogs.at(-1).message.includes('abcdef01'), dialogs.at(-1).message);
+});
+
+test('two overlapping reconnects leave one transport, never an orphan that keeps dialing', async (t) => {
+  // A double-click on Reconnect, or a menu click landing while the bootstrap is
+  // still inside its `await` of the config: both callers pass the same point
+  // with nothing in the module slot yet, and both used to build a transport.
+  // The loser became unreachable while keeping its socket *and* its heartbeat,
+  // and since each instance numbers its attempts from 1 both registered the
+  // same `boardwise-1` — measured against the shipped bundle as
+  // `register(): ['boardwise-1','boardwise-1']`, `close(): []` (issue #57 §18).
+  const { socket } = withHost(t);
+
+  const first = connector.reconnect();
+  const second = connector.reconnect();
+  await Promise.all([first, second]);
+
+  assert.equal(
+    socket.registered.length,
+    1,
+    `two attempts reached the editor: ${JSON.stringify(socket.registered)}`,
+  );
+
+  // Every registration the editor ever saw gets the banner on its own
+  // connection, the way the editor delivers one. A transport that was merely
+  // *forgotten* answers with a hello and starts heartbeating; a stopped one
+  // sends nothing, ever (docs/bridge.md §7 — the sentence §18 measured false).
+  for (let index = 0; index < socket.listeners.length; index += 1) {
+    await socket.deliver(BANNER, index);
+  }
+  const hellos = socket.sent.filter((entry) => entry.frame.action === 'hello');
+  assert.equal(hellos.length, 1, `${hellos.length} transports are alive at once`);
+});
+
+test('a reconnect stops and closes the transport it replaces', async (t) => {
+  // Replacing is not forgetting: the socket the old transport opened has to be
+  // closed by name, or the editor keeps a connection nobody owns.
+  const { socket } = withHost(t);
+
+  await connector.activate();
+  await socket.deliver(BANNER);
+  assert.equal(socket.registered.length, 1);
+
+  await connector.reconnect();
+
+  assert.deepEqual(socket.closed, ['boardwise-1'], 'the replaced socket must really close');
+  assert.equal(socket.registered.length, 2);
+});
+
+test('a stop during an in-flight connect leaves no socket behind', async (t) => {
+  // Stop is synchronous and the connect is not: between the menu click and the
+  // socket there is an `await` of the config, and an attempt that resumes after
+  // the stop would open a socket for an extension the user has just switched
+  // off — an alarm-free transport heartbeating forever (issue #57 §18).
+  const { socket, toasts } = withHost(t);
+
+  const connecting = connector.reconnect();
+  connector.stopConnection();
+  await connecting;
+
+  assert.deepEqual(socket.registered, [], 'a stopped connector must not open a socket');
+  assert.ok(toasts.some((line) => line.includes('stopped')), toasts.join('\n'));
 });
 
 test('rePair drops the stored token so the next connect offers a new one', async (t) => {

@@ -319,6 +319,17 @@ let status: {
   lastError?: string;
   /** What the daemon said about this pairing, from the `hello` answer. */
   paired?: boolean;
+  /**
+   * The code the daemon refused this connector with (issue #57 §12), when it
+   * did: `UNAUTHENTICATED`, `VERSION_MISMATCH`, `BAD_REQUEST`,
+   * `PROTOCOL_VIOLATION`, or `''` when the refusal named none.
+   *
+   * Kept beside {@link lastError} because the About box has to tell the two
+   * refusal *remedies* apart: only a pairing refusal is answered by
+   * `boardwise bridge revoke`, and pointing a version skew at that command would
+   * be advice that cannot work.
+   */
+  refusedCode?: string;
   fingerprint?: string;
   /**
    * The oldest connector build the daemon accepts, from the `hello` answer.
@@ -615,11 +626,36 @@ function buildTransport(current: ResolvedConfig): Transport {
       if (state === 'connected') host().notify('boardwise: connected');
       if (state === 'reconnecting') status.lastError = detail;
     },
+    onHandshakeRefused: (refusal) => {
+      // The daemon looked at this window and said no (issue #57 §12). Three
+      // surfaces have to say so together, and each of them was silent before
+      // this callback existed: `paired: false` (the About box's REFUSED line),
+      // the code and the daemon's own message (`lastError`), and the log panel.
+      const line = `daemon refused the handshake: ${refusal.code || 'no code given'}`
+        + (refusal.message ? ` — ${refusal.message}` : '');
+      status = {
+        ...status,
+        paired: false,
+        refusedCode: refusal.code,
+        lastError: line,
+      };
+      logLine(line);
+      // The transport has stopped itself, so the alarm goes with it — the same
+      // rule `runStop` keeps, and what `watchdogLine()` reads out from
+      // `state: 'stopped'`. A Worker left running would watch a connection that
+      // will never be made again until the user acts.
+      watchdog?.stop();
+      watchdog = undefined;
+    },
     onHelloResponse: (data) => {
       status = {
         ...status,
         paired: Boolean(data.paired),
         fingerprint: typeof data.fingerprint === 'string' ? data.fingerprint : undefined,
+        // A handshake that got answered is not a refused one: leaving the code
+        // behind would keep the About box's refusal line in front of a window
+        // that is talking to the daemon (issue #57 §12).
+        refusedCode: undefined,
       };
       // The fingerprint goes in the log so the value the user reads in the
       // editor can be compared with `boardwise bridge status` on the daemon
@@ -795,6 +831,61 @@ function claimConnectionAttempt(): boolean {
   return true;
 }
 
+/**
+ * Which attempt owns the transport slot (issue #57 §18).
+ *
+ * Bumped by every attempt that is about to build one, and by `runStop`. A
+ * caller that comes back from its `await` holding an older number has been
+ * superseded and must build **nothing**: two callers can otherwise both pass
+ * the point where the slot looked empty, both build a transport, and both
+ * register `boardwise-1` — the loser unreachable from the module while its
+ * socket and heartbeat carry on.
+ *
+ * `claimConnectionAttempt` cannot do this job: it is claimed once per runtime
+ * (the first `connectOnce` keeps it), and it is deliberately *not* re-taken by
+ * a manual reconnect, so it says nothing about which of two in-flight attempts
+ * is the current one.
+ */
+let connectEpoch = 0;
+
+/**
+ * Replace the module's transport with a fresh one, or stand down.
+ *
+ * The one place the slot is written, because the guard has to sit on the
+ * `await` and there are two callers across it (`connectOnce`, `runReconnect`).
+ * Returns the new transport and the config it was built from, or `undefined`
+ * when a newer attempt (or a stop) took the slot meanwhile.
+ *
+ * Three rules, each measured somewhere:
+ *
+ * - **replacing is not forgetting** — whatever is in the slot is stopped first,
+ *   which closes its socket by name (`docs/bridge.md` §7);
+ * - **only the newest attempt builds** — checked after the `await`, so the
+ *   loser never puts a socket on the wire at all;
+ * - **a stop invalidates an attempt in flight** — `runStop` bumps the epoch, so
+ *   a connect that resumes after the user switched the extension off opens
+ *   nothing.
+ */
+async function openTransport(): Promise<
+  { transport: Transport; config: ResolvedConfig } | undefined
+> {
+  const epoch = (connectEpoch += 1);
+  transport?.stop();
+  transport = undefined;
+  const config = await connectableConfig();
+  if (epoch !== connectEpoch) return undefined;
+  const next = buildTransport(config);
+  transport = next;
+  await next.start();
+  if (epoch !== connectEpoch) {
+    // Superseded while starting: the newer attempt has taken the slot and is
+    // responsible for the socket now. Stopping again is free and idempotent.
+    next.stop();
+    return undefined;
+  }
+  return { transport: next, config };
+}
+
 async function connectOnce(): Promise<void> {
   // `activate()` and the self-arm both route through here, and only one of them
   // should reach the editor's socket. See `claimConnectionAttempt`.
@@ -825,8 +916,7 @@ async function connectOnce(): Promise<void> {
   // off there is no socket for it to watch, and `About…` would then have to
   // explain a running Worker that watches nothing (026b §2.2).
   ensureWatchdog();
-  transport = buildTransport(await connectableConfig());
-  await transport.start();
+  await openTransport();
 }
 
 /**
@@ -862,17 +952,22 @@ export function stopConnection(): void {
 /** The body behind Reconnect: a fresh socket, claimed so nothing doubles it. */
 async function runReconnect(): Promise<void> {
   // A manual connect is an attempt too: the self-arm must not pile a second
-  // socket on top of this one afterwards.
+  // socket on top of this one afterwards. The claim's *result* is deliberately
+  // not checked here — a manual reconnect supersedes whatever is on the wire,
+  // while the claim only records that this runtime has attempted at all — and
+  // the attempt that is currently in flight is settled by `openTransport`'s
+  // epoch instead (issue #57 §18).
   claimConnectionAttempt();
-  transport?.stop();
-  const current = await connectableConfig();
   // The same alarm, not a second one: a manual reconnect replaces the socket,
   // never the Worker (026b §2.1).
   ensureWatchdog();
-  transport = buildTransport(current);
-  logLine(`manual reconnect to ${current.url} (token ${current.tokenSource})`);
-  await transport.start();
-  host().notify(`boardwise: reconnecting to ${current.url}`);
+  const opened = await openTransport();
+  if (!opened) {
+    logLine('reconnect superseded by a newer attempt — it owns the wire');
+    return;
+  }
+  logLine(`manual reconnect to ${opened.config.url} (token ${opened.config.tokenSource})`);
+  host().notify(`boardwise: reconnecting to ${opened.config.url}`);
 }
 
 /**
@@ -887,6 +982,11 @@ async function runReconnect(): Promise<void> {
  * thread too — so it is terminated, and the next connect builds a fresh one.
  */
 function runStop(quiet = false): void {
+  // A stop is the newest decision there is: it invalidates any attempt still
+  // inside its `await`, so a connect that resumes afterwards opens nothing
+  // (`openTransport` checks this number). Without it, Stop is undone by an
+  // attempt the user cannot see (issue #57 §18).
+  connectEpoch += 1;
   transport?.stop();
   transport = undefined;
   watchdog?.stop();
@@ -975,11 +1075,7 @@ function runAbout(): void {
     };
   }
 
-  const pairing = status.fingerprint
-    ? `paired with the daemon (fingerprint ${status.fingerprint})`
-    : status.paired === false
-      ? 'REFUSED — the daemon holds a different pairing; run "boardwise bridge revoke"'
-      : 'not connected yet';
+  const pairing = pairingLine();
   const lines = [
     // First thing in the box: *which build is this*? On 2026-09-14 a sideload
     // that did not take was indistinguishable from one that did, and the only
@@ -1121,6 +1217,25 @@ function storageLine(): string {
   } catch (error) {
     return `read FAILED — ${describeError(error)}`;
   }
+}
+
+/**
+ * What this window's pairing is, in one line, including the one refusal a user
+ * can act on (issue #57 §12).
+ *
+ * A refusal is not "not connected yet": the daemon answered, and every refusal
+ * has its own remedy. Only the **pairing** refusal is answered by
+ * `boardwise bridge revoke` — the sideloaded-build case the Re-pair menu item
+ * describes — so every other code says its own name and points at `last error`
+ * instead of advising a command that cannot help.
+ */
+function pairingLine(): string {
+  if (status.fingerprint) return `paired with the daemon (fingerprint ${status.fingerprint})`;
+  if (status.paired !== false) return 'not connected yet';
+  if (status.refusedCode && status.refusedCode !== 'UNAUTHENTICATED') {
+    return `REFUSED — the daemon refused this connector (${status.refusedCode}); see the last error`;
+  }
+  return 'REFUSED — the daemon holds a different pairing; run "boardwise bridge revoke"';
 }
 
 function tokenLine(current: ResolvedConfig): string {

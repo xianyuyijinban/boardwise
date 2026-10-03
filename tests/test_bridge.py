@@ -2025,6 +2025,10 @@ def test_two_live_sockets_claiming_one_instance_id_both_stay_visible(tmp_path):
 
 
 def test_connect_audit_records_origin_and_user_agent(tmp_path):
+    # Since #57's security note this handshake is also *refused* — a web-page
+    # Origin may not write a pairing (see the section below) — which is exactly
+    # why the record matters: the Origin is written down whatever the handshake's
+    # outcome, so a refusal can be read next to the value that caused it.
     async def scenario():
         daemon = _daemon(tmp_path)
         server, port = await _start(daemon)
@@ -2068,6 +2072,152 @@ def test_check_origin_allows_everything_for_now():
     assert check_origin({"origin": "http://evil.example"}) is True
     assert check_origin({"origin": None}) is True
     assert check_origin({}) is True
+
+
+# --------------------------------------------------------------------------
+# the compound web-page gap (#57 security note)
+# --------------------------------------------------------------------------
+#
+# Two separately-documented deferrals compounded: `check_origin` allows every
+# Origin (004d, still unmeasured), and the re-pair exception honours *any*
+# newcomer whenever no connector is attached — which is true between
+# `bridge start` and the editor attaching, and every time all editor windows
+# close. During exactly that window any `http://` page could open the socket,
+# have its token written down as the pairing, and lock the real connector out
+# with `UNAUTHENTICATED` (#12 then hid that behind "heartbeat timed out").
+#
+# Threat model, stated because the rule is narrow on purpose: the newcomer this
+# refuses is a **web page in the user's browser** — and a browser always sends
+# an `Origin` on a WebSocket handshake, while `curl`-class clients do not
+# (`websockets` itself sends none, asserted above). A non-browser attacker
+# merely has to omit the header, so this is *not* a boundary against local
+# processes: that boundary is the token (§9). 004d still owns what the editor's
+# own socket sends, which is why the rule refuses only `http(s)` and lets
+# everything else — including a missing Origin — through.
+
+
+def test_a_web_page_cannot_pair_itself_before_the_editor_attaches(tmp_path):
+    """The attack the audit described, in its own window: a fresh daemon."""
+
+    async def scenario():
+        daemon = _daemon(tmp_path)
+        server, port = await _start(daemon)
+        async with server:
+            ws, reply = await _hello(
+                port, "connector", token="page-token",
+                headers={"Origin": "http://evil.example"},
+            )
+            assert reply["ok"] is False, "a web page must not be able to pair"
+            assert reply["error"]["code"] == ErrorCodes.UNAUTHENTICATED
+            # The handshake refusal frame carries code + message only (`_close`
+            # sends `BridgeError(code, message)`), so the Origin has to be
+            # readable in the message — that is where a human looks.
+            assert "http://evil.example" in reply["error"]["message"], reply["error"]
+            await ws.close()
+
+    run(scenario())
+
+    assert load_connector_token(tmp_path) is None, (
+        "the page's token must not become the pairing — that is what locks the "
+        "real connector out"
+    )
+    assert not [r for r in _audit_records(tmp_path) if r["action"] == AUDIT_PAIRING]
+
+
+def test_a_web_page_cannot_re_pair_over_a_pairing_nobody_is_using(tmp_path):
+    """The other half: an existing pairing, and every window closed."""
+
+    async def scenario():
+        daemon = _daemon(tmp_path)
+        server, port = await _start(daemon)
+        async with server:
+            real_ws, first = await _hello(port, "connector", token="real-token")
+            assert first["ok"] is True
+            await real_ws.close()
+            await _until(lambda: not daemon.has_connector())
+
+            ws, reply = await _hello(
+                port, "connector", token="page-token",
+                headers={"Origin": "http://evil.example"},
+            )
+            assert reply["ok"] is False
+            assert reply["error"]["code"] == ErrorCodes.UNAUTHENTICATED
+            await ws.close()
+
+    run(scenario())
+
+    assert load_connector_token(tmp_path) == "real-token", (
+        "a re-pair must not be handed to a web page"
+    )
+    assert not [r for r in _audit_records(tmp_path) if r["action"] == AUDIT_REPAIRING]
+
+
+def test_the_editor_pairs_exactly_as_before_when_it_sends_no_origin(tmp_path):
+    """The rule may not cost the editor anything — it sends no Origin at all
+    (`websockets`, which the tests use, matches that; 004d measures the real
+    one)."""
+
+    async def scenario():
+        daemon = _daemon(tmp_path)
+        server, port = await _start(daemon)
+        async with server:
+            ws, reply = await _hello(port, "connector", token="editor-token")
+            assert reply["ok"] is True
+            await ws.close()
+
+    run(scenario())
+
+    assert load_connector_token(tmp_path) == "editor-token"
+
+
+def test_a_non_http_origin_still_pairs(tmp_path):
+    """`chrome-extension://…` is not a web page's origin, and 004d has not yet
+    said which value the editor's host sends — so anything that is not `http(s)`
+    keeps the door it had."""
+
+    async def scenario():
+        daemon = _daemon(tmp_path)
+        server, port = await _start(daemon)
+        async with server:
+            ws, reply = await _hello(
+                port, "connector", token="extension-token",
+                headers={"Origin": "chrome-extension://abcdefghijklmnop"},
+            )
+            assert reply["ok"] is True
+            await ws.close()
+
+    run(scenario())
+
+    assert load_connector_token(tmp_path) == "extension-token"
+
+
+def test_a_paired_connector_sending_an_http_origin_is_still_accepted(tmp_path):
+    """The gate guards the **pairing write**, not the token check.
+
+    A caller that already knows the pairing secret is the paired connector as
+    far as this daemon can tell, and a browser page cannot learn that secret —
+    so narrowing here would buy nothing and could refuse a legitimate build.
+    """
+
+    async def scenario():
+        daemon = _daemon(tmp_path)
+        server, port = await _start(daemon)
+        async with server:
+            first, paired = await _hello(port, "connector", token="real-token")
+            assert paired["ok"] is True
+            await first.close()
+            await _until(lambda: not daemon.has_connector())
+
+            ws, reply = await _hello(
+                port, "connector", token="real-token",
+                headers={"Origin": "http://evil.example"},
+            )
+            assert reply["ok"] is True
+            await ws.close()
+
+    run(scenario())
+
+    assert load_connector_token(tmp_path) == "real-token"
 
 
 def test_daemon_speaks_first_with_a_banner(tmp_path):
@@ -2334,6 +2484,140 @@ def test_a_window_that_vanishes_mid_call_answers_disconnected(tmp_path):
                 "connector disconnected while the call was in flight"
             )
             await cli_ws.close()
+
+    run(scenario())
+
+
+def test_a_write_queued_behind_a_dead_window_answers_disconnected(tmp_path):
+    """#57 §13: the same fact as #43, one queue position later.
+
+    `handle_request` routes with `route()`, which *does* check `is_open()` — and
+    then a write waits on `window.write_lock` **without re-checking liveness**.
+    A window that dies while the call is parked there, and the queued call takes
+    the lock and calls `websocket.send` on a closed socket: `ConnectionClosed`,
+    which is neither `BridgeError` nor `TimeoutError`, so `_on_frame`'s generic
+    `except Exception` turned it into `INTERNAL`.
+
+    That destroys the distinction this codebase calls load-bearing.
+    `DISCONNECTED` means "nobody will ever learn whether the editor acted on it —
+    read the document back"; `INTERNAL` tells the caller the write failed
+    *safely*, which is exactly the half-drawn-page-reported-as-untouched failure
+    `DISCONNECTED` exists to prevent.
+
+    The two frames here are the audit's own: A in flight, B queued. B is routed
+    **while the window is still alive** (that is the whole point — `route()`
+    passes and the call parks on the lock), which is why it comes from a second
+    CLI connection: one connection's frames are served one at a time, so a
+    second request on the *same* socket is not even read until the first call
+    finishes.
+    """
+
+    async def scenario():
+        daemon = _daemon(tmp_path)
+        server, port = await _start(daemon)
+        async with server:
+            conn_ws, _ = await _hello(port, "connector", token="t", instanceId=WINDOW_A)
+            cli_one, _ = await _hello(port, "cli")
+            cli_two, _ = await _hello(port, "cli")
+
+            forwarded: list[dict] = []
+
+            async def read_but_never_answer():
+                forwarded.append(decode_frame(await conn_ws.recv()))
+
+            task = asyncio.create_task(read_but_never_answer())
+
+            # A — in flight: the request is read off the wire, so it is genuinely
+            # on the editor's side of the bridge, and the write lock is held.
+            await cli_one.send(request_frame(
+                "sch.place_component", {"designator": "R1"}, id="A"
+            ))
+            await _until(lambda: len(forwarded) == 1)
+
+            # B — queued: sent while the window is still alive, so it routes to
+            # it and then waits for the lock. The lock's own waiter list is the
+            # only observation that says "queued" rather than "about to be":
+            # a sleep would be a guess about someone else's event loop.
+            window = daemon.windows[WINDOW_A]
+            await cli_two.send(request_frame(
+                "sch.place_component", {"designator": "R2"}, id="B"
+            ))
+            await _until(lambda: bool(window.write_lock._waiters))
+
+            # The window dies while B is still waiting.
+            await conn_ws.close()
+            await task
+            await _until(lambda: not daemon.has_connector())
+
+            in_flight = decode_frame(await cli_one.recv())
+            queued = decode_frame(await cli_two.recv())
+
+            assert (in_flight["id"], queued["id"]) == ("A", "B")
+            assert in_flight["error"]["code"] == ErrorCodes.DISCONNECTED
+            assert in_flight["error"]["message"] == (
+                "connector disconnected while the call was in flight"
+            )
+            assert queued["error"]["code"] == ErrorCodes.DISCONNECTED, (
+                "a write queued behind a dead window answered "
+                f"{queued['error']['code']}: {queued['error']['message']} — a caller "
+                "reading that as a safe failure reports a page it may have drawn as "
+                "untouched"
+            )
+            # The message says *where* it died, and this is the fact the re-check
+            # after the lock exists to establish: the request never went out, so
+            # it is not the same sentence as the in-flight one — and, more to the
+            # point, it is not a failure the *send* discovered. Asserted because
+            # the two guards on this path (the re-check, and the
+            # `ConnectionClosed` translation around the send) otherwise produce
+            # the same code, which would leave the re-check unpinned.
+            assert queued["error"]["message"] == (
+                "connector disconnected while the call waited for the window's "
+                "write lock"
+            ), queued["error"]["message"]
+            await cli_one.close()
+            await cli_two.close()
+
+    run(scenario())
+
+
+def test_a_socket_that_dies_between_the_recheck_and_the_send_answers_disconnected(tmp_path):
+    """The re-check cannot be atomic with the `send`, so the send is guarded too.
+
+    A window whose socket is still `OPEN` when the liveness re-check runs, and
+    gone by the time `send` runs, is a real ordering on a real event loop — one
+    instant wide, and the same INTERNAL-versus-DISCONNECTED mistake if it is
+    missed. Driven without sockets on purpose: the race cannot be produced from
+    outside, only by a socket that answers "open" and then refuses to send.
+    """
+
+    class DiesOnSend:
+        """What `websockets`' own object does when the peer has gone away."""
+
+        state = State.OPEN
+
+        async def send(self, _payload):
+            raise websockets.exceptions.ConnectionClosedOK(
+                websockets.frames.Close(1000, "OK"),
+                websockets.frames.Close(1000, "OK"),
+                rcvd_then_sent=True,
+            )
+
+    async def scenario():
+        daemon = _daemon(tmp_path)
+        window = WindowConnection(
+            websocket=DiesOnSend(), key=WINDOW_A, instance_id=WINDOW_A,
+        )
+        daemon.windows[WINDOW_A] = window
+
+        with pytest.raises(BridgeError) as raised:
+            await daemon.handle_request(
+                "sch.place_component", {"designator": "R1"}, "cli", "", {},
+            )
+
+        assert raised.value.code == ErrorCodes.DISCONNECTED, (
+            f"a send that died mid-flight answered {raised.value.code}: "
+            f"{raised.value.message}"
+        )
 
     run(scenario())
 
