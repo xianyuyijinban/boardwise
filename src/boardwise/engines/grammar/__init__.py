@@ -1,6 +1,6 @@
 """The drawing grammars of 053 stage B (053 sec.3, 052 sec.5).
 
-Four grammars, one per idiom the drawing compiler is about, each a `bind` over
+Five grammars, one per idiom the drawing compiler is about, each a `bind` over
 the two specs of stage A:
 
     voltage-divider   两电阻竖排同轴，抽头可见
@@ -9,6 +9,10 @@ the two specs of stage A:
     power-entry       连接器终结轨的输入端，两轨各一条实体横线，支路在轨间竖放
                       （088；entry 靠 `openInterfaces[].part` 这条事实通道绑上，
                       不靠拓扑——并联支路与连接器在图上是同构的）
+    ic-periphery      核心 IC 居中，挂脚件各贴自己那一脚；晶振跨核心两脚（bridge）、
+                      负载/去耦/V3 电容从一脚网回到轨或地（shunt）、跨模块信号在核心
+                      自己的脚上出标签（098；核心靠 `modules[].core` > intent
+                      blocks[] > 唯一严格最多脚三来源绑上，三者冲突并列原文拒绝）
 
 Two things this package is not. It does not compute coordinates — the compiler
 does, and `RelativeConstraint` has no place to put one (053 sec.4). And it does
@@ -35,7 +39,7 @@ from typing import Mapping
 from ...core.circuitspec import CircuitSpec
 from ...core.presentationspec import GRAMMARS, PresentationSpec
 from ...core.symbolprofile import SymbolProfile
-from . import ldo, power_entry, rc_lowpass, voltage_divider
+from . import ic_periphery, ldo, power_entry, rc_lowpass, voltage_divider
 from .base import (
     ABOVE,
     ADJACENT,
@@ -73,11 +77,12 @@ from .base import (
     refused_result,
 )
 
-#: The four grammar names this build implements, spelled as `GRAMMARS` in
+#: The five grammar names this build implements, spelled as `GRAMMARS` in
 #: `presentationspec` spells them: the spec's literal and the implementation's
 #: name are the same string, so a lookup cannot half-match.
 NAMES: tuple[str, ...] = (
     voltage_divider.NAME, rc_lowpass.NAME, ldo.NAME, power_entry.NAME,
+    ic_periphery.NAME,
 )
 
 _CLASSES: dict[str, type] = {
@@ -85,6 +90,7 @@ _CLASSES: dict[str, type] = {
     rc_lowpass.NAME: rc_lowpass.RcLowpassGrammar,
     ldo.NAME: ldo.LdoGrammar,
     power_entry.NAME: power_entry.PowerEntryGrammar,
+    ic_periphery.NAME: ic_periphery.IcPeripheryGrammar,
 }
 
 #: Every role any grammar may bind, per grammar, table roles first and this
@@ -94,6 +100,7 @@ ROLES_BY_GRAMMAR: dict[str, tuple[str, ...]] = {
     rc_lowpass.NAME: rc_lowpass.ROLES,
     ldo.NAME: ldo.ROLES + ldo.EXTRA_ROLES,
     power_entry.NAME: power_entry.ROLES,
+    ic_periphery.NAME: ic_periphery.ROLES,
 }
 
 __all__ = [
@@ -101,6 +108,7 @@ __all__ = [
     "ROLES_BY_GRAMMAR",
     "bind",
     "grammar_for",
+    "ic_periphery",
     "ldo",
     "power_entry",
     "rc_lowpass",
@@ -177,11 +185,12 @@ def bind(
     the choice belongs, never a silent fallback to a generic layout.
 
     `intent` is the `DesignIntent` a grammar **may** read (095 A4) — the fourth
-    contract, which today only `power-entry` consumes, for the branch order 088b's
-    `branchOrder` stated in every presentation before it. It travels as the same
-    optional, opaque value every grammar's `bind` accepts, so one dispatcher call
-    serves all four and a grammar that reads none of it says so where it takes it.
-    ``None`` (the default) is a drawing that reads no contract, which is every
+    contract, which `power-entry` consumes for the branch order 088b's
+    `branchOrder` stated in every presentation before it, and which `ic-periphery`
+    reads for the core when the drawing declares none (098). It travels as the
+    same optional, opaque value every grammar's `bind` accepts, so one dispatcher
+    call serves all five and a grammar that reads none of it says so where it takes
+    it. ``None`` (the default) is a drawing that reads no contract, which is every
     caller before 095 and every drawing without one.
     """
     name = grammar_name or presentation.grammar_ref

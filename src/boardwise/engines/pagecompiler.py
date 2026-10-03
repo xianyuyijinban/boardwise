@@ -993,8 +993,13 @@ def _module_view(
             # reason 088's `openInterfaces[].part` travels with the circuit: the
             # order is this group's own statement about its own branches, and a
             # slice that dropped it would draw the page's inlet in designator
-            # order while the standalone module used the stated one.
+            # order while the standalone module used the stated one. 098's
+            # `core` travels for the same reason again: it is the group's own
+            # statement of which part the drawing is arranged around, and a page
+            # whose module has two multi-pin parts would otherwise come back
+            # `facts-missing` about a fact the document states.
             branch_order=list(module.branch_order),
+            core=module.core,
         )],
         main_paths=_module_paths(presentation_spec.main_paths, part_ids, net_ids),
         feedback_paths=_module_paths(

@@ -155,7 +155,16 @@ on purpose, because the compiler is the part that must work with no editor:
   `modules[].branchOrder` (the order the branches are drawn in, from the inlet
   outwards — R12; a module's own statement, absent means designator order, and
   `pagecompiler._module_view` carries it into the page slice the way it carries
-  `openInterfaces[].part`).
+  `openInterfaces[].part`). 098 adds the fifth grammar, `ic-periphery` (an IC and
+  what hangs off its own pins: the crystal across two of its pins, the load and
+  decoupling capacitors returning to rail/ground, the cross-module signals named
+  at the pins that carry them — R13) — and the first whose **core** is a stated
+  fact with three sources: `modules[].core` (new optional key) > the intent's
+  `blocks[]` > the partition's unique strict pin-count maximum; sources that
+  speak and disagree are refused with both originals quoted. It also carries the
+  page slice's `core` (`_module_view`, the same reason 088b's `branchOrder`
+  travels) and names its `bridge` role in `drawcompiler.BRANCH_ROLES`, the way
+  088 named `entry` in `CHAIN_ROLES`.
 
   **Recorded upgrade path (088b, no code change on purpose).** `power-entry`'s
   branch order is carried by an `adjacent` chain between neighbouring branches

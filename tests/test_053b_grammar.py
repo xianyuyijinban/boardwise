@@ -857,8 +857,11 @@ def test_each_grammar_satisfies_the_protocol_and_carries_its_name():
         instance = grammar.grammar_for(name)
         assert isinstance(instance, DrawingGrammar)
         assert instance.name == name
-    # 088 adds the fourth literal; this is a registration list, not a 053 claim.
-    assert grammar.NAMES == ("voltage-divider", "rc-lowpass", "ldo", "power-entry")
+    # 088 adds the fourth literal, 098 the fifth; this is a registration list,
+    # not a 053 claim.
+    assert grammar.NAMES == (
+        "voltage-divider", "rc-lowpass", "ldo", "power-entry", "ic-periphery",
+    )
 
 
 def test_bind_is_deterministic_byte_for_byte():

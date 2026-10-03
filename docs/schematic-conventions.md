@@ -96,7 +96,8 @@ rejected, not scored down. The reference renders live in `outputs/069_ldo_exampl
 (the hand-drawn P22 exemplar) and `evidence/074/` (P23 v5/v6).
 
 R11–R12 are the power-entry rulings, added by 088b (ruled by xianyuyijinban 2026-10-02 on
-the landed 088 sample drawing); R6–R10 stand unchanged.
+the landed 088 sample drawing); R13 is the ic-periphery ruling added by 098 (ruled by
+岳 2026-10-03, offline half; the landed drawing is 099's). R6–R10 stand unchanged.
 
 ### R6 — A capacitor hangs on its owning pin's physical side
 
@@ -181,3 +182,39 @@ evidence. Two sources that both speak and disagree are **refused** (`circuit-inv
 both originals quoted, a person says which is wrong) rather than ranked; two that agree
 say so in the evidence. A contract that names no branch of this module changes nothing,
 so a `branchOrder`-less drawing without one is byte-for-byte 088's.
+
+### R13 — An IC's drawing hangs each peripheral off its own pin, and the core is a stated fact
+
+The fifth grammar, `ic-periphery` (098, ruled by 岳 2026-10-03 on the CH340 module):
+**one core IC in the middle, every hanging part attached to the pin it belongs to** —
+its crystal across two of its pins (`bridge`), its load, decoupling and V3 capacitors
+returning from one pin net to the rail or the ground (`shunt`), and its cross-module
+signals named at the pins that carry them. Three things are rulings rather than
+defaults:
+
+* **Which part is the core cannot be derived**, and this grammar does not guess: the
+  sheet may state it (`PresentationSpec.modules[].core` — a new optional key, absent in
+  every older document and written only when stated), the contract may
+  (`DesignIntent.blocks[]` naming exactly one multi-pin part of the drawing), and the
+  partition is read last (a *unique strict* maximum of stated pin counts, above two).
+  Sources that speak and disagree are **refused with both originals quoted** — a person
+  says which is wrong; sources that are silent are not sources.
+* **A cluster is structural**: two hanging parts belong together when they share a core
+  pin net that is neither the rail nor the ground, so 岳's crystal and its two load
+  capacitors are one cluster and a decoupling capacitor is a cluster of its own. No
+  designator, value or package is ever read (053 §6).
+* **The rail is a reference, not a trunk**: a supply here is a flag or a label (069's
+  own rule), so this grammar states no `direct-wire` promise and no `gnd-outlet` — those
+  are `power-entry`'s rulings about a rail that *is* the drawing.
+
+Two limits are measured and stated rather than papered over, and both are in the
+grammar's own docstring: `near(hanging part, core)` is measured between the two parts'
+pins on the shared net that sorts first — for a shunt that is the **ground**, so what it
+really measures is that the whole group is compact; and the label of a one-pin net is
+drawn at its pin, so which side a declared cross-module signal reads on is decided by
+the drawing's orientation — which the grammar pins by stating, on the hanging *parts*,
+the side they read on in the orientation the declared signals pick (`_points_for_relation`
+never resolves a net, so the signal's own statement cannot move anything). The two mirror
+poses of a symbol are what a declaration chooses between; declared sides that no single
+orientation can hold are said in the evidence, not refused — a declared side is a
+statement about the page.
