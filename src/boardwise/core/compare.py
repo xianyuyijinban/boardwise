@@ -529,6 +529,10 @@ def reconcile_names(
         for name, pages in candidate.cross_page_designators.items()
     }
     out.unproven_nets = dict(candidate.unproven_nets)
+    # …and with them why each name is unproven (107). A rebuilt reason falls back
+    # to ``WELDED_BY_NAME``, which is the pre-107 wording: a truncation the
+    # reconcile dropped would still refuse, but it would name the wrong gap.
+    out.unproven_reasons = dict(candidate.unproven_reasons)
     for designator, component in candidate.components.items():
         clone = _copy.deepcopy(component)
         for pin in clone.pins:

@@ -63,6 +63,8 @@ from boardwise.core.geometry import (
 )
 from boardwise.core.geometry import transform_point as _transform_point
 from boardwise.core.model import (
+    TRUNCATED_BY_CROSS_PAGE_DESIGNATOR,
+    TRUNCATED_BY_DESIGNATOR,
     BoardModel,
     BoardRef,
     Component,
@@ -1721,6 +1723,10 @@ def _fill_board_model(
 
     # --- fill Pin.net and reverse-build nets
     nets: dict[str, Net] = {}
+    # 107: net name -> the repeated designators whose dropped placement would
+    # have joined it. Filled by the guard below, read after the repeat lists are
+    # classified (the kind of repeat is only known there).
+    dropped_on: dict[str, list[str]] = {}
     for placement, (inst, component, pins) in enumerate(placed):
         for number, point, ez, pin_name in pins:
             # the pin's own page and its own placement (040 §WI-1, 049 P1): the
@@ -1758,6 +1764,19 @@ def _fill_board_model(
             # ``model.nets`` does not carry, which is a worse inconsistency for a
             # consumer than a net whose member list came out empty.
             if components.get(component.designator) is not component:
+                # 107: the net is created, the member is not written — and the
+                # net is now one whose member list came out **short**: this
+                # placement is drawn on the sheet, it does connect to ``name``,
+                # and the only reason it is not a member is 049's
+                # one-designator-one-component contract keeping the first copy.
+                # That is a knowledge gap, not a reading, so it is filed where a
+                # rule can refuse on it (``unproven_nets``) instead of being left
+                # implicit in a missing member. The name the pin reads is known
+                # here — it is this placement's own cluster — which is what makes
+                # the fact collectable at all.
+                dropped = dropped_on.setdefault(name, [])
+                if component.designator not in dropped:
+                    dropped.append(component.designator)
                 continue
             member = (component.designator, number)
             if member not in net.pins:
@@ -1779,6 +1798,77 @@ def _fill_board_model(
             # one netlist. (Until 040b this bucket also held the cross-board
             # repeats, which is exactly what it must no longer do.)
             model.cross_page_designators[designator] = sorted(pages_of)
+
+    # --- the nets whose member list those drops may have truncated (107)
+    #
+    # Filed into the same channel the per-page merge uses
+    # (``DesignModel.unproven_nets``), because a consumer needs no new verb: a
+    # name listed there is one no net-shaped rule may conclude about, in either
+    # direction. What is new is the reason (``unproven_reasons``): the merge's
+    # gap is "these pages may be two boards", this one is "this netlist is
+    # missing the members a dropped placement would have added". The DCDC board
+    # is the worked example — ``VCC`` is where the dropped copies of ``100NF``
+    # sit, so "no grounded capacitor on VCC" (a WARN) and "a capacitor is on
+    # VCC" (an OK) are equally unestablished there, and 岳's ruling is that the
+    # row says UNKNOWN rather than the WARN it used to be.
+    for name, designators in sorted(dropped_on.items()):
+        phrases = [
+            _dropped_placement_phrase(placements_seen.get(designator, {}), designator)
+            for designator in sorted(designators)
+        ]
+        codes = [
+            _truncation_code(placements_seen.get(designator, {}))
+            for designator in sorted(designators)
+        ]
+        detail = (
+            "the 2nd and later placement of "
+            if len(phrases) == 1 else "the 2nd and later placements of "
+        ) + " and ".join(phrases) + " are not in this netlist"
+        model.unproven_reasons[name] = (
+            TRUNCATED_BY_DESIGNATOR
+            if TRUNCATED_BY_DESIGNATOR in codes
+            else TRUNCATED_BY_CROSS_PAGE_DESIGNATOR,
+            detail,
+        )
+        seen = model.unproven_nets.get(name, ())
+        model.unproven_nets[name] = tuple(sorted(set(seen) | _dropped_pages(
+            placements_seen, designators)))
+
+
+def _dropped_pages(
+    placements_seen: dict[str, dict[str, int]], designators: list[str]
+) -> set[str]:
+    """The pages the dropped placements of ``designators`` sit on."""
+    return {
+        page
+        for designator in designators
+        for page in placements_seen.get(designator, {})
+    }
+
+
+def _truncation_code(pages_of: dict[str, int]) -> str:
+    """Which kind of repeat this designator is — 040 §WI-3's two buckets.
+
+    Several copies on **one page** are two parts claiming one name in one
+    netlist; one copy on each of several pages of **this board** is one design
+    drawn on several sheets. A designator that is both is the first — the defect
+    dominates, exactly as ``duplicate_designators`` above reads it.
+    """
+    if any(count > 1 for count in pages_of.values()):
+        return TRUNCATED_BY_DESIGNATOR
+    return TRUNCATED_BY_CROSS_PAGE_DESIGNATOR
+
+
+def _dropped_placement_phrase(pages_of: dict[str, int], designator: str) -> str:
+    """``'100NF' (4 placements on page '…')`` — one designator's own clause."""
+    pages = sorted(pages_of)
+    if len(pages) == 1:
+        where = f"page {pages[0]!r}"
+    else:
+        where = "pages " + ", ".join(repr(page) for page in pages)
+    if _truncation_code(pages_of) == TRUNCATED_BY_DESIGNATOR:
+        return f"{designator!r} ({sum(pages_of.values())} placements on {where})"
+    return f"{designator!r} (one placement on each of {where})"
 
 
 def net_labels_of(
