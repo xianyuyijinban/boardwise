@@ -117,7 +117,7 @@ _PART_KEYS = (
 )
 _SEGMENT_KEYS = ("net", "points")
 _JUNCTION_KEYS = ("net", "x", "y")
-_LABEL_KEYS = ("net", "text", "x", "y", "rotation", "bbox")
+_LABEL_KEYS = ("net", "text", "partId", "x", "y", "rotation", "bbox")
 _POWER_KEYS = ("symbolRef", "symbolHash", "net", "x", "y", "rotation")
 _TEXT_KEYS = ("kind", "text", "partId", "x", "y", "rotation", "bbox")
 _EVIDENCE_KEYS = (
@@ -206,6 +206,14 @@ class LayoutLabel:
     `LayoutText`'s when it tests for overlap — a label is text on the canvas
     whether or not it is also electrical. Required in the *type* as well as in
     the reader, so a plan built in process cannot be one the schema would refuse.
+
+    ``part_id`` (099b) is the part whose **pin this label names**, when the label
+    sits on one — the compiler knows it at the moment it places the label
+    (`_label_for` is handed the pin's owner) and the readability contract needs
+    it: a label printed over the edge of *its own* symbol is that symbol's own
+    text, not a foreign text landing on a component. It is written in the
+    document and **left out of the geometry digest** — the digest's contract is
+    "where everything is", and which part a label names moves no box.
     """
 
     net: str
@@ -214,6 +222,7 @@ class LayoutLabel:
     x: float = 0.0
     y: float = 0.0
     rotation: float = 0.0
+    part_id: str = ""
 
 
 @dataclass
@@ -333,13 +342,21 @@ class LayoutPlan:
         )
         return boxes
 
-    def _geometry_payload(self) -> dict[str, Any]:
+    def _geometry_payload(self, *, ownership: bool = False) -> dict[str, Any]:
         """Everything that *is* the layout, in one place.
 
         Shared by :meth:`geometry_json` and :meth:`to_jsonable` deliberately: the
         digest a preview binds to has to be a digest of the same picture the
         document states, and two copies of this block could drift by one field
         without anything noticing.
+
+        ``ownership`` adds the one field that is not a position: a label's
+        ``partId`` (099b). The document states it — a plan read back from disk
+        has to check exactly like the plan that was built — while
+        :meth:`geometry_sha256` keeps its own contract ("where everything is",
+        see there): which part a label names does not move a single box, and
+        folding it into the digest would re-digest every preview this repo has
+        already recorded for a drawing that did not change.
         """
         return {
             "source": {
@@ -367,14 +384,7 @@ class LayoutPlan:
                 {"net": item.net, "x": item.x, "y": item.y} for item in self.junctions
             ],
             "labels": [
-                {
-                    "net": item.net,
-                    "text": item.text,
-                    "x": item.x,
-                    "y": item.y,
-                    "rotation": item.rotation,
-                    "bbox": list(item.bbox),
-                }
+                self._label_payload(item, ownership=ownership)
                 for item in self.labels
             ],
             "powerSymbols": [
@@ -402,6 +412,25 @@ class LayoutPlan:
             ],
         }
 
+    def _label_payload(self, item: LayoutLabel, *, ownership: bool) -> dict[str, Any]:
+        """One label as JSON. ``ownership`` adds ``partId`` — see `_geometry_payload`.
+
+        Written only when the label actually names a part's pin: a label the
+        compiler placed at a tap's stub end belongs to no part, and an empty
+        string in the document would claim an owner nobody stated.
+        """
+        body: dict[str, Any] = {
+            "net": item.net,
+            "text": item.text,
+            "x": item.x,
+            "y": item.y,
+            "rotation": item.rotation,
+            "bbox": list(item.bbox),
+        }
+        if ownership and item.part_id:
+            body["partId"] = item.part_id
+        return body
+
     def geometry_json(self) -> str:
         """Canonical JSON of everything that *is* the layout (see `geometry_sha256`)."""
         return json.dumps(
@@ -422,6 +451,10 @@ class LayoutPlan:
         preview invalidated by its own report would be useless; a page digest
         that changed would only mean the plan needs re-binding, which is the
         target's question and not the geometry's.
+
+        A label's ``part_id`` (099b) is excluded with them: it says which pin the
+        label names, never where the label is drawn, and a digest that moved for
+        it would re-digest every preview in this repo for an unchanged picture.
         """
         return hashlib.sha256(self.geometry_json().encode("utf-8")).hexdigest()
 
@@ -431,7 +464,7 @@ class LayoutPlan:
         return {
             "kind": LAYOUT_PLAN_KIND,
             "planVersion": self.plan_version,
-            **self._geometry_payload(),
+            **self._geometry_payload(ownership=True),
             "target": {
                 "projectUuid": self.target.project_uuid,
                 "boardUuid": self.target.board_uuid,
@@ -642,6 +675,7 @@ def _labels_from(value: Any) -> list[LayoutLabel]:
             y=_number(body.get("y"), f"{spot}.y"),
             rotation=_pose(body.get("rotation", 0), f"{spot}.rotation"),
             bbox=_required_box(body.get("bbox"), f"{spot}.bbox"),
+            part_id=_text(body.get("partId"), f"{spot}.partId"),
         ))
     return out
 

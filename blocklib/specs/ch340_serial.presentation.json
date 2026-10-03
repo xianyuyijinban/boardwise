@@ -1,0 +1,25 @@
+{
+  "kind": "boardwise-presentation-spec",
+  "specVersion": 1,
+  "grammarRef": "ic-periphery",
+  "sidePreferences": {
+    "output": "left",
+    "input": "left",
+    "load": "left"
+  },
+  "portRoles": {
+    "TXD": "output",
+    "RXD": "input",
+    "D+": "load",
+    "D-": "load"
+  },
+  "modules": [
+    {
+      "id": "serial",
+      "parts": ["U1", "X1", "C1", "C2", "C3", "C4"],
+      "role": "the USB-serial bridge",
+      "grammarRef": "ic-periphery",
+      "core": "U1"
+    }
+  ]
+}

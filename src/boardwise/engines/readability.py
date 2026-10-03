@@ -1063,6 +1063,16 @@ def _check_text(
     inside its own extent, and the contract here is about a *foreign* text
     landing on a component — including a note with no part at all, which is why
     the unowned case is reported.
+
+    A **net label on a pin** is that pin's part's own text for this rule (099b):
+    the label names the part's pin, so it belongs to it exactly as its value
+    does, and printing it slightly across the symbol's edge is how a compact
+    part is drawn — a 16-pin SOP-16 keeps its pin tips 9.5 units from the drawn
+    body, less than half a label box, so the outward placement *is* an overlap
+    and the alternative (a label centred on its own pin, half of it inside the
+    symbol) is worse. `LayoutLabel.part_id` carries the owner; a label with no
+    owner (a tap's stub end, a page boundary) keeps the strict rule, and every
+    label is still checked against every *other* part's body.
     """
     out: list[HardViolation] = []
     boxes = _text_boxes(layout_plan)
@@ -1097,13 +1107,19 @@ def _check_text(
 def _text_boxes(
     layout_plan: LayoutPlan,
 ) -> list[tuple[str, Box, str, str]]:
-    """``(name, box, partId, text)`` for every text on the canvas, labels included."""
+    """``(name, box, partId, text)`` for every text on the canvas, labels included.
+
+    ``partId`` is the owner of a *text* (`LayoutText.part_id` — a reference, a
+    value) and, since 099b, the part whose pin a *label* names
+    (`LayoutLabel.part_id`): both halves of the set hand the owner to
+    `_check_text`, which exempts a text from its own part's body.
+    """
     boxes: list[tuple[str, Box, str, str]] = [
         (f"texts[{index}]", item.bbox, item.part_id, item.text)
         for index, item in enumerate(layout_plan.texts)
     ]
     boxes.extend(
-        (f"labels[{index}]", item.bbox, "", item.text)
+        (f"labels[{index}]", item.bbox, item.part_id, item.text)
         for index, item in enumerate(layout_plan.labels)
     )
     return boxes

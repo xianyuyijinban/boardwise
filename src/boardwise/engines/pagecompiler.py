@@ -1364,7 +1364,7 @@ def _copy_plan(plan: LayoutPlan) -> LayoutPlan:
         labels=[
             LayoutLabel(
                 net=item.net, text=item.text, bbox=item.bbox, x=item.x, y=item.y,
-                rotation=item.rotation,
+                rotation=item.rotation, part_id=item.part_id,
             )
             for item in plan.labels
         ],
@@ -2326,6 +2326,7 @@ def _merge(
                 bbox=(label.bbox[0] + dx, label.bbox[1] + dy,
                       label.bbox[2] + dx, label.bbox[3] + dy),
                 x=label.x + dx, y=label.y + dy, rotation=label.rotation,
+                part_id=label.part_id,
             ))
         for symbol in item.plan.power_symbols:
             drawn.symbols.append(LayoutPowerSymbol(

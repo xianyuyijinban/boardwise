@@ -1,0 +1,106 @@
+{
+  "profiles": [
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "CH340G-C14267",
+      "title": "CH340G USB-serial bridge, SOP-16 (LCSC C14267, measured on the live editor)",
+      "body": [-30.5, -45.5, 30.5, 45.5],
+      "pins": [
+        {"number": "1", "name": "GND", "tip": [-40.0, 35.0], "direction": "left",
+         "length": 10.0, "pinType": "passive"},
+        {"number": "2", "name": "TXD", "tip": [-40.0, 25.0], "direction": "left",
+         "length": 10.0, "pinType": "passive"},
+        {"number": "3", "name": "RXD", "tip": [-40.0, 15.0], "direction": "left",
+         "length": 10.0, "pinType": "passive"},
+        {"number": "4", "name": "V3", "tip": [-40.0, 5.0], "direction": "left",
+         "length": 10.0, "pinType": "passive"},
+        {"number": "5", "name": "UD+", "tip": [-40.0, -5.0], "direction": "left",
+         "length": 10.0, "pinType": "passive"},
+        {"number": "6", "name": "UD-", "tip": [-40.0, -15.0], "direction": "left",
+         "length": 10.0, "pinType": "passive"},
+        {"number": "7", "name": "XI", "tip": [-40.0, -25.0], "direction": "left",
+         "length": 10.0, "pinType": "passive"},
+        {"number": "8", "name": "XO", "tip": [-40.0, -35.0], "direction": "left",
+         "length": 10.0, "pinType": "passive"},
+        {"number": "9", "name": "CTS#", "tip": [40.0, -35.0], "direction": "right",
+         "length": 10.0, "pinType": "passive"},
+        {"number": "10", "name": "DSR#", "tip": [40.0, -25.0], "direction": "right",
+         "length": 10.0, "pinType": "passive"},
+        {"number": "11", "name": "RI#", "tip": [40.0, -15.0], "direction": "right",
+         "length": 10.0, "pinType": "passive"},
+        {"number": "12", "name": "DCD#", "tip": [40.0, -5.0], "direction": "right",
+         "length": 10.0, "pinType": "passive"},
+        {"number": "13", "name": "DTR#", "tip": [40.0, 5.0], "direction": "right",
+         "length": 10.0, "pinType": "passive"},
+        {"number": "14", "name": "RTS#", "tip": [40.0, 15.0], "direction": "right",
+         "length": 10.0, "pinType": "passive"},
+        {"number": "15", "name": "R232", "tip": [40.0, 25.0], "direction": "right",
+         "length": 10.0, "pinType": "passive"},
+        {"number": "16", "name": "VCC", "tip": [40.0, 35.0], "direction": "right",
+         "length": 10.0, "pinType": "passive"}
+      ],
+      "source": "measured 2026-10-03: C14267 placed at (300,500) on test/P24 (probe page fa96410e884cc55f); sch.component_pins answered all 16 pins at x=260 (pins 1-8) and x=340 (pins 9-16), y from 535 down to 465 in steps of 10, every PinLength 10; its own bbox was [269.5,454.5,330.5,545.5] -> body (-30.5,-45.5,30.5,45.5). Pin names are the host's own: GND/TXD/RXD/V3/UD+/UD-/XI/XO on the left face, CTS#/DSR#/RI#/DCD#/DTR#/RTS#/R232/VCC on the right face — both the UART pair and the USB data pair are on the LEFT, unlike 098's hand-written sample (a fact of this symbol; the presentation declares the sides it draws). Evidence: outputs/099/libprobe/pins_ch340g.json + 08_geometry_probe.json"
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "HC-49S-12M-C389706",
+      "title": "12 MHz HC-49S crystal, THT two-pin (LCSC C389706, measured)",
+      "body": [-10.5, -7.5, 10.5, 7.5],
+      "pins": [
+        {"number": "1", "name": "OSC1", "tip": [-20.0, 0.0], "direction": "left",
+         "length": 10.0, "pinType": "passive"},
+        {"number": "2", "name": "OSC2", "tip": [20.0, 0.0], "direction": "right",
+         "length": 10.0, "pinType": "passive"}
+      ],
+      "source": "measured 2026-10-03: C389706 (5S0-1200A2020-00, footprint HC-49S_L11.0-W4.4-P4.88) placed at (600,500) on test/P24; sch.component_pins answered pin 1 'OSC1' at (580,500) and pin 2 'OSC2' at (620,500), both PinLength 10; its own bbox was [589.5,492.5,610.5,507.5] -> body (-10.5,-7.5,10.5,7.5). Two pins on opposite sides, 40 units apart. Evidence: outputs/099/libprobe/pins_xtal.json + 08_geometry_probe.json"
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "C0603-22P-C140958",
+      "title": "22pF 0603 C0G (LCSC C140958, measured)",
+      "body": [-10.5, -8.5, 10.5, 8.5],
+      "pins": [
+        {"number": "1", "name": "1", "tip": [20.0, 0.0], "direction": "right",
+         "length": 10.0, "pinType": "passive"},
+        {"number": "2", "name": "2", "tip": [-20.0, 0.0], "direction": "left",
+         "length": 10.0, "pinType": "passive"}
+      ],
+      "source": "measured 2026-10-03: C140958 (C0603C220J2GAC7867, footprint C0603) placed at (800,500) on test/P24; sch.component_pins answered pin 1 at (820,500) (Rotation 0) and pin 2 at (780,500) (Rotation 180), both PinLength 10; its own bbox was [789.5,491.5,810.5,508.5] -> body (-10.5,-8.5,10.5,8.5). Note the pin order: at the host's own rotation 0, pin 1 leaves on the RIGHT — the library profile states the measured shape, not an assumed one. Evidence: outputs/099/libprobe/pins_c22p.json + 08_geometry_probe.json"
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "C0603-100N-C85986",
+      "title": "100nF 0603 X7R (LCSC C85986, measured)",
+      "body": [-10.5, -8.5, 10.5, 8.5],
+      "pins": [
+        {"number": "1", "name": "1", "tip": [-20.0, 0.0], "direction": "left",
+         "length": 10.0, "pinType": "passive"},
+        {"number": "2", "name": "2", "tip": [20.0, 0.0], "direction": "right",
+         "length": 10.0, "pinType": "passive"}
+      ],
+      "source": "measured 2026-10-03: C85986 (GRM188B11E104KA01D, footprint C0603) placed at (1000,500) on test/P24; sch.component_pins answered pin 1 at (980,500) (Rotation 180) and pin 2 at (1020,500) (Rotation 0), both PinLength 10; its own bbox was [989.5,491.5,1010.5,508.5] -> body (-10.5,-8.5,10.5,8.5). Same body as the 22pF part and the opposite pin order — measured, not assumed. Evidence: outputs/099/libprobe/pins_c100n.json + 08_geometry_probe.json"
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "PWR-VCC",
+      "title": "PWR-VCC",
+      "body": [-6.0, 0.0, 6.0, 18.0],
+      "pins": [],
+      "source": "flag glyph convention of the compiler (the host places a power flag by kind+net, never from a library profile). Measured on the live host 2026-10-03 for the family: the Power flag placed at (300,300) with net VCC resolves to the host symbol 'Power-5V', has its connection point AT the origin (PinLength 5) and its glyph 4.5..10.5 units ABOVE it (bbox [294.5,304.5,305.5,310.5]); the Ground flag at (600,300) has its connection point at the origin (PinLength 10) and its bars 9.5..19.5 units BELOW it ([589.5,280.5,610.5,290.5]) — pit 43's two families, re-measured this batch. Evidence: outputs/099/libprobe/pins_flag_vcc.json + 08_geometry_probe.json"
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "PWR-GND",
+      "title": "PWR-GND",
+      "body": [-6.0, 0.0, 6.0, 18.0],
+      "pins": [],
+      "source": "flag glyph convention of the compiler; the measured Ground family hangs below its connection point (see PWR-VCC's source line and SKILL pit 43)"
+    }
+  ]
+}
