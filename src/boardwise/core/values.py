@@ -163,7 +163,9 @@ _IMPERIAL_SIZE_CODES = (
 _SIZE_CODE_PREFIXES = _IMPERIAL_SIZE_CODES + _METRIC_SIZE_CODES
 
 #: The **components** of a size code as whole digit runs, for asking "does this
-#: token state a package size of its own?" (the anchor below).
+#: token state a package size of its own?" (the anchor below) -- and, since 102,
+#: for asking the same question of a **Value field's** digit run, where the answer
+#: is a reading rather than a strip (:data:`_MID_LETTER_KINDS`).
 _SIZE_CODE_RUNS = frozenset(_IMPERIAL_SIZE_CODES + _METRIC_SIZE_CODES)
 
 #: The three syntactic **anchors** a decoded reading can carry (071 §1, oracle
@@ -374,6 +376,13 @@ def parse_capacitance_farads(value: str) -> float | None:
       the part entirely, so a board writing ``4u7`` lost its ``param-rc-cutoff``
       pair, while the same part spelled ``4.7uF`` was measured. Read by
       :func:`_mid_letter_farads`, which requires the notation to span the field.
+      The same silence had a second shape, reported by the external audit and
+      closed by 102: a field like ``160n`` -- the spelling the shelf itself
+      addresses a part by -- lost its mantissa to the **MPN** size-code strip
+      (``160`` is the metric size code for 0603), so the capacitance spellings
+      that begin with a package size code (``160n``, ``0805n``, ``105u``: 54 of
+      them across both size alphabets and the three unit letters) read as
+      nothing while the neighbouring ``160nF`` read fine.
 
     Every string the suffix grammar reads keeps its exact value: the two grammars
     cannot overlap at all -- the suffix form names its unit and ends there
@@ -486,14 +495,25 @@ def _mid_letter_farads(text: str) -> float | None:
       field has to carry digits in front of the unit letter;
     * **what is it worth** -- the scan the resistance side uses
       (:func:`_mid_letter_readings`), which owns the fraction's presence and
-      length, the size-code strip, the mantissa's three figures and the meaning of
-      the fraction.
+      length, the mantissa's three figures and the meaning of the fraction. It
+      does **not** own the size-code strip here: 102 read across what the module
+      already says about a Value field -- the run in front of the letter is the
+      mantissa, because there is no vendor prefix to guess at -- and a run that
+      **is** one of the industry's package size codes is therefore the field's own
+      figures rather than a prefix to come off. ``160n`` is 160 nF (the spelling
+      ``core.parts.quantity_slug`` addresses the shelf by, ``cap.160n_0402``) and
+      ``0805n`` is 805 nF, the reading ``805n`` has always had. Before that, the
+      strip ate the mantissa whole and the field read as nothing, which a rule
+      reads as *silence*: it skips the part (087 §8).
 
     Its own refusal is ``vendor_prefix=False``: a Value field states the value and
     nothing else, so the digit run in front of the unit letter is the mantissa
     rather than a manufacturer's code. That is the resistance side's own rule,
     ``47R`` reading as 47 Ω -- and it is why ``0u1`` states nothing here, as
-    ``0K1`` states nothing there.
+    ``0K1`` states nothing there. What is **not** opened is a run longer than the
+    trade's mantissa that is not a size code: ``12345n`` and ``12345u7`` are
+    refused by the scan's three figures plus the coverage check below, as they
+    were before.
     """
     if _CAP_NOTATION_FIELD_RE.fullmatch(text) is None:
         return None  # not this notation as a whole field
@@ -552,12 +572,31 @@ _MID_LETTER_RE = re.compile(r"(\d*)([RKM])(\d*)", re.IGNORECASE)
 _CAP_MID_LETTER_RE = re.compile(r"(\d*)([unp\u00b5\u03bc])(\d*)", re.IGNORECASE)
 
 #: The two notations in the one shape :func:`_mid_letter_readings` dispatches on:
-#: ``kind`` -> (scan, letters-and-multipliers). The scan spells its letters and
-#: the table says what they are worth, so the reading looks the letter up in the
-#: table of the notation it was scanned by.
+#: ``kind`` -> (scan, letters-and-multipliers, does a size code read as the
+#: value?). The scan spells its letters and the table says what they are worth, so
+#: the reading looks the letter up in the table of the notation it was scanned by.
+#:
+#: The third column is 102's, and it is the one place the two notations differ
+#: beyond their letters. A **Value field** states a value and nothing else, so a
+#: digit run that *is* one of the industry's package size codes has no size to
+#: state: it is the field's own figures, and the strip that takes a size code off
+#: a part number (071 §3②) must not take it off here -- `160n` is 160 nF, and it
+#: is the spelling `core.parts.quantity_slug` addresses the shelf by
+#: (`cap.160n_0402`), so a rule handed the field read nothing and skipped the
+#: part outright (087 §8: silence, not a miss). The audit swept both alphabets
+#: against the three letters and measured 54 such capacitance spellings.
+#:
+#: It is the **capacitance** notation because that is the family the audit
+#: measured and the family this batch opens; the resistance notation has the same
+#: collision (`160R` = 160 Ω is refused today, the R-suffix spelling `47R` has
+#: always read) and it is registered with the batch's delivery for a ruling rather
+#: than opened here, so that the reader's reading set does not widen by 18
+#: spellings no audit named. `outputs/102/SUMMARY.txt` §遗留 carries it, and
+#: `tests/test_102_b3_value_sizecodes.py` pins the refusal so a later batch has to
+#: say so to open it.
 _MID_LETTER_KINDS = {
-    "resistance": (_MID_LETTER_RE, _MID_LETTER_BASE),
-    "capacitance": (_CAP_MID_LETTER_RE, _CAP_MID_LETTER_BASE),
+    "resistance": (_MID_LETTER_RE, _MID_LETTER_BASE, False),
+    "capacitance": (_CAP_MID_LETTER_RE, _CAP_MID_LETTER_BASE, True),
 }
 
 
@@ -572,6 +611,13 @@ def _without_leading_size(run: str) -> str:
     no mantissa at all (:func:`_mid_letter_readings` then produces no reading),
     which is the same rule from the other side: ``CC0603KRX7R9BB104``'s
     ``603K`` was read off its size field.
+
+    This is **MPN grammar**, and 102 is the batch that had to say so out loud: a
+    Value field has no vendor prefix and therefore no size code to state either,
+    so its own run that *is* one of these codes is read as the field's figures
+    rather than handed to this function. Read
+    :data:`_MID_LETTER_KINDS`' third column before calling it from a new caller:
+    the strip is right for a part number and wrong for a value.
     """
     for size in _SIZE_CODE_PREFIXES:
         if run.startswith(size):
@@ -598,8 +644,13 @@ def _mid_letter_readings(
 
     ``kind`` picks the notation: ``"resistance"`` (``R``/``K``/``M``) or
     ``"capacitance"`` (``u``/``n``/``p`` and the micro spellings). Which letters
-    a notation holds and what each is worth is the whole of the difference
-    between them; every structural refusal below is one rule for both.
+    a notation holds and what each is worth is nearly the whole of the difference
+    between them; every structural refusal below is one rule for both, with one
+    102 exception the kind table carries as its third column: a **Value field's**
+    run that *is* a package size code is the field's own figures, and that is a
+    reading the audited capacitance family needs (``160n``, the spelling the shelf
+    addresses a part by) while the resistance notation's twin of the same shape
+    (``160R``) stays refused and is registered with the batch's delivery.
 
     The **located** candidate carries :data:`ANCHOR_MID_LETTER` (071 §1 C): the
     one read off a run the size code was stripped off, so that run *is* the
@@ -609,12 +660,14 @@ def _mid_letter_readings(
     none (078 A1, issue #32). All of them are still returned: 046's "both
     readings are legitimate" and the amplitude waiver do not need an anchor, and
     dropping the right reading is what turns a correct board into a violation.
-    The anchor only decides who is allowed to *accuse*.
+    The anchor only decides who is allowed to *accuse*. A Value field's size-code
+    reading carries none either, and does not need one: it is the field itself.
 
     Two refusals are grammar, not vendor shapes (071 §3②/§4):
 
     * the digit run may carry the package size in front of the mantissa
-      (``0603``10``K0``), which comes off before anything is read;
+      (``0603``10``K0``), which comes off before anything is read -- in an MPN,
+      and in a Value field for every run that is not itself a size code;
     * a letter with **no** digit run in front of it states no value:
       ``WR06X1002FTL``'s ``R06`` was read as 0.06 Ω and ``GRM188R71C104KA01D``'s
       ``R71`` as 0.71 Ω, both of them the series-name letter followed by the
@@ -629,7 +682,7 @@ def _mid_letter_readings(
     Value-field form, and it is what keeps a part number out of the capacitor
     notation -- ``2N2222`` contains ``2N2``.
     """
-    scan, bases = _MID_LETTER_KINDS[kind]
+    scan, bases, size_code_is_value = _MID_LETTER_KINDS[kind]
     readings: dict[float, tuple[str, str]] = {}
     for match in scan.finditer(token):
         run, raw_letter, fraction = match.group(1), match.group(2), match.group(3)
@@ -642,14 +695,29 @@ def _mid_letter_readings(
             continue  # the scan and its table are one whitelist, spelled twice
         if len(fraction) > 2:
             continue  # the shunt form (`R005`) and any longer tail
-        located_run = _without_leading_size(run)
-        if not located_run:
-            continue  # no mantissa: a series name, or the size code alone
-        # 078 A1: did the strip *locate* the value segment? Only a run the size
-        # code came off is one -- see the anchor line below.
-        located = len(located_run) < len(run)
-        run = located_run
         base = bases[letter]
+        # 102: a Value field's run that **is** a package size code is its own
+        # figures, not a prefix to strip. A Value field has no vendor prefix
+        # (`vendor_prefix=False` is its own rule, two paragraphs up), so the strip
+        # below -- MPN grammar, 071 §3② -- has nothing to take off it: `160n` is
+        # 160 nF, the spelling `core.parts.quantity_slug` addresses the shelf by
+        # (`cap.160n_0402`), and before this the strip ate its mantissa whole and
+        # the field read as nothing. The kind table says which notation this is
+        # the case for; a run that is *not* a size code keeps every reading 071
+        # pinned (`12345n`: the trade's mantissa is three figures).
+        size_code_run = size_code_is_value and not vendor_prefix and (
+            run in _SIZE_CODE_RUNS
+        )
+        if size_code_run:
+            located = False  # nothing came off: the run is the field's figures
+        else:
+            located_run = _without_leading_size(run)
+            if not located_run:
+                continue  # no mantissa: a series name, or the size code alone
+            # 078 A1: did the strip *locate* the value segment? Only a run the
+            # size code came off is one -- see the anchor line below.
+            located = len(located_run) < len(run)
+            run = located_run
         trimmed = run[-3:]
         # Mantissa candidates: inside a part number every suffix of the digit
         # run that does not start with a zero ("074" -> "74", "4"), because a
@@ -687,7 +755,19 @@ def _mid_letter_readings(
             # it). In the capacitor notation the same refusal leaves `0u1`
             # unread, and there the suffix grammar holds the spellings that do
             # state the value (`0.1uF`, `100nF`).
-            candidates = [] if trimmed.startswith("0") else [trimmed]
+            #
+            # 102: a size code is the one digit run that does start with a zero
+            # and *is* a mantissa -- the field's own figures, since a Value field
+            # has no size to state them in (`0805n` = 805 nF, the reading `805n`
+            # has always had; the leading zero is the size spelling's padding, not
+            # a figure of its own). Every other run of four or more figures stays
+            # refused by the line below, the coverage check at the caller's end
+            # being what says so.
+            candidates = (
+                [run] if size_code_run
+                else [] if trimmed.startswith("0")
+                else [trimmed]
+            )
         for position, mantissa in enumerate(candidates):
             digits = mantissa + fraction
             if not digits:

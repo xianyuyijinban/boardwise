@@ -249,10 +249,17 @@ def test_the_capacitance_parser_reads_the_fraction_free_trade_spelling():
     # A part number is not a value, and the anchoring is what says so: 087 widened
     # the *shape*, never the anchor.
     assert parse_capacitance_farads("IRF540N") is None
-    assert parse_capacitance_farads("0603n") is None
     assert parse_capacitance_farads("12345n") is None
     assert parse_capacitance_farads("4u7F") is None
     assert parse_capacitance_farads("C4u7") is None
+    # One refusal of that group is no longer one, and 102 is the batch that read
+    # it: `0603n` is a Value field whose own figures *are* a package size code,
+    # and the strip that takes a size code off a part number has no business here
+    # (a Value field has no vendor prefix, so the run is the mantissa -- the rule
+    # this module already states). The reading is pinned, spelling by spelling,
+    # in `tests/test_102_b3_value_sizecodes.py`; what stays refused is the run
+    # that is longer than the trade's mantissa *without* being a size code.
+    assert parse_capacitance_farads("0603n") == pytest.approx(603e-9, rel=1e-12)
 
 
 def test_the_capacitance_mid_letter_notation_refuses_its_neighbours():
@@ -273,9 +280,14 @@ def test_the_capacitance_mid_letter_notation_refuses_its_neighbours():
     100 nF, and which the shelf addresses a part by -- was unread, and that gap is
     now closed (the reading is pinned in the test above). What did **not** move
     with it is the anchoring: the notation is still the whole field, so a
-    designator in front (``C4u7``), a trailing unit letter (``4u7F``), a package
-    size in front of the mantissa (``0603n``) and a mantissa longer than three
-    figures (``12345u7``) are all still not readings of a value.
+    designator in front (``C4u7``), a trailing unit letter (``4u7F``) and a
+    mantissa longer than three figures (``12345u7``) are all still not readings of
+    a value. A package size in front of the mantissa (``0603n``) was on that list
+    until 102 took it off: a Value field has no vendor prefix, so a run that **is**
+    a package size code is its own figures, not a size to strip (the readings are
+    pinned in ``tests/test_102_b3_value_sizecodes.py``). Its neighbours here still
+    refuse, and the run that is long without being a size code is the one that
+    keeps 071's operand.
     """
     assert parse_capacitance_farads("4m7") is None
     assert parse_capacitance_farads("4M7") is None
@@ -290,10 +302,9 @@ def test_the_capacitance_mid_letter_notation_refuses_its_neighbours():
     assert parse_capacitance_farads("0u1") is None
     assert parse_capacitance_farads("4u700") is None
     assert parse_capacitance_farads("12345u7") is None
-    # ...and the two that keep their meaning when the fraction is empty: the
-    # leading zero (``0u1``'s rule) and the size-code strip / long mantissa.
+    # ...and what keeps its meaning when the fraction is empty: the leading zero
+    # (``0u1``'s rule) and a run over the mantissa that states no size code.
     assert parse_capacitance_farads("0n") is None
-    assert parse_capacitance_farads("0603n") is None
     assert parse_capacitance_farads("12345n") is None
     assert parse_capacitance_farads("u") is None
     # The bare number without a unit is still refused (011's own rule): the
