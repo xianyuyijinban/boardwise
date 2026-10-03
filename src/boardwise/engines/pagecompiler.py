@@ -131,6 +131,7 @@ from boardwise.core.presentationspec import (
     PresentationPath,
     PresentationSpec,
     UserLock,
+    main_path_wire,
 )
 from boardwise.core.symbolprofile import (
     Box,
@@ -1473,25 +1474,39 @@ def _net_style(
        case where the connection is drawn end to end;
     3. otherwise the two ends are **named**, and the page's own consistency rule
        makes them both labels or both flags.
+
+    Which of 1 and 2 applies is :func:`~boardwise.core.presentationspec.main_path_wire`'s
+    answer, not a second rule grown here (096): the page checker asks the same
+    function, so the two cannot disagree about one net again. This function adds
+    only what is *this arrangement's* — the module order, the adjacency, and the
+    flag the library actually carries.
     """
     net = ctx.circuit.net(net_id)
     modules = ctx.nets_by_module[net_id]
     main_path = len(modules) == 2 and bool(_main_path_edges(ctx, set(modules)))
-    if net is not None and _is_bus(net, ctx.budget.module_budget.high_fanout):
-        if not (main_path and net.cls == "power"):
-            profile, ref = _flag_profile(ctx, net)
-            if profile is None:
-                return (
-                    PAGE_PORT_LABEL,
-                    f"the library carries no flag symbol {ref!r}, so this bus is "
-                    "named by labels at both ends (one style throughout)",
-                )
+    # Whether this net is the one wire or a name is **not** decided here: 096
+    # moved the rule to a single source both this module and the page checker
+    # ask, because a second copy of it (a member-count threshold) is what made
+    # the same net a wire here and a bus there.
+    wire = main_path_wire(
+        ctx.presentation, net.cls if net is not None else None, modules,
+    )
+    if not wire and net is not None and _is_bus(
+        net, ctx.budget.module_budget.high_fanout
+    ):
+        profile, ref = _flag_profile(ctx, net)
+        if profile is None:
             return (
-                PAGE_PORT_FLAG,
-                f"a bus of {len(net.members)} member(s) is expressed by its flag at "
-                "every end (053 sec.7: it may never become a page-wide wire tree; "
-                "069 sec.7: a rail is a bus at any fan-out)",
+                PAGE_PORT_LABEL,
+                f"the library carries no flag symbol {ref!r}, so this bus is "
+                "named by labels at both ends (one style throughout)",
             )
+        return (
+            PAGE_PORT_FLAG,
+            f"a bus of {len(net.members)} member(s) is expressed by its flag at "
+            "every end (053 sec.7: it may never become a page-wide wire tree; "
+            "069 sec.7: a rail is a bus at any fan-out)",
+        )
     if main_path:
         if _adjacent(index[modules[0]], index[modules[1]], variant.columns, len(index)):
             return (
@@ -3112,7 +3127,14 @@ def _edge_label(ctx: _Context, net_id: str) -> str:
 
 
 def _is_bus(net: SpecNet | None, high_fanout: int) -> bool:
-    """Is this net always expressed by name (053 sec.7)?"""
+    """Is this net always expressed by name (053 sec.7, 069 sec.7)?
+
+    A ground and a rail at any fan-out — 069 sec.7 retired the member count, so
+    ``high_fanout`` is stated by the caller and no longer decides. The one
+    exception to "always" is the `mainPath` mark, and it is deliberately **not**
+    read here: :func:`boardwise.core.presentationspec.main_path_wire` owns that
+    decision for this compiler and for the page checker alike (096).
+    """
     if net is None:
         return False
     return net.cls in ("gnd", "power")

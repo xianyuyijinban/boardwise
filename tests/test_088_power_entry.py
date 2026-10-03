@@ -16,6 +16,8 @@
 5. **实测记录**：两处**跨模块不一致**（页级 mainPath 与可读性检查器对"宽轨"的判断、
    以及有页面时锚点吸附越过页边）在本文件里各钉一条测试，名字写清
    "今天是这样、原因已测量、修法属公共路径"——它们不是本批的契约，是本批的实测。
+   **096 已修这两处**：那两条测试改写为钉修复后的行为，docstring 里的实测记录原样
+   保留（历史价值）。
 
 CircuitSpec / PresentationSpec / SymbolProfile 全部手写字面量，不建夹具文件；符号库
 里除入口连接器、TVS、体格电解三颗本批新增形状外，直接复用 053B 的 `library()`
@@ -886,7 +888,7 @@ def test_scene_10_the_page_slices_each_module_and_carries_the_fact_with_it():
     ]
 
 
-def test_a_main_path_mark_on_a_wide_rail_is_refused_while_the_compiler_draws_it():
+def test_a_main_path_mark_on_a_wide_rail_is_one_wire_after_096():
     """实测到的跨模块不一致（不是本批契约，留给裁决）：
 
     `pagecompiler._net_style` 认 069 v3 的例外——mainPath 标在电源轨上时画整条线；
@@ -894,6 +896,10 @@ def test_a_main_path_mark_on_a_wide_rail_is_refused_while_the_compiler_draws_it(
     （power 且成员数 > 3 即总线），于是**同一个网**一个画线、一个拒绝。岳样板那条
     轨有 4 个成员（连接器 + TVS + 2 电容 + 分压），一标 mainPath 整页就 0 候选；
     把轨缩到 3 个成员就过（上一条测试）。
+
+    096 已修，本测试现在钉的是修复后行为。那条判据不再是 readability 的一份拷贝：
+    两处改问同一个出处 `presentationspec.main_path_wire`（069 v3 例外一体适用）——
+    阈值没有被抬高，是被拿掉了。
     """
     spec = CircuitSpec.from_dict({
         **_page_circuit().to_jsonable(),
@@ -921,16 +927,25 @@ def test_a_main_path_mark_on_a_wide_rail_is_refused_while_the_compiler_draws_it(
         spec, presentation_spec, library(), pc.PageCompileBudget(page_box=PAGE_BOX)
     )
 
-    assert result.ok is False
-    assert any(
-        "no wire joins the two modules" in item.detail for item in result.failures
-    )
+    assert result.ok, result.render_failures()
     assert all(module.ok for module in result.modules.values()), (
-        "两个模块各自都能编译，拒绝发生在页级"
+        "两个模块各自都能编译，这里钉的是页级"
     )
+    page = result.pages[0]
+    kinds = page.port_kinds()
+    assert kinds[RAIL] == {pc.PAGE_PORT_WIRE}, "宽轨照样是整条实体线（069 v3 例外）"
+    assert kinds[GND] == {pc.PAGE_PORT_FLAG}, "GND 仍走旗：例外只对电源轨开"
+    rail_wires = wire_for(page.plan, RAIL)
+    assert rail_wires, "rail 是画出来的导体，不是一个名字"
+    rail_ports = [
+        item for module in page.modules for item in module.ports if item.net == RAIL
+    ]
+    assert len(rail_ports) == 2 and all(
+        touches(rail_wires, (item.x, item.y)) for item in rail_ports
+    ), "rail 从一端的 port 通到另一端的 port（页级一致性检查也是这么判的）"
 
 
-def test_a_stated_sheet_can_refuse_a_drawing_whose_snap_lands_outside_the_margin():
+def test_a_stated_sheet_keeps_a_drawing_whose_snap_lands_inside_the_margin_after_096():
     """实测到的第二处公共路径问题（同样留给裁决，不在本批改）：
 
     `_anchor_to_page` 先按页边留出 `PAGE_MARGIN` 再把锚点吸到格点上，而
@@ -938,6 +953,11 @@ def test_a_stated_sheet_can_refuse_a_drawing_whose_snap_lands_outside_the_margin
     1130×785 能装下的 413×133 图被报成"放不下"。实测：岳样板在 1170×825 上
     box[0] = 18 < 20（页边 20），0 候选；同一条电路不声明页面（`page_box=None`）
     或换成 input=left 都能编译。
+
+    096 已修，本测试现在钉的是修复后行为。吸附改成**朝页内**（左/下边 ceil、
+    右/上边 floor），`_overflow` 的 1e-6 一个字没动——页边是作者的约束，格点是
+    编译器的便利，便利不许违反约束。下面是同一条电路现在的实测：有候选，且每张
+    候选的图形都落回页边内。
     """
     spec, pres = inlet_circuit(), inlet_presentation()
     stated = compile_module(
@@ -946,9 +966,14 @@ def test_a_stated_sheet_can_refuse_a_drawing_whose_snap_lands_outside_the_margin
     unstated = compile_module(spec, pres)
 
     assert unstated.ok
-    if stated.ok:
-        pytest.skip("the anchoring snap no longer escapes the margin")
-    (failure,) = [item for item in stated.failures
-                  if item.category == dc.FAILURE_LAYOUT_UNSAT]
-    assert "1170 x 825" in failure.detail
-    assert "1170 x 825" in failure.detail and "margin" in failure.detail
+    assert stated.ok, stated.render_failures()
+    inner = (
+        dc.PAGE_MARGIN, dc.PAGE_MARGIN,
+        1170.0 - dc.PAGE_MARGIN, 825.0 - dc.PAGE_MARGIN,
+    )
+    for plan in stated.candidates:
+        # the drawing's own extent, read back by the page compiler's reader of
+        # one (`_module_frame`), rather than re-measured here by a third rule
+        box = pc._module_frame(plan, library(), 0.0)
+        assert box[0] >= inner[0] and box[1] >= inner[1], box
+        assert box[2] <= inner[2] and box[3] <= inner[3], box

@@ -127,7 +127,10 @@ on purpose, because the compiler is the part that must work with no editor:
   findings' one-way rule, the save and the render.
 * **the page compiler** (`engines/pagecompiler.py`, 056) composes several
   modules into one page document (`core/pagelayoutplan.py`): modules keep their
-  own compiled interiors, inter-module nets are named at each end (G4), page
+  own compiled interiors, inter-module nets are named at each end (G4; the one
+  exception is the flow edge the presentation marks `mainPath` — that edge is one
+  wire from port to port, and 096 made the page compiler and the page checker ask
+  the same function for it, `core.presentationspec.main_path_wire`), page
   locks pin a part to an absolute page point, and everything already on the
   page becomes a named keep-out. `draw compile` takes the page path whenever
   the presentation carries `modules[]`; `draw apply` digests the page

@@ -95,6 +95,7 @@ __all__ = [
     "PresentationSpec",
     "PresentationSpecError",
     "UserLock",
+    "main_path_wire",
     "presentation_sha256",
 ]
 
@@ -466,6 +467,45 @@ def presentation_sha256(spec: PresentationSpec) -> str:
         spec.to_jsonable(), sort_keys=True, separators=(",", ":"), ensure_ascii=False
     )
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def main_path_wire(
+    spec: PresentationSpec, net_class: str | None, modules: Sequence[str]
+) -> bool:
+    """Is this crossing net **one whole wire** on the page, rather than a name?
+
+    A net that crosses a module boundary is stated by its name at both ends — a
+    flag for a ground or a rail, a label otherwise (:class:`LabelPolicy`'s
+    ``crossModule``). The one exception is the flow edge the presentation itself
+    marks ``mainPath``: that mark asks for **one run** from port to port
+    (056 sec.2), which a name at each end cannot keep. 069 sec.7 keeps a *rail*
+    on the same terms — "a rail is a bus at any fan-out": the member count that
+    used to decide it is gone, and the flag is what 岳 reads. A **ground is never
+    a wire**, so a `mainPath` mark on one is refused and named rather than
+    quietly downgraded (056 sec.3).
+
+    This function is the **single source** of that decision (096), and the two
+    callers ask it instead of keeping a copy: the page compiler picks each
+    port's style with it (`pagecompiler._net_style`), and the page checker
+    decides with it which cross-module wire may satisfy a ``mainPath`` edge
+    (`readability._check_main_paths`). The copy the checker used to keep —
+    "`power` with more than `high_fanout` members is a bus" — is exactly what
+    made the same net a wire to the compiler and a bus to the checker, so a
+    four-member rail marked `mainPath` was drawn as a wire and refused in the
+    same pass.
+
+    ``modules`` are the modules that own the net (the rule needs exactly two),
+    and ``net_class`` is the net's class in the circuit — ``None`` for a net the
+    circuit does not state, which the compiler refuses elsewhere rather than
+    here.
+    """
+    if net_class == "gnd":
+        return False
+    pair = set(modules)
+    return len(pair) == 2 and any(
+        edge.main_path and {edge.from_module, edge.to_module} == pair
+        for edge in spec.flow
+    )
 
 
 # ------------------------------------------------------------------ readers
