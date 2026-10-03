@@ -57,7 +57,9 @@ routes each call to the window whose project the caller named.
 
 Why the editor dials *out*: an extension cannot open a listening socket, and `eda.sys_WebSocket`
 only offers outbound registration. So the daemon is the server and the editor is a client that
-reconnects forever. This is the same shape `easyeda-agent` uses.
+reconnects on any ordinary loss, forever; a handshake the daemon **refuses** is the one exception —
+that stops the connector and is cleared by acting on the refusal, not by retrying (§6). This is the
+same shape `easyeda-agent` uses.
 
 The connector is the only component that touches `eda.*`. The daemon never opens a file inside
 the editor; it only forwards frames and relays answers.
@@ -331,6 +333,20 @@ Crypto is unusable (see §9, and `connector/src/random.ts`):
 | present, token matches | accepts |
 | present, token differs, **a connector is attached** | `UNAUTHENTICATED` |
 | present, token differs, **nothing is attached** | **re-pairs**: overwrites the record, audits `re-pairing`, announces the replacement (004f) |
+| either pairing row, and the handshake carries `Origin: http(s)://…` | `UNAUTHENTICATED` — **no pairing is written** (#57 security note) |
+
+The last row is a precondition on **both** rows that write a pairing record. The rule those rows key
+on — "no connector is attached" — is exactly the state between `bridge start` and the editor
+attaching, and again every time the editor's windows all close; with no Origin check, any page in the
+user's browser could pair itself in that window and hold a pairing the real connector cannot take
+back (it is then refused with `UNAUTHENTICATED`, which #12 used to hide behind "heartbeat timed out").
+A browser **always** sends `Origin` on a WebSocket handshake, and `curl`-class clients never do, so
+the gate is: the Origin must be **absent or non-`http(s)`** before a pairing is written. A missing
+Origin passes — the editor's own socket may send none, and refusing it would refuse the editor
+(`check_origin` still allows everything; this is a narrower, separate decision). What it is *not* is
+a boundary against local processes: a non-browser attacker omits the header, and that boundary is
+the token (§9). A caller that already presents the stored token is accepted whatever its Origin says
+— the gate guards the write, and a page cannot learn the secret.
 
 The fourth row is the sideload self-heal. **Sideloading a connector build resets
 the editor's extension storage**, so the new build generates a fresh token and
@@ -495,7 +511,7 @@ declaring `confirm`).
 | `sys.get_document_source` | connector | read | connector | `maxChars` | `{source, chars, maxChars, truncated, data, headLines, tail?, note?}` — the focused document's own source text, **unjudged**: the declaration is one line (`Promise<string \| undefined>`, `@beta`) and says nothing about the format, so whether it equals the `.epru` record stream is a probe question (`outputs/025_probe_p2_document_source.txt`). Truncates to `maxChars` and echoes both ends — a stream is recognised by its first and last records, and a head without a tail cannot be told from a different format | 30 s |
 | `sch.drc_check` | connector | read | connector | `strict`, `userInterface`, `includeVerboseError` | `{source, checked, mode: 'counts'\|'boolean'\|'unexpected', counts, entries?, total?, byType?, unparsed?, passed, elapsedMs, args, page, uiRequested, notes?, raw?}` — `sch_Drc.check(strict, false, true)`. (025 §0, measured) the host's verbose answer holds **aggregate counts only**; the per-item detail goes to the bottom panel and `SYS_PanelControl` has no read interface, so the array is returned **verbatim** under `counts` with `total`/`byType` summed from the entries' own fields and any entry lacking a numeric `count` counted in `unparsed` rather than folded in as zero. A boolean answer is mode `boolean`, never an empty result. Throws on a non-schematic page; the refusal names the focused document | 30 s |
 | `pcb.drc_check` | connector | read | connector | `strict`, `userInterface`, `includeVerboseError`, `maxChars` | `{source, checked, available, mode: 'groups'\|'boolean'\|'unexpected', groups, counts: {groups, returnedGroups, errors, errorsSource, items, byLabel, jsonChars}, truncated, elapsedMs, args, page, uiRequested, reason?, notes?, raw?}` — `pcb_Drc.check(strict, false, true)`, the DRC that *does* carry item detail. **Measured 2026-09-23** (`outputs/025_probe_p4_pcb_drc.txt`): the tree is `group.list[].list[]`, every node states its own `count`, and a leaf carries `ruleName`/`errorType`/`explanation.str`/`obj1`/`obj2`/`globalIndex`/`parentId`. Groups come back **verbatim** for the Finding-mapping layer; whole groups are dropped (never cut in half) to stay inside `maxChars`. A non-PCB page is never reported as a clean board — the declaration promises `undefined`, the host actually **throws** `指定的主题消息在对应的画布内没有相关订阅`, and both become `checked: false` + a `reason` naming the focused document. An *empty* PCB is not a zero-finding board either: the test project's empty PCB answered one "Netlist Error / Import Changes" (schematic has parts, PCB does not) | 30 s |
-| `sys.connector_status` | connector | read | connector | — | `{present, readStatus, status, moduleBootstrapObserved, activateObserved, evaluations}` — the About box's own read-out, for a caller who cannot open the box. `status` is the same `ConnectorStatus` the box renders (so the two can never disagree): the transport `state`, the daemon's `paired`/`fingerprint`/`minConnectorVersion`, the 024 lifecycle counters — **`moduleBootstrapObserved`** (was our bundle evaluated in this editor runtime at all?), **`activateObserved`** (did the host dispatch `activate()`?), **`evaluations`** (how many times the bundle was evaluated) — and, since 026b, **`watchdog`**: `{state: 'running'\|'unavailable'\|'not started'\|'stopped', reason?, wakes, activityPosts, checkIntervalMs, activityTimeoutMs}`. That last field is the one that answers "why did this window sit there for hours": `running` means a Worker alarm is watching the page, `unavailable(<reason>)` means the host refused one and the window recovers **only** when the user brings it to the front (§7). `present: false` means no evaluation has published its runtime record — an extension that is not loaded, which is a different failure from one that is loaded and inert. Read-only: it never starts, stops or reconnects anything | 30 s |
+| `sys.connector_status` | connector | read | connector | — | `{present, readStatus, status, moduleBootstrapObserved, activateObserved, evaluations}` — the About box's own read-out, for a caller who cannot open the box. `status` is the same `ConnectorStatus` the box renders (so the two can never disagree): the transport `state`, the daemon's `paired`/`fingerprint`/`minConnectorVersion`, **`refusedCode`** (the error code the daemon refused this handshake with — the one reading that tells a pairing refusal from a protocol skew, §6), the 024 lifecycle counters — **`moduleBootstrapObserved`** (was our bundle evaluated in this editor runtime at all?), **`activateObserved`** (did the host dispatch `activate()`?), **`evaluations`** (how many times the bundle was evaluated) — and, since 026b, **`watchdog`**: `{state: 'running'\|'unavailable'\|'not started'\|'stopped', reason?, wakes, activityPosts, checkIntervalMs, activityTimeoutMs}`. That last field is the one that answers "why did this window sit there for hours": `running` means a Worker alarm is watching the page, `unavailable(<reason>)` means the host refused one and the window recovers **only** when the user brings it to the front (§7). `present: false` means no evaluation has published its runtime record — an extension that is not loaded, which is a different failure from one that is loaded and inert. Read-only: it never starts, stops or reconnects anything | 30 s |
 | `sch.readback` | connector | read | connector | `includePrimitives` | `{kind: 'sch', components, primitives, componentCount}` | 30 s |
 | `pcb.readback` | connector | read | connector | `includePrimitives` | `{kind: 'pcb', components, primitives, componentCount}` | 30 s |
 | `export.screenshot` | connector | read | connector | `fit` | `{format, encoding: 'base64', bytes, data}` — **diagnostic only**: cached frames | 60 s |
@@ -733,7 +749,27 @@ intentional — it separates the two failure families:
 | `handshaking` | socket open, waiting for `hello` to be accepted | **pairing problem** — the daemon is holding a different pairing (§3.4) |
 | `connected` | accepted; serving requests | — |
 | `reconnecting` | closed, waiting for the backoff timer | daemon went away |
-| `stopped` | stopped from the menu | — |
+| `stopped` | stopped from the menu, or the daemon **refused** the handshake (the `detail` says which) | act on the refusal (below) |
+
+A handshake the daemon refuses is **reported and stopped, never retried** (0.4.27, issue #57 §12).
+Both shapes of refusal reach the same code: `hello` answered with `ok: false`, and the refusal the
+daemon actually sends — `{"id": null, "ok": false, "error": {…}}`, with no id, because nothing was
+ever accepted for the frame to be an answer *to* (`_close`). Until 0.4.27 only the first shape was
+recognised, so every real refusal was dropped: the transport sat in `handshaking` until three
+heartbeats had missed (15 s), reconnected saying *"heartbeat timed out"* — blaming the daemon for the
+user's pairing — and did it forever, while `paired` never went false and the About box could not show
+its `REFUSED` line. Nothing on this side can clear a refusal (the user has to `bridge revoke`, change
+builds, or fix the protocol), which is why it stops and says why rather than looping.
+
+`About…` therefore reports a refusal in three places, and all three are asserted in the suite: `state:
+stopped (daemon refused the handshake: <CODE> — <the daemon's message>)`, `last error:` with the same
+text, and a `REFUSED` pairing line whose remedy names the code — `boardwise bridge revoke` for
+`UNAUTHENTICATED`, the code itself otherwise (telling a user with a protocol skew to revoke a pairing
+would be advice that cannot work). `sys.connector_status` carries the same reading as `refusedCode`.
+
+A refusal the daemon sends for a frame **it could not decode** while the connection is serving is not
+this case: it carries no id either (`_on_frame`), and stopping a live window over one bad frame is a
+different decision, so the transport logs it and serves on.
 
 The extension's **About…** menu item prints the state, the URL, where the token came from, the
 pairing fingerprint the daemon reported, whether the background watchdog is running, and the last
@@ -765,9 +801,20 @@ consequences:
    the second attempt silently do nothing.
 
 Backoff doubles from 1 s to a 30 s ceiling and resets on a successful connect. `stop()` clears
-every timer and closes the socket and the watchdog Worker; a stopped transport sends nothing, ever
-(asserted in the suite, with a wait long enough to be meaningful — and since 026b with the Worker's
-own message count asserted alongside).
+every timer and closes the socket and the watchdog Worker; a stopped transport sends nothing, ever.
+That last sentence is load-bearing and is asserted, not asserted-to: the suite waits out a generous
+interval on a stopped transport and reads the wire, since 026b it asserts the Worker's own message
+count alongside, and since 0.4.27 it does both again for the case issue #57 §18 measured — a
+transport that a **second** connect attempt had replaced. It used to be false for exactly that one:
+`connectOnce`/`runReconnect` reinstalled the module slot across an `await` with no guard, so two
+overlapping attempts both built a transport, both registered `boardwise-1` (each instance numbers
+its attempts from 1), and the loser stayed reachable only by its own heartbeat — still sending `ping`
+11 s after the extension was deactivated, measured against the shipped bundle. The slot is now
+written in one place (`openTransport`), only the newest attempt builds, the attempt that is replaced
+is stopped by name, and a `Stop` during an attempt in flight invalidates it too.
+
+A **refusal** (§6) is the one failure that does not reconnect: nothing this side can do clears it,
+and `reconnect()` from the menu is the way back once the user has acted.
 
 ### 7.1 The background watchdog (026b)
 
@@ -1119,11 +1166,18 @@ Stated plainly because it is the whole threat model:
   observe this process's PRNG outputs. The `Origin` rule below is the control that actually
   addresses the web-page case. Anyone who wants stronger provenance can read `About…` and refuse a
   `Math.random` pairing — which is why the source is displayed rather than assumed.
-- **What is *not* yet enforced: `Origin`.** The daemon records the `Origin` and `User-Agent` of
-  every handshake (task 004c is evidence-gathering) and `check_origin()` currently allows
-  everything. The rule — refuse `http(s)://` origins, allow a missing origin and the extension
-  host's own — lands in 004d, once the measurements say what the editor actually sends. Do not
-  describe this bridge as origin-checked until then.
+- **What is *not* yet enforced: `Origin` on the socket itself.** The daemon records the `Origin` and
+  `User-Agent` of every handshake (task 004c is evidence-gathering) and `check_origin()` still allows
+  everything: whether `eda.sys_WebSocket` sends an `Origin` at all, and what value, is unmeasured, and
+  a rule written without that measurement could refuse the editor itself. 004d owns that decision.
+  What **is** enforced since 0.4.27 is the narrower control the compound gap in issue #57 made
+  unavoidable: a handshake carrying `Origin: http(s)://…` may not **write a pairing record** (§3.4),
+  so a browser page can no longer pair itself first during the window in which no connector is
+  attached. It is not a general origin check and must not be described as one: a socket with an
+  `http(s)` Origin that presents the stored token is still accepted (a page cannot learn it), and a
+  non-browser client simply omits the header. `Origin: null` also passes, deliberately, because it is
+  both what a sandboxed frame sends and what a client with no origin to name sends — 004d decides
+  that one with measurements.
 
 ## 10. Known limitations (v0)
 

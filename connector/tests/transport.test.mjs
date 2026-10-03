@@ -121,21 +121,93 @@ test('a successful hello response marks the transport connected', async () => {
   transport.stop();
 });
 
-test('a rejected hello triggers a reconnect', async () => {
+test('a frameless refusal is reported, not swallowed until the heartbeat times out', async () => {
+  // The shape the daemon really sends when it turns a connector away:
+  // `error_frame(None, …)` (daemon.py:1699) — `{"id": null, "ok": false, …}`,
+  // with no id at all, because the handshake it refuses never got accepted and
+  // there is nothing to correlate the refusal with. A transport that only knows
+  // `id === 'hello'` drops it and then reports "heartbeat timed out" 15 s later,
+  // blaming the daemon for the user's pairing (issue #57 §12).
   const socket = new FakeSocket();
-  const { transport } = makeTransport(socket);
+  const refusals = [];
+  const logs = [];
+  const states = [];
+  const { transport } = makeTransport(socket, {
+    onHandshakeRefused: (refusal) => refusals.push(refusal),
+    onLog: (line) => logs.push(line),
+    onStatus: (state, detail) => states.push([state, detail]),
+  });
   await transport.start();
   socket.connect();
-  await socket.deliver({ id: 'hello', ok: false, error: { code: 'UNAUTHENTICATED', message: 'bad token' } });
+  assert.ok(
+    await waitFor(() => socket.lastFrame()?.action === 'hello'),
+    'the refusal has to arrive after a hello, the way the daemon produces it',
+  );
 
-  assert.equal(transport.getState(), 'reconnecting');
+  await socket.deliver({
+    id: null,
+    ok: false,
+    error: { code: 'UNAUTHENTICATED', message: 'bad or missing token' },
+  });
+
+  assert.deepEqual(refusals, [{ code: 'UNAUTHENTICATED', message: 'bad or missing token' }]);
+  assert.equal(transport.getState(), 'stopped', 'a refusal is not an attempt to schedule');
+  assert.ok(logs.some((line) => line.includes('UNAUTHENTICATED')), logs.join('\n'));
   assert.deepEqual(socket.closed, ['boardwise-1']);
 
-  // The retry registers again, with a fresh id (the API ignores parameter
-  // changes on a still-live id).
-  assert.ok(await waitFor(() => socket.registered.length === 2), 'expected a retry');
-  assert.equal(socket.registered[1].id, 'boardwise-2');
+  // Long enough for the old path to do what the audit measured: three missed
+  // heartbeats (10 ms apart here), then a reconnect that blamed the network.
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  assert.equal(socket.registered.length, 1, 'nothing may be retried after a refusal');
+  assert.equal(
+    states.some(([state, detail]) => state === 'reconnecting' && /heartbeat/.test(detail ?? '')),
+    false,
+    `the refusal must never come back as a heartbeat timeout: ${JSON.stringify(states)}`,
+  );
+});
 
+test('a refusal answered to our hello is the same refusal, not a reconnect', async () => {
+  // Unreachable with today's daemon (it answers `hello` only with `ok: true`),
+  // but the two shapes mean one thing — the daemon refused this handshake — and
+  // a transport that treated them differently would need a reason a future
+  // daemon cannot give it.
+  const socket = new FakeSocket();
+  const refusals = [];
+  const { transport } = makeTransport(socket, {
+    onHandshakeRefused: (refusal) => refusals.push(refusal),
+  });
+  await transport.start();
+  socket.connect();
+  await socket.deliver({
+    id: 'hello', ok: false, error: { code: 'VERSION_MISMATCH', message: 'connector speaks 2.0' },
+  });
+
+  assert.deepEqual(refusals, [{ code: 'VERSION_MISMATCH', message: 'connector speaks 2.0' }]);
+  assert.equal(transport.getState(), 'stopped');
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(socket.registered.length, 1);
+});
+
+test('a malformed frame the daemon answers with no id is not a handshake refusal', async () => {
+  // `_on_frame` also sends `error_frame(None, …)` (daemon.py:1646) — for a frame
+  // of ours it could not decode, on a socket it keeps serving. Stopping a live
+  // connection over that would turn a bad frame into a dead window.
+  const socket = new FakeSocket();
+  const refusals = [];
+  const { transport } = makeTransport(socket, {
+    onHandshakeRefused: (refusal) => refusals.push(refusal),
+  });
+  await transport.start();
+  socket.connect();
+  await socket.deliver({ id: 'hello', ok: true, data: { role: 'connector' } });
+  assert.equal(transport.getState(), 'connected');
+
+  await socket.deliver({
+    id: null, ok: false, error: { code: 'BAD_REQUEST', message: 'frame must be a JSON object' },
+  });
+
+  assert.deepEqual(refusals, []);
+  assert.equal(transport.getState(), 'connected', 'a refusal mid-session is not our handshake');
   transport.stop();
 });
 
@@ -457,11 +529,9 @@ test('the project is re-read for each handshake, never carried over from the las
   assert.ok(await waitFor(() => socket.lastFrame()?.action === 'hello'));
   assert.equal(socket.lastFrame().params.projectName, '/test');
 
-  // A refusal forces a reconnect; the retry greets from inbound traffic, as
-  // every attempt does (004b).
-  await socket.deliver({
-    id: 'hello', ok: false, error: { code: 'CONNECTOR_ALREADY_ACTIVE', message: 'refused' },
-  });
+  // A lost socket forces a retry — the heartbeat's path (since 0.4.27 a
+  // *refusal* stops the transport instead of reconnecting, issue #57 §12); the
+  // retry greets from inbound traffic, as every attempt does (004b).
   assert.ok(await waitFor(() => socket.registered.length === 2), 'expected a retry');
   await socket.deliver({ event: 'banner', data: {} });
 

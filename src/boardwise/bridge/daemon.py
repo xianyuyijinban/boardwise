@@ -554,9 +554,43 @@ def check_origin(headers: Any) -> bool:
     yet: whether ``eda.sys_WebSocket`` sends an ``Origin`` at all, and what
     value it carries, is unmeasured. So 004c records and 004d decides.
 
-    One function, one decision: 004d changes this body and nothing else.
+    One function, one decision: 004d changes this body and nothing else. The
+    *narrower* question this module now answers elsewhere (#57 security note) is
+    a different decision from this one and does not pre-empt it: :func:`_origin_is_a_web_page`
+    decides only whether a newcomer may **write a pairing record**, and leaves
+    ``check_origin``'s "may this socket talk to us at all" exactly as it was.
     """
     return True
+
+
+def _origin_is_a_web_page(origin: Any) -> bool:
+    """Whether a handshake's ``Origin`` says it came from a page in a browser.
+
+    The one control that tells a browser page apart from the editor's own
+    socket at this layer, and the only one available before 004d measures what
+    ``eda.sys_WebSocket`` sends: **a browser always sends ``Origin`` on a
+    WebSocket handshake**, while ``curl``-class clients and ``websockets``
+    itself send none (asserted in the suite).
+
+    Deliberately narrow, and the narrowness is the rule:
+
+    - a **missing** ``Origin`` passes — the editor may send none, and refusing
+      it would refuse the editor itself;
+    - every **non-``http(s)``** scheme passes (``chrome-extension://…``, or
+      whatever 004d measures) for the same reason;
+    - only ``http(s)://`` is refused, because that is what a page served over
+      the web always carries.
+
+    Two honest limits, stated rather than implied. ``Origin: null`` passes: it
+    is what a sandboxed frame sends, and it is also what a client with no origin
+    to name sends, and 004d decides that one from measurements. And this is not
+    a boundary against local processes at all — a non-browser attacker simply
+    omits the header; that boundary is the token (docs/bridge.md §9).
+    """
+    if not isinstance(origin, str) or not origin:
+        return False
+    scheme = origin.split("://", 1)[0].strip().lower() if "://" in origin else ""
+    return scheme in ("http", "https")
 
 
 # --------------------------------------------------------------------------
@@ -814,7 +848,9 @@ class BridgeDaemon:
             if not _tokens_equal(provided, self.token):
                 raise BridgeError(ErrorCodes.UNAUTHENTICATED, "bad or missing token")
         else:
-            self._authenticate_connector(provided, client, peer)
+            self._authenticate_connector(
+                provided, client, peer, client_headers(websocket)["origin"]
+            )
 
         connection = Connection(
             role=role,
@@ -840,7 +876,13 @@ class BridgeDaemon:
             connection.project_name, connection.project_uuid = _project_identity(params)
         return connection
 
-    def _authenticate_connector(self, provided: str, client: str, peer: str) -> None:
+    def _authenticate_connector(
+        self,
+        provided: str,
+        client: str,
+        peer: str,
+        origin: Any = None,
+    ) -> None:
         """Trust the first connector; require an exact match afterwards.
 
         Reads the pairing record from disk every time (see
@@ -868,12 +910,39 @@ class BridgeDaemon:
         unchanged: an unknown token may only take over a pairing **nobody** is
         using, never one a live window is connected with. What changed is only
         that "live" is now a set rather than a slot.
+
+        **Both ways of writing a pairing now also need a non-web ``Origin``**
+        (#57 security note). "No connector attached" is exactly the state
+        between ``bridge start`` and the editor attaching, and again every time
+        the editor's windows all close — and in that state the rule above let
+        *any* newcomer write the pairing record, including a page in the user's
+        browser, which would then hold the pairing the real connector cannot
+        take back (``UNAUTHENTICATED``, dressed up as a heartbeat timeout until
+        #12). The origin is the only thing that tells the two apart here, so it
+        is required to be absent-or-non-``http(s)`` before either pairing write
+        happens. The refusal is deliberately the *same* code — this connector
+        did not prove it may write the pairing — with ``detail.origin`` so the
+        log says which handshake it was.
         """
         paired = load_connector_token(self.home)
+        # A caller that already presents the pairing secret is the paired
+        # connector as far as this daemon can tell, whatever its Origin says:
+        # the gate below guards the **write**, not the token check, and refusing
+        # a known secret would buy nothing (a page cannot learn it).
+        if paired is not None and _tokens_equal(provided, paired):
+            return
+        if _origin_is_a_web_page(origin):
+            raise BridgeError(
+                ErrorCodes.UNAUTHENTICATED,
+                "this handshake came from a web page and would have written the "
+                f"pairing record (Origin: {origin}); the pairing is only ever "
+                "taken by the editor's own connector. If that connector cannot "
+                "connect, run 'boardwise bridge revoke' on the daemon host and "
+                "let it pair again",
+                {"origin": origin, "pairedFingerprint": connector_fingerprint(paired)},
+            )
         if paired is None:
             self._pair(provided, client, peer, repaired=False)
-            return
-        if _tokens_equal(provided, paired):
             return
         # Liveness read from the sockets themselves (:meth:`live_windows`), not
         # from whether the handler has cleared its bookkeeping yet: a reload
@@ -1293,7 +1362,38 @@ class BridgeDaemon:
         # hub back into a queue. Reads never take the lock: `doc.list` cannot
         # corrupt anything.
         async with window.write_lock:
-            return await self._forward(action, params, role, window)
+            # Liveness is re-read **after** the lock, not only at `route()`
+            # (#57 §13). Waiting for the lock is the one thing here that has no
+            # bound and no liveness check: a window can die while a call is
+            # parked on it, and `send` on that closed socket raises
+            # `ConnectionClosed` — neither a `BridgeError` nor a `TimeoutError`
+            # — which `_on_frame`'s generic `except Exception` would report as
+            # `INTERNAL`. That code tells the caller the write failed *safely*,
+            # and a caller that believes it reports a half-drawn page as
+            # untouched: precisely the failure `DISCONNECTED` exists to prevent
+            # (§43). The queue position changes nothing about that fact — the
+            # request is already routed and going to a window that is gone — so
+            # the answer is the same one the in-flight case gets.
+            if not window.is_open():
+                raise BridgeError(
+                    ErrorCodes.DISCONNECTED,
+                    "connector disconnected while the call waited for the "
+                    "window's write lock",
+                )
+            try:
+                return await self._forward(action, params, role, window)
+            except (websockets.ConnectionClosed, OSError) as exc:
+                # The re-check above is one instant old, and the socket can
+                # still die inside `send`. Same fact, so the same code — and
+                # **only** on this path: a *read* whose socket dies has a
+                # different answer (`_forward`'s own `TIMEOUT`), and turning it
+                # into `DISCONNECTED` here would be a decision about the read
+                # path that nobody has made (#57 §13 says not to flip it
+                # elsewhere).
+                raise BridgeError(
+                    ErrorCodes.DISCONNECTED,
+                    "connector disconnected while the call was being sent",
+                ) from exc
 
     def context_for_frame(self, routed: dict[str, Any] | None) -> dict[str, Any]:
         """The answering window's context, for the frame relayed back to the caller.
