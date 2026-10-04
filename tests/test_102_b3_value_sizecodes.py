@@ -28,6 +28,12 @@ part of the corpus sweep the batch re-runs (the harvest reads this repository's
 own text), and that sweep has to count the 54 and nothing else -- see
 ``outputs/102/SUMMARY.txt`` §语料回归.
 
+**108 opens the resistance twin**, and its 18 spellings are written out here as
+literals on purpose: the same sweep now has to count 54 capacitance readings plus
+18 resistance ones, and the literals are what makes those 18 visible to it (see
+``outputs/108/SUMMARY.txt`` §语料对账). 102 had assembled them from parts for
+exactly the opposite reason -- the count it was held to was 54 and nothing else.
+
 The refusals the earlier batches pinned stay refused: a run longer than the
 trade's mantissa that is not a size code (``12345n``, ``12345u7``), a leading zero
 that is no size code's padding (``0u1``, ``0n``), a designator in front of the
@@ -165,23 +171,73 @@ def test_the_value_reader_still_refuses_the_shapes_the_earlier_batches_pinned() 
     assert parse_capacitance_farads("IRF540N") is None
 
 
-def test_the_resistance_twin_of_the_same_shape_is_registered_not_opened() -> None:
-    """``160R`` is the same defect in the other notation, and it stays refused.
+#: 108's family: every package size code with the resistance notation's ``R``
+#: suffix, and the ohms each states. ``R`` is the notation's own suffix for ohms
+#: (``47R`` has read all along), so ``160R`` is 160 Ω -- and the run in front of
+#: the letter is the Value field's own figures, which is why the reading is the
+#: digits, not something a size code stripped back. The imperial spellings'
+#: leading zero is the size code's padding, not a figure: ``0805R`` reads what
+#: ``805R`` has always read, and ``01005R`` is 1005 Ω.
+#:
+#: Written out as literals **on purpose** (108): this file is part of the corpus
+#: sweep the batch re-runs, and the 18 strings in it are exactly the 18 readings
+#: the batch creates -- see ``outputs/108/SUMMARY.txt`` §语料对账. 102 assembled
+#: them from parts because the count it was held to was 54 and nothing else.
+RESISTANCE_TWIN_READINGS = (
+    ("105R", 105.0), ("160R", 160.0), ("188R", 188.0), ("201R", 201.0),
+    ("321R", 321.0), ("322R", 322.0), ("451R", 451.0), ("453R", 453.0),
+    ("01005R", 1005.0), ("0201R", 201.0), ("0402R", 402.0), ("0603R", 603.0),
+    ("0805R", 805.0), ("1206R", 1206.0), ("1210R", 1210.0), ("1812R", 1812.0),
+    ("2010R", 2010.0), ("2512R", 2512.0),
+)
+
+
+@pytest.mark.parametrize("spelling,ohms", RESISTANCE_TWIN_READINGS)
+def test_the_resistance_twin_of_the_same_shape_reads_as_its_own_figures(
+    spelling: str, ohms: float
+) -> None:
+    """``160R`` is 160 Ω, read one spelling at a time: 108 opened the twin.
 
     The size-code strip is one rule for both notations (071 §2's "the difference
-    between them is the letters"), so the resistance Value field has the same
-    collision: ``160R`` -- 160 Ω, the R-suffix spelling ``47R`` has always read --
-    loses its mantissa to the ``160`` size code. This batch fixes the audited
-    family, the 54 **capacitance** spellings; the resistance twin is registered
-    with the delivery (``outputs/102/SUMMARY.txt`` §遗留) for a ruling rather than
-    decided here, because opening it would move the resistance reader's reading
-    set by 18 spellings that no audit measured and no corpus token names.
-
-    Pinning the refusal is how that stays visible: a later batch that opens the
-    twin will fail here and have to say so.
+    between them is the letters"), so 102's repair -- a Value field's run that
+    *is* a package size code is the field's own figures -- applies to the
+    resistance notation too. 102 opened only the audited 54 capacitance
+    spellings and registered the 18 resistance ones for a ruling
+    (``outputs/102/SUMMARY.txt`` §遗留 2); the oracle ruled 2026-10-04 to open
+    them, so this file pins the readings instead of the refusal. The reading is
+    the digits the field spells, exactly as in the capacitance family, and the
+    same 18 spellings are the corpus sweep's whole delta.
     """
-    for size in IMPERIAL_SIZES + METRIC_SIZES:
-        assert parse_resistance_ohms(size + "R") is None
+    assert parse_resistance_ohms(spelling) == pytest.approx(ohms, rel=1e-12)
+
+
+def test_the_size_code_resistance_spelling_reads_what_the_padded_number_reads() -> None:
+    """The neighbours of the new reading, and the family's own boundary.
+
+    ``805R`` is the padded number the size code ``0805`` spells, and it has always
+    read 805 Ω; ``47R`` is the notation's suffix spelling of a value whose run is
+    *not* a size code. The new reading has to land on the first -- the size code's
+    leading zero is the spelling's padding, not a figure to refuse -- and leave
+    the second alone, or one board would hold spellings of one value with one of
+    them invisible (087 §8: silence, not a miss).
+    """
+    assert {spelling for spelling, _ in RESISTANCE_TWIN_READINGS} == {
+        size + "R" for size in IMPERIAL_SIZES + METRIC_SIZES
+    }
+    assert parse_resistance_ohms("805R") == pytest.approx(805.0, rel=1e-12)
+    assert parse_resistance_ohms("0805R") == pytest.approx(
+        parse_resistance_ohms("805R"), rel=1e-12
+    )
+    # The metric spelling of one size code and the imperial spelling of the same
+    # size code carry the same figures (``201`` is ``0201``), so they agree.
+    assert parse_resistance_ohms("201R") == pytest.approx(
+        parse_resistance_ohms("0201R"), rel=1e-12
+    )
+    # Unchanged neighbours: a run that is not a size code reads as it always did.
+    assert parse_resistance_ohms("47R") == pytest.approx(47.0, rel=1e-12)
+    assert parse_resistance_ohms("4R7") == pytest.approx(4.7, rel=1e-12)
+    assert parse_resistance_ohms("0R01") == pytest.approx(0.01, rel=1e-12)
+    assert parse_resistance_ohms("10K0") == pytest.approx(10000.0, rel=1e-12)
 
 
 def test_the_shelf_spelling_the_slug_makes_is_one_the_reader_reads() -> None:
@@ -311,3 +367,9 @@ def test_the_mpn_side_reads_the_size_code_as_a_prefix_and_a_value_field_does_not
     assert mpn_resistance_readings("CRCW060310K0FEA") == [(10000.0, "10K0")]
     assert parse_resistance_ohms("CRCW060310K0FEA") is None
     assert parse_capacitance_farads("CRCW060310K0FEA") is None
+    # 108 follow-up (the batch's own M2 mutation exposed the hole): a part
+    # number whose size field *is* a size code (``CC0603…``) must still read its
+    # value code and nothing else — the ``not vendor_prefix`` gate is what keeps
+    # 108's value-field reading out of the MPN reader, and removing it invented
+    # ``3K``/``603K`` readings off this very string with the whole suite green.
+    assert mpn_resistance_readings("CC0603KRX7R0BB103") == [(7.0, "7R0")]
