@@ -138,6 +138,31 @@ from boardwise.core.symbolprofile import (
 
 from . import readability
 from .grammar import bind as bind_grammar
+#: The lattice search and the geometry helpers it is defined in terms of, moved
+#: to `engines/router.py` (112) so the interactive draw flows can route on the
+#: same walls the compiler routes on. A copy would be a second opinion about
+#: where a body begins, and the two would drift; this import is the seam. The
+#: one helper that did **not** move is `_compress` — the router never calls it
+#: (`route` returns lattice nodes), while every segment this module emits goes
+#: through it and `pagecompiler` uses it under the name `compress_path`.
+from .router import (
+    CROSS_COST,
+    TURN_COST,
+    _Router,
+    _close,
+    _collinear_overlap,
+    _key,
+    _on_polyline,
+    _rounded,
+    _segment_hits_box,
+    _strictly_on_segment,
+)
+
+#: The two costs still live on this module's namespace: they were public here
+#: since 053 (`drawcompiler.TURN_COST`), and a name that vanishes because its
+#: definition moved is a silent break for any caller that read it off this
+#: module rather than off the router. Nothing here *uses* them — the router does
+#: — so they are re-exported, not imported for their own sake.
 from .grammar.base import (
     ABOVE,
     ADJACENT,
@@ -279,11 +304,6 @@ NEAR_LIMIT = 300.0
 
 #: The corridor a net's search may use, beyond the net's own bounding box.
 SEARCH_MARGIN = 160.0
-
-#: Costs in lattice steps: a bend is worth staying straight, and crossing a
-#: foreign wire perpendicularly is allowed but not free.
-TURN_COST = 0.6
-CROSS_COST = 2.0
 
 #: The roles that bind a **chain** element: the series line the drawing is read
 #: along. Verbatim from 053 sec.3's three tables (`upper_arm`/`lower_arm` the
@@ -1489,9 +1509,6 @@ def _posed_tip(pin: SymbolPin, pose: SymbolPose) -> tuple[float, float]:
     ))
 
 
-def _rounded(point: tuple[float, float]) -> tuple[float, float]:
-    """Trim float noise from a rotation (``cos(90°)`` is 6.1e-17, not 0)."""
-    return (round(point[0], 6), round(point[1], 6))
 
 
 def _accepted_poses(
@@ -1929,8 +1946,6 @@ def _snap_inside(value: float, grid: float, residue: float, inside: int) -> floa
     return (math.ceil(steps) if inside > 0 else math.floor(steps)) * grid + residue
 
 
-def _close(left: float, right: float, tol: float = 1e-6) -> bool:
-    return abs(left - right) <= tol
 
 
 def _lattice_residue(
@@ -3391,289 +3406,6 @@ def _flag_plan(
     """
     ref = ctx.budget.gnd_flag if cls == "gnd" else f"{ctx.budget.power_flag_prefix}{net_id}"
     return (ctx.book.get(ref), ref)
-
-
-def _segment_hits_box(start: tuple[float, float], end: tuple[float, float], box: Box) -> bool:
-    """Does the segment have a positive-length run inside the box's interior?
-
-    The slab test the readability checker's own `_clip_to_box` uses (Liang–Barsky
-    against the box inset by a hair): a wire lying exactly on an outline, or
-    touching only a corner, is not crossing the box.
-    """
-    left, bottom, right, top = box[0] + 1e-6, box[1] + 1e-6, box[2] - 1e-6, box[3] - 1e-6
-    if right <= left or top <= bottom:
-        return False
-    dx, dy = end[0] - start[0], end[1] - start[1]
-    low, high = 0.0, 1.0
-    for p, q in (
-        (-dx, start[0] - left),
-        (dx, right - start[0]),
-        (-dy, start[1] - bottom),
-        (dy, top - start[1]),
-    ):
-        if p == 0:
-            if q < 0:
-                return False
-            continue
-        ratio = q / p
-        if p < 0:
-            if ratio > high:
-                return False
-            low = max(low, ratio)
-        else:
-            if ratio < low:
-                return False
-            high = min(high, ratio)
-    return high - low > 1e-6
-
-
-# -------------------------------------------------------------- the router
-
-
-def _key(point: tuple[float, float]) -> tuple[float, float]:
-    return (round(point[0], 6), round(point[1], 6))
-
-
-def _strictly_on_segment(
-    point: tuple[float, float],
-    start: tuple[float, float],
-    end: tuple[float, float],
-) -> bool:
-    """Is `point` inside the segment, not at either end (the tee condition)?"""
-    if _key(point) == _key(start) or _key(point) == _key(end):
-        return False
-    cross = (end[0] - start[0]) * (point[1] - start[1]) - (end[1] - start[1]) * (
-        point[0] - start[0]
-    )
-    if abs(cross) > 1e-6:
-        return False
-    dot = (point[0] - start[0]) * (end[0] - start[0]) + (point[1] - start[1]) * (
-        end[1] - start[1]
-    )
-    length = (end[0] - start[0]) ** 2 + (end[1] - start[1]) ** 2
-    return 0.0 < dot < length
-
-
-def _on_polyline(point: tuple[float, float], points: Sequence[tuple[float, float]]) -> bool:
-    for start, end in zip(points, points[1:]):
-        if _key(point) == _key(start) or _key(point) == _key(end):
-            return True
-        if _strictly_on_segment(point, start, end):
-            return True
-    return False
-
-
-class _Router:
-    """Orthogonal obstacle-avoiding search on the compilation lattice.
-
-    The furniture, and why each piece is there:
-
-    * **obstacle boxes** — part extents and text boxes (053 sec.4: "文字 bbox
-      参与避障") plus the keep-outs. A step whose segment cuts a box's interior
-      is refused, with the checker's own clip test, so a path this search calls
-      clear is clear to the layer that grades it;
-    * **blocked points** — foreign pin tips, foreign labels and flags, and other
-      nets' wire vertices. A wire vertex on any of them is a *connection* in the
-      editor's model, which is exactly the short the readability contract
-      refuses, so they are walls;
-    * **foreign edges** — another net's wire. Its interior may be crossed
-      perpendicularly (measured editor behaviour: a plain crossing does not
-      join), but never run along, and never turned on: a turn or a parallel run
-      would put a vertex of one wire on the other, which does join;
-    * **cost** — a step costs one, a bend costs :data:`TURN_COST`, a crossing
-      costs :data:`CROSS_COST`. The trunk is tried before any search, so the
-      search only ever spends bends on what the trunk cannot reach.
-    """
-
-    def __init__(
-        self,
-        *,
-        grid: float,
-        residue: tuple[float, float],
-        boxes: Sequence[Box],
-        bounds: Box,
-    ) -> None:
-        self.grid = grid
-        self.residue = residue
-        self.boxes = list(boxes)
-        self.bounds = bounds
-        self.blocked: set[tuple[float, float]] = set()
-        self.edges: list[tuple[tuple[float, float], tuple[float, float]]] = []
-        #: The net each edge belongs to, in step with ``edges`` (074): a refusal
-        #: that says *which* foreign wire a lead ran through has to be able to name
-        #: it, and "another net's run" is not a name. Both writers of ``edges`` in
-        #: this module keep the two lists the same length —
-        #: :func:`_set_foreign_edges`, which records the net of every run it
-        #: collects, and :meth:`add_edge`, which reaches for no net in particular
-        #: and so records none. A caller that assigns ``edges`` itself (057's page
-        #: router does) leaves the names behind, and a reader that finds the two
-        #: lists out of step reports the run without naming its net rather than
-        #: naming the wrong one.
-        self.edge_nets: list[str] = []
-
-    # ------------------------------------------------------------ geometry
-
-    def node(self, point: tuple[float, float]) -> tuple[int, int]:
-        return (
-            round((point[0] - self.residue[0]) / self.grid),
-            round((point[1] - self.residue[1]) / self.grid),
-        )
-
-    def point(self, node: tuple[int, int]) -> tuple[float, float]:
-        return _rounded((
-            self.residue[0] + node[0] * self.grid,
-            self.residue[1] + node[1] * self.grid,
-        ))
-
-    def add_edge(self, start: tuple[float, float], end: tuple[float, float]) -> None:
-        if _key(start) != _key(end):
-            self.edges.append((start, end))
-            # ``edge_nets`` stays the same length as ``edges`` (see the attribute's
-            # own note): a run added here is not being drawn by any one net.
-            self.edge_nets.append("")
-
-    def _in_bounds(self, node: tuple[int, int]) -> bool:
-        point = self.point(node)
-        return (
-            self.bounds[0] - 1e-6 <= point[0] <= self.bounds[2] + 1e-6
-            and self.bounds[1] - 1e-6 <= point[1] <= self.bounds[3] + 1e-6
-        )
-
-    def _wall(self, node: tuple[int, int]) -> bool:
-        point = self.point(node)
-        if _key(point) in self.blocked:
-            return True
-        for box in self.boxes:
-            if (
-                box[0] - 1e-6 < point[0] < box[2] + 1e-6
-                and box[1] - 1e-6 < point[1] < box[3] + 1e-6
-            ):
-                return True
-        return False
-
-    def _step_free(
-        self, node: tuple[int, int], other: tuple[int, int]
-    ) -> bool:
-        start = self.point(node)
-        end = self.point(other)
-        for box in self.boxes:
-            if _segment_hits_box(start, end, box):
-                return False
-        for foreign in self.edges:
-            if _collinear_overlap(start, end, foreign[0], foreign[1]):
-                return False
-        return True
-
-    def crossing_at(self, point: tuple[float, float]) -> tuple[int, int] | None:
-        """Is this point inside a foreign wire's span? (the join condition)"""
-        return self._crossing(self.node(point))
-
-    def _crossing(self, node: tuple[int, int]) -> tuple[int, int] | None:
-        """The axis of the foreign edge this node lies inside, if any.
-
-        A node inside a foreign wire's span is the one place a crossing can
-        happen — and it may only be *crossed*, never turned on or run along,
-        which is what the caller's stepping rules enforce from this answer.
-        """
-        point = self.point(node)
-        for start, end in self.edges:
-            if _strictly_on_segment(point, start, end):
-                return (1, 0) if _close(start[1], end[1]) else (0, 1)
-        return None
-
-    # --------------------------------------------------------------- search
-
-    def route(
-        self,
-        start: tuple[float, float],
-        goal: tuple[float, float],
-        *,
-        targets: Sequence[tuple[float, float]] | None = None,
-    ) -> list[tuple[float, float]] | None:
-        """A cheapest orthogonal path from `start` to `goal` (or to any target).
-
-        Dijkstra over ``(node, arrival direction)`` so a turn can be priced, with
-        the stepping rules above. ``None`` means "not found inside the corridor
-        the caller gave", which is what the caller reports — never "no solution".
-        """
-        goals = {self.node(point) for point in (targets or [goal])}
-        start_node = self.node(start)
-        if start_node in goals:
-            return [self.point(start_node)]
-        frontier: list[tuple[float, int, tuple[int, int], int]] = []
-        counter = 0
-        heappush(frontier, (0.0, counter, start_node, 4))
-        best: dict[tuple[tuple[int, int], int], float] = {(start_node, 4): 0.0}
-        parent: dict[tuple[tuple[int, int], int], tuple[tuple[int, int], int]] = {}
-        steps = ((1, 0), (-1, 0), (0, 1), (0, -1))
-        while frontier:
-            cost, _, node, arrived = heappop(frontier)
-            if node in goals:
-                return self._unwind((node, arrived), parent, start_node)
-            for index, (dx, dy) in enumerate(steps):
-                other = (node[0] + dx, node[1] + dy)
-                if not self._in_bounds(other) or self._wall(other):
-                    continue
-                direction = index
-                if not self._step_free(node, other):
-                    continue
-                moving = (1, 0) if dx != 0 else (0, 1)
-                here = self._crossing(node)
-                if here is not None and here == moving:
-                    continue  # running along a foreign wire from inside it
-                if here is not None and arrived < 4 and direction != arrived:
-                    continue  # a crossing may not be turned on
-                there = self._crossing(other)
-                if there is not None and there == moving:
-                    continue  # entering a foreign wire lengthwise
-                total = cost + 1.0
-                if arrived < 4 and arrived != direction:
-                    total += TURN_COST
-                if there is not None:
-                    total += CROSS_COST
-                state = (other, direction)
-                if best.get(state, math.inf) <= total + 1e-9:
-                    continue
-                best[state] = total
-                parent[state] = (node, arrived)
-                counter += 1
-                heappush(frontier, (total, counter, other, direction))
-        return None
-
-    def _unwind(
-        self,
-        state: tuple[tuple[int, int], int],
-        parent: Mapping[tuple[tuple[int, int], int], tuple[tuple[int, int], int]],
-        start_node: tuple[int, int],
-    ) -> list[tuple[float, float]]:
-        nodes = [state[0]]
-        while state[0] != start_node:
-            state = parent[state]
-            nodes.append(state[0])
-        nodes.reverse()
-        return [self.point(node) for node in nodes]
-
-
-def _collinear_overlap(
-    a: tuple[float, float],
-    b: tuple[float, float],
-    c: tuple[float, float],
-    d: tuple[float, float],
-) -> bool:
-    """Do two segments lie on one line and share more than a point?
-
-    A parallel run along a foreign wire is the case that must not happen: the
-    editor joins wires that overlap, and a vertex of one on the other is a short.
-    """
-    if _close(a[1], b[1]) and _close(c[1], d[1]) and _close(a[1], c[1]):
-        low = max(min(a[0], b[0]), min(c[0], d[0]))
-        high = min(max(a[0], b[0]), max(c[0], d[0]))
-        return high - low > 1e-6
-    if _close(a[0], b[0]) and _close(c[0], d[0]) and _close(a[0], c[0]):
-        low = max(min(a[1], b[1]), min(c[1], d[1]))
-        high = min(max(a[1], b[1]), max(c[1], d[1]))
-        return high - low > 1e-6
-    return False
 
 
 def _compress(points: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
