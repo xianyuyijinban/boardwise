@@ -9900,6 +9900,11 @@ def _cmd_draw_lint(args: argparse.Namespace) -> int:
                 "L5_DUPLICATE_NET_GAP": drawlint.L5_DUPLICATE_NET_GAP,
                 "L7_LABEL_WIRE_GAP": drawlint.L7_LABEL_WIRE_GAP,
                 "L9_FILL_RATIO": drawlint.L9_FILL_RATIO,
+                "L6_CLUSTER_GAP": drawlint.L6_CLUSTER_GAP,
+                "L6_CLUSTER_WARN": drawlint.L6_CLUSTER_WARN,
+                "L6_CLUSTER_SPREAD": drawlint.L6_CLUSTER_SPREAD,
+                "L6_PAGE_WARN": drawlint.L6_PAGE_WARN,
+                "L10_EDGE_EPS": drawlint.L10_EDGE_EPS,
             },
         }
         Path(args.json_path).write_text(

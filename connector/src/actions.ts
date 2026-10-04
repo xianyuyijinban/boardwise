@@ -7170,6 +7170,293 @@ export const pcbDrcCheck: ActionHandler = async (params, eda) => {
 };
 
 // --------------------------------------------------------------------------
+// 111b: `sys.log_read` — the sys_Log panel, read as text
+// --------------------------------------------------------------------------
+
+/** `ESYS_LogType` as the type package declares it, verbatim. */
+const SYS_LOG_TYPES = ['info', 'warn', 'error', 'fatalError', 'find', 'replace', 'openProject'] as const;
+
+const SYS_LOG_DEFAULT_LIMIT = 200;
+/** A ceiling, not a promise: past this the answer stops being a log read. */
+const SYS_LOG_MAX_LIMIT = 5_000;
+const SYS_LOG_DEFAULT_MAX_CHARS = 200_000;
+const SYS_LOG_MAX_MAX_CHARS = 4_000_000;
+
+/**
+ * `sys.log_read` — the host's own log panel, as text.
+ *
+ * This action exists for one hole: **`sch.drc_check` returns counts, not
+ * findings.** 025 §0 measured it — `sch_Drc.check(…, includeVerboseError: true)`
+ * answers `[{type, count}]` and the per-item ERC text goes to the bottom panel,
+ * which no `eda.*` member reads. 岳's panel showed 22 warn lines of full text on
+ * 2026-10-04, and `SYS_Log` is the published surface for that panel
+ * (`@jlceda/pro-api-types@0.4.25`, `SYS_Log.sort(types?): Promise<ISYS_LogLine[]>`).
+ * So this was built as the **candidate** read path for the ERC text — and the
+ * first live call answered it (111b, 2026-10-04, test/P1 with 22 warns): an
+ * API-driven `sch.drc_check` writes NOTHING to sys_Log, under neither
+ * `userInterface:false` nor `:true`. The panel's ERC text comes from a human
+ * running DRC from the editor menu; a harness-run check's per-item wording is
+ * still unreachable. What this action verifiably does is read the panel back —
+ * extension diagnostics, `openProject` events, and menu-run ERC text when it is
+ * there.
+ *
+ * Read-only, and narrow about it. `sort` only. **`export` is never called** — it
+ * opens the editor's save dialog, which is a side effect on a machine nobody is
+ * watching — and **`clear` is never called**, because it destroys the very
+ * evidence this action is here to recover. `find` is not used either: `sort` plus
+ * a case-insensitive substring filter on the client covers what `find` does,
+ * and `find`'s `message` argument doubles as a UI-anchored object lookup
+ * (`{text, attr: {id, path, sheet, pcbid}}`) whose failure mode we cannot predict
+ * from here.
+ *
+ * `message` crosses the wire **verbatim** — never trimmed, re-cased, dedented or
+ * re-wrapped. A log line is evidence, and the text an engineer sees on the panel
+ * is the text that has to be quotable back at them.
+ */
+export const sysLogRead: ActionHandler = async (params, eda) => {
+  const PATH = 'sys_Log.sort';
+  const { types: wanted, asArray } = sysLogTypes(params?.types);
+  const since = optionalNumber(params?.since, 'since');
+  const pattern = optionalPattern(params?.pattern);
+  const limit = optionalInt(params?.limit, 'limit', SYS_LOG_DEFAULT_LIMIT, SYS_LOG_MAX_LIMIT);
+  const maxChars = optionalInt(
+    params?.maxChars,
+    'maxChars',
+    SYS_LOG_DEFAULT_MAX_CHARS,
+    SYS_LOG_MAX_MAX_CHARS,
+  );
+
+  const call = requireFn(eda, PATH);
+
+  const started = Date.now();
+  let result: unknown;
+  try {
+    result = await raceHostCall(
+      settle(wanted.length === 0 ? call() : call(asArray ? wanted : wanted[0])),
+      PATH,
+      DOCUMENT_READ_TIMEOUT_MS,
+      'sys_Log is absent on older editor builds, and the host drops an argument it '
+        + 'dislikes rather than rejecting it',
+    );
+  } catch (error) {
+    if (isActionError(error)) throw error;
+    const host = hostErrorText(error);
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `${PATH} threw ${host.text}. The log panel is the only published surface for `
+        + "the ERC's per-item text, so a refusal here is a refusal of that text, not "
+        + 'of the counts sch.drc_check still has',
+      {
+        path: PATH,
+        types: wanted.length ? wanted : undefined,
+        thrown: true,
+        errorName: host.name,
+        errorMessage: host.message,
+        elapsedMs: Date.now() - started,
+      },
+    );
+  }
+  const elapsedMs = Date.now() - started;
+
+  const raw = Array.isArray(result) ? result : [];
+  if (!Array.isArray(result)) {
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `${PATH} answered ${result === undefined ? 'undefined' : result === null ? 'null' : typeof result} `
+        + 'instead of the declared array of log lines. Nothing is reported: an empty log '
+        + 'and a log this build cannot read are different facts, and only the first is one',
+      { path: PATH, kind: result === undefined ? 'undefined' : result === null ? 'null' : typeof result },
+    );
+  }
+
+  // `total` is the count the host handed back, before our own filters — the
+  // difference between total and count is what a caller needs to know it lost.
+  const total = raw.length;
+  // A line the host gave no usable `timestamp` for cannot be shown to satisfy
+  // `since`, and saying so beats dropping it in silence: the caller asked a
+  // question about *time* and a line that vanished would read as "nothing that
+  // old is in the log".
+  let unstamped = 0;
+  const sinceCut = since === null
+    ? raw
+    : raw.filter((line) => {
+      const stamp = logTimestamp(line);
+      if (stamp === null) unstamped += 1;
+      return stamp !== null && stamp >= since;
+    });
+  const afterTypes = wanted.length
+    ? sinceCut.filter((line) => wanted.includes(String(plainGet(line, 'type')) as never))
+    : sinceCut;
+  // Case-insensitive, and deliberately a plain substring: the panel's own filter
+  // is a text match, and a regex here would reject log lines as "no match" when
+  // it is the pattern that is wrong.
+  const afterPattern = pattern
+    ? afterTypes.filter((line) => String(plainGet(line, 'message') ?? '').toLowerCase().includes(pattern))
+    : afterTypes;
+
+  const limited = afterPattern.slice(0, limit);
+  const budget = sysLogBudget(limited, maxChars);
+  const kept = budget.lines;
+  const notes: string[] = [];
+  if (unstamped > 0) {
+    notes.push(
+      `${unstamped} line(s) carry no numeric timestamp and were left out by since=${since}; `
+        + 'the declaration promises one on every line, so this is the host departing from it',
+    );
+  }
+  if (limited.length < afterPattern.length) {
+    notes.push(
+      `${afterPattern.length - limited.length} matching line(s) were left out by limit=${limit}; `
+        + 'they are not errors, they are lines this answer does not carry',
+    );
+  }
+  if (budget.dropped > 0) {
+    notes.push(
+      `${budget.dropped} line(s) were dropped to keep the answer inside maxChars=${maxChars}; `
+        + 'a log line is never cut in half, so the dropped ones are absent whole',
+    );
+  }
+  if (budget.oversizedFirst) {
+    notes.push(
+      'the first line alone exceeds maxChars, so it is returned whole and this answer is '
+        + 'larger than the budget asks for',
+    );
+  }
+  if (result.length === 0) {
+    notes.push('the host returned no log lines at all — an empty log, reported as an empty log');
+  }
+
+  const byLimit = afterPattern.length - limited.length;
+  const truncated = byLimit > 0 || budget.dropped > 0;
+  return {
+    source: PATH,
+    lines: kept,
+    count: kept.length,
+    total,
+    truncated,
+    ...(wanted.length ? { types: wanted } : {}),
+    ...(since === null ? {} : { since }),
+    ...(pattern ? { pattern } : {}),
+    elapsedMs,
+    ...(notes.length ? { notes } : {}),
+  };
+};
+
+/**
+ * The `types` argument, validated against `ESYS_LogType`.
+ *
+ * Two facts about the caller's shape travel with the answer:
+ *
+ * - `undefined` means *all types*, and that is signalled by passing **no
+ *   argument at all**: the declaration's default is "every type", and an
+ *   explicit empty array is not a documented spelling of the same thing on
+ *   every build. A typo is refused rather than forwarded, because the host
+ *   drops an argument it dislikes rather than rejecting it — a silent
+ *   all-types read would look like a filter that did nothing.
+ * - A **string stays a string** and an **array stays an array**, even when the
+ *   array holds one entry. Both are in the declaration, and quietly promoting
+ *   `['error']` to `'error'` is a guess about the host's overload resolution
+ *   that this action has no business making.
+ */
+function sysLogTypes(value: unknown): { types: string[]; asArray: boolean } {
+  if (value === undefined || value === null) return { types: [], asArray: false };
+  const asArray = Array.isArray(value);
+  const list = asArray ? value : [value];
+  if (list.length === 0) {
+    throw new ActionError(
+      'BAD_REQUEST',
+      'sys.log_read params.types was an empty array; omit it to read every type',
+    );
+  }
+  const types: string[] = [];
+  for (const entry of list) {
+    const label = String(entry);
+    if (!(SYS_LOG_TYPES as readonly string[]).includes(label)) {
+      throw new ActionError(
+        'BAD_REQUEST',
+        `sys.log_read params.types must be from ${SYS_LOG_TYPES.join(' | ')} `
+          + `(got ${JSON.stringify(entry)})`,
+      );
+    }
+    if (!types.includes(label)) types.push(label);
+  }
+  return { types, asArray };
+}
+
+/** A finite number, or `null` for "the caller did not ask". */
+function optionalNumber(value: unknown, label: string): number | null {
+  if (value === undefined || value === null) return null;
+  const n = Number(value);
+  if (!Number.isFinite(n)) {
+    throw new ActionError('BAD_REQUEST', `sys.log_read params.${label} must be a finite number of ms since the epoch`);
+  }
+  return n;
+}
+
+/** The substring filter, lowercased once so the per-line work is a plain `includes`. */
+function optionalPattern(value: unknown): string | null {
+  if (value === undefined || value === null) return '';
+  if (typeof value !== 'string') {
+    throw new ActionError('BAD_REQUEST', 'sys.log_read params.pattern must be a string');
+  }
+  return value ? value.toLowerCase() : '';
+}
+
+/** A whole number inside `[1, max]`, defaulting when the caller was silent. */
+function optionalInt(value: unknown, label: string, fallback: number, max: number): number {
+  if (value === undefined || value === null) return fallback;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 1 || n > max) {
+    throw new ActionError(
+      'BAD_REQUEST',
+      `sys.log_read params.${label} must be a whole number between 1 and ${max} `
+        + `(got ${JSON.stringify(value)})`,
+    );
+  }
+  return n;
+}
+
+/** A line's own millisecond timestamp, or `null` when it carries no usable one. */
+function logTimestamp(line: unknown): number | null {
+  const value = Number(plainGet(line, 'timestamp'));
+  return Number.isFinite(value) ? value : null;
+}
+
+/**
+ * Whole lines inside a character budget.
+ *
+ * The same rule `pcb.drc_check` uses for whole DRC groups: a line that does not
+ * fit is **dropped**, never sliced, because a half-sentence in a log read is
+ * indistinguishable from a different log line.
+ */
+function sysLogBudget(
+  lines: unknown[],
+  maxChars: number,
+): { lines: unknown[]; dropped: number; jsonChars: number; oversizedFirst: boolean } {
+  const kept: unknown[] = [];
+  let chars = 0;
+  let dropped = 0;
+  let oversizedFirst = false;
+  for (const line of lines) {
+    const rendered = safeJson(line);
+    const size = rendered.text.length;
+    if (size > maxChars && kept.length === 0) {
+      oversizedFirst = true;
+      kept.push(line);
+      chars += size;
+      continue;
+    }
+    if (chars + size > maxChars) {
+      dropped += 1;
+      continue;
+    }
+    kept.push(line);
+    chars += size;
+  }
+  return { lines: kept, dropped, jsonChars: chars, oversizedFirst };
+}
+
+// --------------------------------------------------------------------------
 // 026b: `sys.connector_status` — the promoted diagnostics action
 // --------------------------------------------------------------------------
 
@@ -7266,6 +7553,7 @@ const PROBE_CALL_ACTIONS: Record<string, ActionHandler> = {
   'sys.get_document_source': sysGetDocumentSource,
   'sch.drc_check': schDrcCheck,
   'pcb.drc_check': pcbDrcCheck,
+  'sys.log_read': sysLogRead,
 };
 
 export function buildHandlers(eda: Eda): Record<string, BoundHandler> {
@@ -7332,5 +7620,10 @@ export function buildHandlers(eda: Eda): Record<string, BoundHandler> {
     // measured on the machine, and the answer lives in `outputs/026_probe.md`
     // and `outputs/026b_2b_p6_nativews.txt`.
     'sys.connector_status': bind(sysConnectorStatus),
+    // 111b: the log panel read as text, so the ERC's per-item wording can be
+    // recovered from somewhere other than the counts `sch.drc_check` hands
+    // back (025 §0 measured the counts; the text was the hole). Read-only, and
+    // it never calls `export` (save dialog) or `clear` (destroys the evidence).
+    'sys.log_read': bind(sysLogRead),
   };
 }

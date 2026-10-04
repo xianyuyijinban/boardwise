@@ -1,5 +1,5 @@
-"""The draw lint readability checker (task 111): nine geometric predicates
-over one live page's read-only snapshot.
+"""The draw lint readability checker (task 111 + 111a addendum): geometric
+predicates over one live page's read-only snapshot.
 
 110 (the flyback end-to-end) exposed the tool gap this closes: the defects a
 human eye caught in re-review — a wire printed through the ``VCC`` label, a
@@ -14,7 +14,8 @@ The snapshot is captured through the bridge (``sch.geometry`` + the render the
 same page already produces); the predicates run on the captured dict alone, so
 a lint run can be replayed from a file with no daemon at all.
 
-**The nine predicates** (each maps to a defect class 110 actually showed):
+**The eleven predicates** (each maps to a defect class 110 actually showed;
+L10 and L5b are the 111a addendum — 岳's editor DRC run, 2026-10-04):
 
 =================================  ============================================  ======
 predicate                          what it refuses                               level
@@ -27,11 +28,20 @@ predicate                          what it refuses                              
                                    pin (non-endpoint)
 ``L5 duplicate-annotation``        same-net flag + label, or two labels          ERROR
                                    closer than :data:`L5_DUPLICATE_NET_GAP`
-``L6 wire-crossing``               wire × wire proper crossing, no junction      INFO
+``L6 wire-crossing``               wire × wire proper crossing, no junction      INFO/WARN
+                                   (clustered per wire pair; ≥ :data:`L6_CLUSTER_WARN`
+                                   crossings in a cluster, or more than
+                                   :data:`L6_PAGE_WARN` clusters on the page, warn)
 ``L7 label-wire-clearance``        label/pin × foreign wire gap below            WARN
                                    :data:`L7_LABEL_WIRE_GAP`
 ``L8 flag-orientation``            a power/ground flag rotated off the vertical  ERROR
 ``L9 board-fill``                  the placed extent under-fills the sheet       INFO
+``L10 out-of-bounds``              a part body, wire point, flag anchor or       ERROR
+                                   text box beyond the sheet frame
+                                   (:data:`L10_EDGE_EPS` inside the edge is legal)
+``L5-wire-multiname``              one wire primitive carrying more than one     WARN
+                                   same-net annotation — the host DRC reports
+                                   导线有多个网络名 (the 110 named-stub shape)
 =================================  ============================================  ======
 
 **Text geometry is estimated, and says so.** The host exposes no text-extent
@@ -181,6 +191,53 @@ FLAG_VERTICAL_ROTATIONS = frozenset({0, 90, 180, 270})
 #: all three as finished pages — so an under-fill *report* may only fire below
 #: the lowest accepted reading. P1's pre-fix placement measured 39.4%.
 L9_FILL_RATIO = 0.04
+
+#: L6 — two crossing points of the *same unordered wire-primitive pair*
+#: closer than this in both coordinates are one crossing site, not several:
+#: the host reports a bent wire as one primitive whose multi-segment run
+#: crosses the neighbour's multi-segment run repeatedly at one corner (the
+#: pre-fix P1's SW × HVDC reported 8 times for one visual crossing —
+#: measured 2026-10-04, the raw per-segment list is 44 rows that collapse
+#: to 22 clusters at this gap on P1 while every accepted page keeps its
+#: own clusters intact: P22 1, P23 1 (its two crossings 150,715/160,720
+#: stay one cluster — the pair reading is what the eye wants), P24 2).
+L6_CLUSTER_GAP = 20.0
+
+#: L6 — a wire pair that crosses this many times inside one cluster warns
+#: (was INFO): the same two conductors crossing ≥3 times is 岳's
+#: 「不必要交叉」 — one wiggle of either wire ends it. Set above the accepted
+#: pages' worst *visual* cluster: P24's XO × 孤立段 double-cross measures 2
+#: crossings (accepted), and P24's second pair reads 4 raw crossings only
+#: because both wires backtrack on themselves — 4 points span 6.4 units,
+#: far under a text row, so the chain closes as one 4-point cluster and the
+#: threshold cannot separate it from the XO double-cross by count alone.
+#: The separating ruler is the cluster's **convex spread**: the accepted
+#: double-crosses span 10.0 (P23) and 16.4 (P24 XO) units, the backtrack
+#: artifact 6.4 — so the WARN needs count ≥3 *and* spread > 8.0 units
+#: (between the artifact's 6.4 and the smallest accepted span of 10.0; all
+#: measured on the 2026-10-04 snapshots).
+L6_CLUSTER_WARN = 3
+
+#: L6 — the spread floor (canvas units, max pairwise distance inside one
+#: cluster) under which multiple crossings of one pair count as the same
+#: backtrack artifact, not N distinct visual crossings. Measured 2026-10-04:
+#: P24's backtrack cluster spans 6.4, the accepted XO double-cross 16.4,
+#: P23's 10.0 — 8.0 sits between artifact and accepted reality.
+L6_CLUSTER_SPREAD = 8.0
+
+#: L6 — more distinct crossing clusters on one page than this upgrades the
+#: crossings to a single page-level WARN. Accepted pages measure 1 (P22),
+#: 1 (P23) and 2 (P24) clusters (2026-10-04); the pre-fix P1 measures 22 —
+#: the threshold sits at the first value that separates them (any value in
+#: 3..21 does; 3 is the tightest honest reading of that gap).
+L6_PAGE_WARN = 3
+
+#: L10 — an object this close to the sheet edge counts as touching it, not
+#: leaving it (框碰到框边不算出界): the frame is a border, and R19's top
+#: rides it without crossing (岳's evidence, 2026-10-04). The accepted
+#: pages' closest object to any edge measures 35 units inside (P22's 3V3
+#: text) — 0.5 is far below any real clearance the estimate could confuse.
+L10_EDGE_EPS = 0.5
 
 #: L1/L3/L4 — a segment whose only contact with a body is an endpoint that is
 #: one of the body's own pins is that pin's connection, not a crossing
@@ -1300,40 +1357,271 @@ def _box_nearest_point(
     )
 
 
-def check_crossings(sheet: Sheet) -> list[LintFinding]:
-    """L6 (INFO): wire × wire proper crossings — the eye's 'is this a join?'.
+def check_wire_multiname(sheet: Sheet) -> list[LintFinding]:
+    """L5b (WARN, 111a §规则二): one wire primitive carrying more than one
+    same-net annotation — the shape the host DRC reports as 「导线 $1N77 有
+    多个网络名: LED_A、LED_A」 (110's named-stub technique: each stub of one
+    continuous conductor is named, so one primitive backs several same-name
+    labels).
 
-    Crossings are a soft indicator, never a refusal: a page can be perfectly
-    correct and still carry them (110's CS_FILT × HVDC十字), and the numbers
-    only help the eye decide where to look.
+    The carrier test is :func:`_label_carriers` — the same contact rule L5's
+    ``_same_carrier`` uses, so the two predicates are complementary by
+    construction: L5 exempts same-carrier pairs from its ERROR (one wire, one
+    statement by position), L5b counts exactly those same-carrier annotations
+    and warns when they are more than one. A flag is not an annotation
+    (kind ``"label"`` only) — flag + label in one region stays L5's case —
+    and two *different*-net labels on one carrier are not a multiname.
     """
     out: list[LintFinding] = []
+    annotations = [b for b in sheet.texts if b.kind == "annotation"]
+    carriers: dict[str, list[TextBox]] = {}
+    for box in annotations:
+        for primitive in _label_carriers(box, sheet):
+            carriers.setdefault(primitive, []).append(box)
+    for primitive, boxes in carriers.items():
+        if len(boxes) <= 1:
+            continue
+        by_net: dict[str, list[TextBox]] = {}
+        for box in boxes:
+            by_net.setdefault(box.net, []).append(box)
+        wire_net = next(
+            (w.net for w in sheet.wires if w.primitive == primitive), ""
+        )
+        for net, group in by_net.items():
+            if len(group) <= 1:
+                continue
+            first = group[0]
+            out.append(
+                LintFinding(
+                    "L5-wire-multiname",
+                    "WARN",
+                    f"wire {primitive[:8]} carries {len(group)} labels of one "
+                    f"net ({', '.join(first.text for _ in [0] * min(len(group), 3))}"
+                    f"{'…' if len(group) > 3 else ''}) — the host DRC reports "
+                    "导线有多个网络名 for this wire; one continuous conductor "
+                    "reads better with one name",
+                    x=(first.box[0] + first.box[2]) / 2,
+                    y=(first.box[1] + first.box[3]) / 2,
+                    objects=(primitive, net, len(group)),
+                    estimate=True,
+                )
+            )
+    return out
+
+
+def check_out_of_bounds(sheet: Sheet) -> list[LintFinding]:
+    """L10 (ERROR, 111a §规则一): element geometry beyond the sheet frame.
+
+    岳's evidence (2026-10-04): P1's +12V flag anchors at (1160,325) inside
+    the 1170-wide sheet but its name's glyphs run past the edge, and R19's
+    top rides the frame *without* crossing — legal. So the check reads every
+    object's extent (part body box, wire points, flag anchors, text boxes —
+    the estimate marks the text findings) and fires only past
+    :data:`L10_EDGE_EPS` outside; touching the edge is inside. Parts whose
+    body extent is unknown fall back to their origin point (the snapshot
+    carries no per-part bbox unless ``--bodies`` fed one in). No sheet box in
+    the snapshot → the predicate says nothing (L9's honest degradation).
+    """
+    if sheet.sheet_box is None:
+        return []
+    x0, y0, x1, y1 = sheet.sheet_box
+    eps = L10_EDGE_EPS
+
+    def beyond_box(box: tuple[float, float, float, float]) -> tuple[int, float]:
+        """Which side(s) stick out past eps, and by how much."""
+        worst = 0.0
+        sides = 0
+        for value, edge in (
+            (x0 - box[0], "left"),
+            (y0 - box[1], "bottom"),
+            (box[2] - x1, "right"),
+            (box[3] - y1, "top"),
+        ):
+            if value > eps:
+                sides += 1
+                worst = max(worst, value)
+        return sides, worst
+
+    out: list[LintFinding] = []
+    for part in sheet.parts:
+        body = part.page_body()
+        if body is None:
+            body = (part.x, part.y, part.x, part.y)
+        sides, over = beyond_box(body)
+        if not sides:
+            continue
+        out.append(
+            LintFinding(
+                "L10-out-of-bounds",
+                "ERROR",
+                f"part {part.designator or part.primitive[:8]} body extends "
+                f"{over:.1f} units beyond the sheet frame "
+                f"({x0:.0f},{y0:.0f})..({x1:.0f},{y1:.0f}) — off the printed "
+                "area, the fabricator's eye never reaches it",
+                x=(body[0] + body[2]) / 2,
+                y=(body[1] + body[3]) / 2,
+                objects=(part.designator or part.primitive,),
+            )
+        )
+    for flag in sheet.flags:
+        sides, over = beyond_box((flag.x, flag.y, flag.x, flag.y))
+        if not sides:
+            continue
+        out.append(
+            LintFinding(
+                "L10-out-of-bounds",
+                "ERROR",
+                f"flag {flag.primitive[:8]} (net {flag.net or 'unnamed'}) at "
+                f"({flag.x:.0f},{flag.y:.0f}) sits {over:.1f} units beyond "
+                "the sheet frame",
+                x=flag.x,
+                y=flag.y,
+                objects=(flag.primitive,),
+            )
+        )
+    for wire in sheet.wires:
+        for px, py in wire.points:
+            sides, over = beyond_box((px, py, px, py))
+            if not sides:
+                continue
+            out.append(
+                LintFinding(
+                    "L10-out-of-bounds",
+                    "ERROR",
+                    f"wire {wire.primitive[:8]} reaches ({px:.0f},{py:.0f}), "
+                    f"{over:.1f} units beyond the sheet frame",
+                    x=px,
+                    y=py,
+                    objects=(wire.primitive,),
+                )
+            )
+    for box in sheet.texts:
+        sides, over = beyond_box(box.box)
+        if not sides:
+            continue
+        out.append(
+            LintFinding(
+                "L10-out-of-bounds",
+                "ERROR",
+                f"text {box.text!r} box extends {over:.1f} units beyond the "
+                "sheet frame — the name runs off the printed area",
+                x=(box.box[0] + box.box[2]) / 2,
+                y=(box.box[1] + box.box[3]) / 2,
+                objects=(box.text,),
+                estimate=True,
+            )
+        )
+    return out
+
+
+def check_crossings(sheet: Sheet) -> list[LintFinding]:
+    """L6 (INFO, one WARN shape — 111a §规则三): wire × wire proper crossings.
+
+    Crossings are a soft indicator, never a refusal: a page can be perfectly
+    correct and still carry them (110's CS_FILT × HVDC 十字). The raw
+    per-segment list double-counts one visual crossing whenever either wire
+    runs several segments (the pre-fix P1's SW × HVDC reported 8 rows for one
+    corner), so rows are first **clustered per unordered wire-primitive
+    pair**: crossings of the same pair within :data:`L6_CLUSTER_GAP` of each
+    other are one cluster, reported once with its crossing count.
+
+    Severity: a 1–2-crossing cluster stays INFO (P24's XO × 孤立段
+    double-cross and P23's pair double-cross are accepted pages' legal
+    shapes); a cluster of :data:`L6_CLUSTER_WARN` or more crossings warns —
+    the same two conductors crossing repeatedly is 岳's 「不必要交叉」 — and
+    a page with more than :data:`L6_PAGE_WARN` distinct clusters adds one
+    page-level WARN. Same-net pairs never pair up (that is connected wiring).
+    """
     wires = [w for w in sheet.wires if w.points]
+    pairs: dict[tuple[str, str], tuple[Wire, Wire, list[tuple[float, float]]]] = {}
     for i in range(len(wires)):
         for j in range(i + 1, len(wires)):
             a_wire, b_wire = wires[i], wires[j]
             if a_wire.net and a_wire.net == b_wire.net:
                 continue
+            points: list[tuple[float, float]] = []
             for a_seg in _segments(a_wire.points):
                 for b_seg in _segments(b_wire.points):
                     point = _segment_intersection(*a_seg, *b_seg)
-                    if point is None:
-                        continue
-                    out.append(
-                        LintFinding(
-                            "L6-wire-crossing",
-                            "INFO",
-                            f"wires {a_wire.primitive[:8]} "
-                            f"({a_wire.net or 'unnamed'}) and "
-                            f"{b_wire.primitive[:8]} ({b_wire.net or 'unnamed'}) "
-                            f"cross at ({point[0]:.0f},{point[1]:.0f}) with no "
-                            "junction — a reader must check the two nets are "
-                            "not joined",
-                            x=point[0],
-                            y=point[1],
-                            objects=(a_wire.primitive, b_wire.primitive),
-                        )
-                    )
+                    if point is not None:
+                        points.append(point)
+            if points:
+                pairs[(a_wire.primitive, b_wire.primitive)] = (a_wire, b_wire, points)
+
+    def cluster_points(points: list[tuple[float, float]]):
+        groups: list[list[tuple[float, float]]] = []
+        for point in sorted(points):
+            if groups and all(
+                abs(point[0] - q[0]) <= L6_CLUSTER_GAP
+                and abs(point[1] - q[1]) <= L6_CLUSTER_GAP
+                for q in groups[-1]
+            ):
+                groups[-1].append(point)
+            else:
+                groups.append([point])
+        return groups
+
+    def spread(group: list[tuple[float, float]]) -> float:
+        """Max pairwise distance inside one cluster — the backtrack artifact
+        (a wire re-reading its own corner) spans nothing; a real multi-cross
+        spans a wire width or more (:data:`L6_CLUSTER_SPREAD`'s evidence)."""
+        return max(
+            (
+                math.hypot(a[0] - b[0], a[1] - b[1])
+                for a in group
+                for b in group
+            ),
+            default=0.0,
+        )
+
+    out: list[LintFinding] = []
+    cluster_count = 0
+    for (pa, pb), (a_wire, b_wire, points) in pairs.items():
+        for group in cluster_points(points):
+            cluster_count += 1
+            count = len(group)
+            cx = sum(p[0] for p in group) / count
+            cy = sum(p[1] for p in group) / count
+            if count >= L6_CLUSTER_WARN and spread(group) > L6_CLUSTER_SPREAD:
+                severity = "WARN"
+                tail = (
+                    f" — one pair of conductors crossing {count} times is the "
+                    "needless-crossing shape 岳's re-review flags; reroute "
+                    "one of the two"
+                )
+            else:
+                severity = "INFO"
+                tail = " — a reader must check the two nets are not joined"
+            out.append(
+                LintFinding(
+                    "L6-wire-crossing",
+                    severity,
+                    f"wires {pa[:8]} ({a_wire.net or 'unnamed'}) and "
+                    f"{pb[:8]} ({b_wire.net or 'unnamed'}) cross {count} "
+                    f"time(s) near ({cx:.0f},{cy:.0f}) with no junction"
+                    + tail,
+                    x=cx,
+                    y=cy,
+                    objects=(pa, pb),
+                )
+            )
+    if cluster_count > L6_PAGE_WARN:
+        out.append(
+            LintFinding(
+                "L6-wire-crossing",
+                "WARN",
+                f"the page carries {cluster_count} distinct crossing sites "
+                f"(more than {L6_PAGE_WARN}) — the routing asks for an eye: "
+                "most crossings read as unintentional on a finished page",
+                x=sheet.sheet_box[0] if sheet.sheet_box else 0.0,
+                y=sheet.sheet_box[1] if sheet.sheet_box else 0.0,
+                objects=tuple(
+                    primitive
+                    for pair in pairs
+                    for primitive in pair
+                ),
+            )
+        )
     return out
 
 
@@ -1461,10 +1749,12 @@ PREDICATES: tuple[tuple[str, str], ...] = (
     ("L3-text-on-part", "ERROR"),
     ("L4-wire-through-part", "ERROR"),
     ("L5-duplicate-annotation", "ERROR"),
-    ("L6-wire-crossing", "INFO"),
+    ("L5-wire-multiname", "WARN"),
+    ("L6-wire-crossing", "INFO/WARN"),
     ("L7-label-wire-clearance", "WARN"),
     ("L8-flag-orientation", "ERROR"),
     ("L9-board-fill", "INFO"),
+    ("L10-out-of-bounds", "ERROR"),
 )
 
 
@@ -1474,7 +1764,7 @@ def run_lint(
     *,
     pin_positions: dict[str, dict[str, tuple[float, float]]] | None = None,
 ) -> list[LintFinding]:
-    """All nine predicates over one normalised page, in the table's order."""
+    """All eleven predicates over one normalised page, in the table's order."""
     sheet = Sheet(snapshot, render_svg=render_svg)
     findings: list[LintFinding] = []
     findings.extend(check_text_on_wire(sheet))
@@ -1482,12 +1772,14 @@ def run_lint(
     findings.extend(check_text_on_part(sheet))
     findings.extend(check_wire_through_part(sheet, pin_positions))
     findings.extend(check_duplicate_annotation(sheet))
+    findings.extend(check_wire_multiname(sheet))
     findings.extend(check_crossings(sheet))
     findings.extend(check_label_wire_clearance(sheet, pin_positions))
     findings.extend(check_flag_orientation(sheet))
     fill = check_board_fill(sheet)
     if fill:
         findings.append(fill)
+    findings.extend(check_out_of_bounds(sheet))
     return findings
 
 
