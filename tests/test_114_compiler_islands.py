@@ -496,15 +496,28 @@ def test_the_lane_pass_moves_nothing_for_the_existing_grammars():
             continue
         with_lane = _placed(ctx)
         saved = module._align_branch_lanes
+        saved_gate = module._relation_failures
         module._align_branch_lanes = lambda *args, **kwargs: None
+        # **115**: the relation gate comes off for the second run, and the
+        # accepted pose list is left **whole**. This file measures
+        # **displacement**, and its own docstring says so; it used to get away
+        # with keeping the gate on only because the "without" run happened to
+        # pass it. It no longer does, and the reason is worth writing down:
+        # `poses[:1]` truncates each part's accepted poses to a single one, and
+        # 115's order criterion asks the *accepted pose set* whether the symbol
+        # has any pose that already keeps an order kind. With the list cut to
+        # one, that set no longer holds the poses the real search would have
+        # drawn, so the criterion concludes "no pose can say it" and fires.
+        # `_place` itself never truncates — `variant.pose_index` indexes — so
+        # the truncation was a fixture device and the honest fix is to drop it
+        # and let the variant do what it does in production.
+        module._relation_failures = lambda *args, **kwargs: []
         try:
-            ctx.accepted = {
-                part_id: poses[:1] for part_id, poses in ctx.accepted.items()
-            }
             without, failure = module._place(ctx, dc._Variant(
                 label="probe", scale=1.0, pose_index=0))
         finally:
             module._align_branch_lanes = saved
+            module._relation_failures = saved_gate
         assert without is not None, f"{name}: {failure}"
         moved = sorted(
             part_id for part_id in with_lane.origins

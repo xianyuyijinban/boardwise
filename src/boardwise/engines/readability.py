@@ -712,8 +712,8 @@ def check(
     violations.extend(_check_text(layout_plan, placed))
     violations.extend(_check_page(layout_plan, placed, page, keep))
     violations.extend(_check_locks(presentation_spec, layout_plan))
-    violations.extend(_check_nc(circuit_spec, net))
-    violations.extend(_check_required_pins(circuit_spec, net, placed))
+    violations.extend(_check_nc(circuit_spec, net, profile_map))
+    violations.extend(_check_required_pins(circuit_spec, net, placed, profile_map))
 
     findings: list[Any] = []
     if grammar_checker is not None:
@@ -858,7 +858,33 @@ def _role_node_expectations(
     for spec_net in circuit_spec.nets:
         for member in spec_net.members:
             declared[member] = spec_net.id
+    # **115-②, one ruler.** A spec writes ``<partId>.<pin>`` with whatever token
+    # the symbol uses: the flyback's ``D1`` declares ``A``/``K`` (names) while the
+    # very same library profile numbers them ``1``/``2``, and the sibling ``D2``
+    # in the same document writes ``1``/``2``. The derived netlist's keys come
+    # from the **profile's numbers**, so a name-spelled member never matched one
+    # and the comparison graded two different keys — ``D1.A`` was "a pin the
+    # symbol has not got" while ``D1.1`` sat on the drawn node unmentioned.
+    #
+    # Both spellings are resolved to the profile's number here, through the same
+    # "number first, then name" rule :func:`drawcompiler._pin_of_token` and
+    # ``grammar.base.profile_pin_for`` apply. Keeping the **number** as the one
+    # key is deliberate: giving ``pins`` a name key as well would put one pad on
+    # its own node **twice**, which corrupts the partition this whole constraint
+    # compares. One key space, one ruler — no second, disagreeing measure.
+    canonical: dict[str, str] = {}
+    for member, net_id in declared.items():
+        part_id, _, token = member.partition(".")
+        part = circuit_spec.part(part_id)
+        profile = profile_map.get(part.symbol_ref) if part is not None else None
+        resolved = _profile_pin_ruler(profile, token)
+        canonical[f"{part_id}.{resolved}"] = net_id
+    declared = canonical
     nc_pins = {item.pin for item in circuit_spec.nc}
+    nc_pins = {
+        f"{pin.partition('.')[0]}.{_profile_pin_ruler(_profile_of(circuit_spec, profile_map, pin), pin.partition('.')[2])}"
+        for pin in nc_pins
+    }
     out = dict(declared)
     for member in sorted(declared):
         net_id = declared[member]
@@ -879,6 +905,35 @@ def _role_node_expectations(
                 continue
             out.setdefault(f"{part_id}.{spelling}", net_id)
     return out
+
+
+def _profile_of(
+    circuit_spec: CircuitSpec, profile_map: Mapping[str, SymbolProfile], pin: str
+) -> SymbolProfile | None:
+    """The profile of the part `pin` names, or ``None``."""
+    part = circuit_spec.part(pin.partition(".")[0])
+    return profile_map.get(part.symbol_ref) if part is not None else None
+
+
+def _profile_pin_ruler(profile: SymbolProfile | None, token: str) -> str:
+    """The **one** spelling this module reads a pin by: number first, then name.
+
+    The same rule `drawcompiler._pin_of_token` and `grammar.base.profile_pin_for`
+    apply, for the same reason — a spec may name a pin either way, and the two
+    must not become two rulers. A token the profile cannot resolve is returned
+    unchanged, so a spec naming a pin the symbol genuinely lacks is still
+    reported as such (constraint 9's "the symbol has no such pin") instead of
+    being silently folded onto some other pad.
+    """
+    if profile is None or not token:
+        return token
+    pin = profile.pin(token)
+    if pin is not None:
+        return str(pin.number)
+    for candidate in profile.pins:
+        if candidate.name == token:
+            return str(candidate.number)
+    return token
 
 
 # ------------------------------------------------------------- 2. wire ends
@@ -1259,23 +1314,29 @@ def _check_locks(
 # --------------------------------------------------------------------- 8. NC
 
 
-def _check_nc(circuit_spec: CircuitSpec, net: DerivedNetlist) -> list[HardViolation]:
+def _check_nc(
+    circuit_spec: CircuitSpec, net: DerivedNetlist,
+    profile_map: Mapping[str, SymbolProfile],
+) -> list[HardViolation]:
     """Constraint 8: an explicit NC pin is not connected to anything.
 
     053 sec.2: "没给连接" ≠ NC, and NC is explicit — so the drawing owes the pin
     nothing at all. Either form of attachment counts as connected: another pin
     on the same derived node, or a conductor (wire, label, power symbol) sitting
     on the tip. A pin whose part is not placed cannot be connected and is not
-    reported here.
+    reported here. **115-②**: the lookup goes through :func:`_profile_pin_ruler`
+    like every other spec-to-drawing comparison here, while the message keeps
+    quoting the spec's own token.
     """
     out: list[HardViolation] = []
     for item in circuit_spec.nc:
         pin = item.pin
-        if pin not in net.pin_points:
+        key = f"{pin.partition('.')[0]}.{_profile_pin_ruler(_profile_of(circuit_spec, profile_map, pin), pin.partition('.')[2])}"
+        if key not in net.pin_points:
             continue
-        group = net.group_of(pin)
-        others = [other for other in group if other != pin]
-        attached = pin in net.wired_pins
+        group = net.group_of(key)
+        others = [other for other in group if other != key]
+        attached = key in net.wired_pins
         if not others and not attached:
             continue
         if others:
@@ -1298,7 +1359,8 @@ def _check_nc(circuit_spec: CircuitSpec, net: DerivedNetlist) -> list[HardViolat
 
 
 def _check_required_pins(
-    circuit_spec: CircuitSpec, net: DerivedNetlist, placed: list[_PlacedPart]
+    circuit_spec: CircuitSpec, net: DerivedNetlist, placed: list[_PlacedPart],
+    profile_map: Mapping[str, SymbolProfile],
 ) -> list[HardViolation]:
     """Constraint 9: every pin a spec net names is actually connected to something.
 
@@ -1319,15 +1381,20 @@ def _check_required_pins(
     for spec_net in circuit_spec.nets:
         for pin in spec_net.members:
             name = f"circuitSpec.nets[{spec_net.id}]"
-            if pin not in net.pin_points:
-                part_id = pin.partition(".")[0]
-                part = by_id.get(part_id)
-                if part is None:
+            # **115-②**: look the pad up under the one ruler's spelling
+            # (:func:`_profile_pin_ruler`), while every message still quotes the
+            # spec's own token — a reader is answering to their document, not to
+            # the library's numbering.
+            part_id, _, token = pin.partition(".")
+            placed_part = by_id.get(part_id)
+            key = f"{part_id}.{_profile_pin_ruler(_profile_of(circuit_spec, profile_map, pin), token)}"
+            if key not in net.pin_points:
+                if placed_part is None:
                     why = f"part {part_id} is not placed in the plan"
                 else:
                     why = (
-                        f"the profile of its symbol {part.symbol_ref!r} has no pin "
-                        f"{pin.partition('.')[2]}"
+                        f"the profile of its symbol {placed_part.symbol_ref!r} has "
+                        f"no pin {token}"
                     )
                 out.append(HardViolation(
                     KIND_REQUIRED_PIN_NOT_CONNECTED,
@@ -1336,10 +1403,10 @@ def _check_required_pins(
                     f"the drawing — {why}",
                 ))
                 continue
-            group = net.group_of(pin)
-            if len(group) > 1 or pin in net.wired_pins:
+            group = net.group_of(key)
+            if len(group) > 1 or key in net.wired_pins:
                 continue
-            point = net.pin_points[pin]
+            point = net.pin_points[key]
             out.append(HardViolation(
                 KIND_REQUIRED_PIN_NOT_CONNECTED,
                 (name, f"pins[{pin}]"),
