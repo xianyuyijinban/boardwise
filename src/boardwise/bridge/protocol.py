@@ -470,6 +470,43 @@ ACTIONS: tuple[Action, ...] = (
         ),
         risk="read",
     ),
+    # --- 111b: the sys_Log panel, read as text -------------------------------
+    Action(
+        name="sys.log_read",
+        summary=(
+            "READ-ONLY: the host's own log panel, as text, via "
+            "`sys_Log.sort(types?)`. It exists because `sch_Drc.check`'s verbose "
+            "answer holds **aggregate counts only** (025 §0, measured: no detail), "
+            "while 岳's log panel showed 22 warn lines of full text on 2026-10-04. "
+            "**Measured live 2026-10-04 (111b, test/P1, 22 warns): an API-driven "
+            "`sch.drc_check` writes NOTHING to sys_Log — neither with "
+            "userInterface:false nor :true — so this action does NOT recover the "
+            "per-item ERC text of a harness-run check; that wording still comes "
+            "only from a human running DRC from the editor menu (which is what "
+            "fills the panel; inferred from the panel format, not yet re-confirmed "
+            "by a manual run). What the action verifiably does: read the panel "
+            "back — extension diagnostics, openProject events, and any menu-run "
+            "ERC text that is there. `sort` only: `export` is never called "
+            "(it opens the editor's save dialog) and `clear` is never called (it "
+            "destroys the evidence); `find` is unused because sort plus a client-side "
+            "substring filter covers it. Lines cross the wire verbatim — no "
+            "re-casing, trimming or wrapping."
+        ),
+        params=("types", "since", "pattern", "limit", "maxChars"),
+        returns=(
+            "{source: 'sys_Log.sort', lines: [{timestamp, type, message}], count, "
+            "total, truncated, types?, since?, pattern?, elapsedMs, notes?}"
+        ),
+        params_schema=(
+            "types: one or more of ESYS_LogType (info | warn | error | "
+            "fatalError | find | replace | openProject), omitted = every type; "
+            "since: ms since the epoch, keeps `timestamp >= since`; pattern: "
+            "case-insensitive substring; limit: 1..5000 (default 200); maxChars: "
+            "1..4000000 (default 200000) — whole lines only, a line that does not "
+            "fit is dropped, never sliced"
+        ),
+        risk="read",
+    ),
     # --- 026 probe batch: TEMPORARY instrumentation --------------------------
     # (empty: `sys.worker_probe` was removed in 0.4.18 / 026c. Its four
     # measurement modes were retired with their answers in 026b; its one
