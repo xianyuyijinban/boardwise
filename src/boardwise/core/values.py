@@ -165,7 +165,8 @@ _SIZE_CODE_PREFIXES = _IMPERIAL_SIZE_CODES + _METRIC_SIZE_CODES
 #: The **components** of a size code as whole digit runs, for asking "does this
 #: token state a package size of its own?" (the anchor below) -- and, since 102,
 #: for asking the same question of a **Value field's** digit run, where the answer
-#: is a reading rather than a strip (:data:`_MID_LETTER_KINDS`).
+#: is a reading rather than a strip (:data:`_MID_LETTER_KINDS`; 108 turned that
+#: answer on for the resistance notation's column of the same table).
 _SIZE_CODE_RUNS = frozenset(_IMPERIAL_SIZE_CODES + _METRIC_SIZE_CODES)
 
 #: The three syntactic **anchors** a decoded reading can carry (071 §1, oracle
@@ -586,16 +587,18 @@ _CAP_MID_LETTER_RE = re.compile(r"(\d*)([unp\u00b5\u03bc])(\d*)", re.IGNORECASE)
 #: part outright (087 §8: silence, not a miss). The audit swept both alphabets
 #: against the three letters and measured 54 such capacitance spellings.
 #:
-#: It is the **capacitance** notation because that is the family the audit
-#: measured and the family this batch opens; the resistance notation has the same
-#: collision (`160R` = 160 Ω is refused today, the R-suffix spelling `47R` has
-#: always read) and it is registered with the batch's delivery for a ruling rather
-#: than opened here, so that the reader's reading set does not widen by 18
-#: spellings no audit named. `outputs/102/SUMMARY.txt` §遗留 carries it, and
-#: `tests/test_102_b3_value_sizecodes.py` pins the refusal so a later batch has to
-#: say so to open it.
+#: 102 opened the **capacitance** notation -- the family that audit measured -- and
+#: registered the resistance notation's twin of the same shape for a ruling rather
+#: than deciding it, so that the reader's reading set would not widen by 18
+#: spellings no audit named. **108 opens the twin** (oracle ruling 2026-10-04,
+#: "同一个 bug 不修一半"): the collision is the same one and the reading is the
+#: same kind -- `160R` is 160 Ω, the R-suffix spelling `47R` has always read, and
+#: `0805R` reads what `805R` has always read -- 18 spellings across both size
+#: alphabets. Both entries answer `True` today. The column stays a column rather
+#: than being folded away because it states which notation a caller is reading,
+#: and a notation that later needs the strip back has one place to say so.
 _MID_LETTER_KINDS = {
-    "resistance": (_MID_LETTER_RE, _MID_LETTER_BASE, False),
+    "resistance": (_MID_LETTER_RE, _MID_LETTER_BASE, True),
     "capacitance": (_CAP_MID_LETTER_RE, _CAP_MID_LETTER_BASE, True),
 }
 
@@ -646,11 +649,13 @@ def _mid_letter_readings(
     ``"capacitance"`` (``u``/``n``/``p`` and the micro spellings). Which letters
     a notation holds and what each is worth is nearly the whole of the difference
     between them; every structural refusal below is one rule for both, with one
-    102 exception the kind table carries as its third column: a **Value field's**
-    run that *is* a package size code is the field's own figures, and that is a
-    reading the audited capacitance family needs (``160n``, the spelling the shelf
-    addresses a part by) while the resistance notation's twin of the same shape
-    (``160R``) stays refused and is registered with the batch's delivery.
+    exception the kind table carries as its third column: a **Value field's** run
+    that *is* a package size code is the field's own figures. 102 opened that for
+    the audited capacitance family (``160n``, the spelling the shelf addresses a
+    part by) and 108 opened the resistance notation's twin of the same shape
+    (``160R`` = 160 Ω, read the way ``47R`` always has been); both notations
+    answer ``True`` there today, while the strip this exception steps around stays
+    what it is -- MPN grammar, :func:`_without_leading_size`.
 
     The **located** candidate carries :data:`ANCHOR_MID_LETTER` (071 §1 C): the
     one read off a run the size code was stripped off, so that run *is* the
@@ -696,15 +701,17 @@ def _mid_letter_readings(
         if len(fraction) > 2:
             continue  # the shunt form (`R005`) and any longer tail
         base = bases[letter]
-        # 102: a Value field's run that **is** a package size code is its own
+        # 102/108: a Value field's run that **is** a package size code is its own
         # figures, not a prefix to strip. A Value field has no vendor prefix
         # (`vendor_prefix=False` is its own rule, two paragraphs up), so the strip
         # below -- MPN grammar, 071 §3② -- has nothing to take off it: `160n` is
         # 160 nF, the spelling `core.parts.quantity_slug` addresses the shelf by
         # (`cap.160n_0402`), and before this the strip ate its mantissa whole and
-        # the field read as nothing. The kind table says which notation this is
-        # the case for; a run that is *not* a size code keeps every reading 071
-        # pinned (`12345n`: the trade's mantissa is three figures).
+        # the field read as nothing. 102 said so for capacitance, 108 turned the
+        # resistance notation's column of the same table on, and both read the
+        # field's figures today (`160R` = 160 Ω); a run that is *not* a size code
+        # keeps every reading 071 pinned (`12345n`: the trade's mantissa is three
+        # figures).
         size_code_run = size_code_is_value and not vendor_prefix and (
             run in _SIZE_CODE_RUNS
         )
@@ -756,13 +763,14 @@ def _mid_letter_readings(
             # unread, and there the suffix grammar holds the spellings that do
             # state the value (`0.1uF`, `100nF`).
             #
-            # 102: a size code is the one digit run that does start with a zero
+            # 102/108: a size code is the one digit run that does start with a zero
             # and *is* a mantissa -- the field's own figures, since a Value field
             # has no size to state them in (`0805n` = 805 nF, the reading `805n`
             # has always had; the leading zero is the size spelling's padding, not
-            # a figure of its own). Every other run of four or more figures stays
-            # refused by the line below, the coverage check at the caller's end
-            # being what says so.
+            # a figure of its own). The resistance notation's twin reads the same
+            # way since 108 (`0805R` = 805 Ω). Every other run of four or more
+            # figures stays refused by the line below, the coverage check at the
+            # caller's end being what says so.
             candidates = (
                 [run] if size_code_run
                 else [] if trimmed.startswith("0")
@@ -811,7 +819,12 @@ def parse_resistance_ohms(value: str) -> float | None:
       (``10m``), or a bare number with a ``k``/``m``/``M`` multiplier;
     * the trade's **mid-letter** notation (``4K7``, ``1K0``, ``2M2``, ``100R``),
       which must span the whole value: a Value field states one value, so
-      ``10MF`` is a millifarad capacitor and not ``10M``.
+      ``10MF`` is a millifarad capacitor and not ``10M``. Since 108 that covers
+      the spelling whose digit run **is** a package size code as well -- ``160R``
+      is 160 Ω and ``0805R`` is 805 Ω, the reading ``805R`` has always had -- by
+      102's rule for a Value field read across to this notation: the run in front
+      of the letter is the field's own figures, because a Value field has no
+      vendor prefix for a size code to come off (oracle ruling 2026-10-04).
 
     The order is load-bearing, not stylistic: ``4.7kΩ`` is the board grammar's
     4700 Ω, while the mid-letter scan would take the ``7K`` after the dot for
