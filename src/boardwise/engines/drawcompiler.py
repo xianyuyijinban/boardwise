@@ -1354,6 +1354,14 @@ def _prepare(
 #: better answer than a half-relaxed group.
 LANE_RELAX_ROUNDS = 4
 
+#: Bounds :func:`_honour_bound_orders` (116).  Same shape and same reason as
+#: :data:`LANE_RELAX_ROUNDS`: a page whose bound orders are jointly satisfiable
+#: converges in a couple of rounds (the real flyback does), and a page whose
+#: orders fight each other runs out of rounds and the relation checker names the
+#: pair with its two measured points.  It is a "give up and say so" bound, not a
+#: modelling limit.
+ORDER_RELAX_ROUNDS = 6
+
 
 def _branch_owner(
     circuit_spec: CircuitSpec,
@@ -2489,6 +2497,25 @@ def _place(
             _snap(origins[part_id][0], ctx.budget.grid, residue[0]),
             _snap(origins[part_id][1], ctx.budget.grid, residue[1]),
         )
+    # 116: after the lattice snap, so a step this pass takes is already on the
+    # same lattice the gate measures and the final snap cannot undo it. Runs
+    # before _anchor_to_page so the page anchor is chosen around the honoured
+    # orders, not around the ones the pass is about to fix.
+    #
+    # The baseline is the set the **tightest** rung breaks, measured from the
+    # same origins this rung reached before the pass ran. It is computed once
+    # and cached on the context, so every rung is filtered by the *same*
+    # statement of "what the base layout cannot do" — the pass then consumes a
+    # relation the base layout also broke, and leaves the ladder to judge the
+    # ones only the wide rungs broke.
+    baseline = getattr(ctx, "_order_baseline", None)
+    if baseline is None:
+        baseline = frozenset(
+            (item.kind, item.subject, item.object)
+            for item in _bound_orders(ctx, origins, poses, None)
+        )
+        setattr(ctx, "_order_baseline", baseline)
+    _honour_bound_orders(ctx, origins, poses, variant.pose_index, baseline)
     _anchor_to_page(ctx, origins, poses, residue)
     placed = _Placement(origins=origins, poses=poses, residue=residue)
     conflict = _relation_failures(ctx, placed)
@@ -3110,6 +3137,538 @@ def _lane_coordinate(
                 return point[index]
     origin = origins.get(part_id)
     return None if origin is None else origin[index]
+
+
+# ----------------------------------- 116: every bound order, not just the owner's
+
+
+def _honour_bound_orders(
+    ctx: _Context,
+    origins: dict[str, tuple[float, float]],
+    poses: Mapping[str, SymbolPose],
+    pose_index: int = 0,
+    baseline: frozenset[tuple[str, str, str]] | None = None,
+) -> None:
+    """Consume **every** bound order the placement breaks, not only the owner's.
+
+    113 bound all of them. 115① consumed the ones between a branch and its
+    **owner**; 114's lane pass consumed the same-line ones between branches of
+    one group. What nobody consumed is everything else the grammar said, and
+    all four of 115's remaining gate reports are one root cause: this stage did
+    not read them.
+
+    The pass walks the **whole** constraint list rather than the owner's, and
+    for each order the placement currently breaks, moves the movable side along
+    the axis that order names until the relation checker stops reporting it.
+    Three design choices, each for a stated reason:
+
+    * **only a relation the tightest layout already breaks** moves anything.
+      This is the rule that makes the 83 shipped previews byte-identical, and
+      it is worth stating in full because the obvious weaker version is wrong.
+
+      The obvious rule — "move whatever this variant breaks" — is **not** a
+      no-op on the existing grammars, and measuring that is how this one was
+      arrived at. In 098 the wide rungs break ``near(C1, U1)`` (that sheet
+      really is too narrow at spacing 1.5 and 2.2), so a pass that reads every
+      broken relation drags ``C1`` in and **rescues three rungs the compiler
+      had correctly refused**: 098 goes from 1 candidate to 3 and three
+      previews move. That is the pass papering over the spacing ladder's own
+      answer, which is a decision, not a defect.
+
+      The distinction that holds: a relation the **tightest** rung already
+      keeps is the ladder saying "this page has no room", and a relation every
+      rung breaks is a **placement** failure the grammar stated and this stage
+      never read. All three of the flyback's ``C10``-against-``U5`` relations
+      are broken at ``spacing=1 pose-variant=0`` as well as at every wider
+      rung, while 098's ``near(C1, U1)`` holds there. So the pass is the
+      identity on all five existing grammars and still consumes the four on
+      the page that needs them.
+    * **pose first** — 115①'s hard lesson, in the form 115 had to be rewritten
+      to learn it. If the movable side has a **pose the ladder actually
+      explores** whose pad already points the relation's way, the pose ladder
+      is left to find it. A variant *is* one rung of that ladder (053 sec.4),
+      so answering for it redraws a variant whose poses the search has not
+      exhausted; that is the byte 098 scene 08 lost in 114, and it is why
+      ``same-column(Q1, R5)`` — a relation between two **chain** parts, which
+      nothing may move — is reported as pose-solvable rather than moved.
+    * **the placed side is the reference** — 114's lane paradigm. A chain part
+      is the page's spine and a lock is the engineer's own coordinate; neither
+      moves. When both ends are free the lower rank keeps its place, so every
+      shift's direction comes from the grammar's own order rather than from
+      iteration order.
+
+    The walk is bounded by :data:`ORDER_RELAX_ROUNDS`. Running out of rounds is
+    not a silent pass: whatever is still broken stays where it is and the
+    relation checker reports it with the two measured points it would have
+    reported anyway — the honest refusal 115 kept.
+    """
+    fixed = {
+        part_id for part_id in ctx.slots
+        if ctx.locked(part_id) is not None or part_id in ctx.chain
+    }
+    for _round in range(ORDER_RELAX_ROUNDS):
+        moved = False
+        for item in _bound_orders(ctx, origins, poses, baseline):
+            here, there = item.subject, item.object
+            if here not in origins or there not in origins:
+                continue
+            here_fixed, there_fixed = here in fixed, there in fixed
+            if here_fixed and there_fixed:
+                continue
+            if here_fixed or (not there_fixed and _keeps(ctx, here, there)):
+                reference, walking = here, there
+            else:
+                reference, walking = there, here
+            if _pose_can_say(ctx, item, walking, reference, poses, origins,
+                             pose_index):
+                continue
+            if _order_step(ctx, item, walking, reference, origins, poses):
+                moved = True
+        if not moved:
+            return
+
+
+def _bound_orders(
+    ctx: _Context,
+    origins: Mapping[str, tuple[float, float]],
+    poses: Mapping[str, SymbolPose],
+    baseline: frozenset[tuple[str, str, str]] | None = None,
+) -> list[Any]:
+    """The bound relations this placement **breaks**, in a stable order.
+
+    "Breaks" is measured with :func:`_relation_violations` — the one ruler the
+    placement stage, the gate and the preview layer all read — so a pair listed
+    here is exactly a pair that would be refused. Which two points a kind is
+    measured between is :func:`_points_for_relation`'s and is not restated.
+
+    Only the kinds this pass can act on are listed; an obligation, a tap or an
+    ``adjacent`` is another subsystem's business and 116 does not touch it.
+
+    `baseline` is the set the **tightest** rung breaks (see
+    :func:`_honour_bound_orders`). A relation outside it is the spacing ladder
+    reporting that the page has no room, and this pass leaves it to the ladder;
+    that filter is what makes the pass the identity on the five existing
+    grammars. ``None`` means no filter, which is what a caller with no base
+    rung to compare against wants.
+    """
+    out: list[Any] = []
+    for item, _points in _relation_violations(
+        ctx.circuit, ctx.binding,
+        origin_of=lambda part_id: origins.get(part_id),
+        pin_of=lambda part_id, token: _pin_point(
+            ctx, part_id, token, poses, origins),
+        grid=ctx.budget.grid, near_limit=ctx.budget.near_limit,
+        lateral=ctx.lateral(), progress=ctx.progress,
+    ):
+        if item.kind not in (ABOVE, BELOW, LEFT_OF, RIGHT_OF, SAME_ROW,
+                             SAME_COLUMN, NEAR):
+            continue
+        if baseline is not None and (item.kind, item.subject, item.object) not in baseline:
+            continue
+        out.append(item)
+    out.sort(key=lambda item: (item.kind, item.subject, item.object))
+    return out
+
+
+def _order_step(
+    ctx: _Context,
+    item: Any,
+    walking: str,
+    reference: str,
+    origins: dict[str, tuple[float, float]],
+    poses: Mapping[str, SymbolPose],
+) -> bool:
+    """Move ``walking`` one whole step onto the side ``item`` names.
+
+    Returns whether the coordinate actually moved. The step is measured on the
+    **same two points the checker measures the pair on** — the shared net's pin
+    when the pair shares one, the origin when it does not — so a single walk
+    clears the tolerance by construction and the pass never satisfies itself
+    against a different ruler than the gate uses. 114's
+    :func:`_lane_coordinate` is that one measurement, reused rather than
+    restated.
+    """
+    shared = _shared_net_of(ctx, walking, reference)
+    if item.kind == NEAR:
+        return _order_step_near(ctx, shared, walking, reference, origins, poses)
+    if item.kind in (SAME_ROW, SAME_COLUMN):
+        # A same-line kind asks for **equality**, not a side, so there is no
+        # sign to step past: the walk is a snap onto the reference's own
+        # coordinate. The axis is the coordinate the line fixes — a
+        # `same-column` shares one **x** (index 0), a `same-row` one **y** —
+        # the same reading 114's lane pass uses.
+        index = 0 if item.kind == SAME_COLUMN else 1
+        current = _lane_coordinate(ctx, walking, shared, index, origins, poses)
+        target = _lane_coordinate(ctx, reference, shared, index, origins, poses)
+        if current is None or target is None:
+            return False
+        if abs(current - target) <= ctx.budget.grid / 2.0:
+            return False
+        return _shift_origin(ctx, walking, index, current, target, origins)
+    index, sign = _order_asks(item.kind, walking == item.subject)
+    # An **order** kind is measured between the two **origins** — never on
+    # pins. That is :func:`_points_for_relation`'s own split, and reading the
+    # pins here would move the part by its own pad offset: the 116 draft's
+    # first bug, which stepped ``C1`` off the shared net's pad instead of off
+    # the body and reported a move the checker never saw.
+    current = origins[walking][index]
+    target = origins[reference][index]
+    if current is None or target is None:
+        return False
+    if (current - target) * sign > ctx.budget.grid / 2.0:
+        # Already **past** the reference on the side this order names: the
+        # checker reads `ax > bx + slack` for an order kind, so anything past
+        # `grid / 2` already holds and the pair is broken on something else.
+        # A gap that only *reaches* the reference is still broken — that is the
+        # `right-of(C1, U1)` case, both measured pins sitting on x = 0.
+        return False
+    # One **whole lattice step** onto the far side of the reference, not
+    # `grid / 2`: `_snap` rounds halves to even, so half a step would land back
+    # on the reference and the walk would report a move it did not make. A whole
+    # step clears the checker's tolerance by construction.
+    #
+    # The delta is taken **on the measured coordinate** and applied to the
+    # **origin**, because those are two different points when the pair shares a
+    # net: `_lane_coordinate` reads a pin, the layout stores an origin. Writing
+    # the pin's absolute coordinate into the origin's slot would move the part
+    # by its own pin offset — the 116 draft's first bug, which put ``C1`` 60
+    # units the wrong way on a pair whose pins sat on the body axis.
+    return _shift_origin(ctx, walking, index, current, target + sign * ctx.budget.grid,
+                         origins)
+
+
+def _shift_origin(
+    ctx: _Context,
+    part_id: str,
+    index: int,
+    measured_now: float,
+    measured_wanted: float,
+    origins: dict[str, tuple[float, float]],
+) -> bool:
+    """Move a part's **origin** by the delta its measured coordinate needs.
+
+    The step is worked out on whatever the gate measures — a pin on the shared
+    net, or the origin when the pair shares none — and applied to the origin,
+    which is the only thing the layout stores. The two differ by the part's own
+    pin offset, so the delta is the quantity that transfers.
+    """
+    delta = measured_wanted - measured_now
+    if not delta:
+        return False
+    origin = origins[part_id]
+    shifted = list(origin)
+    shifted[index] = origin[index] + _snap(delta, ctx.budget.grid, 0.0)
+    if shifted[index] == origin[index]:
+        return False
+    origins[part_id] = (shifted[0], shifted[1])
+    return True
+
+
+def _order_step_near(
+    ctx: _Context,
+    shared: str,
+    walking: str,
+    reference: str,
+    origins: dict[str, tuple[float, float]],
+    poses: Mapping[str, SymbolPose],
+) -> bool:
+    """Trim a ``near`` down to its budget, on the axis that separates the pair.
+
+    ``near`` states a **distance**, not a side, so there is no sign to take from
+    the grammar. What it does say is *how close* — ``near_limit`` — and that
+    budget is the whole of what this pass is allowed to spend. The move takes
+    the excess over the limit off the separating axis and stops: not a creep of
+    one lattice step, which could never close the flyback's 62-unit overshoot
+    inside :data:`ORDER_RELAX_ROUNDS` rounds, and not a slide onto the
+    reference, which satisfies the relation and destroys the drawing.
+
+    Which side moves is decided by the caller, on 114's rule: the chain and the
+    lock never move, and of two free parts the lower rank keeps its place. So a
+    ``near`` between two branches of one string pulls the **later** arm toward
+    the earlier one, and the earlier arm's own ``near`` to its owner is left
+    alone — which is the point: the string closes without either arm leaving
+    what it hangs off.
+
+    Bounded by the round count like every other step: a pair still too far apart
+    after :data:`ORDER_RELAX_ROUNDS` rounds is left broken and is reported with
+    its two measured points, which is the same honest refusal 114 gave the
+    branch string.
+    """
+    here_x = _lane_coordinate(ctx, walking, shared, 0, origins, poses)
+    there_x = _lane_coordinate(ctx, reference, shared, 0, origins, poses)
+    here_y = _lane_coordinate(ctx, walking, shared, 1, origins, poses)
+    there_y = _lane_coordinate(ctx, reference, shared, 1, origins, poses)
+    if None in (here_x, there_x, here_y, there_y):
+        return False
+    index = 0 if abs(here_x - there_x) >= abs(here_y - there_y) else 1
+    mine, theirs = (here_x, there_x) if index == 0 else (here_y, there_y)
+    # ``near`` is a **two-dimensional** distance, so the excess is taken off the
+    # distance and not off the separating axis. Reading it off the axis is the
+    # 116 draft's fourth bug and it moved two more previews: with 098's
+    # ``near(C2, U1)`` the two measured points are 60 apart on y and 400 on x,
+    # the axis rule subtracted ``near_limit`` from the x gap and dragged a
+    # capacitor 60 units along y — a coordinate ``near`` never asked about —
+    # and it fired even where the true distance already held.
+    excess = math.hypot(here_x - there_x, here_y - there_y) - ctx.budget.near_limit
+    if excess <= 0.0:
+        return False
+    # Only as far as the limit asks, never onto the reference. ``near`` is a
+    # **distance with a budget**, not an equality: sliding the walking side all
+    # the way onto the reference satisfies it and destroys the drawing — the
+    # 116 draft's second bug, which stacked 088's ``D1`` and ``C117`` on the
+    # page origin (x -445 -> -50, -345 -> -5, 345 -> 5, 445 -> 50) and moved
+    # twelve of the 83 previews. The move therefore takes the excess off the
+    # separating axis and stops, which is the smallest answer that is true and
+    # leaves every other distance alone.
+    if mine == theirs:
+        return False
+    # ``sign`` points **at** the reference: ``-1`` when this side's coordinate
+    # is the larger one. The move is then ``+ sign * excess`` — toward the
+    # reference by exactly the overshoot. It reads ``mine + sign * excess`` and
+    # not the other way round; the 116 draft's third bug had it reversed, which
+    # walked 088's ``D1`` and the flyback's ``R15`` steadily *away* from what
+    # they were supposed to hug — ``R15`` -455 -> -550 -> -740 -> -1120 — and
+    # ran the round budget out with a pair 200,000 units apart.
+    sign = -1.0 if mine > theirs else 1.0
+    return _shift_origin(ctx, walking, index, mine, mine + sign * excess, origins)
+
+
+def _order_asks(kind: str, own: bool) -> tuple[int, float]:
+    """``(axis, sign)`` that tells **the checker** this side wants for ``kind``.
+
+    Read straight off :func:`_relation_holds` rather than off a hand-written
+    table, so this can never disagree with the ruler that will judge the move.
+    Concretely: put the walking side one step in each direction along the
+    order's axis and ask the checker which one it accepts.
+
+    There is already a function shaped like this in the module,
+    :func:`_order_wanted`, and 116 does **not** call it, for a reason worth
+    recording. That function is 115(1)'s, and it returns the sign 115's own
+    docstring says it returns: ``left-of``'s subject gets ``+x``. The checker
+    reads ``left-of`` as "the subject's x is the **smaller** one", so the two
+    are opposite on the horizontal kinds and agree on the vertical ones
+    (``above``/``below``) — which is exactly the one kind 115(1) had a real
+    case for, so the disagreement never showed. Measured, not guessed:
+
+        left-of   _order_wanted subject sign=+1   checker holds=False
+        right-of  _order_wanted subject sign=-1   checker holds=False
+        above     _order_wanted subject sign=+1   checker holds=True
+        below     _order_wanted subject sign=-1   checker holds=True
+
+    Changing that function would rewrite 115(1)'s path, and this batch's byte
+    gate is the reason to leave anything that already ships alone. So 116
+    derives its own sign from the checker, and the honest summary records the
+    latent disagreement as 116's finding rather than silently working around a
+    bug it inherited.
+    """
+    axis = 0 if kind in (LEFT_OF, RIGHT_OF) else 1
+    origin = (0.0, 0.0)
+    for sign in (1.0, -1.0):
+        probe = [0.0, 0.0]
+        probe[axis] = sign * 10.0
+        points = (tuple(probe), origin) if own else (origin, tuple(probe))
+        if _relation_holds(
+            kind, points, grid=1.0, near_limit=300.0,
+            lateral=(0.0, 1.0), progress=(1.0, 0.0),
+        ):
+            return axis, sign
+    return axis, 1.0
+
+
+def _shared_net_of(ctx: _Context, here: str, there: str) -> str:
+    """The net this pair is measured on, or ``""`` when they share none.
+
+    The same first net :func:`_points_for_relation` picks, so the coordinate
+    this pass moves is the coordinate the gate measures.
+    """
+    common = sorted(
+        set(_part_nets(ctx.circuit, here).values())
+        & set(_part_nets(ctx.circuit, there).values())
+    )
+    return common[0] if common else ""
+
+
+def _pose_can_say(
+    ctx: _Context,
+    item: Any,
+    walking: str,
+    reference: str,
+    poses: Mapping[str, SymbolPose],
+    origins: Mapping[str, tuple[float, float]],
+    pose_index: int = 0,
+) -> bool:
+    """Would the pose ladder place this pair correctly under some pose?
+
+    The pose-first gate, and the whole of 115①'s lesson as it applies here. It
+    asks the **accepted** pose set — the poses :func:`_accepted_poses` already
+    filtered to the legal ones — so "some pose exists" means "some pose this
+    compiler would actually draw", the same ruler 115① reads.
+
+    **An order kind cannot be answered by re-posing a part, and that is the
+    correction this function exists to record.** A first version tried it
+    anyway: it put each end under each accepted pose, re-measured the relation,
+    and asked the checker. That can never succeed, and the reason is structural
+    rather than a slip — :func:`_points_for_relation` measures an order kind
+    between the two **origins**, and a pose moves pins, not origins. All eight
+    of 098's ``U1`` poses measured identically and the gate answered "no pose
+    can say this", so the pass moved four branches onto ``U1``'s own column
+    (``C1`` 290 -> -5, ``C2`` 170 -> -5, ``C4`` -170 -> 5, ``X1`` 230 -> -5)
+    and moved three of the 83 previews.
+
+    So the question is not "would this pose satisfy the relation" but **"would
+    the placement under this pose put the pair on the right side"** — and the
+    placement follows the owner's **pin direction**, which is what
+    :func:`_branch_offset_direction` reads. That is 115①'s own
+    :func:`_a_pose_says` criterion, generalised from the owner's poses to either
+    end's. In 098 the ``pose-variant=1`` rungs mirror ``U1``, so *all* of
+    ``left-of(C1,U1)``, ``left-of(C2,U1)``, ``right-of(C4,U1)`` and
+    ``left-of(X1,U1)`` point away from what ``U1``'s pads say; the unmirrored
+    poses say all four, the pose ladder was about to find them on its own, and
+    answering first is exactly the byte 114 lost and 115 had to be rewritten to
+    avoid.
+
+    A same-line or ``near`` kind *is* measured on pins, so those two keep the
+    direct test; only the order kinds need this reading.
+    """
+    if item.kind in (SAME_ROW, SAME_COLUMN, NEAR):
+        rungs = {0, pose_index}
+        for posing in (walking, reference):
+            accepted = ctx.accepted.get(posing, ())
+            for rung in sorted(rungs):
+                if rung >= len(accepted):
+                    continue
+                points = _points_under(
+                    ctx, item, posing, accepted[rung], poses, origins)
+                if _relation_holds(
+                    item.kind, points,
+                    grid=ctx.budget.grid, near_limit=ctx.budget.near_limit,
+                    lateral=ctx.lateral(), progress=ctx.progress,
+                ):
+                    return True
+        return False
+    return _a_pin_pose_says(ctx, item, walking, reference, pose_index)
+
+
+def _a_pin_pose_says(
+    ctx: _Context,
+    item: Any,
+    walking: str,
+    reference: str,
+    pose_index: int,
+) -> bool:
+    """Does some pose the **ladder actually explores** point this order's way?
+
+    The generalisation of 115①'s :func:`_a_pose_says` from "the owner's poses"
+    to "either end's poses", and it asks the same thing: does that symbol's
+    **own pad** already leave in the direction the relation names. If it does,
+    the per-owner placement (which follows the pad, not the relation) would have
+    put the part on the right side, so the pose ladder has an answer coming and
+    this pass must not pre-empt it.
+
+    **Only the poses in the ladder's own rungs count** (``pose_index`` 0 and 1,
+    the two :func:`_variants` generates). A first version asked the whole
+    accepted set, and a core with four rotations has one that happens to point
+    the relation's way while the compilation only ever draws rungs 0 and 1 —
+    so the gate stood aside on the flyback's real ``right-of(C1, U1)`` and the
+    pass left the branch exactly where the grammar said it must not be. The
+    question is not "does some rotation exist" but "does a rotation this
+    compiler is going to draw exist".
+
+    The pad asked about is the one the placement follows — see
+    :func:`_order_probe_pads` for why it is never the walking part's own pads
+    and never a chain reference's.
+    """
+    index, sign = _order_asks(item.kind, walking == item.subject)
+    rungs = {0, pose_index}
+    for posing, token in _order_probe_pads(ctx, item, walking, reference):
+        poses = ctx.accepted.get(posing, ())
+        for rung in sorted(rungs):
+            if rung >= len(poses):
+                continue
+            direction = _pin_direction(ctx, posing, token, {posing: poses[rung]})
+            if direction is not None and direction[index] * sign > 0.0:
+                return True
+    return False
+
+
+def _order_probe_pads(
+    ctx: _Context,
+    item: Any,
+    walking: str,
+    reference: str,
+) -> list[tuple[str, str]]:
+    """The ``(part, pad)`` pairs a pose could speak this order through.
+
+    Two sources, both of them pads that actually **drive a placement**:
+
+    * the walking part's **owner's** shared pad — what
+      :func:`_branch_offset_direction` reads to decide which way that branch
+      goes, which is 115①'s own subject;
+    * the shared net's pad **on the walking part itself**, when the walking
+      part is itself a branch that another part hangs off — the same
+      "a branch is placed from its owner's pad" statement one level down.
+
+    Two things are deliberately **not** asked, and both were bugs in the
+    versions before this one:
+
+    * the walking part's own pads, when it is placed from its owner. ``C10``'s
+      pad 2 leaves upward, so ``below(C10, U5)`` read as "a pose already says
+      it" and ``C10`` never moved — while ``C10``'s placement is decided by
+      ``T1``'s pad, not its own. Asking a part whether it points the right way
+      says nothing about where the compiler will put it.
+    * the **reference's** pads, when the reference is a chain part. ``U5``'s
+      ``COMP`` pad leaves downward and so "said" ``below(C10, U5)`` — but
+      ``U5`` is on the page's spine and no pose of it will ever put ``C10``
+      anywhere. A chain part's pose is fixed by the variant, not chosen to
+      satisfy a branch's order, and asking it concedes the one thing 114 lost
+      098 scene 08 over.
+    """
+    pads: list[tuple[str, str]] = []
+    slot = ctx.slots.get(walking)
+    if slot is None:
+        return pads
+    if slot.owner:
+        token = _shared_token(ctx, slot)
+        if token:
+            pads.append((slot.owner, token))
+    if slot.kind == "branch" and slot.owner:
+        owner_slot = ctx.slots.get(slot.owner)
+        if owner_slot is not None and owner_slot.kind == "branch":
+            shared = _shared_net_of(ctx, walking, reference)
+            token = _token_on(ctx.circuit, walking, shared) if shared else ""
+            if token:
+                pads.append((walking, token))
+    return pads
+
+
+def _points_under(
+    ctx: _Context,
+    item: Any,
+    posing: str,
+    pose: SymbolPose,
+    poses: Mapping[str, SymbolPose],
+    origins: Mapping[str, tuple[float, float]],
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """The two measured points of ``item`` with ``posing`` under one pose.
+
+    Every other part keeps the pose the current variant drew: the question is
+    whether turning *this one* part to that pose would satisfy the relation,
+    not whether a whole re-search would. ``posing`` is whichever end of the
+    pair the caller is trying, which is why the two ends are both worth asking
+    — see :func:`_pose_can_say`.
+    """
+    shared = _shared_net_of(ctx, item.subject, item.object)
+    under = dict(poses)
+    under[posing] = pose
+    here = _pin_point(
+        ctx, item.subject, _token_on(ctx.circuit, item.subject, shared),
+        under, origins)
+    there = _pin_point(
+        ctx, item.object, _token_on(ctx.circuit, item.object, shared),
+        under, origins)
+    if item.kind in (SAME_ROW, SAME_COLUMN, NEAR) and here and there:
+        return (here, there)
+    return (origins[item.subject], origins[item.object])
 
 
 def _tap_junction(

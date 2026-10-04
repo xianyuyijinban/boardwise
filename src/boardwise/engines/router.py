@@ -254,38 +254,94 @@ class _Router:
     ) -> list[tuple[float, float]] | None:
         """A cheapest orthogonal path from `start` to `goal` (or to any target).
 
-        Dijkstra over ``(node, arrival direction)`` so a turn can be priced, with
-        the stepping rules above. ``None`` means "not found inside the corridor
-        the caller gave", which is what the caller reports — never "no solution".
+        A* over ``(node, arrival direction)`` so a turn can be priced, with the
+        stepping rules above. ``None`` means "not found inside the corridor the
+        caller gave", which is what the caller reports — never "no solution".
+
+        **The heuristic is what keeps this from being pathological** (116's
+        performance post-mortem). Plain Dijkstra expands every state whose cost
+        is at or below the answer, and the answer is roughly the Manhattan
+        distance between the two pins — so the work is the *area of a diamond*
+        around the route, over the whole page corridor. On the flyback page that
+        is 52,800 lattice points × 4 arrival directions, and two of the nets
+        116's order pass moved far enough to need a long detour took **98s and
+        39s** each: 432s of a 433s compile, 1.57 billion function calls, with
+        :meth:`_crossing` and :meth:`_step_free` rescanning every box and every
+        foreign edge for every one of those states. The search was not wrong,
+        it was quadratic in the page.
+
+        The heuristic is the **Manhattan distance in lattice steps to the
+        nearest goal**, in the same unit as an edge (one step costs 1.0), and a
+        turn or a crossing only ever *adds* cost. That makes it admissible: it
+        never overestimates, so A* still returns a path of the **same optimal
+        cost** Dijkstra would — the same cheapest wire, not merely a cheap one.
+        Expansion is now confined to the corridor around the optimal path rather
+        than the whole page, which is the whole of the difference. The five
+        existing grammars' 83 previews are byte-identical before and after
+        (``tools/116_zero_move.py``), which is the check that a tie did not
+        quietly reroute a wire.
         """
-        goals = {self.node(point) for point in (targets or [goal])}
+        goal_nodes = {self.node(point) for point in (targets or [goal])}
         start_node = self.node(start)
-        if start_node in goals:
+        if start_node in goal_nodes:
             return [self.point(start_node)]
-        frontier: list[tuple[float, int, tuple[int, int], int]] = []
+        nearest = _nearest(goal_nodes)
+
+        def estimate(node: tuple[int, int]) -> float:
+            return float(
+                abs(node[0] - nearest[0]) + abs(node[1] - nearest[1])
+            )
+
+        # Per-**call** memo of the two geometry answers the inner loop asks for
+        # at every node. It is per call on purpose: ``self.edges`` is rebuilt and
+        # appended to as each net is routed (``_set_foreign_edges``), so an
+        # answer cached on the instance would be stale for the next net. Within
+        # one search the foreign wires do not move, so the answer cannot change
+        # and is asked for up to four times per node (once as ``other`` for each
+        # of its neighbours, once as ``node`` on the way out).
+        crossings: dict[tuple[int, int], tuple[int, int] | None] = {}
+        walls: dict[tuple[int, int], bool] = {}
+
+        def crossing_at_node(node: tuple[int, int]) -> tuple[int, int] | None:
+            if node not in crossings:
+                crossings[node] = self._crossing(node)
+            return crossings[node]
+
+        def wall_at_node(node: tuple[int, int]) -> bool:
+            if node not in walls:
+                walls[node] = self._wall(node)
+            return walls[node]
+
+        # The heap carries ``(f, counter, node, arrived, g)``: the A* priority
+        # and the real cost both, so a stale entry is recognised by comparing its
+        # own ``g`` with the ``g`` table rather than by re-deriving anything.
+        frontier: list[tuple[float, int, tuple[int, int], int, float]] = []
         counter = 0
-        heappush(frontier, (0.0, counter, start_node, 4))
+        heappush(frontier, (estimate(start_node), counter, start_node, 4, 0.0))
         best: dict[tuple[tuple[int, int], int], float] = {(start_node, 4): 0.0}
         parent: dict[tuple[tuple[int, int], int], tuple[tuple[int, int], int]] = {}
         steps = ((1, 0), (-1, 0), (0, 1), (0, -1))
         while frontier:
-            cost, _, node, arrived = heappop(frontier)
-            if node in goals:
-                return self._unwind((node, arrived), parent, start_node)
+            _, _, node, arrived, cost = heappop(frontier)
+            state_in = (node, arrived)
+            if best.get(state_in, math.inf) < cost - 1e-9:
+                continue  # superseded while this entry sat in the heap
+            if node in goal_nodes:
+                return self._unwind(state_in, parent, start_node)
+            here = crossing_at_node(node)
             for index, (dx, dy) in enumerate(steps):
                 other = (node[0] + dx, node[1] + dy)
-                if not self._in_bounds(other) or self._wall(other):
+                if not self._in_bounds(other) or wall_at_node(other):
                     continue
                 direction = index
                 if not self._step_free(node, other):
                     continue
                 moving = (1, 0) if dx != 0 else (0, 1)
-                here = self._crossing(node)
                 if here is not None and here == moving:
                     continue  # running along a foreign wire from inside it
                 if here is not None and arrived < 4 and direction != arrived:
                     continue  # a crossing may not be turned on
-                there = self._crossing(other)
+                there = crossing_at_node(other)
                 if there is not None and there == moving:
                     continue  # entering a foreign wire lengthwise
                 total = cost + 1.0
@@ -299,7 +355,8 @@ class _Router:
                 best[state] = total
                 parent[state] = (node, arrived)
                 counter += 1
-                heappush(frontier, (total, counter, other, direction))
+                heappush(frontier, (
+                    total + estimate(other), counter, other, direction, total))
         return None
 
     def _unwind(
@@ -314,6 +371,17 @@ class _Router:
             nodes.append(state[0])
         nodes.reverse()
         return [self.point(node) for node in nodes]
+
+def _nearest(nodes: set[tuple[int, int]]) -> tuple[int, int]:
+    """One of `nodes` to measure the heuristic against.
+
+    Any member is admissible — the Manhattan distance to *a* goal is a lower
+    bound on the distance to *the nearest* one — so this is a speed choice, not
+    a correctness one, and picking the first keeps the search deterministic
+    (two runs of one input must draw the same wire, 053 stage A).
+    """
+    return min(nodes)
+
 
 def _collinear_overlap(
     a: tuple[float, float],
