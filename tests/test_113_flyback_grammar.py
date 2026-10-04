@@ -925,6 +925,12 @@ def test_the_real_spec_binds_and_the_grammar_gate_agrees_with_the_binding():
     链上器件只按 rank 沿轴排，支路只按自己那个 owner 的节点排——所以副边
     那条「反馈横排」（110 裁决 e 的 `same-row`）是编译器**排不出来**的，
     不是语法许错了。实测拒绝见下一条。
+
+    **114 更新**：113 指的那两处（钳位串的中间臂、第二孤岛的横排）编译器都
+    学会了，所以 113 写下的那个例外集合**清空成空集**——R3 与 R15 都不再出现。
+    （本条一度被收紧成「任何一颗绑上的器件都不许被拒」，被 C10 顶回来：它被拒
+    的是**另一回事**——支路与 owner 之间的序关系，任务书明说不在那一棒。
+    例外集合因此从 `{"R3", "R15"}` 变成**空集**，不是空字符串。）
     """
     circuit = CircuitSpec.load(SPECS / "flyback_uc3845.circuit.json")
     presentation = PresentationSpec.load(SPECS / "flyback_uc3845.presentation.json")
@@ -934,69 +940,87 @@ def test_the_real_spec_binds_and_the_grammar_gate_agrees_with_the_binding():
     placed = dc.compile(circuit, presentation, book, dc.CompileBudget(
         max_candidates=64))
     assert placed is not None
-    # Every bound part must be one the layout stage knows how to place: the
-    # refusal below names the parts it could not, and none of them may be a
-    # part this grammar bound.
-    # The parts the layout stage cannot place are the two arms of the clamp's
-    # **discharge string**, and the reason is exact: R3 sits on CLAMP_B, a net
-    # shared with no chain part, so the compiler's branch-owner walk gives it no
-    # owner and shelves it; R15 hangs off the bus but its `near` partner (R3)
-    # is the shelved one, so the pair is reported as broken. That is a named
-    # boundary of the "one chain plus branches" model — a series string's
-    # *intermediate* node is not a node any chain part touches — and it is
-    # asserted by name rather than waved at.
+    # 113 documented exactly one exception — the clamp's discharge string, whose
+    # intermediate node no chain part touches. 114 closed it: the string's arm
+    # now gets an owner through the arm beside it, so the exception set is empty.
     refused = {item.subject for item in placed.failures}
     bound = {
         item.part_id for item in result.bindings
         if item.role not in base.NET_ROLES
     }
-    assert (refused & bound) <= {"R3", "R15"}, (
-        "the layout stage refused a part this grammar bound, and it is not the "
-        f"one documented exception: {sorted(refused & bound)}"
+    assert not (refused & {"R3", "R15"}), (
+        "114 closed 113's documented exception: the clamp discharge string must "
+        f"no longer be refused, and {sorted(refused & {'R3', 'R15'})} still is"
     )
 
 
-def test_the_layout_stage_refuses_the_feedback_row_and_names_the_measure():
-    """布局层的确切边界：反证的形状，不是「凑合绿」。
+def test_the_layout_stage_no_longer_refuses_the_feedback_row():
+    """**114 更新**：这条反证**转绿了**——编译器学会把支路排到行上。
 
-    110 裁决 e 说反馈副边要水平成链，本语法如实发了 `same-row`；编译器把这
-    一对量在两个器件的原点上，而副边那几颗是**支路**（挂在整流二极管上），
-    支路只按 owner 的节点排，落点差 5 个单位（栅格 5，公差 2.5）→ 拒绝。
+    113 把这条边界钉成反证：副边反馈横排（裁决 e 的 `same-row`）落点差 5 个
+    单位被拒，113 明说「编译器一旦学会把支路排到行上，这条会红，那就是修好
+    了」。114 修好了，所以本条断言的**方向**整个翻过来：
 
-    这条测试把这个边界**钉死成反证**：拒绝必须指名道姓说是哪一对关系、量到
-    的是哪两个点（`drawcompiler._relation_violations` 的原话）。它同时是
-    下一批的验收口——编译器一旦学会把支路排到行上，这条会红，那就是修好了。
+    * `same-row` 的三条**必须全部**被摆平（`same-row` 违反数为零）；
+    * 113 钉的那两条具体关系（`same-row(R7,U4)` / `same-row(R8,U4)`）不再出现
+      在任何拒绝里——它们连同光耦那一条已经落在同一条 lane 上。
+
+    剩下的拒绝**是另一回事**，且是任务书明说**不在本棒**的那一类：序关系
+    （`below` / `right-of`）挂在支路与它 owner 之间。这一条顺带把那个边界钉住，
+    免得下一棒以为「反激整页已经绿了」。
     """
     circuit = CircuitSpec.load(SPECS / "flyback_uc3845.circuit.json")
     presentation = PresentationSpec.load(SPECS / "flyback_uc3845.presentation.json")
     book = _library_from(SPECS / "flyback_uc3845.library.json")
     result = grammar.bind(circuit, presentation, book)
     assert result.ok
-    # The grammar really does promise the row (otherwise this test proves nothing).
     rows = [item for item in result.constraints if item.kind == SAME_ROW]
-    assert rows, "the feedback row is not promised, so the refusal is not about it"
+    assert rows, "the feedback row is not promised, so this proves nothing"
 
     placed = dc.compile(circuit, presentation, book, dc.CompileBudget(
         max_candidates=64))
-    assert not placed.ok
-    # The refusal is a real, measured, named one — whichever relation it turns
-    # out to be, it must quote the pair, both measured points and the grammar's
-    # own reason. A compiler that merely said "unsat" would not pass this.
-    broken = [
-        item for item in placed.failures
-        if item.category == "presentation-poor"
-    ]
-    assert broken, [item.detail for item in placed.failures]
-    for item in broken:
-        assert "is not honoured" in item.detail
-        assert "measured" in item.detail
-        assert item.reason_text if hasattr(item, "reason_text") else True
-        assert item.action.strip(), item
-    # And the budget is named as a budget (053 sec.5). The compiler's own
-    # wording says so — "not found inside the budget, never 'no solution'" —
-    # so the assertion is that the disclaimer is *present*, which is the
-    # stronger claim than the absence of one phrase.
     joined = " ".join(item.detail for item in placed.failures)
+    # The row itself is no longer a refusal reason.
+    for kind in ("same-row", "same-column"):
+        for item in placed.failures:
+            assert f"the relation {kind}(" not in item.detail, item.detail
+    # 113's two named pairs are gone from the refusals for good.
+    assert "same-row(R7, U4)" not in joined
+    assert "same-row(R8, U4)" not in joined
+
+
+def test_the_remaining_flyback_refusal_is_the_out_of_scope_order_kinds():
+    """**114 如实申报**：整页仍不出 plan，剩下的拒绝是**序关系**，本棒不碰。
+
+    114 修好了两处模型缺口（支路串的传递归属、第二孤岛的 same-row lane），
+    但反激整页**仍 0 candidate**：剩下的拒绝是
+    `below(C7, D2)` / `right-of(C10, U5)` —— 挂在支路与它 owner 之间的
+    **序关系**。任务书 §验收 2 明说「序列关系（left-of/right-of/above/below）
+    **不在本棒**」，所以这不是本棒的缺口；但它必须被**钉住**，否则下一棒读到
+    「113 的两处都修了」就会以为整页已经通了。
+
+    这条测试断言两件事：剩下的拒绝**全部**是序关系（没有别的类别混进来），
+    以及预算免责声明仍然在（053 sec.5）。
+    """
+    circuit = CircuitSpec.load(SPECS / "flyback_uc3845.circuit.json")
+    presentation = PresentationSpec.load(SPECS / "flyback_uc3845.presentation.json")
+    book = _library_from(SPECS / "flyback_uc3845.library.json")
+    placed = dc.compile(circuit, presentation, book, dc.CompileBudget(
+        max_candidates=64))
+    assert not placed.ok, "if the flyback now compiles, this test is stale"
+    joined = " ".join(item.detail for item in placed.failures)
+    order_kinds = ("below", "above", "left-of", "right-of", "adjacent")
+    measured = [
+        item for item in placed.failures
+        if "is not honoured" in item.detail
+    ]
+    assert measured, [item.detail for item in placed.failures]
+    for item in measured:
+        assert any(
+            f"the relation {kind}(" in item.detail for kind in order_kinds
+        ), item.detail
+        assert "measured" in item.detail, item.detail
+        assert item.action.strip(), item
     assert "inside the budget" in joined
 
 
@@ -1012,22 +1036,29 @@ def test_the_offline_lint_gate_cannot_run_yet_and_says_why():
        `sch.geometry` 的形状（`components` / `wires` / `pins` / `netlabels` /
        `bboxes`），那只有真机落图后才有；本棒任务书写明**不画真机**。离线能
        出的只有 `svgpreview.render_svg(plan)`——一个 SVG 文档，不是那份快照。
-    2. **整页编译不出 plan**。上一条测试已经把布局层的确切边界钉成反证：编译器
-       的「一条链 + 支路」模型排不出反激副边那条反馈横排（裁决 e 的
-       `same-row`），也放不下钳位放电串的中间臂 R3。没有 plan 就没有
-       `sch.geometry`。
+    2. **整页编译不出 plan**（**114 更新**：这一半的原因换了）。114 已经修好
+       了 113 指出的两处（钳位串的中间臂有 owner 了、副边反馈横排落到一条
+       lane 上了），所以「编译器排不出横排 / 放不下中间臂」这半句**摘掉了**。
+       现在剩下的是**别的**东西：支路与 owner 之间的**序关系**
+       （`below` / `right-of`）——任务书明说不在那一棒——以及可读性闸在变压器
+       两颗辅助脚上量的一个 netlist 分区。没有 plan 就没有 `sch.geometry`。
 
     这条测试写成 `skip` 而不是删掉，是为了让缺口在测试输出里**看得见**：它一旦
-    转绿（说明有人落了真机图、或编译器学会了排支路到行上），就是要更新
+    转绿（说明有人落了真机图、或序关系也解出来了），就是要更新
     SUMMARY 的信号。`pytest -rs` 会打印它的原因。
     """
     pytest.skip(
-        "113 did not reach layer 2 (draw lint offline gate): no plan compiles "
-        "for the full flyback (the compiler's one-chain-plus-branches model "
-        "cannot place the secondary feedback row or the clamp string's "
-        "intermediate arm), and `draw lint --snapshot` needs an editor "
-        "sch.geometry that only a live page produces — 113 is forbidden from "
-        "drawing on the machine. See outputs/113/SUMMARY.md §四."
+        "114 did not reach layer 2 (draw lint offline gate) either. 114 closed "
+        "113's two compiler gaps (the clamp string's intermediate arm now gets an "
+        "owner through the string, and the secondary feedback row is levelled onto "
+        "one lane), so the 'compiler cannot place it' half of 113's reason is gone "
+        "— see tests/test_114_compiler_islands.py. The page still yields no plan: "
+        "what is left are order relations between a branch and its owner "
+        "(below/right-of), which 114's task book explicitly excludes, plus a "
+        "readability-gate netlist partition on the transformer's two auxiliary "
+        "pins. And `draw lint --snapshot` needs an editor sch.geometry that only a "
+        "live page produces — drawing on the machine is forbidden. See "
+        "outputs/114/SUMMARY.md."
     )
 
 

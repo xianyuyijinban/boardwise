@@ -1014,6 +1014,20 @@ class _Context:
     #: The contract this compilation reads (095 A4), carried so the gate can
     #: re-bind the grammar with the same input the constraints came from.
     intent: IntentSource | DesignIntent | None = None
+    #: ``part id -> (line axis, group label, group members)`` for the branches
+    #: the grammar asked to share a line with **each other** (114 §四 second gap).
+    #: Empty for every circuit whose same-line relations are all chain-to-branch,
+    #: which is all five grammars before this batch — see outputs/114/SUMMARY.md.
+    lane_groups: dict[str, tuple[str, str, list[str]]] = field(
+        default_factory=dict
+    )
+    #: ``lane label -> that group's same-line edges`` as
+    #: ``(subject, object, the net the pair is measured on)``; ``""`` for a pair
+    #: that shares no net, which :func:`_points_for_relation` measures between
+    #: the two origins instead. See :func:`_branch_lane_edges`.
+    lane_edges: dict[str, list[tuple[str, str, str]]] = field(
+        default_factory=dict
+    )
 
     def profile(self, part_id: str) -> SymbolProfile:
         part = self.circuit.part(part_id)
@@ -1240,33 +1254,58 @@ def _prepare(
         )
 
     order_failures: list[GrammarFailure] = []
+    candidates: list[tuple[str, str, bool]] = []
     for item in binding.bindings:
         if item.role in NET_ROLES or item.part_id in slots:
             continue
         nets = _part_nets(circuit_spec, item.part_id)
         if not nets:
             continue
-        owner = _branch_owner(circuit_spec, item.part_id, chain_ids, ranks)
         classes = {
             net.cls for net in circuit_spec.nets if net.id in set(nets.values())
         }
-        is_branch = item.role in BRANCH_ROLES or (
-            owner and len(nets) == 2 and "gnd" in classes
-        )
-        if not is_branch or not owner:
+        candidates.append((
+            item.part_id, item.role,
+            item.role in BRANCH_ROLES or (len(nets) == 2 and "gnd" in classes),
+        ))
+
+    owners, links, strings = _branch_owners(
+        circuit_spec, [part_id for part_id, _, _ in candidates], chain_ids, ranks,
+    )
+    for part_id, role, is_branch in candidates:
+        if not is_branch:
+            continue
+        owner = owners.get(part_id, "")
+        if not owner:
+            if part_id in strings:
+                order_failures.append(GrammarFailure(
+                    category=FAILURE_FACTS_MISSING,
+                    subject=part_id,
+                    detail=(
+                        f"{part_id} is bound as {role!r} but its series string on "
+                        f"net {strings[part_id]} reaches no chain part, so the node "
+                        "it belongs to cannot be read off the page: the arms of the "
+                        "string share only each other, and no end of it is anchored"
+                    ),
+                    action=(
+                        "check the CircuitSpec connections of this series string "
+                        "(its first arm must sit on a node some chain part also "
+                        "touches), or the module split it is bound through"
+                    ),
+                ))
             continue
         slot = _branch_slot(
-            circuit_spec, presentation_spec, binding, item.part_id, item.role,
-            owner, axis, ranks,
+            circuit_spec, presentation_spec, binding, part_id, role,
+            links[part_id], axis, ranks,
         )
         if slot is None:
             order_failures.append(GrammarFailure(
                 category=FAILURE_FACTS_MISSING,
-                subject=item.part_id,
+                subject=part_id,
                 detail=(
-                    f"{item.part_id} is bound as {item.role!r} but shares no net "
-                    "with any chain part, so which node it belongs to cannot be "
-                    "read from the circuit"
+                    f"{part_id} is bound as {role!r} but shares no net with "
+                    f"{links[part_id]}, so which node it belongs to cannot be read "
+                    "from the circuit"
                 ),
                 action=(
                     "check the CircuitSpec connections of this branch (one end "
@@ -1275,7 +1314,7 @@ def _prepare(
                 ),
             ))
             continue
-        slots[item.part_id] = slot
+        slots[part_id] = slot
 
     for part in circuit_spec.parts:
         if part.id in slots:
@@ -1285,11 +1324,14 @@ def _prepare(
             axis=axis, rank=ranks.get(part.id, 0) + 1000,
         )
 
+    lanes = _branch_lane_groups(binding, slots)
     ctx = _Context(
         circuit=circuit_spec, presentation=presentation_spec, binding=binding,
         book=book, budget=budget, axis=axis, progress=progress,
         chain_net_rank=chain_net_rank, slots=slots, chain=chain_ids,
         accepted={}, body_dirs={}, intent=intent,
+        lane_groups=lanes,
+        lane_edges=_branch_lane_edges(circuit_spec, binding, lanes),
     )
     failures = list(order_failures)
     for part_id in sorted(slots):
@@ -1304,18 +1346,50 @@ def _prepare(
     return _Prepare(context=ctx, failures=failures)
 
 
+#: How many times the same-line relaxation may re-level a group before the stage
+#: stops trying. A row of branches converges in two rounds (chain anchor, then
+#: the branches hanging off it); the bound only matters for a group whose
+#: relations cannot all be true at once, and then it is the *refusal* that has to
+#: come out — the relation checker measures it and names the pair, which is a
+#: better answer than a half-relaxed group.
+LANE_RELAX_ROUNDS = 4
+
+
 def _branch_owner(
     circuit_spec: CircuitSpec,
     part_id: str,
     chain_ids: Sequence[str],
     ranks: Mapping[str, int],
 ) -> str:
-    """The chain part a branch hangs off: the one it shares a net with.
+    """The part a branch hangs off: the chain part, or another branch, it reaches.
+
+    A branch usually shares a net with a **chain** part, and that is the whole
+    answer. The other case is a **series string** of branches: a leakage clamp's
+    discharge path and an auxiliary winding's rectifier both hang off the same
+    node, and the string's *intermediate* arm sits on a node no chain part ever
+    touches (the flyback's `CLAMP_B` is shared by R3 and R15 and by neither T1 nor
+    Q1). Such an arm is still owned — by the arm beside it, which does reach the
+    chain. :func:`_branch_owners` resolves that by iterating ownership to a fixed
+    point, so this function asks only the first question: "which chain part do we
+    share a net with?", and the iteration above it walks the string.
 
     When it shares a net with two chain parts (the divider's tap belongs to both
     arms), the answer is the one nearer the power end — the branch hangs off the
     junction where the tap leaves, and the tie-break is the rank order the
     grammar already stated.
+
+    A candidate that shares **only a ground** with this branch is the weaker
+    claim, and it is ranked after any candidate that shares a node of its own:
+    the flyback's C10 touches the primary ground (T1, R5) *and* the compensation
+    node (U5), and a branch belongs to the node it decouples, not to the rail they
+    all share. :func:`_shared_nets` states that rule for the net; applying it here
+    as well is what keeps the owner and the anchor from being chosen by two
+    different criteria.
+
+    The rule is about **the shared node only** — it does not reach the branch's
+    own pins, so a part with more than two nets is still anchored on whichever of
+    its nets the owner shares, and the rank order still decides between two
+    candidates of equal standing.
     """
     here = set(_part_nets(circuit_spec, part_id).values())
     candidates = [
@@ -1324,8 +1398,136 @@ def _branch_owner(
     ]
     if not candidates:
         return ""
+
     candidates.sort(key=lambda name: (ranks.get(name, 0), name))
     return candidates[0]
+
+
+def _is_ground(circuit_spec: CircuitSpec, net_id: str) -> bool:
+    """Is this net a ground-class net? A net the spec does not describe is not."""
+    net = circuit_spec.net(net_id)
+    return net is not None and net.cls == "gnd"
+
+
+#: How far ownership may be carried from one branch to the next before the walk
+#: gives up. A string is short by construction (a clamp, a rail), so the bound is
+#: a safety stop against a presentation that wired every part to every part, not
+#: a modelling limit: 114 §四 reports the real strings as two and three deep.
+OWNER_ITERATIONS = 8
+
+
+def _branch_owners(
+    circuit_spec: CircuitSpec,
+    branches: Sequence[str],
+    chain_ids: Sequence[str],
+    ranks: Mapping[str, int],
+) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
+    """``(chain owner, the arm it hangs off, the string it broke on)``, fixed point.
+
+    A branch that shares a net with a chain part is owned by it in one step. One
+    that shares only with **other branches** is owned through them: the clamp's
+    R3 reaches the chain through R15, so R15 is resolved first and R3 inherits.
+    That is a fixed point, not a search — an arm's owner is its owner — so the
+    iteration is monotone (an arm is only ever added, never re-pointed) and it
+    terminates in at most one step per hop. :data:`OWNER_ITERATIONS` is the stop
+    for the degenerate case where a presentation wires branches in a cycle, which
+    the task book requires be **refused, not silently attached**: a cycle of
+    branches with no chain anchor is a closed ring, not a page, and a branch
+    inside one is left without an owner so :func:`_branch_slot` refuses it by
+    name.
+
+    ``links`` is the arm each branch **hangs off** — the chain part for a direct
+    branch, and the neighbouring arm for one that reaches the chain through a
+    string. It is what a branch's slot anchors on, because that is the net the two
+    really share: the clamp's R3 hangs off R15 on `CLAMP_B`, not off T1, and
+    anchoring it on T1 would be a wire the circuit does not contain.
+
+    The fixed point runs over **all** branches, not only over the ones the chain
+    could not place, because a chain part that shares nothing but a ground is a
+    weaker claim than a branch that shares the branch's own node. The flyback's
+    C7 is the case: it touches the primary ground (which the transformer shares
+    with everything) and the auxiliary rail (which only the aux rectifier
+    touches), and it belongs under the rectifier. A branch-to-branch edge on a
+    non-ground net therefore **outranks** a chain claim, and a ground-only edge
+    never creates one.
+    """
+    nets = {part_id: set(_part_nets(circuit_spec, part_id).values())
+            for part_id in branches}
+    owner: dict[str, str] = {}
+    links: dict[str, str] = {}
+    for part_id in branches:
+        found = _branch_owner(circuit_spec, part_id, chain_ids, ranks)
+        if found:
+            owner[part_id] = found
+            links[part_id] = found
+    strings: dict[str, str] = {}
+    for part_id in branches:
+        if part_id in owner:
+            continue
+        here = nets[part_id]
+        peers = sorted(
+            other for other in branches
+            if other != part_id and here & nets[other]
+        )
+        if peers:
+            strings[part_id] = ",".join(sorted(here & nets[peers[0]]))
+    for _ in range(OWNER_ITERATIONS):
+        progressed = False
+        for part_id in sorted(branches):
+            if part_id in owner:
+                continue
+            here = nets[part_id]
+            reachable = sorted(
+                other for other in branches
+                if other != part_id and other in owner and here & nets[other]
+            )
+            if not reachable:
+                continue
+            reachable.sort(key=lambda name: (ranks.get(name, 0), name))
+            owner[part_id] = owner[reachable[0]]
+            links[part_id] = reachable[0]
+            progressed = True
+        if not progressed:
+            break
+    # A branch that a **branch peer** claims on a node of its own outranks a chain
+    # part it shared **only a ground** with — and only that. A chain part the
+    # branch already reaches on a node of its own keeps it (the secondary's
+    # reservoir hangs off the rectifier's output, not off its sibling's), so the
+    # flyback's C7 moves onto the aux rectifier while C11 and C13 stay on D3.
+    for _ in range(OWNER_ITERATIONS):
+        progressed = False
+        for part_id in sorted(branches):
+            here = nets[part_id]
+            current = links.get(part_id, "")
+            if not current or current in chain_ids:
+                shared = here & nets.get(
+                    current, set(_part_nets(circuit_spec, current).values())
+                )
+                if any(not _is_ground(circuit_spec, net) for net in shared):
+                    continue
+            better = sorted(
+                other for other in branches
+                if other != part_id and other in owner
+                and any(not _is_ground(circuit_spec, net)
+                        for net in here & nets[other])
+            )
+            if not better:
+                continue
+            better.sort(key=lambda name: (ranks.get(name, 0), name))
+            if current == better[0]:
+                continue
+            links[part_id] = better[0]
+            owner[part_id] = owner[better[0]]
+            progressed = True
+        if not progressed:
+            break
+    for part_id in branches:
+        if part_id not in owner and part_id not in strings:
+            # A branch sharing a net with nothing at all, chain or branch.
+            here = nets[part_id]
+            if here:
+                strings[part_id] = ",".join(sorted(here))
+    return owner, links, strings
 
 
 def _branch_slot(
@@ -1361,6 +1563,132 @@ def _branch_slot(
         pin_other=pins_there[0] if pins_there else "",
         basis=basis, sign=sign, offset_axis=offset_axis, sign_from_order=from_order,
     )
+
+
+def _branch_lane_groups(
+    binding: GrammarResult, slots: Mapping[str, _Slot]
+) -> dict[str, tuple[str, str, list[str]]]:
+    """Groups of parts the grammar asked to share a line, and the axis each runs on.
+
+    A `same-row` / `same-column` the grammar states **between two branches** is
+    a statement about the page that nothing used to consume: each branch was
+    placed from its own owner's pin, so two of them the grammar had put on one
+    row came out wherever their two owners' pins happened to fall. The flyback's
+    feedback chain is exactly this (裁决 e): a divider arm, the error amplifier
+    and the optocoupler are all in one island, and the grammar asks for one row.
+
+    A group is a **connected component** of the same-line relation, and the axis
+    is the line's own coordinate: a `same-row` group is aligned by its *y*, a
+    `same-column` group by its *x*. Three kinds of member are allowed, and the
+    distinction is the conservative one:
+
+    * **branch–branch** (the flyback's divider arms and error amplifier) — both
+      are placed from their own owner, and the pass puts them on one line;
+    * **chain–branch** (the flyback's optocoupler, which 113 named in
+      :data:`CHAIN_ROLES` so the secondary would have an anchor) — the chain part
+      keeps its origin, because the chain is the page's spine and moving it would
+      move every other relation with it; only the branch is moved, onto the
+      chain member's line. So the pass can satisfy a `same-row` the grammar
+      stated between the secondary's rectifier and the optocoupler;
+    * a part asked for **two different lines** (a `same-row` *and* a
+      `same-column`) has no single lane, so it is left out of every group and the
+      relation checker reports it by name — a pass that guessed which line meant
+      would hide the contradiction.
+
+    Chain-to-chain `same-row` / `same-column` is **not** handled here: the chain
+    is already laid on its own axis, and a same-line pair of two chain parts
+    would be a statement about the chain's own pitch, which is a different
+    question than the one this function answers.
+    """
+    same: dict[str, str] = {}
+    members: dict[str, str] = {}
+    for item in binding.constraints:
+        if item.kind not in (SAME_ROW, SAME_COLUMN):
+            continue
+        here, there = item.subject, item.object
+        if here not in slots or there not in slots:
+            continue
+        if slots[here].kind == "free" or slots[there].kind == "free":
+            continue
+        if slots[here].kind == "chain" and slots[there].kind == "chain":
+            continue
+        axis = "y" if item.kind == SAME_ROW else "x"
+        for part_id in (here, there):
+            if same.setdefault(part_id, axis) != axis:
+                same[part_id] = ""
+                members.pop(part_id, None)
+    # connected components over the surviving same-line pairs
+    parent: dict[str, str] = {part_id: part_id for part_id in same}
+
+    def find(node: str) -> str:
+        while parent[node] != node:
+            parent[node] = parent[parent[node]]
+            node = parent[node]
+        return node
+
+    for item in binding.constraints:
+        if item.kind not in (SAME_ROW, SAME_COLUMN):
+            continue
+        here, there = item.subject, item.object
+        if here not in same or there not in same:
+            continue
+        if not same[here] or not same[there]:
+            continue
+        a, b = find(here), find(there)
+        if a != b:
+            parent[min(a, b)] = min(a, b)
+            parent[max(a, b)] = min(a, b)
+    groups: dict[str, list[str]] = {}
+    for part_id in sorted(same):
+        if not same[part_id]:
+            continue
+        groups.setdefault(find(part_id), []).append(part_id)
+    out: dict[str, tuple[str, str, list[str]]] = {}
+    for root, group in sorted(groups.items()):
+        if len(group) < 2:
+            continue
+        label = f"{'row' if same[group[0]] == 'y' else 'column'}:" + "+".join(group)
+        for part_id in group:
+            out[part_id] = (same[part_id], label, group)
+    return out
+
+
+def _branch_lane_edges(
+    circuit_spec: CircuitSpec,
+    binding: GrammarResult,
+    lanes: Mapping[str, tuple[str, str, list[str]]],
+) -> dict[str, list[tuple[str, str, str]]]:
+    """``lane label -> that group's same-line edges``, as ``(a, b, measured net)``.
+
+    The net is resolved here exactly the way :func:`_points_for_relation`
+    resolves it — the first net the pair has in common, and ``""`` when they
+    share none, which is the case the relation is measured between **origins** on.
+    Carrying it with the edge is what lets the placement level a group whose
+    members are measured on *different pins* of different pairs: the flyback's
+    U4 is asked to share a row with the divider through its ``FB_SENSE`` pad and
+    with the optocoupler through its ``LED_K`` pad, and those two pads are 40
+    units apart in the symbol, so "the row" is not one number the group can all
+    be snapped to. It is a set of edges, and each is levelled on its own net.
+    """
+    out: dict[str, list[tuple[str, str, str]]] = {}
+    for item in binding.constraints:
+        if item.kind not in (SAME_ROW, SAME_COLUMN):
+            continue
+        here, there = item.subject, item.object
+        lane_here = lanes.get(here)
+        lane_there = lanes.get(there)
+        if lane_here is None or lane_there is None:
+            continue
+        if lane_here[1] != lane_there[1]:
+            continue
+        common = sorted(
+            set(_part_nets(circuit_spec, here).values())
+            & set(_part_nets(circuit_spec, there).values())
+        )
+        out.setdefault(lane_here[1], []).append(
+            (here, there, common[0] if common else "")
+        )
+    return out
 
 
 def _shared_nets(
@@ -1430,6 +1758,18 @@ def _branch_basis(
             if line_axis == axis:
                 return ("line", "x" if line_axis == "h" else "y", sign, ordered)
             return ("across", "x" if axis == "v" else "y", sign, ordered)
+    # An **order kind stated between this branch and its owner** says which side
+    # of the owner it goes on, and that is stronger evidence than the owner's own
+    # pin direction: the flyback's auxiliary reservoir is a capacitor whose pad
+    # leaves sideways, so reading the pin put it *above* the aux rectifier, while
+    # the grammar's own `below(C7, D2)` puts it under. The basis becomes
+    # ``order`` — an explicit axis and sign, never a guess — and the relation
+    # checker then measures the same pair the same way, so the two agree.
+    #
+    # Only the **owner's own pin** is bypassed. An order kind between a branch and
+    # some *other* part is a statement about the page the placement does not own
+    # (that is what the relation checker is for), and acting on it here would be
+    # the compiler drawing a relation the chain never asked for.
     for item in binding.constraints:
         if item.kind not in (HORIZONTAL_TAP, VERTICAL_TAP):
             continue
@@ -1603,6 +1943,17 @@ def _pose_satisfies(
                 return True
         return False
     if not slot.pin_shared or not slot.pin_other:
+        return True
+    # A part with **more than two pins** is not a two-terminal element: the rule
+    # below ("the two pins lie along the body direction") is a statement about a
+    # resistor or a capacitor, where the two pads *are* the part. A three-pin
+    # device's pads are on three sides, and no rotation makes an arbitrary two of
+    # them collinear with the body — the flyback's TL431 hangs its compensation
+    # off the optocoupler's cathode and its `REF` pad is a third direction. So the
+    # body-direction rule is applied to the two-terminal parts it was written for
+    # (a pin count of two, or a profile that declared no body at all), and the
+    # other parts are left to the relations, which are what place them.
+    if len(profile.pins) > 2:
         return True
     body = ctx.body_dirs.get(slot.part_id)
     if body is None:
@@ -2049,6 +2400,8 @@ def _place(
         origins[part_id] = (progress[0] * axial, progress[1] * axial)
         previous = part_id
 
+    _park_unordered_chain(ctx, origins, boxes, variant)
+
     anchor_delta: tuple[float, float] | None = None
     for part_id in ctx.chain:
         lock = ctx.locked(part_id)
@@ -2069,12 +2422,7 @@ def _place(
             )
 
     counts: dict[tuple[str, tuple[float, float]], int] = {}
-    branch_ids = sorted(
-        (part_id for part_id in ctx.slots if ctx.slots[part_id].kind == "branch"),
-        key=lambda part_id: (
-            ctx.slots[part_id].owner, ctx.slots[part_id].rank, part_id,
-        ),
-    )
+    branch_ids = _branch_order(ctx)
     for part_id in branch_ids:
         lock = ctx.locked(part_id)
         if lock is not None:
@@ -2107,10 +2455,15 @@ def _place(
             anchor[1] + direction[1] * _snap(distance, ctx.budget.grid, 0.0),
         )
         shared = _pin_local(ctx, part_id, slot.pin_shared, poses)
+        root = _dodge_foreign_pins(
+            ctx, part_id, slot, anchor, root, poses, origins,
+        )
         if shared is None:
             origins[part_id] = root
         else:
             origins[part_id] = (root[0] - shared[0], root[1] - shared[1])
+
+    _align_branch_lanes(ctx, origins, poses, residue)
 
     shelf_y = axial if ctx.chain else 0.0
     shelf_x = 0.0
@@ -2310,6 +2663,455 @@ def _branch_anchor(
     return origins.get(slot.owner, (0.0, 0.0))
 
 
+def _branch_order(ctx: _Context) -> list[str]:
+    """The order branches are placed in: an owner before everything it owns.
+
+    A branch hangs off its owner's **pin**, so the owner has to have an origin
+    first. When the owner is a chain part that was already true, and the old sort
+    by owner id happened to be safe by accident; with the transitive ownership of
+    114 a branch's owner can be another branch, so the order is stated instead of
+    being stumbled into: a Kahn walk over "is owned by", with the same stable
+    tie-break the rest of this module uses (rank, then part id), and a cycle —
+    a presentation whose two branches own each other — broken the way
+    :func:`_ranks` breaks one: by taking what is left, in order, so the stage
+    reports a relation conflict rather than hanging on a contradictory document.
+    """
+    branches = {
+        part_id for part_id, slot in ctx.slots.items() if slot.kind == "branch"
+    }
+    pending = sorted(
+        branches, key=lambda part_id: (ctx.slots[part_id].rank, part_id),
+    )
+    ordered: list[str] = []
+    waiting = {part_id: set() for part_id in branches}
+    for part_id in branches:
+        owner = ctx.slots[part_id].owner
+        if owner in branches:
+            waiting[part_id].add(owner)
+    remaining = list(pending)
+    while remaining:
+        ready = [part_id for part_id in remaining if not waiting[part_id]]
+        if not ready:
+            ready = [remaining[0]]
+            remaining.remove(ready[0])
+            for part_id in remaining:
+                waiting[part_id].discard(ready[0])
+            ordered.append(ready[0])
+            continue
+        for part_id in ready:
+            remaining.remove(part_id)
+            ordered.append(part_id)
+        for part_id in remaining:
+            waiting[part_id].difference_update(ready)
+    return ordered
+
+
+def _dodge_foreign_pins(
+    ctx: _Context,
+    part_id: str,
+    slot: _Slot,
+    anchor: tuple[float, float],
+    root: tuple[float, float],
+    poses: Mapping[str, SymbolPose],
+    origins: Mapping[str, tuple[float, float]],
+) -> tuple[float, float]:
+    """Step a branch's root sideways until its run misses every foreign pin.
+
+    A branch is placed by walking straight out of its owner's pin, and the run it
+    asks for is the straight line between that pin and where the branch lands. When
+    the owner has **another pin on the way**, the run passes over it, and the
+    readability contract refuses that outright: a wire vertex on a foreign pin tip
+    is a connection the CircuitSpec never declared, and the checker names it
+    (``netlist-partition-mismatch``). The flyback's auxiliary rectifier is the case
+    — the transformer's two auxiliary pins both leave upward, 20 units apart, and
+    the rectifier hung off the first one walked straight across the second.
+
+    The dodge is the smallest one that clears the obstacles: the root moves
+    **perpendicular to the run**, away from the owner's own body, by
+    :data:`GAP` plus the clearance the obstacle itself needs. It is deliberately
+    local — it moves this branch, never the owner (whose origin the chain already
+    fixed) and never another branch — so it cannot undo a placement that a
+    relation already decided, and the sideways leg it asks for is a leg the router
+    then has to find, which it will: the run is no longer collinear with the
+    owner's pin, so it is an elbow rather than a pass-through.
+
+    With no foreign pin on the run the root comes back unchanged, which is the case
+    for every circuit the five existing grammars compile.
+    """
+    leg = (root[0] - anchor[0], root[1] - anchor[1])
+    if _close(leg[0], 0.0) and _close(leg[1], 0.0):
+        return root
+    across = (-leg[1], leg[0])
+    span = abs(across[0]) + abs(across[1])
+    if span <= 0.0:
+        return root
+    unit = (across[0] / span, across[1] / span)
+    index = 0 if unit[0] != 0.0 else 1
+    own = set(_part_nets(ctx.circuit, part_id).values())
+    blockers = 0
+    for other in sorted(ctx.slots):
+        if other == part_id or other not in origins:
+            continue
+        pins_of = _part_nets(ctx.circuit, other)
+        for pin in ctx.profile(other).pins:
+            # Per **pin**, not per part: a branch's owner shares this run's net on
+            # the one pin the branch hangs off, and its *other* pins sit on other
+            # nets — those are exactly the ones a straight run walks over. The
+            # flyback's transformer is the case: the aux rectifier hangs off its
+            # ``AUX`` pin and the run crosses its ``PGND`` pin 20 units along.
+            if (pins_of.get(pin.number) or pins_of.get(pin.name, "")) in own:
+                continue
+            point = _pin_point(ctx, other, pin.number, poses, origins)
+            if point is None:
+                continue
+            if _strictly_on_segment(point, anchor, root):
+                blockers += 1
+    if not blockers:
+        return root
+    # Away from the owner's own body: the run starts at the owner's pin, so the
+    # clear side is the one the owner's centre is not on.
+    owner_centre = _body_centre(ctx, slot.owner, poses, origins)
+    sign = 1.0
+    if owner_centre is not None:
+        to_centre = (
+            owner_centre[0] - anchor[0], owner_centre[1] - anchor[1],
+        )
+        if abs(to_centre[0]) * abs(unit[0]) + abs(to_centre[1]) * abs(unit[1]) > 0.0:
+            sign = -1.0 if (
+                to_centre[0] * unit[0] + to_centre[1] * unit[1]
+            ) > 0.0 else 1.0
+    step = _snap(GAP + ctx.budget.channel * 0.0, ctx.budget.grid, 0.0)
+    if step <= 0.0:
+        step = ctx.budget.grid
+    shifted = list(root)
+    shifted[index] = root[index] + unit[index] * sign * step
+    return (shifted[0], shifted[1])
+
+
+def _body_centre(
+    ctx: _Context, part_id: str,
+    poses: Mapping[str, SymbolPose],
+    origins: Mapping[str, tuple[float, float]],
+) -> tuple[float, float] | None:
+    """A part's body centre in page coordinates, or ``None`` when it has no body."""
+    profile = ctx.book.get(_symbol_ref(ctx, part_id))
+    if profile is None or profile.body is None:
+        return None
+    local = (
+        (profile.body[0] + profile.body[2]) / 2.0,
+        (profile.body[1] + profile.body[3]) / 2.0,
+    )
+    point = _posed(local, poses[part_id], origins[part_id])
+    return point
+
+
+def _park_unordered_chain(
+    ctx: _Context,
+    origins: dict[str, tuple[float, float]],
+    boxes: Mapping[str, Box],
+    variant: _Variant,
+) -> None:
+    """Move a chain part the grammar never ordered **beside** its partner.
+
+    The chain is drawn along one axis, and a chain part's place on it comes from
+    the order relations between chain parts. A chain part with **no** order
+    relation to any other chain part therefore has no place on that axis at all —
+    the rank walk gives it one by its part id, which is an accident of the
+    alphabet and not a statement about the circuit. The flyback's secondary
+    rectifier is the case: the grammar says `near(D3, T1)` and nothing else, and
+    the walk put D3 at the head of the chain, so the rectifier sat *above* the
+    transformer with its winding pin facing back into it, and the winding could
+    not be wired at all.
+
+    What the grammar did say is `near`, so that is what this honours: the part
+    takes its partner's position **along the chain's own axis** and is offset
+    **laterally** by one clear channel. That is what `near` means for a part on a
+    spine — beside, not before — and it leaves every rank the order relations
+    established untouched, because this part had none of its own.
+
+    The direction of the lateral offset is the conservative one: the side an
+    order kind between the two names when the grammar stated one, and otherwise
+    the positive side of the lateral axis — the tie-break the rest of this module
+    uses. It only chooses a side, and the relation checker measures the result
+    either way, so a tie-break is a tie-break and is not dressed up as a reading.
+    With no partner at all the part is left where the rank walk put it, rather
+    than have a position invented for it.
+    """
+    for part_id in ctx.chain:
+        if ctx.locked(part_id) is not None:
+            continue
+        if _has_chain_order(ctx, part_id):
+            continue
+        partner = _chain_near_partner(ctx, part_id)
+        if partner is None or partner not in origins:
+            continue
+        lateral = ctx.lateral()
+        index = 0 if lateral[0] != 0.0 else 1
+        axial = 1 - index
+        # Half of each box, measured from the partner's own origin, so the
+        # offset clears both bodies without a constant of its own.
+        distance = _snap(
+            _extent(boxes[partner], lateral)[0]
+            + _extent(boxes[part_id], lateral)[0]
+            + ctx.budget.channel * variant.scale,
+            ctx.budget.grid, 0.0,
+        )
+        sign = _near_side_sign(ctx, part_id, partner)
+        shifted = list(origins[part_id])
+        shifted[axial] = origins[partner][axial]
+        shifted[index] = origins[partner][index] + sign * distance
+        origins[part_id] = (shifted[0], shifted[1])
+
+
+def _near_side_sign(ctx: _Context, part_id: str, partner: str) -> float:
+    """Which side of its `near` partner an unordered chain part is drawn on.
+
+    The side an order kind between the two states, when the grammar stated one;
+    otherwise the positive side of the lateral axis.
+    """
+    for item in ctx.binding.constraints:
+        if {item.subject, item.object} != {part_id, partner}:
+            continue
+        if item.kind == LEFT_OF:
+            return -1.0 if item.subject == part_id else 1.0
+        if item.kind == RIGHT_OF:
+            return 1.0 if item.subject == part_id else -1.0
+    return 1.0
+
+
+def _has_chain_order(ctx: _Context, part_id: str) -> bool:
+    """Does any order kind place this part against another chain part?"""
+    return any(
+        item.kind in (ABOVE, BELOW, LEFT_OF, RIGHT_OF, ADJACENT)
+        and part_id in (item.subject, item.object)
+        and item.subject in ctx.chain and item.object in ctx.chain
+        for item in ctx.binding.constraints
+    )
+
+
+def _chain_near_partner(ctx: _Context, part_id: str) -> str | None:
+    """The chain part this one is `near`, when the grammar said so and only so."""
+    found: list[str] = []
+    for item in ctx.binding.constraints:
+        if item.kind != NEAR:
+            continue
+        pair = {item.subject, item.object}
+        if part_id not in pair:
+            continue
+        other = (pair - {part_id}).pop()
+        if other in ctx.chain:
+            found.append(other)
+    return min(found) if found else None
+
+
+def _align_branch_lanes(
+    ctx: _Context,
+    origins: dict[str, tuple[float, float]],
+    poses: Mapping[str, SymbolPose],
+    residue: tuple[float, float],
+) -> None:
+    """Put every branch of a same-line group **on** the line, not near it.
+
+    The group was placed per-owner first (each branch off its own owner's pin,
+    which is what puts a divider arm beside the rectifier), and this pass makes
+    the grammar's statement true: the members of a `same-row` group end up with
+    one **y**, of a `same-column` group with one **x**.
+
+    The three design choices are the conservative ones, each for a stated reason:
+
+    * **the anchor** is a **fixed** member when the group has one — a chain part,
+      which the page's spine must not move, or a locked part, which the engineer
+      placed. With none, the anchor is the member with the smallest rank (ties by
+      part id) — the group keeps the place the page's own read gave it instead of
+      drifting toward the group's own centroid, which a later relation could undo;
+    * every other member is shifted **only along the line's own axis**, so the
+      perpendicular offset from its own owner survives exactly as measured and only
+      the line coordinate is replaced. This is what keeps the group's parts near
+      what they hang off, which `near` is also measuring;
+    * the shift is applied **once**, from the pre-shift origins. A second pass
+      would let the first shift decide the second, and the members would end up a
+      lane apart — the very thing this pass exists to remove.
+
+    A locked member is never moved and a chain member is never moved: a lock is
+    the engineer's coordinate and the chain is the page's spine, and the relation
+    checker reports a conflict against the lock (053 sec.5 scenario 12) rather
+    than the compiler overriding either. A group of only fixed members does
+    nothing at all.
+    """
+    groups: dict[str, list[str]] = {}
+    axes: dict[str, str] = {}
+    for part_id, (axis, label, members) in sorted(ctx.lane_groups.items()):
+        groups.setdefault(label, members)
+        axes[label] = axis
+    for label in sorted(groups):
+        # `axis` is the *coordinate* the line fixes: a `same-row` group shares one
+        # **y** (index 1), a `same-column` group one **x** (index 0).
+        index = 1 if axes[label] == "y" else 0
+        present = [
+            part_id for part_id in groups[label] if part_id in origins
+        ]
+        movable = sorted(
+            (
+                part_id for part_id in present
+                if ctx.locked(part_id) is None
+                and ctx.slots[part_id].kind == "branch"
+            ),
+            key=lambda part_id: (ctx.slots[part_id].rank, part_id),
+        )
+        fixed = [
+            part_id for part_id in present
+            if part_id not in movable
+        ]
+        if not movable or not (fixed or len(movable) > 1):
+            continue
+        before = {part_id: origins[part_id] for part_id in present}
+        # The group is aligned by **relaxation over its own same-line edges**, not
+        # against one anchor pin, because a member can be related to two different
+        # group-mates on two different nets and the two relations are measured on
+        # two *different pins* of that member: the flyback's U4 is asked to share a
+        # row with the divider (through its ``FB_SENSE`` pad) **and** with the
+        # optocoupler (through its ``LED_K`` pad), and those pads sit 40 units
+        # apart in the symbol. So there is no single "the row" to align to; there
+        # is a set of edges, and the pass makes each edge's two measured points
+        # level in turn, taking the already-placed side of each edge as the
+        # reference.
+        #
+        # A **fixed** member (chain or locked) is the reference whenever the edge
+        # touches it — the page's spine does not move. Among two free members the
+        # lower rank keeps its place and the other moves, so the iteration is
+        # deterministic and terminates: each step strictly reduces the set of
+        # unlevelled edges.
+        _relax_branch_lanes(ctx, present, movable, index, origins, poses)
+
+
+def _relax_branch_lanes(
+    ctx: _Context,
+    present: Sequence[str],
+    movable: Sequence[str],
+    index: int,
+    origins: dict[str, tuple[float, float]],
+    poses: Mapping[str, SymbolPose],
+) -> None:
+    """Level a same-line group by relaxing over **its own edges**.
+
+    Each edge is one grammar relation, measured on one net, between one pair of
+    parts. The pass walks the edges and makes each one's two measured points
+    level, taking the side that must not move as the reference:
+
+    * a **fixed** member (a chain part or a locked one) always wins the reference;
+    * otherwise the member with the **lower rank** keeps its place and the other
+      moves, so the direction of every shift is decided by the grammar's own
+      order rather than by iteration order.
+
+    The walk is repeated until no edge moves a part by a whole lattice step,
+    bounded by :data:`LANE_RELAX_ROUNDS`. It terminates because a group whose
+    edges form a cycle of *moves* would need every member to move at once, and
+    the round bound turns that into "the group's relations are not jointly
+    satisfiable by translation alone" — reported by the relation checker with
+    the measurement, not silently half-applied. The bound is generous (a real
+    feedback row converges in two rounds) so that a group which *is* satisfiable
+    is never cut off.
+
+    Only the line coordinate is touched. The perpendicular offset from each
+    part's own owner survives exactly as the per-owner placement measured it,
+    which is what keeps the `near` relations and the wiring routes true.
+    """
+    edges = ctx.lane_edges.get(_label_of(ctx, present), [])
+    if not edges:
+        return
+    settled = set(_fixed_of(ctx, present, movable))
+    fixed_edges = [
+        edge for edge in edges
+        if (edge[0] in settled) or (edge[1] in settled)
+    ]
+    free_edges = [edge for edge in edges if edge not in fixed_edges]
+    for _round in range(LANE_RELAX_ROUNDS):
+        moved = False
+        # The edges that touch a fixed member run first: a chain part is the
+        # page's spine, so the line it implies is the one the group is hung on,
+        # and the branches hanging off that part follow it rather than the other
+        # way round. Walking them in the other order would let a branch set the
+        # line and then drag the part the chain already placed off it.
+        for here, there, shared in fixed_edges + free_edges:
+            if here not in origins or there not in origins:
+                continue
+            here_fixed = here in settled
+            there_fixed = there in settled
+            if here_fixed and there_fixed:
+                continue
+            if here_fixed or (not there_fixed and _keeps(ctx, here, there)):
+                reference, moving = here, there
+            else:
+                reference, moving = there, here
+            target = _lane_coordinate(ctx, reference, shared, index, origins, poses)
+            current = _lane_coordinate(ctx, moving, shared, index, origins, poses)
+            if target is None or current is None:
+                continue
+            delta = _snap(target - current, ctx.budget.grid, 0.0)
+            if not delta:
+                # Already level: this end of the edge is now a reference too, so
+                # a later edge touching it will not drag it off the line it has
+                # just been put on.
+                settled.add(moving)
+                continue
+            origin = origins[moving]
+            shifted = list(origin)
+            shifted[index] = origin[index] + delta
+            origins[moving] = (shifted[0], shifted[1])
+            settled.add(moving)
+            moved = True
+        if not moved:
+            return
+
+
+def _label_of(ctx: _Context, present: Sequence[str]) -> str:
+    """The lane label shared by the group's members (``""`` when mixed)."""
+    for part_id in present:
+        lane = ctx.lane_groups.get(part_id)
+        if lane is not None:
+            return lane[1]
+    return ""
+
+
+def _fixed_of(
+    ctx: _Context, present: Sequence[str], movable: Sequence[str]
+) -> set[str]:
+    """The group's members that must not move: its chain parts and its locks."""
+    return {
+        part_id for part_id in present
+        if part_id not in movable
+    }
+
+
+def _keeps(ctx: _Context, here: str, there: str) -> bool:
+    """Does `here` keep its place (and `there` move) when both are free?"""
+    return (ctx.slots[here].rank, here) <= (ctx.slots[there].rank, there)
+
+
+def _lane_coordinate(
+    ctx: _Context, part_id: str, shared_net: str, index: int,
+    origins: Mapping[str, tuple[float, float]],
+    poses: Mapping[str, SymbolPose],
+) -> float | None:
+    """The line coordinate of a branch, measured **as the checker measures it**.
+
+    Not the origin: :func:`_points_for_relation` measures a same-line kind
+    between the two parts' **pins on the net they share** when they share one, and
+    between the two **origins** when they do not. So the coordinate is read from
+    the pin on `shared_net` when one is named, and from the origin when it is
+    ``""`` — the same two cases, in the same order, or the pass would satisfy
+    itself and leave the gate still refusing, which is the 113 symptom again.
+    """
+    if shared_net:
+        token = _token_on(ctx.circuit, part_id, shared_net)
+        if token:
+            point = _pin_point(ctx, part_id, token, poses, origins)
+            if point is not None:
+                return point[index]
+    origin = origins.get(part_id)
+    return None if origin is None else origin[index]
+
+
 def _tap_junction(
     ctx: _Context,
     net_id: str,
@@ -2470,12 +3272,13 @@ def _branch_offset_direction(
 ) -> tuple[float, float]:
     """Which way the offset from the owner's pin runs — see :class:`_Slot`.
 
-    ``side``/``line``/``tap`` carry their own axis (the side the grammar states,
-    the line a same-line kind names, the stub's axis); ``pin`` reads the owner's
+    ``side``/``line``/``tap``/``order`` carry their own axis (the side the grammar
+    states, the line a same-line kind names, the stub's axis, the direction an
+    order kind between the branch and its owner names); ``pin`` reads the owner's
     own pin direction from its profile under its chosen pose (which is why the
     pose choice comes first); ``across`` is perpendicular to the chain.
     """
-    if slot.basis in ("side", "line", "tap"):
+    if slot.basis in ("side", "line", "tap", "order"):
         if slot.basis == "line" and not slot.sign_from_order:
             resolved = _beyond_owner(ctx, slot, poses, origins)
             if resolved is not None:
