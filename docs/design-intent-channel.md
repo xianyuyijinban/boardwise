@@ -99,7 +99,7 @@
 | A2a | 审查规则（params） | 冲突时按 intent 给**方向**：该位号有 `decisions[].value` → 建议改料号/重选件（按 provenance 分级语气）；没有 → 双向列出 + `intent-missing` 点名 `decisions[].value` | 发现→修复依据（**已落地，091**，见 `tests/test_091_intent_direction.py`） |
 | A2b | 审查规则（额定/降额）+ 报告接线 | rail 声明进「耐压 vs 轨压」与「LDO 耗散」两条规则；`checkup` 把合同传进规则走查（A2a 落地记录的「未接线」已补） | **已落地，092**，见 `tests/test_092_rail_ratings.py` 与 §七 |
 | A3 | 架构自洽检查器 | 信号链闭合规则（采样链必须有偏置/参考、开漏必须有上拉、单端 ADC 不许直吃双极性信号……第一批 5–8 条，全部来自真案例）；**分级框架**：违反 `user_stated` = ERROR、违反 `ai_asserted`/`verified_recipe` = WARN、无合同零移动、结构性闭合直接 WARN | **A3a/A3b 均已落地，093/094**，见 `tests/test_093_arch_closure.py`、`tests/test_094_sense_bias.py` 与 §八/§九；F2（nFAULT 无上拉）、F3（NRST 裸奔）由规则复现，F1（采样链偏置不闭合）进 A3b：偏置**算术**判定 + 合同 `closure: "waived"` 豁免通道，且合同接进 `draw/edit apply` 的 findings 走查 |
-| A4 | 绘制侧 | 语法绑定消费 blocks/decisions（TVS/bulk 角色、支路顺序、模块清单由 intent 推出） | **支路顺序部分已落地（095：power-entry 首吃）**——`branchOrder` > intent > 位号序三来源，冲突并列双源原文拒绝，`dc.compile(..., intent=None)` 可选缝 + CLI `draw compile/plan --intent PATH`；**核心哪个件也由合同读（098：ic-periphery）**——`blocks[].parts` 里唯一的 >2 脚件就是这一组的核心，声明 > 合同 > 结构三来源、冲突并列原文；**未落地**：模块清单与 flow 由 blocks 推出的提案器（见下） |
+| A4 | 绘制侧 | 语法绑定消费 blocks/decisions（TVS/bulk 角色、支路顺序、模块清单由 intent 推出） | **支路顺序部分已落地（095：power-entry 首吃）**——`branchOrder` > intent > 位号序三来源，冲突并列双源原文拒绝，`dc.compile(..., intent=None)` 可选缝 + CLI `draw compile/plan --intent PATH`；**核心哪个件也由合同读（098：ic-periphery）**——`blocks[].parts` 里唯一的 >2 脚件就是这一组的核心，声明 > 合同 > 结构三来源、冲突并列原文；**提案器已落地（109：`draw propose`）**——intent 文档**一次**变成一份 `PresentationSpec` 草稿（模块清单 + flow + 角色分工），草稿走与手写规格**同一个**封闭 schema、正确性仍由既有编译链裁决，详见 §十一 |
 
 ## 四、通往「毕设水平」的全程路线（A 主线之后的 backlog，记档）
 
@@ -388,3 +388,36 @@ A1–A3 让 intent 成了**审查**的事实源；A4 让它成为**绘制**的�
    `<home>/design-intent/<projectUuid>.json` 够不着——编译发生在读工程之前，那时没有 uuid
    （`draw plan --page` 的 projectUuid 是编译之后才知道的）。要把默认落点接上，得把编译
    挪到 live context 之后，那是改 054 流程的活，留记录。
+
+## 十一、A4 提案器落地记录（109 批，见 `tests/test_109_intent_proposer.py`）
+
+§十.8① 的提案器落地：**intent 文档一次变成一份 `PresentationSpec` 草稿**（模块清单 + flow
++ 角色分工），而不是让每条语法各自去合同里翻。落点 `engines/intentproposer.py`，CLI
+`draw propose --intent PATH [--circuit PATH] [--out PATH] [--json PATH]`（离线、只读两份
+输入；`--intent` 仍只认显式路径，理由与 §十.8③ 同）。
+
+1. **草稿=提案**：草稿走与手写规格**同一个**封闭 schema（`core/presentationspec.py` 的加载/
+   校验通道），编译器照旧裁决正确性——提案器只负责写出来。`serialize→parse→serialize`
+   逐字节稳定（`outputs/109/roundtrip.txt`）。
+2. **两张声明出来的封闭表**（表外一律不猜）：
+   - `kind → grammar`（`intentproposer.KIND_GRAMMARS`）：语法注册表的五个名（kind 字面就是
+     语法名）+ 合同词表里唯一具名的 kind `current-sense → ic-periphery`（098 画的就是这个
+     形状：分流挂核心自己的脚，核心从 `blocks[].parts` 读）；
+   - `kind → 流向角色`（`KIND_FLOW_ROLES`）：`power-entry → source`、`current-sense → sink`。
+     比语法表**故意小**：把 kind 映到画法是关于画法的声明，映到方向是关于电的声明，本批只写
+     repo 里已经说过的那两条。
+3. **四条规则**：① 模块清单 `block.id/parts/kind → module.id/parts/grammarRef`（表外 kind →
+   模块仍在、`grammarRef` 空、报告点名）；② core 按 098 的来源顺序（intent 声明 → 结构），
+   **冲突不替裁**（留空 + 两源原文并列，098 同款措辞），且只写进 `ic-periphery` 的模块；
+   ③ flow 从 blocks 的 parts **共网**推邻接、**方向只从角色表给**（给不出 → `underdetermined`
+   并列两 kind，不猜），`mainPath` 只在「贯穿链唯一 + 每条边跨网唯一且非地」时标；④ 角色分工
+   （bulk/TVS）取**既有消费路径的结论**（`power_entry` 自己从合同读出的顺序），合同没移动它
+   就留空、回退三来源——写了必须同值，是同一次阅读而不是第二份意见。
+4. **R3 在合同上**：没被读、没被用上的元素逐个点名（空 parts 的块、没人读的 decision、
+   `requires`/`feeds`、整段 `requirements`），`--circuit` 缺席时 flow/core/顺序三件事留空并
+   明说「需要网表」。
+5. **零移动**：五族预览 83 张逐字节 + 21 板 `run_review` 行与 `checkup` 报告逐字节 + 语料
+   2894 token/2958 值串（`outputs/109/`）；CLI 构建出的解析器里唯一的移动就是新增的
+   `draw propose`（`outputs/109/boards_reconcile.txt` 的 parser 行）。
+6. **仍未见地**（§十.8② 的边界一字未动）：**页级** `pagecompiler` 不读合同、页级 flow 跨模块
+   布线不做、CLI 默认 intent 落点够不着——三条都留记录。

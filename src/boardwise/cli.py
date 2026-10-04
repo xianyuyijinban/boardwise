@@ -1641,6 +1641,62 @@ def build_parser() -> argparse.ArgumentParser:
         "--port", type=int, default=None, help="Daemon port (default: 61190).",
     )
 
+    # ---- 109 A4: the intent proposer (offline, no editor) ------------------
+    draw_propose = draw_sub.add_parser(
+        "propose",
+        help=(
+            "Offline: one DesignIntent contract -> one PresentationSpec draft "
+            "(module list + flow + roles, 109)."
+        ),
+        description=(
+            "The proposer (109 A4): it reads the contract **once** and writes down a "
+            "whole draft of the presentation — the module list from `blocks[]` "
+            "(id/parts/kind), the flow from the nets the blocks share, the branch "
+            "order from the contract's own clamping claims — instead of making every "
+            "grammar read the contract one clause at a time. The draft goes through "
+            "the **same** closed schema as a hand-written spec (`PresentationSpec`), "
+            "so the compiler still judges it: the proposer writes, it does not decide "
+            "correctness. Nothing is guessed silently — an unmapped kind, a core two "
+            "sources disagree about and a flow direction no role table entry decides "
+            "are left empty and **named** in the report (R3). Exit 0 a draft with at "
+            "least one module / 2 an input could not be read / 5 nothing could be "
+            "proposed."
+        ),
+    )
+    draw_propose.add_argument(
+        "--intent", required=True, metavar="PATH",
+        help=(
+            "The DesignIntent contract to turn into a draft (090 A1: "
+            "`design-intent-channel.md` §二). Explicit path only, exactly as `draw "
+            "compile --intent` takes it: this command runs before anything names a "
+            "project, so the user-level default (`<home>/design-intent/<uuid>.json`) "
+            "has no uuid to be found from (095 §8③'s recorded limit)."
+        ),
+    )
+    draw_propose.add_argument(
+        "--circuit", default="", metavar="PATH",
+        help=(
+            "The CircuitSpec the draft is proposed against. The netlist decides the "
+            "three facts a document cannot: which groups share a net (the flow's "
+            "adjacency), which part is a group's core (pin counts) and which parts "
+            "hang between the rails (the branch order). Without it those three stay "
+            "empty and **the report says so** — they are never guessed."
+        ),
+    )
+    draw_propose.add_argument(
+        "-o", "--out", dest="out_path", default=None, metavar="PATH",
+        help="Write the draft here (default: print it to stdout).",
+    )
+    draw_propose.add_argument(
+        "--json", dest="json_path", metavar="PATH",
+        help=(
+            "Write the machine-readable proposal report: the two declared tables, "
+            "one row per module with its notes, the flow edges and its undetermined "
+            "candidates, what was read out of every contract element, and the list of "
+            "everything that was not."
+        ),
+    )
+
     persist = sub.add_parser(
         "persistence",
         help=(
@@ -9487,11 +9543,119 @@ def _cmd_draw_discard(args: argparse.Namespace) -> int:
     return asyncio.run(run())
 
 
+def _cmd_draw_propose(args: argparse.Namespace) -> int:
+    """`draw propose --intent PATH [--circuit PATH]`: one contract -> one draft (109).
+
+    Offline and read-only: it reads two files and writes one (or prints it). The
+    contract is read by **094's own reader** (an explicit `--intent` path, never a
+    default location this run did not name — there is no project uuid yet, which is
+    the recorded limit `draw compile --intent` shares), and the draft is written
+    through `core.presentationspec`, the same closed schema a hand-written spec
+    goes through. Nothing here contacts the editor, and nothing here decides
+    whether the draft is *correct*: the compiler still does, over the very same
+    document (053 stage B).
+
+    Exit 0 a draft with at least one module / 2 an input could not be read / 5
+    nothing could be proposed (every block was named in the report, and an empty
+    draft is a refusal rather than a success).
+    """
+    from .core import designintent as di
+    from .core.circuitspec import CircuitSpec, CircuitSpecError
+    from .engines import intentproposer
+
+    try:
+        intent = di.IntentSource.load(args.intent)
+    except (di.DesignIntentError, OSError) as exc:
+        print(f"draw propose: {exc}", file=sys.stderr)
+        return 2
+    circuit_path = str(getattr(args, "circuit", "") or "")
+    circuit = None
+    if circuit_path:
+        try:
+            circuit = CircuitSpec.load(circuit_path)
+        except (CircuitSpecError, OSError) as exc:
+            print(f"draw propose: {exc}", file=sys.stderr)
+            return 2
+    proposal = intentproposer.propose(
+        intent, circuit, circuit_path=circuit_path
+    )
+    draft = json.dumps(proposal.spec.to_jsonable(), ensure_ascii=False, indent=2) + "\n"
+    # A draft with no module is a refusal, and a refusal writes nothing: the file
+    # would be a presentation the compiler refuses for a different reason than the
+    # one this run refused it for, and the report already names every block that
+    # could not become a module.
+    out_path = getattr(args, "out_path", None) if proposal.ok else None
+    if out_path:
+        Path(out_path).write_text(draft, encoding="utf-8")
+    _print_proposal(proposal, out_path)
+    if getattr(args, "json_path", None):
+        Path(args.json_path).write_text(
+            json.dumps(proposal.report, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    if not proposal.ok:
+        return 5
+    if not out_path:
+        print(draft, end="")
+    return 0
+
+
+def _print_proposal(proposal: object, out_path: str | None) -> None:
+    """The run's own summary: what was written, and everything it could not use.
+
+    R3 is a printing rule as much as a data rule: a run that read a contract and
+    used no part of it must say so where the reader is looking, which is why the
+    unread list and the undetermined flow candidates are printed and not merely
+    written into `--json`.
+    """
+    report = proposal.report
+    where = report["contract"] or "(an in-memory contract)"
+    print(
+        f"draw propose: {len(proposal.spec.modules)} module(s) from {where}"
+        + (f", against {report['circuit']}" if report["circuit"] else ", with no circuit")
+    )
+    for row in report["modules"]:
+        written = f"  module[{row['id']}] kind={row['kind'] or '(unstated)'} grammar={row['grammarRef'] or '(unmapped)'} role={row['role']}"
+        if row["core"]:
+            written += f" core={row['core']}"
+        if row["branchOrder"]:
+            written += f" branchOrder={', '.join(row['branchOrder'])}"
+        print(written)
+        # The module's notes are the R3 half of the draft: *why* a field is empty
+        # (an unmapped kind, a core two sources disagree about, a core read but not
+        # written because this grammar does not read it) belongs where the reader
+        # is, not only in `--json`.
+        for note in row["notes"]:
+            print(f"    {note}")
+    for edge in proposal.spec.flow:
+        print(
+            f"  flow {edge.from_module} -> {edge.to_module}"
+            + (" (mainPath)" if edge.main_path else "")
+        )
+    for row in report["flow"]["undetermined"]:
+        print(
+            f"  flow {row['pair'][0]} -- {row['pair'][1]}: underdetermined — "
+            f"{row['why']}"
+        )
+    print(f"  {report['flow']['mainPath']}")
+    for row in report["skipped"]:
+        print(f"  skipped blocks[id={row['block']!r}]: {row['why']}")
+    for sentence in report["unread"]:
+        print(f"  unread {sentence}")
+    for note in report["notes"]:
+        print(f"  note: {note}")
+    if out_path:
+        print(f"  draft written to {out_path}")
+    else:
+        print("  draft:")
+
+
 DRAW_COMMANDS = {
     "compile": _cmd_draw_compile,
     "plan": _cmd_draw_plan,
     "apply": _cmd_draw_apply,
     "discard": _cmd_draw_discard,
+    "propose": _cmd_draw_propose,
 }
 
 
