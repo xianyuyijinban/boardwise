@@ -989,22 +989,19 @@ def test_the_layout_stage_no_longer_refuses_the_feedback_row():
     assert "same-row(R8, U4)" not in joined
 
 
-def test_the_remaining_flyback_refusal_is_the_out_of_scope_order_kinds():
-    """**115 如实申报**：支路×owner 的序关系消了，剩下的**不是那一类**。
+def test_the_remaining_flyback_refusal_is_the_readability_gate():
+    """**116 如实申报**：序关系全消了，剩下的是**③ 类**（可读性闸）。
 
-    115 学会了消费挂在支路与它 **owner** 之间的序关系（`below(C7, D2)` 现在
-    被满足，实测那条拒绝已不在列表里）。但反激整页**仍 0 candidate**，而剩下
-    的第一条是 `right-of(C10, U5)` —— C10 的 owner 是 **T1**，U5 是**另一颗链件**，
-    关系挂在支路与**别的链件**之间，不是支路×owner。任务书 §① 点的名是
-    「支路×owner」，把这条也接进来等于编译器替语法画一条链从未要求的页级关系
-    （那正是 `_branch_basis` 里那条注释守住的东西）。
+    113 的语法、114 的求解器、115① 的支路×owner、115② 的 pin token 同尺，
+    116 消费了**全部**已绑定序关系——**六条变体全部越过关系闸**了。这一条按
+    事实更新：反激整页**仍 0 candidate**，但**不再有任何一条序关系违例**，
+    拦着的是 `readability` 闸的 **11 条硬违反**（1 条
+    `netlist-partition-mismatch` + 10 条 text-overlap），那是**文字/旗标/网表**
+    子系统，**归 117**，116 任务书明写不许为翻绿它去动。
 
-    另两条（`above(R3,Q1)` / `same-column(Q1,R5)` / `near(R15,R3)`）同样不是
-    支路×owner 的序关系。
-
-    这一条因此按事实更新：断言剩下的拒绝**里没有支路×owner 的序关系**了
-    （`below(C7, D2)` 不许回来），而预算免责声明仍然在（053 sec.5）。这样下一棒
-    读到「支路×owner 已通」时，会看到还欠什么，而不会以为整页已经通了。
+    断言因此从「还欠哪条序关系」换成「**一条序关系违例都不许剩下**，
+    而拦着的那条必须点名可读性闸」——这样下一棒读到时会看到**真正**还欠什么，
+    而不会以为整页已经通了，也不会把 ③ 类误当成序关系。
     """
     circuit = CircuitSpec.load(SPECS / "flyback_uc3845.circuit.json")
     presentation = PresentationSpec.load(SPECS / "flyback_uc3845.presentation.json")
@@ -1014,20 +1011,22 @@ def test_the_remaining_flyback_refusal_is_the_out_of_scope_order_kinds():
         max_candidates=64))
     assert not placed.ok, "if the flyback now compiles, this test is stale"
     joined = " ".join(item.detail for item in placed.failures)
+    # 116's own work: **no** bound order is refused any more, at any variant.
     measured = [
         item for item in placed.failures
         if "is not honoured" in item.detail
     ]
-    assert measured, [item.detail for item in placed.failures]
-    for item in measured:
-        assert "measured" in item.detail, item.detail
-        assert item.action.strip(), item
-    # 115's own work is done: the branch-vs-its-own-owner order kind is gone
-    # and must not come back (see tests/test_115_flyback_page.py).
-    assert "below(C7, D2)" not in joined, (
-        "115 taught the compiler to read the order kind between a branch and "
-        "its owner; below(C7, D2) must stay satisfied"
+    assert not measured, (
+        "116 consumed every bound order; a refused relation came back: "
+        + "; ".join(item.detail for item in measured)
     )
+    for name in ("right-of(C10, U5)", "below(C10, U5)", "near(C10, U5)",
+                 "above(R3, Q1)", "same-column(Q1, R5)", "near(R15, R3)",
+                 "below(C7, D2)"):
+        assert name not in joined, f"{name} is refused again"
+    # What is left must be the readability gate, named as such.
+    assert "readability checker refused" in joined, joined[:400]
+    # The budget disclaimer still stands (053 sec.5).
     assert "inside the budget" in joined
 
 
@@ -1043,39 +1042,42 @@ def test_the_offline_lint_gate_cannot_run_yet_and_says_why():
        `sch.geometry` 的形状（`components` / `wires` / `pins` / `netlabels` /
        `bboxes`），那只有真机落图后才有；本棒任务书写明**不画真机**。离线能
        出的只有 `svgpreview.render_svg(plan)`——一个 SVG 文档，不是那份快照。
-    2. **整页编译不出 plan**（**115 更新**：这一半的原因又换了）。114 关掉了
-       113 指出的两处（钳位串的中间臂有 owner 了、副边反馈横排落到一条 lane
-       上了）；115 又关掉了第三处——支路与它 **owner** 之间的序关系
-       （`below(C7, D2)` 现在被满足），以及可读性闸在 pin token 上的那道
-       netlist 分区（115-② 让读数层与 `drawcompiler._pin_of_token` 同一把尺）。
-       剩下的是**别的**东西：`right-of(C10, U5)` 挂在支路与**另一颗链件**之间
-       （C10 的 owner 是 T1），以及 `above(R3,Q1)` / `same-column(Q1,R5)` /
-       `near(R15,R3)`。这些不是「支路×owner」那一类。没有 plan 就没有
-       `sch.geometry`。
+    2. **整页编译不出 plan**（**116 更新**：这一半的原因又换了）。114 关掉了
+       113 指出的两处；115 又关掉了第三处——支路与它 **owner** 之间的序关系
+       （`below(C7, D2)`），以及可读性闸在 pin token 上的那道 netlist 分区
+       （115-②）；116 关掉了第四处——**全部**已绑定序关系（六条变体全部越过
+       关系闸，`right-of(C10, U5)` / `above(R3,Q1)` / `near(R15,R3)` 等一律
+       不再是拒绝理由）。剩下的是**③ 类**：`readability` 闸 11 条硬违反，
+       归 117。没有 plan 就没有 `sch.geometry`。
 
     这一条**整条保留 skip**（真机落图归岳）：任务书 §验收 2 说「live 快照那一
     半保留 skip（理由文本更新）」，更新的就是上面这段——编译出图那一半已经
-    单独由 115 的合成夹具与端到端断言接住，不再混在这条 skip 里。
+    单独由 115/116 的合成夹具与端到端断言接住，不再混在这条 skip 里。
 
     这条测试写成 `skip` 而不是删掉，是为了让缺口在测试输出里**看得见**：它一旦
-    转绿（说明有人落了真机图、或剩下的序关系也解出来了），就是要更新
-    SUMMARY 的信号。`pytest -rs` 会打印它的原因。
+    转绿（说明有人落了真机图、或 ③ 类也解出来了），就是要更新 SUMMARY 的信号。
+    `pytest -rs` 会打印它的原因。
     """
     pytest.skip(
-        "115 did not reach layer 2 (draw lint offline gate) either. 114 closed "
+        "116 did not reach layer 2 (draw lint offline gate) either. 114 closed "
         "113's two compiler gaps (the clamp string's intermediate arm gets an "
         "owner through the string; the secondary feedback row is levelled onto "
         "one lane). 115 closed the third: an order kind stated between a branch "
         "and its OWNER is now read by the placement (below(C7, D2) is satisfied "
         "— see tests/test_115_flyback_page.py), and the readability gate reads "
         "the spec's pin token through the same ruler drawcompiler._pin_of_token "
-        "uses, so D1.A/D1.K no longer look like pins the symbol has not got. The "
-        "page still yields no plan, and what is left is a different class: "
-        "right-of(C10, U5) sits between a branch and ANOTHER chain part (C10's "
-        "owner is T1), plus above(R3,Q1) / same-column(Q1,R5) / near(R15,R3). "
+        "uses, so D1.A/D1.K no longer look like pins the symbol has not got. 116 "
+        "closed the fourth: EVERY bound order is now consumed by the placement "
+        "(all six variants clear the relation gate; right-of(C10, U5) / "
+        "above(R3,Q1) / near(R15,R3) are no longer refusal reasons — see "
+        "tests/test_116_ordinal_consumption.py). The page still yields no plan, "
+        "and what is left is class (3): the readability gate's 11 hard "
+        "violations (1 netlist-partition-mismatch + 10 text-overlap) — text, "
+        "flags and netlist, which belong to 117 and this batch was told not to "
+        "touch them to turn the page green. "
         "And `draw lint --snapshot` needs an editor sch.geometry that only a live "
         "page produces — drawing on the machine is 岳's call, not this batch's. "
-        "See outputs/115/SUMMARY.md."
+        "See outputs/116/SUMMARY.md."
     )
 
 
