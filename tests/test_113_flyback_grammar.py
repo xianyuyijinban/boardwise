@@ -990,37 +990,44 @@ def test_the_layout_stage_no_longer_refuses_the_feedback_row():
 
 
 def test_the_remaining_flyback_refusal_is_the_out_of_scope_order_kinds():
-    """**114 如实申报**：整页仍不出 plan，剩下的拒绝是**序关系**，本棒不碰。
+    """**115 如实申报**：支路×owner 的序关系消了，剩下的**不是那一类**。
 
-    114 修好了两处模型缺口（支路串的传递归属、第二孤岛的 same-row lane），
-    但反激整页**仍 0 candidate**：剩下的拒绝是
-    `below(C7, D2)` / `right-of(C10, U5)` —— 挂在支路与它 owner 之间的
-    **序关系**。任务书 §验收 2 明说「序列关系（left-of/right-of/above/below）
-    **不在本棒**」，所以这不是本棒的缺口；但它必须被**钉住**，否则下一棒读到
-    「113 的两处都修了」就会以为整页已经通了。
+    115 学会了消费挂在支路与它 **owner** 之间的序关系（`below(C7, D2)` 现在
+    被满足，实测那条拒绝已不在列表里）。但反激整页**仍 0 candidate**，而剩下
+    的第一条是 `right-of(C10, U5)` —— C10 的 owner 是 **T1**，U5 是**另一颗链件**，
+    关系挂在支路与**别的链件**之间，不是支路×owner。任务书 §① 点的名是
+    「支路×owner」，把这条也接进来等于编译器替语法画一条链从未要求的页级关系
+    （那正是 `_branch_basis` 里那条注释守住的东西）。
 
-    这条测试断言两件事：剩下的拒绝**全部**是序关系（没有别的类别混进来），
-    以及预算免责声明仍然在（053 sec.5）。
+    另两条（`above(R3,Q1)` / `same-column(Q1,R5)` / `near(R15,R3)`）同样不是
+    支路×owner 的序关系。
+
+    这一条因此按事实更新：断言剩下的拒绝**里没有支路×owner 的序关系**了
+    （`below(C7, D2)` 不许回来），而预算免责声明仍然在（053 sec.5）。这样下一棒
+    读到「支路×owner 已通」时，会看到还欠什么，而不会以为整页已经通了。
     """
     circuit = CircuitSpec.load(SPECS / "flyback_uc3845.circuit.json")
     presentation = PresentationSpec.load(SPECS / "flyback_uc3845.presentation.json")
     book = _library_from(SPECS / "flyback_uc3845.library.json")
+    binding = grammar.bind(circuit, presentation, book)
     placed = dc.compile(circuit, presentation, book, dc.CompileBudget(
         max_candidates=64))
     assert not placed.ok, "if the flyback now compiles, this test is stale"
     joined = " ".join(item.detail for item in placed.failures)
-    order_kinds = ("below", "above", "left-of", "right-of", "adjacent")
     measured = [
         item for item in placed.failures
         if "is not honoured" in item.detail
     ]
     assert measured, [item.detail for item in placed.failures]
     for item in measured:
-        assert any(
-            f"the relation {kind}(" in item.detail for kind in order_kinds
-        ), item.detail
         assert "measured" in item.detail, item.detail
         assert item.action.strip(), item
+    # 115's own work is done: the branch-vs-its-own-owner order kind is gone
+    # and must not come back (see tests/test_115_flyback_page.py).
+    assert "below(C7, D2)" not in joined, (
+        "115 taught the compiler to read the order kind between a branch and "
+        "its owner; below(C7, D2) must stay satisfied"
+    )
     assert "inside the budget" in joined
 
 
@@ -1036,29 +1043,39 @@ def test_the_offline_lint_gate_cannot_run_yet_and_says_why():
        `sch.geometry` 的形状（`components` / `wires` / `pins` / `netlabels` /
        `bboxes`），那只有真机落图后才有；本棒任务书写明**不画真机**。离线能
        出的只有 `svgpreview.render_svg(plan)`——一个 SVG 文档，不是那份快照。
-    2. **整页编译不出 plan**（**114 更新**：这一半的原因换了）。114 已经修好
-       了 113 指出的两处（钳位串的中间臂有 owner 了、副边反馈横排落到一条
-       lane 上了），所以「编译器排不出横排 / 放不下中间臂」这半句**摘掉了**。
-       现在剩下的是**别的**东西：支路与 owner 之间的**序关系**
-       （`below` / `right-of`）——任务书明说不在那一棒——以及可读性闸在变压器
-       两颗辅助脚上量的一个 netlist 分区。没有 plan 就没有 `sch.geometry`。
+    2. **整页编译不出 plan**（**115 更新**：这一半的原因又换了）。114 关掉了
+       113 指出的两处（钳位串的中间臂有 owner 了、副边反馈横排落到一条 lane
+       上了）；115 又关掉了第三处——支路与它 **owner** 之间的序关系
+       （`below(C7, D2)` 现在被满足），以及可读性闸在 pin token 上的那道
+       netlist 分区（115-② 让读数层与 `drawcompiler._pin_of_token` 同一把尺）。
+       剩下的是**别的**东西：`right-of(C10, U5)` 挂在支路与**另一颗链件**之间
+       （C10 的 owner 是 T1），以及 `above(R3,Q1)` / `same-column(Q1,R5)` /
+       `near(R15,R3)`。这些不是「支路×owner」那一类。没有 plan 就没有
+       `sch.geometry`。
+
+    这一条**整条保留 skip**（真机落图归岳）：任务书 §验收 2 说「live 快照那一
+    半保留 skip（理由文本更新）」，更新的就是上面这段——编译出图那一半已经
+    单独由 115 的合成夹具与端到端断言接住，不再混在这条 skip 里。
 
     这条测试写成 `skip` 而不是删掉，是为了让缺口在测试输出里**看得见**：它一旦
-    转绿（说明有人落了真机图、或序关系也解出来了），就是要更新
+    转绿（说明有人落了真机图、或剩下的序关系也解出来了），就是要更新
     SUMMARY 的信号。`pytest -rs` 会打印它的原因。
     """
     pytest.skip(
-        "114 did not reach layer 2 (draw lint offline gate) either. 114 closed "
-        "113's two compiler gaps (the clamp string's intermediate arm now gets an "
-        "owner through the string, and the secondary feedback row is levelled onto "
-        "one lane), so the 'compiler cannot place it' half of 113's reason is gone "
-        "— see tests/test_114_compiler_islands.py. The page still yields no plan: "
-        "what is left are order relations between a branch and its owner "
-        "(below/right-of), which 114's task book explicitly excludes, plus a "
-        "readability-gate netlist partition on the transformer's two auxiliary "
-        "pins. And `draw lint --snapshot` needs an editor sch.geometry that only a "
-        "live page produces — drawing on the machine is forbidden. See "
-        "outputs/114/SUMMARY.md."
+        "115 did not reach layer 2 (draw lint offline gate) either. 114 closed "
+        "113's two compiler gaps (the clamp string's intermediate arm gets an "
+        "owner through the string; the secondary feedback row is levelled onto "
+        "one lane). 115 closed the third: an order kind stated between a branch "
+        "and its OWNER is now read by the placement (below(C7, D2) is satisfied "
+        "— see tests/test_115_flyback_page.py), and the readability gate reads "
+        "the spec's pin token through the same ruler drawcompiler._pin_of_token "
+        "uses, so D1.A/D1.K no longer look like pins the symbol has not got. The "
+        "page still yields no plan, and what is left is a different class: "
+        "right-of(C10, U5) sits between a branch and ANOTHER chain part (C10's "
+        "owner is T1), plus above(R3,Q1) / same-column(Q1,R5) / near(R15,R3). "
+        "And `draw lint --snapshot` needs an editor sch.geometry that only a live "
+        "page produces — drawing on the machine is 岳's call, not this batch's. "
+        "See outputs/115/SUMMARY.md."
     )
 
 

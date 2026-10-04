@@ -3292,10 +3292,104 @@ def _branch_offset_direction(
             ctx, slot.owner, _shared_token(ctx, slot), poses,
         )
         if direction is not None:
+            stated = _order_direction(ctx, slot)
+            if stated is not None:
+                return stated
             return direction
     lateral = ctx.lateral()
     sign = float(slot.sign)
     return (lateral[0] * sign, lateral[1] * sign)
+
+
+def _order_direction(ctx: _Context, slot: _Slot) -> tuple[float, float] | None:
+    """The direction an **order kind** names, when the owner's symbol cannot say it.
+
+    The owner's own pin says which way *that pad* escapes; an order kind between
+    the branch and its owner says which **side of the owner** the branch belongs
+    on. The two normally agree and then this returns ``None`` — the pin
+    direction stands and not one coordinate moves. They disagree when the pad
+    leaves perpendicular to where the branch has to go: the measured AMS1117
+    shape (054 C3) and the flyback's aux reservoir, whose pad leaves sideways so
+    the branch lands above the rectifier while the grammar's own
+    ``below(C7, D2)`` says under.
+
+    **The gate, and why 114's version had none** (115, after 114's retreat).
+    114 gave every order kind between a branch and its owner a basis, and that
+    is what moved 098 scene 08 by one byte. 115 measured why: the compiler's
+    variants include a **pose ladder** (053 sec.4's finite search), so a symbol
+    whose pads face the wrong way under one pose may well face the right way
+    under the next. Acting on the order kind regardless of that is not
+    "respecting the grammar", it is silently redrawing a *variant* whose pose
+    the search has not exhausted — which is exactly the byte 098 scene 08 lost,
+    and it took 114's whole sheet with it (the mirrored ``U1`` moved every
+    branch on it, and the refusal text with it).
+
+    So the criterion is: **the owner's symbol has no legal pose whose pad already
+    points the relation's way** (:func:`_a_pose_says`, which reads the same
+    accepted pose set the placement will draw from — "some pose exists" means
+    "some pose this compiler would actually draw"). What is left is the real
+    disease: the flyback's ``D2`` has one accepted pose, its pad leaves upward,
+    ``below(C7, D2)`` says down, no rotation supplies it, and the relation is
+    otherwise unsatisfiable. ``below(C11, D3)`` and ``below(C13, D3)`` are
+    already said by ``D3``'s pose and stay untouched.
+
+    A first draft stated the gate twice — once on the *current* pin direction and
+    once on the pose set. The first was dead: :func:`_a_pose_says` iterates the
+    accepted poses, and the current one is among them, so it already stands aside
+    in every case the first would have. It is gone rather than shipped as a guard
+    that cannot fire.
+
+    The test is on the **sign of the direction alone**: that is the whole of
+    what the branch's offset can change — the checker measures the two origins
+    for an order kind (never the pins), and the offset is what puts this origin
+    on that side of the owner's. A direction silent on the axis the relation is
+    about (zero) does not contradict it and is left alone.
+    """
+    relations = [
+        item for item in ctx.binding.constraints
+        if item.kind in (ABOVE, BELOW, LEFT_OF, RIGHT_OF)
+        and {slot.part_id, slot.owner} == {item.subject, item.object}
+    ]
+    if not relations:
+        return None
+    token = _shared_token(ctx, slot)
+    for item in relations:
+        wanted = _order_wanted(item.kind, item.subject == slot.part_id)
+        if _a_pose_says(ctx, slot, token, wanted):
+            continue
+        return (wanted[1], 0.0) if wanted[0] == 0 else (0.0, wanted[1])
+    return None
+
+
+def _order_wanted(kind: str, own: bool) -> tuple[int, float]:
+    """``(axis index, sign)`` an order kind asks of its subject.
+
+    ``own`` says which end of the pair the branch is: ``left-of(C1, U1)`` asks
+    the *subject* for -x and the object for +x, and a branch that is the object
+    of its owner's relation is asked for the other sign. One function for both
+    ends so the two can never be computed inconsistently.
+    """
+    index = 0 if kind in (LEFT_OF, RIGHT_OF) else 1
+    negative = kind in (LEFT_OF, ABOVE)
+    return index, (-1.0 if own else 1.0) * (-1.0 if negative else 1.0)
+
+
+def _a_pose_says(
+    ctx: _Context, slot: _Slot, token: str, wanted: tuple[int, float]
+) -> bool:
+    """Is some legal pose of the owner already pointing the order's way?
+
+    The whole of gate 2. It asks the owner's **accepted** pose set — the poses
+    :func:`_accepted_poses` already filtered to the legal ones, so "some pose
+    exists" means "some pose this compiler would actually draw", not "some
+    rotation of the symbol exists in the abstract".
+    """
+    index, sign = wanted
+    for pose in ctx.accepted.get(slot.owner, ()):
+        direction = _pin_direction(ctx, slot.owner, token, {slot.owner: pose})
+        if direction is not None and direction[index] * sign > 0.0:
+            return True
+    return False
 
 
 def _beyond_owner(
