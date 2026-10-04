@@ -1,0 +1,563 @@
+{
+  "kind": "boardwise-symbol-library",
+  "libraryVersion": 1,
+  "source": "113's own shape set, written for the flyback end-to-end scene. The pin numbers and names are 110 plan.corrected.json's; the geometries are this batch's, chosen so the 110 drawing rulings are reachable (the switch stands vertically, the transformer's primary faces left and its secondary hangs below, the optocoupler's two sides face opposite ways).",
+  "profiles": [
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "R0603",
+      "title": "Resistor 0603, axial (two pins on the horizontal axis), drawn vertically with pin 1 (the row end) UP, so the part's chain/row pin presents on a horizontal line — the feedback row 岳 ruling (e) asks for.",
+      "body": [
+        -5,
+        -10,
+        5,
+        10
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            0,
+            20
+          ],
+          "direction": "up",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            0,
+            -20
+          ],
+          "direction": "down",
+          "length": 10.0,
+          "pinType": "passive"
+        }
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "RES-TH-17K8",
+      "title": "Resistor, through-hole axial (17.8k 1%), drawn vertically with pin 1 (the row end) UP, so the part's chain/row pin presents on a horizontal line — the feedback row 岳 ruling (e) asks for.",
+      "body": [
+        -5,
+        -10,
+        5,
+        10
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            0,
+            20
+          ],
+          "direction": "up",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            0,
+            -20
+          ],
+          "direction": "down",
+          "length": 10.0,
+          "pinType": "passive"
+        }
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "R0805",
+      "title": "Resistor 0805, axial, drawn vertically with pin 1 (the row end) UP, so the part's chain/row pin presents on a horizontal line — the feedback row 岳 ruling (e) asks for.",
+      "body": [
+        -5,
+        -10,
+        5,
+        10
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            0,
+            20
+          ],
+          "direction": "up",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            0,
+            -20
+          ],
+          "direction": "down",
+          "length": 10.0,
+          "pinType": "passive"
+        }
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "C0603",
+      "title": "Capacitor 0603, vertical (plate 1 up)",
+      "body": [
+        -5,
+        -10,
+        5,
+        10
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            0,
+            20
+          ],
+          "direction": "up",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            0,
+            -20
+          ],
+          "direction": "down",
+          "length": 10.0,
+          "pinType": "passive"
+        }
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "C0805",
+      "title": "Capacitor 0805, vertical (plate 1 up)",
+      "body": [
+        -5,
+        -10,
+        5,
+        10
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            0,
+            20
+          ],
+          "direction": "up",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            0,
+            -20
+          ],
+          "direction": "down",
+          "length": 10.0,
+          "pinType": "passive"
+        }
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "CAP-SMD-220UF",
+      "title": "Electrolytic 220uF/25V SMD, vertical (plate 1 up)",
+      "body": [
+        -10,
+        -10,
+        10,
+        10
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            0,
+            25
+          ],
+          "direction": "up",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            0,
+            -25
+          ],
+          "direction": "down",
+          "length": 10.0,
+          "pinType": "passive"
+        }
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "CAP-TH-1NF-1KV",
+      "title": "Capacitor 1nF/1kV through-hole, vertical (plate 1 up)",
+      "body": [
+        -10,
+        -10,
+        10,
+        10
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            0,
+            25
+          ],
+          "direction": "up",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            0,
+            -25
+          ],
+          "direction": "down",
+          "length": 10.0,
+          "pinType": "passive"
+        }
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "DIO-DO41-UF4007",
+      "title": "DIO-DO41-UF4007 — the clamp diode (D1), drawn with its ANODE on the left and its CATHODE on the right, so the winding it hangs off leaves horizontally. A vertical diode cannot express the 'this side of the transformer' relation the compiler measures against the pin, and its own refusal is what settled the shape.",
+      "body": [
+        -10.0,
+        -5.0,
+        10.0,
+        5.0
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "A",
+          "tip": [
+            -20.0,
+            0.0
+          ],
+          "direction": "left",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "2",
+          "name": "K",
+          "tip": [
+            20.0,
+            0.0
+          ],
+          "direction": "right",
+          "length": 10.0,
+          "pinType": "passive"
+        }
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "DIO-SMA-SS310",
+      "title": "Schottky SS310 SMA — the secondary rectifier, drawn VERTICALLY (anode up on the winding's hot end, cathode down to the output rail) so its chain pins present on the same column as the rest of the chain.",
+      "body": [
+        -5.0,
+        -10.0,
+        5.0,
+        10.0
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "A",
+          "tip": [
+            0.0,
+            20.0
+          ],
+          "direction": "up",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "2",
+          "name": "K",
+          "tip": [
+            0.0,
+            -20.0
+          ],
+          "direction": "down",
+          "length": 10.0,
+          "pinType": "passive"
+        }
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "NMOS-TO251",
+      "title": "N-channel MOSFET 4N60 TO-251, drawn VERTICALLY: drain up, source down, gate right (110 ruling c)",
+      "body": [
+        -15,
+        -20,
+        15,
+        20
+      ],
+      "pins": [
+        {
+          "number": "2",
+          "name": "D",
+          "tip": [
+            0,
+            40
+          ],
+          "direction": "up",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "1",
+          "name": "S",
+          "tip": [
+            0,
+            -40
+          ],
+          "direction": "down",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "3",
+          "name": "G",
+          "tip": [
+            35,
+            0
+          ],
+          "direction": "right",
+          "length": 10.0,
+          "pinType": "passive"
+        }
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "XFMR-EE16-3W",
+      "title": "Flyback transformer, three windings: the primary on the left with its bus end ABOVE the origin and its switch-node end below (so the clamp hangs off the top and the switch off the bottom), the secondary on the right, the auxiliary across the top. 岳 ruling (a).",
+      "body": [
+        -45.0,
+        -35.0,
+        45.0,
+        35.0
+      ],
+      "pins": [
+        {
+          "number": "P1",
+          "name": "P1",
+          "tip": [
+            -60.0,
+            20.0
+          ],
+          "direction": "left",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "P2",
+          "name": "P2",
+          "tip": [
+            -60.0,
+            -20.0
+          ],
+          "direction": "left",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "A1",
+          "name": "A1",
+          "tip": [
+            0.0,
+            55.0
+          ],
+          "direction": "up",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "A2",
+          "name": "A2",
+          "tip": [
+            0.0,
+            75.0
+          ],
+          "direction": "up",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "S1",
+          "name": "S1",
+          "tip": [
+            60.0,
+            20.0
+          ],
+          "direction": "right",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "S2",
+          "name": "S2",
+          "tip": [
+            60.0,
+            -20.0
+          ],
+          "direction": "right",
+          "length": 10.0,
+          "pinType": "passive"
+        }
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "SOT23-3-TL431",
+      "title": "TL431 voltage reference, SOT-23-3. A (the secondary-ground side) and REF (the divider tap) are on one vertical line so the body points from the tap down to ground; K (the optocoupler LED cathode) faces right, where the feedback row runs.",
+      "body": [
+        -15,
+        -20,
+        15,
+        20
+      ],
+      "pins": [
+        {
+          "number": "A",
+          "name": "A",
+          "tip": [
+            0,
+            -40
+          ],
+          "direction": "down",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "REF",
+          "name": "REF",
+          "tip": [
+            0,
+            40
+          ],
+          "direction": "up",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "K",
+          "name": "K",
+          "tip": [
+            35,
+            0
+          ],
+          "direction": "right",
+          "length": 10.0,
+          "pinType": "passive"
+        }
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "SMD-4-PC817",
+      "title": "Optocoupler PC817, SMD-4, drawn as the barrier it is: the chain pins (LED cathode 2 and collector 4) on one vertical line, the two ground-side pins (LED anode 1 and emitter 3) facing left. 岳 ruling (e): the only part allowed to cross the isolation band.",
+      "body": [
+        -20,
+        -25,
+        20,
+        25
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "A",
+          "tip": [
+            -40,
+            10
+          ],
+          "direction": "left",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "2",
+          "name": "K",
+          "tip": [
+            0,
+            45
+          ],
+          "direction": "up",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "4",
+          "name": "C",
+          "tip": [
+            0,
+            -45
+          ],
+          "direction": "down",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "3",
+          "name": "E",
+          "tip": [
+            -40,
+            -10
+          ],
+          "direction": "left",
+          "length": 10.0,
+          "pinType": "passive"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,336 @@
+{
+  "kind": "boardwise-circuit-spec",
+  "specVersion": 1,
+  "parts": [
+    {
+      "id": "T1",
+      "symbolRef": "XFMR-EE16-3W",
+      "value": "EE16_3+3_V02 (Lp=1mH, Np:Ns=7.2:1, Naux:Ns=1.2:1 — 绕组参数写属性)",
+      "provenance": "engineer_confirmed",
+      "lcsc": "C9900020988"
+    },
+    {
+      "id": "Q1",
+      "symbolRef": "NMOS-TO251",
+      "value": "4N60 (600V 4A NMOS)",
+      "provenance": "engineer_confirmed",
+      "lcsc": "C2681894"
+    },
+    {
+      "id": "R3",
+      "symbolRef": "R0603",
+      "value": "75k 1% 0603",
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "R15",
+      "symbolRef": "R0603",
+      "value": "75k 1% 0603",
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "C5",
+      "symbolRef": "CAP-TH-1NF-1KV",
+      "value": "1nF/1kV",
+      "provenance": "engineer_confirmed",
+      "lcsc": "C9900022732"
+    },
+    {
+      "id": "D1",
+      "symbolRef": "DIO-DO41-UF4007",
+      "value": "UF4007",
+      "provenance": "engineer_confirmed",
+      "lcsc": "C212802"
+    },
+    {
+      "id": "R5",
+      "symbolRef": "R0603",
+      "value": "1R 1% 0603",
+      "provenance": "engineer_confirmed",
+      "lcsc": "C22936"
+    },
+    {
+      "id": "R4",
+      "symbolRef": "R0603",
+      "value": "10k 0603",
+      "provenance": "engineer_confirmed",
+      "lcsc": "C25804"
+    },
+    {
+      "id": "C6",
+      "symbolRef": "C0603",
+      "value": "100pF 0603 C0G",
+      "provenance": "engineer_confirmed",
+      "lcsc": "C14858"
+    },
+    {
+      "id": "D2",
+      "symbolRef": "DIO-DO41-UF4007",
+      "value": "UF4007",
+      "provenance": "engineer_confirmed",
+      "lcsc": "C84067"
+    },
+    {
+      "id": "C7",
+      "symbolRef": "C0805",
+      "value": "22uF/25V X5R 0805",
+      "provenance": "engineer_confirmed",
+      "lcsc": "C45783"
+    },
+    {
+      "id": "D3",
+      "symbolRef": "DIO-SMA-SS310",
+      "value": "SS310 (100V 3A schottky)",
+      "provenance": "engineer_confirmed",
+      "lcsc": "C9900021858"
+    },
+    {
+      "id": "C11",
+      "symbolRef": "CAP-SMD-220UF",
+      "value": "220uF/25V SMD electrolytic",
+      "provenance": "engineer_confirmed",
+      "lcsc": "C9900017672"
+    },
+    {
+      "id": "C13",
+      "symbolRef": "C0603",
+      "value": "100nF 0603",
+      "provenance": "engineer_confirmed",
+      "lcsc": "C14663"
+    },
+    {
+      "id": "R7",
+      "symbolRef": "RES-TH-17K8",
+      "value": "17.8k 1% TH",
+      "provenance": "engineer_confirmed",
+      "lcsc": "C1370938"
+    },
+    {
+      "id": "R8",
+      "symbolRef": "R0603",
+      "value": "4.7k 1% 0603",
+      "provenance": "engineer_confirmed",
+      "lcsc": "C99782"
+    },
+    {
+      "id": "U4",
+      "symbolRef": "SOT23-3-TL431",
+      "value": "TL431 (SOT-23-3)",
+      "provenance": "engineer_confirmed",
+      "lcsc": "C2887585"
+    },
+    {
+      "id": "R9",
+      "symbolRef": "R0805",
+      "value": "1k 1% 0805",
+      "provenance": "engineer_confirmed",
+      "lcsc": "C25271"
+    },
+    {
+      "id": "U5",
+      "symbolRef": "SMD-4-PC817",
+      "value": "PC817X2NIP0F",
+      "provenance": "engineer_confirmed",
+      "lcsc": "C7437"
+    },
+    {
+      "id": "R10",
+      "symbolRef": "R0603",
+      "value": "2k 1% 0603",
+      "provenance": "engineer_confirmed",
+      "lcsc": "C22975"
+    },
+    {
+      "id": "C10",
+      "symbolRef": "C0603",
+      "value": "1nF 0603",
+      "provenance": "engineer_confirmed",
+      "lcsc": "C100040"
+    }
+  ],
+  "nets": [
+    {
+      "id": "HVDC",
+      "class": "power",
+      "members": [
+        "C5.2",
+        "R15.2",
+        "T1.P1"
+      ],
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "PGND",
+      "class": "gnd",
+      "members": [
+        "T1.A2",
+        "C7.2",
+        "C6.2",
+        "R5.2",
+        "R10.2",
+        "C10.2",
+        "U5.3"
+      ],
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "SW",
+      "class": "signal",
+      "members": [
+        "Q1.2",
+        "T1.P2",
+        "D1.A"
+      ],
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "CLAMP",
+      "class": "signal",
+      "members": [
+        "D1.K",
+        "C5.1",
+        "R3.1"
+      ],
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "CLAMP_B",
+      "class": "signal",
+      "members": [
+        "R3.2",
+        "R15.1"
+      ],
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "SRC",
+      "class": "signal",
+      "members": [
+        "Q1.1",
+        "R5.1",
+        "R4.1"
+      ],
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "CS_FILT",
+      "class": "signal",
+      "members": [
+        "R4.2",
+        "C6.1"
+      ],
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "GATE",
+      "class": "signal",
+      "members": [
+        "Q1.3"
+      ],
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "VCC",
+      "class": "power",
+      "members": [
+        "C7.1",
+        "D2.2"
+      ],
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "AUX",
+      "class": "signal",
+      "members": [
+        "T1.A1",
+        "D2.1"
+      ],
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "VFB_NF",
+      "class": "signal",
+      "members": [
+        "R10.1"
+      ],
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "COMP",
+      "class": "signal",
+      "members": [
+        "C10.1",
+        "U5.4"
+      ],
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "SEC_SW",
+      "class": "signal",
+      "members": [
+        "T1.S1",
+        "D3.1"
+      ],
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "SEC_12V",
+      "class": "power",
+      "members": [
+        "D3.2",
+        "C11.1",
+        "C13.1",
+        "R7.1",
+        "R9.1"
+      ],
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "SEC_GND",
+      "class": "gnd",
+      "members": [
+        "T1.S2",
+        "C11.2",
+        "C13.2",
+        "R8.2",
+        "U4.A"
+      ],
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "FB_SENSE",
+      "class": "signal",
+      "members": [
+        "R7.2",
+        "R8.1",
+        "U4.REF"
+      ],
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "LED_A",
+      "class": "signal",
+      "members": [
+        "R9.2",
+        "U5.1"
+      ],
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "LED_K",
+      "class": "signal",
+      "members": [
+        "U5.2",
+        "U4.K"
+      ],
+      "provenance": "engineer_confirmed"
+    }
+  ],
+  "operatingConditions": {
+    "inputVoltage": "311Vdc (220Vac rectified)",
+    "outputVoltage": "12V",
+    "outputCurrent": "0.1A",
+    "switchingFrequency": "65kHz",
+    "mode": "DCM"
+  }
+}

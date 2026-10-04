@@ -249,7 +249,25 @@ FAILURE_CATEGORIES: tuple[str, ...] = (
 #: supply bus of `power-entry`. A net role is what makes
 #: :meth:`RoleBinding.to_jsonable` report ``target: "net"`` for it, and what the
 #: compiler's slot pass skips when it walks bindings looking for parts.
-NET_ROLES: tuple[str, ...] = ("in", "out", "gnd", "tap", "rail")
+#:
+#: **113 adds the flyback's eleven net roles.** They are in this table rather
+#: than in the module's own vocabulary because the table is what the compiler
+#: reads (`drawcompiler` skips a net role when it walks bindings looking for
+#: parts, in three places), and a net role the compiler did not recognise
+#: would be laid out as a part — the bug 088's `entry` and 098's `bridge` were
+#: each about, in the other direction. The set is a **membership table, not a
+#: new kind**: it says which role names hold a net id, nothing more, so
+#: extending it cannot change the meaning of any existing role, and every one
+#: of the five existing grammars' roles is untouched. The flyback's net roles
+#: are the ones its topology names: the bus it is fed from, the switch node,
+#: the source, the two ground families, the auxiliary node and its rail, the
+#: output, the sense tap and the clamp node.
+NET_ROLES: tuple[str, ...] = (
+    "in", "out", "gnd", "tap", "rail",
+    # flyback (113)
+    "bus", "switch-node", "secondary-node", "src", "pgnd", "aux", "vcc",
+    "vout", "sec-gnd", "fb-sense", "clamp",
+)
 
 #: What :attr:`RoleBinding.part_id` is holding — the same field carries either,
 #: because a CircuitSpec names parts and nets by the same kind of stable logical

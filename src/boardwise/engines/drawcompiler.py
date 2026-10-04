@@ -315,6 +315,15 @@ SEARCH_MARGIN = 160.0
 #: named here rather than left to fall through.
 CHAIN_ROLES: tuple[str, ...] = (
     "upper_arm", "lower_arm", "middle_arm", "series", "core", "entry",
+    # flyback (113): the transformer's **primary** chain, read left to right
+    # from the bus through the switch to the sense. These are the parts the
+    # drawing is read *along*, so they are chain elements rather than
+    # branches — the same kind of addition 088 made for `entry`. Only the
+    # primary half is here: the secondary is laid out by the relations the
+    # grammar states about it (the feedback row, the isolation crossing), and
+    # naming it as a chain as well would give the compiler two chains and no
+    # way to say which one the page is read along.
+    "transformer", "switch", "sense", "sec-D", "opto",
 )
 
 #: The roles that bind an element **hanging off** a chain node (053 sec.3:
@@ -333,6 +342,15 @@ BRANCH_ROLES: tuple[str, ...] = (
     "in_caps",
     "out_caps",
     "aux_branch",
+    # flyback (113): everything that hangs off the primary chain's nodes. Each
+    # is named for the same reason 098 named `bridge` — a role left out of
+    # both tuples is bound to a part and would land on the free shelf instead
+    # of at the node it belongs to, which for a power stage is the difference
+    # between a drawing and a scatter of parts.
+    "clamp-R", "clamp-C", "clamp-D",       # the leakage clamp
+    "sec-D", "output-caps",                # the secondary rectifier and filter
+    "feedback-divider", "error-amp", "opto",  # the feedback chain
+    "compensation", "aux-D", "aux-C",      # loop gain and the aux supply
 )
 
 #: Which `sidePreferences` entry a branch role is read against (052 sec.4's side

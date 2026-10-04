@@ -1,0 +1,68 @@
+{
+  "kind": "boardwise-presentation-spec",
+  "specVersion": 1,
+  "grammarRef": "flyback",
+  "sidePreferences": {
+    "input": "left",
+    "output": "right",
+    "power": "top",
+    "gnd": "bottom"
+  },
+  "portRoles": {
+    "HVDC": "input",
+    "SEC_12V": "output"
+  },
+  "modules": [
+    {
+      "id": "power_stage",
+      "parts": [
+        "T1",
+        "Q1",
+        "R3",
+        "R15",
+        "C5",
+        "D1"
+      ],
+      "role": "the flyback power stage: primary loop and leakage clamp (M3)"
+    },
+    {
+      "id": "current_sense",
+      "parts": [
+        "R5",
+        "R4",
+        "C6"
+      ],
+      "role": "the current-sense chain from the switch source to the controller (M4)"
+    },
+    {
+      "id": "secondary",
+      "parts": [
+        "D3",
+        "C11",
+        "C13"
+      ],
+      "role": "the secondary rectifier and the output filter (M6)"
+    },
+    {
+      "id": "feedback",
+      "parts": [
+        "R7",
+        "R8",
+        "U4",
+        "R9",
+        "U5",
+        "R10",
+        "C10"
+      ],
+      "role": "the divider, error amplifier, optocoupler and compensation (M7)"
+    },
+    {
+      "id": "aux_supply",
+      "parts": [
+        "D2",
+        "C7"
+      ],
+      "role": "the auxiliary winding's rectifier and reservoir"
+    }
+  ]
+}

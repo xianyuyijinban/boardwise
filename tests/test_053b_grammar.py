@@ -857,10 +857,13 @@ def test_each_grammar_satisfies_the_protocol_and_carries_its_name():
         instance = grammar.grammar_for(name)
         assert isinstance(instance, DrawingGrammar)
         assert instance.name == name
-    # 088 adds the fourth literal, 098 the fifth; this is a registration list,
-    # not a 053 claim.
+    # 088 adds the fourth literal, 098 the fifth, 113 the sixth; this is a
+    # registration list, not a 053 claim. The **order** is asserted because
+    # `NAMES.index` is how a caller reports "the Nth grammar", and the first
+    # five literals keep their positions so no existing report shifts.
     assert grammar.NAMES == (
         "voltage-divider", "rc-lowpass", "ldo", "power-entry", "ic-periphery",
+        "flyback",
     )
 
 
