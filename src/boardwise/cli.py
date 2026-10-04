@@ -17123,7 +17123,23 @@ async def _edit_apply_add_flow(
                 f"({spot[0]:g}, {spot[1]:g}) rather than on the pin"
             )
         # Orthogonal by construction: a diagonal segment hangs the host (029-c).
-        route = addcomponent.wire_route(pin_at, target)
+        # 112: with the page's own geometry as the obstacle field the wire is
+        # routed **around** what is in the way instead of through it. The field
+        # is empty of boxes (a `sch.geometry` snapshot carries no per-part body
+        # extent — 坑 9) but it does carry every component origin, every foreign
+        # wire vertex and every foreign run, all of which are walls. If the
+        # snapshot is empty the field is empty, `wire_route` takes its old L
+        # path, and this is byte-for-byte what this flow drew before 112.
+        avoid = addcomponent.avoid_from_geometry(geometry, item.net)
+        route = addcomponent.wire_route(pin_at, target, avoid=avoid)
+        if route is None:
+            notes.append(
+                f"pin {item.pin} of {designator} → {item.net}: there is no clean path to "
+                f"({target[0]:g}, {target[1]:g}) that avoids what the page already "
+                "carries — the wire was NOT drawn (一条穿体的线比没画更糟)"
+            )
+            report["write"]["connections"] = executed
+            return done(2, "failed", "no_clean_route")
         answered = await call(
             "sch.place_wire",
             {"points": [list(point) for point in route], "net": item.net,
@@ -17936,7 +17952,20 @@ async def _edit_apply_patch_pin_flow(client, bridge_error, plan, args, started) 
                 "vertex of that net to reach — the connection was NOT drawn"
             )
             return done(2, "failed", "connection_unavailable")
-        route = addcomponent.wire_route(pin_at, target)
+        # 112: the same obstacle field as the add flow. This flow re-attaches a
+        # wire that was just taken off, so the page it reads still carries every
+        # other wire — routing around them is exactly what stops the re-attached
+        # wire from landing on top of a neighbour. A snapshot with nothing on it
+        # gives an empty field and the old L, unchanged.
+        avoid = addcomponent.avoid_from_geometry(geometry, item.net)
+        route = addcomponent.wire_route(pin_at, target, avoid=avoid)
+        if route is None:
+            notes.append(
+                f"{designator} pin{pin} → {item.net}: no clean path to "
+                f"({target[0]:g}, {target[1]:g}) that avoids what the page carries — "
+                "the wire was NOT drawn (一条穿体的线比没画更糟)"
+            )
+            return done(2, "failed", "no_clean_route")
         answered = await call(
             "sch.place_wire",
             {"points": [list(point) for point in route], "net": item.net,
@@ -18729,7 +18758,25 @@ async def _edit_apply_insert_flow(
             )
             report["write"]["connections"] = executed
             return done(2, "failed", "wire_unavailable")
-        route = addcomponent.wire_route(start, target)
+        # 112: the field is read off `placed_geometry` — the page **after** the
+        # parts landed, so their origins are in it and the new node's wires route
+        # around the parts it was placed next to. A node whose net is not a page
+        # net (`NODE_X`, unnamed) passes an empty `net` to the reader, which is
+        # the conservative reading: nothing on the page is assumed to be its own,
+        # so every other wire is a wall. A page that reports nothing gives an
+        # empty field and the old L, unchanged.
+        avoid = addcomponent.avoid_from_geometry(
+            placed_geometry if isinstance(placed_geometry, dict) else {}, item.net
+        )
+        route = addcomponent.wire_route(start, target, avoid=avoid)
+        if route is None:
+            notes.append(
+                f"{item.designator}.{item.pin} → {item.to_pin or item.net}: no clean "
+                f"path to ({target[0]:g}, {target[1]:g}) that avoids what the page "
+                "carries — the wire was NOT drawn (一条穿体的线比没画更糟)"
+            )
+            report["write"]["connections"] = executed
+            return done(2, "failed", "no_clean_route")
         # The net name is passed only where the plan named a page net: the new
         # node's own wires are left unnamed on purpose, so the editor names that
         # island itself (036 §3 — the read-back compares islands, not names).

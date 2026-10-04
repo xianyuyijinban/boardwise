@@ -238,6 +238,45 @@ def _far_points(geometry: Any, exclude: Iterable[str]) -> list[tuple[str, str]]:
     return out
 
 
+def _redraw_field(
+    geometry: Any,
+    group: Sequence[Part],
+    net: str,
+    *exclude: tuple[float, float],
+) -> addcomponent.ObstacleField:
+    """The obstacle field a redrawn wire is routed against (112).
+
+    The stock field from :func:`addcomponent.avoid_from_geometry` treats **every**
+    component origin as a wall, and after a move the group's own parts are no
+    longer where the snapshot says they are — their *old* origins would send the
+    redrawn wire round where the part used to be, and their new positions are not
+    in the snapshot at all. So the group's origins come out of the walls.
+
+    ``exclude`` is the wire's own new endpoints, and they come out too: a wire
+    that starts (or must arrive) inside a wall is unroutable by definition, so
+    leaving a pin in the blocked set would refuse every internal wire outright.
+
+    Everything else stands: another net's wire vertices, another net's runs, and
+    every part that is **not** moving. That is the whole reason a redrawn wire is
+    allowed to bend now — before 112 it always took the L and could land on a
+    neighbour.
+    """
+    field = addcomponent.avoid_from_geometry(geometry, net)
+    free = {(round(point[0], 3), round(point[1], 3)) for point in exclude}
+    free |= {(round(part.x, 3), round(part.y, 3)) for part in group}
+    kept = tuple(
+        point for point in field.blocked
+        if (round(point[0], 3), round(point[1], 3)) not in free
+    )
+    return addcomponent.ObstacleField(
+        boxes=field.boxes,
+        blocked=kept,
+        edges=field.edges,
+        own_vertices=field.own_vertices,
+        own_edges=field.own_edges,
+    )
+
+
 def plan_wires(
     geometry: Any,
     group: Sequence[Part],
@@ -308,9 +347,22 @@ def plan_wires(
         if len(distinct) == 2:
             (name_a, pin_a), point_a = distinct[0]
             (name_b, pin_b), point_b = distinct[1]
+            start_a = (point_a[0] + dx, point_a[1] + dy)
+            start_b = (point_b[0] + dx, point_b[1] + dy)
+            # 112: both ends move, so the wire is still redrawn rather than
+            # replayed — but now against the page instead of blindly. The group's
+            # own origins and both new pin points are excluded, so the search is
+            # about the rest of the page: a body it slid onto, or a neighbour's.
             route = addcomponent.wire_route(
-                (point_a[0] + dx, point_a[1] + dy), (point_b[0] + dx, point_b[1] + dy)
+                start_a, start_b,
+                avoid=_redraw_field(geometry, group, segment.net, start_a, start_b),
             )
+            if route is None:
+                raise MoveRefused(
+                    f"the internal wire {segment.primitive_id} ({name_a}.{pin_a} ↔ "
+                    f"{name_b}.{pin_b}) has no clean path between its moved pins that "
+                    "avoids what the page already carries — 没有净通路就不画"
+                )
             moves.append(WireMove(
                 primitive_id=segment.primitive_id, net=segment.net,
                 points_before=tuple(points), points_after=tuple(route),
@@ -340,9 +392,17 @@ def plan_wires(
                 + " — 边界附着只认脚（wire 端点落在脚上）；label / netflag / 认不出的图元 "
                 "v1 一律拒绝（本机 sch_PrimitiveNetLabel 连读都不存在，SKILL 坑 9）"
             )
+        start_at = (pin_point[0] + dx, pin_point[1] + dy)
         route = addcomponent.wire_route(
-            (pin_point[0] + dx, pin_point[1] + dy), far_point
+            start_at, far_point, avoid=_redraw_field(geometry, group, segment.net, start_at),
         )
+        if route is None:
+            raise MoveRefused(
+                f"the boundary wire {segment.primitive_id} on {name}.{number} has no "
+                f"clean path from its moved pin ({start_at[0]:g}, {start_at[1]:g}) back "
+                f"to ({far_point[0]:g}, {far_point[1]:g}) that avoids what the page "
+                "already carries — 没有净通路就不画：一条穿体的线看着像接上了，其实没有"
+            )
         moves.append(WireMove(
             primitive_id=segment.primitive_id, net=segment.net,
             points_before=tuple(points), points_after=tuple(route),

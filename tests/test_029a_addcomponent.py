@@ -379,13 +379,18 @@ def test_every_declared_connection_is_executed_and_never_left_to_the_landing_spo
         "for the first declaration and nothing for the second"
     )
     assert [params["points"] for params in wires] == [
-        [[-20.0, -5.0], [-20.0, 0.0], [5.0, 0.0]],
+        [[-20.0, -5.0], [5.0, -5.0], [5.0, 0.0]],
         [[20.0, -5.0], [20.0, 5.0], [0.0, 5.0]],
     ], (
         "each wire runs from **that pin of the new part** (its own reported coordinate, "
         "20 units off the landing spot on the measured symbol) to that connection's own "
         "target, turning a right angle on the way — a wire from the origin reaches no "
-        "pin, and a diagonal segment hangs the host"
+        "pin, and a diagonal segment hangs the host. (112 moved the VCC leg: the old L "
+        "put its corner on U1's origin at (0, 0) and ran *through* it; the wire now "
+        "detours via (5, -5). Same two ends, same net, one fewer thing pressed through — "
+        "the routing upgrade this batch is for, so the pinned route is updated, not "
+        "loosened: the ends, the net, the orthogonality and the exit code are all "
+        "still asserted below exactly as before.)"
     )
     assert all(
         (a[0] == b[0]) or (a[1] == b[1])
@@ -442,8 +447,14 @@ def test_a_wire_falls_back_to_the_spot_and_says_so_when_pins_cannot_be_read(
     assert code == 0, out
     wires = [params for action, params in bridge.writes if action == "sch.place_wire"]
     assert [params["points"] for params in wires] == [
-        [[0.0, -5.0], [0.0, 0.0], [5.0, 0.0]], [[0.0, -5.0], [0.0, 5.0]],
-    ], "with no pin geometry the wire starts at the landing spot, as it always did"
+        [[0.0, -5.0], [5.0, -5.0], [5.0, 0.0]], [[0.0, -5.0], [-5.0, -5.0], [-5.0, 5.0], [0.0, 5.0]],
+    ], (
+        "with no pin geometry the wire starts at the landing spot, as it always did. "
+        "(112: both legs now route round U1's origin at (0, 0) — the old Ls ran through "
+        "it, on the way to (5, 0) and straight up it. Same two starts, same two targets; "
+        "the exact points are updated, the start-at-the-spot claim is what this test is "
+        "for and it still holds.)"
+    )
     assert "reported no pin geometry for C7" in out, (
         "the weaker anchor is named in the notes — the reader is told which claim rests "
         "on the netlist readback alone"

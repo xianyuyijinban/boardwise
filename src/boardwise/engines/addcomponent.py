@@ -80,6 +80,12 @@ LADDER: tuple[tuple[int, int], ...] = (
 #: limit the facts shelf quotes ("within 0.5 inch of the pin").
 CONNECT_RADIUS = 100.0
 
+#: How far beyond everything it walls off a wire's search may go (112). The
+#: lattice search has to be able to step *around* the last obstacle, so the
+#: corridor cannot be the obstacles' own bounding box; four grids of room is
+#: enough to turn a corner past any of them without wandering.
+ROUTE_MARGIN = 20.0
+
 _DESIGNATOR_RE = re.compile(r"^([A-Za-z]+)(\d+)$")
 
 
@@ -265,9 +271,284 @@ def netflag_count(geometry: Any) -> int:
     )
 
 
-def wire_route(
-    anchor: tuple[float, float], target: tuple[float, float]
+class ObstacleField:
+    """What a wire must route around, as far as the page can actually say (112).
+
+    Four lists, and each is *only* what the host measures — this type never
+    invents geometry, because an invented obstacle is a wire refused for a body
+    that is not on the page (坑 9: a `sch.geometry` snapshot carries no per-part
+    extent, so ``boxes`` is empty unless a caller probed one).
+
+    * ``boxes`` — solid extents, ``(x0, y0, x1, y1)``. A step cutting one is
+      refused. **Empty by default**, which is the honest reading of a snapshot.
+    * ``blocked`` — points a vertex of this wire may not land on: another net's
+      pin tip, its flag anchor, its wire vertex. A vertex there *is* a
+      connection in the editor's model, so it is a short.
+    * ``edges`` — another net's runs. Their interiors may be crossed
+      perpendicularly; they may never be run along or turned on, because that
+      would put a vertex of this wire on the other, which does join.
+    * ``own_vertices`` / ``own_edges`` — this net's own geometry, which is
+      **legal**: the goal is a vertex of it, so treating that vertex as a wall
+      would refuse the connection the wire exists to make. The two are what the
+      router must *not* be handed as obstacles, so they are carried separately
+      rather than being filtered out of the obstacle lists at the call site.
+    """
+
+    __slots__ = ("boxes", "blocked", "edges", "own_vertices", "own_edges")
+
+    def __init__(
+        self,
+        *,
+        boxes: Sequence[tuple[float, float, float, float]] = (),
+        blocked: Iterable[tuple[float, float]] = (),
+        edges: Iterable[tuple[float, float, float, float]] = (),
+        own_vertices: Iterable[tuple[float, float]] = (),
+        own_edges: Iterable[tuple[float, float, float, float]] = (),
+    ) -> None:
+        self.boxes: tuple[tuple[float, float, float, float], ...] = tuple(
+            (float(b[0]), float(b[1]), float(b[2]), float(b[3])) for b in boxes
+        )
+        self.blocked: tuple[tuple[float, float], ...] = tuple(
+            (float(p[0]), float(p[1])) for p in blocked
+        )
+        self.edges: tuple[tuple[float, float, float, float], ...] = tuple(
+            (float(e[0]), float(e[1]), float(e[2]), float(e[3])) for e in edges
+        )
+        self.own_vertices: tuple[tuple[float, float], ...] = tuple(
+            (float(p[0]), float(p[1])) for p in own_vertices
+        )
+        self.own_edges: tuple[tuple[float, float, float, float], ...] = tuple(
+            (float(e[0]), float(e[1]), float(e[2]), float(e[3])) for e in own_edges
+        )
+
+    @property
+    def empty(self) -> bool:
+        """Nothing to avoid — the caller should take the old straight/L path.
+
+        A field carrying no boxes, no blocked points and no foreign runs has
+        nothing to say about this wire, and a search over an empty field would
+        still bend for a reason no one can see. ``None`` and this are the same
+        instruction, stated as data so no caller has to re-derive it.
+        """
+        return not (self.boxes or self.blocked or self.edges)
+
+    def extents(self, *points: tuple[float, float]) -> tuple[float, float, float, float] | None:
+        """The bounding box of everything this field walls off, or ``None``.
+
+        ``points`` are the wire's own two ends, and they belong in the corridor:
+        a search bounded by the *obstacles* alone refuses the very first step,
+        because the anchor is normally outside the walls. A field with nothing in
+        it and no points has no corridor to state.
+        """
+        here: list[tuple[float, float]] = list(self.blocked) + list(self.own_vertices)
+        here += list(points)
+        for edge in self.edges + self.own_edges:
+            here.append((edge[0], edge[1]))
+            here.append((edge[2], edge[3]))
+        for box in self.boxes:
+            here.append((box[0], box[1]))
+            here.append((box[2], box[3]))
+        if not here:
+            return None
+        xs = [p[0] for p in here]
+        ys = [p[1] for p in here]
+        return (min(xs), min(ys), max(xs), max(ys))
+
+
+def avoid_from_geometry(geometry: Any, net: str) -> ObstacleField:
+    """Read one net's obstacle field out of a ``sch.geometry`` snapshot (112).
+
+    What the snapshot **does** carry, and is therefore read:
+
+    * every component's origin — including an unnumbered one, which
+      :func:`component_origins` skips for the landing ladder on purpose (a
+      half-placed part is not *free space*, but it is still something a wire
+      may not land on) — the only extent a component has here, so it is a
+      **blocked point** (a wire may not end on it) and never a box;
+    * every wire's vertices, split by net: another net's are walls, this net's
+      are its own legal geometry;
+    * every wire's runs, split the same way — another net's are edges the wire
+      may cross but not run along.
+
+    What it does **not** carry is a per-part body box, so ``boxes`` comes back
+    empty. That is not a gap to paper over: a box invented from a designator
+    would refuse a wire for a body nobody measured. Callers that *do* have body
+    boxes (the compiler, from the symbol profile) pass them in themselves.
+
+    ``net=''`` — the unjudged spelling, kept for the diagnostics that ask
+    "what would the field look like" without owning a net — treats every wire on
+    the page as foreign.
+    """
+    field_own_vertices: list[tuple[float, float]] = []
+    field_own_edges: list[tuple[float, float, float, float]] = []
+    field_blocked: list[tuple[float, float]] = []
+    field_edges: list[tuple[float, float, float, float]] = []
+    for point in component_origins(geometry).values():
+        field_blocked.append(point)
+    for entry in (geometry or {}).get("wires") or []:
+        state = _state_of(entry)
+        net_name = _text(state.get("Net"))
+        line = state.get("Line") or state.get("Points") or state.get("points") or []
+        points: list[tuple[float, float]] = []
+        if isinstance(line, (list, tuple)) and line and not isinstance(line[0], (list, tuple)):
+            coords = list(line)
+            for index in range(0, len(coords) - 1, 2):
+                x, y = _number(coords[index]), _number(coords[index + 1])
+                if x is not None and y is not None:
+                    points.append((x, y))
+        else:
+            for pair in line:
+                if isinstance(pair, (list, tuple)) and len(pair) >= 2:
+                    x, y = _number(pair[0]), _number(pair[1])
+                    if x is not None and y is not None:
+                        points.append((x, y))
+        mine = bool(net) and net_name == net
+        for point in points:
+            (field_own_vertices if mine else field_blocked).append(point)
+        for start, end in zip(points, points[1:]):
+            if start == end:
+                continue
+            (field_own_edges if mine else field_edges).append(
+                (start[0], start[1], end[0], end[1])
+            )
+    return ObstacleField(
+        blocked=field_blocked,
+        edges=field_edges,
+        own_vertices=field_own_vertices,
+        own_edges=field_own_edges,
+    )
+
+
+def route_orthogonal(
+    anchor: tuple[float, float],
+    target: tuple[float, float],
+    field: ObstacleField,
+    *,
+    grid: float = LANDING_GRID,
+    bounds: tuple[float, float, float, float] | None = None,
+) -> list[tuple[float, float]] | None:
+    """The cheapest orthogonal path around ``field``, or ``None``.
+
+    A thin wrapper over :class:`boardwise.engines.router.Router` — the same
+    search, the same walls, the same costs the drawing compiler routes on, so
+    the interactive flows cannot draw something the checker would refuse.
+
+    Two lattice facts, spelled out because they are where a diagonal would sneak
+    back in (029-c: a diagonal `sch.place_wire` hangs the host, measured 2/2):
+
+    * the lattice's residue is taken from ``anchor``, so the **first** point of
+      the path is the anchor itself and the wire leaves the pin on-grid;
+    * ``target`` need not be on the lattice — a pin is wherever the editor put
+      it. The search therefore aims at the nearest lattice node to the target
+      and joins the target as a final leg. Of the two legs that final join
+      needs, one is always a straight run and the other a single bend, so every
+      emitted segment is axis-aligned; the corner goes at ``(node.x, target.y)``,
+      which is the old L's rule (the run *into* the pin is the one along it).
+      A target that is already a lattice point gets no extra points at all.
+    """
+    from . import router
+
+    ax, ay = float(anchor[0]), float(anchor[1])
+    tx, ty = float(target[0]), float(target[1])
+    if field.empty:
+        if ax == tx or ay == ty:
+            return [(ax, ay), (tx, ty)]
+        return [(ax, ay), (ax, ty), (tx, ty)]
+    corridor = bounds if bounds is not None else field.extents((ax, ay), (tx, ty))
+    if corridor is None:
+        return None
+    if bounds is not None:
+        search_box = bounds
+    else:
+        search_box = (
+            corridor[0] - ROUTE_MARGIN, corridor[1] - ROUTE_MARGIN,
+            corridor[2] + ROUTE_MARGIN, corridor[3] + ROUTE_MARGIN,
+        )
+    residue = (ax % grid, ay % grid)
+    lattice = router.Router(
+        grid=grid, residue=residue, boxes=field.boxes, bounds=search_box,
+    )
+    for point in field.blocked:
+        lattice.blocked.add((round(point[0], 6), round(point[1], 6)))
+    for edge in field.edges:
+        lattice.add_edge((edge[0], edge[1]), (edge[2], edge[3]))
+    # The search's goal is the lattice node nearest the target. `Router.route`
+    # ends the walk as soon as it pops a goal node, and a node inside a wall
+    # (the target vertex of a net whose own geometry is excluded from `blocked`
+    # can still sit on a foreign body) is never reached as a step, so the
+    # nearest *free* node along one of the two axes is taken when the exact one
+    # is a wall. A target already on the lattice is its own node, unchanged.
+    goal = _goal_node(lattice, target)
+    if goal is None:
+        return None
+    goal_point = lattice.point(goal)
+    path = lattice.route(anchor, goal_point, targets=[goal_point])
+    if path is None:
+        return None
+    tail_point = (round(float(path[-1][0]), 6), round(float(path[-1][1]), 6))
+    return _as_bends([tuple(point) for point in path], (tx, ty), tail_point)
+
+
+def _as_bends(
+    path: Sequence[tuple[float, float]],
+    target: tuple[float, float],
+    tail: tuple[float, float],
 ) -> list[tuple[float, float]]:
+    """The lattice path as a wire: straight runs collapsed, then the target.
+
+    The final leg into a target that is not on the lattice is appended **before**
+    the collapse, so the run leading to the pin and the run leaving the last
+    lattice node are each judged on their own. Exactly one of the two extra legs
+    is a straight run and the other is a single bend, so every emitted segment
+    stays axis-aligned; the corner is placed on the target's own x, which is the
+    old path's rule (the run into the pin is the one along it).
+
+    The collapse itself is **the compiler's own** :func:`drawcompiler._compress`,
+    called here rather than restated: a wire's vertices must be its bends for the
+    same reason on both paths (the readability checker reads a vertex inside
+    another wire's span as a tee that needs a junction, while a proper crossing
+    is not a connection at all), and two copies of that rule would eventually
+    disagree. The import is function-local so this module keeps no load-time edge
+    on the whole compiler.
+    """
+    from .drawcompiler import _compress
+
+    points = [tuple(point) for point in path]
+    if tail != target:
+        if abs(tail[0] - target[0]) > 1e-6 and abs(tail[1] - target[1]) > 1e-6:
+            points.append((tail[0], target[1]))
+        points.append(target)
+    return _compress(points)
+
+
+def _goal_node(lattice: Any, target: tuple[float, float]) -> tuple[int, int] | None:
+    """The lattice node the search aims at, or ``None`` if the target is walled in.
+
+    The target's own node first, then the nearest free node along each axis, in
+    increasing distance — a target that happens to sit inside a body must not
+    make the whole wire unroutable, but it must not be routed *through* it
+    either, so the fallback is a node the search may legally stand on.
+    """
+    exact = lattice.node(target)
+    if not lattice._wall(exact) and lattice._in_bounds(exact):
+        return exact
+    steps = (1, -1, 2, -2, 3, -3, 4, -4)
+    for distance in steps:
+        for dx, dy in ((distance, 0), (0, distance)):
+            candidate = (exact[0] + dx, exact[1] + dy)
+            if lattice._in_bounds(candidate) and not lattice._wall(candidate):
+                return candidate
+    return None
+
+
+def wire_route(
+    anchor: tuple[float, float],
+    target: tuple[float, float],
+    *,
+    avoid: ObstacleField | None = None,
+    grid: float = LANDING_GRID,
+    bounds: tuple[float, float, float, float] | None = None,
+) -> list[tuple[float, float]] | None:
     """The polyline from a pin to its target, **orthogonal** by construction (029-c).
 
     Measured on 3.2.186: `sch.place_wire` with a diagonal segment never returns —
@@ -276,12 +557,28 @@ def wire_route(
     ``(anchor.x, target.y)``: the first run leaves the pin along the axis it points
     at, which keeps it clear of the neighbouring pin (a run along the pin row would
     cross the part's own body). Same discipline `engines/layout.py` routes on.
+
+    **112: the L is now the fallback, not the method.** With ``avoid`` the wire is
+    routed around what the page says is in the way, on the same lattice search the
+    drawing compiler uses (:func:`route_orthogonal`). Three outcomes, and the
+    third is the point of the batch:
+
+    * ``avoid=None``, or a field with nothing in it → **exactly** the straight/L
+      polyline this function has always returned, byte for byte;
+    * a path is found → the searched route, orthogonal, cleared of every box,
+      blocked point and foreign run in the field;
+    * no path is found → ``None``. The caller reports 「无净通路」 and exits the
+      way that flow already reports a failure. It does **not** fall back to the
+      L: a wire pressed through a part body is a drawing that looks connected
+      and is not, which is a worse lie than a connection that was not drawn.
     """
-    ax, ay = float(anchor[0]), float(anchor[1])
-    tx, ty = float(target[0]), float(target[1])
-    if ax == tx or ay == ty:
-        return [(ax, ay), (tx, ty)]
-    return [(ax, ay), (ax, ty), (tx, ty)]
+    if avoid is None or avoid.empty:
+        ax, ay = float(anchor[0]), float(anchor[1])
+        tx, ty = float(target[0]), float(target[1])
+        if ax == tx or ay == ty:
+            return [(ax, ay), (tx, ty)]
+        return [(ax, ay), (ax, ty), (tx, ty)]
+    return route_orthogonal(anchor, target, avoid, grid=grid, bounds=bounds)
 
 
 def occupied_points(geometry: Any) -> list[tuple[float, float]]:
