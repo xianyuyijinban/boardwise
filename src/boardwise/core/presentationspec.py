@@ -114,6 +114,7 @@ PRESENTATION_SPEC_VERSION = 1
 #: saying the grammar is not known.
 GRAMMARS: tuple[str, ...] = (
     "voltage-divider", "rc-lowpass", "ldo", "power-entry", "ic-periphery",
+    "flyback",
 )
 
 #: How a net may be expressed locally (052 sec.5: a key local topology is drawn

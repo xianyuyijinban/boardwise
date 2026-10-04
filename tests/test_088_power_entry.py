@@ -397,7 +397,12 @@ def test_the_rail_and_the_ground_are_read_from_the_classes_and_the_roles_bind():
         item.part_id for item in result.bindings if item.role == "shunt"
     ) == ["C115", "C116", "D1"]
     assert base.is_net_role("rail") and not base.is_net_role("entry")
-    assert base.NET_ROLES[-1] == "rail"
+    # 088's own claim is that `rail` is a net role, not that it is the last
+    # entry: 113 appended the flyback's net roles to the same table (they are
+    # a membership list, not an ordering), so the position assertion is
+    # replaced by the one this test is actually about.
+    assert "rail" in base.NET_ROLES
+    assert base.NET_ROLES[:5] == ("in", "out", "gnd", "tap", "rail")
 
 
 def test_the_entry_is_the_part_the_document_names_not_the_one_topology_suggests():

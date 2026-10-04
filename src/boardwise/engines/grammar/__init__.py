@@ -1,6 +1,6 @@
 """The drawing grammars of 053 stage B (053 sec.3, 052 sec.5).
 
-Five grammars, one per idiom the drawing compiler is about, each a `bind` over
+Six grammars, one per idiom the drawing compiler is about, each a `bind` over
 the two specs of stage A:
 
     voltage-divider   两电阻竖排同轴，抽头可见
@@ -13,6 +13,13 @@ the two specs of stage A:
                       负载/去耦/V3 电容从一脚网回到轨或地（shunt）、跨模块信号在核心
                       自己的脚上出标签（098；核心靠 `modules[].core` > intent
                       blocks[] > 唯一严格最多脚三来源绑上，三者冲突并列原文拒绝）
+    flyback           隔离反激核心（113；毕设语法谱系首块砖）：T1 居中、原边朝输入
+                      侧副边朝输出侧、RCD 钳位贴原边上、Q1 竖放、采样电阻直连、
+                      反馈副边成链、光耦唯一跨隔离带、双地分族各自统一。角色全按
+                      「脚上的网类 + 拓扑」判，不读位号/值/符号名；绕组靠三对网判
+                      （Np 在母线与开关节点间、Ns 在整流二极管与副边地间、Naux 另一对）。
+                      与 power-entry / ic-periphery **组合**使用，引用其角色证据、
+                      不复制其逻辑
 
 Two things this package is not. It does not compute coordinates — the compiler
 does, and `RelativeConstraint` has no place to put one (053 sec.4). And it does
@@ -39,7 +46,14 @@ from typing import Mapping
 from ...core.circuitspec import CircuitSpec
 from ...core.presentationspec import GRAMMARS, PresentationSpec
 from ...core.symbolprofile import SymbolProfile
-from . import ic_periphery, ldo, power_entry, rc_lowpass, voltage_divider
+from . import (
+    flyback,
+    ic_periphery,
+    ldo,
+    power_entry,
+    rc_lowpass,
+    voltage_divider,
+)
 from .base import (
     ABOVE,
     ADJACENT,
@@ -77,12 +91,12 @@ from .base import (
     refused_result,
 )
 
-#: The five grammar names this build implements, spelled as `GRAMMARS` in
+#: The six grammar names this build implements, spelled as `GRAMMARS` in
 #: `presentationspec` spells them: the spec's literal and the implementation's
 #: name are the same string, so a lookup cannot half-match.
 NAMES: tuple[str, ...] = (
     voltage_divider.NAME, rc_lowpass.NAME, ldo.NAME, power_entry.NAME,
-    ic_periphery.NAME,
+    ic_periphery.NAME, flyback.NAME,
 )
 
 _CLASSES: dict[str, type] = {
@@ -91,6 +105,7 @@ _CLASSES: dict[str, type] = {
     ldo.NAME: ldo.LdoGrammar,
     power_entry.NAME: power_entry.PowerEntryGrammar,
     ic_periphery.NAME: ic_periphery.IcPeripheryGrammar,
+    flyback.NAME: flyback.FlybackGrammar,
 }
 
 #: Every role any grammar may bind, per grammar, table roles first and this
@@ -101,12 +116,14 @@ ROLES_BY_GRAMMAR: dict[str, tuple[str, ...]] = {
     ldo.NAME: ldo.ROLES + ldo.EXTRA_ROLES,
     power_entry.NAME: power_entry.ROLES,
     ic_periphery.NAME: ic_periphery.ROLES,
+    flyback.NAME: flyback.ROLES,
 }
 
 __all__ = [
     "NAMES",
     "ROLES_BY_GRAMMAR",
     "bind",
+    "flyback",
     "grammar_for",
     "ic_periphery",
     "ldo",

@@ -917,7 +917,10 @@ def test_the_roles_are_read_from_the_partition_and_the_core_owns_them():
     assert bound["gnd"] == [GND]
     assert bound["bridge"] == ["X1"]
     assert sorted(bound["shunt"]) == ["C1", "C2", "C3", "C4"]
-    assert base.NET_ROLES[-1] == "rail" and not base.is_net_role("bridge")
+    # As in 088: `rail` being a net role is the claim; being the *last* entry
+    # was an accident of the table's size, and 113 appended to it (see
+    # base.NET_ROLES's own comment).
+    assert "rail" in base.NET_ROLES and not base.is_net_role("bridge")
 
 
 def test_a_bridge_is_a_part_across_two_of_the_cores_pins_and_a_shunt_returns():
