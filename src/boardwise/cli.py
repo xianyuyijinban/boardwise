@@ -1641,6 +1641,77 @@ def build_parser() -> argparse.ArgumentParser:
         "--port", type=int, default=None, help="Daemon port (default: 61190).",
     )
 
+    # ---- 111: the page lint (read-only; live snapshot or a captured dump) --
+    draw_lint = draw_sub.add_parser(
+        "lint",
+        help=(
+            "Read-only readability lint of one page: nine geometric predicates "
+            "(text-on-wire, text-on-text, text-on-part, wire-through-part, "
+            "duplicate-annotation, crossings, label-wire-clearance, flag "
+            "orientation, board fill), findings by severity (task 111)."
+        ),
+        description=(
+            "The machine gate for the defects 110's re-review caught by eye: "
+            "a wire printed through a label, a value stacked on a part, a pin "
+            "crossed mid-span — all purely geometric, all judgeable from one "
+            "read-only page snapshot. The snapshot is the page's `sch.geometry` "
+            "plus the editor's own SVG render of the same page (the render is "
+            "where the text geometry lives: the host exposes no text-extent "
+            "read, so every text box is estimated from the render's anchors "
+            "and marked `estimate` in the findings). Default reads the live "
+            "page (`--page` focuses it first, exactly like `draw apply`'s "
+            "guard); `--snapshot` + `--render` replay a captured pair with no "
+            "daemon at all. Exit 0 no ERROR (INFO/WARN reported) / 1 ERROR "
+            "findings / 2 bad input / 3 the page's state cannot be stated."
+        ),
+    )
+    draw_lint.add_argument(
+        "--page", default=None, metavar="UUID",
+        help=(
+            "The page to lint (default: the focused page). Read-only: "
+            "doc.open + sch.geometry + export.render format=svg, nothing written."
+        ),
+    )
+    draw_lint.add_argument(
+        "--snapshot", default=None, metavar="PATH",
+        help=(
+            "A captured `sch.geometry` dump to lint instead of the live page "
+            "(offline replay; with --render there is no daemon contact)."
+        ),
+    )
+    draw_lint.add_argument(
+        "--render", default=None, metavar="PATH",
+        help=(
+            "The captured SVG render of the same page (the text-geometry "
+            "sidecar for --snapshot; without it the text predicates answer "
+            "'unreadable' and only wire/flag geometry is judged)."
+        ),
+    )
+    draw_lint.add_argument(
+        "--bodies", default=None, metavar="PATH",
+        help=(
+            "Per-part measured body boxes (JSON: primitiveId → [minX, minY, "
+            "maxX, maxY], from `sch.geometry --params {\"bboxIds\":[id]}`). "
+            "Without them L3/L4's body half answers 'unreadable' — the host "
+            "gives no body extent in the page dump."
+        ),
+    )
+    draw_lint.add_argument(
+        "--json", dest="json_path", metavar="PATH",
+        help="Write the machine-readable findings report here.",
+    )
+    draw_lint.add_argument(
+        "--project", default=None, metavar="NAME_OR_UUID",
+        help="Which editor window to read (023 routing hint; the daemon will not guess).",
+    )
+    draw_lint.add_argument(
+        "--instance", default=None, metavar="INSTANCE_ID",
+        help="The same choice by window key.",
+    )
+    draw_lint.add_argument(
+        "--port", type=int, default=None, help="Daemon port (default: 61190).",
+    )
+
     # ---- 109 A4: the intent proposer (offline, no editor) ------------------
     draw_propose = draw_sub.add_parser(
         "propose",
@@ -9650,12 +9721,202 @@ def _print_proposal(proposal: object, out_path: str | None) -> None:
         print("  draft:")
 
 
+def _cmd_draw_lint(args: argparse.Namespace) -> int:
+    """`draw lint --page P1` (task 111): nine read-only geometric predicates.
+
+    Two data paths: live (doc.open to focus the page, then one `sch.geometry`
+    and one `export.render format=svg` — reads only, and the render is a
+    *report*, not a write) and replay (`--snapshot` + `--render`, no daemon).
+    Exit 0 no ERROR / 1 ERROR findings / 2 bad input / 3 the page's state
+    cannot be stated (the live read failed or came back unusable).
+    """
+    import asyncio
+
+    from .engines import drawlint
+
+    snapshot: dict | None = None
+    render_svg: str | None = None
+    bodies: dict[str, tuple] = {}
+    notes: list[str] = []
+
+    if args.snapshot:
+        if getattr(args, "page", None):
+            print(
+                "boardwise draw lint: --snapshot replays a captured pair, so "
+                "--page would be a second, contradictory source (give one)",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            snapshot = json.loads(Path(args.snapshot).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            print(f"boardwise draw lint: {args.snapshot}: {exc}", file=sys.stderr)
+            return 2
+        if args.render:
+            try:
+                render_svg = Path(args.render).read_text(encoding="utf-8")
+            except OSError as exc:
+                print(f"boardwise draw lint: {args.render}: {exc}", file=sys.stderr)
+                return 2
+        else:
+            notes.append(
+                "no --render sidecar: the text predicates (L1 text half, L2, L3, "
+                "L7) answer 'unreadable' — only wire/flag geometry is judged"
+            )
+        if args.bodies:
+            try:
+                raw = json.loads(Path(args.bodies).read_text(encoding="utf-8"))
+                bodies = {
+                    key: tuple(value)
+                    for key, value in (raw or {}).items()
+                    if isinstance(value, (list, tuple)) and len(value) == 4
+                }
+            except (OSError, ValueError) as exc:
+                print(f"boardwise draw lint: {args.bodies}: {exc}", file=sys.stderr)
+                return 2
+        page_label = args.snapshot
+    else:
+        BridgeClient, BridgeError, port, token = _open_cli(args)
+
+        async def run() -> tuple[dict | None, str | None, list[str]]:
+            local_notes: list[str] = []
+            try:
+                client = await BridgeClient.open(
+                    _bridge_uri(port), token, "cli", client="boardwise-cli"
+                )
+            except (OSError, BridgeError) as exc:
+                local_notes.append(f"daemon not reachable on 127.0.0.1:{port} ({exc})")
+                return None, None, local_notes
+
+            async def call(action: str, params: dict, purpose: str):
+                return await client.call(action, params, **_edit_target_kwargs(args))
+
+            try:
+                if args.page:
+                    listing = await call(
+                        "doc.list", {}, "read the focused project and page"
+                    )
+                    pages = {
+                        row.get("uuid"): row.get("name")
+                        for row in (listing.get("documents") or [])
+                        if isinstance(row, dict) and row.get("type") == "page"
+                    }
+                    # `--page P1` names the page like the editor's own tab does;
+                    # a uuid works too. One lookup, no guessing: a name that
+                    # matches several pages or no page is refused (R3).
+                    page_uuid = None
+                    if args.page in pages:
+                        page_uuid = args.page
+                    else:
+                        name_matches = [
+                            uuid for uuid, name in pages.items()
+                            if name == args.page
+                        ]
+                        if len(name_matches) == 1:
+                            page_uuid = name_matches[0]
+                        elif len(name_matches) > 1:
+                            local_notes.append(
+                                f"page name {args.page!r} matches several pages "
+                                f"({sorted(name_matches)}) — pass the uuid"
+                            )
+                            return None, None, local_notes
+                    if page_uuid is None:
+                        local_notes.append(
+                            f"page {args.page} is not in the focused project's "
+                            f"page list ({sorted(v for v in pages.values() if v)})"
+                        )
+                        return None, None, local_notes
+                    await call("doc.open", {"uuid": page_uuid}, "focus the page (read-only)")
+                geometry = await call(
+                    "sch.geometry", {}, "read the page's primitives (read-only)"
+                )
+                if not isinstance(geometry, dict) or not geometry.get("components"):
+                    local_notes.append(
+                        "sch.geometry answered nothing readable — the page's "
+                        "state cannot be stated"
+                    )
+                    return None, None, local_notes
+                render_payload = await call(
+                    "export.render",
+                    {"format": "svg", "scope": "page"},
+                    "render the page (read-only; the text-geometry sidecar)",
+                )
+                render = drawlint.render_svg_from_payload(
+                    render_payload if isinstance(render_payload, dict) else None
+                )
+                if render is None:
+                    local_notes.append(
+                        "the page's SVG render was not available, so the text "
+                        "predicates answer 'unreadable' — only wire/flag "
+                        "geometry is judged"
+                    )
+                return geometry, render, local_notes
+            except BridgeError as exc:
+                local_notes.append(f"{exc.code}: {exc.message}")
+                return None, None, local_notes
+            except Exception as exc:  # noqa: BLE001 — a dropped bridge is an answer
+                local_notes.append(f"bridge call failed: {exc}")
+                return None, None, local_notes
+            finally:
+                try:
+                    await client.close()
+                except Exception:  # noqa: BLE001
+                    pass
+
+        snapshot, render_svg, notes = asyncio.run(run())
+        if snapshot is None:
+            print(
+                "boardwise draw lint: 在线状态不可陈述 — the page's state cannot "
+                "be stated (see notes)",
+                file=sys.stderr,
+            )
+            for note in notes:
+                print(f"  note: {note}", file=sys.stderr)
+            return 3
+        page_label = args.page or "the focused page"
+
+    findings = drawlint.run_lint(snapshot, render_svg)
+    counts = {"ERROR": 0, "WARN": 0, "INFO": 0}
+    for finding in findings:
+        counts[finding.severity] += 1
+
+    print(f"boardwise draw lint: {page_label} — {counts['ERROR']} error / "
+          f"{counts['WARN']} warn / {counts['INFO']} info")
+    for note in notes:
+        print(f"  note: {note}")
+    print(drawlint.render_report(findings))
+
+    if args.json_path:
+        payload = {
+            "page": page_label,
+            "source": "replay" if args.snapshot else "live",
+            "findings": [finding.as_dict() for finding in findings],
+            "counts": counts,
+            "exitCode": 1 if counts["ERROR"] else 0,
+            "notes": notes,
+            "thresholds": {
+                "L1_TEXT_WIRE_PENETRATION": drawlint.L1_TEXT_WIRE_PENETRATION,
+                "L2_TEXT_OVERLAP": drawlint.L2_TEXT_OVERLAP,
+                "L5_DUPLICATE_NET_GAP": drawlint.L5_DUPLICATE_NET_GAP,
+                "L7_LABEL_WIRE_GAP": drawlint.L7_LABEL_WIRE_GAP,
+                "L9_FILL_RATIO": drawlint.L9_FILL_RATIO,
+            },
+        }
+        Path(args.json_path).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        print(f"  report: {args.json_path}")
+
+    return 1 if counts["ERROR"] else 0
+
+
 DRAW_COMMANDS = {
     "compile": _cmd_draw_compile,
     "plan": _cmd_draw_plan,
     "apply": _cmd_draw_apply,
     "discard": _cmd_draw_discard,
     "propose": _cmd_draw_propose,
+    "lint": _cmd_draw_lint,
 }
 
 
