@@ -266,8 +266,20 @@ def test_the_cause_is_one_point_where_two_nets_share_a_pin_tip():
         dc._dodge_foreign_pins = saved
     assert before is not None
     bad = _cross_net_pin_coincidences(circuit, ctx, before)
-    assert len(bad) == 2, (
-        f"the root-cause shape moved: {bad} — re-measure before trusting the rest"
+    # **119 重新量过**：118 在**五脚**那颗料上量到 **2** 处跨网 pad 重合
+    # （`(80,-290)` / `(80,-250)`，都在反馈横排那一行）。岳 2026-10-04 换的
+    # 七脚变压器体框是 101x136（旧颗 40x40），链的排布整个变了——**重新量是 0**。
+    #
+    # 所以这一条现在量的是**一个仍然成立的事实，而不是一个已经不再犯的病**：
+    # 关掉 117① 的治法也**量不出**跨网重合。这比 118 那版**更强**而不是更弱
+    # ——117① 治的是 `_dodge_foreign_pins` 的盲区，而盲区一旦在几何上不再被踩到，
+    # 「关掉治法也没有病」就是真话。反过来，如果哪一天这里又量出非零，那说明
+    # 几何退回去了，**治法也就重新需要它**，这条会红并要求重新量。
+    assert not bad, (
+        f"the root-cause shape moved back: {bad} — the seven-pin transformer's "
+        "measured bbox put the chain somewhere this page no longer collides; a "
+        "non-empty set here means either the geometry reverted or the claim "
+        "needs re-deriving, and both are worth stopping for"
     )
     # Every coincidence is between pins of **different declared nets**, which is
     # the whole claim: the plan is putting two nets on one coordinate.  The
@@ -300,10 +312,24 @@ def test_the_profile_is_not_the_disease_so_c_is_ruled_out():
             assert f"{part_id}.{pin}" in declared[net], (
                 f"{part_id}.{pin} is on {net!r} but the spec does not say so"
             )
-    # And the profile is the measured one, not 113's: T1 has five pins.
-    assert len(ctx.profile("T1").pins) == 5, [
-        pin.number for pin in ctx.profile("T1").pins
-    ]
+    # And the profile is the **measured** one, not 113's. **119 更新**：118 量的
+    # 是五脚（`C9900020988`），岳 2026-10-04 换成了七脚（`C49118510`，
+    # `XREE16-050624`），所以这里不再写死脚数——写死就是下一次换料时的一句谎话。
+    # 钉的是**那颗料的真身**：脚号逐个等于 118b 换料探针的读数。
+    import json as _json
+    import pathlib as _pathlib
+    probe = _json.loads(
+        (_pathlib.Path(__file__).resolve().parents[1] / "outputs" / "118"
+         / "probe" / "xfmr_swap_probe.json").read_text(encoding="utf-8")
+    )
+    chosen = next(entry for entry in probe["candidates"].values()
+                  if entry.get("verdict") == "chosen")
+    measured = sorted(str(pin["number"]) for pin in chosen["pins"])
+    assert sorted(pin.number for pin in ctx.profile("T1").pins) == measured, (
+        f"the transformer's pins are "
+        f"{sorted(pin.number for pin in ctx.profile('T1').pins)}; the 118b "
+        f"probe measured {measured} — re-probe before trusting either list"
+    )
 
 
 def test_the_flags_are_not_the_disease_so_a_is_ruled_out():
@@ -406,14 +432,21 @@ def test_a_gap_wider_than_the_collision_does_not_help_so_it_is_topological():
     dc._dodge_foreign_pins = (
         lambda ctx_, pid, slot, anchor, root, poses, origins: root)
     try:
+        # **119 重新量过**：118 在五脚那颗料上量到 GAP 10/20/40 各 2 处跨网重合
+        # （`(80,-290)` / `(80,-250)`）。换料后体框从 40x40 变成 101x136，链的
+        # 排布整个变了，这三档**重新量是 0**。所以 before 侧现在钉的是 0——**不是**
+        # 「治法之前有病」，而是「这一页在换料之后**没有**这个病可治」，而下面
+        # after 侧量的是**治法仍然不制造新病**。两侧都断言，是 118 就在这里的
+        # 那句「只断言对自己有利的那个数，就是在挑数据」。
         for gap in (10.0, 20.0, 40.0):
             dc.GAP = gap
             placed, _ = _soft_placement(ctx)
             assert placed is not None
             before = _cross_net_pin_coincidences(circuit, ctx, placed)
-            assert sorted(before) == [(80.0, -290.0), (80.0, -250.0)], (
-                f"GAP={gap}: the coincidence set is {sorted(before)} — if the "
-                "two immune points moved, the topology claim is stale"
+            assert not before, (
+                f"GAP={gap}: the coincidence set is {sorted(before)} — 118 "
+                "measured zero here on the seven-pin transformer, so a non-empty "
+                "set means the geometry reverted and this table needs re-measuring"
             )
     finally:
         dc._dodge_foreign_pins = saved_dodge
@@ -428,13 +461,18 @@ def test_a_gap_wider_than_the_collision_does_not_help_so_it_is_topological():
                 "rather than measuring the trail"
             )
         # The one rung where the fix does not hold, stated rather than hidden.
+        # **119 重新量过**：118 量到 GAP=60 剩 1 处；换料后**仍是 1 处**，但坐标
+        # 换了（`(100,-270)`，不是 118 的那个点）。所以这里只钉**个数**——
+        # 钉坐标就是钉一句会随换料变的话，钉个数才是「这一档治法挡不住」这个
+        # 事实本身。
         dc.GAP = 60.0
         placed, _ = _soft_placement(ctx)
         assert placed is not None
         wide = _cross_net_pin_coincidences(circuit, ctx, placed)
         assert len(wide) == 1, (
-            f"GAP=60 leaves {wide} — 118 measured exactly one, so a different "
-            "number means the geometry moved and this table needs re-measuring"
+            f"GAP=60 leaves {sorted(wide)} — 119 measured exactly one, so a "
+            "different number means the geometry moved and this table needs "
+            "re-measuring"
         )
     finally:
         dc.GAP = saved_gap
