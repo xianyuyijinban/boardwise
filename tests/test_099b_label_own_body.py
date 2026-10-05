@@ -144,30 +144,49 @@ def test_an_unowned_label_over_a_body_is_still_refused():
 
 
 def _occupied_around(point, *, net="RXD"):
-    """把锚点四邻全堵上：preferred=left 与其余三个候选方向**全都撞车**。
+    """把锚点四邻全堵上：preferred=left 与其余三个方向**每一格**都撞车。
 
     每个挡块正好盖住一个候选盒（候选盒按 `_label_at` 自己的偏移造：水平
     ``±(text_width/2 + TEXT_GAP)``、垂直 ``±(TEXT_SIZE/2 + TEXT_GAP)``）。
+
+    **117 更新**：`_label_at` 的阶梯从「每方向一格」改成「每方向
+    :data:`drawcompiler.TEXT_ESCALATION_STEPS` 格」（旗名在一格上放不下时，
+    两格三格常常是空的——反激整页的八个 `text-overlap` 就是这么来的）。所以
+    「四个方向都被占」必须按**新的判据**造：**每一格**都被占，测试量的仍然是
+    同一件事——真的无处可去时，盒子落回引脚自己的逃逸那一侧、且不把锚点包在
+    里面。只堵第一格的话，117 之后第二格是空的，量到的就不再是「无处可去」
+    而是「试得太少」，而这两条测试的**本意是前者**。
     """
     half_x = dc.text_width(net) / 2.0 + dc.TEXT_GAP
     half_y = dc.TEXT_SIZE / 2.0 + dc.TEXT_GAP
     boxes = []
-    for dx, dy in ((1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)):
-        x = point[0] + dx * half_x
-        y = point[1] + dy * half_y
-        boxes.append((x - half_x, y - half_y, x + half_x, y + half_y))
+    for rung in range(1, dc.TEXT_ESCALATION_STEPS + 1):
+        for dx, dy in ((1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)):
+            reach_x = half_x * rung if dx else half_x
+            reach_y = half_y * rung if dy else half_y
+            x = point[0] + dx * reach_x
+            y = point[1] + dy * reach_y
+            boxes.append((x - half_x, y - half_y, x + half_x, y + half_y))
     return boxes
 
 
 def _candidate_boxes(point, *, net="RXD"):
-    """`_label_at` 会依次试的四个盒（preferred=left 先）。"""
+    """`_label_at` 会依次试的盒，**按它自己的顺序**：方向优先、格次之。
+
+    顺序不是装饰——回退取的是**第一个**候选（`_label_at` 里的 `fallback`），
+    所以这个列表的第一项必须与 `_label_at` 试的第一格是同一个盒子，否则
+    下面两条断言量的就不是「回退落在哪」。
+    """
     half_x = dc.text_width(net) / 2.0 + dc.TEXT_GAP
     half_y = dc.TEXT_SIZE / 2.0 + dc.TEXT_GAP
     out = []
     for dx, dy in ((-1.0, 0.0), (1.0, 0.0), (0.0, 1.0), (0.0, -1.0)):
-        x = point[0] + dx * half_x
-        y = point[1] + dy * half_y
-        out.append(dc.font_text_box(net, x=x, y=y))
+        for rung in range(1, dc.TEXT_ESCALATION_STEPS + 1):
+            reach_x = half_x * rung if dx else half_x
+            reach_y = half_y * rung if dy else half_y
+            x = point[0] + dx * reach_x
+            y = point[1] + dy * reach_y
+            out.append(dc.font_text_box(net, x=x, y=y))
     return out
 
 

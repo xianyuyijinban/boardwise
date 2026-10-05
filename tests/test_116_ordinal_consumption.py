@@ -613,9 +613,14 @@ def test_the_flyback_page_compiles_within_its_time_budget():
         f"{FLYBACK_COMPILE_BUDGET_SECONDS:g}s budget — see "
         f"outputs/116/SUMMARY.md for the profile that says where it went"
     )
-    # The result is the one 116's other tests pin; the budget must not be met
-    # by compiling less.
-    assert not result.ok, "if the flyback now compiles, this test is stale"
+    # **117 更新**：反激整页**现在编译出来了**（ok=True、1 个候选、闸零硬违反
+    # ——117① 治了 netlist 分区、117② 治了八个 text-overlap）。116 当年写下的
+    # `assert not result.ok` 是一条**防作弊的钉**（「预算不许靠少编译来达成」），
+    # 它在 117 之后变成「反激编译不出来就说明有东西坏了」——**方向反过来**，
+    # 钉的还是同一件事：这条测的是**时间**，结果必须是真的全部编译一遍。
+    # 所以断言改成「真的编译出了图」，而不只是「没超时」。
+    assert result.ok, [item.detail for item in result.failures]
+    assert result.candidates, "ok=True with no candidate is not a compile"
 
 
 #: The page's whole compile must stay inside this many seconds.
