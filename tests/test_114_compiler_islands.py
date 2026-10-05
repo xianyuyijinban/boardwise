@@ -571,8 +571,15 @@ def test_an_unordered_chain_part_is_parked_beside_its_near_partner():
     # Level with its partner along the chain's own axis (here the y), and clear
     # of it across: the winding pin is 45 units from the transformer's, and the
     # run between them is what the plan has to wire.
-    a1 = dc._pin_point(ctx, "T1", "S1", placed.poses, placed.origins)
-    d3 = dc._pin_point(ctx, "D3", "1", placed.poses, placed.origins)
+    # **118 更新**：这两根脚在实测库上换了号。113 编的 profile 把变压器的副边
+    # 热端叫 `S1`、副边整流管的阳极叫 `1`；宿主实测的 `C9900020988` 只有
+    # `1 3 4 5 6`（没有 S1），`C9900021858` 的 `1` 是**阴极**、阳极是 `2`。
+    # 本条量的是**摆放**（副边整流管是否与变压器并排且让开），与脚叫什么无关，
+    # 所以按**网**取脚，不再按名字取。
+    a1 = dc._pin_point(ctx, "T1", dc._token_on(circuit, "T1", "SEC_SW"),
+                       placed.poses, placed.origins)
+    d3 = dc._pin_point(ctx, "D3", dc._token_on(circuit, "D3", "SEC_SW"),
+                       placed.poses, placed.origins)
     assert a1 and d3
     assert abs(a1[1] - d3[1]) <= ctx.budget.grid / 2.0, (a1, d3)
     assert d3[0] > a1[0], ("the rectifier must be drawn clear of the transformer", a1, d3)
@@ -596,14 +603,34 @@ def test_a_branch_nudges_its_root_clear_of_a_foreign_pin_on_the_run():
     ).context
     assert ctx is not None
     placed = _placed(ctx)
-    # T1's two aux pins: A1 on AUX (the rectifier's own net) and A2 on PGND.
-    a1 = dc._pin_point(ctx, "T1", "A1", placed.poses, placed.origins)
-    a2 = dc._pin_point(ctx, "T1", "A2", placed.poses, placed.origins)
-    d2 = dc._pin_point(ctx, "D2", "1", placed.poses, placed.origins)
-    assert a1 and a2 and d2
-    assert not dc._strictly_on_segment(a2, a1, d2), (
-        "the aux run still crosses the transformer's ground pin"
+    # **118 更新**：113 的夹具是「变压器的两颗辅助脚都朝上、相距 20」，
+    # 辅助热端接整流管、冷端接地。实测的 `C9900020988` **没有 A1/A2 这两个
+    # 名字**（`PinName == PinNumber`），而五脚骨架只有**一颗**多余的脚同时
+    # 承担副边回线与辅助冷端（见 118 的 SUMMARY）。所以这一条在实测几何上
+    # 量的是**同一个判据**：整流管那一跑**不许**落在变压器任何一颗异网脚上。
+    # 判据没变，脚换了——所以按网取，不按名字取。
+    d2_pin = dc._token_on(circuit, "D2", "AUX")
+    d2 = dc._pin_point(ctx, "D2", d2_pin, placed.poses, placed.origins)
+    assert d2 is not None, "the aux rectifier no longer reaches the aux net"
+    foreign = []
+    for pin in ctx.profile("T1").pins:
+        net = dc._part_nets(circuit, "T1").get(pin.number)
+        if net is None or net == "AUX":
+            continue          # the rectifier's own net is not foreign
+        point = dc._pin_point(ctx, "T1", pin.number, placed.poses,
+                              placed.origins)
+        if point and dc._strictly_on_segment(point, d2, _anchor_of(ctx, placed)):
+            foreign.append((pin.number, net, point))
+    assert not foreign, (
+        f"the aux run still crosses the transformer's foreign pins: {foreign}"
     )
+
+
+def _anchor_of(ctx, placed):
+    """The owner's pin the aux rectifier hangs off — the run's start point."""
+    owner = ctx.slots["D2"].owner
+    token = dc._token_on(ctx.circuit, owner, "AUX")
+    return dc._pin_point(ctx, owner, token, placed.poses, placed.origins)
 
 
 def test_the_dodge_is_a_no_op_when_no_foreign_pin_is_on_the_run():

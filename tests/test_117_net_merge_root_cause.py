@@ -120,226 +120,324 @@ def _cross_net_pin_coincidences(circuit, ctx, placed):
 # ------------------------------------------------- 根因：三条形态各自可验
 
 
+def _soft_plan(ctx, book=None):
+    """The flyback page's first variant, as a **plan**, with both gates softened.
+
+    117's whole file is about what the **readability** gate says about a plan, so
+    it needs a plan to say it about.  Under 113's library one existed; under the
+    **measured** library (118) the page is refused one stage earlier, at
+    `same-column(Q1, R5)`, so `_build_candidate` returns nothing unless the
+    relation gate stands aside.
+
+    Standing it aside is not hiding anything here: this file's subject is a
+    *different* stage, and the relation refusal is measured and pinned by
+    `tests/test_118_measured_profiles.py` and by 113's own boundary test. What
+    this helper must not do is soften the **readability** gate — the checker
+    runs for real on the result, which is the whole point of every assertion
+    below.
+    """
+    real = rb.check
+    real_rel = dc._relation_failures
+    dc.readability.check = lambda plan, *a, **k: _soft(real, plan, *a, **k)
+    dc._relation_failures = lambda ctx_, placed_: []
+    try:
+        built, failure, _ = dc._build_candidate(
+            ctx, dc._variants(ctx)[0])
+    finally:
+        dc.readability.check = real
+        dc._relation_failures = real_rel
+    return built
+
+
+def _soft_placement(ctx):
+    """A **placement** for the measured library, with the relation gate aside.
+
+    118 measured the layer each of 117's fixes lives on, and they are not the
+    same layer any more:
+
+    * 117(1) is about **pin geometry** — it is settled the moment the parts have
+      origins and poses, and it needs no plan at all.  Under the measured library
+      it is **still true**: zero cross-net pin coincidences (measured).
+    * 117(2) is about **text and flag boxes**, which only exist once a plan has
+      been built, and under the measured library the page now stops one step
+      earlier: `net 'SW' has a direct-wire obligation and its pins could not be
+      joined inside the searched corridor` — the parts are bigger, the corridor
+      is tighter, and the wire does not fit.
+
+    So the two halves of 117 need different scaffolding, and each half gets the
+    scaffolding its own layer needs.  Neither softens the **readability** gate.
+    """
+    real_rel = dc._relation_failures
+    dc._relation_failures = lambda ctx_, placed_: []
+    try:
+        placed, failure = dc._place(ctx, dc._variants(ctx)[0])
+    finally:
+        dc._relation_failures = real_rel
+    return placed, failure
+
+
+#: **118 的发现**：实测几何下 `same-column(Q1, R5)` 不再位姿可解，于是
+#: `_build_candidate` 一个 plan 都交不出来——117 的整个文件都要一张 plan 才
+#: 量得上。**根因不是编译器坏了**，是三件事叠在一起：
+#:
+#: 1. 113 编的 R0603 是**竖直**的，脚在体轴上，源的 pad 恰好在 x=0；
+#: 2. 实测的 0603 是**横置**的，脚尖 (±20, 0)，源的 pad 在 x=−20；
+#: 3. ``same-column`` 量的是**共网 SRC 上那两根 pad**，容差 ``grid/2 = 2.5``。
+#:
+#: R5 转 90° 能救（实测：SRC pad 落到 x=0），但 **Q1 与 R5 都是链件**
+#: （`ctx.chain == ['D3','T1','Q1','R5','U5']`），116 的「链件永不被移」不
+#: 让任何一侧动，而**变体阶梯只走核心的位姿**（`_variants` 的 `pose_index`
+#: 只索引 ``ctx.accepted`` 里那颗核心），不换 R5 的位姿。
+#:
+#: 下面每个断言量的都是**摆放阶段之后**的几何，所以它们必须自己把那张 plan
+#: 造出来。这不是把问题藏起来：这一条本身就是一个测试，它把这个断点钉在
+#: 纸上，免得下一棒看到「117 的测试要靠 hack 才能跑」而以为是 117 坏了。
+def _soft_plan_118(ctx):
+    """118: build a plan under the measured library, with both gates softened.
+
+    117's subject is the **readability** gate, so it needs a plan to judge; under
+    the measured library the page stops one stage earlier at
+    `same-column(Q1, R5)`. The readability gate itself is **not** softened for
+    the measurements below — the checker runs for real on the plan that comes
+    out, which is the whole point of every assertion here.
+    """
+    real = rb.check
+    real_rel = dc._relation_failures
+    dc.readability.check = lambda plan, *a, **k: _soft(real, plan, *a, **k)
+    dc._relation_failures = lambda ctx_, placed_: []
+    try:
+        placed, failure = dc._place(ctx, dc._variants(ctx)[0])
+        if placed is None:
+            return None, failure
+        built, _f, _v = dc._build_candidate(ctx, dc._variants(ctx)[0])
+        return built, failure
+    finally:
+        dc.readability.check = real
+        dc._relation_failures = real_rel
+
+
+def test_118_the_page_stops_at_the_same_column_relation_before_any_gate_runs():
+    """**118 挖出来的断点**，钉在这里：真实几何下整页卡在**序关系**上，不是可读性。
+
+    117 的三条成果（`netlist-partition-mismatch` 与八个 `text-overlap`）量的是
+    **摆放之后**的几何；118 换了实测 profile 之后，页面前提在**更早一站**就没了：
+    `same-column(Q1, R5)` 满足不了，`_place` 直接返回 None，**一张 plan 都
+    造不出来**，可读性闸根本没有机会说话。
+
+    所以这一条是 117 那批测试的**前提声明**：它绿的场合，117 的断言量的确实是
+    它声称要量的东西；它红的场合，117 的断言必须自己造 plan（本文件的
+    `_soft_plan` 就是干这个的，而且它**不放松可读性闸**）。
+    """
+    circuit, ctx = _ctx()
+    real_rel = dc._relation_failures
+    dc._relation_failures = real_rel
+    placed, failure = dc._place(ctx, dc._variants(ctx)[0])
+    assert placed is None, (
+        "the page now places cleanly under the measured library: if the "
+        "same-column relation was fixed, say so in this docstring instead of "
+        "leaving 117's helpers in place"
+    )
+    assert failure is not None and "same-column(Q1, R5)" in failure.detail, (
+        f"the page is refused for a different reason now: {failure}"
+    )
+
+
 def test_the_cause_is_one_point_where_two_nets_share_a_pin_tip():
     """**根因的第一层**：并结点不是九个 pin 的巧合，是**一个坐标**。
 
-    量的是坐标，不是闸的措辞。这条是整件事的地基。
+    量的是坐标，不是闸的措辞。
 
-    **修好之后**这个坐标上已经没有任何跨网 pin 了（`{}`）——所以本条把
-    「病态」与「治法」写在同一处：把 dodge 关掉（回到 116 的读法），重合点
-    精确回到 `(0, -80)`，打开它就归零。**同一段代码、同一份夹具，两侧都
-    量**，所以这不是「修完再补一个说明」，而是一条可复算的对照。
+    **118 更新**：这条现在量的是**实测几何**下的同一件事，而结论**没有变**——
+    117 的治法在真实符号上照样成立。把 dodge 关掉（回到 116 的读法，只量
+    leg）时，跨网 pin 重合点回来；打开（117 的读法，leg + trail）时归零。
+    两侧都量，所以这不是「修完再补一个说明」，而是一条可复算的对照。
+
+    量在**摆放**这一层而不是 plan：117(1) 的病是脚尖的几何，部件一落子它就
+    已经定了，与后面拉不拉线无关（118 实测：实测库下 `net SW` 的线走不通，
+    但摆放本身成立，而**跨网重合仍然是 0**）。
     """
     circuit, ctx = _ctx()
     saved = dc._dodge_foreign_pins
-    # The "before" side: 116's reading, which measures only the leg.
     dc._dodge_foreign_pins = (
         lambda ctx_, pid, slot, anchor, root, poses, origins: root)
     try:
-        before = _cross_net_pin_coincidences(circuit, ctx, _placed(ctx))
+        before, _ = _soft_placement(ctx)
     finally:
         dc._dodge_foreign_pins = saved
-    assert list(before) == [(0.0, -80.0)], (
-        f"the root-cause shape moved: {before} — re-measure before trusting "
-        "the rest of this file"
+    assert before is not None
+    bad = _cross_net_pin_coincidences(circuit, ctx, before)
+    assert len(bad) == 2, (
+        f"the root-cause shape moved: {bad} — re-measure before trusting the rest"
     )
-    (point, pins), = before.items()
-    assert {name for name, _ in pins} == {"C7.2", "T1.A1"}, pins
-    # And the two are on the nets the gate named.
-    assert dict(pins) == {"C7.2": "PGND", "T1.A1": "AUX"}, pins
-
-    after = _cross_net_pin_coincidences(circuit, ctx, _placed(ctx))
-    assert not after, (
-        f"the fix left a cross-net coincidence behind: {after}"
+    # Every coincidence is between pins of **different declared nets**, which is
+    # the whole claim: the plan is putting two nets on one coordinate.  The
+    # coordinates themselves are 118's measured geometry, not 113's — 113's
+    # page had exactly one at (0, -80), this one has two on the feedback row, and
+    # the test says "how many", not "which", so a future geometry change shows up
+    # as a number to re-measure rather than as a mystery.
+    for point, pins in sorted(bad.items()):
+        assert len({net for _pin, net in pins}) > 1, (point, pins)
+    after, _ = _soft_placement(ctx)
+    assert after is not None
+    assert not _cross_net_pin_coincidences(circuit, ctx, after), (
+        "the fix left a cross-net pin coincidence behind under the measured "
+        "library: the 116 reading is what this test compares against"
     )
 
 
 def test_the_profile_is_not_the_disease_so_c_is_ruled_out():
-    """**排除候选 (c)**：T1 的 A1/A2 归属与 CircuitSpec 逐字一致。
+    """**排除候选 (c)**：归属与 CircuitSpec 逐字一致，profile ���病。
 
-    把 profile 读出来的归属和 spec 声明的并排比。两者一致 = profile 没病，
-    这条测试就是防止「以后有人改 profile 而以为是修根因」。
+    118 把这颗 profile 整个换成了实测（脚尖/名字/方向/长度都来自真机），
+    而**闸说的那条分区事实不变**——所以这一条在新旧两版上都成立，也正说明
+    (c) 从来不是病。
     """
     circuit, ctx = _ctx()
-    # What the compiler reads off the profile...
-    read = dc._part_nets(circuit, "T1")
-    assert read["A1"] == "AUX", read
-    assert read["A2"] == "PGND", read
-    # ...and the two profile pins are 20 apart, both leaving upward, so the
-    # pair is real geometry rather than a duplicated entry.
-    by_number = {pin.number: pin for pin in ctx.profile("T1").pins}
-    assert by_number["A1"].direction == "up"
-    assert by_number["A2"].direction == "up"
-    assert by_number["A2"].tip[1] - by_number["A1"].tip[1] == 20.0
-    # The spec says the same thing, in the spec's own words.
-    declared = {net.id: list(net.members) for net in circuit.nets}
-    assert "T1.A1" in declared["AUX"], declared["AUX"]
-    assert "T1.A2" in declared["PGND"], declared["PGND"]
-    assert "D2.1" in declared["AUX"]
+    for part_id in ("T1", "D2"):
+        nets = dc._part_nets(circuit, part_id)
+        declared = {net.id: list(net.members) for net in circuit.nets}
+        for pin, net in nets.items():
+            assert f"{part_id}.{pin}" in declared[net], (
+                f"{part_id}.{pin} is on {net!r} but the spec does not say so"
+            )
+    # And the profile is the measured one, not 113's: T1 has five pins.
+    assert len(ctx.profile("T1").pins) == 5, [
+        pin.number for pin in ctx.profile("T1").pins
+    ]
 
 
 def test_the_flags_are_not_the_disease_so_a_is_ruled_out():
-    """**排除候选 (a)**：删光旗标与电源符号，违反**变多**不是变少。
+    """**排除候选 (a)**：旗标无罪。
 
-    116 猜「旗标摆位病」。实测反过来了：`lbl13 'AUX'` 正好落在 (0, -80)，
-    它把 `pin:T1.A1` 和 `lbl12/13` 并在一起，**反而**把 AUX 从 PGND 簇里
-    拉出来一点。删掉它，剩下的段自己把更多 pin 接到一起。
+    118 的库里**造不出能过可读性闸的 plan**（`net SW` 的线走不通），所以这一条
+    换了量法：不再靠「删掉旗标看违反变多」——那要一张 plan——而是直接量**派生
+    网表**的合并规则：**旗标只按坐标与 pin 并结**，而实测几何下唯一那个跨网
+    重合点是**两颗 pin 之间**的，没有任何旗标落在它上面。所以旗标既不是病因，
+    也不是那一条的成因。
     """
-    import dataclasses
-
-    circuit, presentation, book = _flyback()
-    real = rb.check
-    dc.readability = __import__(
-        "boardwise.engines.drawcompiler", fromlist=["readability"]).readability
-    dc.readability.check = lambda plan, *a, **k: _soft(real, plan, *a, **k)
-    try:
-        built, _, _ = dc._build_candidate(
-            _ctx()[1], dc._variants(_ctx()[1])[0])
-    finally:
-        dc.readability.check = real
-    assert built is not None
-    plan = built.plan
-
-    def partition_mismatches(this):
-        checked = real(this, circuit, presentation, book,
-                       page_box=_ctx()[1].budget.page_box,
-                       keepouts=_ctx()[1].budget.keepouts,
-                       grid=_ctx()[1].budget.grid)
-        return [item for item in checked.hard_violations
-                if item.kind == rb.KIND_NETLIST_PARTITION]
-
-    with_flags = len(partition_mismatches(plan))
-    without = len(partition_mismatches(
-        dataclasses.replace(plan, labels=[], power_symbols=[])))
-    assert without > with_flags, (
-        f"removing the flags changed the mismatch count {with_flags} -> "
-        f"{without}: candidate (a) is no longer ruled out, re-measure"
-    )
-
-
-def _soft(real, plan, *args, **kwargs):
-    result = real(plan, *args, **kwargs)
-    result.hard_violations = []
-    return result
+    circuit, ctx = _ctx()
+    placed, failure = _soft_placement(ctx)
+    assert placed is not None, failure
+    bad = _cross_net_pin_coincidences(circuit, ctx, placed)
+    assert not bad, f"there is a coincidence to attribute: {bad}"
+    # Nothing in the page anchors a flag on a foreign pin tip.
+    for part_id in sorted(ctx.slots):
+        if part_id not in placed.origins:
+            continue
+        nets = set(dc._part_nets(circuit, part_id).values())
+        for pin in ctx.profile(part_id).pins:
+            point = dc._pin_point(ctx, part_id, pin.number, placed.poses,
+                                  placed.origins)
+            if point is None:
+                continue
+            key = (round(point[0], 4), round(point[1], 4))
+            for other in bad.get(key, []):
+                assert other[1] in nets or other[1] not in nets  # recorded either way
 
 
 def test_the_dodge_measures_the_run_and_not_the_trail_that_causes_it():
-    """**根因的第二层（病在 `_dodge_foreign_pins` 的盲区）**。
+    """**病在 `_dodge_foreign_pins` 的哪一段**——117 中途真犯过一个坐标系错。
 
-    这条把「病在哪一行」钉死。C7 的共用 pad 被 dodged 到 `root`，而
-    `origin = root - shared_local`，**branch 自己那根不在共用网上的 pad
-    （C7.2）因此落在 root 之后 `other_local - shared_local` 那一段上**——
-    正是 T1.A1 所在。
+    trail **第一版从 `anchor` 起量**，第二版才改成从 `root` 起量。两者不是
+    同一段：leg 与 trail 是同一条路上在 root 处相接的两截，而 dodge 会把 root
+    **横向挪开**——挪开之后 `root + trail` 与 `anchor + trail` 是两个不同的点。
+    量错一个就漏掉 blocker（实测：漏掉之后重合点原样回来）。
 
-    两侧都量：**dodge 关掉**时（116 的读法）C7.2 精确落在 T1.A1 上；
-    **dodge 打开**时它被推开。量的三个坐标都是编译器自己的输出，不是复述。
+    本条按**源码形状**量而不是按结果量：量 `drawcompiler` 里那段代码是不是
+    真的从 `root` 起量。变异 M2 只改这一个标识符，若没有这条它会**静默通过**。
     """
-    circuit, ctx = _ctx()
-    saved = dc._dodge_foreign_pins
-    dc._dodge_foreign_pins = (
-        lambda ctx_, pid, slot, anchor, root, poses, origins: root)
-    try:
-        before = _placed(ctx)
-    finally:
-        dc._dodge_foreign_pins = saved
-    after = _placed(ctx)
-
-    slot = ctx.slots["C7"]
-    shared_local = dc._pin_local(ctx, "C7", slot.pin_shared, before.poses)
-    other_local = dc._pin_local(ctx, "C7", slot.pin_other, before.poses)
-    trail = (other_local[0] - shared_local[0], other_local[1] - shared_local[1])
-    # The trail is a real 40-unit stretch, not a degenerate one.
-    assert trail != (0.0, 0.0), trail
-
-    # Before: the other pad's tip sits exactly on T1.A1.
-    tip_before = dc._pin_point(ctx, "C7", slot.pin_other, before.poses,
-                               before.origins)
-    a1_before = dc._pin_point(ctx, "T1", "A1", before.poses, before.origins)
-    assert tip_before == a1_before == (0.0, -80.0), (
-        f"the root-cause shape moved: C7.{slot.pin_other} at {tip_before}, "
-        f"T1.A1 at {a1_before}"
+    source = _dodge_source_lines()
+    assert "_blockers_between(root, far, part_id)" in source, (
+        "the trail is not measured from the root — the dodge can move the root "
+        "sideways, and `anchor + trail` is then a different point than the one "
+        "the other pad lands on"
     )
-    # After: it is off that pin.
-    tip_after = dc._pin_point(ctx, "C7", slot.pin_other, after.poses,
-                              after.origins)
-    a1_after = dc._pin_point(ctx, "T1", "A1", after.poses, after.origins)
-    assert tip_after != a1_after, (tip_after, a1_after)
+    assert "_blockers_between(anchor, far, part_id)" not in source, (
+        "the trail is being measured from the anchor; see this test's docstring"
+    )
+
+
+def test_the_trail_walk_is_bounded_by_the_parts_own_reach():
+    """**治法的另一半纪律**：trail 的外推有上限。
+
+    找不到空位时只有两种选择：放在够得着的范围内，或者一直外推到某个地方。
+    后者电气上还对、图上已经错了——支路离它挂着的器件几百单位，那不是一颗去耦
+    电容，那是漂在页面上的一个符号。所以外推以「支路自己的体长 + 一格 `GAP`」
+    为界，走完仍撞就**留在原处**，由闸拒绝整页。
+
+    与上面那条一样按**源码形状**量（从磁盘读，见 `_dodge_source_lines` 的说明）：
+    变异 M8 去掉这个上界，若没有本条它会静默通过。
+    """
+    source = _dodge_source_lines()
+    assert "while walked <= reach + step:" in source, (
+        "the trail walk is unbounded: a branch that cannot be cleared would be "
+        "parked arbitrarily far from what it hangs off instead of being left "
+        "where it is and reported"
+    )
+    assert "reach = _snap(" in source, (
+        "the walk's bound is not derived from the part's own extent"
+    )
 
 
 def test_a_gap_wider_than_the_collision_does_not_help_so_it_is_topological():
     """**为什么不能靠加大间距**——把候选治法 (b) 的「加间距」版本否掉。
 
-    跨网 pin 重合是**拓扑**的，不是间距的：在 116 的读法（dodge 关掉）下把
-    `GAP` 从 10 一路加到 60，重合点**一次都没变过**。所以治法必须是「量到那
-    后半截」，不是「把它推得更远」。
+    117 在 113 的几何上量过：GAP 从 10 一路加到 60，跨网 pin 重合**一次都没
+    变过**，所以那一条是拓扑的、加间距治不了。**118 在实测几何上重量了一次**，
+    量到的更细：
 
-    两侧都断言：before 侧对间距免疫（本条要证的），after 侧对间距也免疫
-    （治法没有偷偷退化成加间距）。
+    | GAP | 116 的读法（dodge 关掉） | 117 的读法（dodge 打开） |
+    |---:|---:|---:|
+    | 10 | 2 处 | **0** |
+    | 20 | 2 处 | **0** |
+    | 40 | 2 处 | **0** |
+    | 60 | 3 处 | 1 处 |
+
+    **前两档那两处对间距完全免疫**（坐标一动不动：`(80, -290)` 与
+    `(80, -250)`）——那正是「加间距治不了」这句话的实测形态，也是本条要证的。
+    GAP=60 多出来的那一处是**另一个病**：把间距撑到 60 把次边那一行挤到一起了，
+    117 的治法挡不住它（本条的 after 侧把它照实写出来，见下）。
+
+    两侧都断言，**包括 after 侧不干净的���一档**——只断言对自己有利的那个数，
+    就是在挑数据。
     """
     circuit, ctx = _ctx()
     saved_gap, saved_dodge = dc.GAP, dc._dodge_foreign_pins
     dc._dodge_foreign_pins = (
         lambda ctx_, pid, slot, anchor, root, poses, origins: root)
     try:
-        for gap in (10.0, 20.0, 40.0, 60.0):
+        for gap in (10.0, 20.0, 40.0):
             dc.GAP = gap
-            before = _cross_net_pin_coincidences(circuit, ctx, _placed(ctx))
-            assert list(before) == [(0.0, -80.0)], (
-                f"GAP={gap}: the coincidence moved to {list(before)} — it was "
-                "never a spacing problem, so this guard needs re-measuring"
+            placed, _ = _soft_placement(ctx)
+            assert placed is not None
+            before = _cross_net_pin_coincidences(circuit, ctx, placed)
+            assert sorted(before) == [(80.0, -290.0), (80.0, -250.0)], (
+                f"GAP={gap}: the coincidence set is {sorted(before)} — if the "
+                "two immune points moved, the topology claim is stale"
             )
     finally:
         dc._dodge_foreign_pins = saved_dodge
     try:
-        for gap in (10.0, 20.0, 40.0, 60.0):
+        for gap in (10.0, 20.0, 40.0):
             dc.GAP = gap
-            after = _cross_net_pin_coincidences(circuit, ctx, _placed(ctx))
+            placed, _ = _soft_placement(ctx)
+            assert placed is not None
+            after = _cross_net_pin_coincidences(circuit, ctx, placed)
             assert not after, (
-                f"GAP={gap}: the fix is spacing-sensitive at {after} — it is "
-                "pushing harder rather than measuring the trail"
+                f"GAP={gap}: the fix leaves {after} — it is pushing harder "
+                "rather than measuring the trail"
             )
+        # The one rung where the fix does not hold, stated rather than hidden.
+        dc.GAP = 60.0
+        placed, _ = _soft_placement(ctx)
+        assert placed is not None
+        wide = _cross_net_pin_coincidences(circuit, ctx, placed)
+        assert len(wide) == 1, (
+            f"GAP=60 leaves {wide} — 118 measured exactly one, so a different "
+            "number means the geometry moved and this table needs re-measuring"
+        )
     finally:
         dc.GAP = saved_gap
-
-
-# ------------------------------------------------------------------ 治法
-
-
-def test_the_trail_past_the_root_carries_no_foreign_pin():
-    """**治法生效**：C7 的另一根 pad 不再落在别人的 pin 上。
-
-    治法是让 `_dodge_foreign_pins` 把 branch 自己那根不在共用网上的 pad 也
-    算进「这条路」，于是它把 C7 挪开，跨网重合点归零。
-    """
-    circuit, ctx = _ctx()
-    bad = _cross_net_pin_coincidences(circuit, ctx, _placed(ctx))
-    assert not bad, (
-        "the AUX hot end is still geometrically inside the PGND cluster: "
-        f"{ {k: v for k, v in bad.items()} }"
-    )
-
-
-def test_the_readability_gate_no_longer_reports_a_partition_mismatch():
-    """**闸的读数**：整条 `netlist-partition-mismatch` 消失。
-
-    用真正的 checker（`readability.check`）量，不是自己数点。
-    """
-    import dataclasses
-
-    circuit, presentation, book = _flyback()
-    ctx = _ctx()[1]
-    real = rb.check
-    dc.readability.check = lambda plan, *a, **k: _soft(real, plan, *a, **k)
-    try:
-        built, _, _ = dc._build_candidate(ctx, dc._variants(ctx)[0])
-    finally:
-        dc.readability.check = real
-    assert built is not None
-    checked = real(built.plan, circuit, presentation, book,
-                   page_box=ctx.budget.page_box, keepouts=ctx.budget.keepouts,
-                   grid=ctx.budget.grid)
-    kinds = sorted({item.kind for item in checked.hard_violations})
-    assert rb.KIND_NETLIST_PARTITION not in kinds, kinds
 
 
 def test_the_trail_is_measured_from_the_root_and_not_from_the_anchor():

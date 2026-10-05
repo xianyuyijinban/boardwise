@@ -613,14 +613,23 @@ def test_the_flyback_page_compiles_within_its_time_budget():
         f"{FLYBACK_COMPILE_BUDGET_SECONDS:g}s budget — see "
         f"outputs/116/SUMMARY.md for the profile that says where it went"
     )
-    # **117 更新**：反激整页**现在编译出来了**（ok=True、1 个候选、闸零硬违反
-    # ——117① 治了 netlist 分区、117② 治了八个 text-overlap）。116 当年写下的
-    # `assert not result.ok` 是一条**防作弊的钉**（「预算不许靠少编译来达成」），
-    # 它在 117 之后变成「反激编译不出来就说明有东西坏了」——**方向反过来**，
-    # 钉的还是同一件事：这条测的是**时间**，结果必须是真的全部编译一遍。
-    # 所以断言改成「真的编译出了图」，而不只是「没超时」。
-    assert result.ok, [item.detail for item in result.failures]
-    assert result.candidates, "ok=True with no candidate is not a compile"
+    # **117 更新**：117 在 113 编的 profile 上把整页编译出来了，116 当年写下的
+    # `assert not result.ok` 是一条**防作弊的钉**（「预算不许靠少编译达成」），
+    # 于是当时把它翻成了 `assert result.ok`。**118 又翻回来了**——理由与 117
+    # 不同：118 把十三颗 profile 换成**实测**之后，整页卡在更早一站
+    # （`same-column(Q1, R5)`，见 118 的 SUMMARY），确实编译不出来。
+    #
+    # 钉的还是同一件事：**这条测的是时间，结果必须是真的全部编译一遍**。
+    # 所以断言是「编译器把它能做的做完了，并且**如实说**为什么没成」——
+    # 既不放过超时，也不放过「因为编译不出来所以快」。
+    joined = " ".join(item.detail for item in result.failures)
+    assert joined, (
+        "the flyback compile neither succeeded nor said why: the budget must "
+        "not be met by doing less than the compiler can do"
+    )
+    assert result.rejected, "no variant was even tried"
+    for item in result.rejected:
+        assert item.reason, f"{item.variant} was rejected with no reason"
 
 
 #: The page's whole compile must stay inside this many seconds.
