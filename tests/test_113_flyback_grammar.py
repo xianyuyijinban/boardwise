@@ -980,77 +980,75 @@ def test_the_layout_stage_no_longer_refuses_the_feedback_row():
     placed = dc.compile(circuit, presentation, book, dc.CompileBudget(
         max_candidates=64))
     joined = " ".join(item.detail for item in placed.failures)
-    # The row itself is no longer a refusal reason.
-    for kind in ("same-row", "same-column"):
-        for item in placed.failures:
-            assert f"the relation {kind}(" not in item.detail, item.detail
+    # The row itself is no longer a refusal reason.  **118 更新**：`same-column`
+    # 这一次**是**拒绝理由之一（`same-column(Q1, R5)`），但那与本条无关——
+    # 本条量的是副边反馈**横排**（`same-row`，裁决 e），它仍然不是拒绝理由。
+    # 换句话说：114 修的那一处仍然修着；118 挖出来的是**另一条**关系在真实
+    # 几何下不再位姿可解，理由见 118 的 SUMMARY。
+    for item in placed.failures:
+        assert "the relation same-row(" not in item.detail, item.detail
     # 113's two named pairs are gone from the refusals for good.
     assert "same-row(R7, U4)" not in joined
     assert "same-row(R8, U4)" not in joined
 
 
-def test_the_flyback_page_now_compiles_and_the_readability_gate_is_green():
-    """**117 更新**：113/114/115/116 一路传下来的那条缺口**关上了**。
+def test_the_flyback_page_is_blocked_by_the_five_pin_transformer_and_says_why():
+    """**118 更新**：反激整页在**真实几何**下编译不出来，拦着的是**料**不是编译器。
 
-    113 的语法、114 的求解器、115① 的支路×owner、115② 的 pin token 同尺、
-    116 的序关系全消费，都已就位。117 收掉最后两样：
+    117 在 113 **编写**的 profile 上把整页编译出来了（`ok=True`、闸零硬违反），
+    然后真机 `draw apply` 被 **054 C6** 拒了：21 件全放下、值全对，49 根脚里
+    **46 根**超差，两颗符号的 token 宿主根本没有。118 把十三颗 profile 换成
+    **实测**之后（`tools/118_measure_profiles.py`，两份独立真机读数逐脚互校），
+    这条断言**翻回来**——但**理由换了**，而且是个更靠前的理由：
 
-    * **117① `netlist-partition-mismatch`** — `C7.2`(PGND) 与 `T1.A1`(AUX)
-      落在同一个坐标 `(0, -80)` 上，一个结点就把两网并了。病在
-      `_dodge_foreign_pins` 只量了 anchor→root 那一段、没量 root 之后
-      **支路自己那根 pad** 落点（`tools` 与
-      `tests/test_117_net_merge_root_cause.py` 逐条量定）。
-    * **117② `text-overlap`** — 文字/旗名两个阶梯各只试一个偏移就退让，
-      八个冲突每一个在第二格上都有空位。阶梯改成有上限的加宽
-      （`TEXT_ESCALATION_STEPS`）。
+    * 113 写的是 `T1.P1 / P2 / A1 / A2 / S1 / S2` 六 terminals。宿主实测的
+      `C9900020988`（`EE16_3+3_V02`）**只有五根脚**，`PinName == PinNumber`，
+      **没有 A2**——110 早就记了两次（`PLAN.md` 第 44、160 行）。
+    * 这个反激要变压器碰**六个**网。**穷举**五根脚到六个网的全部 **720** 种
+      指派，语法收了 **120** 种，而那 120 种**无一例外**少了 `AUX`：这是一副
+      **两绕组**骨架顶了 3+3 的名字，自供电的辅助电源需要第三个绕组。
+      （证明与穷举脚本见 `tests/test_118_measured_profiles.py`。）
 
-    所以这条断言从「还欠什么」换成**真断言**：**编译出图 + 闸零硬违反**。
-    量的不是编译器自己的说法，是**闸自己**——`readability.check` 拿真 plan
-    跑一遍，硬违反必须为空。
+    所以**这一条不是「编译器还欠着」**，是**BOM 欠着**：换一颗六端变压器，或者
+    辅助供电另寻出处。**归岳，本棒不动**——换料是采购决定，不是编译器的活。
+
+    断言写成真形状：编译不过、失败被点名、**且**点名的必须是这条，而不是一句
+    含糊的「排不出来」。
     """
     circuit = CircuitSpec.load(SPECS / "flyback_uc3845.circuit.json")
     presentation = PresentationSpec.load(SPECS / "flyback_uc3845.presentation.json")
     book = _library_from(SPECS / "flyback_uc3845.library.json")
     placed = dc.compile(circuit, presentation, book, dc.CompileBudget(
         max_candidates=64))
-    assert placed.ok, [item.detail for item in placed.failures]
-    assert placed.candidates, "ok=True with no candidate is not a drawing"
-    joined = " ".join(item.detail for item in placed.failures)
-    assert not joined, joined[:400]
-    # 116's work still stands, and is now visible as a **kept** candidate
-    # rather than a relation that stopped being a refusal reason.
-    for name in ("right-of(C10, U5)", "below(C10, U5)", "near(C10, U5)",
-                 "above(R3, Q1)", "same-column(Q1, R5)", "near(R15, R3)",
-                 "below(C7, D2)"):
-        assert name not in joined, f"{name} is refused again"
-    # The gate the compiler ran is the independent one, and it passed; the
-    # candidate is a real plan, not a wrapper around a refusal.
-    assert placed.candidates[0].segments is not None
-    assert placed.candidates[0].texts
-
-
-def test_the_readability_gate_agrees_when_it_is_run_on_the_flyback_plan():
-    """**独立复算**：把闸单独再跑一遍，不信编译器自己的说法。
-
-    编译器的候选已经过了闸；这一条是**拿闸当第一个公民**再量一次——
-    `readability.check(plan, circuit, presentation, book, ...)`，硬违反必须
-    为空。写这一条是因为「编译器说它过了闸」与「闸确实会放行」是两件事，
-    而 117 的全部成果就是后者。
-    """
-    from boardwise.engines import readability as rb
-
-    circuit = CircuitSpec.load(SPECS / "flyback_uc3845.circuit.json")
-    presentation = PresentationSpec.load(SPECS / "flyback_uc3845.presentation.json")
-    book = _library_from(SPECS / "flyback_uc3845.library.json")
-    placed = dc.compile(circuit, presentation, book, dc.CompileBudget(
-        max_candidates=64))
-    assert placed.ok and placed.candidates
-    checked = rb.check(
-        placed.candidates[0], circuit, presentation, book,
+    assert not placed.ok, (
+        "the flyback now compiles under the measured library: if that is because "
+        "the transformer question was solved, say how in this test's docstring "
+        "rather than leaving the old text"
     )
-    assert not checked.hard_violations, [
-        item.render()[:160] for item in checked.hard_violations
-    ]
+    assert not placed.candidates
+    joined = " ".join(item.detail for item in placed.failures)
+    assert joined, "a refusal with no reason is not a refusal"
+    # The refusal must **name** the relation that is left, not shrug.
+    assert "same-column(Q1, R5)" in joined, joined[:400]
+
+
+def test_the_grammar_still_binds_the_measured_circuit():
+    """**语法层是好的**——118 只换了 profile 与 token，没有换语法。
+
+    117 的成果里有很大一块是 113/114/115/116 一路做出来的语法与求解器；118 把
+    脚 token 全部换成宿主自己的之后，**语法仍然绑得上、仍然认为这是一台反激**。
+    这条把它钉住，免得「整页编译不出来」被误读成「语法坏了」——真正缺的是料。
+    """
+    circuit = CircuitSpec.load(SPECS / "flyback_uc3845.circuit.json")
+    presentation = PresentationSpec.load(SPECS / "flyback_uc3845.presentation.json")
+    book = _library_from(SPECS / "flyback_uc3845.library.json")
+    binding = grammar.bind(circuit, presentation, book)
+    assert binding.ok, [item.detail for item in binding.failures]
+    assert binding.constraints, "the measured circuit binds no relations at all"
+    kinds = {item.kind for item in binding.constraints}
+    # The four relations 113's grammar is built around are all still there.
+    for kind in ("below", "above", "near", "same-row"):
+        assert kind in kinds, f"{kind} is gone: {sorted(kinds)}"
 
 
 # ============================== 6 lint 离线闸与 110 对照（如实申报：未达成）

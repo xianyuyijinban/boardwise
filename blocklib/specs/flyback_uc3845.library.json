@@ -1,561 +1,504 @@
 {
   "kind": "boardwise-symbol-library",
   "libraryVersion": 1,
-  "source": "113's own shape set, written for the flyback end-to-end scene. The pin numbers and names are 110 plan.corrected.json's; the geometries are this batch's, chosen so the 110 drawing rulings are reachable (the switch stands vertically, the transformer's primary faces left and its secondary hangs below, the optocoupler's two sides face opposite ways).",
+  "source": "blockwise-symbol-profile, MEASURED 2026-10-04 from the live editor (outputs/118/apply_report.json pin read-back; outputs/110/11_pins.json + 12_bodies.json for names/directions/lengths). Built by tools/118_measure_profiles.py — do not hand-edit: a profile is a set of claims about one library symbol, and 113's hand-written ones were refused by 054 C6 on contact.",
   "profiles": [
     {
-      "kind": "boardwise-symbol-profile",
-      "profileVersion": 1,
       "symbolRef": "R0603",
-      "title": "Resistor 0603, axial (two pins on the horizontal axis), drawn vertically with pin 1 (the row end) UP, so the part's chain/row pin presents on a horizontal line — the feedback row 岳 ruling (e) asks for.",
-      "body": [
-        -5,
-        -10,
-        5,
-        10
-      ],
-      "pins": [
-        {
-          "number": "1",
-          "name": "1",
-          "tip": [
-            0,
-            20
-          ],
-          "direction": "up",
-          "length": 10.0,
-          "pinType": "passive"
-        },
-        {
-          "number": "2",
-          "name": "2",
-          "tip": [
-            0,
-            -20
-          ],
-          "direction": "down",
-          "length": 10.0,
-          "pinType": "passive"
-        }
-      ]
-    },
-    {
-      "kind": "boardwise-symbol-profile",
-      "profileVersion": 1,
-      "symbolRef": "RES-TH-17K8",
-      "title": "Resistor, through-hole axial (17.8k 1%), drawn vertically with pin 1 (the row end) UP, so the part's chain/row pin presents on a horizontal line — the feedback row 岳 ruling (e) asks for.",
-      "body": [
-        -5,
-        -10,
-        5,
-        10
-      ],
-      "pins": [
-        {
-          "number": "1",
-          "name": "1",
-          "tip": [
-            0,
-            20
-          ],
-          "direction": "up",
-          "length": 10.0,
-          "pinType": "passive"
-        },
-        {
-          "number": "2",
-          "name": "2",
-          "tip": [
-            0,
-            -20
-          ],
-          "direction": "down",
-          "length": 10.0,
-          "pinType": "passive"
-        }
-      ]
-    },
-    {
-      "kind": "boardwise-symbol-profile",
-      "profileVersion": 1,
-      "symbolRef": "R0805",
-      "title": "Resistor 0805, axial, drawn vertically with pin 1 (the row end) UP, so the part's chain/row pin presents on a horizontal line — the feedback row 岳 ruling (e) asks for.",
-      "body": [
-        -5,
-        -10,
-        5,
-        10
-      ],
-      "pins": [
-        {
-          "number": "1",
-          "name": "1",
-          "tip": [
-            0,
-            20
-          ],
-          "direction": "up",
-          "length": 10.0,
-          "pinType": "passive"
-        },
-        {
-          "number": "2",
-          "name": "2",
-          "tip": [
-            0,
-            -20
-          ],
-          "direction": "down",
-          "length": 10.0,
-          "pinType": "passive"
-        }
-      ]
-    },
-    {
-      "kind": "boardwise-symbol-profile",
-      "profileVersion": 1,
-      "symbolRef": "C0603",
-      "title": "Capacitor 0603, vertical (plate 1 up)",
-      "body": [
-        -5,
-        -10,
-        5,
-        10
-      ],
-      "pins": [
-        {
-          "number": "1",
-          "name": "1",
-          "tip": [
-            0,
-            20
-          ],
-          "direction": "up",
-          "length": 10.0,
-          "pinType": "passive"
-        },
-        {
-          "number": "2",
-          "name": "2",
-          "tip": [
-            0,
-            -20
-          ],
-          "direction": "down",
-          "length": 10.0,
-          "pinType": "passive"
-        }
-      ]
-    },
-    {
-      "kind": "boardwise-symbol-profile",
-      "profileVersion": 1,
-      "symbolRef": "C0805",
-      "title": "Capacitor 0805, vertical (plate 1 up)",
-      "body": [
-        -5,
-        -10,
-        5,
-        10
-      ],
-      "pins": [
-        {
-          "number": "1",
-          "name": "1",
-          "tip": [
-            0,
-            20
-          ],
-          "direction": "up",
-          "length": 10.0,
-          "pinType": "passive"
-        },
-        {
-          "number": "2",
-          "name": "2",
-          "tip": [
-            0,
-            -20
-          ],
-          "direction": "down",
-          "length": 10.0,
-          "pinType": "passive"
-        }
-      ]
-    },
-    {
-      "kind": "boardwise-symbol-profile",
-      "profileVersion": 1,
-      "symbolRef": "CAP-SMD-220UF",
-      "title": "Electrolytic 220uF/25V SMD, vertical (plate 1 up)",
-      "body": [
-        -10,
-        -10,
-        10,
-        10
-      ],
-      "pins": [
-        {
-          "number": "1",
-          "name": "1",
-          "tip": [
-            0,
-            25
-          ],
-          "direction": "up",
-          "length": 10.0,
-          "pinType": "passive"
-        },
-        {
-          "number": "2",
-          "name": "2",
-          "tip": [
-            0,
-            -25
-          ],
-          "direction": "down",
-          "length": 10.0,
-          "pinType": "passive"
-        }
-      ]
-    },
-    {
-      "kind": "boardwise-symbol-profile",
-      "profileVersion": 1,
-      "symbolRef": "CAP-TH-1NF-1KV",
-      "title": "Capacitor 1nF/1kV through-hole, vertical (plate 1 up)",
-      "body": [
-        -10,
-        -10,
-        10,
-        10
-      ],
-      "pins": [
-        {
-          "number": "1",
-          "name": "1",
-          "tip": [
-            0,
-            25
-          ],
-          "direction": "up",
-          "length": 10.0,
-          "pinType": "passive"
-        },
-        {
-          "number": "2",
-          "name": "2",
-          "tip": [
-            0,
-            -25
-          ],
-          "direction": "down",
-          "length": 10.0,
-          "pinType": "passive"
-        }
-      ]
-    },
-    {
-      "kind": "boardwise-symbol-profile",
-      "profileVersion": 1,
-      "symbolRef": "DIO-DO41-UF4007",
-      "title": "DIO-DO41-UF4007 — the clamp diode (D1), drawn with its ANODE on the left and its CATHODE on the right, so the winding it hangs off leaves horizontally. A vertical diode cannot express the 'this side of the transformer' relation the compiler measures against the pin, and its own refusal is what settled the shape.",
+      "title": "Resistor 0603, axial (two pins on the horizontal axis), drawn vertically with pin 1 (the row end) UP, so the part's chain/row pin presents on a horizontal line — the feedback row 岳 ruling (e) asks for.\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (R3, C22975), names/directions/lengths from 110's 11_pins.json on the same LCSC. Body box = the two pins' inner ends (measured drawn extent).",
       "body": [
         -10.0,
-        -5.0,
+        0.0,
         10.0,
-        5.0
+        0.0
       ],
+      "bodySource": "measured: the two pins' inner ends",
       "pins": [
         {
           "number": "1",
-          "name": "A",
+          "name": "1",
           "tip": [
             -20.0,
             0.0
           ],
           "direction": "left",
-          "length": 10.0,
-          "pinType": "passive"
+          "length": 10.0
         },
         {
           "number": "2",
-          "name": "K",
+          "name": "2",
           "tip": [
             20.0,
             0.0
           ],
           "direction": "right",
-          "length": 10.0,
-          "pinType": "passive"
+          "length": 10.0
         }
       ]
     },
     {
-      "kind": "boardwise-symbol-profile",
-      "profileVersion": 1,
-      "symbolRef": "DIO-SMA-SS310",
-      "title": "Schottky SS310 SMA — the secondary rectifier, drawn VERTICALLY (anode up on the winding's hot end, cathode down to the output rail) so its chain pins present on the same column as the rest of the chain.",
+      "symbolRef": "RES-TH-17K8",
+      "title": "Resistor, through-hole axial (17.8k 1%), drawn vertically with pin 1 (the row end) UP, so the part's chain/row pin presents on a horizontal line — the feedback row 岳 ruling (e) asks for.\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (R9, C1370938); names/directions/lengths from the 0603/0805 two-pin family rule read off 110's twelve measurements of that family. Body box = the two pins' inner ends (measured drawn extent).",
       "body": [
-        -5.0,
         -10.0,
-        5.0,
-        10.0
+        0.0,
+        10.0,
+        0.0
       ],
+      "bodySource": "measured: the two pins' inner ends",
       "pins": [
         {
           "number": "1",
-          "name": "A",
+          "name": "1",
+          "tip": [
+            -20.0,
+            0.0
+          ],
+          "direction": "left",
+          "length": 10.0
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            20.0,
+            0.0
+          ],
+          "direction": "right",
+          "length": 10.0
+        }
+      ]
+    },
+    {
+      "symbolRef": "R0805",
+      "title": "Resistor 0805, axial, drawn vertically with pin 1 (the row end) UP, so the part's chain/row pin presents on a horizontal line — the feedback row 岳 ruling (e) asks for.\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (R12, C25271); names/directions/lengths from the 0603/0805 two-pin family rule read off 110's twelve measurements of that family. Body box = the two pins' inner ends (measured drawn extent).",
+      "body": [
+        -10.0,
+        0.0,
+        10.0,
+        0.0
+      ],
+      "bodySource": "measured: the two pins' inner ends",
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            -20.0,
+            0.0
+          ],
+          "direction": "left",
+          "length": 10.0
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            20.0,
+            0.0
+          ],
+          "direction": "right",
+          "length": 10.0
+        }
+      ]
+    },
+    {
+      "symbolRef": "C0603",
+      "title": "Capacitor 0603, vertical (plate 1 up)\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (C4, C100040); names/directions/lengths from the 0603/0805 two-pin family rule read off 110's twelve measurements of that family. Body box = the two pins' inner ends (measured drawn extent).",
+      "body": [
+        -5.0,
+        0.0,
+        5.0,
+        0.0
+      ],
+      "bodySource": "measured: the two pins' inner ends",
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            -15.0,
+            -0.0
+          ],
+          "direction": "left",
+          "length": 10.0
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            15.0,
+            0.0
+          ],
+          "direction": "right",
+          "length": 10.0
+        }
+      ]
+    },
+    {
+      "symbolRef": "C0805",
+      "title": "Capacitor 0805, vertical (plate 1 up)\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (C9, C45783); names/directions/lengths from the 0603/0805 two-pin family rule read off 110's twelve measurements of that family. Body box = the two pins' inner ends (measured drawn extent).",
+      "body": [
+        -10.0,
+        0.0,
+        10.0,
+        0.0
+      ],
+      "bodySource": "measured: the two pins' inner ends",
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            -20.0,
+            0.0
+          ],
+          "direction": "left",
+          "length": 10.0
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            20.0,
+            0.0
+          ],
+          "direction": "right",
+          "length": 10.0
+        }
+      ]
+    },
+    {
+      "symbolRef": "CAP-SMD-220UF",
+      "title": "Electrolytic 220uF/25V SMD, vertical (plate 1 up)\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (C5, C9900017672), names/directions/lengths from 110's 11_pins.json on the same LCSC. Body box = the two pins' inner ends (measured drawn extent).",
+      "body": [
+        0.0,
+        -1.0,
+        0.0,
+        3.0
+      ],
+      "bodySource": "measured: the two pins' inner ends",
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
           "tip": [
             0.0,
             20.0
           ],
           "direction": "up",
-          "length": 10.0,
-          "pinType": "passive"
+          "length": 17.0
         },
         {
           "number": "2",
-          "name": "K",
+          "name": "2",
           "tip": [
             0.0,
             -20.0
           ],
           "direction": "down",
-          "length": 10.0,
-          "pinType": "passive"
+          "length": 19.0
         }
       ]
     },
     {
-      "kind": "boardwise-symbol-profile",
-      "profileVersion": 1,
-      "symbolRef": "NMOS-TO251",
-      "title": "N-channel MOSFET 4N60 TO-251, drawn VERTICALLY: drain up, source down, gate right (110 ruling c)",
+      "symbolRef": "CAP-TH-1NF-1KV",
+      "title": "Capacitor 1nF/1kV through-hole, vertical (plate 1 up)\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (C7, C9900022732), names/directions/lengths from 110's 11_pins.json on the same LCSC. Body box = the two pins' inner ends (measured drawn extent).",
       "body": [
-        -15,
-        -20,
-        15,
-        20
+        -10.0,
+        0.0,
+        10.0,
+        0.0
       ],
+      "bodySource": "measured: the two pins' inner ends",
       "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            -20.0,
+            0.0
+          ],
+          "direction": "left",
+          "length": 10.0
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            20.0,
+            0.0
+          ],
+          "direction": "right",
+          "length": 10.0
+        }
+      ]
+    },
+    {
+      "symbolRef": "DIO-DO41-UF4007",
+      "title": "DIO-DO41-UF4007 — the clamp diode (D1), drawn with its ANODE on the left and its CATHODE on the right, so the winding it hangs off leaves horizontally. A vertical diode cannot express the 'this side of the transformer' relation the compiler measures against the pin, and its own refusal is what settled the shape.\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (D1, C212802), names/directions/lengths from 110's 11_pins.json on the same LCSC. Body box = the two pins' inner ends (measured drawn extent).",
+      "body": [
+        -5.0,
+        0.0,
+        5.0,
+        0.0
+      ],
+      "bodySource": "measured: the two pins' inner ends",
+      "pins": [
+        {
+          "number": "1",
+          "name": "C",
+          "tip": [
+            -20.0,
+            0.0
+          ],
+          "direction": "left",
+          "length": 15.0
+        },
+        {
+          "number": "2",
+          "name": "A",
+          "tip": [
+            20.0,
+            -0.0
+          ],
+          "direction": "right",
+          "length": 15.0
+        }
+      ]
+    },
+    {
+      "symbolRef": "DIO-SMA-SS310",
+      "title": "Schottky SS310 SMA — the secondary rectifier, drawn VERTICALLY (anode up on the winding's hot end, cathode down to the output rail) so its chain pins present on the same column as the rest of the chain.\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (D3, C9900021858), names/directions/lengths from 110's 11_pins.json on the same LCSC. Body box = the two pins' inner ends (measured drawn extent).",
+      "body": [
+        -5.0,
+        0.0,
+        5.0,
+        0.0
+      ],
+      "bodySource": "measured: the two pins' inner ends",
+      "pins": [
+        {
+          "number": "1",
+          "name": "K",
+          "tip": [
+            -20.0,
+            0.0
+          ],
+          "direction": "left",
+          "length": 15.0
+        },
+        {
+          "number": "2",
+          "name": "A",
+          "tip": [
+            20.0,
+            0.0
+          ],
+          "direction": "right",
+          "length": 15.0
+        }
+      ]
+    },
+    {
+      "symbolRef": "NMOS-TO251",
+      "title": "N-channel MOSFET 4N60 TO-251, drawn VERTICALLY: drain up, source down, gate right (110 ruling c)\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (Q1, C2681894), names/directions/lengths from 110's 11_pins.json on the same LCSC. Body box = the outer pins' inner ends — a stated lower bound, since no reading carries a per-part bounding box.",
+      "body": [
+        -20.0,
+        -10.0,
+        0.0,
+        10.0
+      ],
+      "bodySource": "derived lower bound: the outer pins' inner ends (no bbox in any reading)",
+      "pins": [
+        {
+          "number": "1",
+          "name": "G",
+          "tip": [
+            -30.0,
+            0.0
+          ],
+          "direction": "left",
+          "length": 10.0
+        },
         {
           "number": "2",
           "name": "D",
           "tip": [
-            0,
-            40
+            0.0,
+            20.0
           ],
           "direction": "up",
-          "length": 10.0,
-          "pinType": "passive"
-        },
-        {
-          "number": "1",
-          "name": "S",
-          "tip": [
-            0,
-            -40
-          ],
-          "direction": "down",
-          "length": 10.0,
-          "pinType": "passive"
+          "length": 10.0
         },
         {
           "number": "3",
-          "name": "G",
-          "tip": [
-            35,
-            0
-          ],
-          "direction": "right",
-          "length": 10.0,
-          "pinType": "passive"
-        }
-      ]
-    },
-    {
-      "kind": "boardwise-symbol-profile",
-      "profileVersion": 1,
-      "symbolRef": "XFMR-EE16-3W",
-      "title": "Flyback transformer, three windings: the primary on the left with its bus end ABOVE the origin and its switch-node end below (so the clamp hangs off the top and the switch off the bottom), the secondary on the right, the auxiliary across the top. 岳 ruling (a).",
-      "body": [
-        -45.0,
-        -35.0,
-        45.0,
-        35.0
-      ],
-      "pins": [
-        {
-          "number": "P1",
-          "name": "P1",
-          "tip": [
-            -60.0,
-            20.0
-          ],
-          "direction": "left",
-          "length": 10.0,
-          "pinType": "passive"
-        },
-        {
-          "number": "P2",
-          "name": "P2",
-          "tip": [
-            -60.0,
-            -20.0
-          ],
-          "direction": "left",
-          "length": 10.0,
-          "pinType": "passive"
-        },
-        {
-          "number": "A1",
-          "name": "A1",
+          "name": "S",
           "tip": [
             0.0,
-            55.0
-          ],
-          "direction": "up",
-          "length": 10.0,
-          "pinType": "passive"
-        },
-        {
-          "number": "A2",
-          "name": "A2",
-          "tip": [
-            0.0,
-            75.0
-          ],
-          "direction": "up",
-          "length": 10.0,
-          "pinType": "passive"
-        },
-        {
-          "number": "S1",
-          "name": "S1",
-          "tip": [
-            60.0,
-            20.0
-          ],
-          "direction": "right",
-          "length": 10.0,
-          "pinType": "passive"
-        },
-        {
-          "number": "S2",
-          "name": "S2",
-          "tip": [
-            60.0,
             -20.0
-          ],
-          "direction": "right",
-          "length": 10.0,
-          "pinType": "passive"
-        }
-      ]
-    },
-    {
-      "kind": "boardwise-symbol-profile",
-      "profileVersion": 1,
-      "symbolRef": "SOT23-3-TL431",
-      "title": "TL431 voltage reference, SOT-23-3. A (the secondary-ground side) and REF (the divider tap) are on one vertical line so the body points from the tap down to ground; K (the optocoupler LED cathode) faces right, where the feedback row runs.",
-      "body": [
-        -15,
-        -20,
-        15,
-        20
-      ],
-      "pins": [
-        {
-          "number": "A",
-          "name": "A",
-          "tip": [
-            0,
-            -40
           ],
           "direction": "down",
-          "length": 10.0,
-          "pinType": "passive"
-        },
-        {
-          "number": "REF",
-          "name": "REF",
-          "tip": [
-            0,
-            40
-          ],
-          "direction": "up",
-          "length": 10.0,
-          "pinType": "passive"
-        },
-        {
-          "number": "K",
-          "name": "K",
-          "tip": [
-            35,
-            0
-          ],
-          "direction": "right",
-          "length": 10.0,
-          "pinType": "passive"
+          "length": 10.0
         }
       ]
     },
     {
-      "kind": "boardwise-symbol-profile",
-      "profileVersion": 1,
-      "symbolRef": "SMD-4-PC817",
-      "title": "Optocoupler PC817, SMD-4, drawn as the barrier it is: the chain pins (LED cathode 2 and collector 4) on one vertical line, the two ground-side pins (LED anode 1 and emitter 3) facing left. 岳 ruling (e): the only part allowed to cross the isolation band.",
+      "symbolRef": "XFMR-EE16-3W",
+      "title": "Flyback transformer, three windings: the primary on the left with its bus end ABOVE the origin and its switch-node end below (so the clamp hangs off the top and the switch off the bottom), the secondary on the right, the auxiliary across the top. 岳 ruling (a).\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (T1, C9900020988), names/directions/lengths from 110's 11_pins.json on the same LCSC. Body box = the outer pins' inner ends — a stated lower bound, since no reading carries a per-part bounding box.",
       "body": [
-        -20,
-        -25,
-        20,
-        25
+        -20.0,
+        -20.0,
+        20.0,
+        20.0
       ],
+      "bodySource": "derived lower bound: the outer pins' inner ends (no bbox in any reading)",
       "pins": [
         {
           "number": "1",
-          "name": "A",
+          "name": "1",
           "tip": [
-            -40,
-            10
+            -40.0,
+            20.0
           ],
           "direction": "left",
-          "length": 10.0,
-          "pinType": "passive"
+          "length": 20.0
         },
         {
-          "number": "2",
-          "name": "K",
+          "number": "3",
+          "name": "3",
           "tip": [
-            0,
-            45
+            -40.0,
+            -10.0
           ],
-          "direction": "up",
-          "length": 10.0,
-          "pinType": "passive"
+          "direction": "left",
+          "length": 20.0
         },
         {
           "number": "4",
-          "name": "C",
+          "name": "4",
           "tip": [
-            0,
-            -45
+            40.0,
+            -20.0
           ],
-          "direction": "down",
-          "length": 10.0,
-          "pinType": "passive"
+          "direction": "right",
+          "length": 20.0
+        },
+        {
+          "number": "5",
+          "name": "5",
+          "tip": [
+            40.0,
+            0.0
+          ],
+          "direction": "right",
+          "length": 20.0
+        },
+        {
+          "number": "6",
+          "name": "6",
+          "tip": [
+            40.0,
+            20.0
+          ],
+          "direction": "right",
+          "length": 20.0
+        }
+      ]
+    },
+    {
+      "symbolRef": "SOT23-3-TL431",
+      "title": "TL431 voltage reference, SOT-23-3. A (the secondary-ground side) and REF (the divider tap) are on one vertical line so the body points from the tap down to ground; K (the optocoupler LED cathode) faces right, where the feedback row runs.\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (U3, C2887585), names/directions/lengths from 110's 11_pins.json on the same LCSC. Body box = the outer pins' inner ends — a stated lower bound, since no reading carries a per-part bounding box.",
+      "body": [
+        -45.0,
+        -5.0,
+        45.0,
+        5.0
+      ],
+      "bodySource": "derived lower bound: the outer pins' inner ends (no bbox in any reading)",
+      "pins": [
+        {
+          "number": "1",
+          "name": "REF",
+          "tip": [
+            -55.0,
+            5.0
+          ],
+          "direction": "left",
+          "length": 10.0
+        },
+        {
+          "number": "2",
+          "name": "CATHODE",
+          "tip": [
+            -55.0,
+            -5.0
+          ],
+          "direction": "left",
+          "length": 10.0
         },
         {
           "number": "3",
-          "name": "E",
+          "name": "ANODE",
           "tip": [
-            -40,
-            -10
+            55.0,
+            0.0
+          ],
+          "direction": "right",
+          "length": 10.0
+        }
+      ]
+    },
+    {
+      "symbolRef": "SMD-4-PC817",
+      "title": "Optocoupler PC817, SMD-4, drawn as the barrier it is: the chain pins (LED cathode 2 and collector 4) on one vertical line, the two ground-side pins (LED anode 1 and emitter 3) facing left. 岳 ruling (e): the only part allowed to cross the isolation band.\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (U4, C7437), names/directions/lengths from 110's 11_pins.json on the same LCSC. Body box = the outer pins' inner ends — a stated lower bound, since no reading carries a per-part bounding box.",
+      "body": [
+        -25.0,
+        -10.0,
+        25.0,
+        10.0
+      ],
+      "bodySource": "derived lower bound: the outer pins' inner ends (no bbox in any reading)",
+      "pins": [
+        {
+          "number": "1",
+          "name": "AN",
+          "tip": [
+            -45.0,
+            10.0
           ],
           "direction": "left",
-          "length": 10.0,
-          "pinType": "passive"
+          "length": 20.0
+        },
+        {
+          "number": "2",
+          "name": "CAT",
+          "tip": [
+            -45.0,
+            -10.0
+          ],
+          "direction": "left",
+          "length": 20.0
+        },
+        {
+          "number": "3",
+          "name": "EM",
+          "tip": [
+            45.0,
+            -10.0
+          ],
+          "direction": "right",
+          "length": 20.0
+        },
+        {
+          "number": "4",
+          "name": "COL",
+          "tip": [
+            45.0,
+            10.0
+          ],
+          "direction": "right",
+          "length": 20.0
         }
       ]
     }

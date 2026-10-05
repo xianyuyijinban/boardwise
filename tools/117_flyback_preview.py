@@ -53,6 +53,8 @@ def main(argv: list[str]) -> int:
     if not result.ok or not result.candidates:
         for item in result.failures:
             print(f"  [{item.category}] {item.detail[:200]}")
+        for item in result.rejected:
+            print(f"  rejected {item.variant}: {item.reason[:160]}")
         return 1
 
     written: list[Path] = []
