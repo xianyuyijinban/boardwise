@@ -21,6 +21,29 @@
 4. **真实几何下 `same-column(Q1, R5)` 不再是「位姿可解」**——116 记的那条结论
    建立在 113 编的 profile 上，实测几何把它推翻了。这条是 118 挖出来的
    **新发现**，如实记在这里与 SUMMARY，不假装它一直是对的。
+============================ 119 更新：换料之后这些断言量的现实换了 ============================
+
+岳 2026-10-04 深夜裁定换料：T1 从 `C9900020988`（`EE16_3+3_V02`，实测**五脚**）
+换成同门的 `C49118510`（`XREE16-050624` 卧式 5+5），真机实测**七脚**
+（左侧 1-5、右侧 6/10；证据 `outputs/118/probe/xfmr_swap_probe.json`；同门
+`C49118511` 立式 4+4 实测只有 3 脚含 NC，已否）。辅助绕组的冷端**第一次有了
+真脚**（`T1.2` 归 `PGND`，物理正确——辅助是原边参考的）。
+
+本文件的断言因此**按新现实改写**，但**五脚缺陷不抹**：它是 118 的**发现**，
+写进 `test_the_five_pin_transformer_cannot_carry_this_circuit` 的**发现记录**里
+（并引 `outputs/118/SUMMARY.md` 与那份穷举证据），不再是关于当前电路的断言。
+
+改写清单（每条一句「原来量什么 → 现在量什么」）：
+
+| 测试 | 119 之后的主张 |
+|---|---|
+| `…hand_written_pin_tip` | 十二颗**换料未动**的 profile 仍逐脚等于 118 的实测；**T1 改钉 118b 换料探针**（那份才是它现在的实测） |
+| `…where_its_geometry_came_from` | 来源写在 **`notes` 的字符串数组**里（library schema 校验不收 `bodySource` 键），判据从「键在不在」改成「那一句在不在」 |
+| `…body_box_is_the_measured_inner_ends` | **T1 的体框是 `sch.geometry` 的实测 bbox**，比体内端**更宽**（骨架中间的空档没有脚可推）；这条按「哪一种来源用什么尺子」分开判 |
+| `…pin_carries_the_name_the_host_reports` | 符号表随换料换了，名字对账改按 **symbolRef 自带的行**查，缺读数的行点名跳过而不是悄悄放过 |
+| `…113_shape_intent_is_kept` | 换料那一行是 `[118b]` 不是 `[118]`（`[118]` 那一行属于十二颗没动过的） |
+| `test_the_transformer_has_five_pins…` | 改成**七脚**现实：脚号集、spec 用的 token、无 `P1/P2/A1/A2/S1/S2` 残留 |
+| `test_the_five_pin_transformer_cannot_carry_this_circuit` | 变成 **118 的发现记录**：拿**当时那五颗脚**（记在 `outputs/118/library_measured.json` 里）重跑那份穷举，结论仍是「缺的永远是 AUX」——钉的是那份发现，不是现电路 |
 """
 
 from __future__ import annotations
@@ -37,6 +60,16 @@ SPECS = ROOT / "blocklib" / "specs"
 APPLY = ROOT / "outputs" / "118" / "apply_report.json"
 PINS110 = ROOT / "outputs" / "110" / "11_pins.json"
 BODIES110 = ROOT / "outputs" / "110" / "12_bodies.json"
+#: 118b 换料探针的原始输出（真机只读）。T1 的实测从这里来，不再从 apply_report
+#: ——那一页上放的还是被换掉的那颗 `C9900020988`。
+SWAP_PROBE = ROOT / "outputs" / "118" / "probe" / "xfmr_swap_probe.json"
+#: 118 **当时**那份实测库（换料之前）。五脚变压器那份发现的可复算证据在这里，
+#: 所以 119 把那条测试改成记录它时不必重新造数据。
+LIBRARY_118 = ROOT / "outputs" / "118" / "library_measured.json"
+
+#: 119 换掉的唯一一颗 profile，以及它现在该读哪份实测。
+SWAPPED_REF = "XFMR-XREE16-050624"
+SWAPPED_FROM = "XFMR-EE16-3W"
 
 if str(ROOT / "tools") not in sys.path:
     sys.path.insert(0, str(ROOT / "tools"))
@@ -106,6 +139,67 @@ def _measured_110() -> dict[str, dict[str, tuple]]:
     return out
 
 
+# ------------------------------------------------------- 119: the swapped part
+
+
+def _swap_probe() -> dict:
+    """The 118b read-only probe that measured the part the flyback now uses.
+
+    The probe placed one scratch part at a known origin and read the editor back,
+    so its page coordinates become **symbol-local** tips by subtracting that
+    origin — the same inverse-pose step :func:`_inverse_pose` performs for the
+    apply report, reduced to its identity case because the probe part was at
+    rotation 0, unmirrored.
+    """
+    payload = json.loads(SWAP_PROBE.read_text(encoding="utf-8"))
+    chosen = next(
+        entry for entry in payload["candidates"].values()
+        if entry.get("verdict") == "chosen"
+    )
+    placed = chosen["placedPrimitive"]
+    assert "rot0" in placed, (
+        f"the probe part was placed {placed!r}, so subtracting its origin is not "
+        "the inverse transform this reader assumes"
+    )
+    match = placed.rsplit("(", 1)
+    ox, oy = (int(value) for value in match[-1].split(")")[0].split(","))
+    return {
+        "lcsc": next(
+            code for code, entry in payload["candidates"].items()
+            if entry is chosen
+        ),
+        "tips": {
+            str(pin["number"]): (float(pin["x"] - ox), float(pin["y"] - oy))
+            for pin in chosen["pins"]
+        },
+        "body": (
+            float(chosen["bbox"]["minX"] - ox),
+            float(chosen["bbox"]["minY"] - oy),
+            float(chosen["bbox"]["maxX"] - ox),
+            float(chosen["bbox"]["maxY"] - oy),
+        ),
+    }
+
+
+def _measured_session() -> dict[str, str]:
+    """``symbolRef -> designator`` **of the measurement session**, not of today.
+
+    The designator↔symbol mapping is read from the apply report's own plan (the
+    page 118 measured), never from the current ``circuit.json``: 119 swapped T1's
+    part, and the spec's designator→LCSC assignments have moved with it, so a
+    test that resolved profiles through today's spec would point at parts the
+    measurement never saw. One designator per symbolRef — profiles are per
+    symbol, not per part.
+    """
+    plan = json.loads(
+        (ROOT / "outputs" / "118" / "plan_report.json").read_text(encoding="utf-8")
+    )["plan"]["change"]["parts"]
+    sample: dict[str, str] = {}
+    for item in plan:
+        sample.setdefault(item["symbolRef"], item["designator"])
+    return sample
+
+
 # ============================================================== 1 实测，不是编写
 
 
@@ -147,79 +241,141 @@ def test_two_live_readings_agree_pin_for_pin():
 
 
 def test_no_profile_carries_a_hand_written_pin_tip():
-    """**每颗 profile 的脚尖都等于 118 的实测**，一颗都不许是编的。
+    """**每颗 profile 的脚尖都等于实测**，一颗都不许是编的——T1 除外，因为它换了料。
 
     量的是**符号局部坐标**（把 118 的页坐标读数按该器件实际落图时的位姿
     逆变换回去），不是页坐标——那才是 profile 该记的东西。
+
+    **119 更新**：T1 的 profile 换成了 118b 换料探针实测的那颗七脚变压器，所以
+    它的脚尖不再等于 `apply_report.json` 的读数——那一页上放的还是**被换掉的**
+    那颗 `C9900020988`。这一条对十二颗没动过的符号照旧逐脚对账，对 T1 改钉
+    探针读数，**并且把两者都要求存在**：一颗既不在 118 那页上、也不在换料探针
+    里的 profile，就是一颗来源不明的 profile，那是本条要抓的形状。
     """
     tips, lcsc = _measured_118()
+    probe = _swap_probe()
+    session = _measured_session()
     book = json.loads((SPECS / "flyback_uc3845.library.json").read_text(
         encoding="utf-8"))
-    plan = json.loads(
-        (ROOT / "outputs" / "118" / "plan_report.json").read_text(encoding="utf-8")
-    )["plan"]["change"]["parts"]
-    # One designator per symbolRef — the profiles are per symbol, not per part.
-    sample: dict[str, str] = {}
-    for item in plan:
-        sample.setdefault(item["symbolRef"], item["designator"])
+
+    measured_for: dict[str, tuple[dict, str]] = {}
+    for symbol_ref, designator in session.items():
+        measured_for[symbol_ref] = (tips[designator], f"the 118 apply report ({designator})")
+    measured_for[SWAPPED_REF] = (probe["tips"], f"the 118b swap probe ({probe['lcsc']})")
 
     for entry in book["profiles"]:
-        designator = sample[entry["symbolRef"]]
-        measured = tips[designator]
+        symbol_ref = entry["symbolRef"]
+        assert symbol_ref in measured_for, (
+            f"{symbol_ref}: no live reading covers this profile any more, so its "
+            f"pin tips would be an assertion about nothing (119 swapped T1; the "
+            f"swapped-in part is measured by {SWAP_PROBE.relative_to(ROOT).as_posix()})"
+        )
+        measured, source = measured_for[symbol_ref]
+        designator = session.get(symbol_ref, "T1")
         declared = {pin["number"]: tuple(pin["tip"]) for pin in entry["pins"]}
         assert set(declared) == set(measured), (
-            f"{entry['symbolRef']}: the profile declares {sorted(declared)} but "
-            f"the host measured {sorted(measured)} on {designator} "
-            f"({lcsc[designator]})"
+            f"{symbol_ref}: the profile declares {sorted(declared)} but "
+            f"{source} measured {sorted(measured)}"
         )
         for number, tip in sorted(measured.items()):
             assert declared[number] == tip, (
-                f"{entry['symbolRef']} pin {number}: the profile says "
-                f"{declared[number]}, the host measured {tip} — 113's "
+                f"{symbol_ref} pin {number}: the profile says "
+                f"{declared[number]}, {source} measured {tip} — 113's "
                 "hand-written tip is still in here"
             )
+        assert designator, f"{symbol_ref} has no designator to name in a failure"
+
+
+def _body_source(entry: dict) -> str:
+    """The one line that says where a profile's body came from.
+
+    **119 更新**：118 wrote it as a ``bodySource`` **key**, and the library
+    schema's CLI validation does not accept that key — it was folded by hand
+    into ``notes``, which the schema does accept and which must therefore be an
+    array of strings. Reading the key would report every profile as unsourced;
+    reading the note is what the file now says.
+    """
+    notes = entry.get("notes")
+    assert isinstance(notes, list) and all(
+        isinstance(line, str) for line in notes
+    ), (
+        f"{entry['symbolRef']}: notes is {notes!r}; the schema wants an array of "
+        "strings, and the body provenance lives in one of them"
+    )
+    for line in notes:
+        if line.startswith("body:"):
+            return line
+    return ""
 
 
 def test_every_profile_says_where_its_geometry_came_from():
     """**每颗 profile 自己交代来源**——实测还是下界，一行字，不许含糊。
 
-    两种来源是分开的，因为可信度不同：两颗脚的器件，体内端**就是**本体的边，
-    是**实测**；多脚器件的外侧体内端只框住 x 与 y 的范围、中间的缺口没有
-    任何读数带得到，所以是**下界**。把两者写成同一种话，就是把一个估计说成
-    测量——drawlint 同款纪律，118 对 profile 用同一条。
+    三种来源，可信度各不相同，而且它们**不是同一种量法**，所以也不该用同一把
+    尺子去量（下一条就是按来源分尺的）：
+
+    * 两颗脚的器件：体内端**就是**本体的边——**实测**；
+    * 多脚器件：外侧体内端只框住 x 与 y 的范围、中间的缺口没有读数带得到——
+      **下界**；
+    * **119 新增第三种**：T1 换的那颗七脚变压器，**真的有一份 bbox 读数**
+      （118b 探针的 ``sch.geometry bboxIds``），所以它的体框是**实测 bbox**，
+      而且比体内端**更宽**——骨架中间的绕组空档没有脚可推，那一块地是真占着的。
+      把一个实测 bbox 说成下界，或者反过来按下界去核一个实测 bbox，都是把
+      测量说成估计。
     """
     book = json.loads((SPECS / "flyback_uc3845.library.json").read_text(
         encoding="utf-8"))
     for entry in book["profiles"]:
-        assert "measured 2026-10-04" in entry["title"], (
+        assert "measured 2026-10-04" in entry["title"] or "measured on the live host" in entry["title"], (
             f"{entry['symbolRef']}: the title does not say the pins are measured"
         )
-        assert entry.get("bodySource"), (
-            f"{entry['symbolRef']}: bodySource is missing, so a reader cannot "
-            "tell a measured body from a derived lower bound"
+        source = _body_source(entry)
+        assert source, (
+            f"{entry['symbolRef']}: no notes line starts with 'body:', so a "
+            "reader cannot tell a measured body from a derived lower bound"
         )
+        if entry["symbolRef"] == SWAPPED_REF:
+            assert "measured bbox" in source, (
+                f"{SWAPPED_REF}: the probe read a real bbox, so the note must say "
+                f"that rather than {source!r}"
+            )
+            continue
         two_pin = len(entry["pins"]) == 2
-        assert ("measured" in entry["bodySource"]) is two_pin, (
-            f"{entry['symbolRef']}: {len(entry['pins'])} pins but bodySource "
-            f"says {entry['bodySource']!r}"
+        assert ("measured" in source) is two_pin, (
+            f"{entry['symbolRef']}: {len(entry['pins'])} pins but the body note "
+            f"says {source!r}"
         )
 
 
 def test_every_body_box_is_the_measured_inner_ends_and_nothing_wider():
-    """**体框也是量出来的**，而且只许是**体内端**——多一圈就是凭空多要地方。
+    """**体框也是量出来的**——而且每颗按它自己那一句来源用那把尺子。
 
-    118 的 `bodySource` 那一行说的是「由体内端推出」，那这一条就去查它是不是
-    真的由体内端推出：把每颗 profile 的体框与它自己的脚尖、脚长对一遍。
-    **多包一个 `GAP` 或者宽了一圈，量出来就不等**——而那正是「按尺寸类别猜」
-    的样子，也是编译器多要一块地、多一张图放不下的样子。
+    由体内端推出体框的那些：把体框与脚尖、脚长对一遍，**多包一个 `GAP` 或者宽了
+    一圈就量出来不等**——那正是「按尺寸类别猜」的样子，也是编译器多要一块地、
+    多一张图放不下的样子。
+
+    **119 更新**：T1 不在这条尺子下。它的体框是 118b 探针读回来的**实测 bbox**，
+    骨架中间的绕组空档没有脚可推，所以它**必然**比体内端宽；按体内端去核它，
+    就是拿一个推不出的数去否一个量出来的数。这一条改成对账**那份 bbox**——
+    仍然要求它等于一次真读数，只是不再要求它等于一个下界。
     """
     book = json.loads((SPECS / "flyback_uc3845.library.json").read_text(
         encoding="utf-8"))
+    probe = _swap_probe()
     inward = {
         "left": (1.0, 0.0), "right": (-1.0, 0.0),
         "up": (0.0, -1.0), "down": (0.0, 1.0),
     }
     for entry in book["profiles"]:
+        if entry["symbolRef"] == SWAPPED_REF:
+            assert [round(value, 4) for value in entry["body"]] == [
+                round(value, 4) for value in probe["body"]
+            ], (
+                f"{SWAPPED_REF}: body is {entry['body']} but the 118b probe read "
+                f"{list(probe['body'])} — a body that is not the measured bbox is "
+                "a guess wearing a measurement's name"
+            )
+            continue
         inner = []
         for pin in entry["pins"]:
             dx, dy = inward[pin["direction"]]
@@ -257,13 +413,19 @@ def test_every_pin_carries_the_name_the_host_reports():
     }
     # The measured names, from 110's reading of the same LCSC parts.
     measured = _measured_110()
-    plan = json.loads(
-        (ROOT / "outputs" / "118" / "plan_report.json").read_text(encoding="utf-8")
-    )["plan"]["change"]["parts"]
     _tips, lcsc = _measured_118()
-    sample: dict[str, str] = {}
-    for item in plan:
-        sample.setdefault(item["symbolRef"], item["lcsc"])
+    # 119: the symbol table follows the **measurement session**, read off the
+    # apply report's own plan rather than today's spec. T1's entry there names
+    # the part that was swapped OUT, so it is dropped explicitly instead of
+    # being resolved through a symbolRef that no longer exists in the library —
+    # and the count is asserted so a future swap cannot quietly shrink what this
+    # test checks.
+    session = _measured_session()
+    sample = {
+        symbol_ref: lcsc[designator]
+        for symbol_ref, designator in session.items()
+        if symbol_ref != SWAPPED_FROM
+    }
     covered = 0
     for symbol_ref, code in sample.items():
         record = measured.get(code)
@@ -276,9 +438,13 @@ def test_every_pin_carries_the_name_the_host_reports():
                 f"{symbol_ref} pin {number}: the profile calls it "
                 f"{declared[symbol_ref].get(number)!r}, the host reports {name!r}"
             )
-    # 9 of the 13 profiles, not 21: the count is over *symbols*, and 110 measured
-    # 12 *parts* which collapse onto fewer symbols (three pairs share an LCSC).
-    assert covered >= 9, (
+    # 8 of the 12 remaining profiles, not 21: the count is over *symbols*, and 110
+    # measured 12 *parts* which collapse onto fewer symbols (three pairs share an
+    # LCSC). **119**: it was 9, and the ninth was the five-pin transformer — the
+    # part 119 took out of the circuit. The floor moves with the library, and
+    # this states the new one rather than leaving a stale 9 that would be
+    # satisfied by re-admitting a profile nobody uses.
+    assert covered >= 8, (
         f"only {covered} profiles could be checked against a measured name; the "
         "pin tokens are the whole point of this batch"
     )
@@ -290,16 +456,24 @@ def test_the_113_shape_intent_is_kept_alongside_the_measurement():
     113 为每颗符号挑的形状是**有理由的**（岳 ruling e 要反馈横排在水平线上、
     钳位二极管要横着画才表达得了「变压器的这一侧」），那些理由写进了 title。
     118 换了几何，**理由必须还在**，只是不能再说成「这就是器件的样子」。
+
+    **119 更新**：那一行的批号跟着**这颗 profile 自己的来历**走。十二颗没换过料
+    的仍然是 `[118] `；换过料的那颗（`XFMR-XREE16-050624`）是 **118b** 的换料
+    探针量的，所以它是 `[118b] `。这一条查的是「实测那一行在，而且标的是这颗
+    profile 真正的来源」，不是查一个写死的批号——写死的批号会在下一次换料时
+    变成一句谎话，而这一条正是为了不让人写谎话存在的。
     """
     book = json.loads((SPECS / "flyback_uc3845.library.json").read_text(
         encoding="utf-8"))
     for entry in book["profiles"]:
         title = entry["title"]
-        assert "\n[118] " in title, (
-            f"{entry['symbolRef']}: the title has no measured-geometry line, so "
-            "113's intent and 118's measurement are not separable"
+        expected = "[118b] " if entry["symbolRef"] == SWAPPED_REF else "[118] "
+        assert f"\n{expected}" in title, (
+            f"{entry['symbolRef']}: the title has no {expected!r} measured-geometry "
+            f"line, so 113's intent and the measurement are not separable (the "
+            f"title is {title.splitlines()[-1]!r})"
         )
-        intent, measurement = title.split("\n[118] ", 1)
+        intent, measurement = title.split(f"\n{expected}", 1)
         assert intent.strip(), f"{entry['symbolRef']}: the intent line is empty"
         assert "measured" in measurement
         # 113 wrote a **reason**, not a part number, for every shape it chose.
@@ -363,21 +537,54 @@ def circuit_symbol(circuit, part_id):
     return None
 
 
-def test_the_transformer_has_five_pins_and_the_spec_uses_five():
-    """**T1 的脚 token 体系整个换了**，而且 spec 一个都不多写。
+def test_the_transformer_has_seven_pins_and_the_spec_uses_seven():
+    """**T1 的脚 token 体系整个换了**，而且 spec 一个都不多写、**一个都不少写**。
 
-    113 写的是 `P1 P2 A1 A2 S1 S2` 六 terminals；宿主实测是 `1 3 4 5 6`
-    **五脚**，`PinName == PinNumber`，**没有 A2**。110 早就记了两次
-    （`PLAN.md` 第 44 行「库内唯一 EE16 **5 脚**骨架」、第 160 行「骨架符号只有
-    5 脚」），118 是把它落到 spec 上的那一棒。
+    113 写的是 `P1 P2 A1 A2 S1 S2` 六 terminals。118 实测宿主那颗
+    `C9900020988`（`EE16_3+3_V02`）**只有五根脚**，`PinName == PinNumber`，
+    **没有 A2**，于是 118 把辅助冷端和副边回线挤在同一颗脚上——那一颗骨架
+    **装不下**这个电路（穷举见下一条）。
+
+    **119 更新：换料。** 岳 2026-10-04 深夜裁定换成同门的 `C49118510`
+    （`XREE16-050624` 卧式 5+5），118b 只读探针实测**七脚**：左侧 1-5、
+    右侧 6/10（`outputs/118/probe/xfmr_swap_probe.json`；同门 `C49118511`
+    立式 4+4 实测只有 3 脚含 NC，已否）。六端终于有六端的地方：辅助绕组的冷端
+    **第一次有了真脚**（`T1.2` 归 `PGND`——辅助是原边参考的，物理正确），
+    副边回线回到 `T1.10`，两颗地**不再共用一颗脚**。
+
+    这条量的是三件事，缺一件都算没接上：脚号集**逐个等于**探针读数；六个网
+    **都挂到了变压器上**（换料的全部意义就在这里，`AUX` 与 `SEC_GND` 各有各的
+    脚）；113 起的 `P1/P2/A1/A2/S1/S2` 一个都不许残留。
     """
     from boardwise.core.circuitspec import CircuitSpec
     from boardwise.engines import drawcompiler as dc
 
     circuit = CircuitSpec.load(SPECS / "flyback_uc3845.circuit.json")
     profile = circuit_symbol(circuit, "T1")
+    probe = _swap_probe()
     numbers = sorted(pin.number for pin in profile.pins)
-    assert numbers == ["1", "3", "4", "5", "6"], numbers
+    assert numbers == sorted(probe["tips"]), (
+        f"the profile carries {numbers}; the 118b probe measured "
+        f"{sorted(probe['tips'])} on {probe['lcsc']} — re-probe before trusting "
+        "either list"
+    )
+    assert numbers == ["1", "10", "2", "3", "4", "5", "6"], numbers
+    # Six nets, six pins: the thing the five-pin part could not do.
+    needed = {"HVDC", "SW", "PGND", "AUX", "SEC_SW", "SEC_GND"}
+    reached = set(dc._part_nets(circuit, "T1").values())
+    assert needed <= reached, (
+        f"the transformer no longer reaches {sorted(needed - reached)}; the "
+        "swap was made to give the auxiliary winding its own cold end, so losing "
+        "a net again is a regression, not a re-measurement"
+    )
+    # AUX and SEC_GND were the pair the five-pin part had to share. They must not.
+    by_net: dict[str, str] = {}
+    for pin, net in dc._part_nets(circuit, "T1").items():
+        by_net.setdefault(net, pin)
+    assert by_net["AUX"] != by_net["SEC_GND"], (
+        "AUX and SEC_GND are back on one pin; that is the two-winding skeleton "
+        "118 measured, and it is exactly what the swap was for"
+    )
     # No 113-style token survives anywhere in the spec.
     used = set(_tokens_of(circuit, "T1"))
     for stale in ("P1", "P2", "A1", "A2", "S1", "S2"):
@@ -388,21 +595,30 @@ def test_the_transformer_has_five_pins_and_the_spec_uses_five():
 
 
 def test_the_five_pin_transformer_cannot_carry_this_circuit():
-    """**118 的结论**：五脚的 EE16 骨架**装不下**这个反激，而这是穷举量出来的。
+    """**118 的发现，仍然钉在那副骨架上**——换料不等于把发现删掉。
 
     113 的 spec 要变压器碰**六个**网：`HVDC` / `SW` / `PGND` / `AUX` / `SEC_SW` /
-    `SEC_GND`——初级的两个端、初级回流、辅助绕组、副边的两个端。宿主实测的
-    `C9900020988` 只有**五根脚**（110 早就记了两次：`PLAN.md` 第 44 行与第
-    160 行）。
+    `SEC_GND`——初级的两个端、初级回流、辅助绕组、副边的两个端。118 实测宿主那颗
+    `C9900020988`（`EE16_3+3_V02`）只有**五根脚**（110 早就记了两次：
+    `PLAN.md` 第 44 与第 160 行）。
 
     **穷举**：把五根脚指派到六个网上，全部 **720** 种都拿去问语法。语法收了
     **120** 种（它要求 `sec_gnd in tx_nets`，且初级回流要够得着），而这 120 种
-    **无一例外**地少了 `AUX`——`EE16_3+3_V02` 是一副**两绕组**骨架顶了个 3+3 的
-    名字，自供电的辅助电源需要第三个绕组。
+    **无一例外**地少了 `AUX`——`EE16_3+3_V02` 是一副**两绕组**骨架顶了 3+3 的
+    名字，自供电的辅助电源需要第三个绕组。牺牲的那一端**永远是辅助绕组**，与
+    哪颗脚放哪一网无关。**要闭合只能换料**——那是 BOM 改动，归岳。
 
-    这条不是「换个读法也许能行」：牺牲的那一端**永远是辅助绕组**，与哪颗脚放
-    哪一网无关。**要闭合只能换料**——一颗六端变压器，或者辅助供电另寻出处——
-    那是 BOM 改动，归岳，**本棒不动**。
+    **119 更新：这条断言的对象换了，但主张没换。** 那副骨架已经换下，
+    `circuit.json` 里的 T1 是七脚的新料，所以**不能再拿现电路去跑这份穷举**
+    ——那会量一颗已经不在这页上的器件，量出来的是别的东西。因此这一条改成
+    **在 118 当时那份实测库上重跑**（`outputs/118/library_measured.json`，
+    树内存档），脚号集从那份库里**读出来**，既不是从现电路读、也不是写死：库里
+    是五脚就重跑五脚；将来若再换料，这一条要么重跑出新结论、要么因为库里不是
+    五脚而**明说**，不会悄悄变成一句关于别人的话。
+
+    换句话说：**这份骨架装不下这个电路，仍然是可复算的事实**，只是它现在是一
+    条**历史记录**而不是当前电路的断言——换料是岳的裁定，换料不替编译器把这
+    条结论擦掉。
     """
     import itertools
 
@@ -411,16 +627,20 @@ def test_the_five_pin_transformer_cannot_carry_this_circuit():
     from boardwise.engines import grammar
     import test_113_flyback_grammar as t113
 
-    book = t113._library_from(SPECS / "flyback_uc3845.library.json")
-    profile = circuit_symbol(
-        CircuitSpec.load(SPECS / "flyback_uc3845.circuit.json"), "T1"
+    archived = json.loads(LIBRARY_118.read_text(encoding="utf-8"))
+    archived_entry = next(
+        item for item in archived["profiles"] if item["symbolRef"] == SWAPPED_FROM
     )
-    assert profile is not None, "T1 has no profile in the measured library"
-    pins = [pin.number for pin in profile.pins]
+    pins = [pin["number"] for pin in archived_entry["pins"]]
     assert len(pins) == 5, (
-        f"the transformer now has {len(pins)} pins ({pins}); this batch's "
-        "finding was measured on five, so re-measure before trusting the test"
+        f"{LIBRARY_118.relative_to(ROOT).as_posix()} records {SWAPPED_FROM} with "
+        f"{len(pins)} pins ({pins}); 118's finding was measured on five, so that "
+        "archive is not the artefact it was written against — re-derive the "
+        "finding rather than trusting this run"
     )
+    # The whole archived library, not the live one: the finding is a statement
+    # about the world as it stood, and the live library has moved on since.
+    book = t113._library_from(LIBRARY_118)
 
     presentation = PresentationSpec.load(
         SPECS / "flyback_uc3845.presentation.json")
@@ -439,9 +659,9 @@ def test_the_five_pin_transformer_cannot_carry_this_circuit():
                 if not member.startswith("T1.")
             ]
         for pin, net in assignment.items():
-            for entry in payload["nets"]:
-                if entry["id"] == net:
-                    entry["members"].append(f"T1.{pin}")
+            for target in payload["nets"]:
+                if target["id"] == net:
+                    target["members"].append(f"T1.{pin}")
         for net in payload["nets"]:
             net["members"] = sorted(set(net["members"]))
         try:

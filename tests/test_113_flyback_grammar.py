@@ -992,28 +992,34 @@ def test_the_layout_stage_no_longer_refuses_the_feedback_row():
     assert "same-row(R8, U4)" not in joined
 
 
-def test_the_flyback_page_is_blocked_by_the_five_pin_transformer_and_says_why():
-    """**118 更新**：反激整页在**真实几何**下编译不出来，拦着的是**料**不是编译器。
+def test_the_flyback_page_is_refused_and_says_which_relations_are_left():
+    """**119 更新**：换料之后拦着的东西换了，这条跟着换——但**形状**不变。
 
-    117 在 113 **编写**的 profile 上把整页编译出来了（`ok=True`、闸零硬违反），
-    然后真机 `draw apply` 被 **054 C6** 拒了：21 件全放下、值全对，49 根脚里
-    **46 根**超差，两颗符号的 token 宿主根本没有。118 把十三颗 profile 换成
-    **实测**之后（`tools/118_measure_profiles.py`，两份独立真机读数逐脚互校），
-    这条断言**翻回来**——但**理由换了**，而且是个更靠前的理由：
+    118 的版本写的是「反激整页被五脚变压器拦着」。岳 2026-10-04 深夜换了料：
+    T1 变成 `C49118510`（`XREE16-050624`，118b 只读探针实测**七脚**），辅助绕组
+    的冷端第一次有了真脚（`T1.2` 归 `PGND`），**六端终于有六端的地方**——
+    118 那条「五脚装不下三绕组」的结论就此不再是当前现实（它作为 118 的**发现**
+    留在 `tests/test_118_measured_profiles.py` 里重跑，仍然可复算）。
 
-    * 113 写的是 `T1.P1 / P2 / A1 / A2 / S1 / S2` 六 terminals。宿主实测的
-      `C9900020988`（`EE16_3+3_V02`）**只有五根脚**，`PinName == PinNumber`，
-      **没有 A2**——110 早就记了两次（`PLAN.md` 第 44、160 行）。
-    * 这个反激要变压器碰**六个**网。**穷举**五根脚到六个网的全部 **720** 种
-      指派，语法收了 **120** 种，而那 120 种**无一例外**少了 `AUX`：这是一副
-      **两绕组**骨架顶了 3+3 的名字，自供电的辅助电源需要第三个绕组。
-      （证明与穷举脚本见 `tests/test_118_measured_profiles.py`。）
+    整页**仍然编译不出来**，但**拦着它的换了人**，而且换了两拨：
 
-    所以**这一条不是「编译器还欠着」**，是**BOM 欠着**：换一颗六端变压器，或者
-    辅助供电另寻出处。**归岳，本棒不动**——换料是采购决定，不是编译器的活。
+    * **第一拨（位姿阶梯，119 治的那一处）**：六档基阶梯**全部**被**同一条**
+      `same-column(Q1, R5)` 拒掉。118 实测 `R5` 转 90° 就把它的 `SRC` pad 放回
+      `Q1` 的列——而那个位姿**不在** `_variants` 只探索的 0/1 两档里。119 给
+      `_variants` 加了一条**只在 candidates=0 时点火**的加宽：这六档既然都被同
+      一���关系拒掉，就把阶梯往它自己的接受位姿集**试完**。加宽之后
+      `same-column` **确实**被清掉了（见
+      `tests/test_119_pose_ladder_widening.py` 的合成单测）——所以这一拨不是
+      拦路的了。
+    * **第二拨（走线，本棒没治）**：加宽之后的每一档都改被**另一条**关系或
+      **布线**拒掉，最后收敛到 `net 'HVDC' has a direct-wire obligation and its
+      pins could not be joined inside the searched corridor`。这是**新料**带来的：
+      118b 探针量到的 T1 体框是 **101 × 136**（旧五脚那颗是 40 × 40），它把 `D3`
+      顶到 `HVDC` 那三个 pad 的直连路径上，而 `D3` 是**链件**、只有一档接受位姿，
+      走不了。**换料是岳的裁定，绕线策略是编译器的事**——本棒如实记下断点。
 
-    断言写成真形状：编译不过、失败被点名、**且**点名的必须是这条，而不是一句
-    含糊的「排不出来」。
+    断言写成真形状：编译不过、**每一个**拒绝都被点名、点名的**不是一句含糊的
+    「排不出来」**、而且加宽确实**发生**了（在 notes 里，不是在沉默里）。
     """
     circuit = CircuitSpec.load(SPECS / "flyback_uc3845.circuit.json")
     presentation = PresentationSpec.load(SPECS / "flyback_uc3845.presentation.json")
@@ -1022,15 +1028,25 @@ def test_the_flyback_page_is_blocked_by_the_five_pin_transformer_and_says_why():
         max_candidates=64))
     assert not placed.ok, (
         "the flyback now compiles under the measured library: if that is because "
-        "the transformer question was solved, say how in this test's docstring "
-        "rather than leaving the old text"
+        "the routing was solved, say how in this test's docstring rather than "
+        "leaving the old text"
     )
     assert not placed.candidates
     joined = " ".join(item.detail for item in placed.failures)
     assert joined, "a refusal with no reason is not a refusal"
-    # The refusal must **name** the relation that is left, not shrug.
-    assert "same-column(Q1, R5)" in joined, joined[:400]
-
+    # 119: the widening is not allowed to be silent. If it fired, the reader is
+    # told which relation triggered it and how many rungs it added.
+    notes = " ".join(placed.notes)
+    assert "pose ladder was widened" in notes, (
+        "the base ladder was refused by one relation in all six rungs, so 119's "
+        f"widening should have fired; notes were: {notes[-400:]}"
+    )
+    # And the widening did NOT rescue the page: the honest refusal is still here,
+    # and it is the *routing* that is left, not the relation the widening chased.
+    assert "direct-wire obligation" in joined or "same-column(Q1, R5)" in joined, (
+        "a refusal that names neither the relation nor the routing is a shrug: "
+        f"{joined[:400]}"
+    )
 
 def test_the_grammar_still_binds_the_measured_circuit():
     """**语法层是好的**——118 只换了 profile 与 token，没有换语法。
@@ -1055,48 +1071,48 @@ def test_the_grammar_still_binds_the_measured_circuit():
 
 
 def test_the_offline_lint_gate_cannot_run_yet_and_says_why():
-    """**如实申报**：第二层验收（`draw lint` 离线闸 0 ERROR）本棒**仍未达成**。
+    """**如实申报**：第二层验收（`draw lint` 离线闸 0 ERROR）仍然**未达成**。
 
-    **117 更新**：这一条当初有**两个**原因，现在只剩**一个**。
+    **119 更新**：117 那一版写的「第一层已经通了、只剩 lint」**已经过期**。118
+    换掉十三颗手写 profile 之后整页编译不出来，118 挖出的是**料**（五脚变压器）；
+    岳 2026-10-04 换料之后料不再是那个问题，但**又来了一条新的**：118b 探针量到
+    的 T1 体框是 **101 × 136**（旧那颗 40 × 40），把 `D3` 顶到 `HVDC` 的直连
+    路径上，走线挤不过走廊。所以**第一层又变红了**，而且是在换料之后。
 
-    ~~2. 整页编译不出 plan~~ —— **117 关掉了**。114 关掉 113 指出的两处；
-    115 关掉第三处（支路与它 owner 之间的序关系 `below(C7, D2)`，以及可读性
-    闸在 pin token 上的 netlist 分区）；116 关掉第四处（全部已绑定序关系）；
-    117 关掉最后两处——**117①** 的 `netlist-partition-mismatch`（`C7.2` 与
-    `T1.A1` 落在同一个坐标上，一个结点并了两个网；病在 `_dodge_foreign_pins`
-    只量了 anchor→root、没量 root 之后支路自己那根 pad 的落点）与
-    **117②** 的**八个** `text-overlap`（文字与旗名两个阶梯各只试一个偏移就
-    退让）。现在 `dc.compile(flyback)` 返回 **ok=True、1 个候选、闸零硬违反**，
-    这一半已由本文件上一条**真断言**接住（不再混在这条 skip 里）。
+    这一条**整条保留 skip**，理由文本随之更新：
 
-    **1. 没有可 lint 的图 —— 仍然成立，且是唯一剩下的原因。** 111 的
-    `draw lint --snapshot` 吃的是编辑器 `sch.geometry` 的形状（`components` /
-    `wires` / `pins` / `netlabels` / `bboxes`），那只有真机落图后才有；
-    本棒任务书**明写不画真机**。离线能出的只有 `svgpreview.render_svg(plan)`
-    ——一个 SVG 文档，不是那份快照。
-
-    这一条**整条保留 skip**（真机落图归岳）：任务书 §验收 2 说「live 快照那一
-    半保留 skip（理由文本更新）」，更新的就是上面这段——编译出图那一半已经
-    单独由真断言接住了。
+    * 第一层（`dc.compile(flyback)` 出 plan）—— 119 加宽了位姿阶梯并救回了
+      `same-column(Q1, R5)`，但整页**仍**编不出来，卡在 `HVDC` 的直连走线上。
+      编译这一半的**真断言**现在在
+      `test_the_flyback_page_is_refused_and_says_which_relations_are_left`
+      （它断言的是「编译不过、且说清是谁拦的」，这是那一层现在真实的形状）。
+    * 第二层（`draw lint --snapshot` 离线闸）—— **仍然缺**，而且理由没变：它吃
+      的是编辑器 `sch.geometry` 的形状（`components` / `wires` / `pins` /
+      `netlabels` / `bboxes`），那只有**真机落图**后才有；本棒任务书明写不画真机。
+      离线能出的只有 `svgpreview.render_svg(plan)`——一个 SVG 文档，不是那份快照。
 
     写成 `skip` 而不是删掉，是为了让缺口在测试输出里**看得见**。`pytest -rs`
     会打印它的原因。
     """
     pytest.skip(
-        "117 reached layer 1 but not layer 2 (the draw lint offline gate). "
-        "The compiler half is DONE: 114 closed 113's two gaps, 115 closed the "
-        "third (an order kind stated between a branch and its OWNER, "
-        "below(C7, D2)), 116 closed the fourth (EVERY bound order is now "
-        "consumed), and 117 closed the last two — 117(1) the netlist "
-        "partition mismatch (C7.2 and T1.A1 shared one coordinate, so one node "
-        "merged two nets; _dodge_foreign_pins measured only the anchor->root leg "
-        "and never the stretch where the branch's OWN other pad lands) and 117(2) "
-        "the eight text-overlaps (both side ladders tried one offset and gave "
-        "up). dc.compile(flyback) now returns ok=True with one candidate and "
-        "zero hard violations, and the two assertions above pin exactly that. "
-        "What is still missing is only `draw lint --snapshot`, which needs an "
-        "editor sch.geometry that a LIVE page produces — drawing on the machine "
-        "is 岳's call, not this batch's. See outputs/117/SUMMARY.md."
+        "119: layer 1 (a compiling plan) went red again and for a NEW reason, and "
+        "layer 2 (the draw lint offline gate) is still missing. On the measured "
+        "library the page is refused; 119 widened the pose ladder (it fires only "
+        "when the base ladder produced no candidate at all and every rung named "
+        "the SAME relation, which is what makes it the identity on every input "
+        "that compiles) and that DID rescue same-column(Q1, R5) -- R5 at rotation "
+        "90 puts its SRC pad back in Q1's column, a pose rung 0/1 never drew. "
+        "What is left is ROUTING: the 118b probe measured the swapped-in "
+        "transformer's body at 101x136 (the old five-pin part was 40x40), which "
+        "pushes D3 -- a chain part with a single accepted pose -- onto the direct "
+        "path between HVDC's three pads, so net 'HVDC' has a direct-wire "
+        "obligation its pins could not be joined inside the searched corridor. "
+        "The compile half is pinned by a real assertion above, which now asserts "
+        "the honest refusal and names the blocker rather than asserting ok=True. "
+        "What is still missing on top of that is only `draw lint --snapshot`, "
+        "which needs an editor sch.geometry that a LIVE page produces -- drawing "
+        "on the machine is 岳's call, not this batch's. See outputs/119/SUMMARY.md."
+
     )
 
 

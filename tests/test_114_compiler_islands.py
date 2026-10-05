@@ -576,13 +576,31 @@ def test_an_unordered_chain_part_is_parked_beside_its_near_partner():
     # `1 3 4 5 6`（没有 S1），`C9900021858` 的 `1` 是**阴极**、阳极是 `2`。
     # 本条量的是**摆放**（副边整流管是否与变压器并排且让开），与脚叫什么无关，
     # 所以按**网**取脚，不再按名字取。
-    a1 = dc._pin_point(ctx, "T1", dc._token_on(circuit, "T1", "SEC_SW"),
-                       placed.poses, placed.origins)
-    d3 = dc._pin_point(ctx, "D3", dc._token_on(circuit, "D3", "SEC_SW"),
-                       placed.poses, placed.origins)
-    assert a1 and d3
-    assert abs(a1[1] - d3[1]) <= ctx.budget.grid / 2.0, (a1, d3)
-    assert d3[0] > a1[0], ("the rectifier must be drawn clear of the transformer", a1, d3)
+    # **119 更新**：这一条量的是**摆放**，所以它量**原点**，不是某根脚。
+    # 118 把它读成两颗 `SEC_SW` pad 的 y，而 119 换的七脚变压器把 `T1.6` 挪到了
+    # 骨架的右侧、局部 y=0，于是 pad 与 `D3.2` 差 20 —— **那不是摆放变了**：
+    # 实测 `D3` 与 `T1` 的原点 Δy = **0**、Δx = **100**，摆放要的「与伙伴沿轴
+    # 对齐、横向让开」原封不动。118 那句「与脚叫什么无关」在 token 层面对、在
+    # **几何**层面不成立，而这一条量的是摆放，所以按原点判。
+    # 顺带把「与脚无关」这句落实：断言里不再出现任何脚 token。
+    d3_origin = placed.origins["D3"]
+    t1_origin = placed.origins["T1"]
+    assert abs(d3_origin[1] - t1_origin[1]) <= ctx.budget.grid / 2.0, (
+        f"the rectifier is not level with the transformer: {d3_origin} vs "
+        f"{t1_origin}"
+    )
+    assert d3_origin[0] > t1_origin[0], (
+        "the rectifier must be drawn clear of the transformer",
+        d3_origin, t1_origin,
+    )
+    # And the clearance is real: the drawn body of one does not overlap the
+    # other. Reading the origin alone would pass a pair whose boxes collide.
+    d3_box = dc._part_box(ctx.profile("D3"), placed.poses["D3"])
+    t1_box = dc._part_box(ctx.profile("T1"), placed.poses["T1"])
+    assert d3_box[0] + d3_origin[0] > t1_box[2] + t1_origin[0] - 1e-9, (
+        "the rectifier is clear along the origin but its body overlaps the "
+        f"transformer's: {d3_box} at {d3_origin}, {t1_box} at {t1_origin}"
+    )
 
 
 def test_a_branch_nudges_its_root_clear_of_a_foreign_pin_on_the_run():

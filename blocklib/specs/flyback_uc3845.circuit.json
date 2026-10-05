@@ -4,10 +4,10 @@
   "parts": [
     {
       "id": "T1",
-      "symbolRef": "XFMR-EE16-3W",
-      "value": "EE16_3+3_V02 (Lp=1mH, Np:Ns=7.2:1, Naux:Ns=1.2:1 — 绕组参数写属性)",
+      "symbolRef": "XFMR-XREE16-050624",
+      "value": "XREE16-050624 (卧式 5+5 骨架, 演示占位 — Lp/Np:Ns/Naux:Ns 绕组参数写属性)",
       "provenance": "engineer_confirmed",
-      "lcsc": "C9900020988"
+      "lcsc": "C49118510"
     },
     {
       "id": "Q1",
@@ -168,7 +168,8 @@
         "C7.2",
         "R10.2",
         "R5.2",
-        "U5.2"
+        "U5.2",
+        "T1.2"
       ],
       "provenance": "engineer_confirmed"
     },
@@ -291,7 +292,7 @@
         "C11.2",
         "C13.2",
         "R8.2",
-        "T1.4",
+        "T1.10",
         "U4.3"
       ],
       "provenance": "engineer_confirmed"

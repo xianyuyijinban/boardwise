@@ -691,45 +691,23 @@ def compile(  # noqa: A001 - the name 053 sec.4 fixes for the entry point
 
     # 5. geometry: variants -> plans -> the hard gate.
     seen: set[str] = set()
-    for variant in _variants(ctx):
-        built, failure, violations = _build_candidate(ctx, variant)
-        if built is None:
-            result.rejected.append(RejectedCandidate(
-                variant=variant.label,
-                reason=failure.detail if failure is not None else "no legal layout",
-                violations=violations,
-                failure=failure,
-            ))
-            continue
-        plan = built.plan
-        digest = plan.geometry_sha256()
-        if digest in seen:
-            # Two variants with the same geometry are one drawing: a symbol whose
-            # legal poses produce identical pins has only one picture, and the
-            # plan's own geometry digest is what says so (052 sec.4).
-            result.rejected.append(RejectedCandidate(
-                variant=variant.label,
-                reason="the same geometry as an earlier variant",
-            ))
-            continue
-        seen.add(digest)
-        findings = check_grammar(
-            plan, circuit_spec, presentation_spec, book, budget=budget, intent=intent
+    _try_variants(ctx, _variants(ctx), result, seen, circuit_spec,
+                  presentation_spec, book, budget, intent)
+
+    # 119: the pose ladder, widened. This runs **only** when the ladder just tried
+    # produced no candidate at all, and only for the one situation a wider ladder
+    # can answer — see :func:`_widened_variants` for both halves of that claim
+    # and for why it is structurally the identity on every input that compiles.
+    widened = _widened_variants(ctx, result)
+    if widened:
+        result.notes.append(
+            f"no candidate from the {len(result.rejected)} base variant(s); every "
+            f"one of them was refused by the same relation "
+            f"({_widening_blocker_label(result)}), so the pose ladder was widened "
+            f"to the {len(widened)} variant(s) its accepted poses still hold"
         )
-        plan.evidence = LayoutEvidence(
-            checker=CHECKER_NAME,
-            hard_violations=[
-                item.render() for item in built.checked.hard_violations
-            ],
-            grammar_findings=[item.render() for item in findings],
-            soft_metrics=dict(built.checked.soft_metrics),
-            soft_reasons={
-                key: " | ".join(value)
-                for key, value in built.checked.soft_reasons.items()
-            },
-            notes=[f"candidate from {COMPILER_NAME} variant {variant.label}"],
-        )
-        result.ranked.append(_measure(plan, findings, ctx))
+        _try_variants(ctx, widened, result, seen, circuit_spec,
+                      presentation_spec, book, budget, intent)
 
     if not result.ranked:
         result.failures = _no_candidate_failures(result)
@@ -5053,6 +5031,184 @@ def _variants(ctx: _Context) -> list[_Variant]:
         for index in range(min(choices, 2)):
             variants.append(_Variant(
                 label=f"spacing={scale:g} pose-variant={index}",
+                scale=float(scale),
+                pose_index=index,
+            ))
+            if len(variants) >= ctx.budget.max_candidates:
+                return variants
+    return variants
+
+
+def _try_variants(
+    ctx: _Context,
+    variants: Sequence[_Variant],
+    result: CompileResult,
+    seen: set[str],
+    circuit_spec: CircuitSpec,
+    presentation_spec: PresentationSpec,
+    book: Mapping[str, SymbolProfile],
+    budget: CompileBudget,
+    intent: Any,
+) -> None:
+    """Build each variant, gate it, and record it — one variant, one verdict.
+
+    Factored out of :func:`compile` by 119 so the widened round runs the **same**
+    code over its own variants: a second copy of this loop would be a second set
+    of rules for what counts as a candidate, and 119's whole claim is that the
+    widened round is the same compiler on a wider ladder, not a different one.
+    """
+    for variant in variants:
+        built, failure, violations = _build_candidate(ctx, variant)
+        if built is None:
+            result.rejected.append(RejectedCandidate(
+                variant=variant.label,
+                reason=failure.detail if failure is not None else "no legal layout",
+                violations=violations,
+                failure=failure,
+            ))
+            continue
+        plan = built.plan
+        digest = plan.geometry_sha256()
+        if digest in seen:
+            # Two variants with the same geometry are one drawing: a symbol whose
+            # legal poses produce identical pins has only one picture, and the
+            # plan's own geometry digest is what says so (052 sec.4).
+            result.rejected.append(RejectedCandidate(
+                variant=variant.label,
+                reason="the same geometry as an earlier variant",
+            ))
+            continue
+        seen.add(digest)
+        findings = check_grammar(
+            plan, circuit_spec, presentation_spec, book, budget=budget, intent=intent
+        )
+        plan.evidence = LayoutEvidence(
+            checker=CHECKER_NAME,
+            hard_violations=[
+                item.render() for item in built.checked.hard_violations
+            ],
+            grammar_findings=[item.render() for item in findings],
+            soft_metrics=dict(built.checked.soft_metrics),
+            soft_reasons={
+                key: " | ".join(value)
+                for key, value in built.checked.soft_reasons.items()
+            },
+            notes=[f"candidate from {COMPILER_NAME} variant {variant.label}"],
+        )
+        result.ranked.append(_measure(plan, findings, ctx))
+
+
+#: The relation kinds a widening can answer, and the only ones it is allowed to
+#: be triggered by.  A refusal that is **not** one of these — a routing failure, a
+#: lattice failure, a readability refusal — is some other subsystem's answer, and
+#: a pose the ladder has not drawn yet is not a way to overrule it.
+WIDENABLE_KINDS: tuple[str, ...] = (
+    ABOVE, BELOW, LEFT_OF, RIGHT_OF, SAME_ROW, SAME_COLUMN, NEAR,
+)
+
+
+def _refusing_relation(failure: GrammarFailure | None) -> tuple[str, str, str] | None:
+    """The ``(kind, subject, object)`` a placement refusal names, or ``None``.
+
+    Read off the failure's own ``detail`` rather than a new predicate, so what
+    triggers the widening is exactly the text the compiler already shows the
+    reader. A refusal this cannot read — the router, the lattice, the region —
+    returns ``None`` and therefore never triggers it.
+    """
+    if failure is None or failure.category != FAILURE_PRESENTATION_POOR:
+        return None
+    detail = failure.detail
+    marker = "the relation "
+    start = detail.find(marker)
+    if start < 0:
+        return None
+    start += len(marker)
+    end = detail.find("(", start)
+    close = detail.find(")", end + 1)
+    if end < 0 or close < 0:
+        return None
+    kind = detail[start:end]
+    if kind not in WIDENABLE_KINDS:
+        return None
+    subject, _, obj = detail[end + 1:close].partition(", ")
+    return (kind, subject.strip(), obj.strip())
+
+
+def _widening_blocker_label(result: CompileResult) -> str:
+    """The one relation every base refusal named, for the note the reader sees."""
+    named = {
+        relation for relation in (
+            _refusing_relation(item.failure) for item in result.rejected
+        ) if relation is not None
+    }
+    if not named:
+        return "a relation this pass cannot name"
+    first = sorted(named)[0]
+    return f"{first[0]}({first[1]}, {first[2]})"
+
+
+def _widened_variants(
+    ctx: _Context, result: CompileResult
+) -> list[_Variant]:
+    """The pose ladder past rung 1 — for one situation only, and never beyond.
+
+    :func:`_variants` explores ``pose_index`` 0 and 1.  That is a deliberate
+    bound, and 116 §三 wrote down why it must not be widened on sight: a core with
+    four rotations may have one that happens to satisfy a relation while the
+    compilation only ever draws rungs 0 and 1, so a pass that consulted the whole
+    accepted set stood aside for a drawing that was never going to be made.  The
+    question is not "does some rotation exist" but "does a rotation **this
+    compiler is going to draw** exist".
+
+    119's answer is that the two rungs and the rest of the set are different
+    questions, and the second one is only worth asking when the first has
+    already failed the whole input.  The condition, in full:
+
+    * **no candidate survived.** This is what makes the path **structurally the
+      identity on every input that compiles** — the widened round is unreachable
+      unless the base ladder produced nothing, so every drawing this compiler
+      can already make is byte-for-byte what it was before.  That is the whole
+      of the zero-move argument, and it is a property of *where* the call sits,
+      not of what the call does, so it does not depend on the shape of any
+      particular input.
+    * **every refusal names the same relation.** If the rungs disagree about why
+      they failed, the page is not "one rung short" — it is a page whose parts
+      fight each other in several ways at once, and which of those a rotation
+      fixes is a question with no answer here.  The flyback is the case this was
+      written for: all six rungs were refused by ``same-column(Q1, R5)`` and
+      nothing else in common, and 118 measured that ``R5`` at rotation 90 puts its
+      ``SRC`` pad back in ``Q1``'s column — a pose the ladder was never going to
+      draw.
+
+    The search itself is bounded the way the rest of the compiler's search is:
+    by the parts' own **accepted** pose sets, to the end.  A part whose accepted
+    set is exhausted adds no rungs, and ``budget.max_candidates`` caps the round
+    as it caps the base one.  A page that no accepted pose can satisfy is still
+    refused, with every refusal's own reason — the widening is a wider look, not a
+    lower bar.
+    """
+    if result.ranked or not result.rejected:
+        return []
+    named = [
+        relation for relation in (
+            _refusing_relation(item.failure) for item in result.rejected
+        ) if relation is not None
+    ]
+    # Every refusal has to be a relation refusal, and they all have to be the
+    # same one.  A single unnamed refusal among them means the page failed for
+    # more than one reason, which is the case this deliberately does not answer.
+    if len(named) != len(result.rejected) or not named:
+        return []
+    if len(set(named)) != 1:
+        return []
+    widest = max(
+        (1, *(len(poses) for poses in ctx.accepted.values() if poses))
+    )
+    variants: list[_Variant] = []
+    for scale in ctx.budget.spacing_ladder:
+        for index in range(2, widest):
+            variants.append(_Variant(
+                label=f"spacing={scale:g} pose-variant={index} (widened)",
                 scale=float(scale),
                 pose_index=index,
             ))
