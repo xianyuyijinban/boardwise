@@ -989,95 +989,116 @@ def test_the_layout_stage_no_longer_refuses_the_feedback_row():
     assert "same-row(R8, U4)" not in joined
 
 
-def test_the_remaining_flyback_refusal_is_the_readability_gate():
-    """**116 如实申报**：序关系全消了，剩下的是**③ 类**（可读性闸）。
+def test_the_flyback_page_now_compiles_and_the_readability_gate_is_green():
+    """**117 更新**：113/114/115/116 一路传下来的那条缺口**关上了**。
 
-    113 的语法、114 的求解器、115① 的支路×owner、115② 的 pin token 同尺，
-    116 消费了**全部**已绑定序关系——**六条变体全部越过关系闸**了。这一条按
-    事实更新：反激整页**仍 0 candidate**，但**不再有任何一条序关系违例**，
-    拦着的是 `readability` 闸的 **11 条硬违反**（1 条
-    `netlist-partition-mismatch` + 10 条 text-overlap），那是**文字/旗标/网表**
-    子系统，**归 117**，116 任务书明写不许为翻绿它去动。
+    113 的语法、114 的求解器、115① 的支路×owner、115② 的 pin token 同尺、
+    116 的序关系全消费，都已就位。117 收掉最后两样：
 
-    断言因此从「还欠哪条序关系」换成「**一条序关系违例都不许剩下**，
-    而拦着的那条必须点名可读性闸」——这样下一棒读到时会看到**真正**还欠什么，
-    而不会以为整页已经通了，也不会把 ③ 类误当成序关系。
+    * **117① `netlist-partition-mismatch`** — `C7.2`(PGND) 与 `T1.A1`(AUX)
+      落在同一个坐标 `(0, -80)` 上，一个结点就把两网并了。病在
+      `_dodge_foreign_pins` 只量了 anchor→root 那一段、没量 root 之后
+      **支路自己那根 pad** 落点（`tools` 与
+      `tests/test_117_net_merge_root_cause.py` 逐条量定）。
+    * **117② `text-overlap`** — 文字/旗名两个阶梯各只试一个偏移就退让，
+      八个冲突每一个在第二格上都有空位。阶梯改成有上限的加宽
+      （`TEXT_ESCALATION_STEPS`）。
+
+    所以这条断言从「还欠什么」换成**真断言**：**编译出图 + 闸零硬违反**。
+    量的不是编译器自己的说法，是**闸自己**——`readability.check` 拿真 plan
+    跑一遍，硬违反必须为空。
     """
     circuit = CircuitSpec.load(SPECS / "flyback_uc3845.circuit.json")
     presentation = PresentationSpec.load(SPECS / "flyback_uc3845.presentation.json")
     book = _library_from(SPECS / "flyback_uc3845.library.json")
-    binding = grammar.bind(circuit, presentation, book)
     placed = dc.compile(circuit, presentation, book, dc.CompileBudget(
         max_candidates=64))
-    assert not placed.ok, "if the flyback now compiles, this test is stale"
+    assert placed.ok, [item.detail for item in placed.failures]
+    assert placed.candidates, "ok=True with no candidate is not a drawing"
     joined = " ".join(item.detail for item in placed.failures)
-    # 116's own work: **no** bound order is refused any more, at any variant.
-    measured = [
-        item for item in placed.failures
-        if "is not honoured" in item.detail
-    ]
-    assert not measured, (
-        "116 consumed every bound order; a refused relation came back: "
-        + "; ".join(item.detail for item in measured)
-    )
+    assert not joined, joined[:400]
+    # 116's work still stands, and is now visible as a **kept** candidate
+    # rather than a relation that stopped being a refusal reason.
     for name in ("right-of(C10, U5)", "below(C10, U5)", "near(C10, U5)",
                  "above(R3, Q1)", "same-column(Q1, R5)", "near(R15, R3)",
                  "below(C7, D2)"):
         assert name not in joined, f"{name} is refused again"
-    # What is left must be the readability gate, named as such.
-    assert "readability checker refused" in joined, joined[:400]
-    # The budget disclaimer still stands (053 sec.5).
-    assert "inside the budget" in joined
+    # The gate the compiler ran is the independent one, and it passed; the
+    # candidate is a real plan, not a wrapper around a refusal.
+    assert placed.candidates[0].segments is not None
+    assert placed.candidates[0].texts
+
+
+def test_the_readability_gate_agrees_when_it_is_run_on_the_flyback_plan():
+    """**独立复算**：把闸单独再跑一遍，不信编译器自己的说法。
+
+    编译器的候选已经过了闸；这一条是**拿闸当第一个公民**再量一次——
+    `readability.check(plan, circuit, presentation, book, ...)`，硬违反必须
+    为空。写这一条是因为「编译器说它过了闸」与「闸确实会放行」是两件事，
+    而 117 的全部成果就是后者。
+    """
+    from boardwise.engines import readability as rb
+
+    circuit = CircuitSpec.load(SPECS / "flyback_uc3845.circuit.json")
+    presentation = PresentationSpec.load(SPECS / "flyback_uc3845.presentation.json")
+    book = _library_from(SPECS / "flyback_uc3845.library.json")
+    placed = dc.compile(circuit, presentation, book, dc.CompileBudget(
+        max_candidates=64))
+    assert placed.ok and placed.candidates
+    checked = rb.check(
+        placed.candidates[0], circuit, presentation, book,
+    )
+    assert not checked.hard_violations, [
+        item.render()[:160] for item in checked.hard_violations
+    ]
 
 
 # ============================== 6 lint 离线闸与 110 对照（如实申报：未达成）
 
 
 def test_the_offline_lint_gate_cannot_run_yet_and_says_why():
-    """**如实申报**：第二层验收（`draw lint` 离线闸 0 ERROR）本棒**未达成**。
+    """**如实申报**：第二层验收（`draw lint` 离线闸 0 ERROR）本棒**仍未达成**。
 
-    两个原因，都是实的，都不是「差一点」：
+    **117 更新**：这一条当初有**两个**原因，现在只剩**一个**。
 
-    1. **没有可 lint 的图**。111 的 `draw lint --snapshot` 吃的是编辑器
-       `sch.geometry` 的形状（`components` / `wires` / `pins` / `netlabels` /
-       `bboxes`），那只有真机落图后才有；本棒任务书写明**不画真机**。离线能
-       出的只有 `svgpreview.render_svg(plan)`——一个 SVG 文档，不是那份快照。
-    2. **整页编译不出 plan**（**116 更新**：这一半的原因又换了）。114 关掉了
-       113 指出的两处；115 又关掉了第三处——支路与它 **owner** 之间的序关系
-       （`below(C7, D2)`），以及可读性闸在 pin token 上的那道 netlist 分区
-       （115-②）；116 关掉了第四处——**全部**已绑定序关系（六条变体全部越过
-       关系闸，`right-of(C10, U5)` / `above(R3,Q1)` / `near(R15,R3)` 等一律
-       不再是拒绝理由）。剩下的是**③ 类**：`readability` 闸 11 条硬违反，
-       归 117。没有 plan 就没有 `sch.geometry`。
+    ~~2. 整页编译不出 plan~~ —— **117 关掉了**。114 关掉 113 指出的两处；
+    115 关掉第三处（支路与它 owner 之间的序关系 `below(C7, D2)`，以及可读性
+    闸在 pin token 上的 netlist 分区）；116 关掉第四处（全部已绑定序关系）；
+    117 关掉最后两处——**117①** 的 `netlist-partition-mismatch`（`C7.2` 与
+    `T1.A1` 落在同一个坐标上，一个结点并了两个网；病在 `_dodge_foreign_pins`
+    只量了 anchor→root、没量 root 之后支路自己那根 pad 的落点）与
+    **117②** 的**八个** `text-overlap`（文字与旗名两个阶梯各只试一个偏移就
+    退让）。现在 `dc.compile(flyback)` 返回 **ok=True、1 个候选、闸零硬违反**，
+    这一半已由本文件上一条**真断言**接住（不再混在这条 skip 里）。
+
+    **1. 没有可 lint 的图 —— 仍然成立，且是唯一剩下的原因。** 111 的
+    `draw lint --snapshot` 吃的是编辑器 `sch.geometry` 的形状（`components` /
+    `wires` / `pins` / `netlabels` / `bboxes`），那只有真机落图后才有；
+    本棒任务书**明写不画真机**。离线能出的只有 `svgpreview.render_svg(plan)`
+    ——一个 SVG 文档，不是那份快照。
 
     这一条**整条保留 skip**（真机落图归岳）：任务书 §验收 2 说「live 快照那一
     半保留 skip（理由文本更新）」，更新的就是上面这段——编译出图那一半已经
-    单独由 115/116 的合成夹具与端到端断言接住，不再混在这条 skip 里。
+    单独由真断言接住了。
 
-    这条测试写成 `skip` 而不是删掉，是为了让缺口在测试输出里**看得见**：它一旦
-    转绿（说明有人落了真机图、或 ③ 类也解出来了），就是要更新 SUMMARY 的信号。
-    `pytest -rs` 会打印它的原因。
+    写成 `skip` 而不是删掉，是为了让缺口在测试输出里**看得见**。`pytest -rs`
+    会打印它的原因。
     """
     pytest.skip(
-        "116 did not reach layer 2 (draw lint offline gate) either. 114 closed "
-        "113's two compiler gaps (the clamp string's intermediate arm gets an "
-        "owner through the string; the secondary feedback row is levelled onto "
-        "one lane). 115 closed the third: an order kind stated between a branch "
-        "and its OWNER is now read by the placement (below(C7, D2) is satisfied "
-        "— see tests/test_115_flyback_page.py), and the readability gate reads "
-        "the spec's pin token through the same ruler drawcompiler._pin_of_token "
-        "uses, so D1.A/D1.K no longer look like pins the symbol has not got. 116 "
-        "closed the fourth: EVERY bound order is now consumed by the placement "
-        "(all six variants clear the relation gate; right-of(C10, U5) / "
-        "above(R3,Q1) / near(R15,R3) are no longer refusal reasons — see "
-        "tests/test_116_ordinal_consumption.py). The page still yields no plan, "
-        "and what is left is class (3): the readability gate's 11 hard "
-        "violations (1 netlist-partition-mismatch + 10 text-overlap) — text, "
-        "flags and netlist, which belong to 117 and this batch was told not to "
-        "touch them to turn the page green. "
-        "And `draw lint --snapshot` needs an editor sch.geometry that only a live "
-        "page produces — drawing on the machine is 岳's call, not this batch's. "
-        "See outputs/116/SUMMARY.md."
+        "117 reached layer 1 but not layer 2 (the draw lint offline gate). "
+        "The compiler half is DONE: 114 closed 113's two gaps, 115 closed the "
+        "third (an order kind stated between a branch and its OWNER, "
+        "below(C7, D2)), 116 closed the fourth (EVERY bound order is now "
+        "consumed), and 117 closed the last two — 117(1) the netlist "
+        "partition mismatch (C7.2 and T1.A1 shared one coordinate, so one node "
+        "merged two nets; _dodge_foreign_pins measured only the anchor->root leg "
+        "and never the stretch where the branch's OWN other pad lands) and 117(2) "
+        "the eight text-overlaps (both side ladders tried one offset and gave "
+        "up). dc.compile(flyback) now returns ok=True with one candidate and "
+        "zero hard violations, and the two assertions above pin exactly that. "
+        "What is still missing is only `draw lint --snapshot`, which needs an "
+        "editor sch.geometry that a LIVE page produces — drawing on the machine "
+        "is 岳's call, not this batch's. See outputs/117/SUMMARY.md."
     )
 
 

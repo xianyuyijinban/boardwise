@@ -293,6 +293,21 @@ TEXT_SIZE = 9.0
 TEXT_LINE_STEP = 14.0
 TEXT_GAP = 8.0
 
+#: How many :data:`TEXT_GAP` rungs a text box or a flag name may be stepped
+#: **outward** before the placement gives up and falls back (117②).
+#:
+#: Both side ladders used to try a single offset per direction and then fall
+#: back to the first one, which is how the flyback ended up with eight
+#: `text-overlap`s in a page where every one of the eight had a free slot a
+#: second rung out (measured — `test_every_one_of_the_eight_has_a_free_slot_somewhere`).
+#: The bound is what keeps the cure from becoming a different disease: a flag
+#: name that has wandered :data:`TEXT_GAP` * 4 = 32 units from its own pin is
+#: still that pin's name, and one that has wandered across the page is not.
+#: **The rung count is an estimate** — the box is still `font_text_box` and the
+#: width is still the `GLYPH_ADVANCE` sum, but how far it has to go is counted
+#: rather than measured, so it is stated as a constant rather than derived.
+TEXT_ESCALATION_STEPS = 4
+
 #: Member count above which a *rail* may be drawn with flags instead of a wire.
 #: 053 sec.7: labels wait for "high fan-out"; three is where a rail stops being
 #: a local connection and becomes a bus.
@@ -2764,6 +2779,22 @@ def _dodge_foreign_pins(
 
     With no foreign pin on the run the root comes back unchanged, which is the case
     for every circuit the five existing grammars compile.
+
+    **The run this measures is the whole of the branch, not the leg to its shared
+    pad** (117①). The first version read the leg ``anchor -> root``, which is the
+    stretch the *shared* pad travels, and left the branch's **other** pad
+    unmeasured — the geometry the flyback's ``C7`` is: its shared pad is dodged to
+    ``root = (0, -40)``, its origin becomes ``(0, -60)``, and its ``PGND`` pad then
+    lands on ``(0, -80)``, which is exactly where ``T1.A1`` (``AUX``) sits. One
+    coordinate, two nets, and the plan has invented the connection. The
+    transformer's two auxiliary pins leave upward 20 units apart, so the branch
+    lands squarely across the pair.
+
+    It is a **topological** collision, not a tight one, which is why widening
+    :data:`GAP` does not touch it (measured 10 → 60, the coincidence never moved)
+    and why the fix has to *see* the second pad rather than push harder. So the
+    segment measured is ``anchor -> the branch's farthest pin``, with every one of
+    this branch's own pins excluded from the obstacle set — it cannot dodge itself.
     """
     leg = (root[0] - anchor[0], root[1] - anchor[1])
     if _close(leg[0], 0.0) and _close(leg[1], 0.0):
@@ -2775,44 +2806,102 @@ def _dodge_foreign_pins(
     unit = (across[0] / span, across[1] / span)
     index = 0 if unit[0] != 0.0 else 1
     own = set(_part_nets(ctx.circuit, part_id).values())
-    blockers = 0
-    for other in sorted(ctx.slots):
-        if other == part_id or other not in origins:
-            continue
-        pins_of = _part_nets(ctx.circuit, other)
-        for pin in ctx.profile(other).pins:
-            # Per **pin**, not per part: a branch's owner shares this run's net on
-            # the one pin the branch hangs off, and its *other* pins sit on other
-            # nets — those are exactly the ones a straight run walks over. The
-            # flyback's transformer is the case: the aux rectifier hangs off its
-            # ``AUX`` pin and the run crosses its ``PGND`` pin 20 units along.
-            if (pins_of.get(pin.number) or pins_of.get(pin.name, "")) in own:
+    # How far past `root` this branch's own body reaches — the half the first
+    # version never read. `root` is where the **shared** pad lands, and the
+    # stored origin is `root - shared_local`, so the other pad's tip is at
+    # `root + (other_local - shared_local)`: the *difference* of the two local
+    # tips, not the other tip itself. Measured on the drawn tips rather than
+    # derived from the body box, because the two pads need not be symmetric and
+    # the box would over-reserve.
+    shared_local = _pin_local(ctx, part_id, slot.pin_shared, poses)
+    other_local = _pin_local(ctx, part_id, slot.pin_other, poses)
+    if other_local is None:
+        other_local = shared_local
+    trail = None
+    if shared_local is not None and other_local is not None:
+        trail = (other_local[0] - shared_local[0],
+                 other_local[1] - shared_local[1])
+    def _blockers_between(start, end, skip: str) -> int:
+        """Foreign pin tips lying on the stretch ``start -> end``.
+
+        ``skip`` is this branch's own id, so the branch never counts itself: the
+        pads it is about to place are its own, not obstacles.
+        """
+        found = 0
+        for other in sorted(ctx.slots):
+            if other == skip or other not in origins:
                 continue
-            point = _pin_point(ctx, other, pin.number, poses, origins)
-            if point is None:
-                continue
-            if _strictly_on_segment(point, anchor, root):
-                blockers += 1
-    if not blockers:
-        return root
-    # Away from the owner's own body: the run starts at the owner's pin, so the
-    # clear side is the one the owner's centre is not on.
-    owner_centre = _body_centre(ctx, slot.owner, poses, origins)
-    sign = 1.0
-    if owner_centre is not None:
-        to_centre = (
-            owner_centre[0] - anchor[0], owner_centre[1] - anchor[1],
-        )
-        if abs(to_centre[0]) * abs(unit[0]) + abs(to_centre[1]) * abs(unit[1]) > 0.0:
-            sign = -1.0 if (
-                to_centre[0] * unit[0] + to_centre[1] * unit[1]
-            ) > 0.0 else 1.0
-    step = _snap(GAP + ctx.budget.channel * 0.0, ctx.budget.grid, 0.0)
-    if step <= 0.0:
-        step = ctx.budget.grid
-    shifted = list(root)
-    shifted[index] = root[index] + unit[index] * sign * step
-    return (shifted[0], shifted[1])
+            pins_of = _part_nets(ctx.circuit, other)
+            for pin in ctx.profile(other).pins:
+                # Per **pin**, not per part: a branch's owner shares this run's net
+                # on the one pin the branch hangs off, and its *other* pins sit on
+                # other nets — those are exactly the ones a straight run walks
+                # over. The flyback's transformer is the case: the aux rectifier
+                # hangs off its ``AUX`` pin and the run crosses its ``PGND`` pin
+                # 20 units along.
+                if (pins_of.get(pin.number) or pins_of.get(pin.name, "")) in own:
+                    continue
+                point = _pin_point(ctx, other, pin.number, poses, origins)
+                if point is None:
+                    continue
+                if _on_polyline(point, (start, end)):
+                    found += 1
+        return found
+
+    # The leg: anchor -> root, the stretch the **shared** pad travels. A foreign
+    # pin here is 114's original case.
+    blockers = _blockers_between(anchor, root, part_id)
+    if blockers:
+        # Away from the owner's own body: the run starts at the owner's pin, so
+        # the clear side is the one the owner's centre is not on.
+        owner_centre = _body_centre(ctx, slot.owner, poses, origins)
+        sign = 1.0
+        if owner_centre is not None:
+            to_centre = (
+                owner_centre[0] - anchor[0], owner_centre[1] - anchor[1],
+            )
+            if abs(to_centre[0]) * abs(unit[0]) + abs(to_centre[1]) * abs(unit[1]) > 0.0:
+                sign = -1.0 if (
+                    to_centre[0] * unit[0] + to_centre[1] * unit[1]
+                ) > 0.0 else 1.0
+        step = _snap(GAP + ctx.budget.channel * 0.0, ctx.budget.grid, 0.0)
+        if step <= 0.0:
+            step = ctx.budget.grid
+        shifted = list(root)
+        shifted[index] = root[index] + unit[index] * sign * step
+        root = (shifted[0], shifted[1])
+
+    # The trail: the stretch **past** the root, where this branch's other pad
+    # lands (117①). Re-measured at the root the dodge just produced, not at the
+    # one it was handed — the two are different points, and a dodge that moves
+    # the branch sideways can *create* a trail collision it never looked at.
+    if trail is not None:
+        far = (root[0] + trail[0], root[1] + trail[1])
+        if _blockers_between(root, far, part_id):
+            # The trail is along the run, so the escape is the same axis the leg
+            # used: step the root further out along its own direction until the
+            # trail is clear. `step` is one whole :data:`GAP` ladder rung, and the
+            # walk is bounded by the part's own extent plus that clearance, so a
+            # branch that cannot be cleared is left where it is and the gate
+            # reports it — never silently parked somewhere arbitrary.
+            step = _snap(GAP, ctx.budget.grid, 0.0) or ctx.budget.grid
+            reach = _snap(
+                _extent(_part_box(ctx.profile(part_id), poses[part_id]),
+                        (unit[0], unit[1]))[1] + GAP,
+                ctx.budget.grid, 0.0,
+            )
+            walked = 0.0
+            while walked <= reach + step:
+                walked += step
+                away = list(root)
+                away[index] = root[index] + unit[index] * sign * walked
+                candidate = (away[0], away[1])
+                if not _blockers_between(
+                        candidate, (candidate[0] + trail[0],
+                                    candidate[1] + trail[1]), part_id):
+                    return candidate
+            return root
+    return root
 
 
 def _body_centre(
@@ -3442,24 +3531,14 @@ def _order_asks(kind: str, own: bool) -> tuple[int, float]:
     order's axis and ask the checker which one it accepts.
 
     There is already a function shaped like this in the module,
-    :func:`_order_wanted`, and 116 does **not** call it, for a reason worth
-    recording. That function is 115(1)'s, and it returns the sign 115's own
-    docstring says it returns: ``left-of``'s subject gets ``+x``. The checker
-    reads ``left-of`` as "the subject's x is the **smaller** one", so the two
-    are opposite on the horizontal kinds and agree on the vertical ones
-    (``above``/``below``) — which is exactly the one kind 115(1) had a real
-    case for, so the disagreement never showed. Measured, not guessed:
-
-        left-of   _order_wanted subject sign=+1   checker holds=False
-        right-of  _order_wanted subject sign=-1   checker holds=False
-        above     _order_wanted subject sign=+1   checker holds=True
-        below     _order_wanted subject sign=-1   checker holds=True
-
-    Changing that function would rewrite 115(1)'s path, and this batch's byte
-    gate is the reason to leave anything that already ships alone. So 116
-    derives its own sign from the checker, and the honest summary records the
-    latent disagreement as 116's finding rather than silently working around a
-    bug it inherited.
+    :func:`_order_wanted`, and 116 did **not** call it, for a reason worth
+    recording. That function is 115(1)'s, and its hand-written table disagreed
+    with the checker — see its own docstring for the measured table. 117③
+    repaired the table, so the two now agree on all four kinds; this function is
+    kept as the **independent** reading of the checker, which is the property
+    worth having: a test can assert the two agree, and either one drifting from
+    :func:`_relation_holds` is then a caught regression rather than a latent
+    disagreement.
     """
     axis = 0 if kind in (LEFT_OF, RIGHT_OF) else 1
     origin = (0.0, 0.0)
@@ -3923,14 +4002,24 @@ def _order_direction(ctx: _Context, slot: _Slot) -> tuple[float, float] | None:
 def _order_wanted(kind: str, own: bool) -> tuple[int, float]:
     """``(axis index, sign)`` an order kind asks of its subject.
 
-    ``own`` says which end of the pair the branch is: ``left-of(C1, U1)`` asks
-    the *subject* for -x and the object for +x, and a branch that is the object
-    of its owner's relation is asked for the other sign. One function for both
-    ends so the two can never be computed inconsistently.
+    ``own`` says which end of the pair the branch is — the caller passes
+    ``item.subject == slot.part_id``, so ``own`` is "the branch is the subject".
+    One function for both ends so the two can never be computed inconsistently.
+
+    **Both factors of the table were wrong, and 117③ is the fix** (116 §四
+    measured it; see :func:`_order_asks` for the checker-derived twin). The
+    checker's own definitions are ``left-of`` → ``subject.x < object.x - slack``,
+    ``right-of`` → ``>``, ``above`` → ``subject.y > object.y + slack``,
+    ``below`` → ``<``, so the **subject** is asked for ``-x / +x / +y / -y`` and
+    the object for the mirror. The table used to be ``+x / -x / -y / +y``: the
+    object factor was inverted on all four kinds and the sign factor on the two
+    horizontal ones, which cancelled on the two vertical ones — which is why
+    115①'s only real case, the vertical ``below(C7, D2)``, read correct and the
+    disagreement stayed latent. The two tables now agree on all four kinds.
     """
     index = 0 if kind in (LEFT_OF, RIGHT_OF) else 1
-    negative = kind in (LEFT_OF, ABOVE)
-    return index, (-1.0 if own else 1.0) * (-1.0 if negative else 1.0)
+    negative = kind in (LEFT_OF, BELOW)
+    return index, (1.0 if own else -1.0) * (-1.0 if negative else 1.0)
 
 
 def _a_pose_says(
@@ -4592,32 +4681,34 @@ def _overlaps(left: Box, right: Box) -> bool:
     )
 
 
-def _line_boxes(part: Box, lines: Sequence[str], side: str) -> list[Box]:
-    """Where a part's text lines go when put on `side` of its box.
+def _line_boxes(part: Box, lines: Sequence[str], side: str, rung: int = 1) -> list[Box]:
+    """Where a part's text lines go when put on `side` of its box, ``rung`` out.
 
     One line per string, stacked in reading order; the block is centred on the
     part's own centre along the side it takes, and offset off the box by
-    :data:`TEXT_GAP`. Both lines of a part's text stay together on one side: a
-    reference on one side and a value on the other reads as two unrelated texts.
+    :data:`TEXT_GAP` per ``rung`` (117②). Both lines of a part's text stay
+    together on one side: a reference on one side and a value on the other reads
+    as two unrelated texts.
     """
     width = max(text_width(line) for line in lines)
     height = len(lines) * TEXT_LINE_STEP
     cx = (part[0] + part[2]) / 2.0
     cy = (part[1] + part[3]) / 2.0
+    gap = TEXT_GAP * rung
     out: list[Box] = []
     for index, line in enumerate(lines):
         if side == "right":
-            x = part[2] + TEXT_GAP + text_width(line) / 2.0
+            x = part[2] + gap + text_width(line) / 2.0
             y = cy + height / 2.0 - TEXT_LINE_STEP * (index + 0.5)
         elif side == "left":
-            x = part[0] - TEXT_GAP - text_width(line) / 2.0
+            x = part[0] - gap - text_width(line) / 2.0
             y = cy + height / 2.0 - TEXT_LINE_STEP * (index + 0.5)
         elif side == "above":
             x = cx - width / 2.0 + text_width(line) / 2.0
-            y = part[3] + TEXT_GAP + height - TEXT_LINE_STEP * (index + 0.5)
+            y = part[3] + gap + height - TEXT_LINE_STEP * (index + 0.5)
         else:
             x = cx - width / 2.0 + text_width(line) / 2.0
-            y = part[1] - TEXT_GAP - height + TEXT_LINE_STEP * (index + 0.5)
+            y = part[1] - gap - height + TEXT_LINE_STEP * (index + 0.5)
         out.append(font_text_box(line, x=x, y=y))
     return out
 
@@ -4666,13 +4757,22 @@ def _part_texts(
         lines = list(_part_lines(ctx, part_id))
         blocked = [*walls, box]
         chosen = None
-        for side in TEXT_SIDES:
-            boxes = _line_boxes(box, [text for _, text in lines], side)
-            if all(
-                not _overlaps(candidate, other)
-                for candidate in boxes for other in blocked
-            ):
-                chosen = boxes
+        # Each side is tried at :data:`TEXT_ESCALATION_STEPS` distances, not one
+        # (117②). A single rung is often occupied while the second is free — the
+        # flyback's 385-unit `EE16_3+3_V02 (…)` value is the measured case, its
+        # own designator sitting on it. Falling back to `TEXT_SIDES[0]` is still
+        # the honest last resort: the gate refuses the candidate rather than the
+        # text being squeezed (053 sec.5 scenario 10).
+        for rung in range(1, TEXT_ESCALATION_STEPS + 1):
+            for side in TEXT_SIDES:
+                boxes = _line_boxes(box, [text for _, text in lines], side, rung)
+                if all(
+                    not _overlaps(candidate, other)
+                    for candidate in boxes for other in blocked
+                ):
+                    chosen = boxes
+                    break
+            if chosen is not None:
                 break
         if chosen is None:
             chosen = _line_boxes(box, [text for _, text in lines], TEXT_SIDES[0])
@@ -4736,23 +4836,34 @@ def _label_at(
     label beside its pin, and the readability contract exempts the overlap it
     may have with that one symbol (its own). The centred path stays written down
     as unreachable: reaching it would mean the four directions were never built.
+
+    **Each direction is tried at :data:`TEXT_ESCALATION_STEPS` distances, not
+    one** (117②). One offset is a single rung of :data:`TEXT_GAP`, and a long
+    net name beside a dense cluster routinely has that rung occupied while the
+    second and third are free — so the first version fell back into a collision
+    the checker then refused. Widening the search is the cure; the bound is
+    what stops a name being flung off the pin that gives it meaning.
     """
     box = None
     fallback = None
+    half_x = text_width(net_id) / 2.0 + TEXT_GAP
+    half_y = TEXT_SIZE / 2.0 + TEXT_GAP
     for candidate_direction in _directions(preferred):
-        half_x = text_width(net_id) / 2.0 + TEXT_GAP
-        half_y = TEXT_SIZE / 2.0 + TEXT_GAP
-        if candidate_direction[0] != 0.0:
-            offset = (candidate_direction[0] * half_x, 0.0)
-        else:
-            offset = (0.0, candidate_direction[1] * half_y)
-        candidate = font_text_box(
-            net_id, x=point[0] + offset[0], y=point[1] + offset[1]
-        )
-        if fallback is None:
-            fallback = candidate
-        if all(not _overlaps(candidate, other) for other in occupied):
-            box = candidate
+        for rung in range(1, TEXT_ESCALATION_STEPS + 1):
+            reach = rung - 1
+            if candidate_direction[0] != 0.0:
+                offset = (candidate_direction[0] * half_x * rung, 0.0)
+            else:
+                offset = (0.0, candidate_direction[1] * half_y * rung)
+            candidate = font_text_box(
+                net_id, x=point[0] + offset[0], y=point[1] + offset[1]
+            )
+            if fallback is None:
+                fallback = candidate
+            if all(not _overlaps(candidate, other) for other in occupied):
+                box = candidate
+                break
+        if box is not None:
             break
     if box is None:
         box = fallback if fallback is not None else font_text_box(

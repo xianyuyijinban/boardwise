@@ -14,55 +14,31 @@
   },
   "modules": [
     {
-      "id": "power_stage",
+      "id": "flyback_core",
       "parts": [
         "T1",
         "Q1",
         "R3",
         "R15",
         "C5",
-        "D1"
-      ],
-      "role": "the flyback power stage: primary loop and leakage clamp (M3)"
-    },
-    {
-      "id": "current_sense",
-      "parts": [
+        "D1",
         "R5",
         "R4",
-        "C6"
-      ],
-      "role": "the current-sense chain from the switch source to the controller (M4)"
-    },
-    {
-      "id": "secondary",
-      "parts": [
+        "C6",
         "D3",
         "C11",
-        "C13"
-      ],
-      "role": "the secondary rectifier and the output filter (M6)"
-    },
-    {
-      "id": "feedback",
-      "parts": [
+        "C13",
         "R7",
         "R8",
         "U4",
         "R9",
         "U5",
         "R10",
-        "C10"
-      ],
-      "role": "the divider, error amplifier, optocoupler and compensation (M7)"
-    },
-    {
-      "id": "aux_supply",
-      "parts": [
+        "C10",
         "D2",
         "C7"
       ],
-      "role": "the auxiliary winding's rectifier and reservoir"
+      "role": "the whole flyback converter core as one drawing (M3–M7 of the 110 plan: power_stage: the flyback power stage: primary loop and leakage clamp (M3)；current_sense: the current-sense chain from the switch source to the controller (M4)；secondary: the secondary rectifier and the output filter (M6)；feedback: the divider, error amplifier, optocoupler and compensation (M7)；aux_supply: the auxiliary winding's rectifier and reservoir) — one module because the flyback grammar binds the converter whole (the transformer, the two islands and the crossing opto are one reading); the 113 five-module split made `wants_page` route to the per-module pagecompiler, where each fragment rightly refuses as \"not a whole flyback\" (117 seam fix, 2026-10-04)"
     }
   ]
 }
