@@ -68,6 +68,9 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
 > **深水区外置（124 减重）**：审查 SOP 在 `docs/review-sop.md`（checkup 报告逐段读法、
 > 架构走查、断连兜底与单点命令），画法 SOP 在 `docs/draw.md`（落图全流程）。
 > 这一节只留路由图——判断「现在该上哪条链」；操作细节到对应文档读。
+> **两种读法的家不一样**：在仓库里，引用文档就在 `docs/` 下原样读；用 install-skill 装的，
+> 同目录 `references/` 下读同名文件（install-skill 会把引用的 references 全拷到 SKILL.md 旁边，
+> 缺了重跑 `boardwise install-skill`，别手抄路径硬找）。
 
 - **审板子**：`boardwise checkup` 一条出报告（ERC/DRC + 20 条自有规则 + 数据手册闸
   + 分诊/器件/总结槽位）。报告逐段读法、架构走查（044 起强制环节）、triage 分诊口径，
@@ -163,6 +166,7 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
 
 > **124 减重**：全表外置到 `docs/pits.md`（45 条全文 + 用法 + 出处）；这里只留索引
 > ——命中关键词就去 `docs/pits.md` 读全行。**加新坑两边一起加**（这里一行 + 全表一行）。
+> 仓库里读 `docs/pits.md`；install-skill 装的读 SKILL.md 旁边的 `references/pits.md`。
 
 | # | 一句话 |
 |---|---|

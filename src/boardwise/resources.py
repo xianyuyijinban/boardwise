@@ -61,6 +61,17 @@ _SKILL_PARTS = (".kimi-code", "skills", "boardwise", "SKILL.md")
 _PARTS_LIBRARY_PARTS = ("blocklib", "parts.json")
 _PORT_META_PARTS = ("blocklib", "blocks.portmeta.json")
 _DRC_RULESET_REFERENCE_PARTS = ("blocklib", "drc_ruleset_reference.json")
+#: The deep-water documents SKILL.md's routing layer points at (124). They are
+#: shipped the same way SKILL.md is, because a routing pointer that resolves
+#: only inside a checkout is a pointer at air for the friend who installed the
+#: exe — install-skill copies these next to SKILL.md under `references/`.
+_SKILL_REFERENCE_PARTS = (
+    ("docs", "review-sop.md"),
+    ("docs", "draw.md"),
+    ("docs", "pits.md"),
+    ("docs", "bridge.md"),
+    ("docs", "getting-started.md"),
+)
 
 
 def is_frozen() -> bool:
@@ -154,3 +165,15 @@ def drc_ruleset_reference() -> Path:
     "everything matched". So callers report the absence, never swallow it.
     """
     return resource_root().joinpath(*_DRC_RULESET_REFERENCE_PARTS)
+
+
+def skill_reference_paths() -> tuple[Path, ...]:
+    """The deep-water docs SKILL.md's routing layer points at (124).
+
+    `install-skill` copies these next to the installed SKILL.md under
+    `references/`, so the pointers resolve for a friend with only the exe too —
+    not just inside a checkout. Adding a doc here means three places change
+    together (this tuple, the spec's DATAS, the installer); `test_resources.py`
+    and the doc-claims pin watch that they cannot drift apart.
+    """
+    return tuple(resource_root().joinpath(*parts) for parts in _SKILL_REFERENCE_PARTS)

@@ -58,6 +58,18 @@ DATAS = [
     # measured exactly that in a clean directory), which is honest but not a
     # working install.
     (REPO / "blocklib" / "blocks.portmeta.json", "resources/blocklib"),
+    # The PCB DRC rule-set reference (123) — without it the frozen meta-audit
+    # has nothing to compare against, and "nothing compared" must not read as
+    # "everything matched". Its resources.py accessor predates this entry.
+    (REPO / "blocklib" / "drc_ruleset_reference.json", "resources/blocklib"),
+    # SKILL.md's deep-water documents (124): the routing layer points at these,
+    # and `install-skill` copies them next to SKILL.md as `references/` —
+    # without them the pointers resolve only inside a checkout.
+    (REPO / "docs" / "review-sop.md", "resources/docs"),
+    (REPO / "docs" / "draw.md", "resources/docs"),
+    (REPO / "docs" / "pits.md", "resources/docs"),
+    (REPO / "docs" / "bridge.md", "resources/docs"),
+    (REPO / "docs" / "getting-started.md", "resources/docs"),
 ]
 
 for _source, _target in DATAS:

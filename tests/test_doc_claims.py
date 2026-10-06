@@ -314,3 +314,27 @@ def test_skill_md_doc_pointers_resolve():
         if not (REPO / ref).is_file():
             missing.append(ref)
     assert missing == [], "SKILL.md points at files that do not exist: " + ", ".join(missing)
+
+
+def test_skill_md_referenced_docs_are_shipped_not_pointed_at_air():
+    """护 124b（外部审计「路由层指向空气」）：SKILL.md 引用的 docs/*.md 必须同时
+    在 **spec 的 DATAS**（exe 打包清单）与 **resources 的引用清单**（install-skill
+    拷到 references/ 的清单）里——读者有两类（仓库内 AI / 装了 exe 的朋友），
+    指针只对一类解析就是只对一类成立。"""
+    from boardwise import resources
+
+    skill = (REPO / ".kimi-code" / "skills" / "boardwise" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    mentioned = set(re.findall(r"docs/[A-Za-z0-9._-]+\.md", skill))
+
+    spec_body = (REPO / "packaging" / "boardwise.spec").read_text(encoding="utf-8")
+    in_spec = {m for m in mentioned if all(p in spec_body for p in m.split("/"))}
+    shipped = {f"docs/{path.name}" for path in resources.skill_reference_paths()}
+    missing_spec = sorted(mentioned - in_spec)
+    missing_ship = sorted(mentioned - shipped)
+    assert not missing_spec and not missing_ship, (
+        f"SKILL.md references docs the install cannot resolve — "
+        f"not in spec DATAS: {missing_spec}; not in resources.skill_reference_paths(): "
+        f"{missing_ship}"
+    )

@@ -93,6 +93,9 @@ class InstallOutcome:
     path: Path
     backup: Path | None = None
     previous_bytes: int | None = None
+    #: Per-file results for the routing layer's deep-water docs (124):
+    #: ``(installed path, installed|updated|current)`` in the order given.
+    references: tuple[tuple[Path, str], ...] = ()
 
     @property
     def changed(self) -> bool:
@@ -262,11 +265,11 @@ def _free_backup_path(destination: Path, now: str | None) -> Path:
     backups too, and they are the only record of a hand-edited SKILL.md.
     """
     stamp = now or datetime.now().strftime(_STAMP_FORMAT)
-    candidate = destination.with_name(f"{SKILL_NAME}.bak-{stamp}")
+    candidate = destination.with_name(f"{destination.name}.bak-{stamp}")
     suffix = 1
     while candidate.exists():
         suffix += 1
-        candidate = destination.with_name(f"{SKILL_NAME}.bak-{stamp}-{suffix}")
+        candidate = destination.with_name(f"{destination.name}.bak-{stamp}-{suffix}")
     return candidate
 
 
@@ -276,6 +279,7 @@ def install(
     *,
     harness: str = "kimi",
     now: str | None = None,
+    references: tuple[Path, ...] = (),
 ) -> InstallOutcome:
     """Put ``source`` at ``harness``'s user-level SKILL.md, backing up any different file.
 
@@ -288,6 +292,11 @@ def install(
     name, so the tests can pin it. The field default is the current time, and
     the name is then free of collisions on its own: two installs on the same day
     are two different files, not the second one overwriting the first (#40).
+
+    ``references`` (124) are the deep-water documents SKILL.md's routing layer
+    points at: each is copied to ``references/<name>`` next to SKILL.md, under
+    the same backup discipline — a pointer that resolves only inside a checkout
+    is a pointer at air for an installed user.
     """
     source = Path(source)
     destination = skill_path(home, harness=harness)
@@ -299,8 +308,43 @@ def install(
             previous = destination.read_bytes()
         except OSError as exc:
             raise SkillInstallError(f"cannot read {destination}: {exc}") from exc
-        if previous == wanted:
-            return InstallOutcome("current", destination, previous_bytes=len(previous))
+
+    ref_outcomes: list[tuple[Path, str]] = []
+    for ref in references:
+        ref = Path(ref)
+        target = destination.parent / "references" / ref.name
+        try:
+            ref_bytes = ref.read_bytes()
+        except OSError as exc:
+            raise SkillInstallError(f"cannot read reference {ref}: {exc}") from exc
+        if target.exists():
+            try:
+                old = target.read_bytes()
+            except OSError as exc:
+                raise SkillInstallError(f"cannot read {target}: {exc}") from exc
+            if old == ref_bytes:
+                ref_outcomes.append((target, "current"))
+                continue
+            backup = _free_backup_path(target, now)
+            try:
+                shutil.copyfile(target, backup)
+            except OSError as exc:
+                raise SkillInstallError(f"cannot back up {target} to {backup}: {exc}") from exc
+            action = "updated"
+        else:
+            action = "installed"
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(ref_bytes)
+        except OSError as exc:
+            raise SkillInstallError(f"cannot write {target}: {exc}") from exc
+        ref_outcomes.append((target, action))
+
+    if previous == wanted and previous is not None:
+        return InstallOutcome(
+            "current", destination, previous_bytes=len(previous),
+            references=tuple(ref_outcomes),
+        )
 
     backup: Path | None = None
     if previous is not None:
@@ -323,10 +367,12 @@ def install(
         destination,
         backup=backup,
         previous_bytes=len(previous) if previous is not None else None,
+        references=tuple(ref_outcomes),
     )
 
 
-def uninstall(home: Path | None = None, *, harness: str = "kimi") -> UninstallOutcome:
+def uninstall(home: Path | None = None, *, harness: str = "kimi",
+              references: tuple[Path, ...] = ()) -> UninstallOutcome:
     """Remove ``harness``'s user-level SKILL.md, and the skill directory if it empties.
 
     Same one-destination-per-call shape as :func:`install`: ``--uninstall`` for
@@ -335,10 +381,25 @@ def uninstall(home: Path | None = None, *, harness: str = "kimi") -> UninstallOu
 
     The directory is only removed when it is empty: a friend (or I) may have put
     something else in there, and a recursive delete is not what "--uninstall"
-    promises.
+    promises. ``references`` (124) names the deep-water docs install placed next
+    to SKILL.md: they are ours, so they go too — by name, never the whole
+    directory, and `references/` itself only if it empties.
     """
     destination = skill_path(home, harness=harness)
     directory = destination.parent
+    for ref in references:
+        target = directory / "references" / Path(ref).name
+        if target.exists():
+            try:
+                target.unlink()
+            except OSError as exc:
+                raise SkillInstallError(f"cannot remove {target}: {exc}") from exc
+    references_dir = directory / "references"
+    try:
+        if references_dir.is_dir() and not any(references_dir.iterdir()):
+            references_dir.rmdir()
+    except OSError:
+        pass  # same courtesy as the skill directory: gone is what was promised
     if not destination.exists():
         return UninstallOutcome("absent", destination)
     try:
