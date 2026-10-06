@@ -626,3 +626,51 @@ def test_agent_exits_1_when_the_bundled_skill_cannot_be_read(tmp_path, monkeypat
     monkeypatch.setattr("boardwise.resources.skill_md", lambda: empty)
     assert cli_main(["install-skill", "--agent"]) == 1
     assert "is empty" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------
+# 124b: references — the routing layer's deep-water docs ship next to SKILL.md
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def refs(tmp_path):
+    """Two bundled reference docs, as resources.skill_reference_paths() would give."""
+    one = tmp_path / "ref-one.md"
+    one.write_bytes(b"# review SOP\n")
+    two = tmp_path / "ref-two.md"
+    two.write_bytes(b"# pits\n")
+    return (one, two)
+
+
+def test_install_copies_the_references_next_to_the_skill(home, source, refs):
+    outcome = skill_install.install(source, home, now="20261006-200000", references=refs)
+
+    assert (home / "references" / "ref-one.md").read_bytes() == b"# review SOP\n"
+    assert (home / "references" / "ref-two.md").read_bytes() == b"# pits\n"
+    assert {(p.name, a) for p, a in outcome.references} == {
+        ("ref-one.md", "installed"),
+        ("ref-two.md", "installed"),
+    }
+
+
+def test_a_different_reference_is_backed_up_before_it_is_replaced(home, source, refs):
+    skill_install.install(source, home, now="20261006-200000", references=refs)
+    (home / "references" / "ref-one.md").write_bytes(b"# my local edits\n")
+
+    outcome = skill_install.install(source, home, now="20261006-201500", references=refs)
+
+    assert (home / "references" / "ref-one.md").read_bytes() == b"# review SOP\n"
+    assert (home / "references" / "ref-one.md.bak-20261006-201500").read_bytes() == b"# my local edits\n"
+    assert dict((p.name, a) for p, a in outcome.references)["ref-one.md"] == "updated"
+    assert dict((p.name, a) for p, a in outcome.references)["ref-two.md"] == "current"
+
+
+def test_uninstall_removes_the_references_and_their_empty_directory(home, source, refs):
+    skill_install.install(source, home, now="20261006-200000", references=refs)
+
+    outcome = skill_install.uninstall(home, references=refs)
+
+    assert outcome.outcome == "removed"
+    assert not (home / "references" / "ref-one.md").exists()
+    assert not (home / "references").exists(), "an emptied references/ goes too"

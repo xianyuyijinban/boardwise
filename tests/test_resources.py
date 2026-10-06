@@ -271,8 +271,12 @@ def test_the_spec_embeds_every_resource_this_module_resolves():
             resources.skill_md,
             resources.parts_library,
             resources.portmeta_sidecar,
+            resources.drc_ruleset_reference,
         )
     }
+    resolved.update(
+        path.relative_to(root).parts for path in resources.skill_reference_paths()
+    )
     assert _spec_datas() == resolved
 
 

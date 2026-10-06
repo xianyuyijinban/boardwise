@@ -20873,7 +20873,9 @@ def _cmd_install_skill(args: argparse.Namespace) -> int:
     if args.uninstall:
         for harness in harnesses:
             try:
-                outcome = skill_install.uninstall(harness=harness)
+                outcome = skill_install.uninstall(
+                    harness=harness, references=resources.skill_reference_paths()
+                )
             except skill_install.SkillInstallError as exc:
                 print(f"boardwise install-skill [{harness}]: {exc}", file=sys.stderr)
                 failed = True
@@ -20887,17 +20889,21 @@ def _cmd_install_skill(args: argparse.Namespace) -> int:
 
     try:
         source = resources.skill_md()
+        references = resources.skill_reference_paths()
     except RuntimeError as exc:
         print(f"boardwise install-skill: {exc}", file=sys.stderr)
         return 1
     for harness in harnesses:
         try:
-            outcome = skill_install.install(source, harness=harness)
+            outcome = skill_install.install(source, harness=harness,
+                                            references=references)
         except skill_install.SkillInstallError as exc:
             print(f"boardwise install-skill [{harness}]: {exc}", file=sys.stderr)
             failed = True
             continue
-        if outcome.outcome == "current":
+        if outcome.outcome == "current" and all(
+            action == "current" for _path, action in outcome.references
+        ):
             print(
                 f"boardwise install-skill [{harness}]: already current — "
                 f"{outcome.path} matches {source}"
@@ -20911,6 +20917,12 @@ def _cmd_install_skill(args: argparse.Namespace) -> int:
             print(
                 f"  the file that was there is kept at {outcome.backup} "
                 f"({outcome.previous_bytes} bytes)"
+            )
+        changed_refs = [(p, a) for p, a in outcome.references if a != "current"]
+        if changed_refs:
+            print(
+                "  references 同步: "
+                + ", ".join(path.name for path, _a in changed_refs)
             )
     return 1 if failed else 0
 
