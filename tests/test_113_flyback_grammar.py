@@ -852,9 +852,16 @@ def test_the_power_loop_and_the_feedback_chain_are_promised_as_wires():
     promised = {net for item in wired for net in item.nets}
     for net_id in ("SW", "SRC", "SEC_SW", "SEC_12V", "FB_SENSE"):
         assert net_id in promised, f"{net_id} is not promised as a wire"
-    # 反馈链：抽头 → LED 阴极 → 补偿节点，三段都是网（base.py 的 obligation
-    # `nets` 是网元组，编译器照它排链序）
-    assert ("FB_SENSE", "LED_K", "COMP") in [item.nets for item in wired]
+    # 反馈链：抽头 → LED 阴极，**到光耦 LED 为止**——COMP 在光耦的另一面
+    # （原边），跨越发生在符号内部，没有一条线可画过去。实测 PC817 符号
+    # （2026-10-06：CAT(-45,-10) / COL(45,10) 成对角线）若把 COMP 排进链，
+    # 编译器会要求 LED_K 与 COMP 两脚在链轴上共线——任何位姿都给不出，
+    # 接受位姿为零；这条链过去能编译只是因为 spec 的 U5.2/U5.3 写反了
+    # （钉的就是修对后的链：COMP 不属于副边这条链）。
+    assert ("FB_SENSE", "LED_K") in [item.nets for item in wired]
+    assert not any(
+        "COMP" in item.nets and "LED_K" in item.nets for item in wired
+    ), "COMP is on the opto's primary face — it is not on the secondary chain"
 
 
 def test_each_local_branch_reads_as_owned_by_its_node():
