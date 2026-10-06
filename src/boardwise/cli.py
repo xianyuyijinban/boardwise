@@ -26,6 +26,8 @@ from .engines.review import (
 from .engines.drc import (
     offline_section,
     pcb_section,
+    ruleset_finding_lines,
+    ruleset_section,
     schematic_section,
     summarise as drc_summarise,
 )
@@ -4638,6 +4640,13 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
             "pcb": offline_section(
                 "离线路径（--file）不连编辑器，因此没有主机 PCB DRC；要它就给一个在线工程"
             ),
+            # 123: three DRC sections, not two. The rule set is a third question
+            # with its own third answer — "no editor to ask" — and saying it here
+            # keeps the offline report's shape identical to the online one's.
+            "ruleset": offline_section(
+                "离线路径（--file）不连编辑器，因此没有主机 DRC 规则集；"
+                "离线也读不到规则集（它在编辑器里，不在归档里）"
+            ),
         }
         attribution = {
             "source": PAGE_ATTRIBUTION_ARCHIVE,
@@ -4675,6 +4684,10 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         drc = {
             "schematic": schematic_section(readings.get("schematic", [])),
             "pcb": pcb_section(readings.get("pcb"), documents_listed=readings.get("pcbDocuments", 0)),
+            "ruleset": ruleset_section(
+                _ruleset_reading(readings),
+                documents_listed=readings.get("pcbDocuments", 0),
+            ),
         }
         notes.append(
             "DRC stage: read "
@@ -4884,6 +4897,18 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
             model, rules_errored=rules_errored, intent=intent_source
         )
     ]
+    # 123: the rule-set meta-audit reaches `findings[]` here, and only here. The
+    # section carries the numbers; this is where a drifted rule set becomes a row
+    # the module walk, the triage table and the exit code can see. `unreadable`
+    # and the harmless-direction `off-reference` never reach this list — a key
+    # that was not read cannot produce a defect.
+    ruleset_rows = ruleset_finding_lines(drc.get("ruleset") or {})
+    if ruleset_rows:
+        findings.extend(ruleset_rows)
+        notes.append(
+            f"DRC 规则集元审查：{len(ruleset_rows)} 项超参考值，已进 findings"
+            "（规则 id `pcb-drc-ruleset-out-of-reference`；逐键数字见 drc.ruleset.metaAudit）"
+        )
     coverage = _coverage_section(
         model=model, board=board, attempts=attempts,
         parse_stats=parse_stats, rules_errored=rules_errored,
@@ -5859,9 +5884,13 @@ def _read_online_drc(args: argparse.Namespace, *, notes: list[str]) -> dict:
     the section reports the per-page readings *and* the invariance. Calling per
     page is the only way to *know* that, and it costs ~27 ms each.
 
-    Returns `{"schematic": [reading…], "pcb": reading|None, "pcbDocuments": n}`.
-    A failure here never fails the command: it lands in the section as
-    `checked: false` with its reason.
+    Returns `{"schematic": [reading…], "pcb": reading|None, "pcbs": [reading…],
+    "pcbDocuments": n}`. `pcbs` holds **one reading per board** (123 — it used to
+    hold the first board only), and each carries its own `ruleset` reading
+    alongside the DRC one; `pcb` is `pcbs[0]`, kept because the report's
+    `drc.pcb` section and `drc.summarise` are single-board shaped and their shape
+    is part of the report contract. A failure here never fails the command: it
+    lands in the section as `checked: false` with its reason.
     """
     import asyncio
 
@@ -5879,13 +5908,14 @@ def _read_online_drc(args: argparse.Namespace, *, notes: list[str]) -> dict:
             )
         except (OSError, BridgeError) as exc:
             notes.append(f"DRC stage: daemon not reachable ({exc})")
-            return {"schematic": [], "pcb": None, "pcbDocuments": 0, "unreachable": str(exc)}
+            return {"schematic": [], "pcb": None, "pcbs": [], "pcbDocuments": 0,
+                            "unreachable": str(exc)}
         try:
             try:
                 listing = await client.call("doc.list", {}, **route_kwargs)
             except BridgeError as exc:
                 notes.append(f"DRC stage: doc.list {exc.code}: {exc.message}")
-                return {"schematic": [], "pcb": None, "pcbDocuments": 0,
+                return {"schematic": [], "pcb": None, "pcbs": [], "pcbDocuments": 0,
                         "error": {"code": exc.code, "message": exc.message}}
             documents = listing.get("documents") or []
             pages = [d.get("uuid") for d in documents if d.get("type") == "page" and d.get("uuid")]
@@ -5909,17 +5939,55 @@ def _read_online_drc(args: argparse.Namespace, *, notes: list[str]) -> dict:
                     return {"documentUuid": uuid, "error": {"code": exc.code, "message": exc.message}}
                 return {"documentUuid": uuid, "payload": payload}
 
+            async def read_here(action: str, uuid: str) -> dict:
+                """A read on the document the last `doc.open` already put in front.
+
+                Deliberately open-free. `pcb.drc_ruleset` refuses a non-PCB focus
+                (025's boundary), so it has to be read while its own board is in
+                front — but re-opening it for the second read would double the
+                opens per board and, on a multi-board project, move the editor
+                twice per board for no reason. The board that was just checked is
+                by construction the one in front.
+                """
+                try:
+                    payload = await client.call(action, {}, **route_kwargs)
+                except BridgeError as exc:
+                    return {"documentUuid": uuid, "error": {"code": exc.code, "message": exc.message}}
+                return {"documentUuid": uuid, "payload": payload}
+
             schematic: list[dict] = []
             for uuid in pages:
                 reading = await read_once("sch.drc_check", uuid)
                 schematic.append({"pageUuid": uuid, **reading})
-            pcb_reading = await read_once("pcb.drc_check", pcbs[0]) if pcbs else None
-            if len(pcbs) > 1:
-                notes.append(
-                    f"doc.list 列了 {len(pcbs)} 块 PCB，本段只读第一块 {pcbs[0]}"
-                    "（多板工程要把 pcb.drc_check 逐块读，留待后续）"
-                )
-            return {"schematic": schematic, "pcb": pcb_reading, "pcbDocuments": len(pcbs)}
+            # **Every** board, one reading each (123). It used to read `pcbs[0]`
+            # and note the rest as "留待后续", which made a multi-board project
+            # report one board's DRC as the project's — a summary that under-
+            # states in the reassuring direction. `pcb` below still carries the
+            # first reading, because `pcb_section`/`drc.summarise` read that key
+            # and their single-board shape is part of the report's contract;
+            # `pcbs` is the full list this stage now produces.
+            pcb_readings: list[dict] = []
+            for uuid in pcbs:
+                reading = await read_once("pcb.drc_check", uuid)
+                pcb_readings.append({"documentUuid": uuid, **reading})
+                # The rule set is read while the board is **still** in front —
+                # `pcb.drc_ruleset` refuses a non-PCB focus (025's boundary), and
+                # the open above already put it there. One open per board covers
+                # both reads.
+                ruleset = await read_here("pcb.drc_ruleset", uuid)
+                if ruleset.get("error"):
+                    notes.append(
+                        f"DRC stage: PCB {uuid} 的规则集没读到（{ruleset['error'].get('code')}）—— "
+                        "drc.ruleset 段会写明没读到，不会拿默认值顶上"
+                    )
+                pcb_readings[-1]["ruleset"] = ruleset
+            pcb_reading = pcb_readings[0] if pcb_readings else None
+            return {
+                "schematic": schematic,
+                "pcb": pcb_reading,
+                "pcbs": pcb_readings,
+                "pcbDocuments": len(pcbs),
+            }
         finally:
             try:
                 if (focus := locals().get("focus")) and pages:
@@ -5931,6 +5999,29 @@ def _read_online_drc(args: argparse.Namespace, *, notes: list[str]) -> dict:
                 await client.close()
 
     return asyncio.run(run())
+
+
+def _ruleset_reading(readings: dict) -> dict | None:
+    """The rule-set reading the `drc.ruleset` section is built from.
+
+    It is `pcbs[0].ruleset` — **the first board's**, which is the same board
+    `drc.pcb` reports, so the leaves and the rules in one report belong to one
+    board. A project whose second board runs a different rule set is not
+    silently merged: the section names the board it read, and the multi-board
+    readings stay in the stage's own return value for a caller that walks them.
+
+    `None` when the stage never got that far (no board, daemon unreachable,
+    `doc.list` refused). The section turns that into `{checked: false, reason}` —
+    never into an empty rule set.
+    """
+    boards = readings.get("pcbs") or []
+    if not boards:
+        # Pre-123 callers (and the tests that stub the stage) hand in the
+        # single-board shape; honour it rather than reporting "no board".
+        legacy = readings.get("pcb")
+        return legacy.get("ruleset") if isinstance(legacy, dict) else None
+    first = boards[0]
+    return first.get("ruleset") if isinstance(first, dict) else None
 
 
 def _cmd_review_eval(args: argparse.Namespace) -> int:

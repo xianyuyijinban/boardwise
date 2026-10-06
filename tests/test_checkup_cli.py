@@ -162,6 +162,16 @@ def _checkup_args(**overrides) -> argparse.Namespace:
     return argparse.Namespace(**base)
 
 
+def _ruleset_answer() -> dict:
+    """The measured `pcb.drc_ruleset` answer, wrapped the way the bridge returns it."""
+    measured = json.loads(
+        (Path(__file__).parent / "fixtures" / "drc_ruleset" / "test_pcb1_ruleset.json")
+        .read_text(encoding="utf-8")
+    )
+    measured["readOnly"] = True
+    return measured
+
+
 def _live_answers(*, project_refusal: bool = False, page_blob: bytes | None = None,
                   netlist: bool = True, drc: bool = True) -> dict:
     """The fake daemon's answers for one run of the ladder (and of the DRC stage)."""
@@ -211,6 +221,12 @@ def _live_answers(*, project_refusal: bool = False, page_blob: bytes | None = No
             "args": {"strict": True, "userInterface": False, "includeVerboseError": True},
             "page": {"uuid": "5dc38976c1fa45ce", "type": "pcb"}, "uiRequested": False,
         }
+        # 123: the rule set, so `drc.ruleset` is a real section in every ladder
+        # test rather than a hole the whole file walks past. The measured shape
+        # (with only its 13x13 matrices dropped) lives in
+        # `tests/fixtures/drc_ruleset/test_pcb1_ruleset.json`; this is the same
+        # answer seen through the bridge's envelope.
+        answers["pcb.drc_ruleset"] = _ruleset_answer()
     return answers
 
 
@@ -1682,6 +1698,139 @@ def test_every_page_is_opened_and_the_focus_is_put_back(fake_bridge, tmp_path):
     assert report["drc"]["schematic"]["countsBasis"] == "host-wide", (
         "the two pages answered the same thing, so the host's counts are reported once"
     )
+
+
+def test_every_board_is_read_and_the_rule_set_comes_along_with_it(fake_bridge, tmp_path):
+    """123 棒 2 item 1: the PCB DRC used to read `pcbs[0]` only.
+
+    That made a two-board project report one board's DRC as the project's — a
+    summary that understates in the reassuring direction. So: one `pcb.drc_check`
+    per board, one `pcb.drc_ruleset` per board (read while the board is already in
+    front, so no extra `doc.open`), and the focus restored to wherever it was.
+    """
+    answers = _live_answers()
+    answers["doc.list"] = {
+        "documents": [
+            {"uuid": "page-a", "name": "A", "type": "page"},
+            {"uuid": "pcb-one", "name": "PCB1", "type": "pcb"},
+            {"uuid": "pcb-two", "name": "PCB2", "type": "pcb"},
+        ],
+        "active": {"uuid": "page-a", "type": "page"},
+        "projects": [{"name": "/test", "friendlyName": "test", "projectUuid": "u", "focused": True}],
+    }
+    _FakeBridgeClient.answers = answers
+    args = _checkup_args(out=str(tmp_path / "out"))
+
+    assert _cmd_checkup(args) == 3, "073：这份 run 的 verdict 是 incomplete → 3"
+
+    from boardwise.cli import _read_online_drc
+
+    _FakeBridgeClient.history_pairs = []
+    _FakeBridgeClient.history = []
+    notes: list[str] = []
+    readings = _read_online_drc(args, notes=notes)
+
+    assert [r["documentUuid"] for r in readings["pcbs"]] == ["pcb-one", "pcb-two"], (
+        "every board gets a reading — reporting one board's DRC as the project's "
+        "understates in the reassuring direction"
+    )
+    assert readings["pcb"] is readings["pcbs"][0], "drc.pcb is the first board, unchanged in shape"
+    assert readings["pcbDocuments"] == 2
+    # The rule set rides along per board, read while `doc.open` already put that
+    # board in front — no extra open for it.
+    assert all("ruleset" in reading for reading in readings["pcbs"])
+    assert _FakeBridgeClient.history.count("pcb.drc_check") == 2
+    assert _FakeBridgeClient.history.count("pcb.drc_ruleset") == 2
+    opens = [params.get("uuid") for action, params in _FakeBridgeClient.history_pairs
+             if action == "doc.open"]
+    assert opens == ["page-a", "pcb-one", "pcb-two", "page-a"], (
+        "the page, then each board once for its own two reads, then back to the focus"
+    )
+    assert not any("留待后续" in note for note in notes), "the deferred-multi-board note is gone"
+
+
+def test_the_report_carries_the_rule_set_next_to_the_drc_it_explains(fake_bridge, tmp_path):
+    """The section is not a footnote: it is the premise of the leaf counts above it."""
+    _FakeBridgeClient.answers = _live_answers()
+    args = _checkup_args(out=str(tmp_path / "out"))
+
+    assert _cmd_checkup(args) == 3
+
+    report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
+    ruleset = report["drc"]["ruleset"]
+    assert ruleset["checked"] is True
+    assert ruleset["ruleSetName"] == "JLCPCB Capability(Two Layers Board)"
+    assert ruleset["metaAudit"]["available"] is True
+    assert ruleset["metaAudit"]["outside"] == 0
+    assert ruleset["ruleset"]["present"] is True
+    # The whole reading is there, not just the compared keys: it is the evidence
+    # a reader checks an *unlisted* key against.
+    assert "Via Size" in ruleset["ruleset"]["raw"]["config"]["Physics"]
+
+    md = (tmp_path / "out" / "report.md").read_text(encoding="utf-8")
+    assert "PCB DRC 规则集：`JLCPCB Capability(Two Layers Board)`" in md
+    assert md.index("PCB DRC 规则集") < md.index("## 模块")
+
+
+def test_a_rule_set_the_bridge_refuses_leaves_the_section_honestly_unread(fake_bridge, tmp_path):
+    """The shape that matters most: an absent rule set must never read as a board
+    that checks nothing — it must say it could not be read, and keep the DRC."""
+    answers = _live_answers()
+    # `PAGE_MISMATCH` is a connector-side code, not one of the daemon's
+    # `ErrorCodes` — spelled literally, exactly as the connector raises it.
+    answers["pcb.drc_ruleset"] = BridgeError(
+        "PAGE_MISMATCH",
+        "the focused document is b4298962367251c8 (page), not a PCB",
+    )
+    _FakeBridgeClient.answers = answers
+    args = _checkup_args(out=str(tmp_path / "out"))
+
+    assert _cmd_checkup(args) == 3
+
+    report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
+    ruleset = report["drc"]["ruleset"]
+    assert ruleset["checked"] is False
+    assert "PAGE_MISMATCH" in ruleset["reason"]
+    assert "metaAudit" not in ruleset, "no comparison ran, so no comparison is claimed"
+    # And the DRC that *was* read is still reported — one failure does not take
+    # the other reading with it.
+    assert report["drc"]["pcb"]["checked"] is True
+    md = (tmp_path / "out" / "report.md").read_text(encoding="utf-8")
+    assert "PCB DRC 规则集：**未读**" in md
+
+
+def test_a_drifted_rule_set_reaches_findings_and_names_both_numbers(fake_bridge, tmp_path):
+    """A rule set outside the reference becomes a row the exit code can see — with
+    the actual value and the expected value both in the message, because "the rule
+    set drifted" without the numbers is not actionable."""
+    measured = json.loads(
+        (Path(__file__).parent / "fixtures" / "drc_ruleset" / "test_pcb1_ruleset.json")
+        .read_text(encoding="utf-8")
+    )
+    measured["ruleset"]["current"]["config"]["Physics"]["Track"]["copperThickness1oz"]["form"][
+        "data"]["1"]["minValue"] = 0.1
+    answers = _live_answers()
+    answers["pcb.drc_ruleset"] = measured
+    _FakeBridgeClient.answers = answers
+    args = _checkup_args(out=str(tmp_path / "out"))
+
+    # 3, not 1: this run has the usual `incomplete` shape (unreviewed parts,
+    # untriaged warnings), and the drifted rule set adds an ERROR on top — the
+    # report's own `summary.exitCode` is asserted below.
+    assert _cmd_checkup(args) == 1
+
+    report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
+    rows = [f for f in report["findings"] if f["rule_id"] == "pcb-drc-ruleset-out-of-reference"]
+    assert len(rows) == 1
+    assert rows[0]["severity"] == "ERROR"
+    assert "0.1mm" in rows[0]["message"] and "0.127mm" in rows[0]["message"]
+    assert rows[0]["refs"] == ["drc.ruleset"]
+    assert rows[0]["target"]["key"] == "track-width-min"
+    # An ERROR finding is in the error list, so the exit code cannot stay at 0
+    # with a rule set the board cannot be made on.
+    assert report["summary"]["exitCode"] == 1
+    assert any(e.get("ruleId") == "pcb-drc-ruleset-out-of-reference"
+               for e in report["summary"]["errors"])
 
 
 # --------------------------------------------------------------------------

@@ -456,6 +456,45 @@ ACTIONS: tuple[Action, ...] = (
         ),
         risk="read",
     ),
+    # --- 123: the DRC rule set, read-only -------------------------------------
+    Action(
+        name="pcb.drc_ruleset",
+        summary=(
+            "READ-ONLY: the DRC rule set in force on the focused PCB, via the "
+            "read-side members of pcb_Drc — getCurrentRuleConfigurationName(), "
+            "getCurrentRuleConfiguration(), getDefaultRuleConfigurationName(), "
+            "getRealTimeDrcStatus() (`all: true` adds getAllRuleConfigurations()). "
+            "A PCB DRC result is a statement about a rule set, so 025's leaves "
+            "without these are half an answer. The values come back **verbatim**, "
+            "sanitised conservatively: functions dropped (they are the "
+            "back-references that make an editor object graph cyclic), `toJSON`-"
+            "bearing objects rendered through the host's own serialiser (a Date "
+            "stays the instant it is), cycles cut as '(cycle)' at the re-entry "
+            "point; every cut is counted and named in `notes`. **Nothing is "
+            "compared** — whether a rule set matches the board's process is a "
+            "judgement the review layer makes, not the read. **No write is "
+            "reachable from this action**: save/overwrite/create/delete/rename "
+            "rules, setAsDefault, start/stopRealTimeDrc and the whole "
+            "net-class / pad-pair / equal-length / differential-pair family are "
+            "off the list. Focus discipline is `pcb.drc_check`'s: a non-PCB "
+            "focus is refused with PAGE_MISMATCH and the focused document named "
+            "(no auto doc.open — opening a board is the caller's job), and an "
+            "absent member is reported as absent rather than as a value, so a "
+            "board whose rule set could not be read never reads as a board with "
+            "no rules."
+        ),
+        params=("maxChars", "all"),
+        returns=(
+            "{source: 'pcb_Drc', page, ruleset: {currentName, current, defaultName, "
+            "realTimeDrcStatus, allConfigurations?}, reads: [{key, path, read}], "
+            "missing, unreadable, jsonChars, elapsedMs, readOnly: true, notes?}"
+        ),
+        params_schema=(
+            "maxChars: 1000..4000000 (default 400000); all: true adds "
+            "getAllRuleConfigurations() (the whole catalogue, not this board's set)"
+        ),
+        risk="read",
+    ),
     # --- 026b: the promoted diagnostics action ------------------------------
     Action(
         name="sys.connector_status",

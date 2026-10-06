@@ -7457,6 +7457,303 @@ function sysLogBudget(
 }
 
 // --------------------------------------------------------------------------
+// 123: `pcb.drc_ruleset` — which DRC rule set this board is checked against
+// --------------------------------------------------------------------------
+
+/**
+ * The read-side members of `pcb_Drc`, in the order the answer carries them.
+ *
+ * **Read-side means read-side**: every write in this namespace is off the list
+ * on purpose — `saveRuleConfiguration`, `overwriteCurrentRuleConfiguration`,
+ * `overwriteNetRules` / `overwriteNetByNetRules` / `overwriteRegionRules`,
+ * `createRuleConfiguration`, `deleteRuleConfiguration`,
+ * `renameRuleConfiguration`, `setAsDefault`, and the whole net-class /
+ * pad-pair / equal-length / differential-pair family (`createNetClass`,
+ * `addNetToNetClass`, `createPadPairGroup`, …) are all writes, and
+ * `startRealTimeDrc` / `stopRealTimeDrc` change editor state rather than
+ * describing it. A rule set is exactly the thing whose *content* decides whether
+ * a DRC means anything, so this action is the one place that must not be able to
+ * change it.
+ *
+ * `getAllRuleConfigurations` is read but kept out of the four this action calls
+ * by default: it is the whole catalogue rather than the board's current set, and
+ * a caller that wants it asks for it (`all: true`) — the default answer stays
+ * about *this board*.
+ */
+const DRC_RULESET_READS = [
+  { key: 'currentName', path: 'pcb_Drc.getCurrentRuleConfigurationName' },
+  { key: 'current', path: 'pcb_Drc.getCurrentRuleConfiguration' },
+  { key: 'defaultName', path: 'pcb_Drc.getDefaultRuleConfigurationName' },
+  { key: 'realTimeDrcStatus', path: 'pcb_Drc.getRealTimeDrcStatus' },
+] as const;
+
+/** The fifth read, only when asked for. */
+const DRC_RULESET_ALL_PATH = 'pcb_Drc.getAllRuleConfigurations';
+
+/** Default and ceiling for the sanitised ruleset body — a rule set is a few dozen keys. */
+const DRC_RULESET_DEFAULT_MAX_CHARS = 400_000;
+const DRC_RULESET_MAX_MAX_CHARS = 4_000_000;
+
+/** How deep the sanitiser walks before it stops and says so. */
+const DRC_RULESET_MAX_DEPTH = 12;
+
+/**
+ * `pcb.drc_ruleset` — the DRC rule set in force on the focused board.
+ *
+ * A PCB DRC result is a statement about a rule set: "clearance 0.2 mm" and
+ * "clearance 0.1 mm" produce the same number of findings on a different board, so
+ * a review that reports leaves without the rules has reported half an answer.
+ * 025 got the leaves (`pcb.drc_check`); this gets the other half — the rules
+ * they were checked against — read from `pcb_Drc`'s read-side members.
+ *
+ * The reading is **verbatim, sanitised conservatively**: the values come back
+ * as the host holds them, with only three things removed, each for a stated
+ * reason — functions (the editor objects' methods carry the back-references that
+ * make the graph cyclic, and no rule value is a function), `Date`s and other
+ * `toJSON`-bearing objects (rendered through the host's own serialiser, so a
+ * timestamp survives as the instant it is instead of as `{}`), and cycles (cut
+ * with a `'(cycle)'` marker at the point the walk would re-enter). Depth and
+ * breadth are bounded and every cut is counted in `sanitized`, so an answer that
+ * was clipped says so rather than looking like a complete rule set.
+ *
+ * **Focus discipline, the same one `pcb.drc_check` uses**: this action does not
+ * open a document. If the focused document is not a PCB the answer is refused
+ * with `PAGE_MISMATCH` and the focused document named — because "there is no rule
+ * set to report" and "there is a rule set but it belongs to another tab" are
+ * different facts, and a caller that cannot tell them apart will read the second
+ * as the first. Opening the board is the caller's business (`doc.open`), exactly
+ * as 025's boundary recorded.
+ *
+ * A read that answered `undefined` is recorded as **`null`, with its key
+ * present**. Measured live 2026-10-06 (test/PCB1, connector 0.4.29): the host
+ * resolves `getDefaultRuleConfigurationName()` to nothing, so on a board whose
+ * rule set is not the factory default there simply is no separate default name —
+ * and dropping the key would have made that identical to "this editor build has
+ * no such member". `reads[].read` is the flag that says whether a read was
+ * attempted; the value being `null` says it answered nothing.
+ *
+ * Nothing here is compared against anything. A rule set read is a measurement;
+ * whether it matches the process the board will be made in is a judgement, and it
+ * belongs to the review layer, not to the read.
+ */
+export const pcbDrcRuleset: ActionHandler = async (params, eda) => {
+  const problems: string[] = [];
+  const page = await drcTarget(eda, problems);
+  const focusedType = String(page.type ?? 'unknown');
+  if (focusedType !== 'pcb') {
+    throw new ActionError(
+      'PAGE_MISMATCH',
+      `the focused document is ${describeDocument(page)}, not a PCB — a rule set belongs to a `
+        + 'board. Open it first (doc.open); this action does not move the editor on its own, '
+        + 'because a rule set read from the wrong tab would look like the board has none',
+      { focused: page, expected: 'pcb' },
+    );
+  }
+
+  let maxChars = DRC_RULESET_DEFAULT_MAX_CHARS;
+  if (params?.maxChars !== undefined) {
+    const wanted = Number(params.maxChars);
+    if (!Number.isFinite(wanted) || wanted < 1_000 || wanted > DRC_RULESET_MAX_MAX_CHARS) {
+      throw new ActionError(
+        'BAD_REQUEST',
+        `pcb.drc_ruleset params.maxChars must be a number between 1000 and `
+          + `${DRC_RULESET_MAX_MAX_CHARS} (got ${JSON.stringify(params.maxChars)})`,
+      );
+    }
+    maxChars = Math.floor(wanted);
+  }
+  const wantAll = params?.all === true;
+
+  const reads = [
+    ...DRC_RULESET_READS.map((entry) => ({ ...entry, optional: false })),
+    ...(wantAll ? [{ key: 'allConfigurations' as const, path: DRC_RULESET_ALL_PATH, optional: true }] : []),
+  ];
+
+  const started = Date.now();
+  const ruleset: Record<string, unknown> = {};
+  const unreadable: string[] = [];
+  const missing: string[] = [];
+  const failures: Record<string, { code?: string; message: string }> = {};
+
+  for (const read of reads) {
+    let call: (...args: any[]) => any;
+    try {
+      call = requireFn(eda, read.path);
+    } catch (error) {
+      // An absent member is not a broken action: it is this editor build having
+      // one fewer reader. Recorded per member, never as a refusal of the whole
+      // ruleset, and never as an empty value — an absent `current` must not
+      // read as "the board has no rules".
+      if (isActionError(error)) {
+        missing.push(read.path);
+        failures[read.key] = { code: error.code, message: error.message };
+        continue;
+      }
+      throw error;
+    }
+    try {
+      const value = await raceHostCall(
+        settle(call()),
+        read.path,
+        DOCUMENT_READ_TIMEOUT_MS,
+        'the host drops an argument it dislikes rather than rejecting it',
+      );
+      const cut = sanitiseHostValue(value);
+      if (cut.error) {
+        unreadable.push(`${read.key}: ${cut.error}`);
+        failures[read.key] = { message: cut.error };
+        continue;
+      }
+      // The key is written **even when the sanitised value is `undefined`**. It
+      // is written even when the host itself answered `undefined`. Measured live
+      // 2026-10-06 (test/PCB1, connector 0.4.29): `getDefaultRuleConfigurationName()`
+      // resolves to nothing, so the host has no separate default on this board.
+      // Omitting the key would make that reading indistinguishable from "this
+      // build has no such member" — and those two need different decisions from
+      // the caller. The `read` flag in `reads[]` is what separates a read that
+      // answered nothing from a read that was never attempted.
+      ruleset[read.key] = cut.value === undefined ? null : cut.value;
+      if (cut.cut > 0) {
+        unreadable.push(
+          `${read.key}: ${cut.cut} value(s) were sanitised out (functions, or a cycle cut at depth `
+            + `${DRC_RULESET_MAX_DEPTH})`,
+        );
+      }
+    } catch (error) {
+      if (isActionError(error)) throw error;
+      const host = hostErrorText(error);
+      unreadable.push(`${read.key}: ${host.text}`);
+      failures[read.key] = { message: host.text };
+    }
+  }
+
+  if (Object.keys(ruleset).length === 0) {
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      'none of the four rule-set reads answered on a focused PCB — the focused document is '
+        + `${describeDocument(page)}. Nothing is reported: a board whose rule set could not be read `
+        + 'is not a board with no rules',
+      { focused: page, attempts: failures },
+    );
+  }
+
+  const notes: string[] = [...problems];
+  if (missing.length) {
+    notes.push(
+      `this editor build has no ${missing.join(' / ')} — reported as absent members, not as values`,
+    );
+  }
+  if (unreadable.length) {
+    notes.push(...unreadable);
+  }
+
+  const budget = budgetDrcGroups([ruleset], maxChars);
+  const truncated = budget.dropped > 0 || budget.jsonChars > maxChars;
+  if (truncated) {
+    notes.push(
+      `the sanitised rule set does not fit maxChars=${maxChars}; this answer is the whole reading `
+        + 'with functions and cycles removed, not a clipped one — raise maxChars to keep any doubt',
+    );
+  }
+
+  return {
+    source: 'pcb_Drc',
+    page,
+    ruleset: budget.kept[0] as Record<string, unknown>,
+    reads: reads.map((read) => ({ key: read.key, path: read.path, read: read.key in ruleset })),
+    missing,
+    unreadable,
+    jsonChars: budget.jsonChars,
+    elapsedMs: Date.now() - started,
+    readOnly: true,
+    ...(notes.length ? { notes } : {}),
+  };
+};
+
+/**
+ * A host value with functions, cycles and unserialisable objects removed.
+ *
+ * The three cuts are the three ways an editor object graph breaks a JSON
+ * transfer, and each one is a cut rather than a fix because a fixed value would
+ * be a value we made up:
+ *
+ * - a **function** is dropped — the rule values are data, and a method hanging
+ *   off them is a back-reference that would otherwise pull the whole editor
+ *   object graph in;
+ * - an object with a `toJSON` (a `Date` above all) is rendered **through it**,
+ *   so a timestamp stays the instant the host holds rather than becoming `{}`;
+ * - a **cycle** is cut at the point the walk would re-enter, as the string
+ *   `'(cycle)'` — the alternative (dropping the key) would make the reader
+ *   guess whether the host had said nothing or said something unrenderable.
+ *
+ * `cut` counts what was removed so the answer can admit it. A getter that throws
+ * is counted too: the host refusing to hand back one of its own fields is a fact
+ * about the reading, not a reason to fail the whole read.
+ */
+function sanitiseHostValue(value: unknown, depth = 0, seen: Set<unknown> = new Set()): {
+  value: unknown;
+  cut: number;
+  error?: string;
+} {
+  let cut = 0;
+  // Deliberately **not** `safeJson(value)` as a gate: the whole point of this
+  // walk is to *repair* what JSON cannot carry, and a cycle is the case that
+  // fails first. Testing the input for renderability would reject exactly the
+  // value this function exists to read. Only the walk's own output is checked.
+  const walk = (input: unknown, level: number): unknown => {
+    if (input === null) return null;
+    const kind = typeof input;
+    if (kind === 'function') {
+      cut += 1;
+      return undefined;
+    }
+    if (kind !== 'object') return input;
+    if (input instanceof Date) return input.toJSON();
+    if (seen.has(input)) {
+      cut += 1;
+      return '(cycle)';
+    }
+    if (level > DRC_RULESET_MAX_DEPTH) {
+      cut += 1;
+      return '(depth limit)';
+    }
+    seen.add(input);
+    try {
+      if (Array.isArray(input)) {
+        return input.map((item) => {
+          const mapped = walk(item, level + 1);
+          return mapped === undefined ? null : mapped;
+        });
+      }
+      const out: Record<string, unknown> = {};
+      for (const name of Object.keys(input as Record<string, unknown>)) {
+        let held: unknown;
+        try {
+          held = (input as Record<string, unknown>)[name];
+        } catch (error) {
+          cut += 1;
+          out[name] = `(getter threw: ${String((error as Error)?.message ?? error)})`;
+          continue;
+        }
+        const mapped = walk(held, level + 1);
+        if (mapped === undefined) {
+          cut += 1;
+          continue;
+        }
+        out[name] = mapped;
+      }
+      return out;
+    } finally {
+      seen.delete(input);
+    }
+  };
+  const value_out = walk(value, depth);
+  const error = safeJson(value_out).error;
+  if (error) return { value: undefined, cut, error };
+  return { value: value_out, cut };
+}
+
+// --------------------------------------------------------------------------
 // 026b: `sys.connector_status` — the promoted diagnostics action
 // --------------------------------------------------------------------------
 
@@ -7553,6 +7850,7 @@ const PROBE_CALL_ACTIONS: Record<string, ActionHandler> = {
   'sys.get_document_source': sysGetDocumentSource,
   'sch.drc_check': schDrcCheck,
   'pcb.drc_check': pcbDrcCheck,
+  'pcb.drc_ruleset': pcbDrcRuleset,
   'sys.log_read': sysLogRead,
 };
 
@@ -7578,6 +7876,12 @@ export function buildHandlers(eda: Eda): Record<string, BoundHandler> {
     'sys.get_project_file': bind(sysGetProjectFile),
     'sch.drc_check': bind(schDrcCheck),
     'pcb.drc_check': bind(pcbDrcCheck),
+    // 123: the rule set the DRC was measured against. Read-only to the core —
+    // every write in `pcb_Drc` (save/overwrite/create/delete/rename rules,
+    // setAsDefault, start/stopRealTimeDrc, the net-class family) is off the
+    // list — and it refuses a non-PCB focus instead of opening the board, the
+    // boundary `pcb.drc_check` keeps.
+    'pcb.drc_ruleset': bind(pcbDrcRuleset),
     'sch.readback': bind(schReadback),
     'lib.symbol.get': bind(libSymbolGet),
     'lib.device.get': bind(libDeviceGet),
