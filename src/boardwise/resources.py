@@ -60,6 +60,7 @@ _EXTENSION_PARTS = ("connector", "extension.json")
 _SKILL_PARTS = (".kimi-code", "skills", "boardwise", "SKILL.md")
 _PARTS_LIBRARY_PARTS = ("blocklib", "parts.json")
 _PORT_META_PARTS = ("blocklib", "blocks.portmeta.json")
+_DRC_RULESET_REFERENCE_PARTS = ("blocklib", "drc_ruleset_reference.json")
 
 
 def is_frozen() -> bool:
@@ -137,3 +138,19 @@ def portmeta_sidecar() -> Path:
     way it would not be for the shelf.
     """
     return resource_root().joinpath(*_PORT_META_PARTS)
+
+
+def drc_ruleset_reference() -> Path:
+    """The PCB DRC rule-set reference table (``blocklib/drc_ruleset_reference.json``).
+
+    123: the ruler `engines/drc.py::ruleset_section` compares a board's own DRC
+    rule set against. Read-only like :func:`portmeta_sidecar`, and resolved the
+    same way, so a frozen exe carries its own table and a checkout uses the one
+    the developer just edited.
+
+    **A caller must treat "the file is not there" as a reportable fact.** This
+    table is what makes the meta-audit mean anything; without it the section has
+    no comparison to run, and "nothing was compared" must not reach a reader as
+    "everything matched". So callers report the absence, never swallow it.
+    """
+    return resource_root().joinpath(*_DRC_RULESET_REFERENCE_PARTS)

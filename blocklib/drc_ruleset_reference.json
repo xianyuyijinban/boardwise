@@ -1,0 +1,111 @@
+{
+  "kind": "boardwise-pcb-drc-ruleset-reference",
+  "version": 1,
+  "provenance": "默认值，岳校（123）。本文件是**元审查的尺子**，不是规则集本身——它记录「嘉立创双层板常规工艺」的默认起点，用来与真机读到的 pcb_Drc 规则集逐键对比。值取自 2026-10-06 真机实测（立创 EDA Pro 3.2.186，connector 0.4.29，test 工程 PCB1 / 5dc38976c1fa45ce，规则集 `JLCPCB Capability(Two Layers Board)`）的原样读数，见 `outputs/123/02_ruleset_raw.json`。",
+  "notes": [
+    "**超界落 finding，本表不含判定逻辑**：`comparison` 只报告实际值与本值的差，判不判是 findings 层的事。",
+    "**读不到的字段不编**：元审查只走本表 `checks` 里列出的键；读数里没有的键报 `unreadable`，不拿参考值顶替（一个「本该是 0.2 的间距」不是 0.2 的事实，而是一次漏读）。",
+    "`tolerance` 是相对容差（`|actual - expected| <= |expected| * tolerance`），用来吸收立创自己那些 `0.49999899999999997` 这样的浮点尾巴——容差是量出来的，不是为了消掉差异。",
+    "`direction` 是「实际值超界往哪个方向算问题」：`below` = 比参考值小（间距/线宽偏小，走线靠得太近）、`above` = 比参考值大、`either` = 任一方向。`min`/`max` 类的键用 `bounds` 而不是 `expected`，因为它们是区间不是定值。",
+    "键名以真机实际读到的字段为准（123 任务书 §棒 2 第 2 条）。宿主按 `category / rule / form / data[1] / minValue` 分层，所以键路径写成点分串；路径不存在时该条报 `unreadable`，不猜。",
+    "换工艺（阻抗板、高压板、四层板）时改这张表，不要改代码——它是数据。"
+  ],
+  "referenceSet": {
+    "name": "JLCPCB Capability(Two Layers Board)",
+    "why": "这是立创对双层板的官方能力规则集，也是本棒真机实测到的当前集；把它钉成参考起点，是为了让「这块板用的是哪套工艺」这件事在报告里可见，而不是隐含在 DRC 的结论里。"
+  },
+  "checks": [
+    {
+      "key": "track-width-min",
+      "path": "config.Physics.Track.copperThickness1oz.form.data.1.minValue",
+      "label": "最小线宽（1oz 铜厚）",
+      "expected": 0.127,
+      "unit": "mm",
+      "direction": "below",
+      "tolerance": 0.01,
+      "severity": "ERROR",
+      "why": "线宽窄于工艺下限是板厂做不出来的问题，不是风格问题。"
+    },
+    {
+      "key": "track-width-default",
+      "path": "config.Physics.Track.copperThickness1oz.form.data.1.defaultValue",
+      "label": "默认线宽（1oz 铜厚）",
+      "expected": 0.254,
+      "unit": "mm",
+      "direction": "either",
+      "tolerance": 0.01,
+      "severity": "INFO",
+      "why": "测量行：默认线宽只是当前规则的偏好，不是板子必须照着画的约束。"
+    },
+    {
+      "key": "via-outer-diameter-min",
+      "path": "config.Physics.Via Size.viaSize.form.viaOuterdiameterMin",
+      "label": "过孔外径下限",
+      "expected": 0.5,
+      "unit": "mm",
+      "direction": "below",
+      "tolerance": 0.01,
+      "severity": "ERROR",
+      "why": "0.49999899999999997 是实测浮点尾巴；比它小一点点同样钻不出来。"
+    },
+    {
+      "key": "via-hole-diameter-min",
+      "path": "config.Physics.Via Size.viaSize.form.viaInnerdiameterMin",
+      "label": "过孔内径（钻孔）下限",
+      "expected": 0.3,
+      "unit": "mm",
+      "direction": "below",
+      "tolerance": 0.01,
+      "severity": "ERROR",
+      "why": "钻头比这个细就下不去，板厂会退单。"
+    },
+    {
+      "key": "hole-to-hole",
+      "path": "config.Spacing.Other Spacing.otherClearance.form.hole2Hole",
+      "label": "孔到孔间距",
+      "expected": 0.3,
+      "unit": "mm",
+      "direction": "below",
+      "tolerance": 0.01,
+      "severity": "ERROR",
+      "why": "这是本板唯一一个**非零**的 otherClearance 子项——两个 0 是「不限」，只有 hole2Hole 是有数的。"
+    },
+    {
+      "key": "plane-line-clearance",
+      "path": "config.Plane.Copper Zone.copperRegion.form.singleLayerPadModel.data.1.lineClearance",
+      "label": "铺铜到同层焊盘的间距",
+      "expected": 0.254,
+      "unit": "mm",
+      "direction": "below",
+      "tolerance": 0.01,
+      "severity": "ERROR",
+      "why": "铺铜离焊盘太近，阻焊桥就断了，焊接良率掉——而且 DRC 未必会报，所以这里单独盯。"
+    },
+    {
+      "key": "solder-mask-expansion",
+      "path": "config.Expansion.Solder Mask Expansion.solderMaskExpansion.form.padToplayerExpansion",
+      "label": "阻焊开窗扩张（顶层）",
+      "expected": 0.0508,
+      "unit": "mm",
+      "direction": "either",
+      "tolerance": 0.01,
+      "severity": "INFO",
+      "why": "0.0508 mm = 2 mil，立创的常规开窗。负值会把开窗缩到焊盘内，那是另一回事（本表只报差，方向由 findings 层裁）。"
+    },
+    {
+      "key": "via-mask-expansion",
+      "path": "config.Expansion.Solder Mask Expansion.solderMaskExpansion.form.viaToplayerExpansion",
+      "label": "过孔阻焊开窗扩张（顶层）",
+      "expected": -25.4,
+      "unit": "mm",
+      "direction": "either",
+      "tolerance": 0.02,
+      "severity": "INFO",
+      "why": "过孔在立创里默认**不做**开窗（tenting），-25.4 mm 就是「不开」这个 sentinel 读出来的样子；不是有人填了 -25.4。"
+    }
+  ],
+  "expectedTopology": {
+    "why": "宿主把规则集按大类分节。这几节在不在，是「读到的到底是不是完整规则集」的第一个判据——少一节意味着这条读数不是我们以为的那份。",
+    "categories": ["Spacing", "Physics", "Plane", "Expansion"]
+  }
+}

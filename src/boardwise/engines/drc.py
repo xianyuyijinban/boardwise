@@ -566,6 +566,337 @@ def _count_leaves_by_rule(groups: list[dict]) -> dict[str, int]:
     return by_rule
 
 
+# --------------------------------------------------------------------------
+# 123: the rule set the DRC was measured against
+# --------------------------------------------------------------------------
+
+#: Who answered the rule-set read. Same provenance discipline as the two sections
+#: above: the report must be able to say *where* each sentence came from.
+RULESET_SOURCE = "host-drc-ruleset"
+
+#: The reference table's file name, relative to `blocklib/`.
+RULESET_REFERENCE_FILE = "drc_ruleset_reference.json"
+
+#: What the host nests the rules under, measured 2026-10-06 on test/PCB1.
+#: `{name, config}` at the top; the rules themselves live under `config`, and each
+#: rule carries `unit` / `isSetDefault` plus either a `form` (scalars) or a
+#: `tables` (a matrix keyed by copper thickness). `data.1` is the 1 oz row —
+#: the table index is the copper thickness in ounces, so `data.1` is this board's
+#: 1 oz entry and not a "first element".
+RULESET_CONFIG_KEY = "config"
+RULESET_THICKNESS_INDEX = "1"
+
+#: The whole reading, verbatim, under one key. Kept whole because the host's
+#: rule set is the *evidence*: a meta-review that quotes only the keys it
+#: compared is a summary of the rules, not the rules, and a reader who wants to
+#: check a different key has nothing to check against.
+RULESET_RAW_KEY = "raw"
+
+
+def _load_ruleset_reference() -> dict | None:
+    """The reference table, or `None` when the file is absent or unreadable.
+
+    A missing table is **not** a section full of violations and not a silent
+    skip: the caller reports `checked: true` with `metaAudit.available: false`
+    and the reason, because "we compared nothing" and "everything matched" are
+    the same thing to a reader who is not told otherwise.
+    """
+    from .. import resources
+
+    try:
+        path = resources.drc_ruleset_reference()
+    except Exception:  # noqa: BLE001 — a root that cannot be located is not a crash
+        return None
+    if not path.is_file():
+        return None
+    try:
+        import json
+
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _resolve_ruleset_path(reading: dict, dotted: str) -> Any:
+    """One dot-joined key path into a ruleset reading, or the ``MISSING`` marker.
+
+    The host's nesting is stable but its *key names* are editor text (`Via Size`,
+    `Safe Spacing`, a space in the middle of a category name), which is why the
+    reference table spells the whole path rather than walking a schema. A path
+    that does not resolve returns :data:`RULESET_MISSING` — never `None`, which
+    would be indistinguishable from a rule whose value genuinely is null.
+    """
+    node: Any = reading
+    for part in str(dotted).split("."):
+        if not isinstance(node, dict) or part not in node:
+            return RULESET_MISSING
+        node = node[part]
+    return node
+
+
+#: The sentinel a dotted path returns when it does not resolve. A private object
+#: so it can never be produced by, or confused with, a value the host returned.
+RULESET_MISSING = object()
+
+
+def _compare_ruleset_key(check: dict, actual: Any) -> dict:
+    """One reference key against what the host answered.
+
+    Three outcomes, kept apart on purpose:
+
+    * ``within`` — the value is the reference value up to ``tolerance``;
+    * ``outside`` — it is not, with the direction and the numbers both carried,
+      because "间距比工艺下限小" and "间距比工艺下限大" are different problems;
+    * ``unreadable`` — the path did not resolve, i.e. **the key was not read**.
+      This never becomes a violation: an absent key is a hole in the reading, and
+      filling it with the reference value would let a missing measurement pass
+      as a matching one.
+    """
+    entry = {
+        "key": check.get("key"),
+        "label": check.get("label"),
+        "path": check.get("path"),
+        "unit": check.get("unit"),
+        "severity": check.get("severity"),
+    }
+    if actual is RULESET_MISSING:
+        return {**entry, "status": "unreadable", "why": check.get("why")}
+    if not isinstance(actual, (int, float)) or isinstance(actual, bool):
+        return {
+            **entry,
+            "status": "unreadable",
+            "actual": actual,
+            "why": check.get("why"),
+            "whyUnreadable": "the host answered something that is not a number",
+        }
+    expected = check.get("expected")
+    tolerance = check.get("tolerance")
+    if not isinstance(expected, (int, float)) or isinstance(expected, bool):
+        return {**entry, "status": "unreadable", "actual": actual,
+                "whyUnreadable": "the reference table holds no numeric expected value"}
+    slack = abs(float(expected)) * float(tolerance) if isinstance(tolerance, (int, float)) else 0.0
+    delta = float(actual) - float(expected)
+    if abs(delta) <= slack:
+        return {**entry, "status": "within", "actual": actual, "expected": expected,
+                "delta": delta, "tolerance": slack}
+    direction = check.get("direction")
+    offending = delta < 0 if direction == "below" else delta > 0 if direction == "above" else True
+    if not offending:
+        # Off the reference value in the *harmless* direction. Still reported —
+        # a rule set that was loosened is a fact about the board — but marked so
+        # it is not read as a violation.
+        return {**entry, "status": "off-reference", "actual": actual, "expected": expected,
+                "delta": delta, "tolerance": slack,
+                "why": check.get("why"),
+                "note": "偏离参考值，但方向是本表标注的无害侧；报出是因为板子确实用了另一套工艺，"
+                        "不是缺陷判定"}
+    return {**entry, "status": "outside", "actual": actual, "expected": expected,
+            "delta": delta, "tolerance": slack, "direction": direction, "why": check.get("why")}
+
+
+def ruleset_section(reading: dict | None, *, documents_listed: int = 0) -> dict:
+    """The `drc.ruleset` section: the DRC rule set, verbatim plus a meta-audit.
+
+    A PCB DRC result is a statement **about a rule set** — the same geometry
+    passes under one clearance and fails under another — so leaves without these
+    are half an answer. `pcb.drc_check` got the leaves (025); this gets the
+    other half.
+
+    Two things, kept apart because they are different amounts of evidence:
+
+    * **the reading** (`ruleset.raw`) — the host's own object, unchanged. It is
+      the evidence: a meta-audit that quotes only the keys it compared is a
+      summary of the rules, not the rules, and a reader who wants to check some
+      other key has nothing to check against. Nothing is normalised, sorted or
+      summarised away.
+    * **the meta-audit** (`ruleset.metaAudit`) — each key of the reference table
+      (`blocklib/drc_ruleset_reference.json`) against what was actually read.
+
+    The meta-audit's rule is the one that keeps it from being a rubber stamp: a
+    key whose path did not resolve is reported ``unreadable``, **not** ``within``.
+    Substituting the reference value for a measurement that was never taken is
+    how a review acquires a clean sheet it did not earn.
+
+    The section never fails the command, and it never raises the report's
+    ``exitCode`` itself: a rule set that drifted from the reference is a finding
+    for the findings layer, recorded here with the numbers, not a verdict this
+    function pronounces.
+    """
+    base: dict[str, Any] = {
+        "checked": False,
+        "source": RULESET_SOURCE,
+        "note": "规则集是 DRC 结论的前提：同一块图在两套规则下结论不同，故 DRC 逐条要连着本段读；"
+                "本段只报读数与元审查，不自己下判决",
+    }
+    if reading is None:
+        return {**base, "reason": "no PCB document was listed for this project",
+                "documentsListed": documents_listed}
+    if error := reading.get("error"):
+        return {**base, "reason": f"{error.get('code')}: {error.get('message')}",
+                "documentUuid": reading.get("documentUuid"),
+                "documentsListed": documents_listed}
+    payload = _as_dict(reading.get("payload"))
+    if not payload:
+        return {**base, "reason": "no answer was recorded",
+                "documentUuid": reading.get("documentUuid"),
+                "documentsListed": documents_listed}
+
+    ruleset = _as_dict(payload.get("ruleset"))
+    current = _as_dict(ruleset.get("current"))
+    checks_out: list[dict] = []
+    notes: list[str] = []
+    unavailable: list[str] = []
+    for path in _as_list(payload.get("missing")):
+        unavailable.append(f"宿主无此成员：{path}")
+    for path in _as_list(payload.get("unreadable")):
+        unavailable.append(f"这一项没读出来：{path}")
+    notes.extend(_as_list(payload.get("notes")))
+    if unavailable:
+        # Which members, not just that some were — a reader who has to guess
+        # which half of the reading is missing cannot act on the other half.
+        notes.append("、".join(unavailable))
+        notes.append(
+            "有成员没读到 —— 下面标 unreadable 的键**没有**拿参考值顶替，"
+            "缺读不是匹配（这是本段元审查唯一的硬纪律）"
+        )
+
+    section: dict[str, Any] = {
+        **base,
+        "checked": True,
+        "documentUuid": reading.get("documentUuid"),
+        "documentsListed": documents_listed,
+        "ruleSetName": _text(ruleset.get("currentName")),
+        "defaultRuleSetName": _text(ruleset.get("defaultName")),
+        "realTimeDrcStatus": ruleset.get("realTimeDrcStatus"),
+        "reads": _as_list(payload.get("reads")),
+        "elapsedMs": payload.get("elapsedMs"),
+        "ruleset": {
+            RULESET_RAW_KEY: current,
+            "name": _text(current.get("name")),
+            "configCategories": sorted(_as_dict(current.get(RULESET_CONFIG_KEY)).keys()),
+            "present": bool(current),
+        },
+        "notes": notes,
+    }
+    if not current:
+        section["reason"] = (
+            "the host answered the rule-set reads but held no `current` object — reported as "
+            "no reading, not as a board with no rules"
+        )
+        return section
+
+    reference = _load_ruleset_reference()
+    if reference is None:
+        section["metaAudit"] = {
+            "available": False,
+            "reason": f"参考表读不到（blocklib/{RULESET_REFERENCE_FILE}）—— 元审查没有跑，"
+                      "不是「都匹配」",
+        }
+        return section
+
+    checks = _as_list(reference.get("checks"))
+    for check in checks:
+        if not isinstance(check, dict):
+            continue
+        dotted = str(check.get("path") or "")
+        checks_out.append(_compare_ruleset_key(check, _resolve_ruleset_path(current, dotted)))
+
+    topology = _as_dict(reference.get("expectedTopology"))
+    wanted_categories = [str(name) for name in _as_list(topology.get("categories"))]
+    present = set(section["ruleset"]["configCategories"])
+    missing_categories = [name for name in wanted_categories if name not in present]
+
+    statuses = [entry["status"] for entry in checks_out]
+    section["metaAudit"] = {
+        "available": True,
+        "referenceFile": f"blocklib/{RULESET_REFERENCE_FILE}",
+        "referenceProvenance": reference.get("provenance"),
+        "referenceSet": _as_dict(reference.get("referenceSet")),
+        "expectedCategories": wanted_categories,
+        "missingCategories": missing_categories,
+        "keysChecked": len(checks_out),
+        "within": statuses.count("within"),
+        "outside": statuses.count("outside"),
+        "offReference": statuses.count("off-reference"),
+        "unreadable": statuses.count("unreadable"),
+        "checks": checks_out,
+    }
+    if missing_categories:
+        section["notes"] = [
+            *section["notes"],
+            f"规则集少了参考表预期的大类：{'、'.join(missing_categories)}—— "
+            "这不是「那几个类别没有规则」，而是这份读数可能不是我们以为的那一整份",
+        ]
+    outside = [entry for entry in checks_out if entry["status"] == "outside"]
+    if outside:
+        section["notes"] = [
+            *section["notes"],
+            f"{len(outside)} 个键超界（{('、'.join(str(e['key']) for e in outside))}）—— "
+            "逐键数字见 metaAudit.checks；本段不下判决，判不判归 findings 层",
+        ]
+    unreadable = [entry for entry in checks_out if entry["status"] == "unreadable"]
+    if unreadable:
+        # Per key, not just a count: which limit was not measured is what tells a
+        # reader whether the rest of the audit can be believed.
+        section["notes"] = [
+            *section["notes"],
+            f"{len(unreadable)} 个键没读到（{'、'.join(str(e['key']) for e in unreadable)}）—— "
+            "**没有**拿参考值顶替；缺读不是匹配，这些键本段不作任何结论",
+        ]
+    if statuses and len(unreadable) == len(statuses):
+        section["notes"] = [
+            *section["notes"],
+            "参考表里的键一个都没读到 —— 本段的元审查没有产生任何结论，"
+            "这不是「都匹配」",
+        ]
+    return section
+
+
+def ruleset_finding_lines(section: dict) -> list[dict]:
+    """The rule-set rows that deserve a `findings[]` entry, and only those.
+
+    ``outside`` becomes a finding; ``off-reference`` (the harmless direction) and
+    ``unreadable`` (the key was never read) do not. The reason is the same one
+    that governs the whole report: **a measurement that was not taken must not be
+    able to produce a defect**, and a value that drifted in the direction the
+    reference table marks harmless is a fact about the process, not a fault.
+
+    Severity comes from the reference table's own `severity`, because the table
+    is where the judgement was made and written down; this function does not
+    invent one.
+    """
+    audit = _as_dict(_as_dict(section).get("metaAudit"))
+    if audit.get("available") is not True:
+        return []
+    out: list[dict] = []
+    for entry in _as_list(audit.get("checks")):
+        entry = _as_dict(entry)
+        if entry.get("status") != "outside":
+            continue
+        key = str(entry.get("key") or "")
+        out.append({
+            "rule_id": "pcb-drc-ruleset-out-of-reference",
+            "severity": str(entry.get("severity") or "WARN").upper(),
+            "message": (
+                f"DRC 规则集 `{_as_dict(section).get('ruleSetName') or '(unnamed)'}` 的"
+                f"「{entry.get('label')}」= {entry.get('actual')}{entry.get('unit') or ''}，"
+                f"参考值 {entry.get('expected')}{entry.get('unit') or ''}"
+                f"（差 {entry.get('delta')}）。{entry.get('why') or ''} 见 drc.ruleset.metaAudit"
+            ),
+            "refs": ["drc.ruleset"],
+            "target": {
+                "source": RULESET_SOURCE,
+                "key": key,
+                "path": entry.get("path"),
+                "actual": entry.get("actual"),
+                "expected": entry.get("expected"),
+                "delta": entry.get("delta"),
+                "direction": entry.get("direction"),
+            },
+        })
+    return out
+
+
 def offline_section(reason: str) -> dict:
     """A section for the `--file` path, where there is no editor to ask."""
     return {

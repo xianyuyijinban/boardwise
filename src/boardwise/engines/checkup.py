@@ -2116,6 +2116,60 @@ def render_report_markdown(report: dict) -> str:
         lines.append("")
     for note in pcb.get("notes") or []:
         lines.append(f"- {note}")
+
+    # 123: the rule set the DRC above was measured against. Rendered right after
+    # the DRC sections and not at the end, because it is the premise those
+    # sections' conclusions rest on — a leaf count with no rule set is half an
+    # answer, and the reader should meet the rule before the verdict.
+    ruleset = drc.get("ruleset") or {}
+    lines.append("")
+    if not ruleset.get("checked"):
+        lines.append(f"- PCB DRC 规则集：**未读** —— {ruleset.get('reason')}")
+    else:
+        lines.append(
+            f"- PCB DRC 规则集：`{ruleset.get('ruleSetName') or '(unnamed)'}`"
+            + (f"（默认 `{ruleset.get('defaultRuleSetName')}`）" if ruleset.get("defaultRuleSetName") else "")
+            + (f"，实时 DRC {'开着' if ruleset.get('realTimeDrcStatus') else '未开'}")
+        )
+        lines.append(
+            f"  - 大类：{'、'.join(ruleset.get('ruleset', {}).get('configCategories') or []) or '（读不到）'}"
+        )
+        audit = ruleset.get("metaAudit") or {}
+        if audit.get("available") is not True:
+            lines.append(f"  - 元审查：**没有跑** —— {audit.get('reason')}")
+        else:
+            lines.append(
+                f"  - 元审查：{audit.get('keysChecked')} 键 —— "
+                f"匹配 {audit.get('within')}、超界 {audit.get('outside')}、"
+                f"偏离（无害侧）{audit.get('offReference')}、**没读到 {audit.get('unreadable')}**"
+                f"（参考表 `{audit.get('referenceFile')}`）"
+            )
+            if audit.get("missingCategories"):
+                lines.append(
+                    f"  - 少的大类：{'、'.join(audit['missingCategories'])}"
+                    "（不是「这些类别没有规则」，是这份读数可能不完整）"
+                )
+            rows = [c for c in (audit.get("checks") or []) if c.get("status") != "within"]
+            if rows:
+                lines.append("")
+                lines.append("| 键 | 读到的 | 参考值 | 差 | 状态 | 说明 |")
+                lines.append("|---|---|---|---|---|---|")
+                for entry in rows:
+                    unit = entry.get("unit") or ""
+                    actual = entry.get("actual")
+                    actual_text = "（没读到）" if actual is None else f"{actual}{unit}"
+                    expected = entry.get("expected")
+                    expected_text = "—" if expected is None else f"{expected}{unit}"
+                    lines.append(
+                        f"| {_cell(entry.get('label'))} "
+                        f"| {_cell(actual_text)} "
+                        f"| {_cell(expected_text)} "
+                        f"| {_cell(entry.get('delta'))} | {_cell(entry.get('status'))} "
+                        f"| {_cell(entry.get('why') or entry.get('note') or entry.get('whyUnreadable'))} |"
+                    )
+                lines.append("")
+    for note in ruleset.get("notes") or []:
+        lines.append(f"  - {note}")
     lines.append("")
 
     lines.append("## 模块")
