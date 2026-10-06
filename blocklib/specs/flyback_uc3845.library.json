@@ -364,88 +364,79 @@
       ]
     },
     {
-      "symbolRef": "XFMR-XREE16-050624",
-      "title": "Flyback transformer, three REAL winding pairs: primary on the left outer pair, auxiliary on the left inner pair, secondary on the right — the primary/aux on one bobbin side is the physical construction (aux is primary-referenced). 岳 ruling (a) + the 2026-10-04 part swap (option 1).\n[118b] measured on the live host 2026-10-04 (probe part T98, C49118510, outputs/118/probe/xfmr_swap_probe.json): seven pins (1-5 left, 6/10 right), body = measured bbox (sch.geometry bboxIds), not a lower bound.",
+      "symbolRef": "XFMR-WE-749118105",
+      "title": "Flyback transformer, TWO windings (Wurth 749118105): primary N1 on the left (pin 1 undotted = bus end ABOVE, pin 3 dotted = switch end below), secondary N2 on the right (pin 4 dotted = rectifier hot below, pin 6 undotted = cold above). Pins 2/5 are NC on the datasheet. 岳 ruling (a); part chosen by 岳 2026-10-04.\n[118c] measured on the live host 2026-10-04 (岳-placed part, primitive 1ee34403283f2a36, outputs/118/probe/): six pins, len 20; body = measured bbox (sch.geometry bboxIds).",
       "body": [
-        -60.5,
-        -70.5,
-        40.5,
-        65.5
+        -20.5,
+        -13.5,
+        20.5,
+        30.5
+      ],
+      "notes": [
+        "body: measured bbox (sch.geometry bboxIds probe, 2026-10-04)",
+        "pins 2/5 exist on the symbol but are NC per the Wurth datasheet — the spec connects nothing to them"
       ],
       "pins": [
         {
           "number": "1",
           "name": "1",
           "tip": [
-            -60.0,
+            -40.0,
             -10.0
           ],
           "direction": "left",
-          "length": 10.0
+          "length": 20.0
         },
         {
           "number": "2",
           "name": "2",
           "tip": [
-            -60.0,
-            -40.0
+            -40.0,
+            -20.0
           ],
           "direction": "left",
-          "length": 10.0
+          "length": 20.0
         },
         {
           "number": "3",
           "name": "3",
           "tip": [
-            -60.0,
-            60.0
+            -40.0,
+            30.0
           ],
           "direction": "left",
-          "length": 10.0
+          "length": 20.0
         },
         {
           "number": "4",
           "name": "4",
           "tip": [
-            -60.0,
+            40.0,
             30.0
           ],
-          "direction": "left",
-          "length": 10.0
+          "direction": "right",
+          "length": 20.0
         },
         {
           "number": "5",
           "name": "5",
           "tip": [
-            -60.0,
-            0.0
+            40.0,
+            -20.0
           ],
-          "direction": "left",
-          "length": 10.0
+          "direction": "right",
+          "length": 20.0
         },
         {
           "number": "6",
           "name": "6",
           "tip": [
-            50.0,
-            0.0
+            40.0,
+            -10.0
           ],
           "direction": "right",
-          "length": 10.0
-        },
-        {
-          "number": "10",
-          "name": "10",
-          "tip": [
-            50.0,
-            -30.0
-          ],
-          "direction": "right",
-          "length": 10.0
+          "length": 20.0
         }
-      ],
-      "notes": [
-        "body: measured bbox (sch.geometry bboxIds probe, 2026-10-04)"
       ]
     },
     {

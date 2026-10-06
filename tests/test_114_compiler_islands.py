@@ -604,13 +604,23 @@ def test_an_unordered_chain_part_is_parked_beside_its_near_partner():
 
 
 def test_a_branch_nudges_its_root_clear_of_a_foreign_pin_on_the_run():
-    """支路**逐支**放在 owner 的某一根脚上时，那条直线可能正好压过 owner 的
-    **另一根**脚——那是一次电路里不存在的连接，可读性闸会以
-    `netlist-partition-mismatch` 拒绝。
+    """一根支路从 owner 的脚直线走过去时，**不许**落在 owner 别的异网脚上。
 
-    真实案例是反激的辅助整流：变压器的两颗辅助脚都朝上、相距 20，挂在第一颗
-    上的整流二极管直线走过去正压在第二颗（`PGND`）上。这里钉的是**逐脚**判定：
-    与支路同网的那颗脚不算foreign，它**别的**脚算。
+    真实案例最早是反激的**辅助**整流：变压器的两颗辅助脚都朝上、相距 20，挂在第一颗
+    上的整流二极管直线走过去正压在第二颗上。这里钉的是**逐脚**判定：与支路同网的
+    那颗脚不算 foreign，它**别的**脚算。
+
+    **120 更新**：辅助链整条拆掉了（D2/C7/AUX/VCC 出 spec，WE 749118105 只有两
+    绕组），所以本条**换到同一形状的另一条跑**——**主边**的输入电容 `C5`：它挂在
+    变压器的 `HVDC`（pin 1）上，而变压器**另外三颗**脚分别接 `SW` / `SEC_SW` /
+    `SEC_GND`，其中接 `SW` 的 pin 3 与 pin 1 同在左侧、相距 40——`C5` 从 pin 1
+    直线走过去，正对着 pin 3。判据一个字没改，**对象换了**（六脚件比七脚件多一颗
+    异网脚，形状比原案例更贴近本条要钉的东西）。
+
+    换对象而不是删掉这一条，理由和 119 把七脚断言改成记录一样：这一条钉的是
+    `_dodge_foreign_pins` 的**判据**（逐脚、只算异网），那与哪一颗二极管在页面上
+    无关。删掉它，判据就没人守了；把它钉在一个已经不存在的对象上，它就只是一句
+    永远为真的空话。
     """
     circuit = CircuitSpec.load(SPECS / "flyback_uc3845.circuit.json")
     presentation = PresentationSpec.load(SPECS / "flyback_uc3845.presentation.json")
@@ -621,33 +631,32 @@ def test_a_branch_nudges_its_root_clear_of_a_foreign_pin_on_the_run():
     ).context
     assert ctx is not None
     placed = _placed(ctx)
-    # **118 更新**：113 的夹具是「变压器的两颗辅助脚都朝上、相距 20」，
-    # 辅助热端接整流管、冷端接地。实测的 `C9900020988` **没有 A1/A2 这两个
-    # 名字**（`PinName == PinNumber`），而五脚骨架只有**一颗**多余的脚同时
-    # 承担副边回线与辅助冷端（见 118 的 SUMMARY）。所以这一条在实测几何上
-    # 量的是**同一个判据**：整流管那一跑**不许**落在变压器任何一颗异网脚上。
-    # 判据没变，脚换了——所以按网取，不按名字取。
-    d2_pin = dc._token_on(circuit, "D2", "AUX")
-    d2 = dc._pin_point(ctx, "D2", d2_pin, placed.poses, placed.origins)
-    assert d2 is not None, "the aux rectifier no longer reaches the aux net"
+    rectifier, net, owner = "C5", "HVDC", "T1"
+    run_pin = dc._token_on(circuit, rectifier, net)
+    run = dc._pin_point(ctx, rectifier, run_pin, placed.poses, placed.origins)
+    assert run is not None, (
+        f"the secondary rectifier no longer reaches {net}; the part this test "
+        f"measures has changed and its docstring has to say so"
+    )
     foreign = []
-    for pin in ctx.profile("T1").pins:
-        net = dc._part_nets(circuit, "T1").get(pin.number)
-        if net is None or net == "AUX":
+    for pin in ctx.profile(owner).pins:
+        pin_net = dc._part_nets(circuit, owner).get(pin.number)
+        if pin_net is None or pin_net == net:
             continue          # the rectifier's own net is not foreign
-        point = dc._pin_point(ctx, "T1", pin.number, placed.poses,
+        point = dc._pin_point(ctx, owner, pin.number, placed.poses,
                               placed.origins)
-        if point and dc._strictly_on_segment(point, d2, _anchor_of(ctx, placed)):
-            foreign.append((pin.number, net, point))
+        if point and dc._strictly_on_segment(point, run, _anchor_of(ctx, placed)):
+            foreign.append((pin.number, pin_net, point))
     assert not foreign, (
-        f"the aux run still crosses the transformer's foreign pins: {foreign}"
+        f"the secondary run still crosses the transformer's foreign pins: "
+        f"{foreign}"
     )
 
 
 def _anchor_of(ctx, placed):
-    """The owner's pin the aux rectifier hangs off — the run's start point."""
-    owner = ctx.slots["D2"].owner
-    token = dc._token_on(ctx.circuit, owner, "AUX")
+    """The owner's pin the branch hangs off — the run's start point."""
+    owner = ctx.slots["C5"].owner
+    token = dc._token_on(ctx.circuit, owner, "HVDC")
     return dc._pin_point(ctx, owner, token, placed.poses, placed.origins)
 
 

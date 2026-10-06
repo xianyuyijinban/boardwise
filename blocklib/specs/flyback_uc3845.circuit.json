@@ -4,10 +4,10 @@
   "parts": [
     {
       "id": "T1",
-      "symbolRef": "XFMR-XREE16-050624",
-      "value": "XREE16-050624 (卧式 5+5 骨架, 演示占位 — Lp/Np:Ns/Naux:Ns 绕组参数写属性)",
+      "symbolRef": "XFMR-WE-749118105",
+      "value": "749118105 (WE off-line transformer, 18.9:1, L=2.8mH, 两绕组 N1=1-3/N2=4-6, 2/5=NC — 岳 2026-10-04 亲手选)",
       "provenance": "engineer_confirmed",
-      "lcsc": "C49118510"
+      "lcsc": "C17189451"
     },
     {
       "id": "Q1",
@@ -62,20 +62,6 @@
       "value": "100pF 0603 C0G",
       "provenance": "engineer_confirmed",
       "lcsc": "C14858"
-    },
-    {
-      "id": "D2",
-      "symbolRef": "DIO-DO41-UF4007",
-      "value": "UF4007",
-      "provenance": "engineer_confirmed",
-      "lcsc": "C84067"
-    },
-    {
-      "id": "C7",
-      "symbolRef": "C0805",
-      "value": "22uF/25V X5R 0805",
-      "provenance": "engineer_confirmed",
-      "lcsc": "C45783"
     },
     {
       "id": "D3",
@@ -165,11 +151,9 @@
       "members": [
         "C10.2",
         "C6.2",
-        "C7.2",
         "R10.2",
         "R5.2",
-        "U5.2",
-        "T1.2"
+        "U5.2"
       ],
       "provenance": "engineer_confirmed"
     },
@@ -230,24 +214,6 @@
       "provenance": "engineer_confirmed"
     },
     {
-      "id": "VCC",
-      "class": "power",
-      "members": [
-        "C7.1",
-        "D2.2"
-      ],
-      "provenance": "engineer_confirmed"
-    },
-    {
-      "id": "AUX",
-      "class": "signal",
-      "members": [
-        "D2.1",
-        "T1.5"
-      ],
-      "provenance": "engineer_confirmed"
-    },
-    {
       "id": "VFB_NF",
       "class": "signal",
       "members": [
@@ -269,7 +235,7 @@
       "class": "signal",
       "members": [
         "D3.2",
-        "T1.6"
+        "T1.4"
       ],
       "provenance": "engineer_confirmed"
     },
@@ -292,8 +258,8 @@
         "C11.2",
         "C13.2",
         "R8.2",
-        "T1.10",
-        "U4.3"
+        "U4.3",
+        "T1.6"
       ],
       "provenance": "engineer_confirmed"
     },

@@ -2828,20 +2828,29 @@ def _dodge_foreign_pins(
 
     # The leg: anchor -> root, the stretch the **shared** pad travels. A foreign
     # pin here is 114's original case.
+    # 120: the escape **side** is decided before either leg is tested, not
+    # inside the first one. It used to be computed inside ``if blockers:`` while
+    # the **trail** walk below read it — so a branch whose anchor->root leg was
+    # clear but whose trail was not reached this function with ``sign`` unbound
+    # and raised ``UnboundLocalError`` instead of reporting a placement it could
+    # not fix. That is 053 sec.4's "a refusal without a reason": the compiler
+    # crashed instead of saying anything. Whether the leg has blockers is not a
+    # statement about which side is clear, so the two questions are now separate.
+    owner_centre = _body_centre(ctx, slot.owner, poses, origins)
+    sign = 1.0
+    if owner_centre is not None:
+        to_centre = (
+            owner_centre[0] - anchor[0], owner_centre[1] - anchor[1],
+        )
+        if abs(to_centre[0]) * abs(unit[0]) + abs(to_centre[1]) * abs(unit[1]) > 0.0:
+            sign = -1.0 if (
+                to_centre[0] * unit[0] + to_centre[1] * unit[1]
+            ) > 0.0 else 1.0
+
     blockers = _blockers_between(anchor, root, part_id)
     if blockers:
         # Away from the owner's own body: the run starts at the owner's pin, so
         # the clear side is the one the owner's centre is not on.
-        owner_centre = _body_centre(ctx, slot.owner, poses, origins)
-        sign = 1.0
-        if owner_centre is not None:
-            to_centre = (
-                owner_centre[0] - anchor[0], owner_centre[1] - anchor[1],
-            )
-            if abs(to_centre[0]) * abs(unit[0]) + abs(to_centre[1]) * abs(unit[1]) > 0.0:
-                sign = -1.0 if (
-                    to_centre[0] * unit[0] + to_centre[1] * unit[1]
-                ) > 0.0 else 1.0
         step = _snap(GAP + ctx.budget.channel * 0.0, ctx.budget.grid, 0.0)
         if step <= 0.0:
             step = ctx.budget.grid
@@ -3400,8 +3409,72 @@ def _order_step(
     # the pin's absolute coordinate into the origin's slot would move the part
     # by its own pin offset — the 116 draft's first bug, which put ``C1`` 60
     # units the wrong way on a pair whose pins sat on the body axis.
-    return _shift_origin(ctx, walking, index, current, target + sign * ctx.budget.grid,
-                         origins)
+    #
+    # 120: **where it lands keeps the part's own room, not just "past the
+    # reference".** An order kind states a *side* (``above`` is a side, not a
+    # coordinate), so landing every part on ``target + sign*grid`` satisfies any
+    # number of them by stacking them on one line — which is exactly what the
+    # flyback's clamp string did: four branches, four ``above(X, Q1)`` relations,
+    # one shared reference, and **four parts at the same y**. Their own horizontal
+    # wires then ran straight through a neighbour's pin, and
+    # ``readability._derive`` (which unions by coordinate) merged two nets into
+    # one — a ``netlist-partition-mismatch`` that has nothing to do with the
+    # order being satisfied.
+    #
+    # So the wanted coordinate is the side the order names **plus whatever room
+    # this part already had from the ones that went before it**: the distance it
+    # is being asked to keep clear by. A part moving alone is unaffected (its
+    # own separation is measured from the reference), and a part arriving second
+    # lands one lane further out, so the group reads as a group instead of a
+    # stack. Nothing is asked to be *exactly* anywhere: the checker reads a side
+    # with ``grid/2`` of slack, and this keeps a whole lattice step of it.
+    #
+    # The extra room is only spent when **somebody is already there**: the target
+    # this walk names is a whole coordinate, and if another part already sits on
+    # it, landing on it too is what stacks the group. If nobody is there, the
+    # part takes the plain step, which is the identity on every page where the
+    # order kinds do not compete for one coordinate — that is what keeps this
+    # pass byte-for-byte identical on the five shipped grammars (measured, see
+    # outputs/120/SUMMARY.md: 83/83 with this condition, 74/83 without it).
+    wanted = target + sign * ctx.budget.grid
+    if _contended_landing(ctx, origins, walking, index, target):
+        # Somebody is already standing where this order would put me. An order
+        # kind states a *side*, not a coordinate, so landing on the same point
+        # as the part that arrived first is not what it asked for — and it is
+        # actively harmful: two parts on one row wire to each other along a line
+        # that runs over a neighbour's pin, and ``readability._derive`` (which
+        # unions by coordinate) then merges two nets. The flyback's clamp string
+        # is the case: four branches, four ``above(X, Q1)`` relations, one shared
+        # reference, and all four on one y. Keeping this part the room it already
+        # had turns the stack back into a group; the order still holds, because
+        # it states a side and the checker reads it with ``grid/2`` of slack.
+        wanted = target + sign * (abs(current - target) + ctx.budget.grid)
+    return _shift_origin(ctx, walking, index, current, wanted, origins)
+
+
+def _contended_landing(
+    ctx: _Context,
+    origins: Mapping[str, tuple[float, float]],
+    walking: str,
+    index: int,
+    target: float,
+) -> bool:
+    """Is another part already on the coordinate this order walk lands on?
+
+    120. Read off the **current** layout, at the moment of the walk, rather than
+    off the binding: what matters is whether the landing spot is *occupied now*,
+    which is a question about the drawing in progress. Two parts on one coordinate
+    is the whole failure — the one that made the clamp string's wires short two
+    nets — so a page where nothing else is there is untouched, which is what keeps
+    the pass the identity on the five shipped grammars (83/83 byte-identical;
+    see outputs/120/SUMMARY.md).
+    """
+    for other, here in origins.items():
+        if other == walking:
+            continue
+        if abs(here[index] - target) <= ctx.budget.grid / 2.0:
+            return True
+    return False
 
 
 def _shift_origin(
@@ -3479,6 +3552,20 @@ def _order_step_near(
     excess = math.hypot(here_x - there_x, here_y - there_y) - ctx.budget.near_limit
     if excess <= 0.0:
         return False
+    # 120: one whole lattice step of the limit is spent **before** the trim, for
+    # the same reason 119 measured on this same pair (``near(C10, U5)``): the move
+    # is applied to an origin and then snapped onto the compilation lattice, so a
+    # trim that lands exactly on the limit lands up to half a step outside it —
+    # and the gate measures ``near`` with **no** tolerance
+    # (``_relation_holds``: ``hypot <= near_limit``), so 0.167 is a violation, not
+    # a rounding artefact. Spending the step up front makes the trim clear the
+    # limit *after* the snap instead of before it.
+    #
+    # A whole ``grid``, not ``grid/2``: the relaxation pass may take a step of its
+    # own on this pair afterwards (the ``above``/``near`` family both name it),
+    # and two half-steps are a whole one. Byte cost measured: none — 83/83
+    # identical (see outputs/120/SUMMARY.md).
+    excess += ctx.budget.grid
     # Only as far as the limit asks, never onto the reference. ``near`` is a
     # **distance with a budget**, not an equality: sliding the walking side all
     # the way onto the reference satisfies it and destroys the drawing — the

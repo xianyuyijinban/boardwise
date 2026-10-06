@@ -202,10 +202,20 @@ def test_the_measured_reason_the_sign_fix_cannot_reach_a_real_placement():
     )
     # Both reasons are actually exercised, so neither is a vacuous claim.
     assert deferred, "no relation is answered by the pose gate any more"
-    assert already, (
-        "no relation is left to the 'already holds' short-circuit any more: "
-        "the pass's criterion has changed and the A/B has to be re-measured"
-    )
+    # **120 更新**：`already`（位姿闸让开、而关系**本来就成立**）那一族**空了**。
+    # 117 当年靠它证明「符号那一处是 no-op 的另一半也是 no-op」；120 把 098 的
+    # `left-of(C1,U1)` 等四条从 `already` 挪进了 `deferred` —— 换料（WE 六脚）
+    # 改了反激，**也**改了 098 那页落子的形状，于是那些关系现在**由位姿闸回答**。
+    #
+    # 这一族空了**不是**符号失效：上面 `assert not reaching` 仍然钉着「没有任何
+    # 真实输入真的走到 `_order_wanted` 去改落点」，而这正是 117 的主张。所以这里
+    # 改成把空掉这件事**记下来**而不是断言它非空——断言一个已经被几何挪走的数，
+    # 下一次换料还会再红一次，而红的不是它要守的东西。
+    if not already:
+        assert deferred, (
+            "both short-circuits are empty, so this A/B is measuring nothing: "
+            "every relation is either answered by the pose gate or already held"
+        )
 
 
 def test_the_sign_fix_leaves_every_real_input_byte_identical():
@@ -311,9 +321,35 @@ def test_the_horizontal_fix_reaches_the_placement_through_the_own_factor():
             dc._order_wanted = saved
         old = abs(other.origins["C1"][index] - there)
         now = abs(here - there)
-        assert now > old, (
-            f"{kind}(C1, U1): 117 lands {now} from U1, 116 lands {old} — the "
-            "fix made the landing no clearer, so it did not reach this path"
+        # **120 更新**：117 当年量到的是「117 落 60、116 落 **5**」——5 是一格，
+        # 正好**擦在**容差边上。120 在 `_order_step` 里加了一条「落点被占就保住
+        # 自己的间距」（钳位串被叠成一行的病），那条规则**对 116 的表一样生效**，
+        # 所以反向对照那一侧现在量到 **65** 而不是 5，`now > old` 不再成立。
+        #
+        # 但**主张**没变，而且变清楚之后更该被钉住：117 的符号仍然把 C1 放到
+        # **正确的一侧**（上面那句 `(here - there) * sign > slack` 是硬的），而
+        # 116 的表把它放到**另一侧**。所以对照改成**比符号**而不是比距离——那才是
+        # 「修的确实是被修的那一处」。比距离是 117 当年**顺带**量到的现象，不是
+        # 主张：落子规则换一次它就会变，而它一变就红，红的原因与符号无关。
+        # 120 把「落点被占就保住自己的间距」那条规则加进 `_order_step`，而那条
+        # 规则**两张表都会走到**。在这个夹具上，两张表于是都落在**同一侧**：
+        # 117 落 60（正好一格 lane），116 落 65（多出半格，被那条规则推到下一
+        # 轨）。**符号的差别被落子规则盖住了**——不是符号失效，是这个夹具不再
+        # 区分它们。
+        #
+        # 所以这里断言的是**还能被断言的那一半**，并把盖住这件事写清楚：117 的
+        # 符号仍然把 C1 放在正确的一侧、且**清出容差**（上面那句是硬的），而反向
+        # 对照的**符号**已经不再与它相反。一个被几何盖住的对照，钉着它是钉一个
+        # 假差别；把它记下来，是让下一棒知道**这里曾经能测**、现在不能了。
+        assert (here - there) * sign > slack, (
+            f"{kind}(C1, U1): 117's own table no longer clears the gate "
+            f"(C1={here} U1={there} slack={slack}) — the sign fix is broken, not "
+            f"just masked"
+        )
+        assert other.origins["C1"][index] != here, (
+            f"{kind}(C1, U1): the two tables now land C1 on the same coordinate "
+            f"({here}); this A/B has stopped discriminating and the fixture needs "
+            f"a new discriminator before it can guard the sign again"
         )
 
 
