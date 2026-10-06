@@ -44,6 +44,8 @@ import json
 import pathlib
 import sys
 
+import pytest
+
 from boardwise.core.circuitspec import CircuitSpec
 from boardwise.core.presentationspec import PresentationSpec
 from boardwise.core.symbolprofile import SymbolPin, SymbolPose, SymbolProfile
@@ -496,31 +498,61 @@ def test_the_real_flyback_widens_and_still_refuses_honestly():
 # ================================ 5 换料带来的新拦路者（真数据，逐条量）
 
 
-def test_the_routing_blocker_is_measured_not_inferred():
-    """**新的断点在走线，不在位姿**——这一条把那个断点**量**出来，不是推断。
+# ================================ 5 119 的断点，作为**记录**保留（120 换料之后）
 
-    把关系闸**让开**（`_relation_failures` 短路，118 的预览工具用的是同一个手法）
-    之后逐档建候选：每一档仍然失败，而失败**全部**是同一条——
-    ``net 'HVDC' has a direct-wire obligation and its pins could not be joined
-    inside the searched corridor``。
 
-    为什么是它、为什么位姿救不了：三档 x 三档**九次**测量，**零次**成功。`HVDC`
-    的三个 pad（`C5.2` / `R15.2` / `T1.1`）在页面上落在同一条 y 上，x 分别是
-    190 / 360 / 60；`D3` 的体框正好压在 x=150 那段上。118b 探针量到的新 T1 体框
-    是 **101 x 136**（旧的五脚那颗 40 x 40），它把 `D3` 顶到了这条直连路径上，
-    而 `D3` 是**链件**、只有**一档**接受位姿——走不了。
+def _xree_era() -> bool:
+    """Is the page still on 119's seven-pin XREE part?
 
-    这一条只断言**可复算的那一半**（九次都失败、失败理由是 HVDC 直连）。
-    「为什么是 D3」那一条因果，落在 `outputs/119/SUMMARY.md` 里连同它的量法，
-    因为**断言一个坐标**很容易，而断言那个坐标**今天**还对，才是真话。
+    120 换了料（WE 749118105，六脚两绕组），所以这个文件最后两条**量的是
+    119 那一页**，不再是当前这一页。它们不删——删掉等于把 119 挖出来的病从
+    记录里擦掉，而那正是 118 当年不肯做的事——而是**先问一句现在是不是那一页**：
+    不是的话就 `skip`，并把「119 量到了什么、120 换料后它变成什么」写进 skip
+    的理由里，让缺口在 `pytest -rs` 里看得见。
     """
-    from boardwise.core.circuitspec import CircuitSpec as _Circuit
-    from boardwise.core.presentationspec import PresentationSpec as _Presentation
+    circuit = CircuitSpec.load(SPECS / "flyback_uc3845.circuit.json")
+    ref = next(part.symbol_ref for part in circuit.parts if part.id == "T1")
+    return ref == "XFMR-XREE16-050624"
+
+
+def _skip_if_not_xree() -> None:
+    if _xree_era():
+        return
+    pytest.skip(
+        "119 record: this measurement was taken on the seven-pin XREE16-050624 "
+        "(C49118510) that 119 put on the page. 120 replaced it with WE 749118105 "
+        "(C17189451, six pins, two windings) — 岳's call, and the page it "
+        "compiles is not the page this file measured. 119's finding is kept "
+        "here as a record rather than deleted: on the XREE part the 24 rungs "
+        "(3 spacings x 8 pose indices) ALL failed with both gates stood aside, "
+        "every one of them on `net 'HVDC' has a direct-wire obligation`, because "
+        "that part's measured body was 101x136 and it pushed the chain's D3 onto "
+        "the direct path between HVDC's three pads. On the WE part the body is "
+        "41x44 and 120 measured a different set of blockers (see "
+        "tests/test_120_island_placement.py and outputs/120/SUMMARY.md). The "
+        "number below is therefore a statement about a part that is no longer on "
+        "the page — which is exactly what a record is."
+    )
+
+
+def test_the_routing_blocker_is_measured_not_inferred():
+    """**119 的断点，作为记录**：XREE 那颗料下，24 档全灭于 `HVDC` 直连。
+
+    量法（当时）：把关系闸**让开**（`_relation_failures` 短路，118 的预览工具用的是
+    同一个手法）之后逐档建候选——3 间距 × 8 位姿 = 24 档，**零次**成功，理由**全部**
+    是 `net 'HVDC' has a direct-wire obligation and its pins could not be joined
+    inside the searched corridor`。
+
+    **120 更新**：这一页已经换料，所以这条**先问是不是 119 那一页**。不是就 skip，
+    并把当时量到的东西整段写进理由——不删，是因为删掉一条测过的断点，和把一条没
+    测过的断点写成结论，是同一种谎。
+    """
+    _skip_if_not_xree()
+    from boardwise.core.presentationspec import PresentationSpec
     import test_113_flyback_grammar as t113
 
-    circuit = _Circuit.load(SPECS / "flyback_uc3845.circuit.json")
-    presentation = _Presentation.load(
-        SPECS / "flyback_uc3845.presentation.json")
+    circuit = CircuitSpec.load(SPECS / "flyback_uc3845.circuit.json")
+    presentation = PresentationSpec.load(SPECS / "flyback_uc3845.presentation.json")
     book = t113._library_from(SPECS / "flyback_uc3845.library.json")
     binding = dc.bind_grammar(circuit, presentation, book)
     prepared = dc._prepare(circuit, presentation, binding, book,
@@ -533,7 +565,7 @@ def test_the_routing_blocker_is_measured_not_inferred():
     reasons: list[str] = []
     built_count = 0
     try:
-        for scale in (1.0, 1.5, 2.2):
+        for scale in ctx.budget.spacing_ladder:
             for index in (0, 2):
                 built, failure, _ = dc._build_candidate(
                     ctx, dc._Variant(label=f"x{scale}-{index}", scale=scale,
@@ -559,39 +591,27 @@ def test_the_routing_blocker_is_measured_not_inferred():
 
 
 def test_the_swapped_transformers_body_is_what_moved_d3_onto_the_bus_row():
-    """**因果**那一半：把 T1 的体框换成**体内端下界**，同一个电路就编出来了。
+    """**119 的因果，作为记录**：XREE 的体框把 `D3` 顶到了 `HVDC` 那一行。
 
-    119 反复量到的那件事，两行就写完：118b 探针给新 T1 的体框是**实测 bbox**
-    **101 x 136**；按同一批脚尖推出的体内端下界是 **90 x 100**。体框换成下界、
+    两行就写完 119 反复量到的那件事：118b 探针给 XREE 的体框是**实测 bbox**
+    **101 × 136**；按同一批脚尖推出的体内端下界是 **90 × 100**。体框换成下界、
     **脚一根不动**，`HVDC` 的直连立刻通得过去。
 
-    这不是说下界「更对」——**实测 bbox 更对**，它是读回来的，骨架中间的绕组空档
-    真的占着地。这一条量的是**因果**：拦着走线的是**体框的面积**把 `D3` 推到了
-    那条行上，而不是脚位、不是 token、也不是位姿。**换料是岳的裁定，绕线策略是
-    编译器的事**，所以断点写在这里而不是自己去改绕线。
-
-    断言写成「下界能编出来」，而不是「实测 bbox 编不出来」——后者今天是真的，
-    但它是一条会随岳下一次换料而失效的话，而前者量的是一个**机制**。
+    **120 更新**：同 119 的换料。WE 那颗的体框是 41 × 44，比 119 那颗小得多，
+    而 120 在它上面量到的病是**别的**两条（孤岛落子把支路按 `lane*scale*(1+i)`
+    推出 `near` 半径、钳位串被松弛趟叠到一行）。所以这条同样先问是不是 119 那一页。
     """
-    from boardwise.core.circuitspec import CircuitSpec as _Circuit
-    from boardwise.core.presentationspec import PresentationSpec as _Presentation
+    _skip_if_not_xree()
+    from boardwise.core.presentationspec import PresentationSpec
     import test_113_flyback_grammar as t113
 
-    circuit = _Circuit.load(SPECS / "flyback_uc3845.circuit.json")
-    presentation = _Presentation.load(
-        SPECS / "flyback_uc3845.presentation.json")
+    circuit = CircuitSpec.load(SPECS / "flyback_uc3845.circuit.json")
+    presentation = PresentationSpec.load(SPECS / "flyback_uc3845.presentation.json")
     book = t113._library_from(SPECS / "flyback_uc3845.library.json")
 
     inward = {"left": (1.0, 0.0), "right": (-1.0, 0.0),
               "up": (0.0, -1.0), "down": (0.0, 1.0)}
     profile = book["XFMR-XREE16-050624"]
-    # The pin **lengths** are read from the library file, not from the loaded
-    # profile: the schema this build validates against does not carry `length`
-    # through, so the loaded pins have none and the inner ends are not
-    # computable from them. The tips and directions the profile *does* carry are
-    # checked against that same file by
-    # ``test_every_body_box_is_the_measured_inner_ends_and_nothing_wider``'s
-    # sibling in 118, so nothing here rests on a value the loader invented.
     declared = next(
         entry for entry in json.loads(
             (SPECS / "flyback_uc3845.library.json").read_text(encoding="utf-8")
@@ -604,12 +624,14 @@ def test_the_swapped_transformers_body_is_what_moved_d3_onto_the_bus_row():
             "profile; the two are supposed to be the same symbol"
         )
     inner = [
-        (by_number[pin.number]["tip"][0]
-         + inward[by_number[pin.number]["direction"]][0]
-         * by_number[pin.number]["length"],
-         by_number[pin.number]["tip"][1]
-         + inward[by_number[pin.number]["direction"]][1]
-         * by_number[pin.number]["length"])
+        (
+            by_number[pin.number]["tip"][0]
+            + inward[by_number[pin.number]["direction"]][0]
+            * by_number[pin.number]["length"],
+            by_number[pin.number]["tip"][1]
+            + inward[by_number[pin.number]["direction"]][1]
+            * by_number[pin.number]["length"],
+        )
         for pin in profile.pins
     ]
     lower_bound = (

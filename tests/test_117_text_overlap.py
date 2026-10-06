@@ -95,7 +95,7 @@ def _first_plan(ctx):
     六条测试各自要一张 plan。不缓存的话，同一次测量要重做六遍——那不是严格，
     是浪费。缓存的是**测量结果**，不是结论。
     """
-    key = id(ctx)
+    key = (ctx.circuit.sha256(), ctx.presentation.sha256(), id(ctx.book))
     if key in _PLAN_CACHE:
         return _PLAN_CACHE[key]
     real = rb.check

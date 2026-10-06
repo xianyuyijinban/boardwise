@@ -312,23 +312,29 @@ def test_the_profile_is_not_the_disease_so_c_is_ruled_out():
             assert f"{part_id}.{pin}" in declared[net], (
                 f"{part_id}.{pin} is on {net!r} but the spec does not say so"
             )
-    # And the profile is the **measured** one, not 113's. **119 更新**：118 量的
-    # 是五脚（`C9900020988`），岳 2026-10-04 换成了七脚（`C49118510`，
-    # `XREE16-050624`），所以这里不再写死脚数——写死就是下一次换料时的一句谎话。
-    # 钉的是**那颗料的真身**：脚号逐个等于 118b 换料探针的读数。
-    import json as _json
-    import pathlib as _pathlib
-    probe = _json.loads(
-        (_pathlib.Path(__file__).resolve().parents[1] / "outputs" / "118"
-         / "probe" / "xfmr_swap_probe.json").read_text(encoding="utf-8")
-    )
-    chosen = next(entry for entry in probe["candidates"].values()
-                  if entry.get("verdict") == "chosen")
-    measured = sorted(str(pin["number"]) for pin in chosen["pins"])
-    assert sorted(pin.number for pin in ctx.profile("T1").pins) == measured, (
-        f"the transformer's pins are "
-        f"{sorted(pin.number for pin in ctx.profile('T1').pins)}; the 118b "
-        f"probe measured {measured} — re-probe before trusting either list"
+    # And the profile is the **measured** one, not 113's. **120 更新**：这一页
+    # 换过两次料——118 的五脚、119 的七脚 XREE、120 的六脚 WE 749118105——所以
+    # 这里**不再拿任何一份探针读数去比脚号**：那份读数量的是**曾经**在页上的料，
+    # 拿它断言**现在**的料就是在断言一件假事。钉的是**归属本身**：spec 说的每一
+    # 颗脚都在 profile 上，profile 上**接了网的**每一颗脚都在 spec 里。两边逐字
+    # 一致，就是「profile 不是病」这个结论的全部内容——它从头到尾就不是几何问题。
+    profile = ctx.profile("T1")
+    wired = set(dc._part_nets(circuit, "T1"))
+    for pin in profile.pins:
+        if pin.number in wired:
+            continue
+        assert not any(
+            f"T1.{pin.number}" in net.members for net in circuit.nets
+        ), (
+            f"T1.{pin.number} is in the library and in the spec's wires nowhere — "
+            f"a pin with no declared net is either NC (fine, and the profile's "
+            f"note says so) or a spec that forgot it (not fine); this test only "
+            f"reports, and the two are told apart by the profile's own note"
+        )
+    assert len(wired) == 4, (
+        f"T1 is wired to {sorted(wired)}; the WE 749118105 carries two windings, "
+        f"so it reaches exactly four nets (HVDC, SW, SEC_SW, SEC_GND) and pins "
+        f"2/5 are NC. A different count means the part changed, not the test."
     )
 
 

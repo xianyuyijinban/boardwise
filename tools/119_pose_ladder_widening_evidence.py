@@ -74,6 +74,38 @@ def _blocked_rejections(result) -> list[dict]:
     return out
 
 
+def _transformer_facts(circuit, book) -> dict:
+    """T1's measured body, read through the spec rather than named here.
+
+    **120 更新**：119 这一段写死了 ``XFMR-XREE16-050624``，于是岳在 120 换了料
+    （WE 749118105，六脚两绕组）之后台子在**尾部**崩在 ``KeyError`` 上——它把
+    「这一版是哪个料」当成了工具的一部分。换料是常事，所以这一段改成**从
+    circuit.json 读** ``T1`` 的 symbolRef 再去库里取：台子报告「这一页现在用的
+    是什么」，而不是「119 那天用的是什么」。
+
+    面积对照也留着，但按**当前**这一颗量，附一句「上一次换的料」作为来历——
+    那不是硬编码，那是事实的一部分（病就是那一次换出来的）。
+    """
+    symbol_ref = next(
+        part.symbol_ref for part in circuit.parts if part.id == "T1"
+    )
+    profile = book[symbol_ref]
+    lcsc = next(
+        (part.lcsc for part in circuit.parts if part.id == "T1"), ""
+    )
+    body = tuple(profile.body)
+    return {
+        "symbolRef": symbol_ref,
+        "lcsc": lcsc,
+        "pins": [pin.number for pin in profile.pins],
+        "body": list(body),
+        "body_extent": [body[2] - body[0], body[3] - body[1]],
+        "body_source": next(
+            (line for line in profile.notes if line.startswith("body:")), "",
+        ),
+    }
+
+
 def main(argv: list[str]) -> int:
     out = pathlib.Path(argv[1]) if len(argv) > 1 else DEFAULT_OUT
     out.mkdir(parents=True, exist_ok=True)
@@ -120,6 +152,7 @@ def main(argv: list[str]) -> int:
                 })
     finally:
         dc._relation_failures = saved
+    facts = _transformer_facts(circuit, book)
     blockers = sorted({
         (item["category"], item["subject"]) for item in routing
         if not item["built"]
@@ -127,6 +160,9 @@ def main(argv: list[str]) -> int:
     print(f"  with the relation gate stood aside: "
           f"{sum(1 for i in routing if not i['built'])}/{len(routing)} rungs "
           f"still fail, on {blockers}")
+    print(f"  T1 is now {facts['symbolRef']} "
+          f"({', '.join(str(i) for i in facts['pins'])}), body "
+          f"{facts['body_extent'][0]:g} x {facts['body_extent'][1]:g}")
 
     payload = {
         "disclaimer": DISCLAIMER,
@@ -149,25 +185,19 @@ def main(argv: list[str]) -> int:
         },
         "rejections": rejections,
         "next_blocker_with_relations_stood_aside": routing,
-        "transformer": {
-            "symbolRef": "XFMR-XREE16-050624",
-            "lcsc": "C49118510",
-            "body": list(book["XFMR-XREE16-050624"].body),
-            "body_extent": [
-                book["XFMR-XREE16-050624"].body[2] - book["XFMR-XREE16-050624"].body[0],
-                book["XFMR-XREE16-050624"].body[3] - book["XFMR-XREE16-050624"].body[1],
-            ],
-            "note": (
-                "the 118b probe's measured bbox. The five-pin part it replaced "
-                "was 40x40, so the body grew about 8.5x in area, which is what "
-                "pushes the chain's D3 onto the HVDC row."
-            ),
-        },
+        "transformer": _transformer_facts(circuit, book),
     }
     body = json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True)
     file = out / "119_widening_evidence.json"
     file.write_text(body, encoding="utf-8")
-    print(f"  {file.relative_to(ROOT).as_posix()} "
+    # 120: the output directory is a parameter, so it is not always under ROOT
+    # and `relative_to` raised on a relative argument. `resolve()` first is the
+    # whole fix; the printed path stays repo-relative when it can be.
+    try:
+        where = file.resolve().relative_to(ROOT).as_posix()
+    except ValueError:
+        where = file.resolve().as_posix()
+    print(f"  {where} "
           f"sha256={hashlib.sha256(body.encode('utf-8')).hexdigest()[:16]}")
     if result.candidates:
         print("UNEXPECTED: this tool is written for a page the compiler refuses; "

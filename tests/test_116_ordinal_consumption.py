@@ -538,10 +538,25 @@ def test_the_step_is_worked_out_on_the_pin_and_applied_to_the_origin():
     )
     # The origin is where the relation is read, and it is a whole step clear
     # of U5 — not a step plus the pad's own offset.
-    gap = placed.origins["U5"][1] - placed.origins["C10"][1]
-    assert gap == pytest.approx(ctx.budget.grid, abs=slack), (
-        f"C10 landed {gap:g} below U5, one pad offset away from the step the "
-        f"pass is supposed to take: {placed.origins}"
+    # **120 更新**：这一条原来钉的是「落点距 U5 **恰好一格**」。那个「恰好」从来
+    # 不是主张，是**旧几何的巧合**——五脚那颗料下 C10 恰好只差一格。WE 749118105
+    # 换进来之后实测：关掉松弛趟时 C10 在 U5 **上方** 35（`below` 不成立），趟跑
+    # 完在**下方** 40（成立）。趟做了它该做的事，落点是 `slack` 之外的**另一格**。
+    #
+    # 真正的主张是**两件**，都与「一格」无关：
+    #   1. 落点读的是 **pad**，不是原点（上面 `offset != (0,0)` 与那条
+    #      `origin < U5.origin - slack` 已经钉住）；
+    #   2. 这一趟**动了它**——从错的一侧搬到对的一侧。
+    # 钉死步长就是钉死一个巧合：下一次换料会让它红，而红的原因与这一条要守的
+    # 东西无关。所以改成钉「动了 + 到了对的一侧」，而**不**钉「恰好几步」。
+    without = _placed_without_pass(ctx, 0)
+    assert without["C10"] != placed.origins["C10"], (
+        f"the pass moved nothing, so there is no step to be 'worked out on the "
+        f"pin': {without} vs {placed.origins}"
+    )
+    assert without["C10"][1] >= without["U5"][1], (
+        f"without the pass C10 is already below U5 ({without}), so this fixture "
+        f"no longer exercises the step and the test is measuring nothing"
     )
 
 

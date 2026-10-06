@@ -993,7 +993,13 @@ def test_the_layout_stage_no_longer_refuses_the_feedback_row():
 
 
 def test_the_flyback_page_is_refused_and_says_which_relations_are_left():
-    """**119 更新**：换料之后拦着的东西换了，这条跟着换——但**形状**不变。
+    """**120 更新**：又换了一次料，这条再跟着换一次——**形状**仍然不变。
+
+    **120 的现实**：岳选了 WE 749118105（`C17189451`，六脚两绕组，pin 2/5 是 NC），
+    辅助链整条拆掉。118 的「五脚装不下三绕组」**前提没了**（两绕组要的端数 4 <
+    脚数 6），119 的「加宽能救 `same-column`」**照旧成立**，而整页**仍然编译不出来**
+    ——这次拦着的是 120 量到的两条新病（孤岛落子、走廊压线），都不是位姿。
+
 
     118 的版本写的是「反激整页被五脚变压器拦着」。岳 2026-10-04 深夜换了料：
     T1 变成 `C49118510`（`XREE16-050624`，118b 只读探针实测**七脚**），辅助绕组
@@ -1011,12 +1017,16 @@ def test_the_flyback_page_is_refused_and_says_which_relations_are_left():
       `same-column` **确实**被清掉了（见
       `tests/test_119_pose_ladder_widening.py` 的合成单测）——所以这一拨不是
       拦路的了。
-    * **第二拨（走线，本棒没治）**：加宽之后的每一档都改被**另一条**关系或
-      **布线**拒掉，最后收敛到 `net 'HVDC' has a direct-wire obligation and its
-      pins could not be joined inside the searched corridor`。这是**新料**带来的：
-      118b 探针量到的 T1 体框是 **101 × 136**（旧五脚那颗是 40 × 40），它把 `D3`
-      顶到 `HVDC` 那三个 pad 的直连路径上，而 `D3` 是**链件**、只有一档接受位姿，
-      走不了。**换料是岳的裁定，绕线策略是编译器的事**——本棒如实记下断点。
+    * **第二拨（120 量到的两条，都不是位姿）**：
+      - **孤岛落子**：`_place` 给每个 (owner, 方向) 组的第 `i` 颗支路
+        `lane*scale*(1+i)`，在 `spacing=2.2` 上是 `132*(1+2) = 396`——**在加 anchor
+        偏移之前**就超了 `near_limit=300`。治的是**落子**，尺子一个字没动。
+      - **走廊**：`net 'HVDC' / 'SEC_12V' / 'SW' has a direct-wire obligation …`。
+        **120 量清了它不是走廊窄**：`SEARCH_MARGIN=160` 不是瓶颈，病是钳位串四颗
+        被 116 的松弛趟拉到**同一条 y**（`above(X, Q1)` 四条共用一个参照），于是同串
+        两颗之间的横线**正好压过旁边那颗的脚**；`readability._derive` 按坐标并结，
+        一根外网线压住别网脚就把两个网并成一个（`netlist-partition-mismatch`）。
+        120 逐脚量到 **4 处**这样的压线。
 
     断言写成真形状：编译不过、**每一个**拒绝都被点名、点名的**不是一句含糊的
     「排不出来」**、而且加宽确实**发生**了（在 notes 里，不是在沉默里）。

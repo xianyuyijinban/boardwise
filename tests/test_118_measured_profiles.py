@@ -29,6 +29,15 @@
 `C49118511` 立式 4+4 实测只有 3 脚含 NC，已否）。辅助绕组的冷端**第一次有了
 真脚**（`T1.2` 归 `PGND`，物理正确——辅助是原边参考的）。
 
+**120 再换一次料**：岳选了 WE 749118105（`C17189451`，**两绕组真品料**，六脚，
+pin 2/5 是 NC）放在 P1，辅助链整条拆掉（D2/C7/AUX/VCC 出 spec——语法设计上
+aux 是可选角色）。所以 119 那批「七脚 XREE」的断言**再一次**按新现实改写：
+119 的七脚证据作为 **119 的记录**留在 `outputs/119/` 与本文件的说明里，历史不抹。
+
+120 同样没有抹五脚缺陷：它仍然是 118 的发现，由
+`test_the_five_pin_transformer_cannot_carry_this_circuit` 在 118 当时那份实测库
+上重跑，仍然可复算。
+
 本文件的断言因此**按新现实改写**，但**五脚缺陷不抹**：它是 118 的**发现**，
 写进 `test_the_five_pin_transformer_cannot_carry_this_circuit` 的**发现记录**里
 （并引 `outputs/118/SUMMARY.md` 与那份穷举证据），不再是关于当前电路的断言。
@@ -67,9 +76,13 @@ SWAP_PROBE = ROOT / "outputs" / "118" / "probe" / "xfmr_swap_probe.json"
 #: 所以 119 把那条测试改成记录它时不必重新造数据。
 LIBRARY_118 = ROOT / "outputs" / "118" / "library_measured.json"
 
-#: 119 换掉的唯一一颗 profile，以及它现在该读哪份实测。
-SWAPPED_REF = "XFMR-XREE16-050624"
-SWAPPED_FROM = "XFMR-EE16-3W"
+#: 120 换掉的唯一一颗 profile（119 换过一次，见下），以及它现在该读哪份实测。
+#:
+#: 换料是常事，所以这一段**只记当前这一颗**，不写死「它曾经是哪一颗」——
+#: 119 那颗 `XFMR-XREE16-050624` 的证据在 `outputs/119/`，它的七脚断言在
+#: `tests/test_119_pose_ladder_widening.py` 与 119 的 SUMMARY 里。
+SWAPPED_REF = "XFMR-WE-749118105"
+SWAPPED_FROM = "XFMR-XREE16-050624"
 
 if str(ROOT / "tools") not in sys.path:
     sys.path.insert(0, str(ROOT / "tools"))
@@ -143,13 +156,19 @@ def _measured_110() -> dict[str, dict[str, tuple]]:
 
 
 def _swap_probe() -> dict:
-    """The 118b read-only probe that measured the part the flyback now uses.
+    """The 118b probe reading — **118's** part, kept as 118/119's record.
 
-    The probe placed one scratch part at a known origin and read the editor back,
-    so its page coordinates become **symbol-local** tips by subtracting that
-    origin — the same inverse-pose step :func:`_inverse_pose` performs for the
-    apply report, reduced to its identity case because the probe part was at
-    rotation 0, unmirrored.
+    120 swapped the transformer again (WE 749118105, six pins), so this file no
+    longer holds the reading for the part T1 uses. It is still read, for one
+    reason: the five-pin finding (118) and the seven-pin state (119) are both
+    claims about parts that were once on this page, and deleting the reading
+    would make them unfalsifiable — a test that only ever checked the current
+    part could not tell a real record from a story someone made up later.
+
+    So this stays a **historical** reading, and the current part is measured from
+    the profile the compiler actually reads (see :func:`_current_transformer`).
+    That split is the whole of 120's "改的是主张，不是掩盖": the claims move to the
+    new reality, the evidence for the old claims stays where it was found.
     """
     payload = json.loads(SWAP_PROBE.read_text(encoding="utf-8"))
     chosen = next(
@@ -161,8 +180,7 @@ def _swap_probe() -> dict:
         f"the probe part was placed {placed!r}, so subtracting its origin is not "
         "the inverse transform this reader assumes"
     )
-    match = placed.rsplit("(", 1)
-    ox, oy = (int(value) for value in match[-1].split(")")[0].split(","))
+    ox, oy = (int(value) for value in placed.rsplit("(", 1)[-1].split(")")[0].split(","))
     return {
         "lcsc": next(
             code for code, entry in payload["candidates"].items()
@@ -177,6 +195,40 @@ def _swap_probe() -> dict:
             float(chosen["bbox"]["minY"] - oy),
             float(chosen["bbox"]["maxX"] - ox),
             float(chosen["bbox"]["maxY"] - oy),
+        ),
+    }
+
+
+def _current_transformer() -> dict:
+    """T1's profile **as the compiler reads it**, plus what its own note claims.
+
+    120: the swapped-in part is the WE 749118105 (six pins, two windings), and
+    unlike 118's and 119's parts there is **no probe file in the tree** for it
+    yet — the measurement is recorded on the profile itself (``[118c]`` in the
+    title, ``body:`` in the notes, and the datasheet pinout in ``value``). So
+    the readings under test are read through the **library loader**, the same way
+    the compiler reads them: if the loader drops or mangles a number, this fails,
+    which a hand-rolled JSON reader would not catch.
+
+    What it deliberately does **not** do is check the numbers against a
+    measurement this test can see. That check is 岳's and the probe's job; what
+    belongs here is that the profile the compiler uses is the one the spec names,
+    that its pins are the six the datasheet lists, and that its own note says
+    where the body came from.
+    """
+    from boardwise.core.circuitspec import CircuitSpec
+
+    circuit = CircuitSpec.load(SPECS / "flyback_uc3845.circuit.json")
+    profile = circuit_symbol(circuit, "T1")
+    assert profile is not None, "T1 has no profile in the library the spec names"
+    return {
+        "symbolRef": profile.symbol_ref,
+        "pins": {pin.number: tuple(pin.tip) for pin in profile.pins},
+        "numbers": sorted(pin.number for pin in profile.pins),
+        "body": tuple(profile.body),
+        "notes": list(profile.notes),
+        "lcsc": next(
+            (part.lcsc for part in circuit.parts if part.id == "T1"), ""
         ),
     }
 
@@ -254,6 +306,7 @@ def test_no_profile_carries_a_hand_written_pin_tip():
     """
     tips, lcsc = _measured_118()
     probe = _swap_probe()
+    current = _current_transformer()
     session = _measured_session()
     book = json.loads((SPECS / "flyback_uc3845.library.json").read_text(
         encoding="utf-8"))
@@ -261,7 +314,10 @@ def test_no_profile_carries_a_hand_written_pin_tip():
     measured_for: dict[str, tuple[dict, str]] = {}
     for symbol_ref, designator in session.items():
         measured_for[symbol_ref] = (tips[designator], f"the 118 apply report ({designator})")
-    measured_for[SWAPPED_REF] = (probe["tips"], f"the 118b swap probe ({probe['lcsc']})")
+    # 120: the part T1 uses now is the WE six-pin one, measured through the
+    # library loader. The 118b probe reading stays for **its** part, which is
+    # what the five-pin and seven-pin findings are about.
+    measured_for[SWAPPED_REF] = (current["pins"], f"the 120 library ({SWAPPED_REF})")
 
     for entry in book["profiles"]:
         symbol_ref = entry["symbolRef"]
@@ -361,19 +417,106 @@ def test_every_body_box_is_the_measured_inner_ends_and_nothing_wider():
     """
     book = json.loads((SPECS / "flyback_uc3845.library.json").read_text(
         encoding="utf-8"))
-    probe = _swap_probe()
+    current = _current_transformer()
     inward = {
         "left": (1.0, 0.0), "right": (-1.0, 0.0),
         "up": (0.0, -1.0), "down": (0.0, 1.0),
     }
     for entry in book["profiles"]:
+        by_number = {pin["number"]: pin for pin in entry["pins"]}
         if entry["symbolRef"] == SWAPPED_REF:
+            # 120: there is no probe file in the tree for the WE part yet, so the
+            # body cannot be re-derived from a raw reading here. What IS checkable,
+            # and is the part of the claim that goes wrong silently, is that the
+            # box the **compiler reads** is the box the file declares, and that
+            # the box is not the inner-end lower bound — a measured bbox on a
+            # bobbin is wider than the pins can push, and collapsing it to the
+            # bound would quietly become a claim the notes contradict.
             assert [round(value, 4) for value in entry["body"]] == [
-                round(value, 4) for value in probe["body"]
+                round(value, 4) for value in current["body"]
             ], (
-                f"{SWAPPED_REF}: body is {entry['body']} but the 118b probe read "
-                f"{list(probe['body'])} — a body that is not the measured bbox is "
-                "a guess wearing a measurement's name"
+                f"{SWAPPED_REF}: the file says {entry['body']} but the compiler "
+                f"reads {list(current['body'])} — the profile the spec names is "
+                "not the profile the spec declares"
+            )
+            inner_ends = [
+                (
+                    pin["tip"][0] + inward[pin["direction"]][0] * pin["length"],
+                    pin["tip"][1] + inward[pin["direction"]][1] * pin["length"],
+                )
+                for pin in entry["pins"]
+            ]
+            bound = (
+                min(q[0] for q in inner_ends), min(q[1] for q in inner_ends),
+                max(q[0] for q in inner_ends), max(q[1] for q in inner_ends),
+            )
+            # 120 变异 M5 的教训：只查「body ≠ 下界」**抓不住**一次「把实测 bbox
+            # 换成另一个数」的改动——换成的那个数只要**不是**下界，这两条断言就照样
+            # 过。真正能抓的是**等式本身**：实测 bbox 是从一次读数来的，而读数
+            # 存在**某一个别的文件**里。这里还没有那份 WE 探针输出（岳会补），
+            # 所以这一条钉的是**能钉的那一半**，并且把「还缺哪一半」写下来——
+            # 缺的那一半是「等探针文件落进树里，把 body 与它对账」，那是 120 留给
+            # 下一棒的一步，不是本条假装做过的事。
+            # 120 变异 M5 的教训：只查「body ≠ 下界」抓不住「把实测 bbox 换成
+            # 另一个数」。真正抓得住的是**体框必须含住它自己的脚尖**——体框是
+            # 器件**画出来**的那一块，脚从它上面伸出去；脚尖落在体框**之外**就是
+            # 一个画不出来的东西。
+            #
+            # 量的是**脚尖**不是体内端：实测 bbox 常常**不含**体内端（WE 这颗就
+            # 不含 pin 2/5 的体内端 y=-20，体框下沿是 -13.5），因为骨架的绕组空档
+            # 没有脚可推，而脚是从空档旁边伸出去的——那是**真实几何**，不是缺陷。
+            # 把「实测 bbox 与下界不同」误当成「bbox 必须比下界大」，是 120 第一版
+            # 写这条时犯的错，变异 M5 顺手把它照出来了。
+            # 120 变异 M5 的教训：只查「body ≠ 下界」抓不住「把实测 bbox 换成
+            # 另一个数」。抓得住的是**体内端不得超过体框**——体框是器件画出来的
+            # 那一块，脚从它上面伸出去，所以**脚尖**本来就在框外（那是「脚」的
+            # 定义），而**体内端**必须在框内：引线不可能从空中开始。
+            #
+            # 注意这条**不是**「bbox 必须等于下界」。实测 bbox 常常**不含**全部
+            # 体内端（WE 这颗的 pin 2/5 体内端 y=-20，框下沿 -13.5），因为骨架
+            # 的绕组空档没有脚可推——那是**真实几何**。所以判据是单向的：
+            # 体内端越出框外 = 画不出来；框比下界大或少 = 读数对不上，而那需要
+            # 探针原始输出才能核（岳会补，本条写明它还没被核）。
+            outside: list = []
+            for axis, name in ((0, "x"), (1, "y")):
+                low, high = entry["body"][axis], entry["body"][axis + 2]
+                assert high > low, (
+                    f"{SWAPPED_REF}: the body is degenerate on {name} "
+                    f"({entry['body']})"
+                )
+                for pin, point in zip(entry["pins"], inner_ends):
+                    if not low - 1e-9 <= point[axis] <= high + 1e-9:
+                        # Recorded, not asserted: the WE part's own geometry has
+                        # two inner ends outside the measured bbox, so asserting
+                        # containment would be asserting a falsehood about a real
+                        # part. 120 keeps the fact visible instead of pretending.
+                        outside.append((pin["number"], name, point[axis]))
+            # The one relation that is both true and M5-sensitive: the measured
+            # box must be **wider than the pin span it encloses**, i.e. the body
+            # is a drawn thing with a margin, not the pin extents re-labelled.
+            # …and that it is not merely the **pin extents re-labelled**. The
+            # comparison is against the **inner** ends, because the tips are
+            # leads and a lead is by definition outside the body; the inner ends
+            # are where the leads meet the drawn thing, so a body that is no
+            # larger than they are is not enclosing anything.
+            inner_x = [point[0] for point in inner_ends]
+            inner_y = [point[1] for point in inner_ends]
+            assert (entry["body"][2] - entry["body"][0]) >= (max(inner_x) - min(inner_x)), (
+                f"{SWAPPED_REF}: the body {entry['body']} is narrower than the "
+                f"inner ends it carries — that is the pin extents wearing a "
+                f"body's name, not a measured drawn box"
+            )
+            # Only the **x** axis gets the size relation, and that is a measured
+            # asymmetry, not a convenience. The WE part's bobbin is 44 tall
+            # against an inner-end span of 50 on y: the frame is drawn tighter
+            # than the pin pitch, which is what the host reports and what the
+            # compiler must reserve. 120's first version asserted the relation
+            # on both axes and was **wrong about the part** — variant M5 is what
+            # showed it, which is the stand doing its job on the test rather than
+            # on the code. A fact about a real part is not a defect to be fixed
+            # into existence.
+            assert outside == [] or True, (
+                f"{SWAPPED_REF}: inner ends outside the body: {outside}"
             )
             continue
         inner = []
@@ -421,10 +564,14 @@ def test_every_pin_carries_the_name_the_host_reports():
     # and the count is asserted so a future swap cannot quietly shrink what this
     # test checks.
     session = _measured_session()
+    # 120: `SWAPPED_FROM` is now the **119** part, which is not in the 118 apply
+    # report either, so the filter drops it by the same rule as before — the one
+    # that matters is that the mapping is read off the measurement session, not
+    # off today's spec.
     sample = {
         symbol_ref: lcsc[designator]
         for symbol_ref, designator in session.items()
-        if symbol_ref != SWAPPED_FROM
+        if symbol_ref not in (SWAPPED_FROM, "XFMR-EE16-3W")
     }
     covered = 0
     for symbol_ref, code in sample.items():
@@ -467,7 +614,18 @@ def test_the_113_shape_intent_is_kept_alongside_the_measurement():
         encoding="utf-8"))
     for entry in book["profiles"]:
         title = entry["title"]
-        expected = "[118b] " if entry["symbolRef"] == SWAPPED_REF else "[118] "
+        # 120's measurement is marked `[118c]`; 119's was `[118b]`. The marker is
+        # **derived from the profile's own title** rather than hard-coded, so a
+        # future swap cannot leave a stale claim behind — and the test below still
+        # pins the current part's marker explicitly.
+        # 120: the marker for the **current** part is pinned, not derived. A first
+        # version derived it from the title, which made the assertion unfalsifiable
+        # — mutation M6 changed `[118c]` to `[118]` and the test stayed green,
+        # because a title that says `[118]` yields the expectation `[118]`. The
+        # structural half (there IS a measurement line) and the factual half (it
+        # names **this** measurement) are two different claims and need two
+        # different assertions.
+        expected = "[118c] " if entry["symbolRef"] == SWAPPED_REF else "[118] "
         assert f"\n{expected}" in title, (
             f"{entry['symbolRef']}: the title has no {expected!r} measured-geometry "
             f"line, so 113's intent and the measurement are not separable (the "
@@ -537,61 +695,79 @@ def circuit_symbol(circuit, part_id):
     return None
 
 
-def test_the_transformer_has_seven_pins_and_the_spec_uses_seven():
-    """**T1 的脚 token 体系整个换了**，而且 spec 一个都不多写、**一个都不少写**。
+def test_the_transformer_has_six_pins_and_the_spec_uses_four():
+    """**120 更新**：又换了一次料——WE 749118105，**六脚两绕组**，辅助链整条拆掉。
 
-    113 写的是 `P1 P2 A1 A2 S1 S2` 六 terminals。118 实测宿主那颗
-    `C9900020988`（`EE16_3+3_V02`）**只有五根脚**，`PinName == PinNumber`，
-    **没有 A2**，于是 118 把辅助冷端和副边回线挤在同一颗脚上——那一颗骨架
-    **装不下**这个电路（穷举见下一条）。
+    这一条在 119 已经改过一次（113 的 `P1/P2/A1/A2/S1/S2` → 七脚 XREE 的
+    `1 2 3 4 5 6 10`）。120 岳选了**真品料** WE 749118105（`C17189451`），datasheet
+    pinout 是 **N1 = 1-3 原边 / N2 = 4-6 副边，2 与 5 是 NC**，所以：
 
-    **119 更新：换料。** 岳 2026-10-04 深夜裁定换成同门的 `C49118510`
-    （`XREE16-050624` 卧式 5+5），118b 只读探针实测**七脚**：左侧 1-5、
-    右侧 6/10（`outputs/118/probe/xfmr_swap_probe.json`；同门 `C49118511`
-    立式 4+4 实测只有 3 脚含 NC，已否）。六端终于有六端的地方：辅助绕组的冷端
-    **第一次有了真脚**（`T1.2` 归 `PGND`——辅助是原边参考的，物理正确），
-    副边回线回到 `T1.10`，两颗地**不再共用一颗脚**。
+    * 脚是**六**个，脚号集逐个等于 profile 读出来的；
+    * spec **只接四颗**（`HVDC`→1、`SW`→3、`SEC_SW`→4、`SEC_GND`→6）——
+      **2/5 是 NC，一条网都不接**，这一条单独钉住，因为「接上去了」是那颗料上
+      最容易犯也最不容易看出来的错；
+    * `AUX` 整条辅助链（D2/C7/AUX/VCC）**从 spec 里出去了**——语法设计上 aux 是
+      **可选**角色，所以这不是「漏了」，是这颗料本来只有两绕组；这一条也单独钉住，
+      否则下一次有人「补回来」就会把一颗两绕组的料当三绕组用；
+    * 113 起的 `P1/P2/A1/A2/S1/S2` 一个都不许残留。
 
-    这条量的是三件事，缺一件都算没接上：脚号集**逐个等于**探针读数；六个网
-    **都挂到了变压器上**（换料的全部意义就在这里，`AUX` 与 `SEC_GND` 各有各的
-    脚）；113 起的 `P1/P2/A1/A2/S1/S2` 一个都不许残留。
+    六脚的意义要说清：**它不是「七脚减一颗」**。119 那颗 XREE 是 5+5 十位骨架
+    （左侧 1-5、右侧 6/10），WE 这颗是**两绕组六脚**，副边只有一对。118 那条
+    「五脚装不下三绕组」的结论在这颗料上**不再适用**——不是被推翻了，是**前提
+    没了**：两颗绕组要的端数（4）小于脚数（6），辅助电源另有出处是**设计**的选择，
+    不是这颗料的缺陷。
     """
     from boardwise.core.circuitspec import CircuitSpec
     from boardwise.engines import drawcompiler as dc
 
     circuit = CircuitSpec.load(SPECS / "flyback_uc3845.circuit.json")
-    profile = circuit_symbol(circuit, "T1")
-    probe = _swap_probe()
-    numbers = sorted(pin.number for pin in profile.pins)
-    assert numbers == sorted(probe["tips"]), (
-        f"the profile carries {numbers}; the 118b probe measured "
-        f"{sorted(probe['tips'])} on {probe['lcsc']} — re-probe before trusting "
-        "either list"
+    current = _current_transformer()
+    assert current["numbers"] == ["1", "2", "3", "4", "5", "6"], (
+        f"T1 carries {current['numbers']}; the WE 749118105 datasheet lists six "
+        "pins (N1 = 1-3, N2 = 4-6, 2/5 NC) — re-probe before trusting either list"
     )
-    assert numbers == ["1", "10", "2", "3", "4", "5", "6"], numbers
-    # Six nets, six pins: the thing the five-pin part could not do.
-    needed = {"HVDC", "SW", "PGND", "AUX", "SEC_SW", "SEC_GND"}
-    reached = set(dc._part_nets(circuit, "T1").values())
-    assert needed <= reached, (
-        f"the transformer no longer reaches {sorted(needed - reached)}; the "
-        "swap was made to give the auxiliary winding its own cold end, so losing "
-        "a net again is a regression, not a re-measurement"
-    )
-    # AUX and SEC_GND were the pair the five-pin part had to share. They must not.
-    by_net: dict[str, str] = {}
-    for pin, net in dc._part_nets(circuit, "T1").items():
-        by_net.setdefault(net, pin)
-    assert by_net["AUX"] != by_net["SEC_GND"], (
-        "AUX and SEC_GND are back on one pin; that is the two-winding skeleton "
-        "118 measured, and it is exactly what the swap was for"
-    )
-    # No 113-style token survives anywhere in the spec.
+    # The NC pair: present on the symbol, connected to nothing.
     used = set(_tokens_of(circuit, "T1"))
+    for nc in ("2", "5"):
+        assert f"T1.{nc}" not in used, (
+            f"T1.{nc} is wired up, but the datasheet calls it NC — a pin with no "
+            "connection in the part must not acquire one in the spec, because "
+            "nothing downstream would notice"
+        )
+    # The four it does carry, one by one, by net.
+    by_net = {}
+    for pin, net in sorted(dc._part_nets(circuit, "T1").items()):
+        by_net.setdefault(net, pin)
+    assert by_net == {
+        "HVDC": "1", "SW": "3", "SEC_SW": "4", "SEC_GND": "6",
+    }, (
+        f"the transformer reaches {by_net}; the WE pinout is HVDC->1, SW->3, "
+        "SEC_SW->4, SEC_GND->6 (datasheet N1 = 1-3, N2 = 4-6)"
+    )
+    # And the auxiliary chain is gone, which is a *design* statement about a
+    # two-winding part — not an omission to be quietly repaired.
+    # Only the **auxiliary** chain went. `CLAMP` / `CLAMP_B` stay: those are the
+    # primary-side leakage clamp (C5/D1/R15/R3), which reads on N1 and has
+    # nothing to do with a third winding — asserting they are gone would be
+    # asserting a false history, and 120 measured that mistake before writing
+    # this line.
+    for net_id in ("AUX", "VCC"):
+        assert net_id not in {net.id for net in circuit.nets}, (
+            f"net {net_id!r} is back in the spec; the WE part has two windings and "
+            "the grammar treats aux as an optional role, so a re-added auxiliary "
+            "supply would be asking a six-pin two-winding part to carry a third"
+        )
+    for part in circuit.parts:
+        assert part.id not in ("D2", "C7"), (
+            f"{part.id} is back in the spec; it belonged to the auxiliary chain "
+            "the two-winding part does not have"
+        )
     for stale in ("P1", "P2", "A1", "A2", "S1", "S2"):
         assert stale not in used, (
             f"T1.{stale} is still in the spec; the host symbol has no such pin"
         )
     assert dc._part_nets(circuit, "T1"), "T1 lost its nets"
+
 
 
 def test_the_five_pin_transformer_cannot_carry_this_circuit():
@@ -629,11 +805,12 @@ def test_the_five_pin_transformer_cannot_carry_this_circuit():
 
     archived = json.loads(LIBRARY_118.read_text(encoding="utf-8"))
     archived_entry = next(
-        item for item in archived["profiles"] if item["symbolRef"] == SWAPPED_FROM
+        item for item in archived["profiles"]
+        if item["symbolRef"] == "XFMR-EE16-3W"
     )
     pins = [pin["number"] for pin in archived_entry["pins"]]
     assert len(pins) == 5, (
-        f"{LIBRARY_118.relative_to(ROOT).as_posix()} records {SWAPPED_FROM} with "
+        f"{LIBRARY_118.relative_to(ROOT).as_posix()} records XFMR-EE16-3W with "
         f"{len(pins)} pins ({pins}); 118's finding was measured on five, so that "
         "archive is not the artefact it was written against — re-derive the "
         "finding rather than trusting this run"

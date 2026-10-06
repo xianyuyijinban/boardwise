@@ -34,9 +34,7 @@
         "R9",
         "U5",
         "R10",
-        "C10",
-        "D2",
-        "C7"
+        "C10"
       ],
       "role": "the whole flyback converter core as one drawing (M3–M7 of the 110 plan: power_stage: the flyback power stage: primary loop and leakage clamp (M3)；current_sense: the current-sense chain from the switch source to the controller (M4)；secondary: the secondary rectifier and the output filter (M6)；feedback: the divider, error amplifier, optocoupler and compensation (M7)；aux_supply: the auxiliary winding's rectifier and reservoir) — one module because the flyback grammar binds the converter whole (the transformer, the two islands and the crossing opto are one reading); the 113 five-module split made `wants_page` route to the per-module pagecompiler, where each fragment rightly refuses as \"not a whole flyback\" (117 seam fix, 2026-10-04)"
     }
