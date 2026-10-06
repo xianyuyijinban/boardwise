@@ -535,3 +535,118 @@ live renders; they are compile-time hard constraints, written up as R6–R10 in
 
 The apply report's `verification.nets` and the readability evidence are what
 prove these held; the renders under `evidence/074/` show the before/after.
+
+
+## 落图 SOP（自 SKILL.md §3.3 迁入，2026-10-06 减重 124）
+
+053 阶段 B 的编译器离线算出**画法**（`LayoutPlan`：器件+姿态+折线+旗标+文字 bbox，
+`engines/drawcompiler.py`），054 把一张画法落进编辑器的一页。三条命令：
+
+```bash
+boardwise draw compile --circuit C.json --presentation P.json --profiles LIB.json \
+    --page-box 0,0,1170,825 --out outputs/054_x/previews      # 离线：ranked 表 + 四分类 + SVG
+boardwise draw plan    --circuit … --presentation … --profiles … --page-box … \
+    --page <uuid> --project test --lcsc R1=C25744 --out plan.json   # 一候选 → ChangePlan
+boardwise draw apply   plan.json --project test \
+    --circuit … --presentation … --profiles … --layout <cand1.layout.json> \
+    --render render.png --json apply.json                     # 真机：守卫 → 落图 → 回读 → 保存 → 出图
+```
+
+同族另外两条，别漏：**`boardwise draw lint --page …` 是落图之后的机器闸**（只读：九条几何
+谓词——压线/重叠/出界/同名导线段等，111 起；真机快照或 `--snapshot` 捕获件都吃。
+P1 的 48E/20W/21I 验收基线就是它量的——**画完一页先过它再交付**）；
+**`boardwise draw propose`**（109 A4，纯离线）把一份 DesignIntent 合同提成
+PresentationSpec 草稿（模块清单 + flow + 角色），是「意图 → 画法」这条链的入口，
+compile/plan 的 `--intent PATH` 消费同一份合同（见下）。
+
+**支路顺序的三个来源（095 A4 起）**：`power-entry` 画法里「哪条支路贴入口」按
+`PresentationSpec.modules[].branchOrder` > **DesignIntent 合同** > 位号序 读；后两者都
+没说话时与 088/088b 逐字节一致。合同侧读 `decisions[subject=<支路>]` 的 prose 或
+`blocks[].kind`（写明 `tvs`/`clamp`·`钳位`/`泄放` 才算），原文 + 出处 + provenance 进
+绑定 evidence，`ai_asserted` 照走但标注草稿。**声明与合同不一致 → `circuit-invalid` 拒绝、
+两个来源的原文并列**（谁错人裁，不会自动二选一）。`draw compile` / `draw plan` 用
+`--intent PATH` 把合同交给编译（`dc.compile(..., intent=…)`）；**只认显式路径**——编译发生在
+读工程之前，用户级默认落点 `<home>/design-intent/<projectUuid>.json` 那时还没有 uuid；
+页级（057）路径本批不读合同，给了 `--intent` 会明说没读。
+
+**落图前必须先有"实测符号库"**（本批最关键的一条工序，C1/C2 都是这么过的）：
+编辑器**不提供**库符号几何的读接口（`lib.symbol.get` 明说 no geometry），所以
+`--profiles` 的那份库要**先在真机上量**——在临时页上放一颗真器件（`sch.place_component
+--params '{"lcsc":"C25744","x":400,"y":300}'`），读 `sch.component_pins`（引脚偏移 + PinLength）
+和 `sch.geometry --params '{"bboxIds":[<id>]}'`（实测外框 = body），删掉这颗探针件，
+再把量到的数字写成 `SymbolProfile`（`source` 里写清量法与出处）。
+实测：C25744（0402 10k）引脚 ±20、body ±10.5×±4.5；C1525（0402 100n）引脚 ±20、body ±10.5×±8.5。
+拿**竖排 ±50** 这类没量过的 profile 去落图，引脚回读必然点名不符（C6 现场）。
+
+**apply 的执行序**（`_draw_apply_flow`）：① 页（`--page` 或 `--new-page`；plan 未绑页又没给页 → exit 5）
+→ ② 守卫（双 spec 摘要 + 布局摘要 + 库几何表 + 页身份；**显式** `--expect-census` 也在这关）
+→ ③ 探针（plan 自己的 postconditions，双证齐全 = `already_applied` exit 0 零写入）
+→ ④ 页既不是 plan 成品也不是 plan 基线 → `canvas_changed` exit 4 零写入
+→ ⑤ 位号池（页面 ∪ 工程导出）→ ⑥ 放件 → ⑦ **写 Value**（055 起：plan 用 `valueKey` 逐件
+声明，无 key/无值**不写不报**；`sch.set_component_attribute` 既有通道零新增）
+→ ⑧ **引脚回读**（容差半格，同一把 geometry 读同时做值回读；引脚不符、值写不进/回读不符
+**都在拉线前**停住 exit 3）→ ⑨ 走线（`net` 承载网名）→ ⑩ 旗标（`place_power`）→ ⑪ 双证回读
+（活网表按**本 plan 自己的引脚**判分区；页面外同名同网只报 `sharedWithOutsidePins`）
+→ ⑫ 范围（无删除 → 导出新鲜）+ findings 分级拦（ERROR 必拦 / WARN 需 `--force` / INFO 只报告）
+→ ⑬ 保存（`saved_unverified`，要 `saved_verified` 得走 `boardwise persistence` 的关闭重开）
+→ ⑭ `export.render` 出图（`already_applied` 也出图：图是证据不是写）
+→ ⑮ **旗标朝向核对**（坑 42 的手法、坑 43 的事实）：出图时一并要 `format=svg`，解
+`c_partid="netflag"` 组逐颗读"连接点 → 字形往哪边伸"，与 plan 里每颗旗标的 `rotation`
+对表；GND 与 PWR-* 两家自然姿态相反，离线预览画的是统一约定盒、看不出这个差
+（照抄姿势与判据见 `outputs/064_railflag/`）。
+
+退出码：**0** 落图并被双证确认（或 already_applied 零写入）/ **2** 承诺的效果不在（写被拒、
+保存被拒、range/旗标数不对、findings 仍被拦：ERROR 有、或 WARN 有而未给 `--force`）/ **3** 页状态不可陈述或回读不符（超时、拔 daemon、
+引脚/值回读不符、postconditions 不满足——**在拉线前**停）/ **4** 守卫拒绝（摘要 stale、库几何变了、
+页不是 plan 的、画布被动过、位号被占、半成品件在页上）/ **5** plan 或输入不可用。
+
+幂等与 stale：`draw apply` 同 plan 再跑 → `already_applied` 零写入（C4）；手工动过画布再跑 →
+exit 4 零写入（C5）；库几何不符 → exit 4 零写入（C6，写前那条腿用 `--profiles` 的库文档，
+编辑器侧那条腿只能靠放完后的引脚回读，所以它是 exit 3 且件已放）。
+
+**LDO（C3）现场有两条真机事实，照坑 33/34 走**：真机 AMS1117 符号的 VIN/VOUT/GND 全在**同一侧**
+（外加一颗重复 VOUT），`ldo` 文法的默认"in 左 out 右"**无合法姿态**——要么按坑 33 用
+`sidePreferences`（这是一个**说明**"下面那条输出支路"，不是"输出在下方"），要么换一颗符号；
+另有坑 34：本仓库 facts 要求 AMS1117 输出 ≥22µF（053 场景值 055 起已同步为 22µF），拿 100n
+输出落图 `decap-required-caps` 会涨 finding、`draw apply` 按 036 规矩**拒绝保存**（图落好了、没落盘）。
+
+**057：一页多模块（页文档）与 `draw discard`——不加命令、不加旗标，同三条命令**：
+
+- **什么算"页"**：PresentationSpec 有 ≥2 个 `modules[]`、或写了 `flow`、或某模块自带 `grammarRef`、
+  或有页级锁（`pagecompiler.wants_page`）→ 走页级编译；恰一个模块（054 夹具那种）走原单模块路径，输出一字不变。
+  页级 `draw compile` **必须给 `--page-box`**，产物是 `candN.page.json`（`kind=boardwise-page-layout-plan`）+
+  带模块虚线框的 `candN.svg`。
+- **`draw plan`（页）**：页级编译后把选中候选的 `plan` 字段交给同一个 `module_plan`，产出的仍是
+  `draw-module` plan（layoutSha256 = 页文档 `plan` 的几何哈希），旁边写 `<plan>.page.json`。带 `--page`
+  时读页面 census，**每个既有图元（件/线/旗标，件用 `bboxIds` 实测外框）转 keepout**，模块组整体平移避开；
+  全被占 → `presentation-poor` 点名"existing R5 …"。页文档里的跨模块标签在本机放不了（坑 9），**没有线
+  到达的标签点会补一段 10 单位具名短线**（downgrades 里写明），否则两边同名网在工程级网表里合不起来。
+- **`draw apply`**：`--layout` 可给页文档；位置参数也可直接给页文档（需 `--circuit/--presentation/--profiles`
+  + `--page`/`--new-page`），运行时现建 plan 再走原流程；页文档的"过期守卫" = 它的模块框对页面现状的
+  keepout 规则（压到既有图元 → exit 4 零写入）；要"页面任何变动都拒"用 `draw plan --page` 产的 plan
+  （census 摘要精确）或 `--expect-census`。**所有落图**新增范围外逐项对比：落图前已在页上的每个图元
+  （位号/值/LCSC/网/坐标/姿态/线点）必须原样，改了一件 → exit 2 不保存（`range.outOfScope`）。
+  报告 `verification.nets` 逐网列出编辑器网表回读名，跨模块网标 `crossModule`、`oneNet`（G4）。
+  findings 按身份分级拦（`rule|severity|位号|脚|命名网` 的**第二段**就是严重度）：ERROR 必拦、
+  WARN 需 `--force`、INFO 只报告（#55 裁决 B）；仍不按计数。
+- **页级锁**：`userLocks[]` 加 `"scope": "page"`（不写 rotation；位姿归模块）→ 该件在每个候选都落在
+  页坐标 P（origin = P − 模块内坐标，逐代次不同是对的）；锁点出页 / 两把锁矛盾 / 锁住的框出页、压
+  keepout、与另一锁住的框冲突 → `presentation-poor` 点名锁。模块锁（默认 scope）与页锁可同件共存。
+- **`draw discard <plan.json|page.json>`**：只删该 plan 自己画的东西。件按**位号 + 坐标 + 值**（无 valueKey
+  的旧 plan 用 LCSC）核身份，旗标按网 + 点，线要求**每个点都在 plan 的线上**（被宿主并进别人线的 primitive
+  不删，坑 32）；**任何一件不符整批拒删**（exit 4，零删除）。先线、再旗标、后件（每相每次 ≤30 id，分批
+  会写进报告）；删后回读：目标全无 + 范围外逐项不变。第二遍 = `nothing_to_discard` exit 0。`--save` 才保存；
+  超时/断连先回读、不重试（exit 3）。页文档需 `--circuit/--presentation/--profiles`，按坐标 + 前缀 + 值找件。
+- **已知缺口（057 离线实测，`tools/057_scenarios.py`）**：CH340G 核心/晶振/USB 侧**没有文法**（只有
+  divider/RC/LDO），页级编译对这三组报 `facts-missing`；金样板上的 RT9013（VIN/GND/EN 同在左侧）在 `ldo`
+  文法下 48 种 sidePreferences **全部无合法姿态**——坑 33 的"改输入侧"对它无效。真机 E1–E7 的操作清单见
+  `tools/057_live_runbook.md`。
+- **074：旗引线不得穿越别网导体**（岳裁「必须改」，命令面一字未增）。069 落下的 pin2 3V3 旗引线
+  「横 50 + 竖拐 25」的**竖拐**子线段与 5V0 横轨在 (60,740) 垂直交叉、无 junction 圆点——电气双岛正确，
+  但第一眼读成「旗挂在 5V0 轨上」。尺子：候选引线的**每个子线段**与别网导体（`router.edges` +
+  已落件引脚）做**严格内部**相交——共享端点、T 型衔接（端点落线 = 有意的 junction）、共线重叠都**不算**；
+  只硬化**旗引线/stub 段**（069① 远脚 stub、`_rail_flag` 沿轨段、竖拐 jog），**普通信号布线穿越不硬化**
+  （crossings 仍是软指标）。硬拒后按既有梯子升级（距离档 → 逃逸方向 → 三折/两段引线 → 向无轨方向垂挂）；
+  梯子穷尽 → `layout-unsat`，报**哪段穿哪条导体 + 交叉点 + 建议动作**，**不许静默产出穿越图、不许假
+  junction**（安全阀：`layout-unsat` 是契约内的合法答复，不是 bug）。
+

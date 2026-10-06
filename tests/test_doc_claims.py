@@ -261,23 +261,56 @@ def test_skill_md_covers_the_load_bearing_commands():
 def test_skill_md_protocol_line_refs_resolve():
     """护 #60 的次级实测：坑表里 `protocol.py:NNN` 的出处行号必须对得上——
     同一行里提到的大写常量，至少有一个真的定义在那一行（坑 2 曾引 :120，
-    DELETE_TIMEOUT 真身在 :152）。"""
-    skill_path = REPO / ".kimi-code" / "skills" / "boardwise" / "SKILL.md"
+    DELETE_TIMEOUT 真身在 :152）。124 减重后全表在 docs/pits.md，两处同查。"""
     protocol_lines = (
         REPO / "src" / "boardwise" / "bridge" / "protocol.py"
     ).read_text(encoding="utf-8").splitlines()
     bad: list[str] = []
-    for lineno, line in enumerate(skill_path.read_text(encoding="utf-8").splitlines(), 1):
-        for ref in re.finditer(r"protocol\.py:(\d+)", line):
-            target = int(ref.group(1))
-            constants = re.findall(r"\b[A-Z][A-Z0-9_]{3,}\b", line)
-            resolved = (
-                1 <= target <= len(protocol_lines)
-                and any(
-                    re.match(rf"{re.escape(name)}\s*=", protocol_lines[target - 1])
-                    for name in constants
+    for doc in (
+        REPO / ".kimi-code" / "skills" / "boardwise" / "SKILL.md",
+        REPO / "docs" / "pits.md",
+    ):
+        for lineno, line in enumerate(doc.read_text(encoding="utf-8").splitlines(), 1):
+            for ref in re.finditer(r"protocol\.py:(\d+)", line):
+                target = int(ref.group(1))
+                constants = re.findall(r"\b[A-Z][A-Z0-9_]{3,}\b", line)
+                resolved = (
+                    1 <= target <= len(protocol_lines)
+                    and any(
+                        re.match(rf"{re.escape(name)}\s*=", protocol_lines[target - 1])
+                        for name in constants
+                    )
                 )
-            )
-            if not resolved:
-                bad.append(f"SKILL.md:{lineno} -> protocol.py:{target}")
+                if not resolved:
+                    bad.append(f"{doc.name}:{lineno} -> protocol.py:{target}")
     assert bad == [], "stale protocol.py line refs: " + ", ".join(bad)
+
+
+# ============================================================ 124 减重预算闸
+SKILL_BUDGET_LINES = 320
+
+
+def test_skill_md_stays_within_its_line_budget():
+    """护 124 的战果：SKILL.md 是运行时必读路由层，不是知识库（岳 2026-10-06：
+    「skill 是对方的 5、6 倍」——峰值 686 行，拆层后 279）。预算 320 行：
+    撞线的人先去压实或外置，不许再把 SKILL 当仓库写。"""
+    skill_lines = (
+        REPO / ".kimi-code" / "skills" / "boardwise" / "SKILL.md"
+    ).read_text(encoding="utf-8").splitlines()
+    assert len(skill_lines) <= SKILL_BUDGET_LINES, (
+        f"SKILL.md is {len(skill_lines)} lines (budget {SKILL_BUDGET_LINES}) — "
+        "深水区内容外置到 docs/，别在路由层续写"
+    )
+
+
+def test_skill_md_doc_pointers_resolve():
+    """路由层的存在理由是指针，指针烂掉路由层就死了：SKILL.md 提到的每个
+    `docs/*.md` / `tasks/*.md` 都必须真的在仓库里。"""
+    skill = (REPO / ".kimi-code" / "skills" / "boardwise" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    missing: list[str] = []
+    for ref in sorted(set(re.findall(r"(?:docs|tasks)/[A-Za-z0-9._-]+\.md", skill))):
+        if not (REPO / ref).is_file():
+            missing.append(ref)
+    assert missing == [], "SKILL.md points at files that do not exist: " + ", ".join(missing)
