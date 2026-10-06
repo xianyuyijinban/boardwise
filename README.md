@@ -19,7 +19,7 @@ multi-platform from day one.
 boardwise checkup
 ```
 
-You get a report: ERC/DRC, fourteen design-rule families, which parts
+You get a report: ERC/DRC, 20 design rules, which parts
 still lack datasheets, and every finding pointing at a concrete
 component, pin and net — with markers drawn on the canvas where the
 problems are. On real boards it has caught things the designer had
@@ -33,7 +33,9 @@ is actually gone. Edit kinds today: change a component value, add a
 missing part, repair a single pin connection, insert an RC/divider
 subcircuit, move a functional block.
 
-**Export.** BOM, netlist, Gerber, pick-and-place — one command each.
+**Export.** One `export-fab` writes the whole fab bundle — Gerber,
+pick-and-place and BOM together. (There is no netlist export command;
+the netlist is read internally for review, not written out as a file.)
 
 **Draw.** You state the circuit intent — a divider, an RC low-pass, an
 LDO; parts, values, which pin joins which net — and the drawing
@@ -73,7 +75,8 @@ retries.
 | Schematic review (rule families + datasheet gate + eval harness) | Usable, in maintenance |
 | Review-to-local-edit (preview / authorize / readback / re-review) | Usable |
 | Drawing compiler (divider / RC / LDO) | Modules and multi-module pages land in the editor |
-| Full schematic capture → PCB → SPICE simulation | In that order |
+| PCB review (DRC closure → module-by-module layout → device checks) | Stage A in flight — roadmap in `tasks/122-pcb-review-roadmap.md` |
+| Full schematic capture → PCB generation → SPICE simulation | In that order |
 | KiCad platform | Planned |
 
 One sentence on how the review rules are scored: the annotated eval
@@ -175,7 +178,7 @@ MIT
 boardwise checkup
 ```
 
-输出一份报告：ERC/DRC、十四类设计规则、哪些器件还缺数据手册、每条问题
+输出一份报告：ERC/DRC、20 条设计规则、哪些器件还缺数据手册、每条问题
 各自指着具体的器件、引脚和网络；顺手把问题标记在画布上。它在真板子上
 抓到过设计者自己没注意到的问题——比如一个该做偏置而没做的电流采样
 电路。这类问题不是查规则书能查出来的，得先理解整个架构自不自洽。
@@ -184,7 +187,8 @@ boardwise checkup
 一遍审查确认问题真的消失。已经支持的改法：改器件值、补一颗缺失的器件、
 修单个引脚连接、插入 RC/分压子电路、局部移动一个功能块。
 
-**导出。** BOM、网表、Gerber、坐标文件，各一条命令。
+**导出。** 一条 `export-fab` 同时出 Gerber、坐标文件和 BOM 三样。
+（网表没有单独的导出命令；它在内部读取供审查，不落文件。）
 
 **画图。** 你写电路意图——分压、RC 低通、LDO，器件、参数、哪个脚接
 哪个网——画法编译器负责把它变成一张能给人看的图：器件怎么摆、线怎么
@@ -220,7 +224,8 @@ daemon + 编辑器扩展      读工程数据，写之前先预览、你授权�
 | 原理图审查（规则族 + 数据手册闸 + 评测体系） | 可用，维护中 |
 | 审查到局部修改（预览/授权/回读/复查） | 可用 |
 | 画法编译器（分压/RC/LDO） | 单模块与多模块整页均已能落进编辑器 |
-| 完整原理图绘制 → PCB → SPICE 仿真 | 按序推进 |
+| PCB 审查（DRC 闭环 → 按模块布局 → 器件检查） | 阶段 A 进行中——路线图见 `tasks/122-pcb-review-roadmap.md` |
+| 完整原理图绘制 → PCB 生成 → SPICE 仿真 | 按序推进 |
 | KiCad 平台 | 规划中 |
 
 审查规则的评测方式说一句人话：我们有一套签名标注过的评测集，分成
