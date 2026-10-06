@@ -207,6 +207,15 @@ class Action:
     #:   the placement actions land on, so they are write.
     #: * ``create`` — produces a **new document**. The daemon refuses these
     #:   unless ``params.confirm is True`` (``CONFIRMATION_REQUIRED``).
+    #: * ``dangerous`` — outranks every document write: replaces running code or
+    #:   otherwise acts beyond any single document (``sys.self_update`` swaps the
+    #:   connector's own bundle and reloads the editor page). Same choke point as
+    #:   ``create``: refused unless ``params.confirm is True``. Filed as its own
+    #:   tier (2026-10-06, issue「self_update 绕开唯一的创建闸」) because the
+    #:   ``create`` wording ("produces a new document") cannot honestly cover it —
+    #:   and because PROGRESS 坑 36 had already called the flow 破坏性 while the
+    #:   enum still said ``write``; the taxonomy not matching the fact is exactly
+    #:   the disease that let it sit.
     risk: str
     #: Who may originate this action. ``connector`` actions are executed by
     #: the extension; ``daemon`` actions are answered by the daemon itself.
@@ -280,13 +289,17 @@ ACTIONS: tuple[Action, ...] = (
             "step validates; any failure is an explicit error (fall back to a "
             "manual reinstall), never a silent degrade."
         ),
-        params=("bundleB64", "version"),
+        params=("bundleB64", "version", "confirm"),
         returns="{ok, oldVersion, newVersion, bytes, database, reloadInMs}",
         params_schema=(
             "bundleB64: the new dist/index.js, base64-encoded (required); "
-            "version: the new version string to store (required)"
+            "version: the new version string to store (required); "
+            "confirm: must be `true` — the daemon's dangerous-tier gate refuses "
+            "anything else, because this replaces running code and reloads the "
+            "editor (2026-10-06: it was risk=write and slipped the create gate "
+            "wide open while a blank pcb.doc.new was refused)"
         ),
-        risk="write",
+        risk="dangerous",
     ),
     Action(
         name="sys.identity",

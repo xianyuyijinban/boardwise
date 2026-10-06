@@ -40,7 +40,7 @@ THREE_SEGMENT_FAMILIES = (
 )
 
 OWNERS = frozenset({"connector", "daemon"})
-RISKS = frozenset({"read", "write", "create"})
+RISKS = frozenset({"read", "write", "create", "dangerous"})
 
 
 def test_names_are_unique():
@@ -140,6 +140,34 @@ def test_create_actions_declare_confirm():
             f"{action.name} is a create action but does not declare confirm — "
             "no caller could ever satisfy CONFIRMATION_REQUIRED"
         )
+
+
+def test_dangerous_actions_declare_confirm():
+    """Same gate, same requirement: the dangerous tier (2026-10-06) is refused
+    unless `confirm is True`, so a gated action must declare the parameter."""
+    for action in ACTIONS:
+        if action.risk != "dangerous":
+            continue
+        assert "confirm" in action.params, (
+            f"{action.name} is a dangerous action but does not declare confirm — "
+            "no caller could ever satisfy CONFIRMATION_REQUIRED"
+        )
+
+
+def test_the_dangerous_tier_is_exactly_the_reviewed_set():
+    """#58 同病的疫苗：危险档的成员是**评审过的清单**，不是谁都能落进来的默认值。
+
+    sys.self_update 曾在 PROGRESS 里被定性「破坏性」而枚举值写 write——事实在
+    散文里、没有闸对拍。这条钉双向：名单里的动作必须是 dangerous，dangerous
+    的动作必须只有名单里这些。要把新动作放进危险档，先改这个清单——
+    那就是评审发生的地方。
+    """
+    reviewed = {"sys.self_update"}
+    actual = {action.name for action in ACTIONS if action.risk == "dangerous"}
+    assert actual == reviewed, (
+        f"the dangerous tier drifted from the reviewed set: "
+        f"unexpected {sorted(actual - reviewed)}, missing {sorted(reviewed - actual)}"
+    )
 
 
 def test_only_document_producing_actions_are_create():

@@ -1450,13 +1450,18 @@ class BridgeDaemon:
         truthy is a gate nobody can reason about.
         """
         forwarded = {key: value for key, value in params.items() if key != "confirm"}
-        if spec.risk != "create":
+        if spec.risk not in ("create", "dangerous"):
             return forwarded
         if params.get("confirm") is True:
             return forwarded
+        reason = (
+            "creates a new document"
+            if spec.risk == "create"
+            else "replaces running code or reloads the editor (dangerous tier)"
+        )
         raise BridgeError(
             ErrorCodes.CONFIRMATION_REQUIRED,
-            f"{spec.name} creates a new document; re-send with confirm: true "
+            f"{spec.name} {reason}; re-send with confirm: true "
             f"(got {params.get('confirm')!r}). Nothing was forwarded to the editor.",
             {"action": spec.name, "risk": spec.risk, "confirm": params.get("confirm")},
         )
