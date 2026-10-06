@@ -634,12 +634,36 @@ def _resolve_ruleset_path(reading: dict, dotted: str) -> Any:
     return node
 
 
+def _resolve_ruleset_unit(reading: dict, dotted: str) -> Any:
+    """The unit a ruleset value is expressed in, read along its own path.
+
+    The host carries ``unit`` at the rule-group level (the object that holds
+    ``form``), and the same rule set is written in **whatever unit the project
+    uses**: test/PCB1's capability set reads ``mm``, 毕设FOC's custom set reads
+    ``mil`` — measured 2026-10-06, when the meta-audit's first real-board run
+    flagged every key off-reference because 5 (mil) was compared against
+    0.127 (mm). The deepest ``unit`` on the path wins, so an ounce-row that
+    overrides its group is read in its own unit. Returns ``None`` when no level
+    says a unit — and the caller treats that as unreadable, because a number
+    without a unit is not a measurement.
+    """
+    node: Any = reading
+    unit: Any = None
+    for part in str(dotted).split("."):
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+        if isinstance(node, dict) and isinstance(node.get("unit"), str):
+            unit = node["unit"]
+    return unit
+
+
 #: The sentinel a dotted path returns when it does not resolve. A private object
 #: so it can never be produced by, or confused with, a value the host returned.
 RULESET_MISSING = object()
 
 
-def _compare_ruleset_key(check: dict, actual: Any) -> dict:
+def _compare_ruleset_key(check: dict, actual: Any, actual_unit: Any = None) -> dict:
     """One reference key against what the host answered.
 
     Three outcomes, kept apart on purpose:
@@ -651,6 +675,18 @@ def _compare_ruleset_key(check: dict, actual: Any) -> dict:
       This never becomes a violation: an absent key is a hole in the reading, and
       filling it with the reference value would let a missing measurement pass
       as a matching one.
+
+    Units are never converted by the engine (123d, and `test_coordinate_guards`
+    makes that a hard boundary: mil↔mm factors belong to parsers +
+    canvas_pin_offsets, not to engines). The reference table carries each
+    expectation **per unit** (``{"mm": …, "mil": …}`` — the two numbers'
+    consistency is pinned by a test, where the conversion factor is allowed to
+    live); the comparison reads the value in the host's own unit. A unit the
+    reference does not name, or no unit on the path at all, is ``unreadable`` —
+    not a silent mm assumption. The same rule set genuinely arrives in the
+    project's own unit (mm on test/PCB1, mil on 毕设FOC — the first real-board
+    run flagged 5 vs 0.127 as a violation; it is 5 mil against a 0.127 mm
+    reference, i.e. a perfect match).
     """
     entry = {
         "key": check.get("key"),
@@ -671,13 +707,25 @@ def _compare_ruleset_key(check: dict, actual: Any) -> dict:
         }
     expected = check.get("expected")
     tolerance = check.get("tolerance")
-    if not isinstance(expected, (int, float)) or isinstance(expected, bool):
+    if not isinstance(expected, dict):
         return {**entry, "status": "unreadable", "actual": actual,
-                "whyUnreadable": "the reference table holds no numeric expected value"}
-    slack = abs(float(expected)) * float(tolerance) if isinstance(tolerance, (int, float)) else 0.0
-    delta = float(actual) - float(expected)
+                "whyUnreadable": "the reference table holds no per-unit expected values"}
+    if actual_unit is None:
+        return {**entry, "status": "unreadable", "actual": actual,
+                "whyUnreadable": "the reading carries no unit along this path — "
+                                "a number without a unit is not a measurement"}
+    expected_here = expected.get(actual_unit)
+    if not isinstance(expected_here, (int, float)) or isinstance(expected_here, bool):
+        return {**entry, "status": "unreadable", "actual": actual,
+                "actualUnit": actual_unit,
+                "whyUnreadable": f"the reference table names no value in unit "
+                                 f"{actual_unit!r} — not converted by guess"}
+    entry["actualUnit"] = actual_unit
+    value = float(actual)
+    slack = abs(float(expected_here)) * float(tolerance) if isinstance(tolerance, (int, float)) else 0.0
+    delta = value - float(expected_here)
     if abs(delta) <= slack:
-        return {**entry, "status": "within", "actual": actual, "expected": expected,
+        return {**entry, "status": "within", "actual": actual, "expected": expected_here,
                 "delta": delta, "tolerance": slack}
     direction = check.get("direction")
     offending = delta < 0 if direction == "below" else delta > 0 if direction == "above" else True
@@ -685,12 +733,12 @@ def _compare_ruleset_key(check: dict, actual: Any) -> dict:
         # Off the reference value in the *harmless* direction. Still reported —
         # a rule set that was loosened is a fact about the board — but marked so
         # it is not read as a violation.
-        return {**entry, "status": "off-reference", "actual": actual, "expected": expected,
+        return {**entry, "status": "off-reference", "actual": actual, "expected": expected_here,
                 "delta": delta, "tolerance": slack,
                 "why": check.get("why"),
                 "note": "偏离参考值，但方向是本表标注的无害侧；报出是因为板子确实用了另一套工艺，"
                         "不是缺陷判定"}
-    return {**entry, "status": "outside", "actual": actual, "expected": expected,
+    return {**entry, "status": "outside", "actual": actual, "expected": expected_here,
             "delta": delta, "tolerance": slack, "direction": direction, "why": check.get("why")}
 
 
@@ -799,7 +847,11 @@ def ruleset_section(reading: dict | None, *, documents_listed: int = 0) -> dict:
         if not isinstance(check, dict):
             continue
         dotted = str(check.get("path") or "")
-        checks_out.append(_compare_ruleset_key(check, _resolve_ruleset_path(current, dotted)))
+        checks_out.append(_compare_ruleset_key(
+            check,
+            _resolve_ruleset_path(current, dotted),
+            _resolve_ruleset_unit(current, dotted),
+        ))
 
     topology = _as_dict(reference.get("expectedTopology"))
     wanted_categories = [str(name) for name in _as_list(topology.get("categories"))]

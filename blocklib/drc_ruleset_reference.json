@@ -8,7 +8,8 @@
     "`tolerance` 是相对容差（`|actual - expected| <= |expected| * tolerance`），用来吸收立创自己那些 `0.49999899999999997` 这样的浮点尾巴——容差是量出来的，不是为了消掉差异。",
     "`direction` 是「实际值超界往哪个方向算问题」：`below` = 比参考值小（间距/线宽偏小，走线靠得太近）、`above` = 比参考值大、`either` = 任一方向。`min`/`max` 类的键用 `bounds` 而不是 `expected`，因为它们是区间不是定值。",
     "键名以真机实际读到的字段为准（123 任务书 §棒 2 第 2 条）。宿主按 `category / rule / form / data[1] / minValue` 分层，所以键路径写成点分串；路径不存在时该条报 `unreadable`，不猜。",
-    "换工艺（阻抗板、高压板、四层板）时改这张表，不要改代码——它是数据。"
+    "换工艺（阻抗板、高压板、四层板）时改这张表，不要改代码——它是数据。",
+    "123d: expected 改为双单位 {mm, mil}——引擎不做 mil↔mm 换算（coordinate_guards 的边界：换算只许在 parsers/canvas_pin_offsets），两单位一致性由 tests/test_123_drc_ruleset.py 的对拍钉看护（换算因子活在测试里）。"
   ],
   "referenceSet": {
     "name": "JLCPCB Capability(Two Layers Board)",
@@ -19,7 +20,10 @@
       "key": "track-width-min",
       "path": "config.Physics.Track.copperThickness1oz.form.data.1.minValue",
       "label": "最小线宽（1oz 铜厚）",
-      "expected": 0.127,
+      "expected": {
+        "mm": 0.127,
+        "mil": 5.0
+      },
       "unit": "mm",
       "direction": "below",
       "tolerance": 0.01,
@@ -30,7 +34,10 @@
       "key": "track-width-default",
       "path": "config.Physics.Track.copperThickness1oz.form.data.1.defaultValue",
       "label": "默认线宽（1oz 铜厚）",
-      "expected": 0.254,
+      "expected": {
+        "mm": 0.254,
+        "mil": 10.0
+      },
       "unit": "mm",
       "direction": "either",
       "tolerance": 0.01,
@@ -41,7 +48,10 @@
       "key": "via-outer-diameter-min",
       "path": "config.Physics.Via Size.viaSize.form.viaOuterdiameterMin",
       "label": "过孔外径下限",
-      "expected": 0.5,
+      "expected": {
+        "mm": 0.5,
+        "mil": 19.685
+      },
       "unit": "mm",
       "direction": "below",
       "tolerance": 0.01,
@@ -52,7 +62,10 @@
       "key": "via-hole-diameter-min",
       "path": "config.Physics.Via Size.viaSize.form.viaInnerdiameterMin",
       "label": "过孔内径（钻孔）下限",
-      "expected": 0.3,
+      "expected": {
+        "mm": 0.3,
+        "mil": 11.811
+      },
       "unit": "mm",
       "direction": "below",
       "tolerance": 0.01,
@@ -63,7 +76,10 @@
       "key": "hole-to-hole",
       "path": "config.Spacing.Other Spacing.otherClearance.form.hole2Hole",
       "label": "孔到孔间距",
-      "expected": 0.3,
+      "expected": {
+        "mm": 0.3,
+        "mil": 11.811
+      },
       "unit": "mm",
       "direction": "below",
       "tolerance": 0.01,
@@ -74,7 +90,10 @@
       "key": "plane-line-clearance",
       "path": "config.Plane.Copper Zone.copperRegion.form.singleLayerPadModel.data.1.lineClearance",
       "label": "铺铜到同层焊盘的间距",
-      "expected": 0.254,
+      "expected": {
+        "mm": 0.254,
+        "mil": 10.0
+      },
       "unit": "mm",
       "direction": "below",
       "tolerance": 0.01,
@@ -85,7 +104,10 @@
       "key": "solder-mask-expansion",
       "path": "config.Expansion.Solder Mask Expansion.solderMaskExpansion.form.padToplayerExpansion",
       "label": "阻焊开窗扩张（顶层）",
-      "expected": 0.0508,
+      "expected": {
+        "mm": 0.0508,
+        "mil": 2.0
+      },
       "unit": "mm",
       "direction": "either",
       "tolerance": 0.01,
@@ -96,7 +118,10 @@
       "key": "via-mask-expansion",
       "path": "config.Expansion.Solder Mask Expansion.solderMaskExpansion.form.viaToplayerExpansion",
       "label": "过孔阻焊开窗扩张（顶层）",
-      "expected": -25.4,
+      "expected": {
+        "mm": -25.4,
+        "mil": -1000.0
+      },
       "unit": "mm",
       "direction": "either",
       "tolerance": 0.02,
@@ -106,6 +131,11 @@
   ],
   "expectedTopology": {
     "why": "宿主把规则集按大类分节。这几节在不在，是「读到的到底是不是完整规则集」的第一个判据——少一节意味着这条读数不是我们以为的那份。",
-    "categories": ["Spacing", "Physics", "Plane", "Expansion"]
+    "categories": [
+      "Spacing",
+      "Physics",
+      "Plane",
+      "Expansion"
+    ]
   }
 }
