@@ -247,14 +247,15 @@ def test_the_cause_is_one_point_where_two_nets_share_a_pin_tip():
 
     量的是坐标，不是闸的措辞。
 
-    **118 更新**：这条现在量的是**实测几何**下的同一件事，而结论**没有变**——
-    117 的治法在真实符号上照样成立。把 dodge 关掉（回到 116 的读法，只量
-    leg）时，跨网 pin 重合点回来；打开（117 的读法，leg + trail）时归零。
-    两侧都量，所以这不是「修完再补一个说明」，而是一条可复算的对照。
+    **121 更新**（2026-10-06）：spec 的 U5.2/U5.3 对调修正 + 反馈链止于光耦
+    LED 之后，这个病**回来了**：关掉 117① 的 dodge（回到 116 的读法，只量
+    leg），跨网 pin 重合点在 `(60,-270)` 恰好一处（C13.2×R7.1）；打开
+    （117 的读法，leg + trail）归零。两侧都量，所以这不是「修完再补一个
+    说明」，而是一条可复算的对照——而且比 119/120 那版「关治法也量不出病」
+    更强：现在**病在场、治法治病**。
 
     量在**摆放**这一层而不是 plan：117(1) 的病是脚尖的几何，部件一落子它就
-    已经定了，与后面拉不拉线无关（118 实测：实测库下 `net SW` 的线走不通，
-    但摆放本身成立，而**跨网重合仍然是 0**）。
+    已经定了，与后面拉不拉线无关。
     """
     circuit, ctx = _ctx()
     saved = dc._dodge_foreign_pins
@@ -266,20 +267,22 @@ def test_the_cause_is_one_point_where_two_nets_share_a_pin_tip():
         dc._dodge_foreign_pins = saved
     assert before is not None
     bad = _cross_net_pin_coincidences(circuit, ctx, before)
-    # **119 重新量过**：118 在**五脚**那颗料上量到 **2** 处跨网 pad 重合
-    # （`(80,-290)` / `(80,-250)`，都在反馈横排那一行）。岳 2026-10-04 换的
-    # 七脚变压器体框是 101x136（旧颗 40x40），链的排布整个变了——**重新量是 0**。
+    # **121 重新量过**（2026-10-06，spec 的 U5.2/U5.3 对调修正 + 反馈链止于
+    # 光耦 LED 之后）：这个病**回来了**——before 侧在 GAP 10/20/40 上量到
+    # **恰好一处**跨网重合 `(60,-270)`：`C13.2`(SEC_GND) × `R7.1`(SEC_12V)，
+    # 而 117① 的治法在 10/20/40 上把它清零。119 那版「关掉治法也量不出病」
+    # 是那颗七脚料的几何巧合；现在钉的是更强的对照：**病在场、治法治病**。
     #
-    # 所以这一条现在量的是**一个仍然成立的事实，而不是一个已经不再犯的病**：
-    # 关掉 117① 的治法也**量不出**跨网重合。这比 118 那版**更强**而不是更弱
-    # ——117① 治的是 `_dodge_foreign_pins` 的盲区，而盲区一旦在几何上不再被踩到，
-    # 「关掉治法也没有病」就是真话。反过来，如果哪一天这里又量出非零，那说明
-    # 几何退回去了，**治法也就重新需要它**，这条会红并要求重新量。
-    assert not bad, (
-        f"the root-cause shape moved back: {bad} — the seven-pin transformer's "
-        "measured bbox put the chain somewhere this page no longer collides; a "
-        "non-empty set here means either the geometry reverted or the claim "
-        "needs re-deriving, and both are worth stopping for"
+    # 钉**坐标与那一对 pin**，不只是个数：坐标动了说明几何变了，这张表就要
+    # 重新量——但个数必须先是一，两处以上就是另一个病。
+    assert sorted(bad) == [(60.0, -270.0)], (
+        f"the coincidence set is {sorted(bad)} — 121 measured exactly one point "
+        "(60,-270) on the corrected spec; a different set means the geometry "
+        "moved and this table needs re-measuring"
+    )
+    assert sorted(bad[(60.0, -270.0)]) == [
+        ("C13.2", "SEC_GND"), ("R7.1", "SEC_12V")], (
+        f"the colliding pair changed: {bad[(60.0, -270.0)]}"
     )
     # Every coincidence is between pins of **different declared nets**, which is
     # the whole claim: the plan is putting two nets on one coordinate.  The
@@ -420,13 +423,14 @@ def test_a_gap_wider_than_the_collision_does_not_help_so_it_is_topological():
 
     | GAP | 116 的读法（dodge 关掉） | 117 的读法（dodge 打开） |
     |---:|---:|---:|
-    | 10 | 2 处 | **0** |
-    | 20 | 2 处 | **0** |
-    | 40 | 2 处 | **0** |
-    | 60 | 3 处 | 1 处 |
+    | 10 | 1 处 `(60,-270)` C13.2×R7.1 | **0** |
+    | 20 | 1 处，**同一点** | **0** |
+    | 40 | 1 处，**同一点** | **0** |
+    | 60 | 2 处（加上 `(60,-240)` C11.2×C13.1） | 1 处（`(60,-240)`） |
 
-    **前两档那两处对间距完全免疫**（坐标一动不动：`(80, -290)` 与
-    `(80, -250)`）——那正是「加间距治不了」这句话的实测形态，也是本条要证的。
+    **前三档那一处对间距完全免疫**（坐标一动不动：`(60, -270)`）——那正是
+    「加间距治不了」这句话的实测形态，也是本条要证的。（**121 重量**，
+    2026-10-06：U5.2/U5.3 对调归位 + 反馈链止于光耦 LED 之后的表。）
     GAP=60 多出来的那一处是**另一个病**：把间距撑到 60 把次边那一行挤到一起了，
     117 的治法挡不住它（本条的 after 侧把它照实写出来，见下）。
 
@@ -438,21 +442,26 @@ def test_a_gap_wider_than_the_collision_does_not_help_so_it_is_topological():
     dc._dodge_foreign_pins = (
         lambda ctx_, pid, slot, anchor, root, poses, origins: root)
     try:
-        # **119 重新量过**：118 在五脚那颗料上量到 GAP 10/20/40 各 2 处跨网重合
-        # （`(80,-290)` / `(80,-250)`）。换料后体框从 40x40 变成 101x136，链的
-        # 排布整个变了，这三档**重新量是 0**。所以 before 侧现在钉的是 0——**不是**
-        # 「治法之前有病」，而是「这一页在换料之后**没有**这个病可治」，而下面
-        # after 侧量的是**治法仍然不制造新病**。两侧都断言，是 118 就在这里的
-        # 那句「只断言对自己有利的那个数，就是在挑数据」。
+        # **121 重新量过**（2026-10-06，spec 订正后）：病回来了——before 侧在
+        # 10/20/40 三档量到**恰好同一处** `(60,-270)`（C13.2(SEC_GND) ×
+        # R7.1(SEC_12V)）。三档同一坐标就是「间距治不了」的实测形态：spacing
+        # ladder 动的是间距，这个重合对间距免疫，所以它是拓扑的。钉坐标与
+        # pin 对——坐标动了说明几何变了，这张表就要重新量。
         for gap in (10.0, 20.0, 40.0):
             dc.GAP = gap
             placed, _ = _soft_placement(ctx)
             assert placed is not None
             before = _cross_net_pin_coincidences(circuit, ctx, placed)
-            assert not before, (
-                f"GAP={gap}: the coincidence set is {sorted(before)} — 118 "
-                "measured zero here on the seven-pin transformer, so a non-empty "
-                "set means the geometry reverted and this table needs re-measuring"
+            assert sorted(before) == [(60.0, -270.0)], (
+                f"GAP={gap}: the coincidence set is {sorted(before)} — 121 "
+                "measured exactly the one point (60,-270) at every one of "
+                "10/20/40 on the corrected spec; a different set means the "
+                "geometry moved and this table needs re-measuring"
+            )
+            assert sorted(before[(60.0, -270.0)]) == [
+                ("C13.2", "SEC_GND"), ("R7.1", "SEC_12V")], (
+                f"GAP={gap}: the colliding pair changed: "
+                f"{before[(60.0, -270.0)]}"
             )
     finally:
         dc._dodge_foreign_pins = saved_dodge
@@ -467,10 +476,10 @@ def test_a_gap_wider_than_the_collision_does_not_help_so_it_is_topological():
                 "rather than measuring the trail"
             )
         # The one rung where the fix does not hold, stated rather than hidden.
-        # **119 重新量过**：118 量到 GAP=60 剩 1 处；换料后**仍是 1 处**，但坐标
-        # 换了（`(100,-270)`，不是 118 的那个点）。所以这里只钉**个数**——
-        # 钉坐标就是钉一句会随换料变的话，钉个数才是「这一档治法挡不住」这个
-        # 事实本身。
+        # **121 重新量过**：GAP=60 仍剩 **1 处**，坐标是 `(60,-240)`
+        # （C11.2(SEC_GND) × C13.1(SEC_12V)——宽间距把次边那一行挤到一起的那一档）。
+        # 这里只钉**个数**——钉坐标就是钉一句会随换料变的话，钉个数才是
+        # 「这一档治法挡不住」这个事实本身。
         dc.GAP = 60.0
         placed, _ = _soft_placement(ctx)
         assert placed is not None

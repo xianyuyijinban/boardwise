@@ -2104,14 +2104,24 @@ def _obligations(
         ),
         GrammarObligation(
             kind=DIRECT_WIRE,
-            nets=(reading.sense_tap, reading.led_cathode, reading.comp),
+            nets=(reading.sense_tap, reading.led_cathode),
             reason=(
                 "岳 110 裁决 e: the feedback chain sense tap→error "
                 "amplifier→optocoupler LED is wired on the secondary side, and "
                 "the loop closes on the page — the one crossing it makes is the "
-                "optocoupler's, which is the point. Every name here is a "
-                "**net** (base.py's `GrammarObligation.nets` is a net tuple, and "
-                "the compiler ranks the chain from it): an earlier version put "
+                "optocoupler's, which is the point. The chain **ends at the "
+                "LED**: the COMP node is on the optocoupler's other face — the "
+                "primary side — and the crossing happens inside the symbol, so "
+                "there is no wire to draw through it. An earlier version of "
+                "this tuple ran the chain on to COMP; measured on the real "
+                "PC817 symbol (2026-10-06, CAT at (-45,-10) / COL at (45,10)) "
+                "that demands the LED_K and COMP pins be collinear on the "
+                "chain axis, which are diagonal in every pose — zero accepted "
+                "poses, and the page was only ever compiled because the spec's "
+                "U5.2/U5.3 were swapped, making the demanded pair the two "
+                "transistor pins instead. Every name here is a **net** "
+                "(base.py's `GrammarObligation.nets` is a net tuple, and the "
+                "compiler ranks the chain from it): an earlier version put "
                 "part ids in it, which quietly reordered the compiler's chain "
                 "and made every pose of the transformer illegal"
             ),
