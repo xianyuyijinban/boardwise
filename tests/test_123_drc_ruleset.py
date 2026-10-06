@@ -142,6 +142,113 @@ def test_a_key_the_host_did_not_return_is_unreadable_and_never_a_match():
     assert any("缺读不是匹配" in note for note in section["notes"])
 
 
+# --------------------------------------------------------------------------
+# 123d: units — the same rule set in the project's own unit
+# --------------------------------------------------------------------------
+
+
+def _in_mil(node):
+    """The fixture, as the same project would answer it with its units in mil.
+
+    毕设FOC 2026-10-06 measured shape: identical rule set, every ``unit`` spelled
+    ``mil``, every number ×(1/0.0254). The first real-board run of the meta-audit
+    compared 5 against 0.127 and reported a violation — that is 5 mil against a
+    0.127 mm reference, a perfect match read as a miss.
+    """
+    if isinstance(node, dict):
+        out = {}
+        for key, value in node.items():
+            if key == "unit" and value == "mm":
+                out[key] = "mil"
+            else:
+                out[key] = _in_mil(value)
+        return out
+    if isinstance(node, list):
+        return [_in_mil(item) for item in node]
+    if isinstance(node, bool) or node is None:
+        return node
+    if isinstance(node, (int, float)):
+        return node / 0.0254
+    return node
+
+
+def test_the_same_ruleset_in_mil_matches_the_same_reference_table():
+    measured = _in_mil(_measured())
+    section = ruleset_section(_reading(measured), documents_listed=1)
+    audit = section["metaAudit"]
+
+    assert audit["outside"] == 0, [c for c in audit["checks"] if c["status"] == "outside"]
+    assert audit["unreadable"] == 0, [c for c in audit["checks"] if c["status"] == "unreadable"]
+    assert audit["within"] == audit["keysChecked"]
+    # The comparison happens in the host's own unit, on the record: the raw
+    # number, its unit, and the expectation read in that same unit.
+    via = next(c for c in audit["checks"] if c["key"] == "via-outer-diameter-min")
+    assert via["status"] == "within"
+    assert via["actualUnit"] == "mil"
+    assert via["actual"] == 0.49999899999999997 / 0.0254
+    assert via["expected"] == 19.685
+    assert via["unit"] == "mm"
+
+
+def test_a_unit_the_table_does_not_know_is_unreadable_not_converted_by_guess():
+    measured = _measured()
+    measured["ruleset"]["current"]["config"]["Physics"]["Via Size"]["viaSize"]["unit"] = "furlong"
+    section = ruleset_section(_reading(measured), documents_listed=1)
+    audit = section["metaAudit"]
+
+    via = next(c for c in audit["checks"] if c["key"] == "via-outer-diameter-min")
+    assert via["status"] == "unreadable"
+    assert "not converted by guess" in via["whyUnreadable"]
+    # The two via keys share the viaSize group's unit — both go unreadable with
+    # it; every *other* key is untouched.
+    hole = next(c for c in audit["checks"] if c["key"] == "via-hole-diameter-min")
+    assert hole["status"] == "unreadable"
+    assert audit["unreadable"] == 2
+    assert audit["within"] == audit["keysChecked"] - 2
+
+
+def test_a_number_without_a_unit_is_unreadable_not_a_silent_mm_assumption():
+    measured = _measured()
+    del measured["ruleset"]["current"]["config"]["Physics"]["Via Size"]["viaSize"]["unit"]
+    section = ruleset_section(_reading(measured), documents_listed=1)
+    audit = section["metaAudit"]
+
+    via = next(c for c in audit["checks"] if c["key"] == "via-outer-diameter-min")
+    assert via["status"] == "unreadable"
+    assert "no unit" in via["whyUnreadable"]
+    # Same shared-unit story: both via keys go unreadable together.
+    assert audit["unreadable"] == 2
+
+
+def test_the_reference_tables_two_units_agree_with_each_other():
+    """双单位参考表的**自洽钉**：expected.mm × (1/0.0254) ≈ expected.mil。
+
+    引擎不许做 mil↔mm 换算（coordinate_guards 的边界），所以参考表必须把两个
+    单位都写出来——而「两个数字说的是同一个物理量」这条本身也要有人看着。
+    换算因子只许活在**测试**里（引擎扫描不到这里）。容差 0.5%：远高于浮点
+    尾巴，远低于任何一次真手误。
+    """
+    reference = json.loads(
+        (Path(__file__).parents[1] / "blocklib" / "drc_ruleset_reference.json")
+        .read_text(encoding="utf-8")
+    )
+    bad: list[str] = []
+    for check in reference["checks"]:
+        expected = check.get("expected") or {}
+        mm, mil = expected.get("mm"), expected.get("mil")
+        if not isinstance(mm, (int, float)) or not isinstance(mil, (int, float)):
+            bad.append(f"{check.get('key')}: not dual-unit {expected!r}")
+            continue
+        if mm == 0:
+            if mil != 0:
+                bad.append(f"{check.get('key')}: mm=0 but mil={mil}")
+            continue
+        ratio = mil / mm
+        if abs(ratio - 39.37007874015748) / 39.37007874015748 > 0.005:
+            bad.append(f"{check.get('key')}: mm={mm} mil={mil} ratio={ratio:.4f}")
+    assert bad == [], "reference table's two units disagree:\n  " + "\n  ".join(bad)
+
+
 def test_a_renamed_category_reads_as_a_missing_category_not_as_absent_rules():
     measured = _measured()
     del measured["ruleset"]["current"]["config"]["Expansion"]
