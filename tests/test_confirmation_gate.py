@@ -35,6 +35,11 @@ TOKEN = tb.TOKEN
 CREATE_ACTIONS = ("sch.doc.new", "pcb.doc.new")
 WRITE_ACTIONS = ("sch.place_wire", "doc.rename", "sch.doc.save", "doc.open")
 READ_ACTIONS = ("doc.list", "sch.geometry", "canvas.highlight")
+#: 2026-10-06: the fourth tier. sys.self_update swaps the connector's own bundle
+#: and reloads the editor page — it was filed risk=write and passed this gate
+#: with no consent while a blank pcb.doc.new was refused. The taxonomy now has
+#: a home for "outranks any document write", and the gate covers it identically.
+DANGEROUS_ACTIONS = ("sys.self_update",)
 
 
 # --------------------------------------------------------------------------
@@ -50,6 +55,8 @@ def test_create_actions_are_the_ones_the_gate_guards():
         assert action_spec(name).risk == "write", name
     for name in READ_ACTIONS:
         assert action_spec(name).risk == "read", name
+    for name in DANGEROUS_ACTIONS:
+        assert action_spec(name).risk == "dangerous", name
 
 
 @pytest.mark.parametrize("action", CREATE_ACTIONS)
@@ -87,7 +94,7 @@ def test_create_with_a_non_true_confirm_is_refused(tmp_path, confirm):
     assert caught.value.detail["confirm"] == confirm
 
 
-@pytest.mark.parametrize("action", CREATE_ACTIONS)
+@pytest.mark.parametrize("action", CREATE_ACTIONS + DANGEROUS_ACTIONS)
 def test_create_with_confirm_true_passes_the_gate(tmp_path, action):
     """The gate must be passable — a refusal nobody can lift is a broken action.
 
@@ -103,7 +110,39 @@ def test_create_with_confirm_true_passes_the_gate(tmp_path, action):
     )
 
 
-@pytest.mark.parametrize("action", CREATE_ACTIONS + WRITE_ACTIONS + READ_ACTIONS)
+@pytest.mark.parametrize("action", DANGEROUS_ACTIONS)
+def test_dangerous_without_confirm_is_refused(tmp_path, action):
+    """危险档与 create 同一道闸：无 confirm 拒绝、detail 说清档位与文案。
+
+    sys.self_update 曾是 risk=write 直接放行（issue「绕开唯一的创建闸」，实测
+    `pcb.doc.new` 被拦而替换运行中扩展的动作直过）——本条钉它回到闸内，
+    且拒绝文案不再说「creates a new document」（那不是它会干的事）。
+    """
+    daemon = BridgeDaemon(token=TOKEN, home=tmp_path)
+    with pytest.raises(Exception) as caught:
+        run(daemon.handle_request(action, {}, "cli"))
+    error = caught.value
+    assert error.code == ErrorCodes.CONFIRMATION_REQUIRED
+    assert "confirm" in error.message
+    assert "creates a new document" not in error.message
+    assert error.detail["action"] == action
+    assert error.detail["risk"] == "dangerous"
+    assert error.detail["confirm"] is None
+
+
+@pytest.mark.parametrize(
+    "confirm", ["true", "yes", 1, 0, [], {}, "True", None, False]
+)
+def test_dangerous_with_a_non_true_confirm_is_refused(tmp_path, confirm):
+    """Identity, not truthiness — 危险档同样只认布尔 True。"""
+    daemon = BridgeDaemon(token=TOKEN, home=tmp_path)
+    with pytest.raises(Exception) as caught:
+        run(daemon.handle_request("sys.self_update", {"confirm": confirm}, "cli"))
+    assert caught.value.code == ErrorCodes.CONFIRMATION_REQUIRED
+    assert caught.value.detail["confirm"] == confirm
+
+
+@pytest.mark.parametrize("action", CREATE_ACTIONS + DANGEROUS_ACTIONS + WRITE_ACTIONS + READ_ACTIONS)
 def test_the_confirm_parameter_never_survives_the_gate(tmp_path, action):
     """Consumed on the way through, for every risk class.
 

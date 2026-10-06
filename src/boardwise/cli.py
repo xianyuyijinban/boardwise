@@ -12229,9 +12229,14 @@ def _cmd_bridge_update_connector(args: argparse.Namespace) -> int:
         try:
             # `--instance` routes the hot update itself; without it the call is
             # unhinted, exactly as it was before the flag existed.
+            # `confirm: True` is the dangerous-tier gate's token: this line is
+            # only reached after the interactive [y/N] above or an explicit
+            # --yes, so the consent the daemon asks for has already been given
+            # (2026-10-06: sys.self_update was risk=write and passed that gate
+            # with no consent at all).
             data = await client.call(
                 "sys.self_update",
-                params,
+                {**params, "confirm": True},
                 **({"target_instance": instance} if instance else {}),
             )
         except BridgeError as exc:
