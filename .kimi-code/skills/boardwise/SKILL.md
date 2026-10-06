@@ -397,6 +397,13 @@ boardwise draw apply   plan.json --project test \
     --render render.png --json apply.json                     # 真机：守卫 → 落图 → 回读 → 保存 → 出图
 ```
 
+同族另外两条，别漏：**`boardwise draw lint --page …` 是落图之后的机器闸**（只读：九条几何
+谓词——压线/重叠/出界/同名导线段等，111 起；真机快照或 `--snapshot` 捕获件都吃。
+P1 的 48E/20W/21I 验收基线就是它量的——**画完一页先过它再交付**）；
+**`boardwise draw propose`**（109 A4，纯离线）把一份 DesignIntent 合同提成
+PresentationSpec 草稿（模块清单 + flow + 角色），是「意图 → 画法」这条链的入口，
+compile/plan 的 `--intent PATH` 消费同一份合同（见下）。
+
 **支路顺序的三个来源（095 A4 起）**：`power-entry` 画法里「哪条支路贴入口」按
 `PresentationSpec.modules[].branchOrder` > **DesignIntent 合同** > 位号序 读；后两者都
 没说话时与 088/088b 逐字节一致。合同侧读 `decisions[subject=<支路>]` 的 prose 或
@@ -565,7 +572,7 @@ exit 4 零写入（C5）；库几何不符 → exit 4 零写入（C6，写前那
 | # | 事实 | 怎么用 |
 |---|---|---|
 | 1 | **两层焦点可以不一致**：`doc.list` 报 `focused=/test`，而编辑区活动文档属另一个工程（实测是 `ROBOT ctrl FOC`，禁地）。`doc.open` 找 `/test` 的 uuid 三连 `CONNECTOR_ERROR`——它在**活动工程**内寻址。更早的形态：工程焦点与 `dmt_Schematic` 上下文页报不同答案 | 写前**双查**（`doc.list` + `document.current`），两边工程名逐字一致才动手；`doc.open` 报错本身就是守卫，不要绕过。出处 `tasks/016` §十.5、`outputs/012v2_probe.md` §三.1 |
-| 2 | **删除逐件 ~3.7 s**（编辑器每件重解页面） | 17 件批删实测 63 s；daemon `DELETE_TIMEOUT=150 s`（约 40 件）。别按 30 s 估超时，别为凑超时偷偷分批。出处 `src/boardwise/bridge/protocol.py:120`、`outputs/012v2_probe.md` §三.3 |
+| 2 | **删除逐件 ~3.7 s**（编辑器每件重解页面） | 17 件批删实测 63 s；daemon `DELETE_TIMEOUT=150 s`（约 40 件）。别按 30 s 估超时，别为凑超时偷偷分批。出处 `src/boardwise/bridge/protocol.py:152`、`outputs/012v2_probe.md` §三.3 |
 | 3 | **`sch.readback` 没有 value / 没有 mpn 通道**：每行是写死的键集合（designator/name/footprint/supplier/supplierId/fields…），`Value`/`mpn` 都拿不到 | 需要 value/mpn 只能走**导出 `.epro2` + `review`/`edit plan`** 的解析通道。别拿 readback 当复查模型。出处 `outputs/016_probe_readback.txt` |
 | 4 | **`.eprj2` 只是工程目录册**：`projects` / `project_structures`（页目录快照）/ `history_data` / `project_images`；**器件级内容不在里面**（新放器件的 uuid、MPN 全 0 命中） | 用 `grep` 工程文件验证器件落盘**此路不通**。器件级持久化只能走编辑器通道（关闭重开 → 回读/导出 `.epro2` → `review`）；删页之所以能验是因为它动的是结构层。出处 `tasks/016` §十.6 |
 | 5 | **保存是异步落盘**：`save` 回 `{saved:true}` 不等于已落盘（结构层 updateTime 刷新 + mtime 跳变有延迟） | 说"已保存"要有第二证据：结构层刷新 / 关闭重开回读 / 导出 #2 复查 |
