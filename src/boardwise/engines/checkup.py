@@ -681,6 +681,314 @@ def modules_section(
 
 
 # --------------------------------------------------------------------------
+# the location chain (issue #69 条 1): 工程 → 板 → 页 → 器件/网 → 问题
+# --------------------------------------------------------------------------
+#
+# A finding used to carry a `board` and a `refs` list, which is enough to *find*
+# the line in `report.json` and nothing else: a hardware engineer reading
+# `report.md` cannot answer "which page of which board is U5 on" without opening
+# the editor. The chain below is the four links a reader needs, assembled from
+# what the report **already knows** — the project's own boards, the archive's page
+# attribution and the module grouping — and from nothing else.
+#
+# The one rule: **a link that cannot be derived is reported as missing, never
+# invented.** `page: None` is a reading ("this tier carries no page information"),
+# not a placeholder for a guess. A chain with a hole is printed with the hole
+# visible (see :func:`chain_text`), because a silently shortened chain reads like
+# a complete one.
+
+#: The chain's links, in order. Rendered into both `report.md` and
+#: `review-summary.md`, and asserted by name in the tests.
+CHAIN_LINKS = ("project", "board", "page", "refs")
+
+#: What a link reads when the report cannot derive it. Deliberately a word rather
+#: than a dash: "—" in a table can be mistaken for "nothing to report", while
+#: this says the report does not know.
+CHAIN_UNKNOWN = "未标注"
+
+
+def _chain_project(source: dict) -> str:
+    """The project link: the report's own project name, or its file, or unknown.
+
+    Prefers `friendlyName` (what a human calls it) over the uuid, and falls back
+    to the file it read so an offline `--file` run still names something. An
+    archive that carries no project metadata and was read from stdin has nothing:
+    that is ``CHAIN_UNKNOWN``, not the file name.
+    """
+    project = source.get("project") or {}
+    name = (
+        project.get("friendlyName")
+        or project.get("name")
+        or source.get("file")
+        or ""
+    )
+    return str(name) if name else CHAIN_UNKNOWN
+
+
+def _chain_board(finding: dict, boards: list[dict]) -> str:
+    """The board link: the finding's own `board`, or the project's single board.
+
+    A PCB finding names its board (`PCB1`); a schematic finding names the board
+    its module lives on. A project with exactly one board needs no lookup — there
+    is no second candidate to confuse the reader with.
+    """
+    board = str(finding.get("board") or "")
+    if board:
+        return board
+    if len(boards) == 1:
+        return str(boards[0].get("title") or "")
+    return CHAIN_UNKNOWN
+
+
+def _page_label(uuid: str, page: dict, titles: dict[str, int]) -> str:
+    """One page's name: `title (uuid8)` when the title is not unique in this report.
+
+    Three pages all titled `P1` is measured on the 毕设 fixture, and a chain that
+    said `P1` three times would not be a location at all — the uuid tail is what
+    makes the page addressable, exactly as it did for the module names (040b).
+    """
+    title = str(page.get("title") or uuid)
+    return f"{title}（{uuid[:8]}）" if titles.get(title, 0) > 1 else title
+
+
+def _chain_pages(
+    refs: list[str], modules: list[dict], attribution: dict[str, dict] | None,
+    board: str = "",
+) -> list[str]:
+    """The page links of one finding: every page its refs land on.
+
+    Two readings, in this order:
+
+    * **the report's own modules** (preferred) — they already decided the
+      designer's page split and hold `pages[]` per module, so the chain cannot
+      disagree with the module table printed above it in `report.md`;
+    * **the archive's attribution alone** — what is left when a caller passes the
+      pages without the grouping (the weaker but still honest reading: a page
+      that lists the designator is a page the part is on).
+
+    `board` narrows both readings to that board's own pages when the finding
+    names one. It matters: a `conn-duplicate-designators` finding about `C1`
+    ("placed on more than one board") matches modules of **both** boards, and
+    printing Board2's page under a `Board1 →` link sends the reader to the wrong
+    sheet for a finding that is about Board1's placement. A finding that names no
+    board gets every page its refs are on — there is nothing to narrow by.
+
+    Either way a page with no components (a title-block-only page) never claims
+    a finding, and an unresolved tier (no pages at all) returns nothing, which
+    the caller renders as the missing link rather than an empty string.
+    """
+    if not refs:
+        return []
+    wanted = set(refs)
+    titles: dict[str, int] = {}
+    for uuid, page in (attribution or {}).items():
+        title = str(page.get("title") or uuid)
+        titles[title] = titles.get(title, 0) + 1
+    if modules:
+        names: list[str] = []
+        for module in modules:
+            if board and module.get("board") and module["board"] != board:
+                continue
+            if not set(module.get("components") or []) & wanted:
+                continue
+            for uuid in module.get("pages") or []:
+                name = _page_label(uuid, (attribution or {}).get(uuid) or {}, titles)
+                if name not in names:
+                    names.append(name)
+        return names
+    return [
+        _page_label(uuid, page, titles)
+        for uuid, page in (attribution or {}).items()
+        if set(page.get("components") or []) & wanted
+    ]
+
+
+def finding_chains(
+    report: dict, *, attribution: dict[str, dict] | None = None,
+    modules: list[dict] | None = None,
+) -> list[dict]:
+    """One location chain per finding, in the report's own `findings[]` order.
+
+    The four links of issue #69's chain, each rendered as a one-line string the
+    Markdown and the `review-summary.md` skeleton can print verbatim:
+
+    ``工程 → 板 → 页（可缺） → 器件/网 → 问题``
+
+    `attribution` is `page_attribution_from_archive`'s `{page_uuid: {title,
+    components}}` — the caller already has it (it built `modules` from it), and
+    passing it in is what lets a page be **named** rather than only its uuid
+    quoted. `modules` is the report's own `modules[]`; without it the page link
+    is derived from `attribution` alone by matching designators, which is the
+    weaker reading and still honest.
+
+    A finding with no `refs` and no `target.component_ref` (a PCB spacing
+    measurement between two parts the rule did not name) still gets all four
+    keys — the chain exists, the device link reads `CHAIN_UNKNOWN`, and the
+    report says so rather than dropping the row.
+    """
+    source = report.get("source") or {}
+    boards = source.get("boards") or []
+    findings = report.get("findings") or []
+    module_list = modules if modules is not None else (report.get("modules") or [])
+    project = _chain_project(source)
+    rows: list[dict] = []
+    for index, finding in enumerate(findings):
+        target = finding.get("target") or {}
+        refs = [str(ref) for ref in (finding.get("refs") or []) if str(ref)]
+        component = str(target.get("component_ref") or "")
+        if component and component not in refs:
+            refs = [component, *refs]
+        net_refs = [str(net) for net in (target.get("net_refs") or []) if str(net)]
+        board = _chain_board(finding, boards)
+        pages = _chain_pages(refs, module_list, attribution, board)
+        device = "、".join(refs) if refs else CHAIN_UNKNOWN
+        if net_refs:
+            device = f"{device}（网 {'、'.join(net_refs)}）"
+        problem = str(finding.get("message") or "").strip() or CHAIN_UNKNOWN
+        rows.append({
+            "index": index,
+            "rule_id": str(finding.get("rule_id") or ""),
+            "severity": str(finding.get("severity") or ""),
+            "project": project,
+            "board": board,
+            "page": "、".join(pages) if pages else CHAIN_UNKNOWN,
+            "refs": device,
+            "problem": problem,
+            "missing": [
+                link for link, value in (
+                    ("project", project), ("board", board),
+                    ("page", "、".join(pages) if pages else CHAIN_UNKNOWN),
+                    ("refs", device),
+                )
+                if value == CHAIN_UNKNOWN
+            ],
+        })
+    return rows
+
+
+#: The findings key the report carries, under the name the pre-chain schema used.
+#: Kept as an alias because three older readers and several tests use it; the
+#: report's own name is the new one (issue #69 条 1).
+CHAINS_KEY = "location_chains"
+FINDING_CHAINS_KEY = CHAINS_KEY
+
+
+def _report_chains(report: dict) -> list[dict]:
+    """The report's location chains, reading the key under either name.
+
+    ``report.json`` names the section ``location_chains``; a report built by this
+    engine always carries it. The fallback to ``finding_chains`` keeps a
+    hand-built report dict (the shape the 025d tests build) rendering exactly as
+    it did — a missing section is a reading, and it is derived on the spot from
+    the same function rather than being an empty table.
+    """
+    chains = report.get(CHAINS_KEY)
+    if isinstance(chains, list):
+        return chains
+    return finding_chains(report)
+
+
+def chain_text(row: dict) -> str:
+    """One chain as the single line both renderings print.
+
+    The page link is optional *in the data* (a netlist tier has none) but never
+    optional in the **line**: it is printed as `页:（本档无页信息）` rather than
+    dropped, so a reader can tell "no page on this board" from "the report did
+    not look". A chain with any other missing link says so at the end too.
+    """
+    page = row.get("page") or ""
+    if page == CHAIN_UNKNOWN:
+        page = "（本档无页信息）"
+    line = (
+        f"{row.get('project') or CHAIN_UNKNOWN} → {row.get('board') or CHAIN_UNKNOWN} "
+        f"→ 页:{page} → {row.get('refs') or CHAIN_UNKNOWN}"
+    )
+    missing = [link for link in (row.get("missing") or []) if link != "page"]
+    if missing:
+        line += f" 〔缺 {'、'.join(missing)}〕"
+    return line
+
+
+#: The skeleton header `review-summary.md` carries (issue #69 条 1 的 AI 侧机械化).
+#: Every line here is load-bearing: the SOP says the model fills the two blanks and
+#: nothing else, so the header is what makes "补全骨架" an instruction rather than
+#: a request to start from nothing.
+REVIEW_SUMMARY_HEADER = """\
+<!-- 本文件由 `boardwise checkup` 生成骨架：定位链已按机器账预填，
+     「分析」「建议」两栏留空给 AI 填。收尾必须补全（docs/review-sop.md §3.1），
+     工程师只看这一份。删掉这两段注释前先读那份 SOP。 -->
+
+# 审查总结 · {project}
+
+**结论：{conclusion}**（退出码 {exit_code}）
+数据来源：{tier} — {tier_label}
+
+## 1. 连接状态（开工第一句必须报，见 docs/review-sop.md §3.0）
+
+<!-- AI 在这里写一行：连上了哪个工程/哪个窗口；没连上写清楚怎么修。 -->
+
+## 2. 逐条问题（{count} 条）
+
+| # | 级别 | 规则 | 定位链（工程 → 板 → 页 → 器件/网） | 问题 | 分析 | 建议 |
+|---|---|---|---|---|---|---|
+"""
+
+#: The two columns the model fills. Kept as constants so the skeleton, the SOP
+#: and the tests all name the same two words.
+REVIEW_SUMMARY_BLANK_ANALYSIS = "<!-- 分析：为什么是问题、根因在哪 -->"
+REVIEW_SUMMARY_BLANK_ADVICE = "<!-- 建议：怎么改/怎么确认 -->"
+
+
+def render_review_summary(report: dict, chains: list[dict]) -> str:
+    """The `review-summary.md` **skeleton**: one prefilled row per finding.
+
+    Not the summary — issue #69 splits the two outputs on purpose: `report.json`
+    / `report.md` are the machine's ledger and stay complete and mechanical, while
+    this file is the one an engineer reads, and it is only useful once the model
+    has filled the two blank columns. What the machine contributes is the part
+    that must not drift: **the location chain**, prefilled verbatim from the same
+    derivation `report.md` renders, so the two cannot disagree about where a
+    problem is.
+
+    Every finding gets a row even when its chain has holes — the row prints which
+    links are missing (see :func:`chain_text`), because "the tool could not say
+    where this is" is itself something the model must answer rather than skip.
+    """
+    source = report.get("source") or {}
+    summary = report.get("summary") or {}
+    project = source.get("project") or {}
+    title = (
+        project.get("friendlyName") or project.get("name")
+        or source.get("file") or "(unknown)"
+    )
+    lines = [
+        REVIEW_SUMMARY_HEADER.format(
+            project=title,
+            conclusion=summary.get("conclusion") or summary.get("exitCode", 0),
+            exit_code=summary.get("exitCode", 0),
+            tier=source.get("tier") or "",
+            tier_label=source.get("tierLabel") or "",
+            count=len(chains),
+        )
+    ]
+    if not chains:
+        lines.append("| — | — | — | — | 本次审查没有 finding | — | — |\n")
+    for row in chains:
+        lines.append(
+            f"| {row['index']} | {_cell(row['severity'])} | {_cell(row['rule_id'])} "
+            f"| {_cell(chain_text(row))} | {_cell(row['problem'])} "
+            f"| {REVIEW_SUMMARY_BLANK_ANALYSIS} | {REVIEW_SUMMARY_BLANK_ADVICE} |\n"
+        )
+    lines.append(
+        "\n## 3. 待确认（本报告依赖的未知项）\n\n"
+        "<!-- needs_datasheet 非空时逐条写：缺什么资料、找谁要。空着才允许写「通过」。 -->\n"
+        "\n## 4. 下一步（按优先级）\n\n"
+        "<!-- 1. / 2. / 3. …工程师照着做就行，别写「建议进一步分析」。 -->\n"
+    )
+    return "".join(lines)
+
+
+# --------------------------------------------------------------------------
 # AI slots
 # --------------------------------------------------------------------------
 
@@ -2219,26 +2527,54 @@ def render_report_markdown(report: dict) -> str:
     lines.append("")
     if not findings:
         lines.append("无。")
-    elif len(boards) > 1:
-        # One extra column when the project has more than one board: a finding's
-        # board is otherwise only in the JSON, and a reader scanning the table
-        # cannot tell Board1's `U2` finding from Board3's.
-        lines.append("| # | 级别 | 规则 | 板 | 位号 | 说明 |")
-        lines.append("|---|---|---|---|---|---|")
-        for index, finding in enumerate(findings):
-            lines.append(
-                f"| {index} | {_cell(finding.get('severity'))} | {_cell(finding.get('rule_id'))} "
-                f"| {_cell(finding.get('board'))} "
-                f"| {_cell('、'.join(finding.get('refs') or []))} | {_cell(finding.get('message'))} |"
-            )
     else:
-        lines.append("| # | 级别 | 规则 | 位号 | 说明 |")
-        lines.append("|---|---|---|---|---|")
-        for index, finding in enumerate(findings):
-            lines.append(
-                f"| {index} | {_cell(finding.get('severity'))} | {_cell(finding.get('rule_id'))} "
-                f"| {_cell('、'.join(finding.get('refs') or []))} | {_cell(finding.get('message'))} |"
+        chains = _report_chains(report)
+        if any(row["missing"] for row in chains):
+            # A gap in the chain is a fact about the reading, not a formatting
+            # choice: the `page` link is absent on tiers that carry no page
+            # information **and** on PCB-side findings (a board of the layout has
+            # no schematic page), and any *other* missing link means this run
+            # could not say where the problem is. Either way the reader is told
+            # here rather than left to notice an empty cell (issue #69 条 1).
+            gaps: dict[str, int] = collections.Counter(
+                link for row in chains for link in row["missing"]
             )
+            tally = "、".join(f"{link} {gaps[link]} 条" for link in sorted(gaps))
+            # The parenthetical says *why* the page link is often the missing one, so
+            # the reader does not read 「缺 page」 as a defect of the run: a PCB
+            # finding is about a board of the layout, which has no schematic page.
+            because = (
+                "（这一档的模型不带页信息、或该 finding 属于 PCB 板——板面没有原理图页）"
+                if set(gaps) == {"page"} else ""
+            )
+            lines.append(
+                f"> 有 {sum(1 for row in chains if row['missing'])}/{len(chains)} 条 finding "
+                "的定位链不完整，缺的那一环在表里写成「未标注」——逐条看得见，不静默省略。"
+                f"本次缺：{tally}{because}"
+            )
+            lines.append("")
+        if len(boards) > 1:
+            # One extra column when the project has more than one board: a finding's
+            # board is otherwise only in the JSON, and a reader scanning the table
+            # cannot tell Board1's `U2` finding from Board3's.
+            lines.append("| # | 级别 | 规则 | 板 | 位号 | 定位链 | 说明 |")
+            lines.append("|---|---|---|---|---|---|---|")
+            for index, finding in enumerate(findings):
+                lines.append(
+                    f"| {index} | {_cell(finding.get('severity'))} | {_cell(finding.get('rule_id'))} "
+                    f"| {_cell(finding.get('board'))} "
+                    f"| {_cell('、'.join(finding.get('refs') or []))} "
+                    f"| {_cell(chain_text(chains[index]))} | {_cell(finding.get('message'))} |"
+                )
+        else:
+            lines.append("| # | 级别 | 规则 | 位号 | 定位链 | 说明 |")
+            lines.append("|---|---|---|---|---|---|")
+            for index, finding in enumerate(findings):
+                lines.append(
+                    f"| {index} | {_cell(finding.get('severity'))} | {_cell(finding.get('rule_id'))} "
+                    f"| {_cell('、'.join(finding.get('refs') or []))} "
+                    f"| {_cell(chain_text(chains[index]))} | {_cell(finding.get('message'))} |"
+                )
     lines.append("")
 
     lines.append("## 警告（WARN）")

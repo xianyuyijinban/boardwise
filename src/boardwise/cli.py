@@ -32,6 +32,7 @@ from .engines.drc import (
     summarise as drc_summarise,
 )
 from .engines.checkup import (
+    CHAINS_KEY,
     PAGE_ATTRIBUTION_ARCHIVE,
     PAGE_ATTRIBUTION_PER_PAGE,
     PAGE_ATTRIBUTION_UNRESOLVED,
@@ -40,6 +41,7 @@ from .engines.checkup import (
     TRIGGER_MARKED,
     UNREVIEWED_DATASHEET_DIR,
     disambiguated_triage_keys,
+    finding_chains,
     intent_section,
     layout_review_section,
     marked_parts,
@@ -49,6 +51,7 @@ from .engines.checkup import (
     order_modules_by_warnings,
     page_attribution_from_archive,
     render_report_markdown,
+    render_review_summary,
     summary_template,
     unknown_parts,
     unreviewed_parts,
@@ -3069,6 +3072,12 @@ def _cmd_review(args: argparse.Namespace) -> int:
 #: every online report.
 CHECKUP_SCHEMA = "boardwise.checkup/7"
 
+#: The file `checkup` writes its AI-facing skeleton into (issue #69 条 1). A name
+#: of its own, not a section of `report.json`: the two outputs have two different
+#: readers (the machine ledger vs the engineer), and merging them again is the
+#: problem this issue exists to split.
+REVIEW_SUMMARY_FILE = "review-summary.md"
+
 #: What each tier actually read, spelled for the report's own header.
 #:
 #: The tier is the one field a reader must be able to trust, because it is what
@@ -4192,6 +4201,26 @@ def _write_checkup_markdown(out_dir: Path, report: dict) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "report.md"
     path.write_text(render_report_markdown(report), encoding="utf-8")
+    return path
+
+
+def _write_review_summary(out_dir: Path, report: dict, chains: list[dict]) -> Path:
+    """Write the ``review-summary.md`` **skeleton** beside the two ledgers.
+
+    Overwritten on every run, like ``report.md``: the location chains are derived
+    from the report and a stale copy of them would be a chain pointing at a board
+    that has since changed — which is worse than no file. What the model then
+    writes into the two blank columns lives in **this** file between runs, so the
+    next `checkup` replaces it; that is the same bargain ``report.md`` makes and
+    the reason the SOP tells the model to deliver the filled file to the engineer
+    rather than to leave it in `--out` and forget it.
+
+    Never raised over: a skeleton that cannot be written is a missing convenience,
+    and the review it belongs to is already complete without it.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / REVIEW_SUMMARY_FILE
+    path.write_text(render_review_summary(report, chains), encoding="utf-8")
     return path
 
 
@@ -5350,8 +5379,30 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         completion=completion,
         pcb_review=pcb_review,
     )
+    # issue #69 条 1（机器侧）: the chains are built **before** anything is written,
+    # so `report.json`, `report.md` and `review-summary.md` all carry the same rows
+    # — three files, one derivation. `modules` is the report's own grouping, so the
+    # chain reads the same page split the module table prints; and
+    # `render_report_markdown` reads the copy in the report, falling back to
+    # deriving it, so a report dict built by a test renders identically.
+    chains = finding_chains(
+        report,
+        attribution=(attribution or {}).get("pages"),
+        modules=modules,
+    )
+    report[CHAINS_KEY] = chains
+    slots["review_summary"] = {
+        "file": REVIEW_SUMMARY_FILE,
+        "entries": len(chains),
+        "note": (
+            "逐条 finding 的定位链已预填进 `review-summary.md`，「分析」「建议」两栏留空给模型"
+            "（docs/review-sop.md §3.1 收尾死一步：必须补全，工程师只看这一份）"
+        ),
+    }
     report_path = _write_checkup_report(out_dir, report)
     report_md_path = _write_checkup_markdown(out_dir, report)
+    review_summary_path = _write_review_summary(out_dir, report, chains)
+    print(f"  review-summary: {review_summary_path}（骨架 {len(chains)} 条，收尾必须补全）")
     architecture_path = (
         _write_architecture(out_dir, architecture.markdown)
         if architecture is not None
@@ -6562,6 +6613,12 @@ def _cmd_bridge_status(args: argparse.Namespace) -> int:
                 _bridge_uri(port), token, "cli", client="boardwise-cli"
             )
         except (OSError, WebSocketException, BridgeError) as exc:
+            # The un-reachable case is the *same* sentence as the reachable-but-
+            # no-connector one, with the daemon step dropped because it is the one
+            # that just failed: a reader who starts the daemon and still sees no
+            # window has the next half of the instruction waiting for them (69 条 2).
+            print("未连接——先启动 daemon：`boardwise bridge start`，"
+                  "再确认立创 EDA 里已导入 connector")
             print(f"boardwise bridge: daemon not reachable on 127.0.0.1:{port} ({exc})")
             return 2
         try:
@@ -6569,6 +6626,11 @@ def _cmd_bridge_status(args: argparse.Namespace) -> int:
         finally:
             await client.close()
         connected = bool(data.get("connector"))
+        # The verdict line first (69 条 2): one sentence saying whether boardwise
+        # can see the engineer's project, in the order the reader has to fix it.
+        # Everything below it is unchanged — the table is the detail, this is the
+        # answer, and neither replaces the other.
+        print(daemon_module.status_summary(data))
         print(f"boardwise bridge: daemon up on 127.0.0.1:{port}")
         print(
             "  connector: connected"
@@ -20317,6 +20379,12 @@ class DoctorCheck:
     #: is printed and never fails the run — claiming red for a comparison that
     #: was never made would be its own kind of wrong.
     skipped: bool = False
+    #: Which `docs/getting-started.md` step this check belongs to, or `0` for
+    #: "no section" — set once by :func:`run_doctor` from :data:`DOCTOR_STEP_HINTS`
+    #: so the guided walkthrough can point at the written instructions instead of
+    #: becoming a second, drifting copy of them (issue #69 条 3). It is **not** part
+    #: of the finding itself: a check's verdict is about this machine, the step
+    #: number is about the manual.
 
 
 @dataclass
@@ -20882,6 +20950,13 @@ def run_doctor(p: DoctorProbe) -> list[DoctorCheck]:
         )
     )
 
+    # 69 条 3: every check now knows which install step it belongs to, so the
+    # guided walkthrough (`_finish_doctor`) can point at the written instructions.
+    # Applied here rather than at each construction site so a **new** check gets it
+    # for free — the failure mode this fixes was a doc pointer silently going
+    # missing, and a per-site assignment is exactly where that happens next.
+    for check in checks:
+        check.step_hint = DOCTOR_STEP_HINTS.get(check.name, 0)
     return checks
 
 
@@ -21195,6 +21270,105 @@ def _repo_connector_version() -> str:
         return ""
 
 
+def _guided_step(check: DoctorCheck, step: int) -> str:
+    """One failing check as a numbered install step, in the order of the manual.
+
+    The per-line ``fix`` says what to do; this says **how**, with the click-path a
+    first-time user needs, and every step names the document it came from so the
+    walkthrough cannot become the thing that drifts (issue #69 条 3: 「检查器不过时，
+    文档会过时」 — so the checker's words and `docs/getting-started.md` are the same
+    words, and this function is where that agreement is made).
+
+    Two rules it obeys:
+
+    * **no step invents a fact the check does not have** — the version numbers in
+      the text come from the check's own detail, which the engine already measured;
+    * **the steps are ordered by the install itself** (editor → connector → daemon
+      → project), which is the order `checks` is built in, so the numbering is a
+      walkthrough rather than a severity ranking — an extension cannot be imported
+      before the editor is new enough to have a menu to import it into.
+    """
+    # The `fix` is the authoritative sentence the engine built; this wraps it with
+    # the *how* and the doc pointer, and never replaces what it says.
+    hint = getattr(check, "step_hint", 0) or 0
+    if not hint:
+        return check.fix
+    return f"{check.fix}（详见 docs/getting-started.md 第 {hint} 步）"
+
+
+#: Which install step each check belongs to, by check name. The numbers are the
+#: sections of `docs/getting-started.md` (第 1 步 editor … 第 5 步 first review);
+#: a check with no entry prints the fix on its own, without a pointer.
+DOCTOR_STEP_HINTS: dict[str, int] = {
+    "editor-install": 1,     # 第 1 步 · 安装立创 EDA Pro
+    "skill-kimi": 0,         # 第 0 步 · 不用 Python 的装法（含 install-skill）
+    "skill-claude": 0,
+    "skill": 0,
+    "daemon": 3,             # 第 3 步 · 启动 daemon
+    "connector": 2,          # 第 2 步 · 装 boardwise 扩展（.eext）
+    "methods": 2,            # the same .eext, an older one
+    "editor-version": 1,     # 第 1 步 · the editor version
+    "daemon-version": 3,     # 第 3 步 · restart daemon
+    "connector-version": 2,  # 第 2 步 · update-connector
+    "project": 5,            # 第 5 步 · open a project
+}
+
+#: The checks whose red verdict is **not their own** — it is the one in front of
+#: them failing (issue #69 条 3).
+#:
+#: With no daemon, six of doctor's lines go red and five of them carry the same
+#: "先让扩展连上" fix. Printing six steps for one missing thing is not a
+#: walkthrough, it is the same sentence six times — which is what the reader had
+#: before, just numbered. So the guided block groups the red lines by **the action
+#: that actually fixes them**: the checks listed here fold into
+#: :data:`DOCTOR_ROOT_ACTION`, and the block prints one step for the whole group
+#: with the folded lines named under it, so the reader is told both "do this once"
+#: and "these four lines are what it will turn green".
+#:
+#: The grouping is by *cause*, not by severity, and it is checked against the
+#: detail: a line only folds when its own detail says it could not be judged
+#: (``未验证``), because a line that failed **on its own evidence** — a missing
+#: method, an old connector — is a real, separate instruction and must stay one.
+DOCTOR_ROOT_ACTION: dict[str, str] = {
+    "methods": "connector",
+    "editor-version": "connector",
+    "connector-version": "connector",
+    "daemon-version": "daemon",
+    "project": "connector",
+}
+
+
+def _guided_groups(failed: list[DoctorCheck]) -> list[list[DoctorCheck]]:
+    """The red lines as steps: one group per distinct action, order preserved.
+
+    Each group is ``[root, *folded]``. A line with no root action (``editor-install``
+    is the canonical one — it is judgeable offline, so nothing upstream of it can be
+    the cause) is its own group of one.
+
+    The groups come out in **install order** (editor → connector → daemon →
+    project), which is :data:`DOCTOR_STEP_HINTS` — not the order the checks were
+    built in, and not a severity ranking. The install is a dependency chain: a
+    `.eext` cannot be imported into an editor that is too old to have the menu, and
+    `doctor` cannot judge the connector before the daemon is up to carry the answer.
+    Sorting by the manual's own numbering is what makes the block a walkthrough;
+    the *groups* keep the order they were built in within a step (a red `connector`
+    followed by a red `editor-version` reads as "connect it, then the version will
+    be readable"), which is the natural reading of the line list above.
+    """
+    grouped: dict[str, list[DoctorCheck]] = {}
+    for check in failed:
+        root = DOCTOR_ROOT_ACTION.get(check.name, "")
+        # Only fold a line that admits it could not judge itself; one that failed on
+        # its own evidence keeps its own step even if a root is named for it.
+        foldable = bool(root) and "未验证" in check.detail
+        key = root if foldable else check.name
+        grouped.setdefault(key, []).append(check)
+    return sorted(
+        grouped.values(),
+        key=lambda group: DOCTOR_STEP_HINTS.get(group[0].name, 99),
+    )
+
+
 def _finish_doctor(checks: list[DoctorCheck], probe: DoctorProbe, args: argparse.Namespace) -> int:
     import json
 
@@ -21211,6 +21385,31 @@ def _finish_doctor(checks: list[DoctorCheck], probe: DoctorProbe, args: argparse
     )
     if failed:
         print(f"  先修第一项：{failed[0].label}")
+        # issue #69 条 3（引导式安装）: the per-line `→` is one sentence each; a
+        # first-time installer needs them **in order** as one walkthrough, because
+        # the three manual steps (import connector → start daemon → verify) are a
+        # dependency chain and fixing them out of order just moves the failure.
+        # Printed only when something is red — the all-green path stays as it was,
+        # so a working install's output does not grow a section nobody reads.
+        groups = _guided_groups(failed)
+        print("")
+        if len(groups) < len(failed):
+            # The grouping did something: say so, because a reader who counts the
+            # steps and the red lines and finds them unequal will otherwise think a
+            # check was dropped. It was not — it is named under the step that fixes
+            # it.
+            print(
+                f"  按这个顺序做（{len(failed)} 个红项归成 {len(groups)} 步，"
+                "归并的红项列在它那一步下面；每做完一步重跑一次 `boardwise doctor`）："
+            )
+        else:
+            print("  按这个顺序做（每做完一步重跑一次 `boardwise doctor`）：")
+        for index, group in enumerate(groups, start=1):
+            root = group[0]
+            print(f"    第 {index} 步 · {root.label}")
+            print(f"      {_guided_step(root, index)}")
+            for folded in group[1:]:
+                print(f"      （这一步会同时解决：{folded.label}）")
     # 062: the two skill lines above cover the harnesses this build knows where to
     # write to. Every other one (Codex, Hermes, ...) is the *agent's* own business
     # — its skill directory is a fact it holds and we would only be guessing at —
@@ -21244,9 +21443,33 @@ def _finish_doctor(checks: list[DoctorCheck], probe: DoctorProbe, args: argparse
                             "skipped": check.skipped,
                             "detail": check.detail,
                             "fix": check.fix,
+                            # 69 条 3: which install step this check belongs to,
+                            # so a script walking the JSON gets the same ordering
+                            # the guided printout does. `0` = no section applies.
+                            "stepHint": getattr(check, "step_hint", 0) or 0,
                         }
                         for check in checks
                     ],
+                    # The same walkthrough the printout shows, already grouped and
+                    # ordered: each entry is one step, `checks` names the red lines
+                    # that step fixes (the first is the cause, the rest are what it
+                    # unblocks). A script does not have to re-derive the grouping
+                    # from `stepHint` and cannot get a different answer. Absent on a
+                    # green run, like the printed block it mirrors.
+                    **(
+                        {"guidedSteps": [
+                            {
+                                "step": number,
+                                "cause": group[0].name,
+                                "label": group[0].label,
+                                "fix": group[0].fix,
+                                "stepHint": getattr(group[0], "step_hint", 0) or 0,
+                                "checks": [entry.name for entry in group],
+                            }
+                            for number, group in enumerate(_guided_groups(failed), start=1)
+                        ]}
+                        if failed else {}
+                    ),
                 },
                 ensure_ascii=False,
                 indent=2,

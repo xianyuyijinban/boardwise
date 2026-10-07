@@ -73,7 +73,8 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
 > 缺了重跑 `boardwise install-skill`，别手抄路径硬找）。
 
 - **审板子**：`boardwise checkup` 一条出报告（ERC/DRC + 20 条自有规则 + 数据手册闸
-  + 分诊/器件/总结槽位）。报告逐段读法、架构走查（044 起强制环节）、triage 分诊口径，
+  + 分诊/器件/总结槽位）。**开工第一句先报连接状态**、报告逐段读法、`review-summary.md`
+  收尾补全（工程师只看这一份）、架构走查（044 起强制环节）、triage 分诊口径，
   全在 `docs/review-sop.md`。
 - **断连兜底**：daemon 掉线重连、watchdog、匿名期、多窗口寻址的操作口径在
   `docs/review-sop.md` 的断连兜底段；机制全表在 `docs/bridge.md`。
