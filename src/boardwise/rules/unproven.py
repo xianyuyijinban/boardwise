@@ -325,6 +325,37 @@ def unproven_missing_fact(found: Sequence[RefusedNet]) -> str:
     )
 
 
+#: Every sentence :func:`unproven_missing_fact` can produce — the one home for
+#: the family, so a third refusal phrasing cannot be added without this noticing.
+#:
+#: Issue #66 was this list going stale: ``refused_conclusions`` (``engines/review``)
+#: matched :data:`UNPROVEN_BY_NAME` alone, so 107's **two** truncation sentences —
+#: which name a different gap (a duplicate designator may have left a placement
+#: out of the netlist) and therefore do not contain that substring — counted as
+#: zero. On the real ``DCDC-12V9V转5V3V3`` fixture all five unproven nets are
+#: truncated, two rules really withheld, and the coverage gate reported
+#: ``rulesRefused: 0`` — which is the one number that keeps a verdict from
+#: claiming ``complete``. One rule, one missing_fact shape, one predicate; a
+#: caller that asks "did this reading withhold a conclusion?" asks it here.
+REFUSAL_SENTENCES: tuple[str, ...] = (
+    UNPROVEN_BY_NAME,
+    *TRUNCATION_PHRASES.values(),
+)
+
+
+def is_unproven_refusal(missing_fact: str | None) -> bool:
+    """Whether this ``missing_fact`` is the unproven reading refusing to conclude.
+
+    The check is by :data:`REFUSAL_SENTENCES` rather than by a name or a rule
+    id, because what the coverage gate needs is "this UNKNOWN exists **because**
+    a net could not be verified", and the reader's own sentence is the only thing
+    that says so. Matching on one of them (issue #66) silently drops the other
+    shapes and makes ``rulesRefused`` read 0 on a board that really withheld.
+    """
+    text = missing_fact or ""
+    return any(sentence in text for sentence in REFUSAL_SENTENCES)
+
+
 def unproven_outcome(
     rule_id: str,
     subject: str,

@@ -714,6 +714,321 @@ def test_refused_conclusions_counts_instances_not_the_registry(monkeypatch):
     )
 
 
+# --------------------------------------------------------------------------
+# #66 — every refusal phrasing counts, and the gate the count feeds
+# --------------------------------------------------------------------------
+
+#: The real board whose unproven nets are **all** 107 truncations (none is the
+#: cross-page same-name merge): five nets, one reason each. Issue #66 measured
+#: ``rulesRefused: 0`` on it and two rules that really did withhold.
+DCDC = FIXTURES / "DCDC-12V9V转5V3V3_2026-09-27.epro2"
+
+
+def board_reason(board, net):
+    """107's reason code for one unproven net — the model's own wording."""
+    return (getattr(board, "unproven_reasons", None) or {})[net][0]
+
+
+def test_every_refusal_phrasing_counts_not_just_the_cross_page_one():
+    """Issue #66: the counter asked ``UNPROVEN_BY_NAME in missing_fact``, which is
+    one of **three** sentences the unproven reading produces — 107's two
+    truncation phrasings do not contain it, so every one of their refusals read as
+    zero. This walks the real DCDC fixture (all five unproven nets truncated by a
+    duplicate designator, none of them a cross-page same-name merge) and asks the
+    two questions that must not disagree: how many refusals did the walk actually
+    file, and how many did the counter report."""
+    from boardwise.engines.review import BUILTIN_RULES, refused_conclusions
+    from boardwise.rules.unproven import NET_MEMBERSHIP_RULES, is_unproven_refusal
+    from boardwise.parsers.schematic import build_project_model
+
+    model = build_project_model(DCDC)
+    unproven = [
+        (board, net, board_reason(board, net))
+        for board in model.boards
+        for net in (getattr(board, "unproven_nets", None) or {})
+    ]
+    assert len(unproven) == 5, [net for _b, net, _r in unproven]
+    assert {reason for _b, _net, reason in unproven} == {
+        "truncated-by-duplicate-designator"
+    }, "this fixture's gap is truncation, not the cross-page merge"
+
+    withheld = [
+        (rule.id, outcome.subject)
+        for board in model.boards
+        if getattr(board, "unproven_nets", None)
+        for rule in BUILTIN_RULES
+        if rule.id in NET_MEMBERSHIP_RULES and hasattr(rule, "outcomes")
+        for outcome in rule.outcomes(board)
+        if outcome.state == "UNKNOWN" and is_unproven_refusal(outcome.missing_fact)
+    ]
+    assert len(withheld) >= 2, (
+        withheld,
+        "the walk really did withhold conclusions on this board — that is what "
+        "the counter is supposed to report",
+    )
+    assert refused_conclusions(model) == len(withheld), (
+        "the counter and the walk are two readings of one number"
+    )
+
+
+
+def test_the_withheld_count_keeps_the_verdict_from_saying_complete(tmp_path):
+    """The other end of issue #66, measured **end to end on the real fixture**.
+
+    The counter is the only source of ``coverage.rulesRefused``, and that field is
+    one of the gates that turns a verdict from ``complete`` into
+    ``complete-with-open-items``. So ``checkup`` is driven on ``DCDC-12V9V转5V3V3``
+    — the board issue #66 measured ``rulesRefused: 0`` on — and the report is
+    read for three things that must hold together:
+
+    * ``rulesRefused >= 2``: two rules really withheld on this board;
+    * the clause is in ``verdictWhy``;
+    * ``verdict != "complete"``.
+
+    The fixture is ``incomplete`` for its own pre-existing reasons (two
+    duplicate-designator ERRORs, 19 parts with no datasheet), so this pins the
+    strongest statement this board supports; ``test_refused_conclusions_gates_a_
+    complete_verdict`` isolates the ``complete`` side, where the withheld count is
+    the *only* thing that decides. Between them both directions are pinned.
+    """
+    _code, report, _out = _checkup(tmp_path, DCDC, name="issue-66-dcdc")
+    coverage = report["completion"]["coverage"]
+    assert coverage["rulesRefused"] >= 2, coverage
+    assert any("withheld" in why for why in report["completion"]["verdictWhy"])
+    assert report["completion"]["verdict"] != "complete", report["completion"]
+    # The report itself never lied: the truncation reasons were already in
+    # ``source.unprovenNets.reasons``; what was missing was the gate that turns
+    # them into a verdict. Pin both halves so a future change cannot fix one and
+    # drop the other.
+    reasons = report["source"]["unprovenNets"]["reasons"]
+    assert set(reasons.values()) == {"truncated-by-duplicate-designator"}, reasons
+
+
+def test_a_checkup_with_a_contract_counts_the_contract_scoped_refusals(tmp_path):
+    """Issue #66 A2, measured end to end: the same board, two runs.
+
+    The rules that read a contract run as per-run instances (:func:`_rules_for`),
+    and three of them — ``pwr-cap-voltage-rating``, ``path-ldo-dissipation``,
+    ``arch-rail-voltage-clash`` — return ``[]`` with no contract at all, because
+    the rail declarations *are* their subject. Counting against the module-level
+    registry therefore cannot see their refusals, so the number the gate reads
+    was strictly **smaller** on a ``--intent`` run than on the same board without
+    one. This drives both runs and pins the direction: with the contract, the
+    count is **higher**.
+    """
+    plain_out = tmp_path / "plain"
+    code = cli.main([
+        "checkup", "--file", str(DCDC), "--out", str(plain_out),
+        "--library", str(SHELF),
+    ])
+    plain = json.loads((plain_out / "report.json").read_text(encoding="utf-8"))
+    assert code in (0, 1)
+
+    contract = tmp_path / "intent.json"
+    assert cli.main([
+        "arch", str(DCDC), "--out", str(tmp_path / "arch.md"),
+        "--library", str(SHELF), "--intent", str(contract),
+    ]) == 0
+    contract_out = tmp_path / "with-intent"
+    cli.main([
+        "checkup", "--file", str(DCDC), "--out", str(contract_out),
+        "--library", str(SHELF), "--intent", str(contract),
+    ])
+    with_intent = json.loads(
+        (contract_out / "report.json").read_text(encoding="utf-8")
+    )
+
+    before = plain["completion"]["coverage"]["rulesRefused"]
+    after = with_intent["completion"]["coverage"]["rulesRefused"]
+    assert after > before, (
+        f"the contract run must see at least as many withheld conclusions: "
+        f"{before} -> {after}"
+    )
+    assert after >= 2
+
+
+def test_refused_conclusions_gates_a_complete_verdict(tmp_path):
+    """A reading that withheld conclusions and has nothing else wrong.
+
+    The #66 claim, isolated: with a **clean** coverage section and every other
+    ``verdictWhy`` clause empty, ``rulesRefused > 0`` is the one thing that stops
+    the verdict from being ``complete``. Both directions are pinned in one test —
+    the count is 0 ⇒ ``complete``, the count is 2 ⇒ ``complete-with-open-items`` —
+    because "the gate exists" and "the gate is wired" are different claims and a
+    test that only saw the second would pass on a counter stuck at 0.
+    """
+    from boardwise.cli import _completion_section
+
+    base = dict(
+        summary={"errorCount": 0, "errors": [], "countsIncomplete": False},
+        unreviewed=[], triage=[], needs_datasheet=[],
+        architecture={"totals": {"slots": 18, "filled": 18, "stale": 0}},
+        model=object(),
+    )
+    assert _completion_section(**base, coverage=dict(CLEAN_COVERAGE))["verdict"] == "complete"
+
+    refused = dict(CLEAN_COVERAGE, rulesRefused=2)
+    gated = _completion_section(**base, coverage=refused)
+    assert gated["verdict"] == "complete-with-open-items", gated
+    assert any("withheld" in why for why in gated["verdictWhy"]), gated["verdictWhy"]
+    # The clause names the family, not one of its three sentences: quoting the
+    # cross-page phrasing would have been wrong on exactly the boards (#66) that
+    # made the count non-zero.
+    clause = next(why for why in gated["verdictWhy"] if "withheld" in why)
+    assert "#19/#107" in clause and "截断" in clause, clause
+
+
+def test_the_count_uses_this_runs_rule_list_not_the_module_registry(monkeypatch):
+    """Issue #66 A2: counting against ``BUILTIN_RULES`` cannot see the refusals of
+    the run that has a contract.
+
+    ``pwr-cap-voltage-rating`` is a ``NET_MEMBERSHIP_RULES`` member, but its
+    ``_rows`` returns ``[]`` with no intent — the rail declarations *are* its
+    subject — so the module-level instance can never withhold anything. The
+    instances :func:`_rules_for` builds for a ``--intent`` run do, and those are
+    the ones that judged the board.
+
+    The two readings of the same board, measured: 0 against the registry, >=1
+    against the run's own list. A test that only pinned the first would have
+    passed all along, which is why both are here.
+    """
+    from boardwise.core import designintent as di
+    from boardwise.core.model import Component, DesignModel, Net, Pin
+    from boardwise.core.parts import PartEntry, PartLibrary
+    from boardwise.engines.review import BUILTIN_RULES, _rules_for, refused_conclusions
+    from boardwise.rules.railratings import CapVoltageRating
+
+    model = DesignModel()
+    model.components["C1"] = Component(
+        uid="c1", designator="C1", value="100nF", mpn="CAP1",
+        pins=[Pin("1", "", "+24V"), Pin("2", "", "GND")],
+    )
+    model.nets = {"+24V": Net("+24V", [("C1", "1")]), "GND": Net("GND", [("C1", "2")])}
+    model.unproven_nets = {"+24V": ("p1", "p2")}
+    model.unproven_reasons = {
+        "+24V": ("truncated-by-duplicate-designator", "detail"),
+    }
+
+    shelf = PartLibrary(parts=[
+        PartEntry(key="cap.100n_0603", mpn="CAP1", lcsc="C1",
+                  params={"Voltage Rating": "50V"}),
+    ])
+    intent = di.IntentSource(
+        document=di.DesignIntent(rails=[di.IntentRail(net="+24V")]),
+        path="mem://contract.json",
+    )
+    rules = _rules_for(intent)
+    registry = next(r for r in rules if r.id == "pwr-cap-voltage-rating")
+    assert isinstance(registry, CapVoltageRating) and registry.intent is not None
+    module_level = next(r for r in BUILTIN_RULES if r.id == "pwr-cap-voltage-rating")
+    assert module_level.intent is None, (
+        "the module-level instance is contract-free, which is exactly why "
+        "counting against the registry read 0"
+    )
+
+    # This run's cap rule really did withhold on this board; the module-level one
+    # has no subject at all, so the same walk finds nothing. The two numbers are
+    # the A2 claim, measured rather than argued.
+    assert refused_conclusions(model, rules=rules) >= 1
+    assert refused_conclusions(model) == 0, (
+        "the registry's blind spot, measured rather than argued"
+    )
+
+
+def test_a_rule_that_raises_while_being_re_counted_does_not_kill_the_report(monkeypatch):
+    """#66 A3: this second walk was the one #30's ``_run_rules`` fork never
+    covered, and its caller (``cli._coverage_section``) sits outside any except —
+    so a rule raising here aborted ``checkup`` outright. The fork is the same one:
+    hand in a collector and the count is partial with the broken id named; leave
+    it out and the exception stands, because ``edit plan`` must not read "the rule
+    crashed" as "the rule found nothing"."""
+    from boardwise.engines.review import BUILTIN_RULES, refused_conclusions
+    from boardwise.rules.base import Outcome
+    from boardwise.rules.unproven import (
+        TRUNCATION_PHRASES,
+        TRUNCATED_BY_DESIGNATOR,
+    )
+
+    model = DesignModel()
+    model.components["U1"] = Component(uid="u1", designator="U1", pins=[Pin("1", "VIN", "VCC")])
+    model.nets = {"VCC": Net("VCC", [("U1", "1")])}
+    model.unproven_nets = {"VCC": ("p1", "p2")}
+
+    # Both rules are handed in explicitly, so this does not depend on the
+    # registry's order: ``broken`` comes first and ``counted`` second.
+    broken = next(r for r in BUILTIN_RULES if r.id == "decap-required-caps")
+    counted = next(r for r in BUILTIN_RULES if r.id == "conn-usb-cc-pulldown")
+
+    def boom(board):
+        raise RuntimeError("this rule is broken")
+
+    monkeypatch.setattr(broken, "outcomes", boom, raising=False)
+    monkeypatch.setattr(counted, "outcomes", lambda board: [
+        Outcome(rule_id=counted.id, state="UNKNOWN", subject="USB1 pin4", message="a",
+                missing_fact=TRUNCATION_PHRASES[TRUNCATED_BY_DESIGNATOR] + "detail")
+    ], raising=False)
+    walk = [broken, counted]
+
+    errored: list[str] = []
+    assert refused_conclusions(model, rules=walk, rules_errored=errored) == 1, (
+        "the other rule's refusal still counted — the count is partial, not zero"
+    )
+    assert errored == ["decap-required-caps"], errored
+
+    # Without a collector the exception stands: a caller that asks for the
+    # hard stop keeps it (the `_run_rules` fork, unchanged).
+    with pytest.raises(RuntimeError):
+        refused_conclusions(model, rules=walk)
+
+
+def test_the_refusal_family_is_defined_once_and_the_counter_only_asks_it():
+    """The maintainability half of #66, and the reason the hole happened twice.
+
+    The sentences live in ``rules.unproven``; ``engines/review`` must *ask*
+    (:func:`is_unproven_refusal`) rather than restate one, or the next phrasing
+    added to the family re-opens the same hole. A test that failed on a duplicate
+    literal keeps the two sides from drifting back apart — this is the pin that
+    makes issue #62's "don't write the same string in two places" enforceable for
+    this one."""
+    review_src = (ROOT / "src" / "boardwise" / "engines" / "review.py").read_text(
+        encoding="utf-8"
+    )
+    assert "UNPROVEN_BY_NAME" not in review_src, (
+        "engines/review no longer names a refusal sentence itself"
+    )
+    assert "is_unproven_refusal" in review_src
+
+    from boardwise.rules.unproven import (
+        REFUSAL_SENTENCES,
+        TRUNCATION_PHRASES,
+        UNPROVEN_BY_NAME,
+        is_unproven_refusal,
+        unproven_missing_fact,
+    )
+
+    assert set(REFUSAL_SENTENCES) == {UNPROVEN_BY_NAME, *TRUNCATION_PHRASES.values()}
+    assert is_unproven_refusal(None) is False
+    assert is_unproven_refusal("a datasheet nobody has read") is False
+    for sentence in REFUSAL_SENTENCES:
+        assert is_unproven_refusal(f"{sentence}some detail"), sentence
+
+
+def test_the_coverage_clause_for_withheld_conclusions_names_the_family():
+    """The ``verdictWhy`` clause must not quote a single sentence of the family.
+
+    Issue #66's report clause read "…(issue #19: agreement by name is not a
+    verified connection)" — true of the phrasing it was written against, and
+    false on the truncation refusals that make the count non-zero. Both boards
+    reach the reader through the same clause, so it names the gap instead."""
+    from boardwise.cli import _coverage_reasons
+
+    reasons = _coverage_reasons(dict(CLEAN_COVERAGE, rulesRefused=3))
+    assert len(reasons) == 1
+    clause = reasons[0]
+    assert "3 条规则结论被 withheld" in clause
+    assert "agreement by name is not a verified connection" not in clause, clause
+
+
 def test_real_boards_report_a_clean_coverage(tmp_path):
     """The regression guard behind the 072 sweep: no fixture trips the gate."""
     for name in ("ch340_golden.epro2", "llc_board.epro2"):

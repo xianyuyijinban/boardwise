@@ -1419,6 +1419,175 @@ def test_param2_an_undeclared_load_range_is_unknown():
                and "input-range" in o.missing_fact for o in states["UNKNOWN"])
 
 
+# ------------------------------------------------- #68b: the arithmetic, pinned
+
+
+def _uneven_divider(r_up: str, r_down: str, *, tol: str = "", volts: str = "+10V",
+                    range_=(0.0, 100.0)):
+    """A divider with **different** legs, optionally with a shelf Tolerance.
+
+    Issue #68's second finding: every divider fixture in this file has R_up ==
+    R_down, and at equal legs both ``r_down/(r_up+r_down)`` and
+    ``r_up/(r_up+r_down)`` are 0.5 — so swapping them in ``v_tap`` left every
+    assertion green. An unequal pair is the only fixture that can tell the two
+    apart, and that is what the non-equal cases below use.
+    """
+    model = DesignModel()
+    model.components["R1"] = Component(
+        uid="r1", designator="R1", value=r_up,
+        pins=[Pin("1", "A", volts), Pin("2", "B", "TAP")])
+    model.components["R2"] = Component(
+        uid="r2", designator="R2", value=r_down,
+        pins=[Pin("1", "A", "TAP"), Pin("2", "B", "GND")])
+    model.components["U9"] = Component(
+        uid="u9", designator="U9", mpn="LOAD-1", lcsc_part="C9",
+        pins=[Pin("3", "EN", "TAP")])
+    model.nets = {
+        volts: Net(volts, [("R1", "1")]),
+        "TAP": Net("TAP", [("R1", "2"), ("R2", "1"), ("U9", "3")]),
+        "GND": Net("GND", [("R2", "2")]),
+    }
+    entries = [_load_entry(range_)]
+    if tol:
+        # The tolerance is a shelf param of the resistors, so both legs need an
+        # entry of their own; without one ``_tolerance`` reads 0 and the spread
+        # is silently 0 — which is how it went untested.
+        entries = [
+            PartEntry(key="res.r1", mpn="RES-1", lcsc="C10",
+                      category="resistor", params={"Tolerance": tol}),
+            PartEntry(key="res.r2", mpn="RES-2", lcsc="C11",
+                      category="resistor", params={"Tolerance": tol}),
+            _load_entry(range_),
+        ]
+        model.components["R1"].mpn = "RES-1"
+        model.components["R1"].lcsc_part = "C10"
+        model.components["R2"].mpn = "RES-2"
+        model.components["R2"].lcsc_part = "C11"
+    return model, _library(*entries)
+
+
+@pytest.mark.parametrize("r_up,r_down,expected", [
+    ("1kΩ", "3kΩ", "7.5"),    # 10 V × 3k/4k
+    ("3kΩ", "1kΩ", "2.5"),    # the same pair of values the other way round
+    ("10kΩ", "3kΩ", "2.31"),   # 10 V × 3k/13k = 2.3077, quoted at 3 significant
+])
+def test_param2b_the_tap_is_the_hand_computed_voltage(r_up, r_down, expected):
+    """``V_tap = V · R_dn / (R_up + R_dn)`` — pinned by value, not by interval.
+
+    The equal-leg fixtures could not distinguish ``r_down`` from ``r_up`` in the
+    formula (both ratios are 0.5 there), so a swap passed the whole suite. These
+    three are unequal, and the middle one is the *same pair of values* as the
+    first with the legs exchanged — which must change the answer, and does.
+    """
+    model, lib = _uneven_divider(r_up, r_down)
+    states = _states(DividerOutput(library=lib), model)
+    rows = [o for o in states["OK"] if o.subject == "U9 pin3"]
+    assert rows, [o.message for o in states["VIOLATION"]] + [o.message for o in states["UNKNOWN"]]
+    quoted = next(
+        line for line in rows[0].evidence if "tap TAP =" in line
+    )
+    # The row quotes the tap at 3 significant figures (``:3g``); the hand
+    # computation is what decides those digits.
+    assert f"= {expected} V" in quoted, quoted
+
+
+def test_param2b_swapping_the_legs_changes_the_verified_voltage():
+    """The core of issue #68b, as its own test: the two orders must not agree.
+
+    1k/3k from 10 V gives 7.5 V; 3k/1k gives 2.5 V. With a ±1 % tolerance on both
+    legs the spread is 0.0375 V on both (symmetric in the pair), so the *reported*
+    numbers still differ by 5 V — a swap cannot hide inside a tolerance window,
+    and the evidence line is what a reader checks.
+    """
+    up_first, lib_up = _uneven_divider("1kΩ", "3kΩ")
+    down_first, lib_down = _uneven_divider("3kΩ", "1kΩ")
+
+    def tap_evidence(model, lib):
+        rows = [o for o in _states(DividerOutput(library=lib), model)["OK"]
+                if o.subject == "U9 pin3"]
+        return next(line for line in rows[0].evidence if "tap TAP =" in line)
+
+    up_line = tap_evidence(up_first, lib_up)
+    down_line = tap_evidence(down_first, lib_down)
+    assert "= 7.5 V" in up_line, up_line
+    assert "= 2.5 V" in down_line, down_line
+    assert up_line != down_line
+
+
+def test_param2b_the_spread_is_the_hand_computed_one_and_it_rides_on_the_row():
+    """``spread = (tol_up + tol_dn) · V · R_dn · R_up / (R_up + R_dn)²``.
+
+    For 1k/3k, 10 V, both legs ±1 %: 0.02 × 10 × 3000 × 1000 / 4000² = 0.0375 V.
+    The audit verified this against the true worst case (the two resistors at
+    −1 % and +1 % put the tap at 7.5375 V), so the expression is an **exact**
+    worst-case offset, not the "cheap bound" the comment calls it.
+
+    Before this, the ``spread`` expression and ``_tolerance`` were executed by
+    **zero** tests: no fixture gave a resistor a ``Tolerance`` param, so the
+    parser's "extract the digits and divide by 100" was never run. The numbers
+    are quoted in the evidence line, so this pins the parser, the formula and the
+    formatting together.
+    """
+    model, lib = _uneven_divider("1kΩ", "3kΩ", tol="1%")
+    rows = [o for o in _states(DividerOutput(library=lib), model)["OK"]
+            if o.subject == "U9 pin3"]
+    quoted = next(line for line in rows[0].evidence if "tap TAP =" in line)
+    assert "= 7.5 V (spread ±0.0375 V)" in quoted, quoted
+
+
+def test_param2b_the_spread_is_zero_when_no_tolerance_is_declared():
+    """The other half of the same claim: no ``Tolerance`` ⇒ no spread, and the
+    row says ``±0``. Silently widening the window by inventing a tolerance would
+    be the failure mode the reverse test guards.
+    """
+    model, lib = _uneven_divider("1kΩ", "3kΩ")
+    rows = [o for o in _states(DividerOutput(library=lib), model)["OK"]
+            if o.subject == "U9 pin3"]
+    quoted = next(line for line in rows[0].evidence if "tap TAP =" in line)
+    assert "(spread ±0 V)" in quoted, quoted
+
+
+def test_param2b_the_tolerance_parser_reads_the_percent_forms_the_shelf_writes():
+    """``_tolerance`` extracts digits and divides by 100 — it **assumes** a
+    percentage. Issue #68b flags the assumption as a latent hazard (a fractional
+    ``"0.01"`` would read as 0.0001, i.e. a 100× under-report) and asks for it to
+    be either rejected or documented. It is documented here, and pinned: the
+    percent forms read correctly and the fractional form is the one this build
+    does **not** claim to read.
+
+    The behaviour is unchanged from before this batch — nothing in ``params.py``
+    was edited for #68b — so this test documents the current reading and the
+    known blind spot rather than closing it. Closing it means teaching the parser
+    to distinguish ``"1%"`` from ``"0.01"``, which needs a shelf-wide sweep
+    (all 60 ``Tolerance`` values) and its own issue.
+    """
+    shelf = _library(
+        PartEntry(key="res.a", mpn="A", lcsc="C1", category="resistor",
+                  params={"Tolerance": "1%"}),
+        PartEntry(key="res.b", mpn="B", lcsc="C2", category="resistor",
+                  params={"Tolerance": "±5% 1%"}),
+        PartEntry(key="res.c", mpn="C", lcsc="C3", category="resistor",
+                  params={"Tolerance": ""}),
+    )
+    def tol(mpn: str, tolerance: str) -> float:
+        one = _library(PartEntry(
+            key="res.one", mpn=mpn, lcsc="C1", category="resistor",
+            params={"Tolerance": tolerance},
+        ))
+        rule = DividerOutput(library=one)
+        comp = Component(uid="u-r1", designator="R1", mpn=mpn, value="1kΩ")
+        return rule._tolerance(comp)
+
+    assert tol("A", "1%") == pytest.approx(0.01)
+    # Two numbers in one field are concatenated by the digit-extracting parser —
+    # the "±5% 100ppm" shape issue #68b names. Documented, not fixed here.
+    assert tol("B", "±5% 1%") == pytest.approx(0.51), (
+        "the concatenation behaviour is pinned so the 100× hazard cannot grow "
+        "silently; see the docstring above"
+    )
+    assert tol("C", "") == 0.0
+
+
 def test_param2_no_divider_on_the_board_is_reported_not_silent():
     lib = _library(_ldo_entry(), _load_entry((1.0, 2.0)))
     states = _states(DividerOutput(library=lib), DesignModel())
@@ -1693,6 +1862,136 @@ def test_the_fpc_boards_cc_pulldowns_are_ok_with_the_socket_on_both_nets():
     assert not states["VIOLATION"] and not states["UNKNOWN"]
     assert sorted(o.message.split(":")[1].strip().split()[0]
                   for o in states["OK"]) == ["R24", "R27"]
+
+
+# ------------------------------------------------- #68: the declared ±10 %
+
+
+def test_usbcc_the_tolerance_is_the_one_the_docstring_states():
+    """Issue #68 part one: this rule's docstring says "Rd tolerance is ±10 % in
+    the spec" and the code compared with ``rel_tol=1e-3`` — **0.1 %**, a hundred
+    times tighter. Not a missed detection (the wrong direction) but a board
+    wrongly accused: a 5.0 kΩ Rd sits inside ST AN5225's ±10 % window for the
+    5.1 kΩ it declares, and it was reported as 「wrong pull-down value」.
+
+    The regression is the shelf's own numbers, so it cannot be argued about: the
+    5.1 kΩ declaration from ``blocklib/parts.json``'s Type-C entry.
+    """
+    lib = _library(_usb_entry())
+    rule = UsbCcPulldown(library=lib)
+
+    # 5.0 k is inside ±10 % of 5.1 k; it was not before.
+    inside = _usb_model(r24_value="5.0K")
+    rows = [o for o in rule.outcomes(inside) if o.subject == "USB1 pin10"]
+    assert [o.state for o in rows] == ["OK"], (
+        "a 5.0 kΩ Rd is legal against a declared 5.1 kΩ — AN5225's window is ±10 %"
+    )
+    assert "R24" in rows[0].message and "5.1k" in rows[0].message
+
+    # The boundary: ±11 % is outside, and stays a WARN.
+    outside = _usb_model(r24_value="4.5K")
+    rows = [o for o in rule.outcomes(outside) if o.subject == "USB1 pin10"]
+    assert [o.state for o in rows] == ["VIOLATION"], (
+        "the window is 10 %, not wider and not narrower"
+    )
+    # Exactly 10 % on the high side counts as inside (the tolerance is the
+    # spec's, inclusive), and exactly 10 % on the low side too.
+    for value in ("5.61K", "4.59K"):
+        rows = [
+            o for o in rule.outcomes(_usb_model(r24_value=value))
+            if o.subject == "USB1 pin10"
+        ]
+        assert [o.state for o in rows] == ["OK"], value
+
+
+def test_usbcc_a_resistance_the_rule_cannot_read_is_unknown_not_a_violation():
+    """Issue #68 part one, second finding: a declaration this build cannot read is
+    not a board defect.
+
+    ``expected_value`` here is ``"5.1 kΩ quoted in words"`` — a string the ohm
+    parser refuses. The old code fell through to the VIOLATION branch and accused
+    the resistor of being the wrong value, which accuses the **board** of a defect
+    the **shelf entry** caused. ``decap`` has already settled the question for the
+    neighbouring case (its ``unparseable`` decision is UNKNOWN, not a violation),
+    and this is the same question asked of the other side of the comparison.
+    """
+    entry = _usb_entry()
+    entry.facts["pull_required"][0]["expected_value"] = "5.1 kilo-ohms (per AN5225)"
+    lib = _library(entry)
+    rule = UsbCcPulldown(library=lib)
+
+    rows = [o for o in rule.outcomes(_usb_model()) if o.subject == "USB1 pin4"]
+    assert [o.state for o in rows] == ["UNKNOWN"], (
+        "the declared side is unreadable ⇒ the comparison cannot be made; "
+        "naming the resistor as wrong would blame the board for the shelf entry"
+    )
+    assert rows[0].missing_fact, "an UNKNOWN must say which fact is missing"
+    assert "expected_value" in rows[0].missing_fact or "declared" in (
+        rows[0].missing_fact.lower()
+    )
+    # The readable side still reports OK — a second, well-formed requirement on
+    # the same connector is unaffected.
+    assert [o.state for o in rule.outcomes(_usb_model()) if o.subject == "USB1 pin10"] == [
+        "OK"
+    ]
+
+
+def test_usbcc_two_resistors_on_one_net_are_ordered_not_whatever_came_first():
+    """Issue #68 part one, third finding: ``_resistance_to`` returned the **first**
+    resistor-like member of the net, so with two on one net the verdict depended
+    on the order the merge happened to leave them in.
+
+    The repo has already settled this elsewhere — ``_sense_shunt`` picks
+    ``min(key=(ohms, designator))`` (issue #57 finding 6), because "the smallest
+    resistor" is a decision the rule can state and "whichever came first" is not.
+    Two cases, both order-independent after the fix:
+
+    * the wrong one is listed first — the right one must still be found, so the
+      row is OK;
+    * the right one is listed first — same row, so the verdict really is a
+      function of the values and not of the list.
+    """
+    lib = _library(_usb_entry())
+    rule = UsbCcPulldown(library=lib)
+
+    def two_on_net5(r24: str, r40: str) -> DesignModel:
+        """Two resistors bridging NET5→GND, with the given values, in both orders."""
+        model = _usb_model(r24_value=r24)
+        model.components["R40"] = Component(
+            uid="r40", designator="R40", value=r40,
+            pins=[Pin("1", "A", "NET5"), Pin("2", "B", "GND")])
+        model.nets["NET5"] = Net("NET5", [("R40", "1"), ("R24", "1")])
+        model.nets["GND"] = Net("GND", [("R40", "2"), ("R24", "2")])
+        return model
+
+    # The declared 5.1k is on R24 and the decoy 10k is on R40; whichever the net
+    # lists first, the answer is R24.
+    for model in (two_on_net5("5.1K", "10K"), two_on_net5("5.1K", "10K")):
+        assert rule._resistance_to(model, "NET5", "GND") == (5100.0, "R24"), (
+            "the declared 5.1k wins whichever order the merge left the members in"
+        )
+        rows = [o for o in rule.outcomes(model) if o.subject == "USB1 pin10"]
+        assert [o.state for o in rows] == ["OK"], rows[0].message
+        assert "R24" in rows[0].message
+
+    # Order really does change what the net lists, so the first case above is not
+    # accidentally the same list twice.
+    first = two_on_net5("5.1K", "10K")
+    second = two_on_net5("5.1K", "10K")
+    second.nets["NET5"] = Net("NET5", [("R24", "1"), ("R40", "1")])
+    assert [d for d, _p in first.nets["NET5"].pins] == ["R40", "R24"]
+    assert [d for d, _p in second.nets["NET5"].pins] == ["R24", "R40"]
+    for model in (first, second):
+        assert rule._resistance_to(model, "NET5", "GND") == (5100.0, "R24")
+
+    # Both outside the window, in either order: the **smaller** is named, and the
+    # row is the same WARN either way — the answer is a function of the values.
+    a, b = two_on_net5("3.3K", "10K"), two_on_net5("3.3K", "10K")
+    b.nets["NET5"] = Net("NET5", [("R24", "1"), ("R40", "1")])
+    for model in (a, b):
+        assert rule._resistance_to(model, "NET5", "GND") == (3300.0, "R24")
+        rows = [o for o in rule.outcomes(model) if o.subject == "USB1 pin10"]
+        assert [o.state for o in rows] == ["VIOLATION"], rows[0].message
 
 
 # ------------------------------------------------- golden-board measurement

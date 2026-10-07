@@ -3393,6 +3393,7 @@ def _coverage_section(
     parse_stats: ParseStats,
     rules_errored: list[str],
     pcb_review_missing: bool = False,
+    intent_source: object | None = None,
 ) -> dict:
     """The coverage gate's **facts**, read off the parse the report is about (#30).
 
@@ -3418,7 +3419,10 @@ def _coverage_section(
     * ``rulesRefused`` — conclusions this model actually **withheld** because its
       net names are unproven (:func:`boardwise.engines.review.refused_conclusions`).
       **Not** `source.unprovenNets.rulesRefused`, which is the length of the rule
-      registry ("how many rules are capable of refusing") — see that function;
+      registry ("how many rules are capable of refusing") — see that function.
+      Counted against ``intent_source``'s per-run rule list, since the
+      module-level instances carry no contract and would file none of the
+      contract-scoped refusals (#66 A2);
     * ``recordsDropped`` — `ParseStats`'s three drop counters, summed. The split
       itself is in ``source.parseStats`` (the audit trail, added by this task).
       These used to reach the console only, which left the CI path (`--file`)
@@ -3446,7 +3450,7 @@ def _coverage_section(
       was read. The online path always passes ``False`` (126d 主代理裁定 1) — an
       absent ``pcb_review`` online is 「未实现」, not 「未通过」.
     """
-    from .engines.review import refused_conclusions
+    from .engines.review import refused_conclusions, rules_for
 
     model_empty = _model_read_nothing(model, board)
     records_dropped = (
@@ -3464,7 +3468,15 @@ def _coverage_section(
             for page in (attempt.get("pages") or [])
             if not page.get("ok")
         ),
-        "rulesRefused": int(refused_conclusions(model)),
+        # #66 A2/A3: the count is taken against **this run's** rule list (the
+        # per-run `--intent` instances, not the module-level registry, whose
+        # contract-free instances can never file a contract-scoped refusal), and
+        # a rule that raises while being re-walked is named in the same
+        # ``rulesErrored`` the main walk writes instead of taking `checkup`
+        # down. Both were read out of this one line by issue #66.
+        "rulesRefused": int(refused_conclusions(
+            model, rules=rules_for(intent_source), rules_errored=rules_errored,
+        )),
         "recordsDropped": records_dropped,
         "rulesErrored": sorted(set(rules_errored)),
         "pcbReviewMissing": bool(pcb_review_missing),
@@ -3502,9 +3514,14 @@ def _coverage_reasons(coverage: dict) -> list[str]:
             f"{coverage['pagesDropped']} 个页的导出/解析失败（per-page 档）：这些页没有进模型"
         )
     if coverage.get("rulesRefused"):
+        # #66: the number now covers 107's two truncation refusals as well as
+        # the cross-page same-name one, so the clause names the **family**
+        # rather than quoting one of its three sentences — which would have
+        # been wrong on exactly the boards that made the count non-zero.
         reasons.append(
-            f"{coverage['rulesRefused']} 条规则结论被 withheld（网名未经证实，issue #19："
-            "agreement by name is not a verified connection）"
+            f"{coverage['rulesRefused']} 条规则结论被 withheld（本档不能证实网名，"
+            "issue #19/#107：跨页同名网无法归属到一块板，或重复位号可能使某网的成员表被截断"
+            "——逐条见 findings 的 UNKNOWN 行）"
         )
     if coverage.get("recordsDropped"):
         reasons.append(
@@ -5153,6 +5170,10 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         # an online run never entered the PCB block, so both are False and the
         # gate does not fire (主代理裁定 1).
         pcb_review_missing=bool(pcb_had_documents and pcb_review is None),
+        # #66 A2: the withheld-conclusion count must be taken against the rule
+        # list this run actually judged with, which with `--intent` is not the
+        # module-level registry.
+        intent_source=intent_source,
     )
     if coverage["modelEmpty"]:
         notes.append(
