@@ -62,6 +62,7 @@ from ..core.geometry import (
     ParseStats,
     Point,
     PourShape,
+    StackupEntry,
     TrackSegment,
     ViaGeometry,
 )
@@ -104,8 +105,8 @@ __all__ = [
 #: obvious what else the format still carries.
 CONSUMED_RECORD_TYPES: frozenset[str] = frozenset(
     {
-        "ATTR", "COMPONENT", "DOCHEAD", "FILL", "LAYER", "LINE", "PAD_NET",
-        "POLY", "POURED", "VIA",
+        "ATTR", "COMPONENT", "DOCHEAD", "FILL", "LAYER", "LAYER_PHYS", "LINE",
+        "PAD_NET", "POLY", "POURED", "VIA",
     }
 )
 
@@ -419,7 +420,11 @@ def build_pads(
                     width=template.width,
                     height=template.height,
                     shape=template.shape,
-                    angle=template.angle,
+                    # Board-frame rotation, not the footprint-local one:
+                    # `PadGeometry` holds a *placed* pad (x/y are already
+                    # board coordinates), so its angle composes the same way —
+                    # both frames are right-handed y-up CCW (task 125a).
+                    angle=comp.angle + template.angle,
                     hole_diameter=template.hole_diameter,
                     plated=template.plated,
                 )
@@ -438,6 +443,9 @@ class PcbContext:
     """
 
     layers: dict[int, LayerInfo] = field(default_factory=dict)
+    #: Physical stackup (``LAYER_PHYS`` records), sorted by z_index at the
+    #: end of the walk. See :class:`boardwise.core.geometry.StackupEntry`.
+    stackup: list[StackupEntry] = field(default_factory=list)
     placements: list[ComponentPlacement] = field(default_factory=list)
     by_id: dict[str, ComponentPlacement] = field(default_factory=dict)
     pads: list[PadGeometry] = field(default_factory=list)
@@ -485,6 +493,19 @@ def collect_pcb_context(
                 layer_id=layer_id,
                 name=str(body.get("layerName") or ""),
                 layer_type=str(body.get("layerType") or ""),
+            )
+        elif rtype == "LAYER_PHYS":
+            try:
+                phys_layer_id = int(parse_id_tuple(record)[1])
+            except (IndexError, ValueError):
+                continue
+            context.stackup.append(
+                StackupEntry(
+                    layer_id=phys_layer_id,
+                    z_index=int(_as_float(body.get("zIndex"))),
+                    material=str(body.get("material") or ""),
+                    thickness=_as_float(body.get("thickness")),
+                )
             )
         elif rtype == "COMPONENT":
             # Older documents use "angle"; the published V3 schema names the
@@ -607,6 +628,7 @@ def collect_pcb_context(
         elif rtype != "DOCHEAD":
             stats.unconsumed_types[rtype] = stats.unconsumed_types.get(rtype, 0) + 1
 
+    context.stackup.sort(key=lambda entry: entry.z_index)
     context.pads = build_pads(
         context.placements,
         footprints,
@@ -628,6 +650,7 @@ def extract_board(
         source=stats.source,
         edit_version=stats.edit_version,
         layers=context.layers,
+        stackup=context.stackup,
         components=context.placements,
         pads=context.pads,
         tracks=context.tracks,
@@ -677,6 +700,7 @@ def build_board_geometry(source: Epro2Source) -> BoardGeometry:
         name=name,
         edit_version=source.stats.edit_version,
         layers=context.layers,
+        stackup=context.stackup,
         components=context.placements,
         pads=context.pads,
         tracks=context.tracks,

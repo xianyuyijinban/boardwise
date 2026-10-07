@@ -36,6 +36,7 @@ __all__ = [
     "Point",
     "BBox",
     "LayerInfo",
+    "StackupEntry",
     "ComponentPlacement",
     "PadGeometry",
     "TrackSegment",
@@ -134,7 +135,13 @@ def transform_point(
 
 
 #: Layer types that carry copper (used by :attr:`LayerInfo.is_copper`).
-COPPER_LAYER_TYPES: frozenset[str] = frozenset({"TOP", "BOTTOM", "SIGNAL"})
+#: ``"PLANE"`` joined in task 125a: an inner plane (内电层) is copper too.
+#: Evidence: `tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2`, PCB
+#: document "PCB1" (the 4-layer driver board), ``["LAYER",15]`` reads
+#: ``{"layerId": 15, "layerType": "PLANE", "layerName": "Inner1", "use": true}``
+#: and the same document's ``LAYER_PHYS`` stackup seats layer 15 between two
+#: dielectrics (zIndex 1002, material 内层铜厚, thickness 0.598 mil = 0.5 oz).
+COPPER_LAYER_TYPES: frozenset[str] = frozenset({"TOP", "BOTTOM", "SIGNAL", "PLANE"})
 
 
 @dataclass(frozen=True)
@@ -204,6 +211,33 @@ class LayerInfo:
 
     def __str__(self) -> str:  # pragma: no cover - convenience only
         return f"{self.name} (id={self.layer_id}, {self.layer_type})"
+
+
+@dataclass
+class StackupEntry:
+    """One physical stackup layer, from a ``LAYER_PHYS`` record.
+
+    The ``LAYER`` table of an EasyEDA Pro document defines every layer the
+    *editor* knows — including all 32 possible inner signal layers on a
+    2-layer board — so it cannot say which copper actually exists. The
+    ``LAYER_PHYS`` table is the fabrication truth: one record per physical
+    layer (copper or dielectric), ordered by ``z_index``. Evidence: on the
+    毕设FOC fixture's "PCB1" document the copper entries are layers
+    1 / 15 / 16 / 2 at zIndex 1000 / 1002 / 1004 / 9000 with dielectrics
+    361 / 362 / 363 between them; on the older LLC fixture the same layout
+    uses the legacy zIndex scale (copper at 4 and 6, ``FR4`` at 5), so only
+    the *ordering* is meaningful, never the magnitude.
+
+    ``thickness`` is in **mils** like every other dimension here (1 oz
+    outer copper reads 1.378 mil = 35 µm; the LLC core reads 59.449 mil ≈
+    1.51 mm). ``material`` is the free-text string the file carries
+    (``"FR4"``, ``"外层铜厚1oz"``, ...), kept verbatim for reporting.
+    """
+
+    layer_id: int
+    z_index: int
+    material: str = ""
+    thickness: float = 0.0
 
 
 @dataclass
@@ -526,6 +560,10 @@ class BoardGeometry:
     name: str | None = None
     edit_version: str | None = None
     layers: dict[int, LayerInfo] = field(default_factory=dict)
+    #: Physical stackup from ``LAYER_PHYS``, ordered by ``z_index``. Empty
+    #: for hand-built boards and files old enough to lack the table; readers
+    #: must fall back to :meth:`copper_layers` in that case (task 125a).
+    stackup: list[StackupEntry] = field(default_factory=list)
     components: list[ComponentPlacement] = field(default_factory=list)
     pads: list[PadGeometry] = field(default_factory=list)
     tracks: list[TrackSegment] = field(default_factory=list)
