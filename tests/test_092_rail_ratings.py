@@ -53,6 +53,10 @@ CLI_SOURCE = Path("src/boardwise/cli.py")
 FOC_10U_MPN = "HGC0603R5106M250NTHJ"
 FOC_100N_MPN = "CGA0603X7R104K500JT"
 
+#: A citation string for the #67 fixtures below; the shelf reader only requires
+#: it to look like one.
+PROV_67 = "issue-067 fixture datasheet, p.4, http://example.com/ds.pdf"
+
 
 def _part(designator: str, *, value: str = "", mpn: str = "", pins=()):
     return Component(
@@ -614,6 +618,172 @@ def test_the_rules_read_core_only_and_never_a_disk():
     for rule in (railratings.CapVoltageRating, railratings.LdoDissipation):
         body = inspect.getsource(rule)
         assert "read_text" not in body and "open(" not in body
+
+
+# ---------------------------------------------------------------------------
+# #67: a rail whose voltage is zero is not a comparison, it is a work order
+# ---------------------------------------------------------------------------
+
+
+def _zero_rail_cap_model(net: str) -> DesignModel:
+    return _model_of(
+        {"C1": _part("C1", value="100nF", mpn="CAP1",
+                     pins=[("1", net), ("2", "GND")])},
+        {net: [("C1", "1")], "GND": [("C1", "2")]},
+    )
+
+
+@pytest.mark.parametrize("net", ["0V", "0V0", "+0V"])
+def test_a_rail_named_zero_volts_is_unknown_not_a_division_by_zero(net):
+    """Issue #67: ``0V``/``0V0``/``+0V`` are KNOWN **0.0 V** rails.
+
+    ``power_domains.voltage_from_net_name``'s ``^\\+?(\\d+(\\.\\d+)?)V$`` matches
+    all three and ``infer_net_domains`` files them as ``state=KNOWN, volts=0.0``
+    — so the fallback path ``rail_voltage`` takes for a rail the contract does
+    not state hands ``volts = 0.0`` straight to ``rating / volts``. That
+    ``ZeroDivisionError`` left ``run_review`` entirely: not one row short, the
+    whole report dead.
+
+    The reading stays honest instead: a rating against a rail that is not a
+    positive number is not a comparison, so the row is UNKNOWN and the
+    ``missing_fact`` says *which* of the two facts is missing.
+    """
+    rule = _cap_rule(_cap_shelf("50V"), _intent(_rail(net)))
+    [(severity, state, message)] = _rows(rule, _zero_rail_cap_model(net))
+    assert (severity, state) == ("INFO", "UNKNOWN"), "an unknown is not a defect"
+    assert "轨压不是正数" in message
+    assert "耐压无从比对" in message
+    # The rating that *is* readable is still stated — "50 V against an unknown
+    # rail" and "nothing is known" are two different work orders (the same
+    # reading as the no-voltage-anywhere branch above).
+    assert "50 V" in message
+    fact = rule.outcomes(_zero_rail_cap_model(net))[0].missing_fact
+    assert "轨压不是正数" in fact and "耐压无从比对" in fact
+
+
+def test_an_ldo_whose_output_suffix_decodes_to_zero_is_unknown_not_a_crash():
+    """The second reachable route to a KNOWN 0.0 V rail: an LDO whose fixed
+    output suffix is ``-00``.
+
+    ``ldo_output_voltage``'s ``_fixed_suffix_voltage`` has no positivity check
+    (contrast ``ldo_output_voltage_facts``, which does), so ``AMS1117-00`` decodes
+    to 0.0 and the LDO's **own output net** becomes a KNOWN 0.0 V rail.
+    """
+    from boardwise.core.power_domains import (
+        infer_net_domains,
+        ldo_output_voltage,
+        voltage_from_net_name,
+    )
+
+    assert ldo_output_voltage("AMS1117-00") == 0.0, (
+        "the zero-voltage route is real: this is what makes it reachable"
+    )
+    assert voltage_from_net_name("VOUT") is None, (
+        "the net name itself decodes to nothing, so the LDO's suffix is the "
+        "only possible source of the 0.0"
+    )
+    shelf = PartLibrary(parts=[
+        PartEntry(key="ic.ldo", mpn="AMS1117-00", lcsc="C7", category="ic.ldo",
+                  facts={
+                      "ldo": {},
+                      "supply_pins": [{"pins": ["1"], "name": "VIN",
+                                      "v_operating": [2.2, 15.0],
+                                      "provenance": PROV_67}],
+                      # Pin 2 is the only non-supply cap pin, which is what
+                      # `ldo_output_pin` reads as the output.
+                      "required_caps": [{"pin": "2", "value": "10uF",
+                                         "provenance": PROV_67}],
+                  }),
+        _cap_shelf("50V").parts[0],
+    ])
+    model = _model_of(
+        {"U1": _part("U1", mpn="AMS1117-00", pins=[("1", "+12V"), ("2", "VOUT")]),
+         "C1": _part("C1", value="100nF", mpn="CAP1",
+                     pins=[("1", "VOUT"), ("2", "GND")])},
+        {"+12V": [("U1", "1")], "VOUT": [("U1", "2"), ("C1", "1")],
+         "GND": [("C1", "2")]},
+    )
+    guess = infer_net_domains(model, shelf)["VOUT"]
+    assert (guess.state, guess.volts) == ("KNOWN", 0.0), (
+        "the drawing files a 0.0 V rail as KNOWN — this is the state the "
+        "guard downstream has to survive"
+    )
+    rule = _cap_rule(shelf, _intent(_rail("VOUT")))
+    rows = _rows(rule, model)
+    assert [state for _, state, _ in rows] == ["UNKNOWN"]
+    assert "轨压不是正数" in rows[0][2]
+    assert "AMS1117-00 output" in rows[0][2], (
+        "the source that produced the zero is quoted, so the reader knows "
+        "which reading to correct"
+    )
+
+
+def test_a_declared_dissipation_limit_of_zero_is_unknown_not_a_division_by_zero():
+    """``max_dissipation_mw: {"mw": 0}`` is **schema-legal** — ``_fact_number``
+    accepts 0 and negatives — while ``limit.get("mw") is None`` cannot see it, so
+    ``p_mw / limit_mw`` divided by zero on the same shape as the rail bug.
+
+    A limit of zero watts is not a limit a part can be over; it is a declaration
+    this build will not act on, so the row becomes UNKNOWN naming both numbers
+    and where the limit came from.
+    """
+    shelf = PartLibrary(parts=[_ldo_entry(limit_mw=0.0)])
+    rule = _ldo_rule(shelf, _intent(
+        _rail("+24V", targetVoltage="24V"),
+        _rail("3V3", targetVoltage="3.3V", continuousCurrent="1A"),
+    ))
+    [(severity, state, message)] = _rows(rule, _ldo_model())
+    assert (severity, state) == ("INFO", "UNKNOWN"), "an unknown is not a defect"
+    assert "限值不是正数" in message
+    # The measurement is still reported: P is established, the limit is not.
+    assert "20.7 W" in message
+    fact = rule.outcomes(_ldo_model())[0].missing_fact
+    assert "限值不是正数" in fact
+    # ... and the citation travels with the refusal, so the reader can go look.
+    assert "p.2 (Power Dissipation)" in message
+
+
+def test_a_zero_volt_rail_does_not_take_the_whole_review_down_with_it():
+    """The **consequence** issue #67 measured, as its own test.
+
+    Not "one row is UNKNOWN instead of OK" — a ``ZeroDivisionError`` escaping
+    ``rule.check`` aborts ``_run_rules``'s rule, and ``run_review`` with no
+    collector lets it out entirely. ``cli._cmd_checkup`` passes a collector, so
+    the run survives #30's fork, but the rule's own verdict is gone and the
+    report never had it. The claim being pinned is the survival of the *reading*:
+    drive the whole rule through ``run_review`` and require a report, with the
+    capacitor's row present.
+    """
+    from boardwise.engines.review import run_review
+
+    model = _zero_rail_cap_model("0V")
+    intent = _intent(_rail("0V"))
+    findings = run_review(model, intent=intent)
+
+    rows = [f for f in findings if f.rule_id == "pwr-cap-voltage-rating"]
+    assert len(rows) == 1, (
+        f"the review came back with {len(findings)} findings but no row for the "
+        "capacitor — a crashed rule and a silent rule look the same here"
+    )
+    assert rows[0].severity == "INFO"
+    assert "轨压不是正数" in rows[0].message
+
+
+def test_the_rail_and_limit_guards_sit_next_to_the_divisions_they_protect():
+    """A structural pin on both guards, because the divisions they precede are
+    the whole point: a future edit that narrows either condition back to ``is
+    None`` re-opens #67 silently (the mutation test says so, but a *readable*
+    structural claim does not go stale the way a test does)."""
+    import inspect as _inspect
+
+    import boardwise.rules.railratings as railratings
+
+    src = _inspect.getsource(railratings)
+    assert "volts is None or volts <= 0" in src, src
+    assert "limit_mw <= 0" in src, src
+    # The contract path already guarded its own positive check; the fallback
+    # path was the one that did not, which is why the guard is in _row.
+    assert _inspect.getsource(railratings.rail_voltage).count("volts > 0") == 1
 
 
 # ---------------------------------------------------------------------------

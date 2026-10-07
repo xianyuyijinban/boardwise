@@ -345,25 +345,43 @@ class CapVoltageRating(FactsRule):
             )
         rating, where = cap_voltage_rating(comp, self.entry_for(comp))
         identity = f"value {comp.value!r}" + (f"，料号 {comp.mpn!r}" if comp.mpn else "")
-        if volts is None:
-            # The rail has no voltage anywhere, so no comparison exists — but a
-            # rating that *is* readable is still stated, because "50 V against
-            # an unknown rail" and "nothing is known at all" are two different
-            # work orders.
+        if volts is None or volts <= 0:
+            # No *positive* rail voltage, so no comparison exists. ``volts`` is 0.0
+            # on two reachable paths (issue #67), both of which file a rail as
+            # KNOWN: a net literally named ``0V``/``0V0``/``+0V``, which
+            # ``voltage_from_net_name``'s whitelist matches, and an LDO whose
+            # fixed output suffix decodes to zero (``AMS1117-00``), which
+            # ``_fixed_suffix_voltage`` has no positivity check for. ``is None``
+            # alone let ``rating / volts`` divide by zero, and that escaped
+            # ``run_review`` entirely — not one row short, the whole report dead.
+            # The rating that *is* readable is still stated, because "50 V
+            # against an unknown rail" and "nothing is known at all" are two
+            # different work orders.
             known = f"（耐压 {rating:g} V，来源 {where}）" if rating is not None else ""
+            if volts is None:
+                why = (
+                    f"所在轨 {rail.net} 的电压读不出，所以耐压无从比对 —— "
+                    f"{volts_why}"
+                )
+                missing = volts_why
+            else:
+                # The source string is quoted: the reader has to know *which*
+                # reading produced the zero to correct it.
+                missing = (
+                    f"所在轨 {rail.net} 的轨压不是正数（读到 {volts:g} V，来源 "
+                    f"{volts_source}），所以耐压无从比对"
+                )
+                why = f"{missing}"
             return (
                 Outcome(
                     rule_id=self.id,
                     state="UNKNOWN",
                     subject=ref,
-                    message=(
-                        f"{ref}（{identity}）{known}：所在轨 {rail.net} 的电压读不出，"
-                        f"所以耐压无从比对 —— {volts_why}"
-                    ),
+                    message=f"{ref}（{identity}）{known}：{why}",
                     evidence=[
                         f"{ref} pin{pin.number} @ {pin.net}" for pin in comp.pins
                     ],
-                    missing_fact=volts_why,
+                    missing_fact=missing,
                 ),
                 "INFO",
             )
@@ -612,6 +630,32 @@ class LdoDissipation(FactsRule):
                 continue
             limit_mw = float(limit["mw"])
             provenance = str(limit.get("provenance") or "")
+            if limit_mw <= 0:
+                # Issue #67: ``max_dissipation_mw: {"mw": 0}`` is schema-legal —
+                # ``_fact_number`` accepts 0 and negatives — while the guard
+                # above reads ``limit.get("mw") is None`` and cannot see it, so
+                # ``p_mw / limit_mw`` divided by zero on the same shape as the
+                # rail bug. A limit of zero milliwatts is not a limit a part can
+                # be over; it is a declaration this build will not act on. P is
+                # still measured and reported, because the measurement stands on
+                # its own — what is missing is the limit to compare it against.
+                missing = (
+                    f"{comp.designator} 的货架声明了 maxDissipation = "
+                    f"{limit_mw:g} mW（{provenance}），但限值不是正数，"
+                    f"所以 P = {p_mw / 1000.0:.4g} W 无从比对"
+                )
+                rows.append((
+                    Outcome(
+                        rule_id=self.id,
+                        state="UNKNOWN",
+                        subject=comp.designator,
+                        message=f"{comp.designator}: {drop_text} × {amps:g} A = {p_mw / 1000.0:.4g} W —— {missing}",
+                        evidence=evidence,
+                        missing_fact=missing,
+                    ),
+                    "INFO",
+                ))
+                continue
             text = (
                 f"{comp.designator}: P = {drop_text} × {amps:g} A = "
                 f"{p_mw / 1000.0:.4g} W vs 货架声明的限值 {limit_mw:g} mW"

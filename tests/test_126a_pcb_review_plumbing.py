@@ -524,10 +524,21 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
 
     # The two differ exactly because pcb/ is now in the recipe; the values are
     # the measured audit trail of each change to the tree:
-    #   direct-only over this tree: e51b8a86   (126a-126c b04153f3 -> 128 e51b8a86:
+    #   direct-only over this tree: 98b1d462   (126a-126c b04153f3 -> 128 e51b8a86:
     #                                              128 edited rules/facts.py and
     #                                              rules/archclosure.py, both
-    #                                              direct files)
+    #                                              direct files
+    #                             -> 129 98b1d462:
+    #                                              this batch (#66's refusal
+    #                                              predicate, #67's guards and
+    #                                              #68's usb-cc window) moved
+    #                                              rules/facts.py,
+    #                                              rules/railratings.py and
+    #                                              rules/unproven.py, all direct
+    #                                              files. Recorded, not loosened —
+    #                                              the pin's job is to notice a rule
+    #                                              body moved without anyone saying
+    #                                              why)
     #   recursive (the widened recipe):
     #     9c7cc335 — after pcb/base.py and the FindingTarget widening (126a)
     #     a9f76763 — after rules/pcb/distance.py landed (126b)
@@ -552,14 +563,23 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     #                intermediate value after the behaviour change and before the
     #                measured-claims docstrings were brought up to date; a
     #                docstring is source too, and the pin does not care why.)
+    #     bd3c240b — after 129 (#66/#67/#68) changed the rule bodies of
+    #                rules/facts.py (the usb-cc ±10 % window, the
+    #                unreadable-declaration UNKNOWN, and the order-independent
+    #                pull-down search), of rules/railratings.py (the
+    #                zero-voltage and zero-limit guards) and of
+    #                rules/unproven.py (which gained the refusal predicate the
+    #                coverage gate now asks). Both digests moved for the same
+    #                reason as every entry above: source is source, and a
+    #                docstring that now describes the code is part of it.
     # Both are measured, not guessed. The recursive digest moves whenever any
     # rule body moves - which is the whole point of the recipe, and the reason
     # this number is updated by hand together with the note in test_017 rather
     # than removed: a stale pin is the signal that the digest moved and nobody
     # recorded why.
     assert recursive != old_digest, "the subpackage is inside the recipe now"
-    assert old_digest == "e51b8a86"
-    assert recursive == "ab898f6b", (
+    assert old_digest == "98b1d462"
+    assert recursive == "bd3c240b", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

@@ -121,6 +121,22 @@ def _rules_for(intent: IntentSource | None) -> list[Rule]:
     ]
 
 
+def rules_for(intent: IntentSource | None) -> list[Rule]:
+    """:func:`_rules_for` under the name other layers may use.
+
+    Issue #66 A2 needed the *same* rule list :func:`run_review` judged with, not
+    a second derivation of it: counting withheld conclusions against the module
+    registry misses every refusal a ``--intent`` instance filed, because those
+    rules return ``[]`` with no contract. ``cli`` therefore asks for the list
+    here — and it may only ask by a **public** name, because importing
+    ``engines._rules_for`` across the layer boundary is exactly what
+    ``tests/test_layer_rules.py`` forbids. The private name stays the internal
+    spelling (it is referenced from the rules' own docstrings and from the 092
+    tests); this is the same function, published.
+    """
+    return _rules_for(intent)
+
+
 def run_review(
     model: DesignModel,
     *,
@@ -197,7 +213,12 @@ def _run_rules(
     return findings
 
 
-def refused_conclusions(model: object) -> int:
+def refused_conclusions(
+    model: object,
+    *,
+    rules: list[Rule] | None = None,
+    rules_errored: list[str] | None = None,
+) -> int:
     """How many conclusions this reading's unproven nets **actually** withheld (#19/#30).
 
     Not the same number as `source.unprovenNets.rulesRefused`, and the two are
@@ -207,35 +228,68 @@ def refused_conclusions(model: object) -> int:
       "how many rules are capable of refusing a net-shaped judgement" — 9 on every
       per-page reading, whether or not one of them had anything to refuse.
     * this counts **instances**: one per `(rule, subject)` whose UNKNOWN outcome
-      names :data:`UNPROVEN_BY_NAME` as the fact it is missing — the verdicts this
-      reading actually withheld. That is the number the coverage gate can act on.
+      is the unproven reading's own refusal — the verdicts this reading actually
+      withheld. That is the number the coverage gate can act on.
 
     Zero by construction for every reading but the per-page tier, and the rule walk
     is skipped entirely there: a refusal is scoped to names the merge welded blind
     (``DesignModel.unproven_nets``), so a model with no such name cannot withhold
     anything — and running the listed rules' outcome walks is not free (each loads
     the shelf).
+
+    ``rules`` is **the rule list this run judged with**, not the module-level
+    registry (issue #66 A2). With ``--intent`` the three rules that read a
+    contract run as per-run instances (:func:`_rules_for`) carrying it; those
+    module-level objects have no contract and return ``[]``, so counting against
+    them could never see the refusals of the run that actually had one. A caller
+    with no such list hands none and gets :data:`BUILTIN_RULES`, which is what
+    this did before and what the plain (no-intent) paths still mean.
+
+    ``rules_errored`` is #30's fork applied to this **second** walk: a caller that
+    hands in a collector gets a partial count and the ids of the rules that were
+    not walked (the CLI folds them into the same ``coverage.rulesErrored`` field
+    the main walk writes); a caller that passes nothing lets the exception out,
+    which is exactly what :func:`_run_rules` does for the same reason.
     """
     from ..core.model import ProjectModel
-    from ..rules.unproven import NET_MEMBERSHIP_RULES, UNPROVEN_BY_NAME
+    from ..rules.unproven import NET_MEMBERSHIP_RULES, is_unproven_refusal
 
     boards = model.boards if isinstance(model, ProjectModel) else [model]
     if not any(getattr(board, "unproven_nets", None) for board in boards):
         return 0
-    rules = [
+    # Issue #66: the refusal sentences live in ``rules.unproven``, and this
+    # function used to restate one of them as a literal — so 107's two truncation
+    # sentences were invisible here and a board whose every unproven net is
+    # truncated reported ``rulesRefused: 0``, which is the field that keeps a
+    # verdict from saying ``complete``. The predicate is asked instead, so the
+    # next phrasing added to the family cannot open that hole a second time.
+    walk = [
         rule
-        for rule in BUILTIN_RULES
+        for rule in (BUILTIN_RULES if rules is None else rules)
         if rule.id in NET_MEMBERSHIP_RULES and hasattr(rule, "outcomes")
     ]
     total = 0
     for board_model in boards:
         if not getattr(board_model, "unproven_nets", None):
             continue
-        for rule in rules:
-            for outcome in rule.outcomes(board_model):
+        for rule in walk:
+            # Issue #66 A3: this walk is not the one ``_run_rules`` protects, and
+            # its caller (``cli._coverage_section``) is not inside an except, so a
+            # rule raising here took ``checkup`` down with it — exactly what #30
+            # made ``_run_rules`` survive. Same fork here: the count is partial
+            # and ``rulesErrored`` names the rule that was not walked, rather than
+            # the report not existing at all.
+            try:
+                outcomes = rule.outcomes(board_model)
+            except Exception:  # noqa: BLE001 — one broken rule may not kill the report
+                if rules_errored is None:
+                    raise
+                rules_errored.append(rule.id)
+                continue
+            for outcome in outcomes:
                 if outcome.state != "UNKNOWN":
                     continue
-                if UNPROVEN_BY_NAME in (outcome.missing_fact or ""):
+                if is_unproven_refusal(outcome.missing_fact):
                     total += 1
     return total
 

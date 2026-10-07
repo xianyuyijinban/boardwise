@@ -585,15 +585,17 @@ def test_the_report_carries_the_provenance_a_run_has_to_record():
     # (IC_PATTERN retired for `is_ic_designator`) and `rules/archclosure.py`
     # (a docstring that described the retired regex) — which is exactly the
     # movement this pin exists to catch:
-    #   old recipe (direct files only) over today's tree: e51b8a86
-    #     (126a-126c b04153f3 -> 128 e51b8a86)
-    #   new recipe (recursive, incl. rules/pcb/*.py):     ab898f6b
+    #   old recipe (direct files only) over today's tree: 98b1d462
+    #     (126a-126c b04153f3 -> 128 e51b8a86 -> 129 98b1d462)
+    #   new recipe (recursive, incl. rules/pcb/*.py):     bd3c240b
     #     (126a 9c7cc335 -> 126b a9f76763 -> 126c 62bfe7f8 -> 128 e3c6645e
     #      -> 127b ab898f6b: rules/pcb/distance.py and rules/pcb/ipc.py both
     #      moved, because the PCB rules had been reading a pad's footprint
     #      layer as its physical face and 127b gave them the effective-layer
     #      reading; the direct-only digest is unchanged, which is the evidence
-    #      that 127b stayed inside rules/pcb/)
+    #      that 127b stayed inside rules/pcb/
+    #      -> 129 bd3c240b: #66/#67/#68 moved rules/facts.py, rules/railratings.py
+    #      and rules/unproven.py, so this time the direct-only digest moved too)
     # Both are measured, not guessed - `tests/test_126a_pcb_review_plumbing.py`
     # recomputes both from the tree and pins them. No number is asserted here:
     # any further rule change moves the digest again, which is the point, so

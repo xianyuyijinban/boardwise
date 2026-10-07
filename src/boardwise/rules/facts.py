@@ -1331,6 +1331,22 @@ class LdoDropout(FactsRule):
         return rows
 
 
+#: The tolerance this rule compares against — the number its own docstring
+#: states and the shelf's Type-C entries carry (they cite ST AN5225 Table 6).
+#:
+#: Issue #68 measured the code using ``rel_tol=1e-3`` — 0.1 %, a hundred times
+#: tighter than the ±10 % written one screen above it. The direction is the safe
+#: one (it accuses, it does not miss), but it accuses **legal** boards: a 5.0 kΩ Rd
+#: is inside AN5225's window for the 5.1 kΩ the declaration names, and it was
+#: reported as a wrong pull-down value. The declared tolerance was sitting in the
+#: row's own docstring and unused, so the constant now carries it — one number,
+#: quoted in both the OK and the WARN message, and the docstring below names it
+#: rather than restating it.
+#:
+#: evidence-boards: FPC触屏游戏机_2026-09-27.epro2, ch340_golden.epro2
+RD_TOLERANCE = 0.10
+
+
 class UsbCcPulldown(FactsRule):
     """CONN 族 bonus (task 011d sec.3.5): a connector that *declares* CC
     pull-down requirements gets them verified -- each required pin's net must
@@ -1338,11 +1354,14 @@ class UsbCcPulldown(FactsRule):
 
     Resistors are identified by their board value parsing as a resistance,
     not by the R prefix (the U3 lesson). A missing resistor is a VIOLATION;
-    a present one with a different nominal is a WARN (Rd tolerance is ±10%
-    in the spec, so nominal mismatch is worth naming but not screaming
-    about); an unparseable resistor value is UNKNOWN. Connectors without
-    pull_required facts are NOT_APPLICABLE -- the rule only speaks where the
-    shelf declares a requirement."""
+    a present one further than :data:`RD_TOLERANCE` from the declared nominal is
+    a WARN (Rd tolerance is ±10% in the spec, so nominal mismatch is worth
+    naming but not screaming about); an unparseable resistor value is UNKNOWN, and
+    so is an **unparseable declaration** (issue #68: the unreadable side of a
+    comparison is a work order, not a defect — the reading ``decap`` already
+    takes for the other side of one). Connectors without pull_required facts are
+    NOT_APPLICABLE -- the rule only speaks where the shelf declares a
+    requirement."""
 
     id = "conn-usb-cc-pulldown"
     title = "Declared CC pull-down resistors are present and correctly sized"
@@ -1390,7 +1409,14 @@ class UsbCcPulldown(FactsRule):
         model's own duplicate-name artifact read as a board defect."""
         if not net:
             return None, None
+        # A resistor-like part whose value will not parse falls through to
+        # ``shadow`` rather than being returned at once, so a **readable**
+        # resistor on the net still wins over it. That is the same question the
+        # single-candidate path answered ("the value does not parse ⇒ UNKNOWN")
+        # and it stays answered that way when there is no readable alternative:
+        # ``shadow`` below is still returned, with its None ohms.
         shadow: Component | None = None
+        resistors: list[tuple[float, str, Component]] = []
         for designator, _pin in model.nets.get(net, Net("x", [])).pins:
             comp = model.components.get(designator)
             if comp is None:
@@ -1399,9 +1425,27 @@ class UsbCcPulldown(FactsRule):
             if to_net not in nets:
                 continue
             if self._resistor_like(comp):
-                return parse_resistance_ohms(comp.value or ""), comp.designator
+                ohms = parse_resistance_ohms(comp.value or "")
+                if ohms is not None:
+                    resistors.append((ohms, comp.designator, comp))
+                    continue
             if shadow is None:
                 shadow = comp
+        if resistors:
+            # Issue #68, third finding: this used to return the **first**
+            # resistor-like member of the net, so a target net carrying two
+            # resistors was judged by whichever the merge happened to list first —
+            # the netlist's order is an artifact, not a fact about the board. The
+            # repo has already settled what to do with that elsewhere
+            # (``archclosure._sense_shunt``, issue #57 finding 6):
+            # ``min(key=(ohms, designator))``. "The smallest resistor bridging
+            # these two nets" is a statement the rule can make and defend; the
+            # designator tiebreak keeps two equal values from going either way,
+            # so the answer is a function of the board alone.
+            ohms, designator, _comp = min(
+                resistors, key=lambda item: (item[0], item[1])
+            )
+            return ohms, designator
         if shadow is not None:
             return parse_resistance_ohms(shadow.value or ""), shadow.designator
         return None, None
@@ -1525,9 +1569,41 @@ class UsbCcPulldown(FactsRule):
                         None,
                     ))
                     continue
-                if expected is not None and math.isclose(
-                    ohms, expected, rel_tol=1e-3
-                ):
+                if expected is None:
+                    # Issue #68, second finding: the **declared** side is the one
+                    # this build cannot read. That used to fall through to the
+                    # VIOLATION branch, which accuses the resistor on the board of
+                    # being the wrong value — a defect the shelf entry caused, not
+                    # the drawing. ``decap`` has already answered the same question
+                    # for the other side of a comparison (its ``unparseable``
+                    # decision is UNKNOWN, not a violation), so both sides of this
+                    # one now agree: an unreadable *requirement* is a work order,
+                    # not a defect. The measured value is still stated, because
+                    # "R24 is 5.0 k and we cannot read what was asked for" tells
+                    # the reader what to fix.
+                    rows.append((
+                        Outcome(
+                            rule_id=self.id,
+                            state="UNKNOWN",
+                            subject=f"{comp.designator} pin{pin}",
+                            message=(
+                                f"{comp.designator} pin{pin}: {r_desig} is "
+                                f"{ohms:.4g}Ω, but the declared pull-down value "
+                                f"{record.get('expected_value')!r} is not a "
+                                "resistance this build can read, so the two "
+                                "cannot be compared"
+                            ),
+                            evidence=evidence,
+                            missing_fact=(
+                                f"a readable expected_value for "
+                                f"{comp.designator} pin{pin} "
+                                f"(declared: {record.get('expected_value')!r})"
+                            ),
+                        ),
+                        None,
+                    ))
+                    continue
+                if math.isclose(ohms, expected, rel_tol=RD_TOLERANCE):
                     rows.append((
                         Outcome(
                             rule_id=self.id,
@@ -1536,9 +1612,13 @@ class UsbCcPulldown(FactsRule):
                             message=(
                                 f"{comp.designator} pin{pin}: {r_desig} "
                                 f"({ohms:.4g}Ω) pulls to {to_net!r} as "
-                                f"declared ({record.get('expected_value')})"
+                                f"declared ({record.get('expected_value')}, "
+                                f"±{RD_TOLERANCE:.0%})"
                             ),
-                            evidence=evidence + [f"{r_desig} value matches"],
+                            evidence=evidence + [
+                                f"{r_desig} value is within the declared "
+                                f"±{RD_TOLERANCE:.0%} window"
+                            ],
                         ),
                         None,
                     ))
@@ -1551,8 +1631,9 @@ class UsbCcPulldown(FactsRule):
                             message=(
                                 f"{comp.designator} pin{pin}: {r_desig} is "
                                 f"{ohms:.4g}Ω, not the declared "
-                                f"{record.get('expected_value')} -- wrong "
-                                "pull-down value"
+                                f"{record.get('expected_value')} -- outside the "
+                                f"declared ±{RD_TOLERANCE:.0%} window, i.e. a "
+                                "wrong pull-down value"
                             ),
                             evidence=evidence,
                         ),
@@ -1569,6 +1650,7 @@ __all__ = [
     "LdoDropout",
     "LibraryPinConsistency",
     "NcAndMustConnect",
+    "RD_TOLERANCE",
     "SupplyOnKnownDomain",
     "UsbCcPulldown",
 ]
