@@ -19,7 +19,7 @@ the same "never raise on absent copper" discipline as
 exception (an anchor string the caller asked us to resolve and could not be
 found is a caller error, not absent copper).
 
-**Interface note for stick 2 (125b).** :func:`_pad_corners` is deliberately
+**Interface note for stick 2 (125b).** :func:`pad_corners` is deliberately
 reusable: 125b's clearance engine consumes the same rotated-rectangle corner
 sets for pads, tracks-as-capsules and pour polygons. Keep its contract
 (4 CCW corners in board coordinates) stable.
@@ -49,6 +49,7 @@ __all__ = [
     "track_width_table",
     "ComponentDistance",
     "component_distance",
+    "pad_corners",
     "pad_edge_distance",
     "LoopArea",
     "loop_area",
@@ -66,7 +67,7 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 
-def _pad_corners(pad: PadGeometry) -> list[Point]:
+def pad_corners(pad: PadGeometry) -> list[Point]:
     """The pad's four corner points in board coordinates, counter-clockwise.
 
     Every pad is modelled as a **rotated rectangle**: ``width`` x ``height``
@@ -82,6 +83,18 @@ def _pad_corners(pad: PadGeometry) -> list[Point]:
     of the real edge-to-edge spacing. That is the safe direction for
     clearance evidence; the exact stadium/ellipse refinement is left to a
     later stick if a rule ever needs it.
+
+    **Public since 126b** (it was the private ``_pad_corners`` when 125 wrote
+    it, with a note saying 125b would consume it). It became public when the
+    PCB review rules needed it from another layer: ``pcb-component-spacing``
+    reads every pad's corners to decide whether a part hangs off the board
+    outline, and the repository's layer rule forbids importing a ``_``-prefixed
+    name across a layer. A pad's corners are geometry, not an implementation
+    detail — the fact that this module happens to compute them from
+    ``width``/``height``/``angle`` is its business, and a caller asking for the
+    outline of a rotated rectangle is asking a question the shape answers the
+    same way. :data:`_pad_corners` remains as an alias so the 125 tests, which
+    pin the private spelling, keep saying what they said.
     """
     hw = pad.width / 2.0
     hh = pad.height / 2.0
@@ -92,6 +105,12 @@ def _pad_corners(pad: PadGeometry) -> list[Point]:
         Point(pad.x + dx * cos_a - dy * sin_a, pad.y + dx * sin_a + dy * cos_a)
         for dx, dy in ((hw, hh), (-hw, hh), (-hw, -hh), (hw, -hh))
     ]
+
+
+#: The name 125 used before 126b promoted :func:`pad_corners`. Kept so the 125
+#: suite (which pins the private spelling as "125b's interface") stays green;
+#: it is the same function object, not a second implementation.
+_pad_corners = pad_corners
 
 
 def _cross(o: Point, a: Point, b: Point) -> float:
@@ -299,15 +318,15 @@ def track_width_table(board: BoardGeometry) -> dict[str, WidthStats]:
 def pad_edge_distance(pad_a: PadGeometry, pad_b: PadGeometry) -> float:
     """Edge-to-edge distance between two pads, in mils (0 when touching).
 
-    Both pads are measured as rotated rectangles (see :func:`_pad_corners`);
+    Both pads are measured as rotated rectangles (see :func:`pad_corners`);
     the distance is the minimum over the 16 edge-segment pairs, which is 0
     exactly when the rectangles intersect or touch. For ``ELLIPSE`` / ``OVAL``
     / circular shapes the bounding rectangle is used, so the result
     under-estimates the true spacing (rectangle contains the shape) — the
     conservative direction for spacing evidence.
     """
-    edges_a = _edges(_pad_corners(pad_a))
-    edges_b = _edges(_pad_corners(pad_b))
+    edges_a = _edges(pad_corners(pad_a))
+    edges_b = _edges(pad_corners(pad_b))
     return min(
         _segment_distance(a1, a2, b1, b2)
         for a1, a2 in edges_a
@@ -343,8 +362,8 @@ def component_distance(
     if not pads_a or not pads_b:
         return None
 
-    shaped_a = [(pad, _pad_corners(pad)) for pad in pads_a]
-    shaped_b = [(pad, _pad_corners(pad)) for pad in pads_b]
+    shaped_a = [(pad, pad_corners(pad)) for pad in pads_a]
+    shaped_b = [(pad, pad_corners(pad)) for pad in pads_b]
     bbox_a = [(pad, corners, BBox.from_points(corners)) for pad, corners in shaped_a]
     bbox_b = [(pad, corners, BBox.from_points(corners)) for pad, corners in shaped_b]
 
@@ -642,7 +661,7 @@ def _net_shape_records(
             (
                 _pad_key(pad),
                 _Shape(
-                    _pad_corners(pad),
+                    pad_corners(pad),
                     0.0,  # pad is a bare rectangle: the corners are the outline
                     layers,
                     _describe("pad", _pad_key(pad), pad.layer_id),

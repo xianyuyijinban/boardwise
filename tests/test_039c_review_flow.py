@@ -157,7 +157,7 @@ def test_the_promoted_section_keeps_the_v2_slot_name(capsys, tmp_path, monkeypat
     # 053 §2.2 bumped the schema to /5 (`completion`), 058 to /6
     # (`needs_datasheet`); the /3 sections this test is about are unchanged, which
     # is the compatibility claim.
-    assert report["schema"] == "boardwise.checkup/6"
+    assert report["schema"] == "boardwise.checkup/7"
     assert report["ai_slots"]["unknown_parts"] == report["unreviewed_parts"]
     assert report["unreviewed_parts"], "this board has parts with no MPN"
     old_fields = {"designator", "name", "value", "footprint", "mpn", "supplier",
@@ -495,7 +495,7 @@ def test_the_schema_bump_only_adds_fields(capsys, tmp_path, monkeypatch):
     ]) == 3
     capsys.readouterr()
     report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
-    assert report["schema"] == "boardwise.checkup/6"
+    assert report["schema"] == "boardwise.checkup/7"
     for key in ("source", "model", "summary", "pending", "drc", "modules", "findings",
                 "unreviewed_parts", "needs_datasheet", "warning_triage", "ai_slots",
                 "architecture"):

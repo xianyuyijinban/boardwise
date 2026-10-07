@@ -1944,6 +1944,13 @@ def render_report_markdown(report: dict) -> str:
                     "（" + "、".join(coverage.get("rulesErrored") or []) + "）"
                     if coverage.get("rulesErrored") else ""
                 )
+                # 126d: rendered from the section's own number like every other
+                # coverage field, and absent (not "clean") when the section is
+                # older than the gate. It is worded as its own item rather than
+                # folded into the line above because it is the one coverage field
+                # that gates `incomplete` rather than `complete-with-open-items`.
+                + (" · **PCB 版面未审（pcbReviewMissing）**"
+                   if coverage.get("pcbReviewMissing") else "")
             )
         lines.append(
             f"- 源版本：ruleset `{versions.get('ruleset', '?')}` · rulebody "

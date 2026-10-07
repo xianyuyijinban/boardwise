@@ -108,7 +108,7 @@ def test_checkup_writes_the_section_with_the_facts_seed_and_nothing_marked(
     report = _checkup(out)
     printed = capsys.readouterr().out
 
-    assert report["schema"] == "boardwise.checkup/6"
+    assert report["schema"] == "boardwise.checkup/7"
     seeded = report["unreviewed_parts"]
     assert seeded, "the golden board has parts the shelf cannot judge"
     rows = {row["part"]: row for row in report["needs_datasheet"]}

@@ -720,11 +720,36 @@ def _checkup_report(tmp_path, name: str, **overrides) -> dict:
 def test_checkup_hands_the_contract_to_the_rule_walk(monkeypatch, tmp_path):
     """The half A2a left undone: the rules see the contract, not just the report.
 
-    Three claims at once — with ``--intent`` the rail rows are in the report's
+    Three claims — with ``--intent`` the rail rows are in the report's
     findings; without one (and with ``BOARDWISE_HOME`` pointing at an empty
     directory, so the default slot cannot answer either) they are not; and the
-    two readings agree on the exit code and the verdict, because an intent adds
-    rows and moves no gate.
+    two readings agree on the schema and the verdict.
+
+    **126c split the exit-code half of the third claim, and this is the update
+    with its reason.** The test used to assert that adding an intent "adds rows
+    and moves no gate" — reading the exit code, the summary's and the CLI
+    return. That was true while every contract-driven row was INFO or WARN. It
+    is no longer true, and the reason is the point of 126c rather than a
+    regression in it:
+
+    * ``pcb-track-ampacity`` (126c) reads the contract's
+      ``signals[].range = "±3A"`` and files **ERROR** — 6 of them on this board
+      — because an overloaded conductor is a safety matter and the rule's
+      ``source`` says so. That is the first contract-driven **ERROR** on the
+      PCB side;
+    * an ERROR sets ``drc_summarise``'s ``exitCode`` to 1, and
+      ``_exit_code_with_verdict`` **only ever raises a 0 to 3** — "an ERROR
+      keeps its 1, and a bad input keeps its 2" is 073's ruling, stated in that
+      function's own docstring. So the ERROR run exits 1 and the ERROR-free run
+      exits 3 (``incomplete`` has nothing to raise, so it stays 3).
+
+    So the two readings now differ in **exit code only**, and the difference is
+    the report saying something it could not say before: with the contract the
+    review has a statement to hand (here: "this board's phase-current copper is
+    undersized"), without it there is none. The properties this batch actually
+    pinned and which still hold are asserted below unchanged — same schema, same
+    verdict, and the 092 rail rows themselves appearing and disappearing exactly
+    as they did.
     """
     monkeypatch.setenv("BOARDWISE_HOME", str(tmp_path / "home"))
     without = _checkup_report(tmp_path, "no-contract")
@@ -740,10 +765,35 @@ def test_checkup_hands_the_contract_to_the_rule_walk(monkeypatch, tmp_path):
     assert refs(without) == []
     assert refs(with_intent) == ["C1", "C10", "C13", "C14", "C15", "C16", "C17",
                                 "C18", "C5", "C6", "C7", "C8", "C9", "U8", "U8"]
-    assert with_intent["report"]["summary"]["exitCode"] == without["report"]["summary"]["exitCode"]
+    # 126c: the contract now also reaches the PCB runner, and on this board that
+    # means the two rules above plus `pcb-track-ampacity` have ERROR rows. That
+    # is the *only* thing that changed about the gate, and it is asserted
+    # explicitly rather than left implicit in the exit-code line below.
+    ampacity_errors = [
+        f for f in with_intent["report"]["findings"]
+        if f["rule_id"] == "pcb-track-ampacity" and f["severity"] == "ERROR"
+    ]
+    assert len(ampacity_errors) == 6, (
+        "3 A of phase current down 10 mil copper, on three layers, two nets"
+    )
+    assert not [
+        f for f in without["report"]["findings"]
+        if f["rule_id"] == "pcb-track-ampacity"
+    ], "no contract means no declared current means no subject (126c's rule)"
+    # Unchanged by 126c: the schema, and the verdict (which stays `incomplete`
+    # on both readings — unreviewed parts and untriaged warnings, not the ERRORs,
+    # are what make it incomplete).
     assert with_intent["report"]["completion"]["verdict"] == without["report"]["completion"]["verdict"]
-    assert with_intent["exit"] == without["exit"]
     assert with_intent["report"]["schema"] == without["report"]["schema"]
+    # The exit code, which is what changed: 3 (nothing to state) -> 1 (ERROR).
+    # Both directions are asserted so this pin cannot be satisfied by a rule that
+    # simply stopped firing.
+    assert without["report"]["summary"]["errorCount"] == 0
+    assert without["report"]["summary"]["exitCode"] == 3
+    assert without["exit"] == 3
+    assert with_intent["report"]["summary"]["exitCode"] == 1
+    assert with_intent["exit"] == 1
+    assert with_intent["report"]["summary"]["errorCount"] == 6
 
 
 def test_checkup_reads_the_contract_from_its_default_slot(monkeypatch, tmp_path):
