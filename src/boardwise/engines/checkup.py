@@ -859,8 +859,7 @@ def unreviewed_parts(
     `datasheetPdfUrl`/`datasheetUrl`, which is what `parts fetch` downloads),
     `official` (never the CLI's — it hands over the queries instead).
     """
-    from ..core.parts import FACTS_KEYS, find_facts
-    from ..rules.facts import IC_PATTERN
+    from ..core.parts import FACTS_KEYS, find_facts, is_ic_designator
 
     known = {
         (entry["designator"], tuple(entry.get("boards") or [])): entry
@@ -869,7 +868,7 @@ def unreviewed_parts(
     folder = Path(datasheet_dir) if datasheet_dir else None
     out: list[dict] = []
     for designator, component, boards in _parts_with_boards(model):
-        is_ic = bool(IC_PATTERN.match(designator))
+        is_ic = is_ic_designator(designator)
         entry = None
         if library is not None:
             if (component.mpn or "").strip():

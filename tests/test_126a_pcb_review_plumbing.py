@@ -524,21 +524,25 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
 
     # The two differ exactly because pcb/ is now in the recipe; the values are
     # the measured audit trail of each change to the tree:
-    #   direct-only over this tree: b04153f3   (unchanged since 126b — 126b and
-    #                                              126c both added files under
-    #                                              pcb/, not beside it)
+    #   direct-only over this tree: e51b8a86   (126a-126c b04153f3 -> 128 e51b8a86:
+    #                                              128 edited rules/facts.py and
+    #                                              rules/archclosure.py, both
+    #                                              direct files)
     #   recursive (the widened recipe):
     #     9c7cc335 — after pcb/base.py and the FindingTarget widening (126a)
     #     a9f76763 — after rules/pcb/distance.py landed (126b)
     #     62bfe7f8 — after rules/pcb/ipc.py landed (126c)
+    #     e3c6645e — after 128 (#63) retired IC_PATTERN out of rules/facts.py
+    #                for `core.parts.is_ic_designator`, and corrected the
+    #                archclosure docstring that described the retired regex
     # Both are measured, not guessed. The recursive digest moves whenever any
     # rule body moves - which is the whole point of the recipe, and the reason
     # this number is updated by hand together with the note in test_017 rather
     # than removed: a stale pin is the signal that the digest moved and nobody
     # recorded why.
     assert recursive != old_digest, "the subpackage is inside the recipe now"
-    assert old_digest == "b04153f3"
-    assert recursive == "62bfe7f8", (
+    assert old_digest == "e51b8a86"
+    assert recursive == "e3c6645e", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

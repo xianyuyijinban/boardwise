@@ -374,10 +374,20 @@ def test_other_single_board_fixtures_keep_their_frozen_severities(name):
 #: F3, found by hand in the 2026-10-01 review and now found by the rules), and
 #: 智能药箱 gains one INFO measurement (its MCU's reset net **is** closed, and a
 #: satisfied structural closure is reported rather than left silent).
+#:
+#: 128 (#63 §3) moved 智能药箱's INFO count by one more, and this time from the
+#: **shelf**: the board's second controller, ``U13`` (ESP-01S, the Wi-Fi MCU
+#: driving the pillbox's WIFIRST net), is a part whose symbol names **zero** pins
+#: ``P<port><n>`` — measured — so `controller_evidence`'s fallback route never
+#: saw it and its ``RST`` net was never judged at all. It now carries
+#: ``category: ic.mcu``, so the strongest route recognises it and the
+#: ``arch-nrst-closure`` measurement row appears (its net has 2 members, so the
+#: reset pin is not left bare). A new INFO here is a part coming **into** scope,
+#: which is the defect this issue is about — not a regression.
 _EXPECTED_SEVERITY = {
     "llc_board.epro2": {"ERROR": 0, "WARN": 0, "INFO": 0},
     "ProPrj_ROBOT ctrl FOC_2026-09-16.epro2": {"ERROR": 0, "WARN": 3, "INFO": 0},
-    "ProPrj_智能药箱_2026-09-17.epro2": {"ERROR": 0, "WARN": 1, "INFO": 1},
+    "ProPrj_智能药箱_2026-09-17.epro2": {"ERROR": 0, "WARN": 1, "INFO": 2},
 }
 
 

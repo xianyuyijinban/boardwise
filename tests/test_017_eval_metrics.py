@@ -580,10 +580,15 @@ def test_the_report_carries_the_provenance_a_run_has_to_record():
     # so the pair below is the value after both changes of that stick (the walk
     # itself moved `da599557` -> `1f457c90`, and the `base.py` widening moved it
     # again). 126b then added `rules/pcb/distance.py`, which moved the recursive
-    # digest once more, and 126c added `rules/pcb/ipc.py` after it:
-    #   old recipe (direct files only) over today's tree: b04153f3
-    #   new recipe (recursive, incl. rules/pcb/*.py):     62bfe7f8
-    #     (126a 9c7cc335 -> 126b a9f76763 -> 126c 62bfe7f8)
+    # digest once more, and 126c added `rules/pcb/ipc.py` after it. 128 (#63)
+    # then edited two rule bodies for the first time since — `rules/facts.py`
+    # (IC_PATTERN retired for `is_ic_designator`) and `rules/archclosure.py`
+    # (a docstring that described the retired regex) — which is exactly the
+    # movement this pin exists to catch:
+    #   old recipe (direct files only) over today's tree: e51b8a86
+    #     (126a-126c b04153f3 -> 128 e51b8a86)
+    #   new recipe (recursive, incl. rules/pcb/*.py):     e3c6645e
+    #     (126a 9c7cc335 -> 126b a9f76763 -> 126c 62bfe7f8 -> 128 e3c6645e)
     # Both are measured, not guessed - `tests/test_126a_pcb_review_plumbing.py`
     # recomputes both from the tree and pins them. No number is asserted here:
     # any further rule change moves the digest again, which is the point, so

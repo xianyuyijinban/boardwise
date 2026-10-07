@@ -252,7 +252,30 @@ def test_the_committed_library_is_v2_with_its_curated_fact_entries():
         "ic.rt9013_33gb", "ic.sn65hvd230dr", "ic.tlv9062idr",
         "led.emerald_green_0603",
     ]
-    assert with_category == with_facts
+    # 128 (#63 §3) broke the ``category == facts`` coincidence this test used
+    # to assert, and it was never a rule: the two fields are curated
+    # independently. A datasheet's **numbers** (facts) need the PDF, while a
+    # part's **class** is readable off the MPN and its description — which is
+    # why the shelf shipped 12 of both and why issue #63's headline number was
+    # "category 只填了 12/109". Ten more entries now carry a category with no
+    # facts: the two STM32s, the TLE5012 encoder, the ESP-01S, the DRV8350, the
+    # LM5164, the TPLP2981, and the three discretes (2N7002K, HB04N090S,
+    # TPD4S010). What the two fields *must* still agree on is the direction
+    # that is a contradiction — facts recorded with no class to give them a
+    # meaning — and that is the assert below.
+    assert [key for key in with_facts if key not in with_category] == [], (
+        "an entry carries curated facts but no category: the facts have nothing "
+        "to be about"
+    )
+    assert with_category == [
+        "conn.type_c_16pin_2md_073", "ic.2n7002k", "ic.ams1117_3_3.c369933",
+        "ic.ams1117_3_3.c6186", "ic.ch340g", "ic.ch340n", "ic.drv8313pwpr",
+        "ic.drv8350srtvr", "ic.esp_01s", "ic.hb04n090s", "ic.lm5164ddar",
+        "ic.mpu_6050", "ic.ref2033aiddcr", "ic.rt9013_33gb", "ic.sn65hvd230dr",
+        "ic.stm32g431rbt6", "ic.stm32h743vit6", "ic.tle5012be1000",
+        "ic.tlv9062idr", "ic.tpd4s010dqar", "ic.tplp2981_30dbvr",
+        "led.emerald_green_0603",
+    ]
     # The two harvested entries gained keys; the 90 others are untouched.
     rt = find_facts(library, mpn="RT9013-33GB")
     assert rt.facts["ldo"]["dropout_max_mv"] == 400

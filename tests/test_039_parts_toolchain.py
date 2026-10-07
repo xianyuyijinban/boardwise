@@ -237,16 +237,32 @@ def test_the_real_shelf_learns_nothing_about_the_gate():
 
 
 def test_missing_lists_every_u_part_with_what_the_shelf_is_missing(capsys):
-    """The intake list itself: one block per U-prefix part, the missing keys
-    named in table order, and the identity the rules will look up."""
+    """The intake list itself: one block per part the repo table calls an IC,
+    the missing keys named in table order, and the identity the rules will
+    look up.
+
+    Since 128 (#63 §2) "one block per U part" is no longer the rule — the gate
+    asks `is_ic_designator`, so ``DRV1`` appears too. That is the point of the
+    batch, so it is asserted rather than tolerated: the ctrl FOC board's gate
+    driver is exactly the part issue #56 named, and before this it had a shelf
+    entry, a datasheet and no line in the project's own fact-intake list.
+    """
     code = cli.main(["parts", "missing", "--file", str(BOARD), "--library", str(SHELF)])
     out = capsys.readouterr().out
     assert code == 0
+    # The gate driver is now in the intake list, with its own category.
+    assert "DRV1 DRV8313PWPR [ic.drv8313pwpr] category=ic.motor-driver" in out
     # A curated part and an uncurated one, both on the same board.
     assert "U6 CH340N [ic.ch340n] category=ic.usb-uart facts=3 missing=4" in out
     assert "present: must_connect, required_caps, supply_pins" in out
     assert "missing: nc_pins, led, ldo, pull_required" in out
-    assert "U7 TLE5012BE1000 [ic.tle5012be1000] category=- facts=0 missing=7" in out
+    # `category=-` became `category=ic.sensor` in 128 (#63 §3): the TLE5012 is a
+    # magnetic angle encoder and its shelf entry now says so.
+    assert "U7 TLE5012BE1000 [ic.tle5012be1000] category=ic.sensor facts=0 missing=7" in out
+    # ...and the controller, which now carries `ic.mcu` — the category
+    # `controller_evidence`'s strongest route has read since 093 and which the
+    # shipped shelf held zero of until this batch.
+    assert "U1 STM32G431RBT6 [ic.stm32g431rbt6] category=ic.mcu" in out
     assert "missing: supply_pins, required_caps, nc_pins, must_connect" in out
     assert "with missing facts" in out and "exit 0" in out
 
