@@ -37,6 +37,21 @@ class FindingTarget:
     §2.1: ``param-value-mpn-match`` names two repairs and picks neither, so its
     target carries the contradiction and no direction). Empty therefore means
     "this rule suggests nothing", never "write nothing".
+
+    ``counterpart_ref`` and ``measurement`` arrived with 126a (the PCB side),
+    which is where a finding stops being about one designator on a netlist: a
+    layout rule judges a **pair** (an IC and the nearest capacitor on its supply
+    net — 126b's ``pcb-decap-distance``) or a **number read off the board**
+    (edge-to-edge distance, track width, net clearance, pour area). Both keys
+    are optional and **every schematic rule leaves them empty**, so the six keys
+    above keep exactly the meaning they had; the two are read by the PCB report
+    section and by nothing on the schematic side. No new regex was added to read
+    them out of prose — like the six, they are structured claims or nothing.
+
+    ``measurement`` is a mapping or ``None`` (``{kind, value, unit, layer_ids?}``;
+    ``kind`` ∈ distance/width/clearance/area, ``value`` in mil or mil²), and
+    ``None`` rather than an empty dict so "this rule measures something" and
+    "this rule does not" cannot read the same.
     """
 
     component_ref: str = ""
@@ -45,6 +60,8 @@ class FindingTarget:
     net_refs: list[str] = field(default_factory=list)
     expected_before: str = ""
     suggested_after: str = ""
+    counterpart_ref: str = ""
+    measurement: dict | None = None
 
 
 @dataclass

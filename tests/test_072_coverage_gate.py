@@ -64,7 +64,12 @@ BAD_ENET_SHAPES: dict[str, tuple[object, str]] = {
 }
 
 #: The coverage section of a reading that was covered **whole** — the shape a
-#: reader sees on a board that parsed cleanly.
+#: reader sees on a board that parsed cleanly. 126d added `pcbReviewMissing` to
+#: the same dict: a reading is covered whole only if the PCB was looked at too,
+#: so the clean value is False. Tests that build their own coverage section
+#: (rather than spreading this one) must be read with that in mind — the key is
+#: read with `.get` everywhere in `cli`, so an older section without it still
+#: works.
 CLEAN_COVERAGE: dict = {
     "parseIncomplete": False,
     "modelEmpty": False,
@@ -72,6 +77,7 @@ CLEAN_COVERAGE: dict = {
     "rulesRefused": 0,
     "recordsDropped": 0,
     "rulesErrored": [],
+    "pcbReviewMissing": False,
 }
 
 

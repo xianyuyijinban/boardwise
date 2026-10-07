@@ -3053,7 +3053,21 @@ def _cmd_review(args: argparse.Namespace) -> int:
 #: counts `needsDatasheet` (marked parts, one per part however many pins) and
 #: `needsDatasheet > 0` is `incomplete`. `summary.mayClaimPassed` is untouched —
 #: it still answers only the unreviewed question (053's narrow discipline).
-CHECKUP_SCHEMA = "boardwise.checkup/6"
+#:
+#: `/7` (126 阶段 C 棒 4, task 126d): the **offline** PCB review joined the
+#: verdict arithmetic. A run that read a *file* backup which **has** PCB
+#: documents but carries no `pcb_review` section has not reviewed the board —
+#: the geometry is right there in the archive and the check did not happen — so
+#: `completion.verdict` says `incomplete`, with the reason in `verdictWhy`
+#: (`coverage.pcbReviewMissing`). This is a **verdict semantic extension**: a
+#: `/6` reader that walked `completion.coverage` and recomputed the verdict would
+#: reach a different answer on such a report, so the version number has to say
+#: so (090 A1's "adds only a reading, no bump" does not apply — that one moved no
+#: gate). The **online** path deliberately does not take the gate (126d 主代理裁定
+#: 1): an online `pcb_review` is always absent because the runner has no live
+#: geometry yet — that is 「未实现」, not 「未通过」, and gating on it would fail
+#: every online report.
+CHECKUP_SCHEMA = "boardwise.checkup/7"
 
 #: What each tier actually read, spelled for the report's own header.
 #:
@@ -3109,6 +3123,7 @@ def _checkup_report(
     architecture: dict | None = None,
     intent: dict | None = None,
     completion: dict | None = None,
+    pcb_review: dict | None = None,
 ) -> dict:
     """Assemble the report: what was read (batch 2), what was found (batch 3),
     what it means and what the model still has to do (batch 4).
@@ -3143,6 +3158,12 @@ def _checkup_report(
     than removed: a consumer that learned to read it finds "nothing owed" instead
     of a missing key, and the next batch that owes something has a place to say
     so.
+
+    126d bumped the schema to `/7`: `completion` grew a **gate**, not just a
+    reading — an offline run over a backup that has PCB documents but no
+    `pcb_review` section is `incomplete`. Nothing else moved: `layout_review`,
+    `intent` and `pcb_review` keep the 090 A1 / 126a "adds a reading, no bump"
+    deal, and `mayClaimPassed` keeps its narrow meaning.
     """
     body: dict = {
         "schema": CHECKUP_SCHEMA,
@@ -3184,11 +3205,12 @@ def _checkup_report(
     # stating: 044/053/058 bumped it for a section that moved a gate or a
     # meaning, and this one adds a **reading** — `intent` is absent from the
     # verdict arithmetic (`completion`, `summary.mayClaimPassed` and the exit
-    # code are untouched, 090 §三), no existing field changes meaning, and a `/6`
-    # reader that iterates the keys it knows finds them all. Bumping it would
-    # have rewritten four existing assertions for a version number that tells
-    # them nothing; the next batch that lets the contract move a gate owns the
-    # bump.
+    # code are untouched, 090 §三), no existing field changes meaning, and a `/7`
+    # reader that iterates the keys it knows finds them all. (126d bumped the id
+    # to `/7` later, for its own gate; this section was not the reason and is not
+    # the reason it moved.) Bumping it would have rewritten four existing
+    # assertions for a version number that tells them nothing; the next batch
+    # that lets the contract move a gate owns the bump.
     if intent is not None:
         body["intent"] = intent
     # 053 §2.2: the complete statement, always present (unlike `layout_review`,
@@ -3196,6 +3218,18 @@ def _checkup_report(
     # "the section is missing" must never be how it learns there is nothing to say.
     if completion is not None:
         body["completion"] = completion
+    # 126a: the PCB runner's own section. Follows `layout_review`'s rule exactly —
+    # **absent, not empty**. A backup with no PCB document (or a run that never
+    # reached the runner) must not carry an empty `pcb_review`, because "nothing
+    # was reviewed" and "everything was reviewed and nothing was found" are two
+    # different claims, and only the second one is a section. The schema moved to
+    # `/7` in 126d, but for a different reason than this section: **the absence
+    # now gates the verdict** (`completion.coverage.pcbReviewMissing`). This
+    # section's own shape is unchanged, `summary.mayClaimPassed` and the exit
+    # code arithmetic are untouched by it, and 126a's decision that the PCB
+    # findings merge into `findings[]` without a second array stands.
+    if pcb_review is not None:
+        body["pcb_review"] = pcb_review
     return body
 
 
@@ -3341,6 +3375,13 @@ def _clean_coverage() -> dict:
         "rulesRefused": 0,
         "recordsDropped": 0,
         "rulesErrored": [],
+        # 126d: the PCB gate reads **false** here on purpose, and the asymmetry
+        # matters. This neutral value is what a caller with no coverage to hand
+        # in gets, and it stands for "this reading was not offline-with-PCB", so
+        # a unit test building a section from counts alone is not failed by a
+        # check it never claimed to run. The gate is set where the facts are
+        # (cli's PCB block), never defaulted to True by omission.
+        "pcbReviewMissing": False,
     }
 
 
@@ -3351,6 +3392,7 @@ def _coverage_section(
     attempts: list[dict],
     parse_stats: ParseStats,
     rules_errored: list[str],
+    pcb_review_missing: bool = False,
 ) -> dict:
     """The coverage gate's **facts**, read off the parse the report is about (#30).
 
@@ -3391,6 +3433,18 @@ def _coverage_section(
       so a board carrying 67 unnamed parts read as ``complete``;
     * ``rulesErrored`` — ids of rules that raised while running (fork 2). The run
       survives them now; this is how the report says so.
+    * ``pcbReviewMissing`` (126d) — the run read a **file** backup that **has**
+      PCB documents, and the PCB runner produced no section. A sixth way the
+      review failed to cover the board, and the strongest of the six that are
+      not 「no input at all」: the geometry is right there in the archive, so this
+      is a check that *could* have run and did not. It is a parameter rather
+      than something this function derives, because only the PCB block knows
+      both halves (whether the backup has PCB documents at all, and whether the
+      runner produced a section), and it is **not** derived from
+      ``modelEmpty``-style facts here for the same reason ``coverage`` is not
+      derived from ``model`` at all: it is a fact about what ran, not about what
+      was read. The online path always passes ``False`` (126d 主代理裁定 1) — an
+      absent ``pcb_review`` online is 「未实现」, not 「未通过」.
     """
     from .engines.review import refused_conclusions
 
@@ -3413,6 +3467,7 @@ def _coverage_section(
         "rulesRefused": int(refused_conclusions(model)),
         "recordsDropped": records_dropped,
         "rulesErrored": sorted(set(rules_errored)),
+        "pcbReviewMissing": bool(pcb_review_missing),
     }
 
 
@@ -3423,7 +3478,14 @@ def _coverage_reasons(coverage: dict) -> list[str]:
     next action differs: "the file may be truncated" (re-export it), "5 pages never
     arrived" (re-run with the export permission), "7 conclusions were withheld"
     (the tier cannot attribute a page to a board), "3 records were dropped" (the
-    report under-covers this board), "this rule crashed" (a boardwise bug).
+    report under-covers this board), "this rule crashed" (a boardwise bug),
+    "this backup has PCB documents that were never reviewed" (126d: the runner
+    did not run or raised — `source.notes` says which).
+
+    ``pcbReviewMissing`` is last within this list, and like all of them it comes
+    **after** every non-coverage clause: the order a reader has been reading
+    `verdictWhy` in since 053 does not move. Where inside the coverage list 126d's
+    clause sits is a free choice; "coverage last" is inherited, not invented here.
     """
     reasons: list[str] = []
     if coverage.get("modelEmpty"):
@@ -3454,6 +3516,11 @@ def _coverage_reasons(coverage: dict) -> list[str]:
         reasons.append(
             f"{len(errored)} 条规则执行出错（{'、'.join(errored)}）：它们的结论缺失，"
             "报告照出但少了一部分"
+        )
+    if coverage.get("pcbReviewMissing"):
+        reasons.append(
+            "工程含 PCB 文档但本次没有 pcb_review 一节：PCB 版面几何未审（离线 epro2 "
+            "路径的 PCB 审查未完成，见 source.notes）—— 整块 PCB 的结论缺失"
         )
     return reasons
 
@@ -3489,7 +3556,11 @@ def _completion_body(
       confidence), **or** the whole review had **no input** (``coverage.modelEmpty``:
       the extreme form of a coverage failure — 053 §2.2's "incomplete" and the
       ruling on issue #29 agree that an empty model is weaker than "some items
-      open");
+      open"), **or** the run read an **offline** backup that has PCB documents
+      and never produced a ``pcb_review`` section
+      (``coverage.pcbReviewMissing``, 126d — the geometry is in the archive and
+      the check did not happen, so this is the same class of statement as
+      ``modelEmpty``: something the run was obliged to look at, and did not);
     * ``complete`` — none of the above **and** stale = 0 **and** nothing waiting
       for triage **and** no coverage failure at all;
     * ``complete-with-open-items`` — the ``complete`` conditions hold except the
@@ -3569,6 +3640,17 @@ def _completion_body(
         or unreviewed_count or marked_count
         or architecture is None
         or coverage["modelEmpty"]
+        # 126d: read with `.get`, not `[...]` — a re-gate of a report written
+        # before the gate existed carries a `/6` coverage section with no such
+        # key, and KeyError there would make `need-datasheet` and `triage` crash
+        # on every old report. Absent means False, which is the same neutral
+        # reading `_clean_coverage` hands in, and it is the right one: an old
+        # report's verdict is not re-litigated by a gate that postdates it. A
+        # report that *did* record the gate carries it in `coverage`, so a
+        # re-gate cannot lose it (#30's "a gate that lived only in the CLI's
+        # memory would be dropped exactly there" — the same trap, one batch
+        # later).
+        or coverage.get("pcbReviewMissing")
     ):
         verdict = "incomplete"
     elif architecture_slots["stale"] or pending or coverage_reasons:
@@ -3795,6 +3877,7 @@ def _review_conclusion(
     stale_slots: int = 0,
     coverage_missing: bool = False,
     coverage_gaps: int = 0,
+    pcb_review_missing: bool = False,
 ) -> str:
     """`summary.conclusion` — the one line that may be quoted as the verdict.
 
@@ -3819,13 +3902,16 @@ def _review_conclusion(
     point — the empty model used to read as a clean board), and neither may one
     whose coverage is missing in some narrower way (pages that never arrived,
     withheld conclusions, dropped records, a rule that crashed).
+    `pcb_review_missing` is the eighth (126d), the offline-only PCB gate — see
+    the clause it adds below.
 
-    The invariant the seven clauses buy, and the reason every gate has one:
+    The invariant the eight clauses buy, and the reason every gate has one:
     **the conclusion is exactly "无 ERROR" if and only if the verdict is
     `complete`**. The gates are the ones :func:`_completion_body` decides on, so
     a gate added there and not here is a bug — `tests/test_039c_review_flow.py`
     asserts the pairing over every combination of them, and
-    `tests/test_072_coverage_gate.py` extends it over the coverage section.
+    `tests/test_072_coverage_gate.py` extends it over the coverage section, and
+    `tests/test_126d_pcb_verdict_gate.py` over the PCB gate.
     """
     errors = int(summary.get("errorCount", 0) or 0)
     verdict = "无 ERROR" if not errors else f"{errors} 项 ERROR"
@@ -3857,6 +3943,14 @@ def _review_conclusion(
             f"；另有 {coverage_gaps} 类覆盖缺口（少页/规则 withheld/解析丢弃记录/规则报错，"
             "逐条见 completion.verdictWhy 与 completion.coverage）"
         )
+    # 126d: the eighth clause. `pcbReviewMissing` is an **incomplete** gate (not
+    # a gap count), so it needs its own flag rather than riding in
+    # `coverage_gaps` — the two speak differently: "N kinds of coverage are
+    # missing" versus "the PCB was never looked at". Without this clause the
+    # invariant #21 established would break for the first time: `completion`
+    # would say `incomplete` while the quotable line said a plain "无 ERROR".
+    if pcb_review_missing:
+        text += "；PCB 版面几何未审（工程含 PCB 文档但本次无 pcb_review 一节）"
     return text
 
 
@@ -3886,6 +3980,15 @@ def _completion_coverage_gates(*, completion: dict) -> dict:
     can say) versus "coverage is missing in N ways". `coverage_gaps` counts
     **kinds**, not instances: it is a pointer, and the sentences (with their
     numbers) are in `completion.verdictWhy`.
+
+    `pcbReviewMissing` (126d) is **not** one of the five kinds and is not counted
+    among them. It is an `incomplete` gate rather than a `complete-with-open-items`
+    one, so folding it into the count would produce a line that says 「N 类覆盖缺口」
+    for a report whose verdict is the strongest statement the section can make —
+    and worse, a re-gate (`need-datasheet` / `triage`, which call this function
+    on a report that never ran the PCB runner) would have no way to know the
+    difference. It gets its own flag instead, and it is read from `coverage` so
+    that the two paths — live run and re-gate — see exactly the same value.
     """
     coverage = (completion or {}).get("coverage") or {}
     missing = bool(coverage.get("modelEmpty"))
@@ -3899,6 +4002,7 @@ def _completion_coverage_gates(*, completion: dict) -> dict:
     return {
         "coverage_missing": missing,
         "coverage_gaps": sum(1 for gap in gaps if gap),
+        "pcb_review_missing": bool(coverage.get("pcbReviewMissing")),
     }
 
 
@@ -4909,25 +5013,23 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
             f"DRC 规则集元审查：{len(ruleset_rows)} 项超参考值，已进 findings"
             "（规则 id `pcb-drc-ruleset-out-of-reference`；逐键数字见 drc.ruleset.metaAudit）"
         )
-    coverage = _coverage_section(
-        model=model, board=board, attempts=attempts,
-        parse_stats=parse_stats, rules_errored=rules_errored,
-    )
+    # `coverage` used to be computed here. 126d moved it **down**, to just after the
+    # PCB block, because its one new field (`pcbReviewMissing`) is a fact about
+    # that block — and a gate computed before the fact it reads would have to be
+    # recomputed or patched afterwards, which is the #30 trap in a new costume.
+    # The three notes that follow move with it, since each one reads the section.
     # What the parse saw, in the report rather than only on the console (#30's
     # adjacent gap): `coverage.recordsDropped` is the sum of the three drop
     # counters, and this is the audit trail a reader checks it against.
     source["parseStats"] = parse_stats.as_dict()
-    if coverage["modelEmpty"]:
-        notes.append(
-            "模型为空（0 器件 0 网络）：归档读不出内容/模型为空，可能被截断或损坏——"
-            "这不是干净板（completion.coverage.parseIncomplete / modelEmpty）"
-        )
-    if rules_errored:
-        notes.append(
-            f"{len(rules_errored)} 条规则执行出错（{'、'.join(rules_errored)}）："
-            "它们的结论缺失，报告照出（completion.coverage.rulesErrored）"
-        )
-    summary = drc_summarise(drc=drc, findings=findings)
+
+    # 126a/126b: the PCB runner used to run here, right after the schematic
+    # rule walk. It moved **down**, to after `modules_section` and before
+    # `drc_summarise` (see the block there for why both ends of that order are
+    # load-bearing), so that `module_of` sees the report's own `modules[]` and
+    # the summary counts PCB findings. Nothing is lost from here: the
+    # schematic findings it used to merge are still the same rows, they are
+    # simply merged a few lines later.
 
     # --- 阶段 C 的分组 + AI 槽位（025 §2 阶段 C/E）。
     modules, module_facts = modules_section(
@@ -4945,6 +5047,130 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
     source["modulesOrderedBy"] = "warnings-first"
     if warning_modules:
         notes.append(f"模块按「含警告优先」排序，含警告的模块：{'、'.join(warning_modules)}")
+
+    # 126b: the PCB runner, offline `.epro2` only (钉 5), sitting **after
+    # `modules_section`** so `module_of` gets the real `modules[]` (task 126
+    # §126b「开工前先修」) and **before** `drc_summarise` so PCB findings already
+    # sit in the one `findings[]` array when it is read. Both directions of that
+    # order matter, and neither is incidental:
+    #
+    # * `modules` is the report's own module reading, one of the two sources
+    #   `build_module_of` merges (钉 2, priority: an engineer-declared
+    #   `intent.blocks[].parts` wins). Before the reorder the runner was handed
+    #   `modules=None`, so a board with no contract — 毕设FOC, which has none —
+    #   got **no** module attribution at all for its PCB findings: `module_of`
+    #   was empty and every PCB finding fell into `未归属` by default rather
+    #   than by evidence.
+    # * `drc_summarise` reads `findings[]` once and derives the summary's
+    #   error/warning counts, the console `errors:`/`reminder:` lines and
+    #   `summary.exitCode`. Run after the merge, PCB findings count in all of
+    #   them; run before, they would be counted twice in the report or not at
+    #   all in the console.
+    #
+    # The merge's own bookkeeping is position-independent either way:
+    # `boards[].findings` holds indices **into this runner's** return value, and
+    # the `base = len(findings)` shift below is computed at the moment of the
+    # merge, so moving the call site does not move the arithmetic. The
+    # `test_126b` suite pins all three of these (summary counts, module
+    # attribution, board index correctness) so the reorder cannot silently
+    # trade one for another.
+    #
+    # The live path's PCB geometry comes from the connector, which 126a/126b do
+    # not touch — there the section is simply absent, like `layout_review` when
+    # the switch is off. The section is also absent when the backup has no PCB
+    # document (缺席而非空, 钉 5).
+    #
+    # 126d's gate reads **this block's** two halves and nothing else:
+    # `pcb_had_documents` (the archive really does carry PCB geometry) and
+    # whether a section came back. Both are needed because the two absences mean
+    # opposite things — no PCB document is 「nothing to review」 (correct, not a
+    # gate), a PCB document with no section is 「the check did not happen」. The
+    # flag is **not** set here but carried to `_coverage_section`, which is
+    # called earlier: `coverage` is the one place this report states "what did
+    # not get read", and a second private copy of the fact would be the #30 trap
+    # (a gate that lives in the CLI's memory and dies at the next re-gate).
+    pcb_review: dict | None = None
+    pcb_had_documents = False
+    if tier == "file" and str(path).lower().endswith(".epro2"):
+        from .engines.pcbreview import run_pcb_review
+
+        # A second parse of the same archive, before the runner's own: the
+        # question 「does this backup have PCB documents at all?」 is a fact
+        # about the file, and the runner answers a different question (「review
+        # what it has」). It is asked here rather than inferred from
+        # `pcb_review is None`, because that single value cannot tell the two
+        # absences apart. A parse failure here is *not* a gate failure by itself —
+        # the runner's own parse is the one that decides whether the review
+        # happened, and if the archive is so broken that it cannot be listed, the
+        # model-empty gate already speaks for it.
+        try:
+            from .parsers.epru import load_epro2_source
+
+            pcb_had_documents = bool(
+                load_epro2_source(path).documents_of_type("PCB")
+            )
+        except Exception:  # noqa: BLE001 — the runner below is the one that judges
+            pcb_had_documents = False
+        try:
+            pcb_findings, pcb_review = run_pcb_review(
+                path,
+                model=model,
+                intent=contract,
+                modules=modules,
+            )
+        except Exception as exc:  # noqa: BLE001 — a report must still be written
+            pcb_review = None
+            notes.append(
+                f"PCB 审查未完成（{type(exc).__name__}: {exc}）：report.json 无 pcb_review 键"
+            )
+        else:
+            if pcb_findings:
+                base = len(findings)
+                for entry in pcb_review["boards"]:
+                    # boards[].findings index into the *merged* array, so the
+                    # runner's own per-runner indices shift by what the
+                    # schematic rules already contributed.
+                    entry["findings"] = [base + index for index in entry["findings"]]
+                findings.extend(
+                    _finding_payload(finding) for finding in pcb_findings
+                )
+                notes.append(
+                    f"PCB 审查：{len(pcb_findings)} 条 finding 已并入 findings[]"
+                    f"（pcb- 前缀，见 pcb_review 节）"
+                )
+
+    # 126d: the coverage gate is computed **here**, after the PCB block and
+    # before `drc_summarise`. It sits at the same point in the order for the same
+    # reason the runner does (#30's own discipline applied to 126d): every fact it
+    # reads — the parse, the tier ladder's attempts, the rule errors, and the PCB
+    # section's presence — exists by now, and the summary that consumes it does
+    # not exist yet.
+    coverage = _coverage_section(
+        model=model, board=board, attempts=attempts,
+        parse_stats=parse_stats, rules_errored=rules_errored,
+        # 126d's one new field: the archive has PCB documents **and** the runner
+        # produced no section. Both halves are read here, where both are in hand;
+        # an online run never entered the PCB block, so both are False and the
+        # gate does not fire (主代理裁定 1).
+        pcb_review_missing=bool(pcb_had_documents and pcb_review is None),
+    )
+    if coverage["modelEmpty"]:
+        notes.append(
+            "模型为空（0 器件 0 网络）：归档读不出内容/模型为空，可能被截断或损坏——"
+            "这不是干净板（completion.coverage.parseIncomplete / modelEmpty）"
+        )
+    if rules_errored:
+        notes.append(
+            f"{len(rules_errored)} 条规则执行出错（{'、'.join(rules_errored)}）："
+            "它们的结论缺失，报告照出（completion.coverage.rulesErrored）"
+        )
+    if coverage["pcbReviewMissing"]:
+        notes.append(
+            "工程含 PCB 文档但本次无 pcb_review 一节：PCB 版面未审，verdict 记 incomplete"
+            "（completion.coverage.pcbReviewMissing）"
+        )
+
+    summary = drc_summarise(drc=drc, findings=findings)
 
     # 未审器件：the datasheet gate's own section (039 批② §WI-1).
     unreviewed = unreviewed_parts(
@@ -5101,6 +5327,7 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         architecture=architecture_section,
         intent=intent_report,
         completion=completion,
+        pcb_review=pcb_review,
     )
     report_path = _write_checkup_report(out_dir, report)
     report_md_path = _write_checkup_markdown(out_dir, report)

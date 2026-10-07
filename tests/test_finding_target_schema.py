@@ -82,6 +82,16 @@ TARGET_KEYS = {
     "component_ref", "primitive_id", "pin_refs", "net_refs",
     "expected_before", "suggested_after",
 }
+# 126a §钉 3 added two PCB-side keys to the same dataclass: ``counterpart_ref``
+# (a layout rule judges a *pair*) and ``measurement`` (a layout rule's evidence
+# is a number read off the board). They are **widening, not reinterpretation**:
+# every schematic rule leaves both at their neutral value, so the six keys above
+# keep the meaning they had and none of the assertions below had to change what
+# they mean — only which keys the target is expected to carry. The pin moved
+# from "six keys" to "these eight keys, of which the last two are PCB's", which
+# is the same pin with the 126a amendment written into it.
+PCB_TARGET_KEYS = {"counterpart_ref", "measurement"}
+ALL_TARGET_KEYS = TARGET_KEYS | PCB_TARGET_KEYS
 
 
 # --------------------------------------------------------------------------
@@ -205,9 +215,14 @@ def test_the_target_section_is_the_same_six_keys_for_every_m3_kind(kind):
     (016 fills two of the six, 035 fills three), and every consumer would have to
     treat a missing key and an empty one as the same thing. The keys are pinned
     as *always present*.
+
+    126a: eight keys now — the six, plus ``counterpart_ref``/``measurement``,
+    which the schematic rules of these five kinds leave neutral. Renamed from
+    ``..._six_keys_...`` because "six" stopped being the truth; the assertion is
+    otherwise unchanged.
     """
     payload = cli._finding_payload(KIND_FINDINGS[kind]())
-    assert set(payload["target"]) == TARGET_KEYS
+    assert set(payload["target"]) == ALL_TARGET_KEYS
 
 
 @pytest.mark.parametrize("kind", sorted(KIND_FINDINGS))
@@ -219,9 +234,17 @@ def test_the_target_values_have_the_types_a_report_reader_gets(kind):
         assert isinstance(target[key], list) and all(
             isinstance(item, str) for item in target[key]
         ), key
-    assert None not in target.values(), (
-        "no None noise inside the target: an unknown field is an empty string / "
-        "empty list (the shape 016 wrote) and a reader must not have to handle both"
+    # 126a: ``counterpart_ref`` is another string; ``measurement`` is the one
+    # key allowed to be ``None``, and only it — it is what distinguishes "this
+    # rule measures" from "this rule does not".
+    assert isinstance(target["counterpart_ref"], str)
+    assert target["measurement"] is None
+    assert None not in [
+        target[key] for key in TARGET_KEYS
+    ], (
+        "no None noise inside the six original keys: an unknown field is an empty "
+        "string / empty list (the shape 016 wrote) and a reader must not have to "
+        "handle both"
     )
 
 
@@ -277,13 +300,52 @@ def test_a_finding_with_no_target_carries_the_key_as_null():
 
 
 def test_an_empty_target_still_serialises_all_six_keys():
+    """The eight keys of 126a, and the two new ones at their neutral value.
+
+    126a adds ``counterpart_ref: ""`` and ``measurement: None``, so this pin
+    moved from six keys to eight; the original six keep their values exactly.
+    """
     payload = cli._finding_payload(
         Finding(rule_id="r", severity="WARN", message="m", level="L2", target=FindingTarget())
     )
     assert payload["target"] == {
         "component_ref": "", "primitive_id": "", "pin_refs": [], "net_refs": [],
         "expected_before": "", "suggested_after": "",
+        "counterpart_ref": "", "measurement": None,
     }
+
+
+def test_a_pcb_measurement_target_round_trips_its_shape():
+    """126a pins the *shape* of the new keys without any rule filling them yet.
+
+    126b/126c are the rules that write a measurement; this is the pin that says
+    what one is allowed to look like, so a rule that invents a fifth spelling
+    goes red here rather than into a report. `measurement` is a plain mapping
+    (the dataclass carries no nested type of its own), so what is pinned is: it
+    survives `asdict`, it is a dict, and the keys it carries are the documented
+    ones.
+    """
+    payload = cli._finding_payload(Finding(
+        rule_id="pcb-decap-distance", severity="WARN", message="m", level="L2",
+        board="PCB1",
+        target=FindingTarget(
+            component_ref="U1", counterpart_ref="C7",
+            measurement={"kind": "distance", "value": 180.0, "unit": "mil"},
+        ),
+    ))
+    target = payload["target"]
+    assert target["counterpart_ref"] == "C7"
+    assert target["measurement"] == {
+        "kind": "distance", "value": 180.0, "unit": "mil",
+    }
+    # A measurement that names the layers it was read on says so.
+    payload = cli._finding_payload(Finding(
+        rule_id="pcb-track-ampacity", severity="WARN", message="m", level="L2",
+        target=FindingTarget(measurement={
+            "kind": "width", "value": 12.0, "unit": "mil", "layer_ids": [15],
+        }),
+    ))
+    assert payload["target"]["measurement"]["layer_ids"] == [15]
 
 
 def test_the_serialised_finding_carries_no_private_keys():

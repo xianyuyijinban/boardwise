@@ -1194,18 +1194,28 @@ def ruleset_fingerprint(rule_ids: list[str]) -> str:
 def rulebody_fingerprint(rules_dir: str | Path | None = None) -> str | None:
     """sha256/8 over the rules package's **source files**, or ``None`` if unreadable.
 
-    Recipe: take every ``*.py`` that sits directly in ``src/boardwise/rules/``,
-    sort by file name, feed each file's name and then its bytes into one sha256,
-    and keep the first 8 hex digits. Names are part of the stream so that moving
-    a rule between files cannot leave the digest unchanged.
+    Recipe: walk the whole ``src/boardwise/rules/`` **tree**, take every
+    ``*.py`` in it (a subpackage's modules included), sort the paths by their
+    **relative** path, and feed each relative path and then its bytes into one
+    sha256, keeping the first 8 hex digits. Relative paths are the stream's
+    names, so moving a rule between files — or into a subpackage — cannot leave
+    the digest unchanged.
 
-    What it covers: the rule bodies, their shared helpers in that directory
-    (``base.py``), their wording (``i18n.py``) — everything that decides what a
-    rule concludes and how it says it. What it does **not** cover, and the reason
-    both segments are printed: anything a rule *calls* from outside the
-    directory. ``engines/`` and ``core/`` helpers, the parsers, the curated shelf
-    (``blocklib/parts.json``) and the harness itself can all move a number
-    without moving this digest, so a report still needs the commit it was run at.
+    The walk is **recursive since 126a.** It used to take only the files sitting
+    *directly* in the directory, which meant the new ``rules/pcb/`` subpackage
+    was outside the recipe: a PCB rule could be edited all day and the reported
+    ``rulebody`` would stay exactly where it was, i.e. the ledger would say "the
+    rules did not change" while the PCB side had changed. Names are still part of
+    the stream (``sub/dir/name.py``, always with forward slashes) so the order is
+    the tree's, not the filesystem's.
+
+    What it covers: the rule bodies wherever they live in the package, their
+    shared helpers (``base.py``), their wording (``i18n.py``). What it does
+    **not** cover, and the reason both segments are printed: anything a rule
+    *calls* from outside the package — ``engines/`` and ``core/`` helpers, the
+    parsers, the curated shelf (``blocklib/parts.json``) and the harness itself
+    can all move a number without moving this digest, so a report still needs
+    the commit it was run at.
 
     ``None`` means "this build cannot see its own rule sources", which is the
     frozen state: a PyInstaller onefile carries the rules in the PYZ as bytecode,
@@ -1222,12 +1232,15 @@ def rulebody_fingerprint(rules_dir: str | Path | None = None) -> str | None:
         )
         if not directory.is_dir():
             return None
-        sources = sorted(path for path in directory.iterdir() if path.suffix == ".py")
+        sources = sorted(
+            (path for path in directory.rglob("*.py") if path.is_file()),
+            key=lambda path: path.relative_to(directory).as_posix(),
+        )
         if not sources:
             return None
         digest = hashlib.sha256()
         for path in sources:
-            digest.update(path.name.encode("utf-8"))
+            digest.update(path.relative_to(directory).as_posix().encode("utf-8"))
             digest.update(b"\x00")
             digest.update(path.read_bytes())
     except OSError:

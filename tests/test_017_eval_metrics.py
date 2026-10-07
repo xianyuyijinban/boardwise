@@ -573,13 +573,36 @@ def test_the_report_carries_the_provenance_a_run_has_to_record():
     # the cwd) -- asserted against an absolute path, not against the function.
     repo_rules = Path(__file__).resolve().parents[1] / "src" / "boardwise" / "rules"
     assert body == rulebody_fingerprint(repo_rules)
+    # 126a made the recipe recursive (the new `rules/pcb/` subpackage was
+    # outside the old direct-only walk), so this repo's own digest moved.
+    # 126a also added two fields to `rules/base.py` (`FindingTarget`'s
+    # `counterpart_ref` / `measurement`), and `base.py` is inside the recipe too,
+    # so the pair below is the value after both changes of that stick (the walk
+    # itself moved `da599557` -> `1f457c90`, and the `base.py` widening moved it
+    # again). 126b then added `rules/pcb/distance.py`, which moved the recursive
+    # digest once more, and 126c added `rules/pcb/ipc.py` after it:
+    #   old recipe (direct files only) over today's tree: b04153f3
+    #   new recipe (recursive, incl. rules/pcb/*.py):     62bfe7f8
+    #     (126a 9c7cc335 -> 126b a9f76763 -> 126c 62bfe7f8)
+    # Both are measured, not guessed - `tests/test_126a_pcb_review_plumbing.py`
+    # recomputes both from the tree and pins them. No number is asserted here:
+    # any further rule change moves the digest again, which is the point, so
+    # this test keeps reading the function.
+    assert rulebody_fingerprint() != "da599557"
 
 
 def test_the_rule_body_digest_moves_when_a_rule_source_moves(tmp_path):
     """The ledger has to see a one-line rule change, not just a rule added.
 
-    Recipe under test: every ``*.py`` directly in the directory, sorted by name,
-    each contributing its name and its bytes (``src/boardwise/rules/``).
+    Recipe under test: every ``*.py`` under the directory **recursively** (a
+    subpackage's modules included), sorted by its relative path, each
+    contributing that relative path and its bytes.
+
+    126a widened the walk from "directly in the directory" to recursive, because
+    the new ``rules/pcb/`` subpackage was outside the recipe — a PCB rule could
+    be edited all day and the reported digest would not move. The two assertions
+    at the bottom are the pin for exactly that: a file in a **subdirectory**
+    counts now.
     """
     (tmp_path / "a.py").write_text("ID = 'a'\n", encoding="utf-8")
     (tmp_path / "b.py").write_text("ID = 'b'\n", encoding="utf-8")
@@ -599,6 +622,16 @@ def test_the_rule_body_digest_moves_when_a_rule_source_moves(tmp_path):
     assert rulebody_fingerprint(tmp_path) == before
     (tmp_path / "a.py").write_text("ID = 'a'\nRENAMED = True\n", encoding="utf-8")
     assert rulebody_fingerprint(tmp_path) != before
+    # 126a: a file inside a *subdirectory* is part of the rule body, and its
+    # content moves the digest.
+    sub = tmp_path / "pcb"
+    sub.mkdir()
+    (sub / "base.py").write_text("ID = 'base'\n", encoding="utf-8")
+    with_sub = rulebody_fingerprint(tmp_path)
+    assert with_sub != changed, "a subpackage's rule source is now in the recipe"
+    (sub / "base.py").write_text("ID = 'BASE'\n", encoding="utf-8")
+    assert rulebody_fingerprint(tmp_path) != with_sub
+    assert rulebody_fingerprint(tmp_path) == rulebody_fingerprint(tmp_path)
 
 
 def test_a_build_without_rule_sources_says_so_instead_of_guessing(

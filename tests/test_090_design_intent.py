@@ -762,8 +762,28 @@ def test_the_report_points_at_the_f1_bias_case(tmp_path, capsys, home):
         "--library", str(SHELF), "--intent", str(contract),
     ])
     out = capsys.readouterr().out
-    assert code == 3
+    # 126c moved this assertion off the numeric exit code, and the reason is
+    # the difference, not a loosening. What 090 §四 pinned here is **the report
+    # naming F1's missing closure slot** — the exit code was incidental, riding
+    # on `verdict: incomplete`. Supplying this contract now also reaches the PCB
+    # runner, and `pcb-track-ampacity` reads the very same
+    # `signals[].range = "±3A"` this test's contract declares and files **6
+    # ERRORs** (3 A down 10 mil copper, on three layers, two nets — an overloaded
+    # conductor is a safety matter). An ERROR sets `drc_summarise`'s exitCode to
+    # 1 and 073's `_exit_code_with_verdict` only ever raises a 0 to 3, so the
+    # code is 1 now.
+    #
+    # So the pin becomes the *verdict*, which is what actually decided the old 3
+    # and is unchanged by 126c: unreviewed parts and untriaged warnings are what
+    # make this board `incomplete`, and 6 more ERRORs do not alter that. The exit
+    # code is asserted alongside it, in the direction 126c moved it, so this test
+    # cannot be satisfied by a rule that simply stopped firing.
     report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
+    assert report["completion"]["verdict"] == "incomplete"
+    assert report["summary"]["errorCount"] == 6, (
+        "the 126c ampacity ERRORs are the reason the exit code is 1, not 3"
+    )
+    assert code == 1, "an ERROR keeps its 1; `incomplete` only ever raises a 0 (073)"
     section = report["intent"]
     hints = {hint["object"]: hint for hint in section["hints"]}
     assert set(hints) == {"U+", "W+"}, "both measured phase-current nets are asked"

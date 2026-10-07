@@ -1215,6 +1215,13 @@ def test_the_report_target_schema_is_explicit(monkeypatch):
     assert set(emitted) == {
         "component_ref", "primitive_id", "pin_refs", "net_refs",
         "expected_before", "suggested_after",
+        # 126a added these two to the same dataclass, so the key set the plan
+        # builder reads widened by two — and by nothing else. The pin is kept as
+        # a full key set (rather than a subset check) precisely so such a
+        # widening is noticed here; the reason it is allowed is that every
+        # schematic rule — this one included — leaves both at their neutral
+        # values, so the plan builder's input is unchanged.
+        "counterpart_ref", "measurement",
     }, "report.json's target keys are the plan builder's input contract"
     assert isinstance(emitted["component_ref"], str)
     assert isinstance(emitted["primitive_id"], str)
