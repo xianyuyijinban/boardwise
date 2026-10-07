@@ -357,6 +357,48 @@ def append_audit(home: Path | None, **fields: Any) -> None:
         pass
 
 
+def status_summary(data: dict[str, Any]) -> str:
+    """The **one line** ``boardwise bridge status`` leads with (issue #69 条 2).
+
+    The window table below answers "which windows are online and what have they
+    been doing", which is the right question for someone debugging the bridge and
+    the wrong one for the hardware engineer who only wants to know whether boardwise
+    can see their project right now. This is that answer, and it is deliberately
+    the *first* line, because the reader who needs it will not read past the table
+    to find it:
+
+    * connected — ``已连接 N 个窗口：<工程名列表>``, one line, the projects by the
+      names a human calls them (a window that named no project is counted and not
+      invented, and says so in the tail);
+    * not connected — ``未连接——先启动 daemon：`boardwise bridge start`，再确认
+      立创 EDA 里已导入 connector``, which is the two-step repair in the order the
+      reader has to do it (issue #69's own diagnosis: the state lives only in this
+      command, so a light user does not know to look).
+
+    Spelled here rather than in the CLI for the reason :func:`status_lines` gives:
+    the wording cannot drift from the keys it reads. Empty ``windows`` **and** a
+    false ``connector`` are both "not connected" — the second is the first's cause.
+    """
+    windows = _status_windows(data)
+    if windows:
+        names: list[str] = []
+        unnamed = 0
+        for window in windows:
+            name = _project_name(window)
+            if not name:
+                unnamed += 1
+                continue
+            if name not in names:
+                names.append(name)
+        listed = "、".join(names) if names else "（窗口都没有报工程名）"
+        tail = f"（另有 {unnamed} 个窗口未报工程名）" if unnamed else ""
+        return f"已连接 {len(windows)} 个窗口：{listed}{tail}"
+    return (
+        "未连接——先启动 daemon：`boardwise bridge start`，"
+        "再确认立创 EDA 里已导入 connector"
+    )
+
+
 def status_lines(data: dict[str, Any]) -> list[str]:
     """The window table ``boardwise bridge status`` prints.
 
