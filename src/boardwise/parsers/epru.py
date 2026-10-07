@@ -54,6 +54,7 @@ from .epru_stream import (
 from .enet import NetlistShapeError, optional_object, shape_of
 
 from ..core.geometry import (
+    MULTI_LAYER_ID,
     BoardGeometry,
     BoardOutline,
     ComponentPlacement,
@@ -76,6 +77,7 @@ __all__ = [
     "collect_pcb_context",
     "extract_board",
     "load_epro2_source",
+    "pad_effective_layers",
     "pad_net_key",
     "pad_templates",
     "parse_epro2",
@@ -387,14 +389,67 @@ def parse_id_tuple(record: EpruRecord) -> list[str]:
     return [str(v) for v in decoded] if isinstance(decoded, list) else [str(decoded)]
 
 
+def pad_effective_layers(
+    template: PadTemplate, placement: ComponentPlacement, copper_layers: Sequence[int]
+) -> list[int]:
+    """The copper layers one instantiated pad physically occupies (127b).
+
+    **Why this is not ``template.layer_id``.** The footprint writes its own
+    layer, and that value describes the part *as the library stores it* — a
+    top-side SMD footprint says ``layerId: 1`` on every one of its pads, and
+    nothing rewrites it when the placement is flipped to the other face. The
+    face the copper is actually on lives in ``COMPONENT.layerId``. Measured on
+    the 毕设FOC fixture: PCB1's ``U4`` / ``U6`` / ``R17`` / ``C14`` sit on
+    ``layerId: 2`` (bottom) while all 28 of their SMD pads carry
+    ``layerId: 1``. A rule that read the footprint's layer would put a bottom
+    part's solder pads on the top face and report the pairs it happens to
+    overlap in plan view as touching copper.
+
+    Three cases, in the order they are decided:
+
+    1. **a barrel** — the pad has a hole, or its ``layer_id`` is
+       :data:`~boardwise.core.geometry.MULTI_LAYER_ID`: every copper layer.
+       The plated barrel is continuous through the board and its lands exist on
+       both faces.
+    2. **an SMD pad** — the **placement's** face when it states one, else the
+       footprint's own layer (a placement with no ``layerId`` is old-file or
+       synthetic, and refusing to answer would drop every pad off a board that
+       is perfectly readable).
+    3. **neither resolvable** — the empty list, which every consumer reads as
+       "unclassifiable" and skips rather than guessing a layer.
+
+    ``copper_layers`` is the document's own copper set (from
+    :class:`~boardwise.core.geometry.StackupEntry`, falling back to the ``LAYER``
+    table). It is passed in rather than re-derived per pad because the barrel
+    case needs the board's copper layers and there are hundreds of pads; the
+    fallback when the stackup names no copper at all is "just the placement's
+    face", which is what a two-layer file needs and never more than the file
+    claims.
+    """
+    copper = sorted({int(layer) for layer in copper_layers})
+    if template.hole_diameter is not None or template.layer_id == MULTI_LAYER_ID:
+        return copper
+    face = placement.layer_id if placement.layer_id is not None else template.layer_id
+    if face is None:
+        return []
+    return [int(face)]
+
+
 def build_pads(
     placements: list[ComponentPlacement],
     footprints: dict[str, list[PadTemplate]],
     pad_nets_by_pad: dict[tuple[str, str], str | None],
     pad_nets_by_pin: dict[tuple[str, str], str | None],
     stats: ParseStats,
+    copper_layers: Sequence[int] = (),
 ) -> list[PadGeometry]:
-    """Instantiate footprint pads at their placed, rotated positions."""
+    """Instantiate footprint pads at their placed, rotated positions.
+
+    ``layer_id`` on the result stays **the footprint's own value** (125's
+    contract, and 125's tests pin it); ``effective_layer_ids`` carries the
+    physical reading from :func:`pad_effective_layers`, which is the one every
+    rule and the clearance engine uses.
+    """
     pads: list[PadGeometry] = []
     for comp in placements:
         templates = footprints.get(comp.footprint or "", [])
@@ -413,6 +468,9 @@ def build_pads(
                     pin_number=template.num or None,
                     net=net,
                     layer_id=template.layer_id,
+                    effective_layer_ids=pad_effective_layers(
+                        template, comp, copper_layers
+                    ),
                     x=point.x,
                     y=point.y,
                     local_x=template.local_x,
@@ -629,12 +687,28 @@ def collect_pcb_context(
             stats.unconsumed_types[rtype] = stats.unconsumed_types.get(rtype, 0) + 1
 
     context.stackup.sort(key=lambda entry: entry.z_index)
+    copper_layers = [
+        entry.layer_id
+        for entry in context.stackup
+        if (info := context.layers.get(entry.layer_id)) is not None and info.is_copper
+    ]
+    if not copper_layers:
+        # No usable ``LAYER_PHYS``: the barrel case then falls back to the
+        # ``LAYER`` table, which is the wider set of layers the editor knows
+        # about. That is the 125a fallback (:func:`~boardwise.core.measure.
+        # read_stackup` takes it for the same reason) and it errs wide: a
+        # through-hole pad spanning a layer the board never fabricated is a
+        # smaller claim than one that spans only what the stackup listed.
+        copper_layers = [
+            info.layer_id for info in context.layers.values() if info.is_copper
+        ]
     context.pads = build_pads(
         context.placements,
         footprints,
         context.pad_nets_by_pad,
         context.pad_nets_by_pin,
         stats,
+        copper_layers,
     )
     return context
 

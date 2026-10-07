@@ -30,8 +30,10 @@ from typing import Any, Iterable, Iterator, Sequence
 from .model import is_ground_net
 
 __all__ = [
+    "COPPER_LAYER_TYPES",
     "MIL_TO_MM",
     "MM_TO_MIL",
+    "MULTI_LAYER_ID",
     "mil_to_mm",
     "Point",
     "BBox",
@@ -142,6 +144,17 @@ def transform_point(
 #: and the same document's ``LAYER_PHYS`` stackup seats layer 15 between two
 #: dielectrics (zIndex 1002, material 内层铜厚, thickness 0.598 mil = 0.5 oz).
 COPPER_LAYER_TYPES: frozenset[str] = frozenset({"TOP", "BOTTOM", "SIGNAL", "PLANE"})
+
+#: The layer id EasyEDA Pro writes for a pad that exists on **every** copper
+#: layer — the editor's own "Multi-Layer" designation, and the normal spelling
+#: on a through-hole pad (where it is what makes pin 1 square). It is a
+#: *declaration*, so it is deliberately not in :data:`COPPER_LAYER_TYPES`: it is
+#: not a layer a track can be drawn on, it is the set of them. Measured: 45 of
+#: PCB3's 125 pads and 8 of PCB1's 430 carry it, and every one of them also
+#: carries a ``hole`` — the two agree 45/45 and 8/8, which is why
+#: :func:`boardwise.parsers.epru.pad_effective_layers` accepts **either** as the
+#: barrel signal rather than insisting on one.
+MULTI_LAYER_ID = 12
 
 
 @dataclass(frozen=True)
@@ -285,6 +298,33 @@ class PadGeometry:
     coordinates; the parser instantiates them per component and transforms
     them here. ``local_x`` / ``local_y`` keep the footprint-local values so a
     consumer can re-derive them.
+
+    **``layer_id`` is what the footprint says; ``effective_layer_ids`` is where
+    the copper physically is** (task 127b). They are not the same fact, and
+    conflating them is what made a bottom-side part's SMD pads read as top
+    copper. Measured on the 毕设FOC fixture: PCB1 places U4 / U6 / R17 / C14 on
+    the **bottom** (``COMPONENT.layerId == 2``), yet all 28 of their SMD pads
+    carry ``layerId == 1`` — the footprint's own hardcoded layer, which is 1 for
+    a top SMD and is not rewritten when the part is flipped to the other face.
+    A rule that measured those pads as top copper produced six **top x bottom**
+    pairs at 0.0 mil "touching" on a board whose host DRC is clean: the copper
+    they were comparing lives on opposite faces of a 1.6 mm board.
+
+    ``effective_layer_ids`` is the reading the rules and the clearance engine
+    use:
+
+    * a **through-hole** pad (one with a ``hole_diameter``), or any pad whose
+      ``layer_id`` is :data:`MULTI_LAYER_ID`, occupies **every copper layer** —
+      its barrel is continuous and its lands exist on both faces;
+    * an **SMD** pad occupies the face its **component** is on
+      (``ComponentPlacement.layer_id``), falling back to the footprint's
+      ``layer_id`` when the placement carries none.
+
+    It is written by the parser (which knows the placement and the document's
+    stackup) and is **empty by default**, so a hand-built pad falls back to the
+    previous behaviour rather than silently claiming an empty layer set. The
+    empty set is "this pad's physical layers were never established", never
+    "this pad has no copper".
     """
 
     id: str
@@ -293,6 +333,7 @@ class PadGeometry:
     pin_number: str | None = None
     net: str | None = None
     layer_id: int | None = None
+    effective_layer_ids: list[int] = field(default_factory=list)
     x: float = 0.0
     y: float = 0.0
     local_x: float = 0.0
@@ -312,6 +353,17 @@ class PadGeometry:
     def is_smd(self) -> bool:
         """True when the pad has no hole (surface mount)."""
         return self.hole_diameter is None
+
+    def effective_layers(self) -> set[int]:
+        """The copper layers this pad physically occupies.
+
+        :attr:`effective_layer_ids` when the parser established it, otherwise
+        **the empty set** — the "never guessed" discipline the rest of
+        :mod:`boardwise.core.measure` follows for an unclassifiable element. A
+        caller that has not got a stackup (a synthetic board, an old file) gets
+        an absent answer and says so, rather than a plausible-looking one.
+        """
+        return set(self.effective_layer_ids)
 
 
 @dataclass
