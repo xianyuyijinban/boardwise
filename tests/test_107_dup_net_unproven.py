@@ -473,11 +473,19 @@ def _loaded_boards():
 
 
 def test_no_board_without_a_repeated_designator_files_a_truncation_fact():
-    """The 19 untouched boards: the guard that files the fact cannot fire on them.
+    """The untouched boards: the guard that files the fact cannot fire on them.
 
     Not "their verdicts happen to be the same" — the **input** to every refusal
     is empty on all of them, so no rule on them can read a truncation whatever it
     concludes.
+
+    The count moved 19 -> 20 on 2026-10-07: 岳 supplied the **1.0.0 export** of
+    the 毕设FOC board (``ProPrj_毕设FOC驱动板_v1.0.0_2026-10-07.epro2``), which
+    joined the corpus. Its Board1 *does* repeat designators (9 nets), so it is
+    not one of the untouched boards — but it was not there when this number was
+    first measured, and a fixture arriving is exactly the kind of event this pin
+    exists to surface. The number is a **corpus** fact, not a behaviour claim,
+    so it is updated here with the reason recorded rather than loosened.
     """
     checked = 0
     for key, title, board in _loaded_boards():
@@ -486,16 +494,24 @@ def test_no_board_without_a_repeated_designator_files_a_truncation_fact():
         assert board.unproven_nets == {}, f"{key} [{title}]"
         assert board.unproven_reasons == {}, f"{key} [{title}]"
         checked += 1
-    assert checked == 19, f"the untouched set is 19 boards, {checked} were checked"
+    assert checked == 20, f"the untouched set is 20 boards, {checked} were checked"
 
 
 #: Which boards file the fact, and which nets — measured on the delivered tree
 #: (``outputs/107/probe_after.json``). Five files, 24 boards: the two that repeat
 #: are DCDC, 毕设FOC's Board1, 高速电机控制器's 控制板, 毕设滤波采样 and the
 #: injected review set, which repeats ``R24`` across pages.
+#:
+#: **Six entries since 2026-10-07**: 岳's **1.0.0 export** of the 毕设FOC board
+#: (``ProPrj_毕设FOC驱动板_v1.0.0_2026-10-07.epro2``) has ``Board1: 9``. It is a
+#: separate project from the 1.1.0 export already listed, not a rename of it —
+#: the two files have different sizes and different contents, and the 1.0.0
+#: board's ``U6`` is the ``TPLP2981-30DBVR`` LDO where the 1.1.0 one's is a 2x6
+#: 排针 (127b's evidence that the审查对象 was wrong, not the parser).
 REPEATED_BOARDS = {
     "DCDC-12V9V转5V3V3_2026-09-27.epro2": {"Board1": 5},
     "ProPrj_毕设FOC驱动板_2026-09-17.epro2": {"Board1": 10},
+    "ProPrj_毕设FOC驱动板_v1.0.0_2026-10-07.epro2": {"Board1": 9},
     "ProPrj_高速电机控制器_2026-09-16.epro2": {"控制板": 17},
     "毕设滤波采样_2026-09-27.epro2": {"Board1": 15},
     "duplicate-designator.epro2": {"Board1": 2},

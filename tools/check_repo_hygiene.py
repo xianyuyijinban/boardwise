@@ -69,6 +69,8 @@ ALLOWLIST: frozenset[str] = frozenset(
         "tests/fixtures/ProPrj_CH340G_2026-09-13.epro2",
         "tests/fixtures/ProPrj_ROBOT ctrl FOC_2026-09-16.epro2",
         "tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2",
+        # 毕设FOC 1.0.0 真机导出（127b，岳亲验版本——盲审终验基准）
+        "tests/fixtures/ProPrj_毕设FOC驱动板_v1.0.0_2026-10-07.epro2",
         "tests/fixtures/ProPrj_智能药箱_2026-09-17.epro2",
         "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2",
         "tests/fixtures/ch340_golden.epro2",

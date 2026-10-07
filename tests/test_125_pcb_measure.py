@@ -468,8 +468,10 @@ def test_pad_edge_distance_oval_uses_bounding_rect():
 def _component_board() -> BoardGeometry:
     """R1 at (1000, 0) angle 0, C1 at (1030, 500) angle 90, plus padless TP1.
 
-    C1's pads sit on layer 2 on purpose: 棒1 measures pure XY geometry and
-    stays layer-blind (the cross-layer projection semantics land in 125b).
+    Both parts are top-side (``layer_id = 1``), and the hand-built pads carry no
+    ``effective_layer_ids`` — so they read through
+    :func:`~boardwise.core.measure._element_layers`'s pre-127b fallback, which is
+    exactly what "no physical reading established" has always meant here.
     """
     return BoardGeometry(
         components=[
@@ -481,8 +483,8 @@ def _component_board() -> BoardGeometry:
             _pad("p1", component="R1", pin="1", net="GND", layer_id=1, x=975, y=0, width=50, height=40),
             _pad("p2", component="R1", pin="2", net="SIG", layer_id=1, x=1025, y=0, width=50, height=40),
             # 60x30 at board-frame 90° -> 30 wide (x ±15) by 60 tall (y ±30).
-            _pad("p3", component="C1", pin="1", net="GND", layer_id=2, x=1030, y=575, width=60, height=30, angle=90),
-            _pad("p4", component="C1", pin="2", net="SIG", layer_id=2, x=1030, y=425, width=60, height=30, angle=90),
+            _pad("p3", component="C1", pin="1", net="GND", layer_id=1, x=1030, y=575, width=60, height=30, angle=90),
+            _pad("p4", component="C1", pin="2", net="SIG", layer_id=1, x=1030, y=425, width=60, height=30, angle=90),
         ],
     )
 
@@ -490,13 +492,25 @@ def _component_board() -> BoardGeometry:
 def test_component_distance_hand_computed():
     dist = component_distance(_component_board(), "R1", "C1")
     assert dist is not None
-    # Anchors (1000, 0) and (1030, 500) -> hypot(30, 500).
+    # Anchors (1000, 0) and (1030, 500) -> hypot(30, 500). The anchor distance
+    # is unchanged by 127b: it is the distance between the two placements and
+    # no pad exemption can move it.
     assert dist.center_distance == pytest.approx(math.hypot(30, 500), abs=1e-9)
-    # Closest pair: R1.2 spans x [1000, 1050], y [-20, 20]; C1.2 spans
-    # x [1015, 1045], y [395, 455]. The x ranges overlap, so the gap is
-    # purely vertical: 395 - 20 = 375.
-    assert dist.edge_distance == pytest.approx(375.0, abs=1e-9)
-    assert (dist.pad_a, dist.pad_b) == ("2", "2")
+    # **127b changed which pair is nearest**, and this is the pin that records
+    # why. Under 125's layer-blind sweep the winner was R1.2/SIG against
+    # C1.2/SIG at 375.0 — but those are **the same net**, and two pads of one
+    # net meeting is the design's own connection, not a placement defect, so
+    # that pair is now exempt. The winner is the nearest *surviving* pair:
+    # R1.1/GND against C1.2/SIG.
+    #
+    #   R1.1 spans x [950, 1000], y [-20, 20]
+    #   C1.2 spans x [1015, 1045], y [395, 455]   (60x30 rotated 90° -> 30 x 60)
+    # Neither range overlaps the other on either axis, so the gap is the corner
+    # to corner distance: dx = 1015 - 1000 = **15**, dy = 395 - 20 = **375**,
+    # hypot(15, 375) = **375.2999**. (R1.2/C1.1, the 540.0 corner-to-corner
+    # alternative, is further.) Stated so a reader can redo the subtraction.
+    assert dist.edge_distance == pytest.approx(math.hypot(15, 375), abs=1e-9)
+    assert (dist.pad_a, dist.pad_b) == ("1", "2")
 
 
 def test_component_distance_unknown_designator_is_none():

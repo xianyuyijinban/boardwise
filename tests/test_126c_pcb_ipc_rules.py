@@ -1292,7 +1292,7 @@ def test_robot_pcb1_the_phase_tracks_are_six_errors_against_the_measured_width(
             assert "internal" in finding.message and "140.0" in finding.message
 
 
-def test_robot_pcb1_the_rails_rule_fires_on_the_two_voltages_the_board_actually_has(
+def test_robot_pcb1_the_rails_rule_prices_the_three_voltages_and_judges_no_cross_layer_pair(
     robot_findings,
 ):
     """The spacing half on the same board, where the contract names **no**
@@ -1305,44 +1305,47 @@ def test_robot_pcb1_the_rails_rule_fires_on_the_two_voltages_the_board_actually_
     regulator half has nothing to say about it, so this is the name/supply-pin
     evidence), and ``GND`` at 0 V as the board's reference.
 
-    The measured pairs (both WARN, both at 0.0 mil):
+    **127b: both measured pairs are now dropped, and this test is the record of
+    why.** 126b reported two WARNs at 0.0 mil, and its own docstring already
+    said the number was a projection artifact:
 
-    * ``+12V`` vs ``GND``: difference 12 V → the ``0–15`` band → **4 mil**; the
-      closest pair is a ``+12V`` track on **layer 16** against ``R5``'s pad 1 on
-      **layer 1**. The measured distance is 0.0 because the capsule engine
-      returns the plan-view projection and the two elements are on different
-      layers — the shapes project onto each other without touching in 3D, so
-      ``overlapping`` is False and the message does **not** claim a short;
-    * ``GND`` vs ``VCC``: difference 3.3 V → **4 mil**; a GND track against a
-      pad on ``U1``, also 0.0 by the same projection reading.
+    * ``+12V`` vs ``GND``: the closest pair was a ``+12V`` track on **layer 16**
+      against ``R5``'s pad 1 on **layer 1**. Different layers. The 0.0 is two
+      shapes projected onto each other in plan view, separated vertically by the
+      prepreg — the test already asserted ``overlapping is False`` and that
+      「touch」 must not appear in the message, which is the same rule stating in
+      prose what the code now does structurally;
+    * ``GND`` vs ``VCC``: a GND track against a pad on ``U1``, 0.0 by the same
+      projection reading.
 
-    And the third rail, ``VCCA``, is **UNKNOWN**: the contract names it and no
+    127b gave :class:`boardwise.core.measure.ClearanceResult` a
+    ``shared_layer_ids`` field, and this rule **drops a pair whose closest copper
+    shares no layer** (:attr:`ClearanceResult.shares_a_layer`). Judging a
+    cross-layer projection against IPC-2221's 4 mil band measures the board's
+    thickness, not its layout. Both pairs are dropped — not counted as a pass,
+    not counted as a violation, and not reported as an UNKNOWN, because the
+    missing thing is in the *measurement* and not in the design's facts (the same
+    argument the pour-containment blind spot makes).
+
+    What survives is the UNKNOWN row: ``VCCA`` is named by the contract and no
     source prices it (neither its name nor a supply pin states a voltage), so
-    there is one INFO row naming where a voltage may be written. Three rails in,
-    two judged, one work order — which is the shape the UNKNOWN discipline is
-    for.
+    one INFO names where a voltage may be written. **Three rails in, none judged,
+    one work order** — the voltage half of the contract is still incomplete and
+    this report says so.
     """
     findings, _section = robot_findings
     spacing = [f for f in findings if f.rule_id == "pcb-voltage-spacing"]
     warns = [f for f in spacing if f.severity == "WARN"]
     unknowns = [f for f in spacing if f.severity == "INFO"]
-    assert len(warns) == 2, [f.message for f in spacing]
-    assert len(unknowns) == 1
-    assert unknowns[0].target.net_refs == ["VCCA"]
-
-    pairs = {tuple(sorted(f.target.net_refs)): f for f in warns}
-    assert set(pairs) == {("+12V", "GND"), ("GND", "VCC")}
-    bus = pairs[("+12V", "GND")]
-    assert bus.target.measurement["value"] == 0.0
-    assert "12 V" in bus.message and "4.0 mil" in bus.message
-    assert "touch" not in bus.message, (
-        "a cross-layer 0.0 projection is not a short — overlapping is False"
+    assert warns == [], (
+        "127b drops every cross-layer pair; both 126b rows were projections: "
+        f"{[f.message for f in warns]}"
     )
-    logic = pairs[("GND", "VCC")]
-    assert logic.target.measurement["value"] == 0.0
-    assert "3.3 V" in logic.message
-    # The evidence names both sources, so the reader can see where 3.3 came from.
-    assert "architecture.chains.rails[net=VCC].voltage" in " | ".join(logic.evidence)
+    assert len(unknowns) == 1
+    assert unknowns[0].target.net_refs == ["VCCA"], (
+        "the one unpriced rail is still a work order — dropping the two "
+        "cross-layer WARNs must not silence the row that can be acted on"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1380,8 +1383,8 @@ def test_foc_ampacity_is_silent_because_no_contract_declares_a_current(foc_findi
     )
 
 
-def test_foc_pcb1_the_spacing_readings_are_three_warns_and_four_unknowns(foc_findings):
-    """毕设FOC PCB1 anchor: five priced nets, three WARNs, three UNKNOWNs.
+def test_foc_pcb1_the_spacing_readings_are_four_unknowns_and_no_warn(foc_findings):
+    """毕设FOC PCB1 anchor: five priced nets, **no WARN**, four UNKNOWNs.
 
     The priced nets, and where each voltage came from (there is no contract, so
     every one is the drawing's own enumeration, and only ``VCC``/``VCCA``/
@@ -1391,73 +1394,59 @@ def test_foc_pcb1_the_spacing_readings_are_three_warns_and_four_unknowns(foc_fin
     * ``+5V`` at **5.0 V** — its name states it;
     * ``GND`` / ``AGND`` / ``PGND`` at **0.0 V** — the board's reference.
 
-    Ten pairs among the five, and the three that come out WARN:
+    **127b: all three of 126b's WARNs are gone, each for its own stated
+    reason**, and the board's host DRC being clean is what makes all three the
+    same story rather than three coincidences.
 
-    * ``+24V`` vs ``+5V``: difference 19 V → **4 mil** required; measured
-      **0.0 mil** between a ``+24V`` track on **layer 16** and a ``+5V`` track
-      on **layer 1** — a cross-layer projection, ``overlapping`` is False, so the
-      message does not call it a short;
-    * ``+24V`` vs ``GND``: difference 24 V → **4 mil**; measured **0.0 mil**
-      between ``U6``'s pad 10 and a GND track, **both on layer 1**, and
-      ``overlapping`` is True — so the message says the copper *touches*, which
-      is a different fact from 「too close」 and the one a reviewer must act on;
-    * ``GND`` vs ``PGND``: difference 0 V → **4 mil**; measured **0.0 mil**
-      between ``U2``'s pad 33 (GND) and ``U6``'s pad 2 (PGND), both 126 mil and
-      40x123 respectively and both on layer 1, and again overlapping.
+    * ``+24V`` vs ``+5V``: 126b measured **0.0 mil** between a ``+24V`` track on
+      **layer 16** and a ``+5V`` track on **layer 1**. Different layers — the
+      0.0 is a plan-view projection of two shapes separated vertically by the
+      prepreg. Dropped by the cross-layer clause; 126b's own test already
+      asserted 「touch」 must not appear, which is the rule saying in prose what
+      the code now does structurally.
+    * ``+24V`` vs ``GND``: 126b measured **0.0 mil** between ``U6``'s pad 10 and
+      a GND track and called it a *short* (``overlapping=True``). It is not.
+      ``U6`` is a **bottom-side** placement (``COMPONENT.layerId == 2``) whose
+      footprint pads all carry ``layerId == 1`` — the 127a root cause. With the
+      effective-layer reading the pad is on **layer 2**, the track is on layer 1,
+      the pair shares no layer, and the "short" is a projection across a 1.6 mm
+      board. Dropped.
+    * ``GND`` vs ``PGND``: 126b measured **0.0 mil** and ``overlapping=True``
+      between ``U2``'s pad 33 (GND) and ``U6``'s pad 2 (PGND) — the same
+      misattribution (``U6.2`` is on layer 2, ``U2.33`` on layer 1). Dropped on
+      the same clause. Even had the layers agreed, 岳裁定 4 exempts two nets at
+      the same potential, and two ground islands meeting in one place is the
+      design's single-point join, not a defect.
 
-    **Deriving the second one by hand**, because it is the sharpest row on the
-    board: ``U6.10`` is a 40.157 x 122.834 mil pad at (1467.12, -800.0) rotated
-    90°, so rotated its corners are x in [1405.71, 1528.54] and y in [-820.08,
-    -779.92]. The GND track ``9dacd55952cf2ade`` is 10 mil wide, runs from
-    (1494.956, -788.287) to (1494.956, -736.059) on layer 1, so its capsule
-    covers x in [1489.96, 1499.96]. The x ranges overlap (1494.96 is inside
-    [1405.71, 1528.54]) and the y ranges overlap too (−788.29 is inside
-    [−820.08, −779.92]), so the two copper bodies intersect on a shared layer:
-    the minimum is 0.0 and ``overlapping`` is True.
+    What is left is the four UNKNOWNs: ``VCC`` / ``VCCA`` / ``VREF`` on PCB1
+    (three rails the enumeration listed but could not price) plus ``VCC`` on
+    **PCB2**, which has eight drawn nets and no priced rail of its own. PCB3 is
+    quiet as before: its two priced nets (``+24V`` and ``PGND``) measure 21.26
+    mil apart, inside the 4 mil band? no — inside it comfortably, so it passes.
 
-    And the four UNKNOWNs: ``VCC`` / ``VCCA`` / ``VREF`` on PCB1 (three rails the
-    enumeration listed but could not price) plus ``VCC`` on **PCB2**, which has
-    eight drawn nets and no priced rail of its own. PCB3 is the quiet one: its
-    two priced nets (``+24V`` 24 V and ``PGND`` 0 V, difference 24 V → 4 mil)
-    measure **21.26 mil** apart — the pads ``U2.7`` and ``U2.5`` of the half-bridge
-    part on layer 12 — so it passes and says nothing.
-
-    The 20 V difference and the 4 mil allowance are the whole rule in one line:
-    a 24 V rail and a 3.3 V rail on a consumer controller board are nowhere near
-    a safety spacing question, and a rule that escalated them would be crying
-    wolf. What the rows honestly report is that the copper on this board is
-    **touching**, which is a real, actionable observation about three pairs of
-    nets and not a claim about their voltages.
+    **The honest reading of this anchor.** Nothing on this board violates its
+    conductor spacing, and the rule now says so by saying nothing about the ten
+    priced pairs while still naming the four rails whose voltage nobody has
+    established. Before 127b it said the opposite — three 「the copper touches」
+    rows on a board that is electrically clean — and a report that cries wolf
+    three times is a report nobody reads the fourth time.
     """
     findings, _section = foc_findings
     spacing = [f for f in findings if f.rule_id == "pcb-voltage-spacing"]
     warns = [f for f in spacing if f.severity == "WARN"]
     unknowns = [f for f in spacing if f.severity == "INFO"]
 
-    assert all(f.board == "PCB1" for f in warns), "PCB3's single pair passes"
-    assert len(warns) == 3
+    assert warns == [], (
+        "127b: the +24V/+5V and +24V/GND rows are cross-layer projections and "
+        "the GND/PGND row is a same-potential join — none is a spacing defect"
+    )
     assert len(unknowns) == 4
     assert sorted((f.board, f.target.net_refs[0]) for f in unknowns) == [
         ("PCB1", "VCC"), ("PCB1", "VCCA"), ("PCB1", "VREF"), ("PCB2", "VCC"),
-    ]
-
-    pairs = {tuple(f.target.net_refs): f for f in warns}
-    assert set(pairs) == {("+24V", "+5V"), ("+24V", "GND"), ("GND", "PGND")}
-
-    rail_pair = pairs[("+24V", "+5V")]
-    assert rail_pair.target.measurement["value"] == 0.0
-    assert "19 V" in rail_pair.message
-    assert "touch" not in rail_pair.message, "a cross-layer projection is not a short"
-
-    short = pairs[("+24V", "GND")]
-    assert short.target.measurement["value"] == 0.0
-    assert "U6.10" in short.message and "24 V" in short.message
-    assert "copper touch on a shared layer" in short.message
-    assert "overlapping=True" in " | ".join(short.evidence)
-
-    island = pairs[("GND", "PGND")]
-    assert island.target.measurement["value"] == 0.0
-    assert "U2.33" in island.message and "U6.2" in island.message
+    ], (
+        "the four unpriced rails are still work orders — silencing the three "
+        "false WARNs must not silence the rows that can be acted on"
+    )
 
     # Every INFO names its net and the address, and none of them is a defect.
     for finding in unknowns:

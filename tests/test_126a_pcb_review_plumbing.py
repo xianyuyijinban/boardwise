@@ -535,6 +535,23 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     #     e3c6645e — after 128 (#63) retired IC_PATTERN out of rules/facts.py
     #                for `core.parts.is_ic_designator`, and corrected the
     #                archclosure docstring that described the retired regex
+    #     ab898f6b — after 127b (blind-review fixes) changed the rule bodies of
+    #                rules/pcb/distance.py and rules/pcb/ipc.py. Both moved, and
+    #                for the same underlying reason: 127a had measured that the
+    #                PCB rules were reading a pad's footprint layer as its
+    #                physical face, so 127b gave PadGeometry an
+    #                `effective_layer_ids` (parser-side) and taught both rule
+    #                modules to ask for it. distance.py additionally replaced
+    #                the pin-count IC test with the schematic-device-fact test
+    #                and split capacitors into bulk / high-frequency pools;
+    #                ipc.py gained the same-potential and cross-layer
+    #                exemptions. rules/facts.py and rules/archclosure.py were NOT
+    #                touched, which is why the direct-only digest above is
+    #                unchanged at e51b8a86 — that pair is itself the evidence
+    #                that 127b stayed inside rules/pcb/. (59b22cca was the
+    #                intermediate value after the behaviour change and before the
+    #                measured-claims docstrings were brought up to date; a
+    #                docstring is source too, and the pin does not care why.)
     # Both are measured, not guessed. The recursive digest moves whenever any
     # rule body moves - which is the whole point of the recipe, and the reason
     # this number is updated by hand together with the note in test_017 rather
@@ -542,7 +559,7 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # recorded why.
     assert recursive != old_digest, "the subpackage is inside the recipe now"
     assert old_digest == "e51b8a86"
-    assert recursive == "e3c6645e", (
+    assert recursive == "ab898f6b", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

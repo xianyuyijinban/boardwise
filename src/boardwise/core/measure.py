@@ -324,6 +324,11 @@ def pad_edge_distance(pad_a: PadGeometry, pad_b: PadGeometry) -> float:
     / circular shapes the bounding rectangle is used, so the result
     under-estimates the true spacing (rectangle contains the shape) — the
     conservative direction for spacing evidence.
+
+    **Layer-blind on purpose.** This is the pure planar primitive: it answers
+    「how far apart are these two rectangles in the board's plane」, and the
+    caller decides what a layer-crossing pair means. See
+    :func:`component_distance`, which is the layer-aware reader.
     """
     edges_a = _edges(pad_corners(pad_a))
     edges_b = _edges(pad_corners(pad_b))
@@ -349,6 +354,74 @@ class ComponentDistance:
     pad_b: str = ""
 
 
+def _comparable_layers(board: BoardGeometry, pad: PadGeometry) -> set[int]:
+    """The layers two pads may be compared on — the parser's reading, or 125's.
+
+    A pad the parser resolved speaks through
+    :attr:`PadGeometry.effective_layers`; a hand-built one (empty set) falls
+    back to :func:`_element_layers`, which is the pre-127b derivation.
+
+    The one widening applied here is for a board with **no ``LAYER`` table at
+    all** (a synthetic fixture, a minimal hand-built ``BoardGeometry``): there
+    :func:`_element_layers` can only answer 「every copper layer」 for a
+    through-hole pad, and answers *nothing* for an SMD one, because the copper
+    set it draws from is empty. Two pads that both say ``layer_id == 1`` plainly
+    share a face, so the pad's own declared layer is admitted alongside. The
+    widening is narrow on purpose: it is consulted **only when the board names
+    no copper layer**, so on every real document (125a: PCB1 defines 34 copper
+    ``LAYER`` records) it never fires and the layer table is the authority.
+    """
+    resolved = pad.effective_layers()
+    if resolved:
+        return resolved
+    layers = _element_layers(board, pad)
+    if not layers and pad.layer_id is not None and not _copper_layer_ids(board):
+        return {pad.layer_id}
+    return layers
+
+
+def _comparable_pair(board: BoardGeometry, pad_a: PadGeometry, pad_b: PadGeometry) -> bool:
+    """Should these two pads be measured against each other? (127b)
+
+    Two refusals, both of which make the pair **unmeasurable** rather than
+    **far apart** — and :func:`component_distance` treats them as "not counted",
+    which is the direction a rule wants. Both are properties of the *pair*, so
+    neither pad is excluded wholesale: a ``GND`` pad is measurable against its
+    neighbour's ``SIG`` pad and exempt against its ``GND`` one.
+
+    * **same-net** — two pads of one net meeting is the design's intent, not a
+      placement defect. Note what this clause does **not** cover: ``U2.33``
+      (``GND``) against ``U6.2`` (``PGND``) are *different* nets, so they are not
+      exempt here even though two ground islands meeting in one place is
+      equally intended. That case belongs to the net-level question, and
+      :class:`~boardwise.rules.pcb.ipc.VoltageSpacing` is where the same-potential
+      pair is asked (岳裁定 4). Keeping the two clauses apart is deliberate: one
+      reads the copper, the other reads the design's declared voltages.
+    * **cross-layer** — the pads share no copper layer, so in plan view their
+      0.0 mil is the board's thickness rather than a layout fact. This is the
+      127a root cause: PCB1's U4/U6/R17/C14 are placed on the bottom while
+      their footprints' pads all say ``layer_id == 1``, and a layer-blind
+      reading put six top x bottom pairs at "touching" on a board whose host
+      DRC is clean. A through-hole pad spans every copper layer and is
+      therefore comparable with everything, which is exactly right.
+
+    A pad with **no** net is comparable with everything — 「I do not know what
+    this is connected to」 is not a reason to call it unreachable, and refusing
+    it would silently delete a real collision from the sweep.
+    """
+    if pad_a.net and pad_a.net == pad_b.net:
+        return False
+    layers_a = _comparable_layers(board, pad_a)
+    layers_b = _comparable_layers(board, pad_b)
+    if not layers_a or not layers_b:
+        # The parser never established one pad's physical layers (a hand-built
+        # board). Judging it against nothing would drop it from every sweep,
+        # which is the silent direction; keep it and let the measurement be the
+        # planar one.
+        return True
+    return bool(layers_a & layers_b)
+
+
 def component_distance(
     board: BoardGeometry, des_a: str, des_b: str
 ) -> ComponentDistance | None:
@@ -362,8 +435,32 @@ def component_distance(
     if not pads_a or not pads_b:
         return None
 
+    # Task 127b: the nearest pair is taken over pad pairs that can actually be
+    # close to each other — **cross-layer pairs are skipped** and **same-net
+    # pairs are skipped**. Both refusals are stated for the *pair* rather than
+    # for a pad in isolation, because they are facts about two pads: a pad on
+    # ``GND`` is measurable against its neighbour's ``SIG`` pad and exempt
+    # against its ``GND`` one, and exempting the pad itself would delete the
+    # real collision the other pair is reporting.
+    #
+    # * *cross-layer*: a top pad and a bottom pad 0.0 mil apart in plan view
+    #   are on opposite faces of a ~62 mil board; comparing them measures the
+    #   board's thickness, not its layout. This is the 127a root cause: PCB1's
+    #   U4/U6/R17/C14 are placed on the bottom while their footprints' pads all
+    #   say ``layer_id == 1``, so a layer-blind reading put six top x bottom
+    #   pairs at "touching" on a board whose host DRC is clean.
+    # * *same-net*: two pads of one net meeting is the design's intent, not a
+    #   placement defect (the measured cases on 毕设FOC PCB1 are of this shape —
+    #   ``U2.33``/``U6.2`` is ``GND`` against ``PGND``, the two grounds'
+    #   single-point join).
+    #
+    # A pair with **no** comparable pads left yields ``None`` — the same
+    # "unmeasurable, not zero" answer an unknown designator gets — rather than
+    # a fabricated distance.
     shaped_a = [(pad, pad_corners(pad)) for pad in pads_a]
     shaped_b = [(pad, pad_corners(pad)) for pad in pads_b]
+    if not shaped_a or not shaped_b:
+        return None
     bbox_a = [(pad, corners, BBox.from_points(corners)) for pad, corners in shaped_a]
     bbox_b = [(pad, corners, BBox.from_points(corners)) for pad, corners in shaped_b]
 
@@ -372,6 +469,8 @@ def component_distance(
     for pad_a, corners_a, box_a in bbox_a:
         edges_a = _edges(corners_a)
         for pad_b, corners_b, box_b in bbox_b:
+            if not _comparable_pair(board, pad_a, pad_b):
+                continue
             # Coarse bbox reject before the exact pass: shapes sit inside
             # their bboxes, so a pair whose bbox gap already loses to the
             # current best can never improve it.
@@ -386,7 +485,11 @@ def component_distance(
                 best = distance
                 best_pair = (pad_a, pad_b)
 
-    assert best_pair is not None  # both pad lists are non-empty
+    if best_pair is None:
+        # Every pad pair was refused — same-net, or no shared copper layer.
+        # Both are "this pair cannot be measured", which is ``None`` (the
+        # unmeasurable answer), not a fabricated zero.
+        return None
     pa, pb = best_pair
     return ComponentDistance(
         component_a=des_a,
@@ -538,11 +641,25 @@ def _element_layers(
 
     * **via** — every copper layer except ``unused_inner_layers``. This is
       the vertical barrel plus its annular rings.
-    * **pad with a hole** (through-hole / plated or not) — every copper
-      layer: the barrel is continuous and its lands exist on both faces.
-    * **SMD pad / track / pour** — only its own ``layer_id``.
+    * **pad** — :meth:`~boardwise.core.geometry.PadGeometry.effective_layers`,
+      i.e. what the parser established about where the copper physically is
+      (task 127b): all copper layers for a through-hole / Multi-Layer pad, and
+      the **placement's own face** for an SMD pad. The footprint's ``layer_id``
+      is *not* read when the parser has spoken — it names the part as the
+      library stores it, and on a part flipped to the bottom face it still says
+      ``1`` (measured: all 28 of PCB1's U4/U6/R17/C14 SMD pads say ``1`` while
+      their placement says ``2``), which is what manufactured six top-x-bottom
+      "touching" pairs on a board whose host DRC is clean. A pad the parser
+      never resolved (``effective_layer_ids`` empty — a hand-built board, a
+      synthetic fixture) **falls back to the pre-127b derivation**: all copper
+      layers if it has a hole, otherwise its own ``layer_id``. That fallback is
+      what keeps 125's own hand-built fixtures saying what they said, and it is
+      the conservative direction — it is the reading 127b proved wrong only for a
+      *flipped* pad, and a flipped pad is one the parser resolved.
+    * **track / pour** — only its own ``layer_id``; the file states it and there
+      is nothing to correct.
 
-    Elements whose ``layer_id`` is missing land on the empty set and take
+    Elements whose layer is missing land on the empty set and take
     part in nothing (the same "unclassifiable, never guessed" discipline as
     :func:`read_stackup`).
     """
@@ -550,16 +667,46 @@ def _element_layers(
     if via:
         unused = {int(v) for v in getattr(element, "unused_inner_layers", [])}
         return {lid for lid in copper if lid not in unused}
+    if isinstance(element, PadGeometry):
+        resolved = element.effective_layers()
+        if resolved:
+            return resolved
+        # Never resolved by the parser — the pre-127b derivation, kept so a
+        # hand-built pad keeps behaving the way 125's fixtures pin it.
+        layer_id = element.layer_id
+        if layer_id is None:
+            return set()
+        if element.hole_diameter is not None and plated is not False:
+            return set(copper)
+        return {layer_id}
     layer_id = getattr(element, "layer_id", None)
     if layer_id is None:
         return set()
-    has_hole = getattr(element, "hole_diameter", None) is not None
-    if has_hole and plated is not False:
+    if getattr(element, "hole_diameter", None) is not None and plated is not False:
         return set(copper)
     return {layer_id}
 
 
 def _describe(kind: str, ident: str, layer_id: int | None) -> str:
+    """One element's label for a clearance result.
+
+    The raw ``layer_id`` is what the file says. For a **pad** that is the
+    footprint's own value and is wrong on a flipped part (127a measured 28 of
+    PCB1's pads claiming layer 1 while sitting on layer 2), so a label built from
+    it tells a reader the copper is on the wrong face — which is the misattribution
+    127b exists to remove. The caller therefore passes the *effective* layers and
+    this function names the set, with the multi-layer case spelled out rather
+    than rendered as a list.
+    """
+    if isinstance(layer_id, (set, frozenset)):
+        if not layer_id:
+            return f"{kind} {ident} on an unclassified layer"
+        if len(layer_id) == 1:
+            return f"{kind} {ident} on layer {next(iter(layer_id))}"
+        return (
+            f"{kind} {ident} on layers "
+            f"{'/'.join(str(v) for v in sorted(layer_id))}"
+        )
     return f"{kind} {ident} on layer {layer_id}"
 
 
@@ -664,7 +811,11 @@ def _net_shape_records(
                     pad_corners(pad),
                     0.0,  # pad is a bare rectangle: the corners are the outline
                     layers,
-                    _describe("pad", _pad_key(pad), pad.layer_id),
+                    # 127b: the **effective** layers, not ``pad.layer_id``. A
+                    # label reading "layer 1" for a pad whose copper is on
+                    # layer 2 is the misattribution this fix removed, and the
+                    # message is where a reader would have been misled.
+                    _describe("pad", _pad_key(pad), layers),
                     is_pour=False,
                 ),
                 0.0,
@@ -807,6 +958,15 @@ class ClearanceResult:
     voids are not in the geometry model. Such pairs are excluded from the
     minimum rather than guessed at (see :func:`_capsule_distance`); a net
     pair with no measurable pair at all yields ``None``.
+
+    ``shared_layer_ids`` (127b) is the intersection of the two elements' copper
+    layers, and it is what tells a caller whether ``distance`` is a claim about
+    the pair at all: an **empty** intersection is a cross-layer pair, whose
+    ``distance`` is the plan-view projection of two shapes separated vertically
+    by at least the board's prepreg (measured: 62 mil on the 毕设FOC fixture,
+    against IPC-2221's 4 mil band). That is a real distance and not a
+    violation; a caller that judged such a pair by the projection would be
+    measuring the board's thickness. :attr:`shares_a_layer` is the one-word form.
     """
 
     net_a: str = ""
@@ -815,6 +975,15 @@ class ClearanceResult:
     element_a: str = ""
     element_b: str = ""
     overlapping: bool = False
+    #: Copper layers the closest pair both occupy. Empty for a cross-layer
+    #: pair, whose ``distance`` is a plan-view projection rather than a
+    #: surface-to-surface gap (see the class docstring).
+    shared_layer_ids: list[int] = field(default_factory=list)
+
+    @property
+    def shares_a_layer(self) -> bool:
+        """Whether the closest pair's copper can actually meet (same layer)."""
+        return bool(self.shared_layer_ids)
 
 
 def net_clearance(
@@ -845,6 +1014,9 @@ def net_clearance(
         element_a=sa.label,
         element_b=sb.label,
         overlapping=_overlapping(sa, sb),
+        # 127b: the layer intersection is what tells a caller whether the
+        # projected distance is a same-layer gap at all.
+        shared_layer_ids=sorted(sa.layers & sb.layers),
     )
 
 

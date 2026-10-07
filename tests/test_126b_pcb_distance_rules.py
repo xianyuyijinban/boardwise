@@ -74,7 +74,7 @@ def _pad(
     *,
     x: float,
     y: float,
-    net: str = "GND",
+    net: str = "",
     width: float = 40.0,
     height: float = 40.0,
 ) -> PadGeometry:
@@ -84,6 +84,16 @@ def _pad(
     the hand-derivations readable: a pad centred at ``x`` spans
     ``[x-20, x+20]`` in both axes, so the edge gap between two of them on one
     axis is ``|x1 - x2| - 40``.
+
+    **``net`` defaults to empty since 127b.** It used to default to ``"GND"``,
+    which put *every* pad in the synthetic boards on one net — and the new
+    same-net exemption (:func:`boardwise.core.measure.component_distance`) then
+    correctly declined to measure any pair, so the threshold tests went quiet
+    instead of reporting. These tests are about the 20 mil threshold and the
+    board frame, not about connectivity, and an **unnetted** pad is the honest
+    "this pair's nets are not what is under test" value: the same-net clause
+    skips only pads that *name the same net*. A test that does mean to exercise
+    the exemption passes ``net=`` explicitly, and there is one below.
     """
     return PadGeometry(
         id=f"{component}.{pin}",
@@ -769,92 +779,122 @@ def foc_findings():
     return findings, section
 
 
-def test_foc_pcb1_the_decap_readings_are_the_measured_ones(foc_findings):
-    """毕设FOC PCB1 anchor: **one** decap WARN out of five (IC, net) pairs.
+def test_foc_pcb1_the_decap_readings_are_four_infos_and_no_warn(foc_findings):
+    """毕设FOC PCB1 anchor: **no WARN at all**, and four INFO rows.
 
-    The measured supply nets of this board are exactly three — ``+24V`` (net
-    name), ``+5V`` (net name) and ``NET10`` (U11's RT9013-33GB LDO output,
-    MPN-decoded at 3.3 V) — and the five (IC, net) pairs they produce are
-    pinned one by one, with each distance derived from its pads' coordinates
-    in the file. 26 pairs, 5460 measurements, 0.66 s: the whole sweep is
-    affordable, so nothing here is sampled.
+    **This is the 127b flip, and it is the whole point of the exercise.** 126b
+    reported one WARN here — ``U6`` at 555.8 mil on ``+24V`` — and 岳's blind
+    review rejected it: ``U6`` is **not an IC**. The schematic says so and says
+    it three ways: its MPN is ``HX PZ2.54-2x6P TP``, its footprint is
+    ``SMD,P=2.54mm``, and its shelf entry is ``conn.hx_pz2_54_2x6p_tp`` — a 2x6
+    **排针**, a row of 2.54 mm pins. It carries a ``U`` designator because
+    whoever drew the sheet wrote ``U?`` in the library's own ``Designator``
+    attribute, which is precisely why 127b made the device's facts outrank the
+    designator. (On the 1.0 export 岳 actually uses, ``U6`` is an LDO; on this
+    1.1.0 fixture it is a header — 127a established that the审查对象 was wrong,
+    not the parser. See the task book.)
+
+    The four rows that remain are this board's (IC, net) pairs, all INFO because
+    **no candidate on any of them is a high-frequency decoupling capacitor**
+    (127b 裁定 5b). What is pinned is the pair set and the fact that not one is a
+    WARN — the INFO-vs-WARN split *is* the fix, and a reader who wants to know
+    why a pair is INFO reads the ``evidence`` lines, which now carry the IC
+    judgement and every candidate's role with the declared value that decided it.
     """
     findings, _section = foc_findings
     pcb1 = [
         f for f in findings
         if f.board == "PCB1" and f.rule_id == "pcb-decap-distance"
     ]
-    # Four of the five pairs are inside the threshold and say nothing; the
-    # fifth is the WARN. This is the "one WARN" claim.
-    assert len(pcb1) == 1
-    warn = pcb1[0]
-    assert warn.severity == "WARN"
-    # U6 (the gate driver) shares the single +24V bulk capacitor C17 with U7,
-    # which sits 530 mil closer. Derived from the pads: U6.9 is a 40.16x122.83
-    # pad at (1682.88, -800.00) rotated 90 deg, so it spans x in
-    # [1621.46, 1744.29] and y in [-820.08, -779.92]; C17.1 is a 58.47x68.03 pad
-    # at (1999.82, -138.29) unrotated, spanning x in [1970.58, 2029.05] and
-    # y in [-172.30, -104.27]. The nearest corners are U6's top-right
-    # (1744.29, -820.08) and C17's bottom-left (1970.58, -172.30), both gaps
-    # positive, so the edge distance is hypot(1970.58-1744.29, -172.30+820.08)
-    # = hypot(226.29, 647.78) = 555.8 mil. Over 200 → WARN.
-    assert warn.target.component_ref == "U6"
-    assert warn.target.counterpart_ref == "C17"
-    assert warn.target.net_refs == ["+24V"]
-    assert warn.target.measurement == {
-        "kind": "distance", "value": 555.8, "unit": "mil",
-    }
+    assert pcb1, "the three supply nets still produce (IC, net) pairs"
+    assert all(f.severity == "INFO" for f in pcb1), (
+        "no decap WARN survives on this board: every candidate pool is bulk, "
+        "unreadable, or in the band between the HF ceiling and the bulk floor"
+    )
+    pairs = {(f.target.component_ref, tuple(f.target.net_refs)) for f in pcb1}
+    assert pairs == {
+        ("U11", ("+5V",)),
+        ("U11", ("NET10",)),
+        ("U13", ("+5V",)),
+        ("U7", ("+24V",)),
+    }, (
+        "the same pairs 126b examined, minus U6 — which the schematic says is "
+        "a 2x6 header, not an IC"
+    )
+    # The IC judgement is quoted, so 「why is there no U6 row」 is answerable from
+    # the report rather than from this file.
+    for finding in pcb1:
+        assert any(
+            "judged an IC because" in line for line in finding.evidence
+        ), "every decap row states the basis on which the part is an IC"
+    # And U6 is absent for a stated reason rather than for no reason: the
+    # connector word that stopped it.
+    from boardwise import cli as _cli
+    from boardwise.rules.pcb.distance import classify_device, device_facts
 
-    # The other four pairs (U11/+5V, U11/NET10, U7/+24V, U13/+5V) are all
-    # inside 200 and produce no row. Their measured values, for the record:
-    # U11-C28 31.7, U11-C27 55.2, U7-C17 26.4, U13-C38 47.0 mil.
-    # What is pinned is that none of them fires, and that exactly these five
-    # pairs were examined at all (i.e. the supply-net inference is not
-    # over-eager and the 100-odd unnamed signal nets are not examined).
+    model, _ = _cli._load_model(FOC, view="schematic")
+    u6 = model.boards[0].components["U6"]
+    is_ic, why = classify_device(device_facts(u6), pins=len(u6.pins))
+    assert is_ic is False
+    assert "connector/header" in why and "PZ2.54" in why
+
     assert len(foc_findings[1]["boards"]) == 3
 
 
-def test_foc_pcb1_the_spacing_warns_are_seventeen_and_six_of_them_touch(foc_findings):
-    """毕设FOC PCB1 anchor: 17 spacing WARNs, **6** of them at 0.0 mil (touching).
+def test_foc_pcb1_the_spacing_warns_are_four_and_none_of_them_touch(foc_findings):
+    """毕设FOC PCB1 anchor: **4** spacing WARNs, and **none** of them touching.
 
-    The measured distribution on this board (5460 pairs, printed by the probe
-    that produced this pin): 17 pairs under 20 mil, 9 under 10, 9 under 5, 7
-    under 1, and **6 at exactly 0.0**. The 9-under-5 == 9-under-10 chain with
-    7-under-1 is what makes the six zeros the interesting part: six pairs of
-    parts on this board **physically overlap** (their pad rectangles intersect),
-    which is a placement defect a reviewer can act on today. The tightest
-    non-touching pair is C27/U6 at 0.4 mil, and the widest is R22/USB1 and
-    R24/USB1 at 19.2 mil — just under the 20 mil line, which is the observation
-    岳 is being asked to rule on: at 20 the threshold catches a real population
-    (17 rows) without flooding (5460 pairs measured), but two of the seventeen
-    sit within a mil of the line, so a 20-mil threshold is not comfortably
-    separated from a 25-mil one on this board.
+    **This is the 127b regression nail, and the numbers are the evidence.** 126b
+    reported 17 WARNs on this board, six of them at exactly 0.0 mil — six pairs
+    of parts "physically overlapping" — on a board whose host DRC is clean. 127a
+    measured every one of those six and found them all to be the **same**
+    defect: a top-side part, whose footprint pads all carry ``layerId == 1``,
+    measured against a bottom-side part (``U4`` / ``U6`` / ``R17`` / ``C14``,
+    ``COMPONENT.layerId == 2``) whose pads carry that same hardcoded ``1``. The
+    rule was comparing copper on opposite faces of a 1.6 mm board.
+
+    After 127b both clauses live in the measurement itself
+    (:func:`boardwise.core.measure.component_distance`): a pad pair sharing no
+    copper layer is not measured, and a **same-net** pair is exempt, because two
+    pads of one net meeting is the design's intent rather than a defect. That
+    is 22 WARNs across the three boards -> 4, and **every remaining one is
+    same-side and cross-net**: U8/USB1 13.8, R18/U16 15.1, R22/USB1 19.2 and
+    R24/USB1 19.2. All four are the real same-face crowded-placement population
+    126b's threshold was reaching for; none is an artifact.
+
+    The widest is R22/USB1 and R24/USB1 at 19.2 mil — just under the 20 mil
+    line, which is still the observation 岳 is asked to rule on. What is no
+    longer true is 126b's 「two of the seventeen sit within a mil of the line」:
+    with the 18 false positives gone, the population is four rows and the
+    nearest is 13.8 mil, so a 20-mil threshold is now **comfortably** separated
+    from a 25-mil one on this board rather than straddling it.
     """
     findings, _section = foc_findings
     spacing = [
         f for f in findings
         if f.board == "PCB1" and f.rule_id == "pcb-component-spacing"
     ]
-    assert len(spacing) == 17
-    values = sorted(f.target.measurement["value"] for f in spacing)
-    assert values[:9] == [0.0] * 6 + [0.4, 2.9, 4.0], (
-        "six touching pairs, then C27/U6 0.4, R6/U6 2.9, R23/U6 4.0"
+    assert len(spacing) == 4, (
+        "the nine top x bottom pairs and the same-net pairs are gone; what "
+        "remains is the same-side, cross-net population"
     )
-    assert values[-1] == 19.2, "the widest WARN is R22/USB1 (and R24/USB1) at 19.2"
-    # The touching pairs concentrate on U6 — the gate driver, whose pads are
-    # large (40x123) and reach under six neighbouring parts. Named here because
-    # the fixture's concentration is the evidence that the threshold is doing
-    # real work rather than reporting a diffuse wash.
-    touching = [f for f in spacing if f.target.measurement["value"] == 0.0]
-    assert len(touching) == 6
-    # The pair's two designators ride `component_ref` / `counterpart_ref`, and
-    # `component_ref` is the alphabetically-first of the two, so U6 — the gate
-    # driver, whose 40x123 pads reach under five of its neighbours — is the
-    # *counterpart* in most of its rows. Counted over both fields so the claim
-    # does not depend on which side the sweep happened to enumerate first.
-    assert sum(
-        1 for f in touching if "U6" in (f.target.component_ref, f.target.counterpart_ref)
-    ) == 5
+    pairs = {
+        (f.target.component_ref, f.target.counterpart_ref):
+            f.target.measurement["value"]
+        for f in spacing
+    }
+    assert pairs == {
+        ("U8", "USB1"): 13.8,
+        ("R18", "U16"): 15.1,
+        ("R22", "USB1"): 19.2,
+        ("R24", "USB1"): 19.2,
+    }
+    # 127a's regression nail, at the rule level: no spacing finding on this
+    # board claims two parts touch. Every one of the six 0.0-mil readings was
+    # the layer-attribution defect, and every one is gone.
+    assert [f for f in spacing if f.target.measurement["value"] == 0.0] == [], (
+        "zero touching pairs — 127a's regression nail"
+    )
 
 
 def test_foc_board_frame_no_part_hangs_off_pcb1(foc_findings):
@@ -878,41 +918,64 @@ def test_foc_board_frame_no_part_hangs_off_pcb1(foc_findings):
     )
 
 
-def test_foc_pcb3_carries_the_four_decap_warns_of_the_driver_stage(foc_findings):
-    """PCB3 anchor: four decap WARNs, all on ``+24V``, none on a rail the
-    inference calls a supply.
+def test_foc_pcb3_carries_no_decap_row_because_it_has_no_ic(foc_findings):
+    """PCB3 anchor: **zero** decap findings — the board has no IC, and that is
+    the cause.
 
-    PCB3 is the MOSFET stage. Its four ICs with a ``+24V`` pin are the four
-    gate drivers Q1/Q3/Q7 and the half-bridge part U2, and they share the
-    board's two bulk capacitors C4 and C5 — 508 / 511 / 621 / 276 mil away,
-    every one over 200. These are **true positives in kind**: the board has no
-    local bypass on the gate-drive supply at all, which is exactly the
-    「贴不贴」 finding the rule exists to make, and the schematic-side
-    ``decap-required-caps`` says nothing about it because the capacitors
-    *are* there. The four distances are pinned to one decimal from the
-    measured run; each is derived by the same min-over-pad-pairs reading the
-    other fixture's numbers are, and the values are reproducible from the pads'
-    coordinates in the file.
+    126b reported four WARNs here and called them 「true positives in kind」.
+    They were not. Every one of them asked a **non-IC** for a bypass capacitor:
+
+    * ``Q1`` / ``Q3`` / ``Q7`` are ``MCAC53N06Y-TP`` MOSFETs (岳裁定 1, named by
+      name in the task book). A power MOSFET's *drain* sits on ``+24V`` and its
+      gate on the driver's output; reading that drain as 「an IC's supply net」
+      and reporting 「no decoupling capacitor within 200 mil」 is a category
+      error, and it was three of the four rows.
+    * ``U2`` on this board is **not** the DRV8350. Its MPN is ``PZ2.54-2*6``
+      and its footprint is ``排针,P=2.54mm`` — it is the 2x6 header that carries
+      the gate-driver signals out (``GHC`` / ``GLC`` / ``SHC`` / ``SLC`` /
+      ``IC+`` / ``IC-`` / ``PGND`` / ``+24V``). The DRV8350 is ``U2`` on
+      **Board1** (PCB1); 126b reached it through the designator alone, across two
+      boards. So the fourth row was a 275.7 mil 「distance from U2 to C115」 on a
+      board where neither part is an IC and C115 is a 330 µF aluminium can.
+
+    **And the candidate pool would have excluded the row anyway** (裁定 5b): the
+    PCB3 candidates on ``+24V`` are C1/C4/C5/C6/C115/C116 — every one a
+    ``330uF`` ``PA50V330M10x15`` bulk electrolytic — plus C2/C3/C13, whose
+    values (100 nF / 2.2 µF / 10 nF) sit in the band between the 1 µF HF
+    ceiling and the 10 µF bulk floor. Not one is a high-frequency bypass.
+
+    This pins the **absence** and its two causes separately, because either
+    could regress alone: an IC appearing on this board, or a bulk capacitor
+    entering the high-frequency pool.
     """
     findings, _section = foc_findings
     pcb3 = [
         f for f in findings
         if f.board == "PCB3" and f.rule_id == "pcb-decap-distance"
     ]
-    assert len(pcb3) == 4
-    pairs = {
-        (f.target.component_ref, f.target.counterpart_ref): (
-            f.target.net_refs[0], f.target.measurement["value"]
+    assert pcb3 == [], (
+        "PCB3 is the MOSFET stage: its +24V pins are transistor drains and its "
+        "U2 is a 2x6 header, so no part on it is an IC and there is nothing "
+        "for this rule to ask about"
+    )
+
+    # The cause, stated directly rather than inferred from the absence: the
+    # device facts, for the two shapes 126b got wrong.
+    from boardwise import cli as _cli
+    from boardwise.rules.pcb.distance import classify_device, device_facts
+
+    model, _ = _cli._load_model(FOC, view="schematic")
+    board3 = next(b for b in model.boards if b.board.title == "Board3")
+    for designator, expected_word in (
+        ("Q1", "transistor"), ("U2", "connector/header"),
+    ):
+        comp = board3.components[designator]
+        is_ic, why = classify_device(device_facts(comp), pins=len(comp.pins))
+        assert is_ic is False, f"{designator} is not an IC"
+        assert expected_word in why, (
+            f"{designator} is excluded by the {expected_word!r} clause, not by "
+            f"the pin count: {why!r}"
         )
-        for f in pcb3
-    }
-    assert pairs == {
-        ("Q1", "C5"): ("+24V", 508.2),
-        ("Q3", "C5"): ("+24V", 510.5),
-        ("Q7", "C4"): ("+24V", 620.7),
-        ("U2", "C115"): ("+24V", 275.7),
-    }
-    assert all(f.severity == "WARN" for f in pcb3)
 
 
 # ---------------------------------------------------------------------------

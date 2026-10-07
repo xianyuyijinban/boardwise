@@ -323,7 +323,16 @@ def _fixture_files() -> list[Path]:
 
 def _loaded_boards():
     """``(file key, board title, board model)`` for every board the repository can
-    parse — the 21 fixture/review-set files, which are 24 boards in total."""
+    parse — the 22 fixture/review-set files, which are 26 boards in total.
+
+    22 files / 26 boards since 2026-10-07: 岳 supplied the **1.0.0 export** of the
+    毕设FOC board (``ProPrj_毕设FOC驱动板_v1.0.0_2026-10-07.epro2``), a project of
+    its own with two boards under it — a different file from the 1.1.0 export,
+    not a rename (its ``U6`` is the ``TPLP2981-30DBVR`` LDO where the 1.1.0
+    one's is a 2x6 排针). This number is a **corpus** fact rather than a
+    behavioural claim, so a fixture arriving moves it and the reason is recorded
+    here instead of the number being loosened.
+    """
     from boardwise.engines.review_eval import load_board_model
 
     for path in _fixture_files():
@@ -383,7 +392,7 @@ def test_every_member_agrees_with_the_kept_placements_own_pin_reading():
                 )
                 if own is None or own.get(str(pin)) != name:
                     bad.append(f"{key} [{title}] {name}: {designator}.{pin} -> {own}")
-    assert seen == 24, f"the fixture set changed: {seen} board(s)"
+    assert seen == 26, f"the fixture set changed: {seen} board(s)"
     assert bad == []
 
 
@@ -525,6 +534,7 @@ def test_the_boards_the_audit_named_are_the_ones_that_repeat():
         "DCDC-12V9V转5V3V3_2026-09-27.epro2": ["Board1"],
         "ProPrj_高速电机控制器_2026-09-16.epro2": ["控制板"],
         "ProPrj_毕设FOC驱动板_2026-09-17.epro2": ["Board1"],
+        "ProPrj_毕设FOC驱动板_v1.0.0_2026-10-07.epro2": ["Board1"],
         "毕设滤波采样_2026-09-27.epro2": ["Board1"],
         "duplicate-designator.epro2": ["Board1"],
     }

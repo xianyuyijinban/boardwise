@@ -40,8 +40,9 @@ declared or MPN-decoded output (011c). A net called ``VCC`` is **not** one: the
 and a rule that treated ``VCC`` as a supply net would put every signal net of a
 connector named ``VCC`` into the report. On 毕设FOC's PCB1 that inference yields
 exactly three supply nets (``+24V``, ``+5V``, and U11's LDO output ``NET10``),
-which is why the measured run below reports five (IC, net) pairs rather than
-the 100-odd the naive reading would produce. What the inference cannot say, it
+which is why the measured run below reports four (IC, net) pairs rather than
+the 100-odd the naive reading would produce — and four rather than 126b's five,
+because ``U6`` is not an IC (127b). What the inference cannot say, it
 does not say: a net it does not know is simply not examined, and the rule says
 so in its own docstring rather than in a per-net UNKNOWN row (a rule that
 emitted a row per unknown signal net would bury the five rows that matter under
@@ -64,13 +65,16 @@ zero.
 from __future__ import annotations
 
 import math
+import re
+from dataclasses import dataclass
 
 from ..base import Finding, FindingTarget
 from ...core.geometry import BBox, BoardGeometry
 from ...core.measure import component_distance, pad_corners
 from ...core.model import is_ground_net
-from ...core.parts import load_parts
+from ...core.parts import designator_category, find_facts, is_ic_designator, load_parts
 from ...core.power_domains import infer_net_domains
+from ...core.values import parse_capacitance_farads
 from ..decap import cap_candidates_on
 from .base import PcbReviewContext, PcbRule
 
@@ -113,15 +117,316 @@ COMPONENT_SPACING_MIL = 20.0
 #: blaming the parts.
 MIN_OUTLINE_CORNERS = 3
 
-#: The IC definition: **three pins or more**, by the schematic model's own pin
-#: list. A two-pin part cannot have a supply net and a decoupling requirement in
-#: any meaningful sense, and calling every 2-pin part an IC would make the rule
-#: report on resistors and capacitors. The floor is the *only* IC test here:
-#: unlike the facts-driven rules, this one does not consult the shelf, because
-#: 「which pins are supplies」 is answered by the voltage inference (see the
-#: module docstring), and a part the shelf has never heard of can still have a
-#: decoupling capacitor next to it.
+#: The IC definition (127b): **the schematic's own device facts**, not a pin
+#: count and not a designator prefix.
+#:
+#: 126b called anything with three or more pins an IC (:data:`MIN_IC_PINS`),
+#: and the blind review found what that buys: on the 毕设FOC PCB3 the three
+#: MOSFETs ``Q1`` / ``Q3`` / ``Q7`` (``MCAC53N06Y-TP``) each produced a
+#: 「no decoupling capacitor near this IC」 WARN, and on PCB1 the **2x6 header
+#: at ``U6``** produced one too — five false positives in all, every one of them
+#: the rule asking a *transistor* or a *connector* for a bypass capacitor.
+#:
+#: The pin floor is kept (:data:`MIN_IC_PINS`) only as a **necessary**
+#: condition — a two-pin part cannot have a decoupling requirement in any
+#: meaningful sense — and the designator table
+#: (:func:`~boardwise.core.parts.is_ic_designator`) is consulted **last**, as the
+#: fallback for a part the device says nothing about. Both halves are pinned.
 MIN_IC_PINS = 3
+
+#: A designator prefix that is never an IC, whatever the shelf says. The pin
+#: floor already excludes ``R`` / ``C`` / ``L`` (two pins), so this table is here
+#: for the parts that are **many**-pin and still not an IC — a four-diode TVS
+#: array, a multi-contact relay.
+NON_IC_DESIGNATOR_PREFIXES: frozenset[str] = frozenset(
+    {"D", "K", "T", "TVS", "RELAY", "XFMR"}
+)
+
+#: Footprint / value / MPN **words that name a header or a connector**, and are
+#: therefore never an IC. This is the 127b discipline-5 case made mechanical: the
+#: designator says ``U`` (so a designator table calls it an IC) and the part
+#: says ``PZ2.54-2*6`` / ``PZ2.54-2x6P TP`` / ``PZ254V-11-04P`` — a **排针**, a
+#: row of 2.54 mm holes. Measured on the fixture: U4 and U6 (PCB1) and U1 and
+#: U2 (PCB3) are all ``PZ2.54``-family parts and all four carry
+#: ``Designator: 'U?'``, which is precisely why the prefix cannot be trusted on
+#: its own.
+#:
+#: Matched case-insensitively as a **substring** of the part's own text, because
+#: these are the library's names and not ours: the same header family is spelled
+#: ``PZ2.54-2*6``, ``HX PZ2.54-2x6P TP``, ``PZ254V-11-04P`` and
+#: ``HDR-TH_4P-P2.54`` on four different parts.
+CONNECTOR_WORDS: tuple[str, ...] = (
+    "PZ2.54", "PZ254", "HDR", "HEADER", "CONN", "TYPE-C", "USB", "MX1.25", "XT60",
+)
+
+#: Words that name a **transistor** (MOSFET / BJT). A power MOSFET's drain sits
+#: on a supply rail and its gate on a driver output, so a pin-count IC test reads
+#: its ``+24V`` drain as 「an IC's supply net」 and asks for a bypass capacitor
+#: beside it — exactly the false positive 岳 ruled on (裁定 1). Matched against
+#: the same text, for the same reason.
+TRANSISTOR_WORDS: tuple[str, ...] = (
+    "MOS", "MOSFET", "N-CH", "P-CH", "2N7002", "MCAC", "DFN", "SOT-23", "SOT23",
+)
+#: ``TRANSISTOR_WORDS`` is scanned in order and the **first** hit is the reason
+#: quoted in the evidence, so the order is a priority order and not a set: a
+#: part named ``MCAC53N06Y-TP`` in an ``DFN(5x6)`` package must be reported as
+#: 「transistor (``MCAC``)」 rather than as its package, because the MPN is the
+#: part's identity and the package is a consequence of it.
+
+#: Words that name a **passive** — a part with no supply rail of its own and
+#: nothing to decouple. A two-pin passive never reaches the rule through the pin
+#: floor; this is here for a passive **array** that arrives on a ``U``
+#: designator.
+PASSIVE_WORDS: tuple[str, ...] = ("RES-", "RES_", "CAP-", "CAP_", "XFMR", "TRANSFORMER")
+
+
+@dataclass(frozen=True)
+class DeviceFacts:
+    """What the **schematic** says a part is — the 127b IC judgement's evidence.
+
+    Three fields, all read off :class:`~boardwise.core.model.Component` (the
+    parsed schematic placement, never the PCB footprint), plus the shelf entry
+    that claims the part. Every one of them is optional, and the reason each one
+    is here is measured:
+
+    * ``shelf_category`` — ``blocklib/parts.json``'s own electrical
+      classification, and the strongest signal when it is present: the
+      fixture's ``ic.drv8350srtvr`` is ``ic.motor-driver`` and
+      ``conn.type_c_16pin_2md_073`` is ``connector``. **Empty on most entries**
+      — the fixture's headers and its MOSFET carry no ``category`` at all — which
+      is exactly why this cannot be the only test.
+    * ``text`` — the part's own ``footprint`` / ``value`` / ``mpn`` /
+      ``device_name``, concatenated and lowercased. This is what catches the
+      parts the shelf has not classified: a ``PZ2.54-2*6`` header says "2.54"
+      and a ``MCAC53N06Y`` says "MCAC".
+    * ``designator`` — the **fallback** and never more. U6 is a header whose
+      designator says ``U``, which is why this is checked after everything else
+      and why a ``U`` designator alone can no longer make a part an IC.
+    """
+
+    designator: str = ""
+    shelf_category: str = ""
+    text: str = ""
+
+
+def device_facts(comp: object, library=None) -> DeviceFacts:
+    """Read :class:`DeviceFacts` off one schematic :class:`Component`.
+
+    The shelf is the **same** :func:`boardwise.rules.facts.default_library_path`
+    every other facts-reading rule uses, resolved through
+    :func:`~boardwise.core.parts.find_facts` (exact match on MPN then C-number,
+    never a prefix match — #202's lesson). A missing shelf reaches
+    :func:`boardwise.core.parts.load_parts` as a path that does not resolve,
+    which that function already reads as an empty shelf, so this degrades to
+    「the category half is absent」 rather than raising.
+
+    ``library`` is an injection point for the tests and for a caller that has
+    already read the shelf; the default reads the project's own.
+    """
+    from ..facts import default_library_path  # noqa: PLC0415 — read at call time
+
+    if library is None:
+        try:
+            library = load_parts(default_library_path())
+        except Exception:  # noqa: BLE001 — a shelfless reading is a narrower one
+            library = None
+    entry = find_facts(
+        library,
+        mpn=str(getattr(comp, "mpn", "") or ""),
+        lcsc=str(getattr(comp, "lcsc_part", "") or ""),
+    ) if library is not None else None
+    props = getattr(comp, "props", {}) or {}
+    text = " ".join(
+        str(getattr(comp, name, "") or "")
+        for name in ("footprint", "value", "mpn")
+    )
+    text = f"{text} {props.get('device_name', '') or ''}"
+    return DeviceFacts(
+        designator=str(getattr(comp, "designator", "") or ""),
+        shelf_category=(entry.category or "") if entry is not None else "",
+        text=text.lower(),
+    )
+
+
+def _hit(text: str, words: tuple[str, ...]) -> str:
+    """The first word of ``words`` occurring in ``text``, or ``""``."""
+    for word in words:
+        if word.lower() in text:
+            return word
+    return ""
+
+
+def classify_device(facts: DeviceFacts, *, pins: int) -> tuple[bool, str]:
+    """Is this part an IC, and **why** — the ``(answer, evidence)`` pair.
+
+    **The evidence string is not decoration.** The task book asks for the
+    judgement's basis to be readable, and a rule that silently dropped four
+    MOSFETs and four headers would be indistinguishable from one that got them
+    right for the wrong reason.
+
+    The order is the design, and each step is a place a part can stop:
+
+    1. **fewer than three pins** — a two-pin part has no decoupling
+       requirement. Necessary, never sufficient: this is what 126b stopped at.
+    2. **the shelf's own category** — ``ic*`` is an IC; ``connector`` / ``fet`` /
+       ``resistor`` / ``capacitor`` / ``crystal`` / ``inductor`` / ``diode`` /
+       ``led`` are not. A part with **no** category does not stop here; it falls
+       through to the words, because most of the fixture's parts carry none.
+    3. **the part's own words** — a ``PZ2.54`` / ``HDR`` / ``TYPE-C`` footprint
+       is a connector or header, ``MOS`` / ``MOSFET`` / ``2N7002`` is a
+       transistor, a passive word is a passive. Each is a **stop**, not a guess:
+       the part is not an IC and the reason names the word that decided it.
+    4. **the designator** — the last resort, and the only step that can turn a
+       part **into** an IC. It is reached only when the shelf and the words both
+       said nothing. :func:`~boardwise.core.parts.is_ic_designator` is the
+       project's own table.
+
+    A part that stops at no step is **not** an IC by this rule's contract: the
+    rule examines what it can establish and says so. That is the honest
+    direction — it loses a real IC the shelf has never heard of, rather than
+    filing a finding about a MOSFET.
+    """
+    if pins < MIN_IC_PINS:
+        return False, f"{pins} pin(s) — below the {MIN_IC_PINS}-pin floor"
+    if facts.shelf_category:
+        category = facts.shelf_category
+        if category.startswith("ic"):
+            return True, f"shelf category {category!r} is an IC class"
+        return False, f"shelf category {category!r} is not an IC class"
+    text = facts.text
+    hit = _hit(text, CONNECTOR_WORDS)
+    if hit:
+        return False, f"the part's own name or footprint says connector/header ({hit!r})"
+    hit = _hit(text, TRANSISTOR_WORDS)
+    if hit:
+        return False, f"the part's own name or footprint says transistor ({hit!r})"
+    hit = _hit(text, PASSIVE_WORDS)
+    if hit:
+        return False, f"the part's own name or footprint says passive ({hit!r})"
+    prefix = re.match(r"^[A-Za-z]+", facts.designator or "")
+    if prefix and prefix.group(0).upper() in NON_IC_DESIGNATOR_PREFIXES:
+        return False, f"designator prefix {prefix.group(0)!r} never names an IC"
+    if is_ic_designator(facts.designator):
+        return True, (
+            f"no device fact classifies it either way, so the designator "
+            f"{facts.designator!r} is the fallback "
+            f"({designator_category(facts.designator)!r})"
+        )
+    return False, (
+        f"no device fact names it an IC and its designator "
+        f"{facts.designator!r} does not either"
+    )
+
+
+#: A capacitor at or above this value is **bulk**: reservoir / inrush energy
+#: storage, which belongs near the power entry or inside a big-current loop, not
+#: against a chip pin. 岳裁定 5b asks for exactly this split. The number is a
+#: **house rule** like 126b's two, and it is stated as such: the dividing line
+#: between 「energy storage」 and 「bypass」 is where the capacitor's impedance
+#: stops dominating the loop's own parasitics, which is a property of the *loop*
+#: and not of the part. 10 µF is where it sits for every part on the 毕设FOC
+#: fixtures, and the measured evidence agrees with the shape: every ``>= 10uF``
+#: capacitor there is a ``330uF`` aluminium electrolytic (``PA50V330M10x15``, a
+#: 10 mm can) — bulk by shape as well as by value.
+BULK_FARADS = 10e-6
+
+#: A capacitor at or below this value is a **high-frequency decoupling**
+#: candidate. 1 µF is the classical ceramic-bypass ceiling: above it a
+#: ceramic's impedance curve has already turned back up as its ESL dominates, so
+#: a larger "decoupling" capacitor is not decoupling anything at high frequency.
+#: House rule, same standing as :data:`BULK_FARADS`.
+HF_FARADS = 1e-6
+
+#: Slack for both boundary comparisons, in farads. See
+#: :func:`capacitor_role` for why it is not optional.
+_BOUNDARY_FARADS = 1e-12
+
+CAP_ROLE_BULK = "bulk"
+CAP_ROLE_HF = "hf"
+CAP_ROLE_UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class CapRole:
+    """Which role one candidate capacitor plays, and what said so.
+
+    ``farads`` is read from the **schematic's own ``value`` field** through
+    :func:`boardwise.core.values.parse_capacitance_farads` and never guessed —
+    the task book forbids it, and 岳裁定 5b asks for the bulk/HF split to be a
+    function of the value the drawing states. A candidate whose value nobody
+    wrote down (:data:`CAP_ROLE_UNKNOWN`) is in **neither** pool: a capacitor
+    whose value is unreadable is not evidence that it decouples anything, which
+    is the same argument :func:`boardwise.rules.decap.decide_required_cap` makes.
+    """
+
+    designator: str
+    role: str = CAP_ROLE_UNKNOWN
+    farads: float | None = None
+    #: Why — the declared value that decided it, or the fact that could not be
+    #: read. Carried with the answer and quoted in the finding's evidence.
+    reason: str = ""
+
+
+def capacitor_role(candidate: object, model: object) -> CapRole:
+    """The role of one :class:`~boardwise.rules.decap.CapCandidate`.
+
+    The value comes from the **board model's own Component**, not from the
+    candidate's echo of it, so the reading and the candidate cannot disagree
+    about which field was consulted. ``>= BULK_FARADS`` is bulk, ``<= HF_FARADS``
+    is a high-frequency candidate, and the band between them (1 µF < c < 10 µF,
+    where this fixture's 2.2 µF and 4.7 µF parts sit) is **neither pool** —
+    stated plainly rather than rounded into one, because that band is exactly
+    where 「is it bulk or is it bypass」 is a question about the loop rather than
+    about the part.
+    """
+    designator = str(getattr(candidate, "designator", "") or "")
+    comp = (getattr(model, "components", {}) or {}).get(designator)
+    declared = str(getattr(comp, "value", "") or "") if comp is not None else ""
+    farads = parse_capacitance_farads(declared) if declared else None
+    if farads is None:
+        return CapRole(
+            designator=designator,
+            role=CAP_ROLE_UNKNOWN,
+            farads=None,
+            reason=(
+                f"the schematic states no readable capacitance for it "
+                f"(value {declared!r}) — an unreadable value is neither bulk "
+                "nor a high-frequency candidate"
+            ),
+        )
+    # A float tolerance at both boundaries, and it is not decoration:
+    # ``parse_capacitance_farads("10uF")`` returns 9.999999999999999e-06, which
+    # is *below* ``10e-06``. Without the epsilon a part whose value is exactly
+    # the threshold would fall into the band between the pools and be silently
+    # treated as neither — which is exactly the boundary case the pin exists to
+    # settle. 1e-12 F is a picofarad, four orders below the smallest value any
+    # real drawing states, and it is the same epsilon
+    # :func:`boardwise.rules.decap.decide_required_cap` already uses for this
+    # exact comparison.
+    if farads + _BOUNDARY_FARADS >= BULK_FARADS:
+        return CapRole(
+            designator=designator,
+            role=CAP_ROLE_BULK,
+            farads=farads,
+            reason=f"declared {declared!r} = {farads * 1e6:g} µF >= {BULK_FARADS * 1e6:g} µF — bulk",
+        )
+    if farads - _BOUNDARY_FARADS <= HF_FARADS:
+        return CapRole(
+            designator=designator,
+            role=CAP_ROLE_HF,
+            farads=farads,
+            reason=f"declared {declared!r} = {farads * 1e6:g} µF <= {HF_FARADS * 1e6:g} µF — high-frequency decoupling",
+        )
+    return CapRole(
+        designator=designator,
+        role=CAP_ROLE_UNKNOWN,
+        farads=farads,
+        reason=(
+            f"declared {declared!r} = {farads * 1e6:g} µF, between the "
+            f"{HF_FARADS * 1e6:g} µF high-frequency ceiling and the "
+            f"{BULK_FARADS * 1e6:g} µF bulk floor — neither pool"
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -248,10 +553,21 @@ class DecapDistance(PcbRule):
     document does not carry them, and *that* is 126's per-board bookkeeping, not
     a layout claim).
 
-    Measured on 毕设FOC's PCB1 (105 components): 5 (IC, net) pairs, all inside
-    the threshold except U6 on ``+24V`` at 556 mil, which is the one WARN and is
-    a **true positive** — U6 is the gate driver on the far side of the board and
-    shares the single ``+24V`` bulk capacitor with U7, 530 mil away.
+    **What is an IC is now the schematic's own device facts**, not a pin
+    count — see :func:`classify_device`, and 岳裁定 1 for the case that forced
+    it. **The candidate pool is the high-frequency pool** — bulk capacitors are
+    named and excluded, and an IC whose pool is entirely bulk gets an INFO
+    saying so rather than a distance complaint; see :func:`capacitor_role` and
+    岳裁定 5b.
+
+    Measured on 毕设FOC's PCB1 (105 components) **after 127b**: 4 (IC, net)
+    pairs, all INFO, **no WARN**. The 126b claim of 「one true positive, U6 on
+    ``+24V`` at 556 mil」 is what the blind review rejected, and the schematic
+    says why: U6 is a 2x6 排针 (``HX PZ2.54-2x6P TP``), and the single ``+24V``
+    capacitor it was measured against is C17, a 4.7 µF part in the band between
+    the HF ceiling and the bulk floor. On the 1.0.0 export — the board 岳
+    actually uses — ``U6`` is the ``TPLP2981-30DBVR`` LDO and *is* judged an IC,
+    which is the same rule reading two different boards correctly.
     """
 
     id = "pcb-decap-distance"
@@ -272,7 +588,7 @@ class DecapDistance(PcbRule):
         # examine, never remove one — and it is what lets a rule that sees a
         # single PCB document still use the netlist the project read.
         findings: list[Finding] = []
-        for designator, component, ic_model in _ic_pairs(ctx.model):
+        for designator, component, ic_model, why in _ic_pairs(ctx.model):
             if board.component(designator) is None:
                 continue  # no geometry on this PCB document: nothing to measure
             nets = sorted(
@@ -283,11 +599,18 @@ class DecapDistance(PcbRule):
                 }
             )
             for net in nets:
-                findings.extend(self._one_net(ic_model, board, designator, net))
+                findings.extend(
+                    self._one_net(ic_model, board, designator, net, why)
+                )
         return findings
 
     def _one_net(
-        self, ic_model, board: BoardGeometry, designator: str, net: str
+        self,
+        ic_model,
+        board: BoardGeometry,
+        designator: str,
+        net: str,
+        why_ic: str = "",
     ) -> list[Finding]:
         """The one row (or the one silence) for ``designator``'s supply ``net``.
 
@@ -296,12 +619,66 @@ class DecapDistance(PcbRule):
         about — asking the project pool instead would weld two boards'
         ``VCC`` into one net and count a capacitor from the other board as this
         one's decoupling (issue #19's shape).
+
+        **The candidate pool is the high-frequency pool only** (127b, 岳裁定 5b).
+        A ``330uF`` aluminium can sitting 508 mil from a MOSFET is not a
+        mis-placed bypass capacitor — bulk energy storage belongs near the power
+        entry, and asking for it to hug a chip pin was the second half of the
+        blind review's complaint. Only a candidate the schematic declares at
+        ``<= HF_FARADS`` is measured; a bulk one is named and excluded, and an
+        IC whose whole candidate pool is bulk gets the INFO row below saying so
+        rather than a WARN about a distance it should never have been asked for.
         """
-        candidates = [
+        candidates = list(cap_candidates_on(ic_model, net))
+        roles = {
+            candidate.designator: capacitor_role(candidate, ic_model)
+            for candidate in candidates
+        }
+        high_freq = [
             candidate.designator
-            for candidate in cap_candidates_on(ic_model, net)
+            for candidate in candidates
+            if roles[candidate.designator].role == CAP_ROLE_HF
         ]
-        if not candidates:
+        bulk = [
+            candidate.designator
+            for candidate in candidates
+            if roles[candidate.designator].role == CAP_ROLE_BULK
+        ]
+        unreadable = [
+            candidate.designator
+            for candidate in candidates
+            if roles[candidate.designator].role == CAP_ROLE_UNKNOWN
+        ]
+        role_evidence = [
+            f"candidate {designator_} {role.role}: {role.reason}"
+            for designator_, role in sorted(roles.items())
+        ]
+        if not high_freq:
+            if bulk and not unreadable:
+                return [
+                    Finding(
+                        rule_id=self.id,
+                        severity="INFO",
+                        level=self.level,
+                        message=(
+                            f"{designator} sits on the supply net {net!r}, and "
+                            f"the only capacitors bridging it to ground are "
+                            f"bulk ({', '.join(sorted(bulk))}) — bulk energy "
+                            f"storage belongs near the power entry or inside the "
+                            f"big-current loop, not against a chip pin, so there "
+                            f"is no high-frequency decoupling candidate here to "
+                            f"measure. Whether one is required at all is the "
+                            f"datasheet's required_caps question "
+                            f"(decap-required-caps)"
+                        ),
+                        evidence=[
+                            f"{designator} @ {net} (no high-frequency candidate)",
+                            f"{designator} judged an IC because {why_ic}",
+                            *role_evidence,
+                        ],
+                        target=FindingTarget(component_ref=designator, net_refs=[net]),
+                    )
+                ]
             return [
                 Finding(
                     rule_id=self.id,
@@ -309,15 +686,21 @@ class DecapDistance(PcbRule):
                     level=self.level,
                     message=(
                         f"{designator} sits on the supply net {net!r}, and no "
-                        f"capacitor bridging it to ground was found on the net "
-                        f"— whether one is required is the datasheet's "
-                        f"required_caps question (decap-required-caps); this row "
-                        f"says only that the layout has none to place"
+                        f"high-frequency decoupling capacitor bridging it to "
+                        f"ground was found on the net — whether one is required "
+                        f"is the datasheet's required_caps question "
+                        f"(decap-required-caps); this row says only that the "
+                        f"layout has none to place"
                     ),
-                    evidence=[f"{designator} @ {net} (no grounded capacitor)"],
+                    evidence=[
+                        f"{designator} @ {net} (no high-frequency capacitor)",
+                        f"{designator} judged an IC because {why_ic}",
+                        *role_evidence,
+                    ],
                     target=FindingTarget(component_ref=designator, net_refs=[net]),
                 )
             ]
+        candidates = high_freq
         measured: list[tuple[str, float]] = []
         for candidate in candidates:
             if board.component(candidate) is None:
@@ -360,23 +743,41 @@ class DecapDistance(PcbRule):
         ]
 
 
-def _ic_pairs(model: object) -> list[tuple[str, object, object]]:
-    """``(designator, component, board model)`` for every IC, in project order.
+def _ic_pairs(model: object, library=None) -> list[tuple[str, object, object, str]]:
+    """``(designator, component, board model, why)`` for every IC, in project order.
 
-    The pin count is read off the **board model** (not the project pool): a
-    designator that is a 28-pin part on one board and a 2-pin header on another
-    (040b's measured shape) must be judged per board, or one board's answer
-    would be applied to the other's parts. The board model travels with the
-    designator because it is also the model the netlist half of the judgement
-    (which capacitors bridge this net) must be asked of.
+    **What changed in 127b, and why.** 126b's test was ``len(pins) >= 3`` and
+    nothing else, which made every MOSFET and every 2.54 mm header an IC with a
+    decoupling obligation. The blind review put a number on it: on 毕设FOC the
+    three ``MCAC53N06Y-TP`` MOSFETs on PCB3 and the 2x6 headers at ``U4`` / ``U6``
+    (PCB1) and ``U1`` / ``U2`` (PCB3) all carry a ``U``-prefixed or nine-pin
+    designator and all four/five produced a WARN about a missing bypass
+    capacitor. The judgement is now :func:`classify_device`, which reads the
+    schematic's own facts; the pin floor survives only as a necessary condition
+    inside it.
+
+    **The board model, not the project pool.** A designator that is a 28-pin
+    part on one board and a 2-pin header on another (040b's measured shape) must
+    be judged per board. The board model travels with the designator because it
+    is also the model the netlist half of the judgement (which capacitors bridge
+    this net) must be asked of.
+
+    The fourth element is the **evidence string** — which shelf category or
+    which word in the part's own name decided it. It travels with the pair so
+    the rule can quote it in a finding's evidence, which is the difference
+    between 「we looked and it is not an IC」 and 「we did not look」.
     """
-    pairs: list[tuple[str, object, object]] = []
+    pairs: list[tuple[str, object, object, str]] = []
     for _title, board_model in _board_models(model):
         components = getattr(board_model, "components", {}) or {}
         for designator in sorted(components):
             component = components[designator]
-            if len(getattr(component, "pins", ()) or ()) >= MIN_IC_PINS:
-                pairs.append((str(designator), component, board_model))
+            pins = len(getattr(component, "pins", ()) or ())
+            is_ic, why = classify_device(
+                device_facts(component, library), pins=pins
+            )
+            if is_ic:
+                pairs.append((str(designator), component, board_model, why))
     return pairs
 
 
@@ -398,6 +799,17 @@ class ComponentSpacing(PcbRule):
     this board is not in the sweep at all** (there is no shape to measure) and
     **two components whose pads overlap report 0.0**, which is what
     "touching" means and is a WARN like any other gap.
+
+    **Two pairs are not measured at all** (task 127b, and both live inside
+    :func:`~boardwise.core.measure.component_distance` rather than here, because
+    they are facts about the copper and not about the threshold): a pad pair on
+    **opposite faces** of the board, and a **same-net** pad pair. The first is
+    127a's root cause — a bottom-side part's SMD pads carry the footprint's
+    hardcoded ``layer_id == 1``, so a layer-blind reading compared copper across
+    a 1.6 mm board; the second is 岳's, that two pads of one net meeting is the
+    design's intent. Measured on 毕设FOC PCB1 this rule went from 17 WARNs
+    (six of them 「touching」 on a DRC-clean board) to **4, none touching, all
+    same-side and cross-net**.
 
     **Board frame.** A part whose pads' bounding box reaches past the outline is
     an ERROR, and each part gets at most one such row. The outline is read as an

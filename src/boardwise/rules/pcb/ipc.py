@@ -38,7 +38,9 @@ What the two rules share is the discipline, not the arithmetic:
   *writing the contract*, which is the address the UNKNOWN rows give. The
   spacing rule is the exception that proves the point: it does **not** need a
   contract, because the drawing's own rail enumeration and the ground reference
-  are facts the board carries, which is why it has 7 rows on that same fixture.
+  are facts the board carries, which is why it has rows on that same fixture
+  (127b: four of them, all of them UNKNOWN work orders — the three WARNs 126b
+  reported there were cross-layer projections and a same-potential ground join).
 
 **Ampacity** (:class:`TrackAmpacity`) is the classic IPC-2221 conductor-current
 relation, ``I = k·ΔT^0.44·A^0.725`` with the area ``A`` in square mils and the
@@ -846,6 +848,10 @@ class VoltageSpacing(PcbRule):
       voltage map entirely, so the net reads UNKNOWN like any other unpriced
       net; picking one board's number would make a verdict depend on enumeration
       order.
+    * **same potential, or a cross-layer pair** → dropped, and **not** reported
+      as an UNKNOWN either, for the reason the pour case above gives: the
+      missing thing is in the *measurement* or in the *design's own wiring*,
+      neither of which an engineer can fix by writing a contract entry. 127b.
 
     **Why B2 (uncoated external) is the column, and why a 0.0 mil reading is a
     WARN rather than an ERROR**, is written at :data:`VOLTAGE_SPACING_MIL`: the
@@ -859,15 +865,33 @@ class VoltageSpacing(PcbRule):
     two nets' copper touches" is a different fact from "these two are too close"
     and a reader needs to know which one they are looking at.
 
-    **Measured on 毕设FOC** (``ProPrj_毕设FOC驱动板``, read-only, no contract):
-    PCB1 examines five priced nets (``+24V`` 24 V, ``+5V`` 5 V, and the three
-    ground islands ``GND`` / ``AGND`` / ``PGND`` at 0 V) in ten pairs: three come
-    out WARN, seven pass, and three UNKNOWNs name the unpriced rails ``VCC`` /
-    ``VCCA`` / ``VREF``. PCB3 examines two nets (``+24V`` and ``PGND``, 21.26 mil
-    apart) and reports one pass and nothing else. PCB2 has only ``GND`` priced
-    and one unpriced rail, so its whole output is a single UNKNOWN for ``VCC``.
+    **Two pairs are dropped before the table is consulted** (task 127b):
+
+    * **same potential** — two nets at the same voltage are not a spacing
+      question (:func:`_same_potential`). 岳裁定 4 named the case: ``GND`` against
+      ``PGND`` is 0 V against 0 V, and two ground islands meeting in one place is
+      a single-point join the designer drew on purpose. The test is the equality,
+      so two 5 V islands get the same answer — nothing is special-cased for
+      grounds except that two ground nets are at one potential by definition.
+    * **cross-layer** — a pair whose closest copper shares no layer
+      (:attr:`~boardwise.core.measure.ClearanceResult.shares_a_layer`). Its
+      distance is a plan-view projection of shapes separated vertically by at
+      least the prepreg, and judging that against a 4 mil band measures the
+      board's thickness. This is the same misattribution 127a named: ``U6`` is a
+      **bottom** placement whose footprint pads all carry ``layerId == 1``, so a
+      layer-blind reading reported its ``+24V`` pad 10 as touching a layer-1 GND
+      track.
+
+    **Measured on 毕设FOC after 127b** (``ProPrj_毕设FOC驱动板``, read-only, no
+    contract): PCB1 prices five nets (``+24V`` 24 V, ``+5V`` 5 V, and the three
+    ground islands at 0 V) and every one of their ten pairs is either dropped by
+    one of the two clauses above or comfortably inside its band — **zero WARNs**,
+    and three UNKNOWNs still naming the unpriced rails ``VCC`` / ``VCCA`` /
+    ``VREF``. 126b's three WARNs on that board were all projections, on a board
+    whose host DRC is clean. PCB3 examines two nets (``+24V`` and ``PGND``, 21.26
+    mil apart) and passes; PCB2's whole output is a single UNKNOWN for ``VCC``.
     The numbers are pinned, with their derivation, in
-    ``tests/test_126c_pcb_ipc_rules.py``.
+    ``tests/test_126c_pcb_ipc_rules.py`` and ``tests/test_127b_blind_review_fixes.py``.
     """
 
     id = "pcb-voltage-spacing"
@@ -922,6 +946,16 @@ class VoltageSpacing(PcbRule):
         volts_a, where_a = priced[first]
         volts_b, where_b = priced[second]
         differential = abs(volts_a - volts_b)
+        if _same_potential(first, second, volts_a, volts_b):
+            # 岳裁定 4 (2026-10-07): two nets at the **same potential** are not a
+            # spacing question. GND against PGND is 0 V against 0 V, and the two
+            # meeting in one place is the design's single-point join — exactly
+            # what a two-ground board is supposed to do. Measured: on 毕设FOC's
+            # PCB1 the ``GND``/``PGND`` pair read **0.0 mil** with
+            # ``overlapping=True``, i.e. a "short" the designer drew on purpose.
+            # Neither clause is a special case for grounds: a 5 V net against a
+            # 5 V net is the same statement, and the test is the equality.
+            return None
         needed = required_spacing_mil(differential)
         if needed is None:
             return self._unknown_band(
@@ -931,6 +965,17 @@ class VoltageSpacing(PcbRule):
         if measured is None:
             # The documented pour blind spot: dropped, not reported. See the
             # class docstring's third paragraph for why this is not an UNKNOWN.
+            return None
+        if not measured.shares_a_layer:
+            # **Cross-layer pair, dropped** (127b). The two nets' closest copper
+            # shares no layer, so the reported distance is a plan-view
+            # projection of shapes that are at least a prepreg apart — measured
+            # at 0.0 mil on 毕设FOC PCB1 for ``U6.10`` (``+24V``, bottom face)
+            # against a ``GND`` track on layer 1, on a board whose host DRC is
+            # clean. Judging it against a 4 mil IPC-2221 band measures the
+            # board's thickness, not its layout. It is dropped rather than
+            # reported as an UNKNOWN for the reason the pour case is: the
+            # missing thing is in the *measurement*, not in the design's facts.
             return None
         if measured.distance + 1e-9 >= needed:
             return None  # margin is silence
@@ -1019,6 +1064,28 @@ class VoltageSpacing(PcbRule):
             ],
             target=FindingTarget(net_refs=[first, second]),
         )
+
+
+def _same_potential(first: str, second: str, volts_a: float, volts_b: float) -> bool:
+    """Do these two nets sit at the same potential, so spacing is not the question?
+
+    **Yes** when they are at the same voltage — which covers the case 岳 ruled
+    on by name (``GND`` against ``PGND``, 0 V against 0 V) without special-casing
+    it, and equally covers two 5 V islands or two 3V3 rails that happen to sit
+    near each other. **Also yes** when both are ground nets, even if one of
+    them reached 0 V by some route other than :func:`is_ground_net` — a ground
+    net is the board's reference node, so two of them are at one potential by
+    definition of what a ground net *is*.
+
+    The floating-point comparison is exact-ish rather than fuzzy: both numbers
+    come from :func:`declared_voltages`, which only ever stores a value that was
+    parsed out of a declaration or an architecture enumeration. A tolerance of
+    1e-9 V is far below any voltage an engineer writes and far above the float
+    noise two identical sources can produce, which is the band this needs.
+    """
+    if is_ground_net(first) and is_ground_net(second):
+        return True
+    return abs(volts_a - volts_b) <= 1e-9
 
 
 def _rail_names(ctx: PcbReviewContext, model: object) -> set[str]:
