@@ -7,11 +7,13 @@ the four-state protocol: a rule that cannot decide says UNKNOWN and names the
 missing fact — "no facts for U3" drives the library's intake priority, which
 is the whole point of the outcome vocabulary.
 
-Common subject rule: these rules look at **U-prefixed** components (ICs by
-designation). A component with a shelf entry whose category is not ``ic.*``
-gets NOT_APPLICABLE; a component with no entry gets UNKNOWN, naming what the
-library lacks. Passive parts never reach the rules at all, so "no facts for
-R24" cannot flood the report with non-questions.
+Common subject rule: these rules look at **components the repository's
+designator table classifies as ICs** (``U``/``IC``/``DRV`` —
+:func:`boardwise.core.parts.is_ic_designator`, which replaced this module's own
+``IC_PATTERN`` in 128/#63). A component with a shelf entry whose category is not
+``ic.*`` gets NOT_APPLICABLE; a component with no entry gets UNKNOWN, naming
+what the library lacks. Passive parts never reach the rules at all, so "no
+facts for R24" cannot flood the report with non-questions.
 
 Each rule documents where it decides from — ``source`` is a datasheet citation
 or ``house rule``; an empty source is a debt (task 011 sec.3), and none of
@@ -25,7 +27,12 @@ import re
 from dataclasses import dataclass, field
 
 from ..core.model import Component, DesignModel, Net
-from ..core.parts import PartEntry, PartLibrary, find_facts
+from ..core.parts import (
+    PartEntry,
+    PartLibrary,
+    find_facts,
+    is_ic_designator,
+)
 from ..core.power_domains import (
     domain_of,
     infer_net_domains,
@@ -41,9 +48,25 @@ from .unproven import (
 )
 
 LEVEL = "L2-facts"
-#: An IC by designation is ``U`` followed by a digit — ``U1``/``U3``/``U5``,
-#: never ``USB1`` (a connector whose prefix merely *starts* with U).
-IC_PATTERN = re.compile(r"^U\d")
+#: What "is this an IC" means for every rule in this module: **the repository's
+#: own designator table**, `boardwise.core.parts.is_ic_designator`.
+#:
+#: This used to be a private ``^U\d`` regex (``IC_PATTERN``, retired in 128,
+#: issue #63 §2). It was narrower than the table sitting thirty lines away in
+#: the same package, and nothing compared the two, so they disagreed about real
+#: parts in this repository's own data: ``IC1``/``IC12`` — which the table
+#: classifies as ICs — passed every facts rule untouched, while ``DRV1``, the
+#: ctrl FOC board's DRV8313 gate driver with a shelf entry and a datasheet, was
+#: never examined at all (#56). The regex also had to spell out ``USB1`` as an
+#: exception, which is what the table's ``USB`` row already says.
+#:
+#: Reading the table does not widen a judgement to "anything with a number
+#: after it": the table is a curated allow-list of prefixes, not a shape, and a
+#: designator it does not name (``OP1``, ``M1``, ``SCREW1``, ``10UH``) is still
+#: not an IC. :data:`boardwise.engines.review.DESIGNATOR_PREFIXES` is the same
+#: table plus the few non-shelf families, and ``tests/test_128_*`` is what keeps
+#: the two classifiers from drifting apart again.
+#:
 #: Where the lazy library loads from when a test does not inject one, spelled
 #: relative to the repository root — the CLI's documented working directory and
 #: the spelling every ``--library`` default and doc quotes. **Frozen there is no
@@ -192,7 +215,7 @@ class FactsRule(OutcomeRule):
         return [
             comp
             for comp in model.components.values()
-            if IC_PATTERN.match(comp.designator)
+            if is_ic_designator(comp.designator)
         ]
 
     def findings_from(self, rows: list[tuple]) -> list[Finding]:
@@ -700,7 +723,7 @@ class LibraryPinConsistency(OutcomeRule):
             )]
         rows: list[tuple[Outcome, str | None]] = []
         for comp in model.components.values():
-            if not IC_PATTERN.match(comp.designator):
+            if not is_ic_designator(comp.designator):
                 continue
             library_pins = self._resolver(comp)
             if library_pins is None:

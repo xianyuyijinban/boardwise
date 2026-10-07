@@ -11339,8 +11339,12 @@ def _cmd_parts_missing(args: argparse.Namespace) -> int:
     """
     import json
 
-    from boardwise.core.parts import FACTS_KEYS, PartError, load_parts
-    from boardwise.rules.facts import IC_PATTERN
+    from boardwise.core.parts import (
+        FACTS_KEYS,
+        PartError,
+        is_ic_designator,
+        load_parts,
+    )
 
     library_path = _parts_library_path(args)
     try:
@@ -11364,7 +11368,7 @@ def _cmd_parts_missing(args: argparse.Namespace) -> int:
     owed = 0
     for designator in sorted(model.components):
         comp = model.components[designator]
-        if not IC_PATTERN.match(designator):
+        if not is_ic_designator(designator):
             continue
         entry = _shelf_entry(library, mpn=comp.mpn, lcsc=comp.lcsc_part)
         facts = _facts_in_file(entry)

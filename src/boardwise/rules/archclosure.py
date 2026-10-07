@@ -77,9 +77,12 @@ What each rule reads, and where its subject comes from:
   pin uses the MCU's internal pull-up closes it too when it is ``user_stated`` —
   F2's own legitimate exit, since the dependency is real but invisible on the
   drawing. The subject is any component with such a shelf entry, whatever its
-  designator prefix: ``DRV1`` is not ``U<digit>``, and widening ``IC_PATTERN``
-  (which would put the part through every facts rule) is deliberately **not**
-  this batch's change;
+  designator prefix — **including** ``DRV1``, which issue #63 §2 settled the
+  other way: the facts gate no longer asks a private ``^U\\d`` regex whether a
+  designator names an IC, it asks :func:`boardwise.core.parts.is_ic_designator`,
+  and ``DRV`` is now a row in the repository's own designator table. This rule's
+  subject set did not widen; what changed is that the classifier the docs
+  describe here no longer exists;
 * :class:`NrstClosure` — ``arch-nrst-closure``. A controller (the shelf's
   ``category: ic.mcu``, or the architecture walk's existing evidence —
   :func:`boardwise.core.architecture.controller_evidence`) whose NRST/RESET pin

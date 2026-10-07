@@ -2110,8 +2110,10 @@
         "note": "2N7002K_C22379475"
       },
       "notes": [
-        "the library spells this footprint 'SOT-23-3_L2.9-W1.3-P0.95-LS2.4-BR'; the project's document said 'sot-23-3_l2.9-w1.3-p0.95-ls2.4-br'. The library's spelling is kept (006b's vocabulary rule)."
-      ]
+        "the library spells this footprint 'SOT-23-3_L2.9-W1.3-P0.95-LS2.4-BR'; the project's document said 'sot-23-3_l2.9-w1.3-p0.95-ls2.4-br'. The library's spelling is kept (006b's vocabulary rule).",
+        "category curated 2N7002K N-channel enhancement MOSFET, 60 V, 340 mA (params 'Current - Continuous Drain(Id)', 'Drain to Source Voltage'); a transistor. Its shelf **key** says `ic.` only because its SOT-23 package matched FOOTPRINT_CATEGORIES — the key prefix is a package bucket and the category is the function class (issue #63 §3)."
+      ],
+      "category": "fet"
     },
     {
       "key": "ic.ams1117_3_3.c369933",
@@ -2522,8 +2524,10 @@
       },
       "notes": [
         "identity re-anchored by C-number through `lib.device.search` (matched on 'supplierId'); the stored library uuid 'FOC' is a library *name*, not a uuid, so `lib.device.get` rejected the pair. device uuid 68769f45364047248aaea8f89f900c62 -> be1781dd1f5a470a9fba3d1f80548721.",
-        "the library spells this footprint 'WQFN-32_L5.0-W5.0-P0.50-TL-EP'; the project's document said 'wqfn-32_l5.0-w5.0-p0.50-tl-ep'. The library's spelling is kept (006b's vocabulary rule)."
-      ]
+        "the library spells this footprint 'WQFN-32_L5.0-W5.0-P0.50-TL-EP'; the project's document said 'wqfn-32_l5.0-w5.0-p0.50-tl-ep'. The library's spelling is kept (006b's vocabulary rule).",
+        "category curated TI DRV8350 102 V three-phase gate driver with integrated FETs (params 'Description'); the same functional class as `ic.drv8313pwpr` (093 A3a added that word for exactly this part family), not `ic.mcu` — it drives three half-bridges and computes nothing."
+      ],
+      "category": "ic.motor-driver"
     },
     {
       "key": "ic.esp_01s",
@@ -2562,8 +2566,10 @@
         "note": "ESP-01S"
       },
       "notes": [
-        "the library spells this footprint 'WIFIM-TH_8P-L24.7-W14.4-P2.54'; the project's document said 'wifim-th_8p-l24.7-w14.4-p2.54'. The library's spelling is kept (006b's vocabulary rule)."
-      ]
+        "the library spells this footprint 'WIFIM-TH_8P-L24.7-W14.4-P2.54'; the project's document said 'wifim-th_8p-l24.7-w14.4-p2.54'. The library's spelling is kept (006b's vocabulary rule).",
+        "category curated Ai-Thinker ESP-01S, an ESP8266 SoC module (params 'Core Processor': ESP8266芯片); the Wi-Fi MCU on the 智能药箱 board."
+      ],
+      "category": "ic.mcu"
     },
     {
       "key": "ic.hb04n090s",
@@ -2606,8 +2612,10 @@
       },
       "notes": [
         "identity re-anchored by C-number through `lib.device.search` (matched on 'supplierId'); the stored library uuid 'FOC' is a library *name*, not a uuid, so `lib.device.get` rejected the pair. device uuid a43b2af3f55c466a88bb8f28e0d34287 -> a7b4fe9132e444f68f50ba710eb9409a.",
-        "the library spells this footprint 'TO-252-3L_L6.6-W6.1-P4.60-LS9.5-BR-CW'; the project's document said 'to-252-3l_l6.6-w6.1-p4.60-ls9.5-br-cw'. The library's spelling is kept (006b's vocabulary rule)."
-      ]
+        "the library spells this footprint 'TO-252-3L_L6.6-W6.1-P4.60-LS9.5-BR-CW'; the project's document said 'to-252-3l_l6.6-w6.1-p4.60-ls9.5-br-cw'. The library's spelling is kept (006b's vocabulary rule).",
+        "category curated R+H HB04N090S N-channel MOSFET, 40 V, 70 A (params 'Drain to Source Voltage', 'Current - Continuous Drain(Id)'); a power transistor, the same class as `fet.agm12n10a` and `fet.mcac53n06y_tp` already on the shelf."
+      ],
+      "category": "fet"
     },
     {
       "key": "ic.lm5164ddar",
@@ -2649,8 +2657,10 @@
         "note": "LM5164DDAR"
       },
       "notes": [
-        "the library spells this footprint 'SO-8_L4.9-W3.9-P1.27-LS6.0-BL-EP'; the project's document said 'so-8_l4.9-w3.9-p1.27-ls6.0-bl-ep'. The library's spelling is kept (006b's vocabulary rule)."
-      ]
+        "the library spells this footprint 'SO-8_L4.9-W3.9-P1.27-LS6.0-BL-EP'; the project's document said 'so-8_l4.9-w3.9-p1.27-ls6.0-bl-ep'. The library's spelling is kept (006b's vocabulary rule).",
+        "category curated TI LM5164 100 V-input step-down voltage regulator, 1 A, 1 MHz (params 'Function': 降压, 'Frequency - Switching'); a switching converter, so `ic.ldo` would be a false word and `ic.ldo`-keyed rules would have judged it against dropout facts a buck does not have."
+      ],
+      "category": "ic.buck"
     },
     {
       "key": "ic.mpu_6050",
@@ -3012,8 +3022,10 @@
         "note": "STM32G431RBT6"
       },
       "notes": [
-        "the library spells this footprint 'LQFP-64_L10.0-W10.0-P0.50-LS12.0-BL'; the project's document said 'lqfp-64_l10.0-w10.0-p0.50-ls12.0-bl'. The library's spelling is kept (006b's vocabulary rule)."
-      ]
+        "the library spells this footprint 'LQFP-64_L10.0-W10.0-P0.50-LS12.0-BL'; the project's document said 'lqfp-64_l10.0-w10.0-p0.50-ls12.0-bl'. The library's spelling is kept (006b's vocabulary rule).",
+        "category curated ARM Cortex-M4 microcontroller, 170 MHz, 52 I/O (params 'CPU Core' / 'CPU Maximum Speed'); the ctrl FOC board's controller, and the entry that makes controller_evidence's strongest route reachable on shipped data (issue #63 §2)."
+      ],
+      "category": "ic.mcu"
     },
     {
       "key": "ic.stm32h743vit6",
@@ -3050,8 +3062,10 @@
         "note": "STM32H743VIT6_C114409"
       },
       "notes": [
-        "the library spells this footprint 'LQFP-100_L14.0-W14.0-P0.50-LS16.0-BL'; the project's document said 'lqfp-100_l14.0-w14.0-p0.50-ls16.0-bl'. The library's spelling is kept (006b's vocabulary rule)."
-      ]
+        "the library spells this footprint 'LQFP-100_L14.0-W14.0-P0.50-LS16.0-BL'; the project's document said 'lqfp-100_l14.0-w14.0-p0.50-ls16.0-bl'. The library's spelling is kept (006b's vocabulary rule).",
+        "category curated ARM Cortex-M7 microcontroller, 480 MHz, 82 I/O (params 'CPU Core' / 'CPU Maximum Speed'); the controller on the thesis FOC board and the 高速电机控制器 export."
+      ],
+      "category": "ic.mcu"
     },
     {
       "key": "ic.tle5012be1000",
@@ -3088,7 +3102,10 @@
         ],
         "note": "TLE5012BE1000"
       },
-      "notes": []
+      "notes": [
+        "category curated Infineon TLE5012 magnetic angle sensor — a TMR-based encoder (params 'Minimum Field' 30 mT, 'Output Type' IIC/SSC); it measures shaft position, so it is a sensor and not the control law itself (`ic.sensor` already names MPU-6050)."
+      ],
+      "category": "ic.sensor"
     },
     {
       "key": "ic.tlv9062idr",
@@ -3197,8 +3214,10 @@
         "note": "TPD4S010DQAR_C907861"
       },
       "notes": [
-        "the library spells this footprint 'DFN2510-10_L2.5-W1.0-P0.50-BL'; the project's document said 'dfn2510-10_l2.5-w1.0-p0.50-bl'. The library's spelling is kept (006b's vocabulary rule)."
-      ]
+        "the library spells this footprint 'DFN2510-10_L2.5-W1.0-P0.50-BL'; the project's document said 'dfn2510-10_l2.5-w1.0-p0.50-bl'. The library's spelling is kept (006b's vocabulary rule).",
+        "category curated TI TPD4S010 four-channel ESD-protection diode array (params 'Type': ESD); a protection diode, so `diode` — the same word `diode.smcj*ca` already carries. Its shelf key says `ic.` for the same package-reason as 2N7002K."
+      ],
+      "category": "diode"
     },
     {
       "key": "ic.tplp2981_30dbvr",
@@ -3235,8 +3254,10 @@
         "note": "TPLP2981-30DBVR"
       },
       "notes": [
-        "the library spells this footprint 'SOT-23-5_L2.9-W1.6-P0.95-LS2.8-BR'; the project's document said 'sot-23-5_l2.9-w1.6-p0.95-ls2.8-br'. The library's spelling is kept (006b's vocabulary rule)."
-      ]
+        "the library spells this footprint 'SOT-23-5_L2.9-W1.6-P0.95-LS2.8-BR'; the project's document said 'sot-23-5_l2.9-w1.6-p0.95-ls2.8-br'. The library's spelling is kept (006b's vocabulary rule).",
+        "category curated TI TPLP2981 18 V-input low-noise linear regulator with a **fixed 3.0 V** output (params 'Out Type': 固定, 'Output Voltage': 3V); the `30` in the MPN is the fixed output voltage, and a linear regulator is what `ic.ldo` already names (AMS1117, RT9013)."
+      ],
+      "category": "ic.ldo"
     },
     {
       "key": "ind.2u2_1008",

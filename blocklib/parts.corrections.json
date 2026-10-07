@@ -550,6 +550,13 @@
   ],
   "curated": [
     {
+      "lcsc": "C114409",
+      "fields": {
+        "category": "ic.mcu"
+      },
+      "note": "category curated ARM Cortex-M7 microcontroller, 480 MHz, 82 I/O (params 'CPU Core' / 'CPU Maximum Speed'); the controller on the thesis FOC board and the 高速电机控制器 export."
+    },
+    {
       "lcsc": "C12084",
       "fields": {
         "category": "ic.transceiver",
@@ -581,6 +588,13 @@
         }
       },
       "note": "facts curated 2026-09-25 (039 wave 1). RS (pin 8) is a mode select (strong pull-down = high speed, strong pull-up = low power, 10k-100k = slope control, p.6 sec.7) — a design choice, not an obligation, so it is not recorded as must_connect or pull_required."
+    },
+    {
+      "lcsc": "C123083",
+      "fields": {
+        "category": "ic.sensor"
+      },
+      "note": "category curated Infineon TLE5012 magnetic angle sensor — a TMR-based encoder (params 'Minimum Field' 30 mT, 'Output Type' IIC/SSC); it measures shaft position, so it is a sensor and not the control law itself (`ic.sensor` already names MPU-6050)."
     },
     {
       "lcsc": "C14267",
@@ -674,6 +688,20 @@
         "notes": []
       },
       "note": ""
+    },
+    {
+      "lcsc": "C22379475",
+      "fields": {
+        "category": "fet"
+      },
+      "note": "category curated 2N7002K N-channel enhancement MOSFET, 60 V, 340 mA (params 'Current - Continuous Drain(Id)', 'Drain to Source Voltage'); a transistor. Its shelf **key** says `ic.` only because its SOT-23 package matched FOOTPRINT_CATEGORIES — the key prefix is a package bucket and the category is the function class (issue #63 §3)."
+    },
+    {
+      "lcsc": "C22435132",
+      "fields": {
+        "category": "ic.ldo"
+      },
+      "note": "category curated TI TPLP2981 18 V-input low-noise linear regulator with a **fixed 3.0 V** output (params 'Out Type': 固定, 'Output Voltage': 3V); the `30` in the MPN is the fixed output voltage, and a linear regulator is what `ic.ldo` already names (AMS1117, RT9013)."
     },
     {
       "lcsc": "C24112",
@@ -773,6 +801,13 @@
         }
       },
       "note": ""
+    },
+    {
+      "lcsc": "C2861195",
+      "fields": {
+        "category": "ic.motor-driver"
+      },
+      "note": "category curated TI DRV8350 102 V three-phase gate driver with integrated FETs (params 'Description'); the same functional class as `ic.drv8313pwpr` (093 A3a added that word for exactly this part family), not `ic.mcu` — it drives three half-bridges and computes nothing."
     },
     {
       "lcsc": "C2977777",
@@ -902,6 +937,13 @@
       "note": "facts curated 2026-09-25 (039 wave 1). V- (pin 4) is the ground/return of the single supply this part is used in, so the operating range is recorded on V+ against that return; the amplifier is not used as a dual-supply part on any board here."
     },
     {
+      "lcsc": "C431633",
+      "fields": {
+        "category": "ic.mcu"
+      },
+      "note": "category curated ARM Cortex-M4 microcontroller, 170 MHz, 52 I/O (params 'CPU Core' / 'CPU Maximum Speed'); the ctrl FOC board's controller, and the entry that makes controller_evidence's strongest route reachable on shipped data (issue #63 §2)."
+    },
+    {
       "lcsc": "C440747",
       "fields": {
         "category": "ic.reference",
@@ -984,6 +1026,27 @@
       "note": ""
     },
     {
+      "lcsc": "C477928",
+      "fields": {
+        "category": "ic.buck"
+      },
+      "note": "category curated TI LM5164 100 V-input step-down voltage regulator, 1 A, 1 MHz (params 'Function': 降压, 'Frequency - Switching'); a switching converter, so `ic.ldo` would be a false word and `ic.ldo`-keyed rules would have judged it against dropout facts a buck does not have."
+    },
+    {
+      "lcsc": "C49423996",
+      "fields": {
+        "category": "fet"
+      },
+      "note": "category curated R+H HB04N090S N-channel MOSFET, 40 V, 70 A (params 'Drain to Source Voltage', 'Current - Continuous Drain(Id)'); a power transistor, the same class as `fet.agm12n10a` and `fet.mcac53n06y_tp` already on the shelf."
+    },
+    {
+      "lcsc": "C503582",
+      "fields": {
+        "category": "ic.mcu"
+      },
+      "note": "category curated Ai-Thinker ESP-01S, an ESP8266 SoC module (params 'Core Processor': ESP8266芯片); the Wi-Fi MCU on the 智能药箱 board."
+    },
+    {
       "lcsc": "C51933293",
       "fields": {
         "key": "led.emerald_green_0603",
@@ -1049,6 +1112,13 @@
         }
       },
       "note": ""
+    },
+    {
+      "lcsc": "C907861",
+      "fields": {
+        "category": "diode"
+      },
+      "note": "category curated TI TPD4S010 four-channel ESD-protection diode array (params 'Type': ESD); a protection diode, so `diode` — the same word `diode.smcj*ca` already carries. Its shelf key says `ic.` for the same package-reason as 2N7002K."
     },
     {
       "lcsc": "C92482",

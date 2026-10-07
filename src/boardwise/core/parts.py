@@ -61,9 +61,21 @@ SCHEMA_VERSION = 2
 #: false about it. Extending the table is this project's documented way to
 #: classify a new class of part ("a decision, not a silent fallback") — the
 #: category is what a rule reads before deciding whether it speaks.
+#:
+#: Extended in 128 (#63) by `ic.buck` and `fet`, both forced by the ten shelf
+#: entries whose own `ic.*` key had no category at all: LM5164 is a 100V-input
+#: step-down **converter** (`ic.ldo` is a linear regulator and would have been a
+#: false word, and `ic.ldo`-keyed rules would then have judged it against
+#: dropout facts it does not have), and 2N7002K / HB04N090S are MOSFETs. Both
+#: were placed at `U*` designators on real boards, so nothing about the drawing
+#: said "transistor" — and note what that means for the shelf's own **key**
+#: prefix: `ic.2n7002k` says `ic` because its *package* matched
+#: :data:`FOOTPRINT_CATEGORIES`, which is precisely why the electrical category
+#: is a separate field and is never derived from the key (#63 §1: the prefix is
+#: a package bucket, the category is a function class).
 CATEGORY_VOCABULARY = frozenset({
-    "resistor", "capacitor", "inductor", "led", "diode", "connector",
-    "crystal", "ic.ldo", "ic.usb-uart", "ic.mcu", "ic.charger",
+    "resistor", "capacitor", "inductor", "led", "diode", "fet", "connector",
+    "crystal", "ic.ldo", "ic.buck", "ic.usb-uart", "ic.mcu", "ic.charger",
     "ic.transceiver", "ic.opamp", "ic.reference", "ic.sensor",
     "ic.motor-driver",
     "buzzer", "switch", "module",
@@ -384,6 +396,13 @@ FOOTPRINT_CATEGORIES: tuple[tuple[re.Pattern[str], str], ...] = (
 
 #: Designator prefix -> shelf category. The fallback when the footprint does not
 #: name a family.
+#:
+#: `DRV` is here since 128 (#63 §2/§5): the ROBOT ctrl FOC board's gate driver
+#: is placed at `DRV1`, carries shelf entry `ic.drv8313pwpr` with
+#: `category: ic.motor-driver` and a datasheet, and the private `^U\d` regex the
+#: facts gate used instead never looked at it (#56). A prefix the drawing chose
+#: for a readable role name is still a prefix, and the table is where the
+#: project's own answer lives.
 DESIGNATOR_CATEGORIES: dict[str, str] = {
     "R": "res",
     "C": "cap",
@@ -392,6 +411,7 @@ DESIGNATOR_CATEGORIES: dict[str, str] = {
     "LED": "led",
     "U": "ic",
     "IC": "ic",
+    "DRV": "ic",
     "Q": "fet",
     "X": "xtal",
     "Y": "xtal",
@@ -429,6 +449,43 @@ def category_of(footprint_name: str, designator: str = "") -> str:
     if prefix:
         return DESIGNATOR_CATEGORIES.get(prefix.group(1).upper(), DEFAULT_CATEGORY)
     return DEFAULT_CATEGORY
+
+
+#: The shelf bucket that means "this part is an IC". One name, so a caller
+#: reading the table above has one thing to compare against.
+IC_DESIGNATOR_CATEGORY = "ic"
+
+
+def designator_category(designator: str) -> str:
+    """:data:`DESIGNATOR_CATEGORIES`' answer for one designator, or ``""``.
+
+    The prefix is **longest-match on the whole alphabetic run**, not the first
+    letter: `USB1` and `IC12` only say what they say because `USB` and `IC` are
+    their own rows. A single-letter read would make `USB1` an unknown prefix and
+    `IC12` an `I`.
+    """
+    prefix = re.match(r"^([A-Za-z]+)", (designator or "").strip())
+    return DESIGNATOR_CATEGORIES.get(prefix.group(1).upper(), "") if prefix else ""
+
+
+def is_ic_designator(designator: str) -> bool:
+    """Whether this designator names an integrated circuit, by the repo table.
+
+    This is the **one** answer to that question, replacing the private
+    ``^U\\d`` regex of `rules.facts.IC_PATTERN` (retired in 128, issue #63 §2).
+    The regex and the table disagreed inside a single repository: the table
+    said ``IC1``/``IC12`` were ICs and the regex let them through every facts
+    rule, while the regex's ``USB1`` exclusion is already the table's `USB` row.
+    A prefix is the project's own published statement about a designator, so
+    the gate reads it rather than carrying a second, narrower one.
+
+    Only the designator is consulted. Whether a part at ``U3`` is *actually* an
+    IC is the shelf's `category` to say (:func:`_category_state` in
+    `boardwise.rules.facts` is the gate that applies it), and the golden board's
+    resistor-wearing-a-``U`` is the standing proof that the two must not be
+    conflated.
+    """
+    return designator_category(designator) == IC_DESIGNATOR_CATEGORY
 
 
 #: SI prefix -> the letter a slug keeps. Case matters here too: ``m`` (milli)
@@ -1523,13 +1580,16 @@ __all__ = [
     "SCHEMA_VERSION",
     "CATEGORY_VOCABULARY",
     "FACTS_KEYS",
+    "IC_DESIGNATOR_CATEGORY",
     "category_of",
     "corrections_from_json",
+    "designator_category",
     "entry_from_json",
     "entry_to_json",
     "expand_footprint_words",
     "find_facts",
     "footprint_matches",
+    "is_ic_designator",
     "library_from_json",
     "library_to_json",
     "load_corrections",
