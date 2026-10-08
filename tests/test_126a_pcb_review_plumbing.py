@@ -111,10 +111,14 @@ def test_the_builtin_pcb_rule_list_is_the_126b_distance_pair_then_the_126c_pair(
     rules are independent (none reads another's output), so the order is a
     *reading* choice, and pinning it is what stops a later batch from reordering
     by accident. 126c appended its two to the end rather than interleaving them,
-    which is why this pin reads in two pairs: 「house rules first (126b), then
-    the standards-derived readings (126c)」. Both are still re-sorted by severity
-    per board before a reader sees them, so the declaration order is about the
-    report's ``checksRun``, not about which row comes first.
+    which is why this pin reads as 「house rules first (126b), then the
+    standards-derived readings (126c)」 with **131b's** regulator rule inserted
+    inside the house-rule block — after ``pcb-decap-distance``, because it
+    answers the same measurement question on a narrower object (one regulator's
+    VIN/VOUT pins rather than every IC's every supply net). Both are still
+    re-sorted by severity per board before a reader sees them, so the
+    declaration order is about the report's ``checksRun``, not about which row
+    comes first.
 
     ``BUILTIN_RULES`` (the schematic 20) is left untouched by this file — read
     rather than re-stated where the point is "this file did not move it", so
@@ -123,6 +127,7 @@ def test_the_builtin_pcb_rule_list_is_the_126b_distance_pair_then_the_126c_pair(
     """
     assert [rule.id for rule in BUILTIN_PCB_RULES] == [
         "pcb-decap-distance",
+        "pcb-regulator-cap-distance",
         "pcb-component-spacing",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
@@ -288,15 +293,16 @@ def test_run_pcb_review_reads_every_pcb_document_of_the_foc_fixture():
     assert by_title["PCB3"]["copperLayers"] == 2
     assert by_title["PCB1"]["copperLayers"] == 4, "PCB1 is the 4-layer driver"
     assert by_title["PCB2"]["copperLayers"] == 2
-    # 126b added the two distance rules and **126c appended the two IPC-2221
-    # ones**, so the executed list is now four ids in declaration order (the
-    # pin's own statement is "the list is the truth, in order"). Only the rule
-    # *set* moved; what is asserted here — the plumbing distributing findings
-    # across the right documents without assuming how many there are — is
-    # unchanged.
+    # 126b added the two distance rules, **126c appended the two IPC-2221
+    # ones** and **131b inserted the regulator rule after the decap one**, so
+    # the executed list is now five ids in declaration order (the pin's own
+    # statement is "the list is the truth, in order"). Only the rule *set* moved;
+    # what is asserted here — the plumbing distributing findings across the
+    # right documents without assuming how many there are — is unchanged.
     for board in section["boards"]:
         assert board["checksRun"] == [
-            "pcb-decap-distance", "pcb-component-spacing",
+            "pcb-decap-distance", "pcb-regulator-cap-distance",
+            "pcb-component-spacing",
             "pcb-track-ampacity", "pcb-voltage-spacing",
         ]
         for index in board["findings"]:
@@ -389,17 +395,25 @@ def test_checkup_offline_with_a_pcb_document_carries_the_pcb_review_section(
     assert section["available"] is True
     assert section["runner"] == RUNNER_ID
     assert [board["title"] for board in section["boards"]] == ["PCB3", "PCB1", "PCB2"]
-    # 126b added the two distance rules and **126c added the two IPC-2221 ones**;
-    # their findings are in the one array too. Note what is *not* here:
+    # 126b added the two distance rules, **126c added the two IPC-2221 ones**
+    # and **131b added the regulator rule**; their findings are in the one array
+    # too. Note what is *not* here:
     # `pcb-track-ampacity` produces no row on this fixture, because 毕设FOC has
     # **no design-intent contract** and the rule's subject is the contract's net
     # — 92 UNKNOWN rows saying "nobody declared a current" would be a wash. That
     # absence is 126c's own discipline, pinned in `test_126c_pcb_ipc_rules.py`,
     # and is asserted here only as "the id set is the two that fired".
+    # `pcb-regulator-cap-distance` does fire here, on Board1, where 毕设FOC's
+    # three regulators live (`U7` = the LM5164 buck, `U11`/`U13` = the two
+    # LDOs) — the rules are mounted and the checkup path reaches them. What is
+    # *not* asserted here is its row set: `test_131b_regulator_cap_distance.py`
+    # owns those numbers, and this test only pins that the id appears in the one
+    # merged `findings[]` array.
     pcb_rows = [f for f in report["findings"] if f["rule_id"].startswith("pcb-")]
-    assert pcb_rows, "the four rules are in BUILTIN_PCB_RULES and three fire here"
+    assert pcb_rows, "the five rules are in BUILTIN_PCB_RULES and four fire here"
     assert {f["rule_id"] for f in pcb_rows} == {
-        "pcb-decap-distance", "pcb-component-spacing", "pcb-voltage-spacing",
+        "pcb-decap-distance", "pcb-regulator-cap-distance",
+        "pcb-component-spacing", "pcb-voltage-spacing",
     }
     # 126a did not touch the schema or the verdict; **126d did**, by bumping the
     # id to `/7` and adding `coverage.pcbReviewMissing`. This fixture has PCB
@@ -572,6 +586,12 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     #                coverage gate now asks). Both digests moved for the same
     #                reason as every entry above: source is source, and a
     #                docstring that now describes the code is part of it.
+    #     e1ac0c59 — after 131b landed rules/pcb/regulator.py, the
+    #                `pcb-regulator-cap-distance` rule. One new file inside the
+    #                pcb/ subpackage, so only the recursive digest moves and the
+    #                direct-only one stays at 98b1d462 — which is itself the
+    #                evidence that 131b stayed inside rules/pcb/, exactly as 127b
+    #                did before it.
     # Both are measured, not guessed. The recursive digest moves whenever any
     # rule body moves - which is the whole point of the recipe, and the reason
     # this number is updated by hand together with the note in test_017 rather
@@ -579,7 +599,7 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # recorded why.
     assert recursive != old_digest, "the subpackage is inside the recipe now"
     assert old_digest == "98b1d462"
-    assert recursive == "bd3c240b", (
+    assert recursive == "e1ac0c59", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

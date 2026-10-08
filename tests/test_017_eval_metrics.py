@@ -587,7 +587,7 @@ def test_the_report_carries_the_provenance_a_run_has_to_record():
     # movement this pin exists to catch:
     #   old recipe (direct files only) over today's tree: 98b1d462
     #     (126a-126c b04153f3 -> 128 e51b8a86 -> 129 98b1d462)
-    #   new recipe (recursive, incl. rules/pcb/*.py):     bd3c240b
+    #   new recipe (recursive, incl. rules/pcb/*.py):     e1ac0c59
     #     (126a 9c7cc335 -> 126b a9f76763 -> 126c 62bfe7f8 -> 128 e3c6645e
     #      -> 127b ab898f6b: rules/pcb/distance.py and rules/pcb/ipc.py both
     #      moved, because the PCB rules had been reading a pad's footprint
@@ -595,7 +595,10 @@ def test_the_report_carries_the_provenance_a_run_has_to_record():
     #      reading; the direct-only digest is unchanged, which is the evidence
     #      that 127b stayed inside rules/pcb/
     #      -> 129 bd3c240b: #66/#67/#68 moved rules/facts.py, rules/railratings.py
-    #      and rules/unproven.py, so this time the direct-only digest moved too)
+    #      and rules/unproven.py, so this time the direct-only digest moved too
+    #      -> 131b e1ac0c59: one new file, rules/pcb/regulator.py (the
+    #      `pcb-regulator-cap-distance` rule), so only the recursive digest
+    #      moved and the direct-only one stayed at 98b1d462)
     # Both are measured, not guessed - `tests/test_126a_pcb_review_plumbing.py`
     # recomputes both from the tree and pins them. No number is asserted here:
     # any further rule change moves the digest again, which is the point, so

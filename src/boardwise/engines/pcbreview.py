@@ -37,12 +37,15 @@ from ..core.measure import read_stackup
 from ..rules.pcb.base import PcbReviewContext, PcbRule
 from ..rules.pcb.distance import ComponentSpacing, DecapDistance
 from ..rules.pcb.ipc import TrackAmpacity, VoltageSpacing
+from ..rules.pcb.regulator import RegulatorCapDistance
 from ..rules.base import SEVERITY_ORDER, Finding
 
 #: The rules this runner applies, in execution order. Empty in 126a (地基);
-#: 126b added the two distance rules, 126c added the two IPC-2221 ones, each
-#: batch adding to this list and to the structure gate that says "the list is
-#: the truth". The ordering is the execution order (like ``BUILTIN_RULES``), and
+#: 126b added the two distance rules, 126c added the two IPC-2221 ones, and
+#: 131b added the regulator input/output capacitor rule — the three L1-geometry
+#: readers of *placement* sit together, ahead of the standards-derived
+#: readings, each batch adding to this list and to the structure gate that says
+#: "the list is the truth". The ordering is the execution order (like ``BUILTIN_RULES``), and
 #: the report's ``pcb_review.boards[].checksRun`` records it so a reader can tell
 #: what ran.
 #:
@@ -54,9 +57,15 @@ from ..rules.base import SEVERITY_ORDER, Finding
 #: derived readings (载流 is a safety fact, 安规间距 is a compliance fact — the
 #: severity sort puts them first in `findings[]` regardless of where they are
 #: declared). Nothing depends on it — no rule reads another's output — so it is
-#: a reading choice, and each batch appends rather than reordering.
+#: a reading choice, and each batch appends rather than reordering. 131b's
+#: ``pcb-regulator-cap-distance`` is the one insert rather than an append: it
+#: sits immediately after ``pcb-decap-distance`` because it reads the same
+#: measurement primitive on a narrower object (one regulator's two supply pins,
+#: not every IC's every supply net), so a reader working down the placement
+#: questions meets the per-IC sweep first and the per-pin one immediately after.
 BUILTIN_PCB_RULES: list[PcbRule] = [
     DecapDistance(),
+    RegulatorCapDistance(),
     ComponentSpacing(),
     TrackAmpacity(),
     VoltageSpacing(),
