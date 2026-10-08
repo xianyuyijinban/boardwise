@@ -770,6 +770,33 @@ def _point_in_polygon(point: Point, polygon: list[Point]) -> bool:
 _UNKNOWN_LAYER = -1
 
 
+def _poured_supersedes(board: BoardGeometry) -> set[str]:
+    """Ids of ``POUR`` regions whose *result* the file also carries.
+
+    **135, the de-duplication rule.** A ``POUR`` record is the region the
+    designer drew; the ``POURED`` with the same parent id is what the pour
+    engine actually produced from it — the same region minus the clearance
+    voids, possibly as several islands. They are one piece of copper described
+    twice, so counting both would report every poured region twice over (a
+    doubled pour area, and an island whose members include a region and its
+    own result).
+
+    The **result** is the one that is kept wherever both exist: it is the
+    copper that is really there, and it is what the island count is supposed to
+    be measuring. A ``POURED`` with no surviving parent — the ``e-xxxx`` ids
+    the editor dropped before saving — has no region to supersede, so it
+    stands on its own; it is the only description of that copper.
+
+    Returned as the set of superseded **region** ids (``PourShape.id`` values
+    of the ``POUR`` records), so a caller can skip exactly those.
+    """
+    return {
+        pour.poured_from
+        for pour in board.pours
+        if pour.kind == "poured" and pour.poured_from
+    }
+
+
 def _net_shape_records(
     board: BoardGeometry, net: NetGeometry, *, with_area: bool
 ) -> list[tuple[str, _Shape, float]]:
@@ -780,7 +807,13 @@ def _net_shape_records(
     :func:`pour_connectivity`) or a plain ``0.0``. Either way the element
     order is deterministic: tracks, then vias, then pads, then pours — the
     order :class:`NetGeometry` stores them in.
+
+    **Which pour record is read (135).** ``POURED`` — the pour *result* — now
+    contributes polygons, and when it has a surviving ``POUR`` parent the
+    parent is skipped: one region, one piece of copper. See
+    :func:`_poured_supersedes`.
     """
+    superseded = _poured_supersedes(board)
     out: list[tuple[str, _Shape, float]] = []
     for track in net.tracks:
         layers = _element_layers(board, track)
@@ -838,23 +871,23 @@ def _net_shape_records(
             )
         )
     for pour in net.pours:
-        # POURED records are the pour *result* whose stored path the parser
-        # deliberately leaves empty (parent-relative, 1:10-scaled
-        # coordinates, not board coordinates). Skip them, plus any other
-        # pour with no usable outline.
+        # 135: a `POURED` contributes its parsed result polygons, and a
+        # `POUR` region that has a `POURED` result is skipped — the region and
+        # its result are one piece of copper described twice, and the *result*
+        # is the truthful one. A `POURED` whose parent is gone from the file
+        # contributes on its own. See `_poured_supersedes`.
         #
-        # 131f: `kind == "pour"` joins `fill` and `poly` here. A POUR record
-        # is the pour **region** as the editor holds it — the user's own
-        # outline, with its own `netName` and `layerId`, in board coordinates
-        # (measured: 毕设FOC 1.0.0 carries 27 of them, ROBOT 3, 药箱 4) — so it
-        # is the same kind of copper claim the other two already make. Leaving
-        # it out is what made 毕设FOC's `AGND` pours under the crystal invisible
-        # to every consumer of this list (125b's island count, the clearance
-        # engine, and the new `region_copper`). It is a *region*, not the
-        # poured result, so it adds a polygon without double-counting: the
-        # POURED records of the same board stay empty on purpose, so a
-        # poured board contributes each region once, not twice.
-        if pour.kind not in ("fill", "poly", "pour") or len(pour.points) < 2:
+        # 131f: `kind == "pour"` (a region with no result in the file) joins
+        # `fill` and `poly` here. A POUR record is the pour **region** as the
+        # editor holds it — the user's own outline, with its own `netName` and
+        # `layerId`, in board coordinates (measured: 毕设FOC 1.0.0 carries 27 of
+        # them, ROBOT 3, 药箱 4) — so it is the same kind of copper claim the
+        # other two already make. Leaving it out is what made 毕设FOC's `AGND`
+        # pours under the crystal invisible to every consumer of this list
+        # (125b's island count, the clearance engine, and `region_copper`).
+        if pour.kind not in ("fill", "poly", "pour", "poured") or len(pour.points) < 2:
+            continue
+        if pour.kind != "poured" and pour.id in superseded:
             continue
         layers = _element_layers(board, pour)
         out.append(
@@ -1173,18 +1206,28 @@ def pour_connectivity(board: BoardGeometry, net: str) -> PourConnectivity:
     * an SMD pad existing only on its own layer, so it connects a pour on
       that layer and nothing on the opposite face.
 
-    **Pour sources.** Only pours with ``kind in {"fill", "poly", "pour"}``
-    contribute polygons. ``POURED`` records are the *result* of a pour and the
-    parser deliberately leaves their paths empty (their stored coordinates are
-    parent-relative and scaled 1:10, not board coordinates — feeding them
-    to geometry would corrupt every bbox), so they carry no shape here;
-    connectivity rides on the ``FILL`` / ``POLY`` / ``POUR`` pour outlines plus
-    tracks, vias and pads. ``POUR`` joined the other two in 131f — it is the
-    pour **region** as the editor holds it, with its own net and layer, in
-    board coordinates — and it is what makes this number change on the boards
-    that store their planes that way: 毕设FOC 1.0.0's ``AGND`` read 67 islands
-    without it and reads 1 with it, ROBOT's ``GND`` 194 → 1, 药箱's ``GND``
-    225 → 1, while ``llc`` (which stores no ``POUR``) is untouched.
+    **Pour sources.** Every pour kind contributes: ``fill`` / ``poly`` /
+    ``pour`` (the ``FILL`` / ``POLY`` / ``POUR`` region outlines) and
+    ``poured`` (the ``POURED`` *result*, which 135 parses into board
+    coordinates). A ``POUR`` region that a ``POURED`` result supersedes is
+    **not** counted — one region and its result are one piece of copper, and
+    the result is the truthful one (:func:`_poured_supersedes`); a ``POURED``
+    whose region is gone from the file is counted on its own.
+    ``POUR`` joined ``fill`` and ``poly`` in 131f and is what made this number
+    change on the boards that store their planes that way: 毕设FOC 1.0.0's
+    ``AGND`` read 67 islands without it and reads 1 with it, ROBOT's ``GND``
+    194 → 1, 药箱's ``GND`` 225 → 1, while ``llc`` (which stores no ``POUR``)
+    is untouched. 135 then swapped region geometry for result geometry on top
+    of that, which changes the **numbers** again without changing their
+    meaning — same islands, less area (the clearance voids are now excluded),
+    and more of them where the pour engine fragmented a plane the region drew
+    as one piece. Measured: 毕设FOC 1.0.0's ``GND`` 46 → 39 islands and
+    12 350.0 → 10 614.0 sq mil, ``AGND`` 2 059 037.0 → 1 433 311.2 sq mil
+    (still one island — a smaller plane, not a broken one); ROBOT's ``GND``
+    1 island / 7 494 300 sq mil → **15** islands / 2 210 304.2 sq mil — that
+    board's ``GND`` region is one solid plane, and the result says the pour
+    engine cut it into fifteen pieces. 药箱's ``GND`` stays at 1 island,
+    9 201 550 → 7 151 163.8 sq mil.
 
     Islands are numbered by the flat order :func:`_net_shape_records`
     yields (tracks, then vias, then pads, then pours), and
@@ -1461,6 +1504,7 @@ def region_copper(
         else sorted(_copper_layer_ids(board))
     )
     report = RegionCopper(region=bbox, requested_layer_ids=requested)
+    superseded = _poured_supersedes(board)
     for layer_id in requested:
         report.layers_by_id[layer_id] = []
     wanted = set(requested)
@@ -1527,12 +1571,13 @@ def region_copper(
             _intersect_box(own, bbox) if own is not None else None,
         )
     for pour in board.pours:
-        # 131f: a POUR region's outline is in board coordinates and is real
-        # copper, so `kind == "pour"` is inventoried here alongside fill and
-        # poly. POURED stays out: the parser leaves its points empty on purpose
-        # (parent-relative, 1:10-scaled — 125b), and an empty polygon meets
-        # nothing.
-        if pour.kind == "poured" or len(pour.points) < 3:
+        # 135: a POURED result is inventoried here like any other pour, and a
+        # POUR region it supersedes is skipped so the same copper is listed
+        # once. A result whose region is gone from the file is listed on its
+        # own — it is the only record of that copper.
+        if len(pour.points) < 3:
+            continue
+        if pour.kind != "poured" and pour.id in superseded:
             continue
         own = pour.bbox
         if own is None or not _boxes_overlap(own, bbox):
@@ -1905,17 +1950,21 @@ def _ground_pours_on(
     more. A pour with no net is not counted; a plane on a net this project never
     named ground is not counted, and that gap is a naming gap, not a verdict.
 
-    Only ``fill`` / ``poly`` / ``pour`` contribute: ``poured`` is the pour
-    *result*, whose points the parser leaves empty on purpose (125b), so it can
-    carry no polygon.
+    ``fill`` / ``poly`` / ``pour`` and ``poured`` all contribute (135 parsed the
+    poured *results* into board coordinates), subject to the same de-duplication
+    every other consumer uses: a ``POUR`` region that a ``POURED`` supersedes is
+    skipped, so one piece of ground copper is not counted twice.
 
     The bbox rides along because :func:`return_path_projection` asks the cheap
     question first: a pour whose own bbox does not meet a footprint cannot put
     copper inside it, whatever the corners say.
     """
+    superseded = _poured_supersedes(board)
     out: list[tuple[str, str, list[Point], BBox | None]] = []
     for pour in board.pours:
-        if pour.kind not in ("fill", "poly", "pour") or len(pour.points) < 3:
+        if pour.kind not in ("fill", "poly", "pour", "poured") or len(pour.points) < 3:
+            continue
+        if pour.kind != "poured" and pour.id in superseded:
             continue
         if pour.layer_id != layer_id or not pour.net or not is_ground_net(pour.net):
             continue
@@ -2054,8 +2103,9 @@ def return_path_projection(
     each corner of the projected footprint, and :attr:`ProjectionRow.
     corner_cover_mask` publishes the four flags so a reader can see the
     evidence. It does not claim to know whether the copper in between is
-    continuous — the model carries pour *regions*, not poured results (125b),
-    so continuity is not derivable here. Both are the reason the answer is
+    continuous: the corners are sampled against polygons, and 135's parsed
+    pour *results* are still polygons — a shape says what copper is where,
+    not how the copper in between is joined. Both are the reason the answer is
     a coverage class and never a pass or a fail.
 
     **Performance.** :func:`region_copper` is a single linear pass per query,

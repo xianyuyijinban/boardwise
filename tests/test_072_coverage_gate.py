@@ -763,6 +763,27 @@ NOT_WIRED: dict[str, str] = {
     "empty_body_records": "a body with no geometry is still a component in the model",
     "malformed_records": "gates on its own field — coverage.parseIncomplete",
     "attrs_attached_by_parent_id": "counts how attributes arrived, not what was lost",
+    # --- 135: POURED -------------------------------------------------------
+    # None of these three is a drop. A POURED record is parsed in full -- its
+    # islands become real copper polygons in board coordinates -- so counting it
+    # in coverage.recordsDropped would under-report a board that is fully read.
+    # What the three say is *how* the read went, the same kind of question
+    # attrs_attached_by_parent_id answers.
+    "poured_with_parent": (
+        "135: POURED records whose parent POUR resolved -- a census of the "
+        "parent link, not a loss; the copper is parsed either way"
+    ),
+    "poured_orphans": (
+        "135: POURED records whose parent is not in the file. The copper is "
+        "parsed (scaled by the measured x10) and reaches the consumers; only "
+        "the net is unrecoverable, so this is not a dropped record. Gating it "
+        "would claim the board lost copper it did not"
+    ),
+    "poured_without_fill": (
+        "135: POURED records whose pourFill held no `fill: true` polygon. The "
+        "record is still counted in records_by_type; there was no copper in it "
+        "to lose, so it is not a record loss"
+    ),
 }
 
 

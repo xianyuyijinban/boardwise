@@ -58,7 +58,7 @@ from boardwise.core.measure import (
     region_copper,
 )
 from boardwise.engines.pcbreview import BUILTIN_PCB_RULES
-from boardwise.parsers.epru import load_epro2_source, parse_epro2
+from boardwise.parsers.epru import _path_points, load_epro2_source, parse_epro2
 from boardwise.rules.pcb.crystalkeepout import (
     CRYSTAL_REGION_MARGIN_MIL,
     McuCrystalKeepout,
@@ -203,18 +203,56 @@ def test_pour_records_parse_into_board_coordinates_as_kind_pour():
     )
 
 
-def test_poured_stays_the_one_kind_with_no_points():
-    """125b's decision is untouched: ``POURED`` keeps empty points.
+def test_poured_is_now_parsed_and_reads_as_board_coordinates():
+    """**135 reversed 125b's decision here, on evidence.**
 
-    131f adds a pour kind; it must not revive the one 125b deliberately left
-    unreadable. Every ``POURED`` on the fixtures has an empty point list, so no
-    consumer can accidentally feed the scaled parent-relative frame to a bbox.
+    131f pinned it as: 「every ``POURED`` on the fixtures has an empty point
+    list, so no consumer can accidentally feed the scaled parent-relative frame
+    to a bbox」. The premise was wrong — the frame is not parent-relative, it is
+    a plain uniform ``board = 10 × local`` with no offset and no flip — so 135
+    parses it, and the safety property is now carried by the *transform* instead
+    of by an empty list.
+
+    What still holds, and is what this pin now checks: every poured polygon is
+    in **board** coordinates, so it sits on the same board as the tracks and
+    pours around it, and a ``POURED`` whose parent is gone from the file says so
+    on the record (``poured_from`` set, ``net`` ``None``).
     """
     for path in (FOC_100, ROBOT, PILLBOX, LLC):
         board = parse_epro2(path)
         poured = [p for p in board.pours if p.kind == "poured"]
         assert poured, f"{path.name} carries POURED records"
-        assert all(p.points == [] for p in poured)
+        assert all(len(p.points) >= 3 for p in poured)
+        assert all(p.poured_from for p in poured)
+        # Board coordinates, not local: the transform is x10, so re-deriving a
+        # poured point from the raw record must reproduce the parsed one
+        # exactly. ROBOT's board really is small (a few hundred mil across), so
+        # this is checked as a ratio and not as an absolute size.
+        raw_by_id = {}
+        for record in load_epro2_source(path).first_document("PCB").records:
+            if record.type == "POURED" and record.body:
+                raw_by_id[record.id] = record.body
+        checked = 0
+        for shape in poured:
+            body = raw_by_id[shape.id]
+            wanted = [(q.x, q.y) for q in shape.points]
+            matched = False
+            for entry in body["pourFill"]:
+                if not entry.get("fill"):
+                    continue
+                raw_points = [(q.x * 10.0, q.y * 10.0)
+                              for q in _path_points(entry.get("path"))]
+                if raw_points != wanted:
+                    continue
+                matched = True
+                break
+            assert matched, f"{path.name}: {shape.id} is not any entry x10"
+            checked += 1
+        assert checked == len(poured), f"{path.name}: {checked} of {len(poured)} re-derived"
+        # An orphan is honest about being one.
+        for shape in poured:
+            if shape.net is None:
+                assert shape.layer_id is None
 
 
 # ---------------------------------------------------------------------------
@@ -239,18 +277,41 @@ def test_poured_stays_the_one_kind_with_no_points():
         # +24V 36 -> 3, PGND 81 -> 33, MOTA/MOTB/MOTC 5 -> 1, +5V 3 -> 1,
         #   IA+/IB+/IC+ 4 -> 1: the same correction, smaller nets.
         # GND 45 -> 46 (毕设FOC): the one count that **grew**. That is not a
-        #   regression — a region now sits between two pads that used to be
+        #   regression -- a region now sits between two pads that used to be
         #   reported as touching copper through the empty space where the pour
         #   outline should have been, and the union-find correctly finds them
         #   separate. The number is pinned so a reader can see it rather than
         #   discover it later.
+        #
+        # --- 135 moved three of these again, and the *after* column below is
+        # the 135 number. The direction is the same rule both times (read more
+        # of the real copper), but 135 swaps each poured region for its POURED
+        # *result* rather than adding to it -- see
+        # `boardwise.core.measure._poured_supersedes`. The three that moved:
+        #
+        #   PGND 33 -> 31: the result polygons are smaller than the regions
+        #     (the pour engine cut clearance voids out of them), so two pairs of
+        #     fragments that touched through a region's full extent no longer
+        #     touch. Pour area 224 746.8 -> 205 038.9 sq mil.
+        #   GND 46 -> 39: the same effect on 毕设FOC's ground, 12 350.0 ->
+        #     10 614.0 sq mil.
+        #   ROBOT GND 1 -> 15: the opposite effect, and the most consequential
+        #     number in this task. ROBOT's GND *region* is one near-full-board
+        #     plane; its poured *result* is **fifteen** pieces. The region was
+        #     the designer's intent, the result is what the pour engine left,
+        #     and 131f's "one island" was reading the intent. 133d's R31/33c
+        #     text that calls ROBOT's ground a single 7 494 300 sq mil island
+        #     is superseded by this number.
+        #
+        # AGND and 药箱 GND stay at 1: their results are still one piece each,
+        #     just less copper (AGND 2 059 037.0 -> 1 433 311.2 sq mil).
         (FOC_100, "AGND", 67, 1),
         (FOC_100, "+24V", 36, 3),
-        (FOC_100, "PGND", 81, 33),
+        (FOC_100, "PGND", 81, 31),
         (FOC_100, "MOTA", 5, 1),
         (FOC_100, "IA+", 4, 1),
-        (FOC_100, "GND", 45, 46),
-        (ROBOT, "GND", 194, 1),
+        (FOC_100, "GND", 45, 39),
+        (ROBOT, "GND", 194, 15),
         (ROBOT, "VCC", 3, 2),
         (PILLBOX, "GND", 225, 1),
     ],
@@ -511,13 +572,26 @@ def _model_of(path: Path):
     return build_design_model(load_epro2_source(path))
 
 
-def test_foc100_crystal_has_an_agnd_pour_region_on_both_copper_faces():
-    """Acceptance anchor 1: 毕设FOC 1.0.0's ``X1``, top **and** bottom.
+def test_foc100_crystal_has_an_agnd_pour_result_on_the_bottom_copper_face():
+    """Acceptance anchor 1, **restated by 135**: 毕设FOC 1.0.0's ``X1``.
 
-    The board's four copper layers each get a row, and the two outer ones both
-    name one ``AGND`` pour region. Before 131f there was no ``kind="pour"`` at
-    all, so these two rows would have said 「no copper on the bottom layer」 —
-    the wrong silence, with a 1000x1750 mil plane exactly underneath.
+    131f pinned this as 「``AGND`` on top **and** bottom」, reading the pour
+    **regions**. 135 reads each region *and* its ``POURED`` result, preferring
+    the result where both exist (``measure._poured_supersedes``), and the two
+    outer faces now answer differently:
+
+    * **Bottom Layer** — the ``AGND`` region is still there and its result
+      (``["POURED","e3b26ff04e3d6300"]``) still reaches the crystal footprint,
+      so the row names it. Unchanged, apart from the label.
+    * **Top Layer** — the region reaches the footprint but its **result does
+      not**: the pour engine cleared a void around something on the top face,
+      and the result polygon's edge falls outside the footprint rectangle. So
+      the top row now says 「no pour region on this layer inside the region」.
+
+    That is the point of the whole task in one line: the region is what the
+    designer drew, the result is what copper there is, and the two disagree
+    exactly where the design is wrong. The inner layers are unaffected (the
+    inner planes are ``LAYER_FILL`` records, which this model does not read).
     """
     rows = _findings(FOC_100)
     assert len(rows) == 4, [row.message for row in rows]
@@ -526,26 +600,42 @@ def test_foc100_crystal_has_an_agnd_pour_region_on_both_copper_faces():
         row = _layer_row(rows, name)
         assert row.severity == "INFO"
         assert "no keepout threshold is in force" in row.message
-    for name in ("Top Layer", "Bottom Layer"):
-        row = _layer_row(rows, name)
-        assert "pour e" in row.message or "(kind=pour)" in row.message
-        assert "AGND" in row.message
-        assert "including 1 pour region(s) (AGND)" in row.message
+
+    bottom = _layer_row(rows, "Bottom Layer")
+    assert 'pour ["POURED","e3b26ff04e3d6300"] (kind=poured) @ AGND' in bottom.message
+    assert "including 1 pour region(s) (AGND)" in bottom.message
+
+    top = _layer_row(rows, "Top Layer")
+    assert "no pour region on this layer inside the region" in top.message
+    assert "AGND" not in top.message
 
 
-def test_robot_crystal_has_a_gnd_pour_region_on_both_copper_faces():
-    """Acceptance anchor 2: ROBOT's ``X2``, whose GND pours are near-full-board."""
+def test_robot_crystal_has_a_gnd_pour_result_on_the_top_face_only():
+    """Acceptance anchor 2, **restated by 135**: ROBOT's ``X2``.
+
+    131f pinned 「``GND`` on top **and** bottom」 from the pour **regions**.
+    135 reads the results instead, and the bottom face's ``GND`` result does not
+    reach the crystal footprint — the same void story as 毕设FOC's top face. The
+    top face's result (``["POURED","0a00b1e1974c2817"]``) does, so it is still
+    named, and the count of pour regions reported under the footprint is still 1.
+
+    ROBOT's ground is also the board whose ``GND`` island count moved most
+    (1 -> 15); see the island-count pin above.
+    """
     rows = _findings(ROBOT)
     assert len(rows) == 4, [row.message for row in rows]
-    for name in ("Top Layer", "Bottom Layer"):
+    top = _layer_row(rows, "Top Layer")
+    assert 'pour ["POURED","0a00b1e1974c2817"] (kind=poured) @ GND' in top.message
+    assert "including 1 pour region(s) (GND)" in top.message
+    for name in ("Bottom Layer", "Inner1", "Inner2"):
         row = _layer_row(rows, name)
-        assert "(kind=pour)" in row.message
-        assert "@ GND" in row.message
-        assert "including 1 pour region(s) (GND)" in row.message
-    # The two pours are almost the whole board, so the overlap bbox of the
-    # region with the pour is the region itself: the whole pad box is inside
-    # the plane, with no clearance modelled at all.
-    blob = _evidence_blob(_layer_row(rows, "Bottom Layer"))
+        assert "no pour region on this layer inside the region" in row.message
+    # The pour is almost the whole board, so the overlap bbox of the region with
+    # it is the region itself: the whole pad box is inside the plane, with no
+    # clearance modelled at all. 131f asserted this on the *Bottom Layer* row,
+    # back when the bottom face still reported a region; with 135 the bottom
+    # face reports none, so the assertion follows the pour to the top row.
+    blob = _evidence_blob(top)
     assert "overlap bbox" in blob
 
 
@@ -553,16 +643,22 @@ def test_pillbox_crystal_region_is_reported_as_measured():
     """Acceptance anchor 3: 药箱 — measured here, not quoted from the task book.
 
     Its crystal sits on a two-layer board, so it gets two rows rather than
-    four, and both name one ``GND`` pour region. The rows also carry the
-    inner layers' absence nowhere — a two-layer board asks two layers, and the
-    rows say so.
+    four, and both name one ``GND`` pour. The rows also carry the inner layers'
+    absence nowhere — a two-layer board asks two layers, and the rows say so.
+
+    135 changes the label only: the pours named here are the ``POURED``
+    **results** (``["POURED","e734"]`` top, ``["POURED","e875"]`` bottom) rather
+    than the regions they came from, because 药箱's ground results still reach
+    the crystal footprint on both faces. Both readings agree that the copper is
+    there; which record proves it is the change.
     """
     rows = _findings(PILLBOX)
     assert len(rows) == 2, [row.message for row in rows]
     for name in ("Top Layer", "Bottom Layer"):
         row = _layer_row(rows, name)
-        assert "(kind=pour)" in row.message
+        assert "(kind=poured)" in row.message
         assert "@ GND" in row.message
+    assert '"POURED"' in rows[0].message and '"POURED"' in rows[1].message
     assert all("Inner" not in row.message for row in rows)
 
 

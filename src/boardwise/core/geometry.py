@@ -418,16 +418,17 @@ class PourShape:
     * ``"pour"`` — ``POUR`` record (131f): the pour **region** as the editor
       holds it — the user's own outline, with its ``netName`` and ``layerId``,
       in board coordinates. Distinct from ``"poured"``, which is the result.
-    * ``"poured"`` — ``POURED`` record, the *result* of pouring a pour
-      region.
-    * ``"pour"`` — ``POUR`` record, the pour **region** as the editor holds it:
-      the user's own outline, with its net and layer, in board coordinates.
+    * ``"poured"`` — ``POURED`` record: the *result* of pouring, i.e. the
+      copper that actually exists after clearance voids were cut. 135 parses
+      its ``pourFill`` polygons into board coordinates (§ ``POURED_SCALE``).
 
-    ``"poured"`` stays the one kind every consumer skips. Its points are
-    empty by the parser's own contract (parent-relative, 1:10-scaled
-    coordinates, measured on 毕设FOC — task 125b), so it carries no shape; the
-    region it came from is ``"pour"`` (131f) and that is the polygon the copper
-    queries read.
+    **Why both a ``"pour"`` and a ``"poured"`` exist.** ``POUR`` is the
+    *intent* (the outline the user drew, net and layer and nothing else);
+    ``POURED`` is the *result* (that outline minus everything the pour engine
+    had to keep clear, possibly as several disjoint islands). A consumer that
+    wants to know whether copper is really there wants the result; one that
+    wants to know what the designer meant wants the region. See
+    :func:`boardwise.core.measure.pour_connectivity` for which one wins where.
     """
 
     id: str
@@ -438,6 +439,13 @@ class PourShape:
     width: float = 0.0
     fill_style: str | None = None
     poly_type: str | None = None
+    #: 135: for ``kind == "poured"``, the id of the pour **region** this
+    #: result was poured from — the ``POUR`` record's own ``id``, decoded out
+    #: of the ``POURED`` id tuple. ``None`` when the region is not in the file
+    #: (the ``e-xxxx`` parents), which is exactly the case where this result
+    #: is the only description of that copper. :func:`boardwise.core.measure.
+    #: _poured_supersedes` reads it to drop the superseded region.
+    poured_from: str | None = None
 
     @property
     def bbox(self) -> BBox | None:
@@ -584,6 +592,23 @@ class ParseStats:
     #: usable designator, so the model drops them. Excludes the page frame
     #: and the net flags, which have no designator by design (task 042 §WI-2).
     instances_without_designator: int = 0
+    #: ``POURED`` records whose parent id resolved to a ``POUR`` in the same
+    #: document, so the result polygon could inherit that region's net and
+    #: layer (task 135). The complement —
+    #: :attr:`poured_orphans` — is the headless half.
+    poured_with_parent: int = 0
+    #: ``POURED`` records whose id names an element that is **not in the file**.
+    #: Measured on every board fixture: 毕设FOC 1.0.0 splits 27 / 24, 1.1.0
+    #: 33 / 22, llc 0 / 4. These are pours the editor has already replaced
+    #: (an inner-layer plane it re-pours writes a fresh ``POURED`` and drops
+    #: the region), so the *copper* is real and parses — but the net is not
+    #: recoverable from the parent link and is left ``None``.
+    poured_orphans: int = 0
+    #: ``POURED`` records whose ``pourFill`` array held no ``fill: true``
+    #: polygon (only stroked outlines, or nothing at all), so no copper came
+    #: out of them. Not a drop of the record — it is counted as a pour with
+    #: an empty ``points``.
+    poured_without_fill: int = 0
     edit_version: str | None = None
     editor_version: str | None = None
 
@@ -604,6 +629,9 @@ class ParseStats:
             "components_without_symbol": self.components_without_symbol,
             "attrs_attached_by_parent_id": self.attrs_attached_by_parent_id,
             "instances_without_designator": self.instances_without_designator,
+            "poured_with_parent": self.poured_with_parent,
+            "poured_orphans": self.poured_orphans,
+            "poured_without_fill": self.poured_without_fill,
             "edit_version": self.edit_version,
             "editor_version": self.editor_version,
         }

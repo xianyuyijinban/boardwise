@@ -87,21 +87,40 @@ island」, and the corpus shows the answer is not always yes.** The reading walk
 :func:`~boardwise.core.measure.pour_connectivity` and finds the island that
 holds the pad, then reports that island's area and layer span. Measured:
 
-* 毕设FOC 1.0.0's ``U10``: the EP pad sits in island 42 on its own (**area
+* 毕设FOC 1.0.0's ``U10``: the EP pad sits in island 37 on its own (**area
   0.0**, one layer), and each of the four thermal vias sits in **its own
   single-member island** — so in this model the pad and its vias are five
-  separate pieces of copper, and the net's 46 islands put no large plane under
+  separate pieces of copper, and the net's 39 islands put no large plane under
   this pad at all;
 * the 1.1.0 board's ``U2``: all four vias **and** the pad are in **one** island
-  (id 9, 15 members, **24 523 sq mil** of pour, layers 1/2/15/16) — a
+  (id 9, 15 members, **21 644 sq mil** of pour, layers 1/2/15/16) — a
   continuous exit to a large plane, and the two boards differ;
-* ROBOT's ``DRV1``: one island, 289 members, **7 494 300 sq mil**, layers
-  1/2/15/16.
+* ROBOT's ``DRV1``: island 0, 281 members, **2 210 304 sq mil**, layers
+  1/2/15/16, out of **15** islands on that net.
+
+**135 re-measured all three, and the island *numbers* moved while the verdicts
+held.** 135 parses ``POURED`` records — the pour **result** — into board
+coordinates and prefers the result over the ``POUR`` **region** it came from
+(:func:`boardwise.core.measure._poured_supersedes`). Consequences for this
+rule's three rows:
+
+* ``U10``'s island index 42 -> 37 and the net's count 46 -> 39: the result
+  polygons are smaller than the regions (the pour engine cut clearance voids
+  out of them), so fewer pieces join. **The verdict is unchanged, and it is now
+  grounded rather than assumed**: with the result layer parsed, no top-layer
+  polygon of any net has ``U10``'s EP centre inside it, so there is no plane
+  here the parser merely failed to see.
+* ``U2``'s area 24 523 -> 21 644 sq mil, members 15 unchanged: one member is
+  now the ``POURED`` result where it used to be its ``POUR`` region, and a
+  result is less copper than the region it was poured from.
+* ROBOT's ``DRV1`` is the one that moved most: the net reads **15** islands,
+  not 1. Its single near-full-board ``GND`` **region** is fifteen pieces once
+  poured. The pad still sits in the large one, so the exit path is continuous.
 
 So R9 reports per board and does not generalise one board's answer onto
 another. Note also that island area is **pour area only** — tracks and vias
 contribute none — so an island reading 0.0 is 「no pour polygon in this piece」,
-which is what island 42 means, and the row says which reading it is.
+which is what an area of 0.0 means here, and the row says which reading it is.
 
 **A board with no motor driver** (llc, 智能药箱) produces **no row** from any of
 the three rules: the object they measure does not exist there, and the
@@ -785,15 +804,17 @@ class FocThermalExitPath(PcbRule):
        below.
 
     **The pad's island and the vias' islands are read separately because on the
-    corpus they come apart.** 毕设FOC 1.0.0's ``U10``: the EP pad is in island 42
+    corpus they come apart.** 毕设FOC 1.0.0's ``U10``: the EP pad is in island 37
     on its own (area 0.0, one layer) and each of the four thermal vias is in
     **its own single-member island** — five separate pieces, and no large plane
     under this pad in this model. The 1.1.0 board's ``U2``: the pad and all four
-    vias are in **one** island (id 9, 15 members, **24 523 sq mil** of pour,
-    layers 1/2/15/16) — a continuous exit. ROBOT's ``DRV1``: one island, 289
-    members, **7 494 300 sq mil**. Two boards with the same driver part and the
+    vias are in **one** island (id 9, 15 members, **21 644 sq mil** of pour,
+    layers 1/2/15/16) — a continuous exit. ROBOT's ``DRV1``: island 0, 281
+    members, **2 210 304 sq mil**. Two boards with the same driver part and the
     same pad size answer the question differently, which is the reason the rule
-    reports per board and grades neither.
+    reports per board and grades neither. (These are the 135 numbers — the
+    131f-era figures were island 42, 24 523 sq mil, and a single 289-member
+    7 494 300 sq mil island; see the module docstring for why each moved.)
 
     **「continuous vs broken」 is 出数, not a verdict.** An island reading 0.0 sq
     mil means 「no pour polygon in this piece」 — island area is **pour area

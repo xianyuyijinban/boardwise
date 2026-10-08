@@ -592,27 +592,38 @@ def test_via_unused_inner_layers_are_not_bridged():
     assert via_layers == [[1, 2]]  # every copper layer except 15
 
 
-def test_poured_records_contribute_no_geometry(llc_board):
-    """POURED carries no points, so it must not enter clearance or islands.
+def test_poured_records_are_parsed_and_orphans_carry_no_net(llc_board):
+    """**135 reversed this test, deliberately.** Its old claim was that a POURED
+    contributes no geometry because its path is "parent-relative and scaled 1:10,
+    not board coordinates" — and it pinned llc's four POURED records as
+    point-less.
 
-    The parser deliberately drops POURED paths (their stored coordinates are
-    parent-relative and scaled 1:10, not board coordinates — see
-    ``parsers/epru.py``'s POURED arm). This pin makes that assumption
-    explicit for 125b: a POURED record exists in the model, but contributes
-    no shape, so it can neither create an island nor become a closest pair.
+    135 measured the frame and found it is a plain uniform scale:
+    ``board = 10 × local``, origin (0, 0), no flip. So a POURED **is** real
+    copper and now parses into islands. llc's four records hold seven
+    ``fill: true`` islands between them, all four are **orphans** (llc stores no
+    ``POUR`` record at all, so their parent ids resolve to nothing) and all four
+    therefore carry ``net=None``.
 
-    llc carries 4 POURED records, all with empty ``points``, and llc's
-    DC-/DHS/CHS nets each carry FILL pours that DO have geometry.
+    The consequence is pinned here rather than assumed: a net-less polygon joins
+    no net, so ``DC-`` is still one island and still made of its ``FILL`` pours,
+    tracks and vias. A poured result with no parent and no net cannot perturb a
+    net's connectivity — it can only be read directly, or by geometry.
     """
     poured = [p for p in llc_board.pours if p.kind == "poured"]
-    assert len(poured) == 4
-    assert all(not p.points for p in poured)
+    assert len(poured) == 7  # four records, seven islands between them
+    assert len({p.id for p in poured}) == 4
+    assert all(len(p.points) >= 3 for p in poured)
+    assert all(p.net is None and p.layer_id is None for p in poured)
+    assert all(p.poured_from not in {"", None} for p in poured)
+    assert llc_board.stats.poured_orphans == 4
+    assert llc_board.stats.poured_with_parent == 0
 
     fills = [p for p in llc_board.pours if p.kind == "fill"]
     assert len(fills) == 25  # the task book's "PCB 段 25 条 FILL"
 
     # DC- is measured from its FILL pours + tracks + vias, and none of the
-    # four point-less POURED records appear in its island.
+    # four net-less POURED records appear in its island.
     result = pour_connectivity(llc_board, "DC-")
     assert result.island_count == 1
     assert not ({p.id for p in poured} & set(result.islands[0].element_ids))

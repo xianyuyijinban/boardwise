@@ -94,7 +94,12 @@ def test_board_level_counts(board):
     # LINE/POLY/FILL counts in the survey are dominated by footprint and
     # symbol library documents; the PCB document itself has far fewer.
     assert len(board.tracks) == 49
-    assert len(board.pours) == 134
+    # 135: was 134 before POURED was parsed, and the +3 is real — llc's four
+    # POURED records hold seven `fill: true` islands between them (e294 -> 2,
+    # e331 -> 1, e732 -> 2, e857 -> 2), and each island is its own polygon.
+    assert len(board.pours) == 137
+    assert len([p for p in board.pours if p.kind == "poured"]) == 7
+    assert len({p.id for p in board.pours if p.kind == "poured"}) == 4
     assert len(board.components) == 47
     assert len(board.pads) == 117
     # Everything the extractor consumes is absent from unconsumed_types.
@@ -125,7 +130,21 @@ def test_board_outline_is_155_by_80_mm(board):
 
 
 def test_all_geometry_sits_inside_the_outline(board):
-    """Strong check on the coordinate frame: nothing may fall off the board."""
+    """Strong check on the coordinate frame: nothing may fall off the board.
+
+    **Except poured copper, which 135 added to this list and which does fall
+    off — and that is real.** ``llc_board``'s ``POURED`` records ``e732`` and
+    ``e857`` are orphan results with no parent region to check them against;
+    scaled by the measured ``×10`` they reach y = −3376.0, which is **223 mil
+    past** the outline's −3152.795 edge, and the overshoot grows smoothly along
+    the polygon rather than being uniform — the signature of a pour that really
+    does overhang the board edge in the file, not of a mis-scaled coordinate
+    (a wrong factor would displace every point by a fixed proportion, and
+    ``k = 9.3`` would then fit; at ``k = 10`` the other 174/187 points of that
+    polygon sit inside the outline, and no single other factor does better).
+    The board's own bbox therefore grows, and ``test_llc_board_outline_bbox``
+    in ``tests/test_125_pcb_measure.py`` pins the new number with that note.
+    """
     outline = board.outline.bbox
     tolerance = 2.0  # mils: outline vs copper rounding
     points = [p.center for p in board.pads]
@@ -133,11 +152,37 @@ def test_all_geometry_sits_inside_the_outline(board):
     for track in board.tracks:
         points += [track.start, track.end]
     for pour in board.pours:
+        if pour.kind == "poured":
+            continue  # see the docstring: real overhang, measured
         points += pour.points
     assert points
     for point in points:
         assert outline.min_x - tolerance <= point.x <= outline.max_x + tolerance
         assert outline.min_y - tolerance <= point.y <= outline.max_y + tolerance
+
+
+def test_the_poured_overhang_is_bounded_and_only_on_llc(board):
+    """The overhang 135 exposed is a measured fact, so pin its size.
+
+    At most 223.2 mil past the outline's bottom edge, on two of llc's seven
+    poured polygons, and never past any other edge. If a future parse makes
+    this worse, this test says so instead of the suite quietly accepting a
+    larger hole in the board.
+    """
+    outline = board.outline.bbox
+    overhang = 0.0
+    for pour in board.pours:
+        if pour.kind != "poured":
+            continue
+        for point in pour.points:
+            overhang = max(
+                overhang,
+                outline.min_x - point.x,
+                point.x - outline.max_x,
+                outline.min_y - point.y,
+                point.y - outline.max_y,
+            )
+    assert overhang == pytest.approx(223.2, abs=0.5)
 
 
 def test_via_dimensions_are_in_mils(board):

@@ -321,14 +321,19 @@ def test_r31_reports_a_single_island_and_its_board_share_on_bishe_foc_100():
     assert rows, "1.0.0's PCB1 is 4-layer and in scope"
     by_net = {r.target.net_refs[0]: r for r in rows if r.target.net_refs}
 
-    # AGND is the one single-island ground on this board (measured: pour area
-    # 2.059e6 sq mil over a 1.027e7 sq mil outline ≈ 20%).
+    # AGND is the one single-island ground on this board. **135 moved the share
+    # from ~20% to ~14%**, and that is the whole task in one number: the figure
+    # used to be the pour *region* — what the designer drew — and is now the
+    # poured *result*. 毕设FOC 1.0.0's AGND region claims 2.059e6 sq mil; the
+    # copper the pour engine actually left is 1.433e6 sq mil over the same
+    # 1.027e7 sq mil outline. The island count is unchanged at 1 (the result is
+    # still one piece), so this is a smaller plane, not a broken one.
     assert "AGND" in by_net
     agnd = by_net["AGND"]
     assert "one island" in agnd.message
     m = re.search(r"([\d.]+)% of the board area", agnd.message)
     assert m, agnd.message
-    assert 19.0 < float(m.group(1)) < 21.0, f"measured ≈20%, got {m.group(1)}%"
+    assert 13.0 < float(m.group(1)) < 15.0, f"measured ≈14%, got {m.group(1)}%"
     assert "不是本工具的判定" in agnd.message
 
     # The other two ground nets are NOT single islands; their rows say so.

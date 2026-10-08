@@ -624,21 +624,31 @@ def test_array_pitches_is_the_nearest_neighbour_of_each_via():
 def test_r9_reports_that_100s_pad_and_its_four_vias_are_five_separate_islands():
     """Acceptance anchor: 毕设FOC 1.0.0 — the headline reading of this batch.
 
-    Measured on ``U10``'s 126 × 126 mil EP: the pad is in **island 42 alone**
+    Measured on ``U10``'s 126 × 126 mil EP: the pad is in **island 37 alone**
     (1 member, layers ``[1]``, area **0.0**) and each of the four thermal vias
     is in **its own single-member island** — 27, 28, 29, 30. So in this model
     the pad's copper and its four vias are **five separate pieces**, and the
-    ``GND`` net's 46 islands put no pour plane under this pad at all.
+    ``GND`` net's islands put no pour plane under this pad at all.
 
     This is the case that decides why the rule keeps the pad's island and the
     vias' islands apart: a rule that joined them would have to call 1.0.0
     「continuous」, and it is not.
+
+    **135 moved the two numbers and not the verdict.** The island *number* fell
+    46 -> 39 and the pad's index 42 -> 37, because ``POURED`` results now
+    replace the pour regions they were poured from (see
+    ``measure._poured_supersedes``) and the smaller result polygons join fewer
+    pieces. The verdict is unchanged **and is now grounded rather than
+    assumed**: 135 checked directly that no top-layer polygon of any net has
+    ``U10``'s EP centre in its interior, so there is no plane here that the
+    parser merely failed to see. See
+    ``tests/test_135_poured_result.py::test_u10_ep_on_1_0_0_sits_on_no_top_layer_copper_at_all``.
     """
     rows = [r for r in _rows(FOC_100, R9) if r.board == "PCB1"]
     assert len(rows) == 1
     row = rows[0]
     assert row.severity == "INFO"
-    assert "the pad is in island 42 of 'GND'" in row.message
+    assert "the pad is in island 37 of 'GND'" in row.message
     assert "1 member(s), layers [1]" in row.message
     assert "**no pour polygon at all** (area 0.0" in row.message
     assert "so this piece of copper is the pad itself rather than a plane" in row.message
@@ -650,7 +660,7 @@ def test_r9_reports_that_100s_pad_and_its_four_vias_are_five_separate_islands():
     ev = _evidence(row)
     assert "region_copper" in ev
     assert "pour_connectivity" in ev
-    assert "46 island(s) on this net" in ev, "the whole net's island count is on the row"
+    assert "39 island(s) on this net" in ev, "the whole net's island count is on the row"
     assert "island area is pour area only" in ev, (
         "area 0.0 means 「no pour polygon in this piece」, and the row must say "
         "so rather than reporting a zero-area region that does not exist"
@@ -664,8 +674,15 @@ def test_r9_reports_the_two_boards_answering_differently():
     毕设FOC 1.0.0's ``U10`` is broken (five single-member islands, 0.0 sq mil).
     The 1.1.0 board's ``U2`` — the **same part, the same 126 × 126 mil pad** —
     is continuous: pad and all four vias in **island 9**, 15 members,
-    **24 523 sq mil** of pour, layers 1/2/15/16. Same driver, same pad, opposite
+    **21 644 sq mil** of pour, layers 1/2/15/16. Same driver, same pad, opposite
     answer, which is why neither is graded and neither is generalised.
+
+    **135 moved that area, 24 523 -> 21 644 sq mil, and the members count is
+    unchanged at 15** — because one of the fifteen is now a ``POURED`` record
+    where it used to be the ``POUR`` region it was poured from. The area falls
+    because the result is the region minus the clearance voids. 「Continuous」
+    is a topology statement and it still holds; 「how much copper」 is a
+    measurement and the answer got more accurate.
     """
     broken = next(r for r in _rows(FOC_100, R9) if r.board == "PCB1")
     continuous = next(r for r in _rows(FOC_110, R9) if r.board == "PCB1")
@@ -673,7 +690,7 @@ def test_r9_reports_the_two_boards_answering_differently():
     assert "U2" in continuous.message and "pin '33'" in continuous.message
     assert "the pad is in island 9 of 'GND'" in continuous.message
     assert "15 member(s), layers [1, 2, 15, 16]" in continuous.message
-    assert "the island carries 24523 sq mil of pour" in continuous.message
+    assert "the island carries 21644 sq mil of pour" in continuous.message
     assert "the pad's own island" in continuous.message, (
         "the via that shares the pad's island is said to share it, and the three "
         "that do not are each named as separate"
@@ -685,20 +702,31 @@ def test_r9_reports_the_two_boards_answering_differently():
     assert "**no pour polygon at all**" not in continuous.message
 
 
-def test_r9_reports_robots_single_huge_island():
-    """Acceptance anchor: ROBOT's ``DRV1`` — one island, 7 494 300 sq mil.
+def test_r9_reports_robots_huge_first_island_out_of_fifteen():
+    """Acceptance anchor: ROBOT's ``DRV1`` — the pad's island is huge, and the
+    net has **fifteen** of them.
 
-    Measured: the ``GND`` net on ROBOT reads **1 island** in total, 289 members,
-    layers 1/2/15/16, **7 494 300 sq mil** of pour, and the pad's one thermal
-    via is inside it. So this board's exit path is continuous and its pour is
-    two orders of magnitude larger than the 1.1.0 board's.
+    Measured: the ``GND`` net on ROBOT reads **15 islands** in total; the pad's
+    is island 0, 281 members, layers 1/2/15/16, **2 210 304 sq mil** of pour, and
+    the pad's one thermal via is inside it. So this board's exit path is
+    continuous and its plane is two orders of magnitude larger than the 1.1.0
+    board's.
+
+    **135 moved both numbers.** ROBOT's ``GND`` went from 1 island / 289
+    members / 7 494 300 sq mil to **15** / 281 / 2 210 304, and the reason is
+    the same one as everywhere else in this task: the single ``GND`` **region**
+    on this board is one near-full-board plane, and its poured **result** is
+    fifteen pieces. Reading the region (131f's choice) gave "one island"; the
+    result says the pour engine cut that plane apart. The pad still sits in the
+    big one, so the exit path verdict is unchanged.
     """
     rows = [r for r in _rows(ROBOT, R9) if r.board == "PCB1"]
     assert len(rows) == 1
     row = rows[0]
     assert "the pad is in island 0 of 'GND'" in row.message
-    assert "289 member(s), layers [1, 2, 15, 16]" in row.message
-    assert "7494300 sq mil of pour" in row.message
+    assert "281 member(s), layers [1, 2, 15, 16]" in row.message
+    assert "2210304 sq mil of pour" in row.message
+    assert "15 island(s) on this net" in _evidence(row)
     assert "island 0 holds 9ce71638bf739fa4" in row.message
     assert "the pad's own island" in row.message
 
@@ -710,6 +738,14 @@ def test_r9_inventories_the_pad_region_per_layer():
     vias), layers 2/15/16 hold 4 each (the vias alone — the EP is an SMD pad on
     layer 1, which is 127b's own reading and the reason it does not appear on
     the inner layers).
+
+    The trailing 「unclassifiable」 count changed 0 -> 2 under 135, and both are
+    the same thing: ``POURED`` records whose parent region is not in the file,
+    so the parser knows the copper's shape but not its layer, and an element
+    with no layer takes part in no layer's inventory. On the 1.1.0 board the
+    count is 0, and on ROBOT's ``DRV1`` the layer-2 inventory gains
+    ``pour ["POURED","3fa287d24c3dd399"] on net 'GND'`` — a poured result that
+    *does* carry a layer because its parent does.
     """
     row = next(r for r in _rows(FOC_100, R9) if r.board == "PCB1")
     assert "region copper over the pad's projection: layer 1: 5, layer 2: 4, layer 15: 4, layer 16: 4" in row.message
@@ -719,7 +755,7 @@ def test_r9_inventories_the_pad_region_per_layer():
         "present the counts as clearances"
     )
     assert "layer 1: pad U10.33 on net 'GND'" in ev
-    assert "0 unclassifiable copper element(s)" in ev
+    assert "2 unclassifiable copper element(s)" in ev
 
 
 def test_r9_reports_a_pad_that_belongs_to_no_island():

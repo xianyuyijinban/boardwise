@@ -807,9 +807,18 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # this number is updated by hand together with the note in test_017 rather
     # than removed: a stale pin is the signal that the digest moved and nobody
     # recorded why.
+    # 135 moved this digest 1149d428 -> 92fa6ff9, and the alarm did its job.
+    # The cause was **docstrings only**: `rules/pcb/focthermal.py`'s R9 prose
+    # carried the pre-135 island figures (island 42, 24 523 sq mil, ROBOT's
+    # single 289-member / 7 494 300 sq mil island), which 135's parsing work
+    # made wrong, and 133d's R9 anchors moved with them. No rule **body** moved
+    # — `git diff` over `src/boardwise/rules/` is 32 insertions / 11 deletions,
+    # all of them prose inside a module or function docstring. The measured
+    # numbers themselves are pinned in `tests/test_133d_foc_thermal.py`, so the
+    # correction is verified there rather than being a bare digest bump.
     assert recursive != old_digest, "the subpackage is inside the recipe now"
     assert old_digest == "98b1d462"
-    assert recursive == "1149d428", (
+    assert recursive == "92fa6ff9", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )
