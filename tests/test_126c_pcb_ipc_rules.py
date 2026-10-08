@@ -361,12 +361,16 @@ def test_both_rules_are_in_the_builtin_list_in_the_declared_order():
     between a rule that was added and a rule that was moved. **131c** then
     inserted ``pcb-regulator-fb-placement`` after 131b's rule — the second of
     the two regulator inserts, both inside the house-rule block, both reading
-    the same measurement primitive on the same object.
+    the same measurement primitive on the same object — and **131d** inserted
+    ``pcb-mcu-crystal-placement`` after that, the third insert, which moves to
+    the next object over (one MCU's oscillator network) with the same
+    discipline.
     """
     assert [rule.id for rule in BUILTIN_PCB_RULES] == [
         "pcb-decap-distance",
         "pcb-regulator-cap-distance",
         "pcb-regulator-fb-placement",
+        "pcb-mcu-crystal-placement",
         "pcb-component-spacing",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",

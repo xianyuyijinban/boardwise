@@ -40,11 +40,14 @@ Roles and their precedence
 
 Checked in this order, and the order is the contract:
 
-1. :data:`_NOT_A_ROLE` — names that are affirmatively *not* one of the nine
+1. :data:`_OSC_SUBSTRING` — a name carrying ``OSC`` names an oscillator and
+   is not a supply pin (131d). Checked first because the failure it closes is
+   the token scan's, and only the token scan produces it.
+2. :data:`_NOT_A_ROLE` — names that are affirmatively *not* one of the nine
    roles, matched before anything else so a blocklisted name can never be
    rescued by token splitting.
-2. :data:`_WHOLE_NAME` — the whole normalised name in the table.
-3. token scan — a compound name (``EN/UVLO``, ``GND/ADJ``, ``VEE/GND``,
+3. :data:`_WHOLE_NAME` — the whole normalised name in the table.
+4. token scan — a compound name (``EN/UVLO``, ``GND/ADJ``, ``VEE/GND``,
    ``OUT A``) is split on :data:`_SEPARATORS` and the **highest-precedence
    resolving token** wins. Precedence is :data:`ROLE_PRECEDENCE`, which is why
    ``GND/ADJ`` reads ``GND`` (the ``ADJ`` half is not a role) and ``EN/UVLO``
@@ -54,6 +57,18 @@ Checked in this order, and the order is the contract:
 ``GND`` outranks ``OUT`` deliberately: ``VEE/GND`` is a return pin that happens
 to be written with a supply name beside it, and reading it as an output would
 put a decoupling rule on a ground pad.
+
+**The oscillator family is the reason a blocklisted *token* has to void a
+compound name (131d).** That behaviour already existed for the gate-driver
+channel halves (``INA/OUT`` reads nothing); an STM32 oscillator pin reached it
+the same way and is why it is now load-bearing. ``PF0-OSC_IN`` splits on the
+underscore into ``PF0-OSC`` + ``IN``, the ``IN`` half is a table hit, and the
+pin resolved as a **supply input** — the exact failure this module exists to
+prevent, reached through a name that looks like one of the nine. The four
+misjudgements are measured on the corpus: ``PH0-OSC_IN`` / ``PH1-OSC_OUT`` on
+毕设FOC 1.0.0 and 1.1.0, ``PF0-OSC_IN`` / ``PF1-OSC_OUT`` on ROBOT ctrl FOC
+and 药箱, ``PC14-OSC32_IN`` / ``PC15-OSC32_OUT`` on every STM32 in the
+fixtures, ``PD0-OSC_IN`` / ``PD1-OSC_OUT`` on 超声波.
 """
 
 from __future__ import annotations
@@ -99,6 +114,14 @@ ROLE_PRECEDENCE: tuple[str, ...] = ("GND", "EP", "EN", "BST", "SW", "FB", "OUT",
 #:   ``D``/``S``/``R``/``15V+``/``15V-``. On an LED, a diode or a bridge these
 #:   are polarity, not a rail direction; the same letter is an address bit on
 #:   anything else.
+#:
+#: The **oscillator family is deliberately not here** (131d). ``PH0-OSC_IN`` /
+#: ``PF0-OSC_IN`` / ``PC14-OSC32_IN`` used to resolve to ``IN`` / ``OUT`` — the
+#: token scan splits ``PF0-OSC_IN`` on the underscore into ``PF0-OSC`` + ``IN``
+#: and the ``IN`` half is a table hit — but ``-`` is *not* in
+#: :data:`_SEPARATORS`, so the token is the whole ``PF0-OSC`` and enumerating
+#: it here would mean one entry per STM32 port pin. :data:`_OSC_SUBSTRING`
+#: short-circuits the family instead; see the module docstring.
 _NOT_A_ROLE: frozenset[str] = frozenset(
     {
         "NC", "NC/", "PGOOD", "RON", "RESV",
@@ -110,6 +133,36 @@ _NOT_A_ROLE: frozenset[str] = frozenset(
         "15V+", "15V-",
     }
 )
+
+
+#: Any pin name carrying this substring names an **oscillator** and is not one
+#: of the nine roles (131d).
+#:
+#: **Why a substring and not a table entry.** The measured spellings are
+#: ``PH0-OSC_IN`` / ``PH1-OSC_OUT`` (毕设FOC 1.0.0 and 1.1.0, 高速板),
+#: ``PF0-OSC_IN`` / ``PF1-OSC_OUT`` (ROBOT ctrl FOC, 药箱),
+#: ``PC14-OSC32_IN`` / ``PC15-OSC32_OUT`` (every STM32 on the corpus),
+#: ``PD0-OSC_IN`` / ``PD1-OSC_OUT`` (超声波) and the crystal's own ``OSC1`` /
+#: ``OSC2`` — and behind each port-pin name stands every other pin of the same
+#: family that no fixture happens to place. :data:`_SEPARATORS` splits ``_`` but
+#: **not** ``-``, so the token the table would have to enumerate is the whole
+#: ``PF0-OSC``: one entry per port pin, on a part whose pin names are its own
+#: naming, not a fixed vocabulary. A substring is the shape the family has.
+#:
+#: **What it costs, stated plainly.** ``OSC`` is a substring, so a name that
+#: merely *contains* it is refused — a hypothetical ``OSC_EN`` (an oscillator
+#: enable) or ``RCC_OSC_IN`` (CubeMX's own spelling for the same pin,
+#: :func:`boardwise.core.pintable.port_pin_of` records that disagreement) is
+#: refused too. That is the safe direction: this module's contract is that a
+#: wrong role is worse than an absent one, and every pin an oscillator
+#: sub-circuit has is a pin whose supply role a supply rule must not act on.
+#: An oscillator enable is an ``EN``-class pin, and refusing it here costs a
+#: caller the ability to learn it is an enable — which no rule in the tree
+#: currently asks an MCU about.
+#:
+#: Checked **before** :data:`_NOT_A_ROLE` and the whole-name table, because the
+#: failure it closes is the token scan's and only the token scan produces it.
+_OSC_SUBSTRING = "OSC"
 
 
 #: The whole normalised name -> role.
@@ -190,10 +243,18 @@ def pin_role(pin_name: str | None) -> str | None:
     that the pin has no function. ``RON`` and ``PGOOD`` are the clearest cases:
     both are real, meaningful pins that carry no supply role, and a caller that
     treats ``None`` as "unknown function" rather than "not a supply pin" is the
-    only correct way to read it.
+    only correct way to read it. ``PF0-OSC_IN`` is the case 131d added: it is a
+    real pin with a real job (a crystal oscillator input) and no supply role
+    at all, and before this batch it answered ``"IN"``.
     """
     text = _normalise(pin_name or "")
     if not text:
+        return None
+    # 131d, before everything: a name carrying OSC names an oscillator. This
+    # has to precede the whole-name table and the blocklist because the fault
+    # it closes is the token scan's — `PF0-OSC_IN` splits into `PF0-OSC` and
+    # `IN`, and the `IN` half is a table hit.
+    if _OSC_SUBSTRING in text:
         return None
     if text in _NOT_A_ROLE:
         return None
