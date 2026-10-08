@@ -1333,9 +1333,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--naming", choices=NAMING_STRATEGIES, default=DEFAULT_NAMING_STRATEGY,
         help=(
             "How signal nets are named (default: %(default)s). "
+            "auto: name a signal net only when it is long or cross-page — "
+            "everything else is read off its wires (a net label is an "
+            "electrical net port in EasyEDA, so naming everything buries "
+            "connections); "
             "wire: the wire carries the net name only; "
-            "text: wire plus a decorative text label beside it (visible, not "
-            "an electrical object — the report says so); "
+            "text: wire plus a decorative text label beside every signal net "
+            "(visible, not an electrical object — the report says so); "
             "label: the native net-label API (needs an EDA v4 host; dormant); "
             "none: no signal names at all. Rails always keep their flags."
         ),

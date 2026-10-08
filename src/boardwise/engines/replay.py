@@ -47,6 +47,7 @@ from boardwise.engines.generate import (
     PlacementStep,
     WireStep,
     canvas_pin_offsets,
+    needs_signal_label,
     normalise_strategy,
     strip_dangling_nets,
 )
@@ -569,7 +570,25 @@ def build_replay_plan(
             layout.annotation_box(flag.x + dx, flag.y + dy, flag.net, glyph)
         )
     for label in page.labels:
-        if plan.naming_strategy == "text":
+        if plan.naming_strategy == "auto":
+            # The same policy the solver applies (岳裁 2026-10-08): a golden
+            # label is kept only when the net is long or cross-page. The
+            # *position* is still the human's own — the replay is a fidelity
+            # path, so the policy decides **whether** to draw the name and the
+            # human decides **where**, which is what makes the replay still a
+            # replay. Length is read off this page's own routed geometry.
+            route = next((r for r in routes if r.net == label.net), None)
+            if route is None or not needs_signal_label(route, model=model)[0]:
+                continue
+            step = NetNameStep(
+                net=label.net,
+                kind="text",
+                x=label.x + dx,
+                y=label.y + dy,
+                rotation=label.rotation,
+                decorative=True,
+            )
+        elif plan.naming_strategy == "text":
             step = NetNameStep(
                 net=label.net,
                 kind="text",

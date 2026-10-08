@@ -159,31 +159,75 @@ The type package has **no path for a *connectivity-bearing* signal-net name**:
 `sch_PrimitiveNetLabel` is not a namespace on this host. The only visible form
 the package offers is `sch_PrimitiveText` — a decoration with no connectivity.
 
-## Naming strategies (006b revision 3)
+## Naming strategies (006b revision 3; default changed by 134, 2026-10-08)
 
 xianyuyijinban's rule is fixed: **signal nets are named with a visible label, never an
 I/O port**; power and ground keep their flags. What varies is *how* the visible
-name is realised, so the generator carries a switch (default `text`):
+name is realised, and — since 134 — *whether* one is placed at all.
+
+**Why this stopped being a cosmetic choice.** In EasyEDA Pro a net label is
+equivalent to a network port: drawing one **creates an electrical connection**.
+So labelling every signal net was not "a bit busy", it was burying implicit
+connections all over the page *and* masking routing mistakes. An engineer's
+complaint that the AI-drawn flyback came back as a screenful of network
+identifiers smeared over parts and wires is precisely this.
 
 | Strategy | Wire carries the net? | Signal name primitive | Status |
 |---|---|---|---|
 | `wire` | yes (`WireStep.net`) | none | **verified** — measured 2026-09-14: the editor's netlister honours the wire's own net attribute (3 resistors + a wire tagged `PROBE_WIRE_NET` → `R1.2/R2.2/R3.1 → PROBE_WIRE_NET` in `getNetlistFile`) |
-| `text` | yes | `sch.place_text` (`sch_PrimitiveText`) | **default** — visible, but decorative; every report line says so |
+| `auto` | yes (`WireStep.net`) | only on long or cross-page nets | **default** (134) — see below |
+| `text` | yes | `sch.place_text` (`sch_PrimitiveText`), one per signal net | was the 006b default; visible but decorative, and every report line says so |
 | `label` | yes | `sch.place_netlabel` (`createNetLabel`) | **dormant** — documented *v4*, never settles on 3.2.186; kept behind its timeout |
 | `none` | no | none | for a bare-connectivity run |
+
+### `auto`: a name only where a name is the only way to read the net
+
+A signal net is named on either of two grounds (岳裁 2026-10-08，长距离/跨页才打):
+
+1. **long distance** — its routed wire runs past `LONG_NET_LABEL_UNITS`
+   (1500 canvas units ≈ 38 mm at 1 unit = 1 mil). The threshold answers *how
+   far can a reader follow a net*, not how tidy the page looks: past roughly a
+   third of an A4 landscape sheet a net has to be traced, and tracing is what a
+   name saves. It is a **house rule pending confirmation of the exact number** —
+   one named constant in `engines/generate.py`, so moving it moves the policy
+   for every page at once. Measured on the CH340G golden board the longest
+   signal net runs 1395 units, i.e. *just under* the threshold, so that page
+   now carries rail flags only.
+2. **cross page** — the net's members sit on more than one sheet
+   (`DesignModel.unproven_nets`; an empty page tuple counts too, because it
+   means "seen twice, page ids unavailable" — issue #19).
+
+Everything else is read off its wires, as a schematic is meant to be read. The
+**wire still carries the net name** under `auto`: the ruling removes the visible
+decoration, never the electrical name (measured 2026-09-14 — the editor's own
+netlister reads the wire's net attribute).
+
+### Where a placed label is allowed to land
+
+Every label that *is* placed goes through `layout.clear_label_point`, which
+walks the on-wire candidates of *that* net — never off it, because a name off
+its wire is a floating marker rather than a name — and scores each by the
+clearance its predicted text box has from every foreign component box, every
+foreign wire, and every name already placed. When nothing along the route
+clears the bar, the plan records that in `notes` instead of dropping a label
+somewhere it reads as a smudge: a nameless net is legible, an unreadable one is
+worse than either.
 
 `boardwise draw --naming <strategy>` and `boardwise lint --naming <strategy>`
 select it; an unknown value falls back to the default **and the fallback is
 reported**, never silent. The gate printout and the acceptance report both name
-the strategy, and the `text` strategy carries an explicit
+the strategy, and any strategy that draws a text name carries an explicit
 "(decorative, NOT native net labels)" disclaimer.
 
-The golden replay lints clean (**0 violations**) under all four strategies. That
+The golden replay lints clean (**0 violations**) under all five strategies. That
 is a deliberate invariant, not a coincidence: the human's wire ends where the
 human's label sits, so the validator's legal terminals include the golden
 page's flag / label anchors regardless of whether the current strategy draws a
 name there. Deriving them from the plan's naming steps alone made the two
 strategies that draw no name report ten phantom `ENDPOINT_NOT_TERMINAL` rows.
+On the replay path `auto` decides **whether** a golden label is drawn; the
+human's own anchor still decides **where**, because a replay that moved the
+human's labels would not be a replay.
 
 ## Two design sources (008a added the second)
 
@@ -313,7 +357,8 @@ PYTHONPATH=src python -m boardwise.cli bridge call --action sch.place_netlabel \
 #   TIMEOUT + landedAnyway true                 -> it landed; the API just never answers
 #   TIMEOUT + landedAnyway false                -> no label path on this host
 
-# 3b. the decorative text fallback (the default `text` strategy uses this)
+# 3b. the decorative text fallback (the `text` strategy uses this; the `auto`
+#     default only places one when a net is long or cross-page)
 PYTHONPATH=src python -m boardwise.cli bridge call --action sch.place_text \
     --params '{"content": "PROBE_NET", "x": 200, "y": 80}'
 
@@ -348,9 +393,9 @@ Verification steps:
 2. Sideload connector **0.4.2**, restart the editor, open the **test** project,
    `boardwise bridge status` must say `connector: connected`.
 3. `boardwise lint --from tests/fixtures/ch340_golden.epro2` → `0 violations`.
-   (Offline, no editor — do this first.) Repeat for `--naming wire|label|none`:
-   all four must be 0, because the human's geometry does not depend on our
-   naming policy.
+   (Offline, no editor — do this first.) Repeat for
+   `--naming auto|wire|text|label|none`: all five must be 0, because the
+   human's geometry does not depend on our naming policy.
    **Task 008a adds the assembled path**, also offline:
    `boardwise lint --spec blocklib/specs/ch340g_usb_uart.json` → 0 violations,
    and `boardwise compare --spec blocklib/specs/ch340g_usb_uart.json --golden
@@ -358,7 +403,8 @@ Verification steps:
    tests/fixtures/ch340_golden.overrides.json` → `no differences`.
 4. Create a fresh page **after asking xianyuyijinban** (new rule: never create a page
    unprompted), then `boardwise draw --from tests/fixtures/ch340_golden.epro2
-   --render out.png` (default `text` strategy) — or, for the 008a acceptance,
+   --render out.png` (default `auto` strategy — signal nets are named only
+   when long or cross-page) — or, for the 008a acceptance,
    `boardwise draw --spec blocklib/specs/ch340g_usb_uart.json --golden
    tests/fixtures/ch340_golden.epro2 --render out.png`. Do **not** draw into
    P1 — the

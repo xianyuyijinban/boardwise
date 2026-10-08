@@ -12,6 +12,8 @@ import pytest
 
 from boardwise.core.model import Component, DesignModel, Net, Pin
 from boardwise.engines.generate import (
+    DEFAULT_NAMING_STRATEGY,
+    NAMING_STRATEGIES,
     _is_power_net,
     canvas_pin_offsets,
     generate_plan,
@@ -107,7 +109,34 @@ def test_empty_model_yields_note():
     assert plan.notes
 
 
-def test_golden_plan_nets_all_multi_pin_nets(golden, golden_plan):
+def test_golden_plan_wires_every_multi_pin_net(golden, golden_plan):
+    """Every multi-pin net is *wired*, under any naming policy.
+
+    The second half of what 006b asserted, and the one that is still true: a
+    net's existence is carried by its wires (the editor's netlist reads the
+    wire's own net attribute, measured 2026-09-14), never by a name.
+    """
+    plan = golden_plan
+    multi = {
+        name
+        for name, net in golden.nets.items()
+        if len(net.pins) >= 2
+    }
+    wired = {wire.net for wire in plan.wires}
+    assert multi <= wired, "every multi-pin net is wired"
+
+
+def test_golden_plan_names_only_the_nets_that_need_a_name(golden, golden_plan):
+    """134: naming is on demand, so the set of names is a *subset*, not an equality.
+
+    The CH340G golden board's longest signal net runs 1395 units, under
+    :data:`LONG_NET_LABEL_UNITS`, and it is single-page — so under ``auto`` its
+    signal nets carry no name and only the rails are flagged. The invariant that
+    matters is the one this pins: **no signal net is named outside the policy**,
+    and every rail still is.
+    """
+    from boardwise.engines.layout import _net_kind
+
     plan = golden_plan
     multi = {
         name
@@ -115,9 +144,36 @@ def test_golden_plan_nets_all_multi_pin_nets(golden, golden_plan):
         if len(net.pins) >= 2
     }
     named = {step.net for step in plan.net_names}
-    wired = {wire.net for wire in plan.wires}
-    assert named == multi, "every multi-pin net is named exactly once"
-    assert multi <= wired, "every multi-pin net is wired"
+    assert named <= multi, "a name was placed on a net that has fewer than two pins"
+    rails = {name for name in multi if _net_kind(name) in ("Ground", "Power")}
+    assert rails <= named, "every rail keeps its flag"
+    assert plan.naming_strategy == "auto"
+
+
+def test_every_golden_name_lands_on_its_wire(golden, golden_plan):
+    """A name that got placed still has to be attached — on-demand is not care-free.
+
+    The rails' flags are the names this board still places under ``auto``, and
+    each must sit on its own wire's geometry.
+    """
+    def on_wire(point, wire_points):
+        for (ax, ay), (bx, by) in zip(wire_points, wire_points[1:]):
+            if abs(ay - by) < 1e-9 and abs(point[1] - ay) < 0.51 and \
+                    min(ax, bx) - 0.51 <= point[0] <= max(ax, bx) + 0.51:
+                return True
+            if abs(ax - bx) < 1e-9 and abs(point[0] - ax) < 0.51 and \
+                    min(ay, by) - 0.51 <= point[1] <= max(ay, by) + 0.51:
+                return True
+        return False
+
+    plan = golden_plan
+    assert plan.net_names, "rails are still flagged"
+    for step in plan.net_names:
+        assert any(
+            on_wire((step.x, step.y), wire.points)
+            for wire in plan.wires
+            if wire.net == step.net
+        ), f"net {step.net} annotation at {step.x},{step.y} floats off its wire"
 
 
 # --------------------------------------------------------------------------
@@ -188,17 +244,33 @@ def test_a_negative_supply_is_not_flagged_as_a_ground():
     plan = generate_plan(model, offsets)
     named = {(step.net, step.kind) for step in plan.net_names}
     assert not any(kind == "Ground" for _, kind in named), named
-    assert ("VEE", "text") in named, f"VEE must still be named: {named}"
+    assert not any(kind == "Power" for _, kind in named), (
+        f"VEE is not a rail this flow flags: {named}"
+    )
+    # Under the 134 default (``auto``) VEE is a short single-page net and is
+    # therefore unnamed; what matters is that *no* flag of any kind hangs on it.
+    # Under ``text`` — the pre-134 policy that names everything — it is still
+    # named, just as ordinary text and never as a ground symbol.
+    under_text = generate_plan(model, offsets, strategy="text")
+    text_named = {(step.net, step.kind) for step in under_text.net_names}
+    assert ("VEE", "text") in text_named, f"VEE must still be nameable: {text_named}"
+    assert not any(kind == "Ground" for _, kind in text_named), text_named
     assert plan.violations == []
 
 
-def test_signal_nets_get_wires_and_a_decorative_name_by_default():
+def test_signal_nets_get_wires_and_no_name_by_default():
+    """134 flipped the default: a short single-page net is read off its wires.
+
+    Everything else this test pinned is still asserted below — the wire exists,
+    it is Manhattan, ports stay banned, and the plan self-checks clean. What
+    changed is the one line the ruling changed: the net no longer carries a
+    decorative text name by default, because in EasyEDA Pro a label is a network
+    port in all but name and a screenful of them buries real connections.
+    """
     plan = generate_plan(_synthetic_model(), _synthetic_offsets())
     rx_names = [n for n in plan.net_names if n.net == "RX"]
-    assert len(rx_names) == 1
-    assert rx_names[0].kind == "text", "the default strategy draws the name as text"
-    assert rx_names[0].decorative is True
-    assert plan.naming_strategy == "text"
+    assert not rx_names, "a short single-page signal net gets no name primitive"
+    assert plan.naming_strategy == "auto"
     assert not any(n.kind == "port" for n in plan.net_names), "ports are banned"
     rx_wires = [w for w in plan.wires if w.net == "RX"]
     assert rx_wires, "the signal net is wired"
@@ -206,6 +278,20 @@ def test_signal_nets_get_wires_and_a_decorative_name_by_default():
         for (x1, y1), (x2, y2) in zip(wire.points, wire.points[1:]):
             assert x1 == x2 or y1 == y2, "Manhattan only"
     assert plan.violations == []
+
+
+def test_the_text_strategy_keeps_its_decorative_name():
+    """The pre-134 behaviour survives as a switch, not as a default.
+
+    The decisive assertion is that the *name rides on the wire* too: dropping
+    the visible name under ``auto`` must not drop the electrical one.
+    """
+    plan = generate_plan(_synthetic_model(), _synthetic_offsets(), strategy="text")
+    rx_names = [n for n in plan.net_names if n.net == "RX"]
+    assert len(rx_names) == 1
+    assert rx_names[0].kind == "text", "the text strategy draws the name as text"
+    assert rx_names[0].decorative is True
+    assert [w for w in plan.wires if w.net == "RX"], "the wire still carries the net"
 
 
 def test_signal_naming_follows_the_strategy():
@@ -221,16 +307,21 @@ def test_signal_naming_follows_the_strategy():
     rx = [n for n in native.net_names if n.net == "RX"]
     assert len(rx) == 1 and rx[0].kind == "label" and not rx[0].decorative
 
+    auto = generate_plan(model, offsets, strategy="auto")
+    assert not [n for n in auto.net_names if n.net == "RX"], (
+        "a short single-page net needs no name under auto"
+    )
+
     silent = generate_plan(model, offsets, strategy="none")
     assert not [n for n in silent.net_names if n.net == "RX"]
 
     # An unknown strategy is reported as the default, never silently obeyed.
     unknown = generate_plan(model, offsets, strategy="nonsense")
-    assert unknown.naming_strategy == "text"
+    assert unknown.naming_strategy == DEFAULT_NAMING_STRATEGY == "auto"
 
 
 def test_rails_keep_their_flags_under_every_strategy():
-    for strategy in ("wire", "text", "label", "none"):
+    for strategy in NAMING_STRATEGIES:
         plan = generate_plan(_synthetic_model(), _synthetic_offsets(), strategy=strategy)
         kinds = {n.kind for n in plan.net_names}
         assert kinds <= {"Ground", "Power", "text", "label"}, (
