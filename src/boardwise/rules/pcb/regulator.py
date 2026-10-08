@@ -49,22 +49,34 @@ three-document 1.1.0 fixture) and on ``llc_board.epro2``. A pool with no
 capacitor, and a side whose pin declares no role, are both single INFO rows
 that name the designator, the side and the pool.
 
-**Which model the rule sees, and the one place it is blind.** Both callers read
-the **PCB-side** model of the backup
-(:func:`boardwise.parsers.epro2_model.build_design_model`, 131a's model — the
-one whose pins carry names). That is what makes the pin-role half work at all:
-on 毕设FOC 1.0.0 the *schematic* view resolves the same components but reports
-``U11``'s VIN as ``NET11`` and U5/U6's inputs as ``+12V``, because that export
-renumbered its rails and carries no stable net names — a rule reading it would
-find no capacitor candidate at all.
+**Which model the rule reads: ``ctx.pcb_model``, and why (131c).** The rule is
+handed :attr:`~boardwise.rules.pcb.base.PcbReviewContext.pcb_model` — the
+netlist view of **the PCB document it is running on**, built per document by
+:func:`boardwise.engines.pcbreview.run_pcb_review`. Two facts force that:
 
-The known blind spot is **document scope**: :func:`build_design_model` reads the
-backup's *first* PCB document only. On the 1.1.0 export that is ``PCB3``,
-which places none of the three regulators the schematic names, so this rule is
-silent on that file even though ``PCB1`` (105 components) carries them. That
-silence is honest — the rule has no model that places them — but it is a gap in
-what gets reviewed rather than a statement that the board has no power stage,
-and it is recorded here rather than papered over.
+* **The two views name nets differently.** 131b's callers passed
+  :func:`boardwise.cli._load_model`'s default, the *schematic* view, and that
+  is a different set of names for the same wires: on 毕设FOC 1.0.0 U5's output
+  is ``$1N66612`` in the PCB view and ``NET11`` in the schematic one, U6's is
+  ``$1N66627`` / ``NET3``. A rule asking 「which capacitors sit on U5's output
+  net」 has to ask it in the view it measures geometry in, or it measures the
+  wrong net and calls the pool empty. The real ``checkup`` reproduced exactly
+  that: U5's VOUT storage pool read *empty* (the parts are on ``$1N66612``) and
+  its VIN storage nearest read *C93 @ 521.2 mil*, a part that belongs to
+  neither reading once the names line up.
+* **The PCB view is per document.** :func:`boardwise.parsers.epro2_model.
+  build_design_model` with no document argument reads the backup's *first* PCB
+  document only. On the 1.1.0 export that is ``PCB3`` (33 components), which
+  places none of the three regulators the schematic names — so a first-document
+  model is blind to ``PCB1`` (105 components), where all three sit. The
+  runner now scopes the model to the document in hand, which is what the
+  ``pcb_model`` field exists for; a caller that hands this rule a context with
+  ``pcb_model=None`` gets silence, not a wrong answer.
+
+``ctx.model`` — the schematic view — is deliberately **not** read here. The
+established PCB rules (``pcb-decap-distance``, the IPC pair) keep it, because
+their questions were established over the schematic netlist; this one needs
+the geometry's own names.
 """
 
 from __future__ import annotations
@@ -302,10 +314,10 @@ class RegulatorCapDistance(PcbRule):
 
     **Measured, not judged.** See the module docstring: no threshold, every row
     ``INFO``. A board with no regulator in :data:`REGULATOR_CATEGORIES` produces
-    nothing at all — measured on 毕设FOC's 2026-09-17 export (``PCB3`` and
-    ``PCB2`` carry no regulator *part* at all, and ``PCB1``'s three ``U`` parts
-    are absent from every one of its three PCB documents), and on
-    ``llc_board.epro2``.
+    nothing at all — and so does a context with no ``pcb_model`` (the schematic
+    view is not a substitute, see the module docstring), or one where this PCB
+    document places no part the shelf calls a regulator (``PCB2``/``PCB3`` of
+    毕设FOC 1.0.0 carry none, and neither does ``llc_board.epro2``).
     """
 
     id = "pcb-regulator-cap-distance"
@@ -329,10 +341,11 @@ class RegulatorCapDistance(PcbRule):
         :func:`~boardwise.rules.pcb.distance._supply_nets` shares).
         """
         board = ctx.board
-        if board is None or ctx.model is None:
+        model = ctx.pcb_model
+        if board is None or model is None:
             return []
         findings: list[Finding] = []
-        for reading in _regulator_readings(ctx.model, library):
+        for reading in _regulator_readings(model, library):
             if board.component(reading.designator) is None:
                 continue  # no geometry on this PCB document: nothing to measure
             for side in (SIDE_INPUT, SIDE_OUTPUT):

@@ -38,11 +38,13 @@ from ..rules.pcb.base import PcbReviewContext, PcbRule
 from ..rules.pcb.distance import ComponentSpacing, DecapDistance
 from ..rules.pcb.ipc import TrackAmpacity, VoltageSpacing
 from ..rules.pcb.regulator import RegulatorCapDistance
+from ..rules.pcb.fbplacement import RegulatorFbPlacement
 from ..rules.base import SEVERITY_ORDER, Finding
 
 #: The rules this runner applies, in execution order. Empty in 126a (地基);
-#: 126b added the two distance rules, 126c added the two IPC-2221 ones, and
-#: 131b added the regulator input/output capacitor rule — the three L1-geometry
+#: 126b added the two distance rules, 126c added the two IPC-2221 ones, 131b
+#: added the regulator input/output capacitor rule and 131c the regulator
+#: feedback-divider rule — the four L1-geometry
 #: readers of *placement* sit together, ahead of the standards-derived
 #: readings, each batch adding to this list and to the structure gate that says
 #: "the list is the truth". The ordering is the execution order (like ``BUILTIN_RULES``), and
@@ -58,14 +60,16 @@ from ..rules.base import SEVERITY_ORDER, Finding
 #: severity sort puts them first in `findings[]` regardless of where they are
 #: declared). Nothing depends on it — no rule reads another's output — so it is
 #: a reading choice, and each batch appends rather than reordering. 131b's
-#: ``pcb-regulator-cap-distance`` is the one insert rather than an append: it
-#: sits immediately after ``pcb-decap-distance`` because it reads the same
-#: measurement primitive on a narrower object (one regulator's two supply pins,
-#: not every IC's every supply net), so a reader working down the placement
-#: questions meets the per-IC sweep first and the per-pin one immediately after.
+#: ``pcb-regulator-cap-distance`` and 131c's ``pcb-regulator-fb-placement`` are
+#: the two inserts rather than appends, and they sit together: both read the
+#: same measurement primitive on the same object (one regulator), one question
+#: further along its power path each, so a reader working down the placement
+#: questions meets the per-IC sweep first, then the per-pin supply capacitors,
+#: then the feedback network.
 BUILTIN_PCB_RULES: list[PcbRule] = [
     DecapDistance(),
     RegulatorCapDistance(),
+    RegulatorFbPlacement(),
     ComponentSpacing(),
     TrackAmpacity(),
     VoltageSpacing(),
@@ -232,11 +236,31 @@ def run_pcb_review(
     ``modules[]``) all flow into the context the rules see, so a rule can ask
     about a net or a module without re-reading anything.
 
+    **Each document also gets its own netlist view** as ``ctx.pcb_model``
+    (131c). The runner already walks one PCB document at a time, so it builds
+    :func:`~boardwise.parsers.epro2_model.build_design_model` for the document
+    in hand and hands it over beside the geometry. That is what closes the
+    first-document blind spot 131b recorded: the default
+    :func:`~boardwise.parsers.epro2_model.build_design_model` reads the backup's
+    *first* PCB document only, which on 毕设FOC 1.1.0 is ``PCB3`` — a board that
+    places none of the three regulators, while ``PCB1`` (105 components) places
+    all of them. It is also what keeps a rule from answering 「which capacitors
+    share U5's output net」 in the schematic view's net names (``NET11``) while
+    measuring the geometry of a board whose own nets are ``$1N66612``.
+
+    The two views are **not** interchangeable and neither replaces the other:
+    ``ctx.model`` stays the schematic model, which is what the established
+    decap and IPC rules read, and ``ctx.pcb_model`` is added beside it. A
+    caller that supplies its own ``rules`` and a context of its own is
+    unaffected — ``pcb_model`` defaults to ``None`` and a rule that needs it
+    treats that as 「no netlist for this document」.
+
     The rules are :data:`BUILTIN_PCB_RULES` unless the caller overrides. One
     broken rule does **not** kill the report: a rule that raises is skipped
     exactly like ``engines.review._run_rules`` does, and its id is recorded so
     ``boards[].checksRun`` never claims a check that did not run.
     """
+    from ..parsers.epro2_model import build_design_model
     from ..parsers.epru import extract_board, load_epro2_source
 
     rule_list = BUILTIN_PCB_RULES if rules is None else rules
@@ -258,6 +282,7 @@ def run_pcb_review(
             model=model,
             intent=intent,
             module_of=module_of,
+            pcb_model=build_design_model(source, document),
         )
         checks_run: list[str] = []
         board_findings: list[Finding] = []

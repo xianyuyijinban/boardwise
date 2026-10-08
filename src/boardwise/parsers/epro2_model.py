@@ -53,7 +53,15 @@ from typing import Any
 
 from ..core.model import Component, DesignModel, Net, Pin
 from .enet import optional_object, require_object
-from .epru import DEVICE_DOC_TYPE, FOOTPRINT_DOC_TYPE, SYMBOL_DOC_TYPE, Epro2Source, PcbContext
+from .epru import (
+    DEVICE_DOC_TYPE,
+    FOOTPRINT_DOC_TYPE,
+    SYMBOL_DOC_TYPE,
+    Document,
+    Epro2Source,
+    PcbContext,
+    collect_pcb_context,
+)
 
 __all__ = [
     "DeviceMeta", "device_metas", "footprint_titles", "symbol_pin_names",
@@ -232,7 +240,9 @@ def _pin_sort_key(number: str) -> tuple[int, int | float, str]:
         return (1, float("inf"), number)
 
 
-def build_design_model(source: Epro2Source) -> DesignModel:
+def build_design_model(
+    source: Epro2Source, document: "Document | None" = None
+) -> DesignModel:
     """Build the netlist view of an already-decoded :class:`Epro2Source`.
 
     Uses the cached :class:`PcbContext`, so building geometry and the model
@@ -240,11 +250,23 @@ def build_design_model(source: Epro2Source) -> DesignModel:
     keyed by designator — the same key :class:`BoardGeometry` exposes through
     ``board.component(designator)`` — so the two views cross-reference.
 
+    ``document`` scopes the read to **one** PCB document (131c). Omitting it
+    keeps the historic behaviour exactly: the backup's *first* PCB document,
+    cached on the source. So every existing caller is unaffected, and a caller
+    that wants one model per board (the PCB review runner does) says which
+    document it means. The historic default is the first-document blind spot
+    131c's ``run_pcb_review`` closes for the rules, not for the parser — see
+    :func:`boardwise.engines.pcbreview.run_pcb_review`.
+
     Returns an empty model (not an error) when the backup has no PCB
     document, so batch runs survive a backup that was saved before layout.
     """
     model = DesignModel()
-    context = source.pcb_context()
+    context = (
+        source.pcb_context()
+        if document is None
+        else collect_pcb_context(document, source.footprints(), source.stats)
+    )
     if context is None:
         model.raw["project"] = dict(source.project_meta)
         return model
