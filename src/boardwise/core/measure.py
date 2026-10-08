@@ -38,7 +38,10 @@ from .geometry import (
     NetGeometry,
     PadGeometry,
     Point,
+    TrackSegment,
+    ViaGeometry,
 )
+from .model import is_ground_net
 
 __all__ = [
     "StackupInfo",
@@ -62,6 +65,16 @@ __all__ = [
     "RegionCopper",
     "RegionCopperItem",
     "region_copper",
+    "OBTUSE_CORNER_DEG",
+    "TrackCorner",
+    "track_corner_angle",
+    "vias_in_region",
+    "via_layers",
+    "vias_on_pad",
+    "reference_layer_for",
+    "ProjectionRow",
+    "ProjectionReport",
+    "return_path_projection",
 ]
 
 
@@ -1534,4 +1547,624 @@ def region_copper(
             _intersect_box(own, bbox),
             pour_kind=pour.kind,
         )
+    return report
+# ---------------------------------------------------------------------------
+# via queries (133a)
+# ---------------------------------------------------------------------------
+#
+# :class:`~boardwise.core.geometry.ViaGeometry` already carries a via's whole
+# physical description: ``center``, ``hole_diameter``, ``via_diameter`` and
+# ``unused_inner_layers``. What no reader had was the three *questions* a via
+# gets asked once those attributes are in hand — **where is it** (a region
+# query), **which layers does it reach** (the layer-pair question the FOC
+# package needs), and **is it on that pad** (the question a thermal-pad rule
+# asks before it may call the pad's copper direct-connected).
+#
+# These answer only those. No size is graded, no via is called good or bad, and
+# the unit discipline is the module's: mils in, mils out.
+
+
+def via_layers(board: BoardGeometry, via: ViaGeometry) -> list[int]:
+    """Copper layers the via's barrel and annular rings physically occupy.
+
+    Every copper layer of the board's stackup (:func:`read_stackup`) **minus**
+    ``unused_inner_layers`` — a blind or semi-blind via states the inner layers
+    it does *not* reach, and those are subtracted rather than read as absent
+    copper. The result is sorted.
+
+    The reading is delegated to :func:`_element_layers`, the same derivation
+    the clearance engine and :func:`region_copper` use for a via, so the three
+    can never disagree about which layers a via touches. An empty result means
+    the board names no copper layer at all (or the via is inside a
+    :data:`_UNKNOWN_LAYER`) — unclassifiable copper, reported as such.
+    """
+    return sorted(_element_layers(board, via, via=True))
+
+
+def vias_in_region(board: BoardGeometry, bbox: BBox) -> list[ViaGeometry]:
+    """Every via whose body lies inside ``bbox``, in board order.
+
+    The region test is the one :func:`region_copper` uses for a via — the via's
+    **annular disc** (inflated by ``via_diameter / 2``) against the box, via
+    :func:`_segment_crosses_box` — so a via that is only partly in the region is
+    found, and one that merely passes the corner is over-accepted in the
+    direction :func:`region_copper` documents.
+
+    Net-blind on purpose: this answers 「is there any via here」, which is the
+    question a rule asks *before* it knows which net it is looking at.
+    """
+    out: list[ViaGeometry] = []
+    for via in board.vias:
+        if _segment_crosses_box(
+            via.center, via.center, bbox, max(via.via_diameter, 0.0) / 2.0
+        ):
+            out.append(via)
+    return out
+
+
+def vias_on_pad(board: BoardGeometry, pad: PadGeometry) -> list[ViaGeometry]:
+    """Vias whose **centre** falls inside ``pad``'s corner rectangle.
+
+    The rectangle is :func:`pad_corners`' — the pad's own bounding rotated
+    rectangle — so a via centred in the pad's body is found and one merely
+    straddling an edge is not. Only the centre is tested: a via half on and
+    half off a pad is one copper feature spanning a boundary, and which side it
+    「belongs to」 is a rule's call, so the number reported here is the share
+    whose centre is unambiguously on the pad.
+    """
+    box = BBox.from_points(pad_corners(pad))
+    if box is None:
+        return []
+    return [
+        via
+        for via in board.vias
+        if box.min_x - 1e-9 <= via.x <= box.max_x + 1e-9
+        and box.min_y - 1e-9 <= via.y <= box.max_y + 1e-9
+    ]
+
+
+# ---------------------------------------------------------------------------
+# track corner angle (133a)
+# ---------------------------------------------------------------------------
+
+
+#: Folds whose interior angle is **at or above** this are left out of
+#: :func:`track_corner_angle`'s list; anything below it is reported.
+#:
+#: It is a **geometric constant of the measurement, not a verdict**. TI
+#: SLVA959B section 4 calls a right-angle bend on a gate or switching node worth
+#: looking at, and 135 is the round number just inside 「visibly not sharp」; but
+#: what is *acceptable* is 133b's rule (R13) to decide, and it may read the
+#: reported angle and grade it differently. What the constant must never become
+#: is a rule smuggled into the primitive.
+#:
+#: The angle is the **interior** one, so a straight continuation reads 180 and
+#: falls outside the window by construction — there is no separate collinear test
+#: to forget.
+OBTUSE_CORNER_DEG = 135.0
+
+#: Co-linearity tolerance for the straight-continuation test, in degrees, and the
+#: same tolerance as a **boundary guard** on the corner window. A fold the user
+#: drew at exactly 135 degrees comes back as ``134.99999999999955`` — the
+#: ``acos`` of a dot product one ULP short of exact — so a bare
+#: ``angle < 135.0`` comparison published 148 such folds on 毕设FOC 1.0.0 as
+#: 「blunter than 135」 when they are the 135-degree bends the constant excludes.
+#: The guard reads 「near the threshold」 as 「at the threshold」 and leaves the
+#: fold out, which is the conservative direction: a fold that might be the
+#: excluded 135 is not reported, and the constant still excludes it.
+_CORNER_WINDOW_EPS_DEG = 1e-9
+
+
+def _corner_angle_deg(prev_end: Point, joint: Point, next_end: Point) -> float | None:
+    """Interior angle of the fold ``prev_end -> joint -> next_end``, in degrees.
+
+    The angle **between the two segments as drawn from the joint**, which is the
+    corner's interior angle: collinear continuation gives 180, a right-angle fold
+    90, a hairpin (back on itself) 0. ``None`` when a segment has zero length —
+    a degenerate segment has no direction, and inventing one would be a guess.
+    """
+    ax = prev_end.x - joint.x
+    ay = prev_end.y - joint.y
+    bx = next_end.x - joint.x
+    by = next_end.y - joint.y
+    la = math.hypot(ax, ay)
+    lb = math.hypot(bx, by)
+    if la == 0.0 or lb == 0.0:
+        return None
+    cos = (ax * bx + ay * by) / (la * lb)
+    return math.degrees(math.acos(max(-1.0, min(1.0, cos))))
+
+
+def _in_corner_window(angle_deg: float) -> bool:
+    """Whether a fold is sharper than :data:`OBTUSE_CORNER_DEG` and is reported.
+
+    Two things live in this one comparison. The threshold is the **geometric
+    constant**, not a verdict — see :data:`OBTUSE_CORNER_DEG`. The boundary
+    guard is what keeps it from being read as 「135 minus a rounding error」:
+    a fold drawn at exactly 135° comes back as 134.99999999999955 from the
+    ``acos`` of a dot product one ULP short of exact, and a bare ``< 135.0``
+    comparison would report all 148 of them on 毕设FOC 1.0.0 as bends. A
+    straight continuation reads 180 and falls outside the window by
+    construction, so no separate collinear test is needed — see
+    :data:`_CORNER_WINDOW_EPS_DEG`.
+    """
+    return angle_deg < OBTUSE_CORNER_DEG - _CORNER_WINDOW_EPS_DEG
+
+
+@dataclass
+class TrackCorner:
+    """One fold between two same-net, same-layer track segments.
+
+    ``angle_deg`` is the **interior** angle (see :func:`_corner_angle_deg`):
+    180 for a straight continuation, 90 for a right-angle bend. The list
+    :func:`track_corner_angle` returns holds only folds *below*
+    :data:`OBTUSE_CORNER_DEG`, so a caller reading the list never has to
+    re-filter — while the angle itself is still reported verbatim, which is what
+    lets 133b's R13 grade the numbers it is given.
+    """
+
+    #: Where the two segments meet — the shared endpoint.
+    position: Point = Point(0.0, 0.0)
+    #: Interior angle in degrees (0 hairpin, 90 right angle, 180 straight).
+    angle_deg: float = 0.0
+    #: The net both segments carry. ``None`` only when the board itself gives a
+    #: track no net and the caller asked for the whole board; a same-net pair is
+    #: a precondition, so a pair with a netless segment is never reported.
+    net: str | None = None
+    #: The layer both segments are on; ``None`` when the file states none.
+    layer_id: int | None = None
+    #: The two segment record ids, sorted, so the pair is order-independent.
+    track_a: str = ""
+    track_b: str = ""
+
+
+def _endpoint_key(point: Point, eps: float = 1e-6) -> tuple[int, int]:
+    """Quantised endpoint key, so floating-point twins match.
+
+    The parser's own arithmetic leaves two tracks that mean to share an endpoint
+    differing in the last bits; an exact float key would miss every real fold and
+    report an empty board. Rounding to a thousandth-of-a-mil grid is finer than
+    any junction tolerance an editor holds and coarse enough to absorb the noise
+    — the same coarse-then-exact shape 125b uses throughout.
+    """
+    return (round(point.x / eps), round(point.y / eps))
+
+
+def track_corner_angle(
+    board: BoardGeometry, net: str | None = None
+) -> list[TrackCorner]:
+    """Report every non-obtuse fold in the board's (or one net's) routing.
+
+    A **fold** is a pair of track segments that share an endpoint, carry the same
+    net, and sit on the same layer. All three are preconditions, which is what
+    keeps two unrelated meetings out of the list: a top track and a bottom track
+    crossing in plan view never pair (different layer), and two tracks of
+    different nets never pair (a same-layer crossing is a DRC matter, not a
+    bend).
+
+    Of those, the folds whose interior angle is **below
+    :data:`OBTUSE_CORNER_DEG`** are reported: a 90° bend and a sharp 45° bend
+    appear; a straight continuation (180°) and a gentle 140° fold do not. The
+    threshold is a geometric constant, not a verdict — see its docstring.
+
+    ``net=None`` sweeps the whole board; a net name narrows to that net's
+    tracks. A pair where **either** segment carries no net is skipped, since
+    「the same net as what」 has no answer; an unknown net name yields an empty
+    list, the module's absent-copper discipline.
+
+    Each pair is reported **once** however many endpoints it shares — two tracks
+    that meet at both ends are one fold, not two.
+
+    **Performance.** The pairing is index-based, not quadratic: segments are
+    bucketed by ``(net, layer, quantised endpoint)`` in one pass, and only
+    buckets holding more than one segment produce pairs. Measured on 毕设FOC
+    1.0.0 (726 tracks, 850 distinct endpoints) at a few milliseconds.
+    """
+    tracks = board.tracks if net is None else board.net(net).tracks
+    buckets: dict[
+        tuple[str | None, int | None, tuple[int, int]], list[tuple[TrackSegment, bool]]
+    ] = {}
+    for track in tracks:
+        for at_start, point in ((True, track.start), (False, track.end)):
+            key = (track.net, track.layer_id, _endpoint_key(point))
+            buckets.setdefault(key, []).append((track, at_start))
+
+    corners: list[TrackCorner] = []
+    seen: set[tuple[str, str]] = set()
+    for (net_name, layer_id, _point), members in buckets.items():
+        if len(members) < 2 or net_name is None:
+            continue
+        for i, (track_a, a_at_start) in enumerate(members):
+            joint = track_a.start if a_at_start else track_a.end
+            far_a = track_a.end if a_at_start else track_a.start
+            for track_b, b_at_start in members[i + 1 :]:
+                if track_a.id <= track_b.id:
+                    pair = (track_a.id, track_b.id)
+                else:
+                    pair = (track_b.id, track_a.id)
+                if pair in seen:
+                    continue
+                far_b = track_b.end if b_at_start else track_b.start
+                angle = _corner_angle_deg(far_a, joint, far_b)
+                if angle is None:
+                    continue
+                seen.add(pair)
+                if not _in_corner_window(angle):
+                    continue
+                corners.append(
+                    TrackCorner(
+                        position=joint,
+                        angle_deg=angle,
+                        net=net_name,
+                        layer_id=layer_id,
+                        track_a=pair[0],
+                        track_b=pair[1],
+                    )
+                )
+    # Deterministic order, so a report is diffable between runs: net, layer,
+    # position, then the two ids as the tiebreak.
+    corners.sort(
+        key=lambda corner: (
+            corner.net or "",
+            -1 if corner.layer_id is None else corner.layer_id,
+            round(corner.position.x, 6),
+            round(corner.position.y, 6),
+            corner.track_a,
+            corner.track_b,
+        )
+    )
+    return corners
+
+
+# ---------------------------------------------------------------------------
+# return path projection (133a)
+# ---------------------------------------------------------------------------
+#
+# 岳 2026-10-08 ruling: on a multi-layer board the return path is analysed by
+# **projection** — a trace running on layer L wants a continuous reference
+# plane on the layer physically adjacent to it, normally the nearest ground
+# pour. This section produces that analysis as **numbers only**: for each trace
+# it finds the adjacent reference layer, projects the trace onto it, and reports
+# how much ground-class pour copper covers the projected footprint. Whether the
+# reference layer *ought* to be a ground plane belongs to the rule layer and to
+# the model; nothing here says so.
+
+
+def _copper_layer_order(board: BoardGeometry) -> list[int]:
+    """Copper layer ids in **physical** order (top of the stackup first).
+
+    :func:`read_stackup` sorts its copper by ``layer_id``, and that is right for
+    a *set* of layers but wrong for anything that asks about **neighbours**:
+    EasyEDA Pro's ids are not an ordering. 毕设FOC 1.0.0's four copper layers
+    carry ids 1 / 15 / 16 / 2 at ``z_index`` 1000 / 1002 / 1004 / 9000, so the
+    physical order is 1, 15, 16, 2 — a signal on the top layer has Inner1
+    directly beneath it, which is the whole reason a return plane lives there,
+    and reading ids instead would have it sit 「below」 the bottom layer.
+
+    The order therefore comes from ``LAYER_PHYS`` (``z_index`` ascending) when
+    the board has one, and falls back to :func:`read_stackup`'s id order for a
+    hand-built board or a file old enough to lack the table — the same fallback
+    chain 125a established, and the one that keeps a two-layer synthetic board
+    answering ``Top -> Bottom``.
+    """
+    ordered: list[int] = []
+    seen: set[int] = set()
+    for entry in sorted(board.stackup, key=lambda item: item.z_index):
+        info = board.layers.get(entry.layer_id)
+        if info is None or not info.is_copper or entry.layer_id in seen:
+            continue
+        seen.add(entry.layer_id)
+        ordered.append(entry.layer_id)
+    if ordered:
+        return ordered
+    return [info.layer_id for info in read_stackup(board).copper_layers]
+
+
+def reference_layer_for(board: BoardGeometry, layer_id: int | None) -> int | None:
+    """The adjacent reference layer for ``layer_id``, **below it preferred**.
+
+    「Adjacent」 means neighbouring in the physical stackup's copper order, not
+    adjacent in layer *id* — see :func:`_copper_layer_order` for why the two are
+    different on a real board. Measured anchors:
+
+    * 毕设FOC 1.0.0 (copper order 1 / 15 / 16 / 2): a top-layer signal (id 1)
+      references **Inner1 (id 15)**, and Inner2 (16) references Inner1 (15) —
+      each layer naming the plane physically beneath it, which is where a
+      return current runs.
+    * llc (copper order 1 / 2): a top-layer signal (id 1) has nothing beneath it
+      and references the **bottom layer (id 2)** — the 向下优先 rule falling
+      through to 向上 when there is no 下.
+
+    A layer id the stackup does not name, or the board's only copper layer, has
+    no reference and yields ``None``: nothing to project onto is absent
+    information, never a guess. A whole-board sweep therefore produces **no**
+    single answer, which is why :class:`ProjectionReport` leaves
+    :attr:`ProjectionReport.reference_layer_id` at ``None`` unless the caller
+    named one layer.
+    """
+    order = _copper_layer_order(board)
+    if layer_id is None or layer_id not in order:
+        return None
+    index = order.index(layer_id)
+    below = [lid for lid in order[:index] if lid != layer_id]
+    if below:
+        return below[-1]
+    above = [lid for lid in order[index + 1 :]]
+    return above[0] if above else None
+
+
+def _ground_pours_on(
+    board: BoardGeometry, layer_id: int
+) -> list[tuple[str, str, list[Point], BBox | None]]:
+    """Ground-class pour polygons on one layer, as ``(id, net, points, bbox)``.
+
+    「Ground class」 is the net-name sieve :func:`is_ground_net` provides
+    (``GND`` / ``AGND`` / ``PGND`` / ``VSS`` / ...). That sieve is a **name**,
+    and its own docstring is explicit that it is a candidate rather than a proof
+    — this module reads it as 「the nets this project calls ground」 and does no
+    more. A pour with no net is not counted; a plane on a net this project never
+    named ground is not counted, and that gap is a naming gap, not a verdict.
+
+    Only ``fill`` / ``poly`` / ``pour`` contribute: ``poured`` is the pour
+    *result*, whose points the parser leaves empty on purpose (125b), so it can
+    carry no polygon.
+
+    The bbox rides along because :func:`return_path_projection` asks the cheap
+    question first: a pour whose own bbox does not meet a footprint cannot put
+    copper inside it, whatever the corners say.
+    """
+    out: list[tuple[str, str, list[Point], BBox | None]] = []
+    for pour in board.pours:
+        if pour.kind not in ("fill", "poly", "pour") or len(pour.points) < 3:
+            continue
+        if pour.layer_id != layer_id or not pour.net or not is_ground_net(pour.net):
+            continue
+        out.append((pour.id, pour.net, pour.points, pour.bbox))
+    return out
+
+
+def _ground_corner_covered(
+    ground_pours: list[tuple[str, str, list[Point], BBox | None]], corner: Point
+) -> bool:
+    """Does any ground pour polygon contain this corner point?"""
+    return any(_point_in_polygon(corner, points) for _, _, points, _ in ground_pours)
+
+
+@dataclass
+class ProjectionRow:
+    """One trace's projection onto its adjacent reference layer.
+
+    ``projected`` is the trace's own footprint moved onto the reference layer.
+    A projection **keeps its XY coordinates** — the shape is unchanged, only
+    the layer it is read on changes — so it is the trace's two endpoints and the
+    numbers can be checked against the board by hand.
+
+    ``ground_pour_count`` / ``ground_items`` / ``corner_cover_mask`` say what was
+    found under it, and :attr:`cover_status` is the classification of that
+    finding. No field says whether the reference layer *ought* to be a plane —
+    that is the rule layer's call (岳 2026-10-08 裁定③ asks for the projection
+    analysis; it does not ask this module to grade it).
+    """
+
+    #: The trace's record id, so a row can be traced back to the copper.
+    track_id: str = ""
+    #: The trace's net, as the document writes it (``None`` when unstated).
+    net: str | None = None
+    #: The copper layer the trace runs on.
+    layer_id: int | None = None
+    #: The adjacent reference layer chosen by :func:`reference_layer_for`.
+    #: ``None`` when the trace's layer has no neighbour — nothing to project
+    #: onto, which is a fact about the stackup and not about the copper.
+    reference_layer_id: int | None = None
+    #: The trace's XY footprint projected onto ``reference_layer_id``.
+    projected: list[Point] = field(default_factory=list)
+    #: How much of the footprint the reference layer's ground copper covers:
+    #: ``"covered"`` (every corner over ground), ``"partial"`` (some corners,
+    #: not all) or ``"none"`` (no ground copper under the footprint at all).
+    cover_status: str = "none"
+    #: How many ground pours of the reference layer were found under this
+    #: footprint, all of them by name (:func:`is_ground_net`).
+    ground_pour_count: int = 0
+    #: Ids of the ground pours found under the footprint (131f's ids).
+    ground_items: list[str] = field(default_factory=list)
+    #: One flag per footprint corner, in the order
+    #: ``(min_x,min_y), (max_x,min_y), (max_x,max_y), (min_x,max_y)``.
+    #: It is the **evidence** behind :attr:`cover_status`, so a reader can see
+    #: 「3 of 4 corners over ground」 rather than a bare word.
+    corner_cover_mask: list[bool] = field(default_factory=list)
+
+
+@dataclass
+class ProjectionReport:
+    """Every traced segment's return-path projection, for one net or the board.
+
+    ``rows`` holds one :class:`ProjectionRow` per trace segment considered, in
+    board order, with :attr:`ProjectionRow.cover_status` aggregating into
+    :attr:`cover_counts` so a caller can quote 「726 rows, 41 not covered」
+    without walking the list. An unknown net yields no rows and all-zero counts
+    — absent copper, never an exception.
+    """
+
+    #: The net queried; ``None`` for the whole-board sweep.
+    net: str | None = None
+    #: The reference layer, when the caller named ``layer`` explicitly — a whole
+    #: board spanning several layers has no single reference, and leaving it
+    #: ``None`` says so rather than picking one.
+    reference_layer_id: int | None = None
+    rows: list[ProjectionRow] = field(default_factory=list)
+    #: ``{status: row count}`` over :attr:`rows`, for the summary a rule prints.
+    cover_counts: dict[str, int] = field(default_factory=dict)
+
+    @property
+    def row_count(self) -> int:
+        """How many traces were projected."""
+        return len(self.rows)
+
+
+def _footprint_corners(box: BBox) -> list[Point]:
+    """The four corners of ``box``, in a fixed order (so masks are comparable)."""
+    return [
+        Point(box.min_x, box.min_y),
+        Point(box.max_x, box.min_y),
+        Point(box.max_x, box.max_y),
+        Point(box.min_x, box.max_y),
+    ]
+
+
+def return_path_projection(
+    board: BoardGeometry,
+    net: str | None = None,
+    *,
+    layer: int | None = None,
+    track_id: str | None = None,
+) -> ProjectionReport:
+    """Project traces onto their adjacent reference layer and report coverage.
+
+    岳 2026-10-08 ruling: on a multi-layer board the return path is analysed by
+    **projection**. For each trace segment of the queried net (or of the whole
+    board):
+
+    1. read the trace's copper layer;
+    2. find its **adjacent reference layer** — the nearest layer in the physical
+       stackup, below preferred (:func:`reference_layer_for`);
+    3. project the trace's XY footprint onto that reference layer (a projection
+       keeps its coordinates; only the layer it is read on changes);
+    4. look at :func:`region_copper`'s inventory of that footprint on the
+       reference layer, keep the **ground-class pour** copper among it
+       (``GND`` / ``AGND`` / ``PGND`` / ``VSS`` / ... by name,
+       :func:`is_ground_net`), and classify the coverage.
+
+    ``net`` narrows to one net, ``layer`` to one copper layer, and ``track_id``
+    to one segment; all three default to 「everything」. An unknown net yields
+    ``rows == []``.
+
+    **Coverage classes, and what they are not.**
+
+    * ``"covered"`` — every corner of the projected footprint lies inside a
+      ground pour on the reference layer.
+    * ``"partial"`` — some corners do. This is the fragmenting case a
+      projection analysis exists to surface: a plane that stops short of part of
+      the trace's footprint.
+    * ``"none"`` — no ground pour under the footprint at all.
+    * ``"no_reference_layer"`` — the trace's layer has no neighbour, so there
+      was nothing to project onto. That is a statement about the stackup.
+
+    The classification is **corner-sampled**, which is a measurement, not a
+    topology proof: it says whether the reference layer's ground copper reaches
+    each corner of the projected footprint, and :attr:`ProjectionRow.
+    corner_cover_mask` publishes the four flags so a reader can see the
+    evidence. It does not claim to know whether the copper in between is
+    continuous — the model carries pour *regions*, not poured results (125b),
+    so continuity is not derivable here. Both are the reason the answer is
+    a coverage class and never a pass or a fail.
+
+    **Performance.** :func:`region_copper` is a single linear pass per query,
+    and the ground inventory is built once per layer rather than per row.
+    """
+    tracks = board.tracks if net is None else board.net(net).tracks
+    if track_id is not None:
+        tracks = [t for t in tracks if t.id == track_id]
+    if layer is not None:
+        tracks = [t for t in tracks if t.layer_id == layer]
+
+    report = ProjectionReport(net=net, reference_layer_id=layer)
+    if layer is not None:
+        report.reference_layer_id = reference_layer_for(board, layer)
+
+    ground_cache: dict[int, list[tuple[str, str, list[Point], BBox | None]]] = {}
+
+    def ground_on(layer_id: int) -> list[tuple[str, str, list[Point], BBox | None]]:
+        if layer_id not in ground_cache:
+            ground_cache[layer_id] = _ground_pours_on(board, layer_id)
+        return ground_cache[layer_id]
+
+    for track in tracks:
+        reference_layer_id = reference_layer_for(board, track.layer_id)
+        projected = [track.start, track.end]
+        if reference_layer_id is None:
+            report.rows.append(
+                ProjectionRow(
+                    track_id=track.id,
+                    net=track.net,
+                    layer_id=track.layer_id,
+                    reference_layer_id=None,
+                    projected=projected,
+                    cover_status="no_reference_layer",
+                    ground_pour_count=0,
+                    ground_items=[],
+                    corner_cover_mask=[],
+                )
+            )
+            continue
+
+        # The footprint is the segment inflated by half its width: a return
+        # current runs *under the copper*, not under the centreline.
+        radius = max(track.width, 0.0) / 2.0
+        box = BBox(
+            min(track.start.x, track.end.x) - radius,
+            min(track.start.y, track.end.y) - radius,
+            max(track.start.x, track.end.x) + radius,
+            max(track.start.y, track.end.y) + radius,
+        )
+        corners = _footprint_corners(box)
+        ground_pours = ground_on(reference_layer_id)
+        # Cheap question first: with no ground pour whose own bbox even meets
+        # the footprint, there is nothing for a corner to be inside of, so both
+        # the coverage test and the inventory are provably empty and the full
+        # board walk is skipped. Same answer, and the reason is a fact about the
+        # geometry rather than an assumption about the result.
+        if not any(
+            pour_box is not None and _boxes_overlap(pour_box, box)
+            for _pid, _net, _points, pour_box in ground_pours
+        ):
+            report.rows.append(
+                ProjectionRow(
+                    track_id=track.id,
+                    net=track.net,
+                    layer_id=track.layer_id,
+                    reference_layer_id=reference_layer_id,
+                    projected=projected,
+                    cover_status="none",
+                    ground_pour_count=0,
+                    ground_items=[],
+                    corner_cover_mask=[False] * len(corners),
+                )
+            )
+            continue
+
+        mask = [_ground_corner_covered(ground_pours, corner) for corner in corners]
+        found = sum(1 for flag in mask if flag)
+        status = "none" if found == 0 else ("covered" if found == len(corners) else "partial")
+
+        # 131f's inventory says what copper is in the footprint, by id; the
+        # corner mask says whether the *ground* copper reaches all four corners.
+        # Both are reported because neither alone is the answer: an id proves the
+        # copper is there, the mask proves it spans the footprint.
+        region = region_copper(board, box, [reference_layer_id])
+        ground_items = sorted(
+            {
+                item.element_id
+                for item in region.layers_by_id.get(reference_layer_id, [])
+                if item.net is not None and is_ground_net(item.net)
+            }
+        )
+
+        report.rows.append(
+            ProjectionRow(
+                track_id=track.id,
+                net=track.net,
+                layer_id=track.layer_id,
+                reference_layer_id=reference_layer_id,
+                projected=projected,
+                cover_status=status,
+                ground_pour_count=len(ground_items),
+                ground_items=ground_items,
+                corner_cover_mask=mask,
+            )
+        )
+
+    counts: dict[str, int] = {}
+    for row in report.rows:
+        counts[row.cover_status] = counts.get(row.cover_status, 0) + 1
+    report.cover_counts = counts
     return report
