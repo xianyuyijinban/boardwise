@@ -28,11 +28,18 @@ parsed quantity.
 
 Left deliberately empty, because the source data is not retained:
 
-- ``Pin.name`` — pin *names* live in SYMBOL documents, which are dropped at
-  parse time to keep memory proportional to useful data. Only pin *numbers*
-  exist here. ``.enet``-sourced models do carry names.
 - ``Component.role`` / ``Component.block`` — stage-2 intent metadata, still
   unpopulated everywhere.
+
+``Pin.name`` was empty for every ``.epro2`` board until 131a and is now filled.
+The names live in SYMBOL documents, which :func:`split_documents` used to drop;
+they are kept again and joined through the library — ``placement -> DEVICE ->
+DEVICE["Symbol"] -> SYMBOL`` — because the PCB document names no symbol itself
+(measured: a placement's attributes are ``Channel ID`` / ``Group ID`` /
+``Unique ID`` / ``Value`` and nothing else). Measured coverage after the join:
+**122/122, 33/33, 49/49 and 47/47** placements across the four board fixtures,
+and 0 pins named on a backup that carries no SYMBOL documents. This is what
+revives ``core.architecture._SUPPLY_PIN``, which had been matching nothing here.
 
 The 4/47 components without a footprint name are the same 4 that carry no
 ``ATTR key="Footprint"``: they have no pad geometry in the backup either, so
@@ -46,9 +53,18 @@ from typing import Any
 
 from ..core.model import Component, DesignModel, Net, Pin
 from .enet import optional_object, require_object
-from .epru import DEVICE_DOC_TYPE, FOOTPRINT_DOC_TYPE, Epro2Source, PcbContext
+from .epru import DEVICE_DOC_TYPE, FOOTPRINT_DOC_TYPE, SYMBOL_DOC_TYPE, Epro2Source, PcbContext
 
-__all__ = ["DeviceMeta", "device_metas", "footprint_titles", "build_design_model"]
+__all__ = [
+    "DeviceMeta", "device_metas", "footprint_titles", "symbol_pin_names",
+    "build_design_model",
+]
+
+#: The three ATTR keys that describe one SYMBOL pin. Same three the schematic
+#: parser reads (`parsers/schematic.py::_PIN_ATTR_KEYS`); restated here because
+#: this module walks SYMBOL records itself and must not import the schematic
+#: parser to learn them.
+_PIN_ATTR_KEYS = frozenset({"Pin Number", "Pin Name"})
 
 
 #: DEVICE attribute keys mapped onto the first-class Component fields. The
@@ -59,6 +75,11 @@ ATTR_LCSC = "Supplier Part"
 ATTR_MANUFACTURER = "Manufacturer"
 ATTR_MPN = "Manufacturer Part"
 ATTR_DATASHEET = "Datasheet"
+
+#: The DEVICE attribute pointing at the SYMBOL document that names this
+#: device's pins. It is the PCB-side model's **only** route to a pin name: a
+# placement's own attributes carry no symbol pointer (131a).
+ATTR_SYMBOL = "Symbol"
 
 #: EasyEDA writes the string "null" where a library attribute is unset.
 _NULL_LITERALS = {"", "null", "NULL", "None", "-"}
@@ -124,6 +145,85 @@ def footprint_titles(source: Epro2Source) -> dict[str, str]:
     return titles
 
 
+def symbol_pin_names(source: Epro2Source) -> dict[str, dict[str, str]]:
+    """SYMBOL document uuid -> ``pin number -> Pin Name`` (131a).
+
+    This is the **only** place an ``.epro2`` backup writes a pin's name, and
+    :func:`build_design_model` joins through the library to fill ``Pin.name`` on
+    the PCB side. Measured on the fixtures: a placement's own PCB attributes
+    carry ``Channel ID`` / ``Group ID`` / ``Unique ID`` / ``Value`` and **no**
+    ``Symbol`` pointer, so the only route is ``placement ->
+    DEVICE (placement.attrs["Device"]) -> DEVICE.attributes["Symbol"] ->
+    SYMBOL`` — resolved for 122/122, 33/33, 49/49 and 47/47 placements on the
+    four board fixtures.
+
+    Two phases, and the order is the point — the same displacement the
+    schematic parser documents (``parsers/schematic.py::_commit_symbol``): a
+    3.2.186 incremental save appends a changed pin's attributes to the **end**
+    of the SYMBOL document, so a pin's attributes are filed by the ``parentId``
+    that names it and never by stream position. Every ``PIN`` row is collected
+    first, under **both** of its spellings (its own record ``id`` and the
+    synthesised ``e<zIndex>`` ref — a V3 file uses either, and on the golden
+    board they differ for 12 pin rows), then the attributes are attributed in
+    stream order, falling back to the open run only when the ``parentId`` names
+    nothing this walk indexed. A field is never overwritten, so nothing already
+    placed moves.
+
+    Returns empty for a backup carrying no SYMBOL documents rather than raising:
+    names are *extra* evidence, and a board saved before they existed still
+    parses.
+    """
+    names: dict[str, dict[str, str]] = {}
+    for document in source.documents_of_type(SYMBOL_DOC_TYPE):
+        uuid = document.uuid
+        if not uuid:
+            continue
+        # pin record id -> [number, name]; each PIN is indexed under both
+        # spellings, pointing at the same mutable pair.
+        slots: dict[str, list[str]] = {}
+        indexed: list[list[str]] = []
+        for record in document.records:
+            body = record.body
+            if body is None or record.type != "PIN":
+                continue
+            pair = ["", ""]
+            indexed.append(pair)
+            if record.id:
+                slots.setdefault(str(record.id), pair)
+            slots.setdefault(f"e{body.get('zIndex')}", pair)
+        if not indexed:
+            continue
+        open_slot: list[str] | None = None
+        for record in document.records:
+            body = record.body
+            if body is None:
+                continue
+            if record.type == "PIN":
+                ref = f"e{body.get('zIndex')}"
+                open_slot = slots.get(str(record.id or "")) or slots.get(ref)
+                continue
+            if record.type != "ATTR":
+                continue
+            key = str(body.get("key") or "")
+            if key not in _PIN_ATTR_KEYS:
+                continue
+            value = str(body.get("value") or "").strip()
+            if not value or value == "null":
+                continue
+            index = 0 if key == "Pin Number" else 1
+            slot = slots.get(str(body.get("parentId") or ""))
+            if slot is None:
+                slot = open_slot
+            # First writer wins: a duplicate attribute can only land on a pin
+            # that has none, so nothing already placed is displaced.
+            if slot is not None and not slot[index]:
+                slot[index] = value
+        table = {number: name for number, name in indexed if number and name}
+        if table:
+            names[uuid] = table
+    return names
+
+
 def _pin_sort_key(number: str) -> tuple[int, int | float, str]:
     """Sort pin numbers naturally: ``"2"`` before ``"10"``, letters last."""
     try:
@@ -151,7 +251,8 @@ def build_design_model(source: Epro2Source) -> DesignModel:
 
     devices = device_metas(source)
     footprints = footprint_titles(source)
-    pins_by_component = _group_pins(context)
+    symbols = symbol_pin_names(source)
+    pins_by_component = _group_pins(context, _pin_names_of(context, devices, symbols))
 
     for placement in context.placements:
         designator = placement.designator or placement.id
@@ -198,16 +299,53 @@ def build_design_model(source: Epro2Source) -> DesignModel:
     return model
 
 
-def _group_pins(context: PcbContext) -> dict[str, list[Pin]]:
+def _pin_names_of(
+    context: PcbContext,
+    devices: dict[str, DeviceMeta],
+    symbols: dict[str, dict[str, str]],
+) -> dict[str, dict[str, str]]:
+    """Placement id -> ``pin number -> Pin Name``, joined through the library.
+
+    The join is ``placement -> DEVICE -> DEVICE["Symbol"] -> SYMBOL`` because
+    the PCB document itself names no symbol (measured: placement attrs are
+    ``Channel ID`` / ``Group ID`` / ``Unique ID`` / ``Value`` only). A placement
+    whose device, whose ``Symbol`` attribute or whose symbol document is missing
+    contributes **no** names — the pins keep ``name=""`` and every consumer
+    already treats that as "not measured" rather than as "no name".
+
+    Only *named* pins are listed. A symbol pin the library left unnamed is not
+    an entry, so a lookup can never mistake the absence of an entry for a name
+    that was read and found empty.
+    """
+    names: dict[str, dict[str, str]] = {}
+    for placement in context.placements:
+        device_uuid = context.device_ids.get(placement.id)
+        device = devices.get(device_uuid) if device_uuid else None
+        if device is None:
+            continue
+        symbol_uuid = _clean(device.attributes.get(ATTR_SYMBOL))
+        if not symbol_uuid:
+            continue
+        table = symbols.get(symbol_uuid)
+        if table:
+            names[placement.id] = table
+    return names
+
+
+def _group_pins(
+    context: PcbContext, names_by_component: dict[str, dict[str, str]] | None = None
+) -> dict[str, list[Pin]]:
     """Group pins by component id, from footprint pads then ``PAD_NET``.
 
     Pads come first because they are the physical pins; ``PAD_NET`` records
     that name a pin no pad instantiated still describe real connectivity, so
-    they are appended rather than dropped. Pin names stay empty (see module
-    docstring); unconnected pins get ``net=None``.
+    they are appended rather than dropped. ``names_by_component`` supplies the
+    ``Pin Name`` the SYMBOL document declares (131a); a pin the library leaves
+    unnamed keeps ``name=""``. Unconnected pins get ``net=None``.
     """
     pins: dict[str, list[Pin]] = {}
     seen: dict[str, set[str]] = {}
+    names = names_by_component or {}
 
     def add(component_id: str, number: str, net: str | None) -> None:
         if not number:
@@ -222,7 +360,13 @@ def _group_pins(context: PcbContext) -> dict[str, list[Pin]]:
                         existing.net = net
             return
         known.add(number)
-        bucket.append(Pin(number=number, name="", net=net))
+        bucket.append(
+            Pin(
+                number=number,
+                name=names.get(component_id, {}).get(number, ""),
+                net=net,
+            )
+        )
 
     for pad in context.pads:
         if pad.component_id:
