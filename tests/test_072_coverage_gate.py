@@ -43,6 +43,25 @@ from boardwise.cli import (
 from boardwise.core.model import Component, DesignModel, Net, Pin
 from boardwise.parsers.enet import NetlistShapeError, enet_dict_to_model
 
+
+def _board(title: str, parts: int) -> "BoardModel":
+    """A project board holding ``parts`` components, under a real ``BoardRef``.
+
+    Issue #30 ⑥'s reproduction needs a board's **title** — it is what the
+    `verdictWhy` clause names — and `BoardRef` is frozen, so the title is passed
+    to the constructor rather than assigned.
+    """
+    from boardwise.core.model import BoardModel, BoardRef
+
+    board = BoardModel(board=BoardRef(uuid=f"uuid-{title}", title=title))
+    for index in range(parts):
+        component = Component(
+            uid=f"{title}-{index}", designator=f"U{index}",
+            pins=[Pin("1", f"P{index}", "NET")],
+        )
+        board.components[component.designator] = component
+    return board
+
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures"
 SHELF = ROOT / "blocklib" / "parts.json"
@@ -66,13 +85,19 @@ BAD_ENET_SHAPES: dict[str, tuple[object, str]] = {
 #: The coverage section of a reading that was covered **whole** — the shape a
 #: reader sees on a board that parsed cleanly. 126d added `pcbReviewMissing` to
 #: the same dict: a reading is covered whole only if the PCB was looked at too,
-#: so the clean value is False. Tests that build their own coverage section
-#: (rather than spreading this one) must be read with that in mind — the key is
-#: read with `.get` everywhere in `cli`, so an older section without it still
-#: works.
+#: so the clean value is False. #30 ⑥ added `boardsEmpty`/`boardsEmptyNames`
+#: (the count of boards that came out with no parts, and which ones): a clean
+#: single-board project has one board with parts on it, so the count is 0 and the
+#: name list is empty — **present** here because `_coverage_section` always
+#: emits both, and a report carrying this section must compare equal to it.
+#: Tests that build their own coverage section (rather than spreading this one)
+#: must be read with that in mind — every key is read with `.get` everywhere in
+#: `cli`, so an older section without any of them still works.
 CLEAN_COVERAGE: dict = {
     "parseIncomplete": False,
     "modelEmpty": False,
+    "boardsEmpty": 0,
+    "boardsEmptyNames": [],
     "pagesDropped": 0,
     "rulesRefused": 0,
     "recordsDropped": 0,
@@ -342,11 +367,22 @@ def test_a_clean_coverage_leaves_the_verdict_alone():
         ("rulesRefused", 7, "withheld"),
         ("recordsDropped", 3, "丢弃"),
         ("rulesErrored", ["decap-required-caps"], "decap-required-caps"),
+        # #30 ⑥: a board that came out with no parts is a coverage gap of
+        # its own — the same one-field-at-a-time contract as the five above.
+        ("boardsEmpty", 1, "块板读出 0 器件"),
     ],
 )
 def test_every_coverage_field_holds_the_verdict_back(field, value, word):
     """One field at a time: `complete` is unreachable, and the reason names it."""
-    section = _body(coverage={**CLEAN_COVERAGE, field: value})
+    section = _body(
+        coverage={
+            **CLEAN_COVERAGE,
+            field: value,
+            # The names are the annotation of the same fact, not a second
+            # field under test — they ride along so the clause can say B2.
+            **({"boardsEmptyNames": ["B2"]} if field == "boardsEmpty" else {}),
+        }
+    )
 
     assert section["coverage"][field] == value
     assert section["verdict"] == "complete-with-open-items", section["verdictWhy"]
@@ -396,6 +432,83 @@ def test_the_coverage_gate_survives_a_regate(tmp_path):
 
     assert section["coverage"]["rulesErrored"] == ["param-led-current"]
     assert section["verdict"] == "complete-with-open-items"
+
+
+def test_a_regate_of_a_report_written_before_the_board_gate_does_not_crash():
+    """#30 ⑥ follows 126d's ``pcbReviewMissing`` precedent, key by key.
+
+    A report written by an older build carries a ``/6`` coverage section with no
+    ``boardsEmpty`` and no ``boardsEmptyNames``. ``need-datasheet`` and ``triage``
+    re-gate through ``_completion_body``, so a ``[...]`` read here would make both
+    commands crash on **every** old report — the exact trap 126d's comment
+    records. Absent means 0 / no names, which is also the right reading: an old
+    report is not re-litigated by a gate that postdates it.
+    """
+    from boardwise.cli import _completion_from_report
+
+    legacy_coverage = {
+        key: value for key, value in CLEAN_COVERAGE.items()
+        if key not in ("boardsEmpty", "boardsEmptyNames")
+    }
+    assert legacy_coverage != CLEAN_COVERAGE, "the fixture must really lack the keys"
+    report = {
+        "completion": {
+            "scope": {"rules": 14, "boards": 2, "pages": 3},
+            "coverage": dict(legacy_coverage),
+        },
+        "model": {"components": 5, "nets": 5},
+        "summary": {"errorCount": 0},
+        "unreviewed_parts": [],
+        "warning_triage": [],
+        "architecture": {"totals": {"slots": 4, "filled": 4, "stale": 0}},
+    }
+
+    section = _completion_from_report(report, needs_datasheet=[])
+
+    assert section["verdict"] == "complete", section["verdictWhy"]
+    # The section is passed through, not rewritten: no key is invented for a
+    # reading that never ran the producer.
+    assert "boardsEmpty" not in section["coverage"], section["coverage"]
+
+
+def test_the_markdown_coverage_line_renders_empty_boards_with_their_names():
+    """#30 ⑥'s renderer follows the JSON: empty boards appear, named (#132).
+
+    The truncated-fixture test above proves the line renders the JSON's own
+    numbers; this one pins the ⑥ segment itself — without it, an empty board
+    would be gated in the JSON but invisible in the document engineers read.
+    """
+    from boardwise.engines.checkup import render_report_markdown
+
+    coverage = dict(CLEAN_COVERAGE)
+    coverage["boardsEmpty"] = 1
+    coverage["boardsEmptyNames"] = ["B2"]
+    report = {
+        "schema": "boardwise.checkup/7",
+        "source": {"tier": "file", "tierLabel": "离线文件", "project": {"friendlyName": "合成工程"}},
+        "model": {"components": 5, "nets": 5},
+        "summary": {"errorCount": 0, "warningCount": 0, "infoCount": 0, "exitCode": 0},
+        "findings": [],
+        "completion": {
+            "verdict": "complete-with-open-items",
+            "verdictWhy": [],
+            "coverage": coverage,
+            "architectureSlots": {"total": 0, "filled": 0, "stale": 0},
+            "openTodos": 0,
+        },
+        "architecture": None,
+    }
+
+    markdown = render_report_markdown(report)
+
+    line = next(line for line in markdown.split("\n") if line.startswith("- 覆盖："))
+    assert "空板 1（B2）" in line, line
+    # Zero stays silent — an all-clean reading must not grow the segment.
+    coverage["boardsEmpty"] = 0
+    coverage["boardsEmptyNames"] = []
+    markdown = render_report_markdown(report)
+    line = next(line for line in markdown.split("\n") if line.startswith("- 覆盖："))
+    assert "空板" not in line, line
 
 
 def test_an_empty_model_regated_from_a_report_is_still_incomplete():
@@ -487,6 +600,7 @@ def test_the_rule_runner_still_raises_for_a_caller_that_asked_for_no_collector(
         dict(CLEAN_COVERAGE),
         {**CLEAN_COVERAGE, "parseIncomplete": True},
         {**CLEAN_COVERAGE, "parseIncomplete": True, "modelEmpty": True},
+        {**CLEAN_COVERAGE, "boardsEmpty": 1, "boardsEmptyNames": ["B2"]},
         {**CLEAN_COVERAGE, "pagesDropped": 3},
         {**CLEAN_COVERAGE, "rulesRefused": 7},
         {**CLEAN_COVERAGE, "recordsDropped": 2},
@@ -1068,3 +1182,196 @@ def test_the_gate_reads_the_coverage_it_is_given_not_the_model_argument():
         )["verdict"]
         == "incomplete"
     )
+# --------------------------------------------------------------------------
+# #30 ⑥ — a multi-board project whose *one* board came out empty
+# --------------------------------------------------------------------------
+
+
+def _project_coverage(model: object) -> dict:
+    """``_coverage_section`` over a parse that produced nothing but the model."""
+    from boardwise.cli import _coverage_section
+    from boardwise.core.geometry import ParseStats
+
+    return _coverage_section(
+        model=model, board=None, attempts=[], parse_stats=ParseStats(),
+        rules_errored=[],
+    )
+
+
+def _project_verdict(model: object) -> dict:
+    """The `completion` section for a project reading, through the live path."""
+    return _completion_section(
+        model=model,
+        summary={"errorCount": 0},
+        unreviewed=[],
+        triage=[],
+        architecture={"totals": {"slots": 4, "filled": 4, "stale": 0}},
+        coverage=_project_coverage(model),
+    )
+
+
+def test_a_project_with_one_empty_board_is_not_complete_and_names_it():
+    """Issue #30 ⑥, verbatim: B1 holds 5 parts, B2 holds none.
+
+    Before this batch every counter read zero and the verdict read `complete`,
+    while the report's own ``model.boards[]`` said ``components: 0`` for B2 — the
+    issue's own pattern, "the information was there, nothing gated on it". The
+    ruling is ``complete-with-open-items`` and not ``incomplete``: the project
+    *did* have input, and an intentionally-empty sub-board is an engineer's call,
+    not a missing review.
+    """
+    from boardwise.core.model import ProjectModel
+
+    model = ProjectModel(boards=[_board("B1", 5), _board("B2", 0)])
+
+    coverage = _project_coverage(model)
+    assert coverage["boardsEmpty"] == 1
+    assert coverage["boardsEmptyNames"] == ["B2"]
+    # #29's own reading is untouched: the project as a whole did read.
+    assert coverage["modelEmpty"] is False
+    assert coverage["parseIncomplete"] is False
+
+    section = _project_verdict(model)
+    assert section["verdict"] == "complete-with-open-items", section["verdictWhy"]
+    clause = next(reason for reason in section["verdictWhy"] if "0 器件" in reason)
+    assert "B2" in clause, clause
+    assert "B1" not in clause, "the clause names the empty board, not the whole project"
+    # The other coverage fields stay at zero — this is board-level, and a test
+    # that only checked the verdict would also pass if the whole parse had been
+    # declared truncated.
+    for field in ("pagesDropped", "rulesRefused", "recordsDropped"):
+        assert coverage[field] == 0, field
+
+
+def test_a_project_whose_boards_are_all_empty_is_still_incomplete():
+    """`modelEmpty` keeps its meaning (#29): a total of zero is 「no input at all」.
+
+    Both fields fire here and the stronger one wins, which is the point: the
+    count is additive to #29 rather than a replacement for it. ``B2`` is still
+    named, because "which boards" is the actionable half of the sentence even
+    when the verdict is already ``incomplete``.
+    """
+    from boardwise.core.model import ProjectModel
+
+    model = ProjectModel(boards=[_board("B1", 0), _board("B2", 0)])
+    coverage = _project_coverage(model)
+
+    assert coverage["modelEmpty"] is True and coverage["parseIncomplete"] is True
+    assert coverage["boardsEmpty"] == 2 and coverage["boardsEmptyNames"] == ["B1", "B2"]
+
+    section = _project_verdict(model)
+    assert section["verdict"] == "incomplete", section["verdictWhy"]
+    assert any("模型为空" in reason for reason in section["verdictWhy"])
+
+
+def test_a_single_board_reading_is_not_a_board_with_nothing_on_it():
+    """#30 ⑥ is board granularity: it must not re-open a single-board reading.
+
+    A plain `DesignModel` has no ``boards`` list, so an empty schematic stays
+    exactly what #29 made it — `modelEmpty` → `incomplete` — with no 「0 器件的板」
+    clause beside it. The two gates answer different questions, and one board is
+    not a project whose one board is empty: a single-board project *is* the
+    model, so "no parts" and "nothing was read" are the same fact and counting it
+    twice would print it twice.
+    """
+    empty = DesignModel()
+    coverage = _project_coverage(empty)
+    assert coverage["boardsEmpty"] == 0, "a single board is not an empty *board* of a project"
+    assert coverage["boardsEmptyNames"] == []
+    section = _completion_section(
+        model=empty,
+        summary={"errorCount": 0},
+        unreviewed=[],
+        triage=[],
+        architecture={"totals": {"slots": 4, "filled": 4, "stale": 0}},
+        coverage={**CLEAN_COVERAGE, "modelEmpty": True, "parseIncomplete": True},
+    )
+    assert section["verdict"] == "incomplete"
+    # 「块板读出 0 器件」 is ⑥'s clause and not a substring of #29's
+    # 「模型为空（0 器件 0 网络）」 — matching on plain "0 器件" would hit
+    # the other reason and pass vacuously.
+    assert not any(
+        "块板读出 0 器件" in reason for reason in section["verdictWhy"]
+    ), section["verdictWhy"]
+
+
+def test_a_single_board_project_that_read_something_reports_no_empty_board():
+    """The zero-impact half: the new field exists and is 0, it is not `None`.
+
+    Chosen over **absent** because `_coverage_section` always emits both keys —
+    the same shape `pcbReviewMissing` set (126d) — and because a caller that
+    spreads `CLEAN_COVERAGE` compares the whole dict. Absent-not-empty is the
+    discipline that applies to a key whose *producer* may not have run (a
+    re-gate of an older report); here the producer always runs.
+    """
+    from boardwise.core.model import ProjectModel
+
+    model = ProjectModel(boards=[_board("B1", 5)])
+    coverage = _project_coverage(model)
+
+    assert coverage["boardsEmpty"] == 0
+    assert coverage["boardsEmptyNames"] == []
+    assert _project_verdict(model)["verdict"] == "complete"
+
+
+def test_a_board_with_nets_but_no_parts_is_still_an_empty_board():
+    """The ruling is 「0 器件」, so nets do not buy a board a pass.
+
+    #29's copper clause exempts 「nothing was read」 from the damage hint — it is
+    about *the whole reading*. Here the project did read (B1 carries parts), so
+    B2's own emptiness is the open item: a net name is not a placed part and no
+    placement rule can judge a board with none. An intentionally netlist-only
+    sub-board is exactly the case the engineer confirms and flips.
+    """
+    from boardwise.core.model import ProjectModel
+
+    netted = _board("B2", 0)
+    netted.nets = {"N1": Net("N1", [])}
+    model = ProjectModel(boards=[_board("B1", 5), netted])
+
+    coverage = _project_coverage(model)
+    assert coverage["boardsEmpty"] == 1 and coverage["boardsEmptyNames"] == ["B2"]
+    assert coverage["modelEmpty"] is False, "the project as a whole did read"
+    assert _project_verdict(model)["verdict"] == "complete-with-open-items"
+
+
+def test_the_boards_empty_clause_is_written_once_per_section():
+    """The count and the names are two readings of one fact, so they cannot
+    disagree; a second clause would print the same loss twice."""
+    from boardwise.cli import _coverage_reasons
+
+    reasons = _coverage_reasons(
+        {**CLEAN_COVERAGE, "boardsEmpty": 1, "boardsEmptyNames": ["B2"]}
+    )
+    assert len(reasons) == 1, reasons
+    # No names (a section carrying only the count) still produces a clause — the
+    # gate does not depend on the annotation existing. The seam is where the name
+    # list would have been: straight from "0 器件" to the following colon.
+    bare = _coverage_reasons({**CLEAN_COVERAGE, "boardsEmpty": 2})
+    assert len(bare) == 1, bare
+    assert "2 块板读出 0 器件：" in bare[0], bare
+    assert "B2" in reasons[0] and "）" not in reasons[0].split("（")[0], reasons[0]
+
+
+def test_the_boards_empty_clause_comes_last_among_the_coverage_clauses():
+    """「coverage 理由排最后」 (053) and 126d's `pcbReviewMissing` is last there.
+
+    `boardsEmpty` sits beside the parse clause rather than at the end: it is the
+    board-level sibling of ④ (a reading that came out short), and ⑤/③/④ keep
+    their places relative to each other. This pins the order so a later batch
+    cannot quietly move an existing clause.
+    """
+    from boardwise.cli import _coverage_reasons
+
+    reasons = _coverage_reasons({
+        **CLEAN_COVERAGE,
+        "boardsEmpty": 1,
+        "boardsEmptyNames": ["B2"],
+        "pagesDropped": 2,
+        "rulesErrored": ["led"],
+        "pcbReviewMissing": True,
+    })
+
+    assert len(reasons) == 4, reasons
+    assert "B2" in reasons[0]
+    assert "页" in reasons[1] and "led" in reasons[2] and "PCB" in reasons[3]

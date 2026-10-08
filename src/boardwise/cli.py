@@ -2595,6 +2595,13 @@ def _model_read_nothing(model: object, board: object | None) -> bool:
     ``board`` is ``None`` whenever the reading has no board geometry to show
     (every schematic view, every ``.enet``), which is not evidence either way, so
     it is only consulted when it is there.
+
+    The sum over boards is what this predicate means, and it is deliberately
+    left that way (#30 ⑥): it answers 「整次审查有没有输入」, and one board's
+    emptiness is a different question at a different granularity. Zero total is
+    ``incomplete`` — nothing was read at all; a zero *board* inside a project
+    that did read is ``complete-with-open-items``, via
+    :func:`_empty_board_titles` and `coverage.boardsEmpty`.
     """
     components, nets = _model_component_counts(model)
     if components or nets:
@@ -2716,6 +2723,40 @@ def _model_component_counts(model: object) -> tuple[int, int]:
     if isinstance(model, ProjectModel):
         return model.component_count(), model.net_count()
     return len(model.components), len(model.nets)
+
+
+def _empty_board_titles(model: object) -> list[str]:
+    """The titles of the project's boards that came out with **nothing on them** (#30 ⑥).
+
+    Issue #30's sixth coverage path: ``_model_read_nothing`` sums over a project's
+    boards, so a multi-board project where one board's export came out empty
+    while its sibling read fine left every coverage counter at zero and the
+    verdict at ``complete`` — while the report's own ``model.boards[]`` said
+    ``components: 0`` for that board. The information was there; nothing gated
+    on it. This is that counter's producer.
+
+    **Board granularity, not file granularity.** ④ (a truncated archive) is
+    ``modelEmpty`` and stays ``incomplete``; ⑤ (``pagesDropped``) is page-level.
+    This one is a board that exists in the project and holds no parts, so the
+    project did have input — an empty sub-board is an open item for the
+    engineer to confirm, which is why it is ``complete-with-open-items`` and not
+    ``incomplete``.
+
+    **Not consulted for a single-board reading.** A plain :class:`DesignModel`
+    has no ``boards`` list, so an empty schematic is the ``modelEmpty`` case
+    #29 already covers; counting it here as well would double-count one fact and
+    would make every empty single-board reading say 「板为空」 next to 「模型为空」.
+
+    A board with **nets but no parts** is not empty: the page did export, so
+    this is not the shape ⑥ measured. The count that gates stays 「0 器件」 and
+    nets are not consulted, for the same reason the reason-clause names only
+    parts.
+    """
+    from .core.model import ProjectModel
+
+    if not isinstance(model, ProjectModel):
+        return []
+    return [board.board.title for board in model.boards if not board.components]
 
 
 def _board_for_designator(model: object, designator: str, *, action: str):
@@ -3380,6 +3421,7 @@ def _clean_coverage() -> dict:
     return {
         "parseIncomplete": False,
         "modelEmpty": False,
+        "boardsEmpty": 0,
         "pagesDropped": 0,
         "rulesRefused": 0,
         "recordsDropped": 0,
@@ -3422,6 +3464,15 @@ def _coverage_section(
       own field because the verdict must tell "there was no input at all"
       (``incomplete``) from "some part of the coverage is missing"
       (``complete-with-open-items``);
+    * ``boardsEmpty`` (& #30 ⑥) — how many of a **project**'s
+      boards came out with no parts on them (:func:`_empty_board_titles`),
+      and ``boardsEmptyNames`` — which ones, in project order. The
+      sixth way a review fails to cover the board, at **board** granularity:
+      ④ is file, ⑤ is page, and this is a board that exists and holds
+      nothing, so every rule is blind to it. It counts *boards*, not parts
+      and not nets (a net name is not a placed part), and it is read off a
+      ``ProjectModel`` only — a plain single-board reading is
+      ``modelEmpty``'s business, or nobody's.
     * ``pagesDropped`` — per-page archives whose export or parse failed, from the
       tier ladder's own record (``attempts[tier=per-page].pages[].ok``). Before
       this, one failed page among nine read as a complete project;
@@ -3462,6 +3513,7 @@ def _coverage_section(
     from .engines.review import refused_conclusions, rules_for
 
     model_empty = _model_read_nothing(model, board)
+    empty_boards = _empty_board_titles(model)
     records_dropped = (
         int(parse_stats.pins_dropped_no_number)
         + int(parse_stats.components_without_symbol)
@@ -3470,6 +3522,15 @@ def _coverage_section(
     return {
         "parseIncomplete": bool(model_empty or parse_stats.malformed_records),
         "modelEmpty": bool(model_empty),
+        # #30 ⑥: boards that came out with no parts. A *count*, like
+        # `pagesDropped` and `recordsDropped`, is what gates — but a bare "1
+        # board is empty" is not actionable on a 20-board project, so the
+        # titles ride along beside it and the `verdictWhy` clause names them
+        # (`_coverage_reasons`). Both keys are read with `.get` everywhere, so
+        # a report written before this batch (neither key present) re-gates
+        # without a KeyError.
+        "boardsEmpty": len(empty_boards),
+        "boardsEmptyNames": list(empty_boards),
         "pagesDropped": sum(
             1
             for attempt in attempts
@@ -3507,6 +3568,11 @@ def _coverage_reasons(coverage: dict) -> list[str]:
     **after** every non-coverage clause: the order a reader has been reading
     `verdictWhy` in since 053 does not move. Where inside the coverage list 126d's
     clause sits is a free choice; "coverage last" is inherited, not invented here.
+
+    ``boardsEmpty`` (#30 ⑥) sits beside the parse clause and names the boards,
+    because a bare count is not actionable on a multi-board project; it is a
+    ``complete-with-open-items`` reason, not an ``incomplete`` one (the project
+    did have input — see :func:`_empty_board_titles`).
     """
     reasons: list[str] = []
     if coverage.get("modelEmpty"):
@@ -3517,6 +3583,19 @@ def _coverage_reasons(coverage: dict) -> list[str]:
     elif coverage.get("parseIncomplete"):
         reasons.append(
             "解析流中途结束（有无法解析的记录行）：审查覆盖不完整，文件可能被截断或损坏"
+        )
+    if coverage.get("boardsEmpty"):
+        # #30 ⑥: the count says how many, the names say which — on a multi-board
+        # project "1 块板是空的" is not actionable without them. The clause sits
+        # right after the parse/model clauses and before `pagesDropped` because
+        # it is the same granularity story as ④ (a reading that came out short)
+        # rather than as ⑤ (pages that never arrived), and because ⑥ is the
+        # board-level sibling of the parse clause it follows.
+        names = coverage.get("boardsEmptyNames") or []
+        named = ("（" + "、".join(names) + "）") if names else ""
+        reasons.append(
+            f"{coverage['boardsEmpty']} 块板读出 0 器件{named}：该板对所有规则不可见，"
+            "覆盖不完整（若确为有意留空的子板，需工程师确认）"
         )
     if coverage.get("pagesDropped"):
         reasons.append(
@@ -3966,7 +4045,7 @@ def _review_conclusion(
         text += "；整次审查没有输入（模型为空/归档读不出内容，可能被截断或损坏）"
     if coverage_gaps:
         text += (
-            f"；另有 {coverage_gaps} 类覆盖缺口（少页/规则 withheld/解析丢弃记录/规则报错，"
+            f"；另有 {coverage_gaps} 类覆盖缺口（少页/空板/规则 withheld/解析丢弃记录/规则报错，"
             "逐条见 completion.verdictWhy 与 completion.coverage）"
         )
     # 126d: the eighth clause. `pcbReviewMissing` is an **incomplete** gate (not
@@ -4020,6 +4099,7 @@ def _completion_coverage_gates(*, completion: dict) -> dict:
     missing = bool(coverage.get("modelEmpty"))
     gaps = [
         bool(coverage.get("parseIncomplete")) and not missing,
+        bool(coverage.get("boardsEmpty")),
         bool(coverage.get("pagesDropped")),
         bool(coverage.get("rulesRefused")),
         bool(coverage.get("recordsDropped")),

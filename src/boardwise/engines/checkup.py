@@ -2244,6 +2244,15 @@ def render_report_markdown(report: dict) -> str:
                 + ("不完整" if coverage.get("parseIncomplete") else "完整")
                 + ("（空模型：归档读不出内容）" if coverage.get("modelEmpty") else "")
                 + f" · 少页 {coverage.get('pagesDropped', 0)}"
+                # 132 (#30⑥): board-level empty boards, named like the JSON does.
+                + (
+                    f" · 空板 {coverage.get('boardsEmpty', 0)}"
+                    + (
+                        "（" + "、".join(coverage.get("boardsEmptyNames") or []) + "）"
+                        if coverage.get("boardsEmptyNames") else ""
+                    )
+                    if coverage.get("boardsEmpty") else ""
+                )
                 + f" · 规则 withheld 结论 {coverage.get('rulesRefused', 0)}"
                 + f" · 解析丢弃记录 {coverage.get('recordsDropped', 0)}"
                 + f" · 规则报错 {len(coverage.get('rulesErrored') or [])}"
