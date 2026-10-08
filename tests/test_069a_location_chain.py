@@ -69,7 +69,21 @@ CH340 = FIXTURES / "ch340_golden.epro2"
 #: fixture names a part or a net, so this set is a short, closed list rather
 #: than a general weakening: adding a rule id here means asserting that its row
 #: is genuinely about a board, not about a part that was forgotten.
-DEVICE_LESS_ALLOWED: frozenset[str] = frozenset({"pcb-foc-gate-trace-width"})
+#: **Widened by 133c**, on the same test as 133b widened it and for the same
+#: reason. Two of the three ground-system rules file rows whose subject is the
+#: *board's ground system*, not a part: R1's 「no power-domain ground」 notice,
+#: R1b's 「no power-domain ground, so no tie search」 notice, and R1b's
+#: 「not a single point」 account of the two bridging resistors (which names
+#: *nets* and parts but is a statement about how the two domains join, and
+#: whose ``component_ref`` is empty by design). R5's per-net rows all carry
+#: ``net_refs`` and so chain to a net, not a device — which is why R5 is **not**
+#: in this set. Each id here is an assertion that the row is about a board, not
+#: a part that was forgotten; test_133c_foc_ground.py pins what each row says.
+DEVICE_LESS_ALLOWED: frozenset[str] = frozenset({
+    "pcb-foc-gate-trace-width",
+    "pcb-foc-ground-domains",
+    "pcb-foc-ground-tie",
+})
 
 
 def _run_checkup(tmp_path: Path, board: Path = BISHE) -> tuple[int, Path]:

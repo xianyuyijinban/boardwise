@@ -719,6 +719,12 @@ def test_the_llc_fixture_stays_clean_under_the_fixed_rules():
         "pcb-foc-decap-proximity", "pcb-foc-ground-plane",
         "pcb-foc-gate-trace-width", "pcb-foc-track-corners",
         "pcb-foc-power-loop-area",
+        # 133c's three ground rules are subtracted for the same reason 133b's
+        # five were: on llc they answer 「there is no power-domain ground here」
+        # (llc names its returns DC+/DC- and carries no PGND at all), so the
+        # question 127b asks — every rule that existed before the FOC pack is
+        # silent — still holds. test_133c_foc_ground.py pins their side.
+        "pcb-foc-ground-domains", "pcb-foc-ground-tie", "pcb-foc-return-path",
     }
     assert [f for f in findings if f.rule_id not in foc_ids] == [], [
         (f.rule_id, f.message) for f in findings if f.rule_id not in foc_ids
