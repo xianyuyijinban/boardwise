@@ -1717,8 +1717,24 @@ def _fill_board_model(
         (root for root in clusters if root not in explicit),
         key=lambda root: min(sorted(str(n) for n in clusters[root])),
     )
-    for index, root in enumerate(remaining, start=1):
-        explicit[root] = f"NET{index}"
+    # Issue #73: the fallback ``NETn`` must not reuse a name an explicit label
+    # already owns. Two circuits — one unnamed cluster, one a hand-written label
+    # that happens to read ``NET1`` — used to share the name, and ``nets.setdefault``
+    # welded them into one net **silently**: no ``unproven`` mark, so every rule
+    # that reads a member list saw a fabricated union. ``NET1``/``NET2`` are legal
+    # things a designer types, and unlike the editor's own derived names
+    # (``$11N…``, :mod:`boardwise.engines.draw`) this ``NETn`` family is the one
+    # that can collide with a human label. The fix is to step over a taken number
+    # rather than to change an explicit label — the name on the drawing is the
+    # truth, the auto-name is ours. A free number always exists (the explicit set
+    # is finite), so this terminates without a bound check.
+    taken = set(explicit.values())
+    next_index = 1
+    for root in remaining:
+        while f"NET{next_index}" in taken:
+            next_index += 1
+        explicit[root] = f"NET{next_index}"
+        taken.add(explicit[root])
     labels = explicit
 
     # --- fill Pin.net and reverse-build nets

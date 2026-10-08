@@ -442,6 +442,29 @@ def test_an_open_drain_pin_with_no_pull_up_is_a_warn_quoting_the_shelf_and_the_f
     assert finding.target.component_ref == "DRV1" and finding.target.pin_refs == ["18"]
 
 
+@pytest.mark.parametrize("rail", ["3V3", "+3V3", "5V", "+5V", "1V8", "+1V8"])
+def test_the_pull_up_rail_prices_the_same_how_it_is_spelled(rail):
+    """Issue #71, measured at the rule it was reached through.
+
+    ``power_domains.voltage_from_net_name`` is how ``_power_class`` decides the
+    far end of a pull-up is a power-class rail. It priced ``3V3`` as 3.3 V and
+    ``+3V3`` as **nothing**, so the *same board* — a ``10k`` from nFAULT to
+    ``+3V3`` — was reported "开漏输出没有上拉" while the identical resistor to
+    ``+5V`` passed. The pull-up is present in both readings; only the spelling
+    of the rail it reaches decided the verdict, which is the hole #71 closes.
+    """
+    rule = _opendrain_rule()
+    board = _fault_board(
+        components={"R1": _part("R1", value="10k",
+                                pins=[("1", FOC_FAULT_NET), ("2", rail)])},
+        nets={FOC_FAULT_NET: [("R1", "1")], rail: [("R1", "2")]},
+    )
+    [(severity, state, message)] = _rows(rule, board)
+    assert (severity, state) == ("INFO", "OK"), (rail, message)
+    assert f"跨到 {rail!r}" in message
+    assert "没有电阻跨到 power-class 轨" not in message
+
+
 def test_a_resistor_to_a_power_rail_is_the_closure_and_is_a_measurement():
     """The other half of the same row: a closure is stated, not silently passed.
 

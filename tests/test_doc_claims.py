@@ -163,9 +163,10 @@ def test_the_harness_default_stays_leak_proof():
 
 
 # ============================================================ issue #58-#60
-#: 命令面抽取：README/SKILL 提到的命令必须与 cli.py 的注册表对拍（issue #60 的
-#: 「contract-drift 同一把尺子对准自己」）。只数**首词是真命令**的序列——散文里的
-#: 「boardwise daemon」不是命令提及；真命令的第二个词必须是它注册过的子命令。
+#: 命令面抽取：README/SKILL 提到的命令必须与 cli.py 的注册表**双向**对拍（issue #60
+#: 的「contract-drift 同一把尺子对准自己」+ issue #62 的反向那一半）。只数**首词是真
+#: 命令**的序列——散文里的「boardwise daemon」不是命令提及（:data:`PROSE_AFTER_BOARDWISE`
+#: 逐个声明）；真命令的第二个词必须是它注册过的子命令。
 def _cli_commands() -> tuple[set[str], dict[str, set[str]]]:
     """（顶层命令集, 顶层 -> 子命令集），全部从 cli.py 的 argparse 注册处直读。"""
     source = (REPO / "src" / "boardwise" / "cli.py").read_text(encoding="utf-8")
@@ -180,17 +181,34 @@ def _cli_commands() -> tuple[set[str], dict[str, set[str]]]:
     return set(tree), tree
 
 
-def _mentioned_commands(document: str) -> set[str]:
-    """文档提到的 boardwise 命令集。
+#: `boardwise <词>` 后面跟的词里，**不是命令**的那些——散文（issue #62）。
+#:
+#: 写成表而不是隐式跳过：「哪些词是散文」是一个要有人负责的声明，写出来才能审。
+#: 反向断言（未知顶层词）比正向断言更依赖这张表，所以它必须小而显式：这里每个词都是
+#: 一次人工判读的结果，不是「跑出来啥是啥」。实测 SKILL.md 正文全集只有 ``connector``
+#: 一个（`boardwise connector —— …` 指的是那个 npm 包，不是子命令）。
+PROSE_AFTER_BOARDWISE: frozenset[str] = frozenset({"connector", "daemon"})
+
+
+def _mentioned_commands(document: str) -> tuple[set[str], set[str]]:
+    """文档提到的 boardwise 命令集，以及提到的**未知顶层词**集。
+
+    返回 ``(commands, unknown_tops)``——issue #62 把这个 helper 从单向改成双向：
+    原实现对未知首词 `continue`，于是「顶层命令被删/改名」这件事连同整条提及一起被丢掉，
+    `checkup` 改名后 SKILL.md 十几处引用**不会让任何测试红**（实测 `review-mark` /
+    `persistence` / `triage` / `checkup` 四个删掉都是 `stale=[]` 静默通过）。
 
     按**行**提取（行内反引号段 + 代码块里的裸命令行），不靠全局反引号配对
-    （全文 2106 个反引号，一处失配全文档翻转——实测过）。三段判定：
+    （全文 2100+ 个反引号，一处失配全文档翻转——实测过）。三段判定：
     首词必须是注册的顶层命令（散文「boardwise daemon 常驻」不是命令提及）；
     第二词是注册的子命令才算双词命令；第二词紧跟 `.` 的是文件名参数
     （`review-mark report.json`），不是子命令。
+    未知首词则进第二个返回值——由 :data:`PROSE_AFTER_BOARDWISE` 豁免散文，
+    其余每一个都是「文档指向一个不存在的命令」。
     """
     tops, tree = _cli_commands()
     commands: set[str] = set()
+    unknown_tops: set[str] = set()
     pattern = re.compile(
         r"boardwise\s+([a-z][a-z0-9-]*)(?:\s+([a-z][a-z0-9-]*)(\.?))?"
     )
@@ -200,12 +218,14 @@ def _mentioned_commands(document: str) -> set[str]:
             for match in pattern.finditer(piece):
                 first, second, dot = match.groups()
                 if first not in tops:
+                    if first not in PROSE_AFTER_BOARDWISE:
+                        unknown_tops.add(first)
                     continue
                 if second is None or dot:
                     commands.add(first)
                 else:
                     commands.add(f"{first} {second}")
-    return commands
+    return commands, unknown_tops
 
 
 def test_readme_rule_count_matches_builtin_rules():
@@ -229,8 +249,15 @@ def test_readme_export_sentence_tells_the_truth():
 
 
 def test_skill_md_mentions_only_real_commands():
-    """护 #60 主治法：SKILL.md 提到的命令必须是 cli.py 注册表里的真命令（单向 set-diff：
-    SKILL ⊆ CLI——SKILL 是 SOP 不是命令参考，不反向要求 74 条全覆盖）。"""
+    """护 #60 主治法 + #62 的反向那一半：SKILL.md 提到的命令必须双向对拍。
+
+    正向（#60）：SKILL ⊆ CLI——SKILL 是 SOP 不是命令参考，不反向要求 74 条全覆盖。
+    反向（#62）：未知顶层词——SKILL 里 `boardwise <词>` 的首词若是 CLI 从未注册过的，
+    就是 SOP 指向一个不存在的命令。旧实现对未知首词 `continue`，把整条提及丢掉，
+    于是顶层命令被删/改名时这条钉子静默通过（实测把 `cli.py` 里 `review-mark` 注册名
+    改成 `mark`：单向 11 passed 静默通过，双向 CAUGHT）。散文由
+    :data:`PROSE_AFTER_BOARDWISE` 豁免——「哪些词不是命令」是有人负责的声明。
+    """
     skill = (REPO / ".kimi-code" / "skills" / "boardwise" / "SKILL.md").read_text(
         encoding="utf-8"
     )
@@ -238,10 +265,18 @@ def test_skill_md_mentions_only_real_commands():
     known = set(tops)
     for parent, subs in tree.items():
         known.update(f"{parent} {sub}" for sub in subs)
-    mentioned = _mentioned_commands(skill)
+    mentioned, unknown_tops = _mentioned_commands(skill)
     stale = sorted(m for m in mentioned if m not in known)
     assert stale == [], (
         "SKILL.md names commands the CLI no longer has: " + ", ".join(stale)
+    )
+    # 反向：SKILL.md 提到的、CLI 没有的顶层命令（不是子命令）。
+    phantom = sorted(unknown_tops)
+    assert phantom == [], (
+        "SKILL.md mentions `boardwise <word>` for top-level commands the CLI "
+        "never registered (or dropped): " + ", ".join(phantom)
+        + " — either the command was removed/renamed, or PROSE_AFTER_BOARDWISE "
+        "needs the word declared as prose"
     )
 
 
@@ -250,7 +285,7 @@ def test_skill_md_covers_the_load_bearing_commands():
     skill = (REPO / ".kimi-code" / "skills" / "boardwise" / "SKILL.md").read_text(
         encoding="utf-8"
     )
-    mentioned = _mentioned_commands(skill)
+    mentioned, _unknown = _mentioned_commands(skill)
     for command in ("draw lint", "draw propose"):
         assert command in mentioned, (
             f"SKILL.md no longer mentions `{command}` — the draw pipeline's "

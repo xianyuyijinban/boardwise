@@ -16,7 +16,9 @@ from it. They always run:
    carries one domain; there is no declaration that licenses mixing two, because
    a level shifter's low side and high side are *two different nets* (2026-09-18
    ruling, M0-P0c — the old ``level_shifter`` exemption only ever let real
-   errors through with a note);
+   errors through with a note). A domain is read through
+   :func:`_io_domain`, so the two spellings of one voltage domain are one domain
+   (issue #70 — the same normalization issue #53 gave the power-tree gate below);
 4. **power tree** — every power rail has exactly one source, and every sink on
    it asks for the voltage that source provides. Ground is exempt: ground is the
    sink.
@@ -819,6 +821,37 @@ def _ports_of(spec: BoardSpec, connection: Any) -> list[tuple[Any, Any, BlockPor
     return out
 
 
+def _io_domain(level: str) -> str:
+    """The IO domain a declared ``level`` names, or the string itself.
+
+    Issue #70, and the sibling of #53 (``_same_voltage``): ``level`` is a free
+    string a person writes (``docs/validate_spec.md``'s own examples are
+    ``3V3``/``5V``/``USB``), and this gate compared them **as strings**. The same
+    3.3 V domain written the two ways this repository writes it — ``3V3`` along
+    the ``blocks.portmeta.json`` convention, ``3.3V`` the way most people type
+    it — came out as "two domains", and the gate is fail-closed, so a correctly
+    wired board was stopped before ``may proceed``. ``USB`` against ``usb`` was
+    the same false VIOLATION by case alone.
+
+    So the reading is the repository's **one** voltage parser first: a level
+    that parses as volts is that rail as a number, which makes ``3V3``/``3.3V``/
+    ``3v3``/``3.3`` one key. A level that is not a voltage is a named domain
+    (``USB``, ``TTL``, ``LVDS``) and compares case-folded — those have no
+    numbers to normalize, and folding is the whole of what can honestly be
+    claimed about them. Refused as a domain is *not* invented: an unreadable
+    level keeps its own spelling as its key, which is what makes two different
+    such names two domains still.
+
+    Neither key says the two ends are electrically compatible — that is not
+    what this gate ever concluded. It says they did not name two domains, which
+    is the question the net actually raises.
+    """
+    volts = parse_voltage_volts(level)
+    if volts is not None:
+        return f"{volts:g}V"
+    return level.strip().casefold()
+
+
 def _gate_levels(spec: BoardSpec) -> Gate:
     title = "a signal net joins ports that speak one IO domain"
     findings: list[Finding] = []
@@ -827,18 +860,20 @@ def _gate_levels(spec: BoardSpec) -> Gate:
         if not entries or any(not port.is_signal for _, _, port in entries):
             continue
         stated = [(who, port) for instance, who, port in entries if port.level]
-        domains = {port.level for _, port in stated}
+        domains = {_io_domain(port.level) for _, port in stated}
         ports = ", ".join(f"{who}.{port.role}" for who, port in stated) or "(none)"
         if len(domains) > 1:
+            # The **written** levels, not the normalized keys: a reader who has
+            # to go look at their own block file needs the string they typed.
             findings.append(
                 Finding(
                     kind=VIOLATION,
                     rule="level-domain",
                     message=(
                         f"net {connection.net!r} joins ports in two IO domains "
-                        f"({', '.join(sorted(domains))}) — a net carries one domain, "
-                        "so this is a mix-up unless the two ends belong on two "
-                        "different nets"
+                        f"({', '.join(sorted({p.level for _, p in stated}))}) — a "
+                        "net carries one domain, so this is a mix-up unless the "
+                        "two ends belong on two different nets"
                     ),
                     evidence=[ports],
                 )
@@ -869,14 +904,16 @@ def _gate_levels(spec: BoardSpec) -> Gate:
             )
             continue
         if silent:
+            # one domain, and every port that stated one stated the *same* one
+            # after :func:`_io_domain`; quote a written level, not the key.
             findings.append(
                 Finding(
                     kind=UNDECIDABLE,
                     rule="level-domain",
                     message=(
-                        f"net {connection.net!r} declares {domains.pop()!r} on some "
-                        f"ports but not on {', '.join(silent)}, so whether the two "
-                        "ends agree cannot be decided — a silent port is not a "
+                        f"net {connection.net!r} declares {stated[0][1].level!r} on "
+                        f"some ports but not on {', '.join(silent)}, so whether the "
+                        "two ends agree cannot be decided — a silent port is not a "
                         "matching port"
                     ),
                     evidence=silent,

@@ -816,9 +816,19 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # all of them prose inside a module or function docstring. The measured
     # numbers themselves are pinned in `tests/test_133d_foc_thermal.py`, so the
     # correction is verified there rather than being a bare digest bump.
+    # 138 moved this digest 98b1d462 -> a5a3911a (direct) and 92fa6ff9 ->
+    # 07080d07 (recursive), and the alarm did its job. The cause was
+    # **docstrings and one guard, in `rules/railratings.py` only** (issue #72):
+    # the module docstring's reading-order list now says a package size in a
+    # `Value` field is refused rather than read as a rating, and `_rows` asks
+    # `core.values.states_package_size` before handing a bare token to the
+    # voltage parser. No verdict changed: the behaviour pins are
+    # `tests/test_092_rail_ratings.py`, and the direct digest recomputed over
+    # HEAD's `railratings.py` alone returns `98b1d462` exactly — measured, not
+    # assumed.
     assert recursive != old_digest, "the subpackage is inside the recipe now"
-    assert old_digest == "98b1d462"
-    assert recursive == "92fa6ff9", (
+    assert old_digest == "a5a3911a"
+    assert recursive == "07080d07", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

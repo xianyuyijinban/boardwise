@@ -193,6 +193,101 @@ def test_the_voltage_code_reader_reads_its_field_and_refuses_everything_else():
     assert mpn_voltage_rating("XX106K103") is None
 
 
+#: TDK's ordered field string (issue #72): ``C1608`` size, ``X7R`` dielectric,
+#: ``1H`` **voltage code (50 V)**, ``104K`` EIA + tolerance, ``080`` **thickness
+#: (0.8 mm)**, ``AB`` packaging. The ``<value><tol><figures>`` tail matches
+#: ``104K080``, and the three figures are the thickness — 8.0 mm-scale, not
+#: volts. Reading them gave 8.0 V for a 50 V part.
+TDK_THICKNESS_WITNESS = "C1608X7R1H104K080AB"
+
+
+def test_a_tdk_thickness_code_is_refused_rather_than_read_as_a_voltage():
+    """Issue #72, second mechanism: the MPN reader's own tail shape.
+
+    ``_voltage_rating_tail`` finds ``104K080`` in ``C1608X7R1H104K080AB`` and
+    the reader turned ``080`` into **8.0 V** — for a 50 V part. Downstream the
+    direction is a false WARN: 8 V < 12 V, so a correctly rated 50 V capacitor on
+    a 12 V rail was reported as over-voltage. Refusing sends the rating to
+    UNKNOWN, which is the safe direction and the honest one: this build cannot
+    say which field those three figures are in that token.
+
+    The guard is anchored on TDK's *whole* ordered layout, so the EIA-tail parts
+    the shelf actually carries keep reading — which the shelf-agreement test
+    below measures over all 11 catalogued capacitors.
+    """
+    assert mpn_voltage_rating(TDK_THICKNESS_WITNESS) is None, (
+        "the tail's three figures are the thickness code (0.8 mm), not a rating"
+    )
+    # The same part without TDK's packaging tail still reads as a size-code guard
+    # would expect — the guard is the layout, not a substring of the MPN.
+    for token in ("CGA0603X7R104K500JT", "HHV0805R7225K101NSLJ"):
+        assert mpn_voltage_rating(token) is not None, (
+            f"{token} states its rating in the EIA tail and must keep reading"
+        )
+
+
+def test_the_value_reader_refuses_a_package_size_written_as_a_bare_number():
+    """Issue #72, first mechanism: ``Value='100nF/0402'`` → 402 V.
+
+    ``parse_voltage_volts`` accepts a bare number (a rail may legitimately be
+    ``3.3``), and ``_VALUE_TOKEN_RE`` splits ``100nF/0402`` into ``100nF`` and
+    ``0402`` — so the four-figure **size** came back as 402 V. The direction is
+    the dangerous one: ``pwr-cap-voltage-rating`` passes ``rating >= rail``, so
+    an invented 402 V turns any 3V3/5V/12V board into an OK and covers a real
+    under-rated part. The size guard is the repository's own list
+    (``core.values.states_package_size``), not a second copy of it here.
+    """
+    from boardwise.core.values import states_package_size
+
+    for token in ("0402", "0603", "0805", "1206", "1210", "2512", "01005",
+                  "0201", "1812", "2010", "105", "160", "188", "201", "322",
+                  "451", "453"):
+        assert states_package_size(token) is True, token
+    # a real voltage is not a size, however it is spelled
+    for token in ("50V", "16V", "25", "3.3", "0402V", "100nF", "105nF"):
+        assert states_package_size(token) is False, token
+
+
+@pytest.mark.parametrize("value", ["100nF/0402", "100nF 0603", "100nF/0805",
+                                   "100nF X7R 0402", "10uF/1206", "100nF 105"])
+def test_a_capacitor_whose_value_states_a_size_does_not_get_that_size_as_its_rating(
+    value,
+):
+    """The rule-level half of issue #72 — the false **pass**, measured.
+
+    A cap whose ``Value`` field writes the size alongside the capacitance
+    (``100nF/0402`` is what an engineer types when value and package go in one
+    field) used to be handed a 402 V "rating". Against a 12 V rail that is
+    ``402 >= 12`` → **OK**, and the row names the fabricated number, so the
+    report claims a measurement nobody made. The rating is now unreadable, the
+    row is UNKNOWN, and the missing fact says where to supply it.
+
+    The part is recognised as a capacitor through its MPN (the ``C1`` designator
+    plus a decodable value code), exactly as a real board's would be — the point
+    is that it *is* a cap on the rail, and the fabricated rating used to be read
+    off its Value field regardless of how it was recognised.
+    """
+    rule = _cap_rule(PartLibrary(parts=[]), _intent(_rail("+12V", targetVoltage="12V")))
+    model = _cap_model(value=value, mpn="CC0603KRX7R9BB104", rail="+12V")
+    [(severity, state, message)] = _rows(rule, model)
+    assert (severity, state) == ("INFO", "UNKNOWN"), (value, message)
+    # the reader itself yields nothing, which is the claim the row rests on
+    assert cap_voltage_rating(model.components["C1"], None) == (None, "")
+    assert "耐压" in message, "the row still says which quantity is missing"
+    assert "OK" not in message, "an unreadable rating may never read as a pass"
+
+
+@pytest.mark.parametrize("value,expected", [("100nF/50V", 50.0), ("10uF 25V", 25.0),
+                                            ("1uF,16V", 16.0), ("100nF/16V", 16.0)])
+def test_a_real_voltage_token_in_a_value_field_still_reads(value, expected):
+    """The guard must not cost the field its own readings — the sizes it refuses
+    are exactly the bare numbers, and a voltage is not written as one."""
+    volts, source = cap_voltage_rating(
+        _cap_model(value=value, mpn="").components["C1"], None
+    )
+    assert volts == expected, (value, source)
+
+
 def test_the_shelf_and_the_code_reader_agree_on_every_catalogued_capacitor():
     """Two independent readings of one number, checked against each other.
 
