@@ -292,6 +292,8 @@ prints one row per violation plus a tally:
 | `WIRE_OUT_OF_SHEET` / `WIRE_ON_TITLE_BLOCK` | a wire endpoint outside / on the block |
 | `ENDPOINT_NOT_TERMINAL` | a wire end that is neither a pin tip, a junction, an annotated end, nor a short overhang |
 | `CROSS_NET_SHORT` | one net's endpoint lands on another net's wire (the editor junction-dots it) |
+| `WIRE_TOO_CLOSE` | two nets' wires running **alongside** each other closer than `WIRE_CLEARANCE` (136) |
+| `SEPARATION_GIVEN_UP` | a net that only routed after the retry dropped the router's wire-separation preference (136) |
 | `LABEL_FLOATS` | a flag / label not on any of its own wires |
 | `LABEL_ON_COMPONENT` | an annotation box overlaps a foreign part |
 | `LABEL_OVERLAP` | two annotation boxes intersect |

@@ -559,6 +559,15 @@ def generate_plan(
         plan.nc_pins.append((designator, pin))
 
     routes, routing_violations = layout.route_nets(model, pin_positions, geometry)
+    #: 136: a net the router only managed by giving up its separation
+    #: preference is said out loud in the plan's notes. The geometry itself is
+    #: re-measured by :func:`validate_full` below, which reports whatever ended
+    #: up genuinely too close as ``WIRE_TOO_CLOSE`` — this note is the *why*,
+    #: that violation is the *how much*.
+    for row in routing_violations:
+        if row.code == "SEPARATION_GIVEN_UP":
+            plan.notes.append(f"{row.subject}: {row.detail}")
+
     members_by_net = {
         name: {des for des, _pin in net.pins} for name, net in model.nets.items()
     }

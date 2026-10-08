@@ -1024,8 +1024,17 @@ def print_gate(plan: ActionPlan, model: DesignModel, source: str, frame: SheetFr
 
 
 def print_self_check(plan: ActionPlan) -> list[str]:
-    """Rendered self-check + lint lines; empty means the plan may execute."""
-    return [v.render() for v in plan.violations]
+    """The violations that must stop the draw; empty means the plan may execute.
+
+    Advisory findings (136: :data:`~boardwise.engines.layout.ADVISORY_VIOLATION_CODES`
+    — wire spacing and the router's disclosure) are **not** in this list. They
+    are still in ``plan.violations``, still counted, still printed by
+    :func:`~boardwise.engines.layout.lint_report`; they just do not abort a
+    board that is electrically correct.
+    """
+    return [
+        v.render() for v in layout.blocking_violations(plan.violations)
+    ]
 
 
 async def _verify_placements(

@@ -59,9 +59,30 @@ def _golden_plan():
 
 
 def test_golden_plan_has_zero_violations():
-    """The crown gate: the whole board, all five constraints, clean."""
+    """The crown gate: the whole board, all five constraints, clean.
+
+    **136 re-pinned, and the distinction is the whole point of this edit.**
+    The five hard constraints are about whether the drawing is *correct*, and
+    on that question this board is still clean — nothing here moved.
+
+    What 136 added is a sixth finding that is not about correctness: two nets'
+    wires running alongside each other closer than
+    :data:`~boardwise.engines.layout.WIRE_CLEARANCE`. The solver's drawing of
+    this board produces 49 of them (it did before 136 too — the gate simply
+    had no ruler to measure them with). So the assertion is now stated against
+    the codes that mean "this plan is wrong", which is exactly the set the
+    draw gate refuses on, and the spacing rows are asserted separately in
+    ``tests/test_136_wire_spacing.py`` where their number and shape are pinned.
+
+    Asserting ``plan.violations == []`` here would have meant one of two
+    wrong things: that the drawing is perfect (it is not, and 136 is the
+    report that says so), or that the new check does not exist.
+    """
     _golden, _offsets, plan = _golden_plan()
-    assert plan.violations == [], [v.render() for v in plan.violations]
+    blocking = [v for v in plan.violations if v.code in layout.ADVISORY_VIOLATION_CODES]
+    hard = [v for v in plan.violations if v.code not in layout.ADVISORY_VIOLATION_CODES]
+    assert hard == [], [v.render() for v in hard]
+    assert blocking, "136: the solver's drawing of this board is too tight to read"
 
 
 def test_golden_boxes_stay_inside_the_frame_and_clear_of_the_title_block():
