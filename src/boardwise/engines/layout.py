@@ -54,9 +54,15 @@ import math
 import re
 from collections import deque
 from dataclasses import dataclass, field
+import heapq
 from typing import Any
 
 from boardwise.core.model import DesignModel, Net, is_ground_net
+
+#: Sentinel for "this state has not been reached yet" in the route-cost search.
+#: Far above any real path cost (a sheet crossing is ~230 cells) so a real
+#: path never loses the comparison by accident.
+_INFINITE_COST = 1 << 30
 
 # --- sheet calibration constants (A4 landscape, editor canvas units) ------
 #
@@ -95,6 +101,76 @@ LABEL_CLEARANCE = 20.0
 
 #: Routing grid cell size (canvas units). Divides every observed pin offset.
 GRID = 5.0
+
+# --- wire separation as a route cost (137) ---------------------------------
+#
+# 136 left two facts on the table and 137 is built out of them.
+#
+# **Fact 1: the one-cell inflation was not dead, only half-alive.** 136's
+# PROGRESS entry says the inflation returned ``("straight", None, False)`` while
+# the only guard reading that axis needs ``nax is not None``, so the two never
+# met and inflated cells were ordinary free space. The entry guard is indeed
+# inert. But the *leaving* branch reads the third element, finds ``own=False``,
+# and pins the search to straight-through — so the cells were not free. Taking
+# that restriction out measures 49 -> 77 findings on the golden board, which is
+# how a half-dead branch becomes a load-bearing one nobody had credited.
+#
+# **Fact 2: making it a real obstacle was measured and is worse** (49 -> 70).
+# Restricting legality is the wrong instrument in both directions — it either
+# does nothing useful or it walls the search in.
+#
+# What is left is a **cost**. A cell near another net's wire stays walkable and
+# merely expensive, :func:`route_nets` prices each candidate cell, and
+# :func:`_bfs_chain` settles paths cheapest-first (Dijkstra). A reader cannot
+# say how much detour a wire may take; a search can weigh one, and a corridor
+# that only exists at one cell's clearance keeps routing — it just costs more,
+# which is exactly what the hard version destroyed.
+
+#: What it costs the search, in steps, to *stand* in a cell at a given
+#: Chebyshev distance, in grid cells, from the nearest already-routed wire of
+#: another net. Index 0 is the wire's own cells, index 1 the cell right beside
+#: it, and everything from index 2 out is free space.
+#:
+#: **House values pending 岳's confirmation** (137), the same status
+#: :data:`WIRE_CLEARANCE` carries — a taste, not a physics. The shape is not:
+#:
+#: * **1 and not more.** :data:`WIRE_CLEARANCE` is 10 units and :data:`GRID`
+#:   is 5, so exactly *one* cell of separation is a violation and two are not.
+#:   Ring 2 is therefore the target a wire is trying to reach and must be free
+#:   to walk into, or the search would pay for the very lane the ruler asks for.
+#:   The zero tail is not cosmetic either: price the open page and every route
+#:   takes the scenic way, which is the same mistake as 136's hard block in a
+#:   softer coat.
+#: * **Small.** One step of penalty is deliberately below the length of one
+#:   grid move, so the price decides only among routes that are *equally
+#:   short*, and never buys a longer route to get clear. Every weight tried
+#:   from 2 upward made the golden board worse (49 -> 61..63), for the reason
+#:   measured and recorded at :func:`price`: the 5-unit lanes on this page are
+#:   *trapped* — the two-cell lane on the far side is already occupied by a
+#:   third wire in all 49 cases — so paying more only buys congestion.
+#:
+#: **Monotone non-increasing with distance**, and that is the one structural
+#: property the search relies on: standing further from every foreign wire must
+#: never cost more. A table that rose with distance would be a soft wall.
+PROXIMITY_COST: tuple[int, ...] = (0, 1, 0)
+
+#: The largest proximity :data:`PROXIMITY_COST` can price. A cell beyond it is
+#: free space: a wire two grids away is not what a reader has to separate.
+PROXIMITY_RANGE = len(PROXIMITY_COST) - 1
+
+_RING_OFFSETS: tuple[tuple[tuple[int, int], ...], ...] = tuple(
+    tuple(
+        (di, dj)
+        for di in range(-ring, ring + 1)
+        for dj in range(-ring, ring + 1)
+        if max(abs(di), abs(dj)) == ring
+    )
+    for ring in range(1, PROXIMITY_RANGE + 1)
+)
+
+_NEIGHBOUR_OFFSETS: tuple[tuple[int, int], ...] = (
+    (-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1),
+)
 
 _DIRS: dict[str, tuple[int, int]] = {"N": (0, -1), "S": (0, 1), "W": (-1, 0), "E": (1, 0)}
 _OPPOSITE: dict[str, str] = {"N": "S", "S": "N", "W": "E", "E": "W"}
@@ -418,23 +494,56 @@ def _bfs_chain(
     source: tuple[tuple[int, int], str],
     target: tuple[int, int],
     classify,
+    price=None,
 ) -> list[tuple[tuple[int, int], str]] | None:
-    """Deterministic stateful BFS: states are ``(cell, arrival direction)``.
+    """Deterministic uniform-cost search: states are ``(cell, arrival direction)``.
 
     Leaving a 'straight' cell is only allowed along the arrival direction
     (own corridors may also retrace back); entering one is only allowed
     along its axis (own) or perpendicular to it (foreign). Returns the
     state path — the cells plus arrival directions — or ``None``.
+
+    137: this is Dijkstra, not breadth-first. ``price`` reports what a step
+    into a cell costs above the flat 1 — for 137 it is the separation price
+    of standing in the band beside an already-routed wire
+    (:data:`PROXIMITY_COST`) — so of two routes that both connect the
+    pins it takes the one that keeps its distance from other nets' wires.
+
+    Two properties make this a repair rather than a new algorithm:
+
+    * **Legality is untouched.** ``classify`` answers exactly what it did in
+      136 and the guards below read it exactly as before; the price only ever
+      changes the price of a move that was already legal. That is the whole
+      difference between this and 136's tried-and-reverted hard block, which
+      changed legality itself and measurably made the board worse.
+    * **A priced cell is a free cell.** The price rides beside the
+      classification rather than inside it, so paying to sit beside a foreign
+      wire does not also forbid turning there — 137's first draft did put the
+      ring in the classification tuple, which silently demoted every priced
+      cell to "straight through" and was worth 15 extra findings before it was
+      found. A soft cost that quietly narrows what the search may do is the
+      hard block wearing a different hat.
+
+    Every step still costs at least 1, so the answer stays a cheapest-path one
+    among the legal moves; and the frontier is ordered by ``(cost, insertion
+    ordinal)``, so equal-cost paths are settled in exactly the breadth-first
+    order this search used to have. Geometry therefore moves only when paying
+    more genuinely reads better — and with every price at 0 the search is
+    byte-for-byte the old BFS, which is what makes "weight zero -> the old
+    board" a mutation worth pinning.
     """
     parent: dict[tuple[tuple[int, int], str], tuple[tuple[int, int], str] | None] = {source: None}
-    seen = {source}
-    queue: deque[tuple[tuple[int, int], str]] = deque([source])
-    while queue:
-        state = queue.popleft()
+    best: dict[tuple[tuple[int, int], str], int] = {source: 0}
+    frontier: list[tuple[int, int, tuple[tuple[int, int], str]]] = [(0, 0, source)]
+    ordinal = 1
+    while frontier:
+        cost, _rank, state = heapq.heappop(frontier)
+        if cost > best[state]:
+            continue  # a cheaper way to the same state already settled
         cell, arrival = state
         cls = classify(cell)
         if isinstance(cls, tuple):
-            _, _wax, own = cls
+            _, _wax, own = cls[0], cls[1], cls[2]
             allowed = (arrival, _OPPOSITE[arrival]) if own else (arrival,)
         else:
             allowed = tuple(_DIRS)
@@ -442,8 +551,6 @@ def _bfs_chain(
             di, dj = _DIRS[d2]
             nxt = (cell[0] + di, cell[1] + dj)
             nstate = (nxt, d2)
-            if nstate in seen:
-                continue
             ncls = classify(nxt)
             if ncls == "blocked":
                 continue
@@ -453,7 +560,10 @@ def _bfs_chain(
                     continue  # sideways into a corridor: dead end by rule
                 if not nown and nax is not None and _axis(d2) == nax:
                     continue  # parallel overlap with a foreign wire
-            seen.add(nstate)
+            ncost = cost + 1 + (price(nxt, d2) if price is not None else 0)
+            if ncost >= best.get(nstate, _INFINITE_COST):
+                continue
+            best[nstate] = ncost
             parent[nstate] = state
             if nxt == target:
                 path = [nstate]
@@ -461,7 +571,8 @@ def _bfs_chain(
                     path.append(parent[path[-1]])
                 path.reverse()
                 return path
-            queue.append(nstate)
+            heapq.heappush(frontier, (ncost, ordinal, nstate))
+            ordinal += 1
     return None
 
 
@@ -484,9 +595,11 @@ def route_nets(
     on a foreign wire would make the editor draw a junction dot, i.e. a
     short — while their interiors may be crossed perpendicularly (no dot,
     no connection) and must never be run along (parallel overlap). Bigger
-    nets route first; a net that fails with the one-cell separation
-    inflation retries without it; a net that still fails is reported,
-    never silently dropped.
+    nets route first. Their *neighbourhood* is not an obstacle at all but a
+    price (137): the search may cross the band beside a foreign wire and
+    pay :data:`PROXIMITY_COST` for it, so it keeps its distance where
+    there is room and still crosses where there is not. A net that fails to
+    route at any price is reported, never silently dropped.
 
     Returns ``(routes, violations)``.
     """
@@ -512,7 +625,18 @@ def route_nets(
 
     #: foreign wire cells -> their axis ('h'/'v'); enter perpendicular only
     routed_axis: dict[tuple[int, int], str] = {}
+    #: The one-cell band around a foreign wire. Exactly 136's ``routed_inflated``
+    #: — walkable, and straight-through only, which is 136's live behaviour
+    #: (see :func:`classify`). Kept as its own name so 137's addition cannot
+    #: silently widen it: the moment the priced rings below became part of this
+    #: set the golden board measured 49 -> 64 at zero price, purely because the
+    #: search lost the right to turn one grid further out.
     routed_inflated: set[tuple[int, int]] = set()
+    #: Chebyshev ring out from the nearest routed wire, out to
+    #: :data:`PROXIMITY_RANGE` — the map :func:`price` reads. O(1) per step,
+    #: which matters: recomputing the proximity per step cost the golden board
+    #: 10s -> 25s for the same answer.
+    routed_ring: dict[tuple[int, int], int] = {}
     #: foreign wire ENDPOINTS (tips, junctions): hard obstacles, all passes
     routed_endpoints: set[tuple[int, int]] = set()
     routes: list[RoutedNet] = []
@@ -562,10 +686,14 @@ def route_nets(
             for cell in cells:
                 corridor_axis.setdefault(cell, axis)
 
-        inflate = [True]
-        #: whether this net only routed after the retry dropped the separation
-        #: inflation — read back after :func:`wire_chain` to say so out loud.
-        gave_up_inflation = [False]
+        #: whether the proximity price is in force; only the safety-net retry below
+        #: turns it off, and only to try again with nothing to pay.
+        penalty = [True]
+
+        #: cells this net's own route paid a separation price to enter; the basis of
+        #: the SEPARATION_GIVEN_UP disclosure (136 kept the code, 137 restates
+        #: what it means under a priced separation).
+        paid_cells: set[tuple[int, int]] = set()
 
         def classify(cell: tuple[int, int], net_cells: set[tuple[int, int]]):
             """'blocked' | 'free' | ('straight', axis, own).
@@ -576,6 +704,16 @@ def route_nets(
             draw over the body) and foreign wires (cross perpendicular,
             never run along or turn on them — a turn would put a wire
             endpoint on the foreign wire).
+
+            **Unchanged from 136, deliberately** (137). The neighbours of a
+            routed wire are not mentioned here at all: they are ordinary free
+            space whose only extra property is a price, read by :func:`price`.
+            136 put them here as ``("straight", None, False)``, which the
+            guards never read and which therefore did nothing; the tempting
+            repair — making them honest ``"straight"`` entries — is a
+            *legality* change and was measured at 49 -> 70 findings. A price
+            that leaves this function alone is the version that cannot repeat
+            that.
             """
             ax = corridor_axis.get(cell)
             if ax is not None:
@@ -593,9 +731,101 @@ def route_nets(
             wax = routed_axis.get(cell)
             if wax is not None:
                 return ("straight", wax, False)
-            if inflate[0] and cell in routed_inflated:
+            if penalty[0] and cell in routed_inflated:
+                # 136's one-cell band, verbatim — and 136's PROGRESS entry
+                # called this dead code. It is only half dead. The *entry*
+                # guard reads the axis, finds ``None``, and lets any approach
+                # through, exactly as recorded; but the *leaving* branch reads
+                # ``own``, finds ``False``, and pins the search to
+                # straight-through. That half is live, and worth 49 -> 77
+                # findings on the golden board when removed. 137 keeps it and
+                # adds the price, rather than "fixing" the axis into a real
+                # one — that correction is the hard block, and 136 measured
+                # it at 49 -> 70.
                 return ("straight", None, False)
             return "free"
+
+        def price(cell: tuple[int, int], direction: str) -> int:
+            """What standing in ``cell`` costs the search (137).
+
+            A **property of the cell, not of the step into it** — chosen because
+            two per-step designs were built and measured first, and both made
+            the board worse:
+
+            * charging per step for merely being *near* anything charged for
+              the perpendicular crossings that are the most ordinary shape on a
+              schematic and that :func:`parallel_gap`, the ruler behind the
+              whole complaint, deliberately never reports: golden 49 -> 64.
+            * charging per step only when *parallel* was right about crossings
+              and still lost (49 -> 59), and once the straight-through lock was
+              removed it had no effect at all.
+
+            The per-cell map is also why this is not a hot loop: recomputing
+            proximity per step measured the golden board at 10s -> 25s for the
+            same answer.
+
+            **What the search can and cannot fix here — measured, not guessed.**
+            The 49 findings on the golden board were decomposed before this
+            function was written, and the answer is the reason the weight is
+            one:
+
+            * all 49 are long parallel trunks 5 units apart, none of them
+              within a few units of a pin tip, and 47 of the 49 had no polyline
+              endpoint anywhere near the clash — the lane was a free choice at
+              the moment the wire was drawn;
+            * but for **all 49** the two-cell lane on the away side was already
+              occupied by a third wire. Every one of them is a *trapped slot*,
+              not a careless lane. To gain 5 units of clearance a wire has to
+              cross whatever is in the way, and the shortest crossing is itself
+              another cell beside a stranger.
+
+            So the honest statement is that proximity pricing can only re-shuffle
+            congestion, not remove it, and on this page the shuffle it produces
+            is worth 49 -> 47 — two fewer, not the order of magnitude the task
+            hoped for. Everything larger was measured and is worse
+            (:data:`PROXIMITY_COST`). The real headroom is not in this function:
+            the page carries four nets' trunks on one gridline
+            (``rows 58/59/60/61``), which is :func:`plan_placement`'s
+            :data:`ROW_CHANNEL` producing more parallel runs than a
+            10-unit pitch can hold.
+            """
+            if not penalty[0]:
+                return 0
+            ring = routed_ring.get(cell)
+            if ring is None or ring > PROXIMITY_RANGE:
+                return 0
+            return PROXIMITY_COST[ring]
+
+        def _alongside_cells(path: list) -> set[tuple[int, int]]:
+            """Paid cells where this wire runs *alongside* a stranger, not across.
+
+            137's disclosure reads :data:`SEPARATION_GIVEN_UP` as "this wire had
+            to stand in the lane beside another net's". But the search pays for
+            both kinds of stand: a wire running **alongside** a stranger and one
+            **crossing** it each sit in a cell the ring map prices, and the
+            crossing is the most ordinary shape on a schematic. The ruler behind
+            the whole complaint (:func:`parallel_gap`, which
+            :func:`validate_full` reports as ``WIRE_TOO_CLOSE``) declines every
+            perpendicular pair and every end-to-end touch by construction — so a
+            crossing cannot become a spacing finding, and disclosing one as "runs
+            close" is a false alarm against the only measure the disclosure is a
+            comment on.
+
+            So a paid cell counts only when this wire's own axis matches the
+            axis of the foreign wire it sits beside: the cells that *can* turn
+            into ``WIRE_TOO_CLOSE``.
+            """
+            found: set[tuple[int, int]] = set()
+            for cell, arrival in path:
+                if cell in routed_axis or cell not in routed_inflated:
+                    continue
+                own = _axis(arrival)
+                for di, dj in _NEIGHBOUR_OFFSETS:
+                    foreign = routed_axis.get((cell[0] + di, cell[1] + dj))
+                    if foreign == own:
+                        found.add(cell)
+                        break
+            return found
 
         def wire_chain() -> list[list[tuple[float, float]]] | None:
             """Link the whole chain once; None when any link is unroutable.
@@ -622,48 +852,56 @@ def route_nets(
                     prev_out, prev_cell = d_out, ctip
                     continue
                 source = (prev_cell, _OPPOSITE[prev_out])
-                path = _bfs_chain(source, ctip, lambda c: classify(c, net_cells))
+                path = _bfs_chain(source, ctip, lambda c: classify(c, net_cells), price)
                 if path is None:
                     return None
                 path_cells = [s[0] for s in path]
                 net_cells.update(path_cells)
+                if penalty[0]:
+                    paid_cells.update(_alongside_cells(path))
                 polylines.append(_cells_to_points(path_cells))
                 prev_out, prev_cell = d_out, ctip
             return polylines
 
         polylines = wire_chain()
         if polylines is None:
-            inflate[0] = False
-            gave_up_inflation[0] = True
+            # Safety net, not the normal path: with separation priced rather
+            # than forbidden the first attempt cannot fail *because* of
+            # proximity, so this only fires if the cost search itself gives up.
+            # It is kept because the "never silently drop a net" promise is
+            # worth more than the code it costs, and because dropping it
+            # would take 136's disclosure below with it.
+            penalty[0] = False
+            paid_cells.clear()
             polylines = wire_chain()
-            inflate[0] = True
+            penalty[0] = True
         if polylines is None:
             violations.append(
                 Violation(
                     "NET_UNROUTABLE",
                     f"net {name}",
-                    "no free route even without separation inflation",
+                    "no route at any separation price",
                 )
             )
             continue
 
-        if gave_up_inflation[0]:
-            # 136: the retry above routes this net *without* the one-cell
-            # separation, which is what the "keep wires apart" preference asks
-            # for. Connectivity still outranks aesthetics — that ordering is
-            # unchanged — but the cost is now stated instead of being silent:
-            # the caller turns this into a plan note, and
-            # :func:`validate_full` re-measures the real geometry and reports
-            # any pair that ended up too close as ``WIRE_TOO_CLOSE``.
+        if paid_cells:
+            # 136 kept the disclosure; 137 restates *what is being disclosed*.
+            # Under a hard separation the honest report was "the first attempt
+            # found no path". Under a priced one there usually is a path — the
+            # question is whether any path avoids the crowded lanes, and often
+            # none does. Saying so is the same warning with a true sentence
+            # behind it, instead of a condition the new search can no longer
+            # reach.
             violations.append(
                 Violation(
                     "SEPARATION_GIVEN_UP",
                     f"net {name}",
-                    "routed without the separation inflation after the first "
-                    "attempt found no path — its wires may run close to other nets'",
+                    "no route kept clear of the lanes beside other nets' wires — "
+                    "its wires run close to them",
                 )
             )
-            gave_up_inflation[0] = False
+            paid_cells.clear()
 
         for poly in polylines:
             for (ax_, ay_), (bx_, by_) in zip(poly, poly[1:]):
@@ -673,12 +911,21 @@ def route_nets(
                 for i in range(i_lo, i_hi + 1):
                     for j in range(j_lo, j_hi + 1):
                         routed_axis.setdefault((i, j), axis)
-        routed_inflated.update(
-            (i + di, j + dj)
-            for (i, j) in routed_axis
-            for di in (-1, 0, 1)
-            for dj in (-1, 0, 1)
-        )
+        # 136's straight-through band, one cell wide: unchanged from 136, and
+        # load-bearing (see :func:`classify`).
+        for (i, j) in list(routed_axis):
+            for di, dj in _NEIGHBOUR_OFFSETS:
+                routed_inflated.add((i + di, j + dj))
+        # 137's price map: the Chebyshev ring out from this net's wires, and
+        # the fence :data:`PROXIMITY_RANGE` draws. Beyond it the search sees
+        # plain free space — a cell two grids from any wire is not what a reader
+        # has trouble telling apart, and pricing it would only make the search
+        # detour forever. ``setdefault`` keeps the *nearest* wire's ring, and
+        # walking the rings inside-out means the first hit is the tightest.
+        for ring, offsets in enumerate(_RING_OFFSETS, start=1):
+            for (i, j) in list(routed_axis):
+                for di, dj in offsets:
+                    routed_ring.setdefault((i + di, j + dj), ring)
         for poly in polylines:
             routed_endpoints.add(_cell(poly[0]))
             routed_endpoints.add(_cell(poly[-1]))
