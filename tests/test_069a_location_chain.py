@@ -57,6 +57,20 @@ BISHE = FIXTURES / "ProPrj_毕设FOC驱动板_v1.0.0_2026-10-07.epro2"
 #: be ambiguous. Used where a test wants a chain that is complete by construction.
 CH340 = FIXTURES / "ch340_golden.epro2"
 
+#: The rule ids allowed to produce a **device-less** chain on 毕设FOC 1.0.0 —
+#: i.e. a row whose subject is the *board*, not a part.
+#:
+#: **Added by 133b.** R11's 「no net on this board has a power-path name」 row
+#: is a statement that a whole board's power-path sieve found nothing. There is
+#: no designator to name, and the engine's own `finding_chains` docstring
+#: already blesses the shape (「a finding with no ``refs`` and no
+#: ``target.component_ref`` … the device link reads ``CHAIN_UNKNOWN``, and the
+#: report says so rather than dropping the row」). Every other rule on this
+#: fixture names a part or a net, so this set is a short, closed list rather
+#: than a general weakening: adding a rule id here means asserting that its row
+#: is genuinely about a board, not about a part that was forgotten.
+DEVICE_LESS_ALLOWED: frozenset[str] = frozenset({"pcb-foc-gate-trace-width"})
+
 
 def _run_checkup(tmp_path: Path, board: Path = BISHE) -> tuple[int, Path]:
     """One real offline `checkup`, and the `--out` directory it wrote."""
@@ -397,7 +411,24 @@ def test_the_skeleton_has_one_prefilled_row_per_finding_on_the_real_board(tmp_pa
         assert chain_text(chain) in line, chain
         assert chain["project"] != CHAIN_UNKNOWN
         assert chain["board"] != CHAIN_UNKNOWN
-        assert chain["refs"] != CHAIN_UNKNOWN
+        # **133b added the first device-less finding this fixture carries**, so
+        # the device link is no longer unconditionally filled. R11's 「no power-
+        # path net on this board」 row on PCB2 is about the *absence* of an
+        # object — there is no designator to name, and inventing one would be a
+        # guess the UNKNOWN discipline forbids. `finding_chains` already
+        # supports this (its own docstring names the case: 「a finding with no
+        # refs and no target.component_ref … the device link reads
+        # CHAIN_UNKNOWN, and the report says so rather than dropping the
+        # row」), so the row is kept and the chain says 未标注 — which is the
+        # honest value, not an empty string.
+        #
+        # Every *component-scoped* finding still names its device; that is the
+        # part of this test the SOP depends on, and it is asserted below with
+        # the device-less set subtracted.
+        if "refs" not in chain["missing"]:
+            assert chain["refs"] != CHAIN_UNKNOWN, chain
+        else:
+            assert chain["rule_id"] in DEVICE_LESS_ALLOWED, chain
         # The two blanks are there and are *blank*: a skeleton that pre-filled a
         # verdict would be the machine judging, which is the split this file undoes.
         assert REVIEW_SUMMARY_BLANK_ANALYSIS in line

@@ -376,6 +376,11 @@ def test_both_rules_are_in_the_builtin_list_in_the_declared_order():
         "pcb-mcu-crystal-keepout",
         "pcb-mcu-supply-groups",
         "pcb-mcu-reset-boot",
+        "pcb-foc-decap-proximity",
+        "pcb-foc-ground-plane",
+        "pcb-foc-gate-trace-width",
+        "pcb-foc-track-corners",
+        "pcb-foc-power-loop-area",
         "pcb-component-spacing",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
@@ -1487,14 +1492,23 @@ def test_llc_prices_no_rail_and_declares_no_current_so_both_rules_are_silent():
       llc carries no ground-named net either, so there is no difference to look
       up and not even an UNKNOWN to file).
 
-    The whole IPC output is ``[]`` while ``checksRun`` still names both rules:
+    The whole **IPC** output is ``[]`` while ``checksRun`` still names both rules:
     silence is a result, not a skip, and it is pinned as an empty answer because
     "a rule that never fires" and "a rule that fires correctly" are only told
     apart by a test that demands nothing.
+
+    **133b narrowed this pin for the same reason 126b's did** — the five FOC
+    rules legitimately produce rows on llc (its full bridge), so the assertion
+    is now over the two IPC rules rather than the runner's whole output. The
+    test's own claim — that neither IPC rule fires — is unchanged and is still
+    what the first assertion below pins.
     """
     model, _geometry = cli._load_model(LLC, view="schematic")
     findings, section = run_pcb_review(LLC, model=model)
-    assert findings == [], [(f.rule_id, f.message) for f in findings]
+    ipc_ids = {"pcb-track-ampacity", "pcb-voltage-spacing"}
+    assert [f for f in findings if f.rule_id in ipc_ids] == [], [
+        (f.rule_id, f.message) for f in findings if f.rule_id in ipc_ids
+    ]
     assert section is not None
     assert section["boards"][0]["checksRun"][-2:] == [
         "pcb-track-ampacity", "pcb-voltage-spacing",

@@ -701,11 +701,28 @@ def test_the_llc_fixture_stays_clean_under_the_fixed_rules():
     not change the measurement of an ordinary two-layer board, and because a
     rule that never fires and a rule that fires correctly are only told apart by
     a test that expects the empty answer.
+
+    **133b narrowed this pin, for the same reason 126b's own llc pin was
+    narrowed.** The five FOC rules were added to ``BUILTIN_PCB_RULES`` and llc is
+    no longer a board every PCB rule is silent on: ``pcb-foc-power-loop-area``
+    produces **four** rows there, because llc places two 330 µF electrolytics on
+    ``DC+``/``DC-`` and four ``B3M040065H`` FETs whose bus pads sit on those same
+    nets — it is a full-bridge power stage, so the high-current loop is a real
+    thing to measure. That is 133b's pack reading llc honestly, not 127b's fixes
+    failing on it, so the assertion is now over the rules that existed at 127b
+    and 133b's side of llc is pinned in ``test_133b_foc_rules.py``.
     """
     llc = FIXTURES / "llc_board.epro2"
     model, _ = cli._load_model(llc, view="schematic")
     findings, section = run_pcb_review(llc, model=model)
-    assert findings == [], [(f.rule_id, f.message) for f in findings]
+    foc_ids = {
+        "pcb-foc-decap-proximity", "pcb-foc-ground-plane",
+        "pcb-foc-gate-trace-width", "pcb-foc-track-corners",
+        "pcb-foc-power-loop-area",
+    }
+    assert [f for f in findings if f.rule_id not in foc_ids] == [], [
+        (f.rule_id, f.message) for f in findings if f.rule_id not in foc_ids
+    ]
     assert section is not None and section["available"] is True
 
 

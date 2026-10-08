@@ -146,6 +146,11 @@ def test_the_builtin_pcb_rule_list_is_the_126b_distance_pair_then_the_126c_pair(
         "pcb-mcu-crystal-keepout",
         "pcb-mcu-supply-groups",
         "pcb-mcu-reset-boot",
+        "pcb-foc-decap-proximity",
+        "pcb-foc-ground-plane",
+        "pcb-foc-gate-trace-width",
+        "pcb-foc-track-corners",
+        "pcb-foc-power-loop-area",
         "pcb-component-spacing",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
@@ -327,6 +332,11 @@ def test_run_pcb_review_reads_every_pcb_document_of_the_foc_fixture():
             "pcb-mcu-crystal-keepout",
             "pcb-mcu-supply-groups",
             "pcb-mcu-reset-boot",
+            "pcb-foc-decap-proximity",
+            "pcb-foc-ground-plane",
+            "pcb-foc-gate-trace-width",
+            "pcb-foc-track-corners",
+            "pcb-foc-power-loop-area",
             "pcb-component-spacing",
             "pcb-track-ampacity", "pcb-voltage-spacing",
         ]
@@ -449,6 +459,10 @@ def test_checkup_offline_with_a_pcb_document_carries_the_pcb_review_section(
     # and its rows are owned by `test_131f_mcu_crystal_keepout.py`.
     pcb_rows = [f for f in report["findings"] if f["rule_id"].startswith("pcb-")]
     assert pcb_rows, "the rules are in BUILTIN_PCB_RULES and several fire here"
+    # **133b moved the PCB family, and this pin moved with it** — the five FOC
+    # rules are in ``BUILTIN_PCB_RULES`` and four of them fire on 毕设FOC
+    # 1.1.0's PCB1/PCB3, so they belong in the set. Their own behaviour is
+    # `test_133b_foc_rules.py`'s subject; this pin says only that they ran.
     assert {f["rule_id"] for f in pcb_rows} == {
         "pcb-decap-distance", "pcb-regulator-cap-distance",
         "pcb-regulator-fb-placement",
@@ -456,6 +470,11 @@ def test_checkup_offline_with_a_pcb_document_carries_the_pcb_review_section(
         "pcb-mcu-crystal-keepout",
         "pcb-mcu-supply-groups",
         "pcb-mcu-reset-boot",
+        "pcb-foc-decap-proximity",
+        "pcb-foc-ground-plane",
+        "pcb-foc-gate-trace-width",
+        "pcb-foc-track-corners",
+        "pcb-foc-power-loop-area",
         "pcb-component-spacing", "pcb-voltage-spacing",
     }
     # 126a did not touch the schema or the verdict; **126d did**, by bumping the
@@ -703,6 +722,30 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     #                bites hardest, because it is a **data-model** change (a
     #                previously-unread record type became real copper) rather
     #                than a wording one.
+    #     0bb1cb0b — after 133b. One new file inside the subpackage,
+    #                `rules/pcb/foc.py`, carrying all five FOC rules
+    #                (`pcb-foc-decap-proximity`, `pcb-foc-ground-plane`,
+    #                `pcb-foc-gate-trace-width`, `pcb-foc-track-corners`,
+    #                `pcb-foc-power-loop-area`) — the FOC pack's first rules,
+    #                all `INFO` with every TI figure quoted and none applied.
+    #                The direct-only digest stays at 98b1d462 for the eighth
+    #                consecutive time, so 133b also stayed inside `rules/pcb/`
+    #                as a rule change.
+    #                133b's **other** file is `engines/pcbreview.py` (the
+    #                registration of the five ids in `BUILTIN_PCB_RULES`),
+    #                which is **outside the recipe by construction** — the
+    #                recipe covers `src/boardwise/rules/` and not `engines/`.
+    #                That is the same known limit 131c and 131d recorded: a
+    #                rule can be registered in the runner without any rule
+    #                body moving, and the `rulebody` number will not say so.
+    #                The list-order pin in `test_126a`'s own first structure
+    #                test is what catches that case.
+    #                133a, the batch before, was the **only** one to land
+    #                entirely outside the recipe: its primitives went into
+    #                `core/measure.py` (`via_geometry`, `track_corner_angle`,
+    #                `return_path_projection`), which the recipe does not
+    #                cover — so **f88ca40e is unchanged by 133a** and the
+    #                move recorded here is 133b's alone.
     # Both are measured, not guessed. The recursive digest moves whenever any
     # rule body moves - which is the whole point of the recipe, and the reason
     # this number is updated by hand together with the note in test_017 rather
@@ -710,7 +753,7 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # recorded why.
     assert recursive != old_digest, "the subpackage is inside the recipe now"
     assert old_digest == "98b1d462"
-    assert recursive == "f88ca40e", (
+    assert recursive == "0bb1cb0b", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

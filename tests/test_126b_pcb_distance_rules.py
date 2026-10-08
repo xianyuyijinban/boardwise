@@ -993,20 +993,46 @@ def test_llc_is_clean_under_both_distance_rules():
     rule on: 20 mil is not a threshold this board violates anywhere, and it
     is not one it clears by a wide margin either. Every component is inside the
     board frame (the 4-corner outline, 0 components out), so the board-frame
-    half is silent too. The whole rule output for this board is ``[]`` — which
-    is pinned, because "a rule that never fires" and "a rule that fires
+    half is silent too. The **whole** rule output for this board is ``[]`` —
+    which is pinned, because "a rule that never fires" and "a rule that fires
     correctly" are only distinguished by a test that expects the empty answer.
+
+    **133b narrowed this pin, and the narrowing is the finding.** 133b added
+    five FOC rules to ``BUILTIN_PCB_RULES``, and llc is no longer a board every
+    PCB rule is silent on: `pcb-foc-power-loop-area` produces **four rows**
+    there, because llc places two 330 µF bulk capacitors on ``DC+``/``DC-`` and
+    four ``B3M040065H`` MOSFETs whose bus pads sit on those same nets — it is a
+    full-bridge power stage, so the high-current loop is a real thing to
+    measure. (llc's other three FOC rows are the two-layer / no-power-net
+    「out of scope」 notices.) That is the FOC pack reading llc honestly rather
+    than 126b's two distance rules failing on it, so this test now asserts what
+    it actually claims — 「126b's two rules and every other rule that existed
+    before 133b are silent」 — by subtracting the FOC set, and
+    `test_133b_foc_rules.py` pins the FOC side of llc on its own.
     """
     model, _board_ = cli._load_model(LLC, view="schematic")
     findings, section = run_pcb_review(LLC, model=model)
-    assert findings == [], (
+    foc_ids = {
+        "pcb-foc-decap-proximity", "pcb-foc-ground-plane",
+        "pcb-foc-gate-trace-width", "pcb-foc-track-corners",
+        "pcb-foc-power-loop-area",
+    }
+    assert [f for f in findings if f.rule_id not in foc_ids] == [], (
         f"llc is clean under both rules; got "
         f"{[(f.rule_id, f.message) for f in findings]}"
     )
+    # The FOC half is not an accident of the subtraction above — llc really
+    # does place a power stage, and the rule really does find it. Pinned here
+    # so a future change that made llc silent for the FOC pack would be caught
+    # rather than read as an improvement.
+    assert [f.rule_id for f in findings if f.rule_id in foc_ids].count(
+        "pcb-foc-power-loop-area"
+    ) == 4, "llc's full bridge (C3/C4 + Q1..Q4) still yields four loops"
     assert section is not None and section["available"] is True
-    # checksRun names **all nine** rules now (131b inserted the regulator pair
-    # after 126b's, 131c the feedback rule, 131d the crystal rule and 131e the
-    # two MCU rules; 126c appended the IPC pair):
+    # checksRun names **all fourteen** rules now (131b inserted the regulator
+    # pair after 126b's, 131c the feedback rule, 131d the crystal rule, 131e
+    # the two MCU rules, 131f the keepout rule, and 133b the five FOC rules;
+    # 126c appended the IPC pair):
     # silence is a *result*, not a skip. On this board the two IPC rules are
     # silent for two different reasons worth keeping separate, and both are
     # 126c's own discipline rather than an accident:
@@ -1039,6 +1065,11 @@ def test_llc_is_clean_under_both_distance_rules():
         "pcb-mcu-crystal-keepout",
         "pcb-mcu-supply-groups",
         "pcb-mcu-reset-boot",
+        "pcb-foc-decap-proximity",
+        "pcb-foc-ground-plane",
+        "pcb-foc-gate-trace-width",
+        "pcb-foc-track-corners",
+        "pcb-foc-power-loop-area",
         "pcb-component-spacing",
         "pcb-track-ampacity", "pcb-voltage-spacing",
     ]
