@@ -98,7 +98,18 @@ FOC_133C_RULE_IDS = [
     "pcb-foc-ground-tie",
     "pcb-foc-return-path",
 ]
-ALL_FOC_RULE_IDS = FOC_RULE_IDS + FOC_133C_RULE_IDS
+#: **133d added three more ``pcb-foc-*`` rules** (``rules/pcb/focthermal.py``:
+#: R7 / R8 / R9, the thermal-design batch). They continue the same contiguous FOC
+#: block, so the two pins below have to say so — the **third** batch to widen
+#: this list, which is the pattern rather than an accident:
+#: 133b's five, then 133c's three, then 133d's three.
+#: ``test_133d_foc_thermal.py`` pins their behaviour.
+FOC_133D_RULE_IDS = [
+    "pcb-foc-thermal-via-style",
+    "pcb-foc-thermal-via-array",
+    "pcb-foc-thermal-exit-path",
+]
+ALL_FOC_RULE_IDS = FOC_RULE_IDS + FOC_133C_RULE_IDS + FOC_133D_RULE_IDS
 
 
 def _rows(path: Path, rule_id: str) -> list:
@@ -147,6 +158,7 @@ def test_the_five_foc_rules_sit_between_the_mcu_block_and_the_geometry_sweep():
         "pcb-foc-ground-domains",
         "pcb-foc-ground-tie",
         "pcb-foc-return-path",
+        *FOC_133D_RULE_IDS,
         "pcb-component-spacing",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
@@ -154,8 +166,9 @@ def test_the_five_foc_rules_sit_between_the_mcu_block_and_the_geometry_sweep():
     assert all(isinstance(rule, PcbRule) for rule in BUILTIN_PCB_RULES)
     ids = [rule.id for rule in BUILTIN_PCB_RULES]
     assert [i for i in ids if i.startswith("pcb-foc")] == ALL_FOC_RULE_IDS, (
-        "the FOC block is contiguous and in the task book's order — 133b's five "
-        "then 133c's three, which is where each batch put its own"
+        "the FOC block is contiguous and in the task book's order — 133b's five, "
+        "then 133c's three, then 133d's three, which is where each batch put "
+        "its own"
     )
 
 
@@ -832,17 +845,18 @@ def test_mutation_dropping_the_bulk_capacitor_floor_breaks_r20():
 
 
 def test_mutation_adding_the_foc_rules_moves_the_rule_list_pin():
-    """Structure-gate mutation: the five ids are exactly what 133b added.
+    """Structure-gate mutation: the ids are exactly what 133b/133c/133d added.
 
-    Removing any one of the five from ``BUILTIN_PCB_RULES`` breaks the
-    structure pin above. This test makes that dependency explicit by asserting
-    the FOC block is exactly the eight ids and no others, so a stray ninth
+    Removing any one of them from ``BUILTIN_PCB_RULES`` breaks the structure pin
+    above. This test makes that dependency explicit by asserting the FOC block
+    is exactly these eleven ids and no others, so a stray twelfth
     ``pcb-foc-*`` rule cannot slip in un-pinned.
 
-    **133c widened the list from five to eight**, which is what makes this test
-    a live pin rather than a historical one: the block is now 133b's five in
-    the task book's order followed by 133c's three (R1 / R1b / R5), all in the
-    same contiguous run ahead of the geometry sweep.
+    **The list has been widened twice** — 133b's five, then 133c added three
+    (R1 / R1b / R5), then 133d added three (R7 / R8 / R9) — which is what makes
+    this a live pin rather than a historical one: the block is 133b's five in
+    the task book's order followed by 133c's three and then 133d's three, all in
+    the same contiguous run ahead of the geometry sweep.
     """
     ids = [rule.id for rule in BUILTIN_PCB_RULES]
     assert [i for i in ids if i.startswith("pcb-foc")] == ALL_FOC_RULE_IDS
