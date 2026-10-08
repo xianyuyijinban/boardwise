@@ -33,7 +33,14 @@ wire (parallel overlap). The validator turns any foreign-endpoint-on-wire
 into ``CROSS_NET_SHORT``; pure crossings are legal by design. Visual
 separation is a first-pass preference (one-cell inflation around earlier
 nets); a net that fails with it retries without — connectivity outranks
-aesthetics.
+aesthetics — and says so, in ``SEPARATION_GIVEN_UP`` and in the plan's
+notes (136).
+
+The preference alone was the whole of the old story, and it was not enough:
+the validator re-checks the *finished* geometry rather than trusting a
+promise, so it also measures the spacing the router only ever aspired to.
+Two nets' wires running alongside each other closer than
+:data:`WIRE_CLEARANCE` come out as ``WIRE_TOO_CLOSE`` (136).
 
 Routing grid: :data:`GRID` = 5 canvas units. EasyEDA pin offsets are
 multiples of 5 (measured on the golden library), and the shelf packing
@@ -556,6 +563,9 @@ def route_nets(
                 corridor_axis.setdefault(cell, axis)
 
         inflate = [True]
+        #: whether this net only routed after the retry dropped the separation
+        #: inflation — read back after :func:`wire_chain` to say so out loud.
+        gave_up_inflation = [False]
 
         def classify(cell: tuple[int, int], net_cells: set[tuple[int, int]]):
             """'blocked' | 'free' | ('straight', axis, own).
@@ -624,6 +634,7 @@ def route_nets(
         polylines = wire_chain()
         if polylines is None:
             inflate[0] = False
+            gave_up_inflation[0] = True
             polylines = wire_chain()
             inflate[0] = True
         if polylines is None:
@@ -635,6 +646,24 @@ def route_nets(
                 )
             )
             continue
+
+        if gave_up_inflation[0]:
+            # 136: the retry above routes this net *without* the one-cell
+            # separation, which is what the "keep wires apart" preference asks
+            # for. Connectivity still outranks aesthetics — that ordering is
+            # unchanged — but the cost is now stated instead of being silent:
+            # the caller turns this into a plan note, and
+            # :func:`validate_full` re-measures the real geometry and reports
+            # any pair that ended up too close as ``WIRE_TOO_CLOSE``.
+            violations.append(
+                Violation(
+                    "SEPARATION_GIVEN_UP",
+                    f"net {name}",
+                    "routed without the separation inflation after the first "
+                    "attempt found no path — its wires may run close to other nets'",
+                )
+            )
+            gave_up_inflation[0] = False
 
         for poly in polylines:
             for (ax_, ay_), (bx_, by_) in zip(poly, poly[1:]):
@@ -760,6 +789,41 @@ def _point_on_segment(point: tuple[float, float], seg: Segment, eps: float = 0.5
 #: units, so this tolerance cannot hide one.
 ENDPOINT_OVERHANG_TOLERANCE = 10.0
 
+#: Minimum gap between two *different* nets' wires running alongside each
+#: other, in canvas units (1 unit = 1 mil = 0.0254 mm).
+#:
+#: **House rule pending 岳's confirmation** (136), the same status
+#: :data:`~boardwise.engines.generate.LONG_NET_LABEL_UNITS` carries. 10 units
+#: is not a guess and not a PCB clearance rule — a schematic has no copper
+#: width — it is **measured off the human's own page**: replaying the golden
+#: CH340G board, the tightest gap between two nets' *parallel* wires is
+#: exactly 10.0 units, and 19 pairs sit under 15. The human's own routing pitch
+#: is therefore the natural ruler, and a drawing that reads worse than the
+#: reference page is the thing worth reporting.
+#:
+#: The number is pinned by measurement rather than by taste; moving it moves
+#: the check for every page at once.
+WIRE_CLEARANCE = 10.0
+
+#: Violation codes that are **reported, not fatal** (136).
+#:
+#: Every other code means the plan is electrically wrong or unbuildable —
+#: a wire through a part, two nets shorted, an end that connects to nothing —
+#: and refusing to draw it is the whole point of the gate. These two are a
+#: different kind of finding: the drawing is *correct*, it is merely hard to
+#: read, and the reading is a house rule (see :data:`WIRE_CLEARANCE`) whose
+#: exact number is still pending confirmation. A ruler still under
+#: calibration must not be able to stop a board from being drawn; it reports,
+#: the operator decides.
+#:
+#: :func:`blocking_violations` is what the draw gate reads.
+ADVISORY_VIOLATION_CODES = frozenset({"WIRE_TOO_CLOSE", "SEPARATION_GIVEN_UP"})
+
+
+def blocking_violations(violations: list[Violation]) -> list[Violation]:
+    """The violations that must stop a draw, i.e. all but the advisory ones."""
+    return [v for v in violations if v.code not in ADVISORY_VIOLATION_CODES]
+
 
 def _segment_distance(point: tuple[float, float], seg: Segment) -> float:
     """Distance from a point to a Manhattan segment (0 when it lies on it)."""
@@ -820,6 +884,45 @@ def _segment_crosses_rect(seg: Segment, rect: Rect) -> bool:
         lo, hi = sorted((ax, bx))
         return min(hi, rect.x1) > max(lo, rect.x0)
     return False
+
+
+def parallel_gap(seg_a: Segment, seg_b: Segment) -> tuple[float, float] | None:
+    """``(gap, shared_run)`` for two wires running alongside each other.
+
+    ``None`` when the pair is not the shape this ruler is about:
+
+    * **perpendicular crossings** — a legal form, not a spacing fault. The
+      router permits them by design (a wire crossing another wire continues
+      through unconnected) and :data:`CROSS_NET_SHORT` already covers the
+      illegal version, an *endpoint* landing on a foreign wire;
+    * **merely adjacent** — the two runs do not overlap along their own axis,
+      so the wires pass each other past a bend rather than running side by
+      side. Their projections do come close, but they are not a parallel run
+      and reporting them would bury the real findings under corner artefacts
+      (measured: 86 such pairs under 15 units on the golden page against 19
+      genuine parallel runs).
+
+    ``shared_run`` is how far the two overlap along their common axis — it is
+    what separates "two long wires running 5 units apart" from "a 4-unit jog
+    that passes a stranger's wire near a corner", and the finding reports it.
+    """
+    (ax, ay), (bx, by) = seg_a.points()
+    (cx, cy), (dx, dy) = seg_b.points()
+    a_horizontal, b_horizontal = abs(ay - by) < 1e-9, abs(cy - dy) < 1e-9
+    if a_horizontal and b_horizontal:
+        gap = abs(ay - cy)
+        low = max(min(ax, bx), min(cx, dx))
+        high = min(max(ax, bx), max(cx, dx))
+    elif not a_horizontal and not b_horizontal:
+        gap = abs(ax - cx)
+        low = max(min(ay, by), min(cy, dy))
+        high = min(max(ay, by), max(cy, dy))
+    else:
+        return None  # perpendicular: a legal crossing
+    shared = high - low
+    if shared <= 1e-9:
+        return None  # end to end: that is a connection, not a spacing fault
+    return gap, shared
 
 
 def validate_full(
@@ -1022,6 +1125,35 @@ def validate_full(
                                 "junction-dot it into a short",
                             )
                         )
+
+    # --- cross-net: two nets' wires running alongside each other (136)
+    #
+    # The user-facing complaint this answers is "the parts and the wires are
+    # all piled in one block", and until now nothing in the gate could see it:
+    # the router's separation is a *construction-time preference* (one-cell
+    # inflation, which the fallback retry drops), so the validator — whose job
+    # is to re-check the finished geometry rather than trust a promise — was
+    # blind to every pair of nets' wires lying 5 units apart. Reporting the
+    # number is the whole point; see :data:`WIRE_CLEARANCE` for the ruler.
+    for i, net_a in enumerate(net_names):
+        for net_b in net_names[i + 1:]:
+            for seg_a in segs_by_net[net_a]:
+                for seg_b in segs_by_net[net_b]:
+                    measured = parallel_gap(seg_a, seg_b)
+                    if measured is None:
+                        continue
+                    gap, shared = measured
+                    if gap >= WIRE_CLEARANCE:
+                        continue
+                    violations.append(
+                        Violation(
+                            "WIRE_TOO_CLOSE",
+                            f"net {net_a} vs net {net_b}",
+                            f"segments {seg_a.points()} and {seg_b.points()} run "
+                            f"{gap:.0f} apart over {shared:.0f} units — under the "
+                            f"{WIRE_CLEARANCE:.0f} a reader needs to tell them apart",
+                        )
+                    )
 
     # --- constraints 4/5: annotations on-wire and clear
     for route in routes:

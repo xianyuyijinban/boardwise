@@ -10831,7 +10831,11 @@ def _cmd_lint(args: argparse.Namespace) -> int:
             print(f"  note: {note}")
         for line in lines:
             print(line)
-    return 1 if plan.violations else 0
+    # 136: advisory findings (wire spacing, the router's separation
+    # disclosure) are reported and counted but do not make `lint` exit 1 —
+    # they describe a drawing that is *correct but hard to read*, and the
+    # ruler they use is a house rule still pending confirmation.
+    return 1 if layout_engine.blocking_violations(plan.violations) else 0
 
 
 def _ask_confirm() -> bool:
