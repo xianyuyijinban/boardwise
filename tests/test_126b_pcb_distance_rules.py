@@ -1004,7 +1004,8 @@ def test_llc_is_clean_under_both_distance_rules():
         f"{[(f.rule_id, f.message) for f in findings]}"
     )
     assert section is not None and section["available"] is True
-    # checksRun names **all four** rules now (126c appended the IPC pair):
+    # checksRun names **all five** rules now (131b inserted the regulator pair
+    # after 126b's, 126c appended the IPC pair):
     # silence is a *result*, not a skip. On this board the two IPC rules are
     # silent for two different reasons worth keeping separate, and both are
     # 126c's own discipline rather than an accident:
@@ -1013,8 +1014,12 @@ def test_llc_is_clean_under_both_distance_rules():
     #   * `pcb-voltage-spacing` has no priced pair — the architecture
     #     enumeration prices **no** rail on this board and llc carries no
     #     ground-named net, so there is no difference to look up.
+    #   * `pcb-regulator-cap-distance` (131b) is silent because llc's shelf has
+    #     no `ic.ldo` / `ic.buck` entry at all — measured, see
+    #     `test_131b_regulator_cap_distance.py::test_llc_names_no_regulator`.
     assert section["boards"][0]["checksRun"] == [
-        "pcb-decap-distance", "pcb-component-spacing",
+        "pcb-decap-distance", "pcb-regulator-cap-distance",
+        "pcb-component-spacing",
         "pcb-track-ampacity", "pcb-voltage-spacing",
     ]
 

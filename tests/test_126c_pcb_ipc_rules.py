@@ -350,7 +350,11 @@ def test_the_spacing_bands_are_the_standard_table_read_as_data():
 def test_both_rules_are_in_the_builtin_list_in_the_declared_order():
     """「The list is the truth」 — the structure gate 126a put up, now four deep.
 
-    126c **appends** its two to 126b's pair rather than interleaving them, so the
+    131b **inserts** ``pcb-regulator-cap-distance`` after ``pcb-decap-distance``
+    rather than appending it: it answers the same measurement question on a
+    narrower object (one regulator's VIN/VOUT pins rather than every IC's every
+    supply net), so it belongs with the decoupling reading. 126c **appends** its
+    two to 126b's pair rather than interleaving them, so the
     executed order is 「house rules first, standards-derived readings second」.
     The order is pinned because the report's ``pcb_review.boards[].checksRun``
     prints it: a reader comparing two reports needs to know the difference
@@ -358,6 +362,7 @@ def test_both_rules_are_in_the_builtin_list_in_the_declared_order():
     """
     assert [rule.id for rule in BUILTIN_PCB_RULES] == [
         "pcb-decap-distance",
+        "pcb-regulator-cap-distance",
         "pcb-component-spacing",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
