@@ -44,8 +44,12 @@ UNKNOWN = "UNKNOWN"
 # ``+5V`` / ``12V`` / ``3.3V`` — optional plus, number, trailing V.
 _V_FORM = re.compile(r"^\+?(\d+(?:\.\d+)?)V$")
 # ``5V0`` / ``3V3`` / ``1V8`` — the ShortJam commas-free rail style. Exactly
-# one decimal digit: ``12V34`` is not a rail anyone names.
-_MN_FORM = re.compile(r"^(\d+)V(\d)$")
+# one decimal digit: ``12V34`` is not a rail anyone names. The optional plus is
+# here for the same reason it is on :data:`_V_FORM` (issue #71): ``+3V3`` is a
+# standard rail name and the mid-letter half of the vocabulary was the only
+# half where the ``+`` was missing, so ``+3V3`` priced as an unknown net while
+# ``+5V`` priced as 5 V.
+_MN_FORM = re.compile(r"^\+?(\d+)V(\d)$")
 
 #: Families whose base part number **ends in digits that name the part, not a
 #: voltage** (issue #17 point one). The classic adjustable regulators and the

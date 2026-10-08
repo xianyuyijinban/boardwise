@@ -952,6 +952,86 @@ def test_two_domains_on_one_net_is_a_violation(tmp_path):
     assert "level-domain" in rules_of(report, "levels")
 
 
+@pytest.mark.parametrize("second", ["3.3V", "3V3", "3.3", "3v3", "+3V3"])
+def test_the_same_domain_written_two_ways_is_one_domain(tmp_path, second):
+    """Issue #70: the levels gate compared free strings; #53 gave the power-tree
+    gate a voltage parser and this gate never got one.
+
+    ``level`` is a hand-written free string — ``docs/validate_spec.md``'s own
+    examples are ``3V3``/``5V``/``USB`` — and ``blocklib/blocks.portmeta.json``
+    writes the CH340's logic ports as ``3V3`` while ``3.3V`` is what most people
+    type. Same 3.3 V domain, two strings, one **false VIOLATION** on a correctly
+    wired board, and this gate is fail-closed: it stops the spec before
+    ``may proceed``. So the reading is the repository's one voltage parser
+    (:func:`boardwise.core.values.parse_voltage_volts`, the same one #53's
+    ``_same_voltage`` uses), and equal voltages are one domain.
+    """
+    spec = level_spec(tmp_path, {"level": second})
+    gate = validate_spec(spec, target="some_board.epro2").gate("levels")
+    assert gate.status != FAIL, (
+        f"3V3 and {second!r} are one 3.3 V domain — a VIOLATION here is a false one"
+    )
+    assert not [f for f in gate.violations if "two IO domains" in f.message]
+
+
+@pytest.mark.parametrize("second", ["usb", "Usb"])
+def test_a_named_domain_compares_case_folded(tmp_path, second):
+    """``USB`` against ``usb`` is the same false VIOLATION by case alone.
+
+    A level that is not a voltage has no numbers to normalize, so case folding
+    is the whole of what can honestly be claimed about it — and it is what keeps
+    ``USB``/``usb`` out of the "two domains" branch. Built with ``USB`` on both
+    ends (rather than through ``level_spec``, whose ``ta`` is fixed at ``3V3``),
+    because a named domain is the case this reading has to handle on its own.
+    """
+    spec = build(
+        tmp_path,
+        spec_json(
+            blocks=[
+                {"id": "a", "template": "ta", "at": [0.0, 0.0], "evidence": ["intent"]},
+                {"id": "b", "template": "tb", "at": [0.0, 0.0], "evidence": ["intent"]},
+            ],
+            connections=[
+                {"net": "N", "ports": [["a", "A"], ["b", "B"]], "evidence": ["intent"]}
+            ],
+            references=[reference("intent", "intent", path="intent.md")],
+        ),
+        {
+            "ta": template_body("ta", [port("A", level="USB")]),
+            "tb": template_body("tb", [port("B", level=second)]),
+        },
+    )
+    gate = validate_spec(spec, target="some_board.epro2").gate("levels")
+    assert gate.status != FAIL, (second, [f.message for f in gate.violations])
+    assert not [f for f in gate.violations if "two IO domains" in f.message]
+
+
+@pytest.mark.parametrize("second", ["1V8", "5V", "12V", "LVDS", "TTL"])
+def test_genuinely_different_domains_are_still_two_domains(tmp_path, second):
+    """The normalization must not become a blanket pass — the gate's whole
+    reason to exist is that one net carries one domain. ``3V3`` against any of
+    these really is two domains and stays a VIOLATION."""
+    spec = level_spec(tmp_path, {"level": second})
+    gate = validate_spec(spec, target="some_board.epro2").gate("levels")
+    assert gate.status == FAIL, second
+    assert [f.message for f in gate.violations if "two IO domains" in f.message], second
+
+
+def test_the_levels_gate_and_the_power_tree_gate_share_one_voltage_reading():
+    """Issue #70's maintainability claim, pinned: both gates normalize a rail
+    with the repository's **single** voltage parser. Two copies of this reading
+    is the "one quantity, one implementation" gap #51/#52/#53 each measured once
+    already — so the pin asks for the shared reader by name in both gates."""
+    from boardwise.core.values import parse_voltage_volts
+    from boardwise.engines import validate_spec as vs
+
+    assert vs.parse_voltage_volts is parse_voltage_volts
+    # and both helpers normalize through the same call: _io_domain(3.3V) and
+    # _same_voltage('3.3V','3V3') both see 3.3
+    assert vs._io_domain("3V3") == vs._io_domain("3.3V") == vs._io_domain("3v3")
+    assert vs._same_voltage("3.3V", "3V3") is True
+
+
 def test_no_declaration_makes_two_domains_on_one_net_legal(tmp_path):
     """A block saying it is a level shifter does not licence its own net.
 

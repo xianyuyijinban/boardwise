@@ -79,6 +79,35 @@ def test_a_whitelisted_net_name_yields_a_voltage_with_its_source():
         assert hit == (volts, f"net name {name!r}"), name
 
 
+@pytest.mark.parametrize("name,volts", [
+    ("+3V3", 3.3), ("+5V0", 5.0), ("+1V8", 1.8), ("+12V0", 12.0),
+    ("+3.3V", 3.3), ("+12V", 12.0), ("+5V", 5.0),
+])
+def test_a_plus_prefixed_rail_prices_the_same_as_its_unprefixed_spelling(name, volts):
+    """Issue #71: the ``+`` was accepted on one rail grammar and missing on the other.
+
+    ``_V_FORM`` (``^\\+?(\\d+(\\.\\d+)?)V$``) carried ``^\\+?`` and ``_MN_FORM``
+    (``^(\\d+)V(\\d)$``) did not — so ``+5V`` priced as 5 V while ``+3V3`` priced
+    as **nothing**. The mid-letter half is exactly where the ``+`` lives in real
+    boards (``+3V3``/``+5V0``/``+1V8`` are standard rail names, not typos), and
+    the hole was reachable: ``arch-opendrain-pullup`` judges the far end of a
+    pull-up resistor through this function, so a ``10k`` from nFAULT to ``+3V3``
+    was reported "no pull-up" while the identical resistor to ``+5V`` passed.
+    """
+    hit = voltage_from_net_name(name)
+    assert hit == (volts, f"net name {name!r}"), name
+    # and the unprefixed spelling of the same rail is unchanged
+    assert voltage_from_net_name(name.lstrip("+")) == (volts, f"net name {name.lstrip('+')!r}")
+
+
+def test_the_plus_prefix_is_still_not_a_rail_of_its_own():
+    """The fix widens the mid-letter grammar by exactly one character. ``+`` alone,
+    ``12V34`` (two decimal digits is not a rail) and the unpriced names stay
+    unpriced — the whitelist's discipline is to refuse, not to widen."""
+    for name in ("+", "+12V34", "+V3", "++3V3", "VCC", "NET7"):
+        assert voltage_from_net_name(name) is None, name
+
+
 def test_a_bare_vcc_is_never_guessed():
     """Names lie: VCC/VDD/VBUS get no voltage from their name alone."""
     for name in ("VCC", "VDD", "VBUS", "VEE", "NET7", "VIN", ""):

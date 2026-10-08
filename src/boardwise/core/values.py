@@ -48,7 +48,11 @@ the digits look like".
   its own ``<value><tolerance><voltage>`` field (``HGC0603R5106M250NTHJ`` ->
   25 V; 092 A2b). Borrowed from the guard beside it rather than invented:
   :data:`_VOLTAGE_TAIL_RE` is the shape this module already refuses a value
-  reading for, so the figures in that field are a rating and nothing else.
+  reading for, so the figures in that field are a rating and nothing else. Two
+  fields that *mimic* that shape are refused rather than read (issue #72): a
+  bare package size in a ``Value`` field (:func:`states_package_size` — what
+  ``0402`` became 402 V through), and TDK's thickness code, whose ordered field
+  string puts it where a voltage code would be.
 - :func:`parse_current_amps` — a current declaration (``5A``, ``500mA``; 092
   A2b), the one reading the DesignIntent's ``continuousCurrent`` needed and no
   rule was allowed to write for itself.
@@ -321,10 +325,28 @@ def mpn_voltage_rating(token: str) -> tuple[float, str] | None:
 
     The second element is the matched tail, so a rule can quote the field it
     read instead of asking a reader to trust a number.
+
+    **Thickness codes are not voltage codes (issue #72).** TDK prints its
+    ceramics as ``C1608X7R1H104K080AB`` — size, dielectric, a **voltage code**
+    (``1H`` = 50 V), the EIA value code with its tolerance letter, then a
+    **thickness code** (``080`` = 0.8 mm) and the packaging letters. The
+    ``<value><tol><three figures>`` tail matches ``104K080``, but the three
+    figures are the *thickness*: reading them gave 8.0 V for a 50 V part, which
+    then fails a 12 V rail as a **false** WARN. So when the token is one of
+    TDK's own ordered field strings — a voltage code letter sitting immediately
+    in front of the EIA group, i.e. the ``[dielectric] <letter> <EIA> <tol>
+    <thickness>`` layout — this reader **refuses** rather than guess from the
+    tail. A refusal is a UNKNOWN upstream, the honest answer for a field it
+    cannot name; the guard is narrow enough that the EIA tails the shelf really
+    relies on (``104K500``, ``106K250``, ``225K101``) keep reading, which
+    :func:`test_the_shelf_and_the_code_reader_agree_on_every_catalogued_capacitor`
+    and this reader's own pins both assert.
     """
     if not token or _too_long(token):
         return None
     text = token.strip()
+    if _is_tdk_thickness_tail(text):
+        return None
     found = _voltage_rating_tail(text)
     if found is None:
         return None
@@ -336,6 +358,35 @@ def mpn_voltage_rating(token: str) -> tuple[float, str] | None:
     if volts is None:
         return None
     return volts, found
+
+
+#: TDK's own ordered field string (issue #72): ``<size><dielectric><voltage
+#: code><EIA><tolerance><thickness><packaging>``, e.g.
+#: ``C1608X7R1H104K080AB``. The head is TDK's series prefix plus a **four-figure
+#: size** (``C1608``, ``CGA0603``); the distinctive mark is the voltage code —
+#: the ``<digit><letter>`` pair (``1H`` = 50 V) sitting **in front of** the
+#: three-figure EIA group, where no other family this reader decodes puts a
+#: letter-prefixed code. When this matches, the ``<value><tol><figures>`` tail
+#: that follows is the **thickness** code, not a rating.
+_TDK_FIELD_RE = re.compile(
+    r"^[A-Z]{1,3}\d{4}[A-Z]\dR\d[A-Z]\d{3}[A-Z]\d{3}[A-Z]{2}$"
+)
+
+
+def _is_tdk_thickness_tail(token: str) -> bool:
+    """True when ``token`` is a TDK field string whose tail is a thickness code.
+
+    Narrow on purpose (issue #72): it fires only on the **whole** ordered TDK
+    layout — a four-figure size head, the voltage code, the EIA code with its
+    tolerance letter, a three-figure thickness and a two-letter packaging tail.
+    The EIA-tail parts the shelf actually carries (``CGA0603X7R104K500JT``,
+    ``HHV0805R7225K101NSLJ``) print no voltage code before the EIA group and so
+    keep their real readings, which
+    :func:`test_the_shelf_and_the_code_reader_agree_on_every_catalogued_capacitor`
+    asserts over all 11 of them. Refusing here sends the rating to UNKNOWN (a
+    safe direction) instead of inventing volts out of a millimetre thickness.
+    """
+    return bool(_TDK_FIELD_RE.match(token))
 
 
 def _non_eia_notation(token: str) -> bool:
@@ -1186,6 +1237,28 @@ def has_package_context(mpn: str) -> bool:
         return False
     token = mpn.strip().split()[0] if mpn.strip() else ""
     return any(
+        match.group(0) in _SIZE_CODE_RUNS for match in re.finditer(r"\d+", token)
+    )
+
+
+def states_package_size(token: str) -> bool:
+    """True when a bare token states a package size rather than a voltage (issue #72).
+
+    The question a ``Value`` field's voltage reader has to ask before it hands a
+    digit run to :func:`parse_voltage_volts`: ``100nF/0402`` splits into
+    ``100nF`` and ``0402``, and the four figures are the **size** — read as
+    volts they come back 402, which is a number no capacitor is rated at and a
+    number every rail this repository prices (3V3/5V/12V) passes against. The
+    direction is the dangerous one: a misread rating makes a rule *less* likely
+    to warn, so an under-rated part on a 12 V rail reads as compliant.
+
+    A token counts when its **only** digit run is a size code, which is what a
+    bare size looks like (``0402``, ``105``). A size carrying its own unit or
+    value spelling (``0402V``) is refused by the size list's own shape rather
+    than by this guard, and ``100nF`` — whose ``100`` is a capacitance — is not
+    in :data:`_SIZE_CODE_RUNS` either.
+    """
+    return bool(re.fullmatch(r"\d+", token.strip() or "x")) and any(
         match.group(0) in _SIZE_CODE_RUNS for match in re.finditer(r"\d+", token)
     )
 
