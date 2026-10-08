@@ -29,16 +29,26 @@ Evidence sources, in the order the task book names them:
   side; and the three-document export, which must produce nothing rather than a
   row about a part that is not on the board.
 
-**Which model is read is pinned, not assumed.** Both
-:func:`~boardwise.rules.pcb.regulator.RegulatorCapDistance.check` and
-:func:`boardwise.cli._load_model` default to the *schematic* view of a PCB-side
-backup; that is what makes the PCB-side model's pin names (131a) visible to this
-rule. On the 1.0.0 export the PCB view names the same components but resolves
-every net to an auto-generated ``NETn`` (no netlist is stored in a backup's
-PCB documents), which would report ``$1N66612`` as ``NET11`` and could not find
-a single capacitor candidate. The rule reads its side labels from
-:func:`boardwise.core.pinrole.pin_role` and its nets from the schematic view;
-both tests below assert that the net it searched is the named one.
+**Which model is read, corrected by 131c.** 131b shipped this rule reading
+``ctx.model``, and this docstring then argued the *schematic* view was the right
+one, on the claim that the PCB view 「resolves every net to an auto-generated
+``NETn``」. **That claim was backwards, and 131c measured it.** On the 1.0.0
+export the two views name the same wires differently, and neither is ``NETn``'s
+fault:
+
+* the **schematic** view renumbers: U5's output is ``NET11``, U6's is ``NET3``;
+* the **PCB** view carries the editor's own names: ``$1N66612`` and
+  ``$1N66627``.
+
+The nets are the same wires, so the rule measured the *right* parts and
+attributed them to the *wrong* net. That is how U5's VOUT storage pool read
+「empty」 in a real ``checkup`` while ``C3``/``C4`` sat on that very net 41.8 mil
+from the pin, and how U6's VOUT storage nearest read *nothing* while ``C64``
+was 91.4 mil away. The rule now reads ``ctx.pcb_model`` — the netlist view of
+the PCB document it is measuring — and the real ``checkup`` is pinned both ways
+in ``test_131c_regulator_fb_placement.py``. The synthetic helper below fills
+``pcb_model=``, and ``_ctx`` fills **both** fields so a test that wants to prove
+the schematic view is *not* read can say so.
 
 The offline fixtures are read-only. Nothing here runs an editor or a daemon.
 """
@@ -146,9 +156,26 @@ def _board(parts: list[tuple[str, float, float]], pads: list[PadGeometry]) -> Bo
     )
 
 
-def _ctx(board: BoardGeometry | None, model: DesignModel | None = None) -> PcbReviewContext:
+def _ctx(
+    board: BoardGeometry | None,
+    model: DesignModel | None = None,
+    pcb_model: DesignModel | None = None,
+) -> PcbReviewContext:
+    """A synthetic context, with the netlist in **both** slots (131c).
+
+    ``pcb_model`` is the field the rule reads; it defaults to ``model`` so the
+    synthetic boards below (which have one view, named consistently) keep
+    working unchanged. A test that wants to prove the schematic view is *not*
+    what the rule consults passes two different models and asserts the row names
+    a net that only exists in ``pcb_model``.
+    """
     return PcbReviewContext(
-        board=board, board_title="SYNTH", model=model, intent=None, module_of={}
+        board=board,
+        board_title="SYNTH",
+        model=model,
+        intent=None,
+        module_of={},
+        pcb_model=model if pcb_model is None else pcb_model,
     )
 
 
@@ -691,39 +718,48 @@ def test_the_robot_ldo_reports_both_pools_on_both_sides():
 # ---------------------------------------------------------------------------
 
 
-def test_the_three_document_export_places_no_regulator_and_produces_nothing():
-    """毕设FOC 2026-09-17 (the three-document 1.1.0 export): zero rows, no crash.
+def test_the_three_document_export_now_reaches_its_pcb1_regulators():
+    """毕设FOC 2026-09-17 (the three-document 1.1.0 export): **131c changed this
+    file's answer**, and the change is the point.
 
-    **The measured reason, because 「no regulator」 is not what this file is.**
-    Its schematic model *does* name three regulators under the shelf's
-    categories (``U7`` = ``LM5164DDAR``/``ic.buck``, ``U11`` =
-    ``RT9013-33GB``/``ic.ldo``, ``U13`` = ``TPLP2981-30DBVR``/``ic.ldo``), and
-    127a established that this export's designators were renumbered against the
-    1.0.0 one — the LM5164 is ``U7`` here and ``U11`` there. What the **PCB
-    side** carries is a different, much smaller answer:
-    :func:`boardwise.parsers.epro2_model.build_design_model` reads the *first*
-    PCB document only, which here is ``PCB3`` (33 components), and ``PCB3``
-    places none of the three. So the model the rule is handed has no regulator
-    at all, and the whole review produces nothing.
+    131b recorded this board as the first-document blind spot:
+    :func:`boardwise.parsers.epro2_model.build_design_model` read the backup's
+    *first* PCB document only — ``PCB3``, 33 components — which places none of
+    the three regulators, so the whole review produced nothing while ``PCB1``
+    (105 components) carried all of them. The test below asserted that silence
+    and called it 「a **model-scope limitation**, not a claim that the export has
+    no power stage」.
 
-    **The stated gap this test records:** because the PCB-side model is one
-    document, ``PCB1`` (105 components — the board the three regulators really
-    sit on) is never consulted, so a regulator that exists only on ``PCB1`` is
-    invisible to this rule today. That is a **model-scope limitation**, not a
-    claim that the export has no power stage; the schematic view of the same
-    file splits into three boards and does carry them.
+    131c closed it. :func:`boardwise.engines.pcbreview.run_pcb_review` now builds
+    one netlist view **per PCB document** and hands it over as
+    ``ctx.pcb_model``, and this rule reads that field. So the same file now
+    yields 11 rows on ``PCB1`` — the three regulators 131b's own test says the
+    schematic names (``U7`` = ``LM5164DDAR``/``ic.buck``, ``U11`` =
+    ``RT9013-33GB``/``ic.ldo``, ``U13`` = ``TPLP2981-30DBVR``/``ic.ldo``), now
+    read off the board that actually places them.
+
+    The designator numbering is 127a's measured fact, not a guess: this export
+    renumbered against the 1.0.0 one, so the LM5164 is ``U7`` here and ``U11``
+    there. ``PCB3`` and ``PCB2`` still produce nothing — neither places a part
+    the shelf calls a regulator — and the rule still *ran* on every document,
+    which is what ``checksRun`` records.
     """
     model, _geometry = cli._load_model(FOC_110, view="pcb")
-    assert model.components, "the first PCB document does place parts"
-    assert _regulator_readings(model) == []
+    assert _regulator_readings(model) == [], (
+        "the first-document model still places no regulator; the fix is that the "
+        "runner no longer asks it for the whole review"
+    )
     findings, section = run_pcb_review(
         FOC_110, model=model, rules=[RegulatorCapDistance()]
     )
-    assert findings == []
-    # The rule still *ran* on every document — silence is a result, not a skip.
-    assert section is not None
-    assert all("pcb-regulator-cap-distance" in b["checksRun"] for b in section["boards"])
-
+    assert {f.target.component_ref for f in findings} == {"U7", "U11", "U13"}
+    assert {f.board for f in findings} == {"PCB1"}
+    assert all(f.severity == "INFO" for f in findings)
+    # Per-document: the two small documents place no regulator part at all.
+    assert [b["findings"] for b in section["boards"]] == [[], list(range(len(findings))), []]
+    # And the schematic view of the same file names the same three — the two
+    # views agree on *which parts*, which is why the earlier silence was a
+    # scope gap and not a disagreement.
     schematic, _geometry = cli._load_model(FOC_110, view="schematic")
     assert {r.designator for r in _regulator_readings(schematic)} == {"U7", "U11", "U13"}
 

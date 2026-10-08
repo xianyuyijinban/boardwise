@@ -358,11 +358,15 @@ def test_both_rules_are_in_the_builtin_list_in_the_declared_order():
     executed order is 「house rules first, standards-derived readings second」.
     The order is pinned because the report's ``pcb_review.boards[].checksRun``
     prints it: a reader comparing two reports needs to know the difference
-    between a rule that was added and a rule that was moved.
+    between a rule that was added and a rule that was moved. **131c** then
+    inserted ``pcb-regulator-fb-placement`` after 131b's rule — the second of
+    the two regulator inserts, both inside the house-rule block, both reading
+    the same measurement primitive on the same object.
     """
     assert [rule.id for rule in BUILTIN_PCB_RULES] == [
         "pcb-decap-distance",
         "pcb-regulator-cap-distance",
+        "pcb-regulator-fb-placement",
         "pcb-component-spacing",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",

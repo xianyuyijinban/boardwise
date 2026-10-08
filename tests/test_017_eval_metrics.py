@@ -598,7 +598,18 @@ def test_the_report_carries_the_provenance_a_run_has_to_record():
     #      and rules/unproven.py, so this time the direct-only digest moved too
     #      -> 131b e1ac0c59: one new file, rules/pcb/regulator.py (the
     #      `pcb-regulator-cap-distance` rule), so only the recursive digest
-    #      moved and the direct-only one stayed at 98b1d462)
+    #      moved and the direct-only one stayed at 98b1d462
+    #      -> 131c ddd201dd: two files inside rules/ moved — the new
+    #      rules/pcb/fbplacement.py (`pcb-regulator-fb-placement`) and
+    #      rules/pcb/regulator.py, whose body now reads `ctx.pcb_model`
+    #      instead of `ctx.model` (the two netlist views name nets
+    #      differently, so the rule had to be pointed at the PCB document's
+    #      own). The direct-only digest stayed at 98b1d462 for the fourth
+    #      time. 131c's parser change — `build_design_model` gaining a
+    #      document-scope argument — is in `parsers/epro2_model.py`, which is
+    #      **outside this recipe by construction**: `rulebody` digests rule
+    #      bodies, not the parsers they call. Recorded rather than inferred
+    #      from a digest that did not move.)
     # Both are measured, not guessed - `tests/test_126a_pcb_review_plumbing.py`
     # recomputes both from the tree and pins them. No number is asserted here:
     # any further rule change moves the digest again, which is the point, so
