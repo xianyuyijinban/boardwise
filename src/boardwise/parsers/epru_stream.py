@@ -57,6 +57,7 @@ __all__ = [
     "KNOWN_RECORD_TYPES",
     "PCB_DOC_TYPE",
     "ParseStats",
+    "SYMBOL_DOC_TYPE",
     "iter_epru_records",
     "load_epru_text",
     "read_project_meta",
@@ -78,11 +79,17 @@ class EncryptedProjectError(ValueError):
 PCB_DOC_TYPE = "PCB"
 FOOTPRINT_DOC_TYPE = "FOOTPRINT"
 DEVICE_DOC_TYPE = "DEVICE"
+SYMBOL_DOC_TYPE = "SYMBOL"
 
 #: Document types kept by :func:`split_documents`. Everything else is
 #: dropped after counting, so memory stays proportional to useful data.
+#: ``SYMBOL`` joined the set in 131a: it is the only place a ``.epro2`` backup
+#: writes pin *names* (``Pin Name``), and :func:`symbol_pin_names` below reads
+#: nothing else for them. It costs 2.5–5k records on the board fixtures (~20% of
+#: what was already kept) — paid for, not dropped, and every record is still
+#: counted in ``ParseStats`` exactly as before.
 KEPT_DOC_TYPES: frozenset[str] = frozenset(
-    {PCB_DOC_TYPE, FOOTPRINT_DOC_TYPE, DEVICE_DOC_TYPE}
+    {PCB_DOC_TYPE, FOOTPRINT_DOC_TYPE, DEVICE_DOC_TYPE, SYMBOL_DOC_TYPE}
 )
 
 #: Record types observed on the fixture. Anything outside this set is
@@ -189,14 +196,18 @@ def iter_epru_records(text: str, stats: ParseStats | None = None) -> Iterator[Ep
 def split_documents(text: str, stats: ParseStats) -> list[Document]:
     """Split the record stream into documents, keeping only the ones we need.
 
-    A new document starts at every ``DOCHEAD`` record. Only PCB, FOOTPRINT
-    and DEVICE documents are retained (records of all others are dropped
-    after counting) so memory stays proportional to the useful data:
+    A new document starts at every ``DOCHEAD`` record. Only PCB, FOOTPRINT,
+    DEVICE and SYMBOL documents are retained (records of all others are
+    dropped after counting) so memory stays proportional to the useful data:
 
     * PCB       — the board: placements, copper, nets.
     * FOOTPRINT — pad shapes, instantiated per placement.
     * DEVICE    — library metadata (Value / LCSC / Manufacturer) joined to
       a placement through its ``Device`` attribute.
+    * SYMBOL    — pin *names*. 131a: a placement's own PCB attributes carry no
+      ``Symbol`` pointer, so the DEVICE ``Symbol`` attribute is the only route
+      from a pad number to the ``Pin Name`` the library wrote for it (see
+      :func:`boardwise.parsers.epro2_model.symbol_pin_names`).
     """
     documents: list[Document] = []
     current: Document | None = None
