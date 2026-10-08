@@ -39,6 +39,13 @@ from ..rules.pcb.distance import ComponentSpacing, DecapDistance
 from ..rules.pcb.ipc import TrackAmpacity, VoltageSpacing
 from ..rules.pcb.crystal import McuCrystalPlacement
 from ..rules.pcb.crystalkeepout import McuCrystalKeepout
+from ..rules.pcb.foc import (
+    FocDecapProximity,
+    FocGateTraceWidth,
+    FocGroundPlane,
+    FocPowerLoopArea,
+    FocTrackCorners,
+)
 from ..rules.pcb.mcusupply import McuSupplyGroups
 from ..rules.pcb.mcureset import McuResetBoot
 from ..rules.pcb.regulator import RegulatorCapDistance
@@ -74,6 +81,16 @@ from ..rules.base import SEVERITY_ORDER, Finding
 #: over (one MCU's oscillator network) and 131f looks at that same crystal
 #: along the other axis (straight through the board) — all placement questions,
 #: each answering what the one before could not.
+#:
+#: **133b inserted the five FOC rules as a contiguous block** after
+#: ``pcb-mcu-reset-boot`` and ahead of the geometry sweep, in the task book's
+#: own table order (R16 → R31 → R11 → R13 → R20). They go there rather than at
+#: the end because they are the same shape as the block above — L1 geometry
+#: readers that measure placement — and a reader scanning the list wants the
+#: whole 「what does this board's layout say」 family together. The intra-block
+#: order is the order of the questions (the driver's bypass, then the board's
+#: planes, then the traces, then the bends, then the loop) and again nothing
+#: depends on it: no FOC rule reads another's output.
 BUILTIN_PCB_RULES: list[PcbRule] = [
     DecapDistance(),
     RegulatorCapDistance(),
@@ -82,6 +99,11 @@ BUILTIN_PCB_RULES: list[PcbRule] = [
     McuCrystalKeepout(),
     McuSupplyGroups(),
     McuResetBoot(),
+    FocDecapProximity(),
+    FocGroundPlane(),
+    FocGateTraceWidth(),
+    FocTrackCorners(),
+    FocPowerLoopArea(),
     ComponentSpacing(),
     TrackAmpacity(),
     VoltageSpacing(),

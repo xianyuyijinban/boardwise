@@ -17,6 +17,9 @@ Layout of the package as the batches land:
 * ``crystal`` — an MCU's crystal and load-capacitor placement (131d).
 * ``mcusupply`` — an MCU's supply groups and their bypass/reservoir columns (131e).
 * ``mcureset`` — an MCU's ``NRST`` net and ``BOOT`` strap inventory (131e).
+* ``foc`` — the five FOC / 功率驱动 quick wins (133b): a power driver's bypass
+  proximity, the ground-plane island inventory, the gate-trace width
+  distribution, the non-obtuse fold list, and the high-current loop area.
 
 The package is importable from the start; ``BUILTIN_PCB_RULES`` was **empty**
 in 126a and its structure gate (the test that says "the list is the truth") is
