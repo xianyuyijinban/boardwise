@@ -223,11 +223,19 @@ def test_parallel_gap_declines_a_pair_that_never_overlaps():
 
 
 def test_the_router_reports_when_it_routes_without_separation():
-    """The fallback retry is the silent path 136 is about — now it is not silent.
+    """The crowded lane is the silent path 136 is about — now it is not silent.
 
-    On the golden board three nets can only route after the retry drops the
-    separation inflation. The routing is still accepted — connectivity outranks
-    aesthetics, and that ordering is unchanged — but the cost is stated.
+    On the golden board two nets (RX and TX) can only be routed through lanes
+    they were not allowed to pay for, so they are disclosed. The routing is
+    still accepted — connectivity outranks aesthetics, and that ordering is
+    unchanged — but the cost is stated.
+
+    137 restated the sentence, because the condition behind it changed: the
+    search now *prices* the lane instead of forbidding it, so there usually is a
+    path and the honest question is whether any path keeps clear of the
+    crowded lanes. The disclosure fires on the parallel runs the ruler can
+    actually report (``WIRE_TOO_CLOSE``), not on the ordinary perpendicular
+    crossings that were never a spacing problem.
     """
     golden = strip_dangling_nets(build_schematic_model(GOLDEN))
     offsets = canvas_pin_offsets(build_pin_offsets(GOLDEN))
@@ -236,10 +244,10 @@ def test_the_router_reports_when_it_routes_without_separation():
         golden, geometry.pin_positions, geometry.geometry
     )
     given_up = [v for v in routing_violations if v.code == "SEPARATION_GIVEN_UP"]
-    assert given_up, "the golden board does exercise the fallback"
+    assert given_up, "the golden board does exercise the crowded lane"
     for row in given_up:
         assert row.subject.startswith("net ")
-        assert "without the separation inflation" in row.detail
+        assert "clear of the lanes" in row.detail
 
 
 def test_the_plan_notes_say_when_separation_was_given_up():
@@ -247,7 +255,7 @@ def test_the_plan_notes_say_when_separation_was_given_up():
     golden = strip_dangling_nets(build_schematic_model(GOLDEN))
     offsets = canvas_pin_offsets(build_pin_offsets(GOLDEN))
     plan = generate_plan(golden, offsets)
-    assert any("separation inflation" in note for note in plan.notes), plan.notes
+    assert any("clear of the lanes" in note for note in plan.notes), plan.notes
     assert any(v.code == "SEPARATION_GIVEN_UP" for v in plan.violations)
 
 
@@ -266,7 +274,7 @@ def test_a_clean_routing_gains_no_separation_note():
     assert not [v for v in plan.violations if v.code == "SEPARATION_GIVEN_UP"], [
         v.render() for v in plan.violations
     ]
-    assert not [n for n in plan.notes if "separation inflation" in n], plan.notes
+    assert not [n for n in plan.notes if "clear of the lanes" in n], plan.notes
 
 
 # --------------------------------------------------------------------------
@@ -381,11 +389,17 @@ def test_the_solver_drawing_reports_the_pairs_it_actually_runs_too_close():
     runs as long as 285 units. The count is pinned because it is the finding
     that 134 filed this task for; a change in it is a change in the router's
     output, which other tests will notice loudly.
+
+    137 re-routes to a price rather than a wall, and the tally is **47**: two
+    fewer, measured, with the reason recorded at `layout.price` (every one of
+    the 49 is a *trapped slot* — the clear lane on the away side is already
+    occupied — so a price can only shuffle congestion, not remove it). 137's
+    own measurement test pins the same number from the other side.
     """
     golden = strip_dangling_nets(build_schematic_model(GOLDEN))
     plan = generate_plan(golden, canvas_pin_offsets(build_pin_offsets(GOLDEN)))
     hits = _too_close(plan.violations)
-    assert len(hits) == 49, len(hits)
+    assert len(hits) == 47, len(hits)
     # every one of them is the same real shape: adjacent grid lanes, 5 apart
     for row in hits:
         assert "run 5 apart" in row.detail
