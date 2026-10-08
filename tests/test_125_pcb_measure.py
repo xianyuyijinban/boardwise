@@ -543,8 +543,17 @@ def test_llc_board_outline_bbox(llc_board):
     bbox = llc_board.bbox()
     assert bbox is not None
     # 155 x 80 mm outline -> 6102.36 x 3149.61 mil.
+    #
+    # 135: the height was 3149.61 and now reads 3372.81, because `bbox()`
+    # spans *every* parsed copper and 135 added the POURED results. The
+    # overhang is real data, not a bad coordinate: llc's orphan `POURED`
+    # records `e732` / `e857` reach y = -3376.0, which is 223.2 mil past the
+    # outline's -3152.795 edge. `tests/test_epru_parser.py::
+    # test_the_poured_overhang_is_bounded_and_only_on_llc` pins that number and
+    # `test_all_geometry_sits_inside_the_outline` keeps the strong "nothing
+    # falls off the board" check for everything that is not poured copper.
     assert bbox.width == pytest.approx(6102.36, abs=0.1)
-    assert bbox.height == pytest.approx(3149.61, abs=0.1)
+    assert bbox.height == pytest.approx(3372.81, abs=0.1)
 
 
 def test_pad_angle_is_board_frame_composition_of_component_and_template(llc_board):

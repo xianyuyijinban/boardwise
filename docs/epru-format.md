@@ -334,7 +334,7 @@ Note the path is **nested one level deeper** than `POLY`'s. `netName` is
 populated, so this is the record type that actually carries pours with nets
 (25 of them in the PCB document).
 
-### 6.9 `POURED` — the result of pouring **[inferred]**
+### 6.9 `POURED` — the result of pouring **[confirmed]**
 
 ```jsonc
 {"type":"POURED","ticket":58344,"id":"[\"POURED\",\"e294\"]","firstTicket":1612}||
@@ -342,22 +342,62 @@ populated, so this is the record type that actually carries pours with nets
   "path":[73.33,-93.9,"L",76.39,-96.96,73.31,-96.96,"ARC",0.1803,73.298,-96.96008,"L", ...]}]}
 ```
 
-Only 4 on the fixture. Its id tuple names the element it was poured from; the
-parser tries to borrow that element's net. The `ARC` command appears only here
-and carries three numbers — `[sweep, x, y]`, where the first is an angle
-(**[inferred]**: values like 45.0, 28.27, 50.80 are angles, not coordinates;
-0.1803 is probably the same angle in radians). The parser drops the sweep and
-keeps the point.
+Its id tuple names the element it was poured from; the parser borrows that
+element's `netName` and `layerId`. The `ARC` command appears only here and
+carries three numbers — `[sweep, x, y]`, where the first is an angle
+(**[confirmed]**: values like 45.0, 28.27, 50.80 are angles, not coordinates;
+0.1803 is the same angle in radians). The parser drops the sweep and keeps the
+point.
 
-> **Coordinates warning (found the hard way).** `POURED.pourFill[].path` is
-> **not in board coordinates**. Measured on the fixture: every point falls in
-> a small local range (y = 22 … 78) while the board spans y = 208 … 790 in the
-> same sign convention. Feeding those points into a bounding box silently
-> corrupted every geometry query (248 of 481 points "outside the outline").
-> The parser therefore keeps the record — it is real copper — but leaves its
-> `points` empty. **[confirmed by measurement; reason inferred]** The official
-> type confirms the field is `pourFill: TPourFill[]` and says nothing about
-> the coordinate space.
+`pourFill` is an **array** because one pour region can pour into several
+disjoint islands — up to 14 measured on 毕设FOC 1.0.0's `["POURED","e1475"]`.
+Entries come in two flavours: `fill: true` with `strokeWidth: 0` is the copper,
+`fill: false` with a non-zero `strokeWidth` is the region *outline* drawn as a
+stroke. Only the former is copper, and the parser emits one polygon per
+`fill: true` entry — concatenating them would weld separate islands with a
+bridge the pour engine did not create. **[confirmed by measurement]**
+
+> **Coordinates: `board = 10 × local`, origin (0, 0), no flip. [confirmed]**
+> `POURED.pourFill[].path` is **not** in board coordinates — it is a uniform
+> 1:10 scale of them. This was the open question 125b recorded and 135 closed.
+>
+> The evidence is a parent `POUR` region whose own rectangle is a clean anchor.
+> On 毕设FOC 1.0.0, `POUR` `00b83083c1b59f8f` (net `IA+`) is
+> `["R", 6695.1024, -1625.2362, 144.8998, 149.7638, 0, 0]` — x
+> 6695.1024…6840.0022, y −1625.2362…−1475.4724 — and its `POURED` fills
+> x 669.9102…683.6002, y −177.1000…−1629.2362 locally. Times ten:
+> 6699.102…6836.002, −1771.000…−1629.236, which is inside the region and
+> inset by exactly **4 mil** on each side. That 4 is the pour's own edge
+> clearance, not a frame offset: across seven board fixtures the offsets
+> `(region_min − 10·local_min, 10·local_max − region_max)` are `(+4, −4)` on
+> 30 of the 35 rect-anchored records, the rest being fragments that stop short
+> of the region edge. **[confirmed: the scale is a constant, not a function of
+> the document's DPI or grid — the `CANVAS` record reads `unit: "mil"`,
+> `gridXSize: 5` on every fixture checked, and all of them land on their parent
+> under this one factor.]**
+>
+> An earlier reading of this record called the path "parent-relative" with an
+> offset. It is neither: `board = 10 × local`, plain. Every competing origin
+> hypothesis (the parent's corner, the board outline's origin, a ±4 shift)
+> leaves filled points outside their own parent region; this one leaves none,
+> which `tests/test_135_poured_result.py` re-measures for every parent-linked
+> `POURED` on three board fixtures. The official type confirms the field is
+> `pourFill: TPourFill[]` and says nothing about the coordinate space.
+
+> **The parent link is only half the story. [confirmed]** The second id slot
+> resolves to a `POUR` record on most records and to nothing at all on the
+> rest: 毕设FOC 1.0.0 splits 27 / 24, 1.1.0 33 / 22, ROBOT 3 / 1, llc 0 / 4.
+> Those orphans are **not** a different record type, and their ids are **not**
+> recoverable by any other key — checked by ticket (`POURED.firstTicket` never
+> matches any record's `ticket`, and the parent's `firstTicket` is not
+> `POURED.firstTicket − 1` either), by scanning every record id in the file for
+> the value, and against the `LAYER_FILL` records that carry the inner-plane
+> regions. They are pours whose region the editor had already replaced before
+> saving: the *copper* is real and parses, but the net is not recoverable, so
+> the parser counts them on `ParseStats.poured_orphans` and leaves `net`
+> `None`. A file always writes a region before its result — 135 of 135
+> resolvable parent links across the fixtures are forward — so one pass
+> suffices. **[confirmed]**
 
 ### 6.10 `NET` — net metadata, not geometry **[confirmed]**
 
@@ -609,11 +649,14 @@ not exist on the fixture.
 | `PAD_NET.padLen` / `propagationDelay` | required in `TPadNet` | absent | official docs are **newer** than the fixture |
 | `LINE` / `FILL` / `POLY` fields (§6.6–6.8) | `line.md` / `fill.md` / `poly.md` match | match | **confirmed** |
 | `polyType` `BOARD_OUTLINE` (§6.7) | `poly.md` enum includes `BOARD_OUTLINE` | exactly one | **confirmed** |
-| `POURED.pourFill` path is local, not board space (§6.9) | type says only `pourFill: TPourFill[]` | y = 22…78 vs board 208…790 | **confirmed (measured), reason still unexplained** |
+| `POURED.pourFill` path is `board / 10` (§6.9) | type says only `pourFill: TPourFill[]` | every filled point of every parent-linked `POURED` lands inside its parent region (re-measured in `tests/test_135_poured_result.py`) | **confirmed (measured), 135** |
+| `POURED` parent id resolves to a `POUR` (§6.9) | no documented link | 27/51 on 毕设FOC 1.0.0; the rest resolve to nothing | **partly confirmed, 135 — orphans counted, not guessed** |
 | `DEVICE.META` = `TMDevice` (`title` + `attributes`) (§10) | `primitives/DEVICE/meta.md` | 81/81 DEVICE docs match | **confirmed** |
 
 Net result: **nothing in the earlier notes was contradicted**, two inferences
-became measurements (units, the `Device` join), one bug was found and fixed
-(`POURED` polluting the bounding box), and the official docs turned out to
-describe a newer revision than the fixture — so the parser keeps tolerating
-the older shape rather than switching to the published one.
+became measurements (units, the `Device` join), and the official docs turned
+out to describe a newer revision than the fixture — so the parser keeps
+tolerating the older shape rather than switching to the published one. The
+`POURED` local-coordinate question that 125b left open is now **closed by
+measurement** (§6.9): the path is `board / 10` with no offset, and the parser
+uses it.

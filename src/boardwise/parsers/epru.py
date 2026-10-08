@@ -74,6 +74,7 @@ __all__ = [
     "Epro2Source",
     "PadTemplate",
     "PcbContext",
+    "POURED_SCALE",
     "build_board_geometry",
     "collect_pcb_context",
     "extract_board",
@@ -379,6 +380,50 @@ def pad_net_key(record: EpruRecord) -> tuple[str, str, str | None] | None:
     return str(comp_id), str(pin), None if pad_id is None else str(pad_id)
 
 
+#: The factor between a ``POURED`` record's stored coordinates and board
+#: coordinates: **1:10**, origin (0, 0), no axis flip. 135 measured this on
+#: every board fixture in ``tests/fixtures`` against a parent ``POUR``
+#: region's own rectangle — see the long derivation in
+#: :func:`boardwise.parsers.epru.collect_pcb_context`. It is a constant, not a
+#: function of the document's DPI or grid: the board's ``CANVAS`` record
+#: (``unit: "mil"``, ``gridXSize: 5``) is identical across the fixtures whose
+#: filled points all land on their parent region under this one factor.
+POURED_SCALE = 10.0
+
+
+def _pour_fill_elements(body: dict[str, Any] | None) -> list[Any]:
+    """The ``fill: true`` entries of a ``POURED``'s ``pourFill`` array.
+
+    One ``POURED`` holds an *array* of sub-polygons because a single pour
+    region can pour into several disjoint islands (measured: 14 on 毕设FOC
+    1.0.0). The array also holds ``fill: false`` entries whose ``strokeWidth``
+    is non-zero — those draw the region *outline* as a stroke, not copper, so
+    they are left out. A body that is not a dict, or a ``pourFill`` that is not
+    a list, yields the empty list; the caller counts that on
+    ``ParseStats.poured_without_fill``.
+    """
+    if not isinstance(body, dict):
+        return []
+    entries = body.get("pourFill")
+    if not isinstance(entries, Sequence) or isinstance(entries, (str, bytes)):
+        return []
+    return [e for e in entries if isinstance(e, dict) and e.get("fill") is True]
+
+
+def _poured_parent_id(record: EpruRecord) -> str | None:
+    """The element id a ``POURED`` was poured from, or ``None``.
+
+    ``POURED``'s id is a tuple ``["POURED", <element id>]``; the second slot
+    is the pour **region** that produced this result. On most records that is a
+    ``POUR`` id present in the same document. On the rest it is an ``e-xxxx``
+    element id that the file does not contain at all — a region the editor had
+    already replaced before saving. Those return the id anyway and the caller
+    finds no match, which is how ``poured_orphans`` is counted.
+    """
+    parts = parse_id_tuple(record)
+    return parts[1] if len(parts) >= 2 and parts[1] else None
+
+
 def parse_id_tuple(record: EpruRecord) -> list[str]:
     """Decode a JSON-array record id such as ``["PAD_NET", comp, pin, pad]``."""
     raw = record.id
@@ -537,6 +582,13 @@ def collect_pcb_context(
     # Element id -> net, so POURED regions can borrow the net of the region
     # they were poured from.
     net_by_element: dict[str, str | None] = {}
+    # 135: element id -> (net, layer_id) of a pour *region* seen so far, which
+    # is what a later `POURED` inherits from. The file always writes a region
+    # before its result (measured: 135 parent links across the seven board
+    # fixtures, 135 of them forward-resolvable within this single pass), so a
+    # one-pass dict is enough — no second walk, and no ordering assumption
+    # beyond the one the format already makes.
+    poured_parents: dict[str, tuple[str | None, Any]] = {}
 
     for record in document.records:
         body = record.body
@@ -651,14 +703,67 @@ def collect_pcb_context(
             )
         elif rtype in ("FILL", "POLY", "POUR", "POURED"):
             if rtype == "POURED":
-                # POURED stores the *result* of a pour. Its path is NOT in
-                # board coordinates (measured: all points sit in a small local
-                # range, e.g. y = 22..78 on a board spanning y = 208..790), so
-                # feeding it into a bbox would corrupt every geometry query.
-                # Keep the record (it is real copper) but leave points empty.
+                # 135: POURED's `pourFill` polygons are stored **1:10** — the
+                # record is not in board coordinates, but it is a plain uniform
+                # scale of them, not a parent-relative frame. Proof on
+                # 毕设FOC 1.0.0, where a rectangular POUR region is a clean
+                # anchor: POUR `00b83083c1b59f8f` (net `IA+`) is
+                #   ["R", 6695.1024, -1625.2362, 144.8998, 149.7638, 0, 0]
+                # i.e. x 6695.1024..6840.0022, y -1625.2362..-1475.4724, and
+                # its POURED `["POURED","00b83083c1b59f8f"]` fills
+                #   x 669.9102..683.6002, y -177.1000..-162.9236
+                # Multiply by ten: x 6699.102..6836.002, y -1771.000..-1629.236
+                # — inside the region, offset by exactly 4 mil on each side.
+                # That 4 is the pour's own edge clearance, not a frame offset:
+                # across all seven board fixtures the offsets of
+                # (region_min - 10*local_min, 10*local_max - region_max) are
+                # (+4, -4) on 30 of 35 rect-anchored records and the rest are
+                # fragments that stop short of the region edge. So the
+                # transform is `board = POURED_SCALE * local` with **no offset
+                # and no flip**; and fitting `board span / local span` over
+                # every rect-anchored pair returns 10 to within a percent once
+                # the 4-mil inset is accounted for. An origin hypothesis that
+                # includes a shift (the parent POUR's corner, the board
+                # outline's origin, ±4) is refuted directly: run it and filled
+                # points land outside their own parent region, while
+                # `board = 10 * local` leaves every one of them inside — see
+                # `tests/test_135_poured_result.py`, which re-measures the
+                # containment for every parent-linked POURED on three boards.
+                #
+                # Only `fill: true` entries are copper. A POURED's array also
+                # carries `fill: false` entries with a non-zero `strokeWidth`:
+                # those are the *outline* of the poured region drawn as a
+                # stroke, and filling them would overstate the copper.
+                # `pourFill` is an array because one pour region can pour into
+                # several disjoint islands — up to 14 measured on 毕设FOC
+                # 1.0.0's `["POURED","e1475"]`. Each entry becomes its own
+                # `PourShape`: concatenating them into one polygon would weld
+                # separate islands with an implied bridge between them, which
+                # is copper the pour engine explicitly did not create. The
+                # shapes share the record's id, so a reader that wants the
+                # whole result groups on it.
+                islands = [
+                    [
+                        Point(p.x * POURED_SCALE, p.y * POURED_SCALE)
+                        for p in _path_points(element.get("path"))
+                    ]
+                    for element in _pour_fill_elements(body)
+                ]
+                islands = [poly for poly in islands if len(poly) >= 3]
+                if not islands:
+                    stats.poured_without_fill += 1
+                parent = poured_parents.get(_poured_parent_id(record))
+                if parent is not None:
+                    net, layer_id = parent
+                    stats.poured_with_parent += 1
+                else:
+                    # The parent id names an element that is not in the file.
+                    # The copper still parses — only the net is lost, and
+                    # `ParseStats.poured_orphans` records how many.
+                    net = None
+                    layer_id = None
+                    stats.poured_orphans += 1
                 path = None
-                parts = parse_id_tuple(record)
-                net = net_by_element.get(parts[1]) if len(parts) >= 2 else None
             else:
                 # 131f: POUR joins this branch, so a `POUR` record becomes a
                 # `kind="pour"` polygon carrying its own `netName` /
@@ -675,32 +780,51 @@ def collect_pcb_context(
                 net = _net_name(body.get("netName"))
                 if net is not None and record.id:
                     net_by_element.setdefault(record.id, net)
-            points = _path_points(path)
-            poly_type = body.get("polyType")
-            if (
-                rtype != "POURED"
-                and poly_type == "BOARD_OUTLINE"
-                and context.outline is None
-            ):
-                context.outline = BoardOutline(points=points, source_id=record.id)
-                continue
-            context.pours.append(
-                PourShape(
-                    id=record.id or "",
-                    net=net,
-                    layer_id=body.get("layerId"),
-                    kind={
-                        "FILL": "fill",
-                        "POLY": "poly",
-                        "POUR": "pour",
-                        "POURED": "poured",
-                    }[rtype],
-                    points=points,
-                    width=_as_float(body.get("width")),
-                    fill_style=body.get("fillStyle"),
-                    poly_type=poly_type,
+                if rtype in ("POUR", "FILL") and record.id:
+                    # 135: register as a candidate parent for a later POURED.
+                    # FILL is included because it is the same shape of record
+                    # (a region with a netName and a layerId); on every board
+                    # fixture read here the POURED parents are POUR records, but
+                    # refusing FILL would be an assumption, not a measurement.
+                    poured_parents.setdefault(
+                        record.id, (net, body.get("layerId"))
+                    )
+            if rtype != "POURED":
+                points = _path_points(path)
+                poly_type = body.get("polyType")
+                if poly_type == "BOARD_OUTLINE" and context.outline is None:
+                    context.outline = BoardOutline(points=points, source_id=record.id)
+                    continue
+                context.pours.append(
+                    PourShape(
+                        id=record.id or "",
+                        net=net,
+                        layer_id=body.get("layerId"),
+                        kind={
+                            "FILL": "fill",
+                            "POLY": "poly",
+                            "POUR": "pour",
+                            "POURED": "poured",
+                        }[rtype],
+                        points=points,
+                        width=_as_float(body.get("width")),
+                        fill_style=body.get("fillStyle"),
+                        poly_type=poly_type,
+                    )
                 )
-            )
+            else:
+                context.pours.extend(
+                    PourShape(
+                        id=record.id or "",
+                        net=net,
+                        layer_id=layer_id,
+                        kind="poured",
+                        points=poly,
+                        fill_style=body.get("fillStyle"),
+                        poured_from=_poured_parent_id(record),
+                    )
+                    for poly in islands
+                )
         elif rtype != "DOCHEAD":
             stats.unconsumed_types[rtype] = stats.unconsumed_types.get(rtype, 0) + 1
 
