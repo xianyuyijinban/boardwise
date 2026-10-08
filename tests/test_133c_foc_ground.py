@@ -150,6 +150,11 @@ def test_the_three_rules_sit_in_the_foc_block_after_133b_five():
     pinned by value, not as a set: no rule reads another's output, so the order
     is a reading choice, and pinning it is what stops a later batch from
     reordering by accident.
+
+    **133d widened this list again** (its R7 / R8 / R9 land after 133c's three),
+    which is the second time this pin has had to move for a new FOC batch — the
+    pattern rather than an accident, and the reason the list is spelled out in
+    full each time.
     """
     assert [rule.id for rule in BUILTIN_PCB_RULES] == [
         "pcb-decap-distance",
@@ -167,6 +172,9 @@ def test_the_three_rules_sit_in_the_foc_block_after_133b_five():
         R1,
         R1B,
         R5,
+        "pcb-foc-thermal-via-style",
+        "pcb-foc-thermal-via-array",
+        "pcb-foc-thermal-exit-path",
         "pcb-component-spacing",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
@@ -182,7 +190,13 @@ def test_the_three_rules_sit_in_the_foc_block_after_133b_five():
         R1,
         R1B,
         R5,
-    ], "the FOC block is contiguous: 133b's five, then 133c's three"
+        "pcb-foc-thermal-via-style",
+        "pcb-foc-thermal-via-array",
+        "pcb-foc-thermal-exit-path",
+    ], (
+        "the FOC block is contiguous: 133b's five, then 133c's three, then "
+        "133d's three"
+    )
 
 
 def test_each_rule_declares_where_its_authority_comes_from():

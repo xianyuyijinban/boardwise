@@ -1029,6 +1029,9 @@ def test_llc_is_clean_under_both_distance_rules():
         "pcb-foc-power-loop-area",
         "pcb-foc-ground-domains", "pcb-foc-ground-tie",
         "pcb-foc-return-path",
+        "pcb-foc-thermal-via-style",
+        "pcb-foc-thermal-via-array",
+        "pcb-foc-thermal-exit-path",
     }
     assert [f for f in findings if f.rule_id not in foc_ids] == [], (
         f"llc is clean under both rules; got "
@@ -1094,6 +1097,9 @@ def test_llc_is_clean_under_both_distance_rules():
         "pcb-foc-ground-domains",
         "pcb-foc-ground-tie",
         "pcb-foc-return-path",
+        "pcb-foc-thermal-via-style",
+        "pcb-foc-thermal-via-array",
+        "pcb-foc-thermal-exit-path",
         "pcb-component-spacing",
         "pcb-track-ampacity", "pcb-voltage-spacing",
     ]

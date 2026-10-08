@@ -51,6 +51,11 @@ from ..rules.pcb.focground import (
     FocGroundTie,
     FocReturnPath,
 )
+from ..rules.pcb.focthermal import (
+    FocThermalExitPath,
+    FocThermalViaArray,
+    FocThermalViaStyle,
+)
 from ..rules.pcb.mcusupply import McuSupplyGroups
 from ..rules.pcb.mcureset import McuResetBoot
 from ..rules.pcb.regulator import RegulatorCapDistance
@@ -119,6 +124,9 @@ BUILTIN_PCB_RULES: list[PcbRule] = [
     FocGroundDomains(),
     FocGroundTie(),
     FocReturnPath(),
+    FocThermalViaStyle(),
+    FocThermalViaArray(),
+    FocThermalExitPath(),
     ComponentSpacing(),
     TrackAmpacity(),
     VoltageSpacing(),

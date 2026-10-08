@@ -154,6 +154,9 @@ def test_the_builtin_pcb_rule_list_is_the_126b_distance_pair_then_the_126c_pair(
         "pcb-foc-ground-domains",
         "pcb-foc-ground-tie",
         "pcb-foc-return-path",
+        "pcb-foc-thermal-via-style",
+        "pcb-foc-thermal-via-array",
+        "pcb-foc-thermal-exit-path",
         "pcb-component-spacing",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
@@ -343,6 +346,9 @@ def test_run_pcb_review_reads_every_pcb_document_of_the_foc_fixture():
             "pcb-foc-ground-domains",
             "pcb-foc-ground-tie",
             "pcb-foc-return-path",
+            "pcb-foc-thermal-via-style",
+            "pcb-foc-thermal-via-array",
+            "pcb-foc-thermal-exit-path",
             "pcb-component-spacing",
             "pcb-track-ampacity", "pcb-voltage-spacing",
         ]
@@ -484,6 +490,9 @@ def test_checkup_offline_with_a_pcb_document_carries_the_pcb_review_section(
         "pcb-foc-ground-domains",
         "pcb-foc-ground-tie",
         "pcb-foc-return-path",
+        "pcb-foc-thermal-via-style",
+        "pcb-foc-thermal-via-array",
+        "pcb-foc-thermal-exit-path",
         "pcb-component-spacing", "pcb-voltage-spacing",
     }
     # 126a did not touch the schema or the verdict; **126d did**, by bumping the
@@ -755,6 +764,26 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     #                `return_path_projection`), which the recipe does not
     #                cover — so **f88ca40e is unchanged by 133a** and the
     #                move recorded here is 133b's alone.
+    #     1149d428 — after 133d. One new file inside the subpackage,
+    #                `rules/pcb/focthermal.py`, carrying the three thermal-design
+    #                rules (`pcb-foc-thermal-via-style`, `pcb-foc-thermal-via-array`,
+    #                `pcb-foc-thermal-exit-path`) — R7 / R8 / R9 of the FOC pack.
+    #                The direct-only digest stays at 98b1d462 for the **tenth**
+    #                consecutive time, so 133d also stayed inside `rules/pcb/`
+    #                as a rule change.
+    #                133d's **other** file is `engines/pcbreview.py` (the
+    #                registration of the three ids in `BUILTIN_PCB_RULES`),
+    #                **outside the recipe by construction** — the third batch to
+    #                record this same limit (133b and 133c did too), which is
+    #                what makes it a structural property of the recipe rather
+    #                than an accident. The list-order pin in `test_126a`'s own
+    #                first structure test (extended by 133c and again by 133d)
+    #                is what catches it.
+    #                133d reads 133a's `via_geometry` queries (`vias_on_pad`,
+    #                `via_layers`) and 131f's `region_copper` / `pour_connectivity`
+    #                primitives out of `core/measure.py`, which is the same
+    #                import-rather-than-re-derive choice 133c made for its
+    #                object pools.
     #     1d76f67c — after 133c. One new file inside the subpackage,
     #                `rules/pcb/focground.py`, carrying the three ground-system
     #                rules (`pcb-foc-ground-domains`, `pcb-foc-ground-tie`,
@@ -780,7 +809,7 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # recorded why.
     assert recursive != old_digest, "the subpackage is inside the recipe now"
     assert old_digest == "98b1d462"
-    assert recursive == "98706289", (
+    assert recursive == "1149d428", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )
