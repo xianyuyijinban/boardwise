@@ -15,6 +15,8 @@ Layout of the package as the batches land:
 * ``regulator`` — per-regulator input/output capacitor placement (131b).
 * ``fbplacement`` — feedback-divider placement (131c).
 * ``crystal`` — an MCU's crystal and load-capacitor placement (131d).
+* ``mcusupply`` — an MCU's supply groups and their bypass/reservoir columns (131e).
+* ``mcureset`` — an MCU's ``NRST`` net and ``BOOT`` strap inventory (131e).
 
 The package is importable from the start; ``BUILTIN_PCB_RULES`` was **empty**
 in 126a and its structure gate (the test that says "the list is the truth") is

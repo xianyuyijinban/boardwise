@@ -143,6 +143,8 @@ def test_the_builtin_pcb_rule_list_is_the_126b_distance_pair_then_the_126c_pair(
         "pcb-regulator-cap-distance",
         "pcb-regulator-fb-placement",
         "pcb-mcu-crystal-placement",
+        "pcb-mcu-supply-groups",
+        "pcb-mcu-reset-boot",
         "pcb-component-spacing",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
@@ -321,6 +323,8 @@ def test_run_pcb_review_reads_every_pcb_document_of_the_foc_fixture():
             "pcb-decap-distance", "pcb-regulator-cap-distance",
             "pcb-regulator-fb-placement",
             "pcb-mcu-crystal-placement",
+            "pcb-mcu-supply-groups",
+            "pcb-mcu-reset-boot",
             "pcb-component-spacing",
             "pcb-track-ampacity", "pcb-voltage-spacing",
         ]
@@ -434,13 +438,18 @@ def test_checkup_offline_with_a_pcb_document_carries_the_pcb_review_section(
     # `test_131c_regulator_fb_placement.py`; 131d's
     # `pcb-mcu-crystal-placement` fires on Board1 too (the STM32H743's `U1` with
     # its `X1` crystal) and its rows are owned by
-    # `test_131d_mcu_crystal_placement.py`.
+    # `test_131d_mcu_crystal_placement.py`; 131e's `pcb-mcu-supply-groups` and
+    # `pcb-mcu-reset-boot` fire on Board1 for the same reason (the same H743,
+    # read as supply groups and as a reset/boot inventory) and their rows are
+    # owned by `test_131e_mcu_supply_reset.py`.
     pcb_rows = [f for f in report["findings"] if f["rule_id"].startswith("pcb-")]
-    assert pcb_rows, "the seven rules are in BUILTIN_PCB_RULES and six fire here"
+    assert pcb_rows, "the nine rules are in BUILTIN_PCB_RULES and several fire here"
     assert {f["rule_id"] for f in pcb_rows} == {
         "pcb-decap-distance", "pcb-regulator-cap-distance",
         "pcb-regulator-fb-placement",
         "pcb-mcu-crystal-placement",
+        "pcb-mcu-supply-groups",
+        "pcb-mcu-reset-boot",
         "pcb-component-spacing", "pcb-voltage-spacing",
     }
     # 126a did not touch the schema or the verdict; **126d did**, by bumping the
@@ -653,6 +662,22 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     #                does not move for a change to a helper a rule *calls* from
     #                `core/`, and the report prints the commit alongside for
     #                exactly that reason.
+    #     6c3d6168 — after 131e. Two new files inside the subpackage,
+    #                `rules/pcb/mcusupply.py` (`pcb-mcu-supply-groups`) and
+    #                `rules/pcb/mcureset.py` (`pcb-mcu-reset-boot`) — the MCU
+    #                pack's fourth and fifth rules, both house-rule inserts with
+    #                every row `INFO` and no distance threshold in force. The
+    #                direct-only digest stays at 98b1d462 for the sixth
+    #                consecutive time, so 131e also stayed inside `rules/pcb/`
+    #                as a rule change.
+    #                131e *reads* `core/pinrole.pin_role` and needs three
+    #                supply names the table declines (`VREF+` / `VREF-` /
+    #                `VREF`, so that 毕设FOC 1.0.0's capacitor-less `VREF` net
+    #                is reported empty rather than absent). It adds them in its
+    #                **own** module rather than by editing `core/pinrole.py`,
+    #                deliberately: `core/` is outside this recipe, so an edit
+    #                there would move no number at all, and the residue is
+    #                131e's object rather than the classifier's.
     # Both are measured, not guessed. The recursive digest moves whenever any
     # rule body moves - which is the whole point of the recipe, and the reason
     # this number is updated by hand together with the note in test_017 rather
@@ -660,7 +685,7 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # recorded why.
     assert recursive != old_digest, "the subpackage is inside the recipe now"
     assert old_digest == "98b1d462"
-    assert recursive == "12874b28", (
+    assert recursive == "6c3d6168", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

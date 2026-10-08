@@ -371,6 +371,8 @@ def test_both_rules_are_in_the_builtin_list_in_the_declared_order():
         "pcb-regulator-cap-distance",
         "pcb-regulator-fb-placement",
         "pcb-mcu-crystal-placement",
+        "pcb-mcu-supply-groups",
+        "pcb-mcu-reset-boot",
         "pcb-component-spacing",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",

@@ -620,6 +620,15 @@ def test_the_report_carries_the_provenance_a_run_has_to_record():
     #      recipe covers `src/boardwise/rules/` and digests rule bodies, not
     #      the helpers they call. That is why the report prints the commit
     #      beside the number.
+    #      -> 131e 6c3d6168: two new files, rules/pcb/mcusupply.py
+    #      (`pcb-mcu-supply-groups`) and rules/pcb/mcureset.py
+    #      (`pcb-mcu-reset-boot`), so only the recursive digest moved and the
+    #      direct-only one stayed at 98b1d462 for the sixth time. 131e reads
+    #      `core.pinrole.pin_role` and needs three supply names the table
+    #      declines (`VREF+`/`VREF-`/`VREF`); it adds them **in its own
+    #      module** rather than by editing `core/pinrole.py`, on purpose —
+    #      the residue is 131e's object, and an edit under `core/` would move
+    #      no number in this recipe anyway.
     # Both are measured, not guessed - `tests/test_126a_pcb_review_plumbing.py`
     # recomputes both from the tree and pins them. No number is asserted here:
     # any further rule change moves the digest again, which is the point, so
