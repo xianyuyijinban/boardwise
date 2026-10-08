@@ -38,6 +38,8 @@ from ..rules.pcb.base import PcbReviewContext, PcbRule
 from ..rules.pcb.distance import ComponentSpacing, DecapDistance
 from ..rules.pcb.ipc import TrackAmpacity, VoltageSpacing
 from ..rules.pcb.crystal import McuCrystalPlacement
+from ..rules.pcb.mcusupply import McuSupplyGroups
+from ..rules.pcb.mcureset import McuResetBoot
 from ..rules.pcb.regulator import RegulatorCapDistance
 from ..rules.pcb.fbplacement import RegulatorFbPlacement
 from ..rules.base import SEVERITY_ORDER, Finding
@@ -74,6 +76,8 @@ BUILTIN_PCB_RULES: list[PcbRule] = [
     RegulatorCapDistance(),
     RegulatorFbPlacement(),
     McuCrystalPlacement(),
+    McuSupplyGroups(),
+    McuResetBoot(),
     ComponentSpacing(),
     TrackAmpacity(),
     VoltageSpacing(),

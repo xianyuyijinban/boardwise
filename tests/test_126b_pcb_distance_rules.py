@@ -1004,9 +1004,9 @@ def test_llc_is_clean_under_both_distance_rules():
         f"{[(f.rule_id, f.message) for f in findings]}"
     )
     assert section is not None and section["available"] is True
-    # checksRun names **all six** rules now (131b inserted the regulator pair
-    # after 126b's, 131c the feedback rule, 131d the crystal rule; 126c
-    # appended the IPC pair):
+    # checksRun names **all nine** rules now (131b inserted the regulator pair
+    # after 126b's, 131c the feedback rule, 131d the crystal rule and 131e the
+    # two MCU rules; 126c appended the IPC pair):
     # silence is a *result*, not a skip. On this board the two IPC rules are
     # silent for two different reasons worth keeping separate, and both are
     # 126c's own discipline rather than an accident:
@@ -1023,10 +1023,17 @@ def test_llc_is_clean_under_both_distance_rules():
     #   * `pcb-mcu-crystal-placement` (131d) is silent for the same shape of
     #     reason: llc places no part the shelf calls `ic.mcu` — measured, see
     #     `test_131d_mcu_crystal_placement.py::test_pillbox_produces_rows_and_llc_produces_silence`.
+    #   * `pcb-mcu-supply-groups` / `pcb-mcu-reset-boot` (131e) are silent for
+    #     the identical reason, and the whole point of the `findings == []`
+    #     assertion above is that adding them changed nothing on this board —
+    #     measured, see
+    #     `test_131e_mcu_supply_reset.py::test_llc_places_no_mcu_and_produces_silence`.
     assert section["boards"][0]["checksRun"] == [
         "pcb-decap-distance", "pcb-regulator-cap-distance",
         "pcb-regulator-fb-placement",
         "pcb-mcu-crystal-placement",
+        "pcb-mcu-supply-groups",
+        "pcb-mcu-reset-boot",
         "pcb-component-spacing",
         "pcb-track-ampacity", "pcb-voltage-spacing",
     ]
