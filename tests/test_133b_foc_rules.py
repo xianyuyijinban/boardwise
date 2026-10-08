@@ -88,6 +88,18 @@ R13 = "pcb-foc-track-corners"
 R20 = "pcb-foc-power-loop-area"
 FOC_RULE_IDS = [R16, R31, R11, R13, R20]
 
+#: **133c added three more ``pcb-foc-*`` rules** (``rules/pcb/focground.py``:
+#: R1 / R1b / R5). They sit in the same contiguous FOC block, so the two pins
+#: below that assert 「the FOC block is exactly these ids」 have to say so — and
+#: this is the *second* time a batch has widened them, which is the pattern
+#: rather than an accident. ``test_133c_foc_ground.py`` pins their behaviour.
+FOC_133C_RULE_IDS = [
+    "pcb-foc-ground-domains",
+    "pcb-foc-ground-tie",
+    "pcb-foc-return-path",
+]
+ALL_FOC_RULE_IDS = FOC_RULE_IDS + FOC_133C_RULE_IDS
+
 
 def _rows(path: Path, rule_id: str) -> list:
     findings, _section = run_pcb_review(path)
@@ -132,14 +144,18 @@ def test_the_five_foc_rules_sit_between_the_mcu_block_and_the_geometry_sweep():
         R11,
         R13,
         R20,
+        "pcb-foc-ground-domains",
+        "pcb-foc-ground-tie",
+        "pcb-foc-return-path",
         "pcb-component-spacing",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
     ]
     assert all(isinstance(rule, PcbRule) for rule in BUILTIN_PCB_RULES)
     ids = [rule.id for rule in BUILTIN_PCB_RULES]
-    assert [i for i in ids if i.startswith("pcb-foc")] == FOC_RULE_IDS, (
-        "the FOC block is contiguous and in the task book's order"
+    assert [i for i in ids if i.startswith("pcb-foc")] == ALL_FOC_RULE_IDS, (
+        "the FOC block is contiguous and in the task book's order — 133b's five "
+        "then 133c's three, which is where each batch put its own"
     )
 
 
@@ -820,11 +836,16 @@ def test_mutation_adding_the_foc_rules_moves_the_rule_list_pin():
 
     Removing any one of the five from ``BUILTIN_PCB_RULES`` breaks the
     structure pin above. This test makes that dependency explicit by asserting
-    the FOC block is exactly the five ids and no others, so a stray sixth
+    the FOC block is exactly the eight ids and no others, so a stray ninth
     ``pcb-foc-*`` rule cannot slip in un-pinned.
+
+    **133c widened the list from five to eight**, which is what makes this test
+    a live pin rather than a historical one: the block is now 133b's five in
+    the task book's order followed by 133c's three (R1 / R1b / R5), all in the
+    same contiguous run ahead of the geometry sweep.
     """
     ids = [rule.id for rule in BUILTIN_PCB_RULES]
-    assert [i for i in ids if i.startswith("pcb-foc")] == FOC_RULE_IDS
+    assert [i for i in ids if i.startswith("pcb-foc")] == ALL_FOC_RULE_IDS
 
 
 # ---------------------------------------------------------------------------
