@@ -143,6 +143,7 @@ def test_the_builtin_pcb_rule_list_is_the_126b_distance_pair_then_the_126c_pair(
         "pcb-regulator-cap-distance",
         "pcb-regulator-fb-placement",
         "pcb-mcu-crystal-placement",
+        "pcb-mcu-crystal-keepout",
         "pcb-mcu-supply-groups",
         "pcb-mcu-reset-boot",
         "pcb-component-spacing",
@@ -323,6 +324,7 @@ def test_run_pcb_review_reads_every_pcb_document_of_the_foc_fixture():
             "pcb-decap-distance", "pcb-regulator-cap-distance",
             "pcb-regulator-fb-placement",
             "pcb-mcu-crystal-placement",
+            "pcb-mcu-crystal-keepout",
             "pcb-mcu-supply-groups",
             "pcb-mcu-reset-boot",
             "pcb-component-spacing",
@@ -441,13 +443,17 @@ def test_checkup_offline_with_a_pcb_document_carries_the_pcb_review_section(
     # `test_131d_mcu_crystal_placement.py`; 131e's `pcb-mcu-supply-groups` and
     # `pcb-mcu-reset-boot` fire on Board1 for the same reason (the same H743,
     # read as supply groups and as a reset/boot inventory) and their rows are
-    # owned by `test_131e_mcu_supply_reset.py`.
+    # owned by `test_131e_mcu_supply_reset.py`. 131f's
+    # `pcb-mcu-crystal-keepout` fires on the **same** `X1` — it reads that same
+    # crystal along the other axis, so the set below grew by exactly one id,
+    # and its rows are owned by `test_131f_mcu_crystal_keepout.py`.
     pcb_rows = [f for f in report["findings"] if f["rule_id"].startswith("pcb-")]
-    assert pcb_rows, "the nine rules are in BUILTIN_PCB_RULES and several fire here"
+    assert pcb_rows, "the rules are in BUILTIN_PCB_RULES and several fire here"
     assert {f["rule_id"] for f in pcb_rows} == {
         "pcb-decap-distance", "pcb-regulator-cap-distance",
         "pcb-regulator-fb-placement",
         "pcb-mcu-crystal-placement",
+        "pcb-mcu-crystal-keepout",
         "pcb-mcu-supply-groups",
         "pcb-mcu-reset-boot",
         "pcb-component-spacing", "pcb-voltage-spacing",
@@ -678,6 +684,25 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     #                deliberately: `core/` is outside this recipe, so an edit
     #                there would move no number at all, and the residue is
     #                131e's object rather than the classifier's.
+    #     f88ca40e — after 131f. One new file inside the subpackage,
+    #                `rules/pcb/crystalkeepout.py` (`pcb-mcu-crystal-keepout`).
+    #                The direct-only digest stays at 98b1d462 for the seventh
+    #                consecutive time, so 131f also stayed inside `rules/pcb/`
+    #                as a rule change.
+    #                131f's **other** two files are `parsers/epru.py` (POUR
+    #                records now parse into `kind="pour"` polygons, so
+    #                `stats.unconsumed_types` no longer carries them) and
+    #                `core/measure.py` (the new `region_copper` primitive, and
+    #                `_net_shape_records` now accepts `kind="pour"`). Both are
+    #                **outside the recipe by construction** — the recipe covers
+    #                `src/boardwise/rules/` — which is the same known limit
+    #                131c and 131d recorded: a report's `rulebody` number does
+    #                not move for a change to a parser or a measurement helper a
+    #                rule calls, and the report prints the commit alongside for
+    #                exactly that reason. 131f is the batch where that limit
+    #                bites hardest, because it is a **data-model** change (a
+    #                previously-unread record type became real copper) rather
+    #                than a wording one.
     # Both are measured, not guessed. The recursive digest moves whenever any
     # rule body moves - which is the whole point of the recipe, and the reason
     # this number is updated by hand together with the note in test_017 rather
@@ -685,7 +710,7 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # recorded why.
     assert recursive != old_digest, "the subpackage is inside the recipe now"
     assert old_digest == "98b1d462"
-    assert recursive == "6c3d6168", (
+    assert recursive == "f88ca40e", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

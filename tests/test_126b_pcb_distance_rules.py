@@ -1028,10 +1028,15 @@ def test_llc_is_clean_under_both_distance_rules():
     #     assertion above is that adding them changed nothing on this board —
     #     measured, see
     #     `test_131e_mcu_supply_reset.py::test_llc_places_no_mcu_and_produces_silence`.
+    #   * `pcb-mcu-crystal-keepout` (131f) is silent for that identical reason —
+    #     it finds its crystals through the same `ic.mcu` oscillator nets, so a
+    #     board with no MCU has no crystal region to inventory — measured, see
+    #     `test_131f_mcu_crystal_keepout.py::test_llc_places_no_mcu_and_is_silent`.
     assert section["boards"][0]["checksRun"] == [
         "pcb-decap-distance", "pcb-regulator-cap-distance",
         "pcb-regulator-fb-placement",
         "pcb-mcu-crystal-placement",
+        "pcb-mcu-crystal-keepout",
         "pcb-mcu-supply-groups",
         "pcb-mcu-reset-boot",
         "pcb-component-spacing",
