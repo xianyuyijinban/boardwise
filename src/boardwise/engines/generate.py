@@ -53,23 +53,30 @@ DEFAULT_PITCH = 400.0
 _DECOUPLING_HINTS = ("pF", "nF", "µF", "uF")
 
 
-#: Naming strategies for signal nets (task 006b revision 3, sanctioned by xianyuyijinban).
+#: Naming strategies for signal nets (task 006b revision 3, sanctioned by
+#: xianyuyijinban; ``auto`` added by the 134 ruling of 2026-10-08).
 #:
 #: The only API that creates a *real* net label is `createNetLabel`, which the
 #: type package marks "ADD since EDA v4" — and the measured host is the v3.2
 #: line, where the call never settles. So "how is a signal net named" is a
 #: policy, not a constant, and the policy is explicit and reported:
 #:
+#: ``auto``  **the default**: name a signal net only where a name is the only
+#:           way to read it — the net's wires run *long*
+#:           (:data:`LONG_NET_LABEL_UNITS`) or its members sit on **more than
+#:           one page**. Every other net is read off its wires, as a schematic
+#:           is meant to be read. See :func:`needs_signal_label`.
 #: ``wire``  the wire itself carries the net name (`sch_PrimitiveWire.create`
 #:           with ``net``). Measured on the host: the editor's own netlist
 #:           accepts it, so the net is electrically named — with **no visible
 #:           label**. Zero net ports.
 #: ``text``  ``wire`` **plus** a free text primitive drawn beside the wire
 #:           (a *decorative* name: visible to a reader, not an electrical
-#:           object). This is the default, because xianyuyijinban's rule is that a
-#:           signal net's name must be *seen*, and text is the closest legal
-#:           form on this host. The report must label it "text, not a native
-#:           label".
+#:           object) for **every** signal net, however short. This is the
+#:           screenful-of-labels complaint of 2026-10-08, so it is no longer the
+#:           default; it stays available for a reader who wants a name on
+#:           everything, and the report still says the name is drawn, not
+#:           attached.
 #: ``label`` the native ``sch.place_netlabel`` path. Kept behind a switch
 #:           because it is the correct API on a v4 host and costs one flag to
 #:           re-enable — dormant here, and timeout-protected.
@@ -77,11 +84,28 @@ _DECOUPLING_HINTS = ("pF", "nF", "µF", "uF")
 #:
 #: Net ports are never emitted by any strategy (xianyuyijinban's ban; the action stays
 #: in the catalogue for the solver's last resort only).
-NAMING_STRATEGIES = ("wire", "text", "label", "none")
+NAMING_STRATEGIES = ("auto", "wire", "text", "label", "none")
 
-#: The default strategy. ``text``: a reader sees the net name, and the report
-#: says how it was drawn.
-DEFAULT_NAMING_STRATEGY = "text"
+#: The default strategy. ``auto``: a name is placed where a reader cannot get
+#: the net from the wires alone, and nowhere else.
+DEFAULT_NAMING_STRATEGY = "auto"
+
+#: How long a signal net's wires must run before ``auto`` names it, in canvas
+#: units (1 unit = 1 mil = 0.0254 mm, `docs/epru-format.md` §4).
+#:
+#: **岳裁 2026-10-08：长距离才打.** The threshold answers "how far can a reader
+#: follow a net", not "how many labels look tidy": 1500 mil is ~38 mm, about
+#: 1.3x the width of a big chip body and a bit over a third of an A4 landscape
+#: sheet (:data:`~boardwise.engines.layout.SHEET_WIDTH` = 1169) — past that a
+#: net has to be traced, and tracing is exactly what a name saves.
+#: **House rule, the exact number pending 岳's confirmation**: one named
+#: constant, so moving it moves the policy for every page at once.
+#:
+#: What it is *not*: a clearance. Under it a net is read from its wires, and a
+#: name on it would be a primitive without information — and every primitive is
+#: one more chance to land on a part (see
+#: :func:`boardwise.engines.layout.clear_label_point`).
+LONG_NET_LABEL_UNITS = 1500.0
 
 
 def normalise_strategy(value: str | None) -> str:
@@ -329,6 +353,91 @@ def _layout_order(model: DesignModel) -> tuple[str, list[str]]:
     return host, order
 
 
+def net_pages_in_model(model: DesignModel, net_name: str) -> tuple[str, ...] | None:
+    """The pages ``net_name``'s members sit on, or ``None`` for "no page data".
+
+    Two sources, both already the model's own statement about itself:
+
+    * :attr:`DesignModel.unproven_nets` — a name the per-page merge (issue #19)
+      saw on more than one page. An **empty tuple is a real answer**: the tier
+      merged models that carry no page ids, so it knows the name is shared and
+      cannot name the pages. Hence the ``is not None`` test, never truthiness.
+    * :attr:`DesignModel.cross_page_designators` — for the weaker case where no
+      name was flagged but a designator sits on several pages; its members'
+      pages are read off that. Used only when ``unproven_nets`` says nothing.
+
+    ``None`` means *no evidence of more than one page*, which for a single-page
+    reading is exactly right: one page's export *is* its connectivity.
+    """
+    pages = model.unproven_pages(net_name)
+    if pages is not None:
+        return pages
+    net = model.nets.get(net_name)
+    if net is None:
+        return None
+    found: set[str] = set()
+    for des, _pin in net.pins:
+        found.update(model.cross_page_designators.get(des, ()))
+    return tuple(sorted(found)) or None
+
+
+def is_cross_page_net(model: DesignModel, net_name: str) -> bool:
+    """Does ``net_name``'s membership span **more than one page**?
+
+    This is the second half of the ``auto`` strategy (岳裁 2026-10-08: 跨页
+    才打). A net whose members are spread over sheets cannot be read off one
+    sheet's wires — the reader on sheet 2 sees a wire with no far end — so it is
+    named even when it is short. ``unproven_nets`` counts pages, so a welded
+    name (page ids unknown, empty tuple) is cross-page *by construction*: it was
+    seen twice.
+    """
+    pages = net_pages_in_model(model, net_name)
+    if pages is None:
+        return False
+    if not pages:
+        return True  # seen on more than one page; the tier could not name them
+    return len(pages) > 1
+
+
+def needs_signal_label(
+    route: "RoutedNet",
+    *,
+    model: DesignModel | None = None,
+    threshold: float = LONG_NET_LABEL_UNITS,
+) -> tuple[bool, str]:
+    """Does this **signal** net need a visible name? ``(yes, why)``.
+
+    The ``auto`` strategy's whole decision, in one function so the answer can be
+    read, tested and reported without running a plan (岳裁 2026-10-08: 信号网
+    只在两种情况打标签). A net qualifies on either of two grounds:
+
+    * **long distance** — its wires run further than ``threshold`` canvas units
+      (:data:`LONG_NET_LABEL_UNITS`). Long is measured as the *routed* length
+      (:func:`layout.polyline_length`), not the straight pin-to-pin distance,
+      because the routed length is what the reader actually has to trace.
+    * **cross page** — its members sit on more than one page
+      (:func:`is_cross_page_net`); see there for what counts as evidence.
+
+    Rails never reach this function: they always get their flag, and a power or
+    ground flag is a *different* thing from a signal name (it is the naming of
+    the net, not a decoration beside it).
+    """
+    if route.kind in ("Ground", "Power"):
+        return (False, "rail: always flagged, never a signal label")
+    length = layout.polyline_length(route.polylines)
+    if length > threshold:
+        return (
+            True,
+            f"long distance: {length:.0f} > {threshold:.0f} units of routed wire",
+        )
+    if model is not None and is_cross_page_net(model, route.net):
+        return (True, "cross page: members sit on more than one sheet")
+    return (
+        False,
+        f"short ({length:.0f} <= {threshold:.0f}) and single-page: read it off the wires",
+    )
+
+
 def naming_steps_for(
     route: "RoutedNet",
     attach: tuple[float, float] | None,
@@ -340,6 +449,11 @@ def naming_steps_for(
     nets only — the ban and the default are both about signal names). A signal
     net's steps depend on the strategy:
 
+    * ``auto`` — nothing, unless :func:`needs_signal_label` says the net is
+      long or cross-page. ``attach`` is then only the *first* candidate: the
+      caller resolves the final anchor through
+      :func:`boardwise.engines.layout.clear_label_point`, which keeps the name
+      on this net's wire but off everything else;
     * ``wire`` — nothing to place: the name rides on the wire itself;
     * ``text`` — one decorative text primitive at the attach point;
     * ``label`` — one native net label (dormant on the v3.2 host);
@@ -347,12 +461,21 @@ def naming_steps_for(
 
     ``kind`` on the returned step is the action family the draw flow
     dispatches on; ``decorative`` marks the text form.
+
+    ``auto`` needs the model to answer the cross-page half of its question and
+    the routes to answer the distance half, so it is resolved by
+    :func:`generate_plan`, which has both; this function is what decides the
+    *form* of the step once the caller has answered *whether* there is one.
     """
     if attach is None:
         return []
     x, y = attach
     if route.kind in ("Ground", "Power"):
         return [NetNameStep(net=route.net, kind=route.kind, x=x, y=y)]
+    if strategy == "auto":
+        return [
+            NetNameStep(net=route.net, kind="text", x=x, y=y, decorative=True)
+        ]
     if strategy == "text":
         return [
             NetNameStep(net=route.net, kind="text", x=x, y=y, decorative=True)
@@ -436,14 +559,50 @@ def generate_plan(
         plan.nc_pins.append((designator, pin))
 
     routes, routing_violations = layout.route_nets(model, pin_positions, geometry)
+    members_by_net = {
+        name: {des for des, _pin in net.pins} for name, net in model.nets.items()
+    }
+    #: names already placed, so two labels never stack (the avoidance search's
+    #: "what is on the page so far"). Populated as the loop places them.
+    taken: list[tuple[float, float, str]] = []
     for route in routes:
         for poly in route.polylines:
             if len(poly) >= 2:
                 plan.wires.append(WireStep(net=route.net, points=poly))
-        if route.attach is not None:
-            plan.net_names.extend(naming_steps_for(route, route.attach, plan.naming_strategy))
-        else:
+        if route.attach is None:
             plan.notes.append(f"net {route.net} routed but has no on-wire attach point")
+            continue
+
+        is_rail = route.kind in ("Ground", "Power")
+        wanted, why = needs_signal_label(route, model=model)
+        # Rails are exempt from the ``auto`` gate: a ground/power flag is the
+        # *naming* of that net, not a decoration beside it, so it is placed
+        # wherever the router anchored it exactly as under every other
+        # strategy. Only signal names go through "does this net need one?".
+        if plan.naming_strategy == "auto" and not is_rail and not wanted:
+            # Read off the wires. Nothing is placed, so nothing is avoided and
+            # nothing is reported as a missing name.
+            continue
+        if plan.naming_strategy == "auto" and not is_rail:
+            point, problem = layout.clear_label_point(
+                routes,
+                route.net,
+                geometry,
+                members_by_net.get(route.net, set()),
+                title_block=layout.Rect(*layout.TITLE_BLOCK),
+                taken=taken,
+            )
+            if point is None:
+                plan.notes.append(problem)
+                continue
+        else:
+            point = route.attach
+        steps = naming_steps_for(route, point, plan.naming_strategy)
+        for step in steps:
+            if step.kind not in ("Ground", "Power"):
+                plan.notes.append(f"net {step.net} is named because {why}")
+        plan.net_names.extend(steps)
+        taken.extend((step.x, step.y, step.net) for step in steps)
 
     plan.violations = layout.validate_full(model, geometry, routes, pin_positions)
     plan.violations.extend(routing_violations)

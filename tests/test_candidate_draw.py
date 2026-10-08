@@ -207,15 +207,45 @@ def test_run_draw_happy_path_executes_the_whole_plan():
     assert actions[0] == "sch.doc.new"
     assert actions.count("sch.place_component") == 2
     assert "sch.place_power" in actions, "GND is named with a flag on its wire"
-    assert "sch.place_text" in actions, "RX is named with a decorative text label"
+    # 134: RX here is a short single-page net, so the default policy places no
+    # name primitive for it. The wire still carries the net — what the editor's
+    # netlist reads — so the net exists; it is simply not spelled out on the page.
+    assert "sch.place_text" not in actions, (
+        "a short single-page signal net gets no text primitive"
+    )
+    assert "sch.place_netlabel" not in actions, "the native label API is dormant (v4)"
     assert "sch.place_netport" not in actions, "ports are banned"
     assert "sch.place_wire" in actions, "RX is wired"
-    assert result.naming_strategy == "text", "the default naming policy is reported"
+    assert result.naming_strategy == "auto", "the default naming policy is reported"
     assert result.candidate_source == "geometry readback", (
         "the fake netlist text is unparseable; the fallback must engage"
     )
     assert result.comparison is not None
     assert not result.zero_diff, "an unwired candidate must differ"
+
+
+def test_run_draw_places_a_signal_name_when_the_policy_asks_for_one():
+    """The same run under ``text`` still writes the name out.
+
+    The ruling changed a default, not a capability: a caller who wants every
+    net named says so, and the pipeline does it without a code change.
+    """
+    geo = {
+        "components": [
+            {"primitiveId": "c1", "state": {"Designator": "U1", "X": 0, "Y": 0}},
+            {"primitiveId": "c2", "state": {"Designator": "R1", "X": 400, "Y": 0}},
+        ],
+        "pins": [], "wires": [], "netlabels": [],
+    }
+    client = FakeClient(geo)
+    result = _run(run_draw(
+        client, _golden_model(), confirm=lambda: True,
+        offsets=GOLDEN_OFFSETS, strategy="text",
+    ))
+    actions = [a for a, _p in client.calls]
+    assert "sch.place_text" in actions, "the text policy writes a visible name"
+    assert "sch.place_power" in actions, "rails keep their flags under any policy"
+    assert result.naming_strategy == "text"
 
 
 def test_run_draw_self_check_failure_executes_nothing():
@@ -269,10 +299,14 @@ def test_run_draw_records_failed_placements_and_continues():
     assert any("R1" in f.summary for f in result.failures), (
         "a failed placement is a report row, not a crash"
     )
-    # the flow continued: naming and wiring still executed
+    # The flow continued: naming and wiring still executed. `place_text` was
+    # the witness here only because the default named every net; under 134's
+    # `auto` the rail's power flag is the naming step this run places, and
+    # asserting on it keeps the test pinning "the run continued" rather than
+    # pinning a naming policy that has since changed.
     actions = [a for a, _p in client.calls]
     assert "sch.place_power" in actions
-    assert "sch.place_text" in actions
+    assert "sch.place_wire" in actions
 
 
 def test_run_draw_flags_a_project_scoped_netlist():
@@ -567,10 +601,16 @@ def test_run_draw_replays_the_golden_layout_when_given_one():
     assert rotations == golden_rotations
 
     kinds = {step.kind for step in result.plan.net_names}
-    assert kinds == {"Ground", "Power", "text"}
+    # 134: this board's signals are short and single-page, so the default
+    # `auto` policy places only the rail flags. The names-as-text behaviour is
+    # pinned separately, under the strategy that asks for it.
+    assert kinds == {"Ground", "Power"}
     actions = [action for action, _params in client.calls]
     assert "sch.place_netport" not in actions, "ports are banned on the replay path"
-    assert "sch.place_text" in actions, "signals are named with decorative text by default"
+    assert "sch.place_text" not in actions, (
+        "no signal name is needed on this page, so none is drawn"
+    )
+    assert "sch.place_power" in actions, "the rails are still flagged"
     assert "sch.place_netlabel" not in actions, "the native label API is dormant (v4)"
     assert "export.render" in actions, "the acceptance image is a document render"
     assert actions[0] == "sch.geometry", "the frame is read before anything is created"

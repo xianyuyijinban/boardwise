@@ -120,6 +120,12 @@ class Rect:
             and self.y0 - margin < y < self.y1 + margin
         )
 
+    def inflate(self, margin: float) -> "Rect":
+        """This rectangle grown by ``margin`` on every side."""
+        return Rect(
+            self.x0 - margin, self.y0 - margin, self.x1 + margin, self.y1 + margin
+        )
+
     def distance_to_point(self, x: float, y: float) -> float:
         """Euclidean distance from the point to the rect (0 when inside)."""
         dx = max(self.x0 - x, 0.0, x - self.x1)
@@ -677,6 +683,57 @@ def _pick_attach_point(
     return best
 
 
+def polyline_length(polylines: list[list[tuple[float, float]]]) -> float:
+    """Total Manhattan length of a route, summed over its polylines.
+
+    What the ``auto`` naming strategy's "long distance" test reads: a net whose
+    wires travel this far is a net a reader cannot follow by eye from one pin to
+    the other, which is the only thing a name is *for*. A short connection reads
+    itself, so naming it adds a primitive without adding information.
+    """
+    total = 0.0
+    for poly in polylines:
+        for (ax, ay), (bx, by) in zip(poly, poly[1:]):
+            total += abs(bx - ax) + abs(by - ay)
+    return total
+
+
+def candidate_points_along(
+    polylines: list[list[tuple[float, float]]],
+    step: float = GRID * 2,
+) -> list[tuple[float, float]]:
+    """Every on-wire candidate anchor, along each polyline at ``step`` spacing.
+
+    The lattice matches the routing grid's own two-cell pitch, so a moved label
+    lands on the same lattice the wire was drawn on — an anchor between cells is
+    one whose distance to the wire is a rounding artefact rather than a real
+    answer. Vertices come first and in document order, so the router's own
+    attach point is tried before anything this search would prefer.
+    """
+    points: list[tuple[float, float]] = []
+    seen: set[tuple[float, float]] = set()
+
+    def offer(x: float, y: float) -> None:
+        key = (round(x, 3), round(y, 3))
+        if key in seen:
+            return
+        seen.add(key)
+        points.append((x, y))
+
+    for poly in polylines:
+        for x, y in poly:
+            offer(float(x), float(y))
+    for poly in polylines:
+        for (ax, ay), (bx, by) in zip(poly, poly[1:]):
+            length = abs(bx - ax) + abs(by - ay)
+            if length <= 0.0:
+                continue
+            for index in range(1, int(length // step) + 1):
+                travelled = index * step
+                offer(ax + (bx - ax) * travelled / length, ay + (by - ay) * travelled / length)
+    return points
+
+
 # --------------------------------------------------------------------------
 # validation (the gate re-checks everything the construction promised)
 # --------------------------------------------------------------------------
@@ -714,6 +771,39 @@ def _segment_distance(point: tuple[float, float], seg: Segment) -> float:
         dx = max(min(ax, bx) - point[0], 0.0, point[0] - max(ax, bx))
         return math.hypot(point[1] - ay, dx)
     return float("inf")
+
+
+def rect_segment_distance(rect: Rect, seg: Segment) -> float:
+    """Distance between a rectangle and a Manhattan segment (0 when they touch).
+
+    Sampling the segment's *endpoints* is not enough: a long wire runs straight
+    past a short label box without either end being near it, and an endpoint-only
+    measure reports "clear" for a label lying on the middle of a stranger's wire.
+    So the answer is the least of the point-to-segment distances at all four
+    corners plus the perpendicular terms — which for axis-aligned inputs is
+    exact, because the closest pair of an axis-aligned rectangle and a Manhattan
+    segment is always either a corner of one or a perpendicular projection onto
+    the other's axis line.
+    """
+    (ax, ay), (bx, by) = seg.points()
+    corners = [
+        (rect.x0, rect.y0), (rect.x1, rect.y0),
+        (rect.x0, rect.y1), (rect.x1, rect.y1),
+    ]
+    best = min(_segment_distance(corner, seg) for corner in corners)
+    if rect.intersects(Rect(
+        min(ax, bx), min(ay, by), max(ax, bx), max(ay, by)
+    )):
+        return 0.0
+    if abs(ax - bx) < 1e-9:  # vertical: the segment's x can be beside the rect
+        if rect.x0 <= ax <= rect.x1:
+            dy = max(min(ay, by) - rect.y1, 0.0, rect.y0 - max(ay, by))
+            best = min(best, dy)
+    elif abs(ay - by) < 1e-9:  # horizontal
+        if rect.y0 <= ay <= rect.y1:
+            dx = max(min(ax, bx) - rect.x1, 0.0, rect.x0 - max(ax, bx))
+            best = min(best, dx)
+    return best
 
 
 def _segment_crosses_rect(seg: Segment, rect: Rect) -> bool:
@@ -1049,6 +1139,100 @@ def annotation_box(
     return Rect(
         min(flag_body.x0, band.x0), min(flag_body.y0, band.y0),
         max(flag_body.x1, band.x1), max(flag_body.y1, band.y1),
+    )
+
+
+def clear_label_point(
+    routes: list[RoutedNet],
+    net: str,
+    placements: list[Placement],
+    own: set[str],
+    *,
+    title_block: Rect | None = None,
+    taken: list[tuple[float, float, str]] | None = None,
+) -> tuple[tuple[float, float] | None, str]:
+    """The clearest on-wire anchor for ``net``'s label, and why that is the answer.
+
+    A name has to sit **on its own wire** — the reference rule set says so and
+    :func:`lint_annotations` checks it — but the router's own attach point is
+    chosen for clearance from boxes alone, so it may land on a foreign wire or
+    on the wire where another net's name already is. A screenful of that is the
+    complaint 134 answers, so this search walks every on-wire candidate of
+    **this** net (never off it, so the name cannot become a floating marker) and
+    scores each by the smallest clearance its predicted text box
+    (:func:`annotation_box` — the same ruler the lint uses) has from
+
+    * every **foreign** component box, inflated by :data:`LABEL_CLEARANCE`; a
+      name beside one of *its own* net's parts is normal (the human's own labels
+      do exactly that), so own parts are exempt from the margin but never from
+      the overlap test;
+    * every **foreign** net's wires, by :data:`LABEL_CLEARANCE` — a name lying on
+      a stranger's wire is both illegible and a second net that is not there;
+    * every name already placed (``taken``), so two names never stack;
+    * the title block, when one is supplied.
+
+    Returns ``(None, reason)`` when *nothing* along the route clears the bar, so
+    the caller records it in ``notes`` as the truth rather than dropping a label
+    where it reads as a smudge — a nameless net is a legible net; an unreadable
+    one is worse than either.
+    """
+    route = next((r for r in routes if r.net == net), None)
+    if route is None or not route.polylines:
+        return (None, f"net {net}: no routed wire for a label to sit on")
+
+    boxes = [(p.designator, p.bbox) for p in placements if p.bbox]
+    foreign_segs = [
+        Segment(ax, ay, bx, by, other.net)
+        for other in routes
+        if other.net != net
+        for poly in other.polylines
+        for (ax, ay), (bx, by) in zip(poly, poly[1:])
+    ]
+
+    best: tuple[float, float] | None = None
+    best_score = -1.0
+    for candidate in candidate_points_along(route.polylines):
+        box = annotation_box(candidate[0], candidate[1], net)
+        if title_block is not None and box.intersects(title_block):
+            continue
+        score = 1e9
+        blocked = False
+        for des, part_box in boxes:
+            if box.intersects(part_box):
+                # Its own net's part: the lint's LABEL_ON_COMPONENT rule, kept
+                # verbatim — beside it is fine, on it is not.
+                blocked = True
+            elif des not in own:
+                gap = part_box.distance_to_point(candidate[0], candidate[1])
+                if gap < score:
+                    score = gap
+                if box.intersects(part_box.inflate(LABEL_CLEARANCE)):
+                    blocked = True
+        for seg in foreign_segs:
+            gap = rect_segment_distance(box, seg)
+            if gap < score:
+                score = gap
+            if gap < LABEL_CLEARANCE:
+                blocked = True
+        for tx, ty, tnet in taken or []:
+            other = annotation_box(tx, ty, tnet)
+            if box.intersects(other.inflate(LABEL_CLEARANCE)):
+                blocked = True
+            gap = other.distance_to_point(candidate[0], candidate[1])
+            if gap < score:
+                score = gap
+        if blocked:
+            continue
+        if score > best_score:
+            best_score = score
+            best = candidate
+    if best is not None:
+        return (best, "")
+    return (
+        None,
+        f"net {net}: no on-wire point clears {LABEL_CLEARANCE:.0f} units of every "
+        "foreign box, foreign wire and already-placed name; left unnamed rather "
+        "than drawn on top of something",
     )
 
 

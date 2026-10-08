@@ -246,7 +246,11 @@ def test_replay_of_the_human_board_has_zero_violations(page, bodies, model, offs
     plan = build_replay_plan(model, page, frame, offsets, bodies)
     assert plan.violations == [], [v.render() for v in plan.violations]
     assert len(plan.placements) == 17
-    assert len(plan.net_names) == 27, "17 flags + 10 labels"
+    # 134: under the default ``auto`` policy this board's 17 flags are all it
+    # places — its 10 signal labels name short single-page nets, which are read
+    # off the wires. The count is asserted per-strategy in
+    # ``test_replay_names_signals_with_text_and_rails_with_flags`` below.
+    assert len(plan.net_names) == 17, "17 rail flags; no signal name is needed"
     assert plan.nc_pins, "NC pins are listed explicitly"
 
 
@@ -291,16 +295,40 @@ def test_replay_pin_tips_exist_for_every_symbol_pin(page, bodies, model, offsets
     assert len(plan.pin_positions) >= 17 * 2
 
 
-def test_replay_names_signals_with_text_and_rails_with_flags(page, bodies, model, offsets, frame):
+def test_replay_names_signals_with_text_only_when_they_need_a_name(page, bodies, model, offsets, frame):
+    """134: the replay honours the same on-demand policy as the solver.
+
+    The CH340G golden board's four named signals (RX/TX/D+/D-) run 210..1160
+    units of wire on one page — all under :data:`LONG_NET_LABEL_UNITS` and all
+    single-page, so under ``auto`` none of them is named. The rail flags are
+    untouched: they are the naming of a rail, not a decoration beside it.
+    """
     plan = build_replay_plan(model, page, frame, offsets, bodies)
     by_kind: dict[str, int] = {}
     for step in plan.net_names:
         by_kind[step.kind] = by_kind.get(step.kind, 0) + 1
-    # The default strategy is `text`: rails keep their flags, signals are drawn
-    # as decorative text (the native label API cannot work on this host).
-    assert by_kind == {"Ground": 12, "Power": 5, "text": 10}
+    assert by_kind == {"Ground": 12, "Power": 5}, by_kind
     assert "port" not in by_kind, "xianyuyijinban's rule: signal nets never use ports"
-    assert "label" not in by_kind, "labels need a v4 host; the default is text"
+    assert plan.decorative_names == []
+    assert plan.naming_strategy == "auto"
+
+
+def test_the_replay_still_names_every_signal_under_the_text_policy(page, bodies, model, offsets, frame):
+    """The pre-134 behaviour, kept as a switch.
+
+    Under ``text`` the replay reproduces the human's own ten labels verbatim,
+    at the human's own anchors — which is what "replay" means here. The policy
+    decides whether a name is drawn; the human decides where, on this path.
+    """
+    plan = build_replay_plan(model, page, frame, offsets, bodies, strategy="text")
+    by_kind: dict[str, int] = {}
+    for step in plan.net_names:
+        by_kind[step.kind] = by_kind.get(step.kind, 0) + 1
+    # The default strategy used to be `text`: on this host the native label API
+    # cannot work (documented v4, never settles on 3.2.186), so text is the
+    # visible form, and the report says so.
+    assert by_kind == {"Ground": 12, "Power": 5, "text": 10}, by_kind
+    assert "label" not in by_kind, "labels need a v4 host"
     assert len(plan.decorative_names) == 10
     assert all(step.decorative for step in plan.decorative_names)
 
@@ -327,13 +355,26 @@ def test_replay_strategy_switch_changes_only_signal_naming(page, bodies, model, 
     assert label_plan.naming_strategy == "label"
 
 
-def test_labels_sit_on_the_goldens_own_anchors(page, bodies, model, offsets, frame):
-    plan = build_replay_plan(model, page, frame, offsets, bodies)
+def test_the_goldens_signal_labels_sit_on_the_goldens_own_anchors(page, bodies, model, offsets, frame):
+    """Under ``text``, the replay reproduces the human's labels verbatim."""
+    plan = build_replay_plan(model, page, frame, offsets, bodies, strategy="text")
     labels = {step.net for step in plan.net_names if step.kind == "text"}
     assert labels == {"RX", "TX", "D+", "D-"}
-    # and the wires the labels name keep the human's own names
-    named_wires = {wire.net for wire in plan.wires if wire.net}
-    assert named_wires == {"RX", "TX", "D+", "D-"}
+
+
+def test_the_goldens_wires_keep_their_own_net_names_under_every_policy(page, bodies, model, offsets, frame):
+    """134 removed the visible name, not the electrical one.
+
+    Under ``auto`` RX/TX/D+/D- carry no label at all — but the wires still carry
+    the net names the human gave them, because that attribute (measured
+    2026-09-14) is what the editor's own netlist reads. Dropping it would make
+    those nets genuinely anonymous, which is the one thing "name it on demand"
+    must never do.
+    """
+    for strategy in ("auto", "wire", "text", "label", "none"):
+        plan = build_replay_plan(model, page, frame, offsets, bodies, strategy=strategy)
+        named_wires = {wire.net for wire in plan.wires if wire.net}
+        assert named_wires == {"RX", "TX", "D+", "D-"}, f"{strategy}: {named_wires}"
 
 
 def test_replay_refuses_nothing_but_reports_what_it_could_not_do(page, bodies, model, offsets, frame):
@@ -529,11 +570,28 @@ def test_lint_cli_is_clean_on_the_golden_board(capsys):
     out = capsys.readouterr().out
     assert code == 0
     assert "plan source: golden replay" in out
-    assert "naming: text" in out, "the naming policy is stated, not implied"
+    assert "naming: auto" in out, "the naming policy is stated, not implied"
+    # Under ``auto`` this board needs no signal name, so the report says *that*
+    # rather than claiming names it did not draw. Stating the absence is the
+    # same discipline as stating the presence.
+    assert "nets named: 17" in out, out
+    assert "layout lint: 0 violations" in out
+
+
+def test_lint_cli_says_so_when_a_signal_name_was_drawn_as_text(capsys):
+    """The other half: the disclaimer still fires when names *are* drawn."""
+    from argparse import Namespace
+
+    from boardwise.cli import _cmd_lint
+
+    code = _cmd_lint(Namespace(from_file=GOLDEN, plan="replay", json=False, naming="text"))
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "naming: text" in out
     assert "drawn as TEXT" in out, (
         "the report must say the signal names are decorative text"
     )
-    assert "layout lint: 0 violations" in out
+    assert "nets named: 27" in out, out
 
 
 def test_lint_cli_reports_the_strategy_it_linted_under(capsys):
