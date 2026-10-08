@@ -59,6 +59,9 @@ __all__ = [
     "PourIsland",
     "PourConnectivity",
     "pour_connectivity",
+    "RegionCopper",
+    "RegionCopperItem",
+    "region_copper",
 ]
 
 
@@ -826,7 +829,19 @@ def _net_shape_records(
         # deliberately leaves empty (parent-relative, 1:10-scaled
         # coordinates, not board coordinates). Skip them, plus any other
         # pour with no usable outline.
-        if pour.kind not in ("fill", "poly") or len(pour.points) < 2:
+        #
+        # 131f: `kind == "pour"` joins `fill` and `poly` here. A POUR record
+        # is the pour **region** as the editor holds it — the user's own
+        # outline, with its own `netName` and `layerId`, in board coordinates
+        # (measured: 毕设FOC 1.0.0 carries 27 of them, ROBOT 3, 药箱 4) — so it
+        # is the same kind of copper claim the other two already make. Leaving
+        # it out is what made 毕设FOC's `AGND` pours under the crystal invisible
+        # to every consumer of this list (125b's island count, the clearance
+        # engine, and the new `region_copper`). It is a *region*, not the
+        # poured result, so it adds a polygon without double-counting: the
+        # POURED records of the same board stay empty on purpose, so a
+        # poured board contributes each region once, not twice.
+        if pour.kind not in ("fill", "poly", "pour") or len(pour.points) < 2:
             continue
         layers = _element_layers(board, pour)
         out.append(
@@ -1066,7 +1081,7 @@ class PourIsland:
     #: across placements. A length mismatch against the net's element count
     #: means elements were skipped (unclassifiable layer), not deduplicated.
     element_ids: list[str] = field(default_factory=list)
-    #: Summed area of the ``kind in {fill, poly}`` pour polygons inside the
+    #: Summed area of the ``kind in {fill, poly, pour}`` pour polygons inside the
     #: island (square mils; tracks and vias contribute no area).
     area: float = 0.0
     #: Sorted copper layer ids the island touches.
@@ -1145,13 +1160,18 @@ def pour_connectivity(board: BoardGeometry, net: str) -> PourConnectivity:
     * an SMD pad existing only on its own layer, so it connects a pour on
       that layer and nothing on the opposite face.
 
-    **Pour sources.** Only pours with ``kind in {"fill", "poly"}`` contribute
-    polygons. ``POURED`` records are the *result* of a pour and the parser
-    deliberately leaves their paths empty (their stored coordinates are
+    **Pour sources.** Only pours with ``kind in {"fill", "poly", "pour"}``
+    contribute polygons. ``POURED`` records are the *result* of a pour and the
+    parser deliberately leaves their paths empty (their stored coordinates are
     parent-relative and scaled 1:10, not board coordinates — feeding them
     to geometry would corrupt every bbox), so they carry no shape here;
-    connectivity rides on the ``FILL`` / ``POLY`` pour outlines plus tracks,
-    vias and pads.
+    connectivity rides on the ``FILL`` / ``POLY`` / ``POUR`` pour outlines plus
+    tracks, vias and pads. ``POUR`` joined the other two in 131f — it is the
+    pour **region** as the editor holds it, with its own net and layer, in
+    board coordinates — and it is what makes this number change on the boards
+    that store their planes that way: 毕设FOC 1.0.0's ``AGND`` read 67 islands
+    without it and reads 1 with it, ROBOT's ``GND`` 194 → 1, 药箱's ``GND``
+    225 → 1, while ``llc`` (which stores no ``POUR``) is untouched.
 
     Islands are numbered by the flat order :func:`_net_shape_records`
     yields (tracks, then vias, then pads, then pours), and
@@ -1205,3 +1225,313 @@ def pour_connectivity(board: BoardGeometry, net: str) -> PourConnectivity:
             )
         )
     return PourConnectivity(net=net, island_count=len(islands), islands=islands)
+# ---------------------------------------------------------------------------
+# region inventory (131f)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class RegionCopperItem:
+    """One copper element whose body lies inside a queried region.
+
+    ``element_kind`` is the four kinds of thing this model holds —
+    ``"pad"`` / ``"track"`` / ``"via"`` / ``"pour"`` — and ``element_id`` is the
+    identifier a reader can act on: the raw record id for a track, via or
+    pour, and :func:`_pad_key` (``"C7.2"``) for a pad, because the footprint
+    template id repeats across every placement of that footprint.
+
+    ``layer_ids`` is the copper the element physically occupies
+    (:func:`_element_layers`): one face for an SMD pad and a track, the whole
+    board for a via or a through-hole pad. A pour carries the single layer the
+    file states for it. ``net`` is the net as the document writes it and is
+    ``None`` when the element carries none — unclassifiable, never guessed.
+
+    **This is a presence record, not a distance.** ``overlap_bbox`` says how
+    much of the element's bounding box falls inside the region, which is a
+    coarse measure of *how much copper is there*; it is not a clearance and a
+    caller must not read it as one (see :func:`region_copper`).
+    """
+
+    element_kind: str = ""
+    element_id: str = ""
+    net: str | None = None
+    layer_ids: list[int] = field(default_factory=list)
+    overlap_bbox: BBox | None = None
+    #: The element's own ``kind`` for a pour (``fill`` / ``poly`` / ``pour``);
+    #: empty for every other element kind, which has no such field.
+    pour_kind: str = ""
+
+
+@dataclass
+class RegionCopper:
+    """Everything the board has inside one rectangular region, per copper layer.
+
+    **Only numbers, never a verdict.** The question this answers is 「what is
+    under here」, not 「is this acceptable」: whether copper under a crystal is a
+    keepout violation, a thermal pad or nothing at all is a rule's call, and this
+    module states no threshold (the module's own contract). An empty
+    ``layers_by_id`` therefore means 「nothing found」, and the caller reads that
+    as an observation, not as a pass.
+    """
+
+    #: The queried rectangle, kept so a finding can quote the region it measured.
+    region: BBox | None = None
+    #: ``{layer id: [items]}`` over the **requested** layers, sorted by the
+    #: element order below within each layer. Layers with nothing in them are
+    #: present with an empty list, so a reader can see that a layer was asked
+    #: about and came back empty — an absent key would be indistinguishable
+    #: from a layer that was never asked.
+    layers_by_id: dict[int, list[RegionCopperItem]] = field(default_factory=dict)
+    #: The copper layers the caller asked about, in the order it asked.
+    requested_layer_ids: list[int] = field(default_factory=list)
+    #: Copper elements whose layers could not be classified at all (no layer in
+    #: the file, or a pad the parser never resolved). They cannot be filed under
+    #: a layer, so they are named here rather than silently dropped — the same
+    #: "unclassifiable, never guessed" discipline as :func:`read_stackup`.
+    unclassified: list[RegionCopperItem] = field(default_factory=list)
+
+    @property
+    def total_count(self) -> int:
+        """How many elements were found, across every requested layer."""
+        return sum(len(items) for items in self.layers_by_id.values()) + len(
+            self.unclassified
+        )
+
+    def is_empty(self) -> bool:
+        """True when nothing at all was found in the region."""
+        return self.total_count == 0
+
+
+def _segment_crosses_box(
+    p1: Point, p2: Point, box: BBox, radius: float
+) -> bool:
+    """Does a capsule (segment + half-width ``radius``) reach into ``box``?
+
+    Exact for the case that decides the answer cheaply: an endpoint inside the
+    box. Otherwise the capsule's own bbox is inflated by the radius and tested
+    against the box, which over-accepts a capsule that passes the box's corner
+    diagonally without reaching it. That direction is deliberate — see
+    :func:`region_copper`'s contract, where a false 「there is copper here」 is
+    a narrower error than a missed one.
+    """
+    for point in (p1, p2):
+        if (
+            box.min_x - 1e-9 <= point.x <= box.max_x + 1e-9
+            and box.min_y - 1e-9 <= point.y <= box.max_y + 1e-9
+        ):
+            return True
+    if radius <= 0.0:
+        return False
+    inflated = BBox(
+        min(p1.x, p2.x) - radius,
+        min(p1.y, p2.y) - radius,
+        max(p1.x, p2.x) + radius,
+        max(p1.y, p2.y) + radius,
+    )
+    return not (
+        inflated.max_x < box.min_x
+        or inflated.min_x > box.max_x
+        or inflated.max_y < box.min_y
+        or inflated.min_y > box.max_y
+    )
+
+
+def _boxes_overlap(a: BBox, b: BBox) -> bool:
+    """Axis-aligned bbox intersection test, touching included."""
+    return not (
+        a.max_x < b.min_x
+        or a.min_x > b.max_x
+        or a.max_y < b.min_y
+        or a.min_y > b.max_y
+    )
+
+
+def _intersect_box(a: BBox, b: BBox) -> BBox | None:
+    """The overlap of two axis-aligned boxes, or ``None`` when disjoint."""
+    if not _boxes_overlap(a, b):
+        return None
+    return BBox(
+        max(a.min_x, b.min_x),
+        max(a.min_y, b.min_y),
+        min(a.max_x, b.max_x),
+        min(a.max_y, b.max_y),
+    )
+
+
+def _polygon_meets_box(polygon: list[Point], box: BBox) -> bool:
+    """Does a filled polygon have any area inside ``box``?
+
+    **Containment semantics, not distance semantics** — the trap 131f calls
+    out. A pad sitting *inside* a pour has a capsule distance of ``math.inf``
+    from it (:func:`_capsule_distance`'s documented blind spot: a foreign pad
+    inside a pour's outer outline is unmeasurable, because the pour's real
+    copper has clearance voids cut around foreign pads that the model does not
+    carry). A region query asking 「is there copper here」 must not inherit that
+    blindness, so it asks the geometric question instead:
+
+    * any vertex inside the box, or
+    * any box corner inside the polygon (:func:`_point_in_polygon`), or
+    * any polygon edge crossing a box edge.
+
+    The three together are the standard polygon/box overlap test and are exact
+    for a simple polygon, which is what a pour outline is.
+    """
+    if not polygon:
+        return False
+    for point in polygon:
+        if (
+            box.min_x - 1e-9 <= point.x <= box.max_x + 1e-9
+            and box.min_y - 1e-9 <= point.y <= box.max_y + 1e-9
+        ):
+            return True
+    corners = [
+        Point(box.min_x, box.min_y),
+        Point(box.max_x, box.min_y),
+        Point(box.max_x, box.max_y),
+        Point(box.min_x, box.max_y),
+    ]
+    if any(_point_in_polygon(corner, polygon) for corner in corners):
+        return True
+    box_edges = _edges(corners)
+    return any(
+        _segments_intersect(p1, p2, p3, p4)
+        for p1, p2 in _edges(polygon)
+        for p3, p4 in box_edges
+    )
+
+
+def region_copper(
+    board: BoardGeometry,
+    bbox: BBox,
+    layers: Sequence[int] | None = None,
+) -> RegionCopper:
+    """Inventory the copper inside a rectangular region, per copper layer.
+
+    The region question is 「what copper lies under this rectangle」, asked of
+    the whole board rather than of a net: pads, tracks, vias and pour polygons
+    all count, and each is filed under the copper layer(s) it physically
+    occupies (:func:`_element_layers` — an SMD pad on its own face, a via and a
+    through-hole pad across the board).
+
+    ``layers`` restricts the answer to those copper layer ids and defaults to
+    the board's copper stackup. It is a *restriction*, never an expansion: an
+    element on a layer the caller did not ask about is not reported under any
+    other layer either, and an element whose layers cannot be classified at all
+    lands in :attr:`RegionCopper.unclassified`.
+
+    **How containment is decided — the 131f trap.** The obvious reuse would be
+    the clearance engine's capsule distance, and it is wrong here in the
+    direction that matters: :func:`_capsule_distance` returns ``math.inf`` for
+    a shape sitting *inside* a pour's outline, precisely so a foreign pad in a
+    pour cannot be reported as a 0-mil short. 「Unmeasurable, drop the pair」 is
+    the honest reading of a *spacing* question and the wrong reading of an
+    *inventory* question — the foreign pad is exactly the copper a reader asking
+    「what is under the crystal」 needs to be told about. So the test here is
+    geometric: point-in-box for a pad or via body, an inflated-bbox plus
+    endpoint test for a track's capsule (:func:`_segment_crosses_box`), and a
+    true polygon/box overlap for a pour (:func:`_polygon_meets_box`). The
+    over-acceptance the capsule test allows at a box corner is the safe
+    direction here and is documented on each helper.
+
+    **Performance.** Every element's own bbox is computed once and tested
+    against the region box before any exact test, so a region of a few hundred
+    square mils over a board with a few thousand elements is a few thousand
+    integer-ish comparisons plus the handful of exact tests that survive — the
+    exact tests are never reached for an element nowhere near the region.
+
+    **No verdict.** Nothing here says whether the copper found is allowed; see
+    :class:`RegionCopper`.
+    """
+    requested = (
+        sorted({int(layer) for layer in layers})
+        if layers is not None
+        else sorted(_copper_layer_ids(board))
+    )
+    report = RegionCopper(region=bbox, requested_layer_ids=requested)
+    for layer_id in requested:
+        report.layers_by_id[layer_id] = []
+    wanted = set(requested)
+
+    def file_item(
+        element_kind: str,
+        element_id: str,
+        net: str | None,
+        layer_ids: set[int],
+        overlap: BBox | None,
+        pour_kind: str = "",
+    ) -> None:
+        item = RegionCopperItem(
+            element_kind=element_kind,
+            element_id=element_id,
+            net=net,
+            layer_ids=sorted(layer_ids),
+            overlap_bbox=overlap,
+            pour_kind=pour_kind,
+        )
+        filed = False
+        for layer_id in item.layer_ids:
+            if layer_id in wanted:
+                report.layers_by_id[layer_id].append(item)
+                filed = True
+        if not filed and not item.layer_ids:
+            report.unclassified.append(item)
+
+    for pad in board.pads:
+        corners = pad_corners(pad)
+        own = BBox.from_points(corners)
+        if own is None or not _boxes_overlap(own, bbox):
+            continue  # coarse reject: the pad's body is nowhere near the region
+        if not _polygon_meets_box(corners, bbox):
+            continue
+        file_item(
+            "pad",
+            _pad_key(pad),
+            pad.net,
+            _element_layers(board, pad),
+            _intersect_box(own, bbox),
+        )
+    for track in board.tracks:
+        radius = max(track.width, 0.0) / 2.0
+        if not _segment_crosses_box(track.start, track.end, bbox, radius):
+            continue
+        own = BBox.from_points([track.start, track.end])
+        file_item(
+            "track",
+            track.id,
+            track.net,
+            _element_layers(board, track),
+            _intersect_box(own, bbox) if own is not None else None,
+        )
+    for via in board.vias:
+        if not _segment_crosses_box(via.center, via.center, bbox, max(via.via_diameter, 0.0) / 2.0):
+            continue
+        own = BBox.from_points([via.center, via.center])
+        file_item(
+            "via",
+            via.id,
+            via.net,
+            _element_layers(board, via, via=True),
+            _intersect_box(own, bbox) if own is not None else None,
+        )
+    for pour in board.pours:
+        # 131f: a POUR region's outline is in board coordinates and is real
+        # copper, so `kind == "pour"` is inventoried here alongside fill and
+        # poly. POURED stays out: the parser leaves its points empty on purpose
+        # (parent-relative, 1:10-scaled — 125b), and an empty polygon meets
+        # nothing.
+        if pour.kind == "poured" or len(pour.points) < 3:
+            continue
+        own = pour.bbox
+        if own is None or not _boxes_overlap(own, bbox):
+            continue
+        if not _polygon_meets_box(pour.points, bbox):
+            continue
+        file_item(
+            "pour",
+            pour.id,
+            pour.net,
+            _element_layers(board, pour),
+            _intersect_box(own, bbox),
+            pour_kind=pour.kind,
+        )
+    return report

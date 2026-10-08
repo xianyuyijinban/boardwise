@@ -601,7 +601,12 @@ def test_both_rules_are_in_builtin_pcb_rules_in_the_declared_order():
 
     Both answer *placement* questions about one object (an MCU), so they sit
     with 131b/131c/131d and ahead of the geometry sweep and the two
-    standards-derived readings.
+    standards-derived readings. **131f** later inserted
+    ``pcb-mcu-crystal-keepout`` between 131d's rule and these two, which is
+    why the list below has one more id than it did when this test was written
+    and why the adjacency assertions no longer say 「immediately after 131d」:
+    they say the supply pair is a **contiguous block**, which is the property
+    this test is actually about.
     """
     ids = [rule.id for rule in BUILTIN_PCB_RULES]
     assert ids == [
@@ -609,18 +614,19 @@ def test_both_rules_are_in_builtin_pcb_rules_in_the_declared_order():
         "pcb-regulator-cap-distance",
         "pcb-regulator-fb-placement",
         "pcb-mcu-crystal-placement",
+        "pcb-mcu-crystal-keepout",
         "pcb-mcu-supply-groups",
         "pcb-mcu-reset-boot",
         "pcb-component-spacing",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
     ]
-    assert ids.index("pcb-mcu-supply-groups") == ids.index(
-        "pcb-mcu-crystal-placement"
-    ) + 1
     assert ids.index("pcb-mcu-reset-boot") == ids.index(
         "pcb-mcu-supply-groups"
     ) + 1
+    assert ids.index("pcb-mcu-supply-groups") > ids.index(
+        "pcb-mcu-crystal-placement"
+    )
     for rule in BUILTIN_PCB_RULES:
         if rule.id in {"pcb-mcu-supply-groups", "pcb-mcu-reset-boot"}:
             assert isinstance(rule, (McuSupplyGroups, McuResetBoot))

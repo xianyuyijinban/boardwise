@@ -410,12 +410,24 @@ class ViaGeometry:
 class PourShape:
     """A copper pour / filled region / polygon.
 
-    ``kind`` distinguishes the three record types that carry area copper:
+    ``kind`` distinguishes the four record types that carry area copper:
 
     * ``"fill"`` — ``FILL`` record, usually a real pour with a net.
     * ``"poly"`` — ``POLY`` record with ``polyType`` ``NORMAL``; often a
       copper region drawn by hand (net may be empty).
-    * ``"poured"`` — ``POURED`` record, the *result* of pouring a region.
+    * ``"pour"`` — ``POUR`` record (131f): the pour **region** as the editor
+      holds it — the user's own outline, with its ``netName`` and ``layerId``,
+      in board coordinates. Distinct from ``"poured"``, which is the result.
+    * ``"poured"`` — ``POURED`` record, the *result* of pouring a pour
+      region.
+    * ``"pour"`` — ``POUR`` record, the pour **region** as the editor holds it:
+      the user's own outline, with its net and layer, in board coordinates.
+
+    ``"poured"`` stays the one kind every consumer skips. Its points are
+    empty by the parser's own contract (parent-relative, 1:10-scaled
+    coordinates, measured on 毕设FOC — task 125b), so it carries no shape; the
+    region it came from is ``"pour"`` (131f) and that is the polygon the copper
+    queries read.
     """
 
     id: str

@@ -110,7 +110,7 @@ __all__ = [
 CONSUMED_RECORD_TYPES: frozenset[str] = frozenset(
     {
         "ATTR", "COMPONENT", "DOCHEAD", "FILL", "LAYER", "LAYER_PHYS", "LINE",
-        "PAD_NET", "POLY", "POURED", "VIA",
+        "PAD_NET", "POLY", "POUR", "POURED", "VIA",
     }
 )
 
@@ -649,7 +649,7 @@ def collect_pcb_context(
                     width=_as_float(body.get("width")),
                 )
             )
-        elif rtype in ("FILL", "POLY", "POURED"):
+        elif rtype in ("FILL", "POLY", "POUR", "POURED"):
             if rtype == "POURED":
                 # POURED stores the *result* of a pour. Its path is NOT in
                 # board coordinates (measured: all points sit in a small local
@@ -660,6 +660,17 @@ def collect_pcb_context(
                 parts = parse_id_tuple(record)
                 net = net_by_element.get(parts[1]) if len(parts) >= 2 else None
             else:
+                # 131f: POUR joins this branch, so a `POUR` record becomes a
+                # `kind="pour"` polygon carrying its own `netName` /
+                # `layerId`. Unlike POURED its path **is** in board
+                # coordinates — measured on 毕设FOC 1.0.0, the `IA+` POUR at
+                # `["R", 6695.10, -1625.24, 144.90, 149.76, 0, 0]` sits in
+                # the same frame as that board's pads and tracks, and the
+                # `MOTC` POUR's polyline runs x = 6875..7240 on the same
+                # scale — so `_path_points` handles both shapes it arrives in
+                # (`["R", x, y, w, h, ..]` rectangles, already expanded to
+                # four corners there, and `[[x0, y0, "L", x1, y1, ..]]`
+                # polylines) with no change of its own.
                 path = body.get("path")
                 net = _net_name(body.get("netName"))
                 if net is not None and record.id:
@@ -678,7 +689,12 @@ def collect_pcb_context(
                     id=record.id or "",
                     net=net,
                     layer_id=body.get("layerId"),
-                    kind={"FILL": "fill", "POLY": "poly", "POURED": "poured"}[rtype],
+                    kind={
+                        "FILL": "fill",
+                        "POLY": "poly",
+                        "POUR": "pour",
+                        "POURED": "poured",
+                    }[rtype],
                     points=points,
                     width=_as_float(body.get("width")),
                     fill_style=body.get("fillStyle"),

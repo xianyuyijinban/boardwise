@@ -364,13 +364,16 @@ def test_both_rules_are_in_the_builtin_list_in_the_declared_order():
     the same measurement primitive on the same object — and **131d** inserted
     ``pcb-mcu-crystal-placement`` after that, the third insert, which moves to
     the next object over (one MCU's oscillator network) with the same
-    discipline.
+    discipline, and **131f** inserted ``pcb-mcu-crystal-keepout`` after *that*,
+    the fourth insert, which reads the same crystal along the other axis
+    (straight through the board, layer by layer, rather than across it).
     """
     assert [rule.id for rule in BUILTIN_PCB_RULES] == [
         "pcb-decap-distance",
         "pcb-regulator-cap-distance",
         "pcb-regulator-fb-placement",
         "pcb-mcu-crystal-placement",
+        "pcb-mcu-crystal-keepout",
         "pcb-mcu-supply-groups",
         "pcb-mcu-reset-boot",
         "pcb-component-spacing",

@@ -38,6 +38,7 @@ from ..rules.pcb.base import PcbReviewContext, PcbRule
 from ..rules.pcb.distance import ComponentSpacing, DecapDistance
 from ..rules.pcb.ipc import TrackAmpacity, VoltageSpacing
 from ..rules.pcb.crystal import McuCrystalPlacement
+from ..rules.pcb.crystalkeepout import McuCrystalKeepout
 from ..rules.pcb.mcusupply import McuSupplyGroups
 from ..rules.pcb.mcureset import McuResetBoot
 from ..rules.pcb.regulator import RegulatorCapDistance
@@ -47,7 +48,8 @@ from ..rules.base import SEVERITY_ORDER, Finding
 #: The rules this runner applies, in execution order. Empty in 126a (地基);
 #: 126b added the two distance rules, 126c added the two IPC-2221 ones, 131b
 #: added the regulator input/output capacitor rule, 131c the regulator
-#: feedback-divider rule and 131d ``pcb-mcu-crystal-placement`` — the five
+#: feedback-divider rule, 131d ``pcb-mcu-crystal-placement`` and 131f
+#: ``pcb-mcu-crystal-keepout`` — the six
 #: L1-geometry readers of *placement* sit together, ahead of the
 #: standards-derived readings, each batch adding to this list and to the
 #: structure gate that says "the list is the truth". The ordering is the
@@ -64,18 +66,20 @@ from ..rules.base import SEVERITY_ORDER, Finding
 #: severity sort puts them first in `findings[]` regardless of where they are
 #: declared). Nothing depends on it — no rule reads another's output — so it is
 #: a reading choice, and each batch appends rather than reordering. 131b's
-#: ``pcb-regulator-cap-distance``, 131c's ``pcb-regulator-fb-placement`` and
-#: 131d's ``pcb-mcu-crystal-placement`` are the three inserts rather than
-#: appends, and they sit together: the first two read the same measurement
-#: primitive on the same object (one regulator), one question further along its
-#: power path each, and 131d moves to the next object over (one MCU's
-#: oscillator network) with the same discipline — placement questions, each
-#: answering what the one before could not.
+#: ``pcb-regulator-cap-distance``, 131c's ``pcb-regulator-fb-placement``, 131d's
+#: ``pcb-mcu-crystal-placement`` and 131f's ``pcb-mcu-crystal-keepout`` are the
+#: four inserts rather than appends, and they sit together: the first two read
+#: the same measurement primitive on the same object (one regulator), one
+#: question further along its power path each, 131d moves to the next object
+#: over (one MCU's oscillator network) and 131f looks at that same crystal
+#: along the other axis (straight through the board) — all placement questions,
+#: each answering what the one before could not.
 BUILTIN_PCB_RULES: list[PcbRule] = [
     DecapDistance(),
     RegulatorCapDistance(),
     RegulatorFbPlacement(),
     McuCrystalPlacement(),
+    McuCrystalKeepout(),
     McuSupplyGroups(),
     McuResetBoot(),
     ComponentSpacing(),
