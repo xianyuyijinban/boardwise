@@ -610,6 +610,16 @@ def test_the_report_carries_the_provenance_a_run_has_to_record():
     #      **outside this recipe by construction**: `rulebody` digests rule
     #      bodies, not the parsers they call. Recorded rather than inferred
     #      from a digest that did not move.)
+    #      -> 131d 12874b28: one new file, rules/pcb/crystal.py (the
+    #      `pcb-mcu-crystal-placement` rule), so only the recursive digest
+    #      moved and the direct-only one stayed at 98b1d462 for the fifth
+    #      time. 131d's other change — the OSC short-circuit in
+    #      `core/pinrole.py`, which stopped `PF0-OSC_IN` reading as a supply
+    #      `IN` — is in `core/`, which is **outside this recipe by
+    #      construction** for the same reason 131c's parser change was: the
+    #      recipe covers `src/boardwise/rules/` and digests rule bodies, not
+    #      the helpers they call. That is why the report prints the commit
+    #      beside the number.
     # Both are measured, not guessed - `tests/test_126a_pcb_review_plumbing.py`
     # recomputes both from the tree and pins them. No number is asserted here:
     # any further rule change moves the digest again, which is the point, so

@@ -299,6 +299,15 @@ def test_pin_role_known_names(name, role):
      "OUT A", "OUT B", "IN A+", "IN A-",
      "+", "-", "15V+", "A", "K", "D", "S", "R", "G", "C",
      "PA7", "BOOT0", "nFAULT", "SDA", "SCK", "CANH",
+     # 131d: the oscillator family. These used to resolve — the bare spellings
+     # through the token scan (``OSC`` + ``IN``), the hyphenated ones the same
+     # way (``PF0-OSC`` + ``IN``, because ``_`` separates but ``-`` does not).
+     # An oscillator pin is not a supply pin, and ``pcb-regulator-cap-distance``
+     # asks exactly ``pin_role(...) == "IN"``.
+     "OSC_IN", "OSC_OUT", "OSC32_IN", "OSC32_OUT",
+     "PH0-OSC_IN", "PH1-OSC_OUT", "PF0-OSC_IN", "PF1-OSC_OUT",
+     "PC14-OSC32_IN", "PC15-OSC32_OUT", "PD0-OSC_IN", "PD1-OSC_OUT",
+     "OSC1", "OSC2",
      "", "   ", None],
 )
 def test_pin_role_declines(name):
@@ -306,7 +315,10 @@ def test_pin_role_declines(name):
 
     ``PGOOD`` and ``RON`` are the two the task names explicitly: both are real
     pins with real jobs and neither is a supply role, so guessing ``OUT`` for
-    them would put a decoupling rule on a status pin.
+    them would put a decoupling rule on a status pin. 131d added the
+    oscillator family here for the same reason one step further: ``IN`` and
+    ``OUT`` *are* roles, so the misjudgement was not a refusal but a
+    confident wrong answer.
     """
     assert pin_role(name) is None
 

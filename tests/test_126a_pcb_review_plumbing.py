@@ -142,6 +142,7 @@ def test_the_builtin_pcb_rule_list_is_the_126b_distance_pair_then_the_126c_pair(
         "pcb-decap-distance",
         "pcb-regulator-cap-distance",
         "pcb-regulator-fb-placement",
+        "pcb-mcu-crystal-placement",
         "pcb-component-spacing",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
@@ -308,16 +309,18 @@ def test_run_pcb_review_reads_every_pcb_document_of_the_foc_fixture():
     assert by_title["PCB1"]["copperLayers"] == 4, "PCB1 is the 4-layer driver"
     assert by_title["PCB2"]["copperLayers"] == 2
     # 126b added the two distance rules, **126c appended the two IPC-2221
-    # ones**, **131b inserted the regulator rule after the decap one** and
-    # **131c inserted the feedback-divider rule after that one**, so the
-    # executed list is now six ids in declaration order (the pin's own
-    # statement is "the list is the truth, in order"). Only the rule *set* moved;
-    # what is asserted here — the plumbing distributing findings across the
-    # right documents without assuming how many there are — is unchanged.
+    # ones**, **131b inserted the regulator rule after the decap one**,
+    # **131c inserted the feedback-divider rule after that one** and **131d
+    # inserted the crystal rule after that one**, so the executed list is now
+    # seven ids in declaration order (the pin's own statement is "the list is
+    # the truth, in order"). Only the rule *set* moved; what is asserted here —
+    # the plumbing distributing findings across the right documents without
+    # assuming how many there are — is unchanged.
     for board in section["boards"]:
         assert board["checksRun"] == [
             "pcb-decap-distance", "pcb-regulator-cap-distance",
             "pcb-regulator-fb-placement",
+            "pcb-mcu-crystal-placement",
             "pcb-component-spacing",
             "pcb-track-ampacity", "pcb-voltage-spacing",
         ]
@@ -412,8 +415,9 @@ def test_checkup_offline_with_a_pcb_document_carries_the_pcb_review_section(
     assert section["runner"] == RUNNER_ID
     assert [board["title"] for board in section["boards"]] == ["PCB3", "PCB1", "PCB2"]
     # 126b added the two distance rules, **126c added the two IPC-2221 ones**,
-    # **131b added the regulator capacitor rule** and **131c the feedback-
-    # divider rule**; their findings are in the one array
+    # **131b added the regulator capacitor rule**, **131c the feedback-
+    # divider rule** and **131d the MCU crystal rule**; their findings are in
+    # the one array
     # too. Note what is *not* here:
     # `pcb-track-ampacity` produces no row on this fixture, because 毕设FOC has
     # **no design-intent contract** and the rule's subject is the contract's net
@@ -427,12 +431,16 @@ def test_checkup_offline_with_a_pcb_document_carries_the_pcb_review_section(
     # owns those numbers, and this test only pins that the id appears in the one
     # merged `findings[]` array. 131c's `pcb-regulator-fb-placement` fires on the
     # same board for the same reason and its rows are owned by
-    # `test_131c_regulator_fb_placement.py`.
+    # `test_131c_regulator_fb_placement.py`; 131d's
+    # `pcb-mcu-crystal-placement` fires on Board1 too (the STM32H743's `U1` with
+    # its `X1` crystal) and its rows are owned by
+    # `test_131d_mcu_crystal_placement.py`.
     pcb_rows = [f for f in report["findings"] if f["rule_id"].startswith("pcb-")]
-    assert pcb_rows, "the six rules are in BUILTIN_PCB_RULES and five fire here"
+    assert pcb_rows, "the seven rules are in BUILTIN_PCB_RULES and six fire here"
     assert {f["rule_id"] for f in pcb_rows} == {
         "pcb-decap-distance", "pcb-regulator-cap-distance",
         "pcb-regulator-fb-placement",
+        "pcb-mcu-crystal-placement",
         "pcb-component-spacing", "pcb-voltage-spacing",
     }
     # 126a did not touch the schema or the verdict; **126d did**, by bumping the
@@ -627,6 +635,24 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     #                known and pre-existing limit of what the number claims, and
     #                it is stated here rather than left for a reader to infer
     #                from a digest that did not move.
+    #     12874b28 — after 131d. One new file inside the subpackage,
+    #                `rules/pcb/crystal.py` (the new `pcb-mcu-crystal-placement`
+    #                rule). The direct-only digest stays at 98b1d462 for the
+    #                fifth consecutive time, so 131d also stayed inside
+    #                `rules/pcb/` as a rule change. (The first value measured
+    #                for this batch was c157920f, before the rule body was
+    #                tidied to use `distance._mil` — 131b's canonical
+    #                rounding — instead of a local `round(x, 1)`. A docstring
+    #                and a rounding call are source too, and the pin does not
+    #                care why; the number is the number.)
+    #                131d's **second** file is `core/pinrole.py` — the OSC
+    #                short-circuit that stopped `PF0-OSC_IN` reading as a supply
+    #                `IN`. That is **outside the recipe by construction** (the
+    #                recipe covers `src/boardwise/rules/`), which is the same
+    #                known limit 131c recorded: a report's `rulebody` number
+    #                does not move for a change to a helper a rule *calls* from
+    #                `core/`, and the report prints the commit alongside for
+    #                exactly that reason.
     # Both are measured, not guessed. The recursive digest moves whenever any
     # rule body moves - which is the whole point of the recipe, and the reason
     # this number is updated by hand together with the note in test_017 rather
@@ -634,7 +660,7 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # recorded why.
     assert recursive != old_digest, "the subpackage is inside the recipe now"
     assert old_digest == "98b1d462"
-    assert recursive == "ddd201dd", (
+    assert recursive == "12874b28", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

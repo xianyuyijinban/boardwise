@@ -37,18 +37,20 @@ from ..core.measure import read_stackup
 from ..rules.pcb.base import PcbReviewContext, PcbRule
 from ..rules.pcb.distance import ComponentSpacing, DecapDistance
 from ..rules.pcb.ipc import TrackAmpacity, VoltageSpacing
+from ..rules.pcb.crystal import McuCrystalPlacement
 from ..rules.pcb.regulator import RegulatorCapDistance
 from ..rules.pcb.fbplacement import RegulatorFbPlacement
 from ..rules.base import SEVERITY_ORDER, Finding
 
 #: The rules this runner applies, in execution order. Empty in 126a (地基);
 #: 126b added the two distance rules, 126c added the two IPC-2221 ones, 131b
-#: added the regulator input/output capacitor rule and 131c the regulator
-#: feedback-divider rule — the four L1-geometry
-#: readers of *placement* sit together, ahead of the standards-derived
-#: readings, each batch adding to this list and to the structure gate that says
-#: "the list is the truth". The ordering is the execution order (like ``BUILTIN_RULES``), and
-#: the report's ``pcb_review.boards[].checksRun`` records it so a reader can tell
+#: added the regulator input/output capacitor rule, 131c the regulator
+#: feedback-divider rule and 131d ``pcb-mcu-crystal-placement`` — the five
+#: L1-geometry readers of *placement* sit together, ahead of the
+#: standards-derived readings, each batch adding to this list and to the
+#: structure gate that says "the list is the truth". The ordering is the
+#: execution order (like ``BUILTIN_RULES``), and the
+#: report's ``pcb_review.boards[].checksRun`` records it so a reader can tell
 #: what ran.
 #:
 #: The order below is **declaration order in this list**, and it is the order a
@@ -60,16 +62,18 @@ from ..rules.base import SEVERITY_ORDER, Finding
 #: severity sort puts them first in `findings[]` regardless of where they are
 #: declared). Nothing depends on it — no rule reads another's output — so it is
 #: a reading choice, and each batch appends rather than reordering. 131b's
-#: ``pcb-regulator-cap-distance`` and 131c's ``pcb-regulator-fb-placement`` are
-#: the two inserts rather than appends, and they sit together: both read the
-#: same measurement primitive on the same object (one regulator), one question
-#: further along its power path each, so a reader working down the placement
-#: questions meets the per-IC sweep first, then the per-pin supply capacitors,
-#: then the feedback network.
+#: ``pcb-regulator-cap-distance``, 131c's ``pcb-regulator-fb-placement`` and
+#: 131d's ``pcb-mcu-crystal-placement`` are the three inserts rather than
+#: appends, and they sit together: the first two read the same measurement
+#: primitive on the same object (one regulator), one question further along its
+#: power path each, and 131d moves to the next object over (one MCU's
+#: oscillator network) with the same discipline — placement questions, each
+#: answering what the one before could not.
 BUILTIN_PCB_RULES: list[PcbRule] = [
     DecapDistance(),
     RegulatorCapDistance(),
     RegulatorFbPlacement(),
+    McuCrystalPlacement(),
     ComponentSpacing(),
     TrackAmpacity(),
     VoltageSpacing(),

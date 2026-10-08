@@ -12,8 +12,11 @@ Layout of the package as the batches land:
 * ``base`` — :class:`PcbRule` and :class:`PcbReviewContext` (126a).
 * ``distance`` — the house-rule distance checks (126b).
 * ``ipc`` — the IPC-2221 checks (126c).
+* ``regulator`` — per-regulator input/output capacitor placement (131b).
+* ``fbplacement`` — feedback-divider placement (131c).
+* ``crystal`` — an MCU's crystal and load-capacitor placement (131d).
 
-The package is importable from the start; ``BUILTIN_PCB_RULES`` is **empty** in
-126a and its structure gate (the test that says "the list is the truth") is the
-pin that a rule arriving must flip.
+The package is importable from the start; ``BUILTIN_PCB_RULES`` was **empty**
+in 126a and its structure gate (the test that says "the list is the truth") is
+the pin that a rule arriving must flip.
 """
