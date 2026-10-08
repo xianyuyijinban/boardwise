@@ -20,6 +20,12 @@ Layout of the package as the batches land:
 * ``foc`` — the five FOC / 功率驱动 quick wins (133b): a power driver's bypass
   proximity, the ground-plane island inventory, the gate-trace width
   distribution, the non-obtuse fold list, and the high-current loop area.
+* ``focground`` — the three FOC ground-system rules (133c): the power-vs-logic
+  ground domain pair and whether their copper meets, the 0 Ω single-point tie
+  (岳's 2026-10-08 ruling), and the return-path projection under the gate /
+  switching / sense nets. It imports its object pools from ``foc`` rather than
+  re-deriving them, so R1b's 「0R 近功率电解」 measures the same bulk
+  capacitors R20's loop does.
 
 The package is importable from the start; ``BUILTIN_PCB_RULES`` was **empty**
 in 126a and its structure gate (the test that says "the list is the truth") is

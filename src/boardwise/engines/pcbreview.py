@@ -46,6 +46,11 @@ from ..rules.pcb.foc import (
     FocPowerLoopArea,
     FocTrackCorners,
 )
+from ..rules.pcb.focground import (
+    FocGroundDomains,
+    FocGroundTie,
+    FocReturnPath,
+)
 from ..rules.pcb.mcusupply import McuSupplyGroups
 from ..rules.pcb.mcureset import McuResetBoot
 from ..rules.pcb.regulator import RegulatorCapDistance
@@ -91,6 +96,13 @@ from ..rules.base import SEVERITY_ORDER, Finding
 #: order is the order of the questions (the driver's bypass, then the board's
 #: planes, then the traces, then the bends, then the loop) and again nothing
 #: depends on it: no FOC rule reads another's output.
+#:
+#: **133c appends the three ground-system rules to that same block**, right after
+#: ``pcb-foc-power-loop-area`` and still ahead of the geometry sweep. They are
+#: the same L1-geometry shape and they sit after the loop-area rule because that
+#: is the last of 133b's five and these three answer what comes *next* in the
+#: question order — the two ground domains and how they join (R1, R1b), then
+#: what the gate / switching / sense traces see under them (R5).
 BUILTIN_PCB_RULES: list[PcbRule] = [
     DecapDistance(),
     RegulatorCapDistance(),
@@ -104,6 +116,9 @@ BUILTIN_PCB_RULES: list[PcbRule] = [
     FocGateTraceWidth(),
     FocTrackCorners(),
     FocPowerLoopArea(),
+    FocGroundDomains(),
+    FocGroundTie(),
+    FocReturnPath(),
     ComponentSpacing(),
     TrackAmpacity(),
     VoltageSpacing(),

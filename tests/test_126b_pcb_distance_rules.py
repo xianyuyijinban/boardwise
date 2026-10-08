@@ -1009,6 +1009,17 @@ def test_llc_is_clean_under_both_distance_rules():
     it actually claims — 「126b's two rules and every other rule that existed
     before 133b are silent」 — by subtracting the FOC set, and
     `test_133b_foc_rules.py` pins the FOC side of llc on its own.
+
+    **133c widened the subtraction, and the widening is again the finding.**
+    133c added ``pcb-foc-ground-domains``, ``pcb-foc-ground-tie`` and
+    ``pcb-foc-return-path``. On llc all three answer 「there is no power-domain
+    ground here」 — llc names its returns ``DC+`` / ``DC-`` and has no ``PGND``
+    at all — and ``pcb-foc-return-path`` adds one 未识别清单 row naming the nets
+    it carries on llc's power stage (``DC+`` / ``DC-`` / ``DHG`` / ``DHS`` /
+    ``DLG`` / ``CHG`` / ``CHS`` / ``CLG``). The set above is subtracted so this
+    pin keeps saying what it always said — *126b's two distance rules and every
+    other rule that existed before the FOC pack are silent* — and
+    ``test_133c_foc_ground.py`` pins the 133c side on its own.
     """
     model, _board_ = cli._load_model(LLC, view="schematic")
     findings, section = run_pcb_review(LLC, model=model)
@@ -1016,6 +1027,8 @@ def test_llc_is_clean_under_both_distance_rules():
         "pcb-foc-decap-proximity", "pcb-foc-ground-plane",
         "pcb-foc-gate-trace-width", "pcb-foc-track-corners",
         "pcb-foc-power-loop-area",
+        "pcb-foc-ground-domains", "pcb-foc-ground-tie",
+        "pcb-foc-return-path",
     }
     assert [f for f in findings if f.rule_id not in foc_ids] == [], (
         f"llc is clean under both rules; got "
@@ -1058,6 +1071,14 @@ def test_llc_is_clean_under_both_distance_rules():
     #     it finds its crystals through the same `ic.mcu` oscillator nets, so a
     #     board with no MCU has no crystal region to inventory — measured, see
     #     `test_131f_mcu_crystal_keepout.py::test_llc_places_no_mcu_and_is_silent`.
+    #   * the three 133c ground rules (`pcb-foc-ground-domains`,
+    #     `pcb-foc-ground-tie`, `pcb-foc-return-path`) are **not** silent in
+    #     `checksRun` — they run and each answers 「llc has no power-domain
+    #     ground」 — but they produce only the no-power-domain notice and one
+    #     未识别清单 row, never a distance or a verdict about llc's two
+    #     distance rules, so the `findings == []` assertion above still holds.
+    #     Measured, see `test_133c_foc_ground.py::test_the_133c_acceptance_
+    #     matrix_across_five_boards`.
     assert section["boards"][0]["checksRun"] == [
         "pcb-decap-distance", "pcb-regulator-cap-distance",
         "pcb-regulator-fb-placement",
@@ -1070,6 +1091,9 @@ def test_llc_is_clean_under_both_distance_rules():
         "pcb-foc-gate-trace-width",
         "pcb-foc-track-corners",
         "pcb-foc-power-loop-area",
+        "pcb-foc-ground-domains",
+        "pcb-foc-ground-tie",
+        "pcb-foc-return-path",
         "pcb-component-spacing",
         "pcb-track-ampacity", "pcb-voltage-spacing",
     ]
