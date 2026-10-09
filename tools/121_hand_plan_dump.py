@@ -3,22 +3,38 @@
 
     .venv/Scripts/python.exe tools/121_hand_plan_dump.py [out-dir]
 
-120 closed with the page still refused: 12 of 24 ladder rungs build a plan when
-the relation gate is stood aside, the other 12 die in routing.  岳 ruled
-(2026-10-06): take the hand-plan path — pick a buildable rung, pin the few
-placements the compiler could not solve by hand, re-route, lint, apply.
+120 closed with the page still refused: ladder rungs died in routing, and the
+relation gate hid the rest.  岳 ruled (2026-10-06): take the hand-plan path —
+pick a buildable rung, pin the few placements the compiler could not solve by
+hand, re-route, lint, apply.
 
 This tool is the first step: it writes, for **every** ladder rung,
 
 * whether it builds (relation gate stood aside, readability gate **real**);
-* which relations the rung violates, measured with the real
-  ``_relation_failures`` on that rung's own placement (never softened);
+* which relations the rung violates, measured on the **finished plan** with
+  ``_relation_violations`` — `check_grammar`'s own ruler over ``plan.parts``
+  (origins and posed pin tips).  A rung that builds is measured there, so the
+  table is exactly what the gate and the checker would read and every row
+  carries the two points it was measured between.  A rung that does **not**
+  build is measured on the placement the compiler reached before the plan was
+  assembled, and the row says so (``relation_violations_ruler``);
 * the real readability verdict on the built plan, verbatim;
 * the full plan JSON (``drawapply.module_plan`` output — the exact document
   ``draw apply`` would consume) and an SVG preview.
 
 Nothing here is a passing compile.  Every artefact's name carries
 ``RELATION_GATE_STOOD_ASIDE``; the disclaimer is inside every JSON.
+
+**The library is read the way `draw plan` reads it** (:func:`_page`): a
+fixture loader that drops a pin's drawn length changes what the router draws
+from one and the same placement, and a dump that is not the pipeline's drawing
+is no use for choosing a rung to pin.
+
+A no-arg run writes into :data:`DEFAULT_OUT`
+(``outputs/121/buildable``) — the directory 121a's artefacts came from.  The
+two are not the same landscape (121a used the fixture loader, and the router
+then labelled CLAMP instead of wiring it), so re-running with no argument
+replaces that landmark; name an out-dir when the comparison matters.
 """
 
 from __future__ import annotations
@@ -40,8 +56,6 @@ from boardwise.engines import drawapply  # noqa: E402
 from boardwise.engines import readability as rb  # noqa: E402
 from boardwise.engines import svgpreview  # noqa: E402
 
-import test_113_flyback_grammar as t113  # noqa: E402
-
 SPECS = ROOT / "blocklib" / "specs"
 DEFAULT_OUT = ROOT / "outputs" / "121" / "buildable"
 
@@ -49,8 +63,9 @@ DISCLAIMER = (
     "NOT a passing compile. This plan exists only because the relation gate "
     "was stood aside so the page could be looked at (岳's option-2 hand-plan "
     "path, 2026-10-06). The relation violations listed are the real ones, "
-    "measured on this rung's own placement; the readability verdict is the "
-    "real checker's, unsoftened."
+    "measured with check_grammar's own ruler over the finished plan where a "
+    "plan came out (see relation_violations_ruler); the readability verdict is "
+    "the real checker's, unsoftened."
 )
 
 #: 岳 2026-10-04 ruling: the two 75k 0603 RCD resistors are C23242.
@@ -61,8 +76,73 @@ def _page():
     circuit = CircuitSpec.load(SPECS / "flyback_uc3845.circuit.json")
     presentation = PresentationSpec.load(
         SPECS / "flyback_uc3845.presentation.json")
-    book = t113._library_from(SPECS / "flyback_uc3845.library.json")
+    #: **The pipeline's own reader.**  `draw plan` reads the library through
+    #: `drawapply.load_library`, and this tool must hand the compiler the same
+    #: book or it dumps a drawing the pipeline would not make.  Measured
+    #: 2026-10-09: `test_113`'s fixture loader drops `pin.length` (and the
+    #: profiles' notes), and the router, which reads a pin's drawn length, then
+    #: routes the **same placement** differently — 17 wires against the real
+    #: reader's 19 on the hand-plan candidate.
+    book = drawapply.load_library(SPECS / "flyback_uc3845.library.json")
     return circuit, presentation, book
+
+
+def _plan_violations(plan, circuit, binding, book, ctx) -> list[dict]:
+    """The relations the **finished plan** does not keep — the checker's own ruler.
+
+    ``_relation_violations`` is called exactly as ``check_grammar`` calls it
+    (same ``origin_of`` / ``pin_of`` over ``plan.parts``, same lateral axis),
+    so a row here is a row the gate would report on this plan.  The two
+    measured points travel with the row: a table of prose cannot be re-checked
+    by hand, coordinates can.
+    """
+    progress = ctx.progress
+    out: list[dict] = []
+    for item, points in dc._relation_violations(
+        circuit, binding,
+        origin_of=lambda part_id: dc._plan_origin(plan, part_id),
+        pin_of=lambda part_id, token: dc._plan_pin(plan, book, part_id, token),
+        grid=ctx.budget.grid, near_limit=ctx.budget.near_limit,
+        lateral=(-progress[1], progress[0]), progress=progress,
+    ):
+        out.append({
+            "kind": item.kind,
+            "subject": item.subject,
+            "object": item.object,
+            "points": [list(point) for point in points],
+            "reason": item.reason,
+        })
+    return out
+
+
+def _placement_violations(ctx, placed) -> list[dict]:
+    """The same table for a rung that never reached a plan (pre-build placement)."""
+    out: list[dict] = []
+    for item, points in dc._relation_violations(
+        ctx.circuit, ctx.binding,
+        origin_of=lambda part_id: placed.origins.get(part_id),
+        pin_of=lambda part_id, token: dc._pin_point(
+            ctx, part_id, token, placed.poses, placed.origins),
+        grid=ctx.budget.grid, near_limit=ctx.budget.near_limit,
+        lateral=ctx.lateral(), progress=ctx.progress,
+    ):
+        out.append({
+            "kind": item.kind,
+            "subject": item.subject,
+            "object": item.object,
+            "points": [list(point) for point in points],
+            "reason": item.reason,
+        })
+    return out
+
+
+def _render_rows(rows: list[dict]) -> list[str]:
+    return [
+        f"the relation {row['kind']}({row['subject']}, {row['object']}) is not "
+        f"kept by the plan: the two points measured are "
+        f"{tuple(row['points'][0])} and {tuple(row['points'][1])}"
+        for row in rows
+    ]
 
 
 def main(argv: list[str]) -> int:
@@ -82,18 +162,27 @@ def main(argv: list[str]) -> int:
     try:
         for variant in dc._variants(ctx):
             placed, place_failure = dc._place(ctx, variant)
-            relations = (
-                [f.render() if hasattr(f, "render") else str(f)
-                 for f in saved_rel(ctx, placed)]
-                if placed is not None else []
-            )
             built, failure, _ = dc._build_candidate(ctx, variant)
+            if built is not None:
+                rows = _plan_violations(built.plan, circuit, binding, book, ctx)
+                ruler = "plan.parts (check_grammar's own ruler)"
+                relations = _render_rows(rows)
+            elif placed is not None:
+                rows = _placement_violations(ctx, placed)
+                ruler = ("the placement this rung reached before the plan was "
+                         "assembled (no plan came out of it)")
+                relations = _render_rows(rows)
+            else:
+                rows, relations = [], []
+                ruler = "none (no placement was reached)"
             entry = {
                 "variant": variant.label,
                 "scale": variant.scale,
                 "pose_index": variant.pose_index,
                 "placed": placed is not None,
+                "relation_violations_ruler": ruler,
                 "relation_violations": relations,
+                "relation_violation_points": rows,
                 "built": built is not None,
                 "build_failure": (
                     {"category": failure.category, "subject": failure.subject,
@@ -137,7 +226,9 @@ def main(argv: list[str]) -> int:
             payload = {
                 "disclaimer": DISCLAIMER,
                 "variant": variant.label,
+                "relation_violations_ruler": ruler,
                 "relation_violations": relations,
+                "relation_violation_points": rows,
                 "readability": entry["readability"],
                 "counts": {
                     "parts": len(plan.parts), "texts": len(plan.texts),
@@ -159,8 +250,10 @@ def main(argv: list[str]) -> int:
                   f"violation(s), {len(checked.hard_violations)} hard readability"
                   f" violation(s)"
                   + (f", change_plan ERROR {plan_error}" if plan_error else ""))
-            for rel in relations:
-                print(f"    relation: {rel}")
+            for row in rows:
+                print(f"    relation: {row['kind']}({row['subject']}, "
+                      f"{row['object']}) measured on the finished plan between "
+                      f"{tuple(row['points'][0])} and {tuple(row['points'][1])}")
     finally:
         dc._relation_failures = saved_rel
 
@@ -169,7 +262,7 @@ def main(argv: list[str]) -> int:
                        encoding="utf-8")
     built_n = sum(1 for e in index if e["built"])
     print(f"built {built_n}/{len(index)} rungs; index -> "
-          f"{summary.relative_to(ROOT).as_posix()}")
+          f"{summary.resolve().relative_to(ROOT).as_posix()}")
     return 0 if built_n else 1
 
 
