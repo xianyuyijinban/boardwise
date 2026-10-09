@@ -409,6 +409,8 @@ def assign_designators(
     parts: Sequence[LayoutPart],
     profiles: Mapping[str, SymbolProfile],
     pool: Iterable[str],
+    *,
+    keep_names: bool = False,
 ) -> list[tuple[str, str, str]]:
     """``[(partId, prefix, designator)]`` for a drawing, from the pool it avoids.
 
@@ -417,6 +419,16 @@ def assign_designators(
     `addcomponent.designator_pool`'s answer at the caller's boundary: the page's
     designators **and** the project export's (036b), because the host renames a
     collision mid-run.
+
+    ``keep_names`` (121c, 岳-ruled 2026-10-06) lands every part under its **spec
+    id** rather than a freshly allocated number: the ids are the designators the
+    engineer reads (``C10`` is ``C10``, not a renumbered ``C3``), and a compiled
+    drawing that renumbers them is a drawing nobody can match against the plan
+    they approved. It is a *checked* preservation, not an override: a name that
+    already sits in the pool is refused by name (the host would rename it mid-run,
+    036b), so "keep the names" is only ever honoured where the pool is free of
+    them. A drawing that does not want it passes ``keep_names=False`` and gets
+    exactly the old numbering.
     """
     used = [name for name in pool]
     out: list[tuple[str, str, str]] = []
@@ -434,6 +446,18 @@ def assign_designators(
                 "prefix — neither the spec id nor the symbol ref carries one, and a part "
                 "cannot be numbered without one"
             )
+        if keep_names:
+            designator = part.part_id
+            if designator in used:
+                raise DrawPlanError(
+                    f"part {part.part_id!r} was told to keep its spec id as its "
+                    f"designator, but {designator} is already on the page or in the "
+                    "project export — a kept name that collides is a rename mid-run "
+                    "(036b); free the name or drop --keep-names"
+                )
+            used.append(designator)
+            out.append((part.part_id, prefix, designator))
+            continue
         designator = addcomponent.allocate_designator(used, prefix)
         used.append(designator)
         out.append((part.part_id, prefix, designator))
@@ -448,9 +472,14 @@ def designator_problems(plan: ChangePlan, pool: Iterable[str]) -> list[str]:
     A human who placed an ``R1`` by hand makes the second answer differ, and a run
     that wrote the plan's numbers anyway would be a run with two ``R1``s (or, worse,
     a part silently renamed mid-run, 036b).
+
+    A **kept-name** plan (121c, ``change.keepNames``) is asked the first question
+    only: its designators are the engineer's spec ids, which the pool would never
+    *allocate*, so the allocation leg would reject every one of them for the wrong
+    reason. What still has to hold is that the name is free — a kept ``C10`` that
+    something else already owns is the same rename mid-run.
     """
     pool_list = [name for name in pool]
-    wanted = [part.designator for part in plan.change.draw_parts]
     problems: list[str] = []
     for part in plan.change.draw_parts:
         if part.designator in pool_list:
@@ -459,6 +488,8 @@ def designator_problems(plan: ChangePlan, pool: Iterable[str]) -> list[str]:
                 "project export — the plan's number was taken between plan and apply"
             )
     if problems:
+        return problems
+    if plan.change.draw_keep_names:
         return problems
     for part in plan.change.draw_parts:
         allocated = addcomponent.allocate_designator(pool_list, part.prefix)
@@ -528,6 +559,7 @@ def module_plan(
     notes: Sequence[str] = (),
     label_stubs: bool = False,
     module_label: str = "",
+    keep_names: bool = False,
 ) -> ChangePlan:
     """One compiled drawing, as the plan a human authorises (054 §四.1).
 
@@ -548,7 +580,8 @@ def module_plan(
     The three things the layout cannot know are settled here, in this order:
     the **recipe** (a symbol ref is not a part: every part needs an LCSC number and
     a value, or the plan is refused naming the parts), the **numbers** (allocated
-    from ``pool``, see `assign_designators`) and the **flags** (a rail's symbol ref
+    from ``pool``, see `assign_designators`; ``keep_names`` lands each part under
+    its spec id when the pool is free of it — 121c) and the **flags** (a rail's symbol ref
     becomes the connector's own ``Ground``/``Power`` vocabulary, and a non-rail
     with a flag is refused rather than quietly drawn as something else).
 
@@ -596,7 +629,9 @@ def module_plan(
                 "— the pins would land somewhere nobody laid out"
             )
 
-    assignments = assign_designators(list(layout.parts), book, pool)
+    assignments = assign_designators(
+        list(layout.parts), book, pool, keep_names=keep_names
+    )
     for part, (part_id, prefix, designator) in zip(layout.parts, assignments):
         profile = book[part.symbol_ref]
         spec_part = circuit.part(part_id)
@@ -878,6 +913,7 @@ def module_plan(
             draw_downgrades=built.downgrades,
             draw_notes=built.notes,
             baseline_findings=[str(item) for item in baseline_findings],
+            draw_keep_names=bool(keep_names),
         ),
         preconditions=_preconditions(built, baseline, baseline_findings),
         expected_postcondition=_postconditions(built, islands),

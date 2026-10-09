@@ -538,6 +538,51 @@
       "notes": [
         "body: derived lower bound: the outer pins' inner ends (no bbox in any reading)"
       ]
+    },
+    {
+      "symbolRef": "PWR-GND",
+      "title": "Ground flag for the source-side (PGND) and the secondary-side (SEC_GND) ground families — 121b, 岳-ruled: the library now carries the rail/ground flags, so those nets are stated by one vertical symbol instead of being named by a label at every pin (tasks/121-hand-plan-next.md: 岳's 电源轨用竖直旗标、有旗不反复标; 069 sec.7: 旗标一定要竖直摆放). No pins: the connection point IS the origin — a pin-less profile is how the compiler identifies a flag — and the glyph hangs on the ground family's own side of it.\n[121b] glyph box and pose measured on the live host, not assumed: 岳's own hand-drawn P1 page (outputs/111/geo_P1_live.json, 2026-10-04) holds all 11 of his PGND/SEC_GND flags at rotation 180 and all 4 of his rail flags at rotation 0 — no flag on the sheet is laid flat; which side the ground family hangs on is read off the host's own Ground-GND flag at rotation 0 (outputs/099/libprobe 2026-10-03 and outputs/089/draw/flag_orientation.txt, both measuring the bars at 9.5..19.5 units BELOW the connection; outputs/064_railflag re-measured the family on the canvas: 20-wide bars hanging 10..19 below), cross-checked against 岳's 110 page render (outputs/111/render_P1.svg).",
+      "body": [
+        -6.0,
+        0.0,
+        6.0,
+        18.0
+      ],
+      "pins": [],
+      "notes": [
+        "body: stated convention, not a measurement — (-6, 0, 6, 18) is 053B's flag-glyph box, the same box every PWR-* profile in this repo declares, reserving the glyph away from the connection point; which side of the connection that glyph hangs on is what the live host readings above measured",
+        "flag glyph convention of the compiler (the host places a power flag by kind+net, never from a library profile); the family is read from the symbolRef token GND by symbolprofile.flag_glyph_kind"
+      ]
+    },
+    {
+      "symbolRef": "PWR-HVDC",
+      "title": "Rail flag for the HVDC input rail (Power family) — 121b, 岳-ruled: the rail is stated by one vertical flag instead of being named by a label at every pin (tasks/121-hand-plan-next.md: 岳's 电源轨用竖直旗标; 069 sec.7: 旗标一定要竖直摆放). No pins: the origin IS the connection point — a pin-less profile is how the compiler identifies a flag — and the glyph hangs on the rail family's own side of it.\n[121b] glyph box and pose measured on the live host, not assumed: 岳's own hand-drawn P1 page (outputs/111/geo_P1_live.json, 2026-10-04) holds his HVDC and SEC_12V rail flags at rotation 0 with every ground flag at 180 — nothing on the sheet is laid flat; which side the rail family hangs on is read off the host's own Power-5V flag at rotation 0 (outputs/099/libprobe 2026-10-03 and outputs/089/draw/flag_orientation.txt, both measuring the bar at 4.5..10.5 units ABOVE the connection; outputs/064_railflag re-measured the family on the canvas: a 10-wide bar 5..10 above), cross-checked against 岳's 110 page render (outputs/111/render_P1.svg: his Power-5V flag at (470,560) carries its bar at canvas y = 570, i.e. +10).",
+      "body": [
+        -6.0,
+        0.0,
+        6.0,
+        18.0
+      ],
+      "pins": [],
+      "notes": [
+        "body: stated convention, not a measurement — (-6, 0, 6, 18) is 053B's flag-glyph box, the same box every PWR-* profile in this repo declares, reserving the glyph away from the connection point; which side of the connection that glyph hangs on is what the live host readings above measured",
+        "flag glyph convention of the compiler; the family is read from the symbolRef (no ground token -> rail) by symbolprofile.flag_glyph_kind"
+      ]
+    },
+    {
+      "symbolRef": "PWR-SEC_12V",
+      "title": "Rail flag for the SEC_12V output rail (Power family) — 121b, 岳-ruled: the rail is stated by one vertical flag instead of being named by a label at every pin (tasks/121-hand-plan-next.md: 岳's 电源轨用竖直旗标; 069 sec.7: 旗标一定要竖直摆放). No pins: the origin IS the connection point — a pin-less profile is how the compiler identifies a flag — and the glyph hangs on the rail family's own side of it.\n[121b] glyph box and pose measured on the live host, not assumed: 岳's own hand-drawn P1 page (outputs/111/geo_P1_live.json, 2026-10-04) holds his SEC_12V output flag at rotation 0 together with the HVDC rail flag, with every ground flag at 180 — nothing on the sheet is laid flat; which side the rail family hangs on is read off the host's own Power-5V flag at rotation 0 (outputs/099/libprobe 2026-10-03 and outputs/089/draw/flag_orientation.txt, both measuring the bar at 4.5..10.5 units ABOVE the connection; outputs/064_railflag re-measured the family on the canvas: a 10-wide bar 5..10 above), cross-checked against 岳's 110 page render (outputs/111/render_P1.svg).",
+      "body": [
+        -6.0,
+        0.0,
+        6.0,
+        18.0
+      ],
+      "pins": [],
+      "notes": [
+        "body: stated convention, not a measurement — (-6, 0, 6, 18) is 053B's flag-glyph box, the same box every PWR-* profile in this repo declares, reserving the glyph away from the connection point; which side of the connection that glyph hangs on is what the live host readings above measured",
+        "flag glyph convention of the compiler; the family is read from the symbolRef (no ground token -> rail) by symbolprofile.flag_glyph_kind"
+      ]
     }
   ]
 }

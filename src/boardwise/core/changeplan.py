@@ -626,6 +626,13 @@ class PlanChange:
     #: junctions the editor will draw itself, which texts it annotates, what the
     #: compiler's own notes said.
     draw_notes: list[str] = field(default_factory=list)
+    #: 121c: the plan landed every part under its **spec id** rather than a
+    #: freshly allocated number. Recorded because apply's designator guard has two
+    #: different questions to ask: an allocated plan must still agree with what the
+    #: pool would allocate now, while a kept-name plan must only still be *free* of
+    #: the pool (the pool would never "allocate" C10, so the allocation check would
+    #: reject every kept name for the wrong reason).
+    draw_keep_names: bool = False
 
 
 @dataclass
@@ -899,6 +906,9 @@ class ChangePlan:
                 "downgrades": list(self.change.draw_downgrades),
                 "notes": list(self.change.draw_notes),
                 "baselineFindings": list(self.change.baseline_findings),
+                # Written only when true, so a plan that kept no names keeps the
+                # document it always had (the kind-aware rule this method exists for).
+                **({"keepNames": True} if self.change.draw_keep_names else {}),
             }
         return {
             "planVersion": self.plan_version,
@@ -1770,6 +1780,7 @@ def _draw_change_from(change: dict[str, Any]) -> PlanChange:
         draw_downgrades=_string_list(change, "downgrades"),
         draw_notes=_string_list(change, "notes"),
         baseline_findings=_string_list(change, "baselineFindings"),
+        draw_keep_names=bool(change.get("keepNames")),
     )
 
 

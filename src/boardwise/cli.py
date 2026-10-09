@@ -1483,6 +1483,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="The sheet to draw into (see `draw compile --page-box`).",
     )
     draw_plan.add_argument(
+        "--keep-names", action="store_true",
+        help=(
+            "Land every part under its spec id instead of a freshly allocated "
+            "number (121c: the engineer's `C10` stays `C10`, not a renumbered "
+            "`C3`). Checked, not forced — a spec id already in the page/project "
+            "pool refuses the plan by name, because the host would rename it "
+            "mid-run (036b)."
+        ),
+    )
+    draw_plan.add_argument(
         "--page", default=None, metavar="UUID",
         help=(
             "Bind the plan to a page: its census, its designator pool (with the "
@@ -1561,6 +1571,15 @@ def build_parser() -> argparse.ArgumentParser:
         ("--layout", "The LayoutPlan JSON to re-digest for the layout guard."),
     ):
         draw_apply.add_argument(flag, default=None, metavar="PATH", help=text)
+    draw_apply.add_argument(
+        "--keep-names", action="store_true",
+        help=(
+            "A page document only: keep every part's spec id as its designator "
+            "when the plan is built at apply time (see `draw plan --keep-names`). "
+            "A `draw-module` plan already carries the designators it was built "
+            "with, so this flag does nothing on that route."
+        ),
+    )
     draw_apply.add_argument(
         "--render", default=None, metavar="PATH",
         help=(
@@ -7851,6 +7870,7 @@ def _cmd_draw_plan(args: argparse.Namespace) -> int:
                 pool=pool,
                 baseline=baseline,
                 baseline_findings=baseline_findings,
+                keep_names=bool(getattr(args, "keep_names", False)),
                 notes=[
                     "the layout is 053 stage B's candidate "
                     f"{args.candidate} ({layout.geometry_sha256()[:12]}…)",
@@ -9322,6 +9342,7 @@ def _draw_plan_from_page(
     baseline=None,
     baseline_findings=(),
     notes=(),
+    keep_names=False,
 ):
     """A page document's merged drawing, as the same `draw-module` plan (057 sec.1).
 
@@ -9344,6 +9365,7 @@ def _draw_plan_from_page(
         notes=list(notes),
         label_stubs=True,
         module_label="page " + "+".join(module.id for module in page.modules),
+        keep_names=bool(keep_names),
     )
 
 
@@ -9491,6 +9513,7 @@ def _cmd_draw_plan_page(args: argparse.Namespace) -> int:
                     f"the designator pool is {report['poolSource'] or 'empty (offline)'}",
                     *_draw_page_notes(page, keep_labels, keep_notes),
                 ],
+                keep_names=bool(getattr(args, "keep_names", False)),
             )
         except drawapply.DrawPlanError as exc:
             return refuse("cannot_build_plan", str(exc))
@@ -9785,6 +9808,7 @@ def _cmd_draw_apply_page(args: argparse.Namespace) -> int:
                         f"the designator pool is {context.get('poolSource') or '(none read)'}",
                         *_draw_page_notes(page, [], []),
                     ],
+                    keep_names=bool(getattr(args, "keep_names", False)),
                 )
             except drawapply.DrawPlanError as exc:
                 report["exitCode"] = 5
