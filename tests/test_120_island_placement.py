@@ -33,6 +33,16 @@
 与 :func:`test_the_clamp_string_lands_on_one_row_so_its_wires_cross_neighbour_pins`
 钉住；两条治法（治落子、不治尺子；让同串错开、不靠加宽走廊）各由后面两条合成单测
 钉住。**验收 4 的两条合成单测**就在本文件。
+
+============================ 121b：库里的旗标与本文件的场景 ============================
+
+121b 之后库带上了旗标 profile，而这页密到 `C11.2` 的 **SEC_GND 地旗挂不下**——
+069/074 的判据是「每一条挂得下的引线都压别人的线就拒」，于是整张候选被
+`layout-unsat` 拒掉。**那是岳裁定过的正确方向**：密度是布局的锅，旗不给让路。
+
+本文件里走 `_build_candidate` 的两条**岛布局**测试因此显式把**地旗关掉**
+（`_page(ground_flag=False)`，`gnd_flag=""` 让地网退回标签命名——121b 之前那张页），
+它们要验的**落子、走线、判据边界**一个字都没动；旗标自己的行为归旗标自己的测试。
 """
 
 from __future__ import annotations
@@ -51,8 +61,25 @@ if str(ROOT / "src") not in sys.path:
 SPECS = ROOT / "blocklib" / "specs"
 
 
-def _page():
-    """The real flyback page under the real (WE six-pin) library."""
+def _page(*, ground_flag: bool = True):
+    """The real flyback page under the real (WE six-pin) library.
+
+    ``ground_flag`` is the budget's ground-flag symbol ref — ``PWR-GND``, and
+    since 121b the library carries that profile, so by default this page draws
+    069's ground flags exactly as the compiler does today.
+
+    The two tests below that go through :func:`_build_candidate` pass
+    ``ground_flag=False``, and that is a **scenario statement, not a
+    relaxation**: in this dense layout ``C11.2``'s SEC_GND flag has no side to
+    hang on that no other net's wire crosses, and the compiler refuses the whole
+    candidate (``layout-unsat``, ``_flag_crossing_failure`` — 岳's ruled
+    direction: density is the layout's problem and the flag does not give way).
+    Those two tests measure **island placement and wire routing**, which is what
+    they were written against *before* the library carried flags, so the flag is
+    turned off explicitly here (``gnd_flag=""`` makes a ground net fall back to
+    a label, the pre-121b shape) and the flag's own behaviour stays with the
+    tests that are about flags.  The assertions themselves are untouched.
+    """
     from boardwise.core.circuitspec import CircuitSpec
     from boardwise.core.presentationspec import PresentationSpec
     from boardwise.engines import drawcompiler as dc
@@ -63,8 +90,10 @@ def _page():
     book = t113._library_from(SPECS / "flyback_uc3845.library.json")
     binding = dc.bind_grammar(circuit, presentation, book)
     assert binding.ok, [item.detail for item in binding.failures]
-    prepared = dc._prepare(circuit, presentation, binding, book,
-                           dc.CompileBudget(max_candidates=64))
+    budget = dc.CompileBudget(max_candidates=64)
+    if not ground_flag:
+        budget = dc.CompileBudget(max_candidates=64, gnd_flag="")
+    prepared = dc._prepare(circuit, presentation, binding, book, budget)
     assert prepared.context is not None, [f.detail for f in prepared.failures]
     return dc, circuit, presentation, book, prepared.context
 
@@ -250,8 +279,14 @@ def test_the_partition_mismatch_is_a_wire_over_a_foreign_pin_not_a_narrow_corrid
 
     量法：把每一颗脚的位置，与**每一条**外网的线段比，看有多少脚**落在**外网线
     的跨度上。落上去的，就是 `readability._derive` 会并错的那几个。当前有 4 个。
+
+    **121b**：本场景**关掉地旗**（`_page(ground_flag=False)`）——库里有了 `PWR-GND`
+    之后，这页密到 `C11.2` 的 SEC_GND 地旗挂不下（每一条能挂的引线都压别人的线，
+    编译器按 069/074 拒 `layout-unsat`，那是**岳裁定过的正确方向**：密度是布局的
+    锅，旗不给让路）。地旗关掉就回到这条测试写的时候那张页（地网用标签命名），
+    而它要验的**分网死因**一个字没动。
     """
-    dc, _circuit, _presentation, _book, ctx = _page()
+    dc, _circuit, _presentation, _book, ctx = _page(ground_flag=False)
     from boardwise.engines import readability as rb
 
     scale = max(ctx.budget.spacing_ladder)
@@ -402,8 +437,13 @@ def test_the_contended_landing_test_is_a_half_step_not_a_whole_one():
     钉的是**判据的边界**，不是判据的结果——所以它不依赖钳位串今天是不是还叠在
     一行上：下一次换料把间距改了，这条要么仍然绿（判据没被动），要么红并说清
     差多少。
+
+    **121b**：与上一条同理，本场景显式**关掉地旗**（`_page(ground_flag=False)`）：
+    库里有了 `PWR-GND` 之后 `C11.2` 的 SEC_GND 地旗在这张密页上挂不下，编译器
+    按 069/074 拒 `layout-unsat`（岳裁定过的正确方向，旗不给布局让路）。这条要量
+    的是**落点判据的边界**，那条判据一个字没动。
     """
-    dc, _circuit, _presentation, _book, ctx = _page()
+    dc, _circuit, _presentation, _book, ctx = _page(ground_flag=False)
     from boardwise.engines import readability as rb
 
     scale = max(ctx.budget.spacing_ladder)

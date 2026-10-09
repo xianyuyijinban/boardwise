@@ -74,8 +74,8 @@ retries.
 |---|---|
 | Schematic review (rule families + datasheet gate + eval harness) | Usable, in maintenance |
 | Review-to-local-edit (preview / authorize / readback / re-review) | Usable |
-| Drawing compiler (divider / RC / LDO) | Modules and multi-module pages land in the editor |
-| PCB review (DRC closure → module-by-module layout → device checks) | Stage A in flight — roadmap in `tasks/122-pcb-review-roadmap.md` |
+| Drawing compiler (divider / RC / LDO / IC periphery / power entry) | Modules and multi-module pages land in the editor; flyback (UC3845) compiles offline with locked placements and rail/ground flags, page landing in flight |
+| PCB review (DRC closure → module-by-module layout → device checks) | Stages A–D done (loop/return-path, power, MCU, FOC rule packs) — stage E (device checks + report) not started; roadmap in `tasks/122-pcb-review-roadmap.md` |
 | Full schematic capture → PCB generation → SPICE simulation | In that order |
 | KiCad platform | Planned |
 
@@ -223,8 +223,8 @@ daemon + 编辑器扩展      读工程数据，写之前先预览、你授权�
 |---|---|
 | 原理图审查（规则族 + 数据手册闸 + 评测体系） | 可用，维护中 |
 | 审查到局部修改（预览/授权/回读/复查） | 可用 |
-| 画法编译器（分压/RC/LDO） | 单模块与多模块整页均已能落进编辑器 |
-| PCB 审查（DRC 闭环 → 按模块布局 → 器件检查） | 阶段 A 进行中——路线图见 `tasks/122-pcb-review-roadmap.md` |
+| 画法编译器（分压/RC/LDO/IC 外围/电源入口） | 单模块与多模块整页均已能落进编辑器；反激（UC3845）离线编译通过（锁定落点+电源/地旗标），页内落图在攻 |
+| PCB 审查（DRC 闭环 → 按模块布局 → 器件检查） | A–D 阶段完成（环路/回流路径、电源、MCU、FOC 规则包），E 阶段（器件检查+报告整合）未开——路线图见 `tasks/122-pcb-review-roadmap.md` |
 | 完整原理图绘制 → PCB 生成 → SPICE 仿真 | 按序推进 |
 | KiCad 平台 | 规划中 |
 

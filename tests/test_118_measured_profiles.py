@@ -53,6 +53,19 @@ aux 是可选角色）。所以 119 那批「七脚 XREE」的断言**再一次*
 | `…113_shape_intent_is_kept` | 换料那一行是 `[118b]` 不是 `[118]`（`[118]` 那一行属于十二颗没动过的） |
 | `test_the_transformer_has_five_pins…` | 改成**七脚**现实：脚号集、spec 用的 token、无 `P1/P2/A1/A2/S1/S2` 残留 |
 | `test_the_five_pin_transformer_cannot_carry_this_circuit` | 变成 **118 的发现记录**：拿**当时那五颗脚**（记在 `outputs/118/library_measured.json` 里）重跑那份穷举，结论仍是「缺的永远是 AUX」——钉的是那份发现，不是现电路 |
+
+============================ 121b 更新：库里多了旗标 ============================
+
+121b 给库加了**三颗无脚 profile**（`PWR-GND` / `PWR-HVDC` / `PWR-SEC_12V`），于是
+「每颗 profile 的几何出处」这份契约多了一条分支：旗标**没有脚尖**可言（连接点就是
+原点，无脚正是编译器识别旗标的办法），所以本文件对它改问**它真正带的那一半实测**
+——字形挂在连接点**哪一侧**、岳把这一族画在**什么姿态**，读数是
+`outputs/099/libprobe`（宿主自己两颗旗标的字号 bbox）与岳亲手画的 P1 页
+（`outputs/111/geo_P1_live.json`：PGND/SEC_GND 全 180、HVDC/SEC_12V 全 0）。
+
+三颗旗标的**体框**是 053B 的**约定盒** `(-6,0,6,18)`（本仓库每颗 `PWR-*` 都写它，
+所以它认不出族），所以那一行 `body:` 必须说自己是**约定**而不是测量；实测那一行
+标 `[121b] `——**118 没量过旗标**，给它写 `[118] ` 正是这条契约要拒的那句谎话。
 """
 
 from __future__ import annotations
@@ -83,6 +96,67 @@ LIBRARY_118 = ROOT / "outputs" / "118" / "library_measured.json"
 #: `tests/test_119_pose_ladder_widening.py` 与 119 的 SUMMARY 里。
 SWAPPED_REF = "XFMR-WE-749118105"
 SWAPPED_FROM = "XFMR-XREE16-050624"
+
+#: 121b: the three **flag** profiles the library gained (``PWR-GND`` /
+#: ``PWR-HVDC`` / ``PWR-SEC_12V``). They have **no pins** — the connection point
+#: IS the origin, and a pin-less profile is how the compiler identifies a flag —
+#: so the contract they are held to is not "every tip is measured" (there are no
+#: tips to have been hand-written) but "the glyph's side and the pose are", and
+#: those readings are real files, read by :func:`_flag_readings`.
+#:
+#: ``symbolRef -> (family, the net 岳's own P1 page states with that family)``.
+FLAG_READINGS: dict[str, tuple[str, str]] = {
+    "PWR-GND": ("gnd", "PGND"),
+    "PWR-HVDC": ("rail", "HVDC"),
+    "PWR-SEC_12V": ("rail", "SEC_12V"),
+}
+
+#: The repo's flag-glyph convention box — 053B's, the same box every ``PWR-*``
+#: profile in this repo declares. A **stated reservation**, not a measurement:
+#: both families state it (which is exactly why the box cannot tell them apart,
+#: and why the family is read off the name instead).
+FLAG_CONVENTION_BOX = (-6.0, 0.0, 6.0, 18.0)
+
+#: The two live-host readings the flag profiles cite: 099's library probe (each
+#: family's glyph extent, relative to the connection, at rotation 0) and 岳's own
+#: hand-drawn P1 page (the rotation his flags are actually drawn at).
+FLAG_GLYPH_PROBE = ROOT / "outputs" / "099" / "libprobe" / "08_geometry_probe.json"
+FLAG_PAGE_READING = ROOT / "outputs" / "111" / "geo_P1_live.json"
+
+
+def _flag_readings() -> tuple[dict[str, tuple[float, float]], dict[str, float]]:
+    """``(glyph extent per family relative to the connection, flag rotation by net)``.
+
+    Both halves are what the flag profiles *claim*, read out of the live-host
+    files they cite instead of taken on trust: which side of the connection each
+    family hangs its glyph on (positive y is above it), and the rotation 岳's own
+    page draws each family at. That is the difference between "the note names a
+    file" and "the file says what the note says" — the whole point of the
+    provenance contract this file pins.
+    """
+    probe = json.loads(FLAG_GLYPH_PROBE.read_text(encoding="utf-8"))
+    glyph: dict[str, tuple[float, float]] = {}
+    for component in probe["components"]:
+        state = component.get("state", component)
+        if state.get("ComponentType") != "netflag":
+            continue
+        box = probe["bboxes"].get(component["primitiveId"])
+        if box is None:
+            continue
+        name = str((state.get("Component") or {}).get("name", ""))
+        family = "gnd" if name.upper().startswith("GROUND") else "rail"
+        glyph[family] = (
+            round(box["minY"] - state["Y"], 4),
+            round(box["maxY"] - state["Y"], 4),
+        )
+    page = json.loads(FLAG_PAGE_READING.read_text(encoding="utf-8"))
+    rotation: dict[str, float] = {}
+    for component in page["components"]:
+        state = component.get("state", component)
+        if state.get("ComponentType") != "netflag":
+            continue
+        rotation.setdefault(state.get("Net", ""), float(state.get("Rotation", 0.0)))
+    return glyph, rotation
 
 if str(ROOT / "tools") not in sys.path:
     sys.path.insert(0, str(ROOT / "tools"))
@@ -303,6 +377,13 @@ def test_no_profile_carries_a_hand_written_pin_tip():
     那颗 `C9900020988`。这一条对十二颗没动过的符号照旧逐脚对账，对 T1 改钉
     探针读数，**并且把两者都要求存在**：一颗既不在 118 那页上、也不在换料探针
     里的 profile，就是一颗来源不明的 profile，那是本条要抓的形状。
+
+    **121b 更新**：库里多了三颗**旗标** profile，它们**没有脚**（连接点就是原点，
+    无脚正是编译器识别旗标的办法）。所以「脚尖是不是编的」在这三颗上无从谈起
+    ——本条对它们改问另一半：**它是被登记在一个真读数上的，而且自己的文字里
+    点得出那两份文件的名字**（`outputs/099/libprobe`、`outputs/111/geo_P1_live.json`）。
+    旗标真正会悄悄错掉的是「字形挂在连接点哪一侧」和「姿态」，那由下面那条
+    体框测试逐项对着这两份文件核；这里只管登记在不在、文字点不点得出来。
     """
     tips, lcsc = _measured_118()
     probe = _swap_probe()
@@ -321,6 +402,33 @@ def test_no_profile_carries_a_hand_written_pin_tip():
 
     for entry in book["profiles"]:
         symbol_ref = entry["symbolRef"]
+        if not entry["pins"]:
+            # 121b's flags. A flag is *identified* by having no pins — its origin
+            # IS the connection point — so there is no tip in here that could
+            # have been hand-written, and "no live reading covers this profile"
+            # is the wrong complaint: what a pin-less profile can get silently
+            # wrong is the glyph's side and its pose, which *are* measured (by
+            # 099's probe / 064's canvas probe / 岳's own page), and which
+            # :func:`test_every_body_box_is_the_measured_inner_ends_and_nothing_wider`
+            # checks against those files. Here the requirement is the one that
+            # keeps that checkable: the flag is registered against a live
+            # reading, and its own prose names it.
+            assert symbol_ref in FLAG_READINGS, (
+                f"{symbol_ref}: a pin-less profile is a flag, and every flag "
+                "profile has to be registered against the live reading that "
+                f"measured its glyph (registry: {sorted(FLAG_READINGS)})"
+            )
+            prose = entry["title"] + "\n" + "\n".join(entry["notes"])
+            for cited in (
+                FLAG_GLYPH_PROBE.parent.relative_to(ROOT).as_posix(),
+                FLAG_PAGE_READING.relative_to(ROOT).as_posix(),
+            ):
+                assert cited in prose, (
+                    f"{symbol_ref}: this profile is registered against a live "
+                    f"reading but never names {cited!r} — a provenance a reader "
+                    "cannot find is not a provenance"
+                )
+            continue
         assert symbol_ref in measured_for, (
             f"{symbol_ref}: no live reading covers this profile any more, so its "
             f"pin tips would be an assertion about nothing (119 swapped T1; the "
@@ -378,6 +486,13 @@ def test_every_profile_says_where_its_geometry_came_from():
       而且比体内端**更宽**——骨架中间的绕组空档没有脚可推，那一块地是真占着的。
       把一个实测 bbox 说成下界，或者反过来按下界去核一个实测 bbox，都是把
       测量说成估计。
+
+    **121b 更新，第四种**：三颗**旗标** profile 的体框既不是实测也不是下界——它是
+    053B 的**约定盒**，本仓库每一颗 `PWR-*` 都写着同一个 `(-6,0,6,18)`，所以那
+    一行 `body:` 必须**说自己是约定**（上一批在这三颗上写了一句 "measured"，
+    把约定说成了测量，这一条就是不让人再这么写）。旗标真正带实测的那一半另说：
+    **字形挂在连接点哪一侧、岳把这一族画在什么姿态**，由下面那条测试对着
+    `outputs/099/libprobe` 与 `outputs/111/geo_P1_live.json` 两份真读数核。
     """
     book = json.loads((SPECS / "flyback_uc3845.library.json").read_text(
         encoding="utf-8"))
@@ -390,6 +505,23 @@ def test_every_profile_says_where_its_geometry_came_from():
             f"{entry['symbolRef']}: no notes line starts with 'body:', so a "
             "reader cannot tell a measured body from a derived lower bound"
         )
+        if not entry["pins"]:
+            # 121b's flags are the **fourth** kind of body, and the one that is
+            # neither measured nor a lower bound derived from pins: (-6,0,6,18)
+            # is 053B's *stated* convention, the same box every PWR-* profile in
+            # this repo declares. The batch that added these profiles wrote a
+            # "measured" body note on a box that no reading measured, so the
+            # requirement here is the distinction itself: the note has to say
+            # the box is the repo's convention, and the reading that *was* taken
+            # (which side each family hangs on) is named in the title and checked
+            # against the file by the next test.
+            assert "convention" in source.lower(), (
+                f"{entry['symbolRef']}: {len(entry['pins'])} pins and the body "
+                f"note is {source!r} — a flag's box is the repo's stated glyph "
+                "convention, and a reader has to be able to tell that apart from "
+                "a measurement of a part no one measured"
+            )
+            continue
         if entry["symbolRef"] == SWAPPED_REF:
             assert "measured bbox" in source, (
                 f"{SWAPPED_REF}: the probe read a real bbox, so the note must say "
@@ -414,16 +546,72 @@ def test_every_body_box_is_the_measured_inner_ends_and_nothing_wider():
     骨架中间的绕组空档没有脚可推，所以它**必然**比体内端宽；按体内端去核它，
     就是拿一个推不出的数去否一个量出来的数。这一条改成对账**那份 bbox**——
     仍然要求它等于一次真读数，只是不再要求它等于一个下界。
+
+    **121b 更新**：三颗旗标同样不在这条尺子下（它们连脚都没有），但理由不是
+    「量过一次」而是「没有东西可推」：它们的体框是 053B 的**约定盒**，所以这一条
+    对它们核的两件事换成了旗标自己的实测——**字形在连接点的哪一侧**
+    （`outputs/099/libprobe` 的 netflag bbox，按族）与**岳把这一族画在什么姿态**
+    （`outputs/111/geo_P1_live.json`：PGND/SEC_GND 是 180，HVDC/SEC_12V 是 0）。
+    这两件都是读出来的，不是从 profile 自己的注里抄的——抄注正是这一条要避免的。
     """
     book = json.loads((SPECS / "flyback_uc3845.library.json").read_text(
         encoding="utf-8"))
     current = _current_transformer()
+    glyph, page_rotation = _flag_readings()
     inward = {
         "left": (1.0, 0.0), "right": (-1.0, 0.0),
         "up": (0.0, -1.0), "down": (0.0, 1.0),
     }
     for entry in book["profiles"]:
         by_number = {pin["number"]: pin for pin in entry["pins"]}
+        if not entry["pins"]:
+            # 121b's flags: there are no inner ends here, so no box can be derived
+            # from them, and the box the profile declares is not derived anyway —
+            # it is the repo's convention. The half that *is* a measurement, and
+            # the half that goes wrong silently (a flag drawn with its bars on the
+            # wrong side is still a flag, still hashes the same, and still passes
+            # every other check in this file), is checked right here against the
+            # two files: 099's probe for which side of the connection the family's
+            # glyph occupies, 岳's own P1 page for the rotation he draws it at.
+            family, net = FLAG_READINGS[entry["symbolRef"]]
+            assert [round(value, 4) for value in entry["body"]] == [
+                round(value, 4) for value in FLAG_CONVENTION_BOX
+            ], (
+                f"{entry['symbolRef']}: body is {entry['body']}, not 053B's "
+                f"convention box {list(FLAG_CONVENTION_BOX)} — a flag's box is "
+                "the box this repo states for every PWR-*, and a different one is "
+                "a reservation nobody measured"
+            )
+            low, high = glyph[family]
+            if family == "gnd":
+                assert high < 0.0, (
+                    f"{entry['symbolRef']} is the ground family, but "
+                    f"{FLAG_GLYPH_PROBE.relative_to(ROOT).as_posix()} measures its "
+                    f"glyph at {low:g}..{high:g} from the connection — not below it"
+                )
+                assert page_rotation.get(net) == 180.0, (
+                    f"岳's own page draws his {net} flags at rotation "
+                    f"{page_rotation.get(net)!r}, not 180 — the ground family's "
+                    "pose is a reading, and this profile claims it"
+                )
+                # The one ground profile states **both** ground families' cases
+                # (its title says PGND and SEC_GND), so both have to be there.
+                assert page_rotation.get("SEC_GND") == 180.0, (
+                    "岳's own page does not draw its SEC_GND flags at 180, so "
+                    "the second family this profile claims is not in the reading"
+                )
+            else:
+                assert low > 0.0, (
+                    f"{entry['symbolRef']} is the rail family, but "
+                    f"{FLAG_GLYPH_PROBE.relative_to(ROOT).as_posix()} measures its "
+                    f"glyph at {low:g}..{high:g} from the connection — not above it"
+                )
+                assert page_rotation.get(net) == 0.0, (
+                    f"岳's own page draws his {net} flag at rotation "
+                    f"{page_rotation.get(net)!r}, not 0 — the rail family's pose "
+                    "is a reading, and this profile claims it"
+                )
+            continue
         if entry["symbolRef"] == SWAPPED_REF:
             # 120: there is no probe file in the tree for the WE part yet, so the
             # body cannot be re-derived from a raw reading here. What IS checkable,
@@ -609,6 +797,12 @@ def test_the_113_shape_intent_is_kept_alongside_the_measurement():
     探针量的，所以它是 `[118b] `。这一条查的是「实测那一行在，而且标的是这颗
     profile 真正的来源」，不是查一个写死的批号——写死的批号会在下一次换料时
     变成一句谎话，而这一条正是为了不让人写谎话存在的。
+
+    **121b 更新**：三颗旗标的实测那一行是 `[121b] `——它们不是任何一次换料量出来的，
+    几何来自宿主自己的旗标读数（`outputs/099/libprobe`、`outputs/064_railflag`）与
+    岳亲手画的 P1 页（`outputs/111/geo_P1_live.json`），所以批号是它们自己那一批。
+    给它们写 `[118] ` 正是这一条要拒的那句谎话：118 从没量过旗标。批号仍然是
+    **逐类钉死**的（不是从 title 里回读出来的），所以把 `[121b]` 改成 `[118]` 会红。
     """
     book = json.loads((SPECS / "flyback_uc3845.library.json").read_text(
         encoding="utf-8"))
@@ -625,7 +819,19 @@ def test_the_113_shape_intent_is_kept_alongside_the_measurement():
         # structural half (there IS a measurement line) and the factual half (it
         # names **this** measurement) are two different claims and need two
         # different assertions.
-        expected = "[118c] " if entry["symbolRef"] == SWAPPED_REF else "[118] "
+        #
+        # 121b added a third class and it is pinned the same way: the flags were
+        # not measured by any part swap — their geometry is the host's own flag
+        # readings (outputs/099/libprobe, outputs/064_railflag) plus 岳's own P1
+        # page (outputs/111/geo_P1_live.json) — so they carry their own batch
+        # marker. Writing `[118] ` on them would be exactly the stale claim this
+        # test exists to refuse: 118 never measured a flag.
+        if entry["symbolRef"] in FLAG_READINGS:
+            expected = "[121b] "
+        elif entry["symbolRef"] == SWAPPED_REF:
+            expected = "[118c] "
+        else:
+            expected = "[118] "
         assert f"\n{expected}" in title, (
             f"{entry['symbolRef']}: the title has no {expected!r} measured-geometry "
             f"line, so 113's intent and the measurement are not separable (the "
