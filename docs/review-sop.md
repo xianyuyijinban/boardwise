@@ -227,6 +227,30 @@ checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起
   填不了就显式问工程师**：这些数只在他脑中，图自身可以完全自洽（044 §6）。答一次就把答案
   写进 `design-intent.md`（**不是** `architecture.md`），**以后 finding 以它为尺**；需求变了改那里
   （活文档）。AI 提案先写 `ai-proposal@日期`，工程师点头后改 `ai-confirmed@日期`。
+- **无电压电源网（issue #65，岳 2026-10-07 裁定）：遇到就停下来逐条问，答一次落合同，
+  此后不再问。** `VCC`/`VCCA`/`VBAT`/`VREF` 这类**名字不带电压**的电源轨，规则只出
+  `intent-missing` 家族的 UNKNOWN 行、点名 `requirements.rails[net=…].voltage`——
+  **那不是让你顺手转述给用户的一句话，而是一张待问清单**。
+  两条离线命令把这件事机械化（只读文件，不碰编辑器）：
+
+  - `boardwise intent audit --file <导出.epro2> [--intent <合同>] [--json a.json]`：一块板一段。
+    **ask 段 = 待问清单**——每条带「凭什么说它是电源」（网名是电源轨写法，或网上挂着电源脚；
+    **脚名本身也得是电源写法**：`VOUT`/`VDD`/`VM` 算，只写 `OUT`/`IN` 的脚不算——互感器、
+    电流传感器、电阻的脚都这么写）与「答案写进哪个键」；**settled 段 = 「已经不该再问」的收据**
+    ——每条点名答案出处：名字自带电压（`+5V`/`A5V`）、地网（0 V 是定义）、派生轨（`VCC/2`）、
+    **图纸架构已定价**（货架稳压器的输出）、**合同里已有电压**（这一条就是「问过不再问」落地的地方）。
+    清单非空也是 exit 0——那是这次要干的活，不是错误；exit 2 = 文件读不了。
+  - `boardwise intent set-rail <网名> --voltage <值> --file <合同>`：把工程师的答案写进
+    `requirements.rails[net=…].voltage` + `provenance: user_stated`，**别的键、别的条目、行序一字不动**
+    （合同是工程师的文档，这命令只是书记）；合同不存在就建（首跑是正常态）。读不出的值
+    （`abc`/`5V 1A`/`VDD`）按名字拒、exit 2，且**一个字节都不落盘**——这个槽是拿算术定价的，
+    存一个谁也读不出来的字符串，这条轨就会永远问下去。
+
+  **答案落进 JSON 合同**（`--intent` 或用户级默认位；有合同时 `design-intent.md` 是渲染视图、
+  手填无效，见上）。下一轮 audit 里同一条轨**不许再出现在 ask 段**——「不再重复问」的兑现方式是
+  settled 段点名收据，不是沉默。补哪个键要看谁来读：`intent set-rail` 写 `voltage`
+  （裁定点名的键，`pcb-voltage-spacing` 按它定价）；`pwr-cap-voltage-rating` /
+  `path-ldo-dissipation` 读的是 `targetVoltage`，要它们也算答过，就在同一份合同里补那个键。
 - **完整结论看 `completion.verdict`**（053 §2.2）：`scope{rules,boards,pages}` / `errors` /
   `unreviewedParts` / `needsDatasheet` / `warningsPendingTriage` / `architectureSlots{total,filled,stale}` /
   `openTodos` / `sourceVersions{ruleset,rulebody}`，三态 `complete`（errors=0 ∧ 未审=0 ∧ 标记=0 ∧ stale=0 ∧
@@ -276,6 +300,10 @@ checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起
   提不出、如实不改库，全文留给你读）。**`facts_verified: false` 的候选事实不驱动任何规则**
   （规则视同无 facts 报 UNKNOWN）——核验的物理形态 = xianyuyijinban审 git diff
   后翻 true。细则见 `docs/parts.md`。
+- **无电压电源网问答（065 `intent` 工具链，纯离线）**：`boardwise intent audit --file <导出.epro2>`
+  列待问清单（settled 段点名已答出处），`boardwise intent set-rail <网名> --voltage <值> --file <合同>`
+  把答案落进 DesignIntent 合同。**这是 3.1b 架构走查的一步，不是可选命令**——口径、退出码与
+  「问过不再问」的收据形态见 §3.1b。
 - **把发现画回画布**（要 daemon + 焦点在那张原理图页）：
   `boardwise bridge call --action doc.list` 拿 `pageUuid` → `boardwise review-mark report.json --page <uuid>`。
   终端那张序号表就是图例（marker 只能画形状、不能写字，`marker#N` = 第 N 个红框）；

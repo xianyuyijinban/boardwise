@@ -2168,6 +2168,106 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    intent = sub.add_parser(
+        "intent",
+        help=(
+            "The DesignIntent contract's rails: `intent audit` lists the power nets "
+            "whose voltage only the engineer knows (issue #65), `intent set-rail` "
+            "writes one answer into the contract with provenance user_stated."
+        ),
+        description=(
+            "Issue #65's two halves, mechanical so the reviewer's question is not "
+            "reinvented 每 run. `intent audit --file <export>` enumerates every "
+            "power net (VCC/VDD/VBAT/VREF-class names, or a net carrying a supply "
+            "pin whose own name is one of those spellings — a bare `OUT`/`IN` is a "
+            "port label, not a rail) "
+            "whose voltage no source prices — the name, the contract and the "
+            "architecture enumeration are all checked first — and marks the ones "
+            "that are already answered, so an engineer is asked **once** and never "
+            "again. `intent set-rail <net> --voltage <值>` writes that answer at "
+            "requirements.rails[net=<网名>].voltage with provenance `user_stated`, "
+            "through the same designintent module `arch --intent` uses, touching no "
+            "other key. Both are offline and read-only except set-rail, which edits "
+            "the one contract file and nothing else. Exit 0 ok / 2 input unusable."
+        ),
+    )
+    intent_sub = intent.add_subparsers(dest="intent_command", required=True)
+    intent_audit = intent_sub.add_parser(
+        "audit",
+        help="List the power nets whose voltage nobody has stated — the ask list.",
+        description=(
+            "One row per unanswered power net: the evidence that put it on the list "
+            "(a rail-spelled net name, or a supply pin — one whose own name is such "
+            "a spelling — sitting on it), the exact contract "
+            "key to write, and a `settled` line for the ones already priced. The "
+            "settled half is the point of the command: a rail the contract already "
+            "carries, a rail whose own name says 5 V, and a ground net come back "
+            "with WHERE the answer came from, so no run asks for it again. "
+            "--json writes the same two lists as a machine-readable report."
+        ),
+    )
+    intent_audit.add_argument(
+        "--file", required=True, help="The .epro2 / .eprj3 project to read (read-only)."
+    )
+    intent_audit.add_argument(
+        "--intent",
+        default="",
+        metavar="PATH",
+        help=(
+            "The DesignIntent contract to read for existing answers (default: "
+            "~/.boardwise/design-intent/<projectUuid>.json when that file exists, "
+            "same resolution `checkup --intent` uses). Without a contract every "
+            "unpriced rail is a question."
+        ),
+    )
+    intent_audit.add_argument(
+        "--library",
+        default=None,
+        help=(
+            "The curated shelf, for the one settled reason that needs it (a "
+            "regulator's declared or MPN-decoded output; default "
+            "blocklib/parts.json)."
+        ),
+    )
+    intent_audit.add_argument(
+        "--json", dest="json_path", metavar="PATH", help="Write the report as JSON."
+    )
+    intent_set = intent_sub.add_parser(
+        "set-rail",
+        help="Write one rail's voltage into the contract as user_stated.",
+        description=(
+            "The clerk half of issue #65: the engineer answered, this records it "
+            "once. It sets requirements.rails[net=<网名>].voltage and the entry's "
+            "provenance to `user_stated`, creates the entry when the contract has "
+            "none, and touches no other key, entry or line order. A value this "
+            "build cannot read as volts is refused by name (exit 2) rather than "
+            "stored — the slot is priced by arithmetic, so an unreadable string "
+            "would leave the rail asking forever. A stale entry is still the "
+            "engineer's answer: re-stating it is how a moved rail keeps its value."
+        ),
+    )
+    intent_set.add_argument("net", help="The net to price, e.g. VCC.")
+    intent_set.add_argument(
+        "--voltage", required=True, help="What it is, e.g. 3.3V / 3V3 / +5V / -12V."
+    )
+    intent_set.add_argument(
+        "--file",
+        dest="contract",
+        required=True,
+        metavar="PATH",
+        help=(
+            "The DesignIntent contract to update (JSON is the source). Created if "
+            "it does not exist — this command is where an engineer's first answer "
+            "lands, so a missing file is the normal first run, not an error."
+        ),
+    )
+    intent_set.add_argument(
+        "--json",
+        dest="json_path",
+        metavar="PATH",
+        help="Write what changed (net, voltage, provenance, the new digest).",
+    )
+
     settings = sub.add_parser(
         "config",
         help=(
@@ -12408,6 +12508,193 @@ def _print_contract_regeneration(contract_path: Path, facts: dict) -> None:
     )
 
 
+def _project_boards(model: object) -> list[object]:
+    """Every board model in a loaded project, in project order.
+
+    A project is not one netlist: 毕设FOC's ``VCC`` on PCB1 and its ``VCC`` on
+    PCB2 are two rails with two answers, and a single-board façade would raise
+    (040b). ``boards`` is empty for a model that is already a board, in which case
+    the model itself is the one board — the two shapes the offline loader returns
+    (``.eprj3`` and ``.epro2`` give a project, ``.enet`` gives a board).
+    """
+    boards = list(getattr(model, "boards", []) or [])
+    return boards or [model]
+
+
+def _cmd_intent_audit(args: argparse.Namespace) -> int:
+    """``boardwise intent audit`` — the 先问再判 list for rail voltages (#65).
+
+    Offline, read-only, and **exit 0 even with a full list**: a non-empty ask
+    list is the work this command exists to hand over, not a failure — the same
+    reading ``parts missing`` has carried since 039, and a build that exited 1 on
+    a list would teach everyone to ignore the code. Exit 2 is reserved for an
+    input that cannot be read.
+
+    The project is walked **per board** and both halves of every board's audit are
+    printed with the board named, so a two-board project's two ``VCC`` rows never
+    collapse into one. The settled half prints its *reason* rather than nothing at
+    all: a reviewer who remembers being asked about ``VCC`` last week has to be
+    able to see that the contract now says 3.3 V, or the ruling's 「不再重复问」 is
+    a promise nothing checks.
+    """
+    import json
+
+    from boardwise.core.railquery import RAIL_QUERY, audit_rails
+
+    project = Path(args.file)
+    try:
+        model, _board = _load_model(project, view=CHECKUP_VIEW)
+    except (EncryptedProjectError, ValueError, OSError) as exc:
+        print(f"boardwise intent audit: cannot read {project}: {exc}", file=sys.stderr)
+        return 2
+
+    notes: list[str] = []
+    library, note = _architecture_shelf_evidence(args)
+    if note:
+        notes.append(note)
+    project_uuid, _page, _host, more = _snapshot_identity(project)
+    notes.extend(more)
+    contract, contract_path, read_error = _load_intent_contract(args, project_uuid, notes)
+
+    report: dict = {
+        "command": "intent-audit",
+        "ok": True,
+        "file": str(project),
+        "token": RAIL_QUERY,
+        "intent": {
+            "path": str(contract_path) if contract_path is not None else "",
+            "present": contract is not None,
+            "readError": read_error,
+        },
+        "boards": [],
+    }
+    ask_total = 0
+    settled_total = 0
+    for index, board in enumerate(_project_boards(model)):
+        title = str(getattr(getattr(board, "board", None), "title", "") or "")
+        audit = audit_rails(board, contract, library=library)
+        ask_total += audit.ask_count
+        settled_total += audit.settled_count
+        if len(_project_boards(model)) > 1 or title:
+            print(f"# {title or f'board {index + 1}'}")
+        for row in audit.ask:
+            print(f"{row.net} — {row.why}")
+            print(
+                f"    问：这条轨是多少伏（或什么范围）？答案写 "
+                f"`{row.write}` → `boardwise intent set-rail {row.net} --voltage <值> "
+                f"--file <合同>`"
+            )
+        for row in audit.settled:
+            print(f"{row.net} — 已有答案，不再问：{row.settled_by}")
+        if not audit.ask and not audit.settled:
+            print("（这块板上没有「名字是电源 / 挂着电源脚」的网）")
+        report["boards"].append(
+            {"title": title, **audit.to_jsonable()}
+        )
+    report["totals"] = {"ask": ask_total, "settled": settled_total}
+    for item in notes:
+        print(f"note: {item}", file=sys.stderr)
+    print(
+        f"rail audit: {ask_total} 条待问 / {settled_total} 条已有答案"
+        f"（合同 {contract_path if contract is not None else '（无，本次全部按未答）'}）"
+    )
+    json_path = getattr(args, "json_path", "")
+    if json_path:
+        Path(json_path).write_text(
+            json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        print(f"audit report: {json_path}")
+    return 0
+
+
+def _cmd_intent_set_rail(args: argparse.Namespace) -> int:
+    """``boardwise intent set-rail`` — record one engineer's answer, once (#65).
+
+    Read-modify-write of the **one** contract file through
+    :func:`boardwise.core.designintent.DesignIntent.load` /
+    :func:`~boardwise.core.railquery.set_rail_voltage` /
+    :func:`~boardwise.core.designintent.render_json` — the same three calls
+    ``arch --intent`` makes, never a hand-rolled dict, because a second writer is
+    how 052 §2.2's accident comes back wearing a different hat.
+
+    Written **atomically** (a ``.tmp`` sibling plus :func:`os.replace`) and only
+    after the updated document has been re-parsed and re-rendered from the module
+    that will read it: a contract that cannot be read back is not a contract, and
+    the clerk half of a 先问再判 discipline has to be the part that never
+    corrupts. A file that does not exist is created — this is where a first answer
+    lands, so a missing contract is the normal first run, not an error.
+
+    Exit 0 written / 2 the value is unreadable or the file cannot be written.
+    """
+    import json
+    import os
+
+    from boardwise.core import designintent as di
+    from boardwise.core.railquery import set_rail_voltage
+
+    path = Path(args.contract)
+    notes: list[str] = []
+    existed = path.is_file()
+    document = di.DesignIntent()
+    if existed:
+        try:
+            document = di.DesignIntent.load(path)
+        except di.DesignIntentError as exc:
+            print(f"boardwise intent set-rail: {exc}", file=sys.stderr)
+            return 2
+    try:
+        updated, changed = set_rail_voltage(document, args.net, args.voltage)
+    except di.DesignIntentError as exc:
+        print(f"boardwise intent set-rail: {exc}", file=sys.stderr)
+        return 2
+    text = di.render_json(updated)
+    # Re-read through the reader before the write: a value the writer accepted
+    # and the parser refuses would be a contract nobody can price.
+    try:
+        di.parse_json(text, where=str(path))
+    except di.DesignIntentError as exc:  # pragma: no cover — writer/parser drift
+        print(f"boardwise intent set-rail: {exc}", file=sys.stderr)
+        return 2
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError as exc:
+        print(f"boardwise intent set-rail: {path}: {exc}", file=sys.stderr)
+        return 2
+    for item in notes:
+        print(f"note: {item}", file=sys.stderr)
+    print(f"intent contract: {path}{'（新建）' if not existed else ''}")
+    print(f"  rails[net={args.net}].voltage = {args.voltage!r}（provenance: user_stated）— {changed}")
+    print(
+        "  答一次就够：下一轮 `intent audit` 会把这条列进 settled，不再问。"
+    )
+    json_path = getattr(args, "json_path", "")
+    if json_path:
+        Path(json_path).write_text(
+            json.dumps(
+                {
+                    "command": "intent-set-rail",
+                    "ok": True,
+                    "contract": str(path),
+                    "net": args.net,
+                    "voltage": args.voltage,
+                    "provenance": "user_stated",
+                    "created": not existed,
+                    "change": changed,
+                    "sha256": updated.sha256(),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        print(f"set-rail report: {json_path}")
+    return 0
+
+
 def _cmd_config_get(args: argparse.Namespace) -> int:
     """Print one setting's resolved value — one line, so a shell can read it."""
     import json
@@ -21600,6 +21887,11 @@ CONFIG_COMMANDS = {
     "show": _cmd_config_show,
 }
 
+INTENT_COMMANDS = {
+    "audit": _cmd_intent_audit,
+    "set-rail": _cmd_intent_set_rail,
+}
+
 
 def main(argv: list[str] | None = None) -> int:
     # Windows pipes default stdio to the locale codepage (e.g. cp936), which
@@ -21643,6 +21935,8 @@ def main(argv: list[str] | None = None) -> int:
         return PARTS_COMMANDS[args.parts_command](args)
     if args.command == "config":
         return CONFIG_COMMANDS[args.config_command](args)
+    if args.command == "intent":
+        return INTENT_COMMANDS[args.intent_command](args)
     if args.command == "bom":
         return BOM_COMMANDS[args.bom_command](args)
     if args.command == "pintable":

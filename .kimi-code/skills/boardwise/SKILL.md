@@ -76,6 +76,9 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
   + 分诊/器件/总结槽位）。**开工第一句先报连接状态**、报告逐段读法、`review-summary.md`
   收尾补全（工程师只看这一份）、架构走查（044 起强制环节）、triage 分诊口径，
   全在 `docs/review-sop.md`。
+- **无电压电源网**（`VCC`/`VCCA`/`VREF` 这类名字不带电压的轨）：`boardwise intent audit --file <导出.epro2>` 列待问清单（已答的列 settled 并点名出处）→ 逐条问工程师 →
+  `boardwise intent set-rail <网名> --voltage <值> --file <合同>` 落设计意图合同，
+  **问一次不再问**（065；口径与收据形态见 `docs/review-sop.md` §3.1b）。
 - **断连兜底**：daemon 掉线重连、watchdog、匿名期、多窗口寻址的操作口径在
   `docs/review-sop.md` 的断连兜底段；机制全表在 `docs/bridge.md`。
 - **画图（画法编译器落图）**：`boardwise draw compile`（离线出候选）→
