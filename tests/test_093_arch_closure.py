@@ -769,10 +769,13 @@ def test_the_open_drain_marker_is_optional_and_the_record_schema_stays_closed():
 
 
 def test_run_review_hands_the_contract_to_the_six_rules_that_read_one():
-    """091 A2a's seam, now with six carriers — and the shared instances stay clean.
+    """091 A2a's seam, now with eight carriers — and the shared instances stay clean.
 
     094 A3b added `arch-sense-bias-closure`, whose subject (a bidirectional
-    current-sense chain) only exists in a contract.
+    current-sense chain) only exists in a contract. 064 added the two selection
+    rules, which take the contract for a weaker reason: their subject is a part
+    on the board, so they run without one — the contract only decides *which*
+    document the rail's voltage is read from.
     """
     contract = _intent(_rail("+12V", targetVoltage="12V"))
     rules = _rules_for(contract)
@@ -783,6 +786,7 @@ def test_run_review_hands_the_contract_to_the_six_rules_that_read_one():
     assert set(carriers) == {
         "param-value-mpn-match", "pwr-cap-voltage-rating", "path-ldo-dissipation",
         "arch-rail-voltage-clash", "arch-opendrain-pullup", "arch-sense-bias-closure",
+        "sel-tvs-standoff-rail", "sel-ldo-fixed-output",
     }
     assert all(rule.intent is contract for rule in carriers.values())
     assert NrstClosure not in INTENT_RULES, (

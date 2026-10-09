@@ -38,6 +38,7 @@ from boardwise.rules.railratings import (
     CapVoltageRating,
     LdoDissipation,
     cap_voltage_rating,
+    rail_voltage,
 )
 from boardwise.rules.unproven import UNPROVEN_BY_NAME
 
@@ -464,6 +465,75 @@ def test_a_declared_voltage_this_build_cannot_read_is_unknown():
     assert "`24V`、`3.3V`" in message, "the spelling that would work is given"
 
 
+# ---------------------------------------------------------------------------
+# 139 收口: either voltage slot answers the rail, `voltage` when they disagree
+# ---------------------------------------------------------------------------
+
+
+def test_either_of_the_contracts_voltage_slots_answers_the_rail():
+    """``voltage`` 与 ``targetVoltage`` 都是这份合同对这条轨的答案（139 收口）。
+
+    这个读取器原本只认 ``targetVoltage``（092 的槽），而 139 的 ``intent set-rail``
+    写的是 ``voltage``：工程师按自家命令答完，这条规则继续报 ``intent-missing``
+    （064 与 139 各撞一次，`evidence/064/intent_slot_gap.txt`）。**两键都读**，
+    并且行里点名**读到的是哪一个键**——否则「合同说了」这句话没有地址可核。
+    """
+    guesses: dict = {}
+    for slot in ("voltage", "targetVoltage"):
+        volts, source, why = rail_voltage(
+            _intent(_rail("+24V", **{slot: "24V"})), guesses, "+24V"
+        )
+        assert (volts, why) == (24.0, ""), (slot, volts, why)
+        assert source == f"合同 requirements.rails[net=+24V].{slot} = '24V'", (slot, source)
+    # 手写合同只写 `voltage` 时，规则侧也拿它判：16 V 耐压对上 24 V 轨 = 确定的越限。
+    rule = _cap_rule(_cap_shelf("16V"), _intent(_rail("+24V", voltage="24V")))
+    [(severity, state, message)] = _rows(rule, _cap_model())
+    assert (severity, state) == ("WARN", "VIOLATION"), message
+    assert "合同 requirements.rails[net=+24V].voltage = '24V'" in message
+
+
+def test_two_slots_that_disagree_resolve_to_voltage_and_the_row_says_so():
+    """两键冲突取 ``voltage``（既定值语义），并且**在行里注明分歧**。
+
+    一份自己跟自己不一致的合同不是拿来平均的，也不是拿来沉默的：读数取 ``voltage``，
+    而 ``targetVoltage`` 的那个值连同「取的是谁」一起进行内 evidence——读的人才知道
+    这份合同需要人去改，而不是以为读到的是全部。
+    """
+    intent = _intent(_rail("+24V", voltage="24V", targetVoltage="12V"))
+    volts, source, why = rail_voltage(intent, {}, "+24V")
+    assert (volts, why) == (24.0, "")
+    assert "requirements.rails[net=+24V].voltage = '24V'" in source
+    assert "requirements.rails[net=+24V].targetVoltage = '12V'" in source
+    assert "两键冲突时取" in source, source
+
+    # The row carries it too: the evidence names both numbers and the winner.
+    rule = _cap_rule(_cap_shelf("16V"), intent)
+    [(severity, state, message)] = _rows(rule, _cap_model())
+    assert (severity, state) == ("WARN", "VIOLATION"), message
+    assert "所在轨 +24V = 24 V" in message, "取的是 voltage 那个值"
+    evidence = rule.outcomes(_cap_model())[0].evidence
+    rail_line = next(line for line in evidence if "轨压" in line)
+    assert "24 V" in rail_line and "targetVoltage = '12V'" in rail_line, rail_line
+
+
+def test_an_answer_recorded_by_set_rail_is_no_longer_intent_missing():
+    """缝的另一半，端到端：``core.railquery.set_rail_voltage`` 写完，这条规则判得动。
+
+    这正是 `evidence/064/intent_slot_gap.txt` 记的现场——工程师答完电压，规则还在
+    要答案。写手与读端各在一边，所以这条测试跨两次批次的公共 API 走一遍。
+    """
+    from boardwise.core.railquery import set_rail_voltage
+
+    document, _ = set_rail_voltage(di.DesignIntent(), "+24V", "24V")
+    intent = di.IntentSource(document=document, path="mem://contract.json")
+    rule = _cap_rule(_cap_shelf("16V"), intent)
+    [(severity, state, message)] = _rows(rule, _cap_model())
+    assert (severity, state) == ("WARN", "VIOLATION"), message
+    assert "intent-missing" not in message
+    assert "requirements.rails[net=+24V].voltage = '24V'" in message
+
+
+
 def test_a_welded_rail_name_is_refused_rather_than_judged():
     """Issue #19: "a capacitor sits on this rail" is read from a net's members.
 
@@ -650,14 +720,14 @@ def test_without_a_contract_the_rail_rules_have_no_subject_at_all():
 
 
 def test_run_review_hands_the_contract_to_the_six_rules_that_read_one():
-    """091 A2a's seam, now with six carriers — and the shared instances stay
+    """091 A2a's seam, now with eight carriers — and the shared instances stay
     contract-free, because ``BUILTIN_RULES`` outlives any single run.
 
     093 A3a added the two architecture rules that read a contract
     (``arch-rail-voltage-clash`` and ``arch-opendrain-pullup``), 094 A3b the
-    sense-bias one; the set below is the seam's own registry
-    (``review.INTENT_RULES``), spelled out here so a rule that starts reading a
-    contract without joining it is a failing test.
+    sense-bias one, 064 the two selection rules; the set below is the seam's own
+    registry (``review.INTENT_RULES``), spelled out here so a rule that starts
+    reading a contract without joining it is a failing test.
     """
     from boardwise.rules.archclosure import (
         ArchRailVoltageClash,
@@ -665,9 +735,11 @@ def test_run_review_hands_the_contract_to_the_six_rules_that_read_one():
         OpenDrainPullup,
     )
     from boardwise.rules.params import ValueMpnMatch
+    from boardwise.rules.paramspec import LdoFixedOutput, TvsStandoffRail
 
     carriers_of = (ValueMpnMatch, CapVoltageRating, LdoDissipation,
-                   ArchRailVoltageClash, OpenDrainPullup, ArchSenseBiasClosure)
+                   ArchRailVoltageClash, OpenDrainPullup, ArchSenseBiasClosure,
+                   TvsStandoffRail, LdoFixedOutput)
     assert _rules_for(None) is BUILTIN_RULES, "no contract, no copy"
     contract = _intent(_rail("+24V", targetVoltage="24V"))
     rules = _rules_for(contract)
@@ -678,6 +750,7 @@ def test_run_review_hands_the_contract_to_the_six_rules_that_read_one():
     assert set(carriers) == {
         "param-value-mpn-match", "pwr-cap-voltage-rating", "path-ldo-dissipation",
         "arch-rail-voltage-clash", "arch-opendrain-pullup", "arch-sense-bias-closure",
+        "sel-tvs-standoff-rail", "sel-ldo-fixed-output",
     }
     assert all(rule.intent is contract for rule in carriers.values())
     for rule, template in zip(rules, BUILTIN_RULES):

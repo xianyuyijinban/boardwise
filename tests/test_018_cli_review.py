@@ -252,13 +252,17 @@ def test_the_md_report_keeps_its_opening_and_gains_a_chinese_summary(tmp_path, c
         "- [提示] RC 截止频率（param-rc-cutoff）：位号 R34/C116；"
         "关键数值 10Ω、330uF、48 Hz、-3 dB" in text
     )
-    assert "共 27 条发现：0 错误 / 0 警告 / 27 提示" in text
+    assert "共 28 条发现：0 错误 / 0 警告 / 28 提示" in text
 
     summary_at = text.index("## 中文摘要")
-    assert summary_at < text.index("## INFO (27)")
+    assert summary_at < text.index("## INFO (28)")
     assert summary_at < text.index("`param-rc-cutoff`")
     # The English finding line is still there, untranslated, in its own place.
     assert "- `param-rc-cutoff` [L2-facts] RC R34(10Ω) + C116(330uF) on 'VM'" in text
+    # 064 added one INFO row to this board and it is the count above that moved:
+    # D2 (SMCJ40CA) is a shelf-backed TVS on `VM`, and no source prices `VM` —
+    # so `sel-tvs-standoff-rail` files an UNKNOWN work order rather than an OK.
+    assert "`sel-tvs-standoff-rail`" in text and "D2" in text
 
 
 def test_the_summary_names_the_rule_the_part_and_the_numbers(tmp_path, capsys):
@@ -267,7 +271,11 @@ def test_the_summary_names_the_rule_the_part_and_the_numbers(tmp_path, capsys):
     capsys.readouterr()
     text = md.read_text(encoding="utf-8")
 
-    assert "共 2 条发现：0 错误 / 2 警告 / 0 提示" in text
+    # 2 findings until 064 added `sel-ldo-fixed-output`'s third: this board's U5
+    # (RT9013-33GB) sits on a `VCC` that only its own part number prices, which
+    # is the self-reference refusal — an INFO work order, so the two WARNs and
+    # their assertions below are untouched.
+    assert "共 3 条发现：0 错误 / 2 警告 / 1 提示" in text
     # One designator, and it is the rule's own subject (issue #16): the finding
     # judges the LED's current, and `U3` (its series resistor) and `U5` (the LDO
     # whose output sets the domain) were only named in the message. They used to
@@ -423,7 +431,9 @@ def test_the_json_schema_is_the_one_the_harness_reads(tmp_path, capsys):
     payload = json.loads(raw)
 
     assert set(payload) == {"summary", "findings"}
-    assert payload["summary"] == {"ERROR": 0, "WARN": 0, "INFO": 27}
+    # 27 until 064: the board's D2 (SMCJ40CA) is a shelf-backed TVS on an
+    # unpriced `VM`, and `sel-tvs-standoff-rail` reports that as UNKNOWN/INFO.
+    assert payload["summary"] == {"ERROR": 0, "WARN": 0, "INFO": 28}
     # `board` joined the finding schema in 040b (per-board runs). An `.enet`
     # input has no boards, so it stays empty here — the key is always present,
     # which is what a reader can rely on.

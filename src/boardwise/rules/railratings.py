@@ -5,9 +5,10 @@ spends the same channel on two questions a board's own fields cannot answer,
 because a rating is not on the board: *is this capacitor's rated voltage above
 the rail it sits on* (``pwr-cap-voltage-rating``), and *how much does this LDO
 dissipate* (``path-ldo-dissipation``). Both are read off two documents that
-already exist — the contract (``requirements.rails[].targetVoltage`` and
-``.continuousCurrent``) and the shelf (the catalog's ``Voltage Rating`` field,
-the part's own ``ldo`` facts) — and neither rule reads a disk: the contract
+already exist — the contract (``requirements.rails[].voltage`` /
+``.targetVoltage`` and ``.continuousCurrent``) and the shelf (the catalog's
+``Voltage Rating`` field, the part's own ``ldo`` facts) — and neither rule reads
+a disk: the contract
 arrives as :class:`~boardwise.core.designintent.IntentSource`, exactly as it
 does for :func:`~boardwise.rules.params.repair_directions`.
 
@@ -46,8 +47,10 @@ nothing and a reading without a contract is byte-for-byte what it was.
 
 Where the numbers come from, in reading order, and why:
 
-* **the rail's voltage** — the contract's ``rails[net=…].targetVoltage``
-  first (it is the requirement), else the drawing's own verdict for that net
+* **the rail's voltage** — the contract's ``rails[net=…].voltage`` (the settled
+  value, 139's writer) or its ``targetVoltage`` (092's design target), either
+  one: they are one answer in two vocabularies, and ``voltage`` takes a
+  disagreement. Without one, the drawing's own verdict for that net
   (:func:`boardwise.core.power_domains.infer_net_domains`: a net name that
   states its voltage, an LDO's output fact or decoded suffix). That is the
   same reading every other voltage-aware rule makes; a rail the two documents
@@ -85,6 +88,7 @@ from ..core.designintent import (
 from ..core.model import Component, DesignModel
 from ..core.parts import PartEntry
 from ..core.power_domains import domain_of, infer_net_domains, ldo_output_pin
+from ..core.railquery import RAIL_VOLTAGE_SLOTS
 from ..core.values import (
     mpn_voltage_rating,
     parse_current_amps,
@@ -132,6 +136,45 @@ def _rail_entry(intent: IntentSource, net: str):
     return intent.document.entry(SECTION_RAILS, net)
 
 
+def _stated_rail_voltage(rail, net: str | None) -> tuple[str, str, str]:
+    """``(value, the slot it was read from, how a second slot disagrees)``.
+
+    **Both** slots of :data:`~boardwise.core.railquery.RAIL_VOLTAGE_SLOTS` state
+    one rail's voltage, and they are two readings of one answer rather than two
+    questions (139 收口; evidence/064): this module was written against 092's
+    ``targetVoltage``, while 139's ``intent set-rail`` records the engineer's
+    answer in ``voltage`` — so a reader that knew only one of the two reported
+    ``intent-missing`` for a rail that had already been priced. Either slot is
+    read, ``voltage`` first: it is the *settled* value, and the precedence is the
+    one :func:`boardwise.core.railquery._contract_voltage` and
+    ``rules.pcb.ipc.declared_voltages`` already use (the writer writes both, so
+    the two agree unless a contract was edited by hand).
+
+    Two slots stating **different** values is a contract disagreeing with itself,
+    which is not something to average or to hide: ``voltage`` wins and the
+    divergence comes back in the third element, so the row's evidence names both
+    keys and says which one was taken.
+    """
+    if rail is None:
+        return "", "", ""
+    stated = ""
+    slot = ""
+    for key in RAIL_VOLTAGE_SLOTS:
+        value = str(rail.value(key) or "").strip()
+        if not value:
+            continue
+        here = write_path(SECTION_RAILS, net or "?", key)
+        if not stated:
+            stated, slot = value, here
+            continue
+        if value != stated:
+            return stated, slot, (
+                f"（注意：同一份合同的 {here} = {value!r} 与之不一致——"
+                f"两键冲突时取 {slot}）"
+            )
+    return stated, slot, ""
+
+
 def _contract_file_note(intent: IntentSource, lead: str = "，") -> str:
     """Where the contract lives — quoted by every row that asks for a slot.
 
@@ -154,25 +197,31 @@ def rail_voltage(
 
     The contract's answer wins when it states one: it is the requirement, and a
     judgement that used the drawing's own inference instead would be comparing
-    the board with itself. Without one, the net's own vote stands in
-    (:func:`infer_net_domains`), and the source string that comes back quotes
-    whichever rule of evidence answered — a net name that states its voltage,
-    or an LDO's output fact. ``why_not`` is a ready-made missing fact naming
-    **both** places an answer could come from, because "nobody states this
-    rail's voltage" has two different fixes (a drawing that names it, or a
-    contract that declares it) and the reader has to be told which one this
-    reading is missing.
+    the board with itself. **Either** of the contract's two voltage slots
+    answers — ``voltage`` (the settled value, 139's writer) and ``targetVoltage``
+    (092's design target) are one engineer's answer in two vocabularies, and
+    ``voltage`` wins a disagreement (see :func:`_stated_rail_voltage`). Without
+    one, the net's own vote stands in (:func:`infer_net_domains`), and the source
+    string that comes back quotes whichever rule of evidence answered — a net
+    name that states its voltage, or an LDO's output fact. ``why_not`` is a
+    ready-made missing fact naming **both** places an answer could come from,
+    because "nobody states this rail's voltage" has two different fixes (a
+    drawing that names it, or a contract that declares it) and the reader has to
+    be told which one this reading is missing.
     """
     rail = _rail_entry(intent, net) if net else None
-    stated = (rail.value("targetVoltage") if rail is not None else "").strip()
-    slot = write_path(SECTION_RAILS, net or "?", "targetVoltage")
+    stated, stated_slot, divergence = _stated_rail_voltage(rail, net)
+    # Where an answer goes when the contract states none: the slot 092 asks for,
+    # unchanged — either slot prices the rail, so the row's job is still just to
+    # say which question is open.
+    slot = stated_slot or write_path(SECTION_RAILS, net or "?", "targetVoltage")
     if stated:
         volts = parse_voltage_volts(stated)
         if volts is not None and volts > 0:
-            return volts, f"合同 {slot} = {stated!r}", ""
+            return volts, f"合同 {slot} = {stated!r}{divergence}", ""
         return None, "", (
             f"{INTENT_MISSING}: 合同声明 {slot} = {stated!r}，不是本工具能读量的写法"
-            f"（要 `24V`、`3.3V` 这样的拼法）{_contract_file_note(intent)}"
+            f"（要 `24V`、`3.3V` 这样的拼法）{_contract_file_note(intent)}{divergence}"
         )
     volts, source, why = domain_of(guesses, net)
     if volts is not None:
@@ -280,7 +329,8 @@ class CapVoltageRating(FactsRule):
     title = "A capacitor's voltage rating clears the rail it sits on"
     level = LEVEL
     source = (
-        "the design intent's rail declaration (requirements.rails[].targetVoltage) "
+        "the design intent's rail declaration (requirements.rails[].voltage, then "
+        ".targetVoltage) "
         "against the capacitor's own rating, read from the shelf's Voltage Rating "
         "field, the board's Value field, or the MPN's code field; no derating "
         "standard is applied (092 A2b)"

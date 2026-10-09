@@ -10,13 +10,19 @@
    的五个理由。名字自带电压（`+5V`/`3V3`/`A5V`）、地网、派生轨（`VCC/2`）、
    架构枚举已定价（货架稳压器输出）、合同里已有答案——五种「settled」全部实测；
    `VCC` 在 ROBOT 板被货架定价 3.3 V、在 毕设FOC 板无价，就是这一族里最锋利的两刀。
-2. **落契约**（`intent set-rail`）——写 `requirements.rails[net=…].voltage` +
-   `provenance: user_stated`，走 `core.designintent` 的既有读/渲染函数（不许手写
-   JSON），别的键/条目/行序逐字不动（`role`、其它 rail、blocks、decisions 都钉住）。
+2. **落契约**（`intent set-rail`）——把同一个值写进 `requirements.rails[net=…].voltage`
+   **和** `.targetVoltage`（**双写、同值同 provenance**：`voltage` 是既定值语义、
+   `targetVoltage` 是设计目标语义，`user_stated` 时两者同义——写一份只够一半读端，
+   092 的 `rail_voltage` 原本只认后者，见组 5），走 `core.designintent` 的既有读/渲染函数
+   （不许手写 JSON），别的键/条目/行序逐字不动（`role`、其它 rail、blocks、decisions 都钉住）。
 3. **往返**——写 → 读 → 再 audit：同一条从 ask 落到 settled，且 settled 行
    **点名答案出处**（「不再问」要可核，不能只是一句沉默）。
 4. **拒绝**——`3.3` 之外的读不出的值（`VDD`/`abc`/`5V 1A`）按名字拒（exit 2），
    因为这个槽是拿算术定价的：存一个谁也读不出来的字符串，这条轨就会永远地问下去。
+5. **缝的对拍（139 收口）**——写手和读端必须是同一件事：`intent set-rail` 落完之后，
+   `rules.railratings.rail_voltage` 必须读得出这条轨（两个键都由它读），不再报
+   `intent-missing`。这条缝断在 064 与 139 手上各一次，证据
+   `evidence/064/intent_slot_gap.txt`。
 
 夹具一律手写内存构造（098/095 的纪律）：一个 `DesignModel` 七条网，四条该问、
 三条不该问；词表的每一半都有实物证人——三块只读夹具 `ch340_golden`（电源网全有价，
@@ -215,9 +221,14 @@ def test_a_stale_rail_entry_still_counts_as_answered():
 # ------------------------------------------------------------ 3. 落契约（组 3）
 
 
-def test_set_rail_writes_one_slot_and_touches_nothing_else():
-    """只改 `voltage` + `provenance`：`role`、其它槽、其它条目、行序、blocks/decisions
-    全部逐字不动——合同是工程师的文档，本命令只是书记。"""
+def test_set_rail_writes_both_voltage_slots_and_touches_nothing_else():
+    """只改 `voltage` + `targetVoltage` + `provenance`：`role`、其它槽、其它条目、行序、
+    blocks/decisions 全部逐字不动——合同是工程师的文档，本命令只是书记。
+
+    **双写**是这一批的正题：`voltage` 与 `targetVoltage` 是同一个答案的两种语义
+    （既定值 / 设计目标），只写一个就有一族读端读不到（见组 5）。两键同值，`provenance`
+    是**条目级**的一个字段，所以「同 provenance」= 这一条的外层那一份。
+    """
     before = contract(
         {"net": "VCCA", "role": "analog", "source": "U9 输出", "provenance": "verified_recipe"},
         {"net": "+12V", "role": "bus", "provenance": PROVENANCE_USER_STATED},
@@ -229,24 +240,56 @@ def test_set_rail_writes_one_slot_and_touches_nothing_else():
 
     after, changed = set_rail_voltage(before, "VCCA", "3.3V")
     assert "3.3V" in changed
+    # 文案列出两个键——工程师要看得见答案写进了哪两个槽。
+    assert "voltage = '3.3V'" in changed and "targetVoltage = '3.3V'" in changed
     body = json.loads(di.render_json(after))
     assert body["requirements"]["rails"][0] == {
         "net": "VCCA", "source": "U9 输出", "role": "analog",
-        "voltage": "3.3V", "provenance": PROVENANCE_USER_STATED,
+        "voltage": "3.3V", "targetVoltage": "3.3V",
+        "provenance": PROVENANCE_USER_STATED,
     }
     assert body["requirements"]["rails"][1] == raw["requirements"]["rails"][1]
     assert body["blocks"] == raw["blocks"] and body["decisions"] == raw["decisions"]
     assert before.rails[0].value("voltage") == "", "写入不得就地改调用方的文档"
 
 
+def test_set_rail_writes_the_same_answer_and_provenance_into_both_slots():
+    """双写往返的一半：两键都在、同值、同 provenance——一手写、两族读端都认。
+
+    `set_rail_voltage` 的旧版只写 `voltage`，而 `rules.railratings.rail_voltage`
+    只读 `targetVoltage`：工程师答完，规则继续报 `intent-missing`。这条测试钉的是
+    **写手这一侧**（`evidence/064/intent_slot_gap.txt` 的第二半）。
+    """
+    after, _ = set_rail_voltage(di.DesignIntent(), "VCCA", "3.3V")
+    entry = after.entry(di.SECTION_RAILS, "VCCA")
+    assert entry is not None
+    assert entry.value("voltage") == "3.3V"
+    assert entry.value("targetVoltage") == "3.3V"
+    assert entry.value("voltage") == entry.value("targetVoltage"), "同值"
+    assert entry.provenance == PROVENANCE_USER_STATED
+
+
+def test_set_rail_fills_the_other_key_of_an_entry_that_stated_only_one():
+    """手写合同只写了 `targetVoltage`（092 语义）时，工程师答一次要把两键都补齐——
+    否则「已答过」的那条轨在 139 的 audit 里照样是待问。"""
+    before = contract({"net": "VCC", "targetVoltage": "5V", "provenance": "ai_asserted"})
+    after, changed = set_rail_voltage(before, "VCC", "3.3V")
+    entry = after.entry(di.SECTION_RAILS, "VCC")
+    assert (entry.value("voltage"), entry.value("targetVoltage")) == ("3.3V", "3.3V")
+    assert entry.provenance == PROVENANCE_USER_STATED
+    assert "corrected" in changed, "覆盖了一个既有答案要说清「改过」"
+
+
 def test_set_rail_creates_a_missing_entry_without_moving_the_others():
-    """新建条目插在最前（与 `designintent.merge` 同序），已有行一位都不移。"""
+    """新建条目插在最前（与 `designintent.merge` 同序），已有行一位都不移；两键一起建。"""
     before = contract({"net": "VCC", "voltage": "3.3V", "provenance": "user_stated"})
     after, changed = set_rail_voltage(before, "TVDD", "1V8")
     assert "new entry" in changed
     body = json.loads(di.render_json(after))
     assert [row["net"] for row in body["requirements"]["rails"]] == ["TVDD", "VCC"]
     assert body["requirements"]["rails"][0]["provenance"] == PROVENANCE_USER_STATED
+    assert body["requirements"]["rails"][0]["voltage"] == "1V8"
+    assert body["requirements"]["rails"][0]["targetVoltage"] == "1V8"
 
 
 def test_set_rail_keeps_the_rail_in_place_and_reports_the_correction():
@@ -255,6 +298,8 @@ def test_set_rail_keeps_the_rail_in_place_and_reports_the_correction():
     after, changed = set_rail_voltage(before, "VCC", "5V")
     assert "3.3V" in changed and "5V" in changed and "corrected" in changed
     assert after.rails[0].value("voltage") == "5V"
+    assert after.rails[0].value("targetVoltage") == "5V", "改过之后两键仍然同值"
+    assert "targetVoltage" in changed, "改过的文案把两个键都写出来"
 
 
 @pytest.mark.parametrize("bad", ["VDD", "abc", "5V 1A", "", "3.3V3V"])
@@ -304,12 +349,33 @@ def test_cli_round_trip_ask_write_reaudit(tmp_path):
     assert "VCCA" not in _ask_of(tmp_path / "a2.json")
     assert "VCCA" in _settled_of(tmp_path / "a2.json")
     # 新条目插在最前（`designintent.set_entry` 的序），已有那条一位都不动：
-    # 逐字钉住它的 role 与 provenance。
+    # 逐字钉住它的 role 与 provenance。**两个电压键都在**（双写，139 收口）。
     assert after["requirements"]["rails"][0] == {
-        "net": "VCCA", "voltage": "3.3V", "provenance": PROVENANCE_USER_STATED,
+        "net": "VCCA", "voltage": "3.3V", "targetVoltage": "3.3V",
+        "provenance": PROVENANCE_USER_STATED,
     }
     assert after["requirements"]["rails"][1] == before["requirements"]["rails"][0]
     assert set(before) == set(after)
+
+
+def test_the_answer_set_rail_records_is_the_answer_the_rail_rules_read():
+    """**缝的对拍**（139 收口）：`intent set-rail` 之后，092 的
+    `rules.railratings.rail_voltage` 读得出这条轨——不再报 `intent-missing`。
+
+    这正是 `evidence/064/intent_slot_gap.txt` 记的那处：064 与 139 两个代理各自撞上
+    「写手写一个键、读端认另一个键」，于是工程师按自家命令答完电压，规则还在要答案。
+    钉在**跨批的公共 API** 上（写手 + 读端两个函数），而不是各自半边，因为这个病只在
+    缝上出现。rail_voltage 的第二个返回值是「证据从哪来」，它点名合同与那个键。
+    """
+    from boardwise.rules.railratings import rail_voltage
+
+    updated, _ = set_rail_voltage(di.DesignIntent(), "VCCA", "3.3V")
+    source = di.IntentSource(document=updated, path="mem://intent.json")
+
+    volts, where, why = rail_voltage(source, {}, "VCCA")
+    assert (volts, why) == (3.3, ""), (volts, where, why)
+    assert "requirements.rails[net=VCCA].voltage = '3.3V'" in where, where
+    assert "intent-missing" not in why
 
 
 def test_cli_audit_without_a_contract_lists_everything(tmp_path):

@@ -84,10 +84,11 @@ enumeration is read through the **public**
 implementation, and this module never re-derives a rail or a voltage.
 
 One rail, one answer. :func:`set_rail_voltage` is the writer: it merges one
-``voltage`` into one ``rails[net=…]`` entry and leaves every other key, every
-other entry and the entry's position alone, because a contract that came back
-different from the one an engineer just answered for is the 052 §2.2 accident
-one level down.
+``voltage`` — and the ``targetVoltage`` that is the same answer in 092's
+vocabulary, so no reader is left asking — into one ``rails[net=…]`` entry and
+leaves every other key, every other entry and the entry's position alone,
+because a contract that came back different from the one an engineer just
+answered for is the 052 §2.2 accident one level down.
 """
 
 from __future__ import annotations
@@ -111,6 +112,7 @@ from .values import parse_voltage_volts
 
 __all__ = [
     "RAIL_QUERY",
+    "RAIL_VOLTAGE_SLOTS",
     "RailAudit",
     "RailQuery",
     "SUPPLY_ROLES",
@@ -124,6 +126,19 @@ __all__ = [
 #: report's row cannot drift apart. One string, read by the CLI's own output and
 #: by `docs/review-sop.md` §3.1b.
 RAIL_QUERY = "intent-missing"
+
+#: The two contract slots a rail's voltage is stated in, in reading order.
+#:
+#: They are two readings of **one** answer, not two questions: ``voltage`` is the
+#: value the rail *is* (the settled slot — this module's audit and
+#: ``rules.pcb.ipc.declared_voltages`` read it first) and ``targetVoltage`` is the
+#: design *target* (092 A2b's slot, the one ``pwr-cap-voltage-rating`` /
+#: ``path-ldo-dissipation`` were written against). Under
+#: ``provenance: user_stated`` one answer is both, so :func:`set_rail_voltage`
+#: writes both and every reader accepts either — answering through one slot used
+#: to leave the other family reporting ``intent-missing`` for a rail an engineer
+#: had already priced (064 and 139 hit the same seam, evidence/064).
+RAIL_VOLTAGE_SLOTS: tuple[str, ...] = ("voltage", "targetVoltage")
 
 #: The pin roles that make a net a **power** net. ``IN`` is a supply input
 #: (``VDD``/``VCC``/``VIN``/``VM``), ``OUT`` is a supply output (``VOUT``). The
@@ -464,7 +479,7 @@ def _contract_voltage(
     entry = contract.entry(SECTION_RAILS, net)
     if entry is None:
         return None
-    for slot in ("voltage", "targetVoltage"):
+    for slot in RAIL_VOLTAGE_SLOTS:
         value = str(getattr(entry, "slots", {}).get(slot, "") or "").strip()
         if value:
             return value, str(getattr(entry, "provenance", "") or "")
@@ -472,22 +487,37 @@ def _contract_voltage(
 
 
 def set_rail_voltage(document: DesignIntent, net: str, voltage: str) -> tuple[DesignIntent, str]:
-    """``(updated document, what changed)`` — one rail's voltage, written once.
+    """``(updated document, what changed)`` — one rail's voltage, one write.
 
     The write is deliberately small, because the contract is the engineer's
-    document and this command is a clerk: it sets ``rails[net=…].voltage`` and
-    ``provenance`` to :data:`~boardwise.core.designintent.PROVENANCE_USER_STATED`
-    and **touches nothing else** — not the entry's ``role``, not its other slots,
-    not another entry, not the order. An entry that does not exist is created (at
-    the front, the way :func:`~boardwise.core.designintent.merge` inserts, so no
-    existing line moves) — with the same ``provenance``, because a brand-new entry
-    that came back a *draft* would be this command refusing to record what the
-    engineer just said. An entry that does keeps its position and its bytes.
+    document and this command is a clerk: it sets ``rails[net=…].voltage`` **and**
+    ``rails[net=…].targetVoltage`` to the same value, the entry's ``provenance``
+    to :data:`~boardwise.core.designintent.PROVENANCE_USER_STATED`, and **touches
+    nothing else** — not the entry's ``role``, not its other slots, not another
+    entry, not the order. An entry that does not exist is created (at the front,
+    the way :func:`~boardwise.core.designintent.merge` inserts, so no existing
+    line moves) — with the same ``provenance``, because a brand-new entry that
+    came back a *draft* would be this command refusing to record what the engineer
+    just said. An entry that does keeps its position and its bytes.
+
+    **Why one answer goes into two slots** (139 收口; evidence/064): ``voltage``
+    and ``targetVoltage`` are two *semantic* readings of the same engineer's
+    answer — ``voltage`` is the value the rail **is** (the settled slot:
+    ``pcb-voltage-spacing``, :func:`_contract_voltage` and the PCB writer all read
+    it first) while ``targetVoltage`` is the design **goal** (092 A2b's slot, the
+    one ``pwr-cap-voltage-rating`` / ``path-ldo-dissipation`` were written
+    against). Under ``user_stated`` the two are the same statement, so writing
+    only one of them left the other family reporting ``intent-missing`` for a rail
+    the engineer had just priced — 064's ``sel-ldo-fixed-output`` and 139's own
+    audit both read the contract that way and both concluded "nobody answered".
+    Writing both, same value, is what makes *any* reader price the rail,
+    including the 092-era readers that know only ``targetVoltage`` (see
+    :data:`RAIL_VOLTAGE_SLOTS`).
 
     A value this build cannot read as a voltage is **refused** by name rather
-    than stored: the contract's values are free text, but this slot is read by
+    than stored: the contract's values are free text, but these slots are read by
     arithmetic (:func:`boardwise.core.values.parse_voltage_volts` is what
-    ``pcb-voltage-spacing`` and ``pwr-cap-voltage-rating`` price it with), and
+    ``pcb-voltage-spacing`` and ``pwr-cap-voltage-rating`` price them with), and
     writing a string no reader can turn into volts would leave the rail asking
     the same question forever — the defect this whole module exists to close.
     The previous value is returned so the caller can print it, and
@@ -512,16 +542,30 @@ def set_rail_voltage(document: DesignIntent, net: str, voltage: str) -> tuple[De
             SECTION_RAILS,
             IntentRail(
                 net=name,
-                slots={"voltage": text},
+                slots={slot: text for slot in RAIL_VOLTAGE_SLOTS},
                 provenance=PROVENANCE_USER_STATED,
             ),
         )
-        return updated, f"new entry, voltage = {text!r}"
-    previous = str(entry.slots.get("voltage", "") or "")
-    entry.slots["voltage"] = text
+        return updated, f"new entry, voltage = {text!r}, targetVoltage = {text!r}"
+    # What each slot held before the write: a correction has to be visible
+    # whichever of the two carried the old answer, and the sentence the engineer
+    # reads names both keys either way.
+    before = {
+        slot: str(entry.slots.get(slot, "") or "") for slot in RAIL_VOLTAGE_SLOTS
+    }
+    for slot in RAIL_VOLTAGE_SLOTS:
+        entry.slots[slot] = text
     entry.provenance = PROVENANCE_USER_STATED
-    if previous and previous != text:
-        return updated, f"voltage {previous!r} -> {text!r} (was stated; corrected)"
-    if previous:
-        return updated, f"voltage {text!r} restated (unchanged)"
-    return updated, f"voltage = {text!r} (was empty)"
+    if any(value and value != text for value in before.values()):
+        return updated, (
+            ", ".join(
+                f"{slot} {before[slot] or '(empty)'!r} -> {text!r}"
+                for slot in RAIL_VOLTAGE_SLOTS
+            )
+            + " (was stated; corrected)"
+        )
+    if any(before.values()):
+        return updated, (
+            f"voltage = {text!r}, targetVoltage = {text!r} restated (unchanged)"
+        )
+    return updated, f"voltage = {text!r}, targetVoltage = {text!r} (was empty)"

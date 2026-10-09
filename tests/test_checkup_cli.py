@@ -1300,6 +1300,45 @@ def _registry_case(rule_id: str):
             {"U3": _part("U3", mpn="LOAD1", pins=[("1", "RAILX")])},
             {"RAILX": [("U3", "1")]},
         )
+    if rule_id == "sel-tvs-standoff-rail":
+        # 064 on the welded board: the TVS hangs on a rail whose voltage every
+        # source has priced *somewhere*, and the sweep is asking whether the
+        # rule still refuses because the net itself was merged blind. The shelf
+        # spec is present and readable on purpose — a rule that answered from
+        # the spec alone would pass the first half and fail the refusal half.
+        from boardwise.rules.paramspec import TvsStandoffRail
+
+        entry = PartEntry(
+            key="diode.smcj28ca", mpn="SMCJ28CA", lcsc="C9", category="diode",
+            params={
+                "Type": "TVS",
+                "Reverse Stand-Off Voltage (Vrwm)": "28V",
+                "Voltage - Breakdown": "34.4V",
+            },
+        )
+        return TvsStandoffRail(library=PartLibrary(parts=[entry])), model_of(
+            {"D1": _part("D1", mpn="SMCJ28CA", pins=[("1", "VM"), ("2", "PGND")])},
+            {"VM": [("D1", "1")], "PGND": [("D1", "2")]},
+        )
+    if rule_id == "sel-ldo-fixed-output":
+        # 064's other selection rule, same shape: the shelf declares the output
+        # step and the pin facts name the output pin, so the rule gets all the
+        # way to the rail read — which is the only place the weld may stop it.
+        from boardwise.rules.paramspec import LdoFixedOutput
+
+        entry = PartEntry(
+            key="ic.ldo", mpn="LDO1", lcsc="C2", category="ic.ldo",
+            params={"Output Voltage": "3.3V", "Output Type": "固定"},
+            facts={
+                "supply_pins": [{"pins": ["1"], "name": "VIN",
+                                 "v_operating": [2.2, 5.5], "provenance": PROV}],
+                "required_caps": [{"pin": "2", "value": "1uF", "provenance": PROV}],
+            },
+        )
+        return LdoFixedOutput(library=PartLibrary(parts=[entry])), model_of(
+            {"U2": _part("U2", mpn="LDO1", pins=[("1", "+5V"), ("2", "VCC")])},
+            {"+5V": [("U2", "1")], "VCC": [("U2", "2")]},
+        )
     raise AssertionError(
         f"no registry case for {rule_id!r} — add one with the rule, so the sweep "
         "stays as wide as the registry"

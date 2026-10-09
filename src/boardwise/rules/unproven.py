@@ -115,6 +115,16 @@ UNPROVEN_BY_NAME = "agreement by name is not a verified connection"
 #:   mid-net or a power-class rail, whose voltage it prices), so a name the merge
 #:   welded blind can neither supply the parts nor the rail the arithmetic needs.
 #:
+#: 064 added the two selection rules, both of which read *one part's* spec against
+#: *the rail that part is used on* — ``sel-tvs-standoff-rail`` (the stand-off
+#: voltage vs the bus it protects) and ``sel-ldo-fixed-output`` (the output step
+#: vs the rail behind its output pin). They are here for the second bullet's
+#: reason rather than the third's: the part itself is the subject, so nothing
+#: about *which other parts are on the net* decides their verdicts — but the
+#: **rail's voltage** they read is the domain inference's, and a rail welded by
+#: name may belong to another page's board entirely, which would make them
+#: compare one board's TVS against another board's bus.
+#:
 #: The two parameter rules joined the list in 076, and their absence before that
 #: was a **misreading of their own code**: they print one part's values, but both
 #: *find their partner* by sharing a net with it — ``param-rc-cutoff`` pairs a
@@ -162,6 +172,8 @@ NET_MEMBERSHIP_RULES: tuple[str, ...] = (
     "arch-opendrain-pullup",
     "arch-rail-voltage-clash",
     "arch-sense-bias-closure",
+    "sel-tvs-standoff-rail",
+    "sel-ldo-fixed-output",
 )
 
 
