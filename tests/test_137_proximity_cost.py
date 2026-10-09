@@ -24,10 +24,13 @@ So the task named a third instrument: not a rule, not a wall — a **price**.
    alongside, and a wide board where the router is free to keep its distance —
    because a change that helps one and hurts the other is not a fix.
 
-The count is pinned at **47**, not at a number anyone hoped for. The reason is
-measured and written down at `layout.price`; read it there before reading the
-assertion. This test file exists partly so that the next person does not
-re-derive it from scratch.
+The count is pinned at **34**, not at a number anyone hoped for, and 141 is why
+it is not 47 any more: this file's own decomposition (every finding is a trapped
+slot, so a price can shuffle congestion but not create room) named the aisle as
+the real constraint, and `plan_placement` now sizes that aisle from the traffic
+it carries. The rest is still measured and written down at `layout.price`; read
+it there before reading the assertion. This test file exists partly so that the
+next person does not re-derive it from scratch.
 """
 
 from __future__ import annotations
@@ -52,11 +55,23 @@ from boardwise.parsers.schematic import (
 GOLDEN = "tests/fixtures/ch340_golden.epro2"
 
 
+_PLAN_CACHE: list = []
+
+
 def _golden_plan():
-    """The golden solver plan, built once (seconds of grid search)."""
-    golden = strip_dangling_nets(build_schematic_model(GOLDEN))
-    offsets = canvas_pin_offsets(build_pin_offsets(GOLDEN))
-    return generate_plan(golden, offsets)
+    """The golden solver plan, built once per session.
+
+    141 gave this build a second page to try (the wider aisle is only taken if
+    the router still wires every net on it), so it is half a minute of grid
+    search rather than ten seconds — and the plan is a pure function of the
+    fixture, so every test in this file re-measuring it is re-measuring the same
+    answer. Built once, handed out many times.
+    """
+    if not _PLAN_CACHE:
+        golden = strip_dangling_nets(build_schematic_model(GOLDEN))
+        offsets = canvas_pin_offsets(build_pin_offsets(GOLDEN))
+        _PLAN_CACHE.append(generate_plan(golden, offsets))
+    return _PLAN_CACHE[0]
 
 
 def _too_close(violations) -> list:
@@ -424,19 +439,23 @@ def test_the_crowded_case_is_disclosed_rather_than_hidden():
 
 
 def test_the_golden_tally_moves_down_and_by_the_measured_amount():
-    """49 -> 47, and the count is pinned rather than described.
+    """49 -> 47 here, and 141 takes it on to 34.
 
-    Not the order of magnitude the task hoped for. The decomposition behind the
+    Not the order of magnitude 137 hoped for. The decomposition behind this
     number is at `layout.price`: all 49 findings are *trapped slots* — the
     clear lane on the far side is occupied in every single case — so a price can
-    only shuffle congestion, and this shuffle is worth two. Anyone who can find
-    a weighting that does better should change this number; what is not
-    acceptable is changing the constant and leaving the number behind.
+    only shuffle congestion, and this shuffle is worth two. 141 then widened the
+    aisle the trunks run through by the traffic it carries, which is what the
+    issue always was, and the count is 34
+    (`tests/test_141_channel_aisles.py` and `_gap_width` carry the arithmetic).
+    Anyone who can find a weighting or a page that does better should change
+    both numbers; what is not acceptable is changing a constant and leaving the
+    number behind.
     """
     plan = _golden_plan()
     hits = _too_close(plan.violations)
-    assert len(hits) == 47, len(hits)
-    assert len(hits) < 49
+    assert len(hits) == 34, len(hits)
+    assert len(hits) < 47
 
 
 def test_the_clearance_weight_is_what_earns_the_two():
@@ -468,7 +487,7 @@ def test_the_netlist_is_unchanged_by_rerouting():
     this pins the thing that must not move.
     """
     plan = _golden_plan()
-    assert len(plan.violations) >= 47
+    assert len(plan.violations) >= 34
     assert plan.wires, "the board still has wires"
     for wire in plan.wires:
         assert wire.net, "every wire belongs to a named net"

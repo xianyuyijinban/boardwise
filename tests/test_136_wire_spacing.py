@@ -390,16 +390,21 @@ def test_the_solver_drawing_reports_the_pairs_it_actually_runs_too_close():
     that 134 filed this task for; a change in it is a change in the router's
     output, which other tests will notice loudly.
 
-    137 re-routes to a price rather than a wall, and the tally is **47**: two
-    fewer, measured, with the reason recorded at `layout.price` (every one of
-    the 49 is a *trapped slot* — the clear lane on the away side is already
-    occupied — so a price can only shuffle congestion, not remove it). 137's
-    own measurement test pins the same number from the other side.
+    137 re-routes to a price rather than a wall and earned two of them back
+    (49 -> 47, with the reason recorded at `layout.price`: every one of the 49 is
+    a *trapped slot* — the clear lane on the away side is already occupied — so a
+    price can shuffle congestion but not create room). 141 then went after the
+    room itself and the tally is **34**: the aisle these trunks run through was
+    40 units wide, which is four nets at the 10-unit pitch `WIRE_CLEARANCE`
+    asks for, and the page had six nets to run through it. The aisle is sized
+    from that demand now (`plan_placement`), and 34 is the width this board's
+    router can still wire; 137's own measurement test and
+    `tests/test_141_channel_aisles.py` pin the number from the other two sides.
     """
     golden = strip_dangling_nets(build_schematic_model(GOLDEN))
     plan = generate_plan(golden, canvas_pin_offsets(build_pin_offsets(GOLDEN)))
     hits = _too_close(plan.violations)
-    assert len(hits) == 47, len(hits)
+    assert len(hits) == 34, len(hits)
     # every one of them is the same real shape: adjacent grid lanes, 5 apart
     for row in hits:
         assert "run 5 apart" in row.detail
