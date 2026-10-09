@@ -668,11 +668,25 @@ def test_a_part_shorting_the_two_ground_families_is_refused():
 
 
 def test_a_missing_optocoupler_is_refused_as_circuit_invalid():
+    """**143b 加强**：光耦缺失要以"隔离带不存在"为理由被拒。
+
+    旧的断言只查 detail 里有 "isolation barrier" 这个词。**143 挖出这句话
+    当时是从一条无条件假报的分支里来的**（`_no_flyback_failure` 用空串顶替
+    anchor、用 `sorted(ground)` 定主/副边，见 143 H1），所以那一条是"因错误
+    原因通过"：拆采样电阻、拆整流管、拆分压臂都会打印同一句，它也照样绿。
+    现在除了词，还钉住**理由是隔离带本身**（这一条电路确实没有跨带器件），
+    并且不许它回头说"链条某一节没读出"——那是别的洞的说法。
+    """
     result = _bind(_without_part(minimal_circuit(), "U5"))
     assert not result.ok
     assert any(item.category == FAILURE_CIRCUIT_INVALID for item in result.failures)
     detail = " ".join(item.detail for item in result.failures)
     assert "isolation barrier" in detail or "隔离" in detail
+    assert "no part closes the feedback loop across the two ground families" in detail
+    assert "not read" not in detail, (
+        "光耦不在 = 隔离带缺失，不是「链条某一节读不出」：143 H1 的假诊断正是"
+        "把这两个说法混在一起"
+    )
 
 
 def test_a_missing_power_loop_is_refused_as_circuit_invalid():

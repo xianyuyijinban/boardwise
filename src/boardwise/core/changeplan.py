@@ -31,7 +31,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from .model import is_ground_net
 from .symbolprofile import POSE_ROTATIONS
@@ -518,16 +518,41 @@ class PlanDrawBaseline:
     The guard a *drawing* needs and a local edit does not: a compiled module lands
     on a page, and "somebody moved/added something by hand since the plan was
     made" has to be detectable **before** the first write (054's C5). Designators,
-    wire count and flag count are the census; ``digest`` is the same census hashed,
-    so a report can quote one string. An empty ``digest`` means the plan was built
-    **offline** and records no baseline — a fact, not a missing guard, exactly as
+    wire count, flag count, label count and the count of not-yet-numbered parts are
+    the census; ``digest`` is the same census hashed, so a report can quote one
+    string. An empty ``digest`` means the plan was built **offline** and records no
+    baseline — a fact, not a missing guard, exactly as
     `core.layoutplan.LayoutTarget.snapshot_sha256` is.
+
+    Every primitive kind a `sch.geometry` dump reports has a counter here, because
+    a kind the census does not count is a change the census cannot see (143d:
+    labels and `?`-suffixed parts were both invisible, and both are things a hand
+    edit adds).
     """
 
     page_uuid: str = ""
     components: list[str] = field(default_factory=list)
     wire_count: int = 0
     netflag_count: int = 0
+    #: Net labels the page holds. The census had no label leg until 143d, and the
+    #: hole that made it a defect was not abstract: a hand edit that only *adds a
+    #: net label* left every number in this census and the whole digest unchanged,
+    #: so 054 C5's guard reported "the page is the one the plan was built against"
+    #: over a page somebody had changed. Measured 2026-10-10 (143d): `sch.geometry`
+    #: really carries the section (`netlabels`, the one `addcomponent.net_label_names`
+    #: and `patchpin` read), so the blindness was this census's alone.
+    netlabel_count: int = 0
+    #: Parts the page holds whose designator is still `?`-suffixed — the editor's
+    #: own notation for "not numbered yet". They are deliberately **not** in
+    #: ``components`` (`addcomponent.component_origins` skips them, 036b's
+    #: occupancy reading), so without this count a part placed by hand on the page
+    #: was invisible to the digest in exactly the same way a label was.
+    unnumbered_count: int = 0
+    #: The ``pins`` section, counted for the same reason as the label count: the
+    #: dump contract names four sections and a census that reads three cannot
+    #: answer "nothing on this page moved". Measured empty on this host (3.2.186)
+    #: and in every recorded dump, so it is insurance, not a live refusal.
+    pin_count: int = 0
     digest: str = ""
     #: Were the *findings* baseline read with the census? An offline plan cannot
     #: know the project's findings, and apply must report "unknown" rather than
@@ -900,6 +925,9 @@ class ChangePlan:
                     "components": list(self.change.draw_baseline.components),
                     "wireCount": int(self.change.draw_baseline.wire_count),
                     "netflagCount": int(self.change.draw_baseline.netflag_count),
+                    "netlabelCount": int(self.change.draw_baseline.netlabel_count),
+                    "unnumberedCount": int(self.change.draw_baseline.unnumbered_count),
+                    "pinCount": int(self.change.draw_baseline.pin_count),
                     "digest": self.change.draw_baseline.digest,
                     "findingsRead": self.change.draw_baseline.findings_read,
                 },
@@ -1763,6 +1791,7 @@ def _draw_change_from(change: dict[str, Any]) -> PlanChange:
     parts = _draw_parts_from(change.get("parts"), profile_hashes)
     wires = _draw_wires_from(change.get("wires"), parts)
     flags = _draw_flags_from(change.get("flags"), parts)
+    _draw_name_conflicts(wires, flags)
     islands = _draw_islands_from(change.get("islands"), parts)
     baseline = _draw_baseline_from(change.get("baseline"))
     return PlanChange(
@@ -1782,6 +1811,41 @@ def _draw_change_from(change: dict[str, Any]) -> PlanChange:
         baseline_findings=_string_list(change, "baselineFindings"),
         draw_keep_names=bool(change.get("keepNames")),
     )
+
+
+def _draw_name_conflicts(
+    wires: Sequence[PlanDrawWire], flags: Sequence[PlanDrawFlag]
+) -> None:
+    """A flag standing on a wire has to carry that wire's net (143 F5).
+
+    The plan-level half of the same rule `drawapply.net_name_problems` applies to a
+    `LayoutPlan`. Both statements are about the same canvas and apply writes both
+    of them: the flag's kind and net go to `sch.place_power` (029-d measured that
+    the flag is what the editor's netlist carries for that node) and the wire's net
+    goes to `sch.place_wire` (029-b: a wire's net *is* its name on the canvas). So a
+    flag anchored on a wire of another name is one conductor claimed twice — which
+    is exactly the shape a hand-written plan can have, and the shape no judge reads
+    (`readability` derives names from declarations only, 052 sec.4; `check_grammar`
+    does not read either string).
+
+    Measured against every draw-module plan document this repo has recorded (37 of
+    them, 367 wires, 130 flags, 2026-10-10): **zero** conflicts, so this refuses
+    hand-edited documents and not compiler output. A flag on a *pin* (``onPin``) is
+    not judged here: the pin's net is not stated in the plan, and the live netlist
+    read-back is the leg that decides it.
+    """
+    for index, flag in enumerate(flags):
+        for wire in wires:
+            if len(wire.points) < 2 or wire.net == flag.net:
+                continue
+            if any((flag.x, flag.y) == (point[0], point[1]) for point in wire.points):
+                raise ChangePlanError(
+                    f"change.flags[{index}] places a {flag.kind} flag named {flag.net!r} "
+                    f"at ({flag.x:g}, {flag.y:g}), which is an endpoint of a wire "
+                    f"carrying net {wire.net!r} — the flag names the node it stands on "
+                    "(029-d) and the wire's net names it too (029-b), so one of the two "
+                    "would land as a net this drawing did not declare"
+                )
 
 
 def _draw_profile_hashes(value: Any) -> list[tuple[str, str]]:
@@ -2131,7 +2195,19 @@ def _draw_baseline_from(value: Any) -> PlanDrawBaseline:
         )
     wire_count = value.get("wireCount", 0)
     netflag_count = value.get("netflagCount", 0)
-    for key, number in (("wireCount", wire_count), ("netflagCount", netflag_count)):
+    netlabel_count = value.get("netlabelCount", 0)
+    unnumbered_count = value.get("unnumberedCount", 0)
+    pin_count = value.get("pinCount", 0)
+    for key, number in (
+        ("wireCount", wire_count),
+        ("netflagCount", netflag_count),
+        # 143d: the counters the census gained. A document written before them
+        # simply has no key, and defaults to 0 — which is what an old plan's census
+        # could see.
+        ("netlabelCount", netlabel_count),
+        ("unnumberedCount", unnumbered_count),
+        ("pinCount", pin_count),
+    ):
         if isinstance(number, bool) or not isinstance(number, int) or number < 0:
             raise ChangePlanError(
                 f"change.baseline.{key} must be a non-negative integer, got {number!r}"
@@ -2146,6 +2222,9 @@ def _draw_baseline_from(value: Any) -> PlanDrawBaseline:
         components=[str(item) for item in components],
         wire_count=int(wire_count),
         netflag_count=int(netflag_count),
+        netlabel_count=int(netlabel_count),
+        unnumbered_count=int(unnumbered_count),
+        pin_count=int(pin_count),
         digest=str(digest),
         findings_read=findings_read,
     )

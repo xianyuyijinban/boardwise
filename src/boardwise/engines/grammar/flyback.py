@@ -8,10 +8,11 @@ from a hand-drawn layout):
                feedback-divider / error-amp / opto / compensation / aux-D/C +
                bus / switch-node / src / pgnd / aux / vcc / vout / sec-gnd /
                fb-sense / clamp |
-    T1 居中，原边朝输入侧、副边朝输出侧（隔离界竖直）；RCD 钳位贴原边上方；
-    Q1 竖放于原边下端；sense 电阻在 Q1 source 与原边地之间直连；
-    反馈副边成链（VOUT→分压→TL431→光耦 LED 水平成链），光耦是唯一允许竖直
-    跨越隔离带的器件；双地分族（PGND / SEC_GND）各自统一、绝不连通。
+    T1 居中，原边朝输入侧、副边朝输出侧（隔离界竖直 —— 两个"侧"都读
+    `sidePreferences`，本文件不写死）；RCD 钳位贴原边上方（power 侧）；
+    Q1 竖放于原边下端（gnd 侧）；sense 电阻在 Q1 source 与原边地之间直连；
+    反馈副边成链（VOUT→分压→TL431→光耦 LED 水平成链），光耦是唯一跨
+    隔离带的器件；双地分族（PGND / SEC_GND）各自统一、绝不连通。
 
 **Every role is a structural judgment; nothing here reads a designator, a
 value, a package or a symbol name** (052 sec.5). The one fact that is *not*
@@ -53,12 +54,17 @@ of the weakest fact that produced it (052 sec.4).
   message names the class to write.
 * ``circuit-invalid`` — the two ground families are **one net** (isolation
   gone: this is a contradiction in the connections, not a missing fact); there
-  is no part carrying a pin on each ground family (no isolation device: a
-  flyback without a transformer-to-secondary barrier is not an isolated
-  flyback); the primary loop is open (bus and switch node with no winding
-  between them); the secondary rectifier's direction is unstated (both its ends
-  inside one ground family: the rectifier phase cannot be read, and a
-  rectifier's phase is what says which winding is hot).
+  is no part closing the barrier on any family pairing the circuit states (no
+  isolation device: a flyback without a transformer-to-secondary barrier is
+  not an isolated flyback); the primary loop is open (bus and switch node with
+  no winding between them, or no sense from the source to a primary ground);
+  the secondary rectifier's direction is unstated (both its ends inside one
+  ground family: the rectifier phase cannot be read, and a rectifier's phase
+  is what says which winding is hot).
+  Which of those it is comes from the walk's own steps replayed
+  (`_primary_prefixes`, `_winding_ends`, `_secondary`, `_divider_strings`), and
+  the refusal reports **which leg of the chain was not readable** — never a
+  guess about the two families' roles or about the parts' designators.
 
 **What this grammar deliberately does not cover** (task book §范围裁定): the AC
 entry and the rectifier bulk (M1/M2 — `power-entry` owns those), and the
@@ -115,7 +121,7 @@ from dataclasses import dataclass, field
 from typing import Mapping
 
 from ...core.circuitspec import CircuitSpec
-from ...core.presentationspec import PresentationSpec
+from ...core.presentationspec import SIDES, PresentationSpec
 from ...core.symbolprofile import SymbolProfile
 from .base import (
     ABOVE,
@@ -353,7 +359,7 @@ class FlybackGrammar:
         readings = _readings(state)
         if not readings:
             return refused_result([_no_flyback_failure(circuit, state)])
-        return self._result(circuit, state, readings)
+        return self._result(circuit, state, readings, presentation)
 
     # ------------------------------------------------------------- internals
 
@@ -362,6 +368,7 @@ class FlybackGrammar:
         circuit: CircuitSpec,
         state: "_State",
         readings: list[FlybackReading],
+        presentation: PresentationSpec,
     ) -> GrammarResult:
         found = readings[0]
         runners = _runner_up_note(readings)
@@ -370,28 +377,41 @@ class FlybackGrammar:
         constraints: list[RelativeConstraint] = []
         obligations: list[GrammarObligation] = []
 
-        in_side = "left"
-        out_side = "right"
+        # Which way the isolation band runs comes from the presentation's own
+        # `sidePreferences` — the same four reads `ldo`, `rc_lowpass`,
+        # `power_entry`, `voltage_divider` and `ic_periphery` make. An earlier
+        # version of this grammar had `in_side = "left"` / `out_side = "right"`
+        # as constants while seven evidence strings still said "per
+        # sidePreferences": the drawing kept the hardcoded direction on a
+        # mirrored page (a page whose other modules all read the declaration),
+        # and the reason text cited a declaration that had never been read.
+        in_side = _declared_side(presentation, "input", "left")
+        out_side = _declared_side(presentation, "output", "right")
+        gnd_side = _declared_side(presentation, "gnd", "bottom")
+        power_side = _declared_side(presentation, "power", "top")
 
         # ---- the anchor: T1, and the four things measured against it
         self._bind_transformer(circuit, found, bindings, constraints, runners)
 
         # ---- the primary side: switch, sense
-        self._bind_primary(circuit, found, bindings, constraints, runners)
+        self._bind_primary(circuit, found, bindings, constraints, runners,
+                           gnd_side)
 
         # ---- the clamp (optional)
-        self._bind_clamp(circuit, found, bindings, constraints, runners)
+        self._bind_clamp(circuit, found, bindings, constraints, runners,
+                         power_side)
 
         # ---- the secondary side
         self._bind_secondary(circuit, found, bindings, constraints, runners,
-                             out_side)
+                             out_side, gnd_side)
 
         # ---- the feedback chain
         self._bind_feedback(circuit, found, bindings, constraints, runners,
-                            out_side)
+                            in_side, out_side, gnd_side)
 
         # ---- the auxiliary chain (optional)
-        self._bind_aux(circuit, found, bindings, constraints, runners)
+        self._bind_aux(circuit, found, bindings, constraints, runners,
+                       gnd_side)
 
         # ---- the nets
         for role, net_id, where in (
@@ -444,7 +464,8 @@ class FlybackGrammar:
             ))
 
         # ---- the obligations (053 sec.3's "必须可见的拓扑")
-        obligations.extend(_obligations(circuit, found, in_side, out_side))
+        obligations.extend(_obligations(circuit, found, in_side, out_side,
+                                        gnd_side, power_side))
 
         return bound_result(bindings, constraints, obligations)
 
@@ -478,6 +499,7 @@ class FlybackGrammar:
         bindings: list[RoleBinding],
         constraints: list[RelativeConstraint],
         runners: str,
+        gnd_side: str,
     ) -> None:
         bindings.append(RoleBinding(
             role="switch",
@@ -508,17 +530,22 @@ class FlybackGrammar:
 
         # (c) Q1 竖放于原边下端：the switch hangs below the primary it drains,
         # and the sense resistor stands in the same column as the switch so
-        # the source→sense→ground loop is one vertical run.
+        # the source→sense→ground loop is one vertical run. "Below" is the
+        # word for the **ground end** of the column, so it is derived from
+        # `sidePreferences.gnd`: with the family declared at the top the same
+        # relation is `above`, which is the same drawing mirrored.
         constraints.append(RelativeConstraint(
-            kind=BELOW,
+            kind=_side_kind(gnd_side, BELOW),
             subject=found.switch,
             object=found.transformer,
             reason=(
                 "岳 110 裁决 c: the main switch is drawn **vertically** at the "
                 "lower end of the primary winding — the loop C+→Np→Q1→Rsense→C− "
                 "is then one column, which is the smallest area a 1.2 W "
-                "converter can have. `below` is the word base.py gives for "
-                "'nearer the ground end', and the primary is the power end"
+                "converter can have. The constraint word is the one base.py "
+                f"gives for 'nearer the ground end', and the ground family is "
+                f"declared on the {gnd_side} "
+                f"(sidePreferences.gnd={gnd_side!r})"
             ),
         ))
         constraints.append(RelativeConstraint(
@@ -551,14 +578,16 @@ class FlybackGrammar:
         # the pair was drawn 285 units from each other — the very scatter this
         # grammar exists to prevent.
         constraints.append(RelativeConstraint(
-            kind=BELOW,
+            kind=_side_kind(gnd_side, BELOW),
             subject=found.sense,
             object=found.switch,
             reason=(
-                f"岳 110 裁决 d: {found.sense} is below {found.switch} — the "
-                "switch drains into it and it returns to the primary ground, so "
-                "the source→sense→ground leg is the ground-side end of the "
-                "primary column, in that order"
+                f"岳 110 裁决 d: {found.sense} is at the ground end of the "
+                f"primary column, {_side_word(_side_kind(gnd_side, BELOW))} "
+                f"{found.switch} — the switch drains into it and it returns to "
+                "the primary ground, so the source→sense→ground leg is the "
+                "ground-side end of the primary column, in that order "
+                f"(sidePreferences.gnd={gnd_side!r})"
             ),
         ))
 
@@ -569,6 +598,7 @@ class FlybackGrammar:
         bindings: list[RoleBinding],
         constraints: list[RelativeConstraint],
         runners: str,
+        power_side: str,
     ) -> None:
         if not found.clamp_d:
             return
@@ -640,21 +670,24 @@ class FlybackGrammar:
                 ),
             ))
             constraints.append(RelativeConstraint(
-                kind=ABOVE,
+                kind=_side_kind(power_side, ABOVE),
                 subject=part_id,
                 object=found.switch,
                 reason=(
-                    f"岳 110 裁决 b: {part_id} is drawn above the switch it "
-                    "clamps — the clamp sits on the rail side, above the drain "
-                    "spike it catches, rather than inside the power loop. The "
+                    f"岳 110 裁决 b: {part_id} is drawn on the **rail side** of "
+                    f"the switch it clamps — "
+                    f"{_side_word(_side_kind(power_side, ABOVE))} the drain "
+                    "spike it catches, rather than inside the power loop; the "
+                    f"rail side is declared as the {power_side} "
+                    f"(sidePreferences.power={power_side!r}). The "
                     "reference is the **switch** and not the transformer on "
-                    "purpose: `above` is measured against the pin the branch "
-                    "hangs off, and a transformer's switch-node pin is at the "
-                    "bottom of its body in every legal pose, so promising "
-                    "'above the transformer' for a branch off that pin is a "
-                    "relation the compiler can only refuse (measured, not "
-                    "assumed — the refusal names the posed pin). The clamp is "
-                    "still tied to the winding by the `near` beside it"
+                    "purpose: the relation is measured against the pin the "
+                    "branch hangs off, and a transformer's switch-node pin is at "
+                    "the bottom of its body in every legal pose, so promising "
+                    "'the rail side of the transformer' for a branch off that "
+                    "pin is a relation the compiler can only refuse (measured, "
+                    "not assumed — the refusal names the posed pin). The clamp "
+                    "is still tied to the winding by the `near` beside it"
                 ),
             ))
 
@@ -666,6 +699,7 @@ class FlybackGrammar:
         constraints: list[RelativeConstraint],
         runners: str,
         out_side: str,
+        gnd_side: str,
     ) -> None:
         bindings.append(RoleBinding(
             role="sec-D",
@@ -706,21 +740,21 @@ class FlybackGrammar:
                 ),
             ))
 
-        # The output filter returns to the secondary ground, which the
-        # presentation puts below (sidePreferences.gnd), so the shunt bodies
-        # leave their rail downward — the same clause 053 sec.3 states for the
-        # RC low-pass's own capacitor.
+        # The output filter returns to the secondary ground, whose side the
+        # presentation declares (`sidePreferences.gnd`) and which this grammar
+        # therefore reads rather than assumes — the same clause 053 sec.3
+        # states for the RC low-pass's own capacitor.
         for part_id in found.output_caps:
             constraints.append(RelativeConstraint(
-                kind=BELOW,
+                kind=_side_kind(gnd_side, BELOW),
                 subject=part_id,
                 object=found.sec_d,
                 reason=(
-                    f"岳 110 裁决 a/f: {part_id} hangs below the rectifier it "
+                    f"岳 110 裁决 a/f: {part_id} hangs off the rectifier it "
                     f"filters — it returns {found.vout} to {found.sec_gnd}, and "
-                    "the ground side is the bottom one (sidePreferences.gn"
-                    "d), so the secondary is a rail on top and its own return "
-                    "underneath"
+                    f"the ground side is the {gnd_side} one "
+                    f"(sidePreferences.gnd={gnd_side!r}), so the secondary is a "
+                    "rail on one edge and its own return on the other"
                 ),
             ))
 
@@ -762,7 +796,9 @@ class FlybackGrammar:
         bindings: list[RoleBinding],
         constraints: list[RelativeConstraint],
         runners: str,
+        in_side: str,
         out_side: str,
+        gnd_side: str,
     ) -> None:
         for part_id in found.divider:
             bindings.append(RoleBinding(
@@ -857,16 +893,20 @@ class FlybackGrammar:
         # directions, which is what "spans" reads as. An earlier version
         # emitted both `left-of` and `right-of` for the same pair, which is a
         # contradiction the compiler can only satisfy by refusing the page.
+        # Which of the two words is "the input half" is the declaration's
+        # (`sidePreferences.input` / `output`), not this file's.
         band_side = LEFT_OF if out_side == "right" else RIGHT_OF
         constraints.append(RelativeConstraint(
             kind=band_side,
             subject=found.opto,
             object=found.error_amp,
             reason=(
-                f"岳 110 裁决 e: the optocoupler is drawn on the output side of "
+                f"岳 110 裁决 e: the optocoupler is drawn on the **input-side "
+                f"half** of the band, {_side_word(band_side)} "
                 f"{found.error_amp} — it is the **only** part this grammar "
                 "allows to cross the isolation band, and it crosses by being "
-                "stated on both sides of it (this relation, and the one below)"
+                "stated on both sides of it (this relation, and the one below) "
+                f"(input {in_side!r} / output {out_side!r} per sidePreferences)"
             ),
         ))
         for part_id in found.compensation:
@@ -879,17 +919,19 @@ class FlybackGrammar:
                     f"**primary** side — the compensation network is the "
                     "controller's local topology, and it is the other half of "
                     "the same crossing: the opto is between the divider and "
-                    "this network, and nothing else is between the two grounds"
+                    "this network, and nothing else is between the two grounds "
+                    f"(input {in_side!r} / output {out_side!r} per "
+                    "sidePreferences)"
                 ),
             ))
             constraints.append(RelativeConstraint(
-                kind=BELOW,
+                kind=_side_kind(gnd_side, BELOW),
                 subject=part_id,
                 object=found.opto,
                 reason=(
                     f"the compensation capacitor returns the COMP node to "
-                    f"{found.pgnd}, and the ground side is the bottom one "
-                    "(sidePreferences.gnd)"
+                    f"{found.pgnd}, and the ground side is the {gnd_side} one "
+                    f"(sidePreferences.gnd={gnd_side!r})"
                 ),
             ))
             constraints.append(RelativeConstraint(
@@ -910,6 +952,7 @@ class FlybackGrammar:
         bindings: list[RoleBinding],
         constraints: list[RelativeConstraint],
         runners: str,
+        gnd_side: str,
     ) -> None:
         if not found.aux_d:
             return
@@ -939,13 +982,14 @@ class FlybackGrammar:
             ),
         ))
         constraints.append(RelativeConstraint(
-            kind=BELOW,
+            kind=_side_kind(gnd_side, BELOW),
             subject=found.aux_c,
             object=found.aux_d,
             reason=(
-                f"the auxiliary capacitor hangs below the rectifier it filters — "
-                f"it returns {found.vcc} to {found.pgnd}, and the ground side is "
-                "the bottom one (sidePreferences.gnd)"
+                f"the auxiliary capacitor hangs off the rectifier it filters on "
+                f"the ground side — it returns {found.vcc} to {found.pgnd}, and "
+                f"that side is the {gnd_side} one "
+                f"(sidePreferences.gnd={gnd_side!r})"
             ),
         ))
         constraints.append(RelativeConstraint(
@@ -1009,15 +1053,48 @@ class _State:
         return net_id if net_id in self.ground else ""
 
 
-def _side_kind(side: str, left: str, right: str) -> str:
-    """The horizontal word for a stated side, defaulting to the left one.
+def _declared_side(
+    presentation: PresentationSpec, role: str, default: str
+) -> str:
+    """The side this page declares for `role`, or the document's default.
 
-    The same resolution `_side_kind` does in the other grammars, and for the
-    same reason: a side preference is a statement about the page, and a page
-    whose input enters from the right is the same drawing mirrored — the word
-    changes, the relation's meaning does not.
+    Read the same way every sibling grammar reads it (`ldo`, `rc_lowpass`,
+    `power_entry`, `voltage_divider`, `ic_periphery`), and with the same
+    fallback: a preference that is not one of `SIDES` is not a statement about
+    the page, so the document default is used instead of guessing.
     """
-    return right if side == "left" else left
+    side = presentation.side_for(role)
+    return side if side in SIDES else default
+
+
+def _side_kind(side: str, default: str) -> str:
+    """The constraint kind that puts something on this side of its anchor.
+
+    Written the way `ldo._side_kind` is written, for the reason 143's drift
+    audit gives: the seven grammars share this helper, and two spellings of it
+    are two behaviours to keep in sync. (This file's earlier version returned
+    *the opposite* horizontal word for a side and had no caller at all — the
+    drift was real and it was dead code, which is how the hardcoded sides
+    survived here while every sibling read the declaration.)
+    """
+    return {
+        "left": LEFT_OF,
+        "right": RIGHT_OF,
+        "top": ABOVE,
+        "bottom": BELOW,
+        "": default,
+    }.get(side, default)
+
+
+def _side_word(kind: str) -> str:
+    """The English word for a constraint kind (the same table `ldo` has)."""
+    return {
+        LEFT_OF: "left of",
+        RIGHT_OF: "right of",
+        ABOVE: "above",
+        BELOW: "below",
+        NEAR: "beside",
+    }[kind]
 
 
 def _missing_class_failures(
@@ -1367,12 +1444,26 @@ def _feedback_readings(
     * the **compensation** — the two-terminal parts from the optocoupler's
       primary-side nets to the primary ground, excluding the sense (which is
       the current-sense, not the loop compensation) and the transformer.
+
+    The **cathode** the reading carries is the net the optocoupler itself
+    shares with the error amplifier (the LED's own node, which is the only net
+    on the secondary that the two have in common), and a reading whose cathode
+    cannot be read is **not emitted** rather than emitted half-formed: a
+    `direct-wire` obligation built from `(sense_tap, "")` names a net that does
+    not exist, and `drawcompiler` then ranks a phantom net into the chain
+    (143 H2 — the empty name also walked straight past
+    `GrammarObligation.__post_init__`, which checked only that the tuple was
+    non-empty, so the net-name half is checked there now too).
     """
     out: list[FlybackReading] = []
-    for opto in _isolation_device(state, sec_gnd, pgnd, transformer):
+    strings = _divider_strings(state, vout, sec_gnd, sec_d)
+    taps = tuple(tap for tap, _arms in strings)
+    for opto in _isolation_device(state, sec_gnd, pgnd, transformer, taps):
         for error_amp in _error_amp_on(state, sec_gnd, opto, transformer):
-            for tap, arms in _divider_strings(state, vout, sec_gnd, sec_d):
-                cathode = _cathode_node(state, error_amp, sec_gnd)
+            for tap, arms in strings:
+                cathode = _cathode_node(state, error_amp, sec_gnd, tap, opto)
+                if not cathode:
+                    continue  # no cathode, no reading: a half one is a lie
                 comp = _comp_node(state, opto, pgnd)
                 out.append(FlybackReading(
                     transformer=transformer,
@@ -1408,7 +1499,11 @@ def _feedback_readings(
 
 
 def _isolation_device(
-    state: _State, sec_gnd: str, pgnd: str, transformer: str
+    state: _State,
+    sec_gnd: str,
+    pgnd: str,
+    transformer: str,
+    taps: tuple[str, ...] = (),
 ) -> list[str]:
     """The part with a pin on the primary ground and on the **LED cathode net**.
 
@@ -1432,19 +1527,31 @@ def _isolation_device(
     non-ground, non-secondary-ground net that is *not* the divider tap (that
     is the cathode node), and the barrier is the part with a pin on it **and**
     a pin on the primary ground, excluding the anchor.
+
+    `transformer` is the **anchor, and it must be the real one**: the anchor
+    is excluded so that a three-winding transformer (which touches both
+    families and every winding's node) is not read as the error amplifier.
+    An earlier caller passed `""` here — meant as "nothing to exclude" — but
+    the exclusion is by id, so nothing *was* excluded: the transformer was
+    then read as the error amplifier, its winding node came back as the
+    "cathode", and the whole barrier question was answered by designator
+    order (143 H1). `taps` are the divider junctions the caller has already
+    read; with none given, every non-ground net of the amplifier stays a
+    candidate, which is the question this function is being asked anyway
+    ("is there a barrier here at all?").
     """
     error_amp = _error_amp_for(state, sec_gnd, transformer)
     if not error_amp:
         return []
-    cathode = _cathode_node(state, error_amp, sec_gnd)
-    if not cathode:
+    cathodes = set(_cathode_candidates(state, error_amp, sec_gnd, taps))
+    if not cathodes:
         return []
     out: list[str] = []
     for part_id in sorted(state.part_nets):
         if part_id in (transformer, error_amp):
             continue
         nets = set(state.part_nets[part_id])
-        if pgnd in nets and cathode in nets:
+        if pgnd in nets and (nets & cathodes):
             out.append(part_id)
     return out
 
@@ -1459,8 +1566,16 @@ def _error_amp_for(
     part sitting *between* the divider and the opto rather than either of
     them. The caller has already found the divider, so this is the last piece
     the loop needs, and it is the same shape `ldo` reads its core.
-    """
 
+    Two things are not small-signal amplifiers and are named rather than
+    inferred: a two-terminal part (an element — its two ends already say what
+    it is) and a part with **four or more nets** (the anchor's own shape: a
+    winding set, an optocoupler, a controller). The anchor is passed in and
+    also excluded by id, but the shape clause is what keeps the answer right
+    when the anchor's id is not known to the caller — which is exactly the
+    slide 143 H1 found, where an empty anchor let the transformer itself be
+    read as the amplifier and the diagnosis then depended on designator order.
+    """
     ground_set = set(state.ground)
     power_set = set(state.power)
     out: list[str] = []
@@ -1468,6 +1583,8 @@ def _error_amp_for(
         if part_id in state.edges or part_id == transformer:
             continue  # two-terminal parts are elements; the anchor is bound
         nets = set(state.part_nets[part_id])
+        if len(nets) >= 4:
+            continue  # the anchor's shape: windings, an opto, a controller
         if sec_gnd not in nets:
             continue
         signal = [
@@ -1479,24 +1596,70 @@ def _error_amp_for(
     return out[0] if out else ""
 
 
-def _cathode_node(state: _State, error_amp: str, sec_gnd: str) -> str:
+def _cathode_candidates(
+    state: _State, error_amp: str, sec_gnd: str, taps: tuple[str, ...] = ()
+) -> list[str]:
+    """The amplifier's nets that can be the LED cathode, sorted.
+
+    Everything except its own ground, the ground family, the power rails and
+    the divider's junction(s): what is left is the node the optocoupler alone
+    drives. The tap is excluded **as the tap** (the caller read it from
+    `_divider_strings`) rather than by the proxy that used to stand in for it
+    — see `_cathode_node` for what that proxy cost.
+    """
+    skip = {sec_gnd, *taps} | set(state.ground) | set(state.power)
+    return [
+        net_id
+        for net_id in sorted(state.part_nets.get(error_amp, ()))
+        if net_id not in skip
+    ]
+
+
+def _cathode_node(
+    state: _State, error_amp: str, sec_gnd: str, tap: str = "",
+    opto: str = "",
+) -> str:
     """The error amplifier's net that is neither its ground nor the divider tap.
 
-    Read as "the net no two-terminal part ties to ground or to the output":
-    the cathode node is the one the opto alone reaches, and anything the
-    divider owns is tied to a rail or to the tap's partner on ground.
+    The clause is the docstring's own: the amplifier sits between the divider
+    and the optocoupler, so its net that is not the tap is the node the
+    optocoupler drives. Earlier versions read it as "the net no two-terminal
+    part ties to ground or to the rail", which is a *proxy* for "is the tap"
+    and a bad one: it is also true of the LED cathode the moment a normal
+    compensation capacitor is drawn across it, so a legitimate type-2 network
+    on the LED erased the whole reading and the grammar refused a circuit that
+    is right (143 H3: `VOUT—C—LED_K` and `LED_K—C—SEC_GND` both became "no
+    isolation barrier"). It also made the answer depend on which nets happened
+    to carry a bypass part, i.e. on the drawing's incidentals rather than on
+    the topology.
+
+    With several nets left over — an amplifier that reads more than one node
+    besides the tap — the net it **shares with the optocoupler** is the
+    cathode (that is what the barrier is made of), then the one nothing ties
+    to a rail or to ground, and only then the id order. The id order is a
+    tie-break, never the reading: 143 H1/H2 are both cases of that order
+    standing in for a judgment.
     """
-    ground_set = set(state.ground)
-    power_set = set(state.power)
-    nets = set(state.part_nets.get(error_amp, ()))
-    for net_id in sorted(nets - {sec_gnd} - ground_set - power_set):
+    candidates = _cathode_candidates(state, error_amp, sec_gnd,
+                                     (tap,) if tap else ())
+    if not candidates:
+        return ""
+    if opto:
+        shared = [net_id for net_id in candidates
+                  if net_id in set(state.part_nets.get(opto, ()))]
+        if shared:
+            return shared[0]
+    if len(candidates) == 1:
+        return candidates[0]
+    rail_set = set(state.ground) | set(state.power)
+    for net_id in candidates:
         tied = [
             other for other in _nets_via(state, net_id, error_amp)
-            if other in ground_set or other in power_set
+            if other in rail_set
         ]
         if not tied:
             return net_id
-    return ""
+    return candidates[0]
 
 
 def _error_amp_on(
@@ -1509,12 +1672,21 @@ def _error_amp_on(
     LED's cathode node). The transformer is excluded — it also touches the
     secondary ground and shares nets with the opto through the LED node in a
     schematic where the two are adjacent, and the anchor is already bound.
+    Two-terminal parts are excluded too, the same clause its twin
+    `_error_amp_for` has always carried ("two-terminal parts are elements"):
+    without it a capacitor across the output and the secondary ground was a
+    candidate error amplifier, and it could *win* — the reading list was
+    sorted by a key that did not name the amplifier, so `C11 < U4` was the
+    whole arbitration (143 H2: an output capacitor bound as the error amp, and
+    the feedback `direct-wire` obligation written as `(FB_SENSE, '')`).
     """
     out: list[str] = []
     opto_nets = set(state.part_nets.get(opto, ()))
     for part_id in sorted(state.part_nets):
         if part_id in (opto, transformer):
             continue
+        if part_id in state.edges:
+            continue  # two-terminal parts are elements
         nets = set(state.part_nets[part_id])
         if sec_gnd not in nets:
             continue
@@ -1916,28 +2088,111 @@ def _reading_key(reading: FlybackReading):
     in every binding's evidence, and the intended way to remove an ambiguity
     is the same as everywhere else in this package: state the module split in
     the presentation.
+
+    The **error amplifier**, the **tap** and the **cathode** are in the key:
+    two readings that agree on the transformer, the switch, the opto and the
+    two grounds are not the same reading, and leaving them out let
+    `list.sort`'s stability decide by *insertion* order — which is the id
+    order of the candidate parts. That is how a capacitor came to be bound as
+    the error amplifier in 143 H2 (the key could not tell the two readings
+    apart, so the tie-break was designator order). A key that names every role
+    makes the tie-break a stated preference rather than an accident of
+    sorting.
     """
     return (
         reading.pgnd, reading.sec_gnd, reading.bus, reading.transformer,
-        reading.switch, reading.opto,
+        reading.switch, reading.opto, reading.error_amp, reading.sense_tap,
+        reading.led_cathode,
+    )
+
+
+def _primary_prefixes(state: _State) -> list[tuple[str, ...]]:
+    """Every `(switch_node, switch, source, transformer, sense, pgnd)` the walk
+    in `_readings` reaches before it needs a second winding end.
+
+    The **same helpers** `_readings` uses, replayed a step at a time so that a
+    refusal can say which step is missing. Nothing here is guessed: the primary
+    ground comes from `_primary_grounds` (the sense's own other end), not from
+    an id sort. 143 H1 is what happens when a refusal guesses instead:
+    `sorted(state.ground)[1]` as "the secondary ground" is a claim about the
+    alphabet, and the branch it produced depended on the id order of the parts.
+    `sense` is `""` when the walk's own `_sense_on` states none, which is how
+    the refusal can tell "the primary stage is not readable" from "the primary
+    stage is fine and something later is missing".
+    """
+    out: list[tuple[str, ...]] = []
+    for switch_node in sorted(state.circuit.net_ids()):
+        for switch in _switches_on(state, switch_node):
+            for source in _sources_of(state, switch):
+                for transformer in _transformers_on(state, switch_node, source):
+                    for pgnd in _primary_grounds(state, source):
+                        out.append((
+                            switch_node, switch, source, transformer,
+                            _sense_on(state, switch, pgnd, source), pgnd,
+                        ))
+    return out
+
+
+def _winding_shaped(state: _State) -> list[str]:
+    """Parts that could be the transformer, by shape alone: four or more nets,
+    one of them power-class and one of them gnd-class.
+
+    Shape, not identity: this is what the first branch of the refusal can say
+    without walking. The two class clauses are what keep an optocoupler or a
+    controller (also four nets) out of the list — an earlier version asked only
+    for the pin count, so a page whose transformer had been deleted reported
+    "no part has four or more nets" while the optocoupler sat there with four
+    (143 H1's sibling: the cheap test has to be a *shape*, too).
+    """
+    power_set = set(state.power)
+    ground_set = set(state.ground)
+    return sorted(
+        part_id
+        for part_id, nets in state.part_nets.items()
+        if len(nets) >= 4
+        and (set(nets) & power_set)
+        and (set(nets) & ground_set)
     )
 
 
 def _no_flyback_failure(circuit: CircuitSpec, state: _State) -> GrammarFailure:
-    """Why no reading was found, naming the four shapes that matter."""
-    wide = sorted(
-        part_id for part_id, nets in state.part_nets.items() if len(nets) >= 4
-    )
+    """Why no reading was found, naming the four shapes that matter.
+
+    Every branch is a question about the **partition**, and none of them is
+    answered by an id order or by a proxy:
+
+    * is there a winding-shaped part at all (`_winding_shaped`)?
+    * are there two ground families?
+    * what does the walk itself reach (`_primary_prefixes`, `_winding_ends`,
+      `_secondary`, `_divider_strings`) — and if the primary stage is readable
+      while no part closes the barrier on any pairing of families the circuit
+      states (`_isolation_device`), say exactly that, and otherwise report
+      which leg of the chain is unread.
+
+    An earlier version answered the barrier question by calling
+    `_isolation_device` with `sorted(state.ground)[1] / [0]` as the two
+    families and `""` as the transformer. The empty string was meant as
+    "nothing to exclude", but the anchor is excluded **by id**, so nothing was
+    excluded: the transformer was read as the error amplifier, its winding
+    node as the LED cathode, and the branch fired for pages whose real fault
+    was elsewhere — "no part closes the feedback loop across the two ground
+    families (PGND, SEC_GND) … Multi-net parts here: T1, U5", denying the
+    barrier while listing the optocoupler that made it. Which branch you got
+    was decided by the id order of the parts (renaming `T1` to `Z9` changed the
+    diagnosis; 143 H1).
+    """
+    wide = _winding_shaped(state)
     if not wide:
         return GrammarFailure(
             category=FAILURE_CIRCUIT_INVALID,
             subject="",
             detail=(
-                "no part in this circuit has four or more distinct nets, so "
-                "there is no transformer here: a flyback's windings are read "
-                "from the net classes on a multi-net part's pins, and every "
-                "part here is a two-terminal element. What is on the page: "
-                f"{_listing(state)}"
+                "no part in this circuit has four or more distinct nets with "
+                "one of them power-class and one gnd-class, so there is no "
+                "transformer here: a flyback's windings are read from the net "
+                "classes on a multi-net part's pins, and every part here is a "
+                "two-terminal element (or a part whose nets do not reach both a "
+                f"rail and a ground). What is on the page: {_listing(state)}"
             ),
             action=(
                 "check the CircuitSpec connections of the transformer — its "
@@ -1965,8 +2220,51 @@ def _no_flyback_failure(circuit: CircuitSpec, state: _State) -> GrammarFailure:
                 "rc-lowpass grammar is the one that fits it"
             ),
         )
-    if not _isolation_device(state, sorted(state.ground)[1],
-                             sorted(state.ground)[0], ""):
+    primaries = _primary_prefixes(state)
+    # The legs, read one at a time by the walk's own helpers. A leg counts as
+    # read only when it produces the piece the step below it needs: the
+    # primary leg is "the sense, the switch, and a winding end on the second
+    # family", because a prefix that dies at `_winding_ends` is a reading of
+    # nothing (the minimal circuit with its sense deleted has such a prefix —
+    # the TL431 read as a switch on the secondary ground — and calling that
+    # leg "read" would be the old mistake again in a new spelling).
+    windings: list[tuple[str, str, str, str]] = []
+    rectified: list[tuple[str, str, str, str, str, str]] = []
+    barrier = False
+    feedback_read = False
+    for (switch_node, _switch, _source, transformer, sense, pgnd) in primaries:
+        if not sense:
+            continue
+        for bus, sec_gnd in _winding_ends(state, transformer, switch_node, pgnd):
+            windings.append((transformer, pgnd, bus, sec_gnd))
+            # The coarse form of the barrier question: the error amplifier's
+            # non-ground net that a part also carries to the primary ground.
+            # No taps are passed — the divider may be exactly what is missing
+            # (that is what this refusal is reporting), and the coarse question
+            # is still a question about the partition rather than about an id
+            # order.
+            if _isolation_device(state, sec_gnd, pgnd, transformer):
+                barrier = True
+            for sec_d, vout, _sec_node in _secondary(
+                state, transformer, sec_gnd, bus
+            ):
+                rectified.append((transformer, pgnd, bus, sec_gnd, vout, sec_d))
+                strings = _divider_strings(state, vout, sec_gnd, sec_d)
+                taps = tuple(tap for tap, _arms in strings)
+                if strings and _isolation_device(
+                    state, sec_gnd, pgnd, transformer, taps
+                ):
+                    feedback_read = True
+    read = [
+        "the primary stage and the winding ends (bus → switch → sense → "
+        "primary ground, and the winding on the second family): "
+        + ("read" if windings else "not read"),
+        "the secondary rectifier (winding → rectifier → output rail): "
+        + ("read" if rectified else "not read"),
+        "the feedback chain (divider → error amplifier → LED cathode): "
+        + ("read" if feedback_read else "not read"),
+    ]
+    if windings and not barrier:
         return GrammarFailure(
             category=FAILURE_CIRCUIT_INVALID,
             subject="",
@@ -1975,7 +2273,13 @@ def _no_flyback_failure(circuit: CircuitSpec, state: _State) -> GrammarFailure:
                 f"families ({', '.join(state.ground)}), so there is no isolation "
                 "barrier: a flyback's regulation crosses optically, and the "
                 "drawing's whole claim — two families, one crossing — needs a "
-                f"part that does it. Multi-net parts here: {', '.join(wide)}"
+                "part that does it. The barrier was looked for on every family "
+                "pairing this circuit states — the primary ground the sense "
+                "returns to, and each ground the transformer's other winding "
+                f"ends on ({', '.join(f'{p}→{s}' for _t, p, _b, s in windings)}) "
+                "— and on each of them there is no part that both sits on the "
+                "primary ground and reaches the node the error amplifier drives "
+                f"(the LED cathode). What is on the page: {_listing(state)}"
             ),
             action=(
                 "check the feedback chain end to end: the divider's junction "
@@ -1991,11 +2295,15 @@ def _no_flyback_failure(circuit: CircuitSpec, state: _State) -> GrammarFailure:
         subject="",
         detail=(
             "this circuit has a transformer-shaped part (" + ", ".join(wide)
-            + ") and two ground families, but the flyback chain does not close: "
-            f"no switch drains a switch node on the primary winding to a sense "
-            f"resistor that returns to the primary ground, or no rectifier "
-            f"carries a secondary winding to the output. What is on the page: "
-            f"{_listing(state)}"
+            + ") and two ground families, but the flyback chain does not close, "
+            "so no reading of it as a flyback exists. The walk's own steps, "
+            "read as far as the partition allows — " + "; ".join(read)
+            + ". A leg that is not read is what has to be repaired: the bus "
+            "net's class (power), the switch between the switch node and the "
+            "sense, the sense between the source and the primary ground, the "
+            "secondary rectifier between the winding's hot node and the output, "
+            "or the divider→error-amplifier→LED-cathode chain. What is on the "
+            f"page: {_listing(state)}"
         ),
         action=(
             "check the four connections the walk reads: the bus net's class "
@@ -2053,6 +2361,8 @@ def _obligations(
     reading: FlybackReading,
     in_side: str,
     out_side: str,
+    gnd_side: str,
+    power_side: str,
 ) -> list[GrammarObligation]:
     """The three topologies that must be readable without chasing labels.
 
@@ -2079,7 +2389,8 @@ def _obligations(
             reason=(
                 "岳 110 裁决 c/d: the primary loop bus→switch node→source is "
                 "wired on the page, not spelled with labels (input side "
-                f"{in_side!r}, power side above per sidePreferences) — the loop "
+                f"{in_side!r}, power side {power_side!r} per sidePreferences) — "
+                "the loop "
                 "a 1.2 W converter's whole EMI story lives in must be followable "
                 "by eye. The **return** through the primary ground is its own "
                 "wiring, reached from the sense, and is not named in this chain: "
@@ -2141,10 +2452,24 @@ def _obligations(
             nets=(reading.sec_gnd,),
             reason=(
                 "岳 110 裁决 f/g: the secondary family is expressed one way "
-                "throughout, and in a way that never reads as the primary's — "
-                "the two grounds are the isolation statement of the whole "
-                "drawing, and a reader who cannot tell them apart is not "
-                "reading isolation at all"
+                "throughout — and that half is checked: the compiler's "
+                "`uniform-gnd` finding counts the styles of **this** net "
+                "(`_uniform_gnd_finding`) and refuses a family that mixes a "
+                "symbol with a label. The ruling's other half — that the "
+                "secondary family never reads as the primary's — is stated "
+                "here because it is what the drawing must do (two grounds a "
+                "reader cannot tell apart are not an isolation statement at "
+                "all), and it is stated **as unchecked**, because a promise "
+                "written like a verified one is the same falsehood as a wrong "
+                "binding (143 H7). Nothing checks it today and nothing can: the "
+                "compiler's finding looks at one net at a time, so it cannot "
+                "see that the two families share a symbol, and `gnd_flag` "
+                "(`CompileBudget`) hands every gnd-class net the *same* flag "
+                "ref, so there is no way to draw them differently. Making it "
+                "checkable needs a comparison of the two families' style sets "
+                "in `drawcompiler._uniform_gnd_finding` plus a per-net flag ref "
+                "in `CompileBudget` — both outside this module, so this batch "
+                "reports the gap instead of pretending the clause holds"
             ),
         ),
     ]

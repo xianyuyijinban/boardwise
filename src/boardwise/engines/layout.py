@@ -2,10 +2,21 @@
 
 Pure geometry: no bridge, no editor, no I/O. Everything is a function over
 plain dataclasses so unit tests pin the rules exactly. All coordinates are
-*editor canvas* units (y grows downward, origin top-left) — the space the
-bridge actions speak. Symbol offsets arrive in *file* space (y up); callers
-convert once at the boundary
-(:func:`boardwise.engines.generate.canvas_pin_offsets`).
+*editor canvas* units — and **one canvas unit is 10 mil = 0.254 mm (0.01 in)**,
+not one mil (`boardwise.core.symbolprofile.Box`: "An axis-aligned box in canvas
+units (0.01 in) … one canvas unit is 10 mil"). The size matters wherever a
+distance here is read against a datasheet, a spot rule or a human's own page.
+
+The canvas **y grows upward** (010c, measured 2026-09-18; `core/geometry.py`
+calls it the y-up canvas frame and `engines/replay.py`'s M3 measurement is what
+settled it — a marker placed at a carve's centre landed in the upper-right blank
+while its y-mirrored twin landed inside the real title block in the
+lower-right). The sheet's origin is therefore its **bottom-left** corner and
+:data:`TITLE_BLOCK` sits at the ``y0`` end. This module does **no** y
+conversion: the parser negates the `.epro2`'s stored axis once at its own
+boundary and hands over canvas coordinates;
+:func:`boardwise.engines.generate.canvas_pin_offsets` is the name of that
+boundary and is an identity today (see its own docstring).
 
 The five hard constraints (task revision 3) and where they live:
 
@@ -149,9 +160,18 @@ GRID = 5.0
 #:   *trapped* — the two-cell lane on the far side is already occupied by a
 #:   third wire in all 49 cases — so paying more only buys congestion.
 #:
-#: **Monotone non-increasing with distance**, and that is the one structural
-#: property the search relies on: standing further from every foreign wire must
-#: never cost more. A table that rose with distance would be a soft wall.
+#: **Monotone non-increasing with the ring index**, and *that* is what the table
+#: promises: standing further from a wire must never cost more, so a table that
+#: rose with distance would be a soft wall.
+#:
+#: **Careful — the price is monotone in the *stored* ring, not in the true
+#: distance** (143e, D5). The map keeps the ring of the *first* wire that came
+#: within range rather than the nearest one (see the write-up at the write site
+#: in :func:`_route_pass`), so a stale cell can be priced free while its
+#: neighbour is priced, and the golden board has 6258 such cells. What the
+#: search actually relies on is weaker and still true: **the price is a function
+#: of the target cell alone**, with nothing read about the step into it — which
+#: is why :func:`_bfs_chain` may return as soon as it pops the target.
 PROXIMITY_COST: tuple[int, ...] = (0, 1, 0)
 
 #: The largest proximity :data:`PROXIMITY_COST` can price. A cell beyond it is
@@ -465,7 +485,10 @@ def _pack(
     for designator in order:
         rel = _relative_box(offsets.get(designator, {}))
         if rel is None:
-            # pin-less: cannot be bounded; park it and let the validator speak
+            # pin-less: cannot be bounded, so there is no box for the validator to
+            # speak about — it is *structurally invisible* to constraint 1 (143e,
+            # D3). Park it on the cursor and report it in the plan's notes
+            # instead; where it lands is the packing's answer and nothing else's.
             placements.append(Placement(designator, cursor_x, row_y, None))
             cursor_x += COL_AISLE * 2
             if not rows:
@@ -509,6 +532,13 @@ def _widen_gaps(
     an aisle that needed room and a row that no longer fits the sheet — the
     second is :func:`validate_full`'s to report.
 
+    A **pin-less** part (no offsets, so no keep-out box: :func:`component_bbox`
+    answers ``None``) is one of those boxes too, and it keeps the base aisle in
+    front of it here exactly as in the plain packing — until 143e/D3 it did not,
+    because the cursor semantics differ between the two walkers (see the branch
+    below). It is also the only part the validator is structurally blind to, so
+    where it lands is this function's whole answer for it.
+
     **Two gaps are deliberately left at their base width** (141, measured):
 
     * the strip between the frame and the first column. Its demand as counted
@@ -546,9 +576,23 @@ def _widen_gaps(
         for designator in row:
             rel = _relative_box(offsets.get(designator, {}))
             if rel is None:
-                # pin-less: cannot be bounded; parked exactly where the plain
-                # packing parks it, and the validator speaks about it there
-                cursor_x = snap(FRAME + BOX_GAP) if previous is None else cursor_x
+                # pin-less: cannot be bounded, so it gets no keep-out box and
+                # the validator cannot see it at all. It is therefore parked
+                # where the plain packing parks it, *with the base aisle in
+                # front of it*: `_pack` adds ``COL_AISLE`` as it leaves a
+                # bounded box, while the cursor here stops on that box's right
+                # edge and only advances by a gap before the next bounded box —
+                # so without the line below a pin-less part in the middle of a
+                # row was emitted flush against its neighbour's box, zero aisle
+                # (143e, D3: measured x 120 -> 80 on the reproduction board,
+                # i.e. it sat exactly on U's right edge, 80, and the widened
+                # page's ``U|V`` aisle demand was spent on the wrong side).
+                # Nothing is rearranged here either: the part keeps its row,
+                # its order and its neighbour.
+                if previous is None:
+                    cursor_x = snap(FRAME + BOX_GAP)
+                elif _relative_box(offsets.get(previous, {})) is not None:
+                    cursor_x = snap(cursor_x + COL_AISLE)
                 placements.append(Placement(designator, cursor_x, row_y, None))
                 cursor_x = snap(cursor_x + COL_AISLE * 2)
                 previous = designator
@@ -1217,8 +1261,35 @@ def _route_pass(
         # the fence :data:`PROXIMITY_RANGE` draws. Beyond it the search sees
         # plain free space — a cell two grids from any wire is not what a reader
         # has trouble telling apart, and pricing it would only make the search
-        # detour forever. ``setdefault`` keeps the *nearest* wire's ring, and
-        # walking the rings inside-out means the first hit is the tightest.
+        # detour forever.
+        #
+        # **``setdefault`` is first-writer-wins, not nearest-wins** (143e, D5).
+        # The sentence that used to stand here claimed the map keeps the nearest
+        # wire's ring, because walking the rings inside-out means the first hit
+        # is the tightest — and that is **false**: the map is written once per
+        # net over ``routed_axis``, which only ever grows, so a cell an *early*
+        # net's wire reached at ring 2 keeps ring 2 even after a *later* net's
+        # wire is drawn right beside it at ring 1. Later wires never refresh it,
+        # and the price
+        # :func:`price` reads is therefore the ring of the *first* wire that came
+        # within range — never more expensive than the truth, and measurably
+        # cheaper when it is stale.
+        #
+        # Measured (143e, D5): on the golden board 6258 priced cells are one ring
+        # too cheap (stored 2 / true 1, i.e. priced as free space while they sit
+        # in the very lane :data:`WIRE_CLEARANCE` forbids); on a synthetic 3-net
+        # board, 4 cells. Correcting the map to the true nearest ring takes the
+        # golden plan's ``WIRE_TOO_CLOSE`` count from 34 to **35** — 35 -> 36
+        # findings in all — so the staleness is *not* what keeps the count down,
+        # and "fixing" it is not a free correctness win.
+        # (Re-measured after this batch's edits with a content-anchored probe:
+        # the original one hooks ``_route_pass`` by line number, which these
+        # comments moved — it now reports "corrected at 0 points" and its
+        # ``fix=True`` leg measures nothing. See
+        # `outputs/143_dig/143e_fix/measure_d5_ring.py`.)
+        # It is left as it is on purpose: this is a statement of
+        # what the numbers mean, not a claim that they are prices of the nearest
+        # wire. Re-measure before trusting either reading.
         for ring, offsets in enumerate(_RING_OFFSETS, start=1):
             for (i, j) in list(routed_axis):
                 for di, dj in offsets:
@@ -1334,7 +1405,14 @@ def _point_on_segment(point: tuple[float, float], seg: Segment, eps: float = 0.5
 ENDPOINT_OVERHANG_TOLERANCE = 10.0
 
 #: Minimum gap between two *different* nets' wires running alongside each
-#: other, in canvas units (1 unit = 1 mil = 0.0254 mm).
+#: other, in canvas units — **one canvas unit = 10 mil = 0.254 mm** (0.01 in;
+#: `boardwise.core.symbolprofile.Box`), so 10 units is 100 mil = 2.54 mm.
+#:
+#: The factor was written here as one unit to one mil (0.0254 mm) until
+#: 143e/D4. The **measurement** below (10 units between the human's own parallel
+#: wires) is unaffected — 10 is 10 whatever a unit is called — only the
+#: millimetre gloss was wrong by 10x, and it is exactly the gloss a reader
+#: compares against a datasheet or a PCB clearance rule.
 #:
 #: **House rule pending 岳's confirmation** (136), the same status
 #: :data:`~boardwise.engines.generate.LONG_NET_LABEL_UNITS` carries. 10 units
@@ -1487,7 +1565,14 @@ def validate_full(
 
     ``frame`` / ``title_block`` override the calibration constants with
     *measured* geometry (task 006b: the target page's own sheet bbox and the
-    ratio-derived keep-out). Defaults keep the solver path unchanged.
+    ratio-derived keep-out). The default is the sheet **inset by**
+    :data:`FRAME` on every side — not the raw sheet rectangle (143e, D6): FRAME
+    is documented as "keep-out between anything (boxes, wire ends) and the sheet
+    edge" and constraint 1 as "placement inside the frame", while this function
+    used to compare against ``Rect(0, 0, SHEET_WIDTH, SHEET_HEIGHT)`` and so
+    said nothing about the last 10 units before the edge — the band
+    :func:`_widen_gaps` can push a widened row into, precisely because it
+    delegates that check here.
 
     ``annotation_points`` are the positions of the plan's flags / labels: a
     wire endpoint that carries a net annotation is a legal terminal (that is
@@ -1495,7 +1580,11 @@ def validate_full(
     touch its wire, so the wire is expected to end there).
     """
     violations: list[Violation] = []
-    sheet = frame if frame is not None else Rect(0.0, 0.0, SHEET_WIDTH, SHEET_HEIGHT)
+    sheet = (
+        frame
+        if frame is not None
+        else Rect(FRAME, FRAME, SHEET_WIDTH - FRAME, SHEET_HEIGHT - FRAME)
+    )
     boxes = [(p.designator, p.bbox) for p in placements if p.bbox]
     title = title_block if title_block is not None else Rect(*TITLE_BLOCK)
 
@@ -1700,45 +1789,96 @@ def validate_full(
                     )
 
     # --- constraints 4/5: annotations on-wire and clear
+    #
+    # The anchors are the ones the caller names: by default the *router's* own
+    # attach point per route, which is what this check has always measured — but
+    # see :func:`annotation_anchor_violations`, which is the single ruler for
+    # this constraint and which :func:`boardwise.engines.generate.generate_plan`
+    # calls with the anchors the plan really draws (143e, D1: under ``auto`` the
+    # label is moved off ``attach`` by ``clear_label_point``, so measuring
+    # ``attach`` here was measuring a point nothing is drawn at).
     for route in routes:
-        if route.attach is None:
+        if route.attach is None and route.kind != "wire":
             # pure wire carriers (replays of older generators) carry no
             # annotation of their own — only annotation-bearing routes
             # must have an on-wire point
-            if route.kind != "wire":
-                violations.append(
-                    Violation(
-                        "NO_ATTACH_POINT",
-                        f"net {route.net}",
-                        "the router found no on-wire attach point",
-                    )
+            violations.append(
+                Violation(
+                    "NO_ATTACH_POINT",
+                    f"net {route.net}",
+                    "the router found no on-wire attach point",
                 )
-            continue
-        ax, ay = route.attach
+            )
+    violations.extend(
+        annotation_anchor_violations(
+            model,
+            routes,
+            placements,
+            [
+                (route.net, route.attach[0], route.attach[1])
+                for route in routes
+                if route.attach is not None
+            ],
+        )
+    )
+    return violations
+
+
+def annotation_anchor_violations(
+    model: DesignModel,
+    routes: list[RoutedNet],
+    placements: list[Placement],
+    anchors: list[tuple[str, float, float]],
+) -> list[Violation]:
+    """Constraints 4 and 5, measured at the annotation anchors given.
+
+    One implementation for every caller, because two rulers always disagree
+    (the rule the module states where :func:`annotation_box` is defined):
+
+    * :func:`validate_full` feeds it the router's ``route.attach`` per net — the
+      historical ruler, kept for the replay path and what it has always checked;
+    * :func:`boardwise.engines.generate.generate_plan` feeds it the anchors the
+      **plan actually draws**, which is a different point whenever
+      :func:`clear_label_point` has moved a name, and *no* point at all for nets
+      it leaves unnamed. Measuring the router's attach point there was measuring
+      something that does not exist on the page (143e, D1).
+
+    Each ``(net, x, y)`` must sit on one of that net's own wire segments
+    (``FLAG_NOT_ON_WIRE``: the editor does not treat an overlapping marker and a
+    pin coordinate as a connection, so a floating name is not merely ugly) and
+    must keep :data:`LABEL_CLEARANCE` from every **foreign** component box
+    (``LABEL_TOO_CLOSE``: beside its own net's part is normal, on a stranger's is
+    not).
+    """
+    violations: list[Violation] = []
+    boxes = [(p.designator, p.bbox) for p in placements if p.bbox]
+    by_net = {route.net: route for route in routes}
+    for net_name, x, y in anchors:
+        route = by_net.get(net_name)
         segs = [
-            Segment(px, py, qx, qy, route.net)
-            for poly in route.polylines
+            Segment(px, py, qx, qy, net_name)
+            for poly in (route.polylines if route else [])
             for (px, py), (qx, qy) in zip(poly, poly[1:])
         ]
-        if not any(_point_on_segment(route.attach, s) for s in segs):
+        if not any(_point_on_segment((x, y), s) for s in segs):
             violations.append(
                 Violation(
                     "FLAG_NOT_ON_WIRE",
-                    f"net {route.net}",
-                    f"annotation at ({ax:.0f},{ay:.0f}) floats off the net's wires",
+                    f"net {net_name}",
+                    f"annotation at ({x:.0f},{y:.0f}) floats off the net's wires",
                 )
             )
-        net = model.nets.get(route.net)
+        net = model.nets.get(net_name)
         members = {des for des, _pin in net.pins} if net else set()
         for des, box in boxes:
             if des in members:
                 continue
-            if box.distance_to_point(ax, ay) < LABEL_CLEARANCE:
+            if box.distance_to_point(x, y) < LABEL_CLEARANCE:
                 violations.append(
                     Violation(
                         "LABEL_TOO_CLOSE",
-                        f"net {route.net}",
-                        f"annotation at ({ax:.0f},{ay:.0f}) is within "
+                        f"net {net_name}",
+                        f"annotation at ({x:.0f},{y:.0f}) is within "
                         f"{LABEL_CLEARANCE:.0f} of component {des}'s box",
                     )
                 )

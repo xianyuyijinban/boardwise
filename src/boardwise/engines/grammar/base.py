@@ -406,6 +406,19 @@ class GrammarObligation:
                 f"obligation {self.kind!r} names no net — an obligation is "
                 "about a net, and one that names none cannot be checked"
             )
+        # Every name has to be a real net, not just "a non-empty tuple": a
+        # `direct-wire` written as `('FB_SENSE', '')` passed this constructor
+        # and then walked on — the compiler ranked the empty name into the
+        # chain and dropped the real cathode net out of it (143 H2). The
+        # constructor is the last place where the emptiness is unambiguously a
+        # bug rather than a modelling choice, so it is caught here.
+        empty = [index for index, net_id in enumerate(self.nets) if not net_id]
+        if empty:
+            raise GrammarError(
+                f"obligation {self.kind!r} names an empty net at index "
+                f"{empty[0]} — every entry of `nets` is a net id, and an empty "
+                "one is a name no circuit can declare"
+            )
         if not self.reason:
             raise GrammarError(f"obligation {self.kind!r} has no reason")
 

@@ -112,6 +112,7 @@ from boardwise.core.circuitspec import CircuitSpec
 from boardwise.core.designintent import DesignIntent, IntentSource
 from boardwise.core.geometry import transform_point
 from boardwise.core.layoutplan import (
+    DOWNGRADE_NOTE_PREFIX,
     LayoutEvidence,
     LayoutJunction,
     LayoutLabel,
@@ -168,6 +169,7 @@ from .grammar.base import (
     ADJACENT,
     BELOW,
     DIRECT_WIRE,
+    FAILURE_CIRCUIT_INVALID,
     FAILURE_FACTS_MISSING,
     FAILURE_LAYOUT_UNSAT,
     FAILURE_PRESENTATION_POOR,
@@ -2081,19 +2083,32 @@ def _dot(point: tuple[float, float], direction: tuple[float, float]) -> float:
 
 
 def _lock_pose_failures(ctx: _Context) -> list[GrammarFailure]:
-    """A lock whose pose the symbol does not declare is reported, never bent.
+    """A lock whose rotation the symbol cannot be drawn in is reported, not bent.
 
     053 sec.5 scenario 12: the engineer's decision is the one input the compiler
     may not quietly ignore, and a rotation the symbol cannot be drawn in is a
     conflict between the lock and the library — `presentation-poor`, because the
     intent is what has to change, with both repairs named.
+
+    **A lock names a rotation, and only a rotation.** :class:`UserLock` carries
+    no mirror, so the rotation counts when the symbol declares it *either* way
+    round: the mirrored-only symbol is a pose the compiler can draw the lock in,
+    and :func:`_locked_pose` picks it (the unmirrored pose when there is one).
+    The old test asked only ``allows(rotation, False)`` and then printed the
+    symbol's own pose list, which contains the mirrored pose it had just called
+    impossible — "locks the part at rotation 90°, which 'R0402' does not allow
+    (its poses are 0, 90+mirror)" contradicted itself on one line. What is left
+    here is the honest refusal: no pose of that rotation exists at all.
     """
     out: list[GrammarFailure] = []
     for lock in ctx.presentation.user_locks:
         profile = ctx.book.get(_symbol_ref(ctx, lock.part_id))
         if profile is None:
             continue
-        if profile.allows(lock.rotation, False):
+        if (
+            profile.allows(lock.rotation, False)
+            or profile.allows(lock.rotation, True)
+        ):
             continue
         out.append(GrammarFailure(
             category=FAILURE_PRESENTATION_POOR,
@@ -2101,7 +2116,7 @@ def _lock_pose_failures(ctx: _Context) -> list[GrammarFailure]:
             detail=(
                 f"{LOCK_PREFIX}[{lock.part_id}] locks the part at rotation "
                 f"{lock.rotation:g}°, which {profile.symbol_ref!r} does not allow "
-                "(its poses are "
+                "in either mirroring (its poses are "
                 + ", ".join(pose.label() for pose in profile.poses)
                 + ")"
             ),
@@ -2109,7 +2124,8 @@ def _lock_pose_failures(ctx: _Context) -> list[GrammarFailure]:
                 f"relax {LOCK_PREFIX}[{lock.part_id}].rotation to one of the "
                 "symbol's poses, or use a symbol that allows the locked "
                 "orientation — the lock is honoured exactly or reported, never "
-                "snapped"
+                "snapped (a lock names a rotation; the mirroring is this "
+                "compiler's to choose)"
             ),
         ))
     return out
@@ -2323,11 +2339,22 @@ def _lattice_residue(
 ) -> tuple[float, float] | None:
     """The lattice offset every pin tip shares, or ``None`` when they disagree.
 
-    Locks are honoured exactly, so a locked part may sit off the zero-origin
-    lattice; the compiler then compiles on the lattice the locks put the tips on
-    — as long as *one* lattice fits them all. Two locks on different residues
-    cannot both be honoured by a grid search, and that is reported rather than
-    silently snapped (a snapped lock is a moved lock).
+    The points handed in are each part's pin tips under its own pose with the
+    origin at ``(0, 0)`` (:func:`_place` builds them that way), so this measures
+    the **symbols' own pin pitches** modulo the grid. It runs before any lock is
+    applied and no lock coordinate enters it: the residue decides which offset
+    the *unlocked* origins are snapped onto, and a locked part keeps its own
+    locked coordinates on top of that, so a lock never has to share the residue
+    and can never be what this refusal is about.
+
+    The docstring used to claim the reverse — "the compiler then compiles on the
+    lattice the locks put the tips on", "two locks on different residues cannot
+    both be honoured … and that is reported" — and :func:`_place` repeated it in
+    the refusal text, which named locks a spec need not contain at all (143's
+    witness: a spec with `userLocks: []`, refused by "the locked positions put
+    tips on different residues"). The measurement is right and the words are now
+    the measurement's own. A lock-residue check is *not* implemented here and is
+    not claimed: this refusal is about the symbols.
     """
     residue: list[float | None] = [None, None]
     for point in points:
@@ -2344,6 +2371,49 @@ def _lattice_residue(
     return (residue[0] or 0.0, residue[1] or 0.0)
 
 
+def _locked_pose(
+    ctx: _Context, part_id: str, accepted: Sequence[SymbolPose]
+) -> SymbolPose | None:
+    """The pose a lock pins this part to, or ``None`` when it pins none.
+
+    A lock names a **rotation** (there is no mirror field to name, and
+    :func:`_lock_pose_failures` refuses only a rotation the symbol cannot be
+    drawn in *at all*), so the pose returned is of that rotation: the
+    **unmirrored** one when the accepted set has it, otherwise the mirrored one,
+    because the mirroring is an engineering decision the lock did not state and
+    the compiler is free to reach the rotation the way the symbol's geometry
+    allows.
+
+    When **no** accepted pose has that rotation the lock is still obeyed: the
+    symbol's own declared pose of that rotation is used, and the relation the
+    placement then breaks is reported by :func:`_relation_failures` — the
+    `presentation-poor` conflict between the lock and the grammar, naming the
+    lock and the relation (053 sec.5 scenario 12: honoured exactly or reported,
+    never silently snapped).
+
+    That second half is what the compiler was missing. The pose used to be
+    ``accepted[min(variant.pose_index, len-1)]`` — a single global index, with
+    the lock's rotation checked by :func:`_lock_pose_failures` and then never
+    read. A lock whose rotation sat past index 1 of its own accepted set (the
+    real flyback's ``C6``, whose ``90`` is index 2) could therefore never be
+    drawn: every variant drew the pose at the base rungs, the gate refused each
+    one for violating the lock, and the input was reported as a *compiler-side
+    geometry problem* — while the pose the lock asked for sat in the compiler's
+    own accepted set the whole time. The 121c locks passed only because they
+    were copied off a plan whose poses were ``accepted[0]`` by construction.
+    """
+    lock = ctx.locked(part_id)
+    if lock is None:
+        return None
+    for source in (accepted, ctx.profile(part_id).poses):
+        unmirrored = [pose for pose in source if not pose.mirror]
+        mirrored = [pose for pose in source if pose.mirror]
+        for pose in (*unmirrored, *mirrored):
+            if pose.rotation == lock.rotation:
+                return pose
+    return None
+
+
 def _place(
     ctx: _Context, variant: _Variant
 ) -> tuple[_Placement | None, GrammarFailure | None]:
@@ -2353,15 +2423,23 @@ def _place(
     the two parts' own extents plus a wiring channel, scaled by the ladder rung;
     every branch is placed from the owner's pin it shares a net with; a free part
     (one the grammar bound to nothing) goes on a shelf past the chain so the
-    drawing still shows it. Locked parts take their lock exactly, and the chain
-    is translated so the unlocked parts keep their relations to it.
+    drawing still shows it. Locked parts take their lock exactly — place *and*
+    rotation (:func:`_locked_pose`) — and the chain is translated so the unlocked
+    parts keep their relations to it.
     """
-    poses = {
-        part_id: ctx.accepted[part_id][
-            min(variant.pose_index, len(ctx.accepted[part_id]) - 1)
-        ]
-        for part_id in ctx.accepted
-    }
+    poses: dict[str, SymbolPose] = {}
+    for part_id, accepted in ctx.accepted.items():
+        # `_prepare` records a refusal for every slot whose accepted set is
+        # empty and `compile` returns on it, so this is an invariant of the
+        # stage rather than a case to handle: say so here instead of indexing
+        # `accepted[-1]` (the latent IndexError 143 dug up, one line away from
+        # the real defect).
+        assert accepted, part_id
+        pinned = _locked_pose(ctx, part_id, accepted)
+        poses[part_id] = (
+            pinned if pinned is not None
+            else accepted[min(variant.pose_index, len(accepted) - 1)]
+        )
     boxes = {
         part_id: _part_box(ctx.profile(part_id), poses[part_id])
         for part_id in ctx.slots
@@ -2379,12 +2457,15 @@ def _place(
             detail=(
                 "the parts' pin tips do not share one compilation lattice of "
                 f"{ctx.budget.grid:g} units, so a grid search cannot reach them "
-                "all: the locked positions put tips on different residues"
+                "all: these symbols' own pin pitches disagree modulo the grid "
+                "(measured on each symbol's pins with its origin at (0, 0), so "
+                "no lock is part of this measurement)"
             ),
             action=(
-                "move the locks onto one lattice, or lower budget.grid to a "
-                "divisor of the coordinates involved — the compiler searches a "
-                "lattice, and it will not snap a locked part to one"
+                "lower budget.grid to a divisor of the pin-tip coordinates "
+                "involved, or use symbols whose pins land on one lattice — the "
+                "compiler searches a lattice and moves parts to it, so a pin "
+                "that is not on any shared lattice cannot be reached"
             ),
         )
 
@@ -5050,12 +5131,87 @@ def _flag_plan(
 
     The ref is derived from the net, not from a scenario: the ground flag is the
     budget's `gnd_flag`, a rail's is `power_flag_prefix` + the net id. A library
-    that does not carry it is not a failure — the net is then expressed with a
-    label, and `uniform-gnd` is what checks that one net does not end up mixing
-    the two styles.
+    that does not carry it is not a failure — the net falls back to being
+    *wired* (:func:`_flag_wire_fallback`), which is what this host can express;
+    `uniform-gnd` is what checks that one net does not end up mixing two styles.
+
+    The docstring used to end "the net is then expressed with a label", and that
+    sentence was the F1 defect written down as a design: this host cannot place a
+    netlabel (029), so a label-only expression left a multi-pin net with **no
+    conductor on the canvas** while the plan's own verdict said `pass`.
     """
     ref = ctx.budget.gnd_flag if cls == "gnd" else f"{ctx.budget.power_flag_prefix}{net_id}"
     return (ctx.book.get(ref), ref)
+
+
+def _net_class(ctx: _Context, net_id: str) -> str:
+    """The CircuitSpec's class for a net (``""`` when the net is unknown)."""
+    net = ctx.circuit.net(net_id)
+    return net.cls if net is not None else ""
+
+
+def _missing_flag_symbol(ctx: _Context, net_id: str) -> bool:
+    """Is this net a flag-style net whose flag symbol the library does not carry?
+
+    Read through :func:`_flag_plan`, so the answer is the same one the flag
+    expression and 069 sec.6's rail-flag pass use: `gnd_flag` for a ground and
+    `power_flag_prefix + net` for a rail.
+    """
+    profile, _ref = _flag_plan(ctx, net_id, _net_class(ctx, net_id) or "gnd")
+    return profile is None
+
+
+def _flag_wire_fallback(
+    ctx: _Context, net_id: str, expression: _Expression
+) -> tuple[_Expression, str]:
+    """The wire expression for a flag net the library has no symbol for (143 F1).
+
+    The fallback is a **wire**, not a label, and the difference is not cosmetic:
+    a label is a conductor in this compiler's offline model (that is how
+    `readability.derive_netlist` reads the plan) but the host has no way to place
+    one — 029 measured `sch.place_netlabel` unusable, and `draw apply` writes
+    `draw_wires` and `draw_flags` and nothing else. A multi-pin net drawn as
+    labels alone is therefore a net the editor sees as several unnamed islands:
+    the plan's verdict reads `pass`, `drawapply._postconditions` promises "the
+    editor's own netlist holds these pins as one net", and no landing can ever
+    satisfy it. 121c's delivered plan is exactly this — `PGND` with 5 members and
+    0 segments, 0 flags (143's F1 witness, measured on the artifact).
+
+    A wire carries the net's own name in this host (`sch.place_wire` net=…,
+    029-c), so the netlist gets the name and the pins are one node. The
+    expression keeps `detached`/`pivot`, so 069 sec.2's split form still applies
+    (the rest of the net is wired; the pads the body separates are named at their
+    own stubs).
+
+    The note it returns carries :data:`DOWNGRADE_NOTE_PREFIX`, which is how the
+    degradation reaches the change plan's ``downgrades`` list — the reader who
+    authorises the plan is told they did not get a flag.
+    """
+    cls = _net_class(ctx, net_id) or "gnd"
+    _profile, ref = _flag_plan(ctx, net_id, cls)
+    downgraded = _Expression(
+        net=expression.net,
+        style="wire",
+        points=expression.points,
+        reason=(
+            f"the library carries no flag symbol {ref!r} for this {cls}-class"
+            f" net, so it is drawn as a wire instead: the wire states the net's "
+            "name in the editor's own netlist (`sch.place_wire` net=…), which is "
+            "the only expression this host can carry out, and a label would name "
+            "the net nowhere (029)"
+        ),
+        detached=expression.detached,
+        pivot=expression.pivot,
+    )
+    note = (
+        DOWNGRADE_NOTE_PREFIX
+        + f"net {net_id}: its class says it is expressed by a flag, and the "
+        f"library carries no flag symbol {ref!r} — the net is drawn as a wire "
+        f"instead, with the net's name on the wire itself, and it keeps "
+        f"{len(expression.points)} pin(s). The drawing you are authorising has "
+        "no flag for this net"
+    )
+    return downgraded, note
 
 
 def _compress(points: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
@@ -5874,8 +6030,34 @@ def _build_candidate(
              for _, point in expression.points],
         ),
     )
+    #: Nets the class says are flags but the library carries no symbol for, so
+    #: they are drawn as wires instead (143 F1). They are remembered because the
+    #: wire path's own "could not route it" answer is a *label*, and for these
+    #: nets that answer is forbidden: a label is a conductor only in this
+    #: compiler's offline model — 029 measured that this host cannot place a
+    #: netlabel at all, and `draw apply` writes wires and flags, nothing else.
+    #: A label-only net is therefore a net with **no conductor on the canvas**.
+    flag_downgraded: set[str] = set()
     for net_id in _net_order(ctx, expressions):
         expression = expressions[net_id]
+        if (
+            expression.style == "flag"
+            # A one-pin net has nothing to conduct: its content *is* its name, so
+            # the label fallback below stays what it is. The invariant this
+            # guards is "a net with more than one pin has a conductor".
+            and len(expression.points) > 1
+            and _missing_flag_symbol(ctx, net_id)
+        ):
+            expression, downgrade_note = _flag_wire_fallback(
+                ctx, net_id, expression
+            )
+            # Written back, because the passes after the loop (069 sec.7's rail
+            # flag, the 088b ground outlet) read `expressions[net_id]` — a local
+            # rebinding alone would hang a flag on a net this pass no longer
+            # draws as one (143's second report names that shape).
+            expressions[net_id] = expression
+            flag_downgraded.add(net_id)
+            notes.append(downgrade_note)
         _set_foreign_edges(router, segments, net_id)
         blocked = _blocked_points(
             ctx, placed, net_id, labels, symbols, segments,
@@ -5921,6 +6103,38 @@ def _build_candidate(
                             "first rung is already the geometric minimum), move "
                             "the keep-out that blocks the corridor, or drop the "
                             "direct-wire obligation if a label is acceptable here"
+                        ),
+                    ), []
+                if net_id in flag_downgraded and len(expression.points) > 1:
+                    # 143 F1: this net was a flag net the library carries no
+                    # symbol for, and it cannot be wired either. A label is the
+                    # one answer 053 sec.7 forbids here — `sch.place_netlabel` is
+                    # measured unusable (029), so the label would name the net
+                    # nowhere: the plan would print a verdict of `pass` for a
+                    # multi-pin net with zero conductors, and `draw apply`'s live
+                    # netlist leg could never satisfy it. Refused, naming the net
+                    # and both repairs.
+                    return None, GrammarFailure(
+                        category=FAILURE_LAYOUT_UNSAT,
+                        subject=net_id,
+                        detail=(
+                            f"net {net_id!r} is a flag-style net (its class is "
+                            f"{_net_class(ctx, net_id)!r}) whose flag symbol the "
+                            "library does not carry, so it falls back to being "
+                            f"wired — and its {len(expression.points)} pins could "
+                            "not be joined inside the searched corridor either. "
+                            "The only remaining expression is a label, and this "
+                            "host cannot place one (`sch.place_netlabel` is "
+                            "measured unusable, 029): the net would be drawn with "
+                            "no conductor at all (143 F1)"
+                        ),
+                        action=(
+                            "add the flag symbol to the library (budget.gnd_flag / "
+                            "power_flag_prefix name it), or enlarge the region / "
+                            "move the keep-out that blocks the corridor, or lower "
+                            "budget.spacing_ladder's first rung if the two ends can "
+                            "be brought closer — a multi-pin net is never left "
+                            "with a name and no conductor"
                         ),
                     ), []
                 expression = _Expression(
@@ -6139,21 +6353,125 @@ def _build_candidate(
         grid=ctx.budget.grid,
     )
     if checked.hard_violations:
-        return None, GrammarFailure(
-            category=FAILURE_LAYOUT_UNSAT,
-            subject="gate",
+        return (
+            None,
+            _gate_failure(ctx, variant, checked.hard_violations),
+            [item.render() for item in checked.hard_violations],
+        )
+    return _Built(plan=plan, checked=checked), None, []
+
+
+#: Where a hard readability violation's own kind sends the refusal (053 sec.4).
+#:
+#: The gate is one mechanism — every plan the checker throws out is refused here
+#: — but the four categories are about **what has to change**, and the checker's
+#: own line says which of them that is: a `user-lock-violated` line is the
+#: engineer's intent contradicting the drawing, a `required-pin-not-connected`
+#: line is a pin the circuit names that the symbol does not carry. Calling both
+#: of them "a compiler-side geometry problem, not a spec problem" (the old
+#: hard-coded wording) points the reader at the region, the ladder and the
+#: symbol set — while the same failure printed, one line above, the spec object
+#: that is actually wrong. That is the "万能兜底" 143 dug up, and the fix is the
+#: dispatch itself, not a longer sentence: the kind is already in hand (it is
+#: what builds the evidence line), so it costs no extra measurement.
+#:
+#: Kinds **not** named here stay `layout-unsat` with the gate's own action, and
+#: that is deliberate: a wire through a body, an overlapping text, a drawing that
+#: leaves the page, a dangling end, an undeclared junction, a keep-out conflict
+#: and a net the drawing partitions are the compiler's own drawing choices, and
+#: the region / ladder / symbol set are exactly the knobs it searches for them.
+GATE_REFUSAL_KINDS: dict[str, str] = {
+    readability.KIND_USER_LOCK_VIOLATED: FAILURE_PRESENTATION_POOR,
+    readability.KIND_REQUIRED_PIN_NOT_CONNECTED: FAILURE_FACTS_MISSING,
+    readability.KIND_NC_PIN_CONNECTED: FAILURE_CIRCUIT_INVALID,
+}
+
+
+def _named_lock(ctx: _Context, objects: Sequence[str]) -> Any:
+    """The lock a violation's objects name, if one is named."""
+    for lock in ctx.presentation.user_locks:
+        marker = f"[{lock.part_id}]"
+        if any(marker in item for item in objects):
+            return lock
+    return None
+
+
+def _gate_failure(
+    ctx: _Context, variant: _Variant, violations: Sequence[Any]
+) -> GrammarFailure:
+    """The refusal for a plan the readability gate threw out,归口 by kind.
+
+    One refusal per variant, carrying the checker's own line as the detail — the
+    same evidence the reader sees either way. What the dispatch changes is the
+    **category**, the **subject** and the **action**, so the four categories keep
+    meaning what 053 sec.4 says they mean and the action names the repair that
+    actually changes the answer.
+    """
+    first = violations[0]
+    count = len(violations)
+    head = (
+        f"{variant.label}: the independent readability checker refused "
+        f"{count} hard violation(s) — {first.render()}"
+    )
+    category = GATE_REFUSAL_KINDS.get(first.kind, FAILURE_LAYOUT_UNSAT)
+    if category == FAILURE_PRESENTATION_POOR:
+        lock = _named_lock(ctx, first.objects)
+        subject = lock.part_id if lock is not None else (first.objects[0] if first.objects else "gate")
+        named = f"{LOCK_PREFIX}[{subject}]"
+        return GrammarFailure(
+            category=category,
+            subject=subject,
             detail=(
-                f"{variant.label}: the independent readability checker refused "
-                f"{len(checked.hard_violations)} hard violation(s) — "
-                + checked.hard_violations[0].render()
+                f"{head} — the drawing the compiler placed contradicts {named}, "
+                "and the lock is the input it may not quietly ignore"
             ),
             action=(
-                "this is a compiler-side geometry problem, not a spec problem: "
-                "the region, the ladder or the symbol set has to change before "
-                "this variant can be drawn"
+                f"honour {named} or change it: the engineer's lock is drawn "
+                "exactly or named here. Editing the region, the ladder or the "
+                "symbol set cannot fix it — the drawing is refused because it "
+                "breaks the lock, not because it does not fit"
             ),
-        ), [item.render() for item in checked.hard_violations]
-    return _Built(plan=plan, checked=checked), None, []
+        )
+    if category == FAILURE_FACTS_MISSING:
+        subject = first.objects[-1] if first.objects else "gate"
+        return GrammarFailure(
+            category=category,
+            subject=subject,
+            detail=f"{head} — the circuit names a pin the drawing has no tip for",
+            action=(
+                "fix the side the checker's line names: a net in the CircuitSpec "
+                "listing a pin the symbol does not carry, or a symbol whose "
+                "profile is missing that pin. No region, ladder or symbol-set "
+                "change can draw a pin that is not there (`facts-missing`, 053 "
+                "sec.4)"
+            ),
+        )
+    if category == FAILURE_CIRCUIT_INVALID:
+        subject = first.objects[-1] if first.objects else "gate"
+        return GrammarFailure(
+            category=category,
+            subject=subject,
+            detail=(
+                f"{head} — the drawing connects a pin the circuit declares "
+                "unconnected, so the two documents contradict each other"
+            ),
+            action=(
+                "connect or release the pin: drop it from the net the drawing "
+                "wires it to, or drop its no-connect declaration — the "
+                "contradiction is between the documents, not inside this "
+                "compiler's search"
+            ),
+        )
+    return GrammarFailure(
+        category=FAILURE_LAYOUT_UNSAT,
+        subject="gate",
+        detail=head,
+        action=(
+            "this is a compiler-side geometry problem, not a spec problem: "
+            "the region, the ladder or the symbol set has to change before "
+            "this variant can be drawn"
+        ),
+    )
 
 
 def _overflow(ctx: _Context, plan: LayoutPlan) -> GrammarFailure | None:
@@ -7375,12 +7693,39 @@ def _relation_holds(
     tolerance is the readability checker's "same column or row" slack — the same
     number all three layers use, so a relation this compiler keeps is never
     reported broken by the layer that measures the finished plan.
+
+    **The two tap kinds are measured here too (143 F4).** They used to fall
+    through to ``return True`` — "every point pair keeps `horizontal-tap`" — which
+    made the ruler's own claim ("every relation the given points do not keep")
+    false for two of the ten published kinds, while
+    :func:`_points_for_relation` already handed this function the pair the kinds
+    are about: the two arms' pins on the shared net, i.e. the two ends that meet
+    at the junction the stub leaves from. The stub leaves **horizontally** for
+    `horizontal-tap`, so that junction stands on a vertical line and the two pins
+    are in one column (`vertical-tap`: one row). Anything else means the two arms
+    of the tap do not meet on one line, and the pair is reported by the same
+    refusal path as every other broken relation.
+
+    A kind this ruler **does not know** is not satisfied either. The ten kinds of
+    ``CONSTRAINT_KINDS`` are all answered above; the old ``return True`` tail made
+    a future eleventh kind a relation the compiler would silently bless, which is
+    the failure 053 sec.5 scenario 12 names ("报告冲突，不静默忽略"). An unknown
+    kind now fails here and is reported with its own kind and reason, which is how
+    the gap gets noticed.
     """
     (ax, ay), (bx, by) = points
     slack = grid / 2.0
     if kind == SAME_COLUMN:
         return abs(ax - bx) <= slack
     if kind == SAME_ROW:
+        return abs(ay - by) <= slack
+    if kind == HORIZONTAL_TAP:
+        # The stub leaves horizontally, so the junction it leaves from is on a
+        # vertical line: the two arm pins the tap sits between share a column.
+        return abs(ax - bx) <= slack
+    if kind == VERTICAL_TAP:
+        # The mirror: a horizontal chain, the stub leaves downward/upward, and
+        # the two arm pins share a row.
         return abs(ay - by) <= slack
     if kind == ABOVE:
         return ay > by + slack
@@ -7397,7 +7742,7 @@ def _relation_holds(
         )
     if kind == NEAR:
         return math.hypot(ax - bx, ay - by) <= near_limit
-    return True
+    return False
 
 
 # --------------------------------------------------- the obligations, checked

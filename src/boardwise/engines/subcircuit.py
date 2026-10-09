@@ -52,6 +52,7 @@ from ..core.changeplan import (
     CONNECTION_WIRE,
     PlanConnection,
 )
+from ..core.model import GROUND_NET_PREFIXES, is_ground_net
 from . import addcomponent, patchpin
 from .addcomponent import (
     LADDER,
@@ -72,9 +73,18 @@ TEMPLATES: tuple[str, ...] = (TEMPLATE_RC_LOWPASS, TEMPLATE_DIVIDER)
 #: settled for `NET\d+` / `$…` spellings.
 NODE_X = "X"
 
-#: The rail the templates ground their shunt leg to. Written down once: the
-#: template is "an RC to ground", so the ground is part of the definition rather
-#: than a parameter nobody would vary here.
+#: The rail the templates ground their shunt leg to — **the fallback name**.
+#:
+#: The template is "an RC to ground", so the ground is part of the definition
+#: rather than a parameter nobody would vary. What is *not* part of the
+#: definition is the **spelling**: this repo's own list of ground names is
+#: :data:`~boardwise.core.model.GROUND_NET_PREFIXES` (``GND``/``AGND``/``DGND``/
+#: ``PGND``/``EGND``/``SGND``/``VSS``), and a page that calls its rail ``VSS`` or
+#: ``PGND`` must be joined to *that* rail, not given a second ground named
+#: ``GND`` — two flags that both look like ground are two nets in the netlist.
+#: :func:`ground_net_for` reads the page's own spelling; this constant is used
+#: when the page names no ground at all, i.e. when the template's own flag is
+#: what brings the rail into being.
 GROUND_NET = "GND"
 
 #: How far the group is tried from the anchor, in `LANDING_GRID` steps. The
@@ -110,7 +120,8 @@ TEMPLATE_DEFS: Mapping[str, Template] = {
     TEMPLATE_RC_LOWPASS: Template(
         name=TEMPLATE_RC_LOWPASS,
         summary=(
-            "series R into the pin's old net, shunt C from the new node to GND; "
+            "series R into the pin's old net, shunt C from the new node to the "
+            "page's ground rail; "
             "the wire that joined the pin to its net is removed first"
         ),
         removes=True,
@@ -122,7 +133,8 @@ TEMPLATE_DEFS: Mapping[str, Template] = {
     TEMPLATE_DIVIDER: Template(
         name=TEMPLATE_DIVIDER,
         summary=(
-            "R1 from the anchor net down to the tap, R2 from the tap to GND; "
+            "R1 from the anchor net down to the tap, R2 from the tap to the "
+            "page's ground rail; "
             "nothing is removed"
         ),
         removes=False,
@@ -299,24 +311,93 @@ def _wire(designator: str, pin: str, net: str, to: tuple[float, float], detail: 
     )
 
 
+def page_ground_nets(geometry: Any) -> list[str]:
+    """Every spelling of **ground** the page's own geometry carries, sorted.
+
+    Read from everything on the canvas that carries a net name: the wires (whose
+    ``state.Net`` is the net, measured — 029-b), the net flags (a ``netflag``
+    component, which is the only thing a page with no ground *wiring* has), and
+    the net labels. "Is this name ground" is not decided here — it is
+    :func:`~boardwise.core.model.is_ground_net`, the one place this repo calls a
+    name ground, so a page whose rail is ``PGND`` is read the same way the rules
+    read it.
+
+    Literal ``"GND"`` is *one* of these spellings, never the definition of them.
+    """
+    found: set[str] = set()
+    if not isinstance(geometry, dict):
+        return []
+    for key in ("wires", "components", "netlabels"):
+        for entry in geometry.get(key) or []:
+            found.add(_text(_state_of(entry).get("Net")))
+    found.discard("")
+    return sorted(name for name in found if is_ground_net(name))
+
+
+def ground_net_for(geometry: Any) -> str:
+    """The page's ground rail, by the page's own spelling, or the fallback.
+
+    Three readings, in order:
+
+    1. the page names no ground → :data:`GROUND_NET`: the template's flag is what
+       creates the rail, and it is named by the template;
+    2. exactly one spelling → that one (``VSS`` on a page whose rail is ``VSS``);
+    3. several, one of them a plain ``GND`` → ``GND``: the template means the
+       plain ground, and asking a page with an AGND beside its GND is answered by
+       the name the template itself uses;
+    4. several with no plain ``GND`` → a refusal naming them: which of a ``VSS``
+       and a ``PGND`` a shunt belongs on is a decision about the circuit, and
+       picking one silently is how the second ground gets created (R3: 目标缺
+       失/不唯一就停下来问).
+
+    Deliberately not a parameter threaded through the callers: the geometry is
+    already the argument every connection is decided against, and a second
+    parameter would let the plan and the probe of the same run disagree.
+    """
+    names = page_ground_nets(geometry)
+    if not names:
+        return GROUND_NET
+    if len(names) == 1:
+        return names[0]
+    for name in names:
+        if name.upper() == GROUND_NET:
+            return name
+    raise addcomponent.NoConnectionOption(
+        GROUND_NET,
+        f"the page carries {len(names)} different ground nets ("
+        + ", ".join(repr(name) for name in names)
+        + f") and none of them is {GROUND_NET!r} — a shunt leg has to pick one, "
+        "and guessing is how a board ends up with a second ground. Name the rail "
+        "this template should use, or make the page carry a plain GND",
+    )
+
+
 def ground_connection(designator: str, pin: str, spot: tuple[float, float], geometry: Any) -> PlanConnection:
     """The shunt leg's ground: 029's `choose_connection`, minus the label option.
+
+    The net is the **page's own ground** (:func:`ground_net_for`), not a literal:
+    :func:`choose_connection` looks for wire vertices *of that net's own
+    spelling*, so asking for ``"GND"`` on a page whose rail is ``VSS`` finds no
+    geometry, falls through to the flag branch, and plants a second ground at the
+    part's pin. Matching the page's spelling is what makes the wire option
+    reachable at all.
 
     `label` is dropped for this kind because the host's net-label API is measured
     unusable here (SKILL pit 9: ``sch_PrimitiveNetLabel: absent``) — a kind the
     page cannot carry is not an option, and 029 already prefers the wire and then
     the rail flag anyway.
     """
-    choice = addcomponent.choose_connection(GROUND_NET, spot, geometry)
+    net = ground_net_for(geometry)
+    choice = addcomponent.choose_connection(net, spot, geometry)
     if choice.kind not in (CONNECTION_WIRE, CONNECTION_POWER_FLAG):
         raise addcomponent.NoConnectionOption(
-            GROUND_NET,
+            net,
             f"the ground end of this template would need a {choice.kind!r} connection, "
             "and this slice only draws wires or places a rail flag (the host has no "
             "usable net-label API — SKILL pit 9)",
         )
     return PlanConnection(
-        designator=designator, pin=pin, net=GROUND_NET, kind=choice.kind,
+        designator=designator, pin=pin, net=net, kind=choice.kind,
         detail=choice.detail, to=choice.to,
     )
 
@@ -410,6 +491,29 @@ def _island_name(live: Mapping[tuple[str, str], str], designator: str, pin: str)
     return str(live.get(_pin_key(designator, pin)) or "")
 
 
+def node_members(plan: Any) -> list[tuple[str, str]]:
+    """Every pin the plan puts on the new node — **both ends** of every node wire.
+
+    A connection that carries :data:`NODE_X` joins its own pin to the node, and
+    when it names ``toPin`` (the divider's tap: ``R1.2`` → ``R2.1``) it joins that
+    pin too. Reading only ``item.designator``/``item.pin`` makes the divider's
+    node a **single pin**, against which "these pins share one island" is an empty
+    claim — it holds whatever the board reads.
+
+    Deduplicated in first-seen order, so the message a problem prints names each
+    pin once.
+    """
+    members: list[tuple[str, str]] = []
+    for item in plan.change.connections:
+        if item.net != NODE_X:
+            continue
+        members.append(_pin_key(item.designator, item.pin))
+        if item.to_pin:
+            designator, _, pin = str(item.to_pin).partition(".")
+            members.append(_pin_key(designator, pin))
+    return list(dict.fromkeys(members))
+
+
 def postcondition_problems(
     plan: Any,
     *,
@@ -429,14 +533,27 @@ def postcondition_problems(
     双证缺一判 unknown):
 
     * ``live`` — **the editor's own netlist**: the pins of the new node must share
-      one island, the legs on either side must not, and the ground pin must be on
-      the rail the plan named. Islands, not names: the editor spells an unnamed
-      net ``NET7`` in one reading and ``$57N2`` in the other, and equality of two
-      meaningless names is not evidence (035 round 4).
+      one island, that island must not be a ground rail, the legs on either side
+      must not be on it, and the ground pin must be on the rail the plan named.
+      Islands, not names: the editor spells an unnamed net ``NET7`` in one reading
+      and ``$57N2`` in the other, and equality of two meaningless names is not
+      evidence (035 round 4).
     * ``canvas`` — each part is on the page at its planned coordinate, and every
       wire in the plan has an endpoint at both ends it promised.
 
     An empty list in both is "the plan's postconditions hold".
+
+    **What must not be satisfied quietly.** The live leg is the only thing
+    standing between a short and "done", so it states its refusals rather than
+    skipping them. Both templates declare one node and one ground leg, so a plan
+    carrying neither — the marker dropped, the rail filed under a name no one
+    reads as ground — makes the corresponding claim *uncheckable*, and an
+    uncheckable claim is a problem, not a pass (the record and the plan
+    disagree). And the node's island is read against
+    :func:`~boardwise.core.model.is_ground_net`: a node welded to the rail — the
+    divider whose tap is on ground, i.e. R2 bypassed — is one island with every
+    other net elsewhere, so neither the "one island" test nor the "the legs on
+    either side must not" test can see it.
     """
     live_problems: list[str] = []
     canvas_problems: list[str] = []
@@ -455,36 +572,58 @@ def postcondition_problems(
                 f"({float(part.x or 0.0):g}, {float(part.y or 0.0):g})"
             )
 
-    node_pins = [
-        item for item in plan.change.connections if item.net == NODE_X
-    ]
+    node_pins = node_members(plan)
     other_nets: dict[tuple[str, str], str] = {}
     ground_pins: list[PlanConnection] = []
     for item in plan.change.connections:
         if item.net == NODE_X:
             continue
-        if item.net == GROUND_NET:
+        # "Is this the ground leg" is the ground **family**, not the literal: a
+        # plan whose rail is PGND has ground legs too, and reading only the
+        # spelling would file them under "other nets", where they are then
+        # compared against the node.
+        if is_ground_net(item.net):
             ground_pins.append(item)
         else:
             other_nets[_pin_key(item.designator, item.pin)] = item.net
 
-    if node_pins:
-        names = {
-            _island_name(live, item.designator, item.pin) for item in node_pins
-        }
+    def _named(pins: Sequence[tuple[str, str]]) -> str:
+        return ", ".join(f"{designator}.{pin}" for designator, pin in pins)
+
+    if not node_pins:
+        live_problems.append(
+            "the plan declares no new node — no connection carries "
+            f"{NODE_X!r}, so 'the pins of the new node are one island' is a claim "
+            "this plan does not make and the check cannot be made either. Every "
+            "template this build ships declares one, so the record and the plan "
+            "disagree: rebuild the plan rather than reading this as done"
+        )
+    else:
+        names = {_island_name(live, *pin) for pin in node_pins}
         if "" in names or len(names) != 1:
             live_problems.append(
-                "the new node's pins "
-                + ", ".join(f"{item.designator}.{item.pin}" for item in node_pins)
+                "the new node's pins " + _named(node_pins)
                 + " are not one island in the editor's own netlist — they read "
                 + ", ".join(
-                    f"{item.designator}.{item.pin}="
-                    f"{_island_name(live, item.designator, item.pin)!r}"
-                    for item in node_pins
+                    f"{designator}.{pin}={_island_name(live, designator, pin)!r}"
+                    for designator, pin in node_pins
                 )
             )
         else:
             node_name = names.pop()
+            # **The node must not be ground.** Sharing one island is not enough:
+            # a tap welded to the rail is one island, and it is the failure this
+            # template exists to avoid (R2 bypassed → the divider's output is
+            # 0 V). Neither the island test nor the "other nets are elsewhere"
+            # test below can see it, because the ground leg legitimately *is* on
+            # the rail.
+            if is_ground_net(node_name):
+                live_problems.append(
+                    "the new node's pins " + _named(node_pins)
+                    + f" are all on {node_name!r}, which this repo reads as a "
+                    "ground rail — the node the template creates is shorted to "
+                    "ground, not a new node"
+                )
             for (designator, pin), net in sorted(other_nets.items()):
                 if _island_name(live, designator, pin) == node_name:
                     live_problems.append(
@@ -492,12 +631,22 @@ def postcondition_problems(
                         f"({node_name!r}) but the plan keeps it on {net!r} — the series "
                         "leg did not separate them"
                     )
+    if not ground_pins:
+        live_problems.append(
+            "the plan declares no ground leg — no connection carries a ground "
+            f"net ({', '.join(GROUND_NET_PREFIXES)}), so 'the ground leg is on the "
+            "rail the plan named' is a claim this plan does not make and the ground "
+            "cannot be checked. Both templates ground their shunt leg, so the "
+            "record and the plan disagree: rebuild the plan rather than reading "
+            "this as done"
+        )
     for item in ground_pins:
         found_name = _island_name(live, item.designator, item.pin)
-        if found_name != GROUND_NET:
+        expected = str(item.net or "")
+        if found_name != expected:
             live_problems.append(
                 f"{item.designator}.{item.pin} reads {found_name!r} in the editor's own "
-                f"netlist, not {GROUND_NET!r} — the ground leg is not connected"
+                f"netlist, not {expected!r} — the ground leg is not connected"
             )
 
     for item in plan.change.connections:

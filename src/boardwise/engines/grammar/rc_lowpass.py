@@ -312,57 +312,59 @@ def _candidates(
         if first in ground_set or second in ground_set:
             continue
         for in_net, out_net in ((first, second), (second, first)):
-            shunts = _shunts(edges, series, out_net, ground_set)
-            if declares_modules(presentation):
-                scope = module_of_part(presentation, series)
-                if scope:
-                    shunts = tuple(
-                        part_id
-                        for part_id in shunts
-                        if scope in modules_of_part(presentation, part_id)
+            # **One candidate per ground family.** The ground is pinned here and
+            # carried into the reading, exactly as `power_entry._shunts` pins
+            # its `gnd` and `ldo._caps_on` pins `core.gnd_net`: a shunt is a
+            # part from `out` to *that* ground, and a page that returns two
+            # branches to two different families is two readings, one of them
+            # bound and the other named among the runners-up. Collecting a
+            # union of families and then naming one of them in the evidence is
+            # what made the second shunt's own binding claim a ground it does
+            # not touch (143 H6), and it left the second family with no
+            # `direct-wire` promise at all — a name the drawing never states.
+            for gnd_net in ground:
+                shunts = _shunts(edges, series, out_net, gnd_net)
+                if declares_modules(presentation):
+                    scope = module_of_part(presentation, series)
+                    if scope:
+                        shunts = tuple(
+                            part_id
+                            for part_id in shunts
+                            if scope in modules_of_part(presentation, part_id)
+                        )
+                if not shunts:
+                    continue
+                module = shared_module(presentation, (series, *shunts))
+                found.append(
+                    _Lowpass(
+                        in_net=in_net,
+                        out_net=out_net,
+                        gnd_net=gnd_net,
+                        series=series,
+                        shunts=shunts,
+                        module=module,
                     )
-            if not shunts:
-                continue
-            gnd_net = _return_net(edges, shunts, ground)
-            module = shared_module(presentation, (series, *shunts))
-            found.append(
-                _Lowpass(
-                    in_net=in_net,
-                    out_net=out_net,
-                    gnd_net=gnd_net,
-                    series=series,
-                    shunts=shunts,
-                    module=module,
                 )
-            )
     found.sort(key=_candidate_key(power, presentation))
     return found
 
 
 def _shunts(
-    edges: dict[str, tuple[str, str]], series: str, out_net: str, ground: set[str]
+    edges: dict[str, tuple[str, str]], series: str, out_net: str, gnd_net: str
 ) -> tuple[str, ...]:
-    """Two-terminal parts from `out` to a ground net, sorted."""
+    """Two-terminal parts from `out` to **this** ground net, sorted.
+
+    `gnd_net` is a parameter rather than a set of "any ground-class net" so
+    that the ground the evidence names is the ground the part is on — the same
+    reading `power_entry._shunts` and `ldo._caps_on` take.
+    """
     return tuple(
         part_id
         for part_id in sorted(edges)
         if part_id != series
         and out_net in edges[part_id]
-        and any(net in ground for net in edges[part_id])
+        and gnd_net in edges[part_id]
     )
-
-
-def _return_net(
-    edges: dict[str, tuple[str, str]], shunts: tuple[str, ...], ground: tuple[str, ...]
-) -> str:
-    """The ground net the shunts return to (id-sorted when several are used)."""
-    used = {
-        net
-        for part_id in shunts
-        for net in edges[part_id]
-        if net in set(ground)
-    }
-    return sorted(used)[0] if used else ground[0]
 
 
 def _candidate_key(power: tuple[str, ...], presentation: PresentationSpec):
@@ -371,6 +373,12 @@ def _candidate_key(power: tuple[str, ...], presentation: PresentationSpec):
     A preference order, not a claim of correctness — when two readings remain,
     every binding's evidence names the runners-up, and `PresentationSpec.modules`
     is the intended way to remove the ambiguity (052 sec.5).
+
+    `gnd_net` is in the key because it is a **part of the reading**: two
+    candidates that differ only in which family the branch returns to are two
+    readings, and leaving it out would let `list.sort`'s stability decide
+    between them by the order the loops ran (143 H6 is that shape — an answer
+    settled by an ordering nobody stated).
     """
     power_set = set(power)
 
@@ -384,6 +392,7 @@ def _candidate_key(power: tuple[str, ...], presentation: PresentationSpec):
             candidate.out_net,
             candidate.series,
             candidate.shunts,
+            candidate.gnd_net,
         )
 
     return key
