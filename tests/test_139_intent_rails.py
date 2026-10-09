@@ -24,6 +24,12 @@
    `intent-missing`。这条缝断在 064 与 139 手上各一次，证据
    `evidence/064/intent_slot_gap.txt`。
 
+**issue #74 是同一份词表的一条缝**：轨名写作 `+VCC`/`-VCC` 时，那个符号是这件东西
+「写成正/负」的拼写，不是另一个名字。修前 `_RAIL_NAME` 从首字符起匹配，于是
+`is_supply_name('+VCC')` 为 False 而 `'VCC'` 为 True——一条只挂无源焊盘的 `+VCC` 网
+两条子句都够不着，一条 `+VBUS` 网则全靠恰好在场的电源脚。数字形的名字
+（`+5V`/`-5V`）依旧不归这个读端管，谁定价、谁报价在两个反向证人的断言里。
+
 夹具一律手写内存构造（098/095 的纪律）：一个 `DesignModel` 七条网，四条该问、
 三条不该问；词表的每一半都有实物证人——三块只读夹具 `ch340_golden`（电源网全有价，
 一条都不问）、ROBOT ctrl FOC（`VCC` 有价 3.3 V、`VCCA` 无价）与 毕设FOC驱动板
@@ -138,7 +144,9 @@ def test_a_non_power_net_is_never_asked_about():
 def test_name_vocabulary_is_the_documented_one():
     """词表钉死：名字读法与「自带电压」读法各有边界，`RECV` 之类不许混进来。"""
     for name in ("VCC", "VCCA", "VDD", "VDDA", "VDDIO", "DVDD", "TVDD", "VBAT",
-                 "VBUS", "VM", "VEE", "VREF", "VREF+", "V+", "vcc"):
+                 "VBUS", "VM", "VEE", "VREF", "VREF+", "V+", "vcc",
+                 # issue #74: the same stems with the trade's polarity in front.
+                 "+VCC", "+VDD", "+VBUS", "-VCC", "+vbat"):
         assert is_supply_name(name), name
     for name in ("CAN_RX", "U+", "NET11", "RECV", "DRV_EN", "AGND_LDO", ""):
         assert not is_supply_name(name), name
@@ -146,6 +154,38 @@ def test_name_vocabulary_is_the_documented_one():
                            ("D5V", "5V"), ("VDD_3V3", "3V3"), ("VCC", ""),
                            ("NET11", "")):
         assert name_states_volts(name) == expected, name
+
+
+def test_issue_74_a_leading_polarity_is_the_same_rail_name():
+    """`+VCC` 是 `VCC` 写了正号，不是另一个名字（issue #74）。
+
+    修前 `_RAIL_NAME` 是 `^V…` 前缀匹配，符号是首字符，于是 `is_supply_name('+VCC')`
+    为 False 而 `'VCC'` 为 True：一条 `+VBUS` 网只有在**恰好**挂着声明电源脚的器件时
+    才进问价清单，一条只有电容/接插件焊盘的 `+VCC` 网一条路都不走。反向证人同样要钉：
+    数字形（`+5V`/`-5V`）仍归 `name_states_volts` 管，本读端一个字都不许接。
+    """
+    assert is_supply_name("+VCC") and is_supply_name("VCC")
+    assert is_supply_name("+VDD") and is_supply_name("+VBUS") and is_supply_name("-VCC")
+    # 反向一：不带符号的名字一个字没变（含首尾空白被 strip 的旧行为）。
+    assert is_supply_name("VCC ") is True
+    assert not is_supply_name("OUT") and not is_supply_name("U+")
+    # 反向二：数字形不是轨名，符号在本读端不改变结论（谁定价见上一句）。
+    assert not is_supply_name("+5V") and not is_supply_name("-5V")
+    assert name_states_volts("+5V") == "+5V"
+    assert name_states_volts("-5V") == "-5V", "负号跟着数字，由它报价"
+
+
+def test_issue_74_the_fix_reaches_the_ask_list_through_the_name_clause():
+    """活的消费者：一条只挂无源焊盘的 `+VCC` 网，修前不上清单，修后上。
+
+    这是「有活消费者够得着」的实测：`_board` 里的脚名是 `1`/`2`（电阻电容的焊盘），
+    两条子句——网名读法、电源脚读法——只有前者够得着它。
+    """
+    board = _board({"+VCC": [("C1", "1", "1"), ("C1", "2", "2")]})
+    audit = audit_rails(board)
+    assert ask_nets(audit) == ["+VCC"]
+    assert audit.ask[0].members == ()  # 没有电源脚，进清单靠的是网名那一半
+    assert "电源轨写法" in audit.ask[0].why
 
 
 def test_ground_and_derived_rails_are_settled_with_a_reason():

@@ -14,7 +14,8 @@ Three groups of tests:
   that happens to exercise it.
 * **fixtures** — the three acceptance boards, named pin by pin.
 * **pin_role** — the classifier's word list, its compound-name splitting and the
-  names it deliberately declines.
+  names it deliberately declines. Issue #75 (the separator-spelled blocklist
+  family, the numbered ground pads) is the last group in this file.
 """
 
 import json
@@ -350,6 +351,97 @@ def test_ground_outranks_out_in_a_compound_name():
 def test_blocklisted_token_voids_a_compound_name():
     """A channel half written beside a direction word is still a channel pin."""
     assert pin_role("INA/OUT") is None
+
+
+# ------------------------------------------------------------------ #75
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        # The witness list from the issue, verbatim: the token scan splits these
+        # on `_`, the direction half is a real role and wins, and the channel
+        # half it should have matched was written with a separator.
+        "OUT_H", "IN_H", "OUT_A", "OUT_A+",
+        # ... and the rest of the same family, every spelling of the same name.
+        "IN_A", "IN_A+", "IN_A-", "OUT_A-", "OUT_B+", "OUT_B-",
+        "OUT_L", "IN_L", "OUT_H+", "OUT_H-", "IN_L+",
+        "OUT H", "IN H", "OUT,A+", "OUT,H-",
+        "OUTH", "OUTL", "INH", "INL",
+    ],
+)
+def test_a_separator_spelling_of_a_blocklisted_name_is_blocklisted(name):
+    """#75: ``OUT_H`` is ``OUTH`` written with the separator the trade glues on.
+
+    ``_NOT_A_ROLE`` is compared token by token, and ``OUT`` is a legitimate role
+    on its own — so before #75 ``OUT_H`` split into ``OUT`` + ``H`` and answered
+    ``"OUT"``, pointing a decoupling rule at a gate driver's channel pin. The
+    joined-form gate reads the same blocklist with the separators removed, which
+    is why every spelling of one name answers the same way.
+    """
+    assert pin_role(name) is None
+
+
+@pytest.mark.parametrize(
+    "name, role",
+    [
+        # The reverse witness, and the reason the joined gate is not a blanket
+        # "any separator means refuse": a separator inside a *real* name is how
+        # the trade writes it, and all of these keep the reading they had.
+        ("OUT_1", "OUT"),   # a numbered output: the OUT token still wins the split
+        ("VOUT1", "OUT"),
+        ("VSS_1", "GND"),
+        ("VDD_3", "IN"),
+        ("GND/ADJ", "GND"),
+        ("EN/UVLO", "EN"),
+        ("VEE/GND", "GND"),
+    ],
+)
+def test_a_separator_in_a_real_name_is_not_a_blocklisted_join(name, role):
+    assert pin_role(name) == role
+
+
+@pytest.mark.parametrize("name", ["OUT1", "OUT2", "IN1", "IN3"])
+def test_a_numbered_direction_word_still_declines(name):
+    """``OUT1``/``IN1`` are port indices, and their reading does not move (#75).
+
+    They answered ``None`` before and answer ``None`` now, on a different route:
+    the whole-name table has no row, and the joined blocklist has no ``OUT1``
+    either. Pinned because the numbered family (``VSS1``, ``VDD1``) *is* in the
+    table, and a reader could reasonably expect the opposite.
+    """
+    assert pin_role(name) is None
+
+
+@pytest.mark.parametrize("name", ["PGND1", "PGND2", "PGND3", "AGND1", "AGND2", "AGND3"])
+def test_a_numbered_ground_pad_names_ground(name):
+    """``PGND1`` is ``PGND`` numbered, and ``PGND`` is ``GND`` (#75).
+
+    ``VSS1``/``VDD1`` were in the table and their ground siblings were not, so a
+    part that numbers its ground pads answered ``None``. The three ``PGND``
+    entries are measured on ROBOT ctrl FOC's ``DRV1`` pins 6/7/10 (the driver's
+    low-side shunt node); ``AGND1``-style names are *standard*, and no fixture
+    places one. Consumers audited before this landed: no rule that reads
+    ``pin_role`` branches on ``"GND"`` except ``rules/pcb/mcusupply``
+    (``SUPPLY_ROLES = {IN, GND, EP}``, ``ic.mcu`` parts only, and ``DRV1`` is a
+    gate driver), and ``railquery.SUPPLY_ROLES`` is ``{IN, OUT}``.
+    """
+    assert pin_role(name) == "GND"
+
+    assert pin_role("PGND") == "GND", "the un-numbered spelling is unchanged"
+    assert pin_role("VSS1") == "GND" and pin_role("VDD1") == "IN"
+
+
+def test_the_joined_blocklist_cannot_shadow_a_table_hit():
+    """A name cannot be both a role and affirmatively not one.
+
+    The joined forms are generated from the blocklist, so this holds by
+    construction — stated and pinned because the next entry typed into either
+    set is what could break it.
+    """
+    from boardwise.core.pinrole import _NOT_A_ROLE_JOINED, _WHOLE_NAME
+
+    assert _NOT_A_ROLE_JOINED.isdisjoint(_WHOLE_NAME)
 
 
 def test_pin_role_is_case_and_space_insensitive():

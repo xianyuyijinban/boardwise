@@ -46,8 +46,14 @@ Checked in this order, and the order is the contract:
 2. :data:`_NOT_A_ROLE` — names that are affirmatively *not* one of the nine
    roles, matched before anything else so a blocklisted name can never be
    rescued by token splitting.
-3. :data:`_WHOLE_NAME` — the whole normalised name in the table.
-4. token scan — a compound name (``EN/UVLO``, ``GND/ADJ``, ``VEE/GND``,
+3. :data:`_NOT_A_ROLE_JOINED` — the **joined form** of the same blocklist
+   (issue #75). A name that *has* separators is collapsed with
+   :data:`_SEPARATORS` and re-checked against it, so a blocklisted family is
+   refused in its ``_``/space spelling too (``OUT_H``, ``IN_H``, ``OUT_A+``
+   are the measured witnesses). Step 2 alone cannot do this: it compares whole
+   tokens, and ``OUT``/``IN`` are legitimate roles on their own.
+4. :data:`_WHOLE_NAME` — the whole normalised name in the table.
+5. token scan — a compound name (``EN/UVLO``, ``GND/ADJ``, ``VEE/GND``,
    ``OUT A``) is split on :data:`_SEPARATORS` and the **highest-precedence
    resolving token** wins. Precedence is :data:`ROLE_PRECEDENCE`, which is why
    ``GND/ADJ`` reads ``GND`` (the ``ADJ`` half is not a role) and ``EN/UVLO``
@@ -102,14 +108,31 @@ ROLE_PRECEDENCE: tuple[str, ...] = ("GND", "EP", "EN", "BST", "SW", "FB", "OUT",
 #:   every one on ``net=None``), ``PGOOD`` (3, all unconnected on the 毕设FOC and
 #:   高速板 LM5164), ``RON`` (3, on a resistor divider ``$1N66669`` / ``NET28`` /
 #:   ``NET23`` — a programming pin, not a rail), ``RESV`` (3, all unconnected).
-#: * gate-driver **channel** pins: ``INA+`` / ``INA-`` / ``INB+`` / ``INB-`` /
-#:   ``INA`` / ``INB`` / ``OUTA`` / ``OUTB`` / ``IN A+`` / ``IN A-`` / ``IN B+``
-#:   / ``IN B-`` / ``OUT A`` / ``OUT B`` (measured 8+ each across U14/U15/U16 of
-#:   毕设FOC and U2/U3 of 级联多电平, landing on nets ``IA``/``IC``/``NET5``…). They
-#:   read as IN/OUT but are one channel's high/low pair, so calling them the
+#: * gate-driver **channel** pins, **both halves of the family** (#75 made the
+#:   list symmetric): ``INA+`` / ``INA-`` / ``INB+`` / ``INB-`` / ``INA`` /
+#:   ``INB`` / ``OUTA`` / ``OUTB`` / ``OUTA+`` / ``OUTA-`` / ``OUTB+`` /
+#:   ``OUTB-`` / ``IN A+`` / ``IN A-`` / ``IN B+`` / ``IN B-`` / ``OUT A`` /
+#:   ``OUT B`` / ``OUT A+`` / ``OUT A-`` / ``OUT B+`` / ``OUT B-`` (the ``IN``
+#:   halves measured 8+ each across U14/U15/U16 of 毕设FOC and U2/U3 of
+#:   级联多电平, landing on nets ``IA``/``IC``/``NET5``…; the ``OUT`` halves were
+#:   the invisible half — ``IN A+`` was listed while ``OUT A+`` was not, so
+#:   ``pin_role('OUT A+')`` answered ``"OUT"`` — a *standard* spelling, no
+#:   fixture exercises it, and the family is written in one breath either way).
+#:   They read as IN/OUT but are one channel's high/low pair, so calling them the
 #:   part's supply ``IN`` would point a decoupling rule at a gate. This is the
 #:   reason ``IN A+`` is listed here explicitly *and* ``OUT A`` is not rescued by
 #:   the token scan: blocklist first, always.
+#: * gate-driver **high/low-side** channel pins: ``OUTH`` / ``OUTL`` / ``INH`` /
+#:   ``INL`` and their polarity spellings ``OUTH+``…``INL-`` — the other
+#:   spelling of the same two halves, *standard* (no fixture places one; the
+#:   measured siblings on the corpus are ``INHA``/``INLA`` on 毕设FOC 1.0.0's
+#:   ``U10`` and 高速板 ``U18``, which the token scan already declines for lack
+#:   of a separator). Both halves of the family are listed for the reason the
+#:   ``A``/``B`` family is: leaving the polarity out would leave ``OUT_H+``
+#:   splitting into ``OUT`` + ``H+`` and answering ``"OUT"``, which is the very
+#:   leak #75 closed one spelling over. ``OUT_H`` joins to ``OUTH`` and needs
+#:   this entry to exist — the gate only sees a name that *has* a separator —
+#:   and ``OUTH`` itself is refused by the entry directly.
 #: * bare polarities and one-letter names: ``+``/``-``/``A``/``K``/``C``/``G``/
 #:   ``D``/``S``/``R``/``15V+``/``15V-``. On an LED, a diode or a bridge these
 #:   are polarity, not a rail direction; the same letter is an address bit on
@@ -126,9 +149,12 @@ _NOT_A_ROLE: frozenset[str] = frozenset(
     {
         "NC", "NC/", "PGOOD", "RON", "RESV",
         "INA", "INB", "INA+", "INA-", "INB+", "INB-",
-        "OUTA", "OUTB",
+        "OUTA", "OUTB", "OUTA+", "OUTA-", "OUTB+", "OUTB-",
         "IN A", "IN B", "OUT A", "OUT B",
         "IN A+", "IN A-", "IN B+", "IN B-",
+        "OUT A+", "OUT A-", "OUT B+", "OUT B-",
+        "OUTH", "OUTL", "INH", "INL",
+        "OUTH+", "OUTH-", "OUTL+", "OUTL-", "INH+", "INH-", "INL+", "INL-",
         "+", "-", "A", "K", "C", "G", "D", "S", "R",
         "15V+", "15V-",
     }
@@ -177,6 +203,14 @@ _WHOLE_NAME: dict[str, str] = {
     "PGND": "GND", "VSS": "GND", "VSSA": "GND", "VSSB": "GND", "VSSC": "GND",
     "VEE": "GND", "0V": "GND", "VSS_1": "GND", "VSS_2": "GND", "VSS_3": "GND",
     "VSS1": "GND", "VSS2": "GND", "VSS3": "GND",
+    # The numbered family was VSS/VDD only (#75): a part that numbers its ground
+    # pads writes PGND1/PGND2/PGND3 or AGND1/AGND2/AGND3, and those answered
+    # ``None`` while the un-numbered PGND/AGND answered GND. *standard* — the
+    # corpus has no AGND1, and the three PGND entries are measured on ROBOT
+    # ctrl FOC's DRV1 pins 6/7/10 (the gate driver's low-side shunt node), which
+    # the un-numbered ``PGND`` reading already covers by intent.
+    "PGND1": "GND", "PGND2": "GND", "PGND3": "GND",
+    "AGND1": "GND", "AGND2": "GND", "AGND3": "GND",
     # V- measured on 毕设滤波采样 U1.4 / U7.4 / U8.4, all on net ``AGND`` — the
     # negative supply of a dual-rail part is a return, so it belongs here rather
     # than in the ``_NOT_A_ROLE`` polarity list that carries bare ``+`` / ``-``.
@@ -224,7 +258,34 @@ _WHOLE_NAME: dict[str, str] = {
 #: Characters a compound pin name is split on. ``/`` is the measured case
 #: (``EN/UVLO``, ``VEE/GND``, ``GND/ADJ``); space and comma join the same way
 #: (``OUT A``); ``_`` covers the ``VSS_1`` / ``VDD_1`` families.
+#:
+#: ``-`` is deliberately **not** here (131d's decision, restated by #75): the
+#: oscillator family's ``PF0-OSC_IN`` would then split into ``PF0`` + ``OSC`` +
+#: ``IN``, one entry per STM32 port pin. The ``_`` spelling of a blocklisted
+#: family is closed by :data:`_NOT_A_ROLE_JOINED` instead, which removes this
+#: alphabet rather than splitting on it.
 _SEPARATORS = re.compile(r"[/,_ ]+")
+
+
+#: :data:`_NOT_A_ROLE` **after** :data:`_SEPARATORS` is taken out — the *joined
+#: form* of every blocklisted name (issue #75).
+#:
+#: Why a second set and not a smarter token test: the token scan compares whole
+#: tokens, and ``OUT`` is a legitimate role on its own, so ``OUT_H`` splits into
+#: ``OUT`` + ``H`` and the ``OUT`` half wins — the channel-half family was
+#: guarded in its ``OUTA`` spelling but not in its ``OUT_H`` one. Joining the
+#: name instead of splitting it asks the question the blocklist actually holds
+#: the answer to — *is this, separators ignored, one of the names that is not a
+#: role?* — and answers it before the whole-name table and the token scan.
+#:
+#: The alphabet is :data:`_SEPARATORS` itself, so ``OUT H``, ``OUT,H`` and
+#: ``OUT_H`` all join to ``OUTH``. ``-`` is not in it (see :data:`_SEPARATORS`),
+#: so ``OUT-H`` is *not* joined and stays ``None`` through the token scan —
+#: which is where it already was, and a name this module declines is not a
+#: defect the way a wrong role is.
+_NOT_A_ROLE_JOINED: frozenset[str] = frozenset(
+    _SEPARATORS.sub("", entry) for entry in _NOT_A_ROLE
+)
 
 
 def _normalise(name: str) -> str:
@@ -245,7 +306,16 @@ def pin_role(pin_name: str | None) -> str | None:
     treats ``None`` as "unknown function" rather than "not a supply pin" is the
     only correct way to read it. ``PF0-OSC_IN`` is the case 131d added: it is a
     real pin with a real job (a crystal oscillator input) and no supply role
-    at all, and before this batch it answered ``"IN"``.
+    at all, and before this batch it answered ``"IN"``. ``OUT_H`` is #75's: the
+    channel-half family was blocklisted in its ``OUTA`` spelling and, because
+    ``_`` splits while ``OUT`` is a real role, leaked as ``"OUT"`` in its
+    ``OUT_H`` one (see :data:`_NOT_A_ROLE_JOINED`).
+
+    A **numbered** output keeps whatever it had: ``OUT_1`` still reads ``OUT``
+    (the ``OUT`` token wins the split, ``OUT1`` is not a blocklisted joined
+    form), and ``OUT1``/``IN1`` still read ``None`` — a number on a bare
+    direction word is a port index, not a supply, and nothing here changes
+    that.
     """
     text = _normalise(pin_name or "")
     if not text:
@@ -257,6 +327,12 @@ def pin_role(pin_name: str | None) -> str | None:
     if _OSC_SUBSTRING in text:
         return None
     if text in _NOT_A_ROLE:
+        return None
+    # #75: the same blocklist, read with the separators removed. Only a name
+    # that *has* a separator can differ from itself, so this costs one `sub` on
+    # the compound spellings and nothing at all on the plain ones.
+    joined = _SEPARATORS.sub("", text)
+    if joined != text and joined in _NOT_A_ROLE_JOINED:
         return None
     whole = _WHOLE_NAME.get(text)
     if whole is not None:
