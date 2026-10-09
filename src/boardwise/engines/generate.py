@@ -505,6 +505,59 @@ def _keyword_for(component) -> str:
     return value
 
 
+#: How many pages the solver lays out before settling: the demanded channel
+#: widths, WIDTH_STEP nets' worth narrower again, and so on, then the plain
+#: packing (141). Every attempt costs a full routing of the sheet, so the list
+#: is short — and its last entry is the packing the engine had before, which
+#: always has an answer.
+WIDTH_ATTEMPTS = 3
+
+#: How many nets' worth of width the solver gives back per attempt. Two, not
+#: one, is a cost decision with a measurement behind it: on the golden board the
+#: pages at 60 and at 55 units of aisle are *both* unwireable and the page at 50
+#: is the one that works, so stepping by one only pays for a routing that is
+#: known to fail. The cost is real — the golden page takes ~20 seconds to lay
+#: out and route — and the risk is bounded by the last attempt being the plain
+#: packing, which is always tried.
+WIDTH_STEP = 2
+
+
+def _choose_geometry(model: DesignModel, offsets, order, attempt):
+    """The widest channel allocation the router can actually wire (141).
+
+    Sizing the page's gaps by the traffic that crosses them
+    (:func:`~boardwise.engines.layout.plan_placement`) is what makes a crowded
+    aisle readable, and it is not free: on the golden board the aisle carrying
+    six nets is where 45% of the ``WIRE_TOO_CLOSE`` findings live, and giving it
+    room takes the count from 47 to 34 — but giving it the *whole* width it asks
+    for loses a net (measured: six nets abreast want 60 units, and the router
+    cannot wire ``NET2`` on the page that has them). Readability must never
+    outrank connectivity, so pages are tried widest first and the search stops
+    at the first one that routes with nothing hard on it.
+
+    Returns ``(geometry, pin_positions, routes, routing_violations,
+    violations)`` for the page it settled on.
+    """
+    exits = layout.net_exits(model, offsets)
+    pages = [
+        layout.plan_placement(offsets, order, exits=exits,
+                              spare_lanes=spare * WIDTH_STEP)
+        for spare in range(0, WIDTH_ATTEMPTS - 1)
+    ] if exits else []
+    pages.append(layout.plan_placement(offsets, order))
+
+    best = None
+    for geometry in pages:
+        pins, routes, routing_violations, violations = attempt(geometry)
+        blocking = layout.blocking_violations(violations)
+        if not blocking:
+            return geometry, pins, routes, routing_violations, violations
+        if best is None or len(blocking) < len(best[0]):
+            best = (blocking, geometry, pins, routes, routing_violations, violations)
+    _, geometry, pins, routes, routing_violations, violations = best
+    return geometry, pins, routes, routing_violations, violations
+
+
 def generate_plan(
     model: DesignModel,
     offsets: dict[str, dict[str, tuple[float, float]]],
@@ -517,7 +570,8 @@ def generate_plan(
     (:data:`NAMING_STRATEGIES`); ``None`` means the default. Pure: no bridge,
     no editor, no I/O. The returned plan carries its own geometry and
     self-check violations — a non-empty ``violations`` list means the draw flow
-    must refuse to execute (revision 3's gate).
+    must refuse to execute (revision 3's gate). The geometry is the first page
+    in :data:`WIDTH_ATTEMPTS` that routes cleanly; see :func:`_choose_geometry`.
     """
     plan = ActionPlan()
     plan.naming_strategy = normalise_strategy(strategy)
@@ -526,7 +580,21 @@ def generate_plan(
         return plan
 
     _host, order = _layout_order(model)
-    geometry = layout.plan_placement(offsets, order)
+
+    def attempt(geometry: list[layout.Placement]):
+        """Everything the plan needs to be judged: geometry, pins and routes."""
+        pins: dict[tuple[str, str], tuple[float, float]] = {}
+        for place in geometry:
+            for number, (dx, dy) in offsets.get(place.designator, {}).items():
+                pins[(place.designator, number)] = (place.x + dx, place.y + dy)
+        wired, wired_violations = layout.route_nets(model, pins, geometry)
+        checked = layout.validate_full(model, geometry, wired, pins)
+        checked.extend(wired_violations)
+        return pins, wired, wired_violations, checked
+
+    geometry, pin_positions, routes, routing_violations, violations = _choose_geometry(
+        model, offsets, order, attempt
+    )
     plan.geometry = geometry
 
     for place in geometry:
@@ -543,11 +611,6 @@ def generate_plan(
             )
         )
 
-    # pin positions in canvas space: origin + offset (all unrotated)
-    pin_positions: dict[tuple[str, str], tuple[float, float]] = {}
-    for place in geometry:
-        for number, (dx, dy) in offsets.get(place.designator, {}).items():
-            pin_positions[(place.designator, number)] = (place.x + dx, place.y + dy)
     plan.pin_positions = pin_positions
 
     for designator, pin in sorted(
@@ -558,7 +621,6 @@ def generate_plan(
     ):
         plan.nc_pins.append((designator, pin))
 
-    routes, routing_violations = layout.route_nets(model, pin_positions, geometry)
     #: 136: a net the router only managed by giving up its separation
     #: preference is said out loud in the plan's notes. The geometry itself is
     #: re-measured by :func:`validate_full` below, which reports whatever ended
@@ -613,8 +675,7 @@ def generate_plan(
         plan.net_names.extend(steps)
         taken.extend((step.x, step.y, step.net) for step in steps)
 
-    plan.violations = layout.validate_full(model, geometry, routes, pin_positions)
-    plan.violations.extend(routing_violations)
+    plan.violations = violations
     return plan
 
 

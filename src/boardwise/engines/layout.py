@@ -313,9 +313,70 @@ def _relative_box(offsets: dict[str, tuple[float, float]]) -> tuple[float, float
 # --------------------------------------------------------------------------
 
 
+def net_exits(
+    model: DesignModel,
+    offsets: dict[str, dict[str, tuple[float, float]]],
+) -> dict[str, dict[str, set[str]]]:
+    """Which nets leave each component on which side of its box.
+
+    ``{designator: {"W" | "E" | "N" | "S": {net, ...}}}`` — the demand a gap
+    between two boxes is sized from (141). The side is the *router's* rule
+    (:func:`_outward_direction`): the nearest box edge, ties broken W, E, N, S,
+    so the demand counted here is the demand the router will actually create.
+
+    A net is counted once per side however many pins it has there: two pins of
+    the same net on one edge are one wire leaving that edge, which is what a gap
+    has to carry.
+    """
+    out: dict[str, dict[str, set[str]]] = {}
+    for designator, pins in offsets.items():
+        component = model.components.get(designator)
+        if component is None or not pins:
+            continue
+        box = _relative_box(pins)
+        if box is None:
+            continue
+        bx0, by0, bx1, by1 = box
+        sides: dict[str, set[str]] = {s: set() for s in ("W", "E", "N", "S")}
+        for pin in component.pins:
+            if pin.net is None or pin.number not in pins:
+                continue
+            dx, dy = pins[pin.number]
+            distances = {"W": dx - bx0, "E": bx1 - dx, "N": dy - by0, "S": by1 - dy}
+            sides[min(distances, key=lambda s: distances[s])].add(pin.net)
+        out[designator] = sides
+    return out
+
+
+#: How much room one more net needs in a gap: the ruler's own pitch
+#: (:data:`WIRE_CLEARANCE`) plus the two grid units that keep the outermost
+#: lanes off the boxes. A gap carrying ``d`` nets abreast needs ``10 * d``
+#: units, in the ruler's terms — which is where the golden page's numbers come
+#: from: a 40-unit aisle holds four nets at 10 units apart and no more, and the
+#: U5|USB1 aisle has six nets to carry (141).
+def _gap_width(demand: int, base: float, spare_lanes: int = 0) -> float:
+    """The width a routing gap needs to carry ``demand`` nets abreast.
+
+    ``base`` is the packing's own gap (``COL_AISLE``, ``BOX_GAP``,
+    ``ROW_CHANNEL``) and is what an uncrowded gap keeps. ``spare_lanes`` shrinks
+    the demand by that many nets: what the solver steps down by when the wider
+    page turns out to be one the router cannot wire (see
+    :func:`~boardwise.engines.generate.generate_plan`).
+    """
+    lanes = max(demand - spare_lanes, 0)
+    if lanes <= 1:
+        return base
+    needed = 2 * GRID + (lanes - 1) * WIRE_CLEARANCE
+    steps = math.ceil(max(needed, base) / GRID)
+    return float(steps * GRID)
+
+
 def plan_placement(
     offsets: dict[str, dict[str, tuple[float, float]]],
     order: list[str],
+    *,
+    exits: dict[str, dict[str, set[str]]] | None = None,
+    spare_lanes: int = 0,
 ) -> list[Placement]:
     """Shelf-pack the components in ``order`` inside the usable sheet area.
 
@@ -335,12 +396,53 @@ def plan_placement(
 
     Origins are snapped to :data:`GRID` so every pin tip lands on the
     routing lattice (offsets are multiples of 5, measured).
+
+    **Gaps are sized by the traffic that has to cross them** (141), when
+    ``exits`` is given (:func:`net_exits`). The shelf packing's gaps are the
+    vertical aisles between columns, the channel between rows and the strip
+    between the frame and the first column — and each is a *routing* channel: a
+    net whose pins are on both sides of one has to run a wire through it. A
+    fixed 40-unit aisle carries four nets at the 10-unit pitch
+    :data:`WIRE_CLEARANCE` asks for; a fifth and sixth net in the same aisle
+    cannot be drawn apart from each other, and
+    :func:`~boardwise.engines.layout.validate_full` reports every pair of them as
+    ``WIRE_TOO_CLOSE``. So an over-subscribed **aisle** is widened to
+    ``_gap_width(demand, base, spare_lanes)``, where the demand is the number of
+    *nets* whose pins exit into it — the left box's east edge together with the
+    right box's west edge, one per net (:func:`_widen_gaps` says why the other
+    two gaps keep their base width).
+
+    A gap is never narrowed below its base, so a board with no crowded aisle
+    packs exactly as it always did — which is why this is a no-op on every
+    sparse page and only moves the ones whose aisles are over-subscribed.
+
+    Rows and their membership are decided **first** (the plain packing, with
+    base gaps) and the widened aisles are spent inside that decision: the
+    widened page keeps every box in the row it was already in and only moves it
+    right, so a wider aisle can never re-shuffle which parts sit together.
+    """
+    return _pack(offsets, order, exits, spare_lanes)[0]
+
+
+def _pack(
+    offsets: dict[str, dict[str, tuple[float, float]]],
+    order: list[str],
+    exits: dict[str, dict[str, set[str]]] | None = None,
+    spare_lanes: int = 0,
+) -> tuple[list[Placement], list[list[str]]]:
+    """Pack the shelves, and hand back both the placements and the rows.
+
+    The rows are the packing's own decision — which components share a shelf,
+    decided here and not revisited by the caller — and they are what lets
+    :func:`_widen_gaps` lay the same page out again with roomier aisles without
+    re-deciding which parts sit together.
     """
 
     def snap(value: float) -> float:
         return round(value / GRID) * GRID
 
     placements: list[Placement] = []
+    rows: list[list[str]] = []
     row_y = snap(max(FRAME + BOX_GAP, TITLE_BLOCK[3] + BOX_GAP))
     row_height = 0.0
     cursor_x = snap(FRAME + BOX_GAP)
@@ -366,6 +468,9 @@ def plan_placement(
             # pin-less: cannot be bounded; park it and let the validator speak
             placements.append(Placement(designator, cursor_x, row_y, None))
             cursor_x += COL_AISLE * 2
+            if not rows:
+                rows.append([])
+            rows[-1].append(designator)
             continue
         bx0, by0, bx1, by1 = rel
         w, h = bx1 - bx0, by1 - by0
@@ -373,12 +478,95 @@ def plan_placement(
             row_y = snap(row_y + row_height + ROW_CHANNEL)
             row_height = 0.0
             cursor_x = snap(FRAME + BOX_GAP)
+            rows.append([])
+        elif not rows:
+            rows.append([])
         origin_x = snap(cursor_x - bx0)
         origin_y = snap(row_y - by0)
         box = component_bbox(origin_x, origin_y, offsets.get(designator, {}))
         placements.append(Placement(designator, origin_x, origin_y, box))
+        rows[-1].append(designator)
         row_height = max(row_height, h)
         cursor_x += w + COL_AISLE
+
+    if not exits:
+        return placements, rows
+    return _widen_gaps(offsets, rows, exits, spare_lanes), rows
+
+
+def _widen_gaps(
+    offsets: dict[str, dict[str, tuple[float, float]]],
+    rows: list[list[str]],
+    exits: dict[str, dict[str, set[str]]],
+    spare_lanes: int,
+) -> list[Placement]:
+    """Re-emit the packed rows with demand-sized aisles between the columns.
+
+    The rows, their order and their members come from :func:`_pack` and are not
+    revisited: this walks them again, spends the demanded width on each
+    inter-column aisle, and lays the same boxes out again. Nothing is
+    rearranged, so the only two ways this can differ from the plain packing are
+    an aisle that needed room and a row that no longer fits the sheet — the
+    second is :func:`validate_full`'s to report.
+
+    **Two gaps are deliberately left at their base width** (141, measured):
+
+    * the strip between the frame and the first column. Its demand as counted
+      here is the nets leaving that first box's west edge, and on the golden
+      page that count is 8 while the strip in fact carries 5: a west-edge pin
+      whose wire turns at once needs no lane. Widening it 30 -> 70 moved the
+      golden board's findings by exactly one, 47 -> 46, for 40 units of the
+      page's scarcest resource — the strip is where the *net* count overstates
+      the *lane* count, so it is left alone;
+    * the channel between two rows, because its width was measured and is not
+      what the findings are made of: ``ROW_CHANNEL`` 60 -> 120 on the golden
+      page reports 47 findings at every value, so the horizontal trunks are
+      lane-assignment, not capacity, and paying area for them buys nothing.
+    """
+
+    def snap(value: float) -> float:
+        return round(value / GRID) * GRID
+
+    def aisle_demand(left: str, right: str) -> int:
+        return len(
+            exits.get(left, {}).get("E", set()) | exits.get(right, {}).get("W", set())
+        )
+
+    placements: list[Placement] = []
+    row_y = snap(max(FRAME + BOX_GAP, TITLE_BLOCK[3] + BOX_GAP))
+    row_height = 0.0
+    cursor_x = 0.0
+    previous: str | None = None
+    for index, row in enumerate(rows):
+        if index:
+            row_y = snap(row_y + row_height + ROW_CHANNEL)
+            row_height = 0.0
+            previous = None
+        cursor_x = 0.0
+        for designator in row:
+            rel = _relative_box(offsets.get(designator, {}))
+            if rel is None:
+                # pin-less: cannot be bounded; parked exactly where the plain
+                # packing parks it, and the validator speaks about it there
+                cursor_x = snap(FRAME + BOX_GAP) if previous is None else cursor_x
+                placements.append(Placement(designator, cursor_x, row_y, None))
+                cursor_x = snap(cursor_x + COL_AISLE * 2)
+                previous = designator
+                continue
+            bx0, by0, bx1, by1 = rel
+            w, h = bx1 - bx0, by1 - by0
+            if previous is None:
+                cursor_x = snap(FRAME + BOX_GAP)
+            else:
+                gap = _gap_width(aisle_demand(previous, designator), COL_AISLE, spare_lanes)
+                cursor_x = snap(cursor_x + gap)
+            origin_x = snap(cursor_x - bx0)
+            origin_y = snap(row_y - by0)
+            box = component_bbox(origin_x, origin_y, offsets.get(designator, {}))
+            placements.append(Placement(designator, origin_x, origin_y, box))
+            row_height = max(row_height, h)
+            cursor_x = snap(cursor_x + w)
+            previous = designator
     return placements
 
 
@@ -581,6 +769,116 @@ def route_nets(
     pin_positions: dict[tuple[str, str], tuple[float, float]],
     placements: list[Placement],
 ) -> tuple[list[RoutedNet], list[Violation]]:
+    """Route every net, and give a net that came out unroutable a second try.
+
+    One pass over the nets in size order is :func:`_route_pass`, and it is what
+    this used to be. What a second pass adds is the answer to a measured
+    fragility (141): a two-pin net whose only lane is a narrow strip between two
+    boxes can be sealed by the routes of the bigger nets that went first — it
+    routes perfectly well *alone* and is unroutable *in traffic* — and the
+    outcome flips on geometry changes of a single grid step. That flip is not a
+    property of the placement; it is the order.
+
+    So when a pass reports ``NET_UNROUTABLE``, the failed nets are re-run with
+    first pick of the lanes, and the second pass replaces the first only if it
+    strictly loses fewer nets. Connectivity outranks everything else here: a
+    hard ``NET_UNROUTABLE`` is an undrawable board, a spacing finding is a
+    readability opinion.
+
+    The retry is a **bound**: :data:`ROUTE_RETRY_LIMIT` passes at most, every
+    pass promoting whatever failed to the front, and the pass that loses the
+    fewest nets wins (ties keep the earlier one). Measured on the 141 widened
+    board, the failing set hops from net to net as the order changes and then
+    spirals: promoting the losers is not a cure, it is a bounded search for a
+    better order, and the honest thing is to say so.
+
+    Returns ``(routes, violations)``.
+    """
+    best = _route_pass(model, pin_positions, placements)
+    if not _unroutable_count(best[1]):
+        return best
+    priority = _unroutable_names(best[1])
+    for _ in range(ROUTE_RETRY_LIMIT - 1):
+        attempt = _route_pass(model, pin_positions, placements, priority=priority)
+        if _route_score(attempt[1]) < _route_score(best[1]):
+            best = attempt
+        if not _unroutable_count(attempt[1]):
+            break
+        grown = priority + [
+            name for name in _unroutable_names(attempt[1]) if name not in priority
+        ]
+        if grown == priority:
+            break
+        priority = grown
+    return best
+
+
+#: How many times :func:`route_nets` may re-run the whole board with the nets
+#: that failed promoted to the front of the queue. The first pass is the
+#: standing one, so the total is this number. Three is measured, not picked:
+#: on the 141 board the failing set walks (+5V, RX) -> (GND, TX) -> (NET1) and
+#: then repeats, so a fourth pass re-measures a board already seen — and each
+#: pass pays a full search of the sheet.
+ROUTE_RETRY_LIMIT = 3
+
+
+def _unroutable_names(violations: list[Violation]) -> list[str]:
+    return [
+        v.subject.removeprefix("net ")
+        for v in violations
+        if v.code == "NET_UNROUTABLE"
+    ]
+
+
+def _unroutable_count(violations: list[Violation]) -> int:
+    return sum(1 for v in violations if v.code == "NET_UNROUTABLE")
+
+
+def _route_score(violations: list[Violation]) -> tuple[int, int]:
+    """Fewest unroutable nets first, then the quietest board.
+
+    Order is not cosmetic: a lost net is an undrawable board, while everything
+    else this router can report is either advisory or a consequence of a net it
+    could not place. Among two orders that lose nothing, the one that complains
+    least is the better drawing.
+    """
+    return (_unroutable_count(violations), len(violations))
+
+
+def _ordered_nets(
+    model: DesignModel,
+    pin_positions: dict[tuple[str, str], tuple[float, float]],
+    priority: list[str] | None = None,
+) -> list[tuple[str, Net]]:
+    """The nets, biggest first, with ``priority`` names moved to the front.
+
+    Biggest-first is the router's standing policy (a wide net has the fewest
+    places to go). The front-of-queue override exists for one reason only: a
+    board where that policy lost a net, retried with the losers going first —
+    in the order given, because that order is what the retry is varying.
+    """
+    entries = sorted(
+        model.nets.items(),
+        key=lambda item: (
+            -sum(1 for m in item[1].pins if m in pin_positions),
+            item[0],
+        ),
+    )
+    if not priority:
+        return entries
+    by_name = dict(entries)
+    front_names = [name for name in priority if name in by_name]
+    front = [(name, by_name[name]) for name in front_names]
+    taken = set(front_names)
+    return front + [e for e in entries if e[0] not in taken]
+
+
+def _route_pass(
+    model: DesignModel,
+    pin_positions: dict[tuple[str, str], tuple[float, float]],
+    placements: list[Placement],
+    priority: list[str] | None = None,
+) -> tuple[list[RoutedNet], list[Violation]]:
     """Route every multi-pin net on a coarse grid, nets one after another.
 
     Each pin owns a straight *corridor* from its tip out of its own box
@@ -600,6 +898,10 @@ def route_nets(
     pay :data:`PROXIMITY_COST` for it, so it keeps its distance where
     there is room and still crosses where there is not. A net that fails to
     route at any price is reported, never silently dropped.
+
+    ``priority`` names the nets that go to the front of that queue, in the
+    order they keep among themselves; everything else follows in size order.
+    :func:`route_nets` uses it to retry a failing board with the losers first.
 
     Returns ``(routes, violations)``.
     """
@@ -641,12 +943,7 @@ def route_nets(
     routed_endpoints: set[tuple[int, int]] = set()
     routes: list[RoutedNet] = []
 
-    def member_count(item) -> tuple[int, str]:
-        name, net = item
-        placed = sum(1 for m in net.pins if m in pin_positions)
-        return (-placed, name)
-
-    for name, _net in sorted(model.nets.items(), key=member_count):
+    for name, _net in _ordered_nets(model, pin_positions, priority):
         net = model.nets[name]
         members = sorted(
             (m for m in net.pins if m in pin_positions),

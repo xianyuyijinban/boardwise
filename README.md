@@ -19,7 +19,7 @@ multi-platform from day one.
 boardwise checkup
 ```
 
-You get a report: ERC/DRC, 20 design rules, which parts
+You get a report: ERC/DRC, 22 design rules, which parts
 still lack datasheets, and every finding pointing at a concrete
 component, pin and net — with markers drawn on the canvas where the
 problems are. On real boards it has caught things the designer had
@@ -178,7 +178,7 @@ MIT
 boardwise checkup
 ```
 
-输出一份报告：ERC/DRC、20 条设计规则、哪些器件还缺数据手册、每条问题
+输出一份报告：ERC/DRC、22 条设计规则、哪些器件还缺数据手册、每条问题
 各自指着具体的器件、引脚和网络；顺手把问题标记在画布上。它在真板子上
 抓到过设计者自己没注意到的问题——比如一个该做偏置而没做的电流采样
 电路。这类问题不是查规则书能查出来的，得先理解整个架构自不自洽。
