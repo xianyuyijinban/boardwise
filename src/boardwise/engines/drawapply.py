@@ -66,14 +66,16 @@ from ..core.changeplan import (
 )
 from ..core.circuitspec import CircuitSpec
 from ..core.geometry import transform_point
-from ..core.layoutplan import LayoutPart, LayoutPlan
+from ..core.layoutplan import DOWNGRADE_NOTE_PREFIX, LayoutPart, LayoutPlan
+from ..core.model import is_ground_net
 from ..core.presentationspec import PresentationSpec
-from ..core.symbolprofile import SymbolProfile, SymbolPose
+from ..core.symbolprofile import SymbolProfile, SymbolPose, role_siblings
 from . import addcomponent
 
 __all__ = [
     "CENSUS_CLEARANCE",
     "CENSUS_FALLBACK_HALF",
+    "GEOMETRY_SECTIONS",
     "DiscardSelection",
     "DrawPlanError",
     "HALF_GRID",
@@ -85,6 +87,7 @@ __all__ = [
     "census_digest",
     "census_items",
     "census_keepouts",
+    "census_phrase",
     "discard_selection",
     "designator_problems",
     "expected_pin_points",
@@ -94,6 +97,8 @@ __all__ = [
     "library_problems",
     "live_islands",
     "module_plan",
+    "net_name_problems",
+    "netlabel_items",
     "plan_pins",
     "placement_problems",
     "posed_pin_offsets",
@@ -363,15 +368,32 @@ def flag_kind(net: str, symbol_ref: str = "") -> str:
        ``PWR-<net>`` flag for every rail by the `CompileBudget` convention. So a
        plan that drew ``PWR-VIN`` on a ``power``-class net is executable, and
        refusing it here would refuse every input rail this repo draws. The
-       convention is :data:`FLAG_SYMBOL_GROUND` / :data:`FLAG_SYMBOL_POWER_PREFIX`.
+       convention is :data:`FLAG_SYMBOL_GROUND` / :data:`FLAG_SYMBOL_POWER_PREFIX`:
+       a symbol is a ground flag when the name it carries is a ground name
+       (``PWR-GND``, ``PWR-PGND``) and a supply flag otherwise.
 
     A name and a symbol that disagree (a ground-named net drawn with a power
     symbol) raise rather than pick one: the flag's kind is what the editor's
     netlist carries (029-d), so picking would misname the net on the board.
+
+    143d: that rule was only applied where **both** judgements spoke, so it was
+    silent exactly where an unrecognised name meets a symbol that says *ground* —
+    `flag_kind("VIN5", "PWR-GND")` answered ``Ground``, and apply put a ground flag
+    on a rail. "Not in the host's vocabulary" is not a licence for the symbol to
+    say anything: a ground symbol on a net whose name is not a ground name is the
+    same disagreement as the one above, and the second half of this function
+    refuses it. The cross-check is `is_ground_net` — the one place this repo calls
+    a name ground — rather than a second reading of the symbol's text.
     """
     by_name = str(addcomponent.power_flag_kind(net) or "")
     reference = (symbol_ref or "").upper()
-    if reference == FLAG_SYMBOL_GROUND:
+    if reference == FLAG_SYMBOL_GROUND or (
+        reference.startswith(FLAG_SYMBOL_POWER_PREFIX)
+        # `PWR-<X>`: a flag for X, so the symbol is a ground flag exactly when the
+        # name it carries is one (`PWR-GND`, and `PWR-PGND` / `PWR-AGND` the same
+        # way — the ground vocabulary is not this function's to re-state).
+        and is_ground_net(reference[len(FLAG_SYMBOL_POWER_PREFIX):])
+    ):
         by_symbol = DRAW_FLAG_GROUND
     elif reference.startswith(FLAG_SYMBOL_POWER_PREFIX):
         by_symbol = DRAW_FLAG_POWER
@@ -383,10 +405,68 @@ def flag_kind(net: str, symbol_ref: str = "") -> str:
             f"symbol (a {by_symbol} flag by this repo's convention) — a flag's kind is "
             "what the editor's netlist carries, so the two have to agree"
         )
+    if by_symbol == DRAW_FLAG_GROUND and not is_ground_net(net):
+        raise DrawPlanError(
+            f"net {net!r} is not a ground name, but the drawing places a "
+            f"{symbol_ref!r} symbol — which is a {DRAW_FLAG_GROUND} flag by this repo's "
+            "convention (053B writes `PWR-GND` for a ground and `PWR-<net>` for a "
+            "rail). The name is not one the host's flag vocabulary recognises, so the "
+            "symbol is the only thing saying what this flag is, and a ground flag on "
+            f"net {net!r} would put that net on ground in the editor's own netlist "
+            "(029-d): either draw the rail's own `PWR-{net}` symbol or say what this "
+            "net is"
+        )
     return by_name or by_symbol
 
 
 # ------------------------------------------------------------ designators
+
+
+def is_designator(name: str) -> bool:
+    """Is this string a *designator*, by the allocator's own rule (143d)?
+
+    ``<letters><digits>`` — the shape `addcomponent.allocate_designator` can
+    produce and the shape every reader in this repo matches on
+    (`addcomponent.component_origins`, `primitive_id_of`, `discard_selection`'s
+    designator leg). The rule is *not* re-stated here: it is the allocator's own
+    regex, imported the way `addcomponent.power_flag_kind` imports
+    `layout._net_kind` — a second copy of "what a designator is" is how the
+    allocator and its readers drift apart, and 143d is exactly a case of one
+    reader (the allocator) having a rule the other (<--keep-names>) did not share.
+
+    Needed because `--keep-names` lands a **spec id** as a designator, and a spec
+    id is only checked for being non-empty, dot-free and unique
+    (`core.circuitspec`) — nothing about it is a number. ``C10?`` in particular is
+    the editor's own notation for "not numbered yet", so a part placed under it
+    lands on the page and then cannot be read back by anything: the pin read-back
+    reports `C10? is not on the page` after two parts are already down.
+    """
+    return bool(addcomponent._DESIGNATOR_RE.match(name or ""))
+
+
+def _pool_match(names: Iterable[str], designator: str) -> str:
+    """The name in ``names`` that ``designator`` collides with, or ``''`` (143d).
+
+    Collision is judged the way the **allocator** judges occupancy rather than by
+    string equality: `addcomponent.allocate_designator` folds the prefix, so a
+    page's ``c10`` occupies ``C10``'s number, and `discard_selection` matches a
+    page designator case-insensitively (`row["designator"].upper()`), so ``C10``
+    beside a page's ``c10`` is one designator with two spellings: a rename mid-run
+    *and* a name two readers would each resolve to the same primitive. The check
+    this replaces was ``designator in used`` — case-sensitive, so exactly that pair
+    went through.
+    """
+    match = addcomponent._DESIGNATOR_RE.match((designator or "").strip())
+    if not match:
+        # Not a designator at all: there is no prefix/number to fold, so only an
+        # exact match is a collision.
+        return designator if designator in list(names) else ""
+    wanted = (match.group(1).upper(), int(match.group(2)))
+    for name in names:
+        other = addcomponent._DESIGNATOR_RE.match((name or "").strip())
+        if other and (other.group(1).upper(), int(other.group(2))) == wanted:
+            return str(name)
+    return ""
 
 
 def _prefix_of(spec_id: str, profile: SymbolProfile) -> str:
@@ -424,11 +504,16 @@ def assign_designators(
     id** rather than a freshly allocated number: the ids are the designators the
     engineer reads (``C10`` is ``C10``, not a renumbered ``C3``), and a compiled
     drawing that renumbers them is a drawing nobody can match against the plan
-    they approved. It is a *checked* preservation, not an override: a name that
-    already sits in the pool is refused by name (the host would rename it mid-run,
-    036b), so "keep the names" is only ever honoured where the pool is free of
-    them. A drawing that does not want it passes ``keep_names=False`` and gets
-    exactly the old numbering.
+    they approved. It is a *checked* preservation, not an override, and the checks
+    are the allocation's own two (143d): the name must **be** a designator
+    (:func:`is_designator` — a spec id is only checked for being non-empty,
+    dot-free and unique, and ``C10?`` is the editor's "not numbered yet") and it
+    must be **free** (a name already in the pool is refused by name, since the host
+    would rename it mid-run, 036b). Both refusals are plan-time, naming the part:
+    the alternative — a plan whose designators no reader can match — lands the
+    parts, fails the pin read-back and leaves half a drawing on the page. A drawing
+    that does not want it passes ``keep_names=False`` and gets exactly the old
+    numbering.
     """
     used = [name for name in pool]
     out: list[tuple[str, str, str]] = []
@@ -448,10 +533,28 @@ def assign_designators(
             )
         if keep_names:
             designator = part.part_id
-            if designator in used:
+            # 143d: the two checks a kept name needs, and they are the *same two*
+            # the allocator applies to a name it hands out — a kept name is an
+            # allocation the spec made instead, so it gets the allocation's rules.
+            # (1) it is a designator at all; (2) it is free. Without (1) the run
+            # compiles a plan whose designators no reader can match, writes the
+            # parts and dies in the pin read-back with a half-landed page.
+            if not is_designator(designator):
                 raise DrawPlanError(
                     f"part {part.part_id!r} was told to keep its spec id as its "
-                    f"designator, but {designator} is already on the page or in the "
+                    f"designator, but {designator!r} is not a designator — the shape is "
+                    "<letters><number> (`R7`, `C10`), which is what "
+                    "`addcomponent.allocate_designator` produces and what every reader "
+                    "in this repo matches on. A `?`-suffixed name is the editor's own "
+                    "'not numbered yet', so a part landed under one cannot be read back "
+                    "(the pin read-back reports it missing *after* the parts are placed). "
+                    "Give the spec part a designator-shaped id, or drop --keep-names"
+                )
+            taken = _pool_match(used, designator)
+            if taken:
+                raise DrawPlanError(
+                    f"part {part.part_id!r} was told to keep its spec id as its "
+                    f"designator, but {taken} is already on the page or in the "
                     "project export — a kept name that collides is a rename mid-run "
                     "(036b); free the name or drop --keep-names"
                 )
@@ -477,12 +580,25 @@ def designator_problems(plan: ChangePlan, pool: Iterable[str]) -> list[str]:
     only: its designators are the engineer's spec ids, which the pool would never
     *allocate*, so the allocation leg would reject every one of them for the wrong
     reason. What still has to hold is that the name is free — a kept ``C10`` that
-    something else already owns is the same rename mid-run.
+    something else already owns is the same rename mid-run. 143d added the other
+    half of the same question: a kept name also has to *be* a designator
+    (:func:`is_designator`), because a plan whose designators no reader can match is
+    a plan that lands half a drawing and then cannot find its own parts.
     """
     pool_list = [name for name in pool]
     problems: list[str] = []
     for part in plan.change.draw_parts:
-        if part.designator in pool_list:
+        if plan.change.draw_keep_names and not is_designator(part.designator):
+            problems.append(
+                f"{part.designator} is this kept-name plan's designator for "
+                f"{part.spec_id}, and it is not a designator (<letters><number>): no "
+                "reader in this repo can match it, so the run would place the part and "
+                "then fail to read it back — re-plan without --keep-names, or give the "
+                "spec part a designator-shaped id"
+            )
+            continue
+        taken = _pool_match(pool_list, part.designator)
+        if taken:
             problems.append(
                 f"{part.designator} ({part.value}) is already on the page or in the "
                 "project export — the plan's number was taken between plan and apply"
@@ -519,7 +635,9 @@ class _Built:
 
 
 def islands_from_circuit(
-    circuit: CircuitSpec, designators: Mapping[str, str]
+    circuit: CircuitSpec,
+    designators: Mapping[str, str],
+    profiles: Mapping[str, SymbolProfile] | None = None,
 ) -> list[PlanIsland]:
     """The netlist expectation: every placed pin and the pins it is one with.
 
@@ -531,17 +649,190 @@ def islands_from_circuit(
     The mates list **includes the pin itself** — the island *is* that set — and a
     net whose only member is one pin yields a one-element island, which is a true
     statement about a rail carried by a flag.
+
+    **The role-sibling pins are part of the expectation (143 F2).** 060 sec.2
+    rules that a role carried on several pins is *one node inside the symbol*, so
+    a spec that puts one of them on a net puts the role there — and the compiler
+    draws the rest of them on that net, on their own stubs under the same name.
+    121's plan-time expectation used to be read off ``net.members`` alone, so the
+    plan declared a smaller net than the drawing it came from: `draw apply`'s
+    read-back then reported *"U1.2 is on net 'Net2' with ['U1.2', 'U1.4'] …
+    but the plan says ['U1.2']"* — a correct drawing judged a disagreement by its
+    own plan, exit 3, never saved (the measured AMS1117 double-`VOUT` shape).
+    Passing ``profiles`` (the same ``symbolRef -> SymbolProfile`` book the plan was
+    built from) adds them, with the two exceptions the compiler's own
+    ``_sibling_members`` and readability's ``_role_node_expectations`` apply: a
+    pin listed in ``nc[]`` stays off the net, and a pin the spec puts on *another*
+    net is left to the `circuit-invalid` refusal rather than silently joined.
+    All three now read the one definition, ``core.symbolprofile.role_siblings``.
+
+    Without ``profiles`` the answer is what it always was (the spec's own
+    members), so a caller holding only the circuit is unchanged.
     """
     islands: list[PlanIsland] = []
+    book = dict(profiles or {})
     for net in circuit.nets:
-        members = sorted(
-            f"{designators[member.partition('.')[0]]}.{member.partition('.')[2]}"
-            for member in net.members
+        spelled = sorted(
+            member for member in net.members
             if member.partition(".")[0] in designators
+        )
+        members = sorted(
+            _designator_pin(
+                designators, member
+            )
+            for member in _role_siblings_of_net(circuit, book, net, spelled)
         )
         for member in members:
             islands.append(PlanIsland(pin=member, mates=list(members)))
     return islands
+
+
+def _designator_pin(designators: Mapping[str, str], member: str) -> str:
+    """``<specId>.<pin>`` -> ``<designator>.<pin>`` for the plan's own spelling."""
+    part_id, _, pin = member.partition(".")
+    return f"{designators[part_id]}.{pin}"
+
+
+def _named_pin(designators: Mapping[str, str], spelling: str) -> str:
+    """The same translation for a sentence, tolerant of a bare pin or ``""``."""
+    part_id, _, pin = spelling.partition(".")
+    if not pin:
+        return spelling
+    return f"{designators.get(part_id, part_id)}.{pin}"
+
+
+def _role_siblings_of_net(
+    circuit: CircuitSpec,
+    profiles: Mapping[str, SymbolProfile],
+    net: Any,
+    members: Sequence[str],
+) -> list[str]:
+    """``members`` plus the role-sibling pins the drawing puts on this net too.
+
+    The rule and both exceptions are `drawcompiler._sibling_members`' own (and
+    `readability._role_node_expectations`'): a pin in ``nc[]`` is an explicit
+    no-connect and stays off the net, and a pin the spec itself puts on another
+    net is the one-role-two-nets contradiction the grammar refuses — nothing is
+    invented for it. The spelling of the exceptions is the **spec's**
+    (``<partId>.<pin>``, which is what ``nc[]`` entries and ``net.members``
+    carry; `grammar.base.nc_pins_of` reads them the same way).
+    """
+    declared = {member: item.id for item in circuit.nets for member in item.members}
+    nc = {item.pin for item in circuit.nc}
+    out: list[str] = list(members)
+    for member in members:
+        part_id, _, token = member.partition(".")
+        part = circuit.part(part_id)
+        profile = profiles.get(part.symbol_ref) if part is not None else None
+        if profile is None:
+            continue
+        for pin in role_siblings(profile, token):
+            spelling = pin.number or pin.name
+            if not spelling or f"{part_id}.{spelling}" in nc:
+                continue
+            here = declared.get(f"{part_id}.{spelling}", declared.get(f"{part_id}.{pin.name}", ""))
+            if here and here != net.id:
+                continue
+            sibling = f"{part_id}.{spelling}"
+            if sibling not in out:
+                out.append(sibling)
+    return sorted(out)
+
+
+def net_name_problems(layout: LayoutPlan) -> list[str]:
+    """Does the drawing claim one conductor is two nets? (143 F5)
+
+    A `LayoutPlan` states net names two ways: **declared** (a `LayoutLabel` or a
+    `LayoutPowerSymbol` says "this point is net X") and **claimed** (a
+    `LayoutSegment` carries ``net``, and 029-b measured that the host's wire
+    carries its own name — which is why `sch.place_wire` is handed exactly this
+    string at apply time). Both are statements about the same canvas, so where a
+    segment touches a conductor on which another name is declared, one of the two
+    is wrong: a node has one name.
+
+    Neither judge the compiler runs sees this: `readability` derives the netlist
+    from the **declared** names only (052 sec.4 says so in as many words) and
+    `check_grammar` does not read ``segment.net`` at all. Measured 2026-10-10
+    (143d): renaming a TAP segment to ``VIN`` in a compiled divider came back
+    **hard=0, grammar=0** — a drawing the compiler would have produced happily, and
+    one whose landing puts those pins on VIN.
+
+    Connectivity is the same rule `readability._derive` uses (a vertex of one wire
+    on another's span is a tee, 054's measured editor behaviour), read here over
+    segments and name anchors — pins carry no name of their own, so they are not
+    anchors and cannot create a name conflict. Measured against every layout
+    document this repo has recorded (847 of them, 10 941 segments, 2026-10-10):
+    **zero** conflicts, so the rule refuses a drawing that was edited and not one
+    the compiler wrote.
+    """
+    segments = [segment for segment in layout.segments if len(segment.points) >= 2]
+    points = [
+        [(float(point[0]), float(point[1])) for point in segment.points]
+        for segment in segments
+    ]
+    anchors: list[tuple[str, tuple[float, float]]] = [
+        (str(label.net), (float(label.x), float(label.y)))
+        for label in layout.labels if label.net
+    ] + [
+        (str(symbol.net), (float(symbol.x), float(symbol.y)))
+        for symbol in layout.power_symbols if symbol.net
+    ]
+    parent = list(range(len(segments) + len(anchors)))
+
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    def union(left: int, right: int) -> None:
+        left, right = find(left), find(right)
+        if left != right:
+            parent[right] = left
+
+    for index, own in enumerate(points):
+        for other in range(index + 1, len(points)):
+            if any(_on_polyline(point, points[other]) for point in own) or any(
+                _on_polyline(point, own) for point in points[other]
+            ):
+                union(index, other)
+    for offset, (_net, point) in enumerate(anchors):
+        for index, own in enumerate(points):
+            if _on_polyline(point, own):
+                union(len(segments) + offset, index)
+
+    names: dict[int, set[str]] = {}
+    members: dict[int, list[str]] = {}
+    for index, segment in enumerate(segments):
+        root = find(index)
+        names.setdefault(root, set()).add(str(segment.net or ""))
+        members.setdefault(root, []).append(
+            f"segments[{index}] (net {segment.net!r})"
+        )
+    for offset, (net, point) in enumerate(anchors):
+        root = find(len(segments) + offset)
+        names.setdefault(root, set()).add(net)
+        members.setdefault(root, []).append(f"the name {net!r} at ({point[0]:g}, {point[1]:g})")
+
+    problems: list[str] = []
+    for root, found in names.items():
+        claimed = sorted(name for name in found if name)
+        if len(claimed) < 2:
+            continue
+        problems.append(
+            "the drawing claims one conductor as "
+            + " and ".join(repr(name) for name in claimed)
+            + " — "
+            + ", ".join(members[root])
+            + " meet at a point (this host joins a wire's vertex that lands on "
+            "another wire, 054), and a node has one name. `sch.place_wire` is handed "
+            "the segment's own net (029-b: a wire's net *is* its name on the canvas), "
+            "so whichever of these is not the node's real name lands as the net of a "
+            "conductor it does not belong to; nothing else checks it (143 F5: the "
+            "readability netlist reads declared names only, 052 sec.4, and "
+            "`check_grammar` does not read `segment.net`)"
+        )
+    return problems
 
 
 def module_plan(
@@ -603,6 +894,17 @@ def module_plan(
             "the layout carries no source digests — a plan that cannot say which specs "
             "it was compiled from cannot be judged stale (053 sec.2)"
         )
+    # 143 F5: the drawing's own names, read before anything is built from them.
+    # A segment's `net` is not read by either judge the compiler runs
+    # (`readability.derive_netlist` states netlist names from labels/symbols by
+    # design, 052 sec.4, and `check_grammar` never reads it), while **apply writes
+    # it straight onto the canvas** (`sch.place_wire`'s net, 029-b) — so a segment
+    # renamed by hand compiles to hard=0 / grammar=0 and lands as a wire carrying a
+    # name its own node does not have. This is the check that closes it, at the one
+    # place a LayoutPlan becomes executable.
+    name_problems = net_name_problems(layout)
+    if name_problems:
+        raise DrawPlanError("; ".join(name_problems))
     book = {str(key): value for key, value in dict(profiles).items()}
     table = profile_table(book)
     known = {ref for ref, _digest in table}
@@ -610,6 +912,17 @@ def module_plan(
     values = {str(key): str(value) for key, value in dict(values_by_part or {}).items()}
 
     built = _Built(notes=list(notes))
+    # 143 F1: a degradation the *compiler* had to make is a degradation the
+    # reader authorising this plan is entitled to see. `_build_candidate` marks
+    # those notes with `DOWNGRADE_NOTE_PREFIX` (the one spelling both modules
+    # import), and they are copied into `downgrades` — the list `draw plan`
+    # prints as `downgrade:` — with the marker dropped. Notes that are not marked
+    # describe the drawing and stay notes.
+    built.downgrades.extend(
+        note[len(DOWNGRADE_NOTE_PREFIX):]
+        for note in layout.notes
+        if note.startswith(DOWNGRADE_NOTE_PREFIX)
+    )
     for ref in sorted({part.symbol_ref for part in layout.parts}):
         if ref not in known:
             # The compiler already refuses a library gap; this is the check that
@@ -741,8 +1054,12 @@ def module_plan(
                     f"here hashes it to {expected!r}"
                 )
 
+    # 143 F3, the same namespace as the postconditions: `on_pin` is a spec id by
+    # contract, and the note that lists it is read beside designators.
+    designator_of = {part.spec_id: part.designator for part in built.parts}
     on_pins = {
-        (flag.on_pin or flag.net) for flag in built.flags if flag.on_pin
+        (_named_pin(designator_of, flag.on_pin) or flag.net)
+        for flag in built.flags if flag.on_pin
     }
     #: What a name stub may not touch (099d): every placed part's drawn body and
     #: every one of its pins, computed once for the whole label pass. A stub is a
@@ -852,7 +1169,11 @@ def module_plan(
             "flags sit on pins: " + ", ".join(sorted(on_pins))
         )
 
-    islands = islands_from_circuit(circuit, {item.spec_id: item.designator for item in built.parts})
+    islands = islands_from_circuit(
+        circuit,
+        {item.spec_id: item.designator for item in built.parts},
+        book,
+    )
     if not islands:
         raise DrawPlanError(
             "the circuit spec declares no nets with a pin of a placed part — there is "
@@ -1207,9 +1528,8 @@ def _preconditions(
     if baseline is not None and baseline.digest:
         lines.append(
             f"page {baseline.page_uuid or '(the page the plan lands on)'} still holds "
-            f"exactly the census the plan was built against ({len(baseline.components)} "
-            f"part(s), {baseline.wire_count} wire(s), {baseline.netflag_count} flag(s); "
-            f"digest {baseline.digest[:12]}…)"
+            f"exactly the census the plan was built against "
+            f"({census_phrase(baseline)}; digest {baseline.digest[:12]}…)"
         )
     else:
         lines.append(
@@ -1226,7 +1546,26 @@ def _preconditions(
 
 
 def _postconditions(built: _Built, islands: Sequence[PlanIsland]) -> list[str]:
-    """Done, as a list a human reads and apply re-checks leg by leg."""
+    """Done, as a list a human reads and apply re-checks leg by leg.
+
+    **One namespace: the designator (143 F3).** ``PlanDrawWire.from_pin`` and
+    ``PlanDrawFlag.on_pin`` are ``<specId>.<pin>`` by contract — the read-back
+    resolves that end through the placed part, so the plan's own field has to be
+    the plan's own id (`changeplan.PlanDrawWire`'s docstring) — but the sentence
+    a human reads is about a drawing, where the part is called by its
+    **designator** and the next line ("``R3`` (10k, R0402) is on the page …") says
+    so. Printed raw, the list read *"a wire carrying net VIN … starting on R1.1"*
+    beside "R3 (10k, R0402) is on the page": `R1.1` does not exist on that page
+    (121c's delivered plan carries the same shape — spec ids ``C10/C11/C13``
+    landed as ``C1/C2/C3``). The field keeps the spec id; only the sentence is
+    translated, through the plan's own ``spec_id -> designator`` table.
+    """
+    table = {item.spec_id: item.designator for item in built.parts}
+
+    def named(spelling: str) -> str:
+        """``<specId>.<pin>`` in the namespace the rest of the sentence uses."""
+        return _named_pin(table, spelling)
+
     lines = [
         f"{item.designator} ({item.value}, {item.symbol_ref}) is on the page at "
         f"({item.x:g}, {item.y:g}) rotation {item.rotation:g}"
@@ -1247,14 +1586,14 @@ def _postconditions(built: _Built, islands: Sequence[PlanIsland]) -> list[str]:
         f"a wire carrying net {item.net} is on the page from "
         f"({item.points[0][0]:g}, {item.points[0][1]:g}) to "
         f"({item.points[-1][0]:g}, {item.points[-1][1]:g})"
-        + (f", starting on {item.from_pin}" if item.from_pin else "")
+        + (f", starting on {named(item.from_pin)}" if item.from_pin else "")
         + (f" ({len(item.points)} point(s))" if len(item.points) > 2 else "")
         for item in built.wires
     )
     lines.extend(
         f"a {item.kind} flag named {item.net} is on the page at "
         f"({item.x:g}, {item.y:g})"
-        + (f", on {item.on_pin}" if item.on_pin else "")
+        + (f", on {named(item.on_pin)}" if item.on_pin else "")
         for item in built.flags
     )
     groups: dict[tuple[str, ...], list[str]] = {}
@@ -1275,36 +1614,113 @@ def _postconditions(built: _Built, islands: Sequence[PlanIsland]) -> list[str]:
 # --------------------------------------------------------------- the guards
 
 
+def census_phrase(census: PlanDrawBaseline) -> str:
+    """A census in words: what a report prints and a refusal quotes.
+
+    One function so every place that speaks about a census (the C5 refusals, the
+    plan's preconditions, the apply report) names the same fields — 143d's defect
+    was precisely a census that spoke about three of its five counters, and a
+    printout that leaves a counter out is a reader told the guard looked at less
+    than it did.
+    """
+    return (
+        f"{len(census.components)} part(s), {census.wire_count} wire(s), "
+        f"{census.netflag_count} flag(s), {census.netlabel_count} label(s), "
+        f"{census.unnumbered_count} part(s) with no usable designator and "
+        f"{census.pin_count} pin(s)"
+    )
+
+
+def _section_count(geometry: Any, key: str) -> int:
+    """How many entries a `sch.geometry` section carries (0 for an absent one)."""
+    items = geometry.get(key) if isinstance(geometry, dict) else None
+    return len(items) if isinstance(items, list) else 0
+
+
 def canvas_census(geometry: Any) -> PlanDrawBaseline:
     """The page's primitive census, from a `sch.geometry` dump (the C5 guard).
 
-    Designators, wire count and flag count: the three things a hand edit changes
-    that a compiled drawing has an opinion about. `addcomponent`'s readers are
-    reused rather than re-written — they already know that a flag is a component
-    with ``ComponentType: netflag`` and an empty designator (which is why the
-    designator set cannot see it) and that a ``?``-suffixed designator is a part
+    Designators, wire count, flag count, label count and the count of parts the
+    page holds without a usable designator (`R5?`): every kind of primitive a hand
+    edit changes that a compiled drawing has an opinion about. `addcomponent`'s
+    readers are reused rather than re-written — they already know that a flag is a
+    component with ``ComponentType: netflag`` and an empty designator (which is why
+    the designator set cannot see it) and that a ``?``-suffixed designator is a part
     the editor has not numbered.
+
+    143d: the census counted `components` and `wires` and stopped, and the section
+    it did not count was invisible to the digest — the same coin has two sides, so
+    both are paid here. A *section* the dump carries but the census ignores is a
+    change no guard can see (`netlabels`, `pins`; see :data:`GEOMETRY_SECTIONS`);
+    a *part the designator set deliberately drops* (``R5?``, 036b's occupancy
+    reading) is the same blindness inside a section the census does read, and it is
+    why ``unnumbered_count`` exists rather than the count being folded into
+    ``components`` — the designator set keeps 036's meaning, and the count carries
+    the fact.
     """
     components = sorted(addcomponent.component_origins(geometry))
-    wires = geometry.get("wires") if isinstance(geometry, dict) else None
-    wire_count = len(wires or [])
-    netflag_count = addcomponent.netflag_count(geometry)
+    counts = {key: _section_count(geometry, key) for key in GEOMETRY_SECTIONS}
+    unnumbered = _unnumbered_part_count(geometry)
     census = PlanDrawBaseline(
         components=components,
-        wire_count=int(wire_count),
-        netflag_count=int(netflag_count),
+        wire_count=int(counts["wires"]),
+        netflag_count=addcomponent.netflag_count(geometry),
+        netlabel_count=int(counts["netlabels"]),
+        pin_count=int(counts["pins"]),
+        unnumbered_count=int(unnumbered),
     )
     census.digest = census_digest(census)
     return census
 
 
+def _unnumbered_part_count(geometry: Any) -> int:
+    """Parts the page holds that no designator can speak for (`R5?`, or none).
+
+    Exactly the components `addcomponent.component_origins` drops and that
+    are not something else with a reason to have no designator: the sheet (the page,
+    not a part) and net flags (counted by `addcomponent.netflag_count`). "Dropped"
+    is asked of that reader's own answer — a name it does not carry is a part it
+    could not speak for, whatever the reason it had (no name, a ``?`` name, no
+    position in the dump) — rather than by re-stating its rule here, so the two
+    cannot drift.
+
+    Measured 2026-10-10 (143d): a page with an un-numbered part added by hand came
+    back with the same `components` list *and* the same digest as the page without
+    it, so C5 reported "the page is the one the plan was built against" while a part
+    sat on it.
+    """
+    if not isinstance(geometry, dict):
+        return 0
+    spoken = addcomponent.component_origins(geometry)
+    count = 0
+    for entry in geometry.get("components") or []:
+        state = _state(entry)
+        kind = _text(state.get("ComponentType")) or "part"
+        if kind in ("sheet", "netflag"):
+            continue
+        other = state.get("OtherProperty")
+        other = other if isinstance(other, dict) else {}
+        name = _text(state.get("Designator")) or _text(other.get("Designator"))
+        if not name or name not in spoken:
+            count += 1
+    return count
+
+
 def census_digest(census: PlanDrawBaseline) -> str:
-    """One string for a census, so a report can quote it and a guard can compare."""
+    """One string for a census, so a report can quote it and a guard can compare.
+
+    Every counter in :class:`PlanDrawBaseline` is in the payload. A counter left
+    out is a change the digest cannot see, which is the whole failure 143d reports
+    (labels and un-numbered parts both had no entry in this dictionary).
+    """
     payload = json.dumps(
         {
             "components": sorted(census.components),
             "wireCount": int(census.wire_count),
             "netflagCount": int(census.netflag_count),
+            "netlabelCount": int(census.netlabel_count),
+            "pinCount": int(census.pin_count),
+            "unnumberedCount": int(census.unnumbered_count),
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -1415,20 +1831,16 @@ def guard_problems(
             if now.digest != plan.change.draw_baseline.digest:
                 problems.append(
                     "the page's primitives are not the ones the plan was built against: "
-                    f"the plan recorded {len(plan.change.draw_baseline.components)} "
-                    f"part(s), {plan.change.draw_baseline.wire_count} wire(s) and "
-                    f"{plan.change.draw_baseline.netflag_count} flag(s) "
+                    f"the plan recorded {census_phrase(plan.change.draw_baseline)} "
                     f"({plan.change.draw_baseline.digest[:12]}…), the page now has "
-                    f"{len(now.components)} part(s), {now.wire_count} wire(s) and "
-                    f"{now.netflag_count} flag(s) ({now.digest[:12]}…) — somebody changed "
+                    f"{census_phrase(now)} ({now.digest[:12]}…) — somebody changed "
                     "the canvas after the plan was made (054 C5)"
                 )
         if expect_census and now.digest != expect_census:
             problems.append(
                 "the page's primitives are not the ones this run was told to expect: "
                 f"expected {expect_census[:12]}…, the page holds "
-                f"{len(now.components)} part(s), {now.wire_count} wire(s) and "
-                f"{now.netflag_count} flag(s) ({now.digest[:12]}…) — somebody changed the "
+                f"{census_phrase(now)} ({now.digest[:12]}…) — somebody changed the "
                 "canvas since the run that quoted that digest (054 C5)"
             )
     return problems
@@ -1853,6 +2265,20 @@ CENSUS_CLEARANCE = DRAW_GRID
 #: stubs; the note that goes with it says the box is an assumption, not a reading.
 CENSUS_FALLBACK_HALF = 10 * DRAW_GRID
 
+#: The primitive sections a `sch.geometry` dump is contracted to carry — the same
+#: four `bridge/protocol.py`'s `sch.geometry` promises and
+#: `engines.draw.geometry_fingerprint` counts. Named once, here, because the census
+#: is the reader that has to see **every** one of them: 143d found the census
+#: reading `components` and `wires` only, so a page that gained a `netlabels`
+#: entry (or a `pins` one) had a byte-identical census and a C5 guard that said
+#: "nobody touched this page" over a page somebody had touched. Measured on this
+#: host (3.2.186, and every recorded dump — 142 of them, `pins` and `netlabels`
+#: always empty): the two sections come back empty today, so this is insurance
+#: against a host that fills them rather than a live refusal — but a guard that
+#: covers three of four contracted sections is a guard whose "checked" is a claim
+#: it cannot support, which is the whole defect 143d reports.
+GEOMETRY_SECTIONS: tuple[str, ...] = ("components", "wires", "pins", "netlabels")
+
 
 def _state(entry: Any) -> dict[str, Any]:
     state = (entry or {}).get("state") if isinstance(entry, dict) else None
@@ -1888,14 +2314,59 @@ def _line_points(state: Mapping[str, Any]) -> list[tuple[float, float]]:
     return out
 
 
+def netlabel_items(geometry: Any) -> list[dict[str, Any]]:
+    """Every net label the page reports, one row each (143d), with its identity.
+
+    The section is one `sch.geometry` is contracted to carry (`netlabels`, and the
+    one `addcomponent.net_label_names`, `patchpin` and `moveblock` already read),
+    and the two shapes it arrives in are both handled: the flat one
+    (``state.Net`` / ``state.Text`` / ``state.Name``) and the nested one
+    (``state.Label.{Net,Text}``) that `addcomponent.net_label_names` carries a
+    branch for. ``net`` is what the label *states*, ``text`` what it prints —
+    they differ when a label shows one name and carries another, and a census
+    that read only one of them would call that edit no change.
+
+    Rows are keyed by the page's own primitive id, like every other census row.
+    """
+    rows: list[dict[str, Any]] = []
+    if not isinstance(geometry, dict):
+        return rows
+    for entry in geometry.get("netlabels") or []:
+        state = _state(entry)
+        label = state.get("Label")
+        label = label if isinstance(label, dict) else {}
+        net = _text(state.get("Net")) or _text(state.get("Name")) or _text(label.get("Net"))
+        text = _text(state.get("Text")) or _text(label.get("Text"))
+        rows.append({
+            "id": str((entry or {}).get("primitiveId") or state.get("PrimitiveId") or ""),
+            "kind": "netlabel",
+            "net": net,
+            "text": text,
+            "x": _num(state.get("X")),
+            "y": _num(state.get("Y")),
+            "rotation": _num(state.get("Rotation")),
+        })
+    return rows
+
+
 def census_items(geometry: Any) -> list[dict[str, Any]]:
     """Every primitive the page holds, one row each, with its identity fields.
 
     The rows are what "zero change" is judged on: a part's designator, value,
     LCSC number, origin and pose; a flag's net and origin; a wire's net and its
-    point list. Keyed by the page's own primitive id — the one identity the host
-    keeps stable across reads. The sheet (the drawing frame) is the page, not an
-    item on it, and is left out.
+    point list; a net label's net, text, origin and angle. Keyed by the page's own
+    primitive id — the one identity the host keeps stable across reads. The sheet
+    (the drawing frame) is the page, not an item on it, and is left out.
+
+    Every section :data:`GEOMETRY_SECTIONS` names has a branch here. It did not
+    until 143d: the ``netlabels`` section had none, so this function's own
+    promise ("every primitive … one row each") was false for exactly the kind of
+    edit 057 sec.2's "既有图元零改动" is meant to catch — a label somebody added,
+    moved or renamed was a change with no row to be seen as one. The ``pins``
+    section is deliberately not a row (a pin is drawn by the component that owns
+    it and is counted with it, in `census_keepouts`' measured box); it is counted
+    in the digest by :func:`canvas_census`, which is where "did anything on this
+    page move" is answered.
     """
     rows: list[dict[str, Any]] = []
     if not isinstance(geometry, dict):
@@ -1927,6 +2398,7 @@ def census_items(geometry: Any) -> list[dict[str, Any]]:
             "net": _text(state.get("Net")),
             "points": [list(point) for point in _line_points(state)],
         })
+    rows.extend(netlabel_items(geometry))
     return sorted(rows, key=lambda row: (row["kind"], row["id"]))
 
 
@@ -1939,12 +2411,16 @@ def census_keepouts(
     """Every existing primitive as a keep-out: ``(boxes, labels, notes)`` (057 sec.2).
 
     ``labels[i]`` says which primitive ``boxes[i]`` came from, so a refusal that
-    names ``keepouts[3]`` can be read back as "the existing R5". A component's box
-    is its **measured** extent from the dump's ``bboxes`` map (the caller asks for
-    it with ``bboxIds``); a component the page did not measure gets a
+    names ``keepouts[3]`` can be read back as "the existing R5". A component's or a
+    label's box is its **measured** extent from the dump's ``bboxes`` map (the
+    caller asks for it with ``bboxIds``); one the page did not measure gets a
     :data:`CENSUS_FALLBACK_HALF` box around its origin and a note saying so — an
     assumed box is a weaker keep-out, and the reader has to know which ones are.
     A wire is one box per segment. Every box is grown by ``clearance``.
+
+    "Every existing primitive" is :func:`census_items`' own list, so a kind that
+    function gains a row for becomes a keep-out in the same commit — 143d found a
+    label could be drawn over because it was never a row.
     """
     boxes: list[tuple[float, float, float, float]] = []
     labels: list[str] = []
@@ -1966,9 +2442,16 @@ def census_keepouts(
                     f"existing wire {row['id']}" + (f" ({row['net']})" if row["net"] else "")
                 )
             continue
-        name = row["designator"] or (
-            f"{row['net']} flag" if row["kind"] == "netflag" and row["net"] else row["kind"]
-        )
+        if row["kind"] == "netlabel":
+            # 143d: a label is a name printed on the canvas and a keep-out like any
+            # other primitive the page holds (057 sec.2: "每一个已存在图元都成为
+            # keep-out"). Without this branch the page compiler could put a module
+            # frame straight on top of somebody's label either.
+            name = f"{row['net'] or 'netlabel'} label"
+        else:
+            name = row["designator"] or (
+                f"{row['net']} flag" if row["kind"] == "netflag" and row["net"] else row["kind"]
+            )
         box = measured.get(row["id"])
         values = (
             [_num(box.get(key)) for key in ("minX", "minY", "maxX", "maxY")]
@@ -1993,7 +2476,7 @@ def census_keepouts(
         labels.append(f"existing {name} {row['id']}")
     if unmeasured:
         notes.append(
-            f"{len(unmeasured)} existing component(s) had no measured extent, so each "
+            f"{len(unmeasured)} existing primitive(s) had no measured extent, so each "
             f"is kept out with an assumed ±{fallback_half:g} box around its origin: "
             + ", ".join(sorted(unmeasured))
         )
@@ -2018,6 +2501,13 @@ def _stable_net(row: Mapping[str, Any]) -> str:
 def _identity(row: Mapping[str, Any]) -> tuple:
     if row["kind"] == "wire":
         return ("wire", _stable_net(row), tuple(tuple(point) for point in row["points"]))
+    if row["kind"] == "netlabel":
+        # 143d: what a label *is* = the net it states, the text it prints and where
+        # it prints it. The two name fields are compared separately because a label
+        # that shows one name and carries another is a change worth a line, and the
+        # auto-net exemption is a *wire* rule (a label's name is a declaration, not
+        # an editor-generated net id).
+        return ("netlabel", row["net"], row["text"], row["x"], row["y"], row["rotation"])
     return (
         row["kind"], row["designator"], row["value"], row["lcsc"], row["net"],
         row["x"], row["y"], row["rotation"], row["mirror"],
@@ -2035,9 +2525,13 @@ def census_changes(
     Every row of ``before`` — except ``ignore_ids``, the ones the run itself was
     meant to touch (a discard's own targets) — must still be on the page, with
     the same identity fields (designator, value, LCSC number, net, origin, pose;
-    a wire's net and point list). A row that is gone or that changed is one line.
-    New rows are not judged here: what a run *adds* is the range check's
-    business, and this function is the one that says "and nothing else moved".
+    a wire's net and point list; a label's net, text and pose — 143d). A row that
+    is gone or that changed is one line. New rows are not judged here: what a run
+    *adds* is the range check's business, and this function is the one that says
+    "and nothing else moved".
+
+    "Every row" is only as wide as :func:`census_items`; the two are one pair, and
+    143d's hole was a kind of primitive that reached one of them and not the other.
     """
     skip = set(ignore_ids)
     now = {row["id"]: row for row in after if row.get("id")}
@@ -2055,7 +2549,7 @@ def census_changes(
             continue
         if _identity(found) != _identity(row):
             fields = [
-                key for key in ("designator", "value", "lcsc", "net", "x", "y",
+                key for key in ("designator", "value", "lcsc", "net", "text", "x", "y",
                                 "rotation", "mirror", "points")
                 if (
                     _stable_net(row) != _stable_net(found) if key == "net"

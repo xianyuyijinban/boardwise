@@ -488,7 +488,15 @@ def test_an_annotated_wire_end_is_a_terminal():
 def test_the_frame_override_moves_the_sheet_edge():
     model = _synthetic_two_pin_model()
     pins = {("U1", "1"): (0.0, 0.0), ("U1", "2"): (100.0, 0.0)}
-    placement = [_placement("U1", 0, 0, bbox=L.Rect(0.0, 0.0, 100.0, 20.0))]
+    # 143e/D6: the box sits **on the frame**, not on the sheet's raw edge. The
+    # default ruler used to be ``Rect(0, 0, SHEET_WIDTH, SHEET_HEIGHT)``, so this
+    # box was placed at (0,0) — legal by that ruler while sitting 10 units inside
+    # the keep-out ``layout.FRAME`` documents ("between anything and the sheet
+    # edge"), which is the blind band the widened-page search could reach. The
+    # old expectation pinned the wrong ruler, not a property of the override.
+    placement = [
+        _placement("U1", 0, 0, bbox=L.Rect(L.FRAME, L.FRAME, L.FRAME + 100, L.FRAME + 20))
+    ]
     wide = L.validate_full(model, placement, [], pins)
     assert [v.code for v in wide if v.code == "OUT_OF_SHEET"] == []
     tight = L.validate_full(

@@ -524,14 +524,19 @@ flag** — the three `draw` commands take a page on the same flags:
 | a page document (`kind=boardwise-page-layout-plan`) | — | — | as `--layout` (digests its `plan`), or as the positional (needs `--circuit/--presentation/--profiles` and `--page`/`--new-page`; the plan is built at apply time) |
 
 **A non-empty page** (`draw plan --page`): every primitive already on the page
-(part, wire segment, flag — parts at their `bboxIds`-measured extent) becomes a
+(part, wire segment, flag, net label — parts and labels at their `bboxIds`-measured
+extent, anything unmeasured at an assumed ±50 box the notes name) becomes a
 keep-out, and the arrangement moves off them as a rigid body
 (`PageCompileBudget.relocate_around_keepouts`; nothing is squeezed). A page the
 census fills is `presentation-poor`, the keep-out named by what it is ("existing
 R5 c-17"). After the landing, **every primitive that was on the page before is
 compared field by field** (designator, value, LCSC, net, origin, pose; a wire's
-point list) — one changed item is exit 2 and no save (`range.outOfScope`). This
-applies to every `draw apply`, single module or page.
+point list; a label's net, text and pose) — one changed item is exit 2 and no save
+(`range.outOfScope`). This applies to every `draw apply`, single module or page.
+The C5 digest behind all of this counts every section a `sch.geometry` dump is
+contracted to carry (`components`/`wires`/`pins`/`netlabels`) plus the parts the
+designator set deliberately drops (`R5?`): a kind the census does not count is a
+change no guard can see.
 
 **Page locks**: a `userLocks[]` entry with `"scope": "page"` (x, y only — the pose
 is the module's) pins the part to that page point in every candidate: the
@@ -626,7 +631,8 @@ compile/plan 的 `--intent PATH` 消费同一份合同（见下）。
 实测：C25744（0402 10k）引脚 ±20、body ±10.5×±4.5；C1525（0402 100n）引脚 ±20、body ±10.5×±8.5。
 拿**竖排 ±50** 这类没量过的 profile 去落图，引脚回读必然点名不符（C6 现场）。
 
-**apply 的执行序**（`_draw_apply_flow`）：① 页（`--page` 或 `--new-page`；plan 未绑页又没给页 → exit 5）
+**apply 的执行序**（`_draw_apply_flow`）：① 页（`--page` 或 `--new-page`；plan 未绑页又没给页 → exit 5；
+**plan 已绑页或已给 `--page` 时再给 `--new-page` → 显式拒 exit 5**，绝不静默落在绑定页上——143d）
 → ② 守卫（双 spec 摘要 + 布局摘要 + 库几何表 + 页身份；**显式** `--expect-census` 也在这关）
 → ③ 探针（plan 自己的 postconditions，双证齐全 = `already_applied` exit 0 零写入）
 → ④ 页既不是 plan 成品也不是 plan 基线 → `canvas_changed` exit 4 零写入
@@ -666,14 +672,16 @@ exit 4 零写入（C5）；库几何不符 → exit 4 零写入（C6，写前那
   带模块虚线框的 `candN.svg`。
 - **`draw plan`（页）**：页级编译后把选中候选的 `plan` 字段交给同一个 `module_plan`，产出的仍是
   `draw-module` plan（layoutSha256 = 页文档 `plan` 的几何哈希），旁边写 `<plan>.page.json`。带 `--page`
-  时读页面 census，**每个既有图元（件/线/旗标，件用 `bboxIds` 实测外框）转 keepout**，模块组整体平移避开；
+  时读页面 census，**每个既有图元（件/线/旗标/网标，件与网标用 `bboxIds` 实测外框，没量到的用原点 ±50 假定框
+  并在 notes 里点名）转 keepout**，模块组整体平移避开；
+  未编号器件（编辑器自己的 `R5?`）没有位号可点名，只进 census 计数、不进组件集；
   全被占 → `presentation-poor` 点名"existing R5 …"。页文档里的跨模块标签在本机放不了（坑 9），**没有线
   到达的标签点会补一段 10 单位具名短线**（downgrades 里写明），否则两边同名网在工程级网表里合不起来。
 - **`draw apply`**：`--layout` 可给页文档；位置参数也可直接给页文档（需 `--circuit/--presentation/--profiles`
   + `--page`/`--new-page`），运行时现建 plan 再走原流程；页文档的"过期守卫" = 它的模块框对页面现状的
   keepout 规则（压到既有图元 → exit 4 零写入）；要"页面任何变动都拒"用 `draw plan --page` 产的 plan
   （census 摘要精确）或 `--expect-census`。**所有落图**新增范围外逐项对比：落图前已在页上的每个图元
-  （位号/值/LCSC/网/坐标/姿态/线点）必须原样，改了一件 → exit 2 不保存（`range.outOfScope`）。
+  （位号/值/LCSC/网/坐标/姿态/线点；网标另比 网名/文字/坐标/角度）必须原样，改了一件 → exit 2 不保存（`range.outOfScope`）。
   报告 `verification.nets` 逐网列出编辑器网表回读名，跨模块网标 `crossModule`、`oneNet`（G4）。
   findings 按身份分级拦（`rule|severity|位号|脚|命名网` 的**第二段**就是严重度）：ERROR 必拦、
   WARN 需 `--force`、INFO 只报告（#55 裁决 B）；仍不按计数。

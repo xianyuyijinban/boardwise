@@ -1546,14 +1546,20 @@ def build_parser() -> argparse.ArgumentParser:
     draw_apply.add_argument(
         "--new-page", action="store_true",
         help=(
-            "Create a page for this drawing (`sch.doc.new`, a `create` action). The "
-            "host ignores the name (pit 24), so the page's uuid is the identity and "
-            "it is confirmed against the listing afterwards."
+            "Create a page for this drawing (`sch.doc.new`, a `create` action), when "
+            "the plan is not bound to one and `--page` is not given. Refused (exit 5) "
+            "when either is — a run cannot both land on a settled page and create one, "
+            "and the flag is never ignored. The host ignores the name (pit 24), so the "
+            "page's uuid is the identity and it is confirmed against the listing "
+            "afterwards."
         ),
     )
     draw_apply.add_argument(
         "--page-name", default=None, metavar="NAME",
-        help="The name handed to `sch.doc.new` (cosmetic: the host ignores it).",
+        help=(
+            "The name handed to `sch.doc.new` (cosmetic: the host ignores it). Read "
+            "only where a page is created; a run that creates none says so."
+        ),
     )
     draw_apply.add_argument(
         "--expect-census", default=None, metavar="SHA256",
@@ -7490,6 +7496,45 @@ def _warn_page_intent(args: argparse.Namespace, command: str) -> None:
     )
 
 
+def _census_is_not_empty(census) -> bool:
+    """Does the page hold any primitive at all — every counter, never three of them.
+
+    143d: this test read parts, wires and flags, so a "just created" page that
+    already held a net label or an un-numbered part passed for empty and the run
+    landed the drawing on top of it. The counters are the census's own fields, so
+    the day the census grows one this test cannot be the reader that forgot it.
+    """
+    return bool(
+        census.components or census.wire_count or census.netflag_count
+        or census.netlabel_count or census.unnumbered_count or census.pin_count
+    )
+
+
+def _draw_new_page_conflict(args: argparse.Namespace, bound_page: str) -> str:
+    """``''``, or why ``--new-page`` cannot be honoured: a settled page.
+
+    054 C1's discipline: a *named flag* either happens or is refused, never
+    ignored. ``--new-page`` used to vanish two ways — a plan bound to a page
+    (``plan.source.page_uuid``) and an explicit ``--page`` each made the resolved
+    page non-empty, so the create branch was unreachable and the run reported
+    ``applied`` having landed on the page it was already bound to (``--page-name``
+    is the same shape and is reported as a note where the page is resolved). A run
+    cannot both land on a page and create one, so this returns the refusal text;
+    every caller that knows the landing page asks it, so the three entry points
+    (`draw apply` on a plan, on a page document, and the shared flow) cannot
+    disagree about the rule.
+    """
+    if not getattr(args, "new_page", False) or not bound_page:
+        return ""
+    return (
+        "--new-page was given, but this run's landing page is already settled: "
+        + ("--page" if getattr(args, "page", None) else "the plan is bound to page")
+        + f" {bound_page} — a run cannot both land on that page and create one, and "
+        "the flag is not ignored instead (054 C1). Drop --new-page, or land a "
+        "drawing that is not bound to a page"
+    )
+
+
 def _draw_is_page(args: argparse.Namespace) -> bool:
     """Does ``--presentation`` ask for a page (057 sec.1)? ``False`` when unreadable.
 
@@ -8119,7 +8164,8 @@ async def _draw_apply_flow(
     0. **the page** — resolved, or created with `sch.doc.new` (a `create` action:
        the daemon consumes ``confirm``). `doc.new`'s ``name`` is **ignored by the
        host** (pit 24), so the uuid from the answer is the identity, and it is
-       confirmed against the listing;
+       confirmed against the listing. ``--new-page`` against a page that is already
+       settled is refused here (`_draw_new_page_conflict`), before any write;
     1. **the guards** (054 §四.1) — the three digests, the library geometry table,
        the page's identity and the primitive census. All of them before the first
        write; any of them failing is exit 4 with nothing written;
@@ -8274,6 +8320,17 @@ async def _draw_apply_flow(
         return done(5, "refused", "guard_input_unreadable")
 
     # ---- 1. the page -------------------------------------------------------
+    # `--new-page` is a *named flag*, and a named flag has to either happen or be
+    # refused — never be ignored (054 C1; the same discipline `_warn_page_intent`
+    # states). The rule lives in `_draw_new_page_conflict` so the three entry
+    # points cannot disagree; this is the flow's own backstop (the two CLI
+    # commands already asked it before opening the bridge). Exit 5: "the plan, the
+    # flags … is unusable" — and it is decided before the first write.
+    if args.new_page and (args.page or plan.source.page_uuid):
+        notes.append(
+            _draw_new_page_conflict(args, args.page or plan.source.page_uuid)
+        )
+        return done(5, "refused", "new_page_conflicts_with_bound_page")
     page = args.page or plan.source.page_uuid
     listing = await call("doc.list", {}, "read the focused project and page")
     identity_payload = listing if isinstance(listing, dict) else {}
@@ -8335,6 +8392,16 @@ async def _draw_apply_flow(
             )
             return done(3 if last["unknown"] else 2, outcome, "page_not_created")
     report["page"]["uuid"] = page
+    if args.page_name and not report["page"]["created"]:
+        # The second half of the same discipline: `--page-name` is only ever read
+        # by `sch.doc.new`, so a run that creates no page did not use it. Saying so
+        # costs a line; leaving the reader to wonder why the page kept its old name
+        # is the failure mode this note exists against.
+        notes.append(
+            f"--page-name {args.page_name!r} was given, but this run creates no page "
+            f"(it lands on {page}) — the name is read by `sch.doc.new` only, so nothing "
+            "used it"
+        )
     sys_identity = await call("sys.identity", {}, "confirm the editor's two layers of focus agree")
     if isinstance(sys_identity, dict):
         report["identity"]["consistent"] = sys_identity.get("consistent")
@@ -8362,16 +8429,16 @@ async def _draw_apply_flow(
             "components": census_before.components,
             "wireCount": census_before.wire_count,
             "netflagCount": census_before.netflag_count,
+            "netlabelCount": census_before.netlabel_count,
+            "unnumberedCount": census_before.unnumbered_count,
+            "pinCount": census_before.pin_count,
             "digest": census_before.digest,
         }
     if report["page"]["created"]:
-        if census_before is not None and (
-            census_before.components or census_before.wire_count or census_before.netflag_count
-        ):
+        if census_before is not None and _census_is_not_empty(census_before):
             notes.append(
-                "the page this run just created is not empty ("
-                f"{len(census_before.components)} part(s), {census_before.wire_count} "
-                f"wire(s), {census_before.netflag_count} flag(s)) — a page a drawing is "
+                "the page this run just created is not empty "
+                f"({drawapply.census_phrase(census_before)}) — a page a drawing is "
                 "landed on has to be one the plan described, and this one was not; "
                 "nothing was written"
             )
@@ -8848,6 +8915,9 @@ async def _draw_apply_flow(
         "components": census_after.components,
         "wireCount": census_after.wire_count,
         "netflagCount": census_after.netflag_count,
+        "netlabelCount": census_after.netlabel_count,
+        "unnumberedCount": census_after.unnumbered_count,
+        "pinCount": census_after.pin_count,
         "digest": census_after.digest,
     }
     if census_before is not None:
@@ -8867,6 +8937,19 @@ async def _draw_apply_flow(
             "planned": len(plan.change.draw_wires),
             "note": "the host may merge or split a polyline, so the count is evidence "
                     "and the endpoint/length check above is the judgement",
+        }
+        diff["netlabels"] = {
+            "before": census_before.netlabel_count,
+            "after": census_after.netlabel_count,
+            "note": "this run places no label primitive (029: `sch.place_netlabel` is "
+                    "unusable), so the count is evidence; the field-by-field "
+                    "`outOfScope` comparison below is the judgement",
+        }
+        diff["unnumbered"] = {
+            "before": census_before.unnumbered_count,
+            "after": census_after.unnumbered_count,
+            "note": "parts with no usable designator (`R5?`): a part this plan placed "
+                    "arrives numbered, so any other count is somebody else's edit",
         }
         if added != wanted or removed:
             notes.append(
@@ -9055,7 +9138,11 @@ def _cmd_draw_apply(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 5
-    if args.expect_census and args.new_page and not (args.page or plan.source.page_uuid):
+    conflict = _draw_new_page_conflict(args, args.page or plan.source.page_uuid)
+    if conflict:
+        print(f"boardwise draw apply: {conflict}", file=sys.stderr)
+        return 5
+    if args.expect_census and args.new_page:
         print(
             "boardwise draw apply: --expect-census describes an **existing** page, and "
             "--new-page creates one — the two cannot both be meant. Drop one",
@@ -9372,16 +9459,24 @@ def _draw_plan_from_page(
 async def _draw_census_keepouts_live(call, geometry, notes: list[str]):
     """``(boxes, labels, measured geometry)`` — the page's census as keep-outs.
 
-    One more `sch.geometry`, this time with every existing component's id in
+    One more `sch.geometry`, this time with every existing primitive's id in
     ``bboxIds``: the plain read carries origins, not extents, and a keep-out has
     to be the thing's size (057 sec.2). A read that fails falls back to the
     first dump and the assumed boxes, and the note says which were assumed.
+
+    143d: the id list is built from every section that can become a **measured**
+    keep-out (``components`` and ``netlabels``) rather than from the ``components``
+    section alone, because `census_keepouts` now keep-out labels too, and a label
+    whose id was never asked for gets an assumed box instead of its measured one.
+    A wire needs no box from here (its segments are the box) and a pin is drawn by
+    the part that owns it, so neither is asked for.
     """
     from .engines import drawapply
 
     ids = [
         str(entry.get("primitiveId") or "")
-        for entry in (geometry or {}).get("components") or []
+        for key in ("components", "netlabels")
+        for entry in (geometry or {}).get(key) or []
         if isinstance(entry, dict)
         and str(((entry.get("state") or {}).get("ComponentType")) or "") != "sheet"
         and entry.get("primitiveId")
@@ -9390,7 +9485,7 @@ async def _draw_census_keepouts_live(call, geometry, notes: list[str]):
     if ids:
         answer = await call(
             "sch.geometry", {"bboxIds": ids},
-            "measure every existing component's extent (the census keep-outs, 057 §二)",
+            "measure every existing primitive's extent (the census keep-outs, 057 §二)",
         )
         if isinstance(answer, dict):
             measured = answer
@@ -9699,6 +9794,10 @@ def _cmd_draw_apply_page(args: argparse.Namespace) -> int:
             "--page <uuid> (an existing page) or --new-page",
             file=sys.stderr,
         )
+        return 5
+    conflict = _draw_new_page_conflict(args, args.page or "")
+    if conflict:
+        print(f"boardwise draw apply: {conflict}", file=sys.stderr)
         return 5
     try:
         circuit, presentation, profiles = _draw_inputs(args)

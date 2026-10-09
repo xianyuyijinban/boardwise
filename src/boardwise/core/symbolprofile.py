@@ -37,7 +37,7 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from .model import is_ground_net
 
@@ -288,8 +288,20 @@ class SymbolProfile:
         return [item.number for item in self.pins]
 
     def role_pins(self, role: str) -> list[SymbolPin]:
-        """Every pin carrying this electrical role."""
-        return [item for item in self.pins if item.electrical_role == role]
+        """Every pin carrying this electrical role — the **same ruler** as
+        :func:`role_of_pin`.
+
+        Two definitions of "what role does this pin have" in one module would be
+        two answers, and a caller reading this method by its name ("has this
+        symbol a VIN pin?") would get the opposite of what the module's own
+        :func:`role_of_pin` — and ``grammar.base.role_pins_of``, which copies
+        that rule — say about the same pin. The measured CH340G profile is the
+        case: its ``GND`` pin carries no ``electricalRole`` (a hand-written
+        library document does not write one), so a role read from the field
+        alone is empty while the pin is plainly the ground. Delegating makes the
+        fallback exist once.
+        """
+        return [item for item in self.pins if role_of_pin(item) == role]
 
     def allows(self, rotation: float, mirror: bool = False) -> bool:
         """May the symbol be drawn at this pose?"""
@@ -537,14 +549,24 @@ def role_siblings(profile: SymbolProfile, token: str) -> tuple[SymbolPin, ...]:
     disagree about which pins are "the same role", and the disagreement would
     show up as a drawing that is wired correctly and reported as an undeclared
     short.
+
+    The token is resolved with the tree's **one ruler**: by number first, then by
+    name (:meth:`SymbolProfile.pin` then a name sweep — the same rule
+    ``drawcompiler._pin_of_token`` and ``grammar.base.profile_pin_for`` apply).
+    A profile whose pin *name* equals another pin's *number* used to get the
+    list-order winner here and the number's winner everywhere else, and the two
+    then held different roles to be siblings of — the exact shape of "wired
+    correctly, reported as an undeclared short" this function's docstring warns
+    about.
     """
     if not token:
         return ()
-    here = None
-    for pin in profile.pins:
-        if token in (pin.number, pin.name):
-            here = pin
-            break
+    here = profile.pin(token)
+    if here is None:
+        for pin in profile.pins:
+            if pin.name == token:
+                here = pin
+                break
     if here is None:
         return ()
     role = role_of_pin(here)
@@ -575,6 +597,13 @@ def from_parsed_symbol(symbol: Any, *, source: str = "") -> SymbolProfile:
     * each pin's **electrical role** comes from :data:`ROLE_BY_PIN_NAME`, and the
       pin records :data:`ROLE_SOURCE_PIN_NAME`.
 
+    The three maps are read through **one key space**: `offsets` may be keyed by
+    int and `pin_names`/`pin_types` by `str` (the parser's own contract is
+    `str`), so the two attribute maps are normalized to `str` keys and every
+    query is made with `str(number)` — the same spelling that becomes the pin's
+    `number`. A map that shares no key with `offsets` at all is named in `notes`
+    rather than passed off as a symbol whose pages state no names.
+
     A library symbol whose pins cannot be told apart (two pins sharing one tip)
     is refused: 053 sec.2 makes that the entry point for "禁止换脚号迁就版式" —
     a symbol that cannot be wired as drawn must be swapped for a compatible one
@@ -599,7 +628,14 @@ def from_parsed_symbol(symbol: Any, *, source: str = "") -> SymbolProfile:
     pins: list[SymbolPin] = []
     for number in sorted(offsets, key=_pin_sort_key):
         tip = _point(offsets[number], f"symbol.offsets[{number!r}]")
-        name = names.get(number, "")
+        # The lookup is `str(number)` because `_attr_map` keys by `str` — the two
+        # helpers have to agree on the key space or every name, `Pin Type` and
+        # the role derived from the name disappear at once, and "the parser did
+        # not give one" (the rule this module is built on) is spelled exactly like
+        # "the name was lost". `offsets` is the *caller's* map and may be keyed by
+        # int (a hand-built `SymbolDetail`); the maps are normalized, the query
+        # goes through the same normalization.
+        name = names.get(str(number), "")
         role = ROLE_BY_PIN_NAME.get(name.strip().upper(), "")
         direction = _direction(tip, body)
         pins.append(SymbolPin(
@@ -613,7 +649,7 @@ def from_parsed_symbol(symbol: Any, *, source: str = "") -> SymbolProfile:
             direction_source=DIRECTION_SOURCE_BODY if direction else "",
             electrical_role=role,
             role_source=ROLE_SOURCE_PIN_NAME if role else "",
-            pin_type=types.get(number, ""),
+            pin_type=types.get(str(number), ""),
         ))
     _refuse_shared_tips(pins)
 
@@ -628,6 +664,7 @@ def from_parsed_symbol(symbol: Any, *, source: str = "") -> SymbolProfile:
         "pin length: not available (SymbolDetail exposes tips only, though the "
         "file's PIN rows carry `length`)",
     ]
+    notes += _keyed_apart_notes(offsets, names, types)
     return SymbolProfile(
         symbol_ref=symbol_ref,
         title=str(getattr(symbol, "title", "") or ""),
@@ -642,10 +679,46 @@ def from_parsed_symbol(symbol: Any, *, source: str = "") -> SymbolProfile:
 
 
 def _attr_map(symbol: Any, name: str) -> dict[str, str]:
+    """One of the parser's pin-keyed maps, **normalized to `str` keys**.
+
+    The normalization is the point: the parser's own contract
+    (`SymbolDetail.pin_names` / `pin_types`) is ``dict[str, …]``, but
+    ``from_parsed_symbol`` also accepts a hand-built value, whose maps may be
+    keyed by int. Keying by `str` here means one spelling reaches the lookup, and
+    :func:`from_parsed_symbol` queries with the same ``str(number)`` — the two
+    helpers have to agree on the key space, or a whole map is silently missed
+    (see :func:`_keyed_apart_notes`).
+    """
     value = getattr(symbol, name, None)
     if not isinstance(value, dict):
         return {}
     return {str(key): str(item) for key, item in value.items()}
+
+
+def _keyed_apart_notes(
+    offsets: Mapping[Any, Any], names: Mapping[str, str], types: Mapping[str, str]
+) -> list[str]:
+    """A note for each parser map that shares **no** key with ``offsets``.
+
+    "The parser did not give one" is what this module leaves empty and never
+    invents — which is exactly why a map that *was* given and missed anyway must
+    say so: an empty name and a lost name look identical on the profile. A whole
+    map missing (rather than one pin) is the signature of a key-space
+    disagreement, which is the failure mode the two helpers above exist to rule
+    out; when it happens anyway, the reading is reported as partial instead of
+    being passed off as a symbol whose pages state no names.
+    """
+    notes: list[str] = []
+    keys = {str(item) for item in offsets}
+    for label, table in (("pin_names", names), ("pin_types", types)):
+        if table and not (set(table) & keys):
+            notes.append(
+                f"{label}: the parser gave {len(table)} entry/entries keyed "
+                f"{sorted(table)[:3]}, none of which is one of this symbol's pin "
+                f"numbers ({sorted(keys)[:3]}) — every pin is left without this "
+                "field rather than filled with a guess"
+            )
+    return notes
 
 
 def _pin_sort_key(number: Any) -> tuple[int, int, str]:
@@ -655,9 +728,26 @@ def _pin_sort_key(number: Any) -> tuple[int, int, str]:
     library symbol emitting its pins in different orders across two container
     formats — so a profile sorts. Without this, two parses of one symbol would
     hash differently for no electrical reason.
+
+    Two things the key has to carry or the promise above breaks:
+
+    * **The text breaks the tie.** ``"1"`` and ``"01"`` are the same *number*,
+      and the numeric branch alone gave them the same key — so the sort kept the
+      emission order and two profiles of one symbol hashed apart, which
+      `canonical_json`/`geometry_hash` promise cannot happen. The key ends with
+      the text itself, so equal numbers still have one fixed order.
+    * **Only ASCII digits are numbers.** ``str.isdigit()`` is true for ``"²"``
+      and ``"①"``, which ``int()`` then refuses — a bare `ValueError` raised
+      inside :meth:`SymbolProfile.geometry_hash`, i.e. outside every
+      ``except SymbolProfileError``, although :meth:`SymbolProfile.load` promises
+      "every failure is a SymbolProfileError". A pin number is a free string
+      (the file may number pads any way it likes): one that is not plain ASCII
+      digits is ordered as text, not turned into an integer.
     """
     text = str(number).strip()
-    return (0, int(text), "") if text.isdigit() else (1, 0, text)
+    if text.isascii() and text.isdigit():
+        return (0, int(text), text)
+    return (1, 0, text)
 
 
 def _direction(tip: tuple[float, float], body: Box | None) -> str:

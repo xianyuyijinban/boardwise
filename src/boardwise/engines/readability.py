@@ -43,7 +43,10 @@ kind                                    what it refuses
                                         span and the plan declares no junction
 ``wire-through-body``                   a wire crosses some non-end part's body
 ``text-overlap``                        two text boxes intersect, or text lands on
-                                        a foreign part's body
+                                        a foreign part's body — a power symbol's
+                                        glyph box counts as text (`_text_boxes`),
+                                        so a rail name printed on a component is
+                                        the same finding as a label's
 ``out-of-page``                         something leaves the page, or enters a
                                         keep-out region
 ``user-lock-violated``                  the plan does not honour a user lock
@@ -168,6 +171,7 @@ from boardwise.core.symbolprofile import (
     Box,
     SymbolProfile,
     check_box,
+    flag_glyph_box,
     role_siblings,
 )
 
@@ -709,8 +713,10 @@ def check(
     violations.extend(_check_wire_ends(layout_plan, net))
     violations.extend(_check_junctions(layout_plan))
     violations.extend(_check_bodies(layout_plan, placed))
-    violations.extend(_check_text(layout_plan, placed))
-    violations.extend(_check_page(layout_plan, placed, page, keep))
+    violations.extend(_check_text(layout_plan, placed, profile_map))
+    violations.extend(
+        _check_page(layout_plan, placed, page, keep, profile_map)
+    )
     violations.extend(_check_locks(presentation_spec, layout_plan))
     violations.extend(_check_nc(circuit_spec, net, profile_map))
     violations.extend(_check_required_pins(circuit_spec, net, placed, profile_map))
@@ -722,7 +728,9 @@ def check(
             or ()
         )
 
-    metrics, reasons = _soft_metrics(layout_plan, presentation_spec, placed, page, grid)
+    metrics, reasons = _soft_metrics(
+        layout_plan, presentation_spec, placed, page, grid, profile_map,
+    )
     return CheckResult(
         hard_violations=violations,
         grammar_findings=findings,
@@ -762,7 +770,12 @@ def _check_netlist(
     would double-count.
     """
     out: list[HardViolation] = []
-    nc_pins = {item.pin for item in circuit_spec.nc}
+    # **One ruler, three uses** (see :func:`_canonical_nc_pins`): the exclusion
+    # set, the naming check below and `_role_node_expectations`'s guard are the
+    # same statement about the same pads, so a raw ``nc[].pin`` spelling may not
+    # be compared against the netlist's profile-number keys here — that would put
+    # the exclusion set out of reach of the drawing it is meant to exclude.
+    nc_pins = _canonical_nc_pins(circuit_spec, profile_map)
     spec_net_of = _role_node_expectations(circuit_spec, profile_map)
     domain = {pin for pin in net.pin_points if pin not in nc_pins}
     merged: set[tuple[str, ...]] = set()
@@ -874,17 +887,10 @@ def _role_node_expectations(
     # compares. One key space, one ruler — no second, disagreeing measure.
     canonical: dict[str, str] = {}
     for member, net_id in declared.items():
-        part_id, _, token = member.partition(".")
-        part = circuit_spec.part(part_id)
-        profile = profile_map.get(part.symbol_ref) if part is not None else None
-        resolved = _profile_pin_ruler(profile, token)
-        canonical[f"{part_id}.{resolved}"] = net_id
+        canonical[_canonical_pin(circuit_spec, profile_map, member)] = net_id
     declared = canonical
-    nc_pins = {item.pin for item in circuit_spec.nc}
-    nc_pins = {
-        f"{pin.partition('.')[0]}.{_profile_pin_ruler(_profile_of(circuit_spec, profile_map, pin), pin.partition('.')[2])}"
-        for pin in nc_pins
-    }
+    # The same ruler answers "which pads did the spec call NC" (:func:`_canonical_nc_pins`).
+    nc_pins = _canonical_nc_pins(circuit_spec, profile_map)
     out = dict(declared)
     for member in sorted(declared):
         net_id = declared[member]
@@ -895,7 +901,15 @@ def _role_node_expectations(
             continue
         for pin in role_siblings(profile, token):
             spelling = pin.number or pin.name
-            if not spelling or spelling in nc_pins:
+            if not spelling:
+                continue
+            # `role_siblings` hands back the profile's own pins, so `spelling`
+            # is a bare **number** — the guard has to ask about the key the
+            # netlist (and `nc_pins`) actually stores, `<partId>.<number>`.
+            # Comparing the bare token against ``{"U1.2"}`` was always false, so
+            # this "nc[] is the explicit exception" never fired and a correctly
+            # drawn NC sibling was demanded to be wired anyway.
+            if f"{part_id}.{spelling}" in nc_pins:
                 continue
             siblings_net = (
                 declared.get(f"{part_id}.{spelling}")
@@ -934,6 +948,45 @@ def _profile_pin_ruler(profile: SymbolProfile | None, token: str) -> str:
         if candidate.name == token:
             return str(candidate.number)
     return token
+
+
+def _canonical_pin(
+    circuit_spec: CircuitSpec,
+    profile_map: Mapping[str, SymbolProfile],
+    pin: str,
+) -> str:
+    """A spec's ``<partId>.<token>`` written the way the derived netlist keys it.
+
+    ``_placed_parts`` builds ``DerivedNetlist.pin_points`` from the **profile's
+    numbers** (``str(pin.number)``), so every comparison of a spec pin against
+    the drawing has to pass through :func:`_profile_pin_ruler` first — otherwise
+    a spec that names a pad by its **name** (``D1.K``) grades against a key that
+    does not exist (``D1.2`` is the real one) and the check reports a circuit it
+    never read. **115-②** made that rule explicit for net members; this is the
+    same ruler lifted to one place so the ``nc[]`` set, the net members and the
+    constraint-8 lookup cannot drift apart again.
+    """
+    part_id, _, token = pin.partition(".")
+    return f"{part_id}.{_profile_pin_ruler(_profile_of(circuit_spec, profile_map, pin), token)}"
+
+
+def _canonical_nc_pins(
+    circuit_spec: CircuitSpec, profile_map: Mapping[str, SymbolProfile]
+) -> set[str]:
+    """The ``nc[]`` pins in the netlist's own spelling — **one** ruler, three uses.
+
+    ``circuitSpec.nc`` is written by the engineer (or an AI) with whatever token
+    the symbol uses, so the raw ``item.pin`` string (``"D1.K"``) is *not* a key
+    the derived netlist has; ``DerivedNetlist`` speaks the profile's numbers
+    (``"D1.2"``). Constraint 1's exclusion set, constraint 8's lookup and
+    :func:`_role_node_expectations`' "nc[] is the explicit exception" guard all
+    mean this one set, so they read it from here instead of each normalising (or
+    forgetting to normalise) on its own.
+    """
+    return {
+        _canonical_pin(circuit_spec, profile_map, item.pin)
+        for item in circuit_spec.nc
+    }
 
 
 # ------------------------------------------------------------- 2. wire ends
@@ -1104,14 +1157,17 @@ def _first_box_crossing(
 
 
 def _check_text(
-    layout_plan: LayoutPlan, placed: list[_PlacedPart]
+    layout_plan: LayoutPlan,
+    placed: list[_PlacedPart],
+    profile_map: Mapping[str, SymbolProfile],
 ) -> list[HardViolation]:
     """Constraint 5: no text box intersects another, and no foreign text on a body.
 
-    Labels and plain texts are one set of boxes (`LayoutPlan.all_text_boxes`
-    makes the same point): a label is text on the canvas whether or not it is
-    also electrical, so checking the two lists apart would miss a label printed
-    over a value.
+    Labels, plain texts **and a power symbol's glyph** are one set of boxes:
+    each of them is a name printed on the canvas, so checking the kinds apart
+    would miss a label printed over a value — or a rail flag printed over either
+    of them (`_text_boxes` carries the flag's own glyph box, the one
+    `core.symbolprofile.flag_glyph_box` states).
 
     A text that belongs to the part whose body it overlaps is **not** a
     violation: a symbol's designator, value and pin names are drawn by the symbol
@@ -1127,10 +1183,11 @@ def _check_text(
     and the alternative (a label centred on its own pin, half of it inside the
     symbol) is worse. `LayoutLabel.part_id` carries the owner; a label with no
     owner (a tap's stub end, a page boundary) keeps the strict rule, and every
-    label is still checked against every *other* part's body.
+    label is still checked against every *other* part's body. A flag has no
+    owner at all, so it is foreign to every body by construction.
     """
     out: list[HardViolation] = []
-    boxes = _text_boxes(layout_plan)
+    boxes = _text_boxes(layout_plan, profile_map)
     for left in range(len(boxes)):
         for right in range(left + 1, len(boxes)):
             name_a, box_a, _part_a, text_a = boxes[left]
@@ -1159,15 +1216,51 @@ def _check_text(
     return out
 
 
+def _flag_glyph_box(
+    profile_map: Mapping[str, SymbolProfile], symbol: Any
+) -> Box | None:
+    """The box a power symbol's **glyph** occupies, or ``None`` if unmeasurable.
+
+    A flag is the one text on the canvas that is not a ``LayoutText``: it is a
+    net name printed in a library glyph, and the glyph's extent is a stated
+    profile fact (`core.symbolprofile.flag_glyph_box` — the one box the compiler
+    reserves, the page's frames measure and the SVG preview draws). Recomputing
+    it here, or estimating it from the net name's length, would be the second
+    ruler 052 sec.7 rules out.
+
+    ``None`` when the plan states a flag whose symbol has no profile or whose
+    profile states no body: that is a box nobody can measure, and the checker
+    would rather leave it out than invent a zero-area one that silently
+    intersects nothing (the same choice `_check_page` makes for a part with no
+    stated extent).
+    """
+    profile = profile_map.get(symbol.symbol_ref)
+    if profile is None or profile.body is None:
+        return None
+    return flag_glyph_box(
+        profile, rotation=symbol.rotation, anchor=(symbol.x, symbol.y)
+    )
+
+
 def _text_boxes(
     layout_plan: LayoutPlan,
+    profile_map: Mapping[str, SymbolProfile],
 ) -> list[tuple[str, Box, str, str]]:
-    """``(name, box, partId, text)`` for every text on the canvas, labels included.
+    """``(name, box, partId, text)`` for **every** text on the canvas.
 
-    ``partId`` is the owner of a *text* (`LayoutText.part_id` — a reference, a
-    value) and, since 099b, the part whose pin a *label* names
-    (`LayoutLabel.part_id`): both halves of the set hand the owner to
-    `_check_text`, which exempts a text from its own part's body.
+    Three kinds, and the set is closed on all of them: a ``LayoutText`` (a
+    reference, a value — owner ``LayoutText.part_id``), a ``LayoutLabel``
+    (a net name, owner ``LayoutLabel.part_id`` since 099b: the part whose pin it
+    names), and — since 143c — a ``LayoutPowerSymbol``, whose glyph is a net
+    name printed on the canvas just like a label's box. The flag had no box in
+    any of the checker's object sets before, so the compass of constraint 5
+    ("a wire on the wrong pin, an NC pin that got connected, **text printed on a
+    component**") could not see a rail flag lying on a body, over a label, off
+    the page or inside a keep-out.
+
+    A flag's owner is the empty string: it belongs to no part, so
+    `_check_text` treats it as foreign to every body — which is what a rail
+    name printed over a symbol is.
     """
     boxes: list[tuple[str, Box, str, str]] = [
         (f"texts[{index}]", item.bbox, item.part_id, item.text)
@@ -1177,6 +1270,10 @@ def _text_boxes(
         (f"labels[{index}]", item.bbox, item.part_id, item.text)
         for index, item in enumerate(layout_plan.labels)
     )
+    for index, symbol in enumerate(layout_plan.power_symbols):
+        glyph = _flag_glyph_box(profile_map, symbol)
+        if glyph is not None:
+            boxes.append((f"powerSymbols[{index}]", glyph, "", symbol.net))
     return boxes
 
 
@@ -1188,13 +1285,17 @@ def _check_page(
     placed: list[_PlacedPart],
     page: Box | None,
     keepouts: Sequence[Box],
+    profile_map: Mapping[str, SymbolProfile],
 ) -> list[HardViolation]:
     """Constraint 6: nothing leaves the page, nothing enters a keep-out.
 
     One kind for both halves because they are one promise ("不越页/禁区",
     052 sec.6): the drawing stays in the area it is allowed to use. Objects are
-    part bodies, wires and text boxes; a body is only checked when the profile
-    states one, since an unstated extent is not a measured zero.
+    part bodies, wires and text boxes — and a power symbol's glyph, which is a
+    box the page has to hold exactly as it holds a label's (`_text_boxes`); a
+    body is only checked when the profile states one, and a flag likewise only
+    when its profile states a glyph extent, since an unstated extent is not a
+    measured zero.
 
     The keep-out half measures the two kinds of object differently, and
     deliberately so. A part's body and a text box **are** rectangles, so their
@@ -1216,8 +1317,8 @@ def _check_page(
     the line and the two tests cannot disagree.
     """
     out: list[HardViolation] = []
-    # (name, bounding box, polyline) — the polyline is None for the two object
-    # kinds that really are boxes.
+    # (name, bounding box, polyline) — the polyline is None for the object
+    # kinds that really are boxes (bodies, every text box, a flag's glyph).
     objects: list[tuple[str, Box, list[tuple[float, float]] | None]] = []
     for part in placed:
         if part.body is not None:
@@ -1228,7 +1329,7 @@ def _check_page(
         ))
     objects.extend(
         (name, box, None)
-        for name, box, _part, _text in _text_boxes(layout_plan)
+        for name, box, _part, _text in _text_boxes(layout_plan, profile_map)
     )
 
     if page is not None:
@@ -1324,14 +1425,16 @@ def _check_nc(
     nothing at all. Either form of attachment counts as connected: another pin
     on the same derived node, or a conductor (wire, label, power symbol) sitting
     on the tip. A pin whose part is not placed cannot be connected and is not
-    reported here. **115-②**: the lookup goes through :func:`_profile_pin_ruler`
+    reported here. **115-②**: the lookup goes through :func:`_canonical_pin`
     like every other spec-to-drawing comparison here, while the message keeps
-    quoting the spec's own token.
+    quoting the spec's own token — but the **object name** is the canonical key
+    (``pins[R2.2]``), because a violation names the thing both documents share
+    and a name-spelled ``pins[D1.K]`` is a key the derived netlist has not got.
     """
     out: list[HardViolation] = []
     for item in circuit_spec.nc:
         pin = item.pin
-        key = f"{pin.partition('.')[0]}.{_profile_pin_ruler(_profile_of(circuit_spec, profile_map, pin), pin.partition('.')[2])}"
+        key = _canonical_pin(circuit_spec, profile_map, pin)
         if key not in net.pin_points:
             continue
         group = net.group_of(key)
@@ -1348,7 +1451,7 @@ def _check_nc(
             how = "a wire, label or power symbol sits on its tip"
         out.append(HardViolation(
             KIND_NC_PIN_CONNECTED,
-            (f"circuitSpec.nc[{pin}]", f"pins[{pin}]"),
+            (f"circuitSpec.nc[{pin}]", f"pins[{key}]"),
             f"{pin} is declared NC but {how} — the drawing connects a pin the "
             "circuit says is deliberately unconnected",
         ))
@@ -1382,12 +1485,14 @@ def _check_required_pins(
         for pin in spec_net.members:
             name = f"circuitSpec.nets[{spec_net.id}]"
             # **115-②**: look the pad up under the one ruler's spelling
-            # (:func:`_profile_pin_ruler`), while every message still quotes the
+            # (:func:`_canonical_pin`), while every message still quotes the
             # spec's own token — a reader is answering to their document, not to
-            # the library's numbering.
+            # the library's numbering. The object name stays the spec's token
+            # here because this finding is also emitted for a member the symbol
+            # has not got at all, where there is no canonical number to name.
             part_id, _, token = pin.partition(".")
             placed_part = by_id.get(part_id)
-            key = f"{part_id}.{_profile_pin_ruler(_profile_of(circuit_spec, profile_map, pin), token)}"
+            key = _canonical_pin(circuit_spec, profile_map, pin)
             if key not in net.pin_points:
                 if placed_part is None:
                     why = f"part {part_id} is not placed in the plan"
@@ -1426,6 +1531,7 @@ def _soft_metrics(
     placed: list[_PlacedPart],
     page: Box | None,
     grid: float,
+    profile_map: Mapping[str, SymbolProfile],
 ) -> tuple[dict[str, float], dict[str, list[str]]]:
     """The raw optimization values of 052 sec.6, with one reason per deduction.
 
@@ -1485,14 +1591,20 @@ def _soft_metrics(
             f"({', '.join(unmoduled)}) — no pair involving them was compared"
         )
 
-    boxes = _text_boxes(layout_plan)
+    boxes = _text_boxes(layout_plan, profile_map)
     gap, gap_reasons = _min_text_gap(boxes)
     metrics["min_text_gap"] = gap
     if gap_reasons:
         reasons["min_text_gap"] = gap_reasons
 
-    occupied, area_reasons = _occupancy(layout_plan, placed, page)
+    occupied, area_reasons = _occupancy(layout_plan, placed, page, profile_map)
     metrics["occupied_ratio"] = occupied
+    # `1.0 - occupied` is a ratio of a page, so it can only be a ratio while
+    # `occupied` is in [0, 1] — which `_occupancy` guarantees (it clamps, and a
+    # box leaving the page is out-of-page's finding rather than a ratio). Without
+    # that, `occupied == 2.0` would make the complement **exactly** `-1.0`, i.e.
+    # the same number as :data:`UNMEASURED`: a real measurement spelled as the
+    # "cannot measure" sentinel, which no downstream reader could tell apart.
     metrics["whitespace_ratio"] = (
         UNMEASURED if occupied == UNMEASURED else 1.0 - occupied
     )
@@ -1568,21 +1680,35 @@ def _unaligned_pairs(
 def _min_text_gap(
     boxes: list[tuple[str, Box, str, str]],
 ) -> tuple[float, list[str]]:
-    """The smallest gap between two text boxes, and why it is what it is."""
+    """The smallest gap between two text boxes, and why it is what it is.
+
+    Two facts, two sentences. ``gap == 0`` is ambiguous by itself: :func:`_box_gap`
+    answers 0.0 both for two boxes that are **touching** (edge to edge, no shared
+    area) and for two that **overlap**, and the two are not the same claim — only
+    the second is a `text-overlap` violation. So the touching/overlapping split
+    is made with the *other* ruler (:func:`_overlap`, which needs more than
+    :data:`TOL` on both axes), not with ``gap == 0``. Reporting "N pair(s)
+    overlap — see this run's text-overlap violations" for a pair that merely
+    touches points the reader at a violation that does not exist (121c's own
+    delivery had exactly that: `min_text_gap = 0` with zero `text-overlap`).
+    """
     if len(boxes) < 2:
         return UNMEASURED, [
             f"{len(boxes)} text box(es) on the page — one gap needs two boxes; "
             f"{UNMEASURED:g} is the 'cannot measure' value, not a distance"
         ]
     best: tuple[float, str, str] | None = None
-    zero = 0
+    touching = 0
+    overlapping = 0
     for left in range(len(boxes)):
         for right in range(left + 1, len(boxes)):
             name_a, box_a, _pa, _ta = boxes[left]
             name_b, box_b, _pb, _tb = boxes[right]
             gap = _box_gap(box_a, box_b)
-            if gap == 0.0:
-                zero += 1
+            if _overlap(box_a, box_b):
+                overlapping += 1
+            elif gap == 0.0:
+                touching += 1
             if best is None or gap < best[0]:
                 best = (gap, name_a, name_b)
     assert best is not None
@@ -1590,18 +1716,37 @@ def _min_text_gap(
         f"closest pair {best[1]} and {best[2]}: {best[0]:g} units apart "
         "(canvas units, edge to edge)"
     ]
-    if zero:
+    if touching:
         reasons.append(
-            f"{zero} text box pair(s) overlap — see this run's text-overlap "
-            "violations"
+            f"{touching} text box pair(s) touch edge to edge (gap 0, no shared "
+            "area) — touching is not overlapping and is not a text-overlap "
+            "violation"
+        )
+    if overlapping:
+        reasons.append(
+            f"{overlapping} text box pair(s) genuinely intersect — see this "
+            "run's text-overlap violations"
         )
     return best[0], reasons
 
 
 def _occupancy(
-    layout_plan: LayoutPlan, placed: list[_PlacedPart], page: Box | None
+    layout_plan: LayoutPlan,
+    placed: list[_PlacedPart],
+    page: Box | None,
+    profile_map: Mapping[str, SymbolProfile],
 ) -> tuple[float, list[str]]:
-    """Parts + text, as a fraction of the page; the union, not a sum of boxes."""
+    """Parts + text + flag glyphs, as a fraction of the page; the union, not a sum.
+
+    The ratio is a **ratio**: it is clamped to ``1.0`` when the boxes cover more
+    area than the whole page (a box that leaves the sheet makes the union exceed
+    the page). That is not a mathematical nicety — its complement
+    ``whitespace_ratio = 1 - occupied`` would otherwise leave [0, 1] and, at
+    ``occupied == 2.0``, land **exactly** on :data:`UNMEASURED`, so a real
+    measurement would be spelled the same as "cannot measure". The overflow these
+    boxes have is already a hard finding (constraint 6, out-of-page); a soft
+    ratio does not get to be the second, ambiguous report of it.
+    """
     if page is None:
         return UNMEASURED, [
             "no page_box was given, so the page area is unknown and neither "
@@ -1614,12 +1759,23 @@ def _occupancy(
             f"page_box {_box_text(page)} encloses no area, so no ratio exists"
         ]
     boxes = [part.body for part in placed if part.body is not None]
-    boxes.extend(box for _name, box, _part, _text in _text_boxes(layout_plan))
+    boxes.extend(
+        box for _name, box, _part, _text in _text_boxes(layout_plan, profile_map)
+    )
     occupied_area = _union_area(boxes)
     ratio = occupied_area / page_area
-    return ratio, [
+    area_line = (
         f"page {page[2] - page[0]:g} x {page[3] - page[1]:g} = {page_area:g} units^2; "
-        f"{len(boxes)} box(es) cover {occupied_area:g} units^2 = {ratio * 100:.2f}%",
+        f"{len(boxes)} box(es) cover {occupied_area:g} units^2 = {ratio * 100:.2f}%"
+    )
+    if ratio > 1.0:
+        return 1.0, [
+            area_line + " (more than the whole page — the ratio is clamped to "
+            "1.0; geometry leaving the sheet is out-of-page's finding)",
+            "whitespace = 1 - 1 = 0.0000",
+        ]
+    return ratio, [
+        area_line,
         f"whitespace = 1 - {ratio:.4f} = {1.0 - ratio:.4f}",
     ]
 
@@ -2154,15 +2310,24 @@ def _check_geometry_framed(
             ),
         ))
     for index, label in enumerate(plan.labels):
-        if framed(label.bbox) and _frames_of((label.x, label.y), frames):
+        # The label's object in this rule is its **name anchor** — the page-domain
+        # kind table reads "a part, a text, a name anchor or a wire end", and the
+        # module docstring says the anchor "holds its module's own geometry".
+        # Requiring the *box* to be inside the frame too made this rule stricter
+        # than its own contract (a wide name beside a compact module was refused
+        # although a module frame is not the module's exact bounding box), and the
+        # evidence sentence — "and neither is inside a module frame" — was false
+        # in both mixed cases it could fire on. One object, one test, one
+        # sentence.
+        if _frames_of((label.x, label.y), frames):
             continue
         out.append(HardViolation(
             kind=KIND_GEOMETRY_OUTSIDE_FRAMES,
             objects=(f"labels[{index}]",),
             evidence=(
-                f"the label {label.text!r} anchors at ({label.x:g}, {label.y:g}) "
-                f"with its box at {_box_text(label.bbox)}, and neither is inside a "
-                "module frame"
+                f"the label {label.text!r} anchors at ({label.x:g}, {label.y:g}), "
+                "which is in no module frame — a name belongs inside the module "
+                f"whose drawing it names (its box is {_box_text(label.bbox)})"
             ),
         ))
     for index, symbol in enumerate(plan.power_symbols):
@@ -2368,6 +2533,13 @@ def _check_shared_expressions(
     and half-named, and may not name it with a flag in one module and a label in
     the other. The one exception is the whole `mainPath` edge: there the
     connection is a wire end to end, so no name is required at either end.
+
+    "the other" is load-bearing: the rule is about two **different** modules
+    disagreeing about how to name one net. A single module that states a net both
+    ways (a rail flag on the module's own drawing and a label the page added
+    beside it) is one voice saying one net — `_name_anchors` keeps the two kinds
+    in a set for exactly this reading — and comparing the two *lists* for
+    non-emptiness instead reported it as "a label on a and a flag on a".
     """
     anchors = _name_anchors(plan, frames)
     wired: dict[str, set[str]] = {}
@@ -2381,15 +2553,17 @@ def _check_shared_expressions(
         for module_id in modules:
             for kind in sorted(anchors.get((module_id, net_id), ())):
                 stated[kind].append(module_id)
-        if stated["label"] and stated["flag"]:
+        label_only = sorted(set(stated["label"]) - set(stated["flag"]))
+        flag_only = sorted(set(stated["flag"]) - set(stated["label"]))
+        if label_only and flag_only:
             out.append(HardViolation(
                 kind=KIND_SHARED_NET_EXPRESSION_SPLIT,
                 objects=(f"circuitSpec.nets[{net_id}]",),
                 evidence=(
                     "the net is a label on "
-                    + ", ".join(sorted(set(stated["label"])))
+                    + ", ".join(label_only)
                     + " and a flag on "
-                    + ", ".join(sorted(set(stated["flag"])))
+                    + ", ".join(flag_only)
                     + " — two drawings that name one net must name it the same way "
                     "(056 sec.3): the join happens by name, and a reader cannot tell "
                     "a flag from a label without checking both"

@@ -43,6 +43,7 @@ from typing import Any
 from .symbolprofile import Box, POSE_ROTATIONS, check_box
 
 __all__ = [
+    "DOWNGRADE_NOTE_PREFIX",
     "EVIDENCE_VERDICT_FAIL",
     "EVIDENCE_VERDICT_NOT_RUN",
     "EVIDENCE_VERDICT_PASS",
@@ -67,6 +68,19 @@ LAYOUT_PLAN_KIND = "boardwise-layout-plan"
 #: Same rule as `changeplan.PLAN_VERSION`: a plan from a future build is refused
 #: rather than half-understood.
 LAYOUT_PLAN_VERSION = 1
+
+#: The prefix a :attr:`LayoutPlan.notes` line carries when the drawing had to
+#: **degrade** what the spec asked for (143 F1: a net the class says is a flag,
+#: whose flag symbol the library does not carry, so it is wired instead).
+#:
+#: It is a marker on a note rather than a field of its own because a note is what
+#: the plan already has for "this is how the picture was made": both sides read
+#: the same spelling from here (the compiler writes it, `drawapply.module_plan`
+#: turns such a note into an entry of the change plan's ``downgrades``), and a
+#: reader who authorises the plan gets the degradation in the list that says what
+#: they are not getting. An ordinary note describes the drawing; only these say
+#: "you asked for something else".
+DOWNGRADE_NOTE_PREFIX = "downgrade: "
 
 #: The three answers `LayoutEvidence.verdict` can give. `not-run` is a state of
 #: its own so that "no violations found" can never be confused with "not looked

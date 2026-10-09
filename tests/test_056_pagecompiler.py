@@ -1169,13 +1169,31 @@ def test_the_page_checker_catches_frames_that_are_too_close_without_overlapping(
 
 
 def test_the_page_checker_catches_one_net_stated_two_ways():
-    """056 sec.3.4: 同名共享网要么全标签要么全旗标（不许一半线一半标签）."""
+    """056 sec.3.4: 同名共享网要么全标签要么全旗标（不许一半线一半标签）.
+
+    **143c changed this mutation.** The old one added a GND *label* beside the
+    GND *flag* inside one and the same module and expected the finding — but the
+    rule's own contract is about two **different** modules disagreeing: the
+    module docstring's kind table says "a label in one module and a flag in
+    **the other**", and `_check_shared_expressions`' docstring says the same. The
+    old mutation made the check report the self-contradictory evidence "a label
+    on div and a flag on div", i.e. it fired on a module that names one net one
+    way twice. A module stating a net both ways is one voice, so the mutation now
+    moves **one module's** GND flag over to a label: `pwr` and `rc` keep the
+    flag, `div` states the label — the mix this rule is actually about. (The
+    same-module case is pinned as *not* this rule in
+    `test_143c_readability.py::test_one_module_stating_a_net_both_ways_is_one_voice`.)
+    """
     scene = scenes()[2]
 
     def mutate(page: PageLayoutPlan) -> None:
-        # The ground is a bus: flagged at every end. One module stating it with a
-        # label as well is the mix the page may not have.
-        symbol = page.plan.power_symbols[0]
+        frames = {module.id: module.frame for module in page.modules}
+        symbol = [
+            item for item in page.plan.power_symbols
+            if item.net == "GND"
+            and readability._frames_of((item.x, item.y), frames) == ("div",)
+        ][0]
+        page.plan.power_symbols.remove(symbol)
         box = dc.font_text_box("GND", x=symbol.x, y=symbol.y)
         page.plan.labels.append(readability_label("GND", symbol.x, symbol.y, box))
 

@@ -359,7 +359,7 @@ class PowerEntryGrammar:
                 evidence=evidence(
                     "role=entry: the part the rail's own openInterfaces entry "
                     f"names in openInterfaces[].part (direction="
-                    f"{named[0].direction or 'input'}) — the one fact this "
+                    f"{named[0].direction}) — the one fact this "
                     "grammar cannot derive, because a connector and a parallel "
                     "branch are the same shape between the same two nets",
                     part_clause(circuit, entry),
@@ -605,12 +605,27 @@ def _entry_claims(
     here" **and** names the part that realises it. Both halves matter: a
     direction alone is a net's role, and a part alone is a part — only the pair
     says "CN1 feeds this rail".
+
+    **Both halves are required, including the direction.** An earlier version
+    read `if item.direction and item.direction not in ENTRY_DIRECTIONS`, so an
+    *empty* direction short-circuited the test and the entry was taken as an
+    inlet: a spec that named a bulk capacitor in `part` with no direction had
+    that capacitor bound as the inlet and the real connector demoted to a
+    shunt, with the evidence printing `direction=input` for a direction nobody
+    had written (143 H5; `CircuitSpec` allows the empty value on purpose —
+    "empty when the spec does not say" — so this was a reachable path, not a
+    corner). The empty value means *the spec does not say*, and the grammar's
+    answer to an unstated direction is the same as everywhere else in this
+    package: refuse and name the missing half, rather than pick one of the two
+    halves that mean opposite things. `_no_entry_failure` already had the
+    wording for exactly this case ("…but no direction that means the supply
+    enters here"), which is what said the three spellings disagreed.
     """
     found = []
     for item in circuit.open_interfaces:
         if item.net != rail or not item.part:
             continue
-        if item.direction and item.direction not in ENTRY_DIRECTIONS:
+        if item.direction not in ENTRY_DIRECTIONS:
             continue
         found.append(item)
     found.sort(key=lambda item: (item.part, item.direction))
@@ -1270,7 +1285,7 @@ def _claim_note(named: list[SpecOpenInterface]) -> str:
     if len(named) < 2:
         return ""
     shown = ", ".join(
-        f"{item.part} (direction={item.direction or 'input'})" for item in named[1:4]
+        f"{item.part} (direction={item.direction})" for item in named[1:4]
     )
     more = "" if len(named) <= 4 else f"; +{len(named) - 4} more"
     return (

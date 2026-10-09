@@ -64,6 +64,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
@@ -981,11 +982,33 @@ def _text_list(value: Any, where: str) -> list[str]:
 
 
 def _number(value: Any, where: str) -> float:
+    """One number out of the document, **finite** or refused.
+
+    ``NaN`` and ``Infinity`` are numbers to :func:`float` and to `json.loads`
+    (and `json.dumps` writes them back the same way, so a document carrying one
+    can be produced by any Python toolchain). They are not places on a canvas:
+    a lock coordinate of ``NaN`` travelled into the compiler's displacement
+    arithmetic, and the final lattice snap raised ``round(NaN)`` out of
+    :func:`drawcompiler._place` as a raw ``ValueError`` — a traceback and exit 1
+    where the contract is a refusal and exit 5 ("Input problems never raise",
+    `drawcompiler.CompileError`). The boundary is the right place to stop it:
+    every number this document carries comes through here, so the refusal names
+    the path and every consumer — single module and page alike — gets a
+    :class:`PresentationSpecError` instead of an arithmetic surprise.
+    """
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise PresentationSpecError(
             f"{where} must be a number in canvas units, got {value!r}"
         )
-    return float(value)
+    number = float(value)
+    if not math.isfinite(number):
+        raise PresentationSpecError(
+            f"{where} is {value!r}; a coordinate is a place on a canvas and "
+            f"{value!r} is not a place — write a finite number in canvas units "
+            "(NaN and Infinity survive JSON, and a lock is honoured exactly, so "
+            "a value the compiler cannot place must be refused here)"
+        )
+    return number
 
 
 def _check_keys(body: dict[str, Any], allowed: tuple[str, ...], where: str) -> None:

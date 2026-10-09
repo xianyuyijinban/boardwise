@@ -407,6 +407,12 @@ def page_layered_key(
        a module boundary;
     4. **compactness** — the area the module frames occupy.
 
+    A layer whose metric was not measured must not be won: the key is compared
+    ascending, so a caller hands in the **worst** value for "there is no value".
+    `readability.UNMEASURED` is a negative number and would read as the smallest
+    area of all, ranking an unmeasured page first — the caller's job is
+    :func:`_rankable`, which is where that sentinel is kept out of the key.
+
     The label/line consistency of 056 sec.3 is **not** here: a page that mixes a
     wire with a name for one net is a hard violation, not a soft metric, because
     it is ambiguous rather than merely ugly.
@@ -591,6 +597,33 @@ def compile_page(
     return result
 
 
+#: What a metric takes in the ranking key when it cannot be measured.
+#:
+#: `readability.UNMEASURED` is a **negative** number, and the ranking key is
+#: compared ascending: a compactness of ``-1`` outranks every real page area, so
+#: a page whose frames do not exist would win the compactness layer. A *missing*
+#: key defaulting to ``0.0`` has the same disease from the other side — it claims
+#: "zero crossings" for a page nobody measured. Both are absence spelled as a
+#: value, so absence is spelled as the **worst** value instead: a page may not
+#: win a layer it has no number for.
+_UNRANKED = float("inf")
+
+
+def _rankable(metrics: Mapping[str, float], key: str) -> float:
+    """One soft metric as a value the ascending ranking key may compare.
+
+    Absent, NaN and the "cannot measure" sentinel (any negative number — every
+    metric this key reads is a length, a count or an area, so a negative one is
+    never a measurement) all become :data:`_UNRANKED`. Keeping the sentinel out
+    of the key is the point: a comparison is a decision, and no decision may be
+    made on a value that says "there is no value".
+    """
+    value = metrics.get(key)
+    if value is None or value != value or value < 0.0:
+        return _UNRANKED
+    return float(value)
+
+
 def _measure(page: PageLayoutPlan) -> PageCandidate:
     """One gated page -> the numbers the ranking compares."""
     metrics = dict(page.page_evidence.soft_metrics)
@@ -605,11 +638,11 @@ def _measure(page: PageLayoutPlan) -> PageCandidate:
             len(page.plan.evidence.hard_violations)
             + len(page.page_evidence.hard_violations),
             len(findings),
-            metrics.get("page_backflow_length", 0.0),
-            metrics.get("page_crossings", 0.0),
-            metrics.get("page_bends", 0.0),
-            metrics.get("page_cross_module_wire_length", 0.0),
-            metrics.get("page_area", 0.0),
+            _rankable(metrics, "page_backflow_length"),
+            _rankable(metrics, "page_crossings"),
+            _rankable(metrics, "page_bends"),
+            _rankable(metrics, "page_cross_module_wire_length"),
+            _rankable(metrics, "page_area"),
         ),
     )
 

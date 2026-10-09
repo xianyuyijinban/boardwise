@@ -182,7 +182,9 @@ on purpose, because the compiler is the part that must work with no editor:
   088b evidence are in `evidence/088b/`).
 
 The three rules the pair leans on: an offline plan is never landed without a page
-it was built against (`--page`, or a page `--new-page` creates and reads back); a
+it was built against (`--page`, or a page `--new-page` creates and reads back; a
+`--new-page` beside a page the plan already carries is **refused**, never ignored
+— 143d); a
 pose is handed to the editor through `engines/draw.py::_editor_pose` (the mirror
 and rotation conventions are *not* the same as `core.geometry.transform_point`'s
 — 054 measured both); and a library profile must be **measured** on the machine it

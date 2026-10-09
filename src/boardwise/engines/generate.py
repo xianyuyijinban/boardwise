@@ -18,10 +18,16 @@ plan, computed *offline*:
    geometry; the draw flow prints the report and *refuses to execute* when
    anything fails.
 
-Coordinate spaces, stated once: symbol offsets from the parser are in *file*
-space (the .epru stream's y axis); the editor canvas negates y. Everything in
-this module and in :mod:`boardwise.engines.layout` speaks *canvas* space —
-:func:`canvas_pin_offsets` is the one conversion point.
+Coordinate spaces, stated once: the `.epro2` stores y opposite to the canvas, so
+the **parser negates the axis once at its own boundary** and hands over canvas
+coordinates; everything in this module and in
+:mod:`boardwise.engines.layout` speaks *canvas* space, which is what the bridge
+actions take. :func:`canvas_pin_offsets` is the name of that boundary, and it is
+an *identity* today: it is kept, and kept named, as the one checkpoint a
+coordinate guard can point at (the 010c measurement and
+`tests/test_coordinate_guards.py` are what closed the double negation), not
+because a conversion happens there. Canvas space is y-**up**, and one canvas
+unit is 10 mil = 0.254 mm (`boardwise.core.symbolprofile.Box`), not one mil.
 
 Nets are named with editor-native primitives rather than ``createNetLabel``,
 which the reference implementation measured hanging on EasyEDA 3.2.186
@@ -41,6 +47,7 @@ import re
 from dataclasses import dataclass, field
 
 from boardwise.core.model import DesignModel
+from boardwise.core.values import parse_capacitance_farads
 from boardwise.engines import layout
 from boardwise.engines.layout import Placement, RoutedNet, Violation
 
@@ -48,9 +55,16 @@ from boardwise.engines.layout import Placement, RoutedNet, Violation
 #: derives its own packing from the sheet constants instead.
 DEFAULT_PITCH = 400.0
 
-#: Value fragments that mark a capacitor-like part worth placing next to the
-#: chip it decouples. Deliberately broad; a wrong guess only costs layout.
-_DECOUPLING_HINTS = ("pF", "nF", "µF", "uF")
+#: The capacitance unit spellings this ordering hint knows, **lower case**, and
+#: the same keys `rules/values.parse_capacitance_farads` reads. It is kept as the
+#: readable statement of the question ("does this value look like a capacitor at
+#: all"), pinned to the reader's own unit table by a test so the two cannot drift
+#: — **but it is not the ruler any more**: the ruler is the reader itself, so a
+#: spelling the rule engine measures as a capacitor is a capacitor here too
+#: (143e, D10: a case-sensitive substring test against the upper-case spellings
+#: of this tuple is what made ``100NF``/``0.1UF`` — the commonest supplier
+#: spellings — decoupling caps to the rule engine and strangers to this hint).
+_DECOUPLING_HINTS = ("pf", "nf", "µf", "uf")
 
 
 #: Naming strategies for signal nets (task 006b revision 3, sanctioned by
@@ -69,7 +83,8 @@ _DECOUPLING_HINTS = ("pF", "nF", "µF", "uF")
 #: ``wire``  the wire itself carries the net name (`sch_PrimitiveWire.create`
 #:           with ``net``). Measured on the host: the editor's own netlist
 #:           accepts it, so the net is electrically named — with **no visible
-#:           label**. Zero net ports.
+#:           *signal* label** (rails keep their flags, as under every strategy).
+#:           Zero net ports.
 #: ``text``  ``wire`` **plus** a free text primitive drawn beside the wire
 #:           (a *decorative* name: visible to a reader, not an electrical
 #:           object) for **every** signal net, however short. This is the
@@ -80,7 +95,16 @@ _DECOUPLING_HINTS = ("pF", "nF", "µF", "uF")
 #: ``label`` the native ``sch.place_netlabel`` path. Kept behind a switch
 #:           because it is the correct API on a v4 host and costs one flag to
 #:           re-enable — dormant here, and timeout-protected.
-#: ``none``  wires only, no names at all.
+#: ``none``  wires only: the wire still carries the net name, and **no signal
+#:           name primitive is placed** at all. Power/ground rails keep their
+#:           flags, as under every other strategy — this line used to read "no
+#:           names at all", which contradicted :func:`naming_steps_for` and was
+#:           the stale half (143e, D8): a rail's flag *is* that net's electrical
+#:           naming rather than a decoration beside it, and the code has said so
+#:           in both places it decides it.
+#:
+#: Every strategy governs **signal** nets; rails are always flagged, so read the
+#: table above as "how a signal net is named", never as "what primitives appear".
 #:
 #: Net ports are never emitted by any strategy (xianyuyijinban's ban; the action stays
 #: in the catalogue for the solver's last resort only).
@@ -90,16 +114,32 @@ NAMING_STRATEGIES = ("auto", "wire", "text", "label", "none")
 #: the net from the wires alone, and nowhere else.
 DEFAULT_NAMING_STRATEGY = "auto"
 
-#: How long a signal net's wires must run before ``auto`` names it, in canvas
-#: units (1 unit = 1 mil = 0.0254 mm, `docs/epru-format.md` §4).
+#: How long a signal net's wires must run before ``auto`` names it, in **canvas
+#: units** — and one canvas unit is **10 mil = 0.254 mm** (0.01 in;
+#: `boardwise.core.symbolprofile.Box`), which is also the unit
+#: :func:`boardwise.engines.layout.polyline_length` answers in. The comparison
+#: is therefore apples to apples; what was wrong was the arithmetic around it.
 #:
 #: **岳裁 2026-10-08：长距离才打.** The threshold answers "how far can a reader
-#: follow a net", not "how many labels look tidy": 1500 mil is ~38 mm, about
-#: 1.3x the width of a big chip body and a bit over a third of an A4 landscape
-#: sheet (:data:`~boardwise.engines.layout.SHEET_WIDTH` = 1169) — past that a
-#: net has to be traced, and tracing is exactly what a name saves.
-#: **House rule, the exact number pending 岳's confirmation**: one named
-#: constant, so moving it moves the policy for every page at once.
+#: follow a net", not "how many labels look tidy".
+#:
+#: **Units, stated once (143e, D4).** This comment used to price the ruling at
+#: one unit to one mil (0.0254 mm) and read "1500 mil is ~38 mm, about 1.3x the
+#: width of a big chip body and a bit over a third of an A4 landscape sheet
+#: (:data:`~boardwise.engines.layout.SHEET_WIDTH` = 1169)". At the real factor
+#: the constant is **1500 units = 15 000 mil = 381 mm**, which is longer than the
+#: A4 landscape sheet is *wide* (1169 units = 297 mm): the sentence's own
+#: arithmetic held under neither reading. As it stands, ``auto`` names a signal
+#: net only when its wires run across practically the whole page (measured on
+#: the golden board: 1 of 10 signal nets). The 38 mm the ruling was written for
+#: is 150 canvas units (= 1500 mil), and under it 10 of 10 golden signal nets are
+#: named — the screenful-of-labels state 134 was asked to end.
+#:
+#: **So the constant is left where it is, and that is deliberate**: moving it
+#: 1500 -> 150 is a policy ruling (岳's, not a unit fix), and the honest unit
+#: statement above is what makes the choice weighable. **House rule, the exact
+#: number pending 岳's confirmation**: one named constant, so moving it moves the
+#: policy for every page at once.
 #:
 #: What it is *not*: a clearance. Under it a net is read from its wires, and a
 #: name on it would be a primitive without information — and every primitive is
@@ -196,6 +236,12 @@ class ActionPlan:
     wires: list[WireStep] = field(default_factory=list)
     #: (designator, pin number) pairs left unconnected on purpose.
     nc_pins: list[tuple[str, str]] = field(default_factory=list)
+    #: (designator, pin number) pairs the netlist connects but the plan could
+    #: **not place** — no position in the offsets table, so no wire reaches them
+    #: (143e, D2). The counterpart of :attr:`nc_pins`, and deliberately a
+    #: separate list: "left open on purpose" and "we could not draw it" must
+    #: never be read as the same thing (module docstring).
+    unplaced_pins: list[tuple[str, str]] = field(default_factory=list)
     #: Geometry placements (with boxes) — the validator's input.
     geometry: list[Placement] = field(default_factory=list)
     #: (designator, pin) -> canvas point of the pin tip, as planned. The
@@ -282,6 +328,23 @@ def _is_power_net(name: str) -> bool:
     return layout._net_kind(name) in ("Ground", "Power")
 
 
+def _is_capacitor_value(value: str) -> bool:
+    """Is ``value`` a capacitance the **rule engine's own reader** accepts?
+
+    One reader, not two (143e, D10). ``rules/values.parse_capacitance_farads``
+    is what every rule measures capacitors with, so asking it here is the only
+    way "a capacitor to the rules" and "a capacitor to the layout order" cannot
+    disagree — the promise the mu-fold comment below already made. The
+    case-sensitive substring test that stood here read only the lowercase
+    spellings, so ``100NF`` and ``0.1UF`` (what a supplier's BOM writes) were
+    capacitors to the rules and strangers to this hint; the reader also knows
+    the trade's mid-letter notation (``4u7``, ``2n2``), which no hint list could
+    have covered. A wrong guess only costs layout, so honesty about the ruler
+    costs nothing.
+    """
+    return parse_capacitance_farads(value) is not None
+
+
 def _decoupling_next_to_host(model: DesignModel, host: str) -> set[str]:
     """Designators of cap-like parts sharing a net with ``host``."""
     host_nets = {
@@ -294,11 +357,11 @@ def _decoupling_next_to_host(model: DesignModel, host: str) -> set[str]:
         if designator == host:
             continue
         # The Greek small mu (U+03BC) is what a Chinese/Greek IME types for
-        # "micro"; the hints spell the MICRO SIGN (U+00B5). Folded the way
-        # `rules/values.parse_capacitance_farads` folds its unit key (the defect
-        # batch's fix), so `22μF` is a capacitor here exactly as it is there.
-        value = component.value.replace("μ", "µ")
-        if any(hint in value for hint in _DECOUPLING_HINTS):
+        # "micro" and the MICRO SIGN (U+00B5) is what the library spells it
+        # with; the reader folds the two together itself (its `_CAP_RE` carries
+        # ``re.IGNORECASE`` and normalises the key), so `22μF` is a capacitor
+        # here exactly as it is there — and so is every other spelling it reads.
+        if _is_capacitor_value(component.value):
             shares = {
                 net.name
                 for net in model.nets.values()
@@ -613,6 +676,43 @@ def generate_plan(
 
     plan.pin_positions = pin_positions
 
+    #: 143e, D2/D3: **what the plan could not draw, said out loud.**
+    #:
+    #: The router filters its net members by "has a known position"
+    #: (:func:`layout.route_nets`), and ``validate_full`` reads its pin tips from
+    #: the same table — so a netlist pin the offsets table cannot place is
+    #: invisible to *both*: not wired, not reported, and not in ``nc_pins``
+    #: (that list is built from ``pin.net is None``, which says "left open on
+    #: purpose"). "We could not place it" masquerading as "left open on purpose"
+    #: is exactly the confusion the module docstring forbids, so the two states
+    #: get a list and a note each. A **pin-less component** is the same disease
+    #: one level up: it has no keep-out box either, so constraint 1 cannot look
+    #: at where it landed, and nothing else would have said so.
+    plan.unplaced_pins = [
+        (designator, pin)
+        for _net_name, net in sorted(model.nets.items())
+        for designator, pin in net.pins
+        if (designator, pin) not in plan.pin_positions
+    ]
+    for designator, pin in plan.unplaced_pins:
+        plan.notes.append(
+            f"pin {designator}.{pin} is connected in the netlist but has no known "
+            "position, so no wire reaches it — UNPLACED, not left open on purpose"
+        )
+    routed_nets = {route.net for route in routes}
+    for net_name, net in sorted(model.nets.items()):
+        if net_name in routed_nets or len(net.pins) < 2:
+            continue
+        plan.notes.append(
+            f"net {net_name} is in the netlist but nothing was drawn for it"
+        )
+    for place in geometry:
+        if place.bbox is None:
+            plan.notes.append(
+                f"component {place.designator} has no known pins, so it has no "
+                "bounding box: the self-check cannot see where it landed"
+            )
+
     for designator, pin in sorted(
         (des, pin.number)
         for des, component in model.components.items()
@@ -670,12 +770,73 @@ def generate_plan(
             point = route.attach
         steps = naming_steps_for(route, point, plan.naming_strategy)
         for step in steps:
-            if step.kind not in ("Ground", "Power"):
+            if step.kind in ("Ground", "Power"):
+                continue
+            if plan.naming_strategy == "auto":
+                # `why` is `needs_signal_label`'s answer, and that function only
+                # ever answers the ``auto`` question.
                 plan.notes.append(f"net {step.net} is named because {why}")
+            else:
+                # 143e, D7: ``text``/``label`` name *every* signal net, so
+                # printing `why` here produced "net X is named because short …
+                # read it off the wires" — a note that contradicted itself and
+                # contradicted the strategy, on the one screen 岳 signs off from.
+                plan.notes.append(
+                    f"net {step.net} is named because strategy "
+                    f"{plan.naming_strategy} names every signal net"
+                )
         plan.net_names.extend(steps)
         taken.extend((step.x, step.y, step.net) for step in steps)
 
     plan.violations = violations
+
+    #: 143e, D1: **the anchors the plan draws go back through the gate.**
+    #:
+    #: The solver path used to validate annotation geometry against
+    #: ``route.attach`` — the router's *candidate* — while ``auto`` hands the
+    #: name to :func:`layout.clear_label_point`, which may return a different
+    #: point (measured on the golden board: the one moved label is drawn 975
+    #: units from the point the gate measured), and ``wire``/``none`` and every
+    #: short signal net under ``auto`` put nothing there at all while still being
+    #: measured. So ``LABEL_TOO_CLOSE`` / ``LABEL_FLOATS`` / ``LABEL_OVERLAP`` /
+    #: ``LABEL_ON_TITLE_BLOCK`` could never fire on a name this generator
+    #: produced, and a moved name could sit on a part, on a stranger's wire or in
+    #: the title block with the gate reporting clean. Both annotation rulers run
+    #: here, on the anchors the draw flow will actually execute:
+    #:
+    #: * :func:`layout.annotation_anchor_violations` — constraints 4/5, the
+    #:   *same* function :func:`layout.validate_full` measures with, fed the real
+    #:   anchors instead of the candidate (on-wire, and ``LABEL_CLEARANCE`` from
+    #:   every foreign box);
+    #: * :func:`layout.lint_annotations` — the four per-category readability
+    #:   findings the replay path already runs, using ``generate``'s own
+    #:   predicted text boxes so generation and checking share one ruler.
+    #:
+    #: ``plan.violations`` is what the draw gate reads, so this is what makes the
+    #: module docstring's promise ("validate_full re-checks all five hard
+    #: constraints on the finished geometry") true of the finished page rather
+    #: than of a candidate that the plan then moves away from. The *page* was
+    #: picked earlier without these rows — a label finding can therefore appear
+    #: on the chosen page instead of the solver trying a narrower one; reported
+    #: is what matters, and re-choosing a page for a label is 岳's call if the
+    #: finding ever blocks a board that used to draw.
+    plan.violations.extend(
+        layout.annotation_anchor_violations(
+            model,
+            routes,
+            geometry,
+            [(step.net, step.x, step.y) for step in plan.net_names],
+        )
+    )
+    plan.violations.extend(
+        layout.lint_annotations(
+            geometry,
+            routes,
+            plan.net_names,
+            layout.Rect(*layout.TITLE_BLOCK),
+            members_by_net=members_by_net,
+        )
+    )
     return plan
 
 
