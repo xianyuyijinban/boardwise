@@ -290,16 +290,41 @@ def test_edit_plan_names_the_boards_when_a_designator_spans_them(capsys):
 #: reading. 040b adds a field (`board`) and changes nothing else about them: the
 #: eval's per-board rows for these boards are unchanged, and this pin says so in
 #: a way a future edit cannot quietly break.
+#:
+#: 064 appended one row to each: both CH340 exports carry the same ``U5``
+#: (RT9013-33GB) whose output rail ``VCC`` is priced by nothing but that part's
+#: own MPN suffix, so `sel-ldo-fixed-output` files its **self-reference refusal**
+#: — an INFO work order naming the contract key to write
+#: (``requirements.rails[net=VCC].targetVoltage``), not a defect. The golden
+#: board gained a row without changing its verdict, which is what a new rule
+#: reading the shelf is allowed to do; `sel-tvs-standoff-rail` is silent here
+#: because neither board carries a shelf-backed TVS.
 FROZEN_FINDINGS = {
     "ch340_golden.epro2": [(
         "decap-required-caps", "WARN",
         "U1 pin4 must sit on net 'VCC' in mode '3.3V' but is on 'NET1' — the "
         "datasheet's wiring for the active mode is not what the board does",
+    ), (
+        "sel-ldo-fixed-output", "INFO",
+        "U5 的固定输出是 3.3 V（货架条目 ic.rt9013_33gb 的 Output Voltage = "
+        "'3.3V'），但它输出轨 VCC 的轨压读不出，所以对拍无从做起：这条轨 'VCC' "
+        "的电压只从被审的 U5 自己推出来（U5 RT9013-33GB output, decoded from the "
+        "MPN suffix — a guess: no datasheet fact declares it），拿它对拍 U5 的规格"
+        "等于拿零件自己的名字验零件自己；intent-missing: 写进合同 "
+        "requirements.rails[net=VCC].targetVoltage，或让轨名自己写着电压",
     )],
     "ProPrj_CH340G_2026-09-13.epro2": [(
         "decap-required-caps", "WARN",
         "U1 pin4 must sit on net 'VCC' in mode '3.3V' but is on 'NET1' — the "
         "datasheet's wiring for the active mode is not what the board does",
+    ), (
+        "sel-ldo-fixed-output", "INFO",
+        "U5 的固定输出是 3.3 V（货架条目 ic.rt9013_33gb 的 Output Voltage = "
+        "'3.3V'），但它输出轨 VCC 的轨压读不出，所以对拍无从做起：这条轨 'VCC' "
+        "的电压只从被审的 U5 自己推出来（U5 RT9013-33GB output, decoded from the "
+        "MPN suffix — a guess: no datasheet fact declares it），拿它对拍 U5 的规格"
+        "等于拿零件自己的名字验零件自己；intent-missing: 写进合同 "
+        "requirements.rails[net=VCC].targetVoltage，或让轨名自己写着电压",
     )],
 }
 
@@ -384,10 +409,20 @@ def test_other_single_board_fixtures_keep_their_frozen_severities(name):
 #: ``arch-nrst-closure`` measurement row appears (its net has 2 members, so the
 #: reset pin is not left bare). A new INFO here is a part coming **into** scope,
 #: which is the defect this issue is about — not a regression.
+#:
+#: 064 moved the ROBOT and 智能药箱 INFO counts by one each, from the **rule set**
+#: again: `sel-ldo-fixed-output` reads a shelf LDO's own ``Output Voltage`` field
+#: against the rail behind its output pin, and both boards' rail (``VCC`` behind
+#: U8/U11, an AMS1117-3.3) is priced by nothing but that part's own MPN suffix —
+#: which the rule refuses as evidence about the part it is auditing, so the row
+#: is an UNKNOWN work order naming the contract key to write. ``llc_board`` stays
+#: empty: it carries neither a shelf-backed TVS nor a shelf-backed LDO, and the
+#: refusal to invent a row for a part that is not there is the half this table
+#: keeps honest.
 _EXPECTED_SEVERITY = {
     "llc_board.epro2": {"ERROR": 0, "WARN": 0, "INFO": 0},
-    "ProPrj_ROBOT ctrl FOC_2026-09-16.epro2": {"ERROR": 0, "WARN": 3, "INFO": 0},
-    "ProPrj_智能药箱_2026-09-17.epro2": {"ERROR": 0, "WARN": 1, "INFO": 2},
+    "ProPrj_ROBOT ctrl FOC_2026-09-16.epro2": {"ERROR": 0, "WARN": 3, "INFO": 1},
+    "ProPrj_智能药箱_2026-09-17.epro2": {"ERROR": 0, "WARN": 1, "INFO": 3},
 }
 
 

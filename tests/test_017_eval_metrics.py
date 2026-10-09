@@ -629,6 +629,20 @@ def test_the_report_carries_the_provenance_a_run_has_to_record():
     #      module** rather than by editing `core/pinrole.py`, on purpose —
     #      the residue is 131e's object, and an edit under `core/` would move
     #      no number in this recipe anyway.
+    # 064 moved both again — the **direct-only** one for the first time since
+    # 129 — to f9160d36 / 42dc76c6 (from HEAD's a5a3911a / 07080d07, measured
+    # by recomputing this recipe with the new file omitted and `i18n.py` /
+    # `unproven.py` read from HEAD). The cause is one new file directly in
+    # `rules/` (`paramspec.py`, the two selection rules) plus those two edits.
+    # 139's close-out moved both again — 4f056aaf / 2243dd42 — by a single
+    # direct file, `rules/railratings.py`: the contract's two voltage slots
+    # (`voltage` / `targetVoltage`) are read as **one** answer now, so the
+    # reader's prose and body both moved while no verdict did (the behaviour
+    # pins are `tests/test_092_rail_ratings.py`). Measured the same way: both
+    # recipes recomputed over this tree with `railratings.py` read from HEAD
+    # return exactly f9160d36 / 42dc76c6.
+    # The running ledger with the pinned values is
+    # `tests/test_126a_pcb_review_plumbing.py`; this note is the pointer to it.
     # Both are measured, not guessed - `tests/test_126a_pcb_review_plumbing.py`
     # recomputes both from the tree and pins them. No number is asserted here:
     # any further rule change moves the digest again, which is the point, so

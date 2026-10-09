@@ -37,6 +37,7 @@ from ..rules.params import (
     RcCutoff,
     ValueMpnMatch,
 )
+from ..rules.paramspec import LdoFixedOutput, TvsStandoffRail
 from ..rules.railratings import CapVoltageRating, LdoDissipation
 
 #: Every rule applied by :func:`run_review`, in execution order. The 011c
@@ -70,6 +71,12 @@ BUILTIN_RULES: list[Rule] = [
     OpenDrainPullup(),
     NrstClosure(),
     ArchSenseBiasClosure(),
+    # 064 added the two selection rules: the shelf's own spec fields (a TVS's
+    # stand-off voltage, a fixed LDO's output step) read as a **judgement**
+    # against the rail they are used on — the specs #64 measured lying in
+    # `parts.json` with nothing consuming them.
+    TvsStandoffRail(),
+    LdoFixedOutput(),
 ]
 
 #: The rules that read a **DesignIntent** (091 A2a), by class. It is a table
@@ -92,6 +99,14 @@ BUILTIN_RULES: list[Rule] = [
 #: `bidirectional` chains (and its new optional ``closure: "waived"`` waiver) are
 #: the subject, and the drawing's own resistors are what the arithmetic is done on
 #: — without a contract there is no chain to ask about.
+#:
+#: 064 added the two selection rules, and they are here for a **weaker** reason
+#: than the first five: their subject is a part on the board, so a reading with
+#: no contract still runs them — the contract only moves *which* document the
+#: rail's voltage is read from (requirement first, the drawing's own inference
+#: second). They are listed because they take the contract at construction for
+#: the same leak reason the others do (`BUILTIN_RULES` outlives one run), not
+#: because they need one to have a subject.
 INTENT_RULES: tuple[type[Rule], ...] = (
     ValueMpnMatch,
     CapVoltageRating,
@@ -99,6 +114,8 @@ INTENT_RULES: tuple[type[Rule], ...] = (
     ArchRailVoltageClash,
     OpenDrainPullup,
     ArchSenseBiasClosure,
+    TvsStandoffRail,
+    LdoFixedOutput,
 )
 
 

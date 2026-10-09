@@ -44,10 +44,12 @@ boardwise checkup --file <导出.epro2> --out <目录>       # 断连兜底：�
 - **报告自己说数据从哪来**（`source.tier`，缺一级就如实降级）：
   `project-file` 整工程归档（满血）→ `per-page` 逐页导出合并（跨页连通性按网名，
   不是追出来的连线）→ `netlist` 仅连通性（无值/无 MPN/无位姿）→ `file` 离线文件。
-  **per-page 档里跨页同名的网不是已验证的连接**（issue #19；参数两条规则于 076 补齐）：按网找
-  协同器件的 9 条规则（`decap-required-caps` / `conn-nc-and-must-connect` / `conn-usb-cc-pulldown` /
+  **per-page 档里跨页同名的网不是已验证的连接**（issue #19；参数两条规则于 076 补齐、
+  选型两条于 064 补齐）：按网找
+  协同器件的 11 条规则（`decap-required-caps` / `conn-nc-and-must-connect` / `conn-usb-cc-pulldown` /
   `param-divider-output` / `param-led-current` / `param-rc-cutoff` / `path-ldo-dropout` /
-  `pwr-domain-vs-range` / `pwr-supply-on-known-domain`）对出现在多于一个页的网名
+  `pwr-domain-vs-range` / `pwr-supply-on-known-domain` / `sel-tvs-standoff-rail` /
+  `sel-ldo-fixed-output`）对出现在多于一个页的网名
   **一律不下通过/违规结论，只报 UNKNOWN**
   ——同名可能是同一块板的另一张页（真连），也可能是另一块板碰巧同名（假连），这一档分不出来。
   每条规则只对**它自己真正读的那几条网**查（`rules/unproven.py` 的登记表逐条写明：rc 查 R-C 共用的
@@ -240,17 +242,22 @@ checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起
     ——每条点名答案出处：名字自带电压（`+5V`/`A5V`）、地网（0 V 是定义）、派生轨（`VCC/2`）、
     **图纸架构已定价**（货架稳压器的输出）、**合同里已有电压**（这一条就是「问过不再问」落地的地方）。
     清单非空也是 exit 0——那是这次要干的活，不是错误；exit 2 = 文件读不了。
-  - `boardwise intent set-rail <网名> --voltage <值> --file <合同>`：把工程师的答案写进
-    `requirements.rails[net=…].voltage` + `provenance: user_stated`，**别的键、别的条目、行序一字不动**
+  - `boardwise intent set-rail <网名> --voltage <值> --file <合同>`：把工程师的答案**同一个值写进
+    两个键**——`requirements.rails[net=…].voltage` **和** `.targetVoltage`，`provenance: user_stated`。
+    **双写**的理由：`voltage` 是「这条轨是多少伏」的**既定值**语义、`targetVoltage` 是**设计目标**
+    语义，`user_stated` 时两者同义；写一份只够一半读端——`pwr-cap-voltage-rating` /
+    `path-ldo-dissipation`（及 064 复用的同一个 `rail_voltage`）原本只读 `targetVoltage`，
+    139 的 `intent audit` 只读 `voltage`，于是工程师答完一侧、另一侧照样报 `intent-missing`
+    （064/139 撞的同一处，证据 `evidence/064/intent_slot_gap.txt`）。**别的键、别的条目、行序一字不动**
     （合同是工程师的文档，这命令只是书记）；合同不存在就建（首跑是正常态）。读不出的值
     （`abc`/`5V 1A`/`VDD`）按名字拒、exit 2，且**一个字节都不落盘**——这个槽是拿算术定价的，
     存一个谁也读不出来的字符串，这条轨就会永远问下去。
 
   **答案落进 JSON 合同**（`--intent` 或用户级默认位；有合同时 `design-intent.md` 是渲染视图、
   手填无效，见上）。下一轮 audit 里同一条轨**不许再出现在 ask 段**——「不再重复问」的兑现方式是
-  settled 段点名收据，不是沉默。补哪个键要看谁来读：`intent set-rail` 写 `voltage`
-  （裁定点名的键，`pcb-voltage-spacing` 按它定价）；`pwr-cap-voltage-rating` /
-  `path-ldo-dissipation` 读的是 `targetVoltage`，要它们也算答过，就在同一份合同里补那个键。
+  settled 段点名收据，不是沉默。两个键**读端都认**：`pcb-voltage-spacing` 一侧按 `voltage` 定价，
+  `pwr-cap-voltage-rating` / `path-ldo-dissipation` 两键都读、**`voltage` 优先**（它是「既定」语义；
+  两键冲突时取 `voltage` 并在行内 evidence 注明分歧）——所以手写合同只补一个键也算答过。
 - **完整结论看 `completion.verdict`**（053 §2.2）：`scope{rules,boards,pages}` / `errors` /
   `unreviewedParts` / `needsDatasheet` / `warningsPendingTriage` / `architectureSlots{total,filled,stale}` /
   `openTodos` / `sourceVersions{ruleset,rulebody}`，三态 `complete`（errors=0 ∧ 未审=0 ∧ 标记=0 ∧ stale=0 ∧

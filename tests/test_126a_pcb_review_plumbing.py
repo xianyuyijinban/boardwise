@@ -133,7 +133,8 @@ def test_the_builtin_pcb_rule_list_is_the_126b_distance_pair_then_the_126c_pair(
     declaration order is about the report's ``checksRun``, not about which row
     comes first.
 
-    ``BUILTIN_RULES`` (the schematic 20) is left untouched by this file — read
+    ``BUILTIN_RULES`` (the schematic set — 22 since 064, and not this file's
+    number to own) is left untouched by this file — read
     rather than re-stated where the point is "this file did not move it", so
     the assertion is that the two lists are separate objects and that the PCB
     one grew on its own.
@@ -164,7 +165,12 @@ def test_the_builtin_pcb_rule_list_is_the_126b_distance_pair_then_the_126c_pair(
     assert all(isinstance(rule, PcbRule) for rule in BUILTIN_PCB_RULES)
     # The schematic side is untouched by this file: its list is the 011-family
     # set, and it is a *separate object* (mutating one must not touch the other).
-    assert len(BUILTIN_RULES) == 20
+    # 22 since 064 added the two selection rules (`sel-tvs-standoff-rail`,
+    # `sel-ldo-fixed-output`) — read through ``len`` rather than by value, which
+    # is what keeps this pin about "the PCB file did not move the schematic
+    # list"; the length belonging to 064 is pinned in test_064's own registry
+    # test and in test_011d's count.
+    assert len(BUILTIN_RULES) == 22
     assert BUILTIN_PCB_RULES is not BUILTIN_RULES
 
 
@@ -826,9 +832,31 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # `tests/test_092_rail_ratings.py`, and the direct digest recomputed over
     # HEAD's `railratings.py` alone returns `98b1d462` exactly — measured, not
     # assumed.
+    # 064 moved both digests again — a5a3911a -> f9160d36 (direct) and
+    # 07080d07 -> 42dc76c6 (recursive) — and the **direct** one moving is this
+    # batch's own news: it had held at 98b1d462 from 126b through 131c and then
+    # at a5a3911a since 138, because every batch in between landed inside
+    # `rules/pcb/` or outside the package. The cause is three files sitting
+    # directly in `rules/`: `paramspec.py` (new — the two selection rules),
+    # `i18n.py` (their two Chinese names) and `unproven.py` (both ids joined
+    # `NET_MEMBERSHIP_RULES`). Measured, not assumed: recomputing this recipe
+    # over the tree with `paramspec.py` omitted and `i18n.py`/`unproven.py` read
+    # from HEAD returns exactly `a5a3911a` / `07080d07`, i.e. the pre-064 tree —
+    # so the move is accounted for by 064's three files and by nothing else.
+    # 139's close-out (the rail-voltage key bookkeeping) moved both again —
+    # f9160d36 -> 4f056aaf (direct) and 42dc76c6 -> 2243dd42 (recursive) — and
+    # the **direct** one moving is the news: the batch landed in
+    # `rules/railratings.py` alone, a direct file. The cause is the two contract
+    # voltage slots being read as **one** answer (`_stated_rail_voltage`, the
+    # writer in `core/railquery.py` writing both) plus the prose that says so;
+    # the verdicts are pinned in `tests/test_092_rail_ratings.py` and
+    # `tests/test_139_intent_rails.py`. Measured, not assumed: recomputing both
+    # recipes over this tree with `railratings.py` read from HEAD returns exactly
+    # `f9160d36` / `42dc76c6`, i.e. 064's tree — so the move is 139's one file
+    # and nothing else.
     assert recursive != old_digest, "the subpackage is inside the recipe now"
-    assert old_digest == "a5a3911a"
-    assert recursive == "07080d07", (
+    assert old_digest == "4f056aaf"
+    assert recursive == "2243dd42", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

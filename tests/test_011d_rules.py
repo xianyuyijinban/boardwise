@@ -2087,9 +2087,11 @@ def test_decoupling_per_ic_is_retired_from_the_builtin_rules():
     # `path-ldo-dissipation`), 19 since 093 A3a added the three architecture
     # closure rules (`arch-rail-voltage-clash`, `arch-opendrain-pullup`,
     # `arch-nrst-closure`), 20 since 094 A3b added
-    # `arch-sense-bias-closure` (the F1 bias arithmetic); the id that was retired
-    # here is still retired.
-    assert len(ids) == 20
+    # `arch-sense-bias-closure` (the F1 bias arithmetic), 22 since 064 added the
+    # two selection rules (`sel-tvs-standoff-rail`, `sel-ldo-fixed-output`) that
+    # read the shelf's own spec fields; the id that was retired here is still
+    # retired.
+    assert len(ids) == 22
     # Retirement is not deletion: the rule is still importable, still its own
     # id, still runnable on its own (its own tests stay in test_rules.py).
     assert DecouplingPerIC().id == "decoupling-per-ic"

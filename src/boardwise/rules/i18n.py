@@ -50,6 +50,8 @@ RULE_NAMES_ZH: dict[str, str] = {
     "arch-opendrain-pullup": "开漏输出缺上拉",
     "arch-nrst-closure": "复位脚裸奔",
     "arch-sense-bias-closure": "双向采样链偏置不闭合",
+    "sel-tvs-standoff-rail": "TVS 关断电压与所挂轨",
+    "sel-ldo-fixed-output": "固定输出 LDO 档位与输出轨",
 }
 
 #: 严重度 → 中文。三个词与 `severity_counts` 的键一一对应。

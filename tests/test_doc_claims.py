@@ -21,6 +21,9 @@ REPO = Path(__file__).resolve().parent.parent
 _readme_raw = (REPO / "README.md").read_text(encoding="utf-8")
 #: 声明钉按整句找——README 的换行是排版不是语义，先把空白归一再对拍。
 README = re.sub(r"\s+", " ", _readme_raw)
+#: 审查 SOP 的正文（139 收口的两条声明钉读这里：§3.1 的「按网找协同器件的 N 条规则」
+#: 与 §3.1b 的 set-rail 双写）。同样先归空白再对拍。
+SOP = (REPO / "docs" / "review-sop.md").read_text(encoding="utf-8")
 
 #: 旧的绝对化口号（#7 的病灶原文，中英两版）：README 曾经断言验收集「从不参与调参」，
 #: 而 params 的两条常量恰恰是在 holdout 板的证据上定出来的。
@@ -372,4 +375,73 @@ def test_skill_md_referenced_docs_are_shipped_not_pointed_at_air():
         f"SKILL.md references docs the install cannot resolve — "
         f"not in spec DATAS: {missing_spec}; not in resources.skill_reference_paths(): "
         f"{missing_ship}"
+    )
+
+
+# ================================================ 139 收口：轨电压的两个键与那份清单
+#: §3.1 的那句清单：``协同器件的 N 条规则（`id` / `id` …）``。
+_SOP_TIER_CLAIM_RE = re.compile(r"协同器件的\s*(\d+)\s*条规则（([^）]*)）")
+#: 清单里的规则 id——反引号段里全小写带连字符的那些。
+_SOP_RULE_ID_RE = re.compile(r"`([a-z][a-z0-9-]+)`")
+
+
+def test_the_sop_rule_list_in_the_per_page_tier_matches_the_registry():
+    """护 064/139：SOP 说的「按网找协同器件的 N 条规则」必须与真实清单对拍。
+
+    失效时的样子（本钉就是为此写的）：064 把 `sel-tvs-standoff-rail` /
+    `sel-ldo-fixed-output` 加进 `NET_MEMBERSHIP_RULES`，而 SOP 仍写着「9 条」并列着
+    老的九个——读 SOP 的人以为少两条规则不下结论，per-page 档的诚实度就少两块。
+
+    钉子读**源头**：条数 == 清单里真有几个 id，成员 ⊆ `BUILTIN_RULES` 的 id
+    （注册表）**且** ⊆ `NET_MEMBERSHIP_RULES`（这段话真正的断言是「它们对出现在多于
+    一个页的网名不下结论」，只有后者能担保）。数字与清单本身必须是同一个数。
+    """
+    from boardwise.engines.review import BUILTIN_RULES
+    from boardwise.rules.unproven import NET_MEMBERSHIP_RULES
+
+    match = _SOP_TIER_CLAIM_RE.search(re.sub(r"\s+", " ", SOP))
+    assert match is not None, (
+        "docs/review-sop.md §3.1 lost its per-page rule list — the sentence that says "
+        "which rules refuse on a welded net"
+    )
+    stated, listing = int(match.group(1)), _SOP_RULE_ID_RE.findall(match.group(2))
+    assert len(listing) == stated, (
+        f"the SOP says {stated} rules and lists {len(listing)}: {listing}"
+    )
+    builtin = {rule.id for rule in BUILTIN_RULES}
+    assert set(listing) <= builtin, (
+        "the SOP names rules that are not in BUILTIN_RULES: "
+        + str(sorted(set(listing) - builtin))
+    )
+    assert set(listing) <= set(NET_MEMBERSHIP_RULES), (
+        "the SOP lists rules that do not refuse on a welded net: "
+        + str(sorted(set(listing) - set(NET_MEMBERSHIP_RULES)))
+    )
+
+
+def test_the_sop_and_the_writer_agree_that_one_answer_fills_both_voltage_keys():
+    """护 139 收口：SOP 的 set-rail 段必须写明**双写**并点名两个键，且代码真的一次
+    写两份——「答一次就不问」这句话两半都要成立。
+
+    失效时的样子（139 之前）：文档写着「`intent set-rail` 写 `voltage`；要那两条规则
+    也算答过，就在同一份合同里补 `targetVoltage`」——把缝留给工程师手工补，于是
+    `pwr-cap-voltage-rating` / `path-ldo-dissipation` 对一条已经答过的轨继续报
+    `intent-missing`（`evidence/064/intent_slot_gap.txt`）。
+
+    文档那一半（「双写」二字与两个键名）与代码那一半（`set_rail_voltage` 真落两键，
+    键名与 `RAIL_VOLTAGE_SLOTS` 逐字一致）分开断言：只写文档不改代码，或反过来，
+    这条测试都会红。
+    """
+    from boardwise.core.designintent import SECTION_RAILS, DesignIntent
+    from boardwise.core.railquery import RAIL_VOLTAGE_SLOTS, set_rail_voltage
+
+    assert "双写" in SOP, "the SOP stopped explaining why one answer goes into two keys"
+    updated, _ = set_rail_voltage(DesignIntent(), "VCCA", "3.3V")
+    entry = updated.entry(SECTION_RAILS, "VCCA")
+    for slot in RAIL_VOLTAGE_SLOTS:
+        assert entry.value(slot) == "3.3V", f"set_rail_voltage stopped writing {slot}"
+        assert f"`{slot}`" in SOP, f"the SOP no longer names the {slot} key"
+    assert RAIL_VOLTAGE_SLOTS == ("voltage", "targetVoltage"), (
+        "the pair moved — update docs/review-sop.md §3.1b in the same breath, and this "
+        "pin with it"
     )

@@ -133,6 +133,26 @@ def _findings(board: Path) -> list:
     return [finding for rule in BUILTIN_RULES for finding in rule.check(model)]
 
 
+#: 064's two selection rules file their **UNKNOWN work orders** as INFO findings
+#: — the convention `rules/railratings.py` argued and the oracle approved in 092
+#: ("an UNKNOWN is not a pass and not a failure; it is a work order with an
+#: address ... filed as an INFO finding so the report a reviewer opens carries
+#: it"). On this board family the work order is always the same one: U5's
+#: (RT9013-33GB) output rail `VCC` is priced by nothing but that part's own MPN
+#: suffix, which the rule refuses as evidence about the part it is auditing.
+#:
+#: It is named here rather than filtered silently, because these three tests are
+#: about *defect* claims: "the base fires nothing" means no rule says anybody's
+#: board is wrong, and an INFO row that says "I cannot tell, write the contract"
+#: is not that claim. A rule that starts reporting a defect here still fails.
+_WORK_ORDER_RULES = frozenset({"sel-tvs-standoff-rail", "sel-ldo-fixed-output"})
+
+
+def _defect_findings(board: Path) -> list:
+    """Findings that are claims about the design, not UNKNOWN work orders (064)."""
+    return [f for f in _findings(board) if f.rule_id not in _WORK_ORDER_RULES]
+
+
 def _evaluation(annotation: Path, board: Path, *, split: str = "all"):
     """Per-board grading, with the split filter opened.
 
@@ -437,8 +457,20 @@ def test_the_base_applies_the_oracles_two_corrections():
 
 
 def test_the_base_has_no_findings_at_all():
-    """Not just "no false positives": nothing fires, by any rule."""
-    assert _findings(BASE) == []
+    """Not just "no false positives": nothing fires, by any rule.
+
+    064 made this two assertions instead of one rather than weakening it: no
+    rule files a *defect* claim about the base, and the only rows left are the
+    selection rules' INFO work orders — here exactly one, whose subject and text
+    are the LDO rail nobody but U5's own part number prices (see
+    :data:`_WORK_ORDER_RULES`). A second severity, or a third rule speaking, is
+    still red.
+    """
+    assert _defect_findings(BASE) == []
+    work_orders = _findings(BASE)
+    assert [f.rule_id for f in work_orders] == ["sel-ldo-fixed-output"]
+    assert [f.severity for f in work_orders] == ["INFO"]
+    assert "VCC" in work_orders[0].message and "U5" in work_orders[0].message
 
 
 def test_the_two_native_defects_are_gone_from_the_base_and_still_there_on_the_golden():
@@ -594,7 +626,11 @@ def test_the_retired_variant_stays_unverifiable_and_the_measurement_is_still_ass
     assert ("U1 pin4", "OK") in on_variant and ("U1 pin16", "OK") in on_variant
     assert not [o for o in rule.outcomes(load_board_model(variant))
                 if o.state == "VIOLATION"]
-    assert _findings(variant) == []
+    # 064: `_defect_findings`, not `_findings` — the selection rules file one
+    # INFO work order on any board whose LDO rail only its own part number
+    # prices, and the claim this test makes is about *defects* (the injection is
+    # invisible). See `_WORK_ORDER_RULES`.
+    assert _defect_findings(variant) == []
 
 
 def test_value_mpn_mismatch_carries_two_findings_and_the_second_is_unclaimed():
@@ -629,11 +665,18 @@ def test_value_mpn_mismatch_carries_two_findings_and_the_second_is_unclaimed():
         for o in ValueMpnMatch().outcomes(load_board_model(BASE))
     }
     assert value_mpn["U3"] == "OK", "the base has value and MPN agreeing"
+    # Two WARN claims, and the test's subject is still the second one being
+    # unclaimed. 064 added a third row to this board — an INFO work order, not a
+    # claim — so the severity assertion is spelled out rather than "all = WARN".
     findings = _findings(INJECTED / "value-mpn-mismatch.epro2")
     assert sorted(f.rule_id for f in findings) == [
-        "param-led-current", "param-value-mpn-match",
+        "param-led-current", "param-value-mpn-match", "sel-ldo-fixed-output",
     ]
-    assert all(f.severity == "WARN" for f in findings)
+    assert [f.severity for f in _defect_findings(
+        INJECTED / "value-mpn-mismatch.epro2"
+    )] == ["WARN", "WARN"]
+    work_orders = [f for f in findings if f.rule_id in _WORK_ORDER_RULES]
+    assert [f.severity for f in work_orders] == ["INFO"]
     aset = load_annotations(INJECTED / "value-mpn-mismatch.json")
     assert [item.ref for item in aset.items] == ["U3"], (
         "the LED finding is deliberately not claimed by a second record: the "
