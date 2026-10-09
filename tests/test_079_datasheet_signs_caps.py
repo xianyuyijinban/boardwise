@@ -34,12 +34,16 @@ import pytest
 
 from boardwise.engines.datasheet import (
     _is_capacitor_part,
+    _pin_table_line,
     _range_of,
     _signed_float,
     candidate_facts,
     pages_from_marked_text,
 )
 
+#: The sections are one per issue this file closes: #34 (the spaced hyphen), #49
+#: (range signs), #50 (the cap criterion) and #75 (the `V+` name shapes — the
+#: half of that issue that lives in this engine rather than in `core.pinrole`).
 ROOT = Path(__file__).resolve().parents[1]
 SHELF = ROOT / "blocklib" / "parts.json"
 DATASHEETS = ROOT / "inputs" / "smart_pillbox" / "datasheets"
@@ -361,3 +365,83 @@ def test_050_no_datasheet_pdf_in_the_corpus_is_silently_expected_to_parse():
         "AMS1117-3.3_C6186.pdf", "CH340N_C2977777.pdf",
         "MPU-6050_C24112.pdf", "STM32G431RBT6_C431633.pdf",
     ]
+
+
+# ========================================================= #75 — the `V+` shapes
+
+
+def test_075_the_number_before_shape_reads_v_plus():
+    """`8 V+ Positive` is the pin-table row that `\\b` made unreadable.
+
+    Every pattern the table is spliced into carried `\\b` after the name, and no
+    word boundary exists after a `+`, so this half of the family produced no pin
+    row at all — the two shapes disagreed about one name.
+    """
+    assert _pin_table_line("8 V+ Positive supply") == ("V+", "8")
+
+
+def test_075_the_name_before_shape_still_reads_v_plus():
+    """The direction that always worked, pinned so the fix cannot trade one for
+    the other (`V+ 8 — Positive` is the op-amp spelling in the table's comment)."""
+    assert _pin_table_line("V+ 8 — Positive supply") == ("V+", "8")
+
+
+@pytest.mark.parametrize(
+    "pin_line",
+    ["8 V+ Positive supply", "V+ 8 Positive supply"],
+)
+def test_075_v_plus_joins_its_specification_row_from_either_shape(pin_line):
+    """End to end in both directions: pin table on one page, range on the next.
+
+    The second half of the defect: the specification row `Supply voltage, V+ 3
+    5.5 V` was never registered under `V+` either, so even the working
+    direction joined nothing.
+    """
+    pages = pages_from_marked_text(
+        f"<<<page 1>>>\nPin Functions\n{pin_line}\n"
+        "<<<page 2>>>\nSupply voltage, V+ 3 5.5 V \n"
+    )
+    assert _supplies(pages) == {("V+", ("8",), (3.0, 5.5))}
+
+
+def test_075_the_other_names_read_the_same_in_both_shapes():
+    """The boundary swap is `(?!\\w)` where `\\b` was, and for a word-shaped name
+    the two are the same test — so `VCC`/`VDD` rows are byte-for-byte unchanged."""
+    assert _pin_table_line("8 VCC Supply") == ("VCC", "8")
+    assert _pin_table_line("VCC 3 Supply") == ("VCC", "3")
+    pages = pages_from_marked_text(
+        "<<<page 1>>>\nPin Functions\n13 VDD Power supply voltage\n"
+        "<<<page 2>>>\nSupply voltage, VDD 3 3.6 V \n"
+    )
+    assert _supplies(pages) == {("VDD", ("13",), (3.0, 3.6))}
+
+
+def test_075_a_bare_voltage_unit_is_not_the_name_v_plus():
+    """Unescaped, `V+` is the regex "one or more V" — and it matched the unit of
+    any `5 V` on any line.
+
+    Measured while fixing this: with a `V+` pin row on one page and an unrelated
+    "Output voltage range 5 V to 12 V" on the next, the extractor produced a
+    `V+` record claiming 5–12 V. That is a fact nobody stated, attached to a pin
+    nobody connected it to, so the escape is part of the fix and not tidying.
+    """
+    pages = pages_from_marked_text(
+        "<<<page 1>>>\nPin Functions\nV+ 8 Positive supply\n"
+        "<<<page 2>>>\nOutput voltage range 5 V to 12 V over temperature\n"
+    )
+    facts, _notes = candidate_facts(pages, label="corpus", url=URL)
+    assert "supply_pins" not in facts, facts.get("supply_pins")
+
+
+def test_075_a_range_line_with_no_supply_name_yields_nothing():
+    """`12V`/`5V` in a sentence about something else is not a supply row, and a
+    line that names no supply must not become a `near_miss` about one either."""
+    facts, notes = candidate_facts(
+        pages_from_marked_text(
+            "<<<page 1>>>\nOutput voltage range 5 V to 12 V over temperature\n"
+        ),
+        label="corpus",
+        url=URL,
+    )
+    assert "supply_pins" not in facts
+    assert not [note for note in notes if "V+" in note], notes

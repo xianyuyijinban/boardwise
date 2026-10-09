@@ -25,10 +25,12 @@ auto-named one (``NET11`` carrying an LDO's ``VDD``) is missed:
 * :data:`_RAIL_NAME` — the *name* family: a ``V``-rooted rail spelling
   (``VCC``/``VCCA``/``VDD``/``VDDA``/``VDDIO``/``DVDD``/``VDD_1``/``IOVDD``/
   ``TVDD``/``VBAT``/``VBUS``/``VIN``/``VM``/``VS``/``VEE``/``VREF``/``VREF+``/
-  ``V+`` and the digit/letter suffixes designers glue on). It is a prefix
-  match, guarded so a prefix cannot be rescued by a blocklist-free suffix:
-  ``VCC`` matches, ``VCCA`` matches, ``VCCIO`` matches, and a name that merely
-  *contains* a ``V`` somewhere (``RECV``, ``DRV_EN``) does not.
+  ``V+`` and the digit/letter suffixes designers glue on) — with a **leading
+  polarity** allowed in front of the stem (#74: ``+VCC``/``-VCC`` are that rail
+  written with its sign). It is a prefix match, guarded so a prefix cannot be
+  rescued by a blocklist-free suffix: ``VCC`` matches, ``VCCA`` matches,
+  ``VCCIO`` matches, and a name that merely *contains* a ``V`` somewhere
+  (``RECV``, ``DRV_EN``) does not.
 * :func:`boardwise.core.pinrole.pin_role` — a pin on the net whose name says
   ``IN`` or ``OUT`` (:data:`SUPPLY_ROLES`) **and** is spelled as one of
   :data:`_RAIL_NAME`'s rails. Both clauses, because they answer different
@@ -161,8 +163,27 @@ SUPPLY_ROLES: frozenset[str] = frozenset({"IN", "OUT"})
 #: sibling ``DVDD_EN`` is a rail by this table (a ``DVDD`` stem), but
 #: ``ADVCC`` is not a rail this build claims to recognise, and
 #: :func:`is_supply_name` says so rather than guessing at the tail.
+#:
+#: **The leading ``[+-]?`` is issue #74.** A designer writing a rail's *polarity*
+#: into its name is spelling the same rail: ``+VCC`` / ``+VDD`` / ``+VBUS`` are
+#: ``VCC`` / ``VDD`` / ``VBUS`` with the ``+`` the trade puts in front, and
+#: ``-VCC`` is the negative rail whose name says so. Before this the polarity
+#: was part of the match's first character and ``is_supply_name('+VCC')``
+#: answered False while ``is_supply_name('VCC')`` answered True — so a
+#: ``+VBUS`` net reached the ask list only if a pin on it happened to declare
+#: the supply, and a ``+VCC`` net whose pins were all capacitor/connector pads
+#: reached it not at all. Skipping the sign is what makes the stem test the
+#: whole test; -*-ing every rail spelling separately would be a second table
+#: that could drift from this one.
+#:
+#: **Why the sign is skipped here and not in :data:`_NAME_STATES_VOLTS`' two
+#: readers.** Those answer *how many volts* — a number — and this one answers
+#: *is this name rail-shaped* — a yes/no. ``+5V``/``-12V`` are number-shaped
+#: names, not rail-shaped ones, so they are deliberately left to
+#: :func:`name_states_volts` (which quotes the matched text, sign included), and
+#: this table still refuses them: the ``5V``/``12V`` tail is no stem here.
 _RAIL_NAME = re.compile(
-    r"^(?:"
+    r"^[+-]?(?:"
     r"VCC|VSS|VDD|DVDD|AVDD|IOVDD|TVDD|LVDD"     # the VDD family and its prefixes
     r"|VBAT|VBUS|VEE"                            # battery / bus / negative supply
     r"|VIN|VOUT|VM|VS"                           # regulator-side rail names
@@ -202,6 +223,12 @@ def is_supply_name(net: str | None) -> bool:
     two halves of :func:`audit_rails`' test, never the whole of it: an
     auto-named ``NET11`` that carries an LDO's output pin is a rail this audit
     lists, and it does so on the pin half.
+
+    A **leading polarity** is part of the spelling, not a different name
+    (issue #74): ``+VCC``/``+VDD``/``+VBUS``/``-VCC`` → True, the same stems with
+    the trade's sign in front. The number-shaped spellings stay out of this
+    reader either way — ``+5V`` is a rail by :func:`name_states_volts`, which
+    prices it, and is not one here.
     """
     return bool(_RAIL_NAME.match(str(net or "").strip()))
 

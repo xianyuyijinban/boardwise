@@ -39,7 +39,12 @@ SUPPLY_NAMES = (
     "VCC", "VDD", "VDDIO", "VLOGIC", "VIN", "VBAT", "VBUS", "AVDD", "DVDD", "VS",
     # An op-amp's positive rail is spelled `V+`; its negative rail (`V-`) is the
     # return of a single supply in this project, so the operating range is kept on
-    # the positive pin (the 039 批① curation made the same choice).
+    # the positive pin (the 039 批① curation made the same choice). Issue #75:
+    # this entry was **half dead** — every pattern it was spliced into carried a
+    # `\b` after the name, and no word boundary exists after a `+`, so the
+    # number-before shape (`8 V+ Positive`) and every specification row mentioning
+    # `V+` were unreachable while `V+ 8 Positive` worked. Read through
+    # :func:`_name_match` / :func:`_names_on` it is a literal name on both shapes.
     "V+",
 )
 
@@ -259,10 +264,46 @@ def _is_capacitor_part(probe: str, section: str) -> bool:
 
 
 _NAMES_RE = "|".join(re.escape(name) for name in SUPPLY_NAMES)
+
+
+def _name_match(candidate: str, upper: str) -> bool:
+    """Is ``candidate`` on this uppercased line **as a name**, not as letters?
+
+    ``\\b`` on both sides is what the *word*-shaped names need, and it is exactly
+    what `V+` cannot provide: `+` is not a word character, so the boundary after
+    it never exists and `\\bV\\+\\b` matches nothing a datasheet can write
+    (issue #75's second half). ``(?!\\w)`` is the same guard stated as what it
+    means — *the name does not continue into a longer word* — which for every
+    other name in the table is identical to ``\\b`` and for `V+` is finally
+    satisfiable. The leading side keeps ``\\b``: every entry starts with ``V``,
+    so a boundary there always exists and ``RECV``/``AVDD``-in-a-word stay out.
+
+    The name is **escaped** on the way in. Unescaped, `V+` is the regex "one or
+    more V", and that is not a hypothetical: it matched the unit `V` of any
+    `5 V` on any line, so an unrelated "Output voltage range 5 V to 12 V" was
+    registered as a `V+` range and joined to a `V+` pin (measured while fixing
+    this — see the tests).
+    """
+    return re.search(rf"\b{re.escape(candidate)}(?![\w])", upper) is not None
+
+
+def _names_on(upper: str) -> list[str]:
+    """Every name of :data:`SUPPLY_NAMES` this uppercased line carries, in order.
+
+    **One implementation is the point.** This used to be two: a compiled
+    alternation decided whether the line was worth reading at all, and a second
+    lookup picked a name out of it — and the two disagreed, because only one of
+    them escaped `V+` (see :func:`_name_match`). The gate is now *this list being
+    non-empty*, so "the line mentions a supply" and "the line's supply name is
+    X" cannot answer differently.
+    """
+    return [candidate for candidate in SUPPLY_NAMES if _name_match(candidate, upper)]
+
+
 #: `19 16 7 5 VCC` / `13 VDD` — a number **immediately** before the name. Only the
 #: adjacent one counts, which is what makes a multi-package column table resolve
 #: to the last column (the manual's SOP-8 pin) rather than to another package's.
-_PIN_BEFORE_NAME = re.compile(rf"(?<![\w.])(\d{{1,2}})\s+(?=(?:{_NAMES_RE})\b)")
+_PIN_BEFORE_NAME = re.compile(rf"(?<![\w.])(\d{{1,2}})\s+(?=(?:{_NAMES_RE})(?![\w]))")
 #: `VCC 3 Supply` / `V+ 8 — Positive` — the name, the number, then a word. The
 #: trailing word is required: `VCC / 2` (a reference-output row) and
 #: `VCC = low power` (a mode note) are not pin rows, and both are shapes that
@@ -280,6 +321,12 @@ def _pin_table_line(probe: str) -> tuple[str, str] | None:
     Infineon one after normalisation (`6VDD - Supply Voltage`). A number merely
     *on the same line* as a supply name is not a pin — that reading is what turned
     `VCC / 2 reference output` into "pin 65" in the first version.
+
+    Both shapes cover every name in the table, `V+` included (#75): the boundary
+    after the name is `(?![\\w])` rather than `\\b` for the reason
+    :func:`_name_match` states — `8 V+ Positive` is a **number-before** row, and
+    `\\b` after a `+` is unsatisfiable, so that half of the family was unreadable
+    while `V+ 8 Positive` read fine.
     """
     if match := _PIN_AFTER_NAME.search(probe):
         return match.group(1), match.group(2)
@@ -287,7 +334,7 @@ def _pin_table_line(probe: str) -> tuple[str, str] | None:
         pin = match.group(1)
         if int(pin) > 0:
             rest = probe[match.end() :]
-            name = re.search(rf"(?:{_NAMES_RE})\b", rest)
+            name = re.search(rf"(?:{_NAMES_RE})(?![\w])", rest)
             if name:
                 return name.group(0), pin
     return None
@@ -340,14 +387,15 @@ def candidate_facts(
                 continue  # a figure/table number is not a specification
             probe = _probe(line)
             upper = probe.upper()
-            if re.search(r"\b(" + "|".join(SUPPLY_NAMES) + r")\b", upper):
+            # The gate and the lookup are the same call (#75): the previous pair
+            # disagreed, because `V+` unescaped is the regex "one or more V" and
+            # matched the unit of any `5 V`, so a line naming no supply could
+            # still be read as one and register a range under `V+`.
+            names = _names_on(upper)
+            if names:
                 row = _pin_table_line(probe)
                 volts = _range_of(probe)
-                name = row[0] if row else next(
-                    (candidate for candidate in SUPPLY_NAMES
-                     if re.search(rf"\b{candidate}\b", upper)),
-                    "",
-                )
+                name = row[0] if row else names[0]
                 pin = row[1] if row else ""
                 if pin and volts is not None and _pin_is_a_voltage(pin, volts):
                     pin = ""  # the number was the range's own end, not a pin
@@ -358,10 +406,7 @@ def candidate_facts(
                     # Registered under **every** supply name on the line: one
                     # datasheet calls the positive rail `VS` in the table and `V+`
                     # in the pin list, and the join has to be able to meet.
-                    for alias in {name, *(
-                        candidate for candidate in SUPPLY_NAMES
-                        if re.search(rf"\b{candidate}\b", upper)
-                    )}:
+                    for alias in {name, *names}:
                         range_rows.setdefault(alias, []).append(
                             (number, volts, absolute, line)
                         )
