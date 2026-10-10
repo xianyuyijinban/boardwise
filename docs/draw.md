@@ -552,7 +552,21 @@ otherwise the pin sits on an unnamed net and the two modules' same-named nets
 never merge in the editor's project-wide netlist. The apply report's
 `verification.nets` lists every net's live name(s), `crossModule` and `oneNet`;
 findings may only shrink, judged by identity (`rule|severity|designator|pins|named
-nets`), never by count.
+nets`), never by count. 145d: a **single-module** plan stakes the same stub for a
+net that has a name and **no conductor at all** (a one-pin net like the flyback's
+`GATE`/`VFB_NF`), because the editor's netlist otherwise holds neither the name
+nor the pin — the label's downgrade used to state "the name is on the wire" over a
+plan that drew no wire.
+
+**Wire ends and vertices (145d)**: the canvas leg asks that **both ends of every
+planned wire be vertices of the page's own wiring for that net**. The host merges
+collinear wires and keeps a node only where a run ends or something else attaches
+(pit 32), so the plan is built to state only points the page will hold: a run
+another wire of the same net already covers is **not drawn** (it adds no
+conductor), and the wire a flag attaches **inside** of is cut in two at that point
+(two wires, one net, connected). Measured on 145c's landed page: the flag's own
+anchor `(280,785)` survived the host's merge while the bare run end `(280,760)`,
+lying on the same rail, did not.
 
 **`draw discard <plan.json|page.json>`** takes one landed drawing back off its
 page, and only that: a part is the plan's by designator + position + value (the

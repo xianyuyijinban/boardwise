@@ -144,6 +144,42 @@
       ]
     },
     {
+      "symbolRef": "C0603W",
+      "title": "Capacitor 0603 whose host symbol is the wide one, vertical (plate 1 up)\n[145c] pins and body measured on the live host 2026-10-10: tips from the 145c probe (outputs/145c/probe_02_pins_C14663.json, placed on a scratch page of `test` and deleted after reading); body box = the two pins' inner ends, the same convention C0603/C0805 use, with the drawn bbox read alongside at 389.5..410.5 x 291.5..308.5 for a part at (400,300) (outputs/145c/probe_03_geom_C14663.json).",
+      "body": [
+        -10.0,
+        0.0,
+        10.0,
+        0.0
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            -20.0,
+            -0.0
+          ],
+          "direction": "left",
+          "length": 10.0
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            20.0,
+            0.0
+          ],
+          "direction": "right",
+          "length": 10.0
+        }
+      ],
+      "notes": [
+        "body: measured: the two pins' inner ends (x -10..10); the drawn box read by sch.geometry is 19.5 wide and 17 tall around the origin, i.e. -10.5..10.5 x -8.5..8.5 (outputs/145c/probe_03_geom_C14663.json)",
+        "145c: the host resolves LCSC C14663 (100nF 0603) to symbol uuid aaaf5070dfb7f1f1, whose pins escape +-20 - not the +-15 of the C0603 profile, which 118 measured from C100040. That is why C13 (C14663) uses this profile while C10 (C100040) and C6 (C14858) keep C0603: '0603' is a footprint, not one symbol geometry."
+      ]
+    },
+    {
       "symbolRef": "C0805",
       "title": "Capacitor 0805, vertical (plate 1 up)\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (C9, C45783); names/directions/lengths from the 0603/0805 two-pin family rule read off 110's twelve measurements of that family. Body box = the two pins' inner ends (measured drawn extent).",
       "body": [
