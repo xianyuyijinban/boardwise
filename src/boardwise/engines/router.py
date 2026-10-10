@@ -195,6 +195,23 @@ class _Router:
         #: one nor cross one, so a lane an earlier pass reserved stays usable
         #: when the flag is drawn at the end. Empty unless the caller reserves.
         self.reserved: dict[tuple[float, float], str] = {}
+        #: 148: the **flags the wiring has not been drawn for yet**, decided
+        #: before the first wire and replayed afterwards — ``(net, member) ->
+        #: (anchor, rotation, lead)``. A rail flag hangs off the rail, and the
+        #: rail is what this router is about to draw; deciding the flag after the
+        #: wires is what put it on top of them (measured on `test/P1`: the HVDC
+        #: flag's name row across the SW run, `outputs/147/FINDINGS.md` sec.2).
+        #: The seat is the one decision; `drawcompiler._lead_lane_reservations`
+        #: takes it and reserves it, the placement replays it.
+        self.flag_seats: dict[tuple[str, str], tuple] = {}
+        #: 148: the boxes the flags seated before the wiring occupy — the glyph,
+        #: the name row the host prints beside it, and nothing else. They are
+        #: obstacles for **every** wire, this net's own included, which is the
+        #: half a node reservation cannot do: a reservation keeps foreign wires
+        #: off a lane, and the rail that must not run through its own pennant is
+        #: not foreign. Filled by `drawcompiler._lead_lane_reservations`, and part
+        #: of `drawcompiler`'s `router.boxes` from that point on.
+        self.flag_walls: list[Box] = []
         #: The net being placed right now: its own reservations do not block it.
         self.reserved_exempt: str = ""
         #: 145a: set while the **reservation pass** is deciding the lanes, so its

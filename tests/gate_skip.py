@@ -60,11 +60,12 @@ GATE_KINDS = (
 #: Everything the skip reason needs to say about how to make the test run again.
 REVIVAL = (
     "these assertions are unchanged and run again the moment the compiler draws "
-    "this shape clean (147 sec.7.2: the flag ladder must treat glyph + name row + "
-    "clearance as one box and drop its 'stand on the pin' last resort; the text "
-    "ladders must treat the host's own name rows as boxes to avoid). Until then "
-    "this shape is not drawable, so the test is skipped rather than weakened — "
-    "outputs/147c/revival_list.md is the list of scenes waiting on that batch"
+    "this shape clean. 148 did the two things this note used to wait for — the "
+    "flag ladder treats glyph + the host's measured name row as one box and no "
+    "longer stands a flag on its own pin, and a wire's own name row is moved aside "
+    "when it lands on something — so what is left here is measured case by case: "
+    "the refusal above names the kind and the objects, and outputs/148/FINDINGS.md "
+    "lists which of 147c's 26 the batch revived and which still refuse and why"
 )
 
 

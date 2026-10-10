@@ -1463,7 +1463,17 @@ def _check_text_on_wire(
                  if _clip_to_box(start, end, box) is not None),
                 default=0.0,
             )
-            if hit < TEXT_WIRE_PENETRATION:
+            # 148: the threshold is the lint's own number, and the *comparison*
+            # has to be the lint's own too. A chord three hundred-billionths under
+            # the threshold (measured on `test/P1`: `CS_FILT`'s row against
+            # `SEC_12V`'s trunk came out 9.999999999999998 here and 10 in
+            # `drawlint`, which measures the same two objects off the render) is
+            # the same crossing; reporting it as a pass on one side and a defect on
+            # the other is the disagreement 147 said the shared constant prevents.
+            # The slack is a hair, not a tolerance: it never moves the decision for
+            # a chord the lint would genuinely call a graze (6.5 on the accepted
+            # pages) or a crossing (21-38 on the refused ones).
+            if hit < TEXT_WIRE_PENETRATION - 1e-9:
                 continue
             out.append(HardViolation(
                 KIND_TEXT_ON_WIRE,
