@@ -82,7 +82,7 @@
     },
     {
       "id": "C13",
-      "symbolRef": "C0603",
+      "symbolRef": "C0603W",
       "value": "100nF 0603",
       "provenance": "engineer_confirmed",
       "lcsc": "C14663"

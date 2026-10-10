@@ -97,6 +97,22 @@ LIBRARY_118 = ROOT / "outputs" / "118" / "library_measured.json"
 SWAPPED_REF = "XFMR-WE-749118105"
 SWAPPED_FROM = "XFMR-XREE16-050624"
 
+#: 145c: the library gained a **second** two-pin capacitor profile, and the
+#: reason is a measurement, not a shape preference. "0603" is a footprint, not
+#: one symbol geometry: the host resolves ``C100040`` (1nF, the part 118 measured
+#: the ``C0603`` profile from) to a symbol whose pins escape ±15, and ``C14663``
+#: (100nF, C13) to a **different** symbol whose pins escape ±20. 145b's live
+#: apply found this the hard way — C13 read back at ±20 against a plan that
+#: expected ±15, and the pin read-back stopped the run before any wire was
+#: drawn. So 145c measured ``C14663`` on a scratch page of ``test`` and
+#: registered it under its own symbolRef instead of widening ``C0603`` (widening
+#: it would be a lie about C10/C6, whose ±15 read-back is exact).
+#:
+#: The reading it must be checked against is the probe output, not the profile's
+#: own note — the same ruler every other profile in this file is held to.
+PROBE_145C = ROOT / "outputs" / "145c" / "probe_145c_C14663.json"
+C0603W_REF = "C0603W"
+
 #: 121b: the three **flag** profiles the library gained (``PWR-GND`` /
 #: ``PWR-HVDC`` / ``PWR-SEC_12V``). They have **no pins** — the connection point
 #: IS the origin, and a pin-less profile is how the compiler identifies a flag —
@@ -326,6 +342,33 @@ def _measured_session() -> dict[str, str]:
     return sample
 
 
+# -------------------------------------------------- 145c: the second 0603 symbol
+
+
+def _probe_145c() -> dict[str, tuple[float, float]]:
+    """``C0603W``'s local pin tips, read off the 145c probe output.
+
+    The probe placed ``C14663`` on a scratch page of ``test`` at a known origin
+    and read ``sch.component_pins`` back; the local tip is the page reading minus
+    that origin, i.e. the same inverse-pose step 118's reader takes (the probe
+    placed it at rotation 0, so there is no rotation to undo). Read from the file
+    rather than taken on trust, so a note that names the probe and a probe that
+    says something else cannot both pass.
+    """
+    payload = json.loads(PROBE_145C.read_text(encoding="utf-8"))
+    placement = payload["placement"]
+    assert placement["rotation"] == 0 and not placement["mirror"], (
+        f"{PROBE_145C.relative_to(ROOT).as_posix()} placed the part under a pose "
+        f"{placement!r}; this reader subtracts the origin only, so a rotated or "
+        "mirrored placement would be read as the wrong local tip"
+    )
+    ox, oy = placement["x"], placement["y"]
+    return {
+        str(pin["number"]): (round(pin["x"] - ox, 4), round(pin["y"] - oy, 4))
+        for pin in payload["pinsAbsolute"]
+    }
+
+
 # ============================================================== 1 实测，不是编写
 
 
@@ -399,6 +442,13 @@ def test_no_profile_carries_a_hand_written_pin_tip():
     # library loader. The 118b probe reading stays for **its** part, which is
     # what the five-pin and seven-pin findings are about.
     measured_for[SWAPPED_REF] = (current["pins"], f"the 120 library ({SWAPPED_REF})")
+    # 145c: the second 0603 symbol, measured on a scratch page of `test`. It is
+    # turned up by **this** registry, not by the 118 apply report, because no 118
+    # page ever placed `C14663`.
+    measured_for[C0603W_REF] = (
+        _probe_145c(),
+        f"the 145c probe ({PROBE_145C.relative_to(ROOT).as_posix()})",
+    )
 
     for entry in book["profiles"]:
         symbol_ref = entry["symbolRef"]
@@ -435,7 +485,13 @@ def test_no_profile_carries_a_hand_written_pin_tip():
             f"swapped-in part is measured by {SWAP_PROBE.relative_to(ROOT).as_posix()})"
         )
         measured, source = measured_for[symbol_ref]
-        designator = session.get(symbol_ref, "T1")
+        # The designator is a name for the failure message only. `T1` is the
+        # default because the swapped-in transformer is the one profile whose
+        # designator is not in the 118 session; 145c's C0603W is the same case,
+        # so its own symbolRef is the honest name rather than a borrowed `T1`.
+        designator = session.get(symbol_ref) or (
+            "T1" if symbol_ref == SWAPPED_REF else symbol_ref
+        )
         declared = {pin["number"]: tuple(pin["tip"]) for pin in entry["pins"]}
         assert set(declared) == set(measured), (
             f"{symbol_ref}: the profile declares {sorted(declared)} but "
@@ -830,6 +886,12 @@ def test_the_113_shape_intent_is_kept_alongside_the_measurement():
             expected = "[121b] "
         elif entry["symbolRef"] == SWAPPED_REF:
             expected = "[118c] "
+        elif entry["symbolRef"] == C0603W_REF:
+            # 145c measured `C14663` on the live host, so its marker is its own
+            # batch. Writing `[118] ` on it would be the same stale claim 121b's
+            # branch refuses: 118 never placed this part (145b is where the host
+            # first disagreed with the plan about it).
+            expected = "[145c] "
         else:
             expected = "[118] "
         assert f"\n{expected}" in title, (

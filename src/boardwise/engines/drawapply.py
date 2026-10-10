@@ -123,9 +123,10 @@ FLAG_SYMBOL_POWER_PREFIX = "PWR-"
 
 #: How long the named stub is that stands in for a label this host cannot place
 #: (057 sec.4): two lattice steps out of the label's anchor, towards its text box,
-#: so it stays inside the room the compiler reserved for the label. Only drawn on
-#: the page path, and only where no planned wire of the net already reaches the
-#: anchor — see :func:`module_plan`'s ``label_stubs``.
+#: so it stays inside the room the compiler reserved for the label. Drawn where no
+#: planned wire of the net already reaches the anchor — always on the page path, and
+#: on a single-module plan for a net that has a name and no conductor at all (145d:
+#: GATE/VFB_NF's shape). See :func:`module_plan`'s ``label_stubs``.
 LABEL_STUB_LENGTH = 2 * DRAW_GRID
 
 #: The lengths a stub's far end is tried at, in order (099d): the preferred one
@@ -854,8 +855,7 @@ def module_plan(
 ) -> ChangePlan:
     """One compiled drawing, as the plan a human authorises (054 §四.1).
 
-    Two 057 keywords, both off by default so a single-module plan is built
-    exactly as before:
+    Two 057 keywords, and the same reading of a label on either path:
 
     * ``label_stubs`` — a label this host cannot place is otherwise carried by
       the wire of its net; a page states a shared net with a label at a *pin tip*
@@ -864,9 +864,18 @@ def module_plan(
       editor's project-wide netlist (G4). With it, such a label becomes a short
       stub wire carrying the name (:data:`LABEL_STUB_LENGTH`, towards the label's
       own text box) — declared in ``downgrades`` like every other landing
-      adaptation;
+      adaptation. 145d: a **single-module** plan stakes the same stub for a net
+      that has a name and *no conductor at all* (GATE/VFB_NF's shape: one pin, one
+      label, no wire), which the page path already covers — what it may not do is
+      claim the wire carries the name while drawing none;
     * ``module_label`` — how the plan's target names what it draws (a page names
       its modules; the default is the presentation's grammar, as 054 wrote it).
+
+    145d, the last thing every plan does to its wires: a run another wire of the
+    same net already covers is dropped, and the wires a flag attaches inside of are
+    cut at that point — so no wire end is stated that the host's own collinear merge
+    (pit 32) will not keep as a vertex. See :func:`_drop_covered_runs` and
+    :func:`_cut_at_flag_attachments`.
 
     The three things the layout cannot know are settled here, in this order:
     the **recipe** (a symbol ref is not a part: every part needs an LCSC number and
@@ -1100,7 +1109,17 @@ def module_plan(
             wire.net == label.net and _on_polyline(anchor, wire.points)
             for wire in built.wires
         )
-        if label_stubs and not carried:
+        # 145d: a net that carries a name and **no conductor at all** is stubbed on
+        # a single-module plan too, not only on the page path (057 sec.4). GATE
+        # (Q1.1) and VFB_NF (R10.1) are the measured shape: one pin, one label, no
+        # wire of the net anywhere — and the branch below used to *state* that the
+        # wire carries the name while drawing no wire, so the editor's netlist held
+        # neither the name nor the pin (`netlist_after_apply.json`: GATE and VFB_NF
+        # appear zero times, 145c sec.5.3). `bare` is that fact and nothing wider: a
+        # net that already has a conductor keeps exactly the behaviour it had (the
+        # label's anchor is on one of its wires, or 057's own `label_stubs` decides).
+        bare = not any(wire.net == label.net for wire in built.wires)
+        if (label_stubs or bare) and not carried:
             stub, blockers = _place_label_stub(
                 label, built, stub_bodies, stub_pins,
             )
@@ -1145,13 +1164,35 @@ def module_plan(
                 "netlist (057 sec.4)" + bent_note
             )
             continue
+        # 145d: the two cases that reach here are *checked* ones, and the sentence
+        # says which it is. `carried` means a planned wire of this net runs through
+        # the label's own anchor — the name is on that conductor. The other case is
+        # a net that keeps conductors elsewhere and a label whose anchor none of
+        # them reaches: the name is on those wires, and this anchor is *not* stubbed
+        # (that is what `bare` above decides for the no-conductor-at-all one), so
+        # the sentence must not promise a stub the plan does not draw.
         built.downgrades.append(
             f"net {label.net}: the compiler drew a net label at "
             f"({label.x:g}, {label.y:g}), and this host cannot place one "
-            "(`sch.place_netlabel` is measured unusable, 029) — the net is named on the "
-            "wire itself instead (`sch.place_wire` net=…), so the netlist carries the "
-            "name while the canvas shows the stub without its label text"
+            "(`sch.place_netlabel` is measured unusable, 029) — "
+            + (
+                f"a planned wire of {label.net} runs through that point, and the net is "
+                "named on that conductor (`sch.place_wire` net=…), so the netlist "
+                "carries the name while the canvas shows the wire without a label text"
+                if carried else
+                f"other planned wire(s) of {label.net} carry the name "
+                "(`sch.place_wire` net=…), so the netlist carries it, while this "
+                "anchor itself draws nothing: no wire of the net reaches it and "
+                "this plan does not stub it (a net with conductors keeps the "
+                "behaviour it had — 145d)"
+            )
         )
+    # 145d, after every wire the plan will draw is known (the label stubs above
+    # included): drop the runs another wire of the same net already covers, then cut
+    # the wires a flag attaches inside of, so every wire end the plan states is a
+    # vertex the page keeps.
+    _drop_covered_runs(built)
+    _cut_at_flag_attachments(built, pin_at)
     if layout.junctions:
         built.notes.append(
             f"{len(layout.junctions)} junction(s) are expected where the drawing tees; "
@@ -1509,6 +1550,209 @@ def _segment_crossing(
         (c[0] - a[0]) * (d[1] - c[1]) - (c[1] - a[1]) * (d[0] - c[0])
     ) / denominator
     return (round(a[0] + t * (b[0] - a[0]), 6), round(a[1] + t * (b[1] - a[1]), 6))
+
+
+# ------------------------------------- 145d: the plan's own vertices are real ones
+#
+# Two adaptations a plan makes to the geometry the compiler drew, both about one
+# measured fact: **the host merges collinear wires and keeps a vertex only where a
+# run ends or something other than a straight run attaches** (pit 32 — touching wires
+# come back as one primitive; measured again on 145c's landed page, where the SEC_12V
+# flag's lead `(280,760) → (280,785)` was absorbed into the trunk it overlaps: the
+# merged primitive lists the vertices 710/785/790 and *not* 760).
+#
+# The canvas leg asks exactly one thing of each planned wire (`_wire_problems`): that
+# both of its ends are vertices of the page's own wiring for that net. So the plan may
+# not promise a run the page will not hold, nor an end the host will merge away.
+#
+# * a run **another wire of the same net already covers** is not drawn: it adds no
+#   conductor the page does not already have, and the host absorbs it (145c measured);
+# * the points a **flag** attaches at — its own anchor, and the far end of its lead —
+#   become genuine vertices by cutting the wire they land inside of in two (two wires,
+#   one net, connected at the cut). Measured: the page keeps a node where a flag
+#   attaches (145c's `(280,785)` survives the merge while `(280,760)`, attached to
+#   nothing, does not), so the cut is a vertex the read-back finds.
+
+
+def _covers(wire: PlanDrawWire, other: PlanDrawWire) -> bool:
+    """Does ``other``'s polyline pass through **every** point of ``wire``?"""
+    if len(other.points) < 2:
+        return False
+    return all(_on_polyline(point, other.points) for point in wire.points)
+
+
+def _drop_covered_runs(built: "_Built") -> None:
+    """145d: a planned run another wire of the same net already covers is dropped.
+
+    Its geometry is already on the page, so dropping it draws nothing away — while
+    keeping it would add a wire whose ends the host is measured not to keep: 145c's
+    `SEC_12V (280,760) → (280,785)` was drawn on top of the rail's own run and came
+    back merged into it, so `(280,760)` was no vertex of the page and the canvas leg
+    refused the landing over a run that had drawn nothing at all.
+
+    A flag's anchor is a conductor (the flag is placed *on* the wire that reaches
+    it), so a drop may not take the last wire under one: such a wire is kept and the
+    reason is said out loud. Two wires that cover each other (identical runs) drop
+    the later one, never both.
+    """
+    wires = built.wires
+    doomed: list[int] = []
+    for index, wire in enumerate(wires):
+        for other_index, other in enumerate(wires):
+            if other_index == index or other.net != wire.net:
+                continue
+            if not _covers(wire, other):
+                continue
+            if other_index > index and _covers(other, wire):
+                # Identical runs: the earlier one is the run, the later is the copy.
+                continue
+            doomed.append(index)
+            break
+    if doomed:
+        anchors = [
+            (flag.net, (round(flag.x, 6), round(flag.y, 6)))
+            for flag in built.flags if flag.net and not flag.on_pin
+        ]
+        for index in list(doomed):
+            wire = wires[index]
+            under = [
+                (net, spot) for net, spot in anchors
+                if net == wire.net and _on_polyline(spot, wire.points)
+            ]
+            if not under:
+                continue
+            carried_elsewhere = all(
+                any(
+                    other_index != index and other_index not in doomed
+                    and other.net == net
+                    and _on_polyline(spot, other.points)
+                    for other_index, other in enumerate(wires)
+                )
+                for net, spot in under
+            )
+            if carried_elsewhere:
+                continue
+            doomed.remove(index)
+            built.notes.append(
+                f"net {wire.net}: the run {_point_pair(wire.points[0], wire.points[-1])} "
+                "is covered by another wire of the same net, but a flag of this net "
+                "anchors on it and nowhere else — it is kept rather than dropped "
+                "(145d: a flag is placed on the wire that reaches it)"
+            )
+        for index in sorted(doomed, reverse=True):
+            wire = wires.pop(index)
+            built.downgrades.append(
+                f"net {wire.net}: the planned run "
+                f"{_point_pair(wire.points[0], wire.points[-1])} is already covered by "
+                "another wire of the same net, so it draws no conductor the page does "
+                "not already have — and this host merges collinear wires, so its ends "
+                "would not be vertices of the page (measured 145c: this very run "
+                "vanished into the rail it overlaps); it is not drawn (145d)"
+            )
+
+
+def _strictly_inside(
+    point: tuple[float, float], points: Sequence[tuple[float, float]]
+) -> bool:
+    """Is `point` on one of the polyline's segments, strictly between its ends?"""
+    for start, end in zip(points, points[1:]):
+        if _near(point, start, 1e-6) or _near(point, end, 1e-6):
+            continue
+        if _on_polyline(point, [start, end]):
+            return True
+    return False
+
+
+def _cut_polyline(
+    wire: PlanDrawWire,
+    cuts: Sequence[tuple[float, float]],
+    pin_at,
+) -> list[PlanDrawWire]:
+    """The wire as two or more pieces, cut at each point strictly inside a segment.
+
+    The pieces carry the same net and share the cut point, so the drawing they
+    describe is the drawing the wire described — the cut only names the point
+    (145d: a vertex the read-back can find). ``from_pin`` is recomputed per piece,
+    because a cut may land on one of the plan's own pin tips, and ``purpose`` is
+    the run's: the first piece keeps it.
+    """
+    expanded: list[tuple[float, float]] = [wire.points[0]]
+    cut_flags: list[bool] = [False]
+    for start, end in zip(wire.points, wire.points[1:]):
+        for point in sorted(
+            (cut for cut in cuts if _strictly_inside(cut, [start, end])),
+            key=lambda cut: math.dist(start, cut),
+        ):
+            expanded.append(point)
+            cut_flags.append(True)
+        expanded.append(end)
+        cut_flags.append(False)
+    pieces: list[list[tuple[float, float]]] = []
+    current: list[tuple[float, float]] = [expanded[0]]
+    for point, is_cut in zip(expanded[1:], cut_flags[1:]):
+        current.append(point)
+        if is_cut:
+            pieces.append(current)
+            current = [point]
+    if current:
+        pieces.append(current)
+    return [
+        PlanDrawWire(
+            net=wire.net,
+            points=points,
+            from_pin=(wire.from_pin if index == 0 else pin_at(points[0])),
+            purpose=(wire.purpose if index == 0 else ""),
+        )
+        for index, points in enumerate(pieces)
+    ]
+
+
+def _cut_at_flag_attachments(built: "_Built", pin_at) -> None:
+    """145d: make every point a flag attaches at a vertex of the plan's own wires.
+
+    Two points per flag: its **anchor** (where the flag stands) and the far end of
+    its **lead** (the run the compiler drew out to that anchor) — the second only
+    when the lead survives :func:`_drop_covered_runs`, i.e. when it is a real run
+    perpendicular to the wire it leaves. Either point may land *inside* another wire
+    of the net (the rail the flag hangs off, or the branch the lead leaves), and
+    then the wire it lands inside is cut in two there, so the plan states the point
+    the page will hold as a node (two wires, one net, connected — the same thing the
+    compiler's own `junctions` list promises for a wire tee, 053 sec.2 constraint 3).
+    """
+    attachments: dict[str, set[tuple[float, float]]] = {}
+    for flag in built.flags:
+        if not flag.net:
+            continue
+        spot = (round(flag.x, 6), round(flag.y, 6))
+        attachments.setdefault(flag.net, set()).add(spot)
+        for wire in built.wires:
+            if wire.net != flag.net or len(wire.points) < 2:
+                continue
+            if _near(wire.points[0], spot, 1e-6):
+                attachments[flag.net].add(wire.points[-1])
+            elif _near(wire.points[-1], spot, 1e-6):
+                attachments[flag.net].add(wire.points[0])
+    out: list[PlanDrawWire] = []
+    for wire in built.wires:
+        cuts = [
+            spot for spot in sorted(attachments.get(wire.net, ()))
+            if _strictly_inside(spot, wire.points)
+        ]
+        if not cuts:
+            out.append(wire)
+            continue
+        out.extend(_cut_polyline(wire, cuts, pin_at))
+        built.downgrades.append(
+            f"net {wire.net}: the wire "
+            f"{_point_pair(wire.points[0], wire.points[-1])} is cut at "
+            + ", ".join(_point_pair(spot, spot) for spot in cuts)
+            + " — a flag of this net attaches there, and this host merges collinear "
+            "neighbours, keeping a node only where something attaches (measured 145c: "
+            "the flag's own anchor `(280, 785)` survived that merge while the bare run "
+            "end `(280, 760)` did not); the pieces are one net, connected at the cut "
+            "(145d)"
+        )
+    built.wires = out
 
 
 def _preconditions(
