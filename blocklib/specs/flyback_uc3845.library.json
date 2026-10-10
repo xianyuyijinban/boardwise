@@ -35,7 +35,20 @@
         }
       ],
       "notes": [
-        "body: measured: the two pins' inner ends"
+        "body: measured: the two pins' inner ends",
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg: the host draws a placed part's designator/value at the symbol's own text item, and mapping each row back through the part's pose gives these symbol-local anchors (y up; the anchor is the row's lower-left corner, the row is 10 units tall). The offsets repeat for every part sharing a symbolRef (R0603 x6, C0603 x2). A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
+      ],
+      "texts": [
+        {
+          "kind": "reference",
+          "x": -10.0,
+          "y": 5.0
+        },
+        {
+          "kind": "value",
+          "x": -10.0,
+          "y": -15.0
+        }
       ]
     },
     {
@@ -70,7 +83,20 @@
         }
       ],
       "notes": [
-        "body: measured: the two pins' inner ends"
+        "body: measured: the two pins' inner ends",
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg: the host draws a placed part's designator/value at the symbol's own text item, and mapping each row back through the part's pose gives these symbol-local anchors (y up; the anchor is the row's lower-left corner, the row is 10 units tall). The offsets repeat for every part sharing a symbolRef (R0603 x6, C0603 x2). A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
+      ],
+      "texts": [
+        {
+          "kind": "reference",
+          "x": -10.0,
+          "y": 5.0
+        },
+        {
+          "kind": "value",
+          "x": -10.0,
+          "y": -15.0
+        }
       ]
     },
     {
@@ -105,7 +131,20 @@
         }
       ],
       "notes": [
-        "body: measured: the two pins' inner ends"
+        "body: measured: the two pins' inner ends",
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg: the host draws a placed part's designator/value at the symbol's own text item, and mapping each row back through the part's pose gives these symbol-local anchors (y up; the anchor is the row's lower-left corner, the row is 10 units tall). The offsets repeat for every part sharing a symbolRef (R0603 x6, C0603 x2). A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
+      ],
+      "texts": [
+        {
+          "kind": "reference",
+          "x": -10.0,
+          "y": 5.0
+        },
+        {
+          "kind": "value",
+          "x": -10.0,
+          "y": -15.0
+        }
       ]
     },
     {
@@ -140,7 +179,20 @@
         }
       ],
       "notes": [
-        "body: measured: the two pins' inner ends"
+        "body: measured: the two pins' inner ends",
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg: the host draws a placed part's designator/value at the symbol's own text item, and mapping each row back through the part's pose gives these symbol-local anchors (y up; the anchor is the row's lower-left corner, the row is 10 units tall). The offsets repeat for every part sharing a symbolRef (R0603 x6, C0603 x2). A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
+      ],
+      "texts": [
+        {
+          "kind": "reference",
+          "x": -5.0,
+          "y": 10.0
+        },
+        {
+          "kind": "value",
+          "x": -5.0,
+          "y": -20.0
+        }
       ]
     },
     {
@@ -176,7 +228,20 @@
       ],
       "notes": [
         "body: measured: the two pins' inner ends (x -10..10); the drawn box read by sch.geometry is 19.5 wide and 17 tall around the origin, i.e. -10.5..10.5 x -8.5..8.5 (outputs/145c/probe_03_geom_C14663.json)",
-        "145c: the host resolves LCSC C14663 (100nF 0603) to symbol uuid aaaf5070dfb7f1f1, whose pins escape +-20 - not the +-15 of the C0603 profile, which 118 measured from C100040. That is why C13 (C14663) uses this profile while C10 (C100040) and C6 (C14858) keep C0603: '0603' is a footprint, not one symbol geometry."
+        "145c: the host resolves LCSC C14663 (100nF 0603) to symbol uuid aaaf5070dfb7f1f1, whose pins escape +-20 - not the +-15 of the C0603 profile, which 118 measured from C100040. That is why C13 (C14663) uses this profile while C10 (C100040) and C6 (C14858) keep C0603: '0603' is a footprint, not one symbol geometry.",
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg: the host draws a placed part's designator/value at the symbol's own text item, and mapping each row back through the part's pose gives these symbol-local anchors (y up; the anchor is the row's lower-left corner, the row is 10 units tall). The offsets repeat for every part sharing a symbolRef (R0603 x6, C0603 x2). A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
+      ],
+      "texts": [
+        {
+          "kind": "reference",
+          "x": -10.0,
+          "y": 10.0
+        },
+        {
+          "kind": "value",
+          "x": -10.0,
+          "y": -20.0
+        }
       ]
     },
     {
@@ -246,7 +311,20 @@
         }
       ],
       "notes": [
-        "body: measured: the two pins' inner ends"
+        "body: measured: the two pins' inner ends",
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg: the host draws a placed part's designator/value at the symbol's own text item, and mapping each row back through the part's pose gives these symbol-local anchors (y up; the anchor is the row's lower-left corner, the row is 10 units tall). The offsets repeat for every part sharing a symbolRef (R0603 x6, C0603 x2). A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
+      ],
+      "texts": [
+        {
+          "kind": "reference",
+          "x": 15.0,
+          "y": 0.0
+        },
+        {
+          "kind": "value",
+          "x": 15.0,
+          "y": -10.0
+        }
       ]
     },
     {
@@ -281,7 +359,20 @@
         }
       ],
       "notes": [
-        "body: measured: the two pins' inner ends"
+        "body: measured: the two pins' inner ends",
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg: the host draws a placed part's designator/value at the symbol's own text item, and mapping each row back through the part's pose gives these symbol-local anchors (y up; the anchor is the row's lower-left corner, the row is 10 units tall). The offsets repeat for every part sharing a symbolRef (R0603 x6, C0603 x2). A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
+      ],
+      "texts": [
+        {
+          "kind": "reference",
+          "x": -10.0,
+          "y": 10.0
+        },
+        {
+          "kind": "value",
+          "x": -10.0,
+          "y": -20.0
+        }
       ]
     },
     {
@@ -316,7 +407,20 @@
         }
       ],
       "notes": [
-        "body: measured: the two pins' inner ends"
+        "body: measured: the two pins' inner ends",
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg: the host draws a placed part's designator/value at the symbol's own text item, and mapping each row back through the part's pose gives these symbol-local anchors (y up; the anchor is the row's lower-left corner, the row is 10 units tall). The offsets repeat for every part sharing a symbolRef (R0603 x6, C0603 x2). A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
+      ],
+      "texts": [
+        {
+          "kind": "reference",
+          "x": -5.0,
+          "y": 10.0
+        },
+        {
+          "kind": "value",
+          "x": -5.0,
+          "y": -20.0
+        }
       ]
     },
     {
@@ -351,7 +455,20 @@
         }
       ],
       "notes": [
-        "body: measured: the two pins' inner ends"
+        "body: measured: the two pins' inner ends",
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg: the host draws a placed part's designator/value at the symbol's own text item, and mapping each row back through the part's pose gives these symbol-local anchors (y up; the anchor is the row's lower-left corner, the row is 10 units tall). The offsets repeat for every part sharing a symbolRef (R0603 x6, C0603 x2). A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
+      ],
+      "texts": [
+        {
+          "kind": "reference",
+          "x": -10.0,
+          "y": 10.0
+        },
+        {
+          "kind": "value",
+          "x": -10.0,
+          "y": -20.0
+        }
       ]
     },
     {
@@ -396,7 +513,20 @@
         }
       ],
       "notes": [
-        "body: derived lower bound: the outer pins' inner ends (no bbox in any reading)"
+        "body: derived lower bound: the outer pins' inner ends (no bbox in any reading)",
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg: the host draws a placed part's designator/value at the symbol's own text item, and mapping each row back through the part's pose gives these symbol-local anchors (y up; the anchor is the row's lower-left corner, the row is 10 units tall). The offsets repeat for every part sharing a symbolRef (R0603 x6, C0603 x2). A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
+      ],
+      "texts": [
+        {
+          "kind": "reference",
+          "x": 20.0,
+          "y": 0.0
+        },
+        {
+          "kind": "value",
+          "x": 20.0,
+          "y": -10.0
+        }
       ]
     },
     {
@@ -410,7 +540,8 @@
       ],
       "notes": [
         "body: measured bbox (sch.geometry bboxIds probe, 2026-10-04)",
-        "pins 2/5 exist on the symbol but are NC per the Wurth datasheet — the spec connects nothing to them"
+        "pins 2/5 exist on the symbol but are NC per the Wurth datasheet — the spec connects nothing to them",
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg: the host draws a placed part's designator/value at the symbol's own text item, and mapping each row back through the part's pose gives these symbol-local anchors (y up; the anchor is the row's lower-left corner, the row is 10 units tall). The offsets repeat for every part sharing a symbolRef (R0603 x6, C0603 x2). A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
       ],
       "pins": [
         {
@@ -473,6 +604,18 @@
           "direction": "right",
           "length": 20.0
         }
+      ],
+      "texts": [
+        {
+          "kind": "reference",
+          "x": -20.0,
+          "y": 30.0
+        },
+        {
+          "kind": "value",
+          "x": -20.0,
+          "y": -30.0
+        }
       ]
     },
     {
@@ -517,7 +660,20 @@
         }
       ],
       "notes": [
-        "body: derived lower bound: the outer pins' inner ends (no bbox in any reading)"
+        "body: derived lower bound: the outer pins' inner ends (no bbox in any reading)",
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg: the host draws a placed part's designator/value at the symbol's own text item, and mapping each row back through the part's pose gives these symbol-local anchors (y up; the anchor is the row's lower-left corner, the row is 10 units tall). The offsets repeat for every part sharing a symbolRef (R0603 x6, C0603 x2). A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
+      ],
+      "texts": [
+        {
+          "kind": "reference",
+          "x": -45.0,
+          "y": 15.0
+        },
+        {
+          "kind": "value",
+          "x": -45.0,
+          "y": -25.0
+        }
       ]
     },
     {
@@ -572,7 +728,20 @@
         }
       ],
       "notes": [
-        "body: derived lower bound: the outer pins' inner ends (no bbox in any reading)"
+        "body: derived lower bound: the outer pins' inner ends (no bbox in any reading)",
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg: the host draws a placed part's designator/value at the symbol's own text item, and mapping each row back through the part's pose gives these symbol-local anchors (y up; the anchor is the row's lower-left corner, the row is 10 units tall). The offsets repeat for every part sharing a symbolRef (R0603 x6, C0603 x2). A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
+      ],
+      "texts": [
+        {
+          "kind": "reference",
+          "x": 25.0,
+          "y": -20.0
+        },
+        {
+          "kind": "value",
+          "x": 25.0,
+          "y": 25.0
+        }
       ]
     },
     {

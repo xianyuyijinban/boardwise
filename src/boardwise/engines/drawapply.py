@@ -66,6 +66,7 @@ from ..core.changeplan import (
 )
 from ..core.circuitspec import CircuitSpec
 from ..core.geometry import transform_point
+from ..core import textmetrics
 from ..core.layoutplan import DOWNGRADE_NOTE_PREFIX, LayoutPart, LayoutPlan
 from ..core.model import is_ground_net
 from ..core.presentationspec import PresentationSpec
@@ -632,6 +633,14 @@ class _Built:
     flags: list[PlanDrawFlag] = field(default_factory=list)
     downgrades: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    #: 146 — ``spec id -> the boxes the host draws on that part``, as
+    #: ``(what it is, box)``: its drawn body plus its own reference/value rows. A
+    #: name stub is checked against *these* as well, because the row the host
+    #: prints on the stub can land on the symbol the stub belongs to even when
+    #: every foreign object is clear (:func:`_name_row_clash`).
+    label_owner: dict[str, list[tuple[str, tuple[float, float, float, float]]]] = (
+        field(default_factory=dict)
+    )
 
 
 
@@ -1096,6 +1105,20 @@ def module_plan(
         for part in built.parts
         for number, point in expected_pin_points(part).items()
     ]
+    #: 146: the part each label names a pin of — its drawn body and its own text
+    #: rows. Passed to the stub chooser because the **name the host draws** on the
+    #: stub can land on that part even when every foreign object is clear: the run
+    #: is checked against other nets and other parts, the glyphs were not checked
+    #: against the symbol they belong to.
+    for text in layout.texts:
+        if text.part_id and text.bbox:
+            built.label_owner.setdefault(text.part_id, []).append(
+                (f"{text.kind} text {text.text!r} of {text.part_id}", text.bbox)
+            )
+    for part_id, owner in built.label_owner.items():
+        body = stub_bodies.get(designator_of.get(part_id, part_id))
+        if body is not None:
+            owner.append((f"the drawn body of {part_id}", body))
     for label in layout.labels:
         covered = any(flag.net == label.net for flag in built.flags)
         if covered:
@@ -1467,6 +1490,54 @@ def _label_stub_blocked(
     return None
 
 
+def _name_row_clash(
+    label: Any,
+    run: "_StubRun",
+    own: Sequence[tuple[str, tuple[float, float, float, float]]],
+) -> str | None:
+    """Does the run's own net-name row land on the part it names? (146)
+
+    ``own`` is the part's drawn body and its own text rows, as
+    ``(what, box)``. The host does not let this layer place a wire's net name —
+    it anchors the text at the midpoint of the run's longest straight piece,
+    start-anchored, so a short stub's name overhangs the stub's far end and a
+    stub that leaves a pin *towards* its own symbol prints the name across that
+    symbol. Measured on the 145e render: `Q1`'s GATE stub is 10 units long, the
+    host draws `GATE` from (165, 540) to (192.2, 550), and Q1's own body starts
+    at x = 180 — 12.2 x 10 units of glyph on the transistor
+    (`outputs/145e/render_P1.svg`, the one defect of 岳's 146 round that the
+    landed page shows and the compiler could not see).
+
+    The rule is the *name row*, not the run: the run is already checked against
+    every foreign body and pin by :func:`_label_stub_blocked`, and a stub whose
+    conductor is free can still print its name over the part it belongs to. A
+    candidate that clashes is not refused — the ladder tries the next rung, and a
+    longer stub moves the row's start away from the symbol.
+    """
+    if not own:
+        return None
+    box = textmetrics.wire_name_box([tuple(run.points[0]), *run.points[1:]],
+                                    str(label.net))
+    if box is None:
+        return None
+    for what, other in own:
+        if (
+            min(box[2], other[2]) - max(box[0], other[0]) > 0.0
+            and min(box[3], other[3]) - max(box[1], other[1]) > 0.0
+        ):
+            return (
+                f"the host draws the name {label.net!r} in "
+                f"{_box_text(box)} and that row lands on {what} "
+                f"{_box_text(other)} — the stub's own conductor is free, the "
+                "glyphs are not (146)"
+            )
+    return None
+
+
+def _box_text(box: tuple[float, float, float, float]) -> str:
+    return f"({box[0]:g}, {box[1]:g})-({box[2]:g}, {box[3]:g})"
+
+
 def _place_label_stub(
     label: Any,
     built: "_Built",
@@ -1479,6 +1550,11 @@ def _place_label_stub(
     is clear at its corner and blocked on its far leg is blocked, never half
     drawn, and a straight run is the one-segment case of the same walk.
 
+    ``built.label_owner`` is the part this label names a pin of — its drawn body
+    and its own text rows — checked as the **name row** the host will draw (146,
+    :func:`_name_row_clash`): a stub whose conductor is free of every foreign
+    object can still print its name over its own symbol.
+
     ``blockers`` names what stopped each rung's preferred run — one line per
     shape (the four straight directions, then the two bends towards the label) —
     so "it could not be drawn" arrives with the geometry that made it so
@@ -1487,6 +1563,7 @@ def _place_label_stub(
     start = (float(label.x), float(label.y))
     blockers: list[str] = []
     seen_shape: set[str] = set()
+    clear: list["_StubRun"] = []
     for run in _label_stub_candidates(label):
         reason = None
         for head, tail in zip(run.points, run.points[1:]):
@@ -1494,13 +1571,30 @@ def _place_label_stub(
             if reason is not None:
                 break
         if reason is None:
-            return run.points, blockers
-        if run.family not in seen_shape:
+            clear.append(run)
+        elif run.family not in seen_shape:
             seen_shape.add(run.family)
             far = run.points[-1]
             blockers.append(
                 f"{run.shape} ({_point_pair(far, far)}): {reason}"
             )
+    # 146: among the runs whose **conductor** is free, prefer one whose net-name
+    # row is free too — the host prints the name at the run's own midpoint and a
+    # short stub towards its own symbol puts the glyphs on that symbol (Q1's GATE
+    # at 10 units: 12.2 x 10 units of `GATE` on the transistor, 145e). A clash is
+    # a *worse drawing*, not a short, so a page where every clear run clashes
+    # keeps the run the pre-146 code chose rather than refusing the plan: the
+    # CH340 page's RXD pin sits 9.5 units from U1's body and had exactly that.
+    own = built.label_owner.get(label.part_id, ())
+    for run in clear:
+        if _name_row_clash(label, run, own) is None:
+            return run.points, blockers
+    if clear:
+        first = clear[0]
+        far = first.points[-1]
+        clash = _name_row_clash(label, first, own) or ""
+        blockers.append(f"{first.shape} ({_point_pair(far, far)}): {clash}")
+        return first.points, blockers
     return None, blockers
 
 

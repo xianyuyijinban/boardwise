@@ -123,6 +123,7 @@ from boardwise.core.layoutplan import (
     LayoutSource,
     LayoutText,
 )
+from boardwise.core import textmetrics
 from boardwise.core.presentationspec import LABEL_LABEL, PresentationSpec
 from boardwise.core.symbolprofile import (
     FLAG_GLYPH_KIND_GND,
@@ -303,6 +304,16 @@ GAP = 20.0
 TEXT_SIZE = 9.0
 TEXT_LINE_STEP = 14.0
 TEXT_GAP = 8.0
+
+#: The height of one row of the **host's** own part text (146). The host draws a
+#: placed part's designator and value in one 10-unit row anchored at the row's
+#: lower-left corner — measured on `test/P1`'s 145e render, where every one of
+#: the 38 rows occupies exactly ``anchor .. anchor + 10`` in canvas units (the
+#: render draws them at 7.15 px, and the canvas unit comes out at
+#: `drawlint.CANVAS_TEXT_UNITS`). The compiler's own :data:`TEXT_SIZE` is the
+#: cap height it reserves with; this is the box the host actually paints, which
+#: is what routing has to avoid.
+TEXT_ROW_HEIGHT = 10.0
 
 #: How many :data:`TEXT_GAP` rungs a text box or a flag name may be stepped
 #: **outward** before the placement gives up and falls back (117②).
@@ -4883,11 +4894,89 @@ def _part_lines(ctx: _Context, part_id: str) -> tuple[tuple[str, str], ...]:
     return (("reference", part_id),)
 
 
+def _declared_rows(
+    ctx: _Context,
+    part_id: str,
+    profile: SymbolProfile,
+    pose: SymbolPose,
+    origin: tuple[float, float],
+) -> list[tuple[str, str, Box]]:
+    """``(kind, text, box)`` at the anchors this **symbol** declares (146).
+
+    The compiler used to invent a side for a part's reference and value
+    (:func:`_part_texts`'s ladder below) while the host draws them where the
+    symbol's own text items sit — a fixed per-symbol anchor that moves with the
+    pose and is *not* a free choice. The two models disagreed about most of the
+    page (measured 2026-10-10 on `test/P1`: R3's value is drawn at
+    ``(50, 665)``, not the compiler's ``(88, 668)``; T1's at ``(180, 670)``, not
+    ``(248, 694)``), and the disagreement was not academic: the *fictional* box
+    is what `_span_free` refuses wires against, so C11's straight drop onto the
+    SEC_12V rail was bent sideways by the compiler's imagined C13 value row
+    (probe: ``span_free (500,640)->(500,710)`` blocked by box
+    ``(448, 648.5, 517.5, 657.5)``, which the host draws nowhere).
+
+    The anchors come from :attr:`SymbolProfile.texts` — the schema always had
+    the slot (:class:`SymbolText`: "one piece of text the symbol itself places");
+    what was missing was the measurement, which the 145e render supplies. The
+    anchor is the drawn row's **lower-left corner** and the row is
+    :data:`TEXT_ROW_HEIGHT` tall, measured for the poses 0 and 180 — a quarter
+    turn is an extrapolation and the acceptance re-measures it.
+
+    The width is the **render's** own ruler
+    (:func:`boardwise.core.textmetrics.render_width`, the same table `drawlint`
+    measures the landed page with), because these rows are the host's own text:
+    a box that claims to be where the host paints has to be the host's box. The
+    compiler's own :func:`text_width` is deliberately wider — it reserves room
+    for the text *this compiler* places — and using it here measures
+    `17.8k 1% TH` + `4.7k 1% 0603` (R7's and R8's value rows) as 73 + 78 units
+    with 13 units of overlap, where the host draws them 57.8 + 61.1 units apart
+    and the whole page was refused as `text-overlap` for a collision no reader
+    can see.
+
+    An empty list means the symbol declares no row — every symbol profile
+    written before 146 — and the caller keeps the old ladder, so a library
+    without measurements compiles exactly as it did.
+    """
+    out: list[tuple[str, str, Box]] = []
+    for declared in profile.texts:
+        if declared.x is None or declared.y is None:
+            continue
+        if declared.kind == "reference":
+            text = part_id
+        elif declared.kind == "value":
+            part = ctx.circuit.part(part_id)
+            text = part.value if part is not None else ""
+        else:
+            continue
+        if not text:
+            continue
+        anchor = _posed((declared.x, declared.y), pose, origin)
+        width = textmetrics.render_width(text)
+        out.append((
+            declared.kind,
+            text,
+            (anchor[0], anchor[1], anchor[0] + width,
+             anchor[1] + TEXT_ROW_HEIGHT),
+        ))
+    return out
+
+
 def _part_texts(
     ctx: _Context, placed: _Placement, occupied: list[Box], walls: list[Box]
 ) -> list[LayoutText]:
-    """The reference and value of every placed part, on a side that is free.
+    """The reference and value of every placed part, at the anchor it draws at.
 
+    A part whose symbol declares its own text anchors (146,
+    :func:`_declared_rows`) gets exactly those rows: the host draws them there
+    whatever the compiler wants, so the honest model is to *read* them and let
+    the router route around them — they go into `occupied` and `walls` like
+    every other text, and the readability checker then measures the page the
+    host will actually draw.
+
+    A part whose symbol declares nothing keeps the old behavior, and the
+    docstring below still describes it.
+
+    The rest of this comment is the pre-146 contract for the fallback path.
     `occupied` is the list of boxes already on the page (part extents, keep-outs
     and earlier texts) and is extended as the texts land. The side ladder is
     tried in order and the first free one wins; when no side is free the text is
@@ -4909,6 +4998,22 @@ def _part_texts(
     for part_id in sorted(placed.origins):
         profile = ctx.profile(part_id)
         box = _part_box(profile, placed.poses[part_id], placed.origins[part_id])
+        declared = _declared_rows(
+            ctx, part_id, profile, placed.poses[part_id], placed.origins[part_id]
+        )
+        if declared:
+            for kind, text, item in declared:
+                occupied.append(item)
+                walls.append(item)
+                out.append(LayoutText(
+                    kind=kind,
+                    text=text,
+                    bbox=item,
+                    part_id=part_id,
+                    x=(item[0] + item[2]) / 2.0,
+                    y=(item[1] + item[3]) / 2.0,
+                ))
+            continue
         lines = list(_part_lines(ctx, part_id))
         blocked = [*walls, box]
         chosen = None
