@@ -350,39 +350,38 @@ def test_branch_to_branch_same_line_forms_one_lane_group():
         assert len(members) >= 2
 
 
-def test_the_flyback_feedback_row_is_one_lane_group_and_lands_on_one_row():
-    """**缺口 2 的正例（真实 spec）**：反激副边横排收成一条 lane 并真的落成一行。
+def test_the_flyback_no_longer_forms_a_feedback_row_lane_group():
+    """**145a T2 更新**：反激不再声明反馈横排，因此也不再组成「行」lane 组。
 
-    这是 113 §四第二层那条「差 5 个单位被拒」的正面：113 钉的
-    `same-row(R7,U4)` / `same-row(R8,U4)` 现在必须**不在**任何拒绝里，且
-    放置阶段量到的三颗器件落在同一条 y 上（公差 = grid/2）。
+    114 写这条时，裁决 e 被读成「副边反馈全链横排」，于是 `same-row(R7/R8/U5,U4)`
+    让这三颗结成一个 `y` lane 组、并且真的落成一行（113 那条「差 5 个单位被拒」
+    的正面）。145a T2 按岳裁决把这条关系收窄成 `left-of` + `near`，理由是
+    **岳自己的手绘活页上分压器就是竖排**（R7 压在 R8 上），而强行成行会把
+    FB_SENSE 的抽头绕线赶到行下、压死 R8.2 的旗引线通道（144 量到 17 处拒因）。
+
+    所以本条断言的**方向翻过来**：反激**没有** `y` lane 组，也没有任何
+    `same-row`；lane 机制本身（成组、链件不动、锁件不动）改由本条下面
+    `test_a_locked_member_of_a_row_is_never_moved` 在 `power_entry_xt30` 上钉
+    ——那一份语法仍然声明 `same-row(CN1, D1/C115/C116)`。
     """
     circuit = CircuitSpec.load(SPECS / "flyback_uc3845.circuit.json")
     presentation = PresentationSpec.load(SPECS / "flyback_uc3845.presentation.json")
     book = _library_from(SPECS / "flyback_uc3845.library.json")
     binding = grammar.bind(circuit, presentation, book)
     assert binding.ok
+    assert not [item for item in binding.constraints if item.kind == SAME_ROW], (
+        "145a T2 narrowed the feedback chain: this grammar states no row"
+    )
     ctx = dc._prepare(
         circuit, presentation, binding, book, dc.CompileBudget(max_candidates=64)
     ).context
     assert ctx is not None
     row = {part_id: value for part_id, value in ctx.lane_groups.items()
            if value[0] == "y"}
-    # 113's four feedback parts: the two divider arms, the error amplifier and
-    # the optocoupler (the last is a chain part — 113 named `opto` a chain role
-    # so the secondary would have an anchor).
-    assert {"R7", "R8", "U4"} <= set(row), sorted(row)
-    assert row["R7"][1] == row["R8"][1] == row["U4"][1]
-
-    placed = _placed(ctx)
-    slack = ctx.budget.grid / 2.0
-    measured = []
-    for part_id in ("R7", "R8", "U4"):
-        token = dc._token_on(circuit, part_id, "FB_SENSE")
-        point = dc._pin_point(ctx, part_id, token, placed.poses, placed.origins)
-        assert point is not None
-        measured.append(point[1])
-    assert max(measured) - min(measured) <= slack, measured
+    assert not row, (
+        "no row is stated any more, so no part may be grouped into one: "
+        f"{sorted(row)}"
+    )
 
 
 def test_a_chain_member_of_a_row_is_never_moved():
@@ -441,10 +440,17 @@ def _chain_spine(ctx: dc._Context) -> set[tuple[float, float]]:
 
 
 def test_a_locked_member_of_a_row_is_never_moved():
-    """锁住的成员同样不动：锁是工程师的坐标，冲突报给关系闸（053 sec.5 场景 12）。"""
-    circuit = CircuitSpec.load(SPECS / "flyback_uc3845.circuit.json")
-    presentation = PresentationSpec.load(SPECS / "flyback_uc3845.presentation.json")
-    book = _library_from(SPECS / "flyback_uc3845.library.json")
+    """锁住的成员同样不动：锁是工程师的坐标，冲突报给关系闸（053 sec.5 场景 12）。
+
+    **145a T2 更新**：这条原来跑在**反激** spec 上——反激的反馈横排曾经是它的
+    `y` lane 组。145a 按岳裁决把那条关系收窄成 `left-of` + `near`（岳手绘的
+    分压器是竖排，平放会压死 R8.2 的旗引线通道），反激于是不再有任何 lane 组。
+    机制本身一个字没改，所以本条改到**仍然声明一行**的那份语法上：
+    `power_entry_xt30` 的 `same-row(CN1, D1/C115/C116)`（088b 的单出口规则）。
+    """
+    circuit = CircuitSpec.load(SPECS / "power_entry_xt30.circuit.json")
+    presentation = PresentationSpec.load(SPECS / "power_entry_xt30.presentation.json")
+    book = _library_from(SPECS / "power_entry_xt30.library.json")
     binding = grammar.bind(circuit, presentation, book)
     ctx = dc._prepare(
         circuit, presentation, binding, book, dc.CompileBudget(max_candidates=64)

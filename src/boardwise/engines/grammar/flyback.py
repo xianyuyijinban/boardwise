@@ -88,7 +88,8 @@ constraint word is invented:
 (c) Q1 竖放于原边下端                ``below``(switch, T1) + ``same-column``
                                      (switch, sense)
 (d) sense 直连 source 与原边地        ``same-row``(switch, sense)
-(e) 反馈副边成链, 光耦唯一跨带        ``same-row``(分压臂, 误差放大, opto) +
+(e) 反馈副边成链, 光耦唯一跨带        ``left-of``(分压臂, 误差放大) +
+                                     ``near``(分压臂/光耦, 误差放大) +
                                      ``left-of``(opto, 副边分压) /
                                      ``right-of``(opto, 原边补偿)
 (f) 双地分族, 绝不连通               no relation is ever stated *between* a
@@ -135,7 +136,6 @@ from .base import (
     OWNED_BRANCH,
     RIGHT_OF,
     SAME_COLUMN,
-    SAME_ROW,
     UNIFORM_GND,
     GrammarFailure,
     GrammarObligation,
@@ -857,32 +857,59 @@ class FlybackGrammar:
                 ),
             ))
 
-        # (e) 反馈副边成链: the whole secondary feedback chain is one row, so
-        # VOUT→divider→error amp→LED reads left to right without a jump. The
-        # error amplifier is the row's **anchor**, so it is not paired with
-        # itself — an earlier version looped over the chain including the
-        # anchor and emitted `same-row(U4, U4)`, which is a relation with one
-        # endpoint and has no meaning for the compiler to keep.
-        for part_id in (*found.divider, found.opto):
+        # (e) 反馈副边成链 — **narrowed by 145a T2**, on 岳's ruling.
+        #
+        # The chain used to be stated as `same-row(divider, error-amp)` and
+        # `same-row(opto, error-amp)`: every member of the secondary feedback
+        # chain on one horizontal line. 144 measured what that costs, and it is
+        # two things at once. It is the **opposite of 岳's own hand-drawn page**,
+        # where R7 sits *over* R8 in a column (110's snapshot: R7 (930,300) above
+        # R8 (930,360)) — the divider he drew is vertical, not a row. And laying
+        # the arms in a row puts the FB_SENSE tap run under the row, straight
+        # through the lane the divider's own ground pad needs for its flag
+        # (measured: R8.2 reported 17 refusals, and the run that took the lane was
+        # `(605,310)-(845,310)`).
+        #
+        # What the ruling is really about survives the narrowing: the chain is
+        # read from the VOUT side leftwards, and each member hugs the error
+        # amplifier. So each divider arm is stated `left-of` + `near` the error
+        # amplifier, and the optocoupler keeps the `left-of` it already has from
+        # the band-crossing relation below — no row is stated, so the divider may
+        # stand as 岳 drew it. `left-of` rather than `right-of` because the
+        # sidePreferences declaration, not this file, says which half is the input
+        # one; when the secondary is drawn on the left the band relation flips and
+        # so does this one.
+        #
+        # The error amplifier is the chain's **anchor** and is never paired with
+        # itself: an earlier version looped over the chain including the anchor and
+        # emitted `same-row(U4, U4)`, which is a relation with one endpoint and has
+        # no meaning for the compiler to keep.
+        chain_side = RIGHT_OF if out_side == "left" else LEFT_OF
+        for part_id in found.divider:
             constraints.append(RelativeConstraint(
-                kind=SAME_ROW,
+                kind=chain_side,
                 subject=part_id,
                 object=found.error_amp,
                 reason=(
-                    f"岳 110 裁决 e: {part_id} is on the feedback chain's row — "
-                    f"VOUT→divider→{found.error_amp}→the optocoupler's LED runs "
-                    "horizontally on the secondary side, so the loop is read in "
-                    "one sweep instead of by chasing labels"
+                    f"岳 110 裁决 e, narrowed by 145a T2: {part_id} stands on the "
+                    f"VOUT side of {found.error_amp} — VOUT→divider→"
+                    f"{found.error_amp}→the optocoupler's LED reads in one sweep. "
+                    "The order is stated, the **row is not**: 岳's own page draws "
+                    "the divider as a column, and laying it flat puts the tap run "
+                    "through the divider's ground pad's flag lane (144)"
                 ),
             ))
-        for part_id in found.divider:
+        for part_id in (*found.divider, found.opto):
             constraints.append(RelativeConstraint(
                 kind=NEAR,
                 subject=part_id,
                 object=found.error_amp,
                 reason=(
-                    f"岳 110 裁决 e: {part_id} hugs {found.error_amp} — the "
-                    "divider is the error amplifier's own local topology"
+                    f"岳 110 裁决 e, narrowed by 145a T2: {part_id} hugs "
+                    f"{found.error_amp} — the chain is the error amplifier's own "
+                    "local topology, and the optocoupler's own place on the chain "
+                    "is stated by the band-crossing relation below (its "
+                    f"{_side_word(chain_side)} {found.error_amp})"
                 ),
             ))
 

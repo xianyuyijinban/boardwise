@@ -193,13 +193,29 @@ def test_the_measured_reason_the_sign_fix_cannot_reach_a_real_placement():
     deferred = [row for row in rows if row[4]]
     already = [row for row in rows if not row[4] and row[5]]
     reaching = [row for row in rows if not row[4] and not row[5]]
-    assert not reaching, (
-        "a real input reaches _order_wanted: the sign fix is no longer a "
-        "no-op. " + "; ".join(
-            f"{r[0]} {r[1]}({r[2]},{r[3]}) pose_gate=False holds=False"
+    # **145a T2 更新**：`reaching`（位姿闸让开、关系又**不成立** ⇒ 真的走到
+    # `_order_wanted` 去改落点）那一族**117 当年是空的**，本棒不再空。
+    # T2 按岳裁决把反馈链的 `same-row(R7/R8/U5, U4)` 收窄成 `left-of` + `near`，
+    # `left-of(R7, U4)` 于是成了**水平支路 × owner 序关系**——正是 116 §四数漏的
+    # 那一类——而它在 T2 之后的落点上 `pose_gate=False`、`holds=False`。
+    #
+    # 所以「零效应」这句话现在**不再**由「没人走进 `_order_wanted`」承担，而是
+    # 由下面那条 A/B 自己承担；本棒在 T2 之后**亲跑过**
+    # `test_the_sign_fix_leaves_every_real_input_byte_identical`，digest 仍然
+    # 逐字节相同（两版表在 `left-of` 这一支上的答案一致，而这一条走的正是
+    # 水平序关系）。这里把旧断言改成钉**这一行本身**：它再变就是几何/语法又
+    # 动了，这张表要重新量。
+    assert sorted((r[0], r[1], r[2], r[3]) for r in reaching) == [
+        ("flyback", "left-of", "R7", "U4")], (
+        "a different set of real inputs now reaches _order_wanted: the A/B below "
+        "is no longer measuring what this test says it measures — re-measure "
+        "rather than relax. " + "; ".join(
+            f"{r[0]} {r[1]}({r[2]},{r[3]}) pose_gate={r[4]} holds={r[5]}"
             for r in reaching
         )
     )
+    # The pose gate is still the short-circuit that answers the rest, and it is
+    # still exercised: neither claim is vacuous.
     # Both reasons are actually exercised, so neither is a vacuous claim.
     assert deferred, "no relation is answered by the pose gate any more"
     # **120 更新**：`already`（位姿闸让开、而关系**本来就成立**）那一族**空了**。

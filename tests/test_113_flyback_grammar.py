@@ -796,16 +796,40 @@ def test_the_switch_and_its_sense_form_one_chain_on_one_column():
     assert ("Q1", "T1", BELOW) in kinds
 
 
-def test_the_feedback_chain_runs_on_one_row_on_the_secondary_side():
-    """VOUT→分压→TL431→光耦 LED 在副边侧水平成链（110 裁决 e）。"""
+def test_the_feedback_chain_is_stated_by_order_and_hug_not_by_a_row():
+    """VOUT→分压→TL431→光耦 LED 在副边侧成链（110 裁决 e，**145a T2 收窄**）。
+
+    113 把裁决 e 读成「全链横排一行」并钉住 `same-row(R7/R8/U5, U4)`、锚是 U4。
+    144 量出这条读法两个毛病，岳裁定**收窄**：岳自己的手绘活页上分压器本来就是
+    **竖排**（110 快照 R7(930,300) 压在 R8(930,360) 上），而强行成行会把
+    FB_SENSE 的抽头绕线赶到行下 5 单位、正好压死行上地脚 R8.2 的旗引线通道
+    （144 在 R8.2 上量到 17 处拒因）。现在声明的还是这条链，只是**序**（`left-of`
+    /`right-of`）与**就近**（`near`）在，**行**不在。
+    """
     result = _bind(flyback_circuit())
     assert result.ok
-    chain = {item.subject for item in result.constraints if item.kind == SAME_ROW}
-    anchors = {item.object for item in result.constraints if item.kind == SAME_ROW}
+    rows = [item for item in result.constraints if item.kind == SAME_ROW]
+    assert not rows, (
+        "145a T2 narrowed the feedback chain: no row is stated, because a row is "
+        f"the opposite of 岳's own vertical divider; got {rows}"
+    )
+    near = {item.subject for item in result.constraints
+            if item.kind == NEAR and item.object == "U4"}
+    order = {item.subject for item in result.constraints
+             if item.kind in (LEFT_OF, RIGHT_OF) and item.object == "U4"}
     for part_id in ("R7", "R8", "U5"):
-        assert part_id in chain, f"{part_id} is not in the horizontal feedback chain"
-    # U4 是这条链的**锚**，不是链上的一节（自己和自己同列没有意义）
-    assert anchors == {"U4"}
+        assert part_id in near, (
+            f"{part_id} is not stated near the error amplifier: {sorted(near)}"
+        )
+        assert part_id in order, (
+            f"{part_id} is not ordered against the error amplifier: "
+            f"{sorted(order)}"
+        )
+    # U4 是这条链的**锚**，不是链上的一节（自己和自己成一序没有意义）。
+    assert not [item for item in result.constraints
+                if item.subject == "U4" and item.object == "U4"], (
+        "the chain's anchor is stated against itself"
+    )
 
 
 def test_the_opto_is_the_only_part_allowed_to_span_the_isolation_band():
@@ -975,20 +999,27 @@ def test_the_real_spec_binds_and_the_grammar_gate_agrees_with_the_binding():
     )
 
 
-def test_the_layout_stage_no_longer_refuses_the_feedback_row():
-    """**114 更新**：这条反证**转绿了**——编译器学会把支路排到行上。
+def test_the_feedback_chain_is_stated_by_order_and_hug_not_by_a_row():
+    """**145a T2 更新**：这条关系被**收窄**了，旧期望钉的是与手绘相反的语法。
 
-    113 把这条边界钉成反证：副边反馈横排（裁决 e 的 `same-row`）落点差 5 个
-    单位被拒，113 明说「编译器一旦学会把支路排到行上，这条会红，那就是修好
-    了」。114 修好了，所以本条断言的**方向**整个翻过来：
+    113 写它时，裁决 e 被读成「副边反馈副边成链 ⇒ 全链横排一行」，114 让编译器
+    学会把支路排到行上，于是旧断言钉的是「`same-row(R7/R8/U5, U4)` 三条都在，
+    且都不是拒绝理由」。
 
-    * `same-row` 的三条**必须全部**被摆平（`same-row` 违反数为零）；
-    * 113 钉的那两条具体关系（`same-row(R7,U4)` / `same-row(R8,U4)`）不再出现
-      在任何拒绝里——它们连同光耦那一条已经落在同一条 lane 上。
+    144 把这条读法推翻了，两句话，都是量出来的：
 
-    剩下的拒绝**是另一回事**，且是任务书明说**不在本棒**的那一类：序关系
-    （`below` / `right-of`）挂在支路与它 owner 之间。这一条顺带把那个边界钉住，
-    免得下一棒以为「反激整页已经绿了」。
+    * 岳手绘的活页上分压器是**竖排**（110 快照：R7(930,300) 压在 R8(930,360)
+      上面），合成一行正是与他自己的画相反的语法；
+    * 强行成行之后，FB_SENSE 的抽头绕线跑在行下 5 单位
+      （`(605,310)-(845,310)`），正好压死行上地脚 R8.2 的旗引线通道——144 在
+      R8.2 上量到 **17 处拒因**。
+
+    145a 据岳裁决把它收窄成 `left-of(分压臂, 误差放大)` + `near(全链成员, 误差
+    放大)`：**序**与**就近**留着（链还是从 VOUT 侧一路读过去），**行**不再声明。
+    光耦自己的位置本来就有跨带那条 `left-of`，所以不重复声明。
+
+    旧期望钉的是「与手绘实践相反的语法」，这里逐条改期望并说明；本条的**形状**
+    （编译不过 + 每个拒绝被点名）不变。
     """
     circuit = CircuitSpec.load(SPECS / "flyback_uc3845.circuit.json")
     presentation = PresentationSpec.load(SPECS / "flyback_uc3845.presentation.json")
@@ -996,21 +1027,27 @@ def test_the_layout_stage_no_longer_refuses_the_feedback_row():
     result = grammar.bind(circuit, presentation, book)
     assert result.ok
     rows = [item for item in result.constraints if item.kind == SAME_ROW]
-    assert rows, "the feedback row is not promised, so this proves nothing"
+    assert not rows, (
+        "145a T2 narrowed the feedback chain: the row is no longer stated, "
+        f"because it is the opposite of 岳's own vertical divider; got {rows}"
+    )
+    # What replaced it: every member of the chain is stated left-of and near the
+    # error amplifier (the opto's left-of comes from the band-crossing relation).
+    pairs = {(item.kind, item.subject, item.object) for item in result.constraints}
+    for part_id in ("R7", "R8", "U5"):
+        assert (NEAR, part_id, "U4") in pairs, (part_id, sorted(pairs))
+    for part_id in ("R7", "R8", "U5"):
+        assert (LEFT_OF, part_id, "U4") in pairs, (part_id, sorted(pairs))
+    assert (SAME_ROW, "U4", "U4") not in pairs, "the anchor is not paired with itself"
 
     placed = dc.compile(circuit, presentation, book, dc.CompileBudget(
         max_candidates=64))
     joined = " ".join(item.detail for item in placed.failures)
-    # The row itself is no longer a refusal reason.  **118 更新**：`same-column`
-    # 这一次**是**拒绝理由之一（`same-column(Q1, R5)`），但那与本条无关——
-    # 本条量的是副边反馈**横排**（`same-row`，裁决 e），它仍然不是拒绝理由。
-    # 换句话说：114 修的那一处仍然修着；118 挖出来的是**另一条**关系在真实
-    # 几何下不再位姿可解，理由见 118 的 SUMMARY。
     for item in placed.failures:
         assert "the relation same-row(" not in item.detail, item.detail
-    # 113's two named pairs are gone from the refusals for good.
     assert "same-row(R7, U4)" not in joined
     assert "same-row(R8, U4)" not in joined
+    assert "same-row(U5, U4)" not in joined
 
 
 def test_the_flyback_page_is_refused_and_says_which_relations_are_left():
@@ -1093,9 +1130,18 @@ def test_the_grammar_still_binds_the_measured_circuit():
     assert binding.ok, [item.detail for item in binding.failures]
     assert binding.constraints, "the measured circuit binds no relations at all"
     kinds = {item.kind for item in binding.constraints}
-    # The four relations 113's grammar is built around are all still there.
-    for kind in ("below", "above", "near", "same-row"):
+    # The four relations 113's grammar is built around: three of them are still
+    # there. **145a T2 更新**：`same-row` 从这张表里**拿掉**了——反馈副边那条
+    # 横排被收窄成 `left-of` + `near`（岳裁决，理由见
+    # `test_the_feedback_chain_is_stated_by_order_and_hug_not_by_a_row`），而它
+    # 是这份语法里**唯一**用到 `same-row` 的地方，所以这一份语法的约束词表里
+    # 不再有它。原来的期望钉的是与岳手绘相反的语法，逐条改期望并说明。
+    for kind in ("below", "above", "near", "left-of"):
         assert kind in kinds, f"{kind} is gone: {sorted(kinds)}"
+    assert "same-row" not in kinds, (
+        "145a T2 narrowed the feedback chain, so this grammar states no row; "
+        f"got {sorted(kinds)}"
+    )
 
 
 # ============================== 6 lint 离线闸与 110 对照（如实申报：未达成）

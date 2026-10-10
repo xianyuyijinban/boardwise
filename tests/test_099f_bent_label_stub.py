@@ -138,7 +138,19 @@ def test_every_bent_run_blocked_is_refused_and_named():
 
 
 def test_the_ch340_page_names_rxd_on_the_label_side_again():
-    """出货规格：RXD 落成折线，网名回到标签盒那一侧（与 D+/D−/TXD 同侧）。"""
+    """出货规格：四条 stub 的网名都在标签盒那一侧（D+/D−/RXD/TXD 同侧）。
+
+    **145a 更新**：RXD 从折线回到两点直线。099f 加折线档，是因为当时左向直线
+    被 V3 走线的拐角独占；145a 把「这个脚要挂旗 / 这个网要打名」变成布线**之前**
+    的输入（`drawcompiler._lead_lane_reservations` 同时预留旗引线与标签 stub 的
+    第一档），V3 因此不再走那一行——它原来的走法还**压着 GND 旗引线**（off 态
+    实测 2 处旗引线被穿，on 态 0 处），所以 V3 改道是修好，RXD 的直线档重新可用。
+    D+ 在 145a 中间态曾落到「反侧 5 单位」（099e 量过的坏形状），标签 stub 通道
+    被保留之后它回到标签侧——本条钉的就是这件事。
+
+    **折线族本身没有失去见证**：本文件上面三条合成用例（直线被堵 ⇒ 折线胜出 /
+    折线两段各自查 / 拐角也要查）逐条钉着它。
+    """
     circuit = CircuitSpec.from_dict(json.loads(
         (SPECS / "ch340_serial.circuit.json").read_text(encoding="utf-8")))
     sheet = PresentationSpec.from_dict(json.loads(
@@ -152,12 +164,8 @@ def test_the_ch340_page_names_rxd_on_the_label_side_again():
     stubs = {item.net: item.points for item in plan.change.draw_wires if item.purpose}
     assert set(stubs) == {"TXD", "RXD", "D+", "D-"}
 
-    # 另外三条是 10 单位直线；RXD 是折线，且**远端比锚点更靠左**——名字回到标签那一侧
-    for net in ("TXD", "D+", "D-"):
+    # 四条都是 10 单位直线，**远端比锚点更靠左**——名字都在标签那一侧
+    for net in ("TXD", "RXD", "D+", "D-"):
         anchor, far = stubs[net]
         assert far[0] < anchor[0] and far[1] == anchor[1], (net, stubs[net])
-    anchor, corner, far = stubs["RXD"]
-    assert far[0] < anchor[0], stubs["RXD"]
-    assert far[1] != anchor[1], stubs["RXD"]
-    # 折线确实只旁移一格 —— 与另三条同一个标签侧
-    assert abs(corner[1] - anchor[1]) == LABEL_STUB_STEPS[0]
+        assert anchor[0] - far[0] == drawapply.LABEL_STUB_LENGTH, (net, stubs[net])
