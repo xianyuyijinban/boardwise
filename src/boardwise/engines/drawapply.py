@@ -70,7 +70,7 @@ from ..core import textmetrics
 from ..core.layoutplan import DOWNGRADE_NOTE_PREFIX, LayoutPart, LayoutPlan
 from ..core.model import is_ground_net
 from ..core.presentationspec import PresentationSpec
-from ..core.symbolprofile import SymbolProfile, SymbolPose, role_siblings
+from ..core.symbolprofile import SymbolProfile, SymbolPose, pose_box, role_siblings
 from . import addcomponent
 
 __all__ = [
@@ -1089,16 +1089,11 @@ def module_plan(
         profile = profiles.get(part.symbol_ref)
         if profile is None or profile.body is None:
             continue
-        pose = SymbolPose(rotation=int(part.rotation) % 360, mirror=part.mirror)
-        x0, y0, x1, y1 = profile.body
-        corners = [
-            transform_point(cx, cy, rotation=pose.rotation, mirror=pose.mirror,
-                            ox=part.x, oy=part.y)
-            for cx, cy in ((x0, y0), (x1, y0), (x1, y1), (x0, y1))
-        ]
-        stub_bodies[part.designator] = (
-            min(point[0] for point in corners), min(point[1] for point in corners),
-            max(point[0] for point in corners), max(point[1] for point in corners),
+        # 147: the same `pose_box` fold the checker and the router use.
+        stub_bodies[part.designator] = pose_box(
+            profile.body,
+            rotation=int(part.rotation) % 360, mirror=part.mirror,
+            ox=part.x, oy=part.y,
         )
     stub_pins: list[tuple[str, str, tuple[float, float]]] = [
         (part.designator, number, point)

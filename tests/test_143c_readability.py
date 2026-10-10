@@ -293,9 +293,18 @@ def test_a_flag_glyph_that_leaves_the_page_is_reported(as_label):
     result = check(plan, circuit, _one_module("R1"), PROFILES,
                    page_box=(0.0, 0.0, 1000.0, 800.0))
     found = _kinds(result, KIND_OUT_OF_PAGE)
-    assert len(found) == 1
-    assert found[0].objects[0].startswith("powerSymbols" if not as_label else "labels")
-    assert "leaves the page" in found[0].evidence
+    # 147b: a rail flag is now **two** boxes on this canvas — the glyph, and the
+    # name row the host prints beside it (`_text_boxes` -> `_flag_name_row`). Both
+    # are past x = 1000 here, so both leave the page and each is reported once; the
+    # label half (`as_label=True`) has always been one box and stays one. The
+    # finding this test is about is the glyph's, and it is asserted the same way.
+    glyphs = [item for item in found if not item.objects[0].endswith(" name")]
+    assert len(glyphs) == 1, [item.render() for item in found]
+    assert glyphs[0].objects[0].startswith(
+        "powerSymbols" if not as_label else "labels"
+    )
+    assert "leaves the page" in glyphs[0].evidence
+    assert len(found) == (1 if as_label else 2), [item.render() for item in found]
 
 
 @pytest.mark.parametrize("as_label", [True, False])
@@ -313,12 +322,19 @@ def test_a_flag_glyph_inside_a_keep_out_is_reported(as_label):
     assert any(item.objects == (what,) for item in inside)
 
 
-def test_the_flag_glyph_is_in_the_text_box_set_and_has_no_owner():
+def test_the_flag_glyph_is_in_the_text_box_set_and_owns_only_itself():
     """H3, the structural half: `_text_boxes` now honours its own docstring.
 
     It said "every text on the canvas" while returning two of the three kinds.
-    The flag's owner is empty on purpose: it belongs to no part, so constraint 5
-    treats its name as foreign to every body.
+
+    147 changed the flag's owner from the empty string to **the flag itself**
+    (`powerSymbols[i]`), and the reason is constraint 4's: 147 gave a flag's glyph a
+    box in the *drawn extent* set too (`_drawn_extents`), so a flag's own glyph
+    would otherwise be reported against itself — a "wire may only reach a flag at
+    its connection point" line whose object is the flag. The exemption is an owner
+    equality like a part's own text, and it is narrow: the flag is still foreign to
+    every *other* object, which is what the assert below and
+    `test_a_flag_glyph_on_a_body_is_a_text_overlap_just_as_a_label_is` both pin.
     """
     plan, _circuit, glyph = _h3_components((200.0, 110.0), as_label=False)
     boxes = {
@@ -328,9 +344,13 @@ def test_the_flag_glyph_is_in_the_text_box_set_and_has_no_owner():
     assert boxes["powerSymbols[0]"][0] == flag_glyph_box(
         FLAG_PROFILE, rotation=0.0, anchor=(200.0, 110.0)
     )
-    assert boxes["powerSymbols[0]"][1] == ""
+    assert boxes["powerSymbols[0]"][1] == "powerSymbols[0]"
     assert boxes["powerSymbols[0]"][2] == "VCC"
     assert boxes["powerSymbols[0]"][0] == glyph
+    # The flag's own name row carries the same owner (the host prints it as part of
+    # this flag), and every *other* box on the canvas is foreign to it — which is
+    # what the sibling test above pins by planting the glyph on R1's body.
+    assert boxes["powerSymbols[0] name"][1] == "powerSymbols[0]"
 
 
 def test_a_flag_whose_symbol_has_no_profile_adds_no_box_and_raises_nothing():

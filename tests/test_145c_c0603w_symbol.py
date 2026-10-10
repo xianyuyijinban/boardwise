@@ -119,9 +119,14 @@ def test_the_wide_profile_carries_the_measured_tips():
         f"{WIDE_REF} declares {_tips(entry)}, "
         f"{PROBE.relative_to(ROOT).as_posix()} measured {measured}"
     )
-    assert entry["body"] == [-10.0, 0.0, 10.0, 0.0], (
-        f"{WIDE_REF}'s body is {entry['body']}; the two pins' inner ends for ±20 tips "
-        "of length 10 are ±10 — the same body convention C0603/C0805 state"
+    # 147b: the body is no longer derived from the pin tips at all — 147 re-measured
+    # every body from the host's own per-primitive bbox (`sch.geometry bboxIds`,
+    # folded through the pose, stroke included); see
+    # `outputs/147b/23_tools118_move.txt`. C0603W's measured extent is 21 x 17.
+    assert entry["body"] == [-10.5, -8.5, 10.5, 8.5], (
+        f"{WIDE_REF}'s body is {entry['body']}; the host's own bbox for this symbol "
+        "is (-10.5, -8.5, 10.5, 8.5) — a real two-dimensional extent, not the pin "
+        "axis (147: the zero-thickness body is why three defects stayed invisible)"
     )
     # The probe must be the part it claims to be: one device uuid, one symbol uuid.
     payload = json.loads(PROBE.read_text(encoding="utf-8"))
@@ -142,7 +147,15 @@ def test_the_narrow_profile_is_untouched_by_the_wide_one():
         f"{NARROW_REF}'s tips are {_tips(narrow)}; 118 measured ±15 from C100040 and "
         "145c's probe re-measured the same ±15 on C100040 and C14858"
     )
-    assert narrow["body"] == [-5.0, 0.0, 5.0, 0.0]
+    # 147b: each name keeps its own measured extent, and the *narrow* one is still
+    # the narrower: C0603's host bbox is 11 x 17 where C0603W's is 21 x 17. The
+    # assertion is the same claim the old exact-equality made — "the standard 0603
+    # was not widened to ±20 to make C13 pass" — stated on the measured numbers.
+    assert narrow["body"] == [-5.5, -8.5, 5.5, 8.5]
+    assert narrow["body"][2] < wide["body"][2] and narrow["body"][0] > wide["body"][0], (
+        f"{NARROW_REF} {narrow['body']} is not narrower than {WIDE_REF} "
+        f"{wide['body']} — the two names are not two geometries any more"
+    )
     assert _tips(narrow) != _tips(wide), (
         "the two profiles carry one geometry — but the host draws two different "
         "symbols, which is the whole reason 145c exists"

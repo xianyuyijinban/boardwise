@@ -425,6 +425,14 @@ def test_a_gap_wider_than_the_collision_does_not_help_so_it_is_topological():
     | 40 | 空集 | 空集 |
     | 60 | 1 处 `(60,-240)` C11.2×C13.1 | 1 处，**同一点** |
 
+    **147c 重新量过**（本棒的读数在 `outputs/147c/remeasure_117a.txt`，脚本
+    `outputs/147c/remeasure_117a.py`）：147 把 16 颗 symbolRef 的体框从「引脚内端
+    连线」换成宿主实测外框，器件变大 → 落点整体挪了一格，那一处重合从
+    `(60,-240)` 走到 **`(70,-240)`**。**其余一切不变**：仍是 GAP=60 那一档、
+    仍是 C11.2(SEC_GND) × C13.1(SEC_12V)、仍然两侧都有（10/20/40 两侧都空集）。
+    所以本条钉的还是同一件事——它是**另一个病**（宽间距把次边那一行挤到一起），
+    与 dodge 无关——只是坐标跟着实测几何走。改的是那个数，不是命题。
+
     **如实申报**：本棒**不能再**用这张表证明「加间距治不了」——前三档两侧都
     干净，没有可对照的病；GAP=60 那一处是**另一个病**（把间距撑到 60 把次边
     那一行挤到一起），而它两侧都在、dodge 既不改它也不治它，所以它证明的是
@@ -466,19 +474,22 @@ def test_a_gap_wider_than_the_collision_does_not_help_so_it_is_topological():
         # 重新量过**：GAP=60 上两侧**各有同一处** `(60,-240)`
         # （C11.2(SEC_GND) × C13.1(SEC_12V)）——宽间距把次边那一行挤到一起的
         # 那一档。这里钉**个数**：它是另一个病，与 dodge 无关，所以两侧的个数
-        # 必须相同而不是一侧为一侧为零。
+        # 必须相同而不是一侧为一侧为零。**147c 重量**：同一个病的坐标随实测
+        # 体框挪到 `(70,-240)`（`outputs/147c/remeasure_117a.txt`），两侧仍然
+        # 一致，所以下面钉的是这个新的点与同一对脚。
         dc.GAP = 60.0
         placed, _ = _soft_placement(ctx)
         assert placed is not None
         wide = _cross_net_pin_coincidences(circuit, ctx, placed)
         assert len(wide) == 1, (
-            f"GAP=60 leaves {sorted(wide)} — 145a re-measured exactly one, so a "
+            f"GAP=60 leaves {sorted(wide)} — 147c re-measured exactly one, so a "
             "different number means the geometry moved and this table needs "
             "re-measuring"
         )
-        assert sorted(wide[(60.0, -240.0)]) == [
+        assert sorted(wide[(70.0, -240.0)]) == [
             ("C11.2", "SEC_GND"), ("C13.1", "SEC_12V")], (
-            f"the wide-rung pair changed: {wide[(60.0, -240.0)]}"
+            f"the wide-rung pair changed: {wide.get((70.0, -240.0))} "
+            f"(all of GAP=60: {sorted(wide)})"
         )
     finally:
         dc.GAP = saved_gap

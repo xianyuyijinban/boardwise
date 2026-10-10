@@ -1,16 +1,16 @@
 {
   "kind": "boardwise-symbol-library",
   "libraryVersion": 1,
-  "source": "blockwise-symbol-profile, MEASURED 2026-10-04 from the live editor (outputs/118/apply_report.json pin read-back; outputs/110/11_pins.json + 12_bodies.json for names/directions/lengths). Built by tools/118_measure_profiles.py — do not hand-edit: a profile is a set of claims about one library symbol, and 113's hand-written ones were refused by 054 C6 on contact.",
+  "source": "blockwise-symbol-profile, MEASURED 2026-10-04 from the live editor (outputs/118/apply_report.json pin read-back; outputs/110/11_pins.json + 12_bodies.json for names/directions/lengths); every body box re-measured 2026-10-10 from the host's own per-primitive bbox (outputs/147/11_geom_bboxes.json, `sch.geometry bboxIds`). Built by tools/118_measure_profiles.py — do not hand-edit: a profile is a set of claims about one library symbol, and 113's hand-written ones were refused by 054 C6 on contact.",
   "profiles": [
     {
       "symbolRef": "R0603",
-      "title": "Resistor 0603, axial (two pins on the horizontal axis), drawn vertically with pin 1 (the row end) UP, so the part's chain/row pin presents on a horizontal line — the feedback row 岳 ruling (e) asks for.\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (R3, C22975), names/directions/lengths from 110's 11_pins.json on the same LCSC. Body box = the two pins' inner ends (measured drawn extent).",
+      "title": "Resistor 0603, axial (two pins on the horizontal axis), drawn vertically with pin 1 (the row end) UP, so the part's chain/row pin presents on a horizontal line — the feedback row 岳 ruling (e) asks for.\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (R3, C22975), names/directions/lengths from 110's 11_pins.json on the same LCSC. Body box = the two pins' inner ends (measured drawn extent).\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (R3, C22975), names/directions/lengths from 110's 11_pins.json on the same LCSC. Body box = the host's own per-primitive bbox (`sch.geometry` bboxIds), folded back through the pose, stroke included — the true drawn extent. 147 re-measured the body; see the profile's `notes`.",
       "body": [
-        -10.0,
-        0.0,
-        10.0,
-        0.0
+        -10.5,
+        -4.5,
+        10.5,
+        4.5
       ],
       "pins": [
         {
@@ -34,10 +34,6 @@
           "length": 10.0
         }
       ],
-      "notes": [
-        "body: measured: the two pins' inner ends",
-        "texts measured 2026-10-10 on outputs/145e/render_P1.svg: the host draws a placed part's designator/value at the symbol's own text item, and mapping each row back through the part's pose gives these symbol-local anchors (y up; the anchor is the row's lower-left corner, the row is 10 units tall). The offsets repeat for every part sharing a symbolRef (R0603 x6, C0603 x2). A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
-      ],
       "texts": [
         {
           "kind": "reference",
@@ -49,16 +45,20 @@
           "x": -10.0,
           "y": -15.0
         }
+      ],
+      "notes": [
+        "measured: the host's per-primitive bbox (sch.geometry bboxIds), stroke included, folded back through the pose (147) — outputs/147/12_live_bodies.txt",
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
       ]
     },
     {
       "symbolRef": "RES-TH-17K8",
-      "title": "Resistor, through-hole axial (17.8k 1%), drawn vertically with pin 1 (the row end) UP, so the part's chain/row pin presents on a horizontal line — the feedback row 岳 ruling (e) asks for.\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (R9, C1370938); names/directions/lengths from the 0603/0805 two-pin family rule read off 110's twelve measurements of that family. Body box = the two pins' inner ends (measured drawn extent).",
+      "title": "Resistor, through-hole axial (17.8k 1%), drawn vertically with pin 1 (the row end) UP, so the part's chain/row pin presents on a horizontal line — the feedback row 岳 ruling (e) asks for.\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (R9, C1370938); names/directions/lengths from the 0603/0805 two-pin family rule read off 110's twelve measurements of that family. Body box = the two pins' inner ends (measured drawn extent).\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (R9, C1370938); names/directions/lengths from the 0603/0805 two-pin family rule read off 110's twelve measurements of that family. Body box = the host's own per-primitive bbox (`sch.geometry` bboxIds), folded back through the pose, stroke included — the true drawn extent. 147 re-measured the body; see the profile's `notes`.",
       "body": [
-        -10.0,
-        0.0,
-        10.0,
-        0.0
+        -10.5,
+        -5.5,
+        10.5,
+        5.5
       ],
       "pins": [
         {
@@ -82,10 +82,6 @@
           "length": 10.0
         }
       ],
-      "notes": [
-        "body: measured: the two pins' inner ends",
-        "texts measured 2026-10-10 on outputs/145e/render_P1.svg: the host draws a placed part's designator/value at the symbol's own text item, and mapping each row back through the part's pose gives these symbol-local anchors (y up; the anchor is the row's lower-left corner, the row is 10 units tall). The offsets repeat for every part sharing a symbolRef (R0603 x6, C0603 x2). A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
-      ],
       "texts": [
         {
           "kind": "reference",
@@ -97,16 +93,20 @@
           "x": -10.0,
           "y": -15.0
         }
+      ],
+      "notes": [
+        "measured: the host's per-primitive bbox (sch.geometry bboxIds), stroke included, folded back through the pose (147) — outputs/147/12_live_bodies.txt",
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
       ]
     },
     {
       "symbolRef": "R0805",
-      "title": "Resistor 0805, axial, drawn vertically with pin 1 (the row end) UP, so the part's chain/row pin presents on a horizontal line — the feedback row 岳 ruling (e) asks for.\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (R12, C25271); names/directions/lengths from the 0603/0805 two-pin family rule read off 110's twelve measurements of that family. Body box = the two pins' inner ends (measured drawn extent).",
+      "title": "Resistor 0805, axial, drawn vertically with pin 1 (the row end) UP, so the part's chain/row pin presents on a horizontal line — the feedback row 岳 ruling (e) asks for.\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (R12, C25271); names/directions/lengths from the 0603/0805 two-pin family rule read off 110's twelve measurements of that family. Body box = the two pins' inner ends (measured drawn extent).\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (R12, C25271); names/directions/lengths from the 0603/0805 two-pin family rule read off 110's twelve measurements of that family. Body box = the host's own per-primitive bbox (`sch.geometry` bboxIds), folded back through the pose, stroke included — the true drawn extent. 147 re-measured the body; see the profile's `notes`.",
       "body": [
-        -10.0,
-        0.0,
-        10.0,
-        0.0
+        -10.5,
+        -4.5,
+        10.5,
+        4.5
       ],
       "pins": [
         {
@@ -130,10 +130,6 @@
           "length": 10.0
         }
       ],
-      "notes": [
-        "body: measured: the two pins' inner ends",
-        "texts measured 2026-10-10 on outputs/145e/render_P1.svg: the host draws a placed part's designator/value at the symbol's own text item, and mapping each row back through the part's pose gives these symbol-local anchors (y up; the anchor is the row's lower-left corner, the row is 10 units tall). The offsets repeat for every part sharing a symbolRef (R0603 x6, C0603 x2). A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
-      ],
       "texts": [
         {
           "kind": "reference",
@@ -145,16 +141,20 @@
           "x": -10.0,
           "y": -15.0
         }
+      ],
+      "notes": [
+        "measured: the host's per-primitive bbox (sch.geometry bboxIds), stroke included, folded back through the pose (147) — outputs/147/12_live_bodies.txt",
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
       ]
     },
     {
       "symbolRef": "C0603",
-      "title": "Capacitor 0603, vertical (plate 1 up)\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (C4, C100040); names/directions/lengths from the 0603/0805 two-pin family rule read off 110's twelve measurements of that family. Body box = the two pins' inner ends (measured drawn extent).",
+      "title": "Capacitor 0603, vertical (plate 1 up)\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (C4, C100040); names/directions/lengths from the 0603/0805 two-pin family rule read off 110's twelve measurements of that family. Body box = the two pins' inner ends (measured drawn extent).\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (C4, C100040); names/directions/lengths from the 0603/0805 two-pin family rule read off 110's twelve measurements of that family. Body box = the host's own per-primitive bbox (`sch.geometry` bboxIds), folded back through the pose, stroke included — the true drawn extent. 147 re-measured the body; see the profile's `notes`.",
       "body": [
-        -5.0,
-        0.0,
-        5.0,
-        0.0
+        -5.5,
+        -8.5,
+        5.5,
+        8.5
       ],
       "pins": [
         {
@@ -178,10 +178,6 @@
           "length": 10.0
         }
       ],
-      "notes": [
-        "body: measured: the two pins' inner ends",
-        "texts measured 2026-10-10 on outputs/145e/render_P1.svg: the host draws a placed part's designator/value at the symbol's own text item, and mapping each row back through the part's pose gives these symbol-local anchors (y up; the anchor is the row's lower-left corner, the row is 10 units tall). The offsets repeat for every part sharing a symbolRef (R0603 x6, C0603 x2). A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
-      ],
       "texts": [
         {
           "kind": "reference",
@@ -193,16 +189,20 @@
           "x": -5.0,
           "y": -20.0
         }
+      ],
+      "notes": [
+        "measured: the host's per-primitive bbox (sch.geometry bboxIds), stroke included, folded back through the pose (147) — outputs/147/12_live_bodies.txt",
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
       ]
     },
     {
       "symbolRef": "C0603W",
       "title": "Capacitor 0603 whose host symbol is the wide one, vertical (plate 1 up)\n[145c] pins and body measured on the live host 2026-10-10: tips from the 145c probe (outputs/145c/probe_02_pins_C14663.json, placed on a scratch page of `test` and deleted after reading); body box = the two pins' inner ends, the same convention C0603/C0805 use, with the drawn bbox read alongside at 389.5..410.5 x 291.5..308.5 for a part at (400,300) (outputs/145c/probe_03_geom_C14663.json).",
       "body": [
-        -10.0,
-        0.0,
-        10.0,
-        0.0
+        -10.5,
+        -8.5,
+        10.5,
+        8.5
       ],
       "pins": [
         {
@@ -227,26 +227,26 @@
         }
       ],
       "notes": [
-        "body: measured: the two pins' inner ends (x -10..10); the drawn box read by sch.geometry is 19.5 wide and 17 tall around the origin, i.e. -10.5..10.5 x -8.5..8.5 (outputs/145c/probe_03_geom_C14663.json)",
+        "measured: the host's per-primitive bbox (sch.geometry bboxIds), stroke included, folded back through the pose (147) — outputs/147/12_live_bodies.txt",
         "145c: the host resolves LCSC C14663 (100nF 0603) to symbol uuid aaaf5070dfb7f1f1, whose pins escape +-20 - not the +-15 of the C0603 profile, which 118 measured from C100040. That is why C13 (C14663) uses this profile while C10 (C100040) and C6 (C14858) keep C0603: '0603' is a footprint, not one symbol geometry.",
-        "texts measured 2026-10-10 on outputs/145e/render_P1.svg: the host draws a placed part's designator/value at the symbol's own text item, and mapping each row back through the part's pose gives these symbol-local anchors (y up; the anchor is the row's lower-left corner, the row is 10 units tall). The offsets repeat for every part sharing a symbolRef (R0603 x6, C0603 x2). A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
       ],
       "texts": [
         {
           "kind": "reference",
-          "x": -10.0,
-          "y": 10.0
+          "x": 15.0,
+          "y": 0.0
         },
         {
           "kind": "value",
-          "x": -10.0,
-          "y": -20.0
+          "x": 15.0,
+          "y": -10.0
         }
       ]
     },
     {
       "symbolRef": "C0805",
-      "title": "Capacitor 0805, vertical (plate 1 up)\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (C9, C45783); names/directions/lengths from the 0603/0805 two-pin family rule read off 110's twelve measurements of that family. Body box = the two pins' inner ends (measured drawn extent).",
+      "title": "Capacitor 0805, vertical (plate 1 up)\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (C9, C45783); names/directions/lengths from the 0603/0805 two-pin family rule read off 110's twelve measurements of that family. Body box = the two pins' inner ends (measured drawn extent).\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (C9, C45783); names/directions/lengths from the 0603/0805 two-pin family rule read off 110's twelve measurements of that family. Body box = the two pins' inner ends (a lower bound: it is the pin axis, with no extent perpendicular to it).",
       "body": [
         -10.0,
         0.0,
@@ -281,12 +281,12 @@
     },
     {
       "symbolRef": "CAP-SMD-220UF",
-      "title": "Electrolytic 220uF/25V SMD, vertical (plate 1 up)\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (C5, C9900017672), names/directions/lengths from 110's 11_pins.json on the same LCSC. Body box = the two pins' inner ends (measured drawn extent).",
+      "title": "Electrolytic 220uF/25V SMD, vertical (plate 1 up)\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (C5, C9900017672), names/directions/lengths from 110's 11_pins.json on the same LCSC. Body box = the two pins' inner ends (measured drawn extent).\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (C5, C9900017672), names/directions/lengths from 110's 11_pins.json on the same LCSC. Body box = the host's own per-primitive bbox (`sch.geometry` bboxIds), folded back through the pose, stroke included — the true drawn extent. 147 re-measured the body; see the profile's `notes`.",
       "body": [
-        0.0,
-        -1.0,
-        0.0,
-        3.0
+        -10.5,
+        -3.6,
+        10.5,
+        8.5
       ],
       "pins": [
         {
@@ -310,10 +310,6 @@
           "length": 19.0
         }
       ],
-      "notes": [
-        "body: measured: the two pins' inner ends",
-        "texts measured 2026-10-10 on outputs/145e/render_P1.svg: the host draws a placed part's designator/value at the symbol's own text item, and mapping each row back through the part's pose gives these symbol-local anchors (y up; the anchor is the row's lower-left corner, the row is 10 units tall). The offsets repeat for every part sharing a symbolRef (R0603 x6, C0603 x2). A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
-      ],
       "texts": [
         {
           "kind": "reference",
@@ -325,16 +321,20 @@
           "x": 15.0,
           "y": -10.0
         }
+      ],
+      "notes": [
+        "measured: the host's per-primitive bbox (sch.geometry bboxIds), stroke included, folded back through the pose (147) — outputs/147/12_live_bodies.txt",
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
       ]
     },
     {
       "symbolRef": "CAP-TH-1NF-1KV",
-      "title": "Capacitor 1nF/1kV through-hole, vertical (plate 1 up)\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (C7, C9900022732), names/directions/lengths from 110's 11_pins.json on the same LCSC. Body box = the two pins' inner ends (measured drawn extent).",
+      "title": "Capacitor 1nF/1kV through-hole, vertical (plate 1 up)\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (C7, C9900022732), names/directions/lengths from 110's 11_pins.json on the same LCSC. Body box = the two pins' inner ends (measured drawn extent).\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (C7, C9900022732), names/directions/lengths from 110's 11_pins.json on the same LCSC. Body box = the host's own per-primitive bbox (`sch.geometry` bboxIds), folded back through the pose, stroke included — the true drawn extent. 147 re-measured the body; see the profile's `notes`.",
       "body": [
-        -10.0,
-        0.0,
-        10.0,
-        0.0
+        -10.5,
+        -8.5,
+        10.5,
+        8.5
       ],
       "pins": [
         {
@@ -358,10 +358,6 @@
           "length": 10.0
         }
       ],
-      "notes": [
-        "body: measured: the two pins' inner ends",
-        "texts measured 2026-10-10 on outputs/145e/render_P1.svg: the host draws a placed part's designator/value at the symbol's own text item, and mapping each row back through the part's pose gives these symbol-local anchors (y up; the anchor is the row's lower-left corner, the row is 10 units tall). The offsets repeat for every part sharing a symbolRef (R0603 x6, C0603 x2). A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
-      ],
       "texts": [
         {
           "kind": "reference",
@@ -373,16 +369,20 @@
           "x": -10.0,
           "y": -20.0
         }
+      ],
+      "notes": [
+        "measured: the host's per-primitive bbox (sch.geometry bboxIds), stroke included, folded back through the pose (147) — outputs/147/12_live_bodies.txt",
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
       ]
     },
     {
       "symbolRef": "DIO-DO41-UF4007",
-      "title": "DIO-DO41-UF4007 — the clamp diode (D1), drawn with its ANODE on the left and its CATHODE on the right, so the winding it hangs off leaves horizontally. A vertical diode cannot express the 'this side of the transformer' relation the compiler measures against the pin, and its own refusal is what settled the shape.\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (D1, C212802), names/directions/lengths from 110's 11_pins.json on the same LCSC. Body box = the two pins' inner ends (measured drawn extent).",
+      "title": "DIO-DO41-UF4007 — the clamp diode (D1), drawn with its ANODE on the left and its CATHODE on the right, so the winding it hangs off leaves horizontally. A vertical diode cannot express the 'this side of the transformer' relation the compiler measures against the pin, and its own refusal is what settled the shape.\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (D1, C212802), names/directions/lengths from 110's 11_pins.json on the same LCSC. Body box = the two pins' inner ends (measured drawn extent).\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (D1, C212802), names/directions/lengths from 110's 11_pins.json on the same LCSC. Body box = the host's own per-primitive bbox (`sch.geometry` bboxIds), folded back through the pose, stroke included — the true drawn extent. 147 re-measured the body; see the profile's `notes`.",
       "body": [
-        -5.0,
-        0.0,
-        5.0,
-        0.0
+        -5.5,
+        -8.5,
+        5.5,
+        8.5
       ],
       "pins": [
         {
@@ -406,10 +406,6 @@
           "length": 15.0
         }
       ],
-      "notes": [
-        "body: measured: the two pins' inner ends",
-        "texts measured 2026-10-10 on outputs/145e/render_P1.svg: the host draws a placed part's designator/value at the symbol's own text item, and mapping each row back through the part's pose gives these symbol-local anchors (y up; the anchor is the row's lower-left corner, the row is 10 units tall). The offsets repeat for every part sharing a symbolRef (R0603 x6, C0603 x2). A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
-      ],
       "texts": [
         {
           "kind": "reference",
@@ -421,16 +417,20 @@
           "x": -5.0,
           "y": -20.0
         }
+      ],
+      "notes": [
+        "measured: the host's per-primitive bbox (sch.geometry bboxIds), stroke included, folded back through the pose (147) — outputs/147/12_live_bodies.txt",
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
       ]
     },
     {
       "symbolRef": "DIO-SMA-SS310",
-      "title": "Schottky SS310 SMA — the secondary rectifier, drawn VERTICALLY (anode up on the winding's hot end, cathode down to the output rail) so its chain pins present on the same column as the rest of the chain.\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (D3, C9900021858), names/directions/lengths from 110's 11_pins.json on the same LCSC. Body box = the two pins' inner ends (measured drawn extent).",
+      "title": "Schottky SS310 SMA — the secondary rectifier, drawn VERTICALLY (anode up on the winding's hot end, cathode down to the output rail) so its chain pins present on the same column as the rest of the chain.\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (D3, C9900021858), names/directions/lengths from 110's 11_pins.json on the same LCSC. Body box = the two pins' inner ends (measured drawn extent).\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (D3, C9900021858), names/directions/lengths from 110's 11_pins.json on the same LCSC. Body box = the host's own per-primitive bbox (`sch.geometry` bboxIds), folded back through the pose, stroke included — the true drawn extent. 147 re-measured the body; see the profile's `notes`.",
       "body": [
-        -5.0,
-        0.0,
-        5.0,
-        0.0
+        -8.5,
+        -8.5,
+        5.5,
+        7.5
       ],
       "pins": [
         {
@@ -454,10 +454,6 @@
           "length": 15.0
         }
       ],
-      "notes": [
-        "body: measured: the two pins' inner ends",
-        "texts measured 2026-10-10 on outputs/145e/render_P1.svg: the host draws a placed part's designator/value at the symbol's own text item, and mapping each row back through the part's pose gives these symbol-local anchors (y up; the anchor is the row's lower-left corner, the row is 10 units tall). The offsets repeat for every part sharing a symbolRef (R0603 x6, C0603 x2). A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
-      ],
       "texts": [
         {
           "kind": "reference",
@@ -469,16 +465,20 @@
           "x": -10.0,
           "y": -20.0
         }
+      ],
+      "notes": [
+        "measured: the host's per-primitive bbox (sch.geometry bboxIds), stroke included, folded back through the pose (147) — outputs/147/12_live_bodies.txt",
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
       ]
     },
     {
       "symbolRef": "NMOS-TO251",
-      "title": "N-channel MOSFET 4N60 TO-251, drawn VERTICALLY: drain up, source down, gate right (110 ruling c)\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (Q1, C2681894), names/directions/lengths from 110's 11_pins.json on the same LCSC. Body box = the outer pins' inner ends — a stated lower bound, since no reading carries a per-part bounding box.",
+      "title": "N-channel MOSFET 4N60 TO-251, drawn VERTICALLY: drain up, source down, gate right (110 ruling c)\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (Q1, C2681894), names/directions/lengths from 110's 11_pins.json on the same LCSC. Body box = the outer pins' inner ends — a stated lower bound, since no reading carries a per-part bounding box.\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (Q1, C2681894), names/directions/lengths from 110's 11_pins.json on the same LCSC. Body box = the host's own per-primitive bbox (`sch.geometry` bboxIds), folded back through the pose, stroke included — the true drawn extent. 147 re-measured the body; see the profile's `notes`.",
       "body": [
-        -20.0,
-        -10.0,
-        0.0,
-        10.0
+        -20.5,
+        -10.5,
+        14.5,
+        10.5
       ],
       "pins": [
         {
@@ -512,10 +512,6 @@
           "length": 10.0
         }
       ],
-      "notes": [
-        "body: derived lower bound: the outer pins' inner ends (no bbox in any reading)",
-        "texts measured 2026-10-10 on outputs/145e/render_P1.svg: the host draws a placed part's designator/value at the symbol's own text item, and mapping each row back through the part's pose gives these symbol-local anchors (y up; the anchor is the row's lower-left corner, the row is 10 units tall). The offsets repeat for every part sharing a symbolRef (R0603 x6, C0603 x2). A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
-      ],
       "texts": [
         {
           "kind": "reference",
@@ -527,6 +523,10 @@
           "x": 20.0,
           "y": -10.0
         }
+      ],
+      "notes": [
+        "measured: the host's per-primitive bbox (sch.geometry bboxIds), stroke included, folded back through the pose (147) — outputs/147/12_live_bodies.txt",
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
       ]
     },
     {
@@ -539,9 +539,9 @@
         30.5
       ],
       "notes": [
-        "body: measured bbox (sch.geometry bboxIds probe, 2026-10-04)",
+        "measured: the host's per-primitive bbox (sch.geometry bboxIds), stroke included, folded back through the pose (147) — outputs/147/12_live_bodies.txt",
         "pins 2/5 exist on the symbol but are NC per the Wurth datasheet — the spec connects nothing to them",
-        "texts measured 2026-10-10 on outputs/145e/render_P1.svg: the host draws a placed part's designator/value at the symbol's own text item, and mapping each row back through the part's pose gives these symbol-local anchors (y up; the anchor is the row's lower-left corner, the row is 10 units tall). The offsets repeat for every part sharing a symbolRef (R0603 x6, C0603 x2). A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
       ],
       "pins": [
         {
@@ -620,12 +620,12 @@
     },
     {
       "symbolRef": "SOT23-3-TL431",
-      "title": "TL431 voltage reference, SOT-23-3. A (the secondary-ground side) and REF (the divider tap) are on one vertical line so the body points from the tap down to ground; K (the optocoupler LED cathode) faces right, where the feedback row runs.\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (U3, C2887585), names/directions/lengths from 110's 11_pins.json on the same LCSC. Body box = the outer pins' inner ends — a stated lower bound, since no reading carries a per-part bounding box.",
+      "title": "TL431 voltage reference, SOT-23-3. A (the secondary-ground side) and REF (the divider tap) are on one vertical line so the body points from the tap down to ground; K (the optocoupler LED cathode) faces right, where the feedback row runs.\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (U3, C2887585), names/directions/lengths from 110's 11_pins.json on the same LCSC. Body box = the outer pins' inner ends — a stated lower bound, since no reading carries a per-part bounding box.\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (U3, C2887585), names/directions/lengths from 110's 11_pins.json on the same LCSC. Body box = the host's own per-primitive bbox (`sch.geometry` bboxIds), folded back through the pose, stroke included — the true drawn extent. 147 re-measured the body; see the profile's `notes`.",
       "body": [
-        -45.0,
-        -5.0,
-        45.0,
-        5.0
+        -45.5,
+        -15.5,
+        45.5,
+        15.5
       ],
       "pins": [
         {
@@ -659,10 +659,6 @@
           "length": 10.0
         }
       ],
-      "notes": [
-        "body: derived lower bound: the outer pins' inner ends (no bbox in any reading)",
-        "texts measured 2026-10-10 on outputs/145e/render_P1.svg: the host draws a placed part's designator/value at the symbol's own text item, and mapping each row back through the part's pose gives these symbol-local anchors (y up; the anchor is the row's lower-left corner, the row is 10 units tall). The offsets repeat for every part sharing a symbolRef (R0603 x6, C0603 x2). A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
-      ],
       "texts": [
         {
           "kind": "reference",
@@ -674,16 +670,20 @@
           "x": -45.0,
           "y": -25.0
         }
+      ],
+      "notes": [
+        "measured: the host's per-primitive bbox (sch.geometry bboxIds), stroke included, folded back through the pose (147) — outputs/147/12_live_bodies.txt",
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
       ]
     },
     {
       "symbolRef": "SMD-4-PC817",
-      "title": "Optocoupler PC817, SMD-4, drawn as the barrier it is: the chain pins (LED cathode 2 and collector 4) on one vertical line, the two ground-side pins (LED anode 1 and emitter 3) facing left. 岳 ruling (e): the only part allowed to cross the isolation band.\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (U4, C7437), names/directions/lengths from 110's 11_pins.json on the same LCSC. Body box = the outer pins' inner ends — a stated lower bound, since no reading carries a per-part bounding box.",
+      "title": "Optocoupler PC817, SMD-4, drawn as the barrier it is: the chain pins (LED cathode 2 and collector 4) on one vertical line, the two ground-side pins (LED anode 1 and emitter 3) facing left. 岳 ruling (e): the only part allowed to cross the isolation band.\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (U4, C7437), names/directions/lengths from 110's 11_pins.json on the same LCSC. Body box = the outer pins' inner ends — a stated lower bound, since no reading carries a per-part bounding box.\n[118] pins and body measured 2026-10-04 on the real host: pins measured on 2026-10-04: tips from 118's pin read-back (U4, C7437), names/directions/lengths from 110's 11_pins.json on the same LCSC. Body box = the host's own per-primitive bbox (`sch.geometry` bboxIds), folded back through the pose, stroke included — the true drawn extent. 147 re-measured the body; see the profile's `notes`.",
       "body": [
-        -25.0,
-        -10.0,
-        25.0,
-        10.0
+        -25.5,
+        -17.5,
+        25.5,
+        17.5
       ],
       "pins": [
         {
@@ -727,35 +727,35 @@
           "length": 20.0
         }
       ],
-      "notes": [
-        "body: derived lower bound: the outer pins' inner ends (no bbox in any reading)",
-        "texts measured 2026-10-10 on outputs/145e/render_P1.svg: the host draws a placed part's designator/value at the symbol's own text item, and mapping each row back through the part's pose gives these symbol-local anchors (y up; the anchor is the row's lower-left corner, the row is 10 units tall). The offsets repeat for every part sharing a symbolRef (R0603 x6, C0603 x2). A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
-      ],
       "texts": [
         {
           "kind": "reference",
-          "x": 25.0,
-          "y": -20.0
+          "x": -25.0,
+          "y": 20.0
         },
         {
           "kind": "value",
-          "x": 25.0,
-          "y": 25.0
+          "x": -25.0,
+          "y": -25.0
         }
+      ],
+      "notes": [
+        "measured: the host's per-primitive bbox (sch.geometry bboxIds), stroke included, folded back through the pose (147) — outputs/147/12_live_bodies.txt",
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
       ]
     },
     {
       "symbolRef": "PWR-GND",
       "title": "Ground flag for the source-side (PGND) and the secondary-side (SEC_GND) ground families — 121b, 岳-ruled: the library now carries the rail/ground flags, so those nets are stated by one vertical symbol instead of being named by a label at every pin (tasks/121-hand-plan-next.md: 岳's 电源轨用竖直旗标、有旗不反复标; 069 sec.7: 旗标一定要竖直摆放). No pins: the connection point IS the origin — a pin-less profile is how the compiler identifies a flag — and the glyph hangs on the ground family's own side of it.\n[121b] glyph box and pose measured on the live host, not assumed: 岳's own hand-drawn P1 page (outputs/111/geo_P1_live.json, 2026-10-04) holds all 11 of his PGND/SEC_GND flags at rotation 180 and all 4 of his rail flags at rotation 0 — no flag on the sheet is laid flat; which side the ground family hangs on is read off the host's own Ground-GND flag at rotation 0 (outputs/099/libprobe 2026-10-03 and outputs/089/draw/flag_orientation.txt, both measuring the bars at 9.5..19.5 units BELOW the connection; outputs/064_railflag re-measured the family on the canvas: 20-wide bars hanging 10..19 below), cross-checked against 岳's 110 page render (outputs/111/render_P1.svg).",
       "body": [
-        -6.0,
+        -10.5,
         0.0,
-        6.0,
-        18.0
+        10.5,
+        19.5
       ],
       "pins": [],
       "notes": [
-        "body: stated convention, not a measurement — (-6, 0, 6, 18) is 053B's flag-glyph box, the same box every PWR-* profile in this repo declares, reserving the glyph away from the connection point; which side of the connection that glyph hangs on is what the live host readings above measured",
+        "measured: the host's per-primitive bbox (sch.geometry bboxIds), stroke included, folded back through the pose (147) — outputs/147/12_live_bodies.txt",
         "flag glyph convention of the compiler (the host places a power flag by kind+net, never from a library profile); the family is read from the symbolRef token GND by symbolprofile.flag_glyph_kind"
       ]
     },
@@ -763,14 +763,14 @@
       "symbolRef": "PWR-HVDC",
       "title": "Rail flag for the HVDC input rail (Power family) — 121b, 岳-ruled: the rail is stated by one vertical flag instead of being named by a label at every pin (tasks/121-hand-plan-next.md: 岳's 电源轨用竖直旗标; 069 sec.7: 旗标一定要竖直摆放). No pins: the origin IS the connection point — a pin-less profile is how the compiler identifies a flag — and the glyph hangs on the rail family's own side of it.\n[121b] glyph box and pose measured on the live host, not assumed: 岳's own hand-drawn P1 page (outputs/111/geo_P1_live.json, 2026-10-04) holds his HVDC and SEC_12V rail flags at rotation 0 with every ground flag at 180 — nothing on the sheet is laid flat; which side the rail family hangs on is read off the host's own Power-5V flag at rotation 0 (outputs/099/libprobe 2026-10-03 and outputs/089/draw/flag_orientation.txt, both measuring the bar at 4.5..10.5 units ABOVE the connection; outputs/064_railflag re-measured the family on the canvas: a 10-wide bar 5..10 above), cross-checked against 岳's 110 page render (outputs/111/render_P1.svg: his Power-5V flag at (470,560) carries its bar at canvas y = 570, i.e. +10).",
       "body": [
-        -6.0,
+        -5.5,
         0.0,
-        6.0,
-        18.0
+        5.5,
+        10.5
       ],
       "pins": [],
       "notes": [
-        "body: stated convention, not a measurement — (-6, 0, 6, 18) is 053B's flag-glyph box, the same box every PWR-* profile in this repo declares, reserving the glyph away from the connection point; which side of the connection that glyph hangs on is what the live host readings above measured",
+        "measured: the host's per-primitive bbox (sch.geometry bboxIds), stroke included, folded back through the pose (147) — outputs/147/12_live_bodies.txt",
         "flag glyph convention of the compiler; the family is read from the symbolRef (no ground token -> rail) by symbolprofile.flag_glyph_kind"
       ]
     },
@@ -778,14 +778,14 @@
       "symbolRef": "PWR-SEC_12V",
       "title": "Rail flag for the SEC_12V output rail (Power family) — 121b, 岳-ruled: the rail is stated by one vertical flag instead of being named by a label at every pin (tasks/121-hand-plan-next.md: 岳's 电源轨用竖直旗标; 069 sec.7: 旗标一定要竖直摆放). No pins: the origin IS the connection point — a pin-less profile is how the compiler identifies a flag — and the glyph hangs on the rail family's own side of it.\n[121b] glyph box and pose measured on the live host, not assumed: 岳's own hand-drawn P1 page (outputs/111/geo_P1_live.json, 2026-10-04) holds his SEC_12V output flag at rotation 0 together with the HVDC rail flag, with every ground flag at 180 — nothing on the sheet is laid flat; which side the rail family hangs on is read off the host's own Power-5V flag at rotation 0 (outputs/099/libprobe 2026-10-03 and outputs/089/draw/flag_orientation.txt, both measuring the bar at 4.5..10.5 units ABOVE the connection; outputs/064_railflag re-measured the family on the canvas: a 10-wide bar 5..10 above), cross-checked against 岳's 110 page render (outputs/111/render_P1.svg).",
       "body": [
-        -6.0,
+        -5.5,
         0.0,
-        6.0,
-        18.0
+        5.5,
+        10.5
       ],
       "pins": [],
       "notes": [
-        "body: stated convention, not a measurement — (-6, 0, 6, 18) is 053B's flag-glyph box, the same box every PWR-* profile in this repo declares, reserving the glyph away from the connection point; which side of the connection that glyph hangs on is what the live host readings above measured",
+        "measured: the host's per-primitive bbox (sch.geometry bboxIds), stroke included, folded back through the pose (147) — outputs/147/12_live_bodies.txt",
         "flag glyph convention of the compiler; the family is read from the symbolRef (no ground token -> rail) by symbolprofile.flag_glyph_kind"
       ]
     }

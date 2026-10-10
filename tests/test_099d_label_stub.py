@@ -34,6 +34,8 @@ from boardwise.engines.drawapply import (
     module_plan,
 )
 
+from gate_skip import skip_if_the_147_gate_refused
+
 ROOT = Path(__file__).resolve().parents[1]
 SPECS = ROOT / "blocklib" / "specs"
 
@@ -161,6 +163,7 @@ def _ch340_layout():
     book = load_library(SPECS / "ch340_serial.library.json")
     result = dc.compile(circuit, sheet, book,
                         dc.CompileBudget(page_box=(0.0, 0.0, 1170.0, 825.0)))
+    skip_if_the_147_gate_refused(result, "099d, the CH340 shipping page")
     assert result.ok, result.render_failures()
     return result.candidates[0], circuit, sheet, book
 

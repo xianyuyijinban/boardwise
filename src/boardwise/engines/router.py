@@ -181,6 +181,15 @@ class _Router:
         #: lists out of step reports the run without naming its net rather than
         #: naming the wrong one.
         self.edge_nets: list[str] = []
+        #: 147: **this** net's own runs, in step with ``edges``' convention.
+        #: ``edges`` deliberately leaves them out so a lead is never in its own
+        #: way — but a flag may not be *hung on* its own rail either: the host
+        #: prints the pennant where the flag stands, and a rail running through
+        #: it is the clump 岳 found on `test/P1`'s `SEC_12V` flag
+        #: (`outputs/147/FINDINGS.md` sec.2). ``drawcompiler._flag_room`` asks
+        #: this list the box's own-net question, and `readability`'s
+        #: `wire-through-body` asks it of the plan.
+        self.own_edges: list[tuple[tuple[float, float], tuple[float, float]]] = []
         #: 145a: the lattice nodes (**point -> owning net**) another net's flag
         #: lead has been promised. A wire of a different net may neither stand on
         #: one nor cross one, so a lane an earlier pass reserved stays usable

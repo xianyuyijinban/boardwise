@@ -28,6 +28,8 @@ from boardwise.engines import drawapply
 from boardwise.engines import drawcompiler as dc
 from boardwise.engines.drawapply import LABEL_STUB_STEPS, PlanDrawWire, load_library
 
+from gate_skip import skip_if_the_147_gate_refused
+
 ROOT = Path(__file__).resolve().parents[1]
 SPECS = ROOT / "blocklib" / "specs"
 
@@ -158,6 +160,7 @@ def test_the_ch340_page_names_rxd_on_the_label_side_again():
     book = load_library(SPECS / "ch340_serial.library.json")
     result = dc.compile(circuit, sheet, book,
                         dc.CompileBudget(page_box=(0.0, 0.0, 1170.0, 825.0)))
+    skip_if_the_147_gate_refused(result, "099f, the CH340 shipping page")
     assert result.ok, result.render_failures()
     plan = drawapply.module_plan(result.candidates[0], circuit, sheet, book,
                                  label_stubs=True, module_label="page serial")

@@ -140,6 +140,7 @@ from boardwise.core.symbolprofile import (
     check_box,
     flag_glyph_box,
     flag_glyph_kind,
+    pose_box,
 )
 from boardwise.core.geometry import transform_point
 
@@ -3008,16 +3009,10 @@ def _part_extent(profile: SymbolProfile, part: LayoutPart) -> Box:
     """A placed part's extent: its body and every pin tip (the compiler's rule)."""
     xs: list[float] = []
     ys: list[float] = []
-    pose = SymbolPose(int(part.rotation), part.mirror)
-    if profile.body is not None:
-        x0, y0, x1, y1 = profile.body
-        for corner in ((x0, y0), (x1, y0), (x1, y1), (x0, y1)):
-            point = transform_point(
-                corner[0], corner[1], rotation=pose.rotation, mirror=pose.mirror,
-                ox=part.x, oy=part.y,
-            )
-            xs.append(point[0])
-            ys.append(point[1])
+    body = _body_box(profile, part)
+    if body is not None:
+        xs.extend([body[0], body[2]])
+        ys.extend([body[1], body[3]])
     for pin in profile.pins:
         point = _posed_pin(profile, part, pin)
         xs.append(point[0])
@@ -3028,17 +3023,11 @@ def _part_extent(profile: SymbolProfile, part: LayoutPart) -> Box:
 
 
 def _body_box(profile: SymbolProfile, part: LayoutPart) -> Box | None:
-    if profile.body is None:
-        return None
-    x0, y0, x1, y1 = profile.body
-    corners = [
-        transform_point(x, y, rotation=int(part.rotation), mirror=part.mirror,
-                        ox=part.x, oy=part.y)
-        for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1))
-    ]
-    xs = [point[0] for point in corners]
-    ys = [point[1] for point in corners]
-    return (min(xs), min(ys), max(xs), max(ys))
+    """A placed part's drawn body — through the one :func:`pose_box` fold (147)."""
+    return pose_box(
+        profile.body,
+        rotation=int(part.rotation), mirror=part.mirror, ox=part.x, oy=part.y,
+    )
 
 
 def _glyph_box(

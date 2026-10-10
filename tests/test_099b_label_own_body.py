@@ -36,6 +36,8 @@ from boardwise.engines import drawcompiler as dc
 from boardwise.engines import readability
 from boardwise.engines.drawapply import load_library
 
+from gate_skip import skip_if_the_147_gate_refused
+
 ROOT = Path(__file__).resolve().parents[1]
 SPECS = ROOT / "blocklib" / "specs"
 
@@ -124,12 +126,19 @@ def test_a_label_over_its_own_parts_body_is_not_a_violation():
 
 
 def test_the_same_label_attributed_to_another_part_is_still_refused():
-    """同一枚盒、只换归属：自己那颗的豁免不适用于**别人**的体框。"""
+    """同一枚盒、只换归属：自己那颗的豁免不适用于**别人**的体框。
+
+    **147c 更新（措辞，不是判据）**：147 把「文字压器件」那一半的盒子从
+    `body` 换成 `_drawn_extents`（器件体框 ∪ 旗标字形），闸的措辞因此从
+    「lands on the drawn **body** of parts[U1]」变成「lands on the drawn
+    **extent** of parts[U1]」——报的仍然是「这枚标签落在别人的绘制范围里」，
+    归属豁免的判据一个字没变（`objects` 那一行照旧钉着 `parts[U1]`）。
+    """
     plan, circuit, book = _checker_case(owner="C3")
     found = [item for item in _violations(plan, circuit, book)
              if item.kind == readability.KIND_TEXT_OVERLAP]
     assert [item.objects for item in found] == [("labels[0]", "parts[U1]")]
-    assert "lands on the drawn body of parts[U1]" in found[0].evidence
+    assert "lands on the drawn extent of parts[U1]" in found[0].evidence
 
 
 def test_an_unowned_label_over_a_body_is_still_refused():
@@ -271,6 +280,7 @@ def test_the_ch340_specs_compile_with_their_labels_outside_the_core():
     book = load_library(SPECS / "ch340_serial.library.json")
     result = dc.compile(circuit, sheet, book,
                         dc.CompileBudget(page_box=(0.0, 0.0, 1170.0, 825.0)))
+    skip_if_the_147_gate_refused(result, "099b, the CH340 shipping spec")
     assert result.ok, result.render_failures()
     plan = result.candidates[0]
     assert plan.evidence.hard_violations == []

@@ -44,6 +44,7 @@ from .model import is_ground_net
 __all__ = [
     "DIRECTIONS",
     "DIRECTION_SOURCE_BODY",
+    "PIN_LINE_OVERLAP",
     "DEFAULT_POSES",
     "FLAG_GLYPH_KINDS",
     "FLAG_GLYPH_KIND_GND",
@@ -66,9 +67,29 @@ __all__ = [
     "flag_glyph_box",
     "flag_glyph_kind",
     "from_parsed_symbol",
+    "pose_box",
     "role_of_pin",
     "role_siblings",
 ]
+
+#: How much of a pin's **drawn lead**, measured from its tip inward, is *not*
+#: reserved against a wire (147). One canvas unit is the pin's own stroke width,
+#: so this is "the wire touches the pin's first unit" rather than "the wire lies
+#: on the pin".
+#:
+#: One number, three consumers, and they have to agree or a drawing the compiler
+#: routes would be refused by the layer that grades it:
+#:
+#: * `readability`'s `wire-on-pin-line` reports an overlap **longer** than this;
+#: * `drawcompiler._pin_walls` keeps the lead as a routing obstacle **from** this
+#:   distance inward, which is what makes the router approach a tip from outside
+#:   the symbol rather than from inside it;
+#: * the tip itself must stay a reachable lattice node — a wall that starts *at*
+#:   the tip covers the point every wire has to arrive at, and the search then
+#:   finds no path to any pin at all (measured: "net 'HVDC' has a direct-wire
+#:   obligation and its pins could not be joined" on the page this was written
+#:   for, with the wall starting at the tip).
+PIN_LINE_OVERLAP = 1.0
 
 #: An axis-aligned box in canvas units (0.01 in), as ``(min_x, min_y, max_x,
 #: max_y)`` — the same plain shape `SymbolDetail.body` uses for a symbol's drawn
@@ -115,11 +136,12 @@ FLAG_GLYPH_KIND_RAIL = "rail"
 FLAG_GLYPH_KINDS: tuple[str, ...] = (FLAG_GLYPH_KIND_GND, FLAG_GLYPH_KIND_RAIL)
 
 #: The turn from the rotation the editor is given to the rotation this module's
-#: glyph convention (``(-6, 0, 6, 18)`` — the glyph *away from* the connection)
-#: is measured at, **per family**: see :func:`flag_glyph_box`. Written as one
-#: table per family because both halves of the 060 fix — the rotation a flag is
-#: drawn at and the box the drawing reserves — have to turn by the same amount,
-#: and two constants in two files would eventually disagree.
+#: glyph convention (the glyph *away from* the connection, see
+#: :data:`FLAG_GLYPH_KINDS`) is measured at, **per family**: see
+#: :func:`flag_glyph_box`. Written as one table per family because both halves of
+#: the 060 fix — the rotation a flag is drawn at and the box the drawing reserves
+#: — have to turn by the same amount, and two constants in two files would
+#: eventually disagree.
 FLAG_GLYPH_ROTATION_OFFSETS: dict[str, float] = {
     FLAG_GLYPH_KIND_GND: 180.0,
     FLAG_GLYPH_KIND_RAIL: 0.0,
@@ -445,6 +467,51 @@ class SymbolProfile:
 # -------------------------------------------------------------- flag glyphs
 
 
+def pose_box(
+    box: Box | None,
+    *,
+    rotation: float,
+    mirror: bool,
+    ox: float,
+    oy: float,
+) -> Box | None:
+    """A **symbol-local** box in page coordinates: the four corners through the
+    pose, re-bounded (147).
+
+    One implementation, because "where does this symbol's drawn extent land" was
+    answered in four places — `readability._body_in_page`, `drawcompiler._body_box`,
+    `drawapply`'s stub pass and `pagecompiler._body_box` — plus
+    :func:`flag_glyph_box`'s own copy. Four copies of one rigid transform is the
+    shape of defect this repo keeps paying for: a check and the router that
+    disagrees with it are two rulers (052 sec.7), and the disagreement shows up
+    as a drawing no gate complains about.
+
+    The fold is **four corners then an axis-aligned bound**, not the local box's
+    own corners: a box turned by 90 degrees is no longer the same rectangle, which
+    is why every caller in this repo re-bounds rather than reusing the local
+    numbers. The pose is
+    :func:`boardwise.core.geometry.transform_point`'s — mirror, then CCW rotation,
+    then the part's origin — so a body box and a pin tip can never disagree about
+    which way a part is drawn.
+
+    ``None`` (a profile that states no extent) comes back ``None``: "nobody
+    measured this" is not "a zero-area box at the origin", and a caller that
+    turned the second into the first would silently stop checking anything.
+    """
+    if box is None:
+        return None
+    from .geometry import transform_point
+
+    x0, y0, x1, y1 = box
+    corners = [
+        transform_point(x, y, rotation=rotation, mirror=mirror, ox=ox, oy=oy)
+        for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1))
+    ]
+    xs = [point[0] for point in corners]
+    ys = [point[1] for point in corners]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
 def flag_glyph_kind(profile: SymbolProfile) -> str:
     """Which family of power flag ``profile`` is: ``"gnd"`` or ``"rail"``.
 
@@ -467,10 +534,11 @@ def flag_glyph_kind(profile: SymbolProfile) -> str:
     the flag stands for (``Ground-GND`` / ``Power-VCC``; this repo's own books
     spell the same pair ``PWR-GND`` / ``PWR-<net>``), so the family is decided by
     :func:`~boardwise.core.model.is_ground_net` — the one place this repo calls a
-    name ground — applied to the name's hyphen-separated tokens. The glyph box
-    cannot decide it: every library this repo ships states the *convention* box
-    ``(-6, 0, 6, 18)`` for a ground and a rail flag alike, which is exactly how
-    six batches of one family drawn backwards stayed invisible offline.
+    name ground — applied to the name's hyphen-separated tokens. The glyph
+    *numbers* cannot decide it: every library this repo ships used to state one
+    convention box for a ground and a rail flag alike, which is exactly how six
+    batches of one family drawn backwards stayed invisible offline (147 measured
+    the two apart, and both are stated per profile now).
     """
     reference = (profile.symbol_ref or profile.title or "").upper()
     for token in reference.split("-"):
@@ -487,8 +555,12 @@ def flag_glyph_box(
     A flag profile is a symbol with no pins: its origin *is* the connection point
     (a pin-less profile is how the compiler identifies a flag), and its ``body``
     is 053B's convention — the glyph's extent taken **away from the pin** the
-    flag names. Every library this repo ships states it that way
-    (``(-6, 0, 6, 18)`` for ``PWR-GND`` and for every ``PWR-<rail>``).
+    flag names. Every library this repo ships states it that way, and 147
+    corrected the numbers to the extent the host really draws (``PWR-GND``
+    ``(-10, 0, 10, 19)``: a 10-unit leader then 20-wide bars; every ``PWR-<rail>``
+    ``(-5, 0, 5, 10)``: a 5-unit leader then a 10-wide pennant) — measured off the
+    landed page's own render, `outputs/147/07_measured_bodies.txt` and
+    `outputs/147/FINDINGS.md` sec.1.
 
     The editor's own power symbols do not all hang that way, and that is the fact
     this function exists for. Read out of an export's own SYMBOL documents (see
@@ -504,22 +576,16 @@ def flag_glyph_box(
     the SVG preview, because all three draw this one box: a preview that computed
     its own would be self-consistent and wrong, which is exactly how six batches
     of upside-down flags stayed invisible (`outputs/057_live/e1b/render.png`).
+    Since 147 the fold itself is :func:`pose_box` — the one rigid transform a
+    placed symbol's box goes through anywhere in this repo.
     """
-    if profile.body is None:
-        return None
-    from .geometry import transform_point
-
-    x0, y0, x1, y1 = profile.body
-    angle = rotation + FLAG_GLYPH_ROTATION_OFFSETS[flag_glyph_kind(profile)]
-    corners = [
-        transform_point(
-            x, y, rotation=angle, mirror=False, ox=anchor[0], oy=anchor[1],
-        )
-        for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1))
-    ]
-    xs = [point[0] for point in corners]
-    ys = [point[1] for point in corners]
-    return (min(xs), min(ys), max(xs), max(ys))
+    return pose_box(
+        profile.body,
+        rotation=rotation + FLAG_GLYPH_ROTATION_OFFSETS[flag_glyph_kind(profile)],
+        mirror=False,
+        ox=anchor[0],
+        oy=anchor[1],
+    )
 
 
 # ------------------------------------------------- one role, several pins
