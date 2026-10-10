@@ -25,7 +25,13 @@ component, pin and net — with markers drawn on the canvas where the
 problems are. On real boards it has caught things the designer had
 missed — a current-sense circuit with no bias, that kind of problem.
 You don't find those by matching rules against a netlist; you have to
-check whether the architecture makes sense together.
+check whether the architecture makes sense together. When a rail's
+voltage lives only in your head, `intent audit` lists those nets and
+asks once; the answer lands in a design-intent contract
+(`intent set-rail`) and is never asked again. The PCB review stages
+already landed have flagged real layout defects on real boards — a
+motor driver's exposed pad whose copper pour was left as a thermal
+island on a four-layer FOC driver, that class of problem.
 
 **Edit.** Find a problem, get a change preview; nothing moves until you
 approve; afterwards it reads back and re-reviews to confirm the problem
@@ -182,6 +188,10 @@ boardwise checkup
 各自指着具体的器件、引脚和网络；顺手把问题标记在画布上。它在真板子上
 抓到过设计者自己没注意到的问题——比如一个该做偏置而没做的电流采样
 电路。这类问题不是查规则书能查出来的，得先理解整个架构自不自洽。
+有些电源网的电压只在你脑子里——`intent audit` 会把这些网列出来问一次，
+答案用 `intent set-rail` 写进设计意图契约，以后不再问。PCB 审查已落地的
+阶段也在真板子上抓到过真缺陷：一块四层 FOC 驱动板上，电机驱动器的
+散热焊盘铺铜成了孤岛。
 
 **改图。** 发现问题后，它给修改预览，你点头它才动，动完自己回读、再跑
 一遍审查确认问题真的消失。已经支持的改法：改器件值、补一颗缺失的器件、
