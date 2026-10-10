@@ -219,6 +219,7 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
 | 43 | 旗标自然姿态按符号分家 |
 | 44 | sch.geometry` 没有 `pageUuid` 参数 |
 | 45 | 旗引线/stub 段穿越别网导体 = 缺陷（硬拒） |
+| 46 | delete 超时后宿主后台续删、`delete returned false` 也已删 |
 
 
 宿主声明 ≠ 宿主实现（`sch_ManufactureData.getPngFile` 声明 v3.2.183 却回 `NOT_IMPLEMENTED`，两台实测互证）；
