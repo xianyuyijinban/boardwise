@@ -2616,17 +2616,22 @@ def test_the_e1_crossing_is_prevented_rather_than_refused():
         spec, _e1_presentation(), library(), dc.CompileBudget(page_box=page),
     )
     assert result.ok, render(result)
-    crossing_refusals = [
-        item for item in result.rejected
-        if item.failure is not None
-        and item.failure.category == dc.FAILURE_LAYOUT_UNSAT
-        and "crosses net" in item.failure.detail
-    ]
-    assert not crossing_refusals, (
-        "145a T3 reserves this pad's lead channel before the wires are drawn, so "
-        "no variant should be refused for a lead crossing another net; got "
-        f"{[item.failure.detail for item in crossing_refusals]}"
-    )
+    # 148: the flag box the ladder reserves is the host's **measured** glyph and
+    # name row (147), so an anchor that used to fit on paper no longer does and a
+    # variant can be refused for want of room — with the pad and the obstacle
+    # named. What 145a's reservation still guarantees is the claim this test was
+    # written for, and it is measured below: **nothing drawn** carries a lead
+    # across another net.
+    for item in result.rejected:
+        if item.failure is None:
+            continue
+        assert item.failure.category == dc.FAILURE_LAYOUT_UNSAT
+        assert item.failure.detail and item.failure.subject, item.failure.detail
+    for candidate in result.candidates:
+        assert _lead_crossings(candidate) == [], (
+            f"a flag lead of {candidate.geometry_sha256()[:12]} cuts through "
+            f"another net's wire: {_lead_crossings(candidate)}"
+        )
 
 
 def test_every_statement_of_the_074_refusal_fits_its_own_signature():
@@ -2753,13 +2758,15 @@ def test_scene_08b_the_ams1117_duplicate_vout_never_reads_as_a_compiler_bug():
         else:
             # 147b: a form this batch's docstring calls "must draw" may now be
             # refused — by 147's flag gate, on a measured defect in the drawing it
-            # produced (a conductor through a power flag's own extent). What must
-            # still hold is what this test is about: the refusal is *named*, it is
-            # never a compiler bug and never the 055 G1 "missing fact", and the
-            # grammar that bound the duplicated role is still ok.
+            # produced (a conductor through a power flag's own extent). 148 makes
+            # the refusal its sibling: the flag's own box is the host's measured
+            # glyph + name row, and a pad that box does not fit beside has no lead
+            # at all (`net 'GND' is named by a flag of its own …`, naming the pad) —
+            # so the *layer* that refuses is no longer fixed, while what this test
+            # is about is: the refusal is **named**, never a compiler bug and never
+            # the 055 G1 "missing fact", and the grammar that bound the duplicated
+            # role is still ok.
             assert result.categories() == [dc.FAILURE_LAYOUT_UNSAT], (name, text)
-            assert "the independent readability checker refused" in text, (name, text)
-            assert "powerSymbols[" in text, (name, text)
             assert all(item.detail and item.action for item in result.failures), name
     # One of the two shapes 055 G1 documented as a refusal still refuses, and by
     # the same route: the far VOUT pad on the net with the near pin NC'd has no
@@ -2868,10 +2875,19 @@ def test_scene_08e_the_same_circuit_draws_once_the_sides_match_the_symbol():
     assert len(result.candidates) >= 2, render(result)
     assert plan.part("U1") is not None and plan.part("C2") is not None
     assert _lead_crossings(plan) == [], _lead_crossings(plan)
+    # 147b pinned "every refusal names the conductor the lead crossed". 148 makes
+    # the flag's own box the host's **measured** glyph + name row (147), which is
+    # larger than the band 146 reserved, so a rung that used to fit no longer
+    # does and a variant can now be refused for want of room *before* any
+    # conductor is crossed — measured: the `VIN5` rail flag at `U1.3` has nowhere
+    # to stand on the `1x` rung, and the note names the pin. The claim that
+    # survives — and the one 053 sec.4 actually states — is that **no refusal is
+    # anonymous**: every rejected variant carries a `layout-unsat` naming its
+    # subject, never a compiler bug and never a silent drop.
     for item in result.rejected:
         if item.failure is not None:
             assert item.failure.category == dc.FAILURE_LAYOUT_UNSAT
-            assert "crosses net" in item.failure.detail, item.failure.detail
+            assert item.failure.detail and item.failure.subject, item.failure.detail
     assert_independently_clean(plan, scene)
 
 
@@ -3759,7 +3775,7 @@ def test_preview_writer_puts_the_file_where_it_says(tmp_path):
     assert target.exists() and target.read_text(encoding="utf-8").startswith("<svg")
 
 
-def test_the_spacing_ladder_stops_when_more_room_cannot_change_the_answer():
+def test_the_spacing_ladder_stops_when_more_room_cannot_change_the_answer(monkeypatch):
     """147b: a refusal that no rung can move is not re-run on every rung.
 
     147 left the tree unable to finish a full pytest run: a scene the gate refuses
@@ -3779,6 +3795,16 @@ def test_the_spacing_ladder_stops_when_more_room_cannot_change_the_answer():
     * an input that draws (or that refuses for a reason room *can* fix, like a
       region that is too small) walks its ladder exactly as before: the stop is
       unreachable unless no candidate survived.
+
+    148: the witness is **planted**, not borrowed from a scene. 147b used the
+    AMS1117 duplicate-VOUT shape because the gate refused it on every rung; 148's
+    flag work makes that shape drawable (it now yields three candidates, which is
+    the whole point of the batch), and a scan of all twelve 053b scenes finds no
+    remaining one that the gate refuses on every rung — the mechanism has no
+    scene-shaped witness left. What is under test is the *stop*, so the gate is
+    wrapped to add one identical refusal to every plan: the same kind and objects
+    on every pose and every rung is exactly the condition `_rung_reproduces`
+    detects, and the two honesty halves below are unchanged.
     """
     page = (0.0, 0.0, 1170.0, 825.0)
     ladder = (1.0, 1.5, 2.2, 3.5, 5.0, 8.0)
@@ -3786,30 +3812,47 @@ def test_the_spacing_ladder_stops_when_more_room_cannot_change_the_answer():
     presentation = ldo_presentation(
         sidePreferences={"input": "left", "output": "bottom"}
     )
-    result = dc.compile(
-        spec, presentation, library(),
-        dc.CompileBudget(page_box=page, spacing_ladder=ladder),
-    )
-    assert not result.ok
-    built = {item.variant.split(" pose", 1)[0] for item in result.rejected}
-    assert built == {"spacing=1", "spacing=1.5", "spacing=2.2"}, (
-        f"the ladder should stop at the 3.5x boundary, built {sorted(built)}"
-    )
-    stopped = [note for note in result.notes if "stopped at rung" in note]
-    assert len(stopped) == 1, result.notes
-    assert "wire-through-body" in stopped[0] and "text-on-wire" in stopped[0], (
-        "the note names the kinds that repeated: " + stopped[0]
-    )
-    assert "stopped early (147b)" in result.failures[0].detail, result.failures[0].detail
+    real_check = dc.readability.check
 
-    for rung in ladder[3:]:
-        alone = dc.compile(
+    def planted(*args, **kwargs):
+        checked = real_check(*args, **kwargs)
+        checked.hard_violations.append(readability.HardViolation(
+            readability.KIND_TEXT_OVERLAP,
+            ("segments[0]", "powerSymbols[0]"),
+            "planted for 148's early-stop witness: the same sentence on every "
+            "pose and every rung, which is what the stop keys on",
+        ))
+        return checked
+
+    monkeypatch.setattr(dc.readability, "check", planted)
+    try:
+        result = dc.compile(
             spec, presentation, library(),
-            dc.CompileBudget(page_box=page, spacing_ladder=(rung,)),
+            dc.CompileBudget(page_box=page, spacing_ladder=ladder),
         )
-        assert not alone.ok, (
-            f"rung {rung:g}x draws on its own — the early stop hid a drawing"
+        built = {item.variant.split(" pose", 1)[0] for item in result.rejected}
+        stopped = [note for note in result.notes if "stopped at rung" in note]
+        assert not result.ok
+        assert built == {"spacing=1", "spacing=1.5", "spacing=2.2"}, (
+            f"the ladder should stop at the 3.5x boundary, built {sorted(built)}"
         )
+        assert len(stopped) == 1, result.notes
+        assert "text-overlap" in stopped[0], (
+            "the note names the kinds that repeated: " + stopped[0]
+        )
+        assert "stopped early (147b)" in result.failures[0].detail, (
+            result.failures[0].detail
+        )
+        for rung in ladder[3:]:
+            alone = dc.compile(
+                spec, presentation, library(),
+                dc.CompileBudget(page_box=page, spacing_ladder=(rung,)),
+            )
+            assert not alone.ok, (
+                f"rung {rung:g}x draws on its own — the early stop hid a drawing"
+            )
+    finally:
+        monkeypatch.setattr(dc.readability, "check", real_check)
 
     drawn = dc.compile(
         divider_circuit(), divider_presentation(), library(),
@@ -3822,7 +3865,15 @@ def test_the_spacing_ladder_stops_when_more_room_cannot_change_the_answer():
         divider_circuit(), divider_presentation(), library(),
         dc.CompileBudget(page_box=(0.0, 0.0, 240.0, 300.0)),
     )
-    assert not too_small.ok and "72 x 306" in too_small.failures[0].detail
+    # 148: in this region the *first* thing to run out is the room a flag needs —
+    # `GND`'s pad on `R2.2` has nowhere to hang one — so the refusal names that pad
+    # rather than the 72 x 306 the region check used to report. Both are
+    # `layout-unsat` and both are a reason more room *can* fix, which is what this
+    # half is about; the full ladder below is the claim itself.
+    assert not too_small.ok
+    assert too_small.failures[0].category == dc.FAILURE_LAYOUT_UNSAT, (
+        too_small.failures[0].detail
+    )
     assert {item.variant.split(" pose", 1)[0] for item in too_small.rejected} == {
         "spacing=1", "spacing=1.5", "spacing=2.2",
     }, "a refusal room can fix walks the whole ladder"

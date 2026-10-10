@@ -271,16 +271,20 @@ FLAG_LEAD = 30.0
 #: end of the turn.
 FLAG_JOG = 25.0
 
-#: Where the host prints a flag's own name: a single line **above** the anchor,
-#: between these two distances from it. Measured on the landed pages (P22's hand
-#: drawing and the v3 page): a rail's name 10 units up, a ground's 15 — the glyph
-#: itself hangs up or down from the anchor by 18, so the name is inside that span
-#: for a rail and just past it for a ground. And the margin a flag keeps between
-#: this whole box and anything else — 069 sec.8 (岳: 「3V3的旗标标识和5V的导线重合了」)
-#: is about *touching*, so the box the placement keeps free is the glyph, the name
-#: and the clearance.
-FLAG_TEXT_NEAR = 6.0
-FLAG_TEXT_REACH = 16.0
+#: The margin a flag keeps between its whole box — glyph **and** the name row the
+#: host prints — and anything else. 069 sec.8 (岳: 「3V3的旗标标识和5V的导线重合了」)
+#: is about *touching*, so the box the placement keeps free is the glyph, that row
+#: and this clearance.
+#:
+#: 148 removed the two constants that used to sit here (`FLAG_TEXT_NEAR` /
+#: `FLAG_TEXT_REACH`, a band 6–16 units above the anchor). They were a **second
+#: model** of where the host prints a flag's name; 147 measured the real one
+#: (`core.textmetrics.flag_name_box`: the ten units immediately past the glyph, on
+#: the far side of the connection) and put it in the readability gate. Two models
+#: disagree wherever the glyph is not ten units tall, and the compiler reserved a
+#: band that ended ten units short of the row the gate refuses a conductor inside
+#: — measured on `test/P1`, where SW's run went through the HVDC flag's name row
+#: in exactly that gap (`_flag_box`).
 FLAG_CLEARANCE = 5.0
 
 #: How far a **duplicate pad across the body** is brought out before its own flag
@@ -5825,7 +5829,12 @@ def _span_free(
     # they honour it as well. A flag's own lead (`wire=False`) meets the lanes
     # only while the reservation pass is deciding them (`reserve_strict`), where
     # two leads must not be promised the same crossing; at placement time a lead
-    # through a *foreign* reserved lane is harmless (see `_flag_room`).
+    # through a *foreign* reserved lane is harmless (see `_flag_room`). 148 tried
+    # gating leads on reservations here as well, to stop two flag leads crossing
+    # each other; measured, it refuses six of 053b's own scenes (`08b`, `08e`, the
+    # roles, the pads-a-body-separates pair and the plain-label one), so the
+    # exemption stays and the crossing between two *leads* is answered where it is
+    # drawn instead.
     if (wire or router.reserve_strict) and _reserved_hits(router, start, end):
         return False
     return True
@@ -6388,6 +6397,14 @@ def _build_candidate(
     texts = _part_texts(ctx, placed, occupied, text_walls)
     for text in texts:
         solids.append(text.bbox)
+    # 148: a flag's own **lead** may not cross a text row either. `bodies` is what
+    # `_flag_anchor` tests a lead against, and 069 sec.11 kept it to part bodies
+    # and keep-outs because the gate had no "a wire printed through a text row"
+    # rule then. 147 added one (`readability`'s `text-on-wire`, the same 10 units
+    # `drawlint` L1 measures), so the obstacle table has to catch up the way it did
+    # for the pin lines: measured on `test/P1`, `C6.2`'s ground stub ran 25 units
+    # up from its pin straight through `C6`'s own value row (`100pF 0603 C0G`).
+    bodies.extend(text.bbox for text in texts)
     early = _region_failure(ctx, occupied)
     if early is not None:
         # The parts and their text already need more room than the region has:
@@ -6424,9 +6441,18 @@ def _build_candidate(
     # promised its lane *before* the first wire is drawn, so the wires the rest of
     # this loop lays down route around it instead of taking it and leaving the
     # lead to be refused. See :func:`_lead_lane_reservations`.
+    #
+    # 148 adds the **flag itself** to that promise, for the nets whose flag hangs
+    # off the rail this loop routes (069 sec.7, 088b): the seat is decided there
+    # and returned as a box no wire may enter — the reservation alone only keeps
+    # *foreign* wires off, and a rail running through its own pennant is the same
+    # defect 岳 saw on `test/P1`. `flag_walls` is therefore part of `router.boxes`
+    # from here on, and `solids` (what a *flag* may not land on) is not: a flag's
+    # own seat must not turn that flag away from itself.
     _lead_lane_reservations(
         ctx, placed, expressions, order, router, occupied, solids, bodies,
     )
+    router.boxes = [*solids, *router.flag_walls]
     for net_id in order:
         expression = expressions[net_id]
         if (
@@ -6629,7 +6655,7 @@ def _build_candidate(
             )
             if failure is not None:
                 return None, failure, []
-        router.boxes = solids
+        router.boxes = [*solids, *router.flag_walls]
 
     # 069 sec.7's own supply, *after* every net is routed: 岳 read the landed P23
     # page and asked why its 5 V rail had no flag (「P23 5V部分为什么不给旗标？」), so
@@ -6651,7 +6677,7 @@ def _build_candidate(
         blocked = _blocked_points(ctx, placed, net_id, labels, symbols, segments)
         router.blocked = blocked
         anchor, failure = _rail_flag(
-            ctx, net_id, expression, pin, profile, ref, router, segments,
+            ctx, placed, net_id, expression, pin, profile, ref, router, segments,
             symbols, occupied, solids, blocked, bodies,
         )
         if failure is not None:
@@ -6662,7 +6688,7 @@ def _build_candidate(
             f"rail its pin {pin[0]} supplies (069 sec.7); a rail named by text "
             "alone would be found by chasing names"
         )
-        router.boxes = solids
+        router.boxes = [*solids, *router.flag_walls]
 
     # 088b sec.1: a declared group's ground rail is *stated* by exactly one
     # outlet symbol of its own, hung at the rail's far end (背向入口那端). The
@@ -6704,46 +6730,86 @@ def _build_candidate(
             " puts that end away from the inlet, 088b sec.1); the rail stays one "
             "conductor, and the symbol says where the return leaves the group"
         )
-        router.boxes = solids
+        router.boxes = [*solids, *router.flag_walls]
 
     junctions = _junctions(segments)
-    plan = LayoutPlan(
-        source=LayoutSource(
-            circuit_sha256=ctx.circuit.sha256(),
-            presentation_sha256=ctx.presentation.sha256(),
-        ),
-        parts=parts,
-        segments=segments,
-        junctions=junctions,
-        labels=labels,
-        power_symbols=symbols,
-        texts=texts,
-        notes=[
-            f"compiled by {COMPILER_NAME}: {variant.label}; "
-            f"axis {'column' if ctx.axis == 'v' else 'row'}, "
-            f"grid {ctx.budget.grid:g}",
-            "references are the CircuitSpec's own ids: an offline plan has not "
-            "landed, so the designator is assigned when it does",
-            *notes,
-        ],
-    )
+    plan_notes = [
+        f"compiled by {COMPILER_NAME}: {variant.label}; "
+        f"axis {'column' if ctx.axis == 'v' else 'row'}, "
+        f"grid {ctx.budget.grid:g}",
+        "references are the CircuitSpec's own ids: an offline plan has not "
+        "landed, so the designator is assigned when it does",
+        *notes,
+    ]
+
+    def assemble() -> LayoutPlan:
+        return LayoutPlan(
+            source=LayoutSource(
+                circuit_sha256=ctx.circuit.sha256(),
+                presentation_sha256=ctx.presentation.sha256(),
+            ),
+            parts=parts,
+            segments=segments,
+            junctions=_junctions(segments),
+            labels=labels,
+            power_symbols=symbols,
+            texts=texts,
+            notes=plan_notes,
+        )
+
+    plan = assemble()
     overflow = _overflow(ctx, plan)
     if overflow is not None:
         return None, overflow, []
-    checked = readability.check(
-        plan,
-        ctx.circuit,
-        ctx.presentation,
-        ctx.book,
-        # 095 A4: the checker re-binds the grammar, so it reads the same three
-        # documents the constraints came from — the contract included. Without it
-        # a plan whose order came from a decision would be graded against the
-        # designator order it was deliberately not drawn with.
-        grammar_checker=partial(check_grammar, intent=ctx.intent),
-        page_box=ctx.budget.page_box,
-        keepouts=ctx.budget.keepouts,
-        grid=ctx.budget.grid,
-    )
+
+    def grade(layout: LayoutPlan) -> readability.CheckResult:
+        return readability.check(
+            layout,
+            ctx.circuit,
+            ctx.presentation,
+            ctx.book,
+            # 095 A4: the checker re-binds the grammar, so it reads the same three
+            # documents the constraints came from — the contract included. Without
+            # it a plan whose order came from a decision would be graded against
+            # the designator order it was deliberately not drawn with.
+            grammar_checker=partial(check_grammar, intent=ctx.intent),
+            page_box=ctx.budget.page_box,
+            keepouts=ctx.budget.keepouts,
+            grid=ctx.budget.grid,
+        )
+
+    checked = grade(plan)
+    # 148: a wire's **name row** is drawn by the host at the midpoint of the wire's
+    # longest run (`core.textmetrics.wire_name_box`), so where it lands is a
+    # property of the geometry the compiler just wrote — and only the gate can say
+    # whether it landed on a part, on another row or across a conductor. The
+    # escape ladder answers exactly that, one row at a time, re-grading after each
+    # round.
+    escaped = 0
+    for _round in range(NAME_ESCAPE_ROUNDS):
+        if not checked.hard_violations:
+            break
+        offenders = _named_rows_in(checked.hard_violations)
+        if not offenders:
+            break
+        moved = _escape_named_rows(
+            ctx, placed, readability._placed_parts(plan, ctx.book), expressions,
+            router, segments, offenders, labels, symbols, assemble,
+        )
+        if not moved:
+            break
+        escaped += moved
+        plan = assemble()
+        overflow = _overflow(ctx, plan)
+        if overflow is not None:
+            return None, overflow, []
+        checked = grade(plan)
+    if escaped:
+        plan_notes.append(
+            f"{escaped} wire run(s) were moved aside so their own net's name row "
+            "could be printed where nothing is (148: the host prints that row at "
+            "the midpoint of the wire's longest run, so the run is the only lever)"
+        )
     if checked.hard_violations:
         return (
             None,
@@ -6751,6 +6817,376 @@ def _build_candidate(
             [item.render() for item in checked.hard_violations],
         )
     return _Built(plan=plan, checked=checked), None, []
+
+
+#: 148: how many times the name-row escape ladder may move a run and re-grade the
+#: page. Each round is a full `readability.check`, and each round moves at most one
+#: run per offending row; four is enough for the pages this repo draws (the flyback
+#: row needs two) and small enough that a page which cannot be repaired is refused
+#: inside the ordinary budget rather than searched forever.
+NAME_ESCAPE_ROUNDS = 4
+
+#: The distances the escape ladder pushes a run aside, in grid steps. Small steps
+#: first (a row that clears a body by one step is the smallest change), and far
+#: enough out to make the pushed run the **longest** one of its wire — which is
+#: what moves the name onto a different run altogether, and the only answer for a
+#: short stub whose row overhangs its far end (`CS_FILT` on `test/P1`).
+NAME_ESCAPE_STEPS: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 8, 10, 12, 14, 16, 20, 24)
+
+#: How many pushes of the ladder are *graded* for one row in one round. Each one
+#: is a full check of the two row rules (`_row_offences`), so the count is what
+#: keeps a page that cannot be repaired from costing a search; the ladder is
+#: ordered nearest-first, so the answers that matter are at its head.
+NAME_ESCAPE_TRIES = 12
+
+
+def _named_rows_in(violations: Sequence[readability.HardViolation]) -> set[int]:
+    """The segments whose **own name row** one of these violations is about.
+
+    The gate names every object it reports, and a wire's name row is named
+    ``segments[i]`` — the row *is* a property of that run (`readability.
+    _named_wire_rows`), so the object that carries the index is the wire the
+    escape ladder has to move. Two kinds qualify:
+
+    * ``text-overlap`` — the row landed on a text, on a part's drawn extent or on
+      another row. Either side of the pair may be the row, so both are read.
+    * ``text-on-wire`` — a conductor was printed through the row. The row is
+      always the violation's **first** object here; the second is the conductor
+      that crossed it, and moving *that* wire is not this pass's business (the
+      conductor's own row is the one the host prints).
+    """
+    out: set[int] = set()
+    for item in violations:
+        if item.kind == readability.KIND_TEXT_OVERLAP:
+            names = item.objects
+        elif item.kind == readability.KIND_TEXT_ON_WIRE:
+            names = item.objects[:1]
+        else:
+            continue
+        for name in names:
+            index = _segment_index(name)
+            if index is not None:
+                out.add(index)
+    return out
+
+
+def _segment_index(name: str) -> int | None:
+    """``"segments[12]"`` -> ``12``; anything else -> ``None``."""
+    if not name.startswith("segments[") or not name.endswith("]"):
+        return None
+    try:
+        return int(name[len("segments["):-1])
+    except ValueError:
+        return None
+
+
+def _escape_deltas(grid: float) -> list[float]:
+    """The ladder: one grid step out, both ways, then farther and farther."""
+    out: list[float] = []
+    for step in NAME_ESCAPE_STEPS:
+        out.append(step * grid)
+        out.append(-step * grid)
+    return out
+
+
+def _escape_run(
+    points: Sequence[tuple[float, float]],
+    delta: float,
+    pads: Sequence[tuple[float, float]] = (),
+    net_wiring: Sequence[Sequence[tuple[float, float]]] = (),
+):
+    """``points`` with its **longest run** pushed ``delta`` units aside.
+
+    The run is the one the host prints the name along, and its midpoint is the
+    name's anchor, so pushing the run is the only way to move the row: the
+    compiler does not place that text.
+
+    **A pad keeps its place; anything else the run reaches slides with it.** The
+    run's two ends are polyline vertices, and each is one of two things: a **pad**
+    (a pin the net must still touch — it stays, and a short leg is added to reach
+    the pushed run) or a **point on the net's own other wiring** (a tee — it
+    slides along with the run, so no leg is added). The second rule is what keeps
+    the drawing from carrying a leg that the host **merges**: measured while
+    landing 148 on P1, pushing `CLAMP`'s `C5.1` stub aside left a leg running
+    *along* the net's own trunk, the host merged the two into one wire, and the
+    page then had no vertex where the plan says one is — `draw apply`'s canvas
+    postcondition failed (`net CLAMP: no wire vertex at (20, 740) on the page`).
+    Sliding the tee to the pushed run's own row gives `(40,740)->(40,750)->(20,750)`
+    instead: two legs, no merge, every vertex on the page.
+
+    The result is compressed (collinear middles and touching duplicates dropped),
+    for the same reason: a redundant vertex is a vertex the host does not draw.
+
+    ``None`` when there is nothing to push (a one-point wire, a diagonal run,
+    ``delta`` of zero). A push large enough makes the pushed run the longest one,
+    which moves the row onto it: that is the ladder's far end and the answer for a
+    stub too short to overhang anywhere clean.
+    """
+    if len(points) < 2 or not delta:
+        return None
+    index = max(
+        range(len(points) - 1),
+        key=lambda i: math.hypot(
+            points[i + 1][0] - points[i][0], points[i + 1][1] - points[i][1]
+        ),
+    )
+    start, end = points[index], points[index + 1]
+    if _close(start[1], end[1]):
+        bend = ((start[0], start[1] + delta), (end[0], end[1] + delta))
+    elif _close(start[0], end[0]):
+        bend = ((start[0] + delta, start[1]), (end[0] + delta, end[1]))
+    else:
+        return None
+
+    def held(point: tuple[float, float]) -> bool:
+        return any(_close_point(point, pad) for pad in pads)
+
+    def slides(point: tuple[float, float], to: tuple[float, float]) -> bool:
+        """May this end move with the run, or must a leg be added to reach it?
+
+        A tee may slide only onto a point the net's **own other wiring** still
+        passes through — otherwise the net is left in two pieces. Measured: the
+        `FB_SENSE` stub whose far end tees into the trunk at the trunk's *end*
+        point has nowhere to slide to on the uphill side, so only the downhill
+        push is a candidate.
+        """
+        on_wiring = any(_on_polyline(to, list(piece)) for piece in net_wiring)
+        if not on_wiring:
+            return False
+        # A **pad** may slide only when the net's own wiring already reaches it —
+        # the far pad of 069 sec.2's sibling pair, whose pin is the trunk's own
+        # end: the stub then exists to join the *near* pad to the net, and any
+        # point of the trunk does. A pad the net's other wiring does not reach
+        # never moves: the pin is where the pin is (`CS_FILT`, `CLAMP`'s `C5.1`).
+        return not held(point) or any(
+            _on_polyline(point, list(piece)) for piece in net_wiring
+        )
+
+    head = list(points[:index + 1])
+    tail = list(points[index + 1:])
+    head = head[:-1] + [bend[0]] if slides(start, bend[0]) else head + [bend[0]]
+    tail = [bend[1]] + tail[1:] if slides(end, bend[1]) else [bend[1], *tail]
+    out = _compress([*head, *tail])
+    if len(out) < 2:
+        return None
+    # Last guard against the host's own merge: an end that the net's wiring
+    # already reaches, whose neighbour would be swallowed by that same wiring, is
+    # dropped — the wire then ends *on* the other run, which is where the host
+    # would have put it anyway. Measured on the landed P1 plan: `FB_SENSE`'s stub
+    # to `R8.1` ended with a leg running down `R7.2`'s trunk, and the page came
+    # back without the vertex between them (`draw apply`'s canvas leg).
+    for end_first in (True, False):
+        if len(out) < 3:
+            break
+        tip = out[0] if end_first else out[-1]
+        near = out[1] if end_first else out[-2]
+        for piece in net_wiring:
+            points = list(piece)
+            if not _on_polyline(tip, points):
+                continue
+            if any(
+                _strictly_on_segment(near, a, b)
+                for a, b in zip(points, points[1:])
+            ):
+                out = out[1:] if end_first else out[:-1]
+                break
+    out = _compress(out)
+    return out if len(out) >= 2 else None
+
+
+def _close_point(left: tuple[float, float], right: tuple[float, float]) -> bool:
+    return _close(left[0], right[0]) and _close(left[1], right[1])
+
+
+def _row_offences(
+    plan: LayoutPlan,
+    placed: Sequence[Any],
+    profile_map: Mapping[str, SymbolProfile],
+    index: int,
+) -> tuple[int, int]:
+    """``(violations about segment ``index``'s own name row, all row violations)``.
+
+    Both halves are the gate's **own** functions (`readability._check_text` and
+    `_check_text_on_wire`) run over a candidate plan, not a second model of them:
+    the row the ladder is trying to clear has to be judged by the same ruler that
+    refused the page, or the ladder optimises against a rule nobody measures.
+    """
+    name = f"segments[{index}]"
+    own = 0
+    total = 0
+    for item in readability._check_text(plan, placed, profile_map):
+        total += 1
+        if name in item.objects:
+            own += 1
+    for item in readability._check_text_on_wire(plan, profile_map):
+        total += 1
+        if item.objects[0] == name:
+            own += 1
+    return own, total
+
+
+def _escape_named_rows(
+    ctx: _Context,
+    placement: _Placement,
+    drawn: Sequence[Any],
+    expressions: Mapping[str, _Expression],
+    router: _Router,
+    segments: list[LayoutSegment],
+    offenders: Sequence[int],
+    labels: Sequence[LayoutLabel],
+    symbols: Sequence[LayoutPowerSymbol],
+    assemble: Callable[[], LayoutPlan],
+) -> int:
+    """Move each offending run aside until **its own row** clears.
+
+    The ladder tries one push at a time and asks the gate's two row rules about
+    each candidate (`_row_offences`): the first push whose row has no violation
+    left and adds none elsewhere wins; failing that, the push that leaves the
+    fewest is taken, so a stubborn row gets closer each round instead of standing
+    still. A row that cannot be cleared at all is left exactly where it was —
+    the caller re-grades and refuses with the gate's own line, which is the honest
+    answer to a wire with no room for its name.
+
+    Legality is checked first and cheaply (`_polyline_legal`): a push that would
+    put the wire through a body, along another net's run or on a foreign
+    connection is not a candidate at all.
+
+    ``placement`` is the compiler's own placement (the pin geometry
+    `_blocked_points` reads) and ``drawn`` is `readability._placed_parts`' answer
+    for the same plan — the two halves of one page, each in the shape the routine
+    that needs it takes.
+    """
+    profile_map = ctx.book
+    moved = 0
+    for index in sorted(offenders):
+        if not 0 <= index < len(segments):
+            continue
+        segment = segments[index]
+        if not segment.net:
+            continue
+        baseline = _row_offences(assemble(), drawn, profile_map, index)
+        others = [item for position, item in enumerate(segments) if position != index]
+        blocked = _blocked_points(
+            ctx, placement, segment.net, labels, symbols, others,
+        )
+        pads = [point for _member, point in expressions[segment.net].points]
+        best: tuple[list[tuple[float, float]], tuple[int, int]] | None = None
+        chosen: list[tuple[float, float]] | None = None
+        tried = 0
+        for delta in _escape_deltas(ctx.budget.grid):
+            points = _escape_run(
+                list(segment.points), delta, pads,
+                [item.points for item in others if item.net == segment.net],
+            )
+            if points is None:
+                continue
+            if not _polyline_legal(
+                router, points, blocked, others, segment.net, segment.points, pads,
+            ):
+                continue
+            segments[index] = LayoutSegment(net=segment.net, points=points)
+            got = _row_offences(assemble(), drawn, profile_map, index)
+            segments[index] = segment
+            tried += 1
+            if got[0] == 0 and got[1] <= baseline[1]:
+                chosen = points
+                break
+            if got[0] < baseline[0] and (best is None or got[0] < best[1][0]):
+                best = (points, got)
+            if tried >= NAME_ESCAPE_TRIES:
+                break
+        if chosen is None and best is not None:
+            chosen = best[0]
+        if chosen is not None:
+            segments[index] = LayoutSegment(net=segment.net, points=chosen)
+            moved += 1
+    return moved
+
+
+def _polyline_legal(
+    router: _Router,
+    points: Sequence[tuple[float, float]],
+    blocked: set[tuple[float, float]],
+    others: Sequence[LayoutSegment],
+    net_id: str,
+    was: Sequence[tuple[float, float]],
+    pads: Sequence[tuple[float, float]],
+) -> bool:
+    """May this wire be drawn as it is, with the net it belongs to still one node?
+
+    The same questions the router asks of a step — no obstacle box entered (parts,
+    text rows, pin lines, every flag's reserved box), no running along another
+    net's run, no point of ours on one of them and no foreign connection *inside*
+    one of ours — applied to a whole polyline. 148 adds the last of those: a leg
+    that carries a foreign pin tip or wire vertex through its **interior** is a
+    joint in the editor's model, which is an undeclared short, and the router's
+    own search never has to ask it because it only ever steps between lattice
+    nodes.
+
+    And it adds the question a *move* makes possible and a route never does: does
+    the net stay connected? Every vertex of this net's own wiring — and every
+    **pad** of it — that lay on the run being moved has to lie on the moved one
+    too. Measured on 144's lock table, where pushing `CLAMP`'s trunk aside left
+    `C5.1` standing on nothing: that pad had no stub of its own, it simply lay on
+    the trunk, so only the pad list can see it go (`required-pin-not-connected`
+    on `C5.1`, and the net split in two).
+    """
+    for start, end in zip(points, points[1:]):
+        if _key(start) == _key(end):
+            return False
+        for box in router.boxes:
+            if _segment_hits_box(start, end, box):
+                return False
+        for point in blocked:
+            if _strictly_on_segment(point, start, end):
+                return False
+        for other in others:
+            if other.net == net_id:
+                continue
+            for a, b in zip(other.points, other.points[1:]):
+                if _collinear_overlap(start, end, a, b):
+                    return False
+    for point in points[1:-1]:
+        for other in others:
+            if other.net == net_id:
+                continue
+            for a, b in zip(other.points, other.points[1:]):
+                if _strictly_on_segment(point, a, b):
+                    return False
+    for point in points[1:]:
+        if _key(point) in blocked:
+            return False
+    for other in others:
+        if other.net != net_id:
+            continue
+        for point in other.points:
+            if _on_polyline(point, points):
+                continue
+            # A vertex of this net's own wirinG is **lost** only when it *teed
+            # into the run being moved* — inside one of its legs, not at a shared
+            # end. A boundary point is still a vertex of `other` and still
+            # connected; a tee is left standing on nothing (measured on 144's lock
+            # table, where moving `CLAMP`'s trunk left `C5`'s stub ending in air).
+            if any(
+                _strictly_on_segment(point, a, b)
+                for a, b in zip(was, was[1:])
+            ):
+                return False
+    for point in pads:
+        if not _on_polyline(point, was) or _on_polyline(point, points):
+            continue
+        # A pad the moved run no longer reaches is still connected when the net's
+        # **own other wiring** passes through it (069 sec.2's far pad is the
+        # trunk's end): the net is one node either way, and `_escape_run` only
+        # lets such a pad go when it is.
+        if any(
+            _on_polyline(point, list(other.points))
+            for other in others
+            if other.net == net_id
+        ):
+            continue
+        return False
+    return True
 
 
 #: Where a hard readability violation's own kind sends the refusal (053 sec.4).
@@ -6976,6 +7412,15 @@ def _flag_anchor(
     away. The run is *bent*, and the page layer accepts a bent lead as long as every
     point of it lies on the net's own wiring (`pagecompiler._is_lead`).
 
+    148: **every reach is tried with the turn before any reach is tried without
+    one.** The unturned run — a flag standing in its own pad's row — is the
+    degenerate form of 069 sec.10's shape, and it is the form 074 sec.3 rejects on
+    the duplicate-VOUT pad (there the flag's name row lies across the input rail).
+    It used to be the *last* rung of the nearest length rather than of the whole
+    ladder, so a pad whose turn was blocked by one text row settled for the
+    unturned run and 岳's rule was lost. A vertical run has nowhere to turn and
+    keeps its single round.
+
     ``leads`` are lengths to try before the default ladder, and ``fits`` is how a
     stub that has to *reach* somewhere is chosen (069 sec.1's far pad): the lead may
     be clear while the flag's own box at its end lands on a neighbouring part, on a
@@ -7003,58 +7448,66 @@ def _flag_anchor(
         if length not in lengths:
             lengths.append(length)
     natural = 1.0 if up else -1.0
-    for length in lengths:
-        corner = _rounded((
-            point[0] + direction[0] * length,
-            point[1] + direction[1] * length,
-        ))
-        if _close(length, 0.0):
-            return corner, None, natural
-        if direction[1] != 0.0:
-            # A vertical run has nowhere to turn: the flag hangs at its end.
-            hangs: tuple[float, ...] = (math.copysign(1.0, direction[1]),)
-            jogs: tuple[float, ...] = (0.0,)
-        else:
-            # The turn goes the family's own way first (a rail lifts, a ground
-            # hangs), then the other; and 岳's own jog length is tried before a
-            # shorter one, so the nearest shape that fits is the one drawn.
-            hangs = (natural, -natural)
-            jogs = (FLAG_JOG, FLAG_JOG / 2.0, 0.0)
-        for hang in hangs:
-            for jog in jogs:
-                anchor = corner if _close(jog, 0.0) else _rounded(
-                    (corner[0], corner[1] + hang * jog)
-                )
-                lead = (_rounded(point), corner) if _close(jog, 0.0) else (
-                    _rounded(point), corner, anchor
-                )
-                # The anchor is a conductor of its own: a flag placed on a *foreign*
-                # pin tip or inside a foreign wire's span would join two nets the spec
-                # keeps apart (measured: a rail's flag run 10 units up landed exactly
-                # on the pin above it). `_span_free` guards the run's interior; the far
-                # end needs its own test, which is also what `_vertex_clear` means for
-                # a wire vertex.
-                if _key(anchor) in blocked or not _vertex_clear(router, anchor):
-                    continue
-                if not _span_free(router, point, corner, blocked, boxes, wire=False):
-                    continue
-                if not _close(jog, 0.0):
-                    if not _vertex_clear(router, corner):
+    if direction[1] != 0.0:
+        # A vertical run has nowhere to turn: the flag hangs at its end.
+        rounds: list[tuple[tuple[float, ...], tuple[float, ...]]] = [
+            ((math.copysign(1.0, direction[1]),), (0.0,)),
+        ]
+    else:
+        # 069 sec.10's shape is a run out **and a turn**, and the turn is what puts
+        # the flag past the conductor the pad's own row runs into — 074 sec.3, on
+        # the duplicate-VOUT pad: level with its pad the flag's name row lies
+        # across the input rail, and the run that only *reaches* it is not the
+        # drawing. So every reach is tried with 岳's own jog first (his 20, then a
+        # shorter one), and the unturned run — a flag in its pad's own row — is
+        # the ladder's last resort rather than its cheapest form (148).
+        rounds = [
+            ((natural, -natural), (FLAG_JOG, FLAG_JOG / 2.0)),
+            ((natural, -natural), (0.0,)),
+        ]
+    for hangs, jogs in rounds:
+        for length in lengths:
+            corner = _rounded((
+                point[0] + direction[0] * length,
+                point[1] + direction[1] * length,
+            ))
+            if _close(length, 0.0):
+                return corner, None, natural
+            for hang in hangs:
+                for jog in jogs:
+                    anchor = corner if _close(jog, 0.0) else _rounded(
+                        (corner[0], corner[1] + hang * jog)
+                    )
+                    lead = (_rounded(point), corner) if _close(jog, 0.0) else (
+                        _rounded(point), corner, anchor
+                    )
+                    # The anchor is a conductor of its own: a flag placed on a *foreign*
+                    # pin tip or inside a foreign wire's span would join two nets the spec
+                    # keeps apart (measured: a rail's flag run 10 units up landed exactly
+                    # on the pin above it). `_span_free` guards the run's interior; the far
+                    # end needs its own test, which is also what `_vertex_clear` means for
+                    # a wire vertex.
+                    if _key(anchor) in blocked or not _vertex_clear(router, anchor):
                         continue
-                    if not _span_free(
-                        router, corner, anchor, blocked, boxes, wire=False
-                    ):
+                    if not _span_free(router, point, corner, blocked, boxes, wire=False):
                         continue
-                if fits is not None and not fits(anchor, hang):
-                    continue
-                # 074: the last word, and only over rungs that pass everything
-                # else — see the docstring. Recorded, never drawn.
-                crossed = _lead_crossing(router, lead)
-                if crossed is not None:
-                    if crossings is not None:
-                        crossings.append(crossed)
-                    continue
-                return anchor, lead, hang
+                    if not _close(jog, 0.0):
+                        if not _vertex_clear(router, corner):
+                            continue
+                        if not _span_free(
+                            router, corner, anchor, blocked, boxes, wire=False
+                        ):
+                            continue
+                    if fits is not None and not fits(anchor, hang):
+                        continue
+                    # 074: the last word, and only over rungs that pass everything
+                    # else — see the docstring. Recorded, never drawn.
+                    crossed = _lead_crossing(router, lead)
+                    if crossed is not None:
+                        if crossings is not None:
+                            crossings.append(crossed)
+                        continue
+                    return anchor, lead, hang
     return _rounded(point), None, natural
 
 
@@ -7076,20 +7529,40 @@ def _flag_box(
     """Everything one flag occupies: its glyph, its name text, and a margin.
 
     069 sec.8 — 岳, on the landed P23 page: 「3V3的旗标标识和5V的导线重合了」. The glyph
-    box alone is **not** the flag: the host prints the net's name beside it (one line
-    *above* the anchor, between :data:`FLAG_TEXT_NEAR` and :data:`FLAG_TEXT_REACH` —
-    measured on the landed pages), so a flag that keeps only its glyph clear still
-    touches its neighbours. This is the box the placement keeps free of foreign
-    wiring: the glyph, that line, and the clearance.
+    box alone is **not** the flag: the host prints the net's name beside it, so a
+    flag that keeps only its glyph clear still touches its neighbours. This is the
+    box the placement keeps free of foreign wiring: the glyph, that line, and the
+    clearance.
+
+    **148: the name row is the host's measured one** (`core.textmetrics.
+    flag_name_box`), not a second model of it. 146 modelled the row as a band
+    6–16 units above the anchor (the two constants that used to sit beside
+    :data:`FLAG_CLEARANCE`); 147 measured where the host actually prints it — the
+    ten units immediately past the **glyph**, on the far side of the connection —
+    and put *that* box in the readability gate. The two agree only where the glyph
+    is ten units tall, so for a flag whose glyph hangs below its anchor the
+    compiler reserved a band that ended ten units short of the row the gate
+    (rightly) refuses a conductor inside. Measured on `test/P1` after 148's flag
+    work: the HVDC flag's name row is `(115.8, 725.5)-(144.2, 735.5)` while the
+    box reserved for it stopped at 731.5, and SW's run at `y=730` went straight
+    through the difference. One model for the drawing and the gate is the whole of
+    the fix.
     """
     glyph = flag_glyph_box(profile, rotation=rotation, anchor=anchor)
     if glyph is None:
         glyph = (anchor[0], anchor[1], anchor[0], anchor[1])
-    half = text_width(net_id) / 2.0 + 2.0
-    text = (
-        anchor[0] - half, anchor[1] + FLAG_TEXT_NEAR,
-        anchor[0] + half, anchor[1] + FLAG_TEXT_REACH,
-    )
+    # A **ground** flag prints no name at all: the symbol is its own name, and the
+    # gate says so (`readability._flag_name_row` returns nothing for the ground
+    # family). Reserving a row it never prints is a box larger than the one the
+    # checker grades, and 148 measured the cost — a `GND` pad the drawing could
+    # have flagged was refused for want of room that does not exist.
+    text = None
+    if flag_glyph_kind(profile) != FLAG_GLYPH_KIND_GND:
+        text = textmetrics.flag_name_box(
+            glyph, anchor, net_id, axis_up=glyph[3] > anchor[1],
+        )
+    if text is None:
+        text = glyph
     return (
         min(glyph[0], text[0]) - margin,
         min(glyph[1], text[1]) - margin,
@@ -7259,6 +7732,7 @@ def _flag_crossing_failure(
 
 def _rail_flag(
     ctx: _Context,
+    placed: _Placement,
     net_id: str,
     expression: _Expression,
     pin: tuple[str, tuple[float, float]],
@@ -7281,19 +7755,201 @@ def _rail_flag(
     straight two-point one, which is also what lets the page layer drop it cleanly
     if it re-states this net at a module boundary.
 
-    Where along the rail the flag hangs is a question about the room: the run goes
-    at 069 sec.1's reach out from the pin first (岳's drawing), then at 069's own
-    jog length, then straight off the pin; and either way up (a rail lifts) or
-    down. Only when no run fits anywhere does the flag stand *on* the rail itself —
-    a legal placement (its anchor is a conductor on the wire) and better than a
-    rail with no flag at all.
+    **148: the seat is not decided here.** It was decided and reserved by
+    :func:`_seat_wire_flags` before the first wire — which is what makes the rail
+    route *around* the flag instead of under it — and this call replays that one
+    decision (`router.flag_seats`). Two readers of one decision is the same rule
+    145a pinned for a flag's lead (:func:`_flag_pin_lead`), for the same measured
+    reason: on `test/P1` the wires were laid first and the HVDC flag ended up
+    standing on `T1.1`'s own pin, its name row printed across the SW run.
 
-    Returns ``(anchor, failure)``: 074 added the second half, because a run that
-    **crosses another net's wire** is not drawn (see :func:`_flag_anchor`) — that is
-    the one refusal this ladder cannot answer with "stand on the rail": standing
-    there changes no picture 岳 would read as a short, but standing on the *pin*
-    after every run crossed would, so the pair below is the honest answer. A run
-    refused for want of room still ends on the rail, exactly as it always did.
+    A seat the reservation pass could not take — the lane would have swallowed a
+    foreign pin tip, or another flag already held it — is decided **here**, with
+    the wiring on the page, by the same ladder 145a uses for a lead
+    (:func:`_flag_pin_lead`). What never happens is 069 sec.8's flag standing on
+    its own pin: ``lead is None`` is returned as a refusal that names the pin
+    (:func:`_rail_flag_room_failure`), because that shape is the one 岳 read as a
+    short.
+    """
+    seat = router.flag_seats.get((net_id, pin[0]))
+    if seat is None:
+        anchor, rotation, lead, failure = _rail_flag_seat(
+            ctx, placed, net_id, pin[0], pin[1], profile, router, blocked,
+            solids, bodies,
+        )
+        if lead is None:
+            return None, failure
+        seat = (anchor, rotation, lead)
+    anchor, rotation, lead = seat
+    _place_flag(
+        net_id, profile, ref, anchor, rotation, lead,
+        segments, symbols, occupied, solids,
+    )
+    return anchor, None
+
+
+def _wire_flag_seats(
+    ctx: _Context,
+    expressions: Mapping[str, _Expression],
+    net_order: Sequence[str],
+) -> list[tuple[str, str, tuple[float, float], SymbolProfile, str, str]]:
+    """Every flag a **wire-style** net will carry: ``(net, member, pin, profile, ref, cls)``.
+
+    148: the flags the wiring has not been drawn for yet. Two shapes, and they
+    are the two the per-net loop cannot place before the wires exist:
+
+    * **069 sec.7's rail flag** — a power rail drawn as a wire carries one of its
+      own, hung off the rail at the pin that supplies it (the same pin
+      :func:`_power_flag_pin` picks for the placement);
+    * **088b sec.1's ground outlet** — a declared group states its return with
+      one symbol of its own, at the rail's far end (:func:`_gnd_outlet_pin`).
+
+    Both are decided by the **expression alone**, which is the whole point: the
+    pin is a property of the circuit, not of the route, so the flag's seat can be
+    chosen and reserved before a single wire is laid. Reading them out here means
+    the reservation pass and the placement loop agree about *which* flags are
+    coming without either of them having to guess.
+    """
+    out: list[tuple[str, str, tuple[float, float], SymbolProfile, str, str, bool]] = []
+    outlets = _gnd_outlet_nets(ctx)
+    for net_id in net_order:
+        expression = expressions[net_id]
+        if expression.style != "wire":
+            continue
+        net = ctx.circuit.net(net_id)
+        cls = net.cls if net is not None else "gnd"
+        # A net whose flag symbols the library does not carry is drawn as a wire
+        # with no flag at all (`_flag_wire_fallback`), so there is nothing to make
+        # room for; and a net whose far pads are named by their own flags already
+        # carries a symbol by the time the rail flag would be asked for.
+        if expression.detached:
+            continue
+        wanted: list[tuple[str, tuple[float, float], str, bool]] = []
+        if _power_needs_flag(ctx, net_id, ()):
+            pin = _power_flag_pin(ctx, expression)
+            if pin is not None:
+                # 069 sec.7's rail flag: a vertical run off the rail (:func:`_rail_flag_seat`).
+                wanted.append((pin[0], pin[1], "power", True))
+        if net_id in outlets:
+            pin = _gnd_outlet_pin(ctx, expression)
+            if pin is not None:
+                # 088b sec.1's outlet: an ordinary flag lead (:func:`_flag_pin_lead`).
+                wanted.append((pin[0], pin[1], cls, False))
+        for member, point, want_cls, vertical in wanted:
+            profile, ref = _flag_plan(ctx, net_id, want_cls)
+            if profile is None:
+                continue
+            out.append((net_id, member, point, profile, ref, want_cls, vertical))
+    return out
+
+
+def _rail_flag_room_failure(
+    net_id: str,
+    member: str,
+    point: tuple[float, float],
+    blocked_by: str,
+) -> GrammarFailure:
+    """074/148: the refusal when a rail's own flag has nowhere legal to stand.
+
+    The alternative the ladder used to take — put the symbol on the pin anyway —
+    is the form 岳 rejected on the landed page: standing there the glyph opens
+    towards the run that leaves the pin and the name row lands across a foreign
+    wire (`outputs/147/FINDINGS.md` sec.0.3, the HVDC flag on `T1.1`). 148 does
+    not draw it: the drawing is refused, the pin and the obstacle are named, and
+    the action says which two things can be moved.
+    """
+    return GrammarFailure(
+        category=FAILURE_LAYOUT_UNSAT,
+        subject=net_id,
+        detail=(
+            f"net {net_id!r} is a rail drawn as a wire and every power flag on "
+            f"it must be stated (069 sec.7), but no legal place to hang one was "
+            f"found at the pin that supplies it, {member} at {_point_text(point)}: "
+            f"{blocked_by}. The flag is not drawn on the pin instead — a flag "
+            "standing on its own pin opens its glyph across the run that leaves "
+            "the pin and prints its name row over whatever is beside it, which is "
+            "the shape 岳 read as a short on the landed page"
+        ),
+        action=(
+            "enlarge the region, move the neighbouring part the message names, or "
+            "move the pin's own run so the flag has a side to hang on; a rail with "
+            "a flag nobody could hang is refused rather than drawn on top of the "
+            "wiring"
+        ),
+    )
+
+
+def _flag_on_pin_refusal(
+    net_id: str, member: str, point: tuple[float, float]
+) -> GrammarFailure:
+    """148: the pad's flag has nowhere legal to hang, and it is not put on the pin.
+
+    069 sec.8's last resort used to be "stand on the pin": a legal placement in
+    the editor's model (the anchor is a conductor) and better than a pad with no
+    name at all. 148 removes it, for the reason 岳 gave on the landed page — a
+    flag standing on its own pin opens its glyph towards the wire that leaves the
+    pin, and the host prints its name row in the band just past the glyph, so the
+    name lands across that wire. That is the HVDC flag on `T1.1`
+    (`outputs/147/FINDINGS.md` sec.0.3, the page lint's first ERROR). The
+    alternative — refuse — is the honest answer to a pin the drawing really has
+    no room beside, and it names the pad.
+    """
+    return GrammarFailure(
+        category=FAILURE_LAYOUT_UNSAT,
+        subject=net_id,
+        detail=(
+            f"net {net_id!r} is named by a flag of its own on {member} at "
+            f"{_point_text(point)} (069 sec.1), and no lead fits anywhere around "
+            "that pad: every direction the ladder tries — the pad's own escape "
+            "side first, then up, down and both across — lands the flag's glyph, "
+            "its name row and their clearance on a part, a text row, another "
+            "net's wire or the page's edge. The flag is not drawn on the pin "
+            "instead: standing there its glyph opens across the run that leaves "
+            "the pin and its name row prints over whatever is beside it, which is "
+            "the shape 岳 read as a short on the landed page"
+        ),
+        action=(
+            "enlarge the region, move the neighbouring part that crowds this pad, "
+            "or move the pad's own run — a pad whose flag nobody could hang is "
+            "refused rather than drawn on top of the wiring"
+        ),
+    )
+
+
+def _rail_flag_seat(
+    ctx: _Context,
+    placed: _Placement,
+    net_id: str,
+    member: str,
+    point: tuple[float, float],
+    profile: SymbolProfile,
+    router: _Router,
+    blocked: set[tuple[float, float]],
+    solids: Sequence[Box],
+    bodies: Sequence[Box] | None = None,
+) -> tuple[tuple[float, float], float, tuple[tuple[float, float], ...] | None,
+           GrammarFailure | None]:
+    """Where a rail's own flag stands: ``(anchor, rotation, lead, failure)``.
+
+    069 sec.7 first, and 069 sec.10 second. The first shape the ladder reaches for
+    is a **straight vertical run** off the rail — 岳's own VIN, and the one the page
+    layer can drop cleanly when it re-states the net at a module boundary — hung
+    :data:`FLAG_JOG` out, then :data:`FLAG_LEAD`, then the grid's own step and the
+    two long reaches, a rail lifting and a ground hanging, each way round tried.
+
+    Only when no straight run fits at all does the **bent** lead come out
+    (:func:`_flag_pin_lead`): the run leaves the pin, travels out and turns up —
+    岳's other hand-drawn shape (069 sec.10). It is a second choice because the
+    turn is a shape the page layer has to keep rather than drop, and because a
+    drawing that can state its rail with one straight run should.
+
+    The run starts at the **pin**, not somewhere along the rail: the rail does not
+    exist yet when the seat is taken (148 decides it before the first wire so the
+    rail can route *around* it), and inventing a point on a wire nobody has drawn
+    is how a reservation and the flag it reserved for come to disagree.
+
+    ``lead is None`` is a refusal — never 069 sec.8's flag standing on its own pin,
+    which is the shape 岳 read as a short on the landed page.
     """
     family = flag_glyph_kind(profile)
     natural = 1.0 if family != FLAG_GLYPH_KIND_GND else -1.0
@@ -7304,113 +7960,119 @@ def _rail_flag(
             page[0] + PAGE_MARGIN, page[1] + PAGE_MARGIN,
             page[2] - PAGE_MARGIN, page[3] - PAGE_MARGIN,
         )
-    on_the_rail: tuple[tuple[float, float], float] | None = None
     room = _flag_room(router, solids, inner, blocked)
     crossings: list[str] = []
-    # 069 sec.8: 被占就沿轨继续走 — the reaches are tried in 岳's own order (his VIN's
-    # 30 out, then a jog's length), and then **farther** along the rail, because a
-    # flag that has nowhere to stand still must not end up touching its neighbours.
-    for reach in (FLAG_LEAD, FLAG_JOG, 2.0 * FLAG_LEAD, 4.0 * FLAG_LEAD, 0.0):
-        attach = _flag_attach_point(expression, pin, segments, reach)
-        if _key(attach) in blocked or not _vertex_clear(router, attach):
-            # The foot of the run is a conductor too: a point on the rail that is
-            # also a foreign pin tip (two nets meeting at a point) would join them.
-            continue
-        for hang in (natural, -natural):
-            def fits(
-                anchor: tuple[float, float], _hang: float = hang
-            ) -> bool:
-                rotation = _flag_rotation((0.0, _hang), family)
-                return room(
-                    _flag_box(profile, rotation, anchor, net_id, margin=0.0),
-                    _flag_box(profile, rotation, anchor, net_id),
-                )
-
-            anchor, lead, placed_hang = _flag_anchor(
-                router, attach, (0.0, hang), blocked,
-                leads=(FLAG_JOG,), fits=fits, up=natural > 0.0, boxes=bodies,
-                crossings=crossings,
+    for hang in (natural, -natural):
+        def fits(anchor: tuple[float, float], _hang: float = hang) -> bool:
+            rotation = _flag_rotation((0.0, _hang), family)
+            return room(
+                _flag_box(profile, rotation, anchor, net_id, margin=0.0),
+                _flag_box(profile, rotation, anchor, net_id),
             )
-            if lead is not None:
-                _place_flag(
-                    net_id, profile, ref, anchor,
-                    _flag_rotation((0.0, placed_hang), family), lead,
-                    segments, symbols, occupied, solids,
-                )
-                return anchor, None
-            if on_the_rail is None:
-                rotation = _flag_rotation((0.0, hang), family)
-                if room(
-                    _flag_box(profile, rotation, attach, net_id, margin=0.0),
-                    _flag_box(profile, rotation, attach, net_id),
-                ):
-                    on_the_rail = (attach, rotation)
-    if on_the_rail is not None:
-        _place_flag(
-            net_id, profile, ref, on_the_rail[0], on_the_rail[1], None,
-            segments, symbols, occupied, solids,
+
+        anchor, lead, placed_hang = _flag_anchor(
+            router, point, (0.0, hang), blocked,
+            leads=(FLAG_JOG,), fits=fits, up=natural > 0.0, boxes=bodies,
+            crossings=crossings,
         )
-        return on_the_rail[0], None
-    if crossings:
-        # Every run 岳 would read as "this rail's name" goes through another net's
-        # wire. 074 refuses the drawing rather than hiding the flag on the pin.
-        return None, _flag_crossing_failure(
-            net_id, pin[1], crossings,
-            "the rail carries no flag at all on this drawing",
-        )
-    # Nothing fits anywhere: the flag stands on the rail's own pin.
-    rotation = _flag_rotation((0.0, natural), family)
-    _place_flag(
-        net_id, profile, ref, pin[1], rotation, None,
-        segments, symbols, occupied, solids,
+        if lead is not None:
+            return (
+                anchor, _flag_rotation((0.0, placed_hang), family), lead, None,
+            )
+    anchor, lead, hang, more = _flag_pin_lead(
+        ctx, placed, net_id, profile, member, point, router, blocked, solids, bodies,
     )
-    return pin[1], None
+    crossings.extend(more)
+    if lead is not None:
+        return anchor, _flag_rotation((0.0, hang), family), lead, None
+    if crossings:
+        return (
+            point, 0.0, None,
+            _flag_crossing_failure(
+                net_id, point, crossings,
+                f"the rail's own flag hangs at {member} (069 sec.7)",
+            ),
+        )
+    return (
+        point, 0.0, None,
+        _rail_flag_room_failure(
+            net_id, member, point,
+            "every reach every ladder tries — a straight vertical run at 25, 30, "
+            "the grid's step and the two long ones, up and down, then a run out "
+            "along the pin's own side with a turn, and then the other three "
+            "directions — lands the glyph, its name row and their clearance on a "
+            "part, a text row, another net's wire or the page's edge",
+        ),
+    )
 
 
-def _flag_attach_point(
-    expression: _Expression,
-    pin: tuple[str, tuple[float, float]],
-    segments: Sequence[LayoutSegment],
-    reach: float,
-) -> tuple[float, float]:
-    """A point ``reach`` along the net's own wiring from this pin, or the pin.
+def _seat_wire_flags(
+    ctx: _Context,
+    placed: _Placement,
+    expressions: Mapping[str, _Expression],
+    net_order: Sequence[str],
+    router: _Router,
+    solids: Sequence[Box],
+    bodies: Sequence[Box] | None,
+    tips: set[tuple[float, float]],
+    taken: dict[tuple[float, float], str],
+) -> list[Box]:
+    """148: decide and reserve every **wire-style** net's own flag, before any wire.
 
-    A rail's flag hangs off the rail, not off a stub drawn over it: the run out is
-    the wiring that is already there (岳's VIN again), so the flag's vertical run
-    is the only line this adds. When the pin is not an end of any of the net's own
-    wires — a single-pin rail, or one the wiring has not reached — the pin is the
-    answer and the flag hangs straight off it.
+    The wall 145a's lane pass left standing: a rail flag hangs off the rail the
+    compiler is *about to* route, so there was no lead to reserve in advance and
+    the flag was placed after every wire — and on `test/P1` the wires had taken
+    the only room beside it (`outputs/147b/FINDINGS.md` sec.1.3: nine scenes
+    refused because a conductor ran through a flag's glyph or its name row).
+
+    So the seat is decided here, on a page with no wires on it, and two things
+    follow for the routing:
+
+    * the lead and the flag's whole box are **reserved** (:func:`_take_lane`), so
+      another net's wire may not take the lane the flag will be drawn on;
+    * the flag's box is returned as an **obstacle** for every wire of every net,
+      this one included — a reservation only keeps foreign wires off, and the
+      rail a flag hangs from is exactly the run that used to cut through its own
+      pennant (`outputs/147/FINDINGS.md` sec.0.2b).
+
+    A seat that cannot be taken — the lead would swallow a foreign pin tip, or
+    another flag already holds the lane — is **not** reserved: the flag is then
+    placed by the ordinary ladder after the wires, exactly as it was before this
+    pass existed. Nothing is taken away.
     """
-    point = pin[1]
-    for segment in segments:
-        if segment.net != expression.net or len(segment.points) < 2:
+    walls: list[Box] = []
+    for net_id, member, point, profile, _ref, _cls, vertical in _wire_flag_seats(
+        ctx, expressions, net_order
+    ):
+        # A rail flag reaches for 069 sec.7's straight vertical run first and only
+        # then for the bent lead (:func:`_rail_flag_seat`); an outlet is placed by
+        # the ordinary ladder (:func:`_flag_pin_lead`), which is where 088b puts it.
+        blocked = _blocked_points(ctx, placed, net_id, [], [], [])
+        router.reserved_exempt = net_id
+        if vertical:
+            anchor, rotation, lead, _failure = _rail_flag_seat(
+                ctx, placed, net_id, member, point, profile, router, blocked,
+                solids, bodies,
+            )
+        else:
+            anchor, lead, hang, _crossings = _flag_pin_lead(
+                ctx, placed, net_id, profile, member, point, router, blocked,
+                solids, bodies,
+            )
+            rotation = _flag_rotation((0.0, hang), flag_glyph_kind(profile))
+        if lead is None:
             continue
-        points = [_rounded(item) for item in segment.points]
-        for index in (0, -1):
-            if _close(points[index][0], point[0]) and _close(points[index][1], point[1]):
-                return _walk(points, index, reach)
-    return point
-
-
-def _walk(
-    points: Sequence[tuple[float, float]], index: int, reach: float
-) -> tuple[float, float]:
-    """``reach`` units along this polyline, starting at ``points[index]``."""
-    step = 1 if index == 0 else -1
-    walked = 0.0
-    position = index
-    while 0 <= position + step < len(points):
-        start, end = points[position], points[position + step]
-        leg = math.hypot(end[0] - start[0], end[1] - start[1])
-        if leg > 0.0 and walked + leg >= reach:
-            ratio = (reach - walked) / leg
-            return _rounded((
-                start[0] + (end[0] - start[0]) * ratio,
-                start[1] + (end[1] - start[1]) * ratio,
-            ))
-        walked += leg
-        position += step
-    return _rounded(points[index])
+        cells: set[tuple[float, float]] = set()
+        for start, end in zip(lead, lead[1:]):
+            cells |= _lattice_nodes(router, start, end)
+        cells.add(_key(anchor))
+        box = _flag_box(profile, rotation, anchor, net_id, margin=0.0)
+        cells |= _nodes_in_box(router, box)
+        if not _take_lane(taken, cells, tips, {_key(point)}, net_id):
+            continue
+        router.flag_seats[(net_id, member)] = (anchor, rotation, lead)
+        walls.append(box)
+    return walls
 
 
 def _lead_lane_reservations(
@@ -7422,7 +8084,7 @@ def _lead_lane_reservations(
     occupied: Sequence[Box],
     solids: Sequence[Box],
     bodies: Sequence[Box] | None,
-) -> None:
+) -> list[Box]:
     """145a T3: promise every **lead the plan will draw** its lane, before any wire.
 
     The wall this answers was measured on 144's flyback page: the wires are drawn
@@ -7432,7 +8094,7 @@ def _lead_lane_reservations(
     answer to a question that should never have been asked — the compiler knows
     which pins are going to be flagged *before* it routes anything.
 
-    Two kinds of lead are reserved, and they are the same kind of thing: a run
+    Three kinds of lead are reserved, and they are the same kind of thing: a run
     the finished drawing will carry, which the wiring must not take first.
 
     * a **flag's lead** — asked of :func:`_flag_pin_lead`, the *same* function the
@@ -7446,6 +8108,10 @@ def _lead_lane_reservations(
       off the flag it used to cut and landed in the row `D+`'s stub leaves on,
       which pushed that stub 5 units *into* the symbol — the shape 099e measured
       as unreadable.
+    * since 148, a **wire-style net's own flag** — 069 sec.7's rail flag and
+      088b's ground outlet, whose seats are decided and reserved here by
+      :func:`_seat_wire_flags`, because the rails they hang off are exactly what
+      this pass runs before (:func:`_wire_flag_seats`).
 
     Everything goes into ``router.reserved`` against the net that owns it, and
     every wire of another net then treats those nodes as walls
@@ -7455,11 +8121,10 @@ def _lead_lane_reservations(
     this pass existed, and refused with 074's measurement if it truly does not
     fit. Nothing is taken away — the lane only ever adds room.
 
-    A rail drawn as a wire carries a flag too (069 sec.7), but its run hangs off
-    the rail the compiler itself routes, so there is no lead to reserve in
-    advance; and a net whose flag symbol the library does not carry is drawn as a
-    wire (:func:`_flag_wire_fallback`), so it has no flag to make room for.
-    Neither is reserved.
+    Fills ``router.flag_walls``, which the caller folds into ``router.boxes``: the
+    whole extent of every flag seated here, the box no wire of **any** net may
+    enter. A reservation keeps *other* nets off a lane; this keeps a flag's own
+    rail off its pennant too, which is the half 147 measured on `test/P1`.
     """
     # Every pin tip on the page. A reserved node that is one of them would wall
     # off a connection some wire has to make, which is worse than the crowded
@@ -7519,8 +8184,12 @@ def _lead_lane_reservations(
                 ),
             )
             _take_lane(taken, cells, tips, own, net_id)
+    router.flag_walls = _seat_wire_flags(
+        ctx, placed, expressions, net_order, router, solids, bodies, tips, taken,
+    )
     router.reserved_exempt = ""
     router.reserve_strict = False
+
 
 
 def _reserve_label_stubs(
@@ -7634,47 +8303,46 @@ def _flag_pins(
     own flag. Every flag's whole box — glyph, its name text and a margin, 069
     sec.8 — is kept off everything the drawing has already put down: a part, a
     text, the page's edge, and **another net's wire**. Where the nearest lead does
-    not fit, the ladder reaches shorter and then farther, and only if nothing
-    anywhere fits does the flag end on its own pin.
+    not fit, the ladder reaches shorter and then farther.
 
     The search itself lives in :func:`_flag_pin_lead`, because 145a's
     reservation pass has to ask the **same** question before any wire is drawn —
     two copies of "which lead this pin would take" is exactly how a reservation
-    and the flag it reserved for would come to disagree.
+    and the flag it reserved for would come to disagree. A seat that pass *took*
+    (148's wire-style nets) is replayed from ``router.flag_seats``.
 
-    Returns the refusal when there is nothing legal to draw: 074's ``layout-unsat``
-    when the pin's every lead crosses another net's wire (see
-    :func:`_flag_crossing_failure` — the flag standing on the crowded pin is the
-    form 岳 rejected, so it is not taken), and ``None`` in every other case, the pin
-    fallback included.
+    Returns the refusal when there is nothing legal to draw. 074's ``layout-unsat``
+    names the crossing when the pin's every lead cuts another net's wire
+    (:func:`_flag_crossing_failure`); since 148 the *other* empty-handed answer —
+    069 sec.8's flag standing on its own pin — is a refusal too
+    (:func:`_flag_on_pin_refusal`), because a flag standing on its pin opens its
+    glyph across the run that leaves the pin and prints its name row over whatever
+    is beside it, which is the shape 岳 read as a short on the landed page.
     """
     family = flag_glyph_kind(profile)
-    natural = family != FLAG_GLYPH_KIND_GND
     for member, point in members:
-        anchor, lead, hang, crossings = _flag_pin_lead(
-            ctx, placed, net_id, profile, member, point, router, blocked, solids,
-            bodies, stub=stub,
-        )
-        if lead is not None:
-            _place_flag(
-                net_id, profile, ref, anchor,
-                _flag_rotation((0.0, hang), family), lead,
-                segments, symbols, occupied, solids,
+        seat = router.flag_seats.get((net_id, member))
+        if seat is None:
+            anchor, lead, hang, crossings = _flag_pin_lead(
+                ctx, placed, net_id, profile, member, point, router, blocked,
+                solids, bodies, stub=stub,
             )
-            continue
-        if crossings:
-            # 074: this pad's flag could have hung 岳's way anywhere it fitted — and
-            # every one of those leads cut through another net's wire. Refused with
-            # the measurement, not drawn on the pin.
-            return _flag_crossing_failure(
-                net_id, point, crossings,
-                f"{member} is named by a flag of its own (069 sec.1)",
-            )
+            if lead is None:
+                if crossings:
+                    # 074: this pad's flag could have hung 岳's way anywhere it
+                    # fitted — and every one of those leads cut another net's wire.
+                    return _flag_crossing_failure(
+                        net_id, point, crossings,
+                        f"{member} is named by a flag of its own (069 sec.1)",
+                    )
+                return _flag_on_pin_refusal(net_id, member, point)
+            seat = (anchor, _flag_rotation((0.0, hang), family), lead)
+        anchor, rotation, lead = seat
         _place_flag(
-            net_id, profile, ref, point,
-            _flag_rotation((0.0, 1.0 if natural else -1.0), family), None,
+            net_id, profile, ref, anchor, rotation, lead,
             segments, symbols, occupied, solids,
         )
+    return None
 
 
 def _flag_pin_lead(
@@ -7709,10 +8377,17 @@ def _flag_pin_lead(
     inner = None
     if ctx.budget.page_box is not None:
         page = ctx.budget.page_box
-        inner = (
-            page[0] + PAGE_MARGIN, page[1] + PAGE_MARGIN,
-            page[2] - PAGE_MARGIN, page[3] - PAGE_MARGIN,
-        )
+        # The page edge is this check's business only where the *pad* is on the
+        # page at all. A module compiled in its own frame carries coordinates the
+        # page box does not contain (measured: 056's `pwr` module puts `C2.2` at
+        # `(20, -35)`), and bounding a flag by a region its own pad is outside of
+        # refuses every rung — which is not "the flag hangs off the page", it is
+        # "this frame is not the page's".
+        if _inside((point[0], point[1], point[0], point[1]), page):
+            inner = (
+                page[0] + PAGE_MARGIN, page[1] + PAGE_MARGIN,
+                page[2] - PAGE_MARGIN, page[3] - PAGE_MARGIN,
+            )
     family = flag_glyph_kind(profile)
     natural = family != FLAG_GLYPH_KIND_GND
     room = _flag_room(router, solids, inner, blocked)

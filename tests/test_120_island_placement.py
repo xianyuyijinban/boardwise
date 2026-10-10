@@ -61,6 +61,34 @@ if str(ROOT / "src") not in sys.path:
 SPECS = ROOT / "blocklib" / "specs"
 
 
+def _seat_on_the_pin_if_it_will_not_hang(dc, real):
+    """148: let a **probe** still get a plan when a rail flag has nowhere to hang.
+
+    `_rail_flag` now refuses a page whose rail flag cannot be seated
+    (`drawcompiler._rail_flag_room_failure`, 148) — inside `_build_candidate`,
+    before the readability gate, which is the layer these two probes stand aside.
+    The refusal is named and correct (069 sec.7: a rail drawn as a wire carries a
+    flag), and neither probe's subject is the flag: one measures the partition's
+    cause, the other the landing criterion's band. So the probe puts the flag back
+    where 069 sec.8 used to — on its own pin, which is exactly the drawing these
+    two tests were written against. Nothing outside the probe is affected.
+    """
+    def rail(ctx, placed, net_id, expression, pin, profile, ref, router, segments,
+             symbols, occupied, solids, blocked, bodies=None):
+        out, failure = real(
+            ctx, placed, net_id, expression, pin, profile, ref, router, segments,
+            symbols, occupied, solids, blocked, bodies,
+        )
+        if out is None:
+            dc._place_flag(
+                net_id, profile, ref, pin[1], 0.0, None,
+                segments, symbols, occupied, solids,
+            )
+            return pin[1], None
+        return out, failure
+    return rail
+
+
 def _page(*, ground_flag: bool = True):
     """The real flyback page under the real (WE six-pin) library.
 
@@ -296,14 +324,17 @@ def test_the_partition_mismatch_is_a_wire_over_a_foreign_pin_not_a_narrow_corrid
         result.hard_violations = []
         return result
     saved_rel = dc._relation_failures
+    saved_rail = dc._rail_flag
     dc.readability.check = soft
     dc._relation_failures = lambda ctx_, placed_: []
+    dc._rail_flag = _seat_on_the_pin_if_it_will_not_hang(dc, saved_rail)
     try:
         built, failure, _ = dc._build_candidate(
             ctx, dc._Variant(label="probe", scale=scale, pose_index=0))
     finally:
         dc.readability.check = real
         dc._relation_failures = saved_rel
+        dc._rail_flag = saved_rail
     assert built is not None, failure
 
     plan = built.plan
@@ -455,8 +486,10 @@ def test_the_contended_landing_test_is_a_half_step_not_a_whole_one():
         return result
 
     saved_rel = dc._relation_failures
+    saved_rail = dc._rail_flag
     dc.readability.check = soft
     dc._relation_failures = lambda ctx_, placed_: []
+    dc._rail_flag = _seat_on_the_pin_if_it_will_not_hang(dc, saved_rail)
     try:
         built, failure, _ = dc._build_candidate(
             ctx, dc._Variant(label="probe", scale=scale, pose_index=0))
@@ -465,6 +498,7 @@ def test_the_contended_landing_test_is_a_half_step_not_a_whole_one():
     finally:
         dc.readability.check = real
         dc._relation_failures = saved_rel
+        dc._rail_flag = saved_rail
     assert built is not None and placed is not None, (failure, failure2)
 
     # Walk the same order steps the relaxation pass does and record how far each
