@@ -247,15 +247,26 @@ def test_the_cause_is_one_point_where_two_nets_share_a_pin_tip():
 
     量的是坐标，不是闸的措辞。
 
-    **121 更新**（2026-10-06）：spec 的 U5.2/U5.3 对调修正 + 反馈链止于光耦
-    LED 之后，这个病**回来了**：关掉 117① 的 dodge（回到 116 的读法，只量
-    leg），跨网 pin 重合点在 `(60,-270)` 恰好一处（C13.2×R7.1）；打开
-    （117 的读法，leg + trail）归零。两侧都量，所以这不是「修完再补一个
-    说明」，而是一条可复算的对照——而且比 119/120 那版「关治法也量不出病」
-    更强：现在**病在场、治法治病**。
+    **145a T2 重新量过**（2026-10-10）。118–121 量到的病是摆位侧**恰好一处**
+    跨网 pin 重合 `(60,-270)`（`C13.2`(SEC_GND) × `R7.1`(SEC_12V)）：关掉
+    117① 的 dodge 就在、打开就不在，「病在场、治法治病」。145a T2 按岳裁决把
+    反馈链的 `same-row` 收窄成 `left-of` + `near`（岳手绘的分压器是**竖排**），
+    分压臂 R7 于是不再被拉到 U4 那一行上对齐——**那一处重合整个消失了**。
 
-    量在**摆放**这一层而不是 plan：117(1) 的病是脚尖的几何，部件一落子它就
-    已经定了，与后面拉不拉线无关。
+    重量结果（本文件的 `diag` 读数，`dc.GAP` 10/20/40 三档）：
+
+    ============  =====================  ====================
+    GAP           dodge 关（116 的读法）  dodge 开（117 的读法）
+    ============  =====================  ====================
+    10/20/40      **空集**                **空集**
+    ============  =====================  ====================
+
+    如实申报两件事：①这个病在 10/20/40 上**已经不在场**，是 T2 收窄关系的
+    连带结果（一件好事）；②因此 **117① 的 trail 修法在这份输入上不再被
+    考验**——它在这页上没有可清的重合点了。覆盖损失照实写出来（与 120 那条
+    「余量减半一个数都不变」的申报同款），修法本身一个字没改，源码形状仍由
+    本文件的 `test_the_dodge_measures_the_run_and_not_the_trail_that_causes_it`
+    与 `test_the_trail_walk_is_bounded_by_the_parts_own_reach` 钉着。
     """
     circuit, ctx = _ctx()
     saved = dc._dodge_foreign_pins
@@ -267,31 +278,13 @@ def test_the_cause_is_one_point_where_two_nets_share_a_pin_tip():
         dc._dodge_foreign_pins = saved
     assert before is not None
     bad = _cross_net_pin_coincidences(circuit, ctx, before)
-    # **121 重新量过**（2026-10-06，spec 的 U5.2/U5.3 对调修正 + 反馈链止于
-    # 光耦 LED 之后）：这个病**回来了**——before 侧在 GAP 10/20/40 上量到
-    # **恰好一处**跨网重合 `(60,-270)`：`C13.2`(SEC_GND) × `R7.1`(SEC_12V)，
-    # 而 117① 的治法在 10/20/40 上把它清零。119 那版「关掉治法也量不出病」
-    # 是那颗七脚料的几何巧合；现在钉的是更强的对照：**病在场、治法治病**。
-    #
-    # 钉**坐标与那一对 pin**，不只是个数：坐标动了说明几何变了，这张表就要
-    # 重新量——但个数必须先是一，两处以上就是另一个病。
-    assert sorted(bad) == [(60.0, -270.0)], (
-        f"the coincidence set is {sorted(bad)} — 121 measured exactly one point "
-        "(60,-270) on the corrected spec; a different set means the geometry "
-        "moved and this table needs re-measuring"
+    assert sorted(bad) == [], (
+        f"the coincidence set is {sorted(bad)} — 145a T2 re-measured this on "
+        "the narrowed feedback chain and found the cross-net pin coincidence "
+        "gone at GAP 10/20/40 (R7 is no longer pulled down onto U4's row); a "
+        "non-empty set means the geometry moved again and this table needs "
+        "re-measuring"
     )
-    assert sorted(bad[(60.0, -270.0)]) == [
-        ("C13.2", "SEC_GND"), ("R7.1", "SEC_12V")], (
-        f"the colliding pair changed: {bad[(60.0, -270.0)]}"
-    )
-    # Every coincidence is between pins of **different declared nets**, which is
-    # the whole claim: the plan is putting two nets on one coordinate.  The
-    # coordinates themselves are 118's measured geometry, not 113's — 113's
-    # page had exactly one at (0, -80), this one has two on the feedback row, and
-    # the test says "how many", not "which", so a future geometry change shows up
-    # as a number to re-measure rather than as a mystery.
-    for point, pins in sorted(bad.items()):
-        assert len({net for _pin, net in pins}) > 1, (point, pins)
     after, _ = _soft_placement(ctx)
     assert after is not None
     assert not _cross_net_pin_coincidences(circuit, ctx, after), (
@@ -418,23 +411,27 @@ def test_a_gap_wider_than_the_collision_does_not_help_so_it_is_topological():
     """**为什么不能靠加大间距**——把候选治法 (b) 的「加间距」版本否掉。
 
     117 在 113 的几何上量过：GAP 从 10 一路加到 60，跨网 pin 重合**一次都没
-    变过**，所以那一条是拓扑的、加间距治不了。**118 在实测几何上重量了一次**，
-    量到的更细：
+    变过**，所以那一条是拓扑的、加间距治不了。
+
+    **145a T2 重新量过**（2026-10-10）。118–121 那一版的表（before 侧三档同一处
+    `(60,-270)` C13.2×R7.1、after 侧清零）在本棒不再成立：T2 按岳裁决把反馈链的
+    `same-row` 收窄成 `left-of` + `near`，分压臂 R7 不再被拉到 U4 那一行，
+    **那一处重合整个消失了**。重量结果：
 
     | GAP | 116 的读法（dodge 关掉） | 117 的读法（dodge 打开） |
-    |---:|---:|---:|
-    | 10 | 1 处 `(60,-270)` C13.2×R7.1 | **0** |
-    | 20 | 1 处，**同一点** | **0** |
-    | 40 | 1 处，**同一点** | **0** |
-    | 60 | 2 处（加上 `(60,-240)` C11.2×C13.1） | 1 处（`(60,-240)`） |
+    |---:|---|---|
+    | 10 | 空集 | 空集 |
+    | 20 | 空集 | 空集 |
+    | 40 | 空集 | 空集 |
+    | 60 | 1 处 `(60,-240)` C11.2×C13.1 | 1 处，**同一点** |
 
-    **前三档那一处对间距完全免疫**（坐标一动不动：`(60, -270)`）——那正是
-    「加间距治不了」这句话的实测形态，也是本条要证的。（**121 重量**，
-    2026-10-06：U5.2/U5.3 对调归位 + 反馈链止于光耦 LED 之后的表。）
-    GAP=60 多出来的那一处是**另一个病**：把间距撑到 60 把次边那一行挤到一起了，
-    117 的治法挡不住它（本条的 after 侧把它照实写出来，见下）。
+    **如实申报**：本棒**不能再**用这张表证明「加间距治不了」——前三档两侧都
+    干净，没有可对照的病；GAP=60 那一处是**另一个病**（把间距撑到 60 把次边
+    那一行挤到一起），而它两侧都在、dodge 既不改它也不治它，所以它证明的是
+    「这不是 trail 的对象」，不是本条原来的命题。覆盖损失照实写出来（同 120
+    那条「余量减半一个数都不变」的申报口径），机制一个字没改。
 
-    两侧都断言，**包括 after 侧不干净的���一档**——只断言对自己有利的那个数，
+    两侧都断言，**包括 after 侧不干净的那一档**——只断言对自己有利的那个数，
     就是在挑数据。
     """
     circuit, ctx = _ctx()
@@ -442,26 +439,16 @@ def test_a_gap_wider_than_the_collision_does_not_help_so_it_is_topological():
     dc._dodge_foreign_pins = (
         lambda ctx_, pid, slot, anchor, root, poses, origins: root)
     try:
-        # **121 重新量过**（2026-10-06，spec 订正后）：病回来了——before 侧在
-        # 10/20/40 三档量到**恰好同一处** `(60,-270)`（C13.2(SEC_GND) ×
-        # R7.1(SEC_12V)）。三档同一坐标就是「间距治不了」的实测形态：spacing
-        # ladder 动的是间距，这个重合对间距免疫，所以它是拓扑的。钉坐标与
-        # pin 对——坐标动了说明几何变了，这张表就要重新量。
         for gap in (10.0, 20.0, 40.0):
             dc.GAP = gap
             placed, _ = _soft_placement(ctx)
             assert placed is not None
             before = _cross_net_pin_coincidences(circuit, ctx, placed)
-            assert sorted(before) == [(60.0, -270.0)], (
-                f"GAP={gap}: the coincidence set is {sorted(before)} — 121 "
-                "measured exactly the one point (60,-270) at every one of "
-                "10/20/40 on the corrected spec; a different set means the "
-                "geometry moved and this table needs re-measuring"
-            )
-            assert sorted(before[(60.0, -270.0)]) == [
-                ("C13.2", "SEC_GND"), ("R7.1", "SEC_12V")], (
-                f"GAP={gap}: the colliding pair changed: "
-                f"{before[(60.0, -270.0)]}"
+            assert sorted(before) == [], (
+                f"GAP={gap}: the coincidence set is {sorted(before)} — 145a T2 "
+                "re-measured this on the narrowed feedback chain and found the "
+                "cross-net pin coincidence gone at 10/20/40; a non-empty set "
+                "means the geometry moved again and this table needs re-measuring"
             )
     finally:
         dc._dodge_foreign_pins = saved_dodge
@@ -475,19 +462,23 @@ def test_a_gap_wider_than_the_collision_does_not_help_so_it_is_topological():
                 f"GAP={gap}: the fix leaves {after} — it is pushing harder "
                 "rather than measuring the trail"
             )
-        # The one rung where the fix does not hold, stated rather than hidden.
-        # **121 重新量过**：GAP=60 仍剩 **1 处**，坐标是 `(60,-240)`
-        # （C11.2(SEC_GND) × C13.1(SEC_12V)——宽间距把次边那一行挤到一起的那一档）。
-        # 这里只钉**个数**——钉坐标就是钉一句会随换料变的话，钉个数才是
-        # 「这一档治法挡不住」这个事实本身。
+        # The one rung that is not clean, stated rather than hidden. **145a T2
+        # 重新量过**：GAP=60 上两侧**各有同一处** `(60,-240)`
+        # （C11.2(SEC_GND) × C13.1(SEC_12V)）——宽间距把次边那一行挤到一起的
+        # 那一档。这里钉**个数**：它是另一个病，与 dodge 无关，所以两侧的个数
+        # 必须相同而不是一侧为一侧为零。
         dc.GAP = 60.0
         placed, _ = _soft_placement(ctx)
         assert placed is not None
         wide = _cross_net_pin_coincidences(circuit, ctx, placed)
         assert len(wide) == 1, (
-            f"GAP=60 leaves {sorted(wide)} — 119 measured exactly one, so a "
+            f"GAP=60 leaves {sorted(wide)} — 145a re-measured exactly one, so a "
             "different number means the geometry moved and this table needs "
             "re-measuring"
+        )
+        assert sorted(wide[(60.0, -240.0)]) == [
+            ("C11.2", "SEC_GND"), ("C13.1", "SEC_12V")], (
+            f"the wide-rung pair changed: {wide[(60.0, -240.0)]}"
         )
     finally:
         dc.GAP = saved_gap

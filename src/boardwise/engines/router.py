@@ -144,7 +144,16 @@ class _Router:
       would put a vertex of one wire on the other, which does join;
     * **cost** — a step costs one, a bend costs :data:`TURN_COST`, a crossing
       costs :data:`CROSS_COST`. The trunk is tried before any search, so the
-      search only ever spends bends on what the trunk cannot reach.
+      search only ever spends bends on what the trunk cannot reach;
+    * **reserved points** (145a) — the lattice nodes a **lead this plan will draw**
+      needs: a flag's lead, or a label's name stub (145a2). Those are drawn
+      *after* the wires on this page, so without a reservation the wires take the
+      lane and the lead is then either hung across one (074's defect) or refused
+      / pushed off the side it belongs on. The reservation is the wiring order's
+      missing half: `drawcompiler._lead_lane_reservations` decides each lead's
+      lane *before* anything is routed, and every wire of another net treats
+      those nodes as walls. Empty by default, so a router that knows nothing
+      about leads behaves exactly as before.
     """
 
     def __init__(
@@ -172,6 +181,17 @@ class _Router:
         #: lists out of step reports the run without naming its net rather than
         #: naming the wrong one.
         self.edge_nets: list[str] = []
+        #: 145a: the lattice nodes (**point -> owning net**) another net's flag
+        #: lead has been promised. A wire of a different net may neither stand on
+        #: one nor cross one, so a lane an earlier pass reserved stays usable
+        #: when the flag is drawn at the end. Empty unless the caller reserves.
+        self.reserved: dict[tuple[float, float], str] = {}
+        #: The net being placed right now: its own reservations do not block it.
+        self.reserved_exempt: str = ""
+        #: 145a: set while the **reservation pass** is deciding the lanes, so its
+        #: own search may not swallow a lane another flag already holds. Off for
+        #: everything else — see `drawcompiler._flag_room`.
+        self.reserve_strict: bool = False
 
     # ------------------------------------------------------------ geometry
 
@@ -204,6 +224,9 @@ class _Router:
     def _wall(self, node: tuple[int, int]) -> bool:
         point = self.point(node)
         if _key(point) in self.blocked:
+            return True
+        owner = self.reserved.get(_key(point))
+        if owner is not None and owner != self.reserved_exempt:
             return True
         for box in self.boxes:
             if (

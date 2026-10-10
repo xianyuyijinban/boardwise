@@ -197,12 +197,16 @@ def test_the_ch340_page_builds_and_no_stub_touches_another_net():
     # the 099c defect in one line: RXD's stub is no longer the 10-unit run that
     # sat on the V3 route's corner
     rxd = next(item for item in stubs if item.net == "RXD")
-    # 099f: RXD 落成折线（先平移一格再向标签侧），因为左向直线全被 V3 走线堵死；
-    # 无论哪种形状，都不再是 099c 那段落在线上的两点直线
-    assert len(rxd.points) == 3, rxd.points
-    anchor, corner, far = rxd.points
-    assert corner[0] == anchor[0] and corner[1] != anchor[1]   # 一格旁移
-    assert far[1] == corner[1] and far[0] < corner[0]          # 再向标签侧（左）
+    # **145a 更新**：RXD 现在是**两点直线**（向左 10，名字在标签那一侧）。
+    # 099f 当年把它钉成折线，是因为左向直线被 V3 走线的拐角独占；145a 的引线
+    # 通道保留（`drawcompiler._lead_lane_reservations`）让 V3 不再走那一行——
+    # V3 原来的走法还**压着 GND 旗引线**（off 态实测 2 处旗引线被穿，on 态 0
+    # 处），所以 V3 改道是**修好**，RXD 的直线档因此重新可用。无论哪种形状，
+    # 都不再是 099c 那段落在线上的两点直线。
+    assert len(rxd.points) == 2, rxd.points
+    anchor, far = rxd.points
+    assert far[0] < anchor[0] and far[1] == anchor[1], rxd.points
+    assert anchor[0] - far[0] == LABEL_STUB_LENGTH, rxd.points
 
     foreign = [
         (item.points[index], item.points[index + 1], item.net)

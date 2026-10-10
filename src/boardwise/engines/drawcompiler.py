@@ -287,6 +287,15 @@ FLAG_CLEARANCE = 5.0
 #: pin's reach is a long run rather than a stub.
 SIBLING_LEAD = 50.0
 
+#: 145a: how many lattice steps of a label's first stub rung are reserved for it
+#: before any wire is routed (:func:`_reserve_label_stubs`). Two steps is
+#: `drawapply.LABEL_STUB_LENGTH` — the page layer's own first rung for a name stub
+#: (057/099d) — so the lane promised here is the run that layer draws first. A
+#: shorter rung (the label box's own reach, when that is shorter) is a subset of
+#: it, and `tests/test_145a_walls.py` pins the two constants equal so they cannot
+#: drift apart.
+LABEL_LANE_STEPS = 2
+
 #: Minimum gap between two boxes that must not touch.
 GAP = 20.0
 
@@ -5500,6 +5509,8 @@ def _span_free(
     end: tuple[float, float],
     blocked: set[tuple[float, float]],
     boxes: Sequence[Box] | None = None,
+    *,
+    wire: bool = True,
 ) -> bool:
     """Can this one straight wire be drawn as it is, ends and all?
 
@@ -5507,6 +5518,18 @@ def _span_free(
     along, and no foreign anchor *inside* the span — a foreign pin or label on a
     wire is a connection, and a foreign wire vertex on it is a tee that needs a
     junction the caller would have to declare.
+
+    ``wire`` says whether this run is an **ordinary wire** (the windings, the
+    trunks) or a **flag's own lead**. 145a's reserved lanes are about the former:
+    the reservation pass promises a pad its lead *before* the wires are laid, and
+    the wires are what has to route around it (:func:`_lead_lane_reservations`).
+    A flag's own lead is not asked about reservations, because the reservation
+    pass and the placement ask this function the *same* question and a
+    reservation is not something the drawing can see: by the time a flag is
+    placed, its lane is free of wires. Gating only one of the two on
+    reservations made them ask different questions (the stricter search skips a
+    rung the looser one takes), and 053b's AMS1117 scenes measured the cost —
+    two flags pushed onto each other's glyph and refused by the gate.
     """
     if _key(start) == _key(end):
         return False
@@ -5524,7 +5547,72 @@ def _span_free(
     for point in blocked:
         if _strictly_on_segment(point, start, end):
             return False
+    # 145a: a lane another net's flag has reserved is a wall for an ordinary wire
+    # — the shortcut paths (this test and `_elbow_route`) are tried *before* the
+    # lattice search, so a reservation the search honours is worthless unless
+    # they honour it as well. A flag's own lead (`wire=False`) meets the lanes
+    # only while the reservation pass is deciding them (`reserve_strict`), where
+    # two leads must not be promised the same crossing; at placement time a lead
+    # through a *foreign* reserved lane is harmless (see `_flag_room`).
+    if (wire or router.reserve_strict) and _reserved_hits(router, start, end):
+        return False
     return True
+
+
+def _reserved_hits(
+    router: _Router, start: tuple[float, float], end: tuple[float, float]
+) -> bool:
+    """Does this run stand on or cross a lane reserved for another net's flag?
+
+    The nodes of the run, not its ends only: a wire that *crosses* a reserved
+    lane cuts the lead the flag will be drawn along, which is 074's defect ("a
+    flag lead through another net's conductor is read as a short"), so the whole
+    span is walled, not just the endpoints. ``router.reserved`` is empty for
+    every caller that reserves nothing, so this costs one truth test there.
+    """
+    if not router.reserved:
+        return False
+    exempt = router.reserved_exempt
+    length = max(abs(end[0] - start[0]), abs(end[1] - start[1]))
+    steps = max(1, int(round(length / router.grid)))
+    for index in range(steps + 1):
+        ratio = index / steps
+        owner = router.reserved.get(_key(_rounded((
+            start[0] + (end[0] - start[0]) * ratio,
+            start[1] + (end[1] - start[1]) * ratio,
+        ))))
+        if owner is not None and owner != exempt:
+            return True
+    return False
+
+
+def _lattice_nodes(
+    router: _Router, start: tuple[float, float], end: tuple[float, float]
+) -> set[tuple[float, float]]:
+    """Every lattice node of the straight run ``start``-``end`` (ends included)."""
+    out = {_key(_rounded(start)), _key(_rounded(end))}
+    length = max(abs(end[0] - start[0]), abs(end[1] - start[1]))
+    steps = max(1, int(round(length / router.grid)))
+    for index in range(steps + 1):
+        ratio = index / steps
+        out.add(_key(_rounded((
+            start[0] + (end[0] - start[0]) * ratio,
+            start[1] + (end[1] - start[1]) * ratio,
+        ))))
+    return out
+
+
+def _nodes_in_box(router: _Router, box: Box) -> set[tuple[float, float]]:
+    """Every lattice node inside ``box`` (its interior and its edges)."""
+    out: set[tuple[float, float]] = set()
+    first_x = math.ceil((box[0] - router.residue[0]) / router.grid - 1e-9)
+    last_x = math.floor((box[2] - router.residue[0]) / router.grid + 1e-9)
+    first_y = math.ceil((box[1] - router.residue[1]) / router.grid - 1e-9)
+    last_y = math.floor((box[3] - router.residue[1]) / router.grid + 1e-9)
+    for index_x in range(first_x, last_x + 1):
+        for index_y in range(first_y, last_y + 1):
+            out.add(router.point((index_x, index_y)))
+    return out
 
 
 def _set_foreign_edges(
@@ -5779,6 +5867,12 @@ def _vertex_clear(router: _Router, point: tuple[float, float]) -> bool:
     model (that is why a tee needs a junction), so our own corner may not land
     there — the readability contract's first constraint would report it, and the
     plan would be a drawing of a different circuit.
+
+    145a's reserved lanes are **not** asked about here, and they do not need to
+    be: every caller reaches a corner through :func:`_span_free` on the two legs
+    that meet there, and that test counts the run's **endpoints**, so a corner
+    standing on a reserved lane is refused as a leg. (It is also why a *flag's*
+    lead is left alone by the reservations — see :func:`_span_free`'s ``wire``.)
     """
     return router.crossing_at(point) is None
 
@@ -6038,7 +6132,15 @@ def _build_candidate(
     #: netlabel at all, and `draw apply` writes wires and flags, nothing else.
     #: A label-only net is therefore a net with **no conductor on the canvas**.
     flag_downgraded: set[str] = set()
-    for net_id in _net_order(ctx, expressions):
+    order = _net_order(ctx, expressions)
+    # 145a T3: every lead the plan will draw — a flag's, a label's name stub — is
+    # promised its lane *before* the first wire is drawn, so the wires the rest of
+    # this loop lays down route around it instead of taking it and leaving the
+    # lead to be refused. See :func:`_lead_lane_reservations`.
+    _lead_lane_reservations(
+        ctx, placed, expressions, order, router, occupied, solids, bodies,
+    )
+    for net_id in order:
         expression = expressions[net_id]
         if (
             expression.style == "flag"
@@ -6058,6 +6160,7 @@ def _build_candidate(
             expressions[net_id] = expression
             flag_downgraded.add(net_id)
             notes.append(downgrade_note)
+        router.reserved_exempt = net_id
         _set_foreign_edges(router, segments, net_id)
         blocked = _blocked_points(
             ctx, placed, net_id, labels, symbols, segments,
@@ -6248,7 +6351,7 @@ def _build_candidate(
     # those runs are obstacles for the router, and put in the per-net loop they
     # cost one 053B scenario 4 s → 40 s of search (measured) without changing a
     # single drawing.
-    for net_id in _net_order(ctx, expressions):
+    for net_id in order:
         expression = expressions[net_id]
         if expression.style != "wire" or not _power_needs_flag(ctx, net_id, symbols):
             continue
@@ -6256,6 +6359,7 @@ def _build_candidate(
         pin = _power_flag_pin(ctx, expression)
         if profile is None or pin is None:
             continue
+        router.reserved_exempt = net_id
         _set_foreign_edges(router, segments, net_id)
         blocked = _blocked_points(ctx, placed, net_id, labels, symbols, segments)
         router.blocked = blocked
@@ -6282,7 +6386,7 @@ def _build_candidate(
     # follows it. A net the plan already states with a symbol of its own, or one
     # not drawn as a wire, is left exactly as it is: the promise is "stated by
     # exactly one symbol", and a bus of flags already states it.
-    for net_id in _net_order(ctx, expressions):
+    for net_id in order:
         if net_id not in _gnd_outlet_nets(ctx):
             continue
         expression = expressions[net_id]
@@ -6296,6 +6400,7 @@ def _build_candidate(
         pin = _gnd_outlet_pin(ctx, expression)
         if profile is None or pin is None:
             continue
+        router.reserved_exempt = net_id
         _set_foreign_edges(router, segments, net_id)
         blocked = _blocked_points(ctx, placed, net_id, labels, symbols, segments)
         router.blocked = blocked
@@ -6644,12 +6749,14 @@ def _flag_anchor(
                 # a wire vertex.
                 if _key(anchor) in blocked or not _vertex_clear(router, anchor):
                     continue
-                if not _span_free(router, point, corner, blocked, boxes):
+                if not _span_free(router, point, corner, blocked, boxes, wire=False):
                     continue
                 if not _close(jog, 0.0):
                     if not _vertex_clear(router, corner):
                         continue
-                    if not _span_free(router, corner, anchor, blocked, boxes):
+                    if not _span_free(
+                        router, corner, anchor, blocked, boxes, wire=False
+                    ):
                         continue
                 if fits is not None and not fits(anchor, hang):
                     continue
@@ -6712,15 +6819,33 @@ def _flag_room(
 ) -> Callable[[Box, Box], bool]:
     """Is this box free of everything the drawing has already put down?
 
-    Three questions, the first two of which the placement already asked about its
-    glyph and the third of which is 069 sec.8's:
+    Four questions, the first three of which the placement already asked about its
+    glyph and the last of which is 145a's:
 
     * does it land on a part or a text box, or leave the page;
     * does it swallow a **foreign connection** — another net's pin tip, flag anchor
       or wire vertex (a flag on one of those joins two nets the spec keeps apart);
     * does it **touch a foreign net's wire**? ``router.edges`` is every wire but this
       net's own, so the rail the flag hangs from is not in its own way, while the
-      neighbouring rail 岳 found a glyph grazing is.
+      neighbouring rail 岳 found a glyph grazing is;
+    * when the caller is the **reservation pass**
+      (``router.reserve_strict``, :func:`_lead_lane_reservations`), does it sit on
+      a lane another net's flag already holds? Two flags may not swallow each
+      other's lane, and the pass that *decides* the lanes has to be able to see
+      that while there is still a choice — a pad whose first shape collides with
+      a lane already spoken for is then brought out another way instead of losing
+      its lane entirely (measured: without this, `C13.2` and `T1.6` got no lane
+      at all on 144's own arrangement, and the flag gate refused the page).
+
+      The **placement** pass deliberately asks the original question. A
+      reservation is not something the drawing can see — by the time a flag is
+      drawn, the lane it was promised is free of wires — and a flag that lands on
+      *another* reserved lane is harmless: it takes a rung its box is free at, and
+      the other lane is simply wasted. Asking both passes the strict question
+      instead made them reach **different rungs** (the strict one skips a rung the
+      loose one takes), and 053b's AMS1117 scenes measured the cost: a rail flag
+      pushed off its rung onto its neighbour's glyph, two flags overlapping,
+      refused by the gate.
     """
     def free(tight: Box, held: Box) -> bool:
         """``tight`` touches nothing; ``held`` (margin grown) touches no conductor.
@@ -6742,6 +6867,17 @@ def _flag_room(
         for point in blocked:
             if held[0] <= point[0] <= held[2] and held[1] <= point[1] <= held[3]:
                 return False
+        # 145a: the **reservation pass** may not swallow a lane another flag has
+        # already been promised — see the docstring. The placement pass asks the
+        # original question, because by then the lane it was promised is free of
+        # wires; asking both made them ask different questions and 053b's
+        # AMS1117 scenes measured the cost (two flags pushed onto each other's
+        # glyph, refused by the gate).
+        if router.reserve_strict and router.reserved:
+            for cell in _nodes_in_box(router, held):
+                owner = router.reserved.get(cell)
+                if owner is not None and owner != router.reserved_exempt:
+                    return False
         return True
 
     return free
@@ -6980,6 +7116,200 @@ def _walk(
     return _rounded(points[index])
 
 
+def _lead_lane_reservations(
+    ctx: _Context,
+    placed: _Placement,
+    expressions: Mapping[str, _Expression],
+    net_order: Sequence[str],
+    router: _Router,
+    occupied: Sequence[Box],
+    solids: Sequence[Box],
+    bodies: Sequence[Box] | None,
+) -> None:
+    """145a T3: promise every **lead the plan will draw** its lane, before any wire.
+
+    The wall this answers was measured on 144's flyback page: the wires are drawn
+    first and the flags last, so by the time a ground pad asks for its flag the
+    lane it would hang on is already taken. `T1.6`'s lead had to cut `SEC_12V`'s
+    trunk and `R8.2`'s had seventeen refusals; refusing the page was the honest
+    answer to a question that should never have been asked — the compiler knows
+    which pins are going to be flagged *before* it routes anything.
+
+    Two kinds of lead are reserved, and they are the same kind of thing: a run
+    the finished drawing will carry, which the wiring must not take first.
+
+    * a **flag's lead** — asked of :func:`_flag_pin_lead`, the *same* function the
+      placement calls, so the lane promised here is the lane drawn there. The
+      answer's nodes — the lead and the flag's own box (glyph, name text, 069
+      sec.8's clearance) — are reserved.
+    * a **label's name stub** (:func:`_label_stub_lane`) — the compiler already
+      decides the label's box side (:func:`_label_at`), and the page layer draws
+      the stub out that side (057/099d). Reserving its first rung keeps a wire
+      from taking it: measured on the CH340 page, where `V3`'s wire had to move
+      off the flag it used to cut and landed in the row `D+`'s stub leaves on,
+      which pushed that stub 5 units *into* the symbol — the shape 099e measured
+      as unreadable.
+
+    Everything goes into ``router.reserved`` against the net that owns it, and
+    every wire of another net then treats those nodes as walls
+    (``_Router._wall``, :func:`_span_free`, :func:`_vertex_clear`). A reservation
+    that would stand on some part's pin tip, or that another net has already
+    spoken for, is **not** taken: the lead is then drawn exactly as it was before
+    this pass existed, and refused with 074's measurement if it truly does not
+    fit. Nothing is taken away — the lane only ever adds room.
+
+    A rail drawn as a wire carries a flag too (069 sec.7), but its run hangs off
+    the rail the compiler itself routes, so there is no lead to reserve in
+    advance; and a net whose flag symbol the library does not carry is drawn as a
+    wire (:func:`_flag_wire_fallback`), so it has no flag to make room for.
+    Neither is reserved.
+    """
+    # Every pin tip on the page. A reserved node that is one of them would wall
+    # off a connection some wire has to make, which is worse than the crowded
+    # flag this pass exists to avoid.
+    tips: set[tuple[float, float]] = set()
+    for part_id in placed.origins:
+        profile = ctx.profile(part_id)
+        for pin in profile.pins:
+            point = _pin_point(
+                ctx, part_id, pin.number, placed.poses, placed.origins
+            )
+            if point is not None:
+                tips.add(_key(point))
+    taken: dict[tuple[float, float], str] = {}
+    router.reserved = taken
+    #: The strict question: while the lanes are being decided, a flag's box may
+    #: not swallow a lane another flag already holds (`_flag_room`). Cleared
+    #: again below, so the placement asks the original question.
+    router.reserve_strict = True
+    for net_id in net_order:
+        expression = expressions[net_id]
+        if expression.style == "label":
+            _reserve_label_stubs(
+                ctx, placed, net_id, expression, router, occupied, tips, taken,
+            )
+            continue
+        if expression.style != "flag":
+            continue
+        cls = _net_class(ctx, net_id) or "gnd"
+        profile, _ref = _flag_plan(ctx, net_id, cls)
+        if profile is None:
+            continue
+        family = flag_glyph_kind(profile)
+        blocked = _blocked_points(ctx, placed, net_id, [], [], [])
+        # This net's own pads are not obstacles: a lane starts *on* the pad it
+        # names, and one flag's box may legitimately reach a sibling pad of the
+        # same net. Only some **other** part's pin tip may not be reserved.
+        own = {_key(point) for _member, point in expression.points}
+        # This net's own reservations must not turn its own pads away, and a pad
+        # of this net may not be blocked by its own earlier lane.
+        router.reserved_exempt = net_id
+        for member, point in expression.points:
+            anchor, lead, hang, _crossings = _flag_pin_lead(
+                ctx, placed, net_id, profile, member, point, router, blocked,
+                solids, bodies,
+            )
+            if lead is None:
+                continue
+            cells: set[tuple[float, float]] = set()
+            for start, end in zip(lead, lead[1:]):
+                cells |= _lattice_nodes(router, start, end)
+            cells.add(_key(anchor))
+            cells |= _nodes_in_box(
+                router,
+                _flag_box(
+                    profile, _flag_rotation((0.0, hang), family), anchor, net_id
+                ),
+            )
+            _take_lane(taken, cells, tips, own, net_id)
+    router.reserved_exempt = ""
+    router.reserve_strict = False
+
+
+def _reserve_label_stubs(
+    ctx: _Context,
+    placed: _Placement,
+    net_id: str,
+    expression: _Expression,
+    router: _Router,
+    occupied: Sequence[Box],
+    tips: set[tuple[float, float]],
+    taken: dict[tuple[float, float], str],
+) -> None:
+    """Reserve the first rung of every stub this label net will be named by.
+
+    One cell run per pin, from the pin out along the side the label's own box is
+    on — the same side :func:`_label_stub_lane` reads off the box the compiler
+    just chose, and the side the page layer's stub leaves on (:func:`_label_at`
+    / `drawapply._label_stub_candidates`). The length is
+    :data:`LABEL_LANE_STEPS` lattice steps, which is the page layer's own first
+    rung (:data:`drawapply.LABEL_STUB_LENGTH`, 2 steps): reserving the first rung
+    is enough, because a wire that would have taken it is what pushes the stub
+    off the label's side in the first place.
+    """
+    router.reserved_exempt = net_id
+    reach = LABEL_LANE_STEPS * router.grid
+    for member, point in expression.points:
+        part_id, _, token = member.partition(".")
+        # `_label_at` *appends* the box it chooses to the list it is given, so it
+        # is handed a copy: the real placement must see the same list it would
+        # have seen without this pass.
+        label = _label_for(
+            ctx, net_id, part_id, token, point, placed, list(occupied)
+        )
+        direction = _label_stub_lane(label, point)
+        far = _rounded((
+            point[0] + direction[0] * reach, point[1] + direction[1] * reach,
+        ))
+        _take_lane(
+            taken, _lattice_nodes(router, point, far), tips,
+            {_key(point)}, net_id,
+        )
+
+
+def _label_stub_lane(
+    label: LayoutLabel, point: tuple[float, float]
+) -> tuple[float, float]:
+    """The way a label's name stub leaves its pin: towards its own box.
+
+    `drawapply._label_stub_candidates`'s own reading of the same two facts (the
+    anchor and the box's centre, along the dominant axis), so the lane reserved
+    here is the run the page layer draws first.
+    """
+    box = label.bbox
+    centre_x = (box[0] + box[2]) / 2.0
+    centre_y = (box[1] + box[3]) / 2.0
+    dx, dy = centre_x - point[0], centre_y - point[1]
+    if abs(dx) >= abs(dy) and abs(dx) > 1e-9:
+        return (1.0 if dx > 0 else -1.0, 0.0)
+    if abs(dy) > 1e-9:
+        return (0.0, 1.0 if dy > 0 else -1.0)
+    return (0.0, 1.0)
+
+
+def _take_lane(
+    taken: dict[tuple[float, float], str],
+    cells: set[tuple[float, float]],
+    tips: set[tuple[float, float]],
+    own: set[tuple[float, float]],
+    net_id: str,
+) -> bool:
+    """Promise these cells to `net_id`, unless someone else needs them.
+
+    Two refusals, both deliberate: a cell that is a **foreign pin tip** (the lane
+    would wall off a connection some wire has to make), and a cell another net has
+    already been promised. Either way the lead is simply drawn the way it was
+    before this pass existed.
+    """
+    if (cells & tips) - own:
+        return False
+    if any(taken.get(cell, net_id) != net_id for cell in cells):
+        return False
+    for cell in cells:
+        taken[cell] = net_id
+    return True
+
+
 def _flag_pins(
     ctx: _Context,
     placed: _Placement,
@@ -7010,11 +7340,74 @@ def _flag_pins(
     not fit, the ladder reaches shorter and then farther, and only if nothing
     anywhere fits does the flag end on its own pin.
 
+    The search itself lives in :func:`_flag_pin_lead`, because 145a's
+    reservation pass has to ask the **same** question before any wire is drawn —
+    two copies of "which lead this pin would take" is exactly how a reservation
+    and the flag it reserved for would come to disagree.
+
     Returns the refusal when there is nothing legal to draw: 074's ``layout-unsat``
     when the pin's every lead crosses another net's wire (see
     :func:`_flag_crossing_failure` — the flag standing on the crowded pin is the
     form 岳 rejected, so it is not taken), and ``None`` in every other case, the pin
     fallback included.
+    """
+    family = flag_glyph_kind(profile)
+    natural = family != FLAG_GLYPH_KIND_GND
+    for member, point in members:
+        anchor, lead, hang, crossings = _flag_pin_lead(
+            ctx, placed, net_id, profile, member, point, router, blocked, solids,
+            bodies, stub=stub,
+        )
+        if lead is not None:
+            _place_flag(
+                net_id, profile, ref, anchor,
+                _flag_rotation((0.0, hang), family), lead,
+                segments, symbols, occupied, solids,
+            )
+            continue
+        if crossings:
+            # 074: this pad's flag could have hung 岳's way anywhere it fitted — and
+            # every one of those leads cut through another net's wire. Refused with
+            # the measurement, not drawn on the pin.
+            return _flag_crossing_failure(
+                net_id, point, crossings,
+                f"{member} is named by a flag of its own (069 sec.1)",
+            )
+        _place_flag(
+            net_id, profile, ref, point,
+            _flag_rotation((0.0, 1.0 if natural else -1.0), family), None,
+            segments, symbols, occupied, solids,
+        )
+
+
+def _flag_pin_lead(
+    ctx: _Context,
+    placed: _Placement,
+    net_id: str,
+    profile: SymbolProfile,
+    member: str,
+    point: tuple[float, float],
+    router: _Router,
+    blocked: set[tuple[float, float]],
+    solids: Sequence[Box],
+    bodies: Sequence[Box] | None = None,
+    *,
+    stub: bool = False,
+) -> tuple[
+    tuple[float, float],
+    tuple[tuple[float, float], ...] | None,
+    float,
+    list[str],
+]:
+    """The lead this pin's flag would be drawn on: ``(anchor, lead, hang, crossings)``.
+
+    The pin's own escape side first, then every other direction: 069 sec.8's 换侧 is
+    about the picture, not about the symbol — a pad whose own side is crowded
+    (the measured AMS1117 with its input capacitor ten units away, its rail ten
+    above) still has room *below*, and a lead that leaves a pin tip in another
+    direction is a legal wire. ``lead`` is ``None`` when no direction fits at all,
+    and then ``crossings`` holds 074's measurement of every rung that fitted
+    everywhere else but cut another net's wire.
     """
     inner = None
     if ctx.budget.page_box is not None:
@@ -7026,77 +7419,50 @@ def _flag_pins(
     family = flag_glyph_kind(profile)
     natural = family != FLAG_GLYPH_KIND_GND
     room = _flag_room(router, solids, inner, blocked)
-    for member, point in members:
-        part_id, _, token = member.partition(".")
-        escape = _pin_direction(
-            ctx, part_id, token, placed.poses,
-        ) or (0.0, -1.0)
+    part_id, _, token = member.partition(".")
+    escape = _pin_direction(
+        ctx, part_id, token, placed.poses,
+    ) or (0.0, -1.0)
 
-        def fits(anchor: tuple[float, float], _hang: float) -> bool:
-            rotation = _flag_rotation((0.0, _hang), family)
-            return room(
-                _flag_box(profile, rotation, anchor, net_id, margin=0.0),
-                _flag_box(profile, rotation, anchor, net_id),
-            )
+    def fits(anchor: tuple[float, float], _hang: float) -> bool:
+        rotation = _flag_rotation((0.0, _hang), family)
+        return room(
+            _flag_box(profile, rotation, anchor, net_id, margin=0.0),
+            _flag_box(profile, rotation, anchor, net_id),
+        )
 
-        # The pin's own escape first, then every other direction: 069 sec.8's 换侧 is
-        # about the picture, not about the symbol — a pad whose own side is crowded
-        # (the measured AMS1117 with its input capacitor ten units away, its rail ten
-        # above) still has room *below*, and a lead that leaves a pin tip in another
-        # direction is a legal wire.
-        hung = False
-        crossings: list[str] = []
-        for direction in [
-            escape,
-            *(
-                other for other in
-                ((0.0, 1.0), (0.0, -1.0), (-1.0, 0.0), (1.0, 0.0))
-                if other != escape
-            ),
-        ]:
-            anchor, lead, hang = _flag_anchor(
-                router, point, direction, blocked,
-                # 069 sec.1's band is 40-60 and :data:`SIBLING_LEAD` is its
-                # middle, so 40 is the **second** rung of a far pad's own ladder:
-                # a shape that fits it without giving up the 50 is drawn 岳's 40
-                # out rather than the nearer :data:`FLAG_LEAD` (measured 082 on
-                # 053b's duplicate-VOUT shape — the 40 rung turns **half** a jog
-                # down instead of a whole one, and that half turn is what clears
-                # C1's own annotation; the 50 stays first, so every drawing that
-                # reached 50 still does, E1 included), and a shape with no room
-                # at 40 still lands on the nearer rung. The label half
-                # (:func:`_stub_label`) keeps 069's single rung: a label box is
-                # one text line, not a glyph plus a name, and 074 measured all
-                # six of its calls answered by the pad's own direction.
-                leads=(SIBLING_LEAD, 40.0) if stub else (),
-                fits=fits,
-                up=natural,
-                boxes=bodies,
-                crossings=crossings,
-            )
-            if lead is None:
-                continue  # nothing fits that way — try the next side
-            _place_flag(
-                net_id, profile, ref, anchor,
-                _flag_rotation((0.0, hang), family), lead,
-                segments, symbols, occupied, solids,
-            )
-            hung = True
-            break
-        if not hung and crossings:
-            # 074: this pad's flag could have hung 岳's way anywhere it fitted — and
-            # every one of those leads cut through another net's wire. Refused with
-            # the measurement, not drawn on the pin.
-            return _flag_crossing_failure(
-                net_id, point, crossings,
-                f"{member} is named by a flag of its own (069 sec.1)",
-            )
-        if not hung:
-            _place_flag(
-                net_id, profile, ref, point,
-                _flag_rotation((0.0, 1.0 if natural else -1.0), family), None,
-                segments, symbols, occupied, solids,
-            )
+    crossings: list[str] = []
+    for direction in [
+        escape,
+        *(
+            other for other in
+            ((0.0, 1.0), (0.0, -1.0), (-1.0, 0.0), (1.0, 0.0))
+            if other != escape
+        ),
+    ]:
+        anchor, lead, hang = _flag_anchor(
+            router, point, direction, blocked,
+            # 069 sec.1's band is 40-60 and :data:`SIBLING_LEAD` is its
+            # middle, so 40 is the **second** rung of a far pad's own ladder:
+            # a shape that fits it without giving up the 50 is drawn 岳's 40
+            # out rather than the nearer :data:`FLAG_LEAD` (measured 082 on
+            # 053b's duplicate-VOUT shape — the 40 rung turns **half** a jog
+            # down instead of a whole one, and that half turn is what clears
+            # C1's own annotation; the 50 stays first, so every drawing that
+            # reached 50 still does, E1 included), and a shape with no room
+            # at 40 still lands on the nearer rung. The label half
+            # (:func:`_stub_label`) keeps 069's single rung: a label box is
+            # one text line, not a glyph plus a name, and 074 measured all
+            # six of its calls answered by the pad's own direction.
+            leads=(SIBLING_LEAD, 40.0) if stub else (),
+            fits=fits,
+            up=natural,
+            boxes=bodies,
+            crossings=crossings,
+        )
+        if lead is not None:
+            return anchor, lead, hang, crossings
+    return _rounded(point), None, natural, crossings
 
 
 def _stub_label(

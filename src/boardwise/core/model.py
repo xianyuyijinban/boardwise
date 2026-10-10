@@ -27,12 +27,24 @@ GROUND_NET_PREFIXES: tuple[str, ...] = (
     "VSS",
 )
 
+#: The same ground words, read as the **last** ``_``-separated token of a
+#: compound name (``SEC_GND``, ``ISO_VSS``). 145a: the prefix rule alone called
+#: the flyback's secondary-side return ``SEC_GND`` "not a ground name", and
+#: `engines.drawapply.flag_kind` (143d's cross-check, which reads this function
+#: as "the one place a name is called ground") then refused to hang the ground
+#: glyph 岳's own page draws on that net — a ground symbol on a rail-looking name
+#: is exactly the disagreement 143d exists to catch, so the vocabulary, not the
+#: check, is what had to grow. A ground word at the end of a name is the same
+#: statement as one at the front.
+GROUND_NET_SUFFIX_WORDS: tuple[str, ...] = GROUND_NET_PREFIXES
+
 
 def is_ground_net(name: str | None) -> bool:
     """Return True for common ground net names (GND, AGND, PGND, VSS, ...).
 
-    Prefix match on the upper-cased name, so ``GNDA`` and ``VSSA`` also count.
-    ``None`` and empty names are never ground.
+    A ground word at the **front** of the upper-cased name (``GNDA`` and ``VSSA``
+    count) or as its **last** ``_``-separated token (``SEC_GND``, ``ISO_VSS`` —
+    145a). ``None`` and empty names are never ground.
 
     **The name is only a candidate.** A net's role should come from declared
     intent and from device facts (a part's pin function, a rail's source); this
@@ -45,7 +57,10 @@ def is_ground_net(name: str | None) -> bool:
     if not name:
         return False
     upper = name.upper()
-    return any(upper.startswith(prefix) for prefix in GROUND_NET_PREFIXES)
+    if any(upper.startswith(prefix) for prefix in GROUND_NET_PREFIXES):
+        return True
+    _head, separator, tail = upper.rpartition("_")
+    return bool(separator) and tail in GROUND_NET_SUFFIX_WORDS
 
 
 @dataclass

@@ -2513,16 +2513,27 @@ def test_a_pad_sealed_on_every_side_is_layout_unsat_with_the_conductor_named():
     )
 
 
-def test_a_lead_that_cuts_another_net_refuses_that_variant_and_names_the_run():
-    """074 sec.4：拒绝要出现在编译器的答复里，逐变体、带实测原因（不是静默丢弃）.
+def test_the_e1_crossing_is_prevented_rather_than_refused():
+    """**145a T3 更新**：E1 那条「引线被穿」的梯级**不再存在**——通道先被预留。
 
-    The ladder turning down a crossing rung is invisible on its own: a variant that
-    loses a pad's flag has to *say so*, or the caller only sees fewer candidates and
-    no reason. This is the other half of the drawing claim in
-    :func:`test_a_pads_flag_lead_never_cuts_through_another_nets_wire` — the same
-    compile, read from the refusal side: some variant is refused as
-    ``layout-unsat``, the refusal names the run and the net it crossed, and no
-    variant is refused without a name.
+    074 的 `layout-unsat`（引线要穿过别网的导线就拒）是 053B 对「挂不下」的诚实
+    答复，这条测试当年钉的是它的**拒绝侧**：某个变体被拒、拒绝里点名跑了哪一段、
+    穿了哪个网、在哪一点。145a T3 把「这个脚要挂旗」变成布线**之前**的输入
+    （`_lead_lane_reservations` 把它需要的通道格子记成禁行，见
+    `_Router.reserved`），于是 E1 上那条会穿 U1.2 引线的 VIN5 导线**自己绕开了**
+    ——穿线没有发生，也就没有可拒的梯级。
+
+    所以断言整条翻过来，并如实记下这一处**形状变化**：
+
+    * 这条形状现在**没有任何变体**因为「引线穿线」被拒（原断言在 145a 之后
+      恒为假）；
+    * 画出来的引线一条都不穿别网的导线（054 侧那半由
+      :func:`test_a_pads_flag_lead_never_cuts_through_another_nets_wire` 钉着）；
+    * **拒绝机制本身没有失去见证**：它仍由前一条
+      :func:`test_a_pad_whose_every_lead_crosses_a_wire_is_refused_not_downgraded`
+      在「每条引线都穿」的形状上逐字钉着，以及
+      :func:`test_every_statement_of_the_074_refusal_fits_its_own_signature` 的
+      三处调用签名。
     """
     page = (0.0, 0.0, 1170.0, 825.0)
     spec = _duplicate_vout_circuit(out_members=["U1.2", "U1.4", "C2.1"])
@@ -2530,25 +2541,16 @@ def test_a_lead_that_cuts_another_net_refuses_that_variant_and_names_the_run():
         spec, _e1_presentation(), library(), dc.CompileBudget(page_box=page),
     )
     assert result.ok, render(result)
-    refused = [
+    crossing_refusals = [
         item for item in result.rejected
         if item.failure is not None
         and item.failure.category == dc.FAILURE_LAYOUT_UNSAT
+        and "crosses net" in item.failure.detail
     ]
-    assert refused, (
-        "the crossing rung of the E1 shape is refused by the ladder, but the "
-        f"compiler's answer says nothing about it: "
-        f"{[(item.variant, item.reason) for item in result.rejected]}"
-    )
-    for item in refused:
-        assert "crosses net" in item.failure.detail and " at (" in item.failure.detail, (
-            f"variant {item.variant} was refused as layout-unsat without naming the "
-            f"conductor it crossed: {item.failure.detail}"
-        )
-        assert item.failure.action
-    assert any("VIN5" in item.failure.detail for item in refused), (
-        "the measured crossing on this shape is the input rail VIN5 being cut by pin "
-        f"2's own run: {[item.failure.detail for item in refused]}"
+    assert not crossing_refusals, (
+        "145a T3 reserves this pad's lead channel before the wires are drawn, so "
+        "no variant should be refused for a lead crossing another net; got "
+        f"{[item.failure.detail for item in crossing_refusals]}"
     )
 
 
