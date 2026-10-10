@@ -43,13 +43,24 @@ symbol is stored as measured and the intent moves into the title, because a
 profile that quietly re-rotates a symbol to satisfy a layout decision is the
 exact failure 118 is fixing.
 
-**What is NOT measured, and is marked as such**: the body box.  Neither reading
-carries a per-part bounding box (`12_bodies.json` is a component dump, not
-boxes; `sch.geometry`'s `bboxes` holds only the sheet).  So the box is derived
-from the **measured pin tips minus the measured pin length** — the inner ends of
-the outer pins, which is the drawn body edge for a two-pin part and a stated
-lower bound for the multi-pin ones.  Every body in the output carries
-``bodySource`` saying which of the two it is.
+**The body box: measured since 147, derived before that and still labelled so.**
+The reading this tool's earlier version said did not exist does exist —
+`sch.geometry --params {"bboxIds": [...]}` answers one box per primitive, stroke
+included, which *is* the drawn extent of a placed symbol (147 measured it for
+all 30 placed primitives of `test/P1`; `outputs/147/12_live_bodies.txt`).
+`read_bboxes` folds that answer back through the pose each primitive was placed
+at, and a symbol whose parts all agree keeps the measured box. The older
+derivation — the **measured pin tips minus the measured pin length**, the inner
+ends of the outer pins — stays as the fallback, and the profile's `notes` say
+which of the two a profile carries. What 147 fixed by making this measured: the derived
+box is the interval between the pins on the pin axis and therefore has **zero
+extent perpendicular to it**, and a zero-area box is one no wire and no text row
+can ever cross — three defects 岳 caught by eye on the landed page, with every
+offline gate green (`outputs/147/FINDINGS.md`).
+
+**`texts` and `notes` are carried through.** They are other batches'
+measurements (146's symbol text anchors, 145c's C0603W provenance); a rebuild
+that dropped them would delete a measurement nobody re-made.
 """
 
 from __future__ import annotations
@@ -64,11 +75,39 @@ for _extra in (ROOT / "src", ROOT / "tests"):
     if str(_extra) not in sys.path:
         sys.path.insert(0, str(_extra))
 
+from boardwise.core.symbolprofile import (  # noqa: E402
+    FLAG_GLYPH_KIND_RAIL,
+    FLAG_GLYPH_ROTATION_OFFSETS,
+    SymbolProfile,
+    flag_glyph_kind,
+)
+
+#: ``symbolRef -> flag family``, filled from the library at the start of a build.
+_FLAG_KIND: dict[str, str] = {}
+
 APPLY = ROOT / "outputs" / "118" / "apply_report.json"
 PINS110 = ROOT / "outputs" / "110" / "11_pins.json"
 BODIES110 = ROOT / "outputs" / "110" / "12_bodies.json"
 LIBRARY = ROOT / "blocklib" / "specs" / "flyback_uc3845.library.json"
 PLAN_REPORT = ROOT / "outputs" / "118" / "plan_report.json"
+
+#: 147: the per-primitive **body** reading this tool's docstring used to say did
+#: not exist. `sch.geometry --params {"bboxIds": [...]}` answers one box per
+#: primitive in page coordinates (stroke included), which is the drawn extent of a
+#: placed symbol — so the body no longer has to be inferred from the pins' inner
+#: ends. `BBOX_LAYOUT` is the landed page those ids came from: it carries the pose
+#: of every primitive, and the box is folded back through that pose here.
+#:
+#: 147b: **both readings live under this tool's own output directory.** They were
+#: born in `outputs/147/` and `outputs/146/cand/` — the working files of the two
+#: batches that measured them — so rebuilding the library depended on another
+#: batch's scratch directory surviving. A cross-batch input is copied next to the
+#: tool that consumes it and named for what it is; the 147 originals stay where
+#: they are, and `--bbox-reading`/`--bbox-layout` point the tool somewhere else
+#: when a newer reading exists. Without either file the tool still runs and falls
+#: back to the pin-derived body, labelled as such per profile.
+BBOX_READING = ROOT / "outputs" / "118" / "11_geom_bboxes.json"
+BBOX_LAYOUT = ROOT / "outputs" / "118" / "bbox_layout.json"
 
 DIR_BY_ROTATION = {0: "right", 90: "up", 180: "left", 270: "down"}
 
@@ -184,7 +223,7 @@ def body_from_pins(local, pins):
     between, so the box is a stated lower bound — which is exactly what
     `readability`'s body tests need (a wire must not cross a body; a box smaller
     than the truth is permissive, a box larger than the truth refuses a legal
-    drawing), and it is labelled per profile by `bodySource`.
+    drawing), and the profile's `notes` say which of the two it carries.
     """
     inward = {
         "left": (1.0, 0.0), "right": (-1.0, 0.0),
@@ -201,6 +240,191 @@ def body_from_pins(local, pins):
         round(min(xs), 4), round(min(ys), 4),
         round(max(xs), 4), round(max(ys), 4),
     )
+
+
+def read_bboxes(
+    profiles,
+    reading: pathlib.Path | None = None,
+    layout_path: pathlib.Path | None = None,
+) -> dict[str, tuple[float, float, float, float]]:
+    """``{symbolRef: local body box}`` from the host's own per-primitive bbox.
+
+    ``reading``/``layout_path`` default to :data:`BBOX_READING` and
+    :data:`BBOX_LAYOUT` (the copies under `outputs/118/`); the CLI overrides them
+    for a newer `sch.geometry bboxIds` reading.
+
+    The reading is a page box per **primitive id**; the poses come from the layout
+    the ids were read off, matched on ``(x, y, rotation)`` — a pose that two
+    different symbols share would make the mapping a guess, and that is reported
+    and skipped rather than averaged.
+
+    Flags fold through the glyph convention frame (``rotation + offset``, mirror
+    false, about the anchor) exactly as `symbolprofile.flag_glyph_box` does, and
+    their box is then extended back to the connection point so the leader is
+    inside it — the same "away from the connection, starting at it" convention
+    every flag profile in this repo states.
+    """
+    reading = BBOX_READING if reading is None else reading
+    layout_path = BBOX_LAYOUT if layout_path is None else layout_path
+    if not (reading.is_file() and layout_path.is_file()):
+        return {}
+    bboxes = json.loads(reading.read_text(encoding="utf-8")).get("bboxes", {})
+    layout = json.loads(layout_path.read_text(encoding="utf-8"))
+    poses: dict[tuple[float, float, float], list[dict]] = {}
+
+    def editor_rotation(angle: float) -> float:
+        """The file's angle -> the angle `sch.geometry` reports back.
+
+        `draw.py::_editor_rotation` lands ``R = -angle``, so a plan's 90 comes back
+        as the editor's 270 (measured here on C13, the page's one rotated part:
+        the layout says 90 and the read-back says 270). Keying the pose table on
+        the file angle silently skipped it.
+        """
+        return (-angle) % 360
+
+    for item in layout["parts"]:
+        poses.setdefault(
+            (item["x"], item["y"], editor_rotation(float(item["rotation"]))), []
+        ).append({"symbolRef": item["symbolRef"], "mirror": bool(item["mirror"]),
+                  "flag": False, "rotation": float(item["rotation"])})
+    for item in layout.get("powerSymbols", []):
+        poses.setdefault(
+            (item["x"], item["y"], editor_rotation(float(item["rotation"]))), []
+        ).append({"symbolRef": item["symbolRef"], "mirror": False, "flag": True,
+                  "rotation": float(item["rotation"])})
+
+    out: dict[str, list[tuple[float, float, float, float]]] = {}
+    for record in json.loads(
+        BBOX_READING.read_text(encoding="utf-8")
+    ).get("components", []):
+        state = record.get("state", {})
+        comp = state.get("Component", {})
+        pid = record.get("primitiveId")
+        if comp.get("ComponentType") == "sheet" or pid not in bboxes:
+            continue
+        key = (float(state.get("X") or 0), float(state.get("Y") or 0),
+               float(state.get("Rotation") or 0))
+        candidates = poses.get(key, [])
+        if len(candidates) != 1:
+            continue
+        entry = candidates[0]
+        ref = entry["symbolRef"]
+        box = bboxes[pid]
+        page = (box["minX"], box["minY"], box["maxX"], box["maxY"])
+        angle = entry["rotation"]
+        mirror = entry["mirror"]
+        if entry["flag"]:
+            angle = entry["rotation"] + FLAG_GLYPH_ROTATION_OFFSETS[flag_glyph_kind_ref(ref)]
+            mirror = False
+        local = unpose_box(page, rotation=angle, mirror=mirror, ox=key[0], oy=key[1])
+        if entry["flag"]:
+            local = (local[0], min(0.0, local[1]), local[2], max(0.0, local[3]))
+        out.setdefault(ref, []).append(local)
+    agreed: dict[str, tuple[float, float, float, float]] = {}
+    for ref, boxes in out.items():
+        distinct = {tuple(box) for box in boxes}
+        if len(distinct) != 1:
+            print(f"  !! {ref}: the placed parts disagree ({len(distinct)} boxes); "
+                  "the derived body stands")
+            continue
+        agreed[ref] = tuple(round(v, 1) for v in boxes[0])
+    return agreed
+
+
+def flag_glyph_kind_ref(ref: str) -> str:
+    """The flag family of a ``symbolRef`` — a lookup into the profiles at hand."""
+    return _FLAG_KIND.get(ref, FLAG_GLYPH_KIND_RAIL)
+
+
+def unpose_box(box, *, rotation: float, mirror: bool, ox: float, oy: float):
+    """Page box -> symbol-local box: the inverse of `core.symbolprofile.pose_box`.
+
+    A rotated rectangle's axis-aligned bound folds back to a box whose own
+    axis-aligned bound is the box that went in, so the round trip below is an
+    identity rather than a tolerance.
+    """
+    from boardwise.core.symbolprofile import pose_box
+
+    xs, ys = [], []
+    for px, py in ((box[0], box[1]), (box[2], box[1]), (box[2], box[3]), (box[0], box[3])):
+        rad = math.radians(-rotation)
+        x, y = px - ox, py - oy
+        x, y = x * math.cos(rad) - y * math.sin(rad), x * math.sin(rad) + y * math.cos(rad)
+        if mirror:
+            x = -x
+        xs.append(round(x, 6))
+        ys.append(round(y, 6))
+    out = (min(xs), min(ys), max(xs), max(ys))
+    # Round-trip guard: the box must come back where it started under the one
+    # fold every consumer uses.
+    back = pose_box(out, rotation=rotation, mirror=mirror, ox=ox, oy=oy)
+    assert all(abs(back[i] - box[i]) < 1e-6 for i in range(4)), (out, back, box)
+    return out
+
+
+#: What every profile whose body came from the host's own bbox reading carries.
+MEASURED_BODY_SOURCE = (
+    "measured: the host's per-primitive bbox (sch.geometry bboxIds), stroke "
+    "included, folded back through the pose (147)"
+)
+
+
+def _note_body(notes: list[str]) -> list[str]:
+    """Replace the ``body:`` note with what the box now is, keeping the rest."""
+    out = [n for n in notes if not n.strip().lower().startswith("body:")]
+    return [MEASURED_BODY_SOURCE + " — outputs/147/12_live_bodies.txt"] + out
+
+
+def _kept_extra(entry: dict, ref: str, measured_bodies: dict) -> dict:
+    """``texts``/``notes`` from the profile being rebuilt, verbatim.
+
+    Other batches' measurements (146's symbol text anchors, 145c's C0603W
+    provenance) live in these two keys; a rebuild that dropped them would delete
+    a measurement nobody re-made.
+    """
+    extra: dict = {}
+    if "texts" in entry:
+        extra["texts"] = entry["texts"]
+    if "notes" in entry:
+        extra["notes"] = (
+            _note_body(entry["notes"]) if ref in measured_bodies else entry["notes"]
+        )
+    return extra
+
+
+def _option(argv: list[str], name: str) -> pathlib.Path | None:
+    """The value of ``--name PATH`` or ``--name=PATH`` in ``argv``, or ``None``."""
+    for index, item in enumerate(argv):
+        if item == name and index + 1 < len(argv):
+            return pathlib.Path(argv[index + 1])
+        if item.startswith(f"{name}="):
+            return pathlib.Path(item.split("=", 1)[1])
+    return None
+
+
+def _shown(path: pathlib.Path) -> str:
+    """``path`` as a repo-relative posix string when it is inside the repo."""
+    try:
+        return path.resolve().relative_to(ROOT).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def _positionals(argv: list[str]) -> list[str]:
+    """Everything in ``argv`` that is neither an option nor an option's value."""
+    out: list[str] = []
+    skip = False
+    for item in argv[1:]:
+        if skip:
+            skip = False
+            continue
+        if item in ("--bbox-reading", "--bbox-layout"):
+            skip = True
+            continue
+        if item.startswith("--") or item == "-h":
+            continue
+        out.append(item)
+    return out
 
 
 def main(argv: list[str]) -> int:
@@ -220,6 +444,14 @@ def main(argv: list[str]) -> int:
 
     current = json.loads(LIBRARY.read_text(encoding="utf-8"))
     old_titles = {item["symbolRef"]: item.get("title", "") for item in current["profiles"]}
+    _FLAG_KIND.clear()
+    for item in current["profiles"]:
+        _FLAG_KIND[item["symbolRef"]] = flag_glyph_kind(SymbolProfile.from_dict(item))
+    reading = _option(argv, "--bbox-reading") or BBOX_READING
+    layout_path = _option(argv, "--bbox-layout") or BBOX_LAYOUT
+    measured_bodies = read_bboxes(current, reading, layout_path)
+    print(f"147: {len(measured_bodies)} symbol(s) have the host's own bbox reading "
+          f"({_shown(reading)}); the rest keep the pin-derived body")
 
     # The 113 intent, kept as the first title line. Copied out of the current
     # library so this tool does not re-word another batch's decision.
@@ -231,9 +463,18 @@ def main(argv: list[str]) -> int:
     out_profiles = []
     for entry in current["profiles"]:
         ref = entry["symbolRef"]
-        designators = sorted(d for d, s in spec_of.items() if False)
         # which 118 designators use this symbolRef
         users = [item["designator"] for item in by_spec if item["symbolRef"] == ref]
+        if not users:
+            # A profile 118 never placed (145c added C0603W after 118 ran). Its
+            # pins and title are another batch's measurement and are kept
+            # verbatim; only a measured body can still update it.
+            kept = dict(entry)
+            if ref in measured_bodies:
+                kept["body"] = list(measured_bodies[ref])
+                kept["notes"] = _note_body(kept.get("notes", []))
+            out_profiles.append(kept)
+            continue
         sample = users[0]
         local = tips[sample]
         record = measured.get(lcsc[sample])
@@ -265,26 +506,39 @@ def main(argv: list[str]) -> int:
         for number, tip in local.items():
             if number not in pins:
                 raise SystemExit(f"{ref}: pin {number} has no direction/length")
-        box = body_from_pins(local, pins)
+        derived = body_from_pins(local, pins)
         two_pin = len(pins) == 2
         intent = old_titles[ref]
+        if ref in measured_bodies:
+            box = list(measured_bodies[ref])
+            body_line = (
+                "Body box = the host's own per-primitive bbox (`sch.geometry` "
+                "bboxIds), folded back through the pose, stroke included — the "
+                "true drawn extent."
+            )
+            body_source = MEASURED_BODY_SOURCE
+        else:
+            box = list(derived)
+            body_line = (
+                "Body box = "
+                + ("the two pins' inner ends (a lower bound: it is the pin axis, "
+                   "with no extent perpendicular to it)."
+                   if two_pin else
+                   "the outer pins' inner ends — a stated lower bound.")
+            )
+            body_source = (
+                "derived lower bound: the outer pins' inner ends (no bbox reading)"
+            )
         out_profiles.append({
             "symbolRef": ref,
             "title": (
                 f"{intent}\n"
                 f"[118] pins and body measured 2026-10-04 on the real host: "
-                f"{source}. Body box = "
-                + ("the two pins' inner ends (measured drawn extent)."
-                   if two_pin else
-                   "the outer pins' inner ends — a stated lower bound, since no "
-                   "reading carries a per-part bounding box.")
+                f"{source}. {body_line}"
+                + (" 147 re-measured the body; see the profile's `notes`."
+                   if ref in measured_bodies else "")
             ),
-            "body": list(box),
-            "bodySource": (
-                "measured: the two pins' inner ends"
-                if two_pin else
-                "derived lower bound: the outer pins' inner ends (no bbox in any reading)"
-            ),
+            "body": box,
             "pins": [
                 {
                     "number": number,
@@ -295,6 +549,7 @@ def main(argv: list[str]) -> int:
                 }
                 for number in sorted(local, key=_pin_sort)
             ],
+            **_kept_extra(entry, ref, measured_bodies),
         })
 
     payload = {
@@ -303,14 +558,17 @@ def main(argv: list[str]) -> int:
         "source": (
             "blockwise-symbol-profile, MEASURED 2026-10-04 from the live editor "
             "(outputs/118/apply_report.json pin read-back; outputs/110/11_pins.json "
-            "+ 12_bodies.json for names/directions/lengths). Built by "
+            "+ 12_bodies.json for names/directions/lengths); every body box "
+            "re-measured 2026-10-10 from the host's own per-primitive bbox "
+            "(outputs/147/11_geom_bboxes.json, `sch.geometry bboxIds`). Built by "
             "tools/118_measure_profiles.py — do not hand-edit: a profile is a set "
             "of claims about one library symbol, and 113's hand-written ones were "
             "refused by 054 C6 on contact."
         ),
         "profiles": out_profiles,
     }
-    target = pathlib.Path(argv[1]) if len(argv) > 1 else LIBRARY
+    positionals = _positionals(argv)
+    target = pathlib.Path(positionals[0]) if positionals else LIBRARY
     target.write_text(
         json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )

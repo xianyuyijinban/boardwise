@@ -48,7 +48,7 @@ aux 是可选角色）。所以 119 那批「七脚 XREE」的断言**再一次*
 |---|---|
 | `…hand_written_pin_tip` | 十二颗**换料未动**的 profile 仍逐脚等于 118 的实测；**T1 改钉 118b 换料探针**（那份才是它现在的实测） |
 | `…where_its_geometry_came_from` | 来源写在 **`notes` 的字符串数组**里（library schema 校验不收 `bodySource` 键），判据从「键在不在」改成「那一句在不在」 |
-| `…body_box_is_the_measured_inner_ends` | **T1 的体框是 `sch.geometry` 的实测 bbox**，比体内端**更宽**（骨架中间的空档没有脚可推）；这条按「哪一种来源用什么尺子」分开判 |
+| `…body_box_is_the_extent_the_host_reports` | **每颗体框逐字等于宿主自己给的读数**（`sch.geometry bboxIds`，本文件的读法是从原始读数重新折回来的）；没有被放上过页面的那颗（`C0805`）仍是「引脚内端推出的下界」，并且必须说自己是下界 |
 | `…pin_carries_the_name_the_host_reports` | 符号表随换料换了，名字对账改按 **symbolRef 自带的行**查，缺读数的行点名跳过而不是悄悄放过 |
 | `…113_shape_intent_is_kept` | 换料那一行是 `[118b]` 不是 `[118]`（`[118]` 那一行属于十二颗没动过的） |
 | `test_the_transformer_has_five_pins…` | 改成**七脚**现实：脚号集、spec 用的 token、无 `P1/P2/A1/A2/S1/S2` 残留 |
@@ -63,9 +63,36 @@ aux 是可选角色）。所以 119 那批「七脚 XREE」的断言**再一次*
 `outputs/099/libprobe`（宿主自己两颗旗标的字号 bbox）与岳亲手画的 P1 页
 （`outputs/111/geo_P1_live.json`：PGND/SEC_GND 全 180、HVDC/SEC_12V 全 0）。
 
-三颗旗标的**体框**是 053B 的**约定盒** `(-6,0,6,18)`（本仓库每颗 `PWR-*` 都写它，
+三颗旗标的**体框**当时是 053B 的**约定盒** `(-6,0,6,18)`（本仓库每颗 `PWR-*` 都写它，
 所以它认不出族），所以那一行 `body:` 必须说自己是**约定**而不是测量；实测那一行
 标 `[121b] `——**118 没量过旗标**，给它写 `[118] ` 正是这条契约要拒的那句谎话。
+
+============================ 147 更新：体框现在是实测，旗标按族实测 ============================
+
+**147 把这条契约的尺子换掉了，而尺子换掉的理由本身就是一次测量。** 147 之前，
+每颗 profile 的 `body` 是「引脚内端推出来的盒」——对两颗脚的器件是**一条线**
+（`R0603: [-10,0,10,0]`），在垂直于引脚轴的方向上零厚度。零厚度的盒子在任何姿态下
+都「没有内部」，于是 `wire-through-body` 与「文字压器件」这两条硬约束对 15/19 个
+器件**天然失效**：岳在落地页面上用眼睛抓到的三处「走线穿器件 / 文字压器件」，全部
+离线闸绿（`outputs/147/FINDINGS.md` §0）。修法是量一次真的：
+`sch.geometry --params {"bboxIds": [...]}` 给每个 primitive 一个外框（含描边），
+把 16 颗 symbolRef 的 `body` 换成那份读数（`outputs/147/11_geom_bboxes.json`，
+147b 把副本搬进 `outputs/118/`，本文件读的就是它）。
+
+所以本文件两条测试的尺子跟着换：
+
+* `…says_where_its_geometry_came_from`：一句 `body:` / `measured:` 的来源要**说对
+  自己那一类**——有读数的那 16 颗必须说「宿主自己的 per-primitive bbox」并点出
+  那份读数文件，没读数的那一颗（`C0805`）必须说自己是**引脚内端的下界**；
+  旗标（无脚那三颗）不再是「约定盒」，它们的那一行必须说这是**宿主读到的字形**，
+  而族是**按 symbolRef 读**的。
+* `…body_box_is_the_extent_the_host_reports`（原名 `…is_the_measured_inner_ends…`）：
+  体框**逐字等于**从两份原始读数重新折回来的那张表（读法复用
+  `tools/118_measure_profiles.py::read_bboxes`——库就是这个工具建的，
+  测试与工具用同一把尺子才算对账）；没有读数的那一颗照旧按下界核。
+  旗标那一半保留 121b 的两项实测（字形在连接点哪一侧、岳把族画在什么姿态），
+  外加一件约定盒**表达不了**的事：两个族的盒子**必须不同**（gnd
+  `(-10.5,0,10.5,19.5)` vs rail `(-5.5,0,5.5,10.5)`）。
 """
 
 from __future__ import annotations
@@ -127,17 +154,56 @@ FLAG_READINGS: dict[str, tuple[str, str]] = {
     "PWR-SEC_12V": ("rail", "SEC_12V"),
 }
 
-#: The repo's flag-glyph convention box — 053B's, the same box every ``PWR-*``
-#: profile in this repo declares. A **stated reservation**, not a measurement:
-#: both families state it (which is exactly why the box cannot tell them apart,
-#: and why the family is read off the name instead).
-FLAG_CONVENTION_BOX = (-6.0, 0.0, 6.0, 18.0)
+#: 147: the reading the library's `body` boxes now come from, and the tool that
+#: folds it back into symbol-local coordinates. **The tool is imported** rather
+#: than re-implemented here: `tools/118_measure_profiles.py` is what *builds* the
+#: library, so a test that folded the reading its own way would be a second ruler
+#: for the same number — and two rulers is how a body box ends up disagreeing
+#: with the drawing it describes (147's root cause). 147b moved both input files
+#: under `outputs/118/`, which is where the tool and this file now read them.
+BODY_TOOL = ROOT / "tools" / "118_measure_profiles.py"
 
 #: The two live-host readings the flag profiles cite: 099's library probe (each
 #: family's glyph extent, relative to the connection, at rotation 0) and 岳's own
 #: hand-drawn P1 page (the rotation his flags are actually drawn at).
 FLAG_GLYPH_PROBE = ROOT / "outputs" / "099" / "libprobe" / "08_geometry_probe.json"
 FLAG_PAGE_READING = ROOT / "outputs" / "111" / "geo_P1_live.json"
+
+
+def _measured_bodies() -> dict[str, tuple[float, float, float, float]]:
+    """``{symbolRef: local body box}`` **re-derived** from the host's bbox reading.
+
+    The reading is a page box per placed primitive (`outputs/118/11_geom_bboxes.json`,
+    the host's own ``sch.geometry bboxIds`` answer) plus the poses of the page the
+    ids came off (`outputs/118/bbox_layout.json`); folding the box back through
+    the pose gives the symbol-local extent — which is what a profile's ``body``
+    has to be, and what 147 measured for all 16 disposed symbolRefs.
+
+    The fold is the tool's own :func:`read_bboxes`, imported by path (the module
+    name starts with a digit). The tool fills its flag-family table from the
+    library at the start of a build, so this does the same — otherwise a ground
+    flag would be folded through the rail family's rotation and the box would be
+    wrong on the axis the flag hangs from, silently.
+
+    A symbolRef the reading never covered is **absent** from the result rather
+    than defaulted: "nobody put this part on a page" is a different claim from
+    "the host reports this box", and the callers below branch on exactly that.
+    """
+    import importlib.util
+
+    from boardwise.core.symbolprofile import SymbolProfile, flag_glyph_kind
+
+    spec = importlib.util.spec_from_file_location("tool_118_measure_profiles", BODY_TOOL)
+    assert spec is not None and spec.loader is not None, BODY_TOOL
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+    book = json.loads((SPECS / "flyback_uc3845.library.json").read_text(
+        encoding="utf-8"))
+    tool._FLAG_KIND.update({
+        entry["symbolRef"]: flag_glyph_kind(SymbolProfile.from_dict(entry))
+        for entry in book["profiles"]
+    })
+    return dict(tool.read_bboxes(book["profiles"]))
 
 
 def _flag_readings() -> tuple[dict[str, tuple[float, float]], dict[str, float]]:
@@ -514,6 +580,12 @@ def _body_source(entry: dict) -> str:
     into ``notes``, which the schema does accept and which must therefore be an
     array of strings. Reading the key would report every profile as unsourced;
     reading the note is what the file now says.
+
+    **147 更新**：147 把体框换成宿主实测之后，那一行的前缀是 ``measured:``
+    而不是 ``body:``（`tools/118_measure_profiles.py::MEASURED_BODY_SOURCE`
+    写的就是这一行），所以这里两种前缀都认得——认的是**「有一行交代体框的来历」
+    这件事**，不是某一个前缀。没有读数的那颗（`C0805`）仍带着 118 那句话
+    （``body: measured: the two pins' inner ends``），它说的正是下界。
     """
     notes = entry.get("notes")
     assert isinstance(notes, list) and all(
@@ -523,7 +595,7 @@ def _body_source(entry: dict) -> str:
         "strings, and the body provenance lives in one of them"
     )
     for line in notes:
-        if line.startswith("body:"):
+        if line.startswith("body:") or line.startswith("measured:"):
             return line
     return ""
 
@@ -549,99 +621,143 @@ def test_every_profile_says_where_its_geometry_came_from():
     把约定说成了测量，这一条就是不让人再这么写）。旗标真正带实测的那一半另说：
     **字形挂在连接点哪一侧、岳把这一族画在什么姿态**，由下面那条测试对着
     `outputs/099/libprobe` 与 `outputs/111/geo_P1_live.json` 两份真读数核。
+
+    **147 更新，四种来源归成两种**：147 量到了每颗 primitive 的外框，于是
+    「约定盒」这一种**没有了**——旗标的盒也成了宿主读数（按族：ground 的 bars
+    挂在连接点下方、rail 的 pennant 挂在上方，两个族**盒子不同**，这正是 053B
+    那个「一盒两族」的约定盒表达不了的事）。所以本条现在只认两种：
+
+    * **有读数**（16 颗，含三颗旗标）：那句话必须说体框是**宿主自己的
+      per-primitive bbox**，并且点出一份**真的在树里**的读数文件；
+    * **没有读数**（`C0805`，118/147 都没把它放上过页面）：那句话必须说这是
+      **引脚内端推出的下界**——把一个没量过的东西说成测量，正是本条要拒的谎话。
     """
     book = json.loads((SPECS / "flyback_uc3845.library.json").read_text(
         encoding="utf-8"))
+    reading = _measured_bodies()
+    assert len(reading) >= 16, sorted(reading)
     for entry in book["profiles"]:
         assert "measured 2026-10-04" in entry["title"] or "measured on the live host" in entry["title"], (
             f"{entry['symbolRef']}: the title does not say the pins are measured"
         )
         source = _body_source(entry)
         assert source, (
-            f"{entry['symbolRef']}: no notes line starts with 'body:', so a "
-            "reader cannot tell a measured body from a derived lower bound"
+            f"{entry['symbolRef']}: no notes line starts with 'body:' or "
+            "'measured:', so a reader cannot tell a measured body from a derived "
+            "lower bound"
+        )
+        if entry["symbolRef"] in reading:
+            # 147: measured, and the note has to say *which* measurement. A note
+            # that claims a host bbox reading while carrying a box nobody read
+            # fails the next test; a note that calls a measured box a lower bound
+            # fails here.
+            assert "per-primitive bbox" in source, (
+                f"{entry['symbolRef']}: the box is in the host's bbox reading but "
+                f"the note says {source!r} — the one thing a reader needs is which "
+                "of the two kinds of box this is"
+            )
+            named = [
+                word for word in source.split()
+                if word.startswith("outputs/") and (ROOT / word).exists()
+            ]
+            assert named, (
+                f"{entry['symbolRef']}: the note cites no reading file that "
+                f"exists, so the provenance cannot be checked: {source!r}"
+            )
+            continue
+        # Nobody ever placed this symbol, so no reading covers it: the box is the
+        # pin-derived lower bound, and calling that a measurement is the lie this
+        # branch exists to refuse.
+        assert "inner ends" in source and "per-primitive bbox" not in source, (
+            f"{entry['symbolRef']}: no reading covers this profile, so its box "
+            f"must be the stated pin-derived lower bound; the note says {source!r}"
         )
         if not entry["pins"]:
-            # 121b's flags are the **fourth** kind of body, and the one that is
-            # neither measured nor a lower bound derived from pins: (-6,0,6,18)
-            # is 053B's *stated* convention, the same box every PWR-* profile in
-            # this repo declares. The batch that added these profiles wrote a
-            # "measured" body note on a box that no reading measured, so the
-            # requirement here is the distinction itself: the note has to say
-            # the box is the repo's convention, and the reading that *was* taken
-            # (which side each family hangs on) is named in the title and checked
-            # against the file by the next test.
-            assert "convention" in source.lower(), (
-                f"{entry['symbolRef']}: {len(entry['pins'])} pins and the body "
-                f"note is {source!r} — a flag's box is the repo's stated glyph "
-                "convention, and a reader has to be able to tell that apart from "
-                "a measurement of a part no one measured"
-            )
             continue
-        if entry["symbolRef"] == SWAPPED_REF:
-            assert "measured bbox" in source, (
-                f"{SWAPPED_REF}: the probe read a real bbox, so the note must say "
-                f"that rather than {source!r}"
-            )
-            continue
-        two_pin = len(entry["pins"]) == 2
-        assert ("measured" in source) is two_pin, (
-            f"{entry['symbolRef']}: {len(entry['pins'])} pins but the body note "
-            f"says {source!r}"
-        )
 
 
-def test_every_body_box_is_the_measured_inner_ends_and_nothing_wider():
-    """**体框也是量出来的**——而且每颗按它自己那一句来源用那把尺子。
+def test_every_body_box_is_the_extent_the_host_reports():
+    """**体框是实测的**：逐字等于从宿主读数重新折回来的那张表，一颗不差。
 
-    由体内端推出体框的那些：把体框与脚尖、脚长对一遍，**多包一个 `GAP` 或者宽了
-    一圈就量出来不等**——那正是「按尺寸类别猜」的样子，也是编译器多要一块地、
-    多一张图放不下的样子。
+    **为什么换尺子（147，见 `outputs/147/FINDINGS.md` §0）**：这条测试原名
+    `…is_the_measured_inner_ends_and_nothing_wider`，量的尺子是「体框 == 引脚内端
+    推出来的盒」。那把尺子在 147 之前是对的（库当时就是这么建的），但它量的东西
+    本身是**退化的**：两颗脚的器件推出的是**一条线**（`R0603: [-10,0,10,0]`），
+    多脚器件推出来的是外侧脚之间那个矩形。线没有内部，于是任何走线、任何文字行
+    都可以穿过它而闸看不见——岳在落地页面上抓到的三处「走线/文字压器件」全部因此
+    离线绿着。147 量了宿主自己的外框（`sch.geometry bboxIds`，含描边）并把 16 颗
+    symbolRef 的 `body` 换掉，**于是这条量的是那次测量**：
 
-    **119 更新**：T1 不在这条尺子下。它的体框是 118b 探针读回来的**实测 bbox**，
-    骨架中间的绕组空档没有脚可推，所以它**必然**比体内端宽；按体内端去核它，
-    就是拿一个推不出的数去否一个量出来的数。这一条改成对账**那份 bbox**——
-    仍然要求它等于一次真读数，只是不再要求它等于一个下界。
-
-    **121b 更新**：三颗旗标同样不在这条尺子下（它们连脚都没有），但理由不是
-    「量过一次」而是「没有东西可推」：它们的体框是 053B 的**约定盒**，所以这一条
-    对它们核的两件事换成了旗标自己的实测——**字形在连接点的哪一侧**
-    （`outputs/099/libprobe` 的 netflag bbox，按族）与**岳把这一族画在什么姿态**
-    （`outputs/111/geo_P1_live.json`：PGND/SEC_GND 是 180，HVDC/SEC_12V 是 0）。
-    这两件都是读出来的，不是从 profile 自己的注里抄的——抄注正是这一条要避免的。
+    * **有读数的 16 颗**：`body` 必须逐字等于 `read_bboxes` 从两份原始读数
+      （`outputs/118/11_geom_bboxes.json` + `bbox_layout.json`）折回来的盒。
+      库就是这个工具建的，所以这是「库 == 工具的输出」的对账，而不是又写一遍
+      同一条公式（两把尺子量同一个数，正是 147 要治的病）；
+    * **两个方向都必须有正的长度**（这是 147 的**主题**：一个零厚度的体框不是
+      体框）。没读数的那颗（`C0805`）**不在**这条断言下，因为它照旧是下界——
+      而下界退化正是它的陈述本身；
+    * **没有读数的（`C0805`）**：照旧按老尺子核——体框 == 引脚内端推出来的盒，
+      并且它必须**说自己是下界**（上一条核那句）。
+    * **旗标（三颗无脚）**：现在也有读数（按族：ground `(-10.5,0,10.5,19.5)`、
+      rail `(-5.5,0,5.5,10.5)`），所以它们走上面第一条分支；121b 那两项实测照旧
+      核——**字形挂在连接点哪一侧**（`outputs/099/libprobe` 的 netflag bbox）与
+      **岳把这一族画在什么姿态**（`outputs/111/geo_P1_live.json`）。再加一条
+      147 才量得出来的事实：**两个族的盒子必须不同**——053B 那个「一盒两族」的
+      约定盒恰恰表达不了这件事，而它曾经让六个批次的旗标画反了方向还全绿。
     """
     book = json.loads((SPECS / "flyback_uc3845.library.json").read_text(
         encoding="utf-8"))
-    current = _current_transformer()
+    reading = _measured_bodies()
+    assert len(reading) >= 16, sorted(reading)
     glyph, page_rotation = _flag_readings()
     inward = {
         "left": (1.0, 0.0), "right": (-1.0, 0.0),
         "up": (0.0, -1.0), "down": (0.0, 1.0),
     }
+    families: dict[str, tuple[float, float, float, float]] = {}
     for entry in book["profiles"]:
-        by_number = {pin["number"]: pin for pin in entry["pins"]}
-        if not entry["pins"]:
-            # 121b's flags: there are no inner ends here, so no box can be derived
-            # from them, and the box the profile declares is not derived anyway —
-            # it is the repo's convention. The half that *is* a measurement, and
-            # the half that goes wrong silently (a flag drawn with its bars on the
-            # wrong side is still a flag, still hashes the same, and still passes
-            # every other check in this file), is checked right here against the
-            # two files: 099's probe for which side of the connection the family's
-            # glyph occupies, 岳's own P1 page for the rotation he draws it at.
-            family, net = FLAG_READINGS[entry["symbolRef"]]
-            assert [round(value, 4) for value in entry["body"]] == [
-                round(value, 4) for value in FLAG_CONVENTION_BOX
-            ], (
-                f"{entry['symbolRef']}: body is {entry['body']}, not 053B's "
-                f"convention box {list(FLAG_CONVENTION_BOX)} — a flag's box is "
-                "the box this repo states for every PWR-*, and a different one is "
-                "a reservation nobody measured"
+        ref = entry["symbolRef"]
+        box = [round(value, 4) for value in entry["body"]]
+        if ref not in reading:
+            assert ref == "C0805", (
+                f"{ref}: no reading covers this profile, and the only symbol the "
+                "118/147 sessions never placed is C0805 — a profile that lost its "
+                "reading is a profile whose body is now a guess"
             )
+            inner = [
+                (pin["tip"][0] + inward[pin["direction"]][0] * pin["length"],
+                 pin["tip"][1] + inward[pin["direction"]][1] * pin["length"])
+                for pin in entry["pins"]
+            ]
+            expected = [
+                min(point[0] for point in inner), min(point[1] for point in inner),
+                max(point[0] for point in inner), max(point[1] for point in inner),
+            ]
+            assert box == [round(value, 4) for value in expected], (
+                f"{ref}: body is {entry['body']} but the measured inner ends give "
+                f"{expected} — that is the stated lower bound for a symbol nobody "
+                "placed, and it has to be exactly that"
+            )
+            continue
+        expected = [round(value, 4) for value in reading[ref]]
+        assert box == expected, (
+            f"{ref}: the profile's body is {entry['body']} but the host's own "
+            f"per-primitive bbox reading folds back to {expected} — the compiler "
+            "reserves a rectangle the part does not occupy (or misses the one it "
+            "does)"
+        )
+        # 147's whole subject: a body with no extent on an axis is a line, and a
+        # line is what no wire and no text row can be caught crossing.
+        assert box[2] > box[0] and box[3] > box[1], (
+            f"{ref}: the measured body is degenerate on an axis ({entry['body']}) "
+            "— that is the defect 147 fixed, not a reading"
+        )
+        if not entry["pins"]:
+            family, net = FLAG_READINGS[ref]
+            families[family] = (box[0], box[1], box[2], box[3])
             low, high = glyph[family]
             if family == "gnd":
                 assert high < 0.0, (
-                    f"{entry['symbolRef']} is the ground family, but "
+                    f"{ref} is the ground family, but "
                     f"{FLAG_GLYPH_PROBE.relative_to(ROOT).as_posix()} measures its "
                     f"glyph at {low:g}..{high:g} from the connection — not below it"
                 )
@@ -656,9 +772,15 @@ def test_every_body_box_is_the_measured_inner_ends_and_nothing_wider():
                     "岳's own page does not draw its SEC_GND flags at 180, so "
                     "the second family this profile claims is not in the reading"
                 )
+                # And the measured box starts at the connection: the leader is the
+                # flag's own extent, so nothing of it is *behind* the anchor.
+                assert box[1] == 0.0 and box[3] > box[1], (
+                    f"{ref}: the flag's box {entry['body']} does not start at the "
+                    "connection (y = 0) and run away from it"
+                )
             else:
                 assert low > 0.0, (
-                    f"{entry['symbolRef']} is the rail family, but "
+                    f"{ref} is the rail family, but "
                     f"{FLAG_GLYPH_PROBE.relative_to(ROOT).as_posix()} measures its "
                     f"glyph at {low:g}..{high:g} from the connection — not above it"
                 )
@@ -667,118 +789,24 @@ def test_every_body_box_is_the_measured_inner_ends_and_nothing_wider():
                     f"{page_rotation.get(net)!r}, not 0 — the rail family's pose "
                     "is a reading, and this profile claims it"
                 )
-            continue
-        if entry["symbolRef"] == SWAPPED_REF:
-            # 120: there is no probe file in the tree for the WE part yet, so the
-            # body cannot be re-derived from a raw reading here. What IS checkable,
-            # and is the part of the claim that goes wrong silently, is that the
-            # box the **compiler reads** is the box the file declares, and that
-            # the box is not the inner-end lower bound — a measured bbox on a
-            # bobbin is wider than the pins can push, and collapsing it to the
-            # bound would quietly become a claim the notes contradict.
-            assert [round(value, 4) for value in entry["body"]] == [
-                round(value, 4) for value in current["body"]
-            ], (
-                f"{SWAPPED_REF}: the file says {entry['body']} but the compiler "
-                f"reads {list(current['body'])} — the profile the spec names is "
-                "not the profile the spec declares"
-            )
-            inner_ends = [
-                (
-                    pin["tip"][0] + inward[pin["direction"]][0] * pin["length"],
-                    pin["tip"][1] + inward[pin["direction"]][1] * pin["length"],
+                assert box[1] == 0.0 and box[3] > box[1], (
+                    f"{ref}: the flag's box {entry['body']} does not start at the "
+                    "connection (y = 0) and run away from it"
                 )
-                for pin in entry["pins"]
-            ]
-            bound = (
-                min(q[0] for q in inner_ends), min(q[1] for q in inner_ends),
-                max(q[0] for q in inner_ends), max(q[1] for q in inner_ends),
-            )
-            # 120 变异 M5 的教训：只查「body ≠ 下界」**抓不住**一次「把实测 bbox
-            # 换成另一个数」的改动——换成的那个数只要**不是**下界，这两条断言就照样
-            # 过。真正能抓的是**等式本身**：实测 bbox 是从一次读数来的，而读数
-            # 存在**某一个别的文件**里。这里还没有那份 WE 探针输出（岳会补），
-            # 所以这一条钉的是**能钉的那一半**，并且把「还缺哪一半」写下来——
-            # 缺的那一半是「等探针文件落进树里，把 body 与它对账」，那是 120 留给
-            # 下一棒的一步，不是本条假装做过的事。
-            # 120 变异 M5 的教训：只查「body ≠ 下界」抓不住「把实测 bbox 换成
-            # 另一个数」。真正抓得住的是**体框必须含住它自己的脚尖**——体框是
-            # 器件**画出来**的那一块，脚从它上面伸出去；脚尖落在体框**之外**就是
-            # 一个画不出来的东西。
-            #
-            # 量的是**脚尖**不是体内端：实测 bbox 常常**不含**体内端（WE 这颗就
-            # 不含 pin 2/5 的体内端 y=-20，体框下沿是 -13.5），因为骨架的绕组空档
-            # 没有脚可推，而脚是从空档旁边伸出去的——那是**真实几何**，不是缺陷。
-            # 把「实测 bbox 与下界不同」误当成「bbox 必须比下界大」，是 120 第一版
-            # 写这条时犯的错，变异 M5 顺手把它照出来了。
-            # 120 变异 M5 的教训：只查「body ≠ 下界」抓不住「把实测 bbox 换成
-            # 另一个数」。抓得住的是**体内端不得超过体框**——体框是器件画出来的
-            # 那一块，脚从它上面伸出去，所以**脚尖**本来就在框外（那是「脚」的
-            # 定义），而**体内端**必须在框内：引线不可能从空中开始。
-            #
-            # 注意这条**不是**「bbox 必须等于下界」。实测 bbox 常常**不含**全部
-            # 体内端（WE 这颗的 pin 2/5 体内端 y=-20，框下沿 -13.5），因为骨架
-            # 的绕组空档没有脚可推——那是**真实几何**。所以判据是单向的：
-            # 体内端越出框外 = 画不出来；框比下界大或少 = 读数对不上，而那需要
-            # 探针原始输出才能核（岳会补，本条写明它还没被核）。
-            outside: list = []
-            for axis, name in ((0, "x"), (1, "y")):
-                low, high = entry["body"][axis], entry["body"][axis + 2]
-                assert high > low, (
-                    f"{SWAPPED_REF}: the body is degenerate on {name} "
-                    f"({entry['body']})"
-                )
-                for pin, point in zip(entry["pins"], inner_ends):
-                    if not low - 1e-9 <= point[axis] <= high + 1e-9:
-                        # Recorded, not asserted: the WE part's own geometry has
-                        # two inner ends outside the measured bbox, so asserting
-                        # containment would be asserting a falsehood about a real
-                        # part. 120 keeps the fact visible instead of pretending.
-                        outside.append((pin["number"], name, point[axis]))
-            # The one relation that is both true and M5-sensitive: the measured
-            # box must be **wider than the pin span it encloses**, i.e. the body
-            # is a drawn thing with a margin, not the pin extents re-labelled.
-            # …and that it is not merely the **pin extents re-labelled**. The
-            # comparison is against the **inner** ends, because the tips are
-            # leads and a lead is by definition outside the body; the inner ends
-            # are where the leads meet the drawn thing, so a body that is no
-            # larger than they are is not enclosing anything.
-            inner_x = [point[0] for point in inner_ends]
-            inner_y = [point[1] for point in inner_ends]
-            assert (entry["body"][2] - entry["body"][0]) >= (max(inner_x) - min(inner_x)), (
-                f"{SWAPPED_REF}: the body {entry['body']} is narrower than the "
-                f"inner ends it carries — that is the pin extents wearing a "
-                f"body's name, not a measured drawn box"
-            )
-            # Only the **x** axis gets the size relation, and that is a measured
-            # asymmetry, not a convenience. The WE part's bobbin is 44 tall
-            # against an inner-end span of 50 on y: the frame is drawn tighter
-            # than the pin pitch, which is what the host reports and what the
-            # compiler must reserve. 120's first version asserted the relation
-            # on both axes and was **wrong about the part** — variant M5 is what
-            # showed it, which is the stand doing its job on the test rather than
-            # on the code. A fact about a real part is not a defect to be fixed
-            # into existence.
-            assert outside == [] or True, (
-                f"{SWAPPED_REF}: inner ends outside the body: {outside}"
-            )
-            continue
-        inner = []
-        for pin in entry["pins"]:
-            dx, dy = inward[pin["direction"]]
-            length = pin["length"]
-            inner.append((pin["tip"][0] + dx * length, pin["tip"][1] + dy * length))
-        expected = [
-            min(point[0] for point in inner), min(point[1] for point in inner),
-            max(point[0] for point in inner), max(point[1] for point in inner),
-        ]
-        assert [round(value, 4) for value in entry["body"]] == [
-            round(value, 4) for value in expected
-        ], (
-            f"{entry['symbolRef']}: body is {entry['body']} but the measured "
-            f"inner ends give {expected} — a body wider than the drawn extent "
-            "reserves room the part does not occupy"
-        )
+    # 147: the two families are **different drawings**, and the library now says
+    # so. The single convention box they used to share is exactly how six batches
+    # of one family drawn backwards stayed invisible offline. Both boxes run from
+    # the connection outwards in the profile's own frame (the family's turn is
+    # `symbolprofile.FLAG_GLYPH_ROTATION_OFFSETS`, applied at draw time), so what
+    # separates them is the **size**: the ground family draws a 10-unit leader
+    # then 20-wide bars, the rail family a 5-unit leader then a 10-wide pennant —
+    # 147's own measurement, and the reason one box could never serve both.
+    assert families.get("gnd") != families.get("rail"), families
+    gnd, rail = families["gnd"], families["rail"]
+    assert (gnd[2] - gnd[0]) > (rail[2] - rail[0]) and gnd[3] > rail[3], (
+        f"the ground family's glyph is the larger one (measured 19.5 from the "
+        f"connection against the rail's 10.5): {families}"
+    )
 
 
 def test_every_pin_carries_the_name_the_host_reports():

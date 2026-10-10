@@ -27,8 +27,10 @@ is pinned by a test, so the two modules never have to import each other.
 `soft_metrics` has no total by design (052 sec.6: "不能只报 aesthetics=4.2"),
 and every key in `soft_reasons` is a key in `soft_metrics`.
 
-**The nine hard constraints**, each with its own kind (the vocabulary is in
-:data:`HARD_KINDS`, and violations are emitted in this order):
+**The eleven hard constraints**, each with its own kind (the vocabulary is in
+:data:`HARD_KINDS`, and violations are emitted in this order). 147 added the two
+the landed page showed were missing — a wire lying *along* a symbol's own line,
+and a conductor printed through a text row:
 
 ======================================  ==========================================
 kind                                    what it refuses
@@ -41,12 +43,16 @@ kind                                    what it refuses
 ``dangling-wire-end``                   a wire end lands on nothing at all
 ``undeclared-junction``                 a wire vertex tees into another wire's
                                         span and the plan declares no junction
-``wire-through-body``                   a wire crosses some non-end part's body
+``wire-through-body``                   a wire crosses some non-end part's **drawn
+                                        extent** (its body, or a flag's glyph)
+``wire-on-pin-line``                    a wire runs along a pin's own drawn lead,
+                                        hiding it
 ``text-overlap``                        two text boxes intersect, or text lands on
-                                        a foreign part's body — a power symbol's
-                                        glyph box counts as text (`_text_boxes`),
-                                        so a rail name printed on a component is
-                                        the same finding as a label's
+                                        a foreign part's drawn extent — a power
+                                        symbol's glyph box, a wire's own net name
+                                        and a rail flag's own name all count as
+                                        text
+``text-on-wire``                        a conductor is printed through a text row
 ``out-of-page``                         something leaves the page, or enters a
                                         keep-out region
 ``user-lock-violated``                  the plan does not honour a user lock
@@ -54,9 +60,9 @@ kind                                    what it refuses
 ``required-pin-not-connected``          a declared net member is connected to nothing
 ======================================  ==========================================
 
-**The page-level domain (056 sec.3), a second vocabulary beside the nine.** Once
+**The page-level domain (056 sec.3), a second vocabulary beside the eleven.** Once
 several modules are drawn on one page, four questions stop being answerable
-inside a module, and :func:`check_page` asks them — the nine constraints above
+inside a module, and :func:`check_page` asks them — the eleven constraints above
 are unchanged and keep their names, their order and their meanings:
 
 ==================================  ==========================================
@@ -80,7 +86,7 @@ kind                                what it refuses
 ==================================  ==========================================
 
 Two of those deserve the reason they exist. ``wire-through-module-frame`` is
-*not* the nine's ``wire-through-body``: a wire may legally pass through the empty
+*not* the eleven's ``wire-through-body``: a wire may legally pass through the empty
 part of a module's frame (between its bodies), and the rule the page owes is that
 it does not — "绕行义务在线不在框" (056 sec.3) — except for the one escape run
 between a port and its own frame's edge. And ``shared-net-expression-split`` is
@@ -168,11 +174,20 @@ from boardwise.core.layoutplan import LayoutPlan
 from boardwise.core.pagelayoutplan import PageLayoutPlan
 from boardwise.core.presentationspec import PresentationSpec, main_path_wire
 from boardwise.core.symbolprofile import (
+    FLAG_GLYPH_KIND_GND,
+    PIN_LINE_OVERLAP,
     Box,
     SymbolProfile,
     check_box,
     flag_glyph_box,
+    flag_glyph_kind,
+    pose_box,
     role_siblings,
+)
+from boardwise.core.textmetrics import (
+    TEXT_WIRE_PENETRATION,
+    flag_name_box,
+    wire_name_box,
 )
 
 __all__ = [
@@ -239,21 +254,32 @@ KIND_NETLIST_PARTITION = "netlist-partition-mismatch"
 KIND_DANGLING_WIRE_END = "dangling-wire-end"
 KIND_UNDECLARED_JUNCTION = "undeclared-junction"
 KIND_WIRE_THROUGH_BODY = "wire-through-body"
+KIND_WIRE_ON_PIN_LINE = "wire-on-pin-line"
 KIND_TEXT_OVERLAP = "text-overlap"
+KIND_TEXT_ON_WIRE = "text-on-wire"
 KIND_OUT_OF_PAGE = "out-of-page"
 KIND_USER_LOCK_VIOLATED = "user-lock-violated"
 KIND_NC_PIN_CONNECTED = "nc-pin-connected"
 KIND_REQUIRED_PIN_NOT_CONNECTED = "required-pin-not-connected"
 
-#: The nine kinds, in the order the constraints are checked and reported
-#: (053 sec.2's list order). A test pins the tuple's length so a tenth kind
-#: cannot appear without the contract being updated deliberately.
+#: The kinds, in the order the constraints are checked and reported (053 sec.2's
+#: list order, plus 147's two). A test pins the tuple so a kind cannot appear or
+#: move without the contract being updated deliberately.
+#:
+#: 147 added ``wire-on-pin-line`` and ``text-on-wire``: 岳 caught three defects by
+#: eye on a page every gate called clean, and both classes are "a conductor drawn
+#: where the symbol's own artwork is" — the older
+#: ``wire-through-body`` tests a *box*, which a wire lying **along** a pin bar or
+#: a flag's glyph never enters, and ``text-overlap`` never looked at a conductor
+#: at all. See `outputs/147/FINDINGS.md`.
 HARD_KINDS: tuple[str, ...] = (
     KIND_NETLIST_PARTITION,
     KIND_DANGLING_WIRE_END,
     KIND_UNDECLARED_JUNCTION,
     KIND_WIRE_THROUGH_BODY,
+    KIND_WIRE_ON_PIN_LINE,
     KIND_TEXT_OVERLAP,
+    KIND_TEXT_ON_WIRE,
     KIND_OUT_OF_PAGE,
     KIND_USER_LOCK_VIOLATED,
     KIND_NC_PIN_CONNECTED,
@@ -263,7 +289,7 @@ HARD_KINDS: tuple[str, ...] = (
 # ------------------------------------------------- the page-level domain (056)
 
 #: What a caller writes into ``PageLayoutPlan.pageEvidence.checker``. A second
-#: vocabulary, not a tenth constraint: the nine above judge a drawing, these
+#: vocabulary, not a further constraint: the eleven above judge a drawing, these
 #: judge a *page* made of drawings, and a report that merged the two would make
 #: "which layer refused" unanswerable (052 sec.8).
 PAGE_CHECKER_NAME = "boardwise-page-readability/1"
@@ -402,12 +428,22 @@ class DerivedNetlist:
 
 @dataclass(frozen=True)
 class _PlacedPart:
-    """One plan part with its profile applied: pins in page coordinates."""
+    """One plan part with its profile applied: pins in page coordinates.
+
+    The pose travels with it (147) because constraint 4b asks about the pin's
+    **drawn line**, which is a symbol-local fact only the pose turns into page
+    coordinates — and it must be the same pose `_in_page` used for the tips, or a
+    pin's line and its own tip would describe two different places.
+    """
 
     part_id: str
     symbol_ref: str
     pins: dict[str, tuple[float, float]]
     body: Box | None
+    x: float = 0.0
+    y: float = 0.0
+    rotation: float = 0.0
+    mirror: bool = False
 
 
 def derive_netlist(
@@ -499,6 +535,10 @@ def _placed_parts(
             symbol_ref=part.symbol_ref,
             pins=pins,
             body=_body_in_page(profile.body, part),
+            x=part.x,
+            y=part.y,
+            rotation=part.rotation,
+            mirror=part.mirror,
         ))
     return out
 
@@ -521,15 +561,15 @@ def _body_in_page(body: Box | None, part: Any) -> Box | None:
     Four corners through the pose and an axis-aligned bound of the result: a box
     rotated by 90 degrees is no longer the same rectangle, and a check that kept
     the local box would test a region the symbol does not occupy.
+
+    147: the fold itself is :func:`~boardwise.core.symbolprofile.pose_box` — the
+    compiler reserves, routes around, previews and *checks* one box, and it is
+    this call that makes "what the checker tests" and "what the router avoided"
+    the same rectangle by construction rather than by four agreeing copies.
     """
-    if body is None:
-        return None
-    x0, y0, x1, y1 = body
-    corners = [_in_page(corner, part) for corner in
-               ((x0, y0), (x1, y0), (x1, y1), (x0, y1))]
-    xs = [point[0] for point in corners]
-    ys = [point[1] for point in corners]
-    return (min(xs), min(ys), max(xs), max(ys))
+    return pose_box(
+        body, rotation=part.rotation, mirror=part.mirror, ox=part.x, oy=part.y
+    )
 
 
 def _derive(layout_plan: LayoutPlan, placed: list[_PlacedPart]) -> DerivedNetlist:
@@ -650,7 +690,7 @@ def check(
     keepouts: Sequence[Box] = (),
     grid: float = DEFAULT_GRID,
 ) -> CheckResult:
-    """Run the nine hard constraints and measure the soft metrics.
+    """Run the eleven hard constraints and measure the soft metrics.
 
     ``profiles`` is the set of :class:`SymbolProfile` the plan's symbols were
     drawn with, as a mapping ``symbolRef -> SymbolProfile`` or any iterable of
@@ -712,8 +752,10 @@ def check(
     violations.extend(_check_netlist(circuit_spec, net, profile_map))
     violations.extend(_check_wire_ends(layout_plan, net))
     violations.extend(_check_junctions(layout_plan))
-    violations.extend(_check_bodies(layout_plan, placed))
+    violations.extend(_check_bodies(layout_plan, placed, profile_map))
+    violations.extend(_check_wire_on_pin_line(layout_plan, placed, profile_map))
     violations.extend(_check_text(layout_plan, placed, profile_map))
+    violations.extend(_check_text_on_wire(layout_plan, profile_map))
     violations.extend(
         _check_page(layout_plan, placed, page, keep, profile_map)
     )
@@ -1094,35 +1136,178 @@ def _check_junctions(layout_plan: LayoutPlan) -> list[HardViolation]:
 # ----------------------------------------------------------------- 4. bodies
 
 
+def _drawn_extents(
+    layout_plan: LayoutPlan,
+    placed: list[_PlacedPart],
+    profile_map: Mapping[str, SymbolProfile],
+) -> list[tuple[str, Box, str]]:
+    """``(name, box, owner)`` for every drawn symbol extent on the canvas (147).
+
+    A part's body and a **flag's glyph** in one set, because a wire crossing either
+    is the same defect: the conductor is drawn where the symbol's own artwork is.
+    147 added the flags after 岳 saw a rail flag's pennant printed *on* the trunk
+    that feeds it (`outputs/147/17_wire_on_lines_146.txt`: three overlaps of five
+    units each on `SEC_12V`). A flag's glyph had a box in the page/keep-out and
+    text halves of this checker since 143c, but no constraint ever tested a
+    **wire** against it.
+
+    ``owner`` is what a text row is exempt from: a part's own designator may sit
+    inside its own extent, and a flag's own name may sit inside its own glyph, but
+    neither may reach into another object's.
+    """
+    out: list[tuple[str, Box, str]] = []
+    for part in placed:
+        if part.body is not None:
+            out.append((f"parts[{part.part_id}]", part.body, part.part_id))
+    for index, symbol in enumerate(layout_plan.power_symbols):
+        glyph = _flag_glyph_box(profile_map, symbol)
+        if glyph is not None:
+            out.append((f"powerSymbols[{index}]", glyph, f"powerSymbols[{index}]"))
+    return out
+
+
 def _check_bodies(
-    layout_plan: LayoutPlan, placed: list[_PlacedPart]
+    layout_plan: LayoutPlan,
+    placed: list[_PlacedPart],
+    profile_map: Mapping[str, SymbolProfile],
 ) -> list[HardViolation]:
-    """Constraint 4: a wire may not cross a part it is not the end of.
+    """Constraint 4: a wire may not cross a part or a flag it is not the end of.
 
     053 sec.2's wording is "非两端器件", so the exemption is exactly that: a part
     whose own pin tip sits at one of the segment's two outer points. A part that
     merely has a pin somewhere along the wire is *not* exempt — a wire running
     through a symbol's drawn extent is unreadable whichever pin it touches.
+
+    Since 147 the extents include every flag's glyph box. A flag has no pins, so
+    nothing is exempt: a wire that reaches the flag's own anchor only touches that
+    box's boundary (the box starts *at* the connection point), and a wire that
+    runs on into the glyph or the pennant is drawn across the symbol — which is
+    what a rail flag printed on its own rail looks like on the page.
     """
     out: list[HardViolation] = []
+    extents = _drawn_extents(layout_plan, placed, profile_map)
     for index, segment in enumerate(layout_plan.segments):
         ends = (segment.points[0], segment.points[-1])
-        for part in placed:
-            if part.body is None:
+        for name, box, owner in extents:
+            if owner == "":
                 continue
-            if any(_same_point(tip, end) for tip in part.pins.values() for end in ends):
+            part = next((p for p in placed if p.part_id == owner), None)
+            if part is not None and any(
+                _same_point(tip, end) for tip in part.pins.values() for end in ends
+            ):
                 continue
-            hit = _first_box_crossing(segment.points, part.body)
+            hit = _first_box_crossing(segment.points, box)
             if hit is None:
                 continue
             out.append(HardViolation(
                 KIND_WIRE_THROUGH_BODY,
-                (f"segments[{index}]", f"parts[{part.part_id}]"),
-                f"segments[{index}] crosses the drawn body of parts[{part.part_id}] "
-                f"(box {_box_text(part.body)}) near ({hit[0]:g}, {hit[1]:g}) — a "
-                "wire may only reach a part through that part's own pin",
+                (f"segments[{index}]", name),
+                f"segments[{index}] crosses the drawn extent of {name} "
+                f"(box {_box_text(box)}) near ({hit[0]:g}, {hit[1]:g}) — a "
+                + ("wire may only reach a part through that part's own pin"
+                   if part is not None else
+                   "wire may only reach a flag at its connection point"),
             ))
     return out
+
+
+#: How much of a part's drawn **pin line** a wire may cover before it is a defect
+#: (147), in canvas units. The number itself lives in `core.symbolprofile` —
+#: `drawcompiler._pin_walls` keeps the same lead as a routing obstacle from the
+#: same distance inward, so "what the router avoided" and "what this refuses" are
+#: the same length. Read there for why it is not zero.
+PIN_LINE_OVERLAP = PIN_LINE_OVERLAP
+
+
+def _pin_lines(
+    placed: list[_PlacedPart], profile_map: Mapping[str, SymbolProfile]
+) -> list[tuple[str, tuple[tuple[float, float], tuple[float, float]]]]:
+    """Every pin's drawn line in page coordinates: ``(name, segment)``.
+
+    A pin is drawn from its tip **inward**, ``length`` units along the direction
+    the profile states, and the drawn lead is what a wire lying on it hides. Both
+    ends go through :func:`_in_page`, so the line starts exactly on the tip the
+    netlist derivation uses — a line computed with its own transform is how a
+    checker and a drawing start disagreeing about where a pin is.
+    """
+    inward = {
+        "left": (1.0, 0.0), "right": (-1.0, 0.0),
+        "up": (0.0, -1.0), "down": (0.0, 1.0),
+    }
+    out = []
+    for part in placed:
+        profile = profile_map.get(part.symbol_ref)
+        if profile is None:
+            continue
+        for pin in profile.pins:
+            if not pin.length or pin.direction not in inward:
+                continue
+            dx, dy = inward[pin.direction]
+            tip = _in_page(pin.tip, part)
+            inner = _in_page(
+                (pin.tip[0] + dx * pin.length, pin.tip[1] + dy * pin.length), part
+            )
+            out.append((f"parts[{part.part_id}].{pin.number}", (tip, inner)))
+    return out
+
+
+def _check_wire_on_pin_line(
+    layout_plan: LayoutPlan,
+    placed: list[_PlacedPart],
+    profile_map: Mapping[str, SymbolProfile],
+) -> list[HardViolation]:
+    """Constraint 4b: a wire may not run **along** a pin's drawn line (147).
+
+    The defect 岳 saw at `T1` (`outputs/147/17_wire_on_lines_146.txt`): the HVDC
+    wire entering `T1.1` covers 15 of that pin's 20 drawn units, and `SW` covers 5
+    of `T1.3`'s. Constraint 4 cannot see it — a pin's line is a *line*, and a wire
+    lying on it enters no box except the part's own, whose pin-tip exemption then
+    excuses it. What a reader loses is the pin: the wire and the lead are the same
+    line on the page, so the symbol reads as if it had no lead there.
+
+    A wire that arrives at a tip from **outside** the symbol overlaps nothing; one
+    that reaches the tip from inside, or doubles back over the lead, overlaps it
+    and is reported. ``PIN_LINE_OVERLAP`` is the slack: strictly more than the
+    pin's own stroke.
+    """
+    out: list[HardViolation] = []
+    for index, segment in enumerate(layout_plan.segments):
+        for name, line in _pin_lines(placed, profile_map):
+            for start, end in _edges(list(segment.points)):
+                got = _collinear_overlap(start, end, line[0], line[1])
+                if got <= PIN_LINE_OVERLAP:
+                    continue
+                out.append(HardViolation(
+                    KIND_WIRE_ON_PIN_LINE,
+                    (f"segments[{index}]", name),
+                    f"segments[{index}] runs along the drawn pin line of {name} "
+                    f"({line[0][0]:g},{line[0][1]:g})->({line[1][0]:g},{line[1][1]:g}) "
+                    f"for {got:.0f} units — the wire hides the pin's own lead; the "
+                    "wire should reach the tip from outside the symbol",
+                ))
+                break
+    return out
+
+
+def _collinear_overlap(a, b, c, d) -> float:
+    """Positive length the collinear segments ``a-b`` and ``c-d`` share.
+
+    Zero when they are not collinear (a crossing is constraint 4's question, not
+    this one) and zero when they merely touch end to end.
+    """
+    if (abs(_cross(a, b, c)) > TOL or abs(_cross(a, b, d)) > TOL
+            or abs(_cross(c, d, a)) > TOL or abs(_cross(c, d, b)) > TOL):
+        return 0.0
+    length = math.hypot(b[0] - a[0], b[1] - a[1])
+    if length <= TOL:
+        return 0.0
+    ux, uy = (b[0] - a[0]) / length, (b[1] - a[1]) / length
+
+    def along(point):
+        return (point[0] - a[0]) * ux + (point[1] - a[1]) * uy
+
+    low, high = sorted((along(c), along(d)))
+    return max(0.0, min(high, length) - max(low, 0.0))
 
 
 def _first_box_crossing(
@@ -1183,8 +1368,15 @@ def _check_text(
     and the alternative (a label centred on its own pin, half of it inside the
     symbol) is worse. `LayoutLabel.part_id` carries the owner; a label with no
     owner (a tap's stub end, a page boundary) keeps the strict rule, and every
-    label is still checked against every *other* part's body. A flag has no
-    owner at all, so it is foreign to every body by construction.
+    label is still checked against every *other* part's body.
+
+    Since 147 the "foreign body" half tests the same extents constraint 4 does
+    (`_drawn_extents`): every part's body **and every flag's glyph**, so a rail
+    name printed over a component and a component's value printed over a flag's
+    pennant are one check. A flag's glyph has no owner a text can match, so it is
+    foreign to every row except the flag's own name — which the host prints in the
+    band just past it, and which carries the flag as its owner
+    (`_flag_name_row`).
     """
     out: list[HardViolation] = []
     boxes = _text_boxes(layout_plan, profile_map)
@@ -1192,6 +1384,8 @@ def _check_text(
         for right in range(left + 1, len(boxes)):
             name_a, box_a, _part_a, text_a = boxes[left]
             name_b, box_b, _part_b, text_b = boxes[right]
+            if _one_statement(name_a, text_a, name_b, text_b):
+                continue
             if not _overlap(box_a, box_b):
                 continue
             out.append(HardViolation(
@@ -1201,17 +1395,82 @@ def _check_text(
                 f"{text_b!r} {_box_text(box_b)} intersect — overlapping text is "
                 "unreadable whichever of the two it hides",
             ))
-    for name, box, part_id, text in boxes:
-        for part in placed:
-            if part.body is None or part.part_id == part_id:
+    extents = _drawn_extents(layout_plan, placed, profile_map)
+    for name, box, owner, text in boxes:
+        for extent_name, extent, extent_owner in extents:
+            if extent_owner == owner:
                 continue
-            if not _overlap(box, part.body):
+            if not _overlap(box, extent):
                 continue
             out.append(HardViolation(
                 KIND_TEXT_OVERLAP,
-                (name, f"parts[{part.part_id}]"),
-                f"{name} {text!r} {_box_text(box)} lands on the drawn body of "
-                f"parts[{part.part_id}] {_box_text(part.body)}",
+                (name, extent_name),
+                f"{name} {text!r} {_box_text(box)} lands on the drawn extent of "
+                f"{extent_name} {_box_text(extent)}",
+            ))
+    return out
+
+
+def _check_text_on_wire(
+    layout_plan: LayoutPlan,
+    profile_map: Mapping[str, SymbolProfile],
+) -> list[HardViolation]:
+    """Constraint 5b: no conductor printed **through** a text row (147).
+
+    The page-level lint has asked this since 111 (`L1-text-on-wire`); the
+    compiler's gate never did, so a plan whose name row runs across a conductor
+    was refused by nothing until the page had already been landed. 岳's second
+    criticism is exactly this class: on the landed page the `SW` wire runs through
+    the `HVDC` flag's name (`outputs/147/FINDINGS.md` sec.2).
+
+    The threshold is `core.textmetrics.TEXT_WIRE_PENETRATION`, the same number the
+    lint uses, so "the plan passed" and "the page lints clean" cannot disagree
+    about the same two objects. A **grazing** conductor is not reported: at 10
+    units a row is crossed, at 6.5 (the accepted pages' worst corner graze) it is
+    not.
+
+    147b closed the last gap between this rule and the lint's: a conductor that
+    only runs **along** a row's outline is not printed through it either. The lint
+    has asked that since 111 (`drawlint._segment_crosses_box`: "a segment running
+    along the border, or touching a single corner, is a conductor drawn flush
+    against a text row — tight, but readable") and this gate did not, so a *chord*
+    as long as the row's whole width could be measured off a wire lying exactly on
+    the row's edge, with zero penetration. Two shapes make that show up: a wire
+    drawn along the bottom edge of a part's designator row, and a wire's own name
+    row — the host anchors that text **at** the wire's midpoint, so the row's
+    leading corner sits on the conductor by construction, and a foreign wire
+    crossing there grazes both edges. The entry test is therefore
+    :func:`_clip_to_box`'s strict interior, and the chord is taken only over the
+    edges that pass it: the lint's own two steps
+    (`_segment_crosses_box` then `_segment_box_chord`), which is what keeps "the
+    gate passed it" and "the lint rejects it" from disagreeing about the same two
+    objects in either direction.
+
+    A row is exempt from the conductors of **its own net**: the host prints a
+    wire's name *along* that wire and a flag's name at the end of its own rail, so
+    the wire that carries the name always touches it. The exemption is by net,
+    which is what the lint's `_own_net_text_exemption` does too — a name of net N
+    names every conductor of N.
+    """
+    out: list[HardViolation] = []
+    for name, box, owner, text in _text_boxes(layout_plan, profile_map):
+        for index, segment in enumerate(layout_plan.segments):
+            if segment.net and segment.net == text:
+                continue  # the row names this wire's own net
+            hit = max(
+                (_box_chord(start, end, box)
+                 for start, end in _edges(list(segment.points))
+                 if _clip_to_box(start, end, box) is not None),
+                default=0.0,
+            )
+            if hit < TEXT_WIRE_PENETRATION:
+                continue
+            out.append(HardViolation(
+                KIND_TEXT_ON_WIRE,
+                (name, f"segments[{index}]"),
+                f"{name} {text!r} {_box_text(box)} is crossed by segments[{index}] "
+                f"(net {segment.net or 'unnamed'}) for {hit:.0f} units — text "
+                "printed through a conductor reads as the other net",
             ))
     return out
 
@@ -1242,25 +1501,111 @@ def _flag_glyph_box(
     )
 
 
+def _one_statement(name_a: str, text_a: str, name_b: str, text_b: str) -> bool:
+    """Are these two boxes the **same name printed once**? (147)
+
+    The host prints a net's name on the wire that carries it — a row this checker
+    now models (`_named_wire_rows`). A plan that also carries a ``LayoutLabel`` for
+    that net is not stating the name twice: since 029 the host cannot place a net
+    label (``sch.place_netlabel`` is measured unusable), so a label is *downgraded*
+    to a stub whose name the host draws along the stub. Reporting the label's own
+    box against the row the host draws would be reporting one statement as two —
+    measured on 053b scene 4, where it refused the whole multi-tap ladder.
+
+    Only that pair: a plain ``LayoutText`` beside a wire's name *is* two texts on
+    the canvas (a note and a name can collide), and two wires' names can too.
+    """
+    return (
+        bool(text_a)
+        and text_a == text_b
+        and sorted((name_a.split("[")[0], name_b.split("[")[0])) == ["labels", "segments"]
+    )
+
+
+def _flag_name_row(
+    layout_plan: LayoutPlan,
+    profile_map: Mapping[str, SymbolProfile],
+    index: int,
+    symbol: Any,
+    glyph: Box | None,
+) -> Box | None:
+    """The row a rail flag's **own name** is printed in, or ``None``.
+
+    `core.textmetrics.flag_name_box` states the measurement; this half only
+    decides *which* flags have one. A flag of the ground family prints no name at
+    all (the ground symbol is its own name), a rail flag prints its net — measured
+    on the flyback page's two rail flags and no others, because those are the only
+    two flags this repo's landed renders carry a name for
+    (`outputs/147/FINDINGS.md` sec.2).
+
+    The row's owner is the flag itself, so the checker does not report the flag's
+    own name against the flag's own glyph box: the host prints the name in the
+    band immediately past the glyph, and for a flag whose glyph hangs below its
+    connection that band is the ten units directly under the pennant — adjacent,
+    not overlapping, and not something a drawing can change.
+    """
+    if glyph is None or not symbol.net:
+        return None
+    profile = profile_map.get(symbol.symbol_ref)
+    if profile is None or flag_glyph_kind(profile) == FLAG_GLYPH_KIND_GND:
+        return None
+    up = glyph[3] > symbol.y
+    return flag_name_box(
+        glyph, (symbol.x, symbol.y), symbol.net, axis_up=up
+    )
+
+
+def _named_wire_rows(layout_plan: LayoutPlan) -> list[tuple[str, Box, str, str]]:
+    """The rows the host prints a wire's **net name** in (147).
+
+    A wire that carries a name is named by the *host*, not by the compiler: it
+    anchors the text at the midpoint of the wire's longest straight run and grows
+    it rightward (or downward). 146 measured that rule
+    (`core.textmetrics.wire_name_box`) and used it offline; 147 puts the same box
+    into this checker, because a name row is a text on the canvas like any other —
+    it can land on a component body, on another row, or across a conductor.
+
+    **Which** wires are named: every wire of a net the page does *not* carry a
+    power flag for. A flagged net is named by its flag (the rail writes its name
+    itself), so the host prints no second name along the trunk — 146's render
+    confirms it (its 16 named wires are exactly the plan's unflagged nets).
+    """
+    flagged = {symbol.net for symbol in layout_plan.power_symbols}
+    out: list[tuple[str, Box, str, str]] = []
+    for index, segment in enumerate(layout_plan.segments):
+        if not segment.net or segment.net in flagged:
+            continue
+        box = wire_name_box(list(segment.points), segment.net)
+        if box is not None:
+            out.append((f"segments[{index}]", box, "", segment.net))
+    return out
+
+
 def _text_boxes(
     layout_plan: LayoutPlan,
     profile_map: Mapping[str, SymbolProfile],
 ) -> list[tuple[str, Box, str, str]]:
     """``(name, box, partId, text)`` for **every** text on the canvas.
 
-    Three kinds, and the set is closed on all of them: a ``LayoutText`` (a
+    Five kinds, and the set is closed on all of them: a ``LayoutText`` (a
     reference, a value — owner ``LayoutText.part_id``), a ``LayoutLabel``
     (a net name, owner ``LayoutLabel.part_id`` since 099b: the part whose pin it
-    names), and — since 143c — a ``LayoutPowerSymbol``, whose glyph is a net
-    name printed on the canvas just like a label's box. The flag had no box in
-    any of the checker's object sets before, so the compass of constraint 5
-    ("a wire on the wrong pin, an NC pin that got connected, **text printed on a
-    component**") could not see a rail flag lying on a body, over a label, off
-    the page or inside a keep-out.
+    names), — since 143c — a ``LayoutPowerSymbol``, whose glyph is a net name
+    printed on the canvas just like a label's box, — and since 147 the two rows the
+    *host* prints and the compiler never places: a wire's own net name
+    (:func:`_named_wire_rows`) and a rail flag's own name
+    (:func:`_flag_name_row`).
 
-    A flag's owner is the empty string: it belongs to no part, so
-    `_check_text` treats it as foreign to every body — which is what a rail
-    name printed over a symbol is.
+    The last two are the rows 146 left out (its own FINDINGS sec.8.4 named the gap
+    and left it to the next batch). They matter because they are the rows 岳 found
+    on the page: a wire's name printed across a diode's body, and a rail flag's
+    name astride the conductor that feeds it. A row the host draws is a row this
+    checker has to model, or the gate reports a page nobody will see.
+
+    A part's own text and a flag's own name carry their owner, so they are not
+    reported against their own drawn extent; a wire's name and a bare label carry
+    ``""``, which is foreign to every object — a net name printed over *any*
+    symbol is the defect.
     """
     boxes: list[tuple[str, Box, str, str]] = [
         (f"texts[{index}]", item.bbox, item.part_id, item.text)
@@ -1273,7 +1618,17 @@ def _text_boxes(
     for index, symbol in enumerate(layout_plan.power_symbols):
         glyph = _flag_glyph_box(profile_map, symbol)
         if glyph is not None:
-            boxes.append((f"powerSymbols[{index}]", glyph, "", symbol.net))
+            # The glyph is the flag's own drawn extent, which constraint 4 tests
+            # as a box too. Carrying the flag as its owner keeps the two halves
+            # from reporting a flag's glyph against itself (147); it is still
+            # foreign to every other object.
+            boxes.append((f"powerSymbols[{index}]", glyph,
+                          f"powerSymbols[{index}]", symbol.net))
+        row = _flag_name_row(layout_plan, profile_map, index, symbol, glyph)
+        if row is not None:
+            boxes.append((f"powerSymbols[{index}] name", row, f"powerSymbols[{index}]",
+                          symbol.net))
+    boxes.extend(_named_wire_rows(layout_plan))
     return boxes
 
 
@@ -1477,7 +1832,7 @@ def _check_required_pins(
     constraint 2's finding). A pin that cannot be present at all — its part is
     not placed, or the symbol profile has no such pin — is reported with that
     reason, because a declared connection the drawing cannot even show is the
-    strongest failure of the nine.
+    strongest failure of the eleven.
     """
     out: list[HardViolation] = []
     by_id = {part.part_id: part for part in placed}
@@ -1677,6 +2032,20 @@ def _unaligned_pairs(
     return pairs, unmoduled
 
 
+def _own_flag_name(name: str, boxes: list[tuple[str, Box, str, str]]) -> bool:
+    """Is ``name`` a flag's **glyph** box whose own name row is also in ``boxes``?
+
+    147b's one exclusion from :func:`_min_text_gap`. The names are the ones
+    :func:`_text_boxes` gives them — ``powerSymbols[i]`` for a flag's drawn extent
+    and ``powerSymbols[i] name`` for the row the host prints beside it — so the
+    predicate is the naming itself: a symbol and its own annotation are one
+    statement, and their edge-to-edge contact is not a spacing measurement.
+    """
+    return any(
+        other == f"{name} name" for other, _box, _part, _text in boxes
+    )
+
+
 def _min_text_gap(
     boxes: list[tuple[str, Box, str, str]],
 ) -> tuple[float, list[str]]:
@@ -1691,7 +2060,21 @@ def _min_text_gap(
     overlap — see this run's text-overlap violations" for a pair that merely
     touches points the reader at a violation that does not exist (121c's own
     delivery had exactly that: `min_text_gap = 0` with zero `text-overlap`).
+
+    147b: one **pair** is not two statements and never counts — a flag and its own
+    name. The host prints a rail flag's name in the band immediately beyond the
+    glyph (`core.textmetrics.flag_name_box`, measured), so the two boxes touch edge
+    to edge **by construction**: 147 put that row into this set, and the metric came
+    out 0.0 on every page carrying a flag — a number about the host's typography,
+    not about the drawing. Only that pair is dropped, not the boxes: a flag's glyph
+    still has to keep its distance from every *other* statement on the page, and
+    dropping the box would stop measuring those. The pair is named rather than
+    derived from the owner, because a part's designator and its value share an owner
+    and their gap is exactly this metric's base case.
     """
+    annotations = {
+        item[0] for item in boxes if _own_flag_name(item[0], boxes)
+    }
     if len(boxes) < 2:
         return UNMEASURED, [
             f"{len(boxes)} text box(es) on the page — one gap needs two boxes; "
@@ -1704,6 +2087,8 @@ def _min_text_gap(
         for right in range(left + 1, len(boxes)):
             name_a, box_a, _pa, _ta = boxes[left]
             name_b, box_b, _pb, _tb = boxes[right]
+            if name_a in annotations and name_b == f"{name_a} name":
+                continue
             gap = _box_gap(box_a, box_b)
             if _overlap(box_a, box_b):
                 overlapping += 1
@@ -1897,15 +2282,19 @@ def _cross(
 
 
 def _clip_to_box(
-    start: tuple[float, float], end: tuple[float, float], box: Box
+    start: tuple[float, float], end: tuple[float, float], box: Box, inset: float = TOL
 ) -> tuple[float, float] | None:
     """The parameter range of the segment strictly inside `box`, or ``None``.
 
-    Liang–Barsky against the box inset by :data:`TOL`: a wire lying exactly on
-    the outline, or touching only a corner, has no positive-length interior and
-    is not "crossing" the box.
+    Liang–Barsky against the box inset by `inset` (:data:`TOL` by default): a wire
+    lying exactly on the outline, or touching only a corner, has no positive-length
+    interior and is not "crossing" the box. `inset=0.0` is the same clip against
+    the box itself, which is what a *chord* is measured with
+    (:func:`_box_chord`).
     """
-    left, bottom, right, top = box[0] + TOL, box[1] + TOL, box[2] - TOL, box[3] - TOL
+    left, bottom, right, top = (
+        box[0] + inset, box[1] + inset, box[2] - inset, box[3] - inset,
+    )
     if right <= left or top <= bottom:
         return None
     dx, dy = end[0] - start[0], end[1] - start[1]
@@ -1932,6 +2321,24 @@ def _clip_to_box(
     if high - low <= TOL:
         return None
     return (low, high)
+
+
+def _box_chord(
+    start: tuple[float, float], end: tuple[float, float], box: Box
+) -> float:
+    """How far the segment runs **inside** `box`, in canvas units (0 when it does not).
+
+    The same measurement `drawlint`'s L1 makes of the landed page
+    (``_segment_box_chord``). The two must agree: the compiler refuses at
+    :data:`~boardwise.core.textmetrics.TEXT_WIRE_PENETRATION` and the lint reports
+    at the same number, so a plan the gate passed cannot come back as a page the
+    lint rejects for the same two objects.
+    """
+    span = _clip_to_box(start, end, box, inset=0.0)
+    if span is None:
+        return 0.0
+    low, high = span
+    return math.hypot(end[0] - start[0], end[1] - start[1]) * (high - low)
 
 
 def _overlap(a: Box, b: Box) -> bool:
@@ -2009,7 +2416,7 @@ class _UnionFind:
 
 # ============================================== the page-level domain (056 sec.3)
 #
-# The nine constraints above judge one drawing. These eight judge a page made of
+# The eleven constraints above judge one drawing. These eight judge a page made of
 # several — where the frames sit, what happens to a wire when it leaves a module,
 # and whether two modules say the same thing about a shared net. The two domains
 # are separate functions on purpose: `check` is the 053 contract and keeps its
@@ -2039,7 +2446,7 @@ def check_page(
 
     ``page_layout`` is a :class:`~boardwise.core.pagelayoutplan.PageLayoutPlan`:
     the merged drawing plus the module placement facts. The *drawing* half of the
-    contract is the nine constraints, checked by :func:`check` on the merged plan
+    contract is the eleven constraints, checked by :func:`check` on the merged plan
     — this function never re-judges it, and a caller that wants both runs both.
     The page box the frames are tested against is the document's own
     ``page_box`` (a page without one has nothing to be outside of).
@@ -2418,7 +2825,7 @@ def _check_wires_clear_of_frames(
     The page's version of `wire-through-body`, and deliberately not the same
     rule: a module frame is mostly empty canvas, so a wire *may* legally pass
     through the space between two of a module's parts while breaking nothing the
-    nine constraints can see. 056 sec.3's rule is that it may not: the drawn
+    eleven constraints can see. 056 sec.3's rule is that it may not: the drawn
     connection leaves through one frame edge and arrives through the other's,
     and the wire's own module gets exactly one escape run.
     """

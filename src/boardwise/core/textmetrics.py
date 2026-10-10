@@ -29,12 +29,15 @@ import math
 
 __all__ = [
     "CANVAS_TEXT_UNITS",
+    "FLAG_NAME_ROW",
     "RENDER_TEXT_PX",
     "RENDER_TEXT_SCALE",
     "TEXT_ADVANCE_EM",
     "TEXT_ADVANCE_EM_FALLBACK",
+    "TEXT_WIRE_PENETRATION",
     "WIRE_NAME_MODEL_EXCEPTION",
     "WIRE_NAME_ROW",
+    "flag_name_box",
     "render_width",
     "wire_name_box",
 ]
@@ -93,6 +96,57 @@ WIRE_NAME_ROW = CANVAS_TEXT_UNITS
 #: land on the run. Named here so a reader of the model knows which case it is
 #: not.
 WIRE_NAME_MODEL_EXCEPTION = "FB_SENSE"
+
+#: How deep a conductor has to run **through** a text row before it is a defect
+#: and not an edge graze (147). One number, two callers: `drawlint`'s L1 (`text
+#: printed through a conductor`) measures the landed page with it, and
+#: `readability`'s `text-on-wire` constraint refuses a *plan* with it — a
+#: drawing the compiler accepted must not become a page the lint rejects.
+#:
+#: The value is `drawlint`'s calibration, kept verbatim: on the 2026-10-04
+#: snapshots the accepted pages' worst crossing is a 6.5-unit corner graze,
+#: while the true text-through-wire defects measure 21-38 units with a 10-unit
+#: median.
+TEXT_WIRE_PENETRATION = 10.0
+
+#: The row a **rail flag's own name** occupies, measured on the landed page
+#: (2026-10-10, `test/P1`, the two rail flags the flyback page draws — a ground
+#: flag prints no name at all). See :func:`flag_name_box`.
+FLAG_NAME_ROW = CANVAS_TEXT_UNITS
+
+
+def flag_name_box(glyph, anchor, text: str, *, axis_up: bool):
+    """The box the host draws a **rail flag's name** in — measured, not chosen.
+
+    A power flag's name is not a ``LayoutText`` and not a wire's own name: the
+    host prints it beside the flag's glyph, and it chooses where. Measured on the
+    145e/146 render, the two rail flags of the flyback page (``outputs/147/
+    FINDINGS.md`` sec.2):
+
+    * ``HVDC`` at ``(160, 690)`` rot 0 — glyph ``(155, 695)-(165, 700)``, name row
+      ``(145.8, 700)-(174.2, 710)``;
+    * ``SEC_12V`` at ``(280, 740)`` rot 180 — glyph ``(275, 730)-(285, 735)``, name
+      row ``(259, 720)-(301, 730)``.
+
+    So the row is the :data:`FLAG_NAME_ROW`-thick band **immediately beyond the
+    glyph**, on the far side from the connection, centred on the flag's axis and
+    as wide as the name. ``axis_up`` says which of the two cases this flag is:
+    whether the glyph hangs *above* the connection (rot 0, row above it) or below
+    (rot 180, row below it). Both measured flags hang on the vertical axis; a flag
+    on the horizontal axis is the same rule transposed, and 147 says so rather
+    than pretending it measured one.
+
+    ``glyph`` is the box :func:`~boardwise.core.symbolprofile.flag_glyph_box`
+    returns (``None`` when the profile states no extent, in which case the row is
+    ``None`` as well — a box nobody can measure is not a zero-area one).
+    """
+    if glyph is None:
+        return None
+    width = render_width(text)
+    cx = anchor[0]
+    if axis_up:
+        return (cx - width / 2.0, glyph[3], cx + width / 2.0, glyph[3] + FLAG_NAME_ROW)
+    return (cx - width / 2.0, glyph[1] - FLAG_NAME_ROW, cx + width / 2.0, glyph[1])
 
 
 def wire_name_box(points, text: str) -> tuple[float, float, float, float] | None:

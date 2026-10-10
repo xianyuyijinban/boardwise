@@ -62,6 +62,7 @@ from boardwise.engines.readability import (
     KIND_TEXT_OVERLAP,
     KIND_UNDECLARED_JUNCTION,
     KIND_USER_LOCK_VIOLATED,
+    KIND_WIRE_ON_PIN_LINE,
     KIND_WIRE_THROUGH_BODY,
     PRECISION,
     TOL,
@@ -267,14 +268,23 @@ def _kinds(result) -> list[str]:
 # ------------------------------------------------ the contract and its shape
 
 
-def test_the_hard_kinds_are_the_nine_the_contract_names():
-    """The vocabulary itself: nine constraints, one kind each, fixed order."""
+def test_the_hard_kinds_are_the_eleven_the_contract_names():
+    """The vocabulary itself: eleven constraints, one kind each, fixed order.
+
+    147 added `wire-on-pin-line` and `text-on-wire` — the two classes 岳 caught by
+    eye on a page every gate called clean (`outputs/147/FINDINGS.md`): a wire
+    lying *along* a symbol's own lead, and a conductor printed through a text row.
+    `wire-through-body`'s box could not see the first (a line is not a box) and
+    `text-overlap` never looked at a conductor at all.
+    """
     assert HARD_KINDS == (
         "netlist-partition-mismatch",
         "dangling-wire-end",
         "undeclared-junction",
         "wire-through-body",
+        "wire-on-pin-line",
         "text-overlap",
+        "text-on-wire",
         "out-of-page",
         "user-lock-violated",
         "nc-pin-connected",
@@ -696,6 +706,18 @@ def test_two_wires_that_cross_need_no_junction():
 
 
 def test_a_wire_crossing_a_foreign_body_is_detected():
+    """Two findings since 147b, and they are different statements about one wire.
+
+    The first is this test's subject (constraint 4). The second is that the same
+    wire's **net name row** lands on `R2`: 147 modelled the row the host prints a
+    named wire's name in (`_named_wire_rows`), and the fixture draws `X` from
+    (0, 200) to (200, 200), i.e. straight through `R2`'s body — so the row the host
+    anchors at that wire's midpoint, (100, 200)-(106.67, 210), is printed on the
+    part as well. That is not a new rule catching the old fixture out: a drawing
+    that runs a named wire through a body puts the name on the body, and the two
+    lines each say which. The old expectation (`exactly one`) measured only the
+    wire because the checker had no row model at all.
+    """
     case = _case(
         segments=_segments() + [
             LayoutSegment(net="X", points=[(0.0, 200.0), (200.0, 200.0)]),
@@ -711,11 +733,24 @@ def test_a_wire_crossing_a_foreign_body_is_detected():
     found = _of(result, KIND_WIRE_THROUGH_BODY)
     assert [item.objects for item in found] == [("segments[2]", "parts[R2]")]
     assert "may only reach a part through that part's own pin" in found[0].evidence
-    assert len(result.hard_violations) == 1
+    rows = _of(result, KIND_TEXT_OVERLAP)
+    assert [item.objects for item in rows] == [("segments[2]", "parts[R2]")]
+    assert "lands on the drawn extent of parts[R2]" in rows[0].evidence
+    assert len(result.hard_violations) == 2, _kinds(result)
 
 
 def test_a_wire_between_its_own_two_pins_may_enter_its_own_body():
-    """"非两端器件" is the rule: the part at a segment's end is not a violation."""
+    """"非两端器件" is the rule: the part at a segment's end is not a violation.
+
+    That exemption is about the **wire** (constraint 4), and it still holds: the
+    segment itself is reported by nothing here. What 147 added is a second
+    statement about the same run — the host prints this wire's name (`MID`) in a
+    row anchored at the wire's own midpoint, and that midpoint is inside `R1`, so
+    the row is printed on the part. The old expectation (`no violations at all`)
+    was written before the checker modelled a wire's own name; a wire that enters
+    its own body legally can still put its name on the body, and that reading is
+    the finding below.
+    """
     file = _case(
         parts=[LayoutPart(
             part_id="R1", symbol_ref=RESISTOR, x=COL, y=400.0, reference="R1",
@@ -732,7 +767,16 @@ def test_a_wire_between_its_own_two_pins_may_enter_its_own_body():
     )
     # The wire runs from tip to tip *through* the drawn body: legal, because
     # both of the segment's ends are this part's own pins.
-    assert _run(file).hard_violations == []
+    result = _run(file)
+    assert _of(result, KIND_WIRE_THROUGH_BODY) == []
+    assert _of(result, KIND_WIRE_ON_PIN_LINE) == []
+    rows = _of(result, KIND_TEXT_OVERLAP)
+    assert [item.objects for item in rows] == [("segments[0]", "parts[R1]")]
+    assert "'MID'" in rows[0].evidence, (
+        "the row the host prints a wire's own name in is anchored at the wire's "
+        "midpoint, which here is the middle of the part"
+    )
+    assert len(result.hard_violations) == 1, _kinds(result)
 
 
 # ------------------------------------------------------------------ 5. text
@@ -896,12 +940,45 @@ def test_a_wire_riding_a_keep_out_edge_is_on_the_border_not_inside_it():
     without "crossing" the body. The control below moves the keep-out one unit
     towards the wire, so where the boundary actually is is pinned too: the rule
     is a boundary, not a licence to ignore the region.
+
+    147b: the wire half is unchanged and the *region* half gained one box. The
+    host prints a wire's own net name in a row anchored at the wire's longest run's
+    midpoint, and here that midpoint (250, 300) is exactly on the keep-out's top
+    edge — so the row grows **down into** the band, which the wire beside it only
+    rides. The old expectation (`nothing in this region at all`) predates 147
+    modelling a wire's own name row; the wire's own finding is still absent, which
+    is what the first assertion now says, and the row's is the second.
     """
     on_the_edge = (COL + 150.0, 300.0, COL + 220.0, 330.0)
     one_unit_in = (COL + 150.0, 299.0, COL + 220.0, 330.0)
-    assert _of(_check_with_keepouts([on_the_edge]), KIND_OUT_OF_PAGE) == []
-    found = _of(_check_with_keepouts([one_unit_in]), KIND_OUT_OF_PAGE)
+
+    def the_wire_in_the_region(result) -> list:
+        """The findings about the **wire** entering the region, row findings out.
+
+        A wire's own name row carries the wire's own object name (`segments[1]`),
+        so the two are told apart by the evidence's own wording: a sub-segment that
+        cuts into the region "runs through keep-out", a box that lies inside it
+        "is inside keep-out".
+        """
+        return [
+            item for item in _of(result, KIND_OUT_OF_PAGE)
+            if "runs through keep-out" in item.evidence
+        ]
+
+    # The *wire* is on the border, so the wire is not in the region — that is this
+    # test's subject and it is unchanged. 147 added a second box in that region
+    # that the fixture did not have: the host prints this net's name (`MID`) in a
+    # row anchored at the longest run's midpoint, (250, 300), and the row grows
+    # *down* into the band (250, 300)-(268.33, 310) — inside the keep-out the wire
+    # only rides. The row is a text box like any other and a reserved region is
+    # reserved against it too, so the finding is reported and named as text.
+    assert the_wire_in_the_region(_check_with_keepouts([on_the_edge])) == []
+    rows = _of(_check_with_keepouts([on_the_edge]), KIND_OUT_OF_PAGE)
+    assert [item.objects for item in rows] == [("segments[1]",)]
+    assert "[250, 300, 268.33, 310] is inside keep-out" in rows[0].evidence
+    found = the_wire_in_the_region(_check_with_keepouts([one_unit_in]))
     assert [item.objects for item in found] == [("segments[1]",)]
+    assert "runs through keep-out" in found[0].evidence
 
 
 def test_without_a_page_box_the_page_boundary_is_not_judged():
@@ -956,7 +1033,14 @@ def test_a_lock_that_matches_is_not_a_violation():
 
 
 def test_an_nc_pin_the_drawing_wires_up_is_detected():
-    """Scenario 11: "NC 被接". The stray wire is the only defect."""
+    """Scenario 11: "NC 被接". The stray wire is the only defect *it* adds.
+
+    147b added the second line, and it is about the same stray wire: `MID`'s name
+    row is anchored at that wire's midpoint — (100, 200), which is inside `R2` — so
+    the name is printed on the part. "The stray wire is the only defect" was true of
+    the wire while the checker had no model of a wire's own name; the row is the
+    host's typography on top of it, and one drawing can be wrong twice.
+    """
     case = _case(
         circuit=_circuit(
             nets=[
@@ -978,7 +1062,10 @@ def test_an_nc_pin_the_drawing_wires_up_is_detected():
         ("circuitSpec.nc[R2.2]", "pins[R2.2]"),
     ]
     assert "pins[R1.2], pins[R2.1]" in found[0].evidence
-    assert len(result.hard_violations) == 1
+    rows = _of(result, KIND_TEXT_OVERLAP)
+    assert [item.objects for item in rows] == [("segments[2]", "parts[R2]")]
+    assert "'MID'" in rows[0].evidence
+    assert len(result.hard_violations) == 2, _kinds(result)
 
 
 def test_an_nc_pin_carrying_a_power_flag_is_detected():
@@ -1242,10 +1329,19 @@ def test_text_spacing_and_occupancy_are_measured_in_canvas_units():
     assert "texts[0] and texts[2]: 15 units apart" in result.soft_reasons[
         "min_text_gap"
     ][0]
-    # Two bodies (20x40 each) and four text/label boxes: 3300 units^2 of 800000.
-    assert result.soft_metrics["occupied_ratio"] == pytest.approx(3300.0 / 800000.0)
+    # Two bodies (20x40 each), four text/label boxes, and — since 147 — the two
+    # rows the host prints this net's own name in: `MID` is not carried by a power
+    # flag, so its two wires each print a name, at (100, 300) growing down (18.33
+    # units wide) and at (150, 300) growing right (18.33 units wide). 3300 +
+    # 2 x 183.3 = 3666.6 units^2 of 800000. The old expectation counted the boxes
+    # the *plan* declares; a wire's own name is a box the plan does not declare and
+    # the page still carries, which is what 147 put into this set.
+    assert result.soft_metrics["occupied_ratio"] == pytest.approx(3666.6 / 800000.0)
+    assert "8 box(es) cover 3666.6 units^2" in result.soft_reasons[
+        "whitespace_ratio"
+    ][0]
     assert result.soft_metrics["whitespace_ratio"] == pytest.approx(
-        1.0 - 3300.0 / 800000.0
+        1.0 - 3666.6 / 800000.0
     )
     assert "800000 units^2" in result.soft_reasons["whitespace_ratio"][0]
 
@@ -1255,7 +1351,12 @@ def test_metrics_that_cannot_be_measured_say_so():
     assert no_page.soft_metrics["whitespace_ratio"] == UNMEASURED
     assert "no page_box was given" in no_page.soft_reasons["whitespace_ratio"][0]
 
-    one_text = _run(_case(texts=[
+    # One text box on the whole canvas, so there is no pair to measure. The wires
+    # go too: since 147 every named wire that no power flag names carries a row the
+    # host prints (`_named_wire_rows`), and the base case's two `MID` wires would
+    # put two more boxes on this page — a gap of 40 between them, which is a
+    # measurement of the fixture rather than of "one text and nothing else".
+    one_text = _run(_case(segments=[], texts=[
         LayoutText(kind="reference", text="R1", part_id="R1",
                    bbox=(COL + 20.0, 430.0, COL + 40.0, 450.0)),
     ], labels=[]))

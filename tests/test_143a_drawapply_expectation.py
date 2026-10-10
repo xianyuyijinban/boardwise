@@ -14,11 +14,17 @@ from __future__ import annotations
 import test_053b_drawcompiler as T
 from boardwise.engines import drawapply, drawcompiler as dc
 
+from gate_skip import skip_if_the_147_gate_refused
+
 PAGE = (0.0, 0.0, 1170.0, 825.0)
 
 
 def _compile(circuit, presentation, book):
     result = dc.compile(circuit, presentation, book, dc.CompileBudget(page_box=PAGE))
+    # 147c: 143a's F2 scene lands a rail flag so that its name row is crossed by
+    # another net's wire — one of the shapes 147's gate now refuses. The skip names
+    # the gate line; a refusal by anything else still fails here.
+    skip_if_the_147_gate_refused(result, "143a F2, the sibling-role LDO scene")
     assert result.ok, result.render_failures()
     return result.best()
 

@@ -114,13 +114,17 @@ TEXT_BOX_SLACK = 2.0
 
 #: L1 — a wire must penetrate the text box deeper than this (chord length of
 #: the segment's clip against the box, canvas units) to count as "printed
-#: through the text". Calibrated on the 2026-10-04 snapshots: the accepted
+#: through the text". The number lives in :mod:`boardwise.core.textmetrics`
+#: because since 147 the **compiler** refuses a plan with it too
+#: (`readability`'s `text-on-wire`): a drawing the compiler accepted must not
+#: come back as a page this lint rejects for the same two objects. Its
+#: calibration, kept verbatim from the 2026-10-04 snapshots: the accepted
 #: pages' worst crossing is a 6.5-unit corner graze (P24's parallel stub
 #: labels, whose glyph rows and neighbour conductors cannot be told apart at
 #: estimate precision), while the pre-fix P1's true text-through-wire defects
 #: measure 21–38 units with a 10-unit median — the threshold sits at that
 #: median, 1.5× the accepted worst case.
-L1_TEXT_WIRE_PENETRATION = 10.0
+L1_TEXT_WIRE_PENETRATION = textmetrics.TEXT_WIRE_PENETRATION
 
 #: L2 — two text boxes overlapping by more than this much in **both**
 #: dimensions report as stacked. Half a text row (5 of 10 canvas units) is

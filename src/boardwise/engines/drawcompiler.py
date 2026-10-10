@@ -128,6 +128,7 @@ from boardwise.core.presentationspec import LABEL_LABEL, PresentationSpec
 from boardwise.core.symbolprofile import (
     FLAG_GLYPH_KIND_GND,
     FLAG_GLYPH_ROTATION_OFFSETS,
+    PIN_LINE_OVERLAP,
     Box,
     SymbolPin,
     SymbolPose,
@@ -135,6 +136,7 @@ from boardwise.core.symbolprofile import (
     check_box,
     flag_glyph_box,
     flag_glyph_kind,
+    pose_box,
     role_siblings,
 )
 
@@ -732,7 +734,7 @@ def compile(  # noqa: A001 - the name 053 sec.4 fixes for the entry point
                       presentation_spec, book, budget, intent)
 
     if not result.ranked:
-        result.failures = _no_candidate_failures(result)
+        result.failures = _no_candidate_failures(result, budget)
         return result
 
     result.ranked.sort(key=lambda item: item.key)
@@ -2181,11 +2183,9 @@ def _part_box(
     xs: list[float] = []
     ys: list[float] = []
     if profile.body is not None:
-        x0, y0, x1, y1 = profile.body
-        for corner in ((x0, y0), (x1, y0), (x1, y1), (x0, y1)):
-            point = _posed(corner, pose, origin)
-            xs.append(point[0])
-            ys.append(point[1])
+        box = _body_box(profile, pose, origin)
+        xs.extend([box[0], box[2]])
+        ys.extend([box[1], box[3]])
     for pin in profile.pins:
         point = _posed(pin.tip, pose, origin)
         xs.append(point[0])
@@ -2243,6 +2243,62 @@ def _text_walls(
     return walls
 
 
+def _pin_walls(
+    profile: SymbolProfile, pose: SymbolPose, origin: tuple[float, float]
+) -> list[Box]:
+    """Each pin's drawn lead as a thin box: the obstacle a wire may not run along.
+
+    The lead is the segment from the tip that pin draws *inward*, and
+    :data:`PIN_TEXT_WALL` is the same thickness `_text_walls` reserves against a
+    neighbouring text — a pin is a stroke, not a rectangle. A wire arriving at the
+    tip from outside, or perpendicular to the lead, only touches this box's end;
+    one that reaches the tip from inside, or doubles back over the lead, crosses
+    it and is refused. That is exactly `readability`'s `wire-on-pin-line`, and the
+    two have to agree: a route this search calls clear must be clear to the layer
+    that grades it.
+
+    A pin whose drawn length the profile does not state reserves nothing: an
+    unstated extent is not a measured one (052 sec.4), and the whole-part box is
+    already in the obstacles.
+    """
+    inward = {
+        "left": (1.0, 0.0), "right": (-1.0, 0.0),
+        "up": (0.0, -1.0), "down": (0.0, 1.0),
+    }
+    half = PIN_TEXT_WALL / 2.0
+    out: list[Box] = []
+    for pin in profile.pins:
+        if pin.length is None or pin.direction not in inward:
+            continue
+        dx, dy = inward[pin.direction]
+        tip = _posed(pin.tip, pose, origin)
+        inner = _posed(
+            (pin.tip[0] + dx * pin.length, pin.tip[1] + dy * pin.length), pose, origin
+        )
+        # The box is the lead from :data:`PIN_LINE_OVERLAP` inward: thick across,
+        # and **not a hair past the tip**. Two things follow, and both are
+        # measured rather than assumed. A wire that arrives at the tip from
+        # outside runs along the lead's own axis, so any overshoot past the tip
+        # refuses it; and a wall that *starts* at the tip covers the lattice node
+        # every wire has to arrive at, which cost the whole HVDC trunk
+        # ("its pins could not be joined inside the searched corridor"). The
+        # landing the tip keeps is exactly the length `readability`'s
+        # `wire-on-pin-line` tolerates, so the two agree by construction.
+        start = (
+            tip[0] + dx * PIN_LINE_OVERLAP, tip[1] + dy * PIN_LINE_OVERLAP,
+        )
+        if (inner[0] - start[0]) * dx + (inner[1] - start[1]) * dy <= 0:
+            continue  # a lead shorter than the landing reserves nothing
+        across = (abs(dy), abs(dx))
+        x0, x1 = sorted((start[0], inner[0]))
+        y0, y1 = sorted((start[1], inner[1]))
+        out.append((
+            x0 - across[0] * half, y0 - across[1] * half,
+            x1 + across[0] * half, y1 + across[1] * half,
+        ))
+    return out
+
+
 def _body_box(
     profile: SymbolProfile, pose: SymbolPose, origin: tuple[float, float]
 ) -> Box | None:
@@ -2254,15 +2310,15 @@ def _body_box(
     :func:`_part_box`, because a wire leaving a pin tip has to travel between the
     tip and the body it belongs to — bounding the tips as obstacles would forbid
     every part's own escape.
+
+    147: the fold is :func:`~boardwise.core.symbolprofile.pose_box` — the same one
+    `readability` and `pagecompiler` call, so the obstacle the router avoids and
+    the box the checker tests cannot be two rectangles.
     """
-    if profile.body is None:
-        return None
-    x0, y0, x1, y1 = profile.body
-    corners = [_posed(corner, pose, origin) for corner in
-               ((x0, y0), (x1, y0), (x1, y1), (x0, y1))]
-    xs = [point[0] for point in corners]
-    ys = [point[1] for point in corners]
-    return (min(xs), min(ys), max(xs), max(ys))
+    return pose_box(
+        profile.body,
+        rotation=pose.rotation, mirror=pose.mirror, ox=origin[0], oy=origin[1],
+    )
 
 
 def _role_spans_body(ctx: _Context, part_id: str) -> bool:
@@ -4919,8 +4975,15 @@ def _declared_rows(
     the slot (:class:`SymbolText`: "one piece of text the symbol itself places");
     what was missing was the measurement, which the 145e render supplies. The
     anchor is the drawn row's **lower-left corner** and the row is
-    :data:`TEXT_ROW_HEIGHT` tall, measured for the poses 0 and 180 — a quarter
-    turn is an extrapolation and the acceptance re-measures it.
+    :data:`TEXT_ROW_HEIGHT` tall.
+
+    147 re-measured *where* the anchor sits, because 146 put it through the
+    part's pose and the host does not: the offset is from the part's **origin in
+    the page frame** (see the comment at the fold below and
+    `outputs/147/20_text_row_pose.txt`). Two profiles' anchors were restated in
+    that frame (``C0603W``, ``SMD-4-PC817``, both measured off the one placed
+    part that has them), and the quarter-turn part C13 is now modelled where it
+    is drawn rather than 25 units away.
 
     The width is the **render's** own ruler
     (:func:`boardwise.core.textmetrics.render_width`, the same table `drawlint`
@@ -4950,7 +5013,15 @@ def _declared_rows(
             continue
         if not text:
             continue
-        anchor = _posed((declared.x, declared.y), pose, origin)
+        # 147: the anchor is an offset from the part's **origin in the page
+        # frame** — the host does not turn a part's text rows with the pose. Three
+        # pose families on the landed page say so (`outputs/147/20_text_row_pose.txt`,
+        # 33 rows of 19 parts): R10 at rot 180 is drawn at `(740, 425)`, the
+        # unrotated anchor, where a turned anchor puts it at `(760, 415)`; U5 at
+        # rot 180 likewise; C13 at rot 90 mirrored at `(435, 660)` where turning
+        # says `(410, 670)`. 146 modelled the turn and flagged the quarter-turn
+        # case as an extrapolation; the measurement says the whole turn is absent.
+        anchor = (origin[0] + declared.x, origin[1] + declared.y)
         width = textmetrics.render_width(text)
         out.append((
             declared.kind,
@@ -5413,10 +5484,34 @@ def _try_variants(
     code over its own variants: a second copy of this loop would be a second set
     of rules for what counts as a candidate, and 119's whole claim is that the
     widened round is the same compiler on a wider ladder, not a different one.
+
+    147b stops the ladder at a **rung boundary** when more room cannot change the
+    answer — see :func:`_rung_reproduces`. The one precondition that matters is
+    "no candidate has been found yet", so every input this compiler can already
+    draw searches exactly the variants it searched before.
     """
+    previous_rung: dict[int, tuple] = {}
+    this_rung: dict[int, tuple] = {}
+    scale: float | None = None
+    rungs_done = 0
     for variant in variants:
+        if scale is not None and variant.scale != scale:
+            rungs_done += 1
+            if not result.ranked and _rung_reproduces(previous_rung, this_rung):
+                result.notes.append(
+                    f"the spacing ladder stopped at rung {variant.scale:g}x: the "
+                    f"{rungs_done} rung(s) built were refused exactly alike "
+                    f"({_rung_summary(this_rung)}) and more room does not move a "
+                    "conflict that is structural (147b), so the rung(s) after "
+                    f"{scale:g}x were not built — `not found inside the budget` "
+                    "stays the claim this compiler makes"
+                )
+                return
+            previous_rung, this_rung = this_rung, {}
+        scale = variant.scale
         built, failure, violations = _build_candidate(ctx, variant)
         if built is None:
+            this_rung[variant.pose_index] = _refusal_signature(violations, failure)
             result.rejected.append(RejectedCandidate(
                 variant=variant.label,
                 reason=failure.detail if failure is not None else "no legal layout",
@@ -5430,6 +5525,7 @@ def _try_variants(
             # Two variants with the same geometry are one drawing: a symbol whose
             # legal poses produce identical pins has only one picture, and the
             # plan's own geometry digest is what says so (052 sec.4).
+            this_rung[variant.pose_index] = ("same-geometry",)
             result.rejected.append(RejectedCandidate(
                 variant=variant.label,
                 reason="the same geometry as an earlier variant",
@@ -5453,6 +5549,77 @@ def _try_variants(
             notes=[f"candidate from {COMPILER_NAME} variant {variant.label}"],
         )
         result.ranked.append(_measure(plan, findings, ctx))
+
+
+#: The prefix of every signature that may stop the spacing ladder (147b): a
+#: refusal by the **readability gate**. Every other answer — "no path inside the
+#: region", "no legal pose", a relation the ladder has not tried yet — is one that
+#: more room *can* change, so the ladder keeps walking those to its end.
+GATE_SIGNATURE = "gate"
+
+
+def _refusal_signature(
+    violations: Sequence[str], failure: GrammarFailure | None
+) -> tuple:
+    """What one variant was refused for, with the coordinates taken out (147b).
+
+    ``violations`` are the gate's rendered lines (``[kind] objects: evidence``);
+    the signature keeps ``[kind] objects`` and drops the evidence, because the
+    evidence carries the coordinates the spacing ladder moves on purpose. Two rungs
+    that refuse the *same objects for the same reason* are the same structural
+    conflict; two that merely agree on the kind are not — that is the difference
+    between "this wire crosses that flag" and "these drawings are crowded
+    differently".
+
+    A non-gate refusal is ``(category, subject)``, which never satisfies
+    :func:`_rung_reproduces` (see :data:`GATE_SIGNATURE`): the ladder may not stop
+    on a reason more room can fix.
+    """
+    if violations:
+        return (
+            GATE_SIGNATURE,
+            tuple(sorted(line.split(": ", 1)[0] for line in violations)),
+        )
+    if failure is not None:
+        return (failure.category, failure.subject or "")
+    return ("", "")
+
+
+def _rung_reproduces(
+    previous: dict[int, tuple], current: dict[int, tuple]
+) -> bool:
+    """Did this rung refuse **every** pose exactly as the rung before it did?
+
+    Three conditions, each load-bearing:
+
+    * the two rungs cover the same poses — a rung that did not get to build a pose
+      it has no verdict for says nothing about that pose;
+    * every verdict is a **gate** refusal (:data:`GATE_SIGNATURE`). Room is the
+      ladder's own remedy for a routing or lattice refusal and for nothing else,
+      so those keep their full walk;
+    * the per-pose signatures are equal. A rung that refuses *fewer* things than
+      the one before it is a rung where room helped, and the ladder must go on.
+
+    The caller adds the fourth condition, and it is the strongest one: no
+    candidate has been found yet. So a ladder that has drawn something is never
+    cut short, and every input this compiler can already draw searches exactly the
+    variants it searched before 147b.
+    """
+    if not previous or not current or set(previous) != set(current):
+        return False
+    if any(signature[0] != GATE_SIGNATURE for signature in current.values()):
+        return False
+    return all(current[pose] == previous[pose] for pose in current)
+
+
+def _rung_summary(rung: dict[int, tuple]) -> str:
+    """The refusal kinds this rung repeated, for the note the reader sees."""
+    kinds = sorted({
+        head.split("] ", 1)[0].lstrip("[")
+        for _kind, heads in rung.values()
+        for head in heads
+    })
+    return ", ".join(kinds) if kinds else "no violation named"
 
 
 #: The relation kinds a widening can answer, and the only ones it is allowed to
@@ -5729,13 +5896,19 @@ def _set_foreign_edges(
     own way, and every other run lands in ``edges`` and ``edge_nets`` together so
     the two lists cannot drift (074's refusal names the foreign net, and a name
     pointing at the wrong run would be worse than no name at all).
+
+    147 adds ``router.own_edges``: the same walk over the runs this call *skips*.
+    They are what a flag's own rail looks like, and a flag may not be hung with
+    its glyph across one — `drawcompiler._flag_room` asks.
     """
     router.edges = []
     router.edge_nets = []
+    router.own_edges = []
     for segment in segments:
-        if segment.net == net_id:
-            continue
         for start, end in zip(segment.points, segment.points[1:]):
+            if segment.net == net_id:
+                router.own_edges.append((start, end))
+                continue
             router.edges.append((start, end))
             router.edge_nets.append(segment.net)
 
@@ -6202,6 +6375,15 @@ def _build_candidate(
             solids.append(body)
             bodies.append(body)
         text_walls.extend(_text_walls(profile, pose, origin))
+        # 147: every pin's drawn lead is an obstacle for the router as well.
+        # `_text_walls` already builds those boxes ("each pin as the segment that
+        # pin is drawn as — never the box around them"); the router only ever got
+        # the body box, so a wire could be routed *along* a pin's line and hide it
+        # (岳, `test/P1`: the HVDC run covers 15 of T1.1's 20 drawn units and SW 5
+        # of T1.3's — `outputs/147/17_wire_on_lines_146.txt`). `readability`'s
+        # `wire-on-pin-line` measures the same lines against the plan, so this is
+        # the obstacle table catching up with the gate rather than a new rule.
+        solids.extend(_pin_walls(profile, pose, origin))
 
     texts = _part_texts(ctx, placed, occupied, text_walls)
     for text in texts:
@@ -6967,6 +7149,16 @@ def _flag_room(
         if inner is not None and not _inside(held, inner):
             return False
         for start, end in router.edges:
+            if _segment_hits_box(start, end, held):
+                return False
+        # 147: the flag's **own** net's runs too. ``router.edges`` skips them so a
+        # lead is never in its own way — but the glyph a flag stands in is not a
+        # lead, and 岳's `SEC_12V` flag on `test/P1` had its own trunk turning
+        # inside the pennant (three 5-unit overlaps, `outputs/147/
+        # 17_wire_on_lines_146.txt`). A rail that must pass a flag now passes
+        # *beside* it, and `readability`'s `wire-through-body` measures the same
+        # box against the same runs.
+        for start, end in router.own_edges:
             if _segment_hits_box(start, end, held):
                 return False
         for point in blocked:
@@ -7847,13 +8039,21 @@ def rank_key(
     )
 
 
-def _no_candidate_failures(result: CompileResult) -> list[GrammarFailure]:
+def _no_candidate_failures(
+    result: CompileResult, budget: CompileBudget | None = None
+) -> list[GrammarFailure]:
     """Why no candidate survived — the first variant's own measured reason.
 
     The first variant is the smallest rung of the ladder, so its measurement is
     the one that says how much room the circuit actually needs. The failure says
     that N variants were tried *inside the budget*: a finite search that found
     nothing never claims there is no solution (053 sec.4).
+
+    147b: when the ladder stopped at a rung boundary because the next rung was
+    refused exactly like the one before it, the sentence says **that** too — how
+    many rungs were built out of the ladder's own list, and that the rest were
+    skipped on purpose rather than run. A reader who only saw "2 variant(s) were
+    built" would take it for the whole search.
     """
     failures = [item.failure for item in result.rejected if item.failure is not None]
     if not failures:
@@ -7868,16 +8068,42 @@ def _no_candidate_failures(result: CompileResult) -> list[GrammarFailure]:
         )]
     first = failures[0]
     tried = len(result.rejected)
+    stopped = _ladder_stopped(result, budget)
     return [GrammarFailure(
         category=first.category,
         subject=first.subject,
         detail=(
             f"{first.detail} — {tried} variant(s) were built and refused inside "
             "the budget (a finite search says 'not found inside the budget', "
-            "never 'no solution')"
+            "never 'no solution')" + stopped
         ),
         action=first.action,
     )]
+
+
+def _ladder_stopped(
+    result: CompileResult, budget: CompileBudget | None
+) -> str:
+    """The clause naming a spacing ladder that 147b cut short, or ``""``.
+
+    Derived from the ladder's own list against the rungs the refusals name: a
+    variant's label is ``spacing=<scale> pose-variant=<i>``, so the number of
+    distinct ``spacing=`` entries among the rejections is how much of the ladder
+    was actually built. Fewer than the budget asked for means
+    :func:`_rung_reproduces` stopped it, and the note in ``result.notes`` names
+    the kinds that were repeated.
+    """
+    if budget is None or not budget.spacing_ladder:
+        return ""
+    built = {item.variant.split(" pose", 1)[0] for item in result.rejected}
+    if len(built) >= len(budget.spacing_ladder):
+        return ""
+    return (
+        f"; the spacing ladder was stopped early (147b) — {len(built)} of "
+        f"{len(budget.spacing_ladder)} rung(s) were built and the rest skipped, "
+        "because a rung refused exactly like the one before it is not fixed by "
+        "more room (the note above names the kinds that repeated)"
+    )
 
 
 # ------------------------------------------------- the grammar checker (plan)

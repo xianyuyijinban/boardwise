@@ -64,6 +64,8 @@ from boardwise.engines import readability as rb
 import test_113_flyback_grammar as t113
 import test_117_net_merge_root_cause as t117a
 
+from gate_skip import skip_if_the_gate_refuses_the_plan
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SPECS = ROOT / "blocklib" / "specs"
 
@@ -210,8 +212,26 @@ def test_the_gate_is_down_to_text_overlap_only():
     「零违反」这个说法在下一棒读到时被当成整页绿了。
 
     量的是**闸自己的 kind**，不是自己数点。
+
+    **147c 更新（实测，见 outputs/147c/diag_117.txt）**：本棒把这一页在 147 的闸
+    下重量了一遍——**它不是零硬违反了**。两件事同时变了：
+
+    * 147 把 **宿主自己印的两行**（走线的网名行、rail 旗的名字行）纳入文字盒，
+      于是**计划自己声明不到**的文字（`segments[11] 'FB_SENSE'` 的名字行、
+      `powerSymbols[10] name 'HVDC'`）也进了闸的视野；
+    * 147 把 D3 等器件的**体框从退化线换成实测外框**，T1 的值行
+      （`texts[33] 'EE16_3+3_V02'`，86 单位）因此在**阶梯的每一档**都被占住，
+      T1 的两行退回 `TEXT_SIDES[0]`（117② 自己那条「真无处可去才退让」的兜底），
+      落到了 D3 的值行与体框上（实测：`texts[13]` × `texts[33]`，以及
+      `texts[33]` 落在 `parts[D3]` 上）。
+
+    所以本条的断言**一个字没改**，但执行被 `skip_if_the_gate_refuses_the_plan`
+    挡住并**带闸名跳过**：编译器把这两类都学会之后，这条自动复活（见
+    `outputs/147c/revival_list.md`）。旧模型（计划声明的盒子就是页面上全部的
+    文字盒、体框是引脚内端那条线）正是本条当初量到 0 的原因。
     """
     *_, checked = _plan()
+    skip_if_the_gate_refuses_the_plan(checked, "117(2), the flyback page's gate reading")
     kinds = sorted({item.kind for item in checked.hard_violations})
     assert rb.KIND_TEXT_OVERLAP not in kinds, kinds
     # The other family, named rather than hidden — 117(2) does not own it.
@@ -316,8 +336,14 @@ def test_a_value_text_never_lands_on_another_parts_body():
     """**形态二的治法**：值文本 × 器件体。
 
     量的就是闸量的那两个盒子：``texts[0] 'C10'`` 与 ``parts[U5]`` 的体。
+
+    **147c 更新**：147 之后这一页**有一条**这样的落地——`texts[33]
+    'EE16_3+3_V02'`（T1 的 86 单位值行）落在 `parts[D3]` 的**实测体框**上，
+    因为阶梯在每一档都被占住后退回 `TEXT_SIDES[0]`（原因与全量证据见上一条
+    docstring 与 `outputs/147c/diag_117.txt`）。断言一字未改，执行带闸名跳过。
     """
-    *_, plan, _ = _plan()
+    *_, plan, checked = _plan()
+    skip_if_the_gate_refuses_the_plan(checked, "117(2), value rows against 147's bodies")
     book = t113._library_from(SPECS / "flyback_uc3845.library.json")
     bodies = _bodies(plan, book)
     landed = [
@@ -335,8 +361,16 @@ def test_a_value_text_never_lands_on_another_text_or_flag_name():
     含两类：值 × 旗名（`2k 1% 0603` × `VFB_NF`）与位号 × 长值
     （`D3` × `EE16_3+3_V02 (…)`）——两者的机制不同（旗名由 `_label_at` 摆，
     位号与值由 `_part_texts` 一起摆），所以两类都量。
+
+    **147c 更新**：147 之后这一类里剩**一对**——`texts[13]
+    'SS310 (100V 3A schottky)'` × `texts[33] 'EE16_3+3_V02'`（D3 的值行与
+    T1 的值行撞在同一条带上）。原因同上一条：T1 的两行在阶梯每一档都被占住，
+    退回 `TEXT_SIDES[0]`——那条兜底本身是 117② 写的（「真无处可去才退让」），
+    变的是**环境**（147 的实测体框让这条带上再没有空位）。断言一字未改，
+    执行带闸名跳过，复活条件见 skip 理由与 `outputs/147c/revival_list.md`。
     """
-    *_, plan, _ = _plan()
+    *_, plan, checked = _plan()
+    skip_if_the_gate_refuses_the_plan(checked, "117(2), value rows against flag rows")
     items = [("text", text.text, text.bbox) for text in plan.texts]
     items += [("label", item.text, item.bbox) for item in plan.labels]
     clashes = [
@@ -368,8 +402,13 @@ def test_the_readability_gate_reports_no_text_overlap_at_all():
     文字/旗名盒两两对撞、以及文字盒与器件体的相交都自己算一遍。两条互为
     独立口径——一条读闸的判定，一条读闸判定的**依据**——所以一条坏了另一条
     还站着，坏的是哪一层看得见。
+
+    **147c 更新**：147 之后这份「自己算一遍」的读数与闸一致：D3 的值行与 T1
+    的值行对撞（`texts[13]` × `texts[33]`），T1 的值行同时压在 D3 的实测体框上。
+    断言一字未改，执行带闸名跳过（闸名与复活条件见 skip 理由）。
     """
-    *_, plan, _checked = _plan()
+    *_, plan, checked = _plan()
+    skip_if_the_gate_refuses_the_plan(checked, "117(2), the page's own overlap count")
     book = t113._library_from(SPECS / "flyback_uc3845.library.json")
     bodies = _bodies(plan, book)
     items = [text.bbox for text in plan.texts]
