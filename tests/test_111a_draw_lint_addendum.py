@@ -330,11 +330,20 @@ def test_l6_clusters_one_primitive_pairs_crossings():
 
 def test_l6_warns_when_one_pair_crosses_repeatedly():
     """L6_CLUSTER_WARN: the same two primitives crossing ≥3 times — one
-    wiggle of either wire would end it (岳's '不必要交叉')."""
+    wiggle of either wire would end it (岳's '不必要交叉').
+
+    The fixtures are written in the spelling the host uses for ``Line``: a flat
+    list whose **consecutive point pairs are the drawn segments** (146 — a
+    reported wire's segments are the render's own ``<polyline>`` elements, and
+    those are the pairwise reading for 24 of 24 wires measured on `test/P1`;
+    reading the same list as a path invents diagonals the page does not carry
+    and 8 of that page's 21 lint errors were exactly those phantoms).
+    """
     snapshot = _snapshot(
         wires=[
-            _wire("wA", "A", 0, 0, 30, 0, 30, 30, 60, 30, 60, 60, 90, 60),
-            _wire("wB", "B", 15, 60, 15, -10, 45, 60, 45, -10, 75, 60, 75, -10),
+            # two cross bars; the lower one is crossed 3 times by wB's uprights
+            _wire("wA", "A", 0, 0, 90, 0, 0, 60, 90, 60),
+            _wire("wB", "B", 30, -10, 30, 50, 40, -10, 40, 50, 50, -10, 50, 50),
         ],
     )
     hits = _by_predicate(_lint(snapshot))["L6-wire-crossing"]

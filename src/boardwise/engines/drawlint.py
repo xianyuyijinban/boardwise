@@ -68,6 +68,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
+from ..core import textmetrics
+
 
 #: The paint colours the editor's render uses for canvas text, measured on
 #: the 3.2.186 renders of test/P1 and test/P22 (2026-10-04): symbols draw
@@ -89,17 +91,19 @@ FILL_PIN_NAME = "#000000"
 #: are body content.
 RENDER_PIN_PX = 6.031413612565445
 
-#: Font size (SVG units) of canvas text in the editor's render, and the
-#: canvas-unit character advance the glyph table is calibrated for. The render
-#: reports 7.148px for canvas text at the same page whose canvas annotation
-#: text measures 10 canvas units — one scale factor ≈ 1.3997 (a canvas
-#: advance of 7.0 for a digit, measured at the compiler's own table, reads
-#: 9.79 ≈ 10 at this factor). Measured on the 3.2.186 render of test/P1
-#: (2026-10-04). The renderer text is Arial; the compiler table was measured
-#: for the same family (053 sec.5's metric source).
-RENDER_TEXT_PX = 7.148342059336824
-CANVAS_TEXT_UNITS = 10.0
-RENDER_TEXT_SCALE = CANVAS_TEXT_UNITS / RENDER_TEXT_PX
+#: Font size (SVG units) of canvas text in the editor's render, the canvas-unit
+#: character advance the glyph table is calibrated for, and the table itself.
+#: **One ruler for the whole toolchain** since 146: the values live in
+#: :mod:`boardwise.core.textmetrics`, because the *compiler* needs the same ruler
+#: for the rows the host draws on a placed part (a symbol's own designator/value
+#: anchors) — two copies would let the compiler reserve one box and the lint
+#: measure another. Re-exported here because every threshold in this module is
+#: written in terms of them.
+RENDER_TEXT_PX = textmetrics.RENDER_TEXT_PX
+CANVAS_TEXT_UNITS = textmetrics.CANVAS_TEXT_UNITS
+RENDER_TEXT_SCALE = textmetrics.RENDER_TEXT_SCALE
+TEXT_ADVANCE_EM = textmetrics.TEXT_ADVANCE_EM
+TEXT_ADVANCE_EM_FALLBACK = textmetrics.TEXT_ADVANCE_EM_FALLBACK
 
 #: The box every estimated text box is inflated by, canvas units, before any
 #: intersection test: the estimate is an anchor + a width table, so half the
@@ -107,37 +111,6 @@ RENDER_TEXT_SCALE = CANVAS_TEXT_UNITS / RENDER_TEXT_PX
 #: a threshold placed *at* the noise floor from reporting it (task 111: 零误报
 #: 优先于检出率). Measured so every P22/P23/P24 clearance stays far outside.
 TEXT_BOX_SLACK = 2.0
-
-#: Character advances of the render's canvas font, in em units (fraction of
-#: the font size). The render declares ``font-family: Arial`` for every
-#: canvas text class, and these are the standard Helvetica/Arial advance
-#: widths; anything not tabled falls back to :data:`TEXT_ADVANCE_EM_FALLBACK`
-#: (wide on purpose — over-estimating a box keeps room, under-estimating
-#: makes it overlap). Canvas width = ``em × size``, and the render draws
-#: canvas text at :data:`RENDER_TEXT_PX` px, so canvas units come out of
-#: ``em × RENDER_TEXT_PX × :data:`RENDER_TEXT_SCALE```.
-TEXT_ADVANCE_EM: dict[str, float] = {
-    " ": 0.278, "!": 0.278, '"': 0.355, "#": 0.556, "$": 0.556, "%": 0.889,
-    "&": 0.667, "'": 0.191, "(": 0.333, ")": 0.333, "*": 0.389, "+": 0.584,
-    ",": 0.278, "-": 0.333, ".": 0.278, "/": 0.278,
-    "0": 0.556, "1": 0.556, "2": 0.556, "3": 0.556, "4": 0.556, "5": 0.556,
-    "6": 0.556, "7": 0.556, "8": 0.556, "9": 0.556,
-    ":": 0.278, ";": 0.278, "<": 0.584, "=": 0.584, ">": 0.584, "?": 0.556,
-    "@": 1.015,
-    "A": 0.667, "B": 0.667, "C": 0.722, "D": 0.722, "E": 0.667, "F": 0.611,
-    "G": 0.778, "H": 0.722, "I": 0.278, "J": 0.5, "K": 0.667, "L": 0.556,
-    "M": 0.833, "N": 0.722, "O": 0.778, "P": 0.667, "Q": 0.778, "R": 0.722,
-    "S": 0.667, "T": 0.611, "U": 0.722, "V": 0.667, "W": 0.944, "X": 0.667,
-    "Y": 0.667, "Z": 0.611,
-    "a": 0.556, "b": 0.556, "c": 0.5, "d": 0.556, "e": 0.556, "f": 0.278,
-    "g": 0.556, "h": 0.556, "i": 0.222, "j": 0.222, "k": 0.5, "l": 0.222,
-    "m": 0.833, "n": 0.556, "o": 0.556, "p": 0.556, "q": 0.556, "r": 0.333,
-    "s": 0.5, "t": 0.278, "u": 0.556, "v": 0.5, "w": 0.722, "x": 0.5,
-    "y": 0.5, "z": 0.5, "_": 0.556, "|": 0.26, "~": 0.581,
-    "\u00b5": 0.556, "\u03bc": 0.556, "\u03a9": 0.833, "\u00b0": 0.4,
-}
-
-TEXT_ADVANCE_EM_FALLBACK = 0.9
 
 #: L1 — a wire must penetrate the text box deeper than this (chord length of
 #: the segment's clip against the box, canvas units) to count as "printed
@@ -309,7 +282,48 @@ def _line_points(state: dict) -> list[tuple[float, float]]:
 
 
 def _segments(points: Sequence[tuple[float, float]]) -> list[tuple[tuple[float, float], tuple[float, float]]]:
+    """Consecutive pairs of a point list — the **path** reading.
+
+    Only :func:`_wire_segments` calls this, for the odd-length list the path
+    reading is the only one available for; a wire's drawn segments come from
+    ``Wire.segments`` (see that function for why the live host's even-length
+    lists are pairs, not a path).
+    """
     return list(zip(points, points[1:]))
+
+
+def _wire_segments(state: dict) -> list[tuple[tuple[float, float], tuple[float, float]]]:
+    """The **drawn** segments of one reported wire (146).
+
+    The render is the authority: a wire's segments are what the host's own
+    exporter emits as ``<polyline>`` elements, and for `test/P1`'s 145e page
+    those polylines are exactly the flat ``Line`` list taken **pairwise** —
+    `(p0,p1)`, `(p2,p3)`, … — 24 wires out of 24, zero exceptions, and *no*
+    wire matches the consecutive pairing. The host spells a two-segment wire
+    ``[x1,y1, x2,y2, x3,y3, x4,y4]`` with the fourth vertex retracing the first
+    (two runs meeting at a corner, not a path through it), so reading the list
+    as a path invents a diagonal the page does not carry. CLAMP_B's
+    ``[80,640, 80,680, 120,640, 80,640]`` is the measured case: the path reading
+    adds a phantom `(80,680)-(120,640)` that runs through R3's value row, and 2
+    of the 21 errors the 145e lint counted were exactly that phantom
+    (`75k 1% 0603` and the page's SW-named wire were both reported through
+    segments no polyline draws).
+
+    A list with an **odd** number of points cannot be read pairwise, and the
+    repo's own hand-written fixtures use that shape as a path
+    (``[100,250, 100,300, 150,300]`` in `tests/test_057_page_offline.py`), so
+    that reading is kept as the fallback rather than refused. Every wire the
+    live host reported is even, and the pair reading is the one that matches
+    the drawing (measured 2026-10-10 on `outputs/145e/render_P1.svg`).
+    """
+    raw = state.get("Line") or []
+    flat = [_num(v) for v in raw]
+    if not flat or any(v is None for v in flat):
+        return []
+    points = list(zip(flat[0::2], flat[1::2]))
+    if len(points) % 2:
+        return _segments(points)
+    return [(points[i], points[i + 1]) for i in range(0, len(points) - 1, 2)]
 
 
 def _pose(state: dict) -> tuple[float, float, float, bool]:
@@ -472,16 +486,27 @@ class Flag:
 
 @dataclass
 class Wire:
-    """One wire primitive: its reported point list and the net it carries."""
+    """One wire primitive: its reported points, its **drawn** segments, its net.
+
+    ``points`` is the flat report read as pairs (the anchor grid every predicate
+    and the tests use); ``segments`` is what the render actually draws, which is
+    the pairwise reading for every wire the live host reports and the path
+    reading only for an odd-length list — see :func:`_wire_segments`, and use it
+    for anything that asks "does a conductor run through this"?.
+    """
 
     primitive: str
     state: dict
     net: str = ""
     points: list[tuple[float, float]] = field(default_factory=list)
+    segments: list[tuple[tuple[float, float], tuple[float, float]]] = field(
+        default_factory=list
+    )
 
     def __post_init__(self) -> None:
         self.net = str(self.state.get("Net") or "")
         self.points = _line_points(self.state)
+        self.segments = _wire_segments(self.state)
 
 
 class TextBox:
@@ -513,16 +538,11 @@ class TextBox:
 def text_width(text: str) -> float:
     """The canvas-unit advance of ``text`` at the render's canvas size.
 
-    The render's font is Arial (:data:`TEXT_ADVANCE_EM`, em advances) drawn
-    at :data:`RENDER_TEXT_PX` px, and canvas units scale by
-    :data:`RENDER_TEXT_SCALE` — so ``em × RENDER_TEXT_PX × scale`` collapses
-    to ``em × :data:`CANVAS_TEXT_UNITS```. (The compiler's own
-    ``GLYPH_ADVANCE`` table is deliberately wider — its job is to *reserve*
-    room when compiling — and would over-estimate a rendered box by ~1.26×,
-    which the accepted pages' flag-name pairs disprove as a render ruler.)
+    The ruler itself is :func:`boardwise.core.textmetrics.render_width` (one
+    copy for the compiler and the lint alike, 146); this is the name every
+    predicate in this module is written against.
     """
-    em = sum(TEXT_ADVANCE_EM.get(ch, TEXT_ADVANCE_EM_FALLBACK) for ch in text)
-    return em * CANVAS_TEXT_UNITS
+    return textmetrics.render_width(text)
 
 
 def render_box(
@@ -738,7 +758,7 @@ def _assign_annotation_nets(boxes: list[TextBox], sheet: "Sheet") -> None:
             )
             on_span = any(
                 _segment_touches_box(a, b, box.box)
-                for a, b in _segments(wire.points)
+                for a, b in wire.segments
             )
             if on_point or on_span:
                 nets.add(wire.net)
@@ -750,7 +770,7 @@ def _assign_annotation_nets(boxes: list[TextBox], sheet: "Sheet") -> None:
                 (
                     min(
                         _point_segment_distance(box.anchor, a, b)
-                        for a, b in _segments(wire.points)
+                        for a, b in wire.segments
                     ),
                     wire.net,
                 )
@@ -853,7 +873,7 @@ def _own_net_text_exemption(
     ):
         return True
     return any(
-        _segment_touches_box(a, b, box.box) for a, b in _segments(wire.points)
+        _segment_touches_box(a, b, box.box) for a, b in wire.segments
     )
 
 
@@ -870,7 +890,7 @@ def check_text_on_wire(sheet: Sheet) -> list[LintFinding]:
         for wire in sheet.wires:
             if _own_net_text_exemption(box, wire, sheet):
                 continue
-            for a, b in _segments(wire.points):
+            for a, b in wire.segments:
                 if not _segment_crosses_box(a, b, box.box):
                     continue
                 chord = _segment_box_chord(a, b, box.box)
@@ -1196,7 +1216,7 @@ def check_wire_through_part(
             for number, point in pins.items():
                 pins_by_wire_cache.setdefault(point, []).append(f"{designator}.{number}")
     for wire in sheet.wires:
-        for a, b in _segments(wire.points):
+        for a, b in wire.segments:
             for name, body in bodies:
                 if not _segment_crosses_box(a, b, body):
                     continue
@@ -1342,7 +1362,7 @@ def _label_carriers(box: TextBox, sheet: Sheet) -> set[str]:
             inflated[0] <= p[0] <= inflated[2] and inflated[1] <= p[1] <= inflated[3]
             for p in wire.points
         ) or any(
-            _segment_touches_box(x, y, box.box) for x, y in _segments(wire.points)
+            _segment_touches_box(x, y, box.box) for x, y in wire.segments
         ):
             carriers.add(wire.primitive)
     return carriers
@@ -1540,8 +1560,8 @@ def check_crossings(sheet: Sheet) -> list[LintFinding]:
             if a_wire.net and a_wire.net == b_wire.net:
                 continue
             points: list[tuple[float, float]] = []
-            for a_seg in _segments(a_wire.points):
-                for b_seg in _segments(b_wire.points):
+            for a_seg in a_wire.segments:
+                for b_seg in b_wire.segments:
                     point = _segment_intersection(*a_seg, *b_seg)
                     if point is not None:
                         points.append(point)
