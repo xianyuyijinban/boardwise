@@ -55,3 +55,4 @@ typeof 全在位、activate 冷启动正常派发、render 实跑 308KB PNG—�
 已被证伪，见 `tasks/027-editor-api-floor.md`）；**3.2.186 是唯一校准对象**。低于 149 没有证据，doctor 照卡。
 宿主声明 ≠ 宿主实现（`sch_ManufactureData.getPngFile` 声明 v3.2.183 却回 `NOT_IMPLEMENTED`，两台实测机皆然）——
 每一节的第一步都是真机 probe，probe 不通就如实降级，**不许照类型包硬写**。
+| 46 | **`sch.delete_primitives` 超时≠停止、报错≠没删**（145b 真机实测）：daemon 150s 预算超时返回 `delete_unanswered` 后，**编辑器后台仍在逐件续删**（件数 19→…→1 持续下降）；第二轮又对剩余 4 件返回 `delete returned false`（`delete_refused`），但这几件随后也被后台删净 | 删大批件别把超时当失败盲目重试、也别把 `false` 当没删——先等再读几何确认现场；「撤净了」的判据是页面几何与动手前逐字段一致，不是某一轮 delete 的返回值。出处 `outputs/145b/FINDINGS.md` §3、两轮 `discard_*` 日志 |
