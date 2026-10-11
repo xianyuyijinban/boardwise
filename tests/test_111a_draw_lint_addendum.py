@@ -208,8 +208,14 @@ def test_l10_catches_the_p1_pre_fix_out_of_bounds_texts(real_pages):
     """P1 pre-fix: the +12V family's name boxes run past x=1170 — the defect
     岳 caught by eye must be an ERROR here. The flag the addendum calls
     「+12V 旗」 names its net SEC_12V on the page (its value row even prints
-    '+12V'); its name box reaches 1173.9, 3.9 past the edge. The other hits
-    are the same corner's texts (220uF/25V-SMT value, SEC_SW name, ...)."""
+    '+12V'); its name box runs 5.7 units off the edge, and the same corner's
+    `VCC` and `ST` rows run off too.
+
+    150: `220uF/25V-SMT` used to be in this set and is not any more. That row's
+    box was 18.4 units past the frame off a ruler 1.39893x too wide
+    (`outputs/150/t2_verdict.md`); at the width the render draws it (52.44, not
+    73.36) the row fits inside the sheet. The three left are real.
+    """
     data = real_pages["P1"]
     findings = drawlint.run_lint(data["snapshot"], data["render"])
     hits = _by_predicate(findings)["L10-out-of-bounds"]
@@ -217,8 +223,9 @@ def test_l10_catches_the_p1_pre_fix_out_of_bounds_texts(real_pages):
     assert all(h.severity == "ERROR" for h in hits)
     texts = {h.objects[0] for h in hits}
     assert "SEC_12V" in texts, f"SEC_12V (the +12V flag's name) must hit: {texts}"
-    assert "220uF/25V-SMT" in texts
-    assert len(hits) >= 5
+    assert {"VCC", "ST"} <= texts
+    assert "220uF/25V-SMT" not in texts
+    assert len(hits) >= 3
 
 
 # ------------------------------------------------------------------ L5b
@@ -300,11 +307,14 @@ def test_l5b_p1_prefix_names_the_host_drc_wires(real_pages):
     for net in ("LED_A", "RTCT", "CS_FILT", "SW", "HVDC", "SRC", "ST"):
         assert net in nets, f"P1 pre-fix: L5b lost the {net} multiname wire"
     # counts are per (carrier, net): HVDC's 18 labels ride one primitive,
-    # CS_FILT's five ride theirs (the probe's dfbfbbe6/fcc78f98 columns)
+    # CS_FILT's five ride theirs (the probe's dfbfbbe6/fcc78f98 columns).
+    # 150: the count was 20 — a ruler 1.39893x too wide pulled two more HVDC
+    # labels onto the `ST` carrier `ceab0771` by box contact; at the width the
+    # render draws them they touch only `dfbfbbe6` (`outputs/150/t2_verdict.md`).
     counts = {(h.objects[0][:8], h.objects[1]): h.objects[2] for h in hits}
     assert ("dfbfbbe6", "HVDC") in counts
     hvdc_total = sum(n for (p, net), n in counts.items() if net == "HVDC")
-    assert hvdc_total == 18 + 2  # 18 on dfbfbbe6 + 2 on the ST carrier ceab0771
+    assert hvdc_total == 18
     csfilt_total = sum(n for (p, net), n in counts.items() if net == "CS_FILT")
     assert csfilt_total == 5
     assert ("e32bcb6d", "LED_A") in counts

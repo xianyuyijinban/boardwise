@@ -2343,6 +2343,11 @@ def _box_chord(
     :data:`~boardwise.core.textmetrics.TEXT_WIRE_PENETRATION` and the lint reports
     at the same number, so a plan the gate passed cannot come back as a page the
     lint rejects for the same two objects.
+
+    150 left this alone: the false report 岳 caught on `test/P22` was the *box*
+    being 1.39893x too wide (`render_width`), not the chord — with the ruler
+    corrected the conductor is 20 units outside the row and the lint is quiet
+    (`outputs/150/t2_verdict.md`).
     """
     span = _clip_to_box(start, end, box, inset=0.0)
     if span is None:

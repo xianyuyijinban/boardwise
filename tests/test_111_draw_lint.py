@@ -183,6 +183,33 @@ def test_l1_fires_when_a_wire_runs_through_a_label():
     assert "ST" in hits[0].message
 
 
+def test_l1_spares_a_conductor_that_only_runs_alongside_the_row():
+    """150 — 岳, on P22: `EE16_3+3_V02` "被无名线穿 10 单位" and no such crossing.
+
+    The value row is anchored at (245, 680) and the render draws it 50.27 units
+    wide, so the box ends at x=295.27; the lint used to make the box 70.33 wide
+    (the Arial advances times the 10-unit *row* instead of the render's 7.148342
+    em) and reported the flag lead that runs north at **x=315** — 0.33 units
+    inside that phantom right edge, and `_segment_box_chord` scored the whole
+    10-unit row height as "printed through". The conductor is not through
+    anything: measured ink ends at 295.10, the wire is 19.9 units further right
+    (`outputs/150/t2_verdict.md`).
+    """
+    snapshot = _snapshot(
+        wires=[_wire("wPGND", "", 305, 700, 315, 700, 315, 680)],
+    )
+    svg = _svg(_text_node(245, -680, "EE16_3+3_V02", fill=BLUE, part_attr=True))
+    assert _by_predicate(_lint(snapshot, svg)).get("L1-text-on-wire") is None
+
+    # The same row, with a conductor actually running through the glyphs.
+    through = _snapshot(
+        wires=[_wire("wPGND", "", 275, 700, 275, 670)],
+    )
+    hits = _by_predicate(_lint(through, svg))["L1-text-on-wire"]
+    assert len(hits) == 1
+    assert "EE16_3+3_V02" in hits[0].message
+
+
 def test_l1_spares_a_label_sitting_on_its_own_net():
     """The host draws a net's name ON its conductor — that is the name's job."""
     snapshot = _snapshot(
@@ -307,7 +334,13 @@ def test_l4_spares_a_wire_landing_on_its_own_pin():
 # ------------------------------------------------------------------ L5
 
 def test_l5_fires_on_two_same_net_labels_on_different_wires():
-    """110: the feedback region naming one net repeatedly."""
+    """110: the feedback region naming one net repeatedly.
+
+    150 re-measured the boxes the gap is taken between (`FB` is 9.13 units wide,
+    not 12.78; `outputs/150/t2_verdict.md`), so the fixture's second label sits
+    25 units along instead of 30 — at the same *gap* within L5's 20 the old
+    fixture measured, where 30 units of spacing now clears it.
+    """
     snapshot = _snapshot(
         wires=[
             _wire("w1", "FB", 200, 100, 260, 100),
@@ -316,7 +349,7 @@ def test_l5_fires_on_two_same_net_labels_on_different_wires():
     )
     svg = _svg(
         _text_node(255, -100, "FB", fill=BLUE),
-        _text_node(285, -100, "FB", fill=BLUE),
+        _text_node(280, -100, "FB", fill=BLUE),
     )
     hits = _by_predicate(_lint(snapshot, svg))["L5-duplicate-annotation"]
     assert len(hits) == 1

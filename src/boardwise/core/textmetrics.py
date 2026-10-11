@@ -1,10 +1,26 @@
 """The **render's** text ruler: how wide a string is where the host draws it.
 
 Measured, not chosen. The host draws canvas text in Arial at
-:data:`RENDER_TEXT_PX` px, the render's canvas unit comes out at
-:data:`CANVAS_TEXT_UNITS`, and Arial's advances are the standard Helvetica ones
-in :data:`TEXT_ADVANCE_EM` — so a string's width in canvas units is
-``sum(em) x CANVAS_TEXT_UNITS``, which is what :func:`render_width` returns.
+:data:`RENDER_TEXT_PX` (the ``font-size`` the render declares for every canvas
+text node), the render's SVG user unit is the canvas unit (measured below), and
+Arial's advances are the standard Helvetica ones in :data:`TEXT_ADVANCE_EM` — so
+a string's width in canvas units is ``sum(em) x RENDER_TEXT_PX``, which is what
+:func:`render_width` returns.
+
+**150 corrected this from ``CANVAS_TEXT_UNITS``.** The module multiplied the
+advance table by the *row height* (10 canvas units — how far apart the host
+stacks two rows) instead of the *em* (7.148342), which made **every** text box
+1.39893x too wide. Measured on `test/P22`'s render (2026-10-11, `outputs/150/`):
+ten value rows' #0000FF ink ends within 0.44 units of the ``sum(em) x 7.148342``
+prediction and 7-22 units short of the ``x 10`` one, and the same holds on
+`test/P1`'s 145e render. 岳 caught the cost on P22: the lint reported a
+conductor "printed through" `EE16_3+3_V02` that actually runs 19.9 units to the
+right of the glyphs (`outputs/150/t2_verdict.md`).
+
+The SVG user unit is the canvas unit — measured, not assumed: the render draws
+the editor's own wire `c5b7922e` (reported `(315,700)-(315,680)`) as ``M 315 -680
+v 10``, and a least-squares fit of the PNG's pixels against 65 reported wire runs
+comes out at the pure viewBox scaling within 0.02 units.
 
 Two callers need the same ruler and they must not each keep a copy:
 
@@ -42,12 +58,18 @@ __all__ = [
     "wire_name_box",
 ]
 
-#: The px size the render's canvas text is drawn at, and the canvas units one
-#: text row occupies. Both measured on `test/P1`'s render (2026-10-04) and
-#: re-checked on the 145e render (2026-10-10): the render declares
-#: ``font-size:7.148342059336824px`` for every canvas text class, and one row is
-#: 10 canvas units tall.
+#: The px size the render's canvas text is drawn at — the ``font-size`` every
+#: canvas text class declares, and so the em in canvas units. Measured on
+#: `test/P1`'s render (2026-10-04) and re-checked on the 145e render
+#: (2026-10-10): the render declares ``font-size:7.148342059336824px`` for every
+#: canvas text class.
 RENDER_TEXT_PX = 7.148342059336824
+
+#: The pitch of the host's text rows, in canvas units: how far apart it stacks a
+#: symbol's designator and value rows, and the height one row's box is modelled
+#: at. **It is not the em** — 150 measured that a row's glyphs are
+#: :data:`RENDER_TEXT_PX` tall per em and that multiplying Arial's advances by
+#: this number instead made every box 1.39893x too wide.
 CANVAS_TEXT_UNITS = 10.0
 RENDER_TEXT_SCALE = CANVAS_TEXT_UNITS / RENDER_TEXT_PX
 
@@ -81,9 +103,15 @@ TEXT_ADVANCE_EM_FALLBACK = 0.9
 
 
 def render_width(text: str) -> float:
-    """``text``'s advance in canvas units, as the render draws it."""
+    """``text``'s advance in canvas units, as the render draws it.
+
+    ``sum(em) x RENDER_TEXT_PX`` — the advance table times the em the render
+    itself declares. 150: it used to be ``x CANVAS_TEXT_UNITS`` (the row pitch,
+    10), which made every box 1.39893x too wide and cost the lint its L1
+    credibility on 岳's own page (`outputs/150/t2_verdict.md`).
+    """
     em = sum(TEXT_ADVANCE_EM.get(ch, TEXT_ADVANCE_EM_FALLBACK) for ch in text)
-    return em * CANVAS_TEXT_UNITS
+    return em * RENDER_TEXT_PX
 
 
 #: The height of one row of a wire's net name as the host draws it. The same 10
@@ -106,7 +134,8 @@ WIRE_NAME_MODEL_EXCEPTION = "FB_SENSE"
 #: The value is `drawlint`'s calibration, kept verbatim: on the 2026-10-04
 #: snapshots the accepted pages' worst crossing is a 6.5-unit corner graze,
 #: while the true text-through-wire defects measure 21-38 units with a 10-unit
-#: median.
+#: median. 150 kept the number and changed what is measured against it from the
+#: chord to :func:`box_penetration`.
 TEXT_WIRE_PENETRATION = 10.0
 
 #: The row a **rail flag's own name** occupies, measured on the landed page

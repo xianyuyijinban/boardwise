@@ -279,19 +279,23 @@ def test_a_conductor_printed_through_a_text_row_is_reported_at_the_lint_threshol
 
 
 def test_the_host_prints_a_rail_flags_name_in_the_band_past_its_glyph():
-    """Measured on the landed page's two rail flags (`147/FINDINGS.md` sec.2).
+    """The model's two measured facts: the row is the band past the glyph, and
+    it is as wide as the render draws the name.
 
-    Nothing else in the repo may model this: the boxes are the numbers the render
-    shows, to the unit.
+    150 re-measured the width: `flag_name_box` asks `render_width`, which used
+    to come out 1.39893x too wide (`outputs/150/t2_verdict.md`). On
+    `outputs/145e/render_P1.png` the HVDC flag's name inks out at
+    x 126.61..145.33 (centre 135.97, the render's own anchor x=135) — 18.7 units
+    of glyph in a 20.25-unit advance box, where the old ruler claimed 28.33.
     """
     hvdc = textmetrics.flag_name_box(
         (154.5, 690.0, 165.5, 700.5), (160.0, 690.0), "HVDC", axis_up=True,
     )
-    assert hvdc == pytest.approx((145.835, 700.5, 174.165, 710.5))
+    assert hvdc == pytest.approx((149.874, 700.5, 170.126, 710.5), abs=0.01)
     sec = textmetrics.flag_name_box(
         (274.5, 729.5, 285.5, 740.0), (280.0, 740.0), "SEC_12V", axis_up=False,
     )
-    assert sec == pytest.approx((258.045, 719.5, 301.955, 729.5))
+    assert sec == pytest.approx((264.308, 719.5, 295.692, 729.5), abs=0.01)
 
 
 def test_a_ground_flag_prints_no_name_and_a_rail_flag_does():

@@ -554,13 +554,15 @@ def render_box(
 ) -> tuple[float, float, float, float]:
     """The box canvas text occupies, from the render's anchor.
 
-    The render draws annotation text at 7.148 SVG px where the compiler's
-    advance table speaks 10-unit canvas text (:data:`RENDER_TEXT_SCALE`);
-    box height is the text size, and the box starts at the anchor for
-    ``start``-anchored nodes (the render's canvas text is uniformly
-    start-anchored — measured 2026-10-04). The estimate is deliberately the
-    *plain* box: :data:`TEXT_BOX_SLACK` is added only where a predicate
-    wants its noise margin, so the threshold numbers below stay readable.
+    The width is :func:`text_width` — the Arial advance table times the em the
+    render declares (:data:`boardwise.core.textmetrics.RENDER_TEXT_PX`); 150
+    corrected that from the row pitch, which had made every box 1.39893x too
+    wide. Box height is the text *row* (:data:`CANVAS_TEXT_UNITS`), and the box
+    starts at the anchor for ``start``-anchored nodes (the render's canvas text
+    is uniformly start-anchored — measured 2026-10-04). The estimate is
+    deliberately the *plain* box: :data:`TEXT_BOX_SLACK` is added only where a
+    predicate wants its noise margin, so the threshold numbers below stay
+    readable.
 
     The render's viewport is y-negated (SVG y-down over the canvas's y-up
     file coordinates — pit 11's ``y = −canvas``, one more place it shows):
@@ -888,6 +890,14 @@ def check_text_on_wire(sheet: Sheet) -> list[LintFinding]:
     :data:`L1_TEXT_WIRE_PENETRATION` units — an edge graze at estimate
     precision is noise, a conductor running through the glyphs is the
     ST-through-"VCC" defect class.
+
+    150: the *box* is what was wrong here, not the measurement. `render_width`
+    took the Arial advances times the 10-unit text **row** instead of the em the
+    render declares, so every box was 1.39893x too wide; on `test/P22` that made
+    `EE16_3+3_V02`'s row reach x=315.33, and the ground flag's lead running north
+    at x=315 was reported as printed through glyphs whose ink ends at 295.10
+    (`outputs/150/t2_verdict.md`). With the ruler corrected the conductor is 20
+    units outside the row and the finding is gone.
     """
     out: list[LintFinding] = []
     for box in sheet.texts:

@@ -969,13 +969,15 @@ def test_a_wire_riding_a_keep_out_edge_is_on_the_border_not_inside_it():
     # test's subject and it is unchanged. 147 added a second box in that region
     # that the fixture did not have: the host prints this net's name (`MID`) in a
     # row anchored at the longest run's midpoint, (250, 300), and the row grows
-    # *down* into the band (250, 300)-(268.33, 310) — inside the keep-out the wire
+    # right into the band (250, 300)-(263.103, 310) — inside the keep-out the wire
     # only rides. The row is a text box like any other and a reserved region is
     # reserved against it too, so the finding is reported and named as text.
+    # (150: the row is 13.103 units wide, `MID` at the em the render declares; it
+    # used to be 18.33 through the over-wide ruler, `outputs/150/t2_verdict.md`.)
     assert the_wire_in_the_region(_check_with_keepouts([on_the_edge])) == []
     rows = _of(_check_with_keepouts([on_the_edge]), KIND_OUT_OF_PAGE)
     assert [item.objects for item in rows] == [("segments[1]",)]
-    assert "[250, 300, 268.33, 310] is inside keep-out" in rows[0].evidence
+    assert "[250, 300, 263.103, 310] is inside keep-out" in rows[0].evidence
     found = the_wire_in_the_region(_check_with_keepouts([one_unit_in]))
     assert [item.objects for item in found] == [("segments[1]",)]
     assert "runs through keep-out" in found[0].evidence
@@ -1331,17 +1333,18 @@ def test_text_spacing_and_occupancy_are_measured_in_canvas_units():
     ][0]
     # Two bodies (20x40 each), four text/label boxes, and — since 147 — the two
     # rows the host prints this net's own name in: `MID` is not carried by a power
-    # flag, so its two wires each print a name, at (100, 300) growing down (18.33
-    # units wide) and at (150, 300) growing right (18.33 units wide). 3300 +
-    # 2 x 183.3 = 3666.6 units^2 of 800000. The old expectation counted the boxes
+    # flag, so its two wires each print a name, at (100, 300) growing down (13.103
+    # units wide) and at (150, 300) growing right (13.103 units wide). 3300 +
+    # 2 x 131.03 = 3562.06 units^2 of 800000. The old expectation counted the boxes
     # the *plan* declares; a wire's own name is a box the plan does not declare and
-    # the page still carries, which is what 147 put into this set.
-    assert result.soft_metrics["occupied_ratio"] == pytest.approx(3666.6 / 800000.0)
-    assert "8 box(es) cover 3666.6 units^2" in result.soft_reasons[
+    # the page still carries, which is what 147 put into this set. (150 re-measured
+    # the width: `MID` is 13.103 units, not 18.33 — `outputs/150/t2_verdict.md`.)
+    assert result.soft_metrics["occupied_ratio"] == pytest.approx(3562.06 / 800000.0)
+    assert "8 box(es) cover 3562.06 units^2" in result.soft_reasons[
         "whitespace_ratio"
     ][0]
     assert result.soft_metrics["whitespace_ratio"] == pytest.approx(
-        1.0 - 3666.6 / 800000.0
+        1.0 - 3562.06 / 800000.0
     )
     assert "800000 units^2" in result.soft_reasons["whitespace_ratio"][0]
 

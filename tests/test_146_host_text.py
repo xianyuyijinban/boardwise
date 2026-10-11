@@ -55,10 +55,35 @@ def test_the_compiler_and_the_lint_measure_a_string_with_one_ruler():
 
 
 def test_the_render_ruler_reproduces_the_boxes_the_render_drew():
-    """Measured boxes on the 145e render, to the unit."""
-    assert drawlint.text_width('R10') == pytest.approx(18.34, abs=0.01)
-    assert drawlint.text_width('17.8k 1% TH') == pytest.approx(57.8, abs=0.05)
-    assert drawlint.text_width('PC817X2NIP0F') == pytest.approx(71.14, abs=0.05)
+    """Measured boxes on the 145e/P22 renders, to the unit (150 re-measured).
+
+    The ruler is the Arial advance table times the em the render **declares**
+    (``font-size:7.148342059336824``, `RENDER_TEXT_PX`), not the 10-unit text
+    *row*. 150 corrected that and re-measured: on `outputs/145e/render_P1.png`
+    `PC817X2NIP0F` (anchor x=725) inks out at 777.11 and this ruler predicts
+    775.85, where the old row-based one predicted 796.14; `GATE` (anchor 165)
+    inks out at 183.78 against 184.46 here and 192.23 there. Nine value rows on
+    `test/P22`'s render agree the same way (`outputs/150/t2_verdict.md`).
+    """
+    assert drawlint.text_width('R10') == pytest.approx(13.11, abs=0.01)
+    assert drawlint.text_width('17.8k 1% TH') == pytest.approx(41.32, abs=0.05)
+    assert drawlint.text_width('PC817X2NIP0F') == pytest.approx(50.85, abs=0.05)
+
+
+def test_the_ruler_is_the_em_the_render_declares_and_not_the_row_pitch():
+    """150: the two constants are 7.148342 (em) and 10 (row) — 1.39893 apart.
+
+    Using the row pitch as if it were the em made every text box 40% too wide,
+    which is what 岳 caught on his own P22 page (`outputs/150/t2_verdict.md`).
+    """
+    assert textmetrics.RENDER_TEXT_PX == pytest.approx(7.148342059336824)
+    assert textmetrics.CANVAS_TEXT_UNITS == 10.0
+    for text in ('EE16_3+3_V02', 'PC817X2NIP0F', 'HVDC'):
+        em = sum(textmetrics.TEXT_ADVANCE_EM[c] for c in text)
+        assert textmetrics.render_width(text) == pytest.approx(
+            em * textmetrics.RENDER_TEXT_PX, abs=1e-9
+        )
+        assert textmetrics.render_width(text) < em * textmetrics.CANVAS_TEXT_UNITS
 
 
 # --------------------------------------- 2. where the host draws a net name
@@ -218,8 +243,15 @@ def test_a_stub_with_no_owner_has_nothing_to_clash_with():
 
 def test_the_stub_chooser_steps_out_past_its_own_symbol():
     """The whole point of the check: the same Q1/GATE fixture through the
-    chooser picks the 40-unit rung (the first whose name row clears the
-    transistor), where the pre-146 order answered `left 10`."""
+    chooser steps past the rung whose name row lands on the transistor, where
+    the pre-146 order answered `left 10`.
+
+    150 moved the rung: the row is as wide as the render draws it
+    (`GATE` = 19.46 units, not 27.23 — measured, `outputs/150/t2_verdict.md`),
+    so `left 20`'s run (170,540)-(150,540) puts the row at 160..179.46 and that
+    clears Q1's body at x=180, where `left 20`'s old 27.23-unit row reached
+    187.23 and clashed. `left 10` still clashes under both rulers (165..184.46).
+    """
     label = SimpleNamespace(
         net='GATE', x=170.0, y=540.0, part_id='Q1',
         bbox=(130.0, 535.5, 162.0, 544.5),
@@ -229,4 +261,4 @@ def test_the_stub_chooser_steps_out_past_its_own_symbol():
     )
     stub, blockers = drawapply._place_label_stub(label, built, {}, ())
     assert stub is not None, blockers
-    assert stub[-1] == (130.0, 540.0)
+    assert stub[-1] == (150.0, 540.0)
