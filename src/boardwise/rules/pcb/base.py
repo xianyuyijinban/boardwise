@@ -57,6 +57,16 @@ class PcbReviewContext:
     ``model`` — their questions are established over the schematic — while the
     regulator rules read ``pcb_model``, and a rule that needs both may read
     both.
+
+    ``board_uuid`` is the **schematic board this PCB document belongs to**
+    (151), read from the PCB document's own ``META.board`` — the container's
+    declared link, not a guess. It is what lets a rule ask the project model
+    for *this* board instead of reaching for board 0: on the 毕设FOC project
+    PCB1's ``board`` is ``Board1``'s uuid and PCB2's is ``Board2``'s, and
+    without it a rule comparing schematic facts to this document's geometry
+    would have to match boards by title or by designator overlap — which on
+    that project is exactly wrong, since Board1 and Board3 share ``C1``…
+    ``R6``. Empty when the document states none (and on a synthetic board).
     """
 
     board: object
@@ -70,6 +80,8 @@ class PcbReviewContext:
     #: The netlist view of ``board``'s own PCB document, or ``None``. See the
     #: class docstring: same geometry, the editor's own net names.
     pcb_model: object | None = None
+    #: 151: the schematic board uuid this PCB document declares (``META.board``).
+    board_uuid: str = ""
 
 
 class PcbRule(SchematicRule):

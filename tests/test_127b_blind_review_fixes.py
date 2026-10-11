@@ -711,6 +711,19 @@ def test_the_llc_fixture_stays_clean_under_the_fixed_rules():
     thing to measure. That is 133b's pack reading llc honestly, not 127b's fixes
     failing on it, so the assertion is now over the rules that existed at 127b
     and 133b's side of llc is pinned in ``test_133b_foc_rules.py``.
+
+    **151 subtracts one more id, and for the third time the subtraction is the
+    finding.** ``pcb-footprint-consistency`` (the E 阶段 footprint reconciliation)
+    is not silent on llc either: 47 parts are reconciled and the answer is a
+    fact about llc's *schematic* — ``C1``/``C2``/``C5``/``C6``'s
+    ``Component.footprint`` holds a library uuid (``0733d61b8033ac9c``) and
+    ``C7``/``C8``/``D1``'s is empty — so the rule files 30 「无从比较」INFO
+    rows, four 「PCB 侧读不出封装」rows, thirteen agreements and one real WARN
+    (``30A焊盘`` names two different pad geometries). None of that is a distance
+    measurement moving; the rows are pinned in
+    `test_151_footprint_consistency.py`. The question this pin asks — *every
+    rule that existed before the FOC pack is silent on llc* — still holds
+    verbatim with the new rule subtracted.
     """
     llc = FIXTURES / "llc_board.epro2"
     model, _ = cli._load_model(llc, view="schematic")
@@ -725,6 +738,8 @@ def test_the_llc_fixture_stays_clean_under_the_fixed_rules():
         # question 127b asks — every rule that existed before the FOC pack is
         # silent — still holds. test_133c_foc_ground.py pins their side.
         "pcb-foc-ground-domains", "pcb-foc-ground-tie", "pcb-foc-return-path",
+        # 151's footprint rule, for the reason in the docstring above.
+        "pcb-footprint-consistency",
     }
     assert [f for f in findings if f.rule_id not in foc_ids] == [], [
         (f.rule_id, f.message) for f in findings if f.rule_id not in foc_ids

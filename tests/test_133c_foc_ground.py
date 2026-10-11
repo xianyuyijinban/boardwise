@@ -175,6 +175,7 @@ def test_the_three_rules_sit_in_the_foc_block_after_133b_five():
         "pcb-foc-thermal-via-style",
         "pcb-foc-thermal-via-array",
         "pcb-foc-thermal-exit-path",
+        "pcb-footprint-consistency",
         "pcb-component-spacing",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",

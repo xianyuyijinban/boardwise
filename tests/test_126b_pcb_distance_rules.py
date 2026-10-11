@@ -909,9 +909,21 @@ def test_foc_board_frame_no_part_hangs_off_pcb1(foc_findings):
     ERRORs either. The reader of this test should take away that the rule's
     ERROR path is exercised only synthetically — a real fixture has no part off
     its board, which is itself the honest answer.
+
+    **151 narrowed this pin, and the narrowing is the finding.** It used to
+    assert 「this fixture has no ERROR from any rule」 — true while
+    ``pcb-component-spacing``'s frame half was the only ERROR-producing PCB
+    rule. 151's ``pcb-footprint-consistency`` now files **six** ERRORs here
+    (``R1``…``R6`` declared by ``Board3`` and placed on no PCB document), and
+    those are a different claim about a different board. So the assertion is
+    narrowed to the rule it was always about, and 151's presence rows are
+    pinned in `test_151_footprint_consistency.py`.
     """
     findings, _section = foc_findings
-    frame_errors = [f for f in findings if f.severity == "ERROR"]
+    frame_errors = [
+        f for f in findings
+        if f.severity == "ERROR" and f.rule_id == "pcb-component-spacing"
+    ]
     assert frame_errors == [], (
         "no fixture part is off its board; the board-frame ERROR path is "
         "covered synthetically only"
@@ -1033,7 +1045,22 @@ def test_llc_is_clean_under_both_distance_rules():
         "pcb-foc-thermal-via-array",
         "pcb-foc-thermal-exit-path",
     }
-    assert [f for f in findings if f.rule_id not in foc_ids] == [], (
+    # **151 subtracts a second id, and the subtraction is again the finding.**
+    # ``pcb-footprint-consistency`` is not silent on llc: 47 parts are
+    # reconciled and the answer is a fact about llc's *schematic* — this board's
+    # ``Component.footprint`` mostly does not hold a footprint name at all
+    # (``C1``/``C2``/``C5``/``C6`` carry a library uuid, ``0733d61b8033ac9c``,
+    # and ``C7``/``C8``/``D1`` carry nothing), so the rule files 30
+    # 「无从比较」INFO rows, four 「PCB 侧读不出封装」rows, thirteen agreements
+    # and **one real WARN** whose subject is a repeated ``30A焊盘`` name with
+    # two different pad geometries. None of that is a distance rule failing on
+    # llc's copper; the rows are pinned in
+    # `test_151_footprint_consistency.py`, so this pin keeps saying what it
+    # always said — *126b's two distance rules and every rule that existed
+    # before the FOC pack are silent on llc*.
+    assert [
+        f for f in findings if f.rule_id not in foc_ids | {"pcb-footprint-consistency"}
+    ] == [], (
         f"llc is clean under both rules; got "
         f"{[(f.rule_id, f.message) for f in findings]}"
     )
@@ -1100,6 +1127,7 @@ def test_llc_is_clean_under_both_distance_rules():
         "pcb-foc-thermal-via-style",
         "pcb-foc-thermal-via-array",
         "pcb-foc-thermal-exit-path",
+        "pcb-footprint-consistency",
         "pcb-component-spacing",
         "pcb-track-ampacity", "pcb-voltage-spacing",
     ]

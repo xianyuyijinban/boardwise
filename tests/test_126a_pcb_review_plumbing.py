@@ -95,17 +95,28 @@ def test_the_context_carries_the_five_facts_a_pcb_rule_reads():
     :func:`~boardwise.parsers.epro2_model.build_design_model` reads only the
     *first* PCB document. The five 钉 1 fields are unchanged — this is an
     addition, not a reshaping, which is what this pin is for.
+
+    **151 added the seventh.** ``board_uuid`` is the PCB document's own
+    ``META.board`` — the container's declared link to a schematic
+    :class:`~boardwise.core.model.BoardRef`. 151's footprint rule needs it
+    because it reads the *schematic* model by designator, and on the 毕设FOC
+    project "which board am I comparing against" cannot be answered by title or
+    by designator overlap (Board1 and Board3 both own ``R1``…``R6``). Same
+    shape as 131c's addition: one more declared fact, nothing reshaped, and the
+    default is empty so a synthetic context is unaffected.
     """
     import dataclasses
 
     fields = {f.name for f in dataclasses.fields(PcbReviewContext)}
     assert fields == {
         "board", "board_title", "model", "intent", "module_of", "pcb_model",
+        "board_uuid",
     }
     ctx = PcbReviewContext(board=BoardGeometry(), board_title="PCB1")
     assert (
         ctx.model is None and ctx.intent is None
         and ctx.module_of == {} and ctx.pcb_model is None
+        and ctx.board_uuid == ""
     )
 
 
@@ -158,6 +169,7 @@ def test_the_builtin_pcb_rule_list_is_the_126b_distance_pair_then_the_126c_pair(
         "pcb-foc-thermal-via-style",
         "pcb-foc-thermal-via-array",
         "pcb-foc-thermal-exit-path",
+        "pcb-footprint-consistency",
         "pcb-component-spacing",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
@@ -355,6 +367,7 @@ def test_run_pcb_review_reads_every_pcb_document_of_the_foc_fixture():
             "pcb-foc-thermal-via-style",
             "pcb-foc-thermal-via-array",
             "pcb-foc-thermal-exit-path",
+            "pcb-footprint-consistency",
             "pcb-component-spacing",
             "pcb-track-ampacity", "pcb-voltage-spacing",
         ]
@@ -499,6 +512,7 @@ def test_checkup_offline_with_a_pcb_document_carries_the_pcb_review_section(
         "pcb-foc-thermal-via-style",
         "pcb-foc-thermal-via-array",
         "pcb-foc-thermal-exit-path",
+        "pcb-footprint-consistency",
         "pcb-component-spacing", "pcb-voltage-spacing",
     }
     # 126a did not touch the schema or the verdict; **126d did**, by bumping the
@@ -854,9 +868,24 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # recipes over this tree with `railratings.py` read from HEAD returns exactly
     # `f9160d36` / `42dc76c6`, i.e. 064's tree — so the move is 139's one file
     # and nothing else.
+    # **151 moved the recursive digest only** — 2243dd42 -> b67694ec — and the
+    # **direct** one staying at `4f056aaf` is the news this time: the batch
+    # landed entirely inside `rules/pcb/`. Three files there moved: a new
+    # `footprint.py` (the `pcb-footprint-consistency` rule), `base.py`
+    # (`PcbReviewContext` gained `board_uuid`) and `__init__.py` (the package
+    # map's one new line). The engine half of the batch,
+    # `engines/pcbreview.py`, is **outside the recipe by construction** — the
+    # recipe covers `src/boardwise/rules/` — which is the same known limit
+    # 131c/131d/131f recorded: a report's `rulebody` does not move for a change
+    # to the runner that calls the rules. Measured, not assumed: recomputing
+    # this recipe over the tree with `rules/pcb/footprint.py` omitted and
+    # `base.py`/`__init__.py` read from HEAD returns exactly `2243dd42`, i.e.
+    # 139's tree. (The value was measured as `357c12ed` first; the batch's own
+    # last docstring tidy — the ``CHIP_SIZE_CODES`` table's comment — moved it to
+    # `b67694ec`, which is the digest doing its job on prose.)
     assert recursive != old_digest, "the subpackage is inside the recipe now"
     assert old_digest == "4f056aaf"
-    assert recursive == "2243dd42", (
+    assert recursive == "b67694ec", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

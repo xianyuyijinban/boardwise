@@ -36,6 +36,7 @@ from typing import Any
 from ..core.measure import read_stackup
 from ..rules.pcb.base import PcbReviewContext, PcbRule
 from ..rules.pcb.distance import ComponentSpacing, DecapDistance
+from ..rules.pcb.footprint import FootprintConsistency
 from ..rules.pcb.ipc import TrackAmpacity, VoltageSpacing
 from ..rules.pcb.crystal import McuCrystalPlacement
 from ..rules.pcb.crystalkeepout import McuCrystalKeepout
@@ -108,6 +109,18 @@ from ..rules.base import SEVERITY_ORDER, Finding
 #: is the last of 133b's five and these three answer what comes *next* in the
 #: question order — the two ground domains and how they join (R1, R1b), then
 #: what the gate / switching / sense traces see under them (R5).
+#:
+#: **151 (E 阶段第一棒, 封装一致性) inserts ``pcb-footprint-consistency``
+#: immediately before the geometry sweep** — after the FOC block and ahead of
+#: ``pcb-component-spacing``. It is the roadmap's 第三步「器件检查」第一条, and
+#: it goes there rather than at the end because it is the same shape as
+#: ``pcb-mcu-reset-boot``: a rule whose answer is a fact read off the netlist +
+#: the library, not a distance. Placing it at the head of the tail keeps the
+#: list readable as 「power-path readings → device readings → board-frame
+#: sweep」, and nothing depends on the position (no rule reads another's
+#: output). What it adds to the list is the **first** PCB rule that reads the
+#: *schematic* model by name rather than through ``module_of`` — and it is the
+#: reason :attr:`PcbReviewContext.board_uuid` exists.
 BUILTIN_PCB_RULES: list[PcbRule] = [
     DecapDistance(),
     RegulatorCapDistance(),
@@ -127,6 +140,7 @@ BUILTIN_PCB_RULES: list[PcbRule] = [
     FocThermalViaStyle(),
     FocThermalViaArray(),
     FocThermalExitPath(),
+    FootprintConsistency(),
     ComponentSpacing(),
     TrackAmpacity(),
     VoltageSpacing(),
@@ -215,25 +229,36 @@ def build_module_of(
     return mapping
 
 
-def _pcb_documents(source: Any) -> list[tuple[str, Any]]:
-    """``(META title, document)`` for every PCB document, in file order.
+def _pcb_documents(source: Any) -> list[tuple[str, str, Any]]:
+    """``(META title, META board, document)`` for every PCB document, in file order.
 
     The title is read from the document's own ``META`` record (钉 4). A document
     whose META carries no title falls back to its uuid so it is still
     addressable and still distinguishable — but the two real fixtures all name
     themselves ("PCB1"/"PCB2"/"PCB3"), which is what the test pins.
+
+    ``board`` is the same META's declared link to the schematic board (151): it
+    is the uuid of a ``BOARD`` document, which is exactly what
+    :class:`~boardwise.core.model.BoardRef` carries. Measured on the three
+    acceptance boards: 毕设FOC 1.0.0's PCB1 → ``d5c055266ef55000`` (Board1) and
+    PCB2 → ``5455a645b144c024`` (Board2); 1.1.0's PCB3 → ``7dca2922104db3df``
+    (Board3); ROBOT's PCB1 → ``258938d3e4719586`` (Board1) — six documents, six
+    hits, no fallback needed. Empty string when the document states none, which
+    a rule reads as 「板链读不出」 rather than as board 0.
     """
-    titled: list[tuple[str, Any]] = []
+    titled: list[tuple[str, str, Any]] = []
     for document in source.documents_of_type("PCB"):
         title = ""
+        parent_board = ""
         for record in document.records:
             if record.type == "META" and record.body is not None:
                 title = str(record.body.get("title") or "")
+                parent_board = str(record.body.get("board") or "")
                 if title:
                     break
         if not title:
             title = str(document.uuid or "")
-        titled.append((title, document))
+        titled.append((title, parent_board, document))
     return titled
 
 
@@ -331,7 +356,7 @@ def run_pcb_review(
     findings: list[Finding] = []
     boards: list[dict] = []
 
-    for title, document in documents:
+    for title, board_uuid, document in documents:
         board = extract_board(document, footprints, source.stats)
         ctx = PcbReviewContext(
             board=board,
@@ -340,6 +365,7 @@ def run_pcb_review(
             intent=intent,
             module_of=module_of,
             pcb_model=build_design_model(source, document),
+            board_uuid=board_uuid,
         )
         checks_run: list[str] = []
         board_findings: list[Finding] = []

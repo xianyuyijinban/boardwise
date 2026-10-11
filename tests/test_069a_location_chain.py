@@ -79,10 +79,23 @@ CH340 = FIXTURES / "ch340_golden.epro2"
 #: ``net_refs`` and so chain to a net, not a device — which is why R5 is **not**
 #: in this set. Each id here is an assertion that the row is about a board, not
 #: a part that was forgotten; test_133c_foc_ground.py pins what each row says.
+#:
+#: **151 widens it by one, for the same test.** ``pcb-footprint-consistency``
+#: files two kinds of board-scoped row: the per-board **对账小结**
+#: (「比了 122 个两边都有的器件——一致 113…」 — a statement about the board's
+#: reconciliation, with no single designator to name) and the **同名封装几何
+#: 不一** WARN (its subject is one footprint *name* used by several parts, not
+#: any one of them). Both keep the row and let the device link read 未标注,
+#: which is the honest value; every per-part row this rule files — the pad-count
+#: / size-code / family ERRORs, the undecidable INFOs and the presence errors —
+#: carries ``target.component_ref`` and therefore chains to a device, which is
+#: what this set must not swallow and does not. What each row says is pinned in
+#: `test_151_footprint_consistency.py`.
 DEVICE_LESS_ALLOWED: frozenset[str] = frozenset({
     "pcb-foc-gate-trace-width",
     "pcb-foc-ground-domains",
     "pcb-foc-ground-tie",
+    "pcb-footprint-consistency",
 })
 
 

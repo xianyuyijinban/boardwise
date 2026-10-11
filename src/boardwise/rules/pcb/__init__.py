@@ -26,6 +26,13 @@ Layout of the package as the batches land:
   switching / sense nets. It imports its object pools from ``foc`` rather than
   re-deriving them, so R1b's 「0R 近功率电解」 measures the same bulk
   capacitors R20's loop does.
+* ``footprint`` — 封装一致性 (151, E 阶段第一棒): every part that lands on the
+  board is reconciled between 「what the schematic declared」 (the library
+  device's ``Supplier Footprint``) and 「what the PCB actually places」 (the
+  FOOTPRINT document's title and its instantiated pad geometry). It is the
+  first PCB rule that reads the *schematic* model by designator, which is why
+  :attr:`PcbReviewContext.board_uuid` (the PCB document's ``META.board`` link
+  to the schematic ``BoardRef``) exists.
 
 The package is importable from the start; ``BUILTIN_PCB_RULES`` was **empty**
 in 126a and its structure gate (the test that says "the list is the truth") is

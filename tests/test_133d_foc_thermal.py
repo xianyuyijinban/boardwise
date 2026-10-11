@@ -155,6 +155,7 @@ def test_the_three_rules_continue_the_foc_block_after_133c_three():
         R7,
         R8,
         R9,
+        "pcb-footprint-consistency",
         "pcb-component-spacing",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
