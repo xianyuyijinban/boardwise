@@ -1067,6 +1067,15 @@ def test_llc_is_clean_under_both_distance_rules():
     # that are placed in two different directions. Neither is a distance
     # measurement moving; both sets are pinned in
     # `test_152_polarity_silk.py`.
+    # **153 subtracts one more id, and this time the subtraction is a *reading*
+    # of llc rather than a defect.** ``pcb-derating-package`` recognises
+    # **two real series strings** on llc (``R10+R9+R8`` and ``R5+R6+R7``) and
+    # files one INFO reading per string plus the board summary; nothing is
+    # graded, because llc's rails have no stated voltage at all (``0`` of its
+    # parts have both ends priced). The strings are pinned in
+    # `test_153_derating_package.py`; this pin keeps saying what it always
+    # said — *126b's two distance rules and every rule that existed before the
+    # E 阶段 device batches are silent on llc*.
     assert [
         f for f in findings
         if f.rule_id
@@ -1074,6 +1083,7 @@ def test_llc_is_clean_under_both_distance_rules():
             "pcb-footprint-consistency",
             "pcb-polarity-orientation",
             "pcb-silk-designator",
+            "pcb-derating-package",
         }
     ] == [], (
         f"llc is clean under both rules; got "
@@ -1145,6 +1155,7 @@ def test_llc_is_clean_under_both_distance_rules():
         "pcb-footprint-consistency",
         "pcb-polarity-orientation",
         "pcb-silk-designator",
+        "pcb-derating-package",
         "pcb-component-spacing",
         "pcb-track-ampacity", "pcb-voltage-spacing",
     ]

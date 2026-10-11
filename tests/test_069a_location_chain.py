@@ -105,6 +105,15 @@ CH340 = FIXTURES / "ch340_golden.epro2"
 #: 与极性脚不符的 ERROR、无方向标记的 ERROR) carries ``target.component_ref``
 #: and therefore chains to a device, which is what this set must not swallow.
 #: What each row says is pinned in `test_152_polarity_silk.py`.
+#:
+#: **153 widens it by one, on the same test.** ``pcb-derating-package`` files two
+#: board-scoped rows: the **串联分压结构读数** (its subject is a *string* of
+#: resistors, and it names all of them) and the per-board **电阻降额读数**
+#: summary (how many resistors were recognised, how many could be priced, which
+#: nets have no voltage). Its WARN rows — 封装耐压不足 / 封装功率不足 — carry
+#: ``target.component_ref`` and now also ``counterpart_ref`` (the other member of
+#: the series string), so they chain to the part. What each row says is pinned in
+#: `test_153_derating_package.py`.
 DEVICE_LESS_ALLOWED: frozenset[str] = frozenset({
     "pcb-foc-gate-trace-width",
     "pcb-foc-ground-domains",
@@ -112,6 +121,7 @@ DEVICE_LESS_ALLOWED: frozenset[str] = frozenset({
     "pcb-footprint-consistency",
     "pcb-polarity-orientation",
     "pcb-silk-designator",
+    "pcb-derating-package",
 })
 
 

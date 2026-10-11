@@ -753,6 +753,12 @@ def test_the_llc_fixture_stays_clean_under_the_fixed_rules():
         # directions on this board. Both sets are pinned in
         # `test_152_polarity_silk.py`.
         "pcb-polarity-orientation", "pcb-silk-designator",
+        # 153's derating rule, for the same reason and with the same character:
+        # it recognises **two real series strings** on llc (``R10+R9+R8`` and
+        # ``R5+R6+R7``) and files one INFO reading per string plus the board
+        # summary, and it grades nothing because llc's rails carry no stated
+        # voltage. Pinned in `test_153_derating_package.py`.
+        "pcb-derating-package",
     }
     assert [f for f in findings if f.rule_id not in foc_ids] == [], [
         (f.rule_id, f.message) for f in findings if f.rule_id not in foc_ids

@@ -172,6 +172,7 @@ def test_the_builtin_pcb_rule_list_is_the_126b_distance_pair_then_the_126c_pair(
         "pcb-footprint-consistency",
         "pcb-polarity-orientation",
         "pcb-silk-designator",
+        "pcb-derating-package",
         "pcb-component-spacing",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
@@ -372,6 +373,7 @@ def test_run_pcb_review_reads_every_pcb_document_of_the_foc_fixture():
             "pcb-footprint-consistency",
             "pcb-polarity-orientation",
             "pcb-silk-designator",
+            "pcb-derating-package",
             "pcb-component-spacing",
             "pcb-track-ampacity", "pcb-voltage-spacing",
         ]
@@ -519,6 +521,7 @@ def test_checkup_offline_with_a_pcb_document_carries_the_pcb_review_section(
         "pcb-footprint-consistency",
         "pcb-polarity-orientation",
         "pcb-silk-designator",
+        "pcb-derating-package",
         "pcb-component-spacing", "pcb-voltage-spacing",
     }
     # 126a did not touch the schema or the verdict; **126d did**, by bumping the
@@ -909,9 +912,39 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # **E2b moved it once more** — 315a1e72 -> 0196dc79 — 岳 2026-10-11 裁
     # 「方向不统一」WARN 降 INFO，改了 polarity.py 的 severity 与文案
     # （test_152 四处期望同步改 INFO）。
+    # **153 moved the recursive digest again** — 0196dc79 -> 34fddd02 — and the
+    # **direct** one stays at `4f056aaf` for the fourteenth batch running: E3
+    # landed entirely inside `rules/pcb/` as well. One new file is the cause
+    # (`derating.py`, the `pcb-derating-package` rule) plus a prose line in
+    # `rules/pcb/__init__.py`'s package map. 153's other edits —
+    # `engines/pcbreview.py` (the registration in `BUILTIN_PCB_RULES`, the
+    # docstring note and the import) — are **outside the recipe by
+    # construction**, and so is every list-position pin those edits move:
+    # `test_126a`'s own first structure test, `test_126b`'s llc pin,
+    # `test_126c`'s order pin and `test_151`/`test_152`'s neighbour pins all
+    # name the shifted device block by hand, which is what catches a
+    # registration that this digest cannot see.
+    # **153b moved the recursive digest once more** — 34fddd02 -> aea4ae7b — and
+    # the **direct** one stays at `4f056aaf` for the fifteenth batch running: the
+    # fix again landed entirely inside `rules/pcb/`, in **one file**,
+    # `focground.py`. The cause is the 0 Ω value reading: `pcb-foc-ground-tie`
+    # used to read the PCB document's own `component.value`, which is a
+    # systematically stale copy (measured: 1.0.0's PCB1 drifts on 37 of 122
+    # parts, 1.1.0's on 45 of 105), so 1.0.0's `R48`/`R49` — both `0R` on the
+    # schematic page — read as `10K` and the board was reported as 「two 10 kΩ
+    # resistors, no 0 Ω at all」. The module now resolves **this document's own
+    # schematic page** off `META.board` (`schematic_board_of`, 151/153's chain),
+    # prefers its declaration and falls back to the copy only when the page
+    # states nothing, writing both views into the row's evidence when they
+    # disagree. Measured, not assumed: recomputing this recipe over the tree with
+    # `focground.py` read from HEAD returns exactly `34fddd02`, i.e. 153's tree —
+    # so the move is that one file and nothing else. The values are pinned in
+    # `tests/test_153b_ground_tie_values.py` and the acceptance anchors in
+    # `tests/test_133c_foc_ground.py`, which is what makes the bump verified
+    # rather than a bookkeeping line.
     assert recursive != old_digest, "the subpackage is inside the recipe now"
     assert old_digest == "4f056aaf"
-    assert recursive == "0196dc79", (
+    assert recursive == "aea4ae7b", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

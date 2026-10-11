@@ -68,6 +68,27 @@ footprints intersect is ordinary routing on a four-layer board, not a short, and
 **UNKNOWN, not zero** — a resistor the drawing does not describe is not a 0 Ω
 tie, and claiming one would invent the very single point 岳's ruling is about.
 
+**Which value field, though: the schematic page's, with the PCB document's copy
+only as a fallback** (153b's correction, and 153's ``derating._schematic_component``
+is the same reading). A PCB document's ``component.value`` is a **systematically
+stale copy**: measured on 毕设FOC 1.1.0's PCB1, 45 of its 105 placed parts carry a
+value the schematic page contradicts — 23 of them read ``100nF`` and 20 read
+``10K`` regardless of what the schematic says, and 1.0.0's PCB1 reads 37 parts the
+same way (``R10`` 15K→10K, ``C1`` 2.2uF→100nF, ``U3`` 1kΩ→470Ω…). Reading the
+envelope's copy therefore fabricated the facts this rule judges on: on 1.0.0 the
+schematic's ``R48``/``R49`` — **both ``0R``** — came back as ``10K`` and the board
+was reported as 「two 10 kΩ resistors, no 0 Ω at all」, which is what 153b fixed.
+
+So every value this module judges on is read through :func:`_value_ohms`, which
+takes **both** views: the schematic page's declaration wins, the PCB document's
+copy is used only when the schematic states nothing, and when the two disagree the
+row writes 「原理图 X / PCB 文档 Y」 into its evidence rather than silently picking
+one. A schematic page that states an **unreadable** value is UNKNOWN — the PCB
+copy is not allowed to turn it into a 0 Ω, because that is the same invention in
+the other direction. Measured on the corpus, the fallback is real and needed:
+ROBOT's ``R8`` has an **empty** schematic value and the PCB document's ``0Ω``,
+which is the value the rule uses (and says it is a fallback).
+
 **A 0 Ω tie must actually bridge the two domains.** The test is structural and
 comes from the netlist view (``ctx.pcb_model``): a part is a tie candidate when it
 is a **resistor** (designator family ``R``, or a shelf category / value parse
@@ -122,6 +143,7 @@ __all__ = [
     "bridging_parts_of",
     "domain_of",
     "return_path_cover",
+    "schematic_board_of",
     "split_ground_domains",
     "zero_ohm_resistors_of",
 ]
@@ -547,11 +569,23 @@ class TieReading:
     pins on nets in **different** ground domains. That is deliberately broader
     than 「a 0 Ω resistor」: 岳's ruling distinguishes *exactly one 0 Ω* (the
     desired single point) from *several connecting parts or a direct copper
-    link* (the account of what is actually there), and 毕设FOC 1.0.0's ``R48``
-    / ``R49`` (both 10 kΩ, one bridging ``GND``↔``PGND`` and the other
-    ``AGND``↔``PGND``) exist to make the second branch reachable. A pool of only
-    0 Ω parts would report this board as 「not connected at all」 and silently drop
-    the two resistors that do the joining.
+    link* (the account of what is actually there), and a value-filtered pool
+    cannot tell 「not connected at all」 from 「joined by a part that is not 0 Ω」 —
+    the two are different answers and only one of them is 岳's 「不连」 branch.
+
+    **Measured, the corpus's cross-domain bridges are all 0 Ω** (1.0.0's
+    ``R48`` bridging ``GND``↔``PGND`` and ``R49`` bridging ``AGND``↔``PGND``,
+    1.1.0's ``R11`` / ``R25`` — four ``0R`` on the schematic page), so no fixture
+    currently reaches the *non-zero* or *UNKNOWN* branch through real data; the
+    synthetic boards in ``tests/test_133c_foc_ground.py`` and
+    ``tests/test_153b_*`` are what keep those two branches exercised. The pool
+    stays structural for the reason above and not because of a fixture.
+
+    ``value`` is the value the judgement uses — the **schematic page's**
+    declaration, with the PCB document's copy only as a fallback
+    (:func:`_value_ohms`) — and ``schematic_value`` / ``pcb_value`` /
+    ``value_basis`` carry both views so a row can say which one it read and which
+    one it overrode.
 
     ``ohms`` is ``None`` when the drawing states no readable resistance — the
     part is still a bridging part and is still on the ledger, but it is
@@ -566,6 +600,14 @@ class TieReading:
     pin_b: str = ""
     net_b: str = ""
     basis: str = ""
+    #: The schematic page's ``Value`` for this designator, ``""`` when that page
+    #: states none or is not reachable.
+    schematic_value: str = ""
+    #: The PCB document's own ``Value`` — the copy, and only a fallback.
+    pcb_value: str = ""
+    #: How ``value`` was chosen, in one auditable sentence: 「原理图 X / PCB 文档
+    #: Y，判定用原理图值」 when the two drift, or the fallback's own wording.
+    value_basis: str = ""
 
     @property
     def is_zero_ohm(self) -> bool:
@@ -637,32 +679,148 @@ EXPLICIT_ZERO_OHM_SPELLINGS: frozenset[str] = frozenset(
 )
 
 
-def _value_ohms(component: object) -> tuple[str, float | None]:
-    """``(value text, ohms)`` for one part, ``ohms`` ``None`` when unreadable.
+@dataclass(frozen=True)
+class DrawValue:
+    """One part's value as **both** views state it, and which one was judged on.
 
-    Read from the drawing's own value field, never the MPN (133b's discipline).
-    ``None`` is **UNKNOWN** and is never rounded to zero.
-
-    One addition over
-    :func:`boardwise.core.values.parse_resistance_ohms`: the exact 0 Ω
-    spellings that parser declines (:data:`EXPLICIT_ZERO_OHM_SPELLINGS`, ``0R``
-    above all) are recognised here, because 「恰好一颗 0R」 is the whole subject
-    of 岳's ruling and the spelling its own name uses is one the shared grammar
-    would refuse. The list is **exactly zero** — nothing near zero is admitted,
-    because 「near zero」 is not a 0 Ω and admitting it would invent single
-    points. A part outside the list still goes through the shared parser, so a
-    10 kΩ reads 10000 Ω and an unreadable value still reads ``None``.
+    ``value``/``ohms`` are what the tie test uses; ``schematic_value`` /
+    ``pcb_value`` are the raw declarations, kept so a row can write
+    「原理图 X / PCB 文档 Y」 instead of picking one silently. ``basis`` is that
+    sentence.
     """
-    value = str(getattr(component, "value", "") or "")
+
+    value: str = ""
+    ohms: float | None = None
+    schematic_value: str = ""
+    pcb_value: str = ""
+    basis: str = ""
+
+
+def schematic_board_of(ctx: PcbReviewContext) -> object | None:
+    """The **schematic page this PCB document belongs to** (151/153's board chain).
+
+    The link is the PCB document's own declared ``META.board`` —
+    :attr:`PcbReviewContext.board_uuid`, which ``run_pcb_review`` reads out of the
+    document — so the schematic page is found by the container's own chain and
+    **never by designator overlap**: on 毕设FOC 1.0.0, Board1 and Board3 share
+    ``C1``…``R6``, and matching boards by refdes would answer with the wrong page.
+    This is :meth:`boardwise.rules.pcb.derating.DeratingPackage._schematic_component`'s
+    own lookup, lifted one level so a whole pass can resolve the page once.
+
+    ``None`` means 「no schematic view for this document」 and is an ordinary
+    answer, not an error: the caller then falls back to the PCB document's own
+    values and says so on the row. It is returned when the context carries no
+    project model, and when the link cannot be resolved to a board (a synthetic
+    context, or a document whose ``META.board`` matches no board).
+
+    A document that declares **no link** (``board_uuid`` empty — 智能药箱's PCB1,
+    measured) resolves to the project's only board when there is exactly one, since
+    a single-board project has no other page it could mean, and to ``None`` when
+    there are several: :attr:`PcbReviewContext.board_uuid` says an empty link is
+    read as 「板链读不出」 rather than as board 0, and guessing board 0 on a
+    multi-board project would read another board's values with no evidence at all.
+    """
+    model = getattr(ctx, "model", None)
+    if model is None:
+        return None
+    boards = getattr(model, "boards", None)
+    if boards is None:
+        # A single-board model is its own page (the shape 151/153 accept too).
+        return model
+    boards = list(boards)
+    uuid = str(getattr(ctx, "board_uuid", "") or "")
+    if not uuid:
+        return boards[0] if len(boards) == 1 else None
+    for board in boards:
+        if str(getattr(getattr(board, "board", None), "uuid", "") or "") == uuid:
+            return board
+    return None
+
+
+def _placed_on(schematic: object | None, designator: str) -> object | None:
+    """This designator's component on the schematic page, or ``None``.
+
+    ``None`` is the honest 「this page does not carry that designator」 — a board
+    link that resolves but whose page has no such refdes (1.1.0's Board3 carries
+    39 parts to PCB3's 33) leaves the PCB document's copy as the only value there
+    is, and :func:`_value_ohms` says it is reading a fallback.
+    """
+    if schematic is None:
+        return None
+    return (getattr(schematic, "components", {}) or {}).get(designator)
+
+
+def _value_ohms(placed: object, schematic: object | None = None) -> DrawValue:
+    """``DrawValue`` for one part, read through **both** views (153b's fix).
+
+    The **schematic page's** declaration wins and the PCB document's copy is only
+    a fallback, because that copy is systematically stale: measured on 毕设FOC
+    1.1.0's PCB1, 45 of 105 placed parts carry a value the schematic contradicts
+    (23 read ``100nF``, 20 read ``10K``), and 1.0.0's PCB1 reads 37 the same way.
+    Judging on the copy manufactured this rule's headline defect — the schematic's
+    ``R48``/``R49``, both ``0R``, read back as ``10K``, so the board was reported
+    as 「two 10 kΩ resistors and no 0 Ω at all」. Same reading, same reasons, as
+    153's ``derating._schematic_component``.
+
+    Three cases, and each one is written down:
+
+    1. **the schematic states a value** — that is the value judged on, and when
+       the PCB copy disagrees the ``basis`` says 「原理图 X / PCB 文档 Y」. A
+       schematic value that does not parse is UNKNOWN: the PCB copy is *not*
+       allowed to turn it into a 0 Ω, because inventing the single point out of
+       the view this fix demotes is the same defect facing the other way;
+    2. **the schematic states nothing, the PCB document does** — the copy is used
+       and the ``basis`` says it is a fallback. Measured and needed: ROBOT's
+       ``R8`` reads ``0Ω`` only in the PCB document;
+    3. **neither states one** — ``value`` is ``""`` and ``ohms`` is ``None``
+       (UNKNOWN, never zero).
+
+    One addition over :func:`boardwise.core.values.parse_resistance_ohms`: the
+    exact 0 Ω spellings that parser declines
+    (:data:`EXPLICIT_ZERO_OHM_SPELLINGS`, ``0R`` above all) are recognised here,
+    because 「恰好一颗 0R」 is the whole subject of 岳's ruling and the spelling its
+    own name uses is one the shared grammar would refuse. The list is **exactly
+    zero** — nothing near zero is admitted, because 「near zero」 is not a 0 Ω and
+    admitting it would invent single points.
+    """
+    drawn = str(getattr(schematic, "value", "") or "")
+    own = str(getattr(placed, "value", "") or "")
+    if drawn:
+        value = drawn
+        basis = (
+            f"两视图不一致，判定用**原理图**值：原理图 {drawn!r} / PCB 文档 {own!r}"
+            if own and own != drawn
+            else f"原理图声明 {drawn!r}"
+            + ("（PCB 文档同值）" if own else "（PCB 文档未写该值）")
+        )
+    elif own:
+        value = own
+        basis = (
+            f"原理图页未写该值，**回退 PCB 文档值** {own!r}（口径：本板板链读出的"
+            "原理图页没有声明，只能取 PCB 文档的副本）"
+        )
+    else:
+        value = ""
+        basis = "原理图页与 PCB 文档都没有写值"
     if not value:
-        return value, None
+        return DrawValue(
+            value="", ohms=None, schematic_value=drawn, pcb_value=own, basis=basis
+        )
     ohms = parse_resistance_ohms(value)
     if ohms is None and value.strip() in EXPLICIT_ZERO_OHM_SPELLINGS:
         ohms = ZERO_OHMS
-    return value, ohms
+    return DrawValue(
+        value=value,
+        ohms=ohms,
+        schematic_value=drawn,
+        pcb_value=own,
+        basis=basis,
+    )
 
 
-def all_zero_ohm_parts_of(model: object, library=None) -> list[TieReading]:
+def all_zero_ohm_parts_of(
+    model: object, library=None, schematic: object | None = None
+) -> list[TieReading]:
     """Every part on this board whose value parses to **exactly 0 Ω**.
 
     Scanned with **no domain filter**, because two different questions need it:
@@ -671,6 +829,13 @@ def all_zero_ohm_parts_of(model: object, library=None) -> list[TieReading]:
     so it is not the tie」. One scan serves both, and the domain test lives in
     :func:`bridging_parts_of` where it belongs.
 
+    ``schematic`` is **this PCB document's own schematic page**
+    (:func:`schematic_board_of`), and it is what makes the 0 Ω test read the
+    right value: the schematic's declaration wins and the PCB document's copy is
+    only a fallback (:func:`_value_ohms`). ``schematic=None`` means 「no schematic
+    view for this document」, and the pool then reads the PCB document's own copy
+    and every reading says so.
+
     A part whose value is unreadable is **UNKNOWN** and is not returned: an
     unstated value is not a 0 Ω, and claiming one would invent the very single
     point 岳's ruling is about.
@@ -678,7 +843,8 @@ def all_zero_ohm_parts_of(model: object, library=None) -> list[TieReading]:
     found: list[TieReading] = []
     for designator in sorted(getattr(model, "components", {}) or {}):
         component = (getattr(model, "components", {}) or {})[designator]
-        value, ohms = _value_ohms(component)
+        draw = _value_ohms(component, _placed_on(schematic, designator))
+        value, ohms = draw.value, draw.ohms
         if ohms is None or ohms != ZERO_OHMS:
             continue
         looks, basis = _looks_like_resistor(str(designator), value, model, library)
@@ -701,29 +867,32 @@ def all_zero_ohm_parts_of(model: object, library=None) -> list[TieReading]:
                 pin_b=str(getattr(pin_b, "number", "") or "") if pin_b else "",
                 net_b=str(getattr(pin_b, "net", "") or "") if pin_b else "",
                 basis=basis if looks else f"its value {value!r} parses to 0 Ω",
+                schematic_value=draw.schematic_value,
+                pcb_value=draw.pcb_value,
+                value_basis=draw.basis,
             )
         )
     return found
 
 
-def bridging_parts_of(model: object, library=None) -> list[TieReading]:
+def bridging_parts_of(
+    model: object, library=None, schematic: object | None = None
+) -> list[TieReading]:
     """Every part whose two pins land on nets in **different** ground domains.
 
     The pool is **structural, not value-based**: a part qualifies when its
     netlist view puts one pin on a power-domain ground net and another on a
-    logic/analog-domain ground net. It is deliberately broader than 「a 0 Ω
-    resistor」 because 岳's ruling has three branches — exactly one 0 Ω, several
-    connecting parts or a direct copper link, or not connected at all — and a
-    pool of only 0 Ω parts cannot see the middle one: it would report 毕设FOC
-    1.0.0 as 「not connected」 while its ``R48`` (10 kΩ, ``GND``↔``PGND``) and
-    ``R49`` (10 kΩ, ``AGND``↔``PGND``) sit there doing the joining.
+    logic/analog-domain ground net. 岳's ruling has three branches — exactly one
+    0 Ω, several connecting parts or a direct copper link, or not connected at
+    all — and a pool filtered by value cannot tell the last two apart: it would
+    report a board joined by a non-0 Ω part as 「not connected」, which is a
+    different answer and the wrong one.
 
     The part's resistance is parsed when the drawing wrote one down and is
     ``None`` otherwise; ``None`` means UNKNOWN and is never a reason to drop the
     part, because the part bridges the domains whatever its value is or is not.
-    A resistor's resistance is parsed through
-    :func:`boardwise.core.values.parse_resistance_ohms`; a non-resistor
-    (whatever bridges two grounds) carries ``None`` and says so.
+    The value read is the **schematic page's**, with the PCB document's copy only
+    as a fallback (:func:`_value_ohms` / ``schematic``).
 
     Read off the netlist view (``ctx.pcb_model``), which is what makes 「two pins
     in two domains」 a statement about the drawing's own connectivity rather than
@@ -750,7 +919,8 @@ def bridging_parts_of(model: object, library=None) -> list[TieReading]:
         (pin_a, net_a, side_a), (pin_b, net_b, side_b) = grounded
         if side_a == side_b:
             continue  # both pins in one domain: not a cross-domain bridge
-        value, ohms = _value_ohms(component)
+        draw = _value_ohms(component, _placed_on(schematic, designator))
+        value, ohms = draw.value, draw.ohms
         looks, basis = _looks_like_resistor(str(designator), value, model, library)
         if looks:
             reading = f"recognised as a resistor because {basis}"
@@ -770,26 +940,72 @@ def bridging_parts_of(model: object, library=None) -> list[TieReading]:
             TieReading(
                 designator=str(designator),
                 value=value,
-                ohms=ohms if looks else ohms,
+                ohms=ohms,
                 pin_a=str(getattr(pin_a, "number", "") or ""),
                 net_a=net_a,
                 pin_b=str(getattr(pin_b, "number", "") or ""),
                 net_b=net_b,
                 basis=reading,
+                schematic_value=draw.schematic_value,
+                pcb_value=draw.pcb_value,
+                value_basis=draw.basis,
             )
         )
     return found
 
 
-def zero_ohm_resistors_of(model: object, library=None) -> list[TieReading]:
+def zero_ohm_resistors_of(
+    model: object, library=None, schematic: object | None = None
+) -> list[TieReading]:
     """The subset of :func:`bridging_parts_of` that is a **0 Ω single point**.
 
     Kept as its own name because it is exactly what 岳's ruling names, and R1b's
     row quotes it. A bridging part whose resistance is unreadable, or parses to
-    anything but 0, is **not** in here — UNKNOWN is not zero, and a 10 kΩ part
+    anything but 0, is **not** in here — UNKNOWN is not zero, and a non-zero part
     is not the single point however convenient it would be to call it one.
     """
-    return [part for part in bridging_parts_of(model, library) if part.is_zero_ohm]
+    return [
+        part
+        for part in bridging_parts_of(model, library, schematic)
+        if part.is_zero_ohm
+    ]
+
+
+def _value_view_evidence(
+    parts: list[TieReading], header: str = "value reading (153b's 口径)"
+) -> str:
+    """One line saying **which view** each part's value was read from.
+
+    「两视图不一致时如实写出」 is the ruling this fix follows, and this is the line
+    that carries it: the parts whose schematic page and PCB document disagree are
+    named with **both** values, and the parts whose value had to fall back to the
+    PCB document are named separately. Parts whose two views agree need no
+    mention of their own — dumping the whole board's drift would bury this row's
+    own parts under it (1.0.0's PCB1 drifts on 37 of its 122 parts, most of them
+    no part of this question).
+    """
+    divergent = [
+        f"{part.designator} 原理图 {part.schematic_value!r} / PCB 文档 "
+        f"{part.pcb_value!r}"
+        for part in parts
+        if part.schematic_value
+        and part.pcb_value
+        and part.schematic_value != part.pcb_value
+    ]
+    fallback = [
+        f"{part.designator} ({part.pcb_value!r})"
+        for part in parts
+        if not part.schematic_value and part.pcb_value
+    ]
+    return (
+        header
+        + "：**原理图声明优先，PCB 文档值仅作回退**（153b；PCB 文档的 value 是"
+        "系统性陈旧副本，实测 1.1.0 的 PCB1 有 45/105 件被原理图页推翻）；"
+        "两视图不一致、判定用**原理图值**的件："
+        + ("; ".join(divergent) or "(无)")
+        + "；原理图页未写、**回退 PCB 文档值**的件："
+        + ("; ".join(fallback) or "(无)")
+    )
 
 
 class FocGroundTie(PcbRule):
@@ -812,13 +1028,16 @@ class FocGroundTie(PcbRule):
       capacitor it is nearest without grading it.
     * **several ties, a non-zero bridging resistor, or a direct copper
       connection** — reported as the account of what *is* there. This is the case
-      a rule that only looked for 0 Ω parts would miss entirely, and it is not
-      hypothetical: 毕设FOC 1.0.0 joins its domains with **two 10 kΩ resistors**
-      (``R48`` bridging ``GND``↔``PGND``, ``R49`` bridging ``AGND``↔``PGND``)
-      and no 0 Ω at all, so a 0 Ω-only pool would have called that board
-      「not connected」 and dropped the two parts doing the joining. The bridging
-      pool is therefore **structural** (:func:`bridging_parts_of`), not
-      value-based.
+      a rule that only looked for 0 Ω parts would miss entirely: a value-filtered
+      pool cannot tell 「not connected」 from 「joined by something that is not
+      0 Ω」. Measured on the corpus, this branch is where 毕设FOC **1.0.0 and
+      1.1.0 both land**, and the account is now the corrected one: 1.0.0's
+      ``R48`` (``0R``, ``GND``↔``PGND``) and ``R49`` (``0R``, ``AGND``↔``PGND``)
+      bridge its domains in **two** places rather than the one 岳's ruling asks
+      for, and 1.1.0 reads the same way through ``R25`` (``GND``↔``PGND``) and
+      ``R11`` (``AGND``↔``PGND``). Before 153b's value fix both boards were
+      reported as 「two 10 kΩ resistors and no 0 Ω at all」, which was the PCB
+      document's stale copy talking (see the module docstring).
     * **not connected at all** — one INFO row. 岳: 「要么不连，要么单点」; a board
       that deliberately isolates its two grounds entirely is compliant, so the
       row reports the absence with the same seriousness as a presence, and says
@@ -833,6 +1052,17 @@ class FocGroundTie(PcbRule):
     applied to **every** part, not only to 0 Ω ones — the value decides which
     branch of 岳's ruling a part falls into, and the domains decide whether it is
     a ground tie at all.
+
+    **The value is the schematic page's, and the PCB document's copy is only a
+    fallback** (153b). This rule's headline defect was reading the PCB document's
+    ``component.value`` — a systematically stale copy — so 1.0.0's ``R48``/
+    ``R49``, both ``0R`` on the schematic, came back ``10K`` and the board was
+    reported as having no 0 Ω at all. :func:`schematic_board_of` resolves **this
+    document's own schematic page** off ``META.board`` (151/153's chain, never
+    designator overlap), :func:`_value_ohms` prefers its declaration and falls
+    back to the copy only when the page states nothing, and
+    :func:`_value_view_evidence` writes both values onto the row whenever they
+    disagree.
 
     A board with **no power domain** (ROBOT, 药箱) produces one INFO row saying
     so. That is the measured state of the corpus, and it is the same
@@ -858,18 +1088,26 @@ class FocGroundTie(PcbRule):
         ``library=None`` degrades to an empty shelf, so a synthetic test injects
         a library rather than monkeypatching
         :func:`boardwise.rules.facts.default_library_path`.
+
+        **The schematic page is resolved once here** (:func:`schematic_board_of`,
+        153's board chain) and threaded into every value read below, so all three
+        pools judge on the same view and no call site can quietly keep reading the
+        PCB document's stale copy. ``schematic=None`` (no project model, or a
+        board link that does not resolve) is an ordinary degradation: the pools
+        read the PCB document's own values and each row says it is a fallback.
         """
         board = ctx.board
         model = ctx.pcb_model
         if board is None or model is None:
             return []
+        schematic = schematic_board_of(ctx)
         split = split_ground_domains(board)
         if not split.has_power:
             return [self._no_power_domain(board, split)]
         if not split.logic:
             return [self._no_logic_domain(board, split)]
 
-        bridges, jumpers = self._partition_ties(model, library)
+        bridges, jumpers = self._partition_ties(model, library, schematic)
         ties = [part for part in bridges if part.is_zero_ohm]
         # A bridging part whose resistance is **unreadable** is UNKNOWN, and
         # UNKNOWN is neither 「a 0 Ω tie」 nor 「a non-zero resistor」 — it is a
@@ -886,12 +1124,16 @@ class FocGroundTie(PcbRule):
         findings: list[Finding] = []
         if not bridges and not copper:
             # Neither a part nor copper joins the domains: 岳's 「不连」 branch.
-            findings.append(self._not_connected(board, model, library, split))
+            findings.append(
+                self._not_connected(board, model, library, schematic, split)
+            )
         if len(ties) == 1 and not copper and not non_zero:
             # Exactly one 0 Ω and nothing else joining the domains — 岳's shape.
             # An UNKNOWN bridge does **not** spoil this: it is reported on its
             # own row rather than being allowed to demote a real single point.
-            findings.append(self._one_tie(board, model, library, split, ties[0]))
+            findings.append(
+                self._one_tie(board, model, library, schematic, split, ties[0])
+            )
         if ties or non_zero or copper:
             findings.append(
                 self._not_single_point(
@@ -905,7 +1147,7 @@ class FocGroundTie(PcbRule):
         return findings
 
     def _partition_ties(
-        self, model: object, library
+        self, model: object, library, schematic: object | None = None
     ) -> tuple[list[TieReading], list[TieReading]]:
         """``(cross-domain bridges, same-domain jumpers)``.
 
@@ -913,8 +1155,12 @@ class FocGroundTie(PcbRule):
         part it returns bridges the domains. The jumpers are collected separately
         so a 0 Ω part sitting **inside** one domain is still reported (it is a
         real part on a ground net) without being mistaken for the single point.
+
+        ``schematic`` is this document's own schematic page, handed straight
+        through to both pools — the jumpers are 0 Ω *by value*, so they read the
+        same view the bridges do and the two cannot disagree about a part.
         """
-        bridges = bridging_parts_of(model, library)
+        bridges = bridging_parts_of(model, library, schematic)
         bridged = {part.designator for part in bridges}
         # A 0 Ω part that did **not** make it into the cross-domain pool is a
         # jumper: it sits somewhere on the board but not across the two domains.
@@ -922,7 +1168,7 @@ class FocGroundTie(PcbRule):
         # never counted toward the single point.
         jumpers = [
             part
-            for part in all_zero_ohm_parts_of(model, library)
+            for part in all_zero_ohm_parts_of(model, library, schematic)
             if part.designator not in bridged
         ]
         return bridges, jumpers
@@ -1064,9 +1310,11 @@ class FocGroundTie(PcbRule):
         board: BoardGeometry,
         model: object,
         library,
+        schematic: object | None,
         split: GroundDomainSplit,
     ) -> Finding:
         bulks = self._bulk_capacitors(board, model, library)
+        zeroes = all_zero_ohm_parts_of(model, library, schematic)
         return Finding(
             rule_id=self.id,
             severity="INFO",
@@ -1088,10 +1336,11 @@ class FocGroundTie(PcbRule):
                     ", ".join(
                         f"{r.designator} ({r.value!r}, pins "
                         f"{r.net_a!r}/{r.net_b!r})"
-                        for r in all_zero_ohm_parts_of(model, library)
+                        for r in zeroes
                     )
                     or "(none at all)"
                 ),
+                _value_view_evidence(zeroes),
                 "bulk electrolytics on this board (the 0 R proximity pool, "
                 f"≥ {100} µF per 133b's floor): "
                 + (", ".join(f"{d} ({v})" for d, v, _f in bulks) or "(none)"),
@@ -1108,12 +1357,15 @@ class FocGroundTie(PcbRule):
         board: BoardGeometry,
         model: object,
         library,
+        schematic: object | None,
         split: GroundDomainSplit,
         tie: TieReading,
     ) -> Finding:
         bulks = self._bulk_capacitors(board, model, library)
         nearest, gap, how = self._nearest_bulk(board, tie.designator, bulks)
-        others = [r.designator for r in zero_ohm_resistors_of(model, library)]
+        others = [
+            r.designator for r in zero_ohm_resistors_of(model, library, schematic)
+        ]
         return Finding(
             rule_id=self.id,
             severity="INFO",
@@ -1136,8 +1388,12 @@ class FocGroundTie(PcbRule):
             evidence=[
                 *_domain_evidence(split),
                 f"tie part {tie.designator}: value {tie.value!r} parses to "
-                f"{tie.ohms!r} Ω through core.values.parse_resistance_ohms — "
-                "exactly 0, which is 岳's stated figure, not a near-zero guess",
+                f"{tie.ohms!r} Ω through this module's value reader "
+                "(core.values.parse_resistance_ohms, plus "
+                "EXPLICIT_ZERO_OHM_SPELLINGS for the ``0R`` the shared grammar "
+                "declines) — exactly 0, which is 岳's stated figure, not a "
+                "near-zero guess",
+                _value_view_evidence([tie], header="tie value reading"),
                 f"recognised as a resistor because {tie.basis} — the same "
                 "two-door test 133b's power_mosfets_of uses (designator family "
                 "**and/or** shelf category), because the corpus's fitted 0 Ω "
@@ -1285,6 +1541,10 @@ class FocGroundTie(PcbRule):
                     )
                     or "(none)"
                 ),
+                _value_view_evidence(
+                    [*ties, *non_zero, *unknown, *same_domain],
+                    header="value reading on this row's parts (153b's 口径)",
+                ),
                 "「恰好一颗 0R」 is 岳's 2026-10-08 wording; TI SLVA959B §1.3.1 "
                 "backs only the isolation and the star point. A non-zero "
                 "bridging resistor, several ties, or a copper connection is "
@@ -1292,10 +1552,12 @@ class FocGroundTie(PcbRule):
                 "raised over it — 岳 has ruled the convention, not that every "
                 "board must already follow it",
                 "the bridging pool is **structural** (two pins in two domains, "
-                "read off the netlist view) rather than value-based, because a "
-                "pool of only 0 Ω parts would report 毕设FOC 1.0.0 as 「not "
-                "connected at all」 and drop the two 10 kΩ resistors that "
-                "actually join its domains",
+                "read off the netlist view) rather than value-based, because the "
+                "value decides *which* of 岳's branches a part falls into, not "
+                "whether the part joins the two domains: a value-filtered pool "
+                "cannot tell 「not connected at all」 from 「joined by a part "
+                "that is not 0 Ω」, and only the first of those is the 不连 "
+                "branch",
                 "the pool is focground.bridging_parts_of — every part whose two "
                 "pins land in different ground domains, whatever its value is",
                 "岳's 2026-10-08 ruling is the single point; the 「0R 要靠近功率"
@@ -1345,6 +1607,9 @@ class FocGroundTie(PcbRule):
                 "— the two-domain test, read off the netlist view rather than "
                 "inferred from geometry",
                 f"why it is not a resistor reading: {part.basis}",
+                _value_view_evidence(
+                    [part], header=f"{part.designator} value reading"
+                ),
                 "an UNKNOWN bridge does **not** demote a real single 0 Ω on the "
                 "same board: 「恰好一颗 0R」 is counted over the 0 Ω parts, and "
                 "this part is reported beside them rather than against them",
@@ -1378,6 +1643,7 @@ class FocGroundTie(PcbRule):
                 f"{tie.pin_a or '(unstated)'} on {tie.net_a!r}, pin "
                 f"{tie.pin_b or '(unstated)'} on {tie.net_b!r}",
                 f"recognised as a resistor because {tie.basis}",
+                _value_view_evidence([tie], header=f"{tie.designator} value reading"),
                 "the structural tie test requires the two pins to land in "
                 "**different** ground domains; this part's pins do not, so no "
                 "single point is claimed from it and no distance to the bulk "

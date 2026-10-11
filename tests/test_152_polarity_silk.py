@@ -486,11 +486,19 @@ def test_polygon_gap_is_exact_for_rotated_rectangles_and_circles():
 
 
 def test_both_rules_are_registered_at_the_declared_position():
-    """The list is the truth (126a): a rule that is not listed does not run."""
+    """The list is the truth (126a): a rule that is not listed does not run.
+
+    152 put its two rules immediately after 151's ``pcb-footprint-consistency``
+    (器件检查 ①封装一致 → ②极性/丝印), and **153 appended
+    ``pcb-derating-package`` after them** (③降额的物理层) — so the device block
+    is four deep and its last member is no longer ``pcb-silk-designator``: the
+    geometry sweep starts two positions further along than it did in 152.
+    """
     ids = [rule.id for rule in BUILTIN_PCB_RULES]
     assert ids.index(POLARITY_ID) == ids.index("pcb-footprint-consistency") + 1
     assert ids.index(SILK_ID) == ids.index(POLARITY_ID) + 1
-    assert ids.index("pcb-component-spacing") == ids.index(SILK_ID) + 1
+    assert ids.index("pcb-derating-package") == ids.index(SILK_ID) + 1
+    assert ids.index("pcb-component-spacing") == ids.index(SILK_ID) + 2
 
     rules = {rule.id: rule for rule in BUILTIN_PCB_RULES}
     for rule_id in (POLARITY_ID, SILK_ID):

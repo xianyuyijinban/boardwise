@@ -45,6 +45,15 @@ Layout of the package as the batches land:
   questions. The glyph advance is not in the file, which is why the overlap
   check measures with a *band* of widths and only warns at the narrowest end
   (see that module's ``ADVANCE_BAND``).
+* ``derating`` — 降额的物理层 (153, E 阶段第三棒): a chip resistor's **package
+  size code** caps the continuous voltage it may carry (0603 = 50 V, 0805 =
+  150 V, 1206 = 200 V … each figure with its datasheet citation), so the rule
+  compares the voltage across a resistor — the difference between its two nets'
+  stated voltages, or its share of a **series string** split by resistance —
+  against that column, and estimates P = U²/R against the package's rated
+  power. The series split is the half 岳 named as a false-positive risk: the
+  rule recognises the string first so the whole string's voltage is never
+  booked against one part. It is the first PCB rule at ``L2-facts``.
 
 The package is importable from the start; ``BUILTIN_PCB_RULES`` was **empty**
 in 126a and its structure gate (the test that says "the list is the truth") is

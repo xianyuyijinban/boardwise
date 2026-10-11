@@ -35,6 +35,7 @@ from typing import Any
 
 from ..core.measure import read_stackup
 from ..rules.pcb.base import PcbReviewContext, PcbRule
+from ..rules.pcb.derating import DeratingPackage
 from ..rules.pcb.distance import ComponentSpacing, DecapDistance
 from ..rules.pcb.footprint import FootprintConsistency
 from ..rules.pcb.polarity import PolarityOrientation
@@ -123,6 +124,15 @@ from ..rules.base import SEVERITY_ORDER, Finding
 #: output). What it adds to the list is the **first** PCB rule that reads the
 #: *schematic* model by name rather than through ``module_of`` — and it is the
 #: reason :attr:`PcbReviewContext.board_uuid` exists.
+#:
+#: **152 (E 阶段第二棒) added ``pcb-polarity-orientation`` and
+#: ``pcb-silk-designator``** right after it, and **153 (第三棒) adds
+#: ``pcb-derating-package``** after those two: the three device-reading rules
+#: of 第三步 sit together at the head of the tail, in the roadmap's own order
+#: (封装 → 极性/丝印 → 降额的物理层). 153 is the first PCB rule at ``L2-facts``
+#: rather than ``L1-pcb-geometry`` — its limits are datasheet columns, not
+#: distances — and it is placed among the device readings because that is the
+#: family whose subject is a *part* rather than a pair or a plane.
 BUILTIN_PCB_RULES: list[PcbRule] = [
     DecapDistance(),
     RegulatorCapDistance(),
@@ -145,6 +155,7 @@ BUILTIN_PCB_RULES: list[PcbRule] = [
     FootprintConsistency(),
     PolarityOrientation(),
     SilkDesignator(),
+    DeratingPackage(),
     ComponentSpacing(),
     TrackAmpacity(),
     VoltageSpacing(),

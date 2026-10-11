@@ -273,12 +273,18 @@ def test_the_rule_is_registered_and_the_list_is_still_the_truth():
     of the device readings and still sits ahead of ``pcb-component-spacing``;
     what moved is which device rule is *last*. The new pair's positions are
     pinned in `test_152_polarity_silk.py`.
+    **153 moved it by one more position** for the same reason: the E 阶段第三棒's
+    ``pcb-derating-package`` is appended after the 152 pair (器件检查 order:
+    封装一致 → 极性/丝印 → 降额的物理层), so the device block is now four deep
+    and this rule is still its head. 153's own position is pinned in
+    `test_153_derating_package.py`.
     """
     ids = [rule.id for rule in BUILTIN_PCB_RULES]
     assert RULE_ID in ids
-    assert ids.index(RULE_ID) == ids.index("pcb-component-spacing") - 3
+    assert ids.index(RULE_ID) == ids.index("pcb-component-spacing") - 4
     assert ids.index("pcb-polarity-orientation") == ids.index(RULE_ID) + 1
     assert ids.index("pcb-silk-designator") == ids.index(RULE_ID) + 2
+    assert ids.index("pcb-derating-package") == ids.index(RULE_ID) + 3
     rule = next(r for r in BUILTIN_PCB_RULES if r.id == RULE_ID)
     assert isinstance(rule, FootprintConsistency)
     assert rule.level == "L1-pcb-geometry"

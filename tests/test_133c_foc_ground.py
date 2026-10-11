@@ -27,16 +27,24 @@ So the 127a 「0.0 mil 贴脸」 history does **not** recur on this board betwee
 these two domains: 127b's pad-layer fix is holding, and the six pairs 127a
 attributed to a parser defect were indeed all top-side × bottom-side.
 
-**The measured answer to the second question.** 「板上有没有 0R 单点件」 — **no**.
-毕设FOC 1.0.0 places **zero** 0 Ω resistors of any kind. Its two domains are
-joined by ``R48`` (10 kΩ, ``GND``↔``PGND``) and ``R49`` (10 kΩ,
-``AGND``↔``PGND``) — two **non-zero** bridging resistors. R1b reports exactly
-that, and the reason the pool is structural rather than value-based is this
-board: a 0 Ω-only pool would have called it 「not connected at all」 and dropped
-the two parts that do the joining. ROBOT is the mirror image — it *does* place
-a 0 Ω (``R8``, ``0Ω``, ``CRCW06030000Z0EAHP``), but on ``GND``↔``$1N251``, so
-it is a **jumper inside one domain**, not the single point, and it has no power
-domain at all to be a tie between.
+**The measured answer to the second question.** 「板上有没有 0R 单点件」 — **yes,
+two of them**, and this is 153b's correction to what this file first recorded.
+毕设FOC 1.0.0's PCB1 joins its two ground domains with ``R48`` (``0R``,
+``GND``↔``PGND``) and ``R49`` (``0R``, ``AGND``↔``PGND``) — one 0 Ω per domain
+pair — plus a third 0 Ω, ``R31``, on ``+24V``↔``$1N74269``, which bridges no
+ground domain and is reported as a jumper. The **PCB document's own copies** of
+``R48``/``R49`` say ``10K``, which is what the rule used to read and why this
+file once recorded 「two 10 kΩ resistors, no 0 Ω at all」; that reading was the
+stale copy talking, and ``focground``'s value chain now reads the schematic page
+first (the module docstring's 「which value field」 section). The branch is still
+「not a single point」, because 岳's convention asks for **exactly one** 0 Ω
+between the power ground and the logic ground and this board ties them twice.
+ROBOT is the mirror image — it places a 0 Ω (``R8``, ``0Ω``,
+``CRCW06030000Z0EAHP``) on ``GND``↔``$1N251``, so it is a **jumper**, not the
+single point, and it has no power domain at all to be a tie between. ROBOT's
+``R8`` is also the measured instance of the **fallback**: the schematic page
+states no value for it, so the value comes from the PCB document and the row
+says so.
 
 **PLANE is the third measured anchor.** 毕设FOC 1.0.0's PCB1 declares layers
 15 and 16 as ``PLANE`` and **neither carries a single pour polygon** — so read
@@ -96,9 +104,30 @@ R5 = "pcb-foc-return-path"
 RULE_IDS = [R1, R1B, R5]
 
 
+#: Which project model each fixture parses to, built once per path. The rules
+#: are run the way **production** runs them (``cli.py`` passes ``model=`` into
+#: ``run_pcb_review``), because 153b's value reading needs the project's
+#: schematic boards: a run with ``model=None`` has no schematic view at all and
+#: falls back to the PCB document's stale ``component.value`` copies. Measured
+#: on 1.0.0's PCB1: with the model its two bridges read ``0R`` (the schematic's
+#: declaration), without it they read ``10K`` (the copy) — so a helper that left
+#: the model out would pin the very defect 153b fixed.
+_PROJECTS: dict[Path, object] = {}
+
+
 def _rows(path: Path, rule_id: str) -> list:
-    findings, _section = run_pcb_review(path)
-    return [f for f in findings if f.rule_id == rule_id]
+    return [f for f in _findings(path) if f.rule_id == rule_id]
+
+
+def _findings(path: Path) -> list:
+    """Every finding of a run wired the way production wires it (see ``_PROJECTS``)."""
+    from boardwise.parsers.schematic import build_project_model
+
+    model = _PROJECTS.get(path)
+    if model is None:
+        model = _PROJECTS[path] = build_project_model(path)
+    findings, _section = run_pcb_review(path, model=model)
+    return findings
 
 
 #: An **empty** shelf, not ``None``. The rules' documented contract is that
@@ -133,6 +162,36 @@ def _model_for(path: Path, title: str = "PCB1"):
                 extract_board(document, source.footprints(), source.stats),
                 build_design_model(source, document),
             )
+    raise AssertionError(f"{path.name} carries no PCB document titled {title!r}")
+
+
+def _schematic_page(path: Path, title: str = "PCB1"):
+    """The **schematic page this PCB document declares**, off ``META.board``.
+
+    The board chain 153b's value reading walks (151/153's own lookup): the PCB
+    document's ``META.board`` uuid against the project model's boards — never
+    designator overlap, which on 毕设FOC would answer with the wrong page
+    (Board1 and Board3 share ``C1``…``R6``). ``None`` when the document declares
+    no link (智能药箱's PCB1 does not), which is the honest 「no schematic view」
+    the rule degrades on.
+    """
+    from boardwise.engines.pcbreview import _pcb_documents
+    from boardwise.parsers.epru import load_epro2_source
+
+    model = _PROJECTS.get(path)
+    if model is None:
+        from boardwise.parsers.schematic import build_project_model
+
+        model = _PROJECTS[path] = build_project_model(path)
+    for doc_title, board_uuid, _document in _pcb_documents(load_epro2_source(path)):
+        if doc_title != title:
+            continue
+        for board in getattr(model, "boards", []) or []:
+            if str(
+                getattr(getattr(board, "board", None), "uuid", "") or ""
+            ) == str(board_uuid):
+                return board
+        return None
     raise AssertionError(f"{path.name} carries no PCB document titled {title!r}")
 
 
@@ -178,6 +237,7 @@ def test_the_three_rules_sit_in_the_foc_block_after_133b_five():
         "pcb-footprint-consistency",
         "pcb-polarity-orientation",
         "pcb-silk-designator",
+        "pcb-derating-package",
         "pcb-component-spacing",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
@@ -473,41 +533,67 @@ def test_r1_reports_a_cross_layer_zero_distance_as_no_connection():
 # ---------------------------------------------------------------------------
 
 
-def test_r1b_reports_that_100_has_no_zero_ohm_and_joins_with_two_10k():
-    """Acceptance anchor: 「板上有没有 0R 单点件」 — measured, the answer is **no**.
+def test_r1b_reads_100s_two_bridges_as_0r_from_the_schematic_page():
+    """**The corrected acceptance anchor (153b)**: 1.0.0 joins its domains with two 0 Ω.
 
-    毕设FOC 1.0.0 places **no 0 Ω resistor at all** (its ``R8`` is a 5 mΩ shunt),
-    and joins its two ground domains with ``R48`` (10 kΩ, ``GND``↔``PGND``) and
-    ``R49`` (10 kΩ, ``AGND``↔``PGND``). R1b must say exactly that: not
-    「connected by one 0R」, and **not** 「not connected at all」 — which is the
-    reading a 0 Ω-only pool would have produced, and the reason this batch's pool
-    is structural.
+    Before 153b this anchor said the opposite — 「1.0.0 places no 0 Ω resistor at
+    all; it joins its domains with two 10 kΩ resistors」 — and it was the PCB
+    document's stale ``component.value`` talking. Read through the schematic page
+    (which is what production wiring gives the rule), 毕设FOC 1.0.0's PCB1 has
+    ``R48`` (``0R``, ``GND``↔``PGND``) and ``R49`` (``0R``, ``AGND``↔``PGND``):
+    **two** 0 Ω ties, one per domain pair, and the PCB document's own copies of
+    both say ``10K``.
 
-    The row also names each part's value in ohms so a reader can see *why* it is
-    not the single point, rather than being told 「not a 0R」 without evidence.
+    Two things are pinned besides the values. First, the row still takes the
+    「not a single point」 branch, and that is the ruling's own semantics rather
+    than a leftover of the bug: 岳's 2026-10-08 convention is **exactly one** 0 Ω
+    between the power ground and the logic/analog ground, and this board ties the
+    power domain to the logic domain **twice** — ``GND`` and ``AGND`` are both
+    logic-domain nets (``U1`` joins them inside that domain), each with its own
+    ``0R`` to ``PGND``. 「Each domain pair has exactly one 0 R」 and 「the board has
+    exactly one 0 R」 are different readings, this rule has always used the
+    second, and 153b changed the *values* it judges, not the judgement.
+
+    Second, the row's evidence writes **both views** for the parts it judged —
+    「原理图 '0R' / PCB 文档 '10K'」 — so the divergence is on the record instead of
+    being resolved silently in either direction.
     """
     rows = [r for r in _rows(FOC_100, R1B) if r.board == "PCB1"]
-    assert len(rows) == 1, [(r.board, r.message[:80]) for r in rows]
-    row = rows[0]
-    assert row.board == "PCB1"
-    assert row.severity == "INFO"
+    assert len(rows) == 2, [(r.board, r.message[:80]) for r in rows]
+    row = next(r for r in rows if "not a single point" in r.message)
+    jumper = next(r for r in rows if r is not row)
+    assert row.severity == "INFO" and jumper.severity == "INFO"
 
     assert "**not a single point**" in row.message
     assert "R48" in row.message and "R49" in row.message
     assert "'GND'" in row.message and "'PGND'" in row.message
     assert "'AGND'" in row.message
-    assert "10K" in row.message
-    assert "non-zero" in row.message
+    assert "2 0 Ω resistor(s)" in row.message, (
+        "the account is two 0 Ω ties — the corrected reading; before 153b this "
+        "row said 「0 0 Ω resistor(s), 2 resistor(s) of a **non-zero** value」"
+    )
+    assert "10K" not in row.message, (
+        "no part on this row is a 10 kΩ bridge any more: the 10K was the PCB "
+        "document's placeholder copy"
+    )
     assert "岳's 2026-10-08 ruling asks for **exactly one 0 Ω**" in row.message
 
     ev = _evidence(row)
-    assert "cross-domain **0 Ω** ties" in ev, "the 0 Ω branch is stated as empty"
-    assert "non-zero** value" in ev
-    assert "= 10000 Ω" in ev, "the value is parsed and shown, not just asserted"
+    assert "cross-domain **0 Ω** ties" in ev
+    assert "R48 ('0R')" in ev and "R49 ('0R')" in ev
+    assert "non-zero** value" in ev, "the non-zero branch is stated as empty"
+    assert "= 10000 Ω" not in ev, "nothing here is judged as 10 kΩ any more"
     assert "structural" in ev, "the pool is named as structural"
     assert "focground.bridging_parts_of" in ev, (
         "and the row says which function built its pool, so a reader can go "
         "look at the sieve that produced it"
+    )
+    assert "原理图 '0R' / PCB 文档 '10K'" in ev, (
+        "the two views' disagreement is written down for both parts, so the row "
+        "can be audited without re-reading the archive"
+    )
+    assert "原理图声明优先" in ev and "回退" in ev, (
+        "and the reading order itself is stated on the row"
     )
     assert "0R 要靠近功率电解电容" in ev, (
         "the 「0R 要靠近功率电解」 convention is named even on the "
@@ -519,33 +605,72 @@ def test_r1b_reports_that_100_has_no_zero_ohm_and_joins_with_two_10k():
         "is 岳's"
     )
 
+    # R31 is 1.0.0's third 0 Ω on the schematic page, and it is a **jumper**:
+    # its pins sit on ``+24V`` and ``$1N74269``, neither a ground net. Before
+    # 153b the rule could not see it at all (its copy reads ``10K``); now it is
+    # reported by name and explicitly not counted toward the single point.
+    assert "R31" in jumper.message and "not a ground-domain tie" in jumper.message
+    assert "'+24V'" in jumper.message, jumper.message
+    assert jumper.target.component_ref == "R31"
+
 
 def test_r1b_the_bridging_pool_is_structural_not_value_based():
-    """The pool is 「two pins in two domains」, and 1.0.0 is why.
+    """The pool is 「two pins in two domains」; the value decides *which branch*.
 
-    Asserted three ways: the two 10 kΩ resistors **are** in the pool, the
-    ``U1`` (which bridges ``AGND``↔``GND``, i.e. inside the logic domain) is
-    **not** — the two-domain test is what excludes it, not its identity — and
-    ``zero_ohm_resistors_of`` is empty on this board.
+    Asserted three ways on the corrected values: ``R48``/``R49`` **are** in the
+    pool as ``0R`` ties, ``U1`` (which bridges ``AGND``↔``GND`` — two pins in the
+    *same* domain) is **not**, and ``zero_ohm_resistors_of`` holds exactly those
+    two.
+
+    The pool stays structural even though 153b's value fix makes every bridge on
+    this board a 0 Ω: a pool filtered by value cannot tell 「the two domains are
+    not connected」 from 「they are joined by a part that is not 0 Ω」, and only the
+    first of those is 岳's 「不连」 branch. The non-zero and UNKNOWN branches are
+    exercised on synthetic boards (``_unvalued_bridge_board`` here, and
+    ``tests/test_153b_ground_tie_values.py`` for the non-zero one) because no
+    fixture reaches them any more.
     """
     _board, model = _model_for(FOC_100)
+    schematic = _schematic_page(FOC_100, "PCB1")
 
-    bridges = {part.designator: part for part in bridging_parts_of(model, EMPTY_SHELF)}
+    bridges = {
+        part.designator: part
+        for part in bridging_parts_of(model, EMPTY_SHELF, schematic)
+    }
     assert set(bridges) == {"R48", "R49"}, sorted(bridges)
 
     r48 = bridges["R48"]
     assert (r48.net_a, r48.net_b) == ("GND", "PGND"), (r48.net_a, r48.net_b)
-    assert r48.ohms == 10000.0
-    assert r48.is_zero_ohm is False, "a 10 kΩ part is not 岳's single point"
-    assert r48.value == "10K"
+    assert r48.ohms == 0.0
+    assert r48.is_zero_ohm is True
+    assert r48.value == "0R", "judged on the schematic page's declaration"
+    assert r48.schematic_value == "0R" and r48.pcb_value == "10K", (
+        "both views are kept on the reading, which is what lets a row write "
+        "「原理图 0R / PCB 文档 10K」"
+    )
 
     assert "U1" not in bridges, (
         "U1 bridges AGND↔GND — two pins in the *same* domain — so the "
         "two-domain test excludes it and it is not a ground-domain tie"
     )
 
-    assert zero_ohm_resistors_of(model, EMPTY_SHELF) == [], (
-        "1.0.0 places no 0 Ω resistor bridging the two domains"
+    assert [
+        part.designator for part in zero_ohm_resistors_of(model, EMPTY_SHELF, schematic)
+    ] == ["R48", "R49"], (
+        "1.0.0's two cross-domain ties are both 0 Ω on the schematic page"
+    )
+
+    # The same pool read with **no** schematic view is the defect 153b removed:
+    # the PCB document's copies say 10K and the same two parts read as non-zero.
+    without_schematic = {
+        part.designator: part for part in bridging_parts_of(model, EMPTY_SHELF)
+    }
+    assert without_schematic["R48"].value == "10K", (
+        "with no schematic view the pool can only read the stale copy — which "
+        "is why every entry point takes one"
+    )
+    assert without_schematic["R48"].value_basis.startswith("原理图页未写"), (
+        "and it says so rather than presenting the copy as the drawing's word"
     )
 
 
@@ -604,9 +729,17 @@ def test_r1b_names_a_0_ohm_part_that_is_not_the_tie():
     ROBOT has no power domain at all, so it takes R1b's *no-power-domain* row
     instead; the jumper reading is asserted through the pool, which is where the
     part is actually found.
+
+    **153b**: this part is also the corpus's measured instance of the
+    **fallback**. ROBOT's schematic page states **no** value for ``R8`` (measured:
+    ``''``), so the ``0Ω`` in the PCB document is the only value there is — and
+    the reading records that it is a fallback rather than the drawing's own word.
+    An empty schematic value is a *different* case from a stale one, and both are
+    distinguished on the row (``value_basis``).
     """
     _board, model = _model_for(ROBOT)
-    zeros = all_zero_ohm_parts_of(model, EMPTY_SHELF)
+    schematic = _schematic_page(ROBOT, "PCB1")
+    zeros = all_zero_ohm_parts_of(model, EMPTY_SHELF, schematic)
     assert [part.designator for part in zeros] == ["R8"], [
         (p.designator, p.value) for p in zeros
     ]
@@ -616,7 +749,14 @@ def test_r1b_names_a_0_ohm_part_that_is_not_the_tie():
     assert r8.net_b == "$1N251", (
         "the far pin is not a ground net, so this 0 Ω bridges no domain pair"
     )
-    assert bridging_parts_of(model, EMPTY_SHELF) == [], (
+    assert r8.value == "0Ω" and r8.schematic_value == "" and r8.pcb_value == "0Ω", (
+        "the schematic page states nothing for R8, so the PCB document's value "
+        "is used"
+    )
+    assert "回退" in r8.value_basis, (
+        "and the reading says it is a fallback rather than the page's own word"
+    )
+    assert bridging_parts_of(model, EMPTY_SHELF, schematic) == [], (
         "and therefore it is not in the cross-domain bridging pool either"
     )
 
@@ -1006,6 +1146,12 @@ def test_the_133c_acceptance_matrix_across_five_boards():
     and the projection summary; ROBOT gives its own rows; llc / 药箱 have **no
     power ground at all** so R1 and R1b take their no-power-domain branch. The
     counts are measured, not aspirational.
+
+    **153b moved one cell**: 1.0.0's PCB1 now produces **two** R1b rows, not one —
+    the 「not a single point」 account of two ``0R`` ties, plus the jumper row for
+    ``R31`` (1.0.0's third ``0R`` on the schematic page, previously invisible
+    because its PCB copy reads ``10K``). No other cell moved: R1 and R5 never
+    read a value.
     """
     matrix = {
         # board fixture -> {PCB document title: {rule id: exact row count}}
@@ -1017,7 +1163,7 @@ def test_the_133c_acceptance_matrix_across_five_boards():
         # whole would hide that second branch, which is exactly what this matrix
         # exists to make visible.
         FOC_100: {
-            "PCB1": {R1: 2, R1B: 1, R5: 16},  # 15 nets + 1 unrecognised list
+            "PCB1": {R1: 2, R1B: 2, R5: 16},  # 15 nets + 1 unrecognised list
             "PCB2": {R1: 1, R1B: 1, R5: 0},
         },
         ROBOT: {"PCB1": {R1: 1, R1B: 1, R5: 1}},   # no power ground; 1 list
@@ -1025,7 +1171,7 @@ def test_the_133c_acceptance_matrix_across_five_boards():
         LLC: {"PCB1": {R1: 1, R1B: 1, R5: 1}},     # 1 unrecognised list
     }
     for path, per_board in matrix.items():
-        findings, _section = run_pcb_review(path)
+        findings = _findings(path)
         for title, expected in per_board.items():
             counts = {
                 rid: sum(
@@ -1144,38 +1290,67 @@ def test_mutation_removing_the_plane_reading_turns_100_into_all_none():
         )
 
 
-def test_mutation_narrowing_the_bridging_pool_to_zero_ohm_hides_100s_resistors():
-    """Mutation: pool only 0 Ω parts → 1.0.0 reads as 「not connected at all」.
+def test_mutation_reading_only_the_pcb_document_brings_100s_10k_back():
+    """Mutation: read the PCB document's copy alone → 1.0.0's two 0 Ω vanish.
 
-    The third mutation, and the one that motivates this batch's pool design.
-    Under the naive pool the board's two 10 kΩ bridging resistors vanish from
-    R1b entirely, the rule takes the 「不连」 branch, and the row says 「no part
-    bridges a power-domain net to a logic-domain net」 — a statement about the
-    board that is **false**, because ``R48`` and ``R49`` do exactly that.
+    This is **153b's own defect**, re-applied in process so the failure it caused
+    is observable rather than asserted. With the value read from the PCB document
+    alone, ``R48``/``R49`` come back ``10K`` (the copy's placeholder), both land in
+    the *non-zero* bucket instead of the 0 Ω one, and the row's account flips back
+    to 「0 0 Ω resistor(s), 2 resistor(s) of a **non-zero** value」 — and ``R31``,
+    the third ``0R``, disappears from the ledger entirely.
+
+    The mutation is applied by handing the rule a context with **no project
+    model** — which is exactly the state the code was in before the fix, since it
+    had no way to take a schematic view at all. Nothing is edited on disk, so
+    nothing has to be restored.
     """
-    _board, model = _model_for(FOC_100)
+    from boardwise.rules.pcb.focground import FocGroundTie
 
-    # The real pool: structural, and it finds both resistors.
-    real = bridging_parts_of(model, EMPTY_SHELF)
-    assert len(real) == 2, [p.designator for p in real]
+    board, model = _model_for(FOC_100)
+    schematic = _schematic_page(FOC_100, "PCB1")
 
-    # The mutated pool: value-based, 0 Ω only. On this board it is empty.
-    mutated = [
-        (designator, value)
-        for designator, value in _all_parts(model)
-        if _strip_ohms(value) in {"0", "0R", "0R0", "0.0", "0Ohm"}
+    real = bridging_parts_of(model, EMPTY_SHELF, schematic)
+    assert len(real) == 2 and all(part.is_zero_ohm for part in real), [
+        (p.designator, p.value, p.ohms) for p in real
     ]
-    assert mutated == [], (
-        "a 0 Ω-only pool finds nothing on 1.0.0 — the two parts that actually "
-        "join its ground domains are both 10 kΩ"
+
+    mutated = bridging_parts_of(model, EMPTY_SHELF)
+    assert len(mutated) == 2
+    assert all(part.ohms == 10000.0 for part in mutated), [
+        (p.designator, p.value, p.ohms) for p in mutated
+    ]
+    assert [p.designator for p in zero_ohm_resistors_of(model, EMPTY_SHELF)] == []
+    assert [
+        p.designator for p in zero_ohm_resistors_of(model, EMPTY_SHELF, schematic)
+    ] == ["R48", "R49"], "the two readings disagree in kind, not merely in value"
+
+    # The mutated rule output, from the same board: a context with no project
+    # model, i.e. the pre-153b code's whole world.
+    mutated_rows = FocGroundTie().check_with_library(
+        PcbReviewContext(board=board, pcb_model=model), EMPTY_SHELF
+    )
+    mutated_account = [r for r in mutated_rows if "not a single point" in r.message]
+    assert len(mutated_account) == 1
+    assert "0 0 Ω resistor(s), 2 resistor(s) of a **non-zero** value" in (
+        mutated_account[0].message
+    ), (
+        "with no schematic view the two domains are reported as joined by two "
+        "**non-zero** resistors and no 0 Ω at all — the false account 153b fixed"
     )
 
     rows = [r for r in _rows(FOC_100, R1B) if r.board == "PCB1"]
-    assert len(rows) == 1
-    assert "not connected at all" not in rows[0].message, (
+    assert len(rows) == 2
+    account = next(r for r in rows if "not a single point" in r.message)
+    assert "not connected at all" not in account.message, (
         "the real rule must NOT take the 不连 branch on a board whose two "
-        "domains are joined by two resistors"
+        "domains are joined by two 0 Ω resistors"
     )
+    assert "2 0 Ω resistor(s)" in account.message
+    assert "of a **non-zero** value" not in account.message, (
+        "and no part on the row is a non-zero bridge any more"
+    )
+    assert "0 0 Ω resistor(s)" not in account.message
 
 
 # ---------------------------------------------------------------------------
