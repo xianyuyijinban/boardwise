@@ -629,6 +629,8 @@ def test_both_rules_are_in_builtin_pcb_rules_in_the_declared_order():
         "pcb-foc-thermal-via-array",
         "pcb-foc-thermal-exit-path",
         "pcb-footprint-consistency",
+        "pcb-polarity-orientation",
+        "pcb-silk-designator",
         "pcb-component-spacing",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",

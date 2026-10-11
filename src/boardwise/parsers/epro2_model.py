@@ -265,7 +265,9 @@ def build_design_model(
     context = (
         source.pcb_context()
         if document is None
-        else collect_pcb_context(document, source.footprints(), source.stats)
+        else collect_pcb_context(
+            document, source.footprints(), source.stats, source.footprint_artwork()
+        )
     )
     if context is None:
         model.raw["project"] = dict(source.project_meta)

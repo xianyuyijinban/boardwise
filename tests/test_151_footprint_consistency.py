@@ -259,15 +259,26 @@ def test_compare_names_grades_by_precedence_and_reports_the_reason():
 
 
 def test_the_rule_is_registered_and_the_list_is_still_the_truth():
-    """151 inserts one rule, immediately before the geometry sweep.
+    """151 inserts one rule, at the head of the device-reading tail.
 
     Same pin the 126-family batches flip: a rule that exists but is not listed
     does not run, and a rule listed in the wrong place re-orders ``checksRun``
     for every reader comparing two reports.
+
+    **152 moved the assertion by two positions, and the move is the news**: the
+    E 阶段第二棒's two device rules (``pcb-polarity-orientation``,
+    ``pcb-silk-designator``) are inserted **between** this rule and the geometry
+    sweep, in the task book's own 器件检查 order (封装一致 → 极性 → 丝印). The
+    claim this pin exists for is unchanged — 151's rule is still the **first**
+    of the device readings and still sits ahead of ``pcb-component-spacing``;
+    what moved is which device rule is *last*. The new pair's positions are
+    pinned in `test_152_polarity_silk.py`.
     """
     ids = [rule.id for rule in BUILTIN_PCB_RULES]
     assert RULE_ID in ids
-    assert ids.index(RULE_ID) == ids.index("pcb-component-spacing") - 1
+    assert ids.index(RULE_ID) == ids.index("pcb-component-spacing") - 3
+    assert ids.index("pcb-polarity-orientation") == ids.index(RULE_ID) + 1
+    assert ids.index("pcb-silk-designator") == ids.index(RULE_ID) + 2
     rule = next(r for r in BUILTIN_PCB_RULES if r.id == RULE_ID)
     assert isinstance(rule, FootprintConsistency)
     assert rule.level == "L1-pcb-geometry"

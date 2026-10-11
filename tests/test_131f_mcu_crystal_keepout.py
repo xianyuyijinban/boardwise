@@ -503,6 +503,8 @@ def test_rule_is_declared_house_rule_with_no_threshold_and_is_in_the_list():
         "pcb-foc-thermal-via-array",
         "pcb-foc-thermal-exit-path",
         "pcb-footprint-consistency",
+        "pcb-polarity-orientation",
+        "pcb-silk-designator",
         "pcb-component-spacing",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",

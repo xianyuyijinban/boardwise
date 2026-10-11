@@ -416,7 +416,8 @@ a mix of schematic names (`DC-`, `DC+`, `CHS`, `DHS`, `CHG`, `CLG`, `DHG`,
 Counted in `ParseStats.unconsumed_types` so it stays obvious what else the
 format carries: `RULE` (242 whole-file), `RULE_SELECTOR`, `RULE_TEMPLATE`,
 `PRIMITIVE`, `ELE_PLACEHOLDER`, `META`, `CANVAS`, `ACTIVE_LAYER`, `LAYER_PHYS`,
-`PANELIZE`, `PREFERENCE`, `SILK_OPTS`, `DIMENSION`, `STRING`, `NET`, `GROUP`.
+`PANELIZE`, `PREFERENCE`, `SILK_OPTS`, `DIMENSION`, `NET`, `GROUP`. (`STRING`
+was on this list until 152; see below for what it carries and where it goes.)
 
 Two of them are worth a future task:
 
@@ -427,7 +428,38 @@ Two of them are worth a future task:
   {"type":"RULE","ticket":74,"id":"[\"RULE\",\"SAFE\",\"safeClearance\"]"}||{...}
   {"type":"RULE_SELECTOR","ticket":59675,"id":"[\"RULE_SELECTOR\",[\"NET\",\"VS2\"]]"}||{...}
   ```
-- **`STRING` / `TEXT`** — silkscreen text (including Chinese: `全桥LLC副边输出`).
+- ~~**`STRING` / `TEXT`** — silkscreen text~~ — **consumed since 152.** Silkscreen
+  arrives in three places, all of them now read into
+  `BoardGeometry.silk_texts` / `.silk_shapes`:
+  - a **PCB** `STRING` is free text the designer drew on the board
+    (``CLK``/``DIO``/``GND`` at ``fontSize`` 40 on 毕设FOC 1.0.0's ``PCB1``,
+    rotated to the connector's axis);
+  - a **FOOTPRINT** `STRING` is a printed *mark* the library part carries —
+    ``+`` / ``-`` / ``*`` / ``1``/``2``/``3`` — instantiated per placement like
+    a pad (measured: four of 毕设FOC 1.0.0's 68 footprint documents carry one);
+  - a **placement's designator** is neither: it is an ``ATTR`` record with
+    ``key="Designator"`` and **its own x/y/angle/fontSize/layerId/valueVisible**,
+    joined to the ``COMPONENT`` by ``parentId``. That is the fact the whole
+    silkscreen rule rests on — the designator text is not rendered from the
+    footprint at read time, it is stored per placement. Measured on 毕设FOC
+    1.0.0 ``PCB1``: 122 records for 122 placements, all on layer 3, all
+    ``fontSize`` 45, 91 with ``valueVisible`` true; ROBOT's ``PCB1`` has 50 for
+    49, the extra one a stale duplicate of ``R6`` whose ``parentId`` names no
+    component.
+
+    **What the format does *not* carry is the glyph advance**: ``fontSize`` is
+    the text height and nothing states how wide a character is, so a text box
+    is a *model* (`rules/pcb/silk.py::ADVANCE_BAND`) and any consumer must say
+    which ratio it assumed.
+
+    Also 152: a FOOTPRINT document's ``POLY``/``FILL``/``CIRCLE`` primitives are
+    instantiated per placement into ``BoardGeometry.silk_shapes`` with **both**
+    frames (board and footprint-local) and with their layer read through the
+    running document's ``LAYER`` table (3 = ``TOP_SILK``, 48 =
+    ``COMPONENT_SHAPE``, 49 = ``COMPONENT_MARKING``, 50 = ``PIN_SOLDERING``).
+    The 49-layer pin-1 dot is the one that matters most to get right: it is
+    **not** silkscreen (Gerber prints layers 3/4 only), so it is not evidence
+    of a printed direction mark.
 
 `BLOB` (1) is a base64 SVG (`data:image/svg+xml;base64,...`) and is the
 truncated last line of the fixture.

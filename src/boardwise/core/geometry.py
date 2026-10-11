@@ -41,6 +41,9 @@ __all__ = [
     "StackupEntry",
     "ComponentPlacement",
     "PadGeometry",
+    "SilkShape",
+    "SilkText",
+    "SILK_LAYER_TYPES",
     "TrackSegment",
     "ViaGeometry",
     "PourShape",
@@ -155,6 +158,25 @@ COPPER_LAYER_TYPES: frozenset[str] = frozenset({"TOP", "BOTTOM", "SIGNAL", "PLAN
 #: :func:`boardwise.parsers.epru.pad_effective_layers` accepts **either** as the
 #: barrel signal rather than insisting on one.
 MULTI_LAYER_ID = 12
+
+
+#: Layer types that carry **printed legend** (丝印) — the ink a fab prints on
+#: the board. `LayerInfo.layer_type` carries these strings verbatim from the
+#: document's ``LAYER`` table (measured: ``["LAYER",3]`` reads
+#: ``{"layerName": "Top Silkscreen Layer", "layerType": "TOP_SILK"}`` on every
+#: board fixture), so a reader never has to hard-code the ids 3/4 — a document
+#: that renumbers its layers still classifies correctly.
+SILK_LAYER_TYPES: frozenset[str] = frozenset({"TOP_SILK", "BOT_SILK"})
+
+#: Layer types carrying the *other* per-placement artwork a footprint document
+#: holds: the body/courtyard outline (``COMPONENT_SHAPE``), the component
+#: marking layer (``COMPONENT_MARKING`` — where EasyEDA draws the pin-1 dot),
+#: the pad solder areas (``PIN_SOLDERING``) and the pin-floating layer.
+#: Measured on 毕设FOC 1.0.0: ``C0603`` keeps its body rectangle on layer 48,
+#: its pin-1 dot on 49, its two solder areas on 50 and its silk on 3.
+ARTWORK_LAYER_TYPES: frozenset[str] = frozenset(
+    {"COMPONENT_SHAPE", "COMPONENT_MARKING", "PIN_SOLDERING", "PIN_FLOATING"}
+)
 
 
 @dataclass(frozen=True)
@@ -364,6 +386,200 @@ class PadGeometry:
         an absent answer and says so, rather than a plausible-looking one.
         """
         return set(self.effective_layer_ids)
+
+
+@dataclass
+class SilkShape:
+    """One **graphic primitive** of a placement's non-copper artwork (task 152).
+
+    The PCB document carries no silkscreen of its own beyond free text: a
+    footprint's legend, body outline and pin-1 dot live in its **FOOTPRINT**
+    document (source of truth per :func:`boardwise.parsers.epru.pad_templates`'s
+    sibling) and are instantiated per placement exactly like pads. This is that
+    instantiated primitive, in **both** frames:
+
+    * ``points`` — board coordinates (the placement transform already applied),
+      so a rule can intersect it with pads and other placed artwork;
+    * ``local_points`` — footprint-local, so a rule can ask what the *footprint*
+      declares (which side its polarity mark is on) independently of how this
+      instance happens to be rotated.
+
+    ``layer_id`` is the **footprint's own** layer id (3 = top silk, 48 = body,
+    49 = marking, ...) and ``layer_kind`` is the reading of that id through the
+    running document's ``LAYER`` table — the same "declared vs effective"
+    distinction :class:`PadGeometry` makes, and for the same reason: the layer
+    table is the only thing that says what id 3 *means*, and hard-coding it
+    would be a guess about the document rather than a reading of it.
+
+    ``kind`` is the record type it came from (``"poly"`` / ``"fill"`` /
+    ``"circle"`` / ``"rect"`` / ``"line"``). ``radius`` is set for a
+    ``CIRCLE`` primitive (measured: the pin-1 dot is a 2.36 mil circle) and
+    ``None`` otherwise; ``arc_count`` counts the ``ARC`` segments inside
+    ``path`` that were chorded (their endpoints are kept, their sweep dropped —
+    the same reading ``epru._path_points`` documents for copper polygons).
+    """
+
+    id: str = ""
+    component: str | None = None
+    component_id: str | None = None
+    #: Record type of the primitive: ``poly`` / ``fill`` / ``circle`` / ``rect`` / ``line``.
+    kind: str = ""
+    #: Footprint-local layer id, and what the running document's table calls it.
+    layer_id: int | None = None
+    layer_kind: str = ""
+    points: list[Point] = field(default_factory=list)
+    local_points: list[Point] = field(default_factory=list)
+    width: float = 0.0
+    filled: bool = False
+    radius: float | None = None
+    arc_count: int = 0
+    #: Free text, for a silk ``STRING`` primitive inside a footprint (the
+    #: ``"+"`` / ``"-"`` polarity marks). Empty for polygons.
+    text: str = ""
+
+    @property
+    def bbox(self) -> BBox | None:
+        return BBox.from_points(self.points)
+
+    @property
+    def local_bbox(self) -> BBox | None:
+        return BBox.from_points(self.local_points)
+
+    @property
+    def is_silk(self) -> bool:
+        """True when this primitive is **printed legend** (layer type TOP/BOT_SILK)."""
+        return self.layer_kind in SILK_LAYER_TYPES
+
+    def centroid(self, local: bool = False) -> Point | None:
+        """Mean of the vertices (``None`` when there are none).
+
+        **Not** the area centroid of a filled polygon and **not** a substitute
+        for one: it is the reading this model uses to place a primitive for
+        comparison, and it is stated as such so a reader does not mistake it
+        for a physical centre of mass. A single-point primitive (a chorded
+        circle kept as its centre) returns that point, which is exactly what
+        the pin-1 dot needs.
+        """
+        points = self.local_points if local else self.points
+        if not points:
+            return None
+        return Point(
+            sum(p.x for p in points) / len(points),
+            sum(p.y for p in points) / len(points),
+        )
+
+
+@dataclass
+class SilkText:
+    """One instantiated piece of silkscreen **text** (task 152).
+
+    Three sources, all normalised here so a rule reads one shape:
+
+    * ``source == "designator"`` — the placement's own ``Designator`` attribute
+      (an ``ATTR`` record with ``key="Designator"``). **Measured, and this is
+      the fact the whole silk rule rests on**: a placed component's designator
+      is *not* derived from the FOOTPRINT document at render time — the PCB
+      document carries its own ``ATTR`` record with the text's own
+      ``x``/``y``/``angle``/``fontSize``/``layerId``/``valueVisible``. On
+      毕设FOC 1.0.0 that is 122 designator records for 122 placements, all on
+      layer 3, all ``fontSize`` 45, all ``origin`` ``LEFT_BOTTOM``; 91 of them
+      ``valueVisible``.
+    * ``source == "footprint"`` — a ``STRING`` record **inside a FOOTPRINT
+      document** (instantiated per placement like :class:`PadGeometry`). These
+      are the footprint's own printed marks — the ``"+"`` / ``"-"`` polarity
+      signs and ``"1"``/``"2"``/``"3"`` pin labels; measured on the library
+      footprints ``CONN-TH_XT30UPB-M`` / ``CONN-TH_XT60PW-M`` / ``R_3386P``.
+    * ``source == "board"`` — a ``STRING`` record directly in the PCB document:
+      free text the designer drew on the board (measured: the three labels
+      ``CLK`` / ``DIO`` / ``GND`` next to PCB1's programming header, at
+      ``fontSize`` 40–50, rotated to the connector's axis).
+
+    ``angle`` is in **degrees, in the same frame and convention as
+    :meth:`ComponentPlacement.transform`** (y-up, positive = anticlockwise) —
+    the two are directly comparable, which is what lets a rule ask whether a
+    designator still points the same way as the part it names. The raw stored
+    value is kept in :attr:`stored_angle` because EasyEDA accumulates whole
+    turns (measured values include 810, 1710, 2250 — i.e. 90°, 270°, 90°), and
+    a reader that printed the raw number without reducing it would report
+    nonsense; the reduction is done in the parser, once, and both numbers are
+    kept so the reduction is auditable.
+
+    ``mirror``/``reverse`` are the record's own flags, carried verbatim;
+    ``visible`` is ``valueVisible`` (a designator record with ``false`` is a
+    designator the designer switched **off** — the board carries no designator
+    for that part).
+    """
+
+    component: str | None = None
+    component_id: str | None = None
+    text: str = ""
+    source: str = ""
+    #: Board-frame anchor (for ``designator``/``board`` sources this is the
+    #: record's own x/y; for a footprint ``STRING`` it is the transformed point).
+    x: float = 0.0
+    y: float = 0.0
+    #: Footprint-local anchor; identical to ``x``/``y`` for a PCB-document record.
+    local_x: float = 0.0
+    local_y: float = 0.0
+    #: Reduced rotation (mod 360) in degrees, and the raw stored value.
+    angle: float = 0.0
+    stored_angle: float = 0.0
+    layer_id: int | None = None
+    layer_kind: str = ""
+    font_size: float = 0.0
+    stroke_width: float = 0.0
+    origin: str = ""
+    mirror: bool = False
+    reverse: bool = False
+    visible: bool = True
+    font_family: str = ""
+
+    @property
+    def is_silk(self) -> bool:
+        return self.layer_kind in SILK_LAYER_TYPES
+
+    def corners(self, advance: float) -> list[Point]:
+        """The text's **frame**: the origin-anchored box, rotated onto the board.
+
+        The box is ``len(text) * advance * font_size`` wide and
+        ``font_size`` tall, anchored at :attr:`origin` (for every designator on
+        the measured boards that is ``LEFT_BOTTOM``) and rotated by
+        :attr:`angle` — so the box runs from the anchor along the text
+        direction, rising by the font size across it.
+
+        **The width is a model, not a reading, which is why it is a parameter
+        and not a constant here.** ``.epru`` carries no glyph advance, so the
+        parser cannot know it and does not claim to; the caller states the
+        ratio it uses. See :data:`boardwise.rules.pcb.silk.ADVANCE_BAND` for
+        the band the rule measures with and why an overlap is only reported
+        when it survives the narrowest end of that band.
+        """
+        width = len(self.text) * advance * self.font_size
+        height = self.font_size
+        origin = str(self.origin or "LEFT_BOTTOM").upper()
+        if "RIGHT" in origin:
+            x0, x1 = -width, 0.0
+        elif "CENTER" in origin:
+            x0, x1 = -width / 2.0, width / 2.0
+        else:  # LEFT_*
+            x0, x1 = 0.0, width
+        if "TOP" in origin:
+            y0, y1 = -height, 0.0
+        elif "MIDDLE" in origin:
+            y0, y1 = -height / 2.0, height / 2.0
+        else:  # *_BOTTOM
+            y0, y1 = 0.0, height
+        rad = math.radians(self.angle)
+        cos_a, sin_a = math.cos(rad), math.sin(rad)
+        out: list[Point] = []
+        for lx, ly in ((x0, y0), (x1, y0), (x1, y1), (x0, y1)):
+            out.append(
+                Point(
+                    self.x + lx * cos_a - ly * sin_a,
+                    self.y + lx * sin_a + ly * cos_a,
+                )
+            )
+        return out
 
 
 @dataclass
@@ -662,6 +878,18 @@ class BoardGeometry:
     vias: list[ViaGeometry] = field(default_factory=list)
     pours: list[PourShape] = field(default_factory=list)
     outline: BoardOutline | None = None
+    #: 152: the placement artwork that is **not copper** — footprint silkscreen,
+    #: body/courtyard outlines and component-marking primitives, instantiated
+    #: at each placement (see :class:`SilkShape`). Empty for a hand-built board
+    #: and for a backup whose FOOTPRINT documents were not carried out with it.
+    silk_shapes: list[SilkShape] = field(default_factory=list)
+    #: 152: every piece of silkscreen **text** on the board — each placement's
+    #: ``Designator`` attribute, the printed marks carried by the footprint
+    #: documents, and free text drawn in the PCB document (see
+    #: :class:`SilkText`). Unlike the copper lists this one is **not** net-indexed:
+    #: legend has no net, and pretending it had one is what the net index exists
+    #: to avoid.
+    silk_texts: list[SilkText] = field(default_factory=list)
     nets: dict[str, NetGeometry] = field(default_factory=dict)
     stats: ParseStats = field(default_factory=ParseStats)
 
@@ -729,6 +957,30 @@ class BoardGeometry:
     def pads_for_component(self, designator: str) -> list[PadGeometry]:
         return [p for p in self.pads if p.component == designator]
 
+    # -- 152: legend ----------------------------------------------------
+
+    def silk_shapes_for(self, designator: str) -> list[SilkShape]:
+        """The artwork primitives of one placement (silkscreen, body, marking)."""
+        return [s for s in self.silk_shapes if s.component == designator]
+
+    def silk_texts_for(self, designator: str) -> list[SilkText]:
+        """Every piece of legend belonging to one placement: its own designator
+        record plus any printed mark its footprint carries.
+
+        The two are **not** interchangeable and the caller can tell them apart
+        by :attr:`SilkText.source` — a ``"designator"`` is the board's own
+        record for the part (so it carries ``visible``), a ``"footprint"`` is
+        the library's printed mark (so it carries the footprint's intent).
+        """
+        return [t for t in self.silk_texts if t.component == designator]
+
+    def designator_text(self, designator: str) -> SilkText | None:
+        """The placement's own designator record, or ``None`` when it has none."""
+        for text in self.silk_texts:
+            if text.component == designator and text.source == "designator":
+                return text
+        return None
+
     def bbox(self) -> BBox | None:
         """Bounding box of all geometry (outline included), or ``None``."""
         pts: list[Point] = []
@@ -754,6 +1006,8 @@ class BoardGeometry:
             "tracks": len(self.tracks),
             "vias": len(self.vias),
             "pours": len(self.pours),
+            "silk_shapes": len(self.silk_shapes),
+            "silk_texts": len(self.silk_texts),
             "nets": len(self.nets),
             "bbox_mil": None if bbox is None else [bbox.min_x, bbox.min_y, bbox.max_x, bbox.max_y],
             "bbox_mm": None if bbox is None else list(bbox.as_mm),

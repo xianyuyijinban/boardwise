@@ -1058,8 +1058,23 @@ def test_llc_is_clean_under_both_distance_rules():
     # `test_151_footprint_consistency.py`, so this pin keeps saying what it
     # always said — *126b's two distance rules and every rule that existed
     # before the FOC pack are silent on llc*.
+    # **152 subtracts two more ids, for the third time the subtraction is the
+    # finding.** Neither device rule of the E 阶段 second batch is silent on
+    # llc: ``pcb-silk-designator`` reads 47 designator records and files four
+    # WARNs about llc's own legend (``D2``/``R2``'s ink over their own pads,
+    # ``C3``'s designator wholly inside ``U8``'s body outline), and
+    # ``pcb-polarity-orientation`` files one WARN naming the four SMB diodes
+    # that are placed in two different directions. Neither is a distance
+    # measurement moving; both sets are pinned in
+    # `test_152_polarity_silk.py`.
     assert [
-        f for f in findings if f.rule_id not in foc_ids | {"pcb-footprint-consistency"}
+        f for f in findings
+        if f.rule_id
+        not in foc_ids | {
+            "pcb-footprint-consistency",
+            "pcb-polarity-orientation",
+            "pcb-silk-designator",
+        }
     ] == [], (
         f"llc is clean under both rules; got "
         f"{[(f.rule_id, f.message) for f in findings]}"
@@ -1128,6 +1143,8 @@ def test_llc_is_clean_under_both_distance_rules():
         "pcb-foc-thermal-via-array",
         "pcb-foc-thermal-exit-path",
         "pcb-footprint-consistency",
+        "pcb-polarity-orientation",
+        "pcb-silk-designator",
         "pcb-component-spacing",
         "pcb-track-ampacity", "pcb-voltage-spacing",
     ]

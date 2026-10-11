@@ -37,6 +37,8 @@ from ..core.measure import read_stackup
 from ..rules.pcb.base import PcbReviewContext, PcbRule
 from ..rules.pcb.distance import ComponentSpacing, DecapDistance
 from ..rules.pcb.footprint import FootprintConsistency
+from ..rules.pcb.polarity import PolarityOrientation
+from ..rules.pcb.silk import SilkDesignator
 from ..rules.pcb.ipc import TrackAmpacity, VoltageSpacing
 from ..rules.pcb.crystal import McuCrystalPlacement
 from ..rules.pcb.crystalkeepout import McuCrystalKeepout
@@ -141,6 +143,8 @@ BUILTIN_PCB_RULES: list[PcbRule] = [
     FocThermalViaArray(),
     FocThermalExitPath(),
     FootprintConsistency(),
+    PolarityOrientation(),
+    SilkDesignator(),
     ComponentSpacing(),
     TrackAmpacity(),
     VoltageSpacing(),
@@ -352,12 +356,13 @@ def run_pcb_review(
         return [], None  # 缺席而非空: nothing was reviewed, so nothing is claimed
 
     footprints = source.footprints()
+    artwork = source.footprint_artwork()
     module_of = build_module_of(model, intent, modules)
     findings: list[Finding] = []
     boards: list[dict] = []
 
     for title, board_uuid, document in documents:
-        board = extract_board(document, footprints, source.stats)
+        board = extract_board(document, footprints, source.stats, artwork)
         ctx = PcbReviewContext(
             board=board,
             board_title=title,

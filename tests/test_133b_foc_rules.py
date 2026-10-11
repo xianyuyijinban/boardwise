@@ -160,6 +160,8 @@ def test_the_five_foc_rules_sit_between_the_mcu_block_and_the_geometry_sweep():
         "pcb-foc-return-path",
         *FOC_133D_RULE_IDS,
         "pcb-footprint-consistency",
+        "pcb-polarity-orientation",
+        "pcb-silk-designator",
         "pcb-component-spacing",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",

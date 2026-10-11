@@ -740,6 +740,19 @@ def test_the_llc_fixture_stays_clean_under_the_fixed_rules():
         "pcb-foc-ground-domains", "pcb-foc-ground-tie", "pcb-foc-return-path",
         # 151's footprint rule, for the reason in the docstring above.
         "pcb-footprint-consistency",
+        # 152's two device rules, for the same reason and with the same
+        # character: both are **not** silent on llc, and what they say is a fact
+        # about llc itself rather than a distance moving.
+        # ``pcb-silk-designator`` reads 47 designator records (all visible, all
+        # on TOP_SILK/BOT_SILK) and files four WARNs that are llc's own layout:
+        # ``D2``/``R2``'s designator ink over their own pads (28.9 / 4.5 mil at
+        # the widest glyph model) and ``C3``'s designator lying wholly inside
+        # ``U8``'s body outline. ``pcb-polarity-orientation`` reads the four SMB
+        # diodes (``D1``–``D4``) and files one WARN: ``D1``/``D2`` point one way
+        # and ``D3``/``D4`` the other, i.e. the same package is placed in two
+        # directions on this board. Both sets are pinned in
+        # `test_152_polarity_silk.py`.
+        "pcb-polarity-orientation", "pcb-silk-designator",
     }
     assert [f for f in findings if f.rule_id not in foc_ids] == [], [
         (f.rule_id, f.message) for f in findings if f.rule_id not in foc_ids

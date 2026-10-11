@@ -33,6 +33,18 @@ Layout of the package as the batches land:
   first PCB rule that reads the *schematic* model by designator, which is why
   :attr:`PcbReviewContext.board_uuid` (the PCB document's ``META.board`` link
   to the schematic ``BoardRef``) exists.
+* ``polarity`` — 极性与方向 (152, E 阶段第二棒 · 族 A): a polarised part's
+  printed direction mark, whether it agrees with the schematic's polarity pin,
+  and whether one footprint is placed in one direction across the board. The
+  polarity fact is *declared* — the symbol's pin names (``+``/``-``, ``K``/``A``,
+  ``C``/``A``) and the DEVICE library's ``Type``/``Polarity`` — never inferred
+  from pad count or shape.
+* ``silk`` — 丝印 (152 · 族 B): every placement's designator is an ``ATTR
+  key=Designator`` record in the PCB document carrying its own x/y/angle/font
+  size/layer/visibility, so 「位号压焊盘」 and 「位号被本体压住」 are geometry
+  questions. The glyph advance is not in the file, which is why the overlap
+  check measures with a *band* of widths and only warns at the narrowest end
+  (see that module's ``ADVANCE_BAND``).
 
 The package is importable from the start; ``BUILTIN_PCB_RULES`` was **empty**
 in 126a and its structure gate (the test that says "the list is the truth") is

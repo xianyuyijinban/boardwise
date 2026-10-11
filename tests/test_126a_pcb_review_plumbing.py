@@ -170,6 +170,8 @@ def test_the_builtin_pcb_rule_list_is_the_126b_distance_pair_then_the_126c_pair(
         "pcb-foc-thermal-via-array",
         "pcb-foc-thermal-exit-path",
         "pcb-footprint-consistency",
+        "pcb-polarity-orientation",
+        "pcb-silk-designator",
         "pcb-component-spacing",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
@@ -368,6 +370,8 @@ def test_run_pcb_review_reads_every_pcb_document_of_the_foc_fixture():
             "pcb-foc-thermal-via-array",
             "pcb-foc-thermal-exit-path",
             "pcb-footprint-consistency",
+            "pcb-polarity-orientation",
+            "pcb-silk-designator",
             "pcb-component-spacing",
             "pcb-track-ampacity", "pcb-voltage-spacing",
         ]
@@ -513,6 +517,8 @@ def test_checkup_offline_with_a_pcb_document_carries_the_pcb_review_section(
         "pcb-foc-thermal-via-array",
         "pcb-foc-thermal-exit-path",
         "pcb-footprint-consistency",
+        "pcb-polarity-orientation",
+        "pcb-silk-designator",
         "pcb-component-spacing", "pcb-voltage-spacing",
     }
     # 126a did not touch the schema or the verdict; **126d did**, by bumping the
@@ -883,9 +889,29 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # 139's tree. (The value was measured as `357c12ed` first; the batch's own
     # last docstring tidy — the ``CHIP_SIZE_CODES`` table's comment — moved it to
     # `b67694ec`, which is the digest doing its job on prose.)
+    # **152 moved the recursive digest only again** — b67694ec -> 315a1e72 — and
+    # the **direct** one stays at `4f056aaf` for the twelfth batch running: E2
+    # landed entirely inside `rules/pcb/`. Two new files are the cause
+    # (`polarity.py` for `pcb-polarity-orientation`, `silk.py` for
+    # `pcb-silk-designator`); the other files of the batch — `parsers/epru.py`,
+    # `core/geometry.py`, `engines/pcbreview.py` — are outside this recipe by
+    # construction, which is the known limit recorded above (152 is the first
+    # batch whose *data source* work also lands outside it: the silk shapes and
+    # designator text it reads are new fields on `BoardGeometry`). Measured, not
+    # assumed: recomputing this recipe over the tree with `polarity.py` and
+    # `silk.py` omitted returns exactly `b67694ec`, i.e. 151's tree. (The value
+    # was measured as `a38e8e4f` first and as `089b6efa` mid-run — the batch's own
+    # last tidy *while the sweep was running*: dropping a now-unused
+    # `_box_inside` helper and turning a `min(key=-worst)` into
+    # `max(key=worst)` in the silk rule moved it twice more. Both intermediate
+    # values were read off half-edited files, which is 151's measurement race
+    # exactly; the stable value over the delivered tree is `315a1e72`.)
+    # **E2b moved it once more** — 315a1e72 -> 0196dc79 — 岳 2026-10-11 裁
+    # 「方向不统一」WARN 降 INFO，改了 polarity.py 的 severity 与文案
+    # （test_152 四处期望同步改 INFO）。
     assert recursive != old_digest, "the subpackage is inside the recipe now"
     assert old_digest == "4f056aaf"
-    assert recursive == "b67694ec", (
+    assert recursive == "0196dc79", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

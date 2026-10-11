@@ -91,11 +91,27 @@ CH340 = FIXTURES / "ch340_golden.epro2"
 #: carries ``target.component_ref`` and therefore chains to a device, which is
 #: what this set must not swallow and does not. What each row says is pinned in
 #: `test_151_footprint_consistency.py`.
+#:
+#: **152 widens it by two, on the same test.** ``pcb-polarity-orientation`` files
+#: board-scoped rows for: the per-board 极性读数小结, the 「原理图没有声明极性脚」
+#: INFO (its subject is *every* part whose symbol omits the polarity pins — a
+#: statement about the schematic's symbol library, not about one part) and the
+#: 「同类极性器件方向不统一」WARN (its subject is a **footprint name** shared by
+#: several parts, and it lists them all). ``pcb-silk-designator`` files the
+#: per-board 丝印读数小结, the 位号方向分布 INFO, the 被关掉位号 list, the
+#: 宽字形压焊盘 measurement row and the 「部分被本体压住」row — all of which are
+#: statements about the board's legend, each naming *several* designators. Every
+#: per-part row these two rules file (压焊盘的 WARN、被完全压住的 WARN、极性标记
+#: 与极性脚不符的 ERROR、无方向标记的 ERROR) carries ``target.component_ref``
+#: and therefore chains to a device, which is what this set must not swallow.
+#: What each row says is pinned in `test_152_polarity_silk.py`.
 DEVICE_LESS_ALLOWED: frozenset[str] = frozenset({
     "pcb-foc-gate-trace-width",
     "pcb-foc-ground-domains",
     "pcb-foc-ground-tie",
     "pcb-footprint-consistency",
+    "pcb-polarity-orientation",
+    "pcb-silk-designator",
 })
 
 

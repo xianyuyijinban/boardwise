@@ -64,6 +64,8 @@ from ..core.geometry import (
     ParseStats,
     Point,
     PourShape,
+    SilkShape,
+    SilkText,
     StackupEntry,
     TrackSegment,
     ViaGeometry,
@@ -72,18 +74,24 @@ from ..core.geometry import (
 __all__ = [
     # PCB geometry — what this module is for.
     "Epro2Source",
+    "ArtworkTemplate",
     "PadTemplate",
     "PcbContext",
     "POURED_SCALE",
+    "ARTWORK_RECORD_TYPES",
     "build_board_geometry",
+    "build_silk",
     "collect_pcb_context",
     "extract_board",
+    "footprint_artwork",
     "load_epro2_source",
     "pad_effective_layers",
     "pad_net_key",
     "pad_templates",
     "parse_epro2",
     "parse_epru_text",
+    "silk_texts_of",
+    "layer_kinds",
     # Framing, re-exported from `epru_stream` for existing importers.
     "DEVICE_DOC_TYPE",
     "Document",
@@ -108,10 +116,16 @@ __all__ = [
 #: Record types the board-geometry extractor actually consumes inside the
 #: PCB document. Known-but-unconsumed types are counted separately so it is
 #: obvious what else the format still carries.
+#:
+#: ``STRING`` / ``TEXT`` joined in 152: the legend pass
+#: (:func:`silk_texts_of`) reads them for the board's own free text. They are
+#: still counted in ``ParseStats.unconsumed_types`` by the copper walk — that
+#: walk genuinely does not consume them, and the census is a statement about
+#: what the walk saw, not about what the module reads in total.
 CONSUMED_RECORD_TYPES: frozenset[str] = frozenset(
     {
         "ATTR", "COMPONENT", "DOCHEAD", "FILL", "LAYER", "LAYER_PHYS", "LINE",
-        "PAD_NET", "POLY", "POUR", "POURED", "VIA",
+        "PAD_NET", "POLY", "POUR", "POURED", "STRING", "TEXT", "VIA",
     }
 )
 
@@ -140,6 +154,9 @@ class Epro2Source:
     _footprints: dict[str, list[PadTemplate]] | None = field(
         default=None, repr=False, compare=False
     )
+    _artwork: dict[str, list[ArtworkTemplate]] | None = field(
+        default=None, repr=False, compare=False
+    )
     _context: "PcbContext | None" = field(default=None, repr=False, compare=False)
 
     def documents_of_type(self, doc_type: str) -> list[Document]:
@@ -160,6 +177,21 @@ class Epro2Source:
                     self._footprints[document.uuid] = pad_templates(document)
         return self._footprints
 
+    def footprint_artwork(self) -> dict[str, list[ArtworkTemplate]]:
+        """Footprint uuid -> its **non-copper** primitives (152) — silk, body
+        outline, marking layer and printed marks.
+
+        Built once and cached beside :meth:`footprints`, from the same
+        documents in the same pass order, so a board's pads and its legend can
+        never come from two different readings of the archive.
+        """
+        if self._artwork is None:
+            self._artwork = {}
+            for document in self.documents_of_type(FOOTPRINT_DOC_TYPE):
+                if document.uuid:
+                    self._artwork[document.uuid] = footprint_artwork(document)
+        return self._artwork
+
     def pcb_context(self) -> "PcbContext | None":
         """Walk the PCB document once, returning everything derived from it.
 
@@ -173,7 +205,9 @@ class Epro2Source:
                 return None
             self.stats.pcb_records = len(document.records)
             self.stats.edit_version = document.edit_version
-            self._context = collect_pcb_context(document, self.footprints(), self.stats)
+            self._context = collect_pcb_context(
+                document, self.footprints(), self.stats, self.footprint_artwork()
+            )
         return self._context
 
 
@@ -361,6 +395,115 @@ def pad_templates(document: Document) -> list[PadTemplate]:
     return templates
 
 
+@dataclass
+class ArtworkTemplate:
+    """One non-copper graphic primitive as stored in a FOOTPRINT document (152).
+
+    Footprint-local coordinates, like :class:`PadTemplate`. ``layer_id`` is the
+    footprint's own layer **id**, kept verbatim; resolving what that id *means*
+    is the running document's job (its ``LAYER`` table), never this module's.
+    """
+
+    id: str = ""
+    kind: str = ""
+    layer_id: int | None = None
+    points: list[Point] = field(default_factory=list)
+    width: float = 0.0
+    filled: bool = False
+    radius: float | None = None
+    arc_count: int = 0
+    #: A ``STRING`` primitive's own fields (the ``"+"``/``"-"`` marks).
+    text: str = ""
+    x: float = 0.0
+    y: float = 0.0
+    angle: float = 0.0
+    font_size: float = 0.0
+    stroke_width: float = 0.0
+    origin: str = ""
+    mirror: bool = False
+    reverse: bool = False
+
+
+#: Record types a FOOTPRINT document draws with. ``TEXT`` joins ``STRING``
+#: because the two are the same thing in different file versions (``docs/
+#: epru-format.md`` §7: "``STRING`` / ``TEXT`` — silkscreen text"); on the
+#: board fixtures only ``STRING`` occurs, but refusing ``TEXT`` would be an
+#: assumption about the version, not a reading of the file.
+ARTWORK_RECORD_TYPES: frozenset[str] = frozenset(
+    {"POLY", "FILL", "ARC", "CIRCLE", "RECT", "LINE", "STRING", "TEXT"}
+)
+
+
+def _artwork_path(path: Any) -> tuple[list[Point], float | None, int]:
+    """Decode an artwork ``path`` into ``(points, radius, arc_count)``.
+
+    Three shapes arrive, and unlike :func:`_path_points` (which throws away
+    everything it cannot express as a copper polygon) this reader **keeps what
+    it would have dropped**, because the polarity rule needs it:
+
+    * ``["CIRCLE", x, y, r]`` — a circle primitive. Returned as its **centre**
+      plus ``r``: measured on the fixtures, the pin-1 mark is exactly this
+      (``["CIRCLE", -31.5, -15.75, 2.361]`` in ``C0603``), and collapsing it to
+      a point while keeping the radius is what makes it comparable with pad
+      geometry instead of invisible.
+    * ``["R", x, y, w, h, rotation, radius]`` — a rectangle, expanded to its
+      four corners exactly as :func:`_path_points` does (height runs along
+      ``-y``; see that function's derivation).
+    * a flat polyline with ``"L"`` / ``"ARC"`` commands — the vertices, with the
+      arc count **reported** rather than silently absorbed: the endpoints of an
+      arc are real vertices of the printed shape, and a reader that later finds
+      two vertices 2 mil apart in a rounded body outline should be able to see
+      that an arc was chorded there.
+    """
+    if not isinstance(path, Sequence) or isinstance(path, (str, bytes)):
+        return [], None, 0
+    items: Any = path
+    if items and isinstance(items[0], (list, tuple)):
+        # A FILL wraps its point list once; a POLY does not. Unwrap one level.
+        items = items[0]
+    values = list(items)
+    if not values:
+        return [], None, 0
+
+    head = str(values[0]).upper() if isinstance(values[0], str) else ""
+    if head == "CIRCLE":
+        nums = [_as_float(v) for v in values[1:]]
+        if len(nums) < 3:
+            return [], None, 0
+        return [Point(nums[0], nums[1])], nums[2], 0
+    if head == "R":
+        nums = [_as_float(v) for v in values[1:]]
+        if len(nums) < 4:
+            return [], None, 0
+        x, y, w, h = nums[0], nums[1], nums[2], nums[3]
+        radius = nums[6] if len(nums) > 6 and nums[6] else None
+        return [
+            Point(x, y),
+            Point(x + w, y),
+            Point(x + w, y - h),
+            Point(x, y - h),
+        ], radius, 0
+
+    points: list[Point] = []
+    pending: list[float] = []
+    arcs = 0
+    for item in values:
+        if isinstance(item, str):
+            command = item.upper()
+            if command == "ARC":
+                arcs += 1
+                # "ARC", <sweep>, x, y -> drop the sweep, keep the endpoint.
+                # `pending` holds the arc's start point, already queued.
+                pending = []
+                continue
+            continue
+        pending.append(_as_float(item))
+        if len(pending) == 2:
+            points.append(Point(pending[0], pending[1]))
+            pending = []
+    return points, None, arcs
+
+
 def pad_net_key(record: EpruRecord) -> tuple[str, str, str | None] | None:
     """Return ``(component_id, pin_number, pad_id)`` for a ``PAD_NET`` record.
 
@@ -434,6 +577,242 @@ def parse_id_tuple(record: EpruRecord) -> list[str]:
     except ValueError:
         return []
     return [str(v) for v in decoded] if isinstance(decoded, list) else [str(decoded)]
+
+
+def layer_kinds(layers: dict[int, LayerInfo]) -> dict[int, str]:
+    """``layer id -> the document's own layer type`` for the ids it defines.
+
+    The one place a hard-numeric id becomes a meaning. Measured on every board
+    fixture: ``3`` is ``TOP_SILK``, ``4`` ``BOT_SILK``, ``48``
+    ``COMPONENT_SHAPE``, ``49`` ``COMPONENT_MARKING``, ``50``
+    ``PIN_SOLDERING``. An id the document does not define is simply absent —
+    the caller reads that as "unclassified" rather than as a guessed kind.
+    """
+    return {int(k): str(v.layer_type or "") for k, v in layers.items()}
+
+
+def silk_texts_of(
+    document: Document,
+    placements: list[ComponentPlacement],
+    layer_kind_of: dict[int, str],
+) -> list[SilkText]:
+    """The PCB document's **own** silkscreen text (152).
+
+    Two record kinds, both read here because both are legend and both carry
+    their own geometry:
+
+    * ``ATTR`` with ``key == "Designator"`` — the designator of one placement.
+      It is joined to the placement by ``parentId``; a record whose parent is
+      not a placement on this board keeps ``component=None`` and is stamped
+      ``source="designator-unparented"``, so a stray designator is reported
+      rather than silently dropped (measured: 毕设FOC 1.0.0 "PCB1" has 122 for
+      122 placements; ROBOT's has 50 for 49, i.e. one such record).
+    * ``STRING`` / ``TEXT`` — free text drawn on the board (the ``CLK`` /
+      ``DIO`` / ``GND`` labels beside PCB1's programming header).
+
+    ``angle`` is reduced ``mod 360`` here and the raw value is kept in
+    ``stored_angle``: EasyEDA accumulates whole turns (measured 810, 1710,
+    2250 — 90°, 270°, 90°), so an unreduced number is not an orientation.
+    """
+    by_id = {comp.id: comp for comp in placements}
+    out: list[SilkText] = []
+    for record in document.records:
+        body = record.body
+        if body is None:
+            continue
+        if record.type == "ATTR":
+            if str(body.get("key") or "") != "Designator":
+                continue
+            parent = by_id.get(str(body.get("parentId") or ""))
+            layer_id = body.get("layerId")
+            stored = _as_float(body.get("angle"))
+            out.append(
+                SilkText(
+                    component=parent.designator if parent is not None else None,
+                    component_id=parent.id if parent is not None else str(
+                        body.get("parentId") or ""
+                    ),
+                    text=str(body.get("value") or ""),
+                    source="designator" if parent is not None else "designator-unparented",
+                    x=_as_float(body.get("x")),
+                    y=_as_float(body.get("y")),
+                    local_x=_as_float(body.get("x")),
+                    local_y=_as_float(body.get("y")),
+                    angle=stored % 360.0,
+                    stored_angle=stored,
+                    layer_id=layer_id if layer_id is None else int(layer_id),
+                    layer_kind=(
+                        layer_kind_of.get(int(layer_id), "") if layer_id is not None else ""
+                    ),
+                    font_size=_as_float(body.get("fontSize")),
+                    stroke_width=_as_float(body.get("strokeWidth")),
+                    origin=str(body.get("origin") or ""),
+                    mirror=bool(body.get("mirror", False)),
+                    reverse=bool(body.get("reverse", False)),
+                    visible=bool(body.get("valueVisible", True)),
+                    font_family=str(body.get("fontFamily") or ""),
+                )
+            )
+            continue
+        if record.type not in ("STRING", "TEXT"):
+            continue
+        layer_id = body.get("layerId")
+        stored = _as_float(body.get("angle", body.get("rotation")))
+        out.append(
+            SilkText(
+                component=None,
+                component_id="",
+                text=str(body.get("text") or body.get("value") or ""),
+                source="board",
+                x=_as_float(body.get("x")),
+                y=_as_float(body.get("y")),
+                local_x=_as_float(body.get("x")),
+                local_y=_as_float(body.get("y")),
+                angle=stored % 360.0,
+                stored_angle=stored,
+                layer_id=layer_id if layer_id is None else int(layer_id),
+                layer_kind=(
+                    layer_kind_of.get(int(layer_id), "") if layer_id is not None else ""
+                ),
+                font_size=_as_float(body.get("fontSize")),
+                stroke_width=_as_float(body.get("strokeWidth")),
+                origin=str(body.get("origin") or body.get("align") or ""),
+                mirror=bool(body.get("mirror", False)),
+                reverse=bool(body.get("reverse", False)),
+                visible=True,
+                font_family=str(body.get("fontFamily") or ""),
+            )
+        )
+    return out
+
+
+def footprint_artwork(document: Document) -> list[ArtworkTemplate]:
+    """Extract the non-copper primitives of a FOOTPRINT document (152).
+
+    Everything that is not a ``PAD``: the silkscreen legend (on the document's
+    own silk layer), the body/courtyard outline, the component-marking dot and
+    the printed text marks. Layers are kept **verbatim** — a footprint left
+    unplaced in the library is read with its own ids and no layer table, so
+    this function cannot classify them and does not try; the instantiating pass
+    (with the running PCB document's ``LAYER`` table in hand) is where each id
+    becomes "top silk" / "marking" / "body".
+    """
+    templates: list[ArtworkTemplate] = []
+    for record in document.records:
+        if record.type not in ARTWORK_RECORD_TYPES or record.body is None:
+            continue
+        body = record.body
+        layer_id = body.get("layerId")
+        if record.type in ("STRING", "TEXT"):
+            templates.append(
+                ArtworkTemplate(
+                    id=record.id or "",
+                    kind="text",
+                    layer_id=layer_id,
+                    text=str(body.get("text") or body.get("value") or ""),
+                    x=_as_float(body.get("x")),
+                    y=_as_float(body.get("y")),
+                    angle=_as_float(body.get("angle", body.get("rotation"))),
+                    font_size=_as_float(body.get("fontSize")),
+                    stroke_width=_as_float(body.get("strokeWidth")),
+                    origin=str(body.get("origin") or body.get("align") or ""),
+                    mirror=bool(body.get("mirror", False)),
+                    reverse=bool(body.get("reverse", False)),
+                    width=_as_float(body.get("fontSize")),
+                )
+            )
+            continue
+        points, radius, arcs = _artwork_path(body.get("path"))
+        if not points:
+            continue
+        templates.append(
+            ArtworkTemplate(
+                id=record.id or "",
+                kind=record.type.lower(),
+                layer_id=layer_id,
+                points=points,
+                width=_as_float(body.get("width")),
+                filled=record.type == "FILL",
+                radius=radius,
+                arc_count=arcs,
+            )
+        )
+    return templates
+
+
+def build_silk(
+    placements: list[ComponentPlacement],
+    artwork: dict[str, list[ArtworkTemplate]],
+    layer_kind_of: dict[int, str],
+    stats: ParseStats,
+) -> tuple[list[SilkShape], list[SilkText]]:
+    """Instantiate every footprint's artwork at its placement (152).
+
+    Same transform as :func:`build_pads` (``ComponentPlacement.transform``), so
+    a silk primitive and a pad of the same placement land in one frame and can
+    be intersected without a second conversion.
+
+    ``layer_kind_of`` maps a layer id to the running document's own name for it
+    (``"TOP_SILK"``, ``"COMPONENT_MARKING"``, ...), read from the PCB
+    document's ``LAYER`` table by the caller. An id the table does not define
+    becomes ``""`` — "unclassified", never a guessed kind: a footprint drawn on
+    a layer this document does not define is a fact the file does not explain,
+    and the rules skip those rather than invent one.
+
+    A template whose ``layer_id`` is not in the table is still instantiated (the
+    geometry is real); only its :attr:`SilkShape.layer_kind` is empty.
+    """
+    shapes: list[SilkShape] = []
+    texts: list[SilkText] = []
+    for comp in placements:
+        for template in artwork.get(comp.footprint or "", []):
+            kind = layer_kind_of.get(int(template.layer_id), "") if template.layer_id is not None else ""
+            if template.kind == "text":
+                point = comp.transform(template.x, template.y)
+                texts.append(
+                    SilkText(
+                        component=comp.designator,
+                        component_id=comp.id,
+                        text=template.text,
+                        source="footprint",
+                        x=point.x,
+                        y=point.y,
+                        local_x=template.x,
+                        local_y=template.y,
+                        # Board-frame rotation, the same composition pads use
+                        # (`comp.angle + template.angle`): both frames are
+                        # right-handed y-up CCW (task 125a).
+                        angle=(comp.angle + template.angle) % 360.0,
+                        stored_angle=template.angle,
+                        layer_id=template.layer_id,
+                        layer_kind=kind,
+                        font_size=template.font_size,
+                        stroke_width=template.stroke_width,
+                        origin=template.origin,
+                        mirror=template.mirror,
+                        reverse=template.reverse,
+                    )
+                )
+                continue
+            local = list(template.points)
+            board_points = [comp.transform(p.x, p.y) for p in local]
+            shapes.append(
+                SilkShape(
+                    id=template.id,
+                    component=comp.designator,
+                    component_id=comp.id,
+                    kind=template.kind,
+                    layer_id=template.layer_id,
+                    layer_kind=kind,
+                    points=board_points,
+                    local_points=local,
+                    width=template.width,
+                    filled=template.filled,
+                    radius=template.radius,
+                    arc_count=template.arc_count,
+                )
+            )
+    return shapes, texts
 
 
 def pad_effective_layers(
@@ -566,17 +945,31 @@ class PcbContext:
     #: The join key into the library metadata (Value / LCSC / Manufacturer);
     #: resolved 47/47 on the LLC fixture.
     device_ids: dict[str, str] = field(default_factory=dict)
+    #: 152: instantiated footprint artwork (silkscreen, body outline, marking)
+    #: in board coordinates, plus the document's own legend text. Both are
+    #: empty when the caller did not hand the artwork table over — which is the
+    #: same "absent, not empty" contract the copper lists follow.
+    silk_shapes: list[SilkShape] = field(default_factory=list)
+    silk_texts: list[SilkText] = field(default_factory=list)
 
 
 def collect_pcb_context(
     document: Document,
     footprints: dict[str, list[PadTemplate]],
     stats: ParseStats,
+    artwork: dict[str, list[ArtworkTemplate]] | None = None,
 ) -> PcbContext:
     """Walk one PCB document once, returning everything derived from it.
 
     Unknown record types are counted on ``stats.unconsumed_types`` and
     skipped; nothing here raises on unexpected payloads.
+
+    ``artwork`` is the FOOTPRINT-document table
+    (:meth:`Epro2Source.footprint_artwork`) the silk pass instantiates. It is
+    keyword-optional so every existing 3-argument caller keeps working, and an
+    omitted table leaves :attr:`PcbContext.silk_shapes` empty — the same
+    distinction between "nothing was there" and "nobody looked" the rest of
+    this module makes.
     """
     context = PcbContext()
     # Element id -> net, so POURED regions can borrow the net of the region
@@ -852,6 +1245,15 @@ def collect_pcb_context(
         stats,
         copper_layers,
     )
+    # 152: legend, last, because it depends on nothing else here and on the
+    # layer table (which the walk above has by now finished reading).
+    kinds = layer_kinds(context.layers)
+    context.silk_texts = silk_texts_of(document, context.placements, kinds)
+    if artwork:
+        context.silk_shapes, footprint_texts = build_silk(
+            context.placements, artwork, kinds, stats
+        )
+        context.silk_texts.extend(footprint_texts)
     return context
 
 
@@ -859,9 +1261,15 @@ def extract_board(
     document: Document,
     footprints: dict[str, list[PadTemplate]],
     stats: ParseStats,
+    artwork: dict[str, list[ArtworkTemplate]] | None = None,
 ) -> BoardGeometry:
-    """Turn one PCB document into a :class:`BoardGeometry`."""
-    context = collect_pcb_context(document, footprints, stats)
+    """Turn one PCB document into a :class:`BoardGeometry`.
+
+    ``artwork`` (152) is the FOOTPRINT-document side of the legend; omit it and
+    the board still parses, with ``silk_texts`` populated (it needs no
+    footprint) and ``silk_shapes`` empty.
+    """
+    context = collect_pcb_context(document, footprints, stats, artwork)
     return BoardGeometry(
         source=stats.source,
         edit_version=stats.edit_version,
@@ -873,6 +1281,8 @@ def extract_board(
         vias=context.vias,
         pours=context.pours,
         outline=context.outline,
+        silk_shapes=context.silk_shapes,
+        silk_texts=context.silk_texts,
         stats=stats,
     )
 
@@ -923,6 +1333,8 @@ def build_board_geometry(source: Epro2Source) -> BoardGeometry:
         vias=context.vias,
         pours=context.pours,
         outline=context.outline,
+        silk_shapes=context.silk_shapes,
+        silk_texts=context.silk_texts,
         stats=source.stats,
     )
 
