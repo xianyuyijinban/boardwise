@@ -30,10 +30,16 @@ boardwise checkup --file <导出.epro2> --out <目录>       # 断连兜底：�
 ```
 
 产出（`--out` 目录内）：`report.json`（契约）· `report.md`（人读，同一份内容）·
+`board-report.md`（**整板报告**：ERC+DRC+模块+器件合成一份，按「板 → 模块/规则族」分组、
+按「严重度 × 模块权重」排序、每条一句话、末段答「整工程能不能投板」；与 `report.md` 开头
+那一节同一份渲染，一键出的就是它）·
 `architecture.md`（架构骨架，§3.1b 必须逐槽走；**自动生成、每次覆盖，手填无效**）·
 `design-intent.md`（**设计意图**，工程师所有：不存在时建全 TODO 模板，存在则生成器一字不改）·
 `review-summary.md`（**审查总结骨架**，见下面的收尾死一步；**每次覆盖**）·
 `canvas-<页名>.png`（每张原理图页一张，PCB 页不出图）。
+
+**先看 `board-report.md` 一眼定盘**（哪块板、哪个模块、几条 ERROR、能不能投板），
+再按下面的四步逐段读 `report.md` 做深度审查。
 
 - **退出码**：`0` 无 ERROR / `1` 有 ERROR（主机 ERC fatalError/error、主机 PCB DRC 逐条、
   自有规则 ERROR 任一命中）/ `2` 输入不可用 / `3` 说不清——在线状态不可陈述（daemon 不通、

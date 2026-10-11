@@ -2138,6 +2138,758 @@ def summary_template() -> str:
 
 
 # --------------------------------------------------------------------------
+# 整板报告（154 / E 阶段收口棒 E4）—— 一键出的那一份
+# --------------------------------------------------------------------------
+#
+# The pipeline already writes three files, and each has exactly one job:
+# `report.json` is the contract (every machine detail), `report.md` is the ledger
+# (complete and mechanical), `review-summary.md` is the skeleton the model fills.
+# What was missing is the one xianyuyijinban reads: the ledger is **too verbose for a
+# human** (岳 2026-10-11 体验反馈) — it prints one flat table of 160 findings with
+# the whole location chain repeated in every row, and an ERROR there does not say
+# in one glance 「which board, which designator, what is wrong」.
+#
+# This section is that file: ERC (schematic side) + DRC (offline geometry / host
+# baseline) + module rules (grouped by module) + device rules, grouped
+# 「板 → 模块/规则族」, sorted by **severity × module weight**, one human-readable
+# line per finding, and one closing line that answers 「整工程能不能投板」. The
+# machine detail stays in `report.json`; nothing here is derived that the JSON does
+# not already carry (the ledger's own rule since 025).
+
+#: The three weight tiers, smallest rank first. **PCB module-level is heaviest** —
+#: 122 第二步「为什么是重中之重」: a green DRC only says 「能造」, the module layer
+#: decides 「好不好活」 (noise, heat, EMI, lifetime), so its findings sort above
+#: everything else and are what the closing verdict is read against.
+WEIGHT_PCB_MODULE = "pcb-module"
+WEIGHT_DEVICE = "device"
+WEIGHT_GENERIC = "generic"
+
+WEIGHT_RANK: dict[str, int] = {
+    WEIGHT_PCB_MODULE: 0,
+    WEIGHT_DEVICE: 1,
+    WEIGHT_GENERIC: 2,
+}
+
+WEIGHT_LABELS: dict[str, str] = {
+    WEIGHT_PCB_MODULE: "PCB 模块级",
+    WEIGHT_DEVICE: "器件级",
+    WEIGHT_GENERIC: "通用",
+}
+
+#: **The evidence for the order, written into the report head** — a reader must
+#: not have to trust the sort, so each tier says why it sits where it does.
+WEIGHT_WHY: dict[str, str] = {
+    WEIGHT_PCB_MODULE: (
+        "路线图第二步（按模块检查）＝重中之重：DRC 过只说明「能造」，模块级"
+        "决定「好不好活」（噪声/发热/EMI/寿命）——权重最高"
+    ),
+    WEIGHT_DEVICE: (
+        "路线图第三步（器件检查）＝收口：封装一致性/极性/丝印/降额，逐颗器件的"
+        "物理可实现性——居中"
+    ),
+    WEIGHT_GENERIC: (
+        "第一步 DRC 与原理图侧 ERC／连通性：门票与电路正确性——最轻"
+    ),
+}
+
+#: 器件级 —— 路线图第三步的四条规则（E1/E2/E3 落地）。
+_DEVICE_RULE_IDS: frozenset[str] = frozenset({
+    "pcb-footprint-consistency",
+    "pcb-polarity-orientation",
+    "pcb-silk-designator",
+    "pcb-derating-package",
+})
+
+#: PCB 侧但属第一步（DRC 规则集元审查）：落「通用」而不是「模块级」。
+_GENERIC_PCB_RULE_IDS: frozenset[str] = frozenset({
+    "pcb-drc-ruleset-out-of-reference",
+})
+
+#: The device family's own group name (one group per board, the four rules
+#: together) — the roadmap's 第三步 read as a family rather than folded into a
+#: module, because a part can be judged by two modules at once and the device
+#: reading is about the *part*.
+DEVICE_GROUP_NAME = "器件检查"
+
+#: The catch-all group name, for findings whose rule family the table below does
+#: not name. Named for what it is rather than left blank.
+OTHER_GROUP_NAME = "其他规则"
+
+#: The severity ranks the sort uses. ERROR first, then WARN, then INFO — the order
+#: every other table in the report already prints in.
+SEVERITY_RANK: dict[str, int] = {"ERROR": 0, "WARN": 1, "INFO": 2}
+
+#: Rule id → family label, first match wins. Only used for grouping and for the
+#: one-line summary's 「依据」; the finding's own `rule_id` is always printed too,
+#: so a wrong or missing label never hides which rule spoke.
+_RULE_FAMILIES: tuple[tuple[re.Pattern, str], ...] = (
+    (re.compile(r"^pcb-foc-"), "FOC/功率驱动"),
+    (re.compile(r"^pcb-regulator-"), "电源调节器"),
+    (re.compile(r"^pcb-mcu-"), "MCU 最小系统"),
+    (re.compile(r"^pcb-decap-distance$"), "电源去耦"),
+    (re.compile(r"^pcb-component-spacing$"), "DFM 通用"),
+    (re.compile(r"^pcb-track-ampacity$"), "载流（IPC-2221）"),
+    (re.compile(r"^pcb-voltage-spacing$"), "安规间距（IPC-2221）"),
+    (re.compile(r"^pcb-drc-ruleset-"), "DRC 规则集元审查"),
+    (re.compile(r"^pcb-"), "PCB 通用几何"),
+    (re.compile(r"^(param|sel)-"), "元件参数/选型"),
+    (re.compile(r"^(conn|decap|shunt)-"), "原理图连通性"),
+    (re.compile(r"^arch-"), "架构闭合/意图"),
+)
+
+#: How much of a finding's message the one-line summary keeps. The message is
+#: often a full English sentence with the measurement spelled out; the ledger
+#: below carries it whole, and this is the glance line.
+ONELINE_MAX_CHARS = 120
+
+
+def finding_weight(rule_id: str) -> str:
+    """The weight tier of one finding, from its rule id ():data:`WEIGHT_RANK`).
+
+    Three tiers, in the roadmap's own vocabulary:
+
+    * **device** — the four 第三步 rules (:data:`_DEVICE_RULE_IDS`);
+    * **generic** — everything else, *including* the schematic rules and the two
+      PCB-side stage-1 readings (:data:`_GENERIC_PCB_RULE_IDS`);
+    * **pcb-module** — every remaining ``pcb-`` rule: the second-step module
+      packages (FOC / regulator / MCU) and the generic-layer geometry rules
+      (去耦距离 / DFM 间距 / 载流 / 安规) — the whole 「按模块检查」 family.
+
+    Read by prefix rather than by an exhaustive list, so a rule added to
+    :data:`~boardwise.engines.pcbreview.BUILTIN_PCB_RULES` later is placed by what
+    it *is* (a ``pcb-`` rule that is not one of the device/DRC-set exceptions is a
+    module-level reading) instead of silently defaulting to 通用.
+    """
+    rid = str(rule_id or "")
+    if rid in _DEVICE_RULE_IDS:
+        return WEIGHT_DEVICE
+    if rid in _GENERIC_PCB_RULE_IDS:
+        return WEIGHT_GENERIC
+    if rid.startswith("pcb-"):
+        return WEIGHT_PCB_MODULE
+    return WEIGHT_GENERIC
+
+
+def rule_family(rule_id: str) -> str:
+    """The family label of one rule — 「FOC/功率驱动」, 「器件检查」, ….
+
+    The device rules answer with :data:`DEVICE_GROUP_NAME` before the pattern
+    table is consulted (their ids also start with ``pcb-`` and would otherwise read
+    as 「PCB 通用几何」). Anything the table does not name is
+    :data:`OTHER_GROUP_NAME`, which is a reading rather than a guess.
+    """
+    rid = str(rule_id or "")
+    if rid in _DEVICE_RULE_IDS:
+        return DEVICE_GROUP_NAME
+    for pattern, label in _RULE_FAMILIES:
+        if pattern.search(rid):
+            return label
+    return OTHER_GROUP_NAME
+
+
+def _first_sentence(text: str) -> str:
+    """A message cut to its first sentence, for the one-line summary.
+
+    The ledger prints the message whole; this keeps the glance line a glance. Split
+    on the three sentence marks the rules actually use (``。`` ``；`` ``;``) and cap
+    the length, adding an ellipsis rather than a silent truncation so a clipped
+    line is visibly clipped.
+    """
+    flat = " ".join(str(text or "").split())
+    if not flat:
+        return ""
+    cut = len(flat)
+    for mark in ("。", "；", "; "):
+        position = flat.find(mark)
+        if position != -1:
+            cut = min(cut, position + (1 if mark != "; " else 0))
+    clipped = flat[:cut].strip()
+    if len(clipped) > ONELINE_MAX_CHARS:
+        clipped = clipped[:ONELINE_MAX_CHARS].rstrip() + "…"
+    return clipped
+
+
+def finding_oneline(finding: dict) -> str:
+    """One finding as the single readable line the integrated report prints.
+
+    The four things 岳 asked an ERROR to carry (位号/网/问题/依据), in order:
+
+    ``板 · 位号（网 …）—— 问题 〔规则族 / rule_id〕``
+
+    The board is *not* part of this string — the caller prints it under the
+    board's heading — so the string names what is left: the designator (or the net
+    the finding names, when it names no part), the problem (the message's first
+    sentence), and the basis (the family label and the rule id, which stays a
+    machine token because that is what other tools match on). Nothing is invented:
+    a finding with no refs reads 「（未点名位号）」 rather than borrowing one.
+    """
+    target = finding.get("target") or {}
+    refs = [str(ref) for ref in (finding.get("refs") or []) if str(ref)]
+    nets = [str(net) for net in (target.get("net_refs") or []) if str(net)]
+    who = "、".join(refs) if refs else "（未点名位号）"
+    if nets:
+        who += f"（网 {'、'.join(nets)}）"
+    problem = _first_sentence(str(finding.get("message") or "")) or "（规则没有给出文字说明）"
+    rid = str(finding.get("rule_id") or "")
+    return f"{who} —— {problem} 〔{rule_family(rid)} / {rid or '(无规则 id)'}〕"
+
+
+def _board_links(report: dict) -> list[dict]:
+    """The boards the integrated report is split by, in the report's own order.
+
+    ``model.boards`` is the primary partition and its order is the order here. A
+    PCB document (``pcb_review.boards[]``) is attached to a schematic board by its
+    own ``boardUuid`` link (154); a document whose link is missing or names no
+    schematic board is kept as its own entry rather than merged into a guessed one
+    — 「板链读不出」 is a reading, and the section says so.
+
+    Each entry is ``{title, pcb, uuid, components, copperLayers}``: ``title`` is
+    the schematic board's, ``pcb`` the PCB document's (or ``""``), so a reader sees
+    「Board1 / PCB1」 and the two name spaces are never conflated.
+
+    A report with **no** board structure at all (a single ``.enet`` netlist carries
+    no ``model.boards`` and no PCB document) gets one synthetic entry named for the
+    project, so its findings are grouped by module/rule family instead of all
+    landing in the unattributed bucket — 「no board partition」 is not the same
+    statement as 「this finding belongs to no board」.
+    """
+    model = report.get("model") or {}
+    model_boards = model.get("boards") or []
+    pcb_boards = ((report.get("pcb_review") or {}).get("boards")) or []
+    if not model_boards and not pcb_boards:
+        source = report.get("source") or {}
+        project = source.get("project") or {}
+        title = (
+            project.get("friendlyName") or project.get("name")
+            or source.get("file") or "(本工程)"
+        )
+        return [{
+            "title": str(title),
+            "pcb": "",
+            "uuid": "",
+            "components": model.get("components"),
+            "copperLayers": None,
+        }]
+
+    by_uuid: dict[str, dict] = {}
+    for board in pcb_boards:
+        uuid = str(board.get("boardUuid") or "")
+        if uuid:
+            by_uuid.setdefault(uuid, board)
+
+    links: list[dict] = []
+    claimed: set[int] = set()
+    for board in model_boards:
+        uuid = str(board.get("uuid") or "")
+        pcb = by_uuid.get(uuid)
+        if pcb is not None:
+            claimed.add(id(pcb))
+        links.append({
+            "title": str(board.get("title") or uuid or "(unnamed board)"),
+            "pcb": str((pcb or {}).get("title") or ""),
+            "uuid": uuid,
+            "components": board.get("components"),
+            "copperLayers": (pcb or {}).get("copperLayers"),
+        })
+    for board in pcb_boards:
+        if id(board) in claimed:
+            continue
+        links.append({
+            "title": str(board.get("title") or "(unnamed PCB)"),
+            "pcb": str(board.get("title") or ""),
+            "uuid": str(board.get("boardUuid") or ""),
+            "components": board.get("components"),
+            "copperLayers": board.get("copperLayers"),
+        })
+    return links
+
+
+def _board_of_finding(finding: dict, links: list[dict], pcb_titles: set[str]) -> int:
+    """The index into ``links`` a finding belongs to, or ``-1`` when none claims it.
+
+    A finding carries ``board`` in one of two name spaces: a schematic board title
+    (``Board1``) for a stage-1/2/3 schematic finding, or a PCB document title
+    (``PCB1``) for a ``pcb-`` finding (钉 4). Both are resolved to the same board
+    link — the schematic title directly, the PCB title through the link table —
+    so a ``PCB1`` finding lands under the same heading as the schematic ``Board1``
+    findings instead of getting a second, unrelated section.
+
+    A finding with no board (a project-wide reading) falls to the last board only
+    when there is exactly one; otherwise it is left ``-1`` and the caller reports it
+    as a project-level row rather than guessing.
+    """
+    board = str(finding.get("board") or "")
+    if board:
+        if board in pcb_titles:
+            for index, link in enumerate(links):
+                if link.get("pcb") == board:
+                    return index
+        for index, link in enumerate(links):
+            if link.get("title") == board:
+                return index
+        return -1
+    if len(links) == 1:
+        return 0
+    return -1
+
+
+def _finding_module(finding: dict, board_title: str, modules: list[dict]) -> str:
+    """The module name of a finding's refs **within its own board**, or ``""``.
+
+    Reads the report's own ``modules[]`` — the same grouping the module table
+    prints — and matches by designator. A module that states a board only claims
+    findings of that board (the 040b rule), and a single-board report's modules
+    carry no board field, so the check is skipped when it is empty rather than
+    failing every match.
+    """
+    refs = set(str(ref) for ref in (finding.get("refs") or []) if str(ref))
+    if not refs:
+        return ""
+    for module in modules:
+        module_board = str(module.get("board") or "")
+        if module_board and board_title and module_board != board_title:
+            continue
+        if refs & set(str(ref) for ref in (module.get("components") or [])):
+            return str(module.get("name") or "")
+    return ""
+
+
+def _group_key(
+    finding: dict, weight: str, board_title: str, modules: list[dict]
+) -> str:
+    """Which group one finding belongs to inside its board.
+
+    The three tiers group differently on purpose, and the grouping says which
+    question the finding answers:
+
+    * **device** — one :data:`DEVICE_GROUP_NAME` group, because the roadmap's
+      第三步 is a family about a *part*, and a part can sit in two modules;
+    * **pcb-module** — the module the finding's refs fall in (「按模块分组」), or
+      the rule family when the refs name no module (a board-frame or whole-net
+      reading is nobody's module);
+    * **generic** — the rule family (原理图连通性 / 元件参数/选型 / …), because a
+      schematic reading's module is not what the reader is triaging.
+    """
+    if weight == WEIGHT_DEVICE:
+        return DEVICE_GROUP_NAME
+    if weight == WEIGHT_PCB_MODULE:
+        module = _finding_module(finding, board_title, modules)
+        return module or rule_family(str(finding.get("rule_id") or ""))
+    return rule_family(str(finding.get("rule_id") or ""))
+
+
+#: The closing line's two states, as words a reader can act on. Deliberately not
+#: 「通过」: the report's own gate (`completion.verdict`) is what may be claimed,
+#: and `mayClaimPassed` keeps its narrow meaning (053 §2.2).
+VERDICT_CAN_SHIP = "可以投板"
+VERDICT_CANNOT_CLAIM = "不能写「通过」"
+
+
+def board_report_verdict(report: dict) -> dict:
+    """「整工程能不能投板」—— the closing line, from the report's **own** gate.
+
+    Read, never recomputed (024's discipline): the answer is
+    ``completion.verdict``, the one section that already states whether the review
+    finished, and the blockers are its own ``verdictWhy``. This function exists so
+    the integrated report can *print* that sentence, not so a second gate can be
+    written beside it:
+
+    * ERROR present → cannot ship, whatever else is true;
+    * ``completion.verdict == "complete"`` → can ship (nothing owed: no ERROR, no
+      part without a datasheet, no untriaged warning, no coverage gap);
+    * anything else (``complete-with-open-items`` / ``incomplete``) → **cannot write
+      「通过」**, with the reasons spelled out — 缺手册 (unreviewed/gated parts) and
+      untriaged warnings are the two 岳 named, and the completion section's own
+      ``verdictWhy`` already lists every blocker, so it is quoted rather than
+      re-listed.
+
+    A report with **no** ``completion`` section (a hand-built dict, an old report)
+    falls back to the narrow field: ``summary.mayClaimPassed`` false, or any ERROR,
+    means the pass may not be claimed, and the line says which reading it used.
+    """
+    summary = report.get("summary") or {}
+    completion = report.get("completion")
+    errors = int(summary.get("errorCount", 0) or 0)
+    error_entries = summary.get("errors")
+    error_entries = error_entries if isinstance(error_entries, list) else []
+    blockers: list[str] = []
+    if errors:
+        blockers.append(f"{errors} 项 ERROR")
+    elif error_entries:
+        blockers.append(f"{len(error_entries)} 条 ERROR 条目（计数不可枚举）")
+
+    if completion is None:
+        may = summary.get("mayClaimPassed")
+        can_ship = not blockers and bool(may)
+        if can_ship:
+            line = (
+                f"{VERDICT_CAN_SHIP}：无 ERROR，且 `summary.mayClaimPassed` 为真"
+                "（窄义：没有器件缺手册未审）——完整结论以 `completion.verdict` 为准"
+            )
+        else:
+            if may is False:
+                blockers.append("有器件缺手册未审（summary.mayClaimPassed 为假）")
+            line = (
+                f"{VERDICT_CANNOT_CLAIM}：{'；'.join(blockers) or '缺少 completion 节，无法给出完整结论'}"
+            )
+        return {
+            "canShip": can_ship,
+            "line": line,
+            "blockers": blockers,
+            "completionVerdict": "",
+            "mayClaimPassed": may,
+            "basis": "summary（无 completion 节：按窄义字段判）",
+        }
+
+    verdict = str(completion.get("verdict") or "")
+    why = [str(reason) for reason in (completion.get("verdictWhy") or [])]
+    if blockers:
+        can_ship = False
+        line = f"不能投板：先改 {'；'.join(blockers)}（逐条见下）"
+    elif verdict == "complete":
+        can_ship = True
+        line = (
+            f"{VERDICT_CAN_SHIP}：本工程无 ERROR、无缺手册未审、无待分诊、无覆盖缺口"
+            "（completion.verdict = complete）"
+        )
+    else:
+        can_ship = False
+        line = (
+            f"{VERDICT_CANNOT_CLAIM}（completion.verdict = {verdict or '未知'}）："
+            + ("；".join(why) if why else "有待办项未清")
+            + "——缺手册、有待分诊项时一律不许写「通过」"
+            "（口径同 `summary.mayClaimPassed` 与 `completion.verdict`）"
+        )
+    return {
+        "canShip": can_ship,
+        "line": line,
+        "blockers": blockers,
+        "completionVerdict": verdict,
+        "mayClaimPassed": summary.get("mayClaimPassed"),
+        "basis": "completion.verdict / verdictWhy（唯一权威闸，本函数不重算）",
+    }
+
+
+def _drc_baseline(report: dict) -> dict:
+    """The ERC + DRC baseline the integrated report opens with, read from `drc`.
+
+    Only the numbers the `drc` section already states: the host ERC counts (or why
+    they are unknown), the PCB DRC leaf/group totals (or the reason it did not run),
+    and the rule-set name the DRC was measured against. Nothing is summed afresh —
+    a baseline that disagreed with `drc` would be worse than none.
+    """
+    drc = report.get("drc") or {}
+    schematic = drc.get("schematic") or {}
+    pcb = drc.get("pcb") or {}
+    ruleset = drc.get("ruleset") or {}
+    erc: dict = {"checked": bool(schematic.get("checked"))}
+    if erc["checked"]:
+        if schematic.get("countsKnown") is False:
+            erc["countsKnown"] = False
+            erc["passed"] = schematic.get("passed")
+            erc["summary"] = f"主机只回 boolean（passed={schematic.get('passed')}），无逐项计数"
+        else:
+            erc["countsKnown"] = True
+            counts = {
+                kind: schematic.get(kind)
+                for kind in ("fatalError", "error", "warn")
+                if kind in schematic
+            }
+            erc["counts"] = counts
+            erc["summary"] = "，".join(f"{k} {v}" for k, v in counts.items()) or "无计数"
+        erc["note"] = str(schematic.get("note") or "")
+    else:
+        erc["summary"] = f"未检查 —— {schematic.get('reason') or '（无原因）'}"
+    pcb_drc: dict = {"checked": bool(pcb.get("checked"))}
+    if pcb_drc["checked"]:
+        totals = pcb.get("totals") or {}
+        pcb_drc["leafs"] = totals.get("leafs", 0)
+        pcb_drc["groups"] = len(pcb.get("groups") or [])
+        pcb_drc["truncated"] = bool(pcb.get("truncated"))
+        pcb_drc["summary"] = (
+            f"{totals.get('leafs', 0)} 条 / {len(pcb.get('groups') or [])} 组"
+            + ("（答复被截断，总数不可知）" if pcb.get("truncated") else "")
+        )
+    else:
+        pcb_drc["summary"] = f"未检查 —— {pcb.get('reason') or '（无原因）'}"
+    return {
+        "erc": erc,
+        "pcb": pcb_drc,
+        "ruleset": {
+            "checked": bool(ruleset.get("checked")),
+            "name": str(ruleset.get("ruleSetName") or ""),
+            "summary": (
+                f"`{ruleset.get('ruleSetName') or '(unnamed)'}`"
+                if ruleset.get("checked")
+                else f"未读 —— {ruleset.get('reason') or '（无原因）'}"
+            ),
+        },
+    }
+
+
+def board_report_section(
+    report: dict, *, modules: list[dict] | None = None
+) -> dict:
+    """The `board_report` section — the integrated, human-first whole-board report.
+
+    The answer to E 阶段的验收「一键出整板报告（ERC+DRC+模块+器件）」and to 岳's
+    2026-10-11 体验反馈 that the machine ledger is too verbose. It re-reads the
+    report's own sections (`drc`, `findings`, `modules`, `summary`, `completion`)
+    and arranges them the way a person triages a board:
+
+    * **per board** (``links`` order = ``model.boards`` order), with the PCB
+      document's title shown beside the schematic board's when the link is known;
+    * **per module / rule family** inside a board — the device rules as one
+      :data:`DEVICE_GROUP_NAME` group, module-level PCB findings by their module,
+      everything else by rule family;
+    * **sorted by severity × module weight** — severity first (ERROR → WARN →
+      INFO), then weight (:data:`WEIGHT_RANK`: 模块级 > 器件级 > 通用) inside a
+      severity tier, so an ERROR is never buried under a pile of module-level INFO
+      measurement rows and a module-level ERROR leads its tier. The exact key is
+      written into the head (`order`) so the sort is checkable, not a vibe;
+    * one human-readable line per finding (:func:`finding_oneline`) — the machine
+      detail stays in `findings[]`;
+    * a closing verdict (:func:`board_report_verdict`) answering 「整工程能不能投板」.
+
+    ``modules`` overrides the report's own grouping when a caller has it (the CLI
+    does); otherwise ``report["modules"]`` is used, and a report with none groups by
+    rule family alone rather than inventing modules.
+    """
+    module_list = modules if modules is not None else (report.get("modules") or [])
+    findings = report.get("findings") or []
+    links = _board_links(report)
+    pcb_titles = {link["pcb"] for link in links if link.get("pcb")}
+
+    # One bucket per board link, plus a project-level bucket for findings no board
+    # claims. A bucket holds ``(weight, severity, report order, finding)`` tuples so
+    # the sort and the grouping read off one list.
+    buckets: list[dict[str, list]] = [
+        {"rows": []} for _ in links
+    ]
+    unassigned: list[dict] = []
+    for index, finding in enumerate(findings):
+        weight = finding_weight(str(finding.get("rule_id") or ""))
+        position = _board_of_finding(finding, links, pcb_titles)
+        row = (weight, str(finding.get("severity") or ""), index, finding)
+        if position < 0:
+            unassigned.append({"index": index, "weight": weight, "finding": finding})
+            continue
+        buckets[position]["rows"].append(row)
+
+    def _group_rows(rows: list, board_title: str) -> list[dict]:
+        groups: dict[str, list] = {}
+        for weight, severity, index, finding in rows:
+            key = _group_key(finding, weight, board_title, module_list)
+            groups.setdefault(key, []).append((weight, severity, index, finding))
+        out: list[dict] = []
+        for name, members in groups.items():
+            # The sort key is **severity first, module weight second** — the two
+            # axes named in `order`, and the reason an ERROR is never buried under
+            # a pile of module-level INFO measurement rows. `rule_id` and the
+            # report's own index break the remaining ties so the order is total
+            # and the same report always renders the same way.
+            members.sort(
+                key=lambda item: (
+                    SEVERITY_RANK.get(item[1].upper(), 9),
+                    WEIGHT_RANK.get(item[0], 9),
+                    str(item[3].get("rule_id") or ""),
+                    item[2],
+                )
+            )
+            # The group's *label* tier is its **heaviest** finding's: a module
+            # group that holds one module-level reading is labelled 模块级 even if
+            # its other rows are generic. It does not decide the order — the best
+            # (severity, weight) pair inside the group does.
+            best_weight = min((WEIGHT_RANK.get(m[0], 9) for m in members), default=9)
+            weight_key = next(
+                (m[0] for m in members if WEIGHT_RANK.get(m[0], 9) == best_weight),
+                WEIGHT_GENERIC,
+            )
+            best_severity = min(
+                (SEVERITY_RANK.get(m[1].upper(), 9) for m in members), default=9
+            )
+            out.append({
+                "name": name,
+                "weight": weight_key,
+                "weightLabel": WEIGHT_LABELS.get(weight_key, weight_key),
+                "counts": _severity_counts([m[3] for m in members]),
+                "findings": [
+                    {
+                        "index": m[2],
+                        "severity": str(m[3].get("severity") or ""),
+                        "rule_id": str(m[3].get("rule_id") or ""),
+                        "level": str(m[3].get("level") or ""),
+                        "board": str(m[3].get("board") or board_title),
+                        "refs": [str(ref) for ref in (m[3].get("refs") or [])],
+                        "line": finding_oneline(m[3]),
+                    }
+                    for m in members
+                ],
+                "_sort": (best_severity, best_weight, name),
+            })
+        out.sort(key=lambda group: group["_sort"])
+        for group in out:
+            group.pop("_sort", None)
+        return out
+
+    board_sections: list[dict] = []
+    for index, link in enumerate(links):
+        rows = buckets[index]["rows"]
+        groups = _group_rows(rows, link["title"])
+        board_sections.append({
+            "board": link["title"],
+            "pcb": link["pcb"],
+            "components": link["components"],
+            "copperLayers": link["copperLayers"],
+            "counts": _severity_counts([row[3] for row in rows]),
+            "groups": groups,
+        })
+
+    return {
+        "order": "严重度（ERROR → WARN → INFO）× 模块权重（同级内 PCB 模块级 > 器件级 > 通用）",
+        "weights": [
+            {
+                "key": key,
+                "label": WEIGHT_LABELS[key],
+                "rank": WEIGHT_RANK[key],
+                "why": WEIGHT_WHY[key],
+            }
+            for key in (WEIGHT_PCB_MODULE, WEIGHT_DEVICE, WEIGHT_GENERIC)
+        ],
+        "note": (
+            "本表给人读：ERC + DRC + 模块规则 + 器件规则合成一份，按「板 → 模块/规则族」"
+            "分组，每条一句话（位号/网/问题/依据）。机器细节（完整 message、evidence、"
+            "定位链、规则等级）留在 `report.json` 的 findings[]，本表一个字都不新增结论。"
+        ),
+        "drc": _drc_baseline(report),
+        "boards": board_sections,
+        "unassigned": [
+            {
+                "index": entry["index"],
+                "weight": entry["weight"],
+                "severity": str(entry["finding"].get("severity") or ""),
+                "rule_id": str(entry["finding"].get("rule_id") or ""),
+                "board": str(entry["finding"].get("board") or ""),
+                "line": finding_oneline(entry["finding"]),
+            }
+            for entry in unassigned
+        ],
+        "totals": _severity_counts(findings),
+        "verdict": board_report_verdict(report),
+    }
+
+
+def _severity_counts(findings: list[dict]) -> dict[str, int]:
+    """``{ERROR, WARN, INFO}`` over a finding list, zero-filled."""
+    counts = {"ERROR": 0, "WARN": 0, "INFO": 0}
+    for finding in findings:
+        severity = str(finding.get("severity") or "").upper()
+        counts[severity] = counts.get(severity, 0) + 1
+    return counts
+
+
+#: The standalone file name the integrated report is written to (`--out`), beside
+#: `report.json` / `report.md` / `review-summary.md`. The same section is embedded
+#: at the top of `report.md` (see :func:`render_report_markdown`); this is the
+#: 「只想要那一份」 form of it.
+BOARD_REPORT_FILE = "board-report.md"
+
+
+def render_board_report(report: dict, section: dict | None = None) -> str:
+    """The `board_report` section as the Markdown a person reads.
+
+    The same renderer feeds the leading section of `report.md` (via
+    :func:`render_report_markdown`) **and** the standalone `board-report.md` file
+    — one function, so the embedded copy and the file cannot disagree. It renders
+    only what the section already says.
+    """
+    section = section if isinstance(section, dict) else board_report_section(report)
+    lines: list[str] = []
+    lines.append("## 整板报告（一键：ERC + DRC + 模块 + 器件）")
+    lines.append("")
+    verdict = section.get("verdict") or {}
+    lines.append(f"### 整工程能不能投板：{verdict.get('line', '（无结论）')}")
+    lines.append("")
+    lines.append(f"- 排序依据：{section.get('order', '')}")
+    for weight in section.get("weights") or []:
+        lines.append(f"  - **{weight.get('label')}**（rank {weight.get('rank')}）：{weight.get('why')}")
+    lines.append(f"- {section.get('note', '')}")
+    lines.append("")
+
+    drc = section.get("drc") or {}
+    erc = drc.get("erc") or {}
+    pcb = drc.get("pcb") or {}
+    ruleset = drc.get("ruleset") or {}
+    lines.append("### 基线（ERC / DRC）")
+    lines.append("")
+    lines.append(f"- 原理图 ERC：{'已查' if erc.get('checked') else '未查'} —— {erc.get('summary', '')}")
+    if erc.get("note"):
+        lines.append(f"  - {erc['note']}")
+    lines.append(f"- PCB DRC：{'已查' if pcb.get('checked') else '未查'} —— {pcb.get('summary', '')}")
+    lines.append(
+        f"- PCB DRC 规则集：{'已读' if ruleset.get('checked') else '未读'} —— {ruleset.get('summary', '')}"
+    )
+    lines.append("")
+
+    boards = section.get("boards") or []
+    if not boards:
+        lines.append("（本工程没有可分组的结构。）")
+        lines.append("")
+    for board in boards:
+        heading = board.get("board") or "(unnamed board)"
+        detail: list[str] = []
+        if board.get("pcb"):
+            detail.append(f"PCB 文档 `{board['pcb']}`")
+        if board.get("components") is not None:
+            detail.append(f"{board['components']} 器件")
+        if board.get("copperLayers") is not None:
+            detail.append(f"{board['copperLayers']} 铜层")
+        counts = board.get("counts") or {}
+        detail.append(
+            f"{counts.get('ERROR', 0)} ERROR / {counts.get('WARN', 0)} WARN / "
+            f"{counts.get('INFO', 0)} INFO"
+        )
+        lines.append(f"### 板：{heading}" + (f"（{'，'.join(detail)}）" if detail else ""))
+        lines.append("")
+        for group in board.get("groups") or []:
+            gcounts = group.get("counts") or {}
+            lines.append(
+                f"#### {group.get('name')}（{group.get('weightLabel')}）"
+                f"—— {gcounts.get('ERROR', 0)} ERROR / {gcounts.get('WARN', 0)} WARN / "
+                f"{gcounts.get('INFO', 0)} INFO"
+            )
+            lines.append("")
+            for entry in group.get("findings") or []:
+                lines.append(
+                    f"- **{_cell(entry.get('severity'))}** `{_cell(entry.get('board'))}` · "
+                    f"{_cell(entry.get('line'))}"
+                )
+            lines.append("")
+    unassigned = section.get("unassigned") or []
+    if unassigned:
+        lines.append(f"### 不归属任何板（{len(unassigned)}）")
+        lines.append("")
+        lines.append(
+            "这些 finding 既没有板、又只有一块板以外可归（多板工程的工程级读数）："
+            "不硬塞进某块板。"
+        )
+        lines.append("")
+        for entry in unassigned:
+            lines.append(
+                f"- **{_cell(entry.get('severity'))}** `{_cell(entry.get('board')) or '工程级'}` · "
+                f"{_cell(entry.get('line'))}"
+            )
+        lines.append("")
+    totals = section.get("totals") or {}
+    lines.append(
+        f"**整工程合计：{totals.get('ERROR', 0)} ERROR / {totals.get('WARN', 0)} WARN / "
+        f"{totals.get('INFO', 0)} INFO**"
+    )
+    lines.append("")
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------
 # report.md
 # --------------------------------------------------------------------------
 
@@ -2205,6 +2957,15 @@ def render_report_markdown(report: dict) -> str:
     if source.get("notes"):
         lines.append("> " + "；".join(str(note) for note in source["notes"]))
         lines.append("")
+
+    # --- 154 / E4: the integrated whole-board report, first, because it is the
+    # one section a person reads end to end (ERC + DRC + module + device, grouped
+    # by board → module/family, sorted by severity × weight, one line each, closing
+    # with 「整工程能不能投板」). The ledger below keeps every machine detail; this is
+    # the glance. It renders only what `board_report` (or the report's own sections,
+    # when a hand-built dict carries no such key) already says.
+    lines.append(render_board_report(report).rstrip())
+    lines.append("")
 
     # --- 053 §2.2: the complete statement first, because it is the answer to the
     # one question a reader has ("is this done?"), and because 052 §2.2 measured

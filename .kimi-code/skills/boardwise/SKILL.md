@@ -73,9 +73,11 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
 > 缺了重跑 `boardwise install-skill`，别手抄路径硬找）。
 
 - **审板子**：`boardwise checkup` 一条出报告（ERC/DRC + 20 条自有规则 + 数据手册闸
-  + 分诊/器件/总结槽位）。**开工第一句先报连接状态**、报告逐段读法、`review-summary.md`
-  收尾补全（工程师只看这一份）、架构走查（044 起强制环节）、triage 分诊口径，
-  全在 `docs/review-sop.md`。
+  + 分诊/器件/总结槽位），并一键出 `board-report.md`（**整板报告**：ERC+DRC+模块+器件
+  合成一份，按「板 → 模块/规则族」分组、按「严重度 × 模块权重」排序、末段答「整工程
+  能不能投板」——先看它一眼定盘）。**开工第一句先报连接状态**、报告逐段读法、
+  `review-summary.md` 收尾补全（工程师只看这一份）、架构走查（044 起强制环节）、
+  triage 分诊口径，全在 `docs/review-sop.md`。
 - **无电压电源网**（`VCC`/`VCCA`/`VREF` 这类名字不带电压的轨）：`boardwise intent audit --file <导出.epro2>` 列待问清单（已答的列 settled 并点名出处）→ 逐条问工程师 →
   `boardwise intent set-rail <网名> --voltage <值> --file <合同>` 落设计意图合同，
   **问一次不再问**（065；口径与收据形态见 `docs/review-sop.md` §3.1b）。

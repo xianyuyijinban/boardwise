@@ -281,6 +281,7 @@ def _board_entry(
     *,
     title: str,
     board: Any,
+    board_uuid: str,
     checks_run: list[str],
     finding_indexes: list[int],
 ) -> dict:
@@ -290,10 +291,20 @@ def _board_entry(
     :func:`boardwise.core.measure.read_stackup`) — the number of copper layers,
     which for the 毕设FOC main board is 4, read from ``LAYER_PHYS`` and not from
     the 34 ``LAYER`` definitions the editor carries.
+
+    ``boardUuid`` is the document's own META link to a schematic ``BOARD``
+    document (151's ``board_uuid``), carried into the section by 154 so the
+    integrated report can put a ``PCB1`` finding under the same heading as the
+    schematic ``Board1`` findings — the two name spaces are otherwise unrelated
+    (a PCB document is titled by its **META title**, a schematic board by its
+    ``BoardRef`` title). Empty string when the document states none, which the
+    reader treats as 「板链读不出」 rather than as a board. Additive: no existing
+    key moves.
     """
     info = read_stackup(board)
     return {
         "title": title,
+        "boardUuid": board_uuid,
         "components": len(board.components),
         "copperLayers": info.copper_count,
         "checksRun": list(checks_run),
@@ -404,6 +415,7 @@ def run_pcb_review(
             _board_entry(
                 title=title,
                 board=board,
+                board_uuid=board_uuid,
                 checks_run=checks_run,
                 finding_indexes=list(range(start, len(findings))),
             )

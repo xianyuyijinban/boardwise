@@ -32,6 +32,7 @@ from .engines.drc import (
     summarise as drc_summarise,
 )
 from .engines.checkup import (
+    BOARD_REPORT_FILE,
     CHAINS_KEY,
     PAGE_ATTRIBUTION_ARCHIVE,
     PAGE_ATTRIBUTION_PER_PAGE,
@@ -40,6 +41,7 @@ from .engines.checkup import (
     TRIGGER_FACTS,
     TRIGGER_MARKED,
     UNREVIEWED_DATASHEET_DIR,
+    board_report_section,
     disambiguated_triage_keys,
     finding_chains,
     intent_section,
@@ -50,6 +52,7 @@ from .engines.checkup import (
     needs_datasheet_section,
     order_modules_by_warnings,
     page_attribution_from_archive,
+    render_board_report,
     render_report_markdown,
     render_review_summary,
     summary_template,
@@ -3413,7 +3416,18 @@ def _checkup_report(
 
 
 def _write_checkup_report(out_dir: Path, report: dict) -> Path:
-    """Write ``report.json`` into ``out_dir`` (created if missing), and say where."""
+    """Write ``report.json`` into ``out_dir`` (created if missing), and say where.
+
+    154: the integrated `board_report` section is **derived** from the report's own
+    sections, and two commands mutate those sections in place after the report was
+    built — `boardwise need-datasheet` and `boardwise triage` rebuild `completion`
+    (and the triage slots) and re-write the report. Recomputing the section here,
+    at the one place every report is written, is what keeps the verdict the
+    integrated report prints from disagreeing with the `completion` beside it in
+    the same file. A report dict that carries no `findings`/`summary` still gets a
+    (degenerate but honest) section rather than a stale one.
+    """
+    report["board_report"] = board_report_section(report)
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "report.json"
     path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -4410,6 +4424,22 @@ def _write_checkup_markdown(out_dir: Path, report: dict) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "report.md"
     path.write_text(render_report_markdown(report), encoding="utf-8")
+    return path
+
+
+def _write_board_report(out_dir: Path, report: dict) -> Path:
+    """Write ``board-report.md`` beside the ledgers — the integrated whole-board report.
+
+    E 阶段的验收「一键出整板报告」的落点：`report.md` 把同一节印在最前面，这份文件
+    是它单独成篇的形态，给只想要那一份的人（工程师/发出去的那份）。**Overwritten
+    on every run**, like `report.md`: it is derived from the report and a stale copy
+    would say something the board no longer does. Rendered through the same
+    :func:`boardwise.engines.checkup.render_board_report` the embedded section uses,
+    so the two cannot disagree.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / BOARD_REPORT_FILE
+    path.write_text(render_board_report(report), encoding="utf-8")
     return path
 
 
@@ -5608,10 +5638,17 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
             "（docs/review-sop.md §3.1 收尾死一步：必须补全，工程师只看这一份）"
         ),
     }
+    # 154 / E4: the integrated whole-board report. `_write_checkup_report` derives
+    # and stores the `board_report` section (the one place every report passes
+    # through, so the two re-gate commands refresh it too); the same derivation is
+    # asked for here only to print the closing line. It is then written standalone.
+    board_report = board_report_section(report, modules=modules)
     report_path = _write_checkup_report(out_dir, report)
     report_md_path = _write_checkup_markdown(out_dir, report)
     review_summary_path = _write_review_summary(out_dir, report, chains)
+    board_report_path = _write_board_report(out_dir, report)
     print(f"  review-summary: {review_summary_path}（骨架 {len(chains)} 条，收尾必须补全）")
+    print(f"  board-report: {board_report_path}（{(board_report.get('verdict') or {}).get('line', '')}）")
     architecture_path = (
         _write_architecture(out_dir, architecture.markdown)
         if architecture is not None
@@ -5888,6 +5925,10 @@ def _cmd_need_datasheet(args: argparse.Namespace) -> int:
     sidecar_path = _write_need_marks(out_dir, marks)
     _write_checkup_report(out_dir, report)
     report_md_path = _write_checkup_markdown(out_dir, report)
+    # 154: the integrated report is an artifact of the same reading, so it follows
+    # the two ledgers on every re-gate — otherwise its closing verdict would keep
+    # saying the counts the run *before* the mark had.
+    _write_board_report(out_dir, report)
 
     for line in _need_datasheet_lines(report, needs_datasheet, added=added, updated=updated):
         print(line)
@@ -6078,6 +6119,9 @@ def _cmd_triage(args: argparse.Namespace) -> int:
     sidecar_path = _write_triage_entries(out_dir, entries)
     _write_checkup_report(out_dir, report)
     report_md_path = _write_checkup_markdown(out_dir, report)
+    # 154: same as `need-datasheet` — the integrated report's verdict reads the
+    # freshly re-gated `completion`, so its own file is rewritten too.
+    _write_board_report(out_dir, report)
 
     for line in _triage_lines(
         report, triage, entries, key=key, added=added, updated=updated, matched=len(matched)
