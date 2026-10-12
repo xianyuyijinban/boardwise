@@ -69,6 +69,7 @@ from ...core.parts import load_parts
 from ..facts import default_library_path
 from .base import PcbReviewContext, PcbRule
 from .crystal import _mcu_oscillators, is_crystal_member
+from .focground import _placed_on, _value_ohms, schematic_board_of
 
 __all__ = [
     "CRYSTAL_KEEPOUT_RULING",
@@ -138,7 +139,12 @@ def crystal_region(board: BoardGeometry, designator: str) -> BBox | None:
     )
 
 
-def crystal_designators(model: object, board: BoardGeometry, library) -> list[str]:
+def crystal_designators(
+    model: object,
+    board: BoardGeometry,
+    library,
+    schematic: object | None = None,
+) -> list[str]:
     """Every crystal the board places, found the way 131d found it.
 
     The crystal set is **not** re-derived here: 131d's
@@ -157,11 +163,15 @@ def crystal_designators(model: object, board: BoardGeometry, library) -> list[st
     than copied: this rule is a second reader of that one answer, which is the
     same discipline :mod:`boardwise.rules.pcb.mcureset` follows in importing
     131d's ``MCU_CATEGORIES``.
+
+    ``schematic`` is this PCB document's own schematic page (164b), handed
+    straight to the sieve so 131d and 131f recognise the same set from the same
+    two declarations.
     """
     found: list[str] = []
     nets = getattr(model, "nets", {}) or {}
     components = getattr(model, "components", {}) or {}
-    for osc in _mcu_oscillators(model, library):
+    for osc in _mcu_oscillators(model, library, schematic):
         for net in sorted(osc.pins_by_net):
             net_obj = nets.get(net)
             for owner, _pin in (getattr(net_obj, "pins", None) or []):
@@ -170,7 +180,7 @@ def crystal_designators(model: object, board: BoardGeometry, library) -> list[st
                     continue
                 if designator not in components:
                     continue
-                if not is_crystal_member(model, designator):
+                if not is_crystal_member(model, designator, schematic):
                     continue
                 if board.component(designator) is None:
                     continue  # named by the netlist, not carried by this document
@@ -251,11 +261,16 @@ class McuCrystalKeepout(PcbRule):
         model = ctx.pcb_model
         if board is None or model is None:
             return []
+        # 164b: the schematic page this document declares, read for the crystal's
+        # **declared value/footprint** on the identity line and handed to 131d's
+        # sieve so the two rules recognise the same set the same way. The nets,
+        # the region and the copper stay the board's own.
+        schematic = schematic_board_of(ctx)
         layers = [info.layer_id for info in read_stackup(board).copper_layers]
         if not layers:
             return []
         findings: list[Finding] = []
-        for crystal in crystal_designators(model, board, library):
+        for crystal in crystal_designators(model, board, library, schematic):
             region = crystal_region(board, crystal)
             if region is None:
                 continue
@@ -270,13 +285,16 @@ class McuCrystalKeepout(PcbRule):
                 if getattr(pad, "net", None)
             )
             component = (getattr(model, "components", {}) or {}).get(crystal)
+            page = _placed_on(schematic, crystal)
+            draw = _value_ohms(component, page)
             identity = [
                 f"{crystal} recognised as a crystal by 131d's documented "
                 f"two-signal sieve (value naming a frequency, or footprint "
                 f"naming the crystal package) — the shelf states no crystal "
                 f"category, so that step is the acknowledged fragile one; value "
-                f"{str(getattr(component, 'value', '') or '')!r}, footprint "
-                f"{str(getattr(component, 'footprint', '') or '')!r}",
+                f"{draw.value!r} ({draw.basis}), footprint "
+                f"{str(getattr(component, 'footprint', '') or '')!r} (PCB 文档) / "
+                f"{str(getattr(page, 'footprint', '') or '')!r} (原理图)",
                 f"region = the crystal's own pad bbox "
                 f"({region.min_x:.1f}, {region.min_y:.1f}) .. "
                 f"({region.max_x:.1f}, {region.max_y:.1f}) mil, grown by "

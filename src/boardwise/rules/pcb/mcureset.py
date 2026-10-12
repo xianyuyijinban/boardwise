@@ -44,6 +44,20 @@ names it rather than passing over it in silence. The same shape applies to
 
 **Measured, not judged**, as in 131b–131e: every row is ``INFO`` and there is no
 distance threshold in this module.
+
+**Which view the values are read in (164b).** The pins, the nets, the membership
+and the geometry are the PCB document's own — a reset net's inventory is a
+connectivity fact. The **value** each member is described by is the *design's*
+declaration, and 岳 ruled (``tasks/158``) that 电气语义一律以原理图为准: the PCB
+document's ``Value`` field is a systematic placeholder (measured: 毕设FOC 1.0.0's
+``PCB1`` disagrees with the schematic on 98 of 122 parts). :func:`_declared`
+therefore reads the schematic page first and the PCB copy only as a fallback
+(153b's :func:`~boardwise.rules.pcb.focground._value_ohms`, reused), and a member
+whose two views disagree is printed with both. The bucket test
+(:func:`_bucket`) still reads the board model, deliberately — it asks 「is this a
+capacitor / a resistor」, which is identity rather than declaration, and the
+predicate it uses (:func:`~boardwise.rules.decap.looks_like_capacitor`) is shared
+with 126b/127b.
 """
 
 from __future__ import annotations
@@ -59,6 +73,7 @@ from ..facts import default_library_path
 from .base import PcbReviewContext, PcbRule
 from .crystal import MCU_CATEGORIES
 from .distance import _measurement, _mil
+from .focground import DrawValue, _placed_on, _value_ohms, schematic_board_of
 
 __all__ = [
     "BOOT0_NAME_MARKER",
@@ -90,6 +105,19 @@ BOOT0_NAME_MARKER = "BOOT"
 
 def _upper(text: object) -> str:
     return str(text or "").strip().upper()
+
+
+def _declared(designator: str, model: object, schematic: object | None) -> DrawValue:
+    """This member's declared value, **schematic page first** (164b).
+
+    The PCB document's ``Value`` field is a systematic placeholder (岳's ruling,
+    ``tasks/158``), so the design's own declaration decides what a member is
+    described by and the copy is only a fallback. The reading is 153b's
+    :func:`~boardwise.rules.pcb.focground._value_ohms`, reused; its ``basis``
+    names the view that won and both declarations when they disagree.
+    """
+    component = (getattr(model, "components", {}) or {}).get(designator)
+    return _value_ohms(component, _placed_on(schematic, designator))
 
 
 @dataclass(frozen=True)
@@ -292,12 +320,19 @@ class McuResetBoot(PcbRule):
         board = ctx.board
         if board is None or model is None:
             return []
+        # 164b: the schematic page this document declares, read for the **values**
+        # the rows describe members with (never for the pins or the nets).
+        schematic = schematic_board_of(ctx)
         findings: list[Finding] = []
         for mcu in _read_mcus(model, library):
             for pin in mcu.reset_pins:
-                findings.append(self._one_reset(mcu, board, pin, library))
+                findings.append(
+                    self._one_reset(mcu, board, pin, library, schematic)
+                )
             for pin in mcu.boot_pins:
-                findings.append(self._one_boot(mcu, board, pin, library))
+                findings.append(
+                    self._one_boot(mcu, board, pin, library, schematic)
+                )
         return findings
 
     # -- rows -------------------------------------------------------------
@@ -313,15 +348,20 @@ class McuResetBoot(PcbRule):
         ]
 
     def _others(
-        self, mcu: McuReset, net: str
-    ) -> list[tuple[str, str, str]]:
-        """``(designator, value, category)`` for every member but the MCU.
+        self, mcu: McuReset, net: str, schematic: object | None = None
+    ) -> list[tuple[str, str, str, str]]:
+        """``(designator, value, category, basis)`` for every member but the MCU.
 
         De-duplicated: an MCU reaches a net through one pin per terminal, so a
         part listed once per pin would print several times.
+
+        ``value`` is what **both views** state, judged on the schematic page
+        first (:func:`_declared`, 164b); ``basis`` is that reading's own sentence
+        and is empty when both views say the same thing, so a row only grows the
+        extra clause where there is something to disambiguate.
         """
         net_obj = (getattr(mcu.board_model, "nets", {}) or {}).get(net)
-        seen: list[tuple[str, str, str]] = []
+        seen: list[tuple[str, str, str, str]] = []
         for designator, _pin in (getattr(net_obj, "pins", None) or []):
             owner = str(designator)
             if owner == mcu.designator or any(row[0] == owner for row in seen):
@@ -329,13 +369,17 @@ class McuResetBoot(PcbRule):
             component = (getattr(mcu.board_model, "components", {}) or {}).get(owner)
             if component is None:
                 continue
+            draw = _declared(owner, mcu.board_model, schematic)
             seen.append(
                 (
                     owner,
-                    str(getattr(component, "value", "") or ""),
+                    draw.value,
                     category_of(
                         str(getattr(component, "footprint", "") or ""), owner
                     ),
+                    ""
+                    if draw.schematic_value == draw.pcb_value
+                    else draw.basis,
                 )
             )
         return seen
@@ -365,25 +409,33 @@ class McuResetBoot(PcbRule):
         return f"{_mil(distance.edge_distance):.1f} mil edge-to-edge"
 
     def _one_reset(
-        self, mcu: McuReset, board, pin: _NamedPin, library
+        self,
+        mcu: McuReset,
+        board,
+        pin: _NamedPin,
+        library,
+        schematic: object | None = None,
     ) -> Finding:
         """The reset row: what else is on ``NRST``, bucketed, and how far."""
         model = mcu.board_model
-        others = self._others(mcu, pin.net)
+        others = self._others(mcu, pin.net, schematic)
         buckets = {bucket: [] for bucket in
                    (PART_PULLUP, PART_CAP_TO_GROUND, PART_SWITCH, PART_OTHER)}
         lines: list[str] = []
-        for designator, value, _category in others:
+        for designator, value, _category, basis in others:
             bucket = _bucket(model, designator, pin.net, library)
             buckets[bucket].append(designator)
             placement = self._placement(board, designator, mcu.designator)
             lines.append(
-                f"{designator} value {value or '(nobody wrote one down)'}, "
-                f"category {category_of(str(getattr((model.components or {})[designator], 'footprint', '') or ''), designator)!r} "
+                f"{designator} value {value or '(nobody wrote one down)'}"
+                + (f" ({basis})" if basis else "")
+                + f", category {category_of(str(getattr((model.components or {})[designator], 'footprint', '') or ''), designator)!r} "
                 f"→ {bucket} (other terminals on "
                 f"{self._lands_on(model, designator, pin.net)}), {placement}"
             )
-        placed = _nearest_placed(board, mcu.designator, [d for d, _v, _c in others])
+        placed = _nearest_placed(
+            board, mcu.designator, [d for d, _v, _c, _b in others]
+        )
         if others:
             summary = (
                 f"{mcu.designator} pin {pin.number} {pin.name!r} @ {pin.net!r}: "
@@ -426,12 +478,24 @@ class McuResetBoot(PcbRule):
                 f"{NRST_NAME_MARKER!r}: pin {pin.number} {pin.name!r} @ "
                 f"{pin.net!r}",
                 f"net {pin.net!r} members other than {mcu.designator}: "
-                + (", ".join(f"{d} ({v!r})" for d, v, _ in others) or "(none)"),
+                + (
+                    ", ".join(
+                        f"{d} ({v!r})"
+                        + (f" [{b}]" if b else "")
+                        for d, v, _c, b in others
+                    )
+                    or "(none)"
+                ),
                 *(lines or [f"net {pin.net!r} carries nothing but the MCU"]),
                 "a member is bucketed by its own declared shape and by where its "
                 "*other* terminals land, never by its designator prefix alone; "
                 "a resistor reaching a ground net is reported as other rather "
                 "than as the pull-up the row is looking for",
+                "the value each member is described by is read through both "
+                "views, the schematic page first and the PCB document's copy "
+                "only as a fallback (岳裁定 tasks/158 — that copy is a "
+                "systematic placeholder); where the two disagree both are "
+                "printed",
             ],
             target=FindingTarget(
                 component_ref=mcu.designator,
@@ -443,11 +507,16 @@ class McuResetBoot(PcbRule):
         )
 
     def _one_boot(
-        self, mcu: McuReset, board, pin: _NamedPin, library
+        self,
+        mcu: McuReset,
+        board,
+        pin: _NamedPin,
+        library,
+        schematic: object | None = None,
     ) -> Finding:
         """The boot row: the strap's direction, which is the whole answer."""
         model = mcu.board_model
-        others = self._others(mcu, pin.net)
+        others = self._others(mcu, pin.net, schematic)
         if not others:
             summary = (
                 f"{mcu.designator} pin {pin.number} {pin.name!r} @ {pin.net!r} "
@@ -457,10 +526,12 @@ class McuResetBoot(PcbRule):
             )
         else:
             directions = "; ".join(
-                f"{designator} value {value or '(nobody wrote one down)'} → other "
-                f"terminals on {self._lands_on(model, designator, pin.net)}"
+                f"{designator} value {value or '(nobody wrote one down)'}"
+                + (f" ({basis})" if basis else "")
+                + f" → other terminals on "
+                f"{self._lands_on(model, designator, pin.net)}"
                 f" ({self._placement(board, designator, mcu.designator)})"
-                for designator, value, _category in others
+                for designator, value, _category, basis in others
             )
             summary = (
                 f"{mcu.designator} pin {pin.number} {pin.name!r} @ {pin.net!r}: "
@@ -480,11 +551,20 @@ class McuResetBoot(PcbRule):
                 f"{BOOT0_NAME_MARKER!r}: pin {pin.number} {pin.name!r} @ "
                 f"{pin.net!r}",
                 f"net {pin.net!r} members other than {mcu.designator}: "
-                + (", ".join(f"{d} ({v!r})" for d, v, _ in others) or "(none)"),
+                + (
+                    ", ".join(
+                        f"{d} ({v!r})" + (f" [{b}]" if b else "")
+                        for d, v, _c, b in others
+                    )
+                    or "(none)"
+                ),
                 "the direction matters more than the presence: a resistor to a "
                 "ground net and a resistor to a supply net are different boot "
                 "modes, so each member's other terminals are printed rather than "
                 "collapsed to 'a resistor is there'",
+                "each member's value is read through both views, the schematic "
+                "page first and the PCB document's copy only as a fallback "
+                "(岳裁定 tasks/158); where the two disagree both are printed",
             ],
             target=FindingTarget(
                 component_ref=mcu.designator,

@@ -70,6 +70,22 @@ invented a threshold would put a number in the ledger nobody decided.
 empty and says which of the two columns is unstated — that is ROBOT's ``$1N251``
 (``VSSA``, whose only other member is a 0 Ω resistor) and 1.0.0's ``VREF``
 (whose members are the H743 and the REF2033 and no capacitor whatsoever).
+
+**Which view the *values* are read in (164b).** The nets, the membership and the
+geometry are the **PCB document's** own — 131c's whole argument, and it stands.
+The *declared value* is not: 岳 ruled (``tasks/158``) that 电气语义一律以原理图为准,
+because the PCB document's ``Value`` field is a systematic placeholder (measured:
+毕设FOC 1.0.0's ``PCB1`` disagrees with the schematic on 98 of 122 parts, 23 of
+them ``100nF``). So :func:`_split_pool` and the ``VCAP`` row read the schematic
+page first and the PCB copy only as a fallback (153b's
+:func:`~boardwise.rules.pcb.focground._value_ohms`, reused), and every row prints
+which view stated the value. Before this, ``C1`` (schematic ``2.2µF``) was filed
+as a sub-1 µF bypass and the rule contradicted ``pcb-derating-package``, which had
+already been repointed at the schematic by 153. The **identity** sieve
+(``looks_like_capacitor``, and the MPN/LCSC shelf lookup) still reads the board
+model's own fields — those are not placeholders (measured: MPN/LCSC agree between
+the two views on all but 5 parts of the whole fixture corpus), and 127b/126b share
+that predicate, so moving it is a separate ruling.
 """
 
 from __future__ import annotations
@@ -87,6 +103,7 @@ from ..facts import default_library_path
 from .base import PcbReviewContext, PcbRule
 from .crystal import MCU_CATEGORIES
 from .distance import HF_FARADS, _measurement, _mil
+from .focground import _placed_on, _value_ohms, schematic_board_of
 
 __all__ = [
     "HF_CEILING_FARADS",
@@ -352,21 +369,54 @@ class _PoolRead:
     part this PCB document does not place is **not measured**. Reporting the two
     as one list would tell a reader the board is missing a capacitor when the
     truth is that the tool could not read or could not see one.
+
+    ``basis`` carries one sentence per candidate — the two-view reading that put
+    it where it is (164b: 「原理图 2.2uF / PCB 文档 100nF」 and which view was
+    judged on). The split is the rule's whole verdict, so how each part was read
+    belongs on the row rather than in the reader's head.
     """
 
     bypass: list[tuple[float, str, str]] = field(default_factory=list)
     reservoir: list[tuple[float, str, str]] = field(default_factory=list)
     unreadable: list[str] = field(default_factory=list)
     unplaced: list[str] = field(default_factory=list)
+    basis: list[str] = field(default_factory=list)
 
 
-def _split_pool(board: object, mcu: str, model: object, pool: list[str]) -> _PoolRead:
+def _declared(designator: str, model: object, schematic: object | None) -> str:
+    """This designator's declared value, **schematic page first** (164b).
+
+    The PCB document's ``Value`` field is a systematic placeholder — 岳's ruling
+    (``tasks/158``), measured on 毕设FOC 1.0.0's ``PCB1`` as 98 of 122 parts
+    disagreeing with the schematic — so the declaration that decides a pool is
+    the schematic page's, and the copy is only a fallback. The reading is
+    153b's :func:`~boardwise.rules.pcb.focground._value_ohms`, reused rather than
+    re-written; its ``basis`` is what the row prints.
+    """
+    component = (getattr(model, "components", {}) or {}).get(designator)
+    return _value_ohms(component, _placed_on(schematic, designator))
+
+
+def _split_pool(
+    board: object,
+    mcu: str,
+    model: object,
+    pool: list[str],
+    schematic: object | None = None,
+) -> _PoolRead:
     """The pool split at :data:`HF_CEILING_FARADS`.
 
     A part whose value cannot be read is in **neither** column and is reported as
     :attr:`_PoolRead.unreadable`: an unreadable capacitance is UNKNOWN, never a
     zero and never a guess that it is small enough to be a bypass. This is the
     same argument :func:`boardwise.rules.pcb.distance.capacitor_role` makes.
+
+    The value read is the **schematic page's** with the PCB document's copy as a
+    fallback (:func:`_declared`, 164b): ``C1`` on 毕设FOC 1.0.0's ``PCB1``
+    declares ``2.2µF`` on the schematic and the board copy reads ``100nF``, so
+    reading the copy filed a 2.2 µF part as a sub-1 µF bypass — and made this
+    rule contradict ``pcb-derating-package``, which 153 had already repointed at
+    the schematic.
     """
     result = _PoolRead()
     for designator in pool:
@@ -375,7 +425,9 @@ def _split_pool(board: object, mcu: str, model: object, pool: list[str]) -> _Poo
         if component is None or distance is None:
             result.unplaced.append(designator)
             continue
-        declared = str(getattr(component, "value", "") or "")
+        draw = _declared(designator, model, schematic)
+        result.basis.append(f"{designator}: {draw.basis}")
+        declared = draw.value
         farads = parse_capacitance_farads(declared) if declared else None
         if farads is None:
             result.unreadable.append(designator)
@@ -483,14 +535,21 @@ class McuSupplyGroups(PcbRule):
         model = ctx.pcb_model
         if board is None or model is None:
             return []
+        # 164b: the schematic page this PCB document declares, resolved once.
+        # It is read for the **values** the two pool columns are split on and
+        # for the value a ``VCAP`` capacitor is quoted with — never for the
+        # nets, which stay the PCB document's own (131c).
+        schematic = schematic_board_of(ctx)
         findings: list[Finding] = []
         for mcu in _read_mcus(model, library):
             if board.component(mcu.designator) is None:
                 continue  # no geometry on this PCB document: nothing to measure
             for net in sorted(mcu.groups):
-                findings.append(self._one_group(mcu, board, net, library))
+                findings.append(self._one_group(mcu, board, net, library, schematic))
             for number, name, net in mcu.vcap_pins:
-                findings.append(self._one_vcap(mcu, board, net, number, name, library))
+                findings.append(
+                    self._one_vcap(mcu, board, net, number, name, library, schematic)
+                )
         return findings
 
     # -- rows -------------------------------------------------------------
@@ -520,14 +579,19 @@ class McuSupplyGroups(PcbRule):
         return ", ".join(members) or "(none)"
 
     def _one_group(
-        self, mcu: McuSupply, board: object, net: str, library
+        self,
+        mcu: McuSupply,
+        board: object,
+        net: str,
+        library,
+        schematic: object | None = None,
     ) -> Finding:
         """One supply group's row: its pins, its bypass column, its reservoir."""
         model = mcu.board_model
         pins = mcu.groups[net]
         ground_kind = is_ground_net(net)
         pool = bypass_pool(model, net, library)
-        read = _split_pool(board, mcu.designator, model, pool)
+        read = _split_pool(board, mcu.designator, model, pool, schematic)
         bypass, reservoir = read.bypass, read.reservoir
         pin_text = ", ".join(f"pin {p.number} {p.name!r} ({p.role})" for p in pins)
 
@@ -573,6 +637,13 @@ class McuSupplyGroups(PcbRule):
             "candidates this PCB document does not place, therefore not "
             "measured at all (an unmeasurable part is not a far one): "
             + (", ".join(sorted(read.unplaced)) or "(none)")
+        )
+        evidence.append(
+            "every candidate's value as **both** views state it, judged on the "
+            "schematic page first and the PCB document's copy only as a "
+            "fallback (岳裁定 tasks/158: the PCB document's Value field is a "
+            "systematic placeholder; 153b's focground._value_ohms is the "
+            "reading, reused): " + ("; ".join(read.basis) or "(no candidate)")
         )
         evidence.append(unreadable_note)
         evidence.append(unplaced_note)
@@ -634,6 +705,7 @@ class McuSupplyGroups(PcbRule):
         number: str,
         name: str,
         library,
+        schematic: object | None = None,
     ) -> Finding:
         """One internal-regulator (``VCAP``) pin's row — named, not grouped.
 
@@ -645,6 +717,13 @@ class McuSupplyGroups(PcbRule):
         「a capacitor of the value the datasheet names is there」 are different
         statements and only the second one is a judgement — which this rule
         deliberately does not make, having no spec to check against.
+
+        The value quoted is the **schematic page's** declaration with the PCB
+        copy as a fallback (164b): the question the row leaves to a human is
+        「is the fitted capacitor the value the datasheet asks for」, and that
+        question is about the design's declaration, not about a field measured to
+        read ``100nF`` for 23 of this fixture's capacitors regardless of what
+        they are.
         """
         model = mcu.board_model
         net_obj = (getattr(model, "nets", {}) or {}).get(net)
@@ -667,7 +746,8 @@ class McuSupplyGroups(PcbRule):
                 footprint=component.footprint or "",
             ):
                 continue
-            declared = str(getattr(component, "value", "") or "")
+            draw = _declared(designator, model, schematic)
+            declared = draw.value
             farads = parse_capacitance_farads(declared) if declared else None
             distance = component_distance(board, designator, mcu.designator)
             placement = (
@@ -677,7 +757,7 @@ class McuSupplyGroups(PcbRule):
             capacitors.append(
                 f"{designator} value {declared or '(nobody wrote one down)'}"
                 + ("" if farads is not None else " — **unreadable**, UNKNOWN")
-                + f" ({placement})"
+                + f" ({placement}; {draw.basis})"
             )
         return Finding(
             rule_id=self.id,

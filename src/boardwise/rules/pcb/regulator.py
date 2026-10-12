@@ -73,10 +73,20 @@ netlist view of **the PCB document it is running on**, built per document by
   ``pcb_model`` field exists for; a caller that hands this rule a context with
   ``pcb_model=None`` gets silence, not a wrong answer.
 
-``ctx.model`` — the schematic view — is deliberately **not** read here. The
-established PCB rules (``pcb-decap-distance``, the IPC pair) keep it, because
-their questions were established over the schematic netlist; this one needs
-the geometry's own names.
+``ctx.model`` — the schematic view — is read here for **one thing only**: the
+**value** each part declares (164b). 131b deliberately did not read it, because
+its net names are a different set for the same wires and this rule's questions
+are 「which capacitors sit on *this pin's own net*」 — a geometry question the
+PCB view must answer. But the *value* is a **declaration**, and 岳 ruled
+(``tasks/158``) that 电气语义一律以原理图为准: the PCB document's own ``Value``
+field is a **systematic placeholder**, measured on 毕设FOC 1.0.0's ``PCB1`` as 98
+of 122 parts carrying a value the schematic contradicts (23 of them ``100nF``,
+20 ``10K``). So the net and the geometry come from :attr:`~PcbReviewContext.
+pcb_model` and the value comes from :func:`_declared`, which reads the schematic
+page first and the PCB copy only as a fallback (153b's
+:func:`~boardwise.rules.pcb.focground._value_ohms`). The defect this closes is
+``C93``: the schematic's ``22µF`` filed as a ``< 1 µF`` high-frequency bypass
+because the board copy says ``100nF``.
 """
 
 from __future__ import annotations
@@ -93,6 +103,7 @@ from ..decap import cap_candidates_on
 from ..facts import default_library_path
 from .base import PcbReviewContext, PcbRule
 from .distance import _board_models, _mil, _measurement
+from .focground import DrawValue, _placed_on, _value_ohms, schematic_board_of
 
 __all__ = [
     "HF_POOL_FARADS",
@@ -181,19 +192,43 @@ class RegulatorReading:
     unclassified_pin_names: tuple[str, ...] = ()
 
 
-def regulator_role(candidate: object, model: object) -> str:
-    """Which pool one :class:`~boardwise.rules.decap.CapCandidate` is in.
+def _declared(candidate: object, model: object, schematic: object | None = None) -> DrawValue:
+    """The value this candidate declares, read through **both** views (164b).
 
-    Read off the **board model's own Component** (``component.value``) through
-    :func:`boardwise.core.values.parse_capacitance_farads`, never off a package
-    name and never guessed — 裁定 ③ makes the pool a function of the value the
-    drawing states. Returns :data:`POOL_HF` below the floor, :data:`POOL_STORAGE`
-    at or above it, and ``""`` for a value nobody wrote down (the UNKNOWN case:
-    in neither pool, and reported as such rather than silently assigned).
+    ``model`` is the board model the candidate came from (the PCB document's own
+    netlist view) and ``schematic`` is **this document's schematic page**
+    (:func:`~boardwise.rules.pcb.focground.schematic_board_of`), or ``None`` for
+    「no schematic view for this document」.
+
+    The reading itself is 153b's
+    :func:`~boardwise.rules.pcb.focground._value_ohms`, reused rather than
+    re-implemented: the schematic page's declaration wins, the PCB document's
+    copy is the fallback, and a disagreement is carried in ``basis`` as
+    「原理图 X / PCB 文档 Y」. ``None`` for ``schematic`` is honest rather than
+    fatal — the copy is then the only value there is, and the basis says it is a
+    fallback instead of claiming the schematic declared it.
     """
     designator = str(getattr(candidate, "designator", "") or "")
-    comp = (getattr(model, "components", {}) or {}).get(designator)
-    declared = str(getattr(comp, "value", "") or "") if comp is not None else ""
+    component = (getattr(model, "components", {}) or {}).get(designator)
+    return _value_ohms(component, _placed_on(schematic, designator))
+
+
+def regulator_role(
+    candidate: object, model: object, schematic: object | None = None
+) -> str:
+    """Which pool one :class:`~boardwise.rules.decap.CapCandidate` is in.
+
+    Read off **both views** through :func:`_declared` — the schematic page's
+    declaration first, the PCB document's copy as a fallback (164b) — and then
+    through :func:`boardwise.core.values.parse_capacitance_farads`, never off a
+    package name and never guessed: 裁定 ③ makes the pool a function of the value
+    the drawing states. Returns :data:`POOL_HF` below the floor,
+    :data:`POOL_STORAGE` at or above it, and ``""`` for a value nobody wrote
+    down (the UNKNOWN case: in neither pool, and reported as such rather than
+    silently assigned). ``schematic=None`` reads the board model alone, which is
+    what a caller with no board link has.
+    """
+    declared = _declared(candidate, model, schematic).value
     farads = parse_capacitance_farads(declared) if declared else None
     if farads is None:
         return ""
@@ -202,26 +237,35 @@ def regulator_role(candidate: object, model: object) -> str:
     return POOL_HF
 
 
-def _pool_reason(candidate: object, model: object) -> str:
-    """The evidence string for one candidate's pool assignment."""
+def _pool_reason(
+    candidate: object, model: object, schematic: object | None = None
+) -> str:
+    """The evidence string for one candidate's pool assignment.
+
+    The **basis** is :func:`_declared`'s own sentence, printed verbatim: it names
+    the view the value was judged on and, when the two views disagree, both
+    declarations. That is 164b's whole point — an evidence line that says
+    「declared '100nF'」 while reading a field the schematic contradicts is a lie,
+    and the fix is for the row to quote the schematic *and* the copy.
+    """
     designator = str(getattr(candidate, "designator", "") or "")
-    comp = (getattr(model, "components", {}) or {}).get(designator)
-    declared = str(getattr(comp, "value", "") or "") if comp is not None else ""
+    draw = _declared(candidate, model, schematic)
+    declared = draw.value
     farads = parse_capacitance_farads(declared) if declared else None
     if farads is None:
         return (
-            f"candidate {designator}: the schematic states no readable "
-            f"capacitance (value {declared!r}) — UNKNOWN, in neither pool"
+            f"candidate {designator}: {draw.basis} — not a readable "
+            f"capacitance, so UNKNOWN and in neither pool"
         )
     if farads + _BOUNDARY_FARADS >= HF_POOL_FARADS:
         return (
-            f"candidate {designator}: declared {declared!r} = "
+            f"candidate {designator}: {draw.basis} = "
             f"{farads * 1e6:g} µF >= {HF_POOL_FARADS * 1e6:g} µF — "
             f"{_POOL_LABELS[POOL_STORAGE]} pool (岳裁定 ③, the middle band is "
             f"assigned to storage, not left undecided)"
         )
     return (
-        f"candidate {designator}: declared {declared!r} = "
+        f"candidate {designator}: {draw.basis} = "
         f"{farads * 1e6:g} µF < {HF_POOL_FARADS * 1e6:g} µF — "
         f"{_POOL_LABELS[POOL_HF]} pool"
     )
@@ -344,6 +388,12 @@ class RegulatorCapDistance(PcbRule):
         model = ctx.pcb_model
         if board is None or model is None:
             return []
+        # 164b: the **value** every pool decision is made on comes from this
+        # document's own schematic page, resolved once through the container's
+        # declared board link. ``None`` (no link, or a synthetic context) leaves
+        # the PCB document's copy as the only value there is, and every row then
+        # says it is reading a fallback.
+        schematic = schematic_board_of(ctx)
         findings: list[Finding] = []
         for reading in _regulator_readings(model, library):
             if board.component(reading.designator) is None:
@@ -356,7 +406,9 @@ class RegulatorCapDistance(PcbRule):
                 for net in nets:
                     for pool in (POOL_HF, POOL_STORAGE):
                         findings.extend(
-                            self._one_pool(reading, board, side, net, pool, library)
+                            self._one_pool(
+                                reading, board, side, net, pool, library, schematic
+                            )
                         )
         return findings
 
@@ -400,6 +452,7 @@ class RegulatorCapDistance(PcbRule):
         net: str,
         pool: str,
         library,
+        schematic: object | None = None,
     ) -> list[Finding]:
         """The one row for ``(side, net, pool)`` of one regulator."""
         label = _SIDE_LABELS[side]
@@ -408,7 +461,7 @@ class RegulatorCapDistance(PcbRule):
         members = [
             c
             for c in candidates
-            if regulator_role(c, reading.board_model) == pool
+            if regulator_role(c, reading.board_model, schematic) == pool
         ]
         excluded = [c for c in candidates if c not in members]
         evidence = [
@@ -417,7 +470,7 @@ class RegulatorCapDistance(PcbRule):
             f"netname pattern)",
             f"candidates bridging {net!r} to a ground net: "
             f"{', '.join(sorted(c.designator for c in candidates)) or '(none)'}",
-            *[_pool_reason(c, reading.board_model) for c in sorted(
+            *[_pool_reason(c, reading.board_model, schematic) for c in sorted(
                 candidates, key=lambda c: c.designator
             )],
         ]

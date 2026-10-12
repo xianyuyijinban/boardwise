@@ -67,17 +67,34 @@ side by side:
   ``Load Capacitance`` param (measured: ``20pF`` on ``X322525MSB4SI``, ``12pF``
   on ``X32258MOB4SI``). Absent where the shelf has no entry, and the row then
   says so rather than substituting the as-declared value for the spec.
-* **实测容值** — what the board actually fitted, read through
-  :func:`boardwise.core.values.parse_capacitance_farads` on the part's own
-  ``value``. 1.0.0's ``C25`` / ``C26`` read ``30pF``; ROBOT's ``C2`` reads
-  ``100nF``.
+* **实测容值** — what the design actually fitted, read through
+  :func:`boardwise.core.values.parse_capacitance_farads` on the part's
+  declaration. 1.0.0's ``C25`` / ``C26`` read ``30pF``; ROBOT's ``C2`` reads
+  ``12pF`` on the schematic while the PCB document copies ``100nF`` over it.
 * **串联等效 CL** — the two load capacitors in series, ``C/2``, plus
   :data:`PARASITIC_CAP_FARADS` (5 pF, the 「典型 3-7pF 取 5」 allowance, and a
   **default, not a measurement** — stated as such in the row).
 
+**Which view the values come from (164b).** The nets, the membership, the
+geometry and the shelf lookup are the PCB document's own — 131c's argument, and
+it stands. The **declared values** are not: 岳 ruled (``tasks/158``) that
+电气语义一律以原理图为准, because the PCB document's ``Value`` field is a
+systematic placeholder (measured: 1.0.0's ``PCB1`` disagrees with the schematic on
+98 of 122 parts, 1.1.0's on 99 of 105 — 23 of them plain ``100nF``). Reading that
+copy made this rule's headline number meaningless: ROBOT's ``C2`` and 1.1.0's
+``C20``/``C21`` declare ``12pF`` / ``20pF`` in the schematic and the row computed
+串联等效 CL = **50005pF** from the copy's ``100nF``. Every value here is now read
+through 153b's :func:`~boardwise.rules.pcb.focground._value_ohms` — the schematic
+page first, the board's copy only as a fallback, and both declarations printed
+when they disagree. The crystal **sieve** uses the same route for ``value`` and,
+for ``footprint``, tests **both** declarations (see
+:func:`is_crystal_member`); the MPN/LCSC shelf lookup stays on the board model,
+which is not a placeholder (measured: the two views agree on MPN/LCSC for all but
+5 parts of the whole fixture corpus).
+
 **No verdict.** 1.0.0's 30 pF pair gives ``30/2 + 5 = 20 pF`` against a
-``20pF`` spec, which matches, and ROBOT's ``100nF`` against ``12pF`` is three
-orders of magnitude out. **Both are the same severity, and neither is graded**:
+``20pF`` spec, which matches, and ROBOT's ``12pF`` against ``12pF`` also
+matches. **Both are the same severity, and neither is graded**:
 岳 has ruled on no tolerance, and a rule that invented one would put a number
 in the ledger that nobody decided. What the task asks for is that the gap be
 *visible*, and three columns side by side is what makes it visible — the
@@ -109,6 +126,7 @@ from ..decap import cap_candidates_on, same_net_capacitors_on
 from ..facts import default_library_path
 from .base import PcbReviewContext, PcbRule
 from .distance import _mil, _measurement
+from .focground import _placed_on, _value_ohms, schematic_board_of
 
 __all__ = [
     "CRYSTAL_NAME_HINT",
@@ -212,7 +230,9 @@ def oscillator_pins_of(component: object) -> list[object]:
     ]
 
 
-def is_crystal_member(model: object, designator: str) -> bool:
+def is_crystal_member(
+    model: object, designator: str, schematic: object | None = None
+) -> bool:
     """Does the board's part at ``designator`` read as a **crystal**?
 
     The fragile step, in one function, and the docstring at the module head is
@@ -224,17 +244,36 @@ def is_crystal_member(model: object, designator: str) -> bool:
     the footprint — and a part matching neither is simply not a crystal, which
     the caller reports as such rather than guessing.
 
-    Read off the **board model** the caller passed in, the same view
-    :func:`boardwise.rules.pcb.regulator.regulator_role` reads, because the
-    geometry and the netlist have to agree on which part is which.
+    **Which view the two signals are read in (164b).** ``value`` is read through
+    **both** views, the schematic page's declaration first and this board model's
+    copy only as a fallback (153b's
+    :func:`~boardwise.rules.pcb.focground._value_ohms`, reused) — 岳's ruling is
+    that the PCB document's ``Value`` field is a systematic placeholder, and a
+    sieve that reads a placeholder can recognise a part by a string nobody
+    stated. The **footprint** is deliberately read on **both** declarations
+    instead of "schematic first with a fallback": measured on the four acceptance
+    fixtures, the two views' footprint hints agree for **every** part, because
+    the schematic holds the symbol name (``SMD3225-4P``) and the board the land
+    pattern (``OSC-SMD_4P-L3.2-W2.5-BL``) — neither is a placeholder, and a
+    boolean identity test must not lose a signal by preferring one spelling over
+    the other. On 1.0.0's ``X1`` this matters: the *schematic symbol* carries
+    ``3225`` and the *board's* land pattern does not, while ``25MHz`` (the
+    schematic states nothing, so the fallback supplies it) is what the value route
+    matches on.
+
+    ``schematic=None`` reads this board model alone — every caller with no board
+    link, and every pre-164b caller, gets exactly the old reading.
     """
     component = (getattr(model, "components", {}) or {}).get(str(designator))
-    if component is None:
-        return False
-    if any(hint in _upper(getattr(component, "value", "")) for hint in CRYSTAL_NAME_HINT):
+    placed = _placed_on(schematic, str(designator))
+    declared = _value_ohms(component, placed).value
+    if any(hint in _upper(declared) for hint in CRYSTAL_NAME_HINT):
         return True
-    footprint = _upper(getattr(component, "footprint", ""))
-    return any(hint in footprint for hint in CRYSTAL_FOOTPRINT_HINT)
+    for source in (placed, component):
+        footprint = _upper(getattr(source, "footprint", ""))
+        if footprint and any(hint in footprint for hint in CRYSTAL_FOOTPRINT_HINT):
+            return True
+    return False
 
 
 def series_equivalent_load(farads: float) -> float:
@@ -293,6 +332,10 @@ class McuOscillator:
     #: The board's own model (a multi-board project has one per board), which
     #: is also the model the capacitor candidates must be asked about.
     board_model: object = None
+    #: **This PCB document's own schematic page** (164b), or ``None``. Read for
+    #: the **values** — the crystal's own declaration and each load capacitor's —
+    #: never for the nets or the geometry, which are the board model's.
+    schematic: object = None
     #: ``{net: [(pin number, pin name), ...]}`` — the oscillator pins that
     #: carry a net. An unpopulated branch is in
     #: :attr:`unused_pin_names`, never here.
@@ -306,13 +349,20 @@ class McuOscillator:
         return list(self.pins_by_net)
 
 
-def _mcu_oscillators(model: object, library) -> list[McuOscillator]:
+def _mcu_oscillators(
+    model: object, library, schematic: object | None = None
+) -> list[McuOscillator]:
     """Every ``ic.mcu`` part, per board, with its oscillator pins read.
 
     The shelf is read once through :func:`boardwise.core.parts.load_parts` /
     :func:`~boardwise.core.parts.find_facts` — the same exact-match lookup
     131b and 131c use, asked directly so the category this rule's evidence
     quotes is the one the shelf states.
+
+    ``schematic`` is this document's own schematic page (164b), carried on the
+    reading so every downstream row — the crystal's identity, the load
+    capacitors' declared values, the series-equivalent CL — is read in the same
+    view without each row having to resolve the board link again.
     """
     readings: list[McuOscillator] = []
     components = getattr(model, "components", {}) or {}
@@ -342,6 +392,7 @@ def _mcu_oscillators(model: object, library) -> list[McuOscillator]:
                 designator=str(designator),
                 category=category,
                 board_model=model,
+                schematic=schematic,
                 pins_by_net=pins_by_net,
                 unused_pin_names=tuple(unused),
             )
@@ -403,8 +454,12 @@ class McuCrystalPlacement(PcbRule):
         model = ctx.pcb_model
         if board is None or model is None:
             return []
+        # 164b: the schematic page this document declares. Read for **values**
+        # only — the crystal's own declaration, the load capacitors', and the
+        # series-equivalent CL derived from them — never for the nets.
+        schematic = schematic_board_of(ctx)
         findings: list[Finding] = []
-        for osc in _mcu_oscillators(model, library):
+        for osc in _mcu_oscillators(model, library, schematic):
             if board.component(osc.designator) is None:
                 continue  # no geometry on this PCB document: nothing to measure
             if osc.unused_pin_names:
@@ -491,7 +546,7 @@ class McuCrystalPlacement(PcbRule):
         crystals = [
             designator
             for designator in members
-            if is_crystal_member(model, designator)
+            if is_crystal_member(model, designator, osc.schematic)
         ]
         if not crystals:
             return [
@@ -541,14 +596,16 @@ class McuCrystalPlacement(PcbRule):
                 designator = str(owner)
                 if designator in found:
                     continue
-                if not is_crystal_member(osc.board_model, designator):
+                if not is_crystal_member(osc.board_model, designator, osc.schematic):
                     continue
                 if board.component(designator) is None:
                     continue  # named by the netlist, not carried by this document
                 found.append(designator)
         return found
 
-    def _crystal_identity(self, model: object, crystal: str) -> str:
+    def _crystal_identity(
+        self, model: object, crystal: str, schematic: object | None = None
+    ) -> str:
         """One evidence line naming the crystal, its value and its MPN.
 
         The three-column row is a comparison about *this* reference, and a
@@ -556,13 +613,25 @@ class McuCrystalPlacement(PcbRule):
         about — 25 MHz / ``X322525MSB4SI`` on 毕设FOC, 8 MHz /
         ``X32258MOB4SI`` on ROBOT and 药箱. The frequency is also the signal
         the sieve matched on, so quoting it shows the reader the working.
+
+        **Both views are named (164b).** The value is read through
+        :func:`is_crystal_member`'s own route — the schematic page first, the
+        board's copy only as a fallback — so the line carries that reading's
+        basis, and both footprints are quoted: the schematic page's symbol name
+        and the board's land pattern are different strings for the same package
+        (``SMD3225-4P`` vs ``OSC-SMD_4P-L3.2-W2.5-BL`` on 1.0.0), and the sieve
+        legitimately used either.
         """
         component = (getattr(model, "components", {}) or {}).get(crystal)
+        placed = _placed_on(schematic, crystal)
+        draw = _value_ohms(component, placed)
+        board_footprint = str(getattr(component, "footprint", "") or "")
+        page_footprint = str(getattr(placed, "footprint", "") or "")
         return (
             f"crystal {crystal}: value "
-            f"{str(getattr(component, 'value', '') or '')!r}, MPN "
+            f"{draw.value!r} ({draw.basis}), MPN "
             f"{str(getattr(component, 'mpn', '') or '')!r}, footprint "
-            f"{str(getattr(component, 'footprint', '') or '')!r}"
+            f"{board_footprint!r} (PCB 文档) / {page_footprint!r} (原理图)"
         )
 
     def _pad(self, board: BoardGeometry, designator: str, pin: str):
@@ -615,7 +684,10 @@ class McuCrystalPlacement(PcbRule):
             for number, name in pins
         ]
         findings: list[Finding] = []
-        identity = [*self._identity(osc), self._crystal_identity(osc.board_model, crystal)]
+        identity = [
+            *self._identity(osc),
+            self._crystal_identity(osc.board_model, crystal, osc.schematic),
+        ]
         for pin_number, pin_name, pin_net in sorted(mcu_pins):
             mcu_pad = self._pad(board, osc.designator, pin_number)
             if mcu_pad is None:
@@ -702,7 +774,7 @@ class McuCrystalPlacement(PcbRule):
         spec_text, spec_basis = _load_capacitance_spec(crystal_component, library)
         evidence = [
             *identity,
-            self._crystal_identity(model, crystal),
+            self._crystal_identity(model, crystal, osc.schematic),
             f"crystal {crystal} recognised as a frequency reference by the "
             "documented two-signal sieve (value naming a frequency, or a "
             "footprint naming the crystal package) — the shelf states no "
@@ -751,7 +823,14 @@ class McuCrystalPlacement(PcbRule):
         ]
         for candidate in sorted(candidates, key=lambda c: c.designator):
             comp = (model.components or {}).get(candidate.designator)
-            declared = str(getattr(comp, "value", "") or "")
+            # 164b: the fitted capacitor's value is the **design's** declaration,
+            # so it is read through both views (schematic page first, the PCB
+            # document's copy only as a fallback). Reading the copy here made the
+            # series-equivalent CL meaningless: ROBOT's C2 declares 12pF and the
+            # board copy reads 100nF, which turned a 11pF network into 50005pF —
+            # and 1.1.0's C20/C21 the same, 20pF -> 100nF.
+            draw = _value_ohms(comp, _placed_on(osc.schematic, candidate.designator))
+            declared = draw.value
             farads = parse_capacitance_farads(declared) if declared else None
             pads = board.pads_for_component(candidate.designator)
             on_net = [pad for pad in pads if pad.net == net]
@@ -812,6 +891,8 @@ class McuCrystalPlacement(PcbRule):
                     message=summary,
                     evidence=evidence
                     + [
+                        f"load capacitor {candidate.designator} value read "
+                        f"through both views: {draw.basis}",
                         *columns,
                         f"load capacitor {candidate.designator} -> MCU "
                         + (

@@ -352,8 +352,17 @@ def test_the_whole_real_checkup_table_is_pinned(checkup_100):
     """Every ``pcb-regulator-cap-distance`` row the real checkup emits.
 
     Pinned **from the report**, not from a direct rule call, because the wiring
-    is what 131c changed. The numbers are 131b's own, unchanged — only the nets
-    they are attributed to are now the board's.
+    is what 131c changed. The nets are 131b's own; one **value** moved under
+    164b's ruling and the row it belongs to moved with it:
+
+    * 旧 ``("U5", "+5V", "C93", 521.2)`` — the HF pool's nearest on ``+5V``;
+    * 新 ``("U5", "+5V", "C98", 660.9)`` — the next nearest HF candidate, because
+    * ``C93`` is now in the **storage** pool: the schematic declares ``22µF`` and
+      the PCB document copies ``100nF`` over it (岳裁 ``tasks/158``: the PCB
+      document's ``Value`` field is a systematic placeholder, so 电气语义以原理图
+      为准). The row's evidence states both declarations. ``C93`` stays 521.2 mil
+      from the pin — it is simply no longer the nearest *HF* part, and it does not
+      displace ``C5`` (95.9) as U5's nearest storage part.
     """
     assert {
         (r["target"]["component_ref"], r["target"]["net_refs"][0] if r["target"]["net_refs"] else "",
@@ -364,7 +373,7 @@ def test_the_whole_real_checkup_table_is_pinned(checkup_100):
         ("U11", "+24V", "", None),
         ("U11", "+24V", "C89", 99.5),
         ("U11", "", "", None),
-        ("U5", "+5V", "C93", 521.2),
+        ("U5", "+5V", "C98", 660.9),
         ("U5", "+5V", "C5", 95.9),
         ("U5", "$1N66612", "C3", 41.8),
         ("U5", "$1N66612", "", None),
