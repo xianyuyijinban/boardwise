@@ -2545,6 +2545,49 @@ def _flag_problems(plan: ChangePlan, geometry: Any) -> list[str]:
     return problems
 
 
+def ground_family_observations(
+    glyphs: Mapping[str, str], refs: Mapping[str, str] | None = None
+) -> list[str]:
+    """The 180 two-family observations: ≥2 ground families on **one** host glyph.
+
+    ``glyphs`` maps a ground net to the host glyph its flag actually landed on —
+    a library device uuid on the by-symbol path (180), or ``place_power
+    <kind>`` on the fallback. 178b measured ``sch.place_power`` drawing every
+    ground net as one ``Ground-GND``; two families a reader cannot tell apart
+    are not an isolation statement at all, and a page with ≥2 ground families
+    whose flags share a glyph is exactly that. One note per shared glyph, naming
+    the families and the plan's symbol refs (``refs``).
+
+    An **observation**, not a finding: no refusal, no severity, no exit code
+    (the main agent ruled: the plan's notes channel, 168's rule). Returned as a
+    list so the caller puts it through its own notes channel and the judgement
+    itself is testable without a bridge.
+    """
+    refs = refs or {}
+    by_glyph: dict[str, list[str]] = {}
+    for net, glyph in glyphs.items():
+        by_glyph.setdefault(glyph, []).append(net)
+    notes: list[str] = []
+    for glyph, nets in sorted(by_glyph.items()):
+        if len(nets) < 2:
+            continue
+        detail = ", ".join(
+            f"{net}→{refs.get(net) or '(无 ref)'}" for net in sorted(nets)
+        )
+        # 180 审计 LOW-c2/c3：只点名共享的族（不共享的不许列进来）；
+        # place_power 回落的字形是 178b 实测的推定，措辞不许说「实际」。
+        certainty = (
+            "推定同形（place_power 恒落 Ground-GND，178b 实测，非本 run 回读）"
+            if glyph.startswith("place_power") else "实际同形"
+        )
+        notes.append(
+            "两族同形观察（180）：" + ", ".join(sorted(nets))
+            + f" {certainty}，挂在同一个宿主字形（{glyph}；{detail}）—— "
+            "它们在画布上读起来是一个地；不拦、不改严重度，仅登记"
+        )
+    return notes
+
+
 def _wire_problems(plan: ChangePlan, geometry: Any) -> list[str]:
     """Each planned wire's own endpoints, under the net it belongs to.
 

@@ -142,6 +142,11 @@ class _PageEditor:
         #: net into (pit 32) — how a landing that changes somebody else's wire is
         #: faked.
         self.merge_wires_into = merge_wires_into
+        #: 180: the host library's ground-flag devices, keyed by device name
+        #: (`Ground-PGND` -> {"uuid": …, "libraryUuid": …}). Empty means the library
+        #: carries no per-net ground symbol, so the flow falls back to
+        #: `sch.place_power` exactly as before.
+        self.ground_symbols: dict[str, dict] = {}
 
     # ------------------------------------------------------------ the page
 
@@ -257,8 +262,28 @@ class _PageEditor:
                 for number, (x, y) in sorted((self.pins_of(item) if item else {}).items())
             ]
             return {"primitiveId": params.get("primitiveId"), "pins": pins}
+        if action == "lib.device.search":
+            # 180: the ground-flag symbol probe (`draw apply` looks up
+            # `Ground-<net>` before falling back to `sch.place_power`), read-only.
+            keyword = str(params.get("keyword") or "")
+            items = [
+                {"name": name, **dict(device)}
+                for name, device in self.ground_symbols.items() if name == keyword
+            ]
+            return {"keyword": keyword, "returned": len(items), "shown": len(items),
+                    "items": items}
         if action == "sch.place_component":
             self.writes.append((action, params))
+            device_uuid = str(params.get("deviceUuid") or "")
+            ground = next(
+                (name for name, device in self.ground_symbols.items()
+                 if str(device.get("uuid") or "") == device_uuid),
+                "",
+            )
+            if ground:
+                # 180: a ground flag placed by its library symbol lands a netflag.
+                net = ground[len("Ground-"):] if ground.startswith("Ground-") else ground
+                return {"uuid": self.add_flag(net, params.get("x"), params.get("y"))}
             ident = self.add_part(
                 str(params.get("designator") or ""), params.get("x"), params.get("y"),
                 lcsc=str(params.get("lcsc") or ""),

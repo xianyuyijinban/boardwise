@@ -571,16 +571,19 @@ def test_h6_parallel_shunts_on_one_family_still_bind_together():
 
 
 # ==================================================================== H7
-# 副边族 `uniform-gnd` 的"never reads as the primary's"没有任何一层核验。
+# 副边族 `uniform-gnd` 的"never reads as the primary's"：173/C 给了机制，180 给了观察。
 
 
-def test_h7_the_uniform_gnd_promise_says_what_is_checked_and_what_is_not():
-    """承诺里没被核验的那半句必须**写明没被核验**（本批的二选一：降级）。
+def test_h7_the_uniform_gnd_promise_names_its_request_and_its_observation():
+    """承诺里"两族不互读"那半句，现在要说清它靠什么成立（180 改口径）。
 
-    理由：核验器 `drawcompiler._uniform_gnd_finding` 一次只看一个网，编译器
-    的 `gnd_flag` 又给所有 gnd 类网同一颗符号 —— 那半句既没人核、也没有实现
-    路径。要真核得上，得改 `drawcompiler.py`（不在本批地盘），所以这里选
-    "把承诺从契约里降级"并写明理由。
+    143b 时那半句是"降级"的：核验器 `drawcompiler._uniform_gnd_finding` 一次
+    只看一个网，编译器 `gnd_flag` 又给所有 gnd 类网同一颗符号 —— 既没人核、也
+    没有实现路径。173/C 的 `drawcompiler._flag_ref` 让多域页上每个地网问**自己**
+    的 `PWR-<net>`，178 把 `PWR-PGND`/`PWR-SEC_GND` 加进本册，180 又让
+    `draw apply` 按库符号（`Ground-<net>`）落旗、两族同形时写 `两族同形` 观察。
+    所以理由不再是"没人核、没法画"，而是点名**请求**（每族问自己的符号）与
+    **观察**（apply 期的 plan notes）——话不许再跑在实现后面。
     """
     result = _bind(t113.flyback_circuit())
     assert result.ok
@@ -588,13 +591,17 @@ def test_h7_the_uniform_gnd_promise_says_what_is_checked_and_what_is_not():
     assert len(uniform) == 2
     assert {item.nets[0] for item in uniform} == {"PGND", "SEC_GND"}
     secondary = [item for item in uniform if item.nets[0] == "SEC_GND"][0]
-    assert "unchecked" in secondary.reason
-    assert "_uniform_gnd_finding" in secondary.reason
-    assert "gnd_flag" in secondary.reason
-    # 那半句仍在（它是图纸必须做到的），但它**与"没人核"绑在一起出现**：
-    # 这就是本批选的"降级"——把没兑现的承诺写明白，而不是留着当已兑现的。
+    # 那半句仍在（它是图纸必须做到的），且它现在的落点是"请求 + 观察"：
     assert "never reads as the primary's" in secondary.reason
-    assert "Nothing checks it today and nothing can" in secondary.reason
+    assert "_uniform_gnd_finding" in secondary.reason
+    assert "_flag_ref" in secondary.reason, "173/C 的机制必须点名"
+    assert "PWR-PGND" in secondary.reason and "PWR-SEC_GND" in secondary.reason, (
+        "178 的两条 profile 是机制的另一半"
+    )
+    assert "两族同形" in secondary.reason, "180 的观察通道必须点名"
+    # 143b 的降级句必须消失：机制已经存在，就不许再写成"没人核、没法画"。
+    assert "Nothing checks it today and nothing can" not in secondary.reason
+    assert "unchecked" not in secondary.reason
 
 
 def test_h7_both_families_are_still_promised_separately():

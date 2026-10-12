@@ -90,6 +90,15 @@ class _FakeEditor:
         #: second one is how 055 G2's "the value did not land" is faked.
         self.values: dict[str, dict] = {}
         self.value_write_lands = value_write_lands
+        #: 180: the host library's ground-flag devices, keyed by device name
+        #: (`Ground-PGND` -> {"uuid": …, "libraryUuid": …}). Empty means "the
+        #: library carries no per-net ground symbol", so the flow falls back to
+        #: `sch.place_power` exactly as before; a test that fills it exercises the
+        #: by-symbol path.
+        self.ground_symbols: dict[str, dict] = {}
+        #: 180 审计 LOW-c1 的判别台架：按网名拒放（per-action 的 `unresolved`
+        #: 做不到只拒一颗旗）。
+        self.place_power_refused: set[str] = set()
 
     # ---------------------------------------------------------- the page
 
@@ -217,6 +226,23 @@ class _FakeEditor:
             return {"schematicUuid": "sheet-created", "pageUuid": self.page}
         if action == "sch.place_component":
             self.writes.append((action, params))
+            device_uuid = str(params.get("deviceUuid") or "")
+            ground = next(
+                (name for name, device in self.ground_symbols.items()
+                 if str(device.get("uuid") or "") == device_uuid),
+                "",
+            )
+            if ground:
+                # 180: a ground flag placed **by its library symbol** — the host
+                # lands a `netflag` (no designator), which the live probe confirmed
+                # for `Ground-PGND`. It is a flag, not a numbered part.
+                net = ground[len("Ground-"):] if ground.startswith("Ground-") else ground
+                self.flag(net, float(params.get("x") or 0.0),
+                          float(params.get("y") or 0.0))
+                return {"uuid": f"flag-{len(self.flags)}", "resolvedBy": "uuid",
+                        "device": {"uuid": device_uuid,
+                                   "libraryUuid": str(params.get("libraryUuid") or ""),
+                                   "name": ground}}
             self.add(
                 str(params.get("designator") or ""), float(params.get("x") or 0.0),
                 float(params.get("y") or 0.0),
@@ -256,9 +282,24 @@ class _FakeEditor:
                     "mismatched": [f"{key}: wanted {value!r}, read {read_back!r}"],
                 }),
             }
+        if action == "lib.device.search":
+            # 180: `draw apply` looks up `Ground-<net>` before falling back to
+            # `sch.place_power`. Read-only, and an exact-name match only — the same
+            # rule the flow applies to the answer.
+            keyword = str(params.get("keyword") or "")
+            items = [
+                {"name": name, **dict(device)}
+                for name, device in self.ground_symbols.items() if name == keyword
+            ]
+            return {"keyword": keyword, "returned": len(items), "shown": len(items),
+                    "items": items}
         if action == "sch.place_power":
+            net = str(params.get("net") or "")
+            if net in self.place_power_refused:
+                raise _BridgeError("CONNECTOR_ERROR",
+                                   f"the editor refused the flag for {net}")
             self.writes.append((action, params))
-            self.flag(str(params.get("net") or ""), float(params.get("x") or 0.0),
+            self.flag(net, float(params.get("x") or 0.0),
                       float(params.get("y") or 0.0))
             return {"uuid": f"flag-{len(self.flags)}"}
         if action == "sch.doc.save":

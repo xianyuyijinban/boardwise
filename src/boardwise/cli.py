@@ -8859,6 +8859,20 @@ async def _draw_apply_flow(
         records.append(_edit_step(action, purpose, True, wrote=writes))
         return data
 
+    def observe(text: str) -> None:
+        """A draw-time observation, on the **plan's notes channel** (168's rule).
+
+        A judgement that is *seen* but does not gate: it goes to the report's top
+        level (``report["notes"]``, the one list ``_render_draw_apply`` prints)
+        **and** to the plan's own notes as reported (``report["plan"]["notes"]``),
+        exactly so a reader of the plan sees why a net got the glyph it did. It
+        is never a violation and never touches an exit code.
+        """
+        notes.append(text)
+        plan_notes = (report.get("plan") or {}).get("notes")
+        if isinstance(plan_notes, list):
+            plan_notes.append(text)
+
     async def read_pins(geometry) -> dict[tuple[str, str], tuple[float, float]]:
         """``(designator, pin) -> (x, y)`` for every plan part that is on the page."""
         found: dict[tuple[str, str], tuple[float, float]] = {}
@@ -9420,24 +9434,118 @@ async def _draw_apply_flow(
             "fromPin": wire.from_pin, "ok": answered is not None,
         })
     # ---- 8. the flags -----------------------------------------------------
-    for flag in plan.change.draw_flags:
-        answered = await call(
-            "sch.place_power",
-            {
-                "kind": flag.kind, "net": flag.net, "x": flag.x, "y": flag.y,
-                "rotation": int(editor_pose(flag.rotation, False)[0]), "mirror": False,
-                "pageUuid": page,
-            },
-            f"place a {flag.kind} flag named {flag.net!r} at ({flag.x:g}, {flag.y:g})"
-            + (f" (on {flag.on_pin})" if flag.on_pin else ""),
-            writes=True,
+    #
+    # 180 (178b 裁决的正面回应): a **ground** flag is placed *by its library
+    # symbol* when the host's library carries one named `Ground-<net>`. 178b
+    # measured `sch.place_power(kind=Ground, net=X)` lands the same `Ground-GND`
+    # for every ground net — it selects the symbol by **kind**, not by net — so
+    # the canvas cannot tell a PGND from a SEC_GND through that action. The
+    # library device `Ground-PGND` *does* place as a flag (`netflag`, Global Net
+    # Name = PGND) through `sch.place_component` (probed live 2026-10-13), and its
+    # symbol is the family's own glyph. A net the library has no `Ground-<net>`
+    # for falls back to `sch.place_power`, and **that fallback is written to the
+    # plan's notes** — an observation, never a refusal (168's rule).
+    #
+    # The lookup is cached per net (`ground_devices`): one probe per net, not one
+    # per flag. A lookup that does not answer is the same as "no such symbol".
+    ground_devices: dict[str, dict | None] = {}
+    #: 「没应答」与「没有」是两回事（180 审计 LOW-b）：查询失败的网记在这里，
+    #: 回落观察的措辞按它分支——查询失败不许说成「库没有」。
+    ground_lookup_failed: set[str] = set()
+
+    async def ground_device(net: str) -> dict | None:
+        """The host library's ``Ground-<net>`` device pair, or ``None`` (cached)."""
+        if net in ground_devices:
+            return ground_devices[net]
+        wanted = f"Ground-{net}"
+        found: dict | None = None
+        answer = await call(
+            "lib.device.search", {"keyword": wanted, "limit": 20},
+            f"look up the ground flag symbol {wanted!r} in the host library",
         )
+        if answer is None:
+            ground_lookup_failed.add(net)
+        else:
+            for item in answer.get("items") or []:
+                if (
+                    str(item.get("name") or "") == wanted
+                    and item.get("uuid") and item.get("libraryUuid")
+                ):
+                    found = {
+                        "uuid": str(item["uuid"]),
+                        "libraryUuid": str(item["libraryUuid"]),
+                    }
+                    break
+        ground_devices[net] = found
+        return found
+
+    #: net -> the host glyph the flag for that ground family landed on. Two
+    #: families on one page sharing an entry is 178b's defect read at the canvas.
+    ground_glyphs: dict[str, str] = {}
+    #: net -> the plan's own symbol ref, for the two-family note's evidence.
+    ground_refs: dict[str, str] = {}
+    for flag in plan.change.draw_flags:
+        is_ground = flag.kind == drawapply.DRAW_FLAG_GROUND
+        device = (await ground_device(flag.net)) if is_ground else None
+        rotation = int(editor_pose(flag.rotation, False)[0])
+        if device is not None:
+            action = "sch.place_component"
+            params = {
+                "deviceUuid": device["uuid"], "libraryUuid": device["libraryUuid"],
+                "x": flag.x, "y": flag.y, "rotation": rotation, "mirror": False,
+                "pageUuid": page,
+            }
+            purpose = (
+                f"place the ground flag symbol {device['uuid']} for net "
+                f"{flag.net!r} at ({flag.x:g}, {flag.y:g})"
+            )
+        else:
+            action = "sch.place_power"
+            params = {
+                "kind": flag.kind, "net": flag.net, "x": flag.x, "y": flag.y,
+                "rotation": rotation, "mirror": False, "pageUuid": page,
+            }
+            purpose = (
+                f"place a {flag.kind} flag named {flag.net!r} at ({flag.x:g}, {flag.y:g})"
+                + (f" (on {flag.on_pin})" if flag.on_pin else "")
+            )
+            if is_ground:
+                if flag.net in ground_lookup_failed:
+                    observe(
+                        f"地旗回落（180）：宿主库查询未应答（`lib.device.search` 失败）"
+                        f"—— 有没有与 net {flag.net!r} 同名的地旗符号 `Ground-{flag.net}`"
+                        " 不得而知；回落 `sch.place_power(kind=Ground)`，画布字形由宿主"
+                        "按 kind 决定（恒 Ground-GND，178b 实测）；不拦、不改"
+                    )
+                else:
+                    observe(
+                        f"地旗回落（180）：宿主库没有与 net {flag.net!r} 同名的地旗符号 "
+                        f"`Ground-{flag.net}`（`lib.device.search` 无同名器件），"
+                        "回落 `sch.place_power(kind=Ground)` —— 宿主按 kind 挑符号，"
+                        "画布字形由宿主决定（恒 Ground-GND，178b 实测）；不拦、不改"
+                    )
+        answered = await call(action, params, purpose, writes=True)
         report["write"]["calls"] += 1
+        # 180 审计 LOW-c1：落旗失败（answered is None）的网不进 glyphs——
+        # 旗没落地就没有「挂」，两族同形只数真挂上的。
+        if is_ground and answered is not None:
+            ground_refs[flag.net] = flag.symbol_ref
+            ground_glyphs[flag.net] = (
+                f"symbol {device['uuid']}" if device is not None else f"place_power {flag.kind}"
+            )
         executed.append({
             "kind": "power-flag", "kind0": flag.kind, "net": flag.net,
             "symbolRef": flag.symbol_ref, "at": [flag.x, flag.y],
             "onPin": flag.on_pin, "ok": answered is not None,
+            "placement": action, "deviceUuid": (device or {}).get("uuid", ""),
         })
+    # 180: the two-family check. A page with ≥2 ground families whose flags landed
+    # on **one** host glyph says they are one ground to a reader — 178b's defect.
+    # Observed on the plan's notes channel: it names the families and their refs,
+    # refuses nothing and moves no severity (the main agent ruled: notes, not
+    # findings). The judgement itself is `drawapply.ground_family_observations`.
+    for note in drawapply.ground_family_observations(ground_glyphs, ground_refs):
+        observe(note)
     report["write"]["connections"] = executed
 
     # ---- 9. the verification: both legs, plus the flag census -------------

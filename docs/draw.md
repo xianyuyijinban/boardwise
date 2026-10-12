@@ -684,7 +684,9 @@ compile/plan 的 `--intent PATH` 消费同一份合同（见下）。
 → ⑤ 位号池（页面 ∪ 工程导出）→ ⑥ 放件 → ⑦ **写 Value**（055 起：plan 用 `valueKey` 逐件
 声明，无 key/无值**不写不报**；`sch.set_component_attribute` 既有通道零新增）
 → ⑧ **引脚回读**（容差半格，同一把 geometry 读同时做值回读；引脚不符、值写不进/回读不符
-**都在拉线前**停住 exit 3）→ ⑨ 走线（`net` 承载网名）→ ⑩ 旗标（`place_power`）→ ⑪ 双证回读
+**都在拉线前**停住 exit 3）→ ⑨ 走线（`net` 承载网名）→ ⑩ 旗标（180：**地旗**按库符号
+`Ground-<net>` 走 `sch.place_component`，库无同名符号或**电源旗**回落 `sch.place_power`；
+回落与「两族同形」写 plan notes，不拦、不改严重度）→ ⑪ 双证回读
 （活网表按**本 plan 自己的引脚**判分区；页面外同名同网只报 `sharedWithOutsidePins`）
 → ⑫ 范围（无删除 → 导出新鲜）+ findings 分级拦（ERROR 必拦 / WARN 需 `--force` / INFO 只报告）
 → ⑬ 保存（`saved_unverified`，要 `saved_verified` 得走 `boardwise persistence` 的关闭重开）
