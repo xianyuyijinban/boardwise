@@ -195,8 +195,13 @@ def test_a_through_hole_pad_occupies_every_copper_layer(foc_project):
     # connector whose **signal** pads are surface mount on layer 1 while its
     # **shield** pads are plated through-holes on layer 12. Without this half the
     # test would pass even if every pad on the board were treated as a barrel.
-    smd = [p for p in pcb1.pads_for_component("USB1") if p.hole_diameter is None]
-    barrels = [p for p in pcb1.pads_for_component("USB1") if p.hole_diameter is not None]
+    # 162b: the proxy for "has a hole" is `PadGeometry.has_hole`, not
+    # `hole_diameter is not None` — USB1's four shield pads are **SLOT** holes
+    # (measured 59.055 x 23.622 and 47.244 x 23.622 mil), and 162b narrowed
+    # `hole_diameter` to mean a round hole's diameter, so it is `None` for them
+    # while they remain plated barrels spanning the stackup.
+    smd = [p for p in pcb1.pads_for_component("USB1") if not p.has_hole]
+    barrels = [p for p in pcb1.pads_for_component("USB1") if p.has_hole]
     assert smd and barrels, "USB1 has both SMD signal pads and TH shield pads"
     for pad in smd:
         assert pad.layer_id == 1 and pad.effective_layer_ids == [1], (

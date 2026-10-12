@@ -97,7 +97,17 @@ def test_board_level_counts(board):
     # 135: was 134 before POURED was parsed, and the +3 is real — llc's four
     # POURED records hold seven `fill: true` islands between them (e294 -> 2,
     # e331 -> 1, e732 -> 2, e857 -> 2), and each island is its own polygon.
-    assert len(board.pours) == 137
+    # 162b: was **137**, and the difference is 105 non-copper polygons — llc
+    # draws its bottom solder-mask openings as `POLY` records on layer 6
+    # (`BOT_SOLDER_MASK`), which `collect_pcb_context` used to file with the
+    # pours. The copper truth is 25 `FILL` (8 on layer 1, 17 on layer 2) + the
+    # 7 orphan `POURED` islands = **32**; the other 105 now live in
+    # `board.non_copper_shapes`, where the inventory pass reads them as what
+    # they are (a mask opening is not copper, and `_ground_pours_on` /
+    # the clearance sweeps had been filtering them out by layer all along).
+    assert len(board.pours) == 32
+    assert len(board.non_copper_shapes) == 105
+    assert {p.layer_id for p in board.non_copper_shapes} == {6}
     assert len([p for p in board.pours if p.kind == "poured"]) == 7
     assert len({p.id for p in board.pours if p.kind == "poured"}) == 4
     assert len(board.components) == 47

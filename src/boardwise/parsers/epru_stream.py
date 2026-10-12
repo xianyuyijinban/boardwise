@@ -94,15 +94,25 @@ KEPT_DOC_TYPES: frozenset[str] = frozenset(
 
 #: Record types observed on the fixture. Anything outside this set is
 #: reported in ``ParseStats.unknown_types`` — i.e. the format drifted.
+#:
+#: ``POUR`` and ``REGION`` joined in 162b. Both are real record types the walk
+#: already reads (``POUR`` became a ``kind="pour"`` polygon in 131f; ``REGION``
+#: a prohibition region in 162b) yet neither was listed here, so every board
+#: carrying one reported a **format drift** on ``ParseStats.unknown_types``
+#: while the parser was in fact decoding that very record. Measured over the
+#: 14 ``.epro2`` fixtures: ``POUR`` occurs on 9 of them, 145 records in total
+#: (2..46 each); ``REGION`` on 2 of them, 7 records. A drift signal that fires
+#: on a type the parser consumes is worse than no signal — it hides the real
+#: ones (``TABLE``, ``UNIVERSAL``, ``LAYER_FILL``, ``IMAGE``, ...).
 KNOWN_RECORD_TYPES: frozenset[str] = frozenset(
     {
         "ACTIVE_LAYER", "ARC", "ATTR", "BEZIER", "BLOB", "CANVAS", "CIRCLE",
         "COMPONENT", "DIMENSION", "DOCHEAD", "ELE_PLACEHOLDER", "ELLIPSE",
         "FILL", "FONT", "GROUP", "LAYER", "LAYER_PHYS", "LINE", "META",
         "NET", "OBJ", "PAD", "PAD_NET", "PANELIZE", "PART", "PIN",
-        "POLY", "POURED", "PREFERENCE", "PRIMITIVE", "RECT", "RULE",
-        "RULE_SELECTOR", "RULE_TEMPLATE", "SILK_OPTS", "STRING", "TEXT",
-        "VIA", "WIRE",
+        "POLY", "POUR", "POURED", "PREFERENCE", "PRIMITIVE", "RECT", "REGION",
+        "RULE", "RULE_SELECTOR", "RULE_TEMPLATE", "SILK_OPTS", "STRING",
+        "TEXT", "VIA", "WIRE",
     }
 )
 

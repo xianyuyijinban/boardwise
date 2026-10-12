@@ -34,6 +34,7 @@ __all__ = [
     "MIL_TO_MM",
     "MM_TO_MIL",
     "MULTI_LAYER_ID",
+    "MULTI_LAYER_TYPES",
     "mil_to_mm",
     "Point",
     "BBox",
@@ -47,6 +48,7 @@ __all__ = [
     "TrackSegment",
     "ViaGeometry",
     "PourShape",
+    "ProhibitRegion",
     "BoardOutline",
     "NetGeometry",
     "ParseStats",
@@ -148,7 +150,7 @@ def transform_point(
 #: dielectrics (zIndex 1002, material 内层铜厚, thickness 0.598 mil = 0.5 oz).
 COPPER_LAYER_TYPES: frozenset[str] = frozenset({"TOP", "BOTTOM", "SIGNAL", "PLANE"})
 
-#: The layer id EasyEDA Pro writes for a pad that exists on **every** copper
+#: Layer id EasyEDA Pro writes for a pad that exists on **every** copper
 #: layer — the editor's own "Multi-Layer" designation, and the normal spelling
 #: on a through-hole pad (where it is what makes pin 1 square). It is a
 #: *declaration*, so it is deliberately not in :data:`COPPER_LAYER_TYPES`: it is
@@ -158,6 +160,15 @@ COPPER_LAYER_TYPES: frozenset[str] = frozenset({"TOP", "BOTTOM", "SIGNAL", "PLAN
 #: :func:`boardwise.parsers.epru.pad_effective_layers` accepts **either** as the
 #: barrel signal rather than insisting on one.
 MULTI_LAYER_ID = 12
+
+#: Layer types that carry copper on **every** copper layer at once — the
+#: editor's "Multi-Layer" designation (the type of :data:`MULTI_LAYER_ID`).
+#: Deliberately separate from :data:`COPPER_LAYER_TYPES`: a *track* cannot be
+#: drawn on it, but a **filled region** can, and such a region is copper on
+#: every layer. Measured: 级联多电平-主拓扑 carries 3 ``FILL`` records and
+#: 级联多电平-驱动模块 4, all on layer 12, which 162b files with the pours
+#: rather than with the non-copper artwork.
+MULTI_LAYER_TYPES: frozenset[str] = frozenset({"MULTI"})
 
 
 #: Layer types that carry **printed legend** (丝印) — the ink a fab prints on
@@ -335,9 +346,10 @@ class PadGeometry:
     ``effective_layer_ids`` is the reading the rules and the clearance engine
     use:
 
-    * a **through-hole** pad (one with a ``hole_diameter``), or any pad whose
-      ``layer_id`` is :data:`MULTI_LAYER_ID`, occupies **every copper layer** —
-      its barrel is continuous and its lands exist on both faces;
+    * a **through-hole** pad (one with a hole of any shape — :attr:`has_hole`),
+      or any pad whose ``layer_id`` is :data:`MULTI_LAYER_ID`, occupies **every
+      copper layer** — its barrel is continuous and its lands exist on both
+      faces;
     * an **SMD** pad occupies the face its **component** is on
       (``ComponentPlacement.layer_id``), falling back to the footprint's
       ``layer_id`` when the placement carries none.
@@ -347,6 +359,34 @@ class PadGeometry:
     previous behaviour rather than silently claiming an empty layer set. The
     empty set is "this pad's physical layers were never established", never
     "this pad has no copper".
+
+    **The hole's shape (162b).** ``.epru`` writes a pad's hole as
+    ``hole: {"holeType": ..., "width": ..., "height": ...}``, and two types
+    occur on the fixtures: ``ROUND`` (1155 pads, 1146 of them with
+    ``width == height`` and 9 with two different extents — a USB shield hole at
+    126 x 118.1102 mil) and ``SLOT`` (141 pads, always two different extents:
+    ``width`` the **long** axis, up to 86.62 x 47.24 mil). Before 162b only
+    ``width`` was read and reported as ``hole_diameter``, so a slot pad was
+    described as a circle of the slot's length and its second dimension was
+    unreadable.
+
+    Three fields now carry the hole, each with one meaning:
+
+    * :attr:`hole_width` / :attr:`hole_height` — the hole's extents along the
+      record's own ``width`` / ``height`` axes. **These are the two dimensions
+      of the hole**, for every shape.
+    * :attr:`hole_type` — ``holeType`` verbatim (``"ROUND"`` / ``"SLOT"``, and
+      ``""`` when the record did not say).
+    * :attr:`hole_diameter` — ``width``, which is the hole's diameter, and
+      ``None`` **exactly when the record says ``SLOT``**. The field is
+      deliberately **narrowed, not deprecated**: every round hole keeps the
+      value it always had, and the one place it stops claiming a diameter is
+      the one place the file itself says there is no circle. A consumer that
+      wants "is there a hole at all" asks :attr:`has_hole`, not this.
+
+    The barrel reading (:attr:`effective_layer_ids`, and the fallback in
+    :func:`boardwise.core.measure._element_layers`) keys on :attr:`has_hole`,
+    so a **slot** pad is still a plated barrel spanning the copper stackup.
     """
 
     id: str
@@ -365,6 +405,15 @@ class PadGeometry:
     shape: str = ""
     angle: float = 0.0
     hole_diameter: float | None = None
+    #: 162b: the hole's extents along the record's ``width`` / ``height`` axes.
+    #: For a ``SLOT`` that is the long and the short axis; for a round hole both
+    #: equal :attr:`hole_diameter`. ``None`` when the pad has no hole block at
+    #: all.
+    hole_width: float | None = None
+    hole_height: float | None = None
+    #: 162b: the record's own ``holeType``, verbatim (``"ROUND"`` / ``"SLOT"`` /
+    #: ``""`` when the file did not say).
+    hole_type: str = ""
     plated: bool = False
 
     @property
@@ -372,9 +421,19 @@ class PadGeometry:
         return Point(self.x, self.y)
 
     @property
+    def has_hole(self) -> bool:
+        """True when the pad has a hole of **any** shape (round or slot).
+
+        The through-hole signal, and the one the barrel reading uses. It is not
+        :attr:`hole_diameter`: since 162b that field is ``None`` for a slot,
+        which is still a plated barrel.
+        """
+        return self.hole_width is not None or self.hole_diameter is not None
+
+    @property
     def is_smd(self) -> bool:
         """True when the pad has no hole (surface mount)."""
-        return self.hole_diameter is None
+        return not self.has_hole
 
     def effective_layers(self) -> set[int]:
         """The copper layers this pad physically occupies.
@@ -411,6 +470,19 @@ class SilkShape:
     table is the only thing that says what id 3 *means*, and hard-coding it
     would be a guess about the document rather than a reading of it.
 
+    **``layer_kind`` is the layer the artwork is actually drawn on (162b).** A
+    footprint stores its legend on its library layers, so every part says
+    ``layerId: 3`` however it is mounted; a part flipped to the bottom face
+    prints its silk on the **bottom** silkscreen. Measured on llc: 12 of 47
+    placements are on the bottom and carry 64 silk primitives that 152 reported
+    as ``TOP_SILK``. Where the document defines the counterpart layer, the
+    reading is renamed ``BOT_SILK`` (``effective_layer_id`` 4) and the library's
+    own spelling is kept in :attr:`declared_layer_kind`; where it defines none,
+    the kind stays and :attr:`face` still states the physical side. This mirrors
+    :class:`PadGeometry`, except that there the *consumer* field
+    (``effective_layer_ids``) is a new one — here consumers have always read
+    ``layer_kind``, so it is ``layer_kind`` that takes the physical truth.
+
     ``kind`` is the record type it came from (``"poly"`` / ``"fill"`` /
     ``"circle"`` / ``"rect"`` / ``"line"``). ``radius`` is set for a
     ``CIRCLE`` primitive (measured: the pin-1 dot is a 2.36 mil circle) and
@@ -424,9 +496,24 @@ class SilkShape:
     component_id: str | None = None
     #: Record type of the primitive: ``poly`` / ``fill`` / ``circle`` / ``rect`` / ``line``.
     kind: str = ""
-    #: Footprint-local layer id, and what the running document's table calls it.
+    #: Footprint-local layer id, and the layer the primitive is **drawn on**.
     layer_id: int | None = None
     layer_kind: str = ""
+    #: 162b: what the ``LAYER`` table calls :attr:`layer_id` — the library-side
+    #: spelling of the same fact, kept so the face correction stays auditable.
+    #: Equal to :attr:`layer_kind` for a top placement and for every
+    #: side-agnostic layer.
+    declared_layer_kind: str = ""
+    #: 162b: the layer id :attr:`layer_kind` was read from (4 where a bottom
+    #: placement's top-silk artwork was renamed).
+    effective_layer_id: int | None = None
+    #: 162b: the board face the primitive is physically on — ``1`` top, ``2``
+    #: bottom, ``None`` when neither the layer's own spelling nor the placement
+    #: states one (a board-level ``DOCUMENT`` / ``MULTI`` annotation). Set for
+    #: the per-placement layers the id cannot express a face for
+    #: (``COMPONENT_SHAPE`` / ``COMPONENT_MARKING`` / ...), which is the fact
+    #: the silk rule reconstructs from the placement on its own.
+    face: int | None = None
     points: list[Point] = field(default_factory=list)
     local_points: list[Point] = field(default_factory=list)
     width: float = 0.0
@@ -526,6 +613,13 @@ class SilkText:
     stored_angle: float = 0.0
     layer_id: int | None = None
     layer_kind: str = ""
+    #: 162b: the library-side spelling of :attr:`layer_id`, for a footprint's own
+    #: printed mark instantiated on a **flipped** part: its ``layer_kind`` is the
+    #: layer the mark is really printed on (``BOT_SILK`` on a bottom placement)
+    #: while this keeps the layer the library declared (``TOP_SILK``). Equal to
+    #: :attr:`layer_kind` for a designator / board text, whose record already
+    #: carries its physical layer.
+    declared_layer_kind: str = ""
     font_size: float = 0.0
     stroke_width: float = 0.0
     origin: str = ""
@@ -677,6 +771,55 @@ class PourShape:
             q = self.points[(i + 1) % len(self.points)]
             total += p.x * q.y - q.x * p.y
         return abs(total) / 2.0
+
+
+@dataclass
+class ProhibitRegion:
+    """A copper-prohibition region — a ``REGION`` record (162b).
+
+    EasyEDA's 禁止布线 / 铜禁布区: an area the designer marked as off-limits to
+    the thing :attr:`prohibit_types` names. Parsed and exposed, and **nothing
+    else**: no rule consumes these yet, so this class carries the record's own
+    fields and no reading of what they forbid.
+
+    Measured on ``ProPrj_高速电机控制器_2026-09-16.epro2`` — the only board
+    fixture with any, six of them in the PCB document:
+
+    .. code-block:: jsonc
+
+       {"regionType": "PROHIBIT", "prohibitType": ["COPPER"], "name": "PROHIBIT",
+        "layerId": 2, "width": 0.2, "locked": false, "groupId": 0,
+        "path": [["CIRCLE", 1768.425, -370, 93.8415]]}     // r = 93.84 mil
+
+    so the shape arrives as the same ``"CIRCLE"`` / ``"R"`` / polyline ``path``
+    forms the artwork reader knows (five circles and one rectangle there), in
+    **board coordinates** like every other geometry here. ``path`` is wrapped
+    one level (``[[...]]``), which is why this is read with
+    :func:`boardwise.parsers.epru._artwork_path` and not ``_path_points``: the
+    circle form must survive as a centre **plus** its radius rather than
+    collapse to a point. The other fixture with one, ``毕设滤波采样``, carries
+    it in a document this parser drops, so only the six above reach a board.
+    """
+
+    id: str = ""
+    #: The record's own ``name`` — ``"PROHIBIT"`` on the measured board.
+    name: str = ""
+    layer_id: int | None = None
+    #: ``regionType`` verbatim (``"PROHIBIT"``), and ``prohibitType`` verbatim as
+    #: the list the file writes (``["COPPER"]``). Kept as strings: which
+    #: prohibited thing this region is about is the record's statement, not a
+    #: reading this model makes.
+    region_type: str = ""
+    prohibit_types: list[str] = field(default_factory=list)
+    points: list[Point] = field(default_factory=list)
+    #: Set for a ``CIRCLE`` region (the centre is ``points[0]``), ``None`` for
+    #: the polygonal forms — exactly as :class:`SilkShape.radius` works.
+    radius: float | None = None
+    width: float = 0.0
+
+    @property
+    def bbox(self) -> BBox | None:
+        return BBox.from_points(self.points)
 
 
 @dataclass
@@ -861,7 +1004,10 @@ class BoardGeometry:
     everything in file order; ``nets`` holds the same objects grouped by net
     name. :meth:`net` never raises — an unknown net name returns an empty
     :class:`NetGeometry`, which is what review rules want when they ask
-    "does this net have any copper at all?".
+    "does this net have any copper at all?". ``non_copper_shapes`` and
+    ``prohibit_regions`` (162b) are deliberately **outside** all of that: they
+    are not copper, so they are neither net-indexed nor counted in
+    :meth:`bbox`.
     """
 
     source: str = ""
@@ -876,7 +1022,24 @@ class BoardGeometry:
     pads: list[PadGeometry] = field(default_factory=list)
     tracks: list[TrackSegment] = field(default_factory=list)
     vias: list[ViaGeometry] = field(default_factory=list)
+    #: **Copper** polygons only (162b): ``FILL`` / ``POLY`` / ``POUR`` /
+    #: ``POURED`` records on a copper layer. A polygon on a solder-mask,
+    #: assembly or custom layer is not copper and lives in
+    #: :attr:`non_copper_shapes` instead — measured, filing them here made
+    #: llc's summary report 137 pours where 32 polygons are copper (105 of the
+    #: 137 were a single board's bottom solder-mask openings as ``POLY``).
+    #: Every net-indexed consumer reads this list, so the index and the summary
+    #: now agree on what a pour is.
     pours: list[PourShape] = field(default_factory=list)
+    #: 162b: the board's **non-copper** area polygons — the ones a review of
+    #: copper must not mistake for copper. Same records and shape as
+    #: :attr:`pours`, so a consumer that wants "was there a polygon here at all"
+    #: can look in both; deliberately **not** net-indexed (no net of a
+    #: non-copper polygon is copper's business).
+    non_copper_shapes: list[PourShape] = field(default_factory=list)
+    #: 162b: copper-prohibition regions (``REGION`` records). Parsed and
+    #: exposed; **no rule consumes them yet**.
+    prohibit_regions: list[ProhibitRegion] = field(default_factory=list)
     outline: BoardOutline | None = None
     #: 152: the placement artwork that is **not copper** — footprint silkscreen,
     #: body/courtyard outlines and component-marking primitives, instantiated
@@ -1006,6 +1169,8 @@ class BoardGeometry:
             "tracks": len(self.tracks),
             "vias": len(self.vias),
             "pours": len(self.pours),
+            "non_copper_shapes": len(self.non_copper_shapes),
+            "prohibit_regions": len(self.prohibit_regions),
             "silk_shapes": len(self.silk_shapes),
             "silk_texts": len(self.silk_texts),
             "nets": len(self.nets),

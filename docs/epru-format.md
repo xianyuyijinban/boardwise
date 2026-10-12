@@ -243,6 +243,15 @@ document and are expressed relative to the footprint origin.
 
 - `layerId` 12 (MULTI) = through-hole; 1 = top-side SMD. **[inferred]**
 - `hole` present ⇒ through-hole; absent ⇒ SMD. **[inferred]**
+- `hole.holeType` is `ROUND` or `SLOT` **[confirmed — 162b]**. A `ROUND` hole
+  usually has `width == height` (the diameter), but 9 records over the fixture
+  set spell `ROUND` with two **different** dimensions (a USB shield hole at
+  126 × 118.1102 mil) and 101 carry `width == height == 0` as the editor's "no
+  hole" placeholder. A `SLOT` (141 records, always `width > height`, e.g.
+  86.62 × 47.24) puts the **long** axis in `width`: `hole.width` is not a
+  diameter there, and the two fields are the hole's two dimensions. Before 162b
+  the parser read only `width` and called it the diameter, so a slot was
+  described as a circle of its own length and `height` was never read.
 - `netName` is **empty here** even on the board — the net comes from `PAD_NET`
   (6.4). **[confirmed]**
 - `padAngle` / `relativeAngle`: rotation of the pad shape and of the pad inside
@@ -316,6 +325,20 @@ Ordinary polygon (105 of 106 in the PCB document):
 - The `NORMAL` polygons on this board mostly have an empty `netName` and sit on
   layers such as 6 (bottom solder mask), so they are **not all copper** — some
   are mask openings / keep-out style shapes. **[inferred]**
+- **Which ones reach `BoardGeometry.pours` (162b)**: a `FILL` / `POLY` / `POUR`
+  whose layer the document calls copper (`TOP` / `BOTTOM` / `SIGNAL` / `PLANE`)
+  or multi-layer (`MULTI`, 7 records over the fixture set — a filled region on
+  layer 12 is copper on every layer at once). Everything else goes to
+  `BoardGeometry.non_copper_shapes`: measured, llc's 105 `POLY` records on
+  layer 6 and 级联多电平-主拓扑's 56, which is what made the board summary
+  report 137 pours where 32 polygons are copper. A polygon whose layer the
+  document does not define stays on the copper side (unknown, never dropped).
+- **`ARC` in an artwork `path`** (162b): a `POLY` / `FILL` inside a **FOOTPRINT**
+  document carries the same three-number encoding as `POURED` (§6.9) —
+  `[sweep, x, y]`, sweep first. Measured: 596 such records across the fixture
+  set (毕设FOC 1.0.0: 66), 908 arc segments. Both readers (`_path_points`,
+  `_artwork_path`) skip the sweep and keep the endpoint; `_artwork_path` used
+  to read the sweep as an x coordinate.
 - `path` rectangle form: `["R", x, y, w, h, rotation, cornerRadius]`.
   **[inferred]** — the fixture cannot distinguish `(x, y, w, h)` from
   `(x1, y1, x2, y2)` because `x` ≈ 0; the height-along-−y part *is* forced by
@@ -347,7 +370,9 @@ element's `netName` and `layerId`. The `ARC` command appears only here and
 carries three numbers — `[sweep, x, y]`, where the first is an angle
 (**[confirmed]**: values like 45.0, 28.27, 50.80 are angles, not coordinates;
 0.1803 is the same angle in radians). The parser drops the sweep and keeps the
-point.
+point. (**162b correction**: "only here" was wrong — a FOOTPRINT's `POLY` /
+`FILL` artwork carries the same encoding in the same shape, 596 records over
+the fixture set; see §6.7.)
 
 `pourFill` is an **array** because one pour region can pour into several
 disjoint islands — up to 14 measured on 毕设FOC 1.0.0's `["POURED","e1475"]`.
@@ -463,6 +488,29 @@ Two of them are worth a future task:
 
 `BLOB` (1) is a base64 SVG (`data:image/svg+xml;base64,...`) and is the
 truncated last line of the fixture.
+
+- ~~**`REGION`** — a copper-prohibition area~~ — **consumed since 162b.**
+  Six in 高速电机控制器's PCB document, one more in 毕设滤波采样 (in a document
+  this parser drops):
+
+  ```jsonc
+  {"type":"REGION","ticket":…,"id":"528d5108078ee52a"}||
+  {"partitionId":"","groupId":0,"layerId":2,"width":0.2,"prohibitType":["COPPER"],
+   "path":[["CIRCLE",1768.425,-370,93.8415]],"locked":false,"name":"PROHIBIT",
+   "regionType":"PROHIBIT"}
+  ```
+
+  Filed as `BoardGeometry.prohibit_regions` (board coordinates; the circle form
+  keeps its centre and radius, the rectangle form its four corners). **No rule
+  reads them yet** — the reading is parsed and exposed, and a verdict needs a
+  rule that does not exist.
+
+`POUR` and `REGION` were **also absent from `KNOWN_RECORD_TYPES`** until 162b,
+which changed nothing about what they carry: every board carrying one reported a
+"format drift" on `ParseStats.unknown_types` **while the parser was decoding
+it** (measured: `POUR` on 9 of the 14 fixtures, 145 records). A drift signal
+that fires on a consumed type hides the real ones (`TABLE`, `UNIVERSAL`,
+`LAYER_FILL`, `IMAGE`, ...).
 
 ## 8. Parser behaviour
 

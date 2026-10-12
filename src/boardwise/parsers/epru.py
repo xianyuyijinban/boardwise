@@ -55,7 +55,9 @@ from .epru_stream import (
 from .enet import NetlistShapeError, optional_object, shape_of
 
 from ..core.geometry import (
+    ARTWORK_LAYER_TYPES,
     MULTI_LAYER_ID,
+    MULTI_LAYER_TYPES,
     BoardGeometry,
     BoardOutline,
     ComponentPlacement,
@@ -64,6 +66,7 @@ from ..core.geometry import (
     ParseStats,
     Point,
     PourShape,
+    ProhibitRegion,
     SilkShape,
     SilkText,
     StackupEntry,
@@ -226,6 +229,17 @@ class PadTemplate:
     angle: float
     hole_diameter: float | None
     plated: bool
+    #: 162b: the hole's two extents and its own ``holeType``, so a ``SLOT`` is
+    #: distinguishable from a round hole instead of being flattened into
+    #: :attr:`hole_diameter` (which a slot now leaves ``None``).
+    hole_width: float | None = None
+    hole_height: float | None = None
+    hole_type: str = ""
+
+    @property
+    def has_hole(self) -> bool:
+        """True for any hole shape — the through-hole signal (not ``hole_diameter``)."""
+        return self.hole_width is not None or self.hole_diameter is not None
 
 
 # --------------------------------------------------------------------------
@@ -354,12 +368,46 @@ def _layer_list(value: Any, where: str) -> list[Any]:
     return list(value)
 
 
-def _hole_diameter(pad: dict[str, Any]) -> float | None:
-    """Return the pad hole diameter, or ``None`` for an SMD pad."""
+def _pad_hole(pad: dict[str, Any]) -> tuple[float | None, float | None, float | None, str]:
+    """Read a pad's ``hole`` block as ``(diameter, width, height, type)`` (162b).
+
+    ``.epru`` writes the hole as ``hole: {"holeType": ..., "width": ...,
+    "height": ...}``. Measured over the fixture set, 1155 pads carry ``ROUND``
+    (of which 1146 have ``width == height`` and 9 do not — llc's ``e1`` is
+    78.7402 x 59.0551, 毕设FOC 1.0.0 has four at 126 x 118.1102) and 141 carry
+    ``SLOT`` (always two different dimensions: 74.803 x 55.118, 86.62 x 47.24,
+    78.544 x 74.804, ...).
+
+    Before 162b this function returned only ``hole.width`` and the parser
+    published it as ``hole_diameter``, so a slot read as a circle of its own
+    length and its second dimension was never read at all.
+
+    The four values, each with one meaning:
+
+    * **diameter** — the hole's diameter, read from ``width``, and ``None``
+      **exactly when ``holeType`` says ``SLOT``**. A slot has no diameter; that
+      is the whole of the narrowing. A record that says ``ROUND`` (or says
+      nothing) keeps the value it always had even where its two extents
+      disagree — the type word is the file's own statement and this reader does
+      not overrule it, it publishes both extents beside it so the disagreement
+      is visible. (Measured: those 9 pads are the USB shield / mounting holes,
+      and calling them slots would be this reader's guess, not a reading.)
+    * **width** / **height** — the hole's extents along the record's own axes,
+      for every shape. ``None`` (both) when the pad has no hole block or the
+      block's width is not positive, which is the same "SMD" answer the old
+      ``... or None`` gave a zero-width hole.
+    * **type** — ``holeType`` verbatim; ``""`` when the record did not say.
+    """
     hole = pad.get("hole")
     if not isinstance(hole, dict):
-        return None
-    return _as_float(hole.get("width"), 0.0) or None
+        return None, None, None, ""
+    width = _as_float(hole.get("width"), 0.0)
+    height = _as_float(hole.get("height"), 0.0)
+    if width <= 0.0:
+        return None, None, None, ""
+    hole_type = str(hole.get("holeType") or "")
+    diameter = None if hole_type.upper() == "SLOT" else width
+    return diameter, width, height, hole_type
 
 
 # --------------------------------------------------------------------------
@@ -377,6 +425,7 @@ def pad_templates(document: Document) -> list[PadTemplate]:
         width, height, shape = _pad_diameter(
             body, f"PAD 记录 {record.id or '(无 id)'}.defaultPad"
         )
+        hole_diameter, hole_width, hole_height, hole_type = _pad_hole(body)
         templates.append(
             PadTemplate(
                 id=record.id or "",
@@ -388,8 +437,11 @@ def pad_templates(document: Document) -> list[PadTemplate]:
                 height=height,
                 shape=shape,
                 angle=_as_float(body.get("padAngle")),
-                hole_diameter=_hole_diameter(body),
+                hole_diameter=hole_diameter,
                 plated=bool(body.get("plated", False)),
+                hole_width=hole_width,
+                hole_height=hole_height,
+                hole_type=hole_type,
             )
         )
     return templates
@@ -454,6 +506,18 @@ def _artwork_path(path: Any) -> tuple[list[Point], float | None, int]:
       arc are real vertices of the printed shape, and a reader that later finds
       two vertices 2 mil apart in a rounded body outline should be able to see
       that an arc was chorded there.
+
+    ``"ARC"`` carries ``["ARC", <sweep>, x, y]`` — an **angle**, then the arc's
+    endpoint — exactly as :func:`_path_points` reads it. The sweep is skipped
+    and the endpoint kept (162b): the two readers used to disagree, and this
+    one was wrong. It dropped the pending start point and then read the sweep
+    itself as an x coordinate, so every vertex after an arc was shifted by one
+    slot: measured, ``[28.401, 19.671, "ARC", -90, 34.401, 13.671]`` came out
+    as ``[(28.401, 19.671), (-90, 34.401)]`` — the endpoint gone, a *rotation*
+    standing in for a coordinate, and the real 13.671 dropped. Arcs are not
+    rare in footprint artwork: over the fixture set, 439 ``POLY`` and 157
+    ``FILL`` primitives carry at least one (908 arc segments in total), and 66
+    of 毕设FOC 1.0.0's own artwork templates have one.
     """
     if not isinstance(path, Sequence) or isinstance(path, (str, bytes)):
         return [], None, 0
@@ -487,20 +551,23 @@ def _artwork_path(path: Any) -> tuple[list[Point], float | None, int]:
     points: list[Point] = []
     pending: list[float] = []
     arcs = 0
-    for item in values:
+    index = 0
+    while index < len(values):
+        item = values[index]
         if isinstance(item, str):
-            command = item.upper()
-            if command == "ARC":
+            if item.upper() == "ARC":
                 arcs += 1
-                # "ARC", <sweep>, x, y -> drop the sweep, keep the endpoint.
-                # `pending` holds the arc's start point, already queued.
-                pending = []
+                # "ARC", <sweep>, x, y -> skip the angle, keep the endpoint the
+                # numbers that follow spell out. Same reading as `_path_points`.
+                index += 2
                 continue
+            index += 1
             continue
         pending.append(_as_float(item))
         if len(pending) == 2:
             points.append(Point(pending[0], pending[1]))
             pending = []
+        index += 1
     return points, None, arcs
 
 
@@ -591,6 +658,37 @@ def layer_kinds(layers: dict[int, LayerInfo]) -> dict[int, str]:
     return {int(k): str(v.layer_type or "") for k, v in layers.items()}
 
 
+def _carries_copper(layers: dict[int, LayerInfo], layer_id: Any) -> bool:
+    """Does a **filled area** on ``layer_id`` carry copper? (162b)
+
+    ``True`` for a copper layer (:attr:`LayerInfo.is_copper`) and for the
+    editor's multi-layer designation (:data:`MULTI_LAYER_TYPES`) — a filled
+    region on layer 12 is copper on every layer at once, and 级联多电平's two
+    boards carry 7 such ``FILL`` records between them. ``False`` for everything
+    else the table defines: a polygon on ``BOT_SOLDER_MASK`` (6) is a mask
+    opening, not copper — measured, llc's 105 of them were what made the
+    summary claim 137 pours on a board with 32 copper polygons.
+
+    **``None`` and an undefined id both answer ``True``.** The layer is
+    *unknown*, and the two possible mistakes are not symmetric: filing real
+    copper as artwork drops it out of every clearance question silently, while
+    filing a mask opening as copper only adds a polygon whose layer no copper
+    query matches (``_ground_pours_on``, the inventory pass and the net index
+    all filter or key on the layer). So the unknown case keeps the pre-162b
+    answer — the polygon stays in ``pours``.
+    """
+    if layer_id is None:
+        return True
+    try:
+        lid = int(layer_id)
+    except (TypeError, ValueError):
+        return True
+    info = layers.get(lid)
+    if info is None:
+        return True
+    return info.is_copper or info.layer_type in MULTI_LAYER_TYPES
+
+
 def silk_texts_of(
     document: Document,
     placements: list[ComponentPlacement],
@@ -644,6 +742,9 @@ def silk_texts_of(
                     layer_kind=(
                         layer_kind_of.get(int(layer_id), "") if layer_id is not None else ""
                     ),
+                    declared_layer_kind=(
+                        layer_kind_of.get(int(layer_id), "") if layer_id is not None else ""
+                    ),
                     font_size=_as_float(body.get("fontSize")),
                     stroke_width=_as_float(body.get("strokeWidth")),
                     origin=str(body.get("origin") or ""),
@@ -672,6 +773,9 @@ def silk_texts_of(
                 stored_angle=stored,
                 layer_id=layer_id if layer_id is None else int(layer_id),
                 layer_kind=(
+                    layer_kind_of.get(int(layer_id), "") if layer_id is not None else ""
+                ),
+                declared_layer_kind=(
                     layer_kind_of.get(int(layer_id), "") if layer_id is not None else ""
                 ),
                 font_size=_as_float(body.get("fontSize")),
@@ -740,10 +844,64 @@ def footprint_artwork(document: Document) -> list[ArtworkTemplate]:
     return templates
 
 
+def _layer_face(layer_type: str) -> int | None:
+    """1 (top) / 2 (bottom) when the layer's **own name** states a face.
+
+    The document's ``LAYER`` table spells the faces: ``TOP_SILK`` / ``BOT_SILK``,
+    ``TOP_SOLDER_MASK`` / ``BOT_SOLDER_MASK``, ``TOP_ASSEMBLY`` /
+    ``BOT_ASSEMBLY``, and the stiffener pair uses ``BOTTOM_``. ``None`` for
+    every side-agnostic type (``COMPONENT_SHAPE``, ``COMPONENT_MARKING``,
+    ``PIN_SOLDERING``, ``PIN_FLOATING``, ``DOCUMENT``, ``MULTI``, ``CUSTOM``,
+    ...) — the id does not say a face, so nothing here may invent one.
+    """
+    text = str(layer_type or "").upper()
+    if text.startswith("TOP_"):
+        return 1
+    if text.startswith("BOT_") or text.startswith("BOTTOM_"):
+        return 2
+    return None
+
+
+def _other_face_type(layer_type: str) -> str:
+    """``TOP_SILK`` -> ``BOT_SILK`` (and back) — the counterpart spelling."""
+    text = str(layer_type or "").upper()
+    if text.startswith("TOP_"):
+        return "BOT_" + text[4:]
+    if text.startswith("BOTTOM_"):
+        return "TOP_" + text[7:]
+    if text.startswith("BOT_"):
+        return "TOP_" + text[4:]
+    return ""
+
+
+def _placement_face(layer_id: Any, layers: dict[int, LayerInfo]) -> int | None:
+    """Which board face a placement sits on, read from the copper layer table.
+
+    A placement's ``layerId`` names the copper layer it is mounted on — ``1`` on
+    every fixture, ``2`` for a flipped part. The *meaning* of those ids comes
+    from the running document (:data:`COPPER_LAYER_TYPES`'s ``TOP`` / ``BOTTOM``
+    spellings), never from the number. ``None`` when the file does not say.
+    """
+    if layer_id is None:
+        return None
+    try:
+        lid = int(layer_id)
+    except (TypeError, ValueError):
+        return None
+    info = layers.get(lid)
+    if info is None:
+        return None
+    if info.layer_type == "TOP":
+        return 1
+    if info.layer_type == "BOTTOM":
+        return 2
+    return None
+
+
 def build_silk(
     placements: list[ComponentPlacement],
     artwork: dict[str, list[ArtworkTemplate]],
-    layer_kind_of: dict[int, str],
+    layers: dict[int, LayerInfo],
     stats: ParseStats,
 ) -> tuple[list[SilkShape], list[SilkText]]:
     """Instantiate every footprint's artwork at its placement (152).
@@ -752,21 +910,65 @@ def build_silk(
     a silk primitive and a pad of the same placement land in one frame and can
     be intersected without a second conversion.
 
-    ``layer_kind_of`` maps a layer id to the running document's own name for it
-    (``"TOP_SILK"``, ``"COMPONENT_MARKING"``, ...), read from the PCB
-    document's ``LAYER`` table by the caller. An id the table does not define
-    becomes ``""`` — "unclassified", never a guessed kind: a footprint drawn on
-    a layer this document does not define is a fact the file does not explain,
-    and the rules skip those rather than invent one.
-
+    ``layers`` is the running PCB document's ``LAYER`` table, so the kind of a
+    footprint's layer id is read from the document rather than hard-coded. An id
+    the table does not define becomes ``""`` — "unclassified", never a guessed
+    kind: a footprint drawn on a layer this document does not define is a fact
+    the file does not explain, and the rules skip those rather than invent one.
     A template whose ``layer_id`` is not in the table is still instantiated (the
     geometry is real); only its :attr:`SilkShape.layer_kind` is empty.
+
+    **The face comes from the placement (162b)** — the same correction 127b made
+    for pads, applied to legend. A footprint stores its artwork on its *library*
+    layers, so every part says silk id 3 no matter which face it is mounted on;
+    a bottom-mounted part's legend is printed on the **bottom** silkscreen. The
+    running document defines both ids, so the reading is available: for a
+    placement on face 2, an artwork layer whose own type is ``TOP_*`` becomes
+    its document-defined ``BOT_*`` counterpart (``layer_kind`` ``BOT_SILK``,
+    :attr:`SilkShape.effective_layer_id` 4), and the library-side spelling is
+    kept in :attr:`SilkShape.declared_layer_kind`. Measured on llc: 12 of its 47
+    placements are on the bottom and carry 64 silk primitives that used to be
+    reported as ``TOP_SILK``.
+
+    Layers with **no** face in their spelling are handled by what they belong
+    to. ``COMPONENT_SHAPE`` / ``COMPONENT_MARKING`` / ``PIN_SOLDERING`` /
+    ``PIN_FLOATING`` (:data:`boardwise.core.geometry.ARTWORK_LAYER_TYPES`) are
+    per-placement layers the editor draws on the part's own face, so their
+    :attr:`SilkShape.face` is the placement's face — that is the fact the silk
+    rule already reconstructs at its own end from ``placement.layer_id``, and
+    publishing it here is what keeps the two readings from disagreeing. Board
+    level annotations (``DOCUMENT``, ``MULTI``, ...) belong to no face and get
+    ``face=None``.
+
+    The kind is only **renamed** when the counterpart layer actually exists in
+    this document; a footprint drawn on a top layer of a file that defines no
+    bottom one keeps its kind and still reports the physical ``face``.
     """
+    kind_of = layer_kinds(layers)
+    id_of_type = {info.layer_type: int(lid) for lid, info in layers.items()}
     shapes: list[SilkShape] = []
     texts: list[SilkText] = []
     for comp in placements:
+        placement_face = _placement_face(comp.layer_id, layers)
         for template in artwork.get(comp.footprint or "", []):
-            kind = layer_kind_of.get(int(template.layer_id), "") if template.layer_id is not None else ""
+            declared_kind = (
+                kind_of.get(int(template.layer_id), "")
+                if template.layer_id is not None
+                else ""
+            )
+            declared_face = _layer_face(declared_kind)
+            if declared_face is None:
+                face = placement_face if declared_kind in ARTWORK_LAYER_TYPES else None
+                effective_id = template.layer_id
+                kind = declared_kind
+            else:
+                face = placement_face if placement_face is not None else declared_face
+                effective_id, kind = template.layer_id, declared_kind
+                if placement_face is not None and placement_face != declared_face:
+                    counterpart = id_of_type.get(_other_face_type(declared_kind))
+                    if counterpart is not None:
+                        effective_id = counterpart
+                        kind = kind_of.get(counterpart, declared_kind)
             if template.kind == "text":
                 point = comp.transform(template.x, template.y)
                 texts.append(
@@ -786,6 +988,7 @@ def build_silk(
                         stored_angle=template.angle,
                         layer_id=template.layer_id,
                         layer_kind=kind,
+                        declared_layer_kind=declared_kind,
                         font_size=template.font_size,
                         stroke_width=template.stroke_width,
                         origin=template.origin,
@@ -804,6 +1007,9 @@ def build_silk(
                     kind=template.kind,
                     layer_id=template.layer_id,
                     layer_kind=kind,
+                    declared_layer_kind=declared_kind,
+                    effective_layer_id=effective_id,
+                    face=face,
                     points=board_points,
                     local_points=local,
                     width=template.width,
@@ -853,7 +1059,7 @@ def pad_effective_layers(
     claims.
     """
     copper = sorted({int(layer) for layer in copper_layers})
-    if template.hole_diameter is not None or template.layer_id == MULTI_LAYER_ID:
+    if template.has_hole or template.layer_id == MULTI_LAYER_ID:
         return copper
     face = placement.layer_id if placement.layer_id is not None else template.layer_id
     if face is None:
@@ -910,6 +1116,9 @@ def build_pads(
                     # both frames are right-handed y-up CCW (task 125a).
                     angle=comp.angle + template.angle,
                     hole_diameter=template.hole_diameter,
+                    hole_width=template.hole_width,
+                    hole_height=template.hole_height,
+                    hole_type=template.hole_type,
                     plated=template.plated,
                 )
             )
@@ -935,7 +1144,16 @@ class PcbContext:
     pads: list[PadGeometry] = field(default_factory=list)
     tracks: list[TrackSegment] = field(default_factory=list)
     vias: list[ViaGeometry] = field(default_factory=list)
+    #: **Copper** area polygons only (162b) — see
+    #: :attr:`boardwise.core.geometry.BoardGeometry.pours`.
     pours: list[PourShape] = field(default_factory=list)
+    #: 162b: area polygons on a **non-copper** layer (solder mask, assembly,
+    #: custom, ...). Same records as ``pours`` would have held before 162b;
+    #: separated so a copper question never reads them by accident.
+    non_copper_shapes: list[PourShape] = field(default_factory=list)
+    #: 162b: ``REGION`` records — copper-prohibition regions, parsed and
+    #: exposed, consumed by no rule.
+    prohibit_regions: list[ProhibitRegion] = field(default_factory=list)
     outline: BoardOutline | None = None
     #: (component id, pad id) -> net name, as written by ``PAD_NET``.
     pad_nets_by_pad: dict[tuple[str, str], str | None] = field(default_factory=dict)
@@ -1188,25 +1406,39 @@ def collect_pcb_context(
                 if poly_type == "BOARD_OUTLINE" and context.outline is None:
                     context.outline = BoardOutline(points=points, source_id=record.id)
                     continue
-                context.pours.append(
-                    PourShape(
-                        id=record.id or "",
-                        net=net,
-                        layer_id=body.get("layerId"),
-                        kind={
-                            "FILL": "fill",
-                            "POLY": "poly",
-                            "POUR": "pour",
-                            "POURED": "poured",
-                        }[rtype],
-                        points=points,
-                        width=_as_float(body.get("width")),
-                        fill_style=body.get("fillStyle"),
-                        poly_type=poly_type,
-                    )
+                # 162b: copper or artwork? The record types here carry both —
+                # a POLY on BOT_SOLDER_MASK is a mask opening, not a pour — and
+                # the layer table is the only thing that says which. Unknown
+                # layers stay on the copper side; see `_carries_copper`.
+                shape = PourShape(
+                    id=record.id or "",
+                    net=net,
+                    layer_id=body.get("layerId"),
+                    kind={
+                        "FILL": "fill",
+                        "POLY": "poly",
+                        "POUR": "pour",
+                        "POURED": "poured",
+                    }[rtype],
+                    points=points,
+                    width=_as_float(body.get("width")),
+                    fill_style=body.get("fillStyle"),
+                    poly_type=poly_type,
                 )
+                if _carries_copper(context.layers, shape.layer_id):
+                    context.pours.append(shape)
+                else:
+                    context.non_copper_shapes.append(shape)
             else:
-                context.pours.extend(
+                # A POURED result inherits its layer from the pour region it was
+                # poured from, so it is classified the same way rather than
+                # assumed copper.
+                bucket = (
+                    context.pours
+                    if _carries_copper(context.layers, layer_id)
+                    else context.non_copper_shapes
+                )
+                bucket.extend(
                     PourShape(
                         id=record.id or "",
                         net=net,
@@ -1218,6 +1450,29 @@ def collect_pcb_context(
                     )
                     for poly in islands
                 )
+        elif rtype == "REGION":
+            # 162b: a copper-prohibition region. Parsed and exposed only — no
+            # rule reads `context.prohibit_regions` yet, deliberately: this
+            # batch adds the reading, not a verdict.
+            points, radius, _arcs = _artwork_path(body.get("path"))
+            context.prohibit_regions.append(
+                ProhibitRegion(
+                    id=record.id or "",
+                    name=str(body.get("name") or ""),
+                    layer_id=body.get("layerId"),
+                    region_type=str(body.get("regionType") or ""),
+                    prohibit_types=[
+                        str(item)
+                        for item in _layer_list(
+                            body.get("prohibitType"),
+                            f"REGION 记录 {record.id or '(无 id)'}.prohibitType",
+                        )
+                    ],
+                    points=points,
+                    radius=radius,
+                    width=_as_float(body.get("width")),
+                )
+            )
         elif rtype != "DOCHEAD":
             stats.unconsumed_types[rtype] = stats.unconsumed_types.get(rtype, 0) + 1
 
@@ -1246,12 +1501,14 @@ def collect_pcb_context(
         copper_layers,
     )
     # 152: legend, last, because it depends on nothing else here and on the
-    # layer table (which the walk above has by now finished reading).
+    # layer table (which the walk above has by now finished reading). 162b: the
+    # artwork pass takes the table itself, not just the id->kind map, because it
+    # also has to resolve the **counterpart** layer of a flipped placement.
     kinds = layer_kinds(context.layers)
     context.silk_texts = silk_texts_of(document, context.placements, kinds)
     if artwork:
         context.silk_shapes, footprint_texts = build_silk(
-            context.placements, artwork, kinds, stats
+            context.placements, artwork, context.layers, stats
         )
         context.silk_texts.extend(footprint_texts)
     return context
@@ -1280,6 +1537,8 @@ def extract_board(
         tracks=context.tracks,
         vias=context.vias,
         pours=context.pours,
+        non_copper_shapes=context.non_copper_shapes,
+        prohibit_regions=context.prohibit_regions,
         outline=context.outline,
         silk_shapes=context.silk_shapes,
         silk_texts=context.silk_texts,
@@ -1332,6 +1591,8 @@ def build_board_geometry(source: Epro2Source) -> BoardGeometry:
         tracks=context.tracks,
         vias=context.vias,
         pours=context.pours,
+        non_copper_shapes=context.non_copper_shapes,
+        prohibit_regions=context.prohibit_regions,
         outline=context.outline,
         silk_shapes=context.silk_shapes,
         silk_texts=context.silk_texts,
