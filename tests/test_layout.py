@@ -1,8 +1,10 @@
 """Revision-3/4 hard constraints, pinned against the layout engine.
 
 Each test names the constraint it pins. The crown test runs the whole
-golden board through ``generate_plan`` and demands ZERO violations — that
-is the gate the draw flow refuses to execute past.
+golden board through ``generate_plan`` and reads every violation class it
+produces — that is the gate the draw flow refuses to execute past. Since
+163a/E3 that reading is not empty: the solver's page draws the ``+5V`` rail
+flag across ``D-``'s wire, which the gate now reports (see the crown test).
 """
 
 from __future__ import annotations
@@ -55,30 +57,36 @@ def _golden_plan():
 
 
 def test_golden_plan_has_zero_violations():
-    """The crown gate: the whole board, all five constraints, clean.
+    """The crown gate: the whole board, all five constraints.
 
-    **136 re-pinned, and the distinction is the whole point of this edit.**
-    The five hard constraints are about whether the drawing is *correct*, and
-    on that question this board is still clean — nothing here moved.
+    **136 re-pinned the spacing half; 163a/E3 re-pinned the annotation half,
+    and the distinction is the whole point of this edit.** The five hard
+    constraints are about whether the drawing is *correct*, and on that question
+    this board is still clean — nothing here moved.
 
     What 136 added is a sixth finding that is not about correctness: two nets'
     wires running alongside each other closer than
     :data:`~boardwise.engines.layout.WIRE_CLEARANCE`. The solver's drawing of
-    this board produces 49 of them (it did before 136 too — the gate simply
-    had no ruler to measure them with). So the assertion is now stated against
-    the codes that mean "this plan is wrong", which is exactly the set the
-    draw gate refuses on, and the spacing rows are asserted separately in
-    ``tests/test_136_wire_spacing.py`` where their number and shape are pinned.
+    this board produces 34 of them.
 
-    Asserting ``plan.violations == []`` here would have meant one of two
-    wrong things: that the drawing is perfect (it is not, and 136 is the
-    report that says so), or that the new check does not exist.
+    163a/E3 added the marker-vs-foreign-wire half of constraint 5, and on the
+    solver's page it **fires once**: the ``+5V`` rail flag is anchored at
+    ``(760, 385)`` while ``D-``'s wire runs vertically through ``(765, 380)``–
+    ``(765, 400)`` — through the marker's own box, and 5 units from the flag's
+    electrical anchor, i.e. inside the glyph the editor draws there. That is
+    the finding, not an artefact: the router anchors rail flags for clearance
+    from *boxes* alone (``layout._pick_attach_point``), and rails are the one
+    marker the ``auto`` strategy does not put through
+    :func:`~boardwise.engines.layout.clear_label_point`. So the assertion is
+    stated against the codes, and the annotation rows are pinned by name here
+    and in ``tests/test_163a_gate_truth.py``.
     """
     _golden, _offsets, plan = _golden_plan()
-    blocking = [v for v in plan.violations if v.code in layout.ADVISORY_VIOLATION_CODES]
+    advisory = [v for v in plan.violations if v.code in layout.ADVISORY_VIOLATION_CODES]
     hard = [v for v in plan.violations if v.code not in layout.ADVISORY_VIOLATION_CODES]
-    assert hard == [], [v.render() for v in hard]
-    assert blocking, "136: the solver's drawing of this board is too tight to read"
+    assert [v.code for v in hard] == ["LABEL_ON_FOREIGN_WIRE"], [v.render() for v in hard]
+    assert "net +5V vs net D-" in hard[0].subject, hard[0].render()
+    assert advisory, "136: the solver's drawing of this board is too tight to read"
 
 
 def test_golden_boxes_stay_inside_the_frame_and_clear_of_the_title_block():

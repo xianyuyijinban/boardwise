@@ -641,15 +641,22 @@ def test_run_draw_naming_strategy_switch_controls_the_naming_actions():
     assert result.naming_strategy == "wire"
 
 
-def test_run_draw_reports_the_render_and_probe_separately(monkeypatch):
-    """159: the one `prefer_replay=False` draw in this file, so the one solve.
+def test_run_draw_reports_the_render_and_probe_separately():
+    """The one `prefer_replay=False` draw in this file: a real solver plan.
 
-    Nothing about the draw is stubbed: the plan run_draw executes is the real
-    solver's output for the golden board, handed out by `tests/_golden.py` —
-    that module's own isolation note says who may write to it, and run_draw gets
-    a **copy**, because F3's drifted-pin snapping (`_snap_drifted_pins`) rewrites
-    the plan it is given (`step.points`, `step.x/y`) and the shared object must
-    not be rewritten by it.
+    Nothing about the draw is stubbed — the plan run_draw executes is the
+    solver's own output, and the render and the probe are two separate
+    diagnostics off the same run.
+
+    **This used to be the golden board, through `tests/_golden.py`'s shared
+    solver plan** (159: "the one solve"). 163a/E3 moved it to the file's own
+    synthetic board, because the shared plan is no longer drawable and that is
+    the *finding*, not a fixture problem: the solver anchors the `+5V` rail flag
+    across `D-`'s wire on the golden page, so ``run_draw`` refuses it with
+    ``LABEL_ON_FOREIGN_WIRE``. The refusal is pinned by name where the plan is
+    read (``tests/test_layout.py``, ``test_136``, ``test_137``, ``test_141``,
+    ``test_143e``); what this test needs is a solver plan that *is* executed, so
+    that the reporting it is about can be observed.
     """
     class RenderClient(FakeClient):
         async def call(self, action: str, params=None) -> dict:
@@ -658,20 +665,13 @@ def test_run_draw_reports_the_render_and_probe_separately(monkeypatch):
                 return {"format": "image/png", "encoding": "base64", "data": "cmVuZGVy"}
             return await super().call(action, params)
 
-    import _golden
-    from boardwise.parsers.schematic import build_pin_offsets, build_schematic_model
-
-    monkeypatch.setattr(
-        "boardwise.engines.generate.generate_plan", _golden.solver_plan_or_cache
-    )
-    golden_path = "tests/fixtures/ch340_golden.epro2"
     client = RenderClient(_geo())
     result = _run(
         run_draw(
             client,
-            strip_dangling_nets(build_schematic_model(golden_path)),
+            _golden_model(),
             confirm=lambda: True,
-            offsets=build_pin_offsets(golden_path),
+            offsets=GOLDEN_OFFSETS,
             prefer_replay=False,
         )
     )

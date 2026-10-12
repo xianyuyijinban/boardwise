@@ -625,6 +625,9 @@ def generate_plan(
     model: DesignModel,
     offsets: dict[str, dict[str, tuple[float, float]]],
     strategy: str | None = None,
+    *,
+    frame: layout.Rect | None = None,
+    title_block: layout.Rect | None = None,
 ) -> ActionPlan:
     """Build the complete, self-checked action plan for ``model``.
 
@@ -635,6 +638,16 @@ def generate_plan(
     self-check violations — a non-empty ``violations`` list means the draw flow
     must refuse to execute (revision 3's gate). The geometry is the first page
     in :data:`WIDTH_ATTEMPTS` that routes cleanly; see :func:`_choose_geometry`.
+
+    ``frame`` / ``title_block`` are the **measured** drawing area of the page the
+    plan will be drawn onto, and until 163a/E1 they could not be handed over at
+    all: this function always packed and judged against the calibration
+    constants' A4 landscape (:data:`~boardwise.engines.layout.SHEET_WIDTH`), so a
+    plan drawn on any other sheet was laid out and *reported* against a page it
+    was not on. ``None`` keeps that A4 default, which is what every legacy caller
+    gets and what the golden board's own page is;
+    :func:`boardwise.engines.replay.replay_or_solver`, whose whole reason to
+    exist is a **measured** frame, now passes the one it read.
     """
     plan = ActionPlan()
     plan.naming_strategy = normalise_strategy(strategy)
@@ -643,15 +656,31 @@ def generate_plan(
         return plan
 
     _host, order = _layout_order(model)
+    #: The keep-out the naming search and the readability lint measure against:
+    #: the measured page's own title block when the caller read one, and the
+    #: calibration constant's A4 rectangle otherwise (163a/E1).
+    page_title = title_block if title_block is not None else layout.Rect(*layout.TITLE_BLOCK)
 
     def attempt(geometry: list[layout.Placement]):
-        """Everything the plan needs to be judged: geometry, pins and routes."""
+        """Everything the plan needs to be judged: geometry, pins and routes.
+
+        The anchors the annotations *will* have are not knowable yet — a name is
+        resolved after a page is in force — so this pass measures **no**
+        annotation rows (``annotation_anchors=[]``) instead of measuring the
+        router's candidate points. Both rulers run on the finished plan below,
+        on the anchors it really draws (163a/E2).
+        """
         pins: dict[tuple[str, str], tuple[float, float]] = {}
         for place in geometry:
             for number, (dx, dy) in offsets.get(place.designator, {}).items():
                 pins[(place.designator, number)] = (place.x + dx, place.y + dy)
         wired, wired_violations = layout.route_nets(model, pins, geometry)
-        checked = layout.validate_full(model, geometry, wired, pins)
+        checked = layout.validate_full(
+            model, geometry, wired, pins,
+            frame=frame,
+            title_block=title_block,
+            annotation_anchors=[],
+        )
         checked.extend(wired_violations)
         return pins, wired, wired_violations, checked
 
@@ -698,6 +727,32 @@ def generate_plan(
         plan.notes.append(
             f"pin {designator}.{pin} is connected in the netlist but has no known "
             "position, so no wire reaches it — UNPLACED, not left open on purpose"
+        )
+    #: 163a, E5: **the same fact as a gate row, not only a note.** 岳's ruling —
+    #: a page that cannot reach every pin the netlist connects is not the
+    #: netlist's page, and the gate's whole job is to refuse those. Until this
+    #: row existed, a plan whose wires stopped short of a connected pin reported
+    #: **zero** blocking violations, so ``draw`` would execute it and the page
+    #: would state less connectivity than the schematic it claims to reproduce.
+    #:
+    #: The boundary is the one the note already drew, and it is exact:
+    #: ``pin.net is None`` is "left open on purpose" (``nc_pins``, never a row);
+    #: this one is "the netlist connects it and the plan cannot draw it". A
+    #: pin-less component and an offsets table missing a pin are the same
+    #: disease one level up, and both land here by construction — the list is
+    #: built from ``model.nets``, so a pin the netlist does *not* connect cannot
+    #: trip it however incomplete its symbol is.
+    for designator, pin in plan.unplaced_pins:
+        # The page's own checked list, so the row lands in ``plan.violations``
+        # with everything else the gate reads.
+        violations.append(
+            Violation(
+                "PINS_UNPLACED",
+                f"pin {designator}.{pin}",
+                "the netlist connects this pin but the plan has no position for "
+                "it, so no wire reaches it — the drawn page would carry less "
+                "connectivity than the netlist it reproduces",
+            )
         )
     routed_nets = {route.net for route in routes}
     for net_name, net in sorted(model.nets.items()):
@@ -760,13 +815,25 @@ def generate_plan(
                 route.net,
                 geometry,
                 members_by_net.get(route.net, set()),
-                title_block=layout.Rect(*layout.TITLE_BLOCK),
+                title_block=page_title,
                 taken=taken,
             )
             if point is None:
                 plan.notes.append(problem)
                 continue
         else:
+            # A rail's flag, or any name under ``text``/``label``, sits where the
+            # router anchored it. That anchor is chosen for clearance from
+            # **boxes** alone (``layout._pick_attach_point``), so it can land on
+            # a foreign wire — and until 163a/E3 nothing at the terminal said so.
+            # It does now (``LABEL_ON_FOREIGN_WIRE``, blocking, measured on this
+            # very board: the ``+5V`` flag's marker lies on ``D-``'s wire), and
+            # the *remedy* is this generator's: sending rails through
+            # :func:`layout.clear_label_point` as well would move the flag
+            # instead of reporting it. That is a placement-policy change (the
+            # documented exemption above says rails use the router's anchor), so
+            # it is 岳's call and not this batch's — the gate reports the truth
+            # in the meantime.
             point = route.attach
         steps = naming_steps_for(route, point, plan.naming_strategy)
         for step in steps:
@@ -820,6 +887,21 @@ def generate_plan(
     #: on the chosen page instead of the solver trying a narrower one; reported
     #: is what matters, and re-choosing a page for a label is 岳's call if the
     #: finding ever blocks a board that used to draw.
+    #:
+    #: **163a made it one ruler and no more.** D1 left the *old* ruler running
+    #: too: the page-selection pass called ``validate_full`` with no anchor
+    #: argument, which falls back to ``route.attach`` per net, and those rows
+    #: were handed on into ``plan.violations`` beside these. So a net the plan
+    #: leaves unnamed was still measured at a point nothing is drawn at, and —
+    #: worse, because that one can refuse a board — a real, drawn anchor could
+    #: be joined by a phantom finding about a point the plan moved away from.
+    #: The selection pass now names its anchors explicitly (the empty list: a
+    #: page is chosen before any name exists), so ``attach`` is never measured
+    #: on the solver path at all. ``annotation_anchor_violations`` also gained
+    #: the foreign-**wire** half of constraint 5 (``LABEL_ON_FOREIGN_WIRE``,
+    #: blocking), which is where 岳's own screenshot defect class finally has a
+    #: terminal check: the search that avoids foreign wires only ever ran for the
+    #: signal names it places, never for the rail flags anchored here.
     plan.violations.extend(
         layout.annotation_anchor_violations(
             model,
@@ -833,7 +915,7 @@ def generate_plan(
             geometry,
             routes,
             plan.net_names,
-            layout.Rect(*layout.TITLE_BLOCK),
+            page_title,
             members_by_net=members_by_net,
         )
     )

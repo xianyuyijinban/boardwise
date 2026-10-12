@@ -298,6 +298,9 @@ prints one row per violation plus a tally:
 | `LABEL_ON_COMPONENT` | an annotation box overlaps a foreign part |
 | `LABEL_OVERLAP` | two annotation boxes intersect |
 | `LABEL_ON_TITLE_BLOCK` | an annotation inside the title block |
+| `LABEL_ON_FOREIGN_WIRE` | an annotation box touches **another** net's wire — a name drawn across a stranger's wire reads as a connection that is not there (163a) |
+| `WIRE_OVERLAP` | two nets' wires coincide (gap ≤ 0) — a true short, unlike the advisory `WIRE_TOO_CLOSE` (163a) |
+| `PINS_UNPLACED` | netlist-connected pins no wire reaches — the page would not equal the netlist (163a) |
 
 `boardwise draw` runs the same lint as part of its self-check and **refuses to
 execute** when anything fails — the whole point is that the burden of proof

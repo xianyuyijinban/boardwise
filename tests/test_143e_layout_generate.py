@@ -181,17 +181,27 @@ def test_the_finished_golden_plan_passes_the_annotation_rulers(golden_auto_plan)
 
     This is a *measurement*, not a promise: on the golden board the four naming
     steps the solver places (three rail flags and one long signal name) all sit
-    on their own wires and clear of every foreign box, so wiring both rulers
-    into ``plan.violations`` adds no row here — which is exactly why the hole
-    could live this long. The point is that it now *would* report one.
+    on their own wires, and D1's own question — "are they clear of every foreign
+    **box**" — is answered clean, so wiring that ruler into ``plan.violations``
+    adds no row here. The point is that it now *would* report one.
+
+    **163a/E3 re-pinned the box-cleanliness to box-and-wire cleanliness**: the
+    ``+5V`` rail flag's marker does lie on ``D-``'s wire, so the annotation codes
+    are no longer empty and this assertion now names the one row it expects. The
+    property D1 is about — every drawn name sits on **its own** net's wire — is
+    asserted below, unchanged.
     """
     _model, plan = golden_auto_plan
     codes = {v.code for v in plan.violations}
-    annotation_codes = {
+    annotation_codes = sorted(
         code for code in codes
         if code.startswith("LABEL_") or code in {"FLAG_NOT_ON_WIRE", "NO_ATTACH_POINT"}
-    }
-    assert not annotation_codes, sorted(annotation_codes)
+    )
+    assert annotation_codes == ["LABEL_ON_FOREIGN_WIRE"], annotation_codes
+    hits = [v for v in plan.violations if v.code == "LABEL_ON_FOREIGN_WIRE"]
+    assert len(hits) == 1 and "net +5V vs net D-" in hits[0].subject, [
+        v.render() for v in hits
+    ]
     assert plan.net_names, "the golden board has rails to flag"
     for step in plan.net_names:
         assert any(

@@ -323,12 +323,24 @@ def test_the_draw_gate_executes_a_plan_whose_only_findings_are_advisory():
     split, adding the check turned the golden solver drawing into 52 self-check
     violations and ``run_draw`` refused it outright — the new check silently
     became the strictest gate in the pipeline.
+
+    **163a/E3 re-pinned the last line**: the gate's blocking list is no longer
+    empty, and what is in it is *not* this task's rows — it is the ``+5V`` rail
+    flag drawn across ``D-``'s wire (``LABEL_ON_FOREIGN_WIRE``, pinned in
+    ``tests/test_layout.py`` and ``tests/test_163a_gate_truth.py``). The claim
+    this test exists for is the one asserted here: **not one spacing row is in
+    that list**, so the ruler still cannot stop a board by itself.
     """
     from boardwise.engines.draw import print_self_check
 
     plan = _golden.golden_plan()
     assert _too_close(plan.violations), "precondition: the finding exists"
-    assert print_self_check(plan) == [], print_self_check(plan)
+    reported = print_self_check(plan)
+    assert not [line for line in reported if "WIRE_TOO_CLOSE" in line], reported
+    assert not [line for line in reported if "SEPARATION_GIVEN_UP" in line], reported
+    assert [line for line in reported if "LABEL_ON_FOREIGN_WIRE" in line] == reported, (
+        f"the gate blocks on something 136 did not measure: {reported}"
+    )
 
 
 def test_the_lint_report_still_counts_and_names_the_advisory_rows():

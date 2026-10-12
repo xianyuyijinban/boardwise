@@ -33,7 +33,10 @@ The five hard constraints (task revision 3) and where they live:
    box's own pins, whitelisted explicitly by the validator;
 4. net ports / power flags attach to their net's wire — the router returns
    an on-wire attach point per net; the validator re-checks;
-5. annotations keep :data:`LABEL_CLEARANCE` from every foreign box.
+5. annotations keep :data:`LABEL_CLEARANCE` from every foreign box, and never
+   *lie on* a foreign net's wire (163a/E3 — the legibility margin is the
+   search's, the terminal bar is contact; see
+   :func:`annotation_anchor_violations`).
 
 Cross-net rule (measured editor behaviour, stated honestly): EasyEDA Pro
 draws junction dots when a wire *endpoint* lands on a wire — a T or an
@@ -340,9 +343,29 @@ def net_exits(
     """Which nets leave each component on which side of its box.
 
     ``{designator: {"W" | "E" | "N" | "S": {net, ...}}}`` — the demand a gap
-    between two boxes is sized from (141). The side is the *router's* rule
-    (:func:`_outward_direction`): the nearest box edge, ties broken W, E, N, S,
-    so the demand counted here is the demand the router will actually create.
+    between two boxes is sized from (141). The side is the *router's* rule,
+    :func:`_outward_direction`, called with the same arguments the router calls
+    it with, so the demand counted here is the demand the router will actually
+    create.
+
+    **The tie matters, and 163a/E7 is what made this function ask**: for a
+    *corner* pin — one equidistant from two box edges — the answer is not
+    "whichever edge comes first in W, E, N, S" but whichever of the tied stub
+    runs stays clear of the component's other pin tips, which is what
+    :func:`_outward_direction` decides and what the router stubs by. This
+    function used to answer with a bare ``min`` over its own distance table,
+    ties broken by that fixed order, and so could count a net's demand on a side
+    the router never leaves by — two rulers for one question, the failure mode
+    this module names everywhere else. Measured: the two rules disagree on 505
+    of 200 000 random two-to-four-pin boxes and agree on all 17 golden parts, so
+    aligning it moves no page that was already drawn right.
+
+    The box and the tips are handed over in the component's own *relative*
+    frame (:func:`_relative_box` is the router's box translated by the
+    placement origin), which is the same question because
+    :func:`_outward_direction` only reads differences — and the packing snaps
+    every origin to :data:`GRID`, so the grid cells it compares are the same
+    cells the router compares.
 
     A net is counted once per side however many pins it has there: two pins of
     the same net on one edge are one wire leaving that edge, which is what a gap
@@ -356,14 +379,14 @@ def net_exits(
         box = _relative_box(pins)
         if box is None:
             continue
-        bx0, by0, bx1, by1 = box
+        rect = Rect(*box)
         sides: dict[str, set[str]] = {s: set() for s in ("W", "E", "N", "S")}
         for pin in component.pins:
             if pin.net is None or pin.number not in pins:
                 continue
-            dx, dy = pins[pin.number]
-            distances = {"W": dx - bx0, "E": bx1 - dx, "N": dy - by0, "S": by1 - dy}
-            sides[min(distances, key=lambda s: distances[s])].add(pin.net)
+            tip = pins[pin.number]
+            siblings = [other for other in pins.values() if other != tip]
+            sides[_outward_direction(tip, rect, siblings)].add(pin.net)
         out[designator] = sides
     return out
 
@@ -1438,6 +1461,12 @@ WIRE_CLEARANCE = 10.0
 #: calibration must not be able to stop a board from being drawn; it reports,
 #: the operator decides.
 #:
+#: The list stays this short on purpose, and 163a/E6 is the boundary drawn
+#: inside the spacing family: **``WIRE_OVERLAP`` — two nets' wires on the same
+#: line — is not here**, because that shape is a short rather than a ruler
+#: reading. The exemption covers "correct but hard to read"; it never covers
+#: "electrically wrong".
+#:
 #: :func:`blocking_violations` is what the draw gate reads.
 ADVISORY_VIOLATION_CODES = frozenset({"WIRE_TOO_CLOSE", "SEPARATION_GIVEN_UP"})
 
@@ -1556,6 +1585,7 @@ def validate_full(
     frame: Rect | None = None,
     title_block: Rect | None = None,
     annotation_points: list[tuple[float, float]] | None = None,
+    annotation_anchors: list[tuple[str, float, float]] | None = None,
 ) -> list[Violation]:
     """The gate: all five constraints against the finished geometry.
 
@@ -1577,7 +1607,23 @@ def validate_full(
     ``annotation_points`` are the positions of the plan's flags / labels: a
     wire endpoint that carries a net annotation is a legal terminal (that is
     what the annotation is *for* — the reference rule set says a label must
-    touch its wire, so the wire is expected to end there).
+    touch its wire, so the wire is expected to end there). ``annotation_points``
+    is the point-only form the *terminality* check reads; it says nothing about
+    which net a marker belongs to.
+
+    ``annotation_anchors`` is the ``(net, x, y)`` form, and it is the ruler for
+    constraints 4/5 — the *markers the caller really draws*. ``None`` means "the
+    caller has not said", and then the historical ruler stands: the router's
+    own ``route.attach`` per route. **A caller that knows its anchors must pass
+    them** (163a/E2): otherwise this function measures the router's *candidate*
+    while the plan draws something else — and, for a net the plan leaves
+    unnamed, measures a point nothing is drawn at. Two rulers for one constraint
+    is the same disease :func:`annotation_anchor_violations` documents, and the
+    one that can refuse a clean board is the one measuring a point that is not
+    on the page. :func:`~boardwise.engines.generate.generate_plan` therefore
+    passes an explicit list (possibly empty) on every page it tries, and the
+    replay path leaves this ``None`` because it draws the human's own anchors
+    and has no attach points at all.
     """
     violations: list[Violation] = []
     sheet = (
@@ -1778,6 +1824,26 @@ def validate_full(
                     gap, shared = measured
                     if gap >= WIRE_CLEARANCE:
                         continue
+                    if gap <= 0.0:
+                        # **Zero gap is not a readability finding, it is a short**
+                        # (163a/E6). Two different nets' wires lying on the same
+                        # line over a shared run are one conductor to the editor:
+                        # the ruler's own subject ("run 5 apart") does not even
+                        # describe them, and filing them under an advisory code
+                        # would let a board with two nets welded together be
+                        # drawn — the one thing the gate exists to refuse. So the
+                        # shape gets its own **blocking** code; a merely *close*
+                        # pair keeps the advisory one.
+                        violations.append(
+                            Violation(
+                                "WIRE_OVERLAP",
+                                f"net {net_a} vs net {net_b}",
+                                f"segments {seg_a.points()} and {seg_b.points()} lie on "
+                                f"the same line over {shared:.0f} units — two nets "
+                                "sharing one conductor is a short, not a spacing fault",
+                            )
+                        )
+                        continue
                     violations.append(
                         Violation(
                             "WIRE_TOO_CLOSE",
@@ -1790,13 +1856,16 @@ def validate_full(
 
     # --- constraints 4/5: annotations on-wire and clear
     #
-    # The anchors are the ones the caller names: by default the *router's* own
-    # attach point per route, which is what this check has always measured — but
-    # see :func:`annotation_anchor_violations`, which is the single ruler for
-    # this constraint and which :func:`boardwise.engines.generate.generate_plan`
-    # calls with the anchors the plan really draws (143e, D1: under ``auto`` the
-    # label is moved off ``attach`` by ``clear_label_point``, so measuring
-    # ``attach`` here was measuring a point nothing is drawn at).
+    # The anchors are the ones the caller names (``annotation_anchors``): with
+    # none named this falls back to the *router's* own attach point per route,
+    # which is what this check has always measured — but
+    # :func:`annotation_anchor_violations` is the single ruler for this
+    # constraint, and :func:`boardwise.engines.generate.generate_plan` calls
+    # this function with an explicit anchor list on every page it tries (143e,
+    # D1: under ``auto`` the label is moved off ``attach`` by
+    # ``clear_label_point``, so measuring ``attach`` here was measuring a point
+    # nothing is drawn at; 163a, E2: the same ruler now also has to *not* be run
+    # twice, once per page tried and once for the anchors the plan draws).
     for route in routes:
         if route.attach is None and route.kind != "wire":
             # pure wire carriers (replays of older generators) carry no
@@ -1809,17 +1878,17 @@ def validate_full(
                     "the router found no on-wire attach point",
                 )
             )
+    anchors = (
+        [
+            (route.net, route.attach[0], route.attach[1])
+            for route in routes
+            if route.attach is not None
+        ]
+        if annotation_anchors is None
+        else list(annotation_anchors)
+    )
     violations.extend(
-        annotation_anchor_violations(
-            model,
-            routes,
-            placements,
-            [
-                (route.net, route.attach[0], route.attach[1])
-                for route in routes
-                if route.attach is not None
-            ],
-        )
+        annotation_anchor_violations(model, routes, placements, anchors)
     )
     return violations
 
@@ -1836,7 +1905,8 @@ def annotation_anchor_violations(
     (the rule the module states where :func:`annotation_box` is defined):
 
     * :func:`validate_full` feeds it the router's ``route.attach`` per net — the
-      historical ruler, kept for the replay path and what it has always checked;
+      historical ruler, and now only a **fallback**: it stands when the caller
+      named no anchors, which the solver path no longer does (163a/E2);
     * :func:`boardwise.engines.generate.generate_plan` feeds it the anchors the
       **plan actually draws**, which is a different point whenever
       :func:`clear_label_point` has moved a name, and *no* point at all for nets
@@ -1845,14 +1915,49 @@ def annotation_anchor_violations(
 
     Each ``(net, x, y)`` must sit on one of that net's own wire segments
     (``FLAG_NOT_ON_WIRE``: the editor does not treat an overlapping marker and a
-    pin coordinate as a connection, so a floating name is not merely ugly) and
-    must keep :data:`LABEL_CLEARANCE` from every **foreign** component box
+    pin coordinate as a connection, so a floating name is not merely ugly), must
+    keep :data:`LABEL_CLEARANCE` from every **foreign** component box
     (``LABEL_TOO_CLOSE``: beside its own net's part is normal, on a stranger's is
-    not).
+    not), and must not lie on
+
+    * a **foreign** net's wire — ``LABEL_ON_FOREIGN_WIRE``, **blocking**
+      (163a/E3). This is the finding 岳 circled on a real page and the gate was
+      blind to: a name drawn **across** a stranger's wire reads as *connected* to
+      it, so the page states a connection the netlist does not have — the same
+      harm :data:`CROSS_NET_SHORT` describes, one primitive over. It was
+      *already* a rule — :func:`clear_label_point` refuses every candidate
+      within :data:`LABEL_CLEARANCE` of a foreign wire — but only inside that
+      search, so it covered the signal names the search places and none of the
+      rail flags, which are anchored at the router's own ``route.attach`` and
+      never searched.
+
+    **The bar here is contact (``rect_segment_distance == 0``), not the
+    search's :data:`LABEL_CLEARANCE`.** The two are not two rulers for one
+    question, they are two questions: the search asks "is there a *nicer* spot"
+    and can afford to insist on a margin, while this check asks "does this name
+    lie on another net's conductor" — the only thing that makes the page claim a
+    connection. Measured, the margin would be the wrong instrument here: the
+    human's own labels sit 10 units from foreign wires (the calibration behind
+    :data:`WIRE_CLEARANCE`), so a *terminal* 20-unit requirement is stricter
+    than the reference page and refuses correct drawings — on this very
+    generator, ``run_draw`` would have refused 31 of its own draw-pipeline
+    boards (measured 163a). A margin is a preference; contact is a defect.
+
+    The marker's box is :func:`annotation_box`'s — the text band for a label,
+    and for a flag whatever glyph box the caller can supply (``None`` here,
+    because this ruler knows anchors and not symbols; see
+    :func:`~boardwise.engines.generate.generate_plan` for why the solver path
+    has no glyph to pass).
     """
     violations: list[Violation] = []
     boxes = [(p.designator, p.bbox) for p in placements if p.bbox]
     by_net = {route.net: route for route in routes}
+    foreign_segs = [
+        Segment(px, py, qx, qy, other.net)
+        for other in routes
+        for poly in other.polylines
+        for (px, py), (qx, qy) in zip(poly, poly[1:])
+    ]
     for net_name, x, y in anchors:
         route = by_net.get(net_name)
         segs = [
@@ -1882,6 +1987,28 @@ def annotation_anchor_violations(
                         f"{LABEL_CLEARANCE:.0f} of component {des}'s box",
                     )
                 )
+        marker = annotation_box(x, y, net_name)
+        # One row per (name, foreign net), not one per touching segment: a long
+        # wire reaches this check as many collinear pieces, so per-segment rows
+        # stated one defect six times over (measured on the golden board: 21 rows
+        # for two flags), which is how a real finding gets buried.
+        touching: dict[str, Segment] = {}
+        for seg in foreign_segs:
+            if seg.net == net_name:
+                continue
+            if rect_segment_distance(marker, seg) > 0.0:
+                continue
+            touching.setdefault(seg.net, seg)
+        for other_net, seg in sorted(touching.items()):
+            violations.append(
+                Violation(
+                    "LABEL_ON_FOREIGN_WIRE",
+                    f"net {net_name} vs net {other_net}",
+                    f"annotation at ({x:.0f},{y:.0f}) lies on net {other_net}'s "
+                    f"wire {seg.points()} — a name drawn across a stranger's wire "
+                    "reads as a connection that is not there",
+                )
+            )
     return violations
 
 

@@ -13,6 +13,7 @@ import pytest
 import _golden
 
 from boardwise.core.model import Component, DesignModel, Net, Pin
+from boardwise.engines import layout
 from boardwise.engines.generate import (
     DEFAULT_NAMING_STRATEGY,
     NAMING_STRATEGIES,
@@ -348,7 +349,16 @@ def test_rails_keep_their_flags_under_every_strategy():
         assert "Ground" in kinds
 
 
-def test_missing_offsets_report_no_violations_but_skip_the_net():
+def test_missing_offsets_are_disclosed_and_skip_the_net():
+    """A part with no offsets is parked unbounded — and its pins are *said*.
+
+    **163a/E5 re-pinned the disclosure half**: this used to be "report no
+    violations", because the pins R1 cannot place were only a note. 岳's ruling
+    is that a netlist pin the plan cannot draw is a blocking finding
+    (``PINS_UNPLACED``), since the drawn page would carry less connectivity than
+    the netlist it reproduces — so the plan now refuses, and that is what the
+    last assertion pins.
+    """
     offsets = {"U1": {"1": (-20.0, -10.0), "2": (-20.0, 10.0)}}
     plan = generate_plan(_synthetic_model(), offsets)
     # R1 has no offsets: it is parked unbounded (the diff would flag a
@@ -358,6 +368,14 @@ def test_missing_offsets_report_no_violations_but_skip_the_net():
     assert "RX" not in {n.net for n in plan.net_names}, (
         "a net whose members are not all placeable is not named either"
     )
+    # ...and every pin that cannot be drawn is a blocking row, by name
+    unplaced = sorted(plan.unplaced_pins)
+    assert unplaced == [("R1", "1"), ("R1", "2")], unplaced
+    rows = [v for v in plan.violations if v.code == "PINS_UNPLACED"]
+    assert sorted(v.subject for v in rows) == ["pin R1.1", "pin R1.2"], [
+        v.render() for v in rows
+    ]
+    assert layout.blocking_violations(rows) == rows
 
 
 # --------------------------------------------------------------------------

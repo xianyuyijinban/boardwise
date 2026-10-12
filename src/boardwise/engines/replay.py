@@ -33,6 +33,7 @@ and when no measurement is available the replay refuses instead of guessing.
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass, field
 
 from boardwise.core.geometry import transform_point as _transform_point
@@ -741,6 +742,42 @@ def split_at_junctions(wires: list[WireStep]) -> tuple[list[WireStep], int]:
     return out, split_count
 
 
+def _solver_page_arguments(solver, frame: SheetFrame | None) -> dict[str, object]:
+    """``generate_plan``'s measured-page keywords — for a solver that has them.
+
+    ``generate_plan`` gained ``frame`` / ``title_block`` in 163a/E1, and the
+    suite's own solver double (``tests/_golden.solver_plan_or_cache``) is patched
+    in its place by four modules **with a three-argument signature it promises to
+    keep** ("signature-compatible with ``generate_plan`` so a test module can
+    patch it in where the solver is not its subject"). A solver that does not
+    take a page is therefore called exactly as it was before this task, and the
+    caller says so in the plan's notes rather than pretending the frame reached
+    it.
+
+    The test is the callable's own signature, not a ``TypeError`` from calling
+    it: a ``TypeError`` raised *inside* a solver would be indistinguishable from
+    a missing parameter, and would silently buy a second, frameless solve.
+    """
+    if frame is None:
+        return {}
+    try:
+        parameters = inspect.signature(solver).parameters
+    except (TypeError, ValueError):  # a builtin or an un-introspectable double
+        return {}
+    names = {
+        name
+        for name, parameter in parameters.items()
+        if parameter.kind
+        in (parameter.POSITIONAL_OR_KEYWORD, parameter.KEYWORD_ONLY)
+    }
+    if "frame" not in names:
+        return {}
+    arguments: dict[str, object] = {"frame": frame.drawable}
+    if "title_block" in names:
+        arguments["title_block"] = frame.title_block
+    return arguments
+
+
 def replay_or_solver(
     model: DesignModel,
     page: PageLayout | None,
@@ -768,11 +805,39 @@ def replay_or_solver(
 
     from boardwise.engines.generate import generate_plan
 
-    plan = generate_plan(model, canvas_pin_offsets(offsets_file), policy)
+    #: **The measured frame goes with the fallback** (163a/E1). A measured
+    #: :class:`SheetFrame` is the whole reason this module exists, and the
+    #: solver used to be called without it: it packed and judged against the A4
+    #: calibration constants whatever page the caller had actually measured, so
+    #: on any other sheet the fallback answered about a page nobody is drawing
+    #: on — and said nothing about it, because the note below only fired when
+    #: the frame was *missing*. The frame is passed whenever it was measured, and
+    #: the note states which frame the answer is against, in both directions.
+    sheet = _solver_page_arguments(generate_plan, frame)
+    plan = generate_plan(
+        model,
+        canvas_pin_offsets(offsets_file),
+        policy,
+        **sheet,
+    )
     if page is None or not page.parts:
         plan.notes.append("no golden layout available; used the generic solver")
     elif frame is None:
         plan.notes.append("no measured sheet frame; used the generic solver")
+    if frame is not None:
+        # Which page the answer is *about* is not optional information: the same
+        # board laid out against another sheet is another drawing — so either it
+        # reached the solver, or the plan says it did not.
+        if sheet:
+            plan.notes.append(
+                "the generic solver packed and self-checked against the measured "
+                f"frame ({frame.render()})"
+            )
+        else:
+            plan.notes.append(
+                "the solver in force takes no measured page, so its answer is "
+                "against whatever sheet it defaults to"
+            )
     return plan, "generic solver"
 
 
