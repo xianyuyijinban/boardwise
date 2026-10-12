@@ -245,9 +245,13 @@ boardwise doctor: 8/8 项通过
 boardwise bridge status
 ```
 
-第一行是结论行——`已连接 2 个窗口：毕设FOC驱动板、test2`，或者没连上时的
-`未连接——先启动 daemon：boardwise bridge start，再确认立创 EDA 里已导入 connector`
-（两步按你要做的顺序写好了）。下面才是每个窗口的详细表。
+第一行是结论行——`已连接 2 个窗口：毕设FOC驱动板、test2`；没连上时它只说**还差哪一步**：
+daemon 在、没有窗口连着时是
+`未连接——daemon 在跑（157 起任何需要桥的命令都会自己把它拉起来），差的是 connector：
+在立创 EDA 里导入 boardwise 扩展并启用它，装过就重启一次编辑器`（这时要修的是扩展，
+不是 daemon）；daemon 真的不在时命令会先自己拉起它，**拉起也没成功才**报
+`daemon not reachable`，那时看报错上面那几行日志尾部（`~/.boardwise/log/`）
+或前台跑 `boardwise bridge start`。下面才是每个窗口的详细表。
 
 > 截图位：`docs/images/gs-04-doctor-green.png` —— 全绿的那次输出。
 > （已补：2026-09-21 本机实跑 `boardwise doctor` 的真实输出（当时 7/7、connector 0.4.10）渲染成终端样式。

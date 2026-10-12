@@ -370,14 +370,22 @@ def status_summary(data: dict[str, Any]) -> str:
     * connected — ``已连接 N 个窗口：<工程名列表>``, one line, the projects by the
       names a human calls them (a window that named no project is counted and not
       invented, and says so in the tail);
-    * not connected — ``未连接——先启动 daemon：`boardwise bridge start`，再确认
-      立创 EDA 里已导入 connector``, which is the two-step repair in the order the
-      reader has to do it (issue #69's own diagnosis: the state lives only in this
-      command, so a light user does not know to look).
+    * not connected — the **connector** half alone, because this function is only
+      ever called on a daemon that answered: the ping came back, so the daemon is
+      running and telling the reader to start it is advice that cannot work
+      (163b — it used to head this line with 「先启动 daemon」, which survives a
+      `bridge start`, a restart and an edit, and after 157's auto-start it was
+      also factually wrong on any machine where a command had just pulled the
+      daemon up). What is left to do is import the `.eext` in 立创 EDA and
+      restart the editor once if it was already imported — the second half of
+      issue #69's own diagnosis.
 
-    Spelled here rather than in the CLI for the reason :func:`status_lines` gives:
-    the wording cannot drift from the keys it reads. Empty ``windows`` **and** a
-    false ``connector`` are both "not connected" — the second is the first's cause.
+    The daemon-is-not-there case is the CLI's to word (it is the one that knows
+    the auto-start failed, and it prints the log tail): see
+    :func:`~boardwise.cli._cmd_bridge_status`. Spelled here rather than in the CLI
+    for the reason :func:`status_lines` gives: the wording cannot drift from the
+    keys it reads. Empty ``windows`` **and** a false ``connector`` are both "not
+    connected" — the second is the first's cause.
     """
     windows = _status_windows(data)
     if windows:
@@ -394,8 +402,8 @@ def status_summary(data: dict[str, Any]) -> str:
         tail = f"（另有 {unnamed} 个窗口未报工程名）" if unnamed else ""
         return f"已连接 {len(windows)} 个窗口：{listed}{tail}"
     return (
-        "未连接——先启动 daemon：`boardwise bridge start`，"
-        "再确认立创 EDA 里已导入 connector"
+        "未连接——daemon 在跑（157 起任何需要桥的命令都会自己把它拉起来），"
+        "差的是 connector：在立创 EDA 里导入 boardwise 扩展并启用它，装过就重启一次编辑器"
     )
 
 

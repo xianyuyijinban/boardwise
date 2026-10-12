@@ -1705,8 +1705,11 @@ def build_parser() -> argparse.ArgumentParser:
     draw_lint.add_argument(
         "--page", default=None, metavar="UUID",
         help=(
-            "The page to lint (default: the focused page). Read-only: "
-            "doc.open + sch.geometry + export.render format=svg, nothing written."
+            "The page to lint (default: the focused page). Reads only: "
+            "doc.open + sch.geometry + export.render format=svg — no page "
+            "content is written. `doc.open` does move the editor's tab, so the "
+            "focus is re-read to confirm it really moved (a page that would not "
+            "open is refused, exit 3) and put back where it was before the run."
         ),
     )
     draw_lint.add_argument(
@@ -6916,12 +6919,20 @@ def _cmd_bridge_status(args: argparse.Namespace) -> int:
                 _bridge_uri(port), token, "cli", client="boardwise-cli"
             )
         except (OSError, WebSocketException, BridgeError) as exc:
-            # The un-reachable case is the *same* sentence as the reachable-but-
-            # no-connector one, with the daemon step dropped because it is the one
-            # that just failed: a reader who starts the daemon and still sees no
-            # window has the next half of the instruction waiting for them (69 条 2).
-            print("未连接——先启动 daemon：`boardwise bridge start`，"
-                  "再确认立创 EDA 里已导入 connector")
+            # Two different repairs used to be one sentence (163b). This path is
+            # **daemon not there** — and since 157 that is a transient state: the
+            # command asked for a bridge, `_open_cli` pulled a daemon up, waited
+            # for the port and *still* got nothing. So the advice is not 「先启动
+            # daemon」 (the reader would run `bridge start` and watch the same
+            # failure) but the two things that explain it: the log the auto-start
+            # wrote, and the foreground run that prints the same reason live. The
+            # connector half belongs to the other state — a daemon that answers
+            # `ping` with no window attached — and `daemon.status_summary` words
+            # that one, because it is the only side that knows the ping came back.
+            print("未连接——daemon 不在，而且自动拉起也没成功（157 起需要桥的命令会自己"
+                  "detached 拉一个 daemon 起来）：看上面几行的日志尾部，"
+                  "日志在 ~/.boardwise/log/daemon-<日期>.log；前台跑 "
+                  "`boardwise bridge start` 看它怎么说（同一份原因，打在窗口里）")
             print(f"boardwise bridge: daemon not reachable on 127.0.0.1:{port} ({exc})")
             return 2
         try:
@@ -10524,13 +10535,24 @@ def _print_proposal(proposal: object, out_path: str | None) -> None:
 
 
 def _cmd_draw_lint(args: argparse.Namespace) -> int:
-    """`draw lint --page P1` (task 111): nine read-only geometric predicates.
+    """`draw lint --page P1` (task 111): eleven read-only geometric predicates.
 
     Two data paths: live (doc.open to focus the page, then one `sch.geometry`
     and one `export.render format=svg` — reads only, and the render is a
     *report*, not a write) and replay (`--snapshot` + `--render`, no daemon).
     Exit 0 no ERROR / 1 ERROR findings / 2 bad input / 3 the page's state
     cannot be stated (the live read failed or came back unusable).
+
+    163b closed the gap between that claim and what the live path did: the
+    `doc.open` answer was dropped and the focus never re-read, so a page the
+    editor refused to open would be linted *as* the page `--page` named —
+    `sch.geometry` reads whatever is focused (pit 44). It is now the `draw
+    plan`/`draw apply` discipline: re-read `doc.list` after the open and refuse
+    when the focused uuid is not the requested one. And because `doc.open`
+    really does move the tab, the focus the run found is restored in a
+    `finally` — the same rule the DRC and canvas stages state for themselves. A
+    read-only verb moves nothing; it no longer *leaves* the editor moved
+    either.
     """
     import asyncio
 
@@ -10593,11 +10615,20 @@ def _cmd_draw_lint(args: argparse.Namespace) -> int:
             async def call(action: str, params: dict, purpose: str):
                 return await client.call(action, params, **_edit_target_kwargs(args))
 
+            # The focus this run found, and the one it moved the editor to: a
+            # read-only command must put the editor back where it was (the DRC
+            # and canvas stages' rule), and the page it moves to has to be
+            # confirmed by a re-read before `sch.geometry` judges it (018 §B2,
+            # the same guard `draw plan` and `draw apply` keep).
+            focus_before = ""
+            moved_to = ""
             try:
                 if args.page:
                     listing = await call(
-                        "doc.list", {}, "read the focused project and page"
+                        "doc.list", {}, "read the focused project, its pages and the focus"
                     )
+                    if isinstance(listing, dict):
+                        focus_before = _active_document_uuid(listing)
                     pages = {
                         row.get("uuid"): row.get("name")
                         for row in (listing.get("documents") or [])
@@ -10628,7 +10659,30 @@ def _cmd_draw_lint(args: argparse.Namespace) -> int:
                             f"page list ({sorted(v for v in pages.values() if v)})"
                         )
                         return None, None, local_notes
-                    await call("doc.open", {"uuid": page_uuid}, "focus the page (read-only)")
+                    await call("doc.open", {"uuid": page_uuid}, "focus the page the lint judges")
+                    moved_to = page_uuid
+                    # `sch.geometry` reads the **focused** page (pit 44): an
+                    # `doc.open` the editor did not honour would have this run
+                    # lint the page it was on and report it under `--page`'s
+                    # name — a wrong page wearing the right label. Re-read the
+                    # focus and refuse rather than guess.
+                    confirmed = await call(
+                        "doc.list", {}, "re-read the focus after opening the page"
+                    )
+                    if not isinstance(confirmed, dict) or _active_document_uuid(
+                        confirmed
+                    ) != page_uuid:
+                        at = (
+                            _active_document_uuid(confirmed)
+                            if isinstance(confirmed, dict) else ""
+                        )
+                        local_notes.append(
+                            f"the editor did not focus page {page_uuid} (it is at "
+                            f"{at or 'nothing'}) — sch.geometry reads the focused page, "
+                            "so the lint would judge another page and report it as this "
+                            "one; nothing was read"
+                        )
+                        return None, None, local_notes
                 geometry = await call(
                     "sch.geometry", {}, "read the page's primitives (read-only)"
                 )
@@ -10660,10 +10714,28 @@ def _cmd_draw_lint(args: argparse.Namespace) -> int:
                 local_notes.append(f"bridge call failed: {exc}")
                 return None, None, local_notes
             finally:
+                # `--page` moved the editor's tab, so the command puts it back
+                # (the DRC stage's and the canvas stage's rule): a read-only
+                # command that leaves the user on another page has changed
+                # something. A restore that fails is a note, never a crash, and
+                # the original focus is on the record either way.
                 try:
-                    await client.close()
-                except Exception:  # noqa: BLE001
-                    pass
+                    if moved_to and focus_before and focus_before != moved_to:
+                        await client.call(
+                            "doc.open",
+                            {"uuid": focus_before},
+                            **_edit_target_kwargs(args),
+                        )
+                        local_notes.append(f"draw lint: 焦点已复位到 {focus_before}")
+                except Exception as exc:  # noqa: BLE001 — a failed restore is a note
+                    local_notes.append(
+                        f"draw lint: 焦点复位失败（{exc}）— 编辑器可能停在别处"
+                    )
+                finally:
+                    try:
+                        await client.close()
+                    except Exception:  # noqa: BLE001
+                        pass
 
         snapshot, render_svg, notes = asyncio.run(run())
         if snapshot is None:
@@ -10677,6 +10749,25 @@ def _cmd_draw_lint(args: argparse.Namespace) -> int:
             return 3
         page_label = args.page or "the focused page"
 
+    text_readable = True
+    if render_svg is None:
+        # Both paths above already said why (no `--render` sidecar, or the
+        # render was not available): the text predicates answer "unreadable".
+        text_readable = False
+    elif not drawlint.render_text_nodes(render_svg):
+        # 163b: the render arrived and parsed to **zero** text nodes — the SVG
+        # text parser keys on the host's inline `style`, and a render that does
+        # not carry it made every text predicate return [] silently. That is a
+        # skipped predicate, not a clean page, and it is said in the same words
+        # as the render-missing case above.
+        text_readable = False
+        notes.append(
+            "the render arrived but carried no text node this reader can "
+            "classify, so the text predicates (L1 text half, L2, L3, L7) judged "
+            "nothing — only wire/flag geometry is judged, and the page is not "
+            "called clean"
+        )
+
     findings = drawlint.run_lint(snapshot, render_svg)
     counts = {"ERROR": 0, "WARN": 0, "INFO": 0}
     for finding in findings:
@@ -10686,7 +10777,7 @@ def _cmd_draw_lint(args: argparse.Namespace) -> int:
           f"{counts['WARN']} warn / {counts['INFO']} info")
     for note in notes:
         print(f"  note: {note}")
-    print(drawlint.render_report(findings))
+    print(drawlint.render_report(findings, text_readable=text_readable))
 
     if args.json_path:
         payload = {
@@ -10695,6 +10786,7 @@ def _cmd_draw_lint(args: argparse.Namespace) -> int:
             "findings": [finding.as_dict() for finding in findings],
             "counts": counts,
             "exitCode": 1 if counts["ERROR"] else 0,
+            "textReadable": text_readable,
             "notes": notes,
             "thresholds": {
                 "L1_TEXT_WIRE_PENETRATION": drawlint.L1_TEXT_WIRE_PENETRATION,

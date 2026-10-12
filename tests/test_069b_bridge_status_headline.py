@@ -12,12 +12,14 @@ The complaint: 「状态只在 bridge status 命令里，硬件工程师/AI 轻�
 What is pinned:
 
 1. `daemon.status_summary` is **pure** and total: one line for a connected
-   installation naming the projects, one line for an unconnected one naming the two
-   repair steps **in the order they have to be done**;
+   installation naming the projects, one line for an unconnected one naming the
+   repair that is left — the connector's (163b: the daemon is by construction
+   running when this line is printed, so 「先启动 daemon」 was advice that could
+   not work there);
 2. the CLI prints that line **first**, above the window table it did not change, and
-   prints it on the daemon-unreachable path too — a reader who has just started the
-   daemon and still sees no window must still have the second half of the
-   instruction in front of them;
+   prints a repair line on the daemon-unreachable path too — a reader whose
+   auto-started daemon did not come up must have the log tail and the foreground
+   run in front of them;
 3. the exit codes are unchanged (2 unreachable / 1 no connector / 0 connected): the
    new line is information, not a new verdict, and a caller keying on the code must
    not see a behaviour change;
@@ -88,12 +90,18 @@ def test_a_window_that_named_no_project_is_counted_and_never_invented():
     assert "未报工程名" in line, "the count of unnamed windows is stated too"
 
 
-def test_no_windows_is_the_two_step_repair_in_the_order_it_has_to_be_done():
-    """The issue's own sentence, with the order it gives.
+def test_no_windows_names_the_connector_step_and_not_the_daemon():
+    """The repair that is actually left, and only that one.
 
-    Daemon first: an extension cannot be seen by a daemon that is not running, so
-    telling the reader to re-import the `.eext` first would have them redo the step
-    they already did.
+    `status_summary` is called on a daemon that **answered `ping`** — the CLI's
+    unreachable branch is a different code path — so the line used to head with
+    「先启动 daemon：`boardwise bridge start`」 was advice that cannot work: the
+    reader runs it, the same daemon answers, and nothing changes. 157's
+    auto-start made it worse than useless (a command had usually just pulled the
+    daemon up itself). 163b splits the two states: this one names the connector
+    and the editor restart, and the daemon half — log tail, foreground run —
+    lives in `cli._cmd_bridge_status`, which is the side that knows the
+    auto-start failed.
     """
     for payload in (
         {"connector": False},
@@ -102,9 +110,13 @@ def test_no_windows_is_the_two_step_repair_in_the_order_it_has_to_be_done():
     ):
         line = status_summary(payload)
         assert line.startswith("未连接")
-        assert "boardwise bridge start" in line
+        assert "daemon 在跑" in line, "the daemon is up and the line has to say so"
+        assert "bridge start" not in line, (
+            "starting the daemon cannot be the repair for a daemon that answered"
+        )
         assert "connector" in line
-        assert line.index("bridge start") < line.index("connector"), line
+        assert "boardwise 扩展" in line, "the repair names the thing to import"
+        assert "重启" in line, "a sideloaded build needs one editor restart"
 
 
 def test_a_malformed_windows_field_does_not_raise_or_invent():

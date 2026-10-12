@@ -2300,9 +2300,10 @@ def postcondition_problems(
       half a lattice step of its expected offset (that is
       :func:`placement_problems`), is each planned wire's own endpoints on the
       page under that net, does every part the plan claims a value write for
-      state that value (that is :func:`value_problems`, 055 G2), and (when the
-      caller read the page before the writes) did exactly the promised number of
-      flags appear.
+      state that value (that is :func:`value_problems`, 055 G2), is each planned
+      flag on its own point **under its own net** (that is :func:`_flag_problems`,
+      163b), and (when the caller read the page before the writes) did exactly
+      the promised number of flags appear.
     """
     state: dict[str, list[str]] = {"live": [], "canvas": []}
     if live is not None:
@@ -2311,6 +2312,7 @@ def postcondition_problems(
         state["canvas"].extend(_part_problems(plan, geometry, pins or {}))
         state["canvas"].extend(_wire_problems(plan, geometry))
         state["canvas"].extend(value_problems(plan, geometry))
+        state["canvas"].extend(_flag_problems(plan, geometry))
         if flags_before is not None:
             expected = len(plan.change.draw_flags)
             now = addcomponent.netflag_count(geometry)
@@ -2487,6 +2489,62 @@ def unnamed_nets(plan: ChangePlan) -> set[str]:
     return {item.net for item in plan.change.draw_flags if item.net}
 
 
+def _flag_problems(plan: ChangePlan, geometry: Any) -> list[str]:
+    """Each planned net flag, on its own point **and** under its own net (163b).
+
+    The count check in :func:`postcondition_problems` says *how many* flags the
+    page gained; it cannot say *which*. A flag placed on the wrong pin of the
+    same page adds exactly one flag, so the census difference reads as
+    satisfied — the rail the plan meant to name is unconnected and the report is
+    green. The page states a flag's net and origin (`census_items`), so the
+    plan's own claim is checkable item by item: exactly one flag of the planned
+    net within half a lattice step of the planned point. This is the identity
+    `discard_selection` recognises a plan's flag by, read in the other
+    direction, and it means "not there yet" and "landed somewhere else" are
+    different sentences.
+
+    It runs on the pre-write read too (the idempotence probe), which is what
+    makes a repeat run's `already_applied` mean "at these points under these
+    nets" rather than "the page has as many flags as it should".
+    """
+    if not plan.change.draw_flags:
+        return []
+    rows = [row for row in census_items(geometry) if row["kind"] == "netflag"]
+    problems: list[str] = []
+    for flag in plan.change.draw_flags:
+        spot = (flag.x, flag.y)
+        label = (
+            f"{flag.kind or 'net'} flag {flag.net or '(unnamed)'} at "
+            f"({spot[0]:g}, {spot[1]:g})"
+        )
+        here = [
+            row for row in rows
+            if row["x"] is not None and row["y"] is not None
+            and _near((row["x"], row["y"]), spot, HALF_GRID)
+        ]
+        mine = [row for row in here if (row["net"] or "") == flag.net]
+        if len(mine) == 1:
+            continue
+        if not here:
+            problems.append(
+                f"{label}: no flag is on the page there — the rail it names is left "
+                "unconnected unless something else reaches it"
+            )
+        elif not mine:
+            problems.append(
+                f"{label}: the page carries "
+                + ", ".join(f"a {row['net'] or '(no net)'} flag {row['id']}" for row in here)
+                + " there, and the plan's flag is not one of them"
+            )
+        else:
+            problems.append(
+                f"{label}: {len(mine)} flags answer to it "
+                f"({', '.join(row['id'] for row in mine)}) — which one is the plan's "
+                "cannot be stated"
+            )
+    return problems
+
+
 def _wire_problems(plan: ChangePlan, geometry: Any) -> list[str]:
     """Each planned wire's own endpoints, under the net it belongs to.
 
@@ -2499,9 +2557,14 @@ def _wire_problems(plan: ChangePlan, geometry: Any) -> list[str]:
     this one says "the drawn thing is on the canvas".
 
     A net in :func:`unnamed_nets` has no name on the page to be found under (069
-    sec.9), so its wires' ends are measured against the page's wiring as a whole and
-    its length against the plan's total — *which* net those wires belong to is the
-    netlist leg's judgement, and the ends still have to be on the canvas.
+    sec.9), so its wiring is recognised **by geometry** instead: the page's
+    vertices that lie on a polyline the plan drew for that net are the set its
+    ends are measured against, and its length is compared against the plan's
+    total — *which* net those wires belong to is the netlist leg's judgement, and
+    the ends still have to be on the canvas. A net whose unnamed wiring cannot be
+    recognised that way is **reported**, not waved past (163b): this used to fall
+    back to every vertex on the page, under which any other net's corner read as
+    "the wire landed".
     """
     vertices: dict[str, set[tuple[float, float]]] = {}
     lengths: dict[str, float] = {}
@@ -2529,17 +2592,58 @@ def _wire_problems(plan: ChangePlan, geometry: Any) -> list[str]:
     problems: list[str] = []
     planned_length: dict[str, float] = {}
     unnamed = unnamed_nets(plan)
-    everywhere = {spot for spots in vertices.values() for spot in spots}
+    all_vertices = {spot for spots in vertices.values() for spot in spots}
+    # 069 sec.9, tightened by 163b: a flagged net's wires are drawn unnamed, so
+    # the page holds them under no name and matching by name finds nothing. They
+    # used to fall back to **every vertex on the page** (`all_vertices`), which is
+    # not an answer source: it says "some vertex of *some* net is at this point"
+    # and calls that "the redrawn wire landed". The set an unnamed net's ends are
+    # measured against is now its own wiring — the page's vertices that lie on a
+    # polyline the plan drew for that net — and a net whose wiring cannot be
+    # recognised at all is **reported** rather than answered from the page's
+    # vertices in general.
+    #
+    # Deliberately still permissive about the *wire* a vertex came from (any page
+    # wire passing through the plan's own geometry counts). The host merges wires
+    # that touch into one primitive (pit 32), and 057 E2 depends on a merged
+    # landing reaching the two later legs — the range leg names the existing wire
+    # that changed — rather than being refused here with a blunter sentence;
+    # `only permissive about touching, never about being elsewhere` is the line
+    # this draws.
+    unnamed_vertices: dict[str, set[tuple[float, float]]] = {}
+    for net in unnamed:
+        polylines = [
+            [(float(point[0]), float(point[1])) for point in wire.points]
+            for wire in plan.change.draw_wires
+            if wire.net == net and len(wire.points) >= 1
+        ]
+        if polylines:
+            unnamed_vertices[net] = {
+                spot
+                for spot in all_vertices
+                if any(_on_polyline(spot, line) for line in polylines)
+            }
     for wire in plan.change.draw_wires:
         have = vertices.get(wire.net, set())
+        attributed = True
         if not have and wire.net in unnamed:
-            have = everywhere
+            have = unnamed_vertices.get(wire.net) or set()
+            attributed = bool(have)
         for end in (wire.points[0], wire.points[-1]):
             spot = (round(end[0], 6), round(end[1], 6))
-            if spot not in have:
+            if spot in have:
+                continue
+            if attributed:
                 problems.append(
                     f"net {wire.net}: no wire vertex at ({end[0]:g}, {end[1]:g}) on the "
                     "page, but the plan draws a wire reaching it"
+                )
+            else:
+                problems.append(
+                    f"net {wire.net}: no wire vertex on the page lies on the wiring the plan "
+                    "drew for it — this is a net the plan draws unnamed (069 sec.9), so its "
+                    "wires cannot be matched by name, and nothing confirms the end at "
+                    f"({end[0]:g}, {end[1]:g}) landed"
                 )
         planned_length[wire.net] = planned_length.get(wire.net, 0.0) + sum(
             abs(wire.points[index][0] - wire.points[index - 1][0])

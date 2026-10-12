@@ -61,9 +61,23 @@ UNATTRIBUTED_NAME = "未归属"
 #: name buried inside a longer code is not evidence of that family, and the
 #: unanchored version of the regulator list below read `7895` out of the LCSC code
 #: `C57895` (see `_part_text`).
+#:
+#: The trailing `(?![0-9])` is what forces a digit-run alternative to end in
+#: `\d*` rather than a fixed count: `STM32` is safe because the character after
+#: it is a letter (`STM32F103`), but `LPC\d{3}` could never match `LPC1768` —
+#: the lookahead sees the last digit and refuses, so that alternative was a
+#: silent no-op (163b: a pattern that never matches is the same defect as a
+#: pattern that matches too much, and it fails the same way — quietly). The
+#: families whose names end in digits are therefore spelled `\d*`.
 _MCU_PATTERNS = re.compile(
-    r"(?<![A-Za-z0-9])(STM32|GD32|CH32|CH58|ESP32|ESP8266|NRF5\d|ATMEGA|ATTINY|"
-    r"RP2040|LPC\d{3}|ATSAM|HC32|APM32|BL7\d\d|MM32|N76E|STC\d|AC63)",
+    r"(?<![A-Za-z0-9])(STM32|GD32|CH32|CH58|ESP32|ESP8266|NRF5\d*|ATMEGA|ATTINY|"
+    r"RP2040|LPC\d*|ATSAM|HC32|APM32|BL7\d*|MM32|N76E\d*|STC\d*|AC63|"
+    # 163b: the four families this table was missing. STM8/MSP430/EFM32 are
+    # spelled to their family token (the following character is a letter or a
+    # dash: `STM8S003`, `MSP430F149`, `EFM32TG`), and PIC needs `\d{2,}` —
+    # bare `PIC` would match the word, while `PIC\d` alone could never match
+    # `PIC16F877` for the lookahead reason above.
+    r"STM8|MSP430|EFM32|PIC\d{2,})(?![0-9])",
     re.IGNORECASE,
 )
 
@@ -84,9 +98,26 @@ _REGULATOR_PATTERNS = re.compile(
 #: second, which named a cluster of op-amps 电源 (found by a test, 2026-09-23). A
 #: deny-list rather than a tighter family list, because the regulator names are
 #: open-ended and the false friends are few.
+#:
+#: 163b added five more LM parts the wide `LM\d{2,4}` alternative swallowed, each
+#: one a different answer to "what is this LM part":
+#:
+#: * `LM311` — a comparator (the LM311 family: 311/211/111);
+#: * `LM335` — an analogue temperature sensor (the Zener-style sensor, `LM335Z`);
+#:   note `LM35` was already denied and does **not** catch it: the trailing
+#:   `(?![0-9])` refuses `LM35` inside `LM335`, exactly as designed;
+#: * `LM4040`/`LM4041`/`LM4042` — shunt **voltage references** (and a reference is
+#:   not a supply: it is a component *of* a supply);
+#: * `LM2903` — a dual comparator (the industrial LM393);
+#: * `LM321` — a single op-amp (`LM321`, the SOT-23 op-amp family).
+#:
+#: The list is not exhaustive and does not pretend to be: the test is the part's
+#: own name, and a rule that reads a name as evidence has to be able to say which
+#: names are not evidence.
 _REGULATOR_FALSE_FRIENDS = re.compile(
     r"(?<![A-Za-z0-9])(LM358|LM324|LM393|LM339|LM741|LM747|LM386|LM833|LM158|"
-    r"LM2902|LM2904|LM2901|LM35|LM75|LMV\d+|TLV906\d|TLV900\d)(?![0-9])",
+    r"LM2902|LM2904|LM2901|LM35|LM75|LMV\d+|TLV906\d|TLV900\d|"
+    r"LM311|LM335|LM4040|LM4041|LM4042|LM2903|LM321)(?![0-9])",
     re.IGNORECASE,
 )
 
@@ -2404,8 +2435,10 @@ def _board_links(report: dict) -> list[dict]:
     return links
 
 
-def _board_of_finding(finding: dict, links: list[dict], pcb_titles: set[str]) -> int:
-    """The index into ``links`` a finding belongs to, or ``-1`` when none claims it.
+def _board_of_finding(
+    finding: dict, links: list[dict], pcb_titles: set[str]
+) -> tuple[int, str]:
+    """``(index into links, why)``, or ``(-1, reason)`` when no *single* board claims it.
 
     A finding carries ``board`` in one of two name spaces: a schematic board title
     (``Board1``) for a stage-1/2/3 schematic finding, or a PCB document title
@@ -2414,23 +2447,68 @@ def _board_of_finding(finding: dict, links: list[dict], pcb_titles: set[str]) ->
     so a ``PCB1`` finding lands under the same heading as the schematic ``Board1``
     findings instead of getting a second, unrelated section.
 
+    **163b: titles are not identities.** Two PCB documents may share a title (a
+    copy-paste is enough), and the title lookup returned the **first** match, so
+    every finding of the second board was merged into the first: one board's
+    heading carried another board's findings, with nothing in the report saying
+    so. Three answers now, in order:
+
+    * ``boardUuid`` on the finding — when it is there it decides, because a uuid
+      is the one name that cannot collide, and a uuid the link table does not
+      know is reported rather than falling through to a title that might match
+      the wrong board;
+    * the title, when **exactly one** link answers to it;
+    * ``-1`` with the reason when several links answer — 「无法归因」 is a fact
+      about the report, and picking the first is a silent guess. The caller
+      renders those findings as unassigned rows with this sentence beside them.
+
     A finding with no board (a project-wide reading) falls to the last board only
     when there is exactly one; otherwise it is left ``-1`` and the caller reports it
     as a project-level row rather than guessing.
     """
     board = str(finding.get("board") or "")
     if board:
+        uuid = str(finding.get("boardUuid") or finding.get("board_uuid") or "").strip()
+        if uuid:
+            named = [
+                index for index, link in enumerate(links)
+                if str(link.get("uuid") or "") == uuid
+            ]
+            if len(named) == 1:
+                return named[0], ""
+            return -1, (
+                f"finding 的 boardUuid {uuid} 不在板链里（板链只有 "
+                + "、".join(sorted(str(link.get('uuid') or '(no uuid)') for link in links))
+                + "）—— 无法归因"
+            )
         if board in pcb_titles:
-            for index, link in enumerate(links):
-                if link.get("pcb") == board:
-                    return index
-        for index, link in enumerate(links):
-            if link.get("title") == board:
-                return index
-        return -1
+            pcb_matches = [
+                index for index, link in enumerate(links) if link.get("pcb") == board
+            ]
+            if len(pcb_matches) == 1:
+                return pcb_matches[0], ""
+            if len(pcb_matches) > 1:
+                return -1, (
+                    f"finding 的 board={board!r} 是 PCB 文档标题，板链里有 "
+                    f"{len(pcb_matches)} 份同名 PCB —— 无法归因（按标题匹配会把它们并成一块板）"
+                )
+        title_matches = [
+            index for index, link in enumerate(links) if link.get("title") == board
+        ]
+        if len(title_matches) == 1:
+            return title_matches[0], ""
+        if len(title_matches) > 1:
+            return -1, (
+                f"finding 的 board={board!r} 是原理图板名，板链里有 {len(title_matches)} "
+                "块板同名 —— 无法归因"
+            )
+        return -1, (
+            f"板链里没有一块板叫 {board!r}（原理图标题与 PCB 文档标题都对不上）"
+            " —— 无法归因"
+        )
     if len(links) == 1:
-        return 0
-    return -1
+        return 0, ""
+    return -1, "finding 没有 board，工程不止一块板 —— 工程级读数，不硬塞进某块板"
 
 
 def _finding_module(finding: dict, board_title: str, modules: list[dict]) -> str:
@@ -2669,10 +2747,12 @@ def board_report_section(
     unassigned: list[dict] = []
     for index, finding in enumerate(findings):
         weight = finding_weight(str(finding.get("rule_id") or ""))
-        position = _board_of_finding(finding, links, pcb_titles)
+        position, why = _board_of_finding(finding, links, pcb_titles)
         row = (weight, str(finding.get("severity") or ""), index, finding)
         if position < 0:
-            unassigned.append({"index": index, "weight": weight, "finding": finding})
+            unassigned.append(
+                {"index": index, "weight": weight, "finding": finding, "why": why}
+            )
             continue
         buckets[position]["rows"].append(row)
 
@@ -2770,6 +2850,7 @@ def board_report_section(
                 "severity": str(entry["finding"].get("severity") or ""),
                 "rule_id": str(entry["finding"].get("rule_id") or ""),
                 "board": str(entry["finding"].get("board") or ""),
+                "why": entry.get("why") or "",
                 "line": finding_oneline(entry["finding"]),
             }
             for entry in unassigned
@@ -2870,14 +2951,15 @@ def render_board_report(report: dict, section: dict | None = None) -> str:
         lines.append(f"### 不归属任何板（{len(unassigned)}）")
         lines.append("")
         lines.append(
-            "这些 finding 既没有板、又只有一块板以外可归（多板工程的工程级读数）："
-            "不硬塞进某块板。"
+            "这些 finding 没有被任何一块板认领：有的是工程级读数（多板工程），有的是板链里"
+            "有同名板、或板名对不上（163b：同名不硬猜，逐条写出为什么归不了）。"
         )
         lines.append("")
         for entry in unassigned:
+            reason = f"（{_cell(entry.get('why'))}）" if entry.get("why") else ""
             lines.append(
                 f"- **{_cell(entry.get('severity'))}** `{_cell(entry.get('board')) or '工程级'}` · "
-                f"{_cell(entry.get('line'))}"
+                f"{_cell(entry.get('line'))}{reason}"
             )
         lines.append("")
     totals = section.get("totals") or {}

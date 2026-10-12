@@ -435,12 +435,35 @@ def test_l8_fires_on_a_tilted_flag():
 
 
 def test_l8_spares_the_vertical_set():
+    """Only the two angles whose bars run along the connector's vertical.
+
+    163b: this fixture used to carry a `rotation=270` flag as "spared" — 90/270
+    are the **sideways** glyph, and sparing them spared the defect 069 sec.7
+    exists to gate (`drawcompiler`'s own acceptance: 「no flag in the plan is 90
+    or 270」). The sideways case is asserted below, not merely dropped.
+    """
     snapshot = _snapshot(
         _flag("GND", 50, 695, rotation=0),
         _flag("GND", 110, 525, rotation=180),
-        _flag("GND", 80, 745, rotation=270),
+        _flag("+5V", 90, 505, rotation=360),
     )
     assert _by_predicate(_lint(snapshot)).get("L8-flag-orientation") is None
+
+
+def test_l8_fires_on_a_sideways_flag():
+    """90/270 are the flat flag: the bar stack runs along x, not along y.
+
+    Measured on the host's own render (outputs/111/render_P22.svg): a 0/180 GND
+    flag's bars are horizontal polylines stacked in y (`190 -615 210 -615`,
+    `196 -609 204 -609`…), while the page's 270° one draws them stacked in x
+    (`70 -755 70 -735`, `61 -746 61 -744`…). Same part, turned on its side.
+    """
+    for rotation in (90, 270):
+        hits = _by_predicate(
+            _lint(_snapshot(_flag("GND", 80, 745, rotation=rotation)))
+        )["L8-flag-orientation"]
+        assert len(hits) == 1, rotation
+        assert hits[0].severity == "ERROR"
 
 
 # ------------------------------------------------------------------ L9
@@ -476,7 +499,18 @@ def test_accepted_pages_have_zero_error_and_warn(real_pages):
     pair) plus P23's TAP and P24's XI hit the host DRC on the accepted pages
     too — true positives by the oracle's own editor DRC run, excluded here by
     predicate name, not by relaxing the pin.
+
+    163b adds a second, **enumerated** exception: P22 carries one GND flag the
+    editor turned on its side (`78a445b6e0b03ef0` at (80,745), `Rotation: 270`),
+    and L8 now reports it. The render proves the reading rather than assuming
+    it — that flag's bars are stacked along x while every other flag on the page
+    (and every flag on P23/P24) stacks them along y, so it is the flat glyph 069
+    sec.7 refuses. It is named by primitive id here, never by predicate: L8 is
+    left fully armed for every other flag, and a second sideways flag on any of
+    these pages would still go red. Whether 岳 wants this one reported is his
+    call, not the lint's (registered with the batch).
     """
+    sideways_on_p22 = "78a445b6e0b03ef0"
     for page in ("P22", "P23", "P24"):
         data = real_pages[page]
         findings = drawlint.run_lint(data["snapshot"], data["render"])
@@ -484,6 +518,10 @@ def test_accepted_pages_have_zero_error_and_warn(real_pages):
             f for f in findings
             if f.severity in ("ERROR", "WARN")
             and f.predicate != "L5-wire-multiname"
+            and not (
+                f.predicate == "L8-flag-orientation"
+                and sideways_on_p22 in f.objects
+            )
         ]
         assert bad == [], (
             f"{page}: zero-false-positive pin broken: "
@@ -596,33 +634,48 @@ class _FakeBridgeClient:
     touched it (caught by the oracle running the command, 2026-10-04). The
     fake here drives the same live block the real daemon drives — doc.list,
     doc.open, sch.geometry, export.render, client.close — without a socket.
+
+    163b: it also models the one thing the real editor does that a dictionary
+    of answers cannot — `doc.open` **moves the focus**, so the next `doc.list`
+    reports the page just opened. Without that, the new focus re-read (and the
+    restore in the `finally`) would be untestable offline, which is exactly the
+    kind of "the seam cannot see it" that let the missing check ship.
     """
 
-    def __init__(self, answers: dict[str, object], calls: list[str]):
+    def __init__(self, answers: dict[str, object], calls: list[str], focus: str = ""):
         self._answers = answers
         self._calls = calls
+        self.focus = focus
 
     @classmethod
-    def with_answers(cls, answers: dict[str, object]):
+    def with_answers(cls, answers: dict[str, object], focus: str = ""):
         calls: list[str] = []
-        return cls(answers, calls), calls
+        return cls(answers, calls, focus), calls
 
     async def call(self, action, params=None, **kwargs):
         self._calls.append(action)
         answer = self._answers.get(action)
         if isinstance(answer, Exception):
             raise answer
+        if action == "doc.open" and isinstance(answer, dict):
+            uuid = str((params or {}).get("uuid") or "")
+            if (answer.get("tabId") or uuid) and answer.get("matchesRequest", True):
+                self.focus = uuid or str(answer.get("tabId") or "")
+        if action == "doc.list":
+            listing = dict(answer) if isinstance(answer, dict) else {}
+            listing["active"] = {"uuid": self.focus} if self.focus else None
+            return listing
         return answer
 
     async def close(self):
         pass
 
 
-def _install_live_daemon(monkeypatch, answers: dict[str, object]):
+def _install_live_daemon(monkeypatch, answers: dict[str, object], focus: str = ""):
     """Point `_cmd_draw_lint`'s live ladder at a scripted fake daemon."""
     from boardwise.bridge.protocol import BridgeError
 
-    client, calls = _FakeBridgeClient.with_answers(answers)
+    client, calls = _FakeBridgeClient.with_answers(answers, focus)
     client_obj = client
 
     class Client:
@@ -686,7 +739,12 @@ def test_cli_draw_lint_live_page_happy_path(monkeypatch, tmp_path, capsys):
     ])
     assert cli_module._cmd_draw_lint(args) == 1
 
-    assert calls == ["doc.list", "doc.open", "sch.geometry", "export.render"]
+    # doc.list → doc.open → doc.list (the 163b focus re-read: `sch.geometry`
+    # reads whatever is focused, so the open is confirmed before it is trusted).
+    # No restore here because nothing was focused when the run began.
+    assert calls == [
+        "doc.list", "doc.open", "doc.list", "sch.geometry", "export.render",
+    ]
     out = capsys.readouterr().out
     assert "P24" in out
     assert "L1-text-on-wire" in out
@@ -762,7 +820,7 @@ def test_cli_draw_lint_live_unreadable_geometry_returns_3(monkeypatch, capsys):
     parser = cli_module.build_parser()
     args = parser.parse_args(["draw", "lint", "--page", "P1"])
     assert cli_module._cmd_draw_lint(args) == 3
-    assert calls == ["doc.list", "doc.open", "sch.geometry"]
+    assert calls == ["doc.list", "doc.open", "doc.list", "sch.geometry"]
 
 
 def test_cli_draw_lint_live_defaults_to_focused_page(monkeypatch, tmp_path):

@@ -518,7 +518,10 @@ def postcondition_problems(
     required (036's rule):
 
     * ``canvas`` — every moved part is at its planned point with the rotation it
-      had, and every redrawn wire has an endpoint at both ends it promised;
+      had, every redrawn wire has an endpoint at both ends it promised, and every
+      wire the plan took off is **gone** — the original primitive id may not
+      still be on the page beside its redrawn copy (坑 46, the check `draw
+      discard` does in its `discard_incomplete` read-back);
     * ``live`` — for every pin the plan recorded, the editor's own netlist still
       shows exactly the mates it had. This is the acceptance's main judgement: a
       move must not change a single connection.
@@ -544,6 +547,19 @@ def postcondition_problems(
                 "re-orient"
             )
     for op in plan.change.wire_ops:
+        if op.primitive_id and patchpin.primitive_present(geometry, op.primitive_id):
+            # 坑 46, the half `draw discard` already enforces (cli.py's
+            # `discard_incomplete` read-back): the plan takes the original wire
+            # **off** the page before drawing its replacement, so the original id
+            # must not be there any more. A delete that did not take leaves the
+            # old wire beside its redrawn copy — the two carry the same net and
+            # run next to each other, which is a short, and the canvas leg used
+            # to answer this plan satisfied while the page held both.
+            canvas.append(
+                f"the wire {op.primitive_id} the plan takes off the page is still on it — "
+                "the delete did not take, and the old wire plus the redrawn copy is a "
+                "short (坑 46)"
+            )
         if not op.points_after:
             continue
         for point in (op.points_after[0], op.points_after[-1]):

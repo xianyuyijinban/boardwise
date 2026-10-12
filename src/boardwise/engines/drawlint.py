@@ -158,9 +158,19 @@ L7_LABEL_WIRE_GAP = 3.0
 #: L8 — the rotations the host writes for a vertical power/ground flag. The
 #: flag glyphs hang their bar on the connector's vertical (pit 43: the two
 #: families face opposite ways at the *same* rotation, so the bar direction
-#: is a per-family question, but "vertical" itself is these four angles —
+#: is a per-family question, but "vertical" itself is these two angles —
 #: any other rotation prints the flag's bar sideways).
-FLAG_VERTICAL_ROTATIONS = frozenset({0, 90, 180, 270})
+#:
+#: **90/270 are sideways, and this set used to allow them** (163b). The
+#: compiler only ever emits 0/180 — `drawcompiler._flag_rotation` builds its
+#: answer from a base of 0 (rail up) or 180 (ground down) plus the family's
+#: own offset — and 069 sec.7's acceptance is 「旗标必须竖着」, so a set that
+#: spared 90/270 spared exactly the defect the gate exists for: L8 answered
+#: [] for a flag the editor had turned on its side. The set is the two angles
+#: whose glyph bars run along the connector's vertical; the render proves it
+#: per flag (a 270 GND flag's bar stack runs along x, a 0/180 one's along y —
+#: measured on P22's own render, outputs/111/render_P22.svg).
+FLAG_VERTICAL_ROTATIONS = frozenset({0, 180})
 
 #: L9 — the sheet fill under which the page reports its layout distribution.
 #: Measured on the accepted pages (2026-10-04): P22 11.7%, P23 8.1%,
@@ -1817,10 +1827,43 @@ def run_lint(
     return findings
 
 
-def render_report(findings: list[LintFinding]) -> str:
-    """The human report: grouped by severity, each line with its predicate."""
+def render_text_nodes(svg: str | None) -> list[tuple[float, float, str, str, str]]:
+    """The canvas text nodes of one render — ``[]`` when there is no render.
+
+    The reader the text predicates trust (:func:`_svg_text_nodes`), exposed for
+    the caller that has to tell two absences apart (163b): a page whose render
+    carries no text of the classes this reader knows, and a render that was
+    never read. Both answer an empty text list to L1/L2/L3/L7, and an empty
+    list of findings from them used to be reported as a clean page — the caller
+    asks this first and degrades out loud instead (``render_report``'s
+    ``text_readable``).
+    """
+    if not svg:
+        return []
+    return _svg_text_nodes(svg)
+
+
+def render_report(findings: list[LintFinding], *, text_readable: bool = True) -> str:
+    """The human report: grouped by severity, each line with its predicate.
+
+    ``text_readable`` is the caller's answer to "did the render hand this run
+    any text node at all" (163b). It only changes the sentence printed when
+    there are no findings: a run whose render parsed to zero text nodes has not
+    cleared the text predicates, it has skipped them, and saying 「reads clean」
+    there is the one lie the whole gate cannot afford. The caller knows it
+    (:func:`render_text_nodes`) and says so; the default is the honest reading
+    for a run that did read text — including the replay path with no render at
+    all, where the "unreadable" note is already printed beside this line.
+    """
     if not findings:
-        return "draw lint: no findings — the page reads clean."
+        if text_readable:
+            return "draw lint: no findings — the page reads clean."
+        return (
+            "draw lint: no findings in the geometry that could be read — the "
+            "text predicates (L1/L2/L3/L7) judged nothing, because the render "
+            "carried no text node this reader could classify; this page is NOT "
+            "called clean"
+        )
     lines: list[str] = []
     for severity in ("ERROR", "WARN", "INFO"):
         rows = [f for f in findings if f.severity == severity]
