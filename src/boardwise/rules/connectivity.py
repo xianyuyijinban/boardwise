@@ -308,6 +308,17 @@ class ShuntSenseLink(Rule):
     Smoke check only: passes if *some* U-prefixed component has pins on both
     terminal nets of the shunt. Series resistors / filter networks between
     shunt and IC are invisible at L1 and produce an INFO, not a WARN.
+
+    The 50 mΩ ceiling names the *differential* shunt domain, and its distance
+    from ``path-sampling-bias``'s 0.5 Ω (176) is a boundary between two
+    questions, not a hole: a milliohm shunt in a high-current path is read by
+    a sense amplifier across both terminals — the architecture the
+    both-terminal-nets check above smokes for — while a larger series resistor
+    (ROBOT's 100 mΩ phase shunts are the measured case) is read single-ended
+    into an ADC pin, which is ``path-sampling-bias``'s territory, and that
+    rule does file those. Raising this ceiling to meet that one would sweep
+    every low-value series resistor into a differential question it is not
+    asking, as INFO noise.
     """
 
     id = "shunt-sense-link"

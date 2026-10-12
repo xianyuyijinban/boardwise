@@ -1037,10 +1037,11 @@ def _point_in_outline(point: Point, polygon: list[Point]) -> bool:
 
     Even-odd containment with an on-edge tolerance: a point on the boundary is on
     the board (「贴边不算越界」 — the board was routed to the outline), so the
-    boundary counts as inside. Written here rather than imported because
-    ``core.measure._point_in_polygon`` is private and the layer rule forbids
-    importing a ``_``-prefixed name across a layer; silk.py carries the same small
-    helper for the same reason.
+    boundary counts as inside. The same 口径 as
+    :func:`boardwise.core.measure.point_in_polygon` (public since 177), which this
+    local copy still duplicates — 177 只收编了 focthermal 那份，这份留待后续。
+    silk.py's ``_point_in_polygon`` is the deliberately different variant that does
+    *not* count the boundary.
     """
     inside = False
     count = len(polygon)

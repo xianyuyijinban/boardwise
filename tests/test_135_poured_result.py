@@ -65,7 +65,7 @@ import pytest
 from boardwise.core.geometry import BBox, BoardGeometry, Point, PourShape
 from boardwise.core.measure import (
     _pad_key,
-    _point_in_polygon,
+    point_in_polygon,
     pour_connectivity,
     region_copper,
 )
@@ -258,7 +258,7 @@ _ROTATED_REGION_IDS = frozenset(
 
 def _within(point: Point, polygon: list[Point], eps: float = 0.6) -> bool:
     """``point`` is inside ``polygon``, or within ``eps`` of its boundary."""
-    if _point_in_polygon(point, polygon):
+    if point_in_polygon(point, polygon):
         return True
     n = len(polygon)
     for i in range(n):
@@ -401,7 +401,7 @@ def test_each_filled_entry_is_its_own_polygon():
     for shape in poured:
         xs = [p.x for p in shape.points]
         assert max(xs) - min(xs) == 10.0
-        assert not _point_in_polygon(Point(300.0, 300.0), shape.points)
+        assert not point_in_polygon(Point(300.0, 300.0), shape.points)
 
 
 def test_a_fixture_poured_really_does_carry_several_islands():
@@ -506,7 +506,7 @@ def test_u10_ep_on_1_0_0_sits_on_no_top_layer_copper_at_all():
         if len(p.points) >= 3 and p.layer_id in ep.effective_layers()
     ]
     assert on_its_own_layer, "the board should carry top-layer pours somewhere"
-    assert not [p for p in on_its_own_layer if _point_in_polygon(centre, p.points)]
+    assert not [p for p in on_its_own_layer if point_in_polygon(centre, p.points)]
 
     conn = pour_connectivity(board, ep.net)
     assert _pad_key(ep) in next(

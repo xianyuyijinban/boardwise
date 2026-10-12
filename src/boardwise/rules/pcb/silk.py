@@ -293,6 +293,23 @@ def _circle_polygon_gap(cx: float, cy: float, radius: float, poly: list) -> floa
 
 
 def _point_in_polygon(x: float, y: float, points: list[tuple[float, float]]) -> bool:
+    """Pure even-odd containment, with **no on-edge rule**.
+
+    Unlike :func:`boardwise.core.measure.point_in_polygon` — which snaps any point
+    within 1e-9 of an edge to 「inside」 via an explicit segment-distance check —
+    a point exactly on an edge gets the raw even-odd answer here, and that answer
+    is direction-dependent: the half-open ``(y0 > y) != (y1 > y)`` convention
+    reads bottom/left edges as inside and top/right as outside (measured
+    2026-10-12, 177 audit). Exact-edge hits are measure-zero in practice; what
+    this implementation promises is only 「no snap band」.
+
+    **177 钉界：这份不是副本，差异是故意的，别再提「三份副本」的 bug。** The
+    measure side's tolerance exists because copper touching copper *is*
+    connected; ink grazing a pad corner is not ink over the pad, and a 1e-9
+    magnetic band would smear that distinction. Its ``(x, y, points)`` signature
+    serves this file's ``_as_xy`` pipeline and is not interchangeable with the
+    ``(Point, list[Point])`` public form.
+    """
     inside = False
     count = len(points)
     for index in range(count):

@@ -54,6 +54,7 @@ __all__ = [
     "component_distance",
     "pad_corners",
     "pad_edge_distance",
+    "point_in_polygon",
     "LoopArea",
     "loop_area",
     "ClearanceResult",
@@ -623,7 +624,7 @@ class _Shape:
     set of copper layers the copper exists on — more than one for vias and
     through-hole pads. ``is_pour`` marks a filled polygon, the only kind
     whose interior counts as copper (so containment is a valid meeting test
-    for it, via :func:`_point_in_polygon`).
+    for it, via :func:`point_in_polygon`).
 
     **``bbox`` is the copper's box, not the centreline's** (162a): the vertex
     box inflated by ``radius``, which is the box of the capsule's own body —
@@ -761,7 +762,7 @@ def _pad_key(pad: PadGeometry) -> str:
     return pad.id
 
 
-def _point_in_polygon(point: Point, polygon: list[Point]) -> bool:
+def point_in_polygon(point: Point, polygon: list[Point]) -> bool:
     """Even-odd containment test for a closed polygon.
 
     Used to recognise a pad / via that is *embedded* in a pour polygon. A
@@ -770,6 +771,15 @@ def _point_in_polygon(point: Point, polygon: list[Point]) -> bool:
     outline-to-pad edge distance would report a non-zero gap even though the
     two are the same electrically-connected copper. This containment test is
     the polygon "包含判定" the task book calls for.
+
+    **177 提升为公开：rules 层可以合法 import，副本消灭.** This is the 「在边上算
+    在里面」 test — a point within ``1e-9`` mil of any edge counts as inside —
+    and ``focthermal.py`` now imports it instead of carrying its own copy.
+    One same-口径 copy is still local and un-consolidated:
+    :func:`boardwise.rules.pcb.distance._point_in_outline` (board-outline escape),
+    left to a later task. silk.py's private ``_point_in_polygon`` is a
+    *deliberately different* variant (pure even-odd, boundary not counted) and is
+    not a copy of this one.
     """
     inside = False
     n = len(polygon)
@@ -959,8 +969,8 @@ def _capsule_distance(a: _Shape, b: _Shape, *, connectivity: bool) -> float:
       spot, not an oversight — it is what keeps ``clearances_vs`` from
       degenerating to all-zeros on a poured board.
     """
-    contained = (a.is_pour and any(_point_in_polygon(p, b.points) for p in b.points)) or (
-        b.is_pour and any(_point_in_polygon(p, a.points) for p in a.points)
+    contained = (a.is_pour and any(point_in_polygon(p, b.points) for p in b.points)) or (
+        b.is_pour and any(point_in_polygon(p, a.points) for p in a.points)
     )
     if contained:
         return 0.0 if connectivity else math.inf
@@ -1205,7 +1215,7 @@ def _touching(a: _Shape, b: _Shape) -> bool:
     sitting inside the other — the containment case matters because a real
     pour is solid copper around its own net's pads, so those pads never
     touch the pour's outline but are one piece of copper with it
-    (:func:`_point_in_polygon`).
+    (:func:`point_in_polygon`).
 
     Cross-layer proximity never connects: shapes with no layer in common
     are separate islands. A via is not "near" an inner pour in this sense —
@@ -1457,7 +1467,7 @@ def _polygon_meets_box(polygon: list[Point], box: BBox) -> bool:
     blindness, so it asks the geometric question instead:
 
     * any vertex inside the box, or
-    * any box corner inside the polygon (:func:`_point_in_polygon`), or
+    * any box corner inside the polygon (:func:`point_in_polygon`), or
     * any polygon edge crossing a box edge.
 
     The three together are the standard polygon/box overlap test and are exact
@@ -1477,7 +1487,7 @@ def _polygon_meets_box(polygon: list[Point], box: BBox) -> bool:
         Point(box.max_x, box.max_y),
         Point(box.min_x, box.max_y),
     ]
-    if any(_point_in_polygon(corner, polygon) for corner in corners):
+    if any(point_in_polygon(corner, polygon) for corner in corners):
         return True
     box_edges = _edges(corners)
     return any(
@@ -1689,7 +1699,7 @@ def vias_on_pad(board: BoardGeometry, pad: PadGeometry) -> list[ViaGeometry]:
     unambiguously on the pad.
 
     **Containment is tested against the rotated rectangle itself** (162a), via
-    :func:`_point_in_polygon` on the pad's four corners, with an on-edge point
+    :func:`point_in_polygon` on the pad's four corners, with an on-edge point
     counting as inside — a via centred exactly on the pad's own boundary is on
     the copper, and the pad's half-width being inclusive is a boundary the 133a
     suite already pins. The earlier reading took the *axis-aligned box* of those
@@ -1704,7 +1714,7 @@ def vias_on_pad(board: BoardGeometry, pad: PadGeometry) -> list[ViaGeometry]:
     if not corners:
         return []
     return [
-        via for via in board.vias if _point_in_polygon(Point(via.x, via.y), corners)
+        via for via in board.vias if point_in_polygon(Point(via.x, via.y), corners)
     ]
 
 
@@ -2067,7 +2077,7 @@ def _ground_corner_covered(
     ground_pours: list[tuple[str, str, list[Point], BBox | None]], corner: Point
 ) -> bool:
     """Does any ground pour polygon contain this corner point?"""
-    return any(_point_in_polygon(corner, points) for _, _, points, _ in ground_pours)
+    return any(point_in_polygon(corner, points) for _, _, points, _ in ground_pours)
 
 
 @dataclass

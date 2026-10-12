@@ -45,8 +45,11 @@ REPO = Path(__file__).resolve().parents[1]
 FIXTURES = Path(__file__).parent / "fixtures"
 FOC_100 = FIXTURES / "ProPrj_毕设FOC驱动板_v1.0.0_2026-10-07.epro2"
 
-#: 岳 2026-10-12 给的 test 工程窗口（任务书点名）。真机探针只碰这一个，只读。
-TEST_INSTANCE = "inst-110614866-3i116ex4"
+#: 岳 2026-10-12 给的 test 工程（任务书点名）。真机探针只碰这一个，只读。
+#: 按**工程名**路由（`--project`），不硬编码窗口 instance id：任何一次
+#: 热更/reload 后 instance id 都会变（2026-10-12 实测 0.4.29→0.4.30 后
+#: inst-110614866-3i116ex4 已不存在），硬编码只会让探针假 skip。test 工程
+#: 只有一个窗口开着，按名路由无歧义。
 TEST_PROJECT = "test"
 
 
@@ -357,7 +360,7 @@ def _bridge_call(action: str, params: dict, *, timeout: int = 60):
     proc = subprocess.run(
         [
             sys.executable, "-m", "boardwise.cli", "bridge", "call",
-            "--action", action, "--instance", TEST_INSTANCE,
+            "--action", action, "--project", TEST_PROJECT,
             "--params", json.dumps(params),
         ],
         cwd=REPO, capture_output=True, timeout=timeout, env=env,

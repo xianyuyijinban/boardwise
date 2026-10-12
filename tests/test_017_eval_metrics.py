@@ -687,6 +687,11 @@ def test_the_report_carries_the_provenance_a_run_has_to_record():
     # behaviour pin that moved is `tests/test_040b_boards.py`'s frozen severity
     # table (ROBOT's WARN 3 -> 5), and its note says why. Behaviour anchor:
     # `tests/test_176_sampling_bias.py`.
+    # 177 moved both again — a1d0a231 -> bb1b77c7, 0c244efa -> aa012db3 — a
+    # zero-semantics consolidation (the duplicated `_point_in_polygon` in
+    # `rules/pcb/focthermal.py` retired in favour of the now-public
+    # `core.measure.point_in_polygon`) plus one docstring in
+    # `rules/connectivity.py`; the ledger in test_126a has the full entry.
     # The running ledger with the pinned values is
     # `tests/test_126a_pcb_review_plumbing.py`; this note is the pointer to it.
     # Both are measured, not guessed - `tests/test_126a_pcb_review_plumbing.py`

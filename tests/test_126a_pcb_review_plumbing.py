@@ -1014,9 +1014,20 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # （test_040b 的冻结表、test_094 等）只有 ROBOT 那张表的 WARN 计数从 3 变 5，
     # 原因写在那张表的注释里。行为锚点是新建 `tests/test_176_sampling_bias.py`
     # （21 条）。
+    # **177 moved both** — a1d0a231 -> bb1b77c7，direct 0c244efa -> aa012db3 ——
+    # 零判决语义：本批消灭了 `rules/pcb/focthermal.py` 里与 core 逐字相同的私有
+    # `_point_in_polygon` 副本（改为 import 公开的 `core.measure.point_in_polygon`，
+    # 4412 条对拍 0 分歧，`outputs/177/`），给 `rules/pcb/silk.py` 那份**故意不同**
+    # 的纯 even-odd 变体钉了 docstring，修了 `rules/pcb/distance.py` 一句失效引用；
+    # direct 移动的全部原因是 `rules/connectivity.py` 的一段 docstring（裁决：
+    # 50mΩ 与 path-sampling-bias 的 0.5Ω 是分工不是洞）。行为锚：test_135 /
+    # test_133d / test_162a，变异 2 组 CAUGHT。钉值含 177 审计（agent-303 的 LOW
+    # 发现）驱动的 silk 措辞修正：原钉「boundary does not count as inside」不准确
+    # （纯 even-odd 对底/左边的边界点实测答 True），改为「无压边规则、边界答案随
+    # 边方向摆动」的准确表述。
     assert recursive != old_digest, "the subpackage is inside the recipe now"
-    assert old_digest == "0c244efa"
-    assert recursive == "a1d0a231", (
+    assert old_digest == "aa012db3"
+    assert recursive == "bb1b77c7", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

@@ -142,6 +142,7 @@ from ...core.measure import (
     RegionCopper,
     RegionCopperItem,
     pad_corners,
+    point_in_polygon,
     pour_connectivity,
     region_copper,
     via_layers,
@@ -788,30 +789,6 @@ class FocThermalViaArray(PcbRule):
 # ---------------------------------------------------------------------------
 
 
-def _point_in_polygon(point: Point, polygon: list[Point]) -> bool:
-    """Even-odd containment, with 「on the boundary counts as inside」.
-
-    The board's own pads and pours are simple polygons whose edges a point can
-    land exactly on (a pad corner on a pour edge, a via centred on a stroke), and
-    those cases are copper touching copper — inside. Written here rather than
-    imported because :func:`boardwise.core.measure._point_in_polygon` is private
-    and the repository's layer rule forbids importing a ``_``-prefixed name
-    across a layer (silk.py carries the same small helper for the same reason).
-    """
-    inside = False
-    count = len(polygon)
-    for index in range(count):
-        a = polygon[index]
-        b = polygon[(index + 1) % count]
-        if _point_segment_distance(point, a, b) <= 1e-9:
-            return True
-        if (a.y > point.y) != (b.y > point.y):
-            x_cross = a.x + (point.y - a.y) / (b.y - a.y) * (b.x - a.x)
-            if point.x < x_cross:
-                inside = not inside
-    return inside
-
-
 def _point_segment_distance(point: Point, a: Point, b: Point) -> float:
     """Distance from ``point`` to the segment ``ab``, in mils."""
     dx, dy = b.x - a.x, b.y - a.y
@@ -885,13 +862,13 @@ def _meets_rect(
             if _segment_gap(a1, a2, b1, b2) <= radius + 1e-9:
                 return True
     for a1, a2 in segments:
-        if _point_in_polygon(a1, rect) or _point_in_polygon(a2, rect):
+        if point_in_polygon(a1, rect) or point_in_polygon(a2, rect):
             return True
     for point in filled or []:
-        if _point_in_polygon(point, rect):
+        if point_in_polygon(point, rect):
             return True
     for corner in rect:
-        if filled and _point_in_polygon(corner, filled):
+        if filled and point_in_polygon(corner, filled):
             return True
     return False
 
@@ -958,8 +935,11 @@ def _pad_region_key(pad: PadGeometry) -> str:
     Mirrors ``core.measure._pad_key`` (the private name that fills
     :attr:`RegionCopperItem.element_id` for a pad): a footprint template id repeats
     across every placement of that footprint, so the designator + pin pair is the
-    only handle a reader can act on. Written here for the same reason
-    :func:`_point_in_polygon` is: the layer rule forbids importing the private name.
+    only handle a reader can act on. Written here because ``_pad_key`` is still
+    private: the layer rule forbids importing a ``_``-prefixed name across a
+    layer. (177 promoted the containment test to a public
+    :func:`boardwise.core.measure.point_in_polygon` and this file imports it; the
+    pad-key convention has no public name yet.)
     """
     return f"{pad.component}.{pad.pin_number or pad.id}"
 
