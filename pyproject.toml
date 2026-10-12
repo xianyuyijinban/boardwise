@@ -27,7 +27,7 @@ dependencies = ["websockets>=13.0"]
 # and leaving it out would make the release artifact reproducible only on the one
 # machine where it happens to be installed by hand.
 [project.optional-dependencies]
-dev = ["pytest", "pyinstaller>=6.0"]
+dev = ["pytest", "pyinstaller>=6.0", "pytest-xdist>=3.0"]
 
 [project.scripts]
 boardwise = "boardwise.cli:main"

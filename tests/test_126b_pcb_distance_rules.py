@@ -1176,14 +1176,15 @@ def test_the_whole_foc_pcb_review_stays_within_a_second_or_two():
     including the O(n²) 5460-measurement pair sweep on the 105-component PCB1
     — completes without approaching a magnitude that would change what a
     reviewer can ask for. The measured value on the development machine is
-    **0.85 s**; the 5-second ceiling here is an order of magnitude of headroom
-    over that, so it fails only if the sweep becomes quadratic-in-the-wrong-
-    way (or a rule starts re-parsing per component), never because the box was
-    busy.
+    **3.3 s** (the 0.85 s recorded when this test landed predates the later
+    rule packs); the ceiling is **8 s** — still an order-of-magnitude-regression
+    tripwire (the sweep becoming quadratic-in-the-wrong-way, or a rule
+    re-parsing per component), while 160 measured 5.25 s here under a full
+    16-worker xdist load, so a tighter ceiling flakes on a busy box.
     """
     model, _board_ = cli._load_model(FOC, view="schematic")
     start = time.perf_counter()
     findings, _section = run_pcb_review(FOC, model=model)
     elapsed = time.perf_counter() - start
     assert findings, "the fixture produces findings to time"
-    assert elapsed < 5.0, f"PCB review of 毕设FOC took {elapsed:.2f}s"
+    assert elapsed < 8.0, f"PCB review of 毕设FOC took {elapsed:.2f}s"
