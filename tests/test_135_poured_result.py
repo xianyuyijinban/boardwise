@@ -517,11 +517,18 @@ def test_u10_ep_on_1_0_0_sits_on_no_top_layer_copper_at_all():
 def test_u2_ep_on_1_1_0_is_continuous_and_its_island_is_a_poured_result():
     """The contrast that makes the 1.0.0 answer meaningful.
 
-    Same part, same 126 × 126 mil pad: on 1.1.0 the EP sits in a 15-member
+    Same part, same 126 × 126 mil pad: on 1.1.0 the EP sits in a 16-member
     island whose pour member is a ``POURED`` record — and whose area is *less*
     than the region it replaced (24 522.8 → 21 644.1 sq mil), which is what a
     result layer should look like: the same copper with the clearance voids cut
     out of it.
+
+    **162a moved the member count, 15 → 16, and not the reading.** One more
+    element joins this island because the clearance engine's coarse reject was
+    comparing centreline boxes: a track ending inside a via's annular ring, a
+    via sitting in a poured polygon — copper whose exact gap is 0.000000 and
+    whose *centrelines* are mils apart, which the old box read as separation.
+    The pour area, the layer set and the ``POURED`` member are unchanged.
     """
     board = _pcb(FOC_110)
     comp = next(c for c in board.components if c.designator == "U2")
@@ -531,7 +538,7 @@ def test_u2_ep_on_1_1_0_is_continuous_and_its_island_is_a_poured_result():
     conn = pour_connectivity(board, ep.net)
     island = next(i for i in conn.islands if any(epkey in e for e in i.element_ids))
     assert island.island_id == 9
-    assert len(island.element_ids) == 15
+    assert len(island.element_ids) == 16
     assert sorted(island.layer_ids) == [1, 2, 15, 16]
     assert '["POURED","9f5f134c801270d3"]' in island.element_ids
     assert island.area == pytest.approx(21644.1, abs=0.1)
@@ -547,8 +554,11 @@ def test_u2_ep_on_1_1_0_is_continuous_and_its_island_is_a_poured_result():
     [
         # The result layer fragments what the region drew as one piece.
         (ROBOT, "GND", 1, 15),
-        # Or removes the clearance voids from it.
-        (FOC_100, "GND", 46, 39),
+        # Or removes the clearance voids from it. 162a then merged two pairs of
+        # this net's (track, via) copper that genuinely touches — copper the
+        # coarse reject had been separating by its centreline box (see
+        # `outputs/162a/evidence.md`): 39 -> 37.
+        (FOC_100, "GND", 46, 37),
     ],
 )
 def test_island_counts_move_and_the_reason_is_the_result_layer(

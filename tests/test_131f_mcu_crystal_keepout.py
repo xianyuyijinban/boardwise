@@ -305,12 +305,31 @@ def test_poured_is_now_parsed_and_reads_as_board_coordinates():
         #
         # AGND and 药箱 GND stay at 1: their results are still one piece each,
         #     just less copper (AGND 2 059 037.0 -> 1 433 311.2 sq mil).
+        #
+        # --- 162a moved two of them, in the **merging** direction this time:
+        #
+        #   PGND 31 -> 30: eleven pairs of (via, poured result) whose copper
+        #     genuinely touches were being rejected by the clearance engine's
+        #     coarse box, which compared **centrelines** rather than the copper
+        #     bodies (see `_Shape`'s 162a note). Each is a via sitting in a
+        #     poured polygon: exact copper gap 0.000000, centreline-box gap
+        #     positive, so the pair read as two islands.
+        #   GND 39 -> 37: the same, twice on 毕设FOC's ground — a track ending
+        #     inside a via's annular ring (``02f15ce939f514be`` /
+        #     ``c42fa3809e0ed76f``, and ``a64516590a1fcc71`` /
+        #     ``8e6d7c7cfd8ed6be``).
+        #
+        # ROBOT's GND (15) and every other net here are unmoved by 162a: the
+        # real boards' copper that the old reject was separating was all on the
+        # nets above. These two numbers are fixture-derived and the parser batch
+        # that lands H1-H6 may move them again — re-measure rather than trust
+        # the digit if they fail after that batch.
         (FOC_100, "AGND", 67, 1),
         (FOC_100, "+24V", 36, 3),
-        (FOC_100, "PGND", 81, 31),
+        (FOC_100, "PGND", 81, 30),
         (FOC_100, "MOTA", 5, 1),
         (FOC_100, "IA+", 4, 1),
-        (FOC_100, "GND", 45, 39),
+        (FOC_100, "GND", 45, 37),
         (ROBOT, "GND", 194, 15),
         (ROBOT, "VCC", 3, 2),
         (PILLBOX, "GND", 225, 1),

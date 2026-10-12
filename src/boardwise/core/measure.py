@@ -624,6 +624,22 @@ class _Shape:
     through-hole pads. ``is_pour`` marks a filled polygon, the only kind
     whose interior counts as copper (so containment is a valid meeting test
     for it, via :func:`_point_in_polygon`).
+
+    **``bbox`` is the copper's box, not the centreline's** (162a): the vertex
+    box inflated by ``radius``, which is the box of the capsule's own body —
+    the centreline's bbox inflated by the shape's half width, exactly the
+    Minkowski sum of the vertex box with the radius disc. The distinction is
+    not cosmetic. Both consumers of this field
+    (:func:`_best_pair`, :func:`pour_connectivity`) use it as a **coarse
+    reject with a proven lower bound**: they skip a pair when the boxes are
+    already farther apart than the answer being looked for. A raw vertex box
+    does not lower-bound the edge-to-edge gap — two wide tracks whose
+    *centrelines* are 15 mil apart have a copper gap of 0 when each is 8 mil
+    wide, and rejecting that pair published a 12 mil clearance for a pair whose
+    copper actually touches (measured, and order-dependent: whichever pair the
+    record order reached first won). Inflating at construction makes the box
+    contain the capsule, hence ``bbox distance <= true edge gap``, which is the
+    property both callers need.
     """
 
     __slots__ = ("points", "radius", "layers", "label", "bbox", "is_pour")
@@ -642,7 +658,12 @@ class _Shape:
         self.layers = layers
         self.label = label
         self.is_pour = is_pour
-        self.bbox = BBox.from_points(points)
+        box = BBox.from_points(points)
+        if box is not None and radius > 0.0:
+            box = BBox(
+                box.min_x - radius, box.min_y - radius, box.max_x + radius, box.max_y + radius
+            )
+        self.bbox = box
 
 
 def _copper_layer_ids(board: BoardGeometry) -> list[int]:
@@ -974,10 +995,15 @@ def _best_pair(
     Returns ``None`` when either list is empty, or when **every** pair came
     back unmeasurable (a foreign element wholly inside a pour outline — see
     :func:`_capsule_distance`; such a net pair is absent from the result
-    rather than reported as 0.0). The bbox of a capsule is the outline's
-    axis-aligned box; two boxes that overlap may still have separated
-    capsules, and two that are farther apart than the current best can never
-    improve it, so the coarse test is a safe prune in both directions.
+    rather than reported as 0.0). The bbox of a capsule is the **capsule's
+    own** axis-aligned box — the vertex box inflated by its radius, see
+    :class:`_Shape` — so the box-to-box gap is a *lower bound* on the
+    edge-to-edge gap the exact test returns. Two boxes that overlap may still
+    have separated capsules, and two whose boxes are already farther apart than
+    the current best can never improve it, so the coarse test is a safe prune
+    in both directions. The lower bound is what makes the second direction
+    sound: against the raw vertex box, a pair whose *centrelines* are 15 mil
+    apart could still touch at 0 and was pruned away.
     """
     if not shapes_a or not shapes_b:
         return None
@@ -1248,8 +1274,13 @@ def pour_connectivity(board: BoardGeometry, net: str) -> PourConnectivity:
             if bi is None or bj is None:
                 continue
             # Coarse reject: shapes whose bboxes are farther apart than 0
-            # cannot touch, so skip the exact test. (0 is the touch
-            # threshold; a positive bbox gap already proves separation.)
+            # cannot touch, so skip the exact test. (0 is the touch threshold;
+            # a positive bbox gap already proves separation.) The bbox is the
+            # capsule's own — vertex box inflated by radius, see `_Shape` — so
+            # a positive box gap is a proven positive copper gap. Against the
+            # raw vertex box this reject was wrong in the other direction:
+            # two 10-wide tracks 10 mil apart centre-to-centre have touching
+            # copper and were counted as two islands.
             if _bbox_distance(bi, bj) > 1e-9:
                 continue
             if _touching(si, sj):
@@ -1650,21 +1681,30 @@ def vias_in_region(board: BoardGeometry, bbox: BBox) -> list[ViaGeometry]:
 def vias_on_pad(board: BoardGeometry, pad: PadGeometry) -> list[ViaGeometry]:
     """Vias whose **centre** falls inside ``pad``'s corner rectangle.
 
-    The rectangle is :func:`pad_corners`' — the pad's own bounding rotated
-    rectangle — so a via centred in the pad's body is found and one merely
-    straddling an edge is not. Only the centre is tested: a via half on and
-    half off a pad is one copper feature spanning a boundary, and which side it
-    「belongs to」 is a rule's call, so the number reported here is the share
-    whose centre is unambiguously on the pad.
+    The rectangle is :func:`pad_corners`' — the pad's own **rotated** rectangle
+    — so a via centred in the pad's body is found and one merely straddling an
+    edge is not. Only the centre is tested: a via half on and half off a pad is
+    one copper feature spanning a boundary, and which side it 「belongs to」 is a
+    rule's call, so the number reported here is the share whose centre is
+    unambiguously on the pad.
+
+    **Containment is tested against the rotated rectangle itself** (162a), via
+    :func:`_point_in_polygon` on the pad's four corners, with an on-edge point
+    counting as inside — a via centred exactly on the pad's own boundary is on
+    the copper, and the pad's half-width being inclusive is a boundary the 133a
+    suite already pins. The earlier reading took the *axis-aligned box* of those
+    corners, which is a superset of the rotated rectangle: for a 45° square pad
+    of side 10 the box reaches 7.071 mil on each axis while the pad's own edge
+    reaches 7.071 mil on the diagonal, so a via at (7, 7) — 9.899 mil from the
+    centre, 2.8 mil clear of the copper — read as 「on the pad」. A rule asking
+    whether a thermal pad's copper is via-stitched would have counted vias in
+    the empty corners around a rotated pad.
     """
-    box = BBox.from_points(pad_corners(pad))
-    if box is None:
+    corners = pad_corners(pad)
+    if not corners:
         return []
     return [
-        via
-        for via in board.vias
-        if box.min_x - 1e-9 <= via.x <= box.max_x + 1e-9
-        and box.min_y - 1e-9 <= via.y <= box.max_y + 1e-9
+        via for via in board.vias if _point_in_polygon(Point(via.x, via.y), corners)
     ]
 
 
@@ -1763,14 +1803,33 @@ class TrackCorner:
     track_b: str = ""
 
 
-def _endpoint_key(point: Point, eps: float = 1e-6) -> tuple[int, int]:
+#: Endpoint-matching tolerance in mils (:func:`_endpoint_key`): a thousandth of
+#: a mil, 25 nm. It is the value the function's docstring has always claimed and
+#: the code did not implement — the default was ``1e-6``, a **millionth** of a
+#: mil, so this was the intended grid written down in prose and then lost in the
+#: signature (162a). Two tracks whose shared endpoint drifted by more than
+#: 1e-6 mil — 0.0004 mil in the pinned regression, a drift a reader could not
+#: draw, let alone see — landed in different buckets and their fold was never
+#: reported: a silent 漏报, which is the failure direction that matters for a
+#: 「find the sharp bends」 query. 1e-3 mil is still two orders of magnitude
+#: below any editor junction tolerance (EasyEDA's own routing grid is 0.1-1 mil)
+#: and below the mil-unit dimensions of every feature on a board, so widening
+#: the grid cannot merge two endpoints that are genuinely distinct copper; a
+#: fold found by it is real, and the angle it reports is computed from the
+#: actual vertices, not from the quantised key.
+_ENDPOINT_EPS_MIL = 1e-3
+
+
+def _endpoint_key(point: Point, eps: float = _ENDPOINT_EPS_MIL) -> tuple[int, int]:
     """Quantised endpoint key, so floating-point twins match.
 
     The parser's own arithmetic leaves two tracks that mean to share an endpoint
     differing in the last bits; an exact float key would miss every real fold and
     report an empty board. Rounding to a thousandth-of-a-mil grid is finer than
     any junction tolerance an editor holds and coarse enough to absorb the noise
-    — the same coarse-then-exact shape 125b uses throughout.
+    — the same coarse-then-exact shape 125b uses throughout. See
+    :data:`_ENDPOINT_EPS_MIL` for the value and for the 1000× gap between it and
+    the ``1e-6`` default it replaced.
     """
     return (round(point.x / eps), round(point.y / eps))
 
@@ -1906,19 +1965,51 @@ def _copper_layer_order(board: BoardGeometry) -> list[int]:
 
 
 def reference_layer_for(board: BoardGeometry, layer_id: int | None) -> int | None:
-    """The adjacent reference layer for ``layer_id``, **below it preferred**.
+    """The adjacent reference layer for ``layer_id``, **the one above preferred**.
 
     「Adjacent」 means neighbouring in the physical stackup's copper order, not
     adjacent in layer *id* — see :func:`_copper_layer_order` for why the two are
-    different on a real board. Measured anchors:
+    different on a real board. The order is **top of the stackup first**, so the
+    layer *above* is the one at the smaller index and the returned reference is
+    ``order[index - 1]``: a signal's return current runs in the copper next to
+    it, and when a layer has neighbours on both sides the upper one is taken.
+    The only fall-through is the stackup's own top layer, which has nothing
+    above it and references the layer below.
 
-    * 毕设FOC 1.0.0 (copper order 1 / 15 / 16 / 2): a top-layer signal (id 1)
-      references **Inner1 (id 15)**, and Inner2 (16) references Inner1 (15) —
-      each layer naming the plane physically beneath it, which is where a
-      return current runs.
-    * llc (copper order 1 / 2): a top-layer signal (id 1) has nothing beneath it
-      and references the **bottom layer (id 2)** — the 向下优先 rule falling
-      through to 向上 when there is no 下.
+    **162a, the direction this used to mis-state.** The body always read
+    ``order[:index]`` — the layers physically *above* — while the docstring
+    called them 「below」 and advertised a 向下优先 rule. Only one reading can be
+    kept, and the measurement decides which. Both 毕设FOC 1.0.0 fixtures share
+    the copper order 1 / 15 / 16 / 2 at z_index 1000 / 1002 / 1004 / 9000
+    (``LAYER_PHYS``), with Inner1 (15) a **PLANE** layer; the 2026-09-17 board
+    makes Inner2 (16) ``SIGNAL`` and routes 67 of its 726 traces there, which is
+    where the two readings part company. The body's reading gives
+
+    * Top (1) → Inner1 (15), the plane beneath it — the textbook 参考平面;
+    * Inner2 (16) → Inner1 (15) — the **PLANE** lying beside the 67 inner-layer
+      traces. This is the answer the rule layer turns into
+      构造性完整覆盖 (``focground.return_path_cover``), and the only one of the
+      two neighbours that is a plane: the other side is the bottom face, whose
+      copper is a pour, not the layer itself;
+    * Bottom (2) → Inner2 (16), the nearest copper above the bottom face;
+    * Inner1 (15) → Top (1), the only other neighbour.
+
+    The literal 向下优先 reading would instead give ``16 → 2`` — the far side of
+    the board, 8000 z-units away, which is exactly the mis-projection this
+    primitive exists to prevent (see :func:`_copper_layer_order`：「sorting by
+    layer id would name layer 2, the *bottom* face, and report a return plane on
+    the far side of the board」). So the code stands and this docstring was
+    corrected to it. The two readings coincide wherever nothing is routed on an
+    inner layer — the v1.0.0 2026-10-07 board's 726 traces are all on layers 1
+    and 2, and llc's two-copper-layer control is blind to the direction for the
+    same reason — while three corpus boards do route copper on an inner layer
+    (ROBOT 10 traces on 16, 毕设FOC 1.1.0 67, 驱动板 19), and that is the only
+    place the direction is observable at all. The decision, the fixtures and the
+    attribution sweep are recorded in ``outputs/162a/evidence.md``.
+
+    Anchors (measured, and the values ``tests/test_133a_foc_primitives.py``
+    pins): on the four-layer board above, ``1 → 15``, ``15 → 1``, ``16 → 15``,
+    ``2 → 16``; on llc (copper order 1 / 2) ``1 → 2`` and ``2 → 1``.
 
     A layer id the stackup does not name, or the board's only copper layer, has
     no reference and yields ``None``: nothing to project onto is absent
@@ -2074,8 +2165,10 @@ def return_path_projection(
     board):
 
     1. read the trace's copper layer;
-    2. find its **adjacent reference layer** — the nearest layer in the physical
-       stackup, below preferred (:func:`reference_layer_for`);
+    2. find its **adjacent reference layer** — the neighbouring copper layer
+       above it in the physical stackup, falling through to the layer below at
+       the top of the stackup (:func:`reference_layer_for`; 162a corrected this
+       line, which said 「below preferred」 while the code did the opposite);
     3. project the trace's XY footprint onto that reference layer (a projection
        keeps its coordinates; only the layer it is read on changes);
     4. look at :func:`region_copper`'s inventory of that footprint on the

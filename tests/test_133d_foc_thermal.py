@@ -406,22 +406,37 @@ def test_r7_reports_u10s_four_vias_with_their_layer_span():
     )
 
 
-def test_r7_reports_a_single_via_on_robot_and_names_its_type():
-    """Acceptance anchor: ROBOT's ``DRV1`` — one via, and it is a ``SUTURE``.
+def test_r7_reports_no_via_on_robots_drv1_thermal_pad():
+    """Acceptance anchor: ROBOT's ``DRV1`` — **no via stands in this pad**.
 
-    Measured: one via (``9ce71638bf739fa4``) centred in the 244.094 × 108.268 mil
-    EP, ``via_type`` **``'SUTURE'``** where 毕设FOC's are ``'NORMAL'``, hole
-    12.008 / pad 24.016 mil, reaching all four copper layers. The rule reports
-    the type verbatim rather than normalising it away, because a suture via is a
-    different construction and the reader is the one who should know.
+    162a moved this anchor from 「one via, and it is a ``SUTURE``」 to 「no via at
+    all」, and the new reading is the true one. The 244.094 × 108.268 mil EP is
+    drawn at **45°** (``pad_corners`` measured: centre (194.996, -254.996),
+    corners (243.018, -130.418) .. (319.575, -206.975)), and the suture via
+    ``9ce71638bf739fa4`` sits at (308.588, -171.019) — inside the pad's
+    *axis-aligned box* (x 70.418..319.575, y -379.575..-130.418) but **17.65 mil
+    beyond the pad's own end edge**: in the pad's local frame it reads
+    (139.70, -20.94) against half extents of (122.047, 54.134). So the via is
+    next to the exposed pad, not on it, and the primitive that reads
+    「is this via on that pad」 must answer no (``core.measure.vias_on_pad``; see
+    its 162a note).
+
+    What this test no longer covers is the ``via_type`` reporting itself: the
+    corpus's only ``'SUTURE'`` via is this one, and no pad in the three boards
+    has a suture via inside it. The reader of the type is unchanged — R7 still
+    prints it verbatim for every via it does find — but there is no longer a
+    real-data anchor for it, and this note is the record of that.
     """
     rows = [r for r in _rows(ROBOT, R7) if r.board == "PCB1"]
     assert len(rows) == 1
     row = rows[0]
     assert "DRV1" in row.message
-    assert "1 via(s) in the projection" in row.message
-    assert "'SUTURE'" in row.message, "the via_type is reported as drawn"
-    assert "0 of 1 do not reach every copper layer" in row.message
+    assert "**no via at all** stands in this pad's projection" in row.message
+    assert "0 of 0 do not reach every copper layer" in row.message
+    assert "'SUTURE'" not in row.message, (
+        "the suture via is 17.65 mil off the pad's end, so no via is reported"
+    )
+    assert "0 via(s)" in _evidence(row), "the measurement is stated, not implied"
 
 
 def test_r7_says_the_two_soldua_readings_are_unknown_and_why():
@@ -570,22 +585,26 @@ def test_r8_quotes_tis_reference_figures_and_does_not_apply_them():
         assert "岳's call" in ev
 
 
-def test_r8_says_a_single_via_is_not_an_array_and_invents_no_pitch():
-    """Acceptance anchor: ROBOT's ``DRV1`` — one via, so no pitch at all.
+def test_r8_says_robot_drv1_has_no_via_at_all_and_invents_no_pitch():
+    """Acceptance anchor: ROBOT's ``DRV1`` — no via in the pad, so no array.
 
-    A set of one has no nearest neighbour, and the honest row says so. Deriving
-    a pitch from the pad size instead would be inventing the very regularity the
-    rule exists to measure.
+    162a moved this anchor from 「one via, so no pitch」 to 「no via at all」 (the
+    pad is drawn at 45° and the suture via sits 17.65 mil past its end edge —
+    see ``test_r7_reports_no_via_on_robots_drv1_thermal_pad`` for the
+    measurement). The rule's discipline is what this test still pins: a set of
+    fewer than two vias has no nearest neighbour, no pitch is derived from the
+    pad size, and the empty set is stated rather than passed over in silence.
     """
     rows = [r for r in _rows(ROBOT, R8) if r.board == "PCB1"]
     assert len(rows) == 1
     row = rows[0]
-    assert "**1 via** in the projection" in row.message
-    assert "a single via is not an array" in row.message
-    assert "no pitch is computed and none is invented" in row.message
+    assert "**0 via** in the projection" in row.message
+    assert "there is no array here at all" in row.message
     ev = _evidence(row)
+    assert "0 via(s) centred inside it" in ev, "the count is stated, not implied"
     assert "a set of fewer than two vias has no nearest neighbour" in ev
     assert "and none is inferred from the pad size" in ev
+    assert "every via's full record, so the row can be re-derived: (none)" in ev
 
 
 def test_r8_reports_a_scatter_as_a_wide_spread_not_a_pass():
@@ -628,9 +647,9 @@ def test_array_pitches_is_the_nearest_neighbour_of_each_via():
 def test_r9_reports_that_100s_pad_and_its_four_vias_are_five_separate_islands():
     """Acceptance anchor: 毕设FOC 1.0.0 — the headline reading of this batch.
 
-    Measured on ``U10``'s 126 × 126 mil EP: the pad is in **island 37 alone**
+    Measured on ``U10``'s 126 × 126 mil EP: the pad is in **island 35 alone**
     (1 member, layers ``[1]``, area **0.0**) and each of the four thermal vias
-    is in **its own single-member island** — 27, 28, 29, 30. So in this model
+    is in **its own single-member island** — 25, 26, 27, 28. So in this model
     the pad's copper and its four vias are **five separate pieces**, and the
     ``GND`` net's islands put no pour plane under this pad at all.
 
@@ -647,12 +666,22 @@ def test_r9_reports_that_100s_pad_and_its_four_vias_are_five_separate_islands():
     ``U10``'s EP centre in its interior, so there is no plane here that the
     parser merely failed to see. See
     ``tests/test_135_poured_result.py::test_u10_ep_on_1_0_0_sits_on_no_top_layer_copper_at_all``.
+
+    **162a moved them again, by two, and the verdict is still the same
+    verdict.** The net's island count fell 39 -> 37 and the pad's index 37 ->
+    35, with the four via islands moving 27-30 -> 25-28: two pairs of this net's
+    copper that genuinely touches (a track ending inside a via's annular ring)
+    were being separated by the clearance engine's centreline-box coarse reject
+    (see ``core.measure._Shape``'s 162a note and ``outputs/162a/evidence.md``
+    for the two pairs and their exact 0.000000 gaps). The pad is still alone in
+    its island with no pour polygon under it, and the four vias are still four
+    islands of one member each.
     """
     rows = [r for r in _rows(FOC_100, R9) if r.board == "PCB1"]
     assert len(rows) == 1
     row = rows[0]
     assert row.severity == "INFO"
-    assert "the pad is in island 37 of 'GND'" in row.message
+    assert "the pad is in island 35 of 'GND'" in row.message
     assert "1 member(s), layers [1]" in row.message
     assert "**no pour polygon at all** (area 0.0" in row.message
     assert "so this piece of copper is the pad itself rather than a plane" in row.message
@@ -664,7 +693,7 @@ def test_r9_reports_that_100s_pad_and_its_four_vias_are_five_separate_islands():
     ev = _evidence(row)
     assert "region_copper" in ev
     assert "pour_connectivity" in ev
-    assert "39 island(s) on this net" in ev, "the whole net's island count is on the row"
+    assert "37 island(s) on this net" in ev, "the whole net's island count is on the row"
     assert "island area is pour area only" in ev, (
         "area 0.0 means 「no pour polygon in this piece」, and the row must say "
         "so rather than reporting a zero-area region that does not exist"
@@ -677,9 +706,10 @@ def test_r9_reports_the_two_boards_answering_differently():
 
     毕设FOC 1.0.0's ``U10`` is broken (five single-member islands, 0.0 sq mil).
     The 1.1.0 board's ``U2`` — the **same part, the same 126 × 126 mil pad** —
-    is continuous: pad and all four vias in **island 9**, 15 members,
-    **21 644 sq mil** of pour, layers 1/2/15/16. Same driver, same pad, opposite
-    answer, which is why neither is graded and neither is generalised.
+    is mostly continuous: the pad and **two of its four vias** in **island 9**,
+    16 members, **21 644 sq mil** of pour, layers 1/2/15/16, with the other two
+    vias in islands 25 and 26. Same driver, same pad, opposite answer, which is
+    why neither is graded and neither is generalised.
 
     **135 moved that area, 24 523 -> 21 644 sq mil, and the members count is
     unchanged at 15** — because one of the fifteen is now a ``POURED`` record
@@ -687,19 +717,35 @@ def test_r9_reports_the_two_boards_answering_differently():
     because the result is the region minus the clearance voids. 「Continuous」
     is a topology statement and it still holds; 「how much copper」 is a
     measurement and the answer got more accurate.
+
+    **162a moved both the member count and the via split, and the contrast
+    survives it.** The island gained a sixteenth member and a second via:
+    ``0f8763b4140b68b2`` joins it through copper that genuinely touches (two
+    tracks ending inside its annular ring and the via sitting in the poured
+    polygon — exact gaps 0.000000), which the clearance engine's centreline-box
+    coarse reject had been separating. So the 1.1.0 board now reads 「2 of 4
+    vias share the pad's island, across 3 islands」 where it read 「1 of 4,
+    across 4」, while 1.0.0's ``U10`` still reads 「no via shares the pad's
+    island, across 4」. The two boards still answer differently, and the 1.1.0
+    answer is now more accurate in the direction that matters: it is less
+    「continuous」 than it claimed to be, not more.
     """
     broken = next(r for r in _rows(FOC_100, R9) if r.board == "PCB1")
     continuous = next(r for r in _rows(FOC_110, R9) if r.board == "PCB1")
 
     assert "U2" in continuous.message and "pin '33'" in continuous.message
     assert "the pad is in island 9 of 'GND'" in continuous.message
-    assert "15 member(s), layers [1, 2, 15, 16]" in continuous.message
+    # 162a: 15 -> 16 members. The extra one is copper that genuinely touches
+    # this island (a track ending inside a via's ring, a via sitting in the
+    # poured polygon) and that the coarse reject had been separating.
+    assert "16 member(s), layers [1, 2, 15, 16]" in continuous.message
     assert "the island carries 21644 sq mil of pour" in continuous.message
-    assert "the pad's own island" in continuous.message, (
-        "the via that shares the pad's island is said to share it, and the three "
-        "that do not are each named as separate"
+    assert "island 9 holds 08c9e04412d58b82, 0f8763b4140b68b2" in continuous.message, (
+        "the vias that share the pad's island are named as sharing it"
     )
-    assert "across 4 island(s) for 4 via(s)" in continuous.message
+    assert "island 25 holds b6c0a96a68201cfb" in continuous.message
+    assert "island 26 holds fc857a938cb885e8" in continuous.message
+    assert "across 3 island(s) for 4 via(s)" in continuous.message
 
     # And the difference is genuinely there, not a wording artefact.
     assert "**no pour polygon at all**" in broken.message
@@ -711,10 +757,12 @@ def test_r9_reports_robots_huge_first_island_out_of_fifteen():
     net has **fifteen** of them.
 
     Measured: the ``GND`` net on ROBOT reads **15 islands** in total; the pad's
-    is island 0, 281 members, layers 1/2/15/16, **2 210 304 sq mil** of pour, and
-    the pad's one thermal via is inside it. So this board's exit path is
-    continuous and its plane is two orders of magnitude larger than the 1.1.0
-    board's.
+    is island 0, 281 members, layers 1/2/15/16 and **2 210 304 sq mil** of pour —
+    the pad's copper is in the plane, and its plane is two orders of magnitude
+    larger than the 1.1.0 board's. The pad has no thermal via in it at all
+    (162a: the one suture via on this board is 17.65 mil past the pad's end —
+    see ``test_r7_reports_no_via_on_robots_drv1_thermal_pad``), so the row names
+    no via island rather than a vialess 「the pad's own island」.
 
     **135 moved both numbers.** ROBOT's ``GND`` went from 1 island / 289
     members / 7 494 300 sq mil to **15** / 281 / 2 210 304, and the reason is
@@ -731,8 +779,11 @@ def test_r9_reports_robots_huge_first_island_out_of_fifteen():
     assert "281 member(s), layers [1, 2, 15, 16]" in row.message
     assert "2210304 sq mil of pour" in row.message
     assert "15 island(s) on this net" in _evidence(row)
-    assert "island 0 holds 9ce71638bf739fa4" in row.message
-    assert "the pad's own island" in row.message
+    # 162a: the board's only suture via is 17.65 mil off this 45° pad's end, so
+    # no via shares the pad's island and the row says exactly that.
+    assert "no thermal via of this pad appears in any island" in row.message
+    assert "the pad's own island" not in row.message
+    assert "9ce71638bf739fa4" not in row.message
 
 
 def test_r9_inventories_the_pad_region_per_layer():
@@ -812,10 +863,13 @@ def test_the_thermal_via_count_matches_the_primitive_on_every_board():
     Three readers of one fact; if two of them disagree the module is measuring
     something other than what it says.
     """
+    # ROBOT's DRV1 reads 0 rather than 1 since 162a: its only via sits 17.65 mil
+    # beyond the end edge of that board's 45°-rotated EP (measured; see
+    # `test_r7_reports_no_via_on_robots_drv1_thermal_pad`).
     for path, designator, expected in (
         (FOC_100, "U10", 4),
         (FOC_110, "U2", 4),
-        (ROBOT, "DRV1", 1),
+        (ROBOT, "DRV1", 0),
     ):
         board, _model = _model_for(path)
         thermal = thermal_pad_of(board, designator)
@@ -824,8 +878,17 @@ def test_the_thermal_via_count_matches_the_primitive_on_every_board():
 
         style = next(r for r in _rows(path, R7) if r.board == "PCB1")
         array = next(r for r in _rows(path, R8) if r.board == "PCB1")
-        assert f"{expected} via(s) in the projection" in style.message, path.name
-        assert f"**{expected} via" in array.message, path.name
+        # Both rules also carry the count in their evidence, in the same
+        # 「N via(s)」 spelling whatever N is. The *message* differs for the
+        # empty set, which R7 states as 「no via at all」 rather than 「0 via」.
+        assert f"{expected} via(s)" in _evidence(style), path.name
+        assert f"{expected} via(s)" in _evidence(array), path.name
+        if expected:
+            assert f"{expected} via(s) in the projection" in style.message, path.name
+            assert f"**{expected} via" in array.message, path.name
+        else:
+            assert "**no via at all** stands in this pad's projection" in style.message, path.name
+            assert "**0 via** in the projection" in array.message, path.name
 
 
 def test_the_door_constant_is_a_separation_and_is_exported():

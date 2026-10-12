@@ -274,21 +274,36 @@ def test_llc_chs_vs_chg_track_clearance_hand_computed(llc_board):
 
 
 def test_llc_chg_vs_cls_track_clearance_cross_layer_agnostic(llc_board):
-    """A second measured pair: CHG vs CLG, both layer-1 tracks, 362.688 mil.
+    """A second measured pair: CHG vs CLG, both layer-1 copper, 355.182 mil.
 
-    CHG's horizontal track ``07c8e25c3fa445ec`` ends at (2345, -2970);
-    CLG's vertical track ``faa458de4e2fb294`` runs x = 2745.828 over
-    y in [-2835.828, -2709.996], so its nearest endpoint to the CHG
-    endpoint is (2745.828, -2835.828). The centreline-to-centreline
-    distance is hypot(2745.828 - 2345, 2835.828 - 2970)
-    = hypot(400.828, 134.172) = 422.6880778635707. Both tracks are 60 mil
-    wide, so the capsule arithmetic subtracts 30 + 30 = 60:
-    422.6880778635707 - 60 = **362.6880778635707**. Same layer, no touch.
+    CHG's copper nearest CLG is **Q1's 60 x 60 mil pad ``e22`` (``U9.3``)**, not
+    the horizontal track that ends at the pad's centre. The pad is centred on
+    (2345, -2970) and its right edge is therefore x = 2375 (measured corners
+    (2315, -3000) .. (2375, -2940), ``angle=180``). CLG's vertical track
+    ``faa458de4e2fb294`` runs x = 2745.828 over y in [-2835.828, -2709.996], so
+    the nearest point of CHG's copper to it is the pad's corner (2375, -2940):
+    hypot(2745.828 - 2375, 2835.828 - 2940) = hypot(370.828, 104.172)
+    = 385.18204938444364 centre-to-edge, minus the 30 mil half width of the
+    60-mil track and the pad's own 0 (a bare rectangle carries no capsule
+    radius) = **355.18204938444364**. Same layer, no touch.
+
+    **162a moved this number, 362.688 -> 355.182, and the old one was the wrong
+    pair.** The track ``07c8e25c3fa445ec`` ends *at the pad's centre*, so the
+    pad's copper reaches 30 mil closer to CLG than the track's endpoint does;
+    the old coarse reject compared **centreline** boxes, pruned the pad away
+    against the track-track distance it had already found, and published
+    362.688 (the track pair's own value: hypot(400.828, 134.172) - 60 =
+    362.6880778635707). The exhaustive pairwise re-measurement agrees with the
+    new figure to the last bit — see ``outputs/162a/evidence.md``.
     """
     result = net_clearance(llc_board, "CHG", "CLG")
     assert result is not None
-    assert result.distance == pytest.approx(362.6880778635707, abs=1e-6)
+    assert result.distance == pytest.approx(355.18204938444364, abs=1e-6)
     assert not result.overlapping
+    assert (result.element_a, result.element_b) == (
+        "pad U9.3 on layers 1/2",
+        "track faa458de4e2fb294 on layer 1",
+    )
 
 
 def test_llc_clearances_vs_largest_net(llc_board):

@@ -406,8 +406,12 @@ def test_reference_layer_is_the_physical_neighbour_not_the_nearest_id():
     1000 / 1002 / 1004 / 9000. A top-layer signal therefore has **Inner1 (15)**
     physically beneath it — which is why a return plane belongs there — while
     sorting by layer id would name layer 2 (the *bottom* face) and report a
-    return plane on the far side of the board. The 向下优先 rule is visible in
-    ``L16 -> 15``: Inner2's reference is the layer below it, not above it.
+    return plane on the far side of the board. The direction this pins is
+    visible in ``L16 -> 15``: Inner2's reference is the layer physically **above**
+    it (z 1004 to Inner1's 1002), not the bottom face 8000 z-units away. 162a
+    corrected this docstring, which called 15 「the layer below it」 — 15 precedes
+    16 in the top-first physical order, so it is above it; see
+    :func:`boardwise.core.measure.reference_layer_for` for the full argument.
     """
     board = _foc_board()
     assert reference_layer_for(board, 1) == 15
@@ -420,12 +424,17 @@ def test_reference_layer_is_the_physical_neighbour_not_the_nearest_id():
     assert reference_layer_for(board, None) is None
 
 
-def test_reference_layer_on_a_two_layer_board_falls_through_to_above():
-    """llc's control: a top-layer signal has nothing below, so it references the bottom.
+def test_reference_layer_on_a_two_layer_board_pairs_the_two_faces():
+    """llc's control: each face is the other's reference, whichever side it is on.
 
-    向下优先 with no 下 to prefer is 向上 — the bottom layer is the only
-    reference a two-layer board offers a top-layer trace, which is exactly the
-    degenerate case the four-layer board never exercises.
+    With two copper layers there is only one neighbour to name, so the two
+    readings of 「above」 and 「below」 give the same answer and the direction is
+    invisible here — a top trace has nothing above it and references the bottom,
+    a bottom trace references the top. That is what lets 162a settle the
+    direction on the four-layer anchor without moving a two-layer expectation.
+    (Renamed in 162a: it said 「falls through to above」, the reading the
+    corrected :func:`boardwise.core.measure.reference_layer_for` no longer
+    claims.)
     """
     board = BoardGeometry(source="syn", layers=dict(_TWO_LAYER), stackup=list(_TWO_LAYER_STACKUP))
     assert reference_layer_for(board, 1) == 2
