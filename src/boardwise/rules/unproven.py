@@ -149,13 +149,15 @@ UNPROVEN_BY_NAME = "agreement by name is not a verified connection"
 #: against its own MPN. None of them asks "what else is on this net", so a welded
 #: netlist cannot move their verdicts.
 #:
-#: The two L1 heuristics that *do* ask (`xtal-load-caps`, `shunt-sense-link`) are
-#: missing on purpose, and it is a declared gap rather than an oversight: both are
-#: legacy ``Rule``s with no four-state protocol, so they cannot say UNKNOWN at
-#: all, and converting them is a change to their own contract (their review-eval
-#: column moves out of "legacy") that issue #19 does not ask for. What they can
-#: do — go quiet on a welded net — they already do, and their messages carry
-#: their own "heuristic limits" caveat.
+#: The three L1 heuristics that *do* ask (`xtal-load-caps`, `shunt-sense-link`,
+#: and 176's `path-sampling-bias`) are missing on purpose, and it is a declared
+#: gap rather than an oversight: all three are legacy ``Rule``s with no four-state
+#: protocol, so they cannot say UNKNOWN at all, and converting them is a change
+#: to their own contract (their review-eval column moves out of "legacy") that
+#: issue #19 does not ask for. What they can do — go quiet on a welded net —
+#: they already do, and their messages carry their own "heuristic limits"
+#: caveat. `path-sampling-bias` says the same thing twice over, because its
+#: verdict *is* "there is no bias resistor on this net".
 NET_MEMBERSHIP_RULES: tuple[str, ...] = (
     "conn-nc-and-must-connect",
     "conn-usb-cc-pulldown",

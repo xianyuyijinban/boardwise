@@ -39,6 +39,7 @@ from ..rules.params import (
 )
 from ..rules.paramspec import LdoFixedOutput, TvsStandoffRail
 from ..rules.railratings import CapVoltageRating, LdoDissipation
+from ..rules.sensebias import SamplingBias
 
 #: Every rule applied by :func:`run_review`, in execution order. The 011c
 #: facts rules sit after the L1 heuristics: they are slower (library loads)
@@ -53,6 +54,10 @@ from ..rules.railratings import CapVoltageRating, LdoDissipation
 BUILTIN_RULES: list[Rule] = [
     CrystalLoadCaps(),
     ShuntSenseLink(),
+    # 176 (issue #76, 岳 2026-10-12): the same subject as `shunt-sense-link`
+    # one question further on — "does the node that shunt feeds carry a bias".
+    # It sits beside its sibling because they read the same parts the same way.
+    SamplingBias(),
     DuplicateDesignators(),
     NcAndMustConnect(),
     LibraryPinConsistency(),

@@ -677,6 +677,16 @@ def test_the_report_carries_the_provenance_a_run_has_to_record():
     # `rules/pcb/focground.py` prose only (the `_domain_evidence` line now reads
     # the ground prefix vocabulary from `core.model` instead of a hardcoded list
     # that 171's EARTH addition had outgrown). No verdict semantics moved.
+    # 176 moved **both** — 2db8ca69 -> a1d0a231 and 4f056aaf -> 0c244efa — the
+    # first time since 129 that the direct-only recipe moved at all: this batch
+    # added `rules/sensebias.py` (`path-sampling-bias`, issue #76's sampling-chain
+    # bias check) directly under `rules/`, and edited three more direct files
+    # (`__init__.py` export, `i18n.py` Chinese name, `unproven.py`'s "the two L1
+    # heuristics" sentence — this is the third of that family). The verdict
+    # movement is one new rule's findings and nothing else: the only existing
+    # behaviour pin that moved is `tests/test_040b_boards.py`'s frozen severity
+    # table (ROBOT's WARN 3 -> 5), and its note says why. Behaviour anchor:
+    # `tests/test_176_sampling_bias.py`.
     # The running ledger with the pinned values is
     # `tests/test_126a_pcb_review_plumbing.py`; this note is the pointer to it.
     # Both are measured, not guessed - `tests/test_126a_pcb_review_plumbing.py`

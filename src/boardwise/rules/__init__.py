@@ -22,6 +22,7 @@ from .params import (
     RcCutoff,
     ValueMpnMatch,
 )
+from .sensebias import SamplingBias
 
 __all__ = [
     "Finding",
@@ -30,6 +31,7 @@ __all__ = [
     "DecouplingPerIC",
     "DuplicateDesignators",
     "ShuntSenseLink",
+    "SamplingBias",
     "NcAndMustConnect",
     "LibraryPinConsistency",
     "SupplyOnKnownDomain",

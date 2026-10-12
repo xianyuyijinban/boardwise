@@ -181,11 +181,11 @@ def test_the_builtin_pcb_rule_list_is_the_126b_distance_pair_then_the_126c_pair(
     # The schematic side is untouched by this file: its list is the 011-family
     # set, and it is a *separate object* (mutating one must not touch the other).
     # 22 since 064 added the two selection rules (`sel-tvs-standoff-rail`,
-    # `sel-ldo-fixed-output`) — read through ``len`` rather than by value, which
-    # is what keeps this pin about "the PCB file did not move the schematic
-    # list"; the length belonging to 064 is pinned in test_064's own registry
-    # test and in test_011d's count.
-    assert len(BUILTIN_RULES) == 22
+    # `sel-ldo-fixed-output`), 23 since 176 added `path-sampling-bias` — read
+    # through ``len`` rather than by value, which is what keeps this pin about
+    # "the PCB file did not move the schematic list"; the length belonging to
+    # 064/176 is pinned in test_064's own registry test and in test_011d's count.
+    assert len(BUILTIN_RULES) == 23
     assert BUILTIN_PCB_RULES is not BUILTIN_RULES
 
 
@@ -1006,9 +1006,17 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # 只动 `focground.py` 的两处过时散文与 `_domain_evidence` 的证据行
     # （硬编码筛子词表改从 `core.model.GROUND_NET_PREFIXES` 动态取，171 的 EARTH
     # 入词表后不再漏列），无判定语义变化。
+    # **176 moved BOTH** — 2db8ca69 -> a1d0a231，direct `4f056aaf` -> `0c244efa`：
+    # 本批第一次把 `rules/` 直下加了新文件（`sensebias.py`，`path-sampling-bias`，
+    # issue #76），并顺手改了三个直下文件——`__init__.py`（导出）、`i18n.py`
+    # （中文名）、`unproven.py`（那句「两个 L1 启发」的散文，本条是第三个）。
+    # 判定语义本身只多了一条规则，没有既有规则被改动：旧规则的行为锚
+    # （test_040b 的冻结表、test_094 等）只有 ROBOT 那张表的 WARN 计数从 3 变 5，
+    # 原因写在那张表的注释里。行为锚点是新建 `tests/test_176_sampling_bias.py`
+    # （21 条）。
     assert recursive != old_digest, "the subpackage is inside the recipe now"
-    assert old_digest == "4f056aaf"
-    assert recursive == "2db8ca69", (
+    assert old_digest == "0c244efa"
+    assert recursive == "a1d0a231", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

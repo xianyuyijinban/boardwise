@@ -33,6 +33,7 @@ RULE_NAMES_ZH: dict[str, str] = {
     "conn-duplicate-designators": "位号重复",
     "xtal-load-caps": "晶振负载电容",
     "shunt-sense-link": "采样电阻检测连路",
+    "path-sampling-bias": "采样链偏置电压",
     "decap-required-caps": "去耦电容是否齐备",
     "conn-nc-and-must-connect": "NC 与必连引脚",
     "conn-library-pins": "库符号引脚一致性",
