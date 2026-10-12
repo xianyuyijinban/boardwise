@@ -3880,12 +3880,26 @@ def test_the_spacing_ladder_stops_when_more_room_cannot_change_the_answer(monkey
 
 
 def test_the_compiler_imports_nothing_above_its_layer():
-    """engines may use core and the standard library — never connector or cli."""
+    """engines may use core and the standard library — never connector or cli.
+
+    **One named exception, added by 173/C and deliberately not generalised.**
+    The drawing engine now reads exactly one thing from the rules layer:
+    ``focground.domain_of``, the word list that decides which isolation domain a
+    ground net's name spells. The batch's instruction was 「词表复用
+    rules/pcb/focground.py 的 domain_of 口径，只读 import」 — reuse that one
+    function rather than grow a second copy of the word list — so the exception
+    is that single module and nothing else: every other ``boardwise.rules``
+    module, and connector / cli / bridge / parsers, is still refused by name.
+    The read is safe by construction: ``rules`` imports no engine (checked), so
+    this edge cannot close a cycle, and ``domain_of`` is a pure name test.
+    """
+    allowed = {"boardwise.rules.pcb.focground"}
     source = Path(dc.__file__).read_text(encoding="utf-8")
     imported = set(re.findall(r"^\s*(?:from|import)\s+([\w.]+)", source, re.M))
     forbidden = {
         name for name in imported
         if name.startswith(("boardwise.cli", "boardwise.connectors", "boardwise.rules",
                             "boardwise.bridge", "boardwise.parsers"))
+        and name not in allowed
     }
     assert forbidden == set(), forbidden

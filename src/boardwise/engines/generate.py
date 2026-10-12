@@ -509,8 +509,10 @@ def naming_steps_for(
     """The naming action(s) for one routed net, under ``strategy``.
 
     Power/ground rails always get their flag (the strategy governs *signal*
-    nets only — the ban and the default are both about signal names). A signal
-    net's steps depend on the strategy:
+    nets only — the ban and the default are both about signal names; under
+    ``auto`` the caller resolves the rail's anchor through
+    :func:`boardwise.engines.layout.clear_label_point` just as it does a signal
+    name's — 173/A). A signal net's steps depend on the strategy:
 
     * ``auto`` — nothing, unless :func:`needs_signal_label` says the net is
       long or cross-page. ``attach`` is then only the *first* candidate: the
@@ -801,15 +803,47 @@ def generate_plan(
 
         is_rail = route.kind in ("Ground", "Power")
         wanted, why = needs_signal_label(route, model=model)
-        # Rails are exempt from the ``auto`` gate: a ground/power flag is the
-        # *naming* of that net, not a decoration beside it, so it is placed
-        # wherever the router anchored it exactly as under every other
-        # strategy. Only signal names go through "does this net need one?".
+        # Rails are exempt from the ``auto`` gate that asks "does this net need a
+        # name?" — a ground/power flag is the *naming* of that net, not a
+        # decoration beside it, so it is always placed. (Nothing is exempt from
+        # *where* it lands; see below.) Only signal names go through
+        # :func:`needs_signal_label`.
         if plan.naming_strategy == "auto" and not is_rail and not wanted:
             # Read off the wires. Nothing is placed, so nothing is avoided and
             # nothing is reported as a missing name.
             continue
-        if plan.naming_strategy == "auto" and not is_rail:
+        if plan.naming_strategy == "auto":
+            # 173/A: **rails go through the same anchor search as signal names.**
+            # Until 163a/E3 a rail's flag was the one marker under ``auto`` that
+            # kept ``route.attach`` — an anchor ``layout._pick_attach_point``
+            # chooses for clearance from **boxes** alone, so it can land on a
+            # foreign wire. On the golden board it did: the ``+5V`` flag's
+            # anchor lay 5 units from ``D-``'s vertical wire, inside the glyph
+            # the editor draws there, and the terminal check 163a added reported
+            # exactly that (``LABEL_ON_FOREIGN_WIRE``, blocking). The fix is
+            # here, at the placement policy, not at the gate: the search walks
+            # this net's own wire and returns a point clear of every foreign box,
+            # foreign wire and already-placed name, so the flag moves instead of
+            # being reported. It can still return ``None`` (no point clears the
+            # bar): then the flag is left undrawn and the reason goes to
+            # ``notes``.
+            #
+            # **A rail gets ``margin=0.0``, and that is the point of the fix.**
+            # ``LABEL_CLEARANCE`` is a *legibility preference*, not the defect
+            # bar (163a/E3: the human's own labels sit 10 units from foreign
+            # wires). An optional signal name may refuse to compromise on it and
+            # stay unnamed — "a nameless net is a legible net" — but a rail flag
+            # *is* the net's naming, so refusing to draw it would trade the
+            # ``LABEL_ON_FOREIGN_WIRE`` short for a nameless rail. Measured: on
+            # the golden board **no** on-wire point of ``+5V`` clears 20 units of
+            # every foreign wire (the densest pocket is 5.5 units clear), so the
+            # preference-only search drops the flag and breaks "every rail keeps
+            # its flag" (``test_generate``). At ``margin=0.0`` the search holds
+            # the correctness bar — never on a foreign wire, never on a part
+            # body, never stacked on another name — and still returns the
+            # **clearest** such point, so it is never worse than the preference
+            # search would have been: where a 20-unit spot exists (``GND``,
+            # ``VCC``) it is the same spot the preference pick would return.
             point, problem = layout.clear_label_point(
                 routes,
                 route.net,
@@ -817,23 +851,19 @@ def generate_plan(
                 members_by_net.get(route.net, set()),
                 title_block=page_title,
                 taken=taken,
+                margin=0.0 if is_rail else layout.LABEL_CLEARANCE,
             )
             if point is None:
                 plan.notes.append(problem)
                 continue
         else:
-            # A rail's flag, or any name under ``text``/``label``, sits where the
-            # router anchored it. That anchor is chosen for clearance from
-            # **boxes** alone (``layout._pick_attach_point``), so it can land on
-            # a foreign wire — and until 163a/E3 nothing at the terminal said so.
-            # It does now (``LABEL_ON_FOREIGN_WIRE``, blocking, measured on this
-            # very board: the ``+5V`` flag's marker lies on ``D-``'s wire), and
-            # the *remedy* is this generator's: sending rails through
-            # :func:`layout.clear_label_point` as well would move the flag
-            # instead of reporting it. That is a placement-policy change (the
-            # documented exemption above says rails use the router's anchor), so
-            # it is 岳's call and not this batch's — the gate reports the truth
-            # in the meantime.
+            # Under ``text``/``label`` the strategy *is* "name every net at the
+            # anchor the router chose" — that is the point of those policies, so
+            # the anchor is not searched (``auto`` above is where placement is a
+            # question). The exemption is documented on
+            # :func:`naming_steps_for`. The gate still measures whatever lands
+            # here, rail or not: a foreign-wire contact under ``text``/``label``
+            # is reported, not silently moved.
             point = route.attach
         steps = naming_steps_for(route, point, plan.naming_strategy)
         for step in steps:
@@ -899,9 +929,11 @@ def generate_plan(
     #: page is chosen before any name exists), so ``attach`` is never measured
     #: on the solver path at all. ``annotation_anchor_violations`` also gained
     #: the foreign-**wire** half of constraint 5 (``LABEL_ON_FOREIGN_WIRE``,
-    #: blocking), which is where 岳's own screenshot defect class finally has a
-    #: terminal check: the search that avoids foreign wires only ever ran for the
-    #: signal names it places, never for the rail flags anchored here.
+    #: blocking), which is where 岳's own screenshot defect class finally had a
+    #: terminal check — and it caught the rail flags still anchored at
+    #: ``route.attach``. 173/A closed that at the source (rails now go through
+    #: :func:`layout.clear_label_point` under ``auto``, see the naming loop), so
+    #: the check keeps its teeth without a row to report here.
     plan.violations.extend(
         layout.annotation_anchor_violations(
             model,

@@ -2136,6 +2136,7 @@ def clear_label_point(
     *,
     title_block: Rect | None = None,
     taken: list[tuple[float, float, str]] | None = None,
+    margin: float = LABEL_CLEARANCE,
 ) -> tuple[tuple[float, float] | None, str]:
     """The clearest on-wire anchor for ``net``'s label, and why that is the answer.
 
@@ -2148,14 +2149,28 @@ def clear_label_point(
     scores each by the smallest clearance its predicted text box
     (:func:`annotation_box` — the same ruler the lint uses) has from
 
-    * every **foreign** component box, inflated by :data:`LABEL_CLEARANCE`; a
+    * every **foreign** component box, inflated by ``margin``; a
       name beside one of *its own* net's parts is normal (the human's own labels
       do exactly that), so own parts are exempt from the margin but never from
       the overlap test;
-    * every **foreign** net's wires, by :data:`LABEL_CLEARANCE` — a name lying on
+    * every **foreign** net's wires, by ``margin`` — a name lying on
       a stranger's wire is both illegible and a second net that is not there;
     * every name already placed (``taken``), so two names never stack;
     * the title block, when one is supplied.
+
+    ``margin`` is the **legibility preference** (:data:`LABEL_CLEARANCE` by
+    default). Touching a foreign wire is *never* forgiven, whatever the margin:
+    the box lying on a stranger's wire reports a connection that is not there,
+    which is the ``LABEL_ON_FOREIGN_WIRE`` defect, not a matter of taste. The
+    margin above that is what an *optional* name may insist on. A caller whose
+    marker is **mandatory** — a power/ground flag, which is the net's naming
+    rather than a decoration beside it (173/A) — passes ``margin=0.0``: the
+    search then holds only the correctness bar (on its wire, off every foreign
+    wire, off every part body and every other name) and returns the *clearest*
+    such point, because refusing to draw a flag that must exist would trade a
+    defect for a nameless rail. With ``margin=0.0`` it still picks the
+    maximum-clearance candidate, so it can never choose a worse spot than a
+    larger margin would.
 
     Returns ``(None, reason)`` when *nothing* along the route clears the bar, so
     the caller records it in ``notes`` as the truth rather than dropping a label
@@ -2192,17 +2207,18 @@ def clear_label_point(
                 gap = part_box.distance_to_point(candidate[0], candidate[1])
                 if gap < score:
                     score = gap
-                if box.intersects(part_box.inflate(LABEL_CLEARANCE)):
+                if box.intersects(part_box.inflate(margin)):
                     blocked = True
         for seg in foreign_segs:
             gap = rect_segment_distance(box, seg)
             if gap < score:
                 score = gap
-            if gap < LABEL_CLEARANCE:
+            # Contact is never forgiven; the margin above it is the preference.
+            if gap <= 0.0 or gap < margin:
                 blocked = True
         for tx, ty, tnet in taken or []:
             other = annotation_box(tx, ty, tnet)
-            if box.intersects(other.inflate(LABEL_CLEARANCE)):
+            if box.intersects(other.inflate(margin)):
                 blocked = True
             gap = other.distance_to_point(candidate[0], candidate[1])
             if gap < score:
@@ -2216,7 +2232,7 @@ def clear_label_point(
         return (best, "")
     return (
         None,
-        f"net {net}: no on-wire point clears {LABEL_CLEARANCE:.0f} units of every "
+        f"net {net}: no on-wire point clears {margin:.0f} units of every "
         "foreign box, foreign wire and already-placed name; left unnamed rather "
         "than drawn on top of something",
     )

@@ -16,8 +16,10 @@ network identifiers smeared over parts and wires is exactly this.
    component bodies, foreign wires and already-placed names, and is slid along
    its own wire to a clear spot. If nothing clears, the plan says so in
    ``notes`` instead of drawing a smudge.
-3. Power/ground flags are untouched — they are the *naming* of a rail, not a
-   decoration beside it.
+3. Power/ground flags are always placed — they are the *naming* of a rail, not
+   a decoration beside it — and since 173/A their anchor goes through the same
+   search as a signal name's under ``auto`` (it used to keep the router's
+   attach point, which could land the flag on a foreign wire).
 
 The old strategies stay (``text`` / ``label`` / ``wire`` / ``none``); only the
 default changed. Each test below names which of the three it pins.
@@ -223,14 +225,61 @@ def test_the_rail_keeps_its_flag_under_auto():
     assert flags[0].kind == "Ground"
 
 
-def test_the_rail_flag_is_exactly_where_every_strategy_puts_it():
-    """`auto` changed the signal policy, not the rails' — same anchor."""
+def test_the_rail_flag_is_placed_by_the_anchor_search_under_auto():
+    """173/A: ``auto`` moves the rail's *anchor*, not its policy.
+
+    Before 173/A this test pinned ``rail_auto == rail_text`` under the title
+    "``auto`` changed the signal policy, not the rails' — same anchor". That is
+    no longer the design. Under ``auto`` a rail flag now goes through
+    :func:`boardwise.engines.layout.clear_label_point` exactly as a signal name
+    does — the fix for the ``+5V`` flag drawn across ``D-``'s wire — so it lands
+    on the search's clearest on-wire point, while the four "anchor-at-router"
+    strategies keep ``route.attach``. What must not change is asserted here: the
+    rail keeps **exactly one** flag under every strategy, every copy of it sits
+    on the GND net's **own wire**, and under ``auto`` it is off every foreign
+    wire (the search's correctness bar).
+    """
     model, offsets = _two_part_model(), _two_part_offsets()
+
+    def flag(plan) -> list[tuple[float, float]]:
+        return [(n.x, n.y) for n in plan.net_names if n.kind == "Ground"]
+
+    def own_wire(point, plan) -> bool:
+        return any(
+            layout._point_on_segment(point, layout.Segment(ax, ay, bx, by, "GND"))
+            for w in plan.wires if w.net == "GND"
+            for (ax, ay), (bx, by) in zip(w.points, w.points[1:])
+        )
+
+    for strategy in NAMING_STRATEGIES:
+        plan = generate_plan(model, offsets, strategy=strategy)
+        placed = flag(plan)
+        assert len(placed) == 1, (strategy, placed)
+        assert own_wire(placed[0], plan), f"{strategy}: the GND flag floats"
+
+    # the four anchor-at-router strategies agree on the router's point
+    router_anchor = (45.0, 160.0)
+    for strategy in ("wire", "text", "label", "none"):
+        assert flag(generate_plan(model, offsets, strategy=strategy)) == [router_anchor], strategy
+
+    # ``auto`` searches instead, and the point it picks is the search's
     under_auto = generate_plan(model, offsets, strategy="auto")
-    under_text = generate_plan(model, offsets, strategy="text")
-    rail_auto = [(n.x, n.y) for n in under_auto.net_names if n.kind == "Ground"]
-    rail_text = [(n.x, n.y) for n in under_text.net_names if n.kind == "Ground"]
-    assert rail_auto == rail_text
+    auto_flag = flag(under_auto)[0]
+    assert auto_flag != router_anchor, (
+        "auto places the flag at the search's clearest point, not at attach"
+    )
+    assert own_wire(auto_flag, under_auto)
+    segs = [
+        layout.Segment(ax, ay, bx, by, w.net)
+        for w in under_auto.wires if w.net != "GND"
+        for (ax, ay), (bx, by) in zip(w.points, w.points[1:])
+    ]
+    assert all(
+        layout.rect_segment_distance(
+            layout.annotation_box(*auto_flag, "GND"), seg
+        ) > 0.0
+        for seg in segs
+    ), f"the auto flag box touches a foreign wire: {auto_flag}"
 
 
 def test_rails_keep_their_flags_under_every_strategy_including_auto():
@@ -379,6 +428,31 @@ def test_a_label_keeps_clearance_from_a_foreign_wire():
     assert layout._point_on_segment(
         point, layout.Segment(-350.0, 0.0, 300.0, 0.0, "SIG")
     )
+
+
+def test_a_mandatory_marker_is_never_drawn_on_a_foreign_wire():
+    """``margin=0.0`` drops the *preference* and keeps the *bar* (173/A).
+
+    A rail flag is mandatory, so its search may take a crowded spot — that is
+    what ``margin=0.0`` buys (the 20-unit margin belongs to names that can stay
+    unnamed). It may **not** take a spot on a stranger's wire, and that has to
+    hold when nothing better exists: with no margin the block would otherwise be
+    ``gap < 0``, which never fires, and the search would hand back a box lying on
+    the foreign wire — exactly the ``LABEL_ON_FOREIGN_WIRE`` short. So contact is
+    refused whatever the margin, and a wire whose every point touches a foreign
+    wire leaves the marker unnamed (reported) rather than drawn.
+    """
+    geometry = [layout.Placement("U1", 0.0, 0.0, layout.Rect(-400.0, -200.0, -300.0, 200.0))]
+    own = layout.RoutedNet(
+        net="A", polylines=[[(0.0, 0.0), (100.0, 0.0)]], attach=(0.0, 0.0)
+    )
+    # B runs along the same line as A: every candidate box of A touches B
+    foreign = layout.RoutedNet(net="B", polylines=[[(0.0, 0.0), (100.0, 0.0)]])
+    point, problem = layout.clear_label_point(
+        [own, foreign], "A", geometry, set(), margin=0.0
+    )
+    assert point is None, f"a mandatory marker was placed on a foreign wire: {point}"
+    assert "left unnamed" in problem and "A" in problem, problem
 
 
 def test_two_labels_never_stack():

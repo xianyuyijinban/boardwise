@@ -463,17 +463,15 @@ def test_no_new_hard_violation_appeared():
     introduce a *blocking* finding of its own, so the golden board is checked
     for the absence of every other code.
 
-    **163a/E3 re-pinned the tail**: the blocking list is no longer empty — it
-    carries the ``+5V`` rail flag anchored across ``D-``'s wire
-    (``LABEL_ON_FOREIGN_WIRE``, the annotation terminal check 163a added). What
-    this test guards is that no *routing* code is in it, so that is what it now
-    asserts, by name.
+    **163a/E3 put one blocking row here** (the ``+5V`` rail flag anchored across
+    ``D-``'s wire, ``LABEL_ON_FOREIGN_WIRE``) and this test was re-pinned to
+    name it; **173/A moved that flag** (rails now go through
+    ``layout.clear_label_point`` under ``auto``), so the list is empty again and
+    the original claim — no blocking code at all — is asserted directly.
     """
     plan = _golden_plan()
     blocking = layout.blocking_violations(plan.violations)
-    assert [v.code for v in blocking] == ["LABEL_ON_FOREIGN_WIRE"], [
-        v.render() for v in blocking
-    ]
+    assert [v.code for v in blocking] == [], [v.render() for v in blocking]
 
 
 def test_the_netlist_is_unchanged_by_rerouting():

@@ -2,9 +2,10 @@
 
 Each test names the constraint it pins. The crown test runs the whole
 golden board through ``generate_plan`` and reads every violation class it
-produces — that is the gate the draw flow refuses to execute past. Since
-163a/E3 that reading is not empty: the solver's page draws the ``+5V`` rail
-flag across ``D-``'s wire, which the gate now reports (see the crown test).
+produces — that is the gate the draw flow refuses to execute past. 163a/E3
+made that reading non-empty (the solver's page drew the ``+5V`` rail flag
+across ``D-``'s wire); 173/A fixed the drawing at the source so the reading
+is empty again — see the crown test.
 """
 
 from __future__ import annotations
@@ -59,33 +60,35 @@ def _golden_plan():
 def test_golden_plan_has_zero_violations():
     """The crown gate: the whole board, all five constraints.
 
-    **136 re-pinned the spacing half; 163a/E3 re-pinned the annotation half,
-    and the distinction is the whole point of this edit.** The five hard
-    constraints are about whether the drawing is *correct*, and on that question
-    this board is still clean — nothing here moved.
+    **136 re-pinned the spacing half; 163a/E3 re-pinned the annotation half;
+    173/A made the annotation half empty again — by moving the drawing, not by
+    loosening the gate.** The five hard constraints are about whether the
+    drawing is *correct*, and on that question this board is clean.
 
     What 136 added is a sixth finding that is not about correctness: two nets'
     wires running alongside each other closer than
     :data:`~boardwise.engines.layout.WIRE_CLEARANCE`. The solver's drawing of
     this board produces 34 of them.
 
-    163a/E3 added the marker-vs-foreign-wire half of constraint 5, and on the
-    solver's page it **fires once**: the ``+5V`` rail flag is anchored at
-    ``(760, 385)`` while ``D-``'s wire runs vertically through ``(765, 380)``–
-    ``(765, 400)`` — through the marker's own box, and 5 units from the flag's
-    electrical anchor, i.e. inside the glyph the editor draws there. That is
-    the finding, not an artefact: the router anchors rail flags for clearance
-    from *boxes* alone (``layout._pick_attach_point``), and rails are the one
-    marker the ``auto`` strategy does not put through
-    :func:`~boardwise.engines.layout.clear_label_point`. So the assertion is
-    stated against the codes, and the annotation rows are pinned by name here
-    and in ``tests/test_163a_gate_truth.py``.
+    163a/E3 added the marker-vs-foreign-wire half of constraint 5, and it caught
+    a real defect on this page: the ``+5V`` rail flag was anchored at
+    ``(760, 385)`` while ``D-``'s wire ran vertically through ``(765, 380)``–
+    ``(765, 400)`` — through the marker's own box, 5 units from the flag's
+    electrical anchor, i.e. inside the glyph the editor draws there. The root
+    cause was placement, not measurement: the router anchors flags for clearance
+    from *boxes* alone (``layout._pick_attach_point``), and rails were the one
+    marker the ``auto`` strategy did not put through
+    :func:`~boardwise.engines.layout.clear_label_point`. **173/A sends rails
+    through that search too**, so the ``+5V`` flag now lands at ``(590, 370)``,
+    on its own wire and clear of ``D-``: the row is gone. The check itself is
+    unchanged and still fires on a name drawn across a foreign wire —
+    ``tests/test_163a_gate_truth.py`` pins that on a synthetic board, and the
+    rail-position flips are pinned in ``tests/test_134_label_policy.py``.
     """
     _golden, _offsets, plan = _golden_plan()
     advisory = [v for v in plan.violations if v.code in layout.ADVISORY_VIOLATION_CODES]
     hard = [v for v in plan.violations if v.code not in layout.ADVISORY_VIOLATION_CODES]
-    assert [v.code for v in hard] == ["LABEL_ON_FOREIGN_WIRE"], [v.render() for v in hard]
-    assert "net +5V vs net D-" in hard[0].subject, hard[0].render()
+    assert [v.code for v in hard] == [], [v.render() for v in hard]
     assert advisory, "136: the solver's drawing of this board is too tight to read"
 
 
