@@ -3243,9 +3243,11 @@ def _cmd_review(args: argparse.Namespace) -> int:
 #: reach a different answer on such a report, so the version number has to say
 #: so (090 A1's "adds only a reading, no bump" does not apply — that one moved no
 #: gate). The **online** path deliberately does not take the gate (126d 主代理裁定
-#: 1): an online `pcb_review` is always absent because the runner has no live
-#: geometry yet — that is 「未实现」, not 「未通过」, and gating on it would fail
-#: every online report.
+#: 1) — 166 kept that ruling while replacing its reason: the online path now
+#: *does* run the PCB review (over the `sys.get_project_file` archive, through
+#: the same runner), so a live run without a `pcb_review` section is disclosed
+#: explicitly (`coverage.pcbReviewNotRun`) instead of gated. The id stays `/7`
+#: under 090 A1: 166 adds a reading and never moves the verdict.
 CHECKUP_SCHEMA = "boardwise.checkup/7"
 
 #: The file `checkup` writes its AI-facing skeleton into (issue #69 条 1). A name
@@ -3261,7 +3263,10 @@ REVIEW_SUMMARY_FILE = "review-summary.md"
 #: "reviewed connectivity only". A report that cannot say which of these it used
 #: cannot be trusted to say what it reviewed (025 §2 阶段 A).
 CHECKUP_TIERS: dict[str, str] = {
-    "project-file": "整工程归档（sys.get_project_file → 临时 .epro2 → 离线管线）：满血",
+    "project-file": (
+        "整工程归档（sys.get_project_file → 临时 .epro2 → 离线管线，"
+        "原理图与 PCB 版面审查同一套）：满血"
+    ),
     # Issue #19: the per-page tier welds pages by net *name*, so a name on two
     # pages is not a verified connection — and the rules that judge a net by the
     # parts on it therefore refuse. Both halves are in the label (the mechanism
@@ -3287,6 +3292,14 @@ CHECKUP_VIEW = "schematic"
 #: say which board a page belongs to; naming the merged board after the tier is
 #: how a report stays honest about it (see :func:`_merge_schematic_models`).
 PER_PAGE_BOARD_TITLE = "per-page"
+
+#: The file name the project-file tier writes its downloaded archive under (166).
+#: One name, two places: the ladder writes it inside its ``TemporaryDirectory``
+#: and `_cmd_checkup` writes the *same bytes* under the same name when it has to
+#: re-materialise them for the PCB runner — so both readings of one online run
+#: are reading a file called the same thing, and the runner cannot be handed an
+#: archive from a different tier by accident.
+ONLINE_ARCHIVE_NAME = "project.epro2"
 
 
 def _checkup_report(
@@ -3413,6 +3426,14 @@ def _checkup_report(
     # section's own shape is unchanged, `summary.mayClaimPassed` and the exit
     # code arithmetic are untouched by it, and 126a's decision that the PCB
     # findings merge into `findings[]` without a second array stands.
+    #
+    # **166 changed who can produce this section, not what it is.** A live run
+    # over the project-file tier now hands the runner the archive it downloaded,
+    # so an online report carries a real `pcb_review`; the gate above is still
+    # offline-only, and a live run without a section says so in
+    # `completion.coverage.pcbReviewNotRun` rather than here. "Absent, not empty"
+    # remains true in both modes — what 166 removed was the *silence* around the
+    # absence, which was never this section's job to fix.
     if pcb_review is not None:
         body["pcb_review"] = pcb_review
     return body
@@ -3590,6 +3611,7 @@ def _coverage_section(
     parse_stats: ParseStats,
     rules_errored: list[str],
     pcb_review_missing: bool = False,
+    pcb_review_not_run: dict | None = None,
     intent_source: object | None = None,
 ) -> dict:
     """The coverage gate's **facts**, read off the parse the report is about (#30).
@@ -3653,8 +3675,18 @@ def _coverage_section(
       runner produced a section), and it is **not** derived from
       ``modelEmpty``-style facts here for the same reason ``coverage`` is not
       derived from ``model`` at all: it is a fact about what ran, not about what
-      was read. The online path always passes ``False`` (126d 主代理裁定 1) — an
-      absent ``pcb_review`` online is 「未实现」, not 「未通过」.
+      was read. **The gate is offline-only, and 166 restated that after the
+      online path stopped being 「未实现」** (126d 主代理裁定 1, kept for a new
+      reason — see ``pcbReviewNotRun`` below).
+    * ``pcbReviewNotRun`` (166 A) — the **disclosure** for the online runs whose
+      PCB section did not run: ``{mode, tier, reason, howToRun, note}``, or the
+      key's absence when the review did run (or the run was offline, which has
+      ``pcbReviewMissing`` for the same question). A reading, not a gate: it
+      moves no verdict, which is exactly what makes it the right shape here —
+      126d's silent gap was not that the online report lacked a penalty, it was
+      that the report said nothing at all about a check it never ran. See
+      :func:`_pcb_online_not_run` for why the online path is disclosed while the
+      offline one is gated.
     """
     from .engines.review import refused_conclusions, rules_for
 
@@ -3696,6 +3728,15 @@ def _coverage_section(
         "recordsDropped": records_dropped,
         "rulesErrored": sorted(set(rules_errored)),
         "pcbReviewMissing": bool(pcb_review_missing),
+        # 166 A: **absent, not empty**, and a reading rather than a gate. Absent
+        # because a coverage section with nothing to disclose must not carry a
+        # key that says "nothing was skipped" — for the same reason 126a made an
+        # empty `pcb_review` impossible: a reader that finds the key learns there
+        # *was* a PCB review step this run did not take. The `.get()` reads in
+        # `_coverage_reasons`/`_completion_body` treat absence as False, so an
+        # offline report and a report written before this batch are unaffected.
+        **({"pcbReviewNotRun": dict(pcb_review_not_run)}
+           if pcb_review_not_run else {}),
     }
 
 
@@ -4665,6 +4706,7 @@ def _load_model_online(
     notes: list[str],
     attempts: list[dict],
     parse_stats: ParseStats | None = None,
+    artifacts: dict | None = None,
 ) -> tuple[object, object | None, str, dict, dict | None] | None:
     """The online branch of model loading: A1 → A1' → A3, first success wins.
 
@@ -4672,6 +4714,18 @@ def _load_model_online(
     the online state **cannot be stated** (daemon unreachable, no connector, or
     every tier refused) — which the caller turns into exit code 3, never into an
     empty model.
+
+    ``artifacts`` is the out-parameter 166 added, in the same shape as ``notes``
+    and ``attempts``: a caller that needs a byte product of the ladder hands in a
+    dict and gets it filled. There is exactly one such product — ``pcbArchive``,
+    the *bytes* of the A1 whole-project archive, stashed when the project-file
+    tier answers. It is bytes rather than a path because that tier's archive
+    lives inside this function's ``TemporaryDirectory`` and is gone the moment
+    the ladder returns; the caller (:func:`_cmd_checkup`) is the one that knows
+    when the PCB reader still needs it, so the bytes travel and the caller writes
+    the file. A caller that passes nothing (``review --live``, every unit test
+    that stubs this function) is unaffected: nothing is filled and the ladder's
+    own behaviour is identical.
 
     The ladder, and why in this order:
 
@@ -4710,7 +4764,9 @@ def _load_model_online(
             notes.append(f"daemon not reachable on 127.0.0.1:{port} ({exc})")
             return None
         try:
-            return await _checkup_ladder(client, args, route_kwargs, notes, attempts, parse_stats)
+            return await _checkup_ladder(
+                client, args, route_kwargs, notes, attempts, parse_stats, artifacts
+            )
         finally:
             await client.close()
 
@@ -4724,6 +4780,7 @@ async def _checkup_ladder(
     notes: list[str],
     attempts: list[dict],
     parse_stats: ParseStats | None,
+    artifacts: dict | None = None,
 ) -> tuple[object, object | None, str, dict, str] | None:
     """One pass down the tier ladder against an open client. See `_load_model_online`."""
     import hashlib
@@ -4789,7 +4846,7 @@ async def _checkup_ladder(
         try:
             payload = await call("sys.get_project_file", {"fileType": "epro2"})
             blob = _archive_bytes(payload, "sys.get_project_file")
-            archive = tmpdir / "project.epro2"
+            archive = tmpdir / ONLINE_ARCHIVE_NAME
             archive.write_bytes(blob)
             model, board = _parse_archive(archive, parse_stats=parse_stats)
             attempts.append({
@@ -4802,6 +4859,16 @@ async def _checkup_ladder(
                 "source": PAGE_ATTRIBUTION_ARCHIVE,
                 "pages": page_attribution_from_archive(archive),
             }
+            # 166: the same bytes, handed to a caller that needs the archive
+            # *after* this function returns — see `_load_model_online`'s
+            # `artifacts`. The file above dies with `tmpdir`; the bytes do not.
+            # Only the project-file tier has one: the per-page archives
+            # (`get_document_file`) are one page each and carry no PCB document,
+            # and the netlist tier never touched a file at all, so a fallback
+            # tier leaves this unstashed on purpose — the *absence* is what the
+            # caller's disclosure reads.
+            if artifacts is not None:
+                artifacts["pcbArchive"] = blob
             return model, board, "project-file", source_meta, attribution
         except BridgeError as exc:
             attempts.append({"tier": "project-file", "ok": False, "code": exc.code,
@@ -4969,6 +5036,111 @@ def _checkup_aesthetics(args: argparse.Namespace) -> tuple[bool, str]:
         return False, f"config（读不了，按默认关：{exc}）"
 
 
+#: 166 A: the actionable half of the online "PCB was not reviewed" disclosure.
+#: A command, not a sentence — the prose that explains *why* this run could not
+#: review the board lives in the same dict's ``reason`` and in `source.notes`
+#: (which is what `report.md` renders), because a JSON consumer wants the next
+#: command and a human wants the story.
+PCB_ONLINE_HINT = "boardwise checkup --file <导出的 .epro2>"
+
+
+def _pcb_online_not_run(*, tier: str, reason: str) -> dict:
+    """The ``coverage.pcbReviewNotRun`` value — 166 A's honest-degradation record.
+
+    Reads as one statement: *the PCB was not reviewed online, here is why, here
+    is what would review it.* Three runs produce it, and they are the three ways
+    an online run can end up without a `pcb_review` section: the project-file tier
+    was refused or never reached (no archive at all), the archive it got carries
+    no PCB document (nothing to review), or the runner over that archive raised
+    (the check did not happen).
+
+    **It is a reading, never a gate.** 126d's `pcbReviewMissing` is the opposite
+    choice for the same-shaped fact — an offline archive with PCB documents and
+    no section is `incomplete` — and 126d 主代理裁定 1 exempted the online path
+    from that gate when an online `pcb_review` was 「未实现」. 166 made the online
+    path implemented, so the exemption no longer rests on 「there is nothing to
+    run」: it rests on what a user can do about it. Offline, the geometry came
+    from the file the user chose, so "did not review it" is a defect of the run;
+    online, the geometry arrived over a bridge call that may have been refused by
+    a permission the user cannot see from the report, and the residual case
+    (runner raised) is a boardwise bug the user can do nothing about inside the
+    editor either. Gating it would turn a failed *bridge call* into 「板子没通过
+    审查」 — the silent-implication failure this batch exists to remove, in the
+    other direction. So it is disclosed loudly (`source.notes`, printed on the
+    console, `report.md`'s blockquote) and it moves no verdict.
+
+    The keys are deliberately close to `pcbReviewMissing`'s vocabulary so a
+    reader comparing the two reports sees the same question answered twice:
+    ``mode`` names which path did not run the review, ``tier`` which rung of the
+    ladder was running, ``reason`` the fact in a sentence, ``howToRun`` the
+    command that would review the same board offline.
+    """
+    return {
+        "mode": "online",
+        "tier": tier,
+        "reason": reason,
+        "howToRun": PCB_ONLINE_HINT,
+        "note": (
+            "在线模式没有走到 PCB 版面审查：这是「没审」，不是「PCB 未通过」"
+            "（verdict 不为它追责）；同一份工程导出用 `--file` 就能审"
+        ),
+    }
+
+
+def _run_pcb_runner(
+    path: str | Path,
+    *,
+    model: object,
+    intent: object | None,
+    modules: list[dict] | None,
+    notes: list[str],
+) -> tuple[list, dict | None, bool]:
+    """Run the PCB review over one backup: ``(findings, section, had_documents)``.
+
+    166 lifted this out of :func:`_cmd_checkup`'s body because the **online** path
+    needs it too, over the archive `sys.get_project_file` returned. Two callers,
+    one body — and the runner behind it stays the single one
+    (:func:`boardwise.engines.pcbreview.run_pcb_review`), so the online and
+    offline readings of one archive cannot drift apart by construction.
+
+    Two things happen here, in this order:
+
+    * the ``had_documents`` probe — a *second* parse of the same archive, because
+      「does this backup have PCB documents at all?」 is a fact about the file and
+      the runner answers a different question (「review what it has」). It is
+      asked rather than inferred from ``section is None``, because that single
+      value cannot tell the two absences apart (126d). A parse failure here is
+      **not** a gate failure by itself — the runner's own parse is the one that
+      decides whether the review happened, and if the archive is so broken that
+      it cannot be listed, the model-empty gate already speaks for it;
+    * the runner itself, whose one exception is caught: a broken rule set or a
+      board the rules choke on may not take the report down, so the section is
+      simply absent and ``notes`` says why (126a's discipline).
+    """
+    from .engines.pcbreview import run_pcb_review
+
+    pcb_had_documents = False
+    try:
+        from .parsers.epru import load_epro2_source
+
+        pcb_had_documents = bool(load_epro2_source(path).documents_of_type("PCB"))
+    except Exception:  # noqa: BLE001 — the runner below is the one that judges
+        pcb_had_documents = False
+    try:
+        pcb_findings, pcb_review = run_pcb_review(
+            path,
+            model=model,
+            intent=intent,
+            modules=modules,
+        )
+    except Exception as exc:  # noqa: BLE001 — a report must still be written
+        notes.append(
+            f"PCB 审查未完成（{type(exc).__name__}: {exc}）：report.json 无 pcb_review 键"
+        )
+        return [], None, pcb_had_documents
+    return pcb_findings, pcb_review, pcb_had_documents
+
+
 def _cmd_checkup(args: argparse.Namespace) -> int:
     """``boardwise checkup`` — one command, an honest tier ladder, an exit code.
 
@@ -5005,6 +5177,11 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
     notes: list[str] = []
     attempts: list[dict] = []
     parse_stats = ParseStats()
+    # 166: the online loader's out-parameter (an empty dict offline). The PCB
+    # block below reads it on both paths so the runner has one input shape, and
+    # the *emptiness* online is itself a fact: no project archive was downloaded,
+    # so there is nothing to review the board with.
+    online_artifacts: dict = {}
 
     if args.file:
         path = Path(args.file)
@@ -5048,7 +5225,10 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         canvas_note = "离线路径（--file）不连编辑器，因此不出画布图；要图就给一个在线工程"
         print(f"boardwise checkup: {path} ({CHECKUP_TIERS['file']})")
     else:
-        loaded = _load_model_online(args, notes=notes, attempts=attempts, parse_stats=parse_stats)
+        loaded = _load_model_online(
+            args, notes=notes, attempts=attempts, parse_stats=parse_stats,
+            artifacts=online_artifacts,
+        )
         if loaded is None:
             print(
                 "boardwise checkup: 在线状态不可陈述 — no tier produced a model "
@@ -5363,10 +5543,24 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
     # attribution, board index correctness) so the reorder cannot silently
     # trade one for another.
     #
-    # The live path's PCB geometry comes from the connector, which 126a/126b do
-    # not touch — there the section is simply absent, like `layout_review` when
-    # the switch is off. The section is also absent when the backup has no PCB
-    # document (缺席而非空, 钉 5).
+    # The live path (166) reaches the runner through the **same** offline
+    # pipeline the `--file` path uses, and this is not a coincidence of shape:
+    # the A1 tier already downloads the whole project
+    # (`sys.get_project_file` → a temporary `.epro2` → the offline parse), so the
+    # runner needs nothing more than that file — the archive it hands over is a
+    # human export by construction (`CHECKUP_TIERS["project-file"]`). The bytes
+    # are stashed by the ladder (`artifacts`) and re-materialised below, because
+    # the ladder's own `TemporaryDirectory` is gone by the time the runner is
+    # called (the call site has to stay here, after `modules_section`).
+    #
+    # A live run that did **not** get the project archive (the per-page and
+    # netlist tiers) has no PCB document to read at all — a page export carries
+    # one page's schematic records, no PCB — so there the section is absent for a
+    # different reason than "the check failed", and 166 A makes the report say
+    # which of the two happened instead of staying silent about both.
+    #
+    # The section is absent when the archive has no PCB document (缺席而非空, 钉 5),
+    # online exactly as offline.
     #
     # 126d's gate reads **this block's** two halves and nothing else:
     # `pcb_had_documents` (the archive really does carry PCB geometry) and
@@ -5379,53 +5573,65 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
     # (a gate that lives in the CLI's memory and dies at the next re-gate).
     pcb_review: dict | None = None
     pcb_had_documents = False
+    # 166 A: the honest-degradation statement. Non-None on exactly the online
+    # runs whose PCB section did not run — see `_pcb_online_not_run` for why it
+    # is a disclosure and not a verdict gate.
+    pcb_not_run: dict | None = None
+    pcb_findings: list = []
     if tier == "file" and str(path).lower().endswith(".epro2"):
-        from .engines.pcbreview import run_pcb_review
+        pcb_findings, pcb_review, pcb_had_documents = _run_pcb_runner(
+            path, model=model, intent=contract, modules=modules, notes=notes
+        )
+    elif tier == "project-file" and online_artifacts.get("pcbArchive"):
+        import tempfile
 
-        # A second parse of the same archive, before the runner's own: the
-        # question 「does this backup have PCB documents at all?」 is a fact
-        # about the file, and the runner answers a different question (「review
-        # what it has」). It is asked here rather than inferred from
-        # `pcb_review is None`, because that single value cannot tell the two
-        # absences apart. A parse failure here is *not* a gate failure by itself —
-        # the runner's own parse is the one that decides whether the review
-        # happened, and if the archive is so broken that it cannot be listed, the
-        # model-empty gate already speaks for it.
-        try:
-            from .parsers.epru import load_epro2_source
-
-            pcb_had_documents = bool(
-                load_epro2_source(path).documents_of_type("PCB")
+        with tempfile.TemporaryDirectory(prefix="boardwise-pcb-") as tmp:
+            # The same name the ladder wrote it under, so the file the runner
+            # reads is the file the ladder parsed — one online run, one archive.
+            archive = Path(tmp) / ONLINE_ARCHIVE_NAME
+            archive.write_bytes(online_artifacts["pcbArchive"])
+            pcb_findings, pcb_review, pcb_had_documents = _run_pcb_runner(
+                archive, model=model, intent=contract, modules=modules, notes=notes
             )
-        except Exception:  # noqa: BLE001 — the runner below is the one that judges
-            pcb_had_documents = False
-        try:
-            pcb_findings, pcb_review = run_pcb_review(
-                path,
-                model=model,
-                intent=contract,
-                modules=modules,
+        if pcb_review is None:
+            pcb_not_run = _pcb_online_not_run(
+                tier=tier,
+                reason=(
+                    "在线模式整工程档（sys.get_project_file）含 PCB 文档，"
+                    "但 PCB 审查管线未出结果（见 source.notes）：PCB 版面审查未跑"
+                    if pcb_had_documents
+                    else "在线模式整工程档（sys.get_project_file）里没有 PCB 文档，"
+                    "没有可审的版面：PCB 版面审查未跑"
+                ),
             )
-        except Exception as exc:  # noqa: BLE001 — a report must still be written
-            pcb_review = None
-            notes.append(
-                f"PCB 审查未完成（{type(exc).__name__}: {exc}）：report.json 无 pcb_review 键"
-            )
-        else:
-            if pcb_findings:
-                base = len(findings)
-                for entry in pcb_review["boards"]:
-                    # boards[].findings index into the *merged* array, so the
-                    # runner's own per-runner indices shift by what the
-                    # schematic rules already contributed.
-                    entry["findings"] = [base + index for index in entry["findings"]]
-                findings.extend(
-                    _finding_payload(finding) for finding in pcb_findings
-                )
-                notes.append(
-                    f"PCB 审查：{len(pcb_findings)} 条 finding 已并入 findings[]"
-                    f"（pcb- 前缀，见 pcb_review 节）"
-                )
+    elif not args.file:
+        pcb_not_run = _pcb_online_not_run(
+            tier=tier,
+            reason=(
+                f"在线模式 tier {tier} 没有整工程档（这一档不含 PCB 文档："
+                "逐页归档只有一页原理图记录，网表档根本没有版面）：PCB 版面审查未跑"
+            ),
+        )
+    if pcb_not_run is not None:
+        notes.append(
+            f"{pcb_not_run['reason']}（在线模式；{PCB_ONLINE_HINT}）；"
+            "这是「没审」，不是「PCB 未通过」——verdict 不为它追责"
+            "（completion.coverage.pcbReviewNotRun）"
+        )
+    if pcb_findings and pcb_review is not None:
+        base = len(findings)
+        for entry in pcb_review["boards"]:
+            # boards[].findings index into the *merged* array, so the
+            # runner's own per-runner indices shift by what the
+            # schematic rules already contributed.
+            entry["findings"] = [base + index for index in entry["findings"]]
+        findings.extend(
+            _finding_payload(finding) for finding in pcb_findings
+        )
+        notes.append(
+            f"PCB 审查：{len(pcb_findings)} 条 finding 已并入 findings[]"
+            f"（pcb- 前缀，见 pcb_review 节）"
+        )
 
     # 126d: the coverage gate is computed **here**, after the PCB block and
     # before `drc_summarise`. It sits at the same point in the order for the same
@@ -5437,10 +5643,23 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         model=model, board=board, attempts=attempts,
         parse_stats=parse_stats, rules_errored=rules_errored,
         # 126d's one new field: the archive has PCB documents **and** the runner
-        # produced no section. Both halves are read here, where both are in hand;
-        # an online run never entered the PCB block, so both are False and the
-        # gate does not fire (主代理裁定 1).
-        pcb_review_missing=bool(pcb_had_documents and pcb_review is None),
+        # produced no section. Both halves are read here, where both are in hand.
+        # **The gate stays offline-only** (166 restated 126d 裁定 1 after the
+        # online path stopped being 「未实现」): a live run over a project archive
+        # that carries PCB documents and still produced no section is disclosed
+        # (`pcbReviewNotRun` below) rather than gated, because turning it into an
+        # exit-3 `incomplete` would tell a user standing in the editor that the
+        # board is un-reviewed when the thing that failed was one bridge call —
+        # and the honest next action (`checkup --file` on the same export) is
+        # named in the disclosure, not left implicit.
+        pcb_review_missing=bool(
+            tier == "file" and pcb_had_documents and pcb_review is None
+        ),
+        # 166 A: the disclosure channel — **a reading, never a gate**. It rides
+        # in `coverage` because that is the one place this report states what did
+        # not get read, and it is absent (not empty) when there is nothing to
+        # disclose, so an offline run's coverage section is untouched by it.
+        pcb_review_not_run=pcb_not_run,
         # #66 A2: the withheld-conclusion count must be taken against the rule
         # list this run actually judged with, which with `--intent` is not the
         # module-level registry.
@@ -13171,6 +13390,12 @@ def _cmd_bridge_update_connector(args: argparse.Namespace) -> int:
     * nothing conclusive inside the budget → the state cannot be stated, exit 3,
       named on stderr.
 
+    The two non-``verified`` outcomes also print the **manual route back**
+    (:func:`_write_without_activation_hint`, 165): the editor evaluates a bundle
+    once, at load, so a stored write can leave a window running the old build
+    forever — uninstall → re-import the `.eext` → restart the editor is the only
+    thing that fixes that, and there is no bridge action for it.
+
     The middle one is the only way to reach exit 1, and that restriction is the
     fix this command needed (025 batch 2's carried-over todo): the window the
     write went to stays online under its old name until the editor tears the page
@@ -13379,6 +13604,7 @@ def _cmd_bridge_update_connector(args: argparse.Namespace) -> int:
                 f"bridge status` (or run doctor) before trusting either answer",
                 file=sys.stderr,
             )
+            print(_write_without_activation_hint(lead=_STILL_OLD_LEAD), file=sys.stderr)
             return 3
         if state == RELOAD_MISMATCH:
             # The only way to reach this branch: a connection that was **not**
@@ -13396,6 +13622,7 @@ def _cmd_bridge_update_connector(args: argparse.Namespace) -> int:
                 "window's version",
                 file=sys.stderr,
             )
+            print(_write_without_activation_hint(), file=sys.stderr)
             return 1
         print(f"  verified: running connector is now {running}")
         print(f"  {detail}")
@@ -13487,7 +13714,17 @@ async def _update_all_windows(
     writes: list[dict] = []
     for key in keys:
         try:
-            data = await client.call("sys.self_update", params, target_instance=key)
+            # `confirm: True` on every frame, same token as the single-window path
+            # (165). Without it the daemon's dangerous-tier gate answers
+            # CONFIRMATION_REQUIRED for *every* window and `--all` can never pass —
+            # the two paths drive the same `sys.self_update`, so they have to carry
+            # the same consent. The consent itself was already given: this function
+            # is only reached from `_cmd_bridge_update_connector` after the
+            # interactive [y/N] or an explicit `--yes`, so nothing is being
+            # confirmed on the user's behalf here.
+            data = await client.call(
+                "sys.self_update", {**params, "confirm": True}, target_instance=key
+            )
         except BridgeError as exc:
             writes.append({"window": key, "error": f"[{exc.code}] {exc.message}"})
             continue
@@ -13567,6 +13804,7 @@ async def _update_all_windows(
             f"报的不是刚存进去的 {expected}；{verified} 个 verified，{unknown} 个 unknown",
             file=sys.stderr,
         )
+        print(_write_without_activation_hint(), file=sys.stderr)
         return 1
     if unknown:
         print(
@@ -13575,6 +13813,7 @@ async def _update_all_windows(
             f"不是失败（{verified} 个 verified）。用 `boardwise bridge status` 逐窗复核",
             file=sys.stderr,
         )
+        print(_write_without_activation_hint(lead=_STILL_OLD_LEAD), file=sys.stderr)
         return 3
     print(f"  verified: {verified} 个窗口都报 {expected}")
     return 0
@@ -13700,6 +13939,40 @@ def _multi_window_update_refusal(windows: list[dict]) -> str:
         "（每一窗都会 reload，未保存的编辑会丢）。什么都没写。"
     )
     return "\n".join(lines)
+
+
+#: Printed before the hot-update guidance when the verdict is **not** conclusive
+#: (exit 3): "unknown" is not yet "failed", so the guidance is offered as the
+#: likely explanation rather than as a statement about this run.
+_STILL_OLD_LEAD = "  复核下来若运行版本仍是旧的，多半就是这个原因："
+
+
+def _write_without_activation_hint(*, lead: str = "  ") -> str:
+    """What to do when the bundle was stored but the editor kept running the old build (165).
+
+    The evidence is a field report (岳的另一台机器, 2026-10-12): the write answered
+    ``ok: 0.4.25 -> 0.4.29`` and every read-back still announced ``0.4.25``.
+    EasyEDA evaluates an extension bundle exactly once, at load, so re-reading the
+    IndexedDB records does not re-evaluate the code the page already ran — the
+    reload the hot path schedules re-reads the *record*, it does not re-run a
+    bundle the editor considers already evaluated.
+
+    So "the bytes are stored" and "the new build is running" really are two
+    different facts, and this is the sentence that says so to a reader staring at
+    a write that "worked". Nothing in the bridge can close the gap:
+    ``protocol.ACTIONS`` has no uninstall / re-import / restart action (checked
+    2026-10-12), so this step stays manual — and saying which steps they are beats
+    a second `update-connector` that would fail exactly the same way.
+    """
+    return (
+        lead + "bundle 已经写进编辑器存储，但编辑器没有重新评估它 —— "
+        "「写入成功」≠「新代码在跑」：立创 EDA 只在加载时评估扩展包一次，"
+        "reload 换不掉已经运行的那份代码。要生效只能手动走一遍："
+        "在立创 EDA 里卸载该扩展 → 重新导入 .eext → 重启编辑器；"
+        "重启后再用 `boardwise bridge status`（或 About… 的版本行）核对版本号。"
+        "bridge 的动作表里没有「卸载 / 重新导入扩展」这类动作，这一步自动化不了，"
+        "再跑一次 update-connector 也只会得到同样的结果"
+    )
 
 
 def _table_verdicts(

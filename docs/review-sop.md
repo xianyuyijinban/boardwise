@@ -57,7 +57,8 @@ boardwise checkup --file <导出.epro2> --out <目录>       # 断连兜底：�
   > incomplete `3` > `0`；`complete-with-open-items` **仍是 `0`**。`3` 绝不是"板子干净"，
   CI 里也别当通过。
 - **报告自己说数据从哪来**（`source.tier`，缺一级就如实降级）：
-  `project-file` 整工程归档（满血）→ `per-page` 逐页导出合并（跨页连通性按网名，
+  `project-file` 整工程归档（满血，**166 起在线此档即跑 PCB 版面审查**；跑不成显式披露
+  「PCB 版面审查未跑（原因）」，不沉默也不背锅 verdict）→ `per-page` 逐页导出合并（跨页连通性按网名，
   不是追出来的连线）→ `netlist` 仅连通性（无值/无 MPN/无位姿）→ `file` 离线文件。
   **per-page 档里跨页同名的网不是已验证的连接**（issue #19；参数两条规则于 076 补齐、
   选型两条于 064 补齐）：按网找

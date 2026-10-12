@@ -16,11 +16,16 @@ Three things live here:
   126b filled it with the two distance rules and 126c adds the IPC ones, and
   the structure gate pins the list as the truth (a rule that exists but is not
   listed does not run);
-* :func:`run_pcb_review` — the per-document driver. Offline ``.epro2`` →
+* :func:`run_pcb_review` — the per-document driver. An ``.epro2`` path →
   :class:`~boardwise.parsers.epru.Epro2Source` → one
   :class:`~boardwise.core.geometry.BoardGeometry` per PCB document, named by its
   ``META`` title (钉 4: documents are selected by **title**, never by a magic
-  count such as "the one with the most components").
+  count such as "the one with the most components"). **166**: the path is the
+  *only* thing this driver asks for, which is why the online `checkup` can use it
+  unchanged — its `project-file` tier downloads the whole project, writes it to a
+  temporary ``.epro2`` and passes that file here, so a live run and an offline
+  run over the same archive are two readings of one pipeline rather than two
+  implementations of one question.
 
 UNKNOWN discipline (钉 6): a rule that lacks a fact (current, voltage, contract)
 states so through an :class:`~boardwise.rules.base.Outcome` and names the missing
@@ -325,6 +330,14 @@ def run_pcb_review(
     rules: list[PcbRule] | None = None,
 ) -> tuple[list[Finding], dict | None]:
     """Run every PCB rule over **every PCB document** of ``source_path``.
+
+    ``source_path`` is any readable ``.epro2`` backup, and **166** is why that
+    sentence is worth spelling out: the online `checkup` calls this function too,
+    handing it the archive its `project-file` tier downloaded from
+    ``sys.get_project_file`` (written to a temporary file for the duration of the
+    call). The two callers differ in where the file came from and in nothing
+    else — same parser, same document selection, same rules — so an online and an
+    offline reading of one board cannot drift apart.
 
     Returns ``(findings, section)``. ``section`` is the ``pcb_review`` report
     section, or ``None`` when the backup has no PCB document — the *absent, not
