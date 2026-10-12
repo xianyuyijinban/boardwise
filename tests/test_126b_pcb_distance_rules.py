@@ -29,6 +29,7 @@ The offline fixtures are read-only. Nothing here runs an editor or a daemon.
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -1166,6 +1167,13 @@ def test_llc_is_clean_under_both_distance_rules():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(
+    os.environ.get("PYTEST_XDIST_WORKER") is not None,
+    reason="wall-clock tripwire is only meaningful on an uncontended box — "
+    "under xdist the workers saturate it (160 measured 5.25 s over a 5 s "
+    "ceiling; the 160s re-measure cleared 8 s and still flaked). Serial runs "
+    "(the default) keep the gate.",
+)
 def test_the_whole_foc_pcb_review_stays_within_a_second_or_two():
     """The measured cost of the two rules on 毕设FOC, all three PCB documents.
 
@@ -1179,8 +1187,10 @@ def test_the_whole_foc_pcb_review_stays_within_a_second_or_two():
     **3.3 s** (the 0.85 s recorded when this test landed predates the later
     rule packs); the ceiling is **8 s** — still an order-of-magnitude-regression
     tripwire (the sweep becoming quadratic-in-the-wrong-way, or a rule
-    re-parsing per component), while 160 measured 5.25 s here under a full
-    16-worker xdist load, so a tighter ceiling flakes on a busy box.
+    re-parsing per component). Under xdist the box is saturated by definition,
+    so the worker processes skip this test entirely (see the marker): a
+    wall-clock number measured under full parallel load measures the load,
+    not the code.
     """
     model, _board_ = cli._load_model(FOC, view="schematic")
     start = time.perf_counter()
