@@ -3157,6 +3157,16 @@ export const pcbDocNew: ActionHandler = async (params, eda) => {
   return { pcbUuid, focused };
 };
 
+/** A host return value as the short string an error message can quote. */
+function describeHostAnswer(value: unknown): string {
+  if (value === undefined) return 'undefined';
+  if (value === null) return 'null';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return JSON.stringify(value);
+  }
+  return typeof value;
+}
+
 /**
  * `doc.rename` — rename a schematic page, a schematic, or a PCB by uuid.
  *
@@ -3169,6 +3179,20 @@ export const pcbDocNew: ActionHandler = async (params, eda) => {
  * `modifyBoardName` is deliberately not used: it takes the board's *name*
  * rather than a uuid, so it cannot be addressed the way this contract says.
  * A rename is a write to existing content, not a new document.
+ *
+ * **A rename that did not happen is an error, never a quiet `renamed: false`**
+ * (179, the second half of 178b's立案). `renamed` is the host's own claim and
+ * `confirmed` the editor's listing read, and the answer is only returned when
+ * the two agree that the document now carries the new name. The measured case
+ * (`outputs/179/live/`) is the one that used to slip through: on EDA 3.2.186
+ * `dmt_Schematic.modifySchematicPageName(uuid, name)` is present with the
+ * declared arity 2, and answers **falsy without throwing** for a page that the
+ * project's own listing keeps showing under its old name — six names, four
+ * document/focus states, all falsy, `renamed: false, confirmed: false`, exit 0.
+ * A caller reading only the exit status saw a rename that never happened. So
+ * "the host said no and nothing changed" is `NOT_SUPPORTED`, "the host claimed
+ * success and nothing changed" stays `CONNECTOR_ERROR`, and a document that has
+ * left the listing is reported rather than confirmed.
  */
 export const docRename: ActionHandler = async (params, eda) => {
   const uuid = typeof params.uuid === 'string' ? params.uuid.trim() : '';
@@ -3220,7 +3244,9 @@ export const docRename: ActionHandler = async (params, eda) => {
     }
   }
 
-  const renamed = Boolean(await settle(requireFn(eda, CALLS[type])(uuid, name)));
+  const callPath = CALLS[type];
+  const answer: unknown = await settle(requireFn(eda, callPath)(uuid, name));
+  const renamed = Boolean(answer);
 
   // Verify against the editor's own table rather than the call's return value:
   // "modify returned true" and "the document now carries that name" are two
@@ -3231,22 +3257,65 @@ export const docRename: ActionHandler = async (params, eda) => {
   const actualName = entry ? plainGet(entry, 'name') : undefined;
   const confirmed = actualName === name;
 
-  if (renamed && !confirmed && entry) {
-    throw new ActionError(
-      'CONNECTOR_ERROR',
-      `modify claimed success but the ${type} is still named ${String(actualName)}`,
-      { uuid, name, type, actualName: actualName ?? null },
-    );
+  if (confirmed) {
+    return {
+      uuid,
+      name,
+      type,
+      renamed,
+      confirmed,
+      ...(problems.length ? { notes: problems } : {}),
+    };
   }
 
-  return {
+  // Everything below is a rename that did **not** happen. Each case is named by
+  // what was observed rather than folded into one "failed": the host's own
+  // answer and the editor's listing are carried as evidence, and the caller
+  // gets an error instead of a success shape that reads as "no, thanks".
+  const evidence = {
     uuid,
     name,
     type,
-    renamed,
-    confirmed,
+    call: callPath,
+    hostAnswer: describeHostAnswer(answer),
+    actualName: actualName ?? null,
     ...(problems.length ? { notes: problems } : {}),
   };
+
+  if (!entry) {
+    // Two different facts, and the message must not pick one: the uuid is gone,
+    // or the listing could not be read at all. `problems` is where the second
+    // one lives (readDocItems records a failed enumeration there), so it is
+    // quoted rather than overwritten with a claim about the document.
+    const why = problems.length
+      ? `the project's own ${type} listing could not be read (${problems.join('; ')})`
+      : `the project's own ${type} listing no longer holds that uuid`;
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `${callPath} was called for ${type} ${uuid}, and ${why}, so the rename cannot be `
+        + `confirmed: nothing here says the ${type} exists, under the old name or the new one`,
+      evidence,
+    );
+  }
+
+  if (renamed) {
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `modify claimed success but the ${type} is still named ${String(actualName)}`,
+      evidence,
+    );
+  }
+
+  throw new ActionError(
+    'NOT_SUPPORTED',
+    `${callPath} answered ${describeHostAnswer(answer)} for ${type} ${uuid} — no error, no `
+      + `rename: the project's own listing still names it ${String(actualName)}. The host has `
+      + `the call (declared arity 2, called with the declaration's own (uuid, name) order) and `
+      + `does not apply it on this build, so reporting \`renamed: false\` as a successful answer `
+      + 'would be a silent no-op. Nothing was changed; there is no other editor call that '
+      + 'renames this kind of document',
+    evidence,
+  );
 };
 
 /**
@@ -6738,7 +6807,7 @@ const SOURCE_MAX_MAX_CHARS = 4_000_000;
 const SOURCE_TAIL_CHARS = 1_024;
 
 /**
- * `sys.get_document_source` — the focused document's source text.
+ * `sys.get_document_source` — one document's source text, **by uuid or the active one**.
  *
  * The declaration is one line (`Promise<string | undefined>`, `@beta`) and says
  * nothing about the format, so this action's job is to hand the string back
@@ -6750,6 +6819,22 @@ const SOURCE_TAIL_CHARS = 1_024;
  * Both ends, not just the head: a record stream's head is a `DOCHEAD` line and
  * its tail is the last record of the last document, and a reader who sees one
  * without the other cannot tell a truncated dump from a different format.
+ *
+ * **`uuid` is honoured or the call is refused — never silently dropped** (179,
+ * 178b's立案). Until 0.4.31 this action took a `uuid` it never read: the host's
+ * `getDocumentSource()` takes **no arguments** (measured arity `0` on EDA
+ * 3.2.186, `outputs/179/live/02_probe_checks.json`), so every call returned the
+ * **active** document's source. A caller who asked for page A while page B was
+ * open got B's stream under A's name and no hint that anything had gone wrong —
+ * `outputs/178b/live/02_fullsrc_b4298962367251c8.json` is exactly that: asked
+ * for `b4298962367251c8`, answered with `790ff841f8a73c11`'s `DOCHEAD`.
+ *
+ * The host has no by-uuid read channel, and opening the document to reach it
+ * would be a side effect this read is not entitled to (it would move the user's
+ * tab). So the honest shape is: `uuid` equal to the active document reads it;
+ * `uuid` naming any other document is refused with `DOC_NOT_ACTIVE` and the
+ * `doc.open` that would make it readable. Omitting `uuid` keeps the old
+ * behaviour — read whatever is active — and `maxChars` is untouched.
  */
 export const sysGetDocumentSource: ActionHandler = async (params, eda) => {
   const PATH = 'sys_FileManager.getDocumentSource';
@@ -6765,6 +6850,36 @@ export const sysGetDocumentSource: ActionHandler = async (params, eda) => {
     }
     maxChars = Math.floor(wanted);
   }
+
+  // The guard 178b's立案 asked for: a `uuid` that is not the active document's
+  // cannot be answered by this host call, so it is refused rather than answered
+  // with somebody else's source. `activeDocument` is the one shared reader of
+  // "which document is active", so this guard and `doc.list` can never disagree
+  // about the fact they are both reporting.
+  const requested = typeof params?.uuid === 'string' ? params.uuid.trim() : '';
+  if (requested) {
+    const problems: string[] = [];
+    const active = await activeDocument(eda, problems);
+    const activeUuid = active?.uuid ?? null;
+    if (activeUuid !== requested) {
+      throw new ActionError(
+        'DOC_NOT_ACTIVE',
+        `${PATH} takes no arguments — it reads the **active** document's source and nothing else `
+          + `(measured arity 0 on EDA 3.2.186). Asked for uuid ${requested} while the active document `
+          + `is ${activeUuid ?? '(none)'}, so answering would have returned the wrong document's source. `
+          + 'Open the document you meant (`doc.open {uuid}`) and read again, or omit `uuid` to read '
+          + 'whatever is active',
+        {
+          uuid: requested,
+          activeUuid,
+          hostCall: PATH,
+          hostArity: 0,
+          ...(problems.length ? { notes: problems } : {}),
+        },
+      );
+    }
+  }
+
   const call = requireFn(eda, PATH);
 
   let source: unknown;

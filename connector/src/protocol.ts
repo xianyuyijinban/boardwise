@@ -99,6 +99,8 @@ export type ErrorCode =
   | 'CONNECTOR_ERROR'
   | 'PAGE_MISMATCH'
   | 'NOT_FOUND'
+  | 'NOT_SUPPORTED'
+  | 'DOC_NOT_ACTIVE'
   | 'TIMEOUT'
   | 'INTERNAL';
 

@@ -229,6 +229,7 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
 | 44 | sch.geometry` 没有 `pageUuid` 参数 |
 | 45 | 旗引线/stub 段穿越别网导体 = 缺陷（硬拒） |
 | 46 | delete 超时后宿主后台续删、`delete returned false` 也已删 |
+| 47 | `getDocumentSource()` 不吃参数（只读活动文档）；`modifySchematicPageName` 在 3.2.186 是假动作（179） |
 
 
 宿主声明 ≠ 宿主实现（`sch_ManufactureData.getPngFile` 声明 v3.2.183 却回 `NOT_IMPLEMENTED`，两台实测互证）；

@@ -545,6 +545,16 @@ def test_live_the_test_board_has_no_measurable_designator():
         pytest.skip("test 窗口在线，但活动工程里没有 PCB 文档")
 
     pcb_uuid = str(pcbs[0]["uuid"])
+    # 179 起 `uuid` 是真的：宿主 `getDocumentSource()` 不吃参数（实测 arity 0），
+    # 所以这个动作只能读**活动文档**，点名别的文档回 `DOC_NOT_ACTIVE`。这条测试
+    # 想读的是 PCB，就得它在前台——不在前台时明确 skip，别让「读到了别的文档」
+    # 冒充「读到了 PCB」。
+    active = listing.get("active") or {}
+    if active.get("uuid") != pcb_uuid:
+        pytest.skip(
+            f"活动文档是 {active.get('uuid')}，不是 {pcbs[0].get('name')}({pcb_uuid})"
+            "——sys.get_document_source 只读活动文档，先把这块板 doc.open 到前台"
+        )
     source_payload, why = _bridge_call("sys.get_document_source", {"uuid": pcb_uuid})
     if source_payload is None:
         pytest.skip(f"读不到 {pcbs[0].get('name')} 的文档源（{why[:200]}）")

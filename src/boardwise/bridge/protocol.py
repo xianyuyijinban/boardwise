@@ -377,21 +377,28 @@ ACTIONS: tuple[Action, ...] = (
     Action(
         name="sys.get_document_source",
         summary=(
-            "READ-ONLY: the focused document's own source text, unjudged. The "
-            "declaration is one line (`Promise<string | undefined>`, @beta) and "
-            "says nothing about the format, so whether it equals the .epru record "
-            "stream inside an .epro2 is a question for a probe, not for this "
-            "action. Truncates to `maxChars` and echoes both ends of the text "
-            "(the head, plus `tail` when truncated), because a stream is "
-            "recognised by its first and last records."
+            "READ-ONLY: one document's own source text, unjudged. The declaration "
+            "is one line (`Promise<string | undefined>`, @beta) and says nothing "
+            "about the format, so whether it equals the .epru record stream inside "
+            "an .epro2 is a question for a probe, not for this action. Truncates "
+            "to `maxChars` and echoes both ends of the text (the head, plus `tail` "
+            "when truncated), because a stream is recognised by its first and last "
+            "records. `uuid` is honoured or refused: the host's `getDocumentSource()` "
+            "takes no arguments (measured arity 0 on EDA 3.2.186), so it reads the "
+            "**active** document and nothing else — asking for any other uuid is "
+            "`DOC_NOT_ACTIVE` (open it with `doc.open` first), never a silent return "
+            "of the wrong document's source (179, the hole 178b's probe filed). Omitting `uuid` reads "
+            "whatever is active."
         ),
-        params=("maxChars",),
+        params=("maxChars", "uuid"),
         returns=(
             "{source, chars, maxChars, truncated, data, headLines, tail?, note?}"
         ),
         params_schema=(
             "maxChars: 256..4000000 (default 65536); `data` is the head, `tail` "
-            "the last 1024 characters, present only when truncated"
+            "the last 1024 characters, present only when truncated; uuid: optional, "
+            "must be the active document's uuid (from doc.list) or the call is "
+            "refused with DOC_NOT_ACTIVE"
         ),
         risk="read",
     ),
@@ -1117,10 +1124,14 @@ ACTIONS: tuple[Action, ...] = (
             "exposes three separate calls (modifySchematicPageName / "
             "modifySchematicName / modifyPcbName) and the action dispatches on the "
             "requested type — a rename is a write to existing content, not a new "
-            "document."
+            "document. A rename that did not happen is an error, not an answer: the "
+            "success shape is returned only when the editor's own listing confirms "
+            "the new name. `CONNECTOR_ERROR` when the host claimed success and "
+            "stored nothing, `NOT_SUPPORTED` when the host's call answered falsy "
+            "and nothing changed (measured on EDA 3.2.186 for schematic pages, 179)."
         ),
         params=("uuid", "name", "type"),
-        returns="{uuid, name, type, renamed, document?}",
+        returns="{uuid, name, type, renamed, confirmed, notes?}",
         params_schema=(
             "uuid: document uuid; name: the new name; type: 'page'|'schematic'|'pcb' "
             "(optional — resolved through doc.list when omitted)"
@@ -1202,6 +1213,20 @@ class ErrorCodes:
     DISCONNECTED = "DISCONNECTED"
     #: Anything else; ``error.message`` carries the text.
     INTERNAL = "INTERNAL"
+    #: The host's own call cannot do what was asked on this build, and said so by
+    #: answering rather than throwing (179). Raised by the connector when
+    #: ``doc.rename`` was accepted, answered falsy and changed nothing — the case
+    #: that used to come back as a successful ``{renamed: false}``, where a caller
+    #: reading only the exit status saw a rename that never happened.
+    NOT_SUPPORTED = "NOT_SUPPORTED"
+    #: The caller named a document that is not the editor's active one, and the
+    #: requested read cannot address it (179). The host's
+    #: ``sys_FileManager.getDocumentSource()`` takes no arguments (measured arity
+    #: 0 on EDA 3.2.186), so it can only read the active document: a ``uuid``
+    #: naming anything else is refused instead of answered with the wrong
+    #: document's source. The message names the active document and the
+    #: ``doc.open`` that would make the target readable.
+    DOC_NOT_ACTIVE = "DOC_NOT_ACTIVE"
 
 
 class BridgeError(Exception):
