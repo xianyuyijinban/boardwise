@@ -34,7 +34,9 @@ predicate                          what it refuses                              
                                    :data:`L6_PAGE_WARN` clusters on the page, warn)
 ``L7 label-wire-clearance``        label/pin × foreign wire gap below            WARN
                                    :data:`L7_LABEL_WIRE_GAP`
-``L8 flag-orientation``            a power/ground flag rotated off the vertical  ERROR
+``L8 flag-orientation``            a power/ground flag rotated off the vertical  ERROR/INFO
+                                   — a **sideways** one (90/270) is reported
+                                   and never fatal (168), an odd tilt still is
 ``L9 board-fill``                  the placed extent under-fills the sheet       INFO
 ``L10 out-of-bounds``              a part body, wire point, flag anchor or       ERROR
                                    text box beyond the sheet frame
@@ -171,6 +173,19 @@ L7_LABEL_WIRE_GAP = 3.0
 #: per flag (a 270 GND flag's bar stack runs along x, a 0/180 one's along y —
 #: measured on P22's own render, outputs/111/render_P22.svg).
 FLAG_VERTICAL_ROTATIONS = frozenset({0, 180})
+
+#: L8 — the rotations that are **sideways**: a flag turned a quarter turn, whose
+#: bar stack runs along x instead of along the connector's vertical. Both are
+#: still reported (the set above is unchanged — 横放仍要报), but at **INFO**
+#: since 168: this predicate only ever judges a page a human drew or an editor
+#: already holds, and 岳's ruling is that a human's page is *observed*, not
+#: gated (the generator's own page cannot carry one — ``drawcompiler`` writes
+#: only 0/180 — and its landed page is checked against the plan's own rotations
+#: by `draw apply`'s 旗标朝向核对, which is where a generated page is gated).
+#: An odd tilt that is not a quarter turn (45°, say) is a different defect — not
+#: 横放 — and stays an ERROR, so this split can only ever narrow the exit code,
+#: never widen it.
+FLAG_SIDEWAYS_ROTATIONS = frozenset({90, 270})
 
 #: L9 — the sheet fill under which the page reports its layout distribution.
 #: Measured on the accepted pages (2026-10-04): P22 11.7%, P23 8.1%,
@@ -1718,16 +1733,24 @@ def check_label_wire_clearance(
 
 
 def check_flag_orientation(sheet: Sheet) -> list[LintFinding]:
-    """L8: a power/ground flag whose rotation is off the vertical set."""
+    """L8: a power/ground flag whose rotation is off the vertical set.
+
+    A **sideways** flag (90/270, :data:`FLAG_SIDEWAYS_ROTATIONS`) is reported at
+    INFO: it is a real reading — the bar stack runs along x — but by 168's
+    ruling the pages this predicate sees are the human's own, and those are
+    observed rather than gated, so it must not drive the exit code. Any other
+    off-vertical rotation stays an ERROR, unchanged.
+    """
     out: list[LintFinding] = []
     for flag in sheet.flags:
         rotation = flag.rotation % 360
         if rotation in FLAG_VERTICAL_ROTATIONS:
             continue
+        severity = "INFO" if rotation in FLAG_SIDEWAYS_ROTATIONS else "ERROR"
         out.append(
             LintFinding(
                 "L8-flag-orientation",
-                "ERROR",
+                severity,
                 f"flag {flag.primitive[:8]} (net {flag.net or 'unnamed'}) at "
                 f"({flag.x:.0f},{flag.y:.0f}) is rotated {rotation:.0f}° — off "
                 "the vertical set the flag bar reads from",
@@ -1796,7 +1819,7 @@ PREDICATES: tuple[tuple[str, str], ...] = (
     ("L5-wire-multiname", "WARN"),
     ("L6-wire-crossing", "INFO/WARN"),
     ("L7-label-wire-clearance", "WARN"),
-    ("L8-flag-orientation", "ERROR"),
+    ("L8-flag-orientation", "ERROR/INFO"),
     ("L9-board-fill", "INFO"),
     ("L10-out-of-bounds", "ERROR"),
 )

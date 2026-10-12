@@ -302,6 +302,16 @@ prints one row per violation plus a tally:
 | `WIRE_OVERLAP` | two nets' wires coincide (gap ≤ 0) — a true short, unlike the advisory `WIRE_TOO_CLOSE` (163a) |
 | `PINS_UNPLACED` | netlist-connected pins no wire reaches — the page would not equal the netlist (163a) |
 
+`LABEL_ON_FOREIGN_WIRE` has **two paths, one ruler** (168). The solver / terminal
+check (`layout.annotation_anchor_violations`) keeps it **blocking**: a generated
+page is ours to fix, so a name pressed on a stranger's wire must not be drawn. The
+**replay** path measures the same defect on the **glyph boxes the replayed page
+really draws** (`layout.annotation_foreign_wire_contacts`), but a replayed page is
+the human's own, so there it is an **INFO observation** written into
+`plan.notes` ("INFO (observation, not a refusal) — [LABEL_ON_FOREIGN_WIRE] …") and
+printed by `boardwise lint` / `draw plan`. It is deliberately *not* an entry in
+`plan.violations`: that list is the gate, and an observation must not be in it.
+
 `boardwise draw` runs the same lint as part of its self-check and **refuses to
 execute** when anything fails — the whole point is that the burden of proof
 moved from the reviewer's eyes to the generator.
@@ -624,7 +634,11 @@ boardwise draw apply   plan.json --project test \
 
 同族另外两条，别漏：**`boardwise draw lint --page …` 是落图之后的机器闸**（只读：九条几何
 谓词——压线/重叠/出界/同名导线段等，111 起；真机快照或 `--snapshot` 捕获件都吃。
-P1 的 48E/20W/21I 验收基线就是它量的——**画完一页先过它再交付**）；
+P1 的 48E/20W/21I 验收基线就是它量的——**画完一页先过它再交付**。
+**168 的严重度口径**：人手页/既有页只观察提醒——L8 横放旗标（90/270）报 INFO，
+不进退出码（`FLAG_VERTICAL_ROTATIONS` 仍是 {0,180}，横放仍要报；非直角斜置如 45°
+仍是 ERROR）；生成器产出的页不受影响，它的旗标朝向闸在 `draw apply` 的⑮核对，
+不在这条只读谓词上）；
 **`boardwise draw propose`**（109 A4，纯离线）把一份 DesignIntent 合同提成
 PresentationSpec 草稿（模块清单 + flow + 角色），是「意图 → 画法」这条链的入口，
 compile/plan 的 `--intent PATH` 消费同一份合同（见下）。

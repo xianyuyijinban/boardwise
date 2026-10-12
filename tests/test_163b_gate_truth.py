@@ -245,16 +245,22 @@ def _flag_snapshot(rotation: float) -> dict:
 
 
 def test_a_sideways_flag_is_reported_and_a_vertical_one_is_not():
-    """The probe: rotation 90 used to answer L8 `[]`; it is now an ERROR.
+    """The probe: rotation 90 used to answer L8 `[]`; it is reported — at INFO.
 
     270 is here as well because it is the angle the host's own render shows on
     P22's turned flag, and 0/180 stay quiet — they are what the compiler emits.
+
+    **168 flipped the level.** 163b made 90/270 an ERROR; 岳 then ruled that the
+    pages this predicate sees are the human's own (the compiler writes only
+    0/180) and that a human's page is observed, not gated — so the same reading
+    is now INFO and no longer drives the exit code. The report is unchanged:
+    both angles still answer exactly one L8 row.
     """
     for rotation in (90, 270):
         findings = drawlint.run_lint(_flag_snapshot(rotation))
         hits = [f for f in findings if f.predicate == "L8-flag-orientation"]
         assert len(hits) == 1, rotation
-        assert hits[0].severity == "ERROR"
+        assert hits[0].severity == "INFO"
     for rotation in (0, 180, 360):
         findings = drawlint.run_lint(_flag_snapshot(rotation))
         assert not [f for f in findings if f.predicate == "L8-flag-orientation"]

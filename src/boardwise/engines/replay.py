@@ -615,6 +615,28 @@ def build_replay_plan(
             layout.annotation_box(label.x + dx, label.y + dy, label.net)
         )
 
+    # --- 168: the terminal check's own ruler, run on the boxes this page really
+    # draws, reported as an **observation** (``plan.notes``) and never a refusal.
+    # 163a hung ``LABEL_ON_FOREIGN_WIRE`` only on the solver/terminal path, whose
+    # ruler knows anchors and not glyphs; here the boxes are the **measured
+    # glyphs** the replayed page draws, and 岳's ruling is that a human's own
+    # page — which is what a replay reprints — is observed, not gated (the
+    # generator's own pages stay blocking, which is why nothing here touches the
+    # solver's row). Measured on the golden CH340G page: one contact, the GND
+    # rail flag's glyph box touching ``NET2``'s wire — the very defect class the
+    # solver path blocks on, which the replay used to answer silence for.
+    #
+    # It goes to ``notes``, not to a second entry in ``plan.violations``: that
+    # list *is* the gate (``blocking_violations`` reads it), so an observation
+    # must not be in it, and ``notes`` is the channel that is printed by
+    # ``boardwise lint`` / ``draw plan`` and read back from ``--json``.
+    for contact in layout.annotation_foreign_wire_contacts(
+        routes,
+        [(step.net, step.x, step.y, box)
+         for step, box in zip(plan.net_names, annotation_boxes)],
+    ):
+        plan.notes.append("INFO (observation, not a refusal) — " + contact.render())
+
     # --- NC pins: golden pins with no net, listed so the report can tell
     # "left open on purpose" from "forgotten"
     for designator in sorted(model.components):

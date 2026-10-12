@@ -1893,6 +1893,65 @@ def validate_full(
     return violations
 
 
+def annotation_foreign_wire_contacts(
+    routes: list[RoutedNet],
+    annotations: list[tuple[str, float, float, Rect]],
+    *,
+    foreign_segs: list[Segment] | None = None,
+) -> list[Violation]:
+    """One ``LABEL_ON_FOREIGN_WIRE`` row per (name, foreign net) whose box touches it.
+
+    ``annotations`` is ``(net, x, y, box)`` — the marker box being measured, at
+    the anchor it was measured for. **One ruler, two callers**: the terminal
+    check (:func:`annotation_anchor_violations`, the solver path, where the box
+    is :func:`annotation_box`'s prediction) and
+    :func:`boardwise.engines.replay.build_replay_plan` — which measures the
+    **glyph boxes the replayed page really draws** — both come through here, so
+    the two paths cannot drift into two answers for one defect.
+
+    The bar is **contact** (``rect_segment_distance == 0``), not the avoidance
+    search's :data:`LABEL_CLEARANCE` margin: the search asks "is there a nicer
+    spot" and can afford to insist, this asks whether the name lies on another
+    net's conductor — see :func:`annotation_anchor_violations` for the
+    measurement behind that.
+
+    One row per (name, foreign net), not one per touching segment: a long wire
+    reaches this check as many collinear pieces, so per-segment rows stated one
+    defect six times over (measured on the golden board: 21 rows for two flags),
+    which is how a real finding gets buried.
+
+    ``foreign_segs`` is the pre-built foreign-segment list, for a caller that
+    measures many anchors at once and must not rebuild it per anchor.
+    """
+    if foreign_segs is None:
+        foreign_segs = [
+            Segment(px, py, qx, qy, other.net)
+            for other in routes
+            for poly in other.polylines
+            for (px, py), (qx, qy) in zip(poly, poly[1:])
+        ]
+    out: list[Violation] = []
+    for net_name, x, y, marker in annotations:
+        touching: dict[str, Segment] = {}
+        for seg in foreign_segs:
+            if seg.net == net_name:
+                continue
+            if rect_segment_distance(marker, seg) > 0.0:
+                continue
+            touching.setdefault(seg.net, seg)
+        for other_net, seg in sorted(touching.items()):
+            out.append(
+                Violation(
+                    "LABEL_ON_FOREIGN_WIRE",
+                    f"net {net_name} vs net {other_net}",
+                    f"annotation at ({x:.0f},{y:.0f}) lies on net {other_net}'s "
+                    f"wire {seg.points()} — a name drawn across a stranger's wire "
+                    "reads as a connection that is not there",
+                )
+            )
+    return out
+
+
 def annotation_anchor_violations(
     model: DesignModel,
     routes: list[RoutedNet],
@@ -1988,27 +2047,11 @@ def annotation_anchor_violations(
                     )
                 )
         marker = annotation_box(x, y, net_name)
-        # One row per (name, foreign net), not one per touching segment: a long
-        # wire reaches this check as many collinear pieces, so per-segment rows
-        # stated one defect six times over (measured on the golden board: 21 rows
-        # for two flags), which is how a real finding gets buried.
-        touching: dict[str, Segment] = {}
-        for seg in foreign_segs:
-            if seg.net == net_name:
-                continue
-            if rect_segment_distance(marker, seg) > 0.0:
-                continue
-            touching.setdefault(seg.net, seg)
-        for other_net, seg in sorted(touching.items()):
-            violations.append(
-                Violation(
-                    "LABEL_ON_FOREIGN_WIRE",
-                    f"net {net_name} vs net {other_net}",
-                    f"annotation at ({x:.0f},{y:.0f}) lies on net {other_net}'s "
-                    f"wire {seg.points()} — a name drawn across a stranger's wire "
-                    "reads as a connection that is not there",
-                )
+        violations.extend(
+            annotation_foreign_wire_contacts(
+                routes, [(net_name, x, y, marker)], foreign_segs=foreign_segs
             )
+        )
     return violations
 
 

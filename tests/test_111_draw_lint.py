@@ -457,13 +457,19 @@ def test_l8_fires_on_a_sideways_flag():
     flag's bars are horizontal polylines stacked in y (`190 -615 210 -615`,
     `196 -609 204 -609`…), while the page's 270° one draws them stacked in x
     (`70 -755 70 -735`, `61 -746 61 -744`…). Same part, turned on its side.
+
+    **168 flipped the level, not the report**: the reading is the same and it is
+    still reported, but a sideways flag is now INFO — the pages this predicate
+    sees are the human's own (the compiler writes only 0/180), and 岳's ruling is
+    that a human's page is observed, not gated. An odd tilt that is not a quarter
+    turn keeps its ERROR — `test_l8_fires_on_a_tilted_flag` is that case.
     """
     for rotation in (90, 270):
         hits = _by_predicate(
             _lint(_snapshot(_flag("GND", 80, 745, rotation=rotation)))
         )["L8-flag-orientation"]
         assert len(hits) == 1, rotation
-        assert hits[0].severity == "ERROR"
+        assert hits[0].severity == "INFO"
 
 
 # ------------------------------------------------------------------ L9
@@ -500,17 +506,14 @@ def test_accepted_pages_have_zero_error_and_warn(real_pages):
     too — true positives by the oracle's own editor DRC run, excluded here by
     predicate name, not by relaxing the pin.
 
-    163b adds a second, **enumerated** exception: P22 carries one GND flag the
+    163b's second exception is **closed** by 168: P22 carries one GND flag the
     editor turned on its side (`78a445b6e0b03ef0` at (80,745), `Rotation: 270`),
-    and L8 now reports it. The render proves the reading rather than assuming
-    it — that flag's bars are stacked along x while every other flag on the page
-    (and every flag on P23/P24) stacks them along y, so it is the flat glyph 069
-    sec.7 refuses. It is named by primitive id here, never by predicate: L8 is
-    left fully armed for every other flag, and a second sideways flag on any of
-    these pages would still go red. Whether 岳 wants this one reported is his
-    call, not the lint's (registered with the batch).
+    163b reported it as an ERROR and excluded it here by primitive id because the
+    pin is about ERROR/WARN. 岳's ruling then made a sideways flag INFO, so the
+    finding no longer reaches this list at all and the enumeration is gone — the
+    pin is again "every ERROR/WARN", with no per-object carve-out left to rot.
+    L8 stays armed for both levels on every other flag.
     """
-    sideways_on_p22 = "78a445b6e0b03ef0"
     for page in ("P22", "P23", "P24"):
         data = real_pages[page]
         findings = drawlint.run_lint(data["snapshot"], data["render"])
@@ -518,10 +521,6 @@ def test_accepted_pages_have_zero_error_and_warn(real_pages):
             f for f in findings
             if f.severity in ("ERROR", "WARN")
             and f.predicate != "L5-wire-multiname"
-            and not (
-                f.predicate == "L8-flag-orientation"
-                and sideways_on_p22 in f.objects
-            )
         ]
         assert bad == [], (
             f"{page}: zero-false-positive pin broken: "
