@@ -5094,6 +5094,7 @@ def _run_pcb_runner(
     intent: object | None,
     modules: list[dict] | None,
     notes: list[str],
+    rules: list | None = None,
 ) -> tuple[list, dict | None, bool]:
     """Run the PCB review over one backup: ``(findings, section, had_documents)``.
 
@@ -5102,6 +5103,12 @@ def _run_pcb_runner(
     one body — and the runner behind it stays the single one
     (:func:`boardwise.engines.pcbreview.run_pcb_review`), so the online and
     offline readings of one archive cannot drift apart by construction.
+
+    ``rules`` (172) is the online path's only difference: when the host gave
+    measured silk text boxes, the caller hands in the built-in rule set with
+    :class:`~boardwise.rules.pcb.silk.SilkDesignator` rebuilt around them. It is
+    ``None`` on every other path, so the offline reading is the untouched
+    built-in list.
 
     Two things happen here, in this order:
 
@@ -5132,6 +5139,7 @@ def _run_pcb_runner(
             model=model,
             intent=intent,
             modules=modules,
+            rules=rules,
         )
     except Exception as exc:  # noqa: BLE001 — a report must still be written
         notes.append(
@@ -5139,6 +5147,205 @@ def _run_pcb_runner(
         )
         return [], None, pcb_had_documents
     return pcb_findings, pcb_review, pcb_had_documents
+
+
+# ---------------------------------------------------------------------------
+# 172: 丝印字宽 —— 宿主实测优先、估算降级
+# ---------------------------------------------------------------------------
+
+#: 量 PCB 图元包围盒的动作（172 接线，174 补上动作本体）。
+#:
+#: 172 当时桥里**没有**这个动作：能测 primitive bbox 的只有 ``sch.geometry``，
+#: 而它挂在 ``sch_Primitive`` 命名空间上——宿主里那条 API 的 pcb 孪生
+#: （``eda.pcb_Primitive.getPrimitivesBBox``，easyeda-agent 的 ``pcbSilkAlign``
+#: 就是用它量每条位号 ATTR 的）没人包。174 把它包成了 ``pcb.geometry``
+#: （只读，与 ``sch.geometry`` 的 bbox 返回同构），所以这里换真值：焦点是 PCB
+#: 时量的是那条板上真的位号文字盒，而不是把 sch 侧的动作硬套到 pcb 的 id 上。
+#: 动作不在（旧 daemon / 旧 connector）或量不到，下面的降级照样明说。
+SILK_BBOX_ACTION = "pcb.geometry"
+
+
+def _designator_attr_ids(source_path: str | Path, pcb_uuid: str) -> tuple[dict[str, str], str]:
+    """一块 PCB 文档里每条 ``ATTR key=Designator`` 的 ``(记录 id → 文字)``。
+
+    ``SilkText`` 只带 ``parentId``（它所命名的 COMPONENT），**不带 ATTR 记录自己
+    的 id**——而宿主量 bbox 要的正是后者，所以这里直接从 ``.epru`` 记录流上读一次
+    （和 :func:`~boardwise.parsers.epru.silk_texts_of` 同一份记录，不是第二套口径）。
+
+    Returns ``(id → designator text, why)``；``why`` 非空说明这块文档没被找到，
+    调用方据此降级。
+    """
+    try:
+        from .parsers.epru import load_epro2_source
+
+        source = load_epro2_source(source_path)
+    except Exception as exc:  # noqa: BLE001 — 读不动就降级，不是审查失败
+        return {}, f"在线整工程档读不动（{type(exc).__name__}: {exc}）"
+    document = next(
+        (d for d in source.documents_of_type("PCB") if str(d.uuid or "") == pcb_uuid),
+        None,
+    )
+    if document is None:
+        return {}, f"在线档里没有 uuid={pcb_uuid} 的 PCB 文档"
+    out: dict[str, str] = {}
+    for record in document.records:
+        body = record.body
+        if record.type != "ATTR" or not isinstance(body, dict):
+            continue
+        if str(body.get("key") or "") != "Designator" or not record.id:
+            continue
+        out[str(record.id)] = str(body.get("value") or "")
+    return out, ""
+
+
+async def _measure_silk_boxes(call, source_path: str | Path, notes: list[str]) -> dict:
+    """试一次宿主实测，返回 ``{(板名, 位号文字): (minX, minY, maxX, maxY)}``。
+
+    ``call`` 是 ``async (action, params) -> payload``（在线档里是
+    ``functools.partial(client.call, **route_kwargs)``；测试里是假宿主）。
+
+    三件事按顺序做，任何一步不成就是**空表 + 一条 ``notes``**——降级永远明说，
+    绝不返回半个「看起来像读数」的表：
+
+    1. ``doc.list`` 看焦点；**焦点不是 PCB 就直接返回空表**（不打搅、不加噪声：
+       没有工程开着的时候本来就没有实测可言，这不算降级）；
+    2. 从在线整工程档里取这块 PCB 的位号 ATTR 记录 id（``_designator_attr_ids``）；
+    3. 用 pcb 侧的 bbox 动作量它们（``pcb.geometry --bboxIds``，见
+       :data:`SILK_BBOX_ACTION`）。
+
+    板名用 ``doc.list`` 报的名字（它也是审查报告里 ``board_title`` 的来源），而
+    不是自己拼一个——对得上的才有实测，对不上就静默退到估算，绝不按位号文字
+    跨板乱贴读数。
+    """
+    try:
+        listing = await call("doc.list", {})
+    except Exception as exc:  # noqa: BLE001 — 读不到就当没有实测
+        notes.append(f"丝印字宽降级：读不到宿主文档表（{exc}）；位号文字宽度按估算值（逐条已标）")
+        return {}
+    active = listing.get("active") if isinstance(listing, dict) else None
+    active = active if isinstance(active, dict) else {}
+    focused_uuid = str(active.get("uuid") or "")
+    if str(active.get("type") or "").lower() != "pcb" or not focused_uuid:
+        return {}
+    title = ""
+    # `doc.list`'s own `pcbs` is a **count**; the documents are in `documents[]`
+    # (`{uuid, name, type}`), with the per-project list in `projects[].pcbs`.
+    # Read the document list first — that is the shape measured 2026-10-12.
+    documents = listing.get("documents") if isinstance(listing.get("documents"), list) else []
+    candidates = [
+        entry for entry in documents
+        if isinstance(entry, dict) and str(entry.get("type") or "") == "pcb"
+    ]
+    for project in (listing.get("projects") or []):
+        if isinstance(project, dict) and isinstance(project.get("pcbs"), list):
+            candidates += [entry for entry in project["pcbs"] if isinstance(entry, dict)]
+    if isinstance(listing.get("pcbs"), list):  # a hand-built shape: a list of documents
+        candidates += [entry for entry in listing["pcbs"] if isinstance(entry, dict)]
+    for entry in candidates:
+        if str(entry.get("uuid") or "") == focused_uuid:
+            title = str(entry.get("name") or "")
+            break
+    if not title:
+        return {}
+
+    ids, why = _designator_attr_ids(source_path, focused_uuid)
+    if not ids:
+        notes.append(
+            f"丝印字宽降级：焦点板 {title} 量不了位号文字盒（{why or '档里没有位号记录'}）；"
+            "位号文字宽度按估算值（逐条已标）"
+        )
+        return {}
+    try:
+        payload = await call(SILK_BBOX_ACTION, {"bboxIds": sorted(ids)})
+    except Exception as exc:  # noqa: BLE001 — 宿主不给就是降级
+        notes.append(
+            f"丝印字宽降级：宿主 bbox 读失败（{exc}）；{title} 的位号文字宽度按估算值（逐条已标）"
+        )
+        return {}
+    boxes = (payload or {}).get("bboxes") if isinstance(payload, dict) else None
+    boxes = boxes if isinstance(boxes, dict) else {}
+    out: dict[tuple[str, str], tuple[float, float, float, float]] = {}
+    for primitive_id, box in boxes.items():
+        designator = ids.get(str(primitive_id))
+        if not designator or not isinstance(box, dict):
+            continue
+        try:
+            out[(title, designator)] = (
+                float(box["minX"]), float(box["minY"]),
+                float(box["maxX"]), float(box["maxY"]),
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+    if not out:
+        notes.append(
+            f"丝印字宽降级：宿主没给出 {title} 的位号文字 bbox（{SILK_BBOX_ACTION} "
+            "--bboxIds 在 PCB 焦点上返回空）；位号文字宽度按估算值（逐条 evidence 已标"
+            "「估算值」）"
+        )
+        return {}
+    notes.append(
+        f"丝印字宽：宿主实测 {title} 的 {len(out)} 条位号文字盒"
+        f"（{SILK_BBOX_ACTION} --bboxIds），其余位号按估算值（逐条已标）"
+    )
+    return out
+
+
+def _pcb_rules_with_measured_silk(measured: dict) -> list:
+    """内置 PCB 规则表，把丝印那条换成带实测盒的实例（172）。
+
+    只换丝印一条：其余规则必须还是**同一个类**，否则在线与离线两条路的规则集
+    就不再是同一套了（166 的「同一条管线」纪律）。
+    """
+    from .engines.pcbreview import BUILTIN_PCB_RULES
+    from .rules.pcb.silk import SilkDesignator
+
+    return [
+        SilkDesignator(measured=measured) if isinstance(rule, SilkDesignator) else rule
+        for rule in BUILTIN_PCB_RULES
+    ]
+
+
+def _measured_silk_boxes_online(args: argparse.Namespace, source_path: str | Path,
+                                notes: list[str]) -> dict:
+    """在线一次实测尝试的同步外壳：开桥、问一次、关桥；永不抛。"""
+    import asyncio
+
+    try:
+        BridgeClient, BridgeError, port, token = _open_cli(args)
+    except Exception as exc:  # noqa: BLE001 — 拿不到桥就是没有实测
+        notes.append(f"丝印字宽降级：连不上桥（{exc}）；位号文字宽度按估算值（逐条已标）")
+        return {}
+    route_kwargs: dict[str, str] = {}
+    if getattr(args, "project", ""):
+        route_kwargs["target_project"] = args.project.strip()
+    if getattr(args, "instance", ""):
+        route_kwargs["target_instance"] = args.instance.strip()
+
+    async def run() -> dict:
+        try:
+            client = await BridgeClient.open(
+                _bridge_uri(port), token, "cli", client="boardwise-cli"
+            )
+        except Exception as exc:  # noqa: BLE001
+            notes.append(f"丝印字宽降级：桥会话打不开（{exc}）；位号文字宽度按估算值（逐条已标）")
+            return {}
+        try:
+            async def call(action, params):
+                return await client.call(action, params, **route_kwargs)
+
+            return await _measure_silk_boxes(call, source_path, notes)
+        finally:
+            try:
+                await client.close()
+            except Exception:  # noqa: BLE001 — 关不掉不是本命令的问题
+                pass
+
+    try:
+        return asyncio.run(run())
+    except Exception as exc:  # noqa: BLE001 — 实测失败绝不影响报告
+        notes.append(f"丝印字宽降级：实测通道异常（{type(exc).__name__}: {exc}）；"
+                     "位号文字宽度按估算值（逐条已标）")
+        return {}
 
 
 def _cmd_checkup(args: argparse.Namespace) -> int:
@@ -5590,8 +5797,17 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
             # reads is the file the ladder parsed — one online run, one archive.
             archive = Path(tmp) / ONLINE_ARCHIVE_NAME
             archive.write_bytes(online_artifacts["pcbArchive"])
+            # 172: the one thing the online path can add to an offline reading —
+            # the host's own measured silk text boxes. Attempted, never assumed:
+            # no boxes → no rule override, empty estimate-only reading, and
+            # `notes` carries why. Offline (`--file`) has no host to ask, so it
+            # never gets here and every width in it says 「估算值」.
+            measured_silk = _measured_silk_boxes_online(args, archive, notes)
             pcb_findings, pcb_review, pcb_had_documents = _run_pcb_runner(
-                archive, model=model, intent=contract, modules=modules, notes=notes
+                archive, model=model, intent=contract, modules=modules, notes=notes,
+                rules=(
+                    _pcb_rules_with_measured_silk(measured_silk) if measured_silk else None
+                ),
             )
         if pcb_review is None:
             pcb_not_run = _pcb_online_not_run(

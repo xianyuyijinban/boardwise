@@ -731,6 +731,28 @@ ACTIONS: tuple[Action, ...] = (
         params_schema="bboxIds: optional array of primitive ids to measure as well",
         risk="read",
     ),
+    Action(
+        name="pcb.geometry",
+        summary=(
+            "Read-only: the **measured** rendered bounding box of PCB primitives "
+            "(`eda.pcb_Primitive.getPrimitivesBBox`, one call per id — the host "
+            "answers a union box for a list). The PCB twin of `sch.geometry`'s "
+            "`bboxIds` half: a board primitive's real extent is not in the file, "
+            "so this is the only way to answer 「这块丝印压上焊盘了吗」 by "
+            "measurement rather than by a font-width model."
+        ),
+        params=("bboxIds",),
+        returns=(
+            "{bboxes: {primitiveId: {minX,minY,maxX,maxY}}, "
+            "meta: {available: {bboxes}, requested, measured, reasons?, unreadable?}}"
+        ),
+        params_schema=(
+            "bboxIds: array of PCB primitive ids to measure (each gets its own "
+            "call); an id the host cannot measure is named in meta.unreadable "
+            "rather than silently dropped"
+        ),
+        risk="read",
+    ),
     # --- 006: schematic write actions ---------------------------------------
     Action(
         name="sch.doc.new",

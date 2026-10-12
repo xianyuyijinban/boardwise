@@ -2240,6 +2240,94 @@ export const schGeometry: ActionHandler = async (params, eda) => {
   };
 };
 
+/**
+ * `pcb.geometry` — the **measured** bounding boxes of PCB primitives (174).
+ *
+ * The PCB twin of `sch.geometry`'s `bboxIds` half, and the action 172 needed:
+ * the silk designator's real rendered width is not in the `.epru` file (only a
+ * font-size and a character count are), so 「位号压焊盘了吗」 can only be
+ * answered on the machine, by measuring. `eda.pcb_Primitive.getPrimitivesBBox`
+ * is the one API that reports where a primitive actually *is* — easyeda-agent's
+ * `pcbSilkAlign` measures every designator ATTR with exactly this call
+ * (`eda.pcb_Primitive.getPrimitivesBBox([attrId])`), and the host answers with
+ * the **union** box of the ids it was given. So a per-id answer costs one call
+ * per id, which is what the loop below is: the same shape `sch.geometry` uses.
+ *
+ * Read-only by construction: `pcb_Primitive` carries the measuring call and
+ * nothing here reaches a `create` / `modify` / `delete` member. A caller cannot
+ * make the editor's canvas change by asking this question.
+ *
+ * What the answer says, and why each part is there:
+ *
+ * * `bboxes` — `{primitiveId: {minX, minY, maxX, maxY}}`, the caller's own key
+ *   shape, the same one `sch.geometry` uses. Only **finite numbers** are
+ *   recorded: a host that answers `undefined` for an id it does not know (the
+ *   measured behaviour of the schematic twin) must not produce a box whose
+ *   fields are missing, because a caller reading `minX` off it would compute a
+ *   *wrong overlap* rather than see nothing.
+ * * `meta.unreadable` — every id that produced no box, **named with why**. An
+ *   empty `bboxes` has two very different causes ("the host has no box for
+ *   these ids" vs "the measuring call is not on this host"), and a caller that
+ *   cannot tell them apart ends up reporting a measurement it never took. That
+ *   is the failure 172 exists to prevent, so the distinction is in the payload.
+ * * `meta.available.bboxes` — whether the API was callable at all.
+ */
+export const pcbGeometry: ActionHandler = async (params, eda) => {
+  const requested = Array.isArray(params?.bboxIds)
+    ? (params.bboxIds as unknown[]).map((v) => String(v)).filter(Boolean)
+    : [];
+  const ids = [...new Set(requested)];
+
+  const namespace = readMember(eda, 'pcb_Primitive').value;
+  const bboxFn = namespace && typeof namespace === 'object'
+    ? readMember(namespace, 'getPrimitivesBBox').value
+    : undefined;
+
+  const bboxes: Record<string, { minX: number; minY: number; maxX: number; maxY: number }> = {};
+  const unreadable: string[] = [];
+  const bboxAvailable = typeof bboxFn === 'function';
+  if (bboxAvailable) {
+    for (const id of ids) {
+      let box: any;
+      try {
+        box = await settle(bboxFn.call(namespace, [id]));
+      } catch (error) {
+        unreadable.push(`${id}: the measuring call threw: ${String((error as Error)?.message ?? error)}`);
+        continue;
+      }
+      if (!box) {
+        unreadable.push(`${id}: the host returned no box for this id`);
+        continue;
+      }
+      const { minX, minY, maxX, maxY } = box;
+      const corners = [minX, minY, maxX, maxY];
+      if (!corners.every((v) => typeof v === 'number' && Number.isFinite(v))) {
+        unreadable.push(
+          `${id}: the host's box has no finite minX/minY/maxX/maxY (`
+          + corners.map((v) => `${typeof v}`).join('/') + ')',
+        );
+        continue;
+      }
+      bboxes[id] = { minX, minY, maxX, maxY };
+    }
+  }
+
+  return {
+    bboxes,
+    meta: {
+      available: { bboxes: bboxAvailable },
+      requested: ids.length,
+      measured: Object.keys(bboxes).length,
+      // Why the table is empty, when it is. Without this, "this host cannot
+      // measure" and "nothing came back" are the same reading.
+      ...(bboxAvailable
+        ? {}
+        : { reasons: { bboxes: 'read eda.pcb_Primitive.getPrimitivesBBox: absent or not a function' } }),
+      ...(unreadable.length ? { unreadable } : {}),
+    },
+  };
+};
+
 // --------------------------------------------------------------------------
 // 006: schematic write actions
 // --------------------------------------------------------------------------
@@ -7895,6 +7983,11 @@ export function buildHandlers(eda: Eda): Record<string, BoundHandler> {
     'canvas.highlight': bind(canvasHighlight),
     'sch.netlist': bind(schNetlist),
     'sch.geometry': bind(schGeometry),
+    // 174: the PCB twin of `sch.geometry`'s measured half — the rendered box of
+    // a PCB primitive, which is what 172's silk width reads instead of guessing
+    // it from the font size. Read-only: `getPrimitivesBBox` measures, it does
+    // not draw.
+    'pcb.geometry': bind(pcbGeometry),
     'doc.list': bind(docList),
     'doc.open': bind(docOpen),
     'pcb.doc.new': bind(pcbDocNew),
