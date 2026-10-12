@@ -686,10 +686,12 @@ def test_llc_reports_neither_rule_because_it_carries_neither_part():
 # ---------------------------------------------------------------------------
 
 
-def test_both_rules_are_builtins_and_22_is_the_count_now():
+def test_both_rules_are_builtins_and_23_is_the_count_now():
     """The structural pin. 20 since 094 A3b added `arch-sense-bias-closure`;
     **22 since #64 added the two selection rules** — the specs the shelf was
-    already carrying and nothing was consuming.
+    already carrying and nothing was consuming; **23 since 176 (issue #76) added
+    `path-sampling-bias`**, which is why the number in this test's own name
+    moved with it.
 
     Two rules, not five: the reconnaissance (§1) measured the MOS and
     electrolytic families as spec-complete too, but neither has a board in the
@@ -698,7 +700,7 @@ def test_both_rules_are_builtins_and_22_is_the_count_now():
     """
     ids = [rule.id for rule in BUILTIN_RULES]
     assert TVS_RULE in ids and LDO_RULE in ids
-    assert len(ids) == 22
+    assert len(ids) == 23
 
 
 def test_both_rules_take_the_contract_at_construction_and_are_carriers():

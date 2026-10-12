@@ -419,9 +419,16 @@ def test_other_single_board_fixtures_keep_their_frozen_severities(name):
 #: empty: it carries neither a shelf-backed TVS nor a shelf-backed LDO, and the
 #: refusal to invent a row for a part that is not there is the half this table
 #: keeps honest.
+#:
+#: 176 (issue #76, 岳 2026-10-12) moved ROBOT's WARN count 3 -> 5, and from the
+#: **rule set** a third time: the new `path-sampling-bias` rule reads the board's
+#: two 100mΩ shunts (R4/R5), which reach U1 pin21 (PA7) and U1 pin24 (PB0)
+#: through U+/W+ with nothing between them, so it files the two WARNs the task
+#: book's 取证锚 names and nothing else on this board. ``llc_board`` and 智能药箱
+#: keep their rows: no shunt of theirs reaches an MCU input directly.
 _EXPECTED_SEVERITY = {
     "llc_board.epro2": {"ERROR": 0, "WARN": 0, "INFO": 0},
-    "ProPrj_ROBOT ctrl FOC_2026-09-16.epro2": {"ERROR": 0, "WARN": 3, "INFO": 1},
+    "ProPrj_ROBOT ctrl FOC_2026-09-16.epro2": {"ERROR": 0, "WARN": 5, "INFO": 1},
     "ProPrj_智能药箱_2026-09-17.epro2": {"ERROR": 0, "WARN": 1, "INFO": 3},
 }
 
