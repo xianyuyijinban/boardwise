@@ -39,39 +39,28 @@ from collections import deque
 
 import pytest
 
+import _golden
+
 from boardwise.core.model import Component, DesignModel, Net, Pin
 from boardwise.engines import layout
 from boardwise.engines.layout import Rect
-from boardwise.engines.generate import (
-    canvas_pin_offsets,
-    generate_plan,
-    strip_dangling_nets,
-)
-from boardwise.parsers.schematic import (
-    build_pin_offsets,
-    build_schematic_model,
-)
-
-GOLDEN = "tests/fixtures/ch340_golden.epro2"
-
-
-_PLAN_CACHE: list = []
 
 
 def _golden_plan():
-    """The golden solver plan, built once per session.
+    """The golden solver plan, from the one session-wide cache (159).
 
     141 gave this build a second page to try (the wider aisle is only taken if
     the router still wires every net on it), so it is half a minute of grid
     search rather than ten seconds — and the plan is a pure function of the
     fixture, so every test in this file re-measuring it is re-measuring the same
     answer. Built once, handed out many times.
+
+    Since 159 the "once" is no longer per file: the build lives in
+    ``tests/_golden.py``, shared with every other module that reads this board,
+    which were each paying the same solve for themselves. Same instrument, same
+    fixture, same answer — the file's own tests are unchanged.
     """
-    if not _PLAN_CACHE:
-        golden = strip_dangling_nets(build_schematic_model(GOLDEN))
-        offsets = canvas_pin_offsets(build_pin_offsets(GOLDEN))
-        _PLAN_CACHE.append(generate_plan(golden, offsets))
-    return _PLAN_CACHE[0]
+    return _golden.golden_plan()
 
 
 def _too_close(violations) -> list:

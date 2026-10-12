@@ -641,7 +641,16 @@ def test_run_draw_naming_strategy_switch_controls_the_naming_actions():
     assert result.naming_strategy == "wire"
 
 
-def test_run_draw_reports_the_render_and_probe_separately():
+def test_run_draw_reports_the_render_and_probe_separately(monkeypatch):
+    """159: the one `prefer_replay=False` draw in this file, so the one solve.
+
+    Nothing about the draw is stubbed: the plan run_draw executes is the real
+    solver's output for the golden board, handed out by `tests/_golden.py` —
+    that module's own isolation note says who may write to it, and run_draw gets
+    a **copy**, because F3's drifted-pin snapping (`_snap_drifted_pins`) rewrites
+    the plan it is given (`step.points`, `step.x/y`) and the shared object must
+    not be rewritten by it.
+    """
     class RenderClient(FakeClient):
         async def call(self, action: str, params=None) -> dict:
             if action == "export.render":
@@ -649,8 +658,12 @@ def test_run_draw_reports_the_render_and_probe_separately():
                 return {"format": "image/png", "encoding": "base64", "data": "cmVuZGVy"}
             return await super().call(action, params)
 
+    import _golden
     from boardwise.parsers.schematic import build_pin_offsets, build_schematic_model
 
+    monkeypatch.setattr(
+        "boardwise.engines.generate.generate_plan", _golden.solver_plan_or_cache
+    )
     golden_path = "tests/fixtures/ch340_golden.epro2"
     client = RenderClient(_geo())
     result = _run(

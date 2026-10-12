@@ -10,34 +10,45 @@ from __future__ import annotations
 
 import pytest
 
+import _golden
+
 from boardwise.core.model import Component, DesignModel, Net, Pin
 from boardwise.engines.generate import (
     DEFAULT_NAMING_STRATEGY,
     NAMING_STRATEGIES,
     _is_power_net,
-    canvas_pin_offsets,
     generate_plan,
     strip_dangling_nets,
 )
-from boardwise.parsers.schematic import build_pin_offsets, build_schematic_model
-
-GOLDEN = "tests/fixtures/ch340_golden.epro2"
 
 
 @pytest.fixture(scope="module")
 def golden() -> DesignModel:
-    return build_schematic_model(GOLDEN)
+    """The golden board, from the one session-wide cache (159).
+
+    It used to be a private parse per module; every consumer builds the same
+    board from the same file, so since 159 the parse — and the plan below —
+    come from ``tests/_golden.py`` and are shared with the other seven modules
+    that were each paying for their own copy. The fixture names and the models
+    handed out are unchanged.
+    """
+    return _golden.golden_model()
 
 
 @pytest.fixture(scope="module")
 def golden_offsets() -> dict:
-    return canvas_pin_offsets(build_pin_offsets(GOLDEN))
+    return _golden.golden_offsets()
 
 
 @pytest.fixture(scope="module")
 def golden_plan(golden, golden_offsets):
-    """Built once: `generate_plan` is a few seconds of grid search per call."""
-    return generate_plan(golden, golden_offsets)
+    """The shared plan: ~50 s of grid search per call, paid once a session.
+
+    Read-only by convention — see the isolation note in ``tests/_golden.py``.
+    ``test_plan_is_stable`` below is the one test here that deliberately
+    re-solves the board, and it goes through the real generator, not this.
+    """
+    return _golden.golden_plan()
 
 
 # --------------------------------------------------------------------------
@@ -99,7 +110,13 @@ def test_plan_resolution_prefers_lcsc_then_keyword(golden, golden_plan):
 
 
 def test_plan_is_stable(golden, golden_offsets, golden_plan):
-    """Pure: the same model and offsets give the same plan, every time."""
+    """Pure: the same model and offsets give the same plan, every time.
+
+    **Deliberately not** served from the shared cache (159): this is the test
+    that would notice the solver ceasing to be a pure function of its inputs, so
+    it pays for its own solve — a minute, in the one place where re-measuring is
+    the point rather than waste.
+    """
     assert generate_plan(golden, golden_offsets) == golden_plan
 
 

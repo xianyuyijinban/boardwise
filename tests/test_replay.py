@@ -636,11 +636,27 @@ def test_the_goldens_geometry_lints_clean_under_every_strategy(strategy):
     assert code == 0, f"golden replay under --naming {strategy} reported violations"
 
 
-def test_lint_cli_can_lint_the_solver_plan_too(capsys):
+def test_lint_cli_can_lint_the_solver_plan_too(capsys, monkeypatch):
+    """159: ``--plan solver`` costs one solve, and the session already has it.
+
+    This is the only slow test in this file (47 s measured with
+    ``pytest --durations``): the CLI reaches the solver through
+    ``replay_or_solver``, so its generate_plan comes from the session cache for
+    the golden board — the same real plan, handed out as a private copy (the
+    cache must not collect the chooser's note). What the test pins — that the
+    ``--plan solver`` path reports ``"source": "generic solver"`` and does not
+    refuse the board — is untouched: a run that misses the cache (any other
+    board, any other offsets) still reaches the real generator.
+    """
     from argparse import Namespace
+
+    import _golden
 
     from boardwise.cli import _cmd_lint
 
+    monkeypatch.setattr(
+        "boardwise.engines.generate.generate_plan", _golden.solver_plan_or_cache
+    )
     code = _cmd_lint(Namespace(from_file=GOLDEN, plan="solver", json=True))
     out = capsys.readouterr().out
     assert '"source": "generic solver"' in out

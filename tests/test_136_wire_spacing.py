@@ -24,16 +24,13 @@ drawing that reads no worse is not.
 
 from __future__ import annotations
 
+import _golden
+
 from boardwise.core.model import Component, DesignModel, Net, Pin
 from boardwise.engines import layout
-from boardwise.engines.generate import (
-    canvas_pin_offsets,
-    generate_plan,
-    strip_dangling_nets,
-)
+from boardwise.engines.generate import generate_plan
 from boardwise.parsers.schematic import (
     build_pin_offsets,
-    build_schematic_model,
     collect_page_layout,
     collect_symbol_bodies,
 )
@@ -237,12 +234,7 @@ def test_the_router_reports_when_it_routes_without_separation():
     actually report (``WIRE_TOO_CLOSE``), not on the ordinary perpendicular
     crossings that were never a spacing problem.
     """
-    golden = strip_dangling_nets(build_schematic_model(GOLDEN))
-    offsets = canvas_pin_offsets(build_pin_offsets(GOLDEN))
-    geometry = generate_plan(golden, offsets)
-    _routes, routing_violations = layout.route_nets(
-        golden, geometry.pin_positions, geometry.geometry
-    )
+    _routes, routing_violations = _golden.golden_routes()
     given_up = [v for v in routing_violations if v.code == "SEPARATION_GIVEN_UP"]
     assert given_up, "the golden board does exercise the crowded lane"
     for row in given_up:
@@ -252,9 +244,7 @@ def test_the_router_reports_when_it_routes_without_separation():
 
 def test_the_plan_notes_say_when_separation_was_given_up():
     """The note is the user-facing half: it lands in the plan, not just the gate."""
-    golden = strip_dangling_nets(build_schematic_model(GOLDEN))
-    offsets = canvas_pin_offsets(build_pin_offsets(GOLDEN))
-    plan = generate_plan(golden, offsets)
+    plan = _golden.golden_plan()
     assert any("clear of the lanes" in note for note in plan.notes), plan.notes
     assert any(v.code == "SEPARATION_GIVEN_UP" for v in plan.violations)
 
@@ -336,16 +326,14 @@ def test_the_draw_gate_executes_a_plan_whose_only_findings_are_advisory():
     """
     from boardwise.engines.draw import print_self_check
 
-    golden = strip_dangling_nets(build_schematic_model(GOLDEN))
-    plan = generate_plan(golden, canvas_pin_offsets(build_pin_offsets(GOLDEN)))
+    plan = _golden.golden_plan()
     assert _too_close(plan.violations), "precondition: the finding exists"
     assert print_self_check(plan) == [], print_self_check(plan)
 
 
 def test_the_lint_report_still_counts_and_names_the_advisory_rows():
     """Advisory is not silent: the tally has to carry them."""
-    golden = strip_dangling_nets(build_schematic_model(GOLDEN))
-    plan = generate_plan(golden, canvas_pin_offsets(build_pin_offsets(GOLDEN)))
+    plan = _golden.golden_plan()
     report = layout.lint_report(plan.violations)
     tally = report[-1]
     assert "WIRE_TOO_CLOSE" in tally and "SEPARATION_GIVEN_UP" in tally
@@ -369,7 +357,7 @@ def test_the_humans_own_page_is_clean_under_this_ruler():
     from boardwise.engines.replay import build_replay_plan, sheet_frame_from_geometry
 
     page = collect_page_layout(GOLDEN)
-    model = strip_dangling_nets(build_schematic_model(GOLDEN))
+    model = _golden.golden_model()
     frame = sheet_frame_from_geometry(
         {}, declared=page.sheet_attrs, origin=page.sheet_origin
     )
@@ -401,8 +389,7 @@ def test_the_solver_drawing_reports_the_pairs_it_actually_runs_too_close():
     router can still wire; 137's own measurement test and
     `tests/test_141_channel_aisles.py` pin the number from the other two sides.
     """
-    golden = strip_dangling_nets(build_schematic_model(GOLDEN))
-    plan = generate_plan(golden, canvas_pin_offsets(build_pin_offsets(GOLDEN)))
+    plan = _golden.golden_plan()
     hits = _too_close(plan.violations)
     assert len(hits) == 34, len(hits)
     # every one of them is the same real shape: adjacent grid lanes, 5 apart

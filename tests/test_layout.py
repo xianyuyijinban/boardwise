@@ -12,17 +12,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
+import _golden  # noqa: E402  (tests/: the session-wide golden board + plan, 159)
 import p4_replay  # noqa: E402  (tools/ replay of the v1 draw)
 
 from boardwise.core.candidate import candidate_from_geometry  # noqa: E402
 from boardwise.core.compare import compare_models, reconcile_names  # noqa: E402
 from boardwise.core.model import is_ground_net  # noqa: E402
 from boardwise.engines import layout  # noqa: E402
-from boardwise.engines.generate import (  # noqa: E402
-    canvas_pin_offsets,
-    generate_plan,
-    strip_dangling_nets,
-)
+from boardwise.engines.generate import strip_dangling_nets  # noqa: E402
 from boardwise.parsers.schematic import (  # noqa: E402
     build_pin_offsets,
     build_schematic_model,
@@ -34,23 +31,22 @@ GOLDEN = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "ch340_gol
 GEO_DUMP = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "ch340_p1_geometry.json"
 
 
-_GOLDEN_PLAN_CACHE: dict = {}
-
-
 def _golden_plan():
-    """The golden plan, computed once.
+    """The golden plan, computed once — for the whole **session** (159).
 
     ``generate_plan`` is a few seconds of grid search on this board and a
     dozen tests read the same plan — recomputing it per test turned a
     seconds-long suite into a minute-long one (measured with
     ``pytest --durations``). The plan is pure, so caching it cannot hide a
-    regression; the dedicated stability test still builds it twice.
+    regression; the dedicated stability test in ``test_generate`` still builds it
+    twice.
+
+    The cache itself moved to ``tests/_golden.py`` in 159, because seven other
+    modules were paying the same solve for themselves: same instrument, same
+    fixture, same answer. The ``(golden, offsets, plan)`` shape the tests here
+    destructure is unchanged.
     """
-    if "plan" not in _GOLDEN_PLAN_CACHE:
-        golden = build_schematic_model(GOLDEN)
-        offsets = canvas_pin_offsets(build_pin_offsets(GOLDEN))
-        _GOLDEN_PLAN_CACHE["plan"] = (golden, offsets, generate_plan(golden, offsets))
-    return _GOLDEN_PLAN_CACHE["plan"]
+    return _golden.golden_model(), _golden.golden_offsets(), _golden.golden_plan()
 
 
 # --------------------------------------------------------------------------

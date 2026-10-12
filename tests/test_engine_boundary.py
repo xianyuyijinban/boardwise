@@ -27,16 +27,13 @@ from pathlib import Path
 
 import pytest
 
-from boardwise.engines.generate import strip_dangling_nets
+import _golden
+
 from boardwise.engines.replay import (
     replay_or_solver,
     sheet_frame_from_geometry,
 )
-from boardwise.parsers.schematic import (
-    build_pin_offsets,
-    build_schematic_model,
-    collect_page_layout,
-)
+from boardwise.parsers.schematic import collect_page_layout
 
 ROOT = Path(__file__).resolve().parents[1]
 GOLDEN = "tests/fixtures/ch340_golden.epro2"
@@ -47,13 +44,45 @@ ENGINES = ROOT / "src" / "boardwise" / "engines"
 def golden():
     page = collect_page_layout(GOLDEN)
     return {
-        "model": strip_dangling_nets(build_schematic_model(GOLDEN)),
+        # 159: the model and the offsets come from the session cache — the same
+        # board every other module builds, parsed and stripped once (and the
+        # strip is a no-op on this fixture: it carries no single-member net).
+        "model": _golden.golden_model(),
         "page": page,
-        "offsets": build_pin_offsets(GOLDEN),
+        "offsets": _golden.golden_file_offsets(),
         "frame": sheet_frame_from_geometry(
             {}, declared=page.sheet_attrs, origin=page.sheet_origin
         ),
     }
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _the_solver_runs_once():
+    """159: four solver cases below, **one** solve of the golden board.
+
+    The four cases differ only in which branch of the chooser runs and in the
+    note that branch appends; the chooser hands the solver the same model and
+    the same offsets every time, so four solves were four measurements of one
+    answer at ~55-60 s each — 252 s for this module (159's own pre-change
+    measurement). `_golden.solver_plan_or_cache` keeps it honest rather than
+    silent: the first call reaches the **real** generator (a golden board that
+    stopped solving still fails this module), the others get a fresh copy of that
+    one plan, and a caller with anything other than the golden board's own inputs
+    falls through to the real generator.
+
+    A copy, not the shared object, because `replay_or_solver` appends its
+    "which engine ran" note to `plan.notes` — sharing one plan here would make
+    each case read the previous cases' notes.
+
+    Nothing that is under test is patched away: branch selection, the returned
+    source string, and the per-branch note are all still the chooser's own.
+    """
+    patch = pytest.MonkeyPatch()
+    patch.setattr(
+        "boardwise.engines.generate.generate_plan", _golden.solver_plan_or_cache
+    )
+    yield
+    patch.undo()
 
 
 def test_replay_is_the_default_engine(golden):

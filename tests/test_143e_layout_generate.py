@@ -19,6 +19,8 @@ import re
 
 import pytest
 
+import _golden
+
 from boardwise.core.model import Component, DesignModel, Net, Pin
 from boardwise.core.values import _CAP_UNITS
 from boardwise.engines import generate, layout
@@ -31,9 +33,6 @@ from boardwise.engines.generate import (
     generate_plan,
 )
 from boardwise.engines.layout import Placement, Rect, RoutedNet
-from boardwise.parsers.schematic import build_pin_offsets, build_schematic_model
-
-GOLDEN = "tests/fixtures/ch340_golden.epro2"
 
 
 def _module_source(module) -> str:
@@ -104,10 +103,15 @@ def _pinless_row_board():
 
 @pytest.fixture(scope="module")
 def golden_auto_plan():
-    """One golden plan, built once: the solver path is ~45 s per call."""
-    model = build_schematic_model(GOLDEN)
-    offsets = canvas_pin_offsets(build_pin_offsets(GOLDEN))
-    return model, generate_plan(model, offsets)
+    """The golden plan — one solve for the whole **session** (159).
+
+    The solver path is 45-60 s per call, so this file used to cache the build for
+    its own two consumers; since 159 the cache lives in ``tests/_golden.py`` and
+    is shared with every other module that solves this board — they were each
+    solving it for themselves. The fixture's shape — ``(model, plan)`` — is
+    unchanged.
+    """
+    return _golden.golden_model(), _golden.golden_plan()
 
 
 # --------------------------------------------------------------------------
