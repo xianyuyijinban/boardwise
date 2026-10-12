@@ -154,6 +154,37 @@ FLAG_READINGS: dict[str, tuple[str, str]] = {
     "PWR-SEC_12V": ("rail", "SEC_12V"),
 }
 
+#: **178**: the per-domain **ground** flags the book gained (173 sec.C.5's
+#: residual — the library only carried one ground flag, so `PGND` and `SEC_GND`
+#: were drawn with one shared symbol). 岳 ruled the naming (2026-10-12: 基础域
+#: PGND/AGND/DGND, 特殊地 xxx-GND), and 173C's compiler asks for `PWR-<net>` on a
+#: page whose grounds fall in more than one domain, so the book carrying these two
+#: refs is exactly what turns that mapping on for the flyback page.
+#:
+#: ``symbolRef -> the net it names``. They are held to a *different* contract
+#: than the three 121b flags, and the difference is the honest part: nobody has
+#: placed a `Ground-PGND` through this repo, so their glyph box is **inherited**
+#: from `PWR-GND` (the ground family's measured extent) rather than measured
+#: again, and the tests below check that the inheritance is byte-exact and said
+#: out loud. What *is* measured per net is that the host library carries a
+#: net-named member of the one ground family — see
+#: :data:`HOST_NET_FLAG_READING`.
+PER_DOMAIN_GROUND_FLAGS: dict[str, str] = {
+    "PWR-PGND": "PGND",
+    "PWR-SEC_GND": "SEC_GND",
+}
+
+#: The live reading in which the host resolves a ground flag to its own library
+#: symbol **by the net name**: 毕设 FOC P1's `sch.geometry` answer of
+#: 2026-09-21, where net `PGND` is carried by `Ground-PGND` (5 placements),
+#: `AGND` by `Ground-AGND` (7) and `GND` by `Ground-GND` (33) — a board drawn in
+#: the editor, so the symbols are the editor's own. It does **not** settle which
+#: symbol `sch.place_power` picks for an arbitrary ground net (the API's own
+#: mapping is unmeasured — no probe in this tree ever placed a non-`GND` ground
+#: flag through it), which is why the per-domain profiles claim the family box
+#: and not a second measurement.
+HOST_NET_FLAG_READING = ROOT / "outputs" / "013_p2_geometry_bisheP1.json"
+
 #: 147: the reading the library's `body` boxes now come from, and the tool that
 #: folds it back into symbol-local coordinates. **The tool is imported** rather
 #: than re-implemented here: `tools/118_measure_profiles.py` is what *builds* the
@@ -204,6 +235,31 @@ def _measured_bodies() -> dict[str, tuple[float, float, float, float]]:
         for entry in book["profiles"]
     })
     return dict(tool.read_bboxes(book["profiles"]))
+
+
+def _host_net_flag_symbols() -> dict[str, str]:
+    """``{net: the symbol name the host put on it}``, from a live board reading.
+
+    **178**: the claim these per-domain profiles rest on is that the host library
+    carries a net-named member of the one ground family, so that ``PGND`` and
+    ``SEC_GND`` are two symbols and not one shared glyph. The evidence is a board
+    drawn in the editor itself (`HOST_NET_FLAG_READING`, 毕设 FOC P1,
+    2026-09-21): every net flag whose component name starts with ``Ground`` is
+    recorded with the net it carries. A net the reading does not contain is
+    simply absent — "this board has no such net" is not "the host has no such
+    symbol", and the caller branches on exactly that difference.
+    """
+    payload = json.loads(HOST_NET_FLAG_READING.read_text(encoding="utf-8"))
+    out: dict[str, str] = {}
+    for component in payload["components"]:
+        state = component.get("state", component)
+        if state.get("ComponentType") != "netflag":
+            continue
+        name = str((state.get("Component") or {}).get("name", ""))
+        net = str(state.get("Net") or "")
+        if name.startswith("Ground-") and net:
+            out[net] = name
+    return out
 
 
 def _flag_readings() -> tuple[dict[str, tuple[float, float]], dict[str, float]]:
@@ -529,10 +585,12 @@ def test_no_profile_carries_a_hand_written_pin_tip():
             # checks against those files. Here the requirement is the one that
             # keeps that checkable: the flag is registered against a live
             # reading, and its own prose names it.
-            assert symbol_ref in FLAG_READINGS, (
+            assert symbol_ref in FLAG_READINGS or symbol_ref in PER_DOMAIN_GROUND_FLAGS, (
                 f"{symbol_ref}: a pin-less profile is a flag, and every flag "
                 "profile has to be registered against the live reading that "
-                f"measured its glyph (registry: {sorted(FLAG_READINGS)})"
+                f"measured its glyph (registries: {sorted(FLAG_READINGS)} and, "
+                f"for 178's per-domain ground flags, "
+                f"{sorted(PER_DOMAIN_GROUND_FLAGS)})"
             )
             prose = entry["title"] + "\n" + "\n".join(entry["notes"])
             for cited in (
@@ -637,8 +695,19 @@ def test_every_profile_says_where_its_geometry_came_from():
     reading = _measured_bodies()
     assert len(reading) >= 16, sorted(reading)
     for entry in book["profiles"]:
-        assert "measured 2026-10-04" in entry["title"] or "measured on the live host" in entry["title"], (
-            f"{entry['symbolRef']}: the title does not say the pins are measured"
+        # 178: a per-domain ground flag has no reading of its own, so the claim its
+        # title has to make is the opposite one — that the box is **inherited** —
+        # and it says so in capitals. The two older phrasings stay for the profiles
+        # that really were measured (118/121b and their successors).
+        declared = (
+            "measured 2026-10-04" in entry["title"]
+            or "measured on the live host" in entry["title"]
+            or (entry["symbolRef"] in PER_DOMAIN_GROUND_FLAGS
+                and "INHERITED" in entry["title"])
+        )
+        assert declared, (
+            f"{entry['symbolRef']}: the title says neither that the geometry is "
+            "measured nor (for 178's per-domain flags) that it is inherited"
         )
         source = _body_source(entry)
         assert source, (
@@ -646,6 +715,33 @@ def test_every_profile_says_where_its_geometry_came_from():
             "'measured:', so a reader cannot tell a measured body from a derived "
             "lower bound"
         )
+        if entry["symbolRef"] in PER_DOMAIN_GROUND_FLAGS:
+            # 178: a per-domain ground flag has no reading of its own (nobody has
+            # placed one through this repo), and its box is **inherited** from the
+            # ground family flag. The note has to say so, name the profile it was
+            # copied from, and cite a file that exists — the same "a provenance a
+            # reader can find" rule, with the honest kind of provenance for a
+            # profile whose geometry is a copy.
+            assert "inherited" in source, (
+                f"{entry['symbolRef']}: 178's per-domain ground flag carries the "
+                f"ground family's box by inheritance, so its note has to say so "
+                f"rather than imply a measurement of its own: {source!r}"
+            )
+            assert "PWR-GND" in source, (
+                f"{entry['symbolRef']}: the note inherits the box but does not name "
+                f"the profile it inherited it from: {source!r}"
+            )
+            named = [
+                token.strip("(),;:.")
+                for token in source.split()
+                if token.startswith("outputs/")
+                and (ROOT / token.strip("(),;:.")).exists()
+            ]
+            assert named, (
+                f"{entry['symbolRef']}: nothing in this profile names a reading "
+                "file that exists, so its provenance cannot be checked"
+            )
+            continue
         if entry["symbolRef"] in reading:
             # 147: measured, and the note has to say *which* measurement. A note
             # that claims a host bbox reading while carrying a box nobody read
@@ -717,6 +813,62 @@ def test_every_body_box_is_the_extent_the_host_reports():
     for entry in book["profiles"]:
         ref = entry["symbolRef"]
         box = [round(value, 4) for value in entry["body"]]
+        if ref in PER_DOMAIN_GROUND_FLAGS:
+            # 178: **no reading covers this ref** — nobody has placed a
+            # ``Ground-PGND`` through this repo — so this profile's box is not its
+            # own measurement and must not pretend to be one. It is the ground
+            # family's measured box, inherited from ``PWR-GND`` unchanged, so it
+            # is checked **against that same reading**: a per-domain flag that
+            # stated a different rectangle than the glyph the host draws for
+            # ground would reserve the wrong room while looking plausible.
+            from boardwise.core.symbolprofile import (
+                SymbolProfile, flag_glyph_kind,
+            )
+
+            profile = SymbolProfile.from_dict(entry)
+            assert flag_glyph_kind(profile) == "gnd", (
+                f"{ref}: 178's per-domain flags are ground flags, but this one "
+                "reads as the rail family (the glyph would hang on the wrong side)"
+            )
+            assert box == [round(value, 4) for value in reading["PWR-GND"]], (
+                f"{ref}: body is {entry['body']} but this profile inherits the "
+                f"ground family's box, which the host reading folds to "
+                f"{[round(value, 4) for value in reading['PWR-GND']]} — a copy that "
+                "has drifted from the thing it was copied from"
+            )
+            assert box[1] == 0.0 and box[3] > box[1] and box[2] > box[0], (
+                f"{ref}: the inherited flag box {entry['body']} does not start at "
+                "the connection (y = 0) and run away from it"
+            )
+            net = PER_DOMAIN_GROUND_FLAGS[ref]
+            low, high = glyph["gnd"]
+            assert high < 0.0, (
+                f"{ref}: it is the ground family, but the glyph probe measures the "
+                f"ground glyph at {low:g}..{high:g} from the connection"
+            )
+            assert page_rotation.get(net) == 180.0, (
+                f"岳's own page draws his {net} flags at rotation "
+                f"{page_rotation.get(net)!r}, not 180 — the ground family's pose is "
+                "a reading, and this profile claims it"
+            )
+            # And the net really is a member of the host's own ground family, by
+            # the net name: absent from this reading is a *different* claim from
+            # "the host has no such symbol", so absence is recorded, not failed.
+            host = _host_net_flag_symbols()
+            covered = [name for name in PER_DOMAIN_GROUND_FLAGS.values() if name in host]
+            assert covered, (
+                f"{HOST_NET_FLAG_READING.relative_to(ROOT).as_posix()} no longer "
+                "resolves any of the nets these profiles name, so the per-domain "
+                f"claim has lost its evidence ({sorted(host)})"
+            )
+            if net in host:
+                assert host[net] == f"Ground-{net}", (
+                    f"the host's own reading carries net {net} with the symbol "
+                    f"{host[net]!r}, not Ground-{net} — the net-name convention the "
+                    "per-domain profiles rest on has moved"
+                )
+            families["gnd"] = (box[0], box[1], box[2], box[3])
+            continue
         if ref not in reading:
             assert ref == "C0805", (
                 f"{ref}: no reading covers this profile, and the only symbol the "
@@ -912,6 +1064,14 @@ def test_the_113_shape_intent_is_kept_alongside_the_measurement():
         # test exists to refuse: 118 never measured a flag.
         if entry["symbolRef"] in FLAG_READINGS:
             expected = "[121b] "
+        elif entry["symbolRef"] in PER_DOMAIN_GROUND_FLAGS:
+            # 178's per-domain ground flags: their box is inherited from the
+            # ground family flag (PWR-GND) rather than measured again, and their
+            # measurement line says which reading the host's net→symbol
+            # resolution comes from. Their own batch marker, for the same reason
+            # 121b's and 145c's are their own: writing `[121b] ` here would claim
+            # 121b measured a profile this book did not have.
+            expected = "[178] "
         elif entry["symbolRef"] == SWAPPED_REF:
             expected = "[118c] "
         elif entry["symbolRef"] == C0603W_REF:

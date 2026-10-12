@@ -760,6 +760,36 @@
       ]
     },
     {
+      "symbolRef": "PWR-PGND",
+      "title": "Ground flag for the source-side power ground (PGND) — 178: 岳's naming rule of 2026-10-12 is 基础域 PGND/AGND/DGND, 特殊地 xxx-GND, and a per-domain ground flag is the net's own name under the budget's PWR- prefix, so the source-side family gets PWR-PGND (a name already in use on an existing board is not renamed). No pins: the connection point IS the origin — a pin-less profile is how the compiler identifies a flag. 173C's compiler asks for this ref on a page whose grounds fall in more than one domain (drawcompiler._flag_ref), so this entry is what makes PGND and SEC_GND hang two flags instead of one shared PWR-GND; the book carries it and the mapping takes effect (173 sec.C.5's residual).\n[178] the glyph box is INHERITED, not separately measured, and that is stated rather than implied: the host draws one ground glyph family — bars hanging 9.5..19.5 units BELOW the connection (outputs/099/libprobe 2026-10-03; outputs/089/draw/flag_orientation.txt) — and 岳's own hand-drawn P1 page (outputs/111/geo_P1_live.json, 2026-10-04) draws his PGND flags at rotation 180, so this profile's body is the ground family's measured extent exactly as this book's PWR-GND states it (folded back from the host's per-primitive bbox, outputs/147/12_live_bodies.txt). What IS measured per net is that the host resolves a Ground flag to its own symbol by the net name: on 毕设 FOC P1's live geometry (outputs/013_p2_geometry_bisheP1.json, 2026-09-21) net PGND is carried by Ground-PGND (five placements) and net AGND by Ground-AGND (seven) — so the per-domain symbol exists in the host library and the net name is what picks it.",
+      "body": [
+        -10.5,
+        0.0,
+        10.5,
+        19.5
+      ],
+      "pins": [],
+      "notes": [
+        "measured: body box = this book's ground-family box, inherited unchanged from PWR-GND (host per-primitive bbox folded through the pose, 147) — outputs/147/12_live_bodies.txt; 178 copied it rather than measuring a symbol nobody has placed, because the host has one ground glyph and names it after the net (outputs/013_p2_geometry_bisheP1.json: PGND -> Ground-PGND, AGND -> Ground-AGND)",
+        "flag glyph convention of the compiler (the host places a power flag by kind+net, never from a library profile); the family is read from the symbolRef token PGND by symbolprofile.flag_glyph_kind"
+      ]
+    },
+    {
+      "symbolRef": "PWR-SEC_GND",
+      "title": "Ground flag for the secondary-side ground (SEC_GND) — 178: 岳's naming rule of 2026-10-12 is 基础域 PGND/AGND/DGND, 特殊地 xxx-GND, so a special ground keeps the net's own name under the budget's PWR- prefix — the secondary ground is already spelled SEC_GND and is not renamed, it only gains its own flag profile. No pins: the connection point IS the origin — a pin-less profile is how the compiler identifies a flag. 173C's compiler asks for this ref on a page whose grounds fall in more than one domain (drawcompiler._flag_ref); on the flyback page SEC_GND keys its own domain (focground.domain_of('SEC_GND') is '', so the name is the domain) and PGND keys 'power', so the two families are exactly the two flags this book now carries.\n[178] the glyph box is INHERITED, not separately measured, and that is stated rather than implied: the host draws one ground glyph family — bars hanging 9.5..19.5 units BELOW the connection (outputs/099/libprobe 2026-10-03; outputs/089/draw/flag_orientation.txt) — and 岳's own hand-drawn P1 page (outputs/111/geo_P1_live.json, 2026-10-04) draws his SEC_GND flags at rotation 180, so this profile's body is the ground family's measured extent exactly as this book's PWR-GND states it (folded back from the host's per-primitive bbox, outputs/147/12_live_bodies.txt). What IS measured per net is that the host resolves a Ground flag to its own symbol by the net name: on 毕设 FOC P1's live geometry (outputs/013_p2_geometry_bisheP1.json, 2026-09-21) net PGND is carried by Ground-PGND and net AGND by Ground-AGND, i.e. a per-domain ground symbol is a net-named member of the one ground family (no SEC_GND is placed in that reading; that net is this library's, not that board's).",
+      "body": [
+        -10.5,
+        0.0,
+        10.5,
+        19.5
+      ],
+      "pins": [],
+      "notes": [
+        "measured: body box = this book's ground-family box, inherited unchanged from PWR-GND (host per-primitive bbox folded through the pose, 147) — outputs/147/12_live_bodies.txt; 178 copied it rather than measuring a symbol nobody has placed, because the host has one ground glyph and names it after the net (outputs/013_p2_geometry_bisheP1.json: PGND -> Ground-PGND, AGND -> Ground-AGND)",
+        "flag glyph convention of the compiler (the host places a power flag by kind+net, never from a library profile); the family is read from the symbolRef token GND by symbolprofile.flag_glyph_kind"
+      ]
+    },
+    {
       "symbolRef": "PWR-HVDC",
       "title": "Rail flag for the HVDC input rail (Power family) — 121b, 岳-ruled: the rail is stated by one vertical flag instead of being named by a label at every pin (tasks/121-hand-plan-next.md: 岳's 电源轨用竖直旗标; 069 sec.7: 旗标一定要竖直摆放). No pins: the origin IS the connection point — a pin-less profile is how the compiler identifies a flag — and the glyph hangs on the rail family's own side of it.\n[121b] glyph box and pose measured on the live host, not assumed: 岳's own hand-drawn P1 page (outputs/111/geo_P1_live.json, 2026-10-04) holds his HVDC and SEC_12V rail flags at rotation 0 with every ground flag at 180 — nothing on the sheet is laid flat; which side the rail family hangs on is read off the host's own Power-5V flag at rotation 0 (outputs/099/libprobe 2026-10-03 and outputs/089/draw/flag_orientation.txt, both measuring the bar at 4.5..10.5 units ABOVE the connection; outputs/064_railflag re-measured the family on the canvas: a 10-wide bar 5..10 above), cross-checked against 岳's 110 page render (outputs/111/render_P1.svg: his Power-5V flag at (470,560) carries its bar at canvas y = 570, i.e. +10).",
       "body": [

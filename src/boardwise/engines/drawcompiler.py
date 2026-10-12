@@ -5376,12 +5376,22 @@ def _flag_ref(ctx: _Context, net_id: str, cls: str) -> str:
     symbol is added to the book. The residual (two domains, one glyph, library
     without the split) is **not** closed here; a library that carries the symbols
     is what closes it, and the whitelist for this batch cannot add them.
+
+    178: ``gnd_flag`` being **empty** is the budget's own way of saying "this
+    drawing names no ground with a flag" (the pre-121b shape a ground net falls
+    back to a label in), and it stays that switch no matter what the book
+    carries — a page compiled with ``gnd_flag=""`` used to express "no ground
+    flags" and, once a book carries per-domain entries, would otherwise draw them
+    again through the branch below. Off means off; the library cannot overrule a
+    scenario's statement about itself. (Found by ``tests/test_120``'s two
+    "no ground flag" scenarios after 178 added the two profiles; with a
+    non-empty ``gnd_flag`` — the default — this condition changes nothing.)
     """
     own = f"{ctx.budget.power_flag_prefix}{net_id}"
     if cls != "gnd":
         return own
     gnd_flag = ctx.budget.gnd_flag
-    if own == gnd_flag or len(_ground_domains(ctx)) <= 1:
+    if not gnd_flag or own == gnd_flag or len(_ground_domains(ctx)) <= 1:
         return gnd_flag
     return own if ctx.book.get(own) is not None else gnd_flag
 
