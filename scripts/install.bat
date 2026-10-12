@@ -140,7 +140,8 @@ if "%DOC%"=="0" (
 ) else (
   echo ============================================================================
   echo  doctor 退出码 %DOC%：现在有红项。
-  echo  首装时这是正常的：daemon 还没起、编辑器还没装扩展。
+  echo  首装时这是正常的：编辑器还没装扩展。（daemon 那条现在会自己解决——doctor 需要桥，
+  echo  发现 daemon 不在就自己拉起来、等它就绪；拉起失败才会红。）
   echo  每条红项下面都有 → 开头的修复建议，照着做；四步都做完再跑一次 doctor。
   echo ============================================================================
 )
@@ -150,8 +151,9 @@ echo   1. 给编辑器装扩展：立创 EDA Pro - 扩展 - 导入扩展，选中 .eext 文件
 echo      * 同事已经给了 boardwise-connector-版本号.eext：直接用那个
 echo      * 没有的话：双击 scripts\build-connector.bat 自己打一个，需要 Node.js 20.15 以上
 echo      * 导入之后必须完全关掉编辑器再重新打开，不然可能还在跑旧版本
-echo   2. 双击 scripts\start-daemon.bat 起 daemon，那个窗口要保持开着
-echo      窗口里每 60 秒会打一次连接状态；首次连上会自动配对并打印一条带指纹的公告
+echo   2. （可跳过）双击 scripts\start-daemon.bat 在前台起 daemon——需要桥的命令发现它不在
+echo      会自己拉起来并等它就绪（分离进程，输出写 %USERPROFILE%\.boardwise\log\）；
+echo      这一步只是让你盯着那个窗口：每 60 秒的连接状态、首次连上那条带指纹的配对公告
 echo   3. 复查：  "%VPY%" -m boardwise.cli doctor
 echo   4. 第一次审查：
 echo      "%VPY%" -m boardwise.cli review 你的工程.epro2 --json report.json --md report.md

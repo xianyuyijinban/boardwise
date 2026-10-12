@@ -37,7 +37,7 @@
 | 1 | 装 Python 3.10+ | 命令行里 `python --version` 有输出 |
 | 2 | 双击 `scripts\install.bat` | 最后打印"下一步"，`.venv` 建好、boardwise 装上 |
 | 3 | 编辑器里导入 `boardwise-connector-*.eext`，**然后完全重启编辑器** | 顶栏出现 `boardwise` 菜单 |
-| 4 | 双击 `scripts\start-daemon.bat`，窗口保持开着 | 窗口里出现带指纹的"配对"公告 |
+| 4 | （可选）双击 `scripts\start-daemon.bat`，窗口保持开着 | 窗口里出现带指纹的"配对"公告；不做这步也行——需要桥的命令会自己拉起 daemon（见第 4 步） |
 | 5 | 命令行跑 `boardwise doctor` | 八行全绿（第一行是离线安装版本预检，编辑器太旧会先在这里红） |
 
 > **命令怎么写**：本文里的 `boardwise xxx` 都指 boardwise 命令。装完之后它不在你的 PATH 上，
@@ -88,7 +88,9 @@ python --version
 
 预期：窗口最后停在"下一步，按顺序："那段话。在第 5 步它会停下来等你按一下回车。在这之前会看到一句
 `doctor 退出码 1：现在有红项。`——**首次装完 doctor 是红的很正常**，
-因为 daemon 还没起、编辑器还没装扩展；脚本会把每条红项的修复建议列出来，照着做即可。
+因为编辑器还没装扩展（第 3 步没做）；daemon 那一条现在会自己解决——doctor 需要桥，
+发现 daemon 不在就自己拉起来（输出写到 `%USERPROFILE%\.boardwise\log\daemon-<日期>.log`），
+所以首次装完那一条通常已经是绿的。脚本会把每条红项的修复建议列出来，照着做即可。
 
 不对怎么办（脚本会直接告诉你原因，这里列最常见的）：
 
@@ -142,9 +144,23 @@ python --version
 
 ---
 
-## 第 4 步 · 启动 daemon 并配对
+## 第 4 步 · daemon 与配对（这一步现在可以跳过）
 
-双击 `scripts\start-daemon.bat`。会开一个标题为 **boardwise daemon** 的窗口：
+**你不需要手动起 daemon**：任何需要桥的命令（`bridge status`、`checkup --live`、
+`review --mark` …）发现 127.0.0.1:61190 上没人应答，就自己把它拉起来、等它就绪再继续。
+它是以**分离进程**起的（不挂在你的终端上，关终端不影响它），输出写在
+
+```text
+%USERPROFILE%\.boardwise\log\daemon-<日期>.log
+```
+
+命令会告诉你它拉起了 daemon 和这个日志在哪；**没拉起来**时它会把日志末尾几行打在
+报错上面，那就是原因。自己管 daemon 的部署（计划任务、服务）用环境变量
+`BOARDWISE_NO_AUTO_DAEMON=1` 关掉自动拉起，行为回到从前——命令只管报
+`daemon not reachable`，起不起由你决定。
+
+想在**前台**盯着它、亲眼看那条配对公告，才需要双击 `scripts\start-daemon.bat`：
+会开一个标题为 **boardwise daemon** 的窗口：
 
 ```text
 boardwise bridge: listening on 127.0.0.1:61190
@@ -154,13 +170,16 @@ boardwise bridge: listening on 127.0.0.1:61190
   waiting for the EasyEDA extension to connect (Ctrl-C to stop)
 ```
 
-- **这个窗口要保持开着**：关掉它或按 `Ctrl-C` 就等于把桥拆了。
+- **这个窗口要保持开着**：关掉它或按 `Ctrl-C` 就等于把桥拆了（自动拉起的那份不受影响，
+  它下次会被命令再拉一次）。
 - 窗口里**每 60 秒会打印一次连接状态**（只打含 `connector:` 的那两行），
   这样不用切窗口就知道编辑器连上没有。
-- 编辑器里的扩展连上来的**第一次**会自动配对，daemon 窗口打印一条带指纹（8 位）的公告
-  ——那就是"这台编辑器被信任了"。之后只有持有那个 token 的连接能进来。
+- 编辑器里的扩展连上来的**第一次**会自动配对：前台的窗口打印一条带指纹（8 位）的公告
+  ——那就是"这台编辑器被信任了"；自动拉起的那份把这条公告写进上面的日志文件里。
+  之后只有持有那个 token 的连接能进来。
 - 要停：双击 `scripts\stop-daemon.bat`，或者直接关掉那个窗口。
-- 换端口：先设环境变量 `BOARDWISE_PORT`，`start-daemon.bat` / `stop-daemon.bat` 都认它。
+- 换端口：先设环境变量 `BOARDWISE_PORT`，`start-daemon.bat` / `stop-daemon.bat` 都认它；
+  命令行上用 `bridge --port <端口>`（自动拉起的那份也会起在你指的这个端口上）。
 
 配对出问题（换了机器、想重新配对）：双击停止脚本后，在仓库目录里敲
 
@@ -168,7 +187,7 @@ boardwise bridge: listening on 127.0.0.1:61190
 .venv\Scripts\python.exe -m boardwise.cli bridge revoke
 ```
 
-再重新启动 daemon，下一个连上来的扩展就会被信任。
+再重新启动 daemon（或随便跑一条需要桥的命令），下一个连上来的扩展就会被信任。
 
 > 截图位：`docs/images/install-04-daemon-pairing.png` —— daemon 窗口的启动横幅与那条配对公告。
 
@@ -186,7 +205,7 @@ boardwise bridge: listening on 127.0.0.1:61190
 
 | 检查 | 在问什么 | 红了怎么办 |
 |---|---|---|
-| daemon 可达 | 本机能连上 daemon | 跑第 4 步；端口不同时加 `--port` |
+| daemon 可达 | 本机能连上 daemon（不在就自动拉起） | 自动拉起没成功：看日志尾部 `%USERPROFILE%\.boardwise\log\daemon-<日期>.log`，或前台跑一次 `boardwise bridge start` 看它怎么说；端口不同时加 `--port` |
 | 扩展已连接 | 编辑器里的扩展真的连上来了 | 打开编辑器、确认扩展启用；不行重做第 3 步 |
 | 关键方法在位 | 编辑器暴露了 harness 要用的 5 个接口 | 编辑器太旧，升级立创 EDA Pro |
 | 编辑器版本 ≥ 3.2.149 | 低于实测过的最低版本就没有证据 | 升级立创 EDA Pro |
@@ -213,7 +232,7 @@ boardwise bridge: listening on 127.0.0.1:61190
 rem 审查一个工程备份，同时生成人和机器都能读的报告
 .venv\Scripts\python.exe -m boardwise.cli review D:\导出\你的板子.epro2 --json report.json --md report.md
 
-rem 把发现画到编辑器画布上（需要第 4 步的 daemon 开着、编辑器里打开着对应原理图页）
+rem 把发现画到编辑器画布上（需要 daemon、编辑器里打开着对应原理图页；daemon 不在会自动拉起）
 .venv\Scripts\python.exe -m boardwise.cli review-mark report.json
 
 rem 看完清掉标记
@@ -243,8 +262,8 @@ rem 看完清掉标记
 | `python` 命令找不到 / 弹去商店 | 第 1 步，重装并勾 `Add python.exe to PATH`，然后重开命令行窗口 |
 | `pip install` 报网络错 | 换镜像（见第 2 步），或确认代理设置 |
 | 顶栏没有 `boardwise` 菜单 | 第 3 步没生效：重导 `.eext` 并**完全重启编辑器** |
-| 任何 `boardwise bridge …` 说 `daemon not reachable` | 第 4 步的窗口还开着吗（用 `scripts\stop-daemon.bat` 确认/停止） |
-| 报 `UNKNOWN_ACTION` | daemon 是旧的：按 `Ctrl-C` 停掉再重新双击 `start-daemon.bat` |
+| 任何 `boardwise bridge …` 说 `daemon not reachable` | 自动拉起也没成功——看报错上面那几行日志尾部（文件在 `%USERPROFILE%\.boardwise\log\`）；或前台跑 `boardwise bridge start` 看原因。真的不需要自动拉起就用 `BOARDWISE_NO_AUTO_DAEMON=1` |
+| 报 `UNKNOWN_ACTION` | daemon 是旧的：先停掉它（`scripts\stop-daemon.bat`），再随便跑一条需要桥的命令——它用你手上这份新代码重新拉起；不想自动拉起就前台跑 `boardwise bridge start` |
 | 报 `NO_CONNECTOR` | 编辑器没连上：`boardwise → About...` 看状态，不行重做第 3 步 |
 | 报 `PAGE_MISMATCH` | 编辑器焦点不在你以为的那一页/那块板上：切过去，或先 `bridge call --action doc.list` |
 | 打标成功但画布上看不到 | 标记画在**最后聚焦的那块画布**上：用 `--page <pageUuid>` 指定，或先点一下目标页 |

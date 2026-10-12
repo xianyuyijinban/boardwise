@@ -35,9 +35,12 @@
    （第二行是你这份 exe 里**自带**的扩展版本号，报障时连这两行一起发）。
 3. 装扩展：打开立创 EDA Pro，在扩展/插件面板里导入 `boardwise-connector-0.4.19.eext`。
    预期：菜单栏出现 boardwise（`关于…` / `Reconnect` / `Stop`）。
-4. 起桥：开一个命令行窗口，运行 `D:\boardwise\boardwise.exe bridge start`。
+4. 起桥（**可以跳过**）：需要桥的命令发现 daemon 不在会自己把它拉起来（分离进程，
+   输出写 `~\.boardwise\log\daemon-<日期>.log`）。想在前台盯着它才运行
+   `D:\boardwise\boardwise.exe bridge start`。
    预期：打印 `boardwise bridge: listening on 127.0.0.1:61190` 与
    `waiting for the EasyEDA extension to connect (Ctrl-C to stop)`；**这个窗口别关**（它就是桥，Ctrl-C 停）。
+   （自己管 daemon 的部署用环境变量 `BOARDWISE_NO_AUTO_DAEMON=1` 关掉自动拉起。）
 5. 回编辑器，点一次 boardwise 菜单里的 `Reconnect`（编辑器启动时扩展可能先于 daemon 醒来）。
    预期：在**另一个**命令行窗口里跑 `D:\boardwise\boardwise.exe bridge status`，看到
    `connector: connected` 与你打开的工程名。
@@ -114,9 +117,12 @@ boardwise 的编辑器插件是一个 `.eext` 文件（就是一个 zip）。它
 
 ---
 
-## 第 3 步 · 启动 daemon
+## 第 3 步 · 启动 daemon（现在可以跳过）
 
-boardwise 的"桥"由两个进程组成：编辑器里的扩展（第 2 步）+ 本机上的 daemon。现在启动 daemon。
+boardwise 的"桥"由两个进程组成：编辑器里的扩展（第 2 步）+ 本机上的 daemon。
+**这一步你不需要做**：任何需要桥的命令（`bridge status`、`checkup --live`…）发现 daemon
+不在，会自己 detached 把它拉起来、等它就绪再继续，输出写
+`~\.boardwise\log\daemon-<日期>.log`。想在前台盯着它、亲眼看那条配对公告，才敲：
 
 ```bash
 boardwise bridge start
@@ -135,13 +141,17 @@ boardwise bridge: listening on 127.0.0.1:61190
 几秒内编辑器里的扩展会连上来，**首次**连接时这个窗口会打印一条很显眼的配对公告
 （"这台编辑器被信任了"之类，带一个 8 位指纹）。这就是配对：第一次谁连上来就信谁，之后只有那个 token 能进。
 
-**这个窗口要一直开着**（关掉就等于把桥拆了；想停就按 Ctrl-C）。
+**这个窗口要一直开着**（关掉就等于把桥拆了；想停就按 Ctrl-C）。自动拉起的那份不受影响，
+它下一次被命令再拉起来。
 
-注意两条：
+注意三条：
 
 - daemon 只管转发，不碰你的工程文件；改工程的动作都会写进 `audit` 目录里的日志。
 - **改过代码/换过版本后要重启 daemon**：动作清单是启动时读一次的常量，跑着旧 daemon 会出现
-  "unknown action" 这种看不懂的报错。
+  "unknown action" 这种看不懂的报错。停掉旧的之后随便跑一条需要桥的命令即可——它用你现在
+  这份代码重新拉起。
+- 自己管 daemon 的部署（计划任务、服务）用 `BOARDWISE_NO_AUTO_DAEMON=1` 关掉自动拉起，
+  行为回到从前：命令只报 `daemon not reachable`，起不起由你决定。
 
 不对怎么办：编辑器没连上，`About…` 会显示 `idle` 或 `NEVER RAN` —— 回第 2 步确认扩展装好并重启过编辑器。
 
@@ -170,7 +180,7 @@ boardwise doctor
 ```text
   PASS 编辑器安装版本 ≥ 3.2.149（离线读安装目录，不用扩展）
          安装树 D:\lceda-pro 的包清单写着 3.2.186.b52e3e87（离线读 resources/app/package.json，没有经过桥）
-  PASS daemon 可达（ping，daemon 无 HTTP /health）
+  PASS daemon 可达（ping，daemon 无 HTTP /health；不在会自动拉起）
          127.0.0.1:61190 的 daemon 已应答 ping
   PASS 扩展已连接（WebSocket 已注册到 daemon）
          daemon 上注册着一个 connector，配对指纹 ab12cd34
@@ -193,7 +203,7 @@ boardwise doctor: 8/8 项通过
 | 行 | 在问什么 | 红了怎么办 |
 |---|---|---|
 | 编辑器安装版本（离线） | 装在本机的编辑器达不达标——不用扩展、不用 daemon，装完立创就能查 | 先升级编辑器到 ≥3.2.149，其余检查都排在它后面 |
-| daemon 可达 | 本机能连上 daemon（`ping`） | 回第 3 步启动它；端口不是 61190 时加 `--port` |
+| daemon 可达 | 本机能连上 daemon（`ping`；不在就自动拉起） | 自动拉起也没成功：看报错上面的日志尾部（`~\.boardwise\log\`），或前台跑一次 `boardwise bridge start` 看原因；端口不是 61190 时加 `--port` |
 | 扩展已连接 | 编辑器里的扩展真的把 socket 注册上来了 | 打开编辑器、确认扩展启用；再不行重做第 2 步 |
 | sys.probe 关键方法在位 | 编辑器真的暴露了 harness 要用的 5 个方法 | 编辑器太旧或版本不对，升级编辑器 |
 | 编辑器版本 ≥ 3.2.149 | 正在跑的这个编辑器达不达标（经桥复核，与离线项互为印证） | 升级立创 EDA Pro；刚升级过就重启编辑器 |
@@ -344,7 +354,7 @@ CI 里尤其别当通过（073 起；有 ERROR 时仍是 `1`）。
 同样退 `3`（075，与 `checkup` 的 `coverage.modelEmpty` 对齐）；它和"根本没拿到模型"
 （`在线状态不可陈述`）是两句不同的话，两句都不许读成通过。
 
-**5.2 把发现画到编辑器上**（需要第 3 步的 daemon 正在跑，并且编辑器里打开着对应的原理图页）：
+**5.2 把发现画到编辑器上**（需要 daemon——不在会自动拉起——并且编辑器里打开着对应的原理图页）：
 
 ```bash
 boardwise review-mark report.json
@@ -435,8 +445,8 @@ fab/
 
 | 症状 | 先看什么 |
 |---|---|
-| 任何 `boardwise bridge …` 说 `daemon not reachable` | 第 3 步的窗口还开着吗 |
-| 报 `UNKNOWN_ACTION` | daemon 是旧版本：Ctrl-C 重启（第 3 步） |
+| 任何 `boardwise bridge …` 说 `daemon not reachable` | 自动拉起也没成功——看报错上面那几行日志尾部（`~\.boardwise\log\`），或前台跑 `boardwise bridge start` 看原因。不想自动拉起就用 `BOARDWISE_NO_AUTO_DAEMON=1` |
+| 报 `UNKNOWN_ACTION` | daemon 是旧版本：停掉它再跑一条需要桥的命令（用新代码重新拉起），或在第 3 步的窗口里 Ctrl-C 后重启 |
 | 报 `NO_CONNECTOR` | 编辑器没连上：`About…` 看状态，不行就重做第 2 步 |
 | 报 `PAGE_MISMATCH` | 编辑器焦点不在你以为的那一页/那块板上：切过去，或先 `bridge call --action doc.list` |
 | 打标成功但画布上看不到 | 标记画在**最后聚焦的那块画布**上；用 `--page <pageUuid>` 明确指定，或先点一下目标页 |

@@ -24,8 +24,12 @@ boardwise doctor            # 10 项全绿（skip 不算红）= 装好了；退�
 ```
 
 - **只做审查（离线）**：不需要编辑器、不需要 daemon。给一个 `.epro2` 就能跑 `review`。
-- **要读/写活着的编辑器**：需要 daemon（`boardwise bridge start`，前台窗口）+ 编辑器里的
+- **要读/写活着的编辑器**：需要 daemon + 编辑器里的
   connector 扩展（`.eext`）。缺一不可，报错分别是 `daemon not reachable` / `NO_CONNECTOR`。
+  **daemon 不用你手动起（157）**：任何需要桥的命令发现它不在，就自己 detached 拉起、
+  等端口就绪再继续，输出写 `~/.boardwise/log/daemon-<日期>.log`；拉起失败会把日志尾部
+  打在报错上面（唯一挂载点是 `cli.py` 的 `_open_cli`）。想在前台盯着配对公告才用
+  `boardwise bridge start`；自己管 daemon 的部署用 `BOARDWISE_NO_AUTO_DAEMON=1` 关掉自动拉起。
 - 开发态用仓库解释器：`E:\boardwise\.venv\Scripts\python.exe -m boardwise.cli <命令>`。
 - **把这份 skill 装到别的 agent 上**：`boardwise install-skill` 写进 Kimi Code / Claude Code 的
   用户级 skill 目录（`--harness {kimi,claude,all}`，默认全装；目标位置已有异版先备份成
@@ -39,7 +43,8 @@ boardwise doctor            # 10 项全绿（skip 不算红）= 装好了；退�
 立创 EDA Pro（宿主，唯一有 eda.* API 的进程）
   └── boardwise connector（.eext，唯一有"手"的代码，主动 dial 出去）
         ⇅ ws://127.0.0.1:61190/eda
-boardwise daemon（Python，`boardwise bridge start`，路由 + 审计 + 动作白名单）
+boardwise daemon（Python，`boardwise bridge start` 前台运行／由 CLI 按需 detached 拉起，
+        路由 + 审计 + 动作白名单）
         ⇅ 同一协议，role="cli"
 boardwise CLI（`boardwise bridge call …`，短命进程）
 ```
@@ -267,7 +272,9 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
   `tests/test_doc_claims.py` 有钉；验不了的散文不许写成断言式口号（要么改写，要么补一个
   能验的机制）。规则常量凡引用板级证据必须在注释里声明 `evidence-boards:`（逗号分隔，
   评审集记录可唯一解析）。**声明失效=同批测试红——文案永远不许跑赢数据。**
-- 真机作业前先 `boardwise bridge status`（**daemon 会自行死亡**，死了先 `bridge start`）。
+- 真机作业前先 `boardwise bridge status`（**daemon 会自行死亡**；157 起连不上它会自己
+  detached 拉起并等就绪——`status` 自己就会把它带回来，只有拉起也失败时才需要看
+  `~/.boardwise/log/` 或前台跑 `bridge start`）。
 - 新增动作：`protocol.py` 目录 + connector handler + `docs/bridge.md` §4 三处必须同步
   （`tests/test_action_catalogue.py` 与 `connector/tests/contract-drift.test.mjs` 会拦）。
 - 不碰历史证据：`outputs/011e*`、`014_*`、`015b_*`、`016_*`；不碰 `tests/fixtures/` 既有夹具。
@@ -279,8 +286,8 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
 
 | 症状 | 先看什么 |
 |---|---|
-| `daemon not reachable` | daemon 窗口还开着吗；`boardwise bridge status` |
-| `UNKNOWN_ACTION` | daemon 是旧版本 → Ctrl-C 重启（动作表是加载期常量） |
+| `daemon not reachable` | 157 起命令会自己拉起 daemon，所以这一条意味着**拉起也没成功**：看报错上面的日志尾部（`~/.boardwise/log/`），或前台 `boardwise bridge start` 看原因；`boardwise bridge status` 会重试一次 |
+| `UNKNOWN_ACTION` | daemon 是旧版本 → 停掉它（`scripts\stop-daemon.bat`）再跑一条需要桥的命令（用新代码重新拉起），或 Ctrl-C 后前台重启（动作表是加载期常量） |
 | `NO_CONNECTOR` | 编辑器 `boardwise → About…` 看状态；扩展是否启用、是否重启过编辑器 |
 | `PAGE_MISMATCH` | 焦点不在你以为的那页/那块板：先 `bridge call --action doc.list` 拿 uuid |
 | 打标成功但看不到 | 标记画在最后聚焦的画布上；加 `--page <uuid>` 或先点一下目标页 |

@@ -130,9 +130,16 @@ checklist — nothing to install.
 ## Common errors & notes
 
 - **Nothing connects** — nine times out of ten it's one of three: the
-  daemon isn't running (`boardwise bridge start`), the extension's
+  daemon isn't running, the extension's
   *external interaction* permission wasn't granted, or the extension
   never activated. The extension's **About…** menu tells you which.
+  The daemon is the one that looks after itself: any command that needs
+  the bridge starts one that isn't there and waits for it (the log it
+  writes is `${BOARDWISE_HOME:-~/.boardwise}/log/daemon-<date>.log`, and
+  the failure it prints names it). If it still is not up, run
+  `boardwise bridge start` in the foreground and read what it says;
+  `BOARDWISE_NO_AUTO_DAEMON=1` turns the automatic start off for the
+  setups that manage it themselves.
 - **Several project windows open** — name one: `--project <name>`. It
   refuses to guess.
 - **Encrypted `.epro2` export** — unreadable; re-export with encryption
@@ -271,9 +278,13 @@ daemon + 编辑器扩展      读工程数据，写之前先预览、你授权�
 
 ### 常见错误和注意事项
 
-- **连不上**，九成是三件事之一：daemon 没起（`boardwise bridge start`）、
+- **连不上**，九成是三件事之一：daemon 没起、
   扩展的"外部交互"权限没给、扩展没激活。扩展菜单里的 **About…** 会直接
-  告诉你卡在哪步。
+  告诉你卡在哪步。daemon 这一条现在会自己解决：任何需要桥的命令发现它不在，
+  自己把它拉起来并等它就绪（它的输出写在
+  `${BOARDWISE_HOME:-~/.boardwise}/log/daemon-<日期>.log`，拉起失败时报错会点名这个文件）。
+  还是没起来就跑 `boardwise bridge start`（前台运行，原因直接打在窗口里）；
+  自己管 daemon 的部署（计划任务/服务）用 `BOARDWISE_NO_AUTO_DAEMON=1` 关掉自动拉起。
 - **开了好几个工程窗口**：命令要指名，`--project <名字>`，否则它拒绝猜。
 - **`.epro2` 导出时勾了加密**：读不了，重新导一次别勾加密。
 - **`.eprj2` 单文件里没有图纸**：那只是工程壳，图纸要么在线走桥读，

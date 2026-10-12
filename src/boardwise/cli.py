@@ -6792,10 +6792,60 @@ def _bridge_port(args: argparse.Namespace) -> int:
     return daemon.resolve_port()
 
 
+def _ensure_daemon(port: int) -> None:
+    """Start the daemon when nothing is listening, and say what happened (157).
+
+    Called from :func:`_open_cli` and therefore from **every** command that needs
+    the bridge — the daemon's absence used to be reported by each of them
+    separately, and the fix ("run `boardwise bridge start` and keep the window
+    open") was one command none of them ran for the user.
+
+    All output goes to stderr: it is a diagnostic about this machine, printed
+    above the command's own answer rather than mixed into it. Nothing here can
+    raise, and the caller's own "daemon not reachable" path is untouched — it is
+    still the one place that decides what a missing daemon means for the command.
+    """
+    from .bridge import autostart
+
+    outcome = autostart.ensure(port)
+    if outcome.ok and outcome.attempted:
+        print(
+            f"boardwise bridge: daemon 不在，已自动拉起 127.0.0.1:{port}"
+            f"（日志 {outcome.log}）",
+            file=sys.stderr,
+            flush=True,
+        )
+    elif outcome.ok and outcome.waited:
+        print(
+            f"boardwise bridge: 另一个进程正在拉起 daemon，等到了 127.0.0.1:{port}",
+            file=sys.stderr,
+            flush=True,
+        )
+    elif outcome.attempted or outcome.waited:
+        print(
+            f"boardwise bridge: 自动拉起 daemon 失败——{outcome.detail}",
+            file=sys.stderr,
+            flush=True,
+        )
+        if outcome.log_tail:
+            print(f"  日志尾部（{outcome.log}）：", file=sys.stderr, flush=True)
+            for line in outcome.log_tail.splitlines():
+                print(f"    {line}", file=sys.stderr, flush=True)
+
+
 def _open_cli(args: argparse.Namespace):
-    """Return ``(BridgeClient, BridgeError, port, token)`` for an already-running daemon."""
+    """Return ``(BridgeClient, BridgeError, port, token)`` for a running daemon.
+
+    The one door to the bridge, and therefore the one place the daemon is started
+    on demand: a command that needs it and finds nothing listening gets one
+    (``bridge/autostart.py``) before its own connection attempt, so the error
+    paths below it stay exactly as they were for the cases where starting one did
+    not work.
+    """
     client, daemon, BridgeError = _bridge_modules()
-    return client.BridgeClient, BridgeError, _bridge_port(args), daemon.ensure_token()
+    port = _bridge_port(args)
+    _ensure_daemon(port)
+    return client.BridgeClient, BridgeError, port, daemon.ensure_token()
 
 
 def _bridge_uri(port: int) -> str:
@@ -20738,6 +20788,25 @@ def _connector_fix(error: str) -> str:
     """
     return MULTI_WINDOW_FIX if _window_unspecified(error) else CONNECTOR_FIX
 
+
+def _daemon_fix() -> str:
+    """The daemon line's fix, for the case the auto-start did not work (157).
+
+    By the time doctor prints this, `_open_cli` has already tried to start a
+    daemon and reported *why* it thinks it failed — so the sentence leads with
+    that, and names the log to read. The command keeps a place on the line
+    because it is still the way to run one in the foreground and watch it, which
+    is the next thing to try when the log's tail does not explain itself.
+    """
+    from .bridge import autostart
+
+    return (
+        "自动拉起没成功（`boardwise bridge status` 会重试一次并打印失败原因）："
+        f"先看日志尾部 `{autostart.log_path()}`，"
+        "也可以自己跑 `boardwise bridge start`（前台运行，日志打在这个窗口里，"
+        "保持窗口开着）；端口不是 61190 时用 --port 指明"
+    )
+
 #: Only the first three fields of an editor version mean anything to the floor.
 #: The fourth is a build suffix — `3.2.186.b52e3e87` on the machine this was
 #: measured on, `3.2.149.88089769` in the issue — so comparing it would make two
@@ -21248,14 +21317,18 @@ def run_doctor(p: DoctorProbe) -> list[DoctorCheck]:
             name="daemon",
             # The daemon has no HTTP surface at all — it is a WebSocket server
             # and `ping` is its health answer, so that is what is checked.
-            label="daemon 可达（ping，daemon 无 HTTP /health）",
+            # Since 157 this line is reached *after* `_open_cli` tried to start
+            # one, so a red here means the auto-start did not work — which is why
+            # the fix leads with that rather than with the command (the command is
+            # still named, as the fallback it now is).
+            label="daemon 可达（ping，daemon 无 HTTP /health；不在会自动拉起）",
             ok=reachable,
             detail=(
                 f"127.0.0.1:{p.port} 的 daemon 已应答 ping"
                 if reachable
                 else f"连不上 127.0.0.1:{p.port}：{p.ping_error or '没有应答'}"
             ),
-            fix="" if reachable else "运行 `boardwise bridge start`（前台运行，保持窗口开着）；端口不是 61190 时用 --port 指明",
+            fix="" if reachable else _daemon_fix(),
         )
     )
 

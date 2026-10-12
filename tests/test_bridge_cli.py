@@ -42,6 +42,10 @@ def _env(home: Path, port: int) -> dict:
     env["PYTHONPATH"] = str(SRC) + os.pathsep + env.get("PYTHONPATH", "")
     env["BOARDWISE_HOME"] = str(home)
     env["BOARDWISE_PORT"] = str(port)
+    # 157: a bridge command with no daemon listening now starts one. These tests
+    # drive the un-reachable *error* paths, so they take the switch that restores
+    # the old behaviour — the auto-start has its own tests (tests/test_157_*).
+    env["BOARDWISE_NO_AUTO_DAEMON"] = "1"
     return env
 
 

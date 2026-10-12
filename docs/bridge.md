@@ -944,7 +944,7 @@ the hub depends on the handler loop exiting. So a *half-open* socket can leave `
 
 | Command | Exit | What it does |
 |---|---|---|
-| `bridge start` | 0 | Run the daemon. Prints the token path, the audit dir, the pairing path, and one loud line per first-time pairing. |
+| `bridge start` | 0 | Run the daemon **in the foreground**. Prints the token path, the audit dir, the pairing path, and one loud line per first-time pairing. Since 157 this is for *watching* it: every command that needs the bridge starts a daemon that is not there (detached, console into `~/.boardwise/log/daemon-<date>.log`) and waits for the port |
 | `bridge status` | 0 / 1 / 2 | Daemon up + connector attached / daemon up, no connector / daemon unreachable. Prints the paired connector's fingerprint and — since 023 — **one block per online editor window**: its `windowKey`, connector build, project, page, peer, arrival, last-heard-from and how many calls it has answered, plus a `projects seen:` line naming every project with the key that reaches it (§3.5). That list is what a caller reads before `bridge call --project …`. Several windows connected is the normal case, not a warning |
 | `bridge revoke` | 0 | Delete the pairing record and audit `revoke`. Needs no daemon: it is a local file operation, because the moment you want to withdraw trust is the moment you are least sure what is running. |
 | `bridge screenshot <out>` | 0 / 1 / 2 | Native canvas capture; `--fit` zooms to the board first. |
@@ -1906,7 +1906,7 @@ now, because the first response refreshed the context.
 
 | Symptom | Look at |
 |---|---|
-| `status` says daemon not reachable, exit 2 | Is `bridge start` still running? Wrong `--port` / `BOARDWISE_PORT`? |
+| `status` says daemon not reachable, exit 2 | Since 157 a bridge command starts a daemon it cannot reach and waits for it, so exit 2 means **that failed too** — the command prints the tail of `~/.boardwise/log/daemon-<date>.log` above this message. `boardwise bridge start` in the foreground shows the same failure live. Then: wrong `--port` / `BOARDWISE_PORT`? `BOARDWISE_NO_AUTO_DAEMON=1` set? |
 | `status` says connector not connected, exit 1 | Extension enabled? **External interaction granted?** → `About…` |
 | Editor log panel shows no `[boardwise]` lines at all | Nothing ran — the extension is not enabled, or the permission in B.2 is missing. Note that with the self-arm (§10.20) the panel is written to even when `activate()` never fires, so "no lines at all" now means the bundle was never evaluated |
 | `About…` says `NEVER RAN — self-connected at …` | Working as designed: the editor did not call `activate()`, and the self-arm covered it (§10.20). Nothing to fix, but it means the editor's activation event is not firing — a full restart is the clean state |

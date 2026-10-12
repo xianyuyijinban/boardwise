@@ -806,6 +806,11 @@ def _env(home: Path, port: int, **extra: str) -> dict:
     env["PYTHONPATH"] = str(SRC)
     env["BOARDWISE_HOME"] = str(home)
     env["BOARDWISE_PORT"] = str(port)
+    # 157: doctor now starts a daemon when it cannot reach one, and these tests are
+    # about the report it prints *without* a daemon. Without the switch the run
+    # would spawn a real background daemon on the free port and then measure that
+    # instead — the auto-start itself is pinned in tests/test_157_*.
+    env["BOARDWISE_NO_AUTO_DAEMON"] = "1"
     env.update(extra)
     return env
 
