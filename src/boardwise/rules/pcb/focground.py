@@ -98,6 +98,15 @@ the other direction. Measured on the corpus, the fallback is real and needed:
 ROBOT's ``R8`` has an **empty** schematic value and the PCB document's ``0Ω``,
 which is the value the rule uses (and says it is a fallback).
 
+**Both halves of R1b read that one口径** (F6). The rule judges two things — a 0 Ω
+tie and 「0R 近功率电解电容」 — and until this fix only the first read the page while
+the **bulk electrolytic pool** (imported from
+:func:`~boardwise.rules.pcb.foc.bulk_capacitors_of`, shared with R20 and R5) still
+read the PCB document's copies: one module, two answers to 「what is this part」.
+The page is resolved once in :meth:`FocGroundTie.check_with_library` and threaded
+into every value read, the bulk pool included, and its rows carry the pool's own
+view sentence rather than quoting a number as though both views agreed.
+
 **A 0 Ω tie must actually bridge the two domains.** The test is structural and
 comes from the netlist view (``ctx.pcb_model``): a part is a tie candidate when it
 is a **resistor** (designator family ``R``, or a shelf category / value parse
@@ -139,6 +148,7 @@ from .foc import (
     _fallback_gap,
     _motor_drivers,
     _pairing_gap,
+    _value_farads_for,
     bulk_capacitors_of,
     is_power_net,
     power_mosfets_of,
@@ -175,10 +185,14 @@ __all__ = [
 #: with one INFO row rather than filing a finding about a missing domain.
 #: ``POWER_GROUND_PREFIXES`` in :mod:`boardwise.core.model` is deliberately
 #: narrower (``PGND`` only) and this list widens it to the ``P``-prefix family,
-#: which is where a naming convention puts a power ground. A board that spells it
-#: ``POWER_GND`` or ``EARTH`` lands in neither family: that is **UNKNOWN** here,
-#: not 「logic ground」, and the R1b row reports the unrecognised ground nets by
-#: name so the gap is visible.
+#: which is where a naming convention puts a power ground — ``P_GND`` /
+#: ``POWER_GND`` / ``EARTH`` included, so a board that spells its power ground
+#: ``EARTH`` lands in the power domain **by this module's own declaration** and is
+#: judged like any other power ground (D2: until that was fixed the outer sieve
+#: dropped such a name before this list was consulted — see
+#: :func:`split_ground_domains`). A ground-class name this list does **not**
+#: carry (``SEC_GND``, ``ISO_VSS``) is **UNKNOWN**, not 「logic ground」, and lands
+#: in :attr:`GroundDomainSplit.unclassified` so the R1b row can name it.
 GROUND_DOMAIN_POWER_PREFIXES: tuple[str, ...] = ("PGND", "P_GND", "POWER_GND", "EARTH")
 
 #: The net-name prefixes that put a ground-class net in the **logic / analog**
@@ -293,14 +307,34 @@ def split_ground_domains(board: BoardGeometry) -> GroundDomainSplit:
     ``_ground_pours_on``), and the two-domain split is
     :func:`domain_of`'s word list above. Both are **name** tests and the rows
     state each net's domain and the prefix that placed it there.
+
+    **The sieve is a union, and that is D2's fix.** ``is_ground_net`` carries
+    ``GND`` / ``AGND`` / ``DGND`` / ``PGND`` / ``EGND`` / ``SGND`` / ``VSS`` — a
+    **prefix at the front or a ``_``-separated tail** — and this module's own
+    :data:`GROUND_DOMAIN_POWER_PREFIXES` is **wider** than it: it also names
+    ``P_GND`` / ``POWER_GND`` / ``EARTH`` as power-domain words. Sieving with
+    ``is_ground_net`` *before* asking :func:`domain_of` therefore dropped exactly
+    the names this module claims for itself — a bare ``EARTH`` net (not a prefix
+    of any ``is_ground_net`` word and with no ``_`` tail) never reached the
+    classifier and vanished from ``power``, ``logic`` **and** ``unclassified``
+    without a word: the drawing said ``EARTH`` and the report said 「no
+    power-domain ground on this board」. So a net is now a candidate when
+    **either** vocabulary knows it, and the two remain distinct in what they are
+    for: ``is_ground_net`` decides 「is this a ground-class name at all」 (and so
+    which names can land in ``unclassified``), ``domain_of`` decides which side.
+
+    **Measured**: no fixture in the corpus carries a name only the wider
+    vocabulary knows (372 net names across the PCB fixtures, zero of them
+    ``EARTH`` / ``P_GND`` / ``POWER_GND``), so this changes no acceptance board's
+    rows — it closes a silent hole, it does not move a number.
     """
     power: list[str] = []
     logic: list[str] = []
     unclassified: list[str] = []
     for net in sorted(board.net_names()):
-        if not is_ground_net(net):
-            continue
         side = domain_of(net)
+        if not side and not is_ground_net(net):
+            continue
         if side == "power":
             power.append(net)
         elif side == "logic":
@@ -850,6 +884,30 @@ def _value_ohms(placed: object, schematic: object | None = None) -> DrawValue:
     )
 
 
+def _two_pins(pins: list, grounded: list) -> tuple[object | None, object | None]:
+    """The **two** pins a 0 Ω reading reports, and never the same pin twice.
+
+    The preference is the documented one: when **two** pins land in a ground
+    domain they are what is reported, whatever their order, because that is the
+    pair a bridge means and R1b's ``_pairs_bridges`` reads the reading's two nets
+    as that pair. Everything else is pin order, which is the order the reading
+    already sorted by.
+
+    **D1's fix.** The old code mixed the two: it took ``grounded[0]`` when one
+    grounded pin existed and then ``pins[1]`` for the second — which is the
+    **same pin** whenever the single grounded pin *is* ``pins[1]``, the ordinary
+    case of a part whose pin 2 is the ground. The ledger then printed a net
+    against itself (「R31 (0R, pins GND/GND)」), a sentence about a part nobody
+    drew. The preference now applies only where it can apply (two grounded pins),
+    the fallback is plain pin order, and a one-pin part reports one pin.
+    """
+    if len(grounded) > 1:
+        return grounded[0], grounded[1]
+    if not pins:
+        return None, None
+    return pins[0], (pins[1] if len(pins) > 1 else None)
+
+
 def all_zero_ohm_parts_of(
     model: object, library=None, schematic: object | None = None
 ) -> list[TieReading]:
@@ -871,6 +929,11 @@ def all_zero_ohm_parts_of(
     A part whose value is unreadable is **UNKNOWN** and is not returned: an
     unstated value is not a 0 Ω, and claiming one would invent the very single
     point 岳's ruling is about.
+
+    The **pins** reported are the two a reader would measure between: the grounded
+    ones when there are two, pin order otherwise, and never the same pin twice
+    (:func:`_two_pins`, D1's fix — this reading's nets are quoted verbatim on R1b's
+    rows, so a degenerate pair printed a net against itself).
     """
     found: list[TieReading] = []
     for designator in sorted(getattr(model, "components", {}) or {}):
@@ -887,8 +950,7 @@ def all_zero_ohm_parts_of(
         grounded = [
             pin for pin in pins if domain_of(str(getattr(pin, "net", "") or ""))
         ]
-        pin_a = grounded[0] if len(grounded) > 0 else (pins[0] if pins else None)
-        pin_b = grounded[1] if len(grounded) > 1 else (pins[1] if len(pins) > 1 else None)
+        pin_a, pin_b = _two_pins(pins, grounded)
         found.append(
             TieReading(
                 designator=str(designator),
@@ -1042,6 +1104,26 @@ def _value_view_evidence(
         + ("; ".join(divergent) or "(无)")
         + "；原理图页未写、**回退 PCB 文档值**的件："
         + ("; ".join(fallback) or "(无)")
+    )
+
+
+def _bulk_view_evidence(bulks: list[tuple[str, str, float, str]]) -> str:
+    """The same 「which view」 line for the **bulk electrolytic** pool (F6).
+
+    ``bulks`` is :meth:`FocGroundTie._bulk_capacitors`'s own output, whose fourth
+    member is the sentence
+    :func:`~boardwise.rules.pcb.foc._value_farads_for` wrote for that part — so
+    this line quotes the chain verbatim rather than paraphrasing it, and a row
+    whose bulk pool drifted from the page cannot look as though the copy spoke for
+    the drawing.
+    """
+    return (
+        "bulk electrolytic pool value reading (153b's 口径, F6)：**原理图声明优先，"
+        "PCB 文档值仅作回退**；按件写出哪一视图被判定采用："
+        + (
+            "; ".join(f"{d} ({v!r}) → {basis}" for d, v, _f, basis in bulks)
+            or "(this board has no bulk electrolytic)"
+        )
     )
 
 
@@ -1310,22 +1392,45 @@ class FocGroundTie(PcbRule):
         reading = DomainPairReading(power=power, logic=logic, clearance=result)
         return result if reading.directly_connected else None
 
-    def _bulk_capacitors(self, board: BoardGeometry, model: object, library):
-        """``[(designator, value, farads)]`` — 133b's pool, read through here too.
+    def _bulk_capacitors(
+        self,
+        board: BoardGeometry,
+        model: object,
+        library,
+        schematic: object | None = None,
+    ) -> list[tuple[str, str, float, str]]:
+        """``[(designator, value, farads, value_basis)]`` — 133b's pool, read here too.
 
         Imported from :mod:`boardwise.rules.pcb.foc` rather than re-implemented,
         so R1b's 「0R 要靠近功率电解」 measures the same parts R20's high-current
         loop does and the two rules cannot disagree about what a bulk
         electrolytic is.
+
+        **``schematic`` is threaded through, and that is F6.** Until this fix the
+        0 Ω half of this very rule read the schematic page (153b) while the bulk
+        pool still read the PCB document's stale copies — one module with two
+       口径 for 「what is this part」. The page resolved once in
+        :meth:`check_with_library` is handed down to
+        :func:`~boardwise.rules.pcb.foc.bulk_capacitors_of`, which reads every
+        value through the same three-case chain (page first, copy as fallback,
+        divergence written down).
+
+        ``value_basis`` is that chain's sentence for the part, carried out so the
+        row can say **which view** the pool's numbers came from rather than
+        quoting them as though both views agreed.
         """
-        out = []
-        for designator, value, farads in bulk_capacitors_of(model, library):
+        out: list[tuple[str, str, float, str]] = []
+        for designator, value, farads in bulk_capacitors_of(model, library, schematic):
             if board.component(designator) is not None:
-                out.append((designator, value, farads))
+                view = _value_farads_for(model, designator, schematic)
+                out.append((designator, value, farads, view.basis))
         return out
 
     def _nearest_bulk(
-        self, board: BoardGeometry, tie: str, bulks: list[tuple[str, str, float]]
+        self,
+        board: BoardGeometry,
+        tie: str,
+        bulks: list[tuple[str, str, float, str]],
     ) -> tuple[str, float | None, str]:
         """The bulk capacitor nearest this tie, its gap, and how the gap was read.
 
@@ -1338,7 +1443,7 @@ class FocGroundTie(PcbRule):
         padless placement, and the row says which reading it used.
         """
         best: tuple[float, str] | None = None
-        for designator, _value, _farads in bulks:
+        for designator, _value, _farads, _basis in bulks:
             gap = _pairing_gap(board, tie, designator)
             if gap is None:
                 gap = _fallback_gap(board, tie, designator)
@@ -1406,7 +1511,7 @@ class FocGroundTie(PcbRule):
         open while ``PGND``↔``AGND`` carries its 0 Ω is a legitimate board — the
         open pair is reported, not aggregated away.
         """
-        bulks = self._bulk_capacitors(board, model, library)
+        bulks = self._bulk_capacitors(board, model, library, schematic)
         zeroes = all_zero_ohm_parts_of(model, library, schematic)
         return Finding(
             rule_id=self.id,
@@ -1440,7 +1545,8 @@ class FocGroundTie(PcbRule):
                 _value_view_evidence(zeroes),
                 "bulk electrolytics on this board (the 0 R proximity pool, "
                 f"≥ {100} µF per 133b's floor): "
-                + (", ".join(f"{d} ({v})" for d, v, _f in bulks) or "(none)"),
+                + (", ".join(f"{d} ({v})" for d, v, _f, _b in bulks) or "(none)"),
+                _bulk_view_evidence(bulks),
                 "TI SLVA959B §1.3.1 backs physical isolation; 岳's rulings add "
                 "the two acceptable join forms (none, or a single 0 Ω **per "
                 "pair**) and this pair takes the first. Neither half of the "
@@ -1467,7 +1573,7 @@ class FocGroundTie(PcbRule):
         distance to the nearest bulk electrolytic as 出数 (岳 ruled the
         convention 「0R 近功率电解电容」 but no distance threshold).
         """
-        bulks = self._bulk_capacitors(board, model, library)
+        bulks = self._bulk_capacitors(board, model, library, schematic)
         nearest, gap, how = self._nearest_bulk(board, tie.designator, bulks)
         others = [
             r.designator for r in zero_ohm_resistors_of(model, library, schematic)
@@ -1522,7 +1628,8 @@ class FocGroundTie(PcbRule):
                 + (", ".join(others) or "(none)"),
                 "bulk electrolytic pool (≥ 100 µF, 133b's floor, read through "
                 "foc.bulk_capacitors_of so this rule and R20 cannot disagree): "
-                + (", ".join(f"{d} ({v})" for d, v, _f in bulks) or "(none)"),
+                + (", ".join(f"{d} ({v})" for d, v, _f, _b in bulks) or "(none)"),
+                _bulk_view_evidence(bulks),
                 f"nearest bulk capacitor to {tie.designator}: "
                 + (
                     f"{nearest}, gap {_mil(gap):.1f} mil, measured {how}"
@@ -1919,30 +2026,42 @@ class FocReturnPath(PcbRule):
         name. ``library=None`` degrades to an empty shelf and the list falls back
         to designator-family tests, which is the same degradation 133b's rules
         accept.
+
+        **The power-stage part set is read through both views** (F8): the page
+        :func:`~boardwise.rules.pcb.foc.schematic_page_of` resolves is handed to
+        :meth:`_power_parts`, so 「a bulk electrolytic」 means the same pool here as
+        in R20 and R1b rather than the PCB document's stale copies.
         """
         board = ctx.board
         model = ctx.pcb_model
         if board is None:
             return []
+        schematic = schematic_board_of(ctx)
         recognised = [
             name
             for name in board.net_names()
             if is_power_net(name) and board.tracks_for_net(name)
         ]
         if not recognised:
-            unrecognised = self._unrecognised(board, model, library)
+            unrecognised = self._unrecognised(board, model, library, schematic)
             if not unrecognised:
                 return []
             return [self._unrecognised_row(board, unrecognised)]
         findings = [
             self._one_net(board, net) for net in sorted(recognised)
         ]
-        unrecognised = self._unrecognised(board, model, library)
+        unrecognised = self._unrecognised(board, model, library, schematic)
         if unrecognised:
             findings.append(self._unrecognised_row(board, unrecognised))
         return findings
 
-    def _power_parts(self, board: BoardGeometry, model: object, library) -> set[str]:
+    def _power_parts(
+        self,
+        board: BoardGeometry,
+        model: object,
+        library,
+        schematic: object | None = None,
+    ) -> set[str]:
         """Every designator that identifies a **power-stage part** on this board.
 
         Three doors, each already used by 133b: a shelf ``ic.motor-driver``
@@ -1952,21 +2071,34 @@ class FocReturnPath(PcbRule):
         that sits on one of these and carries tracks but whose **name** the
         power-path sieve does not recognise is exactly the 未识别 case — it is on
         the power stage by placement, and UNKNOWN by name.
+
+        The last two doors read **values**, so they take ``schematic``: without it
+        this list would be assembled from the PCB document's stale copies and the
+        未识别清单 would name (or not name) a net on the strength of a number the
+        drawing does not state.
         """
         parts: set[str] = set()
         for designator, _component, _category in _motor_drivers(model, library):
             if board.component(designator) is not None:
                 parts.add(designator)
-        for designator, _category, _basis in power_mosfets_of(board, model, library):
+        for designator, _category, _basis in power_mosfets_of(
+            board, model, library, schematic
+        ):
             if board.component(designator) is not None:
                 parts.add(designator)
-        for designator, _value, _farads in bulk_capacitors_of(model, library):
+        for designator, _value, _farads in bulk_capacitors_of(
+            model, library, schematic
+        ):
             if board.component(designator) is not None:
                 parts.add(designator)
         return parts
 
     def _unrecognised(
-        self, board: BoardGeometry, model: object, library
+        self,
+        board: BoardGeometry,
+        model: object,
+        library,
+        schematic: object | None = None,
     ) -> list[tuple[str, list[str]]]:
         """``[(net, power-stage designators on it)]`` for names the sieve misses.
 
@@ -1976,7 +2108,7 @@ class FocReturnPath(PcbRule):
         """
         if model is None:
             return []
-        parts = self._power_parts(board, model, library)
+        parts = self._power_parts(board, model, library, schematic)
         if not parts:
             return []
         rows: list[tuple[str, list[str]]] = []

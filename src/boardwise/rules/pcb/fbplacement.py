@@ -78,6 +78,22 @@ The filter is read off **pin names and the shelf**, never off an MPN pattern
 and never off a net name, so a part with no name and no category is skipped
 rather than guessed at.
 
+**Which parts are legs at all is read through both views (F7).** A leg's value
+comes from **this PCB document's own schematic page**
+(:func:`~boardwise.rules.pcb.focground.schematic_board_of`), with the PCB
+document's copy only as a fallback (153b's
+:func:`~boardwise.rules.pcb.focground._value_ohms` — the same call the
+neighbouring regulator rules make). The copy is a systematically stale field:
+measured, 毕设FOC 1.0.0's PCB1 contradicts the page on 37 of its parts and 1.1.0's
+on 45, the ``10K`` / ``100nF`` placeholder being the bulk of it. Reading it made
+every ``0R`` on the page look like a ``10K`` **leg**, so a board whose page draws
+a 0 Ω link could have that link counted as half a divider. Measured, the fix
+takes 1.0.0's leg pool from 38 parts to 35 (``R31`` / ``R48`` / ``R49``, all
+``0R`` on the page) and leaves the divider it reports — ``U11`` on ``R14`` /
+``R21`` — unchanged, because none of the three was a leg. The **netlist** stays on
+``ctx.pcb_model``: pins, nets, the tap and the rail domain are the view the
+geometry is measured in (131c).
+
 **The rail-side answer is a net comparison, not a distance.** 「Is the upper
 leg on the output-capacitor end or on the rail?」 is decided by asking whether
 the leg's non-tap net is the same net as the non-ground net of any capacitor
@@ -117,7 +133,7 @@ from ...core.model import is_ground_net
 from ...core.parts import load_parts
 from ...core.pinrole import pin_role
 from ...core.power_domains import domain_of, infer_net_domains
-from ...core.values import parse_resistance_ohms
+from .focground import DrawValue, _placed_on, _value_ohms, schematic_board_of
 from ..decap import CapCandidate, cap_candidates_on
 from ..facts import default_library_path
 from .base import PcbReviewContext, PcbRule
@@ -199,19 +215,46 @@ class FbDivider:
         return (self.upper, self.lower)
 
 
-def _resistors(model: object) -> dict[str, object]:
+def _leg_value(component: object, schematic: object | None, designator: str) -> DrawValue:
+    """This part's resistance, read through **both** views (153b's 口径).
+
+    ``schematic`` is **this PCB document's own schematic page**
+    (:func:`~boardwise.rules.pcb.focground.schematic_board_of`) and the reading is
+    :func:`~boardwise.rules.pcb.focground._value_ohms`, reused rather than
+    re-implemented — the same call
+    :func:`~boardwise.rules.pcb.regulator._declared` makes, so the two neighbour
+    rules cannot disagree about a part's value.
+    """
+    return _value_ohms(component, _placed_on(schematic, designator))
+
+
+def _resistors(model: object, schematic: object | None = None) -> dict[str, object]:
     """Designator -> component, for every part whose value reads as a resistance.
 
     Read through :func:`boardwise.core.values.parse_resistance_ohms` and
-    **only** that: a resistor is a part whose value parses as ohms, so a
-    capacitor or a test point is not a candidate and an unreadable value is
-    UNKNOWN rather than a zero-ohm leg. ``parse_resistance_ohms`` returns
-    ``None`` for a value nobody wrote down, and this filters on that.
+    **only** that (via :func:`~boardwise.rules.pcb.focground._value_ohms`, which
+    adds the ``0R`` spellings the shared grammar declines): a resistor is a part
+    whose value parses as ohms, so a capacitor or a test point is not a candidate
+    and an unreadable value is UNKNOWN rather than a zero-ohm leg. A value nobody
+    wrote down reads ``None``, and this filters on that. **Above zero**, because
+    the pool is a pool of **legs**: a 0 Ω link is a jumper, and the reason
+    :data:`~boardwise.rules.pcb.focground.EXPLICIT_ZERO_OHM_SPELLINGS` exists is
+    that ``0R`` — the spelling boards actually use — is one the shared grammar
+    declines.
+
+    **The value read here is the schematic page's, with the PCB document's copy
+    only as a fallback (F7).** The copy is a systematically stale field (measured:
+    毕设FOC 1.0.0's PCB1 contradicts the page on 37 of its parts, 1.1.0's on 45),
+    and reading it turned the schematic's ``0R`` parts into ``10K`` legs — so a
+    board whose page draws a 0 Ω **link** could have that link counted as a
+    divider leg, which is a divider nobody drew. ``schematic=None`` is the honest
+    「no page for this document」: the copy is then the only value there is and
+    the reading says so.
     """
     found: dict[str, object] = {}
     for designator, component in (getattr(model, "components", {}) or {}).items():
-        ohms = parse_resistance_ohms(str(getattr(component, "value", "") or ""))
-        if ohms is not None and ohms > 0:
+        draw = _leg_value(component, schematic, str(designator))
+        if draw.ohms is not None and draw.ohms > 0:
             found[str(designator)] = component
     return found
 
@@ -251,7 +294,9 @@ def _fb_pin(component: object) -> tuple[str, str, str] | None:
     return None
 
 
-def fb_dividers(model: object, library=None) -> list[FbDivider]:
+def fb_dividers(
+    model: object, library=None, schematic: object | None = None
+) -> list[FbDivider]:
     """Every **feedback** divider in one board model, with the reading behind it.
 
     The four mechanical criteria are the ones
@@ -287,6 +332,16 @@ def fb_dividers(model: object, library=None) -> list[FbDivider]:
     swapped — the same first-wins discipline
     :meth:`~boardwise.rules.params.DividerOutput._rows` uses, so the two
     readers report the same number of dividers.
+
+    ``schematic`` is this PCB document's own schematic page
+    (:func:`~boardwise.rules.pcb.focground.schematic_board_of`) and decides
+    **which parts are legs at all** (:func:`_resistors`, F7). It is handed to
+    every board model in the loop rather than matched to one: a designator the
+    page does not carry resolves to ``None`` and falls back to the copy, so a
+    page and a board that are not the same board cannot silently weld together.
+    The **netlist** — pins, nets, the tap, the rail domain — is the PCB
+    document's own throughout (131c), because it is the view the geometry is
+    measured in.
     """
     if library is None:
         try:
@@ -309,7 +364,7 @@ def fb_dividers(model: object, library=None) -> list[FbDivider]:
         guesses = infer_net_domains(board_model, library)
         components = getattr(board_model, "components", {}) or {}
         nets = getattr(board_model, "nets", {}) or {}
-        resistors = _resistors(board_model)
+        resistors = _resistors(board_model, schematic)
         seen: set[tuple[str, str]] = set()
         for upper_desig, upper in sorted(resistors.items()):
             upper_nets = _nets_of(upper)
@@ -609,6 +664,13 @@ class RegulatorFbPlacement(PcbRule):
         check_with_library` publishes, for the same reason: the synthetic tests
         can inject a shelf without monkeypatching the project's own
         :func:`boardwise.rules.facts.default_library_path`.
+
+        **The schematic page is resolved once here** (:func:`schematic_board_of`,
+        151/153's board chain off the document's declared ``META.board``) and
+        threaded into the leg pool, so 「which parts are legs」 is read through the
+        same 口径 as the neighbouring regulator rules' values (F7). ``None`` — no
+        project model, or a link that does not resolve — is ordinary: the pool then
+        reads the PCB document's copies and every reading says it is a fallback.
         """
         board = ctx.board
         model = ctx.pcb_model
@@ -619,8 +681,9 @@ class RegulatorFbPlacement(PcbRule):
                 library = load_parts(default_library_path())
             except Exception:  # noqa: BLE001 — a shelfless reading is a narrower one
                 library = None
+        schematic = schematic_board_of(ctx)
 
-        dividers = fb_dividers(model, library)
+        dividers = fb_dividers(model, library, schematic)
         claimed: dict[str, str] = {}
         findings: list[Finding] = []
         for divider in dividers:

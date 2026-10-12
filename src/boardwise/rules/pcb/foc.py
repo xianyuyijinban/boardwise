@@ -64,6 +64,22 @@ what a placement checklist usually means by 「环路大小」. 岳 has ruled on
 so :func:`boardwise.core.measure.loop_area` returns both and this rule reports
 both on the same row, side by side. Neither is marked 「the」 answer.
 
+**Which view a value is read from, and why it is the schematic page.** A PCB
+document's ``component.value`` is a **systematically stale copy**, not data:
+measured on 毕设FOC 1.1.0's PCB1, 45 of its 105 placed parts carry a value the
+schematic page contradicts — 23 read ``100nF`` and 20 read ``10K`` regardless of
+what the page says — and 1.0.0's PCB1 reads 37 the same way. So every value this
+module judges on is read through :func:`_value_farads` (153b's 口径, the same
+reader focground's 0 Ω test uses): :func:`schematic_page_of` resolves **this PCB
+document's own schematic page** off ``META.board`` (151/153's chain, never
+designator overlap), the page's declaration wins, the PCB document's copy is used
+only when the page states nothing, and a divergence is written onto the row as
+「原理图 X / PCB 文档 Y」 rather than resolved in silence. The **netlist** stays on
+``ctx.pcb_model`` throughout — 131c's lesson, and the reason the two views are not
+interchangeable: the schematic calls a wire ``NET11`` where the board calls it
+``$1N66612``, so a net read off the page cannot be measured in the board's
+geometry.
+
 **Objects the pack identifies, and from what.** A **power driver IC** is a part
 the shelf calls ``ic.motor-driver`` (:data:`MOTOR_DRIVER_CATEGORIES`) — measured
 on the corpus as exactly two entries, TI's DRV8350SRTVR and DRV8313PWPR. A
@@ -127,6 +143,7 @@ __all__ = [
     "MOTOR_DRIVER_CATEGORIES",
     "POWER_NET_PREFIXES",
     "MULTILAYER_THRESHOLD",
+    "CapacitanceValue",
     "FocDecapProximity",
     "FocGateTraceWidth",
     "FocGroundPlane",
@@ -136,6 +153,7 @@ __all__ = [
     "gate_nets_of",
     "is_power_net",
     "power_mosfets_of",
+    "schematic_page_of",
 ]
 
 
@@ -316,7 +334,178 @@ def _motor_drivers(model: object, library) -> list[tuple[str, object, str]]:
     return found
 
 
-def bulk_capacitors_of(model: object, library=None) -> list[tuple[str, str, float]]:
+# ---------------------------------------------------------------------------
+# The value view — **schematic page first**, PCB copy only as a fallback (153b)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CapacitanceValue:
+    """One part's capacitance as **both** views state it, and which one was read.
+
+    ``value``/``farads`` are what this module's pools judge on;
+    ``schematic_value`` / ``pcb_value`` are the raw declarations, kept so a row
+    can write 「原理图 X / PCB 文档 Y」 when the two disagree. The container is
+    this module's own because ``focground`` (which owns the 0 Ω version,
+    ``DrawValue``) imports **from** here — see :func:`schematic_page_of` — but the
+    reading and every sentence it writes are that module's, one口径 for the whole
+    FOC pack.
+    """
+
+    value: str = ""
+    farads: float | None = None
+    schematic_value: str = ""
+    pcb_value: str = ""
+    basis: str = ""
+
+
+def _focground():
+    """The value channel's other half, imported **at call time**.
+
+    ``focground`` imports this module at module level (it reuses
+    :func:`bulk_capacitors_of` and friends), so the import cannot be hoisted
+    without a cycle. Resolving it per call is a ``sys.modules`` lookup, and it
+    keeps one seam rather than one import per call site.
+    """
+    from . import focground
+
+    return focground
+
+
+def schematic_page_of(ctx: PcbReviewContext) -> object | None:
+    """The schematic page this PCB document belongs to, or ``None``.
+
+    :func:`~boardwise.rules.pcb.focground.schematic_board_of`, resolved off the
+    document's own declared ``META.board`` link (151/153's chain, never
+    designator overlap — 毕设FOC's Board1 and Board3 share ``C1``…``R6``, so
+    matching boards by refdes would answer with the wrong page). ``None`` means
+    「no schematic view for this document」 and is an ordinary degradation: the
+    pools then read the PCB document's copies and every reading says it is a
+    fallback.
+    """
+    return _focground().schematic_board_of(ctx)
+
+
+def _farads_of(text: str) -> float | None:
+    """Farads for one ``Value`` field, whole field first and leading token second.
+
+    The second attempt is not a second grammar: it is the **same**
+    :func:`~boardwise.core.values.parse_capacitance_farads`, handed the field's
+    first whitespace-separated token — the piece ``core.values._too_long`` already
+    declares the decoders read (「an MPN's `` TS`` tail is a packaging note, not
+    code」). Measured on llc: the schematic page states ``330uF 400V`` for ``C3`` /
+    ``C4``, and the shared grammar requires the unit to **end** the field, so the
+    whole-field read is ``None`` while ``parse_capacitance_farads("330uF")`` is
+    330 µF. Reading only the whole field would have reported llc — which really
+    does place two 330 µF bus electrolytics — as carrying none.
+    """
+    if not text:
+        return None
+    farads = parse_capacitance_farads(text)
+    if farads is not None:
+        return farads
+    stripped = text.strip()
+    if not stripped:
+        return None
+    return parse_capacitance_farads(stripped.split(maxsplit=1)[0])
+
+
+def _token_note(text: str) -> str:
+    """The clause saying a trailing-rated field was read by its leading token."""
+    if not text or parse_capacitance_farads(text) is not None:
+        return ""
+    stripped = text.strip()
+    if not stripped:
+        return ""
+    token = stripped.split(maxsplit=1)[0]
+    if token == stripped or parse_capacitance_farads(token) is None:
+        return ""
+    return (
+        f"（该值字段共享电容语法读不整串——{text!r} 带尾注——按其首个词 {token!r} 读出）"
+    )
+
+
+def _value_farads(placed: object, schematic: object | None = None) -> CapacitanceValue:
+    """``CapacitanceValue`` for one part, read through **both** views.
+
+    The **schematic page's** declaration wins and the PCB document's copy is only
+    a fallback, because that copy is systematically stale: measured on 毕设FOC
+    1.1.0's PCB1, 45 of 105 placed parts carry a value the schematic contradicts
+    (23 read ``100nF``, 20 read ``10K``). Same reading, same three cases, same
+    sentences as :func:`~boardwise.rules.pcb.focground._value_ohms` (153b's 0 Ω
+    reader) — the module family reads one view through one口径:
+
+    1. **the schematic states a value** — that is the value judged on, and when the
+       PCB copy disagrees the ``basis`` says 「原理图 X / PCB 文档 Y」. A schematic
+       value that does not parse is UNKNOWN: the PCB copy is *not* allowed to
+       rescue it, because promoting a part into the bulk pool out of the view this
+       fix demotes is the same invention facing the other way;
+    2. **the schematic states nothing, the PCB document does** — the copy is used
+       and the ``basis`` says it is a fallback. Measured and needed: 毕设FOC
+       1.0.0's ``C115``/``C116`` (the 330 µF pair) have **empty** schematic values
+       and the copy's ``330uF``;
+    3. **neither states one** — ``value`` is ``""`` and ``farads`` is ``None``
+       (UNKNOWN, never zero).
+
+    One addition over ``_value_ohms``, and only for capacitance: a field that
+    carries a trailing annotation (llc's ``330uF 400V``) is read by its leading
+    token — see :func:`_farads_of` — and the row says so.
+    """
+    drawn = str(getattr(schematic, "value", "") or "")
+    own = str(getattr(placed, "value", "") or "")
+    if drawn:
+        value = drawn
+        basis = (
+            f"两视图不一致，判定用**原理图**值：原理图 {drawn!r} / PCB 文档 {own!r}"
+            if own and own != drawn
+            else f"原理图声明 {drawn!r}"
+            + ("（PCB 文档同值）" if own else "（PCB 文档未写该值）")
+        )
+        basis += _token_note(drawn)
+    elif own:
+        value = own
+        basis = (
+            f"原理图页未写该值，**回退 PCB 文档值** {own!r}（口径：本板板链读出的"
+            "原理图页没有声明，只能取 PCB 文档的副本）"
+        )
+        basis += _token_note(own)
+    else:
+        value = ""
+        basis = "原理图页与 PCB 文档都没有写值"
+    if not value:
+        return CapacitanceValue(
+            value="", farads=None, schematic_value=drawn, pcb_value=own, basis=basis
+        )
+    return CapacitanceValue(
+        value=value,
+        farads=_farads_of(value),
+        schematic_value=drawn,
+        pcb_value=own,
+        basis=basis,
+    )
+
+
+def _value_farads_for(
+    model: object, designator: str, schematic: object | None = None
+) -> CapacitanceValue:
+    """One designator's capacitance through both views (:func:`_value_farads`).
+
+    The copy is read off the netlist view the runner hands over — the geometry
+    carries pads and tracks, not values — and **never** off the shelf: the fitted
+    capacitance is the drawing's own word, and a shelf entry's value field is a
+    catalogue default. The page's copy of the same designator is resolved by
+    :func:`~boardwise.rules.pcb.focground._placed_on` (this document's own page,
+    so 1.0.0's ``C1`` cannot answer with 1.1.0's).
+    """
+    component = (getattr(model, "components", {}) or {}).get(designator)
+    if component is None:
+        return CapacitanceValue()
+    return _value_farads(component, _focground()._placed_on(schematic, designator))
+
+
+def bulk_capacitors_of(
+    model: object, library=None, schematic: object | None = None
+) -> list[tuple[str, str, float]]:
     """Every capacitor at or above :data:`BULK_FARADS`, as ``(des, value, farads)``.
 
     A candidate must **look like a capacitor** (the same
@@ -328,23 +517,35 @@ def bulk_capacitors_of(model: object, library=None) -> list[tuple[str, str, floa
     not guessed into one: an unreadable value is UNKNOWN, never a zero and never
     a 330 µF.
 
-    Measured: 毕设FOC 1.0.0's ``C115`` / ``C116`` (330 µF) and llc's ``C3`` /
-    ``C4``; ROBOT's largest fitted capacitor is 10 µF, so R20 is silent there.
+    **The value is read through both views** (:func:`_value_farads_for`,
+    ``schematic`` handed in as :func:`schematic_page_of`): the schematic page's
+    declaration wins and the PCB document's copy is only a fallback. This is
+    153b's 口径, applied to the pool 133b first built — R1b's 0 Ω half already read
+    the page while this half still read the copies, which is one module with two
+    answers to 「what is this part」 (F6 in the audit). ``schematic=None`` is the
+    ordinary 「no page for this document」 and every reading then says it is a
+    fallback.
+
+    Measured: 毕设FOC 1.0.0's ``C115`` / ``C116`` (330 µF — the page states no
+    value and the copy does, the fallback case) and llc's ``C3`` / ``C4`` (the
+    page states ``330uF 400V``, read by its leading token); ROBOT's largest fitted
+    capacitor is 10 µF, so R20 is silent there.
     """
     found: list[tuple[str, str, float]] = []
     for designator in sorted(getattr(model, "components", {}) or {}):
-        component = (getattr(model, "components", {}) or {})[designator]
-        value = str(getattr(component, "value", "") or "")
-        farads = parse_capacitance_farads(value) if value else None
-        if farads is None:
+        draw = _value_farads_for(model, str(designator), schematic)
+        if draw.farads is None:
             continue
-        if farads + _BOUNDARY_FARADS >= BULK_FARADS:
-            found.append((str(designator), value, farads))
+        if draw.farads + _BOUNDARY_FARADS >= BULK_FARADS:
+            found.append((str(designator), draw.value, draw.farads))
     return found
 
 
 def power_mosfets_of(
-    board: BoardGeometry, model: object, library=None
+    board: BoardGeometry,
+    model: object,
+    library=None,
+    schematic: object | None = None,
 ) -> list[tuple[str, str, str]]:
     """Every power MOSFET on this board, as ``(designator, category, basis)``.
 
@@ -371,8 +572,16 @@ def power_mosfets_of(
     of the two doors a part came through. A board with no ``Q`` part on any bulk
     net and no shelf ``fet`` returns an empty list, and R20 then produces no
     row — 「this board has no power stage」 is a legal board, not a finding.
+
+    ``schematic`` is threaded straight into :func:`bulk_capacitors_of`, so the
+    bus-net half of the ``Q``-door reads the **same pool** R20 ranks against
+    (:func:`_value_farads_for`'s 口径): a FET the rule admits through a bulk net,
+    and the capacitor the rule pairs it with, must be the same two parts.
     """
-    bulk_designators = {des for des, _value, _farads in bulk_capacitors_of(model, library)}
+    bulk_designators = {
+        des
+        for des, _value, _farads in bulk_capacitors_of(model, library, schematic)
+    }
     bus_nets = {
         net
         for net in board.net_names()
@@ -443,18 +652,6 @@ def _between_vias(
     if box is None:
         return []
     return vias_in_region(board, box)
-
-
-def _declared_value(model: object, designator: str) -> str:
-    """The value the drawing states for one part, or ``""``.
-
-    Read off the netlist view the runner hands over — the geometry carries pads
-    and tracks, not values — and **never** off the shelf: the fitted
-    capacitance is the drawing's own word, and a shelf entry's value field is a
-    catalogue default.
-    """
-    component = (getattr(model, "components", {}) or {}).get(designator)
-    return str(getattr(component, "value", "") or "") if component is not None else ""
 
 
 def _pairing_gap(board: BoardGeometry, a: str, b: str) -> float | None:
@@ -562,16 +759,30 @@ class FocDecapProximity(PcbRule):
         shelf, so a synthetic test injects a two-entry library rather than
         monkeypatching the project's own
         :func:`boardwise.rules.facts.default_library_path`.
+
+        **The schematic page is resolved once here** (:func:`schematic_page_of`)
+        and threaded into the one value read this rule makes — 「the capacitor's
+        declared value」. Everything *electrical about the wiring* stays on
+        ``ctx.pcb_model``: the supply net, the bypass candidates and the pin
+        numbers are the **board's** netlist, because that is the view the geometry
+        was measured in (131c's lesson: the schematic calls a wire ``NET11`` where
+        the board calls it ``$1N66612``, and reading nets off the wrong view
+        attributes a real measurement to a net that does not exist on the board).
         """
         board = ctx.board
         model = ctx.pcb_model
         if board is None or model is None:
             return []
+        schematic = schematic_page_of(ctx)
         findings: list[Finding] = []
         for designator, component, category in _motor_drivers(model, library):
             if board.component(designator) is None:
                 continue  # named by the netlist, not placed on this PCB document
-            findings.extend(self._one_driver(board, model, designator, category, library))
+            findings.extend(
+                self._one_driver(
+                    board, model, designator, category, library, schematic
+                )
+            )
         return findings
 
     def _identity(self, designator: str, category: str) -> list[str]:
@@ -623,6 +834,7 @@ class FocDecapProximity(PcbRule):
         designator: str,
         category: str,
         library,
+        schematic: object | None = None,
     ) -> list[Finding]:
         """Every row for one power driver on one PCB document."""
         component = (getattr(model, "components", {}) or {})[designator]
@@ -709,6 +921,7 @@ class FocDecapProximity(PcbRule):
                         ic_layers,
                         evidence,
                         library,
+                        schematic,
                     )
                 )
         return findings
@@ -733,6 +946,7 @@ class FocDecapProximity(PcbRule):
         ic_layers: list[int],
         identity: list[str],
         library,
+        schematic: object | None = None,
     ) -> Finding:
         """One (driver, net, capacitor) row: distance, same layer, corridor vias.
 
@@ -741,6 +955,13 @@ class FocDecapProximity(PcbRule):
         when it is within it, and ``INFO`` when it cannot be measured at all —
         an unmeasurable gap is UNKNOWN and UNKNOWN is not 「over」, which is the
         same discipline the value readers in this pack follow.
+
+        The capacitor's **declared value** is read through both views
+        (:func:`_value_farads_for`): the schematic page's declaration wins and the
+        PCB document's copy is only a fallback, with 「原理图 X / PCB 文档 Y」 on the
+        row when they disagree. Measured on 毕设FOC 1.0.0's PCB1, 37 parts carry a
+        copy the page contradicts, and this rule used to quote those copies as
+        「declared」.
         """
         cap_pads = [
             pad for pad in board.pads_for_component(cap) if pad.net == net
@@ -753,8 +974,8 @@ class FocDecapProximity(PcbRule):
             (pad_edge_distance(a, ic_pad) for a in cap_pads),
             default=None,
         )
-        declared = _declared_value(model, cap)
-        farads = parse_capacitance_farads(declared) if declared else None
+        declared_view = _value_farads_for(model, cap, schematic)
+        declared, farads = declared_view.value, declared_view.farads
         # 岳 2026-10-11: 以内 INFO、以外 WARN. Only a **measured** gap can cross
         # the line — UNKNOWN is not 「over」, and grading an unmeasurable gap would
         # be the same invention the pack refuses everywhere else.
@@ -795,7 +1016,8 @@ class FocDecapProximity(PcbRule):
                 else f" = {farads * 1e6:g} µF"
                 if farads is not None
                 else " — unreadable, so no capacitance figure is stated"
-            ),
+            )
+            + f"；value reading (153b's 口径)：{declared_view.basis}",
             f"component-level distance {driver} ↔ {cap}: "
             + (
                 f"{_mil(component_level.edge_distance):.1f} mil edge-to-edge "
@@ -1330,6 +1552,10 @@ class LoopReading:
     bulk_farads: float = 0.0
     mos: str = ""
     mos_basis: str = ""
+    #: How ``bulk_value`` was chosen between the two views, in one auditable
+    #: sentence (:func:`_value_farads`, 153b's 口径) — 「原理图 X / PCB 文档 Y，
+    #: 判定用原理图值」 when they drift, or the fallback's own wording.
+    bulk_value_basis: str = ""
     #: The anchor strings handed to ``loop_area``, in order.
     anchors: tuple[str, ...] = ()
     polygon_area: float = 0.0
@@ -1386,6 +1612,13 @@ class FocPowerLoopArea(PcbRule):
     driver, no bulk capacitor, no power FET) produces **no row** — 「no power
     stage」 is a legal board shape, and a rule that filed a finding for every
     absence would bury the FOC boards under everything else.
+
+    **The bulk pool is read through both views** (:func:`bulk_capacitors_of` with
+    the page :func:`schematic_page_of` resolves, 153b's 口径): the schematic
+    page's declaration wins and the PCB document's copy is only a fallback, with
+    the divergence written onto the row. llc is the corpus's measured instance —
+    its page states ``330uF 400V`` for ``C3``/``C4`` where the copy states
+    ``330uF`` — so a reader sees which view the number came from on every loop.
     """
 
     id = "pcb-foc-power-loop-area"
@@ -1399,22 +1632,32 @@ class FocPowerLoopArea(PcbRule):
     def check_with_library(
         self, ctx: PcbReviewContext, library=None
     ) -> list[Finding]:
-        """The pass, with the shelf handed in (same contract as 131b/131d)."""
+        """The pass, with the shelf handed in (same contract as 131b/131d).
+
+        The page is resolved once here (:func:`schematic_page_of`) and threaded
+        into both pools, so the bulk capacitor this rule pairs with a FET and the
+        bus net that admitted the FET are one reading rather than two.
+        """
         board = ctx.board
         model = ctx.pcb_model
         if board is None or model is None:
             return []
-        readings = self._loops(board, model, library)
+        schematic = schematic_page_of(ctx)
+        readings = self._loops(board, model, library, schematic)
         if not readings:
             return []
         return [self._one_loop(board, model, library, reading) for reading in readings]
 
     def _loops(
-        self, board: BoardGeometry, model: object, library
+        self,
+        board: BoardGeometry,
+        model: object,
+        library,
+        schematic: object | None = None,
     ) -> list[LoopReading]:
         """Every closable (bulk capacitor, power FET) loop on this board."""
-        bulks = bulk_capacitors_of(model, library)
-        fets = power_mosfets_of(board, model, library)
+        bulks = bulk_capacitors_of(model, library, schematic)
+        fets = power_mosfets_of(board, model, library, schematic)
         readings: list[LoopReading] = []
         for mos, category, basis in fets:
             mos_pads = board.pads_for_component(mos)
@@ -1430,7 +1673,7 @@ class FocPowerLoopArea(PcbRule):
             # capacitor **may** serve more than one FET — that is what a bus
             # capacitor does — so the pairing is not one-to-one, and a tie at the
             # same gap is broken by designator so the result is deterministic.
-            candidates: list[tuple[float, str, str, float]] = []
+            candidates: list[tuple[float, str, str, float, str]] = []
             for bulk, value, farads in bulks:
                 bulk_pads = board.pads_for_component(bulk)
                 if not bulk_pads:
@@ -1446,11 +1689,19 @@ class FocPowerLoopArea(PcbRule):
                     gap = _fallback_gap(board, bulk, mos)
                 if gap is None:
                     continue
-                candidates.append((gap, bulk, value, farads))
+                candidates.append(
+                    (
+                        gap,
+                        bulk,
+                        value,
+                        farads,
+                        _value_farads_for(model, bulk, schematic).basis,
+                    )
+                )
             if not candidates:
                 continue  # no bulk capacitor on any of this FET's nets: no loop
             candidates.sort(key=lambda row: (row[0], row[1]))
-            gap, bulk, value, farads = candidates[0]
+            gap, bulk, value, farads, value_basis = candidates[0]
 
             bulk_pads = board.pads_for_component(bulk)
             bus_net = sorted({p.net for p in bulk_pads if p.net} & mos_nets)[0]
@@ -1477,6 +1728,7 @@ class FocPowerLoopArea(PcbRule):
                     bulk=bulk,
                     bulk_value=value,
                     bulk_farads=farads,
+                    bulk_value_basis=value_basis,
                     mos=mos,
                     mos_basis=basis,
                     anchors=anchors,
@@ -1513,6 +1765,8 @@ class FocPowerLoopArea(PcbRule):
                 f"at or above the {BULK_FARADS * 1e6:g} µF floor (133b's own "
                 "figure; read through core.values.parse_capacitance_farads on "
                 "the drawing's own value, never guessed from a package)",
+                f"{reading.bulk} value reading (153b's 口径)："
+                f"{reading.bulk_value_basis}",
                 f"power FET {reading.mos} recognised because: {reading.mos_basis}",
                 "anchor construction (the documented shape): the bulk "
                 "capacitor's bus pad → its return pad → the FET's pad on the "
