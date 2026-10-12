@@ -36,11 +36,32 @@ ROBOT ctrl FOC PCB1  50            49（**多一条**：parentId 不指向本板
 字号 ``fontSize`` 实测全是 45 mil（板上的位号统一 1.143 mm），``origin`` 全是
 ``LEFT_BOTTOM``。
 
-**文字盒子是个模型，不是读数**：``.epru`` 不带字形宽度，所以「这串字占多宽」
-只能按「字符数 × 字宽比 × 字号」估。本规则的做法见 :data:`ADVANCE_BAND`：
-**用一条带（最窄 0.4 / 常用 0.6 / 最宽 0.8）量三次**，只有**在最窄的那一档就已经
-压上**才报 WARN（那是无论字形怎么设计都成立的压焊盘）；只有宽档才压上的降为
-INFO 测量行。这是任务书「阈值没谱的就出测量行（INFO），别编阈值」的落点。
+**宽度两态：实测优先、估算降级（任务 172，岳 2026-10-11 裁）**
+=============================================================
+
+``.epru`` 不带字形宽度，所以**离线**只有一条路：按「字符数 × 字宽比 × 字号」估。
+本规则的做法见 :data:`ADVANCE_BAND`：**用一条带（最窄 0.4 / 常用 0.6 / 最宽 0.8）
+量三次**，只有**在最窄的那一档就已经压上**才报 WARN（那是无论字形怎么设计都成立
+的压焊盘）；只有宽档才压上的降为 INFO 测量行。这是任务书「阈值没谱的就出测量行
+（INFO），别编阈值」的落点。
+
+**岳 2026-10-11 裁：宽度要实测，测不到就明说降级，不许拿估算当实测。** 于是本规则
+多了第二种宽度来源：
+
+* :data:`MEASURED_WIDTH` —— 宿主给的 primitive **bbox**（EasyEDA Pro 的
+  ``getPrimitivesBBox``，参考 easyeda-agent 的 ``pcbSilkAlign``：
+  ``eda.pcb_Primitive.getPrimitivesBBox([attrId])`` 量每条位号 ATTR）。这时宽度是
+  **读数**，一整条带都不需要，一次相交判定就够；
+* :data:`ESTIMATED_WIDTH` —— 上面那条带。**每条终结于估算数字的 evidence 都必须
+  出现「估算值」三个字**，就是这一条把两态钉开：报告里不允许出现一个看起来像读数
+  的估算数字。
+
+实测盒是宿主给的**轴对齐** ink 盒（``minX/minY/maxX/maxY``），所以 0°/90°/180°/
+270° 的位号上它与文字盒等价，而**斜置**位号上它是外接矩形（比字大）——这一条写进
+evidence，不藏起来。谁给实测盒不归本规则管：:class:`SilkDesignator` 收一个
+``measured`` 映射，键是 ``(板名, 位号文字)``，值是四角或 ``(minX, minY, maxX,
+maxY)``——**按板名分键是必须的**，同一个工程里 ``C1`` 在多块板上各有一份，
+按位号文字单键会把 A 板的读数贴到 B 板的几何上。
 
 分级阶梯（与 :mod:`boardwise.rules.pcb.polarity` 同一套口径）
 ============================================================
@@ -48,7 +69,8 @@ INFO 测量行。这是任务书「阈值没谱的就出测量行（INFO），�
 =======================  =======  =============================================
 类别                     级别     判据
 =======================  =======  =============================================
-位号丝印压焊盘            WARN     位号文字盒与**同面的焊盘**相交，且在**最窄**字宽
+位号丝印压焊盘            WARN     位号文字盒与**同面的焊盘**相交：有宿主实测
+                                  bbox 时按读数判（172）；没有时要在**最窄**字宽
                                   档下就相交（量出叠加深度）
 位号被器件本体压住        WARN     位号文字盒**整体落进**另一个器件本体轮廓内
                                   （完全看不见）
@@ -56,7 +78,8 @@ INFO 测量行。这是任务书「阈值没谱的就出测量行（INFO），�
                                   文件答不了（同 151 的 DNP 缺口），只出读数
 位号方向分布              INFO     同面文字方向的分布（含与多数方向相反/斜置的
                                   那些）——**方向上没有可查的阈值**，出读数不判
-本板丝印小结              INFO     几个位号、几个可读、压焊盘的几个
+本板丝印小结              INFO     几个位号、几个可读、压焊盘的几个、宽度实测/
+                                  估算各几个（172 的两态盘账）
 =======================  =======  =============================================
 
 WARN 与 INFO 的分界是同一条：**几何硬事实（相交/包含）报 WARN，需要判断意图或
@@ -74,10 +97,14 @@ from .base import PcbReviewContext, PcbRule
 __all__ = [
     "ADVANCE_BAND",
     "DEFAULT_ADVANCE",
+    "ESTIMATED_WIDTH",
+    "MEASURED_WIDTH",
     "NARROW_ADVANCE",
     "WIDE_ADVANCE",
+    "WIDTH_SOURCE_LABEL",
     "SilkDesignator",
     "box_overlaps",
+    "measured_corners",
     "pad_polygon",
     "polygon_gap",
     "text_box",
@@ -105,11 +132,58 @@ NARROW_ADVANCE = 0.4
 DEFAULT_ADVANCE = 0.6
 WIDE_ADVANCE = 0.8
 
+#: 文字宽度的两种来源（任务 172）。**不是同一种东西，报告里必须分开**：
+#:
+#: * :data:`MEASURED_WIDTH` —— 宿主 primitive bbox 的读数；
+#: * :data:`ESTIMATED_WIDTH` —— :data:`ADVANCE_BAND` 里那条带的估算（默认值，
+#:   也是离线 ``--file`` 路径上唯一的来源：没有宿主可问）。
+MEASURED_WIDTH = "measured"
+ESTIMATED_WIDTH = "estimated"
+
+#: 两态在报告里的字样。``ESTIMATED_WIDTH`` 那个必须是「估算值」——这是本批
+#: 「不许拿估算当实测」的落点，测试逐字钉它。
+WIDTH_SOURCE_LABEL = {
+    MEASURED_WIDTH: "实测（宿主 primitive bbox）",
+    ESTIMATED_WIDTH: "估算值（字宽比带，非读数）",
+}
+
 #: 位号文字在板上的面：顶层丝印 ↔ 顶层铜，底层丝印 ↔ 底层铜。
 FACE_OF_SILK = {"TOP_SILK": 1, "BOT_SILK": 2}
 
 #: 器件**本体轮廓**所在层（EasyEDA 的「元件外形层」，实测 id 48）。
 BODY_KIND = "COMPONENT_SHAPE"
+
+
+def measured_corners(value) -> list:
+    """把一条宿主实测盒规范成四个板坐标角点。
+
+    收两种写法，都是调用方容易拿到的东西：
+
+    * ``(minX, minY, maxX, maxY)`` —— 宿主 ``getPrimitivesBBox`` 的原始形状
+      （轴对齐）；
+    * 四个点（``(x, y)`` 或带 ``.x``/``.y`` 的对象）—— 已经算好的盒子。
+
+    形状不对就 ``ValueError``：一条读不懂的实测盒必须当场炸，不能悄悄退化成
+    估算（那正是本批要消灭的混同）。
+    """
+    from ...core.geometry import Point
+
+    if (
+        isinstance(value, (tuple, list))
+        and len(value) == 4
+        and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value)
+    ):
+        min_x, min_y, max_x, max_y = (float(v) for v in value)
+        return [
+            Point(min_x, min_y),
+            Point(max_x, min_y),
+            Point(max_x, max_y),
+            Point(min_x, max_y),
+        ]
+    points = [Point(*_as_xy(p)) for p in value]
+    if len(points) != 4:
+        raise ValueError(f"a measured text box needs 4 corners, got {len(points)}")
+    return points
 
 
 def text_box(text, advance: float = DEFAULT_ADVANCE):
@@ -249,15 +323,31 @@ def box_overlaps(corners: list, pad) -> float:
 
 @dataclass
 class _Hit:
-    """一次压焊盘命中：哪只脚、叠加多深（三个字宽模型各量一次）。"""
+    """一次压焊盘命中：哪只脚、叠加多深（估算法三个字宽模型各量一次）。
+
+    ``measured`` 非 ``None`` 时是 :data:`MEASURED_WIDTH` 那一档的读数——那时
+    ``depths`` 是空的（一整条带都不需要），两个字段恒有一个有值，绝不混着报。
+    """
 
     component: str = ""
     pin: str = ""
     depths: dict[float, float] = field(default_factory=dict)
+    measured: float | None = None
 
     @property
     def worst(self) -> float:
-        return min(self.depths.values()) if self.depths else 0.0
+        values = list(self.depths.values())
+        if self.measured is not None:
+            values.append(self.measured)
+        return min(values) if values else 0.0
+
+    def line(self) -> str:
+        """这条命中的量值（估算法那三档 / 那一档实测读数）。"""
+        parts = []
+        if self.measured is not None:
+            parts.append(f"实测 → {self.measured:.1f} mil")
+        parts.extend(f"字宽比 {a:g} → {d:.1f} mil" for a, d in sorted(self.depths.items()))
+        return " / ".join(parts)
 
 
 class SilkDesignator(PcbRule):
@@ -265,16 +355,59 @@ class SilkDesignator(PcbRule):
 
     每条 finding 都把 5 件事说全：哪块板 / 哪个位号（或哪一组）/ 量出什么 /
     判据是什么 / 后果是什么。见模块 docstring 的分级阶梯。
+
+    ``measured``（任务 172）是**宿主实测的文字盒**，键 ``(板名, 位号文字)``、
+    值是 :func:`measured_corners` 收的两种写法之一。给了就用读数、不给就用
+    :data:`ADVANCE_BAND` 估——两条路在每条 evidence 里分别带「实测（宿主
+    primitive bbox）」/「估算值（字宽比带，非读数）」字样，读报告的人不必猜。
     """
 
     id = "pcb-silk-designator"
     title = "位号丝印不压焊盘、不被器件本体压住、方向一致"
     level = "L1-pcb-geometry"
     source = (
-        "house rule（岳 2026-10-11 待裁）：文字盒 = 字符数 × 字宽比 × fontSize，"
-        "字宽比取带 [0.4, 0.6, 0.8]（.epru 不带字形步进，最窄档是 WARN 门槛）；"
-        "压焊盘判据 = 同面焊盘与文字盒相交（0 间隙，非工艺限值）"
+        "house rule（压焊盘判据「0 间隙」待裁；文字宽度岳 2026-10-11 裁："
+        "**实测优先、估算降级**——宿主 primitive bbox（getPrimitivesBBox）可用时用"
+        "读数，测不到时退到字宽比带 [0.4, 0.6, 0.8] 并在 evidence 里逐条标"
+        "「估算值」（.epru 不带字形步进））；压焊盘判据 = 同面焊盘与文字盒相交"
+        "（0 间隙，非工艺限值）"
     )
+
+    def __init__(self, measured=None):
+        #: ``(board_title, designator text) -> 实测盒``。按板名分键：同一工程里
+        #: ``C1`` 在多块板上各有一份，单键会把 A 板的读数贴到 B 板上。
+        self.measured = dict(measured or {})
+
+    # -- width provenance (172) -------------------------------------------
+
+    def _measured_box(self, ctx, text):
+        """这条位号的宿主实测盒（四角），没测到就是 ``None``。"""
+        value = self.measured.get((ctx.board_title, text.text))
+        if value is None:
+            return None
+        return measured_corners(value)
+
+    def _measured_note(self, ctx, text, corners) -> str:
+        xs = [c.x for c in corners]
+        ys = [c.y for c in corners]
+        line = (
+            f"宽度来源：{WIDTH_SOURCE_LABEL[MEASURED_WIDTH]}——"
+            f"实测盒 ({min(xs):.3f}, {min(ys):.3f})–({max(xs):.3f}, {max(ys):.3f}) mil，"
+            f"是宿主给的**轴对齐** ink 盒（读数，不是模型）"
+        )
+        if abs((float(text.angle) % 90.0)) > 1e-6:
+            line += (
+                f"；这条位号斜置 {text.angle:g}°，轴对齐盒是它的外接矩形（比字大）"
+                "——外接方向只会**多报**不会漏报"
+            )
+        return line
+
+    def _estimate_note(self, text) -> str:
+        return (
+            f"宽度来源：{WIDTH_SOURCE_LABEL[ESTIMATED_WIDTH]}——.epru 不带字形步进，"
+            f"文字盒按 字符数 × 字宽比 × fontSize({text.font_size:g} mil) 估，"
+            "字宽比只测到「这条压不压得上」，测不到「这串字到底多宽」"
+        )
 
     # -- the pass ---------------------------------------------------------
 
@@ -305,53 +438,84 @@ class SilkDesignator(PcbRule):
             face = FACE_OF_SILK.get(str(text.layer_kind or ""))
             if face is None:
                 continue
+            # 172: 实测优先。有读数就不跑那条带——一整条三档的估算在读数面前
+            # 没有信息量，混在一起报反而让人分不清哪个数是量出来的。
+            measured_box = self._measured_box(ctx, text)
             hits: list[_Hit] = []
             for pad in ctx.board.pads:
                 if face not in (pad.effective_layer_ids or []):
                     continue
                 hit = _Hit(component=str(pad.component or ""), pin=str(pad.pin_number or ""))
-                for advance in ADVANCE_BAND:
-                    gap = box_overlaps(text_box(text, advance), pad)
+                if measured_box is not None:
+                    gap = polygon_gap([_as_xy(c) for c in measured_box], pad_polygon(pad))
                     if gap < 0:
-                        hit.depths[advance] = -gap
-                if hit.depths:
+                        hit.measured = -gap
+                else:
+                    for advance in ADVANCE_BAND:
+                        gap = box_overlaps(text_box(text, advance), pad)
+                        if gap < 0:
+                            hit.depths[advance] = -gap
+                if hit.measured is not None or hit.depths:
                     hits.append(hit)
             if not hits:
                 continue
+            if measured_box is not None:
+                findings.append(
+                    self._over_pad_warn(ctx, text, hits, MEASURED_WIDTH, measured_box)
+                )
+                continue
             robust = [h for h in hits if NARROW_ADVANCE in h.depths]
             if robust:
-                findings.append(self._over_pad_warn(ctx, text, robust))
+                findings.append(self._over_pad_warn(ctx, text, robust, ESTIMATED_WIDTH))
             else:
                 wide_only.append((str(text.text), hits))
         if wide_only:
             findings.append(self._over_pad_wide(ctx, wide_only))
         return findings
 
-    def _over_pad_warn(self, ctx, text, hits: list[_Hit]) -> Finding:
+    def _over_pad_warn(self, ctx, text, hits: list[_Hit], source: str, measured_box=None) -> Finding:
         worst = max(hits, key=lambda h: h.worst)
         lines = [
-            f"{h.component} pin {h.pin}: 叠加深度 "
-            + " / ".join(f"字宽比 {a:g} → {d:.1f} mil" for a, d in sorted(h.depths.items()))
+            f"{h.component} pin {h.pin}: 叠加深度（{WIDTH_SOURCE_LABEL[source]}）{h.line()}"
             for h in sorted(hits, key=lambda h: h.component)
         ]
+        if source == MEASURED_WIDTH:
+            verdict = (
+                f"{len(hits)} 只焊盘被压（最深的 {worst.component} pin {worst.pin}、"
+                f"{worst.worst:.1f} mil），宿主实测的文字盒就直接相交（不是估算出来的）"
+            )
+            criteria = (
+                "判据：**宿主实测**的文字盒（getPrimitivesBBox 的轴对齐 ink 盒）与"
+                "**同面**焊盘的实例化几何相交，0 间隙——不是工艺限值，是「压上」这件事"
+                "本身。宽度是读数，所以不需要字宽比带"
+            )
+        else:
+            verdict = (
+                f"{len(hits)} 只焊盘被压（最深的 {worst.component} pin {worst.pin}、"
+                f"{worst.worst:.1f} mil），最窄字宽档（{NARROW_ADVANCE:g}）下就已经压上"
+            )
+            criteria = (
+                "判据：**估算值**文字盒（字符数 × 字宽比 × fontSize，按角度旋转）与"
+                "**同面**焊盘的实例化几何相交，0 间隙——不是工艺限值，是「压上」这件事"
+                "本身。三档字宽比都量了，这里报的是最窄档也压上的"
+            )
         return Finding(
             rule_id=self.id,
             severity="WARN",
             level=self.level,
-            message=(
-                f"{ctx.board_title} {text.text} 的位号丝印压在焊盘上："
-                f"{len(hits)} 只焊盘被压（最深的 {worst.component} pin {worst.pin}、"
-                f"{worst.worst:.1f} mil），最窄字宽档（{NARROW_ADVANCE:g}）下就已经压上"
-            ),
+            message=f"{ctx.board_title} {text.text} 的位号丝印压在焊盘上：{verdict}",
             evidence=lines
             + [
                 f"位号记录：layer {text.layer_id}（{text.layer_kind}），锚点 "
                 f"({text.x:.1f}, {text.y:.1f})，角度 {text.angle:g}°"
                 f"（文件原值 {text.stored_angle:g}），fontSize {text.font_size:g} mil，"
                 f"origin {text.origin or '(空)'}，文字 {text.text!r}",
-                f"判据：文字盒（字符数 × 字宽比 × fontSize，按角度旋转）与**同面**焊盘的"
-                f"实例化几何相交，0 间隙——不是工艺限值，是「压上」这件事本身。"
-                f"三档字宽比都量了，这里报的是最窄档也压上的",
+                (
+                    self._measured_note(ctx, text, measured_box)
+                    if source == MEASURED_WIDTH
+                    else self._estimate_note(text)
+                ),
+                criteria,
                 "焊盘几何取**内接**形状（椭圆焊盘取内接圆），所以这个叠加深度是保守"
                 "下限；阻焊开窗比焊盘大 2.008 mil（本工程 SOLDER 规则实测值），"
                 "真实压上的面积只会更大",
@@ -371,12 +535,11 @@ class SilkDesignator(PcbRule):
         lines: list[str] = []
         for name, hits in sorted(entries):
             for hit in sorted(hits, key=lambda h: h.component):
+                # 这条汇总行只出现在估算那一态（有实测盒的位号走 WARN 那条路），
+                # 所以来源字样是恒定的「估算值」——逐行写出来，不给读者留猜测。
                 lines.append(
                     f"{name} → {hit.component} pin {hit.pin}: "
-                    + " / ".join(
-                        f"字宽比 {a:g} → {d:.1f} mil"
-                        for a, d in sorted(hit.depths.items())
-                    )
+                    f"叠加深度（{WIDTH_SOURCE_LABEL[ESTIMATED_WIDTH]}）{hit.line()}"
                 )
         return Finding(
             rule_id=self.id,
@@ -389,11 +552,15 @@ class SilkDesignator(PcbRule):
             ),
             evidence=lines
             + [
-                ".epru 不带字形步进，本规则只能用字宽比带 "
+                f"宽度来源：{WIDTH_SOURCE_LABEL[ESTIMATED_WIDTH]}——.epru 不带字形步进，"
+                "本规则只能用字宽比带 "
                 + " / ".join(f"{a:g}" for a in ADVANCE_BAND)
                 + " 量；这条是测量行，不是缺陷判定的落点（任务书纪律：阈值没谱的"
                 "只出测量行）。要判的话先把字形步进钉死，再把这条升级成 WARN 即可"
                 "——那是一次口径变更，改一行",
+                "这条之所以还是估算：宿主 primitive bbox（getPrimitivesBBox）没有"
+                "给出这些位号的实测盒（任务 172）——一旦给出，实测盒会直接取代这条带，"
+                "这条汇总行也随之消失",
             ],
         )
 
@@ -421,7 +588,18 @@ class SilkDesignator(PcbRule):
             face = FACE_OF_SILK.get(str(text.layer_kind or ""))
             if face is None:
                 continue
-            box = text_box(text, WIDE_ADVANCE)
+            # 172: 「整体落进别人本体」也吃宽度，所以同样实测优先。估算档取
+            # **最宽**——这里问的是「完全看不见」，宽松估计才不会漏报。
+            measured_box = self._measured_box(ctx, text)
+            if measured_box is not None:
+                box = measured_box
+                width_note = self._measured_note(ctx, text, measured_box)
+            else:
+                box = text_box(text, WIDE_ADVANCE)
+                width_note = (
+                    f"宽度来源：{WIDTH_SOURCE_LABEL[ESTIMATED_WIDTH]}——本规则用**最宽**"
+                    f"字宽档（{WIDE_ADVANCE:g}）估这串字占多宽（.epru 不带字形步进）"
+                )
             for component, body_face, polygon in bodies:
                 if component == text.component or body_face != face:
                     continue
@@ -430,7 +608,10 @@ class SilkDesignator(PcbRule):
                 if inside == 0:
                     continue
                 if inside < len(box):
-                    partial.append(f"{text.text} 落在 {component} 本体轮廓内 {inside}/4 角")
+                    partial.append(
+                        f"{text.text} 落在 {component} 本体轮廓内 {inside}/4 角"
+                        f"（宽度{MEASURED_WIDTH if measured_box is not None else '估算值'}）"
+                    )
                     continue
                 findings.append(
                     Finding(
@@ -448,9 +629,9 @@ class SilkDesignator(PcbRule):
                             f"fontSize {text.font_size:g} mil, {text.layer_kind}",
                             f"{component} body outline on layer {BODY_KIND} covers it "
                             f"（该器件在{'顶层' if body_face == 1 else '底层'}）",
-                            "判据：文字盒（**最宽**字宽档，宽松估计）四角全部落在另一个"
-                            "器件的本体轮廓多边形内——「完全看不见」是硬事实，"
-                            "所以这条报 WARN 而不是测量行",
+                            width_note,
+                            "判据：文字盒四角全部落在另一个器件的本体轮廓多边形内"
+                            "——「完全看不见」是硬事实，所以这条报 WARN 而不是测量行",
                             "本体轮廓取 FOOTPRINT 文档的 COMPONENT_SHAPE 层图元"
                             "（实测 id 48），按 COMPONENT 位姿实例化；它是器件的"
                             "占位外形，比实物本体略大，所以「落进轮廓内」是保守读数",
@@ -473,6 +654,9 @@ class SilkDesignator(PcbRule):
                         "「完全盖住」（4 角全在内）报 WARN、「部分盖住」只出这条"
                         "测量行——后者字还看得见，是密度与可读性的取舍，没有可查的"
                         "阈值（实测毕设FOC 1.0.0 的 PCB1 最多到 2/4 角，没有一处 4/4）",
+                        "每行末尾的「宽度实测/估算值」就是这条计数所用的盒子来源："
+                        "有宿主实测盒的按读数（轴对齐 ink 盒），没有的按**最宽**字宽档 "
+                        f"{WIDE_ADVANCE:g} 估——估算出来的角点计数在这里不许冒充读数",
                     ],
                 )
             )
@@ -634,6 +818,10 @@ class SilkDesignator(PcbRule):
     def _summary(self, ctx, designators) -> Finding:
         visible = [t for t in designators if t.visible and t.text]
         hidden = [t for t in designators if not t.visible and t.text]
+        # 172: 两态的盘账。哪几个位号的宽度是量出来的、哪几个是估的，在这一行
+        # 报出来——读者不必翻每条 evidence 才知道这份报告有多少是读数。
+        measured = [t for t in visible if self._measured_box(ctx, t) is not None]
+        estimated = len(visible) - len(measured)
         return Finding(
             rule_id=self.id,
             severity="INFO",
@@ -642,15 +830,34 @@ class SilkDesignator(PcbRule):
                 f"{ctx.board_title} 丝印读数：{len(designators)} 个位号记录"
                 f"（显示 {len(visible)}、关掉 {len(hidden)}），"
                 f"板上焊盘 {len(ctx.board.pads)} 只、器件本体轮廓 "
-                f"{sum(1 for s in ctx.board.silk_shapes if s.layer_kind == BODY_KIND)} 个"
+                f"{sum(1 for s in ctx.board.silk_shapes if s.layer_kind == BODY_KIND)} 个；"
+                f"文字宽度：{WIDTH_SOURCE_LABEL[MEASURED_WIDTH]} {len(measured)} 个、"
+                f"{WIDTH_SOURCE_LABEL[ESTIMATED_WIDTH]} {estimated} 个"
             ),
             evidence=[
                 "位号文字来自 PCB 文档自己的 ``ATTR key=Designator`` 记录"
                 "（带 x/y/角度/字号/层/显示开关），不是 FOOTPRINT 渲染出来的——"
                 "这一点是实测的，也是本规则能存在的前提",
-                "文字盒宽度是模型不是读数：.epru 不带字形步进，本规则用字宽比带 "
-                + " / ".join(f"{a:g}" for a in ADVANCE_BAND)
-                + " 量三次，只有最窄档就压上焊盘的报 WARN",
+                (
+                    "文字宽度是**两态**的（任务 172）：实测那一态用宿主的 primitive "
+                    "bbox（getPrimitivesBBox），是读数；估算那一态用字宽比带 "
+                    + " / ".join(f"{a:g}" for a in ADVANCE_BAND)
+                    + "，是模型。每条 evidence 都写着自己属于哪一态——"
+                    "报告里不出现「看起来像读数的估算值」"
+                ),
+                (
+                    f"本板实测 {len(measured)} 个位号、"
+                    f"估算 {estimated} 个："
+                    + (
+                        "本板没有可读的位号丝印（没有可量的字、也没有可估的字），"
+                        "所以这一行的两个 0 是「没有对象」，不是「测了没测到」"
+                        if not visible
+                        else "全部位号都有宿主实测盒，宽度这一项整份报告没有估算数字"
+                        if estimated == 0
+                        else "没测到的那些按估算降级（宿主未给出 bbox，或这条位号不在"
+                        "可测的焦点板上）——降级是明说的，不是悄悄当实测用"
+                    )
+                ),
                 "板载自由文字（``source='board'``，实测 PCB1 的 CLK/DIO/GND）与"
                 "封装自带印字（``source='footprint'``，极性标记）不在本规则的位号"
                 "口径里——前者不是位号，后者归 pcb-polarity-orientation",
