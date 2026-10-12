@@ -654,6 +654,29 @@ def test_the_report_carries_the_provenance_a_run_has_to_record():
     # (foc/focground/fbplacement + regulator/mcusupply/mcureset/crystal/
     # crystalkeepout now read declared values from the schematic view, verdicts
     # unmoved; pins `tests/test_164a_foc_view_truth.py` + `test_164b_supply_view_truth.py`).
+    # 171 moved it once more — f6c8ac35 -> 48aaaeac — direct still 4f056aaf:
+    # `rules/pcb/foc.py` alone, where `_farads_of`'s two-stage read (whole field,
+    # then the field's leading token) was retired in favour of the reader that now
+    # does it (`core.values.parse_capacitance_farads`, a Value field's trailing
+    # annotation, `330uF 400V`), and `_token_note`'s condition was restated over
+    # the same fields with the same sentence. 171's other half — `EARTH` joining
+    # `core.model.GROUND_NET_PREFIXES` — is in `core/`, which this recipe does not
+    # read. Pins: `tests/test_171_capacitance_tail.py`, `tests/test_171_earth_net.py`.
+    # 172 moved it once more — 48aaaeac -> a771a738 — direct still 4f056aaf:
+    # `rules/pcb/silk.py` alone (岳 2026-10-11 裁「丝印字宽改走宿主实测 bbox」).
+    # The rule gained a second width source: a `measured` map keyed
+    # `(board title, designator)` replaces the `ADVANCE_BAND` estimate when the
+    # caller has it, and every number's provenance now travels with it
+    # (`WIDTH_SOURCE_LABEL`: 「实测（宿主 primitive bbox）」 vs 「估算值（字宽比带，
+    # 非读数）」), including a measured/estimated census in the board summary. The
+    # offline `--file` reading is unchanged in verdict — it has no host to ask, so
+    # it stays on the estimate and now says so. Pins:
+    # `tests/test_172_silk_measured_width.py`; the verdict ledger is the unchanged
+    # `tests/test_152_polarity_silk.py`.
+    # 175 moved it once more — a771a738 -> 2db8ca69 — direct still 4f056aaf:
+    # `rules/pcb/focground.py` prose only (the `_domain_evidence` line now reads
+    # the ground prefix vocabulary from `core.model` instead of a hardcoded list
+    # that 171's EARTH addition had outgrown). No verdict semantics moved.
     # The running ledger with the pinned values is
     # `tests/test_126a_pcb_review_plumbing.py`; this note is the pointer to it.
     # Both are measured, not guessed - `tests/test_126a_pcb_review_plumbing.py`

@@ -125,6 +125,10 @@ from boardwise.core.layoutplan import (
 )
 from boardwise.core import textmetrics
 from boardwise.core.presentationspec import LABEL_LABEL, PresentationSpec
+#: 173/C: the isolation-domain word list is a **rule's** (133c), and the drawing
+#: reads it instead of keeping a second one. Read-only: `domain_of` is a pure
+#: name test, and importing it here does not make this engine a rules consumer.
+from boardwise.rules.pcb.focground import domain_of
 from boardwise.core.symbolprofile import (
     FLAG_GLYPH_KIND_GND,
     FLAG_GLYPH_ROTATION_OFFSETS,
@@ -286,6 +290,23 @@ FLAG_JOG = 25.0
 #: — measured on `test/P1`, where SW's run went through the HVDC flag's name row
 #: in exactly that gap (`_flag_box`).
 FLAG_CLEARANCE = 5.0
+
+#: 175/B-2: how far one flag's **lead** must stay from another net's flag lead,
+#: in canvas units. A preference inside the ladder, never a refusal — see
+#: :func:`_flag_anchor`'s ``near``.
+#:
+#: **Borrowed value, pending 岳's own look (「慢慢调」).** 173 measured the defect
+#: on the flyback page: `SEC_GND`'s flag lead ran 5 units from `PGND`'s
+#: (vertical legs at x=725 and x=730, both hung off the same row y=665) — two
+#: *different* ground domains drawn as one pair. The number comes from the
+#: reference harness's schematic autoconnect planner
+#: (`easyeda-agent_RE/source/internal/app/cmd_sch_autoconnect.go`,
+#: `defaultAutoconnectRules().MinLabelGap = 12`): 12 schematic units is the gap at
+#: which that planner calls a stub "running close to another channel" and prices
+#: it. Same unit (1 unit = 1 mil), same kind of decision — and it sits above this
+#: file's :data:`FLAG_CLEARANCE` (5), which is how close a flag may graze a
+#: *wire*; two named runs need more room than that to read as two.
+SIBLING_LEAD_CLEARANCE = 12.0
 
 #: How far a **duplicate pad across the body** is brought out before its own flag
 #: goes on (069 sec.1). 岳's hand-drawn AMS1117 brings a far pad out 40-60 units
@@ -5313,23 +5334,76 @@ def _flag_rotation(direction: tuple[float, float], kind: str) -> float:
     return (base + FLAG_GLYPH_ROTATION_OFFSETS[kind]) % 360.0
 
 
+def _ground_domain(net_id: str) -> str:
+    """Which ground domain a net's **name** puts it in, keyed as 155/173 read it.
+
+    ``focground.domain_of`` is the word list (it is the one this repo audits the
+    isolation domains with), and it answers ``power`` / ``logic`` / ``""``.
+    ``""`` is not a domain — it is 「this drawing spells its ground something the
+    word list does not carry」 (``SEC_GND``, whose name 145a taught the *ground*
+    vocabulary but not this table's two prefixes) — so an unclassified ground
+    keys on its own name rather than being filed under a domain it is not in.
+    """
+    return domain_of(net_id) or net_id
+
+
+def _ground_domains(ctx: _Context) -> set[str]:
+    """The distinct ground domains this circuit's ``gnd``-class nets spell."""
+    return {
+        _ground_domain(net.id) for net in ctx.circuit.nets if net.cls == "gnd"
+    }
+
+
+def _flag_ref(ctx: _Context, net_id: str, cls: str) -> str:
+    """The flag symbol ref a net is looked up under (173/C).
+
+    A rail is named by its own ``power_flag_prefix + net`` as before. A **ground**
+    takes the family's shared symbol (``budget.gnd_flag``) unless the page really
+    has more than one ground domain, in which case it asks for the flag named
+    after itself (173/C: 「按网的域选对应旗标族、绝不并地」).
+
+    Why the domain count gates it: a page whose grounds all sit in one domain has
+    nothing to isolate, and ``gnd_flag`` is that domain's own symbol — asking for
+    a per-net ref there would just rename a symbol for no reader's benefit. With
+    two or more domains the shared glyph *is* the defect 岳 named: ``PGND`` and
+    ``SEC_GND`` drawn with one ``Ground-GND`` symbol says they are one ground.
+
+    The shared symbol stays the fallback when the library carries no per-domain
+    entry. That is not silence, it is the library's own statement: this repo's
+    flyback book titles ``PWR-GND`` 「the source-side (PGND) and the secondary-side
+    (SEC_GND) ground families」, so on that page one symbol for both families is
+    what the library says — and this mapping takes effect the moment a per-domain
+    symbol is added to the book. The residual (two domains, one glyph, library
+    without the split) is **not** closed here; a library that carries the symbols
+    is what closes it, and the whitelist for this batch cannot add them.
+    """
+    own = f"{ctx.budget.power_flag_prefix}{net_id}"
+    if cls != "gnd":
+        return own
+    gnd_flag = ctx.budget.gnd_flag
+    if own == gnd_flag or len(_ground_domains(ctx)) <= 1:
+        return gnd_flag
+    return own if ctx.book.get(own) is not None else gnd_flag
+
+
 def _flag_plan(
     ctx: _Context, net_id: str, cls: str
 ) -> tuple[SymbolProfile | None, str]:
     """``(flag profile, symbol ref)`` — the library's rail/ground flag for this net.
 
-    The ref is derived from the net, not from a scenario: the ground flag is the
-    budget's `gnd_flag`, a rail's is `power_flag_prefix` + the net id. A library
-    that does not carry it is not a failure — the net falls back to being
-    *wired* (:func:`_flag_wire_fallback`), which is what this host can express;
-    `uniform-gnd` is what checks that one net does not end up mixing two styles.
+    The ref comes from :func:`_flag_ref` (173/C: a rail's own ``PWR-<net>``, a
+    ground's family symbol or — on a multi-domain page — its own), and the profile
+    is the book's entry for it. A library that does not carry the ref is not a
+    failure — the net falls back to being *wired* (:func:`_flag_wire_fallback`),
+    which is what this host can express; `uniform-gnd` is what checks that one net
+    does not end up mixing two styles.
 
     The docstring used to end "the net is then expressed with a label", and that
     sentence was the F1 defect written down as a design: this host cannot place a
     netlabel (029), so a label-only expression left a multi-pin net with **no
     conductor on the canvas** while the plan's own verdict said `pass`.
     """
-    ref = ctx.budget.gnd_flag if cls == "gnd" else f"{ctx.budget.power_flag_prefix}{net_id}"
+    ref = _flag_ref(ctx, net_id, cls)
     return (ctx.book.get(ref), ref)
 
 
@@ -6015,6 +6089,84 @@ def _lead_crossing(
     return None
 
 
+def _remember_lead(
+    router: _Router,
+    net_id: str,
+    kind: str,
+    lead: Sequence[tuple[float, float]] | None,
+) -> None:
+    """Note every node of a lead this plan will draw, against `(net, kind)` (175/B-2).
+
+    ``router.flag_leads`` is the book :func:`_lead_too_close` reads: the leads
+    already decided, so the next flag's ladder can give them room. It is filled
+    wherever a lead is **settled** — 145a's reservation pass (both the pad-flag
+    walk and 148's rail seats) and 148's placement, through
+    :func:`_flag_pins` / :func:`_rail_flag` — and never cleared, so the seat pass
+    sees every lane already promised and the drawing sees everything it has put
+    down. The first net to claim a node keeps it: two leads of the *same* net are
+    not a crowd (they are one name), and that is the only case the map's single
+    owner can merge.
+    """
+    if lead is None:
+        return
+    for start, end in zip(lead, lead[1:]):
+        for node in _lattice_nodes(router, start, end):
+            router.flag_leads.setdefault(node, (net_id, kind))
+
+
+def _lead_too_close(
+    router: _Router, net_id: str, kind: str, lead: Sequence[tuple[float, float]]
+) -> str | None:
+    """The first **sibling flag lead** this run would crowd, described, or ``None``.
+
+    175/B-2. 074 refuses a lead that runs *through* another net's wire
+    (:func:`_lead_crossing`); this asks the milder question 173's measurement
+    raised: a lead that runs *alongside* another net's **flag lead** — parallel
+    (or just near) within :data:`SIBLING_LEAD_CLEARANCE` — makes two names read as
+    one pair. On the flyback page `SEC_GND`'s leg at `x=725` and `PGND`'s at
+    `x=730` are exactly that: 5 units apart, two ground domains a reader cannot
+    tell apart.
+
+    Three limits, each of them a measurement rather than a taste:
+
+    * a **different net's** lead only — two pads of one net named by two of its own
+      flags are one name drawn twice, and 069 sec.1 depends on that being allowed;
+    * the **same glyph family** only (``kind`` = :func:`flag_glyph_kind`): a
+      ground flag beside a ground flag is the pair 173 measured, and the flags
+      that share a family share a shape — a ground glyph beside a rail glyph is
+      two different pictures 10 units apart, and refusing those measured
+      053b's own sideways scene into a `layout-unsat` it never had (the moved
+      lead pushed `VIN5`'s run into the only rung `3V3` had left);
+    * a **reason, not a refusal** — :func:`_flag_anchor` treats it as a preference
+      and draws the crowded rung anyway when the page has no roomier one.
+    """
+    if not router.flag_leads:
+        return None
+    for start, end in zip(lead, lead[1:]):
+        for node, (owner, owner_kind) in router.flag_leads.items():
+            if owner == net_id or owner_kind != kind:
+                continue
+            gap = _run_to_point(start, end, node)
+            if gap < SIBLING_LEAD_CLEARANCE:
+                return (
+                    f"its run {_point_text(start)}-{_point_text(end)} comes "
+                    f"{gap:g} units from net {owner!r}'s flag lead at "
+                    f"{_point_text(node)} (nearer than the "
+                    f"{SIBLING_LEAD_CLEARANCE:g} units two flags of one family "
+                    "need to read as two)"
+                )
+    return None
+
+
+def _run_to_point(
+    start: tuple[float, float], end: tuple[float, float], point: tuple[float, float]
+) -> float:
+    """Distance from ``point`` to the axis-aligned run ``start``-``end``."""
+    near_x = min(max(point[0], min(start[0], end[0])), max(start[0], end[0]))
+    near_y = min(max(point[1], min(start[1], end[1])), max(start[1], end[1]))
+    return math.hypot(point[0] - near_x, point[1] - near_y)
+
+
 def _geometry_nodes(
     router: _Router, segments: Sequence[LayoutSegment]
 ) -> list[tuple[float, float]]:
@@ -6128,6 +6280,23 @@ def _elbow_route(
     tried before the search because it is both cheaper to find and better to look
     at (one bend rather than whatever the search happens to return), and the
     search is then only used where the drawing really is crowded.
+
+    **The shortcut may not undercut the search's own price** (175/B-1). A *bent*
+    candidate whose legs run through another net's wire is not returned, and the
+    search — which pays :data:`~engines.router.CROSS_COST` for that same crossing
+    — decides the run instead. 岳's 2026-10-12 ruling (「宁可多绕也不穿干线」) is a
+    price, not a wall, so the crossing is still drawn whenever the search finds
+    nothing cheaper; what this stops is the one case the price could never
+    reach: a *free* elbow taken at the cost of a crossing the search would have
+    paid for. Measured on the 150 landing page: `COMP`'s run was drawn here, its
+    two crossings of `SEC_12V` cost 2.0 each, and raising the price to 120 did
+    not move the drawn wire at all until this check was added (evidence
+    `outputs/175/evidence.md` §1.3).
+
+    A **straight** run (the degenerate corner case below) is not gated: there is
+    no alternative to weigh, and 074 keeps an ordinary wire's crossing legal
+    (`test_053b_drawcompiler.test_only_a_leads_run_is_gated_and_ordinary_wiring_
+    still_crosses` is that promise).
     """
     if _key(start) == _key(end):
         return None
@@ -6143,8 +6312,36 @@ def _elbow_route(
             continue
         if not _vertex_clear(router, corner):
             continue
+        if _run_crosses_a_foreign_wire(router, start, corner):
+            continue
+        if _run_crosses_a_foreign_wire(router, corner, end):
+            continue
         return [start, corner, end]
     return None
+
+
+def _run_crosses_a_foreign_wire(
+    router: _Router, start: tuple[float, float], end: tuple[float, float]
+) -> bool:
+    """Does this straight run enter another net's wire anywhere along it?
+
+    The search's own question, asked of a whole run instead of one node — the
+    lattice nodes of the run are walked and each is put to
+    :meth:`~engines.router._Router.crossing_at`, which is the same answer the A*
+    loop prices. Asking it this way is what keeps the shortcut and the search
+    from holding two opinions about where a crossing happens.
+    """
+    span = max(abs(end[0] - start[0]), abs(end[1] - start[1]))
+    steps = max(1, int(round(span / router.grid)))
+    for index in range(steps + 1):
+        ratio = index / steps
+        node = (
+            start[0] + (end[0] - start[0]) * ratio,
+            start[1] + (end[1] - start[1]) * ratio,
+        )
+        if router.crossing_at(node) is not None:
+            return True
+    return False
 
 
 def _vertex_clear(router: _Router, point: tuple[float, float]) -> bool:
@@ -7394,6 +7591,7 @@ def _flag_anchor(
     up: bool = True,
     boxes: Sequence[Box] | None = None,
     crossings: list[str] | None = None,
+    near: Callable[[Sequence[tuple[float, float]]], str | None] | None = None,
 ) -> tuple[tuple[float, float], tuple[tuple[float, float], ...] | None, float]:
     """Where a flag's anchor goes, the lead that reaches it, and which way it hangs.
 
@@ -7439,6 +7637,18 @@ def _flag_anchor(
     the measured reason when *no* rung survives instead of drawing a short or a
     flag standing on its own pin. A rung the box test already refused is not
     recorded: it was never a candidate, and the crossing on it proves nothing.
+
+    ``near`` is the one check that is a **preference rather than a refusal**
+    (175/B-2): it reports why a rung would crowd *another net's flag lead*
+    (:func:`_lead_too_close`, :data:`SIBLING_LEAD_CLEARANCE`), the ladder keeps
+    looking for a rung that does not, and the first crowded rung is kept as the
+    fallback — used only when no roomier one exists. 074's lesson is why: drawing
+    a name across a stranger's conductor reads as a short, but two *names* five
+    units apart read as one name, and 173 measured exactly that on the flyback
+    page (`SEC_GND`'s lead beside `PGND`'s, two ground domains drawn as a pair).
+    Stated as a preference because making it a refusal is what 148 measured as a
+    mistake: a stricter ladder pushed a flag onto its neighbour's glyph
+    (`_flag_room`), so a page with no room to spare keeps its old drawing.
     """
     lengths: list[float] = []
     for length in (
@@ -7447,6 +7657,14 @@ def _flag_anchor(
     ):
         if length not in lengths:
             lengths.append(length)
+    #: 175/B-2's **preference** rung: the first rung that passed every other test
+    #: but crowds another net's flag lead. The ladder keeps looking for one that
+    #: does not, and this is what it falls back on when nothing better is on
+    #: offer — so the spacing rule can never cost a flag its seat, and a page that
+    #: cannot spare the room is drawn exactly as it was before 175.
+    fallback: tuple[
+        tuple[float, float], tuple[tuple[float, float], ...], float
+    ] | None = None
     natural = 1.0 if up else -1.0
     if direction[1] != 0.0:
         # A vertical run has nowhere to turn: the flag hangs at its end.
@@ -7472,6 +7690,12 @@ def _flag_anchor(
                 point[1] + direction[1] * length,
             ))
             if _close(length, 0.0):
+                # 069 sec.8's last resort is "no lead at all" — but 175/B-2's
+                # preference must not be what pushes a flag off the page: a rung it
+                # only *crowded* is the answer the ladder owed before 175, so it is
+                # returned here rather than falling through to the refusal.
+                if fallback is not None:
+                    return fallback
                 return corner, None, natural
             for hang in hangs:
                 for jog in jogs:
@@ -7507,7 +7731,17 @@ def _flag_anchor(
                         if crossings is not None:
                             crossings.append(crossed)
                         continue
+                    # 175/B-2: a rung whose lead crowds another net's flag lead is
+                    # **remembered, not taken**, while the ladder still has one
+                    # that keeps its distance — see ``fallback`` above and
+                    # :func:`_lead_too_close`.
+                    if near is not None and near(lead) is not None:
+                        if fallback is None:
+                            fallback = (anchor, lead, hang)
+                        continue
                     return anchor, lead, hang
+    if fallback is not None:
+        return fallback
     return _rounded(point), None, natural
 
 
@@ -7664,8 +7898,13 @@ def _place_flag(
     symbols: list[LayoutPowerSymbol],
     occupied: list[Box],
     solids: list[Box],
+    router: _Router | None = None,
 ) -> None:
-    """Record one flag: the symbol, the lead that reaches it, and the box it takes."""
+    """Record one flag: the symbol, the lead that reaches it, and the box it takes.
+
+    ``router`` is handed the lead (:func:`_remember_lead`) so the next flag's
+    ladder can see it — 175/B-2's book of the leads this plan has already drawn.
+    """
     symbols.append(LayoutPowerSymbol(
         symbol_ref=ref,
         symbol_hash=profile.geometry_hash(),
@@ -7676,6 +7915,8 @@ def _place_flag(
     ))
     if lead is not None:
         segments.append(LayoutSegment(net=net_id, points=list(lead)))
+        if router is not None:
+            _remember_lead(router, net_id, flag_glyph_kind(profile), lead)
     glyph = flag_glyph_box(
         profile, rotation=rotation, anchor=anchor,
     ) or (anchor[0], anchor[1], anchor[0], anchor[1])
@@ -7783,7 +8024,7 @@ def _rail_flag(
     anchor, rotation, lead = seat
     _place_flag(
         net_id, profile, ref, anchor, rotation, lead,
-        segments, symbols, occupied, solids,
+        segments, symbols, occupied, solids, router,
     )
     return anchor, None
 
@@ -8070,6 +8311,7 @@ def _seat_wire_flags(
         cells |= _nodes_in_box(router, box)
         if not _take_lane(taken, cells, tips, {_key(point)}, net_id):
             continue
+        _remember_lead(router, net_id, flag_glyph_kind(profile), lead)
         router.flag_seats[(net_id, member)] = (anchor, rotation, lead)
         walls.append(box)
     return walls
@@ -8184,6 +8426,7 @@ def _lead_lane_reservations(
                 ),
             )
             _take_lane(taken, cells, tips, own, net_id)
+            _remember_lead(router, net_id, family, lead)
     router.flag_walls = _seat_wire_flags(
         ctx, placed, expressions, net_order, router, solids, bodies, tips, taken,
     )
@@ -8340,7 +8583,7 @@ def _flag_pins(
         anchor, rotation, lead = seat
         _place_flag(
             net_id, profile, ref, anchor, rotation, lead,
-            segments, symbols, occupied, solids,
+            segments, symbols, occupied, solids, router,
         )
     return None
 
@@ -8373,6 +8616,13 @@ def _flag_pin_lead(
     direction is a legal wire. ``lead`` is ``None`` when no direction fits at all,
     and then ``crossings`` holds 074's measurement of every rung that fitted
     everywhere else but cut another net's wire.
+
+    175/B-2 adds one more question to every rung — :func:`_lead_too_close`, asked
+    as ``near`` — and it is a **preference**: a rung that would crowd a *sibling*
+    flag lead (another net, same glyph family) is passed over while the ladder
+    still has one that keeps ``SIBLING_LEAD_CLEARANCE``, and the ladder's own
+    answer is what it falls back on when there is none. Everything else about the
+    rung list is unchanged, 074's crossing refusal included.
     """
     inner = None
     if ctx.budget.page_box is not None:
@@ -8431,6 +8681,9 @@ def _flag_pin_lead(
             up=natural,
             boxes=bodies,
             crossings=crossings,
+            near=lambda lead, _net=net_id, _kind=flag_glyph_kind(profile): (
+                _lead_too_close(router, _net, _kind, lead)
+            ),
         )
         if lead is not None:
             return anchor, lead, hang, crossings

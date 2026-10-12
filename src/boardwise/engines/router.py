@@ -44,7 +44,36 @@ from boardwise.core.symbolprofile import Box
 #: Costs in lattice steps: a bend is worth staying straight, and crossing a
 #: foreign wire perpendicularly is allowed but not free.
 TURN_COST = 0.6
-CROSS_COST = 2.0
+
+#: What one perpendicular crossing of another net's wire costs the search, in
+#: lattice steps (175/B-1).
+#:
+#: **岳 2026-10-12 裁：宁可多绕也不穿干线.** A wire a reader sees cutting a trunk
+#: reads as a join, so the price has to be worth a detour rather than cheaper
+#: than one. 173 measured what it was: 2.0 — two steps — while the flyback
+#: page's own `COMP` run could avoid its two crossings of `SEC_12V` for about 80
+#: lattice steps, so the corridor through the trunk won every time (150's L6
+#: reading is that crossing).
+#:
+#: **High and finite, and the finiteness is the decision.** A schematic is not a
+#: planar graph — two nets can genuinely have no crossing-free route — so a
+#: refusal here would turn a merely crowded page into `NET_UNROUTABLE`, an
+#: undrawable board. 120 steps (600 units) makes any detour shorter than 120
+#: steps buy its way out of a crossing, while a crossing is still drawn as the
+#: last resort rather than lost. It sits below the ~230-step full sheet crossing
+#: (`layout._INFINITE_COST`'s note measures that), so the search will pay a full
+#: detour for one crossing but will not walk the sheet to dodge one. Behind a
+#: refusal the retry/ladder fallbacks are untouched: this is a price, never a
+#: wall (137's rule).
+#:
+#: **Measured on the 150 landing page** (`outputs/175/evidence.md` §1.3): raising
+#: this constant alone did *not* move `COMP` — that run is drawn by
+#: `drawcompiler._elbow_route`, the one-bend shortcut tried before the search,
+#: which never consulted a price. The price bites on the runs the search does
+#: draw: `FB_SENSE`'s crossing of `SEC_12V` is avoided from 120 upward (and its
+#: replacement crossing of `LED_K` is what the page's own crossings count then
+#: shows) — a detour of ~325 units, which is exactly the trade 岳 asked for.
+CROSS_COST = 120.0
 
 
 def _rounded(point: tuple[float, float]) -> tuple[float, float]:
@@ -218,6 +247,16 @@ class _Router:
         #: own search may not swallow a lane another flag already holds. Off for
         #: everything else — see `drawcompiler._flag_room`.
         self.reserve_strict: bool = False
+        #: 175/B-2: every lattice node of a **flag lead this plan has decided**,
+        #: against `(net, glyph kind)` — the kind because two flags that read as
+        #: one pair are two flags *of the same family* (a ground glyph beside a
+        #: ground glyph), which is the defect 173 measured. Filled by
+        #: `drawcompiler._remember_lead` as leads are settled (145a's reservation
+        #: pass first, the placement after), and read by
+        #: `drawcompiler._lead_too_close` so the next flag's ladder can give a
+        #: sibling of its own family its `SIBLING_LEAD_CLEARANCE`. Not a wall: the
+        #: flag is placed on the crowded rung anyway when nothing roomier fits.
+        self.flag_leads: dict[tuple[float, float], tuple[str, str]] = {}
 
     # ------------------------------------------------------------ geometry
 

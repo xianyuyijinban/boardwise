@@ -972,9 +972,43 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # （HF/储能池分类、CL 计算、复位启动值全改原理图优先，证据句写明两视图各是什么）。
     # 行为锚点是 `tests/test_164a_foc_view_truth.py`（24 条）与
     # `tests/test_164b_supply_view_truth.py`（15 条），bump 同样是被验证过的。
+    # **171 moved the recursive digest once more** — f6c8ac35 -> 64c84fc5 —
+    # direct 仍 `4f056aaf`：本批落在 `rules/pcb/foc.py` 一个文件（`_farads_of`
+    # 的两段读撤掉，改委托 `core.values.parse_capacitance_farads`——尾注读进了
+    # reader，071 §2 一处判定一处实现；`_token_note` 的判据重述为「字段带尾注且
+    # 首个词可读」，文案逐字未动）。行为锚点是新建
+    # `tests/test_171_capacitance_tail.py` 与翻转后仍绿的
+    # `tests/test_164a_foc_view_truth.py`。171 的另一半（`EARTH` 入
+    # `core.model.GROUND_NET_PREFIXES`）落在 `core/`，按本 recipe 的定义
+    # **不进摘要**（与 131c/131d 记过的同一条限制），锚点是
+    # `tests/test_171_earth_net.py`。
+    # **注意：本值是在一棵还有另一批未提交改动的树上量的** —— 同一工作树的
+    # `rules/pcb/silk.py` 当时正被另一批改（171 不碰它），它也在本 recipe 里，
+    # 所以 `64c84fc5` 是**这棵树**的值而不是 171 单独的值；后落地的那批按同一
+    # 规矩再量一次即可（命令：`.venv/Scripts/python.exe -c "from pathlib import
+    # Path;from boardwise.engines.review_eval import rulebody_fingerprint as f;
+    # print(f(Path('src/boardwise/rules')))"`）。
+    # **172 moved the recursive digest again** — 64c84fc5 -> a771a738 — and the
+    # **direct** one still holds at `4f056aaf`（第十九批连任）：岳 2026-10-11 裁
+    # 「丝印字宽改走宿主渲染 bbox（参考 easyeda-agent）：实测不估算、测不到就
+    # 诚实降级」，整批又落在 `rules/pcb/`，只动 **一个文件** `silk.py`。它多了
+    # 第二种宽度来源：`SilkDesignator(measured=...)`（键 `(板名, 位号文字)`）在
+    # 有实测盒时取代 `ADVANCE_BAND` 那条估算带，且**每个数字都带着自己的来源**
+    # （`WIDTH_SOURCE_LABEL`：「实测（宿主 primitive bbox）」/「估算值（字宽比带，
+    # 非读数）」），小结行再报一次实测/估算的盘账。离线 `--file` 的判决一个字没变
+    # （没有宿主可问，仍在估算那一态，只是现在逐条说明）。接线落在 `cli.py` 与
+    # 桥的动作表**之外**——桥里能测 bbox 的只有 `sch.geometry` 的 `bboxIds`，
+    # 本批不许加新动作，所以真机端到端的「实测」演示缺席（test 工程的 PCB1 是
+    # 空板），原因与全部真机探针记在 `outputs/172/evidence.md`。行为锚点是新建
+    # `tests/test_172_silk_measured_width.py`（16 条），判决账仍是逐条未动的
+    # `tests/test_152_polarity_silk.py`。
+    # **175 moved it once more** — a771a738 -> 2db8ca69 — direct 仍 `4f056aaf`：
+    # 只动 `focground.py` 的两处过时散文与 `_domain_evidence` 的证据行
+    # （硬编码筛子词表改从 `core.model.GROUND_NET_PREFIXES` 动态取，171 的 EARTH
+    # 入词表后不再漏列），无判定语义变化。
     assert recursive != old_digest, "the subpackage is inside the recipe now"
     assert old_digest == "4f056aaf"
-    assert recursive == "f6c8ac35", (
+    assert recursive == "2db8ca69", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

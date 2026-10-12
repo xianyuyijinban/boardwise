@@ -137,7 +137,7 @@ from ...core.measure import (
     reference_layer_for,
     return_path_projection,
 )
-from ...core.model import is_ground_net
+from ...core.model import GROUND_NET_PREFIXES, is_ground_net
 from ...core.values import parse_resistance_ohms
 from ..facts import default_library_path
 from ...core.parts import load_parts
@@ -196,10 +196,19 @@ __all__ = [
 GROUND_DOMAIN_POWER_PREFIXES: tuple[str, ...] = ("PGND", "P_GND", "POWER_GND", "EARTH")
 
 #: The net-name prefixes that put a ground-class net in the **logic / analog**
-#: domain. Everything :func:`boardwise.core.model.is_ground_net` recognises
-#: minus the power family — ``GND`` / ``AGND`` / ``DGND`` / ``EGND`` / ``SGND`` /
-#: ``VSS``, which is the corpus's own ground vocabulary
-#: (:data:`boardwise.core.model.GROUND_NET_PREFIXES`).
+#: domain: the corpus's own ground vocabulary minus the power family. That
+#: vocabulary is :data:`boardwise.core.model.GROUND_NET_PREFIXES` — ``GND`` /
+#: ``AGND`` / ``DGND`` / ``PGND`` / ``EGND`` / ``SGND`` / ``VSS``, plus ``EARTH``
+#: as of 171 — and removing :data:`GROUND_DOMAIN_POWER_PREFIXES` leaves the six
+#: words below.
+#:
+#: Listed rather than derived, and that is the point: the two lists are this
+#: module's own **declaration** of which side each family lands on, and 171 grew
+#: the shared vocabulary instead of this file. The two are not the same set in
+#: either direction — ``P_GND`` / ``POWER_GND`` are power-side words only this
+#: file carries, and a name ``is_ground_net`` knows but neither list holds
+#: (``SEC_GND``, ``ISO_VSS``) is placed on **neither** side, by name, in
+#: :attr:`GroundDomainSplit.unclassified`.
 GROUND_DOMAIN_LOGIC_PREFIXES: tuple[str, ...] = (
     "GND",
     "AGND",
@@ -309,19 +318,32 @@ def split_ground_domains(board: BoardGeometry) -> GroundDomainSplit:
     state each net's domain and the prefix that placed it there.
 
     **The sieve is a union, and that is D2's fix.** ``is_ground_net`` carries
-    ``GND`` / ``AGND`` / ``DGND`` / ``PGND`` / ``EGND`` / ``SGND`` / ``VSS`` — a
-    **prefix at the front or a ``_``-separated tail** — and this module's own
-    :data:`GROUND_DOMAIN_POWER_PREFIXES` is **wider** than it: it also names
-    ``P_GND`` / ``POWER_GND`` / ``EARTH`` as power-domain words. Sieving with
-    ``is_ground_net`` *before* asking :func:`domain_of` therefore dropped exactly
-    the names this module claims for itself — a bare ``EARTH`` net (not a prefix
-    of any ``is_ground_net`` word and with no ``_`` tail) never reached the
-    classifier and vanished from ``power``, ``logic`` **and** ``unclassified``
-    without a word: the drawing said ``EARTH`` and the report said 「no
-    power-domain ground on this board」. So a net is now a candidate when
-    **either** vocabulary knows it, and the two remain distinct in what they are
-    for: ``is_ground_net`` decides 「is this a ground-class name at all」 (and so
-    which names can land in ``unclassified``), ``domain_of`` decides which side.
+    ``GND`` / ``AGND`` / ``DGND`` / ``PGND`` / ``EGND`` / ``SGND`` / ``VSS`` —
+    and ``EARTH`` as of 171 — as a **prefix at the front or a ``_``-separated
+    tail**; this module's own :data:`GROUND_DOMAIN_POWER_PREFIXES` carries
+    ``PGND`` / ``P_GND`` / ``POWER_GND`` / ``EARTH``. Sieving with
+    ``is_ground_net`` *before* asking :func:`domain_of` therefore dropped names
+    this module claims for itself — a bare ``EARTH`` net, which D2 was written
+    for, never reached the classifier then and vanished from ``power``,
+    ``logic`` **and** ``unclassified`` without a word: the drawing said
+    ``EARTH`` and the report said 「no power-domain ground on this board」. So a
+    net is a candidate when **either** vocabulary knows it, and the two remain
+    distinct in what they are for: ``is_ground_net`` decides 「is this a
+    ground-class name at all」 (and so which names can land in
+    ``unclassified``), ``domain_of`` decides which side.
+
+    **171 made the union redundant, and it is kept anyway.** ``EARTH`` joined
+    :data:`boardwise.core.model.GROUND_NET_PREFIXES` (as a prefix word), and that
+    vocabulary's **suffix** rule already carried ``P_GND`` / ``POWER_GND`` (a
+    ground word as the last ``_``-separated token) — so every word this module's
+    own :data:`GROUND_DOMAIN_POWER_PREFIXES` claims is a name
+    :func:`boardwise.core.model.is_ground_net` knows, and *either* sieve alone
+    would give today's answer. Measured, on this tree: ``PGND`` / ``EARTH`` by
+    the prefix rule, ``P_GND`` / ``POWER_GND`` by the suffix rule. It stays a
+    union because the sieve is not what decides a domain — this file's word lists
+    are — and asking the shared vocabulary *first* is exactly how a name could be
+    dropped before its own rule ever saw it (D2). Dropping the union would arm
+    the next vocabulary change to re-open that hole silently.
 
     **Measured**: no fixture in the corpus carries a name only the wider
     vocabulary knows (372 net names across the PCB fixtures, zero of them
@@ -355,9 +377,10 @@ def _domain_evidence(split: GroundDomainSplit) -> list[str]:
     lines = [
         "ground-domain classification (**net-name test**, the fragile step this "
         "rule declares): ground-class sieve is "
-        "core.model.is_ground_net (GND / AGND / DGND / EGND / SGND / PGND / "
-        "VSS by prefix), and the two-domain split reads this rule's own word "
-        "lists",
+        "core.model.is_ground_net ("
+        + " / ".join(GROUND_NET_PREFIXES)
+        + " by prefix, or by a `_`-separated tail), and the two-domain split "
+        "reads this rule's own word lists",
         "power domain ("
         + ", ".join(repr(p) for p in GROUND_DOMAIN_POWER_PREFIXES)
         + " family): "

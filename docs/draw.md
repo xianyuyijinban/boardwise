@@ -213,6 +213,20 @@ clears the bar, the plan records that in `notes` instead of dropping a label
 somewhere it reads as a smudge: a nameless net is legible, an unreadable one is
 worse than either.
 
+**Power/ground flags go through the same search, and that is 173/A's fix.** The
+sentence above used to be true of signal names only: under `auto` a rail's flag
+was pinned to the router's own candidate (`route.attach`) without the search
+ever looking at it, and 163a/E3 caught the consequence on the golden page — the
+`+5V` flag's anchor sat on another net's wire, 5 units from the electrical
+anchor, which is the `LABEL_ON_FOREIGN_WIRE` reading (a short to a reader). The
+two are one search now, with one difference in the bar: a signal name may refuse
+a placement the search cannot clear (`LABEL_CLEARANCE`, 20 units — a
+readability preference), while a rail's flag is *the* naming of that net, so it
+is placed at the cleanest point the search finds under `margin=0.0` — it may
+never land on a foreign wire, a body, or another name, but it is never dropped
+in exchange for a preference (`naming_steps_for` in `engines/generate.py` is the
+whole of that policy).
+
 `boardwise draw --naming <strategy>` and `boardwise lint --naming <strategy>`
 select it; an unknown value falls back to the default **and the fallback is
 reported**, never silent. The gate printout and the acceptance report both name
@@ -736,4 +750,11 @@ exit 4 零写入（C5）；库几何不符 → exit 4 零写入（C6，写前那
   （crossings 仍是软指标）。硬拒后按既有梯子升级（距离档 → 逃逸方向 → 三折/两段引线 → 向无轨方向垂挂）；
   梯子穷尽 → `layout-unsat`，报**哪段穿哪条导体 + 交叉点 + 建议动作**，**不许静默产出穿越图、不许假
   junction**（安全阀：`layout-unsat` 是契约内的合法答复，不是 bug）。
+- **175/B-1：普通布线的穿越是一条*价*，不是一堵墙**（岳裁 2026-10-12「宁可多绕也不穿干线」）。
+  `router.CROSS_COST` 从 2.0（两步——比绕行便宜得多）提到 **120 步（600 单位）**：一次垂直穿越比
+  120 步以内的绕行都贵，而它仍是**有限价**——原理图图论上不保证平面，硬拒会把「拥挤的页」变成
+  `NET_UNROUTABLE`（画不出的板），所以穿越仍留作最后手段（一折快路与搜索同价：折腿穿别网导线的
+  肘不再直接返回，交搜索按同一价决定）。实测：150 落地页的 `COMP` 引线由**穿 `SEC_12V` 干线两次**
+  降到一次（第 175 批前该走线出自一折快路，因此单提常量对它无效）；`FB_SENSE` 的穿越从 120 起
+  被绕开。另见 `docs/draw.md` 的旗引线一节（074）——**普通信号布线穿越不硬化**这条未变。
 
