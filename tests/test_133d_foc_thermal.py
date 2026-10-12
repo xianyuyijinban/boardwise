@@ -63,6 +63,7 @@ from boardwise.core.geometry import (
 )
 from boardwise.core.parts import PartLibrary
 from boardwise.engines.pcbreview import BUILTIN_PCB_RULES, run_pcb_review
+from boardwise.parsers.schematic import build_project_model
 from boardwise.rules.pcb.base import PcbRule
 from boardwise.rules.pcb.focthermal import (
     DIRECT_VS_RELIEF_READABLE,
@@ -94,9 +95,33 @@ RULE_IDS = [R7, R8, R9]
 EMPTY_SHELF = PartLibrary()
 
 
+#: 170: which project model each fixture parses to, built once per path — 133c's
+#: own cache, for the same reason (the parse is the expensive half of a run and a
+#: fixture is read by many tests).
+_PROJECTS: dict[Path, object] = {}
+
+
 def _rows(path: Path, rule_id: str) -> list:
-    findings, _section = run_pcb_review(path)
+    """Rows for one rule, through the **production shape** (170).
+
+    ``run_pcb_review`` is handed the schematic ``ProjectModel`` the way
+    ``cli._cmd_checkup`` hands it one. The three ``pcb-foc-thermal-*`` rules read
+    only ``ctx.pcb_model``, so passing no ``model`` reads the same today — but it
+    leaves ``ctx.model`` ``None``, and a rule that later consults it would
+    silently fall back to the PCB document's placeholder copies here while
+    production read the schematic page. 133c's helper already passes ``model=``;
+    this is the same alignment.
+    """
+    findings, _section = run_pcb_review(path, model=_project(path))
     return [f for f in findings if f.rule_id == rule_id]
+
+
+def _project(path: Path) -> object:
+    """The fixture's schematic ``ProjectModel``, parsed once per path (170)."""
+    model = _PROJECTS.get(path)
+    if model is None:
+        model = _PROJECTS[path] = build_project_model(path)
+    return model
 
 
 def _evidence(row) -> str:

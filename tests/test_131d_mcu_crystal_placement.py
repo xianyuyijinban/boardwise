@@ -286,9 +286,22 @@ def test_crystal_sieve_also_accepts_the_3225_footprint_alone():
 
 
 def _findings(path: Path, rule_id: str) -> list:
-    from boardwise.engines.pcbreview import run_pcb_review
+    """The production shape: the schematic model is handed to the runner.
 
-    findings, _section = run_pcb_review(path)
+    ``cli._cmd_checkup`` loads the ``schematic`` view
+    (:func:`boardwise.parsers.schematic.build_project_model`) and passes it as
+    ``run_pcb_review(..., model=model)``, so ``ctx.model`` is the schematic
+    page a rule resolves through :func:`~boardwise.rules.pcb.focground.schematic_board_of`.
+    Calling the runner with no ``model`` leaves ``ctx.model is None``, which
+    every such rule reads as 「no schematic view」 and falls back from — i.e. it
+    pinned the **PCB document's placeholder copy** rather than the schematic
+    truth (158's measurement: 98 of 122 parts on 毕设FOC 1.0.0's ``PCB1``
+    disagree with the schematic). 169 repointed this helper at the real shape.
+    """
+    from boardwise.engines.pcbreview import run_pcb_review
+    from boardwise.parsers.schematic import build_project_model
+
+    findings, _section = run_pcb_review(path, model=build_project_model(path))
     return [f for f in findings if f.rule_id == rule_id]
 
 

@@ -61,6 +61,7 @@ from boardwise.core.geometry import (
 )
 from boardwise.core.measure import OBTUSE_CORNER_DEG, track_corner_angle
 from boardwise.engines.pcbreview import BUILTIN_PCB_RULES, run_pcb_review
+from boardwise.parsers.schematic import build_project_model
 from boardwise.rules.pcb.foc import (
     BULK_FARADS,
     FocDecapProximity,
@@ -111,10 +112,34 @@ FOC_133D_RULE_IDS = [
 ]
 ALL_FOC_RULE_IDS = FOC_RULE_IDS + FOC_133C_RULE_IDS + FOC_133D_RULE_IDS
 
+#: 170: which project model each fixture parses to, built once per path — 133c's
+#: own cache, for the same reason (the parse is the expensive half of a run and a
+#: fixture is read by many tests).
+_PROJECTS: dict[Path, object] = {}
+
 
 def _rows(path: Path, rule_id: str) -> list:
-    findings, _section = run_pcb_review(path)
+    """Rows for one rule, through the **production shape** (170).
+
+    ``run_pcb_review`` is handed the schematic ``ProjectModel`` the way
+    ``cli._cmd_checkup`` hands it one. The five ``pcb-foc-*`` rules under test
+    read only ``ctx.pcb_model`` (:mod:`boardwise.rules.pcb.foc`), so passing no
+    ``model`` reads the same today — but it leaves ``ctx.model`` ``None``, and a
+    rule that later consults it (``focground`` and ``regulator`` already do)
+    would silently fall back to the PCB document's placeholder copies here while
+    production read the schematic page. 133c's helper already passes ``model=``;
+    this is the same alignment.
+    """
+    findings, _section = run_pcb_review(path, model=_project(path))
     return [f for f in findings if f.rule_id == rule_id]
+
+
+def _project(path: Path) -> object:
+    """The fixture's schematic ``ProjectModel``, parsed once per path (170)."""
+    model = _PROJECTS.get(path)
+    if model is None:
+        model = _PROJECTS[path] = build_project_model(path)
+    return model
 
 
 def _evidence(row) -> str:
@@ -845,7 +870,7 @@ def test_the_foc_acceptance_matrix_across_five_boards():
         LLC: {R16: 0, R31: 1, R11: 1, R13: 1, R20: 4},
     }
     for path, expected in matrix.items():
-        findings, _section = run_pcb_review(path)
+        findings, _section = run_pcb_review(path, model=_project(path))
         counts = {
             rid: sum(1 for f in findings if f.rule_id == rid)
             for rid in FOC_RULE_IDS

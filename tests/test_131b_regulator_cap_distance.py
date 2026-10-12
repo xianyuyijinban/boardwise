@@ -29,7 +29,7 @@ Evidence sources, in the order the task book names them:
   side; and the three-document export, which must produce nothing rather than a
   row about a part that is not on the board.
 
-**Which model is read, corrected by 131c.** 131b shipped this rule reading
+**Which model is read, corrected twice.** 131b shipped this rule reading
 ``ctx.model``, and this docstring then argued the *schematic* view was the right
 one, on the claim that the PCB view 「resolves every net to an auto-generated
 ``NETn``」. **That claim was backwards, and 131c measured it.** On the 1.0.0
@@ -44,11 +44,29 @@ The nets are the same wires, so the rule measured the *right* parts and
 attributed them to the *wrong* net. That is how U5's VOUT storage pool read
 「empty」 in a real ``checkup`` while ``C3``/``C4`` sat on that very net 41.8 mil
 from the pin, and how U6's VOUT storage nearest read *nothing* while ``C64``
-was 91.4 mil away. The rule now reads ``ctx.pcb_model`` — the netlist view of
-the PCB document it is measuring — and the real ``checkup`` is pinned both ways
-in ``test_131c_regulator_fb_placement.py``. The synthetic helper below fills
-``pcb_model=``, and ``_ctx`` fills **both** fields so a test that wants to prove
-the schematic view is *not* read can say so.
+was 91.4 mil away. The rule reads ``ctx.pcb_model`` for **which net and which
+capacitor** (131c), and the real ``checkup`` is pinned both ways in
+``test_131c_regulator_fb_placement.py``.
+
+**170 added the second correction, about *values*.** The rule also reads
+``ctx.model`` — through ``_declared`` → ``schematic_board_of`` — for **what a
+part's value is**, because the PCB document's own ``Value`` field is a
+systematic placeholder (岳 158: 98 of the 122 parts on 毕设FOC 1.0.0's ``PCB1``
+disagree with the schematic), and 164b settled that the schematic page wins. A
+test that hands the runner a **PCB-side** ``DesignModel`` as ``ctx.model``
+therefore does not pin the production reading at all: that model carries no
+``boards`` chain, so ``schematic_board_of`` takes it for 「its own page」 and
+``_declared`` answers from the very placeholder copies the ruling is about.
+``_foc_100_rows`` below did exactly that until 170 repointed it — and the ROBOT
+helper beside it — at the production shape
+(``run_pcb_review(path, model=build_project_model(path))``, which is what
+``cli._cmd_checkup`` passes), and two pinned rows moved as a result (``U5``'s VIN
+high-frequency nearest on 1.0.0, and ``U8``'s on ROBOT). 169 did the same repair
+for the ``test_131d``/``test_131e``/``test_131f`` helpers. The synthetic tests do
+not go through the runner: ``_ctx`` fills **both** ``model`` and ``pcb_model``
+from one synthetic ``DesignModel`` (no ``boards``, so it is read as its own
+page), and a test that wants to show which of the two fields *is* consulted
+passes two different models.
 
 The offline fixtures are read-only. Nothing here runs an editor or a daemon.
 """
@@ -69,6 +87,7 @@ from boardwise.core.model import Component, DesignModel, Net, Pin
 from boardwise.core.parts import PartEntry, PartLibrary
 from boardwise.core.pinrole import pin_role
 from boardwise.engines.pcbreview import BUILTIN_PCB_RULES, run_pcb_review
+from boardwise.parsers.schematic import build_project_model
 from boardwise.rules.pcb.base import PcbReviewContext, PcbRule
 from boardwise.rules.pcb.distance import capacitor_role
 from boardwise.rules.pcb.regulator import (
@@ -510,16 +529,19 @@ def test_the_rule_reads_pin_roles_never_net_name_patterns():
 # ---------------------------------------------------------------------------
 
 
-def _foc_100_rows(model=None) -> dict:
+def _foc_100_rows() -> dict:
     """``{(designator, side, pool): finding}`` on 毕设FOC 1.0.0, PCB1.
 
-    ``model`` defaults to the **PCB-side** view of the backup — see the module
-    docstring for why, and why this is not a fixture accident.
+    Built the **production way** (170): the runner gets the schematic
+    ``ProjectModel`` (``build_project_model``), which is the model
+    ``cli._cmd_checkup`` hands it. It used to get the **PCB-side**
+    ``DesignModel`` instead, which left ``ctx.model`` without a ``boards`` chain
+    — so ``schematic_board_of`` read it as its own page and ``_declared``
+    answered from the PCB document's placeholder copies, pinning those instead
+    of the production reading (see the module docstring).
     """
-    if model is None:
-        model, _geometry = cli._load_model(FOC_100, view="pcb")
     findings, _section = run_pcb_review(
-        FOC_100, model=model, rules=[RegulatorCapDistance()]
+        FOC_100, model=build_project_model(FOC_100), rules=[RegulatorCapDistance()]
     )
     rows: dict = {}
     for finding in findings:
@@ -607,9 +629,12 @@ def test_the_acceptance_anchor_u5_output_pool_holds_only_its_own_net():
     assert "energy storage pool is empty" in storage.message
 
     # U5's input side lives on the very net it shares with U6 and is a separate
-    # row set whose nearest parts are different capacitors.
+    # row set whose nearest parts are different capacitors. Its HF nearest is
+    # ``C98`` under the production shape — 170 moved this pin off ``C93`` (see
+    # ``test_the_whole_1_0_0_table_is_pinned`` for why ``C93`` was the PCB
+    # copy's answer, not the schematic's).
     assert rows[("U5", "VIN", "STORAGE")].target.counterpart_ref == "C5"
-    assert rows[("U5", "VIN", "HF")].target.counterpart_ref == "C93"
+    assert rows[("U5", "VIN", "HF")].target.counterpart_ref == "C98"
     assert rows[("U6", "VIN", "STORAGE")].target.counterpart_ref == "C101"
     assert rows[("U6", "VOUT", "STORAGE")].target.counterpart_ref == "C64"
 
@@ -645,7 +670,21 @@ def test_the_buck_has_no_vout_side_and_says_so():
 
 
 def test_the_whole_1_0_0_table_is_pinned():
-    """Every (regulator, side, pool) row on 毕设FOC 1.0.0, with its numbers."""
+    """Every (regulator, side, pool) row on 毕设FOC 1.0.0, with its numbers.
+
+    ``U5``'s VIN high-frequency nearest is ``C98`` at 660.9 mil, and 170 is why
+    this pin moved. The old value (``C93`` @ 521.2 mil) came from the PCB
+    document's **placeholder copies** of the two parts — ``C93`` and ``C98`` are
+    both ``100nF`` there, so both sat in the HF pool and the nearer one
+    (``C93``) won. The production shape has ``schematic_board_of`` resolve the
+    schematic page, where ``C93`` is **``22uF``**: 裁定 ③ puts it in the storage
+    pool, it leaves the HF pool, and ``C98`` — whose schematic page states no
+    value and so falls back to the PCB copy's ``100nF`` — is the HF nearest at
+    660.9 mil. The evidence line is the ruling's own sentence
+    (``两视图不一致，判定用**原理图**值：原理图 '22uF' / PCB 文档 '100nF'``). Every
+    other row is unchanged, so this is one pinned value and not a table rewritten
+    to fit.
+    """
     rows = _foc_100_rows()
     assert {
         key: (f.target.counterpart_ref, (f.target.measurement or {}).get("value"))
@@ -654,7 +693,7 @@ def test_the_whole_1_0_0_table_is_pinned():
         ("U11", "VIN", "HF"): ("", None),
         ("U11", "VIN", "STORAGE"): ("C89", 99.5),
         ("U11", "VOUT", "?"): ("", None),
-        ("U5", "VIN", "HF"): ("C93", 521.2),
+        ("U5", "VIN", "HF"): ("C98", 660.9),
         ("U5", "VIN", "STORAGE"): ("C5", 95.9),
         ("U5", "VOUT", "HF"): ("C3", 41.8),
         ("U5", "VOUT", "STORAGE"): ("", None),
@@ -667,9 +706,8 @@ def test_the_whole_1_0_0_table_is_pinned():
 
 def test_every_row_on_the_fixture_is_info_and_stamped_with_its_board():
     """No threshold means no WARN anywhere, and 钉 4 stamps the board title."""
-    model, _geometry = cli._load_model(FOC_100, view="pcb")
     findings, section = run_pcb_review(
-        FOC_100, model=model, rules=[RegulatorCapDistance()]
+        FOC_100, model=build_project_model(FOC_100), rules=[RegulatorCapDistance()]
     )
     assert findings
     assert {f.severity for f in findings} == {"INFO"}
@@ -691,10 +729,19 @@ def test_the_robot_ldo_reports_both_pools_on_both_sides():
     output side has one net and both pools are measured against it. The VIN row
     is the interesting one: ``+12V`` carries U8's own ``C10`` (10 µF), which is
     storage by 裁定 ③ and is that pool's nearest member at 35.0 mil.
+
+    **170 moved ``U8/VIN/HF`` from ``C6`` @ 187.5 mil to an empty pool.** The two
+    readings are the two shapes of the model, and the production one wins:
+    ``C6`` and ``C9`` are ``100nF`` in the PCB document's placeholder copy (the
+    HF answer) but **``10UF``** on the schematic page, so under 164b's
+    schematic-first ruling they are storage and ``+12V`` has no HF member left.
+    The evidence line says it outright
+    (``两视图不一致，判定用**原理图**值：原理图 '10UF' / PCB 文档 '100nF'``), and the
+    old pin was the placeholder copy's answer — the same failure mode as the
+    ``U5``/``C93`` row on 毕设FOC 1.0.0.
     """
-    model, _geometry = cli._load_model(ROBOT, view="pcb")
     findings, _section = run_pcb_review(
-        ROBOT, model=model, rules=[RegulatorCapDistance()]
+        ROBOT, model=build_project_model(ROBOT), rules=[RegulatorCapDistance()]
     )
     rows = {}
     for finding in findings:
@@ -705,11 +752,12 @@ def test_the_robot_ldo_reports_both_pools_on_both_sides():
         key: (f.target.counterpart_ref, (f.target.measurement or {}).get("value"))
         for key, f in rows.items()
     } == {
-        ("U8", "VIN", "HF"): ("C6", 187.5),
+        ("U8", "VIN", "HF"): ("", None),
         ("U8", "VIN", "STORAGE"): ("C10", 35.0),
         ("U8", "VOUT", "HF"): ("C15", 420.7),
         ("U8", "VOUT", "STORAGE"): ("C7", 62.8),
     }
+    assert "high-frequency bypass pool is empty" in rows[("U8", "VIN", "HF")].message
     assert {f.target.component_ref for f in findings} == {"U8"}
 
 
@@ -744,13 +792,13 @@ def test_the_three_document_export_now_reaches_its_pcb1_regulators():
     the shelf calls a regulator — and the rule still *ran* on every document,
     which is what ``checksRun`` records.
     """
-    model, _geometry = cli._load_model(FOC_110, view="pcb")
-    assert _regulator_readings(model) == [], (
+    pcb_model, _geometry = cli._load_model(FOC_110, view="pcb")
+    assert _regulator_readings(pcb_model) == [], (
         "the first-document model still places no regulator; the fix is that the "
         "runner no longer asks it for the whole review"
     )
     findings, section = run_pcb_review(
-        FOC_110, model=model, rules=[RegulatorCapDistance()]
+        FOC_110, model=build_project_model(FOC_110), rules=[RegulatorCapDistance()]
     )
     assert {f.target.component_ref for f in findings} == {"U7", "U11", "U13"}
     assert {f.board for f in findings} == {"PCB1"}
@@ -771,7 +819,9 @@ def test_llc_names_no_regulator_either():
     names all five rules: a rule that never fires and a rule that fires
     correctly are only told apart by a test that demands nothing.
     """
-    model, _geometry = cli._load_model(LLC, view="pcb")
-    assert _regulator_readings(model) == []
-    findings, _section = run_pcb_review(LLC, model=model, rules=[RegulatorCapDistance()])
+    pcb_model, _geometry = cli._load_model(LLC, view="pcb")
+    assert _regulator_readings(pcb_model) == []
+    findings, _section = run_pcb_review(
+        LLC, model=build_project_model(LLC), rules=[RegulatorCapDistance()]
+    )
     assert findings == []

@@ -63,9 +63,22 @@ LLC = FIXTURES / "llc_board.epro2"
 
 
 def _findings(path: Path, rule_id: str) -> list:
-    from boardwise.engines.pcbreview import run_pcb_review
+    """The production shape: the schematic model is handed to the runner.
 
-    findings, _section = run_pcb_review(path)
+    ``cli._cmd_checkup`` loads the ``schematic`` view
+    (:func:`boardwise.parsers.schematic.build_project_model`) and passes it as
+    ``run_pcb_review(..., model=model)``, so ``ctx.model`` is the schematic
+    page a rule resolves through :func:`~boardwise.rules.pcb.focground.schematic_board_of`.
+    Calling the runner with no ``model`` leaves ``ctx.model is None``, which
+    every such rule reads as 「no schematic view」 and falls back from — i.e. it
+    pinned the **PCB document's placeholder copy** rather than the schematic
+    truth (158's measurement: 98 of 122 parts on 毕设FOC 1.0.0's ``PCB1``
+    disagree with the schematic). 169 repointed this helper at the real shape.
+    """
+    from boardwise.engines.pcbreview import run_pcb_review
+    from boardwise.parsers.schematic import build_project_model
+
+    findings, _section = run_pcb_review(path, model=build_project_model(path))
     return [f for f in findings if f.rule_id == rule_id]
 
 
@@ -265,8 +278,11 @@ def test_vcap_pins_are_listed_apart_and_never_joined_a_group():
     vcaps = [r for r in rows if VCAP_NAME_MARKER in r.message]
     assert len(vcaps) == 2
     blob = _blob(vcaps)
-    # Each carries its net and the capacitor on it with the declared value.
-    assert "$1N66421" in blob and "C1 value 100nF" in blob
+    # Each carries its net and the capacitor on it with the declared value —
+    # read the production way, schematic page first (164b/169). ``C1``'s PCB
+    # copy says ``100nF`` while the schematic says ``2.2uF``, so the old
+    # no-``model`` reading of this helper was quoting the placeholder.
+    assert "$1N66421" in blob and "C1 value 2.2uF" in blob
     assert "$1N74272" in blob and "C16 value 2.2uF" in blob
     assert "not** a supply group" in blob
 
@@ -340,12 +356,21 @@ def test_foc_100_supply_groups_are_the_measured_ones():
     refuses same-net pad pairs by design, so 「the gap between the bypass body
     and the MCU body」 is what is printed — the number a placement question is
     actually about.
+
+    **The ``GND`` row is the one 164b/169 flipped, and the new numbers are the
+    truth.** ``C1``'s PCB copy declares ``100nF`` while the schematic page
+    declares ``2.2uF``; the rule reads the schematic first (岳裁定 tasks/158),
+    so ``C1`` is a **储能池** part, not a 高频旁路 one. That makes ``C25``
+    (``30pF``, the crystal's own load capacitor, 45.6 mil) the nearest bypass
+    and ``C1`` at 33.5 mil the nearest reservoir — where the old
+    no-``model`` reading of this helper had ``C1`` as the bypass and ``C16``
+    (74.7 mil) as the reservoir. Both columns still quote the schematic value.
     """
     rows = _findings(FOC_100, "pcb-mcu-supply-groups")
     expected = {
         # net: (nearest bypass, mil, nearest reservoir, mil)
         "VCC": ("C72", 164.4, "C69", 180.7),
-        "GND": ("C1", 33.5, "C16", 74.7),
+        "GND": ("C25", 45.6, "C1", 33.5),
         "AGND": ("C108", 64.8, "C64", 475.2),
         "VCCA": ("C17", 672.2, "C67", 708.8),
     }

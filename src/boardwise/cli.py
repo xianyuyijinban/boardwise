@@ -5604,6 +5604,31 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
                     "没有可审的版面：PCB 版面审查未跑"
                 ),
             )
+        # 170: the cold-start export disclosure. A `sys.get_project_file` taken
+        # moments after the editor connects can arrive without the PCB documents'
+        # layer records, and then the board's copper count — which the physical
+        # stackup answers and only falls back to the `LAYER` definitions for —
+        # reads 0 (166 真机对拍: the first export was 4531 B smaller than a warm
+        # one, and the same board's copper count read 0 where the truth is 2 —
+        # `pcb-foc-ground-plane` printed 「reads 0 copper layer(s)」 from it). The
+        # archive is still a real export and every other reading off it stands,
+        # so this is a `source.notes` disclosure and not a gate — the same
+        # *reading, never a check* discipline `_pcb_online_not_run` follows.
+        # Offline `--file` is deliberately untouched: there the user chose the
+        # file, and a file a human exported carries its layer data.
+        if pcb_review is not None and any(
+            not entry.get("copperLayers")
+            for entry in (pcb_review.get("boards") or [])
+        ):
+            notes.append(
+                "在线整工程档（sys.get_project_file）里的 PCB 文档读不出层物理信息"
+                "（LAYER_PHYS 等层记录缺席 → boards[].copperLayers=0）："
+                "本次导出的层数不可信，"
+                "由它派生的层数结论（如 pcb-foc-ground-plane 的铜层数证据）以本句为准——"
+                "疑似编辑器刚连上时的冷启动导出（166 真机实测：首次导出比热态少 4531 B，"
+                "同一块板的铜层数读 0 而真值为 2，编辑器自己跑过一遍 DRC 后导出即完整）；"
+                "建议重跑 checkup 或改用 `boardwise checkup --file <导出的 .epro2>` 复核"
+            )
     elif not args.file:
         pcb_not_run = _pcb_online_not_run(
             tier=tier,
@@ -5632,6 +5657,20 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
             f"PCB 审查：{len(pcb_findings)} 条 finding 已并入 findings[]"
             f"（pcb- 前缀，见 pcb_review 节）"
         )
+
+    # 169: the PCB runner's own error channel, merged into the **one**
+    # `rules_errored` list `coverage.rulesErrored` already carries. A second
+    # `pcbRulesErrored` key would say the same thing in a second vocabulary —
+    # 「this rule raised and its conclusion is missing」 reads the same whichever
+    # walk raised it — so the ids go into the existing list and `coverage`, the
+    # verdict's `verdictWhy` clause and the note below all speak about both walks
+    # without one line of new structure. Read **outside** the findings merge
+    # above on purpose: a run where every PCB rule raised has no findings at all,
+    # and that is exactly the run whose silence the list exists to break.
+    pcb_rules_errored = list((pcb_review or {}).get("rules_errored") or [])
+    for rule_id in pcb_rules_errored:
+        if rule_id not in rules_errored:
+            rules_errored.append(rule_id)
 
     # 126d: the coverage gate is computed **here**, after the PCB block and
     # before `drc_summarise`. It sits at the same point in the order for the same
@@ -5671,9 +5710,19 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
             "这不是干净板（completion.coverage.parseIncomplete / modelEmpty）"
         )
     if rules_errored:
+        # 169: one line, always — and it says which walk the raise came from when
+        # any of them is the PCB runner's, because 「a rule raised」 and 「the PCB
+        # section is short a rule」 send the reader to two different places.
+        pcb_clause = (
+            f"（其中 PCB 审查 {len(pcb_rules_errored)} 条："
+            f"{'、'.join(pcb_rules_errored)}，见 pcb_review.rules_errored）"
+            if pcb_rules_errored
+            else ""
+        )
         notes.append(
             f"{len(rules_errored)} 条规则执行出错（{'、'.join(rules_errored)}）："
             "它们的结论缺失，报告照出（completion.coverage.rulesErrored）"
+            f"{pcb_clause}"
         )
     if coverage["pcbReviewMissing"]:
         notes.append(

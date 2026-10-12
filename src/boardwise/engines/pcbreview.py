@@ -378,8 +378,22 @@ def run_pcb_review(
 
     The rules are :data:`BUILTIN_PCB_RULES` unless the caller overrides. One
     broken rule does **not** kill the report: a rule that raises is skipped
-    exactly like ``engines.review._run_rules`` does, and its id is recorded so
-    ``boards[].checksRun`` never claims a check that did not run.
+    exactly like ``engines.review._run_rules`` does, its id is left out of that
+    board's ``boards[].checksRun`` so the list never claims a check that did not
+    run, and the id is **named** in the section's ``rules_errored`` (169).
+
+    ``rules_errored`` is the section's flat disclosure of the second half — the
+    ids of every rule that raised, deduplicated and sorted. Before 169 the
+    ``except: continue`` was silent: the rule simply vanished from
+    ``checksRun``, the finding count dropped by whatever it would have said, and
+    nothing in the report distinguished 「the rule ran and found nothing」 from
+    「the rule raised and was skipped」 (the measured incident: a run where
+    ``pcb-polarity-orientation`` was absent — 59 rows became 57 — and could not
+    be reproduced afterwards). This is the same channel ``engines.review`` has
+    had since fork 2 on the schematic side (``completion.coverage.rulesErrored``);
+    the shape is deliberately identical so a reader does not have to learn two.
+    The runner still **never** re-raises: a caller that wants the exception
+    keeps it by not using this runner, exactly as ``_run_rules`` forks.
     """
     from ..parsers.epro2_model import build_design_model
     from ..parsers.epru import extract_board, load_epro2_source
@@ -395,6 +409,10 @@ def run_pcb_review(
     module_of = build_module_of(model, intent, modules)
     findings: list[Finding] = []
     boards: list[dict] = []
+    # 169: every rule that raised, on **any** board. A rule may raise on one
+    # board and answer on another (the two views differ per document), so the
+    # list is flat and covers the whole run, like ``coverage.rulesErrored``.
+    rules_errored: list[str] = []
 
     for title, board_uuid, document in documents:
         board = extract_board(document, footprints, source.stats, artwork)
@@ -413,6 +431,9 @@ def run_pcb_review(
             try:
                 found = rule.check(ctx)
             except Exception:  # noqa: BLE001 — one broken rule may not kill the report
+                # 169: named rather than silent. The rule stays out of
+                # `checks_run` below, so the two statements agree.
+                rules_errored.append(rule.id)
                 continue
             checks_run.append(rule.id)
             for finding in found:
@@ -437,5 +458,11 @@ def run_pcb_review(
         "available": True,
         "boards": boards,
         "runner": RUNNER_ID,
+        # 169: the ids of the rules that raised, sorted and deduplicated — the
+        # same flat shape `completion.coverage.rulesErrored` has, and the reason
+        # 「a rule is missing from checksRun」 is no longer ambiguous. Empty (not
+        # absent) when every rule answered: the section exists because rules
+        # ran, so "none raised" is a reading this run really has.
+        "rules_errored": sorted(set(rules_errored)),
     }
     return findings, section
