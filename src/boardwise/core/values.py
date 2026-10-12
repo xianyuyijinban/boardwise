@@ -32,10 +32,11 @@ the digits look like".
   read by one module, because the rule that compares the two had one grammar
   for each side and the mid-letter spelling fell between them (issue #23).
 - :func:`parse_capacitance_farads` — board capacitor values (``100nF``,
-  ``0.1uF``, ``22pF``, and the trade's mid-letter ``4u7``/``2n2``/``5p1``). A
-  bare number without a unit is None: for capacitors the convention-less
-  number is ambiguous by two orders of magnitude and the 011 family exists
-  because a guess got recorded as a fact.
+  ``0.1uF``, ``22pF``, the trade's mid-letter ``4u7``/``2n2``/``5p1``, and a
+  field carrying a trailing annotation, ``330uF 400V``, read by its leading
+  token — 171). A bare number without a unit is None: for capacitors the
+  convention-less number is ambiguous by two orders of magnitude and the 011
+  family exists because a guess got recorded as a fact.
 - :func:`decode_eia_3digit` — the EIA three-digit value code (``471`` ->
   47x10^1). The *base unit depends on the part kind*: ohms for resistors,
   picofarads for capacitors, so the caller supplies the multiplier.
@@ -107,7 +108,10 @@ def _too_long(text: str | None) -> bool:
     The token, not the whole string: that is the piece the decoders read (an
     MPN's ``" TS"`` tail is a packaging note, not code), and it is how every entry
     point below slices it anyway. Only the length is asked -- what makes a long
-    string unreadable here is the cost of the question, not its digits.
+    string unreadable here is the cost of the question, not its digits. 171's
+    trailing-annotation read leans on the same reading: a Value field states its
+    value in the first token (``330uF 400V``), so a long *annotation* is harmless
+    while a long *value* is refused.
     """
     if not text:
         return False
@@ -414,6 +418,33 @@ def _foreign_unit_code(token: str) -> bool:
     return token.startswith(_POLYMER_SERIES_HEADS)
 
 
+def _farads_of_field(text: str) -> float | None:
+    """The capacitance a **whole field** states, by the two grammars, or None.
+
+    One implementation of 「read this string as a capacitance」, so that the
+    trailing-annotation read in :func:`parse_capacitance_farads` is the *same*
+    reader handed a shorter string rather than a second grammar beside it: the
+    suffix form first (an editor's ``100nF``), the trade's mid-letter notation
+    second (``4u7``), and each of them anchored at both ends of what it is given.
+    """
+    m = _CAP_RE.match(text)
+    if m is None:
+        return _mid_letter_farads(text)
+    # GREEK SMALL LETTER MU (U+03BC) and MICRO SIGN (U+00B5) are one unit to a
+    # reader and two code points to Python: ``_CAP_RE``'s ``re.IGNORECASE``
+    # folds them together (both casefold to U+03BC), so ``22μF`` *matches* and
+    # then arrives here as ``"μf"`` — a key :data:`_CAP_UNITS` never held, and
+    # the lookup raised ``KeyError`` out of the rule (task 055's defect: a
+    # Greek-mu value, an everyday IME spelling, crashed the decap rule where
+    # the contract is "unreadable -> None -> UNKNOWN"). The key is normalised
+    # to the micro sign and read with ``.get``: the map is now total, so an
+    # unrecognised unit is None like any other unreadable value.
+    factor = _CAP_UNITS.get(m.group(2).lower().replace("\u03bc", "\u00b5"))
+    if factor is None:
+        return None
+    return _finite(float(m.group(1)) * factor)
+
+
 def parse_capacitance_farads(value: str) -> float | None:
     """Board capacitor value -> farads, with an explicit unit required.
 
@@ -442,29 +473,51 @@ def parse_capacitance_farads(value: str) -> float | None:
     trailing ``F`` is a character it does not cover (``4u7F`` is not this
     notation).
 
+    **A third shape, and it is not a third grammar (171): a field carrying a
+    trailing annotation, read by its leading token.** llc's schematic states
+    ``330uF 400V`` in ``C3``/``C4``'s Value field -- value and voltage rating in
+    one field, which is how a person writes a bus electrolytic -- and both
+    grammars are whole-field anchored, so the field read as nothing and the part
+    vanished from every pool that filters on capacitance (087 §8's 「silence, not
+    a miss」). When the whole field is neither grammar, this reader hands
+    :func:`_farads_of_field` the field's **leading token** -- the piece
+    :func:`_too_long` already declares the decoders read (「an MPN's `` TS`` tail
+    is a packaging note, not code」) -- so the same two grammars read
+    ``330uF``/``4u7`` here exactly as they read them alone.
+
+    Three boundaries, stated because 164a read them off a rule and this batch
+    moves them into the reader:
+
+    * the tail has to *be* a separate token. ``100nF63V`` and ``22uF50V`` are one
+      string and stay unreadable -- those are merchant part-number shapes, the
+      ones 071 §1 C's whole-field anchoring exists to refuse;
+    * the leading token has to be a capacitance. ``SMCJ28CA 400V``, ``2N2222
+      50V``, ``10K 400V`` and a bare ``400V`` all answer None: a rating beside a
+      part number, a resistance or nothing is not a capacitance;
+    * ``0.1 uF 50V`` stays unreadable, and that is disclosed rather than hidden:
+      the suffix grammar's ``number \\s* unit`` shape is a whole-field shape, so
+      the leading token of that field is ``0.1`` -- a number naming no unit,
+      which this module has refused since 011. Reading it would want a third
+      grammar (a unit-terminated *prefix* of the field) no witness asks for.
+
     Two refusals come before the grammar: a first token longer than the cap is not
-    read at all (issue #27), and a quantity that overflowed to a non-finite float
-    is not a capacitance this can state (issue #31).
+    read at all (issue #27 -- the cap is measured on the token, which is why a
+    long *annotation* is harmless), and a quantity that overflowed to a
+    non-finite float is not a capacitance this can state (issue #31).
     """
     if not value or _too_long(value):
         return None
     text = value.strip()
-    m = _CAP_RE.match(text)
-    if m is None:
-        return _mid_letter_farads(text)
-    # GREEK SMALL LETTER MU (U+03BC) and MICRO SIGN (U+00B5) are one unit to a
-    # reader and two code points to Python: ``_CAP_RE``'s ``re.IGNORECASE``
-    # folds them together (both casefold to U+03BC), so ``22μF`` *matches* and
-    # then arrives here as ``"μf"`` — a key :data:`_CAP_UNITS` never held, and
-    # the lookup raised ``KeyError`` out of the rule (task 055's defect: a
-    # Greek-mu value, an everyday IME spelling, crashed the decap rule where
-    # the contract is "unreadable -> None -> UNKNOWN"). The key is normalised
-    # to the micro sign and read with ``.get``: the map is now total, so an
-    # unrecognised unit is None like any other unreadable value.
-    factor = _CAP_UNITS.get(m.group(2).lower().replace("\u03bc", "\u00b5"))
-    if factor is None:
+    if not text:
         return None
-    return _finite(float(m.group(1)) * factor)
+    farads = _farads_of_field(text)
+    if farads is not None:
+        return farads
+    token = text.split(maxsplit=1)[0]
+    if token == text:
+        return None  # one token: the grammars have already seen all of it
+    return _farads_of_field(token)
+
 
 
 def _cap_spelling(text: str) -> str:

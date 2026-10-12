@@ -17,6 +17,20 @@ from typing import Any
 #: configurable later without touching rule code. ``VEE`` is deliberately
 #: absent: it is a *negative supply* in analog/ECL circuits, not a ground
 #: (2026-09-18 ruling, M0-P0c).
+#:
+#: ``EARTH`` joined in 171, and why it belongs **here** rather than in a rule's
+#: own word list: it is the commonest English spelling of a board's ground, and
+#: this tuple is 「the one place this repo calls a name ground」 (143d). 164a's D2
+#: measured the cost of its absence from the other side —
+#: ``rules/pcb/focground.GROUND_DOMAIN_POWER_PREFIXES`` names ``EARTH`` as a
+#: power-domain word, so ``split_ground_domains`` had to sieve with a **union**
+#: (``domain_of`` ∨ :func:`is_ground_net`) or a bare ``EARTH`` net vanished from
+#: every domain in silence. The union sieve stays (it is redundant for ``EARTH``
+#: now and still carries ``P_GND`` / ``POWER_GND``, which core does not claim);
+#: what changed is that the vocabulary can answer for the name. Being a member
+#: means being matched with ``startswith``, so ``EARTHING`` / ``EARTHED`` are
+#: ground-class too — the same over-reach ``GNDX_RAIL`` has had all along (145a
+#: pins it), and cheaper than a second, exact-name list to keep in step.
 GROUND_NET_PREFIXES: tuple[str, ...] = (
     "GND",
     "AGND",
@@ -25,6 +39,7 @@ GROUND_NET_PREFIXES: tuple[str, ...] = (
     "EGND",
     "SGND",
     "VSS",
+    "EARTH",
 )
 
 #: The same ground words, read as the **last** ``_``-separated token of a
@@ -45,6 +60,12 @@ def is_ground_net(name: str | None) -> bool:
     A ground word at the **front** of the upper-cased name (``GNDA`` and ``VSSA``
     count) or as its **last** ``_``-separated token (``SEC_GND``, ``ISO_VSS`` —
     145a). ``None`` and empty names are never ground.
+
+    ``EARTH`` is one of the words as of 171 (see
+    :data:`GROUND_NET_PREFIXES`), so the bare ``EARTH`` a board's earthing net is
+    usually called now reads as a ground name, and so do ``EARTH_PGND`` /
+    ``SEC_EARTH``. The prefix rule means ``EARTHING`` counts as well — the same
+    over-reach the GND family has always had (``GNDX_RAIL``).
 
     **The name is only a candidate.** A net's role should come from declared
     intent and from device facts (a part's pin function, a rail's source); this

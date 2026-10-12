@@ -123,9 +123,11 @@ def test_a_ground_word_at_the_end_of_a_compound_name_is_a_ground_name():
     for name in ("VM", "+24V", "VCC", "VEE", "VEE-5V", "-5V", "3V3", "RX",
                  "SEC_12V", "HVDC", "SEC_SW", "SECGND", "", None):
         assert not is_ground_net(name), name
-    # The suffix words are the ground words, not a second list that can drift.
+    # The suffix words are the ground words, not a second list that can drift —
+    # which is why 171's ``EARTH`` (a ground word at the front of a name, and at
+    # the end of one: ``SEC_EARTH``) arrives here too.
     assert set(GROUND_NET_SUFFIX_WORDS) == {
-        "GND", "AGND", "DGND", "PGND", "EGND", "SGND", "VSS",
+        "GND", "AGND", "DGND", "PGND", "EGND", "SGND", "VSS", "EARTH",
     }
 
 

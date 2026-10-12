@@ -23,8 +23,11 @@ the same module family reading through the same channel:
 * **D1** — ``all_zero_ohm_parts_of``'s pin fallback could answer a single-ground-
   pin part with **the same pin twice**, printing 「GND↔GND」 on the ledger.
 * **D2** — ``split_ground_domains`` sieved with ``core.model.is_ground_net``
-  (which does not carry ``EARTH``) *before* asking ``domain_of`` (which does), so
-  a bare ``EARTH`` net vanished from every domain without a word.
+  (which did not carry ``EARTH`` then) *before* asking ``domain_of`` (which does), so
+  a bare ``EARTH`` net vanished from every domain without a word. 171 put ``EARTH``
+  in ``core.model.GROUND_NET_PREFIXES``, so the sieve knows the name itself now and
+  the union ``focground`` sieves with is redundant for it (the module keeps the
+  union for ``P_GND`` / ``POWER_GND``, which core does not claim).
 
 **What this file pins, and what it deliberately does not.**
 
@@ -327,15 +330,15 @@ def test_an_unreadable_schematic_value_is_not_rescued_by_the_copy():
 def test_a_schematic_value_with_a_trailing_rating_is_read_by_its_leading_token():
     """llc's measured shape: the page writes ``330uF 400V``.
 
-    The shared grammar requires the unit to end the field
-    (``parse_capacitance_farads("330uF 400V") is None`` — the voltage rating is
-    part of the same Value field), so reading only the whole field would report
-    llc as carrying **no** bulk electrolytic, which is false: the page itself
-    says 330 µF. The reader therefore falls back to the field's **leading token**,
-    the piece ``core.values._too_long`` already declares the decoders read, and
-    the row says it did so.
+    The shared grammar used to require the unit to **end** the field, so this rule
+    read the field's **leading token** itself — the piece ``core.values._too_long``
+    already declares the decoders read — and the row says it did so. 171 moved that
+    read into the reader (:func:`~boardwise.core.values.parse_capacitance_farads`,
+    one verdict one implementation, 071 §2), so the line that pinned the *gap* now
+    pins the *reading*: the number the rule produced by hand is the number core
+    states, and the row's sentence is unchanged.
     """
-    assert parse_capacitance_farads("330uF 400V") is None, "the measured gap"
+    assert parse_capacitance_farads("330uF 400V") == 330e-6, "171 closed the gap"
     assert parse_capacitance_farads("330uF") == 330e-6
 
     model = DesignModel(
@@ -749,13 +752,17 @@ def _board_with(*nets: str) -> BoardGeometry:
 def test_a_bare_earth_net_lands_in_the_power_domain():
     """D2: the sieve and the word list must not disagree about ``EARTH``.
 
-    ``split_ground_domains`` sieved with ``core.model.is_ground_net`` — which does
-    **not** carry ``EARTH`` (it is not in ``GROUND_NET_PREFIXES`` and ``EARTH``
+    ``split_ground_domains`` sieved with ``core.model.is_ground_net`` — which did
+    **not** carry ``EARTH`` (it was not in ``GROUND_NET_PREFIXES`` and ``EARTH``
     has no ``_``-separated tail) — and only then asked :func:`domain_of`, whose
     own word list **does** carry it
     (:data:`~boardwise.rules.pcb.focground.GROUND_DOMAIN_POWER_PREFIXES`). So the
     one name the module claims as a power ground was filtered out before the
     classifier saw it and vanished from every domain in silence.
+
+    171 closed the vocabulary gap (``EARTH`` is a ``GROUND_NET_PREFIXES`` word now),
+    so the union sieve is redundant for this name — the split, which is what this
+    test is about, is the same either way.
     """
     split = split_ground_domains(_board_with("EARTH", "GND"))
     assert split.power == ("EARTH",), split

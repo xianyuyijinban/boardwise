@@ -387,32 +387,34 @@ def schematic_page_of(ctx: PcbReviewContext) -> object | None:
 
 
 def _farads_of(text: str) -> float | None:
-    """Farads for one ``Value`` field, whole field first and leading token second.
+    """Farads for one ``Value`` field — the core reader, unchanged.
 
-    The second attempt is not a second grammar: it is the **same**
-    :func:`~boardwise.core.values.parse_capacitance_farads`, handed the field's
-    first whitespace-separated token — the piece ``core.values._too_long`` already
-    declares the decoders read (「an MPN's `` TS`` tail is a packaging note, not
-    code」). Measured on llc: the schematic page states ``330uF 400V`` for ``C3`` /
-    ``C4``, and the shared grammar requires the unit to **end** the field, so the
-    whole-field read is ``None`` while ``parse_capacitance_farads("330uF")`` is
-    330 µF. Reading only the whole field would have reported llc — which really
-    does place two 330 µF bus electrolytics — as carrying none.
+    This function *was* a two-stage read (whole field first, the field's leading
+    token second), written by 164a when the reader could not do it: llc's
+    schematic states ``330uF 400V`` for ``C3`` / ``C4``, and
+    :func:`~boardwise.core.values.parse_capacitance_farads` required the unit to
+    **end** the field, so the rule read the field's first whitespace-separated
+    token itself. 171 moved that read into the reader (071 §2: one verdict has one
+    implementation — every consumer of a Value field meets the shape, not just this
+    rule), so all that is left here is the delegation: same grammar, same token,
+    same numbers, and the wrapper stays so this rule's call sites and its evidence
+    wording do not move.
     """
-    if not text:
-        return None
-    farads = parse_capacitance_farads(text)
-    if farads is not None:
-        return farads
-    stripped = text.strip()
-    if not stripped:
-        return None
-    return parse_capacitance_farads(stripped.split(maxsplit=1)[0])
+    return parse_capacitance_farads(text)
 
 
 def _token_note(text: str) -> str:
-    """The clause saying a trailing-rated field was read by its leading token."""
-    if not text or parse_capacitance_farads(text) is not None:
+    """The clause saying a trailing-rated field was read by its leading token.
+
+    The condition is 「the field carries a tail, and that token alone is a
+    capacitance」 — which is exactly the set of fields core read by its leading
+    token, and therefore exactly the set this note fired on before 171 moved the
+    read (a whole field that *does* read is a one-token field here, and a tailed
+    field whose leading token is a bare number has no capacitance to report). The
+    sentence is unchanged, byte for byte: it says what happened — the grammars do
+    not read this whole field, and the value comes from its first word.
+    """
+    if not text:
         return ""
     stripped = text.strip()
     if not stripped:
