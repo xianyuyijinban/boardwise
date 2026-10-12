@@ -477,11 +477,12 @@ def test_region_copper_reports_a_via_on_every_copper_layer_it_spans():
 def test_rule_is_declared_house_rule_with_no_threshold_and_is_in_the_list():
     """Structure gate: the id, its place in the list, and its source string.
 
-    ``source`` is not decoration (钉 7) and this one says 待裁 because there is no
-    ruled keepout radius. There is no distance constant in the module either —
-    the only number it owns is :data:`CRYSTAL_REGION_MARGIN_MIL`, which is a
-    region margin and is documented as a default rather than a measurement, and
-    it is **not** used to grade a row.
+    ``source`` is not decoration (钉 7). Until 2026-10-11 it said 待裁 because
+    there was no ruled keepout radius; 岳's ruling (「净空区内**别网铜** WARN、晶振
+    自身铜与空层 INFO」) supplies the verdict while **keeping** the margin, so the
+    source now names the ruling and the constant stays where it was —
+    :data:`CRYSTAL_REGION_MARGIN_MIL` is still a region margin documented as a
+    default rather than a datasheet figure.
     """
     assert [rule.id for rule in BUILTIN_PCB_RULES] == [
         "pcb-decap-distance",
@@ -512,7 +513,9 @@ def test_rule_is_declared_house_rule_with_no_threshold_and_is_in_the_list():
     ]
     rule = McuCrystalKeepout()
     assert rule.id == RULE_ID
-    assert "待裁" in rule.source
+    assert "岳 2026-10-11 裁" in rule.source
+    assert "别网铜" in rule.source and "WARN" in rule.source, rule.source
+    assert "INFO" in rule.source and "9.84 mil" in rule.source, rule.source
     assert CRYSTAL_REGION_MARGIN_MIL > 0
 
 
@@ -596,22 +599,50 @@ def test_foc100_crystal_has_an_agnd_pour_result_on_the_bottom_copper_face():
     designer drew, the result is what copper there is, and the two disagree
     exactly where the design is wrong. The inner layers are unaffected (the
     inner planes are ``LAYER_FILL`` records, which this model does not read).
+
+    **155a adds the verdict, and this board is its flagship case.** The bottom
+    row carries the ``AGND`` pour — a net the crystal's own pads do **not** sit
+    on (they sit on ``OSC-IN`` / ``OSC-OUT`` / ``GND``) — so it is the ``WARN``
+    side of 岳's 2026-10-11 ruling, and it is the very copper this module has
+    been measuring since 131f. The other three rows carry only the crystal's own
+    copper (its pads and their tracks on ``Top Layer``, ``GND`` stitching vias on
+    the inner layers) or nothing, so they stay ``INFO`` measurement rows.
     """
     rows = _findings(FOC_100)
     assert len(rows) == 4, [row.message for row in rows]
     layer_names = ["Top Layer", "Bottom Layer", "Inner1", "Inner2"]
     for name in layer_names:
         row = _layer_row(rows, name)
-        assert row.severity == "INFO"
-        assert "no keepout threshold is in force" in row.message
+        assert "岳 2026-10-11 裁" in _evidence_blob(row)
+    assert {
+        name: _layer_row(rows, name).severity for name in layer_names
+    } == {
+        "Top Layer": "INFO",
+        "Bottom Layer": "WARN",
+        "Inner1": "INFO",
+        "Inner2": "INFO",
+    }
 
     bottom = _layer_row(rows, "Bottom Layer")
     assert 'pour ["POURED","e3b26ff04e3d6300"] (kind=poured) @ AGND' in bottom.message
     assert "including 1 pour region(s) (AGND)" in bottom.message
+    assert "**WARN**" in bottom.message, bottom.message
+    assert "别网铜" in bottom.message and "AGND" in bottom.message
+    assert "以外 WARN" in bottom.message
+    assert bottom.severity == "WARN", (
+        "1.0.0's AGND plane under X1 is exactly the case the fixed keepout rule "
+        "exists for"
+    )
 
     top = _layer_row(rows, "Top Layer")
     assert "no pour region on this layer inside the region" in top.message
     assert "AGND" not in top.message
+    assert "区内没有别网铜" in top.message
+    assert "以内 INFO" in top.message
+    assert top.severity == "INFO", (
+        "the crystal's own pads and their own tracks are its own copper — "
+        "grading them would make every crystal a finding"
+    )
 
 
 def test_robot_crystal_has_a_gnd_pour_result_on_the_top_face_only():
@@ -666,13 +697,16 @@ def test_pillbox_crystal_region_is_reported_as_measured():
     assert all("Inner" not in row.message for row in rows)
 
 
-def test_every_row_names_the_pending_margin_and_withholds_a_verdict():
+def test_every_row_names_the_margin_the_ruling_and_the_region_query():
     """The evidence must show the reader what the one chosen number was.
 
-    ``CRYSTAL_REGION_MARGIN_MIL`` is a default nobody ruled on, so a row that
-    used it without saying so would be reporting a measurement it did not make.
-    The row also has to say that the region query is an **inventory** rather
-    than a clearance, because the two read the same board differently.
+    ``CRYSTAL_REGION_MARGIN_MIL`` is a default (no document in the corpus states
+    a keepout radius), so a row that used it without saying so would be
+    reporting a measurement it did not make — and since 岳's 2026-10-11 ruling
+    the row must also carry **the ruling itself** and the crystal's own nets, so
+    a reader can see which copper the verdict was taken over. The row also has
+    to say that the region query is an **inventory** rather than a clearance,
+    because the two read the same board differently.
     """
     for path in (FOC_100, ROBOT, PILLBOX):
         for row in _findings(path):
@@ -680,7 +714,8 @@ def test_every_row_names_the_pending_margin_and_withholds_a_verdict():
             assert str(CRYSTAL_REGION_MARGIN_MIL) in blob
             assert "default, not a measurement" in blob
             assert "region_copper" in blob
-            assert "待裁" in blob or "no keepout" in blob
+            assert "岳 2026-10-11 裁" in blob
+            assert "the crystal's own nets" in blob
             assert "region asked:" in blob
 
 

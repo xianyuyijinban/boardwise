@@ -179,9 +179,12 @@ def test_the_five_foc_rules_sit_between_the_mcu_block_and_the_geometry_sweep():
 def test_each_foc_rule_declares_its_ti_section_and_is_l1():
     """钉 7: ``source`` is where the number came from, and each names its own.
 
-    All five name a **TI SLVA959B** section (this pack's design basis), and all
-    five say in the same breath that they 出数不出判定 — 岳 has ruled on no
-    threshold here, so no rule may claim a standard it is not measured against.
+    All five name a **TI SLVA959B** section (this pack's design basis). Four of
+    them say in the same breath that they 出数不出判定 — 岳 has ruled on no
+    threshold for them — and **R16 names both halves of its figure's
+    provenance**: the number is TI §5.3.1's and the ruling that it grades
+    (「以内 INFO、以外 WARN」) is 岳's 2026-10-11. That is the same
+    attribution-is-not-merged discipline R1b's source follows.
     Every rule is ``L1-pcb-geometry``: all five are geometry readings.
     """
     sources = {
@@ -196,19 +199,35 @@ def test_each_foc_rule_declares_its_ti_section_and_is_l1():
             continue
         assert rule.source.startswith("TI SLVA959B §"), rule.id
         assert sources[rule.id] in rule.source, (rule.id, rule.source)
-        assert "出数不出判定" in rule.source or "待岳裁" in rule.source, rule.id
+        if rule.id == R16:
+            assert "以内 INFO、以外 WARN" in rule.source, (
+                "R16's source must name 岳's 2026-10-11 ruling that made the "
+                "figure a graded line"
+            )
+            assert "岳 2026-10-11" in rule.source, rule.source
+        else:
+            assert "出数不出判定" in rule.source or "待岳裁" in rule.source, rule.id
         assert rule.level == "L1-pcb-geometry", rule.id
         assert rule.title, rule.id
 
 
-def test_no_foc_rule_compares_a_measurement_against_a_threshold():
-    """The pack's core discipline, asserted on the source rather than trusted.
+def test_only_the_ruled_figure_is_compared_and_the_other_still_is_not():
+    """The pack's discipline, asserted on the source rather than trusted.
 
-    The two TI reference numbers (:data:`~boardwise.rules.pcb.foc.TI_DECAP_REFERENCE_MIL`
-    and ``TI_GATE_WIDTH_REFERENCE_MIL``) are **quoted into evidence**, never
-    compared against. This file pins that they exist, that they are the numbers
-    TI states (0.2 in = 200 mil, 20 mil), and that they appear in no ``if``.
+    Two TI reference numbers live in the module
+    (:data:`~boardwise.rules.pcb.foc.TI_DECAP_REFERENCE_MIL` and
+    ``TI_GATE_WIDTH_REFERENCE_MIL`), and this file pins the numbers TI states
+    (0.2 in = 200 mil, 20 mil).
+
+    **155a narrowed the pin rather than dropping it.** 岳's 2026-10-11 ruling
+    made the **decoupling** figure a graded line (「以内 INFO、以外 WARN」), so a
+    comparison against it is now required rather than forbidden — the gate-width
+    figure is the one that must still appear in no ``if``, because 岳 explicitly
+    left R11 at 「维持测量行不动」. Pinning *which* of the two is compared is
+    exactly the fact that changed, so leaving the old blanket assertion in place
+    would have hidden it.
     """
+    import ast
     import inspect
 
     from boardwise.rules.pcb import foc
@@ -216,14 +235,26 @@ def test_no_foc_rule_compares_a_measurement_against_a_threshold():
     assert foc.TI_DECAP_REFERENCE_MIL == 200.0, "TI §5.3.1's 0.2 in, in mils"
     assert foc.TI_GATE_WIDTH_REFERENCE_MIL == 20.0, "TI §4's gate-trace figure"
     source = inspect.getsource(foc)
-    for name in ("TI_DECAP_REFERENCE_MIL", "TI_GATE_WIDTH_REFERENCE_MIL"):
-        # Every mention is inside an f-string that becomes evidence text; none
-        # is the right-hand side of a comparison. The simplest honest pin is
-        # that neither name appears in a bare comparison expression.
-        assert not re.search(rf"(?:<|>|<=|>=|==)\s*{name}\b", source), (
-            f"{name} is a reference quoted into evidence, not a threshold; a "
-            "comparison against it would grade a row, which 133b forbids"
-        )
+    # The pin is an **AST** reading rather than a source regex: both figures
+    # appear in evidence strings, and one of those strings literally contains
+    # 「>= {TI_GATE_WIDTH_REFERENCE_MIL} mil」 as prose, so a text search cannot
+    # tell a comparison from a quotation. Walking the parse tree can.
+    compared: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Compare):
+            for side in (node.left, *node.comparators):
+                for sub in ast.walk(side):
+                    if isinstance(sub, ast.Name):
+                        compared.add(sub.id)
+    assert "TI_DECAP_REFERENCE_MIL" in compared, (
+        "the decoupling figure grades (岳 2026-10-11): the row must compare the "
+        "measured gap against it"
+    )
+    assert "TI_GATE_WIDTH_REFERENCE_MIL" not in compared, (
+        "TI_GATE_WIDTH_REFERENCE_MIL is still a reference quoted into evidence, "
+        "not a threshold — 岳's 2026-10-11 rulings left R11's width alone; a "
+        "comparison against it would grade a row nobody ruled on"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -247,7 +278,12 @@ def test_r16_reads_the_driv8350_on_bishe_foc_100():
     rows = _rows(FOC_100, R16)
     assert rows, "U10 is a motor driver on PCB1; the rule must fire"
     assert all(r.board == "PCB1" for r in rows)
-    assert all(r.severity == "INFO" for r in rows), "the pack is INFO 起手"
+    assert all(r.severity == "INFO" for r in rows), (
+        "155a: the grading only starts **beyond** the line. Measured on this "
+        "board's U10, the three pad-to-pad gaps are 83.0 / 170.9 / 92.1 mil — "
+        "all inside the 200 mil line, so every row stays the INFO measurement "
+        "it always was (岳 2026-10-11：以内 INFO)"
+    )
     assert all("U10" in r.message or "U10" in _evidence(r) for r in rows)
 
     # 1.0.0's U10 declares two supply nets (VM on pin 2, DVDD on pin 29) and
@@ -260,10 +296,54 @@ def test_r16_reads_the_driv8350_on_bishe_foc_100():
         assert "edge-to-edge" in row.message
         assert "same copper layer" in row.message
         assert "corridor" in row.message
-        # The TI reference is quoted, and named as not-applied.
+        # The TI figure is quoted, and 岳's ruling over it is named — with the
+        # measured gap on the inside of the line.
         assert "0.2 in" in row.message or "0.2 in" in _evidence(row)
-        assert "not applied" in _evidence(row)
+        assert "岳 2026-10-11 裁：以内 INFO、以外 WARN" in _evidence(row)
+        assert "以内（岳 2026-10-11 裁：以内 INFO）" in row.message, row.message
         assert "§5.3.1" in _evidence(row)
+
+
+def test_r16_warns_only_beyond_the_line_and_robot_is_the_measured_instance():
+    """**155a's ruling**: 岳 2026-10-11 — over 200 mil is a WARN, within is INFO.
+
+    ROBOT's ``DRV1`` is the corpus's measured instance of the outside: its
+    ``VM`` pins (11 and 4) are decoupled by ``C10`` at 596.4 / 767.3 mil and by
+    ``C6`` at 304.1 mil, all three over the line, while ``C6`` at 149.9 and
+    ``C9`` at 44.0 / 162.3 mil sit inside it. So the same board produces both
+    severities, which is what makes it the acceptance anchor: the split is the
+    ruling, not a blanket ``WARN`` on the rule.
+
+    Measured rows (ROBOT PCB1, six of them):
+    ``C10@11 596.4 WARN`` / ``C10@4 767.3 WARN`` / ``C6@4 304.1 WARN`` /
+    ``C6@11 149.9 INFO`` / ``C9@11 44.0 INFO`` / ``C9@4 162.3 INFO``.
+    """
+    rows = _rows(ROBOT, R16)
+    assert rows, "DRV1 is a motor driver on ROBOT; the rule must fire"
+    by_severity = {}
+    for row in rows:
+        gap = row.target.measurement["value"] if row.target.measurement else None
+        by_severity.setdefault(row.severity, []).append(gap)
+    assert sorted(by_severity.get("WARN", [])) == [304.1, 596.4, 767.3], by_severity
+    assert sorted(by_severity.get("INFO", [])) == [44.0, 149.9, 162.3], by_severity
+    for row in rows:
+        gap = row.target.measurement["value"]
+        if row.severity == "WARN":
+            assert gap > 200.0
+            assert "超过" in row.message and "200 mil" in row.message, row.message
+            assert "以外 WARN" in row.message, row.message
+            assert "TI SLVA959B §5.3.1 的 0.2 in 建议值" in row.message, (
+                "the WARN row carries both the measured value and the "
+                "threshold's provenance — the figure is TI's, the ruling 岳's"
+            )
+        else:
+            assert gap <= 200.0
+            assert "以内 INFO" in row.message, row.message
+
+    # And the two 毕设FOC boards produce **no** WARN: the ruling separates the
+    # corpus rather than flagging every driver.
+    for path in (FOC_100, FOC_110):
+        assert all(r.severity == "INFO" for r in _rows(path, R16)), path.name
 
 
 def test_r16_silent_on_a_board_that_places_no_motor_driver():

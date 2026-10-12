@@ -942,9 +942,19 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # `tests/test_153b_ground_tie_values.py` and the acceptance anchors in
     # `tests/test_133c_foc_ground.py`, which is what makes the bump verified
     # rather than a bookkeeping line.
+    # **155a moved the recursive digest once more** — aea4ae7b -> 85a0822b — and
+    # the **direct** one holds at `4f056aaf` for the **sixteenth** batch running:
+    # 岳 2026-10-11 的两条裁定又整批落在 `rules/pcb/` 内，动的是**四个既有文件**：
+    # `focground.py`（0R 单点改成按域对计，每对一行「合规 / 报账 / 不连」）、
+    # `foc.py`（R16 的 200 mil 从「引文」变成判定线，`over = gap > 200`）、
+    # `crystalkeepout.py`（净空区内**别网铜**升级 WARN）、`distance.py`（两条既有
+    # 阈值补上裁定出处，行为未动）。行为锚点在
+    # `tests/test_155a_ruling_upgrades.py`、`tests/test_133c_foc_ground.py`、
+    # `tests/test_153b_ground_tie_values.py`、`tests/test_133b_foc_rules.py` 与
+    # `tests/test_131f_mcu_crystal_keepout.py`，所以 bump 是被验证过的，不是记账。
     assert recursive != old_digest, "the subpackage is inside the recipe now"
     assert old_digest == "4f056aaf"
-    assert recursive == "aea4ae7b", (
+    assert recursive == "85a0822b", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

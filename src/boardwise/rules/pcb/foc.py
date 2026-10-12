@@ -2,9 +2,14 @@
 
 133a landed the three primitives this batch needs (``via_geometry``,
 ``track_corner_angle``, ``return_path_projection``); 133b is the batch that
-**reads with them**. Five rules, one file, all ``INFO``:
-岳 has ruled on no threshold in this pack yet, so every row is a measurement
-and none is a verdict, exactly as 131b/131c/131d/131e/131f did.
+**reads with them**. Five rules, one file, four of them ``INFO`` throughout —
+岳 has ruled on no threshold for the gate width, the layer count, the corner
+geometry or the loop 口径, so those rows are measurements and none is a verdict,
+exactly as 131b/131c/131d/131e/131f did. **R16 is the exception since
+2026-10-11**: 岳 ruled that TI §5.3.1's 0.2 in (200 mil) **grades** — a bypass
+capacitor whose pad sits further than that from the supply pin is a ``WARN``,
+and one within it keeps the measurement row (「以内 INFO、以外 WARN」, 数字沿用
+既有建议值). See :data:`TI_DECAP_REFERENCE_MIL`.
 
 The five, and what each one is *about*:
 
@@ -12,8 +17,7 @@ The five, and what each one is *about*:
   driver IC**'s decoupling capacitor: how far its pad sits from the IC's supply
   pin, **whether the two are on the same copper layer**
   (``effective_layer_ids``), and whether a via stands between them. TI SLVA959B
-  §5.3.1's 0.2 in goes into the evidence as a reference number and grades
-  nothing.
+  §5.3.1's 0.2 in is **the graded line since 岳's 2026-10-11 ruling**.
 * :class:`FocGroundPlane` (``pcb-foc-ground-plane``, R31) — on a **≥4-layer**
   board (read off the physical stackup), is there a layer carrying **one single
   ground-class island**, and what share of the board area does it cover. A
@@ -27,18 +31,19 @@ The five, and what each one is *about*:
 * :class:`FocPowerLoopArea` (``pcb-foc-power-loop-area``, R20) — the
   high-current loop between a **bus electrolytic** and a **power MOSFET pair**,
   in **both** 口径 (polygon / bbox) because 岳's ruling on which one is the loop
-  area has not arrived.
+  area has not arrived (2026-10-11 岳 explicitly left this one 维持测量行不动).
 
-**Why the whole pack is INFO.** The pack's design basis (TI SLVA959B, a
-*guide*) states guidance numbers, and 岳's own ruling on this pack (2026-10-08)
-records that the threshold set is unsettled. A rule that graded them would put
-a number in the ledger nobody decided, which is the exact failure 131b's
-「measured, not judged」 and :data:`DECAP_DISTANCE_MIL`'s provenance note are
-about. So every constant in this module is either a **geometric fact of the
-measurement** (which nets count as gate nets) or a **provenance marker**
-(the bulk threshold, the layer count) — never a pass/fail line. The TI figures
-appear in ``evidence`` beside the measured number so the two can be read
-together without the tool having chosen between them.
+**Why the rest of the pack is INFO.** The pack's design basis (TI SLVA959B, a
+*guide*) states guidance numbers, and 岳's own ruling on this pack (2026-10-08,
+extended 2026-10-11) records that all but R16's threshold are still unsettled. A
+rule that graded them would put a number in the ledger nobody decided, which is
+the exact failure 131b's 「measured, not judged」 and :data:`DECAP_DISTANCE_MIL`'s
+provenance note are about. So every constant in this module is either a
+**geometric fact of the measurement** (which nets count as gate nets) or a
+**provenance marker** (the bulk threshold, the layer count, TI's two reference
+figures) — and exactly one of them, :data:`TI_DECAP_REFERENCE_MIL`, is a
+pass/fail line, because 岳 ruled it one. The TI figures appear in ``evidence``
+beside the measured number so the two can be read together.
 
 **The narrow-net question R13/R11 share, and why it is a net-name test.** 133b's
 task table says R13 may narrow to 「功率/栅极网」. Both readings (R11's gate-net
@@ -168,17 +173,24 @@ _BOUNDARY_FARADS = 1e-12
 #: it is out of scope for the question, and its row says so.
 MULTILAYER_THRESHOLD = 4
 
-#: TI SLVA959B §5.3.1's decoupling figure, in mils. **Reference only.**
+#: TI SLVA959B §5.3.1's decoupling figure, in mils — **and, since 2026-10-11, a
+#: graded line**. 岳's ruling: 「以内 INFO、以外 WARN」, with the number kept at
+#: the guideline's own value (0.2 in = 200 mil), so a bypass capacitor whose pad
+#: sits further than this from the supply pad is a ``WARN`` and one within it
+#: keeps the measurement row.
 #:
-#: The guideline puts the bypass capacitor within 0.2 in of the supply pin.
-#: This module **reports the measured gap and quotes this beside it in the
-#: evidence**, and grades nothing — the whole pack is INFO until 岳 rules. It is
-#: named so the reference cannot be mistaken for a constant the code compares
-#: against (it is used only inside an evidence string).
+#: The guideline puts the bypass capacitor within 0.2 in of the supply pin, and
+#: this module **reports the measured gap beside the figure on every row**; what
+#: changed is that the gap is now also compared against it, so the row can say
+#: which side of the line the board is on. The *number* is TI's, the *ruling*
+#: that it grades is 岳's, and both are named on the row rather than merged into
+#: one attribution.
 TI_DECAP_REFERENCE_MIL = 0.2 * 1000.0
 
-#: TI SLVA959B §4's gate-trace width figure, in mils. **Reference only**, same
-#: discipline as :data:`TI_DECAP_REFERENCE_MIL`.
+#: TI SLVA959B §4's gate-trace width figure, in mils. **Reference only**, and
+#: still not compared against anything: 岳's 2026-10-11 rulings upgraded the
+#: decoupling distance, the component spacing and the crystal keepout margin, and
+#: explicitly left R11's width figure alone (「维持测量行不动」).
 TI_GATE_WIDTH_REFERENCE_MIL = 20.0
 
 #: The **net-name** prefixes that make a net a power-path net, as a regex over
@@ -509,9 +521,15 @@ class FocDecapProximity(PcbRule):
     3. **vias in the corridor** between the capacitor's pads and the driver's
        supply pad (:func:`_between_vias`).
 
-    TI §5.3.1's 0.2 in is quoted in the evidence next to the measurement and
-    **grades nothing**: this is the pack's 「INFO 出数起步」 discipline and the
-    first row is no more of a verdict than the hundredth.
+    TI §5.3.1's 0.2 in is quoted in the evidence next to the measurement — and,
+    since 岳's **2026-10-11 ruling**, it also **grades**: the row is a ``WARN``
+    when the measured pad-to-pad gap is **over** 200 mil, and an ``INFO``
+    measurement when it is within it (「以内 INFO、以外 WARN」, the number kept at
+    the guideline's own value). Measured on the corpus, that line separates
+    cleanly: 毕设FOC 1.0.0's ``U10`` caps sit at 83.0 / 170.9 / 92.1 mil and
+    1.1.0's ``U2`` at 157.8 / 187.4 / 112.9 mil — all within, all INFO — while
+    ROBOT's ``DRV1`` has a 330 µF-class bypass 596.4 and 767.3 mil away from its
+    ``VM`` pins and one at 304.1 mil, which is what the ruling now flags.
 
     **Supply nets come from the pin name, through 131a's own classifier.**
     :func:`boardwise.core.pinrole.pin_role` decides which pins declare a supply
@@ -527,7 +545,10 @@ class FocDecapProximity(PcbRule):
     id = "pcb-foc-decap-proximity"
     title = "A power driver's bypass capacitor: how near the supply pin, same layer, no via between"
     level = "L1-pcb-geometry"
-    source = "TI SLVA959B §5.3.1（出数不出判定，阈值待岳裁）"
+    source = (
+        "TI SLVA959B §5.3.1（0.2 in 以内 INFO、以外 WARN；岳 2026-10-11 裁，"
+        "数字沿用既有建议值）"
+    )
 
     def check(self, ctx: PcbReviewContext) -> list[Finding]:
         return self.check_with_library(ctx, load_parts(default_library_path()))
@@ -565,9 +586,10 @@ class FocDecapProximity(PcbRule):
             "ground-bridging predicate 126b and 131b read, so this rule cannot "
             "disagree with them about what a bypass capacitor is",
             f"TI SLVA959B §5.3.1 places the bypass within "
-            f"{TI_DECAP_REFERENCE_MIL:.0f} mil (0.2 in) of the supply pin; that "
-            "figure is quoted here for reference and **this rule grades "
-            "nothing** — 岳 has ruled on no decoupling threshold in this pack",
+            f"{TI_DECAP_REFERENCE_MIL:.0f} mil (0.2 in) of the supply pin — "
+            "**岳 2026-10-11 裁：以内 INFO、以外 WARN**，数字沿用该建议值；"
+            "the ruling is the user's, the figure is TI's, and both are named "
+            "here rather than merged into one attribution",
         ]
 
     def _supply_nets(self, component: object) -> list[tuple[str, str, str, str]]:
@@ -712,7 +734,14 @@ class FocDecapProximity(PcbRule):
         identity: list[str],
         library,
     ) -> Finding:
-        """One (driver, net, capacitor) row: distance, same layer, corridor vias."""
+        """One (driver, net, capacitor) row: distance, same layer, corridor vias.
+
+        The row's severity is 岳's 2026-10-11 ruling: ``WARN`` when the measured
+        pad-to-pad gap is over :data:`TI_DECAP_REFERENCE_MIL` (200 mil), ``INFO``
+        when it is within it, and ``INFO`` when it cannot be measured at all —
+        an unmeasurable gap is UNKNOWN and UNKNOWN is not 「over」, which is the
+        same discipline the value readers in this pack follow.
+        """
         cap_pads = [
             pad for pad in board.pads_for_component(cap) if pad.net == net
         ]
@@ -726,6 +755,10 @@ class FocDecapProximity(PcbRule):
         )
         declared = _declared_value(model, cap)
         farads = parse_capacitance_farads(declared) if declared else None
+        # 岳 2026-10-11: 以内 INFO、以外 WARN. Only a **measured** gap can cross
+        # the line — UNKNOWN is not 「over」, and grading an unmeasurable gap would
+        # be the same invention the pack refuses everywhere else.
+        over = gap is not None and gap > TI_DECAP_REFERENCE_MIL
 
         parts = [
             f"{cap} on {net!r} sits {_mil(gap):.1f} mil edge-to-edge from "
@@ -778,15 +811,36 @@ class FocDecapProximity(PcbRule):
             ),
             f"TI SLVA959B §5.3.1 reference: within "
             f"{TI_DECAP_REFERENCE_MIL:.0f} mil (0.2 in) of the supply pin — "
-            "**not applied**, this row is a measurement and 岳 has ruled on no "
-            "threshold in this pack",
+            "**岳 2026-10-11 裁：以内 INFO、以外 WARN**，数字沿用该建议值"
+            + (
+                f"；实测 {_mil(gap):.1f} mil > "
+                f"{TI_DECAP_REFERENCE_MIL:.0f} mil，故本行 WARN"
+                if over
+                else f"；实测 {_mil(gap):.1f} mil <= "
+                f"{TI_DECAP_REFERENCE_MIL:.0f} mil，故本行 INFO 出数"
+            ),
         ]
+        if over:
+            verdict = (
+                f" — 实测 {_mil(gap):.1f} mil **超过** "
+                f"{TI_DECAP_REFERENCE_MIL:.0f} mil（岳 2026-10-11 裁：以外 WARN；"
+                f"数字沿用 TI SLVA959B §5.3.1 的 0.2 in 建议值），WARN"
+            )
+        elif gap is None:
+            verdict = (
+                " — 距离量不出来，故不套阈值：本行 INFO（UNKNOWN 不等于超标；"
+                "岳 2026-10-11 裁的判定线只作用于量得出来的距离）"
+            )
+        else:
+            verdict = (
+                f" — 实测 {_mil(gap):.1f} mil 在 {TI_DECAP_REFERENCE_MIL:.0f} mil "
+                "以内（岳 2026-10-11 裁：以内 INFO），本行 INFO 出数"
+            )
         return Finding(
             rule_id=self.id,
-            severity="INFO",
+            severity="WARN" if over else "INFO",
             level=self.level,
-            message="; ".join(parts)
-            + " — INFO 出数，阈值待岳裁，本行不出判定",
+            message="; ".join(parts) + verdict,
             evidence=[
                 *identity,
                 *parts,

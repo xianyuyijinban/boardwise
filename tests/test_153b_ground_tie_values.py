@@ -377,51 +377,73 @@ def test_value_view_evidence_names_the_divergent_and_the_fallback_parts():
 # ---------------------------------------------------------------------------
 
 
-def test_r1b_reads_100_as_two_0r_ties_plus_one_jumper():
-    """1.0.0's corrected answer, straight off the production entry point.
+def test_r1b_reads_100_as_one_0r_per_pair_plus_one_jumper():
+    """1.0.0's answer under 岳's **per-pair** ruling (2026-10-11): both pairs 合规.
 
-    Two ``0R`` cross-domain ties (``R48`` ``GND``↔``PGND``, ``R49``
-    ``AGND``↔``PGND``), one 0 Ω jumper inside neither domain (``R31`` on
-    ``+24V``↔``$1N74269``), and no 10 kΩ bridge anywhere. The 「not a single
-    point」 branch is unchanged in *form* — 岳's convention is one 0 Ω for the
-    whole ground system, and this board ties the power domain to the logic domain
-    twice — but the account is now the board's own.
+    Production entry point, 1.0.0 PCB1: three rows — one per domain pair
+    (``PGND``↔``GND`` with ``R48``, ``PGND``↔``AGND`` with ``R49``), each
+    reporting **每对域恰好一颗 0R — 合规**, plus the 0 Ω jumper ``R31``
+    (``+24V``↔``$1N74269``, no ground net on either pin).
+
+    This is the conclusion 155a changed: under 岳's 2026-10-08 board-wide wording
+    the same two ``0R`` read as 「not a single point」 (one 0 Ω for the whole
+    ground system, this board ties its logic side to the power side twice), and
+    under the 2026-10-11 wording 「每对地域各一颗 0R 即合规」 the board is
+    compliant on both pairs. The measurement did not move a digit; the unit the
+    count is taken over did.
     """
     rows = [r for r in _rows(FOC_100) if r.board == "PCB1"]
-    assert len(rows) == 2, [r.message[:70] for r in rows]
-    account = next(r for r in rows if "not a single point" in r.message)
-    assert "2 0 Ω resistor(s) (R48 'GND'↔'PGND', R49 'AGND'↔'PGND')" in account.message
-    assert "非零" not in account.message and "**non-zero**" not in account.message
-    assert "原理图 '0R' / PCB 文档 '10K'" in "\n".join(account.evidence)
-    assert account.target.net_refs == [], (
-        "the account row is not a per-part row; the ties are named in its text"
-    )
+    assert len(rows) == 3, [r.message[:70] for r in rows]
+    pairs = [r for r in rows if "每对域恰好一颗 0R — 合规" in r.message]
+    assert len(pairs) == 2, [r.message[:70] for r in pairs]
+    by_tie = {r.target.component_ref: r for r in pairs}
+    assert set(by_tie) == {"R48", "R49"}, by_tie
+    assert "'GND'" in by_tie["R48"].message and "'PGND'" in by_tie["R48"].message
+    assert "'AGND'" in by_tie["R49"].message and "'PGND'" in by_tie["R49"].message
+    for row in pairs:
+        assert row.severity == "INFO", "the pack reports, it does not raise"
+        assert "岳 2026-10-11 裁" in row.message
+        assert "出数不出判定" in row.message, (
+            "the tie's distance to the bulk cap is still a measurement"
+        )
+        blob = "\n".join(row.evidence)
+        assert "原理图 '0R' / PCB 文档 '10K'" in blob, (
+            "the two views' disagreement is still written down"
+        )
+        assert "每对地域各一颗 0R 即合规" in blob and "推翻 2026-10-08" in blob, (
+            "the row names the ruling it was produced under"
+        )
+        assert "the other pairs of this board are judged on their own rows" in blob
 
-    jumper = next(r for r in rows if r is not account)
+    jumper = next(r for r in rows if r not in pairs)
     assert "R31" in jumper.message and jumper.target.component_ref == "R31"
     assert "not a ground-domain tie" in jumper.message
 
 
-def test_r1b_reads_110_as_two_0r_ties_on_pcb1():
-    """1.1.0's corrected answer, and its own two jumpers' board is PCB3.
+def test_r1b_reads_110_as_one_0r_per_pair_on_pcb1():
+    """1.1.0's answer, and its own two structural rows on PCB2 / PCB3.
 
     1.1.0's PCB1 carries the power stage: ``R25`` (``0R``, ``GND``↔``PGND``) and
-    ``R11`` (``0R``, ``AGND``↔``PGND``) are its two cross-domain ties, plus
-    ``R3`` (``0R``, ``+24V``↔``$1N74457``) as a jumper. Its PCB3 carries a
-    ``PGND`` and no logic ground at all, and PCB2 no power ground — the same two
-    structural rows as before, unaffected by the value fix.
+    ``R11`` (``0R``, ``AGND``↔``PGND``) are one per pair — **both pairs 合规**
+    under the 2026-10-11 ruling — plus ``R3`` (``0R``, ``+24V``↔``$1N74457``) as
+    a jumper. Its PCB3 carries a ``PGND`` and no logic ground at all, and PCB2 no
+    power ground — the same two structural rows as before, unaffected by the
+    value fix and by the ruling.
     """
     rows = [r for r in _rows(FOC_110) if r.board == "PCB1"]
-    assert len(rows) == 2, [r.message[:70] for r in rows]
-    account = next(r for r in rows if "not a single point" in r.message)
-    assert "2 0 Ω resistor(s) (R11 'AGND'↔'PGND', R25 'GND'↔'PGND')" in account.message
-    assert "**non-zero**" not in account.message
-    assert "原理图 '0R' / PCB 文档 '10K'" in "\n".join(account.evidence)
-    for part in ("R11", "R25", "R3"):
-        assert f"{part} 原理图 '0R' / PCB 文档 '10K'" in "\n".join(account.evidence)
+    assert len(rows) == 3, [r.message[:70] for r in rows]
+    pairs = [r for r in rows if "每对域恰好一颗 0R — 合规" in r.message]
+    assert len(pairs) == 2, [r.message[:70] for r in pairs]
+    assert {r.target.component_ref for r in pairs} == {"R11", "R25"}
+    for row in pairs:
+        blob = "\n".join(row.evidence)
+        assert (
+            f"{row.target.component_ref} 原理图 '0R' / PCB 文档 '10K'" in blob
+        ), "every judged part's two views are on its own pair's row"
 
-    jumper = next(r for r in rows if r is not account)
+    jumper = next(r for r in rows if r not in pairs)
     assert jumper.target.component_ref == "R3"
+    assert "R3 原理图 '0R' / PCB 文档 '10K'" in "\n".join(jumper.evidence)
 
     pcb3 = [r for r in _rows(FOC_110) if r.board == "PCB3"]
     assert len(pcb3) == 1 and "no logic/analog ground" in pcb3[0].message
@@ -461,12 +483,12 @@ def test_the_row_counts_are_unchanged_on_the_four_boards_without_a_tie():
     tally = {
         FOC_100: {
             "pcb-foc-ground-domains": 3,
-            "pcb-foc-ground-tie": 3,
+            "pcb-foc-ground-tie": 4,
             "pcb-foc-return-path": 16,
         },
         FOC_110: {
             "pcb-foc-ground-domains": 4,
-            "pcb-foc-ground-tie": 4,
+            "pcb-foc-ground-tie": 5,
             "pcb-foc-return-path": 25,
         },
         ROBOT: {
@@ -500,24 +522,39 @@ def test_the_same_board_read_without_the_project_model_is_the_old_false_answer()
 
     Production passes the project model (``cli.py``); a context without one has
     no schematic view and falls back to the PCB copy, which is the state the code
-    was in before the fix. On 1.0.0 that produces 「0 0 Ω resistor(s), 2
-    resistor(s) of a **non-zero** value」 — the false account — so this test fails
-    if the schematic threading is ever dropped at a call site, which is the one
-    way the defect can come back.
+    was in before the fix. On 1.0.0 that turns **both** cross-domain bridges into
+    ``10K``, so each of the board's two pairs takes the 「not a single point」
+    branch with 「1 resistor(s) of a **non-zero** value」 — the false account —
+    and this test fails if the schematic threading is ever dropped at a call site,
+    which is the one way the defect can come back.
+
+    Under 155a's per-pair ruling that mutation is still two rows rather than one
+    (there are two pairs), and the *compliant* conclusion the real board reaches
+    is nowhere in the mutated output — which is the sharper statement of the
+    same failure.
     """
     board, pcb_model = _pcb_view(FOC_100, "PCB1")
     rows = FocGroundTie().check_with_library(
         PcbReviewContext(board=board, pcb_model=pcb_model), EMPTY_SHELF
     )
     account = [r for r in rows if "not a single point" in r.message]
-    assert len(account) == 1
-    assert "0 0 Ω resistor(s), 2 resistor(s) of a **non-zero** value" in (
-        account[0].message
+    assert len(account) == 2, [r.message[:70] for r in rows]
+    for row in account:
+        assert "0 0 Ω resistor(s), 1 resistor(s) of a **non-zero** value" in (
+            row.message
+        )
+    assert not [r for r in rows if "每对域恰好一颗 0R — 合规" in r.message], (
+        "the mutated reading has no compliant pair left, which is the defect"
     )
     assert "R31" not in "".join(r.message for r in rows), (
         "and the third 0R is invisible to that reading, exactly as it was before"
     )
-    assert "回退 PCB 文档值" in "\n".join(account[0].evidence)
+    assert all(
+        "回退 PCB 文档值" in "\n".join(row.evidence) for row in account
+    ), "each row says its value came from the PCB document's copy"
+    for row in account:
+        blob = "\n".join(row.evidence)
+        assert "'10K'" in blob, "the copy's placeholder value is what was judged"
 
 
 # ---------------------------------------------------------------------------
@@ -535,6 +572,11 @@ def test_the_non_zero_branch_is_reachable_and_the_pool_stays_structural():
     and shows why the pool cannot be value-filtered: a 0 Ω-only pool would report
     this board as joined by **nothing**, which is a different answer from 「not
     connected at all」 and only one of the two is 岳's 「不连」 branch.
+
+    Under 155a's per-pair ruling the branch is reached **once per pair** — two
+    rows, one for ``PGND``↔``GND`` (``R48``, 10 kΩ) and one for
+    ``PGND``↔``AGND`` (``R49``, 10 kΩ) — and neither pair is reported as
+    compliant.
     """
     board, pcb_model = _pcb_view(FOC_100, "PCB1")
     ctx = PcbReviewContext(
@@ -545,12 +587,11 @@ def test_the_non_zero_branch_is_reachable_and_the_pool_stays_structural():
     )
     rows = FocGroundTie().check_with_library(ctx, EMPTY_SHELF)
     account = [r for r in rows if "not a single point" in r.message]
-    assert len(account) == 1, [r.message[:70] for r in rows]
-    assert "0 0 Ω resistor(s), 2 resistor(s) of a **non-zero** value" in (
-        account[0].message
-    )
-    assert "R48 '10K' 'GND'↔'PGND'" in account[0].message
-    assert "R49 '10K' 'AGND'↔'PGND'" in account[0].message
+    assert len(account) == 2, [r.message[:70] for r in rows]
+    assert any("R48 '10K' 'GND'↔'PGND'" in r.message for r in account)
+    assert any("R49 '10K' 'AGND'↔'PGND'" in r.message for r in account)
+    for row in account:
+        assert "0 0 Ω resistor(s), 1 resistor(s) of a **non-zero** value" in row.message
     assert "not connected at all" not in "".join(r.message for r in rows)
 
     # The value-filtered pool over the same view: nothing at all.
@@ -562,12 +603,13 @@ def test_the_non_zero_branch_is_reachable_and_the_pool_stays_structural():
     )
 
 
-def test_a_mixed_board_reports_one_0r_and_one_non_zero_bridge_together():
-    """Both branches at once: ``R48`` 0 Ω, ``R49`` non-zero.
+def test_a_mixed_board_reports_compliance_on_one_pair_and_an_account_on_the_other():
+    """Both shapes at once: ``R48`` 0 Ω (compliant pair), ``R49`` non-zero.
 
-    The mixed case is what the 「several ways, one of them not 0 Ω」 account is
-    for, and it also shows the single-point branch is **not** taken: one 0 Ω plus
-    a non-zero bridge is not 岳's 「恰好一颗 0R」.
+    This is the case the per-pair ruling was needed for: the two pairs answer
+    **differently**, and a board-wide count could only ever say 「several ways」
+    about both. ``PGND``↔``GND`` is 合规 (exactly one 0 Ω, ``R48``);
+    ``PGND``↔``AGND`` takes the non-zero account (``R49``, 10 kΩ).
     """
     board, pcb_model = _pcb_view(FOC_100, "PCB1")
     ctx = PcbReviewContext(
@@ -577,12 +619,17 @@ def test_a_mixed_board_reports_one_0r_and_one_non_zero_bridge_together():
         board_uuid="d5c055266ef55000",
     )
     rows = FocGroundTie().check_with_library(ctx, EMPTY_SHELF)
-    assert not [r for r in rows if "exactly one 0 Ω single point" in r.message]
+    compliant = [r for r in rows if "每对域恰好一颗 0R — 合规" in r.message]
+    assert len(compliant) == 1, [r.message[:70] for r in rows]
+    assert compliant[0].target.component_ref == "R48"
+    assert "'GND'" in compliant[0].message and "'PGND'" in compliant[0].message
     account = [r for r in rows if "not a single point" in r.message]
     assert len(account) == 1
-    assert "1 0 Ω resistor(s) (R48 'GND'↔'PGND')" in account[0].message
-    assert "1 resistor(s) of a **non-zero** value" in account[0].message
+    assert "0 0 Ω resistor(s), 1 resistor(s) of a **non-zero** value" in (
+        account[0].message
+    )
     assert "R49 '10K' 'AGND'↔'PGND'" in account[0].message
+    assert "'AGND'" in account[0].message and "'PGND'" in account[0].message
 
 
 def test_the_unknown_branch_is_unaffected_by_the_view_and_never_zero():

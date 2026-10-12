@@ -8,11 +8,14 @@ switching / sense traces see under them. Three rules, all ``INFO``:
 * **R1 ``pcb-foc-ground-domains``** — one row per (power ground net, logic
   ground net) pair: does their copper **meet on a shared layer**, how near is
   the nearest pair, and how many copper islands does each side carry.
-* **R1b ``pcb-foc-ground-tie``** — 岳's 2026-10-08 ruling: the two domains join
-  through **exactly one 0 Ω**, and that 0 Ω should sit near the power-stage
-  bulk electrolytic. Four branches are reported — one 0 Ω (with its distance to
-  the nearest bulk cap), several / non-zero / directly-copper-connected, not
-  connected at all, and a 0 Ω part that sits inside one domain.
+* **R1b ``pcb-foc-ground-tie``** — 岳's rulings: the domains join through a
+  **0 Ω per domain pair** (2026-10-08 supplied the 0 Ω form; **2026-10-11** fixed
+  the unit — 「每对地域各一颗 0R 即合规」), and that 0 Ω should sit near the
+  power-stage bulk electrolytic. Branches reported: one 0 Ω per pair (**合规**,
+  with its distance to the nearest bulk cap), several / non-zero /
+  directly-copper-connected *on that pair*, nothing joining that pair
+  (「要么不连，要么单点」), a part whose resistance is UNKNOWN, and a 0 Ω part that
+  sits inside one domain (a jumper, not a tie).
 * **R5 ``pcb-foc-return-path``** — the return-path projection of every gate /
   switching-node / sense net, with **PLANE-layer semantics** (岳's ruling: a
   ``layerType == "PLANE"`` reference layer is 构造性完整覆盖), plus an explicit
@@ -28,22 +31,25 @@ these two domains: 127b's pad-layer fix is holding, and the six pairs 127a
 attributed to a parser defect were indeed all top-side × bottom-side.
 
 **The measured answer to the second question.** 「板上有没有 0R 单点件」 — **yes,
-two of them**, and this is 153b's correction to what this file first recorded.
+two of them**, and this is 153b's correction to what this file first recorded,
+while 155a's per-pair ruling is what makes them the *compliant* answer.
 毕设FOC 1.0.0's PCB1 joins its two ground domains with ``R48`` (``0R``,
-``GND``↔``PGND``) and ``R49`` (``0R``, ``AGND``↔``PGND``) — one 0 Ω per domain
-pair — plus a third 0 Ω, ``R31``, on ``+24V``↔``$1N74269``, which bridges no
-ground domain and is reported as a jumper. The **PCB document's own copies** of
-``R48``/``R49`` say ``10K``, which is what the rule used to read and why this
-file once recorded 「two 10 kΩ resistors, no 0 Ω at all」; that reading was the
-stale copy talking, and ``focground``'s value chain now reads the schematic page
-first (the module docstring's 「which value field」 section). The branch is still
-「not a single point」, because 岳's convention asks for **exactly one** 0 Ω
-between the power ground and the logic ground and this board ties them twice.
-ROBOT is the mirror image — it places a 0 Ω (``R8``, ``0Ω``,
-``CRCW06030000Z0EAHP``) on ``GND``↔``$1N251``, so it is a **jumper**, not the
-single point, and it has no power domain at all to be a tie between. ROBOT's
-``R8`` is also the measured instance of the **fallback**: the schematic page
-states no value for it, so the value comes from the PCB document and the row
+``GND``↔``PGND``) and ``R49`` (``0R``, ``AGND``↔``PGND``) — **one 0 Ω per domain
+pair**, which is 岳's 2026-10-11 shape (「每对地域各一颗 0R 即合规」) — plus a
+third 0 Ω, ``R31``, on ``+24V``↔``$1N74269``, which bridges no ground domain and
+is reported as a jumper. The **PCB document's own copies** of ``R48``/``R49`` say
+``10K``, which is what the rule used to read and why this file once recorded
+「two 10 kΩ resistors, no 0 Ω at all」; that reading was the stale copy talking,
+and ``focground``'s value chain now reads the schematic page first (the module
+docstring's 「which value field」 section). Before 155a the same two 0 Ω were
+reported as 「not a single point」, because 岳's earlier board-wide wording asked
+for exactly one 0 Ω for the whole ground system; the ruling of 2026-10-11 moved
+**the unit the count is taken over**, from the board to the domain pair, and no
+per-pair count on this board exceeds one. ROBOT is the mirror image — it places
+a 0 Ω (``R8``, ``0Ω``, ``CRCW06030000Z0EAHP``) on ``GND``↔``$1N251``, so it is a
+**jumper**, not a tie, and it has no power domain at all to be a tie between.
+ROBOT's ``R8`` is also the measured instance of the **fallback**: the schematic
+page states no value for it, so the value comes from the PCB document and the row
 says so.
 
 **PLANE is the third measured anchor.** 毕设FOC 1.0.0's PCB1 declares layers
@@ -272,8 +278,11 @@ def test_each_rule_declares_where_its_authority_comes_from():
     the 0 Ω form would be claiming a standard it is not measured against, which
     is the failure 133b's source-pin discipline exists to stop.
 
-    All three are ``L1-pcb-geometry``, and all three say in the same breath that
-    they 出数不出判定.
+    **155a moved R1b's source, not R1/R5's.** 岳's 2026-10-11 ruling
+    (「每对地域各一颗 0R 即合规」) is now the line this rule grades against, so
+    the source names **both** rulings — the 2026-10-08 one that supplied the 0 Ω
+    form and the 2026-10-11 one that supplied the unit it counts over — and it
+    still says which half TI backs. R1 and R5 remain measurements 出数不出判定.
     """
     sources = {R1: "1.3.1", R5: "1.2"}
     for rule in BUILTIN_PCB_RULES:
@@ -284,14 +293,18 @@ def test_each_rule_declares_where_its_authority_comes_from():
         if rule.id in sources:
             assert rule.source.startswith("TI SLVA959B §"), rule.id
             assert sources[rule.id] in rule.source, (rule.id, rule.source)
+            assert "出数不出判定" in rule.source or "待岳裁" in rule.source, rule.id
         else:
             assert "oracle ruling" in rule.source, rule.id
             assert "岳 2026-10-08" in rule.source, rule.id
+            assert "2026-10-11" in rule.source and "每对地域各一颗 0R" in rule.source, (
+                "R1b's source must name 岳's per-pair ruling, which is the "
+                "conclusion this rule reports as 合规"
+            )
             assert "TI SLVA959B 只背书物理隔离" in rule.source, (
                 "R1b's source must say which half came from TI and which half "
                 "is 岳's engineering convention"
             )
-        assert "出数不出判定" in rule.source or "待岳裁" in rule.source, rule.id
 
 
 def test_no_rule_grades_a_measurement_against_a_threshold():
@@ -533,85 +546,59 @@ def test_r1_reports_a_cross_layer_zero_distance_as_no_connection():
 # ---------------------------------------------------------------------------
 
 
-def test_r1b_reads_100s_two_bridges_as_0r_from_the_schematic_page():
-    """**The corrected acceptance anchor (153b)**: 1.0.0 joins its domains with two 0 Ω.
+def test_r1b_reads_100_as_one_0r_per_domain_pair_and_reports_compliance():
+    """**The acceptance anchor 155a moved**: 1.0.0 joins each pair with one 0 Ω.
 
-    Before 153b this anchor said the opposite — 「1.0.0 places no 0 Ω resistor at
-    all; it joins its domains with two 10 kΩ resistors」 — and it was the PCB
-    document's stale ``component.value`` talking. Read through the schematic page
-    (which is what production wiring gives the rule), 毕设FOC 1.0.0's PCB1 has
-    ``R48`` (``0R``, ``GND``↔``PGND``) and ``R49`` (``0R``, ``AGND``↔``PGND``):
-    **two** 0 Ω ties, one per domain pair, and the PCB document's own copies of
-    both say ``10K``.
+    Before 155a this anchor said 「not a single point」, which was 岳's 2026-10-08
+    board-wide wording talking: 「全板恰好一颗 0R」 counts one 0 Ω for the whole
+    ground system, and 1.0.0's PCB1 carries **two** (``R48`` ``GND``↔``PGND``,
+    ``R49`` ``AGND``↔``PGND``). 岳's 2026-10-11 ruling fixes the unit —
+    「每对地域各一颗 0R 即合规」 — so the same measurement is now reported as
+    **合规 on both pairs**, one row per pair. Nothing about the values moved:
+    both ``R48``/``R49`` read ``0R`` from the schematic page (153b) while the
+    PCB document's copies still say ``10K``, and each row still writes both views
+    into its evidence.
 
-    Two things are pinned besides the values. First, the row still takes the
-    「not a single point」 branch, and that is the ruling's own semantics rather
-    than a leftover of the bug: 岳's 2026-10-08 convention is **exactly one** 0 Ω
-    between the power ground and the logic/analog ground, and this board ties the
-    power domain to the logic domain **twice** — ``GND`` and ``AGND`` are both
-    logic-domain nets (``U1`` joins them inside that domain), each with its own
-    ``0R`` to ``PGND``. 「Each domain pair has exactly one 0 R」 and 「the board has
-    exactly one 0 R」 are different readings, this rule has always used the
-    second, and 153b changed the *values* it judges, not the judgement.
-
-    Second, the row's evidence writes **both views** for the parts it judged —
-    「原理图 '0R' / PCB 文档 '10K'」 — so the divergence is on the record instead of
-    being resolved silently in either direction.
+    The rows are the ruling's own shape: **per pair**, each naming its tie, the
+    other pair's independence, and 岳's sentence. ``R31`` — the third ``0R`` on
+    the schematic page, on ``+24V``↔``$1N74269`` — is still a **jumper** row:
+    neither of its pins is a ground net, so it belongs to no pair.
     """
     rows = [r for r in _rows(FOC_100, R1B) if r.board == "PCB1"]
-    assert len(rows) == 2, [(r.board, r.message[:80]) for r in rows]
-    row = next(r for r in rows if "not a single point" in r.message)
-    jumper = next(r for r in rows if r is not row)
-    assert row.severity == "INFO" and jumper.severity == "INFO"
+    assert len(rows) == 3, [(r.board, r.message[:80]) for r in rows]
+    pairs = [r for r in rows if "每对域恰好一颗 0R — 合规" in r.message]
+    assert len(pairs) == 2, [r.message[:80] for r in pairs]
+    jumper = next(r for r in rows if r not in pairs)
+    assert all(r.severity == "INFO" for r in rows)
 
-    assert "**not a single point**" in row.message
-    assert "R48" in row.message and "R49" in row.message
-    assert "'GND'" in row.message and "'PGND'" in row.message
-    assert "'AGND'" in row.message
-    assert "2 0 Ω resistor(s)" in row.message, (
-        "the account is two 0 Ω ties — the corrected reading; before 153b this "
-        "row said 「0 0 Ω resistor(s), 2 resistor(s) of a **non-zero** value」"
-    )
-    assert "10K" not in row.message, (
-        "no part on this row is a 10 kΩ bridge any more: the 10K was the PCB "
-        "document's placeholder copy"
-    )
-    assert "岳's 2026-10-08 ruling asks for **exactly one 0 Ω**" in row.message
+    by_tie = {r.target.component_ref: r for r in pairs}
+    assert set(by_tie) == {"R48", "R49"}, by_tie
+    r48, r49 = by_tie["R48"], by_tie["R49"]
+    assert "'GND'" in r48.message and "'PGND'" in r48.message
+    assert "'AGND'" in r49.message and "'PGND'" in r49.message
+    for row in pairs:
+        assert "岳 2026-10-11 裁" in row.message
+        assert "出数不出判定" in row.message, "the bulk-cap distance is 出数"
+        assert "distance to the nearest power-stage bulk electrolytic" in row.message
+        blob = "\n".join(row.evidence)
+        assert "每对地域各一颗 0R 即合规" in blob
+        assert "推翻 2026-10-08" in blob, (
+            "the row says which wording it overturns, so the change is auditable"
+        )
+        assert "the other pairs of this board are judged on their own rows" in blob
+        assert "原理图 '0R' / PCB 文档 '10K'" in blob, (
+            "the two views' disagreement is written down for the part it judged"
+        )
+        assert "岳's 2026-10-08 convention is 「0R 近功率电解电容」" in blob
+        assert "not a TI citation" in blob
 
-    ev = _evidence(row)
-    assert "cross-domain **0 Ω** ties" in ev
-    assert "R48 ('0R')" in ev and "R49 ('0R')" in ev
-    assert "non-zero** value" in ev, "the non-zero branch is stated as empty"
-    assert "= 10000 Ω" not in ev, "nothing here is judged as 10 kΩ any more"
-    assert "structural" in ev, "the pool is named as structural"
-    assert "focground.bridging_parts_of" in ev, (
-        "and the row says which function built its pool, so a reader can go "
-        "look at the sieve that produced it"
-    )
-    assert "原理图 '0R' / PCB 文档 '10K'" in ev, (
-        "the two views' disagreement is written down for both parts, so the row "
-        "can be audited without re-reading the archive"
-    )
-    assert "原理图声明优先" in ev and "回退" in ev, (
-        "and the reading order itself is stated on the row"
-    )
-    assert "0R 要靠近功率电解电容" in ev, (
-        "the 「0R 要靠近功率电解」 convention is named even on the "
-        "not-single-point branch, because that is the branch whose proximity "
-        "the ruling would have measured"
-    )
-    assert "TI SLVA959B §1.3.1 backs only the" in ev, (
-        "and the row says which half of the convention TI backs and which half "
-        "is 岳's"
-    )
-
-    # R31 is 1.0.0's third 0 Ω on the schematic page, and it is a **jumper**:
-    # its pins sit on ``+24V`` and ``$1N74269``, neither a ground net. Before
-    # 153b the rule could not see it at all (its copy reads ``10K``); now it is
-    # reported by name and explicitly not counted toward the single point.
     assert "R31" in jumper.message and "not a ground-domain tie" in jumper.message
     assert "'+24V'" in jumper.message, jumper.message
     assert jumper.target.component_ref == "R31"
+    assert not [r for r in rows if "not a single point" in r.message], (
+        "no pair of this board is joined twice, so the account branch is not "
+        "reached — that is the whole content of the 2026-10-11 ruling"
+    )
 
 
 def test_r1b_the_bridging_pool_is_structural_not_value_based():
@@ -780,62 +767,82 @@ def test_r1b_is_silent_by_construction_on_a_board_with_no_power_domain():
 
 
 def test_r1b_reports_the_not_connected_branch_when_no_part_and_no_copper():
-    """The 「不连」 branch: one INFO row, and it names the 0 Ω parts it did find.
+    """The 「不连」 branch: **one INFO row per pair**, naming the 0 Ω parts it did find.
 
-    岳: 「要么不连，要么单点」 — both count, so a board with nothing joining its
-    domains is reported with the same seriousness as one with a single 0 Ω, and
-    the row says which branch it took. The synthetic board is built so the
-    branch is reached by the real rule rather than by mocking it.
+    岳: 「要么不连，要么单点」 — both count, so a pair with nothing joining its two
+    nets is reported with the same seriousness as one with a single 0 Ω, and the
+    row says which branch it took. Under the 2026-10-11 per-pair ruling the unit
+    is the pair, so this synthetic board — ``PGND`` against two logic grounds,
+    ``GND`` and ``AGND`` — produces **two** 不连 rows rather than one board-level
+    one: each pair answers for itself.
 
-    The evidence must also state the 0 Ω pool's contents, because 「no tie」 and
-    「there is a 0 Ω here but it is elsewhere」 are different answers.
+    The synthetic board is built so the branch is reached by the real rule rather
+    than by mocking it. The evidence must also state the 0 Ω pool's contents,
+    because 「no tie here」 and 「there is a 0 Ω here but it is elsewhere」 are
+    different answers.
     """
     board, model = _isolated_domains_board()
     findings = FocGroundTie().check_with_library(
         PcbReviewContext(board=board, pcb_model=model), EMPTY_SHELF
     )
     rows = [f for f in findings if "not connected at all" in f.message]
-    assert len(rows) == 1, [f.message[:70] for f in findings]
-    row = rows[0]
-    assert row.rule_id == R1B and row.severity == "INFO"
-    assert "「要么不连，要么单点」" in row.message
-    ev = _evidence(row)
-    assert "bridging-part pool" in ev
-    assert "the 0 Ω parts anywhere on this board are" in ev
-    assert "bulk electrolytics on this board" in ev, (
-        "the bulk-cap pool is named even when there is no tie to measure, so a "
-        "reader can see the proximity question had nothing to work with"
-    )
+    assert len(rows) == 2, [f.message[:70] for f in findings]
+    assert {tuple(sorted(r.target.net_refs)) for r in rows} == {
+        ("GND", "PGND"),
+        ("AGND", "PGND"),
+    }, [r.target.net_refs for r in rows]
+    for row in rows:
+        assert row.rule_id == R1B and row.severity == "INFO"
+        assert "「要么不连，要么单点」" in row.message
+        assert "this pair is not connected at all" in row.message
+        ev = _evidence(row)
+        assert "岳 2026-10-11 裁" in ev
+        assert "bridging-part pool" in ev
+        assert "the 0 Ω parts anywhere on this board are" in ev
+        assert "R9" in ev, "the board's other 0 Ω (a jumper on AGND↔+5V) is named"
+        assert "bulk electrolytics on this board" in ev, (
+            "the bulk-cap pool is named even when there is no tie to measure, so "
+            "a reader can see the proximity question had nothing to work with"
+        )
+        assert "the other pairs of this board are judged on their own rows" in ev
+    assert not [f for f in findings if "每对域恰好一颗 0R — 合规" in f.message]
 
 
 def test_r1b_reports_one_zero_ohm_tie_with_its_distance_to_the_bulk_cap():
-    """The 「唯一一颗 0R → 量它到最近功率级电解电容的距离」 branch.
+    """The 「每对域一颗 0R → 合规，并量它到最近功率级电解电容的距离」 branch.
 
     Built on a synthetic board so the branch is exercised end to end: one 0 Ω
-    bridging the two domains, and one 330 µF bulk electrolytic at a known gap.
-    The row must report **the gap in mils** and **name the capacitor** — 岳's
-    convention is 「0R 近功率电解电容」 but he has ruled **no distance
-    threshold**, so the number is 出数 and the row says so rather than grading.
+    bridging the two domain nets, and one 330 µF bulk electrolytic at a known
+    gap. The row must report **合规** (岳 2026-10-11: 每对域恰好一颗 0R), and it
+    must report **the gap in mils** and **name the capacitor** — 岳's convention
+    is 「0R 近功率电解电容」 but he has ruled **no distance threshold**, so the
+    number is 出数 and the row says so rather than grading it.
     """
     board, model = _single_zero_ohm_board()
     findings = FocGroundTie().check_with_library(
         PcbReviewContext(board=board, pcb_model=model), EMPTY_SHELF
     )
-    rows = [f for f in findings if "exactly one 0 Ω single point" in f.message]
+    rows = [f for f in findings if "每对域恰好一颗 0R — 合规" in f.message]
     assert len(rows) == 1, [f.message[:70] for f in findings]
+    assert not [f for f in findings if "not a single point" in f.message]
+    assert not [f for f in findings if "not connected at all" in f.message]
     row = rows[0]
     assert "R1" in row.message and "PGND" in row.message
+    assert "岳 2026-10-11 裁" in row.message
     assert "distance to the nearest power-stage bulk electrolytic" in row.message
-    assert "out of 无" not in row.message
     assert "出数不出判定" in row.message, "the gap is quoted, not graded"
 
     ev = _evidence(row)
     assert "parses to 0.0 Ω" in ev
     assert "structural test" in ev, "the two-domain test is stated"
+    assert "每对地域各一颗 0R 即合规" in ev
     assert "C9" in row.message and "bulk" in ev
     assert "岳's 2026-10-08 convention is 「0R 近功率电解电容」" in ev
     assert "not a TI citation" in ev, (
         "the 0 Ω form is 岳's convention; the row must not let it read as TI"
+    )
+    assert "毕设FOC 1.0.0's" in ev and "compliant on both of their pairs" in ev, (
+        "the row carries the measured corpus evidence for the ruling it applies"
     )
     assert row.target.component_ref == "R1"
     assert row.target.measurement is not None
@@ -1147,23 +1154,26 @@ def test_the_133c_acceptance_matrix_across_five_boards():
     power ground at all** so R1 and R1b take their no-power-domain branch. The
     counts are measured, not aspirational.
 
-    **153b moved one cell**: 1.0.0's PCB1 now produces **two** R1b rows, not one —
-    the 「not a single point」 account of two ``0R`` ties, plus the jumper row for
-    ``R31`` (1.0.0's third ``0R`` on the schematic page, previously invisible
-    because its PCB copy reads ``10K``). No other cell moved: R1 and R5 never
-    read a value.
+    **Two batches moved cells here, and both moves are the ruling rather than a
+    regression.** 153b moved 1.0.0's PCB1 from one R1b row to two (the corrected
+    ``0R`` values plus the ``R31`` jumper row). **155a moved it again, to three**:
+    under 岳's 2026-10-11 per-pair ruling each of the board's two domain pairs
+    reports its own 合规 row, and the jumper row stays — so PCB1 carries three
+    rows where the board-wide wording produced one. 1.1.0's PCB1 reads the same
+    way (two pair rows + one jumper), and its total moves 4 → 5. No other cell
+    moved: R1 and R5 never read a value.
     """
     matrix = {
         # board fixture -> {PCB document title: {rule id: exact row count}}
         # 毕设FOC 1.0.0 is a **three-document** project and the counts are per
         # document, not per project: PCB1 carries the power stage and produces
-        # the domain pairs / the tie row / the fifteen projection rows, while
-        # PCB2 (a two-layer sensor board) has one ``GND`` and no ``PGND`` at
+        # the domain pairs / the per-pair tie rows / the fifteen projection rows,
+        # while PCB2 (a two-layer sensor board) has one ``GND`` and no ``PGND`` at
         # all, so it takes the no-power-domain branch. Counting the project as a
         # whole would hide that second branch, which is exactly what this matrix
         # exists to make visible.
         FOC_100: {
-            "PCB1": {R1: 2, R1B: 2, R5: 16},  # 15 nets + 1 unrecognised list
+            "PCB1": {R1: 2, R1B: 3, R5: 16},  # 15 nets + 1 unrecognised list
             "PCB2": {R1: 1, R1B: 1, R5: 0},
         },
         ROBOT: {"PCB1": {R1: 1, R1B: 1, R5: 1}},   # no power ground; 1 list
@@ -1296,14 +1306,20 @@ def test_mutation_reading_only_the_pcb_document_brings_100s_10k_back():
     This is **153b's own defect**, re-applied in process so the failure it caused
     is observable rather than asserted. With the value read from the PCB document
     alone, ``R48``/``R49`` come back ``10K`` (the copy's placeholder), both land in
-    the *non-zero* bucket instead of the 0 Ω one, and the row's account flips back
-    to 「0 0 Ω resistor(s), 2 resistor(s) of a **non-zero** value」 — and ``R31``,
-    the third ``0R``, disappears from the ledger entirely.
+    the *non-zero* bucket instead of the 0 Ω one, and **both** of the board's
+    pairs take the 「not a single point」 branch with 「1 resistor(s) of a
+    **non-zero** value」 — and ``R31``, the third ``0R``, disappears from the
+    ledger entirely.
 
     The mutation is applied by handing the rule a context with **no project
     model** — which is exactly the state the code was in before the fix, since it
     had no way to take a schematic view at all. Nothing is edited on disk, so
     nothing has to be restored.
+
+    155a sharpens the mutation's signature rather than changing it: the real
+    board produces **two 合规 rows and no account row at all**, and the mutated
+    one produces **two account rows and no 合规 row** — the two readings disagree
+    in kind on every pair, not merely in a count.
     """
     from boardwise.rules.pcb.focground import FocGroundTie
 
@@ -1331,26 +1347,28 @@ def test_mutation_reading_only_the_pcb_document_brings_100s_10k_back():
         PcbReviewContext(board=board, pcb_model=model), EMPTY_SHELF
     )
     mutated_account = [r for r in mutated_rows if "not a single point" in r.message]
-    assert len(mutated_account) == 1
-    assert "0 0 Ω resistor(s), 2 resistor(s) of a **non-zero** value" in (
-        mutated_account[0].message
-    ), (
-        "with no schematic view the two domains are reported as joined by two "
-        "**non-zero** resistors and no 0 Ω at all — the false account 153b fixed"
-    )
+    assert len(mutated_account) == 2, [r.message[:70] for r in mutated_rows]
+    for row in mutated_account:
+        assert "0 0 Ω resistor(s), 1 resistor(s) of a **non-zero** value" in (
+            row.message
+        ), (
+            "with no schematic view each pair is reported as joined by one "
+            "**non-zero** resistor and no 0 Ω at all — the false account 153b fixed"
+        )
+    assert not [
+        r for r in mutated_rows if "每对域恰好一颗 0R — 合规" in r.message
+    ], "and nothing on the mutated board is compliant, which is the defect"
 
     rows = [r for r in _rows(FOC_100, R1B) if r.board == "PCB1"]
-    assert len(rows) == 2
-    account = next(r for r in rows if "not a single point" in r.message)
-    assert "not connected at all" not in account.message, (
-        "the real rule must NOT take the 不连 branch on a board whose two "
-        "domains are joined by two 0 Ω resistors"
+    assert len(rows) == 3
+    assert len([r for r in rows if "每对域恰好一颗 0R — 合规" in r.message]) == 2
+    assert not [r for r in rows if "not a single point" in r.message], (
+        "the real rule must NOT take the account branch on a board whose two "
+        "pairs each carry exactly one 0 Ω"
     )
-    assert "2 0 Ω resistor(s)" in account.message
-    assert "of a **non-zero** value" not in account.message, (
-        "and no part on the row is a non-zero bridge any more"
+    assert not [r for r in rows if "not connected at all" in r.message], (
+        "nor the 不连 branch: both pairs are joined"
     )
-    assert "0 0 Ω resistor(s)" not in account.message
 
 
 # ---------------------------------------------------------------------------

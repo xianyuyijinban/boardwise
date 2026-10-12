@@ -51,7 +51,9 @@ a hundred that say nothing).
 **Every threshold here is a house rule, not a standard.** Neither 200 mil nor
 20 mil comes from IPC-2221 (that is 126c's job, and the two are deliberately
 kept in separate files so the standards never launder a guess). Both constants
-carry the provenance inline, and 岳's ruling replaces it.
+carry the provenance inline — and 岳's **2026-10-11** ruling has now fixed both
+as graded lines (「以内 INFO、以外 WARN」, numbers kept), so these two rules are
+the house-rule pair whose thresholds are no longer 待裁.
 
 **Empty input never raises.** A board with no ICs, no capacitors, or no
 outline produces no findings — except the one case where "no outline" is itself
@@ -79,9 +81,15 @@ from ..decap import cap_candidates_on
 from .base import PcbReviewContext, PcbRule
 
 #: How far a decoupling capacitor may sit from the IC it decouples, edge to
-#: edge, in mils. Over this is a WARN.
+#: edge, in mils. Over this is a WARN — **the line is graded, and 岳 confirmed it
+#: on 2026-10-11**: 「以内 INFO、以外 WARN」, with the number kept at the value this
+#: constant already carried (200 mil). The same ruling upgraded the FOC pack's
+#: driver-level reading of the same figure
+#: (:data:`~boardwise.rules.pcb.foc.TI_DECAP_REFERENCE_MIL`), so the two rules now
+#: grade the same distance consistently.
 #:
-#: **source: house rule（岳 2026-10 待裁）** — not a standard. Nothing in
+#: **source: house rule（岳 2026-10 待裁 → 2026-10-11 裁：以内 INFO、以外 WARN）**
+#: — not a standard. Nothing in
 #: IPC-2221 states a placement distance (it states *clearance*, which is a
 #: different question and 126c's), and the usual published figure for high-speed
 #: decoupling is a fraction of a wavelength, which is a function of the edge
@@ -93,9 +101,14 @@ from .base import PcbReviewContext, PcbRule
 DECAP_DISTANCE_MIL = 200.0
 
 #: The smallest edge-to-edge gap two placed components may have, in mils.
-#: Below this is a WARN.
+#: Below this is a WARN — **岳 re-affirmed the line on 2026-10-11**: this is the
+#: 「器件间距 20mil」 threshold of that ruling, and the number is kept as it was.
+#: Note the direction: this one and :data:`DECAP_DISTANCE_MIL` are the same
+#: shape of ruling (one side of the line is INFO, the other WARN) applied to two
+#: opposite measurements — a *minimum* spacing against a *maximum* distance.
 #:
-#: **source: house rule（岳 2026-10 待裁）** — the placement-assembly and
+#: **source: house rule（岳 2026-10 待裁 → 2026-10-11 裁：贴合/过近 WARN）** —
+#: the placement-assembly and
 #: solderability side of the same coin as the clearance rule, and again not an
 #: IPC-2221 table value. The number is a *tightness* claim: below it two parts
 #: cannot be reflowed or hand-soldered with ordinary clearance without the

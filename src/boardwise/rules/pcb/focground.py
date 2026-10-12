@@ -13,14 +13,23 @@ this pack, so every row is a measurement.
   power net against every logic net, and report for each pair whether their
   copper **meets on a shared layer** (which is a direct copper connection) and
   what each side's ``pour_connectivity`` island count is.
-* :class:`FocGroundTie` (``pcb-foc-ground-tie``, **R1b**) — 岳's 2026-10-08
-  ruling on the single-point tie: if the two domains are connected at all, the
-  connection should be **exactly one 0 Ω resistor**, and that resistor should sit
-  near the power-stage bulk electrolytic. Four outcomes, all reported:
-  **one 0R** (with its distance to the nearest bulk cap), **several / non-zero /
-  directly-copper-connected** (an account of what is actually there), **not
-  connected at all** (an INFO row — 岳: 「要么不连，要么单点」 both count), and
-  **a 0 Ω part that sits inside one domain** (a jumper, not the tie).
+* :class:`FocGroundTie` (``pcb-foc-ground-tie``, **R1b**) — 岳's **2026-10-11**
+  ruling on the single-point tie: the domains are joined **per domain pair**,
+  and **每对地域各一颗 0 Ω resistor** is what 「单点」 means — one 0 Ω between
+  ``PGND`` and ``GND``, another between ``PGND`` and ``AGND``, each pair judged
+  **independently**. 岳's earlier 2026-10-08 wording (「全板恰好一颗 0R」) asked
+  for **exactly one 0 Ω on the whole board**, which 毕设FOC 1.0.0 and 1.1.0 were
+  both reported as violating: measured, each board joins ``PGND``↔``GND`` with
+  one ``0R`` and ``PGND``↔``AGND`` with another (1.0.0's ``R48``/``R49``,
+  1.1.0's ``R25``/``R11``), so **two** ties on one board is the compliant shape
+  under the per-pair reading and was the non-compliant one under the board-wide
+  reading. **Both corrected boards now report 合规 on both pairs.** Three outcomes
+  per pair, plus two per-part rows: **per pair** — exactly one 0R (合规, with the
+  tie's distance to the nearest bulk cap), several / non-zero /
+  directly-copper-connected (an account of what is actually there), or nothing
+  joining that pair (**不连** — 岳: 「要么不连，要么单点」 both count); **per part**
+  — a bridging part whose resistance is UNKNOWN, and **a 0 Ω part that sits
+  inside one domain** (a jumper, not a tie).
 * :class:`FocReturnPath` (``pcb-foc-return-path``, **R5**) — the return-path
   projection of every gate / switching-node / sense net onto its adjacent
   reference layer, summarised per net, with **PLANE-layer semantics**: a
@@ -96,6 +105,13 @@ that says resistance), its parsed value is exactly 0 Ω, and **two of its pins
 land on nets belonging to different ground domains**. A 0 Ω part whose both pins
 sit inside one domain is not a tie at all — it is a jumper — and the row says so
 rather than counting it as the single point.
+
+**And the count is taken over a domain pair, not over the board** (岳
+2026-10-11, see :data:`TIE_PER_PAIR_RULING`): a bridging part is credited to the
+**one pair of nets its two pins land on** (:meth:`FocGroundTie._pairs_bridges`),
+so a board that ties two different pairs with one 0 Ω each has two compliant
+pairs rather than one over-tied board — which is exactly the shape 毕设FOC
+1.0.0 / 1.1.0 have, and exactly what the earlier board-wide wording got wrong.
 """
 
 from __future__ import annotations
@@ -134,6 +150,7 @@ __all__ = [
     "GROUND_DOMAIN_POWER_PREFIXES",
     "PLANE_LAYER_TYPE",
     "RESISTOR_DESIGNATOR",
+    "TIE_PER_PAIR_RULING",
     "GroundDomainSplit",
     "FocGroundDomains",
     "FocGroundTie",
@@ -204,12 +221,27 @@ RESISTOR_CATEGORIES: frozenset[str] = frozenset(
     {"resistor", "resistors", "chip-resistor", "res", "r"}
 )
 
-#: 岳 2026-10-08's tie form. A resistor parses to **exactly** 0 Ω — not 「near
-#: zero」 and not 「a small value」. This is the oracle ruling's own figure, and
-#: unlike TI's numbers it is a **stated requirement**: 岳 ruled that the single
-#: point 「必须经恰好一颗 0R」. The rule still reports every outcome rather than
-#: raising on a violation, in keeping with the pack's INFO discipline.
+#: 岳 2026-10-08's tie form, **re-scoped to the domain pair on 2026-10-11**. A
+#: resistor parses to **exactly** 0 Ω — not 「near zero」 and not 「a small
+#: value」. This is the oracle ruling's own figure, and unlike TI's numbers it is
+#: a **stated requirement**: 岳 ruled that the single point 「必须经恰好一颗 0R」,
+#: and then (2026-10-11) that 「恰好一颗」 counts **per pair of ground domains**
+#: rather than per board — 「每对地域各一颗」. The rule still reports every
+#: outcome rather than raising on a violation, in keeping with the pack's
+#: measurement-first discipline; what changed is *which unit* the count is taken
+#: over (see :meth:`FocGroundTie.check_with_library`).
 ZERO_OHMS = 0.0
+
+#: The ruling that decides what 「单点」 counts over — 岳 **2026-10-11 裁**.
+#:
+#: Quoted on every per-pair row so a reader never has to guess which of the two
+#: readings a row was produced under. It is a **string constant, not a
+#: threshold**: the per-pair count compares against :data:`ZERO_OHMS` and
+#: nothing else.
+TIE_PER_PAIR_RULING = (
+    "岳 2026-10-11 裁：三域（PGND / GND / AGND）两两之间，**每对地域各一颗 0R 即合规**"
+    "——推翻 2026-10-08 的「全板恰好一颗」口径；每对域的判定彼此独立，一对缺就报那一对"
+)
 
 
 def _upper(text: object) -> str:
@@ -883,9 +915,10 @@ def bridging_parts_of(
     The pool is **structural, not value-based**: a part qualifies when its
     netlist view puts one pin on a power-domain ground net and another on a
     logic/analog-domain ground net. 岳's ruling has three branches — exactly one
-    0 Ω, several connecting parts or a direct copper link, or not connected at
-    all — and a pool filtered by value cannot tell the last two apart: it would
-    report a board joined by a non-0 Ω part as 「not connected」, which is a
+    0 Ω on a pair, several connecting parts or a direct copper link **on that
+    pair**, or that pair not connected at all (the **pair** is the unit since
+    2026-10-11) — and a pool filtered by value cannot tell the last two apart: it
+    would report a pair joined by a non-0 Ω part as 「not connected」, which is a
     different answer and the wrong one.
 
     The part's resistance is parsed when the drawing wrote one down and is
@@ -960,7 +993,11 @@ def zero_ohm_resistors_of(
     """The subset of :func:`bridging_parts_of` that is a **0 Ω single point**.
 
     Kept as its own name because it is exactly what 岳's ruling names, and R1b's
-    row quotes it. A bridging part whose resistance is unreadable, or parses to
+    rows quote it. The list is **board-wide** — R1b's per-pair count filters it
+    by the two nets of the pair it is judging
+    (:meth:`FocGroundTie._pairs_bridges`), and a board whose two pairs each carry
+    one 0 Ω therefore appears here as two entries. A bridging part whose
+    resistance is unreadable, or parses to
     anything but 0, is **not** in here — UNKNOWN is not zero, and a non-zero part
     is not the single point however convenient it would be to call it one.
     """
@@ -1015,37 +1052,54 @@ class FocGroundTie(PcbRule):
     distinction is load-bearing: TI SLVA959B backs **physical isolation and the
     star / single-point** arrangement (§1.3.1), but it says nothing about a **0 Ω
     resistor** or where it should sit. 岳's 2026-10-08 ruling
-    (「模数地直接分割 + 单颗 0R 单点接地，0R 近功率电解电容」) supplies both, and
-    the row says which half came from where.
+    (「模数地直接分割 + 单颗 0R 单点接地，0R 近功率电解电容」) supplied the form, and
+    his **2026-10-11** ruling supplies the unit the form is counted over —
+    「每对地域各一颗 0R」（see :data:`TIE_PER_PAIR_RULING`). The row says which
+    half came from where.
+
+    **The judgement is per (power net, logic net) pair, and the pairs are the
+    ones R1 already enumerates** — :func:`split_ground_domains`'s power side ×
+    its logic side, so a board that spells its grounds ``PGND`` / ``GND`` /
+    ``AGND`` gets exactly two pairs (``PGND``↔``GND``, ``PGND``↔``AGND``) and each
+    pair is judged on its own. A pair *inside* one side of the split
+    (``GND``↔``AGND``, which ``U1`` joins inside the logic domain on 毕设FOC
+    1.0.0) is not a domain pair at all: the split is two-domain by construction
+    (:func:`domain_of`), and the tie question is 「how do the two sides join」.
+    This is what 岳's 2026-10-11 ruling means by 「三域两两之间」: the three nets
+    the board actually has, taken pairwise **across** the two sides.
 
     Four outcomes, all ``INFO``, and all of them are reportable shapes:
 
-    * **exactly one 0 Ω tie** — reported with the tie's **distance to the
-      nearest power-stage bulk electrolytic** (133b's pool: a capacitor at or
-      above :data:`~boardwise.rules.pcb.foc.BULK_FARADS`, 100 µF). The number
+    * **exactly one 0 Ω tie on this pair** — **合规** under the per-pair ruling
+      (岳 2026-10-11), reported with the tie's **distance to the nearest
+      power-stage bulk electrolytic** (133b's pool: a capacitor at or above
+      :data:`~boardwise.rules.pcb.foc.BULK_FARADS`, 100 µF). The number
       is 出数, not a verdict: 岳 has ruled the *convention* (near the bulk cap)
       but no distance threshold, so the rule states the gap and names the
       capacitor it is nearest without grading it.
     * **several ties, a non-zero bridging resistor, or a direct copper
-      connection** — reported as the account of what *is* there. This is the case
-      a rule that only looked for 0 Ω parts would miss entirely: a value-filtered
-      pool cannot tell 「not connected」 from 「joined by something that is not
-      0 Ω」. Measured on the corpus, this branch is where 毕设FOC **1.0.0 and
-      1.1.0 both land**, and the account is now the corrected one: 1.0.0's
-      ``R48`` (``0R``, ``GND``↔``PGND``) and ``R49`` (``0R``, ``AGND``↔``PGND``)
-      bridge its domains in **two** places rather than the one 岳's ruling asks
-      for, and 1.1.0 reads the same way through ``R25`` (``GND``↔``PGND``) and
-      ``R11`` (``AGND``↔``PGND``). Before 153b's value fix both boards were
-      reported as 「two 10 kΩ resistors and no 0 Ω at all」, which was the PCB
-      document's stale copy talking (see the module docstring).
-    * **not connected at all** — one INFO row. 岳: 「要么不连，要么单点」; a board
-      that deliberately isolates its two grounds entirely is compliant, so the
-      row reports the absence with the same seriousness as a presence, and says
-      which.
+      connection on this pair** — reported as the account of what *is* there.
+      This is the case a rule that only looked for 0 Ω parts would miss
+      entirely: a value-filtered pool cannot tell 「not connected」 from 「joined
+      by something that is not 0 Ω」. Measured on the corpus, this branch
+      **used to be where 毕设FOC 1.0.0 and 1.1.0 both landed** — the board-wide
+      count read their two ties as 「two places instead of one」. Under the
+      per-pair ruling both boards are compliant on both of their pairs
+      (1.0.0's ``R48`` ``GND``↔``PGND`` / ``R49`` ``AGND``↔``PGND``; 1.1.0's
+      ``R25`` / ``R11``), and this branch is left to a pair that genuinely has
+      two ties, a non-zero bridge, or copper. Before 153b's value fix both
+      boards were reported as 「two 10 kΩ resistors and no 0 Ω at all」, which
+      was the PCB document's stale copy talking (see the module docstring).
+    * **nothing joining this pair** — one INFO row **per pair**. 岳:
+      「要么不连，要么单点」; a pair that is deliberately left unjoined is not a
+      defect, so the row reports the absence with the same seriousness as a
+      presence, and says which. Measured on the corpus, 毕设FOC 1.0.0/1.1.0 have
+      no such pair (both of their pairs carry a 0 Ω), and ROBOT / 药箱 / llc take
+      the *no power domain* row instead.
     * **a 0 Ω part inside one domain** — one INFO row per part: it is on the
       ledger because a 0 Ω part somewhere on a ground net is the shape a reader
       would otherwise look for and not find, and it is explicitly **not**
-      counted toward the single point.
+      counted toward any pair's single point.
 
     **The structural tie test** is what makes this a *ground-domain* tie rather
     than a jumper: a part's two pins must land in **different** domains. It is
@@ -1070,11 +1124,12 @@ class FocGroundTie(PcbRule):
     """
 
     id = "pcb-foc-ground-tie"
-    title = "Ground-domain tie: is the single point one 0 Ω resistor, and how near is it to the bulk electrolytic?"
+    title = "Ground-domain tie: is each domain pair joined by one 0 Ω resistor, and how near is it to the bulk electrolytic?"
     level = "L1-pcb-geometry"
     source = (
-        "oracle ruling（岳 2026-10-08）——TI SLVA959B 只背书物理隔离+星点/单点，"
-        "0R 形式与位置是用户工程约定（出数不出判定，阈值待岳裁）"
+        "oracle ruling（岳 2026-10-08 + 2026-10-11）——TI SLVA959B 只背书物理隔离+"
+        "星点/单点，0R 形式与位置是用户工程约定；**每对地域各一颗 0R 即合规**"
+        "（2026-10-11 裁，推翻「全板恰好一颗」）"
     )
 
     def check(self, ctx: PcbReviewContext) -> list[Finding]:
@@ -1095,6 +1150,15 @@ class FocGroundTie(PcbRule):
         PCB document's stale copy. ``schematic=None`` (no project model, or a
         board link that does not resolve) is an ordinary degradation: the pools
         read the PCB document's own values and each row says it is a fallback.
+
+        **The unit of judgement is the domain pair** (岳 2026-10-11). The pairs
+        are R1's own enumeration — every power-domain net against every
+        logic-domain net — and each is judged independently: the bridges whose
+        two pins land on **that** pair are counted against :data:`ZERO_OHMS`,
+        the pair's own copper contact is read, and the row states which of 岳's
+        three shapes it found. Nothing is aggregated board-wide: 「this board has
+        two 0 Ω ties」 is a different statement from 「each pair has exactly one」,
+        and only the second is what 岳 ruled.
         """
         board = ctx.board
         model = ctx.pcb_model
@@ -1108,43 +1172,45 @@ class FocGroundTie(PcbRule):
             return [self._no_logic_domain(board, split)]
 
         bridges, jumpers = self._partition_ties(model, library, schematic)
-        ties = [part for part in bridges if part.is_zero_ohm]
+        findings: list[Finding] = []
+        for power in split.power:
+            for logic in split.logic:
+                findings.extend(
+                    self._one_pair(
+                        board, model, library, schematic, split,
+                        power, logic, bridges,
+                    )
+                )
         # A bridging part whose resistance is **unreadable** is UNKNOWN, and
         # UNKNOWN is neither 「a 0 Ω tie」 nor 「a non-zero resistor」 — it is a
         # third thing, and it is kept apart from both. Folding it into the
         # non-zero bucket would let a part nobody described outvote a real
-        # single 0 Ω, which is exactly the invention this rule forbids.
-        non_zero = [
-            part for part in bridges
-            if part.ohms is not None and not part.is_zero_ohm
-        ]
-        unknown = [part for part in bridges if part.ohms is None]
-        copper = self._direct_copper(board, split)
-
-        findings: list[Finding] = []
-        if not bridges and not copper:
-            # Neither a part nor copper joins the domains: 岳's 「不连」 branch.
-            findings.append(
-                self._not_connected(board, model, library, schematic, split)
-            )
-        if len(ties) == 1 and not copper and not non_zero:
-            # Exactly one 0 Ω and nothing else joining the domains — 岳's shape.
-            # An UNKNOWN bridge does **not** spoil this: it is reported on its
-            # own row rather than being allowed to demote a real single point.
-            findings.append(
-                self._one_tie(board, model, library, schematic, split, ties[0])
-            )
-        if ties or non_zero or copper:
-            findings.append(
-                self._not_single_point(
-                    board, split, ties, non_zero, unknown, jumpers, copper
-                )
-            )
-        for part in unknown:
-            findings.append(self._unknown_resistance(board, split, part))
+        # single 0 Ω, which is exactly the invention this rule forbids. It is
+        # reported **per part** rather than per pair because the part's own
+        # value is what is unknown, not the pair's state.
+        for part in bridges:
+            if part.ohms is None:
+                findings.append(self._unknown_resistance(board, split, part))
         for jumper in jumpers:
             findings.append(self._jumper(board, split, jumper))
         return findings
+
+    def _pairs_bridges(
+        self, bridges: list[TieReading], power: str, logic: str
+    ) -> list[TieReading]:
+        """The bridging parts whose two pins land on **this** pair of nets.
+
+        The pair is unordered (``R48``'s pins are ``GND``/``PGND`` in pin order,
+        the pair is the same two nets either way), and membership is read off the
+        part's own resolved pins rather than off a domain class: a part that
+        bridges ``PGND``↔``AGND`` is not a candidate for ``PGND``↔``GND`` even
+        though both are cross-domain bridges.
+        """
+        return [
+            part
+            for part in bridges
+            if {part.net_a, part.net_b} == {power, logic}
+        ]
 
     def _partition_ties(
         self, model: object, library, schematic: object | None = None
@@ -1173,58 +1239,76 @@ class FocGroundTie(PcbRule):
         ]
         return bridges, jumpers
 
-    def _direct_copper(
-        self, board: BoardGeometry, split: GroundDomainSplit
+    def _one_pair(
+        self,
+        board: BoardGeometry,
+        model: object,
+        library,
+        schematic: object | None,
+        split: GroundDomainSplit,
+        power: str,
+        logic: str,
+        bridges: list[TieReading],
     ) -> list[Finding]:
-        """One finding per power↔logic pair whose copper **meets** on a shared layer.
+        """Every row for **one** (power net, logic net) pair, judged alone.
+
+        This is where 岳's 2026-10-11 「每对地域各一颗 0R」 lands: the pair's own
+        bridges are split by value, the pair's own copper contact is read, and
+        exactly one of the three shapes is reported — never a board-wide tally.
+        A pair with several 0 Ω, a non-zero bridge or copper takes the account
+        row; a pair with exactly one 0 Ω and nothing else takes the **合规** row;
+        a pair with nothing at all takes the 不连 row; and a pair whose only
+        bridges state no readable resistance takes **no pair row at all** — the
+        per-part UNKNOWN rows carry it, and claiming 「not connected」 for a pair
+        something does join would be a false statement about the drawing.
+        """
+        pair = self._pairs_bridges(bridges, power, logic)
+        ties = [part for part in pair if part.is_zero_ohm]
+        non_zero = [
+            part for part in pair if part.ohms is not None and not part.is_zero_ohm
+        ]
+        copper = self._copper_connection(board, power, logic)
+        if len(ties) == 1 and not non_zero and copper is None:
+            return [
+                self._one_tie(
+                    board, model, library, schematic, split, power, logic, ties[0]
+                )
+            ]
+        if ties or non_zero or copper is not None:
+            return [
+                self._not_single_point(
+                    board, split, power, logic, ties, non_zero, copper
+                )
+            ]
+        if pair:
+            # The pair is bridged, but every bridge's resistance is **UNKNOWN**:
+            # the pair's own state is UNKNOWN too, and it is reported by the
+            # per-part rows (`_unknown_resistance`) rather than by claiming
+            # 「not connected」, which would be a false statement about a pair
+            # something does join.
+            return []
+        return [
+            self._not_connected(
+                board, model, library, schematic, split, power, logic
+            )
+        ]
+
+    def _copper_connection(
+        self, board: BoardGeometry, power: str, logic: str
+    ) -> ClearanceResult | None:
+        """The pair's own shared-layer copper contact, or ``None``.
 
         Copper connection **is** the thing 岳's ruling forbids in favour of a 0 Ω
         tie, so it has to be on the ledger even when a 0 Ω part also exists: a
-        board with both has two answers to the same question and the reader needs
-        to see both.
+        pair with both has two answers to the same question and the reader needs
+        to see both. Returning the reading rather than a row keeps the
+        per-pair decision in one place (:meth:`_one_pair`) — the same
+        :class:`DomainPairReading` predicate R1 uses decides 「meets in copper」,
+        so the two rules cannot disagree about it.
         """
-        findings: list[Finding] = []
-        for power in split.power:
-            for logic in split.logic:
-                result = net_clearance(board, power, logic)
-                reading = DomainPairReading(power=power, logic=logic, clearance=result)
-                if not reading.directly_connected:
-                    continue
-                findings.append(
-                    Finding(
-                        rule_id=self.id,
-                        severity="INFO",
-                        level=self.level,
-                        message=(
-                            f"**direct copper connection** between ground "
-                            f"domains: {power!r} (power) and {logic!r} (logic) "
-                            f"share copper on layer(s) "
-                            f"{result.shared_layer_ids} — {result.element_a} ↔ "
-                            f"{result.element_b}. This is copper, not a part: "
-                            "no 0 Ω tie can be the single point on this board "
-                            "while two domains also touch directly"
-                        ),
-                        evidence=[
-                            *_domain_evidence(split),
-                            f"net_clearance({power!r}, {logic!r}): distance "
-                            f"{result.distance!r}, overlapping="
-                            f"{result.overlapping!r}, shared_layer_ids="
-                            f"{result.shared_layer_ids}, nearest pair "
-                            f"{result.element_a} ↔ {result.element_b}",
-                            "power side " + _island_summary(board, power)
-                            + "; logic side " + _island_summary(board, logic),
-                            "岳 2026-10-08's ruling asks for 分割 + 单点; a "
-                            "direct copper connection is not a single point "
-                            "however it is drawn. The row reports it and grades "
-                            "nothing",
-                        ],
-                        target=FindingTarget(
-                            net_refs=[power, logic],
-                            measurement=_measurement("distance", result.distance),
-                        ),
-                    )
-                )
-        return findings
+        result = net_clearance(board, power, logic)
+        reading = DomainPairReading(power=power, logic=logic, clearance=result)
+        return result if reading.directly_connected else None
 
     def _bulk_capacitors(self, board: BoardGeometry, model: object, library):
         """``[(designator, value, farads)]`` — 133b's pool, read through here too.
@@ -1312,7 +1396,16 @@ class FocGroundTie(PcbRule):
         library,
         schematic: object | None,
         split: GroundDomainSplit,
+        power: str,
+        logic: str,
     ) -> Finding:
+        """**This pair** is joined by nothing at all — 岳's 「不连」 shape.
+
+        One row per pair: 岳's 「要么不连，要么单点」 was about a pair's join, and
+        under the 2026-10-11 ruling a board whose ``PGND``↔``GND`` pair is left
+        open while ``PGND``↔``AGND`` carries its 0 Ω is a legitimate board — the
+        open pair is reported, not aggregated away.
+        """
         bulks = self._bulk_capacitors(board, model, library)
         zeroes = all_zero_ohm_parts_of(model, library, schematic)
         return Finding(
@@ -1320,18 +1413,22 @@ class FocGroundTie(PcbRule):
             severity="INFO",
             level=self.level,
             message=(
-                "**the two ground domains are not connected at all** — no part "
-                "bridges a power-domain net to a logic-domain net, and "
-                "core.measure.net_clearance finds no shared-layer copper overlap "
-                "between them. 岳 2026-10-08: 「要么不连，要么单点」 — both are "
+                f"ground domain pair {power!r} (power) ↔ {logic!r} (logic): "
+                "**this pair is not connected at all** — no part bridges these "
+                "two nets, and core.measure.net_clearance finds no shared-layer "
+                "copper overlap between them. 岳: 「要么不连，要么单点」 — both are "
                 "compliant shapes, so this row reports the shape and grades "
                 "nothing"
             ),
             evidence=[
                 *_domain_evidence(split),
+                TIE_PER_PAIR_RULING,
+                f"the pair under this row: {power!r} (power domain) ↔ "
+                f"{logic!r} (logic domain); the other pairs of this board are "
+                "judged on their own rows",
                 "the bridging-part pool was searched and holds no part whose "
-                "two pins land in different ground domains; the 0 Ω parts "
-                "anywhere on this board are "
+                "two pins land on **these two nets**; the 0 Ω parts anywhere on "
+                "this board are "
                 + (
                     ", ".join(
                         f"{r.designator} ({r.value!r}, pins "
@@ -1344,12 +1441,12 @@ class FocGroundTie(PcbRule):
                 "bulk electrolytics on this board (the 0 R proximity pool, "
                 f"≥ {100} µF per 133b's floor): "
                 + (", ".join(f"{d} ({v})" for d, v, _f in bulks) or "(none)"),
-                "TI SLVA959B §1.3.1 backs physical isolation; 岳's 2026-10-08 "
-                "ruling adds the two acceptable join forms (none, or a single "
-                "0 Ω) and this board takes the first. Neither half of the ruling "
-                "is graded here",
+                "TI SLVA959B §1.3.1 backs physical isolation; 岳's rulings add "
+                "the two acceptable join forms (none, or a single 0 Ω **per "
+                "pair**) and this pair takes the first. Neither half of the "
+                "ruling is graded here",
             ],
-            target=FindingTarget(),
+            target=FindingTarget(net_refs=[power, logic]),
         )
 
     def _one_tie(
@@ -1359,8 +1456,17 @@ class FocGroundTie(PcbRule):
         library,
         schematic: object | None,
         split: GroundDomainSplit,
+        power: str,
+        logic: str,
         tie: TieReading,
     ) -> Finding:
+        """**This pair** carries exactly one 0 Ω and nothing else — 合规.
+
+        The compliance statement is the one thing 岳's 2026-10-11 ruling added
+        to this rule: 「每对地域各一颗 0R 即合规」. The row still reports the tie's
+        distance to the nearest bulk electrolytic as 出数 (岳 ruled the
+        convention 「0R 近功率电解电容」 but no distance threshold).
+        """
         bulks = self._bulk_capacitors(board, model, library)
         nearest, gap, how = self._nearest_bulk(board, tie.designator, bulks)
         others = [
@@ -1371,11 +1477,12 @@ class FocGroundTie(PcbRule):
             severity="INFO",
             level=self.level,
             message=(
-                f"**exactly one 0 Ω single point**: {tie.designator} "
-                f"(value {tie.value!r}) bridges {tie.net_a!r} "
-                f"({domain_of(tie.net_a)} domain) and {tie.net_b!r} "
-                f"({domain_of(tie.net_b)} domain) — this is the shape 岳's "
-                f"2026-10-08 ruling asks for. Its distance to the nearest "
+                f"ground domain pair {power!r} (power) ↔ {logic!r} (logic): "
+                f"**每对域恰好一颗 0R — 合规**（岳 2026-10-11 裁）："
+                f"{tie.designator} (value {tie.value!r}) bridges "
+                f"{tie.net_a!r} ({domain_of(tie.net_a)} domain) and "
+                f"{tie.net_b!r} ({domain_of(tie.net_b)} domain) and nothing else "
+                f"joins this pair. Its distance to the nearest "
                 f"power-stage bulk electrolytic"
                 + (
                     f" is {_mil(gap):.1f} mil ({nearest}, {how})"
@@ -1387,6 +1494,12 @@ class FocGroundTie(PcbRule):
             ),
             evidence=[
                 *_domain_evidence(split),
+                TIE_PER_PAIR_RULING,
+                f"the pair under this row: {tie.net_a!r} ↔ {tie.net_b!r}, and "
+                "the count over it is exactly one 0 Ω with no copper contact and "
+                "no other bridging part — the other pairs of this board are "
+                "judged on their own rows, so 「two 0 Ω on one board」 is not a "
+                "violation of this row's shape",
                 f"tie part {tie.designator}: value {tie.value!r} parses to "
                 f"{tie.ohms!r} Ω through this module's value reader "
                 "(core.values.parse_resistance_ohms, plus "
@@ -1422,6 +1535,13 @@ class FocGroundTie(PcbRule):
                 "0 Ω form and its position are **the user's engineering "
                 "convention, not a TI citation**. No threshold is applied to the "
                 "measured gap",
+                "measured, and this is what the ruling changed: 毕设FOC 1.0.0's "
+                "PCB1 carries **two** 0 Ω ties (``R48`` on ``GND``↔``PGND``, "
+                "``R49`` on ``AGND``↔``PGND``) and 1.1.0's PCB1 the same shape "
+                "through ``R25``/``R11`` — one per pair, so both boards are "
+                "**compliant on both of their pairs**. Under 岳's 2026-10-08 "
+                "board-wide wording the same measurement read as 「not a single "
+                "point」, which is the conclusion the 2026-10-11 ruling overturns",
             ],
             target=FindingTarget(
                 component_ref=tie.designator,
@@ -1434,20 +1554,29 @@ class FocGroundTie(PcbRule):
         self,
         board: BoardGeometry,
         split: GroundDomainSplit,
+        power: str,
+        logic: str,
         ties: list[TieReading],
         non_zero: list[TieReading],
-        unknown: list[TieReading],
-        same_domain: list[TieReading],
-        copper: list[Finding],
+        copper: ClearanceResult | None,
     ) -> Finding:
-        ways = len(ties) + len(non_zero) + len(copper)
+        """**This pair** is joined some way other than one 0 Ω — the account row.
+
+        Per-pair is the whole point of 岳's 2026-10-11 ruling: a pair with two
+        0 Ω resistors answers 「single point?」 with 「no」 **for that pair**, and
+        the row names that pair rather than the board. 岳's original
+        「多颗/非零/铜直连」 three accounts are kept exactly as they were — the
+        ruling changed the unit, not what counts as an account.
+        """
+        ways = len(ties) + len(non_zero) + (1 if copper is not None else 0)
         return Finding(
             rule_id=self.id,
             severity="INFO",
             level=self.level,
             message=(
-                f"**not a single point**: the two ground domains are joined "
-                f"{ways} way(s) — {len(ties)} 0 Ω resistor(s)"
+                f"ground domain pair {power!r} (power) ↔ {logic!r} (logic): "
+                f"**not a single point** — this pair is joined {ways} way(s): "
+                f"{len(ties)} 0 Ω resistor(s)"
                 + (
                     " (" + ", ".join(
                         f"{t.designator} {t.net_a!r}↔{t.net_b!r}" for t in ties
@@ -1470,23 +1599,27 @@ class FocGroundTie(PcbRule):
                     else ""
                 )
                 + (
-                    f", and {len(copper)} direct copper connection(s) (no part "
-                    "at all — the domains touch in copper)"
-                    if copper and not ties and not non_zero
+                    ", and a direct copper connection (no part at all — the two "
+                    "nets touch in copper)"
+                    if copper is not None and not ties and not non_zero
                     else (
-                        f", and {len(copper)} direct copper connection(s) on top "
-                        "of the parts above"
-                        if copper
+                        ", and a direct copper connection on top of the parts "
+                        "above"
+                        if copper is not None
                         else ""
                     )
                 )
-                + ". 岳's 2026-10-08 ruling asks for **exactly one 0 Ω**; this "
-                "board answers differently. Reported as the account of what is "
-                "there, not graded"
+                + ". 岳 2026-10-11 裁：**每对域恰好一颗 0R 即合规**；这一对不是。"
+                "Reported as the account of what is there, not graded"
             ),
             evidence=[
                 *_domain_evidence(split),
-                "cross-domain **0 Ω** ties (the shape the ruling names): "
+                TIE_PER_PAIR_RULING,
+                f"the pair under this row: {power!r} (power domain) ↔ "
+                f"{logic!r} (logic domain); the other pairs of this board are "
+                "judged on their own rows and this row says nothing about them",
+                "cross-domain **0 Ω** ties between **these two nets** (the shape "
+                "the ruling names): "
                 + (
                     "; ".join(
                         f"{t.designator} ({t.value!r}) pin {t.pin_a or '?'} on "
@@ -1495,8 +1628,8 @@ class FocGroundTie(PcbRule):
                     )
                     or "(none)"
                 ),
-                "cross-domain resistors of a **non-zero** value (bridging parts, "
-                "but not 岳's single point): "
+                "resistors between **these two nets** of a **non-zero** value "
+                "(bridging parts, but not 岳's single point): "
                 + (
                     "; ".join(
                         f"{t.designator} ({t.value!r}"
@@ -1512,45 +1645,29 @@ class FocGroundTie(PcbRule):
                     )
                     or "(none)"
                 ),
-                "cross-domain bridging parts whose resistance is "
-                "**UNKNOWN** (kept apart from both branches on purpose — an "
-                "unstated value is neither a 0 Ω tie nor a non-zero resistor): "
+                "direct copper connection between **these two nets**: "
                 + (
-                    "; ".join(
-                        f"{t.designator} (value {t.value or '(unstated)'!r}) "
-                        f"pin {t.pin_a or '?'} on {t.net_a!r} "
-                        f"(domain {domain_of(t.net_a)}) ↔ pin {t.pin_b or '?'} "
-                        f"on {t.net_b!r} (domain {domain_of(t.net_b)})"
-                        for t in unknown
-                    )
-                    or "(none)"
+                    f"layer(s) {copper.shared_layer_ids}, {copper.element_a} ↔ "
+                    f"{copper.element_b}, distance {copper.distance!r} "
+                    f"(overlapping={copper.overlapping!r}) — this is copper, not "
+                    "a part, and no 0 Ω tie can be this pair's single point "
+                    "while the two nets also touch directly"
+                    if copper is not None
+                    else "(none)"
                 ),
-                "direct copper connections between the two domains: "
-                + (
-                    "; ".join(
-                        f"{p.message.splitlines()[0]}" for p in copper
-                    )
-                    or "(none)"
-                ),
-                "0 Ω parts that do **not** bridge the two domains (jumpers, "
-                "not counted toward the single point): "
-                + (
-                    ", ".join(
-                        f"{t.designator} ({t.value!r}, {t.net_a!r}/{t.net_b!r})"
-                        for t in same_domain
-                    )
-                    or "(none)"
-                ),
+                "power side " + _island_summary(board, power)
+                + "; logic side " + _island_summary(board, logic),
                 _value_view_evidence(
-                    [*ties, *non_zero, *unknown, *same_domain],
+                    [*ties, *non_zero],
                     header="value reading on this row's parts (153b's 口径)",
                 ),
-                "「恰好一颗 0R」 is 岳's 2026-10-08 wording; TI SLVA959B §1.3.1 "
-                "backs only the isolation and the star point. A non-zero "
-                "bridging resistor, several ties, or a copper connection is "
-                "reported as the account of what is there, and no severity is "
-                "raised over it — 岳 has ruled the convention, not that every "
-                "board must already follow it",
+                "岳's 2026-10-08 wording was 「恰好一颗 0R」 and his 2026-10-11 "
+                "ruling fixed the unit it counts over: **per pair of ground "
+                "domains**, not per board. So a board with two pairs that each "
+                "carry one 0 Ω is compliant — which is exactly the shape 毕设FOC "
+                "1.0.0 / 1.1.0 have — while a *single* pair joined twice is what "
+                "this row reports. TI SLVA959B §1.3.1 backs only the isolation "
+                "and the star point; the 0 Ω form is 岳's engineering convention",
                 "the bridging pool is **structural** (two pins in two domains, "
                 "read off the netlist view) rather than value-based, because the "
                 "value decides *which* of 岳's branches a part falls into, not "
@@ -1565,7 +1682,7 @@ class FocGroundTie(PcbRule):
                 "threshold is applied), and TI SLVA959B §1.3.1 backs only the "
                 "isolation and the star point",
             ],
-            target=FindingTarget(),
+            target=FindingTarget(net_refs=[power, logic]),
         )
 
     def _unknown_resistance(
@@ -1611,8 +1728,9 @@ class FocGroundTie(PcbRule):
                     [part], header=f"{part.designator} value reading"
                 ),
                 "an UNKNOWN bridge does **not** demote a real single 0 Ω on the "
-                "same board: 「恰好一颗 0R」 is counted over the 0 Ω parts, and "
-                "this part is reported beside them rather than against them",
+                "same board: 岳 2026-10-11 裁 「每对域恰好一颗 0R」 is counted over "
+                "the 0 Ω parts **per domain pair**, and this part is reported "
+                "beside that pair's row rather than against it",
             ],
             target=FindingTarget(
                 component_ref=part.designator,
@@ -1632,10 +1750,10 @@ class FocGroundTie(PcbRule):
                 f"but its two pins sit on {tie.net_a!r} and {tie.net_b!r} "
                 f"(domains {domain_of(tie.net_a) or 'none'} / "
                 f"{domain_of(tie.net_b) or 'none'}) — **not a ground-domain "
-                "tie**, so it is not counted toward the single point 岳's "
-                "ruling describes. Reported because a 0 Ω part somewhere on a "
-                "ground net is the shape a reader would otherwise look for and "
-                "not find"
+                "tie**, so it is not counted toward any domain pair's single "
+                "point 岳's ruling describes. Reported because a 0 Ω part "
+                "somewhere on a ground net is the shape a reader would otherwise "
+                "look for and not find"
             ),
             evidence=[
                 *_domain_evidence(split),
