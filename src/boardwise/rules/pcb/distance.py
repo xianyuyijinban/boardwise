@@ -71,8 +71,8 @@ import re
 from dataclasses import dataclass
 
 from ..base import Finding, FindingTarget
-from ...core.geometry import BBox, BoardGeometry
-from ...core.measure import component_distance, pad_corners
+from ...core.geometry import BBox, BoardGeometry, Point
+from ...core.measure import component_distance, pad_corners, pad_edge_distance
 from ...core.model import is_ground_net
 from ...core.parts import designator_category, find_facts, is_ic_designator, load_parts
 from ...core.power_domains import infer_net_domains
@@ -543,7 +543,8 @@ class DecapDistance(PcbRule):
        a candidate — that is 039 批①b's measurement, and it is inherited rather
        than re-argued;
     3. every candidate that has **geometry on this PCB document** is measured
-       against the IC with :func:`~boardwise.core.measure.component_distance`,
+       **on the net** against the IC — this capacitor's pad on ``net`` to this
+       IC's pad on ``net``, edge to edge (:func:`~boardwise.core.measure.pad_edge_distance`) —
        and the **nearest** one is the row. A candidate with no geometry (a part
        the schematic names that this board does not carry — the multi-board
        case, and the 040/107 "a placement was dropped" case) is **skipped, not
@@ -558,6 +559,20 @@ class DecapDistance(PcbRule):
        rule can say without a datasheet is narrower and still useful: *this IC
        sits on a supply net and the design put no grounded capacitor anywhere
        on it*, which is a question about the layout worth asking.
+
+    **Which distance, and why it changed (164c, D5).** The reading is the
+    **same-net pad-to-pad** gap: the loop the capacitor actually decouples, and
+    the number TI SLVA959B §5.3.1's 「within 0.2 in of the supply pin」 is about —
+    the reading ``pcb-foc-decap-proximity`` (:mod:`boardwise.rules.pcb.foc`)
+    already takes. Until 164c this rule measured
+    :func:`~boardwise.core.measure.component_distance` instead, which refuses
+    same-net pairs (the design *wants* a capacitor's pad on the supply net) and
+    therefore answered with the closest pair across **other** nets — a placement
+    distance that can be an order of magnitude smaller than the loop. Two rules
+    with one threshold and two objects is exactly the 「两条规则可以互相矛盾」
+    the audit filed; the object kept is the one the threshold belongs to. The
+    placement distance is still quoted in every row's evidence, under its own
+    name, so a reader who wants it does not have to go without it.
 
     **Severity and the third state.** Both severities are the two the schema
     has, and a board with nothing to say produces nothing: no ICs (silence), no
@@ -714,18 +729,58 @@ class DecapDistance(PcbRule):
                 )
             ]
         candidates = high_freq
+        # 164c (D5): the gap is read **on the net** — this capacitor's pad on
+        # ``net`` to this IC's pad on ``net``, edge to edge. That is the loop the
+        # capacitor actually decouples, and it is the reading TI SLVA959B §5.3.1
+        # asks about (「within 200 mil of the supply pin」), which ``foc.py``'s
+        # driver-level rule already measures. The measurement used to be
+        # ``component_distance``, which refuses same-net pairs and therefore
+        # answered with the closest pair across **other** nets — a placement
+        # distance, and one the two rules could report differently for one
+        # capacitor (the fixture below is measured at 210.0 vs 10.0 mil).
+        ic_pads = [
+            pad for pad in board.pads_for_component(designator) if pad.net == net
+        ]
         measured: list[tuple[str, float]] = []
         for candidate in candidates:
             if board.component(candidate) is None:
                 continue  # named by the netlist, not carried by this PCB document
-            distance = component_distance(board, designator, candidate)
-            if distance is None:
-                continue  # padless on this board: unmeasurable, not zero
-            measured.append((candidate, distance.edge_distance))
+            cap_pads = [
+                pad for pad in board.pads_for_component(candidate) if pad.net == net
+            ]
+            if not cap_pads or not ic_pads:
+                # No pad of this pair carries the net on this document, so there
+                # is no loop leg to measure: unmeasurable, not zero (the same
+                # "an unmeasurable pair is not counted" discipline as before).
+                continue
+            measured.append(
+                (
+                    candidate,
+                    min(
+                        pad_edge_distance(cap_pad, ic_pad)
+                        for cap_pad in cap_pads
+                        for ic_pad in ic_pads
+                    ),
+                )
+            )
         if not measured:
             return []
         nearest, gap = min(measured, key=lambda pair: pair[1])
         evidence = [f"{designator} @ {net}", f"{nearest} @ {net}"]
+        component_level = component_distance(board, designator, nearest)
+        if component_level is not None:
+            evidence.append(
+                f"the reading is **pad-to-pad on {net!r}**: {nearest}'s pad on "
+                f"{net!r} to {designator}'s pad on {net!r}, {_mil(gap):.1f} mil "
+                "edge-to-edge — the loop this capacitor decouples, which is TI "
+                "SLVA959B §5.3.1's own reference and the reading "
+                "pcb-foc-decap-proximity takes. core.measure.component_distance "
+                f"reads {_mil(component_level.edge_distance):.1f} mil (pads "
+                f"{component_level.pad_a} / {component_level.pad_b}) — a "
+                "**different** measurement, because it refuses same-net pairs and "
+                "so answers with the closest pair across some other net; quoted "
+                "so a reader who wants the placement distance has it"
+            )
         target = FindingTarget(
             component_ref=designator,
             net_refs=[net],
@@ -741,7 +796,8 @@ class DecapDistance(PcbRule):
                 level=self.level,
                 message=(
                     f"{designator}'s nearest decoupling capacitor on {net!r} is "
-                    f"{nearest} at {_mil(gap):.1f} mil edge-to-edge, over the "
+                    f"{nearest} at {_mil(gap):.1f} mil edge-to-edge "
+                    f"(pad on {net!r} to pad on {net!r}), over the "
                     f"{DECAP_DISTANCE_MIL:.0f} mil house rule — the loop it "
                     f"decouples is {_mil(gap) / DECAP_DISTANCE_MIL:.1f}x longer "
                     f"than the rule allows"
@@ -905,26 +961,40 @@ class ComponentSpacing(PcbRule):
         public ``pad_corners`` precisely because a rule in another layer is now
         its second caller and the repository's layer rule forbids crossing a
         layer boundary on a private name.)
+
+        **The outline is a polygon, not its bounding box** (164c, the low-severity
+        item of the audit). The comparison used to be ``pad_box`` vs
+        ``BBox.from_points(outline.points)``, which is exact for the four-corner
+        rectangles almost every board has and blind for anything else: a part
+        sitting in an L-shaped board's **notch** is inside the box and outside the
+        board, and the old reading said nothing about a part that is off the
+        board. The number is now the same question asked properly — 「how far does
+        the pad's deepest corner reach past the outline」 — and 「touching the edge
+        is not over」 is kept exactly as it was (an on-edge point is inside, so its
+        contribution is 0.0).
         """
         outline = board.outline
         if outline is None or len(outline.points) < MIN_OUTLINE_CORNERS:
             return []
-        frame = BBox.from_points(outline.points)
-        if frame is None:
-            return []
+        polygon = list(outline.points)
         findings: list[Finding] = []
         for designator in designators:
             pads = board.pads_for_component(designator)
             if not pads:
                 continue
-            pad_box = BBox.from_points(
-                [corner for pad in pads for corner in pad_corners(pad)]
-            )
-            if pad_box is None:
+            over = 0.0
+            worst = None
+            for pad in pads:
+                corners = pad_corners(pad)
+                if not corners:
+                    continue
+                past = _outside_by(corners, polygon)
+                if past > over:
+                    over, worst = past, (pad, corners)
+            if over <= 0.0 or worst is None:
                 continue
-            over = _outside_by(pad_box, frame)
-            if not over:
-                continue
+            pad, corners = worst
+            pad_box = BBox.from_points(corners)
             findings.append(
                 Finding(
                     rule_id=self.id,
@@ -935,11 +1005,23 @@ class ComponentSpacing(PcbRule):
                         f"outline — the part is placed off the edge of the board"
                     ),
                     evidence=[
-                        f"{designator} pads bbox "
-                        f"({pad_box.min_x:.2f}, {pad_box.min_y:.2f})-"
-                        f"({pad_box.max_x:.2f}, {pad_box.max_y:.2f})",
-                        f"board outline bbox ({frame.min_x:.2f}, {frame.min_y:.2f})-"
-                        f"({frame.max_x:.2f}, {frame.max_y:.2f})",
+                        f"{designator}.{pad.pin_number or pad.id} corners "
+                        + ", ".join(f"({c.x:.2f}, {c.y:.2f})" for c in corners)
+                        + (
+                            f"  (pad bbox {pad_box.min_x:.2f}, {pad_box.min_y:.2f})-"
+                            f"({pad_box.max_x:.2f}, {pad_box.max_y:.2f})"
+                            if pad_box is not None
+                            else ""
+                        ),
+                        "board outline polygon ("
+                        f"{len(polygon)} corners): "
+                        + ", ".join(
+                            f"({point.x:.2f}, {point.y:.2f})" for point in polygon[:8]
+                        )
+                        + (f", … (+{len(polygon) - 8} more)" if len(polygon) > 8 else ""),
+                        "判据：焊盘的**四角**逐点对板框多边形做包含判定（在边上算在里面），"
+                        "越界深度 = 最深那个越界角点到最近一条边的距离——"
+                        "板框是 L 形/带缺口时，它的 AABB 会把缺口算进板内（164c）",
                     ],
                     target=FindingTarget(
                         component_ref=designator,
@@ -950,19 +1032,61 @@ class ComponentSpacing(PcbRule):
         return findings
 
 
-def _outside_by(pad_box: BBox, frame: BBox) -> float:
-    """How far ``pad_box`` reaches past ``frame``, in mils (0.0 when inside).
+def _point_in_outline(point: Point, polygon: list[Point]) -> bool:
+    """Is ``point`` inside or **on** the board outline ``polygon``?
 
-    Four signed margins, the largest of which is the answer. A box that only
-    overlaps one edge reports only that edge, so the number in the message is
-    the edge it actually hangs off rather than a diagonal.
+    Even-odd containment with an on-edge tolerance: a point on the boundary is on
+    the board (「贴边不算越界」 — the board was routed to the outline), so the
+    boundary counts as inside. Written here rather than imported because
+    ``core.measure._point_in_polygon`` is private and the layer rule forbids
+    importing a ``_``-prefixed name across a layer; silk.py carries the same small
+    helper for the same reason.
     """
+    inside = False
+    count = len(polygon)
+    for index in range(count):
+        a = polygon[index]
+        b = polygon[(index + 1) % count]
+        if _point_segment_mil(point, a, b) <= 1e-9:
+            return True
+        if (a.y > point.y) != (b.y > point.y):
+            x_cross = a.x + (point.y - a.y) / (b.y - a.y) * (b.x - a.x)
+            if point.x < x_cross:
+                inside = not inside
+    return inside
+
+
+def _point_segment_mil(point: Point, a: Point, b: Point) -> float:
+    """Distance from ``point`` to the segment ``ab``, in mils."""
+    dx, dy = b.x - a.x, b.y - a.y
+    length_sq = dx * dx + dy * dy
+    if length_sq <= 1e-18:
+        return math.hypot(point.x - a.x, point.y - a.y)
+    t = max(0.0, min(1.0, ((point.x - a.x) * dx + (point.y - a.y) * dy) / length_sq))
+    return math.hypot(point.x - (a.x + t * dx), point.y - (a.y + t * dy))
+
+
+def _outside_by(corners: list[Point], polygon: list[Point]) -> float:
+    """How far a pad's rotated rectangle reaches past the outline, in mils.
+
+    ``0.0`` when every corner is inside or on the outline — the口径 126b pinned
+    and 164c keeps. Otherwise the **deepest** corner's distance to the nearest
+    outline edge: the pad's furthest point past the boundary, which is the number
+    「how far off the board is this part」 means. The corners are the pad's own
+    rotated rectangle (:func:`boardwise.core.measure.pad_corners`), not its box.
+    """
+    outside = [
+        corner for corner in corners if not _point_in_outline(corner, polygon)
+    ]
+    if not outside:
+        return 0.0
+    edges = [
+        (polygon[index], polygon[(index + 1) % len(polygon)])
+        for index in range(len(polygon))
+    ]
     return max(
-        0.0,
-        frame.min_x - pad_box.min_x,
-        frame.min_y - pad_box.min_y,
-        pad_box.max_x - frame.max_x,
-        pad_box.max_y - frame.max_y,
+        min(_point_segment_mil(corner, a, b) for a, b in edges)
+        for corner in outside
     )
 
 

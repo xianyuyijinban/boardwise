@@ -87,6 +87,21 @@ specification，Table 2 下方的 RATED VOLTAGE 段）。所以一颗 0603 的 1
 ``intent-missing`` 名单），异常件（越限、以及在串里被分了压的）才有自己的 finding
 ——151/152 的同一口径。
 
+板链读不出时，本规则**不替读者挑一块板**（164c 的 F3）
+======================================================
+
+「原理图的声明优先」这条的前提是**找得到本板的原理图页**，它由 PCB 文档自己声明的
+``META.board`` 定位（:func:`schematic_board_of`），**绝不按位号重合度配板**（毕设FOC
+的 Board1 与 Board3 共用 ``C1``…``R6``）。板链读不出时：
+
+* 工程只有一块板 —— 用那一块（没有第二种可能，智能药箱 PCB1 就是这条）；
+* 工程有多块板 —— **不判断**：每一颗的声明只读 PCB 文档自己的副本，小结点名
+  「板链读不出、这一路未判断」（:func:`board_link_note`），判决行也带同一句话。
+
+修前这里有个静默分支：``if uuid and uuid != …`` 在 uuid 为空时**恒假**，循环于是
+命中遍历到的第一块带该位号的板——Board1 的 ``R48``（``0R``）就这样成了 PCB1 上
+每一颗 ``R48`` 的声明。
+
 **本模块不 NET、不碰 bridge、不读盘**（货架也不需要）：纯离线，读同一份 ``.epro2``
 的两个视图（原理图模型 + PCB 文档的网表视图）。
 """
@@ -113,8 +128,10 @@ __all__ = [
     "ResistiveEdge",
     "SOURCES",
     "SeriesString",
+    "board_link_note",
     "chip_limit",
     "resistance_ohms_of",
+    "schematic_board_of",
     "series_strings",
 ]
 
@@ -502,6 +519,93 @@ def series_strings(
 
 
 # ---------------------------------------------------------------------------
+# the board chain (164c, F3)
+# ---------------------------------------------------------------------------
+
+
+def schematic_board_of(ctx: PcbReviewContext) -> object | None:
+    """这块 PCB 文档所属的**原理图板**，读不出就是 ``None``（151/153/153b 的同一路）。
+
+    板链是 PCB 文档自己声明的 ``META.board``（在 ctx 里是
+    :attr:`PcbReviewContext.board_uuid`），所以那一页**由文档自己的链找到**，
+    **绝不按位号重合度配板**：毕设FOC 1.0.0 的 Board1 与 Board3 共用
+    ``C1``…``R6`` 一大串位号，按位号配会答出另一块板。
+
+    返回 ``None`` 是**一个正常答案**（「本板没有可读的原理图视图」），调用方据此
+    退回 PCB 文档自己的声明并在证据里写明，不是错误。
+
+    **164c 的 F3 修在这里**：板链读不出（``board_uuid`` 为空）时
+
+    * 工程只有**一块**原理图板 —— 用那一块（没有第二种可能，这也是
+      智能药箱 PCB1 的情形：它没声明 ``META.board``，工程里也只有一块板）；
+    * 工程有**多块** —— **返回 ``None``**。
+
+    修前的写法是 ``for board in boards: if uuid and uuid != …: continue``：uuid
+    为空时这个条件**恒假**，于是循环静默命中**遍历到的第一块**带该位号的板——
+    「板链读不出」被当成「就是它」。Board1 的 ``R48``（``0R``）就这样成了 PCB1
+    每一颗叫做 ``R48`` 的件的声明。
+    """
+    model = getattr(ctx, "model", None)
+    if model is None:
+        return None
+    boards = getattr(model, "boards", None)
+    if boards is None:
+        # 单板模型自己就是那一页（151/153 接受的同一种形状）。
+        return model
+    boards = list(boards)
+    uuid = str(getattr(ctx, "board_uuid", "") or "")
+    if not uuid:
+        return boards[0] if len(boards) == 1 else None
+    for board in boards:
+        if str(getattr(getattr(board, "board", None), "uuid", "") or "") == uuid:
+            return board
+    return None
+
+
+def board_link_note(ctx: PcbReviewContext) -> str:
+    """「板链读不出、本规则未判断」那句话，板链读得出时是空串。
+
+    只在**真的定位不到**时写：``boards`` 缺省（单板模型自己就是那一页）、工程只有
+    一块板（没有第二种可能），都是能定位的情形。写不出的原因是「位号重合度」这条
+    路的**反面**，所以也一并写在句子里——读者要能看出本规则拒绝了哪条错路。
+
+    **降额（本模块）与极性（:mod:`boardwise.rules.pcb.polarity`）共用这一句**：
+    164c 的 F3 是同一个洞在两个文件里逐字重复，所以修法也共用一份实现（极性那条
+    规则 import 这个函数），免得下一次改动只修一半。
+    """
+    model = getattr(ctx, "model", None)
+    if model is None:
+        return ""
+    boards = getattr(model, "boards", None)
+    if boards is None:
+        return ""
+    boards = list(boards)
+    if len(boards) <= 1:
+        return ""
+    uuid = str(getattr(ctx, "board_uuid", "") or "")
+    if not uuid:
+        return (
+            f"**板链读不出**：本 PCB 文档没有声明 `META.board`（`board_uuid` 为空），"
+            f"而这个工程有 {len(boards)} 块原理图板——无法定位本板的原理图页，"
+            "所以**依赖原理图的那条判据这一路未判断**（降额是「原理图声明优先」，"
+            "极性是「符号脚名给的极性脚」），只报 PCB 文档与库件这一侧读得到的读数"
+            "（那侧的副本实测会漂，见下）；本规则**不按位号重合度配板**"
+        )
+    if not any(
+        str(getattr(getattr(board, "board", None), "uuid", "") or "") == uuid
+        for board in boards
+    ):
+        return (
+            f"**板链读不出**：`board_uuid` = {uuid!r} 在这个工程的 {len(boards)} 块"
+            "原理图板里都找不到对应的一块——无法定位本板的原理图页，"
+            "所以**依赖原理图的那条判据这一路未判断**（降额是「原理图声明优先」，"
+            "极性是「符号脚名给的极性脚」），只报 PCB 文档与库件这一侧读得到的读数；"
+            "本规则**不按位号重合度配板**"
+        )
+    return ""
+
+
+# ---------------------------------------------------------------------------
 # the rule
 # ---------------------------------------------------------------------------
 
@@ -543,6 +647,7 @@ class DeratingPackage(PcbRule):
             return []
         volts, _notes = self._voltages(ctx)
         priced_nets = set(volts)
+        link_note = board_link_note(ctx)
 
         edges: list[ResistiveEdge] = []
         members_of_net: dict[str, frozenset[str]] = {
@@ -609,7 +714,8 @@ class DeratingPackage(PcbRule):
         findings.extend(self._verdicts(ctx, readings, strings, volts))
         findings.append(
             self._summary(
-                ctx, readings, strings, unpriced, unidentified, jumper, divergent, volts
+                ctx, readings, strings, unpriced, unidentified, jumper, divergent,
+                volts, link_note,
             )
         )
         return findings
@@ -651,23 +757,14 @@ class DeratingPackage(PcbRule):
     def _schematic_component(ctx: PcbReviewContext, designator: str) -> object | None:
         """这颗 PCB 位号在**本板对应的原理图板**上的那颗件（151/152 的同一路）。
 
-        板链走 ``PcbReviewContext.board_uuid``；读不出板链时退回手上那本
-        ``components``（单板工程与测试走这条），**绝不按位号重合度配板**。
+        板链走 :func:`schematic_board_of`——读不出板链时退回手上那本
+        ``components``（单板工程与测试走这条），**绝不按位号重合度配板**；
+        **多板工程 + 没有板链 = 无页可答**（164c 的 F3，见下）。
         """
-        model = ctx.model
-        if model is None:
+        page = schematic_board_of(ctx)
+        if page is None:
             return None
-        boards = getattr(model, "boards", None)
-        if boards is None:
-            return (getattr(model, "components", {}) or {}).get(designator)
-        uuid = str(getattr(ctx, "board_uuid", "") or "")
-        for board in boards:
-            if uuid and str(getattr(getattr(board, "board", None), "uuid", "") or "") != uuid:
-                continue
-            found = (getattr(board, "components", {}) or {}).get(designator)
-            if found is not None:
-                return found
-        return None
+        return (getattr(page, "components", {}) or {}).get(designator)
 
     @staticmethod
     def _split(string: SeriesString, volts: dict[str, tuple[float, str]]) -> None:
@@ -833,6 +930,9 @@ class DeratingPackage(PcbRule):
             "（没有 80%、没有温度修正）——这是 092 A2b 的同一口径，"
             "本工具不发明降额标准",
         ]
+        link_note = board_link_note(ctx)
+        if link_note:
+            evidence.append(link_note)
         if string is not None:
             evidence.append(
                 "串联分压：本规则先把这一串电阻认出来（中间节点上没有第三个器件）、"
@@ -1003,6 +1103,7 @@ class DeratingPackage(PcbRule):
         jumper: list[str],
         divergent: list[str],
         volts: dict[str, tuple[float, str]],
+        link_note: str = "",
     ) -> Finding:
         """本板读数小结：几颗电阻、几颗判得了、几颗读不出（含要问的网名）。"""
         priced = [
@@ -1037,6 +1138,8 @@ class DeratingPackage(PcbRule):
             "本规则不发明降额标准：比较就是实际值 vs 手册那一栏，无 80% 系数、"
             "无温度修正；每颗器件至多一条 finding（先耐压、后功率）",
         ]
+        if link_note:
+            evidence.insert(0, link_note)
         if jumper:
             evidence.append("0 Ω 跳线（不是电阻档的事）：" + ", ".join(jumper))
         if unknown_packages:

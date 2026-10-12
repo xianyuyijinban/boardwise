@@ -84,6 +84,7 @@ from dataclasses import dataclass, field
 
 from ..base import Finding, FindingTarget
 from .base import PcbReviewContext, PcbRule
+from .derating import board_link_note, schematic_board_of
 
 __all__ = [
     "MARK_SNAP_MIL",
@@ -437,27 +438,17 @@ class PolarityOrientation(PcbRule):
 
     @staticmethod
     def _schematic_component(ctx: PcbReviewContext, designator: str) -> object | None:
-        """这颗 PCB 位号在**本板对应的原理图板**上的那颗件（151 的同一路）。
+        """这颗 PCB 位号在**本板对应的原理图板**上的那颗件（151/153b 的同一路）。
 
-        板链走 ``PcbReviewContext.board_uuid``（PCB 文档 ``META.board`` →
-        原理图 ``BoardRef.uuid``）；读不出板链时退回项目模型的手上那本
+        板链走 :func:`schematic_board_of`——读不出板链时退回项目模型的手上那本
         ``components``（单板工程与测试走这条），**绝不按位号重合度配板**——
-        毕设FOC 的 Board1 与 Board3 共用 ``C1``…``R6`` 一大串位号。
+        毕设FOC 的 Board1 与 Board3 共用 ``C1``…``R6`` 一大串位号；
+        **多板工程 + 没有板链 = 无页可答**（164c 的 F3，见下）。
         """
-        model = ctx.model
-        if model is None:
+        page = schematic_board_of(ctx)
+        if page is None:
             return None
-        boards = getattr(model, "boards", None)
-        if boards is None:
-            return (getattr(model, "components", {}) or {}).get(designator)
-        uuid = str(getattr(ctx, "board_uuid", "") or "")
-        for board in boards:
-            if uuid and str(getattr(getattr(board, "board", None), "uuid", "") or "") != uuid:
-                continue
-            found = (getattr(board, "components", {}) or {}).get(designator)
-            if found is not None:
-                return found
-        return None
+        return (getattr(page, "components", {}) or {}).get(designator)
 
     # -- the pass ---------------------------------------------------------
 
@@ -466,6 +457,7 @@ class PolarityOrientation(PcbRule):
         if board is None:
             return []
         pcb_components = getattr(ctx.pcb_model, "components", {}) or {}
+        link_note = board_link_note(ctx)
 
         readings: list[tuple[str, Polarity, MarkReading, object | None]] = []
         unnameable: list[tuple[str, Polarity, str]] = []
@@ -488,8 +480,8 @@ class PolarityOrientation(PcbRule):
         findings.extend(self._mismatch(ctx, readings))
         findings.extend(self._no_mark(ctx, readings))
         findings.extend(self._inconsistent(ctx, readings))
-        findings.extend(self._unnameable(ctx, unnameable))
-        findings.append(self._summary(ctx, readings, unnameable))
+        findings.extend(self._unnameable(ctx, unnameable, link_note))
+        findings.append(self._summary(ctx, readings, unnameable, link_note))
         return findings
 
     # -- one part's reading -----------------------------------------------
@@ -761,25 +753,40 @@ class PolarityOrientation(PcbRule):
             )
         return findings
 
-    def _unnameable(self, ctx, unnameable) -> list[Finding]:
-        """库件说有极性、符号脚名却只有 1/2 → 丝印标记无从与原理图核对（INFO）。"""
+    def _unnameable(self, ctx, unnameable, link_note: str = "") -> list[Finding]:
+        """库件说有极性、符号脚名却只有 1/2 → 丝印标记无从与原理图核对（INFO）。
+
+        164c（F3）：板链读不出时**「原理图没有声明极性脚」这句话不能这么说**——
+        那是关于一页没人读过的图的断言。此时消息改说「本板的原理图页没有定位到」，
+        并把 :func:`boardwise.rules.pcb.derating.board_link_note` 摆进证据。
+        """
         if not unnameable:
             return []
         lines = [
             f"{designator}: {declaration}（封装 {self._footprint_name(ctx, designator)}）"
             for designator, _polarity, declaration in unnameable
         ]
+        if link_note:
+            lines.append(link_note)
+            message = (
+                f"{ctx.board_title} 有 {len(unnameable)} 颗极性器件的原理图侧"
+                "**没能核对极性脚**——本板的原理图页没有定位到（板链读不出，见小结），"
+                "所以「符号脚名有没有声明哪只脚是正极」这一路**未判断**：丝印上的方向"
+                "标记无从与原理图核对，这里只报库件类型词说的那句，本规则不猜"
+            )
+        else:
+            message = (
+                f"{ctx.board_title} 有 {len(unnameable)} 颗极性器件的原理图侧"
+                "**没有声明哪只脚是正极**（符号脚名只有 1/2）：丝印上的方向标记"
+                "无法与原理图核对，装配只能靠丝印本身——这是原理图符号的事实缺口，"
+                "本规则如实记下、不猜"
+            )
         return [
             Finding(
                 rule_id=self.id,
                 severity="INFO",
                 level=self.level,
-                message=(
-                    f"{ctx.board_title} 有 {len(unnameable)} 颗极性器件的原理图侧"
-                    "**没有声明哪只脚是正极**（符号脚名只有 1/2）：丝印上的方向标记"
-                    "无法与原理图核对，装配只能靠丝印本身——这是原理图符号的事实缺口，"
-                    "本规则如实记下、不猜"
-                ),
+                message=message,
                 evidence=lines
                 + [
                     "判极性走的是 DEVICE 库件的 Type 词（声明事实），不是形状推断；"
@@ -789,7 +796,7 @@ class PolarityOrientation(PcbRule):
             )
         ]
 
-    def _summary(self, ctx, readings, unnameable) -> Finding:
+    def _summary(self, ctx, readings, unnameable, link_note: str = "") -> Finding:
         named = [r for r in readings if r[1].plus_pin is not None]
         footprints = sorted({self._footprint_name(ctx, d) for d, _p, _r, _s in readings})
         marked = [r for r in readings if r[2].unpaired]
@@ -804,7 +811,10 @@ class PolarityOrientation(PcbRule):
                 f"涉及 {len(footprints)} 种封装名，"
                 f"量出印刷方向标记的 {len(marked)} 颗"
             ),
-            evidence=[
+            evidence=(
+                [link_note] if link_note else []
+            )
+            + [
                 "极性来源：①原理图符号脚名（+/-、K/A、C/A 三种写法，成对才认）"
                 "②DEVICE 库件的 Type 词与 Polarity 属性；Polarity 写着「双向」的器件"
                 "（实测两颗 SMCJ TVS）方向不敏感，本规则不判",

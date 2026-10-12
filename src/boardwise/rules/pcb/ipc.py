@@ -470,27 +470,52 @@ def declared_voltages(
             continue
         for slot in ("voltage", "targetVoltage"):
             raw = str(getattr(rail, "slots", {}).get(slot, "") or "").strip()
+            if not raw:
+                continue
             value = parse_voltage_volts(raw)
-            if value is None or value <= 0.0:
+            if value is None:
+                # 164c (F5): a statement this build cannot read is **dropped with
+                # a reason**, not dropped in silence — the UNKNOWN row for the net
+                # then quotes this note instead of saying 「nobody priced it」,
+                # which would send the engineer to write a number that is already
+                # there.
+                notes.append(
+                    f"net {net!r}: the contract's {slot} = {raw!r} is not a "
+                    "voltage this build can read (a number, an optional sign and a "
+                    "V, in that order), so no voltage is stored for it"
+                )
+                continue
+            if value == 0.0:
+                # A 0 V rail is the board's reference level and both callers
+                # already price grounds by convention (`is_ground_net`), so a
+                # contract statement of 0 V is not a rail voltage here — dropped,
+                # and named.
+                notes.append(
+                    f"net {net!r}: the contract's {slot} = {raw!r} states 0 V — the "
+                    "board's reference level, which the ground convention already "
+                    "carries — so no rail voltage is stored for it"
+                )
                 continue
             if net in volts and volts[net][0] != value:
                 notes.append(
                     f"net {net!r}: contract says {volts[net][0]:g} V "
                     f"({volts[net][1]}) but {slot} = {raw!r} says {value:g} V; "
-                    "the first is kept and the second is ignored"
+                    "the first is kept and the second is ignored — the sources disagree"
                 )
                 break
             volts[net] = (value, f"contract requirements.rails[net={net}].{slot} = {raw!r}")
             break
 
-    for net, value, where in _architecture_rails(model):
+    architecture_rails, architecture_notes = _architecture_rails(model)
+    notes.extend(architecture_notes)
+    for net, value, where in architecture_rails:
         if net in volts:
             if volts[net][0] != value:
                 notes.append(
                     f"net {net!r}: the contract says {volts[net][0]:g} V and the "
                     f"architecture enumeration says {value:g} V ({where}); the "
                     "contract is the requirement and wins, and the divergence is "
-                    "reported rather than averaged"
+                    "reported rather than averaged — the sources disagree"
                 )
             continue
         volts[net] = (value, f"architecture.chains.rails[net={net}].voltage ({where})")
@@ -498,8 +523,28 @@ def declared_voltages(
     return volts, notes
 
 
-def _architecture_rails(model: object) -> list[tuple[str, float, str]]:
-    """``(net, volts, where)`` per rail the drawing supports, from 044.
+#: The phrase every **conflicted** note carries. It is what lets
+#: :func:`_notes_about`'s reader tell 「two sources disagree」 apart from 「the one
+#: statement could not be read」 — see :meth:`VoltageSpacing._unknown_voltage`,
+#: which says which of the two an UNKNOWN row is.
+SOURCES_DISAGREE = "the sources disagree"
+
+
+def _notes_about(notes: list[str], net: str) -> list[str]:
+    """The notes **addressed to** ``net``.
+
+    Every note :func:`declared_voltages` writes starts with ``net 'X':`` (that has
+    been the convention since 126c), so a caller holding the flat list can still
+    ask 「what was said about *this* net」 without a second return channel.
+    """
+    prefix = f"net {net!r}:"
+    return [note for note in notes if note.startswith(prefix)]
+
+
+def _architecture_rails(
+    model: object,
+) -> tuple[list[tuple[str, float, str]], list[str]]:
+    """``(net, volts, where)`` per rail the drawing supports, from 044, plus notes.
 
     Read through the public enumeration, with the shelf — the same shelf
     :func:`boardwise.rules.decap.cap_candidates_on` and 126b's supply-net
@@ -515,9 +560,20 @@ def _architecture_rails(model: object) -> list[tuple[str, float, str]]:
     and a rail whose voltage the enumeration could not establish comes back
     without one and is simply not in this list — its net then falls to UNKNOWN
     with a message saying no source names its voltage.
+
+    **The second half of the return value is 164c's F4.** The enumeration walks a
+    project board by board, and two boards may each carry a rail of the same name
+    at a different voltage; such a net is dropped from the map (no entry, no
+    verdict — picking one would make a board's spacing verdict depend on the
+    board that happened to be enumerated first). Dropping the net was right;
+    dropping the **reason** was not, and this function's caller's docstring
+    promised the conflict came back in its ``notes``. It does now: one note per
+    conflicted net, naming both voltages and both boards, which is also what lets
+    :class:`VoltageSpacing`'s UNKNOWN row say 「two sources contradict each other」
+    instead of 「no source names this voltage」.
     """
     if model is None:
-        return []
+        return [], []
     from ..facts import default_library_path  # noqa: PLC0415 — read at call time
 
     try:
@@ -527,24 +583,36 @@ def _architecture_rails(model: object) -> list[tuple[str, float, str]]:
     try:
         enumeration = generate_architecture(model, library=library)
     except Exception:  # noqa: BLE001 — see above: never a crash on the report
-        return []
+        return [], []
     seen: dict[str, tuple[float, str]] = {}
-    conflicting: set[str] = set()
+    conflicting: dict[str, list[tuple[float, str]]] = {}
     for rail in (enumeration.section.get("chains") or {}).get("rails") or []:
         net = str(rail.get("net") or "")
         value = rail.get("voltage")
         if not net or value is None:
             continue
         board = str(rail.get("board") or "")
+        where = board or "this project"
         if net in seen:
             if seen[net][0] != float(value):
-                conflicting.add(net)
+                conflicting.setdefault(net, [seen[net]]).append((float(value), where))
             continue
-        seen[net] = (float(value), board or "this project")
-    return [
-        (net, value, where) for net, (value, where) in seen.items()
-        if net not in conflicting
+        seen[net] = (float(value), where)
+    notes = [
+        f"net {net!r}: the architecture enumeration prices this net at "
+        + " and ".join(f"{volts:g} V on {where}" for volts, where in sides)
+        + " — the sources disagree, so no voltage is asserted for it and it falls "
+        "to UNKNOWN; keeping one would make this board's spacing verdict depend on "
+        "which board was enumerated first"
+        for net, sides in sorted(conflicting.items())
     ]
+    return (
+        [
+            (net, value, where) for net, (value, where) in seen.items()
+            if net not in conflicting
+        ],
+        notes,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1016,12 +1084,37 @@ class VoltageSpacing(PcbRule):
     def _unknown_voltage(
         self, ctx: PcbReviewContext, net: str, conflicts: list[str]
     ) -> Finding:
-        """The net whose voltage no source names — an INFO, naming the address."""
-        return Finding(
-            rule_id=self.id,
-            severity="INFO",
-            level=self.level,
-            message=(
+        """The net with no **usable** voltage — an INFO, saying which kind of unknown.
+
+        164c (F4/F5): the row is the reader's whole answer for an unpriced rail, so
+        it must distinguish the two ways a net ends up here. 「no source names this
+        voltage」 sends the engineer to the contract; 「two sources named two
+        different voltages」 sends them to *reconcile* two statements — and a row
+        that said the first while the second was true would send them to write a
+        number that is already there. A note addressed to this net
+        (:func:`_notes_about`) is what tells them apart, and the note's own text —
+        both numbers, both boards — is quoted so the row is actionable on its own.
+        """
+        own = _notes_about(conflicts, net)
+        if own and any(SOURCES_DISAGREE in note for note in own):
+            message = (
+                f"net {net!r} has conflicting voltage sources — "
+                + "；".join(own)
+                + ", so no voltage is asserted for it and its spacing against every "
+                "other net cannot be judged: this row is UNKNOWN rather than a "
+                "guess, and it takes two agreeing statements to close it"
+            )
+            evidence = [f"net {net!r} on {ctx.board_title or 'this PCB document'}"] + own
+        elif own:
+            message = (
+                f"net {net!r} has no usable stated voltage — "
+                + "；".join(own)
+                + ", so its spacing against every other net cannot be judged and "
+                "this row is UNKNOWN rather than a guess"
+            )
+            evidence = [f"net {net!r} on {ctx.board_title or 'this PCB document'}"] + own
+        else:
+            message = (
                 f"net {net!r} has no established voltage, so its spacing against "
                 "every other net cannot be judged — establish it at "
                 f"requirements.rails[net={net}].voltage (or .targetVoltage) in the "
@@ -1030,8 +1123,14 @@ class VoltageSpacing(PcbRule):
                 "output). This rule never reads a voltage out of a net's name"
                 + ("; contract/architecture conflict on another net is noted in "
                    "this report's other rows" if conflicts else "")
-            ),
-            evidence=[f"net {net!r} on {ctx.board_title or 'this PCB document'}"],
+            )
+            evidence = [f"net {net!r} on {ctx.board_title or 'this PCB document'}"]
+        return Finding(
+            rule_id=self.id,
+            severity="INFO",
+            level=self.level,
+            message=message,
+            evidence=evidence,
             target=FindingTarget(net_refs=[net]),
         )
 
@@ -1128,6 +1227,7 @@ __all__ = [
     "GROUND_VOLTS",
     "INNER_K",
     "OUTER_K",
+    "SOURCES_DISAGREE",
     "SPACING_ABOVE_MAX_BAND_MM_PER_V",
     "SPACING_TABLE_MAX_V",
     "TEMP_RISE_C",

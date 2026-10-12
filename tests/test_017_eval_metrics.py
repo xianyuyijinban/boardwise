@@ -641,6 +641,19 @@ def test_the_report_carries_the_provenance_a_run_has_to_record():
     # pins are `tests/test_092_rail_ratings.py`). Measured the same way: both
     # recipes recomputed over this tree with `railratings.py` read from HEAD
     # return exactly f9160d36 / 42dc76c6.
+    # 164c then moved the recursive digest once more — 85a0822b -> f838d122 —
+    # with the direct-only one holding at 4f056aaf, i.e. the batch stayed inside
+    # `rules/pcb/`: five existing rule bodies (derating / polarity / ipc /
+    # distance / focthermal) for the 161 audit's F3/F4/F5, D5 and the two
+    # axis-aligned-box projections. The behaviour pins are
+    # `tests/test_164c_silent_truth.py` (17 tests, each red before its fix) plus
+    # the existing test_126b/126c/133d/152/153/153b; the running ledger with the
+    # pinned values is `tests/test_126a_pcb_review_plumbing.py`.
+    # 164a/164b moved it once more — f838d122 -> f6c8ac35 — direct still
+    # 4f056aaf: the 158 schematic-first ruling landed inside `rules/pcb/`
+    # (foc/focground/fbplacement + regulator/mcusupply/mcureset/crystal/
+    # crystalkeepout now read declared values from the schematic view, verdicts
+    # unmoved; pins `tests/test_164a_foc_view_truth.py` + `test_164b_supply_view_truth.py`).
     # The running ledger with the pinned values is
     # `tests/test_126a_pcb_review_plumbing.py`; this note is the pointer to it.
     # Both are measured, not guessed - `tests/test_126a_pcb_review_plumbing.py`

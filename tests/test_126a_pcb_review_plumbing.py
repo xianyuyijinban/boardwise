@@ -952,9 +952,29 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # `tests/test_155a_ruling_upgrades.py`、`tests/test_133c_foc_ground.py`、
     # `tests/test_153b_ground_tie_values.py`、`tests/test_133b_foc_rules.py` 与
     # `tests/test_131f_mcu_crystal_keepout.py`，所以 bump 是被验证过的，不是记账。
+    # **164c moved the recursive digest once more** — 85a0822b -> f838d122 — and
+    # the **direct** one holds at `4f056aaf` for the **seventeenth** batch
+    # running: 164c（161 挖洞审计的 F3/F4/F5 + D5 + 两条几何口径）整批落在
+    # `rules/pcb/` 内，动的是**五个既有文件**——`derating.py` 与 `polarity.py`
+    # （板链为空 + 多板工程时 `if uuid and uuid != …` 恒假、静默命中遍历到的第一块
+    # 板：改成 153b 的 `schematic_board_of` 语义，并把「板链读不出、未判断」写进
+    # 证据）、`ipc.py`（跨板电压冲突落进 notes、负压轨不再被 `value <= 0.0` 丢掉、
+    # UNKNOWN 文案分清「没有源报电压」与「两源互相矛盾」）、`distance.py`（去耦距离
+    # 对齐到「同网焊盘边到边」这一条 TI 口径；板框越界从 AABB 改成真多边形包含）、
+    # `focthermal.py`（旋转焊盘的投影从 AABB 改成真旋转矩形过滤）。行为锚点是
+    # `tests/test_164c_silent_truth.py`（17 条，修前逐条红）与既有的
+    # test_126b/126c/133d/152/153/153b，所以 bump 是被验证过的，不是记账。
+    # **164a/164b moved it once more** — f838d122 -> f6c8ac35 — direct 仍
+    # `4f056aaf`：158 实施（岳裁「电气语义以原理图为准」）——164a 落在
+    # `foc.py`/`focground.py`/`fbplacement.py`（bulk 池/去耦/FB 腿池改原理图优先、
+    # 0R 错句、EARTH 域筛；判决零翻转只换真值），164b 落在
+    # `regulator.py`/`mcusupply.py`/`mcureset.py`/`crystal.py`/`crystalkeepout.py`
+    # （HF/储能池分类、CL 计算、复位启动值全改原理图优先，证据句写明两视图各是什么）。
+    # 行为锚点是 `tests/test_164a_foc_view_truth.py`（24 条）与
+    # `tests/test_164b_supply_view_truth.py`（15 条），bump 同样是被验证过的。
     assert recursive != old_digest, "the subpackage is inside the recipe now"
     assert old_digest == "4f056aaf"
-    assert recursive == "85a0822b", (
+    assert recursive == "f6c8ac35", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

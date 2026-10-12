@@ -137,8 +137,10 @@ import math
 from dataclasses import dataclass, field
 
 from ..base import Finding, FindingTarget
-from ...core.geometry import BBox, BoardGeometry, PadGeometry, ViaGeometry
+from ...core.geometry import BBox, BoardGeometry, PadGeometry, Point, ViaGeometry
 from ...core.measure import (
+    RegionCopper,
+    RegionCopperItem,
     pad_corners,
     pour_connectivity,
     region_copper,
@@ -786,6 +788,227 @@ class FocThermalViaArray(PcbRule):
 # ---------------------------------------------------------------------------
 
 
+def _point_in_polygon(point: Point, polygon: list[Point]) -> bool:
+    """Even-odd containment, with 「on the boundary counts as inside」.
+
+    The board's own pads and pours are simple polygons whose edges a point can
+    land exactly on (a pad corner on a pour edge, a via centred on a stroke), and
+    those cases are copper touching copper — inside. Written here rather than
+    imported because :func:`boardwise.core.measure._point_in_polygon` is private
+    and the repository's layer rule forbids importing a ``_``-prefixed name
+    across a layer (silk.py carries the same small helper for the same reason).
+    """
+    inside = False
+    count = len(polygon)
+    for index in range(count):
+        a = polygon[index]
+        b = polygon[(index + 1) % count]
+        if _point_segment_distance(point, a, b) <= 1e-9:
+            return True
+        if (a.y > point.y) != (b.y > point.y):
+            x_cross = a.x + (point.y - a.y) / (b.y - a.y) * (b.x - a.x)
+            if point.x < x_cross:
+                inside = not inside
+    return inside
+
+
+def _point_segment_distance(point: Point, a: Point, b: Point) -> float:
+    """Distance from ``point`` to the segment ``ab``, in mils."""
+    dx, dy = b.x - a.x, b.y - a.y
+    length_sq = dx * dx + dy * dy
+    if length_sq <= 1e-18:
+        return math.hypot(point.x - a.x, point.y - a.y)
+    t = max(0.0, min(1.0, ((point.x - a.x) * dx + (point.y - a.y) * dy) / length_sq))
+    return math.hypot(point.x - (a.x + t * dx), point.y - (a.y + t * dy))
+
+
+def _segment_gap(p1: Point, p2: Point, p3: Point, p4: Point) -> float:
+    """Distance between two straight segments, in mils (0.0 when they cross).
+
+    For two segments that do not intersect the minimum distance is attained at an
+    endpoint of one of them, so the four endpoint-to-segment distances are the
+    answer; when they cross it is zero and no endpoint test could see it.
+    """
+    if _segments_cross(p1, p2, p3, p4):
+        return 0.0
+    return min(
+        _point_segment_distance(p1, p3, p4),
+        _point_segment_distance(p2, p3, p4),
+        _point_segment_distance(p3, p1, p2),
+        _point_segment_distance(p4, p1, p2),
+    )
+
+
+def _segments_cross(p1: Point, p2: Point, p3: Point, p4: Point) -> bool:
+    """Do the two segments intersect (endpoints included)?"""
+
+    def orient(a: Point, b: Point, c: Point) -> float:
+        return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+
+    d1, d2 = orient(p3, p4, p1), orient(p3, p4, p2)
+    d3, d4 = orient(p1, p2, p3), orient(p1, p2, p4)
+    if ((d1 > 0) != (d2 > 0)) and ((d3 > 0) != (d4 > 0)):
+        return True
+    return (
+        (abs(d1) <= 1e-12 and _point_segment_distance(p1, p3, p4) <= 1e-9)
+        or (abs(d2) <= 1e-12 and _point_segment_distance(p2, p3, p4) <= 1e-9)
+        or (abs(d3) <= 1e-12 and _point_segment_distance(p3, p1, p2) <= 1e-9)
+        or (abs(d4) <= 1e-12 and _point_segment_distance(p4, p1, p2) <= 1e-9)
+    )
+
+
+def _meets_rect(
+    segments: list[tuple[Point, Point]],
+    radius: float,
+    filled: list[Point],
+    rect: list[Point],
+) -> bool:
+    """Does one copper element have any copper inside the convex ``rect``?
+
+    ``segments`` is the element's own boundary — a pad's four edges, a track's
+    centreline, a via's degenerate centre point, a pour's outline — and ``radius``
+    is the half-width the element has around that boundary (0 for a pad or a pour,
+    the track's half-width or the via's radius otherwise). ``filled`` is the
+    element's polygon when it is a filled shape, which is what lets a pad's or a
+    pour's corner inside the region count even when its edges do not reach.
+
+    The four clauses together are the same reading
+    :func:`~boardwise.core.measure.region_copper` applies to an axis-aligned box —
+    edge contact, a shape's own point inside, a corner of the region inside the
+    shape — generalised to a rectangle the caller rotated. The second clause is
+    not decoration: a via centred under the pad has no edge anywhere near the
+    pad's boundary and is still unambiguously copper under the pad.
+    """
+    rect_edges = [(rect[i], rect[(i + 1) % len(rect)]) for i in range(len(rect))]
+    for a1, a2 in segments:
+        for b1, b2 in rect_edges:
+            if _segment_gap(a1, a2, b1, b2) <= radius + 1e-9:
+                return True
+    for a1, a2 in segments:
+        if _point_in_polygon(a1, rect) or _point_in_polygon(a2, rect):
+            return True
+    for point in filled or []:
+        if _point_in_polygon(point, rect):
+            return True
+    for corner in rect:
+        if filled and _point_in_polygon(corner, filled):
+            return True
+    return False
+
+
+def _element_meets_projection(
+    board: BoardGeometry, item: RegionCopperItem, rect: list[Point]
+) -> bool:
+    """Is ``item``'s copper really inside the pad's rotated projection?
+
+    The element is re-read from the board by the id ``region_copper`` filed it
+    under, so the test runs on the element's own geometry and not on the box that
+    was used to find it. An id that no longer resolves keeps the item: dropping
+    copper because the lookup failed would be a silent removal, and the coarse
+    reading is the narrower error of the two.
+    """
+    if item.element_kind == "pad":
+        pad = next(
+            (
+                candidate
+                for candidate in board.pads
+                if _pad_region_key(candidate) == item.element_id
+            ),
+            None,
+        )
+        if pad is None:
+            return True
+        corners = pad_corners(pad)
+        return _meets_rect(
+            [(corners[i], corners[(i + 1) % len(corners)]) for i in range(len(corners))],
+            0.0,
+            corners,
+            rect,
+        )
+    if item.element_kind == "via":
+        via = next((v for v in board.vias if v.id == item.element_id), None)
+        if via is None:
+            return True
+        centre = Point(via.x, via.y)
+        return _meets_rect(
+            [(centre, centre)], max(via.via_diameter, 0.0) / 2.0, [], rect
+        )
+    if item.element_kind == "track":
+        track = next((t for t in board.tracks if t.id == item.element_id), None)
+        if track is None:
+            return True
+        return _meets_rect(
+            [(track.start, track.end)], max(track.width, 0.0) / 2.0, [], rect
+        )
+    pour = next((p for p in board.pours if p.id == item.element_id), None)
+    if pour is None or len(pour.points) < 3:
+        return True
+    points = list(pour.points)
+    return _meets_rect(
+        [(points[i], points[(i + 1) % len(points)]) for i in range(len(points))],
+        0.0,
+        points,
+        rect,
+    )
+
+
+def _pad_region_key(pad: PadGeometry) -> str:
+    """``"U10.33"`` — the key :func:`region_copper` files a pad under.
+
+    Mirrors ``core.measure._pad_key`` (the private name that fills
+    :attr:`RegionCopperItem.element_id` for a pad): a footprint template id repeats
+    across every placement of that footprint, so the designator + pin pair is the
+    only handle a reader can act on. Written here for the same reason
+    :func:`_point_in_polygon` is: the layer rule forbids importing the private name.
+    """
+    return f"{pad.component}.{pad.pin_number or pad.id}"
+
+
+def _projection_region(
+    board: BoardGeometry, thermal: ThermalPad
+) -> tuple[RegionCopper | None, BBox | None, list[Point]]:
+    """``region_copper``'s answer **restricted to the pad's rotated rectangle**.
+
+    164c's leftover from 162a: ``region_copper`` takes an axis-aligned box, and
+    ``BBox.from_points(pad_corners(pad))`` — the box *around* a rotated pad — is
+    not the pad. On ROBOT's ``DRV1`` the EP is 244.094 × 108.268 mil at 45°, so
+    its box encloses **62 079 sq mil** against the pad's own **26 428** (2.35×):
+    every element in the four corner triangles was reported as 「under the pad」,
+    and on that board that is 51 layer-1 elements where the pad's own projection
+    holds a handful.
+
+    So the primitive is kept (it is 131f's inventory, and the per-layer reading is
+    built on it) and its answer is filtered to the elements that truly meet the
+    corner rectangle: the same three clauses core applies to a box — edge
+    contact, a shape inside, a corner of the region inside the shape — with the
+    rectangle rotated. Nothing else about the reading changes: the layer ids, the
+    item order and the unclassified list are the ones the primitive produced.
+    """
+    corners = pad_corners(thermal.pad)
+    box = BBox.from_points(corners)
+    if box is None or not corners:
+        return None, None, []
+    copper = region_copper(board, box)
+    filtered = RegionCopper(
+        region=copper.region,
+        requested_layer_ids=copper.requested_layer_ids,
+        layers_by_id={
+            layer_id: [
+                item
+                for item in items
+                if _element_meets_projection(board, item, corners)
+            ]
+            for layer_id, items in copper.layers_by_id.items()
+        },
+        unclassified=[
+            item
+            for item in copper.unclassified
+            if _element_meets_projection(board, item, corners)
+        ],
+    )
+    return filtered, box, corners
+
+
 class FocThermalExitPath(PcbRule):
     """R9: does the thermal pad have a continuous copper exit to a large plane?
 
@@ -853,8 +1076,7 @@ class FocThermalExitPath(PcbRule):
     ) -> Finding:
         board = ctx_board
         net = thermal.pad.net or ""
-        box = BBox.from_points(pad_corners(thermal.pad))
-        copper = region_copper(board, box) if box is not None else None
+        copper, box, corners = _projection_region(board, thermal)
         vias = thermal_vias_of(board, thermal)
         connectivity = pour_connectivity(board, net) if net else None
         pad_island, via_islands = (
@@ -920,14 +1142,23 @@ class FocThermalExitPath(PcbRule):
                 f"motor driver by shelf category {category!r}; thermal pad "
                 f"identified by {thermal.basis}",
                 f"region inventory read by core.measure.region_copper over the "
-                f"pad's projection rectangle "
+                f"pad's projection rectangle — the pad's own **rotated** corner "
+                f"rectangle ({thermal.pad.width:g} × {thermal.pad.height:g} mil at "
+                f"{thermal.pad.angle:g}°) "
                 + (
                     f"(min_x {box.min_x:.2f}, min_y {box.min_y:.2f}, max_x "
-                    f"{box.max_x:.2f}, max_y {box.max_y:.2f})"
+                    f"{box.max_x:.2f}, max_y {box.max_y:.2f}, and the four corners "
+                    + ", ".join(f"({c.x:.2f}, {c.y:.2f})" for c in corners)
+                    + ")"
                     if box is not None
                     else "(the pad's corner rectangle is unreadable)"
                 )
-                + ", over the board's own copper layers "
+                + " — the primitive's region is an axis-aligned box, so it was "
+                "asked with the box that encloses that rectangle and its answer was "
+                "then restricted to the elements that truly meet the rectangle "
+                "(164c: for a 45° pad the box alone over-counts by the four corner "
+                "triangles — 62 079 vs 26 428 sq mil on ROBOT's DRV1), over the "
+                "board's own copper layers "
                 + (
                     f"{copper.requested_layer_ids}"
                     if copper is not None
