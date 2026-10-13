@@ -1,0 +1,32 @@
+{
+ "fixture": "毕设滤波采样_2026-09-27.epro2",
+ "R": "R43",
+ "C": "C79",
+ "net": "NET8",
+ "rule_fc_hz": 338627.5384933943,
+ "ngspice": "D:/tools/ngspice-47/Spice64/bin/ngspice_con.exe",
+ "pair": {
+  "source_net": "NET20",
+  "included": [
+   "R43",
+   "C79"
+  ],
+  "left_out": [
+   "U8 pins on ['INPA', 'NET19', 'NET8', 'AGND', 'NET8', 'NET19', 'INPA', 'A5V']"
+  ],
+  "f3db_hz": 338628.0,
+  "netlist": "毕设滤波采样_2026-09-27_R43_C79_pair.cir"
+ },
+ "node": {
+  "source_net": "NET20",
+  "included": [
+   "R43",
+   "C79"
+  ],
+  "left_out": [
+   "U8 pins on ['INPA', 'NET19', 'NET8', 'AGND', 'NET8', 'NET19', 'INPA', 'A5V']"
+  ],
+  "f3db_hz": 338628.0,
+  "netlist": "毕设滤波采样_2026-09-27_R43_C79_node.cir"
+ }
+}

@@ -1,0 +1,10 @@
+* R5 probe (pair): R12 + C12 on TVDD
+V1 in 0 DC 0 AC 1
+R12 in out 10000.0
+C12 out 0 1.0000000000000001e-07
+.control
+ac dec 200 0.001 1g
+meas ac f3db when vdb(out)=-3.0103 fall=1
+print f3db
+.endc
+.end

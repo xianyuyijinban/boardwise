@@ -1,0 +1,38 @@
+{
+ "fixture": "FPC触屏游戏机_2026-09-27.epro2",
+ "R": "R12",
+ "C": "C12",
+ "net": "TVDD",
+ "rule_fc_hz": 159.15494309189532,
+ "ngspice": "D:/tools/ngspice-47/Spice64/bin/ngspice_con.exe",
+ "pair": {
+  "source_net": "VCC",
+  "included": [
+   "R12",
+   "C12"
+  ],
+  "left_out": [
+   "C11 pins on ['TVDD', 'GND']",
+   "C13 pins on ['GND', 'TVDD']",
+   "R11 pins on ['TOUCH_IRQ', 'TVDD']",
+   "U7 pins on ['TVDD', 'TVDD', 'TOUCH_IRQ', 'TOUCH_MISO', 'TOUCH_MOSI', 'TOUCH_CS', 'TOUCH_CLK', 'X+', 'Y+', 'X-', 'Y-', 'GND', 'TVDD']"
+  ],
+  "f3db_hz": 159.155,
+  "netlist": "FPC触屏游戏机_2026-09-27_R12_C12_pair.cir"
+ },
+ "node": {
+  "source_net": "VCC",
+  "included": [
+   "R12",
+   "C11",
+   "C12",
+   "C13"
+  ],
+  "left_out": [
+   "R11 pins on ['TOUCH_IRQ', 'TVDD']",
+   "U7 pins on ['TVDD', 'TVDD', 'TOUCH_IRQ', 'TOUCH_MISO', 'TOUCH_MOSI', 'TOUCH_CS', 'TOUCH_CLK', 'X+', 'Y+', 'X-', 'Y-', 'GND', 'TVDD']"
+  ],
+  "f3db_hz": 1.56034,
+  "netlist": "FPC触屏游戏机_2026-09-27_R12_C12_node.cir"
+ }
+}

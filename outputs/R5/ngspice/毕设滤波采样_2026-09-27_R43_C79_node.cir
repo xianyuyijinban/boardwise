@@ -1,0 +1,10 @@
+* R5 probe (node): R43 + C79 on NET8
+V1 in 0 DC 0 AC 1
+R43 in out 470.0
+C79 out 0 1e-09
+.control
+ac dec 200 0.001 1g
+meas ac f3db when vdb(out)=-3.0103 fall=1
+print f3db
+.endc
+.end

@@ -1,0 +1,14 @@
+
+Note: No compatibility mode selected!
+
+
+Circuit: * r5 probe (node): r12 + c12 on tvdd
+
+Doing analysis at TEMP = 27.000000 and TNOM = 27.000000
+
+Using SPARSE 1.3 as Direct Linear Solver
+
+No. of Data Rows : 2401
+f3db                =  1.56034e+00
+f3db = 1.560343e+00
+Note: Simulation executed from .control section 
