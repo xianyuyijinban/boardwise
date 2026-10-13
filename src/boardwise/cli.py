@@ -98,6 +98,11 @@ from .rules.unproven import NET_MEMBERSHIP_RULES
 SUPPORTED_SUFFIXES: dict[str, str] = {
     ".enet": "schematic netlist export",
     ".epro2": "project backup (board + netlist, one file)",
+    # R3: KiCad, the second host. Any of the three names the project; the
+    # schematic and the board are read from the same-stem siblings.
+    ".kicad_pro": "KiCad project (reads the same-stem .kicad_sch / .kicad_pcb)",
+    ".kicad_sch": "KiCad schematic (flat, one sheet)",
+    ".kicad_pcb": "KiCad board",
 }
 
 #: Where `boardwise review --latest` looks when no directory is given
@@ -2378,6 +2383,14 @@ def _load_model(
         return build_project_model(path, parse_stats=parse_stats), None
     if suffix == ".enet":
         return parse_enet(path), None
+    if suffix in (".kicad_pro", ".kicad_sch", ".kicad_pcb"):
+        # R3: a KiCad project. The schematic view reads the .kicad_sch, the pcb
+        # view the .kicad_pcb (with its geometry); a missing file, a
+        # hierarchical sheet or a bus is a KicadFormatError — a ValueError, so
+        # every caller already turns it into exit 2 with the reason.
+        from .parsers.kicad import load_kicad
+
+        return load_kicad(path, view=view)
     if suffix == ".epro2":
         source = load_epro2_source(path)
         if view == "schematic":
@@ -5128,9 +5141,15 @@ def _run_pcb_runner(
 
     pcb_had_documents = False
     try:
-        from .parsers.epru import load_epro2_source
+        from .parsers.kicad import is_kicad_path, kicad_project_files
 
-        pcb_had_documents = bool(load_epro2_source(path).documents_of_type("PCB"))
+        if is_kicad_path(path):
+            # R3: a KiCad project has a board exactly when its .kicad_pcb exists.
+            pcb_had_documents = kicad_project_files(path)[1] is not None
+        else:
+            from .parsers.epru import load_epro2_source
+
+            pcb_had_documents = bool(load_epro2_source(path).documents_of_type("PCB"))
     except Exception:  # noqa: BLE001 — the runner below is the one that judges
         pcb_had_documents = False
     try:
@@ -5785,7 +5804,9 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
     # is a disclosure and not a verdict gate.
     pcb_not_run: dict | None = None
     pcb_findings: list = []
-    if tier == "file" and str(path).lower().endswith(".epro2"):
+    if tier == "file" and (
+        str(path).lower().endswith(".epro2") or Path(path).suffix.lower() in (".kicad_pro", ".kicad_sch", ".kicad_pcb")
+    ):
         pcb_findings, pcb_review, pcb_had_documents = _run_pcb_runner(
             path, model=model, intent=contract, modules=modules, notes=notes
         )

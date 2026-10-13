@@ -1,0 +1,9 @@
+{
+  "meta": {
+    "filename": "kicad_min.kicad_pro",
+    "version": 3
+  },
+  "boardwise": {
+    "note": "self-built R3 fixture; generator tools/R3_make_kicad_fixture.py"
+  }
+}

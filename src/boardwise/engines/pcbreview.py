@@ -321,6 +321,54 @@ def _board_entry(
     }
 
 
+def _review_units(source_path: str | Path) -> list[tuple[str, str, Any, Any]]:
+    """``(title, board uuid, read board, read pcb model)`` for every board in a file.
+
+    The two readers are deferred so an ``.epro2`` with three PCB documents
+    still parses one board at a time, exactly as before R3. An ``.epro2`` gives
+    one unit per PCB document (titled by its ``META``, 钉 4). A KiCad project
+    (R3) gives **one** unit — a ``.kicad_pcb`` is one board — titled by the
+    board file's stem, with no schematic-board link (``board_uuid`` empty: KiCad
+    has no such container). An empty list is 「no board in this file」.
+    """
+    from ..parsers.kicad import (
+        is_kicad_path,
+        kicad_project_files,
+        read_kicad_board,
+        read_kicad_board_model,
+    )
+
+    if is_kicad_path(source_path):
+        _sch, pcb = kicad_project_files(source_path)
+        if pcb is None:
+            return []
+        return [(
+            pcb.stem,
+            "",
+            lambda: read_kicad_board(pcb),
+            lambda board: read_kicad_board_model(pcb, board),
+        )]
+
+    from ..parsers.epro2_model import build_design_model
+    from ..parsers.epru import extract_board, load_epro2_source
+
+    source = load_epro2_source(source_path)
+    documents = _pcb_documents(source)
+    if not documents:
+        return []
+    footprints = source.footprints()
+    artwork = source.footprint_artwork()
+    return [
+        (
+            title,
+            board_uuid,
+            lambda document=document: extract_board(document, footprints, source.stats, artwork),
+            lambda _board, document=document: build_design_model(source, document),
+        )
+        for title, board_uuid, document in documents
+    ]
+
+
 def run_pcb_review(
     source_path: str | Path,
     model: Any = None,
@@ -395,17 +443,11 @@ def run_pcb_review(
     The runner still **never** re-raises: a caller that wants the exception
     keeps it by not using this runner, exactly as ``_run_rules`` forks.
     """
-    from ..parsers.epro2_model import build_design_model
-    from ..parsers.epru import extract_board, load_epro2_source
-
     rule_list = BUILTIN_PCB_RULES if rules is None else rules
-    source = load_epro2_source(source_path)
-    documents = _pcb_documents(source)
-    if not documents:
+    units = _review_units(source_path)
+    if not units:
         return [], None  # 缺席而非空: nothing was reviewed, so nothing is claimed
 
-    footprints = source.footprints()
-    artwork = source.footprint_artwork()
     module_of = build_module_of(model, intent, modules)
     findings: list[Finding] = []
     boards: list[dict] = []
@@ -414,15 +456,15 @@ def run_pcb_review(
     # list is flat and covers the whole run, like ``coverage.rulesErrored``.
     rules_errored: list[str] = []
 
-    for title, board_uuid, document in documents:
-        board = extract_board(document, footprints, source.stats, artwork)
+    for title, board_uuid, read_board, read_pcb_model in units:
+        board = read_board()
         ctx = PcbReviewContext(
             board=board,
             board_title=title,
             model=model,
             intent=intent,
             module_of=module_of,
-            pcb_model=build_design_model(source, document),
+            pcb_model=read_pcb_model(board),
             board_uuid=board_uuid,
         )
         checks_run: list[str] = []
