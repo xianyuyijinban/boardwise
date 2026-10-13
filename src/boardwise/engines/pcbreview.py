@@ -46,6 +46,7 @@ from ..rules.pcb.footprint import FootprintConsistency
 from ..rules.pcb.polarity import PolarityOrientation
 from ..rules.pcb.silk import SilkDesignator
 from ..rules.pcb.ipc import TrackAmpacity, VoltageSpacing
+from ..rules.pcb.keepout import KeepoutViolation
 from ..rules.pcb.crystal import McuCrystalPlacement
 from ..rules.pcb.crystalkeepout import McuCrystalKeepout
 from ..rules.pcb.foc import (
@@ -138,6 +139,10 @@ from ..rules.base import SEVERITY_ORDER, Finding
 #: rather than ``L1-pcb-geometry`` — its limits are datasheet columns, not
 #: distances — and it is placed among the device readings because that is the
 #: family whose subject is a *part* rather than a pair or a plane.
+#:
+#: **R2-1 appends ``pcb-keepout-violation``** at the very end: the first reader
+#: of 162b's ``prohibit_regions``, a board-frame sweep like the IPC pair before
+#: it, and independent of every other rule's output.
 BUILTIN_PCB_RULES: list[PcbRule] = [
     DecapDistance(),
     RegulatorCapDistance(),
@@ -164,6 +169,7 @@ BUILTIN_PCB_RULES: list[PcbRule] = [
     ComponentSpacing(),
     TrackAmpacity(),
     VoltageSpacing(),
+    KeepoutViolation(),
 ]
 
 #: The runner identity a report carries, so a reader can tell which engine

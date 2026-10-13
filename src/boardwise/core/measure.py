@@ -164,14 +164,38 @@ def _segments_intersect(p1: Point, p2: Point, p3: Point, p4: Point) -> bool:
     return False
 
 
-def _point_segment_distance(p: Point, a: Point, b: Point) -> float:
-    """Distance from point ``p`` to segment ``ab``, in mils."""
-    dx = b.x - a.x
-    dy = b.y - a.y
-    if dx == 0 and dy == 0:
+def point_segment_distance(p: Point, a: Point, b: Point) -> float:
+    """Distance from point ``p`` to segment ``ab``, in mils.
+
+    **The one copy (R2-4).** Until R2 there were three: this one (private, its
+    degenerate-edge guard ``dx == 0 and dy == 0``), and two byte-identical
+    private copies in ``rules/pcb/focthermal.py`` and ``rules/pcb/distance.py``
+    (guard ``length_sq <= 1e-18``). The guard is the only place they differed,
+    and the choice between them was made on data
+    (``outputs/R2/point_segment_census.json``,
+    ``outputs/R2/guard_flip_experiment.json``):
+
+    * over the full PCB review of all 14 board fixtures this function is called
+      6.5 M times; 36 calls fall in the band ``0 < length² <= 1e-18`` (an edge
+      shorter than 1e-9 mil — float noise between two vertices meant to be one),
+      and on 24 of them the two guards answer bitwise differently, by at most the
+      edge's own length;
+    * replacing **every** copy with either guard leaves all 881 PCB findings of
+      the 14 fixtures identical, message and evidence included — zero verdict
+      flips either way;
+    * the exact-zero guard divides by ``dx*dx + dy*dy`` whenever it is not
+      exactly zero, and that sum **underflows to 0.0** for a non-zero edge
+      shorter than ~1e-162 mil: ``ZeroDivisionError``. The ``length_sq`` guard
+      answers the distance to ``a`` there instead.
+
+    So the guard is ``length_sq <= 1e-18``: same verdicts, no crash. An edge that
+    short is a point, and the distance to it is the distance to ``a``.
+    """
+    dx, dy = b.x - a.x, b.y - a.y
+    length_sq = dx * dx + dy * dy
+    if length_sq <= 1e-18:
         return math.hypot(p.x - a.x, p.y - a.y)
-    t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy)
-    t = max(0.0, min(1.0, t))
+    t = max(0.0, min(1.0, ((p.x - a.x) * dx + (p.y - a.y) * dy) / length_sq))
     return math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy))
 
 
@@ -180,10 +204,10 @@ def _segment_distance(p1: Point, p2: Point, p3: Point, p4: Point) -> float:
     if _segments_intersect(p1, p2, p3, p4):
         return 0.0
     return min(
-        _point_segment_distance(p1, p3, p4),
-        _point_segment_distance(p2, p3, p4),
-        _point_segment_distance(p3, p1, p2),
-        _point_segment_distance(p4, p1, p2),
+        point_segment_distance(p1, p3, p4),
+        point_segment_distance(p2, p3, p4),
+        point_segment_distance(p3, p1, p2),
+        point_segment_distance(p4, p1, p2),
     )
 
 
@@ -775,11 +799,12 @@ def point_in_polygon(point: Point, polygon: list[Point]) -> bool:
     **177 提升为公开：rules 层可以合法 import，副本消灭.** This is the 「在边上算
     在里面」 test — a point within ``1e-9`` mil of any edge counts as inside —
     and ``focthermal.py`` now imports it instead of carrying its own copy.
-    One same-口径 copy is still local and un-consolidated:
-    :func:`boardwise.rules.pcb.distance._point_in_outline` (board-outline escape),
-    left to a later task. silk.py's private ``_point_in_polygon`` is a
-    *deliberately different* variant (pure even-odd, boundary not counted) and is
-    not a copy of this one.
+    **R2-4 retired the last same-口径 copy**, ``rules/pcb/distance.py``'s
+    ``_point_in_outline`` (board-outline escape): line for line the same test,
+    differing only in which private point-to-segment copy it called, and those
+    are now one function (:func:`point_segment_distance`). silk.py's private
+    ``_point_in_polygon`` is a *deliberately different* variant (pure even-odd,
+    boundary not counted) and is not a copy of this one.
     """
     inside = False
     n = len(polygon)
@@ -787,7 +812,7 @@ def point_in_polygon(point: Point, polygon: list[Point]) -> bool:
         a = polygon[i]
         b = polygon[(i + 1) % n]
         # On-edge counts as inside (a pad exactly on the boundary touches).
-        if _point_segment_distance(point, a, b) <= 1e-9:
+        if point_segment_distance(point, a, b) <= 1e-9:
             return True
         if (a.y > point.y) != (b.y > point.y):
             x_at = a.x + (point.y - a.y) / (b.y - a.y) * (b.x - a.x)

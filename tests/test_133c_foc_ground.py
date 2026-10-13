@@ -247,6 +247,7 @@ def test_the_three_rules_sit_in_the_foc_block_after_133b_five():
         "pcb-component-spacing",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
+        "pcb-keepout-violation",  # R2-1, appended last
     ]
     assert all(isinstance(rule, PcbRule) for rule in BUILTIN_PCB_RULES)
     ids = [rule.id for rule in BUILTIN_PCB_RULES]

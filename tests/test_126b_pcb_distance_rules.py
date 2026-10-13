@@ -1159,6 +1159,7 @@ def test_llc_is_clean_under_both_distance_rules():
         "pcb-derating-package",
         "pcb-component-spacing",
         "pcb-track-ampacity", "pcb-voltage-spacing",
+        "pcb-keepout-violation",  # R2-1, appended last
     ]
 
 

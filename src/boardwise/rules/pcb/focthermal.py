@@ -143,6 +143,7 @@ from ...core.measure import (
     RegionCopperItem,
     pad_corners,
     point_in_polygon,
+    point_segment_distance,
     pour_connectivity,
     region_copper,
     via_layers,
@@ -789,16 +790,6 @@ class FocThermalViaArray(PcbRule):
 # ---------------------------------------------------------------------------
 
 
-def _point_segment_distance(point: Point, a: Point, b: Point) -> float:
-    """Distance from ``point`` to the segment ``ab``, in mils."""
-    dx, dy = b.x - a.x, b.y - a.y
-    length_sq = dx * dx + dy * dy
-    if length_sq <= 1e-18:
-        return math.hypot(point.x - a.x, point.y - a.y)
-    t = max(0.0, min(1.0, ((point.x - a.x) * dx + (point.y - a.y) * dy) / length_sq))
-    return math.hypot(point.x - (a.x + t * dx), point.y - (a.y + t * dy))
-
-
 def _segment_gap(p1: Point, p2: Point, p3: Point, p4: Point) -> float:
     """Distance between two straight segments, in mils (0.0 when they cross).
 
@@ -809,10 +800,10 @@ def _segment_gap(p1: Point, p2: Point, p3: Point, p4: Point) -> float:
     if _segments_cross(p1, p2, p3, p4):
         return 0.0
     return min(
-        _point_segment_distance(p1, p3, p4),
-        _point_segment_distance(p2, p3, p4),
-        _point_segment_distance(p3, p1, p2),
-        _point_segment_distance(p4, p1, p2),
+        point_segment_distance(p1, p3, p4),
+        point_segment_distance(p2, p3, p4),
+        point_segment_distance(p3, p1, p2),
+        point_segment_distance(p4, p1, p2),
     )
 
 
@@ -827,10 +818,10 @@ def _segments_cross(p1: Point, p2: Point, p3: Point, p4: Point) -> bool:
     if ((d1 > 0) != (d2 > 0)) and ((d3 > 0) != (d4 > 0)):
         return True
     return (
-        (abs(d1) <= 1e-12 and _point_segment_distance(p1, p3, p4) <= 1e-9)
-        or (abs(d2) <= 1e-12 and _point_segment_distance(p2, p3, p4) <= 1e-9)
-        or (abs(d3) <= 1e-12 and _point_segment_distance(p3, p1, p2) <= 1e-9)
-        or (abs(d4) <= 1e-12 and _point_segment_distance(p4, p1, p2) <= 1e-9)
+        (abs(d1) <= 1e-12 and point_segment_distance(p1, p3, p4) <= 1e-9)
+        or (abs(d2) <= 1e-12 and point_segment_distance(p2, p3, p4) <= 1e-9)
+        or (abs(d3) <= 1e-12 and point_segment_distance(p3, p1, p2) <= 1e-9)
+        or (abs(d4) <= 1e-12 and point_segment_distance(p4, p1, p2) <= 1e-9)
     )
 
 
