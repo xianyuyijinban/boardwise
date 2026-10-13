@@ -264,8 +264,11 @@ ACTIONS: tuple[Action, ...] = (
             "exotic host objects that abort enumeration), and enumeration "
             "finds members nobody predicted."
         ),
-        params=("checks", "namespace", "namespaces", "functionsOnly", "call"),
+        params=("checks", "namespace", "namespaces", "functionsOnly", "call", "realm"),
         returns=(
+            "realm mode (R4): {version, connector, topLevel, realm: {kinds, execution: "
+            "{indirectEval, newFunction, dynamicImportDataUrl: {ok, value|error}}, note}} "
+            "— constant code only, nothing from params is executed; "
             "checks mode: {version, topLevel, checks: {NAME: {present, kind, "
             "checked, missing, status: {member: 'function'|'object'|"
             "'undefined'|'threw: …'|'namespace-absent'}, arity: {member: "

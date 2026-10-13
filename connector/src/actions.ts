@@ -17,6 +17,7 @@
 
 import { PROBE_CHECKS, ADDED_SINCE } from './api-names';
 import { ActionError, isActionError, type ResponseContext } from './protocol';
+import { ambientRandomHost, describeRandomHost } from './random';
 import { sysSelfUpdate } from './self-update';
 import { VERSION } from './version';
 
@@ -1805,6 +1806,78 @@ function probeChecks(checks: Record<string, unknown>, eda: any): Record<string, 
  * - `call` (object, optional): `{action, params?}` — dispatch one allowlisted
  *   read-only action. Checked before `checks`, so the key cannot be shadowed.
  */
+/**
+ * R4 stage 1 (experiments 1–2): what the extension realm can execute.
+ *
+ * The roadmap's 「真·热更」 (a fixed stub that fetches and runs the current
+ * payload from the daemon) only makes sense if this realm can turn a string
+ * into running code, and nothing in the repository has measured that. This
+ * mode answers it, **read-only and with no input**: every string executed here
+ * is a constant written below and evaluates to the sentinel `6 * 7`; nothing in
+ * `params` is ever executed (`realm` is a boolean switch, any other value is
+ * refused). It also reads the realm facts a signed-payload design would depend
+ * on (`crypto.subtle` for signature checks, `WebSocket` for the transport the
+ * daemon already speaks).
+ *
+ * Each row is `{ok, value}` or `{ok: false, error}`: a realm that forbids
+ * `eval` (a CSP, a frozen intrinsic) answers with the error it threw, which is
+ * the measurement — never a crash of the probe.
+ */
+const REALM_SENTINEL = 42;
+
+const REALM_GLOBALS = [
+  'eval', 'Function', 'fetch', 'WebSocket', 'Worker', 'WebAssembly', 'Blob', 'URL',
+  'importScripts', 'TextEncoder', 'indexedDB', 'SharedArrayBuffer',
+];
+
+async function realmProbe(): Promise<Record<string, unknown>> {
+  const g = globalThis as any;
+  const kinds: Record<string, string> = {};
+  for (const name of REALM_GLOBALS) {
+    try {
+      kinds[name] = typeof g[name];
+    } catch (error) {
+      kinds[name] = `threw: ${String((error as Error)?.message ?? error)}`;
+    }
+  }
+  // Web Crypto is read through random.ts, the one sanctioned reader of the
+  // ambient global (source-guard.test.mjs), never from here directly.
+  const webcrypto: any = ambientRandomHost().crypto;
+  kinds.crypto = describeRandomHost(webcrypto);
+  try {
+    kinds['crypto.subtle'] = typeof webcrypto?.subtle;
+  } catch (error) {
+    kinds['crypto.subtle'] = `threw: ${String((error as Error)?.message ?? error)}`;
+  }
+
+  const run = async (attempt: () => unknown): Promise<Record<string, unknown>> => {
+    try {
+      const value = await attempt();
+      return { ok: value === REALM_SENTINEL, value: String(value) };
+    } catch (error) {
+      const err = error as Error;
+      return { ok: false, error: `${err?.name ?? 'Error'}: ${String(err?.message ?? error)}` };
+    }
+  };
+  const execution = {
+    // indirect eval: global scope, no access to this module's bindings
+    indirectEval: await run(() => (0, g.eval)('6 * 7')),
+    newFunction: await run(() => new g.Function('return 6 * 7')()),
+    // a module from a data: URL — the shape a fetched payload would most
+    // naturally take; a realm without module loading answers here
+    dynamicImportDataUrl: await run(async () => {
+      const load = new g.Function("return import('data:text/javascript,export default 6 * 7')");
+      return (await load()).default;
+    }),
+  };
+  return {
+    kinds,
+    execution,
+    note: 'constant code only: every executed string is written in the connector and evaluates to 6 * 7; '
+      + 'nothing from params is executed',
+  };
+}
+
 export const sysProbe: ActionHandler = async (params, eda) => {
   const version = (() => {
     try {
@@ -1828,6 +1901,15 @@ export const sysProbe: ActionHandler = async (params, eda) => {
       return [];
     }
   })();
+
+  // `realm` mode (R4 stage 1): can this realm execute a string? Read-only,
+  // constant code only — see `realmProbe`.
+  if (params?.realm !== undefined) {
+    if (params.realm !== true) {
+      throw new ActionError('BAD_REQUEST', 'sys.probe params.realm is a switch: pass true (no code is accepted)');
+    }
+    return { version, connector: VERSION, topLevel, realm: await realmProbe() };
+  }
 
   // `call` mode (025): dispatch one registered **read-only** action by name.
   // Exists because the daemon's catalogue is a load-time constant, so a freshly
