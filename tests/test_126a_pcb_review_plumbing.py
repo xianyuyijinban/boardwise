@@ -637,12 +637,13 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     recursive = rulebody_fingerprint(rules_dir)
     assert recursive is not None
 
-    # The old recipe (direct *.py only) over today's tree.
+    # The old recipe (direct *.py only) over today's tree, with the same
+    # CRLF -> LF fold the recursive recipe applies (see the eol entry below).
     old = hashlib.sha256()
     for path in sorted(rules_dir.glob("*.py")):
         old.update(path.name.encode("utf-8"))
         old.update(b"\x00")
-        old.update(path.read_bytes())
+        old.update(path.read_bytes().replace(b"\r\n", b"\n"))
     old_digest = old.hexdigest()[:8]
 
     # The two differ exactly because pcb/ is now in the recipe; the values are
@@ -1025,9 +1026,19 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # 发现）驱动的 silk 措辞修正：原钉「boundary does not count as inside」不准确
     # （纯 even-odd 对底/左边的边界点实测答 True），改为「无压边规则、边界答案随
     # 边方向摆动」的准确表述。
+    # **eol 修正（wushi2333 2026-10-13，规则体零改动）** — bb1b77c7 -> f3a69124，
+    # direct aa012db3 -> 8269e601：配方改为哈希前把 CRLF 折成 LF。177 的两个钉值
+    # 量的是**那台机器的检出**而不是源码：git 里 30 个规则文件全是 LF，而
+    # 钉值只在「archclosure/base/decap/facts + pcb/distance/fbplacement/footprint/
+    # ipc 这 8 个是 CRLF、其余 LF」的混合工作区上成立（穷举 2^13 / 2^17 种
+    # LF/CRLF 组合反推，唯一解）——任何新 clone（autocrlf=true 全 CRLF 得
+    # 6929c7fc，false 全 LF 得 8269e601）都红在这一行。折行后数字只随提交的
+    # 字节动。新钉值 = 折行配方在 177 树上的读数（与全 LF 检出一致）；行为锚：
+    # `tests/test_017_eval_metrics.py` 的
+    # `test_the_rule_body_digest_does_not_read_the_checkouts_line_endings`。
     assert recursive != old_digest, "the subpackage is inside the recipe now"
-    assert old_digest == "aa012db3"
-    assert recursive == "bb1b77c7", (
+    assert old_digest == "8269e601"
+    assert recursive == "f3a69124", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

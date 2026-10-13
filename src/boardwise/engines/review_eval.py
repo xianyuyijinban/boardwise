@@ -1217,6 +1217,15 @@ def rulebody_fingerprint(rules_dir: str | Path | None = None) -> str | None:
     can all move a number without moving this digest, so a report still needs
     the commit it was run at.
 
+    **Line endings are folded to LF before hashing** (CRLF -> LF). Without that
+    the digest measured the *checkout*, not the source: git stores these files
+    with LF, but a Windows clone with ``core.autocrlf=true`` writes them out with
+    CRLF, and a working tree where some files were re-checked-out and others
+    were rewritten by an editor carries a mix. The pins up to 177 (``aa012db3`` /
+    ``bb1b77c7``) were exactly such a mix -- 8 of the 30 files in CRLF -- so every
+    fresh clone, LF or CRLF, failed them with the same rule bodies. Folding
+    makes the number a property of the committed bytes again.
+
     ``None`` means "this build cannot see its own rule sources", which is the
     frozen state: a PyInstaller onefile carries the rules in the PYZ as bytecode,
     and ``packaging/boardwise.spec``'s ``datas`` adds the connector bundle, the
@@ -1242,7 +1251,7 @@ def rulebody_fingerprint(rules_dir: str | Path | None = None) -> str | None:
         for path in sources:
             digest.update(path.relative_to(directory).as_posix().encode("utf-8"))
             digest.update(b"\x00")
-            digest.update(path.read_bytes())
+            digest.update(path.read_bytes().replace(b"\r\n", b"\n"))
     except OSError:
         return None
     return digest.hexdigest()[:8]

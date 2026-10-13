@@ -692,6 +692,10 @@ def test_the_report_carries_the_provenance_a_run_has_to_record():
     # `rules/pcb/focthermal.py` retired in favour of the now-public
     # `core.measure.point_in_polygon`) plus one docstring in
     # `rules/connectivity.py`; the ledger in test_126a has the full entry.
+    # The eol fix moved both with zero rule edits — bb1b77c7 -> f3a69124,
+    # aa012db3 -> 8269e601: the recipe now folds CRLF to LF, because the 177
+    # pins were a reading of one machine's mixed LF/CRLF checkout and failed on
+    # every fresh clone (pin: the line-endings test below).
     # The running ledger with the pinned values is
     # `tests/test_126a_pcb_review_plumbing.py`; this note is the pointer to it.
     # Both are measured, not guessed - `tests/test_126a_pcb_review_plumbing.py`
@@ -742,6 +746,43 @@ def test_the_rule_body_digest_moves_when_a_rule_source_moves(tmp_path):
     (sub / "base.py").write_text("ID = 'BASE'\n", encoding="utf-8")
     assert rulebody_fingerprint(tmp_path) != with_sub
     assert rulebody_fingerprint(tmp_path) == rulebody_fingerprint(tmp_path)
+
+
+def test_the_rule_body_digest_does_not_read_the_checkouts_line_endings(tmp_path):
+    """The same committed bytes give the same digest on every clone.
+
+    git stores the rule sources with LF; a Windows checkout with
+    ``core.autocrlf=true`` writes CRLF, and a long-lived working tree can hold
+    a mix. Up to 177 the digest hashed raw bytes, so the pinned value was a
+    reading of one machine's checkout (8 of 30 files CRLF) and every fresh
+    clone failed the pin with identical rule bodies. CRLF is folded to LF
+    before hashing: an all-CRLF copy, an all-LF copy and a mixed copy agree,
+    while a real content change still moves the number.
+    """
+    lf = {"a.py": b"ID = 'a'\nX = 1\n", "pcb/b.py": b"ID = 'b'\n\nY = 2\n"}
+
+    def write(root, crlf_names):
+        for name, body in lf.items():
+            target = root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            data = body.replace(b"\n", b"\r\n") if name in crlf_names else body
+            target.write_bytes(data)
+        return rulebody_fingerprint(root)
+
+    all_lf = write(tmp_path / "lf", set())
+    all_crlf = write(tmp_path / "crlf", set(lf))
+    mixed = write(tmp_path / "mixed", {"pcb/b.py"})
+    assert all_lf == all_crlf == mixed
+    # The fold is CRLF -> LF only: a lone CR is content (a source holding one
+    # differs from the same source without it), and so is any edit.
+    lone = tmp_path / "lone"
+    lone.mkdir()
+    (lone / "a.py").write_bytes(b"S = 'x\ry'\n")
+    with_cr = rulebody_fingerprint(lone)
+    (lone / "a.py").write_bytes(b"S = 'xy'\n")
+    assert rulebody_fingerprint(lone) != with_cr
+    (tmp_path / "crlf" / "a.py").write_bytes(b"ID = 'A'\r\nX = 1\r\n")
+    assert rulebody_fingerprint(tmp_path / "crlf") != all_crlf
 
 
 def test_a_build_without_rule_sources_says_so_instead_of_guessing(
