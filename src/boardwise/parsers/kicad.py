@@ -817,16 +817,16 @@ def _outline(tree: list, name: str) -> BoardOutline | None:
             what = f"{name}: {kind} on Edge.Cuts"
             if kind == "gr_rect":
                 (x0, y0), (x1, y1) = (_coord(shape, k, what) for k in ("start", "end"))
-                return BoardOutline(points=[_mil(x0, y0), _mil(x1, y0), _mil(x1, y1), _mil(x0, y1)])
+                return BoardOutline(closed=True, points=[_mil(x0, y0), _mil(x1, y0), _mil(x1, y1), _mil(x0, y1)])
             if kind == "gr_poly":
                 pts = _pts(_first(shape, "pts"), what)
                 if len(pts) >= 3:
-                    return BoardOutline(points=[_mil(*p) for p in pts])
+                    return BoardOutline(closed=True, points=[_mil(*p) for p in pts])
                 continue
             if kind == "gr_circle":
                 (cx, cy), (ex, ey) = (_coord(shape, k, what) for k in ("center", "end"))
                 r = math.hypot(ex - cx, ey - cy)
-                return BoardOutline(points=[_mil(cx + r * math.cos(2 * math.pi * k / 72), cy + r * math.sin(2 * math.pi * k / 72)) for k in range(72)])
+                return BoardOutline(closed=True, points=[_mil(cx + r * math.cos(2 * math.pi * k / 72), cy + r * math.sin(2 * math.pi * k / 72)) for k in range(72)])
             a = _coord(shape, "start", what)
             b = _coord(shape, "end", what)
             if kind == "gr_arc":
@@ -858,7 +858,7 @@ def _outline(tree: list, name: str) -> BoardOutline | None:
             return None  # a gap: the outline does not close
     if not close(chain[0], chain[-1]):
         return None
-    return BoardOutline(points=[_mil(*p) for p in chain[:-1]])
+    return BoardOutline(closed=True, points=[_mil(*p) for p in chain[:-1]])
 
 
 def read_kicad_board(path: str | Path) -> BoardGeometry:

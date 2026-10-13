@@ -710,7 +710,7 @@ def _spacing_board(gap: float) -> BoardGeometry:
         tracks=[],
         vias=[],
         pours=[],
-        outline=BoardOutline(
+        outline=BoardOutline(closed=True, 
             points=[
                 Point(-500.0, -500.0), Point(5000.0, -500.0),
                 Point(5000.0, 500.0), Point(-500.0, 500.0),

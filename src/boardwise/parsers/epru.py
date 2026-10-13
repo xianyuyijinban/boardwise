@@ -339,6 +339,255 @@ def _path_points(path: Any) -> list[Point]:
     return points
 
 
+def _path_is_rectangle(path: Any) -> bool:
+    """True when ``path`` is the ``["R", x, y, w, h, rot, radius]`` form.
+
+    That form is a **closed** rectangle by construction — the editor stores four
+    corners (see :func:`_path_points`) and no fifth point repeating the first —
+    so a single ``R``-form ``BOARD_OUTLINE`` record is a ring even though its
+    first and last points do not coincide. The check is on the raw path, the
+    only place the distinction survives.
+    """
+    if not isinstance(path, Sequence) or isinstance(path, (str, bytes)):
+        return False
+    items: Sequence[Any] = path
+    if items and isinstance(items[0], (list, tuple)):
+        items = items[0]
+    return bool(items) and items[0] == "R"
+
+
+#: bug98-A: how close two outline endpoints must be to be read as the same
+#: drawn vertex, in mils. **House tolerance**, and the number is deliberate: an
+#: editor-split frame shares its vertices exactly (the 16 segments of the field
+#: board's rounded rectangle end on the same coordinates), so any tolerance at
+#: all would stitch them; 1 mil is picked as the *smallest* value that still
+#: absorbs the sub-thousandth rounding a re-saved or re-scaled file can carry.
+#: （审计订正方向：1 mil 是弧弦误差 0.05 mil——见 :data:`ARC_STEP_DEG`——的
+#: **20 倍**（本拼合不分辨亚弦细节），是 4-mil 铺铜净空的 1/4。）A larger
+#: tolerance risks welding two *distinct* vertices of a tight corner, which would
+#: silently reshape the board — and two panels 0.5 mil apart really do get
+#: welded (measured in the bug98 audit), which is why a welded ring that
+#: self-intersects is rejected by :func:`_longest_closed_chain` rather than
+#: passed off as the frame.
+OUTLINE_STITCH_TOLERANCE_MIL = 1.0
+
+
+def _endpoints_meet(first: Point, second: Point, tolerance: float) -> bool:
+    """Are two endpoints the same drawn vertex, within ``tolerance`` mils?"""
+    return (
+        abs(first.x - second.x) <= tolerance
+        and abs(first.y - second.y) <= tolerance
+    )
+
+
+def _perimeter(points: Sequence[Point]) -> float:
+    """The length of a polyline in mils (0.0 for fewer than two points)."""
+    return sum(
+        math.hypot(points[i + 1].x - points[i].x, points[i + 1].y - points[i].y)
+        for i in range(len(points) - 1)
+    )
+
+
+def _is_closed_ring(points: Sequence[Point], tolerance: float) -> bool:
+    """Does a polyline return to its own start?"""
+    return len(points) >= 3 and _endpoints_meet(points[0], points[-1], tolerance)
+
+
+def _is_simple_ring(points: Sequence[Point]) -> bool:
+    """No two non-adjacent edges properly cross (a figure-eight is not a frame).
+
+    Adjacent edges share a vertex by construction and are skipped, as is the
+    closing pair (first/last edge). Endpoint-*touching* is not a cross (the
+    strict inequality), so a chain welded at exact shared vertices stays legal;
+    what this rejects is the bug98-audit case: two panels whose endpoints sit
+    0.5 mil apart get welded by the tolerance into one self-intersecting ring,
+    and that ring must not be passed off as a board outline.
+    """
+    count = len(points)
+
+    def _orient(p: Point, q: Point, r: Point) -> int:
+        value = (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x)
+        return (value > 0) - (value < 0)
+
+    def _proper_cross(a: Point, b: Point, c: Point, d: Point) -> bool:
+        return (
+            _orient(a, b, c) * _orient(a, b, d) < 0
+            and _orient(c, d, a) * _orient(c, d, b) < 0
+        )
+
+    for i in range(count):
+        for j in range(i + 2, count):
+            if i == 0 and j == count - 1:
+                continue  # the closing pair shares the ring's seam vertex
+            if _proper_cross(
+                points[i], points[(i + 1) % count],
+                points[j], points[(j + 1) % count],
+            ):
+                return False
+    return True
+
+
+def _longest_closed_chain(
+    polylines: list[list[Point]], tolerance: float
+) -> tuple[list[Point], int] | None:
+    """``(ring, records used)`` of the longest closed chain, or ``None``.
+
+    A greedy walk from every polyline in turn: at each step any so-far-unused
+    polyline whose **either** end meets the chain's **either** end is welded on
+    (reversed when it meets at its far end, and its shared vertex dropped).
+    When the chain's two ends meet, it is a ring; the ring with the greatest
+    perimeter wins. Greedy is enough for the shapes this runs on — the segments
+    of one frame are a chain, not a graph with competing joins — and it is
+    deterministic (file order, and a strict ``>`` on the perimeter), so two runs
+    over one document stitch the same ring.
+
+    A candidate ring that **self-intersects** is rejected, not returned
+    (:func:`_is_simple_ring`): the weld that produces one is the tolerance
+    joining two distinct frames, and a figure-eight is nobody's board.
+    A ring whose welds are not all vertex-exact is still returned, but its
+    non-exact weld count rides along (the ``tolerance_welds`` third element):
+    a 0.5-mil panel gap welds into a vertex-pinched ring that no crossing test
+    can see, so the honest answer is to *say* the ring was welded across gaps.
+    """
+    best: list[Point] | None = None
+    best_used = 0
+    best_welds = 0
+    best_length = -1.0
+    count = len(polylines)
+    for start in range(count):
+        chain = list(polylines[start])
+        used = {start}
+        welds = 0
+        joined = True
+        while joined:
+            joined = False
+            for index in range(count):
+                if index in used:
+                    continue
+                piece = polylines[index]
+                if _endpoints_meet(chain[-1], piece[0], tolerance):
+                    gap = max(abs(chain[-1].x - piece[0].x), abs(chain[-1].y - piece[0].y))
+                    chain = chain + piece[1:]
+                elif _endpoints_meet(chain[-1], piece[-1], tolerance):
+                    gap = max(abs(chain[-1].x - piece[-1].x), abs(chain[-1].y - piece[-1].y))
+                    chain = chain + list(reversed(piece))[1:]
+                elif _endpoints_meet(chain[0], piece[-1], tolerance):
+                    gap = max(abs(chain[0].x - piece[-1].x), abs(chain[0].y - piece[-1].y))
+                    chain = piece[:-1] + chain
+                elif _endpoints_meet(chain[0], piece[0], tolerance):
+                    gap = max(abs(chain[0].x - piece[0].x), abs(chain[0].y - piece[0].y))
+                    chain = list(reversed(piece))[:-1] + chain
+                else:
+                    continue
+                if gap > 1e-6:  # 逐字相等不算焊缝；错开 0.5 mil 算
+                    welds += 1
+                used.add(index)
+                joined = True
+                break
+        if len(used) < 2 or not _is_closed_ring(chain, tolerance):
+            continue
+        # Drop the repeated closing vertex so the ring reads clean, and only the
+        # ring (a single record keeps its own points byte for byte — see
+        # `_stitch_outline`).
+        if _endpoints_meet(chain[0], chain[-1], tolerance):
+            chain = chain[:-1]
+        if not _is_simple_ring(chain):
+            continue
+        length = _perimeter(chain)
+        if length > best_length:
+            best, best_length, best_used, best_welds = chain, length, len(used), welds
+    return (best, best_used, best_welds) if best is not None else None
+
+
+def _stitch_outline(
+    segments: Sequence[tuple[str, list[Point], bool]],
+    tolerance: float = OUTLINE_STITCH_TOLERANCE_MIL,
+) -> tuple[BoardOutline | None, int]:
+    """Turn every ``BOARD_OUTLINE`` record into one outline, or say why not.
+
+    Returns ``(outline, fragments)``:
+
+    * **no records** — ``(None, 0)``: the document carries no frame at all,
+      which is "nothing was there" and not "a frame failed to read";
+    * **one record** — that record's own points, exactly as before bug98-A
+      (byte for byte: this is the single-segment behaviour the repo's fixtures
+      and the ``["R", ...]`` rectangle depend on). ``segments=1``, and ``closed``
+      is True for the ``R`` form or a polyline that returns to its start, False
+      for an open one. ``fragments`` is ``0`` — the record was read, so nothing
+      was left unstitched;
+    * **several records** — the longest closed ring the polylines can be
+      stitched into (see :func:`_longest_closed_chain`), with ``segments`` set
+      to how many records were stitched and ``closed=True``. If no closed ring
+      can be formed at all (an open chain, or disjoint fragments), the answer is
+      ``(None, len(segments))`` — **the frame did not read, and the count of
+      what was there is stated** rather than the first fragment being passed off
+      as the board. That is the whole point of bug98-A: 「拼不出」 is an explicit
+      fact.
+
+    ``fragments`` counts the records **present but not consumed into the
+    winning ring** (audit 325: it used to read 0 whenever *any* ring closed,
+    silently dropping loose segments and extra closed loops — a two-panel
+    document read as its bigger panel with the smaller one nowhere). A closed
+    ring that wins the ``max(perimeter)`` race consumes its own record; a
+    stitched ring consumes the polylines welded into it; everything else —
+    loose open ends, losing closed loops — is counted here so the report layer
+    can say so.
+
+    ``source_id`` names the first record of the outline in file order, which for
+    a stitched ring is its opening segment; ``segments`` says how many records
+    the ring was built from, so a reader that needs the exact set can still see
+    the count.
+    """
+    if not segments:
+        return None, 0
+    if len(segments) == 1:
+        source_id, points, is_rectangle = segments[0]
+        closed = bool(is_rectangle) or _is_closed_ring(points, tolerance)
+        return (
+            BoardOutline(
+                points=list(points), source_id=source_id, segments=1, closed=closed
+            ),
+            0,
+        )
+    closed_rings: list[list[Point]] = []
+    open_polylines: list[list[Point]] = []
+    for _source_id, points, is_rectangle in segments:
+        if is_rectangle or _is_closed_ring(points, tolerance):
+            if len(points) >= 3:
+                closed_rings.append(list(points))
+        else:
+            open_polylines.append(list(points))
+    stitched = _longest_closed_chain(open_polylines, tolerance) if open_polylines else None
+    stitched_used = 0
+    stitched_welds = 0
+    if stitched is not None:
+        stitched_ring, stitched_used, stitched_welds = stitched
+        closed_rings.append(stitched_ring)
+    if not closed_rings:
+        return None, len(segments)
+    longest = max(closed_rings, key=_perimeter)
+    consumed = (
+        stitched_used
+        if stitched is not None and longest is stitched_ring
+        else 1
+    )
+    welds = (
+        stitched_welds
+        if stitched is not None and longest is stitched_ring
+        else 0
+    )
+    return (
+        BoardOutline(
+            points=longest,
+            source_id=segments[0][0],
+            segments=len(segments),
+            closed=True,
+            tolerance_welds=welds,
+        ),
+        len(segments) - consumed,
+    )
+
+
 #: R2-1: the largest angle one chord of an expanded arc may span, in degrees.
 #: At 3° a chord sits within ``r * (1 - cos 1.5°)`` = 0.034 % of the radius of
 #: its arc — 0.05 mil on the largest keepout circle of the fixtures (r = 148.8
@@ -1419,6 +1668,15 @@ class PcbContext:
     #: exposed, consumed by no rule.
     prohibit_regions: list[ProhibitRegion] = field(default_factory=list)
     outline: BoardOutline | None = None
+    #: bug98-A: every ``BOARD_OUTLINE`` record's polyline, in file order, as
+    #: ``(record id, points, is_rectangle_form)``. The walk collects **all** of
+    #: them (it used to keep only the first) and :func:`_stitch_outline` turns
+    #: them into :attr:`outline` once the document has been read.
+    outline_segments: list[tuple[str, list[Point], bool]] = field(default_factory=list)
+    #: bug98-A: how many ``BOARD_OUTLINE`` records could not be stitched into
+    #: one closed outline. See :attr:`boardwise.core.geometry.BoardGeometry.
+    #: outline_fragments`.
+    outline_fragments: int = 0
     #: (component id, pad id) -> net name, as written by ``PAD_NET``.
     pad_nets_by_pad: dict[tuple[str, str], str | None] = field(default_factory=dict)
     #: (component id, pin number) -> net name. First writer wins.
@@ -1677,8 +1935,19 @@ def collect_pcb_context(
             if rtype != "POURED":
                 points = _path_points(path)
                 poly_type = body.get("polyType")
-                if poly_type == "BOARD_OUTLINE" and context.outline is None:
-                    context.outline = BoardOutline(points=points, source_id=record.id)
+                if poly_type == "BOARD_OUTLINE":
+                    # bug98-A: **every** ``BOARD_OUTLINE`` record is an outline
+                    # segment, not just the first. A rounded-rectangle frame is
+                    # written by the editor as many independent polylines (the
+                    # field board carries 16), so keeping only the first read a
+                    # single arc as the whole board. The records are collected
+                    # here — none of them is a copper or artwork shape, so none
+                    # may fall through to ``non_copper_shapes`` the way the
+                    # second-and-later ones used to — and stitched into one ring
+                    # after the walk (see :func:`_stitch_outline`).
+                    context.outline_segments.append(
+                        (record.id or "", points, _path_is_rectangle(path))
+                    )
                     continue
                 # 162b: copper or artwork? The record types here carry both —
                 # a POLY on BOT_SOLDER_MASK is a mask opening, not a pour — and
@@ -1755,6 +2024,12 @@ def collect_pcb_context(
         elif rtype != "DOCHEAD":
             stats.unconsumed_types[rtype] = stats.unconsumed_types.get(rtype, 0) + 1
 
+    # bug98-A: the outline is stitched once the whole document has been read,
+    # because it is a fact about **all** of the ``BOARD_OUTLINE`` records
+    # together and not about any one of them.
+    context.outline, context.outline_fragments = _stitch_outline(
+        context.outline_segments
+    )
     context.stackup.sort(key=lambda entry: entry.z_index)
     copper_layers = [
         entry.layer_id
@@ -1819,6 +2094,7 @@ def extract_board(
         non_copper_shapes=context.non_copper_shapes,
         prohibit_regions=context.prohibit_regions,
         outline=context.outline,
+        outline_fragments=context.outline_fragments,
         silk_shapes=context.silk_shapes,
         silk_texts=context.silk_texts,
         stats=stats,
@@ -1873,6 +2149,7 @@ def build_board_geometry(source: Epro2Source) -> BoardGeometry:
         non_copper_shapes=context.non_copper_shapes,
         prohibit_regions=context.prohibit_regions,
         outline=context.outline,
+        outline_fragments=context.outline_fragments,
         silk_shapes=context.silk_shapes,
         silk_texts=context.silk_texts,
         stats=source.stats,

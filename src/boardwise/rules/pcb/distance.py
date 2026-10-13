@@ -14,10 +14,18 @@ re-derivation:
   one. Too far is a WARN; a net with no grounded capacitor at all is an INFO
   that **names the net and the IC**, not a silence.
 * :class:`ComponentSpacing` (``pcb-component-spacing``) — **do any two parts
-  collide, and does anything hang off the edge?** Every pair of placed
-  components in the same PCB document is measured once; a pair closer than the
-  threshold is one WARN naming the *closest* pair's two designators, and a part
-  whose pads reach past the board outline is an ERROR.
+  collide?** Every pair of placed components in the same PCB document is
+  measured once; a pair closer than the threshold is one WARN naming the
+  *closest* pair's two designators.
+* :class:`BoardOffEdge` (``pcb-component-off-board``) — **does anything hang
+  off the edge?** A part whose pads reach past the board outline is an ERROR.
+  It is the second half of what 126b shipped as one rule, split out by bug98-A:
+  the two questions are different objects with different evidence, and merging
+  them let one board's unreadable frame bury the other question's rows under a
+  hundred rows of the same rule name. The severity, the message and the
+  evidence are exactly what ``pcb-component-spacing`` used to produce — a rename,
+  not a re-judgement — so every existing board reports the same rows under the
+  id that names the question.
 
 **The division of labour with the schematic side is the point of both rules.**
 ``decap-required-caps`` answers 「有没有」 — is a grounded capacitor of the
@@ -57,7 +65,7 @@ the house-rule pair whose thresholds are no longer 待裁.
 
 **Empty input never raises.** A board with no ICs, no capacitors, or no
 outline produces no findings — except the one case where "no outline" is itself
-worth saying (see :class:`ComponentSpacing`), and even that is silent rather
+worth saying (see :class:`BoardOffEdge`), and even that is silent rather
 than an exception. :func:`boardwise.core.measure.component_distance` returns
 ``None`` for an unknown or padless designator, and every caller here treats
 ``None`` as "this pair cannot be measured, so it is not counted" rather than as
@@ -133,6 +141,17 @@ COMPONENT_SPACING_MIL = 20.0
 #: scale, so a degenerate outline is treated as *absent*: the rule stays silent
 #: about the board frame and says why in the module docstring rather than
 #: blaming the parts.
+#:
+#: **It reads the stitched whole (bug98-A).** The count is taken over the
+#: outline the parser assembled from every ``BOARD_OUTLINE`` record
+#: (:attr:`~boardwise.core.geometry.BoardOutline.points`), not over any single
+#: record: the field board of bug98-A is a rounded rectangle written as 16
+#: separate polylines, and reading any one of them passed this floor while
+#: describing a fragment. When the records cannot be stitched into a ring at all
+#: the outline is ``None`` and the parser says how many fragments it saw
+#: (:attr:`~boardwise.core.geometry.BoardGeometry.outline_fragments`) — the rule
+#: is silent there too, which is the same 「a frame that did not read files no
+#: ERROR about the parts」 discipline as this floor.
 MIN_OUTLINE_CORNERS = 3
 
 #: The IC definition (127b): **the schematic's own device facts**, not a pin
@@ -861,9 +880,16 @@ def _ic_pairs(model: object, library=None) -> list[tuple[str, object, object, st
 
 
 class ComponentSpacing(PcbRule):
-    """Do any two parts collide, and does any part hang off the board?
+    """Do any two parts collide?
 
-    **Spacing.** Every unordered pair of placed components in this PCB document
+    **Spacing only** since bug98-A. The board-frame half — whether a part hangs
+    off the edge — is :class:`BoardOffEdge`, because the two questions have
+    different objects (a pair vs one part), different evidence (a gap vs an
+    over-hang) and, on a board whose own frame did not read, the frame half's
+    hundred rows buried the spacing half's few. Splitting them is a rename of the
+    rows, not a re-judgement: this rule's WARNs are what it always produced.
+
+    Every unordered pair of placed components in this PCB document
     is measured once with :func:`~boardwise.core.measure.component_distance`
     (which is a bbox-rejected min over pad-pair edge distances, so 105
     components cost 5460 measurements in 0.66 s on the fixture — the whole
@@ -885,30 +911,14 @@ class ComponentSpacing(PcbRule):
     (six of them 「touching」 on a DRC-clean board) to **4, none touching, all
     same-side and cross-net**.
 
-    **Board frame.** A part whose pads' bounding box reaches past the outline is
-    an ERROR, and each part gets at most one such row. The outline is read as an
-    **axis-aligned bbox of its own points**, which is exact for the rectangle
-    every real board outline in these fixtures is and conservative (never
-    over-strict) for a cut-corner or round-corner outline: a part inside the
-    polygon is inside its bbox, so no false ERROR can come from this. The part's
-    own box is the bbox of every pad **corner**, not of the pad centres — a
-    centre-only test would call a 40-mil pad sitting 30 mil inside the frame a
-    part that is inside, and that is a real hole rather than a rounding detail.
-
-    **A degenerate outline says nothing.** 毕设FOC's PCB2 document carries a
-    *one-point* ``BOARD_OUTLINE`` poly (measured, see
-    :data:`MIN_OUTLINE_CORNERS`) — an unfinished rectangle, not a board. A rule
-    that measured against it would file 10 ERRORs saying every part on that
-    document hangs off the board. Fewer than :data:`MIN_OUTLINE_CORNERS` corners
-    is therefore read as **no outline at all**, and the board-frame half stays
-    silent; the spacing half still runs, because a collision between two parts
-    does not need a board frame to be true. That silence is a gap, not a pass:
-    it is 126's job to report that a document's outline did not read, and this
-    rule's job is to not invent parts hanging off a board that was never drawn.
+    **No board frame needed.** A collision between two parts is true whether or
+    not the board's outline read, so this rule never consults
+    :attr:`~boardwise.core.geometry.BoardGeometry.outline` and is unaffected by
+    a frame that is missing, degenerate or stitched from many records.
     """
 
     id = "pcb-component-spacing"
-    title = "Components keep their spacing and stay inside the board outline"
+    title = "Components keep their spacing"
     level = "L1-pcb-geometry"
     source = "house rule（岳 2026-10 待裁）"
 
@@ -947,8 +957,53 @@ class ComponentSpacing(PcbRule):
                         ),
                     )
                 )
-        findings.extend(self._outside_outline(board, designators))
         return findings
+
+
+class BoardOffEdge(PcbRule):
+    """Does any part hang off the edge of the board?
+
+    One ERROR per part whose pads reach past the board outline, and at most one
+    such row per part. The severity, the message and the evidence are exactly
+    what ``pcb-component-spacing`` produced before bug98-A split the rule out of
+    it — a reader comparing an old report with a new one sees the same rows under
+    the id that names the question.
+
+    **The outline is everything the parser could stitch (bug98-A).** The frame
+    this measures against is :attr:`~boardwise.core.geometry.BoardOutline.points`
+    — the ring assembled from **every** ``BOARD_OUTLINE`` record, not the first
+    one. That is the fix for the field board whose rounded-rectangle frame
+    arrives as 16 separate polylines: reading only the first (an arc) put a 98-part
+    board outside a fragment of a frame. The parser's own answer about how the
+    ring was built (``segments`` / ``closed``) is disclosure, not a gate here;
+    what gates a judgement is :data:`MIN_OUTLINE_CORNERS` over the stitched
+    ``points``.
+
+    **A degenerate outline says nothing.** 毕设FOC's PCB2 document carries a
+    *one-point* ``BOARD_OUTLINE`` poly (measured, see
+    :data:`MIN_OUTLINE_CORNERS`) — an unfinished rectangle, not a board. A rule
+    that measured against it would file 10 ERRORs saying every part on that
+    document hangs off the board. Fewer than :data:`MIN_OUTLINE_CORNERS` corners
+    is therefore read as **no outline at all**, and this rule stays silent. The
+    same silence covers a frame that could not be read: when the parser finds
+    ``BOARD_OUTLINE`` records it cannot stitch into a ring it sets ``outline`` to
+    ``None`` and states the count on
+    :attr:`~boardwise.core.geometry.BoardGeometry.outline_fragments`, and this
+    rule files nothing — 「the frame did not read」 is not evidence about a part.
+    That silence is a gap, not a pass, and it is stated here rather than dressed
+    up as a finding about the parts.
+    """
+
+    id = "pcb-component-off-board"
+    title = "Components stay inside the board outline"
+    level = "L1-pcb-geometry"
+    source = "house rule（岳 2026-10 待裁）"
+
+    def check(self, ctx: PcbReviewContext) -> list[Finding]:
+        board = ctx.board
+        if board is None:
+            return []
+        return self._outside_outline(board, _measurable_designators(board))
 
     def _outside_outline(
         self, board: BoardGeometry, designators: list[str]
@@ -977,9 +1032,22 @@ class ComponentSpacing(PcbRule):
         the pad's deepest corner reach past the outline」 — and 「touching the edge
         is not over」 is kept exactly as it was (an on-edge point is inside, so its
         contribution is 0.0).
+
+        **The two silences** (see the class docstring): fewer than
+        :data:`MIN_OUTLINE_CORNERS` corners, or no outline at all — which covers
+        both "the document never had a frame" and "the frame's records could not
+        be stitched into a ring". And a third, pinned by the bug98 audit (325):
+        an outline that read but is **not closed** (a single open polyline —
+        the field board's left-edge arc as its only record) is not a frame
+        either, and must not measure parts against it. ``BoardOutline.closed``
+        exists for exactly this guard.
         """
         outline = board.outline
-        if outline is None or len(outline.points) < MIN_OUTLINE_CORNERS:
+        if (
+            outline is None
+            or len(outline.points) < MIN_OUTLINE_CORNERS
+            or not outline.closed
+        ):
             return []
         polygon = list(outline.points)
         findings: list[Finding] = []
@@ -1087,6 +1155,7 @@ __all__ = [
     "DECAP_DISTANCE_MIL",
     "MIN_IC_PINS",
     "MIN_OUTLINE_CORNERS",
+    "BoardOffEdge",
     "ComponentSpacing",
     "DecapDistance",
 ]

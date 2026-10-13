@@ -392,6 +392,7 @@ def test_both_rules_are_in_the_builtin_list_in_the_declared_order():
         "pcb-silk-designator",
         "pcb-derating-package",
         "pcb-component-spacing",
+        "pcb-component-off-board",  # bug98-A, the split-out board-frame rule
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
         "pcb-keepout-violation",  # R2-1, appended last

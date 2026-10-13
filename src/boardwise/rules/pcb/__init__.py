@@ -10,7 +10,10 @@ A **parallel** rule family: these rules read one PCB document's geometry
 Layout of the package as the batches land:
 
 * ``base`` — :class:`PcbRule` and :class:`PcbReviewContext` (126a).
-* ``distance`` — the house-rule distance checks (126b).
+* ``distance`` — the house-rule distance checks (126b; bug98-A split the
+  board-frame error out of ``pcb-component-spacing`` into its own
+  ``pcb-component-off-board`` rule, so 「two parts collide」 and 「one part hangs
+  off the edge」 are two ids).
 * ``ipc`` — the IPC-2221 checks (126c).
 * ``regulator`` — per-regulator input/output capacitor placement (131b).
 * ``fbplacement`` — feedback-divider placement (131c).

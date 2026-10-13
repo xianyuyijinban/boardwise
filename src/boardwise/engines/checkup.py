@@ -2259,6 +2259,7 @@ _RULE_FAMILIES: tuple[tuple[re.Pattern, str], ...] = (
     (re.compile(r"^pcb-mcu-"), "MCU 最小系统"),
     (re.compile(r"^pcb-decap-distance$"), "电源去耦"),
     (re.compile(r"^pcb-component-spacing$"), "DFM 通用"),
+    (re.compile(r"^pcb-component-off-board$"), "DFM 通用"),
     (re.compile(r"^pcb-track-ampacity$"), "载流（IPC-2221）"),
     (re.compile(r"^pcb-voltage-spacing$"), "安规间距（IPC-2221）"),
     (re.compile(r"^pcb-drc-ruleset-"), "DRC 规则集元审查"),
@@ -2421,6 +2422,7 @@ def _board_links(report: dict) -> list[dict]:
             "uuid": uuid,
             "components": board.get("components"),
             "copperLayers": (pcb or {}).get("copperLayers"),
+            "outlineNote": (pcb or {}).get("outlineNote"),
         })
     for board in pcb_boards:
         if id(board) in claimed:
@@ -2431,6 +2433,7 @@ def _board_links(report: dict) -> list[dict]:
             "uuid": str(board.get("boardUuid") or ""),
             "components": board.get("components"),
             "copperLayers": board.get("copperLayers"),
+            "outlineNote": board.get("outlineNote"),
         })
     return links
 
@@ -2821,6 +2824,7 @@ def board_report_section(
             "pcb": link["pcb"],
             "components": link["components"],
             "copperLayers": link["copperLayers"],
+            "outlineNote": link.get("outlineNote"),
             "counts": _severity_counts([row[3] for row in rows]),
             "groups": groups,
         })
@@ -2931,6 +2935,10 @@ def render_board_report(report: dict, section: dict | None = None) -> str:
             f"{counts.get('INFO', 0)} INFO"
         )
         lines.append(f"### 板：{heading}" + (f"（{'，'.join(detail)}）" if detail else ""))
+        if board.get("outlineNote"):
+            # bug98：板框没读出/未闭环/有碎段/含容差焊缝——「没跑」必须写在
+            # 人读的报告上，不是只埋在 report.json。
+            lines.append(f"> ⚠️ {board['outlineNote']}")
         lines.append("")
         for group in board.get("groups") or []:
             gcounts = group.get("counts") or {}

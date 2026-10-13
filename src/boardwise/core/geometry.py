@@ -867,10 +867,55 @@ class ProhibitRegion:
 
 @dataclass
 class BoardOutline:
-    """The board outline (``POLY`` record with ``polyType`` ``BOARD_OUTLINE``)."""
+    """The board outline (``POLY`` records with ``polyType`` ``BOARD_OUTLINE``).
+
+    ``points`` is the outline as one ring. For a board whose frame is a single
+    record — a rectangle (``["R", x, y, w, h, rot, radius]``), a flattened
+    rectangle or a single closed polyline — this is exactly the record's own
+    point list, byte for byte what it always was.
+
+    ``segments`` and ``closed`` (bug98-A) are the **disclosure** of how
+    ``points`` was arrived at, and they exist because the editor does not
+    always store a board frame as one record: a rounded-rectangle outline is
+    written as many independent ``BOARD_OUTLINE`` records (the field board of
+    bug98-A carries **16** — four corner arcs plus twelve edge pieces), each an
+    open polyline. The parser stitches those polylines end to end and takes the
+    longest closed ring as the frame, so:
+
+    * ``segments`` — how many ``BOARD_OUTLINE`` records went into ``points``.
+      ``1`` is the single-record board every fixture used to have; a larger
+      number says the frame was assembled (and ``points`` is therefore **not**
+      any one record's own list).
+    * ``closed`` — whether ``points`` closes into a ring. True for a stitched
+      loop and for a single rectangle record (the editor's ``R`` form is a
+      closed rectangle by construction); False when the ring could not be
+      closed, which for a single record means the record was an open polyline —
+      the honest reading of a fragment, and the reason
+      :attr:`BoardGeometry.outline_fragments` exists beside it.
+
+    Neither field is a verdict: what counts as a usable frame (a corner floor,
+    and the case where nothing could be stitched at all) is
+    :data:`boardwise.rules.pcb.distance.MIN_OUTLINE_CORNERS`'s business, and it
+    reads ``points`` above; whether the frame is *trusted* at all is
+    ``closed``'s business — the off-board rule refuses to measure against an
+    outline that is not closed (bug98 审计 325-a1). The defaults describe the
+    hand-built outline a test or a caller constructs from a raw point list:
+    one segment, closure not asserted — so a hand-built frame that *means* to
+    be a board must say ``closed=True``.
+    """
 
     points: list[Point] = field(default_factory=list)
     source_id: str | None = None
+    #: How many ``BOARD_OUTLINE`` records ``points`` was built from (bug98-A).
+    segments: int = 1
+    #: Whether ``points`` closes into a ring (bug98-A). See the class docstring.
+    closed: bool = False
+    #: How many joins in a stitched ring were *not* vertex-exact (bug98 审计
+    #: 325-a2 的焊接案）：the stitch tolerance (1 mil) can weld two panels whose
+    #: shared corner sits 0.5 mil apart into one pinched ring no crossing test
+    #: can see — the honest answer is to count the inexact joins and let the
+    #: report say so. 0 for a single record and for an exactly-joined ring.
+    tolerance_welds: int = 0
 
     @property
     def bbox(self) -> BBox | None:
@@ -1084,6 +1129,27 @@ class BoardGeometry:
     #: R2-1 by ``pcb-keepout-violation``.
     prohibit_regions: list[ProhibitRegion] = field(default_factory=list)
     outline: BoardOutline | None = None
+    #: bug98-A: how many ``BOARD_OUTLINE`` records were seen but **could not**
+    #: be stitched into one closed outline, so :attr:`outline` is ``None``.
+    #:
+    #: It is the explicit half of the parser's answer, and its absence was the
+    #: defect: the parser used to keep only the *first* ``BOARD_OUTLINE`` record
+    #: and, when a frame arrived as many independent records (the field board of
+    #: bug98-A: a rounded rectangle written as 16 polylines), the remaining
+    #: records fell through as ordinary ``POLY`` shapes and the board frame read
+    #: as whatever fragment came first — 98 parts then reported 「off the board」
+    #: against an arc. Now every record is collected and stitched, and when the
+    #: stitching cannot close a ring the *count* of what was there is stated
+    #: here rather than the first fragment being passed off as the frame.
+    #:
+    #: ``0`` means "no outline was left unstitched": either one was produced, or
+    #: the document carried no ``BOARD_OUTLINE`` record at all. Non-zero is
+    #: therefore always read alongside ``outline is None``, never against a
+    #: frame that was read. The board-frame rule
+    #: (:class:`boardwise.rules.pcb.distance.BoardOffEdge`) treats a non-zero
+    #: count as 「the frame did not read」 and stays silent, exactly as it stays
+    #: silent for a frame with too few corners.
+    outline_fragments: int = 0
     #: 152: the placement artwork that is **not copper** — footprint silkscreen,
     #: body/courtyard outlines and component-marking primitives, instantiated
     #: at each placement (see :class:`SilkShape`). Empty for a hand-built board

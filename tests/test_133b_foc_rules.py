@@ -189,6 +189,7 @@ def test_the_five_foc_rules_sit_between_the_mcu_block_and_the_geometry_sweep():
         "pcb-silk-designator",
         "pcb-derating-package",
         "pcb-component-spacing",
+        "pcb-component-off-board",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
         "pcb-keepout-violation",  # R2-1, appended last

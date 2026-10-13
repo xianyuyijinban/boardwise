@@ -54,6 +54,7 @@ from boardwise.rules.pcb.base import PcbReviewContext, PcbRule
 from boardwise.rules.pcb.distance import (
     COMPONENT_SPACING_MIL,
     DECAP_DISTANCE_MIL,
+    BoardOffEdge,
     ComponentSpacing,
     DecapDistance,
 )
@@ -151,7 +152,7 @@ def _board(parts: list[tuple[str, float, float]], pads: list[PadGeometry]) -> Bo
 
 
 def _outline_board(x0: float, y0: float, x1: float, y1: float) -> BoardGeometry:
-    return BoardOutline(
+    return BoardOutline(closed=True, 
         points=[
             Point(x0, y0),
             Point(x1, y0),
@@ -565,7 +566,8 @@ def test_two_parts_exactly_at_the_threshold_are_silence():
 
 
 def test_a_part_hanging_off_the_board_outline_is_an_error():
-    """State 2: the board frame, as its own severity.
+    """State 2: the board frame, as its own severity — and, since bug98-A, its
+    own rule.
 
     The outline is the rectangle (0,0)-(500,500) and ``C9``'s pad is centred at
     (520, 100) with a 40x40 pad, so its right edge is at **540.0** — 40.0 mil
@@ -573,27 +575,36 @@ def test_a_part_hanging_off_the_board_outline_is_an_error():
     measurement. The part is *inside* the frame in every other axis; the number
     is the largest single-edge margin, not a diagonal, so the message names the
     edge it actually hangs off.
+
+    bug98-A split the board-frame half out of ``pcb-component-spacing`` into
+    ``pcb-component-off-board``. The row is the same row — severity, message,
+    measurement — under the id that names the question, so this test now runs
+    the rule that owns it. ``ComponentSpacing`` says nothing about the frame at
+    all, which is the second half of the pin.
     """
     board = _board(
         [("C9", 520.0, 100.0)],
         [_pad("C9", "1", x=520.0, y=100.0)],
     )
     board.outline = _outline_board(0.0, 0.0, 500.0, 500.0)
-    findings = ComponentSpacing().check(_ctx(board))
+    findings = BoardOffEdge().check(_ctx(board))
     assert len(findings) == 1
     assert findings[0].severity == "ERROR"
-    assert findings[0].rule_id == "pcb-component-spacing"
+    assert findings[0].rule_id == "pcb-component-off-board"
     assert findings[0].target.component_ref == "C9"
     assert findings[0].target.measurement == {
         "kind": "distance", "value": 40.0, "unit": "mil",
     }
-    # A part comfortably inside the same frame produces nothing from the
-    # board-frame half, and with only one part the spacing half is silent too.
+    # The spacing rule no longer files the board-frame error: with one part its
+    # sweep is silent, and that silence is now the whole rule.
+    assert ComponentSpacing().check(_ctx(board)) == []
+    # A part comfortably inside the same frame produces nothing from either half.
     inside = _board(
         [("C9", 100.0, 100.0)],
         [_pad("C9", "1", x=100.0, y=100.0)],
     )
     inside.outline = _outline_board(0.0, 0.0, 500.0, 500.0)
+    assert BoardOffEdge().check(_ctx(inside)) == []
     assert ComponentSpacing().check(_ctx(inside)) == []
 
 
@@ -607,20 +618,23 @@ def test_a_degenerate_one_point_outline_files_no_board_frame_errors():
     file 10 ERRORs at board scale about a board whose outline the editor never
     finished — a false ERROR is worse than a missing one here, because the
     report's exit code and the reviewer's first action both follow the error
-    count. So fewer than three corners is read as **no outline**: the
-    board-frame half is silent and the spacing half still runs, since a
-    collision between two parts needs no frame to be true.
+    count. So fewer than three corners is read as **no outline**: the board-frame
+    rule (`BoardOffEdge`, since bug98-A) is silent, and the spacing rule still
+    runs, since a collision between two parts needs no frame to be true.
     """
     board = _board(
         [("U1", 0.0, 0.0), ("R1", 50.0, 0.0)],
         [_pad("U1", "1", x=0.0, y=0.0), _pad("R1", "1", x=50.0, y=0.0)],
     )
-    board.outline = BoardOutline(
+    board.outline = BoardOutline(closed=True, 
         points=[Point(17.4999, 27.5)], source_id="one-point"
+    )
+    assert BoardOffEdge().check(_ctx(board)) == [], (
+        "the one-point outline files no board-frame ERROR"
     )
     findings = ComponentSpacing().check(_ctx(board))
     assert [f.severity for f in findings] == ["WARN"], (
-        "only the spacing half runs; the one-point outline files no ERROR"
+        "the spacing half still runs; the one-point outline files no ERROR"
     )
 
 
@@ -1158,6 +1172,7 @@ def test_llc_is_clean_under_both_distance_rules():
         "pcb-silk-designator",
         "pcb-derating-package",
         "pcb-component-spacing",
+        "pcb-component-off-board",
         "pcb-track-ampacity", "pcb-voltage-spacing",
         "pcb-keepout-violation",  # R2-1, appended last
     ]

@@ -22897,12 +22897,17 @@ INTENT_COMMANDS = {
 
 def main(argv: list[str] | None = None) -> int:
     # Windows pipes default stdio to the locale codepage (e.g. cp936), which
-    # mangles any non-ASCII output (em-dashes, Chinese part names in evidence).
-    # This CLI is UTF-8 end to end; reconfigure is best-effort for odd streams.
+    # mangles any non-ASCII output (em-dashes, Chinese part names in report
+    # notes). This CLI is UTF-8 end to end; reconfigure is best-effort for odd
+    # streams — pytest's capture objects are `EncodedFile`/`CaptureIO` shims, so
+    # the capability is asked for before it is used, and the call itself is
+    # guarded for a stream that refuses to be reconfigured.
     for stream in (sys.stdout, sys.stderr):
+        if not hasattr(stream, "reconfigure"):
+            continue
         try:
             stream.reconfigure(encoding="utf-8", errors="replace")
-        except (AttributeError, ValueError):
+        except ValueError:
             pass
     args = build_parser().parse_args(argv)
     if args.command == "review":

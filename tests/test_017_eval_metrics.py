@@ -705,6 +705,10 @@ def test_the_report_carries_the_provenance_a_run_has_to_record():
     # fixA moved it once more — f45cfd99 -> dad6b777, direct unchanged: keepout.py
     # disclosure/wording fixes from PR#79's review (no rule semantics moved;
     # anchors test_r2_1b_keepout_disclosure.py).
+    # bug98 moved it again — dad6b777 -> 0f524f9d, direct unchanged: distance.py
+    # split BoardOffEdge out + footprint.py's library-id fallback (the field
+    # report's 98 false ERRORs; anchors test_bug98a_outline_stitch.py /
+    # test_151b_footprint_id_fallback.py).
     # The running ledger with the pinned values is
     # `tests/test_126a_pcb_review_plumbing.py`; this note is the pointer to it.
     # Both are measured, not guessed - `tests/test_126a_pcb_review_plumbing.py`

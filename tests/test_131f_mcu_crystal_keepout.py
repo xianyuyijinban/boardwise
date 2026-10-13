@@ -540,6 +540,7 @@ def test_rule_is_declared_house_rule_with_no_threshold_and_is_in_the_list():
         "pcb-silk-designator",
         "pcb-derating-package",
         "pcb-component-spacing",
+        "pcb-component-off-board",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
         "pcb-keepout-violation",  # R2-1, appended last

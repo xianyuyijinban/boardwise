@@ -13,7 +13,11 @@
 * 原理图侧 = ``ctx.model`` 里这块板的 :class:`~boardwise.core.model.Component`
   的 ``footprint`` 字段（``DEVICE`` 库件的 ``Supplier Footprint``，退化为实例
   ``Footprint`` 属性；见 ``parsers/schematic.py::DEVICE_ATTR_FIELDS``）。这是工程
-  师在原理图上**声明的封装**，也是 BOM 上写的那个名字；
+  师在原理图上**声明的封装**，也是 BOM 上写的那个名字。该字段存的是**库件 id**
+  时（那几步退化的产物），模型层已按档内 ``FOOTPRINT`` 文档的 ``META.title``
+  反查成名字、原值留在 ``Component.props['footprint_library_id']``
+  （bug98-B；见 ``parsers/schematic.py::_resolve_declared_footprint``）；反查
+  当真成了，这一支的 finding 才消失；**档内查不到**的那种 id 仍是「无从比较」；
 * PCB 侧 = 落到板上的 **FOOTPRINT 文档**：名字取文档 ``META.title``，焊盘取文档里
   的 ``PAD`` 记录按 COMPONENT 位姿实例化后的几何（``parsers/epru.py``）。
 
@@ -171,14 +175,21 @@ NAMELESS_FOOTPRINTS: frozenset[str] = frozenset({"", "-", "null", "none", "n/a",
 
 #: 库件 uuid 的样子：16 / 32 位十六进制，或用 ``_`` 接起来的两段（
 #: ``308cffdb9f930ec1_c4dc0f6ef1616584702a893414cd16c7`` 是实测的螺丝封装 id）。
+#: 与 ``parsers/schematic.py::FOOTPRINT_ID_RE`` 同一个形状；两处分开写是分层
+#: 约束（``rules`` 与 ``parsers`` 都只许 import ``core``），有测试钉住两者同一。
 #:
 #: 它出现在**原理图侧 ``Component.footprint``** 里是模型层的一处噪声：llc 板上
 #: ``C1``/``C2``/``C5``/``C6`` 的 footprint 字段实测值是
 #: ``'0733d61b8033ac9c'``——那是库件 uuid，不是封装名（``parsers/schematic.py``
 #: 在 DEVICE 库件没写 ``Supplier Footprint`` 时退化为实例的 ``Footprint`` 属性，
-#: 而那几个实例的该属性存的是 id）。本规则**不修模型层**，只认出来并如实说
-#: 「这一侧没有封装名可比」——拿它去和 PCB 的名字比对，会拿 uuid 里的十六进制
-#: 片段当尺寸数，报出一堆看着像测量的废话。
+#: 而那几个实例的该属性存的是 id）。
+#:
+#: **模型层已经回退**（bug98-B）：``parsers/schematic.py`` 现在按档内
+#: ``FOOTPRINT`` 文档的 ``META.title`` 把 id 反查成封装名，原值留在
+#: ``Component.props['footprint_library_id']``。所以这一支只剩下**档内查不到**
+#: 的那种 id（没有 FOOTPRINT 文档）——那才是真比不了，如实说「id 无档内映射」，
+#: 顺手说明桥侧该怎么补上（``lib.footprint.get``）。无论哪种情形，本规则都
+#: **不拿 id 里的十六进制片段当尺寸数**：那会报出一堆看着像测量的废话。
 LIBRARY_ID_RE = re.compile(
     r"^(?:[0-9a-fA-F]{16}|[0-9a-fA-F]{32})(?:_(?:[0-9a-fA-F]{16}|[0-9a-fA-F]{32}))*$"
 )
@@ -670,6 +681,13 @@ class FootprintConsistency(PcbRule):
         }
         mpn = str(getattr(sch_component, "mpn", "") or "")
         pcb_pins = footprint.pin_numbers()
+        # 原理图那一侧写的可能是**库件 id**，模型层已按档内 FOOTPRINT 文档的
+        # title 反查成名字（bug98-B）；反查是模型层的动作，规则只是把它说出来，
+        # 让读报告的人知道这个名字不是文件里直接写着的那个。
+        library_id = str(
+            (getattr(sch_component, "props", {}) or {}).get("footprint_library_id")
+            or ""
+        )
         base = [
             f"designator {designator}",
             f"schematic declares footprint {_describe(sch_name)} with "
@@ -684,6 +702,14 @@ class FootprintConsistency(PcbRule):
             f"{footprint.pad_size_line()}"
             + (f"; pad numbers {', '.join(sorted(pcb_pins))}" if pcb_pins else ""),
         ]
+        if library_id and library_id != str(sch_name or "").strip():
+            base.append(
+                f"the schematic's footprint field stores the library id "
+                f"{library_id!r}, not a name — the name above was resolved from "
+                "it by reverse lookup in this archive's own FOOTPRINT documents "
+                "(the raw id is kept on the component as "
+                "Component.props['footprint_library_id'])"
+            )
 
         # 1) 焊盘数——量出来的，先判。封装文档不在备份里（0 个焊盘实例）时不判：
         #    那不是「焊盘数不符」，是「读不出这只封装」，走 INFO（别重复报）。
@@ -732,18 +758,23 @@ class FootprintConsistency(PcbRule):
                 mpn=mpn, detail=reason, evidence=base,
             )
 
-        # 2b) 原理图那一侧写的不是封装名，是个**库件 id**（模型层噪声，见
-        #     LIBRARY_ID_RE）——比不了，说清楚是哪一类的比不了。
+        # 2b) 原理图那一侧写的不是封装名，是个**库件 id**（见 LIBRARY_ID_RE）
+        #     ——比不了，说清楚是哪一类的比不了。走到这里意味着模型层的档内
+        #     反查**也没查到**（查得到的已经在 151b 的回退里变成名字了），
+        #     也就是这份备份里没有那个 id 的 FOOTPRINT 文档：能力边界，不是缺陷。
         if LIBRARY_ID_RE.match(str(sch_name or "").strip()):
             return _Verdict(
                 designator=designator, state=VERDICT_UNDECIDABLE, severity="INFO",
                 sch_name=sch_name, pcb=footprint, sch_pins=len(sch_pins),
                 mpn=mpn, detail=(
                     f"原理图这一侧的 footprint 字段写的是库件 id "
-                    f"{str(sch_name).strip()!r}，不是封装名——模型层在库件没写 "
-                    "Supplier Footprint 时退化为实例的 Footprint 属性，而那几个"
-                    "实例的该属性存的是 id；本规则不拿 id 里的十六进制片段当尺寸"
-                    "数比，如实记成没有可比的对造"
+                    f"{str(sch_name).strip()!r}，不是封装名——库件没写 Supplier "
+                    "Footprint 时模型退化为实例的 Footprint 属性，而那几个实例的"
+                    "该属性存的是 id；本档的 FOOTPRINT 表里查不到这个 id"
+                    "（**id 无档内映射**，或模型未携带档内映射表），反查无从做起。这是一条能力边界而不是"
+                    "缺陷：拿着工程里活着的库走桥的 "
+                    "`lib.footprint.get` 才查得到这个名字。本规则不拿 id 里的"
+                    "十六进制片段当尺寸数比，如实记成没有可比的对造"
                 ),
                 evidence=base,
             )
@@ -906,7 +937,9 @@ class FootprintConsistency(PcbRule):
             ),
             evidence=[
                 "对账口径：原理图 Component.footprint（DEVICE 库件的 "
-                "Supplier Footprint，退化为实例 Footprint 属性）vs PCB "
+                "Supplier Footprint，退化为实例 Footprint 属性；该属性存的是库件 "
+                "id 时由模型层按档内 FOOTPRINT 文档 META.title 反查成名字，见 "
+                "parsers/schematic.py 的 id 回退）vs PCB "
                 "FOOTPRINT 文档 META.title + 实例化焊盘几何",
                 "一致的件不逐个出 finding（122 个器件会刷屏），异常件各有自己的"
                 "finding，各条的数目在这条里对得上",

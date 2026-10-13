@@ -54,6 +54,7 @@ Known v0 limitations, recorded rather than hidden:
 from __future__ import annotations
 
 import math
+import re
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -531,6 +532,77 @@ def _collect_device_meta(records: list[Any]) -> dict[str, dict[str, str]]:
             meta["is_part"] = "yes" if str(attributes.get("Designator") or "").strip() else "no"
         out[uuid] = meta
     return out
+
+
+#: The shape of a **raw library id** where a footprint name belongs: 16 or 32
+#: hex digits, or two such segments joined by ``_`` (a screw footprint id
+#: measured on a real board). Same shape the review rule recognises as
+#: :data:`boardwise.rules.pcb.footprint.LIBRARY_ID_RE`; the two are kept apart
+#: because ``parsers`` may only import ``core`` (``tests/test_layer_rules.py``),
+#: and a test pins that they agree on a shared corpus.
+FOOTPRINT_ID_RE = re.compile(
+    r"^(?:[0-9a-fA-F]{16}|[0-9a-fA-F]{32})(?:_(?:[0-9a-fA-F]{16}|[0-9a-fA-F]{32}))*$"
+)
+
+
+def _collect_footprint_titles(text: str) -> dict[str, str]:
+    """FOOTPRINT document uuid -> its ``META.title`` (the footprint name).
+
+    This is the archive's own ``id -> 封装名`` table, and it is what makes the
+    library-id fallback below possible at all: the schematic's ``Footprint``
+    attribute stores the **library footprint uuid**, and the same ``.epro2``
+    carries the FOOTPRINT document that uuid names — with the footprint's name
+    in its META title. Measured 2026-10-13 across ``tests/fixtures``: all 16
+    placements whose schematic field holds an id resolve this way — 14 of them to
+    the very document the PCB side names, and 2 (``级联多电平-主拓扑``'s
+    ``U1``/``U2``) to a *different* document that carries the same title. So the
+    lookup is a real one: it is not the PCB side echoed back.
+
+    Walks :func:`iter_epru_records` directly rather than the page-filtered
+    :func:`_iter_schematic_records`, which drops FOOTPRINT documents by design.
+    No :class:`ParseStats` is passed, so this second pass counts nothing: the
+    counters belong to the parse that built the model.
+    """
+    titles: dict[str, str] = {}
+    uuid = ""
+    for record in iter_epru_records(text):
+        if record.type == "DOCHEAD":
+            head = record.body or {}
+            uuid = (
+                str(head.get("uuid") or "")
+                if head.get("docType") == "FOOTPRINT" else ""
+            )
+            continue
+        if not uuid or record.type != "META":
+            continue
+        if uuid in titles:
+            continue
+        titles[uuid] = str((record.body or {}).get("title") or "").strip()
+    return titles
+
+
+def _resolve_declared_footprint(
+    value: str, titles: dict[str, str]
+) -> tuple[str, str]:
+    """``(footprint name, raw library id)`` for a declared footprint field.
+
+    When the field holds a library id **and** this archive carries the FOOTPRINT
+    document that id names, the document's title is returned as the name and the
+    id as the second element (the caller keeps it: the raw value must survive,
+    because "the editor wrote an id" and "the editor wrote a name" are two
+    different statements about the file).
+
+    Everything else — a real name, an empty field, an id with no matching
+    document in this archive — comes back unchanged with ``""`` as the id, so a
+    caller cannot mistake "not resolvable" for "resolved".
+    """
+    text = str(value or "").strip()
+    if not text or not FOOTPRINT_ID_RE.match(text):
+        return text, ""
+    title = titles.get(text, "")
+    if title:
+        return title, text
+    return text, ""
 
 
 def _looks_like_a_nameless_part(
@@ -1396,12 +1468,14 @@ def build_project_model(
     split = _split_page(records, stats)
     symbols = _collect_symbols(records, stats, pin_key=_pin_key_for(meta))
     device_meta = _collect_device_meta(records)
+    footprint_titles = _collect_footprint_titles(text)
 
     project = ProjectModel(source=str(path), project_raw={"project": dict(meta)})
     for ref in board_partition(records, project_meta=meta):
         board_model = BoardModel(board=ref)
         _fill_board_model(
-            board_model, _board_slice(split, ref.page_uuids), symbols, device_meta, stats
+            board_model, _board_slice(split, ref.page_uuids), symbols, device_meta,
+            stats, footprint_titles,
         )
         project.boards.append(board_model)
 
@@ -1476,6 +1550,7 @@ def _fill_board_model(
     symbols: dict[str, _SymbolDef],
     device_meta: dict[str, dict[str, str]],
     stats: ParseStats,
+    footprint_titles: dict[str, str],
 ) -> None:
     """Fill one board's model from the records of its own pages (040b §WI-2).
 
@@ -1485,6 +1560,10 @@ def _fill_board_model(
     wire-head-only groups) and the two repeat lists are 040's classification
     computed per board, so "same page", "same board, several pages" and "also on
     another board" are now three different readings instead of one.
+
+    ``footprint_titles`` is the archive's ``FOOTPRINT uuid -> title`` table
+    (:func:`_collect_footprint_titles`); it is consulted only when the declared
+    footprint field holds a library id instead of a name.
     """
     instances, segments = split.instances, split.segments
     loose = [item.body for item in split.loose]
@@ -1521,16 +1600,32 @@ def _fill_board_model(
         # the library. See `resolve_component_identity` for why the empty
         # instance field must not shadow a populated library field.
         fields, provenance = resolve_component_identity(inst.attrs, meta)
+        # The declared footprint, and the library id behind it when the file
+        # stored one instead of a name (bug98-B): the ATTR holds the library
+        # footprint uuid on the placements the DEVICE left a blank Supplier
+        # Footprint for, and this archive carries that uuid's FOOTPRINT
+        # document — so the name is a lookup, not a guess. The raw value is kept
+        # on the component either way.
+        declared_footprint = fields.get("footprint", "") or (
+            inst.attrs.get("Footprint") or ""
+        ).strip()
+        footprint, footprint_library_id = _resolve_declared_footprint(
+            declared_footprint, footprint_titles
+        )
+        if footprint_library_id:
+            provenance.append("footprint=library-id")
         component = Component(
             uid=symbol_uuid or inst.part_id,
             designator=designator,
             value=(inst.attrs.get("Value") or "").strip(),
-            footprint=fields.get("footprint", "") or (inst.attrs.get("Footprint") or "").strip(),
+            footprint=footprint,
             lcsc_part=fields.get("lcsc_part", ""),
             manufacturer=fields.get("manufacturer", ""),
             mpn=fields.get("mpn", ""),
             datasheet=fields.get("datasheet", ""),
         )
+        if footprint_library_id:
+            component.props["footprint_library_id"] = footprint_library_id
         # The library device title (e.g. "CH340G") is what a keyword search
         # resolves when the part has no LCSC number of its own.
         device_name = meta.get("title", "")

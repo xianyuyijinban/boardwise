@@ -576,26 +576,28 @@ def test_the_summary_reconciles_with_the_rows_it_summarises():
             assert f"原理图有而 PCB 没摆 {unplaced} 个" in summary, entry["title"]
 
 
-def test_a_library_id_in_the_schematic_field_is_named_as_such():
-    """llc's schematic side stores a **uuid**, not a footprint name (151's finding).
+def test_a_library_id_in_the_schematic_field_no_longer_reaches_the_rule():
+    """llc's raw id used to be 「无从比较」; **bug98-B resolved it at the model layer**.
 
-    ``llc_board.epro2``'s ``C1``/``C2``/``C5``/``C6`` carry
+    ``llc_board.epro2``'s ``C1``/``C2``/``C5``/``C6`` carried
     ``Component.footprint == '0733d61b8033ac9c'`` — a library id that
-    ``parsers/schematic.py`` writes into the footprint field when the DEVICE has
+    ``parsers/schematic.py`` wrote into the footprint field when the DEVICE has
     no ``Supplier Footprint`` and the instance's own ``Footprint`` attribute
-    holds an id. The rule must not tokenize those hex characters into
-    「尺寸数」 and print a fake measurement; it names the reason instead. This is
-    a **model-layer** observation, recorded here and not fixed in this batch.
+    holds an id. The 151 rule named the reason instead of tokenizing hex into
+    fake 「尺寸数」, and that reading is what this test pinned.
+
+    The model now resolves the id against the archive's own ``FOOTPRINT``
+    documents (``META.title``), keeping the raw id on
+    ``Component.props['footprint_library_id']``, so the rule sees a name and the
+    four rows are gone. The full enumeration of that flip, and the residual
+    「id 无档内映射」 case, live in ``test_151b_footprint_id_fallback.py``.
     """
     path = FIXTURES / "llc_board.epro2"
     findings, section = _run(path)
     rows = _board_rows(section, findings, "PCB1")
-    ids = [
-        row for row in _by_severity(rows, "INFO")
-        if "库件 id" in row.message and "'0733d61b8033ac9c'" in row.message
-    ]
-    assert _targets(ids) == {"C1", "C2", "C5", "C6"}
-    assert all("无从比较" in row.message for row in ids)
+    assert [row for row in rows if "库件 id" in row.message] == []
+    summary = _by_severity(rows, "INFO")[-1].message
+    assert "一致 17" in summary and "无从比较 26" in summary
 
 
 def test_a_context_with_nothing_to_reconcile_says_which_half_is_missing():

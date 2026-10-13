@@ -328,8 +328,11 @@ Ordinary polygon (105 of 106 in the PCB document):
  "polyType":"NORMAL",...}
 ```
 
-- `polyType` is the discriminator: exactly one `BOARD_OUTLINE` per board.
-  **[confirmed on this fixture]**
+- `polyType` is the discriminator: `BOARD_OUTLINE` records name the board frame.
+  **[confirmed on this fixture]** 一处一个的假设已被证伪（bug98）：圆角矩形
+  板框会被编辑器拆成**多段**独立记录（现场板 16 段），解析层按端点拼合成环
+  （`_stitch_outline`），拼不出则 `outline_fragments` 显性计数。
+  **[updated 2026-10-13]**
 - The `NORMAL` polygons on this board mostly have an empty `netName` and sit on
   layers such as 6 (bottom solder mask), so they are **not all copper** — some
   are mask openings / keep-out style shapes. **[inferred]**
@@ -750,7 +753,7 @@ not exist on the fixture.
 | `PAD_NET` triple in the body (§6.4) | `TPadNet`: `componentId` / `padNum` / `padId` | not on the fixture; id tuple instead | **both forms supported** |
 | `PAD_NET.padLen` / `propagationDelay` | required in `TPadNet` | absent | official docs are **newer** than the fixture |
 | `LINE` / `FILL` / `POLY` fields (§6.6–6.8) | `line.md` / `fill.md` / `poly.md` match | match | **confirmed** |
-| `polyType` `BOARD_OUTLINE` (§6.7) | `poly.md` enum includes `BOARD_OUTLINE` | exactly one | **confirmed** |
+| `polyType` `BOARD_OUTLINE` (§6.7) | `poly.md` enum includes `BOARD_OUTLINE` | exactly one per board on this fixture; **can be many** (rounded rect splits into 16 records, bug98) — stitched at parse | **confirmed; updated 2026-10-13** |
 | `POURED.pourFill` path is `board / 10` (§6.9) | type says only `pourFill: TPourFill[]` | every filled point of every parent-linked `POURED` lands inside its parent region (re-measured in `tests/test_135_poured_result.py`) | **confirmed (measured), 135** |
 | `POURED` parent id resolves to a `POUR` (§6.9) | no documented link | 27/51 on 毕设FOC 1.0.0; the rest resolve to nothing | **partly confirmed, 135 — orphans counted, not guessed** |
 | `DEVICE.META` = `TMDevice` (`title` + `attributes`) (§10) | `primitives/DEVICE/meta.md` | 81/81 DEVICE docs match | **confirmed** |

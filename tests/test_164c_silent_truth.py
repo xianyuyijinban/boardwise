@@ -73,7 +73,7 @@ from boardwise.parsers.schematic import build_project_model
 from boardwise.rules.pcb import ipc as ipc_module
 from boardwise.rules.pcb.base import PcbReviewContext
 from boardwise.rules.pcb.derating import DeratingPackage
-from boardwise.rules.pcb.distance import ComponentSpacing, DecapDistance
+from boardwise.rules.pcb.distance import BoardOffEdge, DecapDistance
 from boardwise.rules.pcb.focthermal import FocThermalExitPath, thermal_pad_of
 from boardwise.rules.pcb.ipc import VoltageSpacing, declared_voltages
 from boardwise.rules.pcb.polarity import PolarityOrientation
@@ -764,7 +764,7 @@ def _l_shaped_board(*, pad_x: float, pad_y: float):
         components=[_place("C9", pad_x, pad_y)],
         pads=[_pad("C9", "1", x=pad_x, y=pad_y)],
     )
-    board.outline = BoardOutline(
+    board.outline = BoardOutline(closed=True, 
         points=[
             Point(0.0, 0.0),
             Point(500.0, 0.0),
@@ -788,7 +788,7 @@ def test_a_part_in_an_l_shaped_boards_notch_is_outside_the_board():
     on a board where the part is off the board.
     """
     board = _l_shaped_board(pad_x=220.0, pad_y=220.0)
-    findings = ComponentSpacing().check(_ctx(board))
+    findings = BoardOffEdge().check(_ctx(board))
     errors = [f for f in findings if f.severity == "ERROR"]
     assert len(errors) == 1
     assert errors[0].target.component_ref == "C9"
@@ -807,10 +807,10 @@ def test_a_part_inside_the_l_and_one_touching_its_edge_file_nothing():
     「touching the edge is not over」 is the口径 126b pinned, kept verbatim.
     """
     inside = _l_shaped_board(pad_x=100.0, pad_y=100.0)
-    assert ComponentSpacing().check(_ctx(inside)) == []
+    assert BoardOffEdge().check(_ctx(inside)) == []
 
     touching = _l_shaped_board(pad_x=180.0, pad_y=180.0)
-    assert ComponentSpacing().check(_ctx(touching)) == []
+    assert BoardOffEdge().check(_ctx(touching)) == []
 
 
 def test_a_rectangular_outline_still_measures_the_overhang_it_always_did():
@@ -827,14 +827,14 @@ def test_a_rectangular_outline_still_measures_the_overhang_it_always_did():
         components=[_place("C9", 520.0, 100.0)],
         pads=[_pad("C9", "1", x=520.0, y=100.0)],
     )
-    board.outline = BoardOutline(
+    board.outline = BoardOutline(closed=True, 
         points=[
             Point(0.0, 0.0), Point(500.0, 0.0), Point(500.0, 500.0), Point(0.0, 500.0),
         ],
         source_id="synthetic-rect",
     )
     findings = [
-        f for f in ComponentSpacing().check(_ctx(board)) if f.severity == "ERROR"
+        f for f in BoardOffEdge().check(_ctx(board)) if f.severity == "ERROR"
     ]
     assert len(findings) == 1
     assert findings[0].target.measurement == {

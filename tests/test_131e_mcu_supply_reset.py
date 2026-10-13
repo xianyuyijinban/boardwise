@@ -658,6 +658,7 @@ def test_both_rules_are_in_builtin_pcb_rules_in_the_declared_order():
         "pcb-silk-designator",
         "pcb-derating-package",
         "pcb-component-spacing",
+        "pcb-component-off-board",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
         "pcb-keepout-violation",  # R2-1, appended last

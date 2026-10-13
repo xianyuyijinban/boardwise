@@ -41,7 +41,12 @@ from typing import Any
 from ..core.measure import read_stackup
 from ..rules.pcb.base import PcbReviewContext, PcbRule
 from ..rules.pcb.derating import DeratingPackage
-from ..rules.pcb.distance import ComponentSpacing, DecapDistance
+from ..rules.pcb.distance import (
+    MIN_OUTLINE_CORNERS,
+    BoardOffEdge,
+    ComponentSpacing,
+    DecapDistance,
+)
 from ..rules.pcb.footprint import FootprintConsistency
 from ..rules.pcb.polarity import PolarityOrientation
 from ..rules.pcb.silk import SilkDesignator
@@ -143,6 +148,14 @@ from ..rules.base import SEVERITY_ORDER, Finding
 #: **R2-1 appends ``pcb-keepout-violation``** at the very end: the first reader
 #: of 162b's ``prohibit_regions``, a board-frame sweep like the IPC pair before
 #: it, and independent of every other rule's output.
+#:
+#: **bug98-A inserts ``pcb-component-off-board`` immediately after
+#: ``pcb-component-spacing``**: 126b shipped the board-frame error *inside*
+#: ``pcb-component-spacing``, and bug98-A split the two questions apart so a
+#: board whose own frame did not read can no longer bury the spacing rows under
+#: a hundred identical-looking ERRORs. It sits where it was born (its rows used
+#: to be the spacing rule's ERRORs), so a reader diffing two reports sees the
+#: same rows under a different id and nothing moved position.
 BUILTIN_PCB_RULES: list[PcbRule] = [
     DecapDistance(),
     RegulatorCapDistance(),
@@ -167,6 +180,7 @@ BUILTIN_PCB_RULES: list[PcbRule] = [
     SilkDesignator(),
     DeratingPackage(),
     ComponentSpacing(),
+    BoardOffEdge(),
     TrackAmpacity(),
     VoltageSpacing(),
     KeepoutViolation(),
@@ -313,7 +327,7 @@ def _board_entry(
     key moves.
     """
     info = read_stackup(board)
-    return {
+    entry = {
         "title": title,
         "boardUuid": board_uuid,
         "components": len(board.components),
@@ -325,6 +339,49 @@ def _board_entry(
         # carries that comment where the shift happens.
         "findings": list(finding_indexes),
     }
+    # bug98（岳转的现场报告）：板框读不出来时「出板框」检查是**没跑**，不是
+    # 「全过」——这件事必须长在报告上。圆角矩形拆成 16 段 BOARD_OUTLINE 而
+    # 拼合失败的板，曾经在报告里淹出 98 条假 ERROR（只认了第一段弧）。
+    # 审计 325 又钉了两档：单段**开放**折线（closed=False）同样不许量；
+    # 成了环但有碎段/多余闭环没入环（outline_fragments>0）检查照跑、碎段披露。
+    # 有好板框且无碎段的板不带此键（逐字节不变）。
+    outline = getattr(board, "outline", None)
+    fragments = int(getattr(board, "outline_fragments", 0) or 0)
+    outline_notes: list[str] = []
+    if outline is None:
+        if fragments > 1:
+            outline_notes.append(
+                f"板框由 {fragments} 段 BOARD_OUTLINE 组成且未能拼合成闭环"
+            )
+        else:
+            outline_notes.append("未读出有效板框（无 BOARD_OUTLINE 记录）")
+        outline_notes.append("「出板框」检查未运行（没跑，不是全过）")
+    else:
+        if not outline.closed:
+            outline_notes.append(
+                "板框未闭环（单段开放折线或退化轮廓）——「出板框」检查未运行"
+                "（没跑，不是全过）"
+            )
+        elif len(outline.points) < MIN_OUTLINE_CORNERS:
+            outline_notes.append(
+                f"板框退化（{len(outline.points)} 个角点 < "
+                f"{MIN_OUTLINE_CORNERS:g}，疑似没画完的框）——「出板框」检查未运行"
+                "（没跑，不是全过）"
+            )
+        if fragments:
+            outline_notes.append(
+                f"另有 {fragments} 段板框记录未入环（多余闭环或碎段），"
+                "「出板框」检查按所成闭环照跑"
+            )
+        welds = int(getattr(outline, "tolerance_welds", 0) or 0)
+        if welds:
+            outline_notes.append(
+                f"板框含 {welds} 处容差焊缝（端点非逐字相等）——"
+                "0.5 mil 级面板缝隙可能被误焊，人工核"
+            )
+    if outline_notes:
+        entry["outlineNote"] = "；".join(outline_notes)
+    return entry
 
 
 def _review_units(source_path: str | Path) -> list[tuple[str, str, Any, Any]]:

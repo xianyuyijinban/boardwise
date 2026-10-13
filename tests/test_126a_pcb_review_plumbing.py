@@ -174,6 +174,7 @@ def test_the_builtin_pcb_rule_list_is_the_126b_distance_pair_then_the_126c_pair(
         "pcb-silk-designator",
         "pcb-derating-package",
         "pcb-component-spacing",
+        "pcb-component-off-board",  # bug98-A, the split-out board-frame rule
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
         "pcb-keepout-violation",  # R2-1, appended last
@@ -376,6 +377,7 @@ def test_run_pcb_review_reads_every_pcb_document_of_the_foc_fixture():
             "pcb-silk-designator",
             "pcb-derating-package",
             "pcb-component-spacing",
+            "pcb-component-off-board",  # bug98-A, the split-out board-frame rule
             "pcb-track-ampacity", "pcb-voltage-spacing",
             "pcb-keepout-violation",  # R2-1, appended last
         ]
@@ -1059,9 +1061,15 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # 缺 regionType 的 PROHIBIT 默认文档化）；同批的 plated 哨兵语义修在
     # parsers/+core/，不在本 recipe。行为锚：tests/test_r2_1b_keepout_disclosure.py
     # + test_r2_2b_plated_consumed.py。
+    # **bug98 moved the recursive one** — dad6b777 -> 0f524f9d（含审计 325 修补：closed 护栏消费、焊缝计数、措辞修），direct 仍
+    # `8269e601`（主代理 2026-10-13，现场「98 条出板框误报」修复波）：
+    # `rules/pcb/distance.py` 拆出 `BoardOffEdge`（pcb-component-off-board），
+    # `rules/pcb/__init__.py` 注册；`rules/pcb/footprint.py` 吃库件 id→封装名
+    # 回退（档内 FOOTPRINT 文档 META.title，provenance 记 `footprint=library-id`）。
+    # 行为锚：tests/test_bug98a_outline_stitch.py + test_151b_footprint_id_fallback.py。
     assert recursive != old_digest, "the subpackage is inside the recipe now"
     assert old_digest == "8269e601"
-    assert recursive == "dad6b777", (
+    assert recursive == "0f524f9d", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )
