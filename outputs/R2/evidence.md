@@ -1,6 +1,6 @@
 # R2 证据（v0.5.13 PCB 审查加深）
 
-开发机无立创 EDA Pro：R2-3（丝印真机闭环）**未做**。其余三件离线完成。
+开发机无立创 EDA Pro：本包三件离线完成；R2-3（丝印真机闭环）**已于 2026-10-13 在有编辑器的机器上跑通**（见文末）。
 基线：`fix/rulebody-fingerprint-eol`（PR #77，指纹换行归一）之上；本包依赖 #77 的折行配方重钉指纹。
 
 ## 侦察来源（三件共用）
@@ -53,16 +53,40 @@
 - 任务书偏差：`test_011d` / `test_064` 的 23 钉的是**原理图** `BUILTIN_RULES`，加 PCB 规则不应该动它们，所以没改。PCB 规则的结构钉在 `test_126a` 等 8 个文件的 id 列表或 `checksRun` 里，已逐个补上 `pcb-keepout-violation`。
 - 指纹：recursive `c0a45f39 → f45cfd99`，direct 不动。
 
-## R2-3 丝印真机闭环 — 未做
+## R2-3 丝印真机闭环 — 已跑（2026-10-13，宿主 3.2.186 / connector 0.5.12）
 
-依赖 R1-1 的 `pcb.place_component` 真机通过（PR #78），本机没有编辑器。步骤：
-1. 按 R1 runbook 在 test 工程 PCB1 放一颗 0603；
-2. `boardwise checkup --project test` 跑在线检查，读「丝印读数（实测）」段；
-3. 用 `pcb.geometry` 读位号 ATTR 盒，与 checkup 读数对拍；
-4. 记下离线估算与实测各有多少条，作为对照；
-5. 删件复原。
+**结论：字宽来源是实测（measured），不是估算（estimated）。**
 
-原始读数落 `outputs/R2/live/`。
+流程：按 `outputs/R1/runbook.md` R1-1 在 test 工程 PCB1 放下器件
+（`18994061da7286d2`，LCSC C25804 = 0603 10 kΩ，位号 `R1`）**在板上不动**，跑
+`boardwise checkup --project test --out outputs/R2/live/checkup_silk`，取 `pcb-silk-designator`
+的 finding 原文，再回 runbook 删件复原。
+
+原始读数：`outputs/R2/live/checkup_silk/report.json`、`report.md`、`checkup_silk.log`；
+摘出的两条 finding 另存 `outputs/R2/live/silk_findings.json`。
+
+finding 原文（`report.json` → `findings[]`，`rule_id == "pcb-silk-designator"`，两态那一态）：
+
+> `PCB1 丝印读数：1 个位号记录（显示 1、关掉 0），板上焊盘 2 只、器件本体轮廓 1 个；`
+> `文字宽度：实测（宿主 primitive bbox） 1 个、估算值（字宽比带，非读数） 0 个`
+
+同一条的 evidence 里写着：
+
+> `本板实测 1 个位号、估算 0 个：全部位号都有宿主实测盒，宽度这一项整份报告没有估算数字`
+
+`report.md` 第 10 行的 stage note 与之同口径：`丝印字宽：宿主实测 PCB1 的 1 条位号文字盒
+（pcb.geometry --bboxIds），其余位号按估算值（逐条已标）`。
+
+- **实测 1 / 估算 0**，且那唯一一条实测就是本次放下的 `R1`（板上此刻没有别的器件）。
+- 对拍：checkup 内部走的 `pcb.geometry --bboxIds` 与 R1-1 单独量的是**同一条盒**——R1-1 的
+  `outputs/R1/live/15_bbox.json` 里 ATTR 盒 `[-57.531, 34.008, -16.531, 79.008]`（id
+  `18994061da7286d2e16`，从 PCB 源里的 `ATTR key=Designator` 记录取，与
+  `cli.py:_designator_attr_ids` 同一口径）。
+- 本次 checkup 整体读数：49 条 finding（全 `pcb-` 前缀）、`completion: incomplete`、
+  `exit 1`（40 项 ERROR，全部来自 test 工程自带内容，与本次放置的器件无关）；焦点复位到
+  `5dc38976c1fa45ce`。
+- 复原：R1-1 删件后 `outputs/R1/live/17_after.json` 与 `90_final_pcb_readback.json` 的
+  `componentCount` 均为 0，PCB 源不含该器件 id。
 
 ## 测试计数（R2 分支全量，`-n 8`）
 
