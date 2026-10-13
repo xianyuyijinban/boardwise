@@ -3386,34 +3386,27 @@ async function componentsNear(
   return out;
 }
 
-/**
- * `sch.place_component` — place a library device and name its designator.
- *
- * Resolution order: explicit uuid pair, LCSC part number, keyword search.
- * The search match is *reported* (`resolvedBy`, device name) rather than
- * trusted — a wrong-library hit is exactly the "replaced for library reasons"
- * the acceptance report must list. After `create`, the designator is set on
- * the returned primitive and `done()` commits it; a refused designator is an
- * error, not a warning, because a renamed placement breaks the netlist diff.
- *
- * Since 006b revision 3 the call is **timeout-bounded and self-reporting**,
- * because the measured host timed out on the *first* placement of a session
- * and placed the part anyway — which silently stacked two parts on one spot.
- * On a miss the handler reads the page back and says whether anything landed
- * near the requested point, and the error tells the caller **not to retry**
- * blindly. `timeoutMs` overrides the 30 s default (clamped 200..60000).
- */
-export const schPlaceComponent: ActionHandler = async (params, eda) => {
-  await guardPage(eda, params.pageUuid);
-  const x = toCoord(params.x, 'x');
-  const y = toCoord(params.y, 'y');
-  const rotation = Number.isFinite(Number(params.rotation)) ? Number(params.rotation) : 0;
-  const mirror = params.mirror === true;
-  const designator = typeof params.designator === 'string' ? params.designator.trim() : '';
-  const timeoutMs = Number.isFinite(Number(params.timeoutMs))
-    ? Math.min(Math.max(Number(params.timeoutMs), 200), 60_000)
-    : PLACE_COMPONENT_TIMEOUT_MS;
+/** A library device resolved for a placement, and which rung of the ladder found it. */
+type ResolvedDevice = {
+  device: { uuid: string; libraryUuid: string; name: string };
+  resolvedBy: string;
+};
 
+/**
+ * Resolve the library device a placement names: explicit uuid pair, LCSC part
+ * number, keyword search — in that order.
+ *
+ * Moved out of `sch.place_component` verbatim (R1-1) so `pcb.place_component`
+ * walks the **same** ladder: two placement actions that could resolve one
+ * request to two different parts would put a different footprint on the board
+ * than the symbol on the page. The search match is *reported* (`resolvedBy`,
+ * device name) rather than trusted, and every miss names the rung that missed.
+ */
+async function resolvePlacementDevice(
+  params: Record<string, unknown>,
+  eda: Eda,
+  action: string,
+): Promise<ResolvedDevice> {
   const deviceLib = namespaceOf(eda, 'lib_Device');
   let device: { uuid: string; libraryUuid: string; name: string } | undefined;
   let resolvedBy = '';
@@ -3488,7 +3481,7 @@ export const schPlaceComponent: ActionHandler = async (params, eda) => {
   if (!device) {
     throw new ActionError(
       'BAD_REQUEST',
-      'sch.place_component needs one of lcsc / deviceUuid+libraryUuid / keyword',
+      `${action} needs one of lcsc / deviceUuid+libraryUuid / keyword`,
     );
   }
   if (!device.uuid || !device.libraryUuid) {
@@ -3498,6 +3491,38 @@ export const schPlaceComponent: ActionHandler = async (params, eda) => {
       { device },
     );
   }
+  return { device, resolvedBy };
+}
+
+/**
+ * `sch.place_component` — place a library device and name its designator.
+ *
+ * Resolution order: explicit uuid pair, LCSC part number, keyword search.
+ * The search match is *reported* (`resolvedBy`, device name) rather than
+ * trusted — a wrong-library hit is exactly the "replaced for library reasons"
+ * the acceptance report must list. After `create`, the designator is set on
+ * the returned primitive and `done()` commits it; a refused designator is an
+ * error, not a warning, because a renamed placement breaks the netlist diff.
+ *
+ * Since 006b revision 3 the call is **timeout-bounded and self-reporting**,
+ * because the measured host timed out on the *first* placement of a session
+ * and placed the part anyway — which silently stacked two parts on one spot.
+ * On a miss the handler reads the page back and says whether anything landed
+ * near the requested point, and the error tells the caller **not to retry**
+ * blindly. `timeoutMs` overrides the 30 s default (clamped 200..60000).
+ */
+export const schPlaceComponent: ActionHandler = async (params, eda) => {
+  await guardPage(eda, params.pageUuid);
+  const x = toCoord(params.x, 'x');
+  const y = toCoord(params.y, 'y');
+  const rotation = Number.isFinite(Number(params.rotation)) ? Number(params.rotation) : 0;
+  const mirror = params.mirror === true;
+  const designator = typeof params.designator === 'string' ? params.designator.trim() : '';
+  const timeoutMs = Number.isFinite(Number(params.timeoutMs))
+    ? Math.min(Math.max(Number(params.timeoutMs), 200), 60_000)
+    : PLACE_COMPONENT_TIMEOUT_MS;
+
+  const { device, resolvedBy } = await resolvePlacementDevice(params, eda, 'sch.place_component');
 
   let created: any;
   let failure = '';
@@ -3581,6 +3606,167 @@ export const schPlaceComponent: ActionHandler = async (params, eda) => {
     uuid: uuid == null ? null : String(uuid),
     device,
     resolvedBy,
+    elapsedMs,
+  };
+};
+
+/** The two copper sides a component can sit on, as the wire spells them and as the host numbers them. */
+const PCB_COMPONENT_LAYERS: Record<string, number> = { top: 1, bottom: 2 };
+
+/**
+ * Every component id on the focused board, or `null` when the board cannot be
+ * enumerated. A `null` is reported as "unknown" by the caller — never as "no
+ * new component appeared", which would be a reading nobody took.
+ */
+async function pcbComponentIds(eda: Eda): Promise<Set<string> | null> {
+  try {
+    const ids = await settle(requireFn(eda, 'pcb_PrimitiveComponent.getAllPrimitiveId')());
+    return Array.isArray(ids) ? new Set(ids.map((id) => String(id))) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A `getState_*` reading as a plain scalar, or `null` when the host gave none. */
+async function scalarState(obj: any, name: string): Promise<string | number | boolean | null> {
+  const value = await getState(obj, name);
+  return isScalar(value) ? value : null;
+}
+
+/**
+ * `pcb.place_component` — put a library device's footprint on the focused PCB (R1-1).
+ *
+ * The gap it closes: the bridge could read a board (`pcb.readback`,
+ * `pcb.geometry`) and move or delete what was on it, but never put anything
+ * there — so a live check that needs an object on the board (172's measured
+ * silk width) had nothing to measure on the empty test board, and a PCB-side
+ * draw flow had nowhere to start.
+ *
+ * Host call: `pcb_PrimitiveComponent.create(component, layer, x, y, rotation,
+ * primitiveLock)`, declared `@beta` in the type package. Declared is not
+ * implemented (`sch_ManufactureData.getPngFile` taught that): whether the
+ * calibrated host carries it is a live reading kept in `outputs/R1/`, not an
+ * assumption made here, and a host without it answers `NOT_IMPLEMENTED` by name.
+ *
+ * Where it deliberately differs from `sch.place_component`:
+ *
+ * - **`pageUuid` is required**, and must be the focused PCB (`guardPcb`, the
+ *   guard `pcb.delete_primitives` / `pcb.modify_primitive` already use). The
+ *   host places onto whatever board is in front; an unguarded PCB write is the
+ *   one shape this action never has.
+ * - The device goes to the host as the bare `{libraryUuid, uuid}` pair — the
+ *   declaration's first union member — so the host picks the device's own
+ *   footprint. The schematic call's `libraryType: 'Device'` spelling is not
+ *   carried over: it was measured for `sch_PrimitiveComponent`, not here.
+ * - A miss is told apart — the host timed out (`TIMEOUT`), threw, or answered
+ *   nothing (`CONNECTOR_ERROR`) — and every miss reads back whether a component
+ *   **appeared on the board** by diffing the board's component ids from before
+ *   the call with after it. Proximity, the schematic action's test, would count
+ *   a part that was already sitting near the point as a landing.
+ * - `primitiveLock` is always `false`: a placement should not leave behind a
+ *   part the user has to unlock before moving it.
+ * - No `designator`: the host assigns one. This action places; it does not
+ *   rename.
+ *
+ * Coordinates are canvas units (mil on a PCB). The answer echoes what was
+ * asked (`requested`) next to what the returned primitive reports (`placed`,
+ * fields `null` when the host does not say) and the board-level diff
+ * (`appeared`, `null` when the board could not be enumerated), so a caller can
+ * check the placement without trusting it.
+ */
+export const pcbPlaceComponent: ActionHandler = async (params, eda) => {
+  const pageUuid = typeof params.pageUuid === 'string' ? params.pageUuid.trim() : '';
+  if (!pageUuid) {
+    throw new ActionError(
+      'BAD_REQUEST',
+      'pcb.place_component needs params.pageUuid — the uuid of the PCB it may write to '
+        + '(doc.list lists it). The host places onto whatever board is focused, so this '
+        + 'write is never unguarded',
+    );
+  }
+  await guardPcb(eda, pageUuid);
+  const x = toCoord(params.x, 'x');
+  const y = toCoord(params.y, 'y');
+  const rotation = params.rotation === undefined ? 0 : Number(params.rotation);
+  if (!Number.isFinite(rotation)) {
+    throw new ActionError('BAD_REQUEST', 'params.rotation must be a finite number of degrees');
+  }
+  const layerName = params.layer === undefined
+    ? 'top'
+    : String(params.layer).trim().toLowerCase();
+  const layer = PCB_COMPONENT_LAYERS[layerName];
+  if (layer === undefined) {
+    throw new ActionError(
+      'BAD_REQUEST',
+      `params.layer must be 'top' or 'bottom' (got ${JSON.stringify(params.layer)})`,
+    );
+  }
+  const timeoutMs = Number.isFinite(Number(params.timeoutMs))
+    ? Math.min(Math.max(Number(params.timeoutMs), 200), 60_000)
+    : PLACE_COMPONENT_TIMEOUT_MS;
+
+  const { device, resolvedBy } = await resolvePlacementDevice(params, eda, 'pcb.place_component');
+  const create = requireFn(eda, 'pcb_PrimitiveComponent.create');
+  const requested = { x, y, rotation, layer: layerName };
+
+  const before = await pcbComponentIds(eda);
+  let created: any;
+  let failure: { code: 'TIMEOUT' | 'CONNECTOR_ERROR'; what: string } | null = null;
+  const started = Date.now();
+  try {
+    created = await raceHostCall(
+      settle(create({ libraryUuid: device.libraryUuid, uuid: device.uuid }, layer, x, y, rotation, false)),
+      'pcb_PrimitiveComponent.create',
+      timeoutMs,
+    );
+    if (!created) failure = { code: 'CONNECTOR_ERROR', what: `answered ${String(created)}` };
+  } catch (error) {
+    failure = isActionError(error) && error.code === 'TIMEOUT'
+      ? { code: 'TIMEOUT', what: `did not settle within ${timeoutMs} ms` }
+      : { code: 'CONNECTOR_ERROR', what: `threw: ${String((error as Error)?.message ?? error)}` };
+  }
+  const elapsedMs = Date.now() - started;
+  const after = before === null ? null : await pcbComponentIds(eda);
+  const appeared = before !== null && after !== null
+    ? [...after].filter((id) => !before.has(id))
+    : null;
+
+  if (failure) {
+    const readback = appeared === null
+      ? "the board's component ids could not be read before and after the call, so whether "
+        + 'anything landed is UNKNOWN — look at the board before retrying'
+      : appeared.length
+        ? `${appeared.length} new component(s) DID appear on the board [${appeared.join(', ')}] — `
+          + 'at least one placement landed, do NOT retry'
+        : 'no new component appeared on the board — nothing landed';
+    throw new ActionError(
+      failure.code,
+      `pcb_PrimitiveComponent.create ${failure.what} (elapsed ${elapsedMs} ms); readback: ${readback}`,
+      {
+        device,
+        requested,
+        elapsedMs,
+        timeoutMs,
+        landedAnyway: appeared === null ? null : appeared.length > 0,
+        appeared,
+      },
+    );
+  }
+
+  const uuid = await getState(created, 'PrimitiveId');
+  return {
+    uuid: uuid == null ? null : String(uuid),
+    device,
+    resolvedBy,
+    requested,
+    placed: {
+      x: await scalarState(created, 'X'),
+      y: await scalarState(created, 'Y'),
+      rotation: await scalarState(created, 'Rotation'),
+      layer: await scalarState(created, 'Layer'),
+      designator: await scalarState(created, 'Designator'),
+    },
+    appeared,
     elapsedMs,
   };
 };
@@ -6857,10 +7043,12 @@ export const sysGetDocumentSource: ActionHandler = async (params, eda) => {
   // "which document is active", so this guard and `doc.list` can never disagree
   // about the fact they are both reporting.
   const requested = typeof params?.uuid === 'string' ? params.uuid.trim() : '';
+  // R1-2: "which document is this?" is read on every call now, not only when the
+  // caller named one — the answer carries it (`uuid` / `name` / `type`).
+  const problems: string[] = [];
+  const active = await activeDocument(eda, problems);
+  const activeUuid = active?.uuid ?? null;
   if (requested) {
-    const problems: string[] = [];
-    const active = await activeDocument(eda, problems);
-    const activeUuid = active?.uuid ?? null;
     if (activeUuid !== requested) {
       throw new ActionError(
         'DOC_NOT_ACTIVE',
@@ -6905,11 +7093,13 @@ export const sysGetDocumentSource: ActionHandler = async (params, eda) => {
       { path: PATH, kind: source === undefined ? 'undefined' : typeof source },
     );
   }
+  const identity = await sourceIdentity(eda, active, problems);
   const chars = source.length;
   const truncated = chars > maxChars;
   const data = truncated ? source.slice(0, maxChars) : source;
   return {
     source: PATH,
+    ...identity,
     chars,
     maxChars,
     truncated,
@@ -6923,8 +7113,52 @@ export const sysGetDocumentSource: ActionHandler = async (params, eda) => {
         }
       : {}),
     ...(chars === 0 ? { note: 'the host returned an empty string' } : {}),
+    ...(problems.length ? { notes: problems } : {}),
   };
 };
+
+/**
+ * The identity `sys.get_document_source` answers with (R1-2): the active
+ * document's `uuid` / `name` / `type`, in `doc.list`'s spelling.
+ *
+ * The host read takes no arguments and reads whatever is active, so before
+ * 0.5.12 a caller that omitted `uuid` got a source with no name on it and no
+ * way to check it was the document it meant. The identity is read **before**
+ * the host call (`active`) and the focus is read again **after** it: if the
+ * active document changed in between, the text may belong to either, so all
+ * three fields are `null` and `notes` says why — an identity that might be the
+ * wrong one is worse than none. The name comes from the same listing
+ * `doc.list` builds (`collectDocumentRows`), so the two cannot spell one
+ * document two ways; a document that listing does not hold has `name: null`
+ * and a note, never a guessed name.
+ */
+async function sourceIdentity(
+  eda: Eda,
+  active: ActiveDocumentReading | null,
+  problems: string[],
+): Promise<{ uuid: string | null; name: string | null; type: string | null }> {
+  const unknown = { uuid: null, name: null, type: null };
+  if (!active) {
+    problems.push('identity: no active document could be read, so the source is not named');
+    return unknown;
+  }
+  const afterRead = await activeDocument(eda, []);
+  if (afterRead?.uuid !== active.uuid) {
+    problems.push(
+      `identity: the active document changed during the read (${active.uuid} before, `
+        + `${afterRead?.uuid ?? '(none)'} after) — the source may belong to either, so it is not named`,
+    );
+    return unknown;
+  }
+  const rows = await collectDocumentRows(eda, problems, active.uuid);
+  const row = rows.find((candidate) => candidate.uuid === active.uuid);
+  if (!row) {
+    problems.push(
+      `identity: ${active.uuid} is not in the open project's document listing, so its name is unknown`,
+    );
+  }
+  return { uuid: active.uuid, name: row ? row.name : null, type: active.type };
+}
 
 /** The three arguments both DRC checks take, with this project's defaults. */
 function drcArgs(params: Record<string, unknown>): {
@@ -8110,6 +8344,9 @@ export function buildHandlers(eda: Eda): Record<string, BoundHandler> {
     'sch.doc.new': bind(schDocNew),
     'sch.doc.save': bind(schDocSave),
     'sch.place_component': bind(schPlaceComponent),
+    // R1-1: the PCB twin — a footprint onto the focused board, guarded and
+    // diff-read-back on a miss. Write; `pageUuid` is required.
+    'pcb.place_component': bind(pcbPlaceComponent),
     'sch.place_wire': bind(schPlaceWire),
     'sch.place_netlabel': bind(schPlaceNetlabel),
     'sch.place_text': bind(schPlaceText),

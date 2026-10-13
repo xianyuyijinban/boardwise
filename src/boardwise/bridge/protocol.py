@@ -388,11 +388,15 @@ ACTIONS: tuple[Action, ...] = (
             "**active** document and nothing else — asking for any other uuid is "
             "`DOC_NOT_ACTIVE` (open it with `doc.open` first), never a silent return "
             "of the wrong document's source (179, the hole 178b's probe filed). Omitting `uuid` reads "
-            "whatever is active."
+            "whatever is active. Every answer names the document it read (R1-2): "
+            "`uuid` / `name` / `type` as the project's document listing spells "
+            "them, or all three null with a `notes` line when the focus moved "
+            "during the read."
         ),
         params=("maxChars", "uuid"),
         returns=(
-            "{source, chars, maxChars, truncated, data, headLines, tail?, note?}"
+            "{source, uuid, name, type, chars, maxChars, truncated, data, headLines, "
+            "tail?, note?, notes?}"
         ),
         params_schema=(
             "maxChars: 256..4000000 (default 65536); `data` is the head, `tail` "
@@ -916,6 +920,32 @@ ACTIONS: tuple[Action, ...] = (
         params_schema="at least one of x / y / rotation / mirror",
         risk="write",
     ),
+    # --- R1-1: put a footprint on a board ------------------------------------
+    Action(
+        name="pcb.place_component",
+        summary=(
+            "Place a library device's footprint on the focused PCB (R1-1) — the "
+            "PCB twin of sch.place_component, same resolution ladder (uuid pair / "
+            "LCSC / keyword). `pageUuid` is required and must be the focused PCB. "
+            "Timeout-bounded; a miss diffs the board's component ids before and "
+            "after the call, so 'did anything land' is read, not guessed."
+        ),
+        params=(
+            "pageUuid", "lcsc", "deviceUuid", "libraryUuid", "keyword", "x", "y",
+            "rotation", "layer", "timeoutMs",
+        ),
+        returns=(
+            "{uuid, device: {uuid, libraryUuid, name}, resolvedBy, "
+            "requested: {x, y, rotation, layer}, "
+            "placed: {x, y, rotation, layer, designator}, appeared, elapsedMs}"
+        ),
+        params_schema=(
+            "pageUuid: required, the focused PCB's uuid (doc.list); layer: 'top' "
+            "(default) | 'bottom'; x/y in canvas units (mil); timeoutMs: override "
+            "the 30 s placement deadline (200..60000, clamped)"
+        ),
+        risk="write",
+    ),
     # --- 012 §五: multi-project awareness ------------------------------------
     Action(
         name="doc.focus",
@@ -1431,7 +1461,7 @@ def timeout_for(action: str) -> float:
     # A placement resolves the library on first use; the connector bounds the
     # call itself (30 s default) and reads back on a miss, so the daemon's
     # budget must outlast that readback for its answer to reach the caller.
-    if action == "sch.place_component":
+    if action in ("sch.place_component", "pcb.place_component"):
         return PLACEMENT_TIMEOUT
     # 012 measured 2026-09-21: a schematic delete costs ~3.7 s per primitive
     # (the editor re-solves the page each time), so the 17-part cleanup ran
