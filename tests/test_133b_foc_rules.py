@@ -191,6 +191,7 @@ def test_the_five_foc_rules_sit_between_the_mcu_block_and_the_geometry_sweep():
         "pcb-component-spacing",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
+        "pcb-keepout-violation",  # R2-1, appended last
     ]
     assert all(isinstance(rule, PcbRule) for rule in BUILTIN_PCB_RULES)
     ids = [rule.id for rule in BUILTIN_PCB_RULES]

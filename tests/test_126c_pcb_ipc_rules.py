@@ -394,6 +394,7 @@ def test_both_rules_are_in_the_builtin_list_in_the_declared_order():
         "pcb-component-spacing",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
+        "pcb-keepout-violation",  # R2-1, appended last
     ]
 
 
@@ -1520,6 +1521,8 @@ def test_llc_prices_no_rail_and_declares_no_current_so_both_rules_are_silent():
         (f.rule_id, f.message) for f in findings if f.rule_id in ipc_ids
     ]
     assert section is not None
-    assert section["boards"][0]["checksRun"][-2:] == [
-        "pcb-track-ampacity", "pcb-voltage-spacing",
+    # R2-1 appended `pcb-keepout-violation` after the IPC pair; the pair is
+    # still the last two rules before it.
+    assert section["boards"][0]["checksRun"][-3:] == [
+        "pcb-track-ampacity", "pcb-voltage-spacing", "pcb-keepout-violation",
     ]

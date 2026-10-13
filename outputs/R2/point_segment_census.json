@@ -1,0 +1,498 @@
+{
+  "per_function": {
+    "core._point_segment_distance": {
+      "calls": 6523834,
+      "exactly_degenerate": 18521,
+      "in_band_0_to_1e-18": 36,
+      "bitwise_diff": 24
+    },
+    "focthermal._point_segment_distance": {
+      "calls": 8256,
+      "exactly_degenerate": 960,
+      "in_band_0_to_1e-18": 8,
+      "bitwise_diff": 8
+    },
+    "distance._point_segment_mil": {
+      "calls": 48304
+    }
+  },
+  "per_fixture": {
+    "ch340_golden.epro2": {
+      "findings": 0,
+      "calls": {
+        "core._point_segment_distance": 0,
+        "focthermal._point_segment_distance": 0,
+        "distance._point_segment_mil": 0
+      },
+      "rules_errored": []
+    },
+    "DCDC-12V9V转5V3V3_2026-09-27.epro2": {
+      "findings": 55,
+      "calls": {
+        "core._point_segment_distance": 179003,
+        "focthermal._point_segment_distance": 0,
+        "distance._point_segment_mil": 3872
+      },
+      "rules_errored": []
+    },
+    "FPC触屏游戏机_2026-09-27.epro2": {
+      "findings": 50,
+      "calls": {
+        "core._point_segment_distance": 458039,
+        "focthermal._point_segment_distance": 0,
+        "distance._point_segment_mil": 4048
+      },
+      "rules_errored": []
+    },
+    "llc_board.epro2": {
+      "findings": 59,
+      "calls": {
+        "core._point_segment_distance": 161728,
+        "focthermal._point_segment_distance": 0,
+        "distance._point_segment_mil": 1872
+      },
+      "rules_errored": []
+    },
+    "ProPrj_CH340G_2026-09-13.epro2": {
+      "findings": 0,
+      "calls": {
+        "core._point_segment_distance": 0,
+        "focthermal._point_segment_distance": 0,
+        "distance._point_segment_mil": 0
+      },
+      "rules_errored": []
+    },
+    "ProPrj_ROBOT ctrl FOC_2026-09-16.epro2": {
+      "findings": 59,
+      "calls": {
+        "core._point_segment_distance": 327743,
+        "focthermal._point_segment_distance": 6377,
+        "distance._point_segment_mil": 0
+      },
+      "rules_errored": []
+    },
+    "ProPrj_智能药箱_2026-09-17.epro2": {
+      "findings": 40,
+      "calls": {
+        "core._point_segment_distance": 254068,
+        "focthermal._point_segment_distance": 0,
+        "distance._point_segment_mil": 3248
+      },
+      "rules_errored": []
+    },
+    "ProPrj_毕设FOC驱动板_2026-09-17.epro2": {
+      "findings": 179,
+      "calls": {
+        "core._point_segment_distance": 1404883,
+        "focthermal._point_segment_distance": 433,
+        "distance._point_segment_mil": 8880
+      },
+      "rules_errored": []
+    },
+    "ProPrj_毕设FOC驱动板_v1.0.0_2026-10-07.epro2": {
+      "findings": 132,
+      "calls": {
+        "core._point_segment_distance": 1460691,
+        "focthermal._point_segment_distance": 569,
+        "distance._point_segment_mil": 7808
+      },
+      "rules_errored": []
+    },
+    "ProPrj_高速电机控制器_2026-09-16.epro2": {
+      "findings": 145,
+      "calls": {
+        "core._point_segment_distance": 1551222,
+        "focthermal._point_segment_distance": 877,
+        "distance._point_segment_mil": 9808
+      },
+      "rules_errored": []
+    },
+    "毕设滤波采样_2026-09-27.epro2": {
+      "findings": 31,
+      "calls": {
+        "core._point_segment_distance": 220416,
+        "focthermal._point_segment_distance": 0,
+        "distance._point_segment_mil": 2208
+      },
+      "rules_errored": []
+    },
+    "级联多电平-主拓扑_2026-09-27.epro2": {
+      "findings": 79,
+      "calls": {
+        "core._point_segment_distance": 279744,
+        "focthermal._point_segment_distance": 0,
+        "distance._point_segment_mil": 2544
+      },
+      "rules_errored": []
+    },
+    "级联多电平-驱动模块_2026-09-27.epro2": {
+      "findings": 24,
+      "calls": {
+        "core._point_segment_distance": 145958,
+        "focthermal._point_segment_distance": 0,
+        "distance._point_segment_mil": 2016
+      },
+      "rules_errored": []
+    },
+    "超声波_2026-09-27.epro2": {
+      "findings": 28,
+      "calls": {
+        "core._point_segment_distance": 80339,
+        "focthermal._point_segment_distance": 0,
+        "distance._point_segment_mil": 2000
+      },
+      "rules_errored": []
+    }
+  },
+  "examples_of_real_diffs": [
+    {
+      "fn": "core._point_segment_distance",
+      "p": [
+        -627.0817,
+        293.9683
+      ],
+      "a": [
+        558.9420924736834,
+        -608.028514270865
+      ],
+      "b": [
+        558.9420924736833,
+        -608.0285142708649
+      ],
+      "exact_zero": 1490.0505660105791,
+      "length_sq": 1490.0505660105796
+    },
+    {
+      "fn": "core._point_segment_distance",
+      "p": [
+        -627.0817,
+        455.3863
+      ],
+      "a": [
+        558.9420924736834,
+        -608.028514270865
+      ],
+      "b": [
+        558.9420924736833,
+        -608.0285142708649
+      ],
+      "exact_zero": 1592.9543319017016,
+      "length_sq": 1592.9543319017018
+    },
+    {
+      "fn": "core._point_segment_distance",
+      "p": [
+        -627.0817,
+        293.9683
+      ],
+      "a": [
+        558.9420924736834,
+        -608.028514270865
+      ],
+      "b": [
+        558.9420924736833,
+        -608.0285142708649
+      ],
+      "exact_zero": 1490.0505660105791,
+      "length_sq": 1490.0505660105796
+    },
+    {
+      "fn": "core._point_segment_distance",
+      "p": [
+        -627.0817,
+        455.3863
+      ],
+      "a": [
+        558.9420924736834,
+        -608.028514270865
+      ],
+      "b": [
+        558.9420924736833,
+        -608.0285142708649
+      ],
+      "exact_zero": 1592.9543319017016,
+      "length_sq": 1592.9543319017018
+    },
+    {
+      "fn": "core._point_segment_distance",
+      "p": [
+        -627.0817,
+        293.9683
+      ],
+      "a": [
+        558.9420924736834,
+        -608.028514270865
+      ],
+      "b": [
+        558.9420924736833,
+        -608.0285142708649
+      ],
+      "exact_zero": 1490.0505660105791,
+      "length_sq": 1490.0505660105796
+    },
+    {
+      "fn": "core._point_segment_distance",
+      "p": [
+        -627.0817,
+        455.3863
+      ],
+      "a": [
+        558.9420924736834,
+        -608.028514270865
+      ],
+      "b": [
+        558.9420924736833,
+        -608.0285142708649
+      ],
+      "exact_zero": 1592.9543319017016,
+      "length_sq": 1592.9543319017018
+    },
+    {
+      "fn": "core._point_segment_distance",
+      "p": [
+        -627.0817,
+        293.9683
+      ],
+      "a": [
+        558.9420924736834,
+        -608.028514270865
+      ],
+      "b": [
+        558.9420924736833,
+        -608.0285142708649
+      ],
+      "exact_zero": 1490.0505660105791,
+      "length_sq": 1490.0505660105796
+    },
+    {
+      "fn": "core._point_segment_distance",
+      "p": [
+        -627.0817,
+        455.3863
+      ],
+      "a": [
+        558.9420924736834,
+        -608.028514270865
+      ],
+      "b": [
+        558.9420924736833,
+        -608.0285142708649
+      ],
+      "exact_zero": 1592.9543319017016,
+      "length_sq": 1592.9543319017018
+    },
+    {
+      "fn": "core._point_segment_distance",
+      "p": [
+        70.41768464986693,
+        -379.57524428232125
+      ],
+      "a": [
+        558.9420924736834,
+        -608.028514270865
+      ],
+      "b": [
+        558.9420924736833,
+        -608.0285142708649
+      ],
+      "exact_zero": 539.3023211595411,
+      "length_sq": 539.3023211595413
+    },
+    {
+      "fn": "focthermal._point_segment_distance",
+      "p": [
+        243.0182072968161,
+        -130.4176846498669
+      ],
+      "a": [
+        558.9420924736834,
+        -608.028514270865
+      ],
+      "b": [
+        558.9420924736833,
+        -608.0285142708649
+      ],
+      "exact_zero": 572.6430003034214,
+      "length_sq": 572.6430003034216
+    },
+    {
+      "fn": "focthermal._point_segment_distance",
+      "p": [
+        70.41768464986693,
+        -303.01820729681606
+      ],
+      "a": [
+        558.9420924736834,
+        -608.028514270865
+      ],
+      "b": [
+        558.9420924736833,
+        -608.0285142708649
+      ],
+      "exact_zero": 575.9230715989887,
+      "length_sq": 575.9230715989889
+    },
+    {
+      "fn": "focthermal._point_segment_distance",
+      "p": [
+        70.41768464986693,
+        -303.01820729681606
+      ],
+      "a": [
+        558.9420924736834,
+        -608.028514270865
+      ],
+      "b": [
+        558.9420924736833,
+        -608.0285142708649
+      ],
+      "exact_zero": 575.9230715989887,
+      "length_sq": 575.9230715989889
+    },
+    {
+      "fn": "focthermal._point_segment_distance",
+      "p": [
+        146.97472163537208,
+        -379.57524428232125
+      ],
+      "a": [
+        558.9420924736834,
+        -608.028514270865
+      ],
+      "b": [
+        558.9420924736833,
+        -608.0285142708649
+      ],
+      "exact_zero": 471.0711317878533,
+      "length_sq": 471.0711317878534
+    },
+    {
+      "fn": "focthermal._point_segment_distance",
+      "p": [
+        146.97472163537208,
+        -379.57524428232125
+      ],
+      "a": [
+        558.9420924736834,
+        -608.028514270865
+      ],
+      "b": [
+        558.9420924736833,
+        -608.0285142708649
+      ],
+      "exact_zero": 471.0711317878533,
+      "length_sq": 471.0711317878534
+    },
+    {
+      "fn": "focthermal._point_segment_distance",
+      "p": [
+        319.57524428232125,
+        -206.97472163537205
+      ],
+      "a": [
+        558.9420924736834,
+        -608.028514270865
+      ],
+      "b": [
+        558.9420924736833,
+        -608.0285142708649
+      ],
+      "exact_zero": 467.05527788515514,
+      "length_sq": 467.05527788515525
+    },
+    {
+      "fn": "focthermal._point_segment_distance",
+      "p": [
+        319.57524428232125,
+        -206.97472163537205
+      ],
+      "a": [
+        558.9420924736834,
+        -608.028514270865
+      ],
+      "b": [
+        558.9420924736833,
+        -608.0285142708649
+      ],
+      "exact_zero": 467.05527788515514,
+      "length_sq": 467.05527788515525
+    },
+    {
+      "fn": "focthermal._point_segment_distance",
+      "p": [
+        243.0182072968161,
+        -130.4176846498669
+      ],
+      "a": [
+        558.9420924736834,
+        -608.028514270865
+      ],
+      "b": [
+        558.9420924736833,
+        -608.0285142708649
+      ],
+      "exact_zero": 572.6430003034214,
+      "length_sq": 572.6430003034216
+    },
+    {
+      "fn": "core._point_segment_distance",
+      "p": [
+        243.0182072968161,
+        -130.4176846498669
+      ],
+      "a": [
+        558.9420924736834,
+        -608.028514270865
+      ],
+      "b": [
+        558.9420924736833,
+        -608.0285142708649
+      ],
+      "exact_zero": 572.6430003034214,
+      "length_sq": 572.6430003034216
+    },
+    {
+      "fn": "core._point_segment_distance",
+      "p": [
+        923.7421,
+        -1605.9759
+      ],
+      "a": [
+        160.23700000000002,
+        -2775.1510000000003
+      ],
+      "b": [
+        160.23700000000002,
+        -2775.151
+      ],
+      "exact_zero": 1396.3919407480194,
+      "length_sq": 1396.3919407480198
+    },
+    {
+      "fn": "core._point_segment_distance",
+      "p": [
+        973.46,
+        -1638.264
+      ],
+      "a": [
+        160.23700000000002,
+        -2775.1510000000003
+      ],
+      "b": [
+        160.23700000000002,
+        -2775.151
+      ],
+      "exact_zero": 1397.7995916790073,
+      "length_sq": 1397.7995916790078
+    }
+  ],
+  "synthetic_band_1e-12_to_1e-6_mil": {
+    "cases": 5000,
+    "bitwise_diff": 1231,
+    "max_abs_diff_mil": 9.680363177722029e-10
+  },
+  "underflow_case_dx_1e-170": {
+    "exact_zero_guard": "ZeroDivisionError: float division by zero",
+    "length_sq_guard": 1.4142135623730951
+  }
+}

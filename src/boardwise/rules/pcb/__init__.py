@@ -54,6 +54,11 @@ Layout of the package as the batches land:
   power. The series split is the half 岳 named as a false-positive risk: the
   rule recognises the string first so the whole string's voltage is never
   booked against one part. It is the first PCB rule at ``L2-facts``.
+* ``keepout`` — 禁布区侵入 (R2-1): the first reader of 162b's ``REGION``
+  keepouts. What each ``prohibitType`` word forbids, and on which layer, is the
+  editor's own reading (3.2.186's DRC), and a pour is judged as its outline
+  **minus its voids** (``PourShape.rings``), which is what keeps the one fixture
+  board with keepouts clean.
 
 The package is importable from the start; ``BUILTIN_PCB_RULES`` was **empty**
 in 126a and its structure gate (the test that says "the list is the truth") is

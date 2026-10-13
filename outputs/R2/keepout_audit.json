@@ -1,0 +1,272 @@
+{
+ "ProPrj_高速电机控制器_2026-09-16.epro2::PCB2": [
+  {
+   "region": "528d5108078ee52a",
+   "layer": 1,
+   "words": [
+    "COPPER"
+   ],
+   "unknown": [],
+   "circle_r": 148.8307,
+   "eroded_r": 148.7307,
+   "pours_touching_by_any_reading": [
+    {
+     "pour": "[\"POURED\",\"aeb890a37d4af099\"]",
+     "kind": "poured",
+     "net": null,
+     "layer": null,
+     "rings": 77,
+     "with_voids": true,
+     "outline_only": true,
+     "chords_points": true
+    },
+    {
+     "pour": "[\"POURED\",\"7deb917f134629af\"]",
+     "kind": "poured",
+     "net": null,
+     "layer": null,
+     "rings": 38,
+     "with_voids": true,
+     "outline_only": true,
+     "chords_points": true
+    },
+    {
+     "pour": "[\"POURED\",\"549e70c38c4daf7e\"]",
+     "kind": "poured",
+     "net": "VM",
+     "layer": 1,
+     "rings": 1,
+     "with_voids": false,
+     "outline_only": false,
+     "chords_points": true
+    },
+    {
+     "pour": "[\"POURED\",\"6a531241cf140a59\"]",
+     "kind": "poured",
+     "net": null,
+     "layer": null,
+     "rings": 3,
+     "with_voids": true,
+     "outline_only": true,
+     "chords_points": true
+    }
+   ],
+   "tracks_on_layer_inside (not forbidden by COPPER)": 0
+  },
+  {
+   "region": "6335e88d3ac44536",
+   "layer": 2,
+   "words": [
+    "COPPER"
+   ],
+   "unknown": [],
+   "circle_r": 93.8415,
+   "eroded_r": 93.7415,
+   "pours_touching_by_any_reading": [
+    {
+     "pour": "[\"POURED\",\"aeb890a37d4af099\"]",
+     "kind": "poured",
+     "net": null,
+     "layer": null,
+     "rings": 77,
+     "with_voids": true,
+     "outline_only": true,
+     "chords_points": true
+    },
+    {
+     "pour": "[\"POURED\",\"7deb917f134629af\"]",
+     "kind": "poured",
+     "net": null,
+     "layer": null,
+     "rings": 38,
+     "with_voids": true,
+     "outline_only": true,
+     "chords_points": true
+    },
+    {
+     "pour": "[\"POURED\",\"174fb55f65247b4a\"]",
+     "kind": "poured",
+     "net": "PGND",
+     "layer": 2,
+     "rings": 7,
+     "with_voids": false,
+     "outline_only": true,
+     "chords_points": true
+    }
+   ],
+   "tracks_on_layer_inside (not forbidden by COPPER)": 0
+  },
+  {
+   "region": "8c13fcfba0ce09c8",
+   "layer": 2,
+   "words": [
+    "COPPER"
+   ],
+   "unknown": [],
+   "circle_r": 93.8415,
+   "eroded_r": 93.7415,
+   "pours_touching_by_any_reading": [
+    {
+     "pour": "[\"POURED\",\"aeb890a37d4af099\"]",
+     "kind": "poured",
+     "net": null,
+     "layer": null,
+     "rings": 77,
+     "with_voids": true,
+     "outline_only": true,
+     "chords_points": true
+    },
+    {
+     "pour": "[\"POURED\",\"7deb917f134629af\"]",
+     "kind": "poured",
+     "net": null,
+     "layer": null,
+     "rings": 38,
+     "with_voids": true,
+     "outline_only": true,
+     "chords_points": true
+    },
+    {
+     "pour": "[\"POURED\",\"174fb55f65247b4a\"]",
+     "kind": "poured",
+     "net": "PGND",
+     "layer": 2,
+     "rings": 7,
+     "with_voids": false,
+     "outline_only": true,
+     "chords_points": true
+    }
+   ],
+   "tracks_on_layer_inside (not forbidden by COPPER)": 0
+  },
+  {
+   "region": "f823fe0888c8eb62",
+   "layer": 2,
+   "words": [
+    "COPPER"
+   ],
+   "unknown": [],
+   "circle_r": 93.8415,
+   "eroded_r": 93.7415,
+   "pours_touching_by_any_reading": [
+    {
+     "pour": "[\"POURED\",\"aeb890a37d4af099\"]",
+     "kind": "poured",
+     "net": null,
+     "layer": null,
+     "rings": 77,
+     "with_voids": true,
+     "outline_only": true,
+     "chords_points": true
+    },
+    {
+     "pour": "[\"POURED\",\"7deb917f134629af\"]",
+     "kind": "poured",
+     "net": null,
+     "layer": null,
+     "rings": 38,
+     "with_voids": true,
+     "outline_only": true,
+     "chords_points": true
+    },
+    {
+     "pour": "[\"POURED\",\"174fb55f65247b4a\"]",
+     "kind": "poured",
+     "net": "PGND",
+     "layer": 2,
+     "rings": 7,
+     "with_voids": false,
+     "outline_only": true,
+     "chords_points": true
+    }
+   ],
+   "tracks_on_layer_inside (not forbidden by COPPER)": 0
+  },
+  {
+   "region": "2d28520890c151e4",
+   "layer": 2,
+   "words": [
+    "COPPER"
+   ],
+   "unknown": [],
+   "circle_r": 93.8415,
+   "eroded_r": 93.7415,
+   "pours_touching_by_any_reading": [
+    {
+     "pour": "[\"POURED\",\"aeb890a37d4af099\"]",
+     "kind": "poured",
+     "net": null,
+     "layer": null,
+     "rings": 77,
+     "with_voids": true,
+     "outline_only": true,
+     "chords_points": true
+    },
+    {
+     "pour": "[\"POURED\",\"7deb917f134629af\"]",
+     "kind": "poured",
+     "net": null,
+     "layer": null,
+     "rings": 38,
+     "with_voids": true,
+     "outline_only": true,
+     "chords_points": true
+    },
+    {
+     "pour": "[\"POURED\",\"174fb55f65247b4a\"]",
+     "kind": "poured",
+     "net": "PGND",
+     "layer": 2,
+     "rings": 7,
+     "with_voids": false,
+     "outline_only": true,
+     "chords_points": true
+    }
+   ],
+   "tracks_on_layer_inside (not forbidden by COPPER)": 0
+  },
+  {
+   "region": "3dff5a7278867929",
+   "layer": 2,
+   "words": [
+    "COPPER"
+   ],
+   "unknown": [],
+   "circle_r": null,
+   "eroded_r": null,
+   "pours_touching_by_any_reading": [
+    {
+     "pour": "[\"POURED\",\"aeb890a37d4af099\"]",
+     "kind": "poured",
+     "net": null,
+     "layer": null,
+     "rings": 77,
+     "with_voids": true,
+     "outline_only": true,
+     "chords_points": true
+    },
+    {
+     "pour": "[\"POURED\",\"7deb917f134629af\"]",
+     "kind": "poured",
+     "net": null,
+     "layer": null,
+     "rings": 38,
+     "with_voids": true,
+     "outline_only": true,
+     "chords_points": true
+    },
+    {
+     "pour": "[\"POURED\",\"174fb55f65247b4a\"]",
+     "kind": "poured",
+     "net": "PGND",
+     "layer": 2,
+     "rings": 7,
+     "with_voids": false,
+     "outline_only": true,
+     "chords_points": true
+    }
+   ],
+   "tracks_on_layer_inside (not forbidden by COPPER)": 0
+  }
+ ]
+}

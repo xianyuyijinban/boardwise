@@ -696,6 +696,12 @@ def test_the_report_carries_the_provenance_a_run_has_to_record():
     # aa012db3 -> 8269e601: the recipe now folds CRLF to LF, because the 177
     # pins were a reading of one machine's mixed LF/CRLF checkout and failed on
     # every fresh clone (pin: the line-endings test below).
+    # R2-4 moved the recursive one — f3a69124 -> c0a45f39, direct unchanged:
+    # three private geometry copies in rules/pcb/ retired for core.measure's
+    # public point_in_polygon / point_segment_distance (zero verdict flips,
+    # measured; test_126a has the entry).
+    # R2-1 moved it again — c0a45f39 -> f45cfd99, direct unchanged: a new
+    # rules/pcb/keepout.py (pcb-keepout-violation), no existing rule touched.
     # The running ledger with the pinned values is
     # `tests/test_126a_pcb_review_plumbing.py`; this note is the pointer to it.
     # Both are measured, not guessed - `tests/test_126a_pcb_review_plumbing.py`

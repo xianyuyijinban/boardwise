@@ -66,13 +66,18 @@ zero.
 
 from __future__ import annotations
 
-import math
 import re
 from dataclasses import dataclass
 
 from ..base import Finding, FindingTarget
 from ...core.geometry import BBox, BoardGeometry, Point
-from ...core.measure import component_distance, pad_corners, pad_edge_distance
+from ...core.measure import (
+    component_distance,
+    pad_corners,
+    pad_edge_distance,
+    point_in_polygon,
+    point_segment_distance,
+)
 from ...core.model import is_ground_net
 from ...core.parts import designator_category, find_facts, is_ic_designator, load_parts
 from ...core.power_domains import infer_net_domains
@@ -1032,41 +1037,6 @@ class ComponentSpacing(PcbRule):
         return findings
 
 
-def _point_in_outline(point: Point, polygon: list[Point]) -> bool:
-    """Is ``point`` inside or **on** the board outline ``polygon``?
-
-    Even-odd containment with an on-edge tolerance: a point on the boundary is on
-    the board (「贴边不算越界」 — the board was routed to the outline), so the
-    boundary counts as inside. The same 口径 as
-    :func:`boardwise.core.measure.point_in_polygon` (public since 177), which this
-    local copy still duplicates — 177 只收编了 focthermal 那份，这份留待后续。
-    silk.py's ``_point_in_polygon`` is the deliberately different variant that does
-    *not* count the boundary.
-    """
-    inside = False
-    count = len(polygon)
-    for index in range(count):
-        a = polygon[index]
-        b = polygon[(index + 1) % count]
-        if _point_segment_mil(point, a, b) <= 1e-9:
-            return True
-        if (a.y > point.y) != (b.y > point.y):
-            x_cross = a.x + (point.y - a.y) / (b.y - a.y) * (b.x - a.x)
-            if point.x < x_cross:
-                inside = not inside
-    return inside
-
-
-def _point_segment_mil(point: Point, a: Point, b: Point) -> float:
-    """Distance from ``point`` to the segment ``ab``, in mils."""
-    dx, dy = b.x - a.x, b.y - a.y
-    length_sq = dx * dx + dy * dy
-    if length_sq <= 1e-18:
-        return math.hypot(point.x - a.x, point.y - a.y)
-    t = max(0.0, min(1.0, ((point.x - a.x) * dx + (point.y - a.y) * dy) / length_sq))
-    return math.hypot(point.x - (a.x + t * dx), point.y - (a.y + t * dy))
-
-
 def _outside_by(corners: list[Point], polygon: list[Point]) -> float:
     """How far a pad's rotated rectangle reaches past the outline, in mils.
 
@@ -1076,8 +1046,11 @@ def _outside_by(corners: list[Point], polygon: list[Point]) -> float:
     「how far off the board is this part」 means. The corners are the pad's own
     rotated rectangle (:func:`boardwise.core.measure.pad_corners`), not its box.
     """
+    # Inside **or on** the outline is on the board (「贴边不算越界」 — the board
+    # was routed to the outline): core's point_in_polygon counts the boundary,
+    # which is the 口径 this check always had (its local copy retired in R2-4).
     outside = [
-        corner for corner in corners if not _point_in_outline(corner, polygon)
+        corner for corner in corners if not point_in_polygon(corner, polygon)
     ]
     if not outside:
         return 0.0
@@ -1086,7 +1059,7 @@ def _outside_by(corners: list[Point], polygon: list[Point]) -> float:
         for index in range(len(polygon))
     ]
     return max(
-        min(_point_segment_mil(corner, a, b) for a, b in edges)
+        min(point_segment_distance(corner, a, b) for a, b in edges)
         for corner in outside
     )
 

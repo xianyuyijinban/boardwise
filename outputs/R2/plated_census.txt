@@ -1,0 +1,21 @@
+== PAD/VIA census: (type, doc, hole?, plated, net?) -> count
+1204 ('PAD', 'FOOTPRINT', 'hole', 'True', 'no-net')
+2379 ('PAD', 'FOOTPRINT', 'smd', 'True', 'no-net')
+12 ('VIA', 'FOOTPRINT', 'hole', "'<absent>'", 'no-net')
+3606 ('VIA', 'PCB', 'hole', "'<absent>'", 'no-net')
+
+== one example per class
+('PAD', 'FOOTPRINT', 'hole', 'True', 'no-net') ch340_golden.epro2 e12
+    {"bottomPasteExpansion": null, "bottomSolderExpansion": null, "centerX": -39.37, "centerY": 0, "connectMode": null, "defaultPad": {"padType": "ELLIPSE", "width": 51.181, "height": 51.181}, "groupId": 0, "hole": {"holeType": "ROUND", "width": 31.496, "height": 31.496}, "layerId": 12, "locked": false, "netName": "", "num": "1", "padAngle": 0, "padLen": 0, "padOffsetX": 0, "padOffsetY": 0, "padType": "NORMAL", "plated": true, "relativeAngle": 0, "specialPad": [], "spokeAngle": null, "spokeSpace": null, "spokeWidth": null, "topPasteExpansion": null, "topSolderExpansion": null, "zIndex": 12}
+('PAD', 'FOOTPRINT', 'smd', 'True', 'no-net') ch340_golden.epro2 e21
+    {"bottomPasteExpansion": null, "bottomSolderExpansion": null, "centerX": 29.488, "centerY": 0.005, "connectMode": null, "defaultPad": {"padType": "RECT", "width": 31.496, "height": 31.496, "radius": 0}, "groupId": 0, "hole": null, "layerId": 1, "locked": false, "netName": "", "num": "2", "padAngle": 90, "padLen": 0, "padOffsetX": -0.001, "padOffsetY": -0.001, "padType": "NORMAL", "plated": true, "relativeAngle": 0, "specialPad": [], "spokeAngle": null, "spokeSpace": null, "spokeWidth": null, "topPasteExpansion": null, "topSolderExpansion": null, "zIndex": 21}
+('VIA', 'FOOTPRINT', 'hole', "'<absent>'", 'no-net') DCDC-12V9V转5V3V3_2026-09-27.epro2 e14
+    {"bottomSolderExpansion": null, "centerX": 19.685, "centerY": 19.685, "groupId": 0, "holeDiameter": 12, "locked": false, "netName": "", "ruleName": "", "topSolderExpansion": null, "viaDiameter": 24, "viaType": "NORMAL", "zIndex": 14}
+('VIA', 'PCB', 'hole', "'<absent>'", 'no-net') DCDC-12V9V转5V3V3_2026-09-27.epro2 e357
+    {"bottomSolderExpansion": null, "centerX": 3759.859, "centerY": -1528, "groupId": 0, "holeDiameter": 12.0078, "locked": false, "netName": "GND", "partitionId": "", "ruleName": "", "topSolderExpansion": null, "unusedInnerLayers": [], "viaDiameter": 24, "viaType": "SUTURE", "zIndex": 357}
+
+== record types seen (doc type, record type) with HOLE/SLOT-ish names
+3583 FOOTPRINT PAD
+12 FOOTPRINT VIA
+7256 PCB PAD_NET
+3606 PCB VIA

@@ -542,6 +542,7 @@ def test_rule_is_declared_house_rule_with_no_threshold_and_is_in_the_list():
         "pcb-component-spacing",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
+        "pcb-keepout-violation",  # R2-1, appended last
     ]
     rule = McuCrystalKeepout()
     assert rule.id == RULE_ID
