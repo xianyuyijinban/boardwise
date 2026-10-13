@@ -7,7 +7,10 @@
 - PCB 规则在 `src/boardwise/rules/pcb/`（每条规则一个类，注册表
   `BUILTIN_PCB_RULES`），runner 在 `src/boardwise/engines/pcbreview.py`。
 - 板级几何模型：`src/boardwise/core/`（`BoardGeometry`、`measure.py`）。
-- **指纹纪律**：改 `rules/` 下任何文件 → 重钉（README 已写命令与台账格式）。
+- **指纹纪律**：改 `rules/` 下任何文件 → 重钉规则体指纹：先跑
+  `.venv/Scripts/python.exe -c "from pathlib import Path;from boardwise.engines.review_eval import rulebody_fingerprint as f;print(f(Path('src/boardwise/rules')))"`
+  再按 `tests/test_126a_pcb_review_plumbing.py` 底部注释的台账格式更新两处钉值
+  （recursive + direct）并写一行台账注释（谁改的、为什么、行为锚是哪个测试文件）。
 - 审查规则写作范式看 `rules/pcb/silk.py` / `rules/pcb/distance.py`：每条 finding 带
   evidence、启发式边界必须写进 message（「这条规则看不到什么」）。
 
