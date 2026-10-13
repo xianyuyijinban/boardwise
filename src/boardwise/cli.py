@@ -328,11 +328,11 @@ def build_parser() -> argparse.ArgumentParser:
         prog="boardwise",
         description="AI harness for EasyEDA Pro: offline design review (stage 1).",
     )
-    # Two versions on purpose (028 batch 3a): the CLI and the connector bundle
-    # this build would push into the editor are versioned separately (0.1.0 vs
-    # 0.4.19 today, a known and deliberate split), and a bug report needs both —
-    # "which boardwise" and "which extension it installed" are different
-    # questions, and the second one is the answer a friend cannot look up.
+    # The versions converge at release time (岳 2026-10-13: the connector's
+    # version IS the release version), and --version still prints both: the CLI
+    # this build is, and the connector bundle it would push into the editor —
+    # between releases they can drift (a connector fix in flight), and a bug
+    # report needs both.
     parser.add_argument(
         "--version",
         action=_VersionAction,

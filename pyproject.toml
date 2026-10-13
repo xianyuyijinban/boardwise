@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "boardwise"
-version = "0.1.0"
+version = "0.5.11"
 description = "AI harness for EasyEDA Pro: rule-driven offline design review (stage 1), generation and simulation on the roadmap."
 readme = "README.md"
 requires-python = ">=3.10"

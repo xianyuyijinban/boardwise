@@ -6821,7 +6821,7 @@ const SOURCE_TAIL_CHARS = 1_024;
  * without the other cannot tell a truncated dump from a different format.
  *
  * **`uuid` is honoured or the call is refused — never silently dropped** (179,
- * 178b's立案). Until 0.4.31 this action took a `uuid` it never read: the host's
+ * 178b's立案). Until 0.5.11 this action took a `uuid` it never read: the host's
  * `getDocumentSource()` takes **no arguments** (measured arity `0` on EDA
  * 3.2.186, `outputs/179/live/02_probe_checks.json`), so every call returned the
  * **active** document's source. A caller who asked for page A while page B was
